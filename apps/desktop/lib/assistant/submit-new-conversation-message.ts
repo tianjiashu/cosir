@@ -24,7 +24,7 @@ export type SubmitNewConversationMessageInput = {
 };
 
 /**
- * 发送请求越过网络边界后结果未知（连接中断、2xx 回执无法解析等）：后端可能已经受理并新开 Run。
+ * 发送请求越过网络边界后结果未知（连接中断等）：后端可能已经受理并新开 Run。
  * 与 HTTP 非 2xx（后端明确拒绝）不同，调用方不能据此认定命令未提交。
  */
 class NewConversationDeliveryUnknownError extends UserFacingError {
@@ -46,7 +46,7 @@ export function wasCommandPossiblyAccepted(error: unknown): boolean {
 }
 
 /**
- * 提交新对话首条消息，以 2xx 回执作为后端 accepted barrier。
+ * 提交新对话首条消息，以 202 作为后端已投递的边界（投递不等于 Run 已启动，结果经 Task 长订阅到达）。
  *
  * 本函数只负责附件预上传与请求序列化，不拥有 React 页面状态，也不订阅输出；调用方在成功返回后
  * 负责导航，在异常时按 `wasCommandPossiblyAccepted` 决定是否清理 provisional Task。新 Task 没有

@@ -8,10 +8,10 @@ type RenderOptions = {
   args?: Record<string, string>;
   display_data?: Record<string, unknown> | null;
   taskId?: number;
-  runCancelling?: boolean;
+  taskCancelling?: boolean;
 };
 
-function renderTerminal({ status, args = {}, display_data = null, taskId, runCancelling = false }: RenderOptions): string {
+function renderTerminal({ status, args = {}, display_data = null, taskId, taskCancelling = false }: RenderOptions): string {
   return renderToStaticMarkup(
     <TerminalTool
       type="tool-call"
@@ -24,7 +24,7 @@ function renderTerminal({ status, args = {}, display_data = null, taskId, runCan
       resume={() => undefined}
       respondToApproval={() => undefined}
       taskId={taskId}
-      runCancelling={runCancelling}
+      taskCancelling={taskCancelling}
       artifact={{
         backendStatus: status,
         presentation: { verb: "运行命令", surface: "standalone", expandable: true, expand_layout: "terminal" },
@@ -89,17 +89,17 @@ describe("TerminalTool", () => {
     expect(html).not.toContain("exit ");
   });
 
-  it("shows a separate stop action only for a running terminal call with its run identity", () => {
+  it("shows a separate stop action only for a running terminal call with its task identity", () => {
     const running = renderTerminal({ status: "running", taskId: 24 });
     const pending = renderTerminal({ status: "pending", taskId: 24 });
-    const missingRun = renderTerminal({ status: "running" });
-    const wholeRunCancelling = renderTerminal({ status: "running", taskId: 24, runCancelling: true });
+    const missingTask = renderTerminal({ status: "running" });
+    const taskStopping = renderTerminal({ status: "running", taskId: 24, taskCancelling: true });
 
     expect(running).toContain('aria-label="停止终端命令"');
     expect(running).toContain("停止</span>");
     expect(pending).not.toContain('aria-label="停止终端命令"');
-    expect(missingRun).not.toContain('aria-label="停止终端命令"');
-    expect(wholeRunCancelling).not.toContain('aria-label="停止终端命令"');
+    expect(missingTask).not.toContain('aria-label="停止终端命令"');
+    expect(taskStopping).not.toContain('aria-label="停止终端命令"');
   });
 
   it("hides the stop action after the tool reaches a terminal status", () => {

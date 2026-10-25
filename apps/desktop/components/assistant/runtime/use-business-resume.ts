@@ -1,227 +1,53 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import { HttpError } from "@/lib/http/errors";
-import { createTimeoutAbort, isCancelledAbort } from "@/lib/async/abort-timeout";
-import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import { resumeTask } from "@/lib/assistant/task-commands";
-import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 
-const BUSINESS_RESUME_TIMEOUT_MS = 15_000;
-
 export type BusinessResumeController = {
   resumeBusinessRun: () => Promise<void>;
-  cancelBusinessResume: () => void;
-};
-
-type BusinessResumeAcceptedStage = "business-started" | "attach-only";
-
-type UncertainBusinessResume = {
-  runId: number;
 };
 
 /**
- * Own the explicit business-resume request independently from Assistant UI's
- * attach-only transport resume.
+ * 显式业务恢复（`POST /tasks/{id}/resume`），与 transport attach 语义分开。
  *
- * POST /tasks/{id}/resume continues the persisted business Run. Once that
- * request is accepted, `onBusinessResumeAccepted` performs the separate
- * attach-only stage. Only one business-resume request may be in flight for a
- * session; stale responses are ignored by the local generation and runtime
- * availability guards.
+ * 命令只投递：202 后结果经 Task 长订阅到达（新 Run 进入活动态，或 actor 拒绝时顶层 `error`），
+ * 这里不读响应内容、不按 runId 对账，也不管订阅：长订阅断开后的重连只由订阅恢复逻辑负责。会话内同时
+ * 只允许一个恢复请求在途。
  */
-export function useBusinessResume(
-  context: RuntimeSessionContext,
-  onBusinessResumeAccepted: (stage: BusinessResumeAcceptedStage) => void,
-): BusinessResumeController {
+export function useBusinessResume(context: RuntimeSessionContext): BusinessResumeController {
   const inFlightRef = useRef<Promise<void> | null>(null);
-  const generationRef = useRef(0);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const disposedRef = useRef(false);
-  const backendRef = context.backendRef;
-  const uncertainResumeRef = useRef<UncertainBusinessResume | null>(null);
-  const acceptedBusinessRunIdRef = useRef<number | null>(null);
-  const activeRequestRunIdRef = useRef<number | null>(null);
-  const phaseRef = useRef<"idle" | "business-starting" | "attach-pending">("idle");
-
-  const cancelBusinessResume = useCallback(() => {
-    const runId = activeRequestRunIdRef.current;
-    if (!disposedRef.current && inFlightRef.current && runId !== null) {
-      uncertainResumeRef.current = {
-        runId,
-      };
-      phaseRef.current = "business-starting";
-    }
-    generationRef.current += 1;
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-  }, [context.latestStateRef]);
 
   useEffect(() => {
     disposedRef.current = false;
-    return () => {
-      disposedRef.current = true;
-      cancelBusinessResume();
-    };
-  }, [cancelBusinessResume]);
-
-  const markBusinessResumeAccepted = useCallback((runId: number, stage: BusinessResumeAcceptedStage) => {
-    acceptedBusinessRunIdRef.current = runId;
-    phaseRef.current = "attach-pending";
-    onBusinessResumeAccepted(stage);
-  }, [onBusinessResumeAccepted]);
-
-  const reconcileUncertainResume = useCallback(async (runId: number): Promise<boolean> => {
-    if (uncertainResumeRef.current?.runId !== runId) return false;
-    if (!backendRef.current.available) throw new UserFacingError("本机后端当前不可用，无法确认继续运行结果");
-
-    const generation = ++generationRef.current;
-    const controller = new AbortController();
-    activeRequestRunIdRef.current = runId;
-    phaseRef.current = "business-starting";
-    abortControllerRef.current = controller;
-    const isCurrent = () => !disposedRef.current
-      && generation === generationRef.current
-      && context.latestStateRef.current.current_run_id === runId
-      && context.cancelRequestedRunIdRef.current !== runId;
-    try {
-      const outcome = await fetchCanonicalSnapshot(context.taskId, {
-        reason: "business_resume_uncertain",
-        timeoutMs: BUSINESS_RESUME_TIMEOUT_MS,
-        traceId: context.traceId,
-        signal: controller.signal,
-      });
-      if (outcome.kind === "superseded" || !isCurrent()) {
-        throw new UserFacingError("本机后端实例已变化，暂不能确认继续运行结果");
-      }
-      const snapshot = outcome.snapshot;
-
-      context.latestStateRef.current = snapshot;
-      const currentRun = currentTransportRun(snapshot);
-      if (
-        currentRun?.runId === runId
-        && (currentRun.status === "pending" || currentRun.status === "running")
-      ) {
-        uncertainResumeRef.current = null;
-        markBusinessResumeAccepted(runId, "business-started");
-        return true;
-      }
-
-      uncertainResumeRef.current = null;
-      phaseRef.current = "idle";
-      throw new UserFacingError("当前运行已不处于可恢复状态，请重新同步");
-    } finally {
-      if (abortControllerRef.current === controller) abortControllerRef.current = null;
-      if (activeRequestRunIdRef.current === runId) activeRequestRunIdRef.current = null;
-    }
-  }, [context, markBusinessResumeAccepted]);
+    return () => { disposedRef.current = true; };
+  }, []);
 
   const resumeBusinessRun = useCallback(() => {
     if (inFlightRef.current) return inFlightRef.current;
     if (disposedRef.current) return Promise.resolve();
-    if (!backendRef.current.available) {
-      return Promise.reject(new Error("本机后端当前不可用，无法继续运行"));
+    if (!context.backendRef.current.available) {
+      return Promise.reject(new UserFacingError("本机后端当前不可用，无法继续运行"));
     }
-
-    const runId = context.latestStateRef.current.current_run_id;
-    if (runId == null) return Promise.reject(new Error("当前没有可恢复的运行"));
-    if (context.cancelRequestedRunIdRef.current === runId) {
-      return Promise.reject(new Error("当前运行正在停止确认中，无法继续运行"));
-    }
-
-    if (acceptedBusinessRunIdRef.current !== null && acceptedBusinessRunIdRef.current !== runId) {
-      acceptedBusinessRunIdRef.current = null;
-      phaseRef.current = "idle";
-    }
-    if (acceptedBusinessRunIdRef.current === runId) {
-      const currentRun = currentTransportRun(context.latestStateRef.current);
-      if (currentRun?.runId === runId && (currentRun.status === "pending" || currentRun.status === "running")) {
-        phaseRef.current = "attach-pending";
-        onBusinessResumeAccepted("attach-only");
-        return Promise.resolve();
-      }
-      acceptedBusinessRunIdRef.current = null;
-      phaseRef.current = "idle";
-    }
-
-    if (uncertainResumeRef.current && uncertainResumeRef.current.runId !== runId) {
-      uncertainResumeRef.current = null;
-    }
-    if (uncertainResumeRef.current?.runId === runId) {
-      const trackedReconcile = reconcileUncertainResume(runId)
-        .then((attached) => {
-          if (!attached && context.latestStateRef.current.current_run_id !== runId) return;
-        })
-        .finally(() => {
-          inFlightRef.current = null;
-        });
-      inFlightRef.current = trackedReconcile;
-      return trackedReconcile;
-    }
-
-    const generation = ++generationRef.current;
-    const runtimeGeneration = backendRef.current.generation;
-    activeRequestRunIdRef.current = runId;
-    phaseRef.current = "business-starting";
-    const { controller, signal, clear } = createTimeoutAbort(BUSINESS_RESUME_TIMEOUT_MS);
-    abortControllerRef.current = controller;
-
-    const isCurrent = () => !disposedRef.current
-      && !controller.signal.aborted
-      && generation === generationRef.current
-      && backendRef.current.available
-      && runtimeGeneration === backendRef.current.generation
-      && context.latestStateRef.current.current_run_id === runId
-      && context.cancelRequestedRunIdRef.current !== runId;
-
     const request = (async () => {
-      let requestDefinitivelyRejected = false;
       try {
-        try {
-          await resumeTask(context.taskId, { signal, traceId: context.traceId });
-        } catch (error) {
-          // HttpError 是后端明确拒绝；网络层失败时结果未知，交给下方 uncertain 对账。
-          if (error instanceof HttpError) {
-            requestDefinitivelyRejected = true;
-            throw new UserFacingError(userErrorMessage(error, `继续运行失败（HTTP ${error.status}）`));
-          }
-          throw error;
-        }
-        if (isCurrent()) {
-          uncertainResumeRef.current = null;
-          markBusinessResumeAccepted(runId, "business-started");
-        } else if (!disposedRef.current && context.latestStateRef.current.current_run_id === runId) {
-          uncertainResumeRef.current = {
-            runId,
-          };
-          phaseRef.current = "business-starting";
-        }
+        await resumeTask(context.taskId, { traceId: context.traceId });
       } catch (error) {
-        if (!requestDefinitivelyRejected && !disposedRef.current && context.latestStateRef.current.current_run_id === runId) {
-          uncertainResumeRef.current = {
-            runId,
-          };
-          phaseRef.current = "business-starting";
-        }
-        if (isCancelledAbort(controller.signal) || generation !== generationRef.current || disposedRef.current) {
-          return;
+        if (error instanceof HttpError) {
+          throw new UserFacingError(userErrorMessage(error, `继续运行失败（HTTP ${error.status}）`));
         }
         throw error;
-      } finally {
-        clear();
-        if (abortControllerRef.current === controller) abortControllerRef.current = null;
-        if (activeRequestRunIdRef.current === runId) activeRequestRunIdRef.current = null;
       }
     })();
-
     const tracked = request.finally(() => {
       if (inFlightRef.current === tracked) inFlightRef.current = null;
     });
     inFlightRef.current = tracked;
     return tracked;
-  }, [context, markBusinessResumeAccepted, onBusinessResumeAccepted, reconcileUncertainResume]);
+  }, [context]);
 
-  return { resumeBusinessRun, cancelBusinessResume };
+  return { resumeBusinessRun };
 }

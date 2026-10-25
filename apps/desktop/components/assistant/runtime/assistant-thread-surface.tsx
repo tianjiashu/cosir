@@ -4,18 +4,15 @@ import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import {
   ComposerRestoreBridge,
   InitialMessageBridge,
-  RuntimeControlBridge,
   RuntimeRenderDiagnostics,
 } from "@/components/assistant/runtime/assistant-runtime-bridges";
 import type {
   AssistantRuntimeProps,
   ComposerRestore,
-  RuntimeControls,
 } from "@/components/assistant/runtime/runtime-types";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportState } from "@/lib/assistant/contract";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
-import type { BackendRuntimeSnapshot } from "@/src/runtime-config";
 
 type AssistantThreadSurfaceProps = Pick<
   AssistantRuntimeProps,
@@ -24,14 +21,10 @@ type AssistantThreadSurfaceProps = Pick<
   | "workspaceRoot"
   | "initialMessage"
   | "initialAttachments"
-  | "forkingRunId"
-  | "onForkRun"
+  | "forkingMessageId"
+  | "onForkMessage"
 > & {
   initialState: TransportState;
-  backendRef: MutableRefObject<BackendRuntimeSnapshot>;
-  resumeOnMount: boolean;
-  attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;
-  registerRuntimeControls: (controls: RuntimeControls | null) => void;
   registerComposerRestore: (restore: ComposerRestore) => void;
   initialMessageSentRef: MutableRefObject<boolean>;
   traceId: string;
@@ -42,9 +35,9 @@ type AssistantThreadSurfaceProps = Pick<
   toolGroupsLoading: boolean;
   toolGroupsError: string | null;
   onResumeBusiness: () => Promise<void>;
-  onCancelRequested: (runId: number) => void;
-  onCancelResult: (runId: number, accepted: boolean) => void;
-  cancellingRunId: number | null;
+  onCancelRequested: () => void;
+  onCancelResult: (accepted: boolean) => void;
+  cancelling: boolean;
   performanceProbe: AssistantPerformanceProbe | null;
 };
 
@@ -61,13 +54,9 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
   workspaceRoot,
   initialMessage,
   initialAttachments,
-  forkingRunId,
-  onForkRun,
+  forkingMessageId,
+  onForkMessage,
   initialState,
-  backendRef,
-  resumeOnMount,
-  attachTransportRef,
-  registerRuntimeControls,
   registerComposerRestore,
   initialMessageSentRef,
   traceId,
@@ -80,17 +69,11 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
   onResumeBusiness,
   onCancelRequested,
   onCancelResult,
-  cancellingRunId,
+  cancelling,
   performanceProbe,
 }: AssistantThreadSurfaceProps) {
   return (
     <>
-      <RuntimeControlBridge
-        register={registerRuntimeControls}
-        backendRef={backendRef}
-        resumeOnMount={resumeOnMount}
-        attachTransportRef={attachTransportRef}
-      />
       <ComposerRestoreBridge register={registerComposerRestore} />
       <RuntimeRenderDiagnostics taskId={taskId} />
       <div className="flex h-full min-h-0 flex-col">
@@ -103,14 +86,13 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
           toolGroupsLoading={toolGroupsLoading}
           toolGroupsError={toolGroupsError}
           workspaceRoot={workspaceRoot}
-          forkingRunId={forkingRunId}
-          onForkRun={onForkRun}
+          forkingMessageId={forkingMessageId}
+          onForkMessage={onForkMessage}
           onResumeBusiness={onResumeBusiness}
           onCancelRequested={onCancelRequested}
           onCancelResult={onCancelResult}
-          cancellingRunId={cancellingRunId}
+          cancelling={cancelling}
           performanceProbe={performanceProbe}
-          attachTransportRef={attachTransportRef}
         />
       </div>
       <InitialMessageBridge

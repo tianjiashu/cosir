@@ -1,3 +1,4 @@
+import { isActiveRunStatus } from "@/lib/assistant/contract";
 import { mapMarkdownText } from "@/lib/assistant/markdown-literals";
 import type { MessageStatus } from "@assistant-ui/core";
 import type { CompleteAttachment, CreateAttachment } from "@assistant-ui/core";
@@ -9,11 +10,13 @@ import type {
 import type { ReadonlyJSONObject } from "assistant-stream/utils";
 
 import type {
+  TransportActivity,
   TransportError,
   TransportImagePart,
   TransportMessage,
+  TransportMessagePart,
+  TransportOutcome,
   TransportReasoningPart,
-  TransportRun,
   TransportTextPart,
   TransportToolCallPart,
   TransportToolStatus,
@@ -50,14 +53,19 @@ export type UserAddMessageCommand = {
   };
 };
 
-/** The render-time Run fields required to project one canonical message. */
+/**
+ * 渲染一条消息所需的上下文；由 frame store 按扁平消息列表与 `activity` 计算，不回查 Run。
+ *
+ * - `outcome`：该回复的结局（只在 Run 最后一条助手消息上、Run 终态后非空）。
+ * - `isRunEnd`：该 Run 最后一条助手消息；回复末尾的用量、fork、诊断入口挂在这里。
+ * - `activity`：消息是当前活动那一轮的回复末尾时为该活动（据此显示运行中与实时用量），否则 null。
+ */
 export type TransportMessageRenderContext = {
-  runId: TransportRun["runId"];
-  runStatus: TransportRun["status"];
-  endReason: TransportRun["endReason"];
-  /** 后端受控的 Run 终态错误；用于把失败原因渲染成消息级错误提示。 */
-  error: TransportRun["error"];
-  isLastRunMessage: boolean;
+  /** 所属 Run；排队与乐观消息尚无 Run，为 null。只供诊断与日志。 */
+  runId: number | null;
+  outcome: TransportOutcome | null;
+  isRunEnd: boolean;
+  activity: TransportActivity | null;
 };
 
 const optimisticCommandIds = new WeakMap<object, string>();
@@ -372,48 +380,37 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
   };
 }
 
-function toMessageStatusForRun(
-  status: TransportRun["status"],
-  endReason: TransportRun["endReason"],
-  error: TransportRun["error"],
-): MessageStatus {
-  switch (status) {
-    case "pending":
-    case "running":
-    case "suspended":
-      return { type: "running" };
-    case "completed":
-      return { type: "complete", reason: "stop" };
-    case "cancelled":
-      return { type: "incomplete", reason: "cancelled" };
-    case "interrupted":
-      return {
-        type: "incomplete",
-        reason: "error",
-        error: "上次对话运行已中断，可以继续发送新消息。",
-      };
-    case "failed":
-      if (endReason === "client_disconnected" || endReason === "cancelled") {
+/**
+ * 助手消息的状态只看它自己的结局与当前活动：有 `outcome` 按结局；没有 `outcome` 且是当前活动
+ * Run 的回复末尾、活动处于活动态时为运行中；其余（同一 Run 内较早的回复）都已完成。
+ */
+export function toAssistantMessageStatus(context: TransportMessageRenderContext): MessageStatus {
+  const { outcome } = context;
+  if (outcome !== null) {
+    switch (outcome.status) {
+      case "completed":
+        return { type: "complete", reason: "stop" };
+      case "cancelled":
         return { type: "incomplete", reason: "cancelled" };
-      }
-      return {
-        type: "incomplete",
-        reason: "error",
-        // 后端错误契约优先：模型 HTTP 失败时 message 可以直接来自响应体。
-        // 没有 error 契约或文案为空白时回退到本地通用文案，避免渲染空白错误气泡。
-        error: error?.message?.trim() ? error.message : "对话运行失败，请检查模型配置或后端状态。",
-      };
-    default:
-      return { type: "incomplete", reason: "other" };
+      case "failed":
+        if (outcome.endReason === "client_disconnected" || outcome.endReason === "cancelled") {
+          return { type: "incomplete", reason: "cancelled" };
+        }
+        return {
+          type: "incomplete",
+          reason: "error",
+          // 后端错误契约优先：模型 HTTP 失败时 message 可以直接来自响应体。
+          // 没有 error 契约或文案为空白时回退到本地通用文案，避免渲染空白错误气泡。
+          error: outcome.error?.message?.trim() ? outcome.error.message : "对话运行失败，请检查模型配置或后端状态。",
+        };
+    }
   }
-}
-
-export function toMessageStatus(message: TransportMessage, run: TransportRun): MessageStatus {
-  return toMessageStatusForRun(run.status, run.endReason, run.error);
+  if (context.isRunEnd && isActiveRunStatus(context.activity?.status)) return { type: "running" };
+  return { type: "complete", reason: "stop" };
 }
 
 function toThreadMessageWithContext(
-  message: TransportMessage,
+  message: Pick<TransportMessage, "id" | "role" | "parts">,
   context: TransportMessageRenderContext,
 ): ThreadMessage {
   const content = message.parts
@@ -461,10 +458,7 @@ function toThreadMessageWithContext(
         steps: undefined,
         submittedFeedback: undefined,
         timing: undefined,
-        custom: {
-          runId: context.runId,
-          isLastRunMessage: context.isLastRunMessage,
-        },
+        custom: { runId: context.runId },
       },
     };
     return userMessage;
@@ -474,7 +468,7 @@ function toThreadMessageWithContext(
     id: message.id,
     role: "assistant",
     content: content as ThreadAssistantMessage["content"],
-    status: toMessageStatusForRun(context.runStatus, context.endReason, context.error),
+    status: toAssistantMessageStatus(context),
     createdAt: new Date(),
     metadata: {
       unstable_state: null,
@@ -483,31 +477,18 @@ function toThreadMessageWithContext(
       steps: [],
       custom: {
         runId: context.runId,
-        runStatus: context.runStatus,
-        isLastRunMessage: context.isLastRunMessage,
+        isRunEnd: context.isRunEnd,
+        outcome: context.outcome,
+        activity: context.activity,
       },
     },
   };
   return assistantMessage;
 }
 
-export function toThreadMessage(
-  message: TransportMessage,
-  run: TransportRun,
-  options: { isLastRunMessage?: boolean } = {},
-): ThreadMessage {
-  return toThreadMessageWithContext(message, {
-    runId: run.runId,
-    runStatus: run.status,
-    endReason: run.endReason,
-    error: run.error,
-    isLastRunMessage: options.isLastRunMessage ?? false,
-  });
-}
-
-/** Project one canonical message from only the Run fields needed by the UI. */
+/** Project one canonical or queued message with its precomputed render context. */
 export function toThreadMessageWithRenderContext(
-  message: TransportMessage,
+  message: Pick<TransportMessage, "id" | "role" | "parts">,
   context: TransportMessageRenderContext,
 ): ThreadMessage {
   return toThreadMessageWithContext(message, context);
@@ -530,7 +511,7 @@ export function getUserAddMessageSourceId(command: unknown): string | null {
 
 export function toPendingUserMessage(command: unknown): ThreadMessage | null {
   if (!isUserAddMessageCommand(command)) return null;
-  const messageParts: TransportMessage["parts"] = [];
+  const messageParts: TransportMessagePart[] = [];
   for (const part of command.message.parts) {
     if (part.type === "text") {
       if (part.text.length > 0) messageParts.push({ type: "text", text: part.text });
@@ -551,13 +532,7 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     id: `pending-${getOrCreateTransportCommandId(command)}`,
     role: "user",
     parts: messageParts,
-  }, {
-    runId: -1,
-    runStatus: "completed",
-    endReason: null,
-    error: null,
-    isLastRunMessage: false,
-  });
+  }, { runId: null, outcome: null, isRunEnd: false, activity: null });
   // The optimistic message follows the same single-source shape as the
   // canonical projection. The content parts already carry all attachments.
   return pending.role === "user" ? { ...pending, attachments: [] } : pending;

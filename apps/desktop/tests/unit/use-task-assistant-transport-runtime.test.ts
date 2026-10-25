@@ -8,14 +8,11 @@ import {
   toAddMessageCommand,
   useTaskAssistantTransportRuntime,
 } from "@/lib/assistant/use-task-assistant-transport-runtime";
+import { activity, transportState } from "./transport-fixtures";
 
-const INITIAL_STATE: TransportState = {
-  runs: [{ runId: 1, status: "completed", endReason: "stop",
-    contextWindowTotal: 128_000, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] }, messages: [], usage: null, error: null }],
-  current_run_id: 1,
-  approvals: {},
-  error: null,
-};
+const INITIAL_STATE: TransportState = transportState({
+  activity: activity(1, "completed", { endReason: "stop", contextWindowTotal: 128_000 }),
+});
 
 function TransportStateProbe() {
   const state = useAuiState((snapshot) => snapshot.thread.state);
@@ -23,10 +20,12 @@ function TransportStateProbe() {
 }
 
 function RuntimeHarness() {
-  const runtime = useTaskAssistantTransportRuntime(501, {
+  // 静态渲染不运行 effect，connectionKey 为 null 也不会发起订阅。
+  const { runtime } = useTaskAssistantTransportRuntime(501, {
     initialState: INITIAL_STATE,
     baseUrl: "http://127.0.0.1:1",
     headers: () => ({}),
+    connectionKey: null,
   });
   return createElement(
     AssistantRuntimeProvider,

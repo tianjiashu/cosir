@@ -1,9 +1,7 @@
 "use client";
 
-import { isTerminalRunStatus } from "@/lib/assistant/contract";
-
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, ListEndIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon, ZapIcon } from "lucide-react";
-import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FC, type MutableRefObject, type ReactNode } from "react";
+import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FC, type ReactNode } from "react";
 import {
   AuiIf,
   ActionBarPrimitive,
@@ -48,8 +46,7 @@ import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import {
   deriveComposerAction,
-  getTransportRunId,
-  isEditableLatestRunUserMessage,
+  isEditableLatestUserMessage,
   isQueuedUserMessage,
   canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
@@ -72,7 +69,7 @@ import {
   takePendingEditComposerDraft,
   type EditDraftAttachment,
 } from "@/lib/assistant/edit-composer-draft";
-import type { InputDelivery, TransportRun, TransportToolStatus } from "@/lib/assistant/contract";
+import type { InputDelivery, TransportActivity, TransportOutcome, TransportToolStatus } from "@/lib/assistant/contract";
 import { readStoredInputDelivery, writeStoredInputDelivery } from "@/lib/input-delivery-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
@@ -112,20 +109,21 @@ export type ThreadProps = {
   toolGroupsLoading?: boolean;
   toolGroupsError?: string | null;
   workspaceRoot?: string;
-  forkingRunId?: number | null;
-  onForkRun?: (runId: number) => void;
+  /** 正在 fork 的消息 id；fork 按消息切分。 */
+  forkingMessageId?: string | null;
+  onForkMessage?: (messageId: string) => void;
   onResumeBusiness?: () => Promise<void>;
-  onCancelRequested?: (runId: number) => void;
-  onCancelResult?: (runId: number, accepted: boolean) => void;
-  cancellingRunId?: number | null;
+  onCancelRequested?: () => void;
+  onCancelResult?: (accepted: boolean) => void;
+  /** 用户已请求停止 Task 的当前活动、尚未收敛（Task 级，不按 runId）。 */
+  cancelling?: boolean;
   performanceProbe?: AssistantPerformanceProbe | null;
-  attachTransportRef?: MutableRefObject<(() => Promise<void>) | null>;
 };
 
 const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
 const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkingRunId" | "onForkRun" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancellingRunId" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "attachTransportRef"> & { taskId?: number };
+type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancelling" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError"> & { taskId?: number };
 const ThreadContext = createContext<ThreadContextValue>({});
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
@@ -174,12 +172,12 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingRunId = null, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId = null, performanceProbe = null, attachTransportRef }) {
+export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId = null, onForkMessage, onResumeBusiness, onCancelRequested, onCancelResult, cancelling = false, performanceProbe = null }) {
   const isEmpty = useAuiState(isNewChatView);
   const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingRunId, onForkRun, onResumeBusiness, onCancelRequested, onCancelResult, cancellingRunId, readonly, attachTransportRef }}>
+    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, onCancelRequested, onCancelResult, cancelling, readonly }}>
     <ThreadComponentsContext.Provider value={components}>
       <AttachmentWorkspaceContext.Provider value={workspaceId ?? undefined}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -346,10 +344,11 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const isDraftEmpty = useAuiState((state) =>
     state.composer.text.trim().length === 0 && state.composer.attachments.length === 0,
   );
-  const { cancellingRunId, onResumeBusiness, onCancelRequested, onCancelResult } = useContext(ThreadContext);
-  const runId = useAuiState((state) => getTransportRunId(state.thread.state));
+  const { cancelling = false, onResumeBusiness, onCancelRequested, onCancelResult } = useContext(ThreadContext);
   const canResume = useAuiState((state) => canResumeStoppedRun(readRuntimeTransportState(state.thread.state)));
-  const isCancelling = cancellingRunId !== null && cancellingRunId === runId;
+  // 命令被拒只写进 snapshot 顶层 `error`（恢复不产生乐观消息，宿主收不到被拒通知），这里按 `seq` 认出新的拒绝。
+  const commandErrorSeq = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.error?.seq ?? null);
+  const isCancelling = cancelling;
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
@@ -357,14 +356,16 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const [delivery, setDelivery] = useState<InputDelivery>(readStoredInputDelivery);
   // toast「重试」持有旧闭包：用 ref 读取当下是否仍可继续、是否已有请求在途，避免重复 business resume。
   const resumingRef = useRef(false);
+  // 点击「继续运行」时的命令错误 `seq`：之后出现不同的 `seq` 就是这次恢复被拒。
+  const resumeErrorSeqRef = useRef<number | null>(null);
   const actionRef = useRef(action);
   actionRef.current = action;
 
   useEffect(() => {
     void frontendLog("DEBUG", "composer_action_derived", "Composer action 状态发生变化", {
-      data: { taskId, action, isRunning, isDraftEmpty, canResume, isCancelling, cancellingRunId, runId },
+      data: { taskId, action, isRunning, isDraftEmpty, canResume, isCancelling },
     });
-  }, [action, canResume, cancellingRunId, isCancelling, isDraftEmpty, isRunning, runId, taskId]);
+  }, [action, canResume, isCancelling, isDraftEmpty, isRunning, taskId]);
 
   useEffect(() => {
     if (isRunning || !canResume) {
@@ -375,19 +376,29 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   }, [canResume, isRunning]);
 
   useEffect(() => {
+    if (!resuming || commandErrorSeq === null || commandErrorSeq === resumeErrorSeqRef.current) return;
+    // 拒绝原因已在对话区显示，这里只复位按钮，不再重复提示。
+    resumingRef.current = false;
+    setResuming(false);
+    void frontendLog("INFO", "composer_resume_rejected", "继续运行被调度拒绝，按钮已复位", {
+      data: { taskId, commandErrorSeq },
+    });
+  }, [commandErrorSeq, resuming, taskId]);
+
+  useEffect(() => {
     if (!resuming) return;
     const timeout = window.setTimeout(() => {
-      const message = "继续运行请求未建立连接，请重试";
+      const message = "继续运行请求未得到响应，请重试";
       resumingRef.current = false;
       setResuming(false);
       setResumeError(message);
       notify.error("继续运行失败", { error: new UserFacingError(message) });
       void frontendLog("WARNING", "composer_resume_feedback_timeout", "继续运行请求超时未建立连接", {
-        data: { taskId, runId, timeoutMs: RESUME_FEEDBACK_TIMEOUT_MS },
+        data: { taskId, timeoutMs: RESUME_FEEDBACK_TIMEOUT_MS },
       });
     }, RESUME_FEEDBACK_TIMEOUT_MS);
     return () => window.clearTimeout(timeout);
-  }, [resuming, runId, taskId]);
+  }, [resuming, taskId]);
 
   if (action === "stop") {
     return <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} onCancelRequested={onCancelRequested} onCancelResult={onCancelResult} />} />;
@@ -401,6 +412,7 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
     const resume = async () => {
       if (resumingRef.current || actionRef.current !== "resume") return;
       resumingRef.current = true;
+      resumeErrorSeqRef.current = commandErrorSeq;
       setResuming(true);
       setResumeError(null);
       try {
@@ -416,7 +428,7 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
         setResumeError(userErrorMessage(error, fallback));
         notify.error("继续运行失败", { error, fallback, action: { label: "重试", onClick: () => void resume() } });
         void frontendLog("ERROR", "composer_resume_failed", "继续运行请求失败", {
-          data: { taskId, runId },
+          data: { taskId },
           error,
         });
       }
@@ -537,7 +549,7 @@ const UserMessageView: FC = () => {
     const transportState = readRuntimeTransportState(state.thread.state);
     // 排队中的消息原地编辑，不影响正在运行的 Run。
     if (isQueuedUserMessage(transportState, messageId)) return true;
-    if (!isEditableLatestRunUserMessage(transportState, messageId)) return false;
+    if (!isEditableLatestUserMessage(transportState, messageId)) return false;
 
     // Transport runtime 可能在 canonical snapshot 到达前乐观渲染新的用户命令；
     // 此期间不能因为旧 snapshot 仍在，就把上一条用户消息重新标记为可编辑。
@@ -830,17 +842,20 @@ const MessageError: FC = () => (
 );
 
 const AssistantMessageDefault: FC = () => {
+  const messageId = useAuiState((state) => state.message.id);
   const custom = useAuiState((state) => state.message.metadata.custom);
-  const isLastRunMessage = custom?.isLastRunMessage === true;
+  // 渲染上下文随消息一并投影（见 frame store 的 contextFor），消息渲染只依赖消息自身事实；
+  // 不回查 ``thread.state``，只读作用域也能正常渲染。
+  const isRunEnd = custom?.isRunEnd === true;
   const runId = typeof custom?.runId === "number" ? custom.runId : null;
-  // Run 状态随消息一并投影（见 ``MessageContext``），因此消息渲染只依赖消息自身事实；
-  // 不再回查 ``thread.state``，只读作用域（无 external state 的 runtime）也能正常渲染。
-  const runStatus = typeof custom?.runStatus === "string"
-    ? custom.runStatus as TransportRun["status"]
-    : null;
-  const { forkingRunId = null, onForkRun, cancellingRunId = null, taskId, readonly = false, attachTransportRef } = useContext(ThreadContext);
-  const canFork = !readonly && isLastRunMessage && runId !== null && isTerminalRunStatus(runStatus);
-  const isForking = runId !== null && forkingRunId === runId;
+  const outcome = (custom?.outcome ?? null) as TransportOutcome | null;
+  const activity = (custom?.activity ?? null) as TransportActivity | null;
+  const { forkingMessageId = null, onForkMessage, cancelling = false, taskId, readonly = false } = useContext(ThreadContext);
+  // fork 入口挂在每一轮回复的末尾，这一轮到终态（消息带 outcome）后才可用。
+  const canFork = !readonly && isRunEnd && outcome !== null;
+  const isForking = forkingMessageId === messageId;
+  const usage = outcome?.usage ?? activity?.usage ?? null;
+  const status = outcome?.status ?? activity?.status ?? null;
 
   return (
     <MessagePrimitive.Root
@@ -935,10 +950,8 @@ const AssistantMessageDefault: FC = () => {
                     <ToolPart
                       {...part}
                       taskId={taskId}
-                      runId={runId}
-                      runStatus={runStatus}
-                      runCancelling={cancellingRunId === runId}
-                      onAttachTransport={() => attachTransportRef?.current?.() ?? Promise.resolve()}
+                      interactive={!readonly}
+                      taskCancelling={cancelling}
                     />
                   </PartRenderBoundary>
                 );
@@ -954,19 +967,21 @@ const AssistantMessageDefault: FC = () => {
         </MessagePrimitive.GroupedParts>
         <MessageError />
       </div>
-      {!readonly && <RunUsageDisplay runId={runId} visible={isLastRunMessage} />}
+      {!readonly && (
+        <RunUsageDisplay usage={usage} running={activity !== null && outcome === null} visible={isRunEnd && (outcome !== null || activity !== null)} />
+      )}
       <ActionBarPrimitive.Root className="mt-1 flex gap-1">
         <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>
           <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
           <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
         </ActionBarPrimitive.Copy>
-        {!readonly && isLastRunMessage && runId !== null && (
+        {!readonly && isRunEnd && (
           <TooltipIconButton
             tooltip={canFork ? "从此处 Fork 新任务" : "此轮结束后才能 Fork"}
             size="sm"
             aria-label="从此处 Fork 新任务"
-            disabled={!canFork || forkingRunId !== null}
-            onClick={() => onForkRun?.(runId)}
+            disabled={!canFork || forkingMessageId !== null}
+            onClick={() => onForkMessage?.(messageId)}
           >
             {isForking ? <Loader2Icon className="animate-spin" /> : <GitForkIcon />}
           </TooltipIconButton>
@@ -974,8 +989,10 @@ const AssistantMessageDefault: FC = () => {
         <RunDiagnosticsActions
           taskId={taskId}
           runId={runId}
-          status={runStatus}
-          visible={isLastRunMessage}
+          status={status}
+          endReason={outcome?.endReason ?? null}
+          errorCode={outcome?.error?.code ?? null}
+          visible={isRunEnd}
         />
       </ActionBarPrimitive.Root>
     </MessagePrimitive.Root>

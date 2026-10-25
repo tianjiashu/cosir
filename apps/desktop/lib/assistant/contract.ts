@@ -1,18 +1,14 @@
 /**
  * 后端 Assistant Transport 协议约定的 state 结构（传输契约类型）。
  *
- * 后端以「增量构建（标准流式）」方式同步此 state：
- * 1. 先通过 `set` 一次性设置完整的 `runs` 数组；
- * 2. 随后在对应 Run 的消息 part 上增量填充内容。
+ * 契约是 Task 视角：对话是一条扁平消息列表，Run 只作为消息上的 `runId`（诊断、日志、fork 定位）
+ * 与 `activity`（最新 Run 摘要）出现，对话界面不按 runId 比对。后端先推 full 帧再按路径增量
+ * 推送 mutation（`messages` / `activity` / `queued_messages` / `error`）。字段与后端
+ * `apps/backend/app/assistant_transport/state/` 严格对齐，改动需前后端同步；契约说明见
+ * `docs/plan/task-command-fire-and-forget-design.md` 的「wire 契约（实施基准）」。
  *
- * `content` 是消息的 part 数组，支持文本与工具调用两种 part。该类型必须与
- * 后端协议层（apps/backend）产出的 wire 帧严格对齐，改动需前后端同步。
- *
- * 本文件为纯类型契约，不依赖 React，归位于 `lib/assistant/`，便于无 React
- * 依赖的模块（如 converter）直接复用。
+ * 本文件为纯类型契约，不依赖 React，归位于 `lib/assistant/`，便于无 React 依赖的模块复用。
  */
-
-import type { MessageStatus } from "@assistant-ui/core";
 
 type KnownTransportToolStatus =
   | "pending"
@@ -133,14 +129,16 @@ type TransportFilePart = {
   name: string;
   contentType: string;
 };
-/** 单条 Transport 消息：Run 内的 canonical conversation 消息。 */
-export type TransportMessage = {
-  id: string;
-  role: "user" | "assistant";
-  parts: Array<TransportTextPart | TransportReasoningPart | TransportToolCallPart | TransportImagePart | TransportFilePart>;
-};
+/** 单条 Transport 消息的内容 part。 */
+export type TransportMessagePart =
+  | TransportTextPart
+  | TransportReasoningPart
+  | TransportToolCallPart
+  | TransportImagePart
+  | TransportFilePart;
 
-type ConversationStateUsage = {
+/** 一次 Run 当前累计的模型 token 用量；字段缺少 provider 明细时为 null。 */
+export type TransportUsage = {
   input_tokens: number | null;
   output_tokens: number | null;
   total_tokens: number | null;
@@ -148,6 +146,39 @@ type ConversationStateUsage = {
   cache_miss_tokens: number | null;
   reasoning_tokens: number | null;
 };
+
+/**
+ * 运行错误：与后端 `ConversationStateError` 对齐的稳定结构。
+ *
+ * 只有稳定 `code` 与 UI 展示 `message`；`retryable` 属于工具观察（仅面向模型），不在
+ * Transport 错误契约内。模型 HTTP 失败时 `message` 可能直接来自响应体的 message 字段。
+ */
+export type TransportError = {
+  code: string;
+  message: string;
+};
+
+/**
+ * 命令被拒的原因（snapshot 顶层 `error`）：比 Run 错误多一个后端单调递增的 `seq`。
+ * 命令没有回执，连续两次同样的拒绝值相同，前端按 `seq` 变化认出「又被拒了一次」。
+ */
+export type TransportCommandError = TransportError & {
+  seq: number;
+};
+
+/** `next` 相对 `previous` 是一次新的命令拒绝（从无到有，或 `seq` 变了）。 */
+export function isNewCommandError(
+  previous: TransportCommandError | null,
+  next: TransportCommandError | null,
+): next is TransportCommandError {
+  return next !== null && (previous === null || previous.seq !== next.seq);
+}
+
+/** Run 生命周期状态：与后端 `ConversationRunStatus` 的五个值一一对应。 */
+export type TransportRunStatus = "running" | "suspended" | "completed" | "failed" | "cancelled";
+
+/** Run 的终态（不会再产生运行中内容）。 */
+export type TransportTerminalRunStatus = Extract<TransportRunStatus, "completed" | "failed" | "cancelled">;
 
 /**
  * Run 冻结的发起配置（运行期锁定）：活动 Run 期间 composer 只读显示这份配置并以它发送。
@@ -159,50 +190,59 @@ export type TransportRunLaunch = {
   banTools: string[];
 };
 
-/** 一个 Run 的完整 Transport 事实，包括其消息、生命周期和 token usage。 */
-export type TransportRun = {
-  runId: number;
-  status: string;
+/**
+ * 一轮回复的结局：Run 到终态时由后端写在该 Run 最后一条助手消息上，Run 被恢复时清空。
+ * 历史回复的「已取消 / 失败 / 用量」与 fork 入口都只读它，不回查 Run。
+ */
+export type TransportOutcome = {
+  status: TransportTerminalRunStatus;
   endReason: string | null;
+  error: TransportError | null;
+  usage: TransportUsage | null;
+  /** 该 Run 冻结的窗口上限，与 `usage` 同属一个 Run：上下文占用的「已用 / 上限」只能成对取。 */
+  contextWindowTotal: number | null;
+};
+
+/** 单条 Transport 消息：Task 级扁平消息列表中的 canonical 消息。 */
+export type TransportMessage = {
+  id: string;
+  role: "user" | "assistant";
+  parts: TransportMessagePart[];
+  /** 所属 Run，只供诊断、日志与 fork 定位；对话界面不据此判断运行状态。 */
+  runId: number;
+  /** 仅「该 Run 最后一条助手消息」在 Run 终态后非空；user 消息恒为 null。 */
+  outcome: TransportOutcome | null;
+};
+
+/**
+ * 当前活动：Task 最新 Run 的摘要投影（事实源仍是后端 `ConversationRunModel.status`）。
+ * `runId` 只供诊断与日志，对话界面按 `status` 判断「运行中 / 已停下」。
+ */
+export type TransportActivity = {
+  runId: number;
+  status: TransportRunStatus;
+  endReason: string | null;
+  error: TransportError | null;
+  usage: TransportUsage | null;
   /** 创建 Run 时冻结的模型上下文窗口上限。 */
   contextWindowTotal: number | null;
   launch: TransportRunLaunch;
-  messages: TransportMessage[];
-  usage: ConversationStateUsage | null;
-  /**
-   * Run 进入失败/取消终态时后端给出的错误；运行中与正常结束为 null。
-   *
-   * `message` 由后端直接提供并展示；模型 HTTP 失败时可能是响应体里的 message 字段。
-   */
-  error: TransportError | null;
 };
 
-/**
- * 运行错误：与后端 `ConversationStateError` 对齐的稳定结构。
- *
- * 只有稳定 `code` 与 UI 展示 `message`；`retryable` 属于工具观察（仅面向模型），不在
- * Transport 错误契约内。
- */
-export type TransportError = {
-  code: string;
-  message: string;
-};
+const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set(["completed", "failed", "cancelled"]);
+const ACTIVE_RUN_STATUSES: ReadonlySet<string> = new Set(["running", "suspended"]);
 
-/**
- * Run 已经结束且不会继续产生运行中内容的状态集合。
- *
- * 该集合与后端 ``Constant.Run.TERMINAL_STATUSES`` 对齐。前端只用它判断展示和
- * 传输收敛，不承担 Run 生命周期迁移或状态修复。
- */
-const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-]);
-
-/** 判断 Run 是否进入后端定义的终态。 */
+/** 判断 Run 是否进入后端定义的终态（与后端 `TERMINAL_RUN_STATUSES` 对齐）。 */
 export function isTerminalRunStatus(status: string | null | undefined): boolean {
   return status !== null && status !== undefined && TERMINAL_RUN_STATUSES.has(status);
+}
+
+/**
+ * 判断 Run 是否处于活动态（与后端 `ACTIVE_RUN_STATUSES` 对齐）：运行中与挂起都算，挂起时仍
+ * 显示停止按钮、锁定配置，同一个 Run 会被唤醒继续输出。
+ */
+export function isActiveRunStatus(status: string | null | undefined): boolean {
+  return status !== null && status !== undefined && ACTIVE_RUN_STATUSES.has(status);
 }
 
 /**
@@ -211,16 +251,21 @@ export function isTerminalRunStatus(status: string | null | undefined): boolean 
  */
 export type InputDelivery = "immediate" | "next_run";
 
-/** 尚未被模型边界消费的排队用户输入，事实仍在后端 inbox。 */
-export type TransportQueuedMessage = TransportMessage & { delivery: InputDelivery };
+/** 尚未被模型边界消费的排队用户输入，事实仍在后端 inbox；尚无所属 Run。 */
+export type TransportQueuedMessage = {
+  id: string;
+  role: "user";
+  parts: TransportMessagePart[];
+  delivery: InputDelivery;
+};
 
-/** Task 级 Transport state；Run 事实全部按 Run 保存在 `runs` 中。 */
+/** Task 级 Transport state。 */
 export type TransportState = {
+  /** 扁平消息列表，按 context 序号排列。 */
+  messages: TransportMessage[];
+  /** 最新 Run 的摘要；Task 尚无 Run 时为 null。 */
+  activity: TransportActivity | null;
+  /** 只承载命令被拒（由后端调度 actor 写入与清空）；Run 自身的失败在 `activity.error` / `outcome.error`。 */
+  error: TransportCommandError | null;
   queued_messages?: TransportQueuedMessage[];
-  runs: TransportRun[];
-  current_run_id: number | null;
-  /** 审批预留；当前固定为空对象。 */
-  approvals: Record<string, never>;
-  /** 运行期错误；无错误时为 null。 */
-  error: TransportError | null;
 };

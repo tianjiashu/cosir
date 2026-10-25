@@ -6,13 +6,11 @@ import { AssistantRuntimeTransportHost } from "@/components/assistant/runtime/as
 import { useRuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
 import { useRuntimeDiagnostics } from "@/components/assistant/runtime/use-runtime-diagnostics";
 import { useBusinessResume } from "@/components/assistant/runtime/use-business-resume";
-import { useCancellationConfirmation } from "@/components/assistant/runtime/use-cancellation-confirmation";
 import { useRuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import { useBackendTransitions } from "@/components/assistant/runtime/use-backend-transitions";
 import type {
   AssistantRuntimeProps,
   ComposerRestore,
-  RuntimeControls,
   RuntimeSessionContext,
 } from "@/components/assistant/runtime/runtime-types";
 import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
@@ -47,8 +45,8 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   initialAttachments,
   initialDisabledToolGroups,
   initialBanTools,
-  forkingRunId,
-  onForkRun,
+  forkingMessageId,
+  onForkMessage,
   onTaskStateChanged,
 }: RuntimeSessionProps) {
   const backendRuntime = useSyncExternalStore(
@@ -92,10 +90,8 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const initialStateRef = useRef(initialState);
   const sessionInitialState = initialStateRef.current;
   const latestStateRef = useRef(sessionInitialState);
-  const runtimeControlsRef = useRef<RuntimeControls | null>(null);
   const attachTransportRef = useRef<(() => Promise<void>) | null>(null);
-  const cancelRequestedRunIdRef = useRef<number | null>(null);
-  const lastTransportErrorRef = useRef<TransportIssue | null>(null);
+  const cancelRequestedRef = useRef(false);
   const composerRestoreRef = useRef<ComposerRestore | null>(null);
   const initialMessageSentRef = useRef(false);
   const onTaskStateChangedRef = useRef(onTaskStateChanged);
@@ -106,9 +102,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     return toolNamesForGroups(selectedToolGroups, toolGroups);
   }, [initialBanTools, selectedToolGroups, toolGroups, toolGroupsError, toolGroupsLoading]);
 
-  const registerRuntimeControls = useCallback((controls: RuntimeControls | null) => {
-    runtimeControlsRef.current = controls;
-  }, []);
   const handleSelectedToolGroupsChange = useCallback((groups: string[]) => {
     setSelectedToolGroups(groups);
     writeStoredToolGroupSelection(taskId, groups);
@@ -135,10 +128,8 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     setIssue,
     onTaskStateChanged: notifyTaskStateChanged,
     latestStateRef,
-    runtimeControlsRef,
     attachTransportRef,
-    cancelRequestedRunIdRef,
-    lastTransportErrorRef,
+    cancelRequestedRef,
     composerRestoreRef,
   }), [
     backendBaseUrl,
@@ -153,34 +144,22 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   ]);
 
   useRuntimeDiagnostics(context);
-  const cancellationConfirmation = useCancellationConfirmation(context);
-  const recovery = useRuntimeRecovery(context, cancellationConfirmation.hasActiveConfirmation);
-  const finishBusinessResume = useCallback((stage: "business-started" | "attach-only") => {
-    if (stage === "business-started") recovery.resetTransportRecoveryBudget();
-    runtimeControlsRef.current?.resume();
-  }, [recovery.resetTransportRecoveryBudget]);
-  const businessResume = useBusinessResume(context, finishBusinessResume);
-  const cancellation = useRuntimeCancellation(context, {
-    ...cancellationConfirmation,
-    reconcileAfterTransportFinish: recovery.reconcileAfterTransportFinish,
-  });
-  // 后端变化的唯一处理点，顺序即语义：先放弃依赖旧实例的业务续跑与取消轮询，
-  // 再由 recovery 以 canonical snapshot 原地对账（运行中则续订，已被收敛则导入终态）。
+  const recovery = useRuntimeRecovery(context);
+  const businessResume = useBusinessResume(context);
+  const cancellation = useRuntimeCancellation(context);
+  // 后端变化的唯一处理点：不可用时停掉重连计时器；恢复后 runtime 按新实例自行重开订阅（首帧即
+  // 完整状态），这里只清零预算并提示。
   useBackendTransitions(backendRuntime, {
     onUnavailable: () => {
-      businessResume.cancelBusinessResume();
-      cancellationConfirmation.suspendForBackend();
       recovery.suspend();
     },
     onRestored: () => {
-      businessResume.cancelBusinessResume();
-      cancellationConfirmation.resumeAfterBackendRestored();
-      recovery.resync("backend_restored", { message: "本机后端已恢复，正在同步当前对话…", canResync: true });
+      recovery.restored({ message: "本机后端已恢复，正在同步当前对话…", canResync: true });
     },
   }, { taskId, traceId });
 
   useEffect(() => {
-    registerResync(() => recovery.resync("user_resync", null));
+    registerResync(() => recovery.resync(null));
     return () => registerResync(null);
   }, [recovery.resync, registerResync]);
 
@@ -192,9 +171,9 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     <AssistantRuntimeTransportHost
       context={context}
       recovery={recovery}
+      cancellation={cancellation}
       commitTransportState={commitTransportState}
       selectedBanTools={selectedBanTools}
-      registerRuntimeControls={registerRuntimeControls}
       registerComposerRestore={registerComposerRestore}
       initialMessageSentRef={initialMessageSentRef}
       toolGroups={toolGroups}
@@ -204,13 +183,13 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       toolGroupsError={toolGroupsError}
       initialMessage={initialMessage}
       initialAttachments={initialAttachments}
-      forkingRunId={forkingRunId}
-      onForkRun={onForkRun}
+      forkingMessageId={forkingMessageId}
+      onForkMessage={onForkMessage}
       onResumeBusiness={businessResume.resumeBusinessRun}
       onInitialMessageError={handleInitialMessageError}
       onCancelRequested={cancellation.onRequested}
       onCancelResult={cancellation.onResult}
-      cancellingRunId={cancellation.cancellingRunId}
+      cancelling={cancellation.cancelling}
       performanceProbe={performanceProbe}
     />
   );

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { TransportState } from "@/lib/assistant/contract";
 import {
   editQueuedTaskMessage,
   rerunTaskMessage,
@@ -11,13 +10,6 @@ import {
 } from "@/lib/assistant/task-commands";
 import { HttpError } from "@/lib/http/errors";
 
-const STATE: TransportState = {
-  runs: [{ runId: 4, status: "running", endReason: null, contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] }, messages: [], usage: null, error: null }],
-  current_run_id: 4,
-  approvals: {},
-  error: null,
-};
-
 const REQUEST: TaskMessageRequest = {
   message: { role: "user", parts: [{ type: "text", text: "hello" }] },
   modelConfigId: 1,
@@ -25,8 +17,9 @@ const REQUEST: TaskMessageRequest = {
   banTools: ["read_file"],
 };
 
-function accepted(queued = false) {
-  return vi.fn().mockImplementation(async () => new Response(JSON.stringify({ state: STATE, queued }), { status: 200 }));
+/** 命令只投递：后端返回 202 `{}`（排队消息编辑 200 `{}`），结果经 Task 长订阅到达。 */
+function accepted(status = 202) {
+  return vi.fn().mockImplementation(async () => new Response("{}", { status }));
 }
 
 function lastCall(): [string, RequestInit] {
@@ -37,9 +30,9 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("task commands", () => {
   it("发送消息只按 Task 寻址，携带投递方式而不携带 runId", async () => {
-    vi.stubGlobal("fetch", accepted(true));
+    vi.stubGlobal("fetch", accepted());
 
-    await expect(sendTaskMessage(7, { ...REQUEST, delivery: "next_run" })).resolves.toEqual({ state: STATE, queued: true });
+    await expect(sendTaskMessage(7, { ...REQUEST, delivery: "next_run" })).resolves.toBeUndefined();
 
     const [url, init] = lastCall();
     expect(url).toMatch(/\/tasks\/7\/messages$/);
@@ -47,9 +40,9 @@ describe("task commands", () => {
   });
 
   it("编辑排队消息用 PATCH 按消息寻址，只带正文，不带发起配置", async () => {
-    vi.stubGlobal("fetch", accepted(true));
+    vi.stubGlobal("fetch", accepted(200));
 
-    await expect(editQueuedTaskMessage(7, "msg/1", REQUEST.message)).resolves.toEqual({ state: STATE, queued: true });
+    await expect(editQueuedTaskMessage(7, "msg/1", REQUEST.message)).resolves.toBeUndefined();
 
     const [url, init] = lastCall();
     expect(url).toMatch(/\/tasks\/7\/queued-messages\/msg%2F1$/);
@@ -80,15 +73,25 @@ describe("task commands", () => {
     expect(JSON.parse(String(lastCall()[1].body))).toEqual({ teamRunId: 17, decision: "approve", data: { goal: "交付" } });
   });
 
+  it("编辑排队消息时消息已并入：409 MESSAGE_CONSUMED 原样抛出", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: { error: { code: "MESSAGE_CONSUMED", message: "消息已被处理", retryable: false } } }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    )));
+    const error = await editQueuedTaskMessage(7, "1", REQUEST.message).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(HttpError);
+    expect((error as HttpError).code).toBe("MESSAGE_CONSUMED");
+  });
+
   it("非 2xx 抛出带后端原因的 HttpError", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({ error: { code: "TASK_STATE_CONFLICT", message: "该 Agent Team 方案已处理", retryable: true } }),
-      { status: 409, headers: { "Content-Type": "application/json" } },
+      JSON.stringify({ detail: { error: { code: "TASK_NOT_FOUND", message: "任务不存在", retryable: false } } }),
+      { status: 404, headers: { "Content-Type": "application/json" } },
     )));
 
     const error = await submitTeamDecision(7, { teamRunId: 17, decision: "reject" }).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(HttpError);
-    expect((error as HttpError).status).toBe(409);
-    expect((error as HttpError).message).toBe("该 Agent Team 方案已处理");
+    expect((error as HttpError).status).toBe(404);
+    expect((error as HttpError).message).toBe("任务不存在");
   });
 });

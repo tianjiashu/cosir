@@ -25,7 +25,7 @@ export type AssistantInitialStateResult = {
  *
  * 每个 task 只成功加载一次。会话挂载后，后端不可用、重启或换实例都**不会**清空
  * 这里的结果——那会卸载会话、丢掉草稿与附件；后端恢复后由会话内的
- * useBackendTransitions → recovery.resync 原地对账。只有尚未加载成功时，后端恢复
+ * runtime 按新的后端实例重开长订阅原地对账（首帧即完整状态）。只有尚未加载成功时，后端恢复
  * 或换代才会自动重新拉取。
  */
 export function useAssistantInitialState(
@@ -56,10 +56,10 @@ export function useAssistantInitialState(
         void frontendLog("INFO", "assistant_initial_state_loaded", "加载对话历史成功", {
           data: {
             taskId,
-            runCount: state.runs.length,
-            messageCount: state.runs.reduce((count, run) => count + run.messages.length, 0),
-            runId: state.current_run_id,
-            runStatus: state.current_run_id === null ? null : state.runs.find((run) => run.runId === state.current_run_id)?.status ?? null,
+            messageCount: state.messages.length,
+            queuedCount: state.queued_messages?.length ?? 0,
+            activityRunId: state.activity?.runId ?? null,
+            activityStatus: state.activity?.status ?? null,
           },
         });
         setLoadedState({ taskId, state });

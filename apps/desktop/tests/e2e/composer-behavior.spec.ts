@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { completedState, seedState } from "./transport-fixtures";
 
 const api = "http://127.0.0.1:8000";
 const undo = process.platform === "darwin" ? "Meta+z" : "Control+z";
@@ -126,7 +127,7 @@ for (const mode of ["new", "task"] as const) {
     let submitted: { message: { attachments?: { path: string }[] } } | undefined;
     await page.route(`${api}/tasks/*/messages`, async route => {
       submitted = route.request().postDataJSON();
-      await route.fulfill({ status: 409, json: { error: { code: "TASK_BUSY", message: "回归测试拒绝发送", retryable: true } } });
+      await route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "回归测试拒绝发送", retryable: true } } } });
     });
     await send.click();
     await expect(page.getByRole("dialog")).toContainText("回归测试拒绝发送");
@@ -204,19 +205,11 @@ test("Task 保活但已进入配置页时，迟到文件不写入隐藏草稿", 
   await expect(input).toHaveText("保留正文");
 });
 
-test("重载后的历史普通文件可编辑、撤销移除并重跑，路径由后端绑定恢复", async ({ page }) => {
-  const state = {
-    runs: [{ runId: 70, status: "completed", endReason: "stop", contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] }, usage: null, error: null,
-      messages: [
-        { id: "history-user", role: "user", parts: [
-          { type: "text", text: "查看 ", status: "completed" },
-          { type: "file", file: "cosir-local-file:historical", name: "history.md", contentType: "text/markdown" },
-        ] },
-        { id: "history-assistant", role: "assistant", parts: [{ type: "text", text: "历史回复", status: "completed" }] },
-      ],
-    }], current_run_id: 70, approvals: {}, error: null,
-  };
-  await page.route(`${api}/tasks/100/assistant/state`, route => route.fulfill({ json: state }));
+test("重载后的历史普通文件可编辑、撤销移除并重跑，路径由后端绑定恢复", async ({ page, request: apiRequest }) => {
+  await seedState(apiRequest, 100, completedState(70, { id: "history-user", parts: [
+    { type: "text", text: "查看 ", status: "completed" },
+    { type: "file", file: "cosir-local-file:historical", name: "history.md", contentType: "text/markdown" },
+  ] }, [{ type: "text", text: "历史回复", status: "completed" }]));
   await openComposer(page, "task");
   await page.reload();
   const user = page.locator('[data-role="user"]');
@@ -232,7 +225,7 @@ test("重载后的历史普通文件可编辑、撤销移除并重跑，路径�
   const editUrl = `${api}/tasks/100/messages/history-user/rerun`;
   const request = page.waitForRequest(req => req.url() === editUrl && req.method() === "POST");
   await page.route(editUrl, async route => {
-    await route.fulfill({ status: 409, json: { error: { code: "EDIT_REJECTED", message: "历史编辑回归拒绝", retryable: true } } });
+    await route.fulfill({ status: 400, json: { detail: { error: { code: "EDIT_REJECTED", message: "历史编辑回归拒绝", retryable: true } } } });
   });
   await page.getByRole("button", { name: "重跑", exact: true }).click();
   const body = (await request).postDataJSON();
@@ -255,7 +248,7 @@ test("Task 图片上传成功但消息提交失败后，正文与完整图片附
   await transfer(input, "paste", "uploaded.png", "image/png", "图片失败恢复");
   await expect(page.locator(".aui-composer-attachments .aui-attachment-root")).toHaveCount(1);
   const request = page.waitForRequest(req => req.url() === `${api}/tasks/100/messages` && req.method() === "POST");
-  await page.route(`${api}/tasks/100/messages`, route => route.fulfill({ status: 409, json: { error: { code: "TASK_BUSY", message: "图片消息回归拒绝", retryable: true } } }));
+  await page.route(`${api}/tasks/100/messages`, route => route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "图片消息回归拒绝", retryable: true } } } }));
   await send.click();
   const body = (await request).postDataJSON();
   expect(body.message.parts).toContainEqual({ type: "image", image: locator });

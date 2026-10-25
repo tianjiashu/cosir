@@ -16,7 +16,6 @@ function task(id: number, workspaceId: number, title: string, updatedAt: string)
     workspace_id: workspaceId,
     title,
     task_type: "user",
-    current_run_id: null,
     execution_status: null,
 
     created_at: updatedAt,

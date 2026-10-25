@@ -12,7 +12,8 @@ export type Workspace = {
 
 type ForkTaskMetadata = {
   source_task_id: number;
-  source_run_id: number;
+  /** fork 切分点：源 Task 中那一轮回复所在的消息 id。 */
+  source_message_id: string;
 };
 
 export type WorkspaceTask = {
@@ -23,7 +24,6 @@ export type WorkspaceTask = {
   extra?: {
     fork?: ForkTaskMetadata;
   } | null;
-  current_run_id: number | null;
   execution_status: string | null;
   created_at: string;
   updated_at: string;
@@ -45,4 +45,8 @@ export const deleteTask = (taskId: number, creationCommandId?: string) =>
     `/tasks/${taskId}${creationCommandId ? `?creationCommandId=${encodeURIComponent(creationCommandId)}` : ""}`,
     { method: "DELETE" },
   );
-export const forkTask = (taskId: number, runId: number) => postJson<WorkspaceTask>(`/tasks/${taskId}/fork`, { runId });
+/**
+ * fork 到某条消息所在那一轮回复为止。`messageId` 可以是用户消息 id、`assistant-{用户消息id}` 或
+ * `assistant-run-{runId}`，后端按消息切分。
+ */
+export const forkTask = (taskId: number, messageId: string) => postJson<WorkspaceTask>(`/tasks/${taskId}/fork`, { messageId });

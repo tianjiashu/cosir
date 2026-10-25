@@ -1,34 +1,23 @@
-import type { TransportState } from "@/lib/assistant/contract";
+import { isActiveRunStatus, type TransportState } from "@/lib/assistant/contract";
 
-/** Return the run selected by the task-level canonical snapshot. */
-export function currentTransportRun(
-  state: TransportState,
-): TransportState["runs"][number] | undefined {
-  return state.current_run_id === null
-    ? undefined
-    : state.runs.find((run) => run.runId === state.current_run_id);
+/** Count the canonical messages of a transport snapshot (queued inputs excluded). */
+export function transportMessageCount(state: TransportState): number {
+  return state.messages.length;
 }
 
-/** Count messages across all persisted runs in a transport snapshot. */
-export function transportMessageCount(state: TransportState): number {
-  return state.runs.reduce((count, run) => count + run.messages.length, 0);
+/** 当前活动是否处于活动态（运行中或挂起）；Task 尚无 Run 时为 false。 */
+export function isActivityActive(state: TransportState): boolean {
+  return isActiveRunStatus(state.activity?.status);
 }
 
 /** Perform the shallow runtime guard used by the Assistant UI state bridge. */
 function isTransportState(value: unknown): value is TransportState {
   if (typeof value !== "object" || value === null) return false;
-  const candidate = value as { runs?: unknown; current_run_id?: unknown };
-  if (!Array.isArray(candidate.runs)) return false;
-  if (candidate.current_run_id !== null
-    && (!Number.isInteger(candidate.current_run_id) || (candidate.current_run_id as number) < 0)) return false;
-  return candidate.runs.every((run) => {
-    if (typeof run !== "object" || run === null || Array.isArray(run)) return false;
-    const candidateRun = run as { runId?: unknown; status?: unknown; messages?: unknown };
-    return Number.isInteger(candidateRun.runId)
-      && (candidateRun.runId as number) >= 0
-      && typeof candidateRun.status === "string"
-      && Array.isArray(candidateRun.messages);
-  });
+  const candidate = value as { messages?: unknown; activity?: unknown };
+  if (!Array.isArray(candidate.messages)) return false;
+  return candidate.activity === null
+    || (typeof candidate.activity === "object" && candidate.activity !== undefined
+      && typeof (candidate.activity as { status?: unknown }).status === "string");
 }
 
 /**
@@ -43,35 +32,32 @@ export function readRuntimeTransportState(value: unknown): TransportState | null
   return isTransportState(value) ? value : null;
 }
 
-/** 在不可信的 thread external state 中按 ``runId`` 定位 Run；未就绪或不存在时返回 undefined。 */
-export function findTransportRun(
-  value: unknown,
-  runId: number | null,
-): TransportState["runs"][number] | undefined {
-  const state = readRuntimeTransportState(value);
-  return state === null || runId === null
-    ? undefined
-    : state.runs.find((run) => run.runId === runId);
-}
-
-/** 从 Task 的 Run 事实中选取最新一条有效上下文窗口测量。 */
+/**
+ * Task 当前的上下文窗口占用。
+ *
+ * 「已用」与「上限」必须来自同一个 Run（窗口随 Run 冻结，两轮之间可能换了模型）：优先取当前活动
+ * 的用量与窗口；当前活动刚开始还没有用量时，回落到最近一条带用量的历史回复结局，用它自己记下的
+ * 窗口（同一 Task 的上下文前缀连续，作为新一轮开始前的占用）。选中的那一对窗口未知时不显示，不拿
+ * 别的 Run 的窗口凑。
+ */
 export function latestMeasuredContextUsage(value: unknown): {
   used: number;
   total: number;
 } | null {
   const state = readRuntimeTransportState(value);
   if (state === null) return null;
-  let latestRunId: number | null = null;
-  let latest: { used: number; total: number } | null = null;
-  for (const run of state.runs) {
-    const used = run.usage?.input_tokens;
-    const total = run.contextWindowTotal;
-    if (used === null || used === undefined || !Number.isFinite(used) || used <= 0) continue;
-    if (total === null || !Number.isFinite(total) || total <= 0) continue;
-    if (latestRunId === null || run.runId > latestRunId) {
-      latestRunId = run.runId;
-      latest = { used, total };
-    }
+  const measured = (count: number | null | undefined): count is number => (
+    count !== null && count !== undefined && Number.isFinite(count) && count > 0
+  );
+  const pair = (used: number, total: number | null) => (
+    measured(total) ? { used, total } : null
+  );
+  const current = state.activity?.usage?.input_tokens;
+  if (measured(current)) return pair(current, state.activity?.contextWindowTotal ?? null);
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    const outcome = state.messages[index].outcome;
+    const used = outcome?.usage?.input_tokens;
+    if (outcome && measured(used)) return pair(used, outcome.contextWindowTotal);
   }
-  return latest;
+  return null;
 }

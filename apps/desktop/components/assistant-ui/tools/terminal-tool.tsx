@@ -47,10 +47,10 @@ function shellBadge(value: unknown): string | null {
 type TerminalToolProps = ToolCallMessagePartProps & {
   /** 工具取消按 Task 寻址：后端命中 Task 当前执行中的这次调用。 */
   taskId?: number;
-  runCancelling?: boolean;
+  taskCancelling?: boolean;
 };
 
-export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact, taskId, runCancelling = false }: TerminalToolProps) {
+export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact, taskId, taskCancelling = false }: TerminalToolProps) {
   const artifact = readToolArtifact(rawArtifact);
   const data = artifact.display_data ?? {};
   const argRecord = asRecord(args);
@@ -64,7 +64,7 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
   const timedOut = data.timed_out === true;
   const status = artifact.backendStatus;
   const isActive = status === "pending" || status === "running";
-  const canCancel = toolName === "execute_terminal" && status === "running" && taskId !== undefined && !runCancelling;
+  const canCancel = toolName === "execute_terminal" && status === "running" && taskId !== undefined && !taskCancelling;
   const [open, setOpen] = useToolDisclosure(status);
   const [cancellationPending, setCancellationPending] = useState(false);
   const [cancellationError, setCancellationError] = useState<string | null>(null);

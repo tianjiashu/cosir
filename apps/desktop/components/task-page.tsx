@@ -22,8 +22,8 @@ type TaskSessionProps = {
   initialDisabledToolGroups?: string[];
   initialBanTools?: string[];
   workspaceRoot?: string;
-  forkingRunId?: number | null;
-  onForkRun?: (runId: number) => void;
+  forkingMessageId?: string | null;
+  onForkMessage?: (messageId: string) => void;
   onTaskLoaded?: (task: WorkspaceTask) => void;
   onTaskStateChanged?: () => void;
 };
@@ -42,8 +42,8 @@ export function TaskPage({
   initialDisabledToolGroups,
   initialBanTools,
   workspaceRoot,
-  forkingRunId,
-  onForkRun,
+  forkingMessageId,
+  onForkMessage,
   onTaskLoaded,
   onTaskStateChanged,
 }: TaskSessionProps) {
@@ -149,8 +149,8 @@ export function TaskPage({
           initialAttachments={initialAttachments}
           initialDisabledToolGroups={initialDisabledToolGroups}
           initialBanTools={initialBanTools}
-          forkingRunId={forkingRunId}
-          onForkRun={onForkRun}
+          forkingMessageId={forkingMessageId}
+          onForkMessage={onForkMessage}
           onTaskStateChanged={onTaskStateChanged}
         />
       </div>

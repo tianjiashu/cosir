@@ -1,16 +1,12 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
 import type { CreateAttachment } from "@assistant-ui/core";
-import { useEffect, useRef, type MutableRefObject } from "react";
+import { useEffect, type MutableRefObject } from "react";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { currentTransportRun, transportMessageCount } from "@/lib/assistant/transport-state-operations";
-import type {
-  ComposerRestore,
-  RuntimeControls,
-} from "@/components/assistant/runtime/runtime-types";
+import { readRuntimeTransportState, transportMessageCount } from "@/lib/assistant/transport-state-operations";
+import type { ComposerRestore } from "@/components/assistant/runtime/runtime-types";
 import type { PickedComposerAttachment } from "@/components/composer/attachment-picker";
-import type { BackendRuntimeSnapshot } from "@/src/runtime-config";
 import {
   getLocalAttachment,
   registerLocalAttachment,
@@ -30,89 +26,14 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 export function RuntimeRenderDiagnostics({ taskId }: { taskId: number }) {
   const messageCount = useAuiState((state) => state.thread.messages.length);
   const isRunning = useAuiState((state) => state.thread.isRunning);
-  const runId = useAuiState((state) => {
-    const run = readRuntimeRun(state.thread.state);
-    return typeof run?.runId === "number" ? run.runId : null;
-  });
-  const runStatus = useAuiState((state) => {
-    const run = readRuntimeRun(state.thread.state);
-    return typeof run?.status === "string" ? run.status : "unknown";
-  });
+  const activityRunId = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.activity?.runId ?? null);
+  const activityStatus = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.activity?.status ?? null);
 
   useEffect(() => {
     void frontendLog("DEBUG", "assistant_ui_render_state", "Assistant UI 渲染状态发生变化", {
-      data: { taskId, messageCount, runId, runStatus, isRunning },
+      data: { taskId, messageCount, activityRunId, activityStatus, isRunning },
     });
-  }, [isRunning, messageCount, runId, runStatus, taskId]);
-
-  return null;
-}
-
-type RuntimeRunDiagnostic = {
-  runId?: unknown;
-  status?: unknown;
-};
-
-function readRuntimeRun(value: unknown): RuntimeRunDiagnostic | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const state = value as { current_run_id?: unknown; runs?: unknown };
-  if (!Array.isArray(state.runs) || typeof state.current_run_id !== "number") return undefined;
-  const run = state.runs.find((candidate) =>
-    typeof candidate === "object" && candidate !== null
-      && (candidate as { runId?: unknown }).runId === state.current_run_id,
-  );
-  return typeof run === "object" && run !== null ? run as RuntimeRunDiagnostic : undefined;
-}
-
-/**
- * 向会话注册 runtime 控制（resume / importState），并在挂载时为仍在运行的 Run 发起一次 attach。
- *
- * 挂载时后端不可用则不发起：后端恢复后由会话的后端变化入口（recovery.resync）统一对账并续订，
- * 避免这里与恢复入口各自 attach 一次。
- */
-export function RuntimeControlBridge({
-  register,
-  backendRef,
-  resumeOnMount,
-  attachTransportRef,
-}: {
-  register: (controls: RuntimeControls | null) => void;
-  backendRef: MutableRefObject<BackendRuntimeSnapshot>;
-  resumeOnMount: boolean;
-  attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;
-}) {
-  const aui = useAui();
-  const initialResumeIssuedRef = useRef(false);
-
-  useEffect(() => {
-    register({
-      resume: () => {
-        if (backendRef.current.available) void attachTransportRef.current?.();
-      },
-      importState: (state) => aui.thread.importExternalState(state),
-    });
-    return () => register(null);
-  }, [attachTransportRef, aui, backendRef, register]);
-
-  useEffect(() => {
-    if (!backendRef.current.available || !resumeOnMount || initialResumeIssuedRef.current) return;
-    let cancelled = false;
-    const scheduledBackendGeneration = backendRef.current.generation;
-    const timer = window.setTimeout(() => {
-      if (
-        cancelled
-        || !backendRef.current.available
-        || backendRef.current.generation !== scheduledBackendGeneration
-        || initialResumeIssuedRef.current
-      ) return;
-      initialResumeIssuedRef.current = true;
-      void attachTransportRef.current?.();
-    }, 0);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [attachTransportRef, backendRef, resumeOnMount]);
+  }, [activityRunId, activityStatus, isRunning, messageCount, taskId]);
 
   return null;
 }
@@ -141,7 +62,7 @@ export function InitialMessageBridge({
       !text?.trim() && attachments.length === 0
       || sentRef.current
       || transportMessageCount(initialState) > 0
-      || (currentTransportRun(initialState)?.status ?? "idle") !== "idle"
+      || initialState.activity !== null
     ) return;
     const composer = aui.thread.composer();
     composer.setText(text ?? "");

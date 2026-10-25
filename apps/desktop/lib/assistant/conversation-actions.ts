@@ -8,27 +8,23 @@ export type ComposerAction = "send" | "stop" | "cancelling" | "resume";
  * 该判断只基于后端 snapshot，不读取 assistant-ui 的 optimistic message，
  * 因而不会让尚未落库的 pending command 获得编辑入口。
  */
-export function getLatestUserMessageId(state: Pick<TransportState, "runs"> | null | undefined): string | null {
-  if (!state || !Array.isArray(state.runs)) return null;
-  for (const run of [...state.runs].reverse()) {
-    for (const message of [...run.messages].reverse()) {
-      if (message.role === "user") return message.id;
-    }
+export function getLatestUserMessageId(state: Pick<TransportState, "messages"> | null | undefined): string | null {
+  if (!state || !Array.isArray(state.messages)) return null;
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    if (state.messages[index].role === "user") return state.messages[index].id;
   }
   return null;
 }
 
 /**
- * 判断指定用户消息是否允许编辑重跑：后端只接受「Task 已到终态」时编辑最新一条已消费用户消息，
+ * 判断指定用户消息是否允许编辑重跑：后端只接受「Task 已停下」时编辑最新一条已消费用户消息，
  * 这里与之对齐以免暴露必然被拒的入口。排队中的消息另由 {@link isQueuedUserMessage} 判断。
  */
-export function isEditableLatestRunUserMessage(
+export function isEditableLatestUserMessage(
   state: TransportState | null | undefined,
   messageId: string,
 ): boolean {
-  if (!state || state.current_run_id == null) return false;
-  const run = state.runs.find((candidate) => candidate.runId === state.current_run_id);
-  if (!run || !isTerminalRunStatus(run.status)) return false;
+  if (!state || !isTerminalRunStatus(state.activity?.status)) return false;
   return getLatestUserMessageId(state) === messageId;
 }
 
@@ -41,21 +37,13 @@ export function isQueuedUserMessage(
 }
 
 /**
- * 当前 canonical Run 已取消或失败时允许显式续跑；等待用户决定有独立入口。
+ * 当前活动已取消或失败时允许显式续跑（同一个 Run 从模型边界继续）。
  *
  * endReason 是后端保留的展示/审计事实，不参与 resume 资格判断。
  */
 export function canResumeStoppedRun(state: TransportState | null | undefined): boolean {
-  if (!state || !Array.isArray(state.runs) || state.current_run_id == null) return false;
-  const run = state.runs.find((candidate) => candidate.runId === state.current_run_id);
-  if (!run || !["cancelled", "failed"].includes(run.status)) return false;
-  return run.messages.some((message) => message.role === "user") || Boolean(state.queued_messages?.length);
-}
-
-export function getTransportRunId(state: unknown): number | null {
-  if (typeof state !== "object" || state === null) return null;
-  const currentRunId = (state as { current_run_id?: unknown }).current_run_id;
-  return typeof currentRunId === "number" ? currentRunId : null;
+  if (!state?.activity || !["cancelled", "failed"].includes(state.activity.status)) return false;
+  return state.messages.some((message) => message.role === "user") || Boolean(state.queued_messages?.length);
 }
 
 export function deriveComposerAction(input: {

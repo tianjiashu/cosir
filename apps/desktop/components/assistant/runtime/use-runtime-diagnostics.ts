@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { currentTransportRun, transportMessageCount } from "@/lib/assistant/transport-state-operations";
+import { transportMessageCount } from "@/lib/assistant/transport-state-operations";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 
@@ -22,8 +22,8 @@ export function useRuntimeDiagnostics(context: RuntimeSessionContext): void {
         taskId: context.taskId,
         workspaceId: context.workspaceId ?? null,
         initialMessageCount: transportMessageCount(context.initialState),
-        initialRunId: context.initialState.current_run_id,
-        initialRunStatus: currentTransportRun(context.initialState)?.status ?? null,
+        initialActivityRunId: context.initialState.activity?.runId ?? null,
+        initialActivityStatus: context.initialState.activity?.status ?? null,
       },
     });
 
@@ -39,8 +39,8 @@ export function useRuntimeDiagnostics(context: RuntimeSessionContext): void {
           data: {
             taskId: context.taskId,
             workspaceId: context.workspaceId ?? null,
-            lastRunId: context.latestStateRef.current.current_run_id,
-            lastRunStatus: currentTransportRun(context.latestStateRef.current)?.status ?? null,
+            lastActivityRunId: context.latestStateRef.current.activity?.runId ?? null,
+            lastActivityStatus: context.latestStateRef.current.activity?.status ?? null,
           },
         });
       }, 0);

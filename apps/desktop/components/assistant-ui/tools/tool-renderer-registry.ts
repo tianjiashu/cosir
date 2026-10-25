@@ -29,16 +29,12 @@ export type ToolPartRoute =
   | "fallback";
 
 export type ToolPartRendererProps = ToolCallMessagePartProps & {
-  /** 拥有该消息的 Run；只读展示面没有可取消工具时可以省略。 */
-  runId?: number | null;
-  /** 拥有该消息的 Conversation Run 状态；审批交互以此判断是否仍在等待用户决定。 */
-  runStatus?: string | null;
-  /** 整个 Run 已经进入取消流程。 */
-  runCancelling?: boolean;
-  /** 拥有该工具 part 的任务，只用于打开任务范围的预览面板。 */
+  /** 拥有该工具 part 的任务：工具取消、审批决定与预览面板都按 Task 寻址。 */
   taskId?: number;
-  /** 用户决定提交后重新订阅当前 Run 的事件流。 */
-  onAttachTransport?: () => Promise<void>;
+  /** 只读展示面不提供写入交互（取消工具、停止子 Agent）。 */
+  interactive?: boolean;
+  /** 用户已请求停止整个 Task 的当前活动，工具级停止入口随之收起。 */
+  taskCancelling?: boolean;
 };
 
 type ToolRendererMatchContext = {
@@ -65,7 +61,6 @@ const KNOWN_DISPLAY_KINDS = new Set([
   "terminal-session",
   "delegation-result",
   "child-agent-result",
-  "repeated-call",
   "agent-configuration-draft",
   "agent-team-approval",
   "agent-team-execution",

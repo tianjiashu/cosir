@@ -18,13 +18,11 @@ const input: SubmitNewConversationMessageInput = {
   traceId: "0".repeat(32),
 };
 
-const STATE = { runs: [], current_run_id: null, approvals: {}, error: null };
-
 afterEach(() => vi.unstubAllGlobals());
 
 describe("submitNewConversationMessage", () => {
-  it("以 2xx 回执作为 accepted barrier，发送到 Task 消息端点", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ state: STATE, queued: false }), { status: 200 })));
+  it("以 202 投递作为后端已受理的边界，发送到 Task 消息端点", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 202 })));
 
     await expect(submitNewConversationMessage(input)).resolves.toBeUndefined();
 
@@ -39,8 +37,8 @@ describe("submitNewConversationMessage", () => {
 
   it("treats a non-2xx response as a definitive rejection with the backend reason", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({ error: { code: "TASK_BUSY", message: "测试拒绝", retryable: true } }),
-      { status: 409, headers: { "Content-Type": "application/json" } },
+      JSON.stringify({ detail: { error: { code: "INVALID_MESSAGE", message: "测试拒绝", retryable: true } } }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
     )));
 
     const error = await submitNewConversationMessage(input).catch((cause: unknown) => cause);

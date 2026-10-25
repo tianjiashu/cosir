@@ -14,14 +14,14 @@ import { useToolDisclosure } from "./tool-disclosure";
 import { DARK_TOOL_CARD_CONTENT_CLASS, DARK_TOOL_CARD_HEADER_CLASS } from "../elements/tool-layout-tokens";
 
 type DelegationToolRowProps = ToolCallMessagePartProps & {
-  /** Parent run context is supplied only by the writable main Thread. */
-  runId?: number | null;
-  /** The parent Run is already being cancelled. */
-  runCancelling?: boolean;
+  /** 只有可写主 Thread 提供停止子 Agent 的入口。 */
+  interactive?: boolean;
+  /** 父 Task 的当前活动已在停止中。 */
+  taskCancelling?: boolean;
 };
 
 /** Generic low-noise tool activity row adapter for delegation. */
-export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCancelling = false }: DelegationToolRowProps) {
+export function DelegationToolRow({ artifact: rawArtifact, interactive = false, taskCancelling = false }: DelegationToolRowProps) {
   const artifact = readToolArtifact(rawArtifact);
   const display = readDelegationDisplay(artifact.display_data);
   const actions = useWorkbenchActions();
@@ -33,8 +33,8 @@ export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCanc
   const canOpen = childTaskId !== undefined && actions !== null && actions.workspaceId !== null;
   const canCancel = childTaskId !== undefined
     && isActive
-    && runId !== null
-    && !runCancelling;
+    && interactive
+    && !taskCancelling;
   const [cancellationPending, setCancellationPending] = useState(false);
   const [cancellationError, setCancellationError] = useState<string | null>(null);
   const [isOpen, setOpen] = useToolDisclosure(status, false, { openWhileRunning: false });
@@ -59,19 +59,14 @@ export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCanc
     setCancellationPending(true);
     setCancellationError(null);
     void frontendLog("INFO", "delegation_child_run_cancel_requested", "用户请求停止子 Agent", {
-      data: { parent_run_id: runId, child_task_id: childTaskId },
+      data: { child_task_id: childTaskId },
     });
 
     const result = await cancelTask(childTaskId);
-    if (result.accepted || result.reason === "not_cancellable") {
-      // 409 表示子 Task 已没有可停止的执行（多为刚结束）。两种情况都等父委派
-      // 工具 part 收到 canonical 终态，不在这里乐观改状态。
-      void frontendLog("INFO", "delegation_child_run_cancel_signalled", "子 Agent 停止信号已发出或已无可停止的执行", {
-        data: {
-          parent_run_id: runId,
-          child_task_id: childTaskId,
-          already_stopped: !result.accepted,
-        },
+    if (result.accepted) {
+      // 停止信号只投递；子 Task 的终态经父委派工具 part 的 canonical 投影到达，不在这里乐观改状态。
+      void frontendLog("INFO", "delegation_child_run_cancel_signalled", "子 Agent 停止信号已发出", {
+        data: { child_task_id: childTaskId },
       });
       return;
     }
@@ -80,7 +75,6 @@ export function DelegationToolRow({ artifact: rawArtifact, runId = null, runCanc
     setCancellationError(result.message);
     void frontendLog("WARNING", "delegation_child_run_cancel_failed", "停止子 Agent 请求失败", {
       data: {
-        parent_run_id: runId,
         child_task_id: childTaskId,
         reason: result.reason,
       },

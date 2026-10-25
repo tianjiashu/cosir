@@ -7,14 +7,14 @@ import { cancelTask } from "@/lib/assistant/cancel-task";
 describe("cancelTask", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("reports HTTP 409 as not cancellable instead of success", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 409 })));
+  it("reports a non-2xx response as rejected instead of success", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
     const result = await cancelTask(7);
-    expect(result).toEqual(expect.objectContaining({ accepted: false, reason: "not_cancellable" }));
+    expect(result).toEqual(expect.objectContaining({ accepted: false, reason: "rejected" }));
   });
 
   it("posts to the task-scoped cancel endpoint", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 202 }));
     vi.stubGlobal("fetch", fetchMock);
     await expect(cancelTask(7)).resolves.toEqual({ accepted: true });
     expect(String(fetchMock.mock.calls[0][0])).toContain("/tasks/7/cancel");

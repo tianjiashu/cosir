@@ -1,32 +1,29 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+
+import type { TransportState } from "../../lib/assistant/contract";
+import { seedState } from "./transport-fixtures";
 
 const origin = "http://127.0.0.1:8000";
-const snapshot = (status: string) => ({
-  runs: ["completed", status].map((runStatus, index) => ({
-    runId: index + 1,
-    status: runStatus,
-    endReason: null,
-    messages: [
-      { id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index + 1}`, status: "completed" }] },
-      { id: `a-${index}`, role: "assistant", parts: [{ type: "text", text: `回答 ${index + 1}`, status: runStatus === "running" ? "running" : "completed" }] },
-    ],
-    usage: null,
+const LAUNCH = { modelConfigId: null, reasoningEffort: null, banTools: [] };
+/** 两轮回复：第一轮已结束（带结局），第二轮处于 `status`。 */
+const snapshot = (status: "completed" | "running" | "suspended"): TransportState => {
+  const ended = (runStatus: string) => runStatus === "completed";
+  const turn = (runId: number, runStatus: string) => [
+    { id: `u-${runId}`, role: "user" as const, runId, outcome: null,
+      parts: [{ type: "text" as const, text: `问题 ${runId}`, status: "completed" as const }] },
+    { id: `assistant-u-${runId}`, role: "assistant" as const, runId,
+      parts: [{ type: "text" as const, text: `回答 ${runId}`, status: ended(runStatus) ? "completed" as const : "running" as const }],
+      outcome: ended(runStatus) ? { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null } : null },
+  ];
+  return {
+    messages: [...turn(1, "completed"), ...turn(2, status)],
+    activity: { runId: 2, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH },
     error: null,
-  })),
-  current_run_id: 2,
-  approvals: {},
-  context_window_total: null,
-  error: null,
-});
+  };
+};
 
-async function seedView(page: Page, status = "completed") {
-  await page.route(`${origin}/tasks/42/assistant/state`, (route) => route.fulfill({ json: snapshot(status) }));
-  await page.route(`${origin}/tasks/42/assistant/attach`, (route) => route.fulfill({
-    contentType: "text/event-stream",
-    body: `data: ${JSON.stringify({
-      task_id: 42, kind: "full", mutations: [], state: snapshot(status), target_run_id: 2, target_run_status: status,
-    })}\n\ndata: [DONE]\n\n`,
-  }));
+async function seedView(page: Page, request: APIRequestContext, status: "completed" | "running" | "suspended" = "completed") {
+  await seedState(request, 42, snapshot(status));
   await page.goto("/tasks/42");
   await expect(page.getByText("回答 1", { exact: true })).toBeVisible();
 }
@@ -42,20 +39,21 @@ test.beforeEach(async ({ request }) => {
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: 43, title: "另一个任务" } });
 });
 
-for (const status of ["running", "pending", "suspended"]) {
-  test(`后续 ${status} Run 不阻止 fork 已结束历史`, async ({ page }) => {
+for (const status of ["running", "suspended"] as const) {
+  test(`后续 ${status} 活动不阻止 fork 已结束的那一轮`, async ({ page, request }) => {
     const calls: unknown[] = [];
     await page.route(`${origin}/tasks/42/fork`, async (route) => {
       calls.push(route.request().postDataJSON());
       await route.fulfill({ status: 409, json: { detail: { code: "WORKSPACE_BUSY", message: "busy", retryable: true } } });
     });
-    await seedView(page, status);
+    await seedView(page, request, status);
     const buttons = page.getByRole("button", { name: "从此处 Fork 新任务", exact: true });
     await expect(buttons).toHaveCount(2);
     await expect(buttons.first()).toBeEnabled();
     await expect(buttons.last()).toBeDisabled();
     await buttons.first().click();
-    await expect.poll(() => calls).toEqual([{ runId: 1 }]);
+    // fork 按消息切分：入口挂在带结局的回复上，请求体只带消息 id。
+    await expect.poll(() => calls).toEqual([{ messageId: "assistant-u-1" }]);
     await expect(page.getByText("工作区正在处理其他操作，请稍后重试。", { exact: true })).toBeVisible();
   });
 }
@@ -63,7 +61,7 @@ for (const status of ["running", "pending", "suspended"]) {
 test("fork 成功后导航不等待目录刷新", async ({ page, request }) => {
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: 44, title: target.title } });
   await page.route(`${origin}/tasks/42/fork`, (route) => route.fulfill({ json: target }));
-  await seedView(page);
+  await seedView(page, request);
   // 后续目录刷新失败不能把创建成功变成失败或再次创建。
   await page.route(`${origin}/workspaces`, (route) => route.fulfill({ status: 503, body: "unavailable" }));
   await page.getByRole("button", { name: "从此处 Fork 新任务", exact: true }).first().click();
@@ -71,7 +69,7 @@ test("fork 成功后导航不等待目录刷新", async ({ page, request }) => {
   await expect(page.getByText("Fork 失败", { exact: true })).toHaveCount(0);
 });
 
-test("切换任务后 fork 的迟到响应不抢回页面", async ({ page }) => {
+test("切换任务后 fork 的迟到响应不抢回页面", async ({ page, request }) => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   let submitted = false;
@@ -80,7 +78,7 @@ test("切换任务后 fork 的迟到响应不抢回页面", async ({ page }) => 
     await gate;
     await route.fulfill({ json: target });
   });
-  await seedView(page);
+  await seedView(page, request);
   await page.getByRole("button", { name: "从此处 Fork 新任务", exact: true }).first().click();
   await expect.poll(() => submitted).toBe(true);
   await page.getByRole("treeitem").filter({ hasText: "另一个任务" }).click();

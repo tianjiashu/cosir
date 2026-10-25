@@ -1,16 +1,21 @@
 import type { ThreadMessage } from "@assistant-ui/react";
 
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
-import type {
-  TransportError,
-  TransportMessage,
-  TransportRun,
-  TransportState,
+import {
+  isActiveRunStatus,
+  isNewCommandError,
+  isTerminalRunStatus,
+  type TransportError,
+  type TransportMessage,
+  type TransportQueuedMessage,
+  type TransportRunStatus,
+  type TransportState,
 } from "@/lib/assistant/contract";
 import {
   toPendingUserMessage,
   toSnapshotErrorMessage,
   toThreadMessageWithRenderContext,
+  type TransportMessageRenderContext,
   type UserAddMessageCommand,
 } from "@/lib/assistant/converter";
 import { parseTransportState } from "@/lib/assistant/snapshot-validation";
@@ -24,38 +29,35 @@ export type TransportFrameEnvelope = {
     value: unknown;
   }>;
   state?: TransportState;
-  source_run_id?: number | null;
-  current_run_id?: number | null;
-  current_run_status?: string | null;
   resync_reason?: string | null;
-  target_run_id: number;
-  target_run_status?: string | null;
 };
 
 export type FrameStoreItem =
-  | { kind: "canonical"; message: TransportMessage; context: MessageContext }
+  | { kind: "canonical"; message: TransportMessage | TransportQueuedMessage; context: TransportMessageRenderContext }
   | { kind: "pending"; command: UserAddMessageCommand }
   | { kind: "error"; error: TransportError };
 
-type MessageContext = {
-  runId: TransportRun["runId"];
-  runStatus: TransportRun["status"];
-  endReason: TransportRun["endReason"];
-  error: TransportRun["error"];
-  isLastRunMessage: boolean;
+/**
+ * 当前活动的状态跳变。`started`：从非活动进入活动态（一轮开始）；`settled`：从活动态进入终态
+ * （一轮结束）。挂起仍是活动态，不产生事件；首次构造只记基线，不产生事件。
+ */
+export type ActivityTransition = {
+  kind: "started" | "settled";
+  status: TransportRunStatus;
 };
 
 type StoreSnapshot = {
   state: TransportState;
   items: readonly FrameStoreItem[];
   isRunning: boolean;
-  targetRunId: number | null;
-  targetRunStatus: string | null;
   pendingCommands: readonly UserAddMessageCommand[];
   resyncRequired: boolean;
 };
 
 type Listener = () => void;
+type ActivityListener = (transition: ActivityTransition) => void;
+/** 乐观命令随顶层 `error` 写入被整体收回时的监听者：宿主据此把草稿恢复给用户。 */
+type RejectionListener = (commands: readonly UserAddMessageCommand[], error: TransportError) => void;
 
 type ScheduledCommit = {
   cancel: () => void;
@@ -105,41 +107,19 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
       value: mutation.value,
     };
   });
-  if (!Number.isInteger(frame.target_run_id)) throw new Error("transport frame target_run_id is invalid");
-  if (frame.target_run_status !== undefined
-    && frame.target_run_status !== null
-    && typeof frame.target_run_status !== "string") {
-    throw new Error("transport frame target_run_status is invalid");
-  }
   if (kind === "full" && frame.state === undefined) {
     throw new Error("full transport frame must include state");
+  }
+  if (frame.resync_reason !== undefined && frame.resync_reason !== null && typeof frame.resync_reason !== "string") {
+    throw new Error("transport frame resync_reason is invalid");
   }
   return {
     task_id: frame.task_id as number,
     kind,
     mutations,
     state: frame.state === undefined ? undefined : parseTransportState(frame.state),
-    source_run_id: parseOptionalInteger(frame.source_run_id, "source_run_id"),
-    current_run_id: parseOptionalInteger(frame.current_run_id, "current_run_id"),
-    current_run_status: parseOptionalString(frame.current_run_status, "current_run_status"),
-    resync_reason: parseOptionalString(frame.resync_reason, "resync_reason"),
-    target_run_id: frame.target_run_id as number,
-    target_run_status: parseOptionalString(frame.target_run_status, "target_run_status"),
+    resync_reason: frame.resync_reason as string | null | undefined,
   };
-}
-
-function parseOptionalInteger(value: unknown, field: string): number | null | undefined {
-  if (value !== undefined && value !== null && !Number.isInteger(value)) {
-    throw new Error(`transport frame ${field} is invalid`);
-  }
-  return value as number | null | undefined;
-}
-
-function parseOptionalString(value: unknown, field: string): string | null | undefined {
-  if (value !== undefined && value !== null && typeof value !== "string") {
-    throw new Error(`transport frame ${field} is invalid`);
-  }
-  return value as string | null | undefined;
 }
 
 /**
@@ -148,31 +128,29 @@ function parseOptionalString(value: unknown, field: string): string | null | und
  * mutation 只复制路径上的 state 祖先；发生变化的消息得到新的源对象，未变化的历史消息
  * 保持原对象身份，以便 assistant-ui 的按消息订阅复用转换结果。它只是渲染工作副本，
  * 不建立第二个持久化事实源，也不会向 wire state 添加排序或版本字段。流式消息内容在
- * 下一动画帧统一通知订阅者，结构变化和终态则立即通知，保证 active row 不会被同一帧内
+ * 下一动画帧统一通知订阅者，结构变化和活动状态变化则立即通知，保证 active row 不会被同一帧内
  * 的多个 token 重复提交。
+ *
+ * 「一轮输出结束」只由这里判定：每次 state 变化后比较 `activity.status`，活动态（运行中 / 挂起）
+ * 进入终态时向活动监听者发一次 `settled`。连接断开是另一件事，由 transport hook 处理，这里不感知。
  */
 export class TransportFrameStore {
   private state: TransportState;
   private items: FrameStoreItem[] = [];
+  private canonicalItems: FrameStoreItem[] = [];
   private pendingCommands: readonly UserAddMessageCommand[] = [];
-  private targetRunId: number | null;
-  private targetRunStatus: string | null;
   private resyncRequired = false;
   private snapshot: StoreSnapshot;
   private readonly listeners = new Set<Listener>();
-  private runItems: FrameStoreItem[][] = [];
-  private canonicalItems: FrameStoreItem[] = [];
-  private runRanges: Array<{ start: number; end: number }> = [];
+  private readonly activityListeners = new Set<ActivityListener>();
+  private readonly rejectionListeners = new Set<RejectionListener>();
   private scheduledCommit: ScheduledCommit | null = null;
   private scheduledFrameTimestamp: number | null = null;
-  private terminalConvergenceKey: string | null = null;
   private readonly scheduleCommit: (callback: (frameTimestamp?: number) => void) => ScheduledCommit;
   private readonly performanceProbe: AssistantPerformanceProbe | undefined;
 
   public constructor(initialState: TransportState, options: TransportFrameStoreOptions = {}) {
     this.state = initialState;
-    this.targetRunId = initialState.current_run_id;
-    this.targetRunStatus = findRun(initialState, this.targetRunId)?.status ?? null;
     this.scheduleCommit = options.scheduleCommit ?? scheduleWebViewCommit;
     this.performanceProbe = options.performanceProbe;
     this.rebuildAllItems();
@@ -182,6 +160,18 @@ export class TransportFrameStore {
   public subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  };
+
+  /** 订阅当前活动的「开始 / 结束」跳变；监听者在本次 publication 之后同步调用。 */
+  public subscribeActivity = (listener: ActivityListener): (() => void) => {
+    this.activityListeners.add(listener);
+    return () => this.activityListeners.delete(listener);
+  };
+
+  /** 订阅「命令被拒」：顶层 `error` 由空变为非空时，被收回的乐观命令随之交给监听者。 */
+  public subscribeRejection = (listener: RejectionListener): (() => void) => {
+    this.rejectionListeners.add(listener);
+    return () => this.rejectionListeners.delete(listener);
   };
 
   public getSnapshot = (): StoreSnapshot => this.snapshot;
@@ -195,73 +185,40 @@ export class TransportFrameStore {
     if (frame.kind === "resync_required") {
       this.cancelScheduledCommit();
       this.resyncRequired = true;
-      this.targetRunStatus = frame.target_run_status ?? this.targetRunStatus;
       this.publish();
       this.recordFrame(frame, startedAt);
       return;
     }
     if (frame.kind === "full") {
       if (!frame.state) throw new Error("full transport frame must include state");
-      this.cancelScheduledCommit();
-      this.state = frame.state;
-      this.targetRunId = frame.target_run_id;
-      this.targetRunStatus = frame.target_run_status
-        ?? findRun(this.state, this.targetRunId)?.status
-        ?? null;
       this.resyncRequired = false;
-      this.pendingCommands = [];
-      this.rebuildAllItems();
-      this.publish();
+      this.replaceState(frame.state);
       this.recordFrame(frame, startedAt);
       return;
     }
 
-    const affectedRuns = new Set<number>();
-    let rebuildAll = false;
-    let structureChanged = false;
+    const previous = this.state;
+    const contentOnlyIndexes = new Set<number>();
+    let structural = false;
     for (const mutation of frame.mutations) {
-      if (mutation.path.length === 0 || mutation.path[0] === "queued_messages") {
-        rebuildAll = true;
-      }
-      if (mutation.path[0] === "runs") {
-        if (typeof mutation.path[1] === "number") {
-          affectedRuns.add(mutation.path[1]);
-          if (!this.runRanges[mutation.path[1]]) structureChanged = true;
-        } else {
-          rebuildAll = true;
-        }
+      if (isMessageContentMutation(mutation, this.state)) {
+        contentOnlyIndexes.add(mutation.path[1] as number);
+      } else {
+        structural = true;
       }
       this.state = applyMutation(this.state, mutation);
     }
-    this.targetRunId = frame.target_run_id;
-    this.targetRunStatus = frame.target_run_status ?? this.targetRunStatus;
-    if (rebuildAll || structureChanged) {
+    if (structural) {
       this.rebuildAllItems();
-    } else {
-      const changedRuns = [...affectedRuns].sort((left, right) => right - left);
-      if (changedRuns.length > 0) this.items = [...this.items];
-      for (const runIndex of changedRuns) {
-        const run = this.state.runs[runIndex];
-        const range = this.runRanges[runIndex];
-        if (!run || !range) continue;
-        const nextItems = buildRunItems(run, this.runItems[runIndex]);
-        this.runItems[runIndex] = nextItems;
-        this.canonicalItems.splice(range.start, range.end - range.start, ...nextItems);
-        this.items.splice(range.start, range.end - range.start, ...nextItems);
-      }
-      if (changedRuns.length > 0) this.rebuildRunRanges();
-    }
-    if (rebuildAll || frame.mutations.some((mutation) => mutation.path[0] === "error")) {
-      this.composeItems();
-    }
-    const canBatchAsActiveRowUpdate = frame.mutations.length > 0
-      && frame.mutations.every((mutation) => this.isActiveMessageContentMutation(mutation))
-      && !rebuildAll
-      && !structureChanged;
-    if (!canBatchAsActiveRowUpdate || isTerminalStatus(this.targetRunStatus)) {
+      const rejected = this.reconcilePending(previous);
       this.publishNow();
+      this.emitRejection(previous, rejected);
+      this.emitActivityTransition(previous);
     } else {
-      this.publishOnNextAnimationFrame();
+      this.refreshMessageItems(contentOnlyIndexes);
+      const activeRowOnly = [...contentOnlyIndexes].every((index) => this.isActiveRowIndex(index));
+      if (activeRowOnly && contentOnlyIndexes.size > 0) this.publishOnNextAnimationFrame();
+      else this.publishNow();
     }
     this.recordFrame(frame, startedAt);
   }
@@ -272,6 +229,7 @@ export class TransportFrameStore {
     this.publish(null, "pending");
   }
 
+  /** 去掉指定的乐观命令（命令被拒）；不传时清空全部。 */
   public clearPendingCommands(rejectedCommands?: readonly UserAddMessageCommand[]): void {
     if (this.pendingCommands.length === 0) return;
     if (!rejectedCommands || rejectedCommands.length === 0) {
@@ -288,30 +246,21 @@ export class TransportFrameStore {
           : !rejectedCommands.includes(command)
       ));
     }
-    if (this.pendingCommands.length === 0) {
-      this.composeItems();
-      this.publish(null, "pending");
-      return;
-    }
     this.composeItems();
     this.publish(null, "pending");
   }
 
+  /** 导入一份完整 state（与 full 帧同一语义：活动跳变照常判定、乐观命令按出现的消息收敛）。 */
   public importState(state: TransportState): void {
-    this.cancelScheduledCommit();
-    this.state = state;
-    this.targetRunId = state.current_run_id;
-    this.targetRunStatus = findRun(state, this.targetRunId)?.status ?? null;
     this.resyncRequired = false;
-    this.rebuildAllItems();
-    this.publish();
+    this.replaceState(state);
   }
 
   /**
    * 立即执行已排队的流式提交。
    *
-   * 生产代码通常不需要调用它；它用于终态收敛和确定性测试，确保排队的 active row
-   * 更新不会在终态提交之后再次触发一次渲染通知。
+   * 生产代码通常不需要调用它；它用于连接结束前和确定性测试，确保排队的 active row
+   * 更新不会在之后再次触发一次渲染通知。
    */
   public flushScheduledPublication(): void {
     if (!this.scheduledCommit) return;
@@ -320,12 +269,109 @@ export class TransportFrameStore {
     this.publish(frameTimestamp, "stream");
   }
 
-  private rebuildAllItems(): void {
-    this.runItems = this.state.runs.map((run) => buildRunItems(run));
-    this.canonicalItems = [];
-    for (const runItems of this.runItems) this.canonicalItems.push(...runItems);
-    this.rebuildRunRanges();
+  private replaceState(state: TransportState): void {
+    const previous = this.state;
+    this.cancelScheduledCommit();
+    this.state = state;
+    this.rebuildAllItems();
+    const rejected = this.reconcilePending(previous);
+    this.publish();
+    this.emitRejection(previous, rejected);
+    this.emitActivityTransition(previous);
+  }
+
+  /**
+   * 乐观命令的收敛：snapshot 里新出现了用户消息（排队或已并入）就按出现顺序去掉同样数量的最早
+   * 乐观命令；顶层 `error` 出现新的拒绝（从无到有，或 `seq` 变了——连续两次同样的拒绝值相同，
+   * 只能靠 `seq` 区分）时全部去掉。202 本身不清。
+   */
+  private reconcilePending(previous: TransportState): readonly UserAddMessageCommand[] {
+    if (this.pendingCommands.length === 0) return [];
+    const known = userMessageIds(previous);
+    const appeared = [...userMessageIds(this.state)].filter((id) => !known.has(id)).length;
+    const rejected = isNewCommandError(previous.error, this.state.error);
+    if (!rejected && appeared === 0) return [];
+    const dropped = rejected ? this.pendingCommands : [];
+    this.pendingCommands = rejected ? [] : this.pendingCommands.slice(appeared);
     this.composeItems();
+    return dropped;
+  }
+
+  /**
+   * 每次新的命令拒绝都通知，即使没有乐观命令被收回（恢复、取消等命令不产生乐观消息，宿主仍要
+   * 据此复位按钮等交互状态）。
+   */
+  private emitRejection(previous: TransportState, commands: readonly UserAddMessageCommand[]): void {
+    const error = this.state.error;
+    if (!isNewCommandError(previous.error, error)) return;
+    for (const listener of this.rejectionListeners) listener(commands, error);
+  }
+
+  /**
+   * 比较前后两份 state 的当前活动。同一份 full 帧里旧 Run 已结束、新 Run 已开始（重连期间错过
+   * 了中间帧）时两端都是活动态，按 `runId` 变化补一次 `settled` 再发 `started`，旧 Run 的结局取
+   * 它最后一条助手消息的 `outcome`。
+   */
+  private emitActivityTransition(previous: TransportState): void {
+    const before = previous.activity;
+    const after = this.state.activity;
+    const transitions: ActivityTransition[] = [];
+    const wasActive = before !== null && isActiveRunStatus(before.status);
+    const isActive = after !== null && isActiveRunStatus(after.status);
+    if (wasActive && isActive && before.runId !== after.runId) {
+      transitions.push({ kind: "settled", status: outcomeStatusOf(this.state.messages, before.runId) });
+      transitions.push({ kind: "started", status: after.status });
+    } else if (isActive && !wasActive) {
+      transitions.push({ kind: "started", status: after.status });
+    } else if (wasActive && after !== null && isTerminalRunStatus(after.status)) {
+      transitions.push({ kind: "settled", status: after.status });
+    }
+    for (const transition of transitions) {
+      if (transition.kind === "settled") this.performanceProbe?.recordTerminalConvergence();
+      for (const listener of this.activityListeners) listener(transition);
+    }
+  }
+
+  private rebuildAllItems(): void {
+    const previousById = new Map(
+      this.canonicalItems
+        .filter((item): item is Extract<FrameStoreItem, { kind: "canonical" }> => item.kind === "canonical")
+        .map((item) => [item.message.id, item]),
+    );
+    const runEndIds = lastAssistantIdsByRun(this.state.messages);
+    this.canonicalItems = this.state.messages.map((message) => {
+      const context = this.contextFor(message, runEndIds);
+      const previous = previousById.get(message.id);
+      if (previous && previous.message === message && sameContext(previous.context, context)) return previous;
+      return { kind: "canonical", message, context };
+    });
+    this.composeItems();
+  }
+
+  /** 只有消息内容变化（流式 token、工具状态）时就地替换这几条，不重算其余消息。 */
+  private refreshMessageItems(indexes: ReadonlySet<number>): void {
+    if (indexes.size === 0) return;
+    this.canonicalItems = [...this.canonicalItems];
+    for (const index of indexes) {
+      const current = this.canonicalItems[index];
+      const message = this.state.messages[index];
+      if (!current || current.kind !== "canonical" || !message) continue;
+      this.canonicalItems[index] = { kind: "canonical", message, context: current.context };
+    }
+    this.composeItems();
+  }
+
+  private contextFor(message: TransportMessage, runEndIds: ReadonlySet<string>): TransportMessageRenderContext {
+    const activity = this.state.activity;
+    const isRunEnd = runEndIds.has(message.id);
+    // 只有当前活动那一轮的回复末尾消费活动（运行中状态、实时用量）；其余消息不挂，活动元数据
+    // 变化时不必重建它们。
+    return {
+      runId: message.runId,
+      outcome: message.outcome,
+      isRunEnd,
+      activity: isRunEnd && activity !== null && activity.runId === message.runId ? activity : null,
+    };
   }
 
   private composeItems(): void {
@@ -337,31 +383,18 @@ export class TransportFrameStore {
       command,
     }));
     const queued: FrameStoreItem[] = (this.state.queued_messages ?? []).map((message) => ({
-      kind: "canonical", message,
-      context: { runId: this.state.current_run_id ?? 0, runStatus: "pending", endReason: null,
-        error: null, isLastRunMessage: false },
+      kind: "canonical",
+      message,
+      context: QUEUED_CONTEXT,
     }));
     this.items = [...this.canonicalItems, ...queued, ...error, ...pending];
-  }
-
-  private rebuildRunRanges(): void {
-    let start = 0;
-    this.runRanges = this.runItems.map((runItems) => {
-      const end = start + runItems.length;
-      const range = { start, end };
-      start = end;
-      return range;
-    });
   }
 
   private makeSnapshot(): StoreSnapshot {
     return {
       state: this.state,
       items: this.items,
-      isRunning: this.pendingCommands.length > 0
-        || (this.targetRunStatus !== null && !TERMINAL_STATUSES.has(this.targetRunStatus)),
-      targetRunId: this.targetRunId,
-      targetRunStatus: this.targetRunStatus,
+      isRunning: this.pendingCommands.length > 0 || isActiveRunStatus(this.state.activity?.status),
       pendingCommands: this.pendingCommands,
       resyncRequired: this.resyncRequired,
     };
@@ -372,22 +405,15 @@ export class TransportFrameStore {
     publicationKind: PublicationKind = "canonical",
   ): void {
     const startedAt = this.performanceProbe?.startTiming() ?? null;
-    const terminalKey = isTerminalStatus(this.targetRunStatus)
-      ? `${this.targetRunId ?? "none"}:${this.targetRunStatus}`
-      : null;
-    const isNewTerminalConvergence = terminalKey !== null && terminalKey !== this.terminalConvergenceKey;
-    this.terminalConvergenceKey = terminalKey;
     this.snapshot = this.makeSnapshot();
-    if (isNewTerminalConvergence) this.performanceProbe?.recordTerminalConvergence();
     if (this.performanceProbe) {
-      const activeRun = findRun(this.state, this.targetRunId);
       this.performanceProbe.recordPublication({
         durationMs: this.performanceProbe.finishTiming(startedAt),
         itemCount: this.items.length,
-        activeMessageId: activeRun?.messages.at(-1)?.id ?? null,
+        activeMessageId: this.state.messages.at(-1)?.id ?? null,
         publicationKind,
         animationFrameTimestamp: frameTimestamp,
-        terminalConvergence: isNewTerminalConvergence,
+        terminalConvergence: false,
       });
     }
     // 先登记本次 publication 的 active message 与宿主动画帧，再通知 React 订阅者，
@@ -426,26 +452,67 @@ export class TransportFrameStore {
     this.scheduledFrameTimestamp = null;
   }
 
-  private isActiveMessageContentMutation(
-    mutation: TransportFrameEnvelope["mutations"][number],
-  ): boolean {
-    if (
-      mutation.path[0] !== "runs"
-      || typeof mutation.path[1] !== "number"
-      || mutation.path[2] !== "messages"
-      || typeof mutation.path[3] !== "number"
-      || mutation.path.length <= 4
-    ) return false;
-
-    const run = this.state.runs[mutation.path[1]];
-    return run?.runId === this.targetRunId
-      && mutation.path[3] === run.messages.length - 1
-      && !isTerminalStatus(run.status);
+  /** 流式内容只合并到下一动画帧提交给「当前活动的最后一条消息」，其它消息的变化立即提交。 */
+  private isActiveRowIndex(index: number): boolean {
+    const activity = this.state.activity;
+    const message = this.state.messages[index];
+    return index === this.state.messages.length - 1
+      && message !== undefined
+      && activity !== null
+      && message.runId === activity.runId
+      && isActiveRunStatus(activity.status);
   }
 }
 
-function isTerminalStatus(status: string | null): boolean {
-  return status !== null && TERMINAL_STATUSES.has(status);
+const QUEUED_CONTEXT: TransportMessageRenderContext = {
+  runId: null,
+  outcome: null,
+  isRunEnd: false,
+  activity: null,
+};
+
+/** 判断 mutation 是否只改写某条已存在消息的内部内容（不增删消息、不改结局）。 */
+function isMessageContentMutation(
+  mutation: TransportFrameEnvelope["mutations"][number],
+  state: TransportState,
+): boolean {
+  return mutation.path[0] === "messages"
+    && typeof mutation.path[1] === "number"
+    && mutation.path[1] < state.messages.length
+    && mutation.path.length > 2
+    && mutation.path[2] === "parts";
+}
+
+/** 某个 Run 的结局状态：取它最后一条带 `outcome` 的消息；投影尚未写入时按已完成处理。 */
+function outcomeStatusOf(messages: readonly TransportMessage[], runId: number): TransportRunStatus {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.runId === runId && message.outcome !== null) return message.outcome.status;
+  }
+  return "completed";
+}
+
+function userMessageIds(state: TransportState): Set<string> {
+  const ids = new Set<string>();
+  for (const message of state.messages) if (message.role === "user") ids.add(message.id);
+  for (const message of state.queued_messages ?? []) ids.add(message.id);
+  return ids;
+}
+
+/** 每个 Run 最后一条助手消息的 id：回复末尾（用量、fork、诊断）只挂在这些消息上。 */
+function lastAssistantIdsByRun(messages: readonly TransportMessage[]): Set<string> {
+  const lastByRun = new Map<number, string>();
+  for (const message of messages) {
+    if (message.role === "assistant") lastByRun.set(message.runId, message.id);
+  }
+  return new Set(lastByRun.values());
+}
+
+function sameContext(left: TransportMessageRenderContext, right: TransportMessageRenderContext): boolean {
+  return left.runId === right.runId
+    && left.outcome === right.outcome
+    && left.isRunEnd === right.isRunEnd
+    && left.activity === right.activity;
 }
 
 function scheduleWebViewCommit(callback: (frameTimestamp?: number) => void): ScheduledCommit {
@@ -467,44 +534,6 @@ export function convertFrameStoreItem(item: FrameStoreItem): ThreadMessage {
     return message;
   }
   return toSnapshotErrorMessage(item.error);
-}
-
-function buildRunItems(
-  run: TransportRun,
-  previous: readonly FrameStoreItem[] = [],
-): FrameStoreItem[] {
-  const lastAssistantMessageId = [...run.messages].reverse().find((message) => message.role === "assistant")?.id;
-  const previousById = new Map(
-    previous
-      .filter((item): item is Extract<FrameStoreItem, { kind: "canonical" }> => item.kind === "canonical")
-      .map((item) => [item.message.id, item]),
-  );
-  return run.messages.map((message) => {
-    const context: MessageContext = {
-      runId: run.runId,
-      runStatus: run.status,
-      endReason: run.endReason,
-      error: run.error,
-      isLastRunMessage: message.id === lastAssistantMessageId,
-    };
-    const previousItem = previousById.get(message.id);
-    if (previousItem && sameContext(previousItem.context, context) && previousItem.message === message) {
-      return previousItem;
-    }
-    return { kind: "canonical", message, context };
-  });
-}
-
-function sameContext(left: MessageContext, right: MessageContext): boolean {
-  return left.runId === right.runId
-    && left.runStatus === right.runStatus
-    && left.endReason === right.endReason
-    && left.error === right.error
-    && left.isLastRunMessage === right.isLastRunMessage;
-}
-
-function findRun(state: TransportState, runId: number | null): TransportRun | undefined {
-  return runId === null ? undefined : state.runs.find((run) => run.runId === runId);
 }
 
 function applyMutation(
@@ -555,4 +584,3 @@ function updateAtPath(
   next[key as string] = updateAtPath(next[key as string], rest, kind, value);
   return next;
 }
-const TERMINAL_STATUSES = new Set(["idle", "completed", "failed", "cancelled", "interrupted"]);

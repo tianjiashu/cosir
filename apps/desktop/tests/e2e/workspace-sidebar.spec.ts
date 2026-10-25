@@ -1,10 +1,12 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+
+import { seedState } from "./transport-fixtures";
 
 const origin = "http://127.0.0.1:8000";
 const longTitle = "检查工作区任务列表中的超长中文标题与EnglishIdentifierWithoutSpaces".repeat(3);
 const workspaceName = "cosir-用于验证长名称的本地工作区";
 
-async function seedSidebar(page: Page, theme: string) {
+async function seedSidebar(page: Page, request: APIRequestContext, theme: string) {
   await page.addInitScript((value) => {
     localStorage.clear();
     localStorage.setItem("cosir.theme-preference", value);
@@ -23,9 +25,8 @@ async function seedSidebar(page: Page, theme: string) {
   // 只读展示夹具按浏览器隔离，避免其他测试重置共享内存服务时影响任务切换。
   for (const task of tasks) {
     await page.route(`${origin}/tasks/${task.task_id}`, (route) => route.fulfill({ json: task }));
-    await page.route(`${origin}/tasks/${task.task_id}/assistant/state`, (route) => route.fulfill({ json: {
-      runs: [], current_run_id: null, approvals: {}, context_window_total: null, error: null,
-    } }));
+    // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要一条常驻连接，路由夹具无法保持。
+    await seedState(request, task.task_id, { messages: [], activity: null, error: null });
   }
 }
 
@@ -40,9 +41,9 @@ async function box(locator: Locator) {
 }
 
 for (const theme of ["light", "dark"]) {
-  test(`${theme}：长标题不溢出，选中与悬停分离，行内删除操作不引起位移`, async ({ page }, testInfo) => {
+  test(`${theme}：长标题不溢出，选中与悬停分离，行内删除操作不引起位移`, async ({ page, request }, testInfo) => {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await seedSidebar(page, theme);
+    await seedSidebar(page, request, theme);
     await page.goto("/tasks/100");
     const selected = row(page, longTitle);
     const other = row(page, "核对运行状态");
@@ -91,8 +92,8 @@ for (const theme of ["light", "dark"]) {
     await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(1);
   });
 
-  test(`${theme}：方向键、Enter、Tab、空格和 Escape 各自执行正确操作`, async ({ page }) => {
-    await seedSidebar(page, theme);
+  test(`${theme}：方向键、Enter、Tab、空格和 Escape 各自执行正确操作`, async ({ page, request }) => {
+    await seedSidebar(page, request, theme);
     await page.goto("/");
     const workspace = row(page, workspaceName);
     const selected = row(page, longTitle);

@@ -12,9 +12,8 @@ const requestJsonMock = vi.mocked(requestJson);
 
 function validSnapshot(): TransportState {
   return {
-    runs: [],
-    current_run_id: null,
-    approvals: {},
+    messages: [],
+    activity: null,
     error: null,
   };
 }

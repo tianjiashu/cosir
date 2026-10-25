@@ -6,18 +6,18 @@ import {
 import type { ReadonlyJSONValue } from "assistant-stream/utils";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
-import type { TransportState } from "@/lib/assistant/contract";
+import type { TransportError, TransportRunStatus, TransportState } from "@/lib/assistant/contract";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import {
   convertFrameStoreItem,
-  parseTransportFrame,
   TransportFrameStore,
   type FrameStoreItem,
 } from "@/lib/assistant/transport-frame-store";
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
 import { cancelTask } from "@/lib/assistant/cancel-task";
-import type { TaskCommandAccepted } from "@/lib/assistant/task-commands";
-import { parseHttpError } from "@/lib/http/errors";
+import { TaskTransportSession, type TransportDisconnect } from "@/lib/assistant/task-transport-session";
+
+export type { TransportDisconnect } from "@/lib/assistant/task-transport-session";
 
 export type TaskAssistantTransportOptions = {
   initialState: TransportState;
@@ -26,40 +26,41 @@ export type TaskAssistantTransportOptions = {
   baseUrl: string;
   headers: () => Promise<Record<string, string>> | Record<string, string>;
   /**
-   * 提交一条用户消息（`sourceId` 存在即编辑重跑），返回后端回执。宿主负责请求体组装与
-   * 端点选择；本 hook 只负责 pending 展示、回执 snapshot 导入与后续 attach。只读 runtime 不提供。
+   * 提交一条用户消息（`sourceId` 存在即编辑）。宿主负责请求体组装与端点选择；命令只投递，
+   * 结果经长订阅到达。返回 `awaitSnapshot`：为真时乐观消息保留到 snapshot 里出现对应消息（或
+   * 命令被拒）才清除；编辑排队消息原地更新、不产生新消息，返回 false 即清。只读 runtime 不提供。
    */
-  submitMessage?: (command: UserAddMessageCommand) => Promise<TaskCommandAccepted>;
+  submitMessage?: (command: UserAddMessageCommand) => Promise<{ awaitSnapshot: boolean }>;
+  /** 长订阅建立（attach 2xx）。 */
   onResponse?: (response: Response) => void;
-  onFinish?: (status: { targetRunId: number | null; targetRunStatus: string | null }) => void;
-  onError?: (
-    error: Error,
-    params: {
-      commands: readonly unknown[];
-      phase: "request-rejected" | "accepted-stream-failed";
-      updateState: (updater: (state: TransportState) => TransportState) => void;
-      clearPendingCommands: () => void;
-    },
-  ) => Promise<void>;
+  /** 一轮输出结束：当前活动从活动态进入终态（含重连 full 帧补发）；挂起不算。 */
+  onActivitySettled?: (status: TransportRunStatus) => void;
+  /** 命令被调度 actor 拒绝：顶层 `error` 写入，乐观消息被收回，宿主据此恢复草稿。 */
+  onCommandRejected?: (error: TransportError, commands: readonly UserAddMessageCommand[]) => void;
+  /**
+   * 长订阅意外结束：长订阅只在客户端主动关闭、背压重同步或 Task 删除时结束，任何其他结束
+   * （EOF、网络错误、attach 非 2xx）都应由宿主进入有限重连。主动关闭不回调。
+   */
+  onDisconnect?: (disconnect: TransportDisconnect) => void;
+  /** 命令提交被拒或未能发出（HTTP 非 2xx、网络失败、附件失效）；乐观消息已先行收回。 */
+  onError?: (error: Error, commands: readonly UserAddMessageCommand[]) => Promise<void> | void;
   onCancel?: (params: { error?: Error; commands: readonly unknown[] }) => void;
-  onAttachReady?: (attach: (() => Promise<void>) | null) => void;
+  /**
+   * 订阅身份：为 null 时不订阅（本机后端不可用）；非 null 时挂载即打开 Task 长订阅，值变化（后端
+   * 换了实例）即重开。卸载或变为 null 时关闭。意外断开后的重连不归这里，由宿主经返回的 `open` 发起。
+   */
+  connectionKey: string | null;
   readonly?: boolean;
   onStateCommit?: (state: TransportState) => void;
   performanceProbe?: AssistantPerformanceProbe | null;
 };
 
-type StreamCallbacks = {
-  commands: readonly unknown[];
-  controller: AbortController;
-  performanceStarted: boolean;
-};
-
 /**
  * 为单个 task 的 frame store 创建 assistant-ui external adapter。
  *
- * frame store 是唯一的流式投影持有者；本 hook 负责请求与连接生命周期，通过被替换的
- * AbortController 和对象身份检查隔离旧 SSE 连接，不引入协议版本字段。它不创建业务
- * 持久化状态，导出的 runtime hook 再选择合适的 assistant-ui 宿主。
+ * frame store 是唯一的流式投影持有者，长订阅与命令提交由 `TaskTransportSession` 承担；本 hook
+ * 只做 React 装配：把 store 快照交给 assistant-ui、把活动跳变与命令被拒转给宿主回调。它不创建
+ * 业务持久化状态。
  */
 function useTaskAssistantTransportAdapter(
   taskId: number,
@@ -69,163 +70,55 @@ function useTaskAssistantTransportAdapter(
     performanceProbe: options.performanceProbe ?? undefined,
   }), [options.initialState, options.performanceProbe, taskId]);
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-  const activeStreamRef = useRef<StreamCallbacks | null>(null);
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const attachUrl = `${options.baseUrl}/tasks/${taskId}/assistant/attach`;
+  const session = useMemo(() => new TaskTransportSession(store, attachUrl, () => {
+    const current = optionsRef.current;
+    return {
+      headers: current.headers,
+      submitMessage: current.submitMessage,
+      onResponse: current.onResponse,
+      onDisconnect: current.onDisconnect,
+      onSubmitError: current.onError,
+    };
+  }), [attachUrl, store]);
 
-  const closeActiveStream = useCallback(() => {
-    const callbacks = activeStreamRef.current;
-    if (callbacks?.performanceStarted) {
-      const snapshot = store.getSnapshot();
-      optionsRef.current.performanceProbe?.finishStream({
-        targetRunId: snapshot.targetRunId,
-        targetRunStatus: snapshot.targetRunStatus,
-      });
-      callbacks.performanceStarted = false;
+  useEffect(() => store.subscribeActivity((transition) => {
+    const probe = optionsRef.current.performanceProbe;
+    if (transition.kind === "started") {
+      probe?.beginStream();
+      return;
     }
-    callbacks?.controller.abort();
-    activeStreamRef.current = null;
-  }, [store]);
+    probe?.finishStream({
+      activityRunId: store.getSnapshot().state.activity?.runId ?? null,
+      activityStatus: transition.status,
+    });
+    optionsRef.current.onActivitySettled?.(transition.status);
+  }), [store]);
 
-  const readSse = useCallback(async (response: Response, callbacks: StreamCallbacks) => {
-    if (!response.body) throw new Error("Assistant frame SSE response has no body");
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const records = buffer.split("\n\n");
-      buffer = records.pop() ?? "";
-      for (const record of records) {
-        const data = record
-          .split("\n")
-          .find((line) => line.startsWith("data:"))
-          ?.slice("data:".length)
-          .trim();
-        if (!data || data === "[DONE]" || activeStreamRef.current !== callbacks) continue;
-        store.applyFrame(parseTransportFrame(JSON.parse(data)));
-      }
-    }
-    buffer += decoder.decode();
-    if (buffer.trim() && activeStreamRef.current === callbacks) {
-      const data = buffer.split("\n").find((line) => line.startsWith("data:"))?.slice(5).trim();
-      if (data && data !== "[DONE]") store.applyFrame(parseTransportFrame(JSON.parse(data)));
-    }
-    // SSE EOF 可能早于宿主 WebView 的下一次动画帧；先提交最后一批 active row 内容，再让完成回调
-    // 读取最新的 Transport state，避免终态收敛基于上一个动画帧的旧快照。
-    if (activeStreamRef.current === callbacks) store.flushScheduledPublication();
-  }, [store]);
+  useEffect(() => store.subscribeRejection((commands, error) => {
+    optionsRef.current.onCommandRejected?.(error, commands);
+  }), [store]);
 
-  const attachApi = `${options.baseUrl}/tasks/${taskId}/assistant/attach`;
-  const stateApi = `${options.baseUrl}/tasks/${taskId}/assistant/state`;
-
-  /** attach 只订阅 Task 当前 Run，不携带请求体，也不触发业务执行。 */
-  const openStream = useCallback(async (commands: readonly unknown[]) => {
-    closeActiveStream();
-    const controller = new AbortController();
-    const callbacks: StreamCallbacks = { commands, controller, performanceStarted: false };
-    activeStreamRef.current = callbacks;
-    let accepted = false;
-    try {
-      const response = await fetch(attachApi, {
-        cache: "no-store",
-        method: "POST",
-        headers: await optionsRef.current.headers(),
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        // 结构化错误（code / message / retryable）由 parseHttpError 解析为 HttpError；
-        // 响应体原文不进入错误消息，界面经 userErrorMessage 只展示后端给出的可读原因。
-        throw await parseHttpError(response);
-      }
-      if (activeStreamRef.current !== callbacks) return;
-      accepted = true;
-      callbacks.performanceStarted = true;
-      optionsRef.current.performanceProbe?.beginStream();
-      optionsRef.current.onResponse?.(response);
-      await readSse(response, callbacks);
-      if (activeStreamRef.current === callbacks) {
-        activeStreamRef.current = null;
-        const snapshot = store.getSnapshot();
-        optionsRef.current.performanceProbe?.finishStream({
-          targetRunId: snapshot.targetRunId,
-          targetRunStatus: snapshot.targetRunStatus,
-        });
-        callbacks.performanceStarted = false;
-        optionsRef.current.onFinish?.({
-          targetRunId: snapshot.targetRunId,
-          targetRunStatus: snapshot.targetRunStatus,
-        });
-      }
-    } catch (error) {
-      if (controller.signal.aborted || activeStreamRef.current !== callbacks) return;
-      activeStreamRef.current = null;
-      const normalized = error instanceof Error ? error : new Error(String(error));
-      if (accepted) {
-        const snapshot = store.getSnapshot();
-        optionsRef.current.performanceProbe?.finishStream({
-          targetRunId: snapshot.targetRunId,
-          targetRunStatus: snapshot.targetRunStatus,
-        });
-        callbacks.performanceStarted = false;
-      }
-      await optionsRef.current.onError?.(normalized, {
-        commands,
-        phase: accepted ? "accepted-stream-failed" : "request-rejected",
-        updateState: (updater) => store.importState(updater(store.getSnapshot().state)),
-        clearPendingCommands: () => store.clearPendingCommands(commands as UserAddMessageCommand[]),
-      });
-    }
-  }, [attachApi, closeActiveStream, readSse, store]);
-
-  const sendMessage = useCallback(async (command: UserAddMessageCommand) => {
-    const submit = optionsRef.current.submitMessage;
-    if (!submit) throw new Error("只读 Transport runtime 不接受消息提交");
-    store.setPendingCommands([command]);
-    try {
-      const accepted = await submit(command);
-      store.clearPendingCommands([command]);
-      // 已有订阅接收提交事件，不能用较早的 HTTP 快照覆盖正在到达的流式帧。
-      if (!activeStreamRef.current || !accepted.queued) {
-        if (!activeStreamRef.current) store.importState(accepted.state);
-        const run = accepted.state.runs.find((candidate) => candidate.runId === accepted.state.current_run_id);
-        if (run && ["pending", "running", "suspended"].includes(run.status)) void openStream([]);
-      }
-    } catch (error) {
-      // 请求未发出（如附件已失效）与后端拒绝同属 request-rejected，交给同一个 onError 恢复草稿并提示。
-      store.clearPendingCommands([command]);
-      await optionsRef.current.onError?.(error instanceof Error ? error : new Error(String(error)), {
-        commands: [command],
-        phase: "request-rejected",
-        updateState: (updater) => store.importState(updater(store.getSnapshot().state)),
-        clearPendingCommands: () => store.clearPendingCommands([command]),
-      });
-    }
-  }, [openStream, store]);
-
-  const attach = useCallback(async () => {
-    const state = store.getSnapshot();
-    if ((state.targetRunId ?? state.state.current_run_id) === null) return;
-    await openStream([]);
-  }, [openStream, store]);
-
+  // 订阅归 runtime 所有：有订阅身份就打开，身份变化或卸载时关闭旧连接再按新身份打开。
+  const { connectionKey } = options;
   useEffect(() => {
-    options.onAttachReady?.(attach);
-    return () => options.onAttachReady?.(null);
-  }, [attach, options.onAttachReady]);
+    if (connectionKey === null) return;
+    void session.open();
+    return () => session.close();
+  }, [connectionKey, session]);
+  // 宿主重连打开的连接同样随 session 释放（connectionKey 为 null 期间也可能有）。
+  useEffect(() => () => session.close(), [session]);
 
   useEffect(() => {
     options.onStateCommit?.(view.state);
   }, [options.onStateCommit, view.state]);
 
-  useEffect(() => () => closeActiveStream(), [closeActiveStream]);
-
   // 编辑与新消息共用提交路径：`sourceId` 随命令进入宿主，由宿主选择编辑端点。
   const onNew = useCallback((message: AppendMessage) => {
-    return sendMessage(toAddMessageCommand(message));
-  }, [sendMessage]);
+    return session.submit(toAddMessageCommand(message));
+  }, [session]);
   const onCancel = useCallback(async () => {
     const commands = store.getSnapshot().pendingCommands;
     const result = await cancelTask(taskId);
@@ -237,19 +130,8 @@ function useTaskAssistantTransportAdapter(
     optionsRef.current.onCancel?.({ error, commands });
     throw error;
   }, [store, taskId]);
-  const onRefetchThread = useCallback(async () => {
-    const currentSnapshot = store.getSnapshot();
-    if (currentSnapshot.targetRunStatus === "pending" || currentSnapshot.targetRunStatus === "running" || currentSnapshot.targetRunStatus === "suspended") {
-      await attach();
-      return;
-    }
-    const response = await fetch(stateApi, {
-      cache: "no-store",
-      headers: await optionsRef.current.headers(),
-    });
-    if (!response.ok) throw await parseHttpError(response);
-    store.importState(await response.json() as TransportState);
-  }, [attach, stateApi, store]);
+  // 重新拉取即重开长订阅：attach 首帧就是完整 canonical state。
+  const onRefetchThread = useCallback(() => session.open(), [session]);
 
   const adapter = useMemo<ExternalStoreAdapter<FrameStoreItem>>(() => {
     const base = {
@@ -271,8 +153,14 @@ function useTaskAssistantTransportAdapter(
     return base as unknown as ExternalStoreAdapter<FrameStoreItem>;
   }, [onCancel, onNew, onRefetchThread, options.adapters, options.readonly, store, view]);
 
-  return adapter;
+  return { adapter, open: session.open };
 }
+
+/** runtime 与重开订阅的入口：`open` 供宿主的有限重连与「重新同步」使用（首帧即完整状态）。 */
+export type TaskAssistantTransport<Runtime> = {
+  runtime: Runtime;
+  open: () => Promise<void>;
+};
 
 /**
  * 创建 task 级可写 Transport runtime。
@@ -285,8 +173,8 @@ export function useTaskAssistantTransportRuntime(
   taskId: number,
   options: TaskAssistantTransportOptions,
 ) {
-  const adapter = useTaskAssistantTransportAdapter(taskId, options);
-  return useExternalStoreRuntime(adapter);
+  const { adapter, open } = useTaskAssistantTransportAdapter(taskId, options);
+  return { runtime: useExternalStoreRuntime(adapter), open };
 }
 
 /** 创建不挂载嵌套远程 thread list 的只读 Workbench runtime。 */
@@ -294,8 +182,8 @@ export function useTaskAssistantReadonlyTransportRuntime(
   taskId: number,
   options: TaskAssistantTransportOptions,
 ) {
-  const adapter = useTaskAssistantTransportAdapter(taskId, options);
-  return useExternalStoreRuntime(adapter);
+  const { adapter, open } = useTaskAssistantTransportAdapter(taskId, options);
+  return { runtime: useExternalStoreRuntime(adapter), open };
 }
 
 export function toAddMessageCommand(message: AppendMessage): UserAddMessageCommand {
@@ -344,5 +232,5 @@ export function toAddMessageCommand(message: AppendMessage): UserAddMessageComma
 }
 
 function isTransportStateLike(value: unknown): value is TransportState {
-  return typeof value === "object" && value !== null && Array.isArray((value as TransportState).runs);
+  return typeof value === "object" && value !== null && Array.isArray((value as TransportState).messages);
 }

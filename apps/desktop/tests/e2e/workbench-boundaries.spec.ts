@@ -1,12 +1,15 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+
+import { seedState } from "./transport-fixtures";
 
 const origin = "http://127.0.0.1:8000";
 const task = (task_id: number, workspace_id: number) => ({
   task_id, workspace_id, title: `任务${task_id}`, task_type: "user", execution_status: null,
-  context_window_total: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+  created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
 });
 
-async function fixture(page: Page) {
+async function fixture(page: Page, request: APIRequestContext) {
+  await request.post(`${origin}/__test__/reset`);
   await page.addInitScript(() => {
     localStorage.clear();
     localStorage.setItem("cosir:last-workspace-id", "7");
@@ -19,9 +22,8 @@ async function fixture(page: Page) {
   await page.route(`${origin}/workspaces/8/tasks`, route => route.fulfill({ json: [task(200, 8)] }));
   for (const [id, workspace] of [[100, 7], [101, 7], [200, 8], [999, 8], [998, 7]]) {
     await page.route(`${origin}/tasks/${id}`, route => route.fulfill({ json: task(id, workspace) }));
-    await page.route(`${origin}/tasks/${id}/assistant/state`, route => route.fulfill({ json: {
-      runs: [], current_run_id: null, approvals: {}, context_window_total: null, error: null,
-    } }));
+    // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
+    await seedState(request, id, { messages: [], activity: null, error: null });
   }
 }
 
@@ -59,7 +61,7 @@ async function state(page: Page) {
 const switchDialog = (page: Page) => page.getByRole("dialog");
 const taskRow = (page: Page, id: number) => page.getByRole("treeitem", { name: `任务${id}`, exact: true });
 
-test.beforeEach(async ({ page }) => fixture(page));
+test.beforeEach(async ({ page, request }) => fixture(page, request));
 
 test("窗口和侧栏变化限制实际宽度，End 和鼠标拖动均保留主区", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });

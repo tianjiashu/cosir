@@ -16,19 +16,15 @@ export type AssistantRuntimeProps = {
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
   initialBanTools?: string[];
-  forkingRunId?: number | null;
-  onForkRun?: (runId: number) => void;
+  /** 正在 fork 的消息 id：fork 按消息切分，入口挂在带结局的回复上。 */
+  forkingMessageId?: string | null;
+  onForkMessage?: (messageId: string) => void;
   onTaskStateChanged?: () => void;
 };
 
 export type ComposerRestore = {
   restoreNewMessage: (text: string, attachments?: readonly CreateAttachment[]) => void;
   restoreEditMessage: (sourceId: string, text: string, attachments?: readonly CreateAttachment[]) => boolean;
-};
-
-export type RuntimeControls = {
-  resume: () => void;
-  importState: (state: TransportState) => void;
 };
 
 export type RuntimeSessionContext = {
@@ -47,9 +43,9 @@ export type RuntimeSessionContext = {
   setIssue: (issue: TransportIssue | null) => void;
   onTaskStateChanged?: () => void;
   latestStateRef: MutableRefObject<TransportState>;
-  runtimeControlsRef: MutableRefObject<RuntimeControls | null>;
+  /** 打开（或替换）Task 长订阅；runtime 挂载前为 null。 */
   attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;
-  cancelRequestedRunIdRef: MutableRefObject<number | null>;
-  lastTransportErrorRef: MutableRefObject<TransportIssue | null>;
+  /** 用户已请求停止、当前活动尚未结束：Task 级标记，不比对 runId。 */
+  cancelRequestedRef: MutableRefObject<boolean>;
   composerRestoreRef: MutableRefObject<ComposerRestore | null>;
 };

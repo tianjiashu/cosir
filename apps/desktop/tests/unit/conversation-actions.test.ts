@@ -3,97 +3,62 @@ import { describe, expect, it } from "vitest";
 import {
   deriveComposerAction,
   getLatestUserMessageId,
-  getTransportRunId,
-  isEditableLatestRunUserMessage,
+  isEditableLatestUserMessage,
   isQueuedUserMessage,
   canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
-import type { TransportMessage, TransportState } from "@/lib/assistant/contract";
-
-const state = (overrides: Partial<TransportState> = {}): TransportState => ({
-  runs: [],
-  current_run_id: null,
-  approvals: {},
-  error: null,
-  ...overrides,
-});
-
-const run = (runId: number, status: string = "completed", messages: TransportMessage[] = []) => ({
-  runId,
-  status,
-  endReason: null,
-  contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
-  messages,
-  usage: null,
-  error: null,
-});
+import { activity, assistantMessage, queuedMessage, transportState, userMessage } from "./transport-fixtures";
 
 describe("conversation actions", () => {
   it("only exposes the last canonical user message as editable", () => {
-    const snapshot = state({
-      runs: [
-        run(1, "completed", [{ id: "u1", role: "user", parts: [] }, { id: "a1", role: "assistant", parts: [] }]),
-        run(2, "completed", [{ id: "u2", role: "user", parts: [] }]),
-      ],
-      current_run_id: 2,
+    const snapshot = transportState({
+      messages: [userMessage("u1", 1), assistantMessage("assistant-u1", 1), userMessage("u2", 2)],
+      activity: activity(2, "completed"),
     });
     expect(getLatestUserMessageId(snapshot)).toBe("u2");
   });
 
-  it("only allows editing the latest user message from the current run", () => {
-    const snapshot = state({
-      runs: [
-        run(1, "completed", [{ id: "u1", role: "user", parts: [] }]),
-        run(2, "completed", [{ id: "u2", role: "user", parts: [] }]),
-      ],
-      current_run_id: 2,
+  it("只在 Task 已停下时允许编辑最新一条已并入的用户消息，不比对 runId", () => {
+    const snapshot = transportState({
+      messages: [userMessage("u1", 1), userMessage("u2", 2)],
+      activity: activity(2, "completed"),
     });
-    expect(isEditableLatestRunUserMessage(snapshot, "u1")).toBe(false);
-    expect(isEditableLatestRunUserMessage(snapshot, "u2")).toBe(true);
-    expect(isEditableLatestRunUserMessage({ ...snapshot, current_run_id: 3 }, "u2")).toBe(false);
-    for (const status of ["pending", "running", "waiting_for_input"]) {
-      expect(isEditableLatestRunUserMessage({ ...snapshot, runs: [snapshot.runs[0], run(2, status, snapshot.runs[1].messages)] }, "u2")).toBe(false);
+    expect(isEditableLatestUserMessage(snapshot, "u1")).toBe(false);
+    expect(isEditableLatestUserMessage(snapshot, "u2")).toBe(true);
+    for (const status of ["running", "suspended"] as const) {
+      expect(isEditableLatestUserMessage({ ...snapshot, activity: activity(2, status) }, "u2")).toBe(false);
     }
+    expect(isEditableLatestUserMessage({ ...snapshot, activity: null }, "u2")).toBe(false);
   });
 
-  it("allows a cancelled current run to resume", () => {
-    const resumable = state({
-      runs: [run(7, "cancelled", [{ id: "u7", role: "user", parts: [] }])],
-      current_run_id: 7,
-    });
+  it("allows a cancelled or failed activity to resume", () => {
+    const resumable = transportState({ messages: [userMessage("u7", 7)], activity: activity(7, "cancelled") });
     expect(canResumeStoppedRun(resumable)).toBe(true);
-    expect(canResumeStoppedRun({ ...resumable, runs: [run(7, "completed", resumable.runs[0].messages)] })).toBe(false);
+    expect(canResumeStoppedRun({ ...resumable, activity: activity(7, "failed") })).toBe(true);
+    expect(canResumeStoppedRun({ ...resumable, activity: activity(7, "completed") })).toBe(false);
+    expect(canResumeStoppedRun({ ...resumable, activity: activity(7, "suspended") })).toBe(false);
+    expect(canResumeStoppedRun(transportState())).toBe(false);
   });
 
-  it("keeps the three composer button states deterministic", () => {
+  it("keeps the composer button states deterministic", () => {
     expect(deriveComposerAction({ isRunning: true, isDraftEmpty: true, canResume: true })).toBe("stop");
     expect(deriveComposerAction({ isRunning: true, isDraftEmpty: true, canResume: true, isCancelling: true })).toBe("cancelling");
     expect(deriveComposerAction({ isRunning: false, isDraftEmpty: true, canResume: true })).toBe("resume");
     expect(deriveComposerAction({ isRunning: false, isDraftEmpty: false, canResume: true })).toBe("send");
     expect(deriveComposerAction({ isRunning: false, isDraftEmpty: true, canResume: false })).toBe("send");
   });
-
-  it("reads only current_run_id from canonical state", () => {
-    expect(getTransportRunId(undefined)).toBeNull();
-    expect(getTransportRunId({ current_run_id: 9 })).toBe(9);
-    expect(getTransportRunId({ current_run_id: "9" })).toBeNull();
-  });
 });
 
 it("edits queued messages in place and still allows editing the latest consumed message", () => {
-  const snapshot = state({
-    runs: [run(1, "cancelled", [{ id: "consumed", role: "user", parts: [] }])],
-    current_run_id: 1,
-    queued_messages: [
-      { id: "q1", role: "user", parts: [], delivery: "next_run" },
-      { id: "q2", role: "user", parts: [], delivery: "immediate" },
-    ],
+  const snapshot = transportState({
+    messages: [userMessage("consumed", 1)],
+    activity: activity(1, "cancelled"),
+    queued_messages: [queuedMessage("q1", "a", "next_run"), queuedMessage("q2", "b", "immediate")],
   });
   expect(getLatestUserMessageId(snapshot)).toBe("consumed");
-  expect(isEditableLatestRunUserMessage(snapshot, "consumed")).toBe(true);
-  expect(isEditableLatestRunUserMessage(snapshot, "q2")).toBe(false);
+  expect(isEditableLatestUserMessage(snapshot, "consumed")).toBe(true);
+  expect(isEditableLatestUserMessage(snapshot, "q2")).toBe(false);
   expect(isQueuedUserMessage(snapshot, "q2")).toBe(true);
   expect(isQueuedUserMessage(snapshot, "consumed")).toBe(false);
-  expect(isEditableLatestRunUserMessage({ ...snapshot, queued_messages: [] }, "consumed")).toBe(true);
-  expect(canResumeStoppedRun(state({ runs: [run(1, "failed")], current_run_id: 1, queued_messages: [{ id: "q", role: "user", parts: [], delivery: "next_run" }] }))).toBe(true);
+  expect(canResumeStoppedRun(transportState({ activity: activity(1, "failed"), queued_messages: [queuedMessage("q")] }))).toBe(true);
 });

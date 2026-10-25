@@ -283,8 +283,8 @@ export function AppLayout() {
                   initialDisabledToolGroups={taskState?.initialDisabledToolGroups}
                   initialBanTools={taskState?.initialBanTools}
                   workspaceRoot={catalog.activeWorkspace?.root_path}
-                  forkingRunId={actions.forkingRunId}
-                  onForkRun={(runId) => void actions.forkRun(runId)}
+                  forkingMessageId={actions.forkingMessageId}
+                  onForkMessage={(messageId) => void actions.forkMessage(messageId)}
                   onTaskLoaded={catalog.handleTaskLoaded}
                   onTaskStateChanged={() => {
                     if (catalog.activeTaskWorkspaceId !== null) void catalog.refreshWorkspaceTasks(catalog.activeTaskWorkspaceId);

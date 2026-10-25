@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { DelegationToolRow } from "@/components/assistant-ui/tools/delegation-tool-row";
 
-function renderDelegationRow(runId?: number, displayData: Record<string, unknown> = {
+function renderDelegationRow(interactive?: boolean, displayData: Record<string, unknown> = {
   kind: "delegation-result",
   title: "审查代码",
   child_task_id: 501,
@@ -26,7 +26,7 @@ function renderDelegationRow(runId?: number, displayData: Record<string, unknown
     },
   } as unknown as ToolCallMessagePartProps;
 
-  return renderToStaticMarkup(<DelegationToolRow {...part} runId={runId} />);
+  return renderToStaticMarkup(<DelegationToolRow {...part} interactive={interactive} />);
 }
 
 describe("DelegationToolRow", () => {
@@ -85,7 +85,7 @@ describe("DelegationToolRow", () => {
   });
 
   it("offers child cancellation in the main Thread when both locators are available", () => {
-    const html = renderDelegationRow(41);
+    const html = renderDelegationRow(true);
 
     expect(html).toContain('aria-label="停止子 Agent：审查代码"');
     expect(html).toContain(">停止</button>");

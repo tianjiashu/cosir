@@ -19,14 +19,13 @@ const workspaces = [
 
 const tasks = new Map();
 const states = new Map();
+// taskId -> 打开着的 Task 长订阅；与生产一致：订阅跟随 Task，Run 结束不断开。
+const subscribers = new Map();
+// taskId -> 正在执行的模拟 Run（同一 Task 至多一个执行者）。
+const executors = new Map();
 let lastStreamBody = "";
 let nextRunId = 1;
-let nextResumeRunId = 900;
 let testGeneration = 0;
-const cancelledRuns = new Set();
-// taskId -> 下一次 attach 要推送的本轮输出；由命令回执登记，attach 消费一次。
-const pendingStreams = new Map();
-const dropCancelledStreams = new Set();
 let dropNextCancelledStream = false;
 let failNextAttach = false;
 const telemetry = {
@@ -39,34 +38,52 @@ function resetTestState() {
   testGeneration += 1;
   tasks.clear();
   states.clear();
-  cancelledRuns.clear();
-  pendingStreams.clear();
-  dropCancelledStreams.clear();
+  for (const set of subscribers.values()) for (const res of set) res.end();
+  subscribers.clear();
+  executors.clear();
   dropNextCancelledStream = false;
   failNextAttach = false;
   lastStreamBody = "";
   nextRunId = 1;
-  nextResumeRunId = 900;
   telemetry.clientCancelCount = 0;
   telemetry.completedStreamCount = 0;
   telemetry.requestBodies = [];
 }
 
+const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+const isActive = (status) => status === "running" || status === "suspended";
+// 与 /model-configs 唯一的模型一致：运行期配置锁定下，运行中发送沿用这份配置。
+const DEFAULT_LAUNCH = { modelConfigId: 2, reasoningEffort: null, banTools: [] };
+
 function taskProjection(task) {
-  const state = states.get(task.task_id);
-  const currentRunId = state?.current_run_id ?? null;
-  return { ...task, current_run_id: currentRunId, execution_status: state?.runs.find(run => run.runId === currentRunId)?.status ?? null };
+  const activity = states.get(task.task_id)?.activity ?? null;
+  return { ...task, execution_status: activity?.status ?? null };
 }
 
-const emptyState = () => ({
-  runs: [],
-  current_run_id: null,
-  approvals: {},
+const emptyState = () => ({ messages: [], activity: null, error: null });
+// 与后端一致：每次命令被拒分配新的 seq，前端靠它认出连续的同样拒绝。
+let commandErrorSeq = 0;
 
+const activityOf = (runId, status, overrides = {}) => ({
+  runId,
+  status,
+  endReason: status === "completed" ? "stop" : status === "cancelled" ? "user_cancelled" : null,
   error: null,
+  usage: null,
+  contextWindowTotal: null,
+  launch: DEFAULT_LAUNCH,
+  ...overrides,
 });
 
-const textMessage = (id, role, text, status) => ({
+const outcomeOf = (activity) => ({
+  status: activity.status,
+  endReason: activity.endReason,
+  error: activity.error,
+  usage: activity.usage,
+  contextWindowTotal: activity.contextWindowTotal,
+});
+
+const textMessage = (id, role, text, status, runId) => ({
   id,
   role,
   parts: role === "assistant"
@@ -74,33 +91,41 @@ const textMessage = (id, role, text, status) => ({
         { type: "reasoning", text: status === "completed" ? "推理完成" : "正在推理", status: status === "completed" ? "completed" : "running" },
         { type: "text", text, status: status === "completed" ? "completed" : "running" },
       ]
-    : [{ type: "text", text, status: status === "completed" ? "completed" : "running" }],
+    : [{ type: "text", text, status: "completed" }],
+  runId,
+  outcome: null,
 });
 
+/** 一轮问答：用户消息 id 为 `user-{runId}`，回复 id 按契约为 `assistant-{用户消息 id}`。 */
 function stateWithExchange(previous, text, runId, assistantText, status) {
   const next = structuredClone(previous);
-  const terminal = status === "completed" || status === "failed" || status === "cancelled";
-  next.runs.push({
-    runId,
-    status: terminal ? status : "running",
-    endReason: status === "completed" ? "stop" : status === "failed" ? "tool_error_limit_reached" : status === "cancelled" ? "user_cancelled" : null,
-    // 与 /model-configs 唯一的模型一致：运行期配置锁定下，运行中发送沿用这份配置。
-    contextWindowTotal: null, launch: { modelConfigId: 2, reasoningEffort: null, banTools: [] },
-    messages: [
-      textMessage(`user-${runId}`, "user", text, "completed"),
-      textMessage(`assistant-${runId}`, "assistant", assistantText, status),
-    ],
-    usage: null,
-    error: null,
+  const userId = `user-${runId}`;
+  next.messages.push(
+    textMessage(userId, "user", text, "completed", runId),
+    textMessage(`assistant-${userId}`, "assistant", assistantText, status, runId),
+  );
+  next.activity = activityOf(runId, TERMINAL.has(status) ? status : "running", {
+    endReason: status === "completed" ? "stop" : status === "failed" ? "max_steps_reached" : status === "cancelled" ? "user_cancelled" : null,
   });
-  next.current_run_id = runId;
+  if (TERMINAL.has(status)) next.messages.at(-1).outcome = outcomeOf(next.activity);
+  next.error = null;
   return next;
 }
 
-function toolLifecycleState(previous, text, runId, status, toolStatus) {
-  const next = stateWithExchange(previous, text, runId, "", status);
-  const assistant = next.runs.at(-1).messages.at(-1);
-  assistant.parts = [
+/** 把当前活动收敛到终态：结局写到这一轮最后一条助手消息上。 */
+function settle(state, status, overrides = {}) {
+  const next = structuredClone(state);
+  next.activity = { ...next.activity, ...activityOf(next.activity.runId, status), usage: next.activity.usage, contextWindowTotal: next.activity.contextWindowTotal, ...overrides };
+  const last = [...next.messages].reverse().find((message) => message.role === "assistant" && message.runId === next.activity.runId);
+  if (last) {
+    last.outcome = outcomeOf(next.activity);
+    for (const part of last.parts) if (part.status === "running") part.status = "completed";
+  }
+  return next;
+}
+
+function toolLifecycleParts(runId, status, toolStatus) {
+  return [
     {
       type: "tool-call",
       toolCallId: `tool-lifecycle-${runId}`,
@@ -122,130 +147,96 @@ function toolLifecycleState(previous, text, runId, status, toolStatus) {
     },
     { type: "text", text: status === "completed" ? "工具完成" : "", status: status === "running" ? "running" : "completed" },
   ];
-  return next;
 }
 
-function applyUsageFixture(state, runId, secondRun) {
+function usageFixture(secondRun) {
   const input = secondRun ? 2_000 : 1_000;
-  const output = secondRun ? 500 : 500;
-  const total = input + output;
-  const run = state.runs.find((candidate) => candidate.runId === runId);
-  run.usage = {
+  const output = 500;
+  return {
     input_tokens: input,
     output_tokens: output,
-    total_tokens: total,
+    total_tokens: input + output,
     cache_hit_tokens: secondRun ? 200 : 100,
     cache_miss_tokens: secondRun ? 50 : null,
     reasoning_tokens: secondRun ? 40 : 20,
   };
-  run.contextWindowTotal = 100_000;
+}
+
+function completedFixture(runId, userMessage, assistantParts) {
+  const activity = activityOf(runId, "completed", { launch: { modelConfigId: null, reasoningEffort: null, banTools: [] } });
+  return {
+    messages: [
+      { ...userMessage, runId, outcome: null },
+      { id: `assistant-${userMessage.id}`, role: "assistant", parts: assistantParts, runId, outcome: outcomeOf(activity) },
+    ],
+    activity,
+    error: null,
+  };
 }
 
 function toolTraceState() {
-  return {
-    runs: [{
-      runId: 77,
+  return completedFixture(77, {
+    id: "user-tool-trace",
+    role: "user",
+    parts: [{ type: "text", text: "检查项目", status: "completed" }],
+  }, [
+    { type: "reasoning", text: "先分析项目结构", status: "completed" },
+    {
+      type: "tool-call",
+      toolCallId: "trace-read-file",
+      toolName: "read_file",
+      args: { path: "README.md" },
       status: "completed",
-      endReason: "stop",
-    contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
-      messages: [
-      {
-        id: "user-tool-trace",
-        role: "user",
-        parts: [{ type: "text", text: "检查项目", status: "completed" }],
-      },
-      {
-        id: "assistant-tool-trace",
-        role: "assistant",
-        parts: [
-          { type: "reasoning", text: "先分析项目结构", status: "completed" },
-          {
-            type: "tool-call",
-            toolCallId: "trace-read-file",
-            toolName: "read_file",
-            args: { path: "README.md" },
-            status: "completed",
-            error: null,
-            presentation: { verb: "读取文件", icon: "eye", expandable: false, expand_layout: "none" },
-            display_data: null,
-            isError: false,
-          },
-          {
-            type: "tool-call",
-            toolCallId: "trace-search-files",
-            toolName: "search_content",
-            args: { pattern: "assistant-ui" },
-            status: "completed",
-            error: null,
-            presentation: { verb: "搜索文件", icon: "search", expandable: false, expand_layout: "none" },
-            display_data: null,
-            isError: false,
-          },
-          { type: "text", text: "检查完成", status: "completed" },
-        ],
-      },
-      ],
-      usage: null,
       error: null,
-    }],
-    current_run_id: 77,
-    approvals: {},
-
-    error: null,
-  };
+      presentation: { verb: "读取文件", icon: "eye", expandable: false, expand_layout: "none" },
+      display_data: null,
+      isError: false,
+    },
+    {
+      type: "tool-call",
+      toolCallId: "trace-search-files",
+      toolName: "search_content",
+      args: { pattern: "assistant-ui" },
+      status: "completed",
+      error: null,
+      presentation: { verb: "搜索文件", icon: "search", expandable: false, expand_layout: "none" },
+      display_data: null,
+      isError: false,
+    },
+    { type: "text", text: "检查完成", status: "completed" },
+  ]);
 }
 
 function webSearchState() {
-  return {
-    runs: [{
-      runId: 78,
+  return completedFixture(78, {
+    id: "user-web-search",
+    role: "user",
+    parts: [{ type: "text", text: "搜索 assistant-ui", status: "completed" }],
+  }, [
+    {
+      type: "tool-call",
+      toolCallId: "trace-web-search",
+      toolName: "web_search",
+      args: { query: "assistant-ui" },
       status: "completed",
-      endReason: "stop",
-    contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
-      messages: [
-      {
-        id: "user-web-search",
-        role: "user",
-        parts: [{ type: "text", text: "搜索 assistant-ui", status: "completed" }],
-      },
-      {
-        id: "assistant-web-search",
-        role: "assistant",
-        parts: [
-          {
-            type: "tool-call",
-            toolCallId: "trace-web-search",
-            toolName: "web_search",
-            args: { query: "assistant-ui" },
-            status: "completed",
-            error: null,
-            presentation: {
-              verb: "网页搜索",
-              icon: "globe",
-              surface: "standalone",
-              expandable: true,
-              expand_layout: "list",
-              default_open: true,
-            },
-            display_data: {
-              kind: "web-search-results",
-              query: "assistant-ui",
-              results: [{ title: "Assistant UI 官方文档", url: "https://assistant-ui.com/docs" }],
-            },
-            isError: false,
-          },
-          { type: "text", text: "搜索完成", status: "completed" },
-        ],
-      },
-      ],
-      usage: null,
       error: null,
-    }],
-    current_run_id: 78,
-    approvals: {},
-
-    error: null,
-  };
+      presentation: {
+        verb: "网页搜索",
+        icon: "globe",
+        surface: "standalone",
+        expandable: true,
+        expand_layout: "list",
+        default_open: true,
+      },
+      display_data: {
+        kind: "web-search-results",
+        query: "assistant-ui",
+        results: [{ title: "Assistant UI 官方文档", url: "https://assistant-ui.com/docs" }],
+      },
+      isError: false,
+    },
+    { type: "text", text: "搜索完成", status: "completed" },
+  ]);
 }
 
 const mermaidSequenceDiagram = [
@@ -263,58 +254,37 @@ function mermaidState() {
 }
 
 function delegationState() {
-  return {
-    runs: [{
-      runId: 500,
+  return completedFixture(500, {
+    id: "user-delegation",
+    role: "user",
+    parts: [{ type: "text", text: "请委派一个审查任务", status: "completed" }],
+  }, [
+    {
+      type: "tool-call",
+      toolCallId: "delegate-ref-500",
+      toolName: "delegate_task",
+      args: { child_agent_id: "delegate_reviewer", title: "审查代码", prompt: "请审查当前改动" },
       status: "completed",
-      endReason: "stop",
-    contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
-      messages: [
-        {
-          id: "user-delegation",
-          role: "user",
-          parts: [{ type: "text", text: "请委派一个审查任务", status: "completed" }],
-        },
-        {
-          id: "assistant-delegation",
-          role: "assistant",
-          parts: [
-            {
-              type: "tool-call",
-              toolCallId: "delegate-ref-500",
-              toolName: "delegate_task",
-              args: { child_agent_id: "delegate_reviewer", title: "审查代码", prompt: "请审查当前改动" },
-              status: "completed",
-              presentation: { verb: "委派 Agent", icon: "users", surface: "standalone", expandable: false, expand_layout: "none" },
-              display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501 },
-              child_task_id: 501,
-              agent_role: "Reviewer",
-              isError: false,
-            },
-            {
-              type: "tool-call",
-              toolCallId: "delegate-ref-501",
-              toolName: "delegate_task",
-              args: { child_agent_id: "delegate_tester", title: "检查测试", prompt: "请检查相关测试" },
-              status: "completed",
-              presentation: { verb: "委派 Agent", icon: "users", surface: "standalone", expandable: false, expand_layout: "none" },
-              display_data: { kind: "delegation-result", title: "检查测试", role: "Tester", child_task_id: 502 },
-              child_task_id: 502,
-              agent_role: "Tester",
-              isError: false,
-            },
-            { type: "text", text: "子 Agent 已开始工作。", status: "completed" },
-          ],
-        },
-      ],
-      usage: null,
-      error: null,
-    }],
-    current_run_id: 500,
-    approvals: {},
-
-    error: null,
-  };
+      presentation: { verb: "委派 Agent", icon: "users", surface: "standalone", expandable: false, expand_layout: "none" },
+      display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501 },
+      child_task_id: 501,
+      agent_role: "Reviewer",
+      isError: false,
+    },
+    {
+      type: "tool-call",
+      toolCallId: "delegate-ref-501",
+      toolName: "delegate_task",
+      args: { child_agent_id: "delegate_tester", title: "检查测试", prompt: "请检查相关测试" },
+      status: "completed",
+      presentation: { verb: "委派 Agent", icon: "users", surface: "standalone", expandable: false, expand_layout: "none" },
+      display_data: { kind: "delegation-result", title: "检查测试", role: "Tester", child_task_id: 502 },
+      child_task_id: 502,
+      agent_role: "Tester",
+      isError: false,
+    },
+    { type: "text", text: "子 Agent 已开始工作。", status: "completed" },
+  ]);
 }
 
 function childDelegationState() {
@@ -329,184 +299,114 @@ function jsonResponse(res, status, value) {
   res.writeHead(status, {
     "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
     "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Expose-Headers": "X-Cosir-Task-Id",
     "Content-Type": "application/json; charset=utf-8",
   });
   res.end(JSON.stringify(value));
 }
 
-function assistantFrame(operations, targetRunId, targetRunStatus = null, taskId = TASK_ID) {
-  const rootOperation = operations.find((operation) => operation.path.length === 0);
-  if (rootOperation) {
-    const state = rootOperation.value;
-    const resolvedRunId = targetRunId ?? state.current_run_id;
-    const resolvedStatus = targetRunStatus
-      ?? state.runs.find((run) => run.runId === resolvedRunId)?.status
-      ?? null;
-    return {
-      task_id: taskId,
-      kind: "full",
-      mutations: [],
-      state,
-      target_run_id: resolvedRunId,
-      target_run_status: resolvedStatus,
-    };
-  }
-  return {
-    task_id: taskId,
-    kind: "mutation",
-    mutations: operations.map(({ type, ...operation }) => ({ kind: type, ...operation })),
-    source_run_id: targetRunId,
-    target_run_id: targetRunId,
-    target_run_status: targetRunStatus,
-  };
+/** 命令只投递：202 `{}`，结果经 Task 长订阅到达。 */
+const accepted = (res) => jsonResponse(res, 202, {});
+
+function writeSse(res, frame) {
+  res.write(`data: ${JSON.stringify(frame)}\n\n`);
 }
 
-function writeSse(res, chunk) {
-  const frame = `data: ${JSON.stringify(chunk)}\n\n`;
-  lastStreamBody += frame;
-  res.write(frame);
+/** 向 Task 的全部订阅推送一帧，并记入最近一轮的流日志。 */
+function publish(taskId, frame) {
+  const encoded = `data: ${JSON.stringify(frame)}\n\n`;
+  lastStreamBody += encoded;
+  for (const res of subscribers.get(taskId) ?? []) res.write(encoded);
+}
+
+/** 落定新的 Task 状态：结构变化以 full 帧推送（前端对 full 与 mutation 同一语义收敛）。 */
+function commit(taskId, state) {
+  states.set(taskId, state);
+  publish(taskId, { task_id: taskId, kind: "full", mutations: [], state });
 }
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function streamState(res, initialState, finalState, assistantIndex, chunks, runId, generation, taskId) {
-  if (generation !== testGeneration) {
-    res.end();
-    return;
-  }
+/**
+ * 模拟一次 Run 执行：先落定运行中状态，再按块推 append-text 增量，最后收敛到终态。
+ * 执行期间收到取消就把活动收敛为 cancelled；`drop` 时同时断开订阅，模拟连接中途掉线。
+ */
+async function execute(taskId, { initialState, chunks, finalState, prefixReasoning = true }) {
+  const generation = testGeneration;
+  const runId = initialState.activity.runId;
+  const executor = { runId, cancelled: false, drop: false };
+  executors.set(taskId, executor);
   lastStreamBody = "";
-  res.writeHead(200, {
-    "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
-    "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    "Access-Control-Expose-Headers": "X-Cosir-Task-Id",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "Content-Type": "text/event-stream; charset=utf-8",
-  });
-
-  let closed = false;
-  const runIndex = initialState.runs.findIndex((run) => run.runId === runId);
-  res.on("close", () => {
-    closed = true;
-    if (generation === testGeneration && !res.writableEnded) telemetry.clientCancelCount += 1;
-  });
-
-  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }], runId, "running", taskId));
+  commit(taskId, initialState);
+  const assistantIndex = initialState.messages.length - 1;
+  const stillCurrent = () => generation === testGeneration && executors.get(taskId) === executor;
+  const finishCancelled = () => {
+    executors.delete(taskId);
+    const cancelled = settle(states.get(taskId), "cancelled");
+    if (executor.drop) {
+      states.set(taskId, cancelled);
+      for (const res of subscribers.get(taskId) ?? []) res.destroy();
+      return;
+    }
+    commit(taskId, cancelled);
+  };
   await wait(120);
-  if (generation !== testGeneration) {
-    res.end();
-    return;
-  }
-  if (dropCancelledStreams.delete(runId)) {
-    res.destroy();
-    return;
-  }
-  if (cancelledRuns.has(runId)) {
-    const cancelledState = structuredClone(initialState);
-    cancelledState.runs[runIndex].status = "cancelled";
-    cancelledState.runs[runIndex].endReason = "user_cancelled";
-    writeSse(res, assistantFrame([
-      { type: "set", path: ["runs", runIndex], value: cancelledState.runs[runIndex] },
-    ], runId, "cancelled", taskId));
-    lastStreamBody += "data: [DONE]\n\n";
-    res.write("data: [DONE]\n\n");
-    res.end();
-    telemetry.completedStreamCount += 1;
-    return;
-  }
   for (const chunk of chunks) {
-    if (closed || generation !== testGeneration) {
-      res.end();
-      return;
+    if (!stillCurrent()) return;
+    if (executor.cancelled) return finishCancelled();
+    const state = structuredClone(states.get(taskId));
+    const parts = state.messages[assistantIndex].parts;
+    const mutations = [];
+    if (prefixReasoning && parts[0]?.type === "reasoning") {
+      parts[0].text += "先分析一下。";
+      mutations.push({ kind: "append-text", path: ["messages", assistantIndex, "parts", 0, "text"], value: "先分析一下。" });
     }
-    if (dropCancelledStreams.delete(runId)) {
-      res.destroy();
-      return;
-    }
-    if (cancelledRuns.has(runId)) {
-      const cancelledState = structuredClone(initialState);
-      cancelledState.runs[runIndex].status = "cancelled";
-      cancelledState.runs[runIndex].endReason = "user_cancelled";
-      writeSse(res, assistantFrame([
-        { type: "set", path: ["runs", runIndex], value: cancelledState.runs[runIndex] },
-      ], runId, "cancelled", taskId));
-      lastStreamBody += "data: [DONE]\n\n";
-      res.write("data: [DONE]\n\n");
-      res.end();
-      telemetry.completedStreamCount += 1;
-      return;
-    }
-    writeSse(
-      res,
-      assistantFrame([
-        {
-          type: "append-text",
-          path: ["runs", runIndex, "messages", assistantIndex, "parts", 0, "text"],
-          value: "先分析一下。",
-        },
-        {
-          type: "append-text",
-          path: ["runs", runIndex, "messages", assistantIndex, "parts", 1, "text"],
-          value: chunk,
-        },
-      ], runId, "running", taskId),
-    );
+    const textIndex = parts.findIndex((part) => part.type === "text");
+    parts[textIndex].text += chunk;
+    mutations.push({ kind: "append-text", path: ["messages", assistantIndex, "parts", textIndex, "text"], value: chunk });
+    states.set(taskId, state);
+    publish(taskId, { task_id: taskId, kind: "mutation", mutations });
     await wait(420);
   }
-
-  if (closed || generation !== testGeneration) {
-    res.end();
-    return;
-  }
-  writeSse(
-    res,
-    assistantFrame([
-      { type: "set", path: ["runs", runIndex], value: finalState.runs[runIndex] },
-    ], runId, finalState.runs[runIndex].status, taskId),
-  );
-  lastStreamBody += "data: [DONE]\n\n";
-  res.write("data: [DONE]\n\n");
-  res.end();
+  if (!stillCurrent()) return;
+  if (executor.cancelled) return finishCancelled();
+  executors.delete(taskId);
+  commit(taskId, finalState);
   telemetry.completedStreamCount += 1;
 }
 
-async function streamToolLifecycle(res, initialState, finalState, runId, generation, taskId) {
-  if (generation !== testGeneration) {
-    res.end();
-    return;
-  }
+async function executeToolLifecycle(taskId, runId, initialState, finalState) {
+  const generation = testGeneration;
+  executors.set(taskId, { runId, cancelled: false, drop: false });
   lastStreamBody = "";
-  res.writeHead(200, {
-    "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
-    "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    "Access-Control-Expose-Headers": "X-Cosir-Task-Id",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-    "Content-Type": "text/event-stream; charset=utf-8",
-  });
-  writeSse(res, assistantFrame([{ type: "set", path: [], value: initialState }], runId, "running", taskId));
+  commit(taskId, initialState);
   await wait(250);
-  if (generation !== testGeneration) {
-    res.end();
-    return;
-  }
-  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0, "messages", 1, "parts", 0, "status"], value: "running" }], runId, "running", taskId));
+  if (generation !== testGeneration) return;
+  const running = structuredClone(initialState);
+  running.messages.at(-1).parts[0].status = "running";
+  commit(taskId, running);
   await wait(250);
-  if (generation !== testGeneration) {
-    res.end();
-    return;
-  }
-  writeSse(res, assistantFrame([{ type: "set", path: ["runs", 0], value: finalState.runs[0] }], runId, finalState.runs[0].status, taskId));
-  lastStreamBody += "data: [DONE]\n\n";
-  res.write("data: [DONE]\n\n");
-  res.end();
+  if (generation !== testGeneration) return;
+  executors.delete(taskId);
+  commit(taskId, finalState);
   telemetry.completedStreamCount += 1;
+}
+
+/** 从运行中或用户取消的 Run 继续：同一个 Run 回到 running，回复续写为 resumed response。 */
+function continueRun(taskId) {
+  const previous = states.get(taskId);
+  const initialState = structuredClone(previous);
+  initialState.activity = { ...initialState.activity, status: "running", endReason: null };
+  const assistant = [...initialState.messages].reverse().find((message) => message.role === "assistant");
+  assistant.outcome = null;
+  assistant.parts = textMessage(assistant.id, "assistant", "", "running", assistant.runId).parts;
+  const finalState = settle(initialState, "completed");
+  finalState.messages[initialState.messages.indexOf(assistant)].parts = textMessage(assistant.id, "assistant", "resumed response", "completed", assistant.runId).parts;
+  finalState.messages[initialState.messages.indexOf(assistant)].outcome = outcomeOf(finalState.activity);
+  void execute(taskId, { initialState, chunks: ["resumed", " response"], finalState });
 }
 
 function readJson(req) {
@@ -535,148 +435,136 @@ function commandText(body) {
 }
 
 /**
- * 模拟 POST /tasks/{id}/messages 与 /messages/{messageId}/rerun：只返回 JSON 回执，把本轮输出登记为
- * 待推流，由随后的 attach 订阅推送；与生产「命令回执 + attach 订阅」的两段语义一致。
+ * 模拟 POST /tasks/{id}/messages 与 /messages/{messageId}/rerun：只投递（202 `{}`），本轮输出由模拟执行者
+ * 推给 Task 长订阅；与生产「命令投递 + 常驻订阅」的语义一致。运行中发送（immediate）也开新一轮，
+ * 测试只关心命令与订阅的边界。
  */
 function handleMessage(res, body, taskId, sourceId) {
   telemetry.requestBodies.push({ ...body, taskId, ...(sourceId ? { sourceId } : {}) });
   const text = commandText(body);
   if (!text.trim()) {
-    jsonResponse(res, 400, { error: { code: "INVALID_MESSAGE", message: "message is required", retryable: false } });
+    jsonResponse(res, 400, { detail: { error: { code: "INVALID_MESSAGE", message: "message is required", retryable: false } } });
+    return;
+  }
+  if (typeof sourceId === "string" && text === "edit-failure") {
+    jsonResponse(res, 400, { detail: { error: { code: "EDIT_REJECTED", message: "编辑重跑被测试后端拒绝", retryable: true } } });
     return;
   }
 
   const runId = nextRunId++;
   const previous = states.get(taskId) ?? emptyState();
-  if (typeof sourceId === "string" && text === "edit-failure") {
-    jsonResponse(res, 409, {
-      error: { code: "EDIT_REJECTED", message: "编辑重跑被测试后端拒绝", retryable: true },
-    });
-    return;
-  }
-  let branchBase = previous;
+  let base = previous;
   if (typeof sourceId === "string") {
-    const sourceRunIndex = previous.runs.findIndex((run) => run.messages.some((message) => message.id === sourceId));
-    const sourceRun = sourceRunIndex < 0 ? null : previous.runs[sourceRunIndex];
-    const sourceIndex = sourceRun?.messages.findIndex((message) => message.id === sourceId) ?? -1;
-    if (sourceRun && sourceIndex >= 0) {
-      branchBase = structuredClone(previous);
-      branchBase.runs = branchBase.runs.slice(0, sourceRunIndex + 1);
-      branchBase.runs[sourceRunIndex].messages = branchBase.runs[sourceRunIndex].messages.slice(0, sourceIndex);
+    // 编辑重跑：被编辑的用户消息及其后内容移出投影，编辑后的消息以新消息身份进入新一轮。
+    const sourceIndex = previous.messages.findIndex((message) => message.id === sourceId);
+    if (sourceIndex >= 0) {
+      base = structuredClone(previous);
+      base.messages = base.messages.slice(0, sourceIndex);
     }
   }
-  const initialState = stateWithExchange(branchBase, text, runId, "", "running");
-  const assistantIndex = initialState.runs.at(-1).messages.length - 1;
-  let finalText;
-  let chunks;
+  accepted(res);
 
   if (text.startsWith("tool-lifecycle")) {
-    const toolInitialState = toolLifecycleState(branchBase, text, runId, "running", "pending");
     const finalStatus = text.startsWith("tool-lifecycle-failed") ? "failed"
       : text.startsWith("tool-lifecycle-cancelled") ? "cancelled"
         : "completed";
-    const finalToolStatus = finalStatus === "completed" ? "completed" : finalStatus;
-    const toolFinalState = toolLifecycleState(branchBase, text, runId, finalStatus, finalToolStatus);
-    states.set(taskId, toolFinalState);
-    pendingStreams.set(taskId, (attachRes) => streamToolLifecycle(attachRes, toolInitialState, toolFinalState, runId, testGeneration, taskId));
-    jsonResponse(res, 200, { state: toolInitialState, queued: false });
+    const initialState = stateWithExchange(base, text, runId, "", "running");
+    initialState.messages.at(-1).parts = toolLifecycleParts(runId, "running", "pending");
+    const finalState = stateWithExchange(base, text, runId, "", finalStatus);
+    finalState.messages.at(-1).parts = toolLifecycleParts(runId, finalStatus, finalStatus);
+    void executeToolLifecycle(taskId, runId, initialState, finalState);
     return;
   }
 
-  finalText = "streaming response";
-  chunks = ["stream", "ing response"];
-
-  const finalState = stateWithExchange(branchBase, text, runId, finalText, "completed");
+  const initialState = stateWithExchange(base, text, runId, "", "running");
+  const finalState = stateWithExchange(base, text, runId, "streaming response", "completed");
   if (text.startsWith("usage-regression")) {
-    applyUsageFixture(initialState, runId, text.includes("second"));
-    applyUsageFixture(finalState, runId, text.includes("second"));
+    const usage = usageFixture(text.includes("second"));
+    for (const state of [initialState, finalState]) {
+      state.activity.usage = usage;
+      state.activity.contextWindowTotal = 100_000;
+    }
+    finalState.messages.at(-1).outcome = outcomeOf(finalState.activity);
   }
-  states.set(taskId, finalState);
-  pendingStreams.set(taskId, (attachRes) => streamState(attachRes, initialState, finalState, assistantIndex, chunks, runId, testGeneration, taskId));
-  jsonResponse(res, 200, { state: initialState, queued: false });
+  void execute(taskId, { initialState, chunks: ["stream", "ing response"], finalState });
 }
 
-/**
- * 计算续跑的初始与最终快照。``business`` 为真时模拟 POST /tasks/{id}/resume（只接受用户取消的
- * Run），否则模拟 attach 订阅一个仍在执行的 seeded Run。不可续跑时返回 null。
- */
-function resumePlan(taskId, { business }) {
-  const previous = states.get(taskId);
-  const previousRun = previous?.runs.find((run) => run.runId === previous.current_run_id);
-  const lastMessage = previousRun?.messages.at(-1);
-  const resumableCancelled = previousRun?.status === "cancelled"
-    && lastMessage?.role === "assistant"
-    && previousRun.endReason === "user_cancelled";
-  const running = previousRun?.status === "pending" || previousRun?.status === "running";
-  if (!previous || (business ? !resumableCancelled : !running && !resumableCancelled)) return null;
-
-  const runId = previous.current_run_id ?? nextResumeRunId++;
-  cancelledRuns.delete(runId);
-  const initialState = structuredClone(previous);
-  const runIndex = initialState.runs.findIndex((run) => run.runId === runId);
-  // 业务 resume 在推流前已把 Run 迁回 running；初始快照须与 target_run_status 一致。
-  initialState.runs[runIndex].status = "running";
-  initialState.runs[runIndex].endReason = null;
-  const assistantIndex = initialState.runs[runIndex].messages.length - 1;
-  const finalState = structuredClone(previous);
-  finalState.runs[runIndex].messages[assistantIndex] = textMessage(
-    finalState.runs[runIndex].messages[assistantIndex].id,
-    "assistant",
-    "resumed response",
-    "completed",
-  );
-  finalState.runs[runIndex].status = "completed";
-  finalState.runs[runIndex].endReason = "stop";
-  states.set(taskId, finalState);
-  return (attachRes) => streamState(attachRes, initialState, finalState, assistantIndex, ["resumed", " response"], runId, testGeneration, taskId);
-}
-
+/** 模拟 POST /tasks/{id}/resume：只续跑用户取消的 Run；不可续跑时调度拒绝投影为顶层 error。 */
 function handleBusinessResume(res, taskId) {
-  const stream = resumePlan(taskId, { business: true });
-  if (!stream) {
-    jsonResponse(res, 409, { error: { code: "RUN_NOT_RESUMABLE", message: "当前运行不可恢复", retryable: true } });
+  const state = states.get(taskId);
+  accepted(res);
+  const activity = state?.activity;
+  if (!activity || activity.status !== "cancelled" || activity.endReason !== "user_cancelled" || executors.has(taskId)) {
+    commit(taskId, { ...(state ?? emptyState()), error: { code: "RUN_NOT_RESUMABLE", message: "当前运行不可恢复", seq: ++commandErrorSeq } });
     return;
   }
-  // 续跑前状态已迁回 running：回执快照与随后 attach 的首帧一致。
-  const state = structuredClone(states.get(taskId));
-  const run = state.runs.find((candidate) => candidate.runId === state.current_run_id);
-  run.status = "running";
-  run.endReason = null;
-  pendingStreams.set(taskId, stream);
-  jsonResponse(res, 200, { state, queued: false });
+  commit(taskId, { ...state, error: null });
+  continueRun(taskId);
 }
 
-async function handleAttach(res, taskId) {
-  res.setHeader("X-Cosir-Task-Id", String(taskId));
-  const pending = pendingStreams.get(taskId);
-  if (pending) {
-    pendingStreams.delete(taskId);
-    await pending(res);
+function handleCancel(res, taskId) {
+  accepted(res);
+  const executor = executors.get(taskId);
+  if (executor) {
+    executor.cancelled = true;
+    executor.drop = dropNextCancelledStream;
+    dropNextCancelledStream = false;
     return;
   }
-  const previous = states.get(taskId);
-  const previousRun = previous?.runs.find((run) => run.runId === previous.current_run_id);
-  const lastMessage = previousRun?.messages.at(-1);
-  // A business resume may finish its executor before the UI's attach request
-  // arrives. Replay the terminal canonical snapshot so the UI does not miss
-  // the result merely because the two local HTTP streams are independent.
-  if (previousRun?.status === "completed" && lastMessage?.role === "assistant") {
-    const assistantIndex = previousRun.messages.length - 1;
-    await streamState(res, previous, previous, assistantIndex, [], previousRun.runId, testGeneration, taskId);
+  // 挂起中的 Run 没有执行者：取消由调度直接迁移为 cancelled。
+  const state = states.get(taskId);
+  if (state?.activity?.status === "suspended") commit(taskId, settle(state, "cancelled"));
+}
+
+/** Task 长订阅：先推 full 帧，之后持续推送；没有 Run 也保持连接，只在客户端断开时结束。 */
+function handleAttach(res, taskId) {
+  if (!states.has(taskId)) {
+    jsonResponse(res, 404, { detail: { error: { code: "TASK_NOT_FOUND", message: "任务不存在", retryable: false } } });
     return;
   }
-  const stream = resumePlan(taskId, { business: false });
-  if (!stream) {
-    jsonResponse(res, 409, { error: { code: "NO_RUN", message: "当前对话没有可订阅的运行", retryable: false } });
+  res.writeHead(200, {
+    "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
+    "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Expose-Headers": "X-Cosir-Task-Id",
+    "X-Cosir-Task-Id": String(taskId),
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Content-Type": "text/event-stream; charset=utf-8",
+  });
+  const set = subscribers.get(taskId) ?? new Set();
+  subscribers.set(taskId, set);
+  set.add(res);
+  const generation = testGeneration;
+  res.on("close", () => {
+    set.delete(res);
+    if (generation === testGeneration && executors.has(taskId)) telemetry.clientCancelCount += 1;
+  });
+  writeSse(res, { task_id: taskId, kind: "full", mutations: [], state: states.get(taskId) });
+  // seeded 的运行中 Run 没有执行者：首个订阅到来时模拟后端继续执行它。
+  if (isActive(states.get(taskId).activity?.status) && states.get(taskId).activity.status === "running" && !executors.has(taskId)) {
+    continueRun(taskId);
+  }
+}
+
+/** 编辑排队消息：原地改正文，消息已并入时 409 MESSAGE_CONSUMED。 */
+function handleQueuedEdit(res, body, taskId, messageId) {
+  const state = states.get(taskId);
+  const queued = state?.queued_messages?.find((message) => message.id === messageId);
+  if (!queued) {
+    jsonResponse(res, 409, { detail: { error: { code: "MESSAGE_CONSUMED", message: "消息已被处理", retryable: false } } });
     return;
   }
-  await stream(res);
+  const next = structuredClone(state);
+  next.queued_messages.find((message) => message.id === messageId).parts = body.message.parts;
+  jsonResponse(res, 200, {});
+  commit(taskId, next);
 }
 
 const server = createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:4173");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Trace-Id");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Expose-Headers", "X-Cosir-Task-Id");
 
   if (req.method === "OPTIONS") {
@@ -723,6 +611,10 @@ const server = createServer(async (req, res) => {
     const taskId = Number(url.pathname.split("/")[2]);
     tasks.delete(taskId);
     states.delete(taskId);
+    executors.delete(taskId);
+    // Task 删除结束它的长订阅。
+    for (const subscriber of subscribers.get(taskId) ?? []) subscriber.end();
+    subscribers.delete(taskId);
     jsonResponse(res, 200, { task_id: taskId, deleted: true });
     return;
   }
@@ -783,6 +675,14 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { task_id: taskId });
     return;
   }
+  if (req.method === "POST" && url.pathname === "/__test__/seed-state") {
+    // 直接落定某个 Task 的 canonical state：state 读取与 attach 首帧共用这一份事实。
+    const body = await readJson(req);
+    executors.delete(Number(body.taskId));
+    commit(Number(body.taskId), body.state);
+    jsonResponse(res, 200, { ok: true });
+    return;
+  }
   if (req.method === "POST" && url.pathname === "/__test__/seed-running") {
     const body = await readJson(req);
     const text = typeof body.text === "string" ? body.text : "恢复中的对话";
@@ -795,6 +695,7 @@ const server = createServer(async (req, res) => {
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(TASK_ID, stateWithExchange(emptyState(), text, 899, "", "running"));
+    executors.delete(TASK_ID);
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
   }
@@ -867,31 +768,13 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.method === "POST" && /^\/tasks\/\d+\/cancel$/.test(url.pathname)) {
-    // 与后端一致按 task 取消：命中该 Task 的当前 Run。
-    const cancelTaskId = Number(url.pathname.split("/")[2]);
-    const runId = states.get(cancelTaskId)?.current_run_id ?? null;
-    if (runId === null) {
-      jsonResponse(res, 409, { detail: "task has no cancellable execution" });
-      return;
-    }
-    cancelledRuns.add(runId);
-    if (dropNextCancelledStream) {
-      dropCancelledStreams.add(runId);
-      dropNextCancelledStream = false;
-    }
-    for (const [taskId, state] of states) {
-      const runIndex = state.runs.findIndex((run) => run.runId === runId);
-      if (runIndex < 0) continue;
-      const cancelledState = structuredClone(state);
-      cancelledState.runs[runIndex].status = "cancelled";
-      cancelledState.runs[runIndex].endReason = "user_cancelled";
-      states.set(taskId, cancelledState);
-    }
-    // Give an already-connected Assistant Transport stream a turn to publish
-    // the terminal cancelled snapshot before the client receives the ACK and
-    // aborts its local request. This mirrors the production projector push.
-    await wait(160);
-    jsonResponse(res, 200, { task_id: cancelTaskId, cancelled: true });
+    // 与后端一致按 Task 取消：只投递停止信号，终态经长订阅到达。
+    handleCancel(res, Number(url.pathname.split("/")[2]));
+    return;
+  }
+  const queuedRoute = url.pathname.match(/^\/tasks\/(\d+)\/queued-messages\/([^/]+)$/);
+  if (req.method === "PATCH" && queuedRoute) {
+    handleQueuedEdit(res, await readJson(req), Number(queuedRoute[1]), decodeURIComponent(queuedRoute[2]));
     return;
   }
   if (req.method === "GET" && /^\/tasks\/\d+$/.test(url.pathname)) {
@@ -925,18 +808,12 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.method === "POST" && /^\/tasks\/\d+\/assistant\/attach$/.test(url.pathname)) {
-    try {
-      if (failNextAttach) {
-        failNextAttach = false;
-        jsonResponse(res, 503, { error: { code: "ATTACH_TEMPORARY_FAILURE", message: "attach temporarily unavailable", retryable: true } });
-        return;
-      }
-      // attach 只订阅：命令回执登记的待推流优先，否则订阅 seeded 的运行中 Run。
-      await handleAttach(res, Number(url.pathname.split("/")[2]));
-    } catch {
-      if (!res.headersSent) jsonResponse(res, 400, { error: { code: "INVALID_REQUEST", message: "invalid request", retryable: false } });
-      else res.destroy();
+    if (failNextAttach) {
+      failNextAttach = false;
+      jsonResponse(res, 503, { detail: { error: { code: "ATTACH_TEMPORARY_FAILURE", message: "attach temporarily unavailable", retryable: true } } });
+      return;
     }
+    handleAttach(res, Number(url.pathname.split("/")[2]));
     return;
   }
   jsonResponse(res, 404, { detail: "not found" });

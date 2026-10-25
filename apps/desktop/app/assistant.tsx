@@ -30,8 +30,8 @@ export const Assistant = ({
   initialAttachments,
   initialDisabledToolGroups,
   initialBanTools,
-  forkingRunId,
-  onForkRun,
+  forkingMessageId,
+  onForkMessage,
   onTaskStateChanged,
 }: {
   taskId: number;
@@ -41,8 +41,8 @@ export const Assistant = ({
   initialAttachments?: InitialConversationAttachment[];
   initialDisabledToolGroups?: string[];
   initialBanTools?: string[];
-  forkingRunId?: number | null;
-  onForkRun?: (runId: number) => void;
+  forkingMessageId?: string | null;
+  onForkMessage?: (messageId: string) => void;
   onTaskStateChanged?: () => void;
 }) => {
   // AppLayout may finish its task-list refresh after the snapshot request.
@@ -71,8 +71,8 @@ export const Assistant = ({
       initialAttachments={initialAttachments}
       initialDisabledToolGroups={initialDisabledToolGroups}
       initialBanTools={initialBanTools}
-      forkingRunId={forkingRunId}
-      onForkRun={onForkRun}
+      forkingMessageId={forkingMessageId}
+      onForkMessage={onForkMessage}
       onTaskStateChanged={onTaskStateChanged}
     />
   );

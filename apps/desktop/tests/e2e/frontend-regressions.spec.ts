@@ -1,12 +1,9 @@
 import { expect, test } from "@playwright/test";
 
-const emptyState = () => ({
-  runs: [],
-  current_run_id: null,
-  approvals: {},
-  context_window_total: null,
-  error: null,
-});
+import type { TransportState } from "../../lib/assistant/contract";
+import { seedState } from "./transport-fixtures";
+
+const emptyState = (): TransportState => ({ messages: [], activity: null, error: null });
 
 test.beforeEach(async ({ request }) => {
   await request.post("http://127.0.0.1:8000/__test__/reset");
@@ -23,9 +20,9 @@ test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输�
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "拒绝发送回归" } });
   await page.route("http://127.0.0.1:8000/tasks/42/messages", async (route) => {
     await route.fulfill({
-      status: 409,
+      status: 400,
       contentType: "application/json",
-      body: JSON.stringify({ error: { code: "TASK_BUSY", message: "测试拒绝普通发送", retryable: true } }),
+      body: JSON.stringify({ detail: { error: { code: "INVALID_MESSAGE", message: "测试拒绝普通发送", retryable: true } } }),
     });
   });
   await page.addInitScript(() => {
@@ -242,7 +239,7 @@ test("侧栏点击 Task 会同步 Tauri WebView 内部路由", async ({ page, re
   await expect(page).toHaveURL(/\/tasks\/42$/);
 });
 
-test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", async ({ page }) => {
+test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", async ({ page, request }) => {
   const workspaces = [
     { workspace_id: 7, name: "workspace-a", root_path: "C:/a", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" },
     { workspace_id: 8, name: "workspace-b", root_path: "C:/b", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" },
@@ -251,7 +248,8 @@ test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", 
   await page.route("http://127.0.0.1:8000/workspaces/7/tasks", (route) => route.fulfill({ json: [{ task_id: 42, workspace_id: 7, title: "任务 A", execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
   await page.route("http://127.0.0.1:8000/workspaces/8/tasks", (route) => route.fulfill({ json: [{ task_id: 43, workspace_id: 8, title: "任务 B", execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
   await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)$/, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
-  await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)\/assistant\/state/, (route) => route.fulfill({ json: emptyState() }));
+  // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
+  for (const taskId of [42, 43]) await seedState(request, taskId, emptyState());
   await page.route("http://127.0.0.1:8000/model-configs", (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
   // Task 由路径寻址，workspace 归属由后端从 Task 事实解析；这里只需核对请求命中的 Task。
   const requestUrls: string[] = [];
@@ -336,7 +334,7 @@ test("Assistant Transport 会展示后端结构化错误", async ({ page, reques
   await expect(page.getByRole("button", { name: "重新同步" })).toHaveCount(0);
 });
 
-test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace 解析", async ({ page }) => {
+test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace 解析", async ({ page, request }) => {
   let workspaceLoadCount = 0;
   const workspaceA = { workspace_id: 7, name: "workspace-a", root_path: "C:/a", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" };
   const workspaceB = { workspace_id: 8, name: "workspace-b", root_path: "C:/b", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" };
@@ -349,7 +347,8 @@ test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace �
   await page.route("http://127.0.0.1:8000/workspaces/7/tasks", (route) => route.fulfill({ json: [{ task_id: 42, workspace_id: 7, title: "任务 A", execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
   await page.route("http://127.0.0.1:8000/workspaces/8/tasks", (route) => route.fulfill({ json: [{ task_id: 43, workspace_id: 8, title: "任务 B", execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
   await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)$/, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", execution_status: null, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
-  await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)\/assistant\/state/, (route) => route.fulfill({ json: emptyState() }));
+  // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
+  for (const taskId of [42, 43]) await seedState(request, taskId, emptyState());
   await page.route("http://127.0.0.1:8000/model-configs", (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
   // Task 由路径寻址，workspace 归属由后端从 Task 事实解析；这里只需核对请求命中的 Task。
   const requestUrls: string[] = [];

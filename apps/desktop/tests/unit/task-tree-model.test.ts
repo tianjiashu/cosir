@@ -14,7 +14,6 @@ function task(taskId: number, title: string, options: Partial<WorkspaceTask> = {
     workspace_id: 1,
     title,
     task_type: "user",
-    current_run_id: null,
     execution_status: null,
 
     created_at: `2026-01-0${taskId}T00:00:00.000Z`,
@@ -26,7 +25,7 @@ function task(taskId: number, title: string, options: Partial<WorkspaceTask> = {
 function fork(taskId: number, sourceTaskId: number, title = `Fork ${taskId}`): WorkspaceTask {
   return task(taskId, title, {
     task_type: "fork",
-    extra: { fork: { source_task_id: sourceTaskId, source_run_id: taskId + 100 } },
+    extra: { fork: { source_task_id: sourceTaskId, source_message_id: `assistant-${taskId + 100}` } },
   });
 }
 

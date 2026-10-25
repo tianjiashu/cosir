@@ -2,24 +2,27 @@ import { describe, expect, it } from "vitest";
 
 import {
   extractUserAddMessageAttachments,
-  toMessageStatus,
   toEditableUserMessageDraft,
-  toThreadMessage,
+  toThreadMessageWithRenderContext,
   toPendingUserMessage,
   toToolCallPart,
+  type TransportMessageRenderContext,
 } from "@/lib/assistant/converter";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
-import type { TransportMessage, TransportState, TransportToolCallPart } from "@/lib/assistant/contract";
+import type { TransportMessage, TransportToolCallPart } from "@/lib/assistant/contract";
+import { activity, outcome, usage } from "./transport-fixtures";
 
-const completedRun = (runId: number, messages: TransportMessage[] = []): TransportState["runs"][number] => ({
-  runId,
-  status: "completed",
-  endReason: null,
-  contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
-  messages,
-  usage: null,
-  error: null,
+/** 已到终态那一轮回复末尾的渲染上下文。 */
+const completedRun = (runId: number): TransportMessageRenderContext => ({
+  runId, outcome: outcome("completed"), isRunEnd: true, activity: null,
 });
+const runningRun = (runId: number): TransportMessageRenderContext => ({
+  runId, outcome: null, isRunEnd: true, activity: activity(runId, "running"),
+});
+const toThreadMessage = (
+  message: Pick<TransportMessage, "id" | "role" | "parts">,
+  context: TransportMessageRenderContext,
+) => toThreadMessageWithRenderContext(message, context);
 
 const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportToolCallPart> = {}): TransportToolCallPart => ({
   type: "tool-call",
@@ -47,17 +50,22 @@ describe("assistant transport converter", () => {
         { type: "image", image: "cosir-attachment://image-one" },
       ],
     });
-    expect(pending?.metadata.custom).toEqual({ runId: -1, isLastRunMessage: false });
+    expect(pending?.metadata.custom).toEqual({ runId: null });
     expect(toPendingUserMessage(command)?.id).toBe(pending?.id);
   });
 
-  // 目的：Run 状态随消息一并投影，使消息渲染只依赖消息自身事实。潜在缺陷：消息组件回查
+  // 目的：结局与当前活动随消息一并投影，使消息渲染只依赖消息自身事实。潜在缺陷：消息组件回查
   // thread external state 时，只读作用域（无 external state 的 runtime）会在渲染期抛错。
-  it("projects the run status onto assistant message metadata", () => {
-    const message: TransportMessage = { id: "assistant-1", role: "assistant", parts: [] };
-    const threadMessage = toThreadMessage(message, { ...completedRun(7), status: "running" });
+  it("projects the outcome and activity onto assistant message metadata (D5)", () => {
+    const message: TransportMessage = { id: "assistant-1", role: "assistant", parts: [], runId: 7, outcome: null };
+    const cancelled = outcome("cancelled", { usage: usage({ total_tokens: 42 }) });
+    const ended = toThreadMessage(message, { runId: 7, outcome: cancelled, isRunEnd: true, activity: null });
+    expect(ended.metadata.custom).toEqual({ runId: 7, isRunEnd: true, outcome: cancelled, activity: null });
+    expect(ended.status).toEqual({ type: "incomplete", reason: "cancelled" });
 
-    expect(threadMessage.metadata.custom).toMatchObject({ runId: 7, runStatus: "running" });
+    const live = toThreadMessage(message, runningRun(7));
+    expect(live.metadata.custom).toMatchObject({ runId: 7, isRunEnd: true, outcome: null, activity: { status: "running" } });
+    expect(live.status).toEqual({ type: "running" });
   });
 
   it("rebuilds ordinary attachments from inline token ids for failure restore", () => {
@@ -273,8 +281,10 @@ describe("assistant transport converter", () => {
         { type: "text", text: "partial **markdown", status: "running" },
         { type: "reasoning", text: "checking", status: "completed" },
       ],
+      runId: 1,
+      outcome: null,
     };
-    const converted = toThreadMessage(message, { ...completedRun(1), status: "running" });
+    const converted = toThreadMessage(message, runningRun(1));
     expect(converted.content[0]).toMatchObject({ type: "text", text: "partial **markdown", status: { type: "running" } });
     expect(converted.content[1]).toMatchObject({ type: "reasoning", text: "checking", status: { type: "complete" } });
     expect(converted.status).toEqual({ type: "running" });
@@ -316,48 +326,6 @@ describe("assistant transport converter", () => {
       },
     });
     expect(JSON.stringify(converted)).not.toContain("private document body");
-  });
-
-  it("does not treat unknown message status as success", () => {
-    expect(toMessageStatus({ id: "m", role: "assistant", parts: [] }, { ...completedRun(1), status: "future-status" })).toEqual({ type: "incomplete", reason: "other" });
-  });
-
-  it("prefers the backend controlled failure message over the local fallback", () => {
-    const failedRun: TransportState["runs"][number] = {
-      ...completedRun(1),
-      status: "failed",
-      error: { code: "model_insufficient_quota", message: "模型服务配额或余额不足，请充值或更换模型" },
-    };
-
-    expect(toMessageStatus({ id: "m", role: "assistant", parts: [] }, failedRun)).toEqual({
-      type: "incomplete",
-      reason: "error",
-      error: "模型服务配额或余额不足，请充值或更换模型",
-    });
-  });
-
-  it("falls back to the local failure message when the run carries no error contract", () => {
-    const failedRun: TransportState["runs"][number] = { ...completedRun(1), status: "failed" };
-
-    expect(toMessageStatus({ id: "m", role: "assistant", parts: [] }, failedRun)).toEqual({
-      type: "incomplete",
-      reason: "error",
-      error: "对话运行失败，请检查模型配置或后端状态。",
-    });
-  });
-
-  it("keeps disconnected failures rendered as cancelled instead of an error", () => {
-    const disconnectedRun: TransportState["runs"][number] = {
-      ...completedRun(1),
-      status: "failed",
-      endReason: "client_disconnected",
-      error: { code: "client_disconnected", message: "连接已断开，本轮对话被中断，请重新发送" },
-    };
-
-    expect(toMessageStatus({ id: "m", role: "assistant", parts: [] }, disconnectedRun)).toEqual({
-      type: "incomplete",
-      reason: "cancelled",
-    });
   });
 
   it("keeps unknown tool and run states explicitly non-success", () => {

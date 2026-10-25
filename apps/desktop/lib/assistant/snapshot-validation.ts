@@ -136,6 +136,15 @@ function validateError(value: unknown, path: string): void {
   }
 }
 
+function validateCommandError(value: unknown, path: string): void {
+  const error = requireRecord(value, path);
+  requireExactKeys(error, ["code", "message", "seq"], path);
+  if (!Number.isInteger(error.seq) || (error.seq as number) <= 0) {
+    throw new TransportSnapshotValidationError(`${path}.seq`, "正整数");
+  }
+  validateError({ code: error.code, message: error.message }, path);
+}
+
 function validateUsage(value: unknown, path: string): void {
   const usage = requireRecord(value, path);
   requireExactKeys(usage, USAGE_KEYS, path);
@@ -208,59 +217,71 @@ function validatePart(value: unknown, path: string): void {
   if (part.approvalRequestId !== null && part.approvalRequestId !== undefined) throw new TransportSnapshotValidationError(`${path}.approvalRequestId`, "null 或 undefined");
 }
 
-function validateMessage(value: unknown, path: string, seenIds: Set<string>, extraKeys: readonly string[] = []): void {
-  const message = requireRecord(value, path);
-  requireExactKeys(message, ["id", "role", "parts", ...extraKeys], path);
+const RUN_STATUSES = ["running", "suspended", "completed", "failed", "cancelled"] as const;
+const TERMINAL_STATUSES = ["completed", "failed", "cancelled"] as const;
+
+function validateMessageBody(message: Record<string, unknown>, path: string, seenIds: Set<string>): void {
   const id = requireString(message.id, `${path}.id`);
-  if (id === "" || seenIds.has(id)) throw new TransportSnapshotValidationError(`${path}.id`, "非空且在 Run 内唯一");
+  if (id === "" || seenIds.has(id)) throw new TransportSnapshotValidationError(`${path}.id`, "非空且在 Task 内唯一");
   seenIds.add(id);
   if (message.role !== "user" && message.role !== "assistant") throw new TransportSnapshotValidationError(`${path}.role`, "user 或 assistant");
   if (!Array.isArray(message.parts)) throw new TransportSnapshotValidationError(`${path}.parts`, "数组");
   message.parts.forEach((part, index) => validatePart(part, `${path}.parts[${index}]`));
 }
 
+function validateOutcome(value: unknown, path: string): void {
+  const outcome = requireRecord(value, path);
+  requireExactKeys(outcome, ["status", "endReason", "error", "usage", "contextWindowTotal"], path);
+  if (!(TERMINAL_STATUSES as readonly unknown[]).includes(outcome.status)) throw new TransportSnapshotValidationError(`${path}.status`, "Run 终态");
+  if (outcome.endReason !== null && typeof outcome.endReason !== "string") throw new TransportSnapshotValidationError(`${path}.endReason`, "字符串或 null");
+  if (outcome.error !== null) validateError(outcome.error, `${path}.error`);
+  if (outcome.usage !== null) validateUsage(outcome.usage, `${path}.usage`);
+}
+
+function validateActivity(value: unknown, path: string): void {
+  const activity = requireRecord(value, path);
+  requireExactKeys(activity, ["runId", "status", "endReason", "error", "usage", "contextWindowTotal", "launch"], path);
+  if (requireNullableNonNegativeInteger(activity.runId, `${path}.runId`) === null) {
+    throw new TransportSnapshotValidationError(`${path}.runId`, "非负整数");
+  }
+  if (!(RUN_STATUSES as readonly unknown[]).includes(activity.status)) throw new TransportSnapshotValidationError(`${path}.status`, "受支持的运行状态");
+  if (activity.endReason !== null && typeof activity.endReason !== "string") throw new TransportSnapshotValidationError(`${path}.endReason`, "字符串或 null");
+  if (activity.error !== null) validateError(activity.error, `${path}.error`);
+  if (activity.usage !== null) validateUsage(activity.usage, `${path}.usage`);
+  requireNullableNonNegativeInteger(activity.contextWindowTotal, `${path}.contextWindowTotal`);
+  validateLaunch(activity.launch, `${path}.launch`);
+}
+
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["runs", "current_run_id", "approvals", "error", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  requireExactKeys(state, ["messages", "activity", "error", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  const ids = new Set<string>();
+  if (!Array.isArray(state.messages)) throw new TransportSnapshotValidationError("messages", "数组");
+  state.messages.forEach((rawMessage, index) => {
+    const path = `messages[${index}]`;
+    const message = requireRecord(rawMessage, path);
+    requireExactKeys(message, ["id", "role", "parts", "runId", "outcome"], path);
+    validateMessageBody(message, path, ids);
+    if (requireNullableNonNegativeInteger(message.runId, `${path}.runId`) === null) {
+      throw new TransportSnapshotValidationError(`${path}.runId`, "非负整数");
+    }
+    if (message.outcome !== null) {
+      if (message.role !== "assistant") throw new TransportSnapshotValidationError(`${path}.outcome`, "user 消息上为 null");
+      validateOutcome(message.outcome, `${path}.outcome`);
+    }
+  });
   if (state.queued_messages !== undefined) {
     if (!Array.isArray(state.queued_messages)) throw new TransportSnapshotValidationError("queued_messages", "数组");
-    const ids = new Set<string>();
-    state.queued_messages.forEach((message, index) => {
+    state.queued_messages.forEach((rawMessage, index) => {
       const path = `queued_messages[${index}]`;
-      validateMessage(message, path, ids, ["delivery"]);
-      const { delivery, role } = message as { delivery: unknown; role: unknown };
-      if (delivery !== "immediate" && delivery !== "next_run") throw new TransportSnapshotValidationError(`${path}.delivery`, "immediate 或 next_run");
-      if (role !== "user") throw new TransportSnapshotValidationError(`${path}.role`, "user");
+      const message = requireRecord(rawMessage, path);
+      requireExactKeys(message, ["id", "role", "parts", "delivery"], path);
+      validateMessageBody(message, path, ids);
+      if (message.delivery !== "immediate" && message.delivery !== "next_run") throw new TransportSnapshotValidationError(`${path}.delivery`, "immediate 或 next_run");
+      if (message.role !== "user") throw new TransportSnapshotValidationError(`${path}.role`, "user");
     });
   }
-  if (!Array.isArray(state.runs)) throw new TransportSnapshotValidationError("runs", "数组");
-  const runIds = new Set<number>();
-  const activeRunIds: number[] = [];
-  for (const [index, rawRun] of state.runs.entries()) {
-    const run = requireRecord(rawRun, `runs[${index}]`);
-    requireExactKeys(run, ["runId", "status", "endReason", "contextWindowTotal", "launch", "messages", "usage", "error"], `runs[${index}]`);
-    const runId = requireNullableNonNegativeInteger(run.runId, `runs[${index}].runId`);
-    if (runId === null || runIds.has(runId)) throw new TransportSnapshotValidationError(`runs[${index}].runId`, "唯一的非负整数");
-    runIds.add(runId);
-    const status = requireString(run.status, `runs[${index}].status`);
-    if (!["idle", "pending", "running", "suspended", "completed", "failed", "cancelled", "interrupted"].includes(status)) throw new TransportSnapshotValidationError(`runs[${index}].status`, "受支持的运行状态");
-    if (status === "pending" || status === "running" || status === "suspended") activeRunIds.push(runId);
-    if (run.endReason !== null && typeof run.endReason !== "string") throw new TransportSnapshotValidationError(`runs[${index}].endReason`, "字符串或 null");
-    requireNullableNonNegativeInteger(run.contextWindowTotal, `runs[${index}].contextWindowTotal`);
-    validateLaunch(run.launch, `runs[${index}].launch`);
-    if (!Array.isArray(run.messages)) throw new TransportSnapshotValidationError(`runs[${index}].messages`, "数组");
-    const messageIds = new Set<string>();
-    run.messages.forEach((message, messageIndex) => validateMessage(message, `runs[${index}].messages[${messageIndex}]`, messageIds));
-    if (run.usage !== null) validateUsage(run.usage, `runs[${index}].usage`);
-    if (run.error !== null) validateError(run.error, `runs[${index}].error`);
-  }
-  const currentRunId = requireNullableNonNegativeInteger(state.current_run_id, "current_run_id");
-  if (currentRunId !== null && !runIds.has(currentRunId)) throw new TransportSnapshotValidationError("current_run_id", "已存在的 Run ID 或 null");
-  if (activeRunIds.length > 1) throw new TransportSnapshotValidationError("runs", "最多一个 active Run");
-  if (activeRunIds.length === 1 && currentRunId !== activeRunIds[0]) {
-    throw new TransportSnapshotValidationError("current_run_id", "必须指向唯一的 active Run");
-  }
-  if (!isRecord(state.approvals) || Object.keys(state.approvals).length !== 0) throw new TransportSnapshotValidationError("approvals", "空对象");
-  if (state.error !== null) validateError(state.error, "error");
+  if (state.activity !== null) validateActivity(state.activity, "activity");
+  if (state.error !== null) validateCommandError(state.error, "error");
   return state as unknown as TransportState;
 }

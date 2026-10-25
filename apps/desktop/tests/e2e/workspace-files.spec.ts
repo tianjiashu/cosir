@@ -1,4 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { TransportState } from "../../lib/assistant/contract";
+import { seedState } from "./transport-fixtures";
 
 const entry = (path: string, kind = "file") => ({
   path,
@@ -522,15 +524,12 @@ test("文件菜单开关不锁定主对话，长消息滚动位置和节点保�
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockFiles(page);
   await request.post("http://127.0.0.1:8000/__test__/seed-tool-trace");
-  await page.route("**/tasks/42/assistant/state", async (route) => {
-    const response = await route.fetch();
-    const state = await response.json();
-    state.runs[0].messages[1].parts = Array.from({ length: 45 }, (_, i) => [
-      { type: "reasoning", text: `分析第 ${i} 次输出`, status: "completed" },
-      { type: "text", text: `第 ${i} 次读取终端输出。继续观察命令的执行过程，检查输出和状态是否符合预期。`, status: "completed" },
-    ]).flat();
-    await route.fulfill({ json: state });
-  });
+  const state = await (await request.get("http://127.0.0.1:8000/tasks/42/assistant/state")).json() as TransportState;
+  state.messages[1].parts = Array.from({ length: 45 }, (_, i) => [
+    { type: "reasoning" as const, text: `分析第 ${i} 次输出`, status: "completed" as const },
+    { type: "text" as const, text: `第 ${i} 次读取终端输出。继续观察命令的执行过程，检查输出和状态是否符合预期。`, status: "completed" as const },
+  ]).flat();
+  await seedState(request, 42, state);
   await page.goto("/tasks/42");
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const trigger = page.getByRole("button", { name: "文件浏览器更多选项" });

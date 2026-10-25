@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   formatTokenCount,
   getContextUsagePresentation,
-  shouldDisplayRunUsage,
 } from "@/components/assistant/usage-display";
 
 describe("usage display", () => {
@@ -38,12 +37,5 @@ describe("usage display", () => {
       tone: "critical",
     });
     expect(getContextUsagePresentation(0.9, 90_000, 100_000).status).toBe("critical");
-  });
-
-  it("only attaches run usage to the matching latest assistant run", () => {
-    expect(shouldDisplayRunUsage(true, 3, true)).toBe(true);
-    expect(shouldDisplayRunUsage(true, 3, false)).toBe(false);
-    expect(shouldDisplayRunUsage(false, 3, true)).toBe(false);
-    expect(shouldDisplayRunUsage(true, null, true)).toBe(false);
   });
 });

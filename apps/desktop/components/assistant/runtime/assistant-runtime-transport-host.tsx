@@ -4,7 +4,8 @@ import { memo } from "react";
 import { AssistantThreadSurface } from "@/components/assistant/runtime/assistant-thread-surface";
 import { useRuntimeTransport } from "@/components/assistant/runtime/use-runtime-transport";
 import type { RuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
-import type { AssistantRuntimeProps, RuntimeSessionContext, RuntimeControls, ComposerRestore } from "@/components/assistant/runtime/runtime-types";
+import type { RuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
+import type { AssistantRuntimeProps, RuntimeSessionContext, ComposerRestore } from "@/components/assistant/runtime/runtime-types";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportState } from "@/lib/assistant/contract";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
@@ -13,9 +14,9 @@ import type { MutableRefObject } from "react";
 type AssistantRuntimeTransportHostProps = {
   context: RuntimeSessionContext;
   recovery: RuntimeRecovery;
+  cancellation: RuntimeCancellation;
   commitTransportState: (state: TransportState) => void;
   selectedBanTools: readonly string[];
-  registerRuntimeControls: (controls: RuntimeControls | null) => void;
   registerComposerRestore: (restore: ComposerRestore) => void;
   initialMessageSentRef: MutableRefObject<boolean>;
   toolGroups: ToolGroupCatalog[];
@@ -25,13 +26,13 @@ type AssistantRuntimeTransportHostProps = {
   toolGroupsError: string | null;
   initialMessage?: string;
   initialAttachments?: AssistantRuntimeProps["initialAttachments"];
-  forkingRunId?: number | null;
-  onForkRun?: (runId: number) => void;
+  forkingMessageId?: string | null;
+  onForkMessage?: (messageId: string) => void;
   onResumeBusiness: () => Promise<void>;
   onInitialMessageError: (message: string) => void;
-  onCancelRequested: (runId: number) => void;
-  onCancelResult: (runId: number, accepted: boolean) => void;
-  cancellingRunId: number | null;
+  onCancelRequested: () => void;
+  onCancelResult: (accepted: boolean) => void;
+  cancelling: boolean;
   performanceProbe: AssistantPerformanceProbe | null;
 };
 
@@ -44,9 +45,9 @@ type AssistantRuntimeTransportHostProps = {
 export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTransportHost({
   context,
   recovery,
+  cancellation,
   commitTransportState,
   selectedBanTools,
-  registerRuntimeControls,
   registerComposerRestore,
   initialMessageSentRef,
   toolGroups,
@@ -56,24 +57,21 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
   toolGroupsError,
   initialMessage,
   initialAttachments,
-  forkingRunId,
-  onForkRun,
+  forkingMessageId,
+  onForkMessage,
   onResumeBusiness,
   onInitialMessageError,
   onCancelRequested,
   onCancelResult,
-  cancellingRunId,
+  cancelling,
   performanceProbe,
 }: AssistantRuntimeTransportHostProps) {
   const runtime = useRuntimeTransport(
     context,
     recovery,
+    cancellation,
     commitTransportState,
     selectedBanTools,
-  );
-  const resumeOnMount = context.initialState.runs.some((run) =>
-    run.runId === context.initialState.current_run_id
-      && (run.status === "pending" || run.status === "running"),
   );
 
   return (
@@ -84,13 +82,9 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
         workspaceRoot={context.workspaceRoot}
         initialMessage={initialMessage}
         initialAttachments={initialAttachments}
-        forkingRunId={forkingRunId}
-        onForkRun={onForkRun}
+        forkingMessageId={forkingMessageId}
+        onForkMessage={onForkMessage}
         initialState={context.initialState}
-        backendRef={context.backendRef}
-        resumeOnMount={resumeOnMount}
-        attachTransportRef={context.attachTransportRef}
-        registerRuntimeControls={registerRuntimeControls}
         registerComposerRestore={registerComposerRestore}
         initialMessageSentRef={initialMessageSentRef}
         traceId={context.traceId}
@@ -103,7 +97,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
         onResumeBusiness={onResumeBusiness}
         onCancelRequested={onCancelRequested}
         onCancelResult={onCancelResult}
-        cancellingRunId={cancellingRunId}
+        cancelling={cancelling}
         performanceProbe={performanceProbe}
       />
     </AssistantRuntimeProvider>

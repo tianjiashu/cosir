@@ -67,7 +67,7 @@ function renderAgentTeamTool(teamRun: Partial<AgentTeamRun> | null): string {
   }
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
-      <AgentTeamTool {...part} runId={2} taskId={3} />
+      <AgentTeamTool {...part} taskId={3} />
     </QueryClientProvider>,
   );
 }

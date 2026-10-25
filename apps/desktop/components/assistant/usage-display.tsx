@@ -13,11 +13,8 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import type { TransportRun } from "@/lib/assistant/contract";
-import {
-  findTransportRun,
-  latestMeasuredContextUsage,
-} from "@/lib/assistant/transport-state-operations";
+import type { TransportUsage } from "@/lib/assistant/contract";
+import { latestMeasuredContextUsage } from "@/lib/assistant/transport-state-operations";
 
 type UsageTone = "normal" | "warning" | "critical" | "unknown";
 
@@ -123,16 +120,6 @@ export function getContextUsagePresentation(
     overageTokens: null,
     measured: false,
   };
-}
-
-export function shouldDisplayRunUsage(
-  visible: boolean,
-  messageRunId: number | null,
-  runExists: boolean,
-): boolean {
-  return visible
-    && messageRunId !== null
-    && runExists;
 }
 
 function toneClass(tone: UsageTone): string {
@@ -258,11 +245,15 @@ export function TaskContextUsage(): ReactElement {
   );
 }
 
-export function RunUsageDisplay({ runId, visible }: { runId: number | null; visible: boolean }): ReactElement | null {
-  const run = useAuiState((state): TransportRun | null =>
-    findTransportRun(state.thread.state, runId) ?? null,
-  );
-  const usage = run?.usage ?? null;
+/**
+ * 一轮回复的用量。数据由消息自身携带：历史回复取 `outcome.usage`，当前活动的最后一条回复取
+ * `activity.usage`（见 frame store 的消息渲染上下文），不回查 Task 级 state。
+ */
+export function RunUsageDisplay({ usage, running, visible }: {
+  usage: TransportUsage | null;
+  running: boolean;
+  visible: boolean;
+}): ReactElement | null {
   const input = usage?.input_tokens ?? null;
   const output = usage?.output_tokens ?? null;
   const total = usage?.total_tokens ?? null;
@@ -271,12 +262,10 @@ export function RunUsageDisplay({ runId, visible }: { runId: number | null; visi
   const cacheHitRate = getCacheHitRate(cacheHit, cacheMiss);
   const reasoning = usage?.reasoning_tokens ?? null;
 
-  if (!shouldDisplayRunUsage(visible, runId, run !== null)) return null;
-  const known = usage !== null;
-  const isRunning = run?.status === "pending" || run?.status === "running";
-  const label = known && total !== null
+  if (!visible) return null;
+  const label = usage !== null && total !== null
     ? `本次用量 ${formatTokenCount(total)} tokens`
-    : isRunning ? "用量统计中…" : "本次用量 —";
+    : running ? "用量统计中…" : "本次用量 —";
   const displayCount = (value: number | null): string => value === null ? "—" : formatTokenCount(value);
 
   return (
@@ -289,7 +278,7 @@ export function RunUsageDisplay({ runId, visible }: { runId: number | null; visi
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64">
         <PopoverHeader>
-          <PopoverTitle>本次 Run 用量</PopoverTitle>
+          <PopoverTitle>本轮用量</PopoverTitle>
         </PopoverHeader>
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
           <dt className="text-muted-foreground">输入</dt><dd className="text-right">{displayCount(input)}</dd>

@@ -3,11 +3,19 @@ import { test as base, expect, type Page } from "@playwright/test";
 
 const origin = "http://127.0.0.1:8000";
 const terminal = (status: string) => ["completed", "failed", "cancelled"].includes(status);
+/** Task 视角 snapshot：一轮回复 + 当前活动；终态时结局写在回复上。 */
 function snapshot(runId: number | null, status = "completed", text = "阅读内容") {
-  return { current_run_id: runId, approvals: {}, error: null,
-    runs: runId === null ? [] : [{ runId, status, endReason: null, contextWindowTotal: null,
-      launch: { modelConfigId: 2, reasoningEffort: null, banTools: [] }, usage: null, error: null,
-      messages: [{ id: `assistant-${runId}`, role: "assistant", parts: [{ type: "text", text, status: terminal(status) ? "completed" : "running" }] }] }],
+  if (runId === null) return { messages: [], activity: null, error: null };
+  const ended = terminal(status);
+  return {
+    messages: [{
+      id: `assistant-run-${runId}`, role: "assistant", runId,
+      parts: [{ type: "text", text, status: ended ? "completed" : "running" }],
+      outcome: ended ? { status, endReason: null, error: null, usage: null, contextWindowTotal: null } : null,
+    }],
+    activity: { runId, status, endReason: null, error: null, usage: null, contextWindowTotal: null,
+      launch: { modelConfigId: 2, reasoningEffort: null, banTools: [] } },
+    error: null,
   };
 }
 type Snapshot = ReturnType<typeof snapshot>;
@@ -29,14 +37,12 @@ const test = base.extend<{ agent: Fixture }>({
       dropStreams: false,
       push(id, state) {
         fixture.states.set(id, state);
-        for (const response of fixture.connections.get(id) ?? []) {
-          response.write(frame(id, state));
-          if (terminal(state.runs[0].status)) response.end();
-        }
+        // Task 长订阅：活动到终态也不断开。
+        for (const response of fixture.connections.get(id) ?? []) response.write(frame(id, state));
       },
     };
     function frame(id: number, state: Snapshot) {
-      return `data: ${JSON.stringify({ kind: "full", task_id: id, state, mutations: [], target_run_id: state.current_run_id, target_run_status: state.runs[0]?.status ?? null })}\n\n`;
+      return `data: ${JSON.stringify({ kind: "full", task_id: id, state, mutations: [] })}\n\n`;
     }
     const server = createServer((req, res) => {
       res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:4173");
@@ -57,8 +63,8 @@ const test = base.extend<{ agent: Fixture }>({
     await page.addInitScript(() => { localStorage.clear(); localStorage.setItem("cosir:last-workspace-id", "7"); });
     await page.route(`${origin}/workspaces`, route => route.fulfill({ json: [{ workspace_id: 7, name: "验收工作区", root_path: "/workspace", created_at: "", updated_at: "" }] }));
     const task = (id: number) => ({ task_id: id, workspace_id: 7, title: `任务${id}`, task_type: id === 100 ? "user" : "delegate_task",
-      current_run_id: fixture.states.get(id)?.current_run_id ?? null, execution_status: fixture.states.get(id)?.runs[0]?.status ?? null,
-      context_window_total: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
+      execution_status: fixture.states.get(id)?.activity?.status ?? null,
+      created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
     await page.route(`${origin}/workspaces/7/tasks`, route => route.fulfill({ json: [task(100)] }));
     await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/\d+$/, route => {
       const id = Number(route.request().url().split("/").at(-1));
@@ -102,10 +108,10 @@ test("非激活标签刷新、收起暂停、展开更新、关闭不取消 Run"
   await page.getByRole("button", { name: /工作台，2 个标签，点击打开/ }).click();
   await expect(tab(page, 501)).toHaveAccessibleName("运行中 Agent501");
   await page.getByRole("button", { name: "关闭 Agent501", exact: true }).click();
-  expect(agent.states.get(501)?.runs[0].status).toBe("running");
+  expect(agent.states.get(501)?.activity?.status).toBe("running");
 });
 
-test("挂起继续订阅，SSE 状态变化刷新标签，后续新 Run 自动接续", async ({ page, agent }, testInfo) => {
+test("挂起继续订阅，SSE 状态变化刷新标签，后续新 Run 经同一订阅接续", async ({ page, agent }, testInfo) => {
   agent.states.set(501, snapshot(1, "suspended", "等待确认内容"));
   await open(page, [501]);
   await expect.poll(() => agent.attaches.get(501)).toBe(1);
@@ -121,20 +127,20 @@ test("挂起继续订阅，SSE 状态变化刷新标签，后续新 Run 自动�
   await expect(tab(page, 501)).toHaveAccessibleName("已完成 Agent501");
   await expect(page.getByText("第一轮完成", { exact: true })).toBeVisible();
   expect(agent.snapshots.get(501)).toBe(count);
-  agent.states.set(501, snapshot(4, "running", "新轮次内容"));
-  await expect(page.getByText("新轮次内容", { exact: true })).toBeVisible({ timeout: 15_000 });
-  await expect.poll(() => agent.attaches.get(501)).toBe(2);
+  agent.push(501, snapshot(4, "running", "新轮次内容"));
+  await expect(page.getByText("新轮次内容", { exact: true })).toBeVisible();
+  expect(agent.attaches.get(501)).toBe(1);
 });
 
-test("同一个已停止 Run 恢复时重新读取并 attach", async ({ page, agent }) => {
+test("已停止的子 Task 也常驻订阅，恢复经同一订阅到达", async ({ page, agent }) => {
   agent.states.set(501, snapshot(1, "cancelled", "已停止的内容"));
   await open(page, [501]);
   await expect(tab(page, 501)).toHaveAccessibleName("已停止 Agent501");
   await expect(page.getByText("已停止的内容", { exact: true })).toBeVisible();
-  expect(agent.attaches.get(501)).toBeUndefined();
-  agent.states.set(501, snapshot(1, "running", "恢复后的内容"));
-  await expect(page.getByText("恢复后的内容", { exact: true })).toBeVisible({ timeout: 15_000 });
   await expect.poll(() => agent.attaches.get(501)).toBe(1);
+  agent.push(501, snapshot(1, "running", "恢复后的内容"));
+  await expect(page.getByText("恢复后的内容", { exact: true })).toBeVisible();
+  expect(agent.attaches.get(501)).toBe(1);
 });
 
 test("摘要读取失败有界且保留旧状态，404 停止观察", async ({ page, agent }) => {
@@ -155,17 +161,26 @@ test("摘要读取失败有界且保留旧状态，404 停止观察", async ({ p
   expect(agent.reads.get(501)).toBe(missingCount);
 });
 
-test("意外 EOF 只重同步两次，手动重试恢复完整预算", async ({ page, agent }) => {
+test("意外 EOF 与主对话同一套有限重连，只重开订阅不重读 snapshot，手动重试恢复完整预算", async ({ page, agent }) => {
   agent.dropStreams = true;
   await open(page, [501]);
-  const retry = page.getByRole("button", { name: "重新同步", exact: true });
-  await expect(retry).toBeVisible();
-  expect(agent.attaches.get(501)).toBe(3);
+  // 主 Task 页同样常驻订阅并会因断流给出自己的提示；这里只看工作台阅读页。
+  const workbench = page.getByLabel("工作台", { exact: true });
+  const exhausted = workbench.getByText("本机后端连接多次中断，请重新同步恢复对话。", { exact: true });
+  await expect(workbench.getByText("阅读内容", { exact: true })).toBeVisible();
+  // 首屏读取次数（开发模式 StrictMode 会让首屏 effect 多跑一次）；之后的重连不再读 snapshot。
+  const initialReads = agent.snapshots.get(501);
+  await expect(exhausted).toBeVisible();
+  // 首次订阅 + 5 次重连后停止；断流期间已显示的内容保留。
+  expect(agent.attaches.get(501)).toBe(6);
+  expect(agent.snapshots.get(501)).toBe(initialReads);
+  await expect(workbench.getByText("阅读内容", { exact: true })).toBeVisible();
   await page.waitForTimeout(3_300);
-  expect(agent.attaches.get(501)).toBe(3);
-  await retry.click();
-  await expect.poll(() => agent.attaches.get(501)).toBe(6);
-  await expect(retry).toBeVisible();
+  expect(agent.attaches.get(501)).toBe(6);
+  await workbench.getByRole("button", { name: "重新同步", exact: true }).click();
+  await expect.poll(() => agent.attaches.get(501)).toBe(12);
+  await expect(exhausted).toBeVisible();
+  expect(agent.snapshots.get(501)).toBe(initialReads);
 });
 
 

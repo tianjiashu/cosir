@@ -1,6 +1,7 @@
 type AssistantPerformanceReport = {
-  targetRunId: number | null;
-  targetRunStatus: string | null;
+  /** 本次计时对应的那一轮活动（Run 身份只供诊断）及其结束状态。 */
+  activityRunId: number | null;
+  activityStatus: string | null;
   frameCount: number;
   mutationCount: number;
   applyFrameTotalMs: number;
@@ -49,9 +50,10 @@ type ReactCommitMeasurement = {
   actualDurationMs: number;
 };
 
+/** 一轮活动结束时的诊断信息：一次计时从活动进入活动态开始，到它进入终态结束。 */
 type StreamStatus = {
-  targetRunId: number | null;
-  targetRunStatus: string | null;
+  activityRunId: number | null;
+  activityStatus: string | null;
 };
 
 export type AssistantPerformanceProbe = {
@@ -88,8 +90,8 @@ export function createAssistantPerformanceProbe(options: PerformanceProbeOptions
     lifecycle = "idle";
     options.onReport({
       ...report,
-      targetRunId: status.targetRunId,
-      targetRunStatus: status.targetRunStatus,
+      activityRunId: status.activityRunId,
+      activityStatus: status.activityStatus,
     });
   };
 
@@ -172,8 +174,8 @@ export function createAssistantPerformanceProbe(options: PerformanceProbeOptions
 
 function emptyReport(): AssistantPerformanceReport {
   return {
-    targetRunId: null,
-    targetRunStatus: null,
+    activityRunId: null,
+    activityStatus: null,
     frameCount: 0,
     mutationCount: 0,
     applyFrameTotalMs: 0,

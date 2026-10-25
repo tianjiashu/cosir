@@ -7,9 +7,6 @@ const captured = vi.hoisted(() => ({
   cancelRun: vi.fn(async (): Promise<CancelTaskResult> => ({ accepted: true })),
 }));
 
-vi.mock("@assistant-ui/react", () => ({
-  useAuiState: () => 7,
-}));
 vi.mock("@/components/ui/button", () => ({
   Button: (props: Record<string, unknown>) => {
     captured.props = props;
@@ -43,8 +40,8 @@ describe("StopButton", () => {
     await vi.waitFor(() => expect(captured.cancelRun).toHaveBeenCalledWith(42));
 
     expect(assistantCancel).not.toHaveBeenCalled();
-    expect(onCancelRequested).toHaveBeenCalledWith(7);
-    expect(onCancelResult).toHaveBeenCalledWith(7, true);
+    expect(onCancelRequested).toHaveBeenCalledWith();
+    expect(onCancelResult).toHaveBeenCalledWith(true);
     expect(onCancelRequested.mock.invocationCallOrder[0]).toBeLessThan(captured.cancelRun.mock.invocationCallOrder.at(-1)!);
     expect(captured.cancelRun.mock.invocationCallOrder.at(-1)!).toBeLessThan(onCancelResult.mock.invocationCallOrder[0]);
   });
@@ -73,8 +70,8 @@ describe("StopButton", () => {
     await vi.waitFor(() => expect(captured.cancelRun).toHaveBeenCalledWith(42));
 
     expect(assistantCancel).not.toHaveBeenCalled();
-    expect(onCancelRequested).toHaveBeenCalledWith(7);
-    expect(onCancelResult).toHaveBeenCalledWith(7, false);
+    expect(onCancelRequested).toHaveBeenCalledWith();
+    expect(onCancelResult).toHaveBeenCalledWith(false);
   });
 
   it("forwards composition props and ref to the styled button", async () => {

@@ -50,11 +50,12 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   await openReviewer.click();
   await expect(page.getByRole("complementary", { name: "工作台" })).toBeVisible();
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
-  expect(attachRequests).toHaveLength(1);
+  // 只读阅读页随标签挂载常驻订阅子 Task：关闭即释放，重新打开再订阅一次，不触发任何业务写入。
+  await expect.poll(() => attachRequests.length).toBe(2);
   expect(businessWrites).toEqual([]);
 });
 
-test("两个并行子 Agent 分别 attach 且切换标签页不丢失订阅", async ({ page }) => {
+test("两个并行子 Agent 分别订阅，切换回标签页重新订阅并保留内容", async ({ page }) => {
   await page.addInitScript(() => window.localStorage.clear());
   const attachRequests: string[] = [];
   page.on("request", (request) => {
@@ -77,6 +78,7 @@ test("两个并行子 Agent 分别 attach 且切换标签页不丢失订阅", as
   await page.getByRole("tab", { name: /审查代码/ }).click();
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
   expect((await frontendLogs(page)).filter((entry) => entry.event === "react_recoverable_render_error")).toEqual([]);
-  expect(attachRequests.filter((url) => url.includes("/tasks/501/")).length).toBe(1);
+  // 只有激活标签挂载阅读页：切回 501 时重新订阅一次，502 不受影响。
+  await expect.poll(() => attachRequests.filter((url) => url.includes("/tasks/501/")).length).toBe(2);
   expect(attachRequests.filter((url) => url.includes("/tasks/502/")).length).toBe(1);
 });

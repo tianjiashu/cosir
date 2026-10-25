@@ -7,19 +7,17 @@ import {
 
 describe("run diagnostics actions", () => {
   it("formats task and run identifiers as grep-friendly lines", () => {
-    expect(formatRunDiagnostics({ taskId: 12, runId: 45, status: "completed", run: null }))
+    expect(formatRunDiagnostics({ taskId: 12, runId: 45, status: "completed" }))
       .toBe("task_id=12\nrun_id=45\nrun_status=completed");
   });
 
-  it("appends end reason and error code when the run provides them", () => {
+  it("appends end reason and error code when the outcome provides them", () => {
     expect(formatRunDiagnostics({
       taskId: 12,
       runId: 45,
       status: "failed",
-      run: {
-        endReason: "model_error",
-        error: { code: "MODEL_HTTP_ERROR", message: "上游返回 500" },
-      },
+      endReason: "model_error",
+      errorCode: "MODEL_HTTP_ERROR",
     })).toBe([
       "task_id=12",
       "run_id=45",
@@ -41,7 +39,7 @@ describe("run diagnostics actions", () => {
     },
   );
 
-  it.each(["pending", "running", null])(
+  it.each(["running", "suspended", null])(
     "hides diagnostics before the %s terminal state",
     (status) => {
       expect(shouldOfferRunDiagnostics({

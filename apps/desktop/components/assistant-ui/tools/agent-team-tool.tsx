@@ -17,9 +17,7 @@ import { readAgentTeamPreviewDisplay, type AgentTeamPreviewDisplay } from "./age
 
 /** 渲染器额外收到所属 Task：提交决定按 Task 与 TeamRun 寻址。 */
 type AgentTeamToolProps = ToolCallMessagePartProps & {
-  runId?: number | null;
   taskId?: number;
-  onAttachTransport?: () => Promise<void>;
 };
 
 function validateReviewedInputs(
@@ -77,7 +75,7 @@ function AwaitingReviewStatus({ label = AWAITING_REVIEW_LABEL, className }: { la
  * 交给执行卡。决定提交后后端确定性执行（批准即后台运行 Team），再以消息唤醒主 Agent。
  */
 export function AgentTeamTool(props: AgentTeamToolProps) {
-  const { artifact: rawArtifact, runId, taskId, toolCallId, onAttachTransport } = props;
+  const { artifact: rawArtifact, taskId, toolCallId } = props;
   const artifact = readToolArtifact(rawArtifact);
   const preview = readAgentTeamPreviewDisplay(artifact.display_data);
   const runQuery = useAgentTeamRunPolling(preview?.teamRunId);
@@ -99,9 +97,9 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
   useEffect(() => {
     if (!preview || teamRunStatus === null) return;
     void frontendLog("INFO", "agent_team_card_status_observed", "Team 方案卡已读到 TeamRun 状态", {
-      data: { taskId, runId, toolCallId, teamRunId: preview.teamRunId, status: teamRunStatus },
+      data: { taskId, toolCallId, teamRunId: preview.teamRunId, status: teamRunStatus },
     });
-  }, [preview?.teamRunId, runId, taskId, teamRunStatus, toolCallId]);
+  }, [preview?.teamRunId, taskId, teamRunStatus, toolCallId]);
 
   if (!preview) return null;
   if (teamRun && teamRun.status === "cancelled" && teamRun.end_reason === "user_rejected") {
@@ -141,19 +139,11 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     try {
       await submitTeamDecision(taskId, { teamRunId: preview.teamRunId, decision, data });
       setState("idle");
+      // 主 Agent 被决定消息唤醒后的输出经 Task 长订阅到达，这里只刷新 TeamRun 状态。
       void runQuery.refetch();
-      if (onAttachTransport) {
-        void onAttachTransport().catch((error: unknown) => {
-          void frontendLog("WARNING", "agent_team_decision_attach_failed", "Team 审批决定已提交，但重新订阅 Run 失败", {
-            data: { taskId, runId, teamRunId: preview.teamRunId, decision },
-            error,
-          });
-          setMessage("决定已提交，但实时连接中断，请刷新对话查看最新结果");
-        });
-      }
     } catch (error) {
       void frontendLog("ERROR", "agent_team_decision_submit_failed", "提交 Team 审批决定失败", {
-        data: { taskId, runId, teamRunId: preview.teamRunId, decision },
+        data: { taskId, teamRunId: preview.teamRunId, decision },
         error,
       });
       setState("failed");

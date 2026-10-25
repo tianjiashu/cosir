@@ -8,10 +8,11 @@ import { queryKeys } from "@/lib/query/query-keys";
 import type { WorkbenchTab } from "@/lib/workbench/types";
 import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
 
-export type AgentRunSummary = { runId: number | null; status: string | null };
+/** 工作台标签只看 Task 的执行状态（后端 `execution_status`），不跟踪某个 Run。 */
+export type AgentTaskStatus = { status: string | null };
 
 type AgentStatusContextValue = {
-  queries: Map<number, UseQueryResult<AgentRunSummary>>;
+  queries: Map<number, UseQueryResult<AgentTaskStatus>>;
   available: boolean;
   invalidate: (taskId: number) => void;
 };
@@ -38,10 +39,10 @@ export function WorkbenchAgentStatusProvider({ workspaceId, tabs, children }: {
   const agentTabs = tabs.filter(tab => tab.kind === "agent");
   const results = useQueries({ queries: agentTabs.map(tab => ({
     queryKey: queryKeys.workbenchAgent(workspaceId, tab.taskId, backend.generation),
-    queryFn: async ({ signal }: { signal: AbortSignal }): Promise<AgentRunSummary> => {
+    queryFn: async ({ signal }: { signal: AbortSignal }): Promise<AgentTaskStatus> => {
       try {
         const task = await getTask(tab.taskId, { signal });
-        return { runId: task.current_run_id, status: task.execution_status };
+        return { status: task.execution_status };
       } catch (error) {
         if (!signal.aborted) void frontendLog("WARNING", "workbench_agent_status_failed", "工作台 Agent 状态读取失败", {
           data: { taskId: tab.taskId, generation: backend.generation }, error,
@@ -55,7 +56,7 @@ export function WorkbenchAgentStatusProvider({ workspaceId, tabs, children }: {
     refetchOnMount: "always" as const,
     refetchOnWindowFocus: "always" as const,
     // 失败后的恢复由有限 retry、重新展开、窗口可见和后端恢复触发，轮询不绕过重试上限。
-    refetchInterval: (query: { state: { status: string; data?: AgentRunSummary } }) =>
+    refetchInterval: (query: { state: { status: string; data?: AgentTaskStatus } }) =>
       query.state.status === "error" ? false : agentStatusPollInterval(query.state.data?.status),
   })) });
   const invalidate = useCallback((taskId: number) => {

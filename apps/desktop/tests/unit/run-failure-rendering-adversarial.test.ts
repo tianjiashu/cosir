@@ -1,193 +1,92 @@
 /**
- * 缺陷发现型对抗测试：Run 失败终态的前端渲染通路。
+ * 缺陷发现型对抗测试：回复结局的前端渲染通路。
  *
  * 攻击面：
- * 1. `toMessageStatusForRun` 在「status × error × endReason」全组合下的输出；
- * 2. `parseTransportState` 对 Run 级 error 的严格白名单校验（键缺失/多余/空白/非字符串）。
+ * 1. `toAssistantMessageStatus` 在「outcome.status × error × endReason」与活动状态全组合下的输出；
+ * 2. `parseTransportState` 对 outcome / activity 级 error 的严格白名单校验（键缺失/多余/空白/非字符串）。
  */
 import { describe, expect, it } from "vitest";
 
-import type { TransportRun, TransportState } from "@/lib/assistant/contract";
-import { toMessageStatus } from "@/lib/assistant/converter";
+import type { TransportOutcome } from "@/lib/assistant/contract";
+import { toAssistantMessageStatus, type TransportMessageRenderContext } from "@/lib/assistant/converter";
 import { parseTransportState } from "@/lib/assistant/snapshot-validation";
+import { activity, assistantMessage, outcome, transportState } from "./transport-fixtures";
 
-const assistantMessage = () => ({
-  id: "assistant-1",
-  role: "assistant" as const,
-  parts: [],
+const ended = (value: TransportOutcome): TransportMessageRenderContext => ({
+  runId: 1, outcome: value, isRunEnd: true, activity: null,
 });
 
-const run = (overrides: Partial<TransportRun> = {}): TransportRun => ({
-  runId: 1,
-  status: "failed",
-  endReason: null,
-  contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
-  messages: [],
-  usage: null,
-  error: null,
-  ...overrides,
-});
-
-describe("toMessageStatusForRun 全组合对抗", () => {
+describe("toAssistantMessageStatus 全组合对抗", () => {
   it("failed + error.message 优先于本地兜底文案", () => {
-    const failed = run({
-      status: "failed",
-      error: { code: "model_insufficient_quota", message: "模型服务配额或余额不足" },
-    });
-    expect(toMessageStatus(assistantMessage(), failed)).toEqual({
-      type: "incomplete",
-      reason: "error",
-      error: "模型服务配额或余额不足",
-    });
+    const failed = outcome("failed", { error: { code: "model_insufficient_quota", message: "模型服务配额或余额不足" } });
+    expect(toAssistantMessageStatus(ended(failed))).toEqual({ type: "incomplete", reason: "error", error: "模型服务配额或余额不足" });
   });
 
-  it("failed + error.message 为空字符串时必须回退本地兜底，不得渲染空文案", () => {
-    // 潜在缺陷：`error?.message ?? fallback` 对空字符串不生效（?? 只处理 null/undefined），
-    // UI 会渲染一个空错误提示。
-    const failed = run({ status: "failed", error: { code: "run_failed", message: "" } });
-    const status = toMessageStatus(assistantMessage(), failed);
-    expect(status).toMatchObject({ type: "incomplete", reason: "error" });
-    expect((status as { error?: string }).error).toBeTruthy();
+  it.each(["", "   "])("failed + 空白 error.message（%j）必须回退本地兜底，不得渲染空文案", (message) => {
+    const status = toAssistantMessageStatus(ended(outcome("failed", { error: { code: "run_failed", message } })));
+    expect(status).toEqual({ type: "incomplete", reason: "error", error: "对话运行失败，请检查模型配置或后端状态。" });
   });
 
-  it("failed + error.message 为纯空白时必须回退本地兜底", () => {
-    const failed = run({ status: "failed", error: { code: "run_failed", message: "   " } });
-    const status = toMessageStatus(assistantMessage(), failed);
-    expect((status as { error?: string }).error).toBeTruthy();
+  it.each(["cancelled", "client_disconnected"])("failed + endReason=%s 渲染为已取消（即使 error 契约存在）", (endReason) => {
+    const failed = outcome("failed", { endReason, error: { code: "x", message: "已取消本轮对话" } });
+    expect(toAssistantMessageStatus(ended(failed))).toEqual({ type: "incomplete", reason: "cancelled" });
   });
 
-  it("failed + endReason=cancelled 渲染为已取消（即使 error 契约存在）", () => {
-    const failed = run({
-      status: "failed",
-      endReason: "cancelled",
-      error: { code: "run_cancelled", message: "已取消本轮对话" },
-    });
-    expect(toMessageStatus(assistantMessage(), failed)).toEqual({
-      type: "incomplete",
-      reason: "cancelled",
-    });
+  it("cancelled 结局即使带 error 契约也必须渲染为已取消，不得显示为错误", () => {
+    const cancelled = outcome("cancelled", { endReason: "user_cancelled", error: { code: "x", message: "残留" } });
+    expect(toAssistantMessageStatus(ended(cancelled))).toEqual({ type: "incomplete", reason: "cancelled" });
   });
 
-  it("failed + endReason=client_disconnected 渲染为已取消", () => {
-    const failed = run({
-      status: "failed",
-      endReason: "client_disconnected",
-      error: { code: "client_disconnected", message: "连接已断开" },
-    });
-    expect(toMessageStatus(assistantMessage(), failed)).toEqual({
-      type: "incomplete",
-      reason: "cancelled",
-    });
+  it("completed 结局即使携带残留 error 契约也必须渲染为成功", () => {
+    const completed = outcome("completed", { error: { code: "x", message: "残留错误" } });
+    expect(toAssistantMessageStatus(ended(completed))).toEqual({ type: "complete", reason: "stop" });
   });
 
-  it("cancelled 状态即使带 error 契约也必须渲染为已取消，不得显示为错误", () => {
-    const cancelled = run({
-      status: "cancelled",
-      endReason: "user_cancelled",
-      error: { code: "model_insufficient_quota", message: "模型服务配额或余额不足" },
-    });
-    expect(toMessageStatus(assistantMessage(), cancelled)).toEqual({
-      type: "incomplete",
-      reason: "cancelled",
-    });
+  it.each(["running", "suspended"] as const)("没有结局的当前活动回复末尾在 %s 时渲染为运行中", (status) => {
+    expect(toAssistantMessageStatus({ runId: 1, outcome: null, isRunEnd: true, activity: activity(1, status) })).toEqual({ type: "running" });
   });
 
-  it("completed 状态即使携带残留 error 契约也必须渲染为成功", () => {
-    // 非终态/成功态不得因残留 error 而把消息渲染成失败。
-    const completed = run({
-      status: "completed",
-      endReason: "stop",
-      error: { code: "model_insufficient_quota", message: "残留错误" },
-    });
-    expect(toMessageStatus(assistantMessage(), completed)).toEqual({
-      type: "complete",
-      reason: "stop",
-    });
+  it("同一 Run 内较早的回复（不是回复末尾）即使活动运行中也已完成", () => {
+    expect(toAssistantMessageStatus({ runId: 1, outcome: null, isRunEnd: false, activity: null })).toEqual({ type: "complete", reason: "stop" });
   });
 
-  it("running / pending 状态一律渲染为运行中，不受残留 error 影响", () => {
-    for (const status of ["running", "pending"]) {
-      const active = run({
-        status,
-        error: { code: "model_insufficient_quota", message: "残留错误" },
-      });
-      expect(toMessageStatus(assistantMessage(), active)).toEqual({ type: "running" });
-    }
-  });
-
-  it("interrupted 状态渲染为中断提示，不读取后端 error.message", () => {
-    const interrupted = run({
-      status: "interrupted",
-      error: { code: "run_failed", message: "后端错误" },
-    });
-    expect(toMessageStatus(assistantMessage(), interrupted)).toEqual({
-      type: "incomplete",
-      reason: "error",
-      error: "上次对话运行已中断，可以继续发送新消息。",
-    });
+  it("活动已到终态但结局尚未投影到消息时不渲染为运行中", () => {
+    expect(toAssistantMessageStatus({ runId: 1, outcome: null, isRunEnd: true, activity: activity(1, "completed") }))
+      .toEqual({ type: "complete", reason: "stop" });
   });
 });
 
-describe("parseTransportState Run 级 error 严格校验对抗", () => {
-  const baseRun = {
-    runId: 1,
-    status: "failed",
-    endReason: "run_failed",
-    contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
-    usage: null,
-    error: null as unknown,
-    messages: [],
-  };
-
-  const withRun = (error: unknown): TransportState => ({
-    runs: [{ ...baseRun, error } as unknown as TransportRun],
-    current_run_id: 1,
-    approvals: {},
-    error: null,
+describe("parseTransportState 结局 error 严格校验对抗", () => {
+  const withOutcomeError = (error: unknown) => transportState({
+    messages: [assistantMessage("assistant-run-1", 1, [], { ...outcome("failed"), error: error as never })],
   });
 
   it("合法 error 契约通过校验", () => {
-    const valid = withRun({ code: "run_failed", message: "通用失败文案" });
+    const valid = withOutcomeError({ code: "run_failed", message: "通用失败文案" });
     expect(parseTransportState(valid)).toBe(valid);
   });
 
   it("error 为 undefined（键存在但值缺失）必须被拒绝", () => {
-    const invalid = withRun(undefined);
-    expect(() => parseTransportState(invalid)).toThrow();
+    expect(() => parseTransportState(withOutcomeError(undefined))).toThrow();
   });
 
-  it("error 缺少 message 键必须被拒绝", () => {
-    expect(() => parseTransportState(withRun({ code: "run_failed" }))).toThrow();
-  });
-
-  it("error 带多余 retryable 键必须被拒绝", () => {
-    expect(() =>
-      parseTransportState(withRun({ code: "run_failed", message: "x", retryable: false })),
-    ).toThrow();
+  it("error 缺少 message 键或带多余 retryable 键必须被拒绝", () => {
+    expect(() => parseTransportState(withOutcomeError({ code: "run_failed" }))).toThrow();
+    expect(() => parseTransportState(withOutcomeError({ code: "run_failed", message: "x", retryable: false }))).toThrow();
   });
 
   it("error.code / error.message 非字符串必须被拒绝", () => {
-    expect(() => parseTransportState(withRun({ code: 1, message: "x" }))).toThrow();
-    expect(() => parseTransportState(withRun({ code: "x", message: null }))).toThrow();
+    expect(() => parseTransportState(withOutcomeError({ code: 1, message: "x" }))).toThrow();
+    expect(() => parseTransportState(withOutcomeError({ code: "x", message: null }))).toThrow();
   });
 
   it("error 的空白 code / message 必须被拒绝（与后端同口径）", () => {
-    // 后端 build_run_error / _validate_error 都要求非空白字符串；前端收紧到同一强度，
-    // 否则被绕过的空白文案会在界面上渲染成没有内容的错误气泡。
-    expect(() => parseTransportState(withRun({ code: "", message: "" }))).toThrow("runs[0].error");
-    expect(() => parseTransportState(withRun({ code: "run_failed", message: "   " }))).toThrow(
-      "runs[0].error",
-    );
+    expect(() => parseTransportState(withOutcomeError({ code: "", message: "" }))).toThrow("messages[0].outcome.error");
+    expect(() => parseTransportState(withOutcomeError({ code: "run_failed", message: "   " }))).toThrow("messages[0].outcome.error");
   });
 
-  it("失败态收到空白文案时回退到本地兜底文案", () => {
-    expect(toMessageStatus(assistantMessage(), {
-      ...run({ status: "failed" }),
-      error: { code: "run_failed", message: "   " },
-    })).toMatchObject({
-      type: "incomplete",
-      reason: "error",
-      error: "对话运行失败，请检查模型配置或后端状态。",
-    });
+  it("活动 error 同样严格校验", () => {
+    const invalid = transportState({ activity: activity(1, "failed", { error: { code: "x" } as never }) });
+    expect(() => parseTransportState(invalid)).toThrow("activity.error");
   });
 });

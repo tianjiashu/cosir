@@ -1,28 +1,62 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { TransportMessage, TransportState } from "@/lib/assistant/contract";
-import { parseTransportFrame, TransportFrameStore } from "@/lib/assistant/transport-frame-store";
+import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import {
+  parseTransportFrame,
+  TransportFrameStore,
+  type ActivityTransition,
+  type TransportFrameEnvelope,
+} from "@/lib/assistant/transport-frame-store";
+import { activity, assistantMessage, outcome, queuedMessage, transportState, userMessage } from "./transport-fixtures";
 
-const baseMessage = (id: string, text: string): TransportMessage => ({
-  id,
-  role: "assistant",
-  parts: [{ type: "text", text, status: "running" }],
+const streaming = (id: string, text: string): TransportMessage => (
+  assistantMessage(id, 1, [{ type: "text", text, status: "running" }])
+);
+
+const running = (messages: TransportMessage[]): TransportState => transportState({
+  messages,
+  activity: activity(1, "running"),
 });
 
-const state = (messages: TransportMessage[]): TransportState => ({
-  runs: [{
-    runId: 1,
-    status: "running",
-    endReason: null,
-    contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
-    messages,
-    usage: null,
-    error: null,
-  }],
-  current_run_id: 1,
-  approvals: {},
-  error: null,
+const mutation = (mutations: TransportFrameEnvelope["mutations"]): TransportFrameEnvelope => ({
+  task_id: 1, kind: "mutation", mutations,
 });
+const full = (state: TransportState): TransportFrameEnvelope => ({ task_id: 1, kind: "full", mutations: [], state });
+
+const command = (text: string, commandId?: string): UserAddMessageCommand => ({
+  type: "add-message",
+  ...(commandId ? { commandId } : {}),
+  message: { role: "user", parts: [{ type: "text", text }] },
+});
+
+const deferredScheduler = () => {
+  const callbacks: Array<(frameTimestamp?: number) => void> = [];
+  return {
+    callbacks,
+    scheduleCommit: (callback: (frameTimestamp?: number) => void) => {
+      callbacks.push(callback);
+      return { cancel: () => undefined };
+    },
+  };
+};
+
+const probe = () => ({
+  startTiming: vi.fn(() => 1),
+  finishTiming: vi.fn(() => 2),
+  recordFrame: vi.fn(),
+  recordPublication: vi.fn(),
+  recordTerminalConvergence: vi.fn(),
+  beginStream: vi.fn(),
+  finishStream: vi.fn(),
+  recordReactCommit: vi.fn(),
+});
+
+const recordTransitions = (store: TransportFrameStore) => {
+  const transitions: ActivityTransition[] = [];
+  store.subscribeActivity((transition) => transitions.push(transition));
+  return transitions;
+};
 
 describe("TransportFrameStore", () => {
   it("rejects malformed wire frames before projection", () => {
@@ -30,375 +64,299 @@ describe("TransportFrameStore", () => {
     expect(() => parseTransportFrame({
       task_id: 1,
       kind: "mutation",
-      mutations: [{ kind: "append-text", path: ["runs", { invalid: true }], value: "x" }],
-      target_run_id: 1,
+      mutations: [{ kind: "append-text", path: ["messages", { invalid: true }], value: "x" }],
     })).toThrow("path");
   });
 
   it("applies an append-text mutation with a new message array and stable untouched message", () => {
-    const historical = baseMessage("m-1", "old");
-    const active = baseMessage("m-2", "partial");
-    const store = new TransportFrameStore(state([historical, active]));
+    const store = new TransportFrameStore(running([streaming("m-1", "old"), streaming("m-2", "partial")]));
     const first = store.getSnapshot();
-    const firstItems = first.items.filter((item) => item.kind === "canonical");
 
-    store.applyFrame({
-      task_id: 1,
-      kind: "mutation",
-      mutations: [{
-        kind: "append-text",
-        path: ["runs", 0, "messages", 1, "parts", 0, "text"],
-        value: " update",
-      }],
-      source_run_id: 1,
-      target_run_id: 1,
-      target_run_status: "running",
-    });
+    store.applyFrame(mutation([{ kind: "append-text", path: ["messages", 1, "parts", 0, "text"], value: " update" }]));
     store.flushScheduledPublication();
 
     const second = store.getSnapshot();
-    const secondItems = second.items.filter((item) => item.kind === "canonical");
     expect(second.items).not.toBe(first.items);
-    expect(secondItems[0]).toBe(firstItems[0]);
-    expect(secondItems[1]).not.toBe(firstItems[1]);
-    expect(second.state.runs[0].messages[1]).toMatchObject({
-      parts: [{ type: "text", text: "partial update" }],
-    });
+    expect(second.items[0]).toBe(first.items[0]);
+    expect(second.items[1]).not.toBe(first.items[1]);
+    expect(second.state.messages[1]).toMatchObject({ parts: [{ type: "text", text: "partial update" }] });
   });
 
   it("batches streaming mutations into one animation-frame publication without touching history identities", () => {
-    const callbacks: Array<(frameTimestamp?: number) => void> = [];
-    const historical = Array.from({ length: 1000 }, (_, index) => baseMessage(`history-${index}`, `old-${index}`));
-    const active = baseMessage("active", "partial");
-    const store = new TransportFrameStore(state([...historical, active]), {
-      scheduleCommit: (callback) => {
-        callbacks.push(callback);
-        return { cancel: () => undefined };
-      },
-    });
+    const scheduler = deferredScheduler();
+    const historical = Array.from({ length: 1000 }, (_, index) => streaming(`history-${index}`, `old-${index}`));
+    const store = new TransportFrameStore(running([...historical, streaming("active", "partial")]), scheduler);
     const before = store.getSnapshot().items.slice(0, historical.length);
     let publicationCount = 0;
-    store.subscribe(() => {
-      publicationCount += 1;
-    });
+    store.subscribe(() => { publicationCount += 1; });
 
     for (let index = 0; index < 1000; index += 1) {
-      store.applyFrame({
-        task_id: 1,
-        kind: "mutation",
-        mutations: [{
-          kind: "append-text",
-          path: ["runs", 0, "messages", 1000, "parts", 0, "text"],
-          value: ` ${index}`,
-        }],
-        target_run_id: 1,
-        target_run_status: "running",
-      });
+      store.applyFrame(mutation([{ kind: "append-text", path: ["messages", 1000, "parts", 0, "text"], value: ` ${index}` }]));
     }
 
     expect(publicationCount).toBe(0);
-    expect(callbacks).toHaveLength(1);
-    callbacks.shift()?.(1);
+    expect(scheduler.callbacks).toHaveLength(1);
+    scheduler.callbacks.shift()?.(1);
 
     const after = store.getSnapshot();
     expect(publicationCount).toBe(1);
-    expect(after.items.slice(0, historical.length)).toEqual(before);
     expect(after.items.slice(0, historical.length).every((item, index) => item === before[index])).toBe(true);
-    expect(after.items.at(-1)).not.toBe(before.at(-1));
-  });
-
-  it("publishes at most once per animation frame and converges a completed run once", () => {
-    const callbacks: Array<(frameTimestamp?: number) => void> = [];
-    const store = new TransportFrameStore(state([baseMessage("active", "partial")]), {
-      scheduleCommit: (callback) => {
-        callbacks.push(callback);
-        return { cancel: () => undefined };
-      },
-    });
-    let publicationCount = 0;
-    store.subscribe(() => {
-      publicationCount += 1;
-    });
-
-    for (const suffix of [" one", " two", " three"]) {
-      store.applyFrame({
-        task_id: 1,
-        kind: "mutation",
-        mutations: [{
-          kind: "append-text",
-          path: ["runs", 0, "messages", 0, "parts", 0, "text"],
-          value: suffix,
-        }],
-        target_run_id: 1,
-        target_run_status: "running",
-      });
-    }
-    expect(publicationCount).toBe(0);
-    callbacks.shift()?.();
-    expect(publicationCount).toBe(1);
-
-    store.applyFrame({
-      task_id: 1,
-      kind: "mutation",
-      mutations: [{ kind: "set", path: ["runs", 0, "status"], value: "completed" }],
-      target_run_id: 1,
-      target_run_status: "completed",
-    });
-
-    expect(publicationCount).toBe(2);
-    expect(store.getSnapshot().state.runs[0]?.status).toBe("completed");
-    expect(callbacks).toHaveLength(0);
   });
 
   it("does not defer content mutations that target a historical message", () => {
-    const callbacks: Array<(frameTimestamp?: number) => void> = [];
-    const store = new TransportFrameStore(state([
-      baseMessage("history", "old"),
-      baseMessage("active", "partial"),
-    ]), {
-      scheduleCommit: (callback) => {
-        callbacks.push(callback);
-        return { cancel: () => undefined };
-      },
-    });
+    const scheduler = deferredScheduler();
+    const store = new TransportFrameStore(running([streaming("history", "old"), streaming("active", "partial")]), scheduler);
     let publicationCount = 0;
-    store.subscribe(() => {
-      publicationCount += 1;
-    });
+    store.subscribe(() => { publicationCount += 1; });
 
-    store.applyFrame({
-      task_id: 1,
-      kind: "mutation",
-      mutations: [{
-        kind: "append-text",
-        path: ["runs", 0, "messages", 0, "parts", 0, "text"],
-        value: " changed",
-      }],
-      target_run_id: 1,
-      target_run_status: "running",
-    });
+    store.applyFrame(mutation([{ kind: "append-text", path: ["messages", 0, "parts", 0, "text"], value: " changed" }]));
 
     expect(publicationCount).toBe(1);
-    expect(callbacks).toHaveLength(0);
+    expect(scheduler.callbacks).toHaveLength(0);
   });
 
   it("reports frame and publication timings through the optional development probe", () => {
-    const performanceProbe = {
-      startTiming: vi.fn(() => 1),
-      finishTiming: vi.fn(() => 2),
-      recordFrame: vi.fn(),
-      recordPublication: vi.fn(),
-      recordTerminalConvergence: vi.fn(),
-      beginStream: vi.fn(),
-      finishStream: vi.fn(),
-      recordReactCommit: vi.fn(),
-    };
-    const callbacks: Array<(frameTimestamp?: number) => void> = [];
-    const store = new TransportFrameStore(state([baseMessage("active", "partial")]), {
-      performanceProbe,
-      scheduleCommit: (callback) => {
-        callbacks.push(callback);
-        return { cancel: () => undefined };
-      },
-    });
+    const performanceProbe = probe();
+    const scheduler = deferredScheduler();
+    const store = new TransportFrameStore(running([streaming("active", "partial")]), { performanceProbe, ...scheduler });
 
-    store.applyFrame({
-      task_id: 1,
-      kind: "mutation",
-      mutations: [{
-        kind: "append-text",
-        path: ["runs", 0, "messages", 0, "parts", 0, "text"],
-        value: " update",
-      }],
-      target_run_id: 1,
-      target_run_status: "running",
-    });
-    callbacks.shift()?.(1);
+    store.applyFrame(mutation([{ kind: "append-text", path: ["messages", 0, "parts", 0, "text"], value: " update" }]));
+    scheduler.callbacks.shift()?.(1);
 
-    expect(performanceProbe.recordFrame).toHaveBeenCalledWith(expect.objectContaining({
-      kind: "mutation",
-      mutationCount: 1,
-      durationMs: 2,
-    }));
+    expect(performanceProbe.recordFrame).toHaveBeenCalledWith(expect.objectContaining({ kind: "mutation", mutationCount: 1, durationMs: 2 }));
     expect(performanceProbe.recordPublication).toHaveBeenCalledWith(expect.objectContaining({
-      durationMs: 2,
-      itemCount: 1,
-      activeMessageId: "active",
-      publicationKind: "stream",
-      animationFrameTimestamp: 1,
-      terminalConvergence: false,
+      itemCount: 1, activeMessageId: "active", publicationKind: "stream", animationFrameTimestamp: 1,
     }));
   });
 
-  it("marks a slow connection for resync without changing canonical messages", () => {
-    const message = baseMessage("m-1", "old");
-    const store = new TransportFrameStore(state([message]));
+  it("marks a slow connection for resync and ignores later mutations until a full frame", () => {
+    const store = new TransportFrameStore(running([streaming("m-1", "old")]));
     const before = store.getSnapshot();
-    store.applyFrame({
-      task_id: 1,
-      kind: "resync_required",
-      mutations: [],
-      target_run_id: 1,
-      target_run_status: "running",
-      resync_reason: "subscriber_backpressure",
-    });
-    const after = store.getSnapshot();
-    expect(after.resyncRequired).toBe(true);
-    expect(after.state).toBe(before.state);
-    expect(after.items).toBe(before.items);
-
-    store.applyFrame({
-      task_id: 1,
-      kind: "mutation",
-      mutations: [{
-        kind: "append-text",
-        path: ["runs", 0, "messages", 0, "parts", 0, "text"],
-        value: " stale",
-      }],
-      target_run_id: 1,
-      target_run_status: "running",
-    });
+    store.applyFrame({ task_id: 1, kind: "resync_required", mutations: [], resync_reason: "subscriber_backpressure" });
+    expect(store.getSnapshot().resyncRequired).toBe(true);
     expect(store.getSnapshot().state).toBe(before.state);
+
+    store.applyFrame(mutation([{ kind: "append-text", path: ["messages", 0, "parts", 0, "text"], value: " stale" }]));
+    expect(store.getSnapshot().state).toBe(before.state);
+
+    store.applyFrame(full(running([streaming("m-1", "fresh")])));
+    expect(store.getSnapshot().resyncRequired).toBe(false);
   });
 
-  it("publishes a terminal convergence only once when later cleanup publishes occur", () => {
-    const performanceProbe = {
-      startTiming: vi.fn(() => 1),
-      finishTiming: vi.fn(() => 2),
-      recordFrame: vi.fn(),
-      recordPublication: vi.fn(),
-      recordTerminalConvergence: vi.fn(),
-      beginStream: vi.fn(),
-      finishStream: vi.fn(),
-      recordReactCommit: vi.fn(),
-    };
-    const store = new TransportFrameStore(state([baseMessage("active", "partial")]), { performanceProbe });
-
-    store.applyFrame({
-      task_id: 1,
-      kind: "mutation",
-      mutations: [{ kind: "set", path: ["runs", 0, "status"], value: "completed" }],
-      target_run_id: 1,
-      target_run_status: "completed",
-    });
-    store.setPendingCommands([{
-      type: "add-message",
-      message: { role: "user", parts: [{ type: "text", text: "cleanup" }] },
-    }]);
-    store.clearPendingCommands();
-
-    expect(performanceProbe.recordTerminalConvergence).toHaveBeenCalledTimes(1);
-  });
-
-  it("Run 窗口元数据更新不重建消息，生命周期更新才刷新消息投影", () => {
-    const historical = baseMessage("m-1", "old");
-    const store = new TransportFrameStore(state([historical]));
+  it("活动元数据更新不重建历史消息，活动状态变化刷新当前 Run 的消息上下文", () => {
+    const store = new TransportFrameStore(running([userMessage("1", 1), streaming("assistant-1", "x")]));
     const before = store.getSnapshot();
-    const beforeItem = before.items[0];
 
-    store.applyFrame({
-      task_id: 1,
-      kind: "mutation",
-      mutations: [{ kind: "set", path: ["runs", 0, "contextWindowTotal"], value: 120_000 }],
-      target_run_id: 1,
-      target_run_status: "running",
-    });
-    const metadataChange = store.getSnapshot();
-    expect(metadataChange.items[0]).toBe(beforeItem);
-    expect(metadataChange.state.runs[0].contextWindowTotal).toBe(120_000);
-    expect(metadataChange.state).not.toBe(before.state);
+    store.applyFrame(mutation([{ kind: "set", path: ["activity", "contextWindowTotal"], value: 120_000 }]));
+    const metadata = store.getSnapshot();
+    expect(metadata.state.activity?.contextWindowTotal).toBe(120_000);
+    expect(metadata.items[0]).toBe(before.items[0]);
 
-    store.applyFrame({
-      task_id: 1,
-      kind: "mutation",
-      mutations: [{ kind: "set", path: ["runs", 0, "status"], value: "completed" }],
-      target_run_id: 1,
-      target_run_status: "completed",
-    });
-    const statusChange = store.getSnapshot();
-    expect(statusChange.items).not.toBe(metadataChange.items);
-    expect(statusChange.items[0]).not.toBe(beforeItem);
+    store.applyFrame(mutation([
+      { kind: "set", path: ["activity", "status"], value: "completed" },
+      { kind: "set", path: ["messages", 1, "outcome"], value: outcome("completed") },
+    ]));
+    const settled = store.getSnapshot();
+    expect(settled.items[1]).not.toBe(metadata.items[1]);
+    expect(settled.items[1]).toMatchObject({ kind: "canonical", context: { isRunEnd: true, outcome: { status: "completed" } } });
   });
 
-  it("rebuilds the canonical projection when a new run is inserted", () => {
-    const store = new TransportFrameStore(state([]));
-    store.applyFrame({
-      task_id: 1,
-      kind: "mutation",
-      mutations: [{
-        kind: "set",
-        path: ["runs", 0],
-        value: {
-          runId: 2,
-          status: "pending",
-          endReason: null,
-          contextWindowTotal: null, launch: { modelConfigId: null, reasoningEffort: null, banTools: [] },
-          messages: [baseMessage("user-2", ""), baseMessage("assistant-2", "")],
-          usage: null,
-          error: null,
-        },
-      }],
-      target_run_id: 2,
-      target_run_status: "pending",
-    });
-
-    expect(store.getSnapshot().items.filter((item) => item.kind === "canonical")).toHaveLength(2);
-    expect(store.getSnapshot().targetRunId).toBe(2);
+  it("每个 Run 只有最后一条助手消息带回复末尾上下文，结局取自消息自身", () => {
+    const store = new TransportFrameStore(transportState({
+      messages: [
+        userMessage("1", 1),
+        assistantMessage("assistant-1", 1, undefined, outcome("cancelled")),
+        userMessage("2", 2),
+        assistantMessage("assistant-run-2", 2),
+        assistantMessage("assistant-2", 2),
+      ],
+      activity: activity(2, "running"),
+    }));
+    const contexts = store.getSnapshot().items.map((item) => item.kind === "canonical" ? item.context : null);
+    expect(contexts[1]).toMatchObject({ runId: 1, isRunEnd: true, outcome: { status: "cancelled" }, activity: null });
+    expect(contexts[3]).toMatchObject({ runId: 2, isRunEnd: false });
+    expect(contexts[4]).toMatchObject({ runId: 2, isRunEnd: true, outcome: null, activity: { runId: 2, status: "running" } });
   });
 
-  it("full frames replace the canonical projection and clear optimistic commands", () => {
-    const store = new TransportFrameStore(state([]));
-    const command = {
-      type: "add-message" as const,
-      message: { role: "user" as const, parts: [{ type: "text" as const, text: "hello" }] },
-    };
-    store.setPendingCommands([command]);
-    expect(store.getSnapshot().pendingCommands).toHaveLength(1);
-    store.applyFrame({
-      task_id: 1,
-      kind: "full",
-      mutations: [],
-      state: state([{ ...baseMessage("m-1", "hello"), role: "user" }]),
-      target_run_id: 1,
-      target_run_status: "running",
-    });
-    expect(store.getSnapshot().pendingCommands).toHaveLength(0);
-    expect(store.getSnapshot().items.filter((item) => item.kind === "canonical")).toHaveLength(1);
+  it("moves a queued message into the conversation without duplicating its stable identity", () => {
+    const store = new TransportFrameStore({ ...running([streaming("a1", "working")]), queued_messages: [queuedMessage("q1", "later", "immediate")] });
+    const ids = () => store.getSnapshot().items.map((item) => item.kind === "canonical" ? item.message.id : item.kind);
+    expect(ids()).toEqual(["a1", "q1"]);
+    store.applyFrame(mutation([
+      { kind: "set", path: ["queued_messages"], value: [] },
+      { kind: "set", path: ["messages", 1], value: userMessage("q1", 1, "later") },
+    ]));
+    expect(ids()).toEqual(["a1", "q1"]);
   });
 
-  it("clears only the rejected command pending projection", () => {
-    const store = new TransportFrameStore(state([]));
-    const first = {
-      type: "add-message" as const,
-      commandId: "command-1",
-      message: { role: "user" as const, parts: [{ type: "text" as const, text: "first" }] },
-    };
-    const second = {
-      type: "add-message" as const,
-      commandId: "command-2",
-      message: { role: "user" as const, parts: [{ type: "text" as const, text: "second" }] },
-    };
-
-    store.setPendingCommands([first, second]);
-    store.clearPendingCommands([first]);
-
-    expect(store.getSnapshot().pendingCommands).toEqual([second]);
+  it("顶层 error 渲染为消息列表末尾的错误条目", () => {
+    const store = new TransportFrameStore(transportState({ messages: [userMessage("1", 1)] }));
+    const error = { code: "RUN_NOT_RESUMABLE", message: "当前没有可恢复的运行", seq: 1 };
+    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: error }]));
+    expect(store.getSnapshot().items.at(-1)).toEqual({ kind: "error", error });
   });
 });
 
-it("moves a queued message into its Run without duplicating its stable identity", () => {
-  const queued: TransportMessage = { id: "q1", role: "user", parts: [{ type: "text", text: "later", status: "completed" }] };
-  const initial = state([baseMessage("a1", "working")]);
-  initial.queued_messages = [{ ...queued, delivery: "immediate" }];
-  const store = new TransportFrameStore(initial);
-  expect(store.getSnapshot().items.filter((item) => item.kind === "canonical").map((item) => item.message.id)).toEqual(["a1", "q1"]);
-  store.applyFrame({
-    task_id: 1, kind: "mutation", target_run_id: 1, target_run_status: "running",
-    mutations: [
-      { kind: "set", path: ["queued_messages"], value: [] },
-      { kind: "set", path: ["runs", 0, "messages", 1], value: queued },
-    ],
+describe("TransportFrameStore 一轮结束（D2）", () => {
+  it("首次构造只记基线，不触发 settled", () => {
+    const store = new TransportFrameStore(transportState({ activity: activity(1, "completed") }));
+    const transitions = recordTransitions(store);
+    store.applyFrame(mutation([{ kind: "set", path: ["activity", "usage"], value: null }]));
+    expect(transitions).toEqual([]);
   });
-  store.flushScheduledPublication();
-  expect(store.getSnapshot().items.filter((item) => item.kind === "canonical").map((item) => item.message.id)).toEqual(["a1", "q1"]);
+
+  it("活动态进入终态时只触发一次 settled，后续无关提交不再触发", () => {
+    const performanceProbe = probe();
+    const store = new TransportFrameStore(running([streaming("assistant-run-1", "x")]), { performanceProbe });
+    const transitions = recordTransitions(store);
+
+    store.applyFrame(mutation([{ kind: "set", path: ["activity", "status"], value: "cancelled" }]));
+    store.setPendingCommands([command("cleanup")]);
+    store.clearPendingCommands();
+    store.applyFrame(mutation([{ kind: "set", path: ["activity", "endReason"], value: "cancelled" }]));
+
+    expect(transitions).toEqual([{ kind: "settled", status: "cancelled" }]);
+    expect(performanceProbe.recordTerminalConvergence).toHaveBeenCalledTimes(1);
+  });
+
+  it("挂起仍是活动态，不触发 settled；挂起后被取消才触发", () => {
+    const store = new TransportFrameStore(running([]));
+    const transitions = recordTransitions(store);
+    store.applyFrame(mutation([{ kind: "set", path: ["activity", "status"], value: "suspended" }]));
+    expect(transitions).toEqual([]);
+    store.applyFrame(mutation([{ kind: "set", path: ["activity", "status"], value: "cancelled" }]));
+    expect(transitions).toEqual([{ kind: "settled", status: "cancelled" }]);
+  });
+
+  it("重连拿到 full 帧时补触发一次 settled", () => {
+    const store = new TransportFrameStore(running([]));
+    const transitions = recordTransitions(store);
+    store.applyFrame(full(transportState({ activity: activity(1, "failed") })));
+    store.applyFrame(full(transportState({ activity: activity(1, "failed") })));
+    expect(transitions).toEqual([{ kind: "settled", status: "failed" }]);
+  });
+
+  it("importState 与 full 帧同一语义", () => {
+    const store = new TransportFrameStore(running([]));
+    const transitions = recordTransitions(store);
+    store.importState(transportState({ activity: activity(1, "completed") }));
+    expect(transitions).toEqual([{ kind: "settled", status: "completed" }]);
+  });
+
+  it("full 帧里旧 Run 已结束、新 Run 已开始：按 runId 变化补 settled 再 started", () => {
+    const store = new TransportFrameStore(running([]));
+    const transitions = recordTransitions(store);
+    store.applyFrame(full(transportState({
+      messages: [assistantMessage("assistant-run-1", 1, [], outcome("completed")), userMessage("2", 2)],
+      activity: activity(2, "running"),
+    })));
+    expect(transitions).toEqual([{ kind: "settled", status: "completed" }, { kind: "started", status: "running" }]);
+  });
+
+  it("从无活动进入活动态触发 started", () => {
+    const store = new TransportFrameStore(transportState());
+    const transitions = recordTransitions(store);
+    store.applyFrame(mutation([{ kind: "set", path: ["activity"], value: activity(1, "running") }]));
+    expect(transitions).toEqual([{ kind: "started", status: "running" }]);
+  });
+});
+
+describe("TransportFrameStore 运行中判定（D3）", () => {
+  it.each([
+    ["running", true],
+    ["suspended", true],
+    ["completed", false],
+    ["failed", false],
+    ["cancelled", false],
+  ] as const)("活动状态 %s → isRunning=%s", (status, expected) => {
+    expect(new TransportFrameStore(transportState({ activity: activity(1, status) })).getSnapshot().isRunning).toBe(expected);
+  });
+
+  it("没有活动但有待提交命令时也是运行中", () => {
+    const store = new TransportFrameStore(transportState());
+    expect(store.getSnapshot().isRunning).toBe(false);
+    store.setPendingCommands([command("hi")]);
+    expect(store.getSnapshot().isRunning).toBe(true);
+  });
+});
+
+describe("TransportFrameStore 乐观命令收敛（D8）", () => {
+  it("snapshot 出现新的用户消息才清除对应的乐观命令，活动与内容变化不清", () => {
+    const store = new TransportFrameStore(transportState({ messages: [userMessage("1", 1)], activity: activity(1, "completed") }));
+    store.setPendingCommands([command("first", "c1"), command("second", "c2")]);
+
+    store.applyFrame(mutation([{ kind: "set", path: ["activity"], value: activity(2, "running") }]));
+    expect(store.getSnapshot().pendingCommands).toHaveLength(2);
+
+    store.applyFrame(mutation([{ kind: "set", path: ["messages", 1], value: userMessage("2", 2, "first") }]));
+    expect(store.getSnapshot().pendingCommands.map((item) => item.commandId)).toEqual(["c2"]);
+
+    store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [queuedMessage("3", "second")] }]));
+    expect(store.getSnapshot().pendingCommands).toEqual([]);
+  });
+
+  it("顶层 error 由空变为非空时收回全部乐观命令并通知拒绝监听者", () => {
+    const store = new TransportFrameStore(transportState({ activity: activity(1, "cancelled") }));
+    const rejected = vi.fn();
+    store.subscribeRejection(rejected);
+    const pending = [command("resume me", "c1")];
+    store.setPendingCommands(pending);
+
+    const error = { code: "RUN_NOT_RESUMABLE", message: "当前没有可恢复的运行", seq: 1 };
+    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: error }]));
+
+    expect(store.getSnapshot().pendingCommands).toEqual([]);
+    expect(rejected).toHaveBeenCalledWith(pending, error);
+  });
+
+  it("没有乐观命令时写入顶层 error 也通知拒绝（恢复等命令不产生乐观消息）", () => {
+    const store = new TransportFrameStore(transportState());
+    const rejected = vi.fn();
+    store.subscribeRejection(rejected);
+    const error = { code: "X", message: "y", seq: 1 };
+    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: error }]));
+    expect(rejected).toHaveBeenCalledWith([], error);
+  });
+
+  it("连续两次同样的拒绝按 seq 认出第二次，收回第二批乐观命令", () => {
+    const first = { code: "COMMAND_FAILED", message: "命令处理失败，请重试", seq: 1 };
+    const store = new TransportFrameStore(transportState({ error: first }));
+    const rejected = vi.fn();
+    store.subscribeRejection(rejected);
+    const pending = [command("again", "c2")];
+    store.setPendingCommands(pending);
+
+    const second = { ...first, seq: 2 };
+    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: second }]));
+
+    expect(store.getSnapshot().pendingCommands).toEqual([]);
+    expect(rejected).toHaveBeenCalledWith(pending, second);
+  });
+
+  it("已有错误时被另一个原因拒绝同样收回乐观命令", () => {
+    const store = new TransportFrameStore(transportState({ error: { code: "RUN_NOT_RESUMABLE", message: "不可恢复", seq: 3 } }));
+    store.setPendingCommands([command("send", "c1")]);
+    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: { code: "COMMAND_FAILED", message: "失败", seq: 4 } }]));
+    expect(store.getSnapshot().pendingCommands).toEqual([]);
+  });
+
+  it("同一 seq 的错误重放（full 帧重同步）不算新的拒绝", () => {
+    const error = { code: "X", message: "y", seq: 5 };
+    const store = new TransportFrameStore(transportState({ error }));
+    const rejected = vi.fn();
+    store.subscribeRejection(rejected);
+    store.setPendingCommands([command("keep", "c1")]);
+    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: { ...error } }]));
+    expect(rejected).not.toHaveBeenCalled();
+    expect(store.getSnapshot().pendingCommands).toHaveLength(1);
+  });
+
+  it("clears only the rejected command pending projection", () => {
+    const store = new TransportFrameStore(transportState());
+    const first = command("first", "command-1");
+    const second = command("second", "command-2");
+    store.setPendingCommands([first, second]);
+    store.clearPendingCommands([first]);
+    expect(store.getSnapshot().pendingCommands).toEqual([second]);
+  });
 });

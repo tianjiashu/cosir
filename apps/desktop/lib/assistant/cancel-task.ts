@@ -1,7 +1,8 @@
 /** 向后端提交停止 Task 当前执行的命令。
  *
- * 按 taskId 取消：同一 Task 内 Run 串行，后端命中的永远是当前执行，不依赖 snapshot 里可能滞后的
- * run_id。接受只表示信号已登记，Run 终态仍以 canonical snapshot 为准；重复请求幂等成功。
+ * 按 taskId 取消：同一 Task 内 Run 串行，后端命中的永远是当前执行。命令只投递（202）：运行中
+ * 的执行在后端入口同步打取消信号，挂起的 Run 由调度 actor 直接迁移；是否真的停下、停成什么状态
+ * 一律以 Task 长订阅里的 `activity` 为准，这里不判断「有没有可停止的对象」。
  */
 
 import { requestRaw } from "@/lib/http/client";
@@ -12,7 +13,7 @@ const CANCEL_REQUEST_TIMEOUT_MS = 15_000;
 
 export type CancelTaskResult =
   | { accepted: true }
-  | { accepted: false; reason: "invalid_task_id" | "not_cancellable" | "rejected" | "network"; message: string };
+  | { accepted: false; reason: "invalid_task_id" | "rejected" | "network"; message: string };
 
 export async function cancelTask(taskId: number | null): Promise<CancelTaskResult> {
   if (taskId === null || !Number.isInteger(taskId)) {
@@ -29,10 +30,6 @@ export async function cancelTask(taskId: number | null): Promise<CancelTaskResul
       traceId,
     });
     if (response.ok) return { accepted: true };
-    if (response.status === 409) {
-      const message = "当前没有可停止的运行，可能已经结束；请刷新对话状态后重试。";
-      return { accepted: false, reason: "not_cancellable", message };
-    }
     return { accepted: false, reason: "rejected", message: `停止请求被服务端拒绝（HTTP ${response.status}）。` };
   } catch {
     return { accepted: false, reason: "network", message: "停止请求失败，请检查本机后端连接。" };

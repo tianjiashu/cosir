@@ -1,5 +1,6 @@
 import type { TransportState } from "../../lib/assistant/contract";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { seedState } from "./transport-fixtures";
 
 async function expectViewportCoverage(page: Page, surface: Locator) {
   await expect.poll(() => surface.evaluate((element) => {
@@ -104,14 +105,12 @@ test("消息图片放大避开消息裁剪，关闭后恢复焦点与滚动", as
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200"><rect width="300" height="200" fill="teal"/></svg>',
   }));
   await request.post("http://127.0.0.1:8000/__test__/seed-mermaid");
-  await page.route("**/tasks/42/assistant/state", async (route) => {
-    const response = await route.fetch();
-    const snapshot = await response.json() as TransportState;
-    snapshot.runs[0].messages.find((message) => message.role === "user")!.parts = [{
-      type: "image", image: `cosir-attachment://${"a".repeat(64)}`,
-    }];
-    await route.fulfill({ json: snapshot });
-  });
+  // 改写 seeded state 并交回模拟后端：state 读取与 attach 首帧共用同一份事实。
+  const snapshot = await (await request.get("http://127.0.0.1:8000/tasks/42/assistant/state")).json() as TransportState;
+  snapshot.messages.find((message) => message.role === "user")!.parts = [{
+    type: "image", image: `cosir-attachment://${"a".repeat(64)}`,
+  }];
+  await seedState(request, 42, snapshot);
   await page.goto("/tasks/42");
   const enter = page.getByRole("button", { name: "点击放大图片" });
   await enter.click();

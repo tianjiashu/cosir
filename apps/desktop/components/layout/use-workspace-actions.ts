@@ -34,7 +34,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     return () => { currentLocationKey.current = null; };
   }, [location.key]);
   const closeWorkspaceTabs = useWorkbenchStore((state) => state.closeWorkspace);
-  const [forkingRunId, setForkingRunId] = useState<number | null>(null);
+  const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
   const { load, selectWorkspace, selectedWorkspaceId, workspaces } = catalog;
 
   const startConversation = useCallback((conversation: StartedConversation, disabledToolGroups: string[]) => {
@@ -44,13 +44,13 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
 
   // 请求绑定发起时的 Task 和路由；用户切页后迟到的响应只更新目录，不抢回页面。
   const executeFork = useCallback(async function executeFork(
-    sourceTaskId: number, runId: number, originLocationKey: string,
+    sourceTaskId: number, messageId: string, originLocationKey: string,
   ) {
     if (forkPending.current) return;
     forkPending.current = true;
-    setForkingRunId(runId);
+    setForkingMessageId(messageId);
     try {
-      const target = await forkTask(sourceTaskId, runId);
+      const target = await forkTask(sourceTaskId, messageId);
       // 创建已成功，目录刷新由 catalog 自行处理错误，不应影响成功反馈或触发重复创建。
       void load();
       if (currentLocationKey.current === originLocationKey) {
@@ -60,7 +60,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
       }
     } catch (cause) {
       void frontendLog("ERROR", "task_fork_failed", "Fork 任务失败", {
-        data: { taskId: sourceTaskId, runId, status: cause instanceof HttpError ? cause.status : null },
+        data: { taskId: sourceTaskId, messageId, status: cause instanceof HttpError ? cause.status : null },
         error: cause,
       });
       if (cause instanceof HttpError && cause.status === 409) {
@@ -74,19 +74,19 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
           fallback: "Fork 失败，请重试",
           action: {
             label: "重试",
-            onClick: () => void executeFork(sourceTaskId, runId, originLocationKey),
+            onClick: () => void executeFork(sourceTaskId, messageId, originLocationKey),
           },
         });
       }
     } finally {
       forkPending.current = false;
-      setForkingRunId(null);
+      setForkingMessageId(null);
     }
   }, [load, navigate]);
 
-  const forkRun = useCallback(async (runId: number) => {
+  const forkMessage = useCallback(async (messageId: string) => {
     if (focusedTaskId === null) return;
-    await executeFork(focusedTaskId, runId, location.key);
+    await executeFork(focusedTaskId, messageId, location.key);
   }, [executeFork, focusedTaskId, location.key]);
 
   /**
@@ -137,5 +137,5 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     await load();
   }, [closeWorkspaceTabs, focusedTaskId, load, navigate, selectWorkspace, selectedWorkspaceId, workspaces]);
 
-  return { startConversation, forkRun, forkingRunId, requestDelete };
+  return { startConversation, forkMessage, forkingMessageId, requestDelete };
 }

@@ -1,76 +1,81 @@
 "use client";
 
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ReadonlyThread } from "@/components/assistant-ui/elements/readonly-thread.aui";
+import { SubscriptionRecovery } from "@/components/assistant/runtime/subscription-recovery";
+import { TransportStatus, type TransportIssue } from "@/components/assistant/transport-status";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
-import { AssistantAttachController } from "@/lib/assistant/assistant-attach-controller";
 import { useAgentReader } from "@/lib/workbench/use-agent-reader";
-import { currentTransportRun } from "@/lib/assistant/transport-state-operations";
 import { useTaskAssistantReadonlyTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
-import { isTerminalRunStatus, type TransportState } from "@/lib/assistant/contract";
+import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
 import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
 
-function AttachBridge({ runId, backendAvailable, controller }: { runId: number | null; backendAvailable: boolean; controller: AssistantAttachController }) {
-  useEffect(() => {
-    if (runId === null || !backendAvailable) {
-      controller.cancel(runId ?? undefined);
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      if (cancelled) return;
-      void frontendLog("INFO", "workbench_agent_attach", "Workbench 子 Agent 开始只读订阅", { data: { runId } });
-      controller.request(runId);
-    }, 0);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      controller.cancel(runId);
-    };
-  }, [backendAvailable, controller, runId]);
-  return null;
-}
-
-function AgentRunTransport({ taskId, initialState, onError, onStateCommit, onFinish }: {
-  taskId: number; initialState: TransportState; onError: (error: unknown) => void;
+/**
+ * 只读查看子 Task：runtime 挂载即打开一条 Task 长订阅，卸载时关闭；不按 runId 去重或重订。
+ * 订阅意外结束交给与主对话共用的 {@link SubscriptionRecovery}：只重开订阅（首帧即完整状态），
+ * 已显示的内容与 runtime 都保留；重连耗尽后由用户「重新同步」。
+ */
+function AgentRunTransport({ taskId, initialState, onDisconnect, onStateCommit }: {
+  taskId: number; initialState: TransportState;
+  onDisconnect: () => void;
   onStateCommit: (state: TransportState) => void;
-  onFinish: (status: { targetRunStatus: string | null }) => void;
 }) {
   const backendRuntime = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
   const [traceId] = useState(() => newTraceId());
-  const runId = initialState.current_run_id;
-  const currentRun = currentTransportRun(initialState);
-  const shouldAttach = currentRun !== undefined && !isTerminalRunStatus(currentRun.status);
-  const attachController = useMemo(
-    () => new AssistantAttachController((error) => onError(error)),
-    [onError],
-  );
-  const runtime = useTaskAssistantReadonlyTransportRuntime(taskId, {
+  const [issue, setIssue] = useState<TransportIssue | null>(null);
+  const openRef = useRef<(() => Promise<void>) | null>(null);
+  const recovery = useMemo(() => new SubscriptionRecovery({
+    taskId,
+    traceId,
+    attach: () => openRef.current,
+    backend: getBackendRuntimeSnapshot,
+    setIssue,
+  }), [taskId, traceId]);
+  useEffect(() => {
+    recovery.setActive(true);
+    return () => recovery.setActive(false);
+  }, [recovery]);
+  const { runtime, open } = useTaskAssistantReadonlyTransportRuntime(taskId, {
     initialState,
     readonly: true,
     baseUrl: backendRuntime.backendBaseUrl,
+    // 阅读页按后端 generation 整体重挂（见 WorkbenchAgentRunSurface），这里只需随可用性开关。
+    connectionKey: backendRuntime.available ? String(backendRuntime.generation) : null,
     headers: async () => ({
       Accept: "text/event-stream",
       "X-Trace-Id": traceId,
     }),
-    onError: async (error) => onError(error),
-    onAttachReady: attachController.setAttach,
+    onResponse: () => {
+      void frontendLog("INFO", "workbench_agent_subscription_opened", "Workbench 子 Agent 只读订阅已建立", { traceId, data: { taskId } });
+      recovery.markConnected();
+      setIssue(null);
+    },
+    onDisconnect: ({ error, resync }) => {
+      void frontendLog("WARNING", "workbench_agent_subscription_closed", "Workbench 子 Agent 只读订阅意外结束", {
+        traceId, data: { taskId, resync }, error: error ?? undefined,
+      });
+      recovery.reconnect(resync ? "resync_required" : "disconnected");
+      onDisconnect();
+    },
     onStateCommit,
-    onFinish,
   });
+  useEffect(() => {
+    openRef.current = open;
+    return () => { openRef.current = null; };
+  }, [open]);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <AttachBridge
-        runId={shouldAttach ? runId : null}
-        backendAvailable={backendRuntime.available}
-        controller={attachController}
-      />
-      <AgentReadonlyMessages taskId={taskId} />
+      <div className="flex h-full min-h-0 flex-col">
+        <TransportStatus issue={issue} onRetry={() => recovery.resync(null)} />
+        <div className="min-h-0 flex-1">
+          <AgentReadonlyMessages taskId={taskId} />
+        </div>
+      </div>
     </AssistantRuntimeProvider>
   );
 }
@@ -97,8 +102,7 @@ function AgentReader({ taskId, onClose }: { taskId: number; onClose: () => void 
   );
   if (!reader.available) return <ErrorState className="m-4" message="本机后端暂不可用，正在等待恢复…" />;
   if (reader.error && !reader.snapshot) return (
-    <ErrorState className="m-4" message={reader.error.message}
-      onRetry={reader.error.exhausted ? reader.retry : undefined} retryLabel="重新同步" />
+    <ErrorState className="m-4" message={reader.error.message} onRetry={reader.retry} retryLabel="重新同步" />
   );
   if (!reader.snapshot) return <LoadingState label="正在同步子 Agent…" className="h-full" />;
   return <div className="flex h-full min-h-0 flex-col">
@@ -106,8 +110,9 @@ function AgentReader({ taskId, onClose }: { taskId: number; onClose: () => void 
       <Button type="button" variant="outline" size="sm" disabled={reader.refreshingStatus} onClick={reader.refreshStatus}>刷新状态</Button>
     }>下方保留已读取的内容。</Alert>}
     <div className="min-h-0 flex-1">
-      <AgentRunTransport taskId={taskId} initialState={reader.snapshot} onError={reader.resync}
-        onStateCommit={reader.onStateCommit} onFinish={reader.onFinish} />
+      {/* 订阅断开时顺带刷新状态摘要：任务被删除时由 404 显示「已不存在」。 */}
+      <AgentRunTransport taskId={taskId} initialState={reader.snapshot} onDisconnect={reader.refreshStatus}
+        onStateCommit={reader.onStateCommit} />
     </div>
   </div>;
 }
