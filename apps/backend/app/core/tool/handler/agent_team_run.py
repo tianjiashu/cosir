@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 from typing import ClassVar
 
-from app.core.tool.agent_team.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.node_goal import AgentTeamNodeGoal
 from app.service.agent_team.registry import get_agent_team_registry
-from app.core.tool.agent_team.team_tool_error import TeamToolError
+from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
 from app.config.logging.logger import log
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
-from app.core.tool.agent_team.agent_team_display import build_agent_team_preview_display_data
+from app.core.tool.handler.agent_team.agent_team_display import build_agent_team_preview_display_data
 from app.core.tool.schemas import (
     ToolDefinition,
     ToolDisplayHints,
@@ -22,7 +22,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_AGENT_TEAM
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.agent_team.agent_team_args import AgentTeamArgs
+from app.core.tool.handler.agent_team.agent_team_args import AgentTeamArgs
 from app.service.agent_team.agent_team_preparation_service import AgentTeamPreparationService
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 

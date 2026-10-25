@@ -29,14 +29,14 @@ class WebExtractArgs(BaseModel):
         default="markdown",
         description=(
             "Extraction format. Use markdown for readable prose or html when you "
-            "need the original markup; both must be supported by the provider."
+            "need the original markup."
         ),
     )
     char_limit: int | None = Field(
         default=None,
         ge=2000,
         description=(
-            "Optional per-page character budget applied by the extraction provider. "
+            "Optional per-page character budget applied during extraction. "
             "Omit (null) to use the global default. Content beyond the budget is "
             "truncated and the result is marked truncated=true; when the combined "
             "output exceeds the global tool output budget it is saved to disk with a "

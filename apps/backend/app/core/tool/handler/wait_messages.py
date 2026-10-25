@@ -17,7 +17,7 @@ from app.core.tool.schemas import (
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.wait_messages_args import WaitMessagesArgs
+from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES
 from app.service.depends import get_task_service

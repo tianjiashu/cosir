@@ -5,7 +5,7 @@ from typing import ClassVar
 
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileConfigError, AgentProfileType
-from app.core.tool.child_agent.child_agent_display import build_child_agent_result_display_data
+from app.core.tool.handler.child_agent.child_agent_display import build_child_agent_result_display_data
 from app.core.tool.schemas import (
     TOOL_CHILD_AGENT_SEND,
     ToolDefinition,
@@ -17,7 +17,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.child_agent.child_agent_send_args import ChildAgentSendArgs
+from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
 from app.models import ConversationRunCommand
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.task_message import RunLaunch

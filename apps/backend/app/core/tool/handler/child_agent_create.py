@@ -18,7 +18,7 @@ from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileType,
 )
-from app.core.tool.child_agent.delegation_display import build_delegation_display_data
+from app.core.tool.handler.child_agent.delegation_display import build_delegation_display_data
 from app.core.tool.schemas import (
     TOOL_DELEGATE_TASK,
     ToolDefinition,
@@ -31,7 +31,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.child_agent.delegate_task_args import DelegateTaskArgs
+from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models import ConversationRunCommand
 from app.service.depends import (
@@ -167,11 +167,11 @@ class DelegateTaskTool(HandlerBase):
             )
 
         try:
-            from app.config.configuration import get_tool_system
+            from app.config.configuration import get_tool_registry
 
             parent_run = self._run_service.get_run(execution_context.run_id)
             child_task_tools = child_agent_profile.select_tools(
-                get_tool_system().executor.list_tools()
+                get_tool_registry().get_all_definitions()
             )
             child_final_task_tools = [
                 tool
@@ -289,7 +289,7 @@ class DelegateTaskTool(HandlerBase):
 
 
 def build_delegate_task_definition() -> ToolDefinition | None:
-    """构建供 ToolSystem 注册的 delegate_task 基础定义。
+    """构建供工具注册表登记的 delegate_task 基础定义。
 
     CHILD 候选不在工具定义里固化（既无 ``enum`` 也不列举 ID 清单）：合法候选由系统提示词的
     工具能力目录层下发，目标是否可委派由 ``DelegateTaskTool.execute`` 在执行期按 workspace

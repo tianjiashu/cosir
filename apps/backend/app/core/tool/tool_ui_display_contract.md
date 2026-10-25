@@ -323,7 +323,7 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
 
 ### 3.6 网页搜索
 
-`web_search` 使用独立的结果契约，不复用文件列表的语义。UI 不展示 provider、摘要或排名；每个结果只保留标题和可跳转 URL：
+`web_search` 使用独立的结果契约，不复用文件列表的语义。UI 不展示摘要或排名；每个结果只保留标题和可跳转 URL：
 
 ```json
 {
@@ -338,11 +338,11 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
 }
 ```
 
-客户端可以打开已经返回的 URL，但不得因此重新调用 provider 或绕过后端网络边界。
+客户端可以打开已经返回的 URL，但不得因此重新调用搜索服务或绕过后端网络边界。
 
 ### 3.7 网页正文提取
 
-`web_extract` 的 UI 只展示 URL，不展示 provider、正文、metadata、原始响应或逐站点错误详情。前端根据 URL 解析网站名称和 favicon，并把 URL 作为可点击链接；不需要后端提供网站名称或 provider 字段。
+`web_extract` 的 UI 只展示 URL，不展示正文、metadata、原始响应或逐站点错误详情。前端根据 URL 解析网站名称和 favicon，并把 URL 作为可点击链接；不需要后端提供网站名称。
 
 ```json
 {
@@ -412,8 +412,8 @@ builder 应接收已校验的参数和领域结果，返回新的普通字典；
 - 每个成功、失败、取消路径都能在安全范围内构建对应的 `display_data`。
 - 失败路径的 `display_data` 只提供 `status_hint`，状态取自 `ToolObservation.status`，不把失败文本投影到 UI。
 - `display_data` 在 allowlist 投影后再进入统一大小预算；当前实现的第一道闸门是「工具不产生内容型载荷」——`delete_file` 不携带被删内容、`move_file` 只携带 rename 元数据，展示数据体积不随目标文件体积增长。
-- `web_search` 的 UI 数据不得出现 provider、description 或 position；结果项只允许 `title` 和 `url`。
-- `web_extract` 的 UI 数据不得出现 provider、content、metadata、逐站点状态或原始 provider payload；只允许 URL 列表。
+- `web_search` 的 UI 数据不得出现 description 或 position；结果项只允许 `title` 和 `url`。
+- `web_extract` 的 UI 数据不得出现 content、metadata、逐站点状态或 Firecrawl 原始 payload；只允许 URL 列表。
 - 文件已修改但语法检查失败时，UI 数据只保留实际变更；语法检查诊断不得进入 UI。
 - `artifact_data` 不进入 Assistant Transport。
 - `ToolObservation.content` 不被当作通用 UI 展示数据的替代来源。

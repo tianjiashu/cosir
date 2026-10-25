@@ -17,7 +17,7 @@ class WebSearchArgs(BaseModel):
     query: str = Field(
         min_length=1,
         description=(
-            "Search query to look up on the web. You may include backend-supported "
+            "Search query to look up on the web. You may include search "
             "operators such as site:example.com, filetype:pdf, intitle:word, -term, "
             'or "exact phrase".'
         ),

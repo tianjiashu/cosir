@@ -1,169 +1,77 @@
-"""Firecrawl API provider."""
+"""Firecrawl 客户端：``web_search`` 与 ``web_extract`` 唯一的远端实现，两个工具直接调用。
+
+只负责请求 Firecrawl 并把响应归一化为结果值对象；URL 安全校验、结果投影与输出预算归工具。
+
+Firecrawl 官方当前 API 版本为 v2（v1 为 legacy）：搜索响应在 v2 下是 ``data.web``（数组嵌在
+对象中），v1 下是 ``data`` 直接为数组，解析同时兼容。
+"""
+
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tool.web.web_provider import (
-    WebExtractItem,
-    WebProvider,
-    WebProviderRequestError,
-    WebProviderUnavailableError,
-    WebSearchItem,
-    ensure_supported_extract_format,
-    provider_result_metadata,
-)
 from app.utils.http_proxy import ProxyHttpClient
 
-# Firecrawl 官方当前 API 版本为 v2（v1 为 legacy）。搜索响应在 v2 下是
-# ``data.web``（数组嵌在对象中），v1 下是 ``data`` 直接为数组，解析需同时兼容。
-# 单次提取最多并发抓取的页数：避免 N 个 URL 串行导致整体耗时成倍放大。
-# 回传给模型的 metadata 中体积大且对阅读无价值的键。
-# 提取结果中已映射到 WebExtractItem 专有字段、不应重复进 metadata 的键。
+MISSING_CONFIGURATION_MESSAGE = (
+    "Firecrawl is unavailable: set FIRECRAWL_API_KEY or FIRECRAWL_API_URL."
+)
 
 
-class FirecrawlProvider(WebProvider):
-    """通过 Firecrawl API 提供网页搜索与正文提取。"""
+@dataclass(frozen=True, slots=True)
+class WebSearchItem:
+    """一条网页搜索结果。"""
 
-    name = "firecrawl"
+    title: str
+    url: str
+    description: str
+    position: int
+
+
+@dataclass(frozen=True, slots=True)
+class WebExtractItem:
+    """一页网页正文提取结果。
+
+    ``content`` 已按调用方的 ``char_limit`` 截断，``truncated`` 标记原文是否被裁剪，使模型能区分
+    「页面就这么短」与「正文被截断」。
+    """
+
+    url: str
+    title: str
+    content: str
+    metadata: dict[str, object]
+    truncated: bool = False
+    error: str = ""
+
+
+class FirecrawlUnavailableError(RuntimeError):
+    """本地缺少 Firecrawl 配置；重试无意义，工具应给出不可重试的配置指引。"""
+
+
+class FirecrawlRequestError(RuntimeError):
+    """配置正确但远端返回业务失败（HTTP 200 + success:false 等）；属瞬态故障，可以重试。"""
+
+
+class FirecrawlClient:
+    """通过 Firecrawl API 执行网页搜索与正文提取。"""
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
-        """初始化 Firecrawl Provider。
+        """读取 ``FIRECRAWL_API_KEY`` / ``FIRECRAWL_API_URL``（显式传入优先）。
 
-        参数:
-            api_key: 可选的 Firecrawl API Key；省略时从环境变量读取。
-            base_url: 可选的 Firecrawl API 根地址；省略时从环境变量读取。
-
-        返回:
-            无。
-
-        异常:
-            无。
-
-        副作用:
-            读取 FIRECRAWL_API_KEY 与 FIRECRAWL_API_URL 环境变量。
+        复用的同步 httpx 客户端由 ``ProxyHttpClient`` 持有，代理变化时自动重建，系统代理开关变化
+        因此无需重启进程即对后续请求生效。
         """
 
         self._api_key = api_key if api_key is not None else os.environ.get("FIRECRAWL_API_KEY", "")
         self._base_url = (
             base_url if base_url is not None else os.environ.get("FIRECRAWL_API_URL", "")
         )
-        # 复用的同步 httpx 客户端：由 ``ProxyHttpClient`` 持有并缓存，代理变化时自动重建，
-        # 从而让系统代理（Clash / V2RayN 等）开关变化在进程不重启的情况下对后续请求实时生效。
         self._proxy_http_client = ProxyHttpClient()
-
-    @property
-    def display_name(self) -> str:
-        """返回 Firecrawl 的可读名称。
-
-        参数:
-            无。
-
-        返回:
-            Provider 的可读名称。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return "Firecrawl"
-
-    def is_available(self) -> bool:
-        """判断 Firecrawl 所需 API Key 或自定义地址是否存在。
-
-        参数:
-            无。
-
-        返回:
-            配置 API Key 或 API 根地址时返回 True。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return bool(self._api_key or self._base_url)
-
-    def supports_search(self) -> bool:
-        """返回 Firecrawl 的搜索能力状态。
-
-        参数:
-            无。
-
-        返回:
-            始终返回 True。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return True
-
-    def supports_extract(self) -> bool:
-        """返回 Firecrawl 的正文提取能力状态。
-
-        参数:
-            无。
-
-        返回:
-            始终返回 True。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return True
-
-    def supported_extract_formats(self) -> frozenset[str]:
-        """返回 Firecrawl 实际支持的正文格式。
-
-        参数:
-            无。
-
-        返回:
-            包含 Markdown 与 HTML 的不可变格式集合。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return frozenset({"markdown", "html"})
-
-    def missing_configuration_message(self) -> str:
-        """返回 Firecrawl 未配置时的英文诊断信息。
-
-        参数:
-            无。
-
-        返回:
-            简洁英文配置说明。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        return "Firecrawl is unavailable: set FIRECRAWL_API_KEY or FIRECRAWL_API_URL."
 
     def search(self, query: str, limit: int) -> list[WebSearchItem]:
         """使用 Firecrawl API 执行网页搜索。
@@ -176,8 +84,8 @@ class FirecrawlProvider(WebProvider):
             归一化后的网页搜索结果；远端无结果时返回空列表（属正常语义）。
 
         异常:
-            WebProviderUnavailableError: 缺少 Firecrawl 配置时抛出。
-            WebProviderRequestError: 远端返回 success:false 等业务失败时抛出。
+            FirecrawlUnavailableError: 缺少 Firecrawl 配置时抛出。
+            FirecrawlRequestError: 远端返回 success:false 等业务失败时抛出。
             httpx.HTTPError: Firecrawl API 请求失败时抛出。
 
         副作用:
@@ -219,18 +127,13 @@ class FirecrawlProvider(WebProvider):
             该页结果带 ``error`` 且不中断其余页面。
 
         异常:
-            WebProviderUnavailableError: 缺少 Firecrawl 配置时抛出（不逐页吞掉，
+            FirecrawlUnavailableError: 缺少 Firecrawl 配置时抛出（不逐页吞掉，
                 交由调用方给出不可重试的配置指引）。
 
         副作用:
-            并发发起至多 ``_MAX_CONCURRENT_SCRAPES`` 个 Firecrawl Scrape API 请求。
+            并发发起至多 ``Constant.Web.FIRECRAWL_MAX_CONCURRENT_SCRAPES`` 个 Firecrawl Scrape API 请求。
         """
 
-        ensure_supported_extract_format(
-            self.display_name,
-            output_format,
-            self.supported_extract_formats(),
-        )
         if not urls:
             return []
         worker_count = min(len(urls), Constant.Web.FIRECRAWL_MAX_CONCURRENT_SCRAPES)
@@ -260,7 +163,7 @@ class FirecrawlProvider(WebProvider):
             空结果（不影响同批次其他页面）。
 
         异常:
-            WebProviderUnavailableError: 缺少 Firecrawl 配置时向上抛出，不在本方法吞掉。
+            FirecrawlUnavailableError: 缺少 Firecrawl 配置时向上抛出，不在本方法吞掉。
 
         副作用:
             发起一次 Firecrawl Scrape API 网络请求。
@@ -268,7 +171,7 @@ class FirecrawlProvider(WebProvider):
 
         try:
             payload = self._post("scrape", {"url": url, "formats": [output_format]})
-        except (httpx.HTTPError, WebProviderRequestError) as exc:
+        except (httpx.HTTPError, FirecrawlRequestError) as exc:
             # 单页失败必须落日志：部分失败时上层返回 success，模型侧看不到堆栈，
             # 缺少此条记录将无法事后定位是哪一页、因何失败。
             log.warning(
@@ -294,9 +197,11 @@ class FirecrawlProvider(WebProvider):
                 metadata={},
                 error="Firecrawl scrape response missing 'data' object.",
             )
-        metadata = _clean_metadata(data.get("metadata")) or provider_result_metadata(
-            data, Constant.Web.FIRECRAWL_EXTRACT_MAPPED_FIELDS
-        )
+        metadata = _clean_metadata(data.get("metadata")) or {
+            key: value
+            for key, value in data.items()
+            if key not in Constant.Web.FIRECRAWL_EXTRACT_MAPPED_FIELDS
+        }
         content = str(
             data.get(output_format) or data.get("markdown") or data.get("content") or ""
         )
@@ -343,17 +248,17 @@ class FirecrawlProvider(WebProvider):
             Firecrawl 返回的 JSON 响应。
 
         异常:
-            WebProviderUnavailableError: 缺少 Firecrawl 配置时抛出。
+            FirecrawlUnavailableError: 缺少 Firecrawl 配置时抛出。
             httpx.HTTPError: HTTP 请求失败（含传输层失败与非 2xx 状态码）时抛出。
-            WebProviderRequestError: HTTP 200 但远端返回 success:false 等业务失败时抛出。
+            FirecrawlRequestError: HTTP 200 但远端返回 success:false 等业务失败时抛出。
 
         副作用:
             发起 Firecrawl API 网络请求；按成功 / 失败分别写 info / error 结构化日志
             （仅记录是否携带凭据，不输出 api_key 原文）。
         """
 
-        if not self.is_available():
-            raise WebProviderUnavailableError(self.missing_configuration_message())
+        if not (self._api_key or self._base_url):
+            raise FirecrawlUnavailableError(MISSING_CONFIGURATION_MESSAGE)
         request_headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         base_url = self._base_url.rstrip("/") or Constant.Web.FIRECRAWL_DEFAULT_BASE_URL
         started = time.monotonic()
@@ -389,7 +294,7 @@ class FirecrawlProvider(WebProvider):
                     },
                 },
             )
-            raise WebProviderRequestError(error_text)
+            raise FirecrawlRequestError(error_text)
         log.info(
             "firecrawl_api_call_succeeded",
             extra={
@@ -475,7 +380,7 @@ def _clean_metadata(metadata: object) -> dict[str, object]:
     """剔除 metadata 中体积大且对模型阅读无价值的键。
 
     参数:
-        metadata: Provider 返回的原始 metadata 对象。
+        metadata: Firecrawl 返回的原始 metadata 对象。
 
     返回:
         去除 ``_METADATA_NOISE_KEYS`` 后的元数据副本；非字典输入返回空字典。

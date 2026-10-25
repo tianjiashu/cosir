@@ -2,7 +2,7 @@
 
 from typing import ClassVar
 
-from app.core.tool.child_agent.agent_configuration_display import (
+from app.core.tool.handler.child_agent.agent_configuration_display import (
     build_agent_configuration_draft_display_data,
 )
 from app.core.tool.schemas import (
@@ -16,7 +16,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_CONFIGURATION
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.child_agent.propose_agent_configuration_args import ProposeAgentConfigurationArgs
+from app.core.tool.handler.child_agent.propose_agent_configuration_args import ProposeAgentConfigurationArgs
 
 
 class ProposeAgentConfigurationTool(HandlerBase):

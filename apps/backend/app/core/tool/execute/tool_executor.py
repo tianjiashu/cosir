@@ -22,7 +22,6 @@ from app.core.events import ToolCallStatusChangedEvent
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.tool.schemas import (
     ToolCall,
-    ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -49,24 +48,6 @@ class ToolExecutor:
         self._gate = ToolAccessGate(registry)
         self._runner = ToolHandlerRunner()
         self._budget = ToolObservationBudget()
-
-    def list_tools(self) -> list[ToolDefinition]:
-        """返回全部已注册工具定义。
-
-        参数:
-            无。
-
-        返回:
-            注册表中全部 :class:`ToolDefinition` 的列表。
-
-        异常:
-            无。
-
-        副作用:
-            无（只读注册表）。
-        """
-
-        return self._registry.get_all_definitions()
 
     def execute(
         self,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.core.tool.agent_team.team_tool_error import TeamToolError
+from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
 from app.config.logging.logger import log
 from app.core.tool.schemas import (
     ToolDefinition,
@@ -17,7 +17,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_CONFIGURATION
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.agent_team.propose_agent_team_configuration_args import (
+from app.core.tool.handler.agent_team.propose_agent_team_configuration_args import (
     ProposeAgentTeamConfigurationArgs,
 )
 
@@ -45,7 +45,7 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
         """校验配置候选并返回前端可审阅的展示数据。"""
 
         try:
-            from app.core.tool.agent_team.agent_team_display import (
+            from app.core.tool.handler.agent_team.agent_team_display import (
                 build_agent_team_configuration_display_data,
             )
             from app.service.agent_team.agent_team_preparation_service import (

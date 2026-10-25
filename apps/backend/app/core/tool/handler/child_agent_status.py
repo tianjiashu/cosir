@@ -3,7 +3,7 @@
 import json
 from typing import ClassVar
 
-from app.core.tool.child_agent.child_agent_display import build_child_agent_result_display_data
+from app.core.tool.handler.child_agent.child_agent_display import build_child_agent_result_display_data
 from app.core.tool.schemas import (
     TOOL_CHILD_AGENT_STATUS,
     ToolDefinition,
@@ -15,7 +15,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.child_agent.child_agent_status_args import ChildAgentStatusArgs
+from app.core.tool.handler.child_agent.child_agent_status_args import ChildAgentStatusArgs
 from app.service.depends import get_conversation_run_service, get_task_service
 
 

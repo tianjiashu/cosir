@@ -9,7 +9,7 @@ from pydantic import (
 )
 
 from app.models.agent_team.configuration.team_node_definition import TeamNodeIdentifier
-from app.core.tool.agent_team.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.node_goal import AgentTeamNodeGoal
 
 
 class AgentTeamNodeGoalArgs(AgentTeamNodeGoal):
