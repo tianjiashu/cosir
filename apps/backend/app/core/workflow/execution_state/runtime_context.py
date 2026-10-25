@@ -11,7 +11,6 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import (
 )
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
-from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 
 if TYPE_CHECKING:
@@ -46,9 +45,7 @@ class RuntimeContext:
     # —— workflow 驱动期补齐 / 可变状态 ——
     model: OpenAIChatModel | None = None
     thinking_channel: str = ""
-    step_limit: int = 0
     usage_stats: ConversationRunUsageStats = field(default_factory=ConversationRunUsageStats)
-    batch: ToolBatch = field(default_factory=ToolBatch)
 
     def is_cancelled(self) -> bool:
         """本 Task 是否收到停止信号；只读进程内注册表，节点在多个检查点调用，不查库。"""

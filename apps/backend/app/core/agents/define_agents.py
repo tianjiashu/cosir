@@ -2,7 +2,7 @@
 
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings
-from app.core.tools.schemas.tool_names import (
+from app.core.tool.schemas.tool_names import (
     TOOL_AGENT_TEAM,
     TOOL_APPLY_PATCH,
     TOOL_CHILD_AGENT_SEND,

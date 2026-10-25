@@ -20,6 +20,7 @@ profile 使用其根路径经 ``normalize_workspace`` 规范化后的字符串�
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Iterable
 from pathlib import Path
@@ -44,6 +45,11 @@ class AgentProfileRegistry:
     冲突与重复遵循「先注册者优先、system 基线不被 workspace 覆盖」：同一作用域重复注册、
     或跨作用域 ``agent_id`` 冲突都不覆盖已有 profile，只跳过并写 warning 日志。装载沿用同一
     裁决，因此「workspace 用同名 agent_id 覆盖内置 profile」不会因懒装载而生效。
+
+    这条规则是双向的：运行期 system 作用域注册遇到某个 workspace 已持有同名 id 时同样被拒
+    （配置中心据此报「Agent 已注册」），而不是逐出 workspace 项。这是有意的取舍：运行期不让
+    一次 system 写入悄悄让已在用的 workspace Agent 失效；代价是运行期结果可能与重启后（先装
+    system、workspace 同名文件被跳过）不同。
 
     为保证上面的「system 优先」不因懒装载退化成「哪个作用域先被读到谁赢」，任何行经
     workspace 作用域的注册与装载都**先确保 system 基线已装载**（见 :meth:`_ensure_scope`
@@ -124,14 +130,18 @@ class AgentProfileRegistry:
 
         异常:
             ValueError: workspace 路径为空。
+            TypeError: 传入 ``None`` 等非路径对象。用 ``os.fspath`` 而不是 ``str``：
+                ``str(None)`` 会把「没有 workspace」伪装成名为 ``None`` 的路径键（口径同
+                ``normalize_scope_path``）。
 
         副作用:
             无；只规范化路径字符串，不读取 Agent 配置文件。
         """
 
-        if str(workspace) == cls.SYSTEM_WORKSPACE:
+        text = os.fspath(workspace)
+        if text == cls.SYSTEM_WORKSPACE:
             return cls.SYSTEM_WORKSPACE
-        text = str(workspace).strip()
+        text = text.strip()
         if not text:
             raise ValueError("workspace path must not be empty")
         return normalize_scope_path(text)

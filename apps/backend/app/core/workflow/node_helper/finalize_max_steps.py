@@ -4,7 +4,7 @@ from typing import Any
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.workflow.execution_state.react_route import ReactRoute
+from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _runtime_context, route_state
 from app.models.enums.conversation_run_status import RunTransition
 from app.service import depends as service_depends
@@ -14,7 +14,7 @@ from app.service import depends as service_depends
 # 输出，让父 Agent / 用户能感知「因步数耗尽而停止」，而不是静默失败。
 
 
-async def _finalize_max_steps(step_count: int) -> dict[str, Any]:
+async def _finalize_max_steps(step_count: int, step_limit: int) -> dict[str, Any]:
     """不再发模型请求；Run 事实写入失败终态后仅返回结束路由。"""
 
     rc = _runtime_context()
@@ -45,7 +45,7 @@ async def _finalize_max_steps(step_count: int) -> dict[str, Any]:
             "data": {
                 "step_id": step_id,
                 "step_count": step_count,
-                "step_limit": rc.step_limit,
+                "step_limit": step_limit,
                 **event_data,
             },
         },

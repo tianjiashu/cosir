@@ -7,14 +7,14 @@ import json
 from typing import Any
 
 from jsonschema import Draft202012Validator
-from openai.types.chat import ChatCompletionMessage, ChatCompletionMessageParam
+from openai.types.chat import ChatCompletionMessage, ChatCompletionUserMessageParam
 from openai.types.shared_params import ResponseFormatJSONObject
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.openai_model import usage_from_response
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.execution_state.react_route import ReactRoute
+from app.models.react_execution_state import ReactExecutionState
+from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, route_state
 from app.service import depends as service_depends
 from app.utils.message_content import content_to_text
@@ -81,28 +81,20 @@ def _validate_response(
     message: ChatCompletionMessage,
     schema: dict[str, Any],
 ) -> tuple[str | None, str]:
-    """先按 schema 判定正文，再处理被拒绝的那一轮，返回安全的重试原因。
+    """先按 schema 判定正文，返回采纳结果或安全的重试原因。
 
-    判定只看 ``content``：模型即使附带工具调用，只要正文已是合规 JSON 就直接采纳，
-    不因多余调用丢弃可用结果。正文不合规时才检查 ``tool_calls``，把本步不允许的工具
-    调用以「失败配对」写回请求副本（见 :func:`_append_rejected_turn`），并用受控文案
-    说明原因，避免模型原文或工具输出进入提示词。
-
-    参数:
-        message: 模型单次非流式响应。
-        schema: 输出契约中的 JSON Schema。
-        request_messages: 本次支线的临时请求副本（不是 canonical context）；被拒绝的轮次
-            追加到其末尾，供下一轮重试读到。
+    判定只看 ``content``：模型即使附带工具调用，只要正文已是合规 JSON 就直接采纳，不因多余调用
+    丢弃可用结果。正文不合规时，重试原因由受控文案拼成（空响应、非法 JSON、不符合 schema 的路径与
+    关键字），不含模型原文；若还附带了工具调用，追加「不要调用工具」并清空这批调用——支线不执行工具。
 
     返回:
-        校验通过时返回紧凑 JSON 字符串和空原因；否则返回 ``None`` 与不含模型原文的原因。
+        校验通过时返回紧凑 JSON 字符串和空原因；否则返回 ``None`` 与重试原因。
 
     异常:
-        jsonschema.exceptions.SchemaError: 调用方传入的 schema 本身无效（正常由契约解析阶段
-            提前拒绝）。
+        jsonschema.exceptions.SchemaError: schema 本身无效（正常由契约解析阶段提前拒绝）。
 
     副作用:
-        校验失败时原地追加 ``request_messages``；不执行工具，不改写 canonical context。
+        正文不合规且带工具调用时，原地清空 ``message.tool_calls``；不改写 canonical context。
     """
 
     retry_reasons: list[str] = []
@@ -152,7 +144,7 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
         retry_feedback: str | None = None
         for attempt in range(1, Constant.Workflow.STRUCTURED_OUTPUT_MAX_ATTEMPTS + 1):
             context_messages.append(
-                ChatCompletionMessageParam(
+                ChatCompletionUserMessageParam(
                     role="user",
                     content=_request_instruction(
                         spec.name, spec.json_schema, retry_feedback=retry_feedback

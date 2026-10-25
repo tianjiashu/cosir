@@ -1,1 +1,1 @@
-"""运行底座包：聚合 tool_execute / runs / workflow / agents 四个运行态模块。"""
+"""Agent 内核：agents / context / llm_provider / workflow / tool / hook / events。"""

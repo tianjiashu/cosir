@@ -7,8 +7,8 @@ from typing import Any
 
 from app.config.logging.logger import log
 from app.core.tool.schemas import ToolCall, ToolObservation
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.execution_state.react_route import ReactRoute
+from app.models.react_execution_state import ReactExecutionState
+from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _runtime_context
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 
@@ -27,7 +27,7 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
     本批摘要，canonical tool 消息与终态事件由 observe 节点结算，是否挂起由 prepare_input 判定。
     """
     rc = _runtime_context()
-    batch = rc.batch
+    batch = state.batch
     step_id = f"step-{state.step_count}"  # 复用上一步 step_id（工具是 model 步的延续）
     tool_calls = [
         ToolCall(
@@ -49,7 +49,7 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
         },
     )
     # running 与终态由 run_tool_batch 按调用投影：只有真正开始运行的调用才显示为运行中。
-    observations = await run_tool_batch(rc, tool_calls, step_id)
+    observations = await run_tool_batch(rc, tool_calls, step_id, batch)
     summaries = [_summary(observation) for observation in observations]
     log.info(
         "tools_node_completed",
@@ -58,5 +58,7 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
             "data": {"step_id": step_id, "observations": summaries},
         },
     )
-    batch.observations = summaries
-    return {"next_node": ReactRoute.OBSERVE}
+    return {
+        "batch": batch.model_copy(update={"observations": summaries}),
+        "next_node": ReactRoute.OBSERVE,
+    }

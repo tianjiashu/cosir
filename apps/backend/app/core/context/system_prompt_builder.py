@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING
 
 from app.config.constant import Constant
 from app.config.settings import Settings
-from app.core.tools.schemas.tool_names import (
+from app.core.tool.schemas.tool_names import (
     TOOL_AGENT_TEAM,
     TOOL_DELEGATE_TASK,
     TOOL_MCP,
@@ -220,10 +220,10 @@ class SystemPromptBuilder:
 
         blocks: list[str] = []
         if TOOL_DELEGATE_TASK in available_tool_names:
-            # 函数内延迟导入：``app.config.configuration`` 模块级导入 ``app.core.tools``，而工具装配
+            # 函数内延迟导入：``app.config.configuration`` 模块级导入 ``app.tools``，而工具装配
             # 链会反向导入 ``app.core.context``，
             # 顶层导入会形成环
-            # （详见 ``app/core/tools/__init__.py`` 的 PEP 562 惰性导出说明）。
+            # （详见 ``app/tools/__init__.py`` 的 PEP 562 惰性导出说明）。
             from app.config.configuration import get_agent_registry
 
             child_summary = get_agent_registry().child_agent_summary(workspace_root).strip()
@@ -233,7 +233,7 @@ class SystemPromptBuilder:
         if TOOL_AGENT_TEAM in available_tool_names:
             # 函数内延迟导入：与 agent 注册表同理，避免在 ``app.core.context``
             # 顶层形成反向循环导入。
-            from app.agent_team.registry import get_agent_team_registry
+            from app.service.agent_team.registry import get_agent_team_registry
 
             team_summary = get_agent_team_registry().team_summary(workspace_root).strip()
             if team_summary:

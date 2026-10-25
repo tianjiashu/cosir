@@ -12,14 +12,14 @@ from openai.types.chat import (
     ParsedFunctionToolCall,
 )
 
-from app.config.configuration import get_tool_system
+from app.config.configuration import get_tool_registry
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.execution_state.react_route import ReactRoute
-from app.core.workflow.execution_state.tool_batch import ToolBatch
+from app.models.react_execution_state import ReactExecutionState
+from app.models.enums.react_route import ReactRoute
+from app.models.tool_batch import ToolBatch
 from app.core.workflow.node_helper.common import (
     RunStopped,
     _message_context,
@@ -58,7 +58,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     messages: list[ChatCompletionMessageParam] = await asyncio.to_thread(
         _message_context().load_message
     )
-    registered_tool_names = frozenset(get_tool_system().registry.get_all_tool_names())
+    registered_tool_names = frozenset(get_tool_registry().get_all_tool_names())
 
     log.info(
         "model_node_started",
@@ -73,8 +73,10 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     )
     # part 生命周期收口：把交错的 text/reasoning 流转换为顺序括号化的 part 事件流。
     # 每次模型请求新建批次，取消只收敛本次已投影的调用。
-    rc.batch = ToolBatch()
-    parts = StreamingPartStateMachine(task_id=task_id, run_id=run_id, step_id=step_id)
+    batch = ToolBatch()
+    parts = StreamingPartStateMachine(
+        task_id=task_id, run_id=run_id, step_id=step_id, batch=batch
+    )
 
     # SDK 快照负责聚合；context 只保存请求正文副本和独立响应元数据。
     aggregated_message: ParsedChatCompletionSnapshot | None = None
@@ -191,12 +193,11 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     if calls:
         # 有任意有效工具调用都进 tools 节点；参数是否合法由执行边界决定，失败由 observe 结算；
         # 工具结果是否回流 model 也由 observe 决定。
-        rc.batch.calls = calls
-        return route_state(step_count, ReactRoute.TOOLS)
+        batch.calls = calls
+        return {**route_state(step_count, ReactRoute.TOOLS), "batch": batch}
 
     # 无工具调用且 finish_reason 非 None：正文可以为空；结构化处理作为已完成 Run 的支线。
     final_answer = content_to_text(ai_message.get("content"))
-    rc.batch = ToolBatch()
     structured = rc.agent.structured_output is not None
     log.info(
         "model_node_final_response",

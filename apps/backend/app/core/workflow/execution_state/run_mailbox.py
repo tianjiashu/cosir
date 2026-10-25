@@ -31,6 +31,11 @@ class RunMailbox:
                 self._seen.add(message.id)
             self._pending.append(message)
 
+    def has_external(self) -> bool:
+        """是否有来自外部队列、尚未取出的消息（``id`` 非空）；Run 内通知不算，不能唤醒挂起。"""
+        with self._lock:
+            return any(message.id is not None for message in self._pending)
+
     def drain(self) -> list[TaskMessage]:
         with self._lock:
             pending, self._pending = self._pending, []

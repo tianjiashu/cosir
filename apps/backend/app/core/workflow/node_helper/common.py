@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.config.logging.logger import log
 from app.core.events import WorkflowEventEnvelope
-from app.core.workflow.execution_state.react_route import ReactRoute
+from app.models.enums.react_route import ReactRoute
 
 if TYPE_CHECKING:
     from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager

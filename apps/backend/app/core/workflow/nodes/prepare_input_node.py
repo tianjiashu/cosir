@@ -13,8 +13,9 @@ from typing import cast
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.events import UserInputConsumedEvent
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.execution_state.react_route import ReactRoute
+from app.models.tool_batch import ToolBatch
+from app.models.react_execution_state import ReactExecutionState
+from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import (
     RunStopped,
     _message_context,
@@ -39,6 +40,7 @@ from app.storage.store_engines import main_session_factory
 async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     """按「取消 → 挂起 → 步数上限 → 并入消息」的顺序判定，通过后流转到 model 节点。
 
+    挂起请求取自执行状态里上一批的观察（``batch.suspends()``），读完即清空批次。
     取消优先于挂起：工具要求等待时 Run 恰好被停，按取消落定。挂起先于步数上限：Agent 明确在等
     消息时不按「步数用完」失败，唤醒后回到这里再检查上限。挂起前 mailbox 已有外部可唤醒消息（如
     子 Agent 结论在工具执行期间送达）就直接继续，省掉「挂起 → 复查 → 唤醒」一圈；之后才到达的消息
@@ -50,10 +52,10 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     step_id = f"step-{step_count}"
     if rc.is_cancelled():
         _cancel_before_request(step_id, rc.run.id)
-    if state.suspend_requested:
+    if state.batch.suspends():
         if not rc.mailbox.has_external():
             _suspend(step_id, rc.run.id)
-            return {"suspend_requested": False, "next_node": ReactRoute.END}
+            return {"batch": ToolBatch(), "next_node": ReactRoute.END}
         log.info(
             "prepare_input_suspend_skipped",
             extra={
@@ -62,8 +64,8 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
             },
         )
     # 超配额时不再发起推理，落定 max_steps_reached 失败终态。
-    if step_count > rc.step_limit:
-        return await _finalize_max_steps(step_count)
+    if step_count > state.step_limit:
+        return await _finalize_max_steps(step_count, state.step_limit)
     messages = rc.mailbox.drain()
     if messages:
         consumed = await asyncio.to_thread(_write_messages, messages)
@@ -74,7 +76,8 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
                     task_id=rc.task.id, run_id=rc.run.id, message_id=cast(int, message.id)
                 )
             )
-    return {**route_state(state.step_count, ReactRoute.MODEL), "suspend_requested": False}
+    # 本节点是批次的唯一清空点：挂起判定已读完，下一模型步不能再看到上一批观察。
+    return {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch()}
 
 
 def _write_messages(messages: list[TaskMessage]) -> list[TaskMessage]:

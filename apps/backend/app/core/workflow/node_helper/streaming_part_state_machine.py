@@ -25,7 +25,7 @@ from collections.abc import Callable
 
 from openai.types.chat import ParsedFunctionToolCall
 
-from app.config.configuration import get_tool_system
+from app.config.configuration import get_tool_registry
 from app.config.constant import Constant
 from app.core.context.tool_call_closure import build_placeholder_tool_message
 from app.core.events import (
@@ -35,7 +35,7 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallStatusChangedEvent,
 )
-from app.core.workflow.execution_state.tool_batch import ValidToolCall
+from app.models.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.message_metadata import ToolMessageMetadata
 
@@ -79,6 +79,7 @@ class StreamingPartStateMachine:
         task_id: int,
         run_id: int,
         step_id: str,
+        batch: ToolBatch,
     ) -> None:
         """构造 part 生命周期状态机。
 
@@ -86,16 +87,15 @@ class StreamingPartStateMachine:
             task_id: 所属任务 ID，写入事件信封。
             run_id: 所属 run ID，写入事件信封。
             step_id: 当前 step ID，写入事件信封。
-
-        副作用:
-            无；只初始化状态与依赖。有效调用记账取自当前 ``ToolBatch``，由驱动共享，
-            本实例只在 :meth:`tool_call` 写入、在 :meth:`cancel` 读回。
+            batch: 本次模型请求的工具批次（model 节点新建、随执行状态交给后续节点）；本实例
+                只在 :meth:`tool_call` 写入有效调用记账、在 :meth:`cancel` 读回。
         """
 
         self._emit = emit
         self._task_id: int = task_id
         self._run_id: int = run_id
         self._step_id: str = step_id
+        self._batch = batch
         self._min_chars: int = Constant.Workflow.DEFAULT_TEXT_FLUSH_MIN_CHARS
         self._max_interval: float = Constant.Workflow.DEFAULT_TEXT_FLUSH_MAX_INTERVAL_SECONDS
         self._now: Callable[[], float] = time.monotonic
@@ -159,8 +159,7 @@ class StreamingPartStateMachine:
         if not raw_tool_calls:
             # 空批次只负责收口 part，不必触碰运行期依赖（也避免在无 graph 上下文时取值）。
             return
-        runtime = _runtime_context()
-        valid_calls = runtime.batch.valid_tool_calls
+        valid_calls = self._batch.valid_tool_calls
         for raw_tool_call in raw_tool_calls:
             # 快照是累积草稿：id / name 由 provider 按 index 首帧给出，个别 provider 可能晚一帧
             # 才带上。SDK 用 model_construct 构造快照、不做校验，缺字段会直接 AttributeError 并炸
@@ -175,7 +174,7 @@ class StreamingPartStateMachine:
                 or call_id in valid_calls
             ):
                 continue
-            if get_tool_system().registry.get_tool_definition(tool_name) is None:
+            if get_tool_registry().get_tool_definition(tool_name) is None:
                 continue
             projected = self.create_tool_call(call_id, tool_name)
             valid_calls[call_id] = ValidToolCall(
@@ -209,8 +208,8 @@ class StreamingPartStateMachine:
 
         self._close()
         runtime_context = _message_context()
-        # 记账由 model_node 在每次请求开始前清空；仅收敛其中已投影的调用。
-        for call_id, call in _runtime_context().batch.valid_tool_calls.items():
+        # 批次由 model_node 在每次请求开始前新建；仅收敛其中已投影的调用。
+        for call_id, call in self._batch.valid_tool_calls.items():
             if call.projection != "projected":
                 continue
             self._emit(
@@ -305,7 +304,7 @@ class StreamingPartStateMachine:
             return False
         # 只为本轮放行的工具创建卡片；被拦调用仍保留在模型协议中，由执行层返回错误观察。
         # 注册表是进程级可变事实（MCP 工具可热更新）：调用方过滤后仍可能被注销，此时不建卡片。
-        definition = get_tool_system().registry.get_tool_definition(tool_name)
+        definition = get_tool_registry().get_tool_definition(tool_name)
         if definition is None:
             return False
         display = definition.display

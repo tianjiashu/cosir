@@ -18,19 +18,20 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
-from app.config.configuration import get_tool_system
+from app.models.tool_batch import ToolBatch
+from app.config.configuration import get_tool_executor, get_tool_registry
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tools.schemas import ToolCall, ToolExecutionContext, ToolObservation
-from app.core.tools.tool_execute.tool_error import tool_error
-from app.core.tools.tool_execute.tool_terminal_projection import terminal_event
+from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.node_helper.common import emit
 from app.models.enums.error_kind import ErrorKind
 
 
 async def run_tool_batch(
-        rc: RuntimeContext, calls: list[ToolCall], step_id: str
+        rc: RuntimeContext, calls: list[ToolCall], step_id: str, batch: ToolBatch
 ) -> list[ToolObservation]:
     """执行一批工具调用，返回与每个调用一一对应的观察：先串行组（入参顺序），再并行组（入参顺序）。
 
@@ -44,10 +45,10 @@ async def run_tool_batch(
     serial = [call for call in calls if not _is_parallel(call)]
     parallel = [call for call in calls if _is_parallel(call)]
     observations = [
-        await asyncio.to_thread(_execute_call, rc, call, step_id, loop) for call in serial
+        await asyncio.to_thread(_execute_call, rc, call, step_id, batch, loop) for call in serial
     ]
     if parallel:
-        observations.extend(await _run_parallel(rc, parallel, step_id, loop))
+        observations.extend(await _run_parallel(rc, parallel, step_id, batch, loop))
     return observations
 
 
@@ -55,6 +56,7 @@ async def _run_parallel(
         rc: RuntimeContext,
         calls: list[ToolCall],
         step_id: str,
+        batch: ToolBatch,
         loop: asyncio.AbstractEventLoop,
 ) -> list[ToolObservation]:
     pool = ThreadPoolExecutor(
@@ -73,6 +75,7 @@ async def _run_parallel(
                             rc,
                             call,
                             step_id,
+                            batch,
                             loop,
                         ),
                     )
@@ -86,7 +89,7 @@ async def _run_parallel(
 
 
 def _is_parallel(call: ToolCall) -> bool:
-    definition = get_tool_system().registry.get_tool_definition(call.tool_name)
+    definition = get_tool_registry().get_tool_definition(call.tool_name)
     return definition is not None and definition.parallel_mode == "parallel"
 
 
@@ -111,20 +114,24 @@ def _execution_context(
 
 
 def _execute_call(
-        rc: RuntimeContext, call: ToolCall, step_id: str, loop: asyncio.AbstractEventLoop
+        rc: RuntimeContext,
+        call: ToolCall,
+        step_id: str,
+        batch: ToolBatch,
+        loop: asyncio.AbstractEventLoop,
 ) -> ToolObservation:
     """执行单个调用并投影其生命周期；未知工具名也交给执行器，由准入门禁产出稳定观察。"""
     execution_context = _execution_context(rc, call, step_id, loop)
 
     try:
-        observation = get_tool_system().executor.execute(
+        observation = get_tool_executor().execute(
             call,
             execution_context=execution_context,
             allowed_tool_names=rc.allows_tools,
         )
     except Exception as exc:
         observation = _internal_error(execution_context, call, exc)
-    if rc.batch.was_projected(call.call_id):
+    if batch.was_projected(call.call_id):
         emit(
             terminal_event(
                 observation,

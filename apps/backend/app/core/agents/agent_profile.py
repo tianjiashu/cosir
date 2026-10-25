@@ -25,12 +25,12 @@ from typing import TYPE_CHECKING, Any
 from app.config.logging.logger import log
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.core.tools.schemas.tool_names import ALL_TOOL_NAMES
+from app.core.tool.schemas.tool_names import ALL_TOOL_NAMES
 from app.service.depends import get_model_config_service
 from app.utils.json_utils import read_json_object
 
 if TYPE_CHECKING:
-    from app.core.tools.schemas.tool_definition import ToolDefinition
+    from app.core.tool.schemas.tool_definition import ToolDefinition
 
 
 class AgentProfileType(str, Enum):
@@ -68,7 +68,7 @@ def _allowed_tool_names() -> frozenset[str]:
         无。
 
     返回:
-        `app/core/tools/schemas/tool_names.py` 中声明的全部工具名集合。
+        `app/core/tool/schemas/tool_names.py` 中声明的全部工具名集合。
 
     """
 
@@ -166,7 +166,7 @@ def _require_tool_names(document: Mapping[str, Any], source: Path) -> list[str]:
         AgentProfileConfigError: 含非字符串元素、列表为空、含未知工具名或存在重复。
 
     副作用:
-        首次调用会经 :func:`_allowed_tool_names` 导入 ``app.core.tools.schemas`` 包。
+        首次调用会经 :func:`_allowed_tool_names` 导入 ``app.core.tool.schemas`` 包。
     """
     tool_names = document["allowed_tools"]
     if not all(isinstance(name, str) for name in tool_names):
