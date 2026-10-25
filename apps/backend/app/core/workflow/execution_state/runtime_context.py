@@ -10,7 +10,7 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     cancellation_registry,
 )
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 
 if TYPE_CHECKING:
