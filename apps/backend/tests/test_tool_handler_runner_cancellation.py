@@ -27,9 +27,9 @@ from typing import ClassVar
 import pytest
 from pydantic import BaseModel
 
-from app.core.tools.schemas import ToolDefinition, ToolExecutionContext
-from app.core.tools.tool_execute import tool_handler_runner as runner_module
-from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
+from app.core.tool.schemas import ToolDefinition, ToolExecutionContext
+from app.core.tool.execute import tool_handler_runner as runner_module, tool_handler_runner as mod
+from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
@@ -72,8 +72,7 @@ def _assert_runtime_cancelled(observation) -> None:
     """断言执行器取消路径使用当前的运行期取消诊断文案。"""
 
     assert observation.status == "cancelled"
-    assert observation.reason is not None
-    assert observation.reason.startswith("the user stopped this tool call mid-execution")
+    assert observation.content.startswith("cancelled: the user stopped this tool call mid-execution")
 
 
 def _handler_emits_output(execution_context=None, output_sink=None, **_kwargs):
@@ -393,7 +392,7 @@ def test_normalize_result_wraps_scalar_and_structured_payloads() -> None:
 
     from dataclasses import replace
 
-    from app.core.tools.schemas import ToolObservation
+    from app.core.tool.schemas import ToolObservation
 
     tool = _make_tool(_handler_returns_string, name="norm")
     runner = ToolHandlerRunner()
@@ -456,8 +455,6 @@ def test_execute_in_process_with_fake_process_success(monkeypatch) -> None:
     潜在缺陷：父进程拿到 ("success", payload) 后未正确归一化（如误判 error）。
     """
 
-    from app.core.tools.tool_execute import tool_handler_runner as mod
-
     monkeypatch.setattr(mod.multiprocessing, "Process", _FakeProcess)
     # result_queue 用 multiprocessing.Queue 的进程内替代（仅需 get/get_nowait/cancel_join_thread）。
     monkeypatch.setattr(mod.multiprocessing, "Queue", _make_fake_queue_factory())
@@ -475,7 +472,7 @@ def test_execute_in_process_with_fake_process_success(monkeypatch) -> None:
 def test_execute_in_process_with_fake_process_handler_error(monkeypatch) -> None:
     """fake 子进程 handler 抛错 -> error payload -> 归一化为 handler_failed。"""
 
-    from app.core.tools.tool_execute import tool_handler_runner as mod
+    from app.core.tool.execute import tool_handler_runner as mod
 
     monkeypatch.setattr(mod.multiprocessing, "Process", _FakeProcess)
     monkeypatch.setattr(mod.multiprocessing, "Queue", _make_fake_queue_factory())
@@ -486,13 +483,13 @@ def test_execute_in_process_with_fake_process_handler_error(monkeypatch) -> None
     observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
 
     assert observation.status == "error"
-    assert observation.retryable is False
+    assert "hint: do not retry this tool call." in observation.content
 
 
 def test_execute_in_process_with_fake_process_exited_without_result(monkeypatch) -> None:
     """子进程「已退出且无结果」-> 返回 error（exited without a result 分支）。"""
 
-    from app.core.tools.tool_execute import tool_handler_runner as mod
+    from app.core.tool.execute import tool_handler_runner as mod
 
     class _DeadProcess(_FakeProcess):
         def start(self) -> None:
@@ -518,7 +515,7 @@ def test_wait_for_result_raises_timeout_when_process_alive(monkeypatch) -> None:
     潜在缺陷：超时未触发或返回了伪结果。
     """
 
-    from app.core.tools.tool_execute import tool_handler_runner as mod
+    from app.core.tool.execute import tool_handler_runner as mod
 
     class _AliveForever:
         def is_alive(self) -> bool:
@@ -537,7 +534,7 @@ def test_wait_for_result_raises_cancelled_when_is_cancelled_true() -> None:
     潜在缺陷：取消检查被放在阻塞 get 之后，导致取消无法及时中断等待。
     """
 
-    from app.core.tools.tool_execute import tool_handler_runner as mod
+    from app.core.tool.execute import tool_handler_runner as mod
 
     class _AliveForever:
         def is_alive(self) -> bool:
@@ -615,7 +612,7 @@ class _AliveProcess:
 def _patch_runner_deps(monkeypatch, *, process, wait_impl=None):
     """把 runner 模块内的 multiprocessing.Process/Queue 与 _wait_for_result 替换为测试替身。"""
 
-    from app.core.tools.tool_execute import tool_handler_runner as mod
+    from app.core.tool.execute import tool_handler_runner as mod
 
     class _P:
         def __new__(cls, *args, **kwargs):
@@ -633,7 +630,7 @@ def test_process_cancel_path_force_kills_and_returns_cancelled(monkeypatch) -> N
     潜在缺陷：catch 分支写错导致取消异常逃逸 or 未强杀。
     """
 
-    from app.core.tools.tool_execute import tool_handler_runner as mod
+    from app.core.tool.execute import tool_handler_runner as mod
 
     proc = _AliveProcess()
 
@@ -668,7 +665,7 @@ def test_process_timeout_path_returns_error_and_retryable(monkeypatch) -> None:
     observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
 
     assert observation.status == "error"
-    assert observation.retryable is True
+    assert "hint: this error can be retried" in observation.content
     assert proc.terminate_called is True or proc.kill_called is True
 
 
@@ -690,7 +687,7 @@ def test_process_oserror_path_returns_error_not_raise(monkeypatch) -> None:
     observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
 
     assert observation.status == "error"
-    assert observation.retryable is False
+    assert "hint: do not retry this tool call." in observation.content
 
 
 def test_thread_handler_exception_returns_error() -> None:
@@ -700,7 +697,7 @@ def test_thread_handler_exception_returns_error() -> None:
     observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
 
     assert observation.status == "error"
-    assert observation.retryable is False
+    assert "hint: do not retry this tool call." in observation.content
 
 
 def test_thread_mode_keeps_result_when_cancelled_during_execution() -> None:
@@ -725,7 +722,7 @@ def test_thread_mode_keeps_result_when_cancelled_during_execution() -> None:
 def test_execute_in_process_uses_runtime_output_channel_factory(monkeypatch) -> None:
     """运行期 factory 返回通道后，process 路径建立输出队列并收尾通道。"""
 
-    from app.core.tools.tool_execute import tool_handler_runner as mod
+    from app.core.tool.execute import tool_handler_runner as mod
 
     monkeypatch.setattr(mod.multiprocessing, "Process", _FakeProcess)
     monkeypatch.setattr(mod.multiprocessing, "Queue", _make_fake_queue_factory())

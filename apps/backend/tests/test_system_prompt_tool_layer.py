@@ -12,14 +12,14 @@ from pathlib import Path
 
 import pytest
 
-from app.agent_team import registry as team_registry
+from app.service.agent_team import registry as team_registry
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import main_agent
 from app.core.context import system_prompt_builder as spb
-from app.core.tools.schemas.tool_names import TOOL_MCP, TOOL_SKILL
+from app.core.tool.schemas.tool_names import TOOL_MCP, TOOL_SKILL
 from app.service.mcp import mcp_client
 from app.service.skills import skill_catalog
 from app.service.skills.skill_catalog import SkillInfo

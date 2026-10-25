@@ -1,4 +1,4 @@
-"""系统提示词 diff 的通知广播测试：命中的 Task 经 ``WorkflowSession.post`` 入外部队列。"""
+"""系统提示词 diff 的通知广播测试：命中的 Task 经 ``TaskActors.post`` 入外部队列。"""
 
 from __future__ import annotations
 
@@ -53,18 +53,18 @@ def clear_runtime_spaces(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def posted(monkeypatch) -> dict[int, list[NoticeBody]]:
-    """记录广播交给 ``post`` 的通知，按 Task 归档。"""
+    """记录广播交给 ``broadcast`` 的通知，按 Task 归档。"""
 
     by_task: dict[int, list[NoticeBody]] = {}
 
-    def post(task_ids: list[int], notice: NoticeBody) -> None:
+    def broadcast(task_ids: list[int], notice: NoticeBody) -> None:
         for task_id in task_ids:
             by_task.setdefault(task_id, []).append(notice)
 
     monkeypatch.setattr(
         runtime_notice_broadcaster,
-        "get_workflow_session",
-        lambda: SimpleNamespace(post=post),
+        "get_task_actors",
+        lambda: SimpleNamespace(broadcast=broadcast),
     )
     return by_task
 

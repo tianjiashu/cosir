@@ -29,14 +29,13 @@ import pathlib
 
 import pytest
 
-from app.core.tools.guard.file_resource_paths import FileResourceResolver
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.core.tools.tool_handler.patch_write.patch_parser import (
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.patch_write import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
-from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
+from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
 PARAM_DESCRIPTION = ApplyPatchArgs.model_fields["patch"].description or ""
 # 最小样例已从描述正文迁到字段 ``examples``（随 strict schema 一并导出给模型）。
@@ -195,12 +194,12 @@ def test_validation_reason_matches_a_binary_target_cause(tmp_path: pathlib.Path)
     observation = _execute(tmp_path, _valid_patch("bin.txt"), 4101)
 
     assert observation.status == "error"
-    assert "binary files are not supported" in observation.error
-    lowered = (observation.reason or "").lower()
+    assert "binary files are not supported" in observation.content
+    lowered = observation.content.lower()
     # 归因必须覆盖二进制这一真实原因，而不是只说「路径 / hunk 上下文」。
     assert "binary" in lowered, (
         "validation reason 未覆盖二进制目标的真实原因，模型会被引向改路径或改上下文："
-        f"reason={observation.reason!r}"
+        f"content={observation.content!r}"
     )
 
 
@@ -212,10 +211,10 @@ def test_validation_reason_matches_a_non_utf8_target_cause(tmp_path: pathlib.Pat
     observation = _execute(tmp_path, _valid_patch("latin.txt"), 4102)
 
     assert observation.status == "error"
-    assert "not a readable UTF-8 text file" in observation.error
-    lowered = (observation.reason or "").lower()
+    assert "not a readable UTF-8 text file" in observation.content
+    lowered = observation.content.lower()
     assert "utf-8" in lowered or "encoding" in lowered, (
-        "validation reason 未覆盖非 UTF-8 目标的真实原因：" f"reason={observation.reason!r}"
+        "validation reason 未覆盖非 UTF-8 目标的真实原因：" f"content={observation.content!r}"
     )
 
 
@@ -228,10 +227,10 @@ def test_validation_reason_matches_a_reserved_area_cause(tmp_path: pathlib.Path)
     observation = _execute(tmp_path, _valid_patch(".cosir/meta.txt"), 4103)
 
     assert observation.status == "error"
-    assert "reserved" in observation.error
-    lowered = (observation.reason or "").lower()
+    assert "reserved" in observation.content
+    lowered = observation.content.lower()
     assert "reserved" in lowered or ".cosir" in lowered, (
-        "validation reason 未覆盖保留区的真实原因：" f"reason={observation.reason!r}"
+        "validation reason 未覆盖保留区的真实原因：" f"content={observation.content!r}"
     )
 
 
@@ -241,10 +240,10 @@ def test_validation_reason_is_accurate_for_a_missing_target(tmp_path: pathlib.Pa
     observation = _execute(tmp_path, _valid_patch("missing.txt"), 4104)
 
     assert observation.status == "error"
-    assert "not an existing regular file" in observation.error
+    assert "not an existing regular file" in observation.content
     # reason 现在按「原因类别」如实列举（缺失 / 不规则文件、二进制、非 UTF-8、保留区），
     # 不再把二进制/编码类原因误归因为「路径或 hunk 上下文」。
-    assert "missing or irregular file" in (observation.reason or "")
+    assert "missing or irregular file" in observation.content
 
 
 # 目的：解析失败分支的 reason 声称「make every hunk header count exactly ...」。当失败
@@ -256,8 +255,8 @@ def test_parse_error_reason_is_actionable_for_a_missing_header() -> None:
     assert observation.status == "error"
     # 具体诊断（缺失的头部类型）由 ``error`` 承载；``reason`` 已统一为通用指引，必须把模型
     # 引向 ``error`` 里的诊断，而不是引向改计数之类的无关方向。
-    assert "expected a Git 'diff --git' header" in observation.error
-    reason = observation.reason or ""
+    assert "expected a Git 'diff --git' header" in observation.content
+    reason = observation.content.split("\nreason: ", 1)[-1]
     assert "reported in error" in reason, "reason 必须把模型引向 error 中的具体诊断"
     assert "count" not in reason.lower(), "reason 不得把缺头部误导为改计数"
 
@@ -581,11 +580,11 @@ def test_diagnostics_stay_complete_stable_and_ascii() -> None:
     repairs.encode("ascii")
 
 
-# 目的：真正**被拒绝**的补丁绝不写文件、retryable=True、且不为其申请资源锁。
-# 缺陷类型：拒绝路径出现写副作用或锁申请。
+# 目的：真正**被拒绝**的补丁绝不写文件、retryable=True。
+# 缺陷类型：拒绝路径出现写副作用。
 # 2026-09-21 契约 B：计数不符改为按正文重算 + 提示（会被接受并真的写入），因此本用例改用
-# **真正被拒绝的形状**（缺 '---' 头、二进制元数据）来继续保障「拒绝 → 零写入 + 不申请锁」。
-def test_rejected_patch_writes_nothing_and_requests_no_lock(tmp_path: pathlib.Path) -> None:
+# **真正被拒绝的形状**（缺 '---' 头、二进制元数据）来继续保障「拒绝 → 零写入」。
+def test_rejected_patch_writes_nothing(tmp_path: pathlib.Path) -> None:
     rejected_shapes = {
         "missing '---' header": "diff --git a/m.txt b/m.txt\n+++ b/m.txt\n@@ -1,1 +1,1 @@\n-a\n+A",
         "binary metadata": (
@@ -598,23 +597,10 @@ def test_rejected_patch_writes_nothing_and_requests_no_lock(tmp_path: pathlib.Pa
 
     for name, patch in rejected_shapes.items():
         observation = _execute(tmp_path, patch, 4600)
-        resources = FileResourceResolver(tmp_path).resolve("apply_patch", {"patch": patch})
 
         assert observation.status == "error", name
-        assert observation.retryable is True, name
+        assert "hint: this error can be retried" in observation.content, name
         assert target.read_bytes() == b"a\nb\n", name
-        assert resources.write_paths == (), name
-        assert resources.lock_paths == (), name
-
-
-# 目的：合法补丁必须照常解析出写路径与锁。缺陷类型：过度拒绝导致调度链失配。
-def test_valid_patch_still_requests_write_paths_and_locks(tmp_path: pathlib.Path) -> None:
-    patch = _valid_patch("m.txt")
-
-    resources = FileResourceResolver(tmp_path).resolve("apply_patch", {"patch": patch})
-
-    assert resources.write_paths == (tmp_path / "m.txt",)
-    assert (tmp_path / "m.txt") in resources.lock_paths
 
 
 # 目的：解析必须纯函数、可重复、不改入参。缺陷类型：缓存污染 / 原地改写。
@@ -686,7 +672,7 @@ def test_syntax_stage_resolution_failure_is_skipped_not_raised(
     tmp_path: pathlib.Path,
     monkeypatch,
 ) -> None:
-    from app.core.tools.tool_handler.security.path_resolver import PathResolver
+    from app.tools.tool_handler.security.path_resolver import PathResolver
 
     (tmp_path / "m.py").write_bytes(b"def f():\n    return 1\n")
     patch = _section("m.py", "@@ -2,1 +2,1 @@", "-    return 1", "+    return 2") + "\n"
@@ -709,7 +695,7 @@ def test_syntax_stage_resolution_failure_is_skipped_not_raised(
 
     assert (
         observation.status == "success"
-    ), f"写后 syntax 阶段解析失败必须被跳过而不是报错：{observation.error!r}"
+    ), f"写后 syntax 阶段解析失败必须被跳过而不是报错：{observation.content!r}"
     assert (tmp_path / "m.py").read_bytes() == b"def f():\n    return 2\n"
 
 
@@ -723,7 +709,7 @@ def test_context_free_insertion_hunk_is_written_at_the_right_place(
 
     observation = _execute(tmp_path, patch, 4801)
 
-    assert observation.status == "success", f"纯插入 hunk 应被应用：{observation.error!r}"
+    assert observation.status == "success", f"纯插入 hunk 应被应用：{observation.content!r}"
     written = (tmp_path / "m.txt").read_bytes().decode("utf-8")
     assert "INSERTED" in written
 

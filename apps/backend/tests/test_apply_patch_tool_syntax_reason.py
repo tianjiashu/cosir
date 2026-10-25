@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tools.guard.syntax_check import SyntaxDiagnostic
-from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
+from app.tools.guard.syntax_check import SyntaxDiagnostic
+from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 
 
 def _diagnostic(
@@ -125,7 +125,6 @@ def test_returned_literals_in_source_are_ascii() -> None:
     source = (
         Path(__file__).resolve().parents[1]
         / "app"
-        / "core"
         / "tools"
         / "tool_handler"
         / "apply_patch_tool.py"
@@ -198,7 +197,7 @@ def test_output_is_deterministic() -> None:
 # A successful patch that leaves an invalid ``.py`` file must still report
 # ``success`` but carry English, ASCII syntax guidance in ``content``.
 def test_success_with_broken_python_reports_english_syntax_content(tmp_path: Path) -> None:
-    from app.core.tools.schemas import ToolExecutionContext
+    from app.core.tool.schemas import ToolExecutionContext
 
     target = tmp_path / "mod.py"
     target.write_bytes(b"def f(\n")
@@ -224,7 +223,7 @@ def test_success_with_broken_python_reports_english_syntax_content(tmp_path: Pat
 
 # A cancelled run must short-circuit to ``cancelled`` before any hunk is written.
 def test_cancelled_run_returns_cancelled_without_writing(tmp_path: Path) -> None:
-    from app.core.tools.schemas import ToolExecutionContext
+    from app.core.tool.schemas import ToolExecutionContext
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )

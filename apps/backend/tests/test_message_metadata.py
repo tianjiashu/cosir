@@ -39,7 +39,7 @@ from app.models.message_metadata import ToolMessageMetadata, parse_message_metad
             {"role": "tool", "tool_call_id": "call-1", "content": "private model result"},
             {
                 "status": "running",
-                "display_data": {"user_input_request": {"request_id": "request-1"}},
+                "display_data": {"kind": "read-file-meta", "path": "a.txt"},
             },
         ),
     ],
@@ -75,6 +75,26 @@ def test_storage_boundary_rejects_role_mismatch_and_obsolete_shapes(role, metada
         parse_message_metadata(role, metadata)
 
 
+def _running_state(part: dict) -> dict:
+    """Run 1 运行中、只有一条助手消息承载 ``part`` 的最小 Task snapshot。"""
+
+    return {
+        "messages": [
+            {"id": "assistant-1", "role": "assistant", "parts": [part], "runId": 1, "outcome": None}
+        ],
+        "activity": {
+            "runId": 1,
+            "status": "running",
+            "endReason": None,
+            "error": None,
+            "usage": None,
+            "contextWindowTotal": None,
+            "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+        },
+        "error": None,
+    }
+
+
 @pytest.mark.parametrize(
     "metadata",
     [
@@ -92,7 +112,7 @@ def test_storage_boundary_rejects_role_mismatch_and_obsolete_shapes(role, metada
         ToolMessageMetadata(status="cancelled", error="已取消"),
         ToolMessageMetadata(
             status="running",
-            display_data={"user_input_request": {"request_id": "wait-1"}},
+            display_data={"kind": "agent-team-approval", "team_run_id": 5},
             team_run_id=5,
         ),
     ],
@@ -128,9 +148,9 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
     )
     initial = ConversationTaskStateRebuilder.build_pair_tool_part([call])["call-1"]
     initial["status"] = "running"
-    initial["display_data"] = {"user_input_request": {"request_id": "old-request"}}
+    initial["display_data"] = {"kind": "read-file-meta", "path": "old.txt"}
     initial["error"] = "old error"
-    state = {"runs": [{"runId": 1, "messages": [{"role": "assistant", "parts": [initial]}]}]}
+    state = _running_state(initial)
     event = ToolCallStatusChangedEvent(
         task_id=1,
         run_id=1,
@@ -161,7 +181,7 @@ def test_final_tool_metadata_keeps_accumulated_terminal_preview():
         "display_data": {"kind": "terminal-result", "output": "full output"},
         "terminal_output_seq": 3,
     }
-    state = {"runs": [{"runId": 1, "messages": [{"role": "assistant", "parts": [part]}]}]}
+    state = _running_state(part)
     event = ToolCallStatusChangedEvent(
         task_id=1,
         run_id=1,

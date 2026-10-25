@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.agent_team import coordinator as coordinator_module
-from app.agent_team.coordinator import AgentTeamCoordinator
+from app.service.agent_team import coordinator as coordinator_module
+from app.service.agent_team.coordinator import AgentTeamCoordinator
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 
 _TEAM_RUN = 3
@@ -41,11 +41,11 @@ class _Node:
             return False
         return True
 
-    async def cancel(self, task_id: int, reason: str = "user") -> bool:
+    def cancel(self, task_id: int, reason: str) -> None:
+        # Coordinator 经 call_soon_threadsafe 在主事件循环上调用：只发停止信号、不等回执。
         assert reason == "parent"
         self.cancelled.append(task_id)
         self._released.set()
-        return True
 
 
 class _TeamRuns:
@@ -62,7 +62,7 @@ def test_node_wait_stops_node_when_team_run_is_cancelled(
     monkeypatch: pytest.MonkeyPatch, main_loop: asyncio.AbstractEventLoop
 ) -> None:
     node = _Node()
-    monkeypatch.setattr(coordinator_module, "get_workflow_session", lambda: node)
+    monkeypatch.setattr(coordinator_module, "get_task_actors", lambda: node)
     runs = _TeamRuns(AgentTeamRunStatus.RUNNING.value)
     coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
     coordinator._team_run_crud = runs

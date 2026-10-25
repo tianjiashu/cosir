@@ -16,12 +16,12 @@ from pathlib import Path
 import pytest
 
 from app.config import configuration
-from app.core.tools.schemas.tool_call import ToolCall
-from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
-from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
-from app.core.tools.tool_handler.child_task import child_agent_create
-from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.schemas.tool_call import ToolCall
+from app.core.tool.schemas import ToolExecutionContext
+from app.core.tool.execute.tool_access_gate import ToolAccessGate
+from app.core.tool.child_agent import child_agent_create
+from app.core.tool.child_agent.delegate_task_args import DelegateTaskArgs
+from app.core.tool.tool_registry import ToolRegistry
 
 
 class _PermanentlyBrokenRegistry:

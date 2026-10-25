@@ -39,7 +39,7 @@ async def test_startup_failure_closes_initialized_runtime_resources(
 
     monkeypatch.setattr(
         lifespan_module,
-        "get_workflow_session",
+        "get_task_actors",
         _CachedGetter(_Executor(), calls, "get_executor"),
     )
     monkeypatch.setattr(

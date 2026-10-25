@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.core.tools.tool_handler.web.providers.firecrawl_provider import FirecrawlProvider
+from app.core.tool.web.providers.firecrawl_provider import FirecrawlProvider
 from app.utils import http_proxy as proxy_module
 from app.utils.http_proxy import resolve_httpx_proxy
 

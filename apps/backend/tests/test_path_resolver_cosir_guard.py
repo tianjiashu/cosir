@@ -12,20 +12,15 @@
 
 from pathlib import Path
 
-import pytest
 
-from app.core.tools.guard.file_resource_paths import (
-    FileResourcePathError,
-    FileResourceResolver,
-)
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.core.tools.tool_handler.delete_tool import DeleteTool
-from app.core.tools.tool_handler.move_tool import MoveTool
-from app.core.tools.tool_handler.read_file import ReadFileTool
-from app.core.tools.tool_handler.replace_tool import ReplaceTool
-from app.core.tools.tool_handler.security.path_resolver import PathResolver
-from app.core.tools.tool_handler.write_file import WriteFileTool
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.delete_tool import DeleteTool
+from app.tools.tool_handler.move_tool import MoveTool
+from app.tools.tool_handler.read_file import ReadFileTool
+from app.tools.tool_handler.replace_tool import ReplaceTool
+from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.tool_handler.write_file import WriteFileTool
 from app.service.terminal.terminal_session_service import TerminalSessionService
 
 
@@ -204,15 +199,6 @@ def test_read_file_can_still_read_cosir(tmp_path: Path) -> None:
 
 
 # --- 4. 调度期资源路径与终端边界 ----------------------------------------------
-
-
-def test_resource_resolution_rejects_cosir_write_path(tmp_path: Path) -> None:
-    """调度期写路径解析同样拒绝 ``.cosir``（不进入路径锁 / revision 登记）。"""
-
-    root = tmp_path / "ws"
-    root.mkdir()
-    with pytest.raises(FileResourcePathError):
-        FileResourceResolver(root).resolve("write_file", {"path": ".cosir/x.txt"})
 
 
 def test_terminal_cwd_inside_cosir_is_allowed(tmp_path: Path) -> None:

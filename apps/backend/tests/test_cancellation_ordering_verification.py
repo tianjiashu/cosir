@@ -46,24 +46,23 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
-    UserInputConsumedEvent,
 )
-from app.core.tools.schemas import (
+from app.core.tool.schemas import (
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
 )
-from app.core.tools.tool_execute import tool_handler_runner as runner_module
-from app.core.tools.tool_execute import tool_terminal_projection as projection_module
-from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
-from app.core.tools.tool_execute.tool_executor import ToolExecutor
-from app.core.tools.tool_execute.tool_output_channel import BufferedProcessToolOutputChannel
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.execute import tool_handler_runner as runner_module, tool_terminal_projection as projection_module
+from app.core.tool.results.tool_cancelled import tool_cancelled
+from app.core.tool.execute.tool_executor import ToolExecutor
+from app.core.tool.execute.tool_output_channel import BufferedProcessToolOutputChannel
+from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
-from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
+from app.models.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_batch_runner
 from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
+from tests.transport_fixtures import consumed, queue_user_input
 
 _RUN_ID = 960001
 _TASK_ID = 12
@@ -187,7 +186,6 @@ class _MemorySnapshotOwner:
             task_id=event.task_id,
             kind="mutation",
             mutations=mutations,
-            source_run_id=getattr(event, "run_id", None),
         )
 
 
@@ -249,11 +247,10 @@ def _make_process_tool(name: str, *, timeout_seconds: float = 60.0) -> ToolDefin
 
 def _batch_runtime(
     executor: Any,
-    *call_ids: str,
     workspace_root: Path = Path("."),
     event_sink: Any = None,
 ) -> Any:
-    """``_execute_call`` 所需的最小 ``RuntimeContext``：给定调用均视为本步已创建工具卡片。
+    """``_execute_call`` 所需的最小 ``RuntimeContext``；投影记账见 :func:`_projected_batch`。
 
     执行上下文由 ``_execute_call`` 按调用从这里的 run / task / workspace / event_sink 构造。
     """
@@ -265,11 +262,17 @@ def _batch_runtime(
         event_sink=event_sink or (lambda _event: None),
         tool_executor=executor,
         allows_tools=frozenset({_STREAMING_TOOL_NAME}),
-        batch=ToolBatch(
-            valid_tool_calls={
-                call_id: ValidToolCall(_STREAMING_TOOL_NAME, "projected") for call_id in call_ids
-            }
-        ),
+    )
+
+
+def _projected_batch(*call_ids: str) -> ToolBatch:
+    """给定调用均视为本步已创建工具卡片的批次。"""
+
+    return ToolBatch(
+        valid_tool_calls={
+            call_id: ValidToolCall(name=_STREAMING_TOOL_NAME, projection="projected")
+            for call_id in call_ids
+        }
     )
 
 
@@ -306,14 +309,11 @@ async def test_projection_ordering_kill_then_drain_then_project(
     owner = _MemorySnapshotOwner(empty_snapshot())
     real_projector = ConversationEventProjector(owner)
     real_projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
-    real_projector.process(
-        UserInputConsumedEvent(
-            task_id=_TASK_ID,
-            run_id=_RUN_ID,
-            message_id="user-1",
-            presentation=UserInputPresentation(display_text="test"),
-        )
+    # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
+    queue_user_input(
+        real_projector._state_service.state, 1, UserInputPresentation(display_text="test")
     )
+    real_projector.process(consumed(_TASK_ID, _RUN_ID, 1))
     real_projector.process(
         RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running")
     )
@@ -354,15 +354,14 @@ async def test_projection_ordering_kill_then_drain_then_project(
     try:
         observation = await asyncio.to_thread(
             tool_batch_runner._execute_call,
-            _batch_runtime(
-                executor, "call-cancel", workspace_root=tmp_path, event_sink=stream_sink
-            ),
+            _batch_runtime(executor, workspace_root=tmp_path, event_sink=stream_sink),
             ToolCall(
                 tool_name=_STREAMING_TOOL_NAME,
                 arguments=json.dumps({"marker_path": str(marker)}),
                 call_id="call-cancel",
             ),
             "step-1",
+            _projected_batch("call-cancel"),
             asyncio.get_running_loop(),
         )
     finally:
@@ -376,7 +375,7 @@ async def test_projection_ordering_kill_then_drain_then_project(
         pytest.skip(
             "本环境下 process 工具子进程未能启动（spawn WinError 6 等环境限制），"
             f"无法观测真实取消时序；observation={observation.status!r} "
-            f"reason={(observation.reason or '')[:120]!r}"
+            f"content={(observation.content or '')[:120]!r}"
         )
 
     # ---- 时序证据（真实时间戳排序，非替身调用栈）----
@@ -424,7 +423,7 @@ async def test_projection_ordering_kill_then_drain_then_project(
     assert status_events[1].error == "已取消"
 
     # 真实 snapshot 的 part 终态。
-    part = owner.state["runs"][0]["messages"][1]["parts"][0]
+    part = owner.state["messages"][1]["parts"][0]
     assert part["status"] == "cancelled"
 
     # 端到端：取消期间确实流出过真实实时输出（排空有实质内容），且被投影进 snapshot。
@@ -501,7 +500,7 @@ async def test_cancel_path_never_touches_shared_projection(
     assert observation.status == "cancelled"
     assert emitted == [], f"取消路径触达了工作流事件出口：{emitted}"
     assert mapped == [], "取消路径在执行层构造了终态事件"
-    # 旧的通知旁路实体与 core/tools 内的全局 projector 依赖必须不存在（第二层护栏）。
+    # 旧的通知旁路实体与 tools 内的全局 projector 依赖必须不存在（第二层护栏）。
     assert not hasattr(runner_module.ToolHandlerRunner, "_notify_tool_call_cancelled")
     assert not hasattr(runner_module, "get_conversation_event_projector")
     assert not hasattr(projection_module, "get_conversation_event_projector")
@@ -517,14 +516,9 @@ def _seed_running_execute_terminal(projector: ConversationEventProjector, call_i
     """在真实 projector 上初始化一个 ``execute_terminal`` 的 running part。"""
 
     projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
-    projector.process(
-        UserInputConsumedEvent(
-            task_id=_TASK_ID,
-            run_id=_RUN_ID,
-            message_id="user-1",
-            presentation=UserInputPresentation(display_text="test"),
-        )
-    )
+    # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
+    queue_user_input(projector._state_service.state, 1, UserInputPresentation(display_text="test"))
+    projector.process(consumed(_TASK_ID, _RUN_ID, 1))
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))
     projector.process(
         ToolCallCreatedEvent(
@@ -571,9 +565,10 @@ def _project_cancelled_via_real_path(
 
     monkeypatch.setattr(tool_batch_runner, "emit", _emit)
     tool_batch_runner._execute_call(
-        _batch_runtime(_CancelledExecutor(), call_id),
+        _batch_runtime(_CancelledExecutor()),
         ToolCall(tool_name="execute_terminal", arguments="{}", call_id=call_id),
         "step-1",
+        _projected_batch(call_id),
         None,
     )
     assert len(captured) == 1
@@ -603,7 +598,7 @@ def test_real_cancel_projection_keeps_streamed_output(
             data=TerminalOutputDeltaData(kind="terminal_output_delta", text=streamed),
         )
     )
-    assert owner.state["runs"][0]["messages"][1]["parts"][0]["display_data"]["output"] == streamed
+    assert owner.state["messages"][1]["parts"][0]["display_data"]["output"] == streamed
 
     event = _project_cancelled_via_real_path(monkeypatch, projector, "call-t")
 
@@ -612,7 +607,7 @@ def test_real_cancel_projection_keeps_streamed_output(
     assert event.error == "已取消"
     assert event.display_data == {}
 
-    part = owner.state["runs"][0]["messages"][1]["parts"][0]
+    part = owner.state["messages"][1]["parts"][0]
     assert part["status"] == "cancelled"
     assert part["error"] == "已取消"
     assert part["display_data"]["kind"] == "terminal-result"

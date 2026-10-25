@@ -12,11 +12,11 @@ from pathlib import Path
 import pytest
 
 from app.config import configuration
-from app.core.tools.schemas.tool_definition import ToolDefinition
-from app.core.tools.schemas.tool_execution_context import ToolExecutionContext
-from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
+from app.core.tool.schemas.tool_definition import ToolDefinition
+from app.core.tool.schemas import ToolExecutionContext
+from app.core.tool.child_agent.delegate_task_args import DelegateTaskArgs
 
-child_agent_create = import_module("app.core.tools.tool_handler.child_task.child_agent_create")
+child_agent_create = import_module("app.core.tool.child_agent.child_agent_create")
 
 
 def _model_payload(definition: ToolDefinition) -> dict:

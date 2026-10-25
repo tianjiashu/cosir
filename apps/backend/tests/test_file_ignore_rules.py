@@ -15,16 +15,13 @@ import logging
 from pathlib import Path
 from time import monotonic
 
-from app.core.tools.guard.file_tool_state_coordinator import FileToolStateCoordinator
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.find_files import FindFilesTool
-from app.core.tools.tool_handler.search.file_walker import iter_files
-from app.core.tools.tool_handler.search.gitignore_rules import (
+from app.tools.tool_handler.search.file_walker import iter_files
+from app.tools.tool_handler.search.gitignore_rules import (
     GitignoreMatcher,
     build_gitwildmatch_spec,
     load_gitignore_rules,
 )
-from app.core.tools.tool_handler.search.ignore_rules import (
+from app.tools.tool_handler.search.ignore_rules import (
     DEFAULT_IGNORED_DIR_NAMES,
     IGNORE_FILE_NAME,
     CompositeIgnoreMatcher,
@@ -33,7 +30,7 @@ from app.core.tools.tool_handler.search.ignore_rules import (
     load_fileignore_rules,
     load_search_ignore_rules,
 )
-from app.core.tools.tool_handler.search.scope import SearchScope
+from app.tools.tool_handler.search.scope import SearchScope
 
 
 def _write_ignore_file(workspace: Path, content: str) -> Path:
@@ -202,33 +199,6 @@ def test_search_scope_applies_workspace_fileignore(tmp_path: Path) -> None:
     assert tmp_path / "generated" / "gen.py" not in produced
     # .cosir 按设计允许遍历，规则文件自身可见。
     assert ignore_file_path(tmp_path) in produced
-
-
-def test_prepare_observed_paths_follows_workspace_fileignore(tmp_path: Path) -> None:
-    """文件状态协调器经公开 ``prepare`` 采样时遵循同一忽略规则，避免把被忽略目录计入。"""
-
-    _write_ignore_file(tmp_path, "generated\n")
-    kept = _touch(tmp_path / "src" / "main.py")
-    _touch(tmp_path / "generated" / "gen.py")
-    definition = FindFilesTool().to_definition()
-    context = ToolExecutionContext(
-        step_id="step-1",
-        task_id=1,
-        workspace_id=1,
-        workspace_root=tmp_path,
-        run_id=0,
-    )
-
-    plan = FileToolStateCoordinator().prepare(
-        definition,
-        {"path": ".", "pattern": "*.py"},
-        context,
-        tool_call_id="call-ignore-rules",
-    )
-
-    assert plan.snapshot_complete is True
-    assert kept in plan.observed_paths
-    assert tmp_path / "generated" / "gen.py" not in plan.observed_paths
 
 
 def test_read_failure_degrades_to_default_rules_and_logs(

@@ -1,7 +1,7 @@
 """Adversarial tests for the hunk line-count recomputation pass.
 
 被测对象：``patch_parser._recompute_hunk_counts`` 及其在 ``parse_git_unified_diff`` /
-``parse_git_unified_diff_detailed`` / ``ApplyPatchTool`` / ``FileResourceResolver`` 中的接线。
+``parse_git_unified_diff_detailed`` / ``ApplyPatchTool`` 中的接线。
 目标是**发现缺陷**，不是复述实现。
 
 2026-09-21 契约 B：计数不符的补丁**不再被拒绝**，而是按正文重算 ``@@`` 头后照常应用，并把
@@ -16,7 +16,7 @@
    ``source_length`` / ``target_length`` 必须等于正文实际行数；自洽的 hunk 不得出现。
 3. 诊断质量：section/hunk 序号、头部原文、声明值、实际值齐全且顺序稳定；纯 ASCII。
 4. 安全性：接受（重算）后**必须真的写文件**；被拒绝的补丁仍绝不写文件、``retryable`` 语义
-   不变、不得为无效补丁申请资源锁；接受后 ``FileResourceResolver`` **必须**申请写路径与锁。
+   不变。
 5. 幂等 / 无副作用：可重复调用结果一致、不修改入参；``section_index`` 呈现从 1 起。
 """
 
@@ -30,10 +30,9 @@ from unidiff import PatchSet
 from unidiff.constants import RE_HUNK_HEADER
 from unidiff.errors import UnidiffParseError
 
-from app.core.tools.guard.file_resource_paths import FileResourceResolver
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.core.tools.tool_handler.patch_write.patch_parser import (
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.patch_write import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
@@ -47,7 +46,7 @@ LEGACY_COUNT_REJECTION = "hunk line counts do not match"
 def _hunk_count_diagnostics(section: str, section_index: int) -> list[str]:
     """测试侧视图：解析层现在「按正文重算计数」，本函数返回重算时产出的提示列表。"""
 
-    module = pytest.importorskip("app.core.tools.tool_handler.patch_write.patch_parser")
+    module = pytest.importorskip("app.tools.tool_handler.patch_write.patch_parser")
     return module._recompute_hunk_counts(section, section_index)[1]
 
 
@@ -617,7 +616,6 @@ def test_miscounted_patch_is_applied_with_a_complete_note(tmp_path: Path) -> Non
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
 
     assert observation.status == "success"
-    assert observation.error is None
     assert observation.content is not None
     assert observation.content.startswith("success\n")
     assert "'@@ -1,2 +1,2 @@' declared source=2 target=2 but body has source=3 target=3" in (
@@ -652,42 +650,6 @@ def test_one_miscounted_section_still_writes_every_file(tmp_path: Path) -> None:
     assert "file section 1 hunk 1" not in observation.content, "自洽的 section 不得出现在提示中"
 
 
-# 目的：计数不符的补丁现在**会**被工具接受并写入，因此资源解析**必须**为它申请写路径与锁
-# （否则调度层与实际写入不一致，可能并发覆盖同一文件）。
-# 缺陷类型：工具实际写入但资源解析未申请锁（锁语义与实际写入失配）。
-# 2026-09-21 契约 B：原「计数不符 → 不申请锁」的期望已过时，翻转为「确实申请锁」。
-def test_miscounted_patch_requests_its_resource_lock(tmp_path: Path) -> None:
-    patch = _section("@@ -1,2 +1,2 @@", " a", "-b", "+c", " d")
-
-    resources = FileResourceResolver(tmp_path).resolve("apply_patch", {"patch": patch})
-
-    assert resources.write_paths == (tmp_path / "mod.txt",)
-    assert (tmp_path / "mod.txt") in resources.lock_paths
-
-
-# 目的：真正**被拒绝**的补丁（非计数不符形状）仍不得申请任何资源锁。
-# 缺陷类型：锁申请先于校验。
-def test_invalid_patch_requests_no_resource_lock(tmp_path: Path) -> None:
-    patch = "not a diff"
-
-    resources = FileResourceResolver(tmp_path).resolve("apply_patch", {"patch": patch})
-
-    assert resources.write_paths == ()
-    assert resources.lock_paths == ()
-
-
-# 目的：计数自洽的补丁必须照常申请写路径与锁（新增校验不得破坏调度链）。
-# 缺陷类型：过度拒绝导致资源未解析。
-def test_valid_patch_still_requests_write_paths_and_locks(tmp_path: Path) -> None:
-    patch = _section("@@ -1,2 +1,2 @@", " a", "-b", "+c")
-
-    resources = FileResourceResolver(tmp_path).resolve("apply_patch", {"patch": patch})
-
-    assert resources.write_paths == (tmp_path / "mod.txt",)
-    assert (tmp_path / "mod.txt") in resources.lock_paths
-    assert resources.write_paths, "合法补丁必须解析出写路径，否则会与 handler 的校验阶段失配"
-
-
 # 目的：计数不符时模型可见通道必须给出**完整重算提示**（定位 + 声明值 + 实际值），使模型能核对
 # 「按正文应用」的结果；不再有 ``error``/``reason`` 通道（那是旧拒绝语义）。
 # 缺陷类型：接受却无提示，或提示残缺导致模型无法核对。
@@ -699,7 +661,6 @@ def test_model_visible_note_guides_the_recomputation(tmp_path: Path) -> None:
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
 
     assert observation.status == "success"
-    assert observation.error is None
     assert observation.content is not None
     assert "note: hunk headers declared counts that did not match the hunk body" in (
         observation.content

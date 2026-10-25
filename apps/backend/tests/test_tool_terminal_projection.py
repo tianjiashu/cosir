@@ -36,24 +36,23 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
 )
-from app.core.tools.schemas import (
+from app.core.tool.schemas import (
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tools.tool_execute import tool_executor as tool_executor_module
-from app.core.tools.tool_execute import tool_terminal_projection as projection_module
-from app.core.tools.tool_execute.tool_executor import ToolExecutor
-from app.core.tools.tool_execute.tool_terminal_projection import (
+from app.core.tool.execute import tool_terminal_projection as projection_module, tool_executor as tool_executor_module
+from app.core.tool.execute.tool_executor import ToolExecutor
+from app.core.tool.execute.tool_terminal_projection import (
     normalize_display_data,
     terminal_error_hint,
     terminal_event,
     terminal_status,
 )
-from app.core.tools.tool_handler.read_file import ReadFileTool
-from app.core.tools.tool_registry import ToolRegistry
-from app.core.workflow.execution_state.tool_batch import ValidToolCall
+from app.tools.tool_handler.read_file import ReadFileTool
+from app.core.tool.tool_registry import ToolRegistry
+from app.models.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
 from tests.runtime_context_stub import runtime_stub
@@ -91,7 +90,6 @@ class _MemorySnapshotOwner:
             task_id=event.task_id,
             kind="mutation",
             mutations=mutations,
-            source_run_id=getattr(event, "run_id", None),
         )
 
 
@@ -160,8 +158,8 @@ def _runtime(
     banned: tuple[str, ...] = (),
     allows: frozenset[str] = frozenset({"read_file"}),
     **overrides: Any,
-) -> SimpleNamespace:
-    """搭一个 Run 作用域替身：``projected`` 为本步已建卡片的 call_id → 工具名。"""
+) -> tuple[SimpleNamespace, ToolBatch]:
+    """搭一个 Run 作用域替身与本步批次：``projected`` 为本步已建卡片的 call_id → 工具名。"""
 
     rc = runtime_stub(
         tool_executor=executor,
@@ -169,11 +167,12 @@ def _runtime(
         allows_tools=allows,
         **overrides,
     )
+    batch = ToolBatch()
     for call_id, name in (projected or {}).items():
-        rc.batch.valid_tool_calls[call_id] = ValidToolCall(name=name, projection="projected")
+        batch.valid_tool_calls[call_id] = ValidToolCall(name=name, projection="projected")
     for call_id in banned:
-        rc.batch.valid_tool_calls[call_id] = ValidToolCall(name="read_file", projection="banned")
-    return rc
+        batch.valid_tool_calls[call_id] = ValidToolCall(name="read_file", projection="banned")
+    return rc, batch
 
 
 def _observation(
@@ -186,9 +185,7 @@ def _observation(
     return ToolObservation(
         tool_name=tool_name,
         status=status,
-        content="body" if status == "success" else None,
-        error="boom" if status == "error" else None,
-        reason="why" if status == "error" else None,
+        content={"success": "body", "error": "error: boom\nreason: why"}.get(status),
         tool_call_id=tool_call_id,
         display_data=display_data,
     )
@@ -302,8 +299,7 @@ def test_terminal_event_keeps_status_when_display_data_is_not_a_mapping(
     observation = ToolObservation(
         tool_name="read_file",
         status="error",
-        content=None,
-        error="boom",
+        content="error: boom",
         tool_call_id="call-1",
         display_data=["not", "a", "mapping"],  # type: ignore[arg-type]
     )
@@ -367,7 +363,7 @@ def test_dropped_log_carries_full_identity(caplog: pytest.LogCaptureFixture) -> 
 
 
 def test_projection_module_does_not_reach_global_projector() -> None:
-    """边界：core/tools 的终态映射是纯函数，不得再持有进程级 projector 入口。"""
+    """边界：tools 的终态映射是纯函数，不得再持有进程级 projector 入口。"""
 
     assert not hasattr(projection_module, "get_conversation_event_projector")
     assert not hasattr(projection_module, "project_tool_terminal_state")
@@ -383,8 +379,14 @@ def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: s
     projector = ConversationEventProjector(owner)
     projector.process(RunInitializedEvent(task_id=task_id, run_id=run_id))
     projector.process(RunStatusChangedEvent(task_id=task_id, run_id=run_id, status="running"))
-    owner.state["runs"][-1]["messages"].append(
-        {"id": f"assistant-{run_id}", "role": "assistant", "parts": []}
+    owner.state["messages"].append(
+        {
+            "id": f"assistant-{run_id}",
+            "role": "assistant",
+            "parts": [],
+            "runId": run_id,
+            "outcome": None,
+        }
     )
     projector.process(
         ToolCallCreatedEvent(
@@ -403,8 +405,9 @@ def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: s
 
 
 def _part(owner: _MemorySnapshotOwner, run_id: int, call_id: str) -> dict[str, Any]:
-    run = next(r for r in owner.state["runs"] if r["runId"] == run_id)
-    for message in run["messages"]:
+    for message in owner.state["messages"]:
+        if message["runId"] != run_id:
+            continue
         for part in message["parts"]:
             if isinstance(part, dict) and part.get("toolCallId") == call_id:
                 return part
@@ -512,10 +515,10 @@ def test_success_emits_running_then_completed(
     """成功路径：先 running（携带展示参数），后恰一次 completed（display_data 不丢）。"""
 
     recorder = _install_recorder(monkeypatch)
-    rc = _runtime(tmp_path, _make_read_file_executor(tmp_path), projected={"call-ok": "read_file"})
+    rc, batch = _runtime(tmp_path, _make_read_file_executor(tmp_path), projected={"call-ok": "read_file"})
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"), "step-1", _NO_LOOP
+        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"), "step-1", batch, _NO_LOOP
     )
 
     assert observation.status == "success"
@@ -550,7 +553,7 @@ def test_running_is_emitted_only_after_admission(
         handler=_handler,
         args_model=_ProbeArgs,
     )
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         ToolExecutor(ToolRegistry([definition])),
         projected={"call-probe": "probe"},
@@ -558,7 +561,7 @@ def test_running_is_emitted_only_after_admission(
     )
 
     tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-probe"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-probe"), "s", batch, _NO_LOOP
     )
 
     assert seen_during_handler == [["running"]]
@@ -571,12 +574,12 @@ def test_unknown_tool_emits_failed_without_running(
     """未注册工具（门禁拒绝）：不发 running，恰一次 failed 终态。"""
 
     recorder = _install_recorder(monkeypatch)
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path, _make_read_file_executor(tmp_path), projected={"call-unknown": "no_such_tool"}
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-unknown"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-unknown"), "s", batch, _NO_LOOP
     )
 
     assert observation.status == "error"
@@ -591,7 +594,7 @@ def test_profile_denied_tool_emits_failed_without_running(
     """Agent profile 权限拒绝：不发 running，恰一次 failed 终态（工具级短提示）。"""
 
     recorder = _install_recorder(monkeypatch)
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         _make_read_file_executor(tmp_path),
         projected={"call-denied": "read_file"},
@@ -599,7 +602,7 @@ def test_profile_denied_tool_emits_failed_without_running(
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-denied"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-denied"), "s", batch, _NO_LOOP
     )
 
     assert observation.status == "error"
@@ -613,10 +616,10 @@ def test_invalid_arguments_emit_failed_without_running(
     """参数非法：门禁拒绝，不发 running，恰一次 failed 终态。"""
 
     recorder = _install_recorder(monkeypatch)
-    rc = _runtime(tmp_path, _make_read_file_executor(tmp_path), projected={"call-bad": "read_file"})
+    rc, batch = _runtime(tmp_path, _make_read_file_executor(tmp_path), projected={"call-bad": "read_file"})
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments='{"nonexistent": 1}', call_id="call-bad"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="read_file", arguments='{"nonexistent": 1}', call_id="call-bad"), "s", batch, _NO_LOOP
     )
 
     assert observation.status == "error"
@@ -634,7 +637,7 @@ def test_invisible_call_emits_nothing(
     """
 
     recorder = _install_recorder(monkeypatch)
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         _make_read_file_executor(tmp_path),
         banned=("call-banned",),
@@ -643,7 +646,7 @@ def test_invisible_call_emits_nothing(
 
     for tool_name, call_id in (("no_such_tool", "call-unregistered"), ("read_file", "call-banned")):
         tool_batch_runner._execute_call(
-            rc, ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id), "s", _NO_LOOP
+            rc, ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id), "s", batch, _NO_LOOP
         )
 
     assert recorder.events == []
@@ -668,7 +671,7 @@ def test_execute_call_specializes_context_per_call(
         handler=_handler,
         args_model=_ProbeArgs,
     )
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         ToolExecutor(ToolRegistry([definition])),
         projected={"call-a": "probe"},
@@ -676,7 +679,7 @@ def test_execute_call_specializes_context_per_call(
     )
 
     tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-a"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-a"), "s", batch, _NO_LOOP
     )
 
     assert received == ["call-a"]
@@ -705,7 +708,7 @@ def test_malformed_display_data_still_emits_failed_terminal(
         args_model=_ProbeArgs,
         execution_mode="thread",
     )
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         ToolExecutor(ToolRegistry([definition])),
         projected={"call-bad-display": "bad_display"},
@@ -713,7 +716,7 @@ def test_malformed_display_data_still_emits_failed_terminal(
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="bad_display", arguments="{}", call_id="call-bad-display"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="bad_display", arguments="{}", call_id="call-bad-display"), "s", batch, _NO_LOOP
     )
 
     assert observation.status == "error"
@@ -730,7 +733,7 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
         calls.append(event)
         raise RuntimeError("sink exploded")
 
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         _make_read_file_executor(tmp_path),
         projected={"call-ok": "read_file"},
@@ -739,7 +742,7 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
 
     with execution_scope(rc, SimpleNamespace()):  # type: ignore[arg-type]
         observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"), "s", batch, _NO_LOOP
     )
 
     assert observation.status == "success"
@@ -775,7 +778,7 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
     """
 
     recorder = _install_recorder(monkeypatch)
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         _RaisingExecutor(RuntimeError("inner pipeline exploded")),
         projected={"call-boom": "read_file"},
@@ -783,14 +786,14 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
 
     with caplog.at_level("ERROR"):
         observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-boom"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-boom"), "s", batch, _NO_LOOP
     )
 
     assert observation.status == "error"
     assert observation.tool_call_id == "call-boom"
-    assert observation.error == "internal execution error in the tool pipeline: RuntimeError"
-    assert "inner pipeline exploded" not in (observation.error or "")
-    assert observation.retryable is False
+    assert observation.content.startswith("error: internal execution error in the tool pipeline: RuntimeError\n")
+    assert "inner pipeline exploded" not in observation.content
+    assert "hint: do not retry this tool call." in observation.content
     assert recorder.statuses("call-boom") == ["failed"]
     event = recorder.events[0]
     assert event.tool_call_id == "call-boom"
@@ -804,17 +807,17 @@ def test_executor_exception_after_start_closes_running_card(
     """已发 running 后执行链抛异常：必须补发 failed 终态封闭卡片。"""
 
     recorder = _install_recorder(monkeypatch)
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         _RaisingExecutor(ValueError("late failure"), start_first=True),
         projected={"call-late": "read_file"},
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-late"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-late"), "s", batch, _NO_LOOP
     )
 
-    assert observation.error == "internal execution error in the tool pipeline: ValueError"
+    assert observation.content.startswith("error: internal execution error in the tool pipeline: ValueError\n")
     assert recorder.statuses("call-late") == ["running", "failed"]
 
 
@@ -827,10 +830,10 @@ def test_executor_exception_on_invisible_call_emits_nothing(
     """
 
     recorder = _install_recorder(monkeypatch)
-    rc = _runtime(tmp_path, _RaisingExecutor(RuntimeError("x")))
+    rc, batch = _runtime(tmp_path, _RaisingExecutor(RuntimeError("x")))
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-hidden"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-hidden"), "s", batch, _NO_LOOP
     )
 
     assert observation.status == "error"
@@ -898,7 +901,7 @@ def test_projection_happens_in_parent_for_process_isolated_tool(
         execution_mode="process",
         timeout_seconds=30.0,
     )
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         ToolExecutor(ToolRegistry([definition])),
         projected={"call-proc": "process_probe"},
@@ -906,7 +909,7 @@ def test_projection_happens_in_parent_for_process_isolated_tool(
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="process_probe", arguments="{}", call_id="call-proc"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="process_probe", arguments="{}", call_id="call-proc"), "s", batch, _NO_LOOP
     )
 
     # 无论子进程链路是否成功（Windows + coverage 下 spawn 可能失败，属环境限制），父进程都必须
@@ -932,7 +935,7 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
         handler=_suspending_probe_handler,
         args_model=_ProbeArgs,
     )
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         ToolExecutor(ToolRegistry([definition])),
         projected={"call-suspend": "suspend_probe"},
@@ -940,7 +943,7 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="suspend_probe", arguments="{}", call_id="call-suspend"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="suspend_probe", arguments="{}", call_id="call-suspend"), "s", batch, _NO_LOOP
     )
 
     assert observation.status == "success"
@@ -959,8 +962,8 @@ def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
     projector = ConversationEventProjector(owner)
     projector.process(RunInitializedEvent(task_id=1, run_id=9))
     projector.process(RunStatusChangedEvent(task_id=1, run_id=9, status="running"))
-    owner.state["runs"][-1]["messages"].append(
-        {"id": "assistant-9", "role": "assistant", "parts": []}
+    owner.state["messages"].append(
+        {"id": "assistant-9", "role": "assistant", "parts": [], "runId": 9, "outcome": None}
     )
     projector.process(
         ToolCallCreatedEvent(
@@ -1030,7 +1033,7 @@ def test_parallel_batch_projects_each_call_independently(
     (tmp_path / "a.txt").write_text("AAA", encoding="utf-8")
     (tmp_path / "b.txt").write_text("BBB", encoding="utf-8")
     recorder = _install_recorder(monkeypatch)
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         _make_read_file_executor(tmp_path),
         projected={f"call-{i}": "read_file" for i in range(4)},
@@ -1043,7 +1046,7 @@ def test_parallel_batch_projects_each_call_independently(
         call_id = f"call-{index}"
         barrier.wait()
         results[call_id] = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments=json.dumps({"path": name}), call_id=call_id), "s", _NO_LOOP
+        rc, ToolCall(tool_name="read_file", arguments=json.dumps({"path": name}), call_id=call_id), "s", batch, _NO_LOOP
     )
 
     threads = [threading.Thread(target=run, args=(i,)) for i in range(4)]
@@ -1068,17 +1071,17 @@ def test_mixed_batch_distinct_statuses_do_not_cross_talk(
 
     (tmp_path / "good.txt").write_text("ok", encoding="utf-8")
     recorder = _install_recorder(monkeypatch)
-    rc = _runtime(
+    rc, batch = _runtime(
         tmp_path,
         _make_read_file_executor(tmp_path),
         projected={"call-good": "read_file", "call-bad": "no_such_tool"},
     )
 
     tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments='{"path": "good.txt"}', call_id="call-good"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="read_file", arguments='{"path": "good.txt"}', call_id="call-good"), "s", batch, _NO_LOOP
     )
     tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-bad"), "s", _NO_LOOP
+        rc, ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-bad"), "s", batch, _NO_LOOP
     )
 
     assert recorder.statuses("call-good") == ["running", "completed"]
@@ -1115,36 +1118,35 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
     task_id = task.id
     # 直接向进程内 state service 注入一条 run 骨架，使投影能命中 part。
     state = empty_snapshot()
-    state["runs"] = [
+    state["messages"] = [
+        {"id": "m0", "role": "user", "parts": [], "runId": 5, "outcome": None},
         {
-            "runId": 5,
-            "status": "running",
-            "endReason": None,
-            "contextWindowTotal": None,
-            "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
-            "messages": [
-                {"id": "m0", "role": "user", "parts": []},
+            "id": "m1",
+            "role": "assistant",
+            "parts": [
                 {
-                    "id": "m1",
-                    "role": "assistant",
-                    "parts": [
-                        {
-                            "type": "tool-call",
-                            "toolCallId": "call-r",
-                            "toolName": "read_file",
-                            "status": "running",
-                            "error": None,
-                            "isError": False,
-                            "presentation": {},
-                        }
-                    ],
-                },
+                    "type": "tool-call",
+                    "toolCallId": "call-r",
+                    "toolName": "read_file",
+                    "status": "running",
+                    "error": None,
+                    "isError": False,
+                    "presentation": {},
+                }
             ],
-            "usage": None,
-            "error": None,
-        }
+            "runId": 5,
+            "outcome": None,
+        },
     ]
-    state["current_run_id"] = 5
+    state["activity"] = {
+        "runId": 5,
+        "status": "running",
+        "endReason": None,
+        "error": None,
+        "usage": None,
+        "contextWindowTotal": None,
+        "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+    }
     projector.state_service.publish_state(task_id, state)
 
     projector.process(
@@ -1164,8 +1166,9 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
 
 
 def _part_from_state(state: ConversationStateSnapshot, run_id: int, call_id: str) -> dict[str, Any]:
-    run = next(r for r in state["runs"] if r["runId"] == run_id)
-    for message in run["messages"]:
+    for message in state["messages"]:
+        if message["runId"] != run_id:
+            continue
         for part in message["parts"]:
             if isinstance(part, dict) and part.get("toolCallId") == call_id:
                 return part

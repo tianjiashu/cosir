@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.delete_tool import (
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.delete_tool import (
     DELETE_FILE_DESCRIPTION,
     DeleteTool,
 )
@@ -32,9 +32,8 @@ def test_delete_rejects_invalid_path(tmp_path: Path, path: str) -> None:
     observation = DeleteTool().execute(_context(tmp_path), path=path)
 
     assert observation.status == "error"
-    assert observation.retryable is False
-    assert observation.error.isascii()
-    assert observation.reason.isascii()
+    assert "hint: do not retry this tool call." in observation.content
+    assert observation.content.isascii()
 
 
 # A missing target must be reported as not-an-existing-regular-file, in English.
@@ -42,8 +41,8 @@ def test_delete_missing_file_reports_english_error(tmp_path: Path) -> None:
     observation = DeleteTool().execute(_context(tmp_path), path="nope.txt")
 
     assert observation.status == "error"
-    assert observation.error == "delete target is not an existing regular file"
-    assert observation.error.isascii()
+    assert observation.content.startswith("error: delete target is not an existing regular file\n")
+    assert observation.content.isascii()
 
 
 # A cancelled run must short-circuit to ``cancelled`` and leave the file on disk.
@@ -79,10 +78,9 @@ def test_delete_unlink_oserror_is_normalized(tmp_path: Path, monkeypatch) -> Non
     observation = DeleteTool().execute(_context(tmp_path), path="fail.txt")
 
     assert observation.status == "error"
-    assert observation.retryable is True
-    assert observation.error.startswith("could not delete the target file: ")
-    assert observation.error.isascii()
-    assert observation.reason.isascii()
+    assert "hint: this error can be retried" in observation.content
+    assert observation.content.startswith("error: could not delete the target file: ")
+    assert observation.content.isascii()
     assert target.read_bytes() == b"data\n"
 
 
@@ -90,7 +88,7 @@ def test_delete_unlink_oserror_is_normalized(tmp_path: Path, monkeypatch) -> Non
 # (destination no longer resolves to the same file), the tool must refuse and report
 # the deterministic, non-retryable error rather than deleting the wrong entity.
 def test_delete_refuses_target_changed_before_mutation(tmp_path: Path, monkeypatch) -> None:
-    import app.core.tools.tool_handler.delete_tool as delete_module
+    import app.tools.tool_handler.delete_tool as delete_module
 
     target = tmp_path / "swap.txt"
     target.write_bytes(b"data\n")
@@ -113,10 +111,9 @@ def test_delete_refuses_target_changed_before_mutation(tmp_path: Path, monkeypat
     observation = DeleteTool().execute(_context(tmp_path), path="swap.txt")
 
     assert observation.status == "error"
-    assert observation.retryable is False
-    assert observation.error == "delete target changed before mutation"
-    assert observation.error.isascii()
-    assert observation.reason.isascii()
+    assert "hint: do not retry this tool call." in observation.content
+    assert observation.content.startswith("error: delete target changed before mutation\n")
+    assert observation.content.isascii()
     # Neither file was removed.
     assert target.exists()
     assert other.exists()

@@ -16,8 +16,8 @@ from pydantic import BaseModel
 from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.api.schemas.request.AgentConfigurationRequest import AgentConfigurationRequest
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
-from app.core.tools.schemas.tool_definition import ToolDefinition
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.schemas.tool_definition import ToolDefinition
+from app.core.tool.tool_registry import ToolRegistry
 
 
 class _PlaceholderArgs(BaseModel):

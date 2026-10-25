@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from app.core.tools.tool_handler import wait_messages as wait_module
-from app.core.tools.tool_handler.wait_messages import WaitMessagesTool
+from app.core.tool import wait_messages as wait_module
+from app.core.tool.wait_messages import WaitMessagesTool
 from app.models.task_message import AgentResultBody
 from app.service.conversation_run.task_actor import TaskActor
 
@@ -23,7 +23,7 @@ def _session(task: SimpleNamespace) -> tuple[TaskActor, list[tuple[int, Any]]]:
     actor._tasks = SimpleNamespace(get_task=lambda _task_id: task)
     posted: list[tuple[int, Any]] = []
     actor._session = SimpleNamespace(
-        post_nowait=lambda task_id, body: posted.append((task_id, body))
+        post=lambda task_id, body: posted.append((task_id, body))
     )
     return actor, posted
 

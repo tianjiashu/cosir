@@ -15,7 +15,7 @@ from app.core.context.runtime_message_context_manager import RuntimeMessageConte
 from app.core.events import RunStatusChangedEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.conversation_run_failure import run_failure_message
-from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.service.conversation_run.conversation_run_service import ConversationRunService
 from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
@@ -125,7 +125,7 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
 
     order: list[str] = []
     recovered_run = SimpleNamespace(
-        id=11, task_id=7, status="cancelled", execution_data=ConversationRunProgress()
+        id=11, task_id=7, status="cancelled", execution_data=ReactExecutionState()
     )
 
     class _Transaction:
@@ -287,8 +287,8 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
                 "reasoning_tokens": None,
             }
             assert kwargs["error"] == {
-                "code": "tool_error_limit_reached",
-                "message": run_failure_message("tool_error_limit_reached"),
+                "code": "max_steps_reached",
+                "message": run_failure_message("max_steps_reached"),
             }
             run.status = "failed"
             return run
@@ -311,7 +311,7 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
     try:
         result = service.transition(
             11, RunTransition.FAIL,
-            end_reason="tool_error_limit_reached",
+            end_reason="max_steps_reached",
             usage_stats=ConversationRunUsageStats(
                 input_tokens=3,
                 output_tokens=2,

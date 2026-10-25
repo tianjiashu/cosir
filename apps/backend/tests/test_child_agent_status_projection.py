@@ -167,11 +167,10 @@ def _service(sources: _Sources) -> ConversationTaskStateService:
 
 
 def _display_by_call(state: dict[str, object], tool_call_id: str) -> dict[str, object]:
-    for run in state["runs"]:  # type: ignore[index]
-        for message in run["messages"]:
-            for part in message["parts"]:
-                if part.get("toolCallId") == tool_call_id:
-                    return part["display_data"]
+    for message in state["messages"]:  # type: ignore[index]
+        for part in message["parts"]:
+            if part.get("toolCallId") == tool_call_id:
+                return part["display_data"]
     raise AssertionError(f"tool call not found: {tool_call_id}")
 
 

@@ -10,7 +10,7 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.models.conversation_input import ConversationInput
-from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.react_execution_state import ReactExecutionState
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
@@ -35,17 +35,12 @@ def _task(task_id: int = 7) -> TaskRecord:
 def test_rebuild_empty_task_returns_valid_empty_snapshot() -> None:
     state = ConversationTaskStateRebuilder.rebuild(_task(), [], [])
 
-    assert state == {
-        "runs": [],
-        "current_run_id": None,
-        "approvals": {},
-        "error": None,
-    }
+    assert state == {"messages": [], "activity": None, "error": None}
 
 
-@pytest.mark.parametrize("windows", [(None, 0), (64_000, 128_000)])
-def test_rebuild_preserves_each_runs_frozen_context_window(windows: tuple[int | None, int]) -> None:
-    """重建只消费各 Run 已冻结的窗口，不把当前模型窗口套到历史 Run 上。"""
+@pytest.mark.parametrize("window", [None, 64_000])
+def test_rebuild_activity_uses_latest_runs_frozen_context_window(window: int | None) -> None:
+    """重建只消费最新 Run 已冻结的窗口，历史 Run 的窗口不进 wire。"""
     timestamp = _timestamp()
     task = _task()
     task.current_run_id = 2
@@ -56,26 +51,112 @@ def test_rebuild_preserves_each_runs_frozen_context_window(windows: tuple[int | 
             status="completed",
             created_at=timestamp,
             updated_at=timestamp,
-            execution_data=ConversationRunProgress(),
-            context_window_total=window,
+            execution_data=ReactExecutionState(),
+            context_window_total=frozen,
         )
-        for index, window in enumerate(windows, start=1)
+        for index, frozen in ((1, 128_000), (2, window))
     ]
     state = ConversationTaskStateRebuilder.rebuild(task, runs, [])
     validate_snapshot(state)
-    assert [run["contextWindowTotal"] for run in state["runs"]] == list(windows)
-    assert "context_window_total" not in state
+    assert state["activity"] is not None
+    assert state["activity"]["runId"] == 2
+    assert state["activity"]["contextWindowTotal"] == window
 
 
-def test_validate_snapshot_rejects_current_run_that_is_not_present() -> None:
+def test_rebuild_task_without_current_run_has_no_activity() -> None:
+    state = ConversationTaskStateRebuilder.rebuild(_task(), [], [])
+
+    assert state["activity"] is None
+
+
+def test_rebuild_writes_outcome_only_on_terminal_runs_last_assistant_message() -> None:
+    """冷重建：终态 Run 的结局写在其最后一条助手消息上，运行中的 Run 不写结局。"""
+    timestamp = _timestamp()
+    task = _task()
+    task.current_run_id = 2
+    runs = [
+        ConversationRunRecord(
+            id=1,
+            task_id=task.id,
+            status="completed",
+            end_reason="final_answer",
+            context_window_total=64_000,
+            created_at=timestamp,
+            updated_at=timestamp,
+            execution_data=ReactExecutionState(),
+        ),
+        ConversationRunRecord(
+            id=2,
+            task_id=task.id,
+            status="running",
+            created_at=timestamp,
+            updated_at=timestamp,
+            execution_data=ReactExecutionState(),
+        ),
+    ]
+    rows = [
+        ConversationTaskContextRecord(
+            id=sequence,
+            task_id=task.id,
+            run_id=run_id,
+            message={"role": "assistant", "content": text},
+            include_in_context=True,
+            sequence=sequence,
+        )
+        for sequence, run_id, text in ((1, 1, "第一段"), (2, 1, "第二段"), (3, 2, "进行中"))
+    ]
+
+    state = ConversationTaskStateRebuilder.rebuild(task, runs, rows)
+
+    validate_snapshot(state)
+    run_one = [m for m in state["messages"] if m["runId"] == 1]
+    run_two = [m for m in state["messages"] if m["runId"] == 2]
+    assert run_one[-1]["outcome"] is not None
+    assert run_one[-1]["outcome"]["status"] == "completed"
+    assert run_one[-1]["outcome"]["endReason"] == "final_answer"
+    # 冷重建同样把该 Run 冻结的窗口写进结局，与它的用量同源。
+    assert run_one[-1]["outcome"]["contextWindowTotal"] == 64_000
+    assert all(m["outcome"] is None for m in run_one[:-1])
+    assert all(m["outcome"] is None for m in run_two)
+    assert state["activity"] is not None
+    assert state["activity"]["status"] == "running"
+
+
+def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
     invalid_state = {
-        "runs": [],
-        "current_run_id": 99,
-        "approvals": {},
+        "messages": [
+            {
+                "id": "assistant-run-1",
+                "role": "assistant",
+                "parts": [],
+                "runId": 1,
+                "outcome": {"status": "running", "endReason": None, "error": None, "usage": None, "contextWindowTotal": None},
+            }
+        ],
+        "activity": None,
         "error": None,
     }
 
-    with pytest.raises(ValueError, match="current_run_id must refer to a run"):
+    with pytest.raises(ValueError, match="outcome status must be terminal"):
+        validate_snapshot(invalid_state)  # type: ignore[arg-type]
+
+
+def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
+    invalid_state = {
+        "messages": [
+            {
+                "id": "1",
+                "role": "user",
+                "parts": [],
+                "runId": 1,
+                "outcome": {"status": "completed", "endReason": None, "error": None, "usage": None, "contextWindowTotal": None},
+            }
+        ],
+        "activity": None,
+        "error": None,
+    }
+
+    with pytest.raises(ValueError, match="only assistant messages carry an outcome"):
         validate_snapshot(invalid_state)  # type: ignore[arg-type]
 
 
@@ -100,34 +181,24 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
     # 防御性：presentation 为显式 None 视作缺省，不再使整张快照校验崩溃
     # （旧实现 ``isinstance(part.get("presentation", {}), dict)`` 会命中 None）。
     state = {
-        "runs": [
+        "messages": [
             {
-                "runId": 1,
-                "status": "completed",
-                "endReason": None,
-                "contextWindowTotal": None,
-                "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
-                "usage": None,
-                "error": None,
-                "messages": [
+                "id": "m1",
+                "role": "assistant",
+                "parts": [
                     {
-                        "id": "m1",
-                        "role": "user",
-                        "parts": [
-                            {
-                                "type": "tool-call",
-                                "toolCallId": "c1",
-                                "toolName": "read_file",
-                                "status": "cancelled",
-                                "presentation": None,
-                            }
-                        ],
+                        "type": "tool-call",
+                        "toolCallId": "c1",
+                        "toolName": "read_file",
+                        "status": "cancelled",
+                        "presentation": None,
                     }
                 ],
+                "runId": 1,
+                "outcome": None,
             }
         ],
-        "current_run_id": 1,
-        "approvals": {},
+        "activity": None,
         "error": None,
     }
 
@@ -145,7 +216,7 @@ def test_rebuild_keeps_interrupted_output_stopped_even_when_run_is_active() -> N
         end_reason=None,
         created_at=timestamp,
         updated_at=timestamp,
-        execution_data=ConversationRunProgress(),
+        execution_data=ReactExecutionState(),
     )
     row = ConversationTaskContextRecord(
         id=1,
@@ -158,7 +229,7 @@ def test_rebuild_keeps_interrupted_output_stopped_even_when_run_is_active() -> N
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
 
-    assert state["runs"][0]["messages"][0]["parts"] == [
+    assert state["messages"][0]["parts"] == [
         {"type": "text", "text": "输出到一半", "status": "completed"}
     ]
     validate_snapshot(state)
@@ -175,7 +246,7 @@ def test_rebuild_keeps_interrupted_output_when_run_is_cancelled() -> None:
         end_reason="backend_restarted",
         created_at=timestamp,
         updated_at=timestamp,
-        execution_data=ConversationRunProgress(),
+        execution_data=ReactExecutionState(),
     )
     row = ConversationTaskContextRecord(
         id=1,
@@ -188,7 +259,7 @@ def test_rebuild_keeps_interrupted_output_when_run_is_cancelled() -> None:
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
 
-    assert state["runs"][0]["messages"][0]["parts"] == [
+    assert state["messages"][0]["parts"] == [
         {"type": "text", "text": "输出到一半", "status": "completed"}
     ]
 
@@ -294,7 +365,7 @@ def test_rebuild_restores_ordinary_file_from_context_input() -> None:
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
 
-    assert state["runs"][0]["messages"][0]["parts"] == [
+    assert state["messages"][0]["parts"] == [
         {"type": "text", "text": "请查看 ", "status": "completed"},
         {
             "type": "file",
@@ -318,7 +389,7 @@ def test_rebuild_does_not_invent_user_message_from_run() -> None:
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [])
 
-    assert state["runs"][0]["messages"] == []
+    assert state["messages"] == []
     validate_snapshot(state)
 
 

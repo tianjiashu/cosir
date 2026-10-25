@@ -69,6 +69,8 @@ def _context_row(
         id=row_id,
         task_id=7,
         run_id=run_id,
+        # 用户行的 wire 身份来自入队消息 id；测试直接复用行 id。
+        message_id=row_id if message["role"] == "user" else None,
         message=message,
         include_in_context=True,
         sequence=sequence,
@@ -219,8 +221,7 @@ def test_rebuilder_scopes_same_provider_tool_call_id_per_run(
     validate_snapshot(state)
     assert all(
         part["status"] == "completed"
-        for run in state["runs"]
-        for message in run["messages"]
+        for message in state["messages"]
         for part in message["parts"]
         if part.get("type") == "tool-call"
     )
@@ -230,8 +231,12 @@ def test_rebuild_reads_run_owned_context_windows_without_capability_lookup() -> 
     runs = [_run(11), _run(12)]
     runs[0].context_window_total = 8192
     runs[1].context_window_total = 16384
-    state = ConversationTaskStateRebuilder.rebuild(_task(), runs, [])
-    assert [run["contextWindowTotal"] for run in state["runs"]] == [8192, 16384]
+    task = _task()
+    task.current_run_id = 12
+    state = ConversationTaskStateRebuilder.rebuild(task, runs, [])
+    # 只有最新 Run 的冻结窗口进入 activity；历史 Run 的窗口不进 wire。
+    assert state["activity"] is not None
+    assert state["activity"]["contextWindowTotal"] == 16384
 
 
 @pytest.fixture

@@ -14,8 +14,8 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     ConversationRunCancellationRegistry,
 )
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.execution_state.react_route import ReactRoute
+from app.models.react_execution_state import ReactExecutionState
+from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming_module
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import model_node, structured_output_node
@@ -152,7 +152,6 @@ def bind_node(monkeypatch, model):
         run=SimpleNamespace(id=7, task_id=1),
         task=SimpleNamespace(id=1, workspace_id=1),
         model=model,
-        step_limit=3,
         usage_stats=ConversationRunUsageStats(),
         run_state=run_state_stub(transition=transition_run),
         task_space=SimpleNamespace(take_runtime_notices=lambda **kw: None),
@@ -167,7 +166,7 @@ def bind_node(monkeypatch, model):
     monkeypatch.setattr(streaming_module, "emit", lambda event: None)
     state = ReactExecutionState(
         step_count=0,
-        tool_error_count=0,
+        step_limit=3,
         next_node=ReactRoute.MODEL,
     )
     return SimpleNamespace(

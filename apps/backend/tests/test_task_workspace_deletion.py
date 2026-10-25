@@ -7,8 +7,10 @@ from sqlalchemy import func, select
 
 from app.api.tasks_api import delete_task as delete_task_endpoint
 from app.api.workspaces_api import delete_workspace as delete_workspace_endpoint
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.deletion_errors import DeletionBusyError
+from app.models.message_metadata import UserMessageMetadata
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_run_crud,
@@ -25,6 +27,13 @@ from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import init_storage, main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.path import system_cosir as paths
+
+
+def _user_meta(text: str) -> UserMessageMetadata:
+    """落库的用户消息都带来源 ``kind``；用户输入还带展示绑定（snapshot 重建与 fork 只从这里取）。"""
+    return UserMessageMetadata(
+        kind="user_input", presentation=UserInputPresentation(display_text=text)
+    )
 
 
 @pytest.fixture
@@ -78,6 +87,7 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
             task_id=root.id,
             run_id=root_run.id,
             message={"role": "user", "content": "root canonical message"},
+            metadata=_user_meta("root canonical message"),
             include_in_context=True,
             sequence=1,
         )
@@ -87,6 +97,7 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
             task_id=child.id,
             run_id=child_run.id,
             message={"role": "user", "content": "child canonical message"},
+            metadata=_user_meta("child canonical message"),
             include_in_context=True,
             sequence=1,
         )
@@ -291,7 +302,7 @@ def test_workspace_delete_serializes_task_creation(
     assert root.id > 0
 
 
-class _FakeWorkflowSession:
+class _FakeTaskActors:
     """记录删除前停止的 Task 集合；删除端点先停执行、再删事实。"""
 
     def __init__(self) -> None:
@@ -321,7 +332,7 @@ async def test_delete_endpoints_return_404_and_busy_409(storage) -> None:
         def delete_workspace(self, _workspace_id: int) -> None:
             raise KeyError(_workspace_id)
 
-    session = _FakeWorkflowSession()
+    session = _FakeTaskActors()
     with pytest.raises(HTTPException) as task_404:
         await delete_task_endpoint(1, MissingTask(), session, None)
     with pytest.raises(HTTPException) as workspace_404:
@@ -360,7 +371,7 @@ async def test_delete_task_endpoint_routes_creation_marker_to_guarded_cleanup(st
         def delete_task(self, _task_id: int) -> None:
             raise AssertionError("provisional cleanup must not use ordinary deletion")
 
-    session = _FakeWorkflowSession()
+    session = _FakeTaskActors()
     result = await delete_task_endpoint(7, ProvisionalTask(), session, "creation-7")
 
     assert result.task_id == 7

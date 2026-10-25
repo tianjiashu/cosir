@@ -343,8 +343,8 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
     import json
 
     from app.config.constant import Constant
-    from app.core.tools.schemas import ToolExecutionContext
-    from app.core.tools.tool_handler.terminal_session import (
+    from app.core.tool.schemas import ToolExecutionContext
+    from app.tools.tool_handler.terminal_session import (
         TerminalListTool,
         TerminalReadTool,
         TerminalStartTool,

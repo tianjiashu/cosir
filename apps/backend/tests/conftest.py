@@ -18,14 +18,14 @@ from pathlib import Path
 
 import pytest
 
-from app.agent_team import configuration_scope_source
-from app.agent_team import registry as agent_team_registry_module
-from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.agent_team.registry import AgentTeamConfigurationRegistry
+from app.service.agent_team import configuration_scope_source
+from app.service.agent_team import registry as agent_team_registry_module
+from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.service.agent_team.registry import AgentTeamConfigurationRegistry
 from app.config import configuration
 from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_config, agent_profile_source
-from app.core.tools.tool_system import ToolSystem
+from app.tools.tool_system import ToolSystem
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces

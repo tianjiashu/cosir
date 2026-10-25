@@ -54,12 +54,11 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     posted: list[tuple[int, Any]] = []
     started: list[int] = []
 
-    async def post_async(task_id: int, body: Any) -> SimpleNamespace:
+    def post(task_id: int, body: Any) -> None:
         posted.append((task_id, body))
-        return SimpleNamespace(queued=False)
 
-    session = SimpleNamespace(post_async=post_async)
-    monkeypatch.setattr(module, "get_workflow_session", lambda: session)
+    session = SimpleNamespace(post=post)
+    monkeypatch.setattr(module, "get_task_actors", lambda: session)
     monkeypatch.setattr(
         module,
         "get_conversation_run_service",

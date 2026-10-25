@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tools.guard.tool_output_budget import ToolOutputBudget
-from app.core.tools.schemas import ToolExecutionContext, ToolObservation
+from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 
 
 def _ctx(root: Path) -> ToolExecutionContext:

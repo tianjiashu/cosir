@@ -51,13 +51,15 @@ def test_uses_current_pointer_instead_of_latest_created_run(store, status):
     record = store.service.get_task(task.id)
     assert (record.current_run_id, record.execution_status) == (current.id, status)
     response = asyncio.run(get_task(task.id, store.service))
-    assert (response.current_run_id, response.execution_status) == (current.id, status)
+    assert response.execution_status == status
+    # 当前 Run 指针是后端内部事实，不进 HTTP 响应。
+    assert "current_run_id" not in response.model_dump()
 
 
 def test_no_run_and_missing_task(store):
     task = store.tasks.create(store.workspace.id, "未运行")
     response = TaskResponse.from_record(store.reads.get(task.id))
-    assert response.current_run_id is None and response.execution_status is None
+    assert response.execution_status is None
     with pytest.raises(KeyError):
         store.service.get_task(task.id + 100)
 

@@ -4,13 +4,13 @@
 或假 Provider 注入，URL 安全校验通过注入 resolver 控制。
 
 被测对象：
-- app/core/tools/tool_handler/web_extract.py (WebExtractTool)
-- app/core/tools/tool_handler/web_search.py (WebSearchTool)
-- app/core/tools/tool_handler/web/providers/firecrawl_provider.py (FirecrawlProvider)
-- app/core/tools/tool_handler/web/web_provider_registry.py (WebProviderRegistry)
-- app/core/tools/tool_handler/web/url_safety.py (URL 安全校验)
-- app/core/tools/tool_models/web_extract_args.py / web_search_args.py (参数模型)
-- app/core/tools/tool_handler/web/web_provider.py (契约与异常)
+- app/core/tool/web/web_extract.py (WebExtractTool)
+- app/core/tool/web/web_search.py (WebSearchTool)
+- app/core/tool/web/providers/firecrawl_provider.py (FirecrawlProvider)
+- app/core/tool/web/web_provider_registry.py (WebProviderRegistry)
+- app/core/tool/web/url_safety.py (URL 安全校验)
+- app/core/tool/web/web_extract_args.py / web_search_args.py (参数模型)
+- app/core/tool/web/web_provider.py (契约与异常)
 """
 
 import logging
@@ -22,19 +22,19 @@ from pydantic import ValidationError
 
 from app.config.constant import Constant
 from app.config.settings import Settings
-from app.core.tools.tool_handler.web.providers import firecrawl_provider
-from app.core.tools.tool_handler.web.providers.firecrawl_provider import (
+from app.core.tool.web.providers.firecrawl_provider import (
     FirecrawlProvider,
     _clean_metadata,
     _search_result_items,
 )
-from app.core.tools.tool_handler.web.url_safety import (
+from app.core.tool.web.providers import firecrawl_provider
+from app.core.tool.web.url_safety import (
     is_safe_public_url,
     normalize_url_for_request,
     sensitive_query_param_name,
     url_contains_secret,
 )
-from app.core.tools.tool_handler.web.web_provider import (
+from app.core.tool.web.web_provider import (
     WebExtractItem,
     WebProviderRequestError,
     WebProviderUnavailableError,
@@ -43,16 +43,16 @@ from app.core.tools.tool_handler.web.web_provider import (
     provider_result_metadata,
     unsupported_extract_format_message,
 )
-from app.core.tools.tool_handler.web.web_provider_registry import (
+from app.core.tool.web.web_provider_registry import (
     WebProviderRegistry,
     get_active_extract_provider,
     get_active_search_provider,
     register_default_web_providers,
 )
-from app.core.tools.tool_handler.web_extract import WebExtractTool
-from app.core.tools.tool_handler.web_search import WebSearchTool
-from app.core.tools.tool_models.web_extract_args import WebExtractArgs
-from app.core.tools.tool_models.web_search_args import WebSearchArgs
+from app.core.tool.web.web_extract import WebExtractTool
+from app.core.tool.web.web_search import WebSearchTool
+from app.core.tool.web.web_extract_args import WebExtractArgs
+from app.core.tool.web.web_search_args import WebSearchArgs
 
 # ---------------------------------------------------------------------------
 # 假 Provider / 假 httpx 脚手架
@@ -798,8 +798,8 @@ def test_extract_all_pages_fail_returns_error_retryable_true() -> None:
     obs = tool.execute(urls=["https://e.com/1"])
 
     assert obs.status == "error"
-    assert obs.retryable is True
-    assert "boom1" in obs.error
+    assert "hint: this error can be retried" in obs.content
+    assert "boom1" in obs.content
 
 
 def test_extract_partial_success_marks_partial_and_failed_count() -> None:
@@ -883,7 +883,7 @@ def test_extract_url_count_over_limit_returns_error() -> None:
     obs = tool.execute(urls=urls)
 
     assert obs.status == "error"
-    assert obs.retryable is True
+    assert "hint: this error can be retried" in obs.content
 
 
 # ---------------------------------------------------------------------------
@@ -1043,7 +1043,7 @@ def test_web_extract_blocks_sensitive_query_param() -> None:
     obs = tool.execute(urls=["https://example.com/?token=abc"])
 
     assert obs.status == "error"
-    assert obs.error.startswith("Blocked:")
+    assert obs.content.startswith("error: Blocked:")
 
 
 def test_web_extract_blocks_non_http_scheme() -> None:
@@ -1055,7 +1055,7 @@ def test_web_extract_blocks_non_http_scheme() -> None:
     obs = tool.execute(urls=["ftp://example.com/file"])
 
     assert obs.status == "error"
-    assert obs.error.startswith("Blocked:")
+    assert obs.content.startswith("error: Blocked:")
 
 
 def test_web_extract_blocks_userinfo() -> None:
@@ -1067,7 +1067,7 @@ def test_web_extract_blocks_userinfo() -> None:
     obs = tool.execute(urls=["http://user:pass@example.com/"])
 
     assert obs.status == "error"
-    assert obs.error.startswith("Blocked:")
+    assert obs.content.startswith("error: Blocked:")
 
 
 # ---------------------------------------------------------------------------
@@ -1084,8 +1084,8 @@ def test_search_single_unavailable_provider_gives_actionable_message() -> None:
     obs = tool.execute(query="hello")
 
     assert obs.status == "error"
-    assert "FIRECRAWL_API_KEY" in obs.error
-    assert "No web search provider configured." not in obs.error
+    assert "FIRECRAWL_API_KEY" in obs.content
+    assert "No web search provider configured." not in obs.content
 
 
 def test_extract_single_unavailable_provider_gives_actionable_message() -> None:
@@ -1097,7 +1097,7 @@ def test_extract_single_unavailable_provider_gives_actionable_message() -> None:
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert "FIRECRAWL_API_KEY" in obs.error
+    assert "FIRECRAWL_API_KEY" in obs.content
 
 
 def test_search_explicit_unregistered_backend_reports_name(
@@ -1113,7 +1113,7 @@ def test_search_explicit_unregistered_backend_reports_name(
     obs = tool.execute(query="hello")
 
     assert obs.status == "error"
-    assert "ghost" in obs.error
+    assert "ghost" in obs.content
 
 
 def test_extract_explicit_unregistered_backend_reports_name(
@@ -1129,7 +1129,7 @@ def test_extract_explicit_unregistered_backend_reports_name(
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert "ghost" in obs.error
+    assert "ghost" in obs.content
 
 
 def test_extract_search_only_explicit_backend_gives_search_only_error(
@@ -1145,7 +1145,7 @@ def test_extract_search_only_explicit_backend_gives_search_only_error(
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert "search-only" in obs.error
+    assert "search-only" in obs.content
 
 
 def test_extract_search_only_only_registered_no_backend_gives_search_only_error(
@@ -1170,8 +1170,8 @@ def test_extract_search_only_only_registered_no_backend_gives_search_only_error(
 
     assert obs.status == "error"
     # 期望：明确告知 search-only，而不是笼统的 "No web extraction provider configured."
-    assert "search-only" in obs.error
-    assert "No web extraction provider configured." not in obs.error
+    assert "search-only" in obs.content
+    assert "No web extraction provider configured." not in obs.content
 
 
 def test_search_provider_without_search_support_rejects_at_execution(
@@ -1179,7 +1179,7 @@ def test_search_provider_without_search_support_rejects_at_execution(
 ) -> None:
     """显式选中不支持 search 的 provider 时，web_search 在执行期拒绝且不可重试。
 
-    可用性判定位于 ``execute`` 前置检查（``tool_avaliable``），不在装配期隐藏工具：
+    可用性判定位于 ``execute`` 的 Provider 选择（``_resolve_search_provider``），不在装配期隐藏工具：
     工具始终可注册，能力不匹配作为配置类失败返回 ``retryable=False`` 的错误观察。
     """
 
@@ -1193,7 +1193,7 @@ def test_search_provider_without_search_support_rejects_at_execution(
     obs = tool.execute(query="hello")
 
     assert obs.status == "error"
-    assert obs.retryable is False
+    assert "hint: do not retry this tool call." in obs.content
 
 
 # ---------------------------------------------------------------------------
@@ -1299,7 +1299,7 @@ def test_extract_unavailable_error_retryable_false() -> None:
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert obs.retryable is False
+    assert "hint: do not retry this tool call." in obs.content
 
 
 def test_extract_request_error_retryable_true() -> None:
@@ -1313,7 +1313,7 @@ def test_extract_request_error_retryable_true() -> None:
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert obs.retryable is True
+    assert "hint: this error can be retried" in obs.content
 
 
 def test_search_unavailable_error_retryable_false() -> None:
@@ -1327,7 +1327,7 @@ def test_search_unavailable_error_retryable_false() -> None:
     obs = tool.execute(query="hello")
 
     assert obs.status == "error"
-    assert obs.retryable is False
+    assert "hint: do not retry this tool call." in obs.content
 
 
 def test_search_request_error_retryable_true() -> None:
@@ -1341,7 +1341,7 @@ def test_search_request_error_retryable_true() -> None:
     obs = tool.execute(query="hello")
 
     assert obs.status == "error"
-    assert obs.retryable is True
+    assert "hint: this error can be retried" in obs.content
 
 
 # ---------------------------------------------------------------------------
@@ -1435,7 +1435,7 @@ def test_registry_four_level_fallback_contract() -> None:
 def test_register_default_web_providers_and_getters() -> None:
     """register_default_web_providers 与 get_active_* 包装函数可用。"""
 
-    from app.core.tools.tool_handler.web.providers import default_web_providers
+    from app.core.tool.web.providers import default_web_providers
 
     registry = register_default_web_providers(WebProviderRegistry(), default_web_providers())
     assert registry.get_provider("firecrawl") is not None
@@ -1481,8 +1481,8 @@ def test_build_definitions_return_tool_definition() -> None:
     未配置凭据时不可用，故必须注入「可用且声明对应能力」的 Fake Provider 才返回定义。
     """
 
-    from app.core.tools.tool_handler.web_extract import build_web_extract_definition
-    from app.core.tools.tool_handler.web_search import build_web_search_definition
+    from app.core.tool.web.web_extract import build_web_extract_definition
+    from app.core.tool.web.web_search import build_web_search_definition
 
     registry = _registry_with(
         FakeProvider(name="fake", supports_search=True, supports_extract=True)
@@ -1507,4 +1507,4 @@ def test_web_extract_unsupported_format_returns_error() -> None:
     obs = tool.execute(urls=["https://example.com/"], format="text")  # type: ignore[arg-type]
 
     assert obs.status == "error"
-    assert "text" in obs.error
+    assert "text" in obs.content

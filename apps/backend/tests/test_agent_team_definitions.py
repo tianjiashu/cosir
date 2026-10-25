@@ -8,22 +8,22 @@ from pydantic import ValidationError
 from sqlalchemy import inspect
 from sqlalchemy.orm import sessionmaker
 
-from app.agent_team import configuration_scope_source
-from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
-from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.agent_team.node_goal import AgentTeamNodeGoal
-from app.agent_team.registry import AgentTeamConfigurationRegistry
-from app.agent_team.state.agent_team_run_state import (
+from app.service.agent_team import configuration_scope_source
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.models.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
+from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.core.tool.agent_team.node_goal import AgentTeamNodeGoal
+from app.service.agent_team.registry import AgentTeamConfigurationRegistry
+from app.models.agent_team.state.agent_team_run_state import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
     AgentTeamRunState,
 )
-from app.core.tools.tool_handler.agent_team.propose_agent_team_configuration import (
+from app.core.tool.agent_team.propose_agent_team_configuration import (
     ProposeAgentTeamConfigurationTool,
 )
 from app.service.agent_team.agent_team_approve_input import AgentTeamApproveInput
-from app.core.tools.tool_models.agent_team.propose_agent_team_configuration_args import (
+from app.core.tool.agent_team.propose_agent_team_configuration_args import (
     ProposeAgentTeamConfigurationArgs,
 )
 from app.service.agent_team.agent_team_preparation_service import (
@@ -151,8 +151,8 @@ def test_proposal_tool_separates_argument_and_configuration_validation(
 def test_approval_input_carries_final_configuration_instead_of_preview_fingerprint() -> None:
     """批准输入提交最终配置，旧的预览指纹协议不再属于契约。
 
-    human-in-the-loop 改造后，确认不再走专用 REST 请求体，而是工具在第二遍执行时消费的
-    用户决定载荷（``AgentTeamApproveInput``）；契约内容不变：最终配置 + 用户审阅后的目标。
+    确认经 ``/decisions`` 由 ``AgentTeamDecisionService`` 消费用户决定载荷
+    （``AgentTeamApproveInput``）；契约内容：最终配置 + 用户审阅后的目标。
     """
 
     configuration = _configuration()
@@ -517,7 +517,6 @@ def test_team_run_crud_round_trips_persisted_confirmation_state(
             options={"ban_tools": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
-                "tool_error_count": 0,
             },
             task_id=task.id,
             status="suspended",
@@ -562,7 +561,6 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
             options={"ban_tools": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
-                "tool_error_count": 0,
             },
             task_id=task.id,
             status="suspended",
@@ -640,7 +638,6 @@ def test_create_pending_confirmation_supersedes_previous_pending(tmp_path: Path)
             options={"ban_tools": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
-                "tool_error_count": 0,
             },
             task_id=task.id,
             status="suspended",
@@ -700,7 +697,6 @@ def test_supersede_pending_for_parent_unblocks_reproposal(tmp_path: Path) -> Non
             options={"ban_tools": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
-                "tool_error_count": 0,
             },
             task_id=task.id,
             status="suspended",
@@ -771,7 +767,7 @@ def test_supersede_pending_for_parent_unblocks_reproposal(tmp_path: Path) -> Non
 
 
 def test_user_rejection_ends_pending_team_run_idempotently(tmp_path: Path) -> None:
-    """HIL 驳回把待确认记录收敛为用户拒绝终态，重复投递不会改写终态。"""
+    """用户驳回把待确认记录收敛为用户拒绝终态，重复投递不会改写终态。"""
 
     engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
     initialize_app_schema(engine)
@@ -787,7 +783,6 @@ def test_user_rejection_ends_pending_team_run_idempotently(tmp_path: Path) -> No
             options={"ban_tools": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
-                "tool_error_count": 0,
             },
             task_id=task.id,
             status="suspended",
@@ -842,7 +837,6 @@ def test_team_run_view_projects_node_and_child_agent_counts(
             options={"ban_tools": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
-                "tool_error_count": 0,
             },
             task_id=parent_task.id,
             status="running",
@@ -862,7 +856,6 @@ def test_team_run_view_projects_node_and_child_agent_counts(
             options={"ban_tools": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
-                "tool_error_count": 0,
             },
             task_id=node_task.id,
             status="running",
@@ -882,7 +875,6 @@ def test_team_run_view_projects_node_and_child_agent_counts(
             options={"ban_tools": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
-                "tool_error_count": 0,
             },
             task_id=child_task.id,
             status="completed",

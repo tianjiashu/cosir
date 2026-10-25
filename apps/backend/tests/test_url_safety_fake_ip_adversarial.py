@@ -1,8 +1,8 @@
 """URL 安全校验（fake-ip 放行修复）对抗性测试。
 
 被测对象：
-- app/core/tools/tool_handler/web/url_safety.py::is_safe_public_url
-- app/core/tools/tool_handler/web_extract.py::WebExtractTool.execute
+- app/core/tool/web/url_safety.py::is_safe_public_url
+- app/core/tool/web/web_extract.py::WebExtractTool.execute
 
 本次修复语义：主机名解析到代理 fake-ip 占位段 198.18.0.0/15（Clash/Mihomo fake-ip）
 时不再判为内网 —— 但仅当 URL 主机名不是 IP 字面量时豁免；IP 字面量 host 仍按原规则
@@ -18,9 +18,9 @@ import logging
 import pytest
 
 from app.config.constant import Constant
-from app.core.tools.tool_handler.web import url_safety
-from app.core.tools.tool_handler.web.url_safety import is_safe_public_url
-from app.core.tools.tool_handler.web_extract import WebExtractTool
+from app.core.tool.web import url_safety
+from app.core.tool.web.url_safety import is_safe_public_url
+from app.core.tool.web.web_extract import WebExtractTool
 from tests.test_web_search_extract_tools import (
     FakeProvider,
     _log_full_text,
@@ -637,7 +637,7 @@ def test_execute_blocked_before_provider_when_mixed_internal() -> None:
     obs = tool.execute(urls=["https://example.com/page"])
 
     assert obs.status == "error"
-    assert obs.error.startswith("Blocked:")
+    assert obs.content.startswith("error: Blocked:")
     assert provider.extract_calls == [], "被拦 URL 绝不能触发 provider 调用"
 
 
@@ -667,7 +667,7 @@ def test_execute_fail_closed_when_resolver_errors() -> None:
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert obs.error.startswith("Blocked:")
+    assert obs.content.startswith("error: Blocked:")
     assert provider.extract_calls == []
 
 
@@ -697,7 +697,7 @@ def test_execute_partial_failure_under_fake_ip_resolver_keeps_success() -> None:
     urls = ["https://example.com/ok", "https://example.com/bad"]
 
     def _factory(req_urls, fmt, cl):
-        from app.core.tools.tool_handler.web.web_provider import WebExtractItem
+        from app.core.tool.web.web_provider import WebExtractItem
 
         return [
             WebExtractItem(url=urls[0], title="t", content="ok", metadata={}),

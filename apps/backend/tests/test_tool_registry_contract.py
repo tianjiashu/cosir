@@ -3,8 +3,8 @@
 import pytest
 from pydantic import BaseModel
 
-from app.core.tools.schemas import ToolDefinition
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.schemas import ToolDefinition
+from app.core.tool.tool_registry import ToolRegistry
 
 
 class _NoArgs(BaseModel):

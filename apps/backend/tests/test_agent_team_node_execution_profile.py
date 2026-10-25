@@ -26,10 +26,10 @@ from unittest.mock import patch
 
 import pytest
 
-from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.agent_team.node_goal import AgentTeamNodeGoal
-from app.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY
-from app.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.core.tool.agent_team.node_goal import AgentTeamNodeGoal
+from app.service.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY
+from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings

@@ -21,8 +21,7 @@ from app.core.workflow.execution_state.conversation_run_usage_stats import (
     ConversationRunUsageStats,
 )
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
-from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.react_execution_state import ReactExecutionState
 from app.service import depends as service_depends
 
 
@@ -104,7 +103,7 @@ def install_runtime_singletons(rc: SimpleNamespace) -> None:
 def runtime_stub(**overrides: Any) -> SimpleNamespace:
     rc = SimpleNamespace(
         run=SimpleNamespace(
-            id=2, task_id=1, execution_data=ConversationRunProgress(), usage=None
+            id=2, task_id=1, execution_data=ReactExecutionState(), usage=None
         ),
         task=SimpleNamespace(id=1),
         workspace=SimpleNamespace(id=1, root_path="."),
@@ -124,9 +123,7 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         user_input_decision_handlers=SimpleNamespace(handle_rejection=lambda *_args: None),
         model=None,
         thinking_channel="",
-        step_limit=10,
         usage_stats=ConversationRunUsageStats(),
-        batch=ToolBatch(),
         resume_decision=None,
         cancelled=False,
     )

@@ -5,12 +5,12 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-import app.agent_team.coordinator as coordinator_module
-from app.agent_team.coordinator import AgentTeamCoordinator
-from app.agent_team.team_tool_error import TeamToolError
+import app.service.agent_team.coordinator as coordinator_module
+from app.service.agent_team.coordinator import AgentTeamCoordinator
+from app.core.tool.agent_team.team_tool_error import TeamToolError
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.core.agents.model_settings import ModelSettings
-from app.core.tools.display.agent_team_display import build_agent_team_preview_display_data
+from app.core.tool.agent_team.agent_team_display import build_agent_team_preview_display_data
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_preparation_service import (
@@ -62,8 +62,8 @@ def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> 
     captured: dict[str, object] = {}
 
     class _State:
-        def cancel(self) -> None:
-            captured["signalled"] = True
+        def running_node_task_id(self) -> int:
+            return 41
 
     class _Crud:
         def get_by_id(self, run_id: int) -> SimpleNamespace:
@@ -90,6 +90,11 @@ def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> 
         "AgentTeamRunState",
         SimpleNamespace(model_validate=lambda _value: _State()),
     )
+    monkeypatch.setattr(
+        coordinator_module.cancellation_registry,
+        "request_cancel",
+        lambda task_id, reason: captured.update(signalled=(task_id, reason)),
+    )
 
     result = coordinator.cancel(17)
 
@@ -101,7 +106,7 @@ def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> 
     assert captured["target"] == AgentTeamRunStatus.CANCELLED.value
     assert captured["end_reason"] == AgentTeamRunEndReason.CANCELLED.value
     assert captured["ended"] is True
-    assert captured["signalled"] is True
+    assert captured["signalled"] == (41, "parent")
     assert captured["archived"] == 17
 
 

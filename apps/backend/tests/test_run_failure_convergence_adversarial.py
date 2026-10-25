@@ -27,7 +27,7 @@ import pytest
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
+from app.assistant_transport.state.conversation_state_activity import ConversationStateActivity
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     empty_snapshot,
@@ -154,17 +154,15 @@ def _record_state() -> ConversationStateSnapshot:
     """构造一个只含单个 running Run 的合法 snapshot。"""
 
     state = empty_snapshot()
-    state["runs"] = [
-        ConversationRunSnapshot(
-            runId=1,
-            status="running",
-            endReason=None,
-            messages=[],
-            usage=None,
-            error=None,
-        )
-    ]
-    state["current_run_id"] = 1
+    state["activity"] = ConversationStateActivity(
+        runId=1,
+        status="running",
+        endReason=None,
+        error=None,
+        usage=None,
+        contextWindowTotal=None,
+        launch={"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+    )
     return state
 
 
@@ -700,7 +698,7 @@ def test_validate_snapshot_rejects_run_error_with_extra_keys() -> None:
     """snapshot 校验必须拒绝带 ``retryable`` 等多余键的 Run 级 error。"""
 
     state = _record_state()
-    state["runs"][0]["error"] = {
+    state["activity"]["error"] = {
         "code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED,
         "message": run_failure_message(Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED),
         "retryable": False,
@@ -713,7 +711,7 @@ def test_validate_snapshot_rejects_run_error_missing_message() -> None:
     """``error`` 缺 ``message`` 键时必须显式失败，不得静默降级。"""
 
     state = _record_state()
-    state["runs"][0]["error"] = {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED}
+    state["activity"]["error"] = {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED}
     with pytest.raises(ValueError):
         validate_snapshot(state)
 
@@ -722,12 +720,12 @@ def test_validate_snapshot_rejects_non_string_run_error_fields() -> None:
     """``code`` / ``message`` 非字符串时必须显式失败。"""
 
     state = _record_state()
-    state["runs"][0]["error"] = {"code": 1, "message": "运行失败"}
+    state["activity"]["error"] = {"code": 1, "message": "运行失败"}
     with pytest.raises(ValueError):
         validate_snapshot(state)
 
     state = _record_state()
-    state["runs"][0]["error"] = {"code": "run_failed", "message": None}
+    state["activity"]["error"] = {"code": "run_failed", "message": None}
     with pytest.raises(ValueError):
         validate_snapshot(state)
 
@@ -736,7 +734,7 @@ def test_validate_snapshot_requires_error_key_present_on_every_run() -> None:
     """Run 缺少 ``error`` 键必须让快照校验失败（严格白名单），而不是静默降级。"""
 
     state = _record_state()
-    del state["runs"][0]["error"]  # type: ignore[misc]
+    del state["activity"]["error"]  # type: ignore[misc]
     with pytest.raises(ValueError):
         validate_snapshot(state)
 
@@ -745,32 +743,32 @@ def test_validate_snapshot_rejects_boolean_run_id_with_error_contract() -> None:
     """``runId`` 为 bool 时即使 error 契约合法也必须失败（bool 是 int 子类）。"""
 
     state = _record_state()
-    state["runs"][0]["runId"] = True  # type: ignore[typeddict-item]
-    state["current_run_id"] = True  # type: ignore[typeddict-item]
+    state["activity"]["runId"] = True  # type: ignore[typeddict-item]
     with pytest.raises(ValueError):
         validate_snapshot(state)
 
 
 # --------------------------------------------------------------------------------------
-# 6. 穷举构造 Run snapshot 的位置（含 e2e mock）一致性核对
+# 6. 穷举构造当前活动（activity）的位置（含 e2e mock）一致性核对
 # --------------------------------------------------------------------------------------
 
 
-_RUN_REQUIRED_KEYS = {
+_ACTIVITY_REQUIRED_KEYS = {
     "runId",
     "status",
     "endReason",
-    "messages",
-    "usage",
     "error",
+    "usage",
+    "contextWindowTotal",
+    "launch",
 }
 
 
 def _python_run_literal_keys(text: str, source_name: str) -> list[tuple[int, set[str]]]:
-    """用 ``ast`` 精确提取 Python 源码里所有「Run 形状」字典字面量的键集合。
+    """用 ``ast`` 精确提取 Python 源码里所有「activity 形状」构造点的键集合。
 
-    只认同时含 ``runId`` 与 ``messages`` 键的字典字面量，避免把 ``run["runId"]``
-    之类的读取点误判为构造点。
+    认两种构造：同时含 ``runId`` 与 ``launch`` 键的字典字面量，以及 ``ConversationStateActivity(...)``
+    调用的关键字参数；避免把 ``activity["runId"]`` 之类的读取点误判为构造点。
     """
 
     import ast
@@ -782,19 +780,26 @@ def _python_run_literal_keys(text: str, source_name: str) -> list[tuple[int, set
 
     results: list[tuple[int, set[str]]] = []
     for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "ConversationStateActivity"
+        ):
+            results.append((node.lineno, {kw.arg for kw in node.keywords if kw.arg}))
+            continue
         if not isinstance(node, ast.Dict):
             continue
         keys: set[str] = set()
         for key in node.keys:
             if isinstance(key, ast.Constant) and isinstance(key.value, str):
                 keys.add(key.value)
-        if "runId" in keys and "messages" in keys:
+        if "runId" in keys and "launch" in keys:
             results.append((node.lineno, keys))
     return results
 
 
 def _js_object_literal_keys(text: str) -> list[tuple[int, set[str]]]:
-    """粗粒度提取 JS 对象字面量的顶层键集合（用于 e2e mock 的 Run 形状核对）。"""
+    """粗粒度提取 JS 对象字面量的顶层键集合（用于 e2e mock 的 activity 形状核对）。"""
 
     results: list[tuple[int, set[str]]] = []
     for match in re.finditer(r"\{", text):
@@ -832,20 +837,17 @@ def _js_object_literal_keys(text: str) -> list[tuple[int, set[str]]]:
                     position += key_match.end()
                     continue
             position += 1
-        if "runId" in keys and "messages" in keys:
+        if "runId" in keys and "launch" in keys:
             results.append((text[:opening].count("\n") + 1, keys))
     return results
 
 
-def test_every_run_snapshot_construction_includes_error_key() -> None:
-    """静态检查：仓库内所有构造 Run 对象的位置都必须带 ``error`` 键。
+def test_every_activity_construction_includes_all_keys() -> None:
+    """静态检查：仓库内所有构造当前活动（activity）的位置都必须带齐全部键（含 ``error``）。
 
     覆盖后端 ``app/`` 与 e2e mock ``apps/desktop/tests/e2e/test-server.mjs``（后端
-    ``_RUN_KEYS`` 与前端 ``requireExactKeys`` 都是严格白名单，任一构造点漏写 ``error``
-    都会让快照校验显式失败）。本用例把该失败前移到静态断言。
-
-    潜在缺陷：新增 FastAPI 端点或恢复路径构造 Run 快照时容易漏 ``error``；漏写会让
-    「无法取消且一直显示用量统计中」的线上问题以另一种形式复现（快照校验失败）。
+    ``_ACTIVITY_KEYS`` 与前端快照校验都是严格白名单，任一构造点漏键都会让快照校验显式失败）。
+    本用例把该失败前移到静态断言。
     """
 
     import pathlib
@@ -859,8 +861,8 @@ def test_every_run_snapshot_construction_includes_error_key() -> None:
         text = path.read_text(encoding="utf-8", errors="ignore")
         for lineno, keys in _python_run_literal_keys(text, str(path)):
             checked += 1
-            if not _RUN_REQUIRED_KEYS.issubset(keys):
-                missing = sorted(_RUN_REQUIRED_KEYS - keys)
+            if not _ACTIVITY_REQUIRED_KEYS.issubset(keys):
+                missing = sorted(_ACTIVITY_REQUIRED_KEYS - keys)
                 offenders.append(f"{path.relative_to(repo_root)}:{lineno} 缺少 {missing}")
 
     js_path = repo_root / "apps/desktop/tests/e2e/test-server.mjs"
@@ -870,9 +872,9 @@ def test_every_run_snapshot_construction_includes_error_key() -> None:
         # 行首等，而不是函数体起始的 ``{``（后者顶层键扫描会命中 ``const`` 之类）。
         for lineno, keys in _js_object_literal_keys(text):
             checked += 1
-            if not _RUN_REQUIRED_KEYS.issubset(keys):
-                missing = sorted(_RUN_REQUIRED_KEYS - keys)
+            if not _ACTIVITY_REQUIRED_KEYS.issubset(keys):
+                missing = sorted(_ACTIVITY_REQUIRED_KEYS - keys)
                 offenders.append(f"{js_path.relative_to(repo_root)}:{lineno} 缺少 {missing}")
 
-    assert checked > 0, "静态检查未命中任何 Run snapshot 构造点，检查逻辑已失效"
-    assert not offenders, "发现未声明 error 键的 Run snapshot 构造点：\n" + "\n".join(offenders)
+    assert checked > 0, "静态检查未命中任何 activity 构造点，检查逻辑已失效"
+    assert not offenders, "发现键不全的 activity 构造点：\n" + "\n".join(offenders)

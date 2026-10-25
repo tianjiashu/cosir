@@ -23,20 +23,20 @@ from typing import Any, cast, get_args
 import pytest
 from pydantic import BaseModel
 
-from app.core.tools.schemas import ToolDefinition
-from app.core.tools.tool_handler.execute_terminal import ExecuteTerminalTool
-from app.core.tools.tool_models.execute_terminal_args import (
+from app.core.tool.schemas import ToolDefinition
+from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
+from app.tools.tool_models.execute_terminal_args import (
     MacExecuteTerminalArgs,
     MacExecuteTerminalShell,
     WindowsExecuteTerminalArgs,
     WindowsExecuteTerminalShell,
     resolve_execute_terminal_args_model,
 )
-from app.core.tools.tool_registry import ToolRegistry
-from app.core.tools.validation.arguments import validate_tool_arguments
+from app.core.tool.tool_registry import ToolRegistry
+from app.core.tool.validation.arguments import validate_tool_arguments
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-_TOOL_MODULE = "app.core.tools.tool_handler.execute_terminal"
+_TOOL_MODULE = "app.tools.tool_handler.execute_terminal"
 
 # execute 的形参必须是「args_model 字段 + 执行链注入的 execution_context / output_sink」。
 _EXECUTION_INJECTED_PARAMS = {"execution_context", "output_sink"}
@@ -830,7 +830,7 @@ def test_execute_reports_unavailable_shell_before_any_execution(
 ) -> None:
     """本机不可用的 shell 必须在校验/执行前被拒，并给出可选值列表。"""
 
-    from app.core.tools.schemas import ToolExecutionContext
+    from app.core.tool.schemas import ToolExecutionContext
 
     _patch_windows_environment(monkeypatch, cmd=True, powershell=False, pwsh=False)
     tool = ExecuteTerminalTool()
@@ -840,8 +840,8 @@ def test_execute_reports_unavailable_shell_before_any_execution(
         command="echo hi", shell="powershell", execution_context=context
     )
     assert obs.status == "error"
-    assert "not available on this host" in obs.error
-    assert "auto, cmd" in obs.reason
+    assert "not available on this host" in obs.content
+    assert "auto, cmd" in obs.content
 
 
 def test_resolve_workdir_boundaries(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:

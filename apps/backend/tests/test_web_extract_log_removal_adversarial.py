@@ -2,7 +2,7 @@
 
 背景与验证目标
 --------------
-本次改动对 ``app/core/tools/tool_handler/web_extract.py`` 的执行流水做了两件事：
+本次改动对 ``app/core/tool/web/web_extract.py`` 的执行流水做了两件事：
 1. 删除 5 个「执行流水」日志事件，后续它们**绝不应再出现**：
    ``web_extract_url_limit_exceeded``、``web_extract_urls_rejected``、
    ``web_extract_started``、``web_extract_provider_completed``、
@@ -42,12 +42,12 @@ import pytest
 
 from app.config.constant import Constant
 from app.config.settings import Settings
-from app.core.tools.tool_handler.web.web_provider import (
+from app.core.tool.web.web_provider import (
     WebExtractItem,
     WebProviderRequestError,
     WebProviderUnavailableError,
 )
-from app.core.tools.tool_handler.web_extract import WebExtractTool
+from app.core.tool.web.web_extract import WebExtractTool
 from tests.test_web_search_extract_tools import (
     FakeProvider,
     _log_full_text,
@@ -149,12 +149,10 @@ def test_over_limit_returns_error_not_silent_success_and_no_removed_event(
     obs = tool.execute(urls=urls)
 
     assert obs.status == "error"
-    assert obs.retryable is True
-    assert obs.error is not None and str(Constant.Web.EXTRACT_URL_LIMIT_MAX) in obs.error
+    assert "hint: this error can be retried" in obs.content
+    assert str(Constant.Web.EXTRACT_URL_LIMIT_MAX) in obs.content
     # 超限在被拦时绝不能调用 provider（无网络副作用）。
     assert provider.extract_calls == []
-    # 不得静默成功：content 必须是 None（错误观察）。
-    assert obs.content is None
     assert _find(caplog.records, "web_extract_url_limit_exceeded") == []
     _assert_no_removed_events(caplog.records)
 
@@ -202,10 +200,9 @@ def test_security_rejection_paths_behavior_unchanged(
     obs = tool.execute(urls=[url])
 
     assert obs.status == "error"
-    assert obs.error is not None and obs.error.startswith("Blocked:")
-    assert error_fragment in obs.error
-    assert obs.retryable is False
-    assert obs.content is None
+    assert obs.content.startswith("error: Blocked:")
+    assert error_fragment in obs.content
+    assert "hint: do not retry this tool call." in obs.content
     assert provider.extract_calls == []
     # 错误 UI 通道只承载稳定短提示，不承载完整错误原因。
     assert obs.display_data == {"status_hint": "提取失败"}
@@ -223,8 +220,8 @@ def test_ip_literal_internal_blocked_with_system_resolver() -> None:
         obs = tool.execute(urls=[url])
 
         assert obs.status == "error", f"{url} 应被拦截"
-        assert obs.error is not None and obs.error.startswith("Blocked:")
-        assert obs.retryable is False
+        assert obs.content.startswith("error: Blocked:")
+        assert "hint: do not retry this tool call." in obs.content
         assert provider.extract_calls == []
 
 
@@ -260,9 +257,8 @@ def test_provider_unavailable_path_behavior_and_kept_event(
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert obs.error == "not configured here"
-    assert obs.retryable is False
-    assert obs.content is None
+    assert obs.content.startswith("error: not configured here\n")
+    assert "hint: do not retry this tool call." in obs.content
     kept = _find(caplog.records, "web_extract_provider_unavailable")
     assert kept, "provider 未配置路径必须保留 web_extract_provider_unavailable"
     assert kept[0].data["provider"] == "fake"
@@ -284,11 +280,10 @@ def test_provider_generic_exception_path_behavior_and_kept_event(
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert obs.retryable is True
-    assert obs.content is None
-    assert "fake" in (obs.error or "")
+    assert "hint: this error can be retried" in obs.content
+    assert "fake" in obs.content
     # 原始异常细节不写入面向模型的 error（避免噪声 / 泄漏）。
-    assert "boom-detail-should-not-leak" not in (obs.error or "")
+    assert "boom-detail-should-not-leak" not in obs.content
     kept = _find(caplog.records, "web_extract_provider_failed")
     assert kept, "provider 通用异常路径必须保留 web_extract_provider_failed"
     _assert_no_removed_events(caplog.records)
@@ -312,9 +307,8 @@ def test_all_pages_failed_path_behavior_and_kept_event_with_elapsed(
     obs = tool.execute(urls=["https://e.com/1", "https://e.com/2"])
 
     assert obs.status == "error"
-    assert obs.retryable is True
-    assert obs.error is not None and "boom1" in obs.error and "boom2" in obs.error
-    assert obs.content is None
+    assert "hint: this error can be retried" in obs.content
+    assert "boom1" in obs.content and "boom2" in obs.content
     kept = _find(caplog.records, "web_extract_all_pages_failed")
     assert kept, "全页失败必须保留 web_extract_all_pages_failed"
     elapsed = kept[0].data["elapsed_ms"]
@@ -394,8 +388,8 @@ def test_result_build_failure_path_behavior_and_kept_event(
     obs = tool.execute(urls=["https://ec.com/1"])
 
     assert obs.status == "error"
-    assert obs.error == "Web extraction result assembly failed."
-    assert obs.retryable is False
+    assert obs.content.startswith("error: Web extraction result assembly failed.\n")
+    assert "hint: do not retry this tool call." in obs.content
     kept = _find(caplog.records, "web_extract_result_build_failed")
     assert kept, "结果构造失败必须保留 web_extract_result_build_failed"
     # data.provider 分支使用了 provider.name（provider 为真值）；不得因删日志而 NameError。
@@ -890,7 +884,7 @@ def test_provider_side_page_failed_event_still_available_contract() -> None:
 
     import logging as _logging
 
-    from app.core.tools.tool_handler.web.providers.firecrawl_provider import FirecrawlProvider
+    from app.core.tool.web.providers.firecrawl_provider import FirecrawlProvider
 
     class _FailPost(FirecrawlProvider):
         def _post(self, endpoint: str, body: dict[str, object]) -> object:

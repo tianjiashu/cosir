@@ -3,17 +3,16 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tools.guard.file_resource_paths import FileResourceResolver
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.core.tools.tool_handler.delete_tool import DELETE_FILE_DESCRIPTION, DeleteTool
-from app.core.tools.tool_handler.move_tool import MOVE_FILE_DESCRIPTION, MoveTool
-from app.core.tools.tool_handler.patch_write.patch_parser import parse_git_unified_diff
-from app.core.tools.tool_handler.tool_base import HandlerBase
-from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
-from app.core.tools.tool_models.delete_file_args import DeleteFileArgs
-from app.core.tools.tool_models.move_file_args import MoveFileArgs
-from app.core.tools.tool_system import ToolSystem
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.delete_tool import DELETE_FILE_DESCRIPTION, DeleteTool
+from app.tools.tool_handler.move_tool import MOVE_FILE_DESCRIPTION, MoveTool
+from app.tools.tool_handler.patch_write import parse_git_unified_diff
+from app.core.tool.tool_base import HandlerBase
+from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
+from app.tools.tool_models.delete_file_args import DeleteFileArgs
+from app.tools.tool_models.move_file_args import MoveFileArgs
+from app.tools.tool_system import ToolSystem
 
 # 工具描述的事实源已从模块级常量 ``APPLY_PATCH_DESCRIPTION`` 迁移为类属性
 # ``ApplyPatchTool.description``（模块不再导出该名字）。这里只做「测试内别名」，把下文的
@@ -244,21 +243,6 @@ def test_apply_patch_rejects_legacy_patch_markers_and_prevalidates_all_files(
     assert rejected.status == "error"
     assert first.read_text(encoding="utf-8") == "before first\n"
     assert second.read_text(encoding="utf-8") == "before second\n"
-
-
-def test_delete_and_move_resolve_and_lock_all_workspace_paths(tmp_path: Path) -> None:
-    resources = FileResourceResolver(tmp_path)
-    delete = resources.resolve("delete_file", {"path": "src/old.txt"})
-    move = resources.resolve(
-        "move_file",
-        {"source_path": "src/old.txt", "destination_path": "dest/new.txt"},
-    )
-
-    assert delete.write_paths == (tmp_path / "src/old.txt",)
-    assert move.write_paths == (tmp_path / "src/old.txt", tmp_path / "dest/new.txt")
-    assert tmp_path / "src" in delete.lock_paths
-    assert tmp_path / "src" in move.lock_paths
-    assert tmp_path / "dest" in move.lock_paths
 
 
 def test_delete_tool_unlinks_one_text_file_but_refuses_a_directory(tmp_path: Path) -> None:

@@ -8,9 +8,21 @@ from openai.types.chat import (
 
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.message_metadata import EmptyMessageMetadata, ToolMessageMetadata
+from app.models.message_metadata import (
+    EmptyMessageMetadata,
+    ToolMessageMetadata,
+    UserMessageMetadata,
+)
 from tests.sdk_fixtures import sdk_completion
+
+
+def _user_meta(text: str) -> UserMessageMetadata:
+    """落库的用户消息都带来源 ``kind``；用户输入还带展示绑定（snapshot 重建与 fork 只从这里取）。"""
+    return UserMessageMetadata(
+        kind="user_input", presentation=UserInputPresentation(display_text=text)
+    )
 
 
 class _ContextService:
@@ -38,6 +50,9 @@ class _ContextService:
         include_in_context: bool,
         metadata: object = None,
         project_to_transport: bool = True,
+        session: object = None,
+        *,
+        message_id: int | None = None,
     ) -> ContextEntry:
         self.appended.append((task_id, run_id, message, seq, include_in_context))
         self.current_max_sequence = seq
@@ -91,7 +106,9 @@ def test_runtime_message_context_manager_owns_next_sequence_after_run_restart() 
     context_service = _ContextService(max_sequence=1)
     manager = _manager(context_service, next_sequence=0)
     manager.begin_run(SimpleNamespace(task_id=7, id=2))
-    manager.add_message({"role": "user", "content": "second message"})
+    manager.add_message(
+        {"role": "user", "content": "second message"}, metadata=_user_meta("second message")
+    )
 
     assert context_service.appended[0][3] == 2
     assert manager._message_sequence == 3
@@ -236,7 +253,7 @@ def test_add_message_replaces_paired_tool_result_row_in_place() -> None:
         {"role": "tool", "content": "placeholder", "tool_call_id": "call-1"},
         metadata=ToolMessageMetadata(
             status="running",
-            display_data={"user_input_request": {"request_id": "wait-1"}},
+            display_data={"kind": "read-file-meta", "path": "old.txt"},
             error="old",
         ),
     )

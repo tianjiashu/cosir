@@ -6,13 +6,14 @@ from PIL import Image
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_task_state_service import _apply_mutation
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
-from app.core.events import RunInitializedEvent, UserInputConsumedEvent
+from app.core.events import RunInitializedEvent
 from app.models.conversation_input import UserInputPresentation
 from app.service.attachment.image_normalizer import (
     ImageNormalizationError,
     normalize_image,
 )
 from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
+from tests.transport_fixtures import consumed, queue_user_input
 
 
 def test_normalize_rejects_unsupported_bmp(tmp_path: Path) -> None:
@@ -69,21 +70,16 @@ def test_run_initialized_has_no_messages_and_input_event_projects_image() -> Non
     """Run 骨架不预置 user 消息；用户输入事件把图片 locator 原样投影为独立 user 消息。"""
 
     snapshot = _apply_planned(RunInitializedEvent(task_id=1, run_id=1), empty_snapshot())
-    assert snapshot["runs"][0]["messages"] == []
+    assert snapshot["messages"] == []
 
     image_part = {"type": "image", "image": "cosir-attachment://" + "1" * 64}
-    snapshot = _apply_planned(
-        UserInputConsumedEvent(
-            task_id=1,
-            run_id=1,
-            message_id="user-1",
-            presentation=UserInputPresentation(
-                display_text="", image_paths=[f"attachments/{'1' * 64}.png"]
-            ),
-        ),
+    queue_user_input(
         snapshot,
+        1,
+        UserInputPresentation(display_text="", image_paths=[f"attachments/{'1' * 64}.png"]),
     )
-    user_message, assistant_message = snapshot["runs"][0]["messages"]
+    snapshot = _apply_planned(consumed(1, 1, 1), snapshot)
+    user_message, assistant_message = snapshot["messages"]
     assert user_message["role"] == "user"
     assert user_message["parts"] == [image_part]
     assert assistant_message["role"] == "assistant"

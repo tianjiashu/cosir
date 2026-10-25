@@ -31,13 +31,13 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
-    UserInputConsumedEvent,
 )
-from app.core.tools.schemas import ToolObservation
-from app.core.tools.tool_execute.tool_terminal_projection import terminal_event
+from app.core.tool.schemas import ToolObservation
+from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import ConversationRunStatus
+from tests.transport_fixtures import consumed, queue_user_input
 
 
 class InMemorySnapshotService:
@@ -64,16 +64,7 @@ class InMemorySnapshotService:
             _apply_mutation(state, mutation)
         validate_snapshot(state)
         self.states[task_id] = copy.deepcopy(state)
-        return TransportFrame(
-            task_id=task_id,
-            kind="mutation",
-            mutations=mutations,
-            source_run_id=getattr(event, "run_id", None),
-            current_run_id=state["current_run_id"],
-            current_run_status=_run(state, state["current_run_id"])["status"]
-            if state["current_run_id"] is not None
-            else None,
-        )
+        return TransportFrame(task_id=task_id, kind="mutation", mutations=mutations)
 
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:
@@ -115,16 +106,24 @@ def _init_run(
 def _append_user_input(
     projector: ConversationEventProjector, task_id: int = 1, run_id: int = 1
 ) -> None:
-    """追加一条已消费用户输入，生成 user 消息与其后的 assistant 占位。"""
+    """追加一条已消费用户输入，生成 user 消息与其后的 assistant 占位。
 
-    projector.process(
-        UserInputConsumedEvent(
-            task_id=task_id,
-            run_id=run_id,
-            message_id=f"user-{run_id}",
-            presentation=UserInputPresentation(display_text="你好"),
-        )
-    )
+    生产口径：先投影排队消息，再发只带消息身份的消费事件（消息身份取 Run 号，便于断言）。
+    """
+
+    _consume(projector, run_id, UserInputPresentation(display_text="你好"), task_id, run_id)
+
+
+def _consume(
+    projector: ConversationEventProjector,
+    message_id: int,
+    presentation: UserInputPresentation,
+    task_id: int = 1,
+    run_id: int = 1,
+) -> object:
+    owner = projector._state_service
+    queue_user_input(owner.states.setdefault(task_id, empty_snapshot()), message_id, presentation)
+    return projector.process(consumed(task_id, run_id, message_id))
 
 
 def _start(projector: ConversationEventProjector, context_window_total: int | None = None) -> None:
@@ -134,8 +133,21 @@ def _start(projector: ConversationEventProjector, context_window_total: int | No
     _append_user_input(projector)
 
 
+def _messages(state: ConversationStateSnapshot, run_id: int) -> list[dict[str, Any]]:
+    """某 Run 的消息（扁平消息列表按 ``runId`` 过滤）。"""
+    return [message for message in state["messages"] if message["runId"] == run_id]
+
+
 def _run(state: ConversationStateSnapshot, run_id: int) -> dict[str, Any]:
-    return next(run for run in state["runs"] if run["runId"] == run_id)
+    """某 Run 在 Task 视角 snapshot 里的生命周期视图：当前活动读 ``activity``，旧 Run 读它最后
+    一条助手消息的 ``outcome``。"""
+    activity = state["activity"]
+    if activity is not None and activity["runId"] == run_id:
+        return dict(activity)
+    assistant = [m for m in _messages(state, run_id) if m["role"] == "assistant"]
+    outcome = assistant[-1]["outcome"] if assistant else None
+    assert outcome is not None, f"run {run_id} 既不是当前活动也没有结局"
+    return dict(outcome)
 
 
 def test_run_initialized_and_user_input(
@@ -143,19 +155,18 @@ def test_run_initialized_and_user_input(
 ) -> None:
     event_projector, snapshots = projector
     _init_run(event_projector)
-    assert _run(snapshots.states[1], 1)["messages"] == []
+    assert _messages(snapshots.states[1], 1) == []
     _append_user_input(event_projector)
     state = snapshots.states[1]
-    current = _run(state, 1)
-    assert state["current_run_id"] == 1
-    # Run 由 WorkflowSession 直接以 running 创建，没有待认领态。
-    assert current["status"] == "running"
-    assert [(m["id"], m["role"]) for m in current["messages"]] == [
-        ("user-1", "user"),
-        ("assistant-user-1", "assistant"),
+    assert state["activity"]["runId"] == 1
+    # Run 由调度 actor 直接以 running 创建，没有待认领态。
+    assert state["activity"]["status"] == "running"
+    assert [(m["id"], m["role"], m["runId"], m["outcome"]) for m in state["messages"]] == [
+        ("1", "user", 1, None),
+        ("assistant-1", "assistant", 1, None),
     ]
-    assert current["messages"][0]["parts"][0]["text"] == "你好"
-    assert current["messages"][1]["parts"] == []
+    assert state["messages"][0]["parts"][0]["text"] == "你好"
+    assert state["messages"][1]["parts"] == []
 
 
 def test_delegation_status_event_projects_display_data_to_target_tool(
@@ -187,7 +198,7 @@ def test_delegation_status_event_projects_display_data_to_target_tool(
     )
 
     change = event_projector.process(event)
-    part = _run(snapshots.states[1], 1)["messages"][1]["parts"][0]
+    part = _messages(snapshots.states[1], 1)[1]["parts"][0]
 
     assert change is not None
     assert part["display_data"] == {
@@ -218,27 +229,24 @@ def test_user_input_projects_ordered_text_image_and_file_parts(
     ]
 
     image_id = "a" * 64
-    event_projector.process(
-        UserInputConsumedEvent(
-            task_id=1,
-            run_id=1,
-            message_id="user-1",
-            presentation=UserInputPresentation(
-                display_text=f"请看[[cosir-file:readme]]和这张图[[cosir-image:{image_id}]]",
-                image_paths=[f"attachments/{image_id}.png"],
-                attachments=[
-                    {
-                        "id": "readme",
-                        "name": "README.md",
-                        "content_type": "text/markdown",
-                        "path": "attachments/readme.md",
-                    }
-                ],
-            ),
-        )
+    _consume(
+        event_projector,
+        1,
+        UserInputPresentation(
+            display_text=f"请看[[cosir-file:readme]]和这张图[[cosir-image:{image_id}]]",
+            image_paths=[f"attachments/{image_id}.png"],
+            attachments=[
+                {
+                    "id": "readme",
+                    "name": "README.md",
+                    "content_type": "text/markdown",
+                    "path": "attachments/readme.md",
+                }
+            ],
+        ),
     )
 
-    user_parts = _run(snapshots.states[1], 1)["messages"][0]["parts"]
+    user_parts = _messages(snapshots.states[1], 1)[0]["parts"]
     assert user_parts == parts
     assert all(part.get("path") is None for part in user_parts if isinstance(part, dict))
 
@@ -248,11 +256,10 @@ def test_user_input_supports_attachment_only_and_duplicate_event(
 ) -> None:
     event_projector, snapshots = projector
     _init_run(event_projector)
-    event = UserInputConsumedEvent(
-        task_id=1,
-        run_id=1,
-        message_id="user-1",
-        presentation=UserInputPresentation(
+    queue_user_input(
+        snapshots.states[1],
+        1,
+        UserInputPresentation(
             display_text="[[cosir-file:only-file]]",
             attachments=[
                 {
@@ -264,13 +271,15 @@ def test_user_input_supports_attachment_only_and_duplicate_event(
             ],
         ),
     )
+    event = consumed(1, 1, 1)
 
     first = event_projector.process(event)
+    # 同一事件重复投递：按 event_id 去重，不再产出帧。
     second = event_projector.process(event)
 
     assert first is not None
     assert second is None
-    assert _run(snapshots.states[1], 1)["messages"][0]["parts"] == [
+    assert _messages(snapshots.states[1], 1)[0]["parts"] == [
         {
             "type": "file",
             "file": "cosir-local-file:only-file",
@@ -357,7 +366,7 @@ def test_assistant_text_and_reasoning_parts(
     )
     event_projector.process(AssistantPartClosedEvent(task_id=1, run_id=1, part="reasoning"))
     event_projector.process(AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="答案"))
-    parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
+    parts = _messages(snapshots.states[1], 1)[1]["parts"]
     assert [part["type"] for part in parts] == ["reasoning", "text"]
     assert parts[0]["text"] == "先思考一下"
     assert parts[0]["status"] == "completed"
@@ -374,7 +383,7 @@ def test_duplicate_text_delta_is_not_appended_twice(
     second = event_projector.process(event)
     assert first is not None and first.mutations
     assert second is None
-    assert _run(snapshots.states[1], 1)["messages"][1]["parts"][0]["text"] == "一次"
+    assert _messages(snapshots.states[1], 1)[1]["parts"][0]["text"] == "一次"
 
 
 def test_tool_lifecycle_and_settlement(
@@ -422,7 +431,7 @@ def test_tool_lifecycle_and_settlement(
     event_projector.process(
         ToolCallsSettledEvent(task_id=1, run_id=1, status="failed", reason="runtime_failed")
     )
-    parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
+    parts = _messages(snapshots.states[1], 1)[1]["parts"]
     assert parts[0]["status"] == "completed"
     assert parts[0]["presentation"]["expandable"] is False
     assert parts[0]["display_data"] == {"kind": "read-file-meta", "path": "a.py", "total_lines": 10}
@@ -507,7 +516,7 @@ def test_tool_part_is_created_after_run_resume(
         )
     )
 
-    parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
+    parts = _messages(snapshots.states[1], 1)[1]["parts"]
     assert [part["toolCallId"] for part in parts] == ["call-9"]
     assert parts[0]["status"] == "running"
     assert parts[0]["args"] == {"path": "a.py"}
@@ -534,7 +543,7 @@ def test_tool_status_change_without_part_is_skipped(
 
     assert change is not None
     assert change.mutations == ()
-    assert _run(snapshots.states[1], 1)["messages"][1]["parts"] == []
+    assert _messages(snapshots.states[1], 1)[1]["parts"] == []
     assert "tool_call_part_missing_for_status_change" in {
         record.message for record in caplog.records
     }
@@ -558,7 +567,7 @@ def test_run_status_usage_is_projected(
     )
     state = snapshots.states[1]
     assert _run(state, 1)["usage"]["total_tokens"] == 14
-    assert state["current_run_id"] == 1
+    assert state["activity"]["runId"] == 1
     assert _run(state, 1)["contextWindowTotal"] == 100
     assert _run(state, 1)["status"] == "completed"
 
@@ -602,8 +611,8 @@ def test_new_run_clears_previous_run_usage(
     state = snapshots.states[1]
     assert _run(state, 1)["usage"]["total_tokens"] == 14
     assert _run(state, 2)["usage"] is None
+    # 上下文窗口只属于当前活动；旧 Run 的结局不带窗口上限。
     assert _run(state, 2)["contextWindowTotal"] is None
-    assert _run(state, 1)["contextWindowTotal"] == 100
     assert "context_window_total" not in state
 
 
@@ -649,7 +658,7 @@ def test_structured_result_updates_completed_run_without_status_transition(
         )
     )
     assert change is not None and change.mutations
-    assert snapshots.states[1]["current_run_id"] == 2
+    assert snapshots.states[1]["activity"]["runId"] == 2
     assert _run(snapshots.states[1], 1)["status"] == "completed"
     assert _run(snapshots.states[1], 1)["endReason"] == "structured_output_failed"
     assert _run(snapshots.states[1], 1)["usage"]["total_tokens"] == 6
@@ -689,20 +698,18 @@ def test_historical_run_status_event_updates_its_own_run(
 def test_unknown_run_event_raises_and_is_not_projected(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
-    """事件引用快照里不存在的 Run 时按契约 fail-fast，不写入任何 mutation。"""
+    """事件引用的 Run 既不是当前活动、也没有已写出的结局时丢弃（留痕），不写入任何 mutation。"""
 
     event_projector, snapshots = projector
-    with pytest.raises(KeyError, match="run 404 not found"):
-        event_projector.process(
-            RunStatusChangedEvent(
-                task_id=1,
-                run_id=404,
-                status=ConversationRunStatus.COMPLETED,
-                usage_stats=ConversationRunUsageStats(
-                    input_tokens=1, output_tokens=1, total_tokens=2
-                ),
-            )
+    change = event_projector.process(
+        RunStatusChangedEvent(
+            task_id=1,
+            run_id=404,
+            status=ConversationRunStatus.COMPLETED,
+            usage_stats=ConversationRunUsageStats(input_tokens=1, output_tokens=1, total_tokens=2),
         )
+    )
+    assert change is not None and change.mutations == ()
     assert snapshots.states.get(1, empty_snapshot()) == empty_snapshot()
 
 
@@ -762,7 +769,7 @@ def _assert_reapply_changes_nothing(
     """同一业务事实用新 event_id 再投一次后，快照必须与首次完全一致。
 
     这证明该事件的 ``plan`` 自幂等：去重窗口淘汰后即使重复投递漏网，也不会改坏快照。
-    唯一的例外是 ``RunInitializedEvent(replace_existing=True)``，见对应用例。
+
     """
 
     event_projector.process(factory())
@@ -809,7 +816,7 @@ def test_duplicate_delta_event_is_dropped(
     event = AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="abc")
     assert event_projector.process(event) is not None
     assert event_projector.process(event) is None
-    parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
+    parts = _messages(snapshots.states[1], 1)[1]["parts"]
     assert [part["text"] for part in parts] == ["abc"]
 
 
@@ -827,7 +834,7 @@ def test_evicted_delta_is_no_longer_deduplicated(monkeypatch: pytest.MonkeyPatch
     assert event_projector._dedup_window.size == 2
     # 最早的 a 已被淘汰：重放它会再次被应用（后果是文本重复，而非崩溃）。
     assert event_projector.process(events[0]) is not None
-    parts = _run(snapshots.states[1], 1)["messages"][1]["parts"]
+    parts = _messages(snapshots.states[1], 1)[1]["parts"]
     assert [part["text"] for part in parts] == ["abca"]
 
 
@@ -880,12 +887,7 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
-        lambda: UserInputConsumedEvent(
-            task_id=1,
-            run_id=1,
-            message_id="user-1",
-            presentation=UserInputPresentation(display_text="你好"),
-        ),
+        lambda: consumed(1, 1, 1),
     )
     _assert_reapply_changes_nothing(
         event_projector,
@@ -948,31 +950,169 @@ def test_idempotent_tool_events_reapply_without_changing_snapshot(
     )
 
 
-def test_run_initialized_replace_existing_reapplication_resets_run(
+
+
+# ---------------------------------------------------------------------------
+# Task 视角：activity、消息级结局（outcome）与旧 Run 的迟到事件
+# ---------------------------------------------------------------------------
+
+
+def _finish(
+    projector: ConversationEventProjector,
+    run_id: int,
+    status: ConversationRunStatus,
+    total_tokens: int | None = None,
+) -> None:
+    usage = (
+        None
+        if total_tokens is None
+        else ConversationRunUsageStats(input_tokens=1, output_tokens=1, total_tokens=total_tokens)
+    )
+    projector.process(
+        RunStatusChangedEvent(task_id=1, run_id=run_id, status=status, usage_stats=usage)
+    )
+
+
+def test_empty_task_has_no_activity() -> None:
+    """A3：Task 还没有任何 Run 时 activity 为 null。"""
+
+    assert empty_snapshot()["activity"] is None
+
+
+def test_activity_follows_latest_run(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
-    """记录危害：``replace_existing=True`` 重复应用会清空 run，故去重必须覆盖全部事件。
+    """A3：activity 是最新 Run 的摘要；新 Run 初始化后切换到它。"""
 
-    去重窗口淘汰后，极旧事件的重复投递会漏网。对绝大多数事件这不构成问题（plan 自幂等），
-    但本事件是唯一例外——它整体 ``set`` 会把 run 重置为空骨架并清空 messages。因此
-    去重不能按「事件是否幂等」收窄，必须对所有事件生效。
+    event_projector, snapshots = projector
+    _start(event_projector, context_window_total=100)
+    _finish(event_projector, 1, ConversationRunStatus.COMPLETED, total_tokens=9)
+    event_projector.process(RunInitializedEvent(task_id=1, run_id=2, context_window_total=64))
+
+    activity = snapshots.states[1]["activity"]
+    assert (activity["runId"], activity["status"], activity["usage"]) == (2, "running", None)
+    assert activity["contextWindowTotal"] == 64
+
+
+def test_terminal_status_writes_outcome_on_last_assistant_message(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """A2：运行中助手消息没有 outcome；Run 终态时写到该 Run 最后一条助手消息，user 消息不带。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector, context_window_total=100)
+    _consume(event_projector, 2, UserInputPresentation(display_text="追问"))
+    assert all(m["outcome"] is None for m in snapshots.states[1]["messages"])
+
+    _finish(event_projector, 1, ConversationRunStatus.COMPLETED, total_tokens=7)
+
+    outcomes = [(m["id"], m["outcome"]) for m in snapshots.states[1]["messages"]]
+    assert [message_id for message_id, outcome in outcomes if outcome is not None] == [
+        "assistant-2"
+    ]
+    outcome = snapshots.states[1]["messages"][-1]["outcome"]
+    assert outcome["status"] == "completed"
+    assert outcome["usage"]["total_tokens"] == 7
+    # 窗口上限与用量同属这个 Run：取自它的 activity，不随后续 Run 变化。
+    assert outcome["contextWindowTotal"] == 100
+
+
+def test_resume_clears_outcome(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """A2：取消后恢复（cancelled → running）清空结局，重新进入终态时再写。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    _finish(event_projector, 1, ConversationRunStatus.CANCELLED)
+    assert snapshots.states[1]["messages"][-1]["outcome"]["status"] == "cancelled"
+
+    _finish(event_projector, 1, ConversationRunStatus.RUNNING)
+    assert snapshots.states[1]["messages"][-1]["outcome"] is None
+    assert snapshots.states[1]["activity"]["status"] == "running"
+
+    _finish(event_projector, 1, ConversationRunStatus.FAILED)
+    assert snapshots.states[1]["messages"][-1]["outcome"]["status"] == "failed"
+
+
+def test_late_events_of_previous_run_only_update_its_outcome(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """A5：两个 Run 依次结束后回放第一个 Run 的状态 / 结果事件。
+
+    activity 不变，只更新第一个 Run 的 outcome。
     """
 
     event_projector, snapshots = projector
     _start(event_projector)
-    reset = RunInitializedEvent(task_id=1, run_id=1, replace_existing=True)
+    _finish(event_projector, 1, ConversationRunStatus.COMPLETED, total_tokens=5)
+    event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
+    _append_user_input(event_projector, run_id=2)
+    _finish(event_projector, 2, ConversationRunStatus.COMPLETED, total_tokens=11)
+    activity_before = copy.deepcopy(snapshots.states[1]["activity"])
 
-    assert event_projector.process(reset) is not None
-    # 同一 event_id 的重复投递必须被去重，否则 run 会被再次重置。
-    assert event_projector.process(reset) is None
-
-    _append_user_input(event_projector)
     event_projector.process(
-        AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="已产出的回答")
+        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
-    assert _run(snapshots.states[1], 1)["messages"][1]["parts"] != []
+    event_projector.process(
+        RunResultUpdatedEvent(
+            task_id=1,
+            run_id=1,
+            end_reason="structured_output_failed",
+            usage_stats=ConversationRunUsageStats(input_tokens=3, output_tokens=3, total_tokens=6),
+        )
+    )
 
-    # 换新 event_id、同一业务事实：模拟「去重窗口淘汰后漏网」的那一次重复投递。
-    event_projector.process(RunInitializedEvent(task_id=1, run_id=1, replace_existing=True))
+    state = snapshots.states[1]
+    assert state["activity"] == activity_before
+    first_outcome = _messages(state, 1)[-1]["outcome"]
+    assert first_outcome["endReason"] == "structured_output_failed"
+    assert first_outcome["usage"]["total_tokens"] == 6
+    assert _messages(state, 2)[-1]["outcome"]["usage"]["total_tokens"] == 11
 
-    assert _run(snapshots.states[1], 1)["messages"] == []
+
+def test_run_events_never_write_top_level_error(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """A6：Run 的失败只进 activity / outcome，run 事件投影不写顶层 error（它只承载命令被拒）。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    failure = {"code": "model_network_error", "message": "无法连接模型服务"}
+    change = event_projector.process(
+        RunStatusChangedEvent(
+            task_id=1, run_id=1, status=ConversationRunStatus.FAILED, error=failure
+        )
+    )
+
+    assert change is not None
+    assert all(mutation.path != ("error",) for mutation in change.mutations)
+    state = snapshots.states[1]
+    assert state["error"] is None
+    assert state["activity"]["error"] == failure
+    assert state["messages"][-1]["outcome"]["error"] == failure
+
+
+def test_first_output_of_run_without_user_input_creates_leading_reply(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """被结果消息唤醒新开、没有用户输入的 Run 第一次输出时建出助手消息。
+
+    该消息 id 为 ``assistant-run-{runId}``。
+    """
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    _finish(event_projector, 1, ConversationRunStatus.COMPLETED)
+    event_projector.process(RunInitializedEvent(task_id=1, run_id=2))
+
+    event_projector.process(AssistantTextDeltaEvent(task_id=1, run_id=2, part="text", delta="结"))
+    event_projector.process(AssistantTextDeltaEvent(task_id=1, run_id=2, part="text", delta="论"))
+    event_projector.process(
+        ToolCallCreatedEvent(task_id=1, run_id=2, tool_call_id="call-9", tool_name="read_file")
+    )
+
+    [reply] = _messages(snapshots.states[1], 2)
+    assert (reply["id"], reply["role"], reply["outcome"]) == ("assistant-run-2", "assistant", None)
+    assert reply["parts"][0]["text"] == "结论"
+    assert reply["parts"][1]["toolCallId"] == "call-9"

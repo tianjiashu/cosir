@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tools.schemas import ToolCall, ToolExecutionContext
-from app.core.tools.tool_execute import tool_executor as tool_executor_module
+from app.core.tool.schemas import ToolCall, ToolExecutionContext
+from app.core.tool.execute import tool_executor as tool_executor_module
 
 
 def emit_running(call: ToolCall, execution_context: ToolExecutionContext) -> None:

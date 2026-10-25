@@ -13,7 +13,7 @@ from app.models.conversation_input import ConversationInput
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_options import ConversationRunOptions
-from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.react_execution_state import ReactExecutionState
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.input_errors import UserInputRejectedError
@@ -389,7 +389,7 @@ def test_run_crud_clone_preserves_options_and_resets_progress() -> None:
             "code": "provider_error",
             "message": "provider unavailable",
         }
-        assert cloned.execution_data == ConversationRunProgress()
+        assert cloned.execution_data == ReactExecutionState()
         assert cloned.options == source.options
     finally:
         engine.dispose()
@@ -429,7 +429,7 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
             )
             session.flush()
 
-            service.clone_for_fork(7, 8, {11: 22}, session)
+            service.clone_for_fork(7, 8, {11: 22}, session, max_sequence=3)
             cloned_row = session.scalar(
                 select(ConversationTaskContextModel).where(
                     ConversationTaskContextModel.task_id == 8,
@@ -500,7 +500,7 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
                     task_id=7,
                     status="running",
                     options=ConversationRunOptions().model_dump(mode="json"),
-                    execution_data=ConversationRunProgress().model_dump(mode="json"),
+                    execution_data=ReactExecutionState().model_dump(mode="json"),
                 )
             )
             context = ConversationTaskContextRecord(

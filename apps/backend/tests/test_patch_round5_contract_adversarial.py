@@ -33,14 +33,14 @@ import pathlib
 
 import pytest
 
-from app.core.tools.guard.file_resource_paths import FileResourceResolver
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.core.tools.tool_handler.patch_write.patch_parser import (
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.patch_write import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
-from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
+from app.utils import atomic_write
+from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
 PARAM_DESCRIPTION = ApplyPatchArgs.model_fields["patch"].description or ""
 
@@ -297,12 +297,12 @@ def test_every_validation_cause_is_attributed_in_the_reason(tmp_path: pathlib.Pa
         _validation_cases(tmp_path).items(), start=1
     ):
         observation = _execute(tmp_path, patch, 5100 + index)
-        reason = observation.reason or ""
+        reason = observation.content.split("\nreason: ", 1)[-1]
         if observation.status != "error":
             failures.append(f"{name}: status={observation.status} 期望 error")
             continue
-        if error_needle not in observation.error:
-            failures.append(f"{name}: error 未点名原因 {error_needle!r}: {observation.error!r}")
+        if error_needle not in observation.content:
+            failures.append(f"{name}: error 未点名原因 {error_needle!r}: {observation.content!r}")
         for needle in expectations[name]:
             if needle not in reason:
                 failures.append(f"{name}: reason 未按原因类别归因 {needle!r}: {reason!r}")
@@ -320,7 +320,7 @@ def test_target_file_causes_say_the_diff_cannot_fix_them(tmp_path: pathlib.Path)
     for index, name in enumerate(("binary target", "non-UTF-8 target", "reserved area"), start=1):
         patch, _ = cases[name]
         observation = _execute(tmp_path, patch, 5200 + index)
-        reason = observation.reason or ""
+        reason = observation.content.split("\nreason: ", 1)[-1]
         if "cannot be fixed by editing the diff" not in reason:
             failures.append(f"{name}: reason 未说明「改 diff 无法修复」: {reason!r}")
         if "pick another target" not in reason:
@@ -338,8 +338,8 @@ def test_hunk_context_failure_keeps_the_diff_repair_path_open(tmp_path: pathlib.
     observation = _execute(tmp_path, patch, 5300)
 
     assert observation.status == "error"
-    assert "no files were modified" in observation.error
-    reason = observation.reason or ""
+    assert "no files were modified" in observation.content
+    reason = observation.content.split("\nreason: ", 1)[-1]
     assert (
         "then submit a new Git unified diff" in reason
     ), f"可修正的上下文不符原因被剥夺了「改 diff 重提」的修复路径: {reason!r}"
@@ -358,10 +358,10 @@ def test_no_validation_cause_writes_a_file_or_blocks_retry(tmp_path: pathlib.Pat
     failures = []
     for index, (name, (patch, _)) in enumerate(cases.items(), start=1):
         observation = _execute(tmp_path, patch, 5400 + index)
-        if observation.retryable is not True:
-            failures.append(f"{name}: retryable={observation.retryable} 期望 True")
-        if observation.error.count("no files were modified") != 1:
-            failures.append(f"{name}: error 未声明零写入: {observation.error!r}")
+        if "hint: this error can be retried" not in observation.content:
+            failures.append(f"{name}: 未提示可重试: {observation.content!r}")
+        if observation.content.count("no files were modified") != 1:
+            failures.append(f"{name}: error 未声明零写入: {observation.content!r}")
 
     for path, expected in snapshots.items():
         target = tmp_path / path
@@ -381,7 +381,7 @@ def test_reserved_area_error_does_not_hint_at_a_bypass(tmp_path: pathlib.Path) -
     (tmp_path / ".cosir" / "meta.txt").write_text("x\n", encoding="utf-8")
 
     observation = _execute(tmp_path, _valid_patch(".cosir/meta.txt"), 5500)
-    text = (observation.error or "") + "\n" + (observation.reason or "")
+    text = observation.content
     lowered = text.lower()
 
     assert observation.status == "error"
@@ -840,11 +840,11 @@ def test_undocumented_backslash_prefix_never_yields_a_silent_success() -> None:
     assert not silent, "反斜杠前缀的正文行在补丁被判有效时被静默消费:\n" + "\n".join(silent)
 
 
-# Purpose: a rejected patch must never write, must stay retryable, and must not be handed
-# resource locks. Defect type: side effects or lock acquisition on the rejection path.
+# Purpose: a rejected patch must never write and must stay retryable.
+# Defect type: side effects on the rejection path.
 # 2026-09-21 契约 B：计数不符改为按正文重算 + 提示（会被接受并真的写入），因此本用例改用
-# **真正被拒绝的形状**（缺 '---' 头、二进制元数据）来继续保障「拒绝 → 零写入 + 不申请锁」。
-def test_rejected_patch_writes_nothing_and_takes_no_lock(tmp_path: pathlib.Path) -> None:
+# **真正被拒绝的形状**（缺 '---' 头、二进制元数据）来继续保障「拒绝 → 零写入」。
+def test_rejected_patch_writes_nothing(tmp_path: pathlib.Path) -> None:
     rejected_shapes = {
         "missing '---' header": "diff --git a/m.txt b/m.txt\n+++ b/m.txt\n@@ -1,1 +1,1 @@\n-a\n+A",
         "binary metadata": (
@@ -856,24 +856,10 @@ def test_rejected_patch_writes_nothing_and_takes_no_lock(tmp_path: pathlib.Path)
 
     for index, (name, patch) in enumerate(rejected_shapes.items(), start=1):
         observation = _execute(tmp_path, patch, 5800 + index)
-        resources = FileResourceResolver(tmp_path).resolve("apply_patch", {"patch": patch})
 
         assert observation.status == "error", name
-        assert observation.retryable is True, name
+        assert "hint: this error can be retried" in observation.content, name
         assert (tmp_path / "m.txt").read_bytes() == b"a\nb\n", name
-        assert resources.write_paths == (), name
-        assert resources.lock_paths == (), name
-
-
-# Purpose: a valid patch must still request its write path and lock, so the round-5 rejection
-# tightening did not over-reject at the scheduling layer. Defect type: over-rejection.
-def test_valid_patch_requests_its_write_path_and_lock(tmp_path: pathlib.Path) -> None:
-    patch = _valid_patch("m.txt")
-
-    resources = FileResourceResolver(tmp_path).resolve("apply_patch", {"patch": patch})
-
-    assert resources.write_paths == (tmp_path / "m.txt",)
-    assert (tmp_path / "m.txt") in resources.lock_paths
 
 
 # Purpose: parsing must be pure and idempotent - no input mutation, no caching, identical
@@ -909,7 +895,7 @@ def test_success_path_emits_display_payload_and_exact_bytes(tmp_path: pathlib.Pa
 
     observation = _execute(tmp_path, patch, 5900)
 
-    assert observation.status == "success", observation.error
+    assert observation.status == "success", observation.content
     assert observation.display_data["kind"] == "file-changes"
     change = observation.display_data["changes"][0]
     assert change["path"] == "m.txt"
@@ -1007,7 +993,7 @@ def test_crlf_target_keeps_its_line_ending_after_apply(tmp_path: pathlib.Path) -
 
     observation = _execute(tmp_path, patch, 6200)
 
-    assert observation.status == "success", observation.error
+    assert observation.status == "success", observation.content
     assert (tmp_path / "m.txt").read_bytes() == b"a\r\nB\r\n"
 
 
@@ -1018,7 +1004,7 @@ def test_bom_target_keeps_exactly_one_bom_after_apply(tmp_path: pathlib.Path) ->
 
     observation = _execute(tmp_path, patch, 6201)
 
-    assert observation.status == "success", observation.error
+    assert observation.status == "success", observation.content
     written = (tmp_path / "m.txt").read_bytes()
     assert written == b"\xef\xbb\xbfa\nB\n", f"BOM 未按原样保留: {written!r}"
 
@@ -1032,7 +1018,7 @@ def test_display_payload_patch_reproduces_the_disk_change(tmp_path: pathlib.Path
 
     observation = _execute(tmp_path, patch, 6202)
 
-    assert observation.status == "success", observation.error
+    assert observation.status == "success", observation.content
     change = observation.display_data["changes"][0]
     on_disk = (tmp_path / "m.txt").read_text(encoding="utf-8")
     assert on_disk == "ONE\ntwo\n"
@@ -1053,7 +1039,7 @@ def test_diff_stats_count_only_real_changes(tmp_path: pathlib.Path) -> None:
 
     observation = _execute(tmp_path, patch, 6203)
 
-    assert observation.status == "success", observation.error
+    assert observation.status == "success", observation.content
     stats = observation.display_data["diff_stats"]
     assert stats["total_files"] == 1
     assert stats["total_insertions"] == 2, f"新增行计数错误: {stats!r}"
@@ -1072,7 +1058,7 @@ def test_unmatched_hunk_is_reported_and_nothing_is_written(tmp_path: pathlib.Pat
     observation = _execute(tmp_path, patch, 6204)
 
     assert observation.status == "error"
-    assert "hunk 1 not found" in observation.error
+    assert "hunk 1 not found" in observation.content
     assert (tmp_path / "m.txt").read_bytes() == b"alpha\nbeta\n"
 
 
@@ -1082,7 +1068,7 @@ def test_unmatched_hunk_is_reported_and_nothing_is_written(tmp_path: pathlib.Pat
 def test_atomic_write_refuses_a_path_outside_the_containment_root(
     tmp_path: pathlib.Path,
 ) -> None:
-    from app.core.tools.tool_handler.patch_write.atomic_write import atomic_write_text
+    from app.utils.atomic_write import atomic_write_text
 
     root = tmp_path / "root"
     root.mkdir()
@@ -1098,8 +1084,6 @@ def test_atomic_write_refuses_a_path_outside_the_containment_root(
 # Purpose: the atomic writer must leave no temporary file behind when the write fails, and
 # must not leave a half-written target. Defect type: temp-file leak / torn write.
 def test_atomic_write_leaves_no_temp_file_when_it_fails(tmp_path: pathlib.Path) -> None:
-    from app.core.tools.tool_handler.patch_write import atomic_write
-
     (tmp_path / "m.txt").write_bytes(b"original\n")
 
     def exploding_fsync(_descriptor: int) -> None:
@@ -1122,7 +1106,7 @@ def test_atomic_write_leaves_no_temp_file_when_it_fails(tmp_path: pathlib.Path) 
 # output, so a model cannot round-trip the numbered listing back into a file.
 # Defect type: guard too weak to detect the pollution it exists for.
 def test_line_number_pollution_guard_flags_numbered_content() -> None:
-    from app.core.tools.tool_handler.patch_write.atomic_write import looks_like_line_numbered
+    from app.tools.tool_handler.patch_write.line_numbered import looks_like_line_numbered
 
     # read_file renders lines as f"{line_number}| {line}" (no padding), so the guard must
     # catch exactly that shape.
@@ -1143,7 +1127,7 @@ def test_line_number_pollution_guard_flags_numbered_content() -> None:
     [("a\r\nb\r\n", "\r\n"), ("a\nb\n", "\n"), ("", "\n"), ("a\rb", "\n")],
 )
 def test_line_ending_detector_matches_the_writer(text: str, eol: str) -> None:
-    from app.core.tools.tool_handler.patch_write.atomic_write import detect_line_ending
+    from app.utils.atomic_write import detect_line_ending
 
     assert detect_line_ending(text) == eol
 
@@ -1180,7 +1164,7 @@ def test_directory_target_is_rejected_as_a_regular_file_requirement(
     observation = _execute(tmp_path, _valid_patch("adir"), 6205)
 
     assert observation.status == "error"
-    assert "not an existing regular file" in observation.error
+    assert "not an existing regular file" in observation.content
     assert (tmp_path / "adir").is_dir()
 
 
@@ -1236,7 +1220,7 @@ def test_indentation_only_drift_is_applied_with_the_file_indentation(
 
     observation = _execute(tmp_path, patch, 6300)
 
-    assert observation.status == "success", observation.error
+    assert observation.status == "success", observation.content
     assert (tmp_path / "m.txt").read_bytes() == b"def f():\n    return 2\n"
 
 
@@ -1266,7 +1250,7 @@ def test_unicode_drift_matches_but_preserves_untouched_characters(
 
     observation = _execute(tmp_path, patch, 6302)
 
-    assert observation.status == "success", observation.error
+    assert observation.status == "success", observation.content
     written = (tmp_path / "m.txt").read_text(encoding="utf-8")
     assert written == "say GOODBYE\nkeep\n", f"Unicode 漂移处理结果不符: {written!r}"
 
@@ -1296,7 +1280,7 @@ def test_escape_drift_only_in_the_added_line_is_refused(tmp_path: pathlib.Path) 
 # fires only when the literal sequence is present in *both* old and new text.
 # Defect type: guard precondition narrower than the drift it must catch.
 def test_escape_drift_guard_fires_when_both_sides_carry_the_escape() -> None:
-    from app.core.tools.tool_handler.patch_write.fuzzy_match import fuzzy_find_and_replace
+    from app.tools.tool_handler.patch_write.fuzzy_match import fuzzy_find_and_replace
 
     content = "x = 'a'\n"
     escaped = "x = \\'a\\'"
@@ -1317,7 +1301,7 @@ def test_insertion_only_hunk_lands_at_the_declared_coordinate(tmp_path: pathlib.
 
     observation = _execute(tmp_path, patch, 6304)
 
-    assert observation.status == "success", observation.error
+    assert observation.status == "success", observation.content
     assert (tmp_path / "m.txt").read_bytes() == b"a\nb\nINSERTED\nc\nd\n"
 
 
@@ -1372,7 +1356,7 @@ def test_failed_replace_leaves_the_original_file_intact(
     tmp_path: pathlib.Path,
     monkeypatch,
 ) -> None:
-    from app.core.tools.tool_handler.patch_write import atomic_write
+    from app.utils import atomic_write
 
     (tmp_path / "m.txt").write_bytes(b"a\nb\n")
     patch = _section("m.txt", "@@ -1,2 +1,2 @@", "-a", "+A", " b") + "\n"

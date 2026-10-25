@@ -92,15 +92,19 @@ def _register_execution(actor: TaskActor) -> Execution:
     return execution
 
 
-async def _cancel(actor: TaskActor, reason: str = "user") -> bool:
-    receipt = asyncio.get_running_loop().create_future()
-    actor.send(Cancel(reason, receipt=receipt))
-    return await asyncio.wait_for(receipt, 1)
+async def _processed(actor: TaskActor, signal: Cancel | RunFinished) -> None:
+    """投递一个信号并等 actor 处理完这一批：信号没有回执，以批处理后的状态通知为准。"""
+    changed = actor.state_changed
+    actor.send(signal)
+    await asyncio.wait_for(changed.wait(), 1)
+
+
+async def _cancel(actor: TaskActor, reason: str = "user") -> None:
+    await _processed(actor, Cancel(reason))
 
 
 async def _finish(actor: TaskActor, execution: Execution) -> None:
-    actor.send(RunFinished(execution))
-    await asyncio.wait_for(execution.settled.wait(), 1)
+    await _processed(actor, RunFinished(execution))
 
 
 @pytest.fixture(autouse=True)
@@ -115,7 +119,7 @@ async def test_cancel_with_active_execution_only_marks_task_signal(monkeypatch) 
     actor, record = _build(monkeypatch, services)
     _register_execution(actor)
 
-    assert await _cancel(actor) is True
+    await _cancel(actor)
     assert cancellation_registry.is_cancelled(_TASK_ID) is True
     assert services.transitions == []
     assert record.after_cancelled == []
@@ -128,7 +132,7 @@ async def test_cancel_terminal_run_leaves_no_signal(monkeypatch) -> None:
     services = _StubServices(ConversationRunStatus.COMPLETED.value)
     actor, record = _build(monkeypatch, services)
 
-    assert await _cancel(actor) is False
+    await _cancel(actor)
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
     assert record.started == []
     actor.loop_task.cancel()
@@ -143,7 +147,7 @@ async def test_cancel_suspended_run_settles_directly_without_starting(
     services = _StubServices(ConversationRunStatus.SUSPENDED.value)
     actor, record = _build(monkeypatch, services)
 
-    assert await _cancel(actor, reason) is True
+    await _cancel(actor, reason)
 
     assert services.transitions == [(_RUN_ID, RunTransition.CANCEL)]
     assert record.started == []

@@ -30,13 +30,13 @@ import sys
 
 import pytest
 
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.core.tools.tool_handler.patch_write.patch_parser import (
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.patch_write import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
-from app.core.tools.tool_models.apply_patch_args import ApplyPatchArgs
+from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
 GIT = shutil.which("git")
 
@@ -46,7 +46,7 @@ pytestmark = pytest.mark.skipif(GIT is None, reason="git is required as the grou
 def _hunk_count_diagnostics():
     """Test-local view of the parser count pass: notes emitted when counts were recomputed."""
 
-    module = sys.modules["app.core.tools.tool_handler.patch_write.patch_parser"]
+    module = sys.modules["app.tools.tool_handler.patch_write.patch_parser"]
 
     def _notes(section: str, section_index: int) -> list[str]:
         return module._recompute_hunk_counts(section, section_index)[1]
@@ -120,7 +120,7 @@ def _run_tool(tmp_path: pathlib.Path, patch: str, content: str) -> tuple[str, by
         patch=patch,
     )
     after = target.read_bytes() if target.exists() else b""
-    return observation.status, after, observation.error
+    return observation.status, after, (observation.content if observation.status == "error" else None)
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +474,7 @@ def test_copying_the_documented_sample_verbatim_succeeds(tmp_path: pathlib.Path)
 
     assert (
         observation.status == "success"
-    ), f"模型照抄文档样例即失败：status={observation.status} error={observation.error!r}"
+    ), f"模型照抄文档样例即失败：status={observation.status} content={observation.content!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -610,13 +610,11 @@ def test_diagnostics_remain_complete_and_ascii() -> None:
     repair.encode("ascii")
 
 
-# 目的：计数不符时不再写文件、``retryable=True``、且不为无效补丁申请资源锁。
-# 缺陷类型：剥离逻辑在拒绝路径上产生副作用或改变锁语义。
+# 目的：计数不符时不再写文件、``retryable=True``。
+# 缺陷类型：剥离逻辑在拒绝路径上产生副作用。
 # 2026-09-21 契约 B：计数不符改为按正文重算 + 提示（会被接受并真的写入），因此本用例改用
-# **真正被拒绝的形状**（缺 `---` 头、二进制元数据）来继续保障「拒绝 → 零写入 + 不申请锁」。
-def test_rejected_patch_writes_nothing_and_requests_no_lock(tmp_path: pathlib.Path) -> None:
-    from app.core.tools.guard.file_resource_paths import FileResourceResolver
-
+# **真正被拒绝的形状**（缺 `---` 头、二进制元数据）来继续保障「拒绝 → 零写入」。
+def test_rejected_patch_writes_nothing(tmp_path: pathlib.Path) -> None:
     rejected_shapes = {
         "missing '---' header": "diff --git a/m.txt b/m.txt\n+++ b/m.txt\n@@ -1,1 +1,1 @@\n-a\n+A",
         "binary metadata": (
@@ -632,13 +630,10 @@ def test_rejected_patch_writes_nothing_and_requests_no_lock(tmp_path: pathlib.Pa
             ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=13),
             patch=patch,
         )
-        resources = FileResourceResolver(tmp_path).resolve("apply_patch", {"patch": patch})
 
         assert observation.status == "error", name
-        assert observation.retryable is True, name
+        assert "hint: this error can be retried" in observation.content, name
         assert target.read_bytes() == b"a\nb\n", name
-        assert resources.write_paths == (), name
-        assert resources.lock_paths == (), name
         # 真正被拒绝的形状不得产出任何「已按正文应用」的重算提示。
         assert parse_git_unified_diff_detailed(patch).count_repairs == [], name
 
@@ -656,9 +651,9 @@ def test_context_mismatch_fails_validation_without_writing(tmp_path: pathlib.Pat
     )
 
     assert observation.status == "error"
-    assert observation.retryable is True
-    assert observation.error is not None and "no files were modified" in observation.error
-    assert "hunk line counts do not match" not in observation.error
+    assert "hint: this error can be retried" in observation.content
+    assert "no files were modified" in observation.content
+    assert "hunk line counts do not match" not in observation.content
     assert target.read_bytes() == b"a\n"
 
 
@@ -697,8 +692,8 @@ def test_successful_patch_emits_file_change_display_payload(tmp_path: pathlib.Pa
     ],
 )
 def test_retryability_classification_contract(partial_applied, cause, expected) -> None:
-    from app.core.tools.tool_handler.apply_patch_tool import _is_patch_retryable_after_correction
-    from app.core.tools.tool_handler.patch_write.patch_apply import PatchApplyError
+    from app.tools.tool_handler.apply_patch_tool import _is_patch_retryable_after_correction
+    from app.tools.tool_handler.patch_write.patch_apply import PatchApplyError
 
     error = PatchApplyError("boom", partial_applied=partial_applied)
     error.__cause__ = cause

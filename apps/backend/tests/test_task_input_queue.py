@@ -10,7 +10,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 )
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.models import ConversationRunCommand
-from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import ToolMessageMetadata
@@ -24,6 +24,7 @@ from app.service.depends import (
     get_conversation_run_service,
     get_conversation_run_state_service,
     get_conversation_task_context_service,
+    get_conversation_task_state_service,
 )
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
@@ -140,15 +141,28 @@ def _session(monkeypatch):
     from unittest.mock import MagicMock
 
     from app.service.conversation_run.task_actor import TaskActor
-    from app.service.conversation_run.workflow_session import WorkflowSession
+    from app.service.conversation_run.task_actors import TaskActors
 
     start = MagicMock()
     monkeypatch.setattr(
         TaskActor, "_start", lambda _self, run, *, fresh_run: start(run, fresh_run=fresh_run)
     )
-    session = WorkflowSession()
+    session = TaskActors()
     _SESSIONS.append(session)
     return session, SimpleNamespace(start=start)
+
+
+async def _processed(session, task_id: int) -> None:
+    """等 actor 处理完刚投递的这一批信号：命令没有回执，测试只能等它处理后再断言效果。
+
+    必须紧跟在投递之后调用（中间不能有 await），否则可能错过这一批的状态通知。
+    """
+    await asyncio.wait_for(session._actors[task_id].state_changed.wait(), 2)
+
+
+def _command_error(task_id: int):
+    """命令被拒的原因：actor 写在 snapshot 顶层 ``error``。"""
+    return get_conversation_task_state_service().get_state(task_id)["error"]
 
 
 async def _advance(session, task_id: int, *, by_user: bool):
@@ -197,12 +211,12 @@ def _consume(store, run_id):
 def _real_context(store, *, run_state=None):
     """真实 Run 状态服务、外部队列、Task 运行空间与 projector 组成的运行上下文；工具系统为空注册表。
 
-    mailbox 已完成初始投递（生产由 ``WorkflowSession`` 在驱动前完成）。
+    mailbox 已完成初始投递（生产由 ``TaskActors`` 在驱动前完成）。
 
     ``run_state`` 非空时替换节点直接取用的 Run 状态单例（经 ``SINGLETONS``，用例结束后复原）。
     """
     from app.config import configuration
-    from app.core.tools.tool_registry import ToolRegistry
+    from app.core.tool.tool_registry import ToolRegistry
     from app.core.workflow.execution_state.runtime_context import RuntimeContext
     from app.service import depends as service_depends
     from tests.runtime_context_stub import SINGLETONS, singleton_getter
@@ -259,21 +273,20 @@ async def _prepare_input(store, context, *, run=None, sink=None):
 
     ``sink`` 默认交真实 projector，与生产装配一致；用例要断言消费事件时传入收集器。
     """
-    from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-    from app.core.workflow.execution_state.react_route import ReactRoute
+    from app.models.react_execution_state import ReactExecutionState
+    from app.models.enums.react_route import ReactRoute
     from app.core.workflow.node_helper.common import execution_scope
     from app.core.workflow.nodes.prepare_input_node import _prepare_input_node
 
     rc = _real_context(store)
     rc.run = run or rc.run
-    rc.step_limit = 10
     if sink is not None:
         rc.event_sink = sink
     before = len(context._entries)
     with execution_scope(rc, context):
         await _prepare_input_node(
             ReactExecutionState(
-                step_count=0, tool_error_count=0, next_node=ReactRoute.PREPARE_INPUT
+                step_count=0, step_limit=10, next_node=ReactRoute.PREPARE_INPUT
             )
         )
     return context._entries[before:]
@@ -334,7 +347,7 @@ def test_edit_needs_no_unload_because_begin_run_rebuilds_memory(store, monkeypat
 
 
 def _edit(store, message_id, command):
-    """编辑 = 移出旧 context + 新建 Run（生产经 ``WorkflowSession.submit`` 在闸门内调用）。
+    """编辑 = 移出旧 context + 新建 Run（生产经 ``TaskActors.submit`` 在闸门内调用）。
 
     返回新 Run 与模型边界消费进 context 的编辑后消息。
     """
@@ -386,12 +399,8 @@ def test_edit_keeps_prefix_and_opens_new_run(store):
     store.context.append(
         store.task.id, store.run.id, {"role": "assistant", "content": "discard"}, 4
     )
-    store.crud.update_status_if_in(
-        store.run.id,
-        "cancelled",
-        ("running",),
-        execution_data=ConversationRunProgress(step_count=5, tool_error_count=2),
-    )
+    store.crud.save_execution(store.run.id, ReactExecutionState(step_count=5))
+    store.crud.update_status_if_in(store.run.id, "cancelled", ("running",))
     new_run, [edited] = _edit(store, mid, ConversationRunCommand(display_text="edited"))
     rows = store.context.entries_in_context(store.task.id)
     assert [e.message.get("content") for e in rows] == ["first", "first response", "edited"]
@@ -399,7 +408,7 @@ def test_edit_keeps_prefix_and_opens_new_run(store):
     assert edited.message_id != mid
     assert edited.run_id == new_run.id != store.run.id
     assert new_run.status == "running"
-    assert new_run.execution_data == ConversationRunProgress()
+    assert new_run.execution_data == ReactExecutionState()
     assert store.crud.get(store.run.id).status == "cancelled"
     assert TaskCrud().get(store.task.id).current_run_id == new_run.id
 
@@ -450,13 +459,12 @@ def test_edit_keeps_replaced_history_out_of_context_and_transport(store):
     snapshot = ConversationTaskStateService().rebuild_state(store.task.id)
     snapshot_texts = [
         part.get("text")
-        for run in snapshot["runs"]
-        for message in run["messages"]
+        for message in snapshot["messages"]
         for part in message["parts"]
         if part.get("type") == "text"
     ]
-    # 第一次编辑开出的 Run 已整段移出投影，不留空分组；首个 Run 仍保留未被替换的前缀。
-    assert len(snapshot["runs"]) == 2
+    # 第一次编辑开出的 Run 已整段移出投影；首个 Run 仍保留未被替换的前缀。
+    assert len({m["runId"] for m in snapshot["messages"]}) == 2
     assert "replaced answer" not in snapshot_texts
     assert "second" not in snapshot_texts
     assert "edited once" not in snapshot_texts
@@ -487,14 +495,14 @@ def test_snapshot_groups_multiple_users_and_pending_inputs(store):
         store.task.id, ConversationRunCommand(display_text="third"), store.config_id
     )
     state = ConversationTaskStateService().rebuild_state(store.task.id)
-    assert [m["role"] for m in state["runs"][0]["messages"]] == [
+    assert [m["role"] for m in state["messages"]] == [
         "user",
         "assistant",
         "user",
         "assistant",
     ]
     # wire 消息 id 是队列行 id 的字符串形式。
-    assert state["runs"][0]["messages"][2]["id"] == str(second)
+    assert state["messages"][2]["id"] == str(second)
     assert state["queued_messages"][0]["id"] == str(queued)
 
 
@@ -530,14 +538,14 @@ async def test_send_after_cancel_or_failure_opens_new_run_with_leftover_queue(st
     )
     store.crud.update_status_if_in(store.run.id, status, ("running",))
     session, executor = _session(monkeypatch)
-    receipt = await session.submit(
+    await session.submit(
         store.task.id,
         ConversationRunCommand(display_text="now"),
         model_config_id=store.config_id,
         reasoning_effort=None,
         delivery="next_run",
     )
-    assert not receipt.queued
+    await _processed(session, store.task.id)
     [run_id] = _starts(executor)
     assert run_id != store.run.id
     assert store.crud.get(store.run.id).status == status
@@ -553,14 +561,14 @@ async def test_send_while_running_queues_by_delivery(store, monkeypatch):
     # 新 Run 的初始投递先完成：此后入队的 next_run 不再进入这个 Run。
     assert [e.message["content"] for e in _consume(store, store.run.id)] == ["first"]
     for text, delivery in (("now", "immediate"), ("later", "next_run")):
-        receipt = await session.submit(
+        await session.submit(
             store.task.id,
             ConversationRunCommand(display_text=text),
             model_config_id=store.config_id,
             reasoning_effort=None,
             delivery=delivery,
         )
-        assert receipt.queued
+        await _processed(session, store.task.id)
     executor.start.assert_not_called()
     entries = _consume(store, store.run.id)
     assert [e.message["content"] for e in entries] == ["now"]
@@ -601,14 +609,13 @@ async def test_snapshot_publish_failure_does_not_orphan_started_run(store, monke
         lambda _task_id: (_ for _ in ()).throw(RuntimeError("projection unavailable")),
     )
 
-    receipt = await session.submit(
+    await session.submit(
         store.task.id,
         ConversationRunCommand(display_text="next round"),
         model_config_id=store.config_id,
         reasoning_effort=None,
     )
-
-    assert receipt.queued is False
+    await _processed(session, store.task.id)
     executor.start.assert_called_once()
 
 
@@ -617,24 +624,24 @@ async def test_background_agent_submit_joins_active_run_or_opens_one_with_its_id
     """子 Agent / Team 节点与用户发送同一入口：活动时并入当前 Run，终态时按自身身份新开 Run。"""
     session, executor = _session(monkeypatch)
     _consume(store, store.run.id)
-    joined = await session.submit(
+    await session.submit(
         store.task.id,
         ConversationRunCommand(display_text="follow up"),
         model_config_id=store.config_id,
         reasoning_effort=None,
     )
-    assert joined.queued is True
+    await _processed(session, store.task.id)
     executor.start.assert_not_called()
 
     store.crud.update_status_if_in(store.run.id, "completed", ("running",))
-    opened = await session.submit(
+    await session.submit(
         store.task.id,
         ConversationRunCommand(display_text="next round"),
         model_config_id=store.config_id,
         reasoning_effort=None,
         agent_id="child_agent",
     )
-    assert opened.queued is False
+    await _processed(session, store.task.id)
     [opened_run_id] = _starts(executor)
     assert TaskCrud().get(store.task.id).current_run_id == opened_run_id
     assert store.crud.get(opened_run_id).agent_id == "child_agent"
@@ -642,19 +649,18 @@ async def test_background_agent_submit_joins_active_run_or_opens_one_with_its_id
 
 @pytest.mark.asyncio
 async def test_edit_requires_stopped_task(store, monkeypatch):
-    """编辑只在 Task 已停止时进行：仍有活动 Run 时拒绝，不移出任何 context。"""
-    from app.service.conversation_run.workflow_session import SessionConflictError
-
+    """编辑只在 Task 已停止时进行：仍有活动 Run 时拒绝（原因写进 snapshot），不移出任何 context。"""
     [first] = _consume(store, store.run.id)
-    with pytest.raises(SessionConflictError) as caught:
-        await _session(monkeypatch)[0].rerun(
-            store.task.id,
-            first.message_id,
-            ConversationRunCommand(display_text="edited"),
-            model_config_id=store.config_id,
-            reasoning_effort=None,
-        )
-    assert caught.value.code == "RUN_NOT_STOPPED"
+    session, _executor = _session(monkeypatch)
+    await session.rerun(
+        store.task.id,
+        first.message_id,
+        ConversationRunCommand(display_text="edited"),
+        model_config_id=store.config_id,
+        reasoning_effort=None,
+    )
+    await _processed(session, store.task.id)
+    assert _command_error(store.task.id)["code"] == "RUN_NOT_STOPPED"
     assert [e.message_id for e in store.context.entries_in_context(store.task.id)] == [
         first.message_id
     ]
@@ -714,26 +720,26 @@ async def test_running_task_queues_other_model_for_next_run(store, monkeypatch):
     other_id = _other_model()
     session, executor = _session(monkeypatch)
     assert [e.message["content"] for e in _consume(store, store.run.id)] == ["first"]
-    receipt = await session.submit(
+    await session.submit(
         store.task.id,
         ConversationRunCommand(display_text="now"),
         model_config_id=other_id,
         reasoning_effort=None,
         delivery="next_run",
     )
-    assert receipt.queued is True
+    await _processed(session, store.task.id)
     assert _consume(store, store.run.id) == []
     assert [p.payload.message.input_text for p in store.inputs.pending_users(store.task.id)] == ["now"]
 
     store.crud.update_status_if_in(store.run.id, "suspended", ("running",))
-    waiting = await session.submit(
+    await session.submit(
         store.task.id,
         ConversationRunCommand(display_text="later"),
         model_config_id=other_id,
         reasoning_effort=None,
         delivery="next_run",
     )
-    assert waiting.queued is True
+    await _processed(session, store.task.id)
     assert store.crud.get(store.run.id).status == "suspended"
     executor.start.assert_not_called()
 
@@ -756,11 +762,9 @@ async def test_queued_edit_keeps_original_launch_and_delivery(store, monkeypatch
         delivery="next_run",
     )
 
-    receipt = await session.edit_queued(
+    await session.edit_queued(
         store.task.id, message_id, ConversationRunCommand(display_text="edited")
     )
-
-    assert receipt.queued is True
     executor.start.assert_not_called()
     [queued] = store.inputs.pending_users(store.task.id)
     assert (queued.id, queued.delivery) == (message_id, "next_run")
@@ -772,7 +776,7 @@ async def test_queued_edit_keeps_original_launch_and_delivery(store, monkeypatch
 @pytest.mark.asyncio
 async def test_queued_edit_of_consumed_message_conflicts_without_rerun(store, monkeypatch):
     """排队编辑命中已并入的消息时 409，不会静默变成「停止当前 Run 并重跑」。"""
-    from app.service.conversation_run.workflow_session import SessionConflictError
+    from app.service.conversation_run.task_actors import SessionConflictError
 
     [first] = _consume(store, store.run.id)
     session, executor = _session(monkeypatch)
@@ -795,12 +799,12 @@ async def test_executor_handoff_waits_for_cleanup_and_starts_new_run(store, monk
     """收尾期间入队的输入在旧执行释放后才交给新 Run，两个执行不重叠。"""
     import asyncio
 
-    from app.service.conversation_run.workflow_session import WorkflowSession
+    from app.service.conversation_run.task_actors import TaskActors
 
     order = []
     finished = asyncio.Event()
     states = get_conversation_run_state_service()
-    session = WorkflowSession()
+    session = TaskActors()
     _SESSIONS.append(session)
 
     async def drive(run_id, mailbox, initial_delivery):
@@ -876,7 +880,7 @@ async def test_completed_model_response_leaves_during_stream_input_for_next_run(
     assert [p.payload.message.input_text for p in store.inputs.pending_users(store.task.id)] == [
         "during request"
     ]
-    messages = ConversationTaskStateService().rebuild_state(store.task.id)["runs"][0]["messages"]
+    messages = ConversationTaskStateService().rebuild_state(store.task.id)["messages"]
     assert [m["role"] for m in messages] == ["user", "assistant"]
     model.close.assert_awaited_once()
 
@@ -895,11 +899,12 @@ async def test_api_queue_ack_does_not_start_another_executor(store, monkeypatch)
                 "modelConfigId": store.config_id,
             }
         ),
-        session=session,
-        state_service=ConversationTaskStateService(),
+        actors=session,
     )
-    assert accepted.queued is True
-    assert len(accepted.state["queued_messages"]) == 2
+    assert accepted.status_code == 202
+    await _processed(session, store.task.id)
+    state = get_conversation_task_state_service().get_state(store.task.id)
+    assert len(state["queued_messages"]) == 2
     executor.start.assert_not_called()
 
 
@@ -932,7 +937,7 @@ async def test_queue_commands_during_stream_preserve_output_and_replace_one_row(
     first = "abcdefgh"
 
     def parts(state):
-        return state["runs"][0]["messages"][-1]["parts"]
+        return state["messages"][-1]["parts"]
 
     async def stream(messages):
         nonlocal identity
@@ -979,13 +984,13 @@ async def test_queue_commands_during_stream_preserve_output_and_replace_one_row(
                         "modelConfigId": store.config_id,
                     }
                 ),
-                session=session,
-                state_service=state_service,
+                actors=session,
             )
-            assert accepted.queued
-            assert accepted.state["runs"] == before["runs"]
-            assert accepted.state["queued_messages"][0]["parts"][0]["text"] == "second"
-            assert state_service.get_state(store.task.id)["runs"] == before["runs"]
+            assert accepted.status_code == 202
+            await _processed(session, store.task.id)
+            after = state_service.get_state(store.task.id)
+            assert after["messages"] == before["messages"]
+            assert after["queued_messages"][0]["parts"][0]["text"] == "second"
 
     model = SimpleNamespace(stream=stream, close=AsyncMock())
     monkeypatch.setattr(
@@ -1013,13 +1018,13 @@ async def test_immediate_send_wakes_the_suspended_run(store, monkeypatch):
     _consume(store, store.run.id)
     store.crud.update_status_if_in(store.run.id, "suspended", ("running",))
     session, executor = _session(monkeypatch)
-    receipt = await session.submit(
+    await session.submit(
         store.task.id,
         ConversationRunCommand(display_text="continue"),
         model_config_id=store.config_id,
         reasoning_effort=None,
     )
-    assert receipt.queued is False
+    await _processed(session, store.task.id)
     assert _starts(executor) == [store.run.id]
     assert store.crud.get(store.run.id).status == "running"
     assert executor.start.call_args.kwargs == {"fresh_run": False}
@@ -1032,7 +1037,8 @@ async def test_cancel_suspended_run_settles_directly_and_leaves_user_notice(stor
     store.crud.update_status_if_in(store.run.id, "suspended", ("running",))
     session, executor = _session(monkeypatch)
 
-    assert await session.cancel(store.task.id) is True
+    session.cancel(store.task.id)
+    await _processed(session, store.task.id)
 
     assert store.crud.get(store.run.id).status == "cancelled"
     executor.start.assert_not_called()
@@ -1055,6 +1061,7 @@ async def test_edit_cancel_of_suspended_run_leaves_no_notice(store, monkeypatch)
         model_config_id=store.config_id,
         reasoning_effort=None,
     )
+    await _processed(session, store.task.id)
 
     assert store.crud.get(store.run.id).status == "cancelled"
     [run_id] = _starts(executor)
@@ -1066,11 +1073,12 @@ async def test_edit_cancel_of_suspended_run_leaves_no_notice(store, monkeypatch)
 async def test_failed_resume_updates_existing_snapshot_without_consuming_queue(store, monkeypatch):
     store.crud.update_status_if_in(store.run.id, "failed", ("running",))
     state = ConversationTaskStateService()
-    assert state.rebuild_state(store.task.id)["runs"][0]["status"] == "failed"
+    assert state.rebuild_state(store.task.id)["activity"]["status"] == "failed"
     session, executor = _session(monkeypatch)
-    await session.resume(store.task.id)
+    session.resume(store.task.id)
+    await _processed(session, store.task.id)
     assert _starts(executor) == [store.run.id]
-    assert state.get_state(store.task.id)["runs"][0]["status"] == "running"
+    assert state.get_state(store.task.id)["activity"]["status"] == "running"
     assert len(store.inputs.pending_users(store.task.id)) == 1
 
 
@@ -1194,11 +1202,12 @@ async def test_queue_during_tool_preview_keeps_pending_part_executable(store, mo
                 "modelConfigId": store.config_id,
             }
         ),
-        session=session,
-        state_service=state_service,
+        actors=session,
     )
-    assert accepted.state["runs"] == before["runs"]
-    assert before["runs"][0]["messages"][-1]["parts"][-1]["status"] == "pending"
+    assert accepted.status_code == 202
+    await _processed(session, store.task.id)
+    assert state_service.get_state(store.task.id)["messages"] == before["messages"]
+    assert before["messages"][-1]["parts"][-1]["status"] == "pending"
     state_service.apply_planned(
         ToolCallStatusChangedEvent(
             task_id=store.task.id,
@@ -1209,7 +1218,7 @@ async def test_queue_during_tool_preview_keeps_pending_part_executable(store, mo
         )
     )
     state = state_service.get_state(store.task.id)
-    assert state["runs"][0]["messages"][-1]["parts"][-1]["status"] == "running"
+    assert state["messages"][-1]["parts"][-1]["status"] == "running"
     executor.start.assert_not_called()
 
 
@@ -1315,7 +1324,7 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
         if run_transition is RunTransition.FAIL:
             assert closed.is_set()
             state = ConversationTaskStateService().get_state(store.task.id)
-            parts = state["runs"][0]["messages"][-1]["parts"]
+            parts = state["messages"][-1]["parts"]
             assert parts and all(part["status"] == "completed" for part in parts)
         return original_transition(run_id, run_transition, **kwargs)
 
@@ -1535,7 +1544,7 @@ async def test_concurrent_sends_to_idle_task_open_one_run_and_queue_the_other(st
 
     store.crud.update_status_if_in(store.run.id, "completed", ("running",))
     session, executor = _session(monkeypatch)
-    receipts = await asyncio.gather(
+    await asyncio.gather(
         *(
             session.submit(
                 store.task.id,
@@ -1547,8 +1556,13 @@ async def test_concurrent_sends_to_idle_task_open_one_run_and_queue_the_other(st
             for text in ("one", "two")
         )
     )
-    # 落在同一批时合并成一次推进（两条都 False）；分两批时后一条进新 Run 的 inbox（True）。
-    assert receipts[0].queued is False or receipts[1].queued is False
+    # 两条可能落在同一批（合并成一次推进），也可能分两批（后一条进新 Run 的 inbox）。
+    actor = session._actors[store.task.id]
+    for _ in range(200):
+        if _starts(executor) and actor._signals.empty():
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
     assert len(_starts(executor)) == 1
     assert len(store.crud.list_by_task(store.task.id)) == 2
 
@@ -1571,8 +1585,8 @@ def _other_model() -> int:
 def test_prepare_input_leaves_queue_when_cancelled(store, monkeypatch):
     """取消后 prepare_input 不取 mailbox，直接落定 cancelled 并结束驱动；排队消息留在外部队列。"""
     from app.core.context.runtime_message_context_manager import SystemPromptBuilder
-    from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-    from app.core.workflow.execution_state.react_route import ReactRoute
+    from app.models.react_execution_state import ReactExecutionState
+    from app.models.enums.react_route import ReactRoute
     from app.core.workflow.node_helper.common import RunStopped, execution_scope
     from app.core.workflow.nodes.prepare_input_node import _prepare_input_node
 
@@ -1580,13 +1594,12 @@ def test_prepare_input_leaves_queue_when_cancelled(store, monkeypatch):
     context = _context_manager(store)
     context.begin_run(store.run)
     rc = _real_context(store)
-    rc.step_limit = 10
     monkeypatch.setattr(type(rc), "is_cancelled", lambda _self: True)
     with execution_scope(rc, context), pytest.raises(RunStopped):
         asyncio.run(
             _prepare_input_node(
                 ReactExecutionState(
-                    step_count=0, tool_error_count=0, next_node=ReactRoute.PREPARE_INPUT
+                    step_count=0, step_limit=10, next_node=ReactRoute.PREPARE_INPUT
                 )
             )
         )

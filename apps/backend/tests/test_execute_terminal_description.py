@@ -11,8 +11,8 @@ from typing import cast, get_args
 import pytest
 from pydantic import BaseModel
 
-from app.core.tools.tool_handler.execute_terminal import ExecuteTerminalTool
-from app.core.tools.tool_models.execute_terminal_args import (
+from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
+from app.tools.tool_models.execute_terminal_args import (
     MacExecuteTerminalArgs,
     MacExecuteTerminalShell,
     WindowsExecuteTerminalArgs,
@@ -20,7 +20,7 @@ from app.core.tools.tool_models.execute_terminal_args import (
 )
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-_TOOL_MODULE = "app.core.tools.tool_handler.execute_terminal"
+_TOOL_MODULE = "app.tools.tool_handler.execute_terminal"
 
 
 def _patch_windows_environment(monkeypatch: pytest.MonkeyPatch, *, powershell: bool) -> None:

@@ -5,14 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.find_files import FindFilesTool
-from app.core.tools.tool_handler.search.content_engine import search_content
-from app.core.tools.tool_handler.search.errors import SearchCancelled, SearchTimedOut
-from app.core.tools.tool_handler.search.gitignore_rules import GitignoreMatcher
-from app.core.tools.tool_handler.search.result import ContentSearchPage
-from app.core.tools.tool_handler.search.scope import SearchScope
-from app.core.tools.tool_handler.search_content import SearchContentTool
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.find_files import FindFilesTool
+from app.tools.tool_handler.search.content_engine import search_content
+from app.tools.tool_handler.search.errors import SearchCancelled, SearchTimedOut
+from app.tools.tool_handler.search.gitignore_rules import GitignoreMatcher
+from app.tools.tool_handler.search.result import ContentSearchPage
+from app.tools.tool_handler.search.scope import SearchScope
+from app.tools.tool_handler.search_content import SearchContentTool
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
@@ -99,8 +99,8 @@ def test_search_content_rejects_invalid_path(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.retryable is True
-    assert "existing file or directory" in (observation.reason or "")
+    assert "hint: this error can be retried" in observation.content
+    assert "existing file or directory" in observation.content
 
 
 def test_search_content_has_cooperative_thread_timeout(tmp_path: Path, monkeypatch) -> None:
@@ -109,8 +109,8 @@ def test_search_content_has_cooperative_thread_timeout(tmp_path: Path, monkeypat
     # 只替换搜索边界的时钟；不修改全局 time，也不依赖固定的检查次数。
     ticks = count()
     clock = SimpleNamespace(monotonic=lambda: float(next(ticks)))
-    monkeypatch.setattr("app.core.tools.tool_handler.search.scope.time", clock)
-    monkeypatch.setattr("app.core.tools.tool_handler.search_content.time", clock)
+    monkeypatch.setattr("app.tools.tool_handler.search.scope.time", clock)
+    monkeypatch.setattr("app.tools.tool_handler.search_content.time", clock)
 
     observation = SearchContentTool().execute(
         pattern="needle",
@@ -152,7 +152,7 @@ def test_search_interrupts_even_without_candidates(
         assert observation.display_data["status_hint"] == "搜索超时"
     else:
         assert observation.status == "cancelled"
-        assert observation.content is None
+        assert observation.content.startswith("cancelled: ")
 
 
 @pytest.mark.parametrize("filter_kind", ["ignore", "glob"])
@@ -183,7 +183,7 @@ def test_search_interrupts_while_traversing_filtered_entries(
 
     monkeypatch.setattr(GitignoreMatcher, "match_file", interrupt_after_first_entry)
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.search.scope.time", SimpleNamespace(monotonic=lambda: now)
+        "app.tools.tool_handler.search.scope.time", SimpleNamespace(monotonic=lambda: now)
     )
     scope = SearchScope.from_path(tmp_path, tmp_path / "tree", task_id=search_task, deadline=5.0)
 

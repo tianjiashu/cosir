@@ -8,9 +8,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.app import app
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.find_files import FindFilesTool
-from app.core.tools.tool_handler.search_content import SearchContentTool
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.find_files import FindFilesTool
+from app.tools.tool_handler.search_content import SearchContentTool
 from app.service.depends import get_workspace_crud, get_workspace_files_service
 from app.service.workspace_files.browser_visibility import BrowserVisibilityStore
 from app.service.workspace_files.file_models import FileConflictError

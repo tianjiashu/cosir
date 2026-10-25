@@ -17,17 +17,17 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.move_tool import (
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.move_tool import (
     MOVE_FILE_DESCRIPTION,
     MoveTool,
     _move_without_overwriting,
 )
-from app.core.tools.tool_handler.security.file_operation_paths import (
+from app.tools.tool_handler.security.file_operation_paths import (
     ensure_utf8_text_file,
     resolve_workspace_relative_path,
 )
-from app.core.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
@@ -247,10 +247,9 @@ def test_move_missing_source_reports_english_error(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.retryable is False
-    assert observation.error == "move source is not an existing regular file"
-    assert observation.error.isascii()
-    assert observation.reason.isascii()
+    assert "hint: do not retry this tool call." in observation.content
+    assert observation.content.startswith("error: move source is not an existing regular file\n")
+    assert observation.content.isascii()
 
 
 # Source resolving to the same file as destination must be rejected *before* any
@@ -264,7 +263,7 @@ def test_move_same_source_and_destination_is_rejected(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.error == "source and destination resolve to the same file"
+    assert observation.content.startswith("error: source and destination resolve to the same file\n")
     assert source.read_bytes() == b"keep\n"
 
 
@@ -280,7 +279,7 @@ def test_move_existing_destination_is_rejected(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.error == "move destination already exists"
+    assert observation.content.startswith("error: move destination already exists\n")
     assert (tmp_path / "d.txt").read_bytes() == b"d\n"
     assert source.exists()
 
@@ -296,7 +295,7 @@ def test_move_missing_destination_parent_is_rejected(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.error == "move destination parent directory does not exist"
+    assert observation.content.startswith("error: move destination parent directory does not exist\n")
     assert not (tmp_path / "nested").exists()
     assert source.exists()
 
@@ -343,7 +342,7 @@ def _os_proxy(monkeypatch, move_module, **overrides):
 # Simulate POSIX semantics on any platform: ``os.link`` + ``os.unlink``.  The move
 # must succeed and produce a real file at the destination with the same bytes.
 def test_move_without_overwriting_link_unlink_success(tmp_path: Path, monkeypatch) -> None:
-    import app.core.tools.tool_handler.move_tool as move_module
+    import app.tools.tool_handler.move_tool as move_module
 
     source = tmp_path / "s.txt"
     source.write_bytes(b"payload\n")
@@ -364,7 +363,7 @@ def test_move_without_overwriting_unlink_failure_removes_destination(
 ) -> None:
     import os as real_os
 
-    import app.core.tools.tool_handler.move_tool as move_module
+    import app.tools.tool_handler.move_tool as move_module
 
     source = tmp_path / "s.txt"
     source.write_bytes(b"payload\n")
@@ -390,7 +389,7 @@ def test_move_without_overwriting_unlink_failure_removes_destination(
 def test_move_without_overwriting_windows_branch_uses_rename(
     tmp_path: Path, monkeypatch
 ) -> None:
-    import app.core.tools.tool_handler.move_tool as move_module
+    import app.tools.tool_handler.move_tool as move_module
 
     source = tmp_path / "s.txt"
     source.write_bytes(b"win\n")

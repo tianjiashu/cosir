@@ -3,8 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from app.core.tools.tool_models.terminal_session_args import TerminalReadArgs, TerminalWriteArgs
-from app.core.tools.validation.arguments import validate_tool_arguments
+from app.tools.tool_models.terminal_session_args import TerminalReadArgs, TerminalWriteArgs
+from app.core.tool.validation.arguments import validate_tool_arguments
 from app.service.terminal.terminal_observation import TerminalObservation, json_size
 
 
@@ -115,8 +115,8 @@ def test_snapshot_budget_keeps_latest_screen_and_tail_without_corrupting_json():
     import json
 
     from app.config.constant import Constant
-    from app.core.tools.tool_execute.tool_observation_budget import ToolObservationBudget
-    from app.core.tools.tool_execute.tool_success import tool_success
+    from app.core.tool.execute.tool_observation_budget import ToolObservationBudget
+    from app.core.tool.results.tool_success import tool_success
 
     observation = make_observation()
     observation.update_screen(

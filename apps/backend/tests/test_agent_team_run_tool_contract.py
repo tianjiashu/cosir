@@ -16,24 +16,24 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.agent_team import registry as team_registry_module
-from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.agent_team.node_goal import AgentTeamNodeGoal
-from app.agent_team.registry import AgentTeamConfigurationRegistry
-from app.agent_team.team_tool_error import TeamToolError
+from app.service.agent_team import registry as team_registry_module
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.core.tool.agent_team.node_goal import AgentTeamNodeGoal
+from app.service.agent_team.registry import AgentTeamConfigurationRegistry
+from app.core.tool.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_tool_system
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.schemas.tool_names import TOOL_AGENT_TEAM
-from app.core.tools.tool_grouping import TOOL_GROUP_AGENT_TEAM
-from app.core.tools.tool_handler.agent_team.agent_team_run import (
+from app.core.tool.schemas import ToolExecutionContext
+from app.core.tool.schemas.tool_names import TOOL_AGENT_TEAM
+from app.core.tool.tool_grouping import TOOL_GROUP_AGENT_TEAM
+from app.core.tool.agent_team.agent_team_run import (
     AgentTeamRunTool,
     build_agent_team_run_definition,
 )
-from app.core.tools.tool_models import AgentTeamArgs
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.agent_team.agent_team_args import AgentTeamArgs
+from app.core.tool.tool_registry import ToolRegistry
 from app.models.model_config_record import ModelConfigRecord
 from app.service.agent_team import agent_team_preparation_service as prep_module
 from app.service.agent_team.agent_team_preparation_service import (
@@ -331,9 +331,9 @@ def test_prepare_branch_reports_missing_team_as_non_retryable_creation_invalid()
     )
 
     assert observation.status == "error"
-    assert observation.error == "agent_team_run_creation_invalid"
-    assert observation.retryable is False
-    assert "ghost-team" in (observation.reason or "")
+    assert observation.content.startswith("error: agent_team_run_creation_invalid\n")
+    assert "hint: do not retry this tool call." in observation.content
+    assert "ghost-team" in observation.content
 
 
 def test_prepare_branch_strips_team_id_before_resolving() -> None:
@@ -382,8 +382,8 @@ def test_whitespace_only_team_id_resolves_to_the_empty_string() -> None:
 
     assert seen == [""]
     assert observation.status == "error"
-    assert observation.error == "agent_team_run_creation_invalid"
-    assert observation.retryable is False
+    assert observation.content.startswith("error: agent_team_run_creation_invalid\n")
+    assert "hint: do not retry this tool call." in observation.content
 
 
 def test_execute_reports_runtime_unavailable_without_injected_parent_profile() -> None:
@@ -414,8 +414,8 @@ def test_execute_reports_runtime_unavailable_without_injected_parent_profile() -
     )
 
     assert observation.status == "error"
-    assert observation.error == "agent_team_runtime_unavailable"
-    assert observation.retryable is False
+    assert observation.content.startswith("error: agent_team_runtime_unavailable\n")
+    assert "hint: do not retry this tool call." in observation.content
 
 
 # --------------------------------------------------------------------------- #
@@ -487,7 +487,7 @@ def test_prepare_branch_succeeds_for_an_existing_team(monkeypatch) -> None:
 
     assert observation.status == "success", (
         "已存在的 Team + 合法输入应产出 pending 观察，实际为 "
-        f"error={observation.error!r} reason={observation.reason!r}"
+        f"content={observation.content!r}"
     )
     content = json.loads(observation.content)
     assert (content["status"], content["team_run_id"]) == ("awaiting_user_review", 101)

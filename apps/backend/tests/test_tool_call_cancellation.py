@@ -6,7 +6,7 @@
    清理与并发不串扰；
 2. ``ToolHandlerRunner``：工具级信号命中即中止本次调用、不误伤同 run 的兄弟调用、
    不写 run 级注册表、不投影 Transport 终态、信号释放；
-3. ``WorkflowSession.cancel_tool_call`` 与 HTTP 端点的状态码映射。
+3. ``TaskActors.cancel_tool_call`` 与 HTTP 端点的状态码映射。
 
 终态投影的时序属于「执行出口」契约，本文件只断言它**不发生在执行层**：终态必须晚于
 ``ToolHandlerRunner`` 的强杀与输出排空（见 ``tool_batch_runner._execute_call`` 在
@@ -32,16 +32,15 @@ from pydantic import BaseModel
 
 from app.assistant_transport.projection.event_projection import plan_event
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tools.schemas import ToolCall, ToolDefinition, ToolExecutionContext
-from app.core.tools.tool_execute import tool_executor as tool_executor_module
-from app.core.tools.tool_execute import tool_handler_runner, tool_terminal_projection
-from app.core.tools.tool_execute.tool_cancelled import tool_cancelled
-from app.core.tools.tool_execute.tool_executor import ToolExecutor
-from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
+from app.core.tool.execute import tool_handler_runner, tool_terminal_projection, tool_executor as tool_executor_module
+from app.core.tool.results.tool_cancelled import tool_cancelled
+from app.core.tool.execute.tool_executor import ToolExecutor
+from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
+from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
-from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
+from app.models.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_batch_runner
 from tests.runtime_context_stub import runtime_stub
 
@@ -138,9 +137,9 @@ def _session_with_execution(task_id: int, run_id: int) -> object:
     from types import SimpleNamespace
 
     from app.service.conversation_run.task_actor import Execution
-    from app.service.conversation_run.workflow_session import WorkflowSession
+    from app.service.conversation_run.task_actors import TaskActors
 
-    session = WorkflowSession.__new__(WorkflowSession)
+    session = TaskActors.__new__(TaskActors)
     execution = Execution(run=SimpleNamespace(id=run_id, task_id=task_id), fresh_run=False)
     session._actors = {task_id: SimpleNamespace(execution=execution)}
     return session
@@ -298,7 +297,7 @@ def test_tool_call_signal_cancels_only_the_named_call_in_parallel(tmp_path: Path
 
     assert observations["call-cancelled"].status == "cancelled"
     # 取消观察必须带面向模型的 reason（具体文案按取消来源决定，见 tool_cancelled）。
-    assert observations["call-cancelled"].reason
+    assert observations["call-cancelled"].content.startswith("cancelled: ")
     assert cancelled_elapsed < 2.5, f"被点名调用耗时 {cancelled_elapsed:.2f}s，疑似未被强杀"
     assert cancelled_marker.exists() is False
 
@@ -349,7 +348,7 @@ def test_cancelled_execution_returns_cancelled_observation() -> None:
     )
 
     assert observation.status == "cancelled"
-    assert observation.reason
+    assert observation.content.startswith("cancelled: ")
 
 
 def test_thread_mode_keeps_result_when_cancel_arrives_during_execution() -> None:
@@ -374,7 +373,7 @@ def test_runner_cancellation_does_not_project_transport_state(
     """取消只产出观察与日志：执行层不得投影 Transport 终态。
 
     终态必须晚于强杀与输出排空，因此取消路径在整个执行期内不得触达工作流事件出口。第二层
-    护栏断言旧的通知旁路与 core/tools 内的全局 projector 依赖本身已不存在，避免它们被重新
+    护栏断言旧的通知旁路与 tools 内的全局 projector 依赖本身已不存在，避免它们被重新
     引入而绕开该时序规则。
     """
 
@@ -389,7 +388,7 @@ def test_runner_cancellation_does_not_project_transport_state(
     )
 
     assert observation.status == "cancelled"
-    assert observation.reason
+    assert observation.content.startswith("cancelled: ")
     assert captured == []
     assert not hasattr(tool_handler_runner, "_notify_tool_cancelled")
     assert not hasattr(tool_handler_runner, "get_conversation_event_projector")
@@ -435,11 +434,17 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
         task=SimpleNamespace(id=_TASK_ID),
         tool_executor=executor,
         allows_tools=frozenset({"probe_tool"}),
-        batch=ToolBatch(valid_tool_calls={"call-1": ValidToolCall("probe_tool", "projected")}),
+    )
+    batch = ToolBatch(
+        valid_tool_calls={"call-1": ValidToolCall(name="probe_tool", projection="projected")}
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="probe_tool", arguments="{}", call_id="call-1"), "step-1", _NO_LOOP
+        rc,
+        ToolCall(tool_name="probe_tool", arguments="{}", call_id="call-1"),
+        "step-1",
+        batch,
+        _NO_LOOP,
     )
 
     assert observation.status == "cancelled"
@@ -560,29 +565,34 @@ def _running_tool_state(tool_call_id: str = "call-9") -> dict[str, Any]:
     """构造只含一个 ``running`` tool-call part 的最小 snapshot，供投影纯函数断言。"""
 
     return {
-        "current_run_id": 4,
-        "runs": [
+        "messages": [
             {
+                "id": "m1",
+                "role": "assistant",
                 "runId": 4,
-                "status": "running",
-                "messages": [
+                "outcome": None,
+                "parts": [
                     {
-                        "id": "m1",
-                        "role": "assistant",
-                        "parts": [
-                            {
-                                "type": "tool-call",
-                                "toolCallId": tool_call_id,
-                                "toolName": "execute_terminal",
-                                "status": "running",
-                                "args": {},
-                                "isError": False,
-                            }
-                        ],
+                        "type": "tool-call",
+                        "toolCallId": tool_call_id,
+                        "toolName": "execute_terminal",
+                        "status": "running",
+                        "args": {},
+                        "isError": False,
                     }
                 ],
             }
         ],
+        "activity": {
+            "runId": 4,
+            "status": "running",
+            "endReason": None,
+            "error": None,
+            "usage": None,
+            "contextWindowTotal": None,
+            "launch": None,
+        },
+        "error": None,
     }
 
 
@@ -605,7 +615,7 @@ def test_cancelled_event_mutates_running_part_to_cancelled() -> None:
         mutation.path: mutation.value
         for mutation in plan_event(event, _running_tool_state("call-1"))
     }
-    base = ("runs", 0, "messages", 0, "parts", 0)
+    base = ("messages", 0, "parts", 0)
 
     assert mutations[(*base, "status")] == "cancelled"
     assert mutations[(*base, "error")] == "已取消"
@@ -623,14 +633,14 @@ def test_cancelled_observation_plan_tolerates_missing_tool_part() -> None:
         error="已取消",
     )
 
-    assert list(plan_event(event, {"current_run_id": _RUN_A, "runs": []})) == []
+    assert list(plan_event(event, {"messages": [], "activity": None, "error": None})) == []
 
 
 def _tool_state_with_status(status: str, tool_call_id: str) -> dict[str, Any]:
     """构造只含一个指定状态 tool-call part 的最小 snapshot，供终态迁移白名单断言。"""
 
     state = _running_tool_state(tool_call_id)
-    state["runs"][0]["messages"][0]["parts"][0]["status"] = status
+    state["messages"][0]["parts"][0]["status"] = status
     return state
 
 
@@ -656,7 +666,7 @@ def test_placeholder_overwrite_transition_cancelled_to_completed_is_applied() ->
         mutation.path: mutation.value
         for mutation in plan_event(event, _tool_state_with_status("cancelled", "call-1"))
     }
-    base = ("runs", 0, "messages", 0, "parts", 0)
+    base = ("messages", 0, "parts", 0)
 
     assert mutations[(*base, "status")] == "completed"
     assert mutations[(*base, "isError")] is False

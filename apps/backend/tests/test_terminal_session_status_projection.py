@@ -164,11 +164,10 @@ def _service(sources: _Sources) -> ConversationTaskStateService:
 
 
 def _display(state: dict[str, object]) -> dict[str, object]:
-    for run in state["runs"]:  # type: ignore[index]
-        for message in run["messages"]:
-            for part in message["parts"]:
-                if part.get("toolCallId") == "terminal-call":
-                    return part["display_data"]
+    for message in state["messages"]:  # type: ignore[index]
+        for part in message["parts"]:
+            if part.get("toolCallId") == "terminal-call":
+                return part["display_data"]
     raise AssertionError("terminal tool part not found")
 
 
@@ -248,7 +247,7 @@ def test_cold_rebuild_closes_orphaned_running_session_and_keeps_tool_completed()
 
     assert display["status"] == "closed"
     assert display["end_reason"] == "backend_restarted"
-    parts = state["runs"][0]["messages"][0]["parts"]
+    parts = state["messages"][0]["parts"]
     assert next(part for part in parts if part["type"] == "tool-call")["status"] == "completed"
     assert sources.updates == [("closed", "backend_restarted", None)]
 
@@ -370,8 +369,7 @@ def test_cross_run_references_reconcile_and_receive_async_exit(monkeypatch) -> N
     state = service.get_state(1)
     displays = [
         part["display_data"]
-        for run in state["runs"]
-        for message in run["messages"]
+        for message in state["messages"]
         for part in message["parts"]
         if part.get("display_data", {}).get("session_id") == "term-1"
     ]
@@ -381,8 +379,7 @@ def test_cross_run_references_reconcile_and_receive_async_exit(monkeypatch) -> N
     current = task_runtime_spaces.get(1).existing_snapshot()
     displays = [
         part["display_data"]
-        for run in current["runs"]
-        for message in run["messages"]
+        for message in current["messages"]
         for part in message["parts"]
         if part.get("display_data", {}).get("session_id") == "term-1"
     ]
@@ -432,8 +429,7 @@ def test_cross_run_projection_persists_and_reconciles_late_rows_in_sqlite(monkey
         state = service.rebuild_state(1)
         displays = [
             part["display_data"]
-            for run in state["runs"]
-            for message in run["messages"]
+            for message in state["messages"]
             for part in message["parts"]
             if part.get("display_data", {}).get("session_id") == "term-1"
         ]

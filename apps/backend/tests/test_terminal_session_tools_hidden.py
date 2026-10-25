@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.tools.display.terminal_display import build_session_display_payload
-from app.core.tools.tool_handler.terminal_session import (
+from app.tools.display.terminal_display import build_session_display_payload
+from app.tools.tool_handler.terminal_session import (
     TerminalCloseTool,
     TerminalListTool,
     TerminalReadTool,
@@ -13,16 +13,16 @@ from app.core.tools.tool_handler.terminal_session import (
     TerminalWriteTool,
     build_terminal_signal_definition,
 )
-from app.core.tools.tool_handler.terminal_session.common import success_observation
-from app.core.tools.tool_handler.tool_base import HandlerBase
-from app.core.tools.tool_models import (
+from app.tools.tool_handler.terminal_session.common import success_observation
+from app.core.tool.tool_base import HandlerBase
+from app.tools.tool_models import (
     TerminalCloseArgs,
     TerminalReadArgs,
     TerminalSignalArgs,
     TerminalStartArgs,
     TerminalWriteArgs,
 )
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.tool_registry import ToolRegistry
 from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
 from app.service.terminal.terminal_session_service import TerminalSessionService
 
@@ -109,7 +109,7 @@ def test_terminal_session_schema_describes_host_specific_shell_and_paths(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        "app.tools.tool_handler.terminal_session.descriptions.platform.system",
         lambda: "Windows",
     )
     windows_schema = TerminalStartTool().to_definition().to_model_tool_definition()["parameters"]
@@ -117,7 +117,7 @@ def test_terminal_session_schema_describes_host_specific_shell_and_paths(
     assert "Windows path syntax" in windows_schema["properties"]["cwd"]["description"]
 
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        "app.tools.tool_handler.terminal_session.descriptions.platform.system",
         lambda: "Darwin",
     )
     macos_schema = TerminalStartTool().to_definition().to_model_tool_definition()["parameters"]
@@ -125,7 +125,7 @@ def test_terminal_session_schema_describes_host_specific_shell_and_paths(
     assert "zsh" in macos_schema["properties"]["shell"]["description"]
 
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        "app.tools.tool_handler.terminal_session.descriptions.platform.system",
         lambda: "Linux",
     )
     linux_schema = TerminalStartTool().to_definition().to_model_tool_definition()["parameters"]
@@ -135,7 +135,7 @@ def test_terminal_session_schema_describes_host_specific_shell_and_paths(
 
 def test_terminal_signal_schema_warns_about_windows_capability(monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        "app.tools.tool_handler.terminal_session.descriptions.platform.system",
         lambda: "Windows",
     )
     schema = TerminalSignalTool().to_definition().to_model_tool_definition()["parameters"]
@@ -156,7 +156,7 @@ def test_terminal_definitions_snapshot_host_projection_at_construction(
         TerminalCloseTool,
     )
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        "app.tools.tool_handler.terminal_session.descriptions.platform.system",
         lambda: "Windows",
     )
     definitions = [handler().to_definition().normalized() for handler in handlers]
@@ -166,7 +166,7 @@ def test_terminal_definitions_snapshot_host_projection_at_construction(
         assert definition.parameters_schema
 
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system",
+        "app.tools.tool_handler.terminal_session.descriptions.platform.system",
         lambda: "Darwin",
     )
     assert [definition.to_model_tool_definition() for definition in definitions] == windows_payloads
@@ -235,7 +235,7 @@ def test_session_display_payload_allowlists_ui_metadata() -> None:
 )
 def test_write_schema_declares_only_host_control_keys(monkeypatch, system, keys):
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.terminal_session.descriptions.platform.system", lambda: system
+        "app.tools.tool_handler.terminal_session.descriptions.platform.system", lambda: system
     )
     schema = TerminalWriteTool().to_definition().to_model_tool_definition()["parameters"]
     assert schema["$defs"]["InputKey"]["properties"]["key"]["enum"] == keys
@@ -282,27 +282,27 @@ def test_terminal_list_projects_each_session_without_mutating_service_snapshots(
 
 
 def test_repeated_read_error_explains_recovery_without_claiming_command_failure():
-    from app.core.tools.tool_handler.terminal_session.common import with_terminal_errors
+    from app.tools.tool_handler.terminal_session.common import with_terminal_errors
     from app.service.terminal.terminal_read_guard import TerminalReadGuard
 
     guard = TerminalReadGuard()
     for _ in range(5):
         guard.observe(1, (1, "running"))
     result = with_terminal_errors("terminal_read", lambda: guard.observe(1, (1, "running")))
-    assert result.status == "error" and result.retryable
-    assert "TERMINAL_READ_UNCHANGED" in result.error
-    assert "does not stop, fail, or otherwise affect the command or session" in result.error
-    assert "terminal operation failed" not in result.error
-    assert "does not reset the counter or guarantee recovery" in result.reason
-    assert "new output or state changes" in result.reason
+    assert result.status == "error"
+    assert "hint: this error can be retried" in result.content
+    assert result.content.startswith("error: TERMINAL_READ_UNCHANGED")
+    assert "does not stop, fail, or otherwise affect the command or session" in result.content
+    assert "terminal operation failed" not in result.content
+    assert "does not reset the counter or guarantee recovery" in result.content
+    assert "new output or state changes" in result.content
     assert result.display_data == {"status_hint": "重复读取"}
-    assert result.content is None
     # 错误映射只改提示，下一次观察到真实进展即恢复。
     assert guard.observe(1, (2, "running")) is None
 
 
 def test_other_terminal_errors_keep_the_existing_error_projection():
-    from app.core.tools.tool_handler.terminal_session.common import service_error_observation
+    from app.tools.tool_handler.terminal_session.common import service_error_observation
     from app.service.terminal.errors import TerminalReadInProgressError, TerminalSessionStateError
 
     for error in [
@@ -311,6 +311,11 @@ def test_other_terminal_errors_keep_the_existing_error_projection():
     ]:
         result = service_error_observation("terminal_read", error)
         assert result.status == "error"
-        assert result.retryable == error.retryable
-        assert result.error == f"terminal operation failed: {error}"
+        expected_hint = (
+            "hint: this error can be retried"
+            if error.retryable
+            else "hint: do not retry this tool call."
+        )
+        assert expected_hint in result.content
+        assert result.content.startswith(f"error: terminal operation failed: {error}\n")
         assert result.display_data == {"status_hint": "终端失败"}

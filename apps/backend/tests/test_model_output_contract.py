@@ -11,8 +11,8 @@ from openai.types.chat import ChatCompletion
 
 import app.core.workflow.node_helper.streaming_part_state_machine as streaming_module
 from app.core.llm_provider.message_codec import assistant_message
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.execution_state.react_route import ReactRoute
+from app.models.react_execution_state import ReactExecutionState
+from app.models.enums.react_route import ReactRoute
 from app.core.workflow.nodes import model_node as model_module
 from app.models.enums.conversation_run_status import RunTransition
 from tests.runtime_context_stub import run_state_stub, runtime_stub
@@ -24,11 +24,8 @@ def _state(**overrides: Any) -> ReactExecutionState:
 
     values: dict[str, Any] = {
         "step_count": 1,
-        "tool_error_count": 0,
+        "step_limit": 10,
         "next_node": ReactRoute.MODEL,
-        "instruction": "",
-        "max_steps": 10,
-        "last_tool_results": {"instruction": "", "observations": []},
     }
     values.update(overrides)
     return ReactExecutionState(**values)
@@ -345,7 +342,7 @@ def test_invalid_tool_arguments_reach_executor_unparsed(monkeypatch, arguments):
     patch = asyncio.run(model_module._model_node(_state()))
     assert patch["next_node"] == ReactRoute.TOOLS
     assert harness.messages[-1]["tool_calls"][0]["function"]["arguments"] == arguments
-    assert harness.runtime_config.batch.calls[0]["function"]["arguments"] == arguments
+    assert patch["batch"].calls[0]["function"]["arguments"] == arguments
     run_batch = AsyncMock(return_value=[])
     monkeypatch.setattr(tools_module, "run_tool_batch", run_batch)
     harness.runtime_config.tool_definitions["read_file"].need_HIL = False

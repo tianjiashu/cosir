@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-import app.core.tools.tool_execute.tool_access_gate as gate_module
+import app.core.tool.execute.tool_access_gate as gate_module
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
@@ -16,14 +16,14 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.events import ToolCallCreatedEvent, ToolCallStatusChangedEvent
 from app.core.hook.hook_event import HookDecision
 from app.core.hook.hook_result import HookResult
-from app.core.tools.schemas import (
+from app.core.tool.schemas import (
     ToolCall,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
-from app.core.tools.tool_handler.read_file import ReadFileTool
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.execute.tool_access_gate import ToolAccessGate
+from app.tools.tool_handler.read_file import ReadFileTool
+from app.core.tool.tool_registry import ToolRegistry
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_task_context import ConversationTaskContextRecord
 
@@ -111,7 +111,7 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
     """T2-a：「已注册但不在 allowed_tool_names」∩「参数非法」→ 必须命中**权限门禁** denial。
 
     被测行为：``evaluate`` 的四段检查实际执行顺序（注册表 → 权限门禁 → 参数校验 → Hook）。
-    修复前实际观测（缺陷）：denial.error 以 ``"invalid tool arguments: "`` 开头、
+    修复前实际观测（缺陷）：denial.content 以 ``"error: invalid tool arguments: "`` 开头、
     ``retryable is True`` —— 参数校验排在权限门禁之前，被禁用的工具会向模型回传
     「改改参数就能重试」的错误信号。
     修复后（当前断言）：权限门禁先于参数校验，参数是否合法都不影响命中「本轮禁用」分支。
@@ -131,9 +131,9 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
     assert outcome.tool is None
     assert outcome.denial is not None
     # 关键事实：命中的是「本轮禁用」分支，而不是「参数非法」分支。
-    assert outcome.denial.error == "tool is not allowed: read_file", outcome.denial.error
-    assert outcome.denial.retryable is False
-    assert "disabled for the current run" in (outcome.denial.reason or "")
+    assert outcome.denial.content.startswith("error: tool is not allowed: read_file\n"), outcome.denial.content
+    assert "hint: do not retry this tool call." in outcome.denial.content
+    assert "disabled for the current run" in outcome.denial.content
     assert outcome.denial.tool_call_id == "call-disabled"
 
 
@@ -154,9 +154,9 @@ def test_t2_disabled_with_valid_args_yields_disabled_denial(tmp_path: Any) -> No
 
     assert outcome.admitted is False
     assert outcome.denial is not None
-    assert outcome.denial.error == "tool is not allowed: read_file"
-    assert "disabled for the current run" in (outcome.denial.reason or "")
-    assert outcome.denial.retryable is False
+    assert outcome.denial.content.startswith("error: tool is not allowed: read_file\n")
+    assert "disabled for the current run" in outcome.denial.content
+    assert "hint: do not retry this tool call." in outcome.denial.content
 
 
 def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
@@ -177,8 +177,8 @@ def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
 
     assert outcome.admitted is False
     assert outcome.denial is not None
-    assert outcome.denial.error.startswith("unknown tool: ")
-    assert outcome.denial.retryable is False
+    assert outcome.denial.content.startswith("error: unknown tool: ")
+    assert "hint: do not retry this tool call." in outcome.denial.content
 
 
 def test_t2_pre_tool_use_hook_deny_and_argument_rewrite(
@@ -187,7 +187,7 @@ def test_t2_pre_tool_use_hook_deny_and_argument_rewrite(
     """T2-d：PreToolUse Hook 是最后一段检查——DENY 硬拒绝、modified_arguments 改写入参。
 
     实际观测：
-    - DENY：``admitted=False``，denial.error == deny_reason，且 ``tool`` 字段为 None；
+    - DENY：``admitted=False``，denial.content 以 ``error: <deny_reason>`` 开头，且 ``tool`` 字段为 None；
     - 改写：``admitted=True``，``outcome.arguments`` **整体替换**为 Hook 返回的字典
       （实测 ``{"path": "z.txt"}``），既不与校验后的参数合并，也不补 args_model 的默认值
       （``offset`` / ``limit`` 由此丢失）；``call.arguments`` 本身不被回写。
@@ -212,7 +212,7 @@ def test_t2_pre_tool_use_hook_deny_and_argument_rewrite(
     assert denied.admitted is False
     assert denied.tool is None
     assert denied.denial is not None
-    assert denied.denial.error == "blocked by policy"
+    assert denied.denial.content.startswith("error: blocked by policy\n")
     assert denied.denial.tool_call_id == "call-hook"
 
     class _RewriteHook:
@@ -450,7 +450,7 @@ def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
     ]
 
     snapshot = ConversationTaskStateRebuilder.rebuild(task, [run], rows)
-    parts = snapshot["runs"][0]["messages"][-1]["parts"]
+    parts = snapshot["messages"][-1]["parts"]
 
     tool_part_ids = [part["toolCallId"] for part in parts if part["type"] == "tool-call"]
     assert tool_part_ids == ["normal-1"], f"快照 part={tool_part_ids}"

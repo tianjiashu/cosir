@@ -27,18 +27,18 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tools.guard.tool_output_budget import ToolOutputBudget
-from app.core.tools.schemas import ToolExecutionContext, ToolObservation
-from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.core.tools.tool_handler.delete_tool import DeleteTool
-from app.core.tools.tool_handler.find_files import FindFilesTool
-from app.core.tools.tool_handler.list_directory import ListDirectoryTool
-from app.core.tools.tool_handler.move_tool import MoveTool
-from app.core.tools.tool_handler.read_file import ReadFileTool
-from app.core.tools.tool_handler.replace_tool import ReplaceTool
-from app.core.tools.tool_handler.search_content import SearchContentTool
-from app.core.tools.tool_handler.security.path_resolver import PathResolver
-from app.core.tools.tool_handler.write_file import WriteFileTool
+from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+from app.core.tool.schemas import ToolExecutionContext, ToolObservation
+from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.delete_tool import DeleteTool
+from app.tools.tool_handler.find_files import FindFilesTool
+from app.tools.tool_handler.list_directory import ListDirectoryTool
+from app.tools.tool_handler.move_tool import MoveTool
+from app.tools.tool_handler.read_file import ReadFileTool
+from app.tools.tool_handler.replace_tool import ReplaceTool
+from app.tools.tool_handler.search_content import SearchContentTool
+from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.tool_handler.write_file import WriteFileTool
 from app.service.terminal.terminal_session_service import TerminalSessionService
 from app.utils.path import system_cosir as paths
 from app.utils.path.system_cosir import COSIR_DIR_NAME, system_cosir_dir
@@ -761,7 +761,7 @@ def test_ensure_system_cosir_dir_degrades_when_name_is_file(tmp_path: Path) -> N
 def test_coding_agent_removed_from_ignored_dirs() -> None:
     """ignore_rules 默认跳过集合不得再含 `.coding-agent`。"""
 
-    from app.core.tools.tool_handler.search.ignore_rules import DEFAULT_IGNORED_DIR_NAMES
+    from app.tools.tool_handler.search.ignore_rules import DEFAULT_IGNORED_DIR_NAMES
 
     assert ".coding-agent" not in DEFAULT_IGNORED_DIR_NAMES
 
@@ -769,7 +769,7 @@ def test_coding_agent_removed_from_ignored_dirs() -> None:
 def test_cosir_not_in_ignored_dirs_by_design() -> None:
     """按设计，`.cosir` 允许被遍历/读取，故不得出现在跳过集里。"""
 
-    from app.core.tools.tool_handler.search.ignore_rules import DEFAULT_IGNORED_DIR_NAMES
+    from app.tools.tool_handler.search.ignore_rules import DEFAULT_IGNORED_DIR_NAMES
 
     assert ".cosir" not in DEFAULT_IGNORED_DIR_NAMES
 
@@ -789,7 +789,7 @@ def test_no_coding_agent_literal_in_backend_app() -> None:
 def test_allow_reserved_only_used_by_internal_call_sites() -> None:
     """全仓 grep：`allow_reserved=True` 仅应出现在后端内部写 `.cosir` 的白名单调用点。
 
-    白名单：交互终端 cwd、工具输出 artifact 落盘、Agent Team 运行档案落盘；均为系统自身写入，
+    白名单：交互终端 cwd、Agent Team 运行档案落盘；均为系统自身写入，
     不经模型工具入参。为避免命中 docstring，只统计关键字实参 ``allow_reserved=True``
     （调用可能跨行，故实参后允许 ``,`` / ``)`` / 行尾；docstring 里的 ``allow_reserved=True``
     后跟反引号，不会命中）。
@@ -809,7 +809,6 @@ def test_allow_reserved_only_used_by_internal_call_sites() -> None:
                 call_sites.append(f"{path.relative_to(app_dir)}:{lineno}")
     expected = {
         "service/terminal/terminal_session_service.py",
-        "core/tools/guard/tool_output_budget.py",
         "service/agent_team/agent_team_run_archive_service.py",
     }
     actual = {site.split(":", 1)[0].replace("\\", "/") for site in call_sites}
@@ -1044,19 +1043,6 @@ def test_resolve_without_boundary_allows_cosir_read(tmp_path: Path) -> None:
     resolved, error = PathResolver(root).resolve_without_boundary(".cosir/x.txt")
     assert resolved == root / ".cosir" / "x.txt"
     assert error == ""
-
-
-def test_is_inside_workspace_and_escapes(tmp_path: Path) -> None:
-    """is_inside_workspace / escapes_workspace 的 containment 语义（`.cosir` 在内）。"""
-
-    root = tmp_path / "ws"
-    (root / ".cosir").mkdir(parents=True)
-    inside = root / ".cosir" / "x.txt"
-    outside = tmp_path / "outside.txt"
-    assert PathResolver.is_inside_workspace(root, inside) is True
-    assert PathResolver.escapes_workspace(root, inside) is False
-    assert PathResolver.is_inside_workspace(root, outside) is False
-    assert PathResolver.escapes_workspace(root, outside) is True
 
 
 def test_resolver_rejects_nested_cosir_prefix_sibling(tmp_path: Path) -> None:

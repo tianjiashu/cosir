@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.tools.tool_handler.terminal_session.common import service_error_observation
+from app.tools.tool_handler.terminal_session.common import service_error_observation
 from app.service.terminal import process_terminal_worker as worker_module
 from app.service.terminal.errors import (
     TerminalWorkerHandshakeError,
@@ -197,10 +197,10 @@ def test_service_error_observation_marks_rejected_handshake_as_not_retryable() -
     )
 
     assert observation.status == "error"
-    assert observation.retryable is False
+    assert "hint: do not retry this tool call." in observation.content
     assert observation.display_data["status_hint"] == "终端失败"
-    assert "TERMINAL_WORKER_HANDSHAKE_REJECTED" in (observation.reason or "")
-    assert "Fix the session or arguments before retrying." in (observation.reason or "")
+    assert "TERMINAL_WORKER_HANDSHAKE_REJECTED" in observation.content
+    assert "Fix the session or arguments before retrying." in observation.content
 
 
 def test_rejected_handshake_raises_handshake_error_and_logs_field_comparison(

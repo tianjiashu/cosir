@@ -5,7 +5,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
 from app.api.tasks_api import get_task
@@ -16,36 +15,31 @@ from app.assistant_transport.request.task_command_request import _ordered_displa
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
 )
-from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import RunTransition
 from app.service.conversation_run.conversation_run_service import ConversationRunService
-from app.service.conversation_run.workflow_session import WorkflowSession
 from app.service.depends import get_workspace_service
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 def _snapshot(
-    run_id: int | None = None, status: str = "idle", end_reason: str | None = None
+    run_id: int | None = None, status: str = "running", end_reason: str | None = None
 ) -> dict[str, object]:
-    runs = (
-        []
-        if run_id is None
-        else [
-            {
-                "runId": run_id,
-                "status": status,
-                "endReason": end_reason,
-                "messages": [{"id": f"user-{run_id}", "role": "user", "parts": []}],
-                "usage": None,
-                "error": None,
-            }
-        ]
-    )
+    if run_id is None:
+        return {"messages": [], "activity": None, "error": None}
     return {
-        "runs": runs,
-        "current_run_id": run_id,
-        "approvals": {},
-        "context_window_total": None,
+        "messages": [
+            {"id": "1", "role": "user", "parts": [], "runId": run_id, "outcome": None}
+        ],
+        "activity": {
+            "runId": run_id,
+            "status": status,
+            "endReason": end_reason,
+            "error": None,
+            "usage": None,
+            "contextWindowTotal": None,
+            "launch": None,
+        },
         "error": None,
     }
 
@@ -149,7 +143,7 @@ def _attach_service(state: dict[str, object]) -> TransportAssistantService:
 
 
 def test_attach_subscribes_task_current_run() -> None:
-    """attach 只按 Task 订阅当前 Run，不需要也不接受 run_id。"""
+    """attach 只按 Task 订阅，不需要也不接受 run_id。"""
 
     result = _attach_service(_snapshot(7, "running")).attach(1)
 
@@ -157,12 +151,12 @@ def test_attach_subscribes_task_current_run() -> None:
     assert result.headers["X-Cosir-Task-Id"] == "1"
 
 
-def test_attach_without_any_run_is_conflict() -> None:
-    with pytest.raises(HTTPException) as error:
-        _attach_service(_snapshot()).attach(1)
+def test_attach_without_any_run_still_subscribes() -> None:
+    """长订阅跟随 Task：还没有 Run 时照常订阅，之后开出的 Run 经同一条订阅推送。"""
 
-    assert error.value.status_code == 409
-    assert error.value.detail["error"]["code"] == "NO_RUN"
+    result = _attach_service(_snapshot()).attach(1)
+
+    assert result.media_type == "text/event-stream"
 
 
 @pytest.mark.parametrize(
@@ -207,7 +201,7 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
         def list_recoverable(self) -> list[object]:
             return [
                 SimpleNamespace(
-                    id=run_id, task_id=task_id, execution_data=ConversationRunProgress()
+                    id=run_id, task_id=task_id, execution_data=ReactExecutionState()
                 )
                 for run_id, task_id in ((7, 1), (8, 2))
             ]
@@ -262,7 +256,7 @@ def test_state_route_has_one_read_method() -> None:
 
 
 @pytest.mark.asyncio
-async def test_state_endpoint_returns_nested_run_snapshot() -> None:
+async def test_state_endpoint_returns_task_view_snapshot() -> None:
     snapshot = _snapshot()
 
     class _TaskService:
@@ -276,13 +270,7 @@ async def test_state_endpoint_returns_nested_run_snapshot() -> None:
     result = await assistant_transport_state(1, _TaskService(), _TransportService())
 
     assert result == snapshot
-    assert set(result) == {
-        "runs",
-        "current_run_id",
-        "approvals",
-        "context_window_total",
-        "error",
-    }
+    assert set(result) == {"messages", "activity", "error"}
 
 
 async def test_task_gate_waits_without_blocking_event_loop(tmp_path: Path) -> None:

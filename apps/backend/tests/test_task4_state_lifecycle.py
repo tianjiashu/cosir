@@ -15,10 +15,12 @@ from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
 from app.models import ConversationRunStatus
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_failure import run_failure_message, run_terminal_error
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import RunTransition
+from app.models.message_metadata import UserMessageMetadata
 from app.models.task_record import TaskRecord
 from app.service.conversation_run import (
     conversation_run_state_service as conversation_run_state_service_module,
@@ -28,6 +30,12 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 # 任务运行时空间在构造时会读当前 task，因此本文件全部用例都需要隔离主库。
 pytestmark = pytest.mark.usefixtures("isolated_storage")
+
+def _user_meta(text: str) -> UserMessageMetadata:
+    """落库的用户消息都带来源 ``kind``；用户输入还带展示绑定（snapshot 重建与 fork 只从这里取）。"""
+    return UserMessageMetadata(
+        kind="user_input", presentation=UserInputPresentation(display_text=text)
+    )
 
 
 def _task() -> TaskRecord:
@@ -40,6 +48,18 @@ def _task() -> TaskRecord:
         updated_at=now,
         current_run_id=2,
     )
+
+
+def _activity(run_id: int, status: str) -> dict[str, object]:
+    return {
+        "runId": run_id,
+        "status": status,
+        "endReason": None,
+        "error": None,
+        "usage": None,
+        "contextWindowTotal": None,
+        "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+    }
 
 
 def _run(run_id: int, status: str) -> ConversationRunRecord:
@@ -92,6 +112,7 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
             task_id=7,
             run_id=2,
             message={"role": "user", "content": "from canonical context"},
+            metadata=_user_meta("from canonical context"),
             include_in_context=True,
             sequence=1,
         )
@@ -113,10 +134,11 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
 
     state = service.get_state(7)
 
-    assert state["current_run_id"] == 2
-    assert [run["runId"] for run in state["runs"]] == [1, 2]
+    assert state["activity"] is not None
+    assert state["activity"]["runId"] == 2
     # 同 Run 可有多个用户输入，正文取对应 context，不能重复使用 Run 的首条 input_text。
-    assert state["runs"][1]["messages"][0]["parts"][0]["text"] == "from canonical context"
+    assert [message["runId"] for message in state["messages"]] == [2, 2]
+    assert state["messages"][0]["parts"][0]["text"] == "from canonical context"
 
 
 def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
@@ -138,6 +160,7 @@ def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
             task_id=7,
             run_id=2,
             message={"role": "user", "content": "canonical user message"},
+            metadata=_user_meta("canonical user message"),
             include_in_context=True,
             sequence=1,
         ),
@@ -164,7 +187,7 @@ def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
 
     state = service.get_state(7)
 
-    messages = state["runs"][0]["messages"]
+    messages = state["messages"]
     assert [message["role"] for message in messages] == ["user", "assistant"]
     assert messages[1]["parts"][0]["text"] == "canonical assistant message"
 
@@ -180,6 +203,7 @@ def test_state_snapshot_is_lazily_rebuilt_once_per_task_runtime_space() -> None:
             task_id=7,
             run_id=2,
             message={"role": "user", "content": "durable"},
+            metadata=_user_meta("durable"),
             include_in_context=True,
             sequence=1,
         )
@@ -225,6 +249,7 @@ def test_memory_state_is_not_written_to_persistence_and_rebuilds_after_restart()
             task_id=7,
             run_id=2,
             message={"role": "user", "content": "durable"},
+            metadata=_user_meta("durable"),
             include_in_context=True,
             sequence=1,
         )
@@ -241,13 +266,14 @@ def test_memory_state_is_not_written_to_persistence_and_rebuilds_after_restart()
 
     service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     first = service.get_state(7)
-    assert [run["runId"] for run in first["runs"]] == [2]
+    assert first["activity"] is not None
+    assert first["activity"]["runId"] == 2
     assert service.get_state(7) == first
 
     ConversationTaskStateService.clear_process_state()
     restarted = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     rebuilt = restarted.get_state(7)
-    assert rebuilt["runs"][0]["messages"][0]["parts"][0]["text"] == "durable"
+    assert rebuilt["messages"][0]["parts"][0]["text"] == "durable"
 
 
 def test_canonical_state_sources_failures_are_logged_and_not_replaced_by_empty_state(
@@ -275,6 +301,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             task_id=7,
             run_id=2,
             message={"role": "user", "content": "committed user"},
+            metadata=_user_meta("committed user"),
             include_in_context=True,
             sequence=1,
         ),
@@ -300,37 +327,30 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
     service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     task_runtime_spaces.get_or_create(7).replace_snapshot(
         {
-            "runs": [
+            "messages": [
                 {
+                    "id": "stale-user",
+                    "role": "user",
+                    "parts": [{"type": "text", "text": "stale", "status": "completed"}],
                     "runId": 2,
-                    "status": "running",
-                    "endReason": None,
-                    "messages": [
-                        {
-                            "id": "stale-user",
-                            "role": "user",
-                            "parts": [{"type": "text", "text": "stale", "status": "completed"}],
-                        },
-                        {
-                            "id": "stale-assistant",
-                            "role": "assistant",
-                            "parts": [{"type": "text", "text": "stale", "status": "running"}],
-                        },
-                    ],
-                    "contextWindowTotal": None,
-                    "usage": None,
-                    "error": None,
-                }
+                    "outcome": None,
+                },
+                {
+                    "id": "stale-assistant",
+                    "role": "assistant",
+                    "parts": [{"type": "text", "text": "stale", "status": "running"}],
+                    "runId": 2,
+                    "outcome": None,
+                },
             ],
-            "current_run_id": 2,
-            "approvals": {},
+            "activity": _activity(2, "running"),
             "error": None,
         }
     )
 
     state = service.get_state(7)
 
-    assert [message["id"] for message in state["runs"][0]["messages"]] == [
+    assert [message["id"] for message in state["messages"]] == [
         "stale-user",
         "stale-assistant",
     ]
@@ -411,21 +431,21 @@ async def test_cold_sse_first_frame_uses_canonical_rebuild() -> None:
     stream_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
     stream_service._snapshots = state_service
 
-    stream = stream_service.stream(7, 2, lambda: False)
+    stream = stream_service.stream(7, lambda: False)
     first = await anext(stream)
+    await stream.aclose()
 
-    assert first.state["current_run_id"] == 2
-    assert first.state["runs"][0]["status"] == "completed"
-    with pytest.raises(StopAsyncIteration):
-        await anext(stream)
+    assert first.kind == "full"
+    assert first.state["activity"]["runId"] == 2
+    assert first.state["activity"]["status"] == "completed"
 
 
-# retryable 只属于工具观察（告诉模型能否重试某次工具调用）；Run 级错误契约的键集精确锁定为
-# code + message，任何把 retryable 加回来的改动都必须让本用例变红。
+# Run 级错误契约的键集精确锁定为 code + message，任何往里加字段（如 retryable）的改动都必须
+# 让本用例变红。
 def test_terminal_error_contract_carries_only_code_and_message() -> None:
     failed = run_terminal_error(
         ConversationRunStatus.FAILED,
-        "tool_error_limit_reached",
+        "max_steps_reached",
     )
     cancelled = run_terminal_error(
         ConversationRunStatus.CANCELLED,
@@ -435,8 +455,8 @@ def test_terminal_error_contract_carries_only_code_and_message() -> None:
     # message 由失败 code 目录统一产出（provider 无关文案）；这里同时锁定 code 与「message
     # 只来自目录」这一契约，避免有人把文案抄回调用点。
     assert failed == {
-        "code": "tool_error_limit_reached",
-        "message": run_failure_message("tool_error_limit_reached"),
+        "code": "max_steps_reached",
+        "message": run_failure_message("max_steps_reached"),
     }
     assert set(failed or {}) == {"code", "message"}
     assert cancelled == {

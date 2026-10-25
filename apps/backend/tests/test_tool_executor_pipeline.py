@@ -15,19 +15,19 @@ from typing import Any
 
 import pytest
 
-from app.core.tools.guard.tool_output_budget import ToolOutputBudget
-from app.core.tools.schemas import (
+from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+from app.core.tool.schemas import (
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tools.tool_execute import tool_executor as tool_executor_module
-from app.core.tools.tool_execute.tool_executor import ToolExecutor
-from app.core.tools.tool_execute.tool_observation_budget import ToolObservationBudget
-from app.core.tools.tool_handler.read_file import ReadFileTool
-from app.core.tools.tool_handler.write_file import WriteFileTool
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.execute import tool_executor as tool_executor_module
+from app.core.tool.execute.tool_executor import ToolExecutor
+from app.core.tool.execute.tool_observation_budget import ToolObservationBudget
+from app.tools.tool_handler.read_file import ReadFileTool
+from app.tools.tool_handler.write_file import WriteFileTool
+from app.core.tool.tool_registry import ToolRegistry
 
 
 def _make_context(tmp_path: Path) -> ToolExecutionContext:
@@ -105,7 +105,6 @@ def test_output_budget_normalizes_nullable_observation_content() -> None:
         tool_name="read_file",
         status="error",
         content=None,
-        error="denied",
     )
 
     result = ToolOutputBudget().apply(observation, execution_context=None)
@@ -155,8 +154,8 @@ def test_unknown_tool_returns_denial_observation(tmp_path: Path) -> None:
 
     assert observation.status == "error"
     assert observation.tool_call_id == "call-1"
-    assert "unknown tool" in observation.error
-    assert observation.reason  # 面向模型的富文本必填
+    assert "unknown tool" in observation.content
+    assert "\nreason: " in observation.content  # 面向模型的富文本必填
 
 
 def test_profile_denied_tool(tmp_path: Path) -> None:
@@ -175,10 +174,10 @@ def test_profile_denied_tool(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.error == "tool is not allowed: read_file"
-    assert observation.retryable is False
-    assert observation.reason  # 面向模型的富文本必填
-    assert "other_tool" not in (observation.reason or "")
+    assert observation.content.startswith("error: tool is not allowed: read_file\n")
+    assert "hint: do not retry this tool call." in observation.content
+    assert "\nreason: " in observation.content  # 面向模型的富文本必填
+    assert "other_tool" not in observation.content
 
 
 def test_invalid_arguments_rejected(tmp_path: Path) -> None:
@@ -192,7 +191,7 @@ def test_invalid_arguments_rejected(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert "invalid tool arguments" in observation.error
+    assert "invalid tool arguments" in observation.content
 
 
 @pytest.mark.parametrize("arguments", ['{"path":', "[1]", "null", '{"n":NaN}', ""])
@@ -207,8 +206,8 @@ def test_malformed_arguments_rejected_before_validation(tmp_path: Path, argument
     )
 
     assert observation.status == "error"
-    assert observation.error == "Invalid tool arguments"
-    assert observation.retryable is True
+    assert observation.content.startswith("error: Invalid tool arguments\n")
+    assert "hint: this error can be retried" in observation.content
     assert observation.tool_call_id == "call-malformed"
 
 
@@ -262,7 +261,7 @@ def test_denial_observation_passes_through_budget(
     """拒绝观察也应过同一道预算：把预算压到极小后 content 被截断。"""
 
     monkeypatch.setattr(
-        "app.core.tools.guard.tool_output_budget.ToolOutputBudget.apply",
+        "app.core.tool.execute.tool_output_budget.ToolOutputBudget.apply",
         lambda self, observation, context: observation,
     )
     observed: dict[str, Any] = {}
@@ -320,7 +319,7 @@ def test_gate_modified_arguments_flow_to_handler(tmp_path: Path) -> None:
 def test_gate_evaluate_unknown_tool(tmp_path: Path) -> None:
     """直接调用门禁：未注册工具返回 denial 且 admitted=False。"""
 
-    from app.core.tools.tool_execute.tool_access_gate import ToolAccessGate
+    from app.core.tool.execute.tool_access_gate import ToolAccessGate
 
     registry = ToolRegistry([ReadFileTool().to_definition()])
     gate = ToolAccessGate(registry)
@@ -363,7 +362,7 @@ def test_running_emitted_once_before_handler(
 ) -> None:
     """成功路径上执行器恰好发出一次 running，且早于 handler 运行。"""
 
-    from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
+    from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
 
     order: list[str] = []
     original_execute = ToolHandlerRunner.execute
@@ -430,37 +429,3 @@ def test_running_not_emitted_when_gate_denies(
 
     assert observation.status == "error"
     assert emitted == []
-
-
-def test_running_not_emitted_for_stale_write(tmp_path: Path, emitted: list[Any]) -> None:
-    """已观察内容被外部改写后，写入在持锁 stale 检查处被拦截：不发 running，文件不被覆盖。"""
-
-    executor = ToolExecutor(
-        registry=ToolRegistry([ReadFileTool().to_definition(), WriteFileTool().to_definition()])
-    )
-    target = tmp_path / "sample.txt"
-    target.write_text("hello world", encoding="utf-8")
-    context = _make_context(tmp_path)
-    read = _execute(
-        executor,
-        ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-read"),
-        context,
-    )
-    assert read.status == "success"
-    target.write_text("changed externally, with a different size", encoding="utf-8")
-    emitted.clear()
-
-    observation = _execute(
-        executor,
-        ToolCall(
-            tool_name="write_file",
-            arguments='{"path": "sample.txt", "content": "overwrite"}',
-            call_id="call-stale",
-        ),
-        context,
-    )
-
-    assert observation.status == "error"
-    assert "target content changed" in observation.error
-    assert emitted == []
-    assert target.read_text(encoding="utf-8") == "changed externally, with a different size"

@@ -33,24 +33,25 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
-    UserInputConsumedEvent,
 )
-from app.core.tools.display.terminal_display import build_terminal_display_data
-from app.core.tools.guard.tool_output_budget import ToolOutputBudget
-from app.core.tools.schemas import ToolCall, ToolExecutionContext, ToolObservation
-from app.core.tools.tool_execute.tool_handler_runner import ToolHandlerRunner
-from app.core.tools.tool_execute.tool_output_channel import (
+from app.tools.display.terminal_display import build_terminal_display_data
+from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
+from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
+from app.core.tool.execute.tool_output_channel import (
     BufferedProcessToolOutputChannel,
     create_process_output_channel,
 )
-from app.core.tools.tool_execute.tool_terminal_projection import terminal_event
-from app.core.tools.tool_handler import execute_terminal as execute_terminal_module
-from app.core.tools.tool_handler.execute_terminal import ExecuteTerminalTool
-from app.core.tools.tool_handler.terminal.execution_result import ExecutionResult
-from app.core.tools.tool_handler.terminal.output_collector import _OutputCollector
+from app.core.tool.execute.tool_terminal_projection import terminal_event
+from app.tools.tool_handler import execute_terminal as execute_terminal_module
+from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
+from app.tools.tool_handler.terminal.execution_result import ExecutionResult
+from app.tools.tool_handler.terminal.output_collector import _OutputCollector
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
+from app.models.tool_batch import ToolBatch
 from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
+from tests.transport_fixtures import consumed, queue_user_input
 
 
 class ChunkStream:
@@ -371,7 +372,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
     )
 
     observations = await run_tool_batch(
-        rc, [ToolCall(tool_name="execute_terminal", arguments='{}', call_id="call-1")], "step-1"
+        rc, [ToolCall(tool_name="execute_terminal", arguments='{}', call_id="call-1")], "step-1", ToolBatch()
     )
 
     assert len(observations) == 1
@@ -458,7 +459,7 @@ def test_output_queue_completion_waits_for_tail_without_dropping_chunks() -> Non
 def test_handler_process_backpressures_full_queue_without_dropping_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.core.tools.tool_execute import tool_handler_runner as runner_module
+    from app.core.tool.execute import tool_handler_runner as runner_module
 
     monkeypatch.setattr(runner_module.os, "setsid", lambda: None, raising=False)
     monkeypatch.setattr(
@@ -505,14 +506,11 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
-    projector.process(
-        UserInputConsumedEvent(
-            task_id=7,
-            run_id=9,
-            message_id="user-1",
-            presentation=UserInputPresentation(display_text="run tool"),
-        )
+    # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
+    queue_user_input(
+        projector._state_service.state, 1, UserInputPresentation(display_text="run tool")
     )
+    projector.process(consumed(7, 9, 1))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(
@@ -536,7 +534,7 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     projector.process(_terminal_output_update(0, "stale"))
     projector.process(_terminal_output_update(2, "tail"))
 
-    part = state["runs"][0]["messages"][1]["parts"][0]
+    part = state["messages"][1]["parts"][0]
     assert part["display_data"] == {
         "kind": "terminal-result",
         "output": "newtail",
@@ -548,14 +546,11 @@ def test_final_terminal_status_preserves_complete_streamed_display_output() -> N
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
-    projector.process(
-        UserInputConsumedEvent(
-            task_id=7,
-            run_id=9,
-            message_id="user-1",
-            presentation=UserInputPresentation(display_text="run tool"),
-        )
+    # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
+    queue_user_input(
+        projector._state_service.state, 1, UserInputPresentation(display_text="run tool")
     )
+    projector.process(consumed(7, 9, 1))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(
@@ -594,7 +589,7 @@ def test_final_terminal_status_preserves_complete_streamed_display_output() -> N
         )
     )
 
-    part = state["runs"][0]["messages"][1]["parts"][0]
+    part = state["messages"][1]["parts"][0]
     assert part["display_data"] == {
         "kind": "terminal-result",
         "output": streamed_output,
@@ -637,7 +632,6 @@ class _MemorySnapshotOwner:
             task_id=event.task_id,
             kind="mutation",
             mutations=mutations,
-            source_run_id=getattr(event, "run_id", None),
         )
 
 
@@ -646,14 +640,11 @@ def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, Conversat
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
-    projector.process(
-        UserInputConsumedEvent(
-            task_id=7,
-            run_id=9,
-            message_id="user-1",
-            presentation=UserInputPresentation(display_text="run tool"),
-        )
+    # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
+    queue_user_input(
+        projector._state_service.state, 1, UserInputPresentation(display_text="run tool")
     )
+    projector.process(consumed(7, 9, 1))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(
@@ -702,7 +693,7 @@ def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, Conversat
             ToolObservation(
                 tool_name="execute_terminal",
                 status="error",
-                error="boom",
+                content="error: boom",
                 display_data={"status_hint": "命令失败"},
             ),
             "failed",
@@ -731,7 +722,7 @@ def test_terminal_replay_is_idempotent_for_streamed_part(
     replay()
 
     assert state == after_first
-    part = state["runs"][0]["messages"][1]["parts"][0]
+    part = state["messages"][1]["parts"][0]
     assert part["status"] == expected_status
     assert part.get("error") == expected_error
     assert part["display_data"]["kind"] == "terminal-result"

@@ -17,9 +17,10 @@ from types import SimpleNamespace
 import pytest
 
 from app.config.constant import Constant
-from app.core.tools.schemas import ToolCall, ToolExecutionContext, ToolObservation
-from app.core.tools.tool_execute import tool_executor as tool_executor_module
+from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
+from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
+from app.models.tool_batch import ToolBatch
 from tests.runtime_context_stub import runtime_stub
 from tests.tool_executor_fakes import emit_running
 
@@ -161,7 +162,7 @@ def test_parallel_batch_does_not_block_event_loop() -> None:
                 ticks += 1
 
         pulse = asyncio.create_task(heartbeat())
-        result = await run_tool_batch(operations, [_parallel_call(0), _parallel_call(1)], "step-1")
+        result = await run_tool_batch(operations, [_parallel_call(0), _parallel_call(1)], "step-1", ToolBatch())
         ticks_during_batch = ticks
         pulse.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -186,7 +187,7 @@ def test_parallel_batch_respects_constant_max_parallel_calls(
 
     async def scenario() -> int:
         calls = [_parallel_call(index) for index in range(4)]
-        result = await run_tool_batch(operations, calls, "step-1")
+        result = await run_tool_batch(operations, calls, "step-1", ToolBatch())
         return len(result)
 
     assert asyncio.run(scenario()) == 4
@@ -204,7 +205,7 @@ def test_parallel_batch_submits_pending_calls_in_argument_order(
 
     async def scenario() -> int:
         calls = [_parallel_call(0), _parallel_call(1), _parallel_call(2)]
-        result = await run_tool_batch(operations, calls, "step-1")
+        result = await run_tool_batch(operations, calls, "step-1", ToolBatch())
         return len(result)
 
     assert asyncio.run(scenario()) == 3
@@ -219,7 +220,7 @@ def test_parallel_batch_results_follow_argument_order() -> None:
     operations = _make_operations(executor)
 
     async def scenario() -> list[str]:
-        result = await run_tool_batch(operations, [_parallel_call(0), _parallel_call(1)], "step-1")
+        result = await run_tool_batch(operations, [_parallel_call(0), _parallel_call(1)], "step-1", ToolBatch())
         return [observation.tool_call_id for observation in result]
 
     assert asyncio.run(scenario()) == ["call-0", "call-1"]
@@ -235,7 +236,7 @@ def test_parallel_batch_cancellation_returns_without_waiting_for_workers() -> No
         started = time.monotonic()
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(
-                run_tool_batch(operations, [_parallel_call(0), _parallel_call(1)], "step-1"),
+                run_tool_batch(operations, [_parallel_call(0), _parallel_call(1)], "step-1", ToolBatch()),
                 timeout=0.2,
             )
         elapsed = time.monotonic() - started

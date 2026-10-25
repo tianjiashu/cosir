@@ -1,11 +1,11 @@
 """子 Agent 配置提案工具的生成契约测试。"""
 
-from app.agent_team.team_tool_error import TeamToolError
+from app.core.tool.agent_team.team_tool_error import TeamToolError
 from app.core.agents.define_agents import main_agent
-from app.core.tools.tool_handler.agent_team.propose_agent_team_configuration import (
+from app.core.tool.agent_team.propose_agent_team_configuration import (
     ProposeAgentTeamConfigurationTool,
 )
-from app.core.tools.tool_handler.child_task.propose_agent_configuration import (
+from app.core.tool.child_agent.propose_agent_configuration import (
     ProposeAgentConfigurationTool,
 )
 
@@ -73,9 +73,9 @@ def test_team_proposal_reports_unavailable_agent_reference(monkeypatch) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.error == "agent_team_configuration_invalid"
-    assert observation.reason == "未知 child Agent: reviewer"
-    assert observation.retryable is False
+    assert observation.content.startswith("error: agent_team_configuration_invalid\n")
+    assert "reason: 未知 child Agent: reviewer" in observation.content
+    assert "hint: do not retry this tool call." in observation.content
 
 
 def test_proposal_tool_only_returns_unsaved_four_field_draft() -> None:

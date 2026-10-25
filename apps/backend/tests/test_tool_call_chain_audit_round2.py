@@ -28,12 +28,12 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
-    UserInputConsumedEvent,
 )
-from app.core.tools.schemas import ToolObservation
+from app.core.tool.schemas import ToolObservation
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
+from tests.transport_fixtures import consumed, queue_user_input
 
 _TASK_ID = 7
 _RUN_ID = 9
@@ -123,7 +123,6 @@ class _MemorySnapshotOwner:
             task_id=event.task_id,
             kind="mutation",
             mutations=mutations,
-            source_run_id=getattr(event, "run_id", None),
         )
 
 
@@ -133,14 +132,9 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
-    projector.process(
-        UserInputConsumedEvent(
-            task_id=_TASK_ID,
-            run_id=_RUN_ID,
-            message_id="u1",
-            presentation=UserInputPresentation(display_text="test"),
-        )
-    )
+    # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
+    queue_user_input(projector._state_service.state, 1, UserInputPresentation(display_text="test"))
+    projector.process(consumed(_TASK_ID, _RUN_ID, 1))
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))
     projector.process(
         ToolCallCreatedEvent(
@@ -170,7 +164,7 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
 def _tool_part(state: ConversationStateSnapshot) -> dict[str, Any]:
     """取 assistant 消息里唯一的 tool-call part。"""
 
-    for message in state["runs"][0]["messages"]:
+    for message in state["messages"]:
         for part in message["parts"]:
             if isinstance(part, dict) and part.get("type") == "tool-call":
                 return part
@@ -293,6 +287,9 @@ class _RecordingContextService:
         include_in_context: bool,
         metadata: Any = None,
         project_to_transport: bool = True,
+        session: object = None,
+        *,
+        message_id: int | None = None,
     ) -> None:
         self.appended.append((task_id, run_id, message, sequence, include_in_context))
         return ContextEntry(message, run_id, sequence)
@@ -463,10 +460,11 @@ def test_p5_placeholder_of_another_run_is_not_overwritten() -> None:
         metadata=ToolMessageMetadata(status="completed"),
     )
 
+    # 写入归属取 manager 的当前 Run（``add_message`` 不再接受 run_id）：换到新 Run 后再写同一调用的结果。
+    manager.current_run_id = _RUN_ID + 1
     with pytest.raises(ContextProtocolError, match="tool_result_without_current_call"):
         manager.add_message(
             {"role": "tool", "content": "new run result", "tool_call_id": "A"},
-            run_id=_RUN_ID + 1,
             metadata=ToolMessageMetadata(status="completed"),
         )
     assert len(manager._entries) == 2

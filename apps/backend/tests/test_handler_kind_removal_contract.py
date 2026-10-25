@@ -34,18 +34,18 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from app.core.tools.schemas import (
+from app.core.tool.schemas import (
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
-    ToolObservation,
+    ToolObservation, tool_definition as tool_definition_module,
 )
-from app.core.tools.schemas import tool_definition as tool_definition_module
-from app.core.tools.tool_execute import tool_executor as tool_executor_module
-from app.core.tools.tool_execute.tool_executor import ToolExecutor
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.execute import tool_executor as tool_executor_module
+from app.core.tool.execute.tool_executor import ToolExecutor
+from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
+from app.models.tool_batch import ToolBatch
 from tests.runtime_context_stub import runtime_stub
 from tests.tool_executor_fakes import emit_running
 
@@ -463,7 +463,7 @@ def test_unknown_tool_name_yields_unknown_tool_observation_without_keyerror(
     )
 
     async def scenario() -> list[ToolObservation]:
-        result = await run_tool_batch(operations, [_call("ghost_tool", "call-ghost")], "step-1")
+        result = await run_tool_batch(operations, [_call("ghost_tool", "call-ghost")], "step-1", ToolBatch())
         return result
 
     observations = asyncio.run(scenario())
@@ -471,10 +471,9 @@ def test_unknown_tool_name_yields_unknown_tool_observation_without_keyerror(
     assert len(observations) == 1
     observation = observations[0]
     assert observation.status == "error"
-    assert observation.error is not None
-    assert observation.error == "unknown tool: ghost_tool"
-    assert observation.reason is not None
-    assert "not registered" in observation.reason
+    assert observation.content.startswith("error: unknown tool: ghost_tool\n")
+    assert "\nreason: " in observation.content
+    assert "not registered" in observation.content
     assert observation.tool_call_id == "call-ghost"
 
 
@@ -500,7 +499,7 @@ def test_unknown_tool_alongside_known_serial_tool_keeps_order_and_count(
                 _call("known_tool", "call-1", {"message": "hi"}),
                 _call("ghost_tool", "call-2"),
                 _call("known_tool", "call-3", {"message": "again"}),
-            ], "step-1")
+            ], "step-1", ToolBatch())
         return result
 
     observations = asyncio.run(scenario())
@@ -524,7 +523,7 @@ def test_serial_batch_preserves_input_order_and_count() -> None:
     )
 
     async def scenario() -> list[str]:
-        result = await run_tool_batch(operations, [_call("serial_tool", f"call-{index}") for index in range(4)], "step-1")
+        result = await run_tool_batch(operations, [_call("serial_tool", f"call-{index}") for index in range(4)], "step-1", ToolBatch())
         return [observation.tool_call_id for observation in result]
 
     assert asyncio.run(scenario()) == ["call-0", "call-1", "call-2", "call-3"]
@@ -554,7 +553,7 @@ def test_serial_batch_runs_off_the_event_loop_thread_and_keeps_loop_responsive()
                 ticks += 1
 
         pulse = asyncio.create_task(heartbeat())
-        result = await run_tool_batch(operations, [_call("serial_tool", "call-0"), _call("serial_tool", "call-1")], "step-1")
+        result = await run_tool_batch(operations, [_call("serial_tool", "call-0"), _call("serial_tool", "call-1")], "step-1", ToolBatch())
         ticks_during_batch = ticks
         pulse.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -588,7 +587,7 @@ def test_internal_error_observation_when_executor_raises() -> None:
     operations = _operations_with_executor(_RaisingExecutor())
 
     async def scenario() -> list[ToolObservation]:
-        result = await run_tool_batch(operations, [_call("boom_tool", "call-boom")], "step-1")
+        result = await run_tool_batch(operations, [_call("boom_tool", "call-boom")], "step-1", ToolBatch())
         return result
 
     observations = asyncio.run(scenario())
@@ -596,9 +595,9 @@ def test_internal_error_observation_when_executor_raises() -> None:
     assert len(observations) == 1
     observation = observations[0]
     assert observation.status == "error"
-    assert observation.retryable is False
+    assert "hint: do not retry this tool call." in observation.content
     assert observation.tool_call_id == "call-boom"
-    assert observation.error == "internal execution error in the tool pipeline: RuntimeError"
+    assert observation.content.startswith("error: internal execution error in the tool pipeline: RuntimeError\n")
 
 
 def test_parallel_batch_runs_concurrently_off_the_event_loop_thread() -> None:
@@ -622,7 +621,7 @@ def test_parallel_batch_runs_concurrently_off_the_event_loop_thread() -> None:
                 ticks += 1
 
         pulse = asyncio.create_task(heartbeat())
-        result = await run_tool_batch(operations, [_call("parallel_tool", f"call-{index}") for index in range(3)], "step-1")
+        result = await run_tool_batch(operations, [_call("parallel_tool", f"call-{index}") for index in range(3)], "step-1", ToolBatch())
         ticks_during_batch = ticks
         pulse.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -656,7 +655,7 @@ def test_mixed_serial_and_parallel_batch_yields_one_observation_per_call() -> No
                 _call("parallel_tool", "p-0"),
                 _call("serial_tool", "s-1"),
                 _call("parallel_tool", "p-1"),
-            ], "step-1")
+            ], "step-1", ToolBatch())
         return [observation.tool_call_id for observation in result]
 
     observation_ids = asyncio.run(scenario())
@@ -674,7 +673,7 @@ def test_empty_batch_returns_no_observations() -> None:
     operations = _operations_with_executor(executor)
 
     async def scenario() -> list[ToolObservation]:
-        result = await run_tool_batch(operations, [], "step-1")
+        result = await run_tool_batch(operations, [], "step-1", ToolBatch())
         return result
 
     assert asyncio.run(scenario()) == []
@@ -698,7 +697,7 @@ def test_serial_batch_cancellation_propagates_without_waiting_for_handler() -> N
         started = time.monotonic()
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(
-                run_tool_batch(operations, [_call("serial_tool", "call-0")], "step-1"),
+                run_tool_batch(operations, [_call("serial_tool", "call-0")], "step-1", ToolBatch()),
                 timeout=0.15,
             )
         return time.monotonic() - started
@@ -848,14 +847,12 @@ def test_async_handler_is_rejected_at_registration() -> None:
 
 
 def test_tool_executor_read_surface(tmp_path: Path) -> None:
-    """删除 async 入口后，执行器的只读面（list_tools / clear_task_state）不变。"""
+    """删除 async 入口后，执行器的只读面（list_tools）不变。"""
 
     definition = _make_definition(name="known_tool", parameters_schema={"type": "object"})
     executor = ToolExecutor(registry=ToolRegistry([definition]))
 
     assert [tool.name for tool in executor.list_tools()] == ["known_tool"]
-    # clear_task_state 只清进程内文件状态，对未登记 task 必须是静默 no-op。
-    assert executor.clear_task_state(12345) is None
 
 
 def test_emit_swallows_projector_failure() -> None:

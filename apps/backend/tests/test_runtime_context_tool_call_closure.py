@@ -287,7 +287,7 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
 
     形状与生产一致（未闭合调用是上一个 Run 的**最后几个**工具调用）：run N 的
     ``AIMessage(tool_calls)`` 是它最后一条消息，随后用户发新消息 → run N+1 的
-    ``HumanMessage`` 在 Run 准备阶段先落库（``WorkflowSession``），
+    ``HumanMessage`` 在 Run 准备阶段先落库（``TaskActors``），
     再进入 run N+1 的 ``model_node`` 取数，此时才补占位。
     """
 
@@ -745,7 +745,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
 
     import app.core.workflow.node_helper.streaming_part_state_machine as machine_module
     from app.core.events import ToolCallStatusChangedEvent
-    from app.core.workflow.execution_state.tool_batch import ToolBatch
+    from app.models.tool_batch import ToolBatch
     from app.core.workflow.node_helper import StreamingPartStateMachine
     from tests.sdk_fixtures import sdk_completion
 
@@ -766,7 +766,6 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
     runtime = SimpleNamespace(
         tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
         allows_tools=frozenset({"read_file"}),
-        batch=ToolBatch(),
     )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
@@ -775,6 +774,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
         task_id=env.task.id,
         run_id=run.id,
         step_id="step-1",
+        batch=ToolBatch(),
     )
     machine.tool_call(
         [
@@ -837,8 +837,8 @@ def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
 @pytest.mark.asyncio
 async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeypatch):
     """上下文有孤儿结果时模型请求前即失败：原始结果与外部队列中的输入都保持原状。"""
-    from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-    from app.core.workflow.execution_state.react_route import ReactRoute
+    from app.models.react_execution_state import ReactExecutionState
+    from app.models.enums.react_route import ReactRoute
     from app.core.workflow.nodes import model_node
     from app.models.conversation_input import ConversationInput
     from app.models.task_message import RunLaunch, TaskMessage, UserInputBody
@@ -873,7 +873,6 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
         yield None
 
     rc = runtime_stub(
-        step_limit=10,
         model=SimpleNamespace(stream=stream),
         task=env.task,
         run=run,
@@ -884,7 +883,7 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
         await model_node._model_node(
             ReactExecutionState(
                 step_count=0,
-                tool_error_count=0,
+                step_limit=10,
                 next_node=ReactRoute.MODEL,
             )
         )

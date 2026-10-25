@@ -14,12 +14,12 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.child_task.child_agent_send import ChildAgentSendTool
+from app.core.tool.schemas import ToolExecutionContext
+from app.core.tool.child_agent.child_agent_send import ChildAgentSendTool
 from app.models import ConversationRunCommand
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.service.conversation_run import task_actor as actor_module
-from app.service.depends import get_conversation_run_state_service, get_workflow_session
+from app.service.depends import get_conversation_run_state_service, get_task_actors
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.task_message_crud import TaskMessageCrud
@@ -85,7 +85,7 @@ def child_task(isolated_storage, tmp_path, monkeypatch):
 
 
 async def test_send_during_release_window_never_runs_two_executions(child_task):
-    session = get_workflow_session()
+    session = get_task_actors()
     task_id = child_task.child.id
 
     def executions() -> int:
@@ -109,7 +109,8 @@ async def test_send_during_release_window_never_runs_two_executions(child_task):
         reasoning_effort=None,
         delivery="immediate",
     )
-    first_run = TaskCrud().get(task_id).current_run_id
+    # 投递没有回执：等 actor 开出首个 Run。
+    first_run = await session.wait_new_run(task_id, None, 2)
     for _ in range(100):
         if ConversationRunCrud().get(first_run).status == ConversationRunStatus.COMPLETED.value:
             break

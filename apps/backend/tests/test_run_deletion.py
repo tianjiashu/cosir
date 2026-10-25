@@ -7,8 +7,10 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 
 from app.api.tasks_api import delete_run as delete_run_endpoint
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.deletion_errors import DeletionBusyError, RunDeletionConflictError
+from app.models.message_metadata import UserMessageMetadata
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_run_crud,
@@ -22,6 +24,13 @@ from app.storage.model.conversation_task_context_model import ConversationTaskCo
 from app.storage.store_engines import init_storage, main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.path import system_cosir as paths
+
+
+def _user_meta(text: str) -> UserMessageMetadata:
+    """落库的用户消息都带来源 ``kind``；用户输入还带展示绑定（snapshot 重建与 fork 只从这里取）。"""
+    return UserMessageMetadata(
+        kind="user_input", presentation=UserInputPresentation(display_text=text)
+    )
 
 
 @pytest.fixture
@@ -64,6 +73,7 @@ def test_delete_middle_run_removes_only_its_data(storage) -> None:
                 task_id=task.id,
                 run_id=run.id,
                 message={"role": "user", "content": f"message-{seq}"},
+                metadata=_user_meta(f"message-{seq}"),
                 include_in_context=True,
                 sequence=seq,
             )

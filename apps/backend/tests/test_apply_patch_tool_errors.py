@@ -3,9 +3,9 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.core.tools.schemas import ToolExecutionContext
-from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.core.tools.tool_handler.patch_write.patch_apply import PatchApplyError
+from app.core.tool.schemas import ToolExecutionContext
+from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.patch_write.patch_apply import PatchApplyError
 
 
 def _context(tmp_path: Path) -> ToolExecutionContext:
@@ -29,30 +29,30 @@ def test_invalid_diff_is_retryable_with_tool_specific_guidance(tmp_path: Path) -
     observation = ApplyPatchTool().execute(_context(tmp_path), patch="not a diff")
 
     assert observation.status == "error"
-    assert observation.retryable is True
-    assert "Git unified diff" in observation.error
+    assert "hint: this error can be retried" in observation.content
+    assert "Git unified diff" in observation.content
     # 解析失败的 reason 已统一为通用指引：具体诊断看 ``error``，不支持的操作改用对应文件工具
     # （替代工具的名字由工具描述承载）。
-    assert "reported in error" in observation.reason
-    assert "matching file tool" in observation.reason
+    assert "reported in error" in observation.content
+    assert "matching file tool" in observation.content
 
 
 def test_success_returns_success_without_repeating_the_patch(monkeypatch, tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("new\n", encoding="utf-8")
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.apply_patch_tool.validate_all",
+        "app.tools.tool_handler.apply_patch_tool.validate_all",
         lambda _operations, _resolver: [],
     )
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.apply_patch_tool.apply_all_with_diff",
+        "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff",
         lambda _operations, _resolver: [],
     )
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.apply_patch_tool.check_source_syntax",
+        "app.tools.tool_handler.apply_patch_tool.check_source_syntax",
         lambda _path, _content: SimpleNamespace(has_error=False),
     )
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.apply_patch_tool.build_file_change_display_data",
+        "app.tools.tool_handler.apply_patch_tool.build_file_change_display_data",
         lambda _results: {"kind": "file-changes"},
     )
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
@@ -67,7 +67,7 @@ def test_transient_apply_failure_is_retryable_after_regenerating_the_diff(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.apply_patch_tool.validate_all",
+        "app.tools.tool_handler.apply_patch_tool.validate_all",
         lambda _operations, _resolver: [],
     )
 
@@ -88,19 +88,19 @@ def test_transient_apply_failure_is_retryable_after_regenerating_the_diff(
             raise PatchApplyError("file is locked", partial_applied=False) from cause
 
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.apply_patch_tool.apply_all_with_diff", fail_apply
+        "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff", fail_apply
     )
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
 
-    assert observation.retryable is True
-    assert observation.error == "unified diff apply failed: file is locked"
-    assert "new unified diff" in observation.reason
-    assert "file is locked" not in observation.reason
+    assert "hint: this error can be retried" in observation.content
+    assert observation.content.startswith("error: unified diff apply failed: file is locked\n")
+    assert "new unified diff" in observation.content
+    assert "file is locked" not in observation.content.split("\nreason: ", 1)[-1]
 
 
 def test_partial_apply_failure_is_not_retryable(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.apply_patch_tool.validate_all",
+        "app.tools.tool_handler.apply_patch_tool.validate_all",
         lambda _operations, _resolver: [],
     )
 
@@ -111,15 +111,15 @@ def test_partial_apply_failure_is_not_retryable(monkeypatch, tmp_path: Path) -> 
             raise PatchApplyError("file is locked", partial_applied=True) from cause
 
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.apply_patch_tool.apply_all_with_diff",
+        "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff",
         fail_after_partial_apply,
     )
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
 
-    assert observation.retryable is False
-    assert observation.error == "unified diff application stopped after partial changes"
-    assert "do not replay this diff unchanged" in observation.reason
-    assert "file is locked" not in observation.reason
+    assert "hint: do not retry this tool call." in observation.content
+    assert observation.content.startswith("error: unified diff application stopped after partial changes\n")
+    assert "do not replay this diff unchanged" in observation.content
+    assert "file is locked" not in observation.content.split("\nreason: ", 1)[-1]
 
 
 def test_hunk_validation_failure_does_not_write_any_file(tmp_path: Path) -> None:
@@ -128,8 +128,8 @@ def test_hunk_validation_failure_does_not_write_any_file(tmp_path: Path) -> None
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
 
     assert observation.status == "error"
-    assert observation.retryable is True
-    assert "no files were modified" in observation.error
+    assert "hint: this error can be retried" in observation.content
+    assert "no files were modified" in observation.content
     assert target.read_text(encoding="utf-8") == "current\n"
 
 
@@ -157,7 +157,6 @@ def test_hunk_count_mismatch_is_repaired_and_names_the_bad_header(tmp_path: Path
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
 
     assert observation.status == "success"
-    assert observation.error is None
     assert observation.content is not None
     assert observation.content.startswith("success\n")
     assert "note: hunk headers declared counts that did not match the hunk body" in (

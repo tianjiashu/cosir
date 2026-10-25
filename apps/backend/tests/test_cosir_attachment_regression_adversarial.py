@@ -34,17 +34,17 @@ import pytest
 from PIL import Image
 from starlette.datastructures import UploadFile
 
-from app.core.tools.guard.tool_output_budget import ToolOutputBudget
-from app.core.tools.schemas import ToolExecutionContext, ToolObservation
-from app.core.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.core.tools.tool_handler.delete_tool import DeleteTool
-from app.core.tools.tool_handler.find_files import FindFilesTool
-from app.core.tools.tool_handler.list_directory import ListDirectoryTool
-from app.core.tools.tool_handler.move_tool import MoveTool
-from app.core.tools.tool_handler.read_file import ReadFileTool
-from app.core.tools.tool_handler.replace_tool import ReplaceTool
-from app.core.tools.tool_handler.search_content import SearchContentTool
-from app.core.tools.tool_handler.write_file import WriteFileTool
+from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+from app.core.tool.schemas import ToolExecutionContext, ToolObservation
+from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.delete_tool import DeleteTool
+from app.tools.tool_handler.find_files import FindFilesTool
+from app.tools.tool_handler.list_directory import ListDirectoryTool
+from app.tools.tool_handler.move_tool import MoveTool
+from app.tools.tool_handler.read_file import ReadFileTool
+from app.tools.tool_handler.replace_tool import ReplaceTool
+from app.tools.tool_handler.search_content import SearchContentTool
+from app.tools.tool_handler.write_file import WriteFileTool
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.service.terminal.terminal_session_service import TerminalSessionService

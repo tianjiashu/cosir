@@ -1,6 +1,6 @@
 """僵尸 running 防治：快照分叉时的丢弃必须留痕。
 
-执行释放与 Run 失败边界的不变量见 ``test_workflow_session_execution`` 与
+执行释放与 Run 失败边界的不变量见 ``test_task_actors_execution`` 与
 ``test_run_failure_settlement``。
 """
 
@@ -14,13 +14,19 @@ from app.core.events import RunInitializedEvent
 
 _TASK_ID = 7
 
-_SNAPSHOT = {
-    "runs": [],
-    "current_run_id": None,
-    "approvals": {},
-    "context_window_total": None,
-    "error": None,
-}
+_SNAPSHOT = {"messages": [], "activity": None, "error": None}
+
+
+def _activity(run_id: int, status: str) -> dict:
+    return {
+        "runId": run_id,
+        "status": status,
+        "endReason": None,
+        "error": None,
+        "usage": None,
+        "contextWindowTotal": None,
+        "launch": None,
+    }
 
 
 def _capture_warnings() -> tuple[list[logging.LogRecord], logging.Handler]:
@@ -38,21 +44,11 @@ def _capture_warnings() -> tuple[list[logging.LogRecord], logging.Handler]:
 
 
 def test_run_initialized_skeleton_drop_is_logged() -> None:
-    """快照分叉导致骨架不建立时必须留 WARNING 日志，不再静默丢弃。"""
+    """当前活动是更新且未结束的 Run 时，旧 Run 的初始化被丢弃，必须留 WARNING 日志。"""
 
     diverged = {
         **_SNAPSHOT,
-        "current_run_id": 12,
-        "runs": [
-            {
-                "runId": 12,
-                "status": "running",
-                "endReason": None,
-                "messages": [],
-                "usage": None,
-                "error": None,
-            }
-        ],
+        "activity": _activity(12, "running"),
     }
     records, handler = _capture_warnings()
     try:
@@ -60,7 +56,7 @@ def test_run_initialized_skeleton_drop_is_logged() -> None:
     finally:
         log.removeHandler(handler)
     assert any(
-        record.getMessage() == "transport_run_initialized_skeleton_dropped"
+        record.getMessage() == "transport_run_initialized_dropped"
         and record.levelno == logging.WARNING
         for record in records
     )
@@ -74,17 +70,7 @@ def test_run_status_transition_drop_is_logged() -> None:
 
     settled = {
         **_SNAPSHOT,
-        "current_run_id": 11,
-        "runs": [
-            {
-                "runId": 11,
-                "status": "completed",
-                "endReason": None,
-                "messages": [],
-                "usage": None,
-                "error": None,
-            }
-        ],
+        "activity": _activity(11, "completed"),
     }
     records, handler = _capture_warnings()
     try:

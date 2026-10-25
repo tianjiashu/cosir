@@ -3,8 +3,8 @@
 import json
 from types import SimpleNamespace
 
-from app.agent_team.coordinator import AgentTeamCoordinator
-from app.agent_team.state.agent_team_run_state import (
+from app.service.agent_team.coordinator import AgentTeamCoordinator
+from app.models.agent_team.state.agent_team_run_state import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
     AgentTeamRunState,
@@ -29,35 +29,33 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
     """错误提示覆盖展示数据时，持久化运行引用仍须留在独立字段。"""
 
     state = {
-        "runs": [
+        "messages": [
             {
+                "id": "assistant-run-3",
+                "role": "assistant",
                 "runId": 3,
-                "status": "running",
-                "endReason": None,
-                "messages": [
+                "outcome": None,
+                "parts": [
                     {
-                        "id": "message-1",
-                        "role": "assistant",
-                        "parts": [
-                            {
-                                "type": "tool-call",
-                                "toolCallId": "call-1",
-                                "toolName": "agent_team",
-                                "status": "running",
-                                "presentation": {},
-                                "display_data": {"kind": "agent-team-approval", "team_run_id": 17},
-                            }
-                        ],
+                        "type": "tool-call",
+                        "toolCallId": "call-1",
+                        "toolName": "agent_team",
+                        "status": "running",
+                        "presentation": {},
+                        "display_data": {"kind": "agent-team-approval", "team_run_id": 17},
                     }
                 ],
-                "contextWindowTotal": None,
-                "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
-                "usage": None,
-                "error": None,
             }
         ],
-        "current_run_id": 3,
-        "approvals": {},
+        "activity": {
+            "runId": 3,
+            "status": "running",
+            "endReason": None,
+            "error": None,
+            "usage": None,
+            "contextWindowTotal": None,
+            "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+        },
         "error": None,
     }
     event = ToolCallStatusChangedEvent(
@@ -76,7 +74,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
             target = target[key]
         target[mutation.path[-1]] = mutation.value
 
-    part = state["runs"][0]["messages"][0]["parts"][0]
+    part = state["messages"][0]["parts"][0]
     assert part["status"] == "failed"
     assert part["display_data"] == {"status_hint": "执行失败"}
     assert part["team_run_id"] == 17

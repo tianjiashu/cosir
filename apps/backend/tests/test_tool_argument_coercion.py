@@ -14,19 +14,19 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.tools.tool_models.child_task.child_agent_send_args import ChildAgentSendArgs
-from app.core.tools.tool_models.child_task.child_agent_status_args import ChildAgentStatusArgs
-from app.core.tools.tool_models.child_task.delegate_task_args import DelegateTaskArgs
-from app.core.tools.tool_models.execute_terminal_args import (
+from app.core.tool.child_agent.child_agent_send_args import ChildAgentSendArgs
+from app.core.tool.child_agent.child_agent_status_args import ChildAgentStatusArgs
+from app.core.tool.child_agent.delegate_task_args import DelegateTaskArgs
+from app.tools.tool_models.execute_terminal_args import (
     MacExecuteTerminalArgs,
     WindowsExecuteTerminalArgs,
 )
-from app.core.tools.tool_models.list_directory_args import ListDirectoryArgs
-from app.core.tools.tool_models.terminal_session_args import TerminalReadArgs, TerminalWriteArgs
-from app.core.tools.tool_models.wait_messages_args import WaitMessagesArgs
-from app.core.tools.tool_models.web_extract_args import WebExtractArgs
-from app.core.tools.validation.argument_coercion import coerce_tool_arguments
-from app.core.tools.validation.arguments import validate_tool_arguments
+from app.tools.tool_models import ListDirectoryArgs
+from app.tools.tool_models.terminal_session_args import TerminalReadArgs, TerminalWriteArgs
+from app.core.tool.wait_messages_args import WaitMessagesArgs
+from app.core.tool.web.web_extract_args import WebExtractArgs
+from app.core.tool.validation.argument_coercion import coerce_tool_arguments
+from app.core.tool.validation.arguments import validate_tool_arguments
 
 
 class _IntOrStrModel(BaseModel):

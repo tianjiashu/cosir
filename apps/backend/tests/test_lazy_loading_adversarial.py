@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -29,9 +30,9 @@ from pathlib import Path
 
 import pytest
 
-from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.agent_team.registry import AgentTeamConfigurationRegistry
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.service.agent_team.registry import AgentTeamConfigurationRegistry
 from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
@@ -39,6 +40,7 @@ from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.service.configuration.agent_configuration_service import (
+    AgentConfigurationError,
     AgentConfigurationService,
 )
 from app.service.configuration.agent_team_configuration_service import (
@@ -277,7 +279,10 @@ def test_reader_writer_drop_interleaving_never_raises(tmp_path: Path) -> None:
             for index in range(rounds):
                 agent_id = f"{prefix}-{index}"
                 registry.register(scope, _file_profile(agent_id, role="writer"))
-                registry.unregister(scope, agent_id)
+                # 注册与注销之间被并发 drop_scope 清空了作用域：未注册即 KeyError 是契约，
+                # 不是本用例要防的并发异常（迭代中改写、读到半装填作用域）。
+                with contextlib.suppress(KeyError):
+                    registry.unregister(scope, agent_id)
         except BaseException as exc:
             failures.append(exc)
             done.set()
@@ -440,11 +445,11 @@ def test_register_workspace_profile_colliding_with_system_file_is_rejected(tmp_p
 
 
 def test_register_system_after_workspace_holds_same_id_is_rejected(tmp_path: Path) -> None:
-    """[跨作用域/不对称] workspace 已持有某 id 时，system 作用域的注册会被拒绝（记录实际行为）。
+    """[跨作用域/先注册者优先] workspace 已持有某 id 时，system 作用域的注册被拒绝。
 
-    这是「先注册者优先」的直接后果：workspace 通过配置中心写出的本地 Agent 会挡住同 id 的
-    system 级 Agent 创建（system 不再天然优先）。此处记录基线行为，服务层的可见后果在
-    ``test_system_scope_create_blocked_by_workspace_local_agent`` 单独断言。
+    这是有意的规则（见 ``AgentProfileRegistry`` 类 docstring）：运行期的 system 写入不逐出
+    已在用的 workspace Agent。服务层的可见后果在
+    ``test_system_scope_create_rejected_when_workspace_holds_same_id`` 断言。
     """
 
     workspace = tmp_path / "workspace"
@@ -458,6 +463,7 @@ def test_register_system_after_workspace_holds_same_id_is_rejected(tmp_path: Pat
 
     assert accepted is False
     assert registry.resolve_local(AgentProfileRegistry.SYSTEM_WORKSPACE, "local-only") is None
+    assert registry.resolve_local(workspace, "local-only") is not None
 
 
 def test_cross_scope_conflict_logs_skip_event(
@@ -959,14 +965,13 @@ def test_agent_service_system_write_then_list_without_false_duplicate(
     ], "刚写入的配置文件不应在首次读取时被读回并报成重复"
 
 
-def test_system_scope_create_blocked_by_workspace_local_agent(
+def test_system_scope_create_rejected_when_workspace_holds_same_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """[跨作用域/缺陷] 某个 workspace 的本地 Agent 不应挡住同 id 的 system 级 Agent 创建。
+    """[跨作用域/先注册者优先] workspace 本地 Agent 已占用某 id 时，同 id 的 system Agent 创建失败。
 
-    期望：system 作用域是权威作用域，其创建只应与 system 作用域既有内容比较（同 id 的
-    workspace 本地 Agent 不应使 system 创建失败）。实际：``register`` 因跨作用域冲突拒绝，
-    配置中心抛出「Agent 已注册」，用户无法创建该 system Agent。
+    运行期 system 写入不逐出已在用的 workspace Agent（规则见 ``AgentProfileRegistry``）：配置中心
+    抛「Agent 已注册」，workspace 本地 Agent 保持可见，system 作用域不出现该 id。
     """
 
     workspace = tmp_path / "workspace"
@@ -980,17 +985,19 @@ def test_system_scope_create_blocked_by_workspace_local_agent(
     )
     service = AgentConfigurationService()
 
-    service.create_document(
-        AgentConfigurationDocument(
-            agent_id="shared",
-            role="system-reader",
-            description="System level agent with a workspace-local name collision",
-            system_prompt="Read only the files needed and report evidence.",
-            allowed_tools=["read_file"],
+    with pytest.raises(AgentConfigurationError, match="已注册"):
+        service.create_document(
+            AgentConfigurationDocument(
+                agent_id="shared",
+                role="system-reader",
+                description="System level agent with a workspace-local name collision",
+                system_prompt="Read only the files needed and report evidence.",
+                allowed_tools=["read_file"],
+            )
         )
-    )
 
-    assert registry.resolve_local(AgentProfileRegistry.SYSTEM_WORKSPACE, "shared") is not None
+    assert registry.resolve_local(AgentProfileRegistry.SYSTEM_WORKSPACE, "shared") is None
+    assert registry.resolve_local(workspace, "shared") is not None
 
 
 def test_agent_service_create_does_not_log_false_duplicate_after_drop(

@@ -12,7 +12,7 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import canc
 from app.service import depends as service_depends
 from app.service.conversation_run import task_actor as actor_module
 from app.service.conversation_run.task_actor import Execution, TaskActor
-from app.service.conversation_run.workflow_session import WorkflowSession
+from app.service.conversation_run.task_actors import TaskActors
 
 _RUN_ID = 1
 _TASK_ID = 7
@@ -44,7 +44,7 @@ class _Services:
         return []
 
 
-def _session(monkeypatch: pytest.MonkeyPatch, services: _Services | None = None) -> WorkflowSession:
+def _session(monkeypatch: pytest.MonkeyPatch, services: _Services | None = None) -> TaskActors:
     """接替身服务的调度入口；actor 闸门换成空上下文。"""
     services = services or _Services()
     for getter in (
@@ -60,7 +60,7 @@ def _session(monkeypatch: pytest.MonkeyPatch, services: _Services | None = None)
         "get_or_create",
         lambda _: SimpleNamespace(async_operation=lambda **kw: nullcontext()),
     )
-    return WorkflowSession()
+    return TaskActors()
 
 
 def _drive(behavior: Callable[[], Awaitable[None]]):
@@ -70,12 +70,18 @@ def _drive(behavior: Callable[[], Awaitable[None]]):
     return drive
 
 
-def _start(session: WorkflowSession) -> TaskActor:
+def _start(session: TaskActors) -> TaskActor:
     """在 actor 上启动 ``_RUN`` 的执行，并放行初始投递（生产由启动它的那批信号处理完放行）。"""
     actor = session._actor(_TASK_ID)
     actor._start(_RUN, fresh_run=True)
     actor.execution.ready.set()
     return actor
+
+
+async def _until_released(actor: TaskActor) -> None:
+    """等执行收尾注销：执行结束后发 RunFinished，actor 处理完那一批才注销登记。"""
+    while actor.execution is not None:
+        await asyncio.wait_for(actor.state_changed.wait(), 1)
 
 
 def _fake_execution(actor: TaskActor) -> Execution:
@@ -96,7 +102,7 @@ def _isolated_signal_registry():
 
 @pytest.mark.asyncio
 async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(monkeypatch) -> None:
-    """runner 永不返回时取消依旧立即返回 True，且只标记进程内信号。"""
+    """runner 永不返回时取消依旧立即返回，且只标记进程内信号。"""
 
     async def runner() -> None:
         await asyncio.Event().wait()
@@ -105,7 +111,7 @@ async def test_cancel_marks_signal_and_returns_without_waiting_for_runner(monkey
     session = _session(monkeypatch)
     execution = _start(session).execution.thread_task
     try:
-        assert await asyncio.wait_for(session.cancel(_TASK_ID), 1.0) is True
+        session.cancel(_TASK_ID)
         assert cancellation_registry.is_cancelled(_TASK_ID) is True
         # 取消只发信号：不取消后台执行 task。
         await asyncio.sleep(0)
@@ -125,7 +131,7 @@ async def test_cancel_preserves_task_terminal(monkeypatch, tmp_path) -> None:
     session = _session(monkeypatch)
     _fake_execution(session._actor(_TASK_ID))
     try:
-        assert await session.cancel(_TASK_ID) is True
+        session.cancel(_TASK_ID)
         assert not workers[0].closed
         terminal.write(
             str(terminal_session["session_id"]),
@@ -148,21 +154,23 @@ async def test_cancel_is_idempotent_while_execution_is_active(monkeypatch) -> No
     actor = session._actor(_TASK_ID)
     _fake_execution(actor)
 
-    assert await session.cancel(_TASK_ID) is True
-    assert await session.cancel(_TASK_ID) is True
+    session.cancel(_TASK_ID)
+    session.cancel(_TASK_ID)
     assert cancellation_registry.consume(_TASK_ID) == "user"
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
     actor.loop_task.cancel()
 
 
 @pytest.mark.asyncio
-async def test_cancel_missing_task_raises_without_signal(monkeypatch) -> None:
-    """task 不存在时抛 KeyError（API 映射 404），且不登记信号。"""
+async def test_cancel_missing_task_leaves_no_signal(monkeypatch) -> None:
+    """task 不存在时投递不报错（存在性由 API 入口校验映射 404），actor 只记录，不登记信号。"""
 
     session = _session(monkeypatch, _Services(missing=True))
+    actor = session._actor(_TASK_ID)
+    changed = actor.state_changed
 
-    with pytest.raises(KeyError):
-        await session.cancel(_TASK_ID)
+    session.cancel(_TASK_ID)
+    await asyncio.wait_for(changed.wait(), 1)
     assert cancellation_registry.is_cancelled(_TASK_ID) is False
     await session.close()
 
@@ -199,8 +207,7 @@ async def test_execution_finishes_and_runs_after_run_when_driver_raises(monkeypa
     monkeypatch.setattr(actor, "_after_run", after_run)
     actor._start(_RUN, fresh_run=True)
     actor.execution.ready.set()
-    settled = actor.execution.settled
-    await asyncio.wait_for(settled.wait(), 1)
+    await _until_released(actor)
 
     assert after == [_RUN_ID]
     assert actor.execution is None
@@ -222,9 +229,8 @@ async def test_after_run_failure_still_releases(monkeypatch) -> None:
     monkeypatch.setattr(actor, "_after_run", after_run)
     actor._start(_RUN, fresh_run=True)
     actor.execution.ready.set()
-    settled = actor.execution.settled
     cancellation_registry.request_cancel(_TASK_ID)
-    await asyncio.wait_for(settled.wait(), 1)
+    await _until_released(actor)
 
     assert actor.execution is None
     assert cancellation_registry.is_cancelled(_TASK_ID) is False

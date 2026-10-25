@@ -1,8 +1,8 @@
 """ToolObservation 工厂的 Agent/UI/内部数据隔离测试。"""
 
-from app.core.tools.schemas.tool_names import TOOL_READ_FILE, TOOL_REPLACE
-from app.core.tools.tool_execute.tool_error import tool_error
-from app.core.tools.tool_execute.tool_success import tool_success
+from app.core.tool.schemas.tool_names import TOOL_READ_FILE, TOOL_REPLACE
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.results.tool_success import tool_success
 
 
 def test_success_keeps_ui_and_internal_data_separate() -> None:

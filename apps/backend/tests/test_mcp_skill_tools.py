@@ -9,8 +9,8 @@ from mcp.server.fastmcp import FastMCP
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import PlainTextResponse
 
-from app.core.tools.tool_handler.mcp import MCPTool
-from app.core.tools.tool_handler.skill import SkillTool
+from app.tools.tool_handler.mcp import MCPTool
+from app.tools.tool_handler.skill import SkillTool
 from app.service.mcp.mcp_client import (
     MCPConfigurationError,
     MCPServerConfig,
@@ -122,11 +122,11 @@ def test_mcp_tool_does_not_discover_or_call_an_untested_server(tmp_path, monkeyp
     config_path.write_text('{"servers":[{"name":"one","command":"python"}]}', encoding="utf-8")
     monkeypatch.setattr("app.service.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.mcp.list_server_tools",
+        "app.tools.tool_handler.mcp.list_server_tools",
         lambda server: pytest.fail("untested MCP server must not be discovered"),
     )
     monkeypatch.setattr(
-        "app.core.tools.tool_handler.mcp.call_server_tool",
+        "app.tools.tool_handler.mcp.call_server_tool",
         lambda *args: pytest.fail("untested MCP server must not be called"),
     )
 

@@ -5,12 +5,12 @@ from datetime import UTC, datetime
 
 # Load the tool package before the transport event package to match the production
 # dependency bootstrap and avoid the legacy import cycle during isolated collection.
-import app.core.tools  # noqa: F401
+import app.tools  # noqa: F401
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.core.tools.display.child_agent_display import build_child_agent_result_display_data
-from app.core.tools.display.delegation_display import build_delegation_display_data
+from app.core.tool.child_agent.child_agent_display import build_child_agent_result_display_data
+from app.core.tool.child_agent.delegation_display import build_delegation_display_data
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata

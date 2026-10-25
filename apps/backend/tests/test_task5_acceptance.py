@@ -26,7 +26,7 @@ from app.core.events import AssistantTextDeltaEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunError, ConversationRunStatus
 from app.models.conversation_input import UserInputPresentation
-from app.models.conversation_run_progress import ConversationRunProgress
+from app.models.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
@@ -151,11 +151,19 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
     """
 
     sequence = store.context.max_sequence(store.task.id) + 1
-    if metadata is None and message["role"] == "user":
-        # 落库的 user 行必须带展示绑定；测试用正文作展示文本。
-        metadata = UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(display_text=message["content"])
-        )
-    store.context.append(store.task.id, run_id, message, sequence, True, metadata)
+    message_id = None
+    if message["role"] == "user":
+        # 落库的 user 行必须带身份（运行期是 inbox 行 id，见 ``prepare_input``）与展示绑定；
+        # 测试用 sequence 充当唯一身份、正文作展示文本。
+        message_id = sequence
+        if metadata is None:
+            metadata = UserMessageMetadata(
+                kind="user_input",
+                presentation=UserInputPresentation(display_text=message["content"]),
+            )
+    store.context.append(
+        store.task.id, run_id, message, sequence, True, metadata, message_id=message_id
+    )
 
 
 def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = None) -> None:
@@ -268,15 +276,30 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     store.tasks.set_current_run_id(store.task.id, cancelled.id)
 
     state = store.state.get_state(store.task.id)
-    assert [run["runId"] for run in state["runs"]] == [completed.id, failed.id, cancelled.id]
-    assert state["current_run_id"] == cancelled.id
+    # 消息按 context 序号扁平排列，Run 分组只体现在 ``runId``；activity 是最新 Run 的摘要。
+    assert [message["runId"] for message in state["messages"]] == [
+        completed.id,
+        completed.id,
+        failed.id,
+        failed.id,
+        cancelled.id,
+        cancelled.id,
+    ]
+    assert state["activity"]["runId"] == cancelled.id
+    assert state["activity"]["status"] == "cancelled"
     first_user = store.contexts.get(store.task.id, include_in_context=False)[0]
-    assert [message["id"] for message in state["runs"][0]["messages"]] == [
-        first_user.message_id,
+    assert [message["id"] for message in state["messages"][:2]] == [
+        str(first_user.message_id),
         f"assistant-{first_user.message_id}",
     ]
+    # 每个终态 Run（含最新 Run）的结局写在各自最后一条助手消息上。
+    assert [
+        message["outcome"]["status"]
+        for message in state["messages"]
+        if message["outcome"] is not None
+    ] == ["completed", "failed", "cancelled"]
     # 消息身份与正文取自 context，Run.input_text 仅记录首条输入的摘要。
-    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == f"user-{completed.id}"
+    assert state["messages"][0]["parts"][0]["text"] == f"user-{completed.id}"
     # 工具终态由 Run 分组配对产出（同一份 canonical 行同时驱动冷读快照与模型上下文）。
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
         store.contexts.get(store.task.id, include_in_context=False)
@@ -288,8 +311,7 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     }
     assert all(
         "run summary must not become a UI message" not in str(message)
-        for run in state["runs"]
-        for message in run["messages"]
+        for message in state["messages"]
     )
 
 
@@ -352,8 +374,8 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
     assert persisted.usage == _USAGE
     ConversationTaskStateService.clear_process_state()
     state = store.state.get_state(store.task.id)
-    assert state["runs"][0]["status"] == "completed"
-    assert state["runs"][0]["messages"][0]["parts"][0]["text"] == "durable user"
+    assert state["activity"]["status"] == "completed"
+    assert state["messages"][0]["parts"][0]["text"] == "durable user"
 
 
 @pytest.mark.asyncio
@@ -372,9 +394,9 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
     )
     stream_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
     stream_service._snapshots = store.state
-    stream = stream_service.stream(store.task.id, run.id, lambda: False)
+    stream = stream_service.stream(store.task.id, lambda: False)
     first = await anext(stream)
-    assert first.state["runs"][0]["messages"][1]["parts"][0]["text"] == "canonical"
+    assert first.state["messages"][1]["parts"][0]["text"] == "canonical"
     before_count = len(store.contexts.get(store.task.id, include_in_context=False))
     await stream.aclose()
     assert store.runs.get(run.id).status == "running"
@@ -412,9 +434,13 @@ def test_real_sqlite_fork_preserves_canonical_identity(
             target.id,
             {source_run.id: target_run.id},
             session,
+            max_sequence=max(
+                row.sequence
+                for row in store.contexts.get(store.task.id, include_in_context=False)
+            ),
         )
     assert target.current_run_id is None
-    assert target_run.execution_data == ConversationRunProgress()
+    assert target_run.execution_data == ReactExecutionState()
     source_rows = store.contexts.get(store.task.id, include_in_context=False)
     target_rows = store.contexts.get(target.id, include_in_context=False)
     assert [row.id for row in target_rows] != [row.id for row in source_rows]
@@ -451,7 +477,7 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     assert repaired[0].metadata == ToolMessageMetadata.model_validate({"status": "cancelled"})
     ConversationTaskStateService.clear_process_state()
     state = store.state.get_state(store.task.id)
-    assert state["runs"][0]["status"] == "cancelled"
+    assert state["activity"]["status"] == "cancelled"
     # 工具终态由 Run 分组配对产出（占位行写入 wire 口径的 cancelled）。
     repaired_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
         store.contexts.get(store.task.id, include_in_context=False)

@@ -772,7 +772,7 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     )
     monkeypatch.setattr(
         lifespan_module,
-        "get_workflow_session",
+        "get_task_actors",
         record("get_executor", _Executor()),
     )
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", record("close_deps"))

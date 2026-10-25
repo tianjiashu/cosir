@@ -632,18 +632,19 @@ def test_environment_configuration_schema_error(
     service.update({"DEFAULT_LANGUAGE": EnvironmentChange("replace", "en")})
     service.update({"DEFAULT_LANGUAGE": EnvironmentChange("replace", "zh")})
 
-    with TestClient(app) as client:
-        response = client.post(
-            "/configuration/agents",
-            json={
-                "agent_id": "unknown-field",
-                "role": "child",
-                "description": "x",
-                "system_prompt": "x",
-                "allowed_tool_groups": ["文件"],
-                "unexpected": True,
-            },
-        )
+    # 不进入 lifespan：``backend_env`` 已装配隔离主库与单例；lifespan 的 ``Settings.load()`` 会
+    # ``paths.reset()`` 回真实用户数据目录，用例因此会去打开开发者本机的主库。
+    response = TestClient(app).post(
+        "/configuration/agents",
+        json={
+            "agent_id": "unknown-field",
+            "role": "child",
+            "description": "x",
+            "system_prompt": "x",
+            "allowed_tool_groups": ["文件"],
+            "unexpected": True,
+        },
+    )
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "configuration_invalid"
 

@@ -12,7 +12,7 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallStatusChangedEvent,
 )
-from app.core.workflow.execution_state.tool_batch import ToolBatch
+from app.models.tool_batch import ToolBatch
 from app.core.workflow.node_helper import (
     StreamingPartStateMachine,
 )
@@ -49,9 +49,13 @@ class _Harness:
     ) -> None:
         self.clock = clock or _Clock()
         self.events: list[Any] = []
+        # 生产由 model 节点每次请求新建批次并交给状态机；这里每个 harness 一个批次。
+        self.batch = ToolBatch()
         # 事件出口在构造期绑定（生产为 ``emit``），测试用替身提供收集器。
         with patch.object(machine_module, "emit", self.events.append):
-            self.machine = StreamingPartStateMachine(task_id=1, run_id=2, step_id="step-1")
+            self.machine = StreamingPartStateMachine(
+                task_id=1, run_id=2, step_id="step-1", batch=self.batch
+            )
         # 合并阈值与时钟是构造期固化的实现细节（生产取 Constant + time.monotonic），测试按用例
         # 白盒注入，才能在字符阈值与时间阈值两个维度上可控。
         self.machine._min_chars = min_chars
@@ -260,7 +264,6 @@ def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> No
             "write_file": SimpleNamespace(name="write_file", display=None),
         },
         allows_tools=frozenset({"read_file"}),
-        batch=ToolBatch(),
     )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
@@ -275,7 +278,7 @@ def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> No
         [_tool_call("c1", "read_file"), _tool_call("c2", "write_file"), _tool_call("c3", "unknown")]
     )
     assert {
-        call_id: call.projection for call_id, call in runtime.batch.valid_tool_calls.items()
+        call_id: call.projection for call_id, call in harness.batch.valid_tool_calls.items()
     } == {"c1": "projected", "c2": "banned"}
     harness.machine.cancel()
 
@@ -294,7 +297,6 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
     runtime = SimpleNamespace(
         tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
         allows_tools=frozenset({"read_file"}),
-        batch=ToolBatch(),
     )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
@@ -312,11 +314,12 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
     created = [event for event in first.events if isinstance(event, ToolCallCreatedEvent)]
     assert [event.tool_call_id for event in created] == ["c1"]
 
-    # 请求边界：model_node 清空记账，同一 id 属于新请求，必须重新投影。
-    runtime.batch = ToolBatch()
+    # 请求边界：model_node 每次请求新建批次，同一 id 属于新请求，必须重新投影。
     second_events: list[Any] = []
     with patch.object(machine_module, "emit", second_events.append):
-        second = StreamingPartStateMachine(task_id=1, run_id=2, step_id="step-2")
+        second = StreamingPartStateMachine(
+            task_id=1, run_id=2, step_id="step-2", batch=ToolBatch()
+        )
     second.tool_call([_tool_call("c1", "read_file")])
 
     assert [

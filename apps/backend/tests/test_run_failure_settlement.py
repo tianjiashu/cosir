@@ -29,7 +29,7 @@ from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
+from app.assistant_transport.state.conversation_state_activity import ConversationStateActivity
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     empty_snapshot,
@@ -104,19 +104,15 @@ def _running_state() -> ConversationStateSnapshot:
     """构造只含一个 running Run 的合法 snapshot（含新的 ``error`` 键）。"""
 
     state = empty_snapshot()
-    state["runs"] = [
-        ConversationRunSnapshot(
-            runId=1,
-            status="running",
-            endReason=None,
-            messages=[],
-            usage=None,
-            contextWindowTotal=None,
-            launch={"modelConfigId": None, "reasoningEffort": None, "banTools": []},
-            error=None,
-        )
-    ]
-    state["current_run_id"] = 1
+    state["activity"] = ConversationStateActivity(
+        runId=1,
+        status="running",
+        endReason=None,
+        error=None,
+        usage=None,
+        contextWindowTotal=None,
+        launch={"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+    )
     return state
 
 
@@ -126,7 +122,7 @@ def _error_mutation_values(
     """取出事件 plan 中对 Run ``error`` 写入的全部取值。"""
 
     mutations = plan_event(event, state)
-    return [mutation.value for mutation in mutations if mutation.path == ("runs", 0, "error")]
+    return [mutation.value for mutation in mutations if mutation.path == ("activity", "error")]
 
 
 def test_failure_code_for_classifies_timeout() -> None:
@@ -354,7 +350,7 @@ def test_non_terminal_transition_clears_previous_error() -> None:
     """非终态迁移（如续跑）必须清空上一轮遗留的错误，避免旧失败文案粘住。"""
 
     state = _running_state()
-    state["runs"][0]["error"] = {
+    state["activity"]["error"] = {
         "code": _QUOTA_CODE,
         "message": run_failure_message(_QUOTA_CODE),
     }
@@ -415,7 +411,7 @@ def test_validate_snapshot_rejects_malformed_run_error() -> None:
     """快照校验拒绝不合法的 Run 级错误契约。"""
 
     state = _running_state()
-    state["runs"][0]["error"] = {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED}
+    state["activity"]["error"] = {"code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED}
 
     with pytest.raises(ValueError):
         validate_snapshot(state)
@@ -425,7 +421,7 @@ def test_validate_snapshot_accepts_controlled_run_error() -> None:
     """合法错误契约通过校验，且 ``error`` 键是 Run 固定字段的一部分。"""
 
     state = _running_state()
-    state["runs"][0]["error"] = {
+    state["activity"]["error"] = {
         "code": Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED,
         "message": run_failure_message(Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED),
     }

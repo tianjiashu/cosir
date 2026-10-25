@@ -26,30 +26,28 @@ import pytest
 from pydantic import ValidationError
 
 # 打破在途重构中的循环导入：先 import 包本体，再导入其子模块。
-import app.core.tools as _tools_pkg
-from app.agent_team import registry as agent_team_registry_module
-from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.agent_team.registry import AgentTeamConfigurationRegistry
+import app.tools as _tools_pkg
+from app.service.agent_team import registry as agent_team_registry_module
+from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.service.agent_team.registry import AgentTeamConfigurationRegistry
 from app.config.constant import Constant
-from app.core.tools.schemas import ALL_TOOL_NAMES, ToolName
-from app.core.tools.tool_handler.child_task.child_agent_send import (
+from app.core.tool.schemas import ALL_TOOL_NAMES, ToolName
+from app.core.tool.child_agent.child_agent_send import (
     ChildAgentSendTool,
     build_child_agent_send_definition,
 )
-from app.core.tools.tool_handler.child_task.child_agent_status import (
+from app.core.tool.child_agent.child_agent_status import (
     ChildAgentStatusTool,
     build_child_agent_status_definition,
 )
-from app.core.tools.tool_handler.wait_messages import (
+from app.core.tool.wait_messages import (
     WaitMessagesTool,
     build_wait_messages_definition,
 )
-from app.core.tools.tool_models.child_task import (
-    ChildAgentSendArgs,
-    ChildAgentStatusArgs,
-)
-from app.core.tools.tool_models.wait_messages_args import WaitMessagesArgs
-from app.core.tools.tool_system import ToolSystem
+from app.core.tool.child_agent.child_agent_send_args import ChildAgentSendArgs
+from app.core.tool.child_agent.child_agent_status_args import ChildAgentStatusArgs
+from app.core.tool.wait_messages_args import WaitMessagesArgs
+from app.tools.tool_system import ToolSystem
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
 from app.utils.path import system_cosir as paths
@@ -58,8 +56,8 @@ from app.utils.path import system_cosir as paths
 _REMOVED_TOOL_NAME = "child_agent_close"
 
 # 被删除的模块全限定名。
-_REMOVED_HANDLER_MODULE = "app.core.tools.tool_handler.child_task.child_agent_close"
-_REMOVED_ARGS_MODULE = "app.core.tools.tool_models.child_task.child_agent_close_args"
+_REMOVED_HANDLER_MODULE = "app.core.tool.child_agent.child_agent_close"
+_REMOVED_ARGS_MODULE = "app.core.tool.child_agent.child_agent_close_args"
 
 # 业务源码根目录（用于磁盘残留扫描）。
 _APP_DIR = Path(__file__).resolve().parents[1] / "app"
@@ -173,10 +171,10 @@ def test_removed_source_files_are_absent_from_disk() -> None:
     """
 
     handler_py = (
-        _APP_DIR / "core" / "tools" / "tool_handler" / "child_task" / "child_agent_close.py"
+        _APP_DIR / "core" / "tool" / "child_agent" / "child_agent_close.py"
     )
     args_py = (
-        _APP_DIR / "core" / "tools" / "tool_models" / "child_task" / "child_agent_close_args.py"
+        _APP_DIR / "core" / "tool" / "child_agent" / "child_agent_close_args.py"
     )
     assert not handler_py.exists(), f"残留源文件: {handler_py}"
     assert not args_py.exists(), f"残留源文件: {args_py}"
@@ -189,10 +187,10 @@ def test_removed_symbols_absent_from_package_namespaces() -> None:
     造成导入即 ImportError 的隐蔽断点。
     """
 
-    schemas = importlib.import_module("app.core.tools.schemas")
-    tool_models = importlib.import_module("app.core.tools.tool_models")
-    child_task_models = importlib.import_module("app.core.tools.tool_models.child_task")
-    tool_names = importlib.import_module("app.core.tools.schemas.tool_names")
+    schemas = importlib.import_module("app.core.tool.schemas")
+    tool_models = importlib.import_module("app.tools.tool_models")
+    child_task_models = importlib.import_module("app.core.tool.child_agent")
+    tool_names = importlib.import_module("app.core.tool.schemas.tool_names")
 
     assert not hasattr(tool_names, "TOOL_CHILD_AGENT_CLOSE")
     assert not hasattr(schemas, "TOOL_CHILD_AGENT_CLOSE")
@@ -253,7 +251,7 @@ def test_every_tool_name_constant_is_registered_in_canonical_list() -> None:
     潜在缺陷类型：新增/删除常量时漏改 ALL_TOOL_NAMES，留下孤儿常量或未登记名字。
     """
 
-    module = importlib.import_module("app.core.tools.schemas.tool_names")
+    module = importlib.import_module("app.core.tool.schemas.tool_names")
     constants = {
         key: value
         for key, value in vars(module).items()
@@ -502,9 +500,9 @@ def test_banned_tools_all_exist_in_live_registry(storage: None) -> None:
 
 
 def test_tool_system_package_export_is_intact() -> None:
-    """目的：``app.core.tools`` 包出口（ToolSystem）未被删除改动破坏。
+    """目的：``app.tools`` 包出口（ToolSystem）未被删除改动破坏。
 
-    潜在缺陷类型：包 __init__ 导出丢失，破坏 from app.core.tools import ToolSystem。
+    潜在缺陷类型：包 __init__ 导出丢失，破坏 from app.tools import ToolSystem。
     """
 
     assert _tools_pkg.ToolSystem is ToolSystem

@@ -37,8 +37,8 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
             "type": "user_input_consumed",
             "task_id": 1,
             "run_id": 1,
-            "message_id": "message-1",
-            "presentation": {"display_text": "读一下这个文件"},
+            # 只带消息身份（inbox 行 id）：展示 parts 已在排队投影里构造。
+            "message_id": 1,
         },
         UserInputConsumedEvent,
     ),
@@ -274,14 +274,9 @@ def test_event_is_frozen() -> None:
         无；只做内存内校验。
     """
 
-    event = UserInputConsumedEvent(
-        task_id=1,
-        run_id=1,
-        message_id="message-1",
-        presentation={"display_text": "原始输入"},
-    )
+    event = UserInputConsumedEvent(task_id=1, run_id=1, message_id=1)
     with pytest.raises(ValidationError):
-        event.message_id = "other"
+        event.message_id = 2
 
 
 def test_run_status_uses_domain_enumeration() -> None:
