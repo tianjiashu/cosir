@@ -1,0 +1,486 @@
+"""read_file 工具实现。
+
+本模块只承载 read_file 这一个工具。为了符合“一个工具一个类”的约定，
+路径安全、文本读取、分页、二进制判断、行号渲染和工具定义适配都封装在
+``ReadFileTool`` 内部。
+
+设计边界：
+- 参数校验模型放在 ``app.tools.tool_models.ReadFileArgs``，由 Pydantic 负责。
+- 对外注册仍通过 ``build_read_file_definition`` 返回 ``ToolDefinition``，暂不改变注册逻辑。
+- 工具执行只读文件系统，不写入任何文件，不执行 shell 命令。
+"""
+
+from pathlib import Path
+from typing import ClassVar
+
+from app.tools.display.filesystem_display import build_read_file_display_data
+from app.core.tool.schemas import (
+    TOOL_READ_FILE,
+    ToolDefinition,
+    ToolDisplayHints,
+    ToolExecutionContext,
+    ToolObservation,
+)
+from app.core.tool.results.tool_error import os_error_message, tool_error
+from app.core.tool.results.tool_success import tool_success
+from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
+from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.core.tool.tool_base import HandlerBase
+from app.tools.tool_models import ReadFileArgs
+from app.tools.tool_models.text_read_result import TextReadResult
+
+# 设备路径是确定性失败；reason 只提供替代动作，不重复 error 的事实。
+_BLOCKED_DEVICE_REASON = (
+    "use a regular text file path inside the project instead."
+)
+
+
+class ReadFileTool(HandlerBase):
+    """读取文本文件并构造模型工具定义的处理器。
+
+    开发者说明：相对路径基于执行上下文的 ``workspace_root``；只读读取允许访问
+    workspace 外的绝对路径。路径解析与文本读取的失败会转换为 ``ToolObservation``。
+    模型可见的用途和限制单独写在 ``description``，参数用法写在参数 schema。
+    """
+
+    name = TOOL_READ_FILE
+    description = (
+        "Read a text file and return numbered lines ('LINE_NUM| CONTENT'). Output is "
+        "capped at about 100K characters and truncated at a line boundary when needed. "
+        "Files larger than 5 MB, images, and other binary files cannot be read."
+    )
+    args_model = ReadFileArgs
+    timeout_seconds = 10.0
+    group = TOOL_GROUP_SEARCH
+
+
+    binary_extensions: ClassVar[set[str]] = {
+        ".7z",
+        ".avi",
+        ".bin",
+        ".bmp",
+        ".class",
+        ".dll",
+        ".doc",
+        ".docx",
+        ".exe",
+        ".gif",
+        ".ico",
+        ".jar",
+        ".jpg",
+        ".jpeg",
+        ".mov",
+        ".mp3",
+        ".mp4",
+        ".pdf",
+        ".png",
+        ".ppt",
+        ".pptx",
+        ".pyc",
+        ".rar",
+        ".so",
+        ".tar",
+        ".webp",
+        ".xls",
+        ".xlsx",
+        ".zip",
+    }
+
+    max_limit = 2_000
+    max_content_chars = 100_000
+    max_line_chars = 2_000
+    binary_sample_bytes = 4_096
+    utf8_bom = "\ufeff"
+    # 单文件体积硬上限：超过此值的文件一律禁止读取，分页也不放行。
+    max_file_bytes = 5_000_000
+
+    def __init__(self) -> None:
+        """初始化 read_file 工具实例。
+
+        参数:
+            无
+        返回:
+            无。
+
+        异常:
+            无。
+        """
+
+    def execute(
+        self,
+        path: str,
+        execution_context: ToolExecutionContext,
+        offset: int = 1,
+        limit: int = 500,
+    ) -> ToolObservation:
+        """读取项目目录内的文本文件，并返回适合模型消费的观测结果。
+
+        参数:
+            path: 用户或模型请求读取的文件路径。相对路径以 workspace 根为基准解析，
+                也接受项目根外的绝对路径（只读不受 workspace 边界限制）。
+            offset: 从第几行开始读取，1 表示第一行。
+            limit: 最多返回多少行。参数模型会限制最大值，内部也会再次归一化。
+            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由执行链
+                在子进程内无条件注入的关键字参数，handler 契约必须接受此 kwarg 以匹配
+                ``ToolHandlerRunner._execute_handler`` 调用约定；本工具只读且不受 workspace
+                边界限制，故不消费该值。
+
+        返回:
+            ``ToolObservation``。成功时 ``content`` 仅包含模型后续工作所需的
+            ``LINE_NUM|CONTENT`` 文本；失败时 ``status`` 为 ``error``，``error``
+            描述事实，``reason`` 提供下一步动作。
+
+        异常:
+            不主动向上抛出异常。文件不存在、路径无法解析、二进制文件和读取失败都会被
+            转换成结构化 ``ToolObservation``。
+
+        副作用:
+            只读文件系统，不写入任何文件。
+        """
+        root = execution_context.workspace_root
+        resolver = PathResolver(root)
+        resolved = None
+        ## 阶段1：对原始字符串做设备名/posix 禁止路径的 fail-fast 拦截
+        if resolved is None:
+            device_error = resolver.blocked_device_reason(path)
+            if device_error:
+                return tool_error(
+                    self.name,
+                    device_error,
+                    reason=_BLOCKED_DEVICE_REASON,
+                    status_hint="无法读取",
+                )
+
+            # 解析路径、相对路径转绝对路径
+            resolved, error = resolver.resolve_without_boundary(path)
+            if resolved is None:
+                return tool_error(
+                    self.name,
+                    f"could not read the file: {error}",
+                    reason="provide a valid file path inside or under the project root.",
+                    retryable=True,
+                    status_hint="路径无效",
+                )
+
+            device_error = resolver.blocked_device_reason(path, resolved)
+            if device_error:
+                return tool_error(
+                    self.name,
+                    device_error,
+                    reason=_BLOCKED_DEVICE_REASON,
+                    status_hint="无法读取",
+                )
+
+        result = self._read_text_page(resolved, offset, limit)
+        if result.error:
+            return tool_error(
+                self.name,
+                result.error,
+                reason=result.reason,
+                retryable=result.retryable,
+                status_hint="无法读取",
+            )
+
+        normalized_offset, normalized_limit = self._normalize_read_pagination(offset, limit)
+        end_line: int | str | None = (
+            "END" if result.next_offset is None and result.end_line is not None else result.end_line
+        )
+        return tool_success(
+            tool_name=self.name,
+            content=result.content,
+            display_data=build_read_file_display_data(
+                path,
+                start_line=normalized_offset,
+                end_line=end_line,
+                file_size=result.file_size,
+                truncated=result.truncated,
+            ),
+        )
+
+    def to_definition(self) -> ToolDefinition:
+        """把工具实例转换成当前注册系统使用的 ``ToolDefinition``。
+
+        参数:
+            无。
+
+        返回:
+            可直接注册到 ``ToolRegistry`` 的工具定义。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return ToolDefinition(
+            name=self.name,
+            group=self.group,
+            description=self.description,
+            handler=self.execute,
+            args_model=self.args_model,
+            timeout_seconds=self.timeout_seconds,
+            resource_keys=("filesystem",),
+            display=ToolDisplayHints(
+                verb="读取文件",
+                icon="eye",
+                expandable=False,
+                expand_layout="none",
+                show_result=False,
+            ),
+        )
+
+    def _normalize_read_pagination(self, offset: int, limit: int) -> tuple[int, int]:
+        """归一化分页参数，保证 offset/limit 落在安全范围内。
+
+        参数:
+            offset: 期望开始读取的 1 基行号。
+            limit: 期望读取的最大行数。
+
+        返回:
+            ``(normalized_offset, normalized_limit)``。
+
+        异常:
+            ``ValueError``: 当传入对象无法转成整数时可能抛出；正常入口会先经过 Pydantic 校验。
+
+        副作用:
+            无。
+        """
+
+        normalized_offset = max(1, int(offset))
+        normalized_limit = max(1, min(int(limit), self.max_limit))
+        return normalized_offset, normalized_limit
+
+    def _read_text_page(self, path: Path, offset: int, limit: int) -> TextReadResult:
+        """按页读取文本文件，并返回带行号的内容。
+
+        参数:
+            path: 已经过安全解析的文件路径。
+            offset: 从第几行开始读取，1 表示第一行。
+            limit: 最多读取多少行。
+
+        返回:
+            ``TextReadResult``。成功时 ``content`` 包含带行号文本；失败（文件不存在、
+            是目录、超过 5MB 体积上限、二进制或编码错误）时 ``error`` 非空。
+
+        异常:
+            不主动向上抛出文件系统异常。读取失败会返回简短的 ``reason`` 修正建议。
+
+        副作用:
+            只读文件系统，不写入任何文件。
+        """
+
+        if not path.exists():
+            return TextReadResult(
+                error=f"could not read the file: no such file at '{path}'",
+                reason="provide the current path of an existing file.",
+                retryable=True,
+            )
+        if path.is_dir():
+            return TextReadResult(
+                error=f"could not read '{path}': it is a directory, not a file",
+                reason="provide a file path, or use list_directory for this directory.",
+                retryable=True,
+            )
+        file_size = self._safe_file_size(path)
+        if file_size > self.max_file_bytes:
+            return TextReadResult(
+                file_size=file_size,
+                error=(
+                    f"File is too large to read: {file_size} bytes "
+                    f"exceeds the {self.max_file_bytes} byte limit."
+                ),
+                reason=(
+                    "read_file cannot open files larger than 5 MB, even with "
+                    "pagination. Use search_content with a known text pattern to "
+                    "locate matching lines, or "
+                    "read a smaller exported or sampled copy of the file."
+                ),
+                retryable=False,
+            )
+
+        if self._is_likely_binary(path):
+            return TextReadResult(
+                file_size=self._safe_file_size(path),
+                error=(
+                    "Binary file cannot be displayed as text. Use a dedicated binary "
+                    "viewer or open it outside the agent to inspect its contents."
+                ),
+                reason=(
+                    "the target is a binary file (detected by extension or NUL bytes) and "
+                    "cannot be rendered as text. Use a dedicated binary viewer or open it "
+                    "outside the agent; reading it with read_file will always fail."
+                ),
+            )
+
+        offset, limit = self._normalize_read_pagination(offset, limit)
+        selected: list[tuple[int, str]] = []
+        next_offset = None
+        end_line = None
+        truncated = False
+        hint = ""
+        total_lines = 0
+        current_chars = 0
+        try:
+            with path.open("r", encoding="utf-8", errors="strict") as file:
+                for line_number, raw_line in enumerate(file, start=1):
+                    total_lines = line_number
+                    if line_number < offset:
+                        continue
+                    if len(selected) >= limit:
+                        next_offset = line_number
+                        hint = f"Use offset={next_offset} to continue reading."
+                        break
+
+                    line = raw_line.rstrip("\r\n")
+                    if line_number == 1 and line.startswith(self.utf8_bom):
+                        line = line[len(self.utf8_bom) :]
+
+                    rendered = self._render_line(line_number, line)
+                    addition = len(rendered) + (1 if selected else 0)
+                    if current_chars + addition > self.max_content_chars:
+                        next_offset = line_number
+                        truncated = True
+                        hint = (
+                            "Output was truncated by character budget. "
+                            f"Use offset={next_offset} to continue reading."
+                        )
+                        break
+
+                    selected.append((line_number, line))
+                    end_line = line_number
+                    current_chars += addition
+        except UnicodeDecodeError:
+            return TextReadResult(
+                error=(
+                    "File is not valid UTF-8 and cannot be read as text. It may use a "
+                    "different encoding (e.g. GBK on Windows) or be a binary file. "
+                    "Re-save it as UTF-8, or convert it before reading."
+                ),
+                reason="convert the file to UTF-8 or use a tool that supports its encoding.",
+                retryable=True,
+            )
+        except OSError as exc:
+            return TextReadResult(
+                error=os_error_message(exc, "read the file"),
+                reason="make the file readable, then call read_file again.",
+                retryable=True,
+            )
+
+        content = self._line_numbered_content(selected)
+        if hint:
+            content = f"{content}\n\n{hint}" if content else hint
+
+        return TextReadResult(
+            content=content,
+            total_lines=total_lines,
+            file_size=self._safe_file_size(path),
+            next_offset=next_offset,
+            hint=hint,
+            end_line=end_line,
+            truncated=truncated,
+        )
+
+    def _is_likely_binary(self, path: Path) -> bool:
+        """判断文件是否像二进制文件。
+
+        参数:
+            path: 待检测文件路径。
+
+        返回:
+            True 表示应拒绝按文本展示；False 表示可以尝试按 UTF-8 文本读取。
+
+        异常:
+            不向上抛出。采样失败时返回 False，让真正读取阶段给出更准确错误。
+
+        副作用:
+            只读取文件开头少量字节。
+        """
+
+        if path.suffix.lower() in self.binary_extensions:
+            return True
+        try:
+            with path.open("rb") as file:
+                sample = file.read(self.binary_sample_bytes)
+        except OSError:
+            return False
+        return b"\x00" in sample
+
+    def _line_numbered_content(self, lines: list[tuple[int, str]]) -> str:
+        """把多行文本渲染成带行号的工具输出。
+
+        参数:
+            lines: ``(line_number, line_text)`` 元组列表。
+
+        返回:
+            形如 ``12| print('hello')`` 的多行字符串。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        return "\n".join(self._render_line(line_number, line) for line_number, line in lines)
+
+    def _render_line(self, line_number: int, line: str) -> str:
+        """渲染单行文本，并在过长时截断单行内容。
+
+        参数:
+            line_number: 原始文件中的行号。
+            line: 原始行文本，不包含换行符。
+
+        返回:
+            带行号前缀的单行字符串。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        if len(line) > self.max_line_chars:
+            line = f"{line[:self.max_line_chars]}... [line truncated]"
+        return f"{line_number}| {line}"
+
+    def _safe_file_size(self, path: Path) -> int:
+        """返回文件大小；读取失败时降级为 0。
+
+        参数:
+            path: 目标文件路径。
+
+        返回:
+            文件字节大小；stat 失败时返回 0。
+
+        异常:
+            不向上抛出。
+
+        副作用:
+            无。
+        """
+
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+
+
+def build_read_file_definition() -> ToolDefinition:
+    """构造绑定到指定项目根目录的 read_file 工具定义。
+
+    参数:
+        无。
+
+    返回:
+        ``ToolDefinition``，供 ``ToolRegistry`` 注册。
+
+    异常:
+        无。
+
+    副作用:
+        创建 ``ReadFileTool`` 实例和定义对象，不执行文件读取。
+    """
+
+    return ReadFileTool().to_definition_if_avaliable()

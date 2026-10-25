@@ -1,0 +1,364 @@
+"""项目路径安全解析器（PathResolver）。
+
+把 ``read_file`` 原先内联的私有路径安全逻辑提取为独立抽象，供文件工具
+共用（符合 Rule of Three，避免路径安全逻辑在多个文件工具间重复）。
+
+设计边界：
+- 只解析与拦截路径，不读不写文件。
+- 提供两种作用域解析策略，均返回 ``(Path | None, str)`` 二元组：
+  - ``resolve_within_workspace``：解析并强制项目根 containment（写/改/删等
+    破坏性工具，越界即拒绝）。
+  - ``resolve_without_boundary``：解析但不强制 containment（只读工具，允许
+    访问项目根外）。
+- ``blocked_device_reason`` 返回空串表示允许。
+- ``resolve_within_workspace`` 同时拒绝落在 workspace ``.cosir`` 保留子树内的路径
+  （``.cosir`` 是只读保留区）；仅当调用方显式传 ``allow_reserved=True`` 时放行，
+  供终端 cwd 与 Agent Team 运行档案落盘等子系统使用。
+"""
+
+from pathlib import Path
+from typing import ClassVar
+
+from app.utils.path.relative_path import has_nul
+from app.utils.path.validation import is_within_cosir
+
+
+class PathResolver:
+    """将用户传入的路径解析到项目根目录内的安全解析器。
+
+    单一职责：解析路径并拦截 Windows 设备名与 POSIX 敏感设备/伪文件路径，并提供
+    两种作用域策略——:meth:`resolve_within_workspace` 强制项目根 containment 且拒绝
+    workspace ``.cosir`` 只读保留区（供 write / patch_write 等文件变更工具，越界或落入
+    保留区即拒绝）；
+    :meth:`resolve_without_boundary` 不强制 containment
+    （供 read / list 等只读工具，允许访问项目根外）。所有文件工具共用同一套设备
+    拦截与解析规则，避免规则漂移。
+
+    参数:
+        project_root: 允许访问的项目根目录，所有路径必须解析到其内部。
+
+    返回:
+        ``ProjectPathResolver`` 实例。
+
+    异常:
+        初始化阶段不主动抛出业务异常。
+
+    副作用:
+        仅保存项目根目录路径；不读取、不写入文件。
+    """
+
+    windows_device_names: ClassVar[set[str]] = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "CONIN$",
+        "CONOUT$",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "COM¹",
+        "COM²",
+        "COM³",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9",
+        "LPT¹",
+        "LPT²",
+        "LPT³",
+    }
+    posix_blocked_device_paths: ClassVar[set[str]] = {
+        "/dev/null",
+        "/dev/zero",
+        "/dev/random",
+        "/dev/urandom",
+        "/dev/full",
+        "/dev/stdin",
+        "/dev/tty",
+        "/dev/console",
+        "/dev/stdout",
+        "/dev/stderr",
+        "/dev/fd/0",
+        "/dev/fd/1",
+        "/dev/fd/2",
+    }
+    proc_blocked_suffixes: ClassVar[tuple[str, ...]] = (
+        "/fd/0",
+        "/fd/1",
+        "/fd/2",
+        "/environ",
+        "/cmdline",
+        "/maps",
+        "/smaps",
+        "/smaps_rollup",
+        "/numa_maps",
+        "/mem",
+        "/auxv",
+        "/pagemap",
+    )
+    posix_blocked_recursive_roots: ClassVar[tuple[str, ...]] = (
+        "/proc",
+        "/sys",
+        "/dev",
+    )
+
+    def __init__(self, workspace_root: str | Path) -> None:
+        """初始化解析器并固化项目根目录。
+
+        参数:
+            workspace_root: 解析器允许访问的项目根目录。
+
+        返回:
+            无。
+
+        异常:
+            无。
+
+        副作用:
+            仅保存 ``workspace_root``，不执行文件系统读取。
+        """
+
+        self.workspace_root = Path(workspace_root)
+
+    def resolve_within_workspace(
+        self,
+        path: str,
+        *,
+        allow_reserved: bool = False,
+    ) -> tuple[Path | None, str]:
+        """解析用户路径，确认仍在项目根目录内，并拒绝 workspace ``.cosir`` 保留区。
+
+        参数:
+            path: 模型传入的路径字符串。
+            allow_reserved: 是否允许落在 workspace ``.cosir`` 保留子树内。默认 ``False``
+                （写/改/删/移动等文件工具一律拒绝）；仅内部子系统（终端 cwd、Agent Team
+                运行档案落盘）显式传 ``True``。
+
+        返回:
+            ``(resolved_path, "")`` 表示成功；``(None, error)`` 表示路径非法（越界或落入
+            ``.cosir`` 保留区）。``error`` 为面向模型的英文短句。
+
+        异常:
+            不向上抛出。解析失败会被转换成错误字符串。
+
+        副作用:
+            无。
+        """
+
+        input_error = self._validate_path(path)
+        if input_error:
+            return None, input_error
+        try:
+            # 把 workspace 根目录解析成一个「真实、规范化、绝对」的 Path 对象，
+            # 作为后续边界比较的基准
+            # 转成绝对路径：如果原本是相对路径（比如"myproject"），就以当前工作
+            # 目录为基准补成绝对路径。
+            # 规范化：展开所有的..（上级目录）和.（当前目录），消除多余分隔符。
+            # 解析符号链接：在文件系统里跟随符号链接，得到链接指向的真实物理路径。
+            root = self.workspace_root.resolve()
+            raw = Path(path)
+            target = raw if raw.is_absolute() else root / raw
+
+            # 把用户传入的路径 target 解析成一个「真实、规范化、绝对」的路径，存进 resolved
+            resolved = target.resolve()
+
+            # 尝试把 resolved 表示为相对于 root 的路径,resolved 是不是 root 的子路径
+            resolved.relative_to(root)
+        except (OSError, RuntimeError, ValueError) as exc:
+            return None, f"path escapes project root: {path} ({exc})"
+        if not allow_reserved and is_within_cosir(resolved, self.workspace_root):
+            return None, (
+                f"path is inside the reserved '.cosir' metadata area: {path}. That area is "
+                "read-only; write, edit, delete, and move operations must target files "
+                "outside '.cosir'."
+            )
+        return resolved, ""
+
+    def resolve_without_boundary(self, path: str) -> tuple[Path | None, str]:
+        """解析用户路径但不强制项目根 containment（供只读工具使用）。
+
+        与 :meth:`resolve_within_workspace` 的唯一区别是不强制校验路径必须在
+        workspace 根内。相对路径仍以 workspace 根为基准解析（保持
+        ``read_file("src/x.py")`` 的体验），但解析到 workspace 外的绝对/越界路径
+        也允许。项目约定：workspace 内路径只读、可写；workspace 外的路径读是允许
+        的、写是禁止的。
+
+        参数:
+            path: 模型传入的路径字符串。
+
+        返回:
+            ``(resolved_path, "")`` 表示成功；``(None, error)`` 表示路径无法解析
+            （空串或解析异常）。
+
+        异常:
+            不向上抛出。解析失败会被转换成错误字符串。
+
+        副作用:
+            无。
+        """
+
+        # 检查用户输入是否合法
+        input_error = self._validate_path(path)
+        if input_error:
+            return None, input_error
+        try:
+            root = self.workspace_root.resolve()
+            raw = Path(path)
+            target = raw if raw.is_absolute() else root / raw
+            resolved = target.resolve()
+        except (OSError, RuntimeError, ValueError) as exc:
+            return None, f"cannot resolve path: {path} ({exc})"
+        return resolved, ""
+
+    def blocked_device_reason(self, path: str, resolved: Path | None = None) -> str:
+        """判断路径是否指向应当禁止读取/写入的系统设备或敏感伪文件。
+
+        参数:
+            path: 原始路径字符串。
+            resolved: 可选的归一化路径，用于二次检查符号链接解析后的目标。
+
+        返回:
+            空字符串表示允许继续；非空字符串表示命中禁止路径。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        # 第 1 层：检查「用户原始输入字符串」
+        if self._is_blocked_posix_path(path) or self._windows_device_name(path):
+            return (
+                f"blocked device path: '{path}' refers to an OS device or sensitive "
+                "pseudo-file (e.g. NUL/CON/COM1 on Windows, /dev/* or /proc/* on POSIX); "
+                "use a regular file path inside the project instead"
+            )
+
+        # 第 2 层：检查「符号链接解析后的真实目标」
+        if resolved is not None and (
+            self._is_blocked_posix_path(resolved.as_posix())
+            or self._windows_device_name(str(resolved))
+        ):
+            return (
+                f"blocked device path: '{path}' resolves to an OS device or sensitive "
+                f"pseudo-file ({resolved}); use a regular file path inside the project instead"
+            )
+        return ""
+
+    def blocked_recursive_search_reason(
+        self,
+        path: str,
+        resolved: Path | None = None,
+    ) -> str:
+        """判断递归搜索根是否位于设备或敏感伪文件树。
+
+        参数:
+            path: 原始搜索根路径。
+            resolved: 可选的 unrestricted 解析结果。
+
+        返回:
+            空字符串表示允许；非空字符串表示必须拒绝递归搜索。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        device_reason = self.blocked_device_reason(path, resolved)
+        if device_reason:
+            return device_reason
+        candidates = [str(path)]
+        # resolved.as_posix() 是把 Path 对象转换成统一用正斜杠 / 的路径字符串
+        if resolved is not None:
+            candidates.append(resolved.as_posix())
+        for candidate in candidates:
+            normalized = candidate.replace("\\", "/").lower().rstrip("/")
+            if any(
+                normalized == root or normalized.startswith(f"{root}/")
+                for root in self.posix_blocked_recursive_roots
+            ):
+                return f"blocked recursive search path: {path}"
+        return ""
+
+    def _is_blocked_posix_path(self, path: str) -> bool:
+        """判断路径是否命中 POSIX 设备或 Linux procfs 敏感路径。
+
+        参数:
+            path: 待检查路径。
+
+        返回:
+            True 表示必须拒绝；False 表示未命中该类规则。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        normalized = str(path).replace("\\", "/").lower().rstrip("/")
+        if normalized in self.posix_blocked_device_paths:
+            return True
+        return normalized.startswith("/proc/") and normalized.endswith(self.proc_blocked_suffixes)
+
+    def _windows_device_name(self, path: str) -> str:
+        """返回命中的 Windows 设备名；没有命中时返回空字符串。
+
+        参数:
+            path: 待检查路径。
+
+        返回:
+            命中的设备名，例如 ``NUL``；未命中时返回空字符串。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        normalized = str(path).replace("\\", "/")
+        for component in normalized.split("/"):
+            cleaned = component.rstrip(" .")
+            stem = cleaned.split(":", 1)[0].split(".", 1)[0].rstrip(" .").upper()
+            if stem in self.windows_device_names:
+                return stem
+        return ""
+
+    @staticmethod
+    def _validate_path(path: object) -> str:
+        """返回原始路径输入错误；合法时返回空字符串。
+
+        参数:
+            path: 待验证的原始路径值。
+
+        返回:
+            空字符串表示合法；否则返回稳定错误说明。
+
+        异常:
+            无。
+
+        副作用:
+            无。
+        """
+
+        if not isinstance(path, str) or not path.strip():
+            return "path must be a non-empty string"
+        if has_nul(path):
+            return "path must not contain NUL characters"
+        return ""

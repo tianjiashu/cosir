@@ -1,0 +1,40 @@
+"""结构化文件名 glob 搜索 engine。"""
+
+from __future__ import annotations
+
+from fnmatch import fnmatchcase
+
+from app.tools.tool_handler.search.result import FileSearchMatch, FileSearchPage
+from app.tools.tool_handler.search.scope import SearchScope
+
+
+def find_files(
+    scope: SearchScope,
+    pattern: str,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> FileSearchPage:
+    """在文件或目录 scope 中按 glob 查找文件名并返回结构化分页结果。"""
+
+    matched: list[FileSearchMatch] = []
+    for file_path in scope.iter_files():
+        scope.check_cancel_and_timeout()
+        relative = scope.display_path(file_path)
+        if _matches(relative, file_path.name, pattern):
+            try:
+                mtime = file_path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            matched.append(FileSearchMatch(relative, mtime))
+
+    matched.sort(key=lambda item: (item.mtime, item.file_path), reverse=True)
+    return FileSearchPage(tuple(matched[offset : offset + limit]), len(matched))
+
+
+def _matches(relative_path: str, file_name: str, pattern: str) -> bool:
+    """匹配文件名或 workspace-relative 路径。"""
+
+    if "/" in pattern or "\\" in pattern:
+        return fnmatchcase(relative_path, pattern.replace("\\", "/"))
+    return fnmatchcase(file_name, pattern)
