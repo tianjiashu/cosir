@@ -16,7 +16,6 @@ from typing import cast
 
 from sqlalchemy.orm import Session
 
-from app.assistant_transport.event.dispatch import dispatch_conversation_event
 from app.config.logging.logger import log
 from app.core.events import (
     RunInitializedEvent,
@@ -31,7 +30,7 @@ from app.models.enums.conversation_run_status import RunTransition
 from app.models.react_execution_state import ReactExecutionState
 from app.models.task_message import RunLaunch
 from app.service import depends as service_depends
-from app.service.depends import get_model_config_service
+from app.service.depends import get_model_config_service, get_conversation_event_projector
 from app.storage.store_engines import main_session_factory
 
 
@@ -99,15 +98,15 @@ class ConversationRunLedger:
         return self._run.get(run_id)
 
     def transition(
-        self,
-        run_id: int,
-        transition: RunTransition,
-        *,
-        end_reason: str | None = None,
-        final_output: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
-        error_message: str | None = None,
-        session: Session | None = None,
+            self,
+            run_id: int,
+            transition: RunTransition,
+            *,
+            end_reason: str | None = None,
+            final_output: str | None = None,
+            usage_stats: ConversationRunUsageStats | None = None,
+            error_message: str | None = None,
+            session: Session | None = None,
     ) -> ConversationRunRecord | None:
         """按迁移表执行一次条件迁移；当前状态不在来源集合内时返回 ``None``，不写库、不发事件。
 
@@ -144,7 +143,8 @@ class ConversationRunLedger:
         )
         if record is None or session is not None:
             return record
-        dispatch_conversation_event(
+
+        get_conversation_event_projector().process(
             RunStatusChangedEvent(
                 task_id=record.task_id,
                 run_id=run_id,
@@ -152,7 +152,7 @@ class ConversationRunLedger:
                 end_reason=end_reason,
                 usage_stats=usage_stats,
                 error=error,
-            ),
+            )
         )
         return record
 
@@ -162,12 +162,12 @@ class ConversationRunLedger:
         self._run.save_execution(run_id, data)
 
     def update_completed_result(
-        self,
-        run_id: int,
-        *,
-        final_output: str | None = None,
-        end_reason: str | None = None,
-        usage_stats: ConversationRunUsageStats | None = None,
+            self,
+            run_id: int,
+            *,
+            final_output: str | None = None,
+            end_reason: str | None = None,
+            usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
         """结构化支线只改写已完成 Run 的结果与用量，不重新发布生命周期事件。"""
 
@@ -178,7 +178,7 @@ class ConversationRunLedger:
             usage=self._persisted_usage(usage_stats),
         )
         if record is not None:
-            dispatch_conversation_event(
+            get_conversation_event_projector().process(
                 RunResultUpdatedEvent(
                     task_id=record.task_id,
                     run_id=run_id,
@@ -189,7 +189,7 @@ class ConversationRunLedger:
         return record
 
     def _persisted_usage(
-        self, usage_stats: ConversationRunUsageStats | None
+            self, usage_stats: ConversationRunUsageStats | None
     ) -> ConversationRunUsage | None:
         """运行时 token 累加器 → Run 行六键用量；``None`` 表示不写用量列。"""
 
