@@ -15,9 +15,9 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_SKILL
 from app.core.tool.tool_base import HandlerBase
-from app.tools.tool_models import SkillArgs
-from app.service.skills.skill_catalog import SkillCatalog, SkillLoadError
-from app.service.skills.skill_configuration import SkillConfigurationError
+from app.core.tool.handler.skill.skill_args import SkillArgs
+from app.core.tool.handler.skill.skill_catalog import SkillCatalog, SkillLoadError
+from app.core.tool.handler.skill.skill_configuration import SkillConfigurationError
 
 
 class SkillTool(HandlerBase):

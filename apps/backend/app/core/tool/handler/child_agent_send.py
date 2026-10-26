@@ -21,7 +21,7 @@ from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSe
 from app.models import ConversationRunCommand
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.task_message import RunLaunch
-from app.service.conversation_run.dispatch_policy import matches_run
+from app.core.workflow.inbox.dispatch_policy import matches_run
 from app.service.depends import (
     get_conversation_run_service,
     get_task_actors,
