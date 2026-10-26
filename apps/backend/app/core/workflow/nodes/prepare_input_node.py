@@ -148,7 +148,7 @@ def _cancel_before_request(step_id: str, run_id: int) -> None:
             "data": {"step_id": step_id, "run_id": run_id},
         },
     )
-    service_depends.get_conversation_run_state_service().transition(
+    service_depends.get_conversation_run_ledger().transition(
         run_id,
         RunTransition.CANCEL,
         end_reason=Constant.Run.RUN_END_REASON_RUNTIME_CANCELLED,
@@ -160,7 +160,7 @@ def _cancel_before_request(step_id: str, run_id: int) -> None:
 def _suspend(step_id: str, run_id: int) -> None:
     """工具要求等待且没有现成的可唤醒消息：迁移为 ``suspended``，由 actor 收尾并复查唤醒。"""
     rc = _runtime_context()
-    suspended = service_depends.get_conversation_run_state_service().transition(
+    suspended = service_depends.get_conversation_run_ledger().transition(
         run_id, RunTransition.SUSPEND, usage_stats=rc.usage_stats
     )
     log.info(

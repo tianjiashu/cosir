@@ -160,7 +160,7 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
                 choice.message, spec.json_schema
             )
             if final_output is not None:
-                service_depends.get_conversation_run_state_service().update_completed_result(
+                service_depends.get_conversation_run_ledger().update_completed_result(
                     run_id,
                     final_output=final_output,
                     usage_stats=runtime.usage_stats,
@@ -192,7 +192,7 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
                 },
             },
         )
-    service_depends.get_conversation_run_state_service().update_completed_result(
+    service_depends.get_conversation_run_ledger().update_completed_result(
         run_id,
         end_reason=Constant.Workflow.STRUCTURED_OUTPUT_FAILURE_REASON,
         usage_stats=runtime.usage_stats,

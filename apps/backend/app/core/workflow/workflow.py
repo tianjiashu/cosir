@@ -65,6 +65,6 @@ class ReactLikeWorkflow:
             while state.next_node != ReactRoute.END:
                 patch = await self._nodes[state.next_node](state)
                 state = state.model_copy(update=patch)
-                service_depends.get_conversation_run_state_service().save_execution(
+                service_depends.get_conversation_run_ledger().save_execution(
                     rc.run.id, state
                 )

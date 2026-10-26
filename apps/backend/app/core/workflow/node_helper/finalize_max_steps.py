@@ -20,7 +20,7 @@ async def _finalize_max_steps(step_count: int, step_limit: int) -> dict[str, Any
     rc = _runtime_context()
     step_id = f"step-{step_count}"
     run_id = rc.run.id
-    failed_run = service_depends.get_conversation_run_state_service().transition(
+    failed_run = service_depends.get_conversation_run_ledger().transition(
         run_id,
         RunTransition.FAIL,
         end_reason=Constant.Run.RUN_FAILURE_CODE_MAX_STEPS,

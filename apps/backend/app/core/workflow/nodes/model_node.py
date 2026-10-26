@@ -137,7 +137,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         )
         # 取消时工具 part 的收敛由状态机按「本请求已投影的调用」完成，不再查询生命周期记录。
         parts.cancel()
-        service_depends.get_conversation_run_state_service().transition(
+        service_depends.get_conversation_run_ledger().transition(
             run_id,
             RunTransition.CANCEL,
             end_reason=Constant.Run.RUN_END_REASON_RUNTIME_CANCELLED,
@@ -211,7 +211,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             },
         },
     )
-    completed = service_depends.get_conversation_run_state_service().transition(
+    completed = service_depends.get_conversation_run_ledger().transition(
         run_id,
         RunTransition.COMPLETE,
         usage_stats=rc.usage_stats,
