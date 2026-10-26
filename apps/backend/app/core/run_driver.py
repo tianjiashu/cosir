@@ -22,6 +22,7 @@ from app.core.llm_provider.model_failure import (
     classify_model_failure,
     extract_model_response_message,
 )
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.inbox.run_mailbox import RunMailbox
@@ -54,23 +55,18 @@ class RunDriver:
     """
 
     def __init__(
-        self,
-        run_id: int,
-        mailbox: RunMailbox,
-        initial_delivery: Callable[[], Awaitable[None]],
-        *,
-        on_finished: Callable[[], None],
+            self,
+            run: ConversationRunRecord,
+            mailbox: RunMailbox,
     ) -> None:
         """``mailbox`` 由调度方随执行创建并持续投递外部队列消息；``initial_delivery`` 是调度方的首次
         投递（等启动它的那一轮释放 Task 闸门才投递），必须在本驱动的失败边界内执行：它在边界外失败时
         Run 会停在 running 而没有执行者；``on_finished`` 是结束通知，调度方据此释放执行登记。"""
-        self._run_id = run_id
+        self.run = run
         self._mailbox = mailbox
-        self._initial_delivery = initial_delivery
-        self._on_finished = on_finished
         self._ledger = get_conversation_run_ledger()
-        # 读 Run 之前不知道它归属哪个 Task；读库本身失败时日志里只有 run_id。
-        self._task_id: int | None = None
+        self._task_service = get_task_service()
+        self._workspace_service = get_workspace_service()
 
     async def drive(self) -> None:
         """驱动一次 Run：失败在此落定，结束时通知调度方。
@@ -88,56 +84,35 @@ class RunDriver:
             工具级取消信号（Task 级信号归调度方的释放边界）。
         """
 
-        cancelled = False
         try:
-            await self._execute()
-        except asyncio.CancelledError:
-            cancelled = True
-            raise
+            task = self._task_service.get_task(self.run.task_id)
+            workspace = self._workspace_service.get_workspace(task.workspace_id)
+            # 无内置实现；Hook 判定 deny 也不阻断已开始的 Run。
+            await HookInterceptor.async_safe_fire(
+                HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, turn=self.run, locatable=None)
+            )
+            from app.core.workflow.workflow import ReactLikeWorkflow
+
+            rc = RuntimeContext.for_run(
+                self.run,
+                task,
+                workspace,
+                AgentRuntimeConfig.for_run(self.run, task, workspace),
+                self._mailbox,
+                event_sink=get_conversation_event_projector().process
+            )
+            await ReactLikeWorkflow().run(rc)
+            if await self._has_settled():
+                await HookInterceptor.async_safe_fire(
+                    HookContext.from_locatable(event=HookEvent.STOP, locatable=task, turn=self.run)
+                )
+
         except Exception as exc:
             self._settle_failure(exc)
         finally:
             # 兜底回收「点名了已结束的工具调用」这类不会再被消费的工具级信号。
-            tool_call_cancellation_registry.clear_run(self._run_id)
-            if not cancelled:
-                self._on_finished()
-
-    async def _execute(self) -> None:
-        """正常路径：读事实 → 初始投递 → 驱动 workflow → 落定后触发 STOP Hook。"""
-
-        run = await asyncio.to_thread(self._ledger.get_run, self._run_id)
-        self._task_id = run.task_id
-        await self._initial_delivery()
-        task = get_task_service().get_task(run.task_id)
-        workspace = get_workspace_service().get_workspace(task.workspace_id)
-        # 无内置实现；Hook 判定 deny 也不阻断已开始的 Run。
-        await HookInterceptor.async_safe_fire(
-            HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, turn=run, locatable=None)
-        )
-        from app.core.workflow.workflow import ReactLikeWorkflow
-
-        await ReactLikeWorkflow().run(self._runtime_context(run, task, workspace))
-        if await self._has_settled():
-            await HookInterceptor.async_safe_fire(
-                HookContext.from_locatable(event=HookEvent.STOP, locatable=task, turn=run)
-            )
-
-    def _runtime_context(
-        self,
-        run: ConversationRunRecord,
-        task: TaskRecord,
-        workspace: WorkspaceRecord,
-    ) -> RuntimeContext:
-        """装配本次 Run 的运行上下文；事件回调由这里注入，core 因此不依赖 Assistant Transport。"""
-
-        return RuntimeContext.for_run(
-            run,
-            task,
-            workspace,
-            AgentRuntimeConfig.for_run(run, task, workspace),
-            self._mailbox,
-            event_sink=get_conversation_event_projector().process,
-        )
+            tool_call_cancellation_registry.clear_run(self.run.id)
+            cancellation_registry.consume(self.run.task_id)
 
     async def _has_settled(self) -> bool:
         """workflow 返回后重读状态：只有收束到终态或挂起才触发 STOP Hook。"""
