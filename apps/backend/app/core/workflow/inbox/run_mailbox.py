@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import threading
+from typing import Deque
 
-from app.models.task_message import TaskMessage
+from app.core.workflow.inbox.task_message import TaskMessage
 
 
 class RunMailbox:
@@ -20,23 +21,25 @@ class RunMailbox:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._pending: list[TaskMessage] = []
-        self._seen: set[int] = set()
+        self._queue: Deque[TaskMessage] = Deque()
 
     def post(self, message: TaskMessage) -> None:
         with self._lock:
-            if message.id is not None:
-                if message.id in self._seen:
-                    return
-                self._seen.add(message.id)
-            self._pending.append(message)
+            self._queue.appendleft(message)
 
     def has_external(self) -> bool:
         """是否有来自外部队列、尚未取出的消息（``id`` 非空）；Run 内通知不算，不能唤醒挂起。"""
         with self._lock:
-            return any(message.id is not None for message in self._pending)
+            return any(message.id is not None for message in self._queue)
 
-    def drain(self) -> list[TaskMessage]:
+    def pop(self) -> TaskMessage:
         with self._lock:
-            pending, self._pending = self._pending, []
-            return pending
+            return self._queue.pop()
+
+    def push(self, message: TaskMessage):
+        with self._lock:
+            self._queue.append(message)
+
+    def isEmpty(self) -> bool:
+        with self._lock:
+            return len(self._queue) == 0

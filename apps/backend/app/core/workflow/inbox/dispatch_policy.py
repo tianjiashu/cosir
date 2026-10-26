@@ -10,10 +10,7 @@ from dataclasses import dataclass
 
 from app.models import ConversationRunRecord
 from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES, ConversationRunStatus
-from app.models.task_message import (
-    AgentResultBody,
-    BackgroundResultBody,
-    MessageBody,
+from app.core.workflow.inbox.task_message import (
     RunLaunch,
     TaskMessage,
     UserInputBody,
@@ -86,23 +83,6 @@ def next_action(
         inherited = _launch_of(latest)
         return StartRun(inherited) if inherited is not None else Stay()
     return Stay()
-
-
-def admit(body: MessageBody, latest: ConversationRunRecord | None) -> bool:
-    """系统消息能否入队：用户取消后，被停止的下游（子 Agent、后台任务）结果不再回投父 Task。"""
-    return not (
-        isinstance(body, AgentResultBody | BackgroundResultBody)
-        and latest is not None
-        and latest.status == ConversationRunStatus.CANCELLED
-    )
-
-
-def initial_messages(pending: list[TaskMessage], *, fresh_run: bool) -> list[TaskMessage]:
-    """执行开始时投递的消息：新 Run 接收全部剩余消息；续跑 / 唤醒只接收 ``immediate``。"""
-    if fresh_run:
-        return pending
-    return [message for message in pending if message.delivery == "immediate"]
-
 
 def _launch_of(run: ConversationRunRecord | None) -> RunLaunch | None:
     """沿用一个 Run 的发起配置；模型配置已被删除时无法继承。"""
