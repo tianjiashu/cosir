@@ -3,8 +3,8 @@
 所有消息进模型时都是 user 角色，来源由 ``TaskMessage.kind`` 表达（由 body 类型决定，持久化时按
 它还原 body），后端规则只读 ``kind``、不解析正文。何时并入只看 ``delivery``，是否投影只看
 ``project_to_transport``，投递方不做额外判断；两者的默认值由 body 类型决定，生产者可覆盖。能否
-唤醒也是类型规则（``WAKES_SUSPENDED`` / ``WAKES_COMPLETED``），由 ``dispatch_policy`` 读取。实体只负责「如何变成 context 消息」，投递时机归
-``TaskActors``，写入归 ``prepare_input``。
+推进（开新 Run、唤醒挂起的 Run）也是类型规则（``WAKES``），由 ``dispatch_policy`` 读取。实体只负责
+「如何变成 context 消息」，投递时机归 Task 的 ``TaskActor``，写入归 ``prepare_input``。
 
 非用户输入的正文由后端加标签包装；外部来源文本（用户反馈、子 Agent / 后台任务输出）里出现的同名
 标签先转义，防止伪造边界。
@@ -51,9 +51,7 @@ class UserInputBody(UserInputPresentation):
     model_config = ConfigDict(extra="forbid")
     KIND: ClassVar[TaskMessageKind] = "user_input"
     DEFAULT_PROJECTED: ClassVar[bool] = True
-    WAKES_SUSPENDED: ClassVar[bool] = True
-    # 已完成 Task 收到用户输入时按其自身配置交接新 Run（见 dispatch_policy），不靠继承唤醒。
-    WAKES_COMPLETED: ClassVar[bool] = False
+    WAKES: ClassVar[bool] = True
     input_text: str
     launch: RunLaunch
 
@@ -104,8 +102,8 @@ class NoticeBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     KIND: ClassVar[TaskMessageKind] = "system_notice"
     DEFAULT_PROJECTED: ClassVar[bool] = False
-    WAKES_SUSPENDED: ClassVar[bool] = False
-    WAKES_COMPLETED: ClassVar[bool] = False
+    # 例外：通知只提醒、不值得单独跑一轮模型，留在队列里随下一次推进一起写入。
+    WAKES: ClassVar[bool] = False
     content: str
     notice_kind: str
     metadata: dict[str, str | None] = Field(default_factory=dict)
@@ -125,8 +123,7 @@ class DecisionBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     KIND: ClassVar[TaskMessageKind] = "user_decision"
     DEFAULT_PROJECTED: ClassVar[bool] = False
-    WAKES_SUSPENDED: ClassVar[bool] = True
-    WAKES_COMPLETED: ClassVar[bool] = True
+    WAKES: ClassVar[bool] = True
     tool_call_id: str
     tool_name: str
     decision: Literal["approve", "reject"]
@@ -161,8 +158,7 @@ class BackgroundResultBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     KIND: ClassVar[TaskMessageKind] = "background_result"
     DEFAULT_PROJECTED: ClassVar[bool] = False
-    WAKES_SUSPENDED: ClassVar[bool] = True
-    WAKES_COMPLETED: ClassVar[bool] = True
+    WAKES: ClassVar[bool] = True
     tool_name: str
     tool_result: str
 

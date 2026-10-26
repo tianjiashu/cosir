@@ -1,4 +1,4 @@
-"""一次执行的内部消息队列：外部队列投递来的消息与 Run 内通知，在下一次模型请求前取光。"""
+"""Task 级的内部消息队列：外部队列投递来的消息与 Run 内通知，在下一次模型请求前取光。"""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from app.core.workflow.inbox.task_message import TaskMessage
 
 
 class RunMailbox:
-    """投递通道，不是事实源：随执行创建、随执行丢弃，不跨执行、不跨重启。
+    """投递通道，不是事实源：由 Task 的 actor 持有，每次开始执行时 :meth:`reset`，不跨重启。
 
-    持久化消息的事实仍在外部队列，``prepare_input`` 并入时才确认删除；执行结束、取消或进程退出
-    丢掉本对象时，未确认的消息留在外部队列，由交接或下次投递重新送达。Run 内产生的通知（``id`` 为
-    ``None``）只存在这里，随执行丢弃是有意的。
+    持久化消息的事实仍在外部队列，``prepare_input`` 并入时才确认删除；执行结束、取消或进程退出时
+    未确认的消息留在外部队列，下次执行开始时重新投递。每次执行开始都清空：上一个 Run 没取完的
+    Run 内通知（``id`` 为 ``None``）随之丢弃是有意的，下一个 Run 会重新产生自己的通知。
 
     派发方在事件循环线程投递，``prepare_input`` 在工作线程取出，因此用锁保护；取出不阻塞。同一行
     在一次执行内只收一次：派发方每次都按外部队列全量投递，去重放在这里。
@@ -22,9 +22,21 @@ class RunMailbox:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._queue: Deque[TaskMessage] = Deque()
+        # 本次执行已收过的外部队列行 id；Run 内通知没有 id，不去重。
+        self._seen: set[int] = set()
+
+    def reset(self) -> None:
+        """开始一次新执行：丢弃残留消息与去重记录。"""
+        with self._lock:
+            self._queue.clear()
+            self._seen.clear()
 
     def post(self, message: TaskMessage) -> None:
         with self._lock:
+            if message.id is not None:
+                if message.id in self._seen:
+                    return
+                self._seen.add(message.id)
             self._queue.appendleft(message)
 
     def has_external(self) -> bool:
