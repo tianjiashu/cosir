@@ -25,7 +25,7 @@ from app.core.workflow.node_helper.common import (
 )
 from app.core.workflow.node_helper.finalize_max_steps import _finalize_max_steps
 from app.models.enums.conversation_run_status import RunTransition
-from app.models.task_message import (
+from app.core.workflow.inbox.task_message import (
     NoticeBody,
     TaskMessage,
     UserInputBody,
