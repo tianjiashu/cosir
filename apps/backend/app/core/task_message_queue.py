@@ -1,14 +1,12 @@
 """Task 外部消息队列：持久化、按入队顺序先进先出，是待并入消息的唯一事实源。
 
 只负责入队、按序读取、原地更新与确认删除，不承载投递策略、输入解析或交接规则——投递时机由
-消息自身的 ``delivery`` 决定，由 ``WorkflowSession`` 执行。投递不删行；``prepare_input`` 写
+消息自身的 ``delivery`` 决定，由 ``TaskActors`` 执行。投递不删行；``prepare_input`` 写
 context 时在同一事务内 :meth:`TaskMessageQueue.ack` 删除，执行结束、取消或进程重启时 mailbox 随之
 丢弃，未确认的行仍在这里，交接或下次投递时重新送达。
 """
 
 from __future__ import annotations
-
-from collections.abc import Iterable
 
 from sqlalchemy.orm import Session
 
@@ -42,21 +40,6 @@ class TaskMessageQueue:
             },
         )
         return message_id
-
-    def put_to_tasks(self, task_ids: Iterable[int], message: TaskMessage) -> None:
-        """同一条消息写入多个 Task（配置广播），一个事务。"""
-        ids = list(task_ids)
-        if not ids:
-            return
-        with main_session_factory().begin() as session:
-            self._messages.append(session, [(task_id, message) for task_id in ids])
-        log.info(
-            "task_message_broadcast_enqueued",
-            extra={
-                "msg": "广播消息已持久化，等待投递",
-                "data": {"task_ids": ids, "kind": message.body.kind},
-            },
-        )
 
     def pending(self, task_id: int) -> list[TaskMessage]:
         with main_session_factory()() as session:

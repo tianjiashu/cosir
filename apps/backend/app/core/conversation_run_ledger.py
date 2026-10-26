@@ -30,7 +30,7 @@ from app.models.enums.conversation_run_status import RunTransition
 from app.models.react_execution_state import ReactExecutionState
 from app.models.task_message import RunLaunch
 from app.service import depends as service_depends
-from app.service.depends import get_model_config_service, get_conversation_event_projector
+from app.service.depends import get_conversation_event_projector, get_model_config_service
 from app.storage.store_engines import main_session_factory
 
 
@@ -68,7 +68,7 @@ class ConversationRunLedger:
                 session=session,
             )
             self._task.set_current_run_id(task_id, run.id, session=session)
-        service_depends.get_conversation_event_projector().process(
+        get_conversation_event_projector().process(
             RunInitializedEvent(
                 task_id=task_id,
                 run_id=run.id,
