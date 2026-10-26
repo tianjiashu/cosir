@@ -20,9 +20,8 @@ from openai.types.chat import ChatCompletionContentPartParam, ChatCompletionUser
 from openai.types.chat.chat_completion_content_part_image_param import ImageURL
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.conversation_input import ConversationInput, UserInputPresentation
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions
-from app.models.enums.react_route import ReactRoute
 from app.models.message_metadata import UserMessageMetadata
 from app.utils.host_platform import host_platform_name
 
@@ -50,6 +49,7 @@ class UserInputBody(UserInputPresentation):
 
     model_config = ConfigDict(extra="forbid")
     KIND: ClassVar[TaskMessageKind] = "user_input"
+    PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = True
     WAKES: ClassVar[bool] = True
     input_text: str
@@ -102,6 +102,8 @@ class NoticeBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     KIND: ClassVar[TaskMessageKind] = "system_notice"
     DEFAULT_PROJECTED: ClassVar[bool] = False
+    # 通知先于其余消息写入：模型先看到环境变化，再看用户说的话。
+    PRIORITY: ClassVar[int] = 0
     # 例外：通知只提醒、不值得单独跑一轮模型，留在队列里随下一次推进一起写入。
     WAKES: ClassVar[bool] = False
     content: str
@@ -122,6 +124,7 @@ class DecisionBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     KIND: ClassVar[TaskMessageKind] = "user_decision"
+    PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = False
     WAKES: ClassVar[bool] = True
     tool_call_id: str
@@ -157,6 +160,7 @@ class BackgroundResultBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     KIND: ClassVar[TaskMessageKind] = "background_result"
+    PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = False
     WAKES: ClassVar[bool] = True
     tool_name: str

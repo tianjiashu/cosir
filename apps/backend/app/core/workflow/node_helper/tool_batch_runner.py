@@ -9,9 +9,9 @@
 线程池，而不是默认执行器：长工具不会占满 ``asyncio.to_thread`` 共用的线程，拖慢数据库读取。
 两条路径都复制当前 contextvars 提交，工具线程因此继承父 Run 的日志上下文与运行作用域。
 
-需要用户决定的工具（``requires_user_decision``）只能单独调用：与其他调用混在一批时整批在执行前
-报错，任何调用都不执行，由模型拆开重发——否则批准一个、同批其余已执行或仍在等待的状态无法收敛。
-用户批准后的再次执行也走这里，决定经 ``decision`` 交给 handler。
+需要用户决定的工具（``ToolDefinition.user_decision`` 非 ``None``）只能单独调用：与其他调用混在
+一批时整批在执行前报错，任何调用都不执行，由模型拆开重发——否则批准一个、同批其余已执行或仍在
+等待的状态无法收敛。用户批准后的再次执行也走这里，决定经 ``decision`` 交给 handler。
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ def _is_parallel(call: ToolCall) -> bool:
 
 def _requires_user_decision(call: ToolCall) -> bool:
     definition = get_tool_registry().get_tool_definition(call.tool_name)
-    return definition is not None and definition.requires_user_decision
+    return definition is not None and definition.user_decision is not None
 
 
 def _reject_mixed_decision_batch(
