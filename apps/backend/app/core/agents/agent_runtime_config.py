@@ -1,14 +1,24 @@
-"""Agent 运行时配置：一次 Run 实际执行所用的 Agent，是 Agent 定义与本次模型选择的最终解析。"""
+"""Agent 运行时配置：一次 Run 实际执行所用的 Agent，是 Agent 定义与本次模型选择的最终解析。
+
+两个构造入口分工明确：:meth:`AgentRuntimeConfig.for_run` 从 Run / Task / 工作区的持久化事实推导
+定义与模型选择（唯一装配方），:meth:`AgentRuntimeConfig.resolve` 只接受已解析好的定义与模型配置。
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.config.configuration import get_agent_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
+from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
+from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
+from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.models.conversation_run_options import ReasoningEffort
 from app.models.model_config_record import ModelConfigRecord
+from app.service.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY, build_node_profile
+from app.service.depends import get_model_config_service
 
 
 @dataclass(frozen=True)
@@ -28,6 +38,49 @@ class AgentRuntimeConfig:
     max_steps: int
     structured_output: StructuredOutputSpec | None
     model: ResolvedModel
+
+    @classmethod
+    def for_run(
+        cls,
+        run: ConversationRunRecord,
+        task: TaskRecord,
+        workspace: WorkspaceRecord,
+    ) -> AgentRuntimeConfig:
+        """合成本次 Run 独占的配置；注册表单例与 Team 冻结定义都不被修改。
+
+        定义只由持久化事实推导：按 Run 的 Agent 身份从注册表解析（主 Agent 用系统作用域，其余用
+        Run 所属工作区）；Team 节点 Task 再叠加其 ``extra`` 里冻结的节点快照。连接与能力字段只由
+        本 Run 的 ``model_config_id`` 物化——``api_key`` 不落盘。
+
+        异常:
+            RuntimeError: 注册表解析不到该 Agent，或 Run 未记录模型配置。
+            KeyError: ``model_config_id`` 指向的配置已不存在。
+            ModelSettingsError: 模型配置不完整。
+        """
+
+        agent_id = run.agent_id or "main_agent"
+        workspace_scope = (
+            AgentProfileRegistry.SYSTEM_WORKSPACE
+            if agent_id == "main_agent"
+            else workspace.root_path
+        )
+        definition = get_agent_registry().resolve(workspace_scope, agent_id)
+        if definition is None:
+            raise RuntimeError(f"agent profile unavailable for run {run.id}")
+        node_snapshot = (task.extra or {}).get(NODE_PROFILE_SNAPSHOT_KEY)
+        if node_snapshot is not None:
+            definition = build_node_profile(
+                definition, AgentTeamRunRuntime.model_validate(node_snapshot)
+            )
+        # Run 行来自持久化边界：建 Run 的唯一路径总会写入模型配置，缺失只可能是脏数据。
+        if run.model_config_id is None:
+            raise RuntimeError(f"run {run.id} has no model config")
+        model_config = get_model_config_service().get_config(run.model_config_id)
+        return cls.resolve(
+            definition,
+            model_config,
+            reasoning_effort=run.options.reasoning_effort,
+        )
 
     @classmethod
     def resolve(

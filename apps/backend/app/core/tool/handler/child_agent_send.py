@@ -1,5 +1,4 @@
 """child_agent_send 工具：给已有子任务追加输入并启动新的 Run。"""
-import asyncio
 import json
 from typing import ClassVar
 
@@ -20,11 +19,12 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
 from app.models import ConversationRunCommand
 from app.models.conversation_run_options import ConversationRunOptions
-from app.models.task_message import RunLaunch
+from app.core.workflow.inbox.task_message import RunLaunch, TaskMessage
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.core.workflow.inbox.dispatch_policy import matches_run
 from app.service.depends import (
-    get_conversation_run_service,
-    get_task_actors,
+    get_conversation_run_ledger,
+    get_user_input_service,
     get_task_service,
     get_workspace_service,
 )
@@ -33,7 +33,7 @@ from app.service.depends import (
 class ChildAgentSendTool(HandlerBase):
     """给已有子任务追加一条输入：子 Agent 仍在运行时并入它的当前 Run，否则为它新开后台 Run。
 
-    职责边界：本类只解析 child 运行参数，消息经 ``TaskActors.submit`` 投递（与用户发送同一
+    职责边界：本类只解析 child 运行参数，消息经 ``task_runtime_spaces.enqueue`` 投递（与用户发送同一
     入队语义，由子 Task 的 actor 串行判定活动 Run，不会并发执行）。子 Agent 的运行终态由它自己的
     workflow 落定。
     """
@@ -55,7 +55,7 @@ class ChildAgentSendTool(HandlerBase):
 
         self._task_service = get_task_service()
         self._workspace_service = get_workspace_service()
-        self._run_service = get_conversation_run_service()
+        self._ledger = get_conversation_run_ledger()
 
     def execute(
         self,
@@ -109,7 +109,7 @@ class ChildAgentSendTool(HandlerBase):
                 retryable=True,
             )
 
-        current_run = self._run_service.get_run(child_task.current_run_id)
+        current_run = self._ledger.get_run(child_task.current_run_id)
 
         try:
             workspace = self._workspace_service.get_workspace(child_task.workspace_id)
@@ -170,18 +170,21 @@ class ChildAgentSendTool(HandlerBase):
             )
             # 与用户发送同一语义：子 Run 仍活动时消息并入它，已终态时新开 Run，不会并发执行。
             # 子 Agent 配置在子 Run 运行期间变了时，消息只能交给下一个 Run（运行期配置锁定）。
-            # 只等解析与投递，不等子 actor 处理；结论经 agent_result 回投父 Task。
-            asyncio.run_coroutine_threadsafe(
-                get_task_actors().submit(
-                    child_task_id,
-                    ConversationRunCommand(display_text=message),
-                    agent_id=launch.agent_id,
-                    model_config_id=launch.model_config_id,
-                    reasoning_effort=reasoning_effort,
+            # 只入队，由子 Task 的 actor 推进（新开 Run 或并入），不等子 Run 结束。
+            body = get_user_input_service().prepare(
+                child_task_id,
+                ConversationRunCommand(display_text=message),
+                launch.model_config_id,
+                reasoning_effort,
+                launch.agent_id,
+            )
+            task_runtime_spaces.enqueue(
+                child_task_id,
+                TaskMessage.of(
+                    body,
                     delivery="immediate" if matches_run(launch, current_run) else "next_run",
                 ),
-                loop,
-            ).result()
+            )
         except Exception as exc:
             log.exception(
                 "child_agent_send_failed",

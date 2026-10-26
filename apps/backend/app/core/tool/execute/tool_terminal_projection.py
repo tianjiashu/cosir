@@ -168,7 +168,8 @@ def terminal_event(
     一直停在 ``running``。
     """
 
-    status = terminal_status(observation.status)
+    # HITL 等待占位不是终态：用户决定后执行完成，才把展示状态推到终态。
+    status = "pending" if observation.awaiting_decision else terminal_status(observation.status)
     return ToolCallStatusChangedEvent(
         task_id=task_id,
         run_id=run_id,

@@ -73,7 +73,7 @@ class ToolHandlerRunner:
         参数:
             arguments: 已通过准入门禁与参数校验的关键字参数字典。
             execution_context: 本次调用的完整执行边界；``tool_call_id`` 用于回写观察结果，并与
-                ``task_id`` / ``run_id`` 一起界定取消检查的范围。
+                ``task_id`` 一起界定取消检查的范围。
 
         副作用:
             无论结果如何，退出前释放本次调用的工具级取消信号。
@@ -85,7 +85,7 @@ class ToolHandlerRunner:
             return self._execute_in_thread(tool, arguments, execution_context)
         finally:
             tool_call_cancellation_registry.clear(
-                execution_context.run_id, execution_context.tool_call_id
+                execution_context.task_id, execution_context.tool_call_id
             )
 
     # ------------------------------------------------------------------
@@ -393,14 +393,14 @@ class ToolHandlerRunner:
     def _cancel_sources(execution_context: ToolExecutionContext) -> tuple[bool, bool]:
         """返回 ``(Task 级已取消, 本调用已取消)``；每次调用都重新读两个注册表。
 
-        Task 级信号（按 ``task_id``）停止整个 Task 的当前执行；工具级信号（按 ``run_id`` +
+        Task 级信号（按 ``task_id``）停止整个 Task 的当前执行；工具级信号（按 ``task_id`` +
         ``tool_call_id``）只中止本次调用。必须现读而不是在执行开始时取一次快照：快照会让工具
         启动之后到达的取消永远查不到。
         """
         return (
             cancellation_registry.is_cancelled(execution_context.task_id),
             tool_call_cancellation_registry.is_cancelled(
-                execution_context.run_id, execution_context.tool_call_id
+                execution_context.task_id, execution_context.tool_call_id
             ),
         )
 

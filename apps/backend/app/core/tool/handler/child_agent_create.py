@@ -1,13 +1,12 @@
 """delegate_task 工具 handler：把一次委派请求落地为 child Task/Run 并启动 child workflow。
 
-职责：解析 child Agent profile、建立 child Task，经 ``TaskActors.submit`` 投递首条输入（由
+职责：解析 child Agent profile、建立 child Task，经 ``task_runtime_spaces.enqueue`` 投递首条输入（由
 child Task 的调度 actor 新开并启动 child Run），返回「已提交」观察（携带 child locator）。
 
 不负责：child workflow 的实际运行与完成观测（结论由调度层以消息回投，父侧用 ``wait_messages``
 挂起等待，或 ``child_agent_status`` 查询）；参数校验与准入门禁（``ToolAccessGate``）；委派展示数据构造
 （``build_delegation_display_data``）。
 """
-import asyncio
 import copy
 import json
 from typing import ClassVar
@@ -33,10 +32,12 @@ from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.inbox.task_message import TaskMessage
 from app.models import ConversationRunCommand
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.service.depends import (
-    get_conversation_run_service,
-    get_task_actors,
+    get_conversation_run_ledger,
+    get_user_input_service,
     get_task_service,
 )
 
@@ -84,7 +85,7 @@ class DelegateTaskTool(HandlerBase):
         """
 
         self._task_service = get_task_service()
-        self._run_service = get_conversation_run_service()
+        self._ledger = get_conversation_run_ledger()
 
     def execute(
             self,
@@ -169,7 +170,7 @@ class DelegateTaskTool(HandlerBase):
         try:
             from app.config.configuration import get_tool_registry
 
-            parent_run = self._run_service.get_run(execution_context.run_id)
+            parent_run = self._ledger.get_run(execution_context.run_id)
             child_task_tools = child_agent_profile.select_tools(
                 get_tool_registry().get_all_definitions()
             )
@@ -196,17 +197,15 @@ class DelegateTaskTool(HandlerBase):
                                 else None)
             child_agent_model_config_id = child_agent_profile.model_config_id
             model_config_id = child_agent_model_config_id or parent_run.model_config_id
-            # 只等解析与投递，不等子 actor 处理；结论经 agent_result 回投父 Task。
-            asyncio.run_coroutine_threadsafe(
-                get_task_actors().submit(
-                    child_task.id,
-                    ConversationRunCommand(display_text=message),
-                    agent_id=child_agent_id,
-                    model_config_id=model_config_id,
-                    reasoning_effort=reasoning_effort,
-                ),
-                loop,
-            ).result()
+            # 只入队，由子 Task 的 actor 新开 Run，不等子 Run 结束。
+            body = get_user_input_service().prepare(
+                child_task.id,
+                ConversationRunCommand(display_text=message),
+                model_config_id,
+                reasoning_effort,
+                child_agent_id,
+            )
+            task_runtime_spaces.enqueue(child_task.id, TaskMessage.of(body))
 
         except Exception as e:
             log.exception(

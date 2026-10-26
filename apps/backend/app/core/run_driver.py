@@ -1,6 +1,6 @@
 """驱动一次 Conversation Run：对话场景的装配方，也是 Run 失败的唯一异常边界。
 
-``TaskActors`` 决定「什么时候跑」，:class:`RunDriver` 负责「怎么跑一次」：读取 Run、Task 与工作区，
+Task 的 ``TaskActor`` 决定「什么时候跑」，:class:`RunDriver` 负责「怎么跑一次」：读取 Run、Task 与工作区，
 合成本次 Run 的 Agent 运行时配置，把 Run / Task 级事实（Task 运行空间，以及 Transport projector
 的事件回调）装进 ``RuntimeContext``，再交给 core 的 ``ReactLikeWorkflow``。进程级单例（Run 状态
 写入、外部消息队列、工具系统）由 workflow 节点直接取用，不经这里转手；事件回调必须由这里注入，
@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -27,9 +26,10 @@ from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_c
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
-from app.models import ConversationRunRecord, ConversationRunStatus, TaskRecord, WorkspaceRecord
+from app.models import ConversationRunRecord, ConversationRunStatus
 from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.conversation_run_status import RunTransition
+from app.core.workflow.inbox.task_message import TaskMessage
 from app.service.depends import (
     get_conversation_event_projector,
     get_conversation_run_ledger,
@@ -54,21 +54,19 @@ class RunDriver:
     失败落定与结束通知复用同一份实例状态。
     """
 
-    def __init__(
-            self,
-            run: ConversationRunRecord,
-            mailbox: RunMailbox,
-    ) -> None:
+    def __init__(self, mailbox: RunMailbox) -> None:
         """``mailbox`` 由调度方随执行创建并持续投递外部队列消息；``initial_delivery`` 是调度方的首次
         投递（等启动它的那一轮释放 Task 闸门才投递），必须在本驱动的失败边界内执行：它在边界外失败时
         Run 会停在 running 而没有执行者；``on_finished`` 是结束通知，调度方据此释放执行登记。"""
-        self.run = run
         self._mailbox = mailbox
         self._ledger = get_conversation_run_ledger()
         self._task_service = get_task_service()
         self._workspace_service = get_workspace_service()
 
-    async def drive(self) -> None:
+    def post(self, message: TaskMessage):
+        self._mailbox.post(message)
+
+    async def drive(self, run: ConversationRunRecord) -> None:
         """驱动一次 Run：失败在此落定，结束时通知调度方。
 
         初始投递 → 装配 Agent 运行时配置与运行上下文 → 驱动 workflow；正常终态由 workflow 节点落定。
@@ -85,42 +83,42 @@ class RunDriver:
         """
 
         try:
-            task = self._task_service.get_task(self.run.task_id)
+            task = self._task_service.get_task(run.task_id)
             workspace = self._workspace_service.get_workspace(task.workspace_id)
             # 无内置实现；Hook 判定 deny 也不阻断已开始的 Run。
             await HookInterceptor.async_safe_fire(
-                HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, turn=self.run, locatable=None)
+                HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, turn=run, locatable=None)
             )
             from app.core.workflow.workflow import ReactLikeWorkflow
 
             rc = RuntimeContext.for_run(
-                self.run,
+                run,
                 task,
                 workspace,
-                AgentRuntimeConfig.for_run(self.run, task, workspace),
+                AgentRuntimeConfig.for_run(run, task, workspace),
                 self._mailbox,
                 event_sink=get_conversation_event_projector().process
             )
             await ReactLikeWorkflow().run(rc)
-            if await self._has_settled():
+            if await self._has_settled(run):
                 await HookInterceptor.async_safe_fire(
-                    HookContext.from_locatable(event=HookEvent.STOP, locatable=task, turn=self.run)
+                    HookContext.from_locatable(event=HookEvent.STOP, locatable=task, turn=run)
                 )
 
         except Exception as exc:
-            self._settle_failure(exc)
+            self._settle_failure(run, exc)
         finally:
             # 兜底回收「点名了已结束的工具调用」这类不会再被消费的工具级信号。
-            tool_call_cancellation_registry.clear_run(self.run.id)
-            cancellation_registry.consume(self.run.task_id)
+            tool_call_cancellation_registry.clear_task(run.task_id)
+            cancellation_registry.consume(run.task_id)
 
-    async def _has_settled(self) -> bool:
+    async def _has_settled(self, run: ConversationRunRecord) -> bool:
         """workflow 返回后重读状态：只有收束到终态或挂起才触发 STOP Hook。"""
 
-        current = await asyncio.to_thread(self._ledger.get_run, self._run_id)
+        current = await asyncio.to_thread(self._ledger.get_run, run.id)
         return current.status in _STOP_HOOK_STATUSES
 
-    def _settle_failure(self, exc: Exception) -> None:
+    def _settle_failure(self, run: ConversationRunRecord, exc: Exception) -> None:
         """把异常归类成失败 code 并落定 failed，再收束本 Run 仍未闭合的工具调用。
 
         落定自身失败（如数据库不可用）时先记录再上浮：后台 task 无人 await，只有这条结构化日志能
@@ -130,7 +128,7 @@ class RunDriver:
         failure_code = _failure_code_for(exc)
         try:
             failed = self._ledger.transition(
-                self._run_id,
+                run.id,
                 RunTransition.FAIL,
                 end_reason=failure_code,
                 final_output=run_failure_message(failure_code),
@@ -142,8 +140,8 @@ class RunDriver:
                 extra={
                     "msg": f"Run 落定 failed 自身失败，失败 code: {failure_code}",
                     "data": {
-                        "task_id": self._task_id,
-                        "run_id": self._run_id,
+                        "task_id": run.task_id,
+                        "run_id": run.id,
                         "failure_code": failure_code,
                     },
                 },
@@ -155,8 +153,8 @@ class RunDriver:
             extra={
                 "msg": f"run 执行失败，失败 code: {failure_code}，错误类型: {type(exc).__name__}",
                 "data": {
-                    "task_id": self._task_id,
-                    "run_id": self._run_id,
+                    "task_id": run.task_id,
+                    "run_id": run.id,
                     "failure_code": failure_code,
                     "error_type": type(exc).__name__,
                 },
@@ -169,7 +167,7 @@ class RunDriver:
         get_conversation_event_projector().process(
             ToolCallsSettledEvent(
                 task_id=failed.task_id,
-                run_id=self._run_id,
+                run_id=run.id,
                 status="cancelled",
                 reason="runtime_failed",
             )

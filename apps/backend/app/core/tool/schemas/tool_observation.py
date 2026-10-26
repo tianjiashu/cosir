@@ -51,6 +51,9 @@ class ToolObservation:
             ``suspended``、不再请求模型，由可唤醒消息继续同一个 Run（取消优先；已有外部可唤醒
             消息时直接继续）。它是工作流控制流事实，不进模型上下文、不随 ``display_data`` 下发。
         artifact_data: 工具执行产出的内部产物数据；不进入事件、快照或模型上下文。
+        awaiting_decision: 本观察是 HITL 工具的等待占位（见 :func:`tool_awaiting_decision`）：模型
+            协议上它就是这次调用的最终结果，用户决定后的执行结果另行追加为消息、不覆盖它；投影为
+            非终态 ``pending``，执行完成后只更新展示状态。
     """
 
     tool_name: str
@@ -61,3 +64,4 @@ class ToolObservation:
     team_run_id: int | None = None
     suspend: bool = False
     artifact_data: dict[str, Any] | None = field(default_factory=dict)
+    awaiting_decision: bool = False

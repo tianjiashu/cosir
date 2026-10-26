@@ -63,8 +63,8 @@ class WaitMessagesTool(HandlerBase):
         pending = [
             f"child_task:{child.id}"
             for child in tasks.list_child_tasks(task_id)
-            if (latest := tasks.get_latest_run(child.id)) is not None
-            and latest.status in ACTIVE_RUN_STATUSES
+            if (latest := tasks.require_current_run(child.id)) is not None
+               and latest.status in ACTIVE_RUN_STATUSES
         ]
         team_runs = AgentTeamRunCrud()
         pending.extend(

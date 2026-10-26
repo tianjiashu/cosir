@@ -254,7 +254,7 @@ class SystemPromptBuilder:
     def _build_mcp_catalog() -> str:
         """列出已启用且连接测试通过的 MCP 服务名；工具详情按需发现。"""
 
-        from app.service.mcp.mcp_client import (
+        from app.core.tool.handler.mcp.mcp_client import (
             MCPConfigurationError,
             enabled_servers,
             read_mcp_configuration,
@@ -283,8 +283,8 @@ class SystemPromptBuilder:
     def _build_skill_catalog() -> str:
         """列出启用 Skill 的名称与描述，正文由 Skill 工具按需加载。"""
 
-        from app.service.skills.skill_catalog import SkillCatalog
-        from app.service.skills.skill_configuration import SkillConfigurationError
+        from app.core.tool.handler.skill.skill_catalog import SkillCatalog
+        from app.core.tool.handler.skill.skill_configuration import SkillConfigurationError
 
         try:
             skills = [skill for skill in SkillCatalog().list_skills() if skill.enabled]

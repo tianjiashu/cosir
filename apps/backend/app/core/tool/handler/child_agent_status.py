@@ -16,7 +16,7 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.handler.child_agent.child_agent_status_args import ChildAgentStatusArgs
-from app.service.depends import get_conversation_run_service, get_task_service
+from app.service.depends import get_conversation_run_ledger, get_task_service
 
 
 class ChildAgentStatusTool(HandlerBase):
@@ -50,11 +50,11 @@ class ChildAgentStatusTool(HandlerBase):
             无（服务取得失败由 ``get_*`` 自身语义决定）。
 
         副作用:
-            从依赖装配取得 ``TaskService`` 与 ``ConversationRunService`` 单例引用。
+            从依赖装配取得 ``TaskService`` 与 ``ConversationRunLedger`` 单例引用。
         """
 
         self._task_service = get_task_service()
-        self._run_service = get_conversation_run_service()
+        self._ledger = get_conversation_run_ledger()
 
     def execute(
         self,
@@ -104,7 +104,7 @@ class ChildAgentStatusTool(HandlerBase):
                 retryable=True,
             )
         try:
-            run = self._run_service.get_run(child_task.current_run_id)
+            run = self._ledger.get_run(child_task.current_run_id)
         except KeyError:
             return tool_error(
                 self.name,

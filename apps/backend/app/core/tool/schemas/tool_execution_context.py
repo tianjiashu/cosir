@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.events import EventSink
+    from app.core.workflow.inbox.task_message import DecisionBody
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,9 @@ class ToolExecutionContext:
         event_sink: 本次 Run 的执行事件回调；进程工具的实时输出经它投递。
         tool_call_id: 单次调用身份，构造时取自该调用；每个调用各一份上下文，
             同批调用不共享。
+        user_decision: ``ToolDefinition.user_decision == "execute"`` 的工具被批准后再次执行时携带的
+            用户决定；首次调用为 ``None``。handler 只有一个入口，按它区分「登记待决」与「按决定
+            执行」。
     """
 
     task_id: int
@@ -41,6 +45,7 @@ class ToolExecutionContext:
     event_loop: asyncio.AbstractEventLoop | None = None
     event_sink: EventSink | None = None
     tool_call_id: str = ""
+    user_decision: DecisionBody | None = None
 
     def for_process_execution(self) -> ToolExecutionContext:
         """返回可安全传入隔离子进程的副本：清空父进程专属的 Run 级对象，保留调用身份。"""

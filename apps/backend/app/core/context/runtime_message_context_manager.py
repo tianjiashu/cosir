@@ -1,4 +1,7 @@
-"""Task context 的唯一运行时协调入口；SDK 负责模型聚合，本层负责持久化、序号与协议闭合。"""
+"""Task context 的唯一运行时协调入口；SDK 负责模型聚合，本层负责 working copy、序号与协议闭合。
+
+行级持久化（追加、原地替换、固定系统提示词）经 ``ContextStore``，本层不直接碰存储。
+"""
 
 from __future__ import annotations
 
@@ -8,6 +11,7 @@ from typing import Literal
 
 from openai.lib.streaming.chat import ParsedChatCompletionSnapshot
 from openai.types.chat import (
+    ChatCompletionMessageFunctionToolCallParam,
     ChatCompletionMessageParam,
 )
 from sqlalchemy.orm import Session
@@ -16,6 +20,10 @@ from app.config.logging.logger import log
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.context import SystemPromptBuilder
 from app.core.context.context_entry import ContextEntry
+from app.core.context.context_store import (
+    TASK_SYSTEM_PROMPT_SEQUENCE,
+    ContextStore,
+)
 from app.core.context.tool_call_closure import (
     ContextProtocolError,
     ToolCallClosurePlan,
@@ -37,10 +45,6 @@ from app.models.message_metadata import (
     ToolMessageMetadata,
     empty_message_metadata,
 )
-from app.service.conversation_run.conversation_task_context_service import (
-    TASK_SYSTEM_PROMPT_SEQUENCE,
-    ConversationTaskContextService,
-)
 
 
 @dataclass
@@ -55,7 +59,8 @@ class RuntimeMessageContextManager:
     current_task_id: int
     # 只用其身份与执行资源（角色、提示词、工具名）构建 Task 首个系统提示词，及供配置广播过滤。
     agent: AgentRuntimeConfig
-    context_service: ConversationTaskContextService
+    # 行级持久化边界：追加、原地替换、序号与 Task 固定系统提示词都经它读写。
+    context_store: ContextStore
     # 工作区记录：系统提示词取 ``root_path``，模型请求的附件解析取 ``id``。必填——缺工作区
     # 会生成一份没有工作区事实的系统提示词并被持久化成 Task 固定前缀，属于不可逆的静默降级。
     workspace: WorkspaceRecord
@@ -75,13 +80,13 @@ class RuntimeMessageContextManager:
         新 Task 使用当前配置构建并持久化完整 system prompt；已有 Task 始终恢复首次持久化的
         内容，因此配置变化不会改写历史 Task 的模型消息前缀。
         """
-        service = self.context_service
-        self._system_entry = service.get_system_prompt(self.current_task_id)
+        store = self.context_store
+        self._system_entry = store.get_system_prompt(self.current_task_id)
         if self._system_entry is None:
             system_prompt_text = SystemPromptBuilder.build(
                 self.agent, self.workspace.root_path
             )
-            self._system_entry = service.create_system_prompt(
+            self._system_entry = store.create_system_prompt(
                 self.current_task_id,
                 {"role": "system", "content": system_prompt_text},
             )
@@ -99,11 +104,11 @@ class RuntimeMessageContextManager:
         self.current_run_id = run.id
         # 草稿行属于上一个 Run 的调用栈，绑定新 Run 时不得沿用到本次调用。
         self._draft_response = None
-        entries = self.context_service.entries_in_context(self.current_task_id)
+        entries = self.context_store.entries_in_context(self.current_task_id)
         self._entries = [
             entry for entry in entries if entry.sequence != TASK_SYSTEM_PROMPT_SEQUENCE
         ]
-        self._message_sequence = self.context_service.max_sequence(self.current_task_id) + 1
+        self._message_sequence = self.context_store.max_sequence(self.current_task_id) + 1
 
     def _track(self, entry: ContextEntry, *, in_context: bool) -> None:
         """内存消息列表与序号的唯一推进入口；调用方保证该行已落库。
@@ -169,7 +174,7 @@ class RuntimeMessageContextManager:
             # 用 replace_message(...) 保留原来的 sequence
             # 和 run_id、更新消息内容与 Transport 元数据，库里始终只有一条结果，不会同一调用
             # 留两行。
-            self.context_service.replace_message(
+            self.context_store.replace_message(
                 ConversationTaskContextRecord(
                     task_id=self.current_task_id,
                     run_id=existing.run_id,
@@ -219,7 +224,7 @@ class RuntimeMessageContextManager:
         session: Session | None = None,
     ) -> ContextEntry:
         """调用方已验证结果归属；写库成功后才推进内存列表和序号。"""
-        entry = self.context_service.append(
+        entry = self.context_store.append(
             self.current_task_id,
             run_id,
             message,
@@ -232,6 +237,58 @@ class RuntimeMessageContextManager:
         )
         self._track(entry, in_context=include_in_context)
         return entry
+
+    def find_tool_call(self, tool_call_id: str) -> ChatCompletionMessageFunctionToolCallParam | None:
+        """在纳入上下文的 assistant 消息里按身份找回一次工具调用（含名称与原始参数）。
+
+        跨 Run 查找：HITL 调用可能在早先的 Run 里发起，决定在之后的 Run 才到。找不到（如已被
+        编辑重跑移出上下文）时返回 ``None``，由调用方决定如何告知模型。
+        """
+        for entry in reversed(self._entries):
+            if entry.message["role"] != "assistant":
+                continue
+            for call in entry.message.get("tool_calls") or ():
+                if call["id"] == tool_call_id and call["type"] == "function":
+                    return call
+        return None
+
+    def update_tool_result_metadata(
+        self, tool_call_id: str, metadata: ToolMessageMetadata
+    ) -> ToolMessageMetadata:
+        """只替换一条工具结果行的展示 metadata，模型可见正文不变；返回实际写入的 metadata。
+
+        HITL 执行结果另行追加为消息，等待占位仍是模型协议上的结果；这里只把占位的卡片状态推到
+        终态，历史前缀因此不变。卡片是否可见（``hidden``）沿用原行，不随结果改变。
+
+        异常:
+            KeyError: 上下文中没有该调用的结果行。
+        """
+        entry = next(
+            (
+                item
+                for item in reversed(self._entries)
+                if item.message["role"] == "tool" and item.message["tool_call_id"] == tool_call_id
+            ),
+            None,
+        )
+        if entry is None:
+            raise KeyError(tool_call_id)
+        if isinstance(entry.metadata, ToolMessageMetadata):
+            metadata = metadata.model_copy(update={"hidden": entry.metadata.hidden})
+        self.context_store.replace_message(
+            ConversationTaskContextRecord(
+                task_id=self.current_task_id,
+                run_id=entry.run_id,
+                message_id=entry.message_id,
+                message=entry.message,
+                include_in_context=True,
+                sequence=entry.sequence,
+                project_to_transport=True,
+                metadata=metadata,
+            )
+        )
+        entry.metadata = metadata
+        return metadata
 
     def save_model_response(
         self,
@@ -268,7 +325,7 @@ class RuntimeMessageContextManager:
             if not include_in_context:
                 self._draft_response = entry
             return entry
-        self.context_service.replace_message(
+        self.context_store.replace_message(
             ConversationTaskContextRecord(
                 task_id=self.current_task_id,
                 run_id=draft.run_id,
