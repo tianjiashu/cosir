@@ -35,7 +35,7 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallStatusChangedEvent,
 )
-from app.models.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.message_metadata import ToolMessageMetadata
 

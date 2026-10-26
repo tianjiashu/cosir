@@ -1,7 +1,7 @@
 """工具观察结算节点：写 canonical tool 消息并投影终态；挂起与清空批次归 prepare_input。"""
 
 from app.config.logging.logger import log
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.tool_observation_projection import (
     settle_decision_observation,

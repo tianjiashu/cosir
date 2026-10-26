@@ -11,7 +11,7 @@ from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
 )
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
-from app.models.tool_batch import ToolBatch
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.core.workflow.inbox.task_message import escape_tag
 

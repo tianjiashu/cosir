@@ -17,9 +17,9 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
-from app.models.tool_batch import ToolBatch
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper.common import (
     RunStopped,
     _message_context,

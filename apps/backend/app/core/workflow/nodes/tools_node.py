@@ -7,7 +7,7 @@ from typing import Any
 
 from app.config.logging.logger import log
 from app.core.tool.schemas import ToolCall, ToolObservation
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _runtime_context
 from app.core.workflow.inbox.task_message import DecisionBody

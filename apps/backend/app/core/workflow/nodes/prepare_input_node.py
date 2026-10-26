@@ -18,10 +18,10 @@ from typing import cast
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.events import UserInputConsumedEvent
-from app.models.tool_batch import ToolBatch
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.config.configuration import get_tool_registry
 from app.core.workflow.inbox.task_message import DecisionBody
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import (
     RunStopped,

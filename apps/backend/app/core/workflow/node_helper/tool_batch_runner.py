@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
-from app.models.tool_batch import ToolBatch
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.config.configuration import get_tool_executor, get_tool_registry
 from app.config.constant import Constant
 from app.config.logging.logger import log

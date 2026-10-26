@@ -13,7 +13,7 @@ from openai.types.shared_params import ResponseFormatJSONObject
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.openai_model import usage_from_response
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, route_state
 from app.service import depends as service_depends
