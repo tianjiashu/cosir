@@ -30,8 +30,6 @@ from app.core.workflow.inbox.task_message import (
     TaskMessage,
     UserInputBody,
     notices_to_context,
-    tagged_to_context,
-    user_input_to_context,
 )
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
@@ -66,76 +64,73 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     # 超配额时不再发起推理，落定 max_steps_reached 失败终态。
     if step_count > state.step_limit:
         return await _finalize_max_steps(step_count, state.step_limit)
-    messages = rc.mailbox.drain()
-    if messages:
-        consumed = await asyncio.to_thread(_write_messages, messages)
-        # 提交后才投影：消费事件按身份把排队消息搬进 Run。
-        for message in consumed:
-            emit(
-                UserInputConsumedEvent(
-                    task_id=rc.task.id, run_id=rc.run.id, message_id=cast(int, message.id)
-                )
-            )
+
+    index = 1
+    while not rc.mailbox.isEmpty():
+        message = rc.mailbox.pop()
+        if message.kind == "user_decision" and message.body.route_tool_node:
+            if index == 1:
+                return {**route_state(state.step_count, ReactRoute.TOOLS), "batch": ToolBatch()}
+            else:
+                rc.mailbox.push(message)
+                break
+        index += 1
+        await asyncio.to_thread(_write_message, message)
     # 本节点是批次的唯一清空点：挂起判定已读完，下一模型步不能再看到上一批观察。
     return {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch()}
 
 
-def _write_messages(messages: list[TaskMessage]) -> list[TaskMessage]:
+def _write_message(task_message: TaskMessage):
     """一个事务内确认持久化消息并写入 context，返回实际并入且需投影的用户输入；工作线程执行。
 
     先确认后写入：确认返回删除那一刻的行内容（排队期间的原地编辑以它为准），已被确认过的消息
     跳过。通知合成一条消息排在最前，其余消息（用户输入、决定、后台结果）按入队顺序各写一条，让
     它们成为模型最后看到的内容；落库后成为历史固定行，后续请求前缀不分叉。
     """
+    rc = _runtime_context()
     context = _message_context()
     with main_session_factory().begin() as session:
-        acked = service_depends.get_task_message_queue().ack(
-            session, [m.id for m in messages if m.id is not None]
-        )
-        live = [
-            m if m.id is None else acked[m.id]
-            for m in messages
-            if m.id is None or m.id in acked
-        ]
-        notices = [m for m in live if isinstance(m.body, NoticeBody)]
-        if notices:
-            message, metadata = notices_to_context([cast(NoticeBody, m.body) for m in notices])
+
+        if task_message.kind == "user_input":
+            service_depends.get_task_message_queue().ack(
+                session, [task_message.id]
+            )
+            message, metadata = task_message.body.render()
             context.add_message(
                 message,
                 metadata=metadata,
                 session=session,
-                project_to_transport=any(m.project_to_transport for m in notices),
+                project_to_transport=True,
             )
-        for item in live:
-            body = item.body
-            if isinstance(body, NoticeBody):
-                continue
-            message, metadata = (
-                user_input_to_context(body)
-                if isinstance(body, UserInputBody)
-                else tagged_to_context(body)
+            emit(
+                UserInputConsumedEvent(
+                    task_id=rc.task.id, run_id=rc.run.id, message_id=cast(int, message.id)
+                )
             )
+        if task_message.kind == "system_notice":
+            message, metadata = task_message.body.render()
             context.add_message(
                 message,
                 metadata=metadata,
-                message_id=item.id,
                 session=session,
-                project_to_transport=item.project_to_transport,
+                project_to_transport=False,
             )
-        users = [m for m in live if isinstance(m.body, UserInputBody)]
-    if len(live) != len(messages):
-        log.warning(
-            "prepare_input_skipped_acked_messages",
-            extra={
-                "msg": "mailbox 中有已被确认的消息，跳过不重复并入",
-                "data": {
-                    "message_ids": [
-                        m.id for m in messages if m.id is not None and m.id not in acked
-                    ]
-                },
-            },
-        )
-    return [user for user in users if user.project_to_transport]
+        if task_message.kind == "background_result":
+            message, metadata = task_message.body.render()
+            context.add_message(
+                message,
+                metadata=metadata,
+                session=session,
+                project_to_transport=False,
+            )
+        if task_message.kind == "user_decision":
+            message, metadata = task_message.body.render()
+            context.add_message(
+                message,
+                metadata=metadata,
+                session=session,
+                project_to_transport=False,
+            )
 
 
 def _cancel_before_request(step_id: str, run_id: int) -> None:

@@ -12,7 +12,7 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import (
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
-from app.models.task_message import NoticeBody, TaskMessage
+from app.core.workflow.inbox.task_message import NoticeBody, TaskMessage
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 if TYPE_CHECKING:
