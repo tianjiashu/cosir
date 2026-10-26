@@ -1,9 +1,13 @@
 """模型请求前的唯一关口：依次判定取消、挂起、步数上限，再把 mailbox 里的消息并入 context。
 
 步与步之间的停止都在这里落定；模型请求中、工具执行中的取消仍由 model 节点与工具运行器就地中断。
-投递归 Task 的调度 actor（外部队列消息）与各节点（Run 内通知），本节点只取光 mailbox 并写入：
+投递归 Task 的调度 actor（外部队列消息）与各节点（Run 内通知），本节点只取 mailbox 并写入：
 持久化消息的确认（删除外部队列行）与 context 写入同一事务提交，消息不会丢也不会并入两次；不读
-外部队列、不按模型截断、不持 Task 闸门。并入前不必先闭合工具协议：``load_message`` 发请求前会
+外部队列、不按模型截断、不持 Task 闸门。
+
+用户决定（``user_decision``）每轮只处理一条，且先于其他消息：批准时确认并写下决定后绕过模型，
+直接执行原 HITL 调用（先确认再执行：执行中途进程退出不会重复执行）；驳回时作为一条决定消息与
+其余消息一起交给模型。并入前不必先闭合工具协议：``load_message`` 发请求前会
 把被用户消息隔开的工具结果按调用恢复到合法顺序。
 """
 
@@ -14,6 +18,7 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.events import UserInputConsumedEvent
 from app.models.tool_batch import ToolBatch
+from app.core.workflow.inbox.task_message import DecisionBody
 from app.models.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import (
@@ -26,10 +31,7 @@ from app.core.workflow.node_helper.common import (
 from app.core.workflow.node_helper.finalize_max_steps import _finalize_max_steps
 from app.models.enums.conversation_run_status import RunTransition
 from app.core.workflow.inbox.task_message import (
-    NoticeBody,
     TaskMessage,
-    UserInputBody,
-    notices_to_context,
 )
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
@@ -65,72 +67,92 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     if step_count > state.step_limit:
         return await _finalize_max_steps(step_count, state.step_limit)
 
-    index = 1
+    decision = rc.mailbox.take_first("user_decision")
+    if decision is not None:
+        routed = await _handle_decision(decision, step_id)
+        if routed is not None:
+            return {**route_state(state.step_count, ReactRoute.TOOLS), "batch": routed}
     while not rc.mailbox.isEmpty():
-        message = rc.mailbox.pop()
-        if message.kind == "user_decision" and message.body.route_tool_node:
-            if index == 1:
-                return {**route_state(state.step_count, ReactRoute.TOOLS), "batch": ToolBatch()}
-            else:
-                rc.mailbox.push(message)
-                break
-        index += 1
-        await asyncio.to_thread(_write_message, message)
+        await asyncio.to_thread(_write_message, rc.mailbox.pop())
     # 本节点是批次的唯一清空点：挂起判定已读完，下一模型步不能再看到上一批观察。
     return {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch()}
 
 
-def _write_message(task_message: TaskMessage):
-    """一个事务内确认持久化消息并写入 context，返回实际并入且需投影的用户输入；工作线程执行。
+async def _handle_decision(decision: TaskMessage, step_id: str) -> ToolBatch | None:
+    """确认并写下这条决定；批准且原调用仍在上下文时返回只含该调用的批次，否则交给模型。
 
-    先确认后写入：确认返回删除那一刻的行内容（排队期间的原地编辑以它为准），已被确认过的消息
-    跳过。通知合成一条消息排在最前，其余消息（用户输入、决定、后台结果）按入队顺序各写一条，让
-    它们成为模型最后看到的内容；落库后成为历史固定行，后续请求前缀不分叉。
+    先确认再执行（最多执行一次）：确认删除与决定消息同一事务提交，之后才执行工具。原调用找不到
+    （如已被编辑重跑移出上下文）时无法执行，只把决定交给模型并留痕。
+    """
+    rc = _runtime_context()
+    body = cast(DecisionBody, decision.body)
+    if not await asyncio.to_thread(_write_message, decision):
+        return None
+    if not body.approved:
+        return None
+    call = _message_context().find_tool_call(body.tool_call_id)
+    if call is None:
+        log.warning(
+            "prepare_input_decision_call_missing",
+            extra={
+                "msg": f"用户批准的工具调用已不在上下文中，只把决定交给模型，step_id={step_id}",
+                "data": {
+                    "step_id": step_id,
+                    "run_id": rc.run.id,
+                    "tool_call_id": body.tool_call_id,
+                    "tool_name": body.tool_name,
+                },
+            },
+        )
+        return None
+    log.info(
+        "prepare_input_decision_routed_to_tool",
+        extra={
+            "msg": f"用户批准，绕过模型直接执行原调用，step_id={step_id}",
+            "data": {
+                "step_id": step_id,
+                "run_id": rc.run.id,
+                "tool_call_id": body.tool_call_id,
+                "tool_name": body.tool_name,
+            },
+        },
+    )
+    return ToolBatch(calls=[call], decision=body.model_dump(mode="json"))
+
+
+def _write_message(task_message: TaskMessage) -> bool:
+    """写入一条消息，返回是否实际写入；工作线程执行。
+
+    外部队列来的消息（``id`` 非空）在同一事务内先确认删除再写入：确认返回删除那一刻的行内容
+    （排队期间的原地编辑以它为准），已被别的执行确认过的消息跳过、返回 ``False``。Run 内通知
+    （``id`` 为 ``None``）只是一条写入，不需要事务。用户输入在提交后发消费事件，供排队投影收敛。
     """
     rc = _runtime_context()
     context = _message_context()
+    if task_message.id is None:
+        message, metadata = task_message.body.render()
+        context.add_message(message, metadata=metadata, project_to_transport=False)
+        return True
     with main_session_factory().begin() as session:
-
-        if task_message.kind == "user_input":
-            service_depends.get_task_message_queue().ack(
-                session, [task_message.id]
+        acked = service_depends.get_task_message_queue().ack(session, [task_message.id])
+        current = acked.get(task_message.id)
+        if current is None:
+            return False
+        message, metadata = current.body.render()
+        context.add_message(
+            message,
+            metadata=metadata,
+            session=session,
+            project_to_transport=current.project_to_transport,
+            message_id=current.id if current.kind == "user_input" else None,
+        )
+    if current.kind == "user_input":
+        emit(
+            UserInputConsumedEvent(
+                task_id=rc.task.id, run_id=rc.run.id, message_id=cast(int, current.id)
             )
-            message, metadata = task_message.body.render()
-            context.add_message(
-                message,
-                metadata=metadata,
-                session=session,
-                project_to_transport=True,
-            )
-            emit(
-                UserInputConsumedEvent(
-                    task_id=rc.task.id, run_id=rc.run.id, message_id=cast(int, message.id)
-                )
-            )
-        if task_message.kind == "system_notice":
-            message, metadata = task_message.body.render()
-            context.add_message(
-                message,
-                metadata=metadata,
-                session=session,
-                project_to_transport=False,
-            )
-        if task_message.kind == "background_result":
-            message, metadata = task_message.body.render()
-            context.add_message(
-                message,
-                metadata=metadata,
-                session=session,
-                project_to_transport=False,
-            )
-        if task_message.kind == "user_decision":
-            message, metadata = task_message.body.render()
-            context.add_message(
-                message,
-                metadata=metadata,
-                session=session,
-                project_to_transport=False,
-            )
+        )
+    return True
 
 
 def _cancel_before_request(step_id: str, run_id: int) -> None:

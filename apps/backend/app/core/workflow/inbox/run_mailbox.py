@@ -32,6 +32,19 @@ class RunMailbox:
         with self._lock:
             return any(message.id is not None for message in self._queue)
 
+    def take_first(self, kind: str) -> TaskMessage | None:
+        """取出最早投递的一条指定种类消息，其余消息顺序不变；没有时返回 ``None``。
+
+        prepare_input 每轮先单独处理一条用户决定，不要求它排在最前。
+        """
+        with self._lock:
+            # 投递从左端进、从右端取：右端是最早的消息。
+            for message in reversed(self._queue):
+                if message.kind == kind:
+                    self._queue.remove(message)
+                    return message
+            return None
+
     def pop(self) -> TaskMessage:
         with self._lock:
             return self._queue.pop()

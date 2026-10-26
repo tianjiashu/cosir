@@ -8,6 +8,10 @@
 ``delegate_task``）若占住事件循环，HTTP、SSE 与「停止」请求都会无响应。并行组使用本批专属的
 线程池，而不是默认执行器：长工具不会占满 ``asyncio.to_thread`` 共用的线程，拖慢数据库读取。
 两条路径都复制当前 contextvars 提交，工具线程因此继承父 Run 的日志上下文与运行作用域。
+
+需要用户决定的工具（``requires_user_decision``）只能单独调用：与其他调用混在一批时整批在执行前
+报错，任何调用都不执行，由模型拆开重发——否则批准一个、同批其余已执行或仍在等待的状态无法收敛。
+用户批准后的再次执行也走这里，决定经 ``decision`` 交给 handler。
 """
 
 from __future__ import annotations
@@ -26,12 +30,17 @@ from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservatio
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
+from app.core.workflow.inbox.task_message import DecisionBody
 from app.core.workflow.node_helper.common import emit
 from app.models.enums.error_kind import ErrorKind
 
 
 async def run_tool_batch(
-        rc: RuntimeContext, calls: list[ToolCall], step_id: str, batch: ToolBatch
+        rc: RuntimeContext,
+        calls: list[ToolCall],
+        step_id: str,
+        batch: ToolBatch,
+        decision: DecisionBody | None = None,
 ) -> list[ToolObservation]:
     """执行一批工具调用，返回与每个调用一一对应的观察：先串行组（入参顺序），再并行组（入参顺序）。
 
@@ -41,11 +50,14 @@ async def run_tool_batch(
     事件循环必须在这里取：本函数运行在事件循环线程，工具调用在工作线程执行，线程内取不到运行中
     循环，而启动子 Run、投递实时输出都要回到该循环；它随调用传给 ``_execute_call``。
     """
+    if len(calls) > 1 and any(_requires_user_decision(call) for call in calls):
+        return _reject_mixed_decision_batch(rc, calls, step_id, batch)
     loop = asyncio.get_running_loop()
     serial = [call for call in calls if not _is_parallel(call)]
     parallel = [call for call in calls if _is_parallel(call)]
     observations = [
-        await asyncio.to_thread(_execute_call, rc, call, step_id, batch, loop) for call in serial
+        await asyncio.to_thread(_execute_call, rc, call, step_id, batch, loop, decision)
+        for call in serial
     ]
     if parallel:
         observations.extend(await _run_parallel(rc, parallel, step_id, batch, loop))
@@ -93,8 +105,64 @@ def _is_parallel(call: ToolCall) -> bool:
     return definition is not None and definition.parallel_mode == "parallel"
 
 
+def _requires_user_decision(call: ToolCall) -> bool:
+    definition = get_tool_registry().get_tool_definition(call.tool_name)
+    return definition is not None and definition.requires_user_decision
+
+
+def _reject_mixed_decision_batch(
+        rc: RuntimeContext, calls: list[ToolCall], step_id: str, batch: ToolBatch
+) -> list[ToolObservation]:
+    """HITL 工具与其他调用（或多个 HITL 调用）同批：每个调用都返回同一条错误观察，一律不执行。"""
+    hitl_names = sorted({call.tool_name for call in calls if _requires_user_decision(call)})
+    log.warning(
+        "tool_batch_rejected_mixed_user_decision",
+        extra={
+            "msg": "需要用户决定的工具未单独调用，整批拒绝执行",
+            "data": {
+                "task_id": rc.task.id,
+                "run_id": rc.run.id,
+                "step_id": step_id,
+                "hitl_tools": hitl_names,
+                "call_ids": [call.call_id for call in calls],
+            },
+        },
+    )
+    observations: list[ToolObservation] = []
+    for call in calls:
+        observation = tool_error(
+            tool_name=call.tool_name,
+            error=(
+                f"{', '.join(hitl_names)} requires the user's decision and must be the only tool "
+                "call in its response; none of the tool calls in this response were executed"
+            ),
+            reason=(
+                "Call the tool that needs the user's decision alone in its own response, and "
+                "issue the other tool calls in a separate response."
+            ),
+            retryable=True,
+            tool_call_id=call.call_id,
+        )
+        if batch.was_projected(call.call_id):
+            emit(
+                terminal_event(
+                    observation,
+                    task_id=rc.task.id,
+                    run_id=rc.run.id,
+                    step_id=step_id,
+                    tool_call_id=call.call_id,
+                )
+            )
+        observations.append(observation)
+    return observations
+
+
 def _execution_context(
-        rc: RuntimeContext, call: ToolCall, step_id: str, loop: asyncio.AbstractEventLoop
+        rc: RuntimeContext,
+        call: ToolCall,
+        step_id: str,
+        loop: asyncio.AbstractEventLoop,
+        decision: DecisionBody | None = None,
 ) -> ToolExecutionContext:
     """单次调用的完整执行边界：Run / step 事实取自 ``rc``，调用身份只取自 ``call``。
 
@@ -110,6 +178,7 @@ def _execution_context(
         event_loop=loop,
         event_sink=rc.event_sink,
         tool_call_id=call.call_id,
+        user_decision=decision,
     )
 
 
@@ -119,9 +188,10 @@ def _execute_call(
         step_id: str,
         batch: ToolBatch,
         loop: asyncio.AbstractEventLoop,
+        decision: DecisionBody | None = None,
 ) -> ToolObservation:
     """执行单个调用并投影其生命周期；未知工具名也交给执行器，由准入门禁产出稳定观察。"""
-    execution_context = _execution_context(rc, call, step_id, loop)
+    execution_context = _execution_context(rc, call, step_id, loop, decision)
 
     try:
         observation = get_tool_executor().execute(

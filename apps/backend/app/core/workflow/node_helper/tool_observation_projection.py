@@ -12,7 +12,8 @@ from app.core.tool.execute.tool_terminal_projection import (
 )
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.tool_batch import ToolBatch
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.core.workflow.inbox.task_message import escape_tag
 
 
 def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
@@ -32,6 +33,7 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
             tool_call_id=call_id,
             display_data=summary.get("display_data"),
             team_run_id=summary.get("team_run_id"),
+            awaiting_decision=summary.get("awaiting_decision", False),
         )
         event = terminal_event(
             observation,
@@ -66,6 +68,70 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
         )
         if visible:
             emit(event)
+
+
+def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
+    """结算用户批准后 HITL 调用的执行结果：结果追加为一条 user 消息，等待占位只更新展示状态。
+
+    占位在模型协议上已是这次调用的结果（见 ``tool_awaiting_decision``），决定可能在占位之后的若干
+    模型步、甚至之后的 Run 才到，此时原调用早已不是最后一批，不能再写 tool 消息；改写历史行又会
+    让后续请求前缀分叉。所以模型从末尾追加的 ``<tool_result>`` 读到结果，卡片从占位行的 metadata
+    读到终态。
+    """
+    runtime = _runtime_context()
+    context = _message_context()
+    [summary] = batch.observations
+    call_id = summary["tool_call_id"]
+    observation = ToolObservation(
+        tool_name=summary["tool_name"],
+        status=summary["status"],
+        content=summary["content"],
+        tool_call_id=call_id,
+        display_data=summary.get("display_data"),
+        team_run_id=summary.get("team_run_id"),
+    )
+    content = to_tool_model_message(observation)["content"]
+    context.add_message(
+        {
+            "role": "user",
+            "content": (
+                f'<tool_result tool_call_id="{call_id}" tool_name="{observation.tool_name}" '
+                f'status="{observation.status}">\n{escape_tag(str(content), "tool_result")}\n'
+                "</tool_result>"
+            ),
+        },
+        metadata=UserMessageMetadata(kind="tool_result"),
+        project_to_transport=False,
+    )
+    event = terminal_event(
+        observation,
+        task_id=runtime.run.task_id,
+        run_id=runtime.run.id,
+        step_id=step_id,
+        tool_call_id=call_id,
+    )
+    written = context.update_tool_result_metadata(
+        call_id,
+        ToolMessageMetadata(
+            status=event.status,
+            display_data=event.display_data,
+            error=event.error,
+            team_run_id=event.team_run_id,
+        ),
+    )
+    log.info(
+        "tool_decision_result_persisted",
+        extra={
+            "msg": "用户决定后的工具结果已追加为消息，占位只更新展示状态",
+            "data": {
+                "run_id": runtime.run.id,
+                "tool_call_id": call_id,
+                "status": event.status,
+            },
+        },
+    )
+    if not written.hidden:
+        emit(event)
 
 
 def to_tool_model_message(observation: ToolObservation) -> ChatCompletionToolMessageParam:

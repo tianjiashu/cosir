@@ -10,6 +10,7 @@ from app.core.tool.schemas import ToolCall, ToolObservation
 from app.models.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _runtime_context
+from app.core.workflow.inbox.task_message import DecisionBody
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 
 
@@ -49,7 +50,9 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
         },
     )
     # running 与终态由 run_tool_batch 按调用投影：只有真正开始运行的调用才显示为运行中。
-    observations = await run_tool_batch(rc, tool_calls, step_id, batch)
+    # 用户批准后的 HITL 执行带着决定，交给 handler 区分「登记待决」与「按决定执行」。
+    decision = DecisionBody.model_validate(batch.decision) if batch.decision else None
+    observations = await run_tool_batch(rc, tool_calls, step_id, batch, decision)
     summaries = [_summary(observation) for observation in observations]
     log.info(
         "tools_node_completed",
