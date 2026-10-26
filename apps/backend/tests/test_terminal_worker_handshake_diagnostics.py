@@ -17,14 +17,14 @@ from types import SimpleNamespace
 import pytest
 
 from app.tools.tool_handler.terminal_session.common import service_error_observation
-from app.service.terminal import process_terminal_worker as worker_module
-from app.service.terminal.errors import (
+from app.tools.terminal_runtime import process_terminal_worker as worker_module
+from app.tools.terminal_runtime.errors import (
     TerminalWorkerHandshakeError,
     TerminalWorkerProtocolError,
     TerminalWorkerUnavailableError,
 )
-from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
-from app.service.terminal.shell_resolver import ShellSpec
+from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker
+from app.tools.terminal_runtime.shell_resolver import ShellSpec
 
 _FAKE_WORKER_PID = 4242
 

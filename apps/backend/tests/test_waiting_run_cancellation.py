@@ -13,9 +13,9 @@ import pytest
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.service import depends as service_depends
-from app.service.conversation_run import task_actor as actor_module
-from app.service.conversation_run.task_actor import Execution, TaskActor
-from app.service.conversation_run.task_signals import Cancel, RunFinished
+from app.core import task_actor as actor_module
+from app.core.task_actor import Execution, TaskActor
+from app.core.task_signals import Cancel, RunFinished
 
 _TASK_ID = 11
 _RUN_ID = 7
@@ -58,8 +58,7 @@ def _build(monkeypatch: pytest.MonkeyPatch, services: _StubServices):
     """在当前事件循环上拉起一个接替身服务的 actor；推进与取消后续换成记录器。"""
 
     for getter in (
-        "get_conversation_run_service",
-        "get_conversation_run_state_service",
+        "get_conversation_run_ledger",
         "get_task_service",
         "get_task_message_queue",
     ):

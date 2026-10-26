@@ -35,7 +35,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.config.constant import Constant
 from app.core.llm_provider.model_failure import classify_model_failure
-from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models import conversation_run_failure as failure_catalog
 from app.models.conversation_run_failure import (
@@ -45,7 +45,8 @@ from app.models.conversation_run_failure import (
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.models.enums.error_kind import ErrorKind
-from app.service.conversation_run import run_driver
+from app.core import run_driver
+
 
 # --------------------------------------------------------------------------------------
 # 测试替身
@@ -124,7 +125,14 @@ def _make_runtime(
     workspaces = SimpleNamespace(get_workspace=lambda ws_id: SimpleNamespace(id=ws_id))
     monkeypatch.setattr(run_driver, "get_task_service", lambda: tasks)
     monkeypatch.setattr(run_driver, "get_workspace_service", lambda: workspaces)
-    monkeypatch.setattr(run_driver, "get_conversation_run_state_service", lambda: run_state_service)
+    monkeypatch.setattr(
+        run_driver,
+        "get_conversation_run_ledger",
+        lambda: SimpleNamespace(
+            get_run=lambda run_id: SimpleNamespace(id=run_id, task_id=3),
+            transition=run_state_service.transition,
+        ),
+    )
 
     async def _noop_fire(_context: object) -> None:
         return None
@@ -137,11 +145,6 @@ def _make_runtime(
     monkeypatch.setattr(run_driver.HookInterceptor, "async_safe_fire", _noop_fire)
     monkeypatch.setattr(run_driver, "_build_context", _build)
     monkeypatch.setattr(run_driver, "_runtime_config", lambda *_args: object())
-    monkeypatch.setattr(
-        run_driver,
-        "get_conversation_run_service",
-        lambda: SimpleNamespace(get_run=lambda run_id: SimpleNamespace(id=run_id, task_id=3)),
-    )
     monkeypatch.setattr(
         run_driver,
         "get_conversation_event_projector",
@@ -601,8 +604,8 @@ def test_failure_code_for_ignores_exception_text() -> None:
             raise RuntimeError("__str__ exploded")
 
     assert (
-        run_driver._failure_code_for(_BoomClassifier())
-        == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+            run_driver._failure_code_for(_BoomClassifier())
+            == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
     )
 
 
@@ -610,8 +613,8 @@ def test_failure_code_for_returns_graph_failed_for_value_error() -> None:
     """``model_config_id`` 缺失一类 ``ValueError`` 走中性兜底，不伪装成模型错误。"""
 
     assert (
-        run_driver._failure_code_for(ValueError("Conversation Run model_config_id is required"))
-        == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+            run_driver._failure_code_for(ValueError("Conversation Run model_config_id is required"))
+            == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
     )
 
 

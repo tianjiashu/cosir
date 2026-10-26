@@ -100,7 +100,8 @@ def test_system_registry_contains_only_code_defined_children(
 ) -> None:
     """进程目录只含代码内置 CHILD，不含已移除的 JSON 预设，也不含 workspace 配置。"""
 
-    monkeypatch.setattr("app.config.configuration._TOOL_SYSTEM", None, raising=False)
+    monkeypatch.setattr("app.config.configuration._TOOL_REGISTRY", None)
+    monkeypatch.setattr("app.config.configuration._TOOL_EXECUTOR", None)
     monkeypatch.setattr(
         "app.core.agents.agent_profile_source.system_agent_config_dir",
         lambda: tmp_path / "agents",

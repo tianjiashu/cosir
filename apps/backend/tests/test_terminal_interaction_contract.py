@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from app.tools.tool_models.terminal_session_args import TerminalReadArgs, TerminalWriteArgs
 from app.core.tool.validation.arguments import validate_tool_arguments
-from app.service.terminal.terminal_observation import TerminalObservation, json_size
+from app.tools.terminal_runtime.terminal_observation import TerminalObservation, json_size
 
 
 @pytest.mark.parametrize(

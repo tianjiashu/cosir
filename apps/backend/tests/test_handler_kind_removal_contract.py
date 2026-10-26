@@ -846,15 +846,6 @@ def test_async_handler_is_rejected_at_registration() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_tool_executor_read_surface(tmp_path: Path) -> None:
-    """删除 async 入口后，执行器的只读面（list_tools）不变。"""
-
-    definition = _make_definition(name="known_tool", parameters_schema={"type": "object"})
-    executor = ToolExecutor(registry=ToolRegistry([definition]))
-
-    assert [tool.name for tool in executor.list_tools()] == ["known_tool"]
-
-
 def test_emit_swallows_projector_failure() -> None:
     """事件 sink 失败只能记录降级，不得把异常带回工作流节点。"""
     from app.core.events import AssistantPartClosedEvent

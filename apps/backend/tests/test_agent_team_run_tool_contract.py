@@ -1,7 +1,7 @@
 """``agent_team`` 执行工具的契约、两阶段语义与边界对抗测试。
 
 本文件只消费生产代码（``app/**`` 只读），不修改任何实现。测试从三类入口交叉验证定义：
-直构 ``ToolDefinition`` / ``ToolRegistry`` 归一化后读回 / ``ToolSystem`` 进程装配后读回；
+直构 ``ToolDefinition`` / ``ToolRegistry`` 归一化后读回 / 工具注册表进程装配后读回；
 并覆盖 ``AgentTeamRunTool.execute()`` 的「准备（``user_decision is None``）」与
 「启动（APPROVE）」两条分支、``team_register.resolve`` 返回 ``None`` 的失败契约、
 确认分支的失败映射，以及准备服务的边界输入。
@@ -19,20 +19,17 @@ from pydantic import ValidationError
 from app.service.agent_team import registry as team_registry_module
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.core.tool.agent_team.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.node_goal import AgentTeamNodeGoal
 from app.service.agent_team.registry import AgentTeamConfigurationRegistry
-from app.core.tool.agent_team.team_tool_error import TeamToolError
-from app.config.configuration import get_tool_system
+from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
+from app.config.configuration import get_tool_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.tool_names import TOOL_AGENT_TEAM
 from app.core.tool.tool_grouping import TOOL_GROUP_AGENT_TEAM
-from app.core.tool.agent_team.agent_team_run import (
-    AgentTeamRunTool,
-    build_agent_team_run_definition,
-)
-from app.core.tool.agent_team.agent_team_args import AgentTeamArgs
+from app.core.tool.handler.agent_team_run import AgentTeamRunTool, build_agent_team_run_definition
+from app.core.tool.handler.agent_team.agent_team_args import AgentTeamArgs
 from app.core.tool.tool_registry import ToolRegistry
 from app.models.model_config_record import ModelConfigRecord
 from app.service.agent_team import agent_team_preparation_service as prep_module
@@ -189,8 +186,8 @@ def _stub_preparation_lookups(monkeypatch: pytest.MonkeyPatch, child: AgentProfi
 
 
 @pytest.fixture
-def assembled_tool_system(isolated_storage, install_process_singletons, monkeypatch):
-    """装配真实 ``ToolSystem``：按 lifespan 的顺序先注入 Team 注册表，再构建单例。"""
+def assembled_tool_registry(isolated_storage, install_process_singletons, monkeypatch):
+    """装配真实工具注册表：按 lifespan 的顺序先注入 Team 注册表，再构建单例。"""
 
     monkeypatch.setattr(
         team_registry_module,
@@ -198,7 +195,7 @@ def assembled_tool_system(isolated_storage, install_process_singletons, monkeypa
         AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource()),
     )
     install_process_singletons()
-    return get_tool_system()
+    return get_tool_registry()
 
 
 # --------------------------------------------------------------------------- #
@@ -282,15 +279,15 @@ def test_registry_round_trip_preserves_description_and_verb(monkeypatch) -> None
     assert registry.get_schema("agent_team") == direct.to_model_tool_definition()["parameters"]
 
 
-def test_assembled_tool_system_exposes_identical_agent_team_definition(
-    assembled_tool_system,
+def test_assembled_tool_registry_exposes_identical_agent_team_definition(
+    assembled_tool_registry,
 ) -> None:
-    """(交叉入口) ``ToolSystem`` 进程装配后的 agent_team 定义与直接构造完全一致。
+    """(交叉入口) 工具注册表进程装配后的 agent_team 定义与直接构造完全一致。
 
     潜在缺陷：装配路径注册了另一个定义，或漏注册 agent_team / 装配顺序导致构建失败。
     """
 
-    assembled = assembled_tool_system.registry.get_tool_definition("agent_team")
+    assembled = assembled_tool_registry.get_tool_definition("agent_team")
     assert assembled is not None
 
     direct = build_agent_team_run_definition()
@@ -301,10 +298,10 @@ def test_assembled_tool_system_exposes_identical_agent_team_definition(
     )
     assert assembled.display == direct.display
     assert assembled.execution_mode == direct.execution_mode
-    assert "agent_team" in assembled_tool_system.registry.get_all_tool_names()
+    assert "agent_team" in assembled_tool_registry.get_all_tool_names()
     # 同组的配置提案工具与执行工具必须能同时存在（职责边界：一个提案、一个运行）。
     assert (
-        "propose_agent_team_configuration" in assembled_tool_system.registry.get_all_tool_names()
+        "propose_agent_team_configuration" in assembled_tool_registry.get_all_tool_names()
     )
 
 

@@ -61,12 +61,12 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(module, "get_task_actors", lambda: session)
     monkeypatch.setattr(
         module,
-        "get_conversation_run_service",
+        "get_conversation_run_ledger",
         lambda: SimpleNamespace(get_run=lambda run_id: SimpleNamespace(id=run_id)),
     )
     parent_agent = object()
     monkeypatch.setattr(
-        "app.service.conversation_run.run_driver.resolve_agent_config", lambda _run: parent_agent
+        "app.core.run_driver.resolve_agent_config", lambda _run: parent_agent
     )
 
     def build(runs: _Runs) -> AgentTeamDecisionService:

@@ -136,8 +136,8 @@ def _session_with_execution(task_id: int, run_id: int) -> object:
     """只含一条执行登记的调度入口（不装配领域服务）。"""
     from types import SimpleNamespace
 
-    from app.service.conversation_run.task_actor import Execution
-    from app.service.conversation_run.task_actors import TaskActors
+    from app.core.task_actor import Execution
+    from app.core.task_actors import TaskActors
 
     session = TaskActors.__new__(TaskActors)
     execution = Execution(run=SimpleNamespace(id=run_id, task_id=task_id), fresh_run=False)

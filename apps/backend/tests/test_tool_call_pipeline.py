@@ -14,7 +14,7 @@ from app.models.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper import tool_observation_projection as projection
-from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import observation_node, prepare_input_node, tools_node
 from app.models.enums.conversation_run_status import RunTransition
@@ -327,7 +327,7 @@ def _gate_runtime(monkeypatch, *, cancelled=False, mailbox_ids=()):
     monkeypatch.setattr(prepare_input_node, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
         prepare_input_node.service_depends,
-        "get_conversation_run_state_service",
+        "get_conversation_run_ledger",
         lambda: SimpleNamespace(
             transition=lambda run_id, transition, **_k: transitions.append((run_id, transition))
             or SimpleNamespace(id=run_id)

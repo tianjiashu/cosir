@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.config.constant import Constant
-from app.service.terminal.terminal_session_service import TerminalSessionService
+from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 
 
 @pytest.fixture(params=["zsh", "powershell", "pwsh"])
@@ -360,7 +360,7 @@ def test_recent_output_is_bounded_and_keeps_latest_tail(terminal, tmp_path):
     assert "NEWEST_RESULT" in page["screen"]["text"]
     assert page["history_truncated"]
     assert "has_more" not in page and "next_cursor" not in page
-    from app.service.terminal.terminal_observation import json_size
+    from app.tools.terminal_runtime.terminal_observation import json_size
 
     assert json_size(page) <= Constant.Tools.MAX_OUTPUT_CHARS
     reread = service.read(session, task_id=1, run_id=1)

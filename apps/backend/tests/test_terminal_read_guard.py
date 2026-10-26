@@ -2,9 +2,9 @@
 
 import pytest
 
-from app.service.terminal.errors import TerminalRepeatedReadError
-from app.service.terminal.terminal_observation import TerminalObservation
-from app.service.terminal.terminal_read_guard import TerminalReadGuard
+from app.tools.terminal_runtime.errors import TerminalRepeatedReadError
+from app.tools.terminal_runtime.terminal_observation import TerminalObservation
+from app.tools.terminal_runtime.terminal_read_guard import TerminalReadGuard
 
 
 def test_four_unchanged_reads_warn_then_fifth_errors_and_new_information_recovers():

@@ -10,9 +10,9 @@ import pytest
 
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.service import depends as service_depends
-from app.service.conversation_run import task_actor as actor_module
-from app.service.conversation_run.task_actor import Execution, TaskActor
-from app.service.conversation_run.task_actors import TaskActors
+from app.core import task_actor as actor_module
+from app.core.task_actor import Execution, TaskActor
+from app.core.task_actors import TaskActors
 
 _RUN_ID = 1
 _TASK_ID = 7
@@ -48,8 +48,7 @@ def _session(monkeypatch: pytest.MonkeyPatch, services: _Services | None = None)
     """接替身服务的调度入口；actor 闸门换成空上下文。"""
     services = services or _Services()
     for getter in (
-        "get_conversation_run_service",
-        "get_conversation_run_state_service",
+        "get_conversation_run_ledger",
         "get_task_service",
         "get_task_message_queue",
         "get_user_input_service",

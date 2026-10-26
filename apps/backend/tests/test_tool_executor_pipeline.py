@@ -90,7 +90,7 @@ def _execute(
     """
 
     if allowed_tool_names is None:
-        allowed_tool_names = {tool.name for tool in executor.list_tools()}
+        allowed_tool_names = set(executor._registry.get_all_tool_names())
     return executor.execute(
         call,
         execution_context=replace(execution_context, tool_call_id=call.call_id),
@@ -244,15 +244,6 @@ def test_file_write_executes_without_change_tracking_service(tmp_path: Path) -> 
 
     assert observation.status == "success"
     assert target.read_text(encoding="utf-8") == "untracked"
-
-
-def test_list_tools(tmp_path: Path) -> None:
-    """列举契约返回注册表中的全部工具定义。"""
-
-    executor = _make_executor(tmp_path)
-    names = [tool.name for tool in executor.list_tools()]
-
-    assert names == ["read_file"]
 
 
 def test_denial_observation_passes_through_budget(

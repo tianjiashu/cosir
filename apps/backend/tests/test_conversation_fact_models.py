@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
 from app.models.conversation_input import ConversationInput
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
@@ -20,9 +21,9 @@ from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.task_record import TaskRecord
 from app.service.conversation_run import user_input_service as user_input_module
-from app.service.conversation_run.conversation_run_service import ConversationRunService
-from app.service.conversation_run.conversation_run_state_service import (
-    ConversationRunStateService,
+from app.service.recover_service import RecoverService
+from app.core.conversation_run_ledger import (
+    ConversationRunLedger,
 )
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
@@ -401,8 +402,11 @@ def test_context_clone_copies_transport_fields_to_real_row() -> None:
     StorageBase.metadata.create_all(engine)
     try:
         crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
+        store = ContextStore.__new__(ContextStore)
+        store._crud = crud
         service = ConversationTaskContextService.__new__(ConversationTaskContextService)
         service._crud = crud
+        service._store = store
         with Session(engine) as session:
             session.add(
                 ConversationTaskContextRecord(
@@ -531,12 +535,15 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
         context_service = ConversationTaskContextService.__new__(ConversationTaskContextService)
         context_crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
         context_crud._session_factory = factory
+        context_store = ContextStore.__new__(ContextStore)
+        context_store._crud = context_crud
         context_service._crud = context_crud
-        service = ConversationRunService.__new__(ConversationRunService)
+        context_service._store = context_store
+        service = RecoverService.__new__(RecoverService)
         service._run = run_crud
-        run_state = ConversationRunStateService.__new__(ConversationRunStateService)
+        run_state = ConversationRunLedger.__new__(ConversationRunLedger)
         run_state._run = run_crud
-        service._run_state = run_state
+        service._ledger = run_state
         service._context = context_service
         service._session_factory = factory
         projected: list[RunStatusChangedEvent] = []

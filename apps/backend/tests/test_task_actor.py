@@ -10,11 +10,11 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import canc
 from app.models import ConversationRunCommand
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.task_message import TaskMessage
-from app.service.conversation_run import task_actor as task_actor_module
-from app.service.conversation_run.task_actors import TaskActors
-from app.service.conversation_run.task_signals import Enqueue
+from app.core import task_actor as task_actor_module
+from app.core.task_actors import TaskActors
+from app.core.task_signals import Enqueue
 from app.service.conversation_run.user_input_service import UserInputService
-from app.service.depends import get_conversation_run_state_service
+from app.service.depends import get_conversation_run_ledger
 from tests import test_task_input_queue as queue_tests
 from tests.test_task_input_queue import _SESSIONS, _consume, _session, _starts
 
@@ -39,7 +39,7 @@ def _real_session(store, monkeypatch, started: list[int]) -> TaskActors:
         # 取消信号注册表没有可 await 的事件：轮询模拟检查点。
         while not cancellation_registry.is_cancelled(task_id):  # noqa: ASYNC110
             await asyncio.sleep(0.005)
-        get_conversation_run_state_service().transition(run_id, RunTransition.CANCEL)
+        get_conversation_run_ledger().transition(run_id, RunTransition.CANCEL)
 
     monkeypatch.setattr(task_actor_module, "drive_run", drive)
     session = TaskActors()
@@ -184,7 +184,7 @@ async def test_wait_new_run_raises_when_delivery_starts_no_run(store, monkeypatc
     def broken_create_run(*_args, **_kwargs):
         raise RuntimeError("model config deleted")
 
-    monkeypatch.setattr(actor._runs, "create_run", broken_create_run)
+    monkeypatch.setattr(actor._ledger, "create_run", broken_create_run)
     await session.submit(
         store.task.id,
         ConversationRunCommand(display_text="node input"),

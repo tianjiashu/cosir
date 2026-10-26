@@ -8,7 +8,8 @@ import pytest
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
-from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.core.context.context_store import ContextStore
+from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.models import ConversationRunCommand
 from app.models.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import RunTransition
@@ -16,15 +17,14 @@ from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.task_message import TaskMessage, UserInputBody
 from app.service.conversation_run import message_edit
-from app.service.conversation_run import task_actor as task_actor_module
-from app.service.conversation_run.task_message_queue import TaskMessageQueue
+from app.core import task_actor as task_actor_module, run_driver
+from app.core.task_message_queue import TaskMessageQueue
 from app.service.conversation_run.user_input_service import UserInputService
 from app.service.depends import (
     get_conversation_event_projector,
-    get_conversation_run_service,
-    get_conversation_run_state_service,
-    get_conversation_task_context_service,
+    get_conversation_run_ledger,
     get_conversation_task_state_service,
+    get_recover_service,
 )
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
@@ -99,7 +99,7 @@ def store(isolated_storage, tmp_path):
         session.add(config)
         session.flush()
         config_id = config.id
-    service = get_conversation_run_service()
+    service = get_conversation_run_ledger()
     inputs = _Inputs()
     inputs.put_user(task.id, ConversationRunCommand(display_text="first"), config_id)
     run = _create_run(service, inputs, task.id)
@@ -109,7 +109,7 @@ def store(isolated_storage, tmp_path):
         run=run,
         inputs=inputs,
         service=service,
-        context=get_conversation_task_context_service(),
+        context=ContextStore(),
         crud=ConversationRunCrud(),
     )
 
@@ -140,8 +140,8 @@ def _session(monkeypatch):
     """
     from unittest.mock import MagicMock
 
-    from app.service.conversation_run.task_actor import TaskActor
-    from app.service.conversation_run.task_actors import TaskActors
+    from app.core.task_actor import TaskActor
+    from app.core.task_actors import TaskActors
 
     start = MagicMock()
     monkeypatch.setattr(
@@ -177,7 +177,7 @@ def _starts(executor) -> list[int]:
 
 def _delivered_mailbox(store, run):
     """模拟生产投递：Run 首次并入前（新 Run 的初始投递）取全部剩余消息，之后只取 ``immediate``。"""
-    from app.service.conversation_run.dispatch_policy import initial_messages
+    from app.core.workflow.inbox.dispatch_policy import initial_messages
 
     rows = ConversationTaskContextCrud().get(store.task.id, include_in_context=False)
     fresh = not any(row.run_id == run.id for row in rows)
@@ -200,7 +200,7 @@ def _consume(store, run_id):
     run = store.crud.get(run_id)
     context = object.__new__(RuntimeMessageContextManager)
     context.current_task_id = store.task.id
-    context.context_service = store.context
+    context.context_store = store.context
     context.begin_run(run)
     before = len(context._entries)
     with execution_scope(SimpleNamespace(), context):
@@ -224,14 +224,11 @@ def _real_context(store, *, run_state=None):
     if run_state is not None:
         SINGLETONS.setattr(
             service_depends,
-            "get_conversation_run_state_service",
+            "get_conversation_run_ledger",
             singleton_getter(lambda: run_state),
         )
-    SINGLETONS.setattr(
-        configuration,
-        "_TOOL_SYSTEM",
-        SimpleNamespace(registry=ToolRegistry(), executor=None, user_input_decision_handlers=None),
-    )
+    SINGLETONS.setattr(configuration, "_TOOL_REGISTRY", ToolRegistry())
+    SINGLETONS.setattr(configuration, "_TOOL_EXECUTOR", None)
     run = store.crud.get(store.run.id)
     return RuntimeContext(
         run=run,
@@ -478,7 +475,7 @@ def test_restart_keeps_suspended_run_and_inbox(store):
     store.inputs.put_user(
         store.task.id, ConversationRunCommand(display_text="later"), store.config_id
     )
-    assert store.service.recover_orphaned_runs() == []
+    assert get_recover_service().recover_orphaned_runs() == []
     assert store.crud.get(store.run.id).status == "suspended"
     assert store.inputs.pending_users(store.task.id)[0].payload.message.input_text == "later"
 
@@ -776,7 +773,7 @@ async def test_queued_edit_keeps_original_launch_and_delivery(store, monkeypatch
 @pytest.mark.asyncio
 async def test_queued_edit_of_consumed_message_conflicts_without_rerun(store, monkeypatch):
     """排队编辑命中已并入的消息时 409，不会静默变成「停止当前 Run 并重跑」。"""
-    from app.service.conversation_run.task_actors import SessionConflictError
+    from app.core.task_actors import SessionConflictError
 
     [first] = _consume(store, store.run.id)
     session, executor = _session(monkeypatch)
@@ -799,11 +796,11 @@ async def test_executor_handoff_waits_for_cleanup_and_starts_new_run(store, monk
     """收尾期间入队的输入在旧执行释放后才交给新 Run，两个执行不重叠。"""
     import asyncio
 
-    from app.service.conversation_run.task_actors import TaskActors
+    from app.core.task_actors import TaskActors
 
     order = []
     finished = asyncio.Event()
-    states = get_conversation_run_state_service()
+    states = get_conversation_run_ledger()
     session = TaskActors()
     _SESSIONS.append(session)
 
@@ -843,7 +840,7 @@ async def test_completed_model_response_leaves_during_stream_input_for_next_run(
     import app.core.workflow.workflow as workflow_module
     from app.core.context.runtime_message_context_manager import SystemPromptBuilder
 
-    states = get_conversation_run_state_service()
+    states = get_conversation_run_ledger()
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     requests = []
 
@@ -927,7 +924,7 @@ async def test_queue_commands_during_stream_preserve_output_and_replace_one_row(
         SystemPromptBuilder,
     )
 
-    states = get_conversation_run_state_service()
+    states = get_conversation_run_ledger()
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     monkeypatch.setattr(Constant.Workflow, "DEFAULT_TEXT_FLUSH_MIN_CHARS", 8 if buffered else 0)
     monkeypatch.setattr(Constant.Workflow, "DEFAULT_TEXT_FLUSH_MAX_INTERVAL_SECONDS", 3600)
@@ -1258,9 +1255,8 @@ async def test_cancel_or_failure_closes_before_resume_or_edit(store, monkeypatch
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )
-    from app.service.conversation_run import run_driver
 
-    states = get_conversation_run_state_service()
+    states = get_conversation_run_ledger()
     monkeypatch.setattr(SystemPromptBuilder, "build", lambda *_: "system")
     reading = asyncio.Event()
     closed = asyncio.Event()
@@ -1626,8 +1622,8 @@ async def test_wait_idle_wakes_when_execution_releases(store, monkeypatch):
     """执行收尾即唤醒等待方，不必等到超时；判定按 Task，与等的是哪条 Run 无关。"""
     import time
 
-    from app.service.conversation_run.task_actor import Execution
-    from app.service.conversation_run.task_signals import RunFinished
+    from app.core.task_actor import Execution
+    from app.core.task_signals import RunFinished
 
     session, _ = _session(monkeypatch)
     _consume(store, store.run.id)

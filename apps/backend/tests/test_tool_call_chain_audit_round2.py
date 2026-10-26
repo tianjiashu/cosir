@@ -256,15 +256,14 @@ def test_p2_explicit_kind_display_replaces_streamed_terminal_output() -> None:
 # ============================================================================
 
 
-class _RecordingContextService:
-    """记录 append / replace 的最小 context service（不落真实数据库）。"""
+class _RecordingContextStore:
+    """记录 append / replace 的最小 context store（不落真实数据库）。"""
 
     def __init__(self, max_sequence: int = 0) -> None:
         self.max_sequence_value = max_sequence
         self.appended: list[tuple[int, int | None, Any, int, bool]] = []
         self.replaced: list[ConversationTaskContextRecord] = []
         self.loaded: list[ContextEntry] = []
-        self.deleted: list[Any] = []
 
     def max_sequence(self, task_id: int) -> int:
         return self.max_sequence_value
@@ -297,12 +296,9 @@ class _RecordingContextService:
     def replace_message(self, record: Any) -> None:
         self.replaced.append(record)
 
-    def delete_by_run_id(self, task_id: int, run_id: int) -> None:
-        self.deleted.append(run_id)
-
 
 def _memory_manager(
-    service: _RecordingContextService, next_sequence: int = 1
+    context_store: _RecordingContextStore, next_sequence: int = 1
 ) -> RuntimeMessageContextManager:
     """构造绕过真实持久化的 ``RuntimeMessageContextManager``（与既有测试同口径）。"""
 
@@ -310,7 +306,7 @@ def _memory_manager(
     manager.current_task_id = _TASK_ID
     manager.agent_profile = SimpleNamespace()
     manager.workspace = SimpleNamespace(id=7, root_path="")
-    manager.context_service = service
+    manager.context_store = context_store
     manager.current_run_id = _RUN_ID
     manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     manager._entries = []
@@ -323,12 +319,12 @@ def test_p4_memory_reorders_but_persisted_order_is_never_fixed() -> None:
 
     被测行为：AI(tool_calls=[blocked-1, valid-1]) 之后先落 valid-1、再落 blocked-1；
     ``_close_unclosed_tool_calls`` 把内存工作副本重排为 tool_calls 顺序，但
-    ``context_service`` 只收到 append，没有任何改写顺序的调用。
+    ``context_store`` 只收到 append，没有任何改写顺序的调用。
     缺陷判定：低危（provider 按 id 配对；仅库内 / 冷读顺序与 tool_calls 顺序不一致）。
     """
 
-    service = _RecordingContextService(max_sequence=0)
-    manager = _memory_manager(service, next_sequence=1)
+    context_store = _RecordingContextStore(max_sequence=0)
+    manager = _memory_manager(context_store, next_sequence=1)
 
     manager.add_message(
         {
@@ -358,7 +354,7 @@ def test_p4_memory_reorders_but_persisted_order_is_never_fixed() -> None:
         metadata=ToolMessageMetadata(status="completed"),
     )
 
-    persisted_before = [message.get("tool_call_id") for _, _, message, _, _ in service.appended]
+    persisted_before = [message.get("tool_call_id") for _, _, message, _, _ in context_store.appended]
     assert persisted_before == [None, "valid-1", "blocked-1"], f"落库顺序={persisted_before}"
 
     loaded = manager.load_message()
@@ -366,9 +362,9 @@ def test_p4_memory_reorders_but_persisted_order_is_never_fixed() -> None:
     # 内存工作副本被重排为 tool_calls 顺序。
     assert tool_messages == ["blocked-1", "valid-1"], f"内存顺序={tool_messages}"
     # 数据库侧没有任何改写：append 记录不变，replace 为空。
-    persisted_after = [message.get("tool_call_id") for _, _, message, _, _ in service.appended]
+    persisted_after = [message.get("tool_call_id") for _, _, message, _, _ in context_store.appended]
     assert persisted_after == persisted_before, "数据库落库顺序未被修正（缺陷：永不修正）"
-    assert service.replaced == []
+    assert context_store.replaced == []
 
 
 # ============================================================================
@@ -385,8 +381,8 @@ def test_p5_placeholder_is_replaced_by_real_result_after_resume() -> None:
     缺陷判定：符合预期（不是缺陷）。
     """
 
-    service = _RecordingContextService(max_sequence=0)
-    manager = _memory_manager(service, next_sequence=1)
+    context_store = _RecordingContextStore(max_sequence=0)
+    manager = _memory_manager(context_store, next_sequence=1)
 
     manager.add_message(
         {
@@ -424,7 +420,7 @@ def test_p5_placeholder_is_replaced_by_real_result_after_resume() -> None:
     )
 
     assert outcome == "replaced", "占位必须被原地覆盖，而不是并排追加第二行"
-    assert len(service.replaced) == 1
+    assert len(context_store.replaced) == 1
     assert [entry.message.get("content") for entry in manager._entries] == [
         "",
         "A result",
@@ -438,8 +434,8 @@ def test_p5_placeholder_of_another_run_is_not_overwritten() -> None:
     """跨 Run 结果不能覆盖旧行，也不能在没有新调用依据时追加成孤儿。"""
     from app.core.context.tool_call_closure import ContextProtocolError
 
-    service = _RecordingContextService(max_sequence=0)
-    manager = _memory_manager(service, next_sequence=1)
+    context_store = _RecordingContextStore(max_sequence=0)
+    manager = _memory_manager(context_store, next_sequence=1)
     manager.current_run_id = _RUN_ID
 
     manager.add_message(
@@ -469,7 +465,7 @@ def test_p5_placeholder_of_another_run_is_not_overwritten() -> None:
         )
     assert len(manager._entries) == 2
     assert manager._entries[-1].message["content"] == "old run result"
-    assert service.replaced == []
+    assert context_store.replaced == []
 
 
 # ============================================================================

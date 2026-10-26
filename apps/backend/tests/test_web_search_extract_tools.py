@@ -1,16 +1,14 @@
-"""web_search / web_extract 工具及其 Firecrawl Provider 的单元测试。
+"""web_search / web_extract 工具及其 Firecrawl 客户端的单元测试。
 
 无网络、不依赖真实 API Key：所有远端交互均通过 monkeypatch 的假 httpx.Client
-或假 Provider 注入，URL 安全校验通过注入 resolver 控制。
+或直接注入工具的假客户端完成，URL 安全校验通过注入 resolver 控制。
 
 被测对象：
 - app/core/tool/web/web_extract.py (WebExtractTool)
 - app/core/tool/web/web_search.py (WebSearchTool)
-- app/core/tool/web/providers/firecrawl_provider.py (FirecrawlProvider)
-- app/core/tool/web/web_provider_registry.py (WebProviderRegistry)
+- app/core/tool/web/firecrawl_client.py (FirecrawlClient、结果值对象与异常)
 - app/core/tool/web/url_safety.py (URL 安全校验)
 - app/core/tool/web/web_extract_args.py / web_search_args.py (参数模型)
-- app/core/tool/web/web_provider.py (契约与异常)
 """
 
 import logging
@@ -21,94 +19,53 @@ import pytest
 from pydantic import ValidationError
 
 from app.config.constant import Constant
-from app.config.settings import Settings
-from app.core.tool.web.providers.firecrawl_provider import (
-    FirecrawlProvider,
+from app.core.tool.handler.web import firecrawl_client
+from app.core.tool.handler.web.firecrawl_client import (
+    FirecrawlClient,
+    FirecrawlRequestError,
+    FirecrawlUnavailableError,
+    WebExtractItem,
+    WebSearchItem,
     _clean_metadata,
     _search_result_items,
 )
-from app.core.tool.web.providers import firecrawl_provider
-from app.core.tool.web.url_safety import (
+from app.core.tool.handler.web.url_safety import (
     is_safe_public_url,
     normalize_url_for_request,
     sensitive_query_param_name,
     url_contains_secret,
 )
-from app.core.tool.web.web_provider import (
-    WebExtractItem,
-    WebProviderRequestError,
-    WebProviderUnavailableError,
-    WebSearchItem,
-    ensure_supported_extract_format,
-    provider_result_metadata,
-    unsupported_extract_format_message,
-)
-from app.core.tool.web.web_provider_registry import (
-    WebProviderRegistry,
-    get_active_extract_provider,
-    get_active_search_provider,
-    register_default_web_providers,
-)
-from app.core.tool.web.web_extract import WebExtractTool
-from app.core.tool.web.web_search import WebSearchTool
-from app.core.tool.web.web_extract_args import WebExtractArgs
-from app.core.tool.web.web_search_args import WebSearchArgs
+from app.core.tool.handler.web_extract import WebExtractTool
+from app.core.tool.handler.web_search import WebSearchTool
+from app.core.tool.handler.web.web_extract_args import WebExtractArgs
+from app.core.tool.handler.web.web_search_args import WebSearchArgs
 
 # ---------------------------------------------------------------------------
-# 假 Provider / 假 httpx 脚手架
+# 假客户端 / 假 httpx 脚手架
 # ---------------------------------------------------------------------------
 
 
-class FakeProvider:
-    """可注入的假 WebProvider：用于在不触发真实网络的情况下驱动工具层逻辑。
+class FakeClient:
+    """可注入工具的假 Firecrawl 客户端：在不触发真实网络的情况下驱动工具层逻辑。
 
     通过回调在 ``search`` / ``extract`` 阶段返回受控结果，并记录调用次数与入参，
     以便断言「去重后只调用一次」「结果顺序与输入一致」等合同。
     """
 
-    name = "fake"
-
     def __init__(
         self,
         *,
-        name: str = "fake",
-        supports_search: bool = True,
-        supports_extract: bool = True,
-        available: bool = True,
         search_items: list[WebSearchItem] | None = None,
         extract_factory=None,
         search_side_effect: BaseException | None = None,
         extract_side_effect: BaseException | None = None,
     ) -> None:
-        self.name = name
-        self._supports_search = supports_search
-        self._supports_extract = supports_extract
-        self._available = available
         self._search_items = search_items or []
         self._extract_factory = extract_factory
         self._search_side_effect = search_side_effect
         self._extract_side_effect = extract_side_effect
         self.search_calls: list[tuple[str, int]] = []
         self.extract_calls: list[tuple[list[str], str, int]] = []
-
-    @property
-    def display_name(self) -> str:
-        return "Fake Provider"
-
-    def is_available(self) -> bool:
-        return self._available
-
-    def supports_search(self) -> bool:
-        return self._supports_search
-
-    def supports_extract(self) -> bool:
-        return self._supports_extract
-
-    def supported_extract_formats(self) -> frozenset[str]:
-        return frozenset({"markdown", "html"})
-
-    def missing_configuration_message(self) -> str:
-        return "Fake is unavailable: set FAKE_API_KEY."
 
     def search(self, query: str, limit: int) -> list[WebSearchItem]:
         self.search_calls.append((query, limit))
@@ -135,8 +92,8 @@ class FakeProvider:
         ]
 
 
-class _FakeFirecrawl(FirecrawlProvider):
-    """用可控的 ``_post`` 实现构造 FirecrawlProvider，避免真实网络。
+class _FakeFirecrawl(FirecrawlClient):
+    """用可控的 ``_post`` 实现构造 FirecrawlClient，避免真实网络。
 
     以子类方法覆盖 ``_post``，确保同步调用与 ThreadPoolExecutor 工作线程内都能
     正确绑定 ``self``（直接对实例属性打补丁的裸函数不会被绑定，会导致丢参）。
@@ -203,23 +160,6 @@ def _make_fake_httpx_client(
     return _FakeClient
 
 
-def _registry_with(*providers: Any) -> WebProviderRegistry:
-    """构造仅含给定 provider 的注册表。"""
-    registry = WebProviderRegistry()
-    for provider in providers:
-        registry.register(provider)
-    return registry
-
-
-@pytest.fixture(autouse=True)
-def _clear_web_backend_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    """让 fake provider 测试不受本机环境中的生产 backend 配置影响。"""
-
-    monkeypatch.setattr(Settings, "WEB_SEARCH_BACKEND", "")
-    monkeypatch.setattr(Settings, "WEB_EXTRACT_BACKEND", "")
-    monkeypatch.setattr(Settings, "WEB_BACKEND", "")
-
-
 # ---------------------------------------------------------------------------
 # 1. Firecrawl 搜索响应解析与 limit 钳制
 # ---------------------------------------------------------------------------
@@ -246,13 +186,12 @@ def test_search_result_items_v2_structure(monkeypatch: pytest.MonkeyPatch) -> No
 def test_web_tools_use_generic_minimal_ui_entries() -> None:
     """Web 工具只返回通用 entries，正文仍保留在模型 content 通道。"""
 
-    provider = FakeProvider(
-        name="fake",
+    client = FakeClient(
         search_items=[
             WebSearchItem(title="A", url="https://a.com", description="desc", position=1)
         ],
     )
-    observation = WebSearchTool(_registry_with(provider)).execute(query="测试")
+    observation = WebSearchTool(client).execute(query="测试")
 
     assert observation.display_data == {
         "kind": "web-search-results",
@@ -266,8 +205,7 @@ def test_web_tools_use_generic_minimal_ui_entries() -> None:
 def test_web_extract_ui_data_uses_generic_entries_without_document_content() -> None:
     """正文仍供模型使用，但 UI data 只使用通用 entries。"""
 
-    provider = FakeProvider(
-        name="fake",
+    client = FakeClient(
         extract_factory=lambda urls, fmt, cl: [
             WebExtractItem(
                 url=urls[0],
@@ -277,7 +215,7 @@ def test_web_extract_ui_data_uses_generic_entries_without_document_content() -> 
             )
         ],
     )
-    observation = WebExtractTool(_registry_with(provider), resolver=_public_resolver).execute(
+    observation = WebExtractTool(client, resolver=_public_resolver).execute(
         urls=["https://example.com/docs"]
     )
 
@@ -337,9 +275,9 @@ def test_firecrawl_search_clamps_limit_to_max(monkeypatch: pytest.MonkeyPatch) -
         {"title": f"t{i}", "url": f"https://e.com/{i}"} for i in range(50)
     ]
     payload = {"success": True, "data": {"web": many}}
-    provider = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
+    client = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
 
-    results = provider.search("query", limit=1000)
+    results = client.search("query", limit=1000)
 
     assert len(results) == Constant.Web.SEARCH_LIMIT_MAX
     assert all(isinstance(r, WebSearchItem) for r in results)
@@ -352,9 +290,9 @@ def test_firecrawl_search_parses_v1_via_post(monkeypatch: pytest.MonkeyPatch) ->
         "success": True,
         "data": [{"title": "X", "url": "https://x.com", "markdown": "desc"}],
     }
-    provider = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
+    client = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
 
-    results = provider.search("q", limit=5)
+    results = client.search("q", limit=5)
 
     assert len(results) == 1
     assert results[0].url == "https://x.com"
@@ -363,21 +301,21 @@ def test_firecrawl_search_parses_v1_via_post(monkeypatch: pytest.MonkeyPatch) ->
 
 
 # ---------------------------------------------------------------------------
-# 2. HTTP 200 但 success:false 必须抛 WebProviderRequestError
+# 2. HTTP 200 但 success:false 必须抛 FirecrawlRequestError
 # ---------------------------------------------------------------------------
 
 
 def test_post_success_false_raises_request_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """HTTP 200 但 {success:false} 必须抛 WebProviderRequestError（不得静默返回空）。"""
+    """HTTP 200 但 {success:false} 必须抛 FirecrawlRequestError（不得静默返回空）。"""
 
     fake_client = _make_fake_httpx_client(
         {"success": False, "error": "rate limited"}
     )
-    monkeypatch.setattr(firecrawl_provider.httpx, "Client", fake_client)
+    monkeypatch.setattr(firecrawl_client.httpx, "Client", fake_client)
 
-    provider = FirecrawlProvider(api_key="dummy")
-    with pytest.raises(WebProviderRequestError) as exc_info:
-        provider._post("search", {"query": "q"})
+    client = FirecrawlClient(api_key="dummy")
+    with pytest.raises(FirecrawlRequestError) as exc_info:
+        client._post("search", {"query": "q"})
 
     assert "rate limited" in str(exc_info.value)
 
@@ -385,35 +323,35 @@ def test_post_success_false_raises_request_error(monkeypatch: pytest.MonkeyPatch
 def test_search_propagates_success_false_as_request_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """search() 在 success:false 时应向上抛 WebProviderRequestError（潜在缺陷：绕过静默）。"""
+    """search() 在 success:false 时应向上抛 FirecrawlRequestError（潜在缺陷：绕过静默）。"""
 
     fake_client = _make_fake_httpx_client(
         {"success": False, "error": "upstream boom"}
     )
-    monkeypatch.setattr(firecrawl_provider.httpx, "Client", fake_client)
+    monkeypatch.setattr(firecrawl_client.httpx, "Client", fake_client)
 
-    provider = FirecrawlProvider(api_key="dummy")
-    with pytest.raises(WebProviderRequestError):
-        provider.search("q", limit=5)
+    client = FirecrawlClient(api_key="dummy")
+    with pytest.raises(FirecrawlRequestError):
+        client.search("q", limit=5)
 
 
 def test_post_http_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
     """HTTP 非 2xx（raise_for_status 抛错）应向上传播 httpx.HTTPError（潜在缺陷：错误透传）。"""
 
     fake_client = _make_fake_httpx_client({}, raise_on_status=True)
-    monkeypatch.setattr(firecrawl_provider.httpx, "Client", fake_client)
+    monkeypatch.setattr(firecrawl_client.httpx, "Client", fake_client)
 
-    provider = FirecrawlProvider(api_key="dummy")
+    client = FirecrawlClient(api_key="dummy")
     with pytest.raises(httpx.HTTPError):
-        provider._post("search", {"query": "q"})
+        client._post("search", {"query": "q"})
 
 
 def test_extract_empty_urls_returns_empty_list() -> None:
     """空 URL 列表直接返回空结果，不发起任何网络请求。"""
 
-    provider = FirecrawlProvider(api_key="dummy")
+    client = FirecrawlClient(api_key="dummy")
 
-    assert provider.extract([], "markdown", 1000) == []
+    assert client.extract([], "markdown", 1000) == []
 
 
 def test_post_transport_error_is_logged_and_propagated(
@@ -428,13 +366,13 @@ def test_post_transport_error_is_logged_and_propagated(
     # 显式保存原始异常实例，用于验证 _post 传播的是「同一个」异常而非包装/替换。
     original_error = httpx.ConnectError("connect failed")
     fake_client = _make_fake_httpx_client({}, raise_on_post=original_error)
-    monkeypatch.setattr(firecrawl_provider.httpx, "Client", fake_client)
-    provider = FirecrawlProvider(api_key=api_key)
+    monkeypatch.setattr(firecrawl_client.httpx, "Client", fake_client)
+    client = FirecrawlClient(api_key=api_key)
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
     # 1) 必须抛原始 httpx.ConnectError，而非 NameError/UnboundLocalError 或包装异常。
     with pytest.raises(httpx.ConnectError) as exc_info:
-        provider._post("search", {"query": "q"})
+        client._post("search", {"query": "q"})
 
     assert type(exc_info.value) is httpx.ConnectError
     assert str(exc_info.value) == "connect failed"
@@ -461,12 +399,12 @@ def test_log_call_failure_direct_writes_structured_fields(
     / error / has_api_key，且绝不输出 api_key 原文（潜在缺陷：字段缺漏或错位、api_key 泄漏）。"""
 
     api_key = "AKIA-DIRECT-LOG-SECRET"
-    provider = FirecrawlProvider(api_key=api_key)
+    client = FirecrawlClient(api_key=api_key)
     error = httpx.ConnectTimeout("timed out")
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
     # 直接驱动私有方法：传输层失败形态（status_code=None）。
-    provider._log_call_failure("scrape", None, 0.0, error)
+    client._log_call_failure("scrape", None, 0.0, error)
 
     failed = [
         r
@@ -486,12 +424,11 @@ def test_log_call_failure_direct_writes_structured_fields(
 
 
 def test_post_unavailable_raises_unavailable_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """未配置（is_available=False）时 _post 必须抛 WebProviderUnavailableError（无网络）。"""
+    """未配置 api_key 与 base_url 时 _post 必须抛 FirecrawlUnavailableError（无网络）。"""
 
-    provider = FirecrawlProvider(api_key="", base_url="")
-    assert provider.is_available() is False
-    with pytest.raises(WebProviderUnavailableError):
-        provider._post("search", {"query": "q"})
+    client = FirecrawlClient(api_key="", base_url="")
+    with pytest.raises(FirecrawlUnavailableError):
+        client._post("search", {"query": "q"})
 
 
 # ---------------------------------------------------------------------------
@@ -518,12 +455,12 @@ def test_post_http_error_logs_failed_event_with_fields(
 
     api_key = "AKIA-SUPER-SECRET-KEY-123"
     fake_client = _make_fake_httpx_client({}, raise_on_status=True, status_code=503)
-    monkeypatch.setattr(firecrawl_provider.httpx, "Client", fake_client)
-    provider = FirecrawlProvider(api_key=api_key)
+    monkeypatch.setattr(firecrawl_client.httpx, "Client", fake_client)
+    client = FirecrawlClient(api_key=api_key)
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
     with pytest.raises(httpx.HTTPError):
-        provider._post("search", {"query": "q"})
+        client._post("search", {"query": "q"})
 
     failed = [
         r
@@ -548,12 +485,12 @@ def test_post_success_false_logs_reported_failure_event(
     fake_client = _make_fake_httpx_client(
         {"success": False, "error": "rate limited"}, status_code=200
     )
-    monkeypatch.setattr(firecrawl_provider.httpx, "Client", fake_client)
-    provider = FirecrawlProvider(api_key=api_key)
+    monkeypatch.setattr(firecrawl_client.httpx, "Client", fake_client)
+    client = FirecrawlClient(api_key=api_key)
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
-    with pytest.raises(WebProviderRequestError):
-        provider._post("scrape", {"url": "https://x.com", "formats": ["markdown"]})
+    with pytest.raises(FirecrawlRequestError):
+        client._post("scrape", {"url": "https://x.com", "formats": ["markdown"]})
 
     failed = [
         r
@@ -579,11 +516,11 @@ def test_post_success_logs_info_and_not_response_body(
         "data": {"url": "https://x.com", "markdown": body_marker, "metadata": {"title": "T"}},
     }
     fake_client = _make_fake_httpx_client(payload, status_code=200)
-    monkeypatch.setattr(firecrawl_provider.httpx, "Client", fake_client)
-    provider = FirecrawlProvider(api_key=api_key)
+    monkeypatch.setattr(firecrawl_client.httpx, "Client", fake_client)
+    client = FirecrawlClient(api_key=api_key)
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
-    result = provider._post("scrape", {"url": "https://x.com", "formats": ["markdown"]})
+    result = client._post("scrape", {"url": "https://x.com", "formats": ["markdown"]})
 
     assert result == payload
     succeeded = [
@@ -610,12 +547,12 @@ def test_scrape_one_page_failure_logs_warning(
     bad_url = "https://e.com/bad"
 
     def _fail_post(endpoint: str, body: dict[str, object]) -> dict[str, object]:
-        raise WebProviderRequestError("boom on page")
+        raise FirecrawlRequestError("boom on page")
 
-    provider = _FakeFirecrawl(api_key=api_key, post_impl=_fail_post)
+    client = _FakeFirecrawl(api_key=api_key, post_impl=_fail_post)
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
-    item = provider._scrape_one(bad_url, "markdown", 100)
+    item = client._scrape_one(bad_url, "markdown", 100)
 
     warnings = [
         r
@@ -650,9 +587,9 @@ def test_scrape_applies_char_limit_and_truncated_flag(
             "metadata": {"title": "T"},
         },
     }
-    provider = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
+    client = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
 
-    items = provider.extract(["https://e.com/p"], "markdown", char_limit=10)
+    items = client.extract(["https://e.com/p"], "markdown", char_limit=10)
 
     assert len(items) == 1
     assert items[0].content == "x" * 10
@@ -672,9 +609,9 @@ def test_scrape_not_truncated_when_within_limit(
             "metadata": {"title": "T"},
         },
     }
-    provider = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
+    client = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
 
-    items = provider.extract(["https://e.com/p"], "markdown", char_limit=100)
+    items = client.extract(["https://e.com/p"], "markdown", char_limit=100)
 
     assert items[0].truncated is False
 
@@ -695,9 +632,9 @@ def test_scrape_strips_metadata_noise_keys(monkeypatch: pytest.MonkeyPatch) -> N
             },
         },
     }
-    provider = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
+    client = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
 
-    items = provider.extract(["https://e.com/p"], "markdown", char_limit=100)
+    items = client.extract(["https://e.com/p"], "markdown", char_limit=100)
 
     metadata = items[0].metadata
     assert "rawHtml" not in metadata
@@ -723,9 +660,9 @@ def test_scrape_preserves_order_for_multiple_urls(
             },
         }
 
-    provider = _FakeFirecrawl(post_impl=_fake_post)
+    client = _FakeFirecrawl(post_impl=_fake_post)
 
-    items = provider.extract(urls, "markdown", char_limit=100)
+    items = client.extract(urls, "markdown", char_limit=100)
 
     assert [item.url for item in items] == urls
 
@@ -733,14 +670,14 @@ def test_scrape_preserves_order_for_multiple_urls(
 def test_scrape_single_page_failure_records_error_not_raise(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """单页 _post 抛 WebProviderRequestError 时该页带 error 且不中断其他页（潜在缺陷：容错）。"""
+    """单页 _post 抛 FirecrawlRequestError 时该页带 error 且不中断其他页（潜在缺陷：容错）。"""
 
     good_url = "https://e.com/ok"
     bad_url = "https://e.com/bad"
 
     def _fake_post(endpoint: str, body: dict[str, Any]) -> dict[str, Any]:
         if body["url"] == bad_url:
-            raise WebProviderRequestError("boom")
+            raise FirecrawlRequestError("boom")
         return {
             "success": True,
             "data": {
@@ -750,9 +687,9 @@ def test_scrape_single_page_failure_records_error_not_raise(
             },
         }
 
-    provider = _FakeFirecrawl(post_impl=_fake_post)
+    client = _FakeFirecrawl(post_impl=_fake_post)
 
-    items = provider.extract([good_url, bad_url], "markdown", char_limit=100)
+    items = client.extract([good_url, bad_url], "markdown", char_limit=100)
 
     by_url = {item.url: item for item in items}
     assert by_url[good_url].error == ""
@@ -764,9 +701,9 @@ def test_scrape_missing_data_object_records_error(
 ) -> None:
     """响应缺少 data 对象时单页带 error 而非抛异常（潜在缺陷：结构异常健壮性）。"""
 
-    provider = _FakeFirecrawl(post_impl=lambda endpoint, body: {"success": True})
+    client = _FakeFirecrawl(post_impl=lambda endpoint, body: {"success": True})
 
-    items = provider.extract(["https://e.com/p"], "markdown", char_limit=100)
+    items = client.extract(["https://e.com/p"], "markdown", char_limit=100)
 
     assert items[0].error  # 非空错误描述
 
@@ -792,8 +729,8 @@ def test_extract_all_pages_fail_returns_error_retryable_true() -> None:
             url="https://e.com/1", title="", content="", metadata={}, error="boom1"
         )
     ]
-    provider = FakeProvider(extract_factory=lambda urls, fmt, cl: failed)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient(extract_factory=lambda urls, fmt, cl: failed)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://e.com/1"])
 
@@ -814,8 +751,8 @@ def test_extract_partial_success_marks_partial_and_failed_count() -> None:
             WebExtractItem(url=urls[2], title="t", content="ok2", metadata={}),
         ]
 
-    provider = FakeProvider(extract_factory=_factory)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient(extract_factory=_factory)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
@@ -847,8 +784,8 @@ def test_extract_full_success_no_partial_field() -> None:
             WebExtractItem(url=u, title="t", content="c", metadata={}) for u in req_urls
         ]
 
-    provider = FakeProvider(extract_factory=_factory)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient(extract_factory=_factory)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
     import json
@@ -860,16 +797,16 @@ def test_extract_full_success_no_partial_field() -> None:
 
 
 def test_extract_dedup_requests_each_url_once() -> None:
-    """重复 URL 在请求前去重，provider.extract 仅被调用一次且 URL 唯一。"""
+    """重复 URL 在请求前去重，client.extract 仅被调用一次且 URL 唯一。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://e.com/a", "https://e.com/a", "https://e.com/a"])
 
     assert obs.status == "success"
-    assert len(provider.extract_calls) == 1
-    called_urls = provider.extract_calls[0][0]
+    assert len(client.extract_calls) == 1
+    called_urls = client.extract_calls[0][0]
     assert called_urls == ["https://e.com/a"]
 
 
@@ -877,8 +814,8 @@ def test_extract_url_count_over_limit_returns_error() -> None:
     """URL 数超过 Constant.Web.EXTRACT_URL_LIMIT_MAX 时返回确定性错误（潜在缺陷：越界保护）。"""
 
     urls = [f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)]
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
@@ -969,19 +906,19 @@ def test_url_safety_blocks_when_fake_ip_mixed_with_private_address() -> None:
 
 
 def test_web_extract_succeeds_behind_fake_ip_proxy() -> None:
-    """fake-ip 代理环境下 web_extract 能真正走到 provider（潜在缺陷：全域名被拦）。
+    """fake-ip 代理环境下 web_extract 能真正走到客户端（潜在缺陷：全域名被拦）。
 
     这是本次缺陷的端到端回归：解析结果为 fake-ip 占位段时必须照常提取，而不是在
     安全检查阶段就返回 Blocked。
     """
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=lambda h: ["198.18.0.67"])
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=lambda h: ["198.18.0.67"])
 
     obs = tool.execute(urls=["https://example.com/page"])
 
     assert obs.status == "success"
-    assert len(provider.extract_calls) == 1
+    assert len(client.extract_calls) == 1
 
 
 def test_url_safety_blocks_non_http_scheme() -> None:
@@ -1037,8 +974,8 @@ def test_normalize_url_adds_https_when_scheme_missing() -> None:
 def test_web_extract_blocks_sensitive_query_param() -> None:
     """web_extract 对带 token 的 URL 返回 'Blocked:' 错误（潜在缺陷：端到端拦截）。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/?token=abc"])
 
@@ -1049,8 +986,8 @@ def test_web_extract_blocks_sensitive_query_param() -> None:
 def test_web_extract_blocks_non_http_scheme() -> None:
     """web_extract 对非 http(s) 协议返回 'Blocked:' 错误。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["ftp://example.com/file"])
 
@@ -1061,8 +998,8 @@ def test_web_extract_blocks_non_http_scheme() -> None:
 def test_web_extract_blocks_userinfo() -> None:
     """web_extract 对带凭据的 URL 返回 'Blocked:' 错误。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["http://user:pass@example.com/"])
 
@@ -1071,129 +1008,32 @@ def test_web_extract_blocks_userinfo() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. Provider 选择语义
+# 6. 未配置时的可执行文案
 # ---------------------------------------------------------------------------
 
 
-def test_search_single_unavailable_provider_gives_actionable_message() -> None:
-    """单个不可用 provider 时，web_search 应给出含 FIRECRAWL_API_KEY 的可执行文案。"""
+def test_search_unconfigured_client_gives_actionable_message() -> None:
+    """Firecrawl 未配置时，web_search 应给出含 FIRECRAWL_API_KEY 的可执行文案。"""
 
-    provider = FirecrawlProvider(api_key="", base_url="")
-    tool = WebSearchTool(_registry_with(provider))
+    client = FirecrawlClient(api_key="", base_url="")
+    tool = WebSearchTool(client)
 
     obs = tool.execute(query="hello")
 
     assert obs.status == "error"
     assert "FIRECRAWL_API_KEY" in obs.content
-    assert "No web search provider configured." not in obs.content
 
 
-def test_extract_single_unavailable_provider_gives_actionable_message() -> None:
-    """单个不可用 provider 时，web_extract 应给出 actionable 文案（潜在缺陷：可执行指引）。"""
+def test_extract_unconfigured_client_gives_actionable_message() -> None:
+    """Firecrawl 未配置时，web_extract 应给出 actionable 文案（潜在缺陷：可执行指引）。"""
 
-    provider = FirecrawlProvider(api_key="", base_url="")
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FirecrawlClient(api_key="", base_url="")
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
     assert "FIRECRAWL_API_KEY" in obs.content
-
-
-def test_search_explicit_unregistered_backend_reports_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """显式 backend 未注册时报错含 backend 名（潜在缺陷：可诊断性）。"""
-
-    monkeypatch.setattr(Settings, "WEB_SEARCH_BACKEND", "ghost")
-    monkeypatch.setattr(Settings, "WEB_BACKEND", "")
-    provider = FirecrawlProvider(api_key="dummy")
-    tool = WebSearchTool(_registry_with(provider))
-
-    obs = tool.execute(query="hello")
-
-    assert obs.status == "error"
-    assert "ghost" in obs.content
-
-
-def test_extract_explicit_unregistered_backend_reports_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """显式 extract backend 未注册时报错含 backend 名。"""
-
-    monkeypatch.setattr(Settings, "WEB_EXTRACT_BACKEND", "ghost")
-    monkeypatch.setattr(Settings, "WEB_BACKEND", "")
-    provider = FirecrawlProvider(api_key="dummy")
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
-
-    obs = tool.execute(urls=["https://example.com/"])
-
-    assert obs.status == "error"
-    assert "ghost" in obs.content
-
-
-def test_extract_search_only_explicit_backend_gives_search_only_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """显式指定 search-only provider 用于 extract 时给出 search-only 错误。"""
-
-    monkeypatch.setattr(Settings, "WEB_EXTRACT_BACKEND", "searchonly")
-    monkeypatch.setattr(Settings, "WEB_BACKEND", "")
-    provider = FakeProvider(name="searchonly", supports_extract=False, available=True)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
-
-    obs = tool.execute(urls=["https://example.com/"])
-
-    assert obs.status == "error"
-    assert "search-only" in obs.content
-
-
-def test_extract_search_only_only_registered_no_backend_gives_search_only_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """回归：四级回退的「首个已注册 provider」档（仅含 search-only provider 且无显式 backend）下，
-    active_extract_provider 返回该 provider，工具据此给出精确 search-only 错误，而非笼统的
-    "No web extraction provider configured."（潜在缺陷：能力不匹配文案被笼统文案覆盖）。
-    """
-
-    monkeypatch.setattr(Settings, "WEB_EXTRACT_BACKEND", "")
-    monkeypatch.setattr(Settings, "WEB_BACKEND", "")
-    provider = FakeProvider(name="searchonly", supports_extract=False, available=True)
-    registry = _registry_with(provider)
-
-    # 契约层：四级回退的末档应返回该 search-only provider（非空注册表绝不返回 None）。
-    assert registry.active_extract_provider("") is provider
-
-    tool = WebExtractTool(registry, resolver=_public_resolver)
-
-    obs = tool.execute(urls=["https://example.com/"])
-
-    assert obs.status == "error"
-    # 期望：明确告知 search-only，而不是笼统的 "No web extraction provider configured."
-    assert "search-only" in obs.content
-    assert "No web extraction provider configured." not in obs.content
-
-
-def test_search_provider_without_search_support_rejects_at_execution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """显式选中不支持 search 的 provider 时，web_search 在执行期拒绝且不可重试。
-
-    可用性判定位于 ``execute`` 的 Provider 选择（``_resolve_search_provider``），不在装配期隐藏工具：
-    工具始终可注册，能力不匹配作为配置类失败返回 ``retryable=False`` 的错误观察。
-    """
-
-    monkeypatch.setattr(Settings, "WEB_SEARCH_BACKEND", "nosupport")
-    monkeypatch.setattr(Settings, "WEB_BACKEND", "")
-    provider = FakeProvider(name="nosupport", supports_search=False, available=True)
-    tool = WebSearchTool(_registry_with(provider))
-
-    assert tool.to_definition_if_avaliable() is not None
-
-    obs = tool.execute(query="hello")
-
-    assert obs.status == "error"
-    assert "hint: do not retry this tool call." in obs.content
 
 
 # ---------------------------------------------------------------------------
@@ -1254,8 +1094,8 @@ def test_web_search_chinese_not_escaped() -> None:
     items = [
         WebSearchItem(title="中文标题", url="https://e.com", description="中文描述", position=1)
     ]
-    provider = FakeProvider(search_items=items)
-    tool = WebSearchTool(_registry_with(provider))
+    client = FakeClient(search_items=items)
+    tool = WebSearchTool(client)
 
     obs = tool.execute(query="中文")
 
@@ -1274,8 +1114,8 @@ def test_web_extract_chinese_not_escaped() -> None:
             for u in req_urls
         ]
 
-    provider = FakeProvider(extract_factory=_factory)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient(extract_factory=_factory)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://e.com/1"])
 
@@ -1289,12 +1129,12 @@ def test_web_extract_chinese_not_escaped() -> None:
 
 
 def test_extract_unavailable_error_retryable_false() -> None:
-    """Provider 抛 WebProviderUnavailableError（未配置）时工具返回 retryable=False。"""
+    """客户端抛 FirecrawlUnavailableError（未配置）时工具返回 retryable=False。"""
 
-    provider = FakeProvider(
-        available=True, extract_side_effect=WebProviderUnavailableError("not configured")
+    client = FakeClient(
+        extract_side_effect=FirecrawlUnavailableError("not configured")
     )
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/"])
 
@@ -1303,12 +1143,12 @@ def test_extract_unavailable_error_retryable_false() -> None:
 
 
 def test_extract_request_error_retryable_true() -> None:
-    """Provider 抛 WebProviderRequestError（远端失败）时工具返回 retryable=True。"""
+    """客户端抛 FirecrawlRequestError（远端失败）时工具返回 retryable=True。"""
 
-    provider = FakeProvider(
-        available=True, extract_side_effect=WebProviderRequestError("remote failed")
+    client = FakeClient(
+        extract_side_effect=FirecrawlRequestError("remote failed")
     )
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/"])
 
@@ -1317,12 +1157,12 @@ def test_extract_request_error_retryable_true() -> None:
 
 
 def test_search_unavailable_error_retryable_false() -> None:
-    """web_search 在 WebProviderUnavailableError 时 retryable=False。"""
+    """web_search 在 FirecrawlUnavailableError 时 retryable=False。"""
 
-    provider = FakeProvider(
-        available=True, search_side_effect=WebProviderUnavailableError("not configured")
+    client = FakeClient(
+        search_side_effect=FirecrawlUnavailableError("not configured")
     )
-    tool = WebSearchTool(_registry_with(provider))
+    tool = WebSearchTool(client)
 
     obs = tool.execute(query="hello")
 
@@ -1331,12 +1171,12 @@ def test_search_unavailable_error_retryable_false() -> None:
 
 
 def test_search_request_error_retryable_true() -> None:
-    """web_search 在 WebProviderRequestError 时 retryable=True。"""
+    """web_search 在 FirecrawlRequestError 时 retryable=True。"""
 
-    provider = FakeProvider(
-        available=True, search_side_effect=WebProviderRequestError("remote failed")
+    client = FakeClient(
+        search_side_effect=FirecrawlRequestError("remote failed")
     )
-    tool = WebSearchTool(_registry_with(provider))
+    tool = WebSearchTool(client)
 
     obs = tool.execute(query="hello")
 
@@ -1345,166 +1185,21 @@ def test_search_request_error_retryable_true() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 额外的契约与注册表覆盖
+# 工具定义装配
 # ---------------------------------------------------------------------------
 
 
-def test_registry_active_search_prefers_available() -> None:
-    """注册表在多个 provider 中优先选「支持且可用」的（潜在缺陷：可用性优先）。"""
-
-    unavailable = FirecrawlProvider(api_key="", base_url="")
-    available = FakeProvider(available=True)
-    registry = _registry_with(unavailable, available)
-
-    provider = registry.active_search_provider("")
-    assert provider is available
-
-
-def test_registry_explicit_backend_returns_named() -> None:
-    """显式 backend 直接返回同名 provider，不受能力/可用性过滤。"""
-
-    provider = FakeProvider(name="custom")
-    registry = _registry_with(provider)
-
-    assert registry.active_search_provider("custom") is provider
-    assert registry.active_extract_provider("custom") is provider
-
-
-def test_registry_empty_returns_none() -> None:
-    """空注册表才返回 None。"""
-
-    registry = WebProviderRegistry()
-
-    assert registry.active_search_provider("") is None
-    assert registry.active_extract_provider("") is None
-
-
-def test_registry_falls_back_to_provider_without_capability() -> None:
-    """无支持目标能力的 provider 时，退回首个已注册 provider 以给出能力不匹配文案。"""
-
-    provider = FakeProvider(supports_search=False, supports_extract=False)
-    registry = _registry_with(provider)
-
-    assert registry.active_search_provider("") is provider
-    assert registry.active_extract_provider("") is provider
-
-
-def test_registry_four_level_fallback_contract() -> None:
-    """四级回退契约逐项验证（潜在缺陷：回退优先级错乱或能力/可用性判定被忽略）。
-
-    档位：①显式 backend → ②优先级列表内可用且支持能力 → ③任意可用且支持能力 →
-    ④任意支持能力但不可用（给配置文案）→ ⑤首个已注册 provider（给能力不匹配文案，
-    如 search-only 后端用于 extract）；注册表为空才返回 None。
-    """
-
-    # ① 显式 backend 直接返回同名 provider，不做能力/可用性过滤。
-    explicit = FakeProvider(name="explicit", available=False, supports_extract=False)
-    reg_explicit = _registry_with(explicit)
-    assert reg_explicit.active_extract_provider("explicit") is explicit
-
-    # ② 优先级列表中的可用且支持能力者优先于其它可用且支持能力者。
-    priority = FakeProvider(name="firecrawl", available=True)
-    other = FakeProvider(name="other", available=True)
-    reg_priority = _registry_with(other, priority)
-    assert reg_priority.active_extract_provider("") is priority
-
-    # ③ 优先级列表内无可用候选时，回退到任意可用且支持能力者。
-    only_other = FakeProvider(name="other", available=True)
-    reg_three = _registry_with(only_other)
-    assert reg_three.active_extract_provider("") is only_other
-
-    # ④ 仅有「支持能力但不可用（未配置）」的 provider 时，返回它以便给出配置文案。
-    unavailable_supporting = FakeProvider(
-        name="firecrawl", available=False, supports_extract=True
-    )
-    reg_four = _registry_with(unavailable_supporting)
-    assert reg_four.active_extract_provider("") is unavailable_supporting
-
-    # ⑤ 仅有「不支持目标能力」的 provider 时，返回首个已注册 provider（能力不匹配文案）。
-    no_capability = FakeProvider(
-        name="searchonly", available=True, supports_extract=False
-    )
-    reg_five = _registry_with(no_capability)
-    assert reg_five.active_extract_provider("") is no_capability
-
-    # 空注册表才返回 None。
-    assert WebProviderRegistry().active_extract_provider("") is None
-    assert WebProviderRegistry().active_search_provider("") is None
-
-
-def test_register_default_web_providers_and_getters() -> None:
-    """register_default_web_providers 与 get_active_* 包装函数可用。"""
-
-    from app.core.tool.web.providers import default_web_providers
-
-    registry = register_default_web_providers(WebProviderRegistry(), default_web_providers())
-    assert registry.get_provider("firecrawl") is not None
-    assert len(registry.list_providers()) >= 1
-
-    assert get_active_search_provider(registry) is not None or True
-    assert get_active_extract_provider(registry) is not None or True
-
-
-def test_ensure_supported_extract_format_raises_for_unsupported() -> None:
-    """ensure_supported_extract_format 对不支持的格式抛 WebProviderUnavailableError。"""
-
-    with pytest.raises(WebProviderUnavailableError):
-        ensure_supported_extract_format("P", "text", frozenset({"markdown"}))
-
-
-def test_unsupported_extract_format_message_shape() -> None:
-    """format 不支持的错误文案包含 provider 名与格式。"""
-
-    msg = unsupported_extract_format_message("Firecrawl", "text")
-    assert "Firecrawl" in msg
-    assert "text" in msg
-
-
-def test_provider_result_metadata_uses_explicit_or_falls_back() -> None:
-    """provider_result_metadata 优先用显式 metadata，否则回退到未映射字段。"""
-
-    explicit = provider_result_metadata(
-        {"metadata": {"a": 1}}, frozenset({"url"})
-    )
-    assert explicit == {"a": 1}
-
-    fallback = provider_result_metadata(
-        {"url": "u", "content": "c", "title": "t"}, frozenset({"url", "content"})
-    )
-    assert fallback == {"title": "t"}
-
-
 def test_build_definitions_return_tool_definition() -> None:
-    """build_web_search_definition / build_web_extract_definition 返回可用定义（不触网）。
+    """build_web_search_definition / build_web_extract_definition 返回可用定义（不触网）。"""
 
-    build_* 自 ``to_definition_if_avaliable`` 起按 ``avaliable()`` 门控：默认内置 Provider 在
-    未配置凭据时不可用，故必须注入「可用且声明对应能力」的 Fake Provider 才返回定义。
-    """
+    from app.core.tool.handler.web_extract import build_web_extract_definition
+    from app.core.tool.handler.web_search import build_web_search_definition
 
-    from app.core.tool.web.web_extract import build_web_extract_definition
-    from app.core.tool.web.web_search import build_web_search_definition
+    search_def = build_web_search_definition()
+    extract_def = build_web_extract_definition()
 
-    registry = _registry_with(
-        FakeProvider(name="fake", supports_search=True, supports_extract=True)
-    )
-
-    search_def = build_web_search_definition(registry)
-    extract_def = build_web_extract_definition(registry)
-
+    assert search_def is not None and extract_def is not None
     assert search_def.name == "web_search"
     assert extract_def.name == "web_extract"
     assert search_def.args_model is WebSearchArgs
     assert extract_def.args_model is WebExtractArgs
-
-
-def test_web_extract_unsupported_format_returns_error() -> None:
-    """请求 provider 不支持的 extract 格式时返回确定性错误（潜在缺陷：格式能力校验）。"""
-
-    # FirecrawlProvider 仅支持 markdown/html；'text' 应触发格式不支持错误。
-    real = FirecrawlProvider(api_key="dummy")
-    tool = WebExtractTool(_registry_with(real), resolver=_public_resolver)
-
-    obs = tool.execute(urls=["https://example.com/"], format="text")  # type: ignore[arg-type]
-
-    assert obs.status == "error"
-    assert "text" in obs.content

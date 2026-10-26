@@ -5,7 +5,7 @@
 1. 模块面：``child_agent_close``（handler）与 ``child_agent_close_args``（args 模型）
    两个模块已不可导入、源文件已从磁盘删除、无残留文本引用。
 2. 名字面：``ALL_TOOL_NAMES`` 与 ``ToolName`` 不含该名字、无重复、长度与常量集自洽。
-3. 装配面：``ToolSystem.build_tool_system()`` 的注册清单不含该名字，且「注册集合 =
+3. 装配面：``build_tool_registry()`` 的注册清单不含该名字，且「注册集合 =
    规范集合 - 条件跳过的 Web 工具」这一不变式仍然成立。
 4. 兄弟面（对抗）：仍存在的三个 child 工具（send/status/wait）的 ``args_model`` /
    ``to_definition()`` 契约，以及 ``CHILD_DISALLOWED_TOOLS`` 不变式未被破坏。
@@ -25,29 +25,27 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-# 打破在途重构中的循环导入：先 import 包本体，再导入其子模块。
-import app.tools as _tools_pkg
 from app.service.agent_team import registry as agent_team_registry_module
 from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
 from app.service.agent_team.registry import AgentTeamConfigurationRegistry
 from app.config.constant import Constant
 from app.core.tool.schemas import ALL_TOOL_NAMES, ToolName
-from app.core.tool.child_agent.child_agent_send import (
+from app.core.tool.handler.child_agent_send import (
     ChildAgentSendTool,
     build_child_agent_send_definition,
 )
-from app.core.tool.child_agent.child_agent_status import (
+from app.core.tool.handler.child_agent_status import (
     ChildAgentStatusTool,
     build_child_agent_status_definition,
 )
-from app.core.tool.wait_messages import (
+from app.core.tool.handler.wait_messages import (
     WaitMessagesTool,
     build_wait_messages_definition,
 )
-from app.core.tool.child_agent.child_agent_send_args import ChildAgentSendArgs
-from app.core.tool.child_agent.child_agent_status_args import ChildAgentStatusArgs
-from app.core.tool.wait_messages_args import WaitMessagesArgs
-from app.tools.tool_system import ToolSystem
+from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
+from app.core.tool.handler.child_agent.child_agent_status_args import ChildAgentStatusArgs
+from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
+from app.tools.tool_registration import build_tool_registry
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
 from app.utils.path import system_cosir as paths
@@ -56,8 +54,8 @@ from app.utils.path import system_cosir as paths
 _REMOVED_TOOL_NAME = "child_agent_close"
 
 # 被删除的模块全限定名。
-_REMOVED_HANDLER_MODULE = "app.core.tool.child_agent.child_agent_close"
-_REMOVED_ARGS_MODULE = "app.core.tool.child_agent.child_agent_close_args"
+_REMOVED_HANDLER_MODULE = "app.core.tool.handler.child_agent_close"
+_REMOVED_ARGS_MODULE = "app.core.tool.handler.child_agent.child_agent_close_args"
 
 # 业务源码根目录（用于磁盘残留扫描）。
 _APP_DIR = Path(__file__).resolve().parents[1] / "app"
@@ -115,7 +113,7 @@ _CONDITIONALLY_SKIPPED_TOOLS = frozenset({"web_search", "web_extract"})
 def storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """为需要真实注册表/服务单例的用例提供隔离的主库，并按 lifespan 顺序注入 Team 注册表。
 
-    ``ToolSystem.build_tool_system()`` 装配期会构造 ``agent_team`` 工具，它读取进程级 Team
+    ``build_tool_registry()`` 装配期会构造 ``agent_team`` 工具，它读取进程级 Team
     注册表；未注入时按契约抛 ``RuntimeError``，因此须先于工具系统装配注入。
     """
 
@@ -171,10 +169,10 @@ def test_removed_source_files_are_absent_from_disk() -> None:
     """
 
     handler_py = (
-        _APP_DIR / "core" / "tool" / "child_agent" / "child_agent_close.py"
+        _APP_DIR / "core" / "tool" / "handler" / "child_agent_close.py"
     )
     args_py = (
-        _APP_DIR / "core" / "tool" / "child_agent" / "child_agent_close_args.py"
+        _APP_DIR / "core" / "tool" / "handler" / "child_agent" / "child_agent_close_args.py"
     )
     assert not handler_py.exists(), f"残留源文件: {handler_py}"
     assert not args_py.exists(), f"残留源文件: {args_py}"
@@ -189,7 +187,7 @@ def test_removed_symbols_absent_from_package_namespaces() -> None:
 
     schemas = importlib.import_module("app.core.tool.schemas")
     tool_models = importlib.import_module("app.tools.tool_models")
-    child_task_models = importlib.import_module("app.core.tool.child_agent")
+    child_task_models = importlib.import_module("app.core.tool.handler.child_agent")
     tool_names = importlib.import_module("app.core.tool.schemas.tool_names")
 
     assert not hasattr(tool_names, "TOOL_CHILD_AGENT_CLOSE")
@@ -265,17 +263,17 @@ def test_every_tool_name_constant_is_registered_in_canonical_list() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 3. 装配面：ToolSystem 注册清单
+# 3. 装配面：工具注册清单
 # --------------------------------------------------------------------------- #
 
 
-def test_tool_system_registry_excludes_removed_tool(storage: None) -> None:
+def test_tool_registry_excludes_removed_tool(storage: None) -> None:
     """目的：进程级装配后的注册表不含 child_agent_close，且相关查询全部落空。
 
     潜在缺陷类型：装配清单未同步删除，注册表仍暴露已删工具（模型可调幽灵工具）。
     """
 
-    registry = ToolSystem.build_tool_system().registry
+    registry = build_tool_registry()
     names = registry.get_all_tool_names()
 
     assert _REMOVED_TOOL_NAME not in names
@@ -291,7 +289,7 @@ def test_registry_is_subset_of_canonical_names_and_only_web_tools_may_be_missing
     潜在缺陷类型：注册了规范清单外的名字（幽灵工具），或删改导致内置工具被意外丢掉。
     """
 
-    names = set(ToolSystem.build_tool_system().registry.get_all_tool_names())
+    names = set(build_tool_registry().get_all_tool_names())
     canonical = set(ALL_TOOL_NAMES)
 
     assert names <= canonical, f"注册了非规范工具名: {names - canonical}"
@@ -307,19 +305,19 @@ def test_registry_exposes_three_remaining_child_tools(storage: None) -> None:
     潜在缺陷类型：删除动作误伤同目录兄弟工具（整目录导入失败或漏注册）。
     """
 
-    names = set(ToolSystem.build_tool_system().registry.get_all_tool_names())
+    names = set(build_tool_registry().get_all_tool_names())
     assert {"child_agent_send", "child_agent_status", "wait_messages"} <= names
     assert "delegate_task" in names
 
 
-def test_build_tool_system_is_deterministic_across_calls(storage: None) -> None:
+def test_build_tool_registry_is_deterministic_across_calls(storage: None) -> None:
     """目的：多次装配得到相同的工具名集合（装配无隐藏状态）。
 
     潜在缺陷类型：装配依赖进程级可变状态，导致二次装配清单漂移。
     """
 
-    first = ToolSystem.build_tool_system().registry.get_all_tool_names()
-    second = ToolSystem.build_tool_system().registry.get_all_tool_names()
+    first = build_tool_registry().get_all_tool_names()
+    second = build_tool_registry().get_all_tool_names()
     assert first == second
 
 
@@ -329,7 +327,7 @@ def test_registry_reads_are_thread_safe(storage: None) -> None:
     潜在缺陷类型：并发查询下注册表内部结构被破坏或返回不一致快照。
     """
 
-    registry = ToolSystem.build_tool_system().registry
+    registry = build_tool_registry()
     results: list[list[str]] = []
     errors: list[BaseException] = []
 
@@ -421,7 +419,7 @@ def test_child_tool_definitions_match_registry_definitions(storage: None) -> Non
     潜在缺陷类型：注册期对定义做了归一化改写，使注册表与工厂产出分叉。
     """
 
-    registry = ToolSystem.build_tool_system().registry
+    registry = build_tool_registry()
     for tool_name, _tool_cls, args_model, _factory, _timeout in _CHILD_TOOL_SPECS:
         definition = registry.get_tool_definition(tool_name)
         assert definition is not None, f"{tool_name} 未注册"
@@ -494,16 +492,8 @@ def test_banned_tools_all_exist_in_live_registry(storage: None) -> None:
     潜在缺陷类型：禁用清单指向已删/不存在的工具，使禁用规则形同虚设。
     """
 
-    registered = set(ToolSystem.build_tool_system().registry.get_all_tool_names())
+    registered = set(build_tool_registry().get_all_tool_names())
     unbacked = set(Constant.Tools.CHILD_DISALLOWED_TOOLS) - registered
     assert unbacked <= _CONDITIONALLY_SKIPPED_TOOLS, f"禁用清单指向不存在的工具: {unbacked}"
 
 
-def test_tool_system_package_export_is_intact() -> None:
-    """目的：``app.tools`` 包出口（ToolSystem）未被删除改动破坏。
-
-    潜在缺陷类型：包 __init__ 导出丢失，破坏 from app.tools import ToolSystem。
-    """
-
-    assert _tools_pkg.ToolSystem is ToolSystem
-    assert "ToolSystem" in getattr(_tools_pkg, "__all__", [])

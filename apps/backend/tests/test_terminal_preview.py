@@ -6,7 +6,7 @@ import pytest
 from test_terminal_session_service import make_service
 
 from app.config.constant import Constant
-from app.service.terminal.terminal_preview import TerminalPreviewSubscription
+from app.tools.terminal_runtime.terminal_preview import TerminalPreviewSubscription
 
 pytestmark = pytest.mark.usefixtures("backend_env")
 

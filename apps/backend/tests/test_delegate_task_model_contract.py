@@ -14,9 +14,9 @@ import pytest
 from app.config import configuration
 from app.core.tool.schemas.tool_definition import ToolDefinition
 from app.core.tool.schemas import ToolExecutionContext
-from app.core.tool.child_agent.delegate_task_args import DelegateTaskArgs
+from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
 
-child_agent_create = import_module("app.core.tool.child_agent.child_agent_create")
+child_agent_create = import_module("app.core.tool.handler.child_agent_create")
 
 
 def _model_payload(definition: ToolDefinition) -> dict:
@@ -36,7 +36,7 @@ def base_delegate_definition(monkeypatch) -> ToolDefinition:
     """构造不含进程级候选的 delegate_task 基础定义。"""
 
     monkeypatch.setattr(child_agent_create, "get_task_service", lambda: object())
-    monkeypatch.setattr(child_agent_create, "get_conversation_run_service", lambda: object())
+    monkeypatch.setattr(child_agent_create, "get_conversation_run_ledger", lambda: object())
     definition = child_agent_create.build_delegate_task_definition()
     assert definition is not None
     return definition
@@ -130,7 +130,7 @@ def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_c
 
     task_spy = _TaskSpy()
     monkeypatch.setattr(child_agent_create, "get_task_service", lambda: task_spy)
-    monkeypatch.setattr(child_agent_create, "get_conversation_run_service", lambda: object())
+    monkeypatch.setattr(child_agent_create, "get_conversation_run_ledger", lambda: object())
     tool = child_agent_create.DelegateTaskTool()
     registry = configuration.build_agent_registry()
     monkeypatch.setattr(configuration, "get_agent_registry", lambda: registry)

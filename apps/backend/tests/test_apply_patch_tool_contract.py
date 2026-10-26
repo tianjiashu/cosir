@@ -12,7 +12,7 @@ from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 from app.tools.tool_models.delete_file_args import DeleteFileArgs
 from app.tools.tool_models.move_file_args import MoveFileArgs
-from app.tools.tool_system import ToolSystem
+from app.tools.tool_registration import build_tool_registry
 
 # 工具描述的事实源已从模块级常量 ``APPLY_PATCH_DESCRIPTION`` 迁移为类属性
 # ``ApplyPatchTool.description``（模块不再导出该名字）。这里只做「测试内别名」，把下文的
@@ -101,13 +101,13 @@ def test_patch_count_rule_is_stated_only_in_the_parameter_description() -> None:
 
 
 # ``backend_env``（conftest）按生产装配顺序准备主库与 Agent Team 注册表；
-# ``ToolSystem`` 装配期依赖二者。
+# 工具注册表装配期依赖二者。
 @pytest.mark.usefixtures("backend_env")
 def test_handlers_inherit_base_and_new_tools_are_registered() -> None:
     assert all(
         issubclass(handler, HandlerBase) for handler in (ApplyPatchTool, DeleteTool, MoveTool)
     )
-    names = set(ToolSystem.build_tool_system().registry.get_all_tool_names())
+    names = set(build_tool_registry().get_all_tool_names())
 
     assert {"apply_patch", "delete_file", "move_file", "write_file"} <= names
     assert "delete" not in names

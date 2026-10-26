@@ -54,6 +54,7 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.execute import tool_handler_runner as runner_module, tool_terminal_projection as projection_module
 from app.core.tool.results.tool_cancelled import tool_cancelled
+from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.execute.tool_output_channel import BufferedProcessToolOutputChannel
 from app.core.tool.tool_registry import ToolRegistry
@@ -335,6 +336,8 @@ async def test_projection_ordering_kill_then_drain_then_project(
         projector.process(event)
 
     monkeypatch.setattr(tool_batch_runner, "emit", _emit)
+    # running 由执行器在 handler 启动前经自己模块的 ``emit`` 发出，同样记入时间线。
+    monkeypatch.setattr(tool_executor_module, "emit", _emit)
     _instrument_real_calls(monkeypatch, timeline)
 
     tool = _make_process_tool(_STREAMING_TOOL_NAME)

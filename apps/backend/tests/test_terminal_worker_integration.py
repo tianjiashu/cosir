@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from app.service.terminal.errors import TerminalWorkerSignalFailedError
-from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
-from app.service.terminal.shell_resolver import ShellSpec
+from app.tools.terminal_runtime.errors import TerminalWorkerSignalFailedError
+from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker
+from app.tools.terminal_runtime.shell_resolver import ShellSpec
 
 
 def _worker_path() -> Path:
@@ -350,7 +350,7 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
         TerminalStartTool,
         TerminalWriteTool,
     )
-    from app.service.terminal.terminal_session_service import TerminalSessionService
+    from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 
     # worker 路径只有宿主环境变量一个来源，测试沿用同一配置边界。
     monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(_worker_path()))

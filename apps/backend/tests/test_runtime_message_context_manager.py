@@ -25,15 +25,11 @@ def _user_meta(text: str) -> UserMessageMetadata:
     )
 
 
-class _ContextService:
+class _ContextStore:
     def __init__(self, max_sequence: int) -> None:
         self.current_max_sequence = max_sequence
         self.appended: list[tuple[int, int | None, object, int, bool]] = []
         self.loaded: list[ContextEntry] = []
-        self.deleted: list[tuple[int, int]] = []
-
-    def delete_by_run_id(self, task_id: int, run_id: int) -> None:
-        self.deleted.append((task_id, run_id))
 
     def entries_in_context(self, task_id: int) -> list[ContextEntry]:
         return list(self.loaded)
@@ -68,13 +64,13 @@ class _ContextService:
 
 
 def _manager(
-    context_service: _ContextService, *, next_sequence: int = 0
+    context_store: _ContextStore, *, next_sequence: int = 0
 ) -> RuntimeMessageContextManager:
     manager = object.__new__(RuntimeMessageContextManager)
     manager.current_task_id = 7
     manager.agent_profile = SimpleNamespace()
     manager.workspace = SimpleNamespace(id=7, root_path="")
-    manager.context_service = context_service
+    manager.context_store = context_store
     manager.current_run_id = None
     manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     manager._entries = []
@@ -103,38 +99,37 @@ def _ai_message(*call_ids: str) -> ChatCompletionAssistantMessageParam:
 def test_runtime_message_context_manager_owns_next_sequence_after_run_restart() -> None:
     """序号游标由 manager 独占：begin_run 从持久化最大序号推进一步，之后只由写入自增。"""
 
-    context_service = _ContextService(max_sequence=1)
-    manager = _manager(context_service, next_sequence=0)
+    context_store = _ContextStore(max_sequence=1)
+    manager = _manager(context_store, next_sequence=0)
     manager.begin_run(SimpleNamespace(task_id=7, id=2))
     manager.add_message(
         {"role": "user", "content": "second message"}, metadata=_user_meta("second message")
     )
 
-    assert context_service.appended[0][3] == 2
+    assert context_store.appended[0][3] == 2
     assert manager._message_sequence == 3
 
 
 def test_begin_run_rebuilds_memory_entries_from_persisted_context() -> None:
     """begin_run 无条件从库重建内存列表与序号：上一个 Run 留下的过时内存不会被沿用。"""
-    context_service = _ContextService(max_sequence=4)
-    context_service.loaded = [
+    context_store = _ContextStore(max_sequence=4)
+    context_store.loaded = [
         ContextEntry({"role": "user", "content": "existing"}, 2, 3),
     ]
-    manager = _manager(context_service, next_sequence=1)
+    manager = _manager(context_store, next_sequence=1)
     manager._entries = [ContextEntry({"role": "user", "content": "stale"}, 1, 1)]
     manager.begin_run(SimpleNamespace(task_id=7, id=2))
 
-    assert context_service.deleted == []
     assert manager.current_run_id == 2
-    assert manager._entries == context_service.loaded
+    assert manager._entries == context_store.loaded
     assert manager._message_sequence == 5
 
 
 def test_load_message_moves_existing_tool_result_before_later_human_message() -> None:
     """取消后追加新输入时，已有 ToolMessage 也必须紧跟原 tool call。"""
 
-    context_service = _ContextService(max_sequence=4)
-    context_service.loaded = [
+    context_store = _ContextStore(max_sequence=4)
+    context_store.loaded = [
         ContextEntry(
             {
                 "role": "assistant",
@@ -153,8 +148,8 @@ def test_load_message_moves_existing_tool_result_before_later_human_message() ->
         ContextEntry({"role": "user", "content": "continue"}, 2, 2),
         ContextEntry({"role": "tool", "content": "cancelled", "tool_call_id": "call-1"}, 1, 3),
     ]
-    manager = _manager(context_service)
-    manager._entries = list(context_service.loaded)
+    manager = _manager(context_store)
+    manager._entries = list(context_store.loaded)
 
     messages = manager.load_message()
 
@@ -166,29 +161,29 @@ def test_load_message_moves_existing_tool_result_before_later_human_message() ->
     ]
     assert messages[2].get("tool_call_id") == "call-1"
     assert messages[3].get("content") == "continue"
-    assert context_service.appended == []
+    assert context_store.appended == []
 
 
 @pytest.mark.parametrize("include_in_context", [False, True])
 def test_save_model_response_writes_once_and_controls_context_membership(include_in_context):
     """首个响应占用一个序号；只有准入响应进入 working copy。"""
-    context_service = _ContextService(max_sequence=4)
-    manager = _manager(context_service, next_sequence=5)
+    context_store = _ContextStore(max_sequence=4)
+    manager = _manager(context_store, next_sequence=5)
     manager.current_run_id = 2
     response = sdk_completion(content="最后收到的内容")
     manager.save_model_response(
         response, include_in_context=include_in_context, registered_tool_names=set()
     )
-    assert len(context_service.appended) == 1
-    assert context_service.appended[0][2]["content"] == "最后收到的内容"
-    assert context_service.appended[0][4] is include_in_context
+    assert len(context_store.appended) == 1
+    assert context_store.appended[0][2]["content"] == "最后收到的内容"
+    assert context_store.appended[0][4] is include_in_context
     assert manager._message_sequence == 6
     assert len(manager._entries) == int(include_in_context)
 
 
 def test_stream_snapshots_replace_one_identity_until_context_admission():
-    service = _ContextService(max_sequence=4)
-    manager = _manager(service, next_sequence=5)
+    context_store = _ContextStore(max_sequence=4)
+    manager = _manager(context_store, next_sequence=5)
     entry = manager.save_model_response(
         sdk_completion(content="part"),
         include_in_context=False,
@@ -202,7 +197,7 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
     )
     assert manager._message_sequence == 6
     assert manager._entries == []
-    record = service.appended[-1][2]
+    record = context_store.appended[-1][2]
     assert record.message_id == identity
     assert record.sequence == 5
     assert record.message["content"] == "part tail"
@@ -212,7 +207,7 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
         include_in_context=True,
         registered_tool_names=set(),
     )
-    assert service.appended[-1][2].include_in_context
+    assert context_store.appended[-1][2].include_in_context
     assert manager._entries == [entry]
     assert manager._message_sequence == 6
     # 提交即结束本次草稿：下一次调用必须新起一行。
@@ -220,8 +215,8 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
 
 
 def test_model_response_filters_unknown_calls_before_persistence():
-    service = _ContextService(max_sequence=0)
-    manager = _manager(service, next_sequence=1)
+    context_store = _ContextStore(max_sequence=0)
+    manager = _manager(context_store, next_sequence=1)
     manager.current_run_id = 2
     response = sdk_completion(
         tool_calls=[
@@ -245,8 +240,8 @@ def test_model_response_filters_unknown_calls_before_persistence():
 def test_add_message_replaces_paired_tool_result_row_in_place() -> None:
     """命中同一条调用的既有结果行时原地覆盖（真实结果顶掉占位），不新增行、不推进序号。"""
 
-    context_service = _ContextService(max_sequence=4)
-    manager = _manager(context_service, next_sequence=5)
+    context_store = _ContextStore(max_sequence=4)
+    manager = _manager(context_store, next_sequence=5)
     manager.current_run_id = 2
     manager.add_message(_ai_message("call-1"))
     manager.add_message(
@@ -264,8 +259,8 @@ def test_add_message_replaces_paired_tool_result_row_in_place() -> None:
     )
 
     assert outcome == "replaced"
-    assert len(context_service.appended) == 3
-    replaced = context_service.appended[-1][2]
+    assert len(context_store.appended) == 3
+    replaced = context_store.appended[-1][2]
     assert replaced.sequence == 6
     assert replaced.include_in_context is True
     assert replaced.metadata == ToolMessageMetadata.model_validate({"status": "completed"})
@@ -281,8 +276,8 @@ def test_add_message_appends_when_same_run_reuses_call_id_in_a_later_step() -> N
     不会被本步的调用命中——这正是「按 id 全表匹配」会踩坏的第二种形态。
     """
 
-    context_service = _ContextService(max_sequence=4)
-    manager = _manager(context_service, next_sequence=5)
+    context_store = _ContextStore(max_sequence=4)
+    manager = _manager(context_store, next_sequence=5)
     manager.current_run_id = 2
     manager.add_message(_ai_message("call-1"))
     manager.add_message(
@@ -299,7 +294,7 @@ def test_add_message_appends_when_same_run_reuses_call_id_in_a_later_step() -> N
     assert outcome == "appended"
     assert [
         item[2]
-        for item in context_service.appended
+        for item in context_store.appended
         if isinstance(item[2], ConversationTaskContextRecord)
     ] == [], "上一 model 步的结果行不得被覆盖"
     assert [entry.message.get("content") for entry in manager._entries][-2:] == ["", "step2 result"]
@@ -312,8 +307,8 @@ def test_add_message_does_not_overwrite_another_run_row_with_same_tool_call_id()
     结果行），因此「当前 Run 的调用没有结果、别的 Run 用了同一个 id」时必须走追加。
     """
 
-    context_service = _ContextService(max_sequence=4)
-    manager = _manager(context_service, next_sequence=5)
+    context_store = _ContextStore(max_sequence=4)
+    manager = _manager(context_store, next_sequence=5)
     manager.current_run_id = 1
     manager.add_message(_ai_message("call-1"))
     manager.add_message(
@@ -334,6 +329,6 @@ def test_add_message_does_not_overwrite_another_run_row_with_same_tool_call_id()
     assert [entry.message.get("content") for entry in manager._entries][2:] == ["", "run2 result"]
     assert [
         item[2]
-        for item in context_service.appended
+        for item in context_store.appended
         if isinstance(item[2], ConversationTaskContextRecord)
     ] == [], "不得原地替换（那会覆盖 run 1 的结果行）"

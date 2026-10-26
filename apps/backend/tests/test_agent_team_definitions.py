@@ -12,18 +12,18 @@ from app.service.agent_team import configuration_scope_source
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
 from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.core.tool.agent_team.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.node_goal import AgentTeamNodeGoal
 from app.service.agent_team.registry import AgentTeamConfigurationRegistry
 from app.models.agent_team.state.agent_team_run_state import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
     AgentTeamRunState,
 )
-from app.core.tool.agent_team.propose_agent_team_configuration import (
+from app.core.tool.handler.propose_agent_team_configuration import (
     ProposeAgentTeamConfigurationTool,
 )
 from app.service.agent_team.agent_team_approve_input import AgentTeamApproveInput
-from app.core.tool.agent_team.propose_agent_team_configuration_args import (
+from app.core.tool.handler.agent_team.propose_agent_team_configuration_args import (
     ProposeAgentTeamConfigurationArgs,
 )
 from app.service.agent_team.agent_team_preparation_service import (
@@ -609,12 +609,12 @@ def test_team_confirmation_only_checks_parent_ownership() -> None:
 
     service = AgentTeamRunService.__new__(AgentTeamRunService)
     for status in ("suspended", "running", "completed"):
-        service._run_service = SimpleNamespace(
+        service._ledger = SimpleNamespace(
             get_run=lambda _run_id, status=status: SimpleNamespace(task_id=2, status=status)
         )
         service._validate_parent_run(2, 1)  # 不抛即通过
 
-    service._run_service = SimpleNamespace(
+    service._ledger = SimpleNamespace(
         get_run=lambda _run_id: SimpleNamespace(task_id=9, status="suspended")
     )
     with pytest.raises(ValueError, match="不属于指定主 Agent Task"):

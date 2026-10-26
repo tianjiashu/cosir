@@ -35,7 +35,7 @@ def fork_store(request, monkeypatch):
     service = TaskService.__new__(TaskService)
     service._task = store.tasks
     service._turn = store.runs
-    service._context = store.context
+    service._context = store.context_service
     service._session_factory = store.factory
     service._task_reads = TaskReadQueries(store.factory)
     store.service = service
@@ -276,7 +276,7 @@ def test_copy_failure_rolls_back_target_and_runs(fork_store, monkeypatch):
     def fail_copy(*args, **kwargs):
         raise RuntimeError("copy failed")
 
-    monkeypatch.setattr(store.context, "clone_for_fork", fail_copy)
+    monkeypatch.setattr(store.context_service, "clone_for_fork", fail_copy)
     with pytest.raises(RuntimeError, match="copy failed"):
         fork(store, run.reply)
     assert len(store.service.list_tasks_for_workspace(store.workspace.id)) == 1
@@ -321,7 +321,7 @@ def test_request_cancellation_does_not_release_workspace_before_worker_finishes(
     store = fork_store
     run = append_run(store, "completed")
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
-    original_copy = store.context.clone_for_fork
+    original_copy = store.context_service.clone_for_fork
     original_worker = store.service._fork_task_in_workspace
 
     def slow_copy(*args, **kwargs):
@@ -335,7 +335,7 @@ def test_request_cancellation_does_not_release_workspace_before_worker_finishes(
         finally:
             finished.set()
 
-    monkeypatch.setattr(store.context, "clone_for_fork", slow_copy)
+    monkeypatch.setattr(store.context_service, "clone_for_fork", slow_copy)
     monkeypatch.setattr(store.service, "_fork_task_in_workspace", worker)
 
     async def scenario():

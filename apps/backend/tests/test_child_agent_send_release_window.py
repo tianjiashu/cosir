@@ -15,11 +15,11 @@ import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.tool.schemas import ToolExecutionContext
-from app.core.tool.child_agent.child_agent_send import ChildAgentSendTool
+from app.core.tool.handler.child_agent_send import ChildAgentSendTool
 from app.models import ConversationRunCommand
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
-from app.service.conversation_run import task_actor as actor_module
-from app.service.depends import get_conversation_run_state_service, get_task_actors
+from app.core import task_actor as actor_module
+from app.service.depends import get_conversation_run_ledger, get_task_actors
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.task_message_crud import TaskMessageCrud
@@ -43,7 +43,7 @@ class _Runtime:
             TaskMessageCrud().delete_returning(
                 session, [m.id for m in mailbox.drain() if m.id is not None]
             )
-        get_conversation_run_state_service().transition(
+        get_conversation_run_ledger().transition(
             run_id, RunTransition.COMPLETE, final_output="done"
         )
         first = not self.started

@@ -740,13 +740,9 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     # 启动编排不再持有任何「装载目录」的调用。
     registry_stub = SimpleNamespace()
 
-    class _RunService:
+    class _RecoverService:
         def recover_orphaned_runs(self) -> list[Any]:
             recorder.calls.append("recover_runs")
-            return []
-
-        def list_latest_runs(self) -> list[Any]:
-            recorder.calls.append("list_latest_runs")
             return []
 
     class _TerminalService:
@@ -762,8 +758,8 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
 
     monkeypatch.setattr(
         lifespan_module,
-        "get_conversation_run_service",
-        record("get_run_service", _RunService()),
+        "get_recover_service",
+        record("get_recover_service", _RecoverService()),
     )
     monkeypatch.setattr(
         lifespan_module,
@@ -776,13 +772,13 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         record("get_executor", _Executor()),
     )
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", record("close_deps"))
-    monkeypatch.setattr(lifespan_module, "ToolSystem", _ToolSystemStub(recorder))
+    monkeypatch.setattr(lifespan_module, "build_tool_registry", lambda: "tool-registry")
     monkeypatch.setattr(
         lifespan_module,
         "build_agent_registry",
         record("build_agent_registry", registry_stub),
     )
-    monkeypatch.setattr(lifespan_module, "set_tool_system", record("set_tool_system"))
+    monkeypatch.setattr(lifespan_module, "set_tool_registry", record("set_tool_registry"))
     monkeypatch.setattr(lifespan_module, "set_agent_registry", record("set_agent_registry"))
     monkeypatch.setattr(
         lifespan_module, "set_agent_team_registry", record("set_agent_team_registry")
@@ -820,17 +816,6 @@ def _safe_fire_stub(recorder: _Recorder) -> Any:
         recorder.calls.append(f"safe_fire:{event}")
 
     return _stub
-
-
-class _ToolSystemStub:
-    """``ToolSystem.build_tool_system`` 的最小替身。"""
-
-    def __init__(self, recorder: _Recorder) -> None:
-        self._recorder = recorder
-
-    @classmethod
-    def build_tool_system(cls) -> str:
-        return "tool-system"
 
 
 def _run_lifespan_once() -> None:
@@ -884,17 +869,13 @@ def test_lifespan_logs_recovered_runs_path(
     _write_phase(boot_file, "booting")
     paths.override(DATA_DIR=tmp_path)
 
-    class _RunServiceWithRecovered:
+    class _RecoverServiceWithRecovered:
         def recover_orphaned_runs(self) -> list[Any]:
             stubbed_lifespan.calls.append("recover_runs")
             return [SimpleNamespace(id=101), SimpleNamespace(id=202)]
 
-        def list_latest_runs(self) -> list[Any]:
-            stubbed_lifespan.calls.append("list_latest_runs")
-            return []
-
     monkeypatch.setattr(
-        lifespan_module, "get_conversation_run_service", lambda: _RunServiceWithRecovered()
+        lifespan_module, "get_recover_service", lambda: _RecoverServiceWithRecovered()
     )
 
     _run_lifespan_once()

@@ -407,36 +407,6 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
         service.update({"NOT_ALLOWED": EnvironmentChange("replace", "x")})
     with pytest.raises(EnvironmentConfigurationError):
         service.update({"DEFAULT_LANGUAGE": EnvironmentChange("replace", "fr")})
-    # Web Provider 选择是固定值，不属于可编辑白名单：当前只有 firecrawl 一个实现，
-    # 显式赋值只会引入「填错名字就选不到 Provider」的失败路径。
-    for backend_field in ("WEB_BACKEND", "WEB_SEARCH_BACKEND", "WEB_EXTRACT_BACKEND"):
-        with pytest.raises(EnvironmentConfigurationError):
-            service.update({backend_field: EnvironmentChange("replace", "firecrawl")})
-
-
-def test_web_provider_selection_is_not_env_overridable(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Web Provider 选择是固定值：同名环境变量不得改变 ``Settings``。
-
-    当前内置 Web Provider 只有 firecrawl 一个实现，这三项既不对外配置也无需按环境覆盖。
-    本用例锁住「``Settings.load`` 不读这三个环境变量」这一事实，避免后续误加回读取后，
-    与配置中心白名单对「谁能配置」产生两套口径。
-    """
-
-    # 隔离文件来源与路径重算，使本用例只验证「环境变量是否被读取」这一件事。
-    monkeypatch.setattr("app.config.settings.paths.env_file", lambda: tmp_path / "absent.env")
-    monkeypatch.setattr("app.config.settings.paths.reset", lambda: None)
-    monkeypatch.setenv("WEB_BACKEND", "unregistered")
-    monkeypatch.setenv("WEB_SEARCH_BACKEND", "unregistered")
-    monkeypatch.setenv("WEB_EXTRACT_BACKEND", "unregistered")
-
-    Settings.load()
-
-    assert Settings.WEB_BACKEND == ""
-    assert Settings.WEB_SEARCH_BACKEND == ""
-    assert Settings.WEB_EXTRACT_BACKEND == ""
 
 
 def test_settings_loads_main_agent_max_steps_from_environment(

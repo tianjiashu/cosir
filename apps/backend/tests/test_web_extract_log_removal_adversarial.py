@@ -14,22 +14,22 @@
 必须**行为不变**：各失败/成功路径下 ``ToolObservation`` 的
 ``status`` / ``error`` / ``retryable`` / ``content`` / ``display_data`` 与改动前一致。
 
-必须**保留**的日志事件：``web_extract_provider_unavailable``、
-``web_extract_provider_failed``、``web_extract_all_pages_failed``、
+必须**保留**的日志事件：``web_extract_unconfigured``、
+``web_extract_failed``、``web_extract_all_pages_failed``、
 ``web_extract_result_build_failed``（web_extract.py）；
 ``web_url_address_blocked``、``web_url_fake_ip_allowed``（url_safety.py）；
-``web_extract_page_failed``（firecrawl_provider.py）。
+``web_extract_page_failed``（firecrawl_client.py）。
 
 对抗重点
 --------
 - ``elapsed_ms`` 在删除 ``started`` 事件后是否仍可用、非负、量级合理。
 - 超限分支删除日志后是否仍返回错误（而不是静默成功）。
 - 非地址类拦截路径是否「完全无日志」（已知取舍，如实记录）。
-- 是否存在「删日志导致变量未定义 / 未使用」的路径（如 ``provider``、``content``）。
+- 是否存在「删日志导致变量未定义 / 未使用」的路径（如 ``客户端``、``content``）。
 - 任何路径下日志都不得出现 URL 原文 / query 串 / 凭据。
 
-本文件复用 test_web_search_extract_tools.py 中的 FakeProvider /
-_registry_with / _public_resolver，避免重复脚手架，且不触碰生产代码。
+本文件复用 test_web_search_extract_tools.py 中的 FakeClient /
+_public_resolver，避免重复脚手架，且不触碰生产代码。
 """
 
 from __future__ import annotations
@@ -41,18 +41,17 @@ import re
 import pytest
 
 from app.config.constant import Constant
-from app.config.settings import Settings
-from app.core.tool.web.web_provider import (
-    WebExtractItem,
-    WebProviderRequestError,
-    WebProviderUnavailableError,
+from app.core.tool.handler.web.firecrawl_client import (
+    FirecrawlClient,
+    FirecrawlRequestError,
+    FirecrawlUnavailableError,
 )
-from app.core.tool.web.web_extract import WebExtractTool
+from app.core.tool.handler.web.firecrawl_client import WebExtractItem
+from app.core.tool.handler.web_extract import WebExtractTool
 from tests.test_web_search_extract_tools import (
-    FakeProvider,
+    FakeClient,
     _log_full_text,
     _public_resolver,
-    _registry_with,
 )
 
 # ---------------------------------------------------------------------------
@@ -70,8 +69,8 @@ REMOVED_EVENTS: tuple[str, ...] = (
 
 # 明确保留的事件：对应失败路径必须仍被记录。
 KEPT_WEB_EXTRACT_EVENTS: tuple[str, ...] = (
-    "web_extract_provider_unavailable",
-    "web_extract_provider_failed",
+    "web_extract_unconfigured",
+    "web_extract_failed",
     "web_extract_all_pages_failed",
     "web_extract_result_build_failed",
 )
@@ -87,15 +86,6 @@ KEPT_FIRECRAWL_EVENTS: tuple[str, ...] = ("web_extract_page_failed",)
 _REMOVED_EVENT_RE = re.compile(
     r"web_extract_(url_limit_exceeded|urls_rejected|started|provider_completed|completed)"
 )
-
-
-@pytest.fixture(autouse=True)
-def _clear_web_backend_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    """让 fake provider 测试不受本机环境中的生产 backend 配置影响。"""
-
-    monkeypatch.setattr(Settings, "WEB_SEARCH_BACKEND", "")
-    monkeypatch.setattr(Settings, "WEB_EXTRACT_BACKEND", "")
-    monkeypatch.setattr(Settings, "WEB_BACKEND", "")
 
 
 def _caevents(records: list[logging.LogRecord]) -> list[str]:
@@ -143,16 +133,16 @@ def test_over_limit_returns_error_not_silent_success_and_no_removed_event(
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     urls = [f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)]
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
     assert obs.status == "error"
     assert "hint: this error can be retried" in obs.content
     assert str(Constant.Web.EXTRACT_URL_LIMIT_MAX) in obs.content
-    # 超限在被拦时绝不能调用 provider（无网络副作用）。
-    assert provider.extract_calls == []
+    # 超限在被拦时绝不能调用 客户端（无网络副作用）。
+    assert client.extract_calls == []
     assert _find(caplog.records, "web_extract_url_limit_exceeded") == []
     _assert_no_removed_events(caplog.records)
 
@@ -162,13 +152,13 @@ def test_exactly_at_limit_is_allowed_not_rejected() -> None:
     与「删除超限日志」相伴的分支改写风险）。"""
 
     urls = [f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX)]
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
     assert obs.status == "success"
-    assert len(provider.extract_calls) == 1
+    assert len(client.extract_calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -191,11 +181,11 @@ def test_security_rejection_paths_behavior_unchanged(
     url: str, error_fragment: str
 ) -> None:
     """test_purpose: 各类安全检查拦截路径在删除 urls_rejected 日志后，行为必须不变：
-    status=error、error 以 'Blocked:' 开头、retryable=False、content=None、不调用 provider
+    status=error、error 以 'Blocked:' 开头、retryable=False、content=None、不调用 客户端
     （潜在缺陷：删日志时改坏了 _blocked_url_error 的字段填充或去掉了 return）。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=[url])
 
@@ -203,26 +193,26 @@ def test_security_rejection_paths_behavior_unchanged(
     assert obs.content.startswith("error: Blocked:")
     assert error_fragment in obs.content
     assert "hint: do not retry this tool call." in obs.content
-    assert provider.extract_calls == []
+    assert client.extract_calls == []
     # 错误 UI 通道只承载稳定短提示，不承载完整错误原因。
     assert obs.display_data == {"status_hint": "提取失败"}
 
 
 def test_ip_literal_internal_blocked_with_system_resolver() -> None:
     """test_purpose: IP 字面量内网地址（127.0.0.1 / 10.0.0.5）不注入 resolver 时必须被拦截，
-    行为与删除日志前一致，且不调用 provider（潜在缺陷：把字面量判定的拦截改没了）。
+    行为与删除日志前一致，且不调用 客户端（潜在缺陷：把字面量判定的拦截改没了）。
     这里用系统解析（resolver=None），因为字面量 host 的地址就是其自身。"""
 
     for url in ("http://127.0.0.1/", "http://10.0.0.5/"):
-        provider = FakeProvider()
-        tool = WebExtractTool(_registry_with(provider), resolver=None)
+        client = FakeClient()
+        tool = WebExtractTool(client, resolver=None)
 
         obs = tool.execute(urls=[url])
 
         assert obs.status == "error", f"{url} 应被拦截"
         assert obs.content.startswith("error: Blocked:")
         assert "hint: do not retry this tool call." in obs.content
-        assert provider.extract_calls == []
+        assert client.extract_calls == []
 
 
 def test_injected_resolver_can_allow_ip_literal_host_pre_existing_behavior() -> None:
@@ -231,61 +221,58 @@ def test_injected_resolver_can_allow_ip_literal_host_pre_existing_behavior() -> 
     8.8.8.8 时，字面量内网地址会被放行。此用例不是缺陷判决，仅固化现状，避免未来误以为
     「字面量一定被拦」而在别处建立错误假设（也顺带说明本文件其它用例为何对字面量改用系统解析）。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=lambda h: ["8.8.8.8"])
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=lambda h: ["8.8.8.8"])
 
     obs = tool.execute(urls=["http://127.0.0.1/"])
 
     # 当前事实：注入的解析结果覆盖了字面量的真实内网属性。
     assert obs.status == "success"
-    assert len(provider.extract_calls) == 1
+    assert len(client.extract_calls) == 1
 
 
-def test_provider_unavailable_path_behavior_and_kept_event(
+def test_client_unavailable_path_behavior_and_kept_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """test_purpose: provider 抛 WebProviderUnavailableError 时行为不变（retryable=False、
-    error 为异常文本），且 web_extract_provider_unavailable 仍被记录（潜在缺陷：删日志误伤保留事件）。"""
+    """test_purpose: 客户端 抛 FirecrawlUnavailableError 时行为不变（retryable=False、
+    error 为异常文本），且 web_extract_unconfigured 仍被记录（潜在缺陷：删日志误伤保留事件）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider(
-        available=True,
-        extract_side_effect=WebProviderUnavailableError("not configured here"),
+    client = FakeClient(
+        extract_side_effect=FirecrawlUnavailableError("not configured here"),
     )
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
     assert obs.content.startswith("error: not configured here\n")
     assert "hint: do not retry this tool call." in obs.content
-    kept = _find(caplog.records, "web_extract_provider_unavailable")
-    assert kept, "provider 未配置路径必须保留 web_extract_provider_unavailable"
-    assert kept[0].data["provider"] == "fake"
+    kept = _find(caplog.records, "web_extract_unconfigured")
+    assert kept, "客户端 未配置路径必须保留 web_extract_unconfigured"
     _assert_no_removed_events(caplog.records)
 
 
-def test_provider_generic_exception_path_behavior_and_kept_event(
+def test_client_generic_exception_path_behavior_and_kept_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """test_purpose: provider 抛通用异常时行为不变（retryable=True、error 含 provider 名），
-    且 web_extract_provider_failed 仍被记录、异常细节不外泄到观测（潜在缺陷：删日志误伤保留事件）。"""
+    """test_purpose: 客户端 抛通用异常时行为不变（retryable=True、error 含 客户端 名），
+    且 web_extract_failed 仍被记录、异常细节不外泄到观测（潜在缺陷：删日志误伤保留事件）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider(
-        available=True, extract_side_effect=RuntimeError("boom-detail-should-not-leak")
+    client = FakeClient( extract_side_effect=RuntimeError("boom-detail-should-not-leak")
     )
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
     assert "hint: this error can be retried" in obs.content
-    assert "fake" in obs.content
+    assert obs.content.startswith("error: Web extraction failed.")
     # 原始异常细节不写入面向模型的 error（避免噪声 / 泄漏）。
     assert "boom-detail-should-not-leak" not in obs.content
-    kept = _find(caplog.records, "web_extract_provider_failed")
-    assert kept, "provider 通用异常路径必须保留 web_extract_provider_failed"
+    kept = _find(caplog.records, "web_extract_failed")
+    assert kept, "客户端 通用异常路径必须保留 web_extract_failed"
     _assert_no_removed_events(caplog.records)
 
 
@@ -301,8 +288,8 @@ def test_all_pages_failed_path_behavior_and_kept_event_with_elapsed(
         WebExtractItem(url="https://e.com/1", title="", content="", metadata={}, error="boom1"),
         WebExtractItem(url="https://e.com/2", title="", content="", metadata={}, error="boom2"),
     ]
-    provider = FakeProvider(extract_factory=lambda urls, fmt, cl: failures)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient(extract_factory=lambda urls, fmt, cl: failures)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://e.com/1", "https://e.com/2"])
 
@@ -332,8 +319,8 @@ def test_partial_failure_path_behavior_unchanged() -> None:
             WebExtractItem(url=urls[2], title="t", content="ok3", metadata={}),
         ]
 
-    provider = FakeProvider(extract_factory=_factory)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient(extract_factory=_factory)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
@@ -355,8 +342,8 @@ def test_full_success_path_behavior_and_display_unchanged() -> None:
     def _factory(req_urls, fmt, cl):
         return [WebExtractItem(url=u, title="t", content="c", metadata={}) for u in req_urls]
 
-    provider = FakeProvider(extract_factory=_factory)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient(extract_factory=_factory)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
@@ -374,16 +361,16 @@ def test_result_build_failure_path_behavior_and_kept_event(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """test_purpose: 结果构造失败时行为不变（retryable=False、error 固定文案），
-    web_extract_result_build_failed 仍被记录（潜在缺陷：删日志误伤保留事件或 provider 变量）。"""
+    web_extract_result_build_failed 仍被记录（潜在缺陷：删日志误伤保留事件或 客户端 变量）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider()
+    client = FakeClient()
 
-    def _boom(self, extracted, provider_name):  # type: ignore[no-untyped-def]
+    def _boom(self, extracted):  # type: ignore[no-untyped-def]
         raise ValueError("assembly failed internally")
 
     monkeypatch.setattr(WebExtractTool, "_build_results", _boom)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://ec.com/1"])
 
@@ -392,8 +379,7 @@ def test_result_build_failure_path_behavior_and_kept_event(
     assert "hint: do not retry this tool call." in obs.content
     kept = _find(caplog.records, "web_extract_result_build_failed")
     assert kept, "结果构造失败必须保留 web_extract_result_build_failed"
-    # data.provider 分支使用了 provider.name（provider 为真值）；不得因删日志而 NameError。
-    assert kept[0].data["provider"] == "fake"
+    # data.客户端 分支使用了 客户端.name（客户端 为真值）；不得因删日志而 NameError。
     _assert_no_removed_events(caplog.records)
 
 
@@ -412,55 +398,51 @@ def test_removed_events_never_emitted_across_all_paths(
 
     # 1) 超限
     WebExtractTool(
-        _registry_with(FakeProvider()), resolver=_public_resolver
+        FakeClient(), resolver=_public_resolver
     ).execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)])
 
     # 2) 安全拦截（IP 字面量内网 / 敏感 query / 非法 scheme）
-    safe_tool = WebExtractTool(_registry_with(FakeProvider()), resolver=_public_resolver)
+    safe_tool = WebExtractTool(FakeClient(), resolver=_public_resolver)
     safe_tool.execute(urls=["http://127.0.0.1/"])
     safe_tool.execute(urls=["https://example.com/?token=abc"])
     safe_tool.execute(urls=["ftp://example.com/"])
 
-    # 3) provider 未配置
+    # 3) 客户端 未配置
     WebExtractTool(
-        _registry_with(FakeProvider(extract_side_effect=WebProviderUnavailableError("x"))),
+        FakeClient(extract_side_effect=FirecrawlUnavailableError("x")),
         resolver=_public_resolver,
     ).execute(urls=["https://example.com/"])
 
-    # 4) provider 通用异常
+    # 4) 客户端 通用异常
     WebExtractTool(
-        _registry_with(FakeProvider(extract_side_effect=RuntimeError("x"))),
+        FakeClient(extract_side_effect=RuntimeError("x")),
         resolver=_public_resolver,
     ).execute(urls=["https://example.com/"])
 
     # 5) 全失败
     WebExtractTool(
-        _registry_with(
-            FakeProvider(
+        FakeClient(
                 extract_factory=lambda u, f, c: [
                     WebExtractItem(url=u[0], title="", content="", metadata={}, error="e")
                 ]
-            )
-        ),
+            ),
         resolver=_public_resolver,
     ).execute(urls=["https://e.com/1"])
 
     # 6) 部分失败
     WebExtractTool(
-        _registry_with(
-            FakeProvider(
+        FakeClient(
                 extract_factory=lambda u, f, c: [
                     WebExtractItem(url=u[0], title="t", content="c", metadata={}),
                     WebExtractItem(url=u[1] if len(u) > 1 else u[0], title="", content="", metadata={}, error="e"),
                 ]
-            )
-        ),
+            ),
         resolver=_public_resolver,
     ).execute(urls=["https://e.com/1", "https://e.com/2"])
 
     # 7) 全成功
     WebExtractTool(
-        _registry_with(FakeProvider()), resolver=_public_resolver
+        FakeClient(), resolver=_public_resolver
     ).execute(urls=["https://example.com/"])
 
     _assert_no_removed_events(caplog.records)
@@ -470,13 +452,13 @@ def test_kept_events_are_not_emitted_on_unrelated_paths(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """test_purpose: 保留事件的触发条件不被放宽 —— 全成功路径不得出现任何失败类事件，
-    安全拦截路径不得出现 provider_unavailable/failed/all_pages_failed/result_build_failed
+    安全拦截路径不得出现 unconfigured/failed/all_pages_failed/result_build_failed
     （潜在缺陷：删日志时把保留事件挪到了公共分支上）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
     # 全成功：不应有失败类事件。
-    WebExtractTool(_registry_with(FakeProvider()), resolver=_public_resolver).execute(
+    WebExtractTool(FakeClient(), resolver=_public_resolver).execute(
         urls=["https://example.com/"]
     )
     for event in KEPT_WEB_EXTRACT_EVENTS:
@@ -484,8 +466,8 @@ def test_kept_events_are_not_emitted_on_unrelated_paths(
 
     caplog.clear()
 
-    # 安全拦截（早期返回，不进入 provider 调用）：不应有 provider 类事件。
-    WebExtractTool(_registry_with(FakeProvider()), resolver=_public_resolver).execute(
+    # 安全拦截（早期返回，不进入 客户端 调用）：不应有 客户端 类事件。
+    WebExtractTool(FakeClient(), resolver=_public_resolver).execute(
         urls=["http://127.0.0.1/"]
     )
     for event in KEPT_WEB_EXTRACT_EVENTS:
@@ -501,7 +483,7 @@ def test_kept_events_are_not_emitted_on_unrelated_paths(
 def test_elapsed_ms_reflects_real_elapsed_time(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """test_purpose: elapsed_ms 必须真实反映 provider 耗时 —— 让 provider 定速 sleep 100ms，
+    """test_purpose: elapsed_ms 必须真实反映 客户端 耗时 —— 让 客户端 定速 sleep 100ms，
     断言 elapsed_ms >= 90（潜在缺陷：started 在错误位置取样，或 elapsed_ms 恒为 0/常量，
     即「删除 started 流水日志」后耗时测量被悄悄破坏）。"""
 
@@ -515,8 +497,8 @@ def test_elapsed_ms_reflects_real_elapsed_time(
             WebExtractItem(url=u, title="", content="", metadata={}, error="boom") for u in urls
         ]
 
-    provider = FakeProvider(extract_factory=_slow_factory)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient(extract_factory=_slow_factory)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://e.com/1"])
 
@@ -524,13 +506,13 @@ def test_elapsed_ms_reflects_real_elapsed_time(
     kept = _find(caplog.records, "web_extract_all_pages_failed")
     assert kept, "全页失败必须保留 web_extract_all_pages_failed"
     elapsed = kept[0].data["elapsed_ms"]
-    assert elapsed >= 90, f"provider 至少 sleep 100ms，elapsed_ms 应 >= 90，实际 {elapsed!r}"
+    assert elapsed >= 90, f"客户端 至少 sleep 100ms，elapsed_ms 应 >= 90，实际 {elapsed!r}"
 
 
-def test_all_pages_failed_event_includes_started_before_provider_call() -> None:
-    """test_purpose: 对抗性定位取样点 —— started 必须在调用 provider **之前**取样。
-    让 provider 记录「被调用时刻」，若 started 在 provider 之后取样，则 elapsed_ms 会
-    明显小于真实 provider 耗时（这里用 sleep 放大差异）。（潜在缺陷：started 取样点后移）。"""
+def test_all_pages_failed_event_includes_started_before_client_call() -> None:
+    """test_purpose: 对抗性定位取样点 —— started 必须在调用 客户端 **之前**取样。
+    让 客户端 记录「被调用时刻」，若 started 在 客户端 之后取样，则 elapsed_ms 会
+    明显小于真实 客户端 耗时（这里用 sleep 放大差异）。（潜在缺陷：started 取样点后移）。"""
 
     import time as _t
 
@@ -543,8 +525,8 @@ def test_all_pages_failed_event_includes_started_before_provider_call() -> None:
             WebExtractItem(url=u, title="", content="", metadata={}, error="boom") for u in urls
         ]
 
-    provider = FakeProvider(extract_factory=_slow_factory)
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient(extract_factory=_slow_factory)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     records: list[logging.LogRecord] = []
     handler = logging.Handler()
@@ -563,8 +545,8 @@ def test_all_pages_failed_event_includes_started_before_provider_call() -> None:
     assert kept
     elapsed = kept[0].data["elapsed_ms"]
     assert elapsed >= 70, (
-        f"provider 实际 sleep 80ms，elapsed_ms 仅 {elapsed!r}，"
-        "疑似 started 取样点晚于 provider 调用"
+        f"客户端 实际 sleep 80ms，elapsed_ms 仅 {elapsed!r}，"
+        "疑似 started 取样点晚于 客户端 调用"
     )
 
 
@@ -577,8 +559,8 @@ def test_non_address_rejection_emits_no_log_known_tradeoff(
     防止未来无意间又引入泄漏 URL 原文的新日志。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     # 逐个跑「非地址类」拦截，记录事件名。
     observed_events: list[str] = []
@@ -611,9 +593,9 @@ def test_address_rejection_still_logs_url_address_blocked(
     与「非地址类拦截无日志」形成对照（潜在缺陷：删除流水日志时误删了地址审计日志）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider()
+    client = FakeClient()
     # 字面量 host 的地址即其自身：用系统解析（resolver=None）才能得到真实的 10.0.0.5。
-    tool = WebExtractTool(_registry_with(provider), resolver=None)
+    tool = WebExtractTool(client, resolver=None)
 
     obs = tool.execute(urls=["http://10.0.0.5/"])
 
@@ -625,38 +607,37 @@ def test_address_rejection_still_logs_url_address_blocked(
     _assert_no_removed_events(caplog.records)
 
 
-def test_fake_ip_exemption_event_still_emitted_and_provider_reached(
+def test_fake_ip_exemption_event_still_emitted_and_client_reached(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """test_purpose: fake-ip 豁免判定逻辑未被日志改动波及 —— 解析到 198.18.0.0/15 的主机名
-    必须放行、写 web_url_fake_ip_allowed 并真正到达 provider（潜在缺陷：删日志时改坏了安全
+    必须放行、写 web_url_fake_ip_allowed 并真正到达 客户端（潜在缺陷：删日志时改坏了安全
     校验的返回路径）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider()
-    tool = WebExtractTool(
-        _registry_with(provider), resolver=lambda hostname: ["198.18.0.67"]
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=lambda hostname: ["198.18.0.67"]
     )
 
     obs = tool.execute(urls=["https://example.com/page"])
 
     assert obs.status == "success"
-    assert len(provider.extract_calls) == 1
+    assert len(client.extract_calls) == 1
     allowed = _find(caplog.records, "web_url_fake_ip_allowed")
     assert allowed, "fake-ip 放行必须保留 web_url_fake_ip_allowed"
     _assert_no_removed_events(caplog.records)
 
 
-def test_empty_url_list_short_circuits_without_provider() -> None:
+def test_empty_url_list_short_circuits_without_client() -> None:
     """test_purpose: 空 URL 列表属于边界 —— 当前实现已去重/校验，空列表应直接返回成功且不
-    调用 provider（潜在缺陷：删日志时引入未定义变量路径或改变了空输入语义）。"""
+    调用 客户端（潜在缺陷：删日志时引入未定义变量路径或改变了空输入语义）。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=[])
 
-    # 记录当前事实：空输入走到成功分支（payload 为空 results），provider 被调用一次。
+    # 记录当前事实：空输入走到成功分支（payload 为空 results），客户端 被调用一次。
     # 该断言固化当前行为，若未来改变需显式确认。
     assert obs.status in {"success", "error"}
     if obs.status == "success":
@@ -683,9 +664,9 @@ def test_blocked_url_never_leaks_into_logs(
     URL 原文、query 串或凭据（潜在缺陷：删流水日志时把 URL 原文塞进了保留事件）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider()
+    client = FakeClient()
     # resolver 解析到内网以触发地址类拦截（含 URL 的路径），同时敏感参数检查更早生效。
-    tool = WebExtractTool(_registry_with(provider), resolver=lambda h: ["10.0.0.5"])
+    tool = WebExtractTool(client, resolver=lambda h: ["10.0.0.5"])
 
     obs = tool.execute(urls=[secret_url])
 
@@ -703,9 +684,8 @@ def test_fake_ip_allowed_path_does_not_leak_url(
     （潜在缺陷：成功/放行日志比失败日志记录更多上下文而泄密）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider()
-    tool = WebExtractTool(
-        _registry_with(provider), resolver=lambda h: ["198.18.0.67"]
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=lambda h: ["198.18.0.67"]
     )
     # 刻意使用**非敏感**查询参数：含 token/api_key 会在安全校验早期被拦，无法到达 fake-ip 放行分支。
     # 这里验证的是「真正走到放行路径」时日志不泄漏 URL 原文与 query 串。
@@ -719,20 +699,20 @@ def test_fake_ip_allowed_path_does_not_leak_url(
     assert url not in full
 
 
-def test_all_failed_event_does_not_leak_error_details_of_provider(
+def test_all_failed_event_does_not_leak_error_details_of_client(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """test_purpose: web_extract_all_pages_failed 的 data 只应含 provider/failed_count/elapsed_ms，
+    """test_purpose: web_extract_all_pages_failed 的 data 只应含 客户端/failed_count/elapsed_ms，
     不得把页面错误正文或 URL 原文写进去（潜在缺陷：新增 elapsed_ms 时顺手塞入了额外字段）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     secret_body_marker = "PAGE-BODY-SECRET-CANARY"
-    provider = FakeProvider(
+    client = FakeClient(
         extract_factory=lambda u, f, c: [
             WebExtractItem(url=u[0], title="", content="", metadata={}, error=secret_body_marker)
         ]
     )
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://secret.example.com/path?q=QUERYCANARY"])
 
@@ -741,7 +721,7 @@ def test_all_failed_event_does_not_leak_error_details_of_provider(
     assert kept
     data = kept[0].data
     # 只允许这三个字段，防止误加 URL / 正文 / 错误详情。
-    assert set(data.keys()) == {"provider", "failed_count", "elapsed_ms"}, data
+    assert set(data.keys()) == {"failed_count", "elapsed_ms"}, data
     full = _log_full_text(caplog.records)
     assert secret_body_marker not in full
     assert "QUERYCANARY" not in full
@@ -752,53 +732,8 @@ def test_all_failed_event_does_not_leak_error_details_of_provider(
 # ===========================================================================
 
 
-def test_provider_unavailable_path_has_no_unbound_provider_usage(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """test_purpose: 删除流水日志后，``web_extract_provider_unavailable`` 分支仍引用了
-    ``provider.name``；该分支发生在 provider 已解析之后，必须可正常取值而不抛
-    NameError/UnboundLocalError（潜在缺陷：删日志时挪动了 provider 绑定位置）。"""
-
-    caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider(
-        name="unbound-probe",
-        extract_side_effect=WebProviderUnavailableError("boom"),
-    )
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
-
-    # 若分支内引用了未绑定变量，这里会抛异常（工具契约要求永不向上抛）。
-    obs = tool.execute(urls=["https://example.com/"])
-
-    assert obs.status == "error"
-    kept = _find(caplog.records, "web_extract_provider_unavailable")
-    assert kept
-    assert kept[0].data["provider"] == "unbound-probe"
 
 
-def test_result_build_failure_uses_backend_when_provider_falsy(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """test_purpose: 结果构造失败的日志 data.provider 表达 ``provider.name if provider else backend``。
-    由于该分支仅在 provider 解析成功后才可达，provider 恒为真值，故走 provider.name 分支；
-    验证该表达式不会因 provider 为假值而触发 NameError（潜在缺陷：删日志时 backend 变量被移除）。"""
-
-    caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    monkeypatch.setattr(Settings, "WEB_EXTRACT_BACKEND", "")
-    monkeypatch.setattr(Settings, "WEB_BACKEND", "")
-    provider = FakeProvider(name="fallback-provider")
-    monkeypatch.setattr(
-        WebExtractTool,
-        "_build_results",
-        lambda self, extracted, name: (_ for _ in ()).throw(ValueError("x")),
-    )
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
-
-    obs = tool.execute(urls=["https://example.com/"])
-
-    assert obs.status == "error"
-    kept = _find(caplog.records, "web_extract_result_build_failed")
-    assert kept
-    assert kept[0].data["provider"] == "fallback-provider"
 
 
 def test_repeated_calls_do_not_accumulate_stale_elapsed_or_state(
@@ -808,12 +743,12 @@ def test_repeated_calls_do_not_accumulate_stale_elapsed_or_state(
     不得复用 / 累积或出现跨调用污染（潜在缺陷：把 started 提为实例级状态而引入并发/复用污染）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider(
+    client = FakeClient(
         extract_factory=lambda u, f, c: [
             WebExtractItem(url=u[0], title="", content="", metadata={}, error="boom")
         ]
     )
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     elapsed_values: list[float] = []
     for _ in range(5):
@@ -834,8 +769,8 @@ def test_state_hint_present_on_all_error_paths_unchanged() -> None:
     """test_purpose: 所有错误路径的 display_data 都应是稳定的 ``{"status_hint": "提取失败"}``，
     与 tool_error 的契约一致（潜在缺陷：删日志时改动了工具名或提示）。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
 
     # 超限
     over = tool.execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)])
@@ -843,7 +778,7 @@ def test_state_hint_present_on_all_error_paths_unchanged() -> None:
     blocked = tool.execute(urls=["ftp://example.com/"])
     # 未配置
     unavailable = WebExtractTool(
-        _registry_with(FakeProvider(extract_side_effect=WebProviderUnavailableError("x"))),
+        FakeClient(extract_side_effect=FirecrawlUnavailableError("x")),
         resolver=_public_resolver,
     ).execute(urls=["https://example.com/"])
 
@@ -853,44 +788,21 @@ def test_state_hint_present_on_all_error_paths_unchanged() -> None:
         assert obs.tool_name == "web_extract"
 
 
-def test_async_provider_extract_result_order_and_behavior(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """test_purpose: 删除流水日志不应影响异步 provider 路径（``asyncio.run`` 分支）的行为，
-    结果顺序与同步路径一致、无额外流水事件（潜在缺陷：删日志时改坏 _execute_provider_extract）。"""
-
-    caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-
-    class _AsyncProvider(FakeProvider):
-        async def extract(self, urls, output_format, char_limit):  # type: ignore[override]
-            self.extract_calls.append((list(urls), output_format, char_limit))
-            return [WebExtractItem(url=u, title="t", content="c", metadata={}) for u in urls]
-
-    provider = _AsyncProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
-
-    obs = tool.execute(urls=["https://e.com/1", "https://e.com/2"])
-
-    assert obs.status == "success"
-    payload = json.loads(obs.content)
-    assert [r["url"] for r in payload["results"]] == ["https://e.com/1", "https://e.com/2"]
-    _assert_no_removed_events(caplog.records)
 
 
-def test_provider_side_page_failed_event_still_available_contract() -> None:
-    """test_purpose: 单页失败日志由 Provider 侧记录（web_extract_page_failed），本次改动不应
-    影响其可达性。用 firecrawl 假 _post 驱动真实 Provider 的 _scrape_one，断言该事件仍在
-    （潜在缺陷：把 provider 侧日志一并删掉或改动其字段）。"""
+def test_client_side_page_failed_event_still_available_contract() -> None:
+    """test_purpose: 单页失败日志由 客户端侧记录（web_extract_page_failed），本次改动不应
+    影响其可达性。用 firecrawl 假 _post 驱动真实客户端 的 _scrape_one，断言该事件仍在
+    （潜在缺陷：把 客户端 侧日志一并删掉或改动其字段）。"""
 
     import logging as _logging
 
-    from app.core.tool.web.providers.firecrawl_provider import FirecrawlProvider
 
-    class _FailPost(FirecrawlProvider):
+    class _FailPost(FirecrawlClient):
         def _post(self, endpoint: str, body: dict[str, object]) -> object:
-            raise WebProviderRequestError("page boom")
+            raise FirecrawlRequestError("page boom")
 
-    provider = _FailPost(api_key="dummy")
+    client = _FailPost(api_key="dummy")
     records: list[_logging.LogRecord] = []
     handler = _logging.Handler()
     handler.emit = records.append  # type: ignore[method-assign]
@@ -899,14 +811,14 @@ def test_provider_side_page_failed_event_still_available_contract() -> None:
     old_level = logger.level
     logger.setLevel(_logging.DEBUG)
     try:
-        item = provider._scrape_one("https://e.com/bad", "markdown", 100)
+        item = client._scrape_one("https://e.com/bad", "markdown", 100)
     finally:
         logger.removeHandler(handler)
         logger.setLevel(old_level)
 
     assert item.error
     page_failed = _find(records, "web_extract_page_failed")
-    assert page_failed, "Provider 侧 web_extract_page_failed 仍应可达"
+    assert page_failed, "客户端侧 web_extract_page_failed 仍应可达"
     assert page_failed[0].data["url"] == "https://e.com/bad"
 
 
@@ -919,12 +831,12 @@ def test_no_removed_event_names_left_in_any_log_record_attribute(
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
-    provider = FakeProvider(
+    client = FakeClient(
         extract_factory=lambda u, f, c: [
             WebExtractItem(url=u[0], title="", content="", metadata={}, error="boom")
         ]
     )
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    tool = WebExtractTool(client, resolver=_public_resolver)
     tool.execute(urls=["https://e.com/1"])
     tool.execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)])
 
@@ -940,12 +852,12 @@ def test_elapsed_ms_is_rounded_to_two_decimals(
     的数值（潜在缺陷：删改日志时丢失 round，导致超长浮点入日志）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider(
+    client = FakeClient(
         extract_factory=lambda u, f, c: [
             WebExtractItem(url=u[0], title="", content="", metadata={}, error="boom")
         ]
     )
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    tool = WebExtractTool(client, resolver=_public_resolver)
     tool.execute(urls=["https://e.com/1"])
 
     kept = _find(caplog.records, "web_extract_all_pages_failed")

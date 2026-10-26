@@ -1,13 +1,11 @@
 """子 Agent 配置提案工具的生成契约测试。"""
 
-from app.core.tool.agent_team.team_tool_error import TeamToolError
+from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
 from app.core.agents.define_agents import main_agent
-from app.core.tool.agent_team.propose_agent_team_configuration import (
+from app.core.tool.handler.propose_agent_team_configuration import (
     ProposeAgentTeamConfigurationTool,
 )
-from app.core.tool.child_agent.propose_agent_configuration import (
-    ProposeAgentConfigurationTool,
-)
+from app.core.tool.handler.propose_agent_configuration import ProposeAgentConfigurationTool
 
 
 def test_team_proposal_tool_returns_only_an_unsaved_configuration_draft(monkeypatch) -> None:

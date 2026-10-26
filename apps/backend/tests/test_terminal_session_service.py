@@ -5,7 +5,7 @@ from typing import ClassVar
 import pytest
 
 from app.config.constant import Constant
-from app.service.terminal.errors import (
+from app.tools.terminal_runtime.errors import (
     TerminalSessionError,
     TerminalSessionNotFoundError,
     TerminalSessionOwnershipError,
@@ -15,9 +15,9 @@ from app.service.terminal.errors import (
     TerminalWorkerSignalFailedError,
     TerminalWorkerUnavailableError,
 )
-from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
-from app.service.terminal.shell_resolver import ShellResolver
-from app.service.terminal.terminal_session_service import (
+from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker
+from app.tools.terminal_runtime.shell_resolver import ShellResolver
+from app.tools.terminal_runtime.terminal_session_service import (
     TerminalSessionService,
 )
 
@@ -120,7 +120,7 @@ def make_service(
         return worker
 
     monkeypatch.setattr(
-        "app.service.terminal.terminal_session_service.ProcessTerminalWorker", construct
+        "app.tools.terminal_runtime.terminal_session_service.ProcessTerminalWorker", construct
     )
     if ring_buffer_bytes is not None:
         monkeypatch.setattr(Constant.Terminal, "MAX_RING_BUFFER_BYTES", ring_buffer_bytes)
@@ -598,7 +598,7 @@ def test_task_deletion_closes_all_runs_and_blocks_late_start(monkeypatch, tmp_pa
 
 
 def test_shell_resolver_has_platform_specific_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("app.service.terminal.shell_resolver.shutil.which", lambda value: value)
+    monkeypatch.setattr("app.tools.terminal_runtime.shell_resolver.shutil.which", lambda value: value)
 
     windows = ShellResolver.resolve("auto", system="Windows")
     cmd = ShellResolver.resolve("cmd", system="Windows")
@@ -628,7 +628,7 @@ def test_shell_resolver_has_platform_specific_defaults(monkeypatch: pytest.Monke
 def test_shell_resolver_builds_disabled_integration_into_each_launch_spec(
         monkeypatch, requested, system
 ):
-    monkeypatch.setattr("app.service.terminal.shell_resolver.shutil.which", lambda value: value)
+    monkeypatch.setattr("app.tools.terminal_runtime.shell_resolver.shutil.which", lambda value: value)
     spec = ShellResolver.resolve(
         requested, system=system, environ={"SHELL": "/bin/zsh"}, integration="off"
     )
@@ -1047,7 +1047,7 @@ def test_read_waits_three_seconds_despite_output_and_returns_latest_screen(monke
     import time
     from concurrent.futures import ThreadPoolExecutor
 
-    from app.service.terminal.errors import TerminalReadInProgressError
+    from app.tools.terminal_runtime.errors import TerminalReadInProgressError
 
     service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)[
@@ -1097,7 +1097,7 @@ def test_read_waits_three_seconds_despite_output_and_returns_latest_screen(monke
 
 
 def test_repeat_error_keeps_command_alive_and_changed_output_or_run_recovers(monkeypatch, tmp_path):
-    from app.service.terminal.errors import TerminalRepeatedReadError
+    from app.tools.terminal_runtime.errors import TerminalRepeatedReadError
 
     service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)[
@@ -1147,7 +1147,7 @@ def test_cancelled_read_does_not_count_or_leave_read_locked(monkeypatch, tmp_pat
 
 
 def test_write_and_read_keep_bounded_latest_history_without_consumption(monkeypatch, tmp_path):
-    from app.service.terminal.terminal_observation import json_size
+    from app.tools.terminal_runtime.terminal_observation import json_size
 
     service, workers = make_service(monkeypatch)
     session = service.start(task_id=1, workspace_id=1, workspace_root=str(tmp_path), run_id=1)[

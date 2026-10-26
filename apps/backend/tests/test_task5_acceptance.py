@@ -22,19 +22,20 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
+from app.core.context.context_store import ContextStore
+from app.core.conversation_run_ledger import ConversationRunLedger
 from app.core.events import AssistantTextDeltaEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunError, ConversationRunStatus
 from app.models.conversation_input import UserInputPresentation
-from app.models.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
-from app.service.conversation_run.conversation_run_service import ConversationRunService
-from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
+from app.models.react_execution_state import ReactExecutionState
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
+from app.service.recover_service import RecoverService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -77,14 +78,17 @@ def canonical_store(tmp_path: Path, monkeypatch):
     initialize_app_schema(engine)
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     monkeypatch.setattr(
-        "app.service.conversation_run.task_message_queue.main_session_factory", lambda: factory
+        "app.core.task_message_queue.main_session_factory", lambda: factory
     )
     workspaces = _bind(WorkspaceCrud, factory)
     tasks = _bind(TaskCrud, factory)
     runs = _bind(ConversationRunCrud, factory)
     contexts = _bind(ConversationTaskContextCrud, factory)
+    context_store = ContextStore.__new__(ContextStore)
+    context_store._crud = contexts
     context_service = ConversationTaskContextService.__new__(ConversationTaskContextService)
     context_service._crud = contexts
+    context_service._store = context_store
     workspace = workspaces.create("acceptance", str(tmp_path))
     task = tasks.create(workspace.id, "canonical conversation_run")
     # 快照重建按工具名查 display 定义；本文件只验证状态契约，给出最小合法 presentation
@@ -121,7 +125,8 @@ def canonical_store(tmp_path: Path, monkeypatch):
         tasks=tasks,
         runs=runs,
         contexts=contexts,
-        context=context_service,
+        context=context_store,
+        context_service=context_service,
         state=state,
         workspace=workspace,
         task=task,
@@ -349,7 +354,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
     store = canonical_store
     run = _create_run(store, current=True)
     _append(store, run.id, {"role": "user", "content": "durable user"})
-    service = ConversationRunStateService.__new__(ConversationRunStateService)
+    service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = store.runs
 
     class FailingProjector:
@@ -357,7 +362,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
             raise RuntimeError("SSE failed after commit")
 
     monkeypatch.setattr(
-        "app.service.conversation_run.conversation_run_state_service.service_depends.get_conversation_event_projector",
+        "app.core.conversation_run_ledger.service_depends.get_conversation_event_projector",
         lambda: FailingProjector(),
     )
     stats = ConversationRunUsageStats(**_USAGE)
@@ -429,7 +434,7 @@ def test_real_sqlite_fork_preserves_canonical_identity(
     target = store.tasks.create(store.workspace.id, "fork")
     with store.factory.begin() as session:
         target_run = store.runs.clone_for_task(session, source_run, target.id)
-        store.context.clone_for_fork(
+        store.context_service.clone_for_fork(
             store.task.id,
             target.id,
             {source_run.id: target_run.id},
@@ -455,12 +460,12 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     store = canonical_store
     run = _create_run(store, current=True)
     _append_user_ai_tool(store, run, "call-interrupted")
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = RecoverService.__new__(RecoverService)
     service._run = store.runs
-    service._context = store.context
+    service._context = store.context_service
     service._session_factory = store.factory
-    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
-    service._run_state._run = store.runs
+    service._ledger = ConversationRunLedger.__new__(ConversationRunLedger)
+    service._ledger._run = store.runs
     recovered = service.recover_orphaned_runs()
     assert [item.id for item in recovered] == [run.id]
     assert service.recover_orphaned_runs() == []

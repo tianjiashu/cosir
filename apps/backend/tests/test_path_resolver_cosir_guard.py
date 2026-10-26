@@ -21,7 +21,7 @@ from app.tools.tool_handler.read_file import ReadFileTool
 from app.tools.tool_handler.replace_tool import ReplaceTool
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.write_file import WriteFileTool
-from app.service.terminal.terminal_session_service import TerminalSessionService
+from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 
 
 def _context(root: Path) -> ToolExecutionContext:

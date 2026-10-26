@@ -9,7 +9,7 @@
 拦截。放行写 web_url_fake_ip_allowed(WARNING)，拦截写 web_url_address_blocked(WARNING)。
 
 本文件只新增测试，不修改任何业务代码。复用 test_web_search_extract_tools.py 的
-FakeProvider / _registry_with / _public_resolver / _log_full_text 等 node_helper。
+FakeClient / _public_resolver / _log_full_text 等 node_helper。
 """
 
 import ipaddress
@@ -18,26 +18,16 @@ import logging
 import pytest
 
 from app.config.constant import Constant
-from app.core.tool.web import url_safety
-from app.core.tool.web.url_safety import is_safe_public_url
-from app.core.tool.web.web_extract import WebExtractTool
+from app.core.tool.handler.web import url_safety
+from app.core.tool.handler.web.url_safety import is_safe_public_url
+from app.core.tool.handler.web_extract import WebExtractTool
 from tests.test_web_search_extract_tools import (
-    FakeProvider,
+    FakeClient,
     _log_full_text,
     _public_resolver,
-    _registry_with,
 )
 
 _FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
-
-
-@pytest.fixture(autouse=True)
-def _clear_web_backend_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
-    """让 fake provider 测试不受本机环境中的生产 backend 配置影响（与主测试文件一致）。"""
-
-    monkeypatch.setattr("app.config.settings.Settings.WEB_SEARCH_BACKEND", "")
-    monkeypatch.setattr("app.config.settings.Settings.WEB_EXTRACT_BACKEND", "")
-    monkeypatch.setattr("app.config.settings.Settings.WEB_BACKEND", "")
 
 
 def _fake_ip_resolver(*addresses: str):
@@ -604,71 +594,70 @@ def test_blocked_log_truncates_address_list_to_max(
 
 
 # ---------------------------------------------------------------------------
-# 7. 端到端：WebExtractTool.execute 在 fake-ip resolver 下必须真的调用 provider
+# 7. 端到端：WebExtractTool.execute 在 fake-ip resolver 下必须真的调用 Firecrawl 客户端
 # ---------------------------------------------------------------------------
 
 
-def test_execute_reaches_provider_under_fake_ip_resolver() -> None:
-    """test_purpose: fake-ip 代理环境下 execute 必须真正调用 provider，而非在安全校验阶段
+def test_execute_reaches_client_under_fake_ip_resolver() -> None:
+    """test_purpose: fake-ip 代理环境下 execute 必须真正调用 客户端，而非在安全校验阶段
     返回 Blocked（本次缺陷的端到端回归）。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_fake_ip_resolver("198.18.0.67"))
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_fake_ip_resolver("198.18.0.67"))
 
     obs = tool.execute(urls=["https://example.com/page", "https://example.org/other"])
 
     assert obs.status == "success"
-    assert len(provider.extract_calls) == 1
-    assert provider.extract_calls[0][0] == [
+    assert len(client.extract_calls) == 1
+    assert client.extract_calls[0][0] == [
         "https://example.com/page",
         "https://example.org/other",
     ]
 
 
-def test_execute_blocked_before_provider_when_mixed_internal() -> None:
-    """test_purpose: 混解析含内网地址时必须在调用 provider 之前返回 Blocked，且 provider
+def test_execute_blocked_before_client_when_mixed_internal() -> None:
+    """test_purpose: 混解析含内网地址时必须在调用 客户端 之前返回 Blocked，且 客户端
     绝不被调用（潜在缺陷：先调用后校验，SSRF 实际已发出）。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(
-        _registry_with(provider), resolver=_fake_ip_resolver("198.18.0.67", "10.0.0.5")
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_fake_ip_resolver("198.18.0.67", "10.0.0.5")
     )
 
     obs = tool.execute(urls=["https://example.com/page"])
 
     assert obs.status == "error"
     assert obs.content.startswith("error: Blocked:")
-    assert provider.extract_calls == [], "被拦 URL 绝不能触发 provider 调用"
+    assert client.extract_calls == [], "被拦 URL 绝不能触发 客户端 调用"
 
 
-def test_execute_rejects_fake_ip_literal_before_provider() -> None:
-    """test_purpose: URL 主机名是 fake-ip 字面量时必须拦截且不调用 provider（潜在缺陷：
-    字面量被豁免而放行到 provider）。"""
+def test_execute_rejects_fake_ip_literal_before_client() -> None:
+    """test_purpose: URL 主机名是 fake-ip 字面量时必须拦截且不调用 客户端（潜在缺陷：
+    字面量被豁免而放行到 客户端）。"""
 
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_fake_ip_resolver("198.18.0.67"))
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_fake_ip_resolver("198.18.0.67"))
 
     obs = tool.execute(urls=["http://198.18.0.67/"])
     assert obs.status == "error"
-    assert provider.extract_calls == []
+    assert client.extract_calls == []
 
 
 def test_execute_fail_closed_when_resolver_errors() -> None:
-    """test_purpose: resolver 抛 OSError 时 execute 必须返回 Blocked 且不调用 provider，
+    """test_purpose: resolver 抛 OSError 时 execute 必须返回 Blocked 且不调用 客户端，
     不得让异常逃逸（潜在缺陷：解析异常未归一化，工具崩溃）。"""
 
-    provider = FakeProvider()
+    client = FakeClient()
 
     def _boom(hostname: str) -> list[str]:
         raise OSError("dns down")
 
-    tool = WebExtractTool(_registry_with(provider), resolver=_boom)
+    tool = WebExtractTool(client, resolver=_boom)
 
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
     assert obs.content.startswith("error: Blocked:")
-    assert provider.extract_calls == []
+    assert client.extract_calls == []
 
 
 def test_execute_does_not_leak_secret_url_into_logs(
@@ -678,8 +667,8 @@ def test_execute_does_not_leak_secret_url_into_logs(
     （潜在缺陷：安全判定日志泄漏原 URL）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    provider = FakeProvider()
-    tool = WebExtractTool(_registry_with(provider), resolver=_public_resolver)
+    client = FakeClient()
+    tool = WebExtractTool(client, resolver=_public_resolver)
     secret_url = "https://example.com/page?api_key=E2ELEAKCANARY999"  # noqa: S105 - 泄漏检测用假密钥
 
     obs = tool.execute(urls=[secret_url])
@@ -697,17 +686,17 @@ def test_execute_partial_failure_under_fake_ip_resolver_keeps_success() -> None:
     urls = ["https://example.com/ok", "https://example.com/bad"]
 
     def _factory(req_urls, fmt, cl):
-        from app.core.tool.web.web_provider import WebExtractItem
+        from app.core.tool.handler.web.firecrawl_client import WebExtractItem
 
         return [
             WebExtractItem(url=urls[0], title="t", content="ok", metadata={}),
             WebExtractItem(url=urls[1], title="", content="", metadata={}, error="boom"),
         ]
 
-    provider = FakeProvider(extract_factory=_factory)
-    tool = WebExtractTool(_registry_with(provider), resolver=_fake_ip_resolver("198.18.0.67"))
+    client = FakeClient(extract_factory=_factory)
+    tool = WebExtractTool(client, resolver=_fake_ip_resolver("198.18.0.67"))
 
     obs = tool.execute(urls=urls)
 
     assert obs.status == "success"
-    assert len(provider.extract_calls) == 1
+    assert len(client.extract_calls) == 1

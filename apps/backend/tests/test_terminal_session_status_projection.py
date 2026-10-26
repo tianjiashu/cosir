@@ -20,7 +20,7 @@ from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.task_record import TaskRecord
-from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
+from app.tools.terminal_runtime.terminal_session_status import TerminalSessionStatusChange
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.model.base import StorageBase
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel

@@ -4,14 +4,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.models.task_message import NoticeBody, TaskMessage
 
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])
 async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> None:
     """工具准入的三条分支都向 mailbox 投递领域通知，不在装配方构造模型消息。"""
-    from app.service.conversation_run import run_driver
+    from app.core import run_driver
 
     space = SimpleNamespace(task_tool_schemas=({"name": "read_file"}, {"name": "write_file"}))
     monkeypatch.setattr(run_driver.task_runtime_spaces, "get_or_create", lambda _id: space)

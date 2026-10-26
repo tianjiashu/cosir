@@ -17,7 +17,7 @@ from app.assistant_transport.service.transport_assistant_service import (
 )
 from app.models.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import RunTransition
-from app.service.conversation_run.conversation_run_service import ConversationRunService
+from app.service.recover_service import RecoverService
 from app.service.depends import get_workspace_service
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -228,9 +228,9 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
             repaired.append((task_id, run_id))
             return [f"call-{run_id}"]
 
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = RecoverService.__new__(RecoverService)
     service._run = _RunCrud()
-    service._run_state = _RunStateService()
+    service._ledger = _RunStateService()
     service._context = _ContextService()
     service._session_factory = _SessionFactory()
 

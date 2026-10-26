@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from test_task5_acceptance import canonical_store as canonical_store
 
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
@@ -17,12 +16,12 @@ from app.core.workflow.execution_state.conversation_run_usage_stats import Conve
 from app.models.conversation_run_failure import run_failure_message
 from app.models.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
-from app.service.conversation_run.conversation_run_service import ConversationRunService
-from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
+from app.core.conversation_run_ledger import ConversationRunLedger
+from app.service.recover_service import RecoverService
 from tests.sdk_fixtures import sdk_completion
 
 
-class _RecordingContextService:
+class _RecordingContextStore:
     def __init__(self) -> None:
         self.appended: list[dict[str, Any]] = []
         self.current_max_sequence = 0
@@ -38,16 +37,13 @@ class _RecordingContextService:
     def max_sequence(self, _task_id: int) -> int:
         return self.current_max_sequence
 
-    def delete_by_run_id(self, _task_id: int, _run_id: int) -> None:
-        return None
 
-
-def _runtime_manager(service: _RecordingContextService) -> RuntimeMessageContextManager:
+def _runtime_manager(context_store: _RecordingContextStore) -> RuntimeMessageContextManager:
     manager = object.__new__(RuntimeMessageContextManager)
     manager.current_task_id = 7
     manager.agent_profile = SimpleNamespace()
     manager.workspace = SimpleNamespace(id=7, root_path="")
-    manager.context_service = service
+    manager.context_store = context_store
     manager.current_run_id = 11
     manager._system_entry = None
     manager._entries = []
@@ -57,8 +53,8 @@ def _runtime_manager(service: _RecordingContextService) -> RuntimeMessageContext
 
 
 def test_message_context_persists_complete_ai_fields_and_ordered_parts() -> None:
-    service = _RecordingContextService()
-    manager = _runtime_manager(service)
+    context_store = _RecordingContextStore()
+    manager = _runtime_manager(context_store)
     message = {
         "role": "assistant",
         "content": "answer",
@@ -74,20 +70,20 @@ def test_message_context_persists_complete_ai_fields_and_ordered_parts() -> None
 
     manager.add_message(message)
 
-    persisted = service.appended[0]
+    persisted = context_store.appended[0]
     assert persisted["args"][2] == message
 
 
 def test_begin_run_binds_identity_without_rewriting_context() -> None:
     """begin_run 只读库重建内存列表并绑定身份，不写任何 context 行。"""
-    service = _RecordingContextService()
-    manager = _runtime_manager(service)
+    context_store = _RecordingContextStore()
+    manager = _runtime_manager(context_store)
     message = {"role": "user", "content": "existing"}
-    service.entries_in_context = lambda _task_id: [ContextEntry(message, 11, 1)]
+    context_store.entries_in_context = lambda _task_id: [ContextEntry(message, 11, 1)]
     manager.begin_run(SimpleNamespace(id=12, task_id=7))
     assert manager.current_run_id == 12
     assert manager._entries[0].message is message
-    assert service.appended == []
+    assert context_store.appended == []
 
 
 def test_sdk_response_projection_preserves_raw_tool_arguments(monkeypatch) -> None:
@@ -173,12 +169,12 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
             order.append("context")
             return ["call-1"]
 
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = RecoverService.__new__(RecoverService)
     service._run = _RunCrud()
     service._context = _ContextService()
     service._session_factory = _SessionFactory()
-    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
-    service._run_state._run = service._run
+    service._ledger = ConversationRunLedger.__new__(ConversationRunLedger)
+    service._ledger._run = service._run
 
     assert service.recover_orphaned_runs() == [recovered_run]
     assert order == ["begin", "run", "context", "commit"]
@@ -199,16 +195,13 @@ def _creation_service(store, monkeypatch, projector):
                 context_window_k=128,
             )
         )
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = store.runs
-    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
-    service._run_state._run = store.runs
     service._task = store.tasks
-    service._context = store.context
     service._session_factory = store.factory
     monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: projector)
     monkeypatch.setattr(
-        "app.service.conversation_run.conversation_run_service.get_model_config_service",
+        "app.core.conversation_run_ledger.get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _id: SimpleNamespace(
                 supports_reasoning_effort=False,
@@ -234,7 +227,7 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
     """独立连接在事件发布时已能看到整组事实，context 留待模型边界并入。"""
     from app.models.conversation_input import ConversationInput
     from app.models.task_message import RunLaunch, TaskMessage, UserInputBody
-    from app.service.conversation_run.task_message_queue import TaskMessageQueue
+    from app.core.task_message_queue import TaskMessageQueue
 
     store = request.getfixturevalue("canonical_store")
     events = []
@@ -301,7 +294,7 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
             order.append("event")
             assert event.status is ConversationRunStatus.FAILED
 
-    service = ConversationRunStateService.__new__(ConversationRunStateService)
+    service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = _RunCrud()
     service._session_factory = None
     import app.service.depends as depends
@@ -344,7 +337,7 @@ def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> 
         def process(self, _event: Any, **_kwargs: Any) -> None:
             raise RuntimeError("transport unavailable")
 
-    service = ConversationRunStateService.__new__(ConversationRunStateService)
+    service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = _RunCrud()
     import app.service.depends as depends
 

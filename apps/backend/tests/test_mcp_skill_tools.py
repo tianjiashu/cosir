@@ -9,9 +9,9 @@ from mcp.server.fastmcp import FastMCP
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import PlainTextResponse
 
-from app.tools.tool_handler.mcp import MCPTool
-from app.tools.tool_handler.skill import SkillTool
-from app.service.mcp.mcp_client import (
+from app.core.tool.handler.mcp_tool import MCPTool
+from app.core.tool.handler.skill_tool import SkillTool
+from app.core.tool.handler.mcp.mcp_client import (
     MCPConfigurationError,
     MCPServerConfig,
     _stdio_parameters,
@@ -21,8 +21,8 @@ from app.service.mcp.mcp_client import (
     read_mcp_configuration,
     server_connection_fingerprint,
 )
-from app.service.skills.skill_catalog import SkillCatalog, SkillLoadError
-from app.service.skills.skill_configuration import read_skill_configuration
+from app.core.tool.handler.skill.skill_catalog import SkillCatalog, SkillLoadError
+from app.core.tool.handler.skill.skill_configuration import read_skill_configuration
 
 
 def _write_skill(directory, name: str, description: str, body: str = "说明正文"):
@@ -53,9 +53,9 @@ def test_skill_catalog_reads_only_system_skills_and_loads_local_resource(tmp_pat
     _write_skill(system_root / "example", "example", "系统 Skill", "系统正文")
     _write_skill(workspace_root / "workspace-only", "workspace-only", "工作区 Skill")
     (system_root / "example" / "reference.md").write_text("资源正文", encoding="utf-8")
-    monkeypatch.setattr("app.service.skills.skill_catalog.system_skills_dir", lambda: system_root)
+    monkeypatch.setattr("app.core.tool.handler.skill.skill_catalog.system_skills_dir", lambda: system_root)
     monkeypatch.setattr(
-        "app.service.skills.skill_configuration.system_skills_config_file",
+        "app.core.tool.handler.skill.skill_configuration.system_skills_config_file",
         lambda: tmp_path / "missing-skills.json",
     )
 
@@ -75,9 +75,9 @@ def test_skill_catalog_rejects_resource_escape(tmp_path, monkeypatch):
     system_root = tmp_path / "system" / "skills"
     _write_skill(system_root / "example", "example", "测试 Skill")
     (system_root / "outside.md").write_text("外部文件", encoding="utf-8")
-    monkeypatch.setattr("app.service.skills.skill_catalog.system_skills_dir", lambda: system_root)
+    monkeypatch.setattr("app.core.tool.handler.skill.skill_catalog.system_skills_dir", lambda: system_root)
     monkeypatch.setattr(
-        "app.service.skills.skill_configuration.system_skills_config_file",
+        "app.core.tool.handler.skill.skill_configuration.system_skills_config_file",
         lambda: tmp_path / "missing-skills.json",
     )
 
@@ -100,7 +100,7 @@ def test_mcp_configuration_reads_enabled_servers(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("app.service.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr("app.core.tool.handler.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
 
     configuration = read_mcp_configuration()
 
@@ -112,7 +112,7 @@ def test_mcp_configuration_excludes_enabled_servers_without_successful_connectio
 ):
     config_path = tmp_path / "mcp_servers.json"
     config_path.write_text('{"servers":[{"name":"one","command":"python"}]}', encoding="utf-8")
-    monkeypatch.setattr("app.service.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr("app.core.tool.handler.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
 
     assert enabled_servers(read_mcp_configuration()) == []
 
@@ -120,13 +120,13 @@ def test_mcp_configuration_excludes_enabled_servers_without_successful_connectio
 def test_mcp_tool_does_not_discover_or_call_an_untested_server(tmp_path, monkeypatch):
     config_path = tmp_path / "mcp_servers.json"
     config_path.write_text('{"servers":[{"name":"one","command":"python"}]}', encoding="utf-8")
-    monkeypatch.setattr("app.service.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr("app.core.tool.handler.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
     monkeypatch.setattr(
-        "app.tools.tool_handler.mcp.list_server_tools",
+        "app.core.tool.handler.mcp_tool.list_server_tools",
         lambda server: pytest.fail("untested MCP server must not be discovered"),
     )
     monkeypatch.setattr(
-        "app.tools.tool_handler.mcp.call_server_tool",
+        "app.core.tool.handler.mcp_tool.call_server_tool",
         lambda *args: pytest.fail("untested MCP server must not be called"),
     )
 
@@ -144,7 +144,7 @@ def test_mcp_configuration_rejects_duplicate_names(tmp_path, monkeypatch):
         '{"servers":[{"name":"same","command":"one"},' '{"name":"same","command":"two"}]}',
         encoding="utf-8",
     )
-    monkeypatch.setattr("app.service.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr("app.core.tool.handler.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
 
     with pytest.raises(MCPConfigurationError, match="必须唯一"):
         read_mcp_configuration()
@@ -251,7 +251,7 @@ def test_mcp_tool_lists_and_calls_local_server(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("app.service.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr("app.core.tool.handler.mcp.mcp_client.system_mcp_servers_file", lambda: config_path)
     tool = MCPTool()
 
     listing = tool.execute(action="list")
@@ -276,9 +276,9 @@ def test_skill_tool_lists_and_loads_enabled_system_skill(tmp_path, monkeypatch):
     config_path = tmp_path / "config" / "skills.json"
     config_path.parent.mkdir()
     config_path.write_text('{"enabled_skills":["example"]}', encoding="utf-8")
-    monkeypatch.setattr("app.service.skills.skill_catalog.system_skills_dir", lambda: system_root)
+    monkeypatch.setattr("app.core.tool.handler.skill.skill_catalog.system_skills_dir", lambda: system_root)
     monkeypatch.setattr(
-        "app.service.skills.skill_configuration.system_skills_config_file",
+        "app.core.tool.handler.skill.skill_configuration.system_skills_config_file",
         lambda: config_path,
     )
     tool = SkillTool()
@@ -296,7 +296,7 @@ def test_skill_tool_lists_and_loads_enabled_system_skill(tmp_path, monkeypatch):
 
 def test_missing_skill_configuration_enables_all_installed_skills(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        "app.service.skills.skill_configuration.system_skills_config_file",
+        "app.core.tool.handler.skill.skill_configuration.system_skills_config_file",
         lambda: tmp_path / "missing-skills.json",
     )
 

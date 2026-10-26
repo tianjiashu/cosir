@@ -3,7 +3,7 @@
 不访问真实操作系统代理：``urllib.request.getproxies`` 与 ``resolve_httpx_proxy``
 均通过 monkeypatch 控制返回值。重点验证：
 - ``resolve_httpx_proxy`` 的开关解析与系统代理回退规则；
-- FirecrawlProvider 复用同一个带代理的 httpx.Client（search / extract 共享）。
+- FirecrawlClient 复用同一个带代理的 httpx.Client（search / extract 共享）。
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.core.tool.web.providers.firecrawl_provider import FirecrawlProvider
+from app.core.tool.handler.web.firecrawl_client import FirecrawlClient
 from app.utils import http_proxy as proxy_module
 from app.utils.http_proxy import resolve_httpx_proxy
 
@@ -119,9 +119,9 @@ def test_firecrawl_reuses_proxy_aware_client(
         proxy_module, "resolve_httpx_proxy", lambda: "http://127.0.0.1:7890"
     )
 
-    provider = FirecrawlProvider(api_key="dummy")
-    provider._post("search", {"query": "q"})
-    provider._post("scrape", {"url": "https://example.com"})
+    client = FirecrawlClient(api_key="dummy")
+    client._post("search", {"query": "q"})
+    client._post("scrape", {"url": "https://example.com"})
 
     assert len(_CaptureClient.instances) == 1, "应复用同一 client 而非每次新建"
     assert _CaptureClient.instances[0].kwargs.get("proxy") == "http://127.0.0.1:7890"
@@ -136,8 +136,8 @@ def test_firecrawl_client_proxy_none_when_disabled(
     monkeypatch.setattr(proxy_module.httpx, "Client", _CaptureClient)
     monkeypatch.setattr(proxy_module, "resolve_httpx_proxy", lambda: None)
 
-    provider = FirecrawlProvider(api_key="dummy")
-    provider._post("search", {"query": "q"})
+    client = FirecrawlClient(api_key="dummy")
+    client._post("search", {"query": "q"})
 
     assert _CaptureClient.instances[0].kwargs.get("proxy") is None
 

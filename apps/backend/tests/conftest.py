@@ -25,7 +25,8 @@ from app.service.agent_team.registry import AgentTeamConfigurationRegistry
 from app.config import configuration
 from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_config, agent_profile_source
-from app.tools.tool_system import ToolSystem
+from app.core.tool.execute.tool_executor import ToolExecutor
+from app.tools.tool_registration import build_tool_registry
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -211,7 +212,7 @@ def isolated_storage(tmp_path: Path) -> Iterator[None]:
 def install_process_singletons(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
     """返回「装配进程级单例（agent 目录 + 工具系统）」的安装函数。
 
-    为什么做成安装函数而不是夹具：``ToolSystem`` 的装配期会构造 ``delegate_task``，它依赖已初始化的
+    为什么做成安装函数而不是夹具：工具注册表的装配期会构造 ``delegate_task``，它依赖已初始化的
     存储单例，因此安装必须**晚于** ``init_storage()``；夹具的参数化依赖无法表达这种顺序，只能由
     调用方在初始化主库之后显式调用本函数。
 
@@ -229,7 +230,7 @@ def install_process_singletons(monkeypatch: pytest.MonkeyPatch) -> Callable[[], 
         AgentProfileConfigError: 内置 agent 定义或 prompt 配置非法（装配层契约错误）。
 
     副作用:
-        把 ``configuration._AGENT_REGISTRY`` / ``configuration._TOOL_SYSTEM`` /
+        把 ``configuration._AGENT_REGISTRY`` / ``_TOOL_REGISTRY`` / ``_TOOL_EXECUTOR`` /
         ``depends._RUNTIME`` 替换为新建实例。
     """
 
@@ -241,7 +242,9 @@ def install_process_singletons(monkeypatch: pytest.MonkeyPatch) -> Callable[[], 
             "_REGISTRY",
             AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource()),
         )
-        monkeypatch.setattr(configuration, "_TOOL_SYSTEM", ToolSystem.build_tool_system())
+        tool_registry = build_tool_registry()
+        monkeypatch.setattr(configuration, "_TOOL_REGISTRY", tool_registry)
+        monkeypatch.setattr(configuration, "_TOOL_EXECUTOR", ToolExecutor(registry=tool_registry))
 
     return install
 

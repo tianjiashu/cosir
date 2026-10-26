@@ -3,10 +3,10 @@
 用例只覆盖它关心的字段（``runtime_stub(allows_tools=..., run_state=...)``）；其余字段给出不会
 触发真实依赖的默认值。取消判定读 ``cancelled`` 标志，用例直接改它即可。
 
-生产节点直接取用进程级单例（Run 状态写入、外部消息队列、工具系统），不经 ``RuntimeContext``。
-本替身仍接受 ``run_state`` / ``message_queue`` / ``tool_executor`` / ``tool_definitions`` /
-``user_input_decision_handlers`` 这些覆盖项，并把它们装为对应单例（经 :data:`SINGLETONS`
-打补丁，``conftest`` 在每个用例结束后复原），保证节点测试不触碰真实数据库与工具系统。
+生产节点直接取用进程级单例（Run 状态写入、外部消息队列、工具注册表与执行器），不经
+``RuntimeContext``。本替身仍接受 ``run_state`` / ``message_queue`` / ``tool_executor`` /
+``tool_definitions`` 这些覆盖项，并把它们装为对应单例（经 :data:`SINGLETONS` 打补丁，``conftest``
+在每个用例结束后复原），保证节点测试不触碰真实数据库与工具装配。
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from app.config import configuration
 from app.core.workflow.execution_state.conversation_run_usage_stats import (
     ConversationRunUsageStats,
 )
-from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.models.react_execution_state import ReactExecutionState
 from app.service import depends as service_depends
 
@@ -53,23 +53,24 @@ class _StubRegistry:
         return sorted(self._definitions)
 
 
-class _StubToolSystem:
-    """工具系统替身：每次读取都取 ``rc`` 的当前属性，用例创建替身后改字段仍生效。"""
+class _StubRegistryProxy:
+    """注册表替身：每次读取都取 ``rc`` 的当前工具定义，用例创建替身后改字段仍生效。"""
 
     def __init__(self, rc: SimpleNamespace) -> None:
         self._rc = rc
 
-    @property
-    def registry(self) -> _StubRegistry:
-        return _StubRegistry(self._rc.tool_definitions)
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_StubRegistry(self._rc.tool_definitions), name)
 
-    @property
-    def executor(self) -> Any:
-        return self._rc.tool_executor
 
-    @property
-    def user_input_decision_handlers(self) -> Any:
-        return self._rc.user_input_decision_handlers
+class _StubExecutorProxy:
+    """执行器替身：转发到 ``rc`` 当前的 ``tool_executor``。"""
+
+    def __init__(self, rc: SimpleNamespace) -> None:
+        self._rc = rc
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._rc.tool_executor, name)
 
 
 def singleton_getter(factory: Any) -> Any:
@@ -91,13 +92,14 @@ def install_runtime_singletons(rc: SimpleNamespace) -> None:
 
     SINGLETONS.setattr(
         service_depends,
-        "get_conversation_run_state_service",
+        "get_conversation_run_ledger",
         singleton_getter(lambda: rc.run_state),
     )
     SINGLETONS.setattr(
         service_depends, "get_task_message_queue", singleton_getter(lambda: rc.message_queue)
     )
-    SINGLETONS.setattr(configuration, "_TOOL_SYSTEM", _StubToolSystem(rc))
+    SINGLETONS.setattr(configuration, "_TOOL_REGISTRY", _StubRegistryProxy(rc))
+    SINGLETONS.setattr(configuration, "_TOOL_EXECUTOR", _StubExecutorProxy(rc))
 
 
 def runtime_stub(**overrides: Any) -> SimpleNamespace:
@@ -120,7 +122,6 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         mailbox=RunMailbox(),
         task_space=SimpleNamespace(task_tool_schemas=()),
         event_sink=lambda _event: None,
-        user_input_decision_handlers=SimpleNamespace(handle_rejection=lambda *_args: None),
         model=None,
         thinking_channel="",
         usage_stats=ConversationRunUsageStats(),

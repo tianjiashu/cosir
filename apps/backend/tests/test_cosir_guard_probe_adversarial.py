@@ -39,7 +39,7 @@ from app.tools.tool_handler.replace_tool import ReplaceTool
 from app.tools.tool_handler.search_content import SearchContentTool
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.write_file import WriteFileTool
-from app.service.terminal.terminal_session_service import TerminalSessionService
+from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 from app.utils.path import system_cosir as paths
 from app.utils.path.system_cosir import COSIR_DIR_NAME, system_cosir_dir
 from app.utils.path.validation import is_within_cosir
@@ -589,7 +589,7 @@ def test_terminal_cwd_cosir_subdir_allowed(tmp_path: Path) -> None:
 def test_terminal_cwd_outside_workspace_still_rejected(tmp_path: Path) -> None:
     """终端豁免仅针对 `.cosir`；越界 cwd 仍必须抛错。"""
 
-    from app.service.terminal.terminal_session_service import TerminalSessionError
+    from app.tools.terminal_runtime.terminal_session_service import TerminalSessionError
 
     root = tmp_path / "ws"
     root.mkdir()
@@ -808,7 +808,7 @@ def test_allow_reserved_only_used_by_internal_call_sites() -> None:
             if re.search(r"allow_reserved=True\s*(,|\)|$)", stripped):
                 call_sites.append(f"{path.relative_to(app_dir)}:{lineno}")
     expected = {
-        "service/terminal/terminal_session_service.py",
+        "tools/terminal_runtime/terminal_session_service.py",
         "service/agent_team/agent_team_run_archive_service.py",
     }
     actual = {site.split(":", 1)[0].replace("\\", "/") for site in call_sites}

@@ -17,8 +17,8 @@ from app.models.task_message import (
     TaskMessage,
     UserInputBody,
 )
-from app.service.conversation_run import dispatch_policy
-from app.service.conversation_run.dispatch_policy import (
+from app.core.workflow.inbox import dispatch_policy
+from app.core.workflow.inbox.dispatch_policy import (
     Deliver,
     StartRun,
     Stay,

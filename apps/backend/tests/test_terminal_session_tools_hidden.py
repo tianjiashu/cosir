@@ -23,8 +23,8 @@ from app.tools.tool_models import (
     TerminalWriteArgs,
 )
 from app.core.tool.tool_registry import ToolRegistry
-from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
-from app.service.terminal.terminal_session_service import TerminalSessionService
+from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker
+from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 
 
 def test_terminal_handlers_implement_handler_base_and_are_registered(monkeypatch) -> None:
@@ -283,7 +283,7 @@ def test_terminal_list_projects_each_session_without_mutating_service_snapshots(
 
 def test_repeated_read_error_explains_recovery_without_claiming_command_failure():
     from app.tools.tool_handler.terminal_session.common import with_terminal_errors
-    from app.service.terminal.terminal_read_guard import TerminalReadGuard
+    from app.tools.terminal_runtime.terminal_read_guard import TerminalReadGuard
 
     guard = TerminalReadGuard()
     for _ in range(5):
@@ -303,7 +303,7 @@ def test_repeated_read_error_explains_recovery_without_claiming_command_failure(
 
 def test_other_terminal_errors_keep_the_existing_error_projection():
     from app.tools.tool_handler.terminal_session.common import service_error_observation
-    from app.service.terminal.errors import TerminalReadInProgressError, TerminalSessionStateError
+    from app.tools.terminal_runtime.errors import TerminalReadInProgressError, TerminalSessionStateError
 
     for error in [
         TerminalReadInProgressError("already waiting"),

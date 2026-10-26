@@ -7,10 +7,12 @@ from pydantic import ValidationError
 
 import app.service.agent_team.coordinator as coordinator_module
 from app.service.agent_team.coordinator import AgentTeamCoordinator
-from app.core.tool.agent_team.team_tool_error import TeamToolError
+from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.core.agents.model_settings import ModelSettings
-from app.core.tool.agent_team.agent_team_display import build_agent_team_preview_display_data
+from app.core.tool.handler.agent_team.agent_team_display import (
+    build_agent_team_preview_display_data,
+)
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_preparation_service import (

@@ -19,8 +19,8 @@ from app.config import configuration
 from app.core.tool.schemas.tool_call import ToolCall
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
-from app.core.tool.child_agent import child_agent_create
-from app.core.tool.child_agent.delegate_task_args import DelegateTaskArgs
+from app.core.tool.handler import child_agent_create
+from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
 from app.core.tool.tool_registry import ToolRegistry
 
 
@@ -48,7 +48,7 @@ def delegate_registry(broken_registry: _PermanentlyBrokenRegistry) -> ToolRegist
     """在注册表持续故障的进程状态下，只装配 delegate_task 的工具注册表。
 
     直接调用工具类的 ``to_definition``（不实例化 handler，故不解析 Task/Run 服务单例），
-    使本探针只聚焦「定义构建 + 准入门禁」这一段，不牵连完整 ``ToolSystem`` 的存储依赖。
+    使本探针只聚焦「定义构建 + 准入门禁」这一段，不牵连完整工具装配的存储依赖。
     """
 
     definition = child_agent_create.DelegateTaskTool.to_definition(

@@ -23,7 +23,7 @@ from app.assistant_transport.request import (
 )
 from app.models import ConversationRunCommand
 from app.models.errors.input_errors import UserInputRejectedError
-from app.service.conversation_run.task_signals import Rerun
+from app.core.task_signals import Rerun
 from app.service.conversation_run.user_input_service import UserInputService
 from app.service.depends import get_task_service
 from tests import test_task_input_queue as queue_tests

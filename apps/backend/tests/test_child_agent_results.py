@@ -8,10 +8,10 @@ from typing import Any
 
 import pytest
 
-from app.core.tool import wait_messages as wait_module
-from app.core.tool.wait_messages import WaitMessagesTool
+from app.core.tool.handler import wait_messages as wait_module
+from app.core.tool.handler.wait_messages import WaitMessagesTool
 from app.models.task_message import AgentResultBody
-from app.service.conversation_run.task_actor import TaskActor
+from app.core.task_actor import TaskActor
 
 _PARENT = 1
 _CHILD = 2

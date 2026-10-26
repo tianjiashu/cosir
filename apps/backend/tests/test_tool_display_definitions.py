@@ -1,10 +1,10 @@
 """Static Tool UI declarations for long-running tool shells."""
 
-from app.core.tool.agent_team.agent_team_run import AgentTeamRunTool
-from app.core.tool.child_agent.child_agent_create import DelegateTaskTool
-from app.core.tool.child_agent.child_agent_send import ChildAgentSendTool
-from app.core.tool.child_agent.child_agent_status import ChildAgentStatusTool
-from app.core.tool.wait_messages import WaitMessagesTool
+from app.core.tool.handler.agent_team_run import AgentTeamRunTool
+from app.core.tool.handler.child_agent_create import DelegateTaskTool
+from app.core.tool.handler.child_agent_send import ChildAgentSendTool
+from app.core.tool.handler.child_agent_status import ChildAgentStatusTool
+from app.core.tool.handler.wait_messages import WaitMessagesTool
 
 
 def test_child_agent_tools_declare_standalone_details_rows() -> None:

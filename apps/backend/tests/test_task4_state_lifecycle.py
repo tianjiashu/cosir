@@ -22,10 +22,8 @@ from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.message_metadata import UserMessageMetadata
 from app.models.task_record import TaskRecord
-from app.service.conversation_run import (
-    conversation_run_state_service as conversation_run_state_service_module,
-)
-from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
+from app.core import conversation_run_ledger as conversation_run_ledger_module
+from app.core.conversation_run_ledger import ConversationRunLedger
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 # 任务运行时空间在构造时会读当前 task，因此本文件全部用例都需要隔离主库。
@@ -373,11 +371,11 @@ def test_transition_propagates_post_commit_projector_failure(
             raise RuntimeError("transport unavailable")
 
     monkeypatch.setattr(
-        conversation_run_state_service_module.service_depends,
+        conversation_run_ledger_module.service_depends,
         "get_conversation_event_projector",
         lambda: FailingProjector(),
     )
-    service = ConversationRunStateService.__new__(ConversationRunStateService)
+    service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = RunCrud()
 
     with pytest.raises(RuntimeError, match="transport unavailable"):

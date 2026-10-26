@@ -67,8 +67,8 @@ async def test_session_cancel_reads_canonical_run_off_event_loop(
     from contextlib import nullcontext
 
     from app.service import depends as service_depends
-    from app.service.conversation_run import task_actor as actor_module
-    from app.service.conversation_run.task_actors import TaskActors
+    from app.core import task_actor as actor_module
+    from app.core.task_actors import TaskActors
 
     monkeypatch.setattr(
         actor_module.task_runtime_spaces,
@@ -77,8 +77,7 @@ async def test_session_cancel_reads_canonical_run_off_event_loop(
     )
     service = _ThreadCheckedRunService(status=ConversationRunStatus.SUSPENDED.value)
     for getter in (
-        "get_conversation_run_service",
-        "get_conversation_run_state_service",
+        "get_conversation_run_ledger",
         "get_task_service",
         "get_task_message_queue",
         "get_user_input_service",
@@ -143,11 +142,8 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     owner_thread = threading.get_ident()
     calls: list[str] = []
 
-    class _RunService:
+    class _RecoverService:
         def recover_orphaned_runs(self) -> list[object]:
-            return []
-
-        def list_latest_runs(self) -> list[object]:
             return []
 
     class _Terminal:
@@ -161,11 +157,6 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
         async def close(self) -> None:
             calls.append("executor_close")
 
-    class _ToolSystem:
-        @classmethod
-        def build_tool_system(cls) -> object:
-            return object()
-
     monkeypatch.setattr(
         lifespan_module, "install_logging_for_current_process", lambda **_kwargs: None
     )
@@ -175,14 +166,14 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     monkeypatch.setattr(lifespan_module, "_ensure_system_cosir_dir", lambda: None)
     monkeypatch.setattr(lifespan_module, "ensure_system_agent_config_dir", lambda: None)
     monkeypatch.setattr(lifespan_module, "ensure_system_agent_team_config_dir", lambda: None)
-    monkeypatch.setattr(lifespan_module, "get_conversation_run_service", lambda: _RunService())
+    monkeypatch.setattr(lifespan_module, "get_recover_service", lambda: _RecoverService())
     monkeypatch.setattr(lifespan_module, "get_terminal_session_service", lambda: _Terminal())
     monkeypatch.setattr(lifespan_module, "get_task_actors", lambda: _Executor())
-    monkeypatch.setattr(lifespan_module, "ToolSystem", _ToolSystem)
+    monkeypatch.setattr(lifespan_module, "build_tool_registry", lambda: object())
     # Registry 只保存内置 profile，用户 JSON 由注册表在作用域首次被读取时按需装载，
     # 因此启动编排不再遍历 workspace 调用装载方法。
     monkeypatch.setattr(lifespan_module, "build_agent_registry", lambda *_args, **_kwargs: object())
-    monkeypatch.setattr(lifespan_module, "set_tool_system", lambda _value: None)
+    monkeypatch.setattr(lifespan_module, "set_tool_registry", lambda _value: None)
     monkeypatch.setattr(lifespan_module, "set_agent_registry", lambda _value: None)
     monkeypatch.setattr(lifespan_module.HookInterceptor, "safe_fire", lambda *_args: None)
     monkeypatch.setattr("app.core.hook.initialize_hook_registry", lambda: None)

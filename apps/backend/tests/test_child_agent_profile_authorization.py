@@ -8,7 +8,7 @@ import pytest
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.tool.schemas import ToolExecutionContext
-from app.core.tool.child_agent import child_agent_send
+from app.core.tool.handler import child_agent_send
 
 
 @pytest.mark.asyncio
@@ -41,7 +41,7 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
     run_service = _RunService()
     monkeypatch.setattr(child_agent_send, "get_task_service", lambda: task_service)
     monkeypatch.setattr(child_agent_send, "get_workspace_service", _WorkspaceService)
-    monkeypatch.setattr(child_agent_send, "get_conversation_run_service", lambda: run_service)
+    monkeypatch.setattr(child_agent_send, "get_conversation_run_ledger", lambda: run_service)
     # 非 CHILD profile 在开 Run 之前就被拒绝，调度入口不得被触达。
     monkeypatch.setattr(child_agent_send, "get_task_actors", lambda: pytest.fail("opened run"))
     base_registry = configuration.build_agent_registry()

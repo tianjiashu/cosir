@@ -6,10 +6,10 @@ import pytest
 
 from app.core.events import RunResultUpdatedEvent, RunStatusChangedEvent
 from app.models.enums.conversation_run_status import RunTransition
-from app.service.conversation_run import conversation_run_state_service as state_module
+from app.core import conversation_run_ledger as ledger_module
 from app.service.depends import (
     get_conversation_run_crud,
-    get_conversation_run_state_service,
+    get_conversation_run_ledger,
     get_task_crud,
     get_workspace_crud,
 )
@@ -22,12 +22,12 @@ def test_structured_result_only_updates_completed_fields(
     """完成事件只发一次；成功替换输出，失败保留原输出并写入支线原因。"""
 
     events = []
-    monkeypatch.setattr(state_module, "dispatch_conversation_event", events.append)
+    monkeypatch.setattr(ledger_module, "dispatch_conversation_event", events.append)
     workspace = get_workspace_crud().create("structured-test", str(Path.cwd()))
     task = get_task_crud().create(workspace.id, "task")
     run_crud = get_conversation_run_crud()
     run = run_crud.create(task.id, status="running")
-    state = get_conversation_run_state_service()
+    state = get_conversation_run_ledger()
 
     state.transition(run.id, RunTransition.COMPLETE, final_output="自然回答", end_reason="stop")
     if succeeds:
@@ -54,13 +54,13 @@ def test_completion_persists_empty_output_and_finish_reason(
     """主线空正文也要与完成原因在同一次状态迁移中持久化并投影。"""
 
     events = []
-    monkeypatch.setattr(state_module, "dispatch_conversation_event", events.append)
+    monkeypatch.setattr(ledger_module, "dispatch_conversation_event", events.append)
     workspace = get_workspace_crud().create("empty-output-test", str(Path.cwd()))
     task = get_task_crud().create(workspace.id, "task")
     run_crud = get_conversation_run_crud()
     run = run_crud.create(task.id, status="running")
 
-    get_conversation_run_state_service().transition(
+    get_conversation_run_ledger().transition(
         run.id, RunTransition.COMPLETE, final_output="", end_reason="content_filter"
     )
 

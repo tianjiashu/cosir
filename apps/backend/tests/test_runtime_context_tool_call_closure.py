@@ -25,13 +25,14 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.agents.agent_profile import AgentProfile
 from app.core.context.context_entry import ContextEntry
+from app.core.context.context_store import ContextStore
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.context.tool_call_closure import ContextProtocolError
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
-from app.service.conversation_run.conversation_run_service import ConversationRunService
-from app.service.conversation_run.conversation_run_state_service import ConversationRunStateService
+from app.service.recover_service import RecoverService
+from app.core.conversation_run_ledger import ConversationRunLedger
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
@@ -104,8 +105,11 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
     tasks = _bind(TaskCrud, factory)
     runs = _bind(ConversationRunCrud, factory)
     contexts = _bind(ConversationTaskContextCrud, factory)
+    context_store = ContextStore.__new__(ContextStore)
+    context_store._crud = contexts
     context_service = ConversationTaskContextService.__new__(ConversationTaskContextService)
     context_service._crud = contexts
+    context_service._store = context_store
     workspace = workspaces.create("closure", str(tmp_path))
     task = tasks.create(workspace.id, "tool call closure")
     # 快照重建会按工具名查 display 定义；本文件只验证配对/状态契约，给出最小合法
@@ -136,7 +140,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
     store = SimpleNamespace(
         engine=engine,
         factory=factory,
-        context=context_service,
+        context=context_store,
+        context_service=context_service,
         contexts=contexts,
         runs=runs,
         task=task,
@@ -150,7 +155,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
 
 def _manager(
     *,
-    context_service: object,
+    context_store: object,
     task_id: int,
     current_run_id: int | None,
     entries: list[ContextEntry],
@@ -163,7 +168,7 @@ def _manager(
     manager.agent_profile = cast(AgentProfile, SimpleNamespace())
     manager.workspace = SimpleNamespace(id=7, root_path="")
     # 假服务按协议实现 append，不继承真实 service 类型。
-    manager.context_service = cast(ConversationTaskContextService, context_service)
+    manager.context_store = cast(ContextStore, context_store)
     manager.current_run_id = current_run_id
     manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
     manager._entries = list(entries)
@@ -196,12 +201,12 @@ def _assert_model_protocol_closed(messages: list[ChatCompletionMessageParam]) ->
     assert not pending, f"存在未闭合的 tool_call: {sorted(pending)}"
 
 
-class _ContractContextService:
-    """按 ``ConversationTaskContextService`` 当前契约实现的假服务。
+class _ContractContextStore:
+    """按 ``ContextStore`` 当前契约实现的假 store。
 
-    契约（见 service / CRUD docstring）：``append`` 只追加、恒不返回去重结果——持久化层不再
-    知道「工具调用身份」；「该调用是否已有结果行」由 ``RuntimeMessageContextManager`` 依据内存
-    working copy（``_entries``）判定，命中时走 ``replace_message`` 原地覆盖。
+    契约（见 ``ContextStore`` / CRUD docstring）：``append`` 只追加、恒不返回去重结果——持久化层
+    不再知道「工具调用身份」；「该调用是否已有结果行」由 ``RuntimeMessageContextManager`` 依据
+    内存 working copy（``_entries``）判定，命中时走 ``replace_message`` 原地覆盖。
     """
 
     def __init__(self) -> None:
@@ -223,7 +228,7 @@ class _ContractContextService:
         return ContextEntry(message, run_id, seq)
 
     def entries_in_context(self, task_id: int) -> list[ContextEntry]:
-        """纯内存用例不通过 service 读取历史。"""
+        """纯内存用例不通过 store 读取历史。"""
 
         return []
 
@@ -231,9 +236,6 @@ class _ContractContextService:
         """纯内存用例不使用序号游标。"""
 
         return 0
-
-    def delete_by_run_id(self, task_id: int, run_id: int) -> None:
-        """纯内存用例不删除行。"""
 
 
 def test_duplicate_call_id_slots_fail_loudly_instead_of_reusing_a_row(
@@ -268,7 +270,7 @@ def test_duplicate_call_id_slots_fail_loudly_instead_of_reusing_a_row(
         env.task.id, run.id, existing_result, 2, True, ToolMessageMetadata(status="completed")
     )
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=[
@@ -301,7 +303,7 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
     )
 
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=current_run.id,
         entries=[
@@ -355,7 +357,7 @@ def test_same_run_placeholder_metadata_backs_snapshot_rebuild(env: SimpleNamespa
     env.context.append(env.task.id, run.id, ai_message, 1, True)
 
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=[ContextEntry(ai_message, run.id, 1)],
@@ -389,7 +391,7 @@ def test_orphan_result_fails_before_any_repair_and_preserves_facts(env, caplog, 
         env.context.append(env.task.id, run.id, _ai_message("call-ghost"), 2, True)
     original = _rows(env)
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=env.context.entries_in_context(env.task.id),
@@ -415,7 +417,7 @@ def test_new_tool_result_requires_current_call_before_writing(env, case):
     """没有正确调用依据的新结果不能进入 context，错误保留输入以便调用方定位。"""
     run = env.seed_run("running")
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=[],
@@ -461,7 +463,7 @@ def test_persisted_result_must_have_one_owner_in_the_same_run(env, case):
         )
     original = _rows(env)
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=env.context.entries_in_context(env.task.id),
@@ -486,7 +488,7 @@ def test_placeholder_does_not_block_later_real_tool_result(env: SimpleNamespace)
     ai_message = _ai_message("call-1")
     env.context.append(env.task.id, run.id, ai_message, 1, True)
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=[ContextEntry(ai_message, run.id, 1)],
@@ -529,7 +531,7 @@ def test_close_unclosed_tool_call_is_idempotent_and_ordered(env: SimpleNamespace
     env.context.append(env.task.id, run.id, third_result, 4, True, {"status": "completed"})
 
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=[
@@ -574,7 +576,7 @@ def test_close_keeps_completed_batches_and_only_appends_missing_results(
     env.context.append(env.task.id, run.id, second_result, 4, True, {"status": "completed"})
 
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=[
@@ -634,12 +636,12 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     env.context.append(env.task.id, run.id, settled, 3, True, {"status": "completed"})
 
     run_crud = _bind(ConversationRunCrud, env.factory)
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = RecoverService.__new__(RecoverService)
     service._run = run_crud
-    service._context = env.context
+    service._context = env.context_service
     service._session_factory = env.factory
-    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
-    service._run_state._run = run_crud
+    service._ledger = ConversationRunLedger.__new__(ConversationRunLedger)
+    service._ledger._run = run_crud
 
     recovered = service.recover_orphaned_runs()
 
@@ -679,12 +681,12 @@ def test_recover_orphaned_runs_preserves_waiting_run(env: SimpleNamespace) -> No
     running = env.seed_run("running")
 
     run_crud = _bind(ConversationRunCrud, env.factory)
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = RecoverService.__new__(RecoverService)
     service._run = run_crud
-    service._context = env.context
+    service._context = env.context_service
     service._session_factory = env.factory
-    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
-    service._run_state._run = run_crud
+    service._ledger = ConversationRunLedger.__new__(ConversationRunLedger)
+    service._ledger._run = run_crud
 
     recovered = service.recover_orphaned_runs()
 
@@ -705,7 +707,7 @@ def test_cold_reload_normalizes_earlier_batches_without_rewriting_facts(env):
     resume = {"role": "user", "content": "继续"}
     env.context.append(env.task.id, current.id, resume, 2, True, _user_metadata(resume))
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=current.id,
         entries=env.context.entries_in_context(env.task.id),
@@ -720,7 +722,7 @@ def test_cold_reload_normalizes_earlier_batches_without_rewriting_facts(env):
     original = _rows(env)
     for _ in range(2):
         cold = _manager(
-            context_service=env.context,
+            context_store=env.context,
             task_id=env.task.id,
             current_run_id=current.id,
             entries=env.context.entries_in_context(env.task.id),
@@ -751,7 +753,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
 
     run = env.seed_run("running")
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=[],
@@ -795,7 +797,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
         if isinstance(event, ToolCallStatusChangedEvent)
     ] == [("preview", "cancelled")]
     cold = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=env.context.entries_in_context(env.task.id),
@@ -819,12 +821,12 @@ def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
     )
     env.context.append(env.task.id, healthy.id, _ai_message("pending"), 2, True)
     original = _rows(env)[0]
-    service = ConversationRunService.__new__(ConversationRunService)
+    service = RecoverService.__new__(RecoverService)
     service._run = _bind(ConversationRunCrud, env.factory)
-    service._context = env.context
+    service._context = env.context_service
     service._session_factory = env.factory
-    service._run_state = ConversationRunStateService.__new__(ConversationRunStateService)
-    service._run_state._run = service._run
+    service._ledger = ConversationRunLedger.__new__(ConversationRunLedger)
+    service._ledger._run = service._run
     recovered = service.recover_orphaned_runs()
     assert [run.id for run in recovered] == [broken.id]
     assert service._run.get(healthy.id).status == "suspended"
@@ -860,7 +862,7 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
         )
         TaskMessageCrud().append(session, [(env.task.id, TaskMessage.of(body))])
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=env.context.entries_in_context(env.task.id),
@@ -912,7 +914,7 @@ def test_included_result_cannot_promote_an_incomplete_draft_into_a_call(env):
     )
     original = _rows(env)
     manager = _manager(
-        context_service=env.context,
+        context_store=env.context,
         task_id=env.task.id,
         current_run_id=run.id,
         entries=env.context.entries_in_context(env.task.id),
