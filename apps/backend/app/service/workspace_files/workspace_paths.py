@@ -4,7 +4,7 @@ import os
 import re
 from pathlib import Path, PurePosixPath
 
-from app.core.tools.tool_handler.security.windows_reparse_point import (
+from app.tools.tool_handler.security.windows_reparse_point import (
     is_windows_directory_reparse_point,
 )
 from app.service.workspace_files.file_models import FileEntry
