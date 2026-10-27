@@ -22,20 +22,17 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.transport_assistant_service import (
         TransportAssistantService,
     )
-    from app.service.conversation_run.conversation_run_service import ConversationRunService
-    from app.service.conversation_run.conversation_run_state_service import (
-        ConversationRunStateService,
-    )
+    from app.core.conversation_run_ledger import ConversationRunLedger
     from app.service.conversation_run.conversation_task_context_service import (
         ConversationTaskContextService,
     )
-    from app.service.conversation_run.task_message_queue import TaskMessageQueue
+    from app.core.workflow.inbox.task_message_queue import TaskMessageQueue
     from app.service.conversation_run.user_input_service import UserInputService
-    from app.service.conversation_run.workflow_session import WorkflowSession
+    from app.service.recover_service import RecoverService
     from app.service.conversation_run.workspace_service import WorkspaceService
     from app.service.model_config import ModelConfigService
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
-    from app.service.terminal.terminal_session_service import TerminalSessionService
+    from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
     from app.service.workspace_files.file_watch import WorkspaceFileWatcher
     from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
@@ -168,12 +165,12 @@ def get_workspace_crud() -> WorkspaceCrud:
 def get_terminal_session_service() -> TerminalSessionService:
     """返回进程级 terminal session service 单例。"""
 
-    from app.service.terminal.terminal_session_service import TerminalSessionService
+    from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 
     def observe_terminal_status(change: object) -> None:
         """把 PTY 生命周期变化转交给 Transport state owner。"""
 
-        from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
+        from app.tools.terminal_runtime.terminal_session_status import TerminalSessionStatusChange
 
         if not isinstance(change, TerminalSessionStatusChange):
             raise TypeError("invalid terminal session status change")
@@ -310,67 +307,43 @@ def get_transport_assistant_service() -> TransportAssistantService:
 
 
 @lru_cache(maxsize=1)
-def get_workflow_session() -> WorkflowSession:
-    """返回进程级 Task 调度入口：调度规则与执行登记都在这里，执行登记不跨实例。"""
+def get_conversation_run_ledger() -> ConversationRunLedger:
+    """返回进程级 Conversation Run 事实台账单例。
 
-    from app.service.conversation_run.workflow_session import WorkflowSession
-
-    return WorkflowSession()
-
-
-@lru_cache(maxsize=1)
-def get_conversation_run_service() -> ConversationRunService:
-    """返回进程级 Conversation Run 用例编排 service 单例。
-
-    只负责 Run 创建与编辑的编排（命令输入解析、附件处理、事务与事件发布所有权）；
-    Run 状态迁移与查询见 ``get_conversation_run_state_service``。
-
-    参数:
-        无。
+    所有 Run 行的创建、读取、状态迁移、执行进度与结果改写都只经它，调用方不再区分
+    「创建/查询」与「状态机」两套入口。
 
     返回:
-        已装配 CRUD / context service / 会话工厂的 ``ConversationRunService`` 单例
+        已装配 Task / Run CRUD 与会话工厂的 ``ConversationRunLedger`` 单例
         （``lru_cache`` 缓存）。
 
     异常:
         RuntimeError: 若存储初始化失败。
     """
 
-    from app.service.conversation_run.conversation_run_service import ConversationRunService
+    from app.core.conversation_run_ledger import ConversationRunLedger
 
-    return ConversationRunService()
+    return ConversationRunLedger()
 
 
 @lru_cache(maxsize=1)
-def get_conversation_run_state_service() -> ConversationRunStateService:
-    """返回进程级 Conversation Run 状态机单例。
+def get_recover_service() -> RecoverService:
+    """返回进程级启动恢复 service 单例。
 
-    只负责 Run 状态的条件迁移、执行进度保存与对应事件发布；Run 创建/编辑编排见
-    ``get_conversation_run_service``。
-
-    参数:
-        无。
-
-    返回:
-        已装配 run CRUD 的 ``ConversationRunStateService`` 单例
-        （``lru_cache`` 缓存）。
-
-    异常:
-        RuntimeError: 若存储初始化失败。
+    只负责后端启动期收敛遗留 Run（状态迁移 + 工具占位补写）；运行期的 Run 生命周期归属
+    ``get_conversation_run_ledger``。
     """
 
-    from app.service.conversation_run.conversation_run_state_service import (
-        ConversationRunStateService,
-    )
+    from app.service.recover_service import RecoverService
 
-    return ConversationRunStateService()
+    return RecoverService()
 
 
 @lru_cache(maxsize=1)
 def get_task_message_queue() -> TaskMessageQueue:
     """返回进程级 Task 外部消息队列单例（无进程内状态，只包队列 CRUD）。"""
 
-    from app.service.conversation_run.task_message_queue import TaskMessageQueue
+    from app.core.workflow.inbox.task_message_queue import TaskMessageQueue
 
     return TaskMessageQueue()
 
@@ -423,8 +396,8 @@ def reset_service_dependencies() -> None:
     _shutdown_cached_runtime_before_reset()
     ConversationTaskStateService.clear_process_state()
     get_workspace_service.cache_clear()
-    get_conversation_run_service.cache_clear()
-    get_conversation_run_state_service.cache_clear()
+    get_conversation_run_ledger.cache_clear()
+    get_recover_service.cache_clear()
     get_task_message_queue.cache_clear()
     get_user_input_service.cache_clear()
     get_task_service.cache_clear()
@@ -433,8 +406,6 @@ def reset_service_dependencies() -> None:
     get_task_crud.cache_clear()
     get_model_config_crud.cache_clear()
     get_conversation_task_context_crud.cache_clear()
-    get_workflow_session.cache_clear()
-    get_conversation_run_state_service.cache_clear()
     get_transport_assistant_service.cache_clear()
     get_conversation_event_projector.cache_clear()
     get_conversation_task_state_service.cache_clear()
@@ -447,23 +418,9 @@ def _shutdown_cached_runtime_before_reset() -> None:
     """Close process-local runtime owners before dropping their cached identities.
 
     ``reset_service_dependencies`` is synchronous and is used by tests and storage-path
-    reconfiguration.  It therefore uses ``WorkflowSession.close_sync`` as its explicit
-    deterministic contract: terminal workers are fenced, task cancellation is posted to owner
-    loops, and process-local indexes are cleared before caches are discarded.  The normal
-    application lifespan uses the awaitable close path instead.
+    reconfiguration.  It therefore uses only synchronous close contracts: terminal workers are
+    fenced and process-local indexes are cleared before caches are discarded.
     """
-
-    if get_workflow_session.cache_info().currsize:
-        try:
-            get_workflow_session().close_sync()
-        except BaseException as exc:
-            log.error(
-                "service_dependency_runtime_reset_failed",
-                extra={
-                    "msg": "service dependency reset 的同步 runtime cleanup 失败",
-                    "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
-                },
-            )
 
     if get_terminal_session_service.cache_info().currsize:
         try:
