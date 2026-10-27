@@ -86,10 +86,14 @@ def _stream_service(state_service: ConversationTaskStateService) -> AssistantTra
 
 
 class _Collector:
-    """在后台消费一条 attach 流，记录收到的帧；``cancel()`` 模拟客户端断开。"""
+    """在后台消费一条 attach 流，记录收到的帧；``cancel()`` 模拟客户端断开。
+
+    静默边界（``None``）不是帧，单独记成「出现边界时已收到的帧数」。
+    """
 
     def __init__(self, stream_service: AssistantTransportStreamService) -> None:
         self.frames: list[TransportFrame] = []
+        self.idle_after: list[int] = []
         self._cancelled = False
         self._received = asyncio.Condition()
         self.task = asyncio.create_task(self._run(stream_service))
@@ -99,7 +103,10 @@ class _Collector:
             _TASK_ID, lambda: self._cancelled, poll_interval=0.01
         ):
             async with self._received:
-                self.frames.append(frame)
+                if frame is None:
+                    self.idle_after.append(len(self.frames))
+                else:
+                    self.frames.append(frame)
                 self._received.notify_all()
 
     def cancel(self) -> None:
@@ -194,6 +201,47 @@ async def test_one_connection_survives_run_completion_new_run_cancel_and_suspend
 
     collector.cancel()
     await asyncio.wait_for(collector.task, 1)
+
+
+@pytest.mark.asyncio
+async def test_idle_boundary_follows_each_burst_exactly_once() -> None:
+    """WebKit 会扣住静默前的最后一段数据：每批帧之后必须恰好有一次边界，持续空闲不重复。"""
+    service = _state_service()
+    collector = _Collector(_stream_service(service))
+    await collector.wait_frames(1)
+    await _settle()
+    # 首个 full 帧之后同样需要边界，否则 attach 的首帧也可能被扣住。
+    assert collector.idle_after == [1]
+
+    service.apply_planned(RunInitializedEvent(task_id=_TASK_ID, run_id=1))
+    service.apply_planned(
+        RunStatusChangedEvent(task_id=_TASK_ID, run_id=1, status=ConversationRunStatus.RUNNING)
+    )
+    service.apply_planned(
+        RunStatusChangedEvent(task_id=_TASK_ID, run_id=1, status=ConversationRunStatus.COMPLETED)
+    )
+    await _settle()
+
+    # 同一批帧连续取出、中间不插边界；整批发完后（含终态帧）只补一次。
+    assert len(collector.frames) > 2
+    assert collector.idle_after == [1, len(collector.frames)]
+
+    collector.cancel()
+    await asyncio.wait_for(collector.task, 1)
+
+
+@pytest.mark.asyncio
+async def test_envelopes_encode_idle_boundary_as_sse_comment() -> None:
+    """边界编码为 SSE 注释行：客户端只读 ``data:`` 记录，会跳过它，只起推出前文的作用。"""
+    envelopes = _stream_service(_state_service()).stream_envelopes(_TASK_ID, lambda: False)
+
+    first = await anext(envelopes)
+    boundary = await asyncio.wait_for(anext(envelopes), 1)
+    await envelopes.aclose()
+
+    assert first.startswith("data: ")
+    assert boundary == ": flush\n\n"
+    assert not any(line.startswith("data:") for line in boundary.splitlines())
 
 
 @pytest.mark.asyncio
