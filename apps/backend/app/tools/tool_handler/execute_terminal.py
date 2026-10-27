@@ -522,7 +522,7 @@ def build_execute_terminal_definition() -> ToolDefinition:
         ``to_definition_if_avaliable`` 只在 ``avaliable()`` 为假时返回 None，而本工具未覆写
         ``avaliable()``（基类恒为 True）。保留 ``ToolDefinition`` 而非 ``ToolDefinition | None``
         标注与仓内其余 ``build_*_definition`` 一致：``ToolRegistry.register`` 的形参类型是
-        ``ToolDefinition``，标成可为 None 会在 ``tool_system`` 的注册调用点引入 mypy 类型错误。
+        ``ToolDefinition``，标成可为 None 会在 ``tool_registration`` 的注册调用点引入 mypy 类型错误。
 
     异常:
         无。
