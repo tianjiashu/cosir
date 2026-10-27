@@ -8,7 +8,16 @@
 
 消息模型、`dispatch_policy` 规则、actor 的串行循环与两阶段处理都不变。
 
-状态：设计稿，未实施。分三期，见「分期」（已按代码核对结果调整）。
+状态：已实施（三期一次完成，见文末「实施记录」）。验收标准见 `task-command-fire-and-forget-acceptance.md`。
+
+## 修订（2026-10-26）：用户命令改回同步返回
+
+本节推翻下文「去掉逐条命令的回执」「actor 的处理结果只经 snapshot 表达」两条决策，其余（Task 长订阅、Task 视角 snapshot、按消息 fork）不变。
+
+- **原因。** 信号队列已删除（见 `task-actor-dispatch-design.md` 修订），入口直接 await actor 的一轮，结果天然可得；拒绝原因是「这次请求」的结果而不是 Task 状态，经 snapshot 回传需要 `seq`、清除时机、重建保留等一整套配套规则。
+- **契约。** 用户命令（发送、编辑、重跑、恢复、审批决定）处理完才返回：400 / 404 / 409，成功 200 `{}`；取消仍是纯投递（202）。
+- **删除。** snapshot 顶层 `error`、`ConversationCommandError` 与 `seq`、`set_command_error`、actor 的 `_report_failure` / `COMMAND_FAILED`；前端的 `TransportCommandError`、`subscribeRejection`、按 `seq` 判定被拒与错误条目渲染。被拒的发送类命令由提交方按 HTTP 结果收回乐观消息、恢复草稿。
+- **跨 Task 投递不变。** 子 Agent 结论、后台结果、审批决定消息、取消传播仍只发起、不等待。
 
 ## 目标
 
@@ -160,6 +169,56 @@ snapshot（权威读取来源）──订阅──▶ 前端（按 Task 的长�
 
 会丢掉的只有「按 Run 分组」这层结构本身；逐轮信息由 `outcome` 承载，更细的历史交给上下文观测页。
 
+## wire 契约（实施基准）
+
+前后端都以本节为准；与上文表述不一致时以本节为准。
+
+### snapshot
+
+```text
+ConversationStateSnapshot = {
+  messages: Message[],            // 扁平，按 context 序号排列
+  activity: Activity | null,      // 最新 Run 摘要；Task 尚无 Run 时为 null
+  error: { code, message, seq } | null, // 只承载命令被拒，由 actor 写入与清空
+  queued_messages?: QueuedMessage[]
+}
+Message = {
+  id: string, role: "user" | "assistant", parts: Part[],
+  runId: number,                  // 只供诊断、日志与 fork 定位，对话界面不按它比对
+  outcome: Outcome | null         // 仅「该 Run 最后一条助手消息」在 Run 终态后非空；user 消息恒为 null
+}
+Outcome  = { status: "completed" | "failed" | "cancelled", endReason, error: {code,message} | null, usage: Usage | null,
+             contextWindowTotal: number | null }   // 该 Run 冻结的窗口，与 usage 同源
+Activity = { runId, status: "running" | "suspended" | "completed" | "failed" | "cancelled",
+             endReason, error: {code,message} | null, usage: Usage | null,
+             contextWindowTotal: number | null, launch: { modelConfigId, reasoningEffort, banTools } }
+QueuedMessage = { id, role: "user", parts, delivery: "immediate" | "next_run" }
+```
+
+- 消息 id：用户消息为 inbox 行 id 的字符串；用户消息之后的助手回复为 `assistant-{用户消息 id}`；Run 内第一条用户消息之前的助手回复（唤醒、结果续跑等没有用户输入的 Run）为 `assistant-run-{runId}`。
+- Part 结构不变（text / reasoning / image / file / tool-call）。
+- 顶层 `error`：每次命令被拒都分配新的 `seq`（进程内单调递增，不持久化）并发帧，原因相同也发；前端按 `seq` 变化（从无到有，或 `seq` 不同）判定「又被拒了一次」。只有下一次成功处理的用户命令清空它；新开 Run、编辑重跑等强制重建 snapshot 时原样保留（命令错误不是 canonical 事实，冷重建恒为空）。后端重启后丢失，可接受。
+- 上下文占用的「已用 / 上限」只能取自同一个 Run：当前活动有用量时取 `activity` 的一对；新一轮还没有用量时回落到最近一条带用量的 `outcome`，用它自己的 `contextWindowTotal`；那一对窗口未知时不显示，不跨 Run 拼。
+- `outcome` 写入时机：`activity` 进入终态时，同步写到该 Run 最后一条助手消息；Run 被恢复（`cancelled` / `failed` → `running`）时清空为 `null`；已完成 Run 的结果更新（结束原因、用量）同步更新两处。旧 Run（不是 `activity.runId`）的迟到事件只更新它的 `outcome`，不碰 `activity`。
+
+### 增量帧与 SSE envelope
+
+- mutation 路径只允许：`("messages", k, …)`（`k == len` 的 `set` 表示追加）、`("activity",)` / `("activity", 字段)`、`("queued_messages",)`、`("error",)`。
+- SSE 每条 `data:` 为 `{ task_id, kind: "full" | "mutation" | "resync_required", mutations: [{kind, path, value}], resync_reason, state? }`；`full` 帧带 `state`。不再有 `source_run_id`、`current_run_id`、`current_run_status`、`target_run_id`、`target_run_status`。
+
+### 接口
+
+| 接口 | 契约 |
+|---|---|
+| `POST /tasks/{id}/assistant/attach` | 长订阅：先推 full 帧（Task 无 Run 也推），之后持续推送，直到客户端断开、`resync_required` 或 Task 删除；不再 409 `NO_RUN` |
+| `GET /tasks/{id}/assistant/state` | 返回上面的 snapshot |
+| `POST /tasks/{id}/messages`、`POST /tasks/{id}/messages/{mid}/rerun`、`POST /tasks/{id}/resume`、`POST /tasks/{id}/decisions`、`POST /tasks/{id}/cancel` | 投递后 **202**，响应体 `{}`；投递前被拒的输入（附件不可用、模型不支持等）400、Task 不存在 404，错误体沿用 `{"detail": {"error": {code, message, retryable}}}`；wire 形状错误由 FastAPI 请求校验返回 422 |
+| 例外：`POST /tasks/{id}/messages/{mid}/rerun` | 目标不是最新一条已投影的用户输入时同步 **409** `TASK_STATE_CONFLICT`：入口要读目标消息的展示绑定才能复用附件，这一步已在生产者手上，不再转交 actor。停止当前 Run 期间目标变旧（`EDIT_TARGET_STALE`）、Task 尚未停下（`RUN_NOT_STOPPED`）仍由 actor 写顶层 `error` |
+| 例外：`POST /tasks/{id}/decisions` | 决定由 `AgentTeamDecisionService` 在入口确定性执行（批准即确认并后台运行 Team），TeamRun 归属不对或已不在待确认态时同步 **409**，TeamRun 不存在 404；执行完才以 `decision` 消息投递唤醒主 Agent |
+| `PATCH /tasks/{id}/queued-messages/{mid}` | 不经 actor：成功 **200** `{}`；消息已并入 409 `MESSAGE_CONSUMED` |
+| `POST /tasks/{id}/fork` | 请求 `{ "messageId": string }`（wire 消息 id），响应不变（新 Task） |
+| `POST /tasks/{id}/tool-calls/{call_id}/cancel` | 不变 |
+
 ## 第二轮核对补充的改动点
 
 ### 后端
@@ -171,7 +230,7 @@ snapshot（权威读取来源）──订阅──▶ 前端（按 Task 的长�
 | 帧元数据 `source_run_id` / `current_run_id` / `current_run_status`（`stream/transport_frame.py`、envelope、前端解析） | 前端据此推断当前 Run | 删除；当前活动只经 `activity.*` 增量表达 |
 | `projection/snapshot_navigation.py`（`find_run`、`find_assistant_message`、`find_tool` 按 Run 下标） | 先找 Run 再找消息 | 在扁平 `messages[]` 中按 `runId` 与消息身份查找 |
 | `conversation_task_state_rebuilder.py` | 按 Run 分组重建 | 按 context 序号输出扁平消息，终态 Run 的结局写到其最后一条助手消息 |
-| 任务列表 API（`TaskResponse.current_run_id` / `execution_status`） | 侧边栏与 Workbench 状态 | 不在本稿范围：它是 Task 列表的读取接口，不是对话 snapshot |
+| 任务列表 API（`TaskResponse.current_run_id` / `execution_status`） | 侧边栏与 Workbench 状态 | 去掉 `current_run_id`（前端唯一读取处 `AgentRunSummary.runId` 是死字段）；保留 `execution_status` 与 Workbench 轮询：它的语义就是「Task 最新 Run 的状态」，与 `activity.status` 同口径，不是 Run 身份泄漏。后端 `TaskRecord.current_run_id` 是库里的当前 Run 指针，内部照用，只是不进 HTTP 响应 |
 
 ### 前端
 
@@ -198,7 +257,8 @@ snapshot（权威读取来源）──订阅──▶ 前端（按 Task 的长�
 
 ## 错误投影
 
-- actor 拒绝一个命令时写 snapshot 顶层 `error`：`code` 沿用现有稳定码 `RUN_NOT_RESUMABLE`、`RUN_NOT_STOPPED`；重跑目标已不是最新用户消息现在只是 `ValueError`（通用 `TASK_STATE_CONFLICT`），改为新增稳定码 `EDIT_TARGET_STALE`。`message` 为面向用户的短提示；同时记结构化日志。
+- actor 拒绝一个命令时写 snapshot 顶层 `error`：`code` 沿用现有稳定码 `RUN_NOT_RESUMABLE`、`RUN_NOT_STOPPED`；重跑第二阶段（当前 Run 停下之后）发现目标已不是最新用户消息时用新增稳定码 `EDIT_TARGET_STALE`；入口在投递前就能判定的过期目标仍同步 409（见「接口」表例外行）。`message` 为面向用户的短提示；同时记结构化日志。
+- 每次拒绝带新的 `seq`（见「wire 契约」）：同样的原因连续被拒时值只差 `seq`，前端靠它判定被拒、收回乐观消息并复位按钮。
 - 前端无需新增展示：顶层 `error` 已渲染为消息列表末尾的错误条目，只是后端此前从未写入。
 - 清空时机：actor 下一次成功处理用户发起的命令（新建、唤醒、投递、恢复、重跑）时置空。Run 自身的失败在 `activity.error`，与顶层命令错误分开：顶层 `error` 只承载命令被拒；run 事件投影里对它的置空随之删除，清空只由 actor 负责。
 - `edit_queued` 不经 actor（只是一次条件更新），`MESSAGE_CONSUMED` 仍同步 409：它是生产者直接对队列行的操作，结果就在手边，不需要绕 snapshot。
@@ -210,7 +270,7 @@ snapshot（权威读取来源）──订阅──▶ 前端（按 Task 的长�
 | HTTP 命令（发送 / 重跑 / 恢复 / 决定） | 等回执，返回 `CommandAccepted{state, queued}` | 投递后 202 `{}`；不返回 snapshot |
 | fork | `POST /tasks/{id}/fork` 带 `runId` | 带 `messageId`，按消息切分（见上文） |
 | `/cancel` | 有可停止对象时 200 `{task_id, cancelled: true}`，没有时 409 | 运行中仍在入口同步打信号；一律 202，是否停下看 snapshot |
-| Coordinator 启动节点 | `submit` 返回后立即读 `current_run_id` | 投递后 `wait_idle`，再读节点 Task 最新 Run 记录 `conversation_run_ids` |
+| Coordinator 启动节点 | `submit` 返回后立即读 `current_run_id` | `deliver` 投递后订阅 `wait_new_run`，新 Run 一出现就记入 `conversation_run_ids`，再 `wait_idle` 等节点静止。不能等静止后再记：执行时间线（`agent_team_execution_timeline.py`）要显示运行中的节点访问，Team 取消（`AgentTeamRunState.cancel`）也按它判断是否给节点打信号 |
 | `child_agent_create` / `child_agent_send` | 经 `run_coroutine_threadsafe(...).result()` 等回执；`child_agent_send` 捕获 `SessionConflictError`（已不可达） | 投递即返回；删除不可达的捕获，结论仍经 `agent_result` 回投 |
 | `AgentTeamDecisionService` | `post_async` 等回执 | 投递即返回 |
 | 删除 Task / 工作区 | `stop_tasks` 等 `Stop` 回执 | 发 `Stop`，订阅 actor 的退出事件（`actor.stopped`），等到后再删 |
@@ -218,9 +278,9 @@ snapshot（权威读取来源）──订阅──▶ 前端（按 Task 的长�
 
 ## 删除清单
 
-- `task_signals.py`：`Receipt`、各信号的 `receipt` 字段、`SessionReceipt`、`resolve` / `reject` / `abandon`；`SessionConflictError` 只剩 `edit_queued` 一处使用，随之收窄。
+- `task_signals.py`：`Receipt`、各信号的 `receipt` 字段、`SessionReceipt`、`resolve` / `reject`；`SessionConflictError` 保留，供 `edit_queued`（同步 409 `MESSAGE_CONSUMED`）与 actor 内的状态冲突（写顶层 `error` 的稳定码）共用。
 - `workflow_session.py`：`_request` / `_receipt`、`wait_run_settled`、`post_async` 与 `post_nowait` 的区分（统一为投递）。
-- `task_actor.py`：`_stop_waiters`、`abandon`、对回执的兑现；`_flush` 只负责合并推进。
+- `task_actor.py`：`_stop_waiters`、对回执的兑现；`_flush` 只负责合并推进。`TaskActor.abandon` 保留但改了用途：进程关闭时丢弃未处理信号并置位 `stopped`，放行删除流程等等待方，不再兑现回执。
 - `assistant_api.py`：`_accept` 的大部分异常映射与回执 snapshot 读取。
 - `transport_assistant_service.attach` 的 `NO_RUN`；`transport_stream_service` 的 `stream_envelopes` 交接循环与 `target_run_*` 元数据。
 - `assistant_transport/state/`：`ConversationRunSnapshot` 作为对话 wire 结构（`runs[]`、`current_run_id`）、`approvals`；run 事件投影里对顶层 `error` 的置空；`RunInitializedEvent.replace_existing` 及其替换分支；帧元数据 `source_run_id` / `current_run_id` / `current_run_status`。
@@ -247,7 +307,7 @@ snapshot（权威读取来源）──订阅──▶ 前端（按 Task 的长�
 - **快照形状变更涉及前后端同时切换**：后端投影与前端校验必须同一期落地；绿地项目不做兼容，但 E2E 模拟后端要同步改。
 - **命令错误的可见性**：拒绝不再以 HTTP 错误出现在发起处；前端需在对话区显示顶层 `error`，否则用户点「继续」后无反馈。
 - **乐观显示**：命令返回不代表已生效；前端的 pending 消息要等 snapshot 排队投影或新 Run 出现再清，不能在 202 时清。
-- **Coordinator 读 Run**：改为静止后读最新 Run，若节点在静止前被交接出多个 Run，只记录最后一个；Team 只关心节点结论，可接受。
+- **Coordinator 记录节点 Run**：按「投递后出现的新 Run」记录；节点 Task 只由 Coordinator 顺序投递、投递时必然静止，所以这个新 Run 就是本次节点 Run。投递已处理而没有新 Run 时 `wait_new_run` 抛 `RuntimeError`，由 Coordinator 收敛为 TeamRun `failed`。
 
 ## 分期
 
@@ -268,3 +328,43 @@ HTTP 去回执 ─需要─▶ 前端总是常驻订阅 ─需要─▶ 后端�
 
 - 命令错误复用 snapshot 顶层 `error`，还是新增独立的 `command_error` 字段？顶层 `error` 后端从未写入、前端已有渲染，Run 错误在 `activity.error`；复用没有语义冲突，建议复用。
 - `edit_queued` 是否也改走 snapshot 错误以统一形态？建议不改：它不经 actor，同步结果已在生产者手上。
+
+## 实施记录
+
+- **第一期（已完成）**：
+  - `WorkflowSession` 新增 `deliver`（解析后发信号即返回，解析错误仍同步抛出）与 `wait_new_run`（订阅投递后出现的新 Run；投递已处理而无新 Run 时抛 `RuntimeError`）；`TaskActor.send` 让旧的静止结论作废，投递方紧接着订阅不会读到投递前的状态。
+  - Coordinator 改为 `deliver` + `wait_new_run` 记节点 Run + `wait_idle`；停止节点改为 `call_soon_threadsafe(cancel_nowait)`，不等回执。
+  - `child_agent_create` / `child_agent_send` 改为 `deliver`，删除 `child_agent_send` 里不可达的 `SessionConflictError` 捕获。
+  - `AgentTeamDecisionService` 的 Team 结果改为 `post_nowait`；`/decisions` 自身仍走回执（HTTP 命令，第二期处理）。
+  - 删除流程：`stop_tasks` 发不带回执的 `Stop`，等 `actor.stopped`；进程关闭时 `abandon` 也置位，等待方不会挂起。
+  - 实施中发现：`TaskRuntimeSpace` 构造时读取 Task，Task 不存在或已删除时取闸门即抛 `KeyError`，原实现会杀死 actor 循环、留下死 actor、让等待方永久挂起（带回执时同样存在）。现在 actor 把它作为终止条件：拒绝全部待处理信号、注销自身并置位 `stopped`。
+- **第二、三期（一次完成）——后端**：
+  - 改名：`WorkflowSession` → `TaskActors`（`service/conversation_run/task_actors.py`，`workflow_session.py` 删除），依赖入口 `get_task_actors`。入口：`submit` / `post` / `broadcast` / `rerun` / `resume` / `cancel` 投递即返回；`edit_queued` 仍同步（不经 actor）；`stop_tasks`、`wait_idle`、`wait_new_run` 订阅 actor 状态。信号（`task_signals.py`）不再带回执，`Execution.settled` 删除。
+  - HTTP：`assistant_api.py` 的发送、重跑、恢复、审批决定、取消投递即 202、响应体 `{}`；恢复与取消投递前确认 Task 存在（不存在 404）；`assistant_transport/response/`（`CommandAccepted`）整包删除。重跑入口先取最新 Run 再比对目标消息：Task 不存在时是 404，而不是被误判为「目标不是最新消息」的 409（实施中发现，已修）。
+  - 命令错误：actor 处理用户命令失败时经 `ConversationTaskStateService.set_command_error` 写顶层 `error`（`SessionConflictError` 带稳定码，其余用 `COMMAND_FAILED` 安全文案；Task 已不存在时不投影），同值不发帧；用户命令成功处理（发送入队、恢复、重跑第二阶段）后清空。
+  - snapshot：`conversation_run_snapshot.py` 删除，新增 `conversation_state_activity.py`（`activity` 与 `launch`）、`message_identity.py`（消息 id 编码与 `turn_of` 反解，投影、冷重建与 fork 共用）。投影改为扁平 `messages`：`ensure_assistant` 在没有用户输入的 Run 第一次输出时建 `assistant-run-{runId}`；只有当前活动且未终态的 Run 能继续流式输出与工具预览（`active_run_id`）；旧 Run 的迟到状态事件只更新它已有的 `outcome`。`RunInitializedEvent.replace_existing` 删除。
+  - 订阅：`TransportStreamService.stream` 按 Task 长订阅，帧去掉 `source_run_id` / `current_run_id` / `current_run_status`；attach 不再返回 `NO_RUN`。
+  - fork：请求 `{ messageId }`，非法 id 422 `FORK_MESSAGE_ID_INVALID`，找不到 404；`TaskService._copy_fork_history` 经 `_resolve_fork_cut` 把消息换算成「所在 Run + 这一轮最后一条 context 的序号」，`clone_for_fork(max_sequence=…)` 截断。「一轮」= 用户消息及其回复，到同一 Run 的下一条用户输入之前；用户消息与它的回复从哪条分叉结果相同。`extra.fork` 改为 `{source_task_id, source_message_id}`。
+  - 测试：调度侧测试去掉回执断言，改为等 actor 的 `state_changed` 后断言事实或 snapshot；新增 `test_task_command_delivery.py`（B1 / B3）、`test_task_subscription_and_command_error.py`（长订阅与命令错误）以及 fork 按消息切分用例。后端全量 0 失败。
+  - 说明：wire 形状错误（缺字段、空 parts）仍由 FastAPI 请求校验在进入路由前返回 422，验收 B1 的「400」指投递前被拒的输入（附件不可用、模型不支持等）。
+- **第二、三期（一次完成）——前端**：
+  - 契约：`contract.ts` / `snapshot-validation.ts` 改为 `messages` / `activity` / `error` / `queued_messages`，状态只剩后端五个值；回复的已取消 / 失败 / 用量读消息自己的 `outcome`。
+  - 订阅与命令：新增 `lib/assistant/task-transport-session.ts`（脱离 React 的 Task 长订阅 + 命令投递），hook 只装配，对外为 `onActivitySettled` / `onCommandRejected` / `onDisconnect`；`task-commands.ts` 命令只返回 `void`。「一轮结束」由 frame store 在 `activity` 从活动态落到终态时触发一次；一个 full 帧里旧 Run 已结束、新 Run 已开始时先补 `settled` 再 `started`。
+  - 恢复：新增 `components/assistant/runtime/subscription-recovery.ts`（有限重连、背压重同步，连接稳定 3 秒后才清零重连预算，避免「接受即关闭」变成无延迟死循环）；取消改为 Task 级标记；删除 `assistant-attach-controller.ts`、`use-cancellation-confirmation.ts` 与全部按 runId 的比对逻辑。
+  - 乐观消息：202 不带消息 id，所以按数量对账——snapshot 里每新出现一条用户消息（排队或已并入），就去掉最早的一条乐观命令；顶层 `error` 出现新的拒绝（按 `seq` 判定）时全部去掉，被拒命令交回恢复草稿。
+  - fork：`forkTask(taskId, messageId)`，入口挂在带 `outcome` 的消息上；`extra.fork.source_message_id`。
+  - E2E 模拟后端（`test-server.mjs`）改为 Task 级长订阅、命令 202。
+  - 遗留待定：无（原先的两项见下方「第二轮修复」）。
+- **验收后修复**：
+  - 命令错误加 `seq`：后端 `ConversationCommandError`（`conversation_state_error.py`）由 `set_command_error` 每次拒绝分配新 `seq` 并发帧；前端 `TransportCommandError` 与 `isNewCommandError`（`contract.ts`），frame store 按 `seq` 判定被拒。修复了「连续两次同样的拒绝」与「已有错误时又被另一原因拒绝」两种情况下乐观消息一直挂着、`isRunning` 不复位的问题。
+  - 拒绝通知不再要求有乐观命令：恢复、取消等命令不产生乐观消息，frame store 照样通知；「继续运行」按钮按 `seq` 认出这次恢复被拒后立即复位（日志 `composer_resume_rejected`），不再等 15 秒超时。
+  - 强制重建 snapshot（`rebuild_state`）把旧副本里的命令错误带入新副本：已完成 Task 收到后台结果新开 Run 时，不会把未处理的命令错误清掉。
+  - 重跑入口的同步 409 与 `/decisions` 的同步校验写进「接口」表的例外行。
+- **第二轮修复**（按第零铁律比较后选结构化 / 减法）：
+  - 上下文占用同源：`outcome` 增加 `contextWindowTotal`（Run 终态投影取当前 `activity` 的窗口，旧 Run 迟到事件保留原值，冷重建取 `run.context_window_total`）；前端 `latestMeasuredContextUsage` 的「已用 / 上限」成对取自同一个 Run，不再拿新窗口配旧用量。补丁式「比较 `launch.modelConfigId` 再决定是否回落」只修换模型一种情况，没有采用。
+  - `TaskResponse` 去掉 `current_run_id`；前端 `WorkspaceTask` 去掉该字段，Workbench 的 `AgentRunSummary` 收窄为 `AgentTaskStatus = { status }`。为状态推送新建 workspace 级订阅不值得（单用户本机，轮询成本低），保留轮询。
+- **前端审查后收敛**：
+  - 订阅归 runtime 所有：`useTaskAssistantTransportRuntime` / `ReadonlyTransportRuntime` 接收 `connectionKey`（后端不可用为 null，换实例即变化），挂载即打开、变化即重开、卸载即关闭，并直接返回 `{ runtime, open }`。删除 `onAttachReady` 回调、`TransportSubscriptionBridge` 与两处 `setTimeout(0)` 时序补丁。
+  - 后端恢复不再由 recovery 重开订阅（runtime 已按新实例打开），`SubscriptionRecovery.restored` 只清零预算并提示；`resync` 只服务「重新同步」按钮。
+  - Workbench 阅读页复用 `SubscriptionRecovery` 与 `TransportStatus`：只在首屏读一次 snapshot，断流重连只重开订阅，已显示内容与 runtime 保留；删除 `use-agent-reader.ts` 里重复的重试计数与延迟表。
+

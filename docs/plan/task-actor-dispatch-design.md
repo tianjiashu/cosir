@@ -4,6 +4,17 @@
 
 状态：已实施（第一步 TaskInbox + TaskActor 与等待方改造；第二步编辑拆成两个命令）。
 
+## 修订（2026-10-26）：去掉信号队列
+
+本节优先于下文中关于信号、批处理与 `RunFinished` 的描述。
+
+- **没有信号队列。** `task_signals.py` 与 `asyncio.Queue` 删除；入口直接调用 `TaskActor` 的方法，每次调用是一轮，轮与轮由 Task 闸门串行。消息事实在外部队列，取消意图在 `cancellation_registry`，信号原本只是「醒来看看」，每轮重读事实源即可替代。
+- **执行结束不再是信号。** Run 结束后由执行收尾那一轮注销登记、取走取消信号并接续调度。
+- **用户命令同步返回。** `submit` / `rerun` / `resume` await 这一轮，拒绝抛 `SessionConflictError`（API 映射 409）；`submit` 返回新建或唤醒的 Run，Coordinator 据此记下节点 Run，`wait_new_run` 删除。
+- **编辑重跑不再记待办。** 运行中先打 `edited` 取消，在闸门外等当前执行收尾（有超时），再拿闸门完成移出与重跑；等待期间 `_rerun_pending` 阻止推进，排队消息随重跑出的新 Run 并入。
+- **跨 Task 调用只发起不等待。** `post` / `cancel` / `broadcast` 另起任务交给对方 actor；持自己的闸门去等对方的闸门会让父取消子、子回投父互等死锁。
+- **用户命令编排归 Transport。** 排队消息编辑、重跑前的目标校验与输入解析、存在性检查移到 `TransportAssistantService`；`TaskActors` 只保留多类投递方共用的入口与登记表。
+
 ## 目标
 
 `WorkflowSession` 现在同时承担入队、Task 闸门、执行判定结果、执行登记、收尾交接、取消传播与 `wait_idle`。复杂度集中在两处：
@@ -31,8 +42,8 @@ TaskActor（每个 Task 一个，单消费者）
   │  signals: asyncio.Queue[Signal]   ← 只传「醒来看看」与回执 future，不传消息正文
   │  读最新 Run + pending → dispatch_policy.next_action → 执行判定
   ▼
-Run 执行（actor 的子 asyncio task）：drive_run → ReactLikeWorkflow → RunMailbox → prepare_input
-  └─ 结束时 done callback 向同一信号队列放入 RunFinished
+Run 执行（actor 的子 asyncio task）：RunDriver.drive → ReactLikeWorkflow → RunMailbox → prepare_input
+  └─ 结束时 RunDriver 调用 on_finished，由 actor 向同一信号队列放入 RunFinished
 ```
 
 两层队列各管一件事：
@@ -68,9 +79,9 @@ async def _loop(self) -> None:
 ```
 
 - **批量合并**：一批 `Arrived` 只做一次 `next_action`，`by_user` 取这批的 any；判定完统一兑现这批 future。
-- **唯一等待点**：Run 结束不靠 `await drive_run`，而是 `RunFinished` 信号，所以 actor 在 Run 运行期间仍能处理投递与取消。
+- **唯一等待点**：Run 结束不靠 `await RunDriver.drive()`，而是 `RunFinished` 信号，所以 actor 在 Run 运行期间仍能处理投递与取消。
 - **处理函数只做短 IO，不 await Run**：需要「等 Run 停下」的动作（取消、编辑重跑）拆成两阶段，第二阶段由 `RunFinished` 触发。否则一个慢处理会堵住其后的取消。
-- **异常边界**：单批处理异常记录日志、以异常兑现该批 future，循环继续；不让一次失败杀死 actor。Run 失败的唯一边界仍是 `drive_run`。
+- **异常边界**：单批处理异常记录日志、以异常兑现该批 future，循环继续；不让一次失败杀死 actor。Run 失败的唯一边界仍是 `RunDriver.drive`。
 
 ## 推进与收尾
 
