@@ -6,15 +6,14 @@ from contextlib import contextmanager
 
 import pytest
 from fastapi import HTTPException
-from test_task5_acceptance import canonical_store as canonical_store
 
 from app.api.schemas import ForkTaskRequest
 from app.api.tasks_api import fork_task
 from app.assistant_transport.state.message_identity import leading_reply_id, reply_id, turn_of
 from app.models.conversation_input import UserInputPresentation
-from app.models.react_execution_state import ReactExecutionState
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.models.message_metadata import UserMessageMetadata
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.storage.queries.task_read_queries import TaskReadQueries
 from app.task_runtime.service.task_service import TaskService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces

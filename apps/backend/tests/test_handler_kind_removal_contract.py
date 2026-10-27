@@ -45,7 +45,7 @@ from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
-from app.models.tool_batch import ToolBatch
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from tests.runtime_context_stub import runtime_stub
 from tests.tool_executor_fakes import emit_running
 
@@ -154,7 +154,7 @@ def _operations_with_executor(
         or ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=Path("."), run_id=0),
         allows_tools=frozenset(allowed or ()),
         tool_definitions={
-            name: SimpleNamespace(parallel_mode=mode)
+            name: SimpleNamespace(parallel_mode=mode, user_decision=None)
             for name, mode in (parallel_modes or {}).items()
         },
         task=SimpleNamespace(id=1),
@@ -471,8 +471,7 @@ def test_unknown_tool_name_yields_unknown_tool_observation_without_keyerror(
     assert len(observations) == 1
     observation = observations[0]
     assert observation.status == "error"
-    assert observation.content.startswith("error: unknown tool: ghost_tool\n")
-    assert "\nreason: " in observation.content
+    assert observation.content.startswith("unknown tool: ghost_tool")
     assert "not registered" in observation.content
     assert observation.tool_call_id == "call-ghost"
 
@@ -595,9 +594,8 @@ def test_internal_error_observation_when_executor_raises() -> None:
     assert len(observations) == 1
     observation = observations[0]
     assert observation.status == "error"
-    assert "hint: do not retry this tool call." in observation.content
     assert observation.tool_call_id == "call-boom"
-    assert observation.content.startswith("error: internal execution error in the tool pipeline: RuntimeError\n")
+    assert observation.content.startswith("internal execution error in the tool pipeline: RuntimeError")
 
 
 def test_parallel_batch_runs_concurrently_off_the_event_loop_thread() -> None:

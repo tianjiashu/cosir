@@ -1088,7 +1088,7 @@ def test_run_events_never_write_top_level_error(
     assert change is not None
     assert all(mutation.path != ("error",) for mutation in change.mutations)
     state = snapshots.states[1]
-    assert state["error"] is None
+    assert "error" not in state
     assert state["activity"]["error"] == failure
     assert state["messages"][-1]["outcome"]["error"] == failure
 

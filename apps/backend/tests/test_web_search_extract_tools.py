@@ -735,7 +735,6 @@ def test_extract_all_pages_fail_returns_error_retryable_true() -> None:
     obs = tool.execute(urls=["https://e.com/1"])
 
     assert obs.status == "error"
-    assert "hint: this error can be retried" in obs.content
     assert "boom1" in obs.content
 
 
@@ -820,7 +819,6 @@ def test_extract_url_count_over_limit_returns_error() -> None:
     obs = tool.execute(urls=urls)
 
     assert obs.status == "error"
-    assert "hint: this error can be retried" in obs.content
 
 
 # ---------------------------------------------------------------------------
@@ -980,7 +978,7 @@ def test_web_extract_blocks_sensitive_query_param() -> None:
     obs = tool.execute(urls=["https://example.com/?token=abc"])
 
     assert obs.status == "error"
-    assert obs.content.startswith("error: Blocked:")
+    assert obs.content.startswith("Blocked:")
 
 
 def test_web_extract_blocks_non_http_scheme() -> None:
@@ -992,7 +990,7 @@ def test_web_extract_blocks_non_http_scheme() -> None:
     obs = tool.execute(urls=["ftp://example.com/file"])
 
     assert obs.status == "error"
-    assert obs.content.startswith("error: Blocked:")
+    assert obs.content.startswith("Blocked:")
 
 
 def test_web_extract_blocks_userinfo() -> None:
@@ -1004,7 +1002,7 @@ def test_web_extract_blocks_userinfo() -> None:
     obs = tool.execute(urls=["http://user:pass@example.com/"])
 
     assert obs.status == "error"
-    assert obs.content.startswith("error: Blocked:")
+    assert obs.content.startswith("Blocked:")
 
 
 # ---------------------------------------------------------------------------
@@ -1139,7 +1137,6 @@ def test_extract_unavailable_error_retryable_false() -> None:
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert "hint: do not retry this tool call." in obs.content
 
 
 def test_extract_request_error_retryable_true() -> None:
@@ -1153,7 +1150,6 @@ def test_extract_request_error_retryable_true() -> None:
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert "hint: this error can be retried" in obs.content
 
 
 def test_search_unavailable_error_retryable_false() -> None:
@@ -1167,7 +1163,6 @@ def test_search_unavailable_error_retryable_false() -> None:
     obs = tool.execute(query="hello")
 
     assert obs.status == "error"
-    assert "hint: do not retry this tool call." in obs.content
 
 
 def test_search_request_error_retryable_true() -> None:
@@ -1181,7 +1176,6 @@ def test_search_request_error_retryable_true() -> None:
     obs = tool.execute(query="hello")
 
     assert obs.status == "error"
-    assert "hint: this error can be retried" in obs.content
 
 
 # ---------------------------------------------------------------------------

@@ -342,7 +342,6 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                 },
             ],
             "activity": _activity(2, "running"),
-            "error": None,
         }
     )
 
@@ -371,7 +370,7 @@ def test_transition_propagates_post_commit_projector_failure(
             raise RuntimeError("transport unavailable")
 
     monkeypatch.setattr(
-        conversation_run_ledger_module.service_depends,
+        conversation_run_ledger_module,
         "get_conversation_event_projector",
         lambda: FailingProjector(),
     )

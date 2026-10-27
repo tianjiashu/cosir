@@ -15,21 +15,38 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.orm import sessionmaker
 
-from app.service.agent_team import configuration_scope_source
-from app.service.agent_team import registry as agent_team_registry_module
-from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.service.agent_team.registry import AgentTeamConfigurationRegistry
+from app.assistant_transport.service.conversation_task_state_rebuilder import (
+    ConversationTaskStateRebuilder,
+)
+from app.assistant_transport.service.conversation_task_state_service import (
+    ConversationTaskStateService,
+)
 from app.config import configuration
 from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_config, agent_profile_source
+from app.core.context.context_store import ContextStore
 from app.core.tool.execute.tool_executor import ToolExecutor
-from app.tools.tool_registration import build_tool_registry
+from app.service.configuration import agent_team_configuration_source as configuration_scope_source
+from app.service.configuration import agent_team_configuration_registry as agent_team_registry_module
+from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
+from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
+from app.service.conversation_run.conversation_task_context_service import (
+    ConversationTaskContextService,
+)
 from app.service.depends import close_service_dependencies
-from app.storage.store_engines import init_storage
+from app.storage.crud.conversation_run_crud import ConversationRunCrud
+from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
+from app.storage.crud.task_crud import TaskCrud
+from app.storage.crud.workspace_crud import WorkspaceCrud
+from app.storage.engine_cache import create_sqlite_engine
+from app.storage.store_engines import init_storage, initialize_app_schema
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.tools.tool_registration import build_tool_registry
 from app.utils.path import system_cosir as paths
 
 # 会被 ``configure_logging`` 改写 ``propagate`` / ``level`` 的后端 logger。
@@ -275,3 +292,85 @@ def backend_env(
 
     install_process_singletons()
     yield
+
+
+def _bind(crud_type: type[object], factory: sessionmaker) -> object:
+    """Bind a real CRUD implementation to the acceptance fixture's SQLite factory."""
+
+    crud = crud_type.__new__(crud_type)
+    crud._session_factory = factory  # type: ignore[attr-defined]
+    return crud
+
+
+@pytest.fixture
+def canonical_store(tmp_path: Path, monkeypatch):
+    """真实 SQLite 的 canonical store：三个测试文件共用同一套 CRUD / state / context 装配。
+
+    文件级共享的原因：``test_task5_acceptance``、``test_task3_canonical_write_paths`` 与
+    ``test_task_fork`` 都要在「真实文件库 + 真实 CRUD」上验证 canonical 写入路径，各自复制一份
+    会漂移。夹具只装配事实与可观测服务，不预置任何 Run / context 行。
+    """
+
+    engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
+    initialize_app_schema(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(
+        "app.core.workflow.inbox.task_message_queue.main_session_factory", lambda: factory
+    )
+    workspaces = _bind(WorkspaceCrud, factory)
+    tasks = _bind(TaskCrud, factory)
+    runs = _bind(ConversationRunCrud, factory)
+    contexts = _bind(ConversationTaskContextCrud, factory)
+    context_store = ContextStore.__new__(ContextStore)
+    context_store._crud = contexts
+    context_service = ConversationTaskContextService.__new__(ConversationTaskContextService)
+    context_service._crud = contexts
+    context_service._store = context_store
+    workspace = workspaces.create("acceptance", str(tmp_path))
+    task = tasks.create(workspace.id, "canonical conversation_run")
+    # 快照重建按工具名查 display 定义；本夹具只验证状态契约，给出最小合法 presentation
+    # （``validate_snapshot`` 要求它是对象），不依赖工具系统装配。
+    monkeypatch.setattr(
+        ConversationTaskStateRebuilder,
+        "get_tool_display",
+        staticmethod(lambda _name: {"verb": "Read"}),
+    )
+    ConversationTaskStateService.clear_process_state()
+    # ConversationTaskStateService 现在从 depends 取 CRUD 单例；这里把三个 getter 指向本夹具的临时库
+    # CRUD，使 state 服务与 store 中的 CRUD 读写同一份临时数据（保留测试隔离，不污染全局库）。
+    monkeypatch.setattr(
+        "app.service.conversation_run.user_input_service.get_task_crud",
+        lambda: tasks,
+    )
+    monkeypatch.setattr("app.service.depends.get_task_crud", lambda: tasks)
+    monkeypatch.setattr("app.service.depends.get_conversation_run_crud", lambda: runs)
+    monkeypatch.setattr("app.service.depends.get_conversation_task_context_crud", lambda: contexts)
+    monkeypatch.setattr(
+        "app.task_runtime.task_runtime_space.get_task_service",
+        lambda: SimpleNamespace(get_task=tasks.get),
+    )
+    monkeypatch.setattr(
+        "app.task_runtime.task_runtime_space.get_workspace_service",
+        lambda: SimpleNamespace(get_workspace=workspaces.get),
+    )
+    state = ConversationTaskStateService()
+    task_runtime_spaces.close()
+    store = SimpleNamespace(
+        engine=engine,
+        factory=factory,
+        workspaces=workspaces,
+        tasks=tasks,
+        runs=runs,
+        contexts=contexts,
+        context=context_store,
+        context_service=context_service,
+        state=state,
+        workspace=workspace,
+        task=task,
+    )
+    try:
+        yield store
+    finally:
+        task_runtime_spaces.close()
+        ConversationTaskStateService.clear_process_state()
+        engine.dispose()

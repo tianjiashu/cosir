@@ -22,7 +22,6 @@ and the model-visible contract sample.
 
 from __future__ import annotations
 
-import errno
 import pathlib
 import shutil
 import subprocess
@@ -632,7 +631,6 @@ def test_rejected_patch_writes_nothing(tmp_path: pathlib.Path) -> None:
         )
 
         assert observation.status == "error", name
-        assert "hint: this error can be retried" in observation.content, name
         assert target.read_bytes() == b"a\nb\n", name
         # 真正被拒绝的形状不得产出任何「已按正文应用」的重算提示。
         assert parse_git_unified_diff_detailed(patch).count_repairs == [], name
@@ -651,7 +649,6 @@ def test_context_mismatch_fails_validation_without_writing(tmp_path: pathlib.Pat
     )
 
     assert observation.status == "error"
-    assert "hint: this error can be retried" in observation.content
     assert "no files were modified" in observation.content
     assert "hunk line counts do not match" not in observation.content
     assert target.read_bytes() == b"a\n"
@@ -673,32 +670,6 @@ def test_successful_patch_emits_file_change_display_payload(tmp_path: pathlib.Pa
     assert observation.display_data["kind"] == "file-changes"
     assert observation.display_data["changes"][0]["path"] == "m.txt"
     assert target.read_bytes() == b"A\n"
-
-
-# 目的：``_is_patch_retryable_after_correction`` 的重试分类契约——部分写入恒不可重试，
-# OSError 起因按 errno 分类。缺陷类型：部分写入被误判为可重试（重放补丁破坏文件）。
-# 瞬时故障用例必须用 ``errno.EAGAIN`` / ``errno.EBUSY`` 符号表达：字面量 11 只在 Linux 上等于
-# EAGAIN（macOS 为 35、11 是 EDEADLK），写死数字会得到与实现口径无关的平台相关失败。
-@pytest.mark.parametrize(
-    ("partial_applied", "cause", "expected"),
-    [
-        (True, RuntimeError("x"), False),
-        (True, OSError(errno.ENOENT, "x"), False),
-        (False, RuntimeError("x"), True),
-        (False, OSError(errno.ENOENT, "no such file"), False),
-        (False, OSError(errno.EAGAIN, "EAGAIN"), True),
-        (False, OSError(errno.EBUSY, "EBUSY"), True),
-        (False, ValueError("not an OSError"), False),
-    ],
-)
-def test_retryability_classification_contract(partial_applied, cause, expected) -> None:
-    from app.tools.tool_handler.apply_patch_tool import _is_patch_retryable_after_correction
-    from app.tools.tool_handler.patch_write.patch_apply import PatchApplyError
-
-    error = PatchApplyError("boom", partial_applied=partial_applied)
-    error.__cause__ = cause
-
-    assert _is_patch_retryable_after_correction(error) is expected
 
 
 # 目的：解析与诊断必须纯函数、可重复、不改入参。缺陷类型：剥离使用 ``list.pop()`` 时

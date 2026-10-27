@@ -43,7 +43,9 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
     monkeypatch.setattr(child_agent_send, "get_workspace_service", _WorkspaceService)
     monkeypatch.setattr(child_agent_send, "get_conversation_run_ledger", lambda: run_service)
     # 非 CHILD profile 在开 Run 之前就被拒绝，调度入口不得被触达。
-    monkeypatch.setattr(child_agent_send, "get_task_actors", lambda: pytest.fail("opened run"))
+    monkeypatch.setattr(
+        child_agent_send.task_runtime_spaces, "enqueue", lambda *_a, **_k: pytest.fail("enqueued")
+    )
     base_registry = configuration.build_agent_registry()
     assert base_registry.resolve("system", "main_agent").agent_type is AgentProfileType.MAIN
     monkeypatch.setattr(configuration, "get_agent_registry", lambda: base_registry)

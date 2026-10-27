@@ -25,9 +25,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.service.agent_team import registry as agent_team_registry_module
-from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.service.agent_team.registry import AgentTeamConfigurationRegistry
+from app.service.configuration import agent_team_configuration_registry as agent_team_registry_module
+from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
+from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
 from app.config.constant import Constant
 from app.core.tool.schemas import ALL_TOOL_NAMES, ToolName
 from app.core.tool.handler.child_agent_send import (

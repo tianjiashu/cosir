@@ -256,8 +256,8 @@ def test_parse_error_reason_is_actionable_for_a_missing_header() -> None:
     # 具体诊断（缺失的头部类型）由 ``error`` 承载；``reason`` 已统一为通用指引，必须把模型
     # 引向 ``error`` 里的诊断，而不是引向改计数之类的无关方向。
     assert "expected a Git 'diff --git' header" in observation.content
-    reason = observation.content.split("\nreason: ", 1)[-1]
-    assert "reported in error" in reason, "reason 必须把模型引向 error 中的具体诊断"
+    reason = observation.content.split("header at the start of the patch. ", 1)[-1]
+    assert "Correct the issue above" in reason, "建议必须把模型引向前面的具体诊断"
     assert "count" not in reason.lower(), "reason 不得把缺头部误导为改计数"
 
 
@@ -599,7 +599,6 @@ def test_rejected_patch_writes_nothing(tmp_path: pathlib.Path) -> None:
         observation = _execute(tmp_path, patch, 4600)
 
         assert observation.status == "error", name
-        assert "hint: this error can be retried" in observation.content, name
         assert target.read_bytes() == b"a\nb\n", name
 
 

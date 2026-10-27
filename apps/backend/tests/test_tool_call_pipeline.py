@@ -8,13 +8,14 @@ import pytest
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.tool.schemas import ToolCall, ToolObservation
 from app.core.tool.execute import tool_executor as tool_executor_module
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
-from app.models.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper import tool_observation_projection as projection
 from app.core.workflow.inbox.run_mailbox import RunMailbox
+from app.core.workflow.inbox.task_message import NoticeBody, TaskMessage
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import observation_node, prepare_input_node, tools_node
 from app.models.enums.conversation_run_status import RunTransition
@@ -76,7 +77,7 @@ def test_streaming_preview_only_creates_allowed_registered_tool(monkeypatch) -> 
 def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -> None:
     received = []
 
-    async def run_calls(_rc, calls, _step_id, _batch):
+    async def run_calls(_rc, calls, _step_id, _batch, _decision=None):
         received.extend(calls)
         return [
             ToolObservation(
@@ -112,7 +113,7 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
     """tools 节点不按投影状态过滤：未建卡片（banned）的已注册调用同样交给执行器，由门禁拒绝。"""
     received = []
 
-    async def run_calls(_rc, calls, _step_id, _batch):
+    async def run_calls(_rc, calls, _step_id, _batch, _decision=None):
         received.extend(calls)
         return []
 
@@ -165,8 +166,12 @@ def _batch_runtime(executor):
         task=SimpleNamespace(id=3),
         run=SimpleNamespace(id=4, task_id=3),
         tool_definitions={
-            "read_file": SimpleNamespace(name="read_file", parallel_mode="serial"),
-            "write_file": SimpleNamespace(name="write_file", parallel_mode="serial"),
+            "read_file": SimpleNamespace(
+                name="read_file", parallel_mode="serial", user_decision=None
+            ),
+            "write_file": SimpleNamespace(
+                name="write_file", parallel_mode="serial", user_decision=None
+            ),
         },
         tool_executor=executor,
     )
@@ -266,7 +271,7 @@ def test_run_tool_batch_projects_only_terminal_when_executor_never_starts(monkey
 def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
     """挂起由工具声明：同批其它调用照常执行与闭合，任一观察带 suspend 即整批挂起。"""
 
-    async def run_calls(_rc, _calls, _step_id, _batch):
+    async def run_calls(_rc, _calls, _step_id, _batch, _decision=None):
         return [
             ToolObservation(tool_name="read_file", status="success", tool_call_id="call-1"),
             ToolObservation(
@@ -316,7 +321,9 @@ def _gate_runtime(monkeypatch, *, cancelled=False, mailbox_ids=()):
     transitions: list[tuple[int, RunTransition]] = []
     mailbox = RunMailbox()
     for message_id in mailbox_ids:
-        mailbox.post(SimpleNamespace(id=message_id))
+        mailbox.post(
+            TaskMessage.of(NoticeBody(content="n", notice_kind="probe"), message_id=message_id)
+        )
     runtime = SimpleNamespace(
         run=SimpleNamespace(id=4, task_id=3),
         task=SimpleNamespace(id=3),
@@ -333,9 +340,9 @@ def _gate_runtime(monkeypatch, *, cancelled=False, mailbox_ids=()):
             or SimpleNamespace(id=run_id)
         ),
     )
-    drained: list[list] = []
+    drained: list[TaskMessage] = []
     monkeypatch.setattr(
-        prepare_input_node, "_write_messages", lambda messages: drained.append(messages) or []
+        prepare_input_node, "_write_message", lambda message: drained.append(message) or True
     )
     return transitions, drained
 
@@ -369,7 +376,7 @@ def test_prepare_input_skips_suspend_when_external_message_waiting(monkeypatch) 
     patch = asyncio.run(prepare_input_node._prepare_input_node(_gate_state(suspend=True)))
 
     assert transitions == []
-    assert [[m.id for m in batch] for batch in drained] == [[None, 7]]
+    assert [message.id for message in drained] == [None, 7]
     assert patch["next_node"] is ReactRoute.MODEL
     assert patch["batch"] == ToolBatch()
 
@@ -403,7 +410,7 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
     """tools 节点不解析参数：残缺 JSON 原样交给执行器，由准入门禁形成错误观察。"""
     called = []
 
-    async def run_calls(_rc, calls, _step_id, _batch):
+    async def run_calls(_rc, calls, _step_id, _batch, _decision=None):
         called.extend(calls)
         return []
 

@@ -2,7 +2,7 @@
 
 本模块**不**重复既有正向契约测试，而是从对抗视角攻击本次修复声称的四条不变量：
 
-1. 落定链路（``run_driver.drive_run`` / ``run_driver._failure_code_for``）在
+1. 落定链路（``run_driver.RunDriver.drive`` / ``run_driver._failure_code_for``）在
    「落定自身失败」「Run 已被别处落终态」「异常是 ``BaseException`` 子类」「异常文本不可
    读」等边界下都必须保证：**Run 先落 failed 再抛原异常**，且不得替换/掩盖原始异常。
 2. 分类器 ``classify_model_failure`` **只按异常类型名**识别传输层失败（超时 / 连接）：
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -34,7 +34,10 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.config.constant import Constant
+from app.core import run_driver
+from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.llm_provider.model_failure import classify_model_failure
+from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models import conversation_run_failure as failure_catalog
@@ -45,8 +48,6 @@ from app.models.conversation_run_failure import (
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.models.enums.error_kind import ErrorKind
-from app.core import run_driver
-
 
 # --------------------------------------------------------------------------------------
 # 测试替身
@@ -98,15 +99,9 @@ def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) 
     return 7
 
 
-async def _no_initial_delivery() -> None:
-    return None
-
-
-def _drive_run(
-    run_id: int, initial_delivery: Callable[[], Awaitable[None]] = _no_initial_delivery
-) -> Awaitable[None]:
-    """以空 mailbox 驱动；初始投递默认为空操作，单测按需替换。"""
-    return run_driver.drive_run(run_id, RunMailbox(), initial_delivery)
+def _drive_run(run_id: int) -> Awaitable[None]:
+    """以空 mailbox 驱动一条 Run。"""
+    return run_driver.RunDriver(RunMailbox()).drive(SimpleNamespace(id=run_id, task_id=3))
 
 
 def _make_runtime(
@@ -115,7 +110,7 @@ def _make_runtime(
     *,
     operations_available: bool = True,
 ) -> SimpleNamespace:
-    """把 ``drive_run`` 依赖的 service、hook 与观测替换为最小替身。
+    """把 ``RunDriver`` 依赖的 service、hook 与观测替换为最小替身。
 
     ``operations_available`` 为假时模拟「门面尚未构造就失败」：门面构造抛错，落定必须仍然发生
     （它只依赖 run 级状态服务）。
@@ -143,8 +138,10 @@ def _make_runtime(
         raise RuntimeError("operations unavailable")
 
     monkeypatch.setattr(run_driver.HookInterceptor, "async_safe_fire", _noop_fire)
-    monkeypatch.setattr(run_driver, "_build_context", _build)
-    monkeypatch.setattr(run_driver, "_runtime_config", lambda *_args: object())
+    monkeypatch.setattr(RuntimeContext, "for_run", classmethod(_build))
+    monkeypatch.setattr(
+        AgentRuntimeConfig, "for_run", classmethod(lambda *_args: object())
+    )
     monkeypatch.setattr(
         run_driver,
         "get_conversation_event_projector",
@@ -501,7 +498,7 @@ def test_terminal_error_message_is_non_empty_and_controlled() -> None:
 
 
 # --------------------------------------------------------------------------------------
-# 4. ``run_driver.drive_run`` 失败收口链路对抗测试
+# 4. ``run_driver.RunDriver.drive`` 失败收口链路对抗测试
 # --------------------------------------------------------------------------------------
 
 

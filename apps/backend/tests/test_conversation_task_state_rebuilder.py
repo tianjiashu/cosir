@@ -9,8 +9,8 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
-from app.models.conversation_input import ConversationInput
-from app.models.react_execution_state import ReactExecutionState
+from app.models.conversation_input import UserInputPresentation
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
@@ -35,7 +35,7 @@ def _task(task_id: int = 7) -> TaskRecord:
 def test_rebuild_empty_task_returns_valid_empty_snapshot() -> None:
     state = ConversationTaskStateRebuilder.rebuild(_task(), [], [])
 
-    assert state == {"messages": [], "activity": None, "error": None}
+    assert state == {"messages": [], "activity": None}
 
 
 @pytest.mark.parametrize("window", [None, 64_000])
@@ -134,7 +134,6 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
             }
         ],
         "activity": None,
-        "error": None,
     }
 
     with pytest.raises(ValueError, match="outcome status must be terminal"):
@@ -153,7 +152,6 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
             }
         ],
         "activity": None,
-        "error": None,
     }
 
     with pytest.raises(ValueError, match="only assistant messages carry an outcome"):
@@ -199,7 +197,6 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
             }
         ],
         "activity": None,
-        "error": None,
     }
 
     validate_snapshot(state)  # 不应抛 ValueError
@@ -341,8 +338,7 @@ def test_rebuild_restores_ordinary_file_from_context_input() -> None:
         created_at=timestamp,
         updated_at=timestamp,
     )
-    message = ConversationInput(
-        input_text="请查看 C:/workspace/notes.md",
+    presentation = UserInputPresentation(
         display_text="请查看 [[cosir-file:file-1]]",
         attachments=[
             {
@@ -357,8 +353,8 @@ def test_rebuild_restores_ordinary_file_from_context_input() -> None:
         id=1,
         task_id=7,
         run_id=1,
-        message={"role": "user", "content": message.input_text},
-        metadata=UserMessageMetadata(kind="user_input", presentation=message.presentation()),
+        message={"role": "user", "content": "请查看 C:/workspace/notes.md"},
+        metadata=UserMessageMetadata(kind="user_input", presentation=presentation),
         include_in_context=True,
         sequence=1,
     )
@@ -395,12 +391,12 @@ def test_rebuild_does_not_invent_user_message_from_run() -> None:
 
 def test_legacy_input_wrapper_is_rejected() -> None:
     with pytest.raises((TypeError, ValueError)):
-        ConversationInput.model_validate({"assistant_input": {}})
+        UserInputPresentation.model_validate({"assistant_input": {}})
 
 
 def test_blank_file_path_is_rejected() -> None:
     with pytest.raises((TypeError, ValueError)):
-        ConversationInput.model_validate(
+        UserInputPresentation.model_validate(
             {
                 "display_text": "请查看 [[cosir-file:file-1]]",
                 "attachments": [

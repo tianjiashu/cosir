@@ -1,5 +1,4 @@
 import errno
-import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,15 +24,14 @@ def _valid_patch() -> str:
     )
 
 
-def test_invalid_diff_is_retryable_with_tool_specific_guidance(tmp_path: Path) -> None:
+def test_invalid_diff_reports_tool_specific_guidance(tmp_path: Path) -> None:
     observation = ApplyPatchTool().execute(_context(tmp_path), patch="not a diff")
 
     assert observation.status == "error"
-    assert "hint: this error can be retried" in observation.content
     assert "Git unified diff" in observation.content
-    # 解析失败的 reason 已统一为通用指引：具体诊断看 ``error``，不支持的操作改用对应文件工具
+    # 解析失败的建议已统一为通用指引：具体诊断在前半句，不支持的操作改用对应文件工具
     # （替代工具的名字由工具描述承载）。
-    assert "reported in error" in observation.content
+    assert "Correct the issue above" in observation.content
     assert "matching file tool" in observation.content
 
 
@@ -62,7 +60,7 @@ def test_success_returns_success_without_repeating_the_patch(monkeypatch, tmp_pa
     assert observation.display_data == {"kind": "file-changes"}
 
 
-def test_transient_apply_failure_is_retryable_after_regenerating_the_diff(
+def test_apply_failure_guides_regenerating_the_diff(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -71,15 +69,7 @@ def test_transient_apply_failure_is_retryable_after_regenerating_the_diff(
         lambda _operations, _resolver: [],
     )
 
-    # 瞬时故障必须按平台可复现的方式表达：Windows 走 winerror=32（ERROR_SHARING_VIOLATION，
-    # ``_is_patch_retryable_after_correction`` 只在该分支读 winerror），POSIX 走 EAGAIN。
-    # 用 4 参数 OSError 模拟 winerror 在 POSIX 上不会填充 winerror（实测为 None），该形状在
-    # POSIX 上无法命中任何瞬时分支，只会得到与本用例意图无关的失败。
-    transient_cause = (
-        OSError(0, "file is locked", None, 32)
-        if os.name == "nt"
-        else OSError(errno.EAGAIN, "file is locked")
-    )
+    transient_cause = OSError(errno.EAGAIN, "file is locked")
 
     def fail_apply(_operations, _resolver):
         try:
@@ -92,13 +82,11 @@ def test_transient_apply_failure_is_retryable_after_regenerating_the_diff(
     )
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
 
-    assert "hint: this error can be retried" in observation.content
-    assert observation.content.startswith("error: unified diff apply failed: file is locked\n")
+    assert observation.content.startswith("unified diff apply failed: file is locked. ")
     assert "new unified diff" in observation.content
-    assert "file is locked" not in observation.content.split("\nreason: ", 1)[-1]
 
 
-def test_partial_apply_failure_is_not_retryable(monkeypatch, tmp_path: Path) -> None:
+def test_partial_apply_failure_forbids_replaying_the_diff(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "app.tools.tool_handler.apply_patch_tool.validate_all",
         lambda _operations, _resolver: [],
@@ -116,10 +104,9 @@ def test_partial_apply_failure_is_not_retryable(monkeypatch, tmp_path: Path) -> 
     )
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
 
-    assert "hint: do not retry this tool call." in observation.content
-    assert observation.content.startswith("error: unified diff application stopped after partial changes\n")
+    assert observation.content.startswith("unified diff application stopped after partial changes. ")
     assert "do not replay this diff unchanged" in observation.content
-    assert "file is locked" not in observation.content.split("\nreason: ", 1)[-1]
+    assert "file is locked" not in observation.content
 
 
 def test_hunk_validation_failure_does_not_write_any_file(tmp_path: Path) -> None:
@@ -128,7 +115,6 @@ def test_hunk_validation_failure_does_not_write_any_file(tmp_path: Path) -> None
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
 
     assert observation.status == "error"
-    assert "hint: this error can be retried" in observation.content
     assert "no files were modified" in observation.content
     assert target.read_text(encoding="utf-8") == "current\n"
 

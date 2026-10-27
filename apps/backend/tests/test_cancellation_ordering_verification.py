@@ -59,7 +59,7 @@ from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.execute.tool_output_channel import BufferedProcessToolOutputChannel
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
-from app.models.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_batch_runner
 from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
@@ -279,9 +279,9 @@ def _projected_batch(*call_ids: str) -> ToolBatch:
 
 @pytest.fixture(autouse=True)
 def _clean_registry() -> Any:
-    tool_call_cancellation_registry.clear_run(_RUN_ID)
+    tool_call_cancellation_registry.clear_task(_TASK_ID)
     yield
-    tool_call_cancellation_registry.clear_run(_RUN_ID)
+    tool_call_cancellation_registry.clear_task(_TASK_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +350,7 @@ async def test_projection_ordering_kill_then_drain_then_project(
     timer = threading.Timer(
         5.0,
         tool_call_cancellation_registry.mark_cancelled,
-        args=(_RUN_ID, "call-cancel"),
+        args=(_TASK_ID, "call-cancel"),
     )
     started = time.monotonic()
     timer.start()
@@ -481,7 +481,7 @@ async def test_cancel_path_never_touches_shared_projection(
     timer = threading.Timer(
         0.3,
         tool_call_cancellation_registry.mark_cancelled,
-        args=(_RUN_ID, "call-cancel"),
+        args=(_TASK_ID, "call-cancel"),
     )
     timer.start()
     try:

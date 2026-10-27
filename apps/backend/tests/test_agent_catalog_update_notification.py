@@ -1,4 +1,4 @@
-"""子 Agent 目录变更的通知广播测试：命中的 Task 经 ``TaskActors.post`` 入外部队列。"""
+"""子 Agent 目录变更的通知广播测试：命中的 Task 经 ``task_runtime_spaces.enqueue`` 入外部队列。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.models.task_message import NoticeBody
+from app.core.workflow.inbox.task_message import NoticeBody
 from app.task_runtime.agent_catalog_change import AgentCatalogChange
 from app.task_runtime.broadcaster import runtime_notice_broadcaster
 from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
@@ -46,19 +46,15 @@ def clear_runtime_spaces():
 
 @pytest.fixture(autouse=True)
 def posted(monkeypatch) -> dict[int, list[NoticeBody]]:
-    """记录广播交给 ``broadcast`` 的通知，按 Task 归档。"""
+    """记录广播经 ``enqueue`` 写入的通知，按 Task 归档。"""
 
     by_task: dict[int, list[NoticeBody]] = {}
 
-    def broadcast(task_ids: list[int], notice: NoticeBody) -> None:
-        for task_id in task_ids:
-            by_task.setdefault(task_id, []).append(notice)
+    def enqueue(task_id: int, message, **_kw) -> int:
+        by_task.setdefault(task_id, []).append(message.body)
+        return 0
 
-    monkeypatch.setattr(
-        runtime_notice_broadcaster,
-        "get_task_actors",
-        lambda: SimpleNamespace(broadcast=broadcast),
-    )
+    monkeypatch.setattr(runtime_notice_broadcaster.task_runtime_spaces, "enqueue", enqueue)
     return by_task
 
 

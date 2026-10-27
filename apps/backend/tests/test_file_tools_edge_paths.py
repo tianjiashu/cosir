@@ -247,8 +247,7 @@ def test_move_missing_source_reports_english_error(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert "hint: do not retry this tool call." in observation.content
-    assert observation.content.startswith("error: move source is not an existing regular file\n")
+    assert observation.content.startswith("move source is not an existing regular file")
     assert observation.content.isascii()
 
 
@@ -263,7 +262,7 @@ def test_move_same_source_and_destination_is_rejected(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.content.startswith("error: source and destination resolve to the same file\n")
+    assert observation.content.startswith("source and destination resolve to the same file")
     assert source.read_bytes() == b"keep\n"
 
 
@@ -279,7 +278,7 @@ def test_move_existing_destination_is_rejected(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.content.startswith("error: move destination already exists\n")
+    assert observation.content.startswith("move destination already exists")
     assert (tmp_path / "d.txt").read_bytes() == b"d\n"
     assert source.exists()
 
@@ -295,7 +294,7 @@ def test_move_missing_destination_parent_is_rejected(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.content.startswith("error: move destination parent directory does not exist\n")
+    assert observation.content.startswith("move destination parent directory does not exist")
     assert not (tmp_path / "nested").exists()
     assert source.exists()
 

@@ -29,19 +29,15 @@ async def test_startup_failure_closes_initialized_runtime_resources(
 ) -> None:
     calls: list[str] = []
 
-    class _Executor:
-        async def close(self) -> None:
-            calls.append("executor_close")
+    class _Spaces:
+        async def aclose(self) -> None:
+            calls.append("spaces_aclose")
 
     class _Terminal:
         def shutdown(self) -> None:
             calls.append("terminal_shutdown")
 
-    monkeypatch.setattr(
-        lifespan_module,
-        "get_task_actors",
-        _CachedGetter(_Executor(), calls, "get_executor"),
-    )
+    monkeypatch.setattr(lifespan_module, "task_runtime_spaces", _Spaces())
     monkeypatch.setattr(
         lifespan_module,
         "get_terminal_session_service",
@@ -56,8 +52,7 @@ async def test_startup_failure_closes_initialized_runtime_resources(
     await lifespan_module._cleanup_startup_failure()
 
     assert calls == [
-        "get_executor",
-        "executor_close",
+        "spaces_aclose",
         "get_terminal",
         "terminal_shutdown",
         "close_dependencies",

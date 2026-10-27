@@ -12,7 +12,7 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallStatusChangedEvent,
 )
-from app.models.tool_batch import ToolBatch
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import (
     StreamingPartStateMachine,
 )

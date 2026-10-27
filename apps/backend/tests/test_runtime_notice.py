@@ -5,35 +5,33 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.workflow.inbox.run_mailbox import RunMailbox
-from app.models.task_message import NoticeBody, TaskMessage
+from app.core.workflow.inbox.task_message import NoticeBody, TaskMessage
 
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])
 async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> None:
     """工具准入的三条分支都向 mailbox 投递领域通知，不在装配方构造模型消息。"""
-    from app.core import run_driver
+    from app.core.workflow.execution_state import runtime_context as runtime_context_module
 
     space = SimpleNamespace(task_tool_schemas=({"name": "read_file"}, {"name": "write_file"}))
-    monkeypatch.setattr(run_driver.task_runtime_spaces, "get_or_create", lambda _id: space)
     monkeypatch.setattr(
-        run_driver, "RuntimeContext", lambda **kwargs: SimpleNamespace(**kwargs)
-    )
-    monkeypatch.setattr(
-        run_driver, "get_conversation_event_projector", lambda: SimpleNamespace(process=print)
+        runtime_context_module.task_runtime_spaces, "get_or_create", lambda _id: space
     )
     agent = SimpleNamespace()
     mailbox = RunMailbox()
-    result = run_driver._build_context(
-        workspace=SimpleNamespace(id=13, root_path="/workspace"),
-        task=SimpleNamespace(id=1),
-        run=SimpleNamespace(id=7, options=SimpleNamespace(ban_tools=banned)),
-        agent=agent,
-        mailbox=mailbox,
+    result = runtime_context_module.RuntimeContext.for_run(
+        SimpleNamespace(id=7, options=SimpleNamespace(ban_tools=banned)),
+        SimpleNamespace(id=1),
+        SimpleNamespace(id=13, root_path="/workspace"),
+        agent,
+        mailbox,
+        event_sink=print,
     )
     assert result.agent is agent
     assert result.mailbox is mailbox
     assert result.allows_tools == {"read_file", "write_file"} - set(banned)
-    [notice] = mailbox.drain()
+    notice = mailbox.pop()
+    assert mailbox.isEmpty()
     assert isinstance(notice.body, NoticeBody)
     assert notice.id is None
     assert notice.body.notice_kind == "tool_availability"
@@ -50,8 +48,11 @@ def test_mailbox_dedupes_persisted_rows_but_keeps_every_run_notice() -> None:
     mailbox.post(transient)
     mailbox.post(transient)
 
-    assert mailbox.drain() == [persisted, transient, transient]
-    assert mailbox.drain() == []
-    # 取光后同一行再次投递仍被忽略：它已在本次执行中处理过。
+    assert [mailbox.pop() for _ in range(3)] == [persisted, transient, transient]
+    assert mailbox.isEmpty()
+    # 取光后同一行再次投递仍被忽略：它已在本次执行中处理过；新执行开始时 reset 才重新接收。
     mailbox.post(persisted)
-    assert mailbox.drain() == []
+    assert mailbox.isEmpty()
+    mailbox.reset()
+    mailbox.post(persisted)
+    assert mailbox.pop() == persisted

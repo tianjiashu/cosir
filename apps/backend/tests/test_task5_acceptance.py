@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import inspect, update
-from sqlalchemy.orm import sessionmaker
 
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -22,7 +20,6 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
-from app.core.context.context_store import ContextStore
 from app.core.conversation_run_ledger import ConversationRunLedger
 from app.core.events import AssistantTextDeltaEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
@@ -31,19 +28,11 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
-from app.models.react_execution_state import ReactExecutionState
-from app.service.conversation_run.conversation_task_context_service import (
-    ConversationTaskContextService,
-)
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.service.recover_service import RecoverService
-from app.storage.crud.conversation_run_crud import ConversationRunCrud
-from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-from app.storage.crud.task_crud import TaskCrud
-from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.store_engines import APP_MODELS, initialize_app_schema
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 _USAGE = {
     "input_tokens": 10,
@@ -60,83 +49,6 @@ _TOOL_WIRE_STATUS: dict[str, ToolCallEventStatus] = {
     "error": "failed",
     "cancelled": "cancelled",
 }
-
-
-def _bind(crud_type: type[object], factory: sessionmaker) -> object:
-    """Bind a real CRUD implementation to the acceptance fixture's SQLite factory."""
-
-    crud = crud_type.__new__(crud_type)
-    crud._session_factory = factory  # type: ignore[attr-defined]
-    return crud
-
-
-@pytest.fixture
-def canonical_store(tmp_path: Path, monkeypatch):
-    """Create a fresh target schema and real CRUD services over a file-backed SQLite database."""
-
-    engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
-    initialize_app_schema(engine)
-    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    monkeypatch.setattr(
-        "app.core.task_message_queue.main_session_factory", lambda: factory
-    )
-    workspaces = _bind(WorkspaceCrud, factory)
-    tasks = _bind(TaskCrud, factory)
-    runs = _bind(ConversationRunCrud, factory)
-    contexts = _bind(ConversationTaskContextCrud, factory)
-    context_store = ContextStore.__new__(ContextStore)
-    context_store._crud = contexts
-    context_service = ConversationTaskContextService.__new__(ConversationTaskContextService)
-    context_service._crud = contexts
-    context_service._store = context_store
-    workspace = workspaces.create("acceptance", str(tmp_path))
-    task = tasks.create(workspace.id, "canonical conversation_run")
-    # 快照重建按工具名查 display 定义；本文件只验证状态契约，给出最小合法 presentation
-    # （``validate_snapshot`` 要求它是对象），不依赖工具系统装配。
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder,
-        "get_tool_display",
-        staticmethod(lambda _name: {"verb": "Read"}),
-    )
-    ConversationTaskStateService.clear_process_state()
-    # ConversationTaskStateService 现在从 depends 取 CRUD 单例；这里把三个 getter 指向本夹具的临时库
-    # CRUD，使 state 服务与 store 中的 CRUD 读写同一份临时数据（保留测试隔离，不污染全局库）。
-    monkeypatch.setattr(
-        "app.service.conversation_run.user_input_service.get_task_crud",
-        lambda: tasks,
-    )
-    monkeypatch.setattr("app.service.depends.get_task_crud", lambda: tasks)
-    monkeypatch.setattr("app.service.depends.get_conversation_run_crud", lambda: runs)
-    monkeypatch.setattr("app.service.depends.get_conversation_task_context_crud", lambda: contexts)
-    monkeypatch.setattr(
-        "app.task_runtime.task_runtime_space.get_task_service",
-        lambda: SimpleNamespace(get_task=tasks.get),
-    )
-    monkeypatch.setattr(
-        "app.task_runtime.task_runtime_space.get_workspace_service",
-        lambda: SimpleNamespace(get_workspace=workspaces.get),
-    )
-    state = ConversationTaskStateService()
-    task_runtime_spaces.close()
-    store = SimpleNamespace(
-        engine=engine,
-        factory=factory,
-        workspaces=workspaces,
-        tasks=tasks,
-        runs=runs,
-        contexts=contexts,
-        context=context_store,
-        context_service=context_service,
-        state=state,
-        workspace=workspace,
-        task=task,
-    )
-    try:
-        yield store
-    finally:
-        task_runtime_spaces.close()
-        ConversationTaskStateService.clear_process_state()
-        engine.dispose()
 
 
 def _create_run(store, *, status: str = "running", current: bool = False):
@@ -362,7 +274,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
             raise RuntimeError("SSE failed after commit")
 
     monkeypatch.setattr(
-        "app.core.conversation_run_ledger.service_depends.get_conversation_event_projector",
+        "app.core.conversation_run_ledger.get_conversation_event_projector",
         lambda: FailingProjector(),
     )
     stats = ConversationRunUsageStats(**_USAGE)

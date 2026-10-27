@@ -31,8 +31,8 @@ from pathlib import Path
 import pytest
 
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.service.agent_team.registry import AgentTeamConfigurationRegistry
+from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
+from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
 from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType

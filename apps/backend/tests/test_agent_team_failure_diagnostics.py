@@ -3,7 +3,7 @@
 import json
 from types import SimpleNamespace
 
-from app.service.agent_team.coordinator import AgentTeamCoordinator
+from app.core.tool.handler.agent_team.coordinator import AgentTeamCoordinator
 from app.models.agent_team.state.agent_team_run_state import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
@@ -21,7 +21,7 @@ from app.models.message_metadata import ToolMessageMetadata
 from app.service.agent_team import agent_team_execution_timeline
 from app.service.agent_team import agent_team_run_service as run_service_module
 from app.service.agent_team.agent_team_execution_timeline import project_node_visits
-from app.service.agent_team.agent_team_run_archive_service import AgentTeamRunArchiveService
+from app.core.tool.handler.agent_team.agent_team_run_archive_service import AgentTeamRunArchiveService
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 
 
@@ -56,7 +56,6 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
             "contextWindowTotal": None,
             "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
         },
-        "error": None,
     }
     event = ToolCallStatusChangedEvent(
         task_id=2,
@@ -298,20 +297,20 @@ def test_invalid_node_output_is_not_an_unhandled_exception() -> None:
     assert coordinator.struct_out_put("not json") is None
 
 
-def test_failed_background_team_result_carries_run_locator_and_archive_hint() -> None:
-    """后台 Team 失败时，回投给主 Agent 的结果保留 TeamRun 定位、状态与档案读取指引。"""
-    from app.service.agent_team.agent_team_decision_service import AgentTeamDecisionService
+def test_failed_team_result_carries_run_locator_and_archive_hint(monkeypatch) -> None:
+    """Team 失败时，返回给主 Agent 的工具结果保留 TeamRun 定位、状态与档案读取指引。"""
+    from app.core.tool.handler.agent_team import agent_team_result
 
-    row = SimpleNamespace(id=17, status="failed", end_reason="node_run_failed")
-    service = AgentTeamDecisionService.__new__(AgentTeamDecisionService)
-    service._archives = SimpleNamespace(
-        existing_archive_path=lambda _id: ".cosir/agent-team-runs/17.json"
+    monkeypatch.setattr(
+        agent_team_result,
+        "AgentTeamRunArchiveService",
+        lambda: SimpleNamespace(existing_archive_path=lambda _id: ".cosir/agent-team-runs/17.json"),
     )
+    row = SimpleNamespace(id=17, status="failed", end_reason="node_run_failed")
 
-    body = service._result_body(row)
+    payload = agent_team_result.team_result_payload(row)
 
-    assert (body.job, body.job_id, body.status) == ("agent_team", 17, "failed")
-    payload = json.loads(body.content)
+    assert (payload["team_run_id"], payload["status"]) == (17, "failed")
     assert payload["end_reason"] == "node_run_failed"
     assert payload["trace_file"] == ".cosir/agent-team-runs/17.json"
     assert "read_file" in payload["read_instructions"]

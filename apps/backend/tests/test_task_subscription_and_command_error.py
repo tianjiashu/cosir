@@ -1,8 +1,8 @@
-"""Task 级长订阅（attach）与顶层命令错误的 snapshot 契约。
+"""Task 级长订阅（attach）的 snapshot 契约。
 
 订阅跟随 Task 而不是 Run：Task 没有 Run 时也推 full 帧并保持连接；Run 完成、新 Run 开始、取消或
-挂起都不结束连接；只有客户端断开、``resync_required`` 或 Task 删除才结束。顶层 ``error`` 只由
-``set_command_error`` 写入 / 清空，Run 状态事件不会写它。
+挂起都不结束连接；只有客户端断开、``resync_required`` 或 Task 删除才结束。命令被拒由 HTTP 同步
+返回，snapshot 没有顶层 ``error``。
 """
 
 from __future__ import annotations
@@ -128,89 +128,6 @@ def _statuses(frames: list[TransportFrame]) -> list[object]:
 
 
 # ---------------------------------------------------------------------------
-# 顶层命令错误（A6：只由 set_command_error 写入 / 清空）
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_set_command_error_assigns_new_seq_per_rejection_and_clears() -> None:
-    """每次拒绝都分配新的 ``seq`` 并发帧（原因相同也发），前端靠它认出「又被拒了一次」；
-    清空只在有错误时发帧。"""
-    service = _state_service()
-    collector = _Collector(_stream_service(service))
-    await collector.wait_frames(1)
-    error = {"code": "TASK_STATE_CONFLICT", "message": "当前状态不允许执行该操作"}
-
-    service.set_command_error(_TASK_ID, error)
-    await collector.wait_frames(2)
-    first = service.get_state(_TASK_ID)["error"]
-    assert first is not None
-    assert {k: v for k, v in first.items() if k != "seq"} == error
-    assert collector.frames[1].mutations[0].path == ("error",)
-    assert collector.frames[1].mutations[0].value == first
-
-    # 同样的原因再被拒一次：值只差 seq，照样发帧。
-    service.set_command_error(_TASK_ID, dict(error))
-    await collector.wait_frames(3)
-    second = service.get_state(_TASK_ID)["error"]
-    assert second is not None and second["seq"] > first["seq"]
-
-    service.set_command_error(_TASK_ID, None)
-    await collector.wait_frames(4)
-    assert service.get_state(_TASK_ID)["error"] is None
-    assert collector.frames[3].mutations[0].value is None
-
-    # 清空后再清空不发帧。
-    service.set_command_error(_TASK_ID, None)
-    await _settle()
-    assert len(collector.frames) == 4
-
-    collector.cancel()
-    await asyncio.wait_for(collector.task, 1)
-
-
-def test_run_status_events_keep_command_error() -> None:
-    """Run 终态（含失败）只写 activity / outcome，不覆盖或清空命令错误。"""
-
-    service = _state_service()
-    error = {"code": "RESUME_REJECTED", "message": "当前没有可恢复的 Run"}
-    service.set_command_error(_TASK_ID, error)
-
-    service.apply_planned(RunInitializedEvent(task_id=_TASK_ID, run_id=1))
-    service.apply_planned(
-        RunStatusChangedEvent(
-            task_id=_TASK_ID, run_id=1, status=ConversationRunStatus.RUNNING
-        )
-    )
-    service.apply_planned(
-        RunStatusChangedEvent(
-            task_id=_TASK_ID,
-            run_id=1,
-            status=ConversationRunStatus.FAILED,
-            end_reason="runtime_failed",
-        )
-    )
-
-    state = service.get_state(_TASK_ID)
-    assert state["activity"] is not None
-    assert state["activity"]["status"] == "failed"
-    assert state["error"] is not None
-    assert (state["error"]["code"], state["error"]["message"]) == (error["code"], error["message"])
-
-
-def test_rebuild_keeps_command_error() -> None:
-    """命令错误不是 canonical 事实：强制重建（新开 Run、编辑重跑）要把它原样带入新副本，
-    只有下一次成功的用户命令才能清空它。"""
-
-    service = _state_service()
-    service.set_command_error(_TASK_ID, {"code": "RUN_NOT_RESUMABLE", "message": "不可恢复"})
-    before = service.get_state(_TASK_ID)["error"]
-
-    assert service.rebuild_state(_TASK_ID)["error"] == before
-    assert service.get_state(_TASK_ID)["error"] == before
-
-
-# ---------------------------------------------------------------------------
 # Task 级长订阅（C1 / C2）
 # ---------------------------------------------------------------------------
 
@@ -225,7 +142,6 @@ async def test_attach_without_run_pushes_full_frame_and_stays_open() -> None:
     assert first.state == {
         "messages": [],
         "activity": None,
-        "error": None,
         "queued_messages": [],
     }
     await _settle()
@@ -325,7 +241,6 @@ async def test_attach_envelopes_encode_task_view_frames_without_run_fields() -> 
     assert first["state"] == {
         "messages": [],
         "activity": None,
-        "error": None,
         "queued_messages": [],
     }
     assert set(first) == {"task_id", "kind", "mutations", "resync_reason", "state"}

@@ -9,7 +9,7 @@
 本文件只消费生产代码（``app/**`` 只读），锁定三条行为契约：
 
 1. 节点运行时配置（``agent_team.node_profile.build_node_profile`` 合成节点定义，
-   ``run_driver._runtime_config`` 按 Run 合成 ``AgentRuntimeConfig``）必须带**已物化**的
+   ``AgentRuntimeConfig.for_run`` 按 Run 合成）必须带**已物化**的
    模型运行设置（连接与能力字段来自 ``run.model_config_id`` 指向的模型配置），并保留节点快照的
    用户偏好、采用节点快照的 ``structured_output``；
 2. 节点快照不是连接字段的来源：快照里出现的任何连接字段都不得影响最终执行 profile；
@@ -27,21 +27,21 @@ from unittest.mock import patch
 import pytest
 
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.core.tool.handler.agent_team.node_goal import AgentTeamNodeGoal
-from app.service.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY
+from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY
 from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
+from app.core.agents import agent_runtime_config as runtime_config_module
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.model_config_record import ModelConfigRecord
-from app.service.agent_team import agent_team_preparation_service as prep_module
-from app.service.agent_team.agent_team_preparation_service import (
+from app.core.tool.handler.agent_team import agent_team_preparation_service as prep_module
+from app.core.tool.handler.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationService,
 )
-from app.core import run_driver
 from app.service.depends import get_model_config_service
 
 # --------------------------------------------------------------------------- #
@@ -139,12 +139,12 @@ def _node_run_profile(
     node_runtime: AgentTeamRunRuntime,
     node_run: ConversationRunRecord,
 ) -> AgentRuntimeConfig:
-    """生产链路：run_driver 从节点 Task 的冻结快照与注册表身份合成定义，再按节点 Run 物化。"""
+    """生产链路：工厂从节点 Task 的冻结快照与注册表身份合成定义，再按节点 Run 物化。"""
 
     task = SimpleNamespace(extra={NODE_PROFILE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json")})
     registry = SimpleNamespace(resolve=lambda *_args: registry_profile)
-    with patch.object(run_driver, "get_agent_registry", lambda: registry):
-        return run_driver._runtime_config(node_run, task, SimpleNamespace(root_path=""))
+    with patch.object(runtime_config_module, "get_agent_registry", lambda: registry):
+        return AgentRuntimeConfig.for_run(node_run, task, SimpleNamespace(root_path=""))
 
 
 def _create_model_config(*, model_name: str, base_url: str) -> int:

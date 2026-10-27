@@ -15,7 +15,7 @@ from app.assistant_transport.request.task_command_request import _ordered_displa
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
 )
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import RunTransition
 from app.service.recover_service import RecoverService
 from app.service.depends import get_workspace_service
@@ -26,7 +26,7 @@ def _snapshot(
     run_id: int | None = None, status: str = "running", end_reason: str | None = None
 ) -> dict[str, object]:
     if run_id is None:
-        return {"messages": [], "activity": None, "error": None}
+        return {"messages": [], "activity": None}
     return {
         "messages": [
             {"id": "1", "role": "user", "parts": [], "runId": run_id, "outcome": None}
@@ -40,7 +40,6 @@ def _snapshot(
             "contextWindowTotal": None,
             "launch": None,
         },
-        "error": None,
     }
 
 
@@ -136,8 +135,13 @@ def _attach_service(state: dict[str, object]) -> TransportAssistantService:
     async def _stream_envelopes(*_args: object, **_kwargs: object):
         yield "data: {}\n\n"
 
+    class _TaskService:
+        def get_task(self, _task_id: int) -> object:
+            return object()
+
     service = TransportAssistantService.__new__(TransportAssistantService)
-    service._snapshots = _SnapshotService()
+    service._states = _SnapshotService()
+    service._tasks = _TaskService()
     service._stream = SimpleNamespace(stream_envelopes=_stream_envelopes)
     return service
 
@@ -259,18 +263,14 @@ def test_state_route_has_one_read_method() -> None:
 async def test_state_endpoint_returns_task_view_snapshot() -> None:
     snapshot = _snapshot()
 
-    class _TaskService:
-        def get_task(self, _task_id: int) -> object:
-            return object()
-
     class _TransportService:
         def get_state(self, _task_id: int) -> dict[str, object]:
             return snapshot
 
-    result = await assistant_transport_state(1, _TaskService(), _TransportService())
+    result = await assistant_transport_state(1, _TransportService())
 
     assert result == snapshot
-    assert set(result) == {"messages", "activity", "error"}
+    assert set(result) == {"messages", "activity"}
 
 
 async def test_task_gate_waits_without_blocking_event_loop(tmp_path: Path) -> None:

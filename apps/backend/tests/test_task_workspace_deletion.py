@@ -303,13 +303,23 @@ def test_workspace_delete_serializes_task_creation(
 
 
 class _FakeTaskActors:
-    """记录删除前停止的 Task 集合；删除端点先停执行、再删事实。"""
+    """记录删除前停止的 Task 集合；删除端点先停 actor、再删事实。"""
 
     def __init__(self) -> None:
         self.stopped: list[set[int]] = []
 
-    async def stop_tasks(self, task_ids: set[int]) -> None:
+    async def stop(self, task_ids: set[int]) -> None:
         self.stopped.append(set(task_ids))
+
+
+@pytest.fixture
+def stopped_actors(monkeypatch) -> _FakeTaskActors:
+    from app.api import tasks_api, workspaces_api
+
+    session = _FakeTaskActors()
+    monkeypatch.setattr(tasks_api.task_runtime_spaces, "stop", session.stop)
+    monkeypatch.setattr(workspaces_api.task_runtime_spaces, "stop", session.stop)
+    return session
 
 
 class _FakeTaskTree:
@@ -323,7 +333,7 @@ class _FakeTaskTree:
 
 
 @pytest.mark.asyncio
-async def test_delete_endpoints_return_404_and_busy_409(storage) -> None:
+async def test_delete_endpoints_return_404_and_busy_409(storage, stopped_actors) -> None:
     class MissingTask(_FakeTaskTree):
         def delete_task(self, _task_id: int) -> None:
             raise KeyError(_task_id)
@@ -332,11 +342,11 @@ async def test_delete_endpoints_return_404_and_busy_409(storage) -> None:
         def delete_workspace(self, _workspace_id: int) -> None:
             raise KeyError(_workspace_id)
 
-    session = _FakeTaskActors()
+    session = stopped_actors
     with pytest.raises(HTTPException) as task_404:
-        await delete_task_endpoint(1, MissingTask(), session, None)
+        await delete_task_endpoint(1, MissingTask(), None)
     with pytest.raises(HTTPException) as workspace_404:
-        await delete_workspace_endpoint(1, MissingWorkspace(), _FakeTaskTree(), session)
+        await delete_workspace_endpoint(1, MissingWorkspace(), _FakeTaskTree())
     assert task_404.value.status_code == 404
     assert workspace_404.value.status_code == 404
 
@@ -349,9 +359,9 @@ async def test_delete_endpoints_return_404_and_busy_409(storage) -> None:
             raise DeletionBusyError("workspace", _workspace_id)
 
     with pytest.raises(HTTPException) as task_409:
-        await delete_task_endpoint(1, BusyTask(), session, None)
+        await delete_task_endpoint(1, BusyTask(), None)
     with pytest.raises(HTTPException) as workspace_409:
-        await delete_workspace_endpoint(1, BusyWorkspace(), _FakeTaskTree(), session)
+        await delete_workspace_endpoint(1, BusyWorkspace(), _FakeTaskTree())
     assert task_409.value.status_code == 409
     assert task_409.value.detail["code"] == "TASK_BUSY"
     assert workspace_409.value.status_code == 409
@@ -361,7 +371,9 @@ async def test_delete_endpoints_return_404_and_busy_409(storage) -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_task_endpoint_routes_creation_marker_to_guarded_cleanup(storage) -> None:
+async def test_delete_task_endpoint_routes_creation_marker_to_guarded_cleanup(
+    storage, stopped_actors
+) -> None:
     calls: list[tuple[int, str]] = []
 
     class ProvisionalTask(_FakeTaskTree):
@@ -371,8 +383,8 @@ async def test_delete_task_endpoint_routes_creation_marker_to_guarded_cleanup(st
         def delete_task(self, _task_id: int) -> None:
             raise AssertionError("provisional cleanup must not use ordinary deletion")
 
-    session = _FakeTaskActors()
-    result = await delete_task_endpoint(7, ProvisionalTask(), session, "creation-7")
+    session = stopped_actors
+    result = await delete_task_endpoint(7, ProvisionalTask(), "creation-7")
 
     assert result.task_id == 7
     assert calls == [(7, "creation-7")]

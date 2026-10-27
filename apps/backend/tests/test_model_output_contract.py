@@ -11,7 +11,7 @@ from openai.types.chat import ChatCompletion
 
 import app.core.workflow.node_helper.streaming_part_state_machine as streaming_module
 from app.core.llm_provider.message_codec import assistant_message
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
 from app.core.workflow.nodes import model_node as model_module
 from app.models.enums.conversation_run_status import RunTransition
@@ -217,7 +217,7 @@ def test_any_finish_reason_without_tool_calls_completes_run(
         "end_reason": finish_reason,
     }
     assert [item["role"] for item in harness.messages] == ["assistant"]
-    assert harness.runtime_config.mailbox.drain() == []
+    assert harness.runtime_config.mailbox.isEmpty()
 
 
 def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) -> None:
@@ -236,7 +236,8 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     # 展示行保留，但没有进入下一步模型的 canonical context。
     assert harness.messages == []
     assert [include for _, include in harness.saved_responses] == [False]
-    [notice] = harness.runtime_config.mailbox.drain()
+    notice = harness.runtime_config.mailbox.pop()
+    assert harness.runtime_config.mailbox.isEmpty()
     assert notice.id is None
     assert notice.body.notice_kind == "model_continuation"
 
@@ -271,50 +272,6 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
     assert result["next_node"] is ReactRoute.END
     assert harness.completed is True
 
-
-def test_runtime_notice_is_persisted_as_tagged_user_message(monkeypatch: Any) -> None:
-    """prepare_input 把 mailbox 里的通知合成一条带标签的 user 消息经 context 持久化，参与紧随其后
-    的模型请求，不改写用户原文。"""
-    from contextlib import nullcontext
-
-    from app.core.workflow.nodes import prepare_input_node as prepare_module
-    from app.models.task_message import NoticeBody, TaskMessage
-    from tests.sdk_fixtures import sdk_completion
-
-    base = {"role": "user", "content": "你好"}
-    harness = _ModelHarness(sdk_completion(content="完成", finish_reason="stop"))
-    harness.runtime_context.load_message = lambda: [base, *harness.messages]
-    requested: list[Any] = []
-    harness.runtime_config.mailbox.post(
-        TaskMessage.of(NoticeBody(content="环境已更新", notice_kind="test"))
-    )
-    # Run 内通知没有外部队列行，确认集合为空；事务只是写入边界，不触碰真实数据库。
-    monkeypatch.setattr(
-        prepare_module,
-        "main_session_factory",
-        lambda: SimpleNamespace(begin=lambda: nullcontext(None)),
-    )
-
-    async def stream(messages: list[Any], **kwargs: Any) -> AsyncIterator[ChunkEvent]:
-        requested.extend(messages)
-        async for chunk in harness._astream(messages, **kwargs):
-            yield chunk
-
-    harness.runtime_config.model.stream = stream
-    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
-    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
-    monkeypatch.setattr(prepare_module, "_runtime_context", lambda: harness.runtime_config)
-    monkeypatch.setattr(prepare_module, "_message_context", lambda: harness.runtime_context)
-    _patch_model_runtime(monkeypatch, harness)
-    prepared = asyncio.run(prepare_module._prepare_input_node(_state()))
-    assert prepared["next_node"] is ReactRoute.MODEL
-    result = asyncio.run(model_module._model_node(_state()))
-    assert result["next_node"] is ReactRoute.END
-    assert requested[-1]["role"] == "user"
-    assert requested[-1]["content"].startswith("<system_notice>")
-    assert requested[-1]["content"].endswith("\n环境已更新\n</system_notice>")
-    assert harness.messages[0] == requested[-1]
-    assert base["content"] == "你好"
 
 
 @pytest.mark.parametrize("arguments", ['{"path":', "[1]", "null", '{"n":NaN}'])
@@ -371,4 +328,4 @@ def test_tool_calls_take_priority_over_finish_reason(monkeypatch, finish_reason)
     assert result["next_node"] is ReactRoute.TOOLS
     assert harness.messages[-1]["tool_calls"][0]["id"] == "call"
     assert [included for _, included in harness.saved_responses] == [False, True]
-    assert harness.runtime_config.mailbox.drain() == []
+    assert harness.runtime_config.mailbox.isEmpty()

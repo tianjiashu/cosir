@@ -155,14 +155,14 @@ def test_unknown_tool_returns_denial_observation(tmp_path: Path) -> None:
     assert observation.status == "error"
     assert observation.tool_call_id == "call-1"
     assert "unknown tool" in observation.content
-    assert "\nreason: " in observation.content  # 面向模型的富文本必填
+    assert "not registered" in observation.content
 
 
 def test_profile_denied_tool(tmp_path: Path) -> None:
     """Agent profile 不允许的工具应被权限门禁拒绝，且不可重试。
 
     门禁刻意不复述策略来源（哪条 profile / 谁关掉的），也不把可用工具集回灌给模型——模型
-    本就持有工具声明，回灌只会放大提示面——故 ``reason`` 只回传「本轮禁用、停止调用」。
+    本就持有工具声明，回灌只会放大提示面——故 ``content`` 只回传「本轮禁用、停止调用」。
     """
 
     executor = _make_executor(tmp_path)
@@ -174,9 +174,8 @@ def test_profile_denied_tool(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.content.startswith("error: tool is not allowed: read_file\n")
-    assert "hint: do not retry this tool call." in observation.content
-    assert "\nreason: " in observation.content  # 面向模型的富文本必填
+    assert observation.content.startswith("tool is not allowed: read_file")
+    assert "disabled for the current run" in observation.content
     assert "other_tool" not in observation.content
 
 
@@ -206,8 +205,7 @@ def test_malformed_arguments_rejected_before_validation(tmp_path: Path, argument
     )
 
     assert observation.status == "error"
-    assert observation.content.startswith("error: Invalid tool arguments\n")
-    assert "hint: this error can be retried" in observation.content
+    assert observation.content.startswith("Invalid tool arguments")
     assert observation.tool_call_id == "call-malformed"
 
 

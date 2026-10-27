@@ -32,7 +32,6 @@ def test_delete_rejects_invalid_path(tmp_path: Path, path: str) -> None:
     observation = DeleteTool().execute(_context(tmp_path), path=path)
 
     assert observation.status == "error"
-    assert "hint: do not retry this tool call." in observation.content
     assert observation.content.isascii()
 
 
@@ -41,7 +40,7 @@ def test_delete_missing_file_reports_english_error(tmp_path: Path) -> None:
     observation = DeleteTool().execute(_context(tmp_path), path="nope.txt")
 
     assert observation.status == "error"
-    assert observation.content.startswith("error: delete target is not an existing regular file\n")
+    assert observation.content.startswith("delete target is not an existing regular file. ")
     assert observation.content.isascii()
 
 
@@ -61,7 +60,7 @@ def test_delete_honours_run_cancellation(tmp_path: Path) -> None:
     assert target.exists()
 
 
-# When ``unlink`` fails, the failure must be normalised into a retryable English
+# When ``unlink`` fails, the failure must be normalised into an English
 # ``tool_error`` and the file must remain readable.
 def test_delete_unlink_oserror_is_normalized(tmp_path: Path, monkeypatch) -> None:
     target = tmp_path / "fail.txt"
@@ -78,15 +77,14 @@ def test_delete_unlink_oserror_is_normalized(tmp_path: Path, monkeypatch) -> Non
     observation = DeleteTool().execute(_context(tmp_path), path="fail.txt")
 
     assert observation.status == "error"
-    assert "hint: this error can be retried" in observation.content
-    assert observation.content.startswith("error: could not delete the target file: ")
+    assert observation.content.startswith("could not delete the target file: ")
     assert observation.content.isascii()
     assert target.read_bytes() == b"data\n"
 
 
 # If the resolved target is swapped out between the pre-check and the mutation
 # (destination no longer resolves to the same file), the tool must refuse and report
-# the deterministic, non-retryable error rather than deleting the wrong entity.
+# the deterministic error rather than deleting the wrong entity.
 def test_delete_refuses_target_changed_before_mutation(tmp_path: Path, monkeypatch) -> None:
     import app.tools.tool_handler.delete_tool as delete_module
 
@@ -111,8 +109,7 @@ def test_delete_refuses_target_changed_before_mutation(tmp_path: Path, monkeypat
     observation = DeleteTool().execute(_context(tmp_path), path="swap.txt")
 
     assert observation.status == "error"
-    assert "hint: do not retry this tool call." in observation.content
-    assert observation.content.startswith("error: delete target changed before mutation\n")
+    assert observation.content.startswith("delete target changed before mutation. ")
     assert observation.content.isascii()
     # Neither file was removed.
     assert target.exists()

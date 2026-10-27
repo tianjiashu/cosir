@@ -1,6 +1,6 @@
 """工具观察转模型可见 tool 消息的最小契约。
 
-失败 / 取消文本由工厂（``tool_error`` / ``tool_cancelled``）唯一拼装进 ``content``，
+失败文本由调用点直接写进 ``tool_error`` 的 ``content``，取消文本由 ``tool_cancelled`` 拼装，
 投影层只把 ``content`` 原样转交模型，空内容时回落为 ``status``。
 """
 
@@ -32,52 +32,16 @@ def test_success_message_only_contains_output_or_success_fallback() -> None:
     assert empty_message.get("content") == "success"
 
 
-def test_retryable_error_factory_builds_text_and_projection_passes_it_through() -> None:
-    observation = tool_error(
-        "web_search",
-        "provider unavailable",
-        "retry after a short delay",
-        retryable=True,
-        tool_call_id="call-2",
-    )
-    expected = (
-        "error: provider unavailable\n"
-        "hint: this error can be retried; decide from the context whether "
-        "retrying is appropriate.\n"
-        "reason: retry after a short delay"
-    )
+def test_error_factory_keeps_content_and_projection_passes_it_through() -> None:
+    content = "provider unavailable. Retry after a short delay."
+    observation = tool_error("web_search", content, tool_call_id="call-2")
 
-    # 重试信号只由 hint 行承载，不单独成行重复发送给模型。
-    assert observation.content == expected
+    # 工厂不再套 error/hint/reason 模板，调用点写好的文本原样交给模型。
+    assert observation.content == content
     message = _to_message(observation)
-    assert message.get("content") == expected
+    assert message.get("content") == content
     assert message.get("tool_call_id") == "call-2"
     assert "status" not in message
-
-
-def test_non_retryable_error_factory_emits_do_not_retry_hint() -> None:
-    observation = tool_error(
-        "apply_patch",
-        "invalid patch_write",
-        "fix the patch_write format before calling again",
-        retryable=False,
-    )
-    expected = (
-        "error: invalid patch_write\n"
-        "hint: do not retry this tool call.\n"
-        "reason: fix the patch_write format before calling again"
-    )
-
-    assert observation.content == expected
-    assert _to_message(observation).get("content") == expected
-
-
-def test_error_factory_omits_blank_reason_and_falls_back_on_blank_error() -> None:
-    observation = tool_error("apply_patch", "   ", "  ")
-
-    assert observation.content == (
-        "error: the tool call failed\nhint: do not retry this tool call."
-    )
 
 
 def test_projection_passes_raw_error_content_through_unchanged() -> None:

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,26 +17,26 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from app.service.agent_team import registry as team_registry_module
-from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.core.tool.handler.agent_team.node_goal import AgentTeamNodeGoal
-from app.service.agent_team.registry import AgentTeamConfigurationRegistry
-from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_tool_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
+from app.core.tool.handler.agent_team.args.agent_team_args import AgentTeamArgs
+from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
+from app.core.tool.handler.agent_team_run import AgentTeamRunTool, build_agent_team_run_definition
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.tool_names import TOOL_AGENT_TEAM
 from app.core.tool.tool_grouping import TOOL_GROUP_AGENT_TEAM
-from app.core.tool.handler.agent_team_run import AgentTeamRunTool, build_agent_team_run_definition
-from app.core.tool.handler.agent_team.agent_team_args import AgentTeamArgs
 from app.core.tool.tool_registry import ToolRegistry
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.model_config_record import ModelConfigRecord
-from app.service.agent_team import agent_team_preparation_service as prep_module
-from app.service.agent_team.agent_team_preparation_service import (
+from app.core.tool.handler.agent_team import agent_team_preparation_service as prep_module
+from app.service.configuration import agent_team_configuration_registry as team_registry_module
+from app.core.tool.handler.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationService,
 )
+from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
+from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
 
 # --------------------------------------------------------------------------- #
 # 夹具与构造助手
@@ -113,6 +114,7 @@ def _context() -> ToolExecutionContext:
         workspace_root=Path("C:/ws-root"),
         run_id=2,
         agent=_parent_run_profile(),
+        tool_call_id="call-team",
     )
 
 
@@ -310,12 +312,8 @@ def test_assembled_tool_registry_exposes_identical_agent_team_definition(
 # --------------------------------------------------------------------------- #
 
 
-def test_prepare_branch_reports_missing_team_as_non_retryable_creation_invalid() -> None:
-    """(契约) ``team_register.resolve`` 返回 None 时给出不可重试的 ``agent_team_run_creation_invalid``。
-
-    潜在缺陷：Team 不存在被映射为可重试错误，模型会反复重试一个永远不存在的 Team；
-    或错误码与 retryable 与契约不符。
-    """
+def test_prepare_branch_reports_missing_team() -> None:
+    """(契约) ``team_register.resolve`` 返回 None 时给出点名 Team 的失败说明。"""
 
     tool = _bare_tool()
     tool.team_register = SimpleNamespace(resolve=lambda scope, team_id: None)
@@ -328,91 +326,21 @@ def test_prepare_branch_reports_missing_team_as_non_retryable_creation_invalid()
     )
 
     assert observation.status == "error"
-    assert observation.content.startswith("error: agent_team_run_creation_invalid\n")
-    assert "hint: do not retry this tool call." in observation.content
+    assert observation.content.startswith("The Team configuration does not exist: ghost-team")
     assert "ghost-team" in observation.content
 
 
-def test_prepare_branch_strips_team_id_before_resolving() -> None:
-    """(边界) team_id 首尾空白必须先 strip 再解析，且解析作用域为 workspace 根。
+def test_whitespace_team_id_is_rejected_at_the_args_boundary() -> None:
+    """team_id 的 pattern 已排除空白：工具与 validator 不再各自 strip / 判空。"""
 
-    潜在缺陷：未 strip 导致配置明明存在却解析失败（键不匹配）。
-    """
-
-    tool = _bare_tool()
-    seen: dict[str, str] = {}
-
-    def resolve(scope: str, team_id: str):
-        seen["scope"], seen["team_id"] = scope, team_id
-        return None
-
-    tool.team_register = SimpleNamespace(resolve=resolve)
-    context = _context()
-
-    tool.execute(
-        team_id="   code-quality   ",
-        goal="交付报告",
-        node_goals=_node_inputs(develop='实现'),
-        execution_context=context,
-    )
-
-    assert seen["team_id"] == "code-quality"
-    assert seen["scope"] == str(context.workspace_root)
-
-
-def test_whitespace_only_team_id_resolves_to_the_empty_string() -> None:
-    """(对抗) 纯空白 team_id 会被 strip 成空串去解析，最终以 creation_invalid 收场。
-
-    潜在缺陷：把空串当成合法 team_id 传下去，命中某个默认 / 空配置。
-    """
-
-    tool = _bare_tool()
-    seen: list[str] = []
-    tool.team_register = SimpleNamespace(resolve=lambda scope, team_id: seen.append(team_id))
-
-    observation = tool.execute(
-        team_id="    ",
-        goal="交付报告",
-        node_goals=_node_inputs(develop='实现'),
-        execution_context=_context(),
-    )
-
-    assert seen == [""]
-    assert observation.status == "error"
-    assert observation.content.startswith("error: agent_team_run_creation_invalid\n")
-    assert "hint: do not retry this tool call." in observation.content
-
-
-def test_execute_reports_runtime_unavailable_without_injected_parent_profile() -> None:
-    """(异常/装配契约) 运行时未注入父 profile 时给出专用不可重试错误，不进入准备分支。
-
-    潜在缺陷：把「依赖未注入」当成输入问题继续执行，最终以无信息的
-    ``agent_team_run_creation_invalid`` 收场，掩盖真正的装配缺失。
-    """
-
-    tool = _bare_tool()
-    # 刻意不经 ``_context``：这里要构造「未注入父 profile」的真实缺失形态。
-    context = ToolExecutionContext(
-        step_id="step-1",
-        task_id=1,
-        workspace_id=1,
-        workspace_root=Path("C:/ws-root"),
-        run_id=2,
-    )
-    tool.team_register = SimpleNamespace(
-        resolve=lambda *a: pytest.fail("未注入父 profile 时不得进入准备分支")
-    )
-
-    observation = tool.execute(
-        team_id="code-quality",
-        goal="交付报告",
-        node_goals=_node_inputs(develop='实现'),
-        execution_context=context,
-    )
-
-    assert observation.status == "error"
-    assert observation.content.startswith("error: agent_team_runtime_unavailable\n")
-    assert "hint: do not retry this tool call." in observation.content
+    with pytest.raises(ValidationError):
+        AgentTeamArgs.model_validate(
+            {
+                "team_id": "   ",
+                "goal": "交付报告",
+                "node_goals": [{"node_id": "develop", "goal": "实现", "summary": "实现"}],
+            }
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -471,7 +399,7 @@ def test_prepare_branch_succeeds_for_an_existing_team(monkeypatch) -> None:
         captured.update(kwargs)
         return SimpleNamespace(id=101)
 
-    tool.agent_team_run_service = SimpleNamespace(
+    tool.agent_team_run_approval = SimpleNamespace(
         create_pending_confirmation=create_pending_confirmation
     )
 
@@ -486,13 +414,13 @@ def test_prepare_branch_succeeds_for_an_existing_team(monkeypatch) -> None:
         "已存在的 Team + 合法输入应产出 pending 观察，实际为 "
         f"content={observation.content!r}"
     )
-    content = json.loads(observation.content)
-    assert (content["status"], content["team_run_id"]) == ("awaiting_user_review", 101)
     assert observation.display_data["team_run_id"] == 101
     assert observation.team_run_id == 101
-    # 审批门由后端强制：工具只建 pending 并挂起，决定与启动不经模型。
+    # 审批门由后端强制：工具只建 pending 并返回等待占位，决定与启动不经模型。
+    assert observation.awaiting_decision is True
     assert observation.suspend is True
     assert captured["parent_run_id"] == 2
+    assert captured["tool_call_id"] == observation.tool_call_id
 
 
 def test_preparation_service_builds_preview_nodes_and_runtime_snapshots(monkeypatch) -> None:
@@ -594,3 +522,159 @@ def test_node_goal_rejects_blank_goal_or_summary(goal: str, summary: str) -> Non
 
     with pytest.raises(ValidationError, match="must not be blank"):
         AgentTeamNodeGoal(goal=goal, summary=summary)
+
+
+# --------------------------------------------------------------------------- #
+# HITL 决定分支：批准即确认并后台运行，驳回即落定；TeamRun 已被处理时以失败结果收尾
+# --------------------------------------------------------------------------- #
+
+
+def test_agent_team_declares_execute_user_decision() -> None:
+    assert _bare_tool().to_definition().user_decision == "execute"
+
+
+class _DecisionRuns:
+    """TeamRun service 替身：按工具调用找回 TeamRun，记录确认与驳回，并给出 Team 落定结论。"""
+
+    def __init__(
+            self, *, reject_end_reason: str = "user_rejected", confirm_error=None
+    ) -> None:
+        self.row = SimpleNamespace(id=101, parent_run_id=2, status="pending")
+        self.reject_end_reason = reject_end_reason
+        self.confirm_error = confirm_error
+        # Coordinator.start 替身返回的落定快照。
+        self.final = SimpleNamespace(id=101, status="completed", end_reason=None)
+        self.confirmed: list[dict] = []
+
+    def get_for_tool_call(self, task_id, tool_call_id):
+        assert (task_id, tool_call_id) == (1, "call-team")
+        return self.row
+
+    def get(self, _team_run_id):
+        return self.row
+
+    def confirm(self, team_run_id, configuration, **kwargs):
+        if self.confirm_error is not None:
+            self.row.status = "cancelled"
+            raise self.confirm_error
+        self.confirmed.append({"id": team_run_id, "configuration": configuration, **kwargs})
+        return SimpleNamespace(id=team_run_id, status="running")
+
+    def reject_pending_confirmation(self, _team_run_id):
+        status = "cancelled"
+        return SimpleNamespace(status=status, end_reason=self.reject_end_reason)
+
+
+def _decide(monkeypatch, runs: _DecisionRuns, decision: str, data=None):
+    from app.core.tool.handler import agent_team_run as tool_module
+    from app.core.workflow.inbox.task_message import DecisionBody
+
+    started: list[int] = []
+
+    def start(row, _loop):
+        started.append(row.id)
+        return runs.final
+
+    monkeypatch.setattr(
+        tool_module, "get_agent_team_coordinator", lambda: SimpleNamespace(start=start)
+    )
+    monkeypatch.setattr(
+        "app.core.tool.handler.agent_team.agent_team_result.AgentTeamRunArchiveService",
+        lambda: SimpleNamespace(
+            existing_archive_path=lambda _id: ".cosir/agent-team-runs/101.json"
+        ),
+    )
+    monkeypatch.setattr(
+        tool_module,
+        "get_conversation_run_ledger",
+        lambda: SimpleNamespace(get_run=lambda run_id: SimpleNamespace(id=run_id)),
+    )
+    parent_agent = object()
+    monkeypatch.setattr("app.core.run_driver.resolve_agent_config", lambda _run: parent_agent)
+    tool = _bare_tool()
+    tool.agent_team_run_approval = runs
+    body = DecisionBody(
+        tool_call_id="call-team",
+        tool_name=TOOL_AGENT_TEAM,
+        decision=decision,
+        feedback="换个分工" if decision == "reject" else None,
+        data=data,
+    )
+    context = dataclasses.replace(_context(), user_decision=body)
+    observation = tool.execute(
+        team_id="code-quality",
+        goal="交付报告",
+        node_goals=_node_inputs(develop="实现"),
+        execution_context=context,
+    )
+    return observation, started, parent_agent
+
+
+_APPROVED_PLAN = {
+    "configuration": {"team_id": "code-quality"},
+    "goal": "最终目标",
+    "node_goals": {"develop": {"goal": "实现", "summary": "实现"}},
+}
+
+
+def test_approval_confirms_with_the_proposing_run_config_and_blocks_until_settled(
+    monkeypatch,
+) -> None:
+    runs = _DecisionRuns()
+
+    observation, started, parent_agent = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
+
+    assert observation.status == "success"
+    # 阻塞运行：工具结果就是 Team 的落定结论，不再是「running」占位。
+    payload = json.loads(observation.content)
+    assert (payload["status"], payload["trace_file"]) == (
+        "completed", ".cosir/agent-team-runs/101.json"
+    )
+    [confirmed] = runs.confirmed
+    assert (confirmed["id"], confirmed["goal"]) == (101, "最终目标")
+    # 节点回落配置取自提出方案的主 Run，而不是执行决定时的当前 Run。
+    assert confirmed["parent_agent"] is parent_agent
+    assert started == [101]
+    assert observation.team_run_id == 101
+
+
+def test_rejection_settles_the_team_run_without_starting(monkeypatch) -> None:
+    observation, started, _ = _decide(monkeypatch, _DecisionRuns(), "reject")
+
+    assert observation.status == "success"
+    payload = json.loads(observation.content)
+    assert (payload["status"], payload["feedback"]) == ("rejected", "换个分工")
+    assert started == []
+
+
+def test_rejection_after_the_plan_was_resolved_elsewhere_reports_it(monkeypatch) -> None:
+    runs = _DecisionRuns(reject_end_reason="parent_cancelled")
+
+    observation, started, _ = _decide(monkeypatch, runs, "reject")
+
+    assert observation.status == "error"
+    assert "already resolved" in observation.content
+    assert started == []
+
+
+def test_approval_after_the_plan_was_resolved_elsewhere_starts_nothing(monkeypatch) -> None:
+    runs = _DecisionRuns(confirm_error=ValueError("该 Agent Team 方案已处理，不能再确认"))
+
+    observation, started, _ = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
+
+    assert observation.status == "error"
+    assert "already resolved" in observation.content
+    assert started == []
+
+
+def test_failed_team_reports_its_settled_status(monkeypatch) -> None:
+    """Coordinator 把调度异常收敛成 failed 后返回落定快照：工具原样把结论交给模型。"""
+    runs = _DecisionRuns()
+    runs.final = SimpleNamespace(id=101, status="failed", end_reason="node_run_failed")
+
+    observation, started, _ = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
+
+    assert started == [101]
+    assert observation.status == "success"
+    payload = json.loads(observation.content)
+    assert (payload["status"], payload["end_reason"]) == ("failed", "node_run_failed")

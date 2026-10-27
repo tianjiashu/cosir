@@ -626,7 +626,7 @@ def test_execute_blocked_before_client_when_mixed_internal() -> None:
     obs = tool.execute(urls=["https://example.com/page"])
 
     assert obs.status == "error"
-    assert obs.content.startswith("error: Blocked:")
+    assert obs.content.startswith("Blocked:")
     assert client.extract_calls == [], "被拦 URL 绝不能触发 客户端 调用"
 
 
@@ -656,7 +656,7 @@ def test_execute_fail_closed_when_resolver_errors() -> None:
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert obs.content.startswith("error: Blocked:")
+    assert obs.content.startswith("Blocked:")
     assert client.extract_calls == []
 
 

@@ -13,7 +13,7 @@ def test_team_proposal_tool_returns_only_an_unsaved_configuration_draft(monkeypa
     from types import SimpleNamespace
 
     monkeypatch.setattr(
-        "app.service.agent_team.agent_team_preparation_service.resolve_node_profile",
+        "app.core.tool.handler.agent_team.agent_team_preparation_service.resolve_node_profile",
         lambda *_args, **_kwargs: None,
     )
     proposal = {
@@ -50,7 +50,7 @@ def test_team_proposal_reports_unavailable_agent_reference(monkeypatch) -> None:
         raise TeamToolError("未知 child Agent: reviewer")
 
     monkeypatch.setattr(
-        "app.service.agent_team.agent_team_preparation_service.resolve_node_profile",
+        "app.core.tool.handler.agent_team.agent_team_preparation_service.resolve_node_profile",
         reject_profile,
     )
     observation = ProposeAgentTeamConfigurationTool().execute(
@@ -71,9 +71,7 @@ def test_team_proposal_reports_unavailable_agent_reference(monkeypatch) -> None:
     )
 
     assert observation.status == "error"
-    assert observation.content.startswith("error: agent_team_configuration_invalid\n")
-    assert "reason: 未知 child Agent: reviewer" in observation.content
-    assert "hint: do not retry this tool call." in observation.content
+    assert observation.content == "未知 child Agent: reviewer"
 
 
 def test_proposal_tool_only_returns_unsaved_four_field_draft() -> None:

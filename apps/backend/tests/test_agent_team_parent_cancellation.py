@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.service.agent_team import coordinator as coordinator_module
-from app.service.agent_team.coordinator import AgentTeamCoordinator
+from app.core.tool.handler.agent_team import coordinator as coordinator_module
+from app.core.tool.handler.agent_team.coordinator import AgentTeamCoordinator
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 
 _TEAM_RUN = 3
@@ -28,13 +28,14 @@ def main_loop() -> Iterator[asyncio.AbstractEventLoop]:
 
 
 class _Node:
-    """调度入口替身：节点 Task 在被取消前一直不静止。"""
+    """节点 actor 与取消信号替身：节点 Task 在被取消前一直不静止。"""
 
-    def __init__(self) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self.cancelled: list[int] = []
+        self._loop = loop
         self._released = asyncio.Event()
 
-    async def wait_idle(self, _task_id: int, wait_seconds: float) -> bool:
+    async def wait_idle(self, wait_seconds: float) -> bool:
         try:
             await asyncio.wait_for(self._released.wait(), wait_seconds)
         except TimeoutError:
@@ -42,10 +43,10 @@ class _Node:
         return True
 
     def cancel(self, task_id: int, reason: str) -> None:
-        # Coordinator 经 call_soon_threadsafe 在主事件循环上调用：只发停止信号、不等回执。
+        # Coordinator 在工作线程里经注册表发起停止节点 Task；节点随之静止。
         assert reason == "parent"
         self.cancelled.append(task_id)
-        self._released.set()
+        self._loop.call_soon_threadsafe(self._released.set)
 
 
 class _TeamRuns:
@@ -61,8 +62,13 @@ class _TeamRuns:
 def test_node_wait_stops_node_when_team_run_is_cancelled(
     monkeypatch: pytest.MonkeyPatch, main_loop: asyncio.AbstractEventLoop
 ) -> None:
-    node = _Node()
-    monkeypatch.setattr(coordinator_module, "get_task_actors", lambda: node)
+    node = _Node(main_loop)
+    monkeypatch.setattr(
+        coordinator_module.task_runtime_spaces,
+        "get_or_create",
+        lambda _task_id: SimpleNamespace(actor=node),
+    )
+    monkeypatch.setattr(coordinator_module.task_runtime_spaces, "cancel", node.cancel)
     runs = _TeamRuns(AgentTeamRunStatus.RUNNING.value)
     coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
     coordinator._team_run_crud = runs

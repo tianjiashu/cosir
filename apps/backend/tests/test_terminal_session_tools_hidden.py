@@ -290,8 +290,7 @@ def test_repeated_read_error_explains_recovery_without_claiming_command_failure(
         guard.observe(1, (1, "running"))
     result = with_terminal_errors("terminal_read", lambda: guard.observe(1, (1, "running")))
     assert result.status == "error"
-    assert "hint: this error can be retried" in result.content
-    assert result.content.startswith("error: TERMINAL_READ_UNCHANGED")
+    assert result.content.startswith("TERMINAL_READ_UNCHANGED")
     assert "does not stop, fail, or otherwise affect the command or session" in result.content
     assert "terminal operation failed" not in result.content
     assert "does not reset the counter or guarantee recovery" in result.content
@@ -311,11 +310,11 @@ def test_other_terminal_errors_keep_the_existing_error_projection():
     ]:
         result = service_error_observation("terminal_read", error)
         assert result.status == "error"
-        expected_hint = (
-            "hint: this error can be retried"
+        expected_guidance = (
+            "Retry after the transient condition clears."
             if error.retryable
-            else "hint: do not retry this tool call."
+            else "Fix the session or arguments before retrying."
         )
-        assert expected_hint in result.content
-        assert result.content.startswith(f"error: terminal operation failed: {error}\n")
+        assert expected_guidance in result.content
+        assert result.content.startswith(f"terminal operation failed ({error.code}): {error}. ")
         assert result.display_data == {"status_hint": "终端失败"}

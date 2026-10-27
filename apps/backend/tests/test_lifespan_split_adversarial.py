@@ -752,9 +752,15 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         def shutdown(self) -> None:
             recorder.calls.append("terminal_shutdown")
 
-    class _Executor:
-        async def close(self) -> None:
-            recorder.calls.append("executor_close")
+    class _Spaces:
+        def bind_loop(self, _loop: Any) -> None:
+            recorder.calls.append("bind_loop")
+
+        def get_or_create(self, _task_id: int) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            recorder.calls.append("spaces_aclose")
 
     monkeypatch.setattr(
         lifespan_module,
@@ -766,10 +772,11 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         "get_terminal_session_service",
         record("get_terminal_service", _TerminalService()),
     )
+    monkeypatch.setattr(lifespan_module, "task_runtime_spaces", _Spaces())
     monkeypatch.setattr(
         lifespan_module,
-        "get_task_actors",
-        record("get_executor", _Executor()),
+        "get_task_service",
+        lambda: SimpleNamespace(list_task_ids_to_dispatch=lambda: []),
     )
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", record("close_deps"))
     monkeypatch.setattr(lifespan_module, "build_tool_registry", lambda: "tool-registry")
@@ -901,7 +908,7 @@ def test_lifespan_fires_session_start_and_end(
     # SESSION_START 晚于依赖初始化与 Hook 注册表播种。
     assert calls.index("init_hook_registry") < calls.index(start_events[0])
     # SESSION_END 是关闭块的第一步，早于 executor / terminal / 依赖关闭。
-    assert calls.index(start_events[1]) < calls.index("executor_close")
+    assert calls.index(start_events[1]) < calls.index("spaces_aclose")
     assert calls.index(start_events[1]) < calls.index("close_deps")
 
 
@@ -929,7 +936,7 @@ def test_lifespan_startup_failure_reraises_and_marks_failed(
 def test_lifespan_startup_failure_before_yield_does_not_stop(
     stubbed_lifespan: _Recorder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """启动失败的路径不得触发关闭编排（SESSION_END / executor close / close_deps）。"""
+    """启动失败走启动期清理（停下可能已拉起的 actor、关闭服务依赖），不走正常关闭编排。"""
 
     boot_file = _boot_state_file(monkeypatch, tmp_path)
     _write_phase(boot_file, "booting")
@@ -939,7 +946,7 @@ def test_lifespan_startup_failure_before_yield_does_not_stop(
     with pytest.raises(RuntimeError, match="stub failure at ensure_cosir"):
         _run_lifespan_once()
 
-    assert "executor_close" not in stubbed_lifespan.calls
+    assert "spaces_aclose" in stubbed_lifespan.calls
     assert "close_deps" in stubbed_lifespan.calls
     assert not any(call.startswith("safe_fire:") for call in stubbed_lifespan.calls)
 
@@ -981,7 +988,7 @@ def test_lifespan_body_exception_still_runs_shutdown_and_marks_stopped(
         asyncio.run(_drive())
 
     calls = stubbed_lifespan.calls
-    assert "executor_close" in calls
+    assert "spaces_aclose" in calls
     assert "close_deps" in calls
     assert stubbed_lifespan.shutdown_logging_calls == 2
     # 关闭块先写 stopped；包装层的 _mark_boot_failed 见到非 booting 阶段会跳过。

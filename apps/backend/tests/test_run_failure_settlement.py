@@ -1,6 +1,6 @@
 """异常逃逸时的 Run 终态收口契约测试。
 
-本模块锁定核心不变量：**任何从 workflow 逃逸的异常都必须由 ``run_driver.drive_run`` 的
+本模块锁定核心不变量：**任何从 workflow 逃逸的异常都必须由 ``run_driver.RunDriver.drive`` 的
 异常边界当场把 Run 落定为 failed**。历史缺陷是 workflow / runner / executor 三方都认为
 「终态由对方落定」，实际无人落定，导致 provider 报错后 Run 永久停留在 ``running``、前端既
 不显示失败原因也无法开始新轮次。
@@ -19,7 +19,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 from types import SimpleNamespace
 from typing import cast
 
@@ -36,7 +36,10 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.config.constant import Constant
+from app.core import run_driver
+from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.events import RunStatusChangedEvent
+from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models.conversation_run_failure import (
@@ -45,7 +48,6 @@ from app.models.conversation_run_failure import (
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.models.enums.error_kind import ErrorKind
-from app.core import run_driver
 
 _QUOTA_CODE = ErrorKind.MODEL_INSUFFICIENT_QUOTA.value
 _SERVICE_ERROR_CODE = ErrorKind.MODEL_SERVICE_ERROR.value
@@ -172,15 +174,9 @@ def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) 
     return 7
 
 
-async def _no_initial_delivery() -> None:
-    return None
-
-
-def _drive_run(
-    run_id: int, initial_delivery: Callable[[], Awaitable[None]] = _no_initial_delivery
-) -> Awaitable[None]:
-    """以空 mailbox 驱动；初始投递默认为空操作，单测按需替换。"""
-    return run_driver.drive_run(run_id, RunMailbox(), initial_delivery)
+def _drive_run(run_id: int) -> Awaitable[None]:
+    """以空 mailbox 驱动一条 Run。"""
+    return run_driver.RunDriver(RunMailbox()).drive(SimpleNamespace(id=run_id, task_id=3))
 
 
 def _make_runtime(
@@ -190,7 +186,7 @@ def _make_runtime(
     build_operations_error: BaseException | None = None,
     run_state_service: _RecordingRunStateService | None = None,
 ) -> SimpleNamespace:
-    """把 ``drive_run`` 依赖的 service、hook 与观测替换为最小替身，只观察「异常 → 分类 → 落定」。
+    """把 ``RunDriver`` 依赖的 service、hook 与观测替换为最小替身，只观察「异常 → 分类 → 落定」。
 
     ``build_operations_error`` 非空时模拟门面尚未构造就失败的路径。
     """
@@ -218,8 +214,10 @@ def _make_runtime(
         return operations
 
     monkeypatch.setattr(run_driver.HookInterceptor, "async_safe_fire", _noop_fire)
-    monkeypatch.setattr(run_driver, "_build_context", _build)
-    monkeypatch.setattr(run_driver, "_runtime_config", lambda *_args: object())
+    monkeypatch.setattr(RuntimeContext, "for_run", classmethod(_build))
+    monkeypatch.setattr(
+        AgentRuntimeConfig, "for_run", classmethod(lambda *_args: object())
+    )
     monkeypatch.setattr(
         run_driver,
         "get_conversation_event_projector",
@@ -305,24 +303,6 @@ async def test_run_agent_propagates_settlement_failure(
 
     assert len(run_state_service.calls) == 1
 
-
-@pytest.mark.asyncio
-async def test_run_agent_settles_when_initial_delivery_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """初始投递在失败边界内：读库失败同样落定 failed，不留下没有执行者的 running Run。"""
-
-    run_state_service = _RecordingRunStateService()
-    runtime = _make_runtime(monkeypatch, object(), run_state_service=run_state_service)
-
-    async def broken_delivery() -> None:
-        raise RuntimeError("queue unavailable")
-
-    await runtime.run_agent(_make_agent(monkeypatch, AssertionError("不应进入 workflow")),
-                            broken_delivery)
-
-    assert len(run_state_service.calls) == 1
-    assert run_state_service.calls[0]["end_reason"] == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
 
 
 def test_status_changed_event_projects_controlled_error() -> None:

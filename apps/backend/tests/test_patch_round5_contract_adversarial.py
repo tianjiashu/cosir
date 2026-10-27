@@ -297,7 +297,7 @@ def test_every_validation_cause_is_attributed_in_the_reason(tmp_path: pathlib.Pa
         _validation_cases(tmp_path).items(), start=1
     ):
         observation = _execute(tmp_path, patch, 5100 + index)
-        reason = observation.content.split("\nreason: ", 1)[-1]
+        reason = observation.content.split("\nFix every cause listed above", 1)[-1]
         if observation.status != "error":
             failures.append(f"{name}: status={observation.status} 期望 error")
             continue
@@ -320,7 +320,7 @@ def test_target_file_causes_say_the_diff_cannot_fix_them(tmp_path: pathlib.Path)
     for index, name in enumerate(("binary target", "non-UTF-8 target", "reserved area"), start=1):
         patch, _ = cases[name]
         observation = _execute(tmp_path, patch, 5200 + index)
-        reason = observation.content.split("\nreason: ", 1)[-1]
+        reason = observation.content.split("\nFix every cause listed above", 1)[-1]
         if "cannot be fixed by editing the diff" not in reason:
             failures.append(f"{name}: reason 未说明「改 diff 无法修复」: {reason!r}")
         if "pick another target" not in reason:
@@ -339,15 +339,15 @@ def test_hunk_context_failure_keeps_the_diff_repair_path_open(tmp_path: pathlib.
 
     assert observation.status == "error"
     assert "no files were modified" in observation.content
-    reason = observation.content.split("\nreason: ", 1)[-1]
+    reason = observation.content.split("\nFix every cause listed above", 1)[-1]
     assert (
         "then submit a new Git unified diff" in reason
     ), f"可修正的上下文不符原因被剥夺了「改 diff 重提」的修复路径: {reason!r}"
 
 
-# Purpose: the rejected validation path must not have written anything and must stay
-# retryable, for every cause class. Defect type: rejection with write side effects.
-def test_no_validation_cause_writes_a_file_or_blocks_retry(tmp_path: pathlib.Path) -> None:
+# Purpose: the rejected validation path must not have written anything, for every cause
+# class. Defect type: rejection with write side effects.
+def test_no_validation_cause_writes_a_file(tmp_path: pathlib.Path) -> None:
     # Materialize every fixture first: the case builder creates the files it needs.
     cases = _validation_cases(tmp_path)
     snapshots: dict[str, bytes] = {}
@@ -358,8 +358,6 @@ def test_no_validation_cause_writes_a_file_or_blocks_retry(tmp_path: pathlib.Pat
     failures = []
     for index, (name, (patch, _)) in enumerate(cases.items(), start=1):
         observation = _execute(tmp_path, patch, 5400 + index)
-        if "hint: this error can be retried" not in observation.content:
-            failures.append(f"{name}: 未提示可重试: {observation.content!r}")
         if observation.content.count("no files were modified") != 1:
             failures.append(f"{name}: error 未声明零写入: {observation.content!r}")
 
@@ -840,7 +838,7 @@ def test_undocumented_backslash_prefix_never_yields_a_silent_success() -> None:
     assert not silent, "反斜杠前缀的正文行在补丁被判有效时被静默消费:\n" + "\n".join(silent)
 
 
-# Purpose: a rejected patch must never write and must stay retryable.
+# Purpose: a rejected patch must never write.
 # Defect type: side effects on the rejection path.
 # 2026-09-21 契约 B：计数不符改为按正文重算 + 提示（会被接受并真的写入），因此本用例改用
 # **真正被拒绝的形状**（缺 '---' 头、二进制元数据）来继续保障「拒绝 → 零写入」。
@@ -858,7 +856,6 @@ def test_rejected_patch_writes_nothing(tmp_path: pathlib.Path) -> None:
         observation = _execute(tmp_path, patch, 5800 + index)
 
         assert observation.status == "error", name
-        assert "hint: this error can be retried" in observation.content, name
         assert (tmp_path / "m.txt").read_bytes() == b"a\nb\n", name
 
 

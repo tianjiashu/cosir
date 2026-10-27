@@ -26,7 +26,7 @@ def prepare(monkeypatch):
     )
     service = object.__new__(UserInputService)
     service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
-    return lambda text: service.prepare(1, ConversationRunCommand(display_text=text), 1).message
+    return lambda text: service.prepare(1, ConversationRunCommand(display_text=text), 1).body
 
 
 @pytest.mark.parametrize(

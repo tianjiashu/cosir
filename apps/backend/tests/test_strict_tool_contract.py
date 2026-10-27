@@ -11,7 +11,7 @@ from app.config.configuration import get_tool_registry
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.handler.agent_team_run import AgentTeamRunTool
 from app.core.tool.handler.mcp_tool import MCPTool
-from app.core.tool.handler.agent_team.agent_team_args import AgentTeamArgs
+from app.core.tool.handler.agent_team.args.agent_team_args import AgentTeamArgs
 from app.core.tool.handler.mcp.mcp_args import MCPArgs
 from app.tools.tool_models.read_file_args import ReadFileArgs
 from app.tools.tool_models.terminal_session_args import TerminalWriteArgs
@@ -121,7 +121,7 @@ def test_team_list_converts_to_domain_map(monkeypatch):
     assert result.ok
     tool = object.__new__(AgentTeamRunTool)
     received = []
-    context = SimpleNamespace(agent=object())
+    context = SimpleNamespace(agent=object(), user_decision=None)
 
     def prepare(team_id, goal, node_goals, execution_context, parent_profile):
         received.append({key: value.model_dump() for key, value in node_goals.items()})

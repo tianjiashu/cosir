@@ -111,8 +111,8 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
     """T2-a：「已注册但不在 allowed_tool_names」∩「参数非法」→ 必须命中**权限门禁** denial。
 
     被测行为：``evaluate`` 的四段检查实际执行顺序（注册表 → 权限门禁 → 参数校验 → Hook）。
-    修复前实际观测（缺陷）：denial.content 以 ``"error: invalid tool arguments: "`` 开头、
-    ``retryable is True`` —— 参数校验排在权限门禁之前，被禁用的工具会向模型回传
+    修复前实际观测（缺陷）：denial.content 以 ``"invalid tool arguments: "`` 开头 ——
+    参数校验排在权限门禁之前，被禁用的工具会向模型回传
     「改改参数就能重试」的错误信号。
     修复后（当前断言）：权限门禁先于参数校验，参数是否合法都不影响命中「本轮禁用」分支。
     """
@@ -131,8 +131,7 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
     assert outcome.tool is None
     assert outcome.denial is not None
     # 关键事实：命中的是「本轮禁用」分支，而不是「参数非法」分支。
-    assert outcome.denial.content.startswith("error: tool is not allowed: read_file\n"), outcome.denial.content
-    assert "hint: do not retry this tool call." in outcome.denial.content
+    assert outcome.denial.content.startswith("tool is not allowed: read_file"), outcome.denial.content
     assert "disabled for the current run" in outcome.denial.content
     assert outcome.denial.tool_call_id == "call-disabled"
 
@@ -154,16 +153,14 @@ def test_t2_disabled_with_valid_args_yields_disabled_denial(tmp_path: Any) -> No
 
     assert outcome.admitted is False
     assert outcome.denial is not None
-    assert outcome.denial.content.startswith("error: tool is not allowed: read_file\n")
+    assert outcome.denial.content.startswith("tool is not allowed: read_file")
     assert "disabled for the current run" in outcome.denial.content
-    assert "hint: do not retry this tool call." in outcome.denial.content
 
 
 def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
-    """T2-c：未注册工具名 = 最优先拒绝（unknown tool / retryable=False），不看 allowed 集合。
+    """T2-c：未注册工具名 = 最优先拒绝（unknown tool），不看 allowed 集合。
 
-    实际观测：error 以 ``"unknown tool: "`` 开头，retryable is False，
-    reason 提示「同名字永远被拒」。
+    实际观测：content 以 ``"unknown tool: "`` 开头，并提示「该工具未注册」。
     是否符合预期：符合（注册表命中是最前置检查，与 docstring 一致）。
     """
 
@@ -177,8 +174,7 @@ def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
 
     assert outcome.admitted is False
     assert outcome.denial is not None
-    assert outcome.denial.content.startswith("error: unknown tool: ")
-    assert "hint: do not retry this tool call." in outcome.denial.content
+    assert outcome.denial.content.startswith("unknown tool: ")
 
 
 def test_t2_pre_tool_use_hook_deny_and_argument_rewrite(
@@ -212,7 +208,7 @@ def test_t2_pre_tool_use_hook_deny_and_argument_rewrite(
     assert denied.admitted is False
     assert denied.tool is None
     assert denied.denial is not None
-    assert denied.denial.content.startswith("error: blocked by policy\n")
+    assert denied.denial.content.startswith("blocked by policy")
     assert denied.denial.tool_call_id == "call-hook"
 
     class _RewriteHook:

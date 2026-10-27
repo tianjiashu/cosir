@@ -809,7 +809,7 @@ def test_allow_reserved_only_used_by_internal_call_sites() -> None:
                 call_sites.append(f"{path.relative_to(app_dir)}:{lineno}")
     expected = {
         "tools/terminal_runtime/terminal_session_service.py",
-        "service/agent_team/agent_team_run_archive_service.py",
+        "core/tool/handler/agent_team/agent_team_run_archive_service.py",
     }
     actual = {site.split(":", 1)[0].replace("\\", "/") for site in call_sites}
     assert actual == expected, f"allow_reserved=True 调用面异常：{call_sites}"

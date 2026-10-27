@@ -48,7 +48,7 @@ from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal.output_collector import _OutputCollector
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
-from app.models.tool_batch import ToolBatch
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
 from tests.transport_fixtures import consumed, queue_user_input
@@ -363,7 +363,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
     rc = runtime_stub(
         tool_executor=Executor(),
         allows_tools=frozenset({"execute_terminal"}),
-        tool_definitions={"execute_terminal": SimpleNamespace(parallel_mode="serial")},
+        tool_definitions={"execute_terminal": SimpleNamespace(parallel_mode="serial", user_decision=None)},
         run=SimpleNamespace(id=9, task_id=7),
         task=SimpleNamespace(id=7),
         workspace=SimpleNamespace(id=2, root_path=str(tmp_path)),

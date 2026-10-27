@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-import app.service.agent_team.coordinator as coordinator_module
-from app.service.agent_team.coordinator import AgentTeamCoordinator
+import app.core.tool.handler.agent_team.coordinator as coordinator_module
+from app.core.tool.handler.agent_team.coordinator import AgentTeamCoordinator
 from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.core.agents.model_settings import ModelSettings
@@ -15,7 +15,7 @@ from app.core.tool.handler.agent_team.agent_team_display import (
 )
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
-from app.service.agent_team.agent_team_preparation_service import (
+from app.core.tool.handler.agent_team.agent_team_preparation_service import (
     resolve_node_model,
 )
 
@@ -93,8 +93,8 @@ def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> 
         SimpleNamespace(model_validate=lambda _value: _State()),
     )
     monkeypatch.setattr(
-        coordinator_module.cancellation_registry,
-        "request_cancel",
+        coordinator_module.task_runtime_spaces,
+        "cancel",
         lambda task_id, reason: captured.update(signalled=(task_id, reason)),
     )
 
@@ -147,7 +147,7 @@ def test_team_node_model_falls_back_to_parent_model_config_and_keeps_own_prefere
     """没有独立模型配置的节点：沿用主 Run 选用的模型配置，节点偏好覆盖、主 Agent 偏好补缺。"""
     from app.core.agents.resolved_model import ResolvedModel
     from app.models.model_config_record import ModelConfigRecord
-    from app.service.agent_team import agent_team_preparation_service as preparation
+    from app.core.tool.handler.agent_team import agent_team_preparation_service as preparation
 
     config = ModelConfigRecord(
         config_name="local",

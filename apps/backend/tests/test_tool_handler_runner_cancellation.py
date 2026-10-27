@@ -483,7 +483,6 @@ def test_execute_in_process_with_fake_process_handler_error(monkeypatch) -> None
     observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
 
     assert observation.status == "error"
-    assert "hint: do not retry this tool call." in observation.content
 
 
 def test_execute_in_process_with_fake_process_exited_without_result(monkeypatch) -> None:
@@ -665,7 +664,6 @@ def test_process_timeout_path_returns_error_and_retryable(monkeypatch) -> None:
     observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
 
     assert observation.status == "error"
-    assert "hint: this error can be retried" in observation.content
     assert proc.terminate_called is True or proc.kill_called is True
 
 
@@ -687,7 +685,6 @@ def test_process_oserror_path_returns_error_not_raise(monkeypatch) -> None:
     observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
 
     assert observation.status == "error"
-    assert "hint: do not retry this tool call." in observation.content
 
 
 def test_thread_handler_exception_returns_error() -> None:
@@ -697,7 +694,6 @@ def test_thread_handler_exception_returns_error() -> None:
     observation = ToolHandlerRunner().execute(tool, {}, _make_context(0))
 
     assert observation.status == "error"
-    assert "hint: do not retry this tool call." in observation.content
 
 
 def test_thread_mode_keeps_result_when_cancelled_during_execution() -> None:

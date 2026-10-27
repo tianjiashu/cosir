@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
 from types import SimpleNamespace
 from typing import Any
@@ -61,52 +60,11 @@ def _clear_run_signal() -> None:
 
 
 @pytest.mark.asyncio
-async def test_session_cancel_reads_canonical_run_off_event_loop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from contextlib import nullcontext
-
-    from app.service import depends as service_depends
-    from app.core import task_actor as actor_module
-    from app.core.task_actors import TaskActors
-
-    monkeypatch.setattr(
-        actor_module.task_runtime_spaces,
-        "get_or_create",
-        lambda _: SimpleNamespace(async_operation=lambda **kw: nullcontext()),
-    )
-    service = _ThreadCheckedRunService(status=ConversationRunStatus.SUSPENDED.value)
-    for getter in (
-        "get_conversation_run_ledger",
-        "get_task_service",
-        "get_task_message_queue",
-        "get_user_input_service",
-    ):
-        monkeypatch.setattr(service_depends, getter, lambda: service)
-    session = TaskActors()
-
-    # 无执行者时由 actor 读 canonical Run 判定是否挂起；所有读取都必须离开事件循环线程。
-    try:
-        actor = session._actor(7)
-        changed = actor.state_changed
-        session.cancel(7)
-        await asyncio.wait_for(changed.wait(), 1)
-        assert "require_latest_run" in service.reads
-        assert service.violations == []
-    finally:
-        await session.close()
-
-
-@pytest.mark.asyncio
 async def test_startup_failure_dependency_cleanup_runs_off_event_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner_thread = threading.get_ident()
     calls: list[str] = []
-
-    class _Executor:
-        async def close(self) -> None:
-            calls.append("executor_close")
 
     class _Terminal:
         def shutdown(self) -> None:
@@ -126,13 +84,12 @@ async def test_startup_failure_dependency_cleanup_runs_off_event_loop(
         assert threading.get_ident() != owner_thread
         calls.append("close_dependencies")
 
-    monkeypatch.setattr(lifespan_module, "get_task_actors", _Getter(_Executor()))
     monkeypatch.setattr(lifespan_module, "get_terminal_session_service", _Getter(_Terminal()))
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", close_dependencies)
 
     await lifespan_module._cleanup_startup_failure()
 
-    assert calls == ["executor_close", "terminal_shutdown", "close_dependencies"]
+    assert calls == ["terminal_shutdown", "close_dependencies"]
 
 
 @pytest.mark.asyncio
@@ -153,10 +110,6 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
         def shutdown(self) -> None:
             calls.append("terminal_shutdown")
 
-    class _Executor:
-        async def close(self) -> None:
-            calls.append("executor_close")
-
     monkeypatch.setattr(
         lifespan_module, "install_logging_for_current_process", lambda **_kwargs: None
     )
@@ -167,8 +120,13 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     monkeypatch.setattr(lifespan_module, "ensure_system_agent_config_dir", lambda: None)
     monkeypatch.setattr(lifespan_module, "ensure_system_agent_team_config_dir", lambda: None)
     monkeypatch.setattr(lifespan_module, "get_recover_service", lambda: _RecoverService())
+    # 启动时为需要调度的 Task 拉起 actor：替身没有需要拉起的 Task，不触达存储。
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_task_service",
+        lambda: SimpleNamespace(list_task_ids_to_dispatch=lambda: set()),
+    )
     monkeypatch.setattr(lifespan_module, "get_terminal_session_service", lambda: _Terminal())
-    monkeypatch.setattr(lifespan_module, "get_task_actors", lambda: _Executor())
     monkeypatch.setattr(lifespan_module, "build_tool_registry", lambda: object())
     # Registry 只保存内置 profile，用户 JSON 由注册表在作用域首次被读取时按需装载，
     # 因此启动编排不再遍历 workspace 调用装载方法。
@@ -185,7 +143,7 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", close_dependencies)
     # 启动流程里的 Agent Team 收敛在函数内惰性 import，因此按模块路径打桩（替身不触达存储）。
     monkeypatch.setattr(
-        "app.service.agent_team.coordinator.get_agent_team_coordinator",
+        "app.core.tool.handler.agent_team.coordinator.get_agent_team_coordinator",
         lambda: SimpleNamespace(recover_after_restart=lambda: []),
     )
 

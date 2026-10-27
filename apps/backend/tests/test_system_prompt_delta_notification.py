@@ -1,4 +1,4 @@
-"""系统提示词 diff 的通知广播测试：命中的 Task 经 ``TaskActors.post`` 入外部队列。"""
+"""系统提示词 diff 的通知广播测试：命中的 Task 经 ``task_runtime_spaces.enqueue`` 入外部队列。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.models.task_message import NoticeBody, notices_to_context
+from app.core.workflow.inbox.task_message import NoticeBody, notices_to_context
 from app.task_runtime.broadcaster import runtime_notice_broadcaster
 from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
     broadcast_system_prompt_delta,
@@ -53,19 +53,15 @@ def clear_runtime_spaces(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def posted(monkeypatch) -> dict[int, list[NoticeBody]]:
-    """记录广播交给 ``broadcast`` 的通知，按 Task 归档。"""
+    """记录广播经 ``enqueue`` 写入的通知，按 Task 归档。"""
 
     by_task: dict[int, list[NoticeBody]] = {}
 
-    def broadcast(task_ids: list[int], notice: NoticeBody) -> None:
-        for task_id in task_ids:
-            by_task.setdefault(task_id, []).append(notice)
+    def enqueue(task_id: int, message, **_kw) -> int:
+        by_task.setdefault(task_id, []).append(message.body)
+        return 0
 
-    monkeypatch.setattr(
-        runtime_notice_broadcaster,
-        "get_task_actors",
-        lambda: SimpleNamespace(broadcast=broadcast),
-    )
+    monkeypatch.setattr(runtime_notice_broadcaster.task_runtime_spaces, "enqueue", enqueue)
     return by_task
 
 
@@ -116,8 +112,8 @@ def test_delta_notice_becomes_one_tagged_user_message() -> None:
     assert metadata.kind == "notice" and metadata.presentation is None
     content = message["content"]
     assert isinstance(content, str)
-    assert content.startswith("<system_notice>")
-    assert content.count("<system_notice>") == 1
+    assert content.startswith('<system_notice time="')
+    assert content.count("<system_notice ") == 1
     assert content.endswith(f"\n{notice.content}\n{notice.content}\n</system_notice>")
     assert "-旧规则" in notice.content
     assert "+新规则" in notice.content

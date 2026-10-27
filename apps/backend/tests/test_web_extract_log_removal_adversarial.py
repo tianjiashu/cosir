@@ -12,7 +12,7 @@
    ``content`` 局部变量。
 
 必须**行为不变**：各失败/成功路径下 ``ToolObservation`` 的
-``status`` / ``error`` / ``retryable`` / ``content`` / ``display_data`` 与改动前一致。
+``status`` / ``content`` / ``display_data`` 与改动前一致。
 
 必须**保留**的日志事件：``web_extract_unconfigured``、
 ``web_extract_failed``、``web_extract_all_pages_failed``、
@@ -139,7 +139,6 @@ def test_over_limit_returns_error_not_silent_success_and_no_removed_event(
     obs = tool.execute(urls=urls)
 
     assert obs.status == "error"
-    assert "hint: this error can be retried" in obs.content
     assert str(Constant.Web.EXTRACT_URL_LIMIT_MAX) in obs.content
     # 超限在被拦时绝不能调用 客户端（无网络副作用）。
     assert client.extract_calls == []
@@ -190,9 +189,8 @@ def test_security_rejection_paths_behavior_unchanged(
     obs = tool.execute(urls=[url])
 
     assert obs.status == "error"
-    assert obs.content.startswith("error: Blocked:")
+    assert obs.content.startswith("Blocked:")
     assert error_fragment in obs.content
-    assert "hint: do not retry this tool call." in obs.content
     assert client.extract_calls == []
     # 错误 UI 通道只承载稳定短提示，不承载完整错误原因。
     assert obs.display_data == {"status_hint": "提取失败"}
@@ -210,8 +208,7 @@ def test_ip_literal_internal_blocked_with_system_resolver() -> None:
         obs = tool.execute(urls=[url])
 
         assert obs.status == "error", f"{url} 应被拦截"
-        assert obs.content.startswith("error: Blocked:")
-        assert "hint: do not retry this tool call." in obs.content
+        assert obs.content.startswith("Blocked:")
         assert client.extract_calls == []
 
 
@@ -246,8 +243,7 @@ def test_client_unavailable_path_behavior_and_kept_event(
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert obs.content.startswith("error: not configured here\n")
-    assert "hint: do not retry this tool call." in obs.content
+    assert obs.content.startswith("not configured here")
     kept = _find(caplog.records, "web_extract_unconfigured")
     assert kept, "客户端 未配置路径必须保留 web_extract_unconfigured"
     _assert_no_removed_events(caplog.records)
@@ -267,8 +263,7 @@ def test_client_generic_exception_path_behavior_and_kept_event(
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert "hint: this error can be retried" in obs.content
-    assert obs.content.startswith("error: Web extraction failed.")
+    assert obs.content.startswith("Web extraction failed.")
     # 原始异常细节不写入面向模型的 error（避免噪声 / 泄漏）。
     assert "boom-detail-should-not-leak" not in obs.content
     kept = _find(caplog.records, "web_extract_failed")
@@ -294,7 +289,6 @@ def test_all_pages_failed_path_behavior_and_kept_event_with_elapsed(
     obs = tool.execute(urls=["https://e.com/1", "https://e.com/2"])
 
     assert obs.status == "error"
-    assert "hint: this error can be retried" in obs.content
     assert "boom1" in obs.content and "boom2" in obs.content
     kept = _find(caplog.records, "web_extract_all_pages_failed")
     assert kept, "全页失败必须保留 web_extract_all_pages_failed"
@@ -375,8 +369,7 @@ def test_result_build_failure_path_behavior_and_kept_event(
     obs = tool.execute(urls=["https://ec.com/1"])
 
     assert obs.status == "error"
-    assert obs.content.startswith("error: Web extraction result assembly failed.\n")
-    assert "hint: do not retry this tool call." in obs.content
+    assert obs.content.startswith("Web extraction result assembly failed.")
     kept = _find(caplog.records, "web_extract_result_build_failed")
     assert kept, "结果构造失败必须保留 web_extract_result_build_failed"
     # data.客户端 分支使用了 客户端.name（客户端 为真值）；不得因删日志而 NameError。

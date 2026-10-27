@@ -10,11 +10,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
-from app.models.conversation_input import ConversationInput
+from app.core.workflow.inbox.task_message import UserInputBody
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_options import ConversationRunOptions
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.input_errors import UserInputRejectedError
@@ -128,43 +129,9 @@ def test_run_record_round_trips_usage_and_error() -> None:
     assert restored.error == error
 
 
-def test_input_serializes_separately_from_run_options() -> None:
-    message = ConversationInput(
-        input_text="请阅读 attachments/readme.md",
-        display_text="请阅读 [[cosir-file:readme.md]]",
-        attachments=[
-            {
-                "id": "readme.md",
-                "name": "README.md",
-                "content_type": "text/markdown",
-                "path": "attachments/readme.md",
-            }
-        ],
-    )
-
-    serialized = message.model_dump(mode="json")
-    assert "reasoning_effort" not in serialized
-    assert "ban_tools" not in serialized
-    assert serialized == {
-        "display_text": "请阅读 [[cosir-file:readme.md]]",
-        "attachments": [
-            {
-                "id": "readme.md",
-                "name": "README.md",
-                "content_type": "text/markdown",
-                "path": "attachments/readme.md",
-            }
-        ],
-        "input_text": "请阅读 attachments/readme.md",
-        "image_paths": [],
-    }
-    assert "version" not in serialized
-    assert ConversationInput.model_validate(serialized) == message
-
-
-def test_input_rejects_legacy_assistant_input_wrapper() -> None:
+def test_user_input_body_rejects_legacy_assistant_input_wrapper() -> None:
     with pytest.raises((TypeError, ValueError)):
-        ConversationInput.model_validate(
+        UserInputBody.model_validate(
             {
                 "assistant_input": {
                     "version": 1,
@@ -178,18 +145,17 @@ def test_input_rejects_legacy_assistant_input_wrapper() -> None:
 def test_presentation_rejects_image_token_without_uploaded_image() -> None:
     """正文引用的图片必须有对应资源：投影按同一不变量消费，缺了它只能在入队后炸。"""
     with pytest.raises(ValueError, match="image tokens"):
-        ConversationInput(input_text="你好", display_text="你好 [[cosir-image:abc]]")
+        UserInputPresentation(display_text="你好 [[cosir-image:abc]]")
 
 
 def test_presentation_accepts_image_token_bound_to_uploaded_image() -> None:
     asset = "a" * 64
-    message = ConversationInput(
-        input_text="描述",
+    presentation = UserInputPresentation(
         display_text=f"描述\n[[cosir-image:{asset}]]",
         image_paths=[f"attachments/{asset}.png"],
     )
 
-    assert message.presentation().image_paths == [f"attachments/{asset}.png"]
+    assert presentation.image_paths == [f"attachments/{asset}.png"]
 
 
 def _input_service(monkeypatch, *, supports_reasoning_effort: bool = False) -> UserInputService:
@@ -223,11 +189,23 @@ def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch)
         ],
     )
 
-    prepared = service.prepare(7, command, 3).message
+    prepared = service.prepare(7, command, 3).body
 
     assert prepared.input_text == f"请阅读 {attachment_path}"
     assert prepared.display_text == command.display_text
     assert prepared.attachments[0]["id"] == "readme"
+
+
+def test_prepare_returns_an_unqueued_user_input_message_with_delivery(monkeypatch) -> None:
+    service = _input_service(monkeypatch)
+
+    message = service.prepare(
+        7, ConversationRunCommand(display_text="检查项目"), 3, delivery="next_run"
+    )
+
+    assert (message.id, message.kind, message.delivery) == (None, "user_input", "next_run")
+    assert message.project_to_transport is True
+    assert message.body.input_text == "检查项目"
 
 
 def test_input_preparation_keeps_run_options_out_of_message(monkeypatch) -> None:
@@ -240,15 +218,16 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch) -> None
         ),
         3,
         "high",
-    )
+    ).body
     assert queued.launch.options.ban_tools == ["execute_terminal"]
     assert queued.launch.options.reasoning_effort == "high"
     assert queued.launch.model_config_id == 3
-    assert set(queued.message.model_dump()) == {
+    assert set(queued.model_dump()) == {
         "input_text",
         "display_text",
         "image_paths",
         "attachments",
+        "launch",
     }
 
 
@@ -267,7 +246,7 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment(monkeypatch) -
         ],
     )
 
-    prepared = service.prepare(7, command, 3).message
+    prepared = service.prepare(7, command, 3).body
 
     assert prepared.input_text == f"请检查 {attachment_path}"
     assert prepared.attachments == [
@@ -282,8 +261,7 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment(monkeypatch) -
 
 def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
     attachment_path = Path(__file__)
-    previous = ConversationInput(
-        input_text=f"请阅读 {attachment_path}",
+    previous = UserInputPresentation(
         display_text="请阅读 [[cosir-file:readme]]",
         attachments=[
             {
@@ -305,9 +283,9 @@ def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
             )
         ],
     )
-    prepared = service.prepare(7, command, 3, None, reuse=previous.presentation())
-    assert prepared.message.input_text == f"请再次阅读 {attachment_path}"
-    assert prepared.message.attachments[0]["path"] == str(attachment_path)
+    prepared = service.prepare(7, command, 3, None, reuse=previous).body
+    assert prepared.input_text == f"请再次阅读 {attachment_path}"
+    assert prepared.attachments[0]["path"] == str(attachment_path)
 
 
 def test_prepared_text_does_not_rescan_attachment_paths(monkeypatch) -> None:
@@ -327,7 +305,7 @@ def test_prepared_text_does_not_rescan_attachment_paths(monkeypatch) -> None:
         ],
     )
 
-    prepared = service.prepare(7, command, 3).message
+    prepared = service.prepare(7, command, 3).body
 
     assert prepared.input_text == f"看 {path}"
     assert prepared.attachments[0]["path"] == path

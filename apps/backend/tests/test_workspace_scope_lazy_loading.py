@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.service.agent_team.registry import AgentTeamConfigurationRegistry
+from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
+from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
 from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_source

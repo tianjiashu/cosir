@@ -7,8 +7,8 @@ import pytest
 
 import app.core.workflow.workflow as module
 from app.models.enums.react_route import ReactRoute
-from app.models.react_execution_state import ReactExecutionState
-from app.models.tool_batch import ToolBatch
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models.enums.conversation_run_status import RunTransition
 from tests.runtime_context_stub import run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion
@@ -119,26 +119,6 @@ async def test_cancelled_resume_does_not_replay_old_tools(loop, monkeypatch):
     assert state.step_limit == 3 + 10
     assert state.batch == ToolBatch()
     assert loop.progress[0].step_count == 3
-
-
-@pytest.mark.asyncio
-async def test_cancellation_before_model_does_not_consume_queue(loop, monkeypatch):
-    """取消由 prepare_input 入口落定：不取 mailbox、不请求模型，排队消息不进已取消的 Run。"""
-    from app.core.workflow.nodes.prepare_input_node import _prepare_input_node
-    from app.models.task_message import NoticeBody, TaskMessage
-
-    # 用真实 prepare_input：取消检查归它所有，替身会绕过被测行为。
-    monkeypatch.setattr(module, "_prepare_input_node", _prepare_input_node)
-    monkeypatch.setattr(
-        module, "_model_node", AsyncMock(side_effect=AssertionError("取消后不应请求模型"))
-    )
-    queued = TaskMessage.of(NoticeBody(content="排队通知", notice_kind="model_continuation"))
-    loop.ops.mailbox.post(queued)
-    loop.ops.cancelled = True
-    await module.ReactLikeWorkflow().run(loop.ops)
-    assert loop.calls == ["cancel"]
-    assert loop.ops.mailbox.drain() == [queued]
-    loop.model.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio

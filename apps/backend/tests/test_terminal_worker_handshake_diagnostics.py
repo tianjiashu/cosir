@@ -1,7 +1,7 @@
 """Terminal Worker 握手失败的错误分类与可排查日志测试。
 
 覆盖：握手身份不匹配（确定性）判为不可重试、握手超时仍可重试、两类失败各自的 WARNING 事件与字段
-对照，以及经 ``service_error_observation`` 投影给模型时 ``retryable``/``reason`` 的变化。
+对照，以及经 ``service_error_observation`` 投影给模型时重试建议文本的变化。
 """
 
 from __future__ import annotations
@@ -197,7 +197,6 @@ def test_service_error_observation_marks_rejected_handshake_as_not_retryable() -
     )
 
     assert observation.status == "error"
-    assert "hint: do not retry this tool call." in observation.content
     assert observation.display_data["status_hint"] == "终端失败"
     assert "TERMINAL_WORKER_HANDSHAKE_REJECTED" in observation.content
     assert "Fix the session or arguments before retrying." in observation.content

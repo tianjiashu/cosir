@@ -52,7 +52,7 @@ from app.core.tool.execute.tool_terminal_projection import (
 )
 from app.tools.tool_handler.read_file import ReadFileTool
 from app.core.tool.tool_registry import ToolRegistry
-from app.models.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
 from tests.runtime_context_stub import runtime_stub
@@ -791,9 +791,8 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
 
     assert observation.status == "error"
     assert observation.tool_call_id == "call-boom"
-    assert observation.content.startswith("error: internal execution error in the tool pipeline: RuntimeError\n")
+    assert observation.content.startswith("internal execution error in the tool pipeline: RuntimeError")
     assert "inner pipeline exploded" not in observation.content
-    assert "hint: do not retry this tool call." in observation.content
     assert recorder.statuses("call-boom") == ["failed"]
     event = recorder.events[0]
     assert event.tool_call_id == "call-boom"
@@ -817,7 +816,7 @@ def test_executor_exception_after_start_closes_running_card(
         rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-late"), "s", batch, _NO_LOOP
     )
 
-    assert observation.content.startswith("error: internal execution error in the tool pipeline: ValueError\n")
+    assert observation.content.startswith("internal execution error in the tool pipeline: ValueError")
     assert recorder.statuses("call-late") == ["running", "failed"]
 
 

@@ -20,7 +20,7 @@ from app.config.constant import Constant
 from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
-from app.models.tool_batch import ToolBatch
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from tests.runtime_context_stub import runtime_stub
 from tests.tool_executor_fakes import emit_running
 
@@ -121,7 +121,7 @@ def _make_operations(executor: _FakeToolExecutor) -> SimpleNamespace:
             task_id=1, workspace_id=1, workspace_root=Path("."), run_id=1
         ),
         allows_tools=frozenset({_PARALLEL_TOOL}),
-        tool_definitions={_PARALLEL_TOOL: SimpleNamespace(parallel_mode="parallel")},
+        tool_definitions={_PARALLEL_TOOL: SimpleNamespace(parallel_mode="parallel", user_decision=None)},
     )
 
 

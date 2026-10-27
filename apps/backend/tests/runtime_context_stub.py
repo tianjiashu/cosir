@@ -21,7 +21,7 @@ from app.core.workflow.execution_state.conversation_run_usage_stats import (
     ConversationRunUsageStats,
 )
 from app.core.workflow.inbox.run_mailbox import RunMailbox
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.service import depends as service_depends
 
 

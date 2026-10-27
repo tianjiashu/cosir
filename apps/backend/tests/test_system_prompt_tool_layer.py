@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from app.service.agent_team import registry as team_registry
+from app.service.configuration import agent_team_configuration_registry as team_registry
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry

@@ -99,7 +99,6 @@ def test_search_content_rejects_invalid_path(tmp_path: Path) -> None:
     )
 
     assert observation.status == "error"
-    assert "hint: this error can be retried" in observation.content
     assert "existing file or directory" in observation.content
 
 

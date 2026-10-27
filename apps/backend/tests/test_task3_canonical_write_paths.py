@@ -14,7 +14,7 @@ from app.core.context.runtime_message_context_manager import RuntimeMessageConte
 from app.core.events import RunStatusChangedEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.conversation_run_failure import run_failure_message
-from app.models.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.core.conversation_run_ledger import ConversationRunLedger
 from app.service.recover_service import RecoverService
@@ -199,7 +199,9 @@ def _creation_service(store, monkeypatch, projector):
     service._run = store.runs
     service._task = store.tasks
     service._session_factory = store.factory
-    monkeypatch.setattr("app.service.depends.get_conversation_event_projector", lambda: projector)
+    monkeypatch.setattr(
+        "app.core.conversation_run_ledger.get_conversation_event_projector", lambda: projector
+    )
     monkeypatch.setattr(
         "app.core.conversation_run_ledger.get_model_config_service",
         lambda: SimpleNamespace(
@@ -225,9 +227,8 @@ def _creation_service(store, monkeypatch, projector):
 
 def test_create_run_commits_inbox_and_current_run_before_projector(request, monkeypatch):
     """独立连接在事件发布时已能看到整组事实，context 留待模型边界并入。"""
-    from app.models.conversation_input import ConversationInput
-    from app.models.task_message import RunLaunch, TaskMessage, UserInputBody
-    from app.core.task_message_queue import TaskMessageQueue
+    from app.core.workflow.inbox.task_message_queue import TaskMessageQueue
+    from app.core.workflow.inbox.task_message import RunLaunch, TaskMessage, UserInputBody
 
     store = request.getfixturevalue("canonical_store")
     events = []
@@ -236,16 +237,15 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
         def process(self, event):
             assert store.tasks.get(store.task.id).current_run_id == event.run_id
             assert store.runs.get(event.run_id).context_window_total == 128000
-            [queued] = TaskMessageQueue().pending(store.task.id)
+            [queued] = TaskMessageQueue().pending_nowait(store.task.id)
             assert isinstance(queued.body, UserInputBody)
-            assert queued.body.message.input_text == "hello"
+            assert queued.body.input_text == "hello"
             assert store.contexts.get(store.task.id, include_in_context=False) == []
             events.append(event)
 
     service = _creation_service(store, monkeypatch, Projector())
     body = UserInputBody(
-        message=ConversationInput(input_text="hello", display_text="hello"),
-        launch=RunLaunch(model_config_id=1),
+        input_text="hello", display_text="hello", launch=RunLaunch(model_config_id=1)
     )
     TaskMessageQueue().put(store.task.id, TaskMessage.of(body))
     run = service.create_run(store.task.id, body.launch)
@@ -297,10 +297,10 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
     service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = _RunCrud()
     service._session_factory = None
-    import app.service.depends as depends
+    from app.core import conversation_run_ledger as ledger_module
 
-    depends_getter = depends.get_conversation_event_projector
-    depends.get_conversation_event_projector = lambda: _Projector()
+    ledger_getter = ledger_module.get_conversation_event_projector
+    ledger_module.get_conversation_event_projector = lambda: _Projector()
     try:
         result = service.transition(
             11, RunTransition.FAIL,
@@ -314,7 +314,7 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
             ),
         )
     finally:
-        depends.get_conversation_event_projector = depends_getter
+        ledger_module.get_conversation_event_projector = ledger_getter
 
     assert result is run
     assert order == ["database", "event"]
@@ -339,15 +339,15 @@ def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> 
 
     service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = _RunCrud()
-    import app.service.depends as depends
+    from app.core import conversation_run_ledger as ledger_module
 
-    original_getter = depends.get_conversation_event_projector
-    depends.get_conversation_event_projector = lambda: _Projector()
+    original_getter = ledger_module.get_conversation_event_projector
+    ledger_module.get_conversation_event_projector = lambda: _Projector()
     try:
         # 终态落库先于投影：投影失败向上传播，但已提交的 Run 事实完好。
         with pytest.raises(RuntimeError, match="transport unavailable"):
             service.transition(11, RunTransition.COMPLETE, final_output="done")
     finally:
-        depends.get_conversation_event_projector = original_getter
+        ledger_module.get_conversation_event_projector = original_getter
 
     assert committed == ["database"]

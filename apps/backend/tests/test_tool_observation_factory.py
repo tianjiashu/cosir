@@ -27,33 +27,31 @@ def test_success_keeps_ui_and_internal_data_separate() -> None:
 
 
 def test_error_does_not_merge_observation_fields_into_ui_data() -> None:
-    """失败观察的 UI display_data 不应被 error/content/reason 等 Agent 字段污染。"""
+    """失败观察的 UI display_data 不应被模型可见的 content 污染。"""
 
     observation = tool_error(
         "execute_terminal",
-        "command failed",
-        "fix the command",
+        "command failed. Fix the command.",
         status_hint="命令失败",
     )
 
     assert observation.display_data == {"status_hint": "命令失败"}
     assert observation.artifact_data == {}
     assert set(observation.display_data) == {"status_hint"}
-    assert "error" not in observation.display_data
-    assert "reason" not in observation.display_data
+    assert "content" not in observation.display_data
 
 
 def test_error_uses_short_tool_default_and_rejects_long_ui_text() -> None:
     """错误省略提示时按工具默认值，过长提示不应把诊断泄漏到 UI。"""
 
-    defaulted = tool_error(TOOL_READ_FILE, "missing", "fix it")
+    defaulted = tool_error(TOOL_READ_FILE, "missing. Fix it.")
     assert defaulted.display_data == {"status_hint": "读取失败"}
 
     # ``patch_write``（``TOOL_REPLACE``）是替换语义工具的规范名；旧字面量 "replace" 不再存在。
-    replace_defaulted = tool_error(TOOL_REPLACE, "missing", "fix it")
+    replace_defaulted = tool_error(TOOL_REPLACE, "missing. Fix it.")
     assert replace_defaulted.display_data == {"status_hint": "替换失败"}
 
     long_hint = tool_error(
-        TOOL_READ_FILE, "missing", "fix it", status_hint="完整错误原因泄漏到前端"
+        TOOL_READ_FILE, "missing. Fix it.", status_hint="完整错误原因泄漏到前端"
     )
     assert long_hint.display_data == {"status_hint": "读取失败"}

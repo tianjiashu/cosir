@@ -141,7 +141,7 @@ def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools
     # 主 Agent 同时声明 agent_team，工具层还会读取 Team 目录；本用例只关心 Agent 目录，
     # 注入空 Team 目录以免依赖宿主机器上的 Team 配置。
     monkeypatch.setattr(
-        "app.service.agent_team.registry.get_agent_team_registry",
+        "app.service.configuration.agent_team_configuration_registry.get_agent_team_registry",
         lambda: SimpleNamespace(team_summary=lambda _workspace_root: ""),
     )
     prompt_with_delegation = SystemPromptBuilder.build(profile, workspace_root)

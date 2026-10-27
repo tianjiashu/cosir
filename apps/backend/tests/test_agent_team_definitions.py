@@ -8,12 +8,12 @@ from pydantic import ValidationError
 from sqlalchemy import inspect
 from sqlalchemy.orm import sessionmaker
 
-from app.service.agent_team import configuration_scope_source
+from app.service.configuration import agent_team_configuration_source as configuration_scope_source
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
-from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.core.tool.handler.agent_team.node_goal import AgentTeamNodeGoal
-from app.service.agent_team.registry import AgentTeamConfigurationRegistry
+from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
+from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
+from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
 from app.models.agent_team.state.agent_team_run_state import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
@@ -22,14 +22,15 @@ from app.models.agent_team.state.agent_team_run_state import (
 from app.core.tool.handler.propose_agent_team_configuration import (
     ProposeAgentTeamConfigurationTool,
 )
-from app.service.agent_team.agent_team_approve_input import AgentTeamApproveInput
-from app.core.tool.handler.agent_team.propose_agent_team_configuration_args import (
+from app.core.tool.handler.agent_team.args.agent_team_approve_input import AgentTeamApproveInput
+from app.core.tool.handler.agent_team.args.propose_agent_team_configuration_args import (
     ProposeAgentTeamConfigurationArgs,
 )
-from app.service.agent_team.agent_team_preparation_service import (
+from app.core.tool.handler.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationResult,
 )
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
+from app.core.tool.handler.agent_team.agent_team_run_approval import AgentTeamRunApproval
 from app.service.configuration.agent_team_configuration_service import (
     AgentTeamConfigurationService,
 )
@@ -130,7 +131,7 @@ def test_proposal_tool_separates_argument_and_configuration_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "app.service.agent_team.agent_team_preparation_service.resolve_node_profile",
+        "app.core.tool.handler.agent_team.agent_team_preparation_service.resolve_node_profile",
         lambda *args, **kwargs: None,
     )
     proposal = _configuration()
@@ -190,7 +191,7 @@ def test_proposal_tool_does_not_construct_persisted_configuration(
     """提案工具只使用 Args 校验，不提前构造持久化配置模型。"""
 
     monkeypatch.setattr(
-        "app.service.agent_team.agent_team_preparation_service.resolve_node_profile",
+        "app.core.tool.handler.agent_team.agent_team_preparation_service.resolve_node_profile",
         lambda *args, **kwargs: None,
     )
     proposal = _configuration()
@@ -532,6 +533,7 @@ def test_team_run_crud_round_trips_persisted_confirmation_state(
         workspace_id=workspace.id,
         parent_task_id=task.id,
         parent_run_id=run.id,
+        tool_call_id="call-1",
         goal="检查代码",
         node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
     )
@@ -575,6 +577,7 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
         workspace_id=workspace.id,
         parent_task_id=task.id,
         parent_run_id=run.id,
+        tool_call_id="call-2",
         goal="检查代码",
         node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
     )
@@ -607,7 +610,7 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
 def test_team_confirmation_only_checks_parent_ownership() -> None:
     """确认边界只校验归属：主 Agent 在等审批期间可能被唤醒并完成，pending 的 Team 仍可批准。"""
 
-    service = AgentTeamRunService.__new__(AgentTeamRunService)
+    service = AgentTeamRunApproval.__new__(AgentTeamRunApproval)
     for status in ("suspended", "running", "completed"):
         service._ledger = SimpleNamespace(
             get_run=lambda _run_id, status=status: SimpleNamespace(task_id=2, status=status)
@@ -648,7 +651,7 @@ def test_create_pending_confirmation_supersedes_previous_pending(tmp_path: Path)
 
     crud = AgentTeamRunCrud.__new__(AgentTeamRunCrud)
     crud._session_factory = factory
-    service = AgentTeamRunService.__new__(AgentTeamRunService)
+    service = AgentTeamRunApproval.__new__(AgentTeamRunApproval)
     service._session_factory = factory
     service._team_run_crud = crud
     preparation = AgentTeamPreparationResult(
@@ -662,6 +665,7 @@ def test_create_pending_confirmation_supersedes_previous_pending(tmp_path: Path)
         workspace_id=workspace_id,
         parent_task_id=task_id,
         parent_run_id=run_id,
+        tool_call_id="call-3",
         goal="第一版",
     )
     second = service.create_pending_confirmation(
@@ -670,6 +674,7 @@ def test_create_pending_confirmation_supersedes_previous_pending(tmp_path: Path)
         workspace_id=workspace_id,
         parent_task_id=task_id,
         parent_run_id=run_id,
+        tool_call_id="call-4",
         goal="第二版",
     )
 
@@ -713,6 +718,7 @@ def test_supersede_pending_for_parent_unblocks_reproposal(tmp_path: Path) -> Non
         workspace_id=workspace_id,
         parent_task_id=task_id,
         parent_run_id=run_id,
+        tool_call_id="call-5",
         goal="第一版",
         node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
     )
@@ -728,6 +734,7 @@ def test_supersede_pending_for_parent_unblocks_reproposal(tmp_path: Path) -> Non
             workspace_id=workspace_id,
             parent_task_id=task_id,
             parent_run_id=run_id,
+            tool_call_id="call-6",
             goal="第二版",
             node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
             session=session,
@@ -798,10 +805,11 @@ def test_user_rejection_ends_pending_team_run_idempotently(tmp_path: Path) -> No
         workspace_id=workspace_id,
         parent_task_id=task_id,
         parent_run_id=parent_run_id,
+        tool_call_id="call-7",
         goal="交付报告",
         node_runtime_snapshots={"develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}},
     )
-    service = AgentTeamRunService.__new__(AgentTeamRunService)
+    service = AgentTeamRunApproval.__new__(AgentTeamRunApproval)
     service._team_run_crud = crud
     service._session_factory = factory
 
@@ -887,6 +895,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(
             workspace_id=workspace.id,
             parent_task_id=parent_task.id,
             parent_run_id=parent_run.id,
+            tool_call_id="call-8",
             goal_input="交付报告",
             configuration_snapshot_json=_configuration(),
             status="running",

@@ -747,7 +747,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
 
     import app.core.workflow.node_helper.streaming_part_state_machine as machine_module
     from app.core.events import ToolCallStatusChangedEvent
-    from app.models.tool_batch import ToolBatch
+    from app.core.workflow.execution_state.tool_batch import ToolBatch
     from app.core.workflow.node_helper import StreamingPartStateMachine
     from tests.sdk_fixtures import sdk_completion
 
@@ -839,11 +839,10 @@ def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
 @pytest.mark.asyncio
 async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeypatch):
     """上下文有孤儿结果时模型请求前即失败：原始结果与外部队列中的输入都保持原状。"""
-    from app.models.react_execution_state import ReactExecutionState
+    from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
     from app.models.enums.react_route import ReactRoute
     from app.core.workflow.nodes import model_node
-    from app.models.conversation_input import ConversationInput
-    from app.models.task_message import RunLaunch, TaskMessage, UserInputBody
+    from app.core.workflow.inbox.task_message import RunLaunch, TaskMessage, UserInputBody
     from app.storage.crud.task_message_crud import TaskMessageCrud
 
     run = env.seed_run("running")
@@ -857,8 +856,7 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
     )
     with env.factory.begin() as session:
         body = UserInputBody(
-            message=ConversationInput(input_text="新消息", display_text="新消息"),
-            launch=RunLaunch(model_config_id=1),
+            input_text="新消息", display_text="新消息", launch=RunLaunch(model_config_id=1)
         )
         TaskMessageCrud().append(session, [(env.task.id, TaskMessage.of(body))])
     manager = _manager(
@@ -893,7 +891,7 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
     with env.factory() as session:
         queued = TaskMessageCrud().list_pending(session, env.task.id)
         assert [
-            item.body.message.input_text
+            item.body.input_text
             for item in queued
             if isinstance(item.body, UserInputBody)
         ] == ["新消息"]
