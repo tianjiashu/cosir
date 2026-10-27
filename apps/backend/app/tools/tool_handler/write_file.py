@@ -25,7 +25,6 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import (
-    blocked_device_reason,
     os_error_message,
     tool_error,
 )
@@ -113,29 +112,25 @@ class WriteFileTool(HandlerBase):
             return tool_error(
                 self.name,
                 device_error,
-                reason=blocked_device_reason("written"),
             )
         resolved, error = resolver.resolve_within_workspace(path)
         if resolved is None:
             return tool_error(
                 self.name,
-                f"could not write the file: {error}",
-                reason="provide a file path inside the project workspace.",
-                retryable=True,
+                f"could not write the file: {error}. "
+                "Provide a file path inside the project workspace.",
             )
         device_error = resolver.blocked_device_reason(path, resolved)
         if device_error:
             return tool_error(
                 self.name,
                 device_error,
-                reason=blocked_device_reason("written"),
             )
         if looks_like_line_numbered(content):
             return tool_error(
                 self.name,
-                "content appears to be line-numbered read_file output",
-                reason="remove the 'N| ' display prefixes and provide the raw file content.",
-                retryable=True,
+                "content appears to be line-numbered read_file output. "
+                "Remove the 'N| ' display prefixes and provide the raw file content.",
             )
         existed = resolved.exists()
         original = ""
@@ -145,9 +140,8 @@ class WriteFileTool(HandlerBase):
             except OSError as exc:
                 return tool_error(
                     self.name,
-                    os_error_message(exc, "read the file"),
-                    reason="make the existing file readable, then call write_file again.",
-                    retryable=True,
+                    f"{os_error_message(exc, 'read the file')}. "
+                    "Make the existing file readable, then call write_file again.",
                 )
 
         try:
@@ -163,9 +157,10 @@ class WriteFileTool(HandlerBase):
         except OSError as exc:
             return tool_error(
                 tool_name=self.name,
-                error=os_error_message(exc, "write the file"),
-                reason="make the target writable, then call write_file again.",
-                retryable=True,
+                content=(
+                    f"{os_error_message(exc, 'write the file')}. "
+                    "Make the target writable, then call write_file again."
+                ),
             )
 
         status = "modified" if existed else "added"

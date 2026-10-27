@@ -271,7 +271,7 @@ class ExecuteTerminalTool(HandlerBase):
             退出码、超时等结构性事实经 ``_render_content`` 并入 ``content`` 的
             ``[exit_code=N]`` 标记，供模型消费（``data`` 通道仅供前端展示，会在
             序列化前被清除，不回传模型）。命令因超时强杀时
-            返回 ``status="error"`` 且 ``retryable=True``，明确告知命令未正常结束。
+            返回 ``status="error"``，明确告知命令未正常结束。
 
         异常:
             不主动向上抛出；均转换为结构化 ``ToolObservation``。
@@ -290,11 +290,8 @@ class ExecuteTerminalTool(HandlerBase):
         if shell not in self._available_shells:
             return tool_error(
                 self.name,
-                f"could not run the command: shell '{shell}' is not available on this host",
-                reason=(
-                    f"choose one of the available shell values: {', '.join(self._available_shells)}"
-                ),
-                retryable=True,
+                f"could not run the command: shell '{shell}' is not available on this host. "
+                f"Choose one of the available shell values: {', '.join(self._available_shells)}",
             )
 
         try:
@@ -312,9 +309,8 @@ class ExecuteTerminalTool(HandlerBase):
             )
             return tool_error(
                 self.name,
-                "command was not run because the terminal deny-list could not be evaluated",
-                reason="repair the terminal deny-list configuration before retrying.",
-                retryable=False,
+                "command was not run because the terminal deny-list could not be evaluated. "
+                "Repair the terminal deny-list configuration before retrying.",
             )
         if verdict.is_dangerous:
             log.warning(
@@ -346,16 +342,13 @@ class ExecuteTerminalTool(HandlerBase):
 
         content = self._render_content(result.output, result)
         # 超时强杀意味着命令未正常结束，模型无法从退出码判断成败，按瞬态故障
-        # 返回 error（retryable=True），避免把超时命令的部分输出误判为成功结果。
+        # 返回 error 并建议加大超时或拆分命令，避免把超时命令的部分输出误判为成功结果。
         if result.timed_out:
             return tool_error(
                 self.name,
-                content,
-                reason=(
-                    f"use a larger timeout (up to {self.max_command_timeout:.0f}s) or split "
-                    "the command into smaller steps."
-                ),
-                retryable=True,
+                f"{content}. "
+                f"Use a larger timeout (up to {self.max_command_timeout:.0f}s) or split "
+                "the command into smaller steps.",
                 status_hint="命令超时",
             )
         return tool_success(
@@ -445,8 +438,8 @@ class ExecuteTerminalTool(HandlerBase):
             verdict: ``detect_dangerous_command`` 的裁决结果，提供命中原因 ``description``。
 
         返回:
-            ``status="error"`` 的 ``ToolObservation``（``tool_error`` 的 ``retryable`` 取缺省 False）：命令被策略
-            确定性拒绝，原样重试必然再次失败，故不给重试提示，只给出替代动作。
+            ``status="error"`` 的 ``ToolObservation``：命令被策略确定性拒绝，原样重试必然
+            再次失败，故只给出替代动作。
 
         异常:
             无。
@@ -456,11 +449,9 @@ class ExecuteTerminalTool(HandlerBase):
         """
         return tool_error(
             self.name,
-            f"command blocked by the safety policy: {verdict.description}",
-            reason=(
-                "use a dedicated file tool for filesystem changes or choose a "
-                "non-destructive command."
-            ),
+            f"command blocked by the safety policy: {verdict.description}. "
+            "Use a dedicated file tool for filesystem changes or choose a "
+            "non-destructive command.",
         )
 
     @staticmethod
@@ -494,8 +485,8 @@ class ExecuteTerminalTool(HandlerBase):
             err: ``_resolve_workdir`` 给出的人读错误（非法字符 / 越界 / 目录不存在）。
 
         返回:
-            ``status="error"`` 且 ``retryable=True`` 的 ``ToolObservation``：三类原因都能通过换一个
-            合法的 workspace 内目录修正，故给出重试提示。
+            ``status="error"`` 的 ``ToolObservation``：三类原因都能通过换一个合法的 workspace
+            内目录修正，故建议改用安全目录。
 
         异常:
             无。
@@ -505,9 +496,8 @@ class ExecuteTerminalTool(HandlerBase):
         """
         return tool_error(
             self.name,
-            err,
-            reason="provide a safe, existing directory inside the workspace root.",
-            retryable=True,
+            f"{err}. "
+            "Provide a safe, existing directory inside the workspace root.",
         )
 
 

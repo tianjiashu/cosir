@@ -15,7 +15,7 @@ from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.service.terminal.errors import TerminalRepeatedReadError, TerminalSessionError
+from app.tools.terminal_runtime.errors import TerminalRepeatedReadError, TerminalSessionError
 
 
 def cancelled(context: ToolExecutionContext) -> bool:
@@ -70,27 +70,20 @@ def service_error_observation(
     if isinstance(exc, TerminalRepeatedReadError):
         return tool_error(
             tool_name,
-            f"{exc.code}: {exc}",
-            reason=(
-                "Increasing wait_ms does not reset the counter or guarantee recovery. "
-                "Normal reads resume when new output or state changes are observed. "
-                "Inspect prior prompts before deciding whether to wait longer or provide input."
-            ),
-            retryable=exc.retryable,
+            f"{exc.code}: {exc}. "
+            "Increasing wait_ms does not reset the counter or guarantee recovery. "
+            "Normal reads resume when new output or state changes are observed. "
+            "Inspect prior prompts before deciding whether to wait longer or provide input.",
             status_hint="重复读取",
         )
     return tool_error(
         tool_name,
-        f"terminal operation failed: {exc}",
-        reason=(
-            f"the terminal service rejected this operation with {exc.code}. "
-            + (
-                "Retry after the transient condition clears."
-                if exc.retryable
-                else "Fix the session or arguments before retrying."
-            )
+        f"terminal operation failed ({exc.code}): {exc}. "
+        + (
+            "Retry after the transient condition clears."
+            if exc.retryable
+            else "Fix the session or arguments before retrying."
         ),
-        retryable=exc.retryable,
         status_hint="终端失败",
     )
 

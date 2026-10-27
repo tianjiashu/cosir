@@ -19,22 +19,22 @@ from typing import Any, Final, Literal
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.service.terminal.errors import (
+from app.tools.terminal_runtime.errors import (
     TerminalReadInProgressError,
     TerminalRepeatedReadError,
     TerminalSessionError,
     TerminalSessionStateError,
 )
-from app.service.terminal.process_terminal_worker import ProcessTerminalWorker, WorkerEventCallback
-from app.service.terminal.shell_resolver import ShellSpec
-from app.service.terminal.terminal_observation import TerminalObservation
-from app.service.terminal.terminal_preview import (
+from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker, WorkerEventCallback
+from app.tools.terminal_runtime.shell_resolver import ShellSpec
+from app.tools.terminal_runtime.terminal_observation import TerminalObservation
+from app.tools.terminal_runtime.terminal_preview import (
     PreviewBuffer,
     TerminalPreviewAttachment,
     TerminalPreviewSubscription,
 )
-from app.service.terminal.terminal_read_guard import TerminalReadGuard
-from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
+from app.tools.terminal_runtime.terminal_read_guard import TerminalReadGuard
+from app.tools.terminal_runtime.terminal_session_status import TerminalSessionStatusChange
 
 RunCancellationCheck = Callable[[], bool]
 

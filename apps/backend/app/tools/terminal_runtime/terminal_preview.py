@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from app.config.constant import Constant
-from app.service.terminal.errors import TerminalSessionResyncRequiredError
+from app.tools.terminal_runtime.errors import TerminalSessionResyncRequiredError
 
 PreviewEvent = dict[str, object]
 

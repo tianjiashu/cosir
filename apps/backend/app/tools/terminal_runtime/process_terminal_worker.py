@@ -23,7 +23,7 @@ from pathlib import Path
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.service.terminal.errors import (
+from app.tools.terminal_runtime.errors import (
     TerminalWorkerBackpressureError,
     TerminalWorkerHandshakeError,
     TerminalWorkerProtocolError,
@@ -31,7 +31,7 @@ from app.service.terminal.errors import (
     TerminalWorkerSignalUnsupportedError,
     TerminalWorkerUnavailableError,
 )
-from app.service.terminal.shell_resolver import ShellSpec
+from app.tools.terminal_runtime.shell_resolver import ShellSpec
 
 WorkerEventCallback = Callable[[Mapping[str, object]], None]
 SIGNAL_ACK_TIMEOUT_SECONDS = 5.0

@@ -292,7 +292,10 @@ class PathResolver:
                 normalized == root or normalized.startswith(f"{root}/")
                 for root in self.posix_blocked_recursive_roots
             ):
-                return f"blocked recursive search path: {path}"
+                return (
+                    f"blocked recursive search path: {path}; "
+                    "search a regular directory inside the project instead"
+                )
         return ""
 
     def _is_blocked_posix_path(self, path: str) -> bool:

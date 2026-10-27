@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.service.terminal.errors import TerminalSessionError
+from app.tools.terminal_runtime.errors import TerminalSessionError
 
 
 @dataclass(frozen=True)

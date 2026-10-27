@@ -13,7 +13,7 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.results.tool_cancelled import tool_cancelled
-from app.core.tool.results.tool_error import blocked_device_reason, tool_error
+from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
 from app.tools.tool_handler.search.errors import (
@@ -61,15 +61,13 @@ class FindFilesTool(HandlerBase):
             return tool_error(
                 self.name,
                 device_error,
-                reason=blocked_device_reason("searched"),
             )
         resolved_path, path_error = resolver.resolve_without_boundary(path)
         if resolved_path is None:
             return tool_error(
                 self.name,
-                f"could not search path: {path_error or path}",
-                reason="provide an existing file or directory path relative to the workspace.",
-                retryable=True,
+                f"could not search path: {path_error or path}. "
+                "Provide an existing file or directory path relative to the workspace.",
             )
         try:
             scope = SearchScope.from_path(
@@ -80,7 +78,6 @@ class FindFilesTool(HandlerBase):
                 return tool_error(
                     self.name,
                     device_error,
-                    reason=blocked_device_reason("searched"),
                 )
             page = find_files(
                 scope,
@@ -96,24 +93,21 @@ class FindFilesTool(HandlerBase):
         except SearchTimedOut:
             return tool_error(
                 self.name,
-                "file search exceeded its time limit",
-                reason="narrow the path or pattern and call find_files again.",
-                retryable=True,
+                "file search exceeded its time limit. "
+                "Narrow the path or pattern and call find_files again.",
                 status_hint="搜索超时",
             )
         except SearchPathNotFound as exc:
             return tool_error(
                 self.name,
-                f"could not search path: {exc}",
-                reason="provide an existing file or directory path relative to the workspace.",
-                retryable=True,
+                f"could not search path: {exc}. "
+                "Provide an existing file or directory path relative to the workspace.",
             )
         except SearchPathUnreadable as exc:
             return tool_error(
                 self.name,
-                f"could not search path: {exc}",
-                reason="provide a readable file or directory path.",
-                retryable=True,
+                f"could not search path: {exc}. "
+                "Provide a readable file or directory path.",
             )
 
         paths = [item.file_path for item in page.matches]

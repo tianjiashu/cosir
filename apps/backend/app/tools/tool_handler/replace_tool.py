@@ -26,7 +26,6 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import (
-    blocked_device_reason,
     os_error_message,
     tool_error,
 )
@@ -114,7 +113,7 @@ class ReplaceTool(HandlerBase):
         返回:
             ``ToolObservation``：成功时 content 为空，除非语法检查发现问题并返回
             简短警告；文件变更通过 display_data 提供。失败时
-            ``error`` 描述事实，``reason`` 提供下一步动作。
+            ``content`` 给出错误事实与下一步动作。
 
         异常:
             不主动向上抛出；所有失败路径均归一化为错误观察。
@@ -126,47 +125,41 @@ class ReplaceTool(HandlerBase):
         if not path or old_string is None or new_string is None:
             return tool_error(
                 self.name,
-                "replace requires path, old_string, new_string",
-                reason="provide path, old_string, and new_string, then call patch_write again.",
-                retryable=True,
+                "replace requires path, old_string, new_string. "
+                "Provide path, old_string, and new_string, then call patch_write again.",
             )
         if old_string == new_string:
             return tool_error(
                 self.name,
-                "old_string and new_string are identical, no changes would be made",
-                reason="provide a different new_string, or skip the call if no change is needed.",
-                retryable=True,
+                "old_string and new_string are identical, no changes would be made. "
+                "Provide a different new_string, or skip the call if no change is needed.",
             )
         device_error = resolver.blocked_device_reason(path)
         if device_error:
             return tool_error(
                 self.name,
                 device_error,
-                reason=blocked_device_reason("patched"),
             )
         resolved, error = resolver.resolve_within_workspace(path)
         if resolved is None:
             return tool_error(
                 self.name,
-                f"could not patch_write the file: {error}",
-                reason="provide a file path inside the project workspace.",
-                retryable=True,
+                f"could not patch_write the file: {error}. "
+                "Provide a file path inside the project workspace.",
             )
         device_error = resolver.blocked_device_reason(path, resolved)
         if device_error:
             return tool_error(
                 self.name,
                 device_error,
-                reason=blocked_device_reason("patched"),
             )
         try:
             original = Path(resolved).read_text(encoding="utf-8")
         except OSError as exc:
             return tool_error(
                 self.name,
-                os_error_message(exc, "read the file"),
-                reason="make the file readable, then call patch_write again.",
-                retryable=True,
+                f"{os_error_message(exc, 'read the file')}. "
+                "Make the file readable, then call patch_write again.",
             )
         new_content, count, _, match_error = fuzzy_find_and_replace(
             original, old_string, new_string, replace_all
@@ -176,19 +169,15 @@ class ReplaceTool(HandlerBase):
             message += format_no_match_hint(match_error, count, old_string, original)
             return tool_error(
                 self.name,
-                message,
-                reason=(
-                    "read the current file and provide an old_string with a unique match, "
-                    "or set replace_all=true."
-                ),
-                retryable=True,
+                f"{message}. "
+                "Read the current file and provide an old_string with a unique match, "
+                "or set replace_all=true.",
             )
         if looks_like_line_numbered(new_content):
             return tool_error(
                 self.name,
-                "resulting content appears line-numbered",
-                reason="remove the 'N| ' display prefixes from new_string.",
-                retryable=True,
+                "resulting content appears line-numbered. "
+                "Remove the 'N| ' display prefixes from new_string.",
             )
         try:
             if cancellation_registry.is_cancelled(execution_context.task_id):
@@ -203,9 +192,8 @@ class ReplaceTool(HandlerBase):
         except OSError as exc:
             return tool_error(
                 self.name,
-                os_error_message(exc, "write the file"),
-                reason="make the file writable, then call patch_write again.",
-                retryable=True,
+                f"{os_error_message(exc, 'write the file')}. "
+                "Make the file writable, then call patch_write again.",
             )
         # 落盘后语法检查（error 驱动）：命中语法错误返回 error 观察（文件已写），
         # 经 reason 引导 Agent 二次编辑覆盖自修复。

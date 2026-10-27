@@ -4,9 +4,6 @@
 各协作者完成，本模块负责编排、取消检查、写后语法检查与观察归一化。
 """
 
-import errno
-import os
-
 from app.config.logging.logger import log
 from app.tools.display.file_change_display import build_file_change_display_data
 from app.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
@@ -33,36 +30,6 @@ from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-
-
-def _is_patch_retryable_after_correction(error: PatchApplyError) -> bool:
-    """判断「非部分写入」的文件系统失败在修正后是否可重试。
-
-    参数:
-        error: 应用补丁时抛出的 ``PatchApplyError``；真实底层异常挂在 ``__cause__`` 上。
-
-    返回:
-        已发生部分写入时恒为 ``False``（必须按文件当前内容重新生成补丁，不能重放原补丁）；
-        ``RuntimeError`` 起因视为可修正后重试；Windows 的文件共享冲突（``winerror`` 为
-        32/33）以及 ``EAGAIN`` / ``EBUSY`` / ``ETXTBSY`` 视为瞬时故障可重试；其余不可重试。
-
-    异常:
-        无。
-
-    副作用:
-        无（纯判断，只读 ``error`` 及其 ``__cause__``）。
-    """
-
-    if error.partial_applied:
-        return False
-    cause = error.__cause__
-    if isinstance(cause, RuntimeError):
-        return True
-    if not isinstance(cause, OSError):
-        return False
-    if os.name == "nt" and getattr(cause, "winerror", None) in {32, 33}:
-        return True
-    return cause.errno in {errno.EAGAIN, errno.EBUSY, getattr(errno, "ETXTBSY", -1)}
 
 
 class ApplyPatchTool(HandlerBase):
@@ -126,12 +93,11 @@ class ApplyPatchTool(HandlerBase):
         if outcome.error:
             return tool_error(
                 tool_name=self.name,
-                error=f"invalid Git unified diff: {outcome.error}",
-                reason=(
-                    "Correct the issue reported in error and submit only the raw diff; choose the "
+                content=(
+                    f"invalid Git unified diff: {outcome.error}. "
+                    "Correct the issue above and submit only the raw diff; choose the "
                     "matching file tool if the requested operation is unsupported."
                 ),
-                retryable=True,
             )
         operations = outcome.operations
         resolver = PathResolver(execution_context.workspace_root)
@@ -139,16 +105,15 @@ class ApplyPatchTool(HandlerBase):
         if validation_errors:
             return tool_error(
                 tool_name=self.name,
-                error="unified diff validation failed (no files were modified):\n"
-                      + "\n".join(f"  - {error}" for error in validation_errors),
-                reason=(
-                    "fix every cause listed in 'error', then submit a new Git unified diff. Causes "
+                content=(
+                    "unified diff validation failed (no files were modified):\n"
+                    + "\n".join(f"  - {error}" for error in validation_errors)
+                    + "\nFix every cause listed above, then submit a new Git unified diff. Causes "
                     "that live in a target file itself (missing or irregular file, binary content, "
                     "non-UTF-8 bytes, reserved or blocked path) cannot be fixed by editing the "
                     "diff: pick another target, or use write_file/delete_file/move_file. This tool "
                     "cannot create, delete, or move files."
                 ),
-                retryable=True,
             )
         if cancellation_registry.is_cancelled(execution_context.task_id):
             return tool_cancelled(tool_name=self.name)
@@ -158,20 +123,19 @@ class ApplyPatchTool(HandlerBase):
             if exc.partial_applied:
                 return tool_error(
                     tool_name=self.name,
-                    error="unified diff application stopped after partial changes",
-                    reason=(
-                        "inspect the changed files and generate a new unified diff from their "
+                    content=(
+                        "unified diff application stopped after partial changes. "
+                        "Inspect the changed files and generate a new unified diff from their "
                         "current contents; do not replay this diff unchanged."
                     ),
                 )
             return tool_error(
                 tool_name=self.name,
-                error=f"unified diff apply failed: {exc}",
-                reason=(
-                    "re-read the affected files and generate a new unified diff for their current "
+                content=(
+                    f"unified diff apply failed: {exc}. "
+                    "Re-read the affected files and generate a new unified diff for their current "
                     "contents before retrying."
                 ),
-                retryable=_is_patch_retryable_after_correction(exc),
             )
 
         display_data = build_file_change_display_data(results)

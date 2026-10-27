@@ -17,8 +17,8 @@ from app.core.tool.schemas.tool_names import (
     TOOL_TERMINAL_START,
     TOOL_TERMINAL_WRITE,
 )
-from app.service.terminal.interaction import control_keys_for_platform
-from app.service.terminal.shell_resolver import ShellResolver
+from app.tools.terminal_runtime.interaction import control_keys_for_platform
+from app.tools.terminal_runtime.shell_resolver import ShellResolver
 
 
 def build_terminal_session_parameters_schema(

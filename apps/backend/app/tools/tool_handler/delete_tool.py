@@ -79,19 +79,19 @@ class DeleteTool(HandlerBase):
         if resolved is None:
             return tool_error(
                 tool_name=self.name,
-                error=error,
-                reason=(
-                    "provide a workspace-relative path to an existing file; "
+                content=(
+                    f"{error}. "
+                    "Provide a workspace-relative path to an existing file; "
                     "directories are not supported."
                 ),
-                retryable=False,
             )
         if not resolved.is_file():
             return tool_error(
                 tool_name=self.name,
-                error="delete target is not an existing regular file",
-                reason="provide a path to one existing regular file inside the workspace.",
-                retryable=False,
+                content=(
+                    "delete target is not an existing regular file. "
+                    "Provide a path to one existing regular file inside the workspace."
+                ),
             )
         if cancellation_registry.is_cancelled(execution_context.task_id):
             return tool_cancelled(tool_name=self.name)
@@ -103,18 +103,18 @@ class DeleteTool(HandlerBase):
         except OSError as exc:
             return tool_error(
                 tool_name=self.name,
-                error=os_error_message(exc, "delete the target file"),
-                reason="check the file's current state and permissions before trying again.",
-                retryable=True,
+                content=(
+                    f"{os_error_message(exc, 'delete the target file')}. "
+                    "Check the file's current state and permissions before trying again."
+                ),
             )
         except (RuntimeError, ValueError) as exc:
             return tool_error(
                 tool_name=self.name,
-                error=str(exc),
-                reason=(
-                    "re-read the target path and confirm it is still the intended workspace file."
+                content=(
+                    f"{exc}. "
+                    "Re-read the target path and confirm it is still the intended workspace file."
                 ),
-                retryable=False,
             )
 
         relative = resolved.relative_to(execution_context.workspace_root.resolve()).as_posix()

@@ -21,7 +21,7 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.results.tool_error import blocked_device_reason, tool_error
+from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
 from app.tools.tool_handler.security.path_resolver import PathResolver
@@ -103,7 +103,7 @@ class ListDirectoryTool(HandlerBase):
 
         返回:
             ``ToolObservation``；成功时 content 为模型继续工作所需的紧凑条目表；
-            失败时 ``error`` 描述事实，``reason`` 提供下一步动作。
+            失败时 ``content`` 给出错误事实与下一步动作。
 
         异常:
             不主动向上抛出；路径解析失败、目录不存在、非目录、以及列举时的
@@ -123,36 +123,31 @@ class ListDirectoryTool(HandlerBase):
             return tool_error(
                 self.name,
                 device_error,
-                reason=blocked_device_reason("listed"),
             )
         resolved, error = resolver.resolve_without_boundary(path)
         if resolved is None:
             return tool_error(
                 self.name,
-                f"could not list the directory: {error}",
-                reason="provide a valid directory path.",
-                retryable=True,
+                f"could not list the directory: {error}. "
+                "Provide a valid directory path.",
             )
         device_error = resolver.blocked_device_reason(path, resolved)
         if device_error:
             return tool_error(
                 self.name,
                 device_error,
-                reason=blocked_device_reason("listed"),
             )
         if not resolved.exists():
             return tool_error(
                 self.name,
-                f"could not list the directory: no such path at '{resolved}'",
-                reason="provide the current path of an existing directory.",
-                retryable=True,
+                f"could not list the directory: no such path at '{resolved}'. "
+                "Provide the current path of an existing directory.",
             )
         if not resolved.is_dir():
             return tool_error(
                 self.name,
-                f"could not list '{resolved}': it is a file, not a directory",
-                reason="provide a directory path, or use read_file for a file.",
-                retryable=True,
+                f"could not list '{resolved}': it is a file, not a directory. "
+                "Provide a directory path, or use read_file for a file.",
             )
 
         children: list[os.DirEntry[str]] = []
@@ -178,12 +173,9 @@ class ListDirectoryTool(HandlerBase):
             # raw 异常且可能中断 turn 流式。
             return tool_error(
                 self.name,
-                f"could not list '{resolved}': {exc}",
-                reason=(
-                    "check that the directory remains available and readable, then call "
-                    "list_directory again."
-                ),
-                retryable=True,
+                f"could not list '{resolved}': {exc}. "
+                "Check that the directory remains available and readable, then call "
+                "list_directory again.",
             )
         page = children[offset : offset + limit]
         entries: list[str] = []

@@ -29,10 +29,6 @@ from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models import ReadFileArgs
 from app.tools.tool_models.text_read_result import TextReadResult
 
-# 设备路径是确定性失败；reason 只提供替代动作，不重复 error 的事实。
-_BLOCKED_DEVICE_REASON = (
-    "use a regular text file path inside the project instead."
-)
 
 
 class ReadFileTool(HandlerBase):
@@ -127,8 +123,8 @@ class ReadFileTool(HandlerBase):
 
         返回:
             ``ToolObservation``。成功时 ``content`` 仅包含模型后续工作所需的
-            ``LINE_NUM|CONTENT`` 文本；失败时 ``status`` 为 ``error``，``error``
-            描述事实，``reason`` 提供下一步动作。
+            ``LINE_NUM|CONTENT`` 文本；失败时 ``status`` 为 ``error``，``content``
+            给出错误事实与下一步动作。
 
         异常:
             不主动向上抛出异常。文件不存在、路径无法解析、二进制文件和读取失败都会被
@@ -147,7 +143,6 @@ class ReadFileTool(HandlerBase):
                 return tool_error(
                     self.name,
                     device_error,
-                    reason=_BLOCKED_DEVICE_REASON,
                     status_hint="无法读取",
                 )
 
@@ -156,9 +151,8 @@ class ReadFileTool(HandlerBase):
             if resolved is None:
                 return tool_error(
                     self.name,
-                    f"could not read the file: {error}",
-                    reason="provide a valid file path inside or under the project root.",
-                    retryable=True,
+                    f"could not read the file: {error}. "
+                    "Provide a valid file path inside or under the project root.",
                     status_hint="路径无效",
                 )
 
@@ -167,7 +161,6 @@ class ReadFileTool(HandlerBase):
                 return tool_error(
                     self.name,
                     device_error,
-                    reason=_BLOCKED_DEVICE_REASON,
                     status_hint="无法读取",
                 )
 
@@ -176,8 +169,6 @@ class ReadFileTool(HandlerBase):
             return tool_error(
                 self.name,
                 result.error,
-                reason=result.reason,
-                retryable=result.retryable,
                 status_hint="无法读取",
             )
 
@@ -264,7 +255,7 @@ class ReadFileTool(HandlerBase):
             是目录、超过 5MB 体积上限、二进制或编码错误）时 ``error`` 非空。
 
         异常:
-            不主动向上抛出文件系统异常。读取失败会返回简短的 ``reason`` 修正建议。
+            不主动向上抛出文件系统异常。读取失败时 ``error`` 同时给出错误事实与修正建议。
 
         副作用:
             只读文件系统，不写入任何文件。
@@ -272,15 +263,17 @@ class ReadFileTool(HandlerBase):
 
         if not path.exists():
             return TextReadResult(
-                error=f"could not read the file: no such file at '{path}'",
-                reason="provide the current path of an existing file.",
-                retryable=True,
+                error=(
+                    f"could not read the file: no such file at '{path}'. "
+                    "Provide the current path of an existing file."
+                ),
             )
         if path.is_dir():
             return TextReadResult(
-                error=f"could not read '{path}': it is a directory, not a file",
-                reason="provide a file path, or use list_directory for this directory.",
-                retryable=True,
+                error=(
+                    f"could not read '{path}': it is a directory, not a file. "
+                    "Provide a file path, or use list_directory for this directory."
+                ),
             )
         file_size = self._safe_file_size(path)
         if file_size > self.max_file_bytes:
@@ -288,28 +281,21 @@ class ReadFileTool(HandlerBase):
                 file_size=file_size,
                 error=(
                     f"File is too large to read: {file_size} bytes "
-                    f"exceeds the {self.max_file_bytes} byte limit."
-                ),
-                reason=(
+                    f"exceeds the {self.max_file_bytes} byte limit. "
                     "read_file cannot open files larger than 5 MB, even with "
                     "pagination. Use search_content with a known text pattern to "
                     "locate matching lines, or "
                     "read a smaller exported or sampled copy of the file."
                 ),
-                retryable=False,
             )
 
         if self._is_likely_binary(path):
             return TextReadResult(
                 file_size=self._safe_file_size(path),
                 error=(
-                    "Binary file cannot be displayed as text. Use a dedicated binary "
-                    "viewer or open it outside the agent to inspect its contents."
-                ),
-                reason=(
-                    "the target is a binary file (detected by extension or NUL bytes) and "
-                    "cannot be rendered as text. Use a dedicated binary viewer or open it "
-                    "outside the agent; reading it with read_file will always fail."
+                    "Binary file cannot be displayed as text (detected by extension or NUL "
+                    "bytes). Use a dedicated binary viewer or open it outside the agent; "
+                    "reading it with read_file will always fail."
                 ),
             )
 
@@ -355,16 +341,15 @@ class ReadFileTool(HandlerBase):
                 error=(
                     "File is not valid UTF-8 and cannot be read as text. It may use a "
                     "different encoding (e.g. GBK on Windows) or be a binary file. "
-                    "Re-save it as UTF-8, or convert it before reading."
+                    "Re-save it as UTF-8, or use a tool that supports its encoding."
                 ),
-                reason="convert the file to UTF-8 or use a tool that supports its encoding.",
-                retryable=True,
             )
         except OSError as exc:
             return TextReadResult(
-                error=os_error_message(exc, "read the file"),
-                reason="make the file readable, then call read_file again.",
-                retryable=True,
+                error=(
+                    f"{os_error_message(exc, 'read the file')}. "
+                    "Make the file readable, then call read_file again."
+                ),
             )
 
         content = self._line_numbered_content(selected)

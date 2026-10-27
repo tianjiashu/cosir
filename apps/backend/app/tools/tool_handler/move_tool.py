@@ -128,13 +128,16 @@ class MoveTool(HandlerBase):
         resolver = PathResolver(execution_context.workspace_root)
         source, error = resolve_workspace_relative_path(resolver, source_path, label="source_path")
         if source is None:
-            return self._error(
-                error, "provide a workspace-relative path to one existing UTF-8 text file."
+            return tool_error(
+                self.name,
+                f"{error}. Provide a workspace-relative path to one existing UTF-8 text file.",
             )
         source_text_error = ensure_utf8_text_file(source, label="move source")
         if source_text_error:
-            return self._error(
-                source_text_error, "the move source must be one existing regular UTF-8 text file."
+            return tool_error(
+                self.name,
+                f"{source_text_error}. "
+                "The move source must be one existing regular UTF-8 text file.",
             )
         destination, error = resolve_workspace_relative_path(
             resolver,
@@ -142,23 +145,27 @@ class MoveTool(HandlerBase):
             label="destination_path",
         )
         if destination is None:
-            return self._error(
-                error, "provide a workspace-relative destination path inside the workspace."
+            return tool_error(
+                self.name,
+                f"{error}. Provide a workspace-relative destination path inside the workspace.",
             )
         if source == destination:
-            return self._error(
-                "source and destination resolve to the same file",
-                "choose a different destination path.",
+            return tool_error(
+                self.name,
+                "source and destination resolve to the same file. "
+                "Choose a different destination path.",
             )
         if os.path.lexists(destination):
-            return self._error(
-                "move destination already exists",
-                "choose a destination path that does not already exist.",
+            return tool_error(
+                self.name,
+                "move destination already exists. "
+                "Choose a destination path that does not already exist.",
             )
         if not destination.parent.is_dir():
-            return self._error(
-                "move destination parent directory does not exist",
-                "choose a destination whose parent directory already exists.",
+            return tool_error(
+                self.name,
+                "move destination parent directory does not exist. "
+                "Choose a destination whose parent directory already exists.",
             )
         if cancellation_registry.is_cancelled(execution_context.task_id):
             return tool_cancelled(tool_name=self.name)
@@ -184,13 +191,15 @@ class MoveTool(HandlerBase):
         except OSError as exc:
             return tool_error(
                 tool_name=self.name,
-                error=os_error_message(exc, "move the file"),
-                reason="check the current source and destination states before trying again.",
-                retryable=True,
+                content=(
+                    f"{os_error_message(exc, 'move the file')}. "
+                    "Check the current source and destination states before trying again."
+                ),
             )
         except (RuntimeError, ValueError) as exc:
-            return self._error(
-                str(exc), "re-read both paths and confirm the source and destination are unchanged."
+            return tool_error(
+                self.name,
+                f"{exc}. Re-read both paths and confirm the source and destination are unchanged.",
             )
 
         root = execution_context.workspace_root.resolve()
@@ -213,31 +222,6 @@ class MoveTool(HandlerBase):
             tool_name=self.name,
             content=None,
             display_data=display_data,
-        )
-
-    def _error(self, error: str, reason: str) -> ToolObservation:
-        """构造确定性的失败观察，并附一句简短的修正指令。
-
-        参数:
-            error: 面向模型的**英文**错误事实（发生了什么）。
-            reason: 面向模型的**英文**修正建议（下一步怎么做）。
-
-        返回:
-            ``status="error"``、``retryable=False`` 的 :class:`ToolObservation`；本方法服务的
-            都是确定性失败，修正参数或当前状态前重试没有意义。
-
-        异常:
-            无。
-
-        副作用:
-            无（只构造观察，不改动文件系统）。
-        """
-
-        return tool_error(
-            tool_name=self.name,
-            error=error,
-            reason=reason,
-            retryable=False,
         )
 
     def to_definition(self) -> ToolDefinition:

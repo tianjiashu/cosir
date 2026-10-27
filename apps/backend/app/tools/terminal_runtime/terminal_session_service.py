@@ -16,7 +16,7 @@ from typing import Any
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.tools.tool_handler.security.path_resolver import PathResolver
-from app.service.terminal.errors import (
+from app.tools.terminal_runtime.errors import (
     TerminalSessionCapacityError,
     TerminalSessionError,
     TerminalSessionNotFoundError,
@@ -24,18 +24,18 @@ from app.service.terminal.errors import (
     TerminalSessionStateError,
     TerminalWorkerUnavailableError,
 )
-from app.service.terminal.process_terminal_worker import ProcessTerminalWorker
-from app.service.terminal.shell_resolver import ShellResolver
-from app.service.terminal.terminal_preview import (
+from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker
+from app.tools.terminal_runtime.shell_resolver import ShellResolver
+from app.tools.terminal_runtime.terminal_preview import (
     TerminalPreviewAttachment,
     TerminalPreviewSubscription,
 )
-from app.service.terminal.terminal_session_runtime import (
+from app.tools.terminal_runtime.terminal_session_runtime import (
     RunCancellationCheck,
     SessionTermination,
     TerminalSessionRuntime,
 )
-from app.service.terminal.terminal_session_status import (
+from app.tools.terminal_runtime.terminal_session_status import (
     TerminalSessionStatusChange,
     TerminalSessionStatusObserverLike,
 )

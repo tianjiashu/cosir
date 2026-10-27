@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.service.terminal.errors import TerminalRepeatedReadError
+from app.tools.terminal_runtime.errors import TerminalRepeatedReadError
 
 
 class TerminalReadGuard:

@@ -10,8 +10,8 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from app.service.terminal.errors import TerminalSessionError
-from app.service.terminal.terminal_screen_projection import project_screen
+from app.tools.terminal_runtime.errors import TerminalSessionError
+from app.tools.terminal_runtime.terminal_screen_projection import project_screen
 
 
 def json_size(value: object) -> int:

@@ -14,7 +14,7 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.results.tool_cancelled import tool_cancelled
-from app.core.tool.results.tool_error import blocked_device_reason, tool_error
+from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
 from app.tools.tool_handler.search.content_engine import search_content
@@ -70,7 +70,6 @@ class SearchContentTool(HandlerBase):
             return tool_error(
                 self.name,
                 device_error,
-                reason=blocked_device_reason("searched"),
                 status_hint="搜索失败",
             )
         resolved_path, path_error = resolver.resolve_without_boundary(path)
@@ -85,7 +84,6 @@ class SearchContentTool(HandlerBase):
                 return tool_error(
                     self.name,
                     device_error,
-                    reason=blocked_device_reason("searched"),
                 )
             page = search_content(
                 scope,
@@ -98,9 +96,8 @@ class SearchContentTool(HandlerBase):
         except SearchTimedOut:
             return tool_error(
                 self.name,
-                "content search exceeded its time limit",
-                reason="narrow the path or file_glob and call search_content again.",
-                retryable=True,
+                "content search exceeded its time limit. "
+                "Narrow the path or file_glob and call search_content again.",
                 status_hint="搜索超时",
             )
         except SearchCancelled:
@@ -111,9 +108,8 @@ class SearchContentTool(HandlerBase):
         except InvalidSearchPattern as exc:
             return tool_error(
                 self.name,
-                f"invalid regular expression: {exc}",
-                reason="correct pattern and call search_content again.",
-                retryable=True,
+                f"invalid regular expression: {exc}. "
+                "Correct pattern and call search_content again.",
                 status_hint="正则无效",
             )
         except SearchPathNotFound as exc:
@@ -121,9 +117,8 @@ class SearchContentTool(HandlerBase):
         except SearchPathUnreadable as exc:
             return tool_error(
                 self.name,
-                f"could not search path: {exc}",
-                reason="provide a readable file or directory path.",
-                retryable=True,
+                f"could not search path: {exc}. "
+                "Provide a readable file or directory path.",
             )
 
         content = _format_content(page.matches)
@@ -192,7 +187,6 @@ def _path_error(tool_name: str, detail: str) -> ToolObservation:
 
     return tool_error(
         tool_name,
-        f"could not search path: {detail}",
-        reason="provide an existing file or directory path relative to the workspace.",
-        retryable=True,
+        f"could not search path: {detail}. "
+        "Provide an existing file or directory path relative to the workspace.",
     )
