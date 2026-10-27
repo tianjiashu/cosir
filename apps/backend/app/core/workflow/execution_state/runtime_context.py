@@ -11,6 +11,7 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     cancellation_registry,
 )
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.tool_availability_notice import tool_availability_notice
 from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.core.workflow.inbox.task_message import NoticeBody, TaskMessage
@@ -72,45 +73,31 @@ class RuntimeContext:
         Assistant Transport）。
 
         副作用:
-            向本次执行的 mailbox 投递本轮工具准入说明，由下一次 prepare_input 写入上下文。通知
-            一旦消费即成为 canonical 历史的固定行，是后续 Run 请求前缀的一部分，不能改为「只注入
-            本次请求、不落库」，否则下一个 Run 的前缀会从这里分叉。
+            需要时向本次执行的 mailbox 投递本轮工具准入说明（与 space 上次告知的禁用集合比较，
+            规则见 ``tool_availability_notice``），由下一次 prepare_input 写入上下文，并更新
+            space 的已告知集合。通知一旦消费即成为 canonical 历史的固定行，是后续 Run 请求前缀
+            的一部分，不能改为「只注入本次请求、不落库」，否则下一个 Run 的前缀会从这里分叉。
+            投递即视为已告知：通知并入前 Run 就被取消属低概率情形，被禁工具仍由准入拦截兜底。
         """
 
         task_space = task_runtime_spaces.get_or_create(task.id)
-        ban_tools = set(run.options.ban_tools)
-        allows_tools = {tool["name"] for tool in task_space.task_tool_schemas} - ban_tools
-        mailbox.post(
-            TaskMessage.of(
-                NoticeBody(
-                    content=cls._tool_availability_notice(ban_tools, allows_tools),
-                    notice_kind="tool_availability",
-                )
+        ban_tools = frozenset(run.options.ban_tools)
+        allows_tools = frozenset(tool["name"] for tool in task_space.task_tool_schemas) - ban_tools
+        content = tool_availability_notice(task_space.announced_ban_tools, ban_tools, allows_tools)
+        if content is not None:
+            mailbox.post(
+                TaskMessage.of(NoticeBody(content=content, notice_kind="tool_availability"))
             )
-        )
+        task_space.announced_ban_tools = ban_tools
         return cls(
             run=run,
             task=task,
             workspace=workspace,
             agent=agent,
-            allows_tools=frozenset(allows_tools),
+            allows_tools=allows_tools,
             task_space=task_space,
             event_sink=event_sink,
             mailbox=mailbox,
-        )
-
-    @staticmethod
-    def _tool_availability_notice(ban_tools: set[str], allows_tools: set[str]) -> str:
-        """本轮工具准入说明；工具名排序，避免同一集合跨进程产生不同文本（前缀缓存）。"""
-
-        if not ban_tools:
-            return "Tool availability notice: all tools are available for this round."
-        if not allows_tools:
-            return "Tool availability notice: all tools are not available for this round."
-        return (
-            "Tool availability notice: the following tools are disabled for this round and calls "
-            f"to them will be rejected: {', '.join(sorted(ban_tools))}. "
-            f"{', '.join(sorted(allows_tools))} tools available."
         )
 
     def is_cancelled(self) -> bool:

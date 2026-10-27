@@ -58,7 +58,7 @@ export function PageHeader({
         </ol>
       </nav>
       {status && <div className="shrink-0">{status}</div>}
-      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+      {actions && <div className="flex shrink-0 items-center gap-1">{actions}</div>}
     </header>
   );
 }

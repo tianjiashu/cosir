@@ -94,6 +94,10 @@ class TaskRuntimeSpace:
     current_task: TaskRecord = field(init=False)
     # Task 的调度者；在这里创建、由注册表拉起（space 可能在工作线程物化，拉起必须回到事件循环）。
     actor: TaskActor = field(init=False)
+    # 最近一次工具准入通知告诉模型的禁用集合，供下一个 Run 只发增量；``None`` 表示未知（新 Task、
+    # fork、后端重启），此时 context 里可能残留其他来源的准入说明，必须重发完整说明。只由
+    # ``RuntimeContext.for_run`` 读写，同一 Task 的 Run 由 actor 串行发起，无需加锁。
+    announced_ban_tools: frozenset[str] | None = field(default=None, init=False)
 
     @property
     def task_tool_schemas(self) -> tuple[FunctionDefinition, ...]:

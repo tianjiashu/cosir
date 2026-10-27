@@ -6,7 +6,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   FolderTreeIcon,
   RefreshCwIcon,
-  ChevronsDownUpIcon,
   SearchIcon,
   XIcon,
 } from "lucide-react";
@@ -141,7 +140,7 @@ export function WorkspaceFilesSurface({
             >
               {/* 工作区名不单独成行：目录根节点已显示名称，悬停可见完整路径。 */}
               <form
-                className="flex items-center gap-0.5 border-b p-2"
+                className="flex items-center gap-0.5 p-2"
                 onSubmit={(event) => {
                   event.preventDefault();
                   runFilenameSearch();
@@ -203,14 +202,6 @@ export function WorkspaceFilesSurface({
                   }
                 >
                   <RefreshCwIcon />
-                </TooltipIconButton>
-                <TooltipIconButton
-                  tooltip="全部折叠"
-                  aria-label="全部折叠"
-                  className="size-8"
-                  onClick={() => patch(workspaceId, { expanded: [] })}
-                >
-                  <ChevronsDownUpIcon />
                 </TooltipIconButton>
                 <FileBrowserMenu onManage={() => setManageIgnored(true)} />
               </form>

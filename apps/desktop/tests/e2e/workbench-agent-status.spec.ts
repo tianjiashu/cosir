@@ -5,9 +5,10 @@ const origin = "http://127.0.0.1:8000";
 const terminal = (status: string) => ["completed", "failed", "cancelled"].includes(status);
 /** Task 视角 snapshot：一轮回复 + 当前活动；终态时结局写在回复上。 */
 function snapshot(runId: number | null, status = "completed", text = "阅读内容") {
-  if (runId === null) return { messages: [], activity: null, error: null };
+  if (runId === null) return { title: "子 Agent", messages: [], activity: null };
   const ended = terminal(status);
   return {
+    title: "子 Agent",
     messages: [{
       id: `assistant-run-${runId}`, role: "assistant", runId,
       parts: [{ type: "text", text, status: ended ? "completed" : "running" }],
@@ -15,7 +16,6 @@ function snapshot(runId: number | null, status = "completed", text = "阅读内�
     }],
     activity: { runId, status, endReason: null, error: null, usage: null, contextWindowTotal: null,
       launch: { modelConfigId: 2, reasoningEffort: null, banTools: [] } },
-    error: null,
   };
 }
 type Snapshot = ReturnType<typeof snapshot>;

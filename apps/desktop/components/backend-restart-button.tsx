@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import { RotateCwIcon } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { Spinner } from "@/components/ui/spinner";
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -36,8 +36,8 @@ export function useBackendRestart(source: "header" | "status_banner") {
 }
 
 /**
- * 开发期顶栏的重启按钮。后端就绪时重启会中断所有运行中的任务，因此必须二次确认；
- * 中断的 Run 由后端收敛为 cancelled，用户可在对话中继续。
+ * 开发期顶栏的重启按钮，与顶栏其余操作一样是图标按钮。后端就绪时重启会中断所有运行中的
+ * 任务，因此必须二次确认；中断的 Run 由后端收敛为 cancelled，用户可在对话中继续。
  */
 export function BackendRestartButton() {
   const { restarting, restart } = useBackendRestart("header");
@@ -58,16 +58,14 @@ export function BackendRestartButton() {
   };
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
+    <TooltipIconButton
+      tooltip={restarting ? "重启中…" : "重启后端"}
+      className="size-7"
       onClick={confirmAndRestart}
       disabled={restarting}
       aria-label={restarting ? "正在重启后端" : "重启后端"}
     >
       {restarting ? <Spinner label={null} /> : <RotateCwIcon />}
-      {restarting ? "重启中…" : "重启后端"}
-    </Button>
+    </TooltipIconButton>
   );
 }

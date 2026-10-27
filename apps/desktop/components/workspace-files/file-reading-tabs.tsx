@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fileTabLabel } from "@/lib/workspace-files/tab-label";
 import { cn } from "@/lib/utils";
+import { PANEL_HEADER_CLASS, panelTabClass } from "@/components/ui/panel-tokens";
 
 /** 仅观察阅读器已产生的元数据错误，不为非活动标签发起额外读取。 */
 function FileTabError({ workspaceId, path }: { workspaceId: number; path: string; }) {
@@ -76,24 +77,18 @@ export function FileReadingTabs({
         onValueChange={(value) => open(workspaceId, String(value))}
         className="flex min-h-0 min-w-0 flex-1 flex-col"
       >
-        <div className="flex min-w-0 shrink-0 border-b">
+        <div className={cn(PANEL_HEADER_CLASS, "min-w-0")}>
           <Tabs.List
             aria-label="文件预览标签"
-            className="flex min-w-0 flex-1 overflow-x-auto"
+            className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
           >
             {session.tabs.map((tab) => (
-              <div
-                key={tab.path}
-                className={cn(
-                  "flex max-w-64 shrink-0 items-center border-r px-1 text-xs",
-                  tab.path === session.active && "bg-muted",
-                )}
-              >
+              <div key={tab.path} className={panelTabClass(tab.path === session.active, "max-w-64")}>
                 <Tooltip disableHoverablePopup>
                   <TooltipTrigger render={<Tabs.Trigger
                     value={tab.path}
                     aria-label={fileTabLabel(tab.path, session.tabs.map(item => item.path))}
-                    className="flex h-9 min-w-0 items-center gap-1 px-2 focus-visible:outline-2 focus-visible:outline-ring"
+                    className="flex min-w-0 items-center gap-1.5 self-stretch focus-visible:outline-2 focus-visible:outline-ring"
                     onDoubleClick={() => open(workspaceId, tab.path, true)}
                   />} >
                     <WorkspaceFileIcon name={tab.path.split("/").at(-1)!} />
@@ -108,7 +103,7 @@ export function FileReadingTabs({
                   <TooltipIconButton
                     tooltip="固定预览，保留此标签"
                     aria-label={`固定 ${tab.path}`}
-                    className="size-7 shrink-0"
+                    className="size-6 shrink-0"
                     onClick={() => open(workspaceId, tab.path, true)}
                   >
                     <PinIcon className="size-3.5" />
@@ -117,7 +112,7 @@ export function FileReadingTabs({
                 <TooltipIconButton
                   tooltip="关闭文件"
                   aria-label={`关闭文件 ${tab.path}`}
-                  className="size-7 shrink-0"
+                  className="size-6 shrink-0"
                   onClick={() => {
                     restoreFocus.current = true;
                     close(workspaceId, tab.path);

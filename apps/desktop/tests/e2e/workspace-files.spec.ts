@@ -173,11 +173,6 @@ test("目录、只读预览、固定标签、未展开目录搜索与定位", as
   ).toBeVisible();
   await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
   await expect(surface.getByRole("tab", { name: "main.py" })).toBeVisible();
-  await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
-  await surface.getByRole("button", { name: "全部折叠" }).click();
-  await expect(
-    surface.getByTestId("workspace-file-tree").getByText("nested.json"),
-  ).toHaveCount(0);
   expect(errors).toEqual([]);
   expect(requests.filter((value) => /PUT|PATCH|DELETE/.test(value))).toEqual(
     [],

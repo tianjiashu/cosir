@@ -18,7 +18,8 @@ import { useCallback, useEffect } from "react";
 import { PanelDock } from "@/components/ui/panel-dock";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Button } from "@/components/ui/button";
+import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { PANEL_HEADER_CLASS, panelTabClass } from "@/components/ui/panel-tokens";
 import { WorkbenchAgentStatusProvider } from "@/lib/workbench/agent-status";
 import { WorkbenchAgentTabStatus } from "@/components/workbench-agent-tab-status";
 import { WorkbenchSurface } from "@/components/workbench-surface";
@@ -153,7 +154,7 @@ export function Workbench({
         aria-label="工作台"
       >
         {/* 卡片位于窗口右上角：标签行是标题栏拖动区，并给 Windows 自绘窗口按钮让位（卡片已离窗口右缘 8px）。 */}
-        <div data-tauri-drag-region="deep" className="flex h-11 shrink-0 items-center gap-1 border-b pl-2 pr-[max(0.5rem,calc(var(--titlebar-inset-right)-0.5rem))]">
+        <div data-tauri-drag-region="deep" className={cn(PANEL_HEADER_CLASS, "pr-[max(0.5rem,calc(var(--titlebar-inset-right)-0.5rem))]")}>
           <Tabs.List
             className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
             aria-label="工作台标签页"
@@ -161,10 +162,7 @@ export function Workbench({
             {tabs.map((tab) => {
               const TabIcon = TAB_KIND_ICONS[tab.kind];
               return (
-                <div
-                  key={tab.id}
-                  className={cn("group flex h-8 max-w-56 min-w-0 items-center gap-1 rounded-md pr-1 pl-2 text-xs", tab.id === activeTab.id ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground")}
-                >
+                <div key={tab.id} className={panelTabClass(tab.id === activeTab.id, "max-w-56 shrink")}>
                   <Tooltip disableHoverablePopup>
                     <TooltipTrigger render={<Tabs.Trigger
                       value={tab.id}
@@ -177,26 +175,22 @@ export function Workbench({
                     </TooltipTrigger>
                     <TooltipContent side="top">{tab.kind === "agent-team-configuration-draft" ? <TeamDraftLabel tab={tab} expanded /> : <DraftLabel title={tab.title} dirty={tab.kind === "agent-configuration-draft" && tab.dirty} expanded />}{tab.kind === "agent" && <WorkbenchAgentTabStatus taskId={tab.taskId} expanded />}</TooltipContent>
                   </Tooltip>
-                  <button
-                    type="button"
-                    className="flex size-6 shrink-0 items-center justify-center rounded opacity-60 hover:bg-background/80 hover:opacity-100"
+                  <TooltipIconButton
+                    tooltip="关闭标签"
+                    side="top"
+                    className="size-6 shrink-0 opacity-60 hover:bg-background/80 hover:opacity-100"
                     aria-label={`关闭 ${tab.title}`}
                     onClick={() => void requestCloseTab(tab.id)}
                   >
                     <XIcon className="size-3" aria-hidden="true" />
-                  </button>
+                  </TooltipIconButton>
                 </div>
               );
             })}
           </Tabs.List>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="收起工作台"
-            onClick={onRequestClose}
-          >
+          <TooltipIconButton tooltip="收起工作台" className="size-7" aria-label="收起工作台" onClick={onRequestClose}>
             <PanelRightCloseIcon />
-          </Button>
+          </TooltipIconButton>
         </div>
         {tabs.map((tab) => (
           <Tabs.Content

@@ -163,6 +163,7 @@ function usageFixture(secondRun) {
 function completedFixture(runId, userMessage, assistantParts) {
   const activity = activityOf(runId, "completed", { launch: { modelConfigId: null, reasoningEffort: null, banTools: [] } });
   return {
+    title: "测试对话",
     messages: [
       { ...userMessage, runId, outcome: null },
       { id: `assistant-${userMessage.id}`, role: "assistant", parts: assistantParts, runId, outcome: outcomeOf(activity) },

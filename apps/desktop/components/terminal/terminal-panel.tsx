@@ -2,7 +2,9 @@ import { Maximize2Icon, Minimize2Icon, TerminalIcon, XIcon } from "lucide-react"
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { PanelDock } from "@/components/ui/panel-dock";
+import { PANEL_HEADER_CLASS } from "@/components/ui/panel-tokens";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import {
@@ -131,7 +133,7 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
       className="terminal-surface bg-terminal-inset dock-panel flex w-full flex-col"
       aria-label="终端会话面板"
     >
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
+      <header className={cn(PANEL_HEADER_CLASS, "gap-2 pl-3")}>
         <TerminalIcon className="text-muted-foreground size-4" aria-hidden="true" />
         <span className="text-foreground text-sm font-medium">终端会话</span>
         <div className="ml-auto flex min-w-0 items-center gap-2">
@@ -155,18 +157,17 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
             </Badge>
           ) : null}
         </div>
-        <button
-          type="button"
+        <TooltipIconButton
+          tooltip={expanded ? "还原高度" : "展开终端"}
+          className="text-muted-foreground size-7"
           onClick={toggleExpanded}
-          className="focus-ring text-muted-foreground hover:bg-accent hover:text-foreground rounded p-1"
           aria-label={expanded ? "还原终端面板高度" : "展开终端面板"}
-          title={expanded ? "还原高度" : "展开终端"}
         >
-          {expanded ? <Minimize2Icon className="size-4" aria-hidden="true" /> : <Maximize2Icon className="size-4" aria-hidden="true" />}
-        </button>
-        <button type="button" onClick={onClose} className="focus-ring text-muted-foreground hover:bg-accent hover:text-foreground rounded p-1" aria-label="关闭终端面板" title="关闭面板">
-          <XIcon className="size-4" aria-hidden="true" />
-        </button>
+          {expanded ? <Minimize2Icon aria-hidden="true" /> : <Maximize2Icon aria-hidden="true" />}
+        </TooltipIconButton>
+        <TooltipIconButton tooltip="关闭面板" className="text-muted-foreground size-7" onClick={onClose} aria-label="关闭终端面板">
+          <XIcon aria-hidden="true" />
+        </TooltipIconButton>
       </header>
       <div ref={containerRef} className="min-h-0 flex-1 overflow-auto px-3 py-2" data-terminal-stream="true" />
     </section>

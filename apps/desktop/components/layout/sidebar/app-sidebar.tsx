@@ -12,6 +12,7 @@ import {
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import type { DeleteTarget } from "@/components/layout/use-workspace-actions";
 import { ResourceDeleteButton } from "@/components/resource-delete-button";
+import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { WorkspaceTree } from "@/components/task-tree/workspace-tree";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
@@ -40,14 +41,16 @@ type AppSidebarProps = {
 export function SidebarToggleButton({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const label = collapsed ? "展开侧栏" : "收起侧栏";
   return (
-    <Button variant="ghost" size="icon-sm" onClick={onToggle} aria-label={label} title={withShortcut(label, "toggleSidebar")}>
+    <TooltipIconButton tooltip={withShortcut(label, "toggleSidebar")} className="size-7" onClick={onToggle} aria-label={label}>
       {collapsed ? <PanelLeftOpenIcon /> : <PanelLeftCloseIcon />}
-    </Button>
+    </TooltipIconButton>
   );
 }
 
 /**
  * 应用侧栏：新对话、工作区 / 任务树、底部的系统配置与上下文观测入口。
+ *
+ * 铺在窗口底色（canvas）上，不画边线：与主区的分隔靠两者明度差，底部入口靠 mt-auto 的留白。
  *
  * 只负责呈现与转发用户意图；停靠 / 抽屉 / 图标栏的切换由 AppLayout 根据视口与偏好决定。
  * 所有文字都不换行并截断——侧栏宽度在动画中变化时，换行会把中文逐字竖排。
@@ -119,7 +122,7 @@ export function AppSidebar({
         </nav>
       )}
 
-      <div className={cn("mt-auto flex shrink-0 flex-col gap-1 border-t", rail ? "items-center p-2" : "p-3")}>
+      <div className={cn("mt-auto flex shrink-0 flex-col gap-1", rail ? "items-center p-2" : "p-3")}>
         <SidebarLink rail={rail} active={section === "settings"} icon={<Settings2Icon className="size-4" />} label="系统配置" shortcut="openSettings" onClick={onOpenSettings} />
         <SidebarLink rail={rail} active={section === "observer"} icon={<SearchIcon className="size-4" />} label="上下文观测" onClick={onOpenObserver} />
       </div>

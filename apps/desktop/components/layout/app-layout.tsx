@@ -10,7 +10,7 @@ import {
   useNavigate,
   useOutletContext,
 } from "react-router-dom";
-import { PanelRightCloseIcon, PanelRightOpenIcon } from "lucide-react";
+import { FolderIcon, PanelRightIcon } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 
 import { BackendRestartButton } from "@/components/backend-restart-button";
@@ -26,8 +26,8 @@ import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { findSettingsTab, SYSTEM_SETTINGS_TABS, WORKSPACE_SETTINGS_TABS } from "@/components/settings/settings-tabs";
 import { TaskPage } from "@/components/task-page";
 import { TaskRunStatusBadge } from "@/components/task-tree/task-run-status";
-import { Button } from "@/components/ui/button";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
+import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { Workbench } from "@/components/workbench";
 import { useWorkbenchLayout } from "./use-workbench-layout";
 import { useWorkspaceNavigation } from "./use-workspace-navigation";
@@ -162,6 +162,9 @@ export function AppLayout() {
   const allWorkbenchTabs = useWorkbenchStore((state) => state.tabs);
   const workbenchTabs = allWorkbenchTabs.filter(tab => filesVisible || tab.kind !== "files");
   const workbenchPanelOpen = useWorkbenchStore((state) => state.panelOpen);
+  const workbenchActiveTabId = useWorkbenchStore((state) => state.activeTabId);
+  // 顶栏图标按当前打开的面板高亮：文件标签在前台时「文件」亮，工作台打开时「工作台」亮。
+  const filesPanelActive = workbenchPanelOpen && workbenchTabs.some((tab) => tab.kind === "files" && tab.id === workbenchActiveTabId);
   const setWorkbenchPanelOpen = useWorkbenchStore((state) => state.setPanelOpen);
   // 收起只改变可见性；草稿由工作台会话保留，真正销毁由关闭/工作区切换边界确认。
   const toggleWorkbenchPanel = useCallback(() => {
@@ -222,12 +225,13 @@ export function AppLayout() {
   return (
     <ReferenceBridgeProvider workspaceRoot={catalog.activeWorkspace?.root_path ?? ""} workspaceName={catalog.activeWorkspace?.name ?? "工作区"} target={filesVisible ? (routeTaskId ? `task:${routeTaskId}` : `new:${catalog.selectedWorkspaceId}`) : null} workspaceId={catalog.activeWorkspace?.workspace_id ?? null}>
     <WorkbenchProvider workspaceId={workbenchWorkspaceId}>
-      <div className="bg-background relative flex h-dvh min-h-0 overflow-hidden">
+      {/* 根是下沉的窗口底色，侧栏直接铺在上面；主区与停靠卡片在 bg-background 上，二者靠明度差分隔，不画线。 */}
+      <div className="bg-canvas relative flex h-dvh min-h-0 overflow-hidden">
         <BackendStatusBanner />
         <aside
           style={sidebarRail ? undefined : { width: sidebarWidth }}
           className={cn(
-            "bg-muted/20 relative flex min-h-0 shrink-0 flex-col border-r",
+            "relative flex min-h-0 shrink-0 flex-col",
             sidebarRail && "w-14",
             // 收起 / 展开有过渡；拖拽调宽时关掉，否则宽度追着指针慢半拍。
             !narrow && "transition-[width] duration-200 motion-reduce:transition-none [&:has(>[role=separator]:active)]:transition-none",
@@ -248,7 +252,7 @@ export function AppLayout() {
         {narrow && drawerOpen && (
           <>
             <div className="absolute inset-0 z-40 bg-black/20" aria-hidden="true" onClick={() => setDrawerOpen(false)} />
-            <aside style={{ width: sidebarWidth }} className="bg-background absolute inset-y-0 left-0 z-50 flex min-h-0 flex-col border-r shadow-xl" aria-label="侧栏">
+            <aside style={{ width: sidebarWidth }} className="bg-canvas absolute inset-y-0 left-0 z-50 flex min-h-0 flex-col shadow-xl" aria-label="侧栏">
               {sidebar("expanded")}
             </aside>
           </>
@@ -262,7 +266,7 @@ export function AppLayout() {
         <div
           ref={workbenchLayout.containerRef}
           className={cn(
-            "flex min-h-0 min-w-0 flex-1 [--header-inset-right:var(--titlebar-inset-right)] has-[[data-workbench-dock]]:[--header-inset-right:0px]",
+            "bg-background flex min-h-0 min-w-0 flex-1 [--header-inset-right:var(--titlebar-inset-right)] has-[[data-workbench-dock]]:[--header-inset-right:0px]",
             sidebarRail && "[--header-inset-left:calc(var(--titlebar-inset-left)-3rem)]",
           )}
         >
@@ -274,35 +278,32 @@ export function AppLayout() {
             actions={(
               <>
                 {filesVisible && catalog.activeWorkspace && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="border-transparent focus-visible:border-transparent"
+                  <TooltipIconButton
+                    tooltip="浏览工作区文件"
                     aria-label="浏览工作区文件"
+                    aria-pressed={filesPanelActive}
+                    className={cn("size-7", filesPanelActive && "bg-muted text-foreground")}
                     onClick={() => useWorkbenchStore.getState().openFiles(
                       catalog.activeWorkspace!.workspace_id,
                       catalog.activeWorkspace!.root_path,
                       catalog.activeWorkspace!.name,
                     )}
                   >
-                    文件
-                  </Button>
+                    <FolderIcon />
+                  </TooltipIconButton>
                 )}
                 {workbenchTabs.length > 0 && (
-                  <Button
-                    type="button"
-                    variant={workbenchPanelOpen ? "secondary" : "outline"}
-                    size="sm"
-                    className="border-transparent focus-visible:border-transparent"
+                  <TooltipIconButton
+                    tooltip={workbenchPanelOpen ? "收起工作台" : "打开工作台"}
                     aria-label={`工作台，${workbenchTabs.length} 个标签，${workbenchPanelOpen ? "点击收起" : "点击打开"}`}
                     aria-pressed={workbenchPanelOpen}
-                    title={workbenchPanelOpen ? "收起工作台" : "打开工作台"}
+                    className={cn("relative size-7", workbenchPanelOpen && "bg-muted text-foreground")}
                     onClick={toggleWorkbenchPanel}
                   >
-                    {workbenchPanelOpen ? <PanelRightCloseIcon aria-hidden="true" /> : <PanelRightOpenIcon aria-hidden="true" />}
-                    <span className="max-[640px]:sr-only">工作台</span>
-                    <span className="text-muted-foreground min-w-4 text-center text-xs tabular-nums">{workbenchTabs.length}</span>
-                  </Button>
+                    <PanelRightIcon />
+                    {/* 标签数作为角标：图标化后仍能一眼看出工作台里有几样东西。 */}
+                    <span aria-hidden="true" className="bg-foreground text-background absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-2xs leading-none tabular-nums">{workbenchTabs.length}</span>
+                  </TooltipIconButton>
                 )}
                 <BackendRestartButton />
               </>

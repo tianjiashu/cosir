@@ -21,6 +21,8 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-canvas: var(--canvas);
+  --shadow-panel: var(--panel-shadow);
   --font-sans: var(--app-font-sans);
   --font-mono: var(--app-font-mono);
   --font-heading: var(--app-font-sans);
@@ -118,6 +120,10 @@
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
   --radius: 0.625rem;
+  /* 窗口底色：侧栏所在的下沉层。区域之间靠它与 --background 的明度差分隔，不画结构分割线。 */
+  --canvas: oklch(0.97 0.002 90);
+  /* 停靠卡片（工作台、终端）浮在主区之上的投影。 */
+  --panel-shadow: 0 1px 2px oklch(0 0 0 / 0.04), 0 6px 20px oklch(0 0 0 / 0.06);
   --terminal: #18181b;
   --terminal-inset: #09090b;
   --terminal-foreground: #e4e4e7;
@@ -157,6 +163,8 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
+  --canvas: oklch(0.115 0 0);
+  --panel-shadow: 0 1px 2px oklch(0 0 0 / 0.3), 0 6px 20px oklch(0 0 0 / 0.35);
   --terminal: #111113;
   --terminal-inset: #09090b;
   --skill-foreground: oklch(0.84 0.08 295);
@@ -192,7 +200,7 @@
  * 先后顺序不可靠，由调用方显式设置。overflow-hidden 让子元素背景不越过圆角。
  */
 @utility dock-panel {
-  @apply overflow-hidden rounded-xl border shadow-xs;
+  @apply overflow-hidden rounded-xl border shadow-panel;
 }
 
 /*
