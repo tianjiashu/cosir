@@ -29,10 +29,10 @@ export type TaskMessageRequest = {
   banTools: readonly string[];
 };
 
-/** 用户对一个待确认 Agent Team 方案的决定；`data` 批准时为最终运行输入，驳回时带 `feedback`。 */
-export type TeamDecision = {
-  teamRunId: number;
+/** 用户对一次等待决定的工具调用（HITL）的决定；`data` 是批准时附带的工具自定义载荷，驳回只带 `feedback`。 */
+export type ToolDecision = {
   decision: "approve" | "reject";
+  feedback?: string;
   data?: Record<string, unknown>;
 };
 
@@ -90,7 +90,12 @@ export function resumeTask(taskId: number, init?: CommandInit): Promise<void> {
   return postTaskCommand(`/tasks/${taskId}/resume`, undefined, init);
 }
 
-/** 对待确认的 Agent Team 方案作出决定；后端执行决定后以消息唤醒主 Agent，后续输出经 Task 长订阅到达。 */
-export function submitTeamDecision(taskId: number, decision: TeamDecision, init?: CommandInit): Promise<void> {
-  return postTaskCommand(`/tasks/${taskId}/decisions`, decision, init);
+/** 对一次等待决定的工具调用作出决定（按工具调用寻址，与具体工具无关）；后续输出经 Task 长订阅到达。 */
+export function submitToolDecision(
+  taskId: number,
+  toolCallId: string,
+  decision: ToolDecision,
+  init?: CommandInit,
+): Promise<void> {
+  return postTaskCommand(`/tasks/${taskId}/tool-calls/${encodeURIComponent(toolCallId)}/decision`, decision, init);
 }

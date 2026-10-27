@@ -5,7 +5,7 @@ import {
   rerunTaskMessage,
   resumeTask,
   sendTaskMessage,
-  submitTeamDecision,
+  submitToolDecision,
   type TaskMessageRequest,
 } from "@/lib/assistant/task-commands";
 import { HttpError } from "@/lib/http/errors";
@@ -68,9 +68,9 @@ describe("task commands", () => {
     expect(lastCall()[0]).toMatch(/\/tasks\/7\/resume$/);
     expect(lastCall()[1].body).toBeUndefined();
 
-    await submitTeamDecision(7, { teamRunId: 17, decision: "approve", data: { goal: "交付" } });
-    expect(lastCall()[0]).toMatch(/\/tasks\/7\/decisions$/);
-    expect(JSON.parse(String(lastCall()[1].body))).toEqual({ teamRunId: 17, decision: "approve", data: { goal: "交付" } });
+    await submitToolDecision(7, "call/1", { decision: "approve", data: { goal: "交付" } });
+    expect(lastCall()[0]).toMatch(/\/tasks\/7\/tool-calls\/call%2F1\/decision$/);
+    expect(JSON.parse(String(lastCall()[1].body))).toEqual({ decision: "approve", data: { goal: "交付" } });
   });
 
   it("编辑排队消息时消息已并入：409 MESSAGE_CONSUMED 原样抛出", async () => {
@@ -89,7 +89,8 @@ describe("task commands", () => {
       { status: 404, headers: { "Content-Type": "application/json" } },
     )));
 
-    const error = await submitTeamDecision(7, { teamRunId: 17, decision: "reject" }).catch((cause: unknown) => cause);
+    const error = await submitToolDecision(7, "call-1", { decision: "reject", feedback: "换个分工" })
+      .catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(HttpError);
     expect((error as HttpError).status).toBe(404);
     expect((error as HttpError).message).toBe("任务不存在");

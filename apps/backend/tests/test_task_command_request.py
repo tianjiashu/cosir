@@ -7,7 +7,7 @@ from app.assistant_transport.request import (
     EditQueuedMessageRequest,
     RerunMessageRequest,
     SendMessageRequest,
-    TeamDecisionRequest,
+    DecisionRequest,
 )
 
 
@@ -105,23 +105,25 @@ def test_invalid_reasoning_effort_is_rejected(effort: object) -> None:
         _send(reasoningEffort=effort)
 
 
-def test_team_decision_addresses_team_run() -> None:
-    decision = TeamDecisionRequest.model_validate(
-        {"teamRunId": 17, "decision": "approve", "data": {"goal": "ok"}}
+def test_decision_carries_no_tool_specific_address() -> None:
+    """调用由路径里的 tool_call_id 寻址，请求体只有决定本身。"""
+    decision = DecisionRequest.model_validate(
+        {"decision": "reject", "feedback": "换个分工", "data": {"goal": "ok"}}
     )
 
-    assert (decision.teamRunId, decision.decision, decision.data) == (17, "approve", {"goal": "ok"})
+    assert (decision.decision, decision.feedback, decision.data) == (
+        "reject", "换个分工", {"goal": "ok"}
+    )
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"teamRunId": 17, "decision": "force_reject"},
-        {"teamRunId": 17, "decision": "abort"},
-        {"teamRunId": 0, "decision": "approve"},
-        {"requestId": "17", "decision": "approve"},
+        {"decision": "force_reject"},
+        {"decision": "abort"},
+        {"teamRunId": 17, "decision": "approve"},
     ],
 )
-def test_team_decision_rejects_unknown_shapes(payload: dict[str, object]) -> None:
+def test_decision_rejects_unknown_shapes(payload: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
-        TeamDecisionRequest.model_validate(payload)
+        DecisionRequest.model_validate(payload)

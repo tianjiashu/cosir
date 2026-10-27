@@ -12,7 +12,10 @@ import {
   hasPendingEditComposerStart,
   isCurrentEditComposerOperation,
   isEditComposerOperationActive,
+  isQueuedEditLocked,
+  lockQueuedEditMode,
   queuePendingEditComposerStart,
+  releaseQueuedEditLock,
   setPendingEditComposerDraft,
   subscribeEditComposerOperations,
   takePendingEditComposerDraft,
@@ -128,6 +131,35 @@ function draftImage(id: string) {
   return { id, type: "image" as const, name: `${id}.png`, contentType: "image/png",
     content: [{ type: "image" as const, image: `cosir-attachment://${id}` }] };
 }
+
+describe("queued edit mode lock", () => {
+  it("keeps the queued mode for a restored draft after the message was consumed", () => {
+    const messageId = `queued-${crypto.randomUUID()}`;
+    expect(lockQueuedEditMode(messageId, true, false)).toBe(true);
+
+    // 提交被拒（消息已被并入）后恢复编辑框：此时已不在排队，仍按排队编辑处理，不会改成重跑。
+    expect(lockQueuedEditMode(messageId, false, true)).toBe(true);
+    expect(isQueuedEditLocked(messageId)).toBe(true);
+  });
+
+  it("re-decides the mode when a fresh edit starts", () => {
+    const messageId = `queued-${crypto.randomUUID()}`;
+    lockQueuedEditMode(messageId, true, false);
+
+    expect(lockQueuedEditMode(messageId, false, false)).toBe(false);
+    expect(isQueuedEditLocked(messageId)).toBe(false);
+  });
+
+  it("releases the lock after a save or an explicit switch to rerun", () => {
+    const messageId = `queued-${crypto.randomUUID()}`;
+    lockQueuedEditMode(messageId, true, false);
+
+    releaseQueuedEditLock(messageId);
+
+    expect(isQueuedEditLocked(messageId)).toBe(false);
+    expect(lockQueuedEditMode(messageId, false, true)).toBe(false);
+  });
+});
 
 describe("edit draft composer write", () => {
   it("将历史普通文件登记为元数据并清除 AUI lift 副本", async () => {

@@ -7,7 +7,7 @@ from app.assistant_transport.request.task_command_request import (
     EditQueuedMessageRequest,
     RerunMessageRequest,
     SendMessageRequest,
-    TeamDecisionRequest,
+    DecisionRequest,
 )
 from app.assistant_transport.request.transport_request_error import TransportRequestError
 
@@ -18,6 +18,6 @@ __all__ = [
     "EditQueuedMessageRequest",
     "RerunMessageRequest",
     "SendMessageRequest",
-    "TeamDecisionRequest",
+    "DecisionRequest",
     "TransportRequestError",
 ]

@@ -127,7 +127,7 @@ def test_all_domain_routes_registered_on_same_app() -> None:
         "/tasks/{task_id}/queued-messages/{message_id}",
         "/tasks/{task_id}/messages/{message_id}/rerun",
         "/tasks/{task_id}/resume",
-        "/tasks/{task_id}/decisions",
+        "/tasks/{task_id}/tool-calls/{tool_call_id}/decision",
         "/tasks/{task_id}/assistant/attach",
         "/tasks/{task_id}/assistant/state",
         "/tasks/{task_id}/cancel",

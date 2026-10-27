@@ -69,11 +69,20 @@ _USER_CANCELLED_NOTICE = (
 
 
 class SessionConflictError(ValueError):
-    """当前 Task 状态不允许本次用户命令；``code`` 是稳定的机器码，API 映射为 409。"""
+    """当前 Task 状态不允许本次用户命令；``code`` 是稳定的机器码，API 映射为 409。
 
-    def __init__(self, code: str, message: str) -> None:
+    ``retryable`` 表示「刷新状态后重试可能成功」，前端据此决定是否提供重新同步入口；冲突已成定局
+    （如排队消息已被并入）时为 ``False``。
+    """
+
+    def __init__(self, code: str, message: str, *, retryable: bool = True) -> None:
         super().__init__(message)
         self.code = code
+        self.retryable = retryable
+
+
+def _refresh_queued(task_id: int) -> None:
+    service_depends.get_conversation_task_state_service().refresh_queued_messages(task_id)
 
 
 def _republish(task_id: int) -> None:
@@ -186,6 +195,19 @@ class TaskActor:
         """
         if self._stopping:
             return
+        if fresh:
+            # 先刷新排队投影再投递：消费投影只搬移排队条目，消息进 mailbox 前投影里必须已有它。
+            try:
+                await asyncio.to_thread(_refresh_queued, self.task_id)
+            except Exception as exc:
+                log.exception(
+                    "queued_projection_refresh_failed",
+                    extra={
+                        "msg": "排队投影刷新失败，照常推进；等后续刷新或重建收敛",
+                        "data": {"task_id": self.task_id},
+                    },
+                    exc_info=exc,
+                )
         async with self._space.async_operation():
             current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
             action = dispatch_policy.next_action(self._phase(current), current, pending, fresh)
@@ -367,6 +389,9 @@ class TaskActor:
         self.execution = None
         reason = cancellation_registry.consume(self.task_id)
         if self._stopping:
+            # 删除前停止：不接续、不传播，但执行已注销，仍要唤醒 ``wait_idle`` 的等待方重新判定，
+            # 否则它们只能等到自己的超时。
+            self._publish_state()
             return
         try:
             settled = await asyncio.to_thread(self._ledger.get_run, run.id)

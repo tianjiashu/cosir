@@ -117,12 +117,15 @@ class RerunMessageRequest(_LaunchCommandRequest):
     """编辑最新一条已并入的用户消息并重跑：按本次请求的配置开新 Run。"""
 
 
-class TeamDecisionRequest(BaseModel):
-    """对一个待确认 Agent Team 方案作出决定；``data`` 的形状由决定种类定义（批准：最终运行输入，
-    驳回：``feedback``），在 ``AgentTeamDecisionService`` 入队边界校验。"""
+class DecisionRequest(BaseModel):
+    """对一次等待用户决定的工具调用（HITL）作出决定；调用由路径里的 ``tool_call_id`` 寻址。
+
+    ``data`` 是批准时附带的工具自定义载荷，形状由工具的 ``ToolDefinition.decision_model`` 声明，
+    在决定入口校验；驳回只带 ``feedback``。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    teamRunId: int = Field(ge=1)
     decision: Literal["approve", "reject"]
-    data: dict[str, Any] = Field(default_factory=dict)
+    feedback: str | None = None
+    data: dict[str, Any] | None = None

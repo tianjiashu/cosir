@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+from typing import cast
 
 from sqlalchemy.orm import Session
 
@@ -178,6 +179,33 @@ class ConversationTaskContextService:
             metadata = record.metadata
             if isinstance(metadata, UserMessageMetadata) and metadata.kind == "user_input":
                 return record
+        return None
+
+    def awaiting_decision_tool(self, task_id: int, tool_call_id: str) -> str | None:
+        """这次调用仍在等用户决定时返回其工具名，否则返回 ``None``。
+
+        等待与否的事实源是工具结果行：HITL 工具首次调用写入的等待占位 metadata 为 ``pending``，
+        决定执行后由结算推到终态。只看仍进模型上下文的行——被编辑重跑移出的调用已无法重放。
+        工具名取自发起这次调用的 assistant 消息，不依赖工具自己的业务事实（如 TeamRun）。
+        """
+        records = self._crud.get(task_id, include_in_context=True)
+        result = next(
+            (
+                record
+                for record in reversed(records)
+                if record.message["role"] == "tool"
+                and record.message["tool_call_id"] == tool_call_id
+            ),
+            None,
+        )
+        if result is None or cast(ToolMessageMetadata, result.metadata).status != "pending":
+            return None
+        for record in reversed(records):
+            if record.message["role"] != "assistant":
+                continue
+            for call in record.message.get("tool_calls") or ():
+                if call["id"] == tool_call_id:
+                    return call["function"]["name"]
         return None
 
     def exclude_from(self, task_id: int, sequence: int, session: Session) -> None:

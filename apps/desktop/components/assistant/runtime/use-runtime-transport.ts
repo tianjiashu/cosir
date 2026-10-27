@@ -13,6 +13,7 @@ import {
   type TaskMessageRequest,
 } from "@/lib/assistant/task-commands";
 import { isQueuedUserMessage } from "@/lib/assistant/conversation-actions";
+import { isQueuedEditLocked, releaseQueuedEditLock } from "@/lib/assistant/edit-composer-draft";
 import { HttpError } from "@/lib/http/errors";
 import { readStoredInputDelivery } from "@/lib/input-delivery-storage";
 import { activeRunLaunch } from "@/lib/assistant/run-launch";
@@ -150,8 +151,12 @@ export function useRuntimeTransport(
       const sourceId = getUserAddMessageSourceId(command);
       const state = context.latestStateRef.current;
       // 编辑按消息是否仍在排队分两个命令：排队消息原地改（配置由后端沿用），已并入的重跑出新 Run。
-      // 排队状态以后端 snapshot 投影为准；编辑期间恰被并入时后端 409，不会静默转成重跑。
-      const queuedId = sourceId !== null && isQueuedUserMessage(state, sourceId) ? sourceId : null;
+      // 模式在开始编辑时锁定（见 lockQueuedEditMode）：编辑期间消息恰被并入时仍按排队编辑提交，
+      // 由后端 409 `MESSAGE_CONSUMED` 拒绝，不会因为提交时它已不在排队就静默改成重跑。
+      const queuedId = sourceId !== null
+        && (isQueuedEditLocked(sourceId) || isQueuedUserMessage(state, sourceId))
+        ? sourceId
+        : null;
       // 运行期配置锁定：活动期间发送用它冻结的配置（composer 也只显示这份）；重跑不受锁定——
       // 它会开新 Run，按用户当前选择。
       const runLaunch = sourceId === null ? activeRunLaunch(state) : null;
@@ -196,6 +201,7 @@ export function useRuntimeTransport(
       const init = { traceId: context.traceId };
       if (taskCommand.kind === "edit_queued") {
         await editQueuedTaskMessage(context.taskId, taskCommand.messageId, message, init);
+        releaseQueuedEditLock(taskCommand.messageId);
       } else if (taskCommand.kind === "send") {
         await sendTaskMessage(context.taskId, { ...taskCommand.request, delivery }, init);
       } else {

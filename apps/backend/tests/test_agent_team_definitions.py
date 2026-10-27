@@ -152,8 +152,8 @@ def test_proposal_tool_separates_argument_and_configuration_validation(
 def test_approval_input_carries_final_configuration_instead_of_preview_fingerprint() -> None:
     """批准输入提交最终配置，旧的预览指纹协议不再属于契约。
 
-    确认经 ``/decisions`` 由 ``AgentTeamDecisionService`` 消费用户决定载荷
-    （``AgentTeamApproveInput``）；契约内容：最终配置 + 用户审阅后的目标。
+    确认经通用决定入口按 ``agent_team`` 声明的 ``decision_model``（``AgentTeamApproveInput``）
+    校验用户决定载荷；契约内容：最终配置 + 用户审阅后的目标。
     """
 
     configuration = _configuration()

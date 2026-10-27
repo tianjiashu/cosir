@@ -65,6 +65,8 @@ import {
   hasPendingEditComposerStart,
   isCurrentEditComposerOperation,
   isEditComposerOperationActive,
+  lockQueuedEditMode,
+  releaseQueuedEditLock,
   subscribeEditComposerOperations,
   takePendingEditComposerDraft,
   type EditDraftAttachment,
@@ -607,6 +609,12 @@ const UserEditMessage: FC = () => {
   // 排队消息原地编辑只改正文与附件，发起配置由后端沿用发送时的值；已并入的编辑会开新 Run，可改配置。
   const isQueued = useAuiState((state) => isQueuedUserMessage(readRuntimeTransportState(state.thread.state), message.id));
   const [restoreOverride] = useState(() => takePendingEditComposerDraft(message.id));
+  // 编辑模式在挂载时锁定，不随消息被并入而改变；被拒后恢复的编辑框沿用同一把锁。
+  const [queuedEdit, setQueuedEdit] = useState(
+    () => lockQueuedEditMode(message.id, isQueued, restoreOverride !== undefined),
+  );
+  // 编辑期间消息已被并入：原地编辑必然被拒，让用户看到原因并自行决定是否改为编辑并重跑。
+  const consumedWhileEditing = queuedEdit && !isQueued;
   const canonicalEditDraft = useMemo(
     () => message.role === "user" ? toEditableUserMessageDraft(message) : null,
     [message],
@@ -763,7 +771,7 @@ const UserEditMessage: FC = () => {
       className="min-w-0 px-2"
       onClickCapture={(event) => {
         const label = (event.target as HTMLElement).closest<HTMLElement>("[aria-label]")?.getAttribute("aria-label");
-        if (label !== "取消编辑" && label !== "重跑") return;
+        if (label !== "取消编辑" && label !== "重跑" && label !== "保存") return;
         void frontendLog("INFO", "edit_composer_action_clicked", "编辑框操作按钮被点击", {
           data: {
             action: label,
@@ -779,7 +787,7 @@ const UserEditMessage: FC = () => {
         <ComposerFeedbackProvider>
           <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
             <div className="flex min-w-0 items-center px-1">
-              <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} lock={isQueued ? { kind: "queued" } : null} />
+              <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} lock={queuedEdit ? { kind: "queued" } : null} />
             </div>
             <div className="min-h-0 min-w-0 w-full">
               <ComposerAttachments />
@@ -792,7 +800,21 @@ const UserEditMessage: FC = () => {
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 px-1">
               <div className="min-w-0 flex-1">
-                {isQueued ? (
+                {consumedWhileEditing ? (
+                  <span className="text-xs text-warning">
+                    这条消息已开始处理，无法再修改。
+                    <button
+                      type="button"
+                      className="ml-1 underline underline-offset-2 hover:text-foreground"
+                      onClick={() => {
+                        releaseQueuedEditLock(message.id);
+                        setQueuedEdit(false);
+                      }}
+                    >
+                      改为编辑并重跑
+                    </button>
+                  </span>
+                ) : queuedEdit ? (
                   <span className="text-muted-foreground text-xs">排队消息沿用发送时的配置</span>
                 ) : (
                   <ComposerControls
@@ -805,7 +827,7 @@ const UserEditMessage: FC = () => {
                 <ComposerPrimitive.Cancel render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
                   <XIcon />
                 </ComposerPrimitive.Cancel>
-                <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label="重跑" disabled={isHydrating || isRecoveryActive} />}>
+                <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label={queuedEdit ? "保存" : "重跑"} disabled={isHydrating || isRecoveryActive || consumedWhileEditing} />}>
                   <ArrowUpIcon className="size-4" />
                 </ComposerPrimitive.Send>
               </div>

@@ -373,9 +373,15 @@ class AgentTeamCoordinator:
         一出现即记入快照并落库，只为执行时间线定位。节点 Task 只由本协调器顺序投递、投递时必然
         静止，投递必然新开 Run；超时没开出来说明调度违约，抛 ``RuntimeError`` 由 :meth:`start`
         收敛为 TeamRun ``failed``。
+
+        为什么轮询而不订阅：本线程是 ``agent_team`` 工具占用的默认线程池线程，整个 Team 期间都被
+        占住（见 ``agent_team_run`` 的类说明）；改为订阅 ``TaskActor.state_changed`` 加进程内停止
+        信号也释放不了它，只省下每个间隔两次本机 SQLite 读取与不到一个间隔的取消延迟，却要多一条
+        跨线程通知通道。重新评估的条件：多个 Team 并发使默认线程池吃紧、或需要在进程关闭时可靠地
+        中断 Team——届时改为 Team 在事件循环上后台执行、主 Run 挂起并经 ``background_result`` 唤醒
+        （复用 ``delegate_task`` 的回投链路），轮询与线程阻塞一并消失。
         """
 
-        # TODO(Agent Team 接入)：改为订阅节点 actor 的状态，不轮询 Task 当前 Run 与 TeamRun 状态。
         actor = task_runtime_spaces.get_or_create(node_execution.task_id).actor
         deadline = time.monotonic() + _NODE_RUN_START_TIMEOUT_SECONDS
         node_run_id: int | None = None
@@ -590,10 +596,12 @@ class AgentTeamCoordinator:
         return cancelled
 
     def cancel_for_parent_run_id(self, parent_run_id: int) -> int:
-        """取消指定主 Agent Run 创建的所有活动 Team。
+        """取消指定主 Agent Run 正在运行的 Team。
 
         由主 Task 的 actor 在发起停止时调用（不等主 Run 落定：``agent_team`` 工具阻塞在 Team 上，
-        主 Run 要等 Team 停下才能走到检查点），把停止传播到待确认或运行中的 Team 及其当前节点 Run。
+        主 Run 要等 Team 停下才能走到检查点），把停止传播到运行中的 Team 及其当前节点 Run。
+        待确认方案不取消：它是一次等待用户决定的 HITL 调用，按 HITL 契约在 Run 停止后仍可决定
+        （批准即开新 Run 执行），与重启后保留 pending 方案一致。
 
         参数:
             parent_run_id: 主 Agent ConversationRun 标识。
@@ -607,10 +615,7 @@ class AgentTeamCoordinator:
         """
 
         cancelled = 0
-        for row in (
-                *self._team_run_crud.list_pending_confirmations(),
-                *self._team_run_crud.list_active(),
-        ):
+        for row in self._team_run_crud.list_active():
             if row.parent_run_id != parent_run_id:
                 continue
             if self._cancel_if_active(row.id, AgentTeamRunEndReason.PARENT_CANCELLED) is not None:

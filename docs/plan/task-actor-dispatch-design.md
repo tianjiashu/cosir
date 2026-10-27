@@ -11,6 +11,7 @@
 - **没有信号队列。** `task_signals.py` 与 `asyncio.Queue` 删除；入口直接调用 `TaskActor` 的方法，每次调用是一轮，轮与轮由 Task 闸门串行。消息事实在外部队列，取消意图在 `cancellation_registry`，信号原本只是「醒来看看」，每轮重读事实源即可替代。
 - **执行结束不再是信号。** Run 结束后由执行收尾那一轮注销登记、取走取消信号并接续调度。
 - **用户命令同步返回。** `submit` / `rerun` / `resume` await 这一轮，拒绝抛 `SessionConflictError`（API 映射 409）；`submit` 返回新建或唤醒的 Run，Coordinator 据此记下节点 Run，`wait_new_run` 删除。
+  > 已被取代：后续 `task-command-fire-and-forget-design.md` 把发送改为纯入队（`task_runtime_spaces.enqueue`），actor 不再提供 `submit`。Coordinator 投递后自行等节点 Task 换上新 Run 并分段 `wait_idle`，理由与重新评估条件见 `agent_team/coordinator.py` 的 `_await_node_run`。
 - **编辑重跑不再记待办。** 运行中先打 `edited` 取消，在闸门外等当前执行收尾（有超时），再拿闸门完成移出与重跑；等待期间 `_rerun_pending` 阻止推进，排队消息随重跑出的新 Run 并入。
 - **跨 Task 调用只发起不等待。** `post` / `cancel` / `broadcast` 另起任务交给对方 actor；持自己的闸门去等对方的闸门会让父取消子、子回投父互等死锁。
 - **用户命令编排归 Transport。** 排队消息编辑、重跑前的目标校验与输入解析、存在性检查移到 `TransportAssistantService`；`TaskActors` 只保留多类投递方共用的入口与登记表。
@@ -169,8 +170,8 @@ async def _loop(self) -> None:
 | `service/conversation_run/message_edit.py` | 不变，被 `Rerun` 第二阶段复用 |
 | `assistant_transport/assistant_api.py`、`task_command_request.py` | 编辑拆为两个端点与请求模型 |
 | `assistant_transport/service/transport_stream_service.py` | `wait_released` 改为等 Run 交接事件 |
-| `agent_team/coordinator.py` | `submit` 不变；`wait_idle` 改订阅静止事件 |
-| `core/tools/tool_handler/child_task/child_agent_create.py`、`child_agent_send.py` | `submit` 调用不变 |
+| `agent_team/coordinator.py` | `submit` 不变；`wait_idle` 改订阅静止事件（已被取代：现为入队 + 分段 `wait_idle`，见上文「用户命令同步返回」的取代说明） |
+| `core/tools/tool_handler/child_task/child_agent_create.py`、`child_agent_send.py` | `submit` 调用不变（已被取代：现为 `task_runtime_spaces.enqueue`） |
 | `service/agent_team/agent_team_decision_service.py`、`task_runtime/broadcaster/runtime_notice_broadcaster.py` | `post_async` / `post` 调用不变 |
 | `api/tasks_api.py`、`api/workspaces_api.py`、`task_runtime/service/task_service.py` | 删除前 `stop_tasks` 改为 `Stop` + 等 actor 退出 |
 | `lifespan.py`、`service/depends.py` | 关闭与 `close_sync` 改为对 actor 发 `Stop` |

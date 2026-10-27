@@ -211,8 +211,8 @@ class AgentTeamRunTool(HandlerBase):
     ) -> ToolObservation:
         """按用户决定推进本次调用创建的 TeamRun；结果由通用 HITL 结算追加给模型。
 
-        决定已在入队边界校验过，但从入队到这里之间 TeamRun 可能已被处理（主 Run 被取消时连同
-        pending 方案一起取消、重复决定）：条件迁移落空时返回失败结果说明现状，不抛异常。
+        决定入口只按等待占位与队列做通用校验，不读 TeamRun；入队到这里之间方案可能已被处理（用户
+        在卡片上取消、并发的重复决定）：条件迁移落空时返回失败结果说明现状，不抛异常。
         节点回落的模型配置取自创建方案的主 Run 的持久化事实，而不是执行决定时的当前 Run——用户
         审批的是那次 Run 提出的方案。
         """
@@ -303,6 +303,7 @@ class AgentTeamRunTool(HandlerBase):
             args_model=self.args_model,
             execution_mode="thread",
             user_decision="execute",
+            decision_model=AgentTeamApproveInput,
             display=ToolDisplayHints(
                 # verb 与同组 propose 工具的中文口径一致；原英文 "Prepare Agent Team
                 # execution plan" 会被读成「配置 Team」，与工具实际职责不符。

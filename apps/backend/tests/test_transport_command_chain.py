@@ -430,7 +430,8 @@ async def test_cancelling_a_suspended_run_stops_downstream_immediately(chain) ->
     await chain.service.cancel(_TASK_ID)
 
     assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
-    assert chain.cancelled_teams == [run.id]
+    # 挂起的 Run 没有运行中的 Team；待确认方案按 HITL 契约保留，停止后仍可决定。
+    assert chain.cancelled_teams == []
 
 
 # ---------------------------------------------------------------------------

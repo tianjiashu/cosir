@@ -15,20 +15,25 @@ import asyncio
 from typing import cast
 
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 from app.assistant_transport.request import (
+    DecisionRequest,
     EditQueuedMessageRequest,
     RerunMessageRequest,
     SendMessageRequest,
-    TeamDecisionRequest,
 )
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.config.configuration import get_tool_registry
+from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
+from app.core.tool.schemas import ToolDefinition
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
-from app.core.workflow.inbox.task_message import TaskMessage
+from app.core.workflow.inbox.task_message import DecisionBody, TaskMessage, UserInputBody
+from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import UserMessageMetadata
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
@@ -81,11 +86,31 @@ class TransportAssistantService:
         为准。消息已被并入时不会转成重跑。
 
         异常:
-            SessionConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中）。
-            ValueError: 输入不合法。
+            SessionConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
+            UserInputRejectedError / ValueError: 输入不合法。
             KeyError: Task 不存在。
         """
-        pass
+        queued = await asyncio.to_thread(self._queue.find, task_id, message_id)
+        if queued is None or not isinstance(queued.body, UserInputBody):
+            raise _message_consumed()
+        launch = queued.body.launch
+        # 复用原消息的展示绑定：编辑请求里的附件可能只剩 token，路径从原消息恢复。
+        prepared = await asyncio.to_thread(
+            self._inputs.prepare,
+            task_id,
+            request.to_run_command(),
+            launch.model_config_id,
+            launch.options.reasoning_effort,
+            launch.agent_id,
+            reuse=queued.body.presentation(),
+        )
+        # 发起配置原样沿用：``prepare`` 按请求重组了 launch（禁用工具为空），这里换回原值。
+        body = cast(UserInputBody, prepared.body).model_copy(update={"launch": launch})
+        edited = TaskMessage.of(body, delivery=queued.delivery)
+        if not await asyncio.to_thread(self._queue.update, task_id, message_id, edited):
+            raise _message_consumed()
+        # 原地更新不新增行、不唤醒 actor，排队投影由这里刷新；消费投影搬移的就是这份新内容。
+        await asyncio.to_thread(self._states.refresh_queued_messages, task_id)
 
     async def rerun(self, task_id: int, message_id: int, request: RerunMessageRequest) -> None:
         """编辑最新一条已并入的用户输入并重跑：停下当前 Run → 软删除它及其后 context + 以新消息
@@ -181,12 +206,62 @@ class TransportAssistantService:
             return tool_call_cancellation_registry.mark_cancelled(task_id, tool_call_id)
         return False
 
-    async def decide(self, task_id: int, request: TeamDecisionRequest) -> None:
-        """对待确认的 Agent Team 方案作出决定：后端确定性执行，再以消息唤醒主 Agent。"""
-        from app.service.agent_team.agent_team_decision_service import AgentTeamDecisionService
+    async def decide(self, task_id: int, tool_call_id: str, request: DecisionRequest) -> None:
+        """对一次等待用户决定的工具调用作出决定：通用校验后入队 ``DecisionBody``，不等工具执行。
 
-        await AgentTeamDecisionService().submit(
-            task_id, request.teamRunId, request.decision, request.data
+        只校验能同步回答用户、且对所有 HITL 工具都成立的事实：调用的等待占位仍为 ``pending``
+        （事实源是 context，不读 TeamRun 之类的工具业务事实）、队列里没有它未处理的决定、载荷符合
+        工具声明的 ``decision_model``。工具自己的业务状态在执行决定时由工具判定（如方案已被取消时
+        以失败结果收尾）。决定之后去哪由 ``ToolDefinition.user_decision`` 决定，这里不关心。
+
+        异常:
+            KeyError: Task 不存在。
+            SessionConflictError: ``DECISION_NOT_AWAITED`` / ``DECISION_ALREADY_SUBMITTED``。
+            UserInputRejectedError: ``DECISION_DATA_INVALID``。
+        """
+        await asyncio.to_thread(self._tasks.get_task, task_id)
+        tool_name = await asyncio.to_thread(
+            self._context.awaiting_decision_tool, task_id, tool_call_id
+        )
+        if tool_name is None:
+            raise SessionConflictError("DECISION_NOT_AWAITED", "该操作已不在等待决定，请刷新后重试")
+        pending = await asyncio.to_thread(self._queue.pending_nowait, task_id)
+        if any(
+            isinstance(message.body, DecisionBody) and message.body.tool_call_id == tool_call_id
+            for message in pending
+        ):
+            raise SessionConflictError("DECISION_ALREADY_SUBMITTED", "该决定已提交，正在处理")
+        # 等待占位只会由已注册的 HITL 工具写入，定义必然存在。
+        definition = cast(ToolDefinition, get_tool_registry().get_tool_definition(tool_name))
+        decision_model = definition.decision_model
+        data = None
+        if request.decision == "approve" and decision_model is not None:
+            try:
+                data = decision_model.model_validate(request.data or {}).model_dump(mode="json")
+            except ValidationError as exc:
+                raise UserInputRejectedError(
+                    "DECISION_DATA_INVALID", "提交的内容不合法，请检查后重试", detail=str(exc)
+                ) from exc
+        feedback = request.feedback.strip() if request.feedback else None
+        body = DecisionBody(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            decision=request.decision,
+            feedback=feedback or None,
+            data=data,
+        )
+        await asyncio.to_thread(task_runtime_spaces.enqueue, task_id, TaskMessage.of(body))
+        log.info(
+            "tool_decision_enqueued",
+            extra={
+                "msg": "用户决定已入队，等待工具执行或交给模型",
+                "data": {
+                    "task_id": task_id,
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "decision": request.decision,
+                },
+            },
         )
 
     # ── 订阅与读取 ────────────────────────────────────────────────────────
@@ -221,3 +296,9 @@ class TransportAssistantService:
 
 def _run_not_stopped() -> SessionConflictError:
     return SessionConflictError("RUN_NOT_STOPPED", "当前运行尚未停止，请稍后重试")
+
+
+def _message_consumed() -> SessionConflictError:
+    return SessionConflictError(
+        "MESSAGE_CONSUMED", "这条消息已开始处理，未作修改", retryable=False
+    )

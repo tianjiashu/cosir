@@ -6,7 +6,7 @@ type FrontendLog = {
 };
 
 /** Task 级业务命令端点：发送、编辑、恢复与用户决定（attach / state 不算命令）。 */
-const TASK_COMMAND_PATH = /\/tasks\/\d+\/(?:messages(?:\/[^/]+\/rerun)?|resume|decisions)$/;
+const TASK_COMMAND_PATH = /\/tasks\/\d+\/(?:messages(?:\/[^/]+\/rerun)?|resume|tool-calls\/[^/]+\/decision)$/;
 function isTaskCommand(url: string): boolean {
   return TASK_COMMAND_PATH.test(new URL(url).pathname);
 }

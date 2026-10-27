@@ -253,6 +253,11 @@ class TaskRuntimeSpace:
             self._snapshot = copy.deepcopy(loader())
         return self._snapshot
 
+    def has_snapshot(self) -> bool:
+        """snapshot 是否已物化；不复制、不触发懒加载。调用方约定同 ``get_snapshot``。"""
+
+        return self._snapshot is not None
+
     def existing_snapshot(self) -> ConversationStateSnapshot | None:
         """返回已物化的 task snapshot，不触发数据库读取或懒加载。
 

@@ -41,6 +41,16 @@ class TaskMessageCrud:
         )
         return [TaskMessage.of_model(row) for row in session.scalars(statement)]
 
+    def find(self, session: Session, task_id: int, message_id: int) -> TaskMessage | None:
+        """读一条仍在队列中的消息；已被确认删除或不属于该 Task 时返回 ``None``。"""
+
+        row = session.scalar(
+            select(TaskMessageModel).where(
+                TaskMessageModel.id == message_id, TaskMessageModel.task_id == task_id
+            )
+        )
+        return TaskMessage.of_model(row) if row is not None else None
+
     def list_task_ids_with_pending(self, session: Session) -> list[int]:
         """返回外部队列里有待处理消息的 task id。"""
 

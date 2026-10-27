@@ -133,6 +133,13 @@ def harness(monkeypatch):
     _Driver.ledger, _Driver.queue = ledger, queue
     monkeypatch.setattr(actor_module, "RunDriver", _Driver)
     monkeypatch.setattr(actor_module, "_republish", lambda _task_id: None)
+    refreshed: list[list[int | None]] = []
+    # 记下每次刷新排队投影时队列里已有的消息，用来断言「先刷新、再投递」。
+    monkeypatch.setattr(
+        actor_module,
+        "_refresh_queued",
+        lambda _task_id: refreshed.append([message.id for message in queue.pending_nowait(_TASK_ID)]),
+    )
     for getter, fake in (
         ("get_conversation_run_ledger", ledger),
         ("get_task_service", ledger),
@@ -140,7 +147,9 @@ def harness(monkeypatch):
     ):
         monkeypatch.setattr(actor_module.service_depends, getter, lambda fake=fake: fake)
     space = SimpleNamespace(task_id=_TASK_ID, async_operation=contextlib.nullcontext)
-    return SimpleNamespace(actor=TaskActor(space), queue=queue, ledger=ledger)
+    return SimpleNamespace(
+        actor=TaskActor(space), queue=queue, ledger=ledger, refreshed=refreshed
+    )
 
 
 async def _settle() -> None:
@@ -280,6 +289,45 @@ async def test_stop_waits_for_the_execution_then_stops_the_loop(harness, monkeyp
     harness.queue.put(_user("after stop"))
     await _settle()
     assert len(harness.ledger.created) == 1
+
+
+async def test_stop_still_wakes_state_waiters_when_the_execution_settles(harness) -> None:
+    """删除前停止走「不接续」的早退分支，也必须发状态通知：否则 ``wait_idle`` 只能等到超时。"""
+    harness.actor.start()
+    harness.queue.put(_user())
+    await _settle()
+    [run] = harness.ledger.created
+    changed = harness.actor.state_changed
+
+    stopping = asyncio.create_task(harness.actor.stop())
+    await _settle()
+    await _finish(run.id, "cancelled")
+    await asyncio.wait_for(stopping, 1)
+
+    assert changed.is_set()
+
+
+async def test_queued_projection_is_refreshed_before_a_running_delivery(harness) -> None:
+    """运行中到达的消息先进排队投影再进 mailbox：消费投影只搬移排队条目，缺了就丢消息。"""
+    harness.actor.start()
+    harness.queue.put(_user("first"))
+    await _settle()
+    [run] = harness.ledger.created
+    posted: list[int | None] = []
+    original_post = harness.actor.mailbox.post
+
+    def post(message: TaskMessage) -> None:
+        posted.append(message.id)
+        assert any(message.id in ids for ids in harness.refreshed)
+        original_post(message)
+
+    harness.actor.mailbox.post = post
+    second = harness.queue.put(_user("second"))
+    await _settle()
+
+    assert posted == [second.id]
+    await _finish(run.id)
+    await harness.actor.abort()
 
 
 async def test_wait_idle_turns_true_after_the_run_completes(harness) -> None:

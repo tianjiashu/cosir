@@ -1,7 +1,7 @@
 """工具定义及模型可见契约。"""
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from pydantic import BaseModel
@@ -52,6 +52,10 @@ class ToolDefinition:
     # 非 None 的工具一批里只能单独调用（见 ``tool_batch_runner``），每个 Task 同时最多一个等待中的
     # 调用由工具自己的事实源保证。
     user_decision: Literal["execute", "reply"] | None = None
+    # 批准时随决定提交的载荷（``DecisionBody.data``）的形状，与 ``args_model`` 对称：决定入口按它
+    # 校验前端输入，不合法同步拒绝；``None`` 表示决定不带载荷。只对 ``user_decision`` 非 None 的工具
+    # 有意义。
+    decision_model: type[BaseModel] | None = None
 
     def normalized(self) -> "ToolDefinition":
         """注册时固定 strict 参数 schema，模型调用阶段不再转换。
@@ -60,20 +64,9 @@ class ToolDefinition:
         """
         if self.parameters_schema:
             return self
-        model_def = self.to_model_tool_definition()
-        return ToolDefinition(
-            name=self.name,
-            group=self.group,
-            description=self.description,
-            handler=self.handler,
-            parameters_schema=model_def["parameters"],
-            args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=self.resource_keys,
-            display=self.display,
-            execution_mode=self.execution_mode,
-            parallel_mode=self.parallel_mode,
-        )
+        # ``replace`` 而不是逐字段重建：逐字段写法曾漏掉 ``user_decision``，注册后的 HITL 工具
+        # 因此不再被 prepare_input 识别为需要执行的决定。
+        return replace(self, parameters_schema=self.to_model_tool_definition()["parameters"])
 
     def to_model_tool_definition(self) -> dict[str, Any]:
         """导出可固化到 Task 的 strict function 定义。

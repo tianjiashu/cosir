@@ -1,7 +1,7 @@
 """Agent Team 配置保存与本地状态查询接口。
 
-TeamRun 的「确认 / 驳回」不在本模块：决定按 Task 寻址走 ``POST /tasks/{id}/decisions``，由
-``AgentTeamDecisionService`` 校验后以 HITL 决定消息入队，``agent_team`` 工具按决定执行。
+TeamRun 的「确认 / 驳回」不在本模块：它是通用 HITL 决定，按工具调用寻址走
+``POST /tasks/{id}/tool-calls/{tool_call_id}/decision``，入队后由 ``agent_team`` 工具按决定执行。
 """
 
 from __future__ import annotations

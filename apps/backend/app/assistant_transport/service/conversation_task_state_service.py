@@ -104,6 +104,35 @@ class ConversationTaskStateService:
             validate_snapshot(state)
             return state
 
+    def refresh_queued_messages(self, task_id: int) -> None:
+        """把外部队列里待处理的用户输入按身份新增或替换进排队投影，只发这一处 mutation。
+
+        调用时机：actor 推进（投递 / 开 Run）之前，以及排队消息原地编辑之后。消费投影
+        （``plan_user_input_consumed``）直接搬移排队条目的 parts、不重建，所以消息进 mailbox 之前
+        排队投影里必须已有它的最新内容。
+
+        只增改、不删除：条目的移除只归消费投影。确认删除与消费投影之间有窗口，这里若按队列整表
+        覆盖，会在窗口内删掉刚被确认的条目，随后消费投影找不到它。快照全量重建时照常整表写入。
+
+        不全量重建：流式输出的 context 可能领先于尚未发出的 Transport delta，重建会提前展示正文
+        再重复追加。snapshot 尚未物化时什么也不做，之后的懒重建自会读到队列。读队列放在锁内，
+        让并发刷新按序落定，不会以旧内容覆盖新内容。
+        """
+
+        with self._lock:
+            self._ensure_not_deleted(task_id)
+            space = task_runtime_spaces.get_or_create(task_id)
+            if not space.has_snapshot():
+                return
+            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            current = state.get("queued_messages", [])
+            merged = _upsert_queued(current, self._queued_messages(task_id))
+            if merged == current:
+                return
+            mutation = ConversationStateMutation("set", ("queued_messages",), merged)
+            _apply_mutation(state, mutation)
+            self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,)))
+
     @staticmethod
     def _queued_messages(task_id: int) -> list[ConversationQueuedMessage]:
         from app.service.depends import get_task_message_queue
@@ -766,6 +795,18 @@ def _matches_dynamic_child_display(value: object, child_task_id: int) -> bool:
     if not _is_dynamic_child_display(value) or not isinstance(value, dict):
         return False
     return value.get("child_task_id") == child_task_id
+
+
+def _upsert_queued(
+        current: list[ConversationQueuedMessage],
+        pending: list[ConversationQueuedMessage],
+) -> list[ConversationQueuedMessage]:
+    """已有条目按身份原位替换，新条目按队列顺序追加；不在 ``pending`` 里的已有条目保留。"""
+
+    latest = {message["id"]: message for message in pending}
+    merged = [latest.pop(message["id"], message) for message in current]
+    merged.extend(message for message in pending if message["id"] in latest)
+    return merged
 
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:

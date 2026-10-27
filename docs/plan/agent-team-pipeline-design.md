@@ -1,6 +1,6 @@
 # Agent Team 工具化流水线方案
 
-> 状态：终版设计与实现依据。代码已按本文契约进入开发；实现验收以本文和现有项目架构边界为准。
+> 状态：**部分已被取代**。执行与等待模型（§1 第 6、7 条，§7.3，§7.4，阶段验收里「主 Agent await 不阻塞 event loop」等条目）已改为「`agent_team` 工具在工具线程里阻塞运行 Team、落定后把结论作为工具结果返回」：主 Run 不挂起等 Team、没有游离于 Run 之外的后台 Team 执行，取舍见 `apps/backend/app/core/tool/handler/agent_team_run.py` 的类说明与 `agent_team/coordinator.py` 的 `_await_node_run`。本文其余章节写于 LangGraph 时期，与现状不一致处以 `AGENTS.md` 与源码为准。
 >
 > 核心定位：Agent Team 不是独立聊天入口，而是主 Agent 可以调用的一组工具。主 Agent
 > 负责提交共同目标和各节点的预设指令；Agent Team 负责生成可审阅方案、等待用户确认、按确认后的
@@ -531,20 +531,13 @@ review.needs_changes → develop
 
 ### 7.4 “主 Agent 阻塞”的准确含义
 
-用户看到的语义是主 Agent 在 Team 未结束前不会继续回答；技术实现不能阻塞 backend event loop 或占用线程等待。工具运行层需要提供明确的异步 handler/awaitable 执行路径：
+> 已被取代（原方案：工具返回后主 Run 挂起，Coordinator 在独立异步任务里等 Team 终态再 resume 主 Run，且不得在线程里轮询）。
 
-~~~text
-主 Agent Run
-    └─ Agent Team 预览 → cancelled + LangGraph interrupt
-          └─ await TeamCoordinator.wait_until_terminal(team_run_id)
-          ├─ Team 节点在 executor 中执行
-          ├─ 节点事件唤醒 coordinator
-          └─ Team 终态注入 TeamResult → resume 主 Agent Run
-~~~
+现行语义：用户批准后，`agent_team` 工具按决定再次执行，在自己的工具线程里调用 Coordinator 阻塞运行 Team，落定后把结论作为本次工具结果返回，主 Agent 不需要 `wait_messages`。Coordinator 逐个投递节点输入，并以 `_NODE_POLL_SECONDS` 为间隔分段 `wait_idle` 等节点落定；backend event loop 不被阻塞，代价是 Team 期间占用一个默认线程池线程。thread 工具执行中途不检查取消信号，所以主 Task 停止时由其 actor 在发起停止那一刻取消本 Run 的 TeamRun，Coordinator 检出后停下当前节点并返回。
 
-不得把 Team 等待实现为 time.sleep 轮询，也不得把 SSE 连接断开误认为业务取消。HTTP/SSE 重新连接只重新订阅；只有显式 cancel 或主 Run 的明确取消语义才会取消 Team。
+重新评估条件：多个 Team 并发使默认线程池吃紧，或需要在进程关闭时可靠中断 Team。届时改为 Team 在事件循环上后台执行、主 Run 挂起并经 `background_result` 唤醒（复用 `delegate_task` 的回投链路）。
 
-Agent Team 不在工具 handler 内阻塞等待。预览工具返回后由 ReAct graph 的等待节点保存断点，Team coordinator 在独立的本地异步任务中等待终态并调用既有 resume 入口。
+HTTP/SSE 断开只表示订阅中断，不取消 Team；只有显式取消或主 Run 的取消语义才会取消 Team。
 
 ## 8. 模型、工具和 profile 解析
 

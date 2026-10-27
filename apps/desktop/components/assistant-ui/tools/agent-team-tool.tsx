@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon, UsersIcon } from "lucide-react";
 
-import { submitTeamDecision } from "@/lib/assistant/task-commands";
+import { submitToolDecision, type ToolDecision } from "@/lib/assistant/task-commands";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { Badge } from "@/components/ui/badge";
@@ -124,11 +124,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
   }
 
   /** 提交决定；后端执行后以消息唤醒主 Agent，失败只影响本卡片的提示状态。 */
-  const submitDecision = async (
-    decision: "approve" | "reject",
-    data: Record<string, unknown>,
-    phase: "confirming" | "rejecting",
-  ) => {
+  const submitDecision = async (decision: ToolDecision, phase: "confirming" | "rejecting") => {
     if (taskId === undefined) {
       setState("failed");
       setMessage("无法定位该执行方案所属的对话，请刷新页面后重试");
@@ -137,13 +133,13 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     setState(phase);
     setMessage("");
     try {
-      await submitTeamDecision(taskId, { teamRunId: preview.teamRunId, decision, data });
+      await submitToolDecision(taskId, toolCallId, decision);
       setState("idle");
       // 主 Agent 被决定消息唤醒后的输出经 Task 长订阅到达，这里只刷新 TeamRun 状态。
       void runQuery.refetch();
     } catch (error) {
       void frontendLog("ERROR", "agent_team_decision_submit_failed", "提交 Team 审批决定失败", {
-        data: { taskId, teamRunId: preview.teamRunId, decision },
+        data: { taskId, toolCallId, teamRunId: preview.teamRunId, decision: decision.decision },
         error,
       });
       setState("failed");
@@ -158,8 +154,10 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
       return;
     }
     await submitDecision(
-      "approve",
-      { configuration: preview.configuration, goal, node_goals: nodeGoals },
+      {
+        decision: "approve",
+        data: { configuration: preview.configuration, goal, node_goals: nodeGoals },
+      },
       "confirming",
     );
   };
@@ -176,11 +174,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
       setMessage("请填写驳回意见，主 Agent 才能据此重新生成方案");
       return;
     }
-    await submitDecision(
-      "reject",
-      { feedback: trimmedFeedback, goal, node_goals: nodeGoals },
-      "rejecting",
-    );
+    await submitDecision({ decision: "reject", feedback: trimmedFeedback }, "rejecting");
   };
   return (
     <div className="space-y-3 rounded-xl border border-border/70 bg-card p-3 shadow-sm">

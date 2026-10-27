@@ -97,6 +97,11 @@ class TaskMessageQueue:
         with main_session_factory()() as session:
             return self._messages.list_pending(session, task_id)
 
+    def find(self, task_id: int, message_id: int) -> TaskMessage | None:
+        """读一条仍在队列中的消息；已被并入（行已删除）时返回 ``None``，由调用方定语义。"""
+        with main_session_factory()() as session:
+            return self._messages.find(session, task_id, message_id)
+
     def update(self, task_id: int, message_id: int, message: TaskMessage) -> bool:
         """原地更新仍在队列中的消息正文，身份与属性不变；已被并入（行已删除）时返回 ``False``。
 

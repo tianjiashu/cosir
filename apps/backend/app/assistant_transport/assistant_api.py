@@ -18,7 +18,7 @@ from app.assistant_transport.request import (
     EditQueuedMessageRequest,
     RerunMessageRequest,
     SendMessageRequest,
-    TeamDecisionRequest,
+    DecisionRequest,
 )
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
@@ -59,7 +59,7 @@ async def _accept(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     except SessionConflictError as exc:
-        _raise_transport_error(409, exc.code, str(exc), retryable=True)
+        _raise_transport_error(409, exc.code, str(exc), retryable=exc.retryable)
     except ImageNormalizationError as exc:
         _raise_transport_error(
             503 if exc.code == "ATTACHMENT_STORAGE_UNAVAILABLE" else 400,
@@ -153,16 +153,19 @@ async def resume_task(
     return await _accept(task_id, "resume", service.resume(task_id))
 
 
-@app.post("/tasks/{task_id}/decisions")
+@app.post("/tasks/{task_id}/tool-calls/{tool_call_id}/decision")
 async def submit_decision(
     task_id: int,
-    request: TeamDecisionRequest,
+    tool_call_id: str,
+    request: DecisionRequest,
     service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> JSONResponse:
-    """对待确认的 Agent Team 方案作出决定：后端确定性执行（批准即后台运行 Team），再以消息唤醒
-    主 Agent。决定本身的校验（TeamRun 归属、是否仍待确认）同步返回。"""
+    """对一次等待用户决定的工具调用作出决定：同步校验后入队，由 Task 的 actor 唤醒或开新 Run。
 
-    return await _accept(task_id, "decide", service.decide(task_id, request))
+    409 ``DECISION_NOT_AWAITED``（调用不在等待决定）/ ``DECISION_ALREADY_SUBMITTED``（已有未处理
+    的决定），400 ``DECISION_DATA_INVALID``（载荷不符合工具声明的形状）。"""
+
+    return await _accept(task_id, "decide", service.decide(task_id, tool_call_id, request))
 
 
 @app.post("/tasks/{task_id}/assistant/attach")
