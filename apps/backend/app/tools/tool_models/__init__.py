@@ -10,12 +10,10 @@ from app.tools.tool_models.execute_terminal_args import (
 )
 from app.tools.tool_models.find_files_args import FindFilesArgs
 from app.tools.tool_models.list_directory_args import ListDirectoryArgs
-from app.tools.tool_models.mcp_args import MCPArgs
 from app.tools.tool_models.move_file_args import MoveFileArgs
 from app.tools.tool_models.read_file_args import ReadFileArgs
 from app.tools.tool_models.replace_args import ReplaceArgs
 from app.tools.tool_models.search_content_args import SearchContentArgs
-from app.tools.tool_models.skill_args import SkillArgs
 from app.tools.tool_models.terminal_session_args import (
     TerminalCloseArgs,
     TerminalListArgs,
@@ -32,13 +30,11 @@ __all__ = [
     "ExecuteTerminalShell",
     "FindFilesArgs",
     "ListDirectoryArgs",
-    "MCPArgs",
     "MacExecuteTerminalArgs",
     "MoveFileArgs",
     "ReadFileArgs",
     "ReplaceArgs",
     "SearchContentArgs",
-    "SkillArgs",
     "TerminalCloseArgs",
     "TerminalListArgs",
     "TerminalReadArgs",

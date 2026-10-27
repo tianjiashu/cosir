@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config.constant import Constant
-from app.service.terminal.interaction import InputKey, InputLine
+from app.tools.terminal_runtime.interaction import InputKey, InputLine
 
 
 class TerminalListArgs(BaseModel):
