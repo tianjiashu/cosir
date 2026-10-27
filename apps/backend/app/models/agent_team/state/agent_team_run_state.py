@@ -132,14 +132,6 @@ class AgentTeamRunState(BaseModel):
             )
         )
 
-    def running_node_task_id(self) -> int | None:
-        """当前节点已启动过 Run 时返回其 Task id，供协调器发停止信号；尚未启动则为 None。"""
-        node_id = self.current_node_id
-        if node_id is None:
-            return None
-        execution = self.node_executions[node_id]
-        return execution.task_id if execution.conversation_run_ids else None
-
     def node_references(self) -> list[tuple[int, int]]:
         """返回所有节点 Task/Run 引用，供取消和诊断使用。"""
 

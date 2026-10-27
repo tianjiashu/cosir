@@ -6,48 +6,54 @@ import asyncio
 import copy
 import json
 import time
-from collections import defaultdict
-from threading import RLock
+from typing import Any
 
+from app.config.logging.logger import log
+from app.core.agents.agent_profile import AgentProfile
+from app.core.tool.handler.agent_team.agent_team_run_archive_service import (
+    AgentTeamRunArchiveService,
+)
+from app.core.tool.handler.agent_team.node_profile import (
+    NODE_PROFILE_SNAPSHOT_KEY,
+    build_node_profile,
+)
+from app.models import ConversationRunRecord
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_node_definition import TeamNodeDefinition
-from app.core.tool.handler.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY, build_node_profile
 from app.models.agent_team.state.agent_team_run_state import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
     AgentTeamRunState,
 )
-from app.config.logging.logger import log
-from app.core.agents.agent_profile import AgentProfile
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-from app.models import ConversationRunRecord
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
-from app.core.tool.handler.agent_team.agent_team_run_archive_service import AgentTeamRunArchiveService
 from app.service.depends import (
     get_conversation_run_ledger,
-    get_user_input_service,
     get_task_service,
+    get_user_input_service,
     get_workspace_service,
 )
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-# 等待节点释放期间检查父 Task 取消信号的间隔；与工具执行层的取消轮询同量级。
-_NODE_CANCEL_POLL_SECONDS = 0.2
+# 等节点静止期间检查 TeamRun 状态、以及等节点开出新 Run 的轮询间隔；与工具执行层的取消轮询同量级。
+_NODE_POLL_SECONDS = 0.2
 # 投递节点输入后等节点 actor 开出新 Run 的上限。
 _NODE_RUN_START_TIMEOUT_SECONDS = 30.0
+_ACTIVE_STATUSES = (AgentTeamRunStatus.RUNNING.value, AgentTeamRunStatus.PENDING.value)
 
 
 class AgentTeamCoordinator:
     """拥有 TeamRun 的节点调度状态机，节点输入经 ``task_runtime_spaces.enqueue`` 投递给节点 Task。
 
-    每条 Team 由一个异步驱动任务串行执行节点：Coordinator 等待节点 Run 结束、读取其
-    持久化 ``final_output``、结算 transition 并创建下一节点。Executor 只执行单个 Run；主
-    ConversationRun 的等待与恢复交给 ``AgentTeamParentRunService``。
+    ``start`` 在 ``agent_team`` 工具的执行线程里同步串行驱动节点：投递输入、等节点 Task 静止、
+    读取节点 Run 持久化的 ``final_output``、结算 transition 再进入下一节点，直到 Team 落定终态。
+    TeamRun 的创建、确认与驳回归审批门（``agent_team_run_approval``），这里只接已确认的 running
+    TeamRun；取消以 TeamRun 状态为唯一事实源（见 :meth:`start`）。
     """
 
     def __init__(self) -> None:
@@ -59,8 +65,6 @@ class AgentTeamCoordinator:
         self._tool_registry = get_tool_registry()
         self._ledger = get_conversation_run_ledger()
         self._session_factory = main_session_factory()
-        self._locks_guard = RLock()
-        self._locks: dict[int, RLock] = defaultdict(RLock)
         self._workspace_service = get_workspace_service()
         self._agent_registry = get_agent_registry()
         self._run_archive_service = AgentTeamRunArchiveService()
@@ -72,67 +76,44 @@ class AgentTeamCoordinator:
     ) -> AgentTeamRunModel:
         """在调用方线程内串行驱动整条已确认的 TeamRun，直到 Team 落定终态。
 
-        本方法只接受已经持久化且完成确认的 ``running`` TeamRun，不读取待确认请求、预览
-        文档或用户确认参数。TeamRun 的创建、确认和 ``pending`` 到 ``running`` 的原子迁移
-        由 ``agent_team`` 工具按用户决定完成。调用方是 ``agent_team`` 工具的执行线程（阻塞到落定）；
-        节点输入经 ``task_runtime_spaces.enqueue`` 投递，本线程等节点 Task 换上新 Run 后记下，再经
-        主事件循环 ``event_loop`` 订阅节点 actor 的静止状态（``wait_idle``）等结论。
+        ``team_run`` 是 ``agent_team`` 工具刚由审批门迁移为 ``running`` 的行，本方法不再校验其
+        状态。调用方是工具的执行线程（阻塞到落定）；节点输入经 ``task_runtime_spaces.enqueue``
+        投递，本线程经主事件循环 ``event_loop`` 等节点 actor 静止（``wait_idle``），期间记下新 Run
+        并在 TeamRun 不再运行时停下节点（见 :meth:`_await_node_run`）。
 
-        取消：以 TeamRun 自身状态为准，不读父 Task 的取消信号——单一事实源，节点等待轮询与调度
-        循环只看它。主 Task 停止由其 actor 发起停止时经 :meth:`cancel_for_parent_run_id`、用户在
-        卡片上取消经 :meth:`cancel` 把 TeamRun 落定 cancelled；本循环每轮开始前与节点结束后检查，等待节点期间检出则停止节点。
+        取消：以 TeamRun 自身状态为准，不读父 Task 的取消信号——单一事实源。主 Task 停止时其 actor
+        经 :meth:`cancel_for_parent_run_id`、用户在卡片上经 :meth:`cancel` 把 TeamRun 落定
+        cancelled；本循环每轮持久化快照时（条件更新落空）与节点结束后检出，等待节点期间检出则
+        停止节点。
 
         返回:
-            落定终态后的 TeamRun 快照。调度异常（含已冻结的节点配置或运行快照无效、重复启动）不向
-            调用方抛出：这里记录堆栈、把仍在运行的 TeamRun 收敛为 failed 并写档案，再返回落定快照——
-            调用方（``agent_team`` 工具）只需把结论交给模型，不必再捕获、再记一遍日志。
+            落定终态后的 TeamRun 快照。调度异常（含已冻结的节点配置或运行快照无效）不向调用方抛出：
+            这里记录堆栈、把仍在运行的 TeamRun 收敛为 failed、停止当前节点并写档案，再返回落定
+            快照——调用方只需把结论交给模型，不必再捕获、再记一遍日志。
 
         异常:
-            KeyError: TeamRun 不存在。
+            KeyError: 收尾读取时 TeamRun 已不存在。
         """
         state: AgentTeamRunState | None = None
         try:
-            if team_run.status != AgentTeamRunStatus.RUNNING.value:
-                raise ValueError(f"Team 已进入非运行态({team_run.status})，无法启动")
             state = AgentTeamRunState.model_validate(team_run.state_json)
             configuration = AgentTeamConfiguration.model_validate(
                 team_run.configuration_snapshot_json
             )
-
             state.current_node_id = configuration.start_node_id
             next_node_input = None
             rounds = 0
 
-            while True:
-                if self._stopped(team_run.id):
-                    break
+            while self._persist_running(team_run.id, state):
                 if rounds >= configuration.max_runs:
-                    self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.FAILED.value,
-                                                            (AgentTeamRunStatus.RUNNING.value,), state=state,
-                                                            end_reason=AgentTeamRunEndReason.MAX_RUNS_EXCEEDED.value,
-                                                            ended=True)
-                    log.error(
-                        "agent_team_max_runs_exceeded",
-                        extra={
-                            "msg": "Agent Team 超过最大轮数，已收敛为失败",
-                            "data": {"run_id": team_run.id, "max_runs": configuration.max_runs},
-                        },
+                    self._fail(
+                        team_run.id, state, AgentTeamRunEndReason.MAX_RUNS_EXCEEDED,
+                        msg="Agent Team 超过最大轮数，已收敛为失败",
+                        data={"max_runs": configuration.max_runs},
                     )
                     break
                 rounds += 1
-                row = self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.RUNNING.value,
-                                                                (AgentTeamRunStatus.RUNNING.value,), state=state)
-                if row is None:
-                    log.info(
-                        "agent_team_start_failed",
-                        extra={
-                            "msg": "Agent Team 已被取消",
-                            "data": {"run_id": team_run.id},
-                        },
-                    )
-                    break
-
-                node_execution, node_run = self._start_node(
+                node_run = self._run_node(
                     team_run,
                     state,
                     configuration,
@@ -140,91 +121,51 @@ class AgentTeamCoordinator:
                     event_loop,
                     next_node_input,
                 )
+                # 节点因 Team 取消而停下时不再按节点失败归因。
                 if self._stopped(team_run.id):
                     break
+                node_data = {"node_id": state.current_node_id, "node_run_id": node_run.id}
                 if node_run.status != ConversationRunStatus.COMPLETED.value:
-                    failure_reason = (
-                        AgentTeamRunEndReason.NODE_RUN_CANCELLED.value
+                    self._fail(
+                        team_run.id, state,
+                        AgentTeamRunEndReason.NODE_RUN_CANCELLED
                         if node_run.status == ConversationRunStatus.CANCELLED.value
-                        else AgentTeamRunEndReason.NODE_RUN_FAILED.value
-                    )
-                    log.info(
-                        "agent_team_start_failed",
-                        extra={
-                            "msg": "Agent Team 节点执行失败",
-                            "data": {
-                                "run_id": team_run.id,
-                                "node_id": state.current_node_id,
-                                "node_run_id": node_run.id,
-                                "node_status": node_run.status,
-                                "failure_code": failure_reason,
-                            },
-                        },
-                    )
-                    self._team_run_crud.update_status_if_in(
-                        team_run.id, AgentTeamRunStatus.FAILED.value,
-                        (AgentTeamRunStatus.RUNNING.value,), state=state,
-                        end_reason=failure_reason, ended=True,
+                        else AgentTeamRunEndReason.NODE_RUN_FAILED,
+                        msg="Agent Team 节点执行未完成",
+                        data={**node_data, "node_status": node_run.status},
                     )
                     break
-
-                final_output = node_run.final_output
-                parsed_output = self.struct_out_put(final_output)
+                parsed_output = self._parse_handoff(node_run.final_output)
                 if parsed_output is None:
-                    log.error(
-                        "agent_team_node_output_invalid",
-                        extra={"msg": "节点未返回有效的 Team 状态与输出", "data": {
-                            "run_id": team_run.id,
-                            "node_id": state.current_node_id,
-                            "node_run_id": node_run.id,
-                        }},
-                    )
-                    self._team_run_crud.update_status_if_in(
-                        team_run.id, AgentTeamRunStatus.FAILED.value,
-                        (AgentTeamRunStatus.RUNNING.value,), state=state,
-                        end_reason=AgentTeamRunEndReason.NODE_OUTPUT_INVALID.value, ended=True,
+                    self._fail(
+                        team_run.id, state, AgentTeamRunEndReason.NODE_OUTPUT_INVALID,
+                        msg="节点未返回有效的 Team 状态与输出",
+                        data=node_data,
                     )
                     break
                 status, next_node_input = parsed_output
                 next_node_id = state.has_next_node(status)
                 if next_node_id is None:
-                    log.error(
-                        "agent_team_start_failed",
-                        extra={
-                            "msg": "节点业务状态没有匹配的转移",
-                            "data": {
-                                "run_id": team_run.id,
-                                "node_id": state.current_node_id,
-                                "node_run_id": node_run.id,
-                                "business_status": status,
-                                "failure_code": AgentTeamRunEndReason.TRANSITION_NOT_FOUND.value,
-                            },
-                        },
-                    )
-                    self._team_run_crud.update_status_if_in(
-                        team_run.id, AgentTeamRunStatus.FAILED.value,
-                        (AgentTeamRunStatus.RUNNING.value,), state=state,
-                        end_reason=AgentTeamRunEndReason.TRANSITION_NOT_FOUND.value,
-                        ended=True,
+                    self._fail(
+                        team_run.id, state, AgentTeamRunEndReason.TRANSITION_NOT_FOUND,
+                        msg="节点业务状态没有匹配的转移",
+                        data={**node_data, "business_status": status},
                     )
                     break
                 state.add_transition(state.current_node_id, status, next_node_id)
                 if next_node_id == "END":
+                    # 结论在节点 Run 与运行档案里；``end_reason`` 只承载失败/取消原因码。
+                    self._team_run_crud.update_status_if_in(
+                        team_run.id, AgentTeamRunStatus.COMPLETED.value,
+                        (AgentTeamRunStatus.RUNNING.value,), state=state, ended=True,
+                    )
                     log.info(
-                        "agent_team_start_completed",
+                        "agent_team_completed",
                         extra={
                             "msg": "Agent Team 已完成",
-                            "data": {
-                                "run_id": team_run.id,
-                                "node_id": state.current_node_id,
-                                "output": final_output,
-                            },
+                            "data": {"team_run_id": team_run.id, **node_data},
                         },
                     )
-                    final_node_output = next_node_input
-                    self._team_run_crud.update_status_if_in(team_run.id, AgentTeamRunStatus.COMPLETED.value,
-                                                            (AgentTeamRunStatus.RUNNING.value,), state=state,
-                                                            end_reason=final_node_output, ended=True)
                     break
                 state.current_node_id = next_node_id
         except Exception as exc:
@@ -234,11 +175,11 @@ class AgentTeamCoordinator:
                 else AgentTeamRunEndReason.TEAM_START_FAILED.value
             )
             log.exception(
-                "agent_team_start_failed",
+                "agent_team_dispatch_failed",
                 extra={
                     "msg": "Agent Team 节点调度异常",
                     "data": {
-                        "run_id": team_run.id,
+                        "team_run_id": team_run.id,
                         "node_id": state.current_node_id if state is not None else None,
                         "failure_code": failure_reason,
                         "error_type": type(exc).__name__,
@@ -251,14 +192,68 @@ class AgentTeamCoordinator:
                 (AgentTeamRunStatus.RUNNING.value,), state=state,
                 end_reason=failure_reason, ended=True,
             )
+            # 异常可能发生在输入已投递之后（等新 Run 超时、等静止失败）：不停下节点，它会在没有
+            # 协调者的情况下继续执行。用内存快照定位——此时节点执行记录可能尚未落库。
+            execution = (
+                state.node_execution_for_node(state.current_node_id)
+                if state is not None and state.current_node_id is not None
+                else None
+            )
+            if execution is not None:
+                task_runtime_spaces.cancel(execution.task_id, "parent")
         finally:
             # 所有正常终态分支与调度异常共用同一档案出口；写入失败由档案 service 记录，
             # 不覆盖已经收敛的 TeamRun 结果。
             self._run_archive_service.write_terminal_archive(team_run.id)
         return self._team_run_crud.get_by_id(team_run.id)
 
-    def struct_out_put(self, output: str | None) -> tuple[str, str] | None:
-        """读取节点交接结果；格式错误由调用方记为稳定的节点输出失败。"""
+    def _persist_running(self, team_run_id: int, state: AgentTeamRunState) -> bool:
+        """把调度快照写回仍在运行的 TeamRun；条件更新落空即 Team 已停止，返回假。"""
+
+        row = self._team_run_crud.update_status_if_in(
+            team_run_id,
+            AgentTeamRunStatus.RUNNING.value,
+            (AgentTeamRunStatus.RUNNING.value,),
+            state=state,
+        )
+        if row is not None:
+            return True
+        log.info(
+            "agent_team_stopped",
+            extra={
+                "msg": "TeamRun 已不在运行，调度停止",
+                "data": {"team_run_id": team_run_id, "node_id": state.current_node_id},
+            },
+        )
+        return False
+
+    def _fail(
+            self,
+            team_run_id: int,
+            state: AgentTeamRunState,
+            reason: AgentTeamRunEndReason,
+            *,
+            msg: str,
+            data: dict[str, Any],
+    ) -> None:
+        """把运行中的 TeamRun 收敛为 failed，并以统一事件记录失败原因码。"""
+
+        self._team_run_crud.update_status_if_in(
+            team_run_id, AgentTeamRunStatus.FAILED.value,
+            (AgentTeamRunStatus.RUNNING.value,), state=state,
+            end_reason=reason.value, ended=True,
+        )
+        log.warning(
+            "agent_team_failed",
+            extra={
+                "msg": msg,
+                "data": {"team_run_id": team_run_id, "failure_code": reason.value, **data},
+            },
+        )
+
+    @staticmethod
+    def _parse_handoff(output: str | None) -> tuple[str, str] | None:
+        """读取节点交接结果 ``{"status", "output"}``；格式错误由调用方记为节点输出失败。"""
 
         try:
             json_output = json.loads(output) if output is not None else None
@@ -272,7 +267,7 @@ class AgentTeamCoordinator:
             return status, node_output
         return None
 
-    def _start_node(
+    def _run_node(
             self,
             row: AgentTeamRunModel,
             state: AgentTeamRunState,
@@ -280,16 +275,13 @@ class AgentTeamCoordinator:
             remaining_rounds: int,
             event_loop: asyncio.AbstractEventLoop,
             node_input: str | None = None,
-    ) -> tuple[AgentTeamNodeExecution, ConversationRunRecord]:
-        """复用或创建节点 Task，跑完本次节点 Run，并返回它落定的执行记录。
+    ) -> ConversationRunRecord:
+        """复用或创建节点 Task，跑完本次节点 Run，返回它落定的 Run 记录。
 
-        本方法是「可信调用方」的写助手：``row`` / ``state`` / ``configuration`` 由调用方在
-        自身事务中加载并校验——``start`` 在入口统一校验 Team 存在、处于 running 且无活动节点；
-        驱动循环在结算时按锁定后的快照校验。本方法不再读取或重新校验 Team 身份与生命周期
-        状态，只负责按节点快照派生 Task、校验节点 profile、经 ``task_runtime_spaces.enqueue`` 把节点
-        输入投递给节点 Task（静止的节点 Task 随即开 Run），等新 Run 出现即记下，再按 Task 等它
-        静止（返回时最新 Run 已是终态），落定执行记录。
-        ``state.start_node`` 仍持有活动节点游标的领域守卫。
+        ``row`` / ``state`` / ``configuration`` 由 :meth:`start` 提供并信任，这里不重新校验 Team
+        身份与生命周期状态。流程：按节点快照派生 Task、校验节点 profile、经
+        ``task_runtime_spaces.enqueue`` 投递节点输入（静止的节点 Task 随即开 Run），等新 Run 出现
+        即把它记入快照并落库，再按 Task 等它静止（返回时最新 Run 已是终态）。
 
         同一 TeamRun 中的节点按 ``node_id`` 绑定独立 Task；再次访问该节点时读取原 Task，
         由 Task 级 context 保留它自己的历史。
@@ -299,45 +291,32 @@ class AgentTeamCoordinator:
         确认阶段校验过；这里不重复校验，也不为「取不到」写死降级分支。
 
         参数:
-            row: 已确认的 TeamRun 记录（非 ``pending``）；其 ``id`` 在本方法内被固化使用。
-            state: TeamRun 执行快照；``current_node_id`` 指明本次要跑的节点。
-            configuration: 本次运行冻结的 Team 配置。
             remaining_rounds: 含本次在内的共享剩余执行预算，用于给节点追加收敛提醒。
             node_input: 上一节点的交接输出；入口节点为 ``None``。
 
-        返回:
-            该节点的执行记录（含绑定 Task 与本次 Run ID）与执行后的 Run 记录。
-
         异常:
-            pydantic.ValidationError: 快照中的结构化输出契约非法（建 Run 之前抛出）。
-            其余异常（工具 schema 解析失败、注册表未命中等）直接上浮，由 :meth:`start` 统一
-            收敛为 TeamRun ``failed``。节点 Run 执行期的失败（含模型配置已删除）由运行时落定
-            为该 Run 的 ``failed``，不在这里抛出。
-            RuntimeError: 节点输入已投递，但节点 Run 没能建立（原因由调度 actor 记录），同样由
-            :meth:`start` 收敛为 TeamRun ``failed``。
+            pydantic.ValidationError: 快照中的结构化输出契约非法（投递输入之前抛出）。
+            RuntimeError: 节点输入已投递，但节点 Run 没能建立（原因由调度 actor 记录）。
+            其余异常（工具 schema 解析失败、注册表未命中等）直接上浮。节点 Run 执行期的失败（含模型
+            配置已删除）由运行时落定为该 Run 的 ``failed``，不在这里抛出。
 
         副作用:
-            可能新建节点 Task（首次执行该节点时）；新开一条 running 节点 Run 并执行到终态；
-            条件更新 TeamRun 快照与 ``updated_at``；Team 已被取消时停止刚启动的节点 Run。
+            可能新建节点 Task（首次执行该节点时）；新开一条节点 Run 并等它到终态；条件更新 TeamRun
+            快照；TeamRun 不再运行时停止节点（见 :meth:`_await_node_run`）。
         """
         node_id = state.current_node_id
-        # ``row`` 在下方被条件更新的返回值覆盖；取消分支需要原始 TeamRun 标识，故先固化。
-        team_run_id = row.id
         node: TeamNodeDefinition = configuration.node(node_id)
         node_runtime: AgentTeamRunRuntime = state.node_runtime.get(node_id)
         agent_id = node.agent_id
         tool_schemas = self._resolve_node_tool_schemas(node_runtime.allowed_tools)
         node_execution: AgentTeamNodeExecution | None = state.node_execution_for_node(node_id)
-        node_goal = node_runtime.node_goal
         input_text = self._build_node_input(
-            node_goal=node_goal,
+            node_goal=node_runtime.node_goal,
             remaining_rounds=remaining_rounds,
             max_rounds=configuration.max_runs,
             node_input=node_input,
         )
-        model_settings = node_runtime.model_settings
-        reasoning_effort = model_settings.get("reasoning_effort")
-        workspace_root = self._workspace_root(row.workspace_id)
+        workspace_root = self._workspace_service.get_workspace(row.workspace_id).root_path
         agent_profile: AgentProfile = self._agent_registry.resolve(workspace_root, agent_id)
 
         if node_execution is None:
@@ -353,78 +332,80 @@ class AgentTeamCoordinator:
                 },
                 tool_schemas=tool_schemas,
             )
-            node_execution: AgentTeamNodeExecution = state.create_execution_node(node_id,
-                                                                                 AgentTeamNodeExecution(node_id=node_id,
-                                                                                                        task_id=task.id))
+            node_execution = state.create_execution_node(
+                node_id, AgentTeamNodeExecution(node_id=node_id, task_id=task.id)
+            )
 
-        # 节点快照在建 Run 之前先合成一次：契约非法时直接上浮，不留下无执行者的节点 Run。真正驱动
-        # 时由 run_driver 从节点 Task 的快照重新合成，不经调度入口在内存中传递定义。
+        # 节点快照在投递输入之前先合成一次：契约非法时直接上浮，不留下无执行者的节点 Run。真正
+        # 驱动时由 ``AgentRuntimeConfig.for_run`` 从节点 Task 的快照重新合成，不经调度入口在内存中
+        # 传递定义。
         build_node_profile(agent_profile, node_runtime)
         previous_run_id = self._task_service.get_task(node_execution.task_id).current_run_id
         message = get_user_input_service().prepare(
             node_execution.task_id,
             ConversationRunCommand(display_text=input_text),
             node_runtime.model_config_id,
-            reasoning_effort,
+            node_runtime.model_settings.get("reasoning_effort"),
             agent_id,
         )
         task_runtime_spaces.enqueue(node_execution.task_id, message)
-        # 节点 Task 只由本协调器顺序投递、投递时必然静止，投递必然新开 Run；没开出来说明调度违约，
-        # 上浮由 :meth:`start` 收敛为 TeamRun ``failed``。节点 Run 一启动就记下：执行时间线与 Team
-        # 取消（``AgentTeamRunState.cancel``）都按它定位。
-        # TODO(Agent Team 接入)：改为订阅节点 actor 的状态，不轮询 Task 当前 Run。
-        node_run_id = self._wait_new_run(node_execution.task_id, previous_run_id)
-        node_execution.conversation_run_ids.append(node_run_id)
-        row = self._team_run_crud.update_status_if_in(
-            team_run_id,
-            AgentTeamRunStatus.RUNNING.value,
-            (AgentTeamRunStatus.RUNNING.value,),
-            state=state,
+        node_run_id = self._await_node_run(
+            event_loop, row.id, state, node_execution, previous_run_id
         )
-        if row is None:
-            # Team 在节点启动期间被取消：停止刚启动的节点 Run，仍等它落定后返回。
-            log.info(
-                "agent_team_start_failed",
-                extra={
-                    "msg": "Agent Team 已被取消",
-                    "data": {"run_id": team_run_id, "node_id": node_id},
-                },
-            )
-            task_runtime_spaces.cancel(node_execution.task_id, "parent")
-        self._wait_node(event_loop, team_run_id, node_execution.task_id)
-        latest = self._task_service.get_task(node_execution.task_id).current_run_id
-        return node_execution, self._ledger.get_run(latest)
+        return self._ledger.get_run(node_run_id)
 
-    def _wait_node(
+    def _await_node_run(
             self,
             event_loop: asyncio.AbstractEventLoop,
             team_run_id: int,
-            node_task_id: int,
-    ) -> None:
-        """按 Task 阻塞等待节点静止（挂起不算）；期间 TeamRun 被取消则停止节点。"""
+            state: AgentTeamRunState,
+            node_execution: AgentTeamNodeExecution,
+            previous_run_id: int | None,
+    ) -> int:
+        """投递节点输入后阻塞到节点 Run 落定（挂起不算），返回该 Run id；本线程是工作线程。
 
-        actor = task_runtime_spaces.get_or_create(node_task_id).actor
+        本协调器是节点的唯一停止者：TeamRun 的取消入口（:meth:`cancel` 等）只迁移状态，不碰节点；
+        这里每 ``_NODE_POLL_SECONDS`` 检查一次 TeamRun，不再运行就停下节点 Task。TeamRun 处于
+        running 时 :meth:`start` 必然在执行，所以这条路径不会缺席；单一负责方也就没有「取消入口
+        找不到刚启动的节点」的竞态窗口。
+
+        取消只在看到新 Run 之后发：Run 开出来之前节点 actor 没有可停止的对象，发了即落空。新 Run
+        一出现即记入快照并落库，只为执行时间线定位。节点 Task 只由本协调器顺序投递、投递时必然
+        静止，投递必然新开 Run；超时没开出来说明调度违约，抛 ``RuntimeError`` 由 :meth:`start`
+        收敛为 TeamRun ``failed``。
+        """
+
+        # TODO(Agent Team 接入)：改为订阅节点 actor 的状态，不轮询 Task 当前 Run 与 TeamRun 状态。
+        actor = task_runtime_spaces.get_or_create(node_execution.task_id).actor
+        deadline = time.monotonic() + _NODE_RUN_START_TIMEOUT_SECONDS
+        node_run_id: int | None = None
         cancel_sent = False
-        while not asyncio.run_coroutine_threadsafe(
-            actor.wait_idle(_NODE_CANCEL_POLL_SECONDS), event_loop
-        ).result():
+        while True:
+            idle = asyncio.run_coroutine_threadsafe(
+                actor.wait_idle(_NODE_POLL_SECONDS), event_loop
+            ).result()
+            if node_run_id is None:
+                current = self._task_service.get_task(node_execution.task_id).current_run_id
+                if current is None or current == previous_run_id:
+                    if time.monotonic() > deadline:
+                        raise RuntimeError(
+                            f"task {node_execution.task_id} 的节点输入没有启动新 Run"
+                        )
+                    if idle:
+                        # 静止时 ``wait_idle`` 立即返回：新 Run 还没开出来，自行让出间隔。
+                        time.sleep(_NODE_POLL_SECONDS)
+                    continue
+                node_run_id = current
+                node_execution.conversation_run_ids.append(node_run_id)
+                self._persist_running(team_run_id, state)
+            if idle:
+                return node_run_id
             if not cancel_sent and self._stopped(team_run_id):
-                task_runtime_spaces.cancel(node_task_id, "parent")
+                task_runtime_spaces.cancel(node_execution.task_id, "parent")
                 cancel_sent = True
 
-    def _wait_new_run(self, node_task_id: int, previous_run_id: int | None) -> int:
-        """阻塞到节点 Task 的当前 Run 换成新 Run（本线程是工作线程）；超时视为调度违约。"""
-
-        deadline = time.monotonic() + _NODE_RUN_START_TIMEOUT_SECONDS
-        while time.monotonic() < deadline:
-            current = self._task_service.get_task(node_task_id).current_run_id
-            if current is not None and current != previous_run_id:
-                return current
-            time.sleep(_NODE_CANCEL_POLL_SECONDS)
-        raise RuntimeError(f"task {node_task_id} 的节点输入没有启动新 Run")
-
     def _stopped(self, team_run_id: int) -> bool:
-        """TeamRun 已不在运行（被取消或已收敛）时返回真；调度循环与节点等待据此停下。"""
+        """TeamRun 已不在运行（被取消或已收敛）时返回真；节点结束后与节点等待期间据此停下。"""
 
         status = self._team_run_crud.get_by_id(team_run_id).status
         if status == AgentTeamRunStatus.RUNNING.value:
@@ -520,41 +501,46 @@ class AgentTeamCoordinator:
             )
         return "\n\n".join(sections) or "Advance the Team's overall goal according to the current node's responsibilities."
 
-    def _workspace_root(self, workspace_id: int) -> str:
-        """读取 workspace 根路径。"""
-
-        return self._workspace_service.get_workspace(workspace_id).root_path
-
     def cancel(
             self,
             team_run_id: int,
             end_reason: AgentTeamRunEndReason = AgentTeamRunEndReason.CANCELLED,
-    ) -> AgentTeamRunModel | None:
-        """把待确认或运行中的 TeamRun 落定 cancelled 并停止当前节点；已在终态时原样返回。
+    ) -> AgentTeamRunModel:
+        """把待确认或运行中的 TeamRun 落定 cancelled；已在终态时原样返回当前快照。
+
+        只迁移状态：运行中的节点由 :meth:`start` 的等待循环检出后停下。
 
         ``end_reason`` 区分用户在卡片上取消与随主 Run 停止（``PARENT_CANCELLED``），写进 TeamRun
         与运行档案供诊断。
+
+        异常:
+            KeyError: TeamRun 不存在。
         """
 
-        row = self._team_run_crud.get_by_id(team_run_id)
-        if row.status not in {"pending", "running"}:
-            return row
-        state = AgentTeamRunState.model_validate(row.state_json)
+        cancelled = self._cancel_if_active(team_run_id, end_reason)
+        return cancelled if cancelled is not None else self._team_run_crud.get_by_id(team_run_id)
 
-        row = self._team_run_crud.update_status_if_in(row.id, AgentTeamRunStatus.CANCELLED.value,
-                                                      (
-                                                          AgentTeamRunStatus.RUNNING.value,
-                                                          AgentTeamRunStatus.PENDING.value,
-                                                      ),
-                                                      end_reason=end_reason.value,
-                                                      ended=True)
+    def _cancel_if_active(
+            self,
+            team_run_id: int,
+            end_reason: AgentTeamRunEndReason,
+    ) -> AgentTeamRunModel | None:
+        """条件迁移为 cancelled 并写档案；TeamRun 已不在活动态（含并发落定）时返回 None。
+
+        不先读状态再判断：条件更新本身就是判定，避免读与写之间被其他路径落定。不停止节点：节点由
+        :meth:`start` 的等待循环检出 TeamRun 不再运行后停下（见 :meth:`_await_node_run`）；运行档案
+        由 :meth:`start` 收尾时再按最终状态重写一次。
+        """
+
+        row = self._team_run_crud.update_status_if_in(
+            team_run_id,
+            AgentTeamRunStatus.CANCELLED.value,
+            _ACTIVE_STATUSES,
+            end_reason=end_reason.value,
+            ended=True,
+        )
         if row is None:
-            return row
-
-        node_task_id = state.running_node_task_id()
-        if node_task_id is not None:
-            # 交给节点 Task 的 actor：运行中打信号，挂起的直接迁移；只发起，不等待。
-            task_runtime_spaces.cancel(node_task_id, "parent")
+            return None
         self._run_archive_service.write_terminal_archive(row.id)
         log.info(
             "agent_team_run_cancelled",
@@ -579,12 +565,11 @@ class AgentTeamCoordinator:
             实际从活动态收敛为 ``cancelled`` 的 Team 数量。
 
         异常:
-            KeyError: TeamRun 在扫描后被其他路径删除时向上暴露，调用方应中止删除；
-            数据库或执行器异常：向上暴露，避免删除任务后留下仍在执行的节点。
+            数据库异常：向上暴露，调用方应中止删除。
 
         副作用:
-            取消以这些任务作为主 Agent 的 Team，以及节点 Task 位于集合中的 Team；
-            同步发出节点取消信号。
+            取消以这些任务作为主 Agent 的 Team，以及节点 Task 位于集合中的 Team。节点 Task 在任务树
+            里（``parent_task_id`` 是主 Task），由删除入口先经 ``task_runtime_spaces.stop`` 停下。
         """
 
         if not task_ids:
@@ -600,8 +585,7 @@ class AgentTeamCoordinator:
             }
             if row.parent_task_id not in task_ids and not node_task_ids & task_ids:
                 continue
-            team = self.cancel(row.id)
-            if team is not None:
+            if self._cancel_if_active(row.id, AgentTeamRunEndReason.CANCELLED) is not None:
                 cancelled += 1
         return cancelled
 
@@ -618,7 +602,7 @@ class AgentTeamCoordinator:
             实际从活动态收敛为 ``cancelled`` 的 Team 数量。
 
         副作用:
-            更新 TeamRun 终态并取消节点执行器；异常向调用方暴露，供
+            更新 TeamRun 终态（节点由 :meth:`start` 的等待循环停下）；异常向调用方暴露，供
             取消入口记录诊断日志，但不回滚主 Run 已发出的取消信号。
         """
 
@@ -629,8 +613,7 @@ class AgentTeamCoordinator:
         ):
             if row.parent_run_id != parent_run_id:
                 continue
-            team = self.cancel(row.id, AgentTeamRunEndReason.PARENT_CANCELLED)
-            if team is not None:
+            if self._cancel_if_active(row.id, AgentTeamRunEndReason.PARENT_CANCELLED) is not None:
                 cancelled += 1
         return cancelled
 
@@ -656,11 +639,6 @@ class AgentTeamCoordinator:
             recovered += 1
             self._run_archive_service.write_terminal_archive(updated.id)
         return recovered
-
-    def get(self, team_run_id: int) -> AgentTeamRunModel:
-        """读取 TeamRun 当前持久化快照。"""
-
-        return self._team_run_crud.get_by_id(team_run_id)
 
 
 _COORDINATOR: AgentTeamCoordinator | None = None

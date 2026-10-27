@@ -13,7 +13,8 @@
 - ``blocked_device_reason`` 返回空串表示允许。
 - ``resolve_within_workspace`` 同时拒绝落在 workspace ``.cosir`` 保留子树内的路径
   （``.cosir`` 是只读保留区）；仅当调用方显式传 ``allow_reserved=True`` 时放行，
-  供终端 cwd 与 Agent Team 运行档案落盘等子系统使用。
+  目前只有交互终端 cwd 使用。后端自行拼出的内部落盘路径（Agent Team 运行档案、工具产物）
+  不经本解析器，越界防护由 ``atomic_write_text`` 的 ``containment_root`` 承担。
 """
 
 from pathlib import Path
@@ -143,8 +144,7 @@ class PathResolver:
         参数:
             path: 模型传入的路径字符串。
             allow_reserved: 是否允许落在 workspace ``.cosir`` 保留子树内。默认 ``False``
-                （写/改/删/移动等文件工具一律拒绝）；仅内部子系统（终端 cwd、Agent Team
-                运行档案落盘）显式传 ``True``。
+                （写/改/删/移动等文件工具一律拒绝）；仅交互终端 cwd 显式传 ``True``。
 
         返回:
             ``(resolved_path, "")`` 表示成功；``(None, error)`` 表示路径非法（越界或落入

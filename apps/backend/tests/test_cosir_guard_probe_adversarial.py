@@ -789,8 +789,8 @@ def test_no_coding_agent_literal_in_backend_app() -> None:
 def test_allow_reserved_only_used_by_internal_call_sites() -> None:
     """全仓 grep：`allow_reserved=True` 仅应出现在后端内部写 `.cosir` 的白名单调用点。
 
-    白名单：交互终端 cwd、Agent Team 运行档案落盘；均为系统自身写入，
-    不经模型工具入参。为避免命中 docstring，只统计关键字实参 ``allow_reserved=True``
+    白名单：交互终端 cwd；它是系统自身写入，不经模型工具入参。Agent Team 运行档案等
+    后端自拼路径不经 ``PathResolver``，只靠 ``atomic_write_text`` 的 ``containment_root``。为避免命中 docstring，只统计关键字实参 ``allow_reserved=True``
     （调用可能跨行，故实参后允许 ``,`` / ``)`` / 行尾；docstring 里的 ``allow_reserved=True``
     后跟反引号，不会命中）。
     """
@@ -809,7 +809,6 @@ def test_allow_reserved_only_used_by_internal_call_sites() -> None:
                 call_sites.append(f"{path.relative_to(app_dir)}:{lineno}")
     expected = {
         "tools/terminal_runtime/terminal_session_service.py",
-        "core/tool/handler/agent_team/agent_team_run_archive_service.py",
     }
     actual = {site.split(":", 1)[0].replace("\\", "/") for site in call_sites}
     assert actual == expected, f"allow_reserved=True 调用面异常：{call_sites}"

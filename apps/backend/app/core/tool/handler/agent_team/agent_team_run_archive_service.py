@@ -10,7 +10,6 @@ from typing import Any
 from app.models.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.config.logging.logger import log
 from app.utils.atomic_write import atomic_write_text
-from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.models.conversation_run_failure import run_failure_message
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
@@ -54,6 +53,11 @@ class AgentTeamRunArchiveService:
 
         档案属于 Agent 的辅助读取结果，写入失败不改变已经提交的 TeamRun 终态。调用方可用
         返回的 workspace 相对路径告知 Agent 如何查阅。
+
+        路径由本方法自行拼出、不来自模型输入，因此不经 ``PathResolver``：越界防护只靠
+        ``atomic_write_text`` 的 ``containment_root``（建目录前与替换前各校验一次，防符号链接
+        逃逸），越界时抛 ``OSError`` 并由下方统一收敛为 ``agent_team_run_archive_write_failed``。
+        ``.cosir`` 只读保留区是工具参数的约束，不约束这个内部子系统。
         """
 
         try:
@@ -64,19 +68,6 @@ class AgentTeamRunArchiveService:
                 self._workspace_service.get_workspace(row.workspace_id).root_path
             ).resolve()
             target = workspace_agent_team_run_dir(workspace_root) / f"{row.id}.json"
-            resolved, error = PathResolver(workspace_root).resolve_within_workspace(
-                str(target), allow_reserved=True
-            )
-            if resolved is None:
-                log.error(
-                    "agent_team_run_archive_path_invalid",
-                    extra={
-                        "msg": "Agent Team 运行档案路径无法解析",
-                        "data": {"team_run_id": row.id, "error": error},
-                    },
-                )
-                return None
-
             document = self._build_document(row)
             content = json.dumps(
                 document,
@@ -85,7 +76,7 @@ class AgentTeamRunArchiveService:
                 allow_nan=False,
             ) + "\n"
             atomic_write_text(
-                resolved,
+                target,
                 content,
                 preserve_eol=False,
                 containment_root=workspace_root,

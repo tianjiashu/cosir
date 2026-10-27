@@ -52,26 +52,18 @@ def test_agent_team_preview_carries_only_card_content() -> None:
     assert "user_input_request" not in display_data
 
 
-def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> None:
-    """父 Run 取消时，pending TeamRun 也要原子收敛、写完整终态信息并落终态运行档案。"""
+def test_cancelling_team_run_only_transitions_status_and_writes_archive(monkeypatch) -> None:
+    """取消入口只做条件迁移与档案，不碰节点：节点由 ``start`` 的等待循环唯一负责停下。"""
 
-    row = SimpleNamespace(id=17, status=AgentTeamRunStatus.PENDING.value, state_json={})
     updated = SimpleNamespace(
         id=17,
         parent_run_id=23,
         status=AgentTeamRunStatus.CANCELLED.value,
+        state_json={},
     )
     captured: dict[str, object] = {}
 
-    class _State:
-        def running_node_task_id(self) -> int:
-            return 41
-
     class _Crud:
-        def get_by_id(self, run_id: int) -> SimpleNamespace:
-            assert run_id == 17
-            return row
-
         def update_status_if_in(
             self,
             run_id: int,
@@ -86,11 +78,6 @@ def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> 
     coordinator._team_run_crud = _Crud()
     coordinator._run_archive_service = SimpleNamespace(
         write_terminal_archive=lambda run_id: captured.update(archived=run_id)
-    )
-    monkeypatch.setattr(
-        coordinator_module,
-        "AgentTeamRunState",
-        SimpleNamespace(model_validate=lambda _value: _State()),
     )
     monkeypatch.setattr(
         coordinator_module.task_runtime_spaces,
@@ -108,8 +95,98 @@ def test_cancelling_pending_team_run_persists_terminal_metadata(monkeypatch) -> 
     assert captured["target"] == AgentTeamRunStatus.CANCELLED.value
     assert captured["end_reason"] == AgentTeamRunEndReason.CANCELLED.value
     assert captured["ended"] is True
-    assert captured["signalled"] == (41, "parent")
+    assert "signalled" not in captured
     assert captured["archived"] == 17
+
+
+def test_cancel_returns_current_row_when_team_run_already_settled() -> None:
+    """条件迁移落空（并发落定或已在终态）时返回当前快照而不是 None，API 才能照常投影。"""
+
+    settled = SimpleNamespace(id=17, status=AgentTeamRunStatus.COMPLETED.value)
+    coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
+    coordinator._team_run_crud = SimpleNamespace(
+        update_status_if_in=lambda *_args, **_kwargs: None,
+        get_by_id=lambda _run_id: settled,
+    )
+
+    assert coordinator.cancel(17) is settled
+
+
+def _driven_coordinator(monkeypatch, run_node) -> tuple[AgentTeamCoordinator, dict[str, object]]:
+    """构造只替换存储与节点执行的协调器，驱动真实的 ``start`` 调度循环。"""
+
+    captured: dict[str, object] = {"updates": [], "cancelled": []}
+
+    class _Crud:
+        def update_status_if_in(self, run_id, target, allowed, **kwargs):
+            captured["updates"].append((target, kwargs))
+            return SimpleNamespace(id=run_id)
+
+        def get_by_id(self, run_id):
+            return SimpleNamespace(id=run_id, status=AgentTeamRunStatus.RUNNING.value)
+
+    coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
+    coordinator._team_run_crud = _Crud()
+    coordinator._run_archive_service = SimpleNamespace(write_terminal_archive=lambda _id: None)
+    coordinator._run_node = run_node
+    monkeypatch.setattr(
+        coordinator_module,
+        "AgentTeamConfiguration",
+        SimpleNamespace(
+            model_validate=lambda _value: SimpleNamespace(start_node_id="develop", max_runs=3)
+        ),
+    )
+    monkeypatch.setattr(
+        coordinator_module.task_runtime_spaces,
+        "cancel",
+        lambda task_id, reason: captured["cancelled"].append((task_id, reason)),
+    )
+    return coordinator, captured
+
+
+_TEAM_RUN = SimpleNamespace(
+    id=17,
+    state_json={"node_transitions": {"develop": {"done": "END"}}},
+    configuration_snapshot_json={},
+)
+
+
+def test_completed_team_does_not_store_node_output_as_end_reason(monkeypatch) -> None:
+    """``end_reason`` 只承载原因码：Team 完成时不得把节点交接输出写进去。"""
+
+    def run_node(_row, _state, *_args):
+        return SimpleNamespace(
+            id=5,
+            status="completed",
+            final_output='{"status": "done", "output": "很长的最终报告"}',
+        )
+
+    coordinator, captured = _driven_coordinator(monkeypatch, run_node)
+    coordinator.start(_TEAM_RUN, event_loop=None)
+
+    target, kwargs = captured["updates"][-1]
+    assert target == AgentTeamRunStatus.COMPLETED.value
+    assert kwargs.get("end_reason") is None
+
+
+def test_dispatch_failure_after_enqueue_stops_the_node_task(monkeypatch) -> None:
+    """输入已投递后调度出错（如等新 Run 超时）：TeamRun 收敛为 failed，并停下节点 Task。"""
+
+    from app.models.agent_team.state.agent_team_run_state import AgentTeamNodeExecution
+
+    def run_node(_row, state, *_args):
+        state.create_execution_node(
+            "develop", AgentTeamNodeExecution(node_id="develop", task_id=41)
+        )
+        raise RuntimeError("节点输入没有启动新 Run")
+
+    coordinator, captured = _driven_coordinator(monkeypatch, run_node)
+    coordinator.start(_TEAM_RUN, event_loop=None)
+
+    target, kwargs = captured["updates"][-1]
+    assert target == AgentTeamRunStatus.FAILED.value
+    assert kwargs["end_reason"] == AgentTeamRunEndReason.NEXT_NODE_START_FAILED.value
+    assert captured["cancelled"] == [(41, "parent")]
 
 
 def test_team_run_view_is_typed_and_does_not_accept_runtime_state() -> None:

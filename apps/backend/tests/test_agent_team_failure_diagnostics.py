@@ -291,10 +291,9 @@ def test_team_view_marks_output_failure_on_completed_node(monkeypatch) -> None:
 def test_invalid_node_output_is_not_an_unhandled_exception() -> None:
     """模型输出缺少状态时交给领域失败分支，不能因解包 None 丢失诊断。"""
 
-    coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
-    assert coordinator.struct_out_put('{"status":"done","output":"ok"}') == ("done", "ok")
-    assert coordinator.struct_out_put('{"output":"ok"}') is None
-    assert coordinator.struct_out_put("not json") is None
+    assert AgentTeamCoordinator._parse_handoff('{"status":"done","output":"ok"}') == ("done", "ok")
+    assert AgentTeamCoordinator._parse_handoff('{"output":"ok"}') is None
+    assert AgentTeamCoordinator._parse_handoff("not json") is None
 
 
 def test_failed_team_result_carries_run_locator_and_archive_hint(monkeypatch) -> None:

@@ -9,6 +9,7 @@ import pytest
 
 from app.core.tool.handler.agent_team import coordinator as coordinator_module
 from app.core.tool.handler.agent_team.coordinator import AgentTeamCoordinator
+from app.models.agent_team.state.agent_team_run_state import AgentTeamNodeExecution
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 
 _TEAM_RUN = 3
@@ -59,25 +60,68 @@ class _TeamRuns:
         return SimpleNamespace(status=self.status)
 
 
-def test_node_wait_stops_node_when_team_run_is_cancelled(
-    monkeypatch: pytest.MonkeyPatch, main_loop: asyncio.AbstractEventLoop
-) -> None:
-    node = _Node(main_loop)
+def _waiting_coordinator(
+    monkeypatch: pytest.MonkeyPatch, node: _Node, runs: _TeamRuns, current_run_ids: list[int | None]
+) -> AgentTeamCoordinator:
+    """节点 Task 的当前 Run 依次取 ``current_run_ids``（取完后停在最后一个），模拟新 Run 晚到。"""
+
     monkeypatch.setattr(
         coordinator_module.task_runtime_spaces,
         "get_or_create",
         lambda _task_id: SimpleNamespace(actor=node),
     )
     monkeypatch.setattr(coordinator_module.task_runtime_spaces, "cancel", node.cancel)
-    runs = _TeamRuns(AgentTeamRunStatus.RUNNING.value)
+
+    def get_task(_task_id: int) -> SimpleNamespace:
+        run_id = current_run_ids.pop(0) if len(current_run_ids) > 1 else current_run_ids[0]
+        return SimpleNamespace(current_run_id=run_id)
+
     coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
     coordinator._team_run_crud = runs
-    # 节点启动后 TeamRun 才被取消：分段等待静止的间隙应检出并经调度入口停止节点。
+    coordinator._task_service = SimpleNamespace(get_task=get_task)
+    coordinator._persist_running = lambda *_args: True
+    return coordinator
+
+
+def test_node_wait_stops_node_when_team_run_is_cancelled(
+    monkeypatch: pytest.MonkeyPatch, main_loop: asyncio.AbstractEventLoop
+) -> None:
+    node = _Node(main_loop)
+    runs = _TeamRuns(AgentTeamRunStatus.RUNNING.value)
+    coordinator = _waiting_coordinator(monkeypatch, node, runs, [None, 101])
+    execution = AgentTeamNodeExecution(node_id="develop", task_id=_NODE_TASK)
+    # 节点启动后 TeamRun 才被取消：等待循环应检出并经调度入口停止节点。
     threading.Timer(0.3, setattr, args=(runs, "status", AgentTeamRunStatus.CANCELLED.value)).start()
 
-    coordinator._wait_node(main_loop, _TEAM_RUN, _NODE_TASK)
+    run_id = coordinator._await_node_run(main_loop, _TEAM_RUN, object(), execution, None)
 
+    assert run_id == 101
+    assert execution.conversation_run_ids == [101]
     assert node.cancelled == [_NODE_TASK]
+
+
+def test_node_wait_defers_cancel_until_node_run_appears(
+    monkeypatch: pytest.MonkeyPatch, main_loop: asyncio.AbstractEventLoop
+) -> None:
+    """Team 在节点 Run 开出来之前就被取消：取消要等看到新 Run 后再发，否则会落空。"""
+
+    node = _Node(main_loop)
+    runs = _TeamRuns(AgentTeamRunStatus.CANCELLED.value)
+    coordinator = _waiting_coordinator(monkeypatch, node, runs, [7, 7, 7, 101])
+    seen_before_cancel: list[list[int]] = []
+    original_cancel = node.cancel
+
+    def cancel(task_id: int, reason: str) -> None:
+        seen_before_cancel.append(list(execution.conversation_run_ids))
+        original_cancel(task_id, reason)
+
+    monkeypatch.setattr(coordinator_module.task_runtime_spaces, "cancel", cancel)
+    execution = AgentTeamNodeExecution(node_id="develop", task_id=_NODE_TASK)
+
+    run_id = coordinator._await_node_run(main_loop, _TEAM_RUN, object(), execution, 7)
+
+    assert run_id == 101
+    assert seen_before_cancel == [[101]]
 
 
 @pytest.mark.parametrize(
