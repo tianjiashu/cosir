@@ -17,7 +17,7 @@ import { BackendRestartButton } from "@/components/backend-restart-button";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { useCommandPaletteHotkey } from "@/components/command-palette/use-command-palette-hotkey";
 import { BackendStatusBanner } from "@/components/backend-status-banner";
-import { AppSidebar, type SidebarSection } from "@/components/layout/sidebar/app-sidebar";
+import { AppSidebar, SidebarToggleButton, type SidebarSection } from "@/components/layout/sidebar/app-sidebar";
 import { PageHeader, type Crumb } from "@/components/layout/page-header";
 import { useWorkspaceActions } from "@/components/layout/use-workspace-actions";
 import { useWorkspaceCatalog, type WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
@@ -27,6 +27,7 @@ import { findSettingsTab, SYSTEM_SETTINGS_TABS, WORKSPACE_SETTINGS_TABS } from "
 import { TaskPage } from "@/components/task-page";
 import { TaskRunStatusBadge } from "@/components/task-tree/task-run-status";
 import { Button } from "@/components/ui/button";
+import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { Workbench } from "@/components/workbench";
 import { useWorkbenchLayout } from "./use-workbench-layout";
 import { useWorkspaceNavigation } from "./use-workspace-navigation";
@@ -34,7 +35,14 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { APP_SHORTCUTS } from "@/lib/shortcuts";
 import { WorkbenchProvider } from "@/lib/workbench/context";
 import { useWorkbenchStore } from "@/lib/workbench/store";
-import { readSidebarCollapsed, writeSidebarCollapsed } from "@/lib/workspace-preferences";
+import {
+  clampSidebarWidth,
+  readSidebarCollapsed,
+  readSidebarWidth,
+  SIDEBAR_WIDTH,
+  writeSidebarCollapsed,
+  writeSidebarWidth,
+} from "@/lib/workspace-preferences";
 import { cn } from "@/lib/utils";
 
 /** 路由表上每个子路由通过 handle 声明自己属于哪个区域（见 src/router.tsx）。 */
@@ -117,6 +125,11 @@ export function AppLayout() {
   const narrow = useMediaQuery(NARROW_VIEWPORT_QUERY);
   const [dockedCollapsed, setDockedCollapsed] = useState(readSidebarCollapsed);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const sidebarRail = narrow || dockedCollapsed;
+  // 展开宽度是用户偏好：拖拽右缘调整，宽屏停靠与窄屏抽屉共用。
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const resizeSidebar = useCallback((width: number) => setSidebarWidth(clampSidebarWidth(width)), []);
+  useEffect(() => writeSidebarWidth(sidebarWidth), [sidebarWidth]);
   const toggleSidebar = useCallback(() => {
     if (narrow) {
       setDrawerOpen((open) => !open);
@@ -212,26 +225,50 @@ export function AppLayout() {
       <div className="bg-background relative flex h-dvh min-h-0 overflow-hidden">
         <BackendStatusBanner />
         <aside
+          style={sidebarRail ? undefined : { width: sidebarWidth }}
           className={cn(
-            "bg-muted/20 flex min-h-0 shrink-0 flex-col border-r",
-            narrow || dockedCollapsed ? "w-14" : "w-72",
-            !narrow && "transition-[width] duration-200 motion-reduce:transition-none",
+            "bg-muted/20 relative flex min-h-0 shrink-0 flex-col border-r",
+            sidebarRail && "w-14",
+            // 收起 / 展开有过渡；拖拽调宽时关掉，否则宽度追着指针慢半拍。
+            !narrow && "transition-[width] duration-200 motion-reduce:transition-none [&:has(>[role=separator]:active)]:transition-none",
           )}
         >
-          {sidebar(narrow || dockedCollapsed ? "rail" : "expanded")}
+          {sidebar(sidebarRail ? "rail" : "expanded")}
+          {!sidebarRail && (
+            <PanelResizeHandle
+              className="absolute inset-y-0 -right-1 bg-transparent [&>svg]:opacity-0 hover:[&>svg]:opacity-100 focus-visible:[&>svg]:opacity-100"
+              label="调整侧栏宽度"
+              value={sidebarWidth}
+              min={SIDEBAR_WIDTH.min}
+              max={SIDEBAR_WIDTH.max}
+              onChange={resizeSidebar}
+            />
+          )}
         </aside>
         {narrow && drawerOpen && (
           <>
             <div className="absolute inset-0 z-40 bg-black/20" aria-hidden="true" onClick={() => setDrawerOpen(false)} />
-            <aside className="bg-background absolute inset-y-0 left-0 z-50 flex w-72 min-h-0 flex-col border-r shadow-xl" aria-label="侧栏">
+            <aside style={{ width: sidebarWidth }} className="bg-background absolute inset-y-0 left-0 z-50 flex min-h-0 flex-col border-r shadow-xl" aria-label="侧栏">
               {sidebar("expanded")}
             </aside>
           </>
         )}
 
-        <div ref={workbenchLayout.containerRef} className="flex min-h-0 min-w-0 flex-1">
+        {/*
+          页面头部让位：右上角有工作台卡片时由卡片标签行让位，否则头部让位（以 DOM 中是否
+          渲染了工作台为准，工作台自身还有多种不渲染的情形）；侧栏为 56px 图标栏时红绿灯越过
+          图标栏，头部左侧补足差值。安全区为 0 的平台上两者都退回头部默认内边距。
+        */}
+        <div
+          ref={workbenchLayout.containerRef}
+          className={cn(
+            "flex min-h-0 min-w-0 flex-1 [--header-inset-right:var(--titlebar-inset-right)] has-[[data-workbench-dock]]:[--header-inset-right:0px]",
+            sidebarRail && "[--header-inset-left:calc(var(--titlebar-inset-left)-3rem)]",
+          )}
+        >
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <PageHeader
+            leading={sidebarRail ? <SidebarToggleButton collapsed onToggle={toggleSidebar} /> : undefined}
             crumbs={crumbs}
             status={showTaskLayer ? <TaskRunStatusBadge status={catalog.activeTask?.execution_status} /> : undefined}
             actions={(

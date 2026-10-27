@@ -14,6 +14,10 @@ export type Crumb = { label: string; to?: string };
  * 所有页面（对话、系统配置、工作区配置、上下文观测）都通过 AppLayout 渲染它，
  * 页面自身不再各写标题栏或「返回」按钮——返回由面包屑承担。
  * 最后一项是当前页，渲染为 aria-current="page" 的标题，过长时截断并保留完整 title。
+ *
+ * 头部位于窗口最上方一行，整行是标题栏拖动区（可点击元素由 Tauri 拖拽脚本自动排除）。
+ * 左右内边距读 `--header-inset-left/right`：由 AppLayout 按「此刻谁在窗口左上 / 右上角」
+ * 换算自标题栏安全区，头部自身不判断平台与布局。
  */
 export function PageHeader({
   crumbs,
@@ -25,12 +29,12 @@ export function PageHeader({
   crumbs: Crumb[];
   status?: ReactNode;
   actions?: ReactNode;
-  /** 标题前的控件（窄屏下的侧栏开关）。 */
+  /** 标题前的控件（侧栏为图标栏时的展开开关）。 */
   leading?: ReactNode;
   className?: string;
 }) {
   return (
-    <header className={cn("flex h-14 shrink-0 items-center gap-3 px-4", className)}>
+    <header data-tauri-drag-region="deep" className={cn("flex h-14 shrink-0 items-center gap-3 pr-[max(1rem,var(--header-inset-right,0px))] pl-[max(1rem,var(--header-inset-left,0px))]", className)}>
       {leading}
       <nav aria-label="当前位置" className="min-w-0 flex-1">
         <ol className="flex min-w-0 items-center gap-1.5 text-sm">

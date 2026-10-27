@@ -130,6 +130,8 @@ class Constant:
         STRUCTURED_OUTPUT_MAX_ATTEMPTS: int = 4
         # 已完成 Run 的结构化支线失败原因；不改变 Run 生命周期状态。
         STRUCTURED_OUTPUT_FAILURE_REASON: str = "structured_output_failed"
+        # 标题支线从启动起的总时限（秒）：Run 收尾最多等到这里，超时即取消，保留原标题。
+        TASK_TITLE_TIMEOUT_SECONDS: float = 20.0
         # 流式文本刷新最小字符数（达到后再 flush，减少碎片）。
         DEFAULT_TEXT_FLUSH_MIN_CHARS: int = 32
         # 流式文本刷新最大间隔（秒）。

@@ -14,6 +14,7 @@ from app.core.events.run_event import (
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
 )
+from app.core.events.task_event import TaskTitleUpdatedEvent
 from app.core.events.tool_call_event import (
     ToolCallCreatedEvent,
     ToolCallsSettledEvent,
@@ -23,7 +24,7 @@ from app.core.events.tool_runtime_event import ToolCallRuntimeUpdateEvent
 from app.core.events.user_input_event import UserInputConsumedEvent
 
 # 按「产生顺序」排列：run 建立 → 用户输入 → 状态 → assistant 输出 → 工具，使本清单同时充当一次
-# run 的时间线。
+# run 的时间线；Task 级事件附在最后。
 WorkflowEvent = Annotated[
     RunInitializedEvent
     | UserInputConsumedEvent
@@ -34,7 +35,8 @@ WorkflowEvent = Annotated[
     | ToolCallCreatedEvent
     | ToolCallStatusChangedEvent
     | ToolCallsSettledEvent
-    | ToolCallRuntimeUpdateEvent,
+    | ToolCallRuntimeUpdateEvent
+    | TaskTitleUpdatedEvent,
     Field(discriminator="type"),
 ]
 """执行内核产出的任意一条事件；``type`` 字段为判别式。"""

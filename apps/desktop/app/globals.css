@@ -206,6 +206,23 @@
   @apply pointer-events-none sticky top-0 z-10 -mb-6 h-6 shrink-0 bg-linear-to-b from-background to-transparent;
 }
 
+/*
+ * 标题栏安全区：窗口最上方一行里被系统或自绘窗口按钮占用的宽度，形态由
+ * lib/platform.ts 在首帧前写入 data-titlebar。业务组件只读这两个变量让位，不判断平台。
+ * mac-overlay：左上角原生红绿灯（位置见 tauri.conf.json 的 trafficLightPosition）；
+ * windows-custom：右上角 WindowControls 的三个按钮（3 × 46px）。
+ */
+:root {
+  --titlebar-inset-left: 0px;
+  --titlebar-inset-right: 0px;
+}
+:root[data-titlebar="mac-overlay"] {
+  --titlebar-inset-left: 84px;
+}
+:root[data-titlebar="windows-custom"] {
+  --titlebar-inset-right: 138px;
+}
+
 /* 与 Button / Input 一致的键盘焦点环；自绘控件统一使用，避免各自发明 ring 样式。 */
 @utility focus-ring {
   @apply outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50;

@@ -15,7 +15,7 @@ from app.models.enums.conversation_run_status import (
     ConversationRunStatus,
 )
 
-_SNAPSHOT_KEYS = {"messages", "activity"}
+_SNAPSHOT_KEYS = {"title", "messages", "activity"}
 _ACTIVITY_KEYS = {
     "runId",
     "status",
@@ -64,27 +64,31 @@ _USAGE_KEYS = {
 class ConversationStateSnapshot(TypedDict):
     """一个 Task 的完整 Transport state。
 
-    对话界面只看 Task：``messages`` 按 context 序号扁平排列，``activity`` 是最新 Run 的摘要。
+    对话界面只看 Task：``title`` 投影自 ``tasks.title``（事实源在 Task 表，snapshot 只是让打开中的
+    页面实时收到标题变化），``messages`` 按 context 序号扁平排列，``activity`` 是最新 Run 的摘要。
     Run 分组不进 wire，历史回复的结局由消息上的 ``outcome`` 承载。命令被拒不进 snapshot，由命令的
     HTTP 响应同步返回。
     """
 
     queued_messages: NotRequired[list[ConversationQueuedMessage]]
+    title: str
     messages: list[ConversationStateMessage]
     activity: ConversationStateActivity | None
 
 
-def empty_snapshot() -> ConversationStateSnapshot:
+def empty_snapshot(title: str = "新对话") -> ConversationStateSnapshot:
     """返回新 Task 的空 snapshot 基线。"""
 
-    return {"messages": [], "activity": None}
+    return {"title": title, "messages": [], "activity": None}
 
 
 def validate_snapshot(state: ConversationStateSnapshot) -> None:
     """严格校验 Task snapshot 的结构与数值边界。"""
 
     if not isinstance(state, dict) or set(state) - {"queued_messages"} != _SNAPSHOT_KEYS:
-        raise ValueError("snapshot must contain messages and activity")
+        raise ValueError("snapshot must contain title, messages and activity")
+    if not isinstance(state["title"], str) or not state["title"].strip():
+        raise ValueError("snapshot title must be a non-empty string")
     if not isinstance(state["messages"], list):
         raise ValueError("snapshot messages must be an array")
     queued = state.get("queued_messages", [])

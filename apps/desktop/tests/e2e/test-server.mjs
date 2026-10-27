@@ -60,7 +60,7 @@ function taskProjection(task) {
   return { ...task, execution_status: activity?.status ?? null };
 }
 
-const emptyState = () => ({ messages: [], activity: null });
+const emptyState = () => ({ title: "新对话", messages: [], activity: null });
 
 const activityOf = (runId, status, overrides = {}) => ({
   runId,

@@ -325,6 +325,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
     service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     task_runtime_spaces.get_or_create(7).replace_snapshot(
         {
+            "title": "task",
             "messages": [
                 {
                     "id": "stale-user",

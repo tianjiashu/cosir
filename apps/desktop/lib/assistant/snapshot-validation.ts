@@ -245,7 +245,8 @@ function validateActivity(value: unknown, path: string): void {
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["messages", "activity", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  requireExactKeys(state, ["title", "messages", "activity", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  if (typeof state.title !== "string" || state.title.trim() === "") throw new TransportSnapshotValidationError("title", "非空字符串");
   const ids = new Set<string>();
   if (!Array.isArray(state.messages)) throw new TransportSnapshotValidationError("messages", "数组");
   state.messages.forEach((rawMessage, index) => {

@@ -3,7 +3,8 @@
 步与步之间的停止都在这里落定；模型请求中、工具执行中的取消仍由 model 节点与工具运行器就地中断。
 投递归 Task 的调度 actor（外部队列消息）与各节点（Run 内通知），本节点只取 mailbox 并写入：
 持久化消息的确认（删除外部队列行）与 context 写入同一事务提交，消息不会丢也不会并入两次；不读
-外部队列、不按模型截断、不持 Task 闸门。
+外部队列、不按模型截断、不持 Task 闸门。Run 首次并入用户输入后，顺带启动标题支线
+（``branch.task_title``，每个 Run 至多一次），它与主线并行、不影响流转。
 
 需要直接执行的用户决定优先级最高、每轮只取一条：工具声明 ``user_decision == "execute"`` 时，
 无论批准还是驳回，都确认并写下决定后绕过模型、直接执行原调用（先确认再执行：执行中途进程退出
@@ -19,6 +20,7 @@ from typing import cast
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.events import UserInputConsumedEvent
+from app.core.workflow.branch import task_title
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.config.configuration import get_tool_registry
 from app.core.workflow.inbox.task_message import DecisionBody
@@ -75,10 +77,18 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
         routed = await _route_decision(decision, step_id)
         if routed is not None:
             return {**route_state(state.step_count, ReactRoute.TOOLS), "batch": routed}
+    consumed_input = False
     while not rc.mailbox.isEmpty():
-        await asyncio.to_thread(_write_message, rc.mailbox.pop())
+        message = rc.mailbox.pop()
+        if await asyncio.to_thread(_write_message, message) and message.kind == "user_input":
+            consumed_input = True
+    # 用户说了新话才值得重新起标题；副本在主线开始流式改写 working copy 前取好。
+    patch: dict[str, object] = {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch()}
+    if consumed_input and task_title.should_launch(rc, state):
+        task_title.launch(rc, await asyncio.to_thread(_message_context().load_message))
+        patch["title_requested"] = True
     # 本节点是批次的唯一清空点：挂起判定已读完，下一模型步不能再看到上一批观察。
-    return {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch()}
+    return patch
 
 
 def _executes_tool(message: TaskMessage) -> bool:

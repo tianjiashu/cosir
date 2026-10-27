@@ -8,12 +8,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.context import system_prompt_builder as spb
+from app.core.workflow.inbox.task_message import MODEL_INPUT_BODIES, MessageBody
 from app.utils.path import system_cosir as paths
 from app.utils.token_estimator import TokenEstimator
 
@@ -96,6 +98,16 @@ def test_message_context_advertises_markdown_rendering_capabilities():
         "`sequenceDiagram`), CJK-friendly formatting, and syntax-highlighted fenced "
         "code are supported; use them when helpful."
     ) in out
+
+
+def test_message_context_declares_every_input_message_tag():
+    """消息协议须覆盖全部入队消息类型：render 不附带读法说明，漏登记即模型不知其含义。"""
+
+    assert set(get_args(MessageBody)) <= set(MODEL_INPUT_BODIES)
+    out = spb.SystemPromptBuilder._build_message_context(_profile(), "/workspace")
+
+    for body in MODEL_INPUT_BODIES:
+        assert f"  - <{body.TAG}>: {body.PROMPT_GUIDE}" in out
 
 
 def test_build_includes_global_layer_in_order(redirect_system_cosir: Path, tmp_path: Path):

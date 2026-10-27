@@ -96,7 +96,7 @@ def test_build_system_prompt_delta_only_contains_changed_lines() -> None:
 
 
 def test_delta_notice_becomes_one_tagged_user_message() -> None:
-    """通知合并为一条带 ``<system_notice>`` 标签的 user 消息：声明只加一次，正文原样拼在后面。"""
+    """通知合并为一条带 ``<system_notice>`` 标签的 user 消息：只含正文，读法说明在系统提示词里。"""
 
     delta = build_system_prompt_delta(
         source=SystemPromptDeltaSource.GLOBAL_INSTRUCTIONS,
@@ -114,7 +114,7 @@ def test_delta_notice_becomes_one_tagged_user_message() -> None:
     assert isinstance(content, str)
     assert content.startswith('<system_notice time="')
     assert content.count("<system_notice ") == 1
-    assert content.endswith(f"\n{notice.content}\n{notice.content}\n</system_notice>")
+    assert content.endswith(f'">\n{notice.content}\n{notice.content}\n</system_notice>')
     assert "-旧规则" in notice.content
     assert "+新规则" in notice.content
 

@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceTask } from "@/lib/api/workspaces";
-import {
-  TASK_TITLE_DISPLAY_LIMIT,
-  buildTaskTreeModel,
-  getTaskAncestorIds,
-  taskDisplayTitle,
-} from "@/components/task-tree/task-tree-model";
+import { buildTaskTreeModel, getTaskAncestorIds } from "@/components/task-tree/task-tree-model";
 
 function task(taskId: number, title: string, options: Partial<WorkspaceTask> = {}): WorkspaceTask {
   return {
@@ -58,37 +53,21 @@ describe("buildTaskTreeModel", () => {
   });
 });
 
-describe("task display title", () => {
-  it("strips inline attachment tokens before measuring length", () => {
-    expect(taskDisplayTitle("[[cosir-file:abc]]帮我优化这个文档")).toBe("帮我优化这个文档");
-    expect(taskDisplayTitle("<!-- [[cosir-file:abc]] -->前文 [[cosir-image:def]]后文")).toBe("前文 后文");
+describe("task tree title", () => {
+  const fullTitle = (title: string) => buildTaskTreeModel([task(1, title)]).roots[0].full_title;
+
+  it("strips inline attachment tokens", () => {
+    expect(fullTitle("[[cosir-file:abc]]帮我优化这个文档")).toBe("帮我优化这个文档");
+    expect(fullTitle("<!-- [[cosir-file:abc]] -->前文 [[cosir-image:def]]后文")).toBe("前文 后文");
   });
 
   it("falls back when the title has no visible text", () => {
-    expect(taskDisplayTitle("[[cosir-file:abc]]")).toBe("新对话");
-    expect(taskDisplayTitle("   ")).toBe("新对话");
+    expect(fullTitle("[[cosir-file:abc]]")).toBe("新对话");
+    expect(fullTitle("   ")).toBe("新对话");
   });
 
-  it("truncates long titles with a single ellipsis", () => {
-    expect(taskDisplayTitle("x".repeat(TASK_TITLE_DISPLAY_LIMIT + 5))).toBe(
-      `${"x".repeat(TASK_TITLE_DISPLAY_LIMIT - 1)}…`,
-    );
-    expect(taskDisplayTitle("短标题", 2)).toBe("短…");
-  });
-
-  it("does not stack an ellipsis onto a trailing ASCII dot", () => {
-    // 后端标题以 "..." 结尾时，切点可能落在点号上。
-    expect(taskDisplayTitle(`${"x".repeat(TASK_TITLE_DISPLAY_LIMIT - 1)}..`)).toBe(
-      `${"x".repeat(TASK_TITLE_DISPLAY_LIMIT - 1)}…`,
-    );
-  });
-
-  it("exposes both display and full titles on tree nodes", () => {
-    const visibleTitle = "长标题".repeat(Math.ceil(TASK_TITLE_DISPLAY_LIMIT / 3) + 1);
-    const model = buildTaskTreeModel([task(1, `[[cosir-file:abc]]${visibleTitle}`)]);
-    const node = model.roots[0];
-
-    expect(node.full_title).toBe(visibleTitle);
-    expect(node.display_title).toBe(`${visibleTitle.slice(0, TASK_TITLE_DISPLAY_LIMIT - 1)}…`);
+  it("keeps long titles intact; the sidebar ellipsizes them by width", () => {
+    const longTitle = "长标题".repeat(30);
+    expect(fullTitle(longTitle)).toBe(longTitle);
   });
 });

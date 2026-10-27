@@ -12,6 +12,7 @@ from app.assistant_transport.projection.run_event_projection import (
     plan_run_result_updated,
     plan_run_status_changed,
 )
+from app.assistant_transport.projection.task_event_projection import plan_task_title_updated
 from app.assistant_transport.projection.tool_call_event_projection import (
     plan_tool_call_created,
     plan_tool_call_status_changed,
@@ -29,6 +30,7 @@ from app.core.events import (
     RunInitializedEvent,
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
+    TaskTitleUpdatedEvent,
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
     ToolCallsSettledEvent,
@@ -50,6 +52,7 @@ _PLANNERS: dict[type, _Planner] = {
     ToolCallStatusChangedEvent: plan_tool_call_status_changed,
     ToolCallsSettledEvent: plan_tool_calls_settled,
     ToolCallRuntimeUpdateEvent: plan_tool_call_runtime_update,
+    TaskTitleUpdatedEvent: plan_task_title_updated,
 }
 
 

@@ -12,8 +12,8 @@ from app.core.tool.execute.tool_terminal_projection import (
 )
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
-from app.core.workflow.inbox.task_message import escape_tag
+from app.models.message_metadata import ToolMessageMetadata
+from app.core.workflow.inbox.task_message import ToolResultBody
 
 
 def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
@@ -90,19 +90,13 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
         display_data=summary.get("display_data"),
         team_run_id=summary.get("team_run_id"),
     )
-    content = to_tool_model_message(observation)["content"]
-    context.add_message(
-        {
-            "role": "user",
-            "content": (
-                f'<tool_result tool_call_id="{call_id}" tool_name="{observation.tool_name}" '
-                f'status="{observation.status}">\n{escape_tag(str(content), "tool_result")}\n'
-                "</tool_result>"
-            ),
-        },
-        metadata=UserMessageMetadata(kind="tool_result"),
-        project_to_transport=False,
-    )
+    message, metadata = ToolResultBody(
+        tool_call_id=call_id,
+        tool_name=observation.tool_name,
+        status=observation.status,
+        content=str(to_tool_model_message(observation)["content"]),
+    ).render()
+    context.add_message(message, metadata=metadata, project_to_transport=False)
     event = terminal_event(
         observation,
         task_id=runtime.run.task_id,

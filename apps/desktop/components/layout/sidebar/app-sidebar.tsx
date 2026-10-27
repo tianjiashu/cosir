@@ -36,6 +36,16 @@ type AppSidebarProps = {
   onRequestDelete: (target: DeleteTarget) => void;
 };
 
+/** 侧栏开关：展开时在侧栏顶部，图标栏时由 AppLayout 放进页面头部。 */
+export function SidebarToggleButton({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const label = collapsed ? "展开侧栏" : "收起侧栏";
+  return (
+    <Button variant="ghost" size="icon-sm" onClick={onToggle} aria-label={label} title={withShortcut(label, "toggleSidebar")}>
+      {collapsed ? <PanelLeftOpenIcon /> : <PanelLeftCloseIcon />}
+    </Button>
+  );
+}
+
 /**
  * 应用侧栏：新对话、工作区 / 任务树、底部的系统配置与上下文观测入口。
  *
@@ -60,11 +70,17 @@ export function AppSidebar({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden whitespace-nowrap">
-      <div className={cn("flex h-14 shrink-0 items-center px-3", rail ? "justify-center" : "justify-between")}>
-        {!rail && <span className="truncate text-sm font-semibold">工作区</span>}
-        <Button variant="ghost" size="icon-sm" onClick={onToggle} aria-label={rail ? "展开侧栏" : "收起侧栏"} title={withShortcut(rail ? "展开侧栏" : "收起侧栏", "toggleSidebar")}>
-          {rail ? <PanelLeftOpenIcon /> : <PanelLeftCloseIcon />}
-        </Button>
+      {/*
+        窗口最上方一行，同时是标题栏拖动区。图标栏只有 56px，放不下 macOS 红绿灯，
+        这一行在图标栏下留空，展开开关改由 AppLayout 放进页面头部（紧跟红绿灯）。
+      */}
+      <div data-tauri-drag-region="deep" className={cn("flex h-14 shrink-0 items-center justify-between pr-3", !rail && "pl-[max(0.75rem,var(--titlebar-inset-left))]")}>
+        {!rail && (
+          <>
+            <span className="truncate text-sm font-semibold">工作区</span>
+            <SidebarToggleButton collapsed={false} onToggle={onToggle} />
+          </>
+        )}
       </div>
 
       <div className={cn("shrink-0", rail ? "flex justify-center p-2" : "px-3 pt-3 pb-5")}>

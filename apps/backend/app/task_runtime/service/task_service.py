@@ -222,6 +222,14 @@ class TaskService:
         """
         return self._task_reads.get(task_id)
 
+    def update_title(self, task_id: int, title: str) -> None:
+        """写入 Task 标题；不进 Task 闸门：单列覆盖，与 Run 调度、删除没有需要互斥的不变量。
+
+        异常:
+            KeyError: Task 不存在（含已被删除）。
+        """
+        self._task.update_title(task_id, title)
+
     async def fork_task(
         self,
         source_task_id: int,

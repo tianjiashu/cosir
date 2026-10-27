@@ -140,6 +140,7 @@ async def test_attach_without_run_pushes_full_frame_and_stays_open() -> None:
     first = collector.frames[0]
     assert first.kind == "full"
     assert first.state == {
+        "title": "subscription task",
         "messages": [],
         "activity": None,
         "queued_messages": [],
@@ -239,6 +240,7 @@ async def test_attach_envelopes_encode_task_view_frames_without_run_fields() -> 
 
     assert first["kind"] == "full"
     assert first["state"] == {
+        "title": "subscription task",
         "messages": [],
         "activity": None,
         "queued_messages": [],

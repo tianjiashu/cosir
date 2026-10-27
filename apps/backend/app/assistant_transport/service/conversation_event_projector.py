@@ -17,7 +17,7 @@ from app.service.depends import get_conversation_task_state_service
 _EVENT_ADAPTER: TypeAdapter[WorkflowEvent] = TypeAdapter(WorkflowEvent)
 _KNOWN_EVENT_TYPES = {
     "run_initialized",
-    "user_input_appended",
+    "user_input_consumed",
     "run_status_changed",
     "run_result_updated",
     "assistant_text_delta",
@@ -26,6 +26,7 @@ _KNOWN_EVENT_TYPES = {
     "tool_call_status_changed",
     "tool_calls_settled",
     "tool_call_runtime_update",
+    "task_title_updated",
 }
 
 

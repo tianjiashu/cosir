@@ -18,6 +18,7 @@ const RUN_LAUNCH = { modelConfigId: 2, reasoningEffort: null, banTools: ["web_se
 
 function activeState(queued: TransportState["queued_messages"] = []): TransportState {
   return {
+    title: "测试对话",
     messages: [
       { id: "u-1", role: "user", runId: 1, outcome: null,
         parts: [{ type: "text", text: "第一个问题", status: "completed" }] },

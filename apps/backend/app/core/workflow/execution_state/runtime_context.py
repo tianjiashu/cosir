@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -48,6 +49,9 @@ class RuntimeContext:
     model: OpenAIChatModel | None = None
     thinking_channel: str = ""
     usage_stats: ConversationRunUsageStats = field(default_factory=ConversationRunUsageStats)
+    # 本次驱动起的标题支线（``branch.task_title``）；复用 ``model``，由 workflow 在关闭 client 前收尾。
+    # 「本 Run 是否起过」看执行状态 ``title_requested``，不看这个字段。
+    title_branch: asyncio.Task[None] | None = None
 
     @classmethod
     def for_run(

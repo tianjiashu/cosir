@@ -26,7 +26,7 @@ async function seedSidebar(page: Page, request: APIRequestContext, theme: string
   for (const task of tasks) {
     await page.route(`${origin}/tasks/${task.task_id}`, (route) => route.fulfill({ json: task }));
     // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要一条常驻连接，路由夹具无法保持。
-    await seedState(request, task.task_id, { messages: [], activity: null });
+    await seedState(request, task.task_id, { title: "测试对话", messages: [], activity: null });
   }
 }
 
@@ -133,3 +133,60 @@ for (const theme of ["light", "dark"]) {
     await expect(page).toHaveURL(/\/tasks\/102$/);
   });
 }
+
+test("拖拽侧栏右缘调宽：最宽时 20 字标题完整显示，宽度写入偏好", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await seedSidebar(page, request, "light");
+  const twentyChars = "检查侧栏标题在最大宽度下能否完整显示二十";
+  const now = new Date().toISOString();
+  const titled = { task_id: 103, workspace_id: 7, title: twentyChars, task_type: "user", execution_status: null, created_at: now, updated_at: now };
+  // 后注册的路由优先：只给这条用例追加一个 20 字标题的任务。
+  await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: [titled] }));
+  await page.route(`${origin}/tasks/103`, (route) => route.fulfill({ json: titled }));
+  await seedState(request, 103, { title: twentyChars, messages: [], activity: null });
+  await page.goto("/tasks/103");
+
+  const aside = page.locator("aside").first();
+  const handle = page.getByRole("separator", { name: "调整侧栏宽度" });
+  const title = row(page, twentyChars).locator(".workspace-tree-title");
+  const overflows = () => title.evaluate((element) => element.scrollWidth > element.clientWidth);
+  await expect(title).toBeVisible();
+  expect((await box(aside)).width).toBeCloseTo(288, 0);
+  expect(await overflows()).toBe(true);
+
+  const grip = await box(handle);
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + grip.width / 2 + 300, grip.y + grip.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await expect(handle).toHaveAttribute("aria-valuenow", "420");
+  await expect.poll(async () => (await box(aside)).width).toBeCloseTo(420, 0);
+  expect(await overflows()).toBe(false);
+
+  await handle.focus();
+  await page.keyboard.press("Home");
+  await expect(handle).toHaveAttribute("aria-valuenow", "240");
+  // 夹具每次导航都会清空 localStorage，这里直接断言写入的偏好，而不是刷新后读回。
+  expect(await page.evaluate(() => localStorage.getItem("cosir:sidebar-width"))).toBe("240");
+});
+
+test("尾栏按时间实际宽度让位：默认宽度下短时间的行能放下更长标题，悬停换成操作也不位移", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await seedSidebar(page, request, "light");
+  const fitting = "调研沙箱改Python可行性";
+  const now = new Date(Date.now() - 60_000).toISOString();
+  const titled = { task_id: 104, workspace_id: 7, title: fitting, task_type: "user", execution_status: null, created_at: now, updated_at: now };
+  await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: [titled] }));
+  await page.route(`${origin}/tasks/104`, (route) => route.fulfill({ json: titled }));
+  await seedState(request, 104, { title: fitting, messages: [], activity: null });
+  await page.goto("/tasks/104");
+
+  const target = row(page, fitting);
+  const title = target.locator(".workspace-tree-title");
+  await expect(title).toBeVisible();
+  expect(await title.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const before = await box(title);
+  await target.hover();
+  await expect(target.getByRole("button", { name: `删除 ${fitting}`, exact: true })).toBeVisible();
+  expect(await box(title)).toEqual(before);
+});

@@ -149,9 +149,11 @@ export function Workbench({
         role="complementary"
         className="dock-panel bg-background flex min-h-0 flex-col"
         style={{ width }}
+        data-workbench-dock
         aria-label="工作台"
       >
-        <div className="flex h-11 shrink-0 items-center gap-1 border-b px-2">
+        {/* 卡片位于窗口右上角：标签行是标题栏拖动区，并给 Windows 自绘窗口按钮让位（卡片已离窗口右缘 8px）。 */}
+        <div data-tauri-drag-region="deep" className="flex h-11 shrink-0 items-center gap-1 border-b pl-2 pr-[max(0.5rem,calc(var(--titlebar-inset-right)-0.5rem))]">
           <Tabs.List
             className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
             aria-label="工作台标签页"

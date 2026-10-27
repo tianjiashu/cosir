@@ -107,7 +107,8 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         run=SimpleNamespace(
             id=2, task_id=1, execution_data=ReactExecutionState(), usage=None
         ),
-        task=SimpleNamespace(id=1),
+        # 默认不是侧栏对话 Task：不触发标题支线，需要它的用例显式覆盖 task。
+        task=SimpleNamespace(id=1, task_type="delegate_task", title="测试对话"),
         workspace=SimpleNamespace(id=1, root_path="."),
         agent=SimpleNamespace(
             structured_output=None,
@@ -125,6 +126,7 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         model=None,
         thinking_channel="",
         usage_stats=ConversationRunUsageStats(),
+        title_branch=None,
         resume_decision=None,
         cancelled=False,
     )

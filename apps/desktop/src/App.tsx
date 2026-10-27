@@ -3,9 +3,11 @@ import { RouterProvider } from "react-router-dom";
 import { BackendStartupScreen } from "@/components/backend-startup-screen";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ConfirmHost } from "@/components/confirm/confirm-host";
+import { WindowControls } from "@/components/layout/window-controls";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { titlebarMode } from "@/lib/platform";
 import { createQueryClient } from "@/lib/query/query-client";
 import { useBackendQuerySync } from "@/lib/query/use-backend-query-sync";
 import {
@@ -23,7 +25,7 @@ function AppRouter() {
 
 function BootFailure({ error, onRetry }: { error: string; onRetry: () => void }) {
   return (
-    <main className="flex min-h-dvh items-center justify-center p-6">
+    <main data-tauri-drag-region="deep" className="flex min-h-dvh items-center justify-center p-6">
       <section className="max-w-md space-y-4 text-center">
         <div role="alert" aria-labelledby="backend-boot-failure-title" aria-describedby="backend-boot-failure-message">
           <h1 id="backend-boot-failure-title" className="text-lg font-semibold">Cosir 后端未能启动</h1>
@@ -96,7 +98,7 @@ function BackendQuerySync() {
 }
 
 /**
- * 应用根：全局只挂载一次的宿主——页面级查询缓存、toast、确认框。
+ * 应用根：全局只挂载一次的宿主——页面级查询缓存、toast、确认框，以及 Windows 自绘窗口按钮。
  * 它们在启动门禁之外，启动失败页与主界面共用同一套通知与确认通道。
  */
 export function App() {
@@ -107,6 +109,7 @@ export function App() {
       <DesktopApp />
       <ConfirmHost />
       <Toaster />
+      {titlebarMode === "windows-custom" && <WindowControls />}
     </QueryClientProvider>
   );
 }

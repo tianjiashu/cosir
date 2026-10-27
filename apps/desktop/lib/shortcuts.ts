@@ -1,3 +1,5 @@
+import { isMac } from "@/lib/platform";
+
 /**
  * 应用级快捷键的唯一登记处：按键（react-hotkeys-hook 语法，`mod` = macOS ⌘ / 其他平台 Ctrl）
  * 与展示文案都从这里取，tooltip 与命令面板显示的组合键因此与实际绑定一致。
@@ -13,8 +15,6 @@ export const APP_SHORTCUTS = {
 } as const;
 
 export type AppShortcutId = keyof typeof APP_SHORTCUTS;
-
-const isMac = typeof navigator !== "undefined" && /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent);
 
 const KEY_LABELS: Record<string, string> = { comma: ",", period: ".", slash: "/", enter: "↵", escape: "Esc" };
 

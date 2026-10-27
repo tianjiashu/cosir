@@ -14,7 +14,7 @@ vi.mock("@/lib/assistant/assistant-snapshot-client", () => ({
 import type { TransportState } from "@/lib/assistant/contract";
 import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 
-const snapshot: TransportState = { messages: [], activity: null };
+const snapshot: TransportState = { title: "测试对话", messages: [], activity: null };
 
 /** 模拟一个只在 signal 中止时以其 reason 拒绝的挂起请求。 */
 function hangUntilAborted() {

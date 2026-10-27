@@ -29,6 +29,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
     """错误提示覆盖展示数据时，持久化运行引用仍须留在独立字段。"""
 
     state = {
+        "title": "测试对话",
         "messages": [
             {
                 "id": "assistant-run-3",

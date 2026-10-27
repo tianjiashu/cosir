@@ -12,6 +12,7 @@ export function completedState(
 ): TransportState {
   const outcome = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
   return {
+    title: "测试对话",
     messages: [
       { id: user.id, role: "user", parts: user.parts, runId, outcome: null },
       { id: `assistant-${user.id}`, role: "assistant", parts: assistantParts, runId, outcome },

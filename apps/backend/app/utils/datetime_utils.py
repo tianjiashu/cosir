@@ -5,10 +5,9 @@
 
 from datetime import UTC, datetime
 
-# Task titles are also rendered in the narrow workspace sidebar. Keep the
-# persisted preview bounded so newly-created tasks cannot push sidebar actions
-# out of their usable area.
-TASK_TITLE_LIMIT = 10
+# Task 标题的统一上限：创建时的用户输入兜底与 Run 标题支线生成的标题都按它截断，
+# 侧栏窄，过长的标题会挤掉行内操作。
+TASK_TITLE_LIMIT = 20
 
 
 def utc_now() -> datetime:

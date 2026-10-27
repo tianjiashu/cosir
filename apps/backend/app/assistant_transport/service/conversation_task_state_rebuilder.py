@@ -262,7 +262,7 @@ class ConversationTaskStateRebuilder:
                     contextWindowTotal=run.context_window_total,
                     launch=run_launch_snapshot(run.model_config_id, run.options),
                 )
-        return ConversationStateSnapshot(messages=messages, activity=activity)
+        return ConversationStateSnapshot(title=task.title, messages=messages, activity=activity)
 
     @staticmethod
     def _run_messages(

@@ -164,9 +164,12 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   }, [recovery.resync, registerResync]);
 
   const commitTransportState = useCallback((state: typeof sessionInitialState) => {
+    const previousTitle = latestStateRef.current.title;
     latestStateRef.current = state;
     cancellation.onStateCommitted(state);
-  }, [cancellation.onStateCommitted, sessionInitialState]);
+    // 标题事实在后端 tasks.title；snapshot 只负责通知打开中的页面，侧栏目录按既有刷新路径重读。
+    if (state.title !== previousTitle) notifyTaskStateChanged();
+  }, [cancellation.onStateCommitted, notifyTaskStateChanged, sessionInitialState]);
   return (
     <AssistantRuntimeTransportHost
       context={context}

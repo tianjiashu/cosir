@@ -63,9 +63,11 @@
   pointer-events: none;
 }
 
+/* 时间与行内操作叠在同一格，宽度取二者较宽者：悬停换成操作时标题不跳动，
+   又不像固定宽度那样为短时间（如「3天前」）白占标题的位置。 */
 .workspace-tree-task-tail {
   display: grid;
-  flex: 0 0 64px;
+  flex: 0 0 auto;
   min-width: 0;
   align-items: center;
   text-align: right;

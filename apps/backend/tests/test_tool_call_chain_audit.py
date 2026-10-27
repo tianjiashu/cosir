@@ -408,7 +408,7 @@ def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
         extra=None,
         created_at=None,
     )
-    task = SimpleNamespace(id=7, current_run_id=1, context_window_total=None)
+    task = SimpleNamespace(id=7, title="task", current_run_id=1, context_window_total=None)
     rows = [
         _ai_row(
             [

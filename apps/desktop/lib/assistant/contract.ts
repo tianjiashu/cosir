@@ -245,6 +245,8 @@ export type TransportQueuedMessage = {
 
 /** Task 级 Transport state。 */
 export type TransportState = {
+  /** Task 标题，投影自后端 `tasks.title`；变化时由宿主刷新侧栏目录。 */
+  title: string;
   /** 扁平消息列表，按 context 序号排列。 */
   messages: TransportMessage[];
   /** 最新 Run 的摘要；Task 尚无 Run 时为 null。 */

@@ -32,3 +32,35 @@ export function writeSidebarCollapsed(collapsed: boolean): void {
     // 偏好写入失败（隐私模式等）只影响下次启动的默认状态，不影响当前会话。
   }
 }
+
+const SIDEBAR_WIDTH_KEY = "cosir:sidebar-width";
+
+/**
+ * 展开侧栏的宽度范围（px）。默认值放得下约 10 个汉字的任务标题；上限放得下后端标题上限
+ * （`TASK_TITLE_LIMIT` = 20 个汉字）加省略号。
+ */
+export const SIDEBAR_WIDTH = { min: 240, default: 288, max: 420 } as const;
+
+export function clampSidebarWidth(width: number): number {
+  return Math.round(Math.max(SIDEBAR_WIDTH.min, Math.min(SIDEBAR_WIDTH.max, width)));
+}
+
+/** 展开侧栏的宽度偏好；缺失或非法时用默认值。 */
+export function readSidebarWidth(): number {
+  if (typeof window === "undefined") return SIDEBAR_WIDTH.default;
+  try {
+    const value = Number(window.localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return Number.isFinite(value) && value > 0 ? clampSidebarWidth(value) : SIDEBAR_WIDTH.default;
+  } catch {
+    return SIDEBAR_WIDTH.default;
+  }
+}
+
+export function writeSidebarWidth(width: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(width));
+  } catch {
+    // 同收起偏好：写入失败只影响下次启动的默认宽度。
+  }
+}

@@ -279,6 +279,23 @@ class TaskCrud:
                 raise KeyError(task_id)
         return self.get(task_id)
 
+    def update_title(self, task_id: int, title: str) -> None:
+        """改写 Task 标题；刻意不刷新 ``updated_at``：侧栏按它排序，改名不该让对话换位置。
+
+        异常:
+            KeyError: Task 不存在（含已被删除）。
+        """
+
+        with self._session_factory.begin() as session:
+            # 显式把 updated_at 写回原值：基类的 onupdate 对 Core update 同样生效。
+            result = session.execute(
+                update(TaskModel)
+                .where(TaskModel.id == task_id)
+                .values(title=title, updated_at=TaskModel.updated_at)
+            )
+            if not result.rowcount:
+                raise KeyError(task_id)
+
     def list_ids_by_workspace(self, workspace_id: int, session: Session | None = None) -> list[int]:
         """仅返回某工作区下全部 task 的整数 id 列表。
 

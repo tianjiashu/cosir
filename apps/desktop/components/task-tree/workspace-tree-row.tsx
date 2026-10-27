@@ -106,9 +106,9 @@ function WorkspaceTaskRow({ style, task, actions }: Pick<NodeRendererProps<Works
         <TaskRunStatusDot status={task.execution_status} className={task.task_type === "fork" ? "absolute -top-0.5 right-1 size-1.5" : undefined} />
       </span>
       <span className="workspace-tree-title min-w-0 flex-1 truncate" title={task.full_title}>{task.full_title}</span>
-      {/* 元信息与操作共用固定尾栏；操作显示时隐藏时间，避免标题跳动。 */}
+      {/* 元信息与操作叠在同一尾栏格内，宽度取较宽者；操作显示时隐藏时间，标题不跳动。 */}
       <div className="workspace-tree-task-tail">
-        <time className="workspace-tree-time truncate text-2xs tabular-nums text-muted-foreground" dateTime={task.updated_at} title={task.updated_at}>{formatRelativeTime(task.updated_at)}</time>
+        <time className="workspace-tree-time whitespace-nowrap text-2xs tabular-nums text-muted-foreground" dateTime={task.updated_at} title={task.updated_at}>{formatRelativeTime(task.updated_at)}</time>
         <div className="workspace-tree-actions" onClick={(event) => event.stopPropagation()}>{actions}</div>
       </div>
     </div>

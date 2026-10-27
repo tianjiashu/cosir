@@ -138,10 +138,13 @@ class RuntimeMessageContextManager:
         同一事务）；内存列表随即推进、不等提交——事务失败会经 Run 失败边界结束本次驱动，下个 Run
         的 :meth:`begin_run` 从库重建，不会留下错位的 working copy。
 
-        既有结果（含等待/中断占位）原地覆盖，保留消息身份和序号；缺少调用依据的新结果
-        在写库前报 ContextProtocolError，不伪造调用或丢弃执行结果。流式预览的取消占位
+        当前批次里已有的结果（如取消、中断占位）原地覆盖，保留消息身份和序号。HITL 的等待
+        占位不走这里：决定可能在之后的模型步甚至之后的 Run 才到，届时调用已不属于当前批次，
+        所以执行结果统一另行追加为 user 消息（见 ``settle_decision_observation``），占位只经
+        :meth:`update_tool_result_metadata` 更新卡片状态，历史前缀因此不变。缺少调用依据的新
+        结果在写库前报 ContextProtocolError，不伪造调用或丢弃执行结果。流式预览的取消占位
         可以没有纳入上下文的调用，但必须 include_in_context=False，仅供 Transport 重建。
-        替换时提交完整 metadata，旧等待请求和错误展示不会被隐式保留。
+        替换时提交完整 metadata，旧占位状态和错误展示不会被隐式保留。
         """
 
         target_run_id = self.current_run_id
@@ -170,10 +173,9 @@ class RuntimeMessageContextManager:
             metadata if metadata is not None else empty_message_metadata(message["role"])
         )
         if existing is not None:
-            # 同一调用可能先写等待或取消占位，随后由用户批准产生真实结果；
-            # 用 replace_message(...) 保留原来的 sequence
-            # 和 run_id、更新消息内容与 Transport 元数据，库里始终只有一条结果，不会同一调用
-            # 留两行。
+            # 同一批次内，调用可能先写了取消或中断占位，随后才拿到真实结果；
+            # 用 replace_message(...) 保留原来的 sequence 和 run_id、更新消息内容与 Transport
+            # 元数据，库里始终只有一条结果，不会同一调用留两行。
             self.context_store.replace_message(
                 ConversationTaskContextRecord(
                     task_id=self.current_task_id,
