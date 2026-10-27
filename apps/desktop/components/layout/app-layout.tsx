@@ -179,7 +179,7 @@ export function AppLayout() {
         { label: tab?.label ?? "未知分类" },
       ];
     }
-    if (section === "observer") return [{ label: "开发者" }, { label: "上下文观测" }];
+    if (section === "observer") return [{ label: "上下文观测" }];
     if (routeTaskId === null) return [{ label: "新对话" }];
     return [
       { label: catalog.activeWorkspace?.name ?? "工作区" },
@@ -313,7 +313,7 @@ export function AppLayout() {
           label="工作台"
           // 收起会改变 resetKey，从而清除崩溃状态；下次打开重新挂载。
           resetKey={`workbench:${workbenchWorkspaceId ?? "none"}:${workbenchPanelOpen ? "open" : "closed"}`}
-          fallbackClassName="w-80 shrink-0 border-l p-3"
+          fallbackClassName="dock-panel bg-background m-2 w-80 shrink-0 p-3"
           escape={{ label: "收起工作台", onClick: () => setWorkbenchPanelOpen(false) }}
         >
           <Workbench filesVisible={filesVisible} workspaceId={workbenchWorkspaceId}

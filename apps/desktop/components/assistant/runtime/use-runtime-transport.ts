@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   extractUserAddMessageAttachments,
   extractUserAddMessageText,
+  getUserAddMessageEditIntent,
   getUserAddMessageSourceId,
   type UserAddMessageCommand,
 } from "@/lib/assistant/converter";
@@ -12,8 +13,6 @@ import {
   sendTaskMessage,
   type TaskMessageRequest,
 } from "@/lib/assistant/task-commands";
-import { isQueuedUserMessage } from "@/lib/assistant/conversation-actions";
-import { isQueuedEditLocked, releaseQueuedEditLock } from "@/lib/assistant/edit-composer-draft";
 import { HttpError } from "@/lib/http/errors";
 import { readStoredInputDelivery } from "@/lib/input-delivery-storage";
 import { activeRunLaunch } from "@/lib/assistant/run-launch";
@@ -59,10 +58,12 @@ function restoreRejectedDraft(context: RuntimeSessionContext, commands: readonly
   if (!failedText.trim() && failedAttachments.length === 0) return;
   if (failedEditCommand) {
     const sourceId = getUserAddMessageSourceId(failedEditCommand);
-    const restored = sourceId !== null
-      && context.composerRestoreRef.current?.restoreEditMessage(sourceId, failedText, failedAttachments) === true;
+    const intent = getUserAddMessageEditIntent(failedEditCommand);
+    // 恢复的编辑框沿用被拒命令的意图：排队编辑因消息已被并入被拒时，不能在恢复后变成重跑。
+    const restored = sourceId !== null && intent !== null
+      && context.composerRestoreRef.current?.restoreEditMessage(sourceId, intent, failedText, failedAttachments) === true;
     if (!restored) {
-      context.setIssue({ message: "编辑重跑失败，原消息仍保留，请重新点击编辑重试。", canResync: true });
+      context.setIssue({ message: "编辑失败，原消息仍保留，请重新点击编辑重试。", canResync: true });
     }
     return;
   }
@@ -149,14 +150,15 @@ export function useRuntimeTransport(
     }),
     submitMessage: async (command) => {
       const sourceId = getUserAddMessageSourceId(command);
+      const editIntent = getUserAddMessageEditIntent(command);
       const state = context.latestStateRef.current;
-      // 编辑按消息是否仍在排队分两个命令：排队消息原地改（配置由后端沿用），已并入的重跑出新 Run。
-      // 模式在开始编辑时锁定（见 lockQueuedEditMode）：编辑期间消息恰被并入时仍按排队编辑提交，
-      // 由后端 409 `MESSAGE_CONSUMED` 拒绝，不会因为提交时它已不在排队就静默改成重跑。
-      const queuedId = sourceId !== null
-        && (isQueuedEditLocked(sourceId) || isQueuedUserMessage(state, sourceId))
-        ? sourceId
-        : null;
+      // 编辑按开始编辑时定下的意图分两个命令（见 EditIntent）：排队消息原地改（配置由后端沿用），
+      // 已并入的重跑出新 Run。编辑期间前提若已失效，由后端 409 裁决，不在这里按快照改道。
+      if (sourceId !== null && editIntent === null) {
+        // 编辑框挂载即写入意图；缺失是装配错误，不能退回去猜，以免把排队编辑当成重跑。
+        throw new Error("编辑命令缺少编辑意图");
+      }
+      const queuedId = editIntent === "queued" ? sourceId : null;
       // 运行期配置锁定：活动期间发送用它冻结的配置（composer 也只显示这份）；重跑不受锁定——
       // 它会开新 Run，按用户当前选择。
       const runLaunch = sourceId === null ? activeRunLaunch(state) : null;
@@ -201,7 +203,6 @@ export function useRuntimeTransport(
       const init = { traceId: context.traceId };
       if (taskCommand.kind === "edit_queued") {
         await editQueuedTaskMessage(context.taskId, taskCommand.messageId, message, init);
-        releaseQueuedEditLock(taskCommand.messageId);
       } else if (taskCommand.kind === "send") {
         await sendTaskMessage(context.taskId, { ...taskCommand.request, delivery }, init);
       } else {

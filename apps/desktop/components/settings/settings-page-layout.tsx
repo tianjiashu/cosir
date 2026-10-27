@@ -28,6 +28,7 @@ export function SettingsPageLayout<Id extends string>({
 }) {
   return (
     <div className="h-full overflow-y-auto">
+      <div aria-hidden="true" className="scroll-fade-top" />
       <div className="mx-auto grid w-full max-w-6xl gap-6 px-5 py-6 lg:grid-cols-[12rem_minmax(0,1fr)] lg:gap-8 lg:px-8">
         <nav className="flex gap-1 overflow-x-auto lg:sticky lg:top-6 lg:block lg:space-y-1 lg:self-start" aria-label={navLabel}>
           {tabs.map(({ id, label, icon: Icon }) => (

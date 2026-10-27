@@ -186,6 +186,26 @@
   color: var(--foreground);
 }
 
+/*
+ * 停靠面板卡片（工作台、终端面板及其崩溃降级）：只定义外观，留白与调整手柄归
+ * PanelDock。背景不在这里给出——终端岛用自己的深色底，与 bg-* 同层工具类比较
+ * 先后顺序不可靠，由调用方显式设置。overflow-hidden 让子元素背景不越过圆角。
+ */
+@utility dock-panel {
+  @apply overflow-hidden rounded-xl border shadow-xs;
+}
+
+/*
+ * 滚动区顶部渐隐：放在滚动容器内第一个、铺满整宽的装饰元素上，取代页面头部的分隔线。
+ * 吸顶且 -mb 抵消自身高度——净高为 0，不推动内容，虚拟列表（未设 scrollMargin）的
+ * 定位不受影响；未滚动时只叠在容器的顶部留白上，内容经过它下方时才淡出。容器顶部
+ * 留白须不小于它的高度。不用 mask-image：遮罩会让整个长滚动区参与合成，WebKit 下
+ * 有滚动性能风险，且未滚动时也会淡化首屏内容。
+ */
+@utility scroll-fade-top {
+  @apply pointer-events-none sticky top-0 z-10 -mb-6 h-6 shrink-0 bg-linear-to-b from-background to-transparent;
+}
+
 /* 与 Button / Input 一致的键盘焦点环；自绘控件统一使用，避免各自发明 ring 样式。 */
 @utility focus-ring {
   @apply outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50;

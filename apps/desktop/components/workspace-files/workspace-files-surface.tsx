@@ -10,7 +10,8 @@ import {
   SearchIcon,
   XIcon,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
+import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import {
   fileSession,
@@ -138,7 +139,14 @@ export function WorkspaceFilesSurface({
                 flexShrink: 0,
               }}
             >
-              <div className="flex items-center gap-1 border-b px-2 py-1.5">
+              {/* 工作区名不单独成行：目录根节点已显示名称，悬停可见完整路径。 */}
+              <form
+                className="flex items-center gap-0.5 border-b p-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  runFilenameSearch();
+                }}
+              >
                 {!wide && (
                   <TooltipIconButton
                     tooltip={treeVisible ? "收起目录，展开阅读" : "浏览目录与搜索"}
@@ -151,12 +159,39 @@ export function WorkspaceFilesSurface({
                     <FolderTreeIcon />
                   </TooltipIconButton>
                 )}
-                <div
-                  className="min-w-0 flex-1 truncate text-sm font-medium"
-                  title={rootPath}
-                >
-                  {workspaceName}
-                </div>
+                <InputGroup className="mr-1 h-8 flex-1">
+                  <input
+                    ref={filenameSearch}
+                    data-slot="input-group-control"
+                    className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+                    aria-label="搜索工作区文件名"
+                    placeholder="搜索文件名或路径，Enter 查找"
+                    value={query}
+                    onChange={(e) => {
+                      setQuery(e.target.value);
+                      setSearchRequest(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") clearFilenameSearch();
+                    }}
+                  />
+                  <InputGroupAddon>
+                    <SearchIcon />
+                  </InputGroupAddon>
+                  {query && (
+                    <InputGroupAddon align="inline-end">
+                      <TooltipIconButton
+                        type="button"
+                        tooltip="清空搜索，返回目录"
+                        aria-label="清空文件名搜索"
+                        className="size-6"
+                        onClick={clearFilenameSearch}
+                      >
+                        <XIcon />
+                      </TooltipIconButton>
+                    </InputGroupAddon>
+                  )}
+                </InputGroup>
                 <TooltipIconButton
                   tooltip="刷新工作区文件"
                   aria-label="刷新工作区文件"
@@ -169,62 +204,16 @@ export function WorkspaceFilesSurface({
                 >
                   <RefreshCwIcon />
                 </TooltipIconButton>
-                {treeVisible && (
-                  <TooltipIconButton
-                    tooltip="全部折叠"
-                    aria-label="全部折叠"
-                    className="size-8"
-                    onClick={() => patch(workspaceId, { expanded: [] })}
-                  >
-                    <ChevronsDownUpIcon />
-                  </TooltipIconButton>
-                )}
-                <FileBrowserMenu onManage={() => setManageIgnored(true)} />
-              </div>
-              <div className="space-y-2 border-b p-2">
-                <form
-                  className="flex items-center gap-1"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    runFilenameSearch();
-                  }}
+                <TooltipIconButton
+                  tooltip="全部折叠"
+                  aria-label="全部折叠"
+                  className="size-8"
+                  onClick={() => patch(workspaceId, { expanded: [] })}
                 >
-                  <input
-                    ref={filenameSearch}
-                    className="min-w-0 flex-1 rounded border bg-background px-2 py-1.5 text-sm"
-                    aria-label="搜索工作区文件名"
-                    placeholder="搜索文件名或路径"
-                    value={query}
-                    onChange={(e) => {
-                      setQuery(e.target.value);
-                      setSearchRequest(null);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") clearFilenameSearch();
-                    }}
-                  />
-                  {query && (
-                    <TooltipIconButton
-                      type="button"
-                      tooltip="清空搜索，返回目录"
-                      aria-label="清空文件名搜索"
-                      className="size-7"
-                      onClick={clearFilenameSearch}
-                    >
-                      <XIcon />
-                    </TooltipIconButton>
-                  )}
-                  <Button
-                    type="submit"
-                    size="sm"
-                    disabled={!query.trim()}
-                    aria-label="搜索工作区文件名"
-                  >
-                    <SearchIcon />
-                    搜索
-                  </Button>
-                </form>
-              </div>
+                  <ChevronsDownUpIcon />
+                </TooltipIconButton>
+                <FileBrowserMenu onManage={() => setManageIgnored(true)} />
+              </form>
               {query.trim() && searchRequest ? (
                 <FileSearch
                   key={`${searchRequest.id}:${revision}`}
@@ -239,7 +228,7 @@ export function WorkspaceFilesSurface({
                   className="p-4 text-sm text-muted-foreground"
                   role="status"
                 >
-                  按 Enter 或点击“搜索”开始查找。
+                  按 Enter 开始查找。
                 </div>
               ) : (
                 <FileTree
@@ -254,47 +243,12 @@ export function WorkspaceFilesSurface({
             </div>
           )}
           {wide && treeVisible && (
-            <div
-              role="separator"
-              aria-label="调整文件目录宽度"
-              aria-orientation="vertical"
-              aria-valuemin={160}
-              aria-valuemax={treeMaxWidth}
-              aria-valuenow={treeWidth}
-              tabIndex={0}
-              className="w-1 shrink-0 cursor-col-resize border-r hover:bg-primary/20 focus-visible:bg-primary/20"
-              onKeyDown={(e) => {
-                if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-                  e.preventDefault();
-                  patch(workspaceId, {
-                    treeWidth: Math.max(
-                      160,
-                      Math.min(
-                        treeMaxWidth,
-                        treeWidth + (e.key === "ArrowRight" ? 16 : -16),
-                      ),
-                    ),
-                  });
-                }
-              }}
-              onPointerDown={(e) =>
-                e.currentTarget.setPointerCapture(e.pointerId)
-              }
-              onPointerMove={(e) => {
-                if (e.currentTarget.hasPointerCapture(e.pointerId))
-                  patch(workspaceId, {
-                    treeWidth: Math.max(
-                      160,
-                      Math.min(
-                        treeMaxWidth,
-                        e.clientX - shell.current!.getBoundingClientRect().left,
-                      ),
-                    ),
-                  });
-              }}
-              onPointerUp={(e) =>
-                e.currentTarget.releasePointerCapture(e.pointerId)
-              }
+            <PanelResizeHandle
+              label="调整文件目录宽度"
+              value={treeWidth}
+              min={160}
+              max={treeMaxWidth}
+              onChange={(width) => patch(workspaceId, { treeWidth: width })}
             />
           )}
           <div

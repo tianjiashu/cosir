@@ -1,4 +1,5 @@
 import type { CreateAttachment } from "@assistant-ui/core";
+import type { EditIntent } from "@/lib/assistant/converter";
 import { registerInlineFileMetadata } from "@/lib/assistant/attachments/local-attachment-registry";
 
 import {
@@ -9,6 +10,8 @@ import {
 export type EditComposerDraftOverride = {
   text: string;
   attachments: readonly CreateAttachment[];
+  /** 被拒命令的编辑意图：恢复出的编辑框沿用它，而不是按恢复时的排队状态重新判定。 */
+  intent: EditIntent;
 };
 
 // The edit composer is created by assistant-ui immediately after beginEdit.
@@ -92,32 +95,6 @@ export function isEditComposerOperationActive(messageId: string): boolean {
 export function subscribeEditComposerOperations(listener: () => void): () => void {
   activeListeners.add(listener);
   return () => activeListeners.delete(listener);
-}
-
-// 编辑模式在开始编辑那一刻锁定：消息当时还在排队就始终按「编辑排队消息」提交。编辑期间消息若被
-// 并入，提交得到 409 `MESSAGE_CONSUMED`，而不会因为提交时它已不在排队就静默改成重跑（重跑会停掉
-// 当前 Run 并把刚并入的消息移出上下文）。被拒后恢复的编辑框沿用这把锁；重新开始一次编辑时按当时
-// 的排队状态重新判定，所以不需要在卸载时清理。
-const queuedEditLocks = new Set<string>();
-
-/**
- * 编辑框挂载时判定编辑模式：恢复被拒草稿时沿用已有的锁，否则按当前是否排队重新锁定。
- * 返回本次编辑是否按「编辑排队消息」处理。
- */
-export function lockQueuedEditMode(messageId: string, isQueued: boolean, restoring: boolean): boolean {
-  const locked = isQueued || (restoring && queuedEditLocks.has(messageId));
-  if (locked) queuedEditLocks.add(messageId);
-  else queuedEditLocks.delete(messageId);
-  return locked;
-}
-
-export function isQueuedEditLocked(messageId: string): boolean {
-  return queuedEditLocks.has(messageId);
-}
-
-/** 编辑排队消息已保存，或用户在消息被并入后明确改为编辑并重跑。 */
-export function releaseQueuedEditLock(messageId: string): void {
-  queuedEditLocks.delete(messageId);
 }
 
 /** 草稿附件必须带稳定身份，否则无法与 composer 里已有附件去重。 */

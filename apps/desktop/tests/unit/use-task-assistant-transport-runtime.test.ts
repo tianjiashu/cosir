@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { AssistantRuntimeProvider, useAuiState } from "@assistant-ui/react";
 
 import type { TransportState } from "@/lib/assistant/contract";
+import { editIntentRunConfig } from "@/lib/assistant/converter";
 import {
   toAddMessageCommand,
   useTaskAssistantTransportRuntime,
@@ -45,6 +46,20 @@ describe("task assistant transport runtime", () => {
 });
 
 describe("toAddMessageCommand", () => {
+  it("carries the edit intent from the composer runConfig on edit commands only", () => {
+    const edit = {
+      role: "user",
+      content: [{ type: "text", text: "改过" }],
+      sourceId: "42",
+      parentId: null,
+      runConfig: editIntentRunConfig("queued"),
+    } as unknown as Parameters<typeof toAddMessageCommand>[0];
+    const fresh = { ...edit, sourceId: null } as Parameters<typeof toAddMessageCommand>[0];
+
+    expect(toAddMessageCommand(edit).editIntent).toBe("queued");
+    expect(toAddMessageCommand(fresh).editIntent).toBeUndefined();
+  });
+
   it("promotes uploaded image attachment content into transport image parts", () => {
     const locator = `cosir-attachment://${"a".repeat(64)}`;
     const message = {

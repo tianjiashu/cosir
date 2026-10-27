@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   deriveComposerAction,
+  editBlockedReason,
   getLatestUserMessageId,
   isEditableLatestUserMessage,
   isQueuedUserMessage,
@@ -61,4 +62,34 @@ it("edits queued messages in place and still allows editing the latest consumed 
   expect(isQueuedUserMessage(snapshot, "q2")).toBe(true);
   expect(isQueuedUserMessage(snapshot, "consumed")).toBe(false);
   expect(canResumeStoppedRun(transportState({ activity: activity(1, "failed"), queued_messages: [queuedMessage("q")] }))).toBe(true);
+});
+
+describe("edit blocked reason", () => {
+  it("排队编辑在消息被并入后失效，不按快照改道成重跑", () => {
+    const queued = transportState({
+      messages: [userMessage("u1", 1)],
+      activity: activity(1, "running"),
+      queued_messages: [queuedMessage("q1")],
+    });
+    expect(editBlockedReason(queued, "q1", "queued")).toBeNull();
+
+    const consumed = transportState({
+      messages: [userMessage("u1", 1), userMessage("q1", 1)],
+      activity: activity(1, "running"),
+    });
+    expect(editBlockedReason(consumed, "q1", "queued")).toContain("已开始处理");
+    // 并入后它所在的 Run 仍在运行，此刻也不能改为编辑并重跑。
+    expect(editBlockedReason(consumed, "q1", "rerun")).toContain("正在运行");
+  });
+
+  it("重跑编辑在出现更新的消息或重新运行后失效", () => {
+    const stopped = transportState({
+      messages: [userMessage("u1", 1), userMessage("u2", 2)],
+      activity: activity(2, "completed"),
+    });
+    expect(editBlockedReason(stopped, "u2", "rerun")).toBeNull();
+    expect(editBlockedReason(stopped, "u1", "rerun")).toContain("更新的消息");
+    expect(editBlockedReason({ ...stopped, activity: activity(3, "running") }, "u2", "rerun"))
+      .toContain("正在运行");
+  });
 });

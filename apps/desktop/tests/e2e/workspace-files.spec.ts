@@ -342,7 +342,7 @@ for (const theme of ["light", "dark"]) {
       ).toBeGreaterThanOrEqual(4.5);
     }
     // 为主区留足空间后，通过实际可用宽度验证并排阅读断点。
-    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.setViewportSize({ width: 1620, height: 900 });
     const outer = page.getByRole("separator", { name: "调整工作台宽度" });
     await expect(outer).toHaveAttribute("aria-valuemax", "900");
     await outer.focus();

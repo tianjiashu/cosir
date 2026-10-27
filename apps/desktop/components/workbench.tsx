@@ -15,7 +15,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect } from "react";
-import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
+import { PanelDock } from "@/components/ui/panel-dock";
+import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { WorkbenchAgentStatusProvider } from "@/lib/workbench/agent-status";
@@ -140,19 +141,19 @@ export function Workbench({
     <>
       {indicators}
       <WorkbenchAgentStatusProvider workspaceId={workspaceId} tabs={tabs}>
+      <PanelDock side="right" size={width} minSize={minWidth} maxSize={maxWidth}
+        onSizeChange={onWidthChange} resizeLabel="调整工作台宽度">
       <Tabs.Root
         value={activeTab.id}
         onValueChange={(value) => activateTab(String(value))}
         role="complementary"
-        className="relative flex min-h-0 shrink-0 flex-col border-l bg-background"
+        className="dock-panel bg-background flex min-h-0 flex-col"
         style={{ width }}
         aria-label="工作台"
       >
-        <PanelResizeHandle className="absolute inset-y-0 -left-1" label="调整工作台宽度"
-          value={width} min={minWidth} max={maxWidth} direction={-1} onChange={onWidthChange} />
-        <div className="flex min-h-12 shrink-0 items-end gap-1 border-b px-2 pt-2">
+        <div className="flex h-11 shrink-0 items-center gap-1 border-b px-2">
           <Tabs.List
-            className="flex min-w-0 flex-1 items-end gap-1 overflow-x-auto"
+            className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
             aria-label="工作台标签页"
           >
             {tabs.map((tab) => {
@@ -160,12 +161,12 @@ export function Workbench({
               return (
                 <div
                   key={tab.id}
-                  className={`group flex h-9 max-w-56 min-w-0 items-center gap-1.5 rounded-t-md border border-b-0 px-2 text-xs ${tab.id === activeTab.id ? "bg-background text-foreground" : "bg-muted/40 text-muted-foreground hover:bg-muted"}`}
+                  className={cn("group flex h-8 max-w-56 min-w-0 items-center gap-1 rounded-md pr-1 pl-2 text-xs", tab.id === activeTab.id ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground")}
                 >
                   <Tooltip disableHoverablePopup>
                     <TooltipTrigger render={<Tabs.Trigger
                       value={tab.id}
-                      className="flex min-w-0 flex-1 items-center gap-1.5 py-2 text-left focus-visible:outline-2 focus-visible:outline-ring"
+                      className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left focus-visible:outline-2 focus-visible:outline-ring"
                     />} >
                       {tab.kind === "agent" ? <WorkbenchAgentTabStatus taskId={tab.taskId} /> : <TabIcon className="size-3.5 shrink-0" aria-hidden="true" />}
                       {tab.kind === "agent-team-configuration-draft"
@@ -176,7 +177,7 @@ export function Workbench({
                   </Tooltip>
                   <button
                     type="button"
-                    className="ml-1 flex size-7 shrink-0 items-center justify-center rounded opacity-60 hover:bg-muted hover:opacity-100"
+                    className="flex size-6 shrink-0 items-center justify-center rounded opacity-60 hover:bg-background/80 hover:opacity-100"
                     aria-label={`关闭 ${tab.title}`}
                     onClick={() => void requestCloseTab(tab.id)}
                   >
@@ -207,6 +208,7 @@ export function Workbench({
           </Tabs.Content>
         ))}
       </Tabs.Root>
+      </PanelDock>
       </WorkbenchAgentStatusProvider>
     </>
   );

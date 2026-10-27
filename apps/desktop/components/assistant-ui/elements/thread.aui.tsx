@@ -46,12 +46,13 @@ import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import {
   deriveComposerAction,
+  editBlockedReason,
   isEditableLatestUserMessage,
   isQueuedUserMessage,
   canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
 import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
-import { toEditableUserMessageDraft } from "@/lib/assistant/converter";
+import { editIntentRunConfig, toEditableUserMessageDraft, type EditIntent } from "@/lib/assistant/converter";
 import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
 import { editableDocumentAttachments } from "@/lib/assistant/editable-user-document";
 import {
@@ -65,8 +66,6 @@ import {
   hasPendingEditComposerStart,
   isCurrentEditComposerOperation,
   isEditComposerOperationActive,
-  lockQueuedEditMode,
-  releaseQueuedEditLock,
   subscribeEditComposerOperations,
   takePendingEditComposerDraft,
   type EditDraftAttachment,
@@ -84,6 +83,7 @@ import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-perfor
 import { UserMessageAttachments } from "@/components/assistant-ui/elements/user-message-attachments";
 import {
   ComposerAttachmentButton,
+  ComposerSendButton,
   ComposerAttachments,
   InlineComposerInput,
 } from "@/components/assistant-ui/elements/attachment.aui";
@@ -192,7 +192,8 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY
           平滑滚动会把这些修正变成可见的漂移；只有用户点击「回到底部」才使用平滑滚动。
         */}
         <ThreadPrimitive.Viewport ref={viewportRef} turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto">
-            <div className={cn("mx-auto flex min-w-0 w-full max-w-3xl flex-1 flex-col px-4 pt-4", isEmpty && "justify-center")}>
+            <div aria-hidden="true" className="scroll-fade-top" />
+            <div className={cn("mx-auto flex min-w-0 w-full max-w-3xl flex-1 flex-col px-4 pt-6", isEmpty && "justify-center")}>
               <VirtualizedThreadMessages
                 scrollElementRef={viewportRef}
                 components={messageComponents}
@@ -221,28 +222,25 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY
 });
 
 /**
- * 「回到底部」按钮：仅在视口未贴底时可见（primitive 在贴底时禁用，样式上隐藏）。
- * Run 流式输出期间叠加一个新输出提示点，提醒用户下方仍在产生内容。
+ * 「回到底部」按钮：仅在视口未贴底时可见（primitive 在贴底时禁用，样式上淡出）。
+ * 刻意保持克制：不加运行中提示点，流式状态已由 composer 的停止按钮表达。
+ * 轮廓用低透明度 ring 而非实色边框：浅色下靠柔和阴影浮起，深色下阴影不可见，靠 ring 保留轮廓。
+ * 必须显式覆盖 TooltipIconButton 默认的 size-6 p-1，否则内边距会挤掉图标空间。
  */
-const ScrollToBottomButton: FC = () => {
-  const isRunning = useAuiState((state) => state.thread.isRunning);
-  const label = isRunning ? "有新输出，回到底部" : "回到底部";
-  return (
-    <ThreadPrimitive.ScrollToBottom
-      behavior="smooth"
-      render={<TooltipIconButton tooltip={label} aria-label={label} variant="outline" className="absolute -top-12 self-center rounded-full p-3 disabled:invisible" />}
-    >
-      <ArrowDownIcon />
-      {isRunning && (
-        <span
-          data-testid="scroll-to-bottom-new-output"
-          aria-hidden="true"
-          className="bg-primary ring-background absolute -top-0.5 -right-0.5 size-2.5 rounded-full ring-2 animate-pulse motion-reduce:animate-none"
-        />
-      )}
-    </ThreadPrimitive.ScrollToBottom>
-  );
-};
+const ScrollToBottomButton: FC = () => (
+  <ThreadPrimitive.ScrollToBottom
+    behavior="smooth"
+    render={
+      <TooltipIconButton
+        tooltip="回到底部"
+        variant="ghost"
+        className="text-muted-foreground hover:text-foreground bg-background hover:bg-muted/60 ring-foreground/[0.06] absolute -top-11 size-8 self-center rounded-full p-0 shadow-[0_1px_2px_rgb(0_0_0/0.04),0_4px_12px_rgb(0_0_0/0.08)] ring-1 transition-[opacity,translate] duration-150 disabled:translate-y-1 disabled:opacity-0 dark:ring-white/10 [&_svg]:size-4"
+      />
+    }
+  >
+    <ArrowDownIcon />
+  </ThreadPrimitive.ScrollToBottom>
+);
 
 const ComposerBoundary = memo(function ComposerBoundary({
   autoFocus,
@@ -275,6 +273,8 @@ const ComposerBoundary = memo(function ComposerBoundary({
 const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { autoFocus: boolean; taskId?: number; workspaceRoot?: string }) {
   // 运行期配置锁定：活动 Run 期间模型与工具显示 Run 冻结的配置且只读，发送也用这份配置。
   const runLaunch = useActiveRunLaunch();
+  // 运行中照常可以发送（按投递方式并入或排到下一轮）；只有停止请求在途时不提交，避免与停止交错。
+  const { cancelling = false } = useContext(ThreadContext);
   return (
     <ComposerInsertionProvider>
       <ComposerFeedbackProvider>
@@ -289,6 +289,7 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
               placeholder={COMPOSER_PLACEHOLDER}
               className={COMPOSER_EDITOR_CLASS_NAME}
               autoFocus={autoFocus}
+              submitDisabled={cancelling}
               aria-label="消息输入"
             />
           </div>
@@ -448,9 +449,12 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
         />
       )}
       {isRunning && <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} onCancelRequested={onCancelRequested} onCancelResult={onCancelResult} />} />}
-      <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label={isRunning ? DELIVERY_LABELS[delivery].send : "发送"} />}>
+      <ComposerSendButton
+        aria-label={isRunning ? DELIVERY_LABELS[delivery].send : "发送"}
+        title={isRunning ? DELIVERY_LABELS[delivery].title : undefined}
+      >
         <ArrowUpIcon className="size-4" />
-      </ComposerPrimitive.Send>
+      </ComposerSendButton>
     </div>
   );
 };
@@ -606,15 +610,22 @@ const UserEditMessage: FC = () => {
   const aui = useAui();
   const message = useAuiState((state) => state.message);
   const { taskId, workspaceRoot } = useContext(ThreadContext);
-  // 排队消息原地编辑只改正文与附件，发起配置由后端沿用发送时的值；已并入的编辑会开新 Run，可改配置。
-  const isQueued = useAuiState((state) => isQueuedUserMessage(readRuntimeTransportState(state.thread.state), message.id));
+  const transportState = useAuiState((state) => readRuntimeTransportState(state.thread.state));
   const [restoreOverride] = useState(() => takePendingEditComposerDraft(message.id));
-  // 编辑模式在挂载时锁定，不随消息被并入而改变；被拒后恢复的编辑框沿用同一把锁。
-  const [queuedEdit, setQueuedEdit] = useState(
-    () => lockQueuedEditMode(message.id, isQueued, restoreOverride !== undefined),
+  // 编辑意图在挂载时确定一次（被拒后恢复的编辑框沿用被拒命令的意图），经 runConfig 随命令提交；
+  // 排队消息原地编辑只改正文与附件、沿用发送时的配置，已并入的编辑会开新 Run、可改配置。
+  const [intent, setIntent] = useState<EditIntent>(
+    () => restoreOverride?.intent ?? (isQueuedUserMessage(transportState, message.id) ? "queued" : "rerun"),
   );
-  // 编辑期间消息已被并入：原地编辑必然被拒，让用户看到原因并自行决定是否改为编辑并重跑。
-  const consumedWhileEditing = queuedEdit && !isQueued;
+  const queuedEdit = intent === "queued";
+  // 编辑期间前提失效（排队消息已被并入、重跑目标已不是可重跑的最新一条）时给出原因并禁止提交。
+  const blockedReason = editBlockedReason(transportState, message.id, intent);
+  // 排队消息已被并入时，只在它此刻确实能编辑重跑时提供改道入口，由用户明确选择。
+  const canSwitchToRerun = queuedEdit && blockedReason !== null
+    && editBlockedReason(transportState, message.id, "rerun") === null;
+  useLayoutEffect(() => {
+    aui.composer.setRunConfig(editIntentRunConfig(intent));
+  }, [aui.composer, intent]);
   const canonicalEditDraft = useMemo(
     () => message.role === "user" ? toEditableUserMessageDraft(message) : null,
     [message],
@@ -640,6 +651,8 @@ const UserEditMessage: FC = () => {
     () => isEditComposerOperationActive(message.id),
     () => false,
   );
+  // 回车与保存按钮共用这一个开关：任何「此刻不能提交」的条件只在这里加一次。
+  const sendBlocked = isHydrating || isRecoveryActive || blockedReason !== null;
 
   // 先于写入 effect 执行：每次提交同步一次草稿快照（无稳定身份的附件在此被剔除）。
   useLayoutEffect(() => {
@@ -795,24 +808,24 @@ const UserEditMessage: FC = () => {
                 className={COMPOSER_EDITOR_CLASS_NAME}
                 autoFocus
                 hydrating={isHydrating || isRecoveryActive}
+                submitDisabled={sendBlocked}
                 aria-label="编辑消息"
               />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 px-1">
               <div className="min-w-0 flex-1">
-                {consumedWhileEditing ? (
+                {blockedReason !== null ? (
                   <span className="text-xs text-warning">
-                    这条消息已开始处理，无法再修改。
-                    <button
-                      type="button"
-                      className="ml-1 underline underline-offset-2 hover:text-foreground"
-                      onClick={() => {
-                        releaseQueuedEditLock(message.id);
-                        setQueuedEdit(false);
-                      }}
-                    >
-                      改为编辑并重跑
-                    </button>
+                    {blockedReason}
+                    {canSwitchToRerun && (
+                      <button
+                        type="button"
+                        className="ml-1 underline underline-offset-2 hover:text-foreground"
+                        onClick={() => setIntent("rerun")}
+                      >
+                        改为编辑并重跑
+                      </button>
+                    )}
                   </span>
                 ) : queuedEdit ? (
                   <span className="text-muted-foreground text-xs">排队消息沿用发送时的配置</span>
@@ -827,9 +840,9 @@ const UserEditMessage: FC = () => {
                 <ComposerPrimitive.Cancel render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
                   <XIcon />
                 </ComposerPrimitive.Cancel>
-                <ComposerPrimitive.Send render={<Button type="button" size="icon" className="size-8 rounded-full" aria-label={queuedEdit ? "保存" : "重跑"} disabled={isHydrating || isRecoveryActive || consumedWhileEditing} />}>
+                <ComposerSendButton blocked={sendBlocked} aria-label={queuedEdit ? "保存" : "重跑"}>
                   <ArrowUpIcon className="size-4" />
-                </ComposerPrimitive.Send>
+                </ComposerSendButton>
               </div>
             </div>
             <ComposerFeedback />

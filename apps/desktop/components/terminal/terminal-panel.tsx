@@ -2,6 +2,7 @@ import { Maximize2Icon, Minimize2Icon, TerminalIcon, XIcon } from "lucide-react"
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { PanelDock } from "@/components/ui/panel-dock";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import {
@@ -33,10 +34,8 @@ function text(value: unknown): string {
 }
 
 function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; sessionId: string; onClose: () => void }) {
-  const panelRef = useRef<HTMLElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<TerminalStreamSession | null>(null);
-  const resizeStartRef = useRef<{ pointerId: number; y: number; height: number } | null>(null);
   const restoreHeightRef = useRef(DEFAULT_PANEL_HEIGHT);
   const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
   // attached 之前后端尚未告知会话状态，null 表示「未知」而不是某个已知状态。
@@ -124,55 +123,14 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
     setPanelHeight(clampPanelHeight(Math.round(window.innerHeight * 0.72)));
     setExpanded(true);
   };
-  const resizeFromKeyboard = (key: string) => {
-    if (key !== "ArrowUp" && key !== "ArrowDown" && key !== "Home" && key !== "End") return false;
-    setExpanded(false);
-    setPanelHeight((current) => clampPanelHeight(
-      key === "Home" ? MIN_PANEL_HEIGHT : key === "End" ? maxPanelHeight : current + (key === "ArrowUp" ? 24 : -24),
-    ));
-    return true;
-  };
   return (
+    <PanelDock side="bottom" size={panelHeight} minSize={MIN_PANEL_HEIGHT} maxSize={maxPanelHeight}
+      onSizeChange={(height) => { setExpanded(false); setPanelHeight(height); }} resizeLabel="调整终端面板高度">
     <section
-      ref={panelRef}
       style={{ height: panelHeight }}
-      className="terminal-surface bg-terminal-inset flex max-h-[80vh] min-h-48 w-full shrink-0 flex-col border-t"
+      className="terminal-surface bg-terminal-inset dock-panel flex w-full flex-col"
       aria-label="终端会话面板"
     >
-      <div
-        role="separator"
-        aria-label="调整终端面板高度"
-        aria-orientation="horizontal"
-        aria-valuemin={MIN_PANEL_HEIGHT}
-        aria-valuenow={panelHeight}
-        aria-valuemax={maxPanelHeight}
-        tabIndex={0}
-        className="group flex h-2 shrink-0 cursor-row-resize touch-none items-center justify-center outline-none focus-visible:bg-muted"
-        onPointerDown={(event) => {
-          event.preventDefault();
-          event.currentTarget.setPointerCapture(event.pointerId);
-          resizeStartRef.current = {
-            pointerId: event.pointerId,
-            y: event.clientY,
-            height: panelRef.current?.getBoundingClientRect().height ?? panelHeight,
-          };
-        }}
-        onPointerMove={(event) => {
-          const start = resizeStartRef.current;
-          if (!start || start.pointerId !== event.pointerId) return;
-          setExpanded(false);
-          setPanelHeight(clampPanelHeight(start.height + start.y - event.clientY));
-        }}
-        onPointerUp={(event) => {
-          if (resizeStartRef.current?.pointerId === event.pointerId) resizeStartRef.current = null;
-        }}
-        onPointerCancel={() => { resizeStartRef.current = null; }}
-        onKeyDown={(event) => {
-          if (resizeFromKeyboard(event.key)) event.preventDefault();
-        }}
-      >
-        <span className="bg-border group-hover:bg-muted-foreground/60 group-focus-visible:bg-muted-foreground h-0.5 w-10 rounded-full transition-colors" />
-      </div>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
         <TerminalIcon className="text-muted-foreground size-4" aria-hidden="true" />
         <span className="text-foreground text-sm font-medium">终端会话</span>
@@ -212,6 +170,7 @@ function TerminalPanel({ taskId, sessionId, onClose }: { taskId: number; session
       </header>
       <div ref={containerRef} className="min-h-0 flex-1 overflow-auto px-3 py-2" data-terminal-stream="true" />
     </section>
+    </PanelDock>
   );
 }
 

@@ -37,7 +37,7 @@ type AppSidebarProps = {
 };
 
 /**
- * 应用侧栏：新对话、工作区 / 任务树、底部的配置与开发者入口。
+ * 应用侧栏：新对话、工作区 / 任务树、底部的系统配置与上下文观测入口。
  *
  * 只负责呈现与转发用户意图；停靠 / 抽屉 / 图标栏的切换由 AppLayout 根据视口与偏好决定。
  * 所有文字都不换行并截断——侧栏宽度在动画中变化时，换行会把中文逐字竖排。
@@ -60,7 +60,7 @@ export function AppSidebar({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden whitespace-nowrap">
-      <div className={cn("flex h-14 shrink-0 items-center border-b px-3", rail ? "justify-center" : "justify-between")}>
+      <div className={cn("flex h-14 shrink-0 items-center px-3", rail ? "justify-center" : "justify-between")}>
         {!rail && <span className="truncate text-sm font-semibold">工作区</span>}
         <Button variant="ghost" size="icon-sm" onClick={onToggle} aria-label={rail ? "展开侧栏" : "收起侧栏"} title={withShortcut(rail ? "展开侧栏" : "收起侧栏", "toggleSidebar")}>
           {rail ? <PanelLeftOpenIcon /> : <PanelLeftCloseIcon />}
@@ -103,9 +103,8 @@ export function AppSidebar({
         </nav>
       )}
 
-      <div className={cn("mt-auto shrink-0 border-t", rail ? "flex flex-col items-center gap-1 p-2" : "p-3")}>
+      <div className={cn("mt-auto flex shrink-0 flex-col gap-1 border-t", rail ? "items-center p-2" : "p-3")}>
         <SidebarLink rail={rail} active={section === "settings"} icon={<Settings2Icon className="size-4" />} label="系统配置" shortcut="openSettings" onClick={onOpenSettings} />
-        {!rail && <p className="text-muted-foreground mt-3 mb-1 px-3 text-2xs font-medium">开发者</p>}
         <SidebarLink rail={rail} active={section === "observer"} icon={<SearchIcon className="size-4" />} label="上下文观测" onClick={onOpenObserver} />
       </div>
     </div>

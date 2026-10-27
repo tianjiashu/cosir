@@ -3,6 +3,7 @@ import type { CreateAttachment } from "@assistant-ui/core";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
 
 import type { TransportState } from "@/lib/assistant/contract";
+import type { EditIntent } from "@/lib/assistant/converter";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportIssue } from "@/components/assistant/transport-status";
 import type { BackendRuntimeSnapshot } from "@/src/runtime-config";
@@ -24,7 +25,12 @@ export type AssistantRuntimeProps = {
 
 export type ComposerRestore = {
   restoreNewMessage: (text: string, attachments?: readonly CreateAttachment[]) => void;
-  restoreEditMessage: (sourceId: string, text: string, attachments?: readonly CreateAttachment[]) => boolean;
+  restoreEditMessage: (
+    sourceId: string,
+    intent: EditIntent,
+    text: string,
+    attachments?: readonly CreateAttachment[],
+  ) => boolean;
 };
 
 export type RuntimeSessionContext = {

@@ -132,7 +132,7 @@ export function TaskPage({
         label="终端面板"
         resetKey={`terminal:${taskId}`}
         metadata={{ taskId }}
-        fallbackClassName="shrink-0 border-t p-3"
+        fallbackClassName="dock-panel bg-background mx-2 mb-2 shrink-0 p-3"
         layout="row"
         // 先关闭再重置边界：重新挂载的 Host 因面板已关闭而不渲染，不会再次触发同一崩溃。
         escape={{ label: "关闭终端", onClick: (reset) => { useTerminalPanelStore.getState().close(); reset(); } }}

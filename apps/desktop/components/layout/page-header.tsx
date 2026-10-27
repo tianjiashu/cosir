@@ -30,7 +30,7 @@ export function PageHeader({
   className?: string;
 }) {
   return (
-    <header className={cn("flex h-14 shrink-0 items-center gap-3 border-b px-4", className)}>
+    <header className={cn("flex h-14 shrink-0 items-center gap-3 px-4", className)}>
       {leading}
       <nav aria-label="当前位置" className="min-w-0 flex-1">
         <ol className="flex min-w-0 items-center gap-1.5 text-sm">

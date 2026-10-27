@@ -287,7 +287,7 @@ export function FileTree({
           data={model}
           width="100%"
           height={height}
-          rowHeight={30}
+          rowHeight={26}
           indent={16}
           openByDefault={false}
           initialOpenState={openState}
@@ -434,10 +434,10 @@ function FileRow({
         <div
           style={style}
           data-file-path={item.entry.path}
-          title={item.entry.hint ?? item.entry.path}
+          title={item.entry.hint ?? (item.entry.path || rootPath)}
           className={cn(
-            "flex cursor-default items-center gap-1.5 rounded px-1 text-sm hover:bg-muted",
-            node.isSelected && "bg-primary/10",
+            "flex cursor-default items-center gap-1.5 rounded-md px-1 text-sm hover:bg-muted/60",
+            node.isSelected && "bg-muted",
             node.isFocused && "ring-1 ring-inset ring-primary/40",
           )}
           onClick={(event) => {

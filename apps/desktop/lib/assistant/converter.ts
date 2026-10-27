@@ -1,7 +1,7 @@
 import { isActiveRunStatus } from "@/lib/assistant/contract";
 import { mapMarkdownText } from "@/lib/assistant/markdown-literals";
 import type { MessageStatus } from "@assistant-ui/core";
-import type { CompleteAttachment, CreateAttachment } from "@assistant-ui/core";
+import type { CompleteAttachment, CreateAttachment, RunConfig } from "@assistant-ui/core";
 import type {
   ThreadAssistantMessage,
   ThreadMessage,
@@ -29,11 +29,32 @@ import {
   type EditableUserDocument,
 } from "@/lib/assistant/editable-user-document";
 
+/**
+ * 一次编辑的意图，在编辑框挂载时确定一次：`queued` 原地改排队中的消息，`rerun` 编辑已并入的最新
+ * 消息并重跑。它随 composer 的 runConfig 进入命令、随被拒后恢复的草稿回到编辑框，提交时按它选择
+ * 接口，不在提交那一刻读快照重新判定——否则编辑期间消息恰被并入，排队编辑会被静默改成重跑。
+ */
+export type EditIntent = "queued" | "rerun";
+
+const EDIT_INTENT_KEY = "cosirEditIntent";
+
+/** 写进编辑 composer 的 runConfig；assistant-ui 在发送时把 runConfig 原样放进 AppendMessage。 */
+export function editIntentRunConfig(intent: EditIntent): RunConfig {
+  return { custom: { [EDIT_INTENT_KEY]: intent } };
+}
+
+export function readEditIntent(runConfig: RunConfig | undefined): EditIntent | undefined {
+  const value = runConfig?.custom?.[EDIT_INTENT_KEY];
+  return value === "queued" || value === "rerun" ? value : undefined;
+}
+
 export type UserAddMessageCommand = {
   type: "add-message";
   commandId?: string;
   sourceId?: string | null;
   parentId?: string | null;
+  /** 只有编辑命令（带 `sourceId`）才有。 */
+  editIntent?: EditIntent;
   message: {
     role: "user";
     attachments?: ReadonlyArray<{
@@ -506,6 +527,12 @@ export function getUserAddMessageSourceId(command: unknown): string | null {
   return typeof command.sourceId === "string" && command.sourceId.length > 0
     ? command.sourceId
     : null;
+}
+
+/** 编辑命令的意图；新消息返回 `null`。 */
+export function getUserAddMessageEditIntent(command: unknown): EditIntent | null {
+  if (!isUserAddMessageCommand(command)) return null;
+  return command.editIntent ?? null;
 }
 
 export function toPendingUserMessage(command: unknown): ThreadMessage | null {

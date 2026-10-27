@@ -77,7 +77,7 @@ test("窗口和侧栏变化限制实际宽度，End 和鼠标拖动均保留主�
     expect(panel.x + panel.width).toBeLessThanOrEqual(width + 1);
   }
   await page.getByRole("button", { name: "收起侧栏", exact: true }).click();
-  await expect(resize).toHaveAttribute("aria-valuenow", "752");
+  await expect(resize).toHaveAttribute("aria-valuenow", "736");
   const grip = (await resize.boundingBox())!;
   await page.mouse.move(grip.x + 3, grip.y + 100);
   await page.mouse.down();

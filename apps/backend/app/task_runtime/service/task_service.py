@@ -187,16 +187,20 @@ class TaskService:
         return self._task.list_by_parent_task(task_id)
 
     def require_current_run(self, task_id: int) -> ConversationRunRecord | None:
-        """返回存在的任务下最新的 run；任务尚无 run 时返回 ``None``。
+        """返回存在的任务的当前 Run（Task 的 ``current_run_id`` 指针）；任务尚无 Run 时返回 ``None``。
 
-        与 :meth:`get_latest_run` 的区别只在存在性：调度入口要让不存在的 Task 以 ``KeyError``
-        上浮（接入层映射为 404），不能把「Task 不存在」误读成「尚无 Run」。
+        调度入口要让不存在的 Task 以 ``KeyError`` 上浮（接入层映射为 404），不能把「Task 不存在」
+        误读成「尚无 Run」，所以 Task 必须先读到、不吞异常。
 
         异常:
             KeyError: 如果指定任务不存在。
         """
 
         task = self._task.get(task_id)
+        # 新建的 Task 还没有 Run：按 ``None`` 去取 Run 会得到 ``KeyError(None)``，被接入层误报为
+        # 「task not found」。
+        if task.current_run_id is None:
+            return None
         return self._turn.get(task.current_run_id)
 
     def get_task(self, task_id: int) -> TaskRecord:

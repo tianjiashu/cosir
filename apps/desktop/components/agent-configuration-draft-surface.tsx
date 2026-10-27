@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BotIcon, Loader2Icon, SaveIcon, XIcon } from "lucide-react";
+import { BotIcon, Loader2Icon, SaveIcon } from "lucide-react";
 
 import {
   AgentModelSelector,
@@ -125,7 +125,7 @@ export function AgentConfigurationDraftSurface({
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
-      <header className="flex shrink-0 items-start justify-between gap-3 border-b px-4 py-3">
+      <header className="flex shrink-0 items-start gap-3 border-b px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           <BotIcon className="size-4 shrink-0" />
           <div className="min-w-0">
@@ -133,7 +133,6 @@ export function AgentConfigurationDraftSurface({
             <p className="text-muted-foreground truncate text-xs">对话生成，仅保存后生效</p>
           </div>
         </div>
-        <Button type="button" variant="ghost" size="icon-sm" aria-label="关闭配置草稿" onClick={() => void close()}><XIcon /></Button>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="space-y-4">

@@ -170,10 +170,10 @@ export function ComposerRestoreBridge({
         const composer = aui.thread.composer();
         void restoreIntoComposer(composer, text, attachments);
       },
-      restoreEditMessage: (sourceId, text, attachments = []) => {
+      restoreEditMessage: (sourceId, intent, text, attachments = []) => {
         try {
           beginEditComposerOperation(sourceId);
-          setPendingEditComposerDraft(sourceId, { text, attachments });
+          setPendingEditComposerDraft(sourceId, { text, attachments, intent });
           queuePendingEditComposerStart(sourceId);
           return true;
         } catch (error) {

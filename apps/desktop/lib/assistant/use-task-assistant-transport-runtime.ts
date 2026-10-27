@@ -13,7 +13,7 @@ import {
   TransportFrameStore,
   type FrameStoreItem,
 } from "@/lib/assistant/transport-frame-store";
-import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import { readEditIntent, type UserAddMessageCommand } from "@/lib/assistant/converter";
 import { cancelTask } from "@/lib/assistant/cancel-task";
 import { TaskTransportSession, type TransportDisconnect } from "@/lib/assistant/task-transport-session";
 
@@ -218,10 +218,12 @@ export function toAddMessageCommand(message: AppendMessage): UserAddMessageComma
     }
   }
 
+  const editIntent = message.sourceId ? readEditIntent(message.runConfig) : undefined;
   return {
     type: "add-message",
     sourceId: message.sourceId,
     parentId: message.parentId,
+    ...(editIntent ? { editIntent } : {}),
     message: { role: "user", parts },
   };
 }
