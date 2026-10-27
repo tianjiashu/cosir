@@ -1,7 +1,7 @@
 """用户在 Agent Team 审批卡片上批准时提交的最终运行输入。
 
 用户在预览卡上编辑目标、节点完整子目标与摘要后再批准，因此「批准」携带一份完整运行输入；本模块
-只定义其形状与必填约束，配置的领域校验由 ``AgentTeamRunService.confirm`` 在确认边界完成。驳回只带
+只定义其形状与必填约束，配置的领域校验由 ``AgentTeamRunApproval.confirm`` 在确认边界完成。驳回只带
 反馈文本，不需要本模块。
 """
 
@@ -11,14 +11,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
-from app.agent_team.configuration.team_node_definition import TeamNodeIdentifier
-from app.agent_team.node_goal import AgentTeamNodeGoal
+from app.models.agent_team.configuration.team_node_definition import TeamNodeIdentifier
+from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
 
 
 class AgentTeamApproveInput(BaseModel):
     """用户批准执行方案时提交的最终运行输入。
 
-    与 ``AgentTeamRunService.confirm`` 的确认参数一一对应；``configuration`` 保持为原始文档
+    与 ``AgentTeamRunApproval.confirm`` 的确认参数一一对应；``configuration`` 保持为原始文档
     （不在此解析为领域模型），避免输入边界与确认边界两处各自做一遍配置校验。
     """
 

@@ -23,10 +23,10 @@ class ConversationTaskContextCrud:
         self._session_factory = main_session_factory()
 
     def get(
-        self,
-        task_id: int,
-        include_in_context: bool = True,
-        session: Session | None = None,
+            self,
+            task_id: int,
+            include_in_context: bool = True,
+            session: Session | None = None,
     ) -> list[ConversationTaskContextRecord]:
         """读取指定 task 的上下文消息行，按 ``sequence`` 升序返回。
 
@@ -53,9 +53,9 @@ class ConversationTaskContextCrud:
         return [ConversationTaskContextRecord._from_model(row) for row in rows]
 
     def get_for_observation(
-        self,
-        task_id: int,
-        run_id: int | None = None,
+            self,
+            task_id: int,
+            run_id: int | None = None,
     ) -> list[ConversationTaskContextRecord]:
         """读取观测页所需的全量消息，不按上下文或流式标记过滤。
 
@@ -82,10 +82,10 @@ class ConversationTaskContextCrud:
         return [ConversationTaskContextRecord._from_model(row) for row in rows]
 
     def get_by_task_sequence(
-        self,
-        task_id: int,
-        sequence: int,
-        session: Session | None = None,
+            self,
+            task_id: int,
+            sequence: int,
+            session: Session | None = None,
     ) -> ConversationTaskContextRecord | None:
         """按 Task 与全局序号读取唯一 context 行。
 
@@ -139,9 +139,9 @@ class ConversationTaskContextCrud:
         return int(current or 0)
 
     def create(
-        self,
-        record: ConversationTaskContextRecord,
-        session: Session | None = None,
+            self,
+            record: ConversationTaskContextRecord,
+            session: Session | None = None,
     ) -> None:
         """写入一条上下文消息行。
 
@@ -171,11 +171,11 @@ class ConversationTaskContextCrud:
         session.flush()
 
     def replace_message(
-        self,
-        task_id: int,
-        sequence: int,
-        record: ConversationTaskContextRecord,
-        session: Session | None = None,
+            self,
+            task_id: int,
+            sequence: int,
+            record: ConversationTaskContextRecord,
+            session: Session | None = None,
     ) -> None:
         """原子替换同一条 context 行的内容：消息正文、归属、模型与展示标记及完整角色 metadata。
 
@@ -222,12 +222,12 @@ class ConversationTaskContextCrud:
         session.flush()
 
     def update_child_display_status(
-        self,
-        task_id: int,
-        sequence: int,
-        child_task_id: int,
-        status: str,
-        session: Session | None = None,
+            self,
+            task_id: int,
+            sequence: int,
+            child_task_id: int,
+            status: str,
+            session: Session | None = None,
     ) -> None:
         """原子更新一条动态 child display 的生命周期状态。
 
@@ -288,15 +288,15 @@ class ConversationTaskContextCrud:
         session.execute(statement)
 
     def update_terminal_session_display(
-        self,
-        task_id: int,
-        sequence: int,
-        run_id: int,
-        session_id: str,
-        status: str,
-        end_reason: str | None,
-        exit_code: int | None,
-        session: Session | None = None,
+            self,
+            task_id: int,
+            sequence: int,
+            run_id: int,
+            session_id: str,
+            status: str,
+            end_reason: str | None,
+            exit_code: int | None,
+            session: Session | None = None,
     ) -> None:
         """原子更新精确 terminal session display 的生命周期字段。
 

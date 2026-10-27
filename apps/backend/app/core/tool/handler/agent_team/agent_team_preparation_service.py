@@ -10,11 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
-from app.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
-from app.agent_team.node_goal import AgentTeamNodeGoal
-from app.agent_team.team_tool_error import TeamToolError
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.models.agent_team.configuration.team_node_definition import TeamNodeDefinition
+from app.models.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
+from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
 from app.config.configuration import get_agent_registry
 from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
@@ -131,45 +131,40 @@ def resolve_node_model(
         ) from exc
 
 
-def build_node_structured_output(
-        configuration: AgentTeamConfiguration,
-        node: TeamNodeDefinition,
-) -> StructuredOutputSpec:
-    """按 Team 节点允许的状态和转移目标生成严格输出契约。
+def _node_routes(
+        configuration: AgentTeamConfiguration, node: TeamNodeDefinition
+) -> list[tuple[str, str]]:
+    """当前节点每个状态 → 去向文案，按节点声明的状态顺序。
 
-    参数:
-        configuration: 本次运行冻结的 Team 工作流配置。
-        node: 当前节点定义。
-
-    返回:
-        包含状态和下游结果的 JSON Schema 契约；状态枚举只包含当前节点允许的值。
-
-    异常:
-        TeamToolError: 节点状态没有对应转移时抛出。
-
-    副作用:
-        无；只读取配置并构造不可变输出契约。
+    图校验已保证每个状态恰有一条转移，这里直接取，不设缺失兜底；提示词与输出契约共用这份
+    文案，两处说法不会分叉。
     """
-
-    node_names = {item.node_id: item.name for item in configuration.nodes}
-    routes = {
+    targets = {
         transition.status: transition.target_node_id
         for transition in configuration.transitions
         if transition.from_node_id == node.node_id
     }
-    route_descriptions = []
+    routes = []
     for status in node.statuses:
-        target_node_id = routes.get(status.name)
-        if target_node_id is None:
-            raise TeamToolError(
-                f"Team 节点状态缺少转移目标: {node.node_id}/{status.name}"
-            )
+        target_node_id = targets[status.name]
         if target_node_id == END_TARGET_NODE_ID:
-            destination = "End the Team"
+            destination = "end the Team"
         else:
-            destination = f"{node_names[target_node_id]} ({target_node_id})"
-        route_descriptions.append(f"{status.name} -> {destination}")
+            target = configuration.node(target_node_id)
+            destination = f"hand off to {target.name} ({target.node_id})"
+        routes.append((status.name, destination))
+    return routes
 
+
+def build_node_structured_output(
+        configuration: AgentTeamConfiguration,
+        node: TeamNodeDefinition,
+) -> StructuredOutputSpec:
+    """按当前节点允许的状态与去向生成严格输出契约；状态枚举只含本节点的状态。
+
+    去向在 ``status`` 的说明里再写一遍：收尾时模型直接读的是这份 schema，不一定回看系统提示词。
+    """
+    routes = _node_routes(configuration, node)
     schema = {
         "type": "object",
         "description": (
@@ -179,11 +174,11 @@ def build_node_structured_output(
         "properties": {
             "status": {
                 "type": "string",
-                "enum": [status.name for status in node.statuses],
+                "enum": [status for status, _ in routes],
                 "description": (
-                        "Choose one allowed business outcome. It determines the next node or ends the Team; "
-                        "it is not a Run lifecycle status. Allowed routes: "
-                        + "; ".join(route_descriptions)
+                    "Choose one allowed business outcome. It determines the next node or ends "
+                    "the Team; it is not a Run lifecycle status. Allowed routes: "
+                    + "; ".join(f"{status} -> {destination}" for status, destination in routes)
                 ),
             },
             "output": {
@@ -208,65 +203,34 @@ def build_node_system_prompt(
         goal: str,
         node_roles: dict[str, str],
 ) -> str:
-    """在节点 Profile 提示词后追加总目标、全队角色概览和流转协议。
+    """在节点 Profile 提示词后追加 Team 身份与协议、总目标和当前节点的路由。
 
-    参数:
-        profile: 已解析的节点 Agent Profile；本函数不修改该对象。
-        configuration: 本次运行冻结的 Team 工作流配置。
-        node: 当前节点定义。
-        goal: 本次运行的全局目标，确认后冻结在每个节点的 system prompt 中。
-        node_roles: 本次运行中每个节点 Agent Profile 声明的职责，用于帮助节点理解全队分工。
-
-    返回:
-        原 Profile 提示词和 Team 专属说明组成的新提示词。
-
-    异常:
-        无。
-
-    副作用:
-        无；不会修改注册表中的 Agent Profile。
+    总目标冻结在系统提示词里，节点子目标与上一节点交接走用户输入（Coordinator 组装）：前者对
+    每个节点、每次执行都相同，后者随执行变化。只列当前节点的路由，不列全队流转图——其他节点的
+    边对本节点没有决策价值，还会让模型误以为能选。JSON 交接格式不在这里写，由收尾的结构化输出
+    节点带 schema 指令。不修改注册表里共享的 Profile。
     """
-
-    route_lines = []
-    for transition in configuration.transitions:
-        if transition.from_node_id != node.node_id:
-            continue
-        if transition.target_node_id == END_TARGET_NODE_ID:
-            route_lines.append(
-                f"- On status '{transition.status}', end the Agent Team."
-            )
-            continue
-        target = configuration.node(transition.target_node_id)
-        route_lines.append(
-            f"- On status '{transition.status}', hand off to {target.name} ({target.node_id})."
-        )
-
-    workflow_nodes = [
-        f"- {item.name} ({item.node_id}); Agent role: {node_roles[item.node_id]}"
+    members = "\n".join(
+        f"- {item.name} ({item.node_id}): {node_roles[item.node_id]}"
         for item in configuration.nodes
-    ]
-    workflow_transitions = []
-    for item in configuration.transitions:
-        source_name = configuration.node(item.from_node_id).name
-        if item.target_node_id == END_TARGET_NODE_ID:
-            target_label = "End the Agent Team"
-        else:
-            target = configuration.node(item.target_node_id)
-            target_label = f"{target.name} ({target.node_id})"
-        workflow_transitions.append(
-            f"- {source_name} ({item.from_node_id}) --{item.status}--> {target_label}"
-        )
-    team_context = "\n".join(
+    )
+    routes = "\n".join(
+        f"- `{status}`: {destination}" for status, destination in _node_routes(configuration, node)
+    )
+    team_context = "\n\n".join(
         (
-            "## Agent Team Execution Protocol",
-            "## Overall Team Goal\n" + goal,
-            f'You are working in Agent Team "{configuration.name}" ({configuration.team_id}).',
-            f"Current node: {node.name} ({node.node_id}).",
-            "Team members and roles:\n" + "\n".join(workflow_nodes),
-            "Team workflow transitions:\n"
-            + ("\n".join(workflow_transitions) or "- No explicit transitions."),
-            "Current node outcomes and routing:\n"
-            + ("\n".join(route_lines) or "- The Team ends after this node completes."),
+            "## Agent Team\n"
+            f'You are the node {node.name} ({node.node_id}) in Agent Team "{configuration.name}" '
+            f"({configuration.team_id}). Nodes run one at a time:\n"
+            "- Your context is your own: you see your subgoal and the previous node's handoff "
+            "output, never other nodes' conversations.\n"
+            "- The workspace file system is shared: files you change are what later nodes see.\n"
+            "- When you finish, you return a status and an output. The output is the only thing "
+            "the next node receives from you, so put your conclusions and everything it needs "
+            "there; if your status ends the Team, your output is the Team's final result.\n\n"
+            "Team members and roles:\n" + members,
+            "## Overall Goal\n" + goal,
+            "## Your Routes\nThe status you return decides what happens next:\n" + routes,
         )
     )
     base_prompt = profile.system_prompt.strip()
@@ -277,7 +241,7 @@ class AgentTeamPreparationService:
     """把 Team 配置和当前运行时依赖准备成一次不可变执行计划。
 
     本服务无内部持久化和进程级缓存，可以按请求创建；调用期间会读取 Agent registry 和
-    ToolSystem，但只把解析结果写入返回值。执行请求 service 负责把结果写入持久化请求。
+    工具注册表，但只把解析结果写入返回值。执行请求 service 负责把结果写入持久化请求。
     """
 
     def prepare(

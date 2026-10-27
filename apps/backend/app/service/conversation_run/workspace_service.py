@@ -14,8 +14,8 @@ import copy
 from contextlib import ExitStack
 from pathlib import Path
 
-from app.agent_team.registry import get_agent_team_registry
-from app.config.configuration import get_agent_registry, get_tool_system
+from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
+from app.config.configuration import get_agent_registry, get_tool_registry
 from app.config.logging.logger import log
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.models import TaskRecord, WorkspaceRecord
@@ -279,15 +279,15 @@ class WorkspaceService:
         """从主 Agent profile 固化新 Task 的模型工具 schema。
 
         主 Agent Task 创建时读取系统作用域中的 ``main_agent`` profile，并从当前
-        ``ToolSystem`` 注册的定义中筛选 ``allowed_tools``。配置提案工具虽然不是主 Agent
+        工具注册表的定义中筛选 ``allowed_tools``。配置提案工具虽然不是主 Agent
         的常驻 allowed_tools，但其 schema 必须随 Task 一并固化，供用户显式开启提案 Run；
         普通 Run 是否实际允许它由运行时的 ``allows_tools`` 决定。
 
         返回:
-            按 ToolSystem 注册顺序排列、与运行时模型 schema 同源的独立 JSON 字典列表。
+            按工具注册顺序排列、与运行时模型 schema 同源的独立 JSON 字典列表。
 
         异常:
-            RuntimeError: Agent registry、ToolSystem 或主 Agent profile 尚未完成应用装配。
+            RuntimeError: Agent registry、工具注册表或主 Agent profile 尚未完成应用装配。
 
         副作用:
             无；只读取进程级 Agent/Tool 装配结果并深拷贝 schema，不写数据库。调用方随后
@@ -301,7 +301,7 @@ class WorkspaceService:
         if profile is None:
             raise RuntimeError("main agent profile is unavailable")
 
-        registered_tools = get_tool_system().executor.list_tools()
+        registered_tools = get_tool_registry().get_all_definitions()
         selected_tools = profile.select_tools(registered_tools)
 
         return [copy.deepcopy(tool.to_model_tool_definition()) for tool in selected_tools]
@@ -336,7 +336,7 @@ class WorkspaceService:
             with workspace_operations.operation(workspace_id, timeout=10):
                 task_ids = set(self._task_crud.list_ids_by_workspace(workspace_id))
                 # 先发送取消信号，再取得 task 闸门，避免运行中的 Team 收尾与删除互相等待。
-                from app.agent_team.coordinator import get_agent_team_coordinator
+                from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
 
                 get_agent_team_coordinator().cancel_for_task_ids(task_ids)
                 with ExitStack() as stack:

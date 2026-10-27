@@ -1,7 +1,9 @@
-"""用户输入解析边界：模型能力校验、附件与图片解析、展示 token 转模型正文，产出 ``UserInputBody``。
+"""用户输入解析边界：模型能力校验、附件与图片解析、展示 token 转模型正文，产出待入队的
+``TaskMessage``。
 
-首条、追加、编辑（含排队消息的原地编辑）共用；只读 Task、模型配置与已发布图片的元数据，不读写
-普通附件文件、不写库、不创建 Run。由 ``WorkflowSession`` 在发信号给 actor 之前调用（解析 IO 不占用 actor 的串行循环）。
+HTTP 发送、子 Agent 委派与追加、Team 节点输入共用，编辑取返回消息的 ``body``；只读 Task、模型
+配置与已发布图片的元数据，不读写普通附件文件、不写库、不入队、不创建 Run。投递方在入队之前调用
+（解析 IO 不占用 Task 闸门），输入不合法在这里同步拒绝，不让坏数据进外部队列。
 """
 
 import re
@@ -13,10 +15,10 @@ from app.models import (
     ConversationRunCommand,
     ConversationRunFileAttachment,
 )
-from app.models.conversation_input import ConversationInput, UserInputPresentation
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.task_message import RunLaunch, UserInputBody
+from app.core.workflow.inbox.task_message import Delivery, RunLaunch, TaskMessage, UserInputBody
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.depends import get_model_config_service, get_task_crud
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
@@ -36,9 +38,13 @@ class UserInputService:
             reasoning_effort: ReasoningEffort | None = None,
             agent_id: str = "main_agent",
             *,
+            delivery: Delivery = "immediate",
             reuse: UserInputPresentation | None = None,
-    ) -> UserInputBody:
-        """校验模型能力、解析附件与图片，组装成携带发起配置的 ``UserInputBody``。
+    ) -> TaskMessage:
+        """校验模型能力、解析附件与图片，组装成携带发起配置的用户输入消息（尚未入队、没有行 id）。
+
+        ``delivery`` 是信封属性，原样带上；排队消息原地编辑要沿用原行的身份与 ``delivery``，只取
+        返回消息的 ``body``。
 
         ``reuse`` 是编辑目标的展示绑定：复用其已解析的附件路径（不从 Run 猜附件归属），请求里带
         新路径的附件照常覆盖；正文不再引用的附件丢弃。图片不复用——图片用 locator 存在展示投影里，
@@ -81,13 +87,11 @@ class UserInputService:
         # Team 节点）直接构造命令，且「正文只剩图片 token」时替换后同样是空。
         if not input_text.strip() and not image_paths:
             raise UserInputRejectedError("EMPTY_INPUT", "请输入消息内容")
-        return UserInputBody(
-            message=ConversationInput(
-                input_text=input_text,
-                image_paths=image_paths,
-                display_text=command.display_text,
-                attachments=file_attachments,
-            ),
+        body = UserInputBody(
+            input_text=input_text,
+            image_paths=image_paths,
+            display_text=command.display_text,
+            attachments=file_attachments,
             launch=RunLaunch(
                 agent_id=agent_id,
                 model_config_id=model_config_id,
@@ -96,6 +100,7 @@ class UserInputService:
                 ),
             ),
         )
+        return TaskMessage.of(body, delivery=delivery)
 
     @staticmethod
     def _check_image_token_bindings(command: ConversationRunCommand) -> None:
@@ -124,8 +129,8 @@ class UserInputService:
                 detail=f"image token(s) {unbound} have no uploaded asset",
             )
 
+    @staticmethod
     def _resolve_file_attachments(
-            self,
             requested: list[ConversationRunAttachmentInput],
             *,
             display_text: str,
@@ -172,11 +177,11 @@ class UserInputService:
         """
         paths = {attachment["id"]: attachment["path"] for attachment in attachments}
 
-        def replace(match: re.Match[str]) -> str:
+        def substitute(match: re.Match[str]) -> str:
             kind, token_id = match.group(1), match.group(2)
             return paths[token_id] if kind == "file" else ""
 
-        return replace_message_tokens(Constant.Cosir.LOCAL_INPUT_TOKEN, replace, text)
+        return replace_message_tokens(Constant.Cosir.LOCAL_INPUT_TOKEN, substitute, text)
 
     @staticmethod
     def _resolve_image_assets(workspace_id: int, image_asset_ids: list[str]) -> list[str]:
@@ -186,8 +191,9 @@ class UserInputService:
             return []
         return AttachmentService().resolve_image_assets_for_run(workspace_id, image_asset_ids)
 
+    @staticmethod
     def _reuse_attachments(
-            self, command: ConversationRunCommand, previous: UserInputPresentation
+            command: ConversationRunCommand, previous: UserInputPresentation
     ) -> ConversationRunCommand:
         """合并编辑目标已解析的附件绑定；请求里带新路径的同 id 附件覆盖旧绑定。
 

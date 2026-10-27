@@ -14,12 +14,12 @@
 
 import json
 
-from sqlalchemy import asc, delete, desc, select, update
+from sqlalchemy import asc, delete, select, update
 from sqlalchemy.orm import Session
 
 from app.models import ConversationRunError, ConversationRunRecord
 from app.models.conversation_run_options import ConversationRunOptions
-from app.models.conversation_run_progress import ConversationRunProgress
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.conversation_run_usage import ConversationRunUsage
 from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES, ConversationRunStatus
 from app.storage.model.conversation_run_model import ConversationRunModel
@@ -76,8 +76,8 @@ class ConversationRunCrud:
         """
         self._session_factory = main_session_factory()
 
-    def save_execution(self, run_id: int, data: ConversationRunProgress) -> None:
-        """单一驱动者更新 Run 执行进度；生命周期仍由状态 service 条件迁移。"""
+    def save_execution(self, run_id: int, data: ReactExecutionState) -> None:
+        """单一驱动者整体覆盖 Run 执行状态；生命周期仍由状态 service 条件迁移。"""
         with self._session_factory.begin() as session:
             session.execute(
                 update(ConversationRunModel)
@@ -200,7 +200,7 @@ class ConversationRunCrud:
             model_config_id=model_config_id,
             context_window_total=context_window_total,
             options=(options or ConversationRunOptions()).model_dump(mode="json"),
-            execution_data=ConversationRunProgress().model_dump(mode="json"),
+            execution_data=ReactExecutionState().model_dump(mode="json"),
             usage_json=_serialize_typed_json(usage),
             error_json=_serialize_typed_json(error),
         )
@@ -285,7 +285,7 @@ class ConversationRunCrud:
             end_reason=source.end_reason,
             final_output=source.final_output,
             options=source.options.model_dump(mode="json"),
-            execution_data=ConversationRunProgress().model_dump(mode="json"),
+            execution_data=ReactExecutionState().model_dump(mode="json"),
             usage_json=_serialize_typed_json(source.usage),
             error_json=_serialize_typed_json(source.error),
             status=source.status,
@@ -360,44 +360,6 @@ class ConversationRunCrud:
             )
         return [ConversationRunRecord.from_model(row) for row in rows]
 
-    def get_latest_by_task(self, task_id: int) -> ConversationRunRecord | None:
-        """返回某任务下创建时间最新的 run（单条查询）。
-
-        仅投影 ``created_at`` 与 ``id`` 的倒序第一条，避免为取最新 run 而加载全部
-        run 列表。任务无任何 run 时返回 ``None``，不抛异常，由调用方决定后续行为。
-
-        参数:
-            task_id: 任务标识（整数 id）。
-
-        返回:
-            该任务下 ``created_at`` 再 ``id`` 倒序的第一条 ``ConversationRunRecord``；
-            无匹配 run 时返回 ``None``。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            打开一次主库只读 session。
-        """
-
-        with self._session_factory() as session:
-            row: ConversationRunModel | None = (
-                session.execute(
-                    select(ConversationRunModel)
-                    .where(ConversationRunModel.task_id == task_id)
-                    .order_by(
-                        desc(ConversationRunModel.created_at),
-                        desc(ConversationRunModel.id),
-                    )
-                    .limit(1)
-                )
-                .scalars()
-                .first()
-            )
-        if row is None:
-            return None
-        return ConversationRunRecord.from_model(row)
-
     def list_recoverable(self) -> list[ConversationRunRecord]:
         """读取失去执行者的 running Run；waiting 保留待决请求。"""
         with self._session_factory() as session:
@@ -442,7 +404,6 @@ class ConversationRunCrud:
         error: ConversationRunError | None = None,
         session: Session | None = None,
         clear_terminal_fields: bool = False,
-        execution_data: ConversationRunProgress | None = None,
     ) -> ConversationRunRecord | None:
         """按来源状态白名单原子更新，传入外部 Session 时加入用例事务。"""
         if session is not None:
@@ -456,7 +417,6 @@ class ConversationRunCrud:
                 usage,
                 error,
                 clear_terminal_fields,
-                execution_data,
             )
         with self._session_factory.begin() as session:
             return self.update_status_if_in_session(
@@ -469,7 +429,6 @@ class ConversationRunCrud:
                 usage,
                 error,
                 clear_terminal_fields,
-                execution_data,
             )
 
     @staticmethod
@@ -483,13 +442,10 @@ class ConversationRunCrud:
         usage: ConversationRunUsage | None = None,
         error: ConversationRunError | None = None,
         clear_terminal_fields: bool = False,
-        execution_data: ConversationRunProgress | None = None,
     ) -> ConversationRunRecord | None:
-        """事务内条件更新 Run 及执行数据；只返回真正命中的记录。"""
+        """事务内条件更新 Run 状态与结果字段；只返回真正命中的记录。执行状态只经 ``save_execution`` 写。"""
 
         values: dict[str, object] = {"status": target_status}
-        if execution_data is not None:
-            values["execution_data"] = execution_data.model_dump(mode="json")
         if clear_terminal_fields:
             values.update(
                 end_reason=None,

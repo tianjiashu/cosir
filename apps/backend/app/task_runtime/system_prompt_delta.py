@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models.task_message import NoticeBody
+from app.core.workflow.inbox.task_message import NoticeBody
 from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 
 __all__ = ["SYSTEM_PROMPT_DELTA_NOTICE_TYPE", "SystemPromptDelta", "SystemPromptDeltaSource"]

@@ -5,8 +5,7 @@ from typing import Any, get_args
 from sqlalchemy import JSON, Boolean, Enum, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.message_metadata import MessageKind
-from app.models.task_message import Delivery
+from app.core.workflow.inbox.task_message import Delivery, TaskMessageKind
 from app.storage.model.base import StorageBase
 
 
@@ -25,7 +24,7 @@ class TaskMessageModel(StorageBase):
     # 取值约束挂在列类型上（非原生枚举 + CHECK）。
     kind: Mapped[str] = mapped_column(
         Enum(
-            *get_args(MessageKind),
+            *get_args(TaskMessageKind),
             name="task_message_kind",
             native_enum=False,
             create_constraint=True,

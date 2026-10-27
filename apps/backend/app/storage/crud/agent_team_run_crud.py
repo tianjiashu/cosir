@@ -7,8 +7,8 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.agent_team.state.agent_team_run_state import AgentTeamRunState
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.models.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
@@ -22,7 +22,7 @@ class AgentTeamRunCrud:
 
     本类遵循 storage/crud 层约定：传入外部 ``Session`` 时复用调用方事务，不自行提交；
     未传入时为单次 CRUD 操作创建本地事务。待确认生命周期由
-    ``AgentTeamRunService`` 编排，运行中的节点流转和终态规则由 ``AgentTeamCoordinator``
+    ``AgentTeamRunApproval`` 编排，运行中的节点流转和终态规则由 ``AgentTeamCoordinator``
     负责。
     """
 
@@ -36,6 +36,7 @@ class AgentTeamRunCrud:
         workspace_id: int,
         parent_task_id: int,
         parent_run_id: int,
+        tool_call_id: str,
         goal: str,
         node_runtime_snapshots: dict[str, dict[str, Any]],
         session: Session | None = None,
@@ -51,7 +52,7 @@ class AgentTeamRunCrud:
             workspace_id=workspace_id,
             parent_task_id=parent_task_id,
             parent_run_id=parent_run_id,
-
+            tool_call_id=tool_call_id,
             goal_input=goal,
             configuration_snapshot_json=configuration.model_dump(mode="json"),
             status=AgentTeamRunStatus.PENDING.value,
@@ -128,6 +129,20 @@ class AgentTeamRunCrud:
             return query(session)
         with self._session_factory() as owned_session:
             return query(owned_session)
+
+    def get_by_tool_call(self, parent_task_id: int, tool_call_id: str) -> AgentTeamRunModel:
+        """按创建它的 ``agent_team`` 工具调用读取 TeamRun；不存在抛 ``KeyError``。"""
+
+        with self._session_factory() as session:
+            row = session.scalars(
+                select(AgentTeamRunModel).where(
+                    AgentTeamRunModel.parent_task_id == parent_task_id,
+                    AgentTeamRunModel.tool_call_id == tool_call_id,
+                )
+            ).one_or_none()
+        if row is None:
+            raise KeyError(tool_call_id)
+        return row
 
     def list_active(self) -> list[AgentTeamRunModel]:
         """读取所有已进入运行阶段且尚未进入 Team 终态的运行。

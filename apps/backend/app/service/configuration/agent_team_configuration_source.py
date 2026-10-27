@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.config.logging.logger import log
 from app.utils.json_utils import read_json_object
 from app.utils.path.system_cosir import system_agent_team_config_dir

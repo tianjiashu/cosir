@@ -1,11 +1,11 @@
 """Agent Team 配置的应用服务。
 
-本模块负责 system/workspace 配置的保存、删除和作用域校验，并把已校验配置同步到
-``app.service.agent_team.registry``。静态字段与图结构由 ``app.models.agent_team.configuration`` 领域模型
-负责；本模块不负责 TeamRun 生命周期、节点执行或主 Agent workflow。
+本模块负责 system/workspace 配置的保存、删除和作用域校验，并把已校验配置同步到同包的
+``agent_team_configuration_registry``。静态字段与图结构由 ``app.models.agent_team.configuration``
+领域模型负责；本模块不负责 TeamRun 生命周期、节点执行或主 Agent workflow。
 
-配置的**读取与装载**不在本模块：目录装载由 ``app.service.agent_team.registry`` 在作用域首次被读取时
-经 ``AgentTeamConfigurationScopeSource`` 完成（见该模块说明），本模块只负责写路径与校验，
+配置的**读取与装载**不在本模块：目录装载由 ``agent_team_configuration_registry`` 在作用域首次被
+读取时经 ``AgentTeamConfigurationScopeSource`` 完成（见该模块说明），本模块只负责写路径与校验，
 避免同一份配置存在「启动期装载」和「按需装载」两套口径。
 """
 
@@ -21,8 +21,8 @@ from app.models.agent_team.configuration.agent_team_configuration import (
     TeamScope,
     configuration_document,
 )
-from app.service.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.service.agent_team.registry import AgentTeamConfigurationRegistry
+from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
+from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
 from app.core.agents.agent_profile import AgentProfileType
 from app.service.configuration.file_store import ConfigurationFileStore
 

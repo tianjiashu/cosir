@@ -6,8 +6,8 @@
 
 职责边界：
 - 负责：任务创建与生命周期管理（``TaskService``）、工作区编排（``WorkspaceService``）、
-  Conversation Run 调度与执行（``WorkflowSession`` / ``run_driver``）、Run 创建与恢复
-  （``ConversationRunService``）、
+  Conversation Run 调度与执行（``TaskActor`` / ``run_driver``）、Run 事实读写与状态迁移
+  （``ConversationRunLedger``）；
 - 不负责：直接数据库读写（委托给 ``app.storage.crud``）；单任务 / 工作区级联删除的
   内部编排细节（归 ``TaskService`` / ``WorkspaceService``）。
 """

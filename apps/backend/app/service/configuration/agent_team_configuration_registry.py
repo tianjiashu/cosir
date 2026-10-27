@@ -16,8 +16,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from threading import Lock, RLock
 
-from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
 from app.config.logging.logger import log
 from app.utils.workspace_scope import SYSTEM_SCOPE as _SYSTEM_SCOPE
 from app.utils.workspace_scope import normalize_scope_path

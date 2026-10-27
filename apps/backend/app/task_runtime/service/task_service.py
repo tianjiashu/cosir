@@ -13,11 +13,13 @@
 import asyncio
 from contextlib import ExitStack
 from dataclasses import dataclass
+from typing import cast
 
 from sqlalchemy.orm.session import Session
 
 from app.config.logging.logger import log
 from app.models import ConversationRunRecord, TaskRecord
+from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
@@ -25,6 +27,7 @@ from app.models.errors.deletion_errors import (
     RunDeletionConflictError,
 )
 from app.models.errors.task_fork_errors import TaskForkConflictError
+from app.models.message_metadata import UserMessageMetadata
 from app.service import depends as service_depends
 from app.storage.queries.task_read_queries import TaskReadQueries
 from app.storage.store_engines import main_session_factory
@@ -38,6 +41,15 @@ class TaskDeletionResult:
     """一次已提交任务级联删除需要执行的进程内清理信息。"""
 
     task_ids: frozenset[int]
+
+
+@dataclass(frozen=True)
+class _ForkPoint:
+    """fork 切分点：以某条用户消息开头的一轮，或某个 Run 开头、没有用户输入的回复。"""
+
+    user_message_id: int | None
+    leading_run_id: int | None
+    source_message_id: str
 
 
 class TaskService:
@@ -84,7 +96,7 @@ class TaskService:
         """创建新 Task 或读取已有 Task，并在新建时固化工具 schema。
 
         新建用户 Task 时，``tool_schemas`` 由调用方显式提供并固化，本方法不会自行从
-        主 Agent profile 或 ToolSystem 推导（设计意图上曾希望以当前 profile 与 ToolSystem
+        主 Agent profile 或工具注册表推导（设计意图上曾希望以当前 profile 与工具注册表
         解析出的 schema 作为默认来源，但当前实现未内置该推导，统一交由调用方负责——此为
         有意为之，以保持本方法的通用性）。传入 ``None`` 时 ``tasks.tool_schemas`` 会
         持久化为**空列表**，意味着该 Task 运行期无任何可调用工具（运行期
@@ -108,7 +120,7 @@ class TaskService:
             新建或读取的 ``TaskRecord``。
 
         异常:
-            RuntimeError: 主 Agent/ToolSystem 尚未完成装配，或已固化 schema 无法生成。
+            RuntimeError: 主 Agent / 工具注册表尚未完成装配，或已固化 schema 无法生成。
             KeyError: 读取不存在的已有 Task。
 
         副作用:
@@ -150,6 +162,22 @@ class TaskService:
         """返回任务及其递归委派子任务的 id；删除前先停止这些 Task 的执行。"""
         return self._collect_task_tree_ids(task_id)
 
+    def list_task_ids_to_dispatch(self) -> set[int]:
+        """启动时需要拉起 actor 的 Task：外部队列有待处理消息，或当前 Run 挂起等唤醒。
+
+        进程重启后 actor 不会自动恢复：这些 Task 若没人访问，已到达的消息不会被处理、挂起的 Run
+        也等不到唤醒。遗留 running Run 已由恢复流程收敛为 cancelled，不在此列。
+        """
+        from app.models.enums.conversation_run_status import ConversationRunStatus
+        from app.storage.crud.task_message_crud import TaskMessageCrud
+
+        with self._session_factory() as session:
+            pending = TaskMessageCrud().list_task_ids_with_pending(session)
+            suspended = self._task.list_ids_with_current_run_status(
+                ConversationRunStatus.SUSPENDED.value, session=session
+            )
+        return {*pending, *suspended}
+
     def list_task_ids_for_workspace(self, workspace_id: int) -> set[int]:
         """返回工作区下全部 task id（含委派子任务与 Team 节点任务）。"""
         return set(self._task.list_ids_by_workspace(workspace_id))
@@ -158,30 +186,7 @@ class TaskService:
         """返回由该任务直接委派的子任务（不含 Agent Team 节点任务）。"""
         return self._task.list_by_parent_task(task_id)
 
-    def get_latest_run(self, task_id: int) -> ConversationRunRecord | None:
-        """返回某任务下创建时间最新的 run。
-
-        委托 ``ConversationRunCrud.get_latest_by_task`` 完成单条倒序查询；任务不含任何
-        run 时返回 ``None``。该方法不做任务存在性守卫——调用方若在 run 之前先取过 task
-        则天然存在，仅取最新 run 的场景下 ``None`` 已能表达「该 task 尚无 run」。
-
-        参数:
-            task_id: 任务标识。
-
-        返回:
-            该任务下最新（``created_at`` 再 ``id`` 倒序）的 ``ConversationRunRecord``；
-            任务无任何 run 时返回 ``None``。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果底层查询失败。
-
-        副作用:
-            无（仅读取）。
-        """
-
-        return self._turn.get_latest_by_task(task_id)
-
-    def require_latest_run(self, task_id: int) -> ConversationRunRecord | None:
+    def require_current_run(self, task_id: int) -> ConversationRunRecord | None:
         """返回存在的任务下最新的 run；任务尚无 run 时返回 ``None``。
 
         与 :meth:`get_latest_run` 的区别只在存在性：调度入口要让不存在的 Task 以 ``KeyError``
@@ -191,8 +196,8 @@ class TaskService:
             KeyError: 如果指定任务不存在。
         """
 
-        self._task.get(task_id)
-        return self.get_latest_run(task_id)
+        task = self._task.get(task_id)
+        return self._turn.get(task.current_run_id)
 
     def get_task(self, task_id: int) -> TaskRecord:
         """按标识取单个任务，并附带派生的执行态。
@@ -213,11 +218,26 @@ class TaskService:
         """
         return self._task_reads.get(task_id)
 
-    async def fork_task(self, source_task_id: int, source_run_id: int) -> TaskRecord:
-        """在指定历史 Run 处创建一个独立的 fork Task。"""
+    async def fork_task(
+        self,
+        source_task_id: int,
+        *,
+        user_message_id: int | None,
+        leading_run_id: int | None,
+        source_message_id: str,
+    ) -> TaskRecord:
+        """在源 Task 的某一轮回复处创建一个独立的 fork Task（规则见 :meth:`_copy_fork_history`）。
+
+        「一轮」以 ``user_message_id`` 那条用户消息开头，或是 ``leading_run_id`` 那个 Run 开头、
+        没有用户输入的回复；二者恰给一个。``source_message_id`` 只记进 fork 来源供追溯。
+        """
 
         supervisor = asyncio.create_task(
-            asyncio.to_thread(self._fork_task_in_workspace, source_task_id, source_run_id)
+            asyncio.to_thread(
+                self._fork_task_in_workspace,
+                source_task_id,
+                _ForkPoint(user_message_id, leading_run_id, source_message_id),
+            )
         )
         try:
             return await asyncio.shield(supervisor)
@@ -246,8 +266,8 @@ class TaskService:
                 },
             )
 
-    def _fork_task_in_workspace(self, source_task_id: int, source_run_id: int) -> TaskRecord:
-        """在指定历史 Run 处创建一个独立的 fork Task。
+    def _fork_task_in_workspace(self, source_task_id: int, point: _ForkPoint) -> TaskRecord:
+        """在指定的一轮回复处创建一个独立的 fork Task。
 
         workspace 闸门协调结构性删除；源 Task 不加锁，也不访问运行时 context。
         状态校验与全部历史复制在同一个 BEGIN IMMEDIATE 事务内完成。Run 的
@@ -256,13 +276,13 @@ class TaskService:
 
         参数:
             source_task_id: 被 fork 的源 Task 标识。
-            source_run_id: 历史边界 Run 标识，复制范围包含该 Run。
+            point: 切分点（一轮回复），复制到这一轮的最后一条 context 为止。
 
         返回:
             已提交的目标 fork Task。
 
         异常:
-            KeyError: 源 Task 或边界 Run 不存在/不属于源 Task。
+            KeyError: 源 Task 不存在，或切分点不对应源 Task 中可见的一轮回复。
             TaskForkConflictError: 复制前缀存在非终态 Run，或 workspace 操作忙碌。
         副作用:
             新增目标 Task、历史 cloned Runs 与 context entries；源 Task 不变。
@@ -271,32 +291,32 @@ class TaskService:
         source = self._task.get(source_task_id)
         try:
             with workspace_operations.operation(source.workspace_id, timeout=10):
-                return self._copy_fork_history(source_task_id, source_run_id)
+                return self._copy_fork_history(source_task_id, point)
         except TimeoutError as exc:
             raise TaskForkConflictError(
                 "WORKSPACE_BUSY", "workspace has an active structural operation"
             ) from exc
 
-    def _copy_fork_history(
-        self,
-        source_task_id: int,
-        source_run_id: int,
-    ) -> TaskRecord:
+    def _copy_fork_history(self, source_task_id: int, point: _ForkPoint) -> TaskRecord:
         """持有 workspace 闸门时复制数据库历史；后续 Run 的状态不影响选定前缀。
 
-        BEGIN IMMEDIATE 在读取之前取得写锁，确保检查与复制之间不会插入 resume、
+        复制范围：切分点所在那一轮的最后一条 context 及之前的全部可见 context，以及拥有这些
+        context 的 Run；切分点所在 Run 只带到这一轮为止（同一 Run 里更晚的轮次不复制）。前缀里的
+        Run 都须已到终态。BEGIN IMMEDIATE 在读取之前取得写锁，确保检查与复制之间不会插入 resume、
         编辑或删除提交。提交后只记录汇总日志，不做数据库回读或运行时预加载。
         """
 
         with begin_immediate(self._session_factory) as session:
             source = self._task.ensure_task(session, source_task_id)
             runs = self._turn.list_by_task_in_session(session, source_task_id)
+            rows = self._context.history(source_task_id, session)
+            boundary_run_id, cut_sequence = _resolve_fork_cut(rows, point)
             boundary_index = next(
-                (index for index, run in enumerate(runs) if run.id == source_run_id),
+                (index for index, run in enumerate(runs) if run.id == boundary_run_id),
                 None,
             )
             if boundary_index is None:
-                raise KeyError(source_run_id)
+                raise KeyError(boundary_run_id)
             source_prefix = runs[: boundary_index + 1]
             if any(run.status not in TERMINAL_RUN_STATUSES for run in source_prefix):
                 raise TaskForkConflictError(
@@ -311,7 +331,7 @@ class TaskService:
                 extra={
                     "fork": {
                         "source_task_id": source_task_id,
-                        "source_run_id": source_run_id,
+                        "source_message_id": point.source_message_id,
                     }
                 },
                 tool_schemas=source.tool_schemas,
@@ -328,6 +348,7 @@ class TaskService:
                 target.id,
                 run_id_map,
                 session,
+                max_sequence=cut_sequence,
             )
         log.info(
             "task_forked",
@@ -335,7 +356,8 @@ class TaskService:
                 "msg": "task fork committed",
                 "data": {
                     "source_task_id": source_task_id,
-                    "source_run_id": source_run_id,
+                    "boundary_run_id": boundary_run_id,
+                    "source_message_id": point.source_message_id,
                     "target_task_id": target.id,
                     "cloned_run_count": len(run_id_map),
                     "cloned_context_count": cloned_context_count,
@@ -454,7 +476,7 @@ class TaskService:
         task_ids = self._collect_task_tree_ids(task_id)
         # 先发送取消信号，再取得 task 闸门；节点 executor 需要拿同一闸门完成收尾，
         # 不能在持有闸门后等待它，否则删除路径会自锁。
-        from app.agent_team.coordinator import get_agent_team_coordinator
+        from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
 
         get_agent_team_coordinator().cancel_for_task_ids(task_ids)
         locked_ids = self._collect_task_ancestor_ids(task_id) | {task_id}
@@ -673,16 +695,6 @@ class TaskService:
             try:
                 self._task_register.mark_deleted(current_id)
                 self._state.mark_task_deleted(current_id)
-                try:
-                    from app.config.configuration import get_tool_system
-
-                    # 契约方法直接调用：``ToolSystem.executor`` 已声明 ``ToolExecutor`` 类型，
-                    # 「工具系统尚未装配」由 ``get_tool_system()`` 抛 ``RuntimeError`` 表达。
-                    get_tool_system().executor.clear_task_state(current_id)
-                except RuntimeError:
-                    # 删除可以发生在工具系统尚未完成装配的测试/启动边界；此时没有
-                    # 进程内工具状态需要清理，数据库删除仍然是 canonical 结果。
-                    pass
                 space = self._task_register.get(current_id)
                 if space is None:
                     continue
@@ -706,3 +718,59 @@ class TaskService:
         self._task_context_crud.delete_by_task_ids([task_id], session)
         self._turn.delete_by_ids(run_ids, session)
         self._task.delete_by_ids([task_id], session)
+
+
+def _resolve_fork_cut(
+    rows: list[ConversationTaskContextRecord], point: _ForkPoint
+) -> tuple[int, int]:
+    """把切分点换算成 ``(所在 Run, 这一轮最后一条 context 的序号)``；只看前端可见的行。
+
+    一轮从它的用户消息（或 Run 开头）起，到同一 Run 的下一条用户输入之前为止。
+
+    异常:
+        KeyError: 切分点在源 Task 的可见历史里找不到。
+    """
+
+    visible = sorted(
+        (row for row in rows if row.run_id is not None and row.project_to_transport),
+        key=lambda row: row.sequence,
+    )
+
+    def starts_turn(row: ConversationTaskContextRecord) -> bool:
+        return (
+            row.message["role"] == "user"
+            and isinstance(row.metadata, UserMessageMetadata)
+            and row.metadata.kind == "user_input"
+        )
+
+    if point.user_message_id is not None:
+        start = next(
+            (
+                row
+                for row in visible
+                if starts_turn(row) and row.message_id == point.user_message_id
+            ),
+            None,
+        )
+        if start is None:
+            raise KeyError(point.source_message_id)
+        run_id = cast(int, start.run_id)
+        turn: list[ConversationTaskContextRecord] = []
+        for row in visible:
+            if row.run_id != run_id or row.sequence < start.sequence:
+                continue
+            if turn and starts_turn(row):
+                break
+            turn.append(row)
+    else:
+        run_id = cast(int, point.leading_run_id)
+        turn = []
+        for row in visible:
+            if row.run_id != run_id:
+                continue
+            if starts_turn(row):
+                break
+            turn.append(row)
+        if not turn:
+            raise KeyError(point.source_message_id)
+    return run_id, turn[-1].sequence

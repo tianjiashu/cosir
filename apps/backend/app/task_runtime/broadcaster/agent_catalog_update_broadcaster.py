@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.tools.schemas.tool_names import TOOL_DELEGATE_TASK
+from app.core.tool.schemas.tool_names import TOOL_DELEGATE_TASK
 from app.task_runtime.agent_catalog_change import AgentCatalogChange
 from app.task_runtime.broadcaster.runtime_notice_broadcaster import (
     broadcast_runtime_notice,

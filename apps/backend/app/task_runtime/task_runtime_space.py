@@ -1,5 +1,8 @@
 """一个持久化 Task 对应的运行时资源空间。
 
+space 同时持有该 Task 的调度者 ``TaskActor``：随 space 物化而创建，由注册表在事件循环上拉起，
+常驻到 Task 删除或进程关闭。
+
 本模块只拥有统一的执行闸门（Task 操作锁）与延迟创建的运行时 context/snapshot working
 copy；持久化的 task / run / context 记录仍由 SQLite 负责。多个 space 的进程内生命周期管理见
 ``app.task_runtime.task_runtime_space_registry``。
@@ -46,6 +49,7 @@ if TYPE_CHECKING:
     from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
+    from app.core.task_actor import TaskActor
     from app.models import TaskRecord, WorkspaceRecord
 
 _T = TypeVar("_T")
@@ -88,6 +92,8 @@ class TaskRuntimeSpace:
     agent: AgentRuntimeConfig | None = None
     current_workspace: WorkspaceRecord = field(init=False)
     current_task: TaskRecord = field(init=False)
+    # Task 的调度者；在这里创建、由注册表拉起（space 可能在工作线程物化，拉起必须回到事件循环）。
+    actor: TaskActor = field(init=False)
 
     @property
     def task_tool_schemas(self) -> tuple[FunctionDefinition, ...]:
@@ -120,6 +126,9 @@ class TaskRuntimeSpace:
         self.current_workspace = get_workspace_service().get_workspace(
             self.current_task.workspace_id
         )
+        from app.core.task_actor import TaskActor
+
+        self.actor = TaskActor(self)
 
     def _acquire_lock(self, timeout: float | None) -> bool:
         """在同步线程中取得 Task 操作闸门。"""
@@ -332,13 +341,13 @@ class TaskRuntimeSpace:
 
                 if self.agent is None:
                     raise RuntimeError("首次装配 Task context 必须提供 Agent 运行时配置")
-                from app.service.depends import get_conversation_task_context_service
+                from app.core.context.context_store import ContextStore
 
                 manager = RuntimeMessageContextManager(
                     current_task_id=self.current_task.id,
                     agent=self.agent,
                     workspace=self.current_workspace,
-                    context_service=get_conversation_task_context_service(),
+                    context_store=ContextStore(),
                 )
                 self._context_manager = _weak_ref(manager)
             return manager

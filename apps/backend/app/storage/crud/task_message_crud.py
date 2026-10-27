@@ -3,28 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import cast
 
-from pydantic import TypeAdapter
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from app.models.task_message import Delivery, MessageBody, TaskMessage
+from app.core.workflow.inbox.task_message import TaskMessage
 from app.storage.model.task_message_model import TaskMessageModel
-
-_BODY: TypeAdapter[MessageBody] = TypeAdapter(MessageBody)
 
 
 class TaskMessageCrud:
     def append(
-        self, session: Session, rows: Iterable[tuple[int, TaskMessage]]
+            self, session: Session, rows: Iterable[tuple[int, TaskMessage]]
     ) -> list[int]:
         """按顺序追加 ``(task_id, message)``，返回行 id（即消息的稳定身份）。"""
 
         models = [
             TaskMessageModel(
                 task_id=task_id,
-                kind=message.body.kind,
+                kind=message.kind,
                 payload=message.body.model_dump(mode="json"),
                 delivery=message.delivery,
                 project_to_transport=message.project_to_transport,
@@ -43,10 +39,15 @@ class TaskMessageCrud:
             .where(TaskMessageModel.task_id == task_id)
             .order_by(TaskMessageModel.id)
         )
-        return [_to_message(row) for row in session.scalars(statement)]
+        return [TaskMessage.of_model(row) for row in session.scalars(statement)]
+
+    def list_task_ids_with_pending(self, session: Session) -> list[int]:
+        """返回外部队列里有待处理消息的 task id。"""
+
+        return list(session.scalars(select(TaskMessageModel.task_id).distinct()).all())
 
     def update_body_if_exists(
-        self, session: Session, task_id: int, message_id: int, message: TaskMessage
+            self, session: Session, task_id: int, message_id: int, message: TaskMessage
     ) -> bool:
         """条件更新一条仍在队列中的消息正文；行已被确认删除时返回 ``False``。"""
 
@@ -70,13 +71,4 @@ class TaskMessageCrud:
             .where(TaskMessageModel.id.in_(ids))
             .returning(TaskMessageModel)
         )
-        return {row.id: _to_message(row) for row in result}
-
-
-def _to_message(row: TaskMessageModel) -> TaskMessage:
-    return TaskMessage(
-        id=row.id,
-        body=_BODY.validate_python(row.payload),
-        delivery=cast(Delivery, row.delivery),
-        project_to_transport=row.project_to_transport,
-    )
+        return {row.id: TaskMessage.of_model(row) for row in result}

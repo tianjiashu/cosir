@@ -304,6 +304,22 @@ class TaskCrud:
         with self._session_factory() as owned_session:
             return list(owned_session.scalars(stmt).all())
 
+    def list_ids_with_current_run_status(
+            self, status: str, session: Session | None = None
+    ) -> list[int]:
+        """返回当前 Run 处于 ``status`` 的 task id；启动时找出挂起中、需要 actor 等唤醒的 Task。"""
+        from app.storage.model.conversation_run_model import ConversationRunModel
+
+        stmt = (
+            select(TaskModel.id)
+            .join(ConversationRunModel, ConversationRunModel.id == TaskModel.current_run_id)
+            .where(ConversationRunModel.status == status)
+        )
+        if session is not None:
+            return list(session.scalars(stmt).all())
+        with self._session_factory() as owned_session:
+            return list(owned_session.scalars(stmt).all())
+
     def list_root_ids_by_workspace(
             self, workspace_id: int, session: Session | None = None
     ) -> list[int]:

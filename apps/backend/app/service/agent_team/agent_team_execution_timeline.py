@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from app.agent_team.state.agent_team_run_state import AgentTeamRunState
+from app.models.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.config.configuration import get_agent_registry as get_agent_profile_registry
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.task_record import TaskRecord

@@ -23,6 +23,8 @@ class AgentTeamRunModel(StorageBase):
         parent_task_id: 发起 TeamRun 的主 Agent Task 数据库主键。
         parent_run_id: 发起 TeamRun 的主 ConversationRun 数据库主键；Team 完成或失败后，
             Coordinator 依据该标识恢复主 Run 的后续流程。
+        tool_call_id: 创建本方案的 ``agent_team`` 工具调用身份。用户决定按 ``teamRunId`` 提交，
+            以它找回原调用，组成 HITL 决定消息（``DecisionBody``）；工具按决定执行时以它反查本行。
         goal_input: 用户或主 Agent 提供的 Team 总体目标，确认后写入各节点的 system prompt。
         configuration_snapshot_json: 当前确认后执行所使用的完整 Team 配置快照，避免运行时
             配置文件变化影响当前执行；待确认阶段的候选配置会在确认时以请求体重新校验并覆盖。
@@ -47,6 +49,7 @@ class AgentTeamRunModel(StorageBase):
     __table_args__ = (
         Index("idx_agent_team_runs_parent", "parent_task_id", "parent_run_id"),
         Index("idx_agent_team_runs_status", "status"),
+        Index("uq_agent_team_runs_tool_call", "parent_task_id", "tool_call_id", unique=True),
         Index(
             "uq_agent_team_runs_pending_parent",
             "parent_task_id",
@@ -70,6 +73,7 @@ class AgentTeamRunModel(StorageBase):
     parent_run_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("conversation_runs.id", ondelete="CASCADE"), nullable=False
     )
+    tool_call_id: Mapped[str] = mapped_column(Text, nullable=False)
     goal_input: Mapped[str] = mapped_column(Text, nullable=False)
     configuration_snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     status: Mapped[str] = mapped_column(
