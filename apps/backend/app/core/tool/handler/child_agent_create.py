@@ -32,7 +32,6 @@ from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.core.workflow.inbox.task_message import TaskMessage
 from app.models import ConversationRunCommand
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.service.depends import (
@@ -46,8 +45,8 @@ class DelegateTaskTool(HandlerBase):
     """把一次 delegate_task 调用落地为已启动的 child Task/Run。
 
     职责：解析 child profile、创建 child Task 并经调度入口启动 Run，全程以
-    ``ToolObservation`` 返回结果。不等待 child 执行结束——结论由调度层以 ``agent_result`` 消息回投父
-    Task，父侧用 ``wait_messages`` 挂起等待或 ``child_agent_status`` 查询。
+    ``ToolObservation`` 返回结果。不等待 child 执行结束——子 Task 的每次 Run 到终态，由它的 actor 以
+    ``background_result`` 消息回投父 Task，父侧用 ``wait_messages`` 挂起等待或 ``child_agent_status`` 查询。
     """
 
     name: str = TOOL_DELEGATE_TASK
@@ -198,14 +197,16 @@ class DelegateTaskTool(HandlerBase):
             child_agent_model_config_id = child_agent_profile.model_config_id
             model_config_id = child_agent_model_config_id or parent_run.model_config_id
             # 只入队，由子 Task 的 actor 新开 Run，不等子 Run 结束。
-            body = get_user_input_service().prepare(
+            task_runtime_spaces.enqueue(
                 child_task.id,
-                ConversationRunCommand(display_text=message),
-                model_config_id,
-                reasoning_effort,
-                child_agent_id,
+                get_user_input_service().prepare(
+                    child_task.id,
+                    ConversationRunCommand(display_text=message),
+                    model_config_id,
+                    reasoning_effort,
+                    child_agent_id,
+                ),
             )
-            task_runtime_spaces.enqueue(child_task.id, TaskMessage.of(body))
 
         except Exception as e:
             log.exception(

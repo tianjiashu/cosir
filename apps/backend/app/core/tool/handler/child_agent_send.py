@@ -19,7 +19,7 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
 from app.models import ConversationRunCommand
 from app.models.conversation_run_options import ConversationRunOptions
-from app.core.workflow.inbox.task_message import RunLaunch, TaskMessage
+from app.core.workflow.inbox.task_message import RunLaunch
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.core.workflow.inbox.dispatch_policy import matches_run
 from app.service.depends import (
@@ -42,8 +42,8 @@ class ChildAgentSendTool(HandlerBase):
     description: str = (
         "Send a follow-up message to a child agent, reusing its child task. If the child agent "
         "is still running, the message is merged into its current run and read at its next "
-        "step; otherwise a new run starts for the child task. Its conclusion arrives as an "
-        "<agent_result> message; use wait_messages to pause until it does, or "
+        "step; otherwise a new run starts for the child task. Its conclusion arrives as a "
+        "<background_result> message; use wait_messages to pause until it does, or "
         "child_agent_status to check on it."
     )
     args_model: type[ChildAgentSendArgs] = ChildAgentSendArgs
@@ -171,17 +171,14 @@ class ChildAgentSendTool(HandlerBase):
             # 与用户发送同一语义：子 Run 仍活动时消息并入它，已终态时新开 Run，不会并发执行。
             # 子 Agent 配置在子 Run 运行期间变了时，消息只能交给下一个 Run（运行期配置锁定）。
             # 只入队，由子 Task 的 actor 推进（新开 Run 或并入），不等子 Run 结束。
-            body = get_user_input_service().prepare(
-                child_task_id,
-                ConversationRunCommand(display_text=message),
-                launch.model_config_id,
-                reasoning_effort,
-                launch.agent_id,
-            )
             task_runtime_spaces.enqueue(
                 child_task_id,
-                TaskMessage.of(
-                    body,
+                get_user_input_service().prepare(
+                    child_task_id,
+                    ConversationRunCommand(display_text=message),
+                    launch.model_config_id,
+                    reasoning_effort,
+                    launch.agent_id,
                     delivery="immediate" if matches_run(launch, current_run) else "next_run",
                 ),
             )

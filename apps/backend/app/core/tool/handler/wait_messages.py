@@ -1,8 +1,8 @@
 """wait_messages 工具：Agent 主动挂起，等委派的子 Agent 或后台任务的结论以消息送达。
 
 取代轮询式等待：调用当步闭合并带 ``suspend``，Run 随即挂起、不占执行者；子 Agent 每次 Run 到
-终态、后台任务结束、用户发来消息时都会唤醒同一个 Run，结论以 ``<agent_result>`` /
-``<background_result>`` 消息并入。是否继续等由模型决定（再次调用本工具）。
+终态、后台 Agent Team 结束、用户发来消息时都会唤醒同一个 Run，结论统一以 ``<background_result>``
+消息并入（``tool_name`` 标明来源）。是否继续等由模型决定（再次调用本工具）。
 """
 
 from typing import ClassVar
@@ -32,7 +32,7 @@ class WaitMessagesTool(HandlerBase):
         "Pause yourself until a result arrives, instead of polling. Use it after delegating to "
         "child agents or after an Agent Team was approved: each time a child agent finishes a "
         "run, a background task ends, or the user sends a message, you resume and the result "
-        "arrives as an <agent_result> or <background_result> message. Results arrive one at a "
+        "arrives as a <background_result> message. Results arrive one at a "
         "time; call this tool again if you still need to wait for others. If nothing is "
         "pending, it returns immediately without pausing."
     )
