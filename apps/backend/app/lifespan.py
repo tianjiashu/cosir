@@ -24,8 +24,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.agent_team.configuration_scope_source import AgentTeamConfigurationScopeSource
-from app.agent_team.registry import (
+from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
+from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,
     set_agent_team_registry,
 )
@@ -36,7 +36,7 @@ from app.bootstate import (
 from app.config.configuration import (
     build_agent_registry,
     set_agent_registry,
-    set_tool_system,
+    set_tool_registry,
 )
 from app.config.constant import Constant
 from app.config.logging.configuration import install_logging_for_current_process, shutdown_logging
@@ -47,7 +47,7 @@ from app.core.agents.agent_profile_config import (
     ensure_system_agent_team_config_dir,
 )
 from app.core.hook import HookContext, HookEvent, HookInterceptor
-from app.core.tools import ToolSystem
+from app.tools.tool_registration import build_tool_registry
 from app.service.configuration.agent_team_configuration_service import (
     AgentTeamConfigurationService,
     set_agent_team_configuration_service,
@@ -57,11 +57,12 @@ from app.service.configuration.main_agent_prompt_configuration_service import (
 )
 from app.service.depends import (
     close_service_dependencies,
-    get_conversation_run_service,
+    get_recover_service,
+    get_task_service,
     get_terminal_session_service,
-    get_workflow_session,
     initialize_service_dependencies,
 )
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.json_utils import JsonFileError, read_json_object
 from app.utils.path import system_cosir as paths
 from app.utils.path.system_cosir import system_cosir_dir
@@ -103,7 +104,7 @@ async def _cleanup_startup_failure() -> None:
     """释放启动失败前可能已经初始化的资源。
 
     启动阶段不经 ``yield`` 之后的正常 ``finally`` 块收尾：工具装配中途失败时，
-    Run 执行、terminal worker 与 service 缓存都不会被关闭。本函数只检查**已经填充**的
+    terminal worker 与 service 缓存都不会被关闭。本函数只检查**已经填充**的
     依赖缓存（``cache_info().currsize``），清理过程中绝不顺手构造缺失的服务；清理为尽力而为，
     每项失败只记 ``error`` 日志，不覆盖原始启动异常。
 
@@ -117,22 +118,12 @@ async def _cleanup_startup_failure() -> None:
         无：所有清理失败都被捕获并记录。
 
     副作用:
-        关闭已存在的 Run 执行、terminal 会话与 service 依赖缓存。
+        关闭已存在的 terminal 会话与 service 依赖缓存。
     """
 
     try:
-        if get_workflow_session.cache_info().currsize:
-            await get_workflow_session().close()
-    except BaseException as exc:
-        log.error(
-            "lifespan_startup_runtime_cleanup_failed",
-            extra={
-                "msg": "startup failure 后 Runtime cleanup 失败",
-                "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
-            },
-        )
-
-    try:
+        # 启动中途失败时可能已有 actor 被拉起，先停下它们。
+        await task_runtime_spaces.aclose()
         if get_terminal_session_service.cache_info().currsize:
             await asyncio.to_thread(get_terminal_session_service().shutdown)
     except BaseException as exc:
@@ -218,12 +209,11 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     team_configuration_service = AgentTeamConfigurationService(registry=team_registry)
     set_agent_team_configuration_service(team_configuration_service)
     set_agent_team_registry(team_registry)
-    tool_system = ToolSystem.build_tool_system()
-    set_tool_system(tool_system)
+    set_tool_registry(build_tool_registry())
 
     # 恢复过程会创建 AgentTeamCoordinator，消费已装配的工具系统，因此统一放在运行时依赖
     # 就绪之后，并确保在后端 ready 前完成。
-    recovered_runs = get_conversation_run_service().recover_orphaned_runs()
+    recovered_runs = get_recover_service().recover_orphaned_runs()
     if recovered_runs:
         log.info(
             "conversation_runs_recovered_after_restart",
@@ -232,7 +222,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
                 "data": {"run_ids": [run.id for run in recovered_runs]},
             },
         )
-    from app.agent_team.coordinator import get_agent_team_coordinator
+    from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
 
     recovered_team_runs = get_agent_team_coordinator().recover_after_restart()
     if recovered_team_runs:
@@ -244,6 +234,11 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             },
         )
     # 当前产品只启动新鲜 ConversationRun；旧 run 不在启动期隐式重放。
+    # Task 的 actor 随 space 物化拉起：先绑定事件循环，再为有待处理消息或挂起 Run 的 Task 物化
+    # space——重启前已到达的消息由 actor 照常处理，挂起的 Run 照常等唤醒。
+    task_runtime_spaces.bind_loop(asyncio.get_running_loop())
+    for task_id in get_task_service().list_task_ids_to_dispatch():
+        task_runtime_spaces.get_or_create(task_id)
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
     # 统一经 HookInterceptor 收口。
@@ -255,13 +250,12 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         try:
             # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
             HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
+            # 先停下全部 actor（取消执行，不调度后续 Run），再关闭终端与服务依赖。
+            await task_runtime_spaces.aclose()
             try:
-                await get_workflow_session().close()
+                await asyncio.to_thread(get_terminal_session_service().shutdown)
             finally:
-                try:
-                    await asyncio.to_thread(get_terminal_session_service().shutdown)
-                finally:
-                    await asyncio.to_thread(close_service_dependencies)
+                await asyncio.to_thread(close_service_dependencies)
             # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
             _mark_boot_stopped()
         finally:

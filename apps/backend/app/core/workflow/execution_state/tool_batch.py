@@ -28,7 +28,7 @@ class ToolBatch(BaseModel):
     calls: list[ChatCompletionMessageFunctionToolCallParam] = Field(default_factory=list)
     observations: list[dict[str, Any]] = Field(default_factory=list)
     valid_tool_calls: dict[str, ValidToolCall] = Field(default_factory=dict)
-    # 用户批准 HITL 调用后，prepare_input 绕过模型组出的单调用批次所携带的决定（``DecisionBody``
+    # 用户对 HITL 调用作出决定后，prepare_input 绕过模型组出的单调用批次所携带的决定（``DecisionBody``
     # 的 JSON 形态；本层不依赖 core 的消息类型）。tools 节点把它交给 handler，observe 节点据此把
     # 结果追加为消息、只更新占位的展示状态，而不是写 tool 消息。
     decision: dict[str, Any] | None = None

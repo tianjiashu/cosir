@@ -46,7 +46,7 @@ export function wasCommandPossiblyAccepted(error: unknown): boolean {
 }
 
 /**
- * 提交新对话首条消息，以 202 作为后端已投递的边界（投递不等于 Run 已启动，结果经 Task 长订阅到达）。
+ * 提交新对话首条消息，以 2xx 作为后端已受理的边界（新 Run 已启动，输出经 Task 长订阅到达）。
  *
  * 本函数只负责附件预上传与请求序列化，不拥有 React 页面状态，也不订阅输出；调用方在成功返回后
  * 负责导航，在异常时按 `wasCommandPossiblyAccepted` 决定是否清理 provisional Task。新 Task 没有

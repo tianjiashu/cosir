@@ -60,9 +60,7 @@ function taskProjection(task) {
   return { ...task, execution_status: activity?.status ?? null };
 }
 
-const emptyState = () => ({ messages: [], activity: null, error: null });
-// 与后端一致：每次命令被拒分配新的 seq，前端靠它认出连续的同样拒绝。
-let commandErrorSeq = 0;
+const emptyState = () => ({ messages: [], activity: null });
 
 const activityOf = (runId, status, overrides = {}) => ({
   runId,
@@ -170,7 +168,6 @@ function completedFixture(runId, userMessage, assistantParts) {
       { id: `assistant-${userMessage.id}`, role: "assistant", parts: assistantParts, runId, outcome: outcomeOf(activity) },
     ],
     activity,
-    error: null,
   };
 }
 
@@ -306,8 +303,8 @@ function jsonResponse(res, status, value) {
   res.end(JSON.stringify(value));
 }
 
-/** 命令只投递：202 `{}`，结果经 Task 长订阅到达。 */
-const accepted = (res) => jsonResponse(res, 202, {});
+/** 用户命令处理完即 200 `{}`，输出经 Task 长订阅到达；取消是纯投递（202）。 */
+const accepted = (res, status = 200) => jsonResponse(res, status, {});
 
 function writeSse(res, frame) {
   res.write(`data: ${JSON.stringify(frame)}\n\n`);
@@ -435,8 +432,8 @@ function commandText(body) {
 }
 
 /**
- * 模拟 POST /tasks/{id}/messages 与 /messages/{messageId}/rerun：只投递（202 `{}`），本轮输出由模拟执行者
- * 推给 Task 长订阅；与生产「命令投递 + 常驻订阅」的语义一致。运行中发送（immediate）也开新一轮，
+ * 模拟 POST /tasks/{id}/messages 与 /messages/{messageId}/rerun：受理即 200 `{}`，本轮输出由模拟
+ * 执行者推给 Task 长订阅；与生产「命令同步受理 + 常驻订阅」的语义一致。运行中发送（immediate）也开新一轮，
  * 测试只关心命令与订阅的边界。
  */
 function handleMessage(res, body, taskId, sourceId) {
@@ -489,21 +486,19 @@ function handleMessage(res, body, taskId, sourceId) {
   void execute(taskId, { initialState, chunks: ["stream", "ing response"], finalState });
 }
 
-/** 模拟 POST /tasks/{id}/resume：只续跑用户取消的 Run；不可续跑时调度拒绝投影为顶层 error。 */
+/** 模拟 POST /tasks/{id}/resume：只续跑用户取消的 Run；不可续跑时 409 `RUN_NOT_RESUMABLE`。 */
 function handleBusinessResume(res, taskId) {
-  const state = states.get(taskId);
-  accepted(res);
-  const activity = state?.activity;
+  const activity = states.get(taskId)?.activity;
   if (!activity || activity.status !== "cancelled" || activity.endReason !== "user_cancelled" || executors.has(taskId)) {
-    commit(taskId, { ...(state ?? emptyState()), error: { code: "RUN_NOT_RESUMABLE", message: "当前运行不可恢复", seq: ++commandErrorSeq } });
+    jsonResponse(res, 409, { detail: { error: { code: "RUN_NOT_RESUMABLE", message: "当前运行不可恢复", retryable: true } } });
     return;
   }
-  commit(taskId, { ...state, error: null });
+  accepted(res);
   continueRun(taskId);
 }
 
 function handleCancel(res, taskId) {
-  accepted(res);
+  accepted(res, 202);
   const executor = executors.get(taskId);
   if (executor) {
     executor.cancelled = true;

@@ -100,12 +100,9 @@ class WebExtractTool(HandlerBase):
         if len(urls) > Constant.Web.EXTRACT_URL_LIMIT_MAX:
             return tool_error(
                 self.name,
-                (
-                    "Web extraction accepts at most "
-                    f"{Constant.Web.EXTRACT_URL_LIMIT_MAX} URLs per call."
-                ),
-                reason="split the URLs into smaller batches and call web_extract again.",
-                retryable=True,
+                "Web extraction accepts at most "
+                f"{Constant.Web.EXTRACT_URL_LIMIT_MAX} URLs per call. "
+                "Split the URLs into smaller batches and call web_extract again.",
             )
 
         normalized_urls_or_error = self._validate_urls(urls)
@@ -125,17 +122,15 @@ class WebExtractTool(HandlerBase):
             )
             return tool_error(
                 self.name,
-                str(exc),
-                reason="configure Firecrawl locally before calling web_extract again.",
-                retryable=False,
+                f"{exc}. "
+                "Configure Firecrawl locally before calling web_extract again.",
             )
         except Exception:
             log.exception("web_extract_failed", extra={"msg": "网页正文提取调用失败", "data": {}})
             return tool_error(
                 self.name,
-                "Web extraction failed.",
-                reason="try the extraction again.",
-                retryable=True,
+                "Web extraction failed. "
+                "Try the extraction again.",
             )
         try:
             results = self._build_results(extracted_items)
@@ -146,9 +141,8 @@ class WebExtractTool(HandlerBase):
             )
             return tool_error(
                 self.name,
-                "Web extraction result assembly failed.",
-                reason="try different source URLs.",
-                retryable=False,
+                "Web extraction result assembly failed. "
+                "Try different source URLs.",
             )
         del execution_context
         failures = [str(item["error"]) for item in results if item.get("error")]
@@ -165,9 +159,8 @@ class WebExtractTool(HandlerBase):
             )
             return tool_error(
                 self.name,
-                f"Web extraction failed for all {len(results)} URL(s): " + "; ".join(failures),
-                reason="try fewer URLs or choose different source URLs.",
-                retryable=True,
+                f"Web extraction failed for all {len(results)} URL(s): {'; '.join(failures)}. "
+                "Try fewer URLs or choose different source URLs.",
             )
         payload: dict[str, object] = {"results": results}
         if failures:
@@ -254,8 +247,8 @@ class WebExtractTool(HandlerBase):
 
         return tool_error(
             self.name,
-            error,
-            reason=f"{remediation} No network request was made.",
+            f"{error}. "
+            f"{remediation} No network request was made.",
         )
 
     def _build_results(

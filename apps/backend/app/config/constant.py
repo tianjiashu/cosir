@@ -88,8 +88,6 @@ class Constant:
         RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE: str = "model_resolve_failed"
         # 流程类失败：模型未返回可用内容。
         RUN_FAILURE_CODE_MODEL_OUTPUT_INVALID: str = "invalid_model_output"
-        # 连续工具调用失败次数触顶。
-        RUN_FAILURE_CODE_TOOL_ERROR_LIMIT: str = "tool_error_limit_reached"
         # 单次 Run 达到最大步数上限。
         RUN_FAILURE_CODE_MAX_STEPS: str = "max_steps_reached"
         # workflow 图执行异常。
@@ -132,11 +130,6 @@ class Constant:
         STRUCTURED_OUTPUT_MAX_ATTEMPTS: int = 4
         # 已完成 Run 的结构化支线失败原因；不改变 Run 生命周期状态。
         STRUCTURED_OUTPUT_FAILURE_REASON: str = "structured_output_failed"
-        # 连续工具调用失败次数上限：达到即终止本轮 Run（end_reason 取
-        # ``Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT``）。由 ``observation_node`` 判定。
-        # 取值沿用迁移前 ``CODING_AGENT_TOOL_ERROR_LIMIT`` 的实际生效值（100，容许长会话中的
-        # 偶发工具失败）；迁移后不再支持 env 覆盖——需要调整直接改本值。
-        TOOL_ERROR_LIMIT: int = 100
         # 流式文本刷新最小字符数（达到后再 flush，减少碎片）。
         DEFAULT_TEXT_FLUSH_MIN_CHARS: int = 32
         # 流式文本刷新最大间隔（秒）。
@@ -229,8 +222,6 @@ class Constant:
     class Web:
         """网页搜索 / 提取工具的共享常量。"""
 
-        # 兼容期 provider 优先级（仅 firecrawl）。
-        LEGACY_PROVIDER_PRIORITY: tuple[str, ...] = ("firecrawl",)
         # 单次 web_search 最多返回的结果条数（同时是模型可见 schema 的 ``limit`` 上限）。
         SEARCH_LIMIT_MAX: int = 20
         # web_search ``limit`` 的默认值：模型可见 schema 默认值与 handler 形参默认值同源。
@@ -351,11 +342,11 @@ class Constant:
         # 同一回复内工具调用的并行 worker 上限（并行批次按此收敛，超出的调用排队执行）。
         MAX_PARALLEL_CALLS: int = 8
 
-        # 「子 Agent 不得使用」的工具名集合：委派与父子通信（``tool_handler/child_task/`` 全部
+        # 「子 Agent 不得使用」的工具名集合：委派与父子通信（``core/tool/child_agent/`` 全部
         # 工具）加可交互终端（``tool_handler/terminal_session/`` 全部工具）。子 Agent 仍能在 Task
         # schema 里看到它们，但会被写进 child Run 的 ``ban_tools``，使 bind_tools 结构与实际执行
         # 权限分离；这两个目录新增工具时必须同步登记。
-        # 名字取自 ``app.core.tools.schemas.tool_names``；本模块是叶子模块、不得 import 任何 ``app``
+        # 名字取自 ``app.core.tool.schemas.tool_names``；本模块是叶子模块、不得 import 任何 ``app``
         # 子模块，故按字面量展开（与 Run 状态等枚举值同一处理），漂移由 tests/ 下「child 工具下线
         # 契约」用例的不变式守住（非空、无重复、全为规范名、且每个名字在活注册表中真实存在）。
         # 该用例会扫描 app/ 源码里的旧工具名文本，本注释刻意不写出那个已下线工具的名字。

@@ -158,22 +158,6 @@ export type TransportError = {
   message: string;
 };
 
-/**
- * 命令被拒的原因（snapshot 顶层 `error`）：比 Run 错误多一个后端单调递增的 `seq`。
- * 命令没有回执，连续两次同样的拒绝值相同，前端按 `seq` 变化认出「又被拒了一次」。
- */
-export type TransportCommandError = TransportError & {
-  seq: number;
-};
-
-/** `next` 相对 `previous` 是一次新的命令拒绝（从无到有，或 `seq` 变了）。 */
-export function isNewCommandError(
-  previous: TransportCommandError | null,
-  next: TransportCommandError | null,
-): next is TransportCommandError {
-  return next !== null && (previous === null || previous.seq !== next.seq);
-}
-
 /** Run 生命周期状态：与后端 `ConversationRunStatus` 的五个值一一对应。 */
 export type TransportRunStatus = "running" | "suspended" | "completed" | "failed" | "cancelled";
 
@@ -265,7 +249,5 @@ export type TransportState = {
   messages: TransportMessage[];
   /** 最新 Run 的摘要；Task 尚无 Run 时为 null。 */
   activity: TransportActivity | null;
-  /** 只承载命令被拒（由后端调度 actor 写入与清空）；Run 自身的失败在 `activity.error` / `outcome.error`。 */
-  error: TransportCommandError | null;
   queued_messages?: TransportQueuedMessage[];
 };

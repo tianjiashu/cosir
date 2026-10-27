@@ -2,14 +2,13 @@
 
 这些运行期配置作为 ``Settings`` 类的类级静态属性存在，由 ``Settings.load`` 在进程启动时
 填充一次，之后所有模块通过 ``from app.config.settings import Settings`` 后静态读取
-（如 ``Settings.WEB_BACKEND``），配置对象不再被到处传递。
+（如 ``Settings.DEFAULT_LANGUAGE``），配置对象不再被到处传递。
 
 设计边界：
 - 本模块只承载**运行期可由环境变量 / ``.cosir/.env`` 覆盖**的进程级配置（默认回复语言、
   可观测性集成参数），以及需要保密的集成凭据。**环境变量名与类字段名
   完全同名**（如 ``DEFAULT_LANGUAGE``），不加应用前缀，避免两套命名漂移。模型相关配置不在
-  此处，统一收敛到 ``app.core.agents.model_settings``。Web provider 选择见下方
-  ``WEB_*_BACKEND`` 的说明：它们在当前实现下是固定值，不属于可覆盖配置。
+  此处，统一收敛到 ``app.core.agents.model_settings``。
 - **不可变、无需按环境覆盖的数值上限不在此处**：系统提示词预算、工具输出与并发上限、
   Web 限额、日志轮转等固定值统一收敛到 ``app.config.constant.Constant`` 的对应域；判定标准
   是「是否存在真实的按环境覆盖需求」，不是数值大小。
@@ -34,7 +33,7 @@ class Settings:
     """后端运行时配置（类级静态属性，进程级单例命名空间）。
 
     配置作为类级静态属性存在，由 ``Settings.load`` 在进程启动时填充一次，之后所有模块通过
-    ``Settings.WEB_BACKEND`` 等静态读取，不实例化、不传递 ``Settings`` 对象。
+    ``Settings.DEFAULT_LANGUAGE`` 等静态读取，不实例化、不传递 ``Settings`` 对象。
 
     职责边界：
         - 负责：进程级运行配置的定义、加载（含 ``.env`` 覆盖）与校验；测试临时改值由调用方
@@ -57,16 +56,6 @@ class Settings:
 
     # 主 Agent 的单轮执行预算：保存环境配置后会重载主 Agent profile，下一轮新 Run 使用新值。
     MAIN_AGENT_MAX_STEPS: ClassVar[int] = 300
-
-    # Web 工具 provider 选择：``WEB_BACKEND`` 是统一开关，两个 per-tool 变量用于按工具覆盖
-    # （空串表示不覆盖）。三者是**固定值**：不经环境变量覆盖，也不进配置中心白名单。
-    # 原因：当前内置 Web Provider 只有 ``firecrawl`` 一个实现（见 ``default_web_providers``），
-    # 留空即由 ``Constant.Web.LEGACY_PROVIDER_PRIORITY`` 命中它，显式赋值不会改变选择结果，
-    # 反而引入「填了未注册的名字 → 显式分支跳过回退 → 选不到 Provider」的失败路径。
-    # 接入第二个实现后如需开放，再恢复环境变量读取并加回配置中心白名单。
-    WEB_SEARCH_BACKEND: ClassVar[str] = ""
-    WEB_EXTRACT_BACKEND: ClassVar[str] = ""
-    WEB_BACKEND: ClassVar[str] = ""
 
     # 记录由系统配置文件注入的值，使配置中心能够与桌面宿主/启动器提供的进程环境区分。
     _LOADED_ENV_VALUES: ClassVar[dict[str, str]] = {}

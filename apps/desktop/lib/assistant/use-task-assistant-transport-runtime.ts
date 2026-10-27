@@ -6,7 +6,7 @@ import {
 import type { ReadonlyJSONValue } from "assistant-stream/utils";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 
-import type { TransportError, TransportRunStatus, TransportState } from "@/lib/assistant/contract";
+import type { TransportRunStatus, TransportState } from "@/lib/assistant/contract";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import {
   convertFrameStoreItem,
@@ -26,17 +26,16 @@ export type TaskAssistantTransportOptions = {
   baseUrl: string;
   headers: () => Promise<Record<string, string>> | Record<string, string>;
   /**
-   * 提交一条用户消息（`sourceId` 存在即编辑）。宿主负责请求体组装与端点选择；命令只投递，
-   * 结果经长订阅到达。返回 `awaitSnapshot`：为真时乐观消息保留到 snapshot 里出现对应消息（或
-   * 命令被拒）才清除；编辑排队消息原地更新、不产生新消息，返回 false 即清。只读 runtime 不提供。
+   * 提交一条用户消息（`sourceId` 存在即编辑）。宿主负责请求体组装与端点选择；后端处理完这一轮
+   * 才返回，被拒时抛错（乐观消息随即收回），输出经长订阅到达。返回 `awaitSnapshot`：为真时乐观
+   * 消息保留到 snapshot 里出现对应消息才清除；编辑排队消息原地更新、不产生新消息，返回 false 即清。
+   * 只读 runtime 不提供。
    */
   submitMessage?: (command: UserAddMessageCommand) => Promise<{ awaitSnapshot: boolean }>;
   /** 长订阅建立（attach 2xx）。 */
   onResponse?: (response: Response) => void;
   /** 一轮输出结束：当前活动从活动态进入终态（含重连 full 帧补发）；挂起不算。 */
   onActivitySettled?: (status: TransportRunStatus) => void;
-  /** 命令被调度 actor 拒绝：顶层 `error` 写入，乐观消息被收回，宿主据此恢复草稿。 */
-  onCommandRejected?: (error: TransportError, commands: readonly UserAddMessageCommand[]) => void;
   /**
    * 长订阅意外结束：长订阅只在客户端主动关闭、背压重同步或 Task 删除时结束，任何其他结束
    * （EOF、网络错误、attach 非 2xx）都应由宿主进入有限重连。主动关闭不回调。
@@ -59,7 +58,7 @@ export type TaskAssistantTransportOptions = {
  * 为单个 task 的 frame store 创建 assistant-ui external adapter。
  *
  * frame store 是唯一的流式投影持有者，长订阅与命令提交由 `TaskTransportSession` 承担；本 hook
- * 只做 React 装配：把 store 快照交给 assistant-ui、把活动跳变与命令被拒转给宿主回调。它不创建
+ * 只做 React 装配：把 store 快照交给 assistant-ui、把活动跳变转给宿主回调。它不创建
  * 业务持久化状态。
  */
 function useTaskAssistantTransportAdapter(
@@ -95,10 +94,6 @@ function useTaskAssistantTransportAdapter(
       activityStatus: transition.status,
     });
     optionsRef.current.onActivitySettled?.(transition.status);
-  }), [store]);
-
-  useEffect(() => store.subscribeRejection((commands, error) => {
-    optionsRef.current.onCommandRejected?.(error, commands);
   }), [store]);
 
   // 订阅归 runtime 所有：有订阅身份就打开，身份变化或卸载时关闭旧连接再按新身份打开。

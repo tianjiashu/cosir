@@ -5,9 +5,10 @@
 持久化消息的确认（删除外部队列行）与 context 写入同一事务提交，消息不会丢也不会并入两次；不读
 外部队列、不按模型截断、不持 Task 闸门。
 
-需要直接执行的用户决定优先级最高、每轮只取一条：工具声明 ``user_decision == "execute"`` 且用户
-批准时，确认并写下决定后绕过模型、直接执行原调用（先确认再执行：执行中途进程退出不会重复执行），其余消息
-留到执行完回到这里再写。其他决定（驳回、``reply`` 类工具的回答）只是普通消息，按 mailbox 的
+需要直接执行的用户决定优先级最高、每轮只取一条：工具声明 ``user_decision == "execute"`` 时，
+无论批准还是驳回，都确认并写下决定后绕过模型、直接执行原调用（先确认再执行：执行中途进程退出
+不会重复执行），其余消息留到执行完回到这里再写。驳回也要执行：工具得落定自己的事实（如 pending
+TeamRun），等待占位也只有执行结果能收尾。``reply`` 类工具的决定只是普通消息，按 mailbox 的
 优先级与时间线和其余消息一起交给模型。并入前不必先闭合工具协议：``load_message`` 发请求前会
 把被用户消息隔开的工具结果按调用恢复到合法顺序。
 """
@@ -81,12 +82,12 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
 
 
 def _executes_tool(message: TaskMessage) -> bool:
-    """这条消息是否是「批准后需要绕过模型直接执行」的决定；去向由工具声明，不看决定本身。"""
+    """这条消息是否是「需要绕过模型直接执行」的决定；去向由工具声明，不看批准还是驳回。"""
     if message.kind != "user_decision":
         return False
     body = cast(DecisionBody, message.body)
     definition = get_tool_registry().get_tool_definition(body.tool_name)
-    return body.approved and definition is not None and definition.user_decision == "execute"
+    return definition is not None and definition.user_decision == "execute"
 
 
 async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | None:
@@ -104,7 +105,7 @@ async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | No
         log.warning(
             "prepare_input_decision_call_missing",
             extra={
-                "msg": f"用户批准的工具调用已不在上下文中，只把决定交给模型，step_id={step_id}",
+                "msg": f"用户决定的工具调用已不在上下文中，只把决定交给模型，step_id={step_id}",
                 "data": {
                     "step_id": step_id,
                     "run_id": rc.run.id,
@@ -117,7 +118,7 @@ async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | No
     log.info(
         "prepare_input_decision_routed_to_tool",
         extra={
-            "msg": f"用户批准，绕过模型直接执行原调用，step_id={step_id}",
+            "msg": f"用户已决定，绕过模型直接执行原调用，step_id={step_id}",
             "data": {
                 "step_id": step_id,
                 "run_id": rc.run.id,

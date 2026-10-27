@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from typing_extensions import TypedDict
 
 from app.models.conversation_run_options import ConversationRunOptions
-from app.models.conversation_run_progress import ConversationRunProgress
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.conversation_run_usage import ConversationRunUsage
 from app.utils.datetime_utils import from_text, to_text
 
@@ -27,7 +27,6 @@ class ConversationRunError(TypedDict):
 
     ``code`` 是内部稳定失败类别；``message`` 默认来自受控文案目录，模型 HTTP 错误时可以
     直接承载响应体中的 ``message`` 字段供 UI 展示。完整响应体和请求内容不进入此契约。
-    ``retryable`` 只属于工具观察（``ToolObservation.retryable``），Run 级错误不包含该字段。
     """
 
     code: str
@@ -43,7 +42,7 @@ class ConversationRunRecord:
     status: str
     created_at: datetime
     updated_at: datetime
-    execution_data: ConversationRunProgress = field(default_factory=ConversationRunProgress)
+    execution_data: ReactExecutionState = field(default_factory=ReactExecutionState)
     end_reason: str | None = None
     final_output: str | None = None
     agent_id: str | None = None
@@ -96,7 +95,7 @@ class ConversationRunRecord:
         return cls(
             id=row.id,
             task_id=row.task_id,
-            execution_data=ConversationRunProgress.model_validate(row.execution_data),
+            execution_data=ReactExecutionState.model_validate(row.execution_data),
             status=row.status,
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),

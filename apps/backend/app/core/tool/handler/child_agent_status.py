@@ -84,36 +84,28 @@ class ChildAgentStatusTool(HandlerBase):
         except KeyError:
             return tool_error(
                 self.name,
-                f"child task not found: {child_task_id}",
-                reason=(
-                    "verify child_task_id against the value returned by "
-                    "delegate_task; this task does not exist."
-                ),
-                retryable=False,
+                f"child task not found: {child_task_id}. "
+                "Verify child_task_id against the value returned by "
+                "delegate_task; this task does not exist.",
             )
 
         if not child_task.is_child or child_task.parent_task_id != execution_context.task_id:
             return tool_error(
                 tool_name=self.name,
-                error="child_task_not_delegated_by_caller",
-                reason=(
+                content=(
                     "child_task_id does not refer to a child task delegated by this task; "
                     "use the child_task_id returned by delegate_task, or "
                     "delegate the subtask first and retry with the corrected child_task_id."
                 ),
-                retryable=True,
             )
         try:
             run = self._ledger.get_run(child_task.current_run_id)
         except KeyError:
             return tool_error(
                 self.name,
-                f"child task {child_task_id} has no run",
-                reason=(
-                    "the child task points at a run that no longer exists; re-delegate the "
-                    "work instead of retrying this read."
-                ),
-                retryable=False,
+                f"child task {child_task_id} has no run. "
+                "The child task points at a run that no longer exists; re-delegate the "
+                "work instead of retrying this read.",
             )
 
         return tool_success(

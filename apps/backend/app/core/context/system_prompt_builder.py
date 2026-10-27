@@ -233,7 +233,7 @@ class SystemPromptBuilder:
         if TOOL_AGENT_TEAM in available_tool_names:
             # 函数内延迟导入：与 agent 注册表同理，避免在 ``app.core.context``
             # 顶层形成反向循环导入。
-            from app.service.agent_team.registry import get_agent_team_registry
+            from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 
             team_summary = get_agent_team_registry().team_summary(workspace_root).strip()
             if team_summary:

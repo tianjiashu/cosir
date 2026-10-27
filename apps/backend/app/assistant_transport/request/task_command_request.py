@@ -14,7 +14,7 @@ from app.assistant_transport.request.part import AssistantImagePart, AssistantTe
 from app.config.constant import Constant
 from app.models import ConversationRunAttachmentInput, ConversationRunCommand
 from app.models.conversation_run_options import ReasoningEffort
-from app.models.task_message import Delivery
+from app.core.workflow.inbox.task_message import Delivery
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 
 
@@ -43,7 +43,9 @@ def _ordered_display_text(parts: Sequence[AssistantTextPart | AssistantImagePart
     return "\n".join(segments)
 
 
-class _UserMessageRequest(BaseModel):
+class _MessageCommandRequest(BaseModel):
+    """消息命令：把 wire 消息映射成 Run 命令；发起配置由需要开 Run 的子类补充。"""
+
     model_config = ConfigDict(extra="forbid")
 
     message: AssistantUserMessage
@@ -77,8 +79,8 @@ class _UserMessageRequest(BaseModel):
         )
 
 
-class _MessageCommandRequest(_UserMessageRequest):
-    """会开出或并入 Run 的消息命令：携带发起配置。"""
+class _LaunchCommandRequest(_MessageCommandRequest):
+    """会开出或并入 Run 的消息命令：附带发起配置。"""
 
     # 模型名由后端配置事实读取，请求只携带配置身份。
     modelConfigId: int = Field(ge=1)
@@ -98,26 +100,26 @@ class _MessageCommandRequest(_UserMessageRequest):
         return self._run_command(ban_tools=list(self.banTools))
 
 
-class SendMessageRequest(_MessageCommandRequest):
+class SendMessageRequest(_LaunchCommandRequest):
     """发送消息；``delivery`` 只在 Task 有活动 Run 时生效（立即并入 / 交给下一个 Run）。"""
 
     delivery: Delivery = "immediate"
 
 
-class EditQueuedMessageRequest(_UserMessageRequest):
+class EditQueuedMessageRequest(_MessageCommandRequest):
     """原地编辑一条排队中（未并入）的用户消息：只带新正文与附件。
 
     发起配置（模型、推理强度、禁用工具）在发送那一刻已定，编辑沿用，因此请求里没有这些字段。
     """
 
 
-class RerunMessageRequest(_MessageCommandRequest):
+class RerunMessageRequest(_LaunchCommandRequest):
     """编辑最新一条已并入的用户消息并重跑：按本次请求的配置开新 Run。"""
 
 
 class TeamDecisionRequest(BaseModel):
     """对一个待确认 Agent Team 方案作出决定；``data`` 的形状由决定种类定义（批准：最终运行输入，
-    驳回：``feedback``），在 ``AgentTeamDecisionService`` 边界校验。"""
+    驳回：``feedback``），在 ``AgentTeamDecisionService`` 入队边界校验。"""
 
     model_config = ConfigDict(extra="forbid")
 

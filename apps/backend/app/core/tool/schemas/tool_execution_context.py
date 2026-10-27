@@ -31,8 +31,8 @@ class ToolExecutionContext:
         event_sink: 本次 Run 的执行事件回调；进程工具的实时输出经它投递。
         tool_call_id: 单次调用身份，构造时取自该调用；每个调用各一份上下文，
             同批调用不共享。
-        user_decision: ``ToolDefinition.user_decision == "execute"`` 的工具被批准后再次执行时携带的
-            用户决定；首次调用为 ``None``。handler 只有一个入口，按它区分「登记待决」与「按决定
+        user_decision: ``ToolDefinition.user_decision == "execute"`` 的工具在用户决定后（批准或驳回）
+            再次执行时携带的用户决定；首次调用为 ``None``。handler 只有一个入口，按它区分「登记待决」与「按决定
             执行」。
     """
 

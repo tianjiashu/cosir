@@ -11,7 +11,6 @@ import type { ReadonlyJSONObject } from "assistant-stream/utils";
 
 import type {
   TransportActivity,
-  TransportError,
   TransportImagePart,
   TransportMessage,
   TransportMessagePart,
@@ -567,21 +566,4 @@ export function extractUserAddMessageAttachments(command: unknown): CreateAttach
     return attachment ? [attachment] : [];
   });
   return [...attachments, ...localFiles];
-}
-
-export function toSnapshotErrorMessage(error: TransportError): ThreadAssistantMessage {
-  return {
-    id: "snapshot-error",
-    role: "assistant",
-    content: [],
-    status: { type: "incomplete", reason: "error", error: error.message },
-    createdAt: new Date(),
-    metadata: {
-      unstable_state: null,
-      unstable_annotations: [],
-      unstable_data: [],
-      steps: [],
-      custom: {},
-    },
-  };
 }

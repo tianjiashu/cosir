@@ -23,7 +23,7 @@ async function fixture(page: Page, request: APIRequestContext) {
   for (const [id, workspace] of [[100, 7], [101, 7], [200, 8], [999, 8], [998, 7]]) {
     await page.route(`${origin}/tasks/${id}`, route => route.fulfill({ json: task(id, workspace) }));
     // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
-    await seedState(request, id, { messages: [], activity: null, error: null });
+    await seedState(request, id, { messages: [], activity: null });
   }
 }
 

@@ -63,9 +63,8 @@ class MCPTool(HandlerBase):
         except MCPConfigurationError as exc:
             return tool_error(
                 self.name,
-                str(exc),
-                reason="Fix the local MCP config file, then retry.",
-                retryable=False,
+                f"{exc}. "
+                "Fix the local MCP config file, then retry.",
             )
 
         if action == "list":
@@ -75,9 +74,8 @@ class MCPTool(HandlerBase):
             if server_name is not None and not selected:
                 return tool_error(
                     self.name,
-                    f"Enabled MCP server not found: {server_name}",
-                    reason="Use action='list' to see available servers.",
-                    retryable=False,
+                    f"Enabled MCP server not found: {server_name}. "
+                    "Use action='list' to see available servers.",
                 )
             catalog: list[dict[str, Any]] = []
             for server in selected:
@@ -106,17 +104,15 @@ class MCPTool(HandlerBase):
         if server_name is None or tool_name is None:
             return tool_error(
                 self.name,
-                "MCP call requires server_name and tool_name.",
-                reason="Use action='list' to see servers and tools, then supply both names.",
-                retryable=False,
+                "MCP call requires server_name and tool_name. "
+                "Use action='list' to see servers and tools, then supply both names.",
             )
         server = next((item for item in servers if item.name == server_name), None)
         if server is None:
             return tool_error(
                 self.name,
-                f"Enabled MCP server not found: {server_name}",
-                reason="Use action='list' to see available servers.",
-                retryable=False,
+                f"Enabled MCP server not found: {server_name}. "
+                "Use action='list' to see available servers.",
             )
 
         try:
@@ -124,16 +120,14 @@ class MCPTool(HandlerBase):
         except MCPToolNotFoundError as exc:
             return tool_error(
                 self.name,
-                str(exc),
-                reason="重新列出该服务的工具，并使用有效工具名。",
-                retryable=True,
+                f"{exc}. "
+                "重新列出该服务的工具，并使用有效工具名。",
             )
         except MCPToolCallError as exc:
             return tool_error(
                 self.name,
-                str(exc) or "MCP server reported a tool call failure.",
-                reason="检查参数和 MCP 服务返回后决定是否重试。",
-                retryable=True,
+                f"{str(exc) or 'MCP server reported a tool call failure.'}. "
+                "检查参数和 MCP 服务返回后决定是否重试。",
             )
         except Exception as exc:
             log.error(
@@ -149,9 +143,8 @@ class MCPTool(HandlerBase):
             )
             return tool_error(
                 self.name,
-                f"MCP call failed: {type(exc).__name__}",
-                reason="Check server status, tool name, and arguments, then retry.",
-                retryable=True,
+                f"MCP call failed: {type(exc).__name__}. "
+                "Check server status, tool name, and arguments, then retry.",
             )
 
         return tool_success(

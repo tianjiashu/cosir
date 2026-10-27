@@ -21,7 +21,7 @@ from app.config.logging.logger import log
 from app.config.logging.process_bridge import get_log_queue
 from app.core.tool.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tool.results.tool_cancelled import tool_cancelled
-from app.core.tool.results.tool_error import handler_exception_reason, tool_error
+from app.core.tool.results.tool_error import tool_error
 from app.core.tool.execute.tool_output_channel import create_process_output_channel
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.execute.windows_job_object import (
@@ -136,15 +136,11 @@ class ToolHandlerRunner:
                 output_channel.finish()
             return tool_error(
                 tool.name,
-                str(exc),
-                reason=(
-                    f"the tool process could not be started: {exc}; this indicates "
-                    f"an environment/runtime problem (e.g. cannot spawn a process), "
-                    f"not a problem with the arguments. Fix the execution environment "
-                    f"before retrying; the same call will keep failing until the "
-                    f"environment is repaired."
-                ),
-                retryable=False,
+                f"the tool process could not be started: {exc}. This indicates "
+                f"an environment/runtime problem (e.g. cannot spawn a process), "
+                f"not a problem with the arguments. Fix the execution environment "
+                f"before retrying; the same call will keep failing until the "
+                f"environment is repaired.",
                 tool_call_id=tool_call_id,
             )
 
@@ -174,14 +170,10 @@ class ToolHandlerRunner:
             )
             return tool_error(
                 tool.name,
-                f"tool timed out after {tool.timeout_seconds} seconds",
-                reason=(
-                    f"the tool timed out after {tool.timeout_seconds} seconds; this "
-                    f"may be transient (e.g. heavy load or a slow external call), so "
-                    f"retrying the same call may succeed. If it keeps timing out, "
-                    f"simplify the task or increase the tool's timeout_seconds."
-                ),
-                retryable=True,
+                f"tool timed out after {tool.timeout_seconds} seconds. This "
+                f"may be transient (e.g. heavy load or a slow external call), so "
+                f"retrying the same call may succeed. If it keeps timing out, "
+                f"simplify the task or increase the tool's timeout_seconds.",
                 tool_call_id=tool_call_id,
             )
         except (OSError, EOFError) as exc:
@@ -200,11 +192,9 @@ class ToolHandlerRunner:
             )
             return tool_error(
                 tool.name,
-                f"tool process communication failed: {exc}",
-                reason=handler_exception_reason(
-                    f"the tool process crashed or its communication pipe broke: {exc}"
-                ),
-                retryable=False,
+                f"the tool process crashed or its communication pipe broke: {exc}. "
+                "Inspect the underlying tool failure and change the plan before calling the "
+                "tool again.",
                 tool_call_id=tool_call_id,
             )
         finally:
@@ -227,11 +217,9 @@ class ToolHandlerRunner:
             )
             return tool_error(
                 tool.name,
-                payload["message"],
-                reason=handler_exception_reason(
-                    f"the tool handler raised an exception: {payload['message']}"
-                ),
-                retryable=False,
+                f"the tool handler raised an exception: {payload['message']}. "
+                "Inspect the underlying tool failure and change the plan before calling the "
+                "tool again.",
                 tool_call_id=tool_call_id,
             )
 
@@ -378,9 +366,9 @@ class ToolHandlerRunner:
             )
             return tool_error(
                 tool.name,
-                str(exc),
-                reason=handler_exception_reason(f"the tool handler raised an exception: {exc}"),
-                retryable=False,
+                f"the tool handler raised an exception: {exc}. "
+                "Inspect the underlying tool failure and change the plan before calling the "
+                "tool again.",
                 tool_call_id=execution_context.tool_call_id,
             )
         # handler 已跑完即保留真实结果：副作用已经发生，改判为取消会让模型误以为操作未执行；

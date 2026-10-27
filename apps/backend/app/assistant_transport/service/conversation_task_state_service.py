@@ -10,6 +10,7 @@ from threading import RLock
 from typing import Any, ClassVar, cast
 
 from app.assistant_transport.projection.event_projection import plan_event
+from app.assistant_transport.projection.snapshot_navigation import iter_parts
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
@@ -21,14 +22,15 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     validate_snapshot,
 )
+from app.assistant_transport.state.message_identity import user_message_id
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
 from app.core.events import WorkflowEvent
 from app.models.message_metadata import ToolMessageMetadata
-from app.models.task_message import UserInputBody
-from app.service.terminal.terminal_session_service import TerminalSessionService
-from app.service.terminal.terminal_session_status import TerminalSessionStatusChange
+from app.core.workflow.inbox.task_message import UserInputBody
+from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
+from app.tools.terminal_runtime.terminal_session_status import TerminalSessionStatusChange
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 _CHILD_RUN_STATUSES = frozenset({"pending", "running", "completed", "failed", "cancelled"})
@@ -102,31 +104,6 @@ class ConversationTaskStateService:
             validate_snapshot(state)
             return state
 
-    def refresh_queued_inputs(self, task_id: int) -> ConversationStateSnapshot:
-        """inbox 提交后只更新排队消息，保留正在投影的正文和工具生命周期。
-
-        流式 context 已持久化的 SDK 快照可能领先于尚未发出的 Transport delta；
-        此时全量重建会提前展示正文，再追加重复 delta。队列变更不应替换输出部分。
-        """
-        with self._lock:
-            self._ensure_not_deleted(task_id)
-            space = task_runtime_spaces.get_or_create(task_id)
-            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            mutation = ConversationStateMutation(
-                "set", ("queued_messages",), self._queued_messages(task_id)
-            )
-            _apply_mutation(state, mutation)
-            self._publish(
-                TransportFrame(
-                    task_id=task_id,
-                    kind="mutation",
-                    mutations=(mutation,),
-                    current_run_id=state["current_run_id"],
-                    current_run_status=_current_run_status(state),
-                )
-            )
-            return copy.deepcopy(state)
-
     @staticmethod
     def _queued_messages(task_id: int) -> list[ConversationQueuedMessage]:
         from app.service.depends import get_task_message_queue
@@ -134,12 +111,14 @@ class ConversationTaskStateService:
         # 投影只看消息属性；目前需投影的只有用户输入，其它 kind 有可投影形态时在这里加渲染。
         return [
             ConversationQueuedMessage(
-                **ConversationTaskStateRebuilder.build_user_message(
-                    str(item.id), item.body.message.presentation()
+                id=user_message_id(cast(int, item.id)),
+                role="user",
+                parts=ConversationTaskStateRebuilder.build_user_parts(
+                    item.body.presentation()
                 ),
                 delivery=item.delivery,
             )
-            for item in get_task_message_queue().pending(task_id)
+            for item in get_task_message_queue().pending_nowait(task_id)
             if item.project_to_transport and isinstance(item.body, UserInputBody)
         ]
 
@@ -173,7 +152,8 @@ class ConversationTaskStateService:
 
         with self._lock:
             self._ensure_not_deleted(task_id)
-            task_runtime_spaces.get_or_create(task_id).unload_snapshot()
+            space = task_runtime_spaces.get_or_create(task_id)
+            space.unload_snapshot()
             return self.get_state(task_id)
 
     def apply_planned(self, event: WorkflowEvent) -> TransportFrame:
@@ -216,9 +196,6 @@ class ConversationTaskStateService:
                 task_id=task_id,
                 kind="mutation",
                 mutations=tuple(mutations),
-                source_run_id=getattr(event, "run_id", None),
-                current_run_id=state["current_run_id"],
-                current_run_status=_current_run_status(state),
             )
             if mutations:
                 self._publish(change)
@@ -239,8 +216,6 @@ class ConversationTaskStateService:
             kind="full",
             state=copied_state,
             mutations=mutations or (),
-            current_run_id=copied_state["current_run_id"],
-            current_run_status=_current_run_status(copied_state),
         )
         with self._lock:
             self._ensure_not_deleted(task_id)
@@ -264,8 +239,6 @@ class ConversationTaskStateService:
                     kind="full",
                     state=initial,
                     mutations=(),
-                    current_run_id=initial["current_run_id"],
-                    current_run_status=_current_run_status(initial),
                 )
             except Exception:
                 self._subscribers[task_id].discard(subscriber)
@@ -375,8 +348,10 @@ class ConversationTaskStateService:
                 "msg": "conversation state rebuilt from canonical records",
                 "data": {
                     "task_id": task_id,
-                    "run_count": len(state["runs"]),
-                    "message_count": sum(len(run["messages"]) for run in state["runs"]),
+                    "message_count": len(state["messages"]),
+                    "activity_run_id": (
+                        state["activity"]["runId"] if state["activity"] is not None else None
+                    ),
                 },
             },
         )
@@ -429,31 +404,17 @@ class ConversationTaskStateService:
                 return None
 
             mutations: list[ConversationStateMutation] = []
-            for run_index, run in enumerate(state["runs"]):
-                for message_index, message in enumerate(run["messages"]):
-                    for part_index, part in enumerate(message["parts"]):
-                        if not isinstance(part, dict) or part.get("type") != "tool-call":
-                            continue
-                        display = part.get("display_data")
-                        if not _matches_dynamic_child_display(display, child_task_id):
-                            continue
-                        updated_display = dict(display)
-                        updated_display["status"] = status
-                        mutations.append(
-                            ConversationStateMutation(
-                                "set",
-                                (
-                                    "runs",
-                                    run_index,
-                                    "messages",
-                                    message_index,
-                                    "parts",
-                                    part_index,
-                                    "display_data",
-                                ),
-                                updated_display,
-                            )
-                        )
+            for path, part in iter_parts(state):
+                if not isinstance(part, dict) or part.get("type") != "tool-call":
+                    continue
+                display = part.get("display_data")
+                if not _matches_dynamic_child_display(display, child_task_id):
+                    continue
+                updated_display = dict(display)
+                updated_display["status"] = status
+                mutations.append(
+                    ConversationStateMutation("set", (*path, "display_data"), updated_display)
+                )
             if not mutations:
                 return None
             for mutation in mutations:
@@ -482,35 +443,18 @@ class ConversationTaskStateService:
                 return None
 
             mutations: list[ConversationStateMutation] = []
-            for run_index, run in enumerate(state["runs"]):
-                for message_index, message in enumerate(run["messages"]):
-                    for part_index, part in enumerate(message["parts"]):
-                        if not isinstance(part, dict):
-                            continue
-                        display = part.get("display_data")
-                        if not _matches_terminal_session_display(
-                            display,
-                            change.session_id,
-                        ):
-                            continue
-                        updated_display = _updated_terminal_display(display, change)
-                        if updated_display == display:
-                            continue
-                        mutations.append(
-                            ConversationStateMutation(
-                                "set",
-                                (
-                                    "runs",
-                                    run_index,
-                                    "messages",
-                                    message_index,
-                                    "parts",
-                                    part_index,
-                                    "display_data",
-                                ),
-                                updated_display,
-                            )
-                        )
+            for path, part in iter_parts(state):
+                if not isinstance(part, dict):
+                    continue
+                display = part.get("display_data")
+                if not _matches_terminal_session_display(display, change.session_id):
+                    continue
+                updated_display = _updated_terminal_display(display, change)
+                if updated_display == display:
+                    continue
+                mutations.append(
+                    ConversationStateMutation("set", (*path, "display_data"), updated_display)
+                )
             if not mutations:
                 return None
             for mutation in mutations:
@@ -533,54 +477,34 @@ class ConversationTaskStateService:
             return []
 
         mutations: list[ConversationStateMutation] = []
-        for run_index, run in enumerate(state["runs"]):
-            for message_index, message in enumerate(run["messages"]):
-                for part_index, part in enumerate(message["parts"]):
-                    if not isinstance(part, dict):
-                        continue
-                    display = part.get("display_data")
-                    if not _is_active_terminal_display(display):
-                        continue
-                    session_id = display.get("session_id")
-                    if not isinstance(session_id, str) or not session_id:
-                        continue
-                    change = source.get_status_change(
-                        session_id,
-                        task_id=parent_task_id or 0,
-                    )
-                    if change is None:
-                        change = TerminalSessionStatusChange(
-                            task_id=parent_task_id or 0,
-                            session_id=session_id,
-                            generation="",
-                            status="closed",
-                            end_reason="backend_restarted",
-                            exit_code=None,
-                        )
-                    self._validate_terminal_status(change.status)
-                    updated_display = _updated_terminal_display(display, change)
-                    if updated_display == display:
-                        continue
-                    mutation = ConversationStateMutation(
-                        "set",
-                        (
-                            "runs",
-                            run_index,
-                            "messages",
-                            message_index,
-                            "parts",
-                            part_index,
-                            "display_data",
-                        ),
-                        updated_display,
-                    )
-                    _apply_mutation(state, mutation)
-                    mutations.append(mutation)
-                    if persist and parent_task_id is not None:
-                        self._persist_terminal_session_display(
-                            change,
-                            task_id=parent_task_id,
-                        )
+        for path, part in list(iter_parts(state)):
+            if not isinstance(part, dict):
+                continue
+            display = part.get("display_data")
+            if not _is_active_terminal_display(display):
+                continue
+            session_id = display.get("session_id")
+            if not isinstance(session_id, str) or not session_id:
+                continue
+            change = source.get_status_change(session_id, task_id=parent_task_id or 0)
+            if change is None:
+                change = TerminalSessionStatusChange(
+                    task_id=parent_task_id or 0,
+                    session_id=session_id,
+                    generation="",
+                    status="closed",
+                    end_reason="backend_restarted",
+                    exit_code=None,
+                )
+            self._validate_terminal_status(change.status)
+            updated_display = _updated_terminal_display(display, change)
+            if updated_display == display:
+                continue
+            mutation = ConversationStateMutation("set", (*path, "display_data"), updated_display)
+            _apply_mutation(state, mutation)
+            mutations.append(mutation)
+            if persist and parent_task_id is not None:
+                self._persist_terminal_session_display(change, task_id=parent_task_id)
         return mutations
 
     def _persist_terminal_session_display(
@@ -668,17 +592,15 @@ class ConversationTaskStateService:
             raise ValueError("parent_task_id is required when persisting child status")
 
         child_task_ids: set[int] = set()
-        for run in state["runs"]:
-            for message in run["messages"]:
-                for part in message["parts"]:
-                    if not isinstance(part, dict):
-                        continue
-                    display = part.get("display_data")
-                    if not _is_dynamic_child_display(display):
-                        continue
-                    child_task_id = cast(dict[str, object], display).get("child_task_id")
-                    if _is_positive_int(child_task_id):
-                        child_task_ids.add(cast(int, child_task_id))
+        for _, part in iter_parts(state):
+            if not isinstance(part, dict):
+                continue
+            display = part.get("display_data")
+            if not _is_dynamic_child_display(display):
+                continue
+            child_task_id = cast(dict[str, object], display).get("child_task_id")
+            if _is_positive_int(child_task_id):
+                child_task_ids.add(cast(int, child_task_id))
 
         # 卡片展示子 Task 最新 Run 的状态：按 Task 的当前 Run 指针取，不跟踪委派时的那条 Run。
         statuses_by_task: dict[int, str] = {}
@@ -696,38 +618,24 @@ class ConversationTaskStateService:
 
         mutations: list[ConversationStateMutation] = []
         changed: dict[int, str] = {}
-        for run_index, run in enumerate(state["runs"]):
-            for message_index, message in enumerate(run["messages"]):
-                for part_index, part in enumerate(message["parts"]):
-                    if not isinstance(part, dict):
-                        continue
-                    display = part.get("display_data")
-                    if not isinstance(display, dict) or not _is_dynamic_child_display(display):
-                        continue
-                    child_task_id = display.get("child_task_id")
-                    if not _is_positive_int(child_task_id):
-                        continue
-                    status = statuses_by_task.get(child_task_id)
-                    if status is None or display.get("status") == status:
-                        continue
-                    updated_display = dict(display)
-                    updated_display["status"] = status
-                    mutation = ConversationStateMutation(
-                        "set",
-                        (
-                            "runs",
-                            run_index,
-                            "messages",
-                            message_index,
-                            "parts",
-                            part_index,
-                            "display_data",
-                        ),
-                        updated_display,
-                    )
-                    _apply_mutation(state, mutation)
-                    mutations.append(mutation)
-                    changed[child_task_id] = status
+        for path, part in list(iter_parts(state)):
+            if not isinstance(part, dict):
+                continue
+            display = part.get("display_data")
+            if not isinstance(display, dict) or not _is_dynamic_child_display(display):
+                continue
+            child_task_id = display.get("child_task_id")
+            if not _is_positive_int(child_task_id):
+                continue
+            status = statuses_by_task.get(child_task_id)
+            if status is None or display.get("status") == status:
+                continue
+            updated_display = dict(display)
+            updated_display["status"] = status
+            mutation = ConversationStateMutation("set", (*path, "display_data"), updated_display)
+            _apply_mutation(state, mutation)
+            mutations.append(mutation)
+            changed[child_task_id] = status
         if persist and parent_task_id is not None:
             # 持久化按子 Task 一次写完它的全部卡片，同一子任务的多张卡片不重复写。
             for child_task_id, status in changed.items():
@@ -887,18 +795,6 @@ def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStat
     if not isinstance(current, str):
         raise TypeError("append-text target must be a string")
     parent[key] = current + mutation.value
-
-
-def _current_run_status(state: ConversationStateSnapshot) -> str | None:
-    """在不做完整投影的前提下，返回当前 run 状态用于连接诊断。"""
-
-    current_id = state["current_run_id"]
-    if current_id is None:
-        return None
-    for run in state["runs"]:
-        if run["runId"] == current_id:
-            return run["status"]
-    return None
 
 
 def _requires_full_snapshot_validation(

@@ -17,7 +17,7 @@ from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.models.conversation_run_options import ReasoningEffort
 from app.models.model_config_record import ModelConfigRecord
-from app.service.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY, build_node_profile
+from app.core.tool.handler.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY, build_node_profile
 from app.service.depends import get_model_config_service
 
 

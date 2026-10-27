@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.tools.policy.terminal_denylist_contract import (
+from app.tools.policy.terminal_denylist_contract import (
     MAX_TERMINAL_DENY_PATTERN_LENGTH,
     MAX_TERMINAL_DENY_PATTERNS,
 )

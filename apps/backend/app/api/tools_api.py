@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from app.app import app
 from app.config.configuration import get_agent_registry, get_tool_registry
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.tools.tool_grouping import DEFAULT_TOOL_GROUP
+from app.core.tool.tool_grouping import DEFAULT_TOOL_GROUP
 
 
 @app.get("/tools/groups")

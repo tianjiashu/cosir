@@ -10,7 +10,7 @@ def install_transport_request_error_handler(app: FastAPI) -> None:
     """注册 ``TransportRequestError`` 全局异常处理器，映射为统一错误体。
 
     把请求模型在解析阶段抛出的纯 wire 契约校验异常，转换为与
-    ``transport_assistant_service._raise_transport_error`` 完全相同的
+    ``assistant_api._raise_transport_error`` 完全相同的
     ``{error:{code,message,retryable}}`` 形状，使前端 HTTP 错误契约
     （``lib/http/errors.ts`` 的 ``StructuredHttpError``）零改动；同时复用
     自定义 ``status_code``，不会退化成 Pydantic 422（422 会破坏前端 frame transport

@@ -18,12 +18,12 @@ from app.api.schemas.response.SkillInfoResponse import SkillInfoResponse
 from app.app import app
 from app.service.configuration.mcp_configuration_service import MCPConfigurationService
 from app.service.configuration.skill_configuration_service import SkillConfigurationService
-from app.service.mcp.mcp_client import (
+from app.core.tool.handler.mcp.mcp_client import (
     MCPConfiguration,
     MCPServerConfig,
     server_connection_fingerprint,
 )
-from app.service.skills.skill_catalog import SkillInfo
+from app.core.tool.handler.skill.skill_catalog import SkillInfo
 
 
 @app.get("/configuration/mcp-servers", response_model=MCPServersResponse)

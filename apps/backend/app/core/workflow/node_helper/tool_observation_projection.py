@@ -131,7 +131,12 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
         },
     )
     if not written.hidden:
-        emit(event)
+        # 卡片按实际写入的 metadata 渲染：结果没带展示数据时沿用了占位的。
+        emit(
+            event.model_copy(
+                update={"display_data": written.display_data, "team_run_id": written.team_run_id}
+            )
+        )
 
 
 def to_tool_model_message(observation: ToolObservation) -> ChatCompletionToolMessageParam:

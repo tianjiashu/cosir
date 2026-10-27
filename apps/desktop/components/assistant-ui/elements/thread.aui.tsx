@@ -346,8 +346,6 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   );
   const { cancelling = false, onResumeBusiness, onCancelRequested, onCancelResult } = useContext(ThreadContext);
   const canResume = useAuiState((state) => canResumeStoppedRun(readRuntimeTransportState(state.thread.state)));
-  // 命令被拒只写进 snapshot 顶层 `error`（恢复不产生乐观消息，宿主收不到被拒通知），这里按 `seq` 认出新的拒绝。
-  const commandErrorSeq = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.error?.seq ?? null);
   const isCancelling = cancelling;
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
   const [resuming, setResuming] = useState(false);
@@ -356,8 +354,6 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
   const [delivery, setDelivery] = useState<InputDelivery>(readStoredInputDelivery);
   // toast「重试」持有旧闭包：用 ref 读取当下是否仍可继续、是否已有请求在途，避免重复 business resume。
   const resumingRef = useRef(false);
-  // 点击「继续运行」时的命令错误 `seq`：之后出现不同的 `seq` 就是这次恢复被拒。
-  const resumeErrorSeqRef = useRef<number | null>(null);
   const actionRef = useRef(action);
   actionRef.current = action;
 
@@ -374,16 +370,6 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
       setResumeError(null);
     }
   }, [canResume, isRunning]);
-
-  useEffect(() => {
-    if (!resuming || commandErrorSeq === null || commandErrorSeq === resumeErrorSeqRef.current) return;
-    // 拒绝原因已在对话区显示，这里只复位按钮，不再重复提示。
-    resumingRef.current = false;
-    setResuming(false);
-    void frontendLog("INFO", "composer_resume_rejected", "继续运行被调度拒绝，按钮已复位", {
-      data: { taskId, commandErrorSeq },
-    });
-  }, [commandErrorSeq, resuming, taskId]);
 
   useEffect(() => {
     if (!resuming) return;
@@ -412,7 +398,6 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
     const resume = async () => {
       if (resumingRef.current || actionRef.current !== "resume") return;
       resumingRef.current = true;
-      resumeErrorSeqRef.current = commandErrorSeq;
       setResuming(true);
       setResumeError(null);
       try {

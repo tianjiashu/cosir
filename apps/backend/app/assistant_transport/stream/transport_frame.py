@@ -29,9 +29,6 @@ class TransportFrame:
     kind: FrameKind
     mutations: tuple[ConversationStateMutation, ...]
     state: ConversationStateSnapshot | None = None
-    source_run_id: int | None = None
-    current_run_id: int | None = None
-    current_run_status: str | None = None
     resync_reason: str | None = None
 
 

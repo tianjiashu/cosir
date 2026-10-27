@@ -13,7 +13,7 @@ import json
 from collections.abc import Sequence
 from datetime import datetime
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from openai.types.chat import ChatCompletionContentPartParam, ChatCompletionUserMessageParam, \
     ChatCompletionContentPartTextParam, ChatCompletionContentPartImageParam
@@ -117,9 +117,14 @@ class NoticeBody(BaseModel):
 class DecisionBody(BaseModel):
     """用户对一次等待决定的工具调用（HITL）作出的决定。
 
-    批准时 ``prepare_input`` 绕过模型、直接执行 ``tool_call_id`` 对应的原调用（参数从 context 里的
-    原调用取，不随消息保存）；驳回时作为一条决定消息交给模型。一轮只处理一条决定，且先于其他消息
-    处理。用户主动作出的决定可以唤醒挂起的 Run，也能在 Run 已完成、取消或失败后开出新 Run。
+    去向由工具声明（``ToolDefinition.user_decision``），不看决定本身：``execute`` 类工具无论批准还是
+    驳回，``prepare_input`` 都绕过模型、带着决定直接执行 ``tool_call_id`` 对应的原调用（参数从
+    context 里的原调用取，不随消息保存）——驳回同样要落定工具自己的事实，也只有执行结果能让等待
+    占位收尾；``reply`` 类工具的决定作为消息交给模型。一轮只处理一条需要执行的决定，且先于其他
+    消息处理。用户主动作出的决定可以唤醒挂起的 Run，也能在 Run 已完成、取消或失败后开出新 Run。
+
+    ``data`` 是工具自定义的决定载荷（如 Agent Team 批准时编辑过的方案），形状由工具在入队边界
+    校验、执行时消费；不进模型正文。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -131,6 +136,7 @@ class DecisionBody(BaseModel):
     tool_name: str
     decision: Literal["approve", "reject"]
     feedback: str | None = None
+    data: dict[str, Any] | None = None
 
     @property
     def approved(self) -> bool:
@@ -152,10 +158,12 @@ class DecisionBody(BaseModel):
 
 
 class BackgroundResultBody(BaseModel):
-    """委派出去的子 Agent 一次 Run 的结论；唤醒挂起的父 Agent，父 Run 已完成时也唤醒。
+    """后台工作的结论：委派子 Agent 一次 Run 的终态，或用户批准后在后台运行的 Agent Team 的终态。
 
-    子 Task 每次 Run 到终态投递一条（多次追加消息就有多条，逐条到达）；因父 Agent 停止而被取消的
-    子 Run 不投递。不投影：委派卡片的状态已跟随子 Task 最新 Run。
+    唤醒挂起的父 Agent，父 Run 已结束时开新 Run。子 Task 每次 Run 到终态投递一条（多次追加消息就
+    有多条，逐条到达）；因父 Agent 停止（或被编辑重跑）而取消的子 Run、因父 Run 取消而停下的 Team
+    不投递——结论已无人需要。``tool_name`` 标明是哪类后台工作，``tool_result`` 是给模型读的 JSON。
+    不投影：委派卡片跟随子 Task 最新 Run，Team 卡片跟随 TeamRun。
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -1,7 +1,7 @@
 """Agent Team 配置保存与本地状态查询接口。
 
 TeamRun 的「确认 / 驳回」不在本模块：决定按 Task 寻址走 ``POST /tasks/{id}/decisions``，由
-``AgentTeamDecisionService`` 确定性执行并以消息唤醒主 Agent。
+``AgentTeamDecisionService`` 校验后以 HITL 决定消息入队，``agent_team`` 工具按决定执行。
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ from typing import Annotated, Any
 from fastapi import HTTPException
 from fastapi import Path as PathParameter
 
-from app.agent_team.coordinator import get_agent_team_coordinator
-from app.agent_team.registry import get_agent_team_registry
+from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
+from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.api.configuration.agent_team_error_messages import (
     agent_team_configuration_error_message,
 )

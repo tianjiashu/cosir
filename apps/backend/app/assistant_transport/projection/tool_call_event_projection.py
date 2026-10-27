@@ -5,9 +5,10 @@ from collections.abc import Sequence
 from typing import cast
 
 from app.assistant_transport.projection.snapshot_navigation import (
-    find_assistant_message,
-    find_run,
+    active_run_id,
+    ensure_assistant,
     find_tool,
+    iter_parts,
 )
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
@@ -15,7 +16,6 @@ from app.assistant_transport.state.conversation_state_part import ConversationSt
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
 from app.core.events import ToolCallCreatedEvent, ToolCallsSettledEvent, ToolCallStatusChangedEvent
-from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
 from app.models.message_metadata import ToolMessageMetadata
 
 # 工具状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）丢弃并留痕。
@@ -23,10 +23,11 @@ from app.models.message_metadata import ToolMessageMetadata
 # ``RuntimeMessageContextManager.add_message`` 可能按调用身份用真实结果覆盖此前的取消占位；
 # 若在此丢弃该迁移，数据库已是真实终态而 snapshot 会永久停在 ``cancelled``
 # （与 Run 状态白名单的 ``cancelled -> running`` 例外同源）。``completed`` / ``failed``
-# 仍不可逆，避免迟到事件把已结束的调用拉回 active。
+# 仍不可逆，避免迟到事件把已结束的调用拉回 active。``running -> pending`` 是 HITL 工具首次调用
+# 返回等待占位（``ToolObservation.awaiting_decision``）：用户决定后执行完成，才经 ``pending`` 推到终态。
 _ALLOWED_TOOL_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
     "pending": frozenset({"pending", "running", "completed", "failed", "cancelled"}),
-    "running": frozenset({"running", "completed", "failed", "cancelled"}),
+    "running": frozenset({"running", "pending", "completed", "failed", "cancelled"}),
     "cancelled": frozenset({"cancelled", "completed", "failed"}),
     "failed": frozenset({"failed"}),
     "completed": frozenset({"completed"}),
@@ -38,46 +39,34 @@ def plan_tool_call_created(
     event: ToolCallCreatedEvent,
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
-    """在 assistant 消息尾部建立 ``pending`` 的 tool-call part。
+    """在当前活动 Run 的助手消息尾部建立 ``pending`` 的 tool-call part。
 
-    同名 toolCallId 已存在时回空列表（幂等）；Run 已终态或 assistant 消息骨架缺失时回空列表，
-    后者记 warning，不以异常中断 Run。
+    同名 toolCallId 已存在时回空列表（幂等）；Run 已终态或不是当前活动时回空列表。Run 还没有
+    助手消息时连同 part 一起建出助手消息。
     """
 
-    run_index = find_run(state, event.run_id)
-    if state["runs"][run_index]["status"] in TERMINAL_RUN_STATUSES:
+    run_id = active_run_id(state, event.run_id)
+    if run_id is None:
         return []
-    located = find_assistant_message(state, event.run_id, required=False)
-    if located is None:
-        # assistant 骨架缺失属于展示事实不完整，不得以断言中断整个 Run。
-        log.warning(
-            "tool_call_part_creation_skipped_missing_assistant_message",
-            extra={
-                "msg": "assistant 消息骨架缺失，跳过 tool-call part 建立",
-                "data": {"run_id": event.run_id, "tool_call_id": event.tool_call_id},
-            },
-        )
+    if find_tool(state, event.tool_call_id) is not None:
         return []
-    _, message_index = located
-    parts = state["runs"][run_index]["messages"][message_index]["parts"]
-    if any(
-        isinstance(part, dict) and part.get("toolCallId") == event.tool_call_id for part in parts
-    ):
-        return []
+    new_part: ConversationStateToolCallPart = {
+        "type": "tool-call",
+        "toolCallId": event.tool_call_id,
+        "toolName": event.tool_name,
+        "status": "pending",
+        "error": None,
+        "presentation": copy.deepcopy(event.presentation),
+        "isError": False,
+        "approvalRequestId": None,
+    }
+    message_index, created = ensure_assistant(state, run_id, new_part)
+    if message_index is None:
+        return created
+    parts = state["messages"][message_index]["parts"]
     return [
         ConversationStateMutation(
-            "set",
-            ("runs", run_index, "messages", message_index, "parts", len(parts)),
-            {
-                "type": "tool-call",
-                "toolCallId": event.tool_call_id,
-                "toolName": event.tool_name,
-                "status": "pending",
-                "error": None,
-                "presentation": copy.deepcopy(event.presentation),
-                "isError": False,
-                "approvalRequestId": None,
-            },
+            "set", ("messages", message_index, "parts", len(parts)), new_part
         )
     ]
 
@@ -94,8 +83,8 @@ def plan_tool_call_status_changed(
         ValueError: 非终态 part 收到白名单外的目标状态（事件生产者与状态机不一致，需暴露）。
     """
 
-    located = find_tool(state, event.tool_call_id, required=False)
-    if located is None:
+    base = find_tool(state, event.tool_call_id)
+    if base is None:
         # 状态事件不携带 toolName / presentation，缺少 part 时无法补建合法 part；此处只
         # 降级为「展示事实缺失」并继续后续投影，绝不让展示层缺口中断 Agent 执行。
         log.warning(
@@ -110,10 +99,10 @@ def plan_tool_call_status_changed(
             },
         )
         return []
-    run_index, message_index, part_index = located
+    _, message_index, _, part_index = base
     part = cast(
         ConversationStateToolCallPart,
-        state["runs"][run_index]["messages"][message_index]["parts"][part_index],
+        state["messages"][cast(int, message_index)]["parts"][cast(int, part_index)],
     )
     current = str(part["status"])
     allowed_targets = _ALLOWED_TOOL_STATUS_TRANSITIONS.get(current, frozenset())
@@ -136,7 +125,6 @@ def plan_tool_call_status_changed(
             )
             return []
         raise ValueError(f"invalid tool transition {current} -> {event.status}")
-    base = ("runs", run_index, "messages", message_index, "parts", part_index)
     fields = project_tool_result(
         ToolMessageMetadata(
             status=event.status,
@@ -180,25 +168,22 @@ def plan_tool_calls_settled(
     """把该 Run 下仍 ``pending`` / ``running`` 的 tool-call part 收束为终态，只迁移状态与错误。"""
 
     mutations: list[ConversationStateMutation] = []
-    run_index = find_run(state, event.run_id)
-    for message_index, run_message in enumerate(state["runs"][run_index]["messages"]):
-        for part_index, part in enumerate(run_message["parts"]):
-            if (
-                not isinstance(part, dict)
-                or part.get("type") != "tool-call"
-                or part.get("status") not in {"pending", "running"}
-            ):
-                continue
-            base = ("runs", run_index, "messages", message_index, "parts", part_index)
-            mutations.extend(
-                [
-                    ConversationStateMutation("set", (*base, "status"), event.status),
-                    ConversationStateMutation(
-                        "set",
-                        (*base, "error"),
-                        "已取消" if event.status == "cancelled" else "执行异常",
-                    ),
-                    ConversationStateMutation("set", (*base, "isError"), event.status == "failed"),
-                ]
-            )
+    for base, part in iter_parts(state, event.run_id):
+        if (
+            not isinstance(part, dict)
+            or part.get("type") != "tool-call"
+            or part.get("status") not in {"pending", "running"}
+        ):
+            continue
+        mutations.extend(
+            [
+                ConversationStateMutation("set", (*base, "status"), event.status),
+                ConversationStateMutation(
+                    "set",
+                    (*base, "error"),
+                    "已取消" if event.status == "cancelled" else "执行异常",
+                ),
+                ConversationStateMutation("set", (*base, "isError"), event.status == "failed"),
+            ]
+        )
     return mutations

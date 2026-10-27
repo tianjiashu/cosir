@@ -1,7 +1,9 @@
-"""wait_messages 工具：Agent 主动挂起，等委派的子 Agent 或后台任务的结论以消息送达。
+"""wait_messages 工具：Agent 主动挂起，等委派的子 Agent 的结论以消息送达。
+
+Agent Team 不在等待范围内：``agent_team`` 工具自己阻塞到 Team 落定，结论就是它的工具结果。
 
 取代轮询式等待：调用当步闭合并带 ``suspend``，Run 随即挂起、不占执行者；子 Agent 每次 Run 到
-终态、后台 Agent Team 结束、用户发来消息时都会唤醒同一个 Run，结论统一以 ``<background_result>``
+终态、用户发来消息时都会唤醒同一个 Run，结论统一以 ``<background_result>``
 消息并入（``tool_name`` 标明来源）。是否继续等由模型决定（再次调用本工具）。
 """
 
@@ -18,10 +20,8 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
-from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES
 from app.service.depends import get_task_service
-from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 
 
 class WaitMessagesTool(HandlerBase):
@@ -30,8 +30,8 @@ class WaitMessagesTool(HandlerBase):
     name: str = TOOL_WAIT_MESSAGES
     description: str = (
         "Pause yourself until a result arrives, instead of polling. Use it after delegating to "
-        "child agents or after an Agent Team was approved: each time a child agent finishes a "
-        "run, a background task ends, or the user sends a message, you resume and the result "
+        "child agents: each time a child agent finishes a "
+        "run or the user sends a message, you resume and the result "
         "arrives as a <background_result> message. Results arrive one at a "
         "time; call this tool again if you still need to wait for others. If nothing is "
         "pending, it returns immediately without pausing."
@@ -46,7 +46,7 @@ class WaitMessagesTool(HandlerBase):
             return tool_success(
                 tool_name=self.name,
                 content=(
-                    "Nothing is pending: no child agent or background task is still running, so "
+                    "Nothing is pending: no child agent is still running, so "
                     "you were not paused. Results that already arrived are in the conversation."
                 ),
             )
@@ -58,22 +58,14 @@ class WaitMessagesTool(HandlerBase):
 
     @staticmethod
     def _pending_work(task_id: int) -> list[str]:
-        """仍可能回投结论的工作：活动中的委派子 Task 与本 Task 发起的待确认 / 运行中 TeamRun。"""
+        """仍可能回投结论的工作：活动中的委派子 Task。"""
         tasks = get_task_service()
-        pending = [
+        return [
             f"child_task:{child.id}"
             for child in tasks.list_child_tasks(task_id)
             if (latest := tasks.require_current_run(child.id)) is not None
                and latest.status in ACTIVE_RUN_STATUSES
         ]
-        team_runs = AgentTeamRunCrud()
-        pending.extend(
-            f"agent_team_run:{row.id}"
-            for row in (*team_runs.list_pending_confirmations(), *team_runs.list_active())
-            if row.parent_task_id == task_id
-            and row.status in {AgentTeamRunStatus.PENDING.value, AgentTeamRunStatus.RUNNING.value}
-        )
-        return pending
 
     def to_definition(self) -> ToolDefinition:
         return ToolDefinition(

@@ -59,16 +59,3 @@ class UserInputPresentation(BaseModel):
             raise ValueError("display_text image tokens do not match images")
         return self
 
-
-class ConversationInput(UserInputPresentation):
-    """入队前解析好的用户输入；消费时正文转为 SDK 消息，展示绑定单独保存。"""
-
-    input_text: str
-
-    def presentation(self) -> UserInputPresentation:
-        """只导出渲染与编辑所需的绑定，模型正文在 context.message 中保存一次。"""
-        return UserInputPresentation(
-            display_text=self.display_text,
-            image_paths=self.image_paths,
-            attachments=self.attachments,
-        )

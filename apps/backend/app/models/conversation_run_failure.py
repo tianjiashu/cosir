@@ -7,7 +7,7 @@
 语义出现两套并行事实源。
 
 不负责：把异常归类为 code（见 ``app.core.llm_provider.model_failure``）、持久化
-（见 ``ConversationRunStateService``）、Transport 投影与渲染（见 ``app.assistant_transport.state``
+（见 ``ConversationRunLedger``）、Transport 投影与渲染（见 ``app.assistant_transport.state``
 与前端 renderer）。
 
 设计约束：
@@ -31,7 +31,6 @@ _RUN_FAILURE_MESSAGES: dict[str, str] = {
     Constant.Run.RUN_FAILURE_CODE_CANCELLED: "已取消本轮对话",
     Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE: "模型配置不可用，请检查模型设置后重试",
     Constant.Run.RUN_FAILURE_CODE_MODEL_OUTPUT_INVALID: "模型未返回可用内容，请重试",
-    Constant.Run.RUN_FAILURE_CODE_TOOL_ERROR_LIMIT: "连续工具调用失败过多，已停止本轮对话",
     Constant.Run.RUN_FAILURE_CODE_MAX_STEPS: "已达最大步数上限，已停止本轮对话",
     Constant.Run.RUN_FAILURE_CODE_CONTEXT_PROTOCOL_INVALID: (
         "工具调用上下文不完整，已停止执行并保留原始记录，请查看日志排查"

@@ -1,35 +1,35 @@
-"""Conversation Transport Task snapshot 的中性 JSON 契约。"""
+"""Conversation Transport Task snapshot 的中性 JSON 契约（Task 视角）。"""
 
-from typing import NotRequired
+from typing import NotRequired, cast
 
 from typing_extensions import TypedDict
 
-from app.assistant_transport.state.conversation_run_snapshot import ConversationRunSnapshot
-from app.assistant_transport.state.conversation_state_error import ConversationStateError
+from app.assistant_transport.state.conversation_state_activity import ConversationStateActivity
 from app.assistant_transport.state.conversation_state_message import (
     ConversationQueuedMessage,
+    ConversationStateMessage,
 )
 from app.config.constant import Constant
+from app.models.enums.conversation_run_status import (
+    TERMINAL_RUN_STATUSES,
+    ConversationRunStatus,
+)
 
-_SNAPSHOT_KEYS = {
-    "runs",
-    "current_run_id",
-    "approvals",
-    "error",
-}
-_RUN_KEYS = {
+_SNAPSHOT_KEYS = {"messages", "activity"}
+_ACTIVITY_KEYS = {
     "runId",
     "status",
     "endReason",
+    "error",
+    "usage",
     "contextWindowTotal",
     "launch",
-    "messages",
-    "usage",
-    "error",
 }
-_MESSAGE_KEYS = {"id", "role", "parts"}
-_QUEUED_MESSAGE_KEYS = _MESSAGE_KEYS | {"delivery"}
+_MESSAGE_KEYS = {"id", "role", "parts", "runId", "outcome"}
+_OUTCOME_KEYS = {"status", "endReason", "error", "usage", "contextWindowTotal"}
+_QUEUED_MESSAGE_KEYS = {"id", "role", "parts", "delivery"}
 _DELIVERIES = {"immediate", "next_run"}
+_RUN_STATUSES = {status.value for status in ConversationRunStatus}
 _LAUNCH_KEYS = {"modelConfigId", "reasoningEffort", "banTools"}
 _TEXT_PART_KEYS = {"type", "text", "status"}
 _IMAGE_PART_KEYS = {"type", "image"}
@@ -64,135 +64,109 @@ _USAGE_KEYS = {
 class ConversationStateSnapshot(TypedDict):
     """一个 Task 的完整 Transport state。
 
-    Run 的消息、生命周期、usage 与窗口上限均位于 ``runs`` 中；上下文占用从 Run 事实派生。
+    对话界面只看 Task：``messages`` 按 context 序号扁平排列，``activity`` 是最新 Run 的摘要。
+    Run 分组不进 wire，历史回复的结局由消息上的 ``outcome`` 承载。命令被拒不进 snapshot，由命令的
+    HTTP 响应同步返回。
     """
 
     queued_messages: NotRequired[list[ConversationQueuedMessage]]
-    runs: list[ConversationRunSnapshot]
-    current_run_id: int | None
-    approvals: dict[str, object]
-    error: ConversationStateError | None
+    messages: list[ConversationStateMessage]
+    activity: ConversationStateActivity | None
 
 
 def empty_snapshot() -> ConversationStateSnapshot:
     """返回新 Task 的空 snapshot 基线。"""
 
-    return {
-        "runs": [],
-        "current_run_id": None,
-        "approvals": {},
-        "error": None,
-    }
-
-
-def find_run(state: ConversationStateSnapshot, run_id: int) -> tuple[int, ConversationRunSnapshot]:
-    """返回指定 Run 的 ``(index, snapshot)``，不存在时抛出 ``KeyError``。"""
-
-    for index, run in enumerate(state["runs"]):
-        if run["runId"] == run_id:
-            return index, run
-    raise KeyError(f"run {run_id} not found")
-
-
-def has_run(state: ConversationStateSnapshot, run_id: int) -> bool:
-    """返回快照中是否存在指定 Run；与 ``find_run`` 的区别是不抛异常。"""
-
-    return any(run["runId"] == run_id for run in state["runs"])
-
-
-def current_run(state: ConversationStateSnapshot) -> ConversationRunSnapshot | None:
-    """返回当前 Run snapshot；空 Task 时返回 ``None``。"""
-
-    run_id = state["current_run_id"]
-    if run_id is None:
-        return None
-    _, run = find_run(state, run_id)
-    return run
+    return {"messages": [], "activity": None}
 
 
 def validate_snapshot(state: ConversationStateSnapshot) -> None:
-    """严格校验新 Task snapshot 的结构、归属和数值边界。"""
+    """严格校验 Task snapshot 的结构与数值边界。"""
 
     if not isinstance(state, dict) or set(state) - {"queued_messages"} != _SNAPSHOT_KEYS:
-        raise ValueError("snapshot must contain runs, current_run_id, approvals and error")
-    if not isinstance(state["runs"], list) or not isinstance(state["approvals"], dict):
-        raise ValueError("snapshot runs and approvals must be arrays/object")
-    current_run_id = state["current_run_id"]
-    if current_run_id is not None and (
-        not isinstance(current_run_id, int)
-        or isinstance(current_run_id, bool)
-        or current_run_id < 0
-    ):
-        raise ValueError("snapshot current_run_id must be a non-negative integer or null")
-
+        raise ValueError("snapshot must contain messages and activity")
+    if not isinstance(state["messages"], list):
+        raise ValueError("snapshot messages must be an array")
     queued = state.get("queued_messages", [])
     if not isinstance(queued, list):
         raise ValueError("queued_messages must be an array")
-    seen_input_ids: set[str] = set()
-    for message in queued:
-        _validate_message(message, seen_input_ids, _QUEUED_MESSAGE_KEYS)
-        if message["delivery"] not in _DELIVERIES:
+    seen_ids: set[str] = set()
+    for queued_message in queued:
+        _validate_message_body(queued_message, seen_ids, _QUEUED_MESSAGE_KEYS)
+        if queued_message["delivery"] not in _DELIVERIES:
             raise ValueError("queued message delivery is invalid")
-        if message["role"] != "user":
+        if queued_message["role"] != "user":
             raise ValueError("queued_messages must contain user messages")
-    seen_run_ids: set[int] = set()
-    for run in state["runs"]:
-        _validate_run(run, seen_run_ids)
-    if current_run_id is not None and current_run_id not in seen_run_ids:
-        raise ValueError("snapshot current_run_id must refer to a run")
-    if state["approvals"]:
-        raise ValueError("approval state is reserved and must remain empty")
-    if state["error"] is not None:
-        _validate_error(state["error"])
+    for message in state["messages"]:
+        _validate_message(message, seen_ids)
+    if state["activity"] is not None:
+        _validate_activity(state["activity"])
 
 
-def _validate_run(run: object, seen_run_ids: set[int]) -> None:
-    if not isinstance(run, dict) or set(run) != _RUN_KEYS:
-        raise ValueError("snapshot contains an invalid run")
-    run_id = run["runId"]
-    if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id < 0:
-        raise ValueError("snapshot runId must be a non-negative integer")
-    if run_id in seen_run_ids:
-        raise ValueError("snapshot contains duplicate runId")
-    seen_run_ids.add(run_id)
-    if not isinstance(run["status"], str) or run["status"] == "":
-        raise ValueError("snapshot run status must be a non-empty string")
-    if run["endReason"] is not None and not isinstance(run["endReason"], str):
-        raise ValueError("snapshot run endReason must be a string or null")
-    value = run["contextWindowTotal"]
-    if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
-        raise ValueError("snapshot run contextWindowTotal must be a non-negative integer or null")
-    _validate_launch(run["launch"])
-    if not isinstance(run["messages"], list):
-        raise ValueError("snapshot run messages must be an array")
-    if run["usage"] is not None:
-        _validate_usage(run["usage"])
-    if run["error"] is not None:
-        _validate_error(run["error"])
-    seen_message_ids: set[str] = set()
-    for message in run["messages"]:
-        _validate_message(message, seen_message_ids)
+def _validate_non_negative_int(value: object, label: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"snapshot {label} must be a non-negative integer")
+
+
+def _validate_activity(activity: object) -> None:
+    if not isinstance(activity, dict) or set(activity) != _ACTIVITY_KEYS:
+        raise ValueError("snapshot activity is invalid")
+    _validate_non_negative_int(activity["runId"], "activity runId")
+    if activity["status"] not in _RUN_STATUSES:
+        raise ValueError("snapshot activity status is invalid")
+    if activity["endReason"] is not None and not isinstance(activity["endReason"], str):
+        raise ValueError("snapshot activity endReason must be a string or null")
+    if activity["contextWindowTotal"] is not None:
+        _validate_non_negative_int(activity["contextWindowTotal"], "contextWindowTotal")
+    _validate_launch(activity["launch"])
+    if activity["usage"] is not None:
+        _validate_usage(activity["usage"])
+    if activity["error"] is not None:
+        _validate_error(activity["error"])
+
+
+def _validate_outcome(outcome: object) -> None:
+    if not isinstance(outcome, dict) or set(outcome) != _OUTCOME_KEYS:
+        raise ValueError("snapshot message outcome is invalid")
+    if outcome["status"] not in TERMINAL_RUN_STATUSES:
+        raise ValueError("snapshot message outcome status must be terminal")
+    if outcome["endReason"] is not None and not isinstance(outcome["endReason"], str):
+        raise ValueError("snapshot outcome endReason must be a string or null")
+    if outcome["usage"] is not None:
+        _validate_usage(outcome["usage"])
+    if outcome["contextWindowTotal"] is not None:
+        _validate_non_negative_int(outcome["contextWindowTotal"], "outcome contextWindowTotal")
+    if outcome["error"] is not None:
+        _validate_error(outcome["error"])
+
+
+def _validate_message(message: object, seen_ids: set[str]) -> None:
+    _validate_message_body(message, seen_ids, _MESSAGE_KEYS)
+    body = cast(dict[str, object], message)
+    _validate_non_negative_int(body["runId"], "message runId")
+    if body["outcome"] is not None:
+        if body["role"] != "assistant":
+            raise ValueError("only assistant messages carry an outcome")
+        _validate_outcome(body["outcome"])
 
 
 def _validate_launch(launch: object) -> None:
     if not isinstance(launch, dict) or set(launch) != _LAUNCH_KEYS:
-        raise ValueError("snapshot run launch is invalid")
+        raise ValueError("snapshot launch is invalid")
     model_config_id = launch["modelConfigId"]
     if model_config_id is not None and (
         not isinstance(model_config_id, int) or isinstance(model_config_id, bool)
     ):
-        raise ValueError("snapshot run launch modelConfigId must be an integer or null")
+        raise ValueError("snapshot launch modelConfigId must be an integer or null")
     if launch["reasoningEffort"] is not None and not isinstance(launch["reasoningEffort"], str):
-        raise ValueError("snapshot run launch reasoningEffort must be a string or null")
+        raise ValueError("snapshot launch reasoningEffort must be a string or null")
     if not isinstance(launch["banTools"], list) or not all(
         isinstance(name, str) for name in launch["banTools"]
     ):
-        raise ValueError("snapshot run launch banTools must be an array of strings")
+        raise ValueError("snapshot launch banTools must be an array of strings")
 
 
-def _validate_message(
-    message: object, seen_message_ids: set[str], keys: set[str] = _MESSAGE_KEYS
-) -> None:
+def _validate_message_body(message: object, seen_message_ids: set[str], keys: set[str]) -> None:
     if not isinstance(message, dict) or set(message) != keys:
         raise ValueError("snapshot contains an invalid message")
     message_id = message["id"]
@@ -211,16 +185,16 @@ def _validate_message(
 
 def _validate_usage(usage: object) -> None:
     if not isinstance(usage, dict) or set(usage) != _USAGE_KEYS:
-        raise ValueError("snapshot run usage is malformed")
+        raise ValueError("snapshot usage is malformed")
     for value in usage.values():
         if value is None:
             continue
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            raise ValueError("snapshot run usage is malformed")
+            raise ValueError("snapshot usage is malformed")
 
 
 def _validate_error(error: object) -> None:
-    # 错误契约只允许 code + message；``retryable`` 属于工具观察，不进 Transport。
+    # 错误契约只允许 code + message。
     # 两者都必须是**非空白**字符串：空白文案会让前端渲染出没有内容的错误气泡。
     if (
         not isinstance(error, dict)

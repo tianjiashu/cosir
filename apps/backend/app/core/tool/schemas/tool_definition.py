@@ -46,7 +46,8 @@ class ToolDefinition:
     parallel_mode: Literal["serial", "parallel"] = "serial"
     # 需要用户决定（human in the loop）：首次调用只登记待决事项并返回等待占位
     # （:func:`tool_awaiting_decision`），用户决定之后的去向由这里声明，不看决定本身：
-    # ``"execute"`` 批准后由 prepare_input 绕过模型、带着决定再次执行同一调用（如 Agent Team）；
+    # ``"execute"`` 批准或驳回后都由 prepare_input 绕过模型、带着决定再次执行同一调用（如 Agent
+    # Team：批准即启动、驳回即落定，执行结果让等待占位收尾）；
     # ``"reply"`` 用户的回答作为消息交给模型（如意图澄清）；``None`` 不需要用户决定。
     # 非 None 的工具一批里只能单独调用（见 ``tool_batch_runner``），每个 Task 同时最多一个等待中的
     # 调用由工具自己的事实源保证。

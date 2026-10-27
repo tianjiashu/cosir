@@ -79,7 +79,7 @@ Tauri Rust 主进程
 
 ### 2.3 错误展示策略
 
-工具侧的重试提示只是 `tool_error` 写进模型文本的 `hint` 行，不是观察字段；它既不进入 Transport tool-call part，也不进入 Run 级错误契约（`ConversationRunError` / `ConversationStateError` 只有 `code` / `message`）。Transport/HTTP 错误体上的 `retryable` 是另一套「客户端能否重试」的传输层契约，与工具侧无关。
+工具侧的重试提示只是调用点写进 `tool_error` 的 `content` 的自然语言建议，不是观察字段；它既不进入 Transport tool-call part，也不进入 Run 级错误契约（`ConversationRunError` / `ConversationStateError` 只有 `code` / `message`）。Transport/HTTP 错误体上的 `retryable` 是另一套「客户端能否重试」的传输层契约，与工具侧无关。
 
 错误信息分为三个通道，不能混用：
 
@@ -378,8 +378,8 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
 task，只使用明确的 `child_task_id`，不从文本中解析链接。
 
 `child_agent_send` 与 `child_agent_status` 使用同一安全结果形状，仅通过 `operation` 区分
-「提交消息」与「读取最新 Run」。子 Agent 的结论不经工具展示：每次子 Run 到终态由调度层以
-`agent_result` 消息回投父 Task；`wait_messages` 只让父 Agent 挂起，调用当步闭合，没有展示数据。
+「提交消息」与「读取最新 Run」。子 Agent 的结论不经工具展示：每次子 Run 到终态由子 Task 的 actor 以
+`background_result` 消息回投父 Task；`wait_messages` 只让父 Agent 挂起，调用当步闭合，没有展示数据。
 
 ## 4. 展示数据构建位置
 

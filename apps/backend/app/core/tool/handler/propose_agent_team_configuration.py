@@ -17,7 +17,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_CONFIGURATION
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.handler.agent_team.propose_agent_team_configuration_args import (
+from app.core.tool.handler.agent_team.args.propose_agent_team_configuration_args import (
     ProposeAgentTeamConfigurationArgs,
 )
 
@@ -48,7 +48,7 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
             from app.core.tool.handler.agent_team.agent_team_display import (
                 build_agent_team_configuration_display_data,
             )
-            from app.service.agent_team.agent_team_preparation_service import (
+            from app.core.tool.handler.agent_team.agent_team_preparation_service import (
                 resolve_node_profile,
             )
 
@@ -76,9 +76,7 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
             )
             return tool_error(
                 tool_name=self.name,
-                error="agent_team_configuration_invalid",
-                reason=str(exc),
-                retryable=True,
+                content=str(exc),
             )
         except TeamToolError as exc:
             log.warning(
@@ -87,9 +85,7 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
             )
             return tool_error(
                 tool_name=self.name,
-                error="agent_team_configuration_invalid",
-                reason=str(exc),
-                retryable=exc.retryable,
+                content=str(exc),
             )
         except Exception as exc:
             log.warning(
@@ -98,9 +94,7 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
             )
             return tool_error(
                 tool_name=self.name,
-                error="agent_team_configuration_invalid",
-                reason="The Team configuration is invalid",
-                retryable=False,
+                content="The Team configuration is invalid.",
             )
 
     def to_definition(self) -> ToolDefinition:

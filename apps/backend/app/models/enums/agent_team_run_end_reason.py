@@ -20,6 +20,8 @@ class AgentTeamRunEndReason(str, Enum):
     NODE_OUTPUT_INVALID = "node_output_invalid"
     IMPLICIT_COMPLETION_MISSING = "implicit_completion_missing"
     CANCELLED = "cancelled"
+    # 主 Agent Run 被取消而随之停下（含待确认方案）：结论无人需要，不回投后台结果。
+    PARENT_CANCELLED = "parent_cancelled"
     RUNTIME_RESTARTED = "runtime_restarted"
     MAX_RUNS_EXCEEDED = "max_runs_exceeded"
     USER_REJECTED = "user_rejected"

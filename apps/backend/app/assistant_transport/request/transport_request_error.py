@@ -5,7 +5,7 @@ class TransportRequestError(Exception):
     """由请求模型在解析阶段抛出，仅描述与领域持久化无关的结构性约束违反。
 
     API 适配层（``app/api/middleware/transport_error.py`` 的全局 exception_handler）负责把它
-    映射为统一的 Assistant Transport HTTP 错误体，保持与 ``_raise_transport_error`` 相同的
+    映射为统一的 Assistant Transport HTTP 错误体，保持与 ``assistant_api._raise_transport_error`` 相同的
     ``code`` / ``message`` / ``retryable`` 形状，使前端 HTTP 错误契约（``lib/http/errors.ts`` 的
     ``StructuredHttpError``）零改动。注意它**不是** Transport snapshot 的
     ``ConversationStateError`` 契约（后者只有 ``code`` / ``message``）。

@@ -60,12 +60,11 @@ class ProposeAgentConfigurationTool(HandlerBase):
             if candidate_agent_id in existing_agent_ids:
                 return tool_error(
                     tool_name=self.name,
-                    error=(
+                    content=(
                         f"agent_id '{candidate_agent_id}' is already in use in this "
-                        "workspace or the system scope."
+                        "workspace or the system scope. "
+                        "Choose a different agent_id that is not already taken."
                     ),
-                    reason="choose a different agent_id that is not already taken.",
-                    retryable=True,
                     tool_call_id=execution_context.tool_call_id,
                 )
 

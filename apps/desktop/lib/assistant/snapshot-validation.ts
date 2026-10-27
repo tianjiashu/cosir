@@ -136,15 +136,6 @@ function validateError(value: unknown, path: string): void {
   }
 }
 
-function validateCommandError(value: unknown, path: string): void {
-  const error = requireRecord(value, path);
-  requireExactKeys(error, ["code", "message", "seq"], path);
-  if (!Number.isInteger(error.seq) || (error.seq as number) <= 0) {
-    throw new TransportSnapshotValidationError(`${path}.seq`, "正整数");
-  }
-  validateError({ code: error.code, message: error.message }, path);
-}
-
 function validateUsage(value: unknown, path: string): void {
   const usage = requireRecord(value, path);
   requireExactKeys(usage, USAGE_KEYS, path);
@@ -254,7 +245,7 @@ function validateActivity(value: unknown, path: string): void {
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["messages", "activity", "error", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  requireExactKeys(state, ["messages", "activity", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
   const ids = new Set<string>();
   if (!Array.isArray(state.messages)) throw new TransportSnapshotValidationError("messages", "数组");
   state.messages.forEach((rawMessage, index) => {
@@ -282,6 +273,5 @@ export function parseTransportState(value: unknown): TransportState {
     });
   }
   if (state.activity !== null) validateActivity(state.activity, "activity");
-  if (state.error !== null) validateCommandError(state.error, "error");
   return state as unknown as TransportState;
 }

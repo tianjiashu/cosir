@@ -21,7 +21,6 @@ from app.core.llm_provider.model_failure import (
     classify_model_failure,
     extract_model_response_message,
 )
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.inbox.run_mailbox import RunMailbox
@@ -110,7 +109,6 @@ class RunDriver:
         finally:
             # 兜底回收「点名了已结束的工具调用」这类不会再被消费的工具级信号。
             tool_call_cancellation_registry.clear_task(run.task_id)
-            cancellation_registry.consume(run.task_id)
 
     async def _has_settled(self, run: ConversationRunRecord) -> bool:
         """workflow 返回后重读状态：只有收束到终态或挂起才触发 STOP Hook。"""

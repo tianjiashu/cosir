@@ -90,23 +90,18 @@ class ChildAgentSendTool(HandlerBase):
         except KeyError:
             return tool_error(
                 self.name,
-                f"child task not found: {child_task_id}",
-                reason=(
-                    "verify child_task_id against the value returned by delegate_task; "
-                    "this task does not exist."
-                ),
-                retryable=True,
+                f"child task not found: {child_task_id}. "
+                "Verify child_task_id against the value returned by delegate_task; "
+                "this task does not exist.",
             )
         if not child_task.is_child or child_task.parent_task_id != execution_context.task_id:
             return tool_error(
                 tool_name=self.name,
-                error="child_task_not_delegated_by_caller",
-                reason=(
+                content=(
                     "child_task_id does not refer to a child task delegated by this task; "
                     "use the child_task_id returned by delegate_task, or "
                     "delegate the subtask first and retry with the corrected child_task_id."
                 ),
-                retryable=True,
             )
 
         current_run = self._ledger.get_run(child_task.current_run_id)
@@ -134,28 +129,20 @@ class ChildAgentSendTool(HandlerBase):
             )
             return tool_error(
                 self.name,
-                "child_agent_send_profile_unavailable",
-                reason="The child agent configuration for this workspace is invalid.",
-                retryable=False,
+                "The child agent configuration for this workspace is invalid.",
             )
         if current_profile is None or current_profile.agent_type is not AgentProfileType.CHILD:
             return tool_error(
                 self.name,
-                "child_agent_send_profile_unavailable",
-                reason="The child agent is no longer available in this workspace.",
-                retryable=False,
+                "The child agent is no longer available in this workspace.",
             )
 
         loop = execution_context.event_loop
         if loop is None or loop.is_closed():
             return tool_error(
                 self.name,
-                "delegate_task_runtime_unavailable",
-                reason=(
-                    "the parent runtime event loop is unavailable, so the child run "
-                    "cannot be started; retry from a normal turn."
-                ),
-                retryable=False,
+                "The parent runtime event loop is unavailable, so the child run "
+                "cannot be started; retry from a normal turn.",
             )
         reasoning_effort = (
             current_profile.model_settings.reasoning_effort
@@ -196,9 +183,7 @@ class ChildAgentSendTool(HandlerBase):
             )
             return tool_error(
                 self.name,
-                "child_agent_send_failed",
-                reason="the follow-up message could not be delivered to the child agent.",
-                retryable=False,
+                "The follow-up message could not be delivered to the child agent.",
             )
 
         return tool_success(

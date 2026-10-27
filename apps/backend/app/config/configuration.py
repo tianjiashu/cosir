@@ -6,13 +6,13 @@
 收口内容（进程级、按需构建、可热替换）：
 - agent profile 目录（``AgentProfileRegistry``）：``set_agent_registry`` /
   ``get_agent_registry`` / ``build_agent_registry``。
-- 工具系统（``ToolSystem``）：``set_tool_system`` / ``get_tool_system``。
+- 工具注册表与执行器：``set_tool_registry`` / ``get_tool_registry`` / ``get_tool_executor``。
 
 设计要点：
 - 两组单例均为 ``None`` 起步，由应用启动（``api/app.py`` 的 lifespan / ``create_app``）
   经对应 ``set_*`` 注入；未注入即 ``get_*`` 会抛出一致的 ``RuntimeError``，避免散落的
   模块级全局变量与 ``global`` 声明。
-- 本模块仅收口轻量配置层可安全持有的 agent 目录与工具系统；领域 service 与底层 CRUD/Store
+- 本模块仅收口轻量配置层可安全持有的 agent 目录与工具注册表、执行器；领域 service 与底层 CRUD/Store
   单例由 ``app.service.depends`` 统一管理。本模块均不持有，避免 ``config`` 层耦合
   service / core 装配。
 """
@@ -25,14 +25,15 @@ from app.core.agents.agent_profile_registry import (
     AgentProfileRegistry,
 )
 from app.core.agents.define_agents import only_read_child_agent
-from app.core.tools.tool_registry import ToolRegistry
+from app.core.tool.tool_registry import ToolRegistry
 
 if TYPE_CHECKING:
     from app.core.agents.agent_profile import AgentProfile
-    from app.core.tools import ToolSystem
+    from app.core.tool.execute.tool_executor import ToolExecutor
 
 _AGENT_REGISTRY: AgentProfileRegistry | None = None
-_TOOL_SYSTEM: ToolSystem | None = None
+_TOOL_REGISTRY: ToolRegistry | None = None
+_TOOL_EXECUTOR: ToolExecutor | None = None
 
 
 def set_agent_registry(registry: AgentProfileRegistry) -> None:
@@ -160,63 +161,31 @@ def replace_main_agent_profile(
     return replacement
 
 
-def set_tool_system(tool_system: ToolSystem) -> None:
-    """设置进程级工具系统单例。
+def set_tool_registry(registry: ToolRegistry) -> None:
+    """注入进程级工具注册表，并在同一个注册表上装配执行器。
 
-    参数:
-        tool_system: 已初始化的工具系统，由应用启动时构建并注入。
-
-    返回:
-        无。
-
-    异常:
-        无。
-
-    副作用:
-        替换模块级工具系统单例。
+    两个单例由这一处一起设置，执行器因此不可能持有与 ``get_tool_registry`` 不同的注册表。执行器
+    延迟导入：执行管线经 workflow 依赖本模块，模块级导入会形成循环。
     """
 
-    global _TOOL_SYSTEM
-    _TOOL_SYSTEM = tool_system
+    from app.core.tool.execute.tool_executor import ToolExecutor
+
+    global _TOOL_REGISTRY, _TOOL_EXECUTOR
+    _TOOL_REGISTRY = registry
+    _TOOL_EXECUTOR = ToolExecutor(registry=registry)
 
 
 def get_tool_registry() -> ToolRegistry:
-    """返回进程级工具注册表。
+    """返回进程级工具注册表；未调用 ``set_tool_registry`` 时抛 ``RuntimeError``。"""
 
-    参数:
-        无。
-
-    返回:
-        已初始化的 ``ToolRegistry``。
-
-    异常:
-        RuntimeError: 工具系统尚未初始化（未调用 ``set_tool_system``）。
-
-    副作用:
-        无。
-    """
-
-    if _TOOL_SYSTEM is None:
-        raise RuntimeError("tool system has not been initialized")
-    return _TOOL_SYSTEM.registry
+    if _TOOL_REGISTRY is None:
+        raise RuntimeError("tool registry has not been initialized")
+    return _TOOL_REGISTRY
 
 
-def get_tool_system() -> ToolSystem:
-    """返回进程级工具系统单例。
+def get_tool_executor() -> ToolExecutor:
+    """返回进程级工具执行器；未调用 ``set_tool_registry`` 时抛 ``RuntimeError``。"""
 
-    参数:
-        无。
-
-    返回:
-        已初始化的 ``ToolSystem``。
-
-    异常:
-        RuntimeError: 如果工具系统尚未初始化（未调用 ``set_tool_system``）。
-
-    副作用:
-        无。
-    """
-
-    if _TOOL_SYSTEM is None:
-        raise RuntimeError("tool system has not been initialized")
-    return _TOOL_SYSTEM
+    if _TOOL_EXECUTOR is None:
+        raise RuntimeError("tool registry has not been initialized")
+    return _TOOL_EXECUTOR

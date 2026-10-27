@@ -5,50 +5,33 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import cast
 
-from app.assistant_transport.projection.snapshot_navigation import find_run
+from app.assistant_transport.projection.snapshot_navigation import find_tool, is_current_run
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import ConversationStateToolCallPart
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
 from app.core.events import TerminalOutputDeltaData, ToolCallRuntimeUpdateEvent
-from app.core.tools.schemas.tool_names import TOOL_EXECUTE_TERMINAL
+from app.core.tool.schemas.tool_names import TOOL_EXECUTE_TERMINAL
 
 
 def plan_tool_call_runtime_update(
     event: ToolCallRuntimeUpdateEvent,
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
-    """只把运行期数据投影到兼容的 tool-call part；目标缺失时跳过并留痕。"""
+    """只把运行期数据投影到兼容的 tool-call part；目标缺失时跳过并留痕。
 
-    try:
-        run_index = find_run(state, event.run_id)
-    except KeyError:
-        log.warning(
-            "tool_runtime_update_run_missing",
-            extra={
-                "msg": "运行期工具投影目标 Run 不存在，跳过事件",
-                "data": {"task_id": event.task_id, "run_id": event.run_id},
-            },
-        )
+    终端输出只在所属 Run 是当前活动且仍 ``running`` 时投影：Run 已停下的迟到输出不再追加。
+    """
+
+    activity = state["activity"]
+    if isinstance(event.data, TerminalOutputDeltaData) and (
+        not is_current_run(state, event.run_id)
+        or activity is None
+        or activity["status"] != "running"
+    ):
         return []
-
-    run = state["runs"][run_index]
-    if isinstance(event.data, TerminalOutputDeltaData) and run["status"] != "running":
-        return []
-
-    located: tuple[int, int] | None = None
-    for message_index, run_message in enumerate(run["messages"]):
-        for part_index, part in enumerate(run_message["parts"]):
-            if (
-                isinstance(part, dict)
-                and part.get("type") == "tool-call"
-                and part.get("toolCallId") == event.tool_call_id
-            ):
-                located = message_index, part_index
-                break
-        if located is not None:
-            break
-    if located is None:
+    base = find_tool(state, event.tool_call_id, event.run_id)
+    if base is None:
         log.warning(
             "tool_runtime_update_part_missing",
             extra={
@@ -61,13 +44,11 @@ def plan_tool_call_runtime_update(
             },
         )
         return []
-
-    message_index, part_index = located
+    _, message_index, _, part_index = base
     part = cast(
         ConversationStateToolCallPart,
-        run["messages"][message_index]["parts"][part_index],
+        state["messages"][cast(int, message_index)]["parts"][cast(int, part_index)],
     )
-    base = ("runs", run_index, "messages", message_index, "parts", part_index)
     return _plan_terminal_output(event, part, base)
 
 

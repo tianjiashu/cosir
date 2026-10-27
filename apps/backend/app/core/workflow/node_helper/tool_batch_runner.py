@@ -11,7 +11,7 @@
 
 需要用户决定的工具（``ToolDefinition.user_decision`` 非 ``None``）只能单独调用：与其他调用混在
 一批时整批在执行前报错，任何调用都不执行，由模型拆开重发——否则批准一个、同批其余已执行或仍在
-等待的状态无法收敛。用户批准后的再次执行也走这里，决定经 ``decision`` 交给 handler。
+等待的状态无法收敛。用户决定后的再次执行（批准或驳回）也走这里，决定经 ``decision`` 交给 handler。
 """
 
 from __future__ import annotations
@@ -132,15 +132,12 @@ def _reject_mixed_decision_batch(
     for call in calls:
         observation = tool_error(
             tool_name=call.tool_name,
-            error=(
+            content=(
                 f"{', '.join(hitl_names)} requires the user's decision and must be the only tool "
-                "call in its response; none of the tool calls in this response were executed"
-            ),
-            reason=(
+                "call in its response; none of the tool calls in this response were executed. "
                 "Call the tool that needs the user's decision alone in its own response, and "
                 "issue the other tool calls in a separate response."
             ),
-            retryable=True,
             tool_call_id=call.call_id,
         )
         if batch.was_projected(call.call_id):
@@ -236,8 +233,8 @@ def _internal_error(
     header = f"internal execution error in the tool pipeline: {type(exc).__name__}"
     return tool_error(
         tool_name=call.tool_name,
-        error=header,
-        reason=(
+        content=(
+            f"{header}. "
             "This failure came from the agent runtime, not from your arguments or the tool's own "
             "logic, so changing the arguments will not help. The call may have been interrupted "
             "before or after the tool ran, so its side effects are unknown: if the tool changes "
@@ -246,6 +243,5 @@ def _internal_error(
             "again, stop using this tool and tell the user that the tool runtime is failing, "
             "including the error above."
         ),
-        retryable=False,
         tool_call_id=call.call_id,
     )

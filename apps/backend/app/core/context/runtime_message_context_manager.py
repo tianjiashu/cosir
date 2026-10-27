@@ -258,7 +258,8 @@ class RuntimeMessageContextManager:
         """只替换一条工具结果行的展示 metadata，模型可见正文不变；返回实际写入的 metadata。
 
         HITL 执行结果另行追加为消息，等待占位仍是模型协议上的结果；这里只把占位的卡片状态推到
-        终态，历史前缀因此不变。卡片是否可见（``hidden``）沿用原行，不随结果改变。
+        终态，历史前缀因此不变。卡片是否可见（``hidden``）沿用原行，不随结果改变；结果没有带
+        展示数据时沿用占位的（HITL 卡片由占位的展示数据决定，如 Agent Team 的方案预览）。
 
         异常:
             KeyError: 上下文中没有该调用的结果行。
@@ -274,7 +275,14 @@ class RuntimeMessageContextManager:
         if entry is None:
             raise KeyError(tool_call_id)
         if isinstance(entry.metadata, ToolMessageMetadata):
-            metadata = metadata.model_copy(update={"hidden": entry.metadata.hidden})
+            previous = entry.metadata
+            metadata = metadata.model_copy(
+                update={
+                    "hidden": previous.hidden,
+                    "display_data": metadata.display_data or previous.display_data,
+                    "team_run_id": metadata.team_run_id or previous.team_run_id,
+                }
+            )
         self.context_store.replace_message(
             ConversationTaskContextRecord(
                 task_id=self.current_task_id,

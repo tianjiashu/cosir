@@ -14,7 +14,6 @@ function validSnapshot(): TransportState {
   return {
     messages: [],
     activity: null,
-    error: null,
   };
 }
 

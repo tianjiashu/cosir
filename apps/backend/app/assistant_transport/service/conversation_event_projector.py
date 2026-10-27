@@ -111,8 +111,7 @@ class ConversationEventProjector:
     去重与内存边界：所有事件统一按 ``event_id`` 去重（重复事件返回 ``None``，不再重复投影）。
     窗口是进程内**有界** FIFO（容量见 ``Constant.Transport.EVENT_DEDUP_WINDOW``），且不按
     task 分桶，因此既不会被长会话的事件数撑大，也不需要任何按 task 的生命周期清理钩子。
-    窗口淘汰会让极旧事件的重复投递漏网，此时依赖各事件 planner 的自幂等性兜底；
-    ``RunInitializedEvent(replace_existing=True)`` 是唯一的例外（它整体 ``set`` 会重置 run）。
+    窗口淘汰会让极旧事件的重复投递漏网，此时依赖各事件 planner 的自幂等性兜底。
     """
 
     def __init__(self, state_service: Any | None = None) -> None:

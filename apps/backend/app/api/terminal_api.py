@@ -13,12 +13,12 @@ from app.app import app
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.depends import get_terminal_session_service
-from app.service.terminal.errors import (
+from app.tools.terminal_runtime.errors import (
     TerminalSessionError,
     TerminalSessionResyncRequiredError,
 )
-from app.service.terminal.terminal_preview import TerminalPreviewSubscription
-from app.service.terminal.terminal_session_service import TerminalSessionService
+from app.tools.terminal_runtime.terminal_preview import TerminalPreviewSubscription
+from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 
 
 @app.websocket("/tasks/{task_id}/terminal/sessions/{session_id}/stream")

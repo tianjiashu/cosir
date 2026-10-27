@@ -145,25 +145,18 @@ class DelegateTaskTool(HandlerBase):
             )
             return tool_error(
                 self.name,
-                f"delegate_task child not found: {child_agent_id}",
-                reason=(
-                    f"the child agent '{child_agent_id}' is not available in this workspace; "
-                    f"verify the child_agent_id against the available child agents "
-                    f"before retrying."
-                ),
-                retryable=True,
+                f"delegate_task child not found: {child_agent_id}. "
+                f"The child agent '{child_agent_id}' is not available in this workspace; "
+                f"verify the child_agent_id against the available child agents "
+                f"before retrying.",
             )
 
         loop = execution_context.event_loop
         if loop is None or loop.is_closed():
             return tool_error(
                 self.name,
-                "delegate_task_runtime_unavailable",
-                reason=(
-                    "the parent runtime event loop is unavailable, so the child run "
-                    "cannot be started; retry from a normal turn."
-                ),
-                retryable=False,
+                "The parent runtime event loop is unavailable, so the child run "
+                "cannot be started; retry from a normal turn.",
             )
 
         try:
@@ -222,9 +215,7 @@ class DelegateTaskTool(HandlerBase):
             )
             return tool_error(
                 tool_name=self.name,
-                error="error",
-                reason="An error occurred while delegating the task.",
-                retryable=False,
+                content="An error occurred while delegating the task.",
             )
         return tool_success(
             tool_name=self.name,

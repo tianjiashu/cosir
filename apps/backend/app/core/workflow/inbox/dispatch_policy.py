@@ -1,20 +1,43 @@
 """Task 消息调度规则：纯函数，不读写数据库、不触碰执行器，可逐条单测。
 
 Task 的调度 actor（``TaskActor``）读出最新 Run 与队列，交给这里判定，再执行判定结果。规则只读
-消息属性（``kind`` / ``delivery``）与 Run 状态，投递方不另加判断。
+消息属性（``kind`` / ``delivery``）与 Task 的执行阶段，投递方不另加判断。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
-from app.models import ConversationRunRecord
-from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES, ConversationRunStatus
 from app.core.workflow.inbox.task_message import (
     RunLaunch,
     TaskMessage,
     UserInputBody,
 )
+from app.models import ConversationRunRecord
+from app.models.enums.conversation_run_status import ConversationRunStatus
+
+Phase = Literal["driving", "suspended", "idle"]
+"""Task 的执行阶段：调度、取消、恢复与静止只按它判定，不各自组合 Run 状态与执行登记。
+
+- ``driving``：有执行者。以执行登记为准而不看 Run 状态：workflow 先写终态或挂起，执行者还要跑完
+  STOP Hook、收束工具调用才释放，这段时间仍算 ``driving``——此时另开执行会出现两个执行者。
+- ``suspended``：没有执行者且 Run 挂起，等可唤醒消息。
+- ``idle``：没有执行者且 Run 已到终态，或尚无 Run。
+"""
+
+
+def phase_of(current: ConversationRunRecord | None, driving: bool) -> Phase:
+    """由当前 Run 与执行登记得出执行阶段。
+
+    不存在「running 但没有执行者」：新 Run 与执行登记在同一次 Task 闸门内完成，``RunDriver``
+    返回前一定把 Run 落定为终态或挂起，重启时遗留的 running Run 先由 lifespan 收敛为 cancelled。
+    """
+    if driving:
+        return "driving"
+    if current is not None and current.status == ConversationRunStatus.SUSPENDED:
+        return "suspended"
+    return "idle"
 
 
 @dataclass(frozen=True)
@@ -45,8 +68,8 @@ Action = Deliver | Wake | StartRun | Stay
 
 
 def next_action(
+    phase: Phase,
     current: ConversationRunRecord | None,
-    has_executor: bool,
     pending: list[TaskMessage],
     fresh: list[TaskMessage],
 ) -> Action:
@@ -56,23 +79,21 @@ def next_action(
     actor 的水位区分）。只看新到达的消息决定要不要推进：残留消息（运行中排队的 ``next_run``、取消
     或失败后没处理的）不会反复触发，随下一次推进一起并入。
 
+    ``current`` 只用来继承发起配置。
+
     - 有执行者：投递全部 ``immediate`` 消息，``next_run`` 留给下一个 Run；mailbox 按行 id 去重。
     - 挂起：新到达的 ``immediate`` 消息里有能推进的（``WAKES``，系统通知除外）就唤醒同一个 Run。
     - 终态或尚无 Run：新到达的消息里有能推进的就新开 Run，不区分谁发起——用户停止后到达的后台
       结果同样会开出新 Run。配置取队列中**最后**一条用户输入（用户最新的选择），没有用户输入时
       继承当前 Run；无从继承（模型配置已删除、尚无 Run）时不动，消息留在队列里。
     """
-    if has_executor:
+    if phase == "driving":
         return Deliver([message for message in pending if message.delivery == "immediate"])
-    status = current.status if current is not None else None
-    if status == ConversationRunStatus.SUSPENDED:
+    if phase == "suspended":
         wakes = any(
             message.delivery == "immediate" and type(message.body).WAKES for message in fresh
         )
         return Wake() if wakes else Stay()
-    if status in ACTIVE_RUN_STATUSES:
-        # running 却没有执行者：只在启动瞬间或进程状态异常时出现，不在这里另开执行。
-        return Stay()
     if not any(type(message.body).WAKES for message in fresh):
         return Stay()
     launches = [

@@ -1,7 +1,7 @@
 """Conversation Run 生命周期状态机：状态枚举、命名迁移表与派生状态集合的唯一定义。
 
 状态值即落库字符串。所有状态迁移只在 ``RunTransition`` 声明，由
-``ConversationRunStateService`` 据此做一次条件更新；「活跃」「终态」等判断一律引用本模块的派生集合，
+``ConversationRunLedger`` 据此做一次条件更新；「活跃」「终态」等判断一律引用本模块的派生集合，
 不在调用点手写状态组合。
 
 Run 由 Task 的调度 actor（``TaskActor``）直接以 running 创建，没有「待认领」态。挂起有两种：Agent

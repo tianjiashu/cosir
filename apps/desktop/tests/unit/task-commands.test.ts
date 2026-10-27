@@ -17,8 +17,8 @@ const REQUEST: TaskMessageRequest = {
   banTools: ["read_file"],
 };
 
-/** 命令只投递：后端返回 202 `{}`（排队消息编辑 200 `{}`），结果经 Task 长订阅到达。 */
-function accepted(status = 202) {
+/** 后端处理完这一轮返回 200 `{}`，输出经 Task 长订阅到达。 */
+function accepted(status = 200) {
   return vi.fn().mockImplementation(async () => new Response("{}", { status }));
 }
 

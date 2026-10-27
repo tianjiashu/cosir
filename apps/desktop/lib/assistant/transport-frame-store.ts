@@ -3,9 +3,7 @@ import type { ThreadMessage } from "@assistant-ui/react";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import {
   isActiveRunStatus,
-  isNewCommandError,
   isTerminalRunStatus,
-  type TransportError,
   type TransportMessage,
   type TransportQueuedMessage,
   type TransportRunStatus,
@@ -13,7 +11,6 @@ import {
 } from "@/lib/assistant/contract";
 import {
   toPendingUserMessage,
-  toSnapshotErrorMessage,
   toThreadMessageWithRenderContext,
   type TransportMessageRenderContext,
   type UserAddMessageCommand,
@@ -34,8 +31,7 @@ export type TransportFrameEnvelope = {
 
 export type FrameStoreItem =
   | { kind: "canonical"; message: TransportMessage | TransportQueuedMessage; context: TransportMessageRenderContext }
-  | { kind: "pending"; command: UserAddMessageCommand }
-  | { kind: "error"; error: TransportError };
+  | { kind: "pending"; command: UserAddMessageCommand };
 
 /**
  * 当前活动的状态跳变。`started`：从非活动进入活动态（一轮开始）；`settled`：从活动态进入终态
@@ -56,8 +52,6 @@ type StoreSnapshot = {
 
 type Listener = () => void;
 type ActivityListener = (transition: ActivityTransition) => void;
-/** 乐观命令随顶层 `error` 写入被整体收回时的监听者：宿主据此把草稿恢复给用户。 */
-type RejectionListener = (commands: readonly UserAddMessageCommand[], error: TransportError) => void;
 
 type ScheduledCommit = {
   cancel: () => void;
@@ -143,7 +137,6 @@ export class TransportFrameStore {
   private snapshot: StoreSnapshot;
   private readonly listeners = new Set<Listener>();
   private readonly activityListeners = new Set<ActivityListener>();
-  private readonly rejectionListeners = new Set<RejectionListener>();
   private scheduledCommit: ScheduledCommit | null = null;
   private scheduledFrameTimestamp: number | null = null;
   private readonly scheduleCommit: (callback: (frameTimestamp?: number) => void) => ScheduledCommit;
@@ -166,12 +159,6 @@ export class TransportFrameStore {
   public subscribeActivity = (listener: ActivityListener): (() => void) => {
     this.activityListeners.add(listener);
     return () => this.activityListeners.delete(listener);
-  };
-
-  /** 订阅「命令被拒」：顶层 `error` 由空变为非空时，被收回的乐观命令随之交给监听者。 */
-  public subscribeRejection = (listener: RejectionListener): (() => void) => {
-    this.rejectionListeners.add(listener);
-    return () => this.rejectionListeners.delete(listener);
   };
 
   public getSnapshot = (): StoreSnapshot => this.snapshot;
@@ -210,9 +197,8 @@ export class TransportFrameStore {
     }
     if (structural) {
       this.rebuildAllItems();
-      const rejected = this.reconcilePending(previous);
+      this.reconcilePending(previous);
       this.publishNow();
-      this.emitRejection(previous, rejected);
       this.emitActivityTransition(previous);
     } else {
       this.refreshMessageItems(contentOnlyIndexes);
@@ -274,37 +260,22 @@ export class TransportFrameStore {
     this.cancelScheduledCommit();
     this.state = state;
     this.rebuildAllItems();
-    const rejected = this.reconcilePending(previous);
+    this.reconcilePending(previous);
     this.publish();
-    this.emitRejection(previous, rejected);
     this.emitActivityTransition(previous);
   }
 
   /**
    * 乐观命令的收敛：snapshot 里新出现了用户消息（排队或已并入）就按出现顺序去掉同样数量的最早
-   * 乐观命令；顶层 `error` 出现新的拒绝（从无到有，或 `seq` 变了——连续两次同样的拒绝值相同，
-   * 只能靠 `seq` 区分）时全部去掉。202 本身不清。
+   * 乐观命令。命令被拒由提交方按 HTTP 结果经 `clearPendingCommands` 收回，不经这里。
    */
-  private reconcilePending(previous: TransportState): readonly UserAddMessageCommand[] {
-    if (this.pendingCommands.length === 0) return [];
+  private reconcilePending(previous: TransportState): void {
+    if (this.pendingCommands.length === 0) return;
     const known = userMessageIds(previous);
     const appeared = [...userMessageIds(this.state)].filter((id) => !known.has(id)).length;
-    const rejected = isNewCommandError(previous.error, this.state.error);
-    if (!rejected && appeared === 0) return [];
-    const dropped = rejected ? this.pendingCommands : [];
-    this.pendingCommands = rejected ? [] : this.pendingCommands.slice(appeared);
+    if (appeared === 0) return;
+    this.pendingCommands = this.pendingCommands.slice(appeared);
     this.composeItems();
-    return dropped;
-  }
-
-  /**
-   * 每次新的命令拒绝都通知，即使没有乐观命令被收回（恢复、取消等命令不产生乐观消息，宿主仍要
-   * 据此复位按钮等交互状态）。
-   */
-  private emitRejection(previous: TransportState, commands: readonly UserAddMessageCommand[]): void {
-    const error = this.state.error;
-    if (!isNewCommandError(previous.error, error)) return;
-    for (const listener of this.rejectionListeners) listener(commands, error);
   }
 
   /**
@@ -375,9 +346,6 @@ export class TransportFrameStore {
   }
 
   private composeItems(): void {
-    const error: FrameStoreItem[] = this.state.error
-      ? [{ kind: "error", error: this.state.error }]
-      : [];
     const pending: FrameStoreItem[] = this.pendingCommands.map((command) => ({
       kind: "pending",
       command,
@@ -387,7 +355,7 @@ export class TransportFrameStore {
       message,
       context: QUEUED_CONTEXT,
     }));
-    this.items = [...this.canonicalItems, ...queued, ...error, ...pending];
+    this.items = [...this.canonicalItems, ...queued, ...pending];
   }
 
   private makeSnapshot(): StoreSnapshot {
@@ -528,12 +496,9 @@ export function convertFrameStoreItem(item: FrameStoreItem): ThreadMessage {
   if (item.kind === "canonical") {
     return toThreadMessageWithRenderContext(item.message, item.context);
   }
-  if (item.kind === "pending") {
-    const message = toPendingUserMessage(item.command);
-    if (!message) throw new Error("pending add-message command has no renderable parts");
-    return message;
-  }
-  return toSnapshotErrorMessage(item.error);
+  const message = toPendingUserMessage(item.command);
+  if (!message) throw new Error("pending add-message command has no renderable parts");
+  return message;
 }
 
 function applyMutation(

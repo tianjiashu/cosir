@@ -128,13 +128,9 @@ class ToolAccessGate:
             return ToolGateOutcome(
                 denial=tool_error(
                     call.tool_name,
-                    f"unknown tool: {call.tool_name}",
-                    reason=(
-                        f"the tool '{call.tool_name}' is not registered in the tool "
-                        f"system;"
-                    ),
+                    f"unknown tool: {call.tool_name}. "
+                    "This tool is not registered; call only the tools you were given.",
                     tool_call_id=call.call_id,
-                    retryable=False,
                 )
             )
 
@@ -142,13 +138,12 @@ class ToolAccessGate:
             return ToolGateOutcome(
                 denial=tool_error(
                     tool.name,
-                    f"tool is not allowed: {tool.name}",
                     # 禁用是 Run 级策略性拒绝：只回传「本轮禁用、停止调用」这一个信号，不复述
                     # 策略来源（哪条 profile / 谁关掉的），也不把可用工具集回灌给模型——模型本就
-                    # 持有工具声明，回灌只会放大提示面。retryable=False 与该信号配套。
-                    reason="This tool is disabled for the current run. Do not call again",
+                    # 持有工具声明，回灌只会放大提示面。
+                    f"tool is not allowed: {tool.name}. "
+                    "This tool is disabled for the current run. Do not call it again.",
                     tool_call_id=call.call_id,
-                    retryable=False,
                 )
             )
 
@@ -158,12 +153,9 @@ class ToolAccessGate:
             return ToolGateOutcome(
                 denial=tool_error(
                     tool.name,
-                    "Invalid tool arguments",
-                    reason=(
-                        "Tool arguments must be a valid JSON object; correct them before retrying."
-                    ),
+                    "Invalid tool arguments. "
+                    "Tool arguments must be a valid JSON object; correct them before retrying.",
                     tool_call_id=call.call_id,
-                    retryable=True,
                 )
             )
 
@@ -176,14 +168,11 @@ class ToolAccessGate:
             return ToolGateOutcome(
                 denial=tool_error(
                     tool.name,
-                    f"invalid tool arguments: {validation.error}",
-                    reason=(
-                        "this is deterministic, so fix the argument values/types per "
-                        "the tool's parameter schema and call again. The same "
-                        "arguments will always be rejected."
-                    ),
+                    f"invalid tool arguments: {validation.error}. "
+                    "This is deterministic, so fix the argument values/types per "
+                    "the tool's parameter schema and call again. The same "
+                    "arguments will always be rejected.",
                     tool_call_id=call.call_id,
-                    retryable=True,
                 )
             )
 
@@ -258,11 +247,9 @@ class ToolAccessGate:
             or HookResult.allow()
         )
         if decision.decision == HookDecision.DENY:
-            reason = decision.deny_reason or "blocked by pre-tool-use hook"
             return tool_error(
                 tool.name,
-                reason,
-                reason=reason,
+                decision.deny_reason or "blocked by pre-tool-use hook",
                 tool_call_id=tool_call_id,
             )
         if decision.modified_arguments is not None:

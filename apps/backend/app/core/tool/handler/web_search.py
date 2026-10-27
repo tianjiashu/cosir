@@ -61,17 +61,15 @@ class WebSearchTool(HandlerBase):
             )
             return tool_error(
                 self.name,
-                str(exc),
-                reason="configure Firecrawl locally before continuing.",
-                retryable=False,
+                f"{exc}. "
+                "Configure Firecrawl locally before continuing.",
             )
         except Exception:
             log.exception("web_search_failed", extra={"msg": "网页搜索调用失败", "data": {}})
             return tool_error(
                 self.name,
-                "Web search failed.",
-                reason="try the search again.",
-                retryable=True,
+                "Web search failed. "
+                "Try the search again.",
             )
         web_results = [
             {

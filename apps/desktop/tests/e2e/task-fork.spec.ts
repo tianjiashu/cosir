@@ -18,7 +18,6 @@ const snapshot = (status: "completed" | "running" | "suspended"): TransportState
   return {
     messages: [...turn(1, "completed"), ...turn(2, status)],
     activity: { runId: 2, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH },
-    error: null,
   };
 };
 

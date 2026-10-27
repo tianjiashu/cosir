@@ -26,7 +26,7 @@ async function seedSidebar(page: Page, request: APIRequestContext, theme: string
   for (const task of tasks) {
     await page.route(`${origin}/tasks/${task.task_id}`, (route) => route.fulfill({ json: task }));
     // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要一条常驻连接，路由夹具无法保持。
-    await seedState(request, task.task_id, { messages: [], activity: null, error: null });
+    await seedState(request, task.task_id, { messages: [], activity: null });
   }
 }
 

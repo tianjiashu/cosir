@@ -4,7 +4,7 @@
 直接注册到 ``app.api.app.app`` 单例中。
 
 分层约定：任务查询、轮次列表与事件回放均依赖业务 service；删除前停止执行经
-``WorkflowSession``。
+``task_runtime_spaces.stop``。
 """
 
 import asyncio
@@ -19,6 +19,7 @@ from app.api.schemas import (
     TaskResponse,
 )
 from app.app import app
+from app.assistant_transport.state.message_identity import turn_of
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
     ProvisionalTaskCleanupConflictError,
@@ -28,13 +29,12 @@ from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
-from app.service.conversation_run.workflow_session import WorkflowSession
 from app.service.depends import (
     get_conversation_task_context_service,
     get_task_service,
-    get_workflow_session,
 )
 from app.task_runtime.service.task_service import TaskService
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 @app.get("/context-messages", response_model=list[ContextMessageResponse])
@@ -90,12 +90,24 @@ async def fork_task(
     payload: ForkTaskRequest,
     task_service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
-    """从源 Task 指定历史 Run 创建一个新的 fork Task。"""
+    """从源 Task 的某条消息处创建一个新的 fork Task：复制到这条消息所在那一轮回复为止。"""
 
     try:
-        target = await task_service.fork_task(task_id, payload.run_id)
+        turn = turn_of(payload.message_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "FORK_MESSAGE_ID_INVALID", "message": str(exc), "retryable": False},
+        ) from exc
+    try:
+        target = await task_service.fork_task(
+            task_id,
+            user_message_id=turn.user_message_id,
+            leading_run_id=turn.leading_run_id,
+            source_message_id=payload.message_id,
+        )
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="task or run not found") from exc
+        raise HTTPException(status_code=404, detail="task or message not found") from exc
     except TaskForkConflictError as exc:
         raise HTTPException(
             status_code=409,
@@ -108,7 +120,6 @@ async def fork_task(
 async def delete_task(
     task_id: int,
     task_service: TaskService = Depends(get_task_service),
-    workflow_session: WorkflowSession = Depends(get_workflow_session),
     creation_command_id: str | None = Query(default=None, alias="creationCommandId"),
 ) -> DeleteTaskResponse:
     """删除单个任务及其级联的轮次与运行时事件。
@@ -116,7 +127,6 @@ async def delete_task(
     参数:
         task_id: 来自路由的任务标识。
         task_service: 通过依赖注入的任务 service（负责级联清理）。
-        workflow_session: 普通删除前用于停止整棵任务树的执行并等待释放。
         creation_command_id: 前端在首条命令未被接受时回收 provisional Task 的创建标记；
             提供时走受控清理，任务树此时尚无 Run，故不经停止执行。
 
@@ -142,10 +152,9 @@ async def delete_task(
                 creation_command_id,
             )
         else:
-            # 先在删除闸门外停止整棵任务树的执行并等其释放，否则工作流会在已删除的 Task 上
-            # 继续请求模型、执行工具。
             task_ids = await asyncio.to_thread(task_service.collect_task_tree_ids, task_id)
-            await workflow_session.stop_tasks(task_ids)
+            # 先停下整棵任务树的 actor（停止执行并等它落定），再进删除闸门。
+            await task_runtime_spaces.stop(task_ids)
             await asyncio.to_thread(task_service.delete_task, task_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc

@@ -5,29 +5,31 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import time
 from collections import defaultdict
 from threading import RLock
 
-from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.agent_team.configuration.team_node_definition import TeamNodeDefinition
-from app.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY, build_node_profile
-from app.agent_team.state.agent_team_run_state import (
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.models.agent_team.configuration.team_node_definition import TeamNodeDefinition
+from app.core.tool.handler.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY, build_node_profile
+from app.models.agent_team.state.agent_team_run_state import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
     AgentTeamRunState,
 )
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.models import ConversationRunRecord
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
-from app.service.agent_team.agent_team_run_archive_service import AgentTeamRunArchiveService
+from app.core.tool.handler.agent_team.agent_team_run_archive_service import AgentTeamRunArchiveService
 from app.service.depends import (
-    get_conversation_run_service,
+    get_conversation_run_ledger,
+    get_user_input_service,
     get_task_service,
-    get_workflow_session,
     get_workspace_service,
 )
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
@@ -36,10 +38,12 @@ from app.storage.store_engines import main_session_factory
 
 # 等待节点释放期间检查父 Task 取消信号的间隔；与工具执行层的取消轮询同量级。
 _NODE_CANCEL_POLL_SECONDS = 0.2
+# 投递节点输入后等节点 actor 开出新 Run 的上限。
+_NODE_RUN_START_TIMEOUT_SECONDS = 30.0
 
 
 class AgentTeamCoordinator:
-    """拥有 TeamRun 的节点调度状态机，节点 Run 经 ``WorkflowSession.submit`` 启动。
+    """拥有 TeamRun 的节点调度状态机，节点输入经 ``task_runtime_spaces.enqueue`` 投递给节点 Task。
 
     每条 Team 由一个异步驱动任务串行执行节点：Coordinator 等待节点 Run 结束、读取其
     持久化 ``final_output``、结算 transition 并创建下一节点。Executor 只执行单个 Run；主
@@ -48,12 +52,12 @@ class AgentTeamCoordinator:
 
     def __init__(self) -> None:
 
-        from app.config.configuration import get_agent_registry, get_tool_system
+        from app.config.configuration import get_agent_registry, get_tool_registry
 
         self._team_run_crud = AgentTeamRunCrud()
         self._task_service = get_task_service()
-        self._tool_system = get_tool_system()
-        self._run_service = get_conversation_run_service()
+        self._tool_registry = get_tool_registry()
+        self._ledger = get_conversation_run_ledger()
         self._session_factory = main_session_factory()
         self._locks_guard = RLock()
         self._locks: dict[int, RLock] = defaultdict(RLock)
@@ -70,21 +74,21 @@ class AgentTeamCoordinator:
 
         本方法只接受已经持久化且完成确认的 ``running`` TeamRun，不读取待确认请求、预览
         文档或用户确认参数。TeamRun 的创建、确认和 ``pending`` 到 ``running`` 的原子迁移
-        由执行请求 service 完成。调用方是 ``AgentTeamDecisionService`` 的后台任务（工作线程）；
-        节点 Run 经 ``WorkflowSession.submit`` 在主事件循环 ``event_loop`` 上启动，本线程只等待其
-        释放。
+        由 ``agent_team`` 工具按用户决定完成。调用方是 ``agent_team`` 工具的执行线程（阻塞到落定）；
+        节点输入经 ``task_runtime_spaces.enqueue`` 投递，本线程等节点 Task 换上新 Run 后记下，再经
+        主事件循环 ``event_loop`` 订阅节点 actor 的静止状态（``wait_idle``）等结论。
 
-        取消：以 TeamRun 自身状态为准，不读父 Task 的取消信号——Team 在后台执行时父 Run 可能处于
-        挂起，没有执行者也就没有信号。父 Agent 取消、用户在卡片上取消都经 :meth:`cancel` 把
-        TeamRun 落定 cancelled；本循环每轮开始前与节点结束后检查，等待节点期间检出则停止节点。
+        取消：以 TeamRun 自身状态为准，不读父 Task 的取消信号——单一事实源，节点等待轮询与调度
+        循环只看它。主 Task 停止由其 actor 发起停止时经 :meth:`cancel_for_parent_run_id`、用户在
+        卡片上取消经 :meth:`cancel` 把 TeamRun 落定 cancelled；本循环每轮开始前与节点结束后检查，等待节点期间检出则停止节点。
 
         返回:
-            落定终态后的 TeamRun 快照。
+            落定终态后的 TeamRun 快照。调度异常（含已冻结的节点配置或运行快照无效、重复启动）不向
+            调用方抛出：这里记录堆栈、把仍在运行的 TeamRun 收敛为 failed 并写档案，再返回落定快照——
+            调用方（``agent_team`` 工具）只需把结论交给模型，不必再捕获、再记一遍日志。
 
         异常:
             KeyError: TeamRun 不存在。
-            ValueError: Team 已处于非运行态或已有活动节点（重复启动），或已冻结的节点配置或
-                运行快照无效。
         """
         state: AgentTeamRunState | None = None
         try:
@@ -247,7 +251,6 @@ class AgentTeamCoordinator:
                 (AgentTeamRunStatus.RUNNING.value,), state=state,
                 end_reason=failure_reason, ended=True,
             )
-            raise
         finally:
             # 所有正常终态分支与调度异常共用同一档案出口；写入失败由档案 service 记录，
             # 不覆盖已经收敛的 TeamRun 结果。
@@ -283,9 +286,9 @@ class AgentTeamCoordinator:
         本方法是「可信调用方」的写助手：``row`` / ``state`` / ``configuration`` 由调用方在
         自身事务中加载并校验——``start`` 在入口统一校验 Team 存在、处于 running 且无活动节点；
         驱动循环在结算时按锁定后的快照校验。本方法不再读取或重新校验 Team 身份与生命周期
-        状态，只负责按节点快照派生 Task、校验节点 profile、经 ``WorkflowSession.submit`` 把节点
-        输入交给节点 Task（静止的节点 Task 随即开 Run），按 Task 等它静止（返回时最新 Run 已是
-        终态），再落定执行记录。
+        状态，只负责按节点快照派生 Task、校验节点 profile、经 ``task_runtime_spaces.enqueue`` 把节点
+        输入投递给节点 Task（静止的节点 Task 随即开 Run），等新 Run 出现即记下，再按 Task 等它
+        静止（返回时最新 Run 已是终态），落定执行记录。
         ``state.start_node`` 仍持有活动节点游标的领域守卫。
 
         同一 TeamRun 中的节点按 ``node_id`` 绑定独立 Task；再次访问该节点时读取原 Task，
@@ -310,6 +313,8 @@ class AgentTeamCoordinator:
             其余异常（工具 schema 解析失败、注册表未命中等）直接上浮，由 :meth:`start` 统一
             收敛为 TeamRun ``failed``。节点 Run 执行期的失败（含模型配置已删除）由运行时落定
             为该 Run 的 ``failed``，不在这里抛出。
+            RuntimeError: 节点输入已投递，但节点 Run 没能建立（原因由调度 actor 记录），同样由
+            :meth:`start` 收敛为 TeamRun ``failed``。
 
         副作用:
             可能新建节点 Task（首次执行该节点时）；新开一条 running 节点 Run 并执行到终态；
@@ -355,21 +360,21 @@ class AgentTeamCoordinator:
         # 节点快照在建 Run 之前先合成一次：契约非法时直接上浮，不留下无执行者的节点 Run。真正驱动
         # 时由 run_driver 从节点 Task 的快照重新合成，不经调度入口在内存中传递定义。
         build_node_profile(agent_profile, node_runtime)
-        session = get_workflow_session()
-        asyncio.run_coroutine_threadsafe(
-            session.submit(
-                node_execution.task_id,
-                ConversationRunCommand(display_text=input_text),
-                agent_id=agent_id,
-                model_config_id=node_runtime.model_config_id,
-                reasoning_effort=reasoning_effort,
-            ),
-            event_loop,
-        ).result()
-        # 节点 Task 只由本协调器顺序投递、提交时必然静止，提交后 Task 的最新 Run 即本次节点 Run。
-        node_execution.conversation_run_ids.append(
-            self._task_service.get_task(node_execution.task_id).current_run_id
+        previous_run_id = self._task_service.get_task(node_execution.task_id).current_run_id
+        message = get_user_input_service().prepare(
+            node_execution.task_id,
+            ConversationRunCommand(display_text=input_text),
+            node_runtime.model_config_id,
+            reasoning_effort,
+            agent_id,
         )
+        task_runtime_spaces.enqueue(node_execution.task_id, message)
+        # 节点 Task 只由本协调器顺序投递、投递时必然静止，投递必然新开 Run；没开出来说明调度违约，
+        # 上浮由 :meth:`start` 收敛为 TeamRun ``failed``。节点 Run 一启动就记下：执行时间线与 Team
+        # 取消（``AgentTeamRunState.cancel``）都按它定位。
+        # TODO(Agent Team 接入)：改为订阅节点 actor 的状态，不轮询 Task 当前 Run。
+        node_run_id = self._wait_new_run(node_execution.task_id, previous_run_id)
+        node_execution.conversation_run_ids.append(node_run_id)
         row = self._team_run_crud.update_status_if_in(
             team_run_id,
             AgentTeamRunStatus.RUNNING.value,
@@ -385,12 +390,10 @@ class AgentTeamCoordinator:
                     "data": {"run_id": team_run_id, "node_id": node_id},
                 },
             )
-            asyncio.run_coroutine_threadsafe(
-                session.cancel(node_execution.task_id, reason="parent"), event_loop
-            ).result()
+            task_runtime_spaces.cancel(node_execution.task_id, "parent")
         self._wait_node(event_loop, team_run_id, node_execution.task_id)
         latest = self._task_service.get_task(node_execution.task_id).current_run_id
-        return node_execution, self._run_service.get_run(latest)
+        return node_execution, self._ledger.get_run(latest)
 
     def _wait_node(
             self,
@@ -400,16 +403,25 @@ class AgentTeamCoordinator:
     ) -> None:
         """按 Task 阻塞等待节点静止（挂起不算）；期间 TeamRun 被取消则停止节点。"""
 
-        session = get_workflow_session()
+        actor = task_runtime_spaces.get_or_create(node_task_id).actor
         cancel_sent = False
         while not asyncio.run_coroutine_threadsafe(
-            session.wait_idle(node_task_id, _NODE_CANCEL_POLL_SECONDS), event_loop
+            actor.wait_idle(_NODE_CANCEL_POLL_SECONDS), event_loop
         ).result():
             if not cancel_sent and self._stopped(team_run_id):
-                asyncio.run_coroutine_threadsafe(
-                    session.cancel(node_task_id, reason="parent"), event_loop
-                ).result()
+                task_runtime_spaces.cancel(node_task_id, "parent")
                 cancel_sent = True
+
+    def _wait_new_run(self, node_task_id: int, previous_run_id: int | None) -> int:
+        """阻塞到节点 Task 的当前 Run 换成新 Run（本线程是工作线程）；超时视为调度违约。"""
+
+        deadline = time.monotonic() + _NODE_RUN_START_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            current = self._task_service.get_task(node_task_id).current_run_id
+            if current is not None and current != previous_run_id:
+                return current
+            time.sleep(_NODE_CANCEL_POLL_SECONDS)
+        raise RuntimeError(f"task {node_task_id} 的节点输入没有启动新 Run")
 
     def _stopped(self, team_run_id: int) -> bool:
         """TeamRun 已不在运行（被取消或已收敛）时返回真；调度循环与节点等待据此停下。"""
@@ -430,7 +442,7 @@ class AgentTeamCoordinator:
         """按节点快照声明的 ``allowed_tools`` 名字，从当前工具注册表解析冻结 schema。
 
         节点运行快照只持久化工具名（``allowed_tools``），工具 schema 在节点启动时按名字
-        从进程级 ToolSystem 实时解析并固化进 Task。这样快照不必携带易漂移的 schema 契约，
+        从进程级工具注册表实时解析并固化进 Task。这样快照不必携带易漂移的 schema 契约，
         也保证节点工具集合与确认时一致（工具名冻结于快照）。
 
         参数:
@@ -443,7 +455,7 @@ class AgentTeamCoordinator:
         异常:
             ValueError: 某个工具名在当前注册表中不存在（可能已在确认后从 workspace 移除）。
         """
-        registered = {tool.name: tool for tool in self._tool_system.executor.list_tools()}
+        registered = {tool.name: tool for tool in self._tool_registry.get_all_definitions()}
         schemas: list[dict[str, object]] = []
         for name in allowed_tools:
             tool = registered.get(name)
@@ -513,7 +525,16 @@ class AgentTeamCoordinator:
 
         return self._workspace_service.get_workspace(workspace_id).root_path
 
-    def cancel(self, team_run_id: int) -> AgentTeamRunModel | None:
+    def cancel(
+            self,
+            team_run_id: int,
+            end_reason: AgentTeamRunEndReason = AgentTeamRunEndReason.CANCELLED,
+    ) -> AgentTeamRunModel | None:
+        """把待确认或运行中的 TeamRun 落定 cancelled 并停止当前节点；已在终态时原样返回。
+
+        ``end_reason`` 区分用户在卡片上取消与随主 Run 停止（``PARENT_CANCELLED``），写进 TeamRun
+        与运行档案供诊断。
+        """
 
         row = self._team_run_crud.get_by_id(team_run_id)
         if row.status not in {"pending", "running"}:
@@ -525,12 +546,15 @@ class AgentTeamCoordinator:
                                                           AgentTeamRunStatus.RUNNING.value,
                                                           AgentTeamRunStatus.PENDING.value,
                                                       ),
-                                                      end_reason=AgentTeamRunEndReason.CANCELLED.value,
+                                                      end_reason=end_reason.value,
                                                       ended=True)
         if row is None:
             return row
 
-        state.cancel()
+        node_task_id = state.running_node_task_id()
+        if node_task_id is not None:
+            # 交给节点 Task 的 actor：运行中打信号，挂起的直接迁移；只发起，不等待。
+            task_runtime_spaces.cancel(node_task_id, "parent")
         self._run_archive_service.write_terminal_archive(row.id)
         log.info(
             "agent_team_run_cancelled",
@@ -539,7 +563,7 @@ class AgentTeamCoordinator:
                 "data": {
                     "team_run_id": row.id,
                     "parent_run_id": row.parent_run_id,
-                    "end_reason": AgentTeamRunEndReason.CANCELLED.value,
+                    "end_reason": end_reason.value,
                 },
             },
         )
@@ -584,8 +608,8 @@ class AgentTeamCoordinator:
     def cancel_for_parent_run_id(self, parent_run_id: int) -> int:
         """取消指定主 Agent Run 创建的所有活动 Team。
 
-        该方法由 ``WorkflowSession`` 在主 Run 落定 cancelled 后调用，负责把主 Run 的取消信号
-        传播到待确认或运行中的 Team 及其当前节点 Run。
+        由主 Task 的 actor 在发起停止时调用（不等主 Run 落定：``agent_team`` 工具阻塞在 Team 上，
+        主 Run 要等 Team 停下才能走到检查点），把停止传播到待确认或运行中的 Team 及其当前节点 Run。
 
         参数:
             parent_run_id: 主 Agent ConversationRun 标识。
@@ -605,7 +629,7 @@ class AgentTeamCoordinator:
         ):
             if row.parent_run_id != parent_run_id:
                 continue
-            team = self.cancel(row.id)
+            team = self.cancel(row.id, AgentTeamRunEndReason.PARENT_CANCELLED)
             if team is not None:
                 cancelled += 1
         return cancelled

@@ -15,7 +15,9 @@ class EmptyMessageMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-MessageKind = Literal["user_input", "notice", "decision", "agent_result", "background_result"]
+MessageKind = Literal[
+    "user_input", "notice", "decision", "agent_result", "background_result", "tool_result"
+]
 """Task 消息队列的消息种类；并入 context 后记在 user 消息的 metadata 上，后端规则只读它。"""
 
 

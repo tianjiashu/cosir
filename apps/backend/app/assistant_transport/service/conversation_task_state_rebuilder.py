@@ -13,26 +13,37 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
 )
 
+from app.assistant_transport.projection.snapshot_navigation import message
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.projection.user_input_projection import build_user_input_parts
-from app.assistant_transport.state.conversation_run_snapshot import (
-    ConversationRunSnapshot,
+from app.assistant_transport.state.conversation_state_activity import (
+    ConversationStateActivity,
     run_launch_snapshot,
 )
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
-from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
+from app.assistant_transport.state.conversation_state_message import (
+    ConversationStateMessage,
+    ConversationStateOutcome,
+)
 from app.assistant_transport.state.conversation_state_part import (
+    ConversationStatePart,
     ConversationStateTextPart,
     ConversationStateToolCallPart,
 )
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
+from app.assistant_transport.state.message_identity import (
+    leading_reply_id,
+    reply_id,
+    user_message_id,
+)
 from app.config.configuration import get_tool_registry
 from app.core.llm_provider.message_codec import display_arguments
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.models.task_record import TaskRecord
 from app.utils.message_content import content_to_text
@@ -176,21 +187,15 @@ class ConversationTaskStateRebuilder:
         return tool_definition.display.to_dict()
 
     @staticmethod
-    def build_user_message(
-        message_id: str, presentation: UserInputPresentation
-    ) -> ConversationStateMessage:
+    def build_user_parts(presentation: UserInputPresentation) -> list[ConversationStatePart]:
         """用户消息只按展示绑定投影，不读 SDK 正文（附件解析后的模型正文不适合展示）。"""
-        return ConversationStateMessage(
-            id=message_id,
-            role="user",
-            parts=[
-                *build_user_input_parts(
-                    presentation.display_text,
-                    presentation.image_paths,
-                    presentation.attachments,
-                )
-            ],
-        )
+        return [
+            *build_user_input_parts(
+                presentation.display_text,
+                presentation.image_paths,
+                presentation.attachments,
+            )
+        ]
 
     @staticmethod
     def rebuild(
@@ -201,24 +206,23 @@ class ConversationTaskStateRebuilder:
         """从三类规范记录装配出通过校验的 Task 级 Transport 快照。
 
         参数:
-            task: Task 级当前 Run 与上下文用量事实。
+            task: Task 级当前 Run 事实（``current_run_id`` 即当前活动）。
             runs: 属于 ``task`` 的全部 Run 记录。
-            context_rows: 该 Task 已持久化的 领域消息与 Transport 元数据。
+            context_rows: 该 Task 已持久化的领域消息与 Transport 元数据。
 
         返回:
-            新的 ``ConversationStateSnapshot``。Run 的排序为 ``created_at`` 再按 id；同一 Run 的
-            assistant 行按用户消息分组展示。中断输出也保留展示；已落库文本均已停止生成，
-            不由 Run 状态反推。
+            新的 ``ConversationStateSnapshot``：消息按 Run（``created_at`` 再按 id）、Run 内按
+            context 序号扁平排列；同一 Run 的 assistant 行按用户消息分组成一条回复，用户消息之前的
+            回复用 ``assistant-run-{runId}``。已到终态的 Run 把结局写到它最后一条助手消息的
+            ``outcome``。中断输出也保留展示；已落库文本均已停止生成，不由 Run 状态反推。
 
         异常:
             RuntimeError: 某条工具结果行在同一 Run 内找不到对应的 AI 工具调用。
 
         副作用:
-            无。本方法不访问 Session、快照存储、checkpoint、工具、前端运行时状态或进程内
-            Transport registry。
+            无。本方法不访问 Session、快照存储、工具、前端运行时状态或进程内 Transport registry。
         """
 
-        run_records = list(runs)
         # Task 系统提示词是模型上下文事实，不属于任何 Conversation Run，也不应出现在
         # Assistant Transport 快照中。其合法的 ``run_id=None`` 不能参与下方的整数分组排序。
         run_context_rows = [row for row in context_rows if row.run_id is not None]
@@ -230,100 +234,111 @@ class ConversationTaskStateRebuilder:
             )
         }
 
-        snapshot_runs: list[ConversationRunSnapshot] = []
-
-        for run in run_records:
-            # 当前 Run 没有 context 行也必须出现在快照里：`current_run_id` 必须指向快照中的某个
-            # Run（``validate_snapshot`` 强校验），而新建 Run 在写入首条消息前正是这个状态。行全部
-            # 被移出投影的 Run（编辑替换掉的整段旧 Run）不进快照。
-            rows: list[ConversationTaskContextRecord] = sorted(
-                run_groups.get(run.id, []), key=lambda row: row.sequence
-            )
-
-            tool_parts_dict = ConversationTaskStateRebuilder.build_pair_tool_part(
-                rows,
-            )
-
-            snapshot_messages: list[ConversationStateMessage] = []
-            assistant_message = ConversationStateMessage(
-                id=f"assistant-{run.id}", role="assistant", parts=[]
-            )
-            has_user_message = False
-            for row in rows:
-                if not row.project_to_transport:
-                    continue
-                message = row.message
-                if message["role"] == "user":
-                    user_metadata = cast(UserMessageMetadata, row.metadata)
-                    # 目前只有用户输入有气泡形态；其它 kind 有可投影形态时在这里加渲染。
-                    if user_metadata.kind != "user_input":
-                        continue
-                    has_user_message = True
-                    if assistant_message["parts"]:
-                        snapshot_messages.append(assistant_message)
-                    snapshot_messages.append(
-                        ConversationTaskStateRebuilder.build_user_message(
-                            str(row.message_id),
-                            cast(UserInputPresentation, user_metadata.presentation),
-                        )
+        messages: list[ConversationStateMessage] = []
+        activity: ConversationStateActivity | None = None
+        for run in runs:
+            rows = sorted(run_groups.get(run.id, []), key=lambda row: row.sequence)
+            run_messages = ConversationTaskStateRebuilder._run_messages(run.id, rows)
+            if run.status in TERMINAL_RUN_STATUSES:
+                assistant = next(
+                    (m for m in reversed(run_messages) if m["role"] == "assistant"), None
+                )
+                if assistant is not None:
+                    assistant["outcome"] = ConversationStateOutcome(
+                        status=run.status,
+                        endReason=run.end_reason,
+                        error=ConversationTaskStateRebuilder.build_run_error(run),
+                        usage=run.usage,
+                        contextWindowTotal=run.context_window_total,
                     )
-                    assistant_message = ConversationStateMessage(
-                        id=f"assistant-{row.message_id}", role="assistant", parts=[]
-                    )
-                elif message["role"] == "assistant":
-                    ai_message: ChatCompletionAssistantMessageParam = message
-                    if ai_message.get("reasoning_content") is not None:
-                        assistant_message["parts"].append(
-                            ConversationStateTextPart(
-                                type="reasoning",
-                                text=content_to_text(ai_message.get("reasoning_content")),
-                                status="completed",
-                            )
-                        )
-                    if ai_message.get("content") is not None:
-                        assistant_message["parts"].append(
-                            ConversationStateTextPart(
-                                type="text",
-                                text=content_to_text(ai_message.get("content")),
-                                status="completed",
-                            )
-                        )
-                    if ai_message.get("tool_calls"):
-                        calls = cast(
-                            list[ChatCompletionMessageFunctionToolCallParam],
-                            ai_message.get("tool_calls") or [],
-                        )
-                        for call in calls:
-                            tool_part = tool_parts_dict.get(call["id"])
-                            if tool_part is None:
-                                # 隐藏调用（本轮未放行 / 工具名未注册）：``build_pair_tool_part``
-                                # 不为它们建 part，实时链路同样没有 part，此处必须跳过而不是
-                                # 抛 KeyError——展示层缺口不得让冷重建整张快照失败。
-                                continue
-                            assistant_message["parts"].append(tool_part)
-            if has_user_message or assistant_message["parts"]:
-                snapshot_messages.append(assistant_message)
-            if rows and not snapshot_messages and run.id != task.current_run_id:
-                # 编辑把旧 Run 的行全部移出投影后，它不再有可展示内容，不留空分组。
-                continue
-            snapshot_runs.append(
-                ConversationRunSnapshot(
+            messages.extend(run_messages)
+            if run.id == task.current_run_id:
+                activity = ConversationStateActivity(
                     runId=run.id,
                     status=run.status,
                     endReason=run.end_reason,
+                    error=ConversationTaskStateRebuilder.build_run_error(run),
+                    usage=run.usage,
                     contextWindowTotal=run.context_window_total,
                     launch=run_launch_snapshot(run.model_config_id, run.options),
-                    messages=snapshot_messages,
-                    usage=run.usage,
-                    error=ConversationTaskStateRebuilder.build_run_error(run),
+                )
+        return ConversationStateSnapshot(messages=messages, activity=activity)
+
+    @staticmethod
+    def _run_messages(
+        run_id: int, rows: list[ConversationTaskContextRecord]
+    ) -> list[ConversationStateMessage]:
+        """把单个 Run 的 context 行投影为消息；不投影的行（编辑移出的历史）跳过。"""
+
+        tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+        run_messages: list[ConversationStateMessage] = []
+        assistant = message(leading_reply_id(run_id), "assistant", [], run_id)
+        has_user_message = False
+        for row in rows:
+            if not row.project_to_transport:
+                continue
+            row_message = row.message
+            if row_message["role"] == "user":
+                user_metadata = cast(UserMessageMetadata, row.metadata)
+                # 目前只有用户输入有气泡形态；其它 kind 有可投影形态时在这里加渲染。
+                if user_metadata.kind != "user_input":
+                    continue
+                has_user_message = True
+                if assistant["parts"]:
+                    run_messages.append(assistant)
+                run_messages.append(
+                    message(
+                        user_message_id(cast(int, row.message_id)),
+                        "user",
+                        ConversationTaskStateRebuilder.build_user_parts(
+                            cast(UserInputPresentation, user_metadata.presentation)
+                        ),
+                        run_id,
+                    )
+                )
+                assistant = message(
+                    reply_id(cast(int, row.message_id)), "assistant", [], run_id
+                )
+            elif row_message["role"] == "assistant":
+                ConversationTaskStateRebuilder._append_assistant_parts(
+                    assistant, row_message, tool_parts
+                )
+        if has_user_message or assistant["parts"]:
+            run_messages.append(assistant)
+        return run_messages
+
+    @staticmethod
+    def _append_assistant_parts(
+        assistant: ConversationStateMessage,
+        ai_message: ChatCompletionAssistantMessageParam,
+        tool_parts: dict[str, ConversationStateToolCallPart],
+    ) -> None:
+        if ai_message.get("reasoning_content") is not None:
+            assistant["parts"].append(
+                ConversationStateTextPart(
+                    type="reasoning",
+                    text=content_to_text(ai_message.get("reasoning_content")),
+                    status="completed",
                 )
             )
-        return ConversationStateSnapshot(
-            runs=snapshot_runs,
-            current_run_id=task.current_run_id,
-            error=None,
-            approvals={},
+        if ai_message.get("content") is not None:
+            assistant["parts"].append(
+                ConversationStateTextPart(
+                    type="text",
+                    text=content_to_text(ai_message.get("content")),
+                    status="completed",
+                )
+            )
+        calls = cast(
+            list[ChatCompletionMessageFunctionToolCallParam],
+            ai_message.get("tool_calls") or [],
         )
+        for call in calls:
+            tool_part = tool_parts.get(call["id"])
+            # 隐藏调用（本轮未放行 / 工具名未注册）：``build_pair_tool_part`` 不为它们建 part，
+            # 实时链路同样没有 part，此处必须跳过——展示层缺口不得让冷重建整张快照失败。
+            if tool_part is not None:
+                assistant["parts"].append(tool_part)
 
 
 __all__ = [

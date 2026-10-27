@@ -119,16 +119,9 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(snapshot)).toThrow("已知字段");
   });
 
-  it("accepts a code+message+seq command error and rejects a missing seq or the legacy retryable field", () => {
-    const snapshot = transportState({ error: { code: "RUN_NOT_RESUMABLE", message: "当前没有可恢复的运行", seq: 1 } });
-    expect(parseTransportState(snapshot)).toBe(snapshot);
-    const withoutSeq = { ...snapshot, error: { code: "RUN_NOT_RESUMABLE", message: "x" } };
-    expect(() => parseTransportState(withoutSeq)).toThrow("error");
-    const badSeq = { ...snapshot, error: { code: "RUN_NOT_RESUMABLE", message: "x", seq: 0 } };
-    expect(() => parseTransportState(badSeq)).toThrow("error.seq");
-    // retryable 只属于 HTTP 错误体与工具观察，不属于 snapshot 错误契约。
-    const legacy = { ...snapshot, error: { code: "RUN_NOT_RESUMABLE", message: "x", seq: 1, retryable: false } };
-    expect(() => parseTransportState(legacy)).toThrow("error");
+  it("rejects a top-level command error: command rejections are returned by HTTP, not the snapshot", () => {
+    const snapshot = { ...transportState(), error: { code: "RUN_NOT_RESUMABLE", message: "x" } };
+    expect(() => parseTransportState(snapshot)).toThrow("snapshot");
   });
 
   it("accepts a controlled outcome error payload and rejects one missing its message", () => {

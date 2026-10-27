@@ -1,8 +1,9 @@
 """用户输入展示 parts 的构造与投影。"""
 
 from collections.abc import Sequence
+from typing import cast
 
-from app.assistant_transport.projection.snapshot_navigation import find_run, message
+from app.assistant_transport.projection.snapshot_navigation import message
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import (
     ConversationStateFilePart,
@@ -10,6 +11,7 @@ from app.assistant_transport.state.conversation_state_part import (
     ConversationStateTextPart,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.assistant_transport.state.message_identity import reply_id, user_message_id
 from app.config.constant import Constant
 from app.core.events import UserInputConsumedEvent
 from app.models.conversation_input import image_asset_id
@@ -101,37 +103,46 @@ def plan_user_input_consumed(
     event: UserInputConsumedEvent,
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
-    """把排队消息按身份搬进 Run，并补后续 assistant 气泡；重复投影按消息身份去重。
+    """把排队消息按身份搬进消息列表，并补其后的助手占位；重复投影按消息身份去重。
 
     排队条目已按展示绑定构造好 parts（actor 先刷新排队投影再投递，消费总在投影之后），这里只搬移
-    不重建，事件因此只带消息身份。快照在消费提交后才懒重建时，消息已从 context 重建进 Run，按去重跳过。
+    不重建，事件因此只带消息身份。快照在消费提交后才懒重建时，消息已从 context 重建出来，按去重
+    跳过。连续消费多条 user 时，同一 Run 尚无输出的助手占位被这条 user 消息原位替换。
 
     异常:
-        KeyError: Run 不存在，或该消息既不在 Run 也不在排队列表——排队投影缺失，属契约错误。
+        KeyError: 该消息既不在消息列表也不在排队列表——排队投影缺失，属契约错误。
     """
 
-    # 领域身份是 inbox 行 id（int），wire 消息 id 是其字符串形式。
-    message_id = str(event.message_id)
-    run_index = find_run(state, event.run_id)
-    messages = state["runs"][run_index]["messages"]
+    message_id = user_message_id(event.message_id)
+    # 消费只发生在某个 Run 的 prepare_input 节点内，事件总带 Run 身份。
+    run_id = cast(int, event.run_id)
+    messages = state["messages"]
     if any(m["id"] == message_id for m in messages):
         return []
     queued = state.get("queued_messages", [])
     entry = next((m for m in queued if m["id"] == message_id), None)
     if entry is None:
         raise KeyError(f"queued message {message_id} not found")
-    # 连续消费多条 user 时移除尚无输出的 assistant 占位。
-    updated = list(messages)
-    if updated and updated[-1]["role"] == "assistant" and not updated[-1]["parts"]:
-        updated.pop()
-    updated.extend(
-        [
-            message(message_id, "user", list(entry["parts"])),
-            message(f"assistant-{message_id}", "assistant", []),
-        ]
-    )
+    insert_at = len(messages)
+    last = messages[-1] if messages else None
+    if (
+        last is not None
+        and last["role"] == "assistant"
+        and last["runId"] == run_id
+        and not last["parts"]
+    ):
+        insert_at -= 1
     return [
-        ConversationStateMutation("set", ("runs", run_index, "messages"), updated),
+        ConversationStateMutation(
+            "set",
+            ("messages", insert_at),
+            message(message_id, "user", list(entry["parts"]), run_id),
+        ),
+        ConversationStateMutation(
+            "set",
+            ("messages", insert_at + 1),
+            message(reply_id(event.message_id), "assistant", [], run_id),
+        ),
         ConversationStateMutation(
             "set", ("queued_messages",), [m for m in queued if m["id"] != message_id]
         ),

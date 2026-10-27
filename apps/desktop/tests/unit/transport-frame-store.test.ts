@@ -189,12 +189,6 @@ describe("TransportFrameStore", () => {
     expect(ids()).toEqual(["a1", "q1"]);
   });
 
-  it("顶层 error 渲染为消息列表末尾的错误条目", () => {
-    const store = new TransportFrameStore(transportState({ messages: [userMessage("1", 1)] }));
-    const error = { code: "RUN_NOT_RESUMABLE", message: "当前没有可恢复的运行", seq: 1 };
-    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: error }]));
-    expect(store.getSnapshot().items.at(-1)).toEqual({ kind: "error", error });
-  });
 });
 
 describe("TransportFrameStore 一轮结束（D2）", () => {
@@ -293,62 +287,6 @@ describe("TransportFrameStore 乐观命令收敛（D8）", () => {
 
     store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [queuedMessage("3", "second")] }]));
     expect(store.getSnapshot().pendingCommands).toEqual([]);
-  });
-
-  it("顶层 error 由空变为非空时收回全部乐观命令并通知拒绝监听者", () => {
-    const store = new TransportFrameStore(transportState({ activity: activity(1, "cancelled") }));
-    const rejected = vi.fn();
-    store.subscribeRejection(rejected);
-    const pending = [command("resume me", "c1")];
-    store.setPendingCommands(pending);
-
-    const error = { code: "RUN_NOT_RESUMABLE", message: "当前没有可恢复的运行", seq: 1 };
-    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: error }]));
-
-    expect(store.getSnapshot().pendingCommands).toEqual([]);
-    expect(rejected).toHaveBeenCalledWith(pending, error);
-  });
-
-  it("没有乐观命令时写入顶层 error 也通知拒绝（恢复等命令不产生乐观消息）", () => {
-    const store = new TransportFrameStore(transportState());
-    const rejected = vi.fn();
-    store.subscribeRejection(rejected);
-    const error = { code: "X", message: "y", seq: 1 };
-    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: error }]));
-    expect(rejected).toHaveBeenCalledWith([], error);
-  });
-
-  it("连续两次同样的拒绝按 seq 认出第二次，收回第二批乐观命令", () => {
-    const first = { code: "COMMAND_FAILED", message: "命令处理失败，请重试", seq: 1 };
-    const store = new TransportFrameStore(transportState({ error: first }));
-    const rejected = vi.fn();
-    store.subscribeRejection(rejected);
-    const pending = [command("again", "c2")];
-    store.setPendingCommands(pending);
-
-    const second = { ...first, seq: 2 };
-    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: second }]));
-
-    expect(store.getSnapshot().pendingCommands).toEqual([]);
-    expect(rejected).toHaveBeenCalledWith(pending, second);
-  });
-
-  it("已有错误时被另一个原因拒绝同样收回乐观命令", () => {
-    const store = new TransportFrameStore(transportState({ error: { code: "RUN_NOT_RESUMABLE", message: "不可恢复", seq: 3 } }));
-    store.setPendingCommands([command("send", "c1")]);
-    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: { code: "COMMAND_FAILED", message: "失败", seq: 4 } }]));
-    expect(store.getSnapshot().pendingCommands).toEqual([]);
-  });
-
-  it("同一 seq 的错误重放（full 帧重同步）不算新的拒绝", () => {
-    const error = { code: "X", message: "y", seq: 5 };
-    const store = new TransportFrameStore(transportState({ error }));
-    const rejected = vi.fn();
-    store.subscribeRejection(rejected);
-    store.setPendingCommands([command("keep", "c1")]);
-    store.applyFrame(mutation([{ kind: "set", path: ["error"], value: { ...error } }]));
-    expect(rejected).not.toHaveBeenCalled();
-    expect(store.getSnapshot().pendingCommands).toHaveLength(1);
   });
 
   it("clears only the rejected command pending projection", () => {

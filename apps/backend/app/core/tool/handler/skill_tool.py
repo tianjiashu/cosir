@@ -48,9 +48,8 @@ class SkillTool(HandlerBase):
         except SkillConfigurationError as exc:
             return tool_error(
                 self.name,
-                str(exc),
-                reason="Fix the Skill config file, then retry.",
-                retryable=False,
+                f"{exc}. "
+                "Fix the Skill config file, then retry.",
             )
         if action == "list":
             skills = [skill for skill in catalog.list_skills() if skill.enabled]
@@ -63,25 +62,22 @@ class SkillTool(HandlerBase):
         if skill_name is None:
             return tool_error(
                 self.name,
-                "skill_name is required to load a Skill.",
-                reason="Use action='list' to see available names, then set skill_name.",
-                retryable=False,
+                "skill_name is required to load a Skill. "
+                "Use action='list' to see available names, then set skill_name.",
             )
         try:
             skill, content = catalog.load(skill_name, resource_path)
         except SkillLoadError as exc:
             return tool_error(
                 self.name,
-                str(exc),
-                reason="Check the Skill name, SKILL.md, and resource path, then retry.",
-                retryable=False,
+                f"{exc}. "
+                "Check the Skill name, SKILL.md, and resource path, then retry.",
             )
         except FileNotFoundError:
             return tool_error(
                 self.name,
-                "Skill file not found.",
-                reason="Re-list Skills or check the resource path.",
-                retryable=False,
+                "Skill file not found. "
+                "Re-list Skills or check the resource path.",
             )
 
         return tool_success(

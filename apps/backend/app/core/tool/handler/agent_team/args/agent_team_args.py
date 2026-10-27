@@ -9,7 +9,7 @@ from pydantic import (
 )
 
 from app.models.agent_team.configuration.team_node_definition import TeamNodeIdentifier
-from app.core.tool.handler.agent_team.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
 
 
 class AgentTeamNodeGoalArgs(AgentTeamNodeGoal):
@@ -34,7 +34,7 @@ class AgentTeamArgs(BaseModel):
     )
     goal: StrictStr = Field(
         min_length=1,
-        max_length=50_00,
+        max_length=5_000,
         description=(
             "Overall goal of this team: every node works toward it. Node agents start with a "
             "clean context, so state the task background in the goal when necessary."
@@ -53,10 +53,11 @@ class AgentTeamArgs(BaseModel):
 
     @model_validator(mode="after")
     def validate_run_inputs(self) -> "AgentTeamArgs":
-        """在工具参数边界拒绝空白目标、保留标识和会导致映射覆盖的重复节点。"""
+        """在工具参数边界拒绝空白目标、保留标识和会导致映射覆盖的重复节点。
 
-        if not self.team_id.strip():
-            raise ValueError("team_id must not be blank")
+        ``team_id`` 的 pattern 已排除空白，不再单独检查。
+        """
+
         if not self.goal.strip():
             raise ValueError("goal must not be blank")
         node_ids = [item.node_id for item in self.node_goals]

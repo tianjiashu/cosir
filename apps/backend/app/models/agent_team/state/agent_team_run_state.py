@@ -6,8 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-from app.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 
 
 class AgentTeamNodeExecution(BaseModel):
@@ -133,15 +132,13 @@ class AgentTeamRunState(BaseModel):
             )
         )
 
-    def cancel(self):
-        """向当前节点 Task 发停止信号；节点 Run 由执行器驱动，信号在其释放边界被取走。"""
+    def running_node_task_id(self) -> int | None:
+        """当前节点已启动过 Run 时返回其 Task id，供协调器发停止信号；尚未启动则为 None。"""
         node_id = self.current_node_id
         if node_id is None:
-            return
+            return None
         execution = self.node_executions[node_id]
-        if not execution.conversation_run_ids:
-            return
-        cancellation_registry.request_cancel(execution.task_id, "parent")
+        return execution.task_id if execution.conversation_run_ids else None
 
     def node_references(self) -> list[tuple[int, int]]:
         """返回所有节点 Task/Run 引用，供取消和诊断使用。"""

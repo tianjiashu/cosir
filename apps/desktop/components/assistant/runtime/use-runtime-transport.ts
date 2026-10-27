@@ -18,7 +18,7 @@ import { readStoredInputDelivery } from "@/lib/input-delivery-storage";
 import { activeRunLaunch } from "@/lib/assistant/run-launch";
 import { readStoredSelection } from "@/lib/model-selection-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import type { TransportError, TransportRunStatus, TransportState } from "@/lib/assistant/contract";
+import type { TransportRunStatus, TransportState } from "@/lib/assistant/contract";
 import { transportMessageCount } from "@/lib/assistant/transport-state-operations";
 import type { RuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import type { RuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
@@ -109,14 +109,6 @@ export function useRuntimeTransport(
   }, [context]);
 
   /** actor 拒绝命令：顶层 `error` 已在对话区显示，这里只恢复草稿并记日志。 */
-  const handleCommandRejected = useCallback((error: TransportError, commands: readonly UserAddMessageCommand[]) => {
-    void frontendLog("WARNING", "assistant_task_command_rejected", "Task 命令被调度拒绝", {
-      traceId: context.traceId,
-      data: { taskId: context.taskId, commandCount: commands.length, source: "snapshot", code: error.code },
-    });
-    restoreRejectedDraft(context, commands);
-  }, [context]);
-
   const handleActivitySettled = useCallback((status: TransportRunStatus) => {
     void frontendLog("INFO", "assistant_activity_settled", "Task 当前活动已结束", {
       traceId: context.traceId,
@@ -229,7 +221,6 @@ export function useRuntimeTransport(
       context.setIssue(null);
     },
     onActivitySettled: handleActivitySettled,
-    onCommandRejected: handleCommandRejected,
     onDisconnect: handleDisconnect,
     onError: handleSubmitError,
     onCancel: ({ error, commands }) => {

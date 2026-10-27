@@ -64,8 +64,6 @@ class Subscriber:
                 task_id=frame.task_id,
                 kind="resync_required",
                 mutations=(),
-                current_run_id=frame.current_run_id,
-                current_run_status=frame.current_run_status,
                 resync_reason="subscriber_backpressure",
             )
             self._wake.set()
@@ -112,9 +110,6 @@ def _can_coalesce(previous: TransportFrame, current: TransportFrame) -> bool:
         and right.kind == "append-text"
         and left.path == right.path
         and previous.task_id == current.task_id
-        and previous.source_run_id == current.source_run_id
-        and previous.current_run_id == current.current_run_id
-        and previous.current_run_status == current.current_run_status
     )
 
 
@@ -132,9 +127,6 @@ def _coalesce(previous: TransportFrame, current: TransportFrame) -> TransportFra
                 value=f"{left.value}{right.value}",
             ),
         ),
-        source_run_id=current.source_run_id,
-        current_run_id=current.current_run_id,
-        current_run_status=current.current_run_status,
     )
 
 

@@ -5,8 +5,8 @@
 由 :mod:`app.service.configuration.agent_team_configuration_service` 负责；工具物化、
 节点执行和数据库状态迁移由 Agent Team 运行层负责。
 
-节点和状态转移的定义见 :mod:`app.agent_team.team_node_definition` 与
-:mod:`app.agent_team.team_transition_definition`。
+节点和状态转移的定义见 :mod:`app.models.agent_team.configuration.team_node_definition` 与
+:mod:`app.models.agent_team.configuration.team_transition_definition`。
 """
 
 from __future__ import annotations
@@ -15,15 +15,15 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
-from app.agent_team.configuration.graph_validation import (
+from app.models.agent_team.configuration.graph_validation import (
     TeamGraphValidationError,
     validate_team_graph,
 )
-from app.agent_team.configuration.team_node_definition import (
+from app.models.agent_team.configuration.team_node_definition import (
     TeamNodeDefinition,
     TeamNodeIdentifier,
 )
-from app.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
+from app.models.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
 
 TeamScope = Literal["system", "workspace"]
 

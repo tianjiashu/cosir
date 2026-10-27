@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from app.core.tool.handler.agent_team.propose_agent_team_configuration_args import (
+from app.core.tool.handler.agent_team.args.propose_agent_team_configuration_args import (
     ProposeAgentTeamConfigurationArgs,
 )
 
