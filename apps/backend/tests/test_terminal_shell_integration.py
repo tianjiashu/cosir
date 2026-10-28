@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.interaction import TerminalWait
+from app.tools.terminal_runtime.terminal_input import TerminalWait
 from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 
 _ROOT = Path(__file__).resolve().parents[3]

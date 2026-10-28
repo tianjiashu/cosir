@@ -8,7 +8,7 @@ import pytest
 
 from app.config.constant import Constant
 from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
-from app.tools.terminal_runtime.observation_text import render_lines
+from app.tools.terminal_runtime.observation_render import render_lines
 from app.tools.terminal_runtime.terminal_observation import TerminalObservation
 
 

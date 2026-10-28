@@ -25,7 +25,7 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionStateError,
     TerminalWorkerBackpressureError,
 )
-from app.tools.terminal_runtime.interaction import TerminalWait
+from app.tools.terminal_runtime.terminal_input import TerminalWait
 from terminal_test_support import (
     FakeWorker,
     ReadyWorker,

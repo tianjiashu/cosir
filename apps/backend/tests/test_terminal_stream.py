@@ -10,14 +10,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from terminal_test_support import make_service, start
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.terminal_preview import (
+from app.tools.terminal_runtime.terminal_stream import (
     OVERFLOW_EVENT_TYPE,
-    PreviewBuffer,
+    TerminalStreamBuffer,
     TerminalStreamSubscription,
 )
-from terminal_test_support import make_service, start
 
 
 @pytest.mark.asyncio
@@ -31,7 +31,7 @@ async def test_subscription_bridges_publishes_from_other_threads() -> None:
 
 @pytest.mark.asyncio
 async def test_subscription_overflow_sends_single_sentinel(monkeypatch) -> None:
-    monkeypatch.setattr(Constant.Terminal, "MAX_PREVIEW_QUEUE_FRAMES", 2)
+    monkeypatch.setattr(Constant.Terminal, "MAX_STREAM_QUEUE_FRAMES", 2)
     subscription = TerminalStreamSubscription(asyncio.get_running_loop(), "s")
     for index in range(5):
         subscription.publish({"type": "output", "seq": index}, 1)
@@ -49,8 +49,8 @@ def test_closed_loop_is_absorbed_at_subscription_boundary() -> None:
 
 
 @pytest.mark.asyncio
-async def test_preview_attach_replays_then_streams_state_frames() -> None:
-    buffer = PreviewBuffer("s", "g", 1024)
+async def test_stream_attach_replays_then_streams_state_frames() -> None:
+    buffer = TerminalStreamBuffer("s", "g", 1024)
     buffer.append("YQ==", 1)
     attachment = buffer.attach(
         None, asyncio.get_running_loop(), status="running", state={"rows": 24, "columns": 80}
@@ -106,7 +106,7 @@ async def _settle(predicate: Any, timeout: float = 2.0) -> None:
 
 @pytest.mark.asyncio
 async def test_websocket_input_resize_release_and_exit(monkeypatch, tmp_path: Path):
-    from app.api.terminal_api import terminal_session_stream
+    from app.api.terminal_stream_api import terminal_session_stream
 
     service, workers = make_service(monkeypatch)
     session_id = start(service, tmp_path, created_by="user")
@@ -141,8 +141,8 @@ async def test_websocket_input_resize_release_and_exit(monkeypatch, tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_websocket_rejects_input_while_agent_holds(monkeypatch, tmp_path: Path):
-    from app.api.terminal_api import terminal_session_stream
-    from app.tools.terminal_runtime.interaction import TerminalWait
+    from app.api.terminal_stream_api import terminal_session_stream
+    from app.tools.terminal_runtime.terminal_input import TerminalWait
 
     service, workers = make_service(monkeypatch)
     session_id = start(service, tmp_path)
@@ -166,7 +166,7 @@ async def test_websocket_rejects_input_while_agent_holds(monkeypatch, tmp_path: 
 
 @pytest.mark.asyncio
 async def test_websocket_handoff_done_and_protocol_errors(monkeypatch, tmp_path: Path):
-    from app.api.terminal_api import terminal_session_stream
+    from app.api.terminal_stream_api import terminal_session_stream
 
     service, _ = make_service(monkeypatch)
     session_id = start(service, tmp_path)
@@ -190,9 +190,9 @@ async def test_websocket_handoff_done_and_protocol_errors(monkeypatch, tmp_path:
 
 @pytest.mark.asyncio
 async def test_websocket_backpressure_turns_into_resync(monkeypatch, tmp_path: Path):
-    from app.api.terminal_api import terminal_session_stream
+    from app.api.terminal_stream_api import terminal_session_stream
 
-    monkeypatch.setattr(Constant.Terminal, "MAX_PREVIEW_QUEUE_FRAMES", 3)
+    monkeypatch.setattr(Constant.Terminal, "MAX_STREAM_QUEUE_FRAMES", 3)
     service, workers = make_service(monkeypatch)
     session_id = start(service, tmp_path)
     ws = FakeWebSocket()

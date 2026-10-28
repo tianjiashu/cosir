@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from app.tools.terminal_runtime.interaction import keys_for_platform
+from app.tools.terminal_runtime.terminal_input import keys_for_platform
 from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 
 ALL_KEYS = sorted(set(keys_for_platform("Linux")) | set(keys_for_platform("Windows")))
