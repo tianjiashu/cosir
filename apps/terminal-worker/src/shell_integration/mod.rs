@@ -44,7 +44,7 @@ impl ShellLaunch {
         if integration == "off" {
             return Ok(launch);
         }
-        if !matches!(kind, "zsh" | "powershell" | "pwsh") {
+        if !matches!(kind, "zsh" | "bash" | "powershell" | "pwsh") {
             launch.unavailable = Some("unsupported_shell");
             return Ok(launch);
         }
@@ -81,6 +81,31 @@ impl ShellLaunch {
                 .env
                 .push(("ZDOTDIR".into(), path.to_string_lossy().into_owned()));
             launch.argv.push("-i".into());
+        } else if kind == "bash" {
+            let path = directory.path();
+            let rcfile = path.join("bashrc");
+            std::fs::write(
+                &rcfile,
+                include_str!("../../resources/shell_integration/bash/bashrc"),
+            )?;
+            std::fs::write(
+                path.join("integration.bash"),
+                include_str!("../../resources/shell_integration/bash/integration.bash"),
+            )?;
+            launch.env.push((
+                "COSIR_BASH_BOOT_DIR".into(),
+                path.to_string_lossy().into_owned(),
+            ));
+            // bash 只在单字母选项之前识别长选项，故紧跟可执行文件插入。
+            // 不用 login 模式：login shell 忽略 --rcfile；用户 login 链由 bashrc 按平台补回。
+            launch.argv.splice(
+                1..1,
+                [
+                    "--rcfile".to_owned(),
+                    rcfile.to_string_lossy().into_owned(),
+                    "-i".to_owned(),
+                ],
+            );
         } else {
             let script = directory.path().join("integration.ps1");
             std::fs::write(
@@ -132,6 +157,44 @@ mod tests {
             .path()
             .join("integration.ps1")
             .is_file());
+    }
+
+    #[test]
+    fn bash_bootstrap_injects_rcfile_before_other_arguments() {
+        let launch = ShellLaunch::prepare(
+            vec!["/bin/bash".into(), "-o".into(), "vi".into()],
+            "bash",
+            "auto",
+        );
+        assert!(launch.unavailable.is_none());
+        let directory = launch._directory.as_ref().unwrap().path();
+        let rcfile = directory.join("bashrc");
+        assert_eq!(
+            launch.argv,
+            vec![
+                "/bin/bash".to_owned(),
+                "--rcfile".to_owned(),
+                rcfile.to_string_lossy().into_owned(),
+                "-i".to_owned(),
+                "-o".to_owned(),
+                "vi".to_owned(),
+            ]
+        );
+        assert!(rcfile.is_file());
+        assert!(directory.join("integration.bash").is_file());
+        let env: std::collections::HashMap<_, _> = launch.env.iter().cloned().collect();
+        assert_eq!(env["COSIR_INTEGRATION_TOKEN"], launch.token);
+        assert_eq!(
+            env["COSIR_BASH_BOOT_DIR"],
+            directory.to_string_lossy().into_owned()
+        );
+        // 一次性身份必须先于用户配置被取走并移出环境。
+        let rc = std::fs::read_to_string(&rcfile).unwrap();
+        let unset = rc.find("unset COSIR_INTEGRATION_TOKEN").unwrap();
+        assert!(unset < rc.find("/etc/profile").unwrap());
+        assert!(unset < rc.find(".bashrc").unwrap());
+        let source = rc.find(". \"$__cosir_boot_dir/integration.bash\"").unwrap();
+        assert!(source < rc.find("builtin trap").unwrap());
     }
 
     #[test]

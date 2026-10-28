@@ -2,21 +2,13 @@ use std::time::{Duration, Instant};
 
 const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase {
-    Running,
-    Closing,
-    Exited,
-    Failed,
-}
-
 /// Owns the worker's terminal lifecycle decisions and the single Exit event.
 ///
 /// Reader, child-watcher and control threads only report observations to the
 /// worker loop. This arbiter keeps the real child exit code ahead of PTY EOF
 /// races and prevents multiple terminal paths from publishing Exit twice.
 pub struct LifecycleArbiter {
-    phase: Phase,
+    closing: bool,
     child_exit: Option<u32>,
     pty_eof: bool,
     drain_deadline: Option<Instant>,
@@ -26,7 +18,7 @@ pub struct LifecycleArbiter {
 impl LifecycleArbiter {
     pub fn running() -> Self {
         Self {
-            phase: Phase::Running,
+            closing: false,
             child_exit: None,
             pty_eof: false,
             drain_deadline: None,
@@ -58,16 +50,9 @@ impl LifecycleArbiter {
         self.child_exit
     }
 
-    pub fn begin_closing(&mut self, failed: bool) -> bool {
-        if matches!(self.phase, Phase::Closing | Phase::Exited | Phase::Failed) {
-            return false;
-        }
-        self.phase = if failed {
-            Phase::Failed
-        } else {
-            Phase::Closing
-        };
-        true
+    /// 只有第一次收尾生效；之后的收尾请求返回 false。
+    pub fn begin_closing(&mut self) -> bool {
+        !std::mem::replace(&mut self.closing, true)
     }
 
     pub fn publish_exit(&mut self) -> bool {
@@ -75,7 +60,6 @@ impl LifecycleArbiter {
             return false;
         }
         self.exit_published = true;
-        self.phase = Phase::Exited;
         true
     }
 }

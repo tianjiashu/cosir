@@ -5,17 +5,20 @@ use vte::{Parser, Perform};
 pub struct ShellParser {
     parser: Parser,
     token: String,
+    last_prompt_id: Option<Vec<u8>>,
 }
 impl ShellParser {
     pub fn new(token: String) -> Self {
         Self {
             parser: Parser::new(),
             token,
+            last_prompt_id: None,
         }
     }
     pub fn advance(&mut self, byte: u8) -> Option<Value> {
         let mut performer = Marker {
             token: &self.token,
+            last_prompt_id: &mut self.last_prompt_id,
             event: None,
         };
         self.parser.advance(&mut performer, &[byte]);
@@ -24,6 +27,10 @@ impl ShellParser {
 }
 struct Marker<'a> {
     token: &'a str,
+    /// bash 把标记挂在 PS1 里，readline 重画提示符（补全列表、窗口变化、bash 3.2 的
+    /// 不可见字符重绘）会原样再输出一次；同一提示符编号只发一次 shell_prompt。
+    /// zsh / PowerShell 不带编号，不受影响。
+    last_prompt_id: &'a mut Option<Vec<u8>>,
     event: Option<Value>,
 }
 impl Perform for Marker<'_> {
@@ -44,9 +51,17 @@ impl Perform for Marker<'_> {
             }
             "unavailable" => Some(json!({"kind":"unavailable", "reason":value})),
             "command_started" => Some(json!({"kind":"command_started", "command":value})),
-            "shell_prompt" => Some(
-                json!({"kind":"shell_prompt", "cwd":if value.is_empty() { None } else { Some(value) }}),
-            ),
+            "shell_prompt" => {
+                if let Some(id) = params.get(5) {
+                    if self.last_prompt_id.as_deref() == Some(*id) {
+                        return;
+                    }
+                    *self.last_prompt_id = Some(id.to_vec());
+                }
+                Some(
+                    json!({"kind":"shell_prompt", "cwd":if value.is_empty() { None } else { Some(value) }}),
+                )
+            }
             "command_returned" => {
                 let code = value.parse::<i32>().ok();
                 let success = match value.as_str() {
@@ -100,6 +115,16 @@ mod tests {
         assert_eq!(events[0]["command"], "echo a;b");
         assert_eq!(events[1]["result"]["code"], 7);
     }
+    #[test]
+    fn redrawn_prompt_with_same_id_is_reported_once() {
+        let mut parser = ShellParser::new("t".into());
+        let bytes = b"\x1b]633;Cosir;t;shell_prompt;/a;1\x07$ \r\r\x1b]633;Cosir;t;shell_prompt;/a;1\x07$ \x1b]633;Cosir;t;shell_prompt;/a;2\x07\x1b]633;Cosir;t;shell_prompt;/b\x07\x1b]633;Cosir;t;shell_prompt;/b\x07";
+        let events: Vec<_> = bytes.iter().filter_map(|b| parser.advance(*b)).collect();
+        let cwds: Vec<_> = events.iter().map(|e| e["cwd"].as_str().unwrap()).collect();
+        // 编号相同视为重画；无编号（zsh / PowerShell）每次都发。
+        assert_eq!(cwds, ["/a", "/a", "/b", "/b"]);
+    }
+
     #[test]
     fn powershell_result_does_not_invent_native_exit_code() {
         let mut parser = ShellParser::new("t".into());

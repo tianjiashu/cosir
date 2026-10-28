@@ -1,3 +1,4 @@
+mod geometry;
 mod io;
 mod lifecycle;
 mod process_tree;

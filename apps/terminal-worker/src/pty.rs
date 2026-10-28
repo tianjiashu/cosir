@@ -4,12 +4,11 @@ use std::sync::{Arc, Mutex};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
+use crate::geometry::Geometry;
 use crate::process_tree::ProcessTreeGuard;
 
 pub struct PtyRuntime {
-    // Keep the PTY master alive for the lifetime of the shell. The worker does
-    // not expose runtime resize; this handle is still required by ConPTY.
-    #[allow(dead_code)]
+    // master 随 shell 存活：resize、前台进程组查询与 ConPTY 都依赖它。
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     writer: Mutex<Box<dyn Write + Send>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
@@ -33,21 +32,20 @@ impl PtyRuntime {
         shell: Vec<String>,
         cwd: String,
         env: &[(String, String)],
+        geometry: Geometry,
     ) -> anyhow::Result<SpawnedPty> {
         if shell.is_empty() {
             anyhow::bail!("shell argv must not be empty")
         }
         let pty_system = native_pty_system();
-        // PTY、屏幕引擎、只读预览共享固定逻辑尺寸，容器布局不改变换行语义。
-        let pair = pty_system.openpty(PtySize {
-            rows: crate::terminal_screen::ROWS,
-            cols: crate::terminal_screen::COLS,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
+        let pair = pty_system.openpty(pty_size(geometry))?;
         let mut command =
             CommandBuilder::from_argv(shell.into_iter().map(OsString::from).collect::<Vec<_>>());
         command.cwd(cwd);
+        // 终端类型由本 worker 的屏幕内核（xterm 兼容）决定，不继承宿主进程的 TERM：
+        // 桌面宿主拉起的后端通常没有 TERM，readline 会退化为 dumb 终端（横向滚动、
+        // 提示符整行重画），bash 3.2 下命令行回显因此错乱并误触发输出匹配。
+        command.env("TERM", "xterm-256color");
         for (key, value) in env {
             command.env(key, value);
         }
@@ -85,6 +83,15 @@ impl PtyRuntime {
         writer.write_all(data)?;
         writer.flush()?;
         Ok(())
+    }
+
+    /// 只调整 PTY；屏幕内核由调用方在同一把屏幕锁内同步调整，二者不能分开发生。
+    pub fn resize(&self, geometry: Geometry) -> anyhow::Result<()> {
+        let master = self
+            .master
+            .lock()
+            .map_err(|_| anyhow::anyhow!("pty master lock poisoned"))?;
+        master.resize(pty_size(geometry))
     }
 
     pub fn signal(&self, signal: &str) -> anyhow::Result<TerminalControlResult> {
@@ -194,5 +201,14 @@ impl PtyRuntime {
             .lock()
             .map_err(|_| anyhow::anyhow!("pty master lock poisoned"))?;
         process_tree.terminate(child.as_mut(), master.as_ref())
+    }
+}
+
+fn pty_size(geometry: Geometry) -> PtySize {
+    PtySize {
+        rows: geometry.rows,
+        cols: geometry.cols,
+        pixel_width: 0,
+        pixel_height: 0,
     }
 }

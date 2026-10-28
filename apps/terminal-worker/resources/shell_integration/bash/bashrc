@@ -1,0 +1,54 @@
+# Cosir 经 --rcfile 注入的启动文件；只服务本 worker 拉起的根 shell。
+# 先取走一次性身份并从环境移除，用户配置与子进程都看不到它；子 shell 因此不会重复集成。
+__cosir_token="${COSIR_INTEGRATION_TOKEN-}"
+__cosir_boot_dir="${COSIR_BASH_BOOT_DIR-}"
+unset COSIR_INTEGRATION_TOKEN COSIR_BASH_BOOT_DIR
+
+# --rcfile 让 bash 跳过默认的 ~/.bashrc；按平台惯例补回用户配置。
+# macOS 终端习惯以 login shell 启动，因此按 login 链加载；其余平台是交互非 login shell。
+case "${OSTYPE-}" in
+  darwin*)
+    [ -r /etc/profile ] && . /etc/profile
+    if [ -r "$HOME/.bash_profile" ]; then
+      . "$HOME/.bash_profile"
+    elif [ -r "$HOME/.bash_login" ]; then
+      . "$HOME/.bash_login"
+    elif [ -r "$HOME/.profile" ]; then
+      . "$HOME/.profile"
+    fi
+    ;;
+  *)
+    [ -r "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+    ;;
+esac
+
+# 集成最后装配，确保 PROMPT_COMMAND 与 DEBUG trap 包住用户配置已安装的钩子。
+. "$__cosir_boot_dir/integration.bash"
+
+# DEBUG trap 的读取与安装必须在本文件顶层：
+# - source 期间 bash 暂存并清空外层 DEBUG trap、返回时恢复（3.2 无条件覆盖）；
+# - 函数内 5.x 看不到外层 DEBUG trap，3.2 在函数返回时恢复调用前的 DEBUG trap。
+# 链接用户已有的 DEBUG trap：借 trap -p 的可重入输出取出原命令串，不自行解析引号；
+# 输出先落到本次启动的临时目录再读回，避免在命令替换子 shell 里读 trap。
+__cosir_user_debug=
+builtin trap -p DEBUG >"$__cosir_boot_dir/user_debug_trap"
+__cosir_reply=$(<"$__cosir_boot_dir/user_debug_trap")
+[ -n "$__cosir_reply" ] && eval "__cosir_capture_trap ${__cosir_reply#trap }"
+if [ -n "$__cosir_user_debug" ]; then
+  builtin trap "__cosir_preexec \"\$_\""$'\n'"$__cosir_user_debug" DEBUG
+else
+  # 末尾 : 让 trap 恒以 0 结束（extdebug 下非零返回会跳过用户命令），并原样传回 $_。
+  builtin trap '__cosir_preexec "$_"; : "$_"' DEBUG
+fi
+
+# bash 5.1 起 PROMPT_COMMAND 可为数组，用户条目原样保留；更早版本只认字符串，用换行拼接，
+# 不受用户字符串末尾分号影响。
+if [ "${BASH_VERSINFO[0]}" -gt 5 ] || { [ "${BASH_VERSINFO[0]}" -eq 5 ] && [ "${BASH_VERSINFO[1]}" -ge 1 ]; }; then
+  PROMPT_COMMAND=(__cosir_precmd ${PROMPT_COMMAND[@]+"${PROMPT_COMMAND[@]}"} __cosir_arm)
+else
+  PROMPT_COMMAND="__cosir_precmd"$'\n'"${PROMPT_COMMAND-}"$'\n'"__cosir_arm"
+fi
+
+shopt -s checkwinsize
+__cosir_escape "$BASH_VERSION"
+__cosir_emit ready "bash;$__cosir_reply"

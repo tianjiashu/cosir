@@ -66,8 +66,10 @@ impl ProcessTreeGuard {
         {
             let _ = master;
             self.containment.refresh_descendants();
+            // 交互 shell 忽略 SIGTERM、只认 SIGHUP（终端挂断，shell 会转发给作业）：先发 HUP 才能让
+            // shell 立即退出；全部退出即结束宽限期，否则每次关闭都要白等满宽限期再 SIGKILL。
+            let mut signal_failures = self.containment.signal_targets(libc::SIGHUP);
             let grace_deadline = Instant::now() + Duration::from_secs(1);
-            let mut signal_failures = 0;
             while Instant::now() < grace_deadline {
                 if let Err(error) = child.try_wait() {
                     if !process_gone(&error) {
@@ -75,8 +77,11 @@ impl ProcessTreeGuard {
                     }
                 }
                 self.containment.refresh_descendants();
+                if !self.containment.has_live_targets() {
+                    break;
+                }
                 signal_failures += self.containment.signal_targets(libc::SIGTERM);
-                std::thread::sleep(Duration::from_millis(50));
+                std::thread::sleep(Duration::from_millis(20));
             }
             self.containment.refresh_descendants();
             signal_failures += self.containment.signal_targets(libc::SIGKILL);
@@ -190,6 +195,16 @@ impl ProcessContainment {
             }
         }
         failures
+    }
+
+    /// 已观察到的进程是否还有存活者（按 pid + 启动时间判定，pid 复用不算）。
+    fn has_live_targets(&self) -> bool {
+        self.observed.values().any(|identity| {
+            matches!(
+                read_process_identity(identity.pid),
+                Ok(Some(current)) if current.start_time == identity.start_time
+            )
+        })
     }
 
     fn depth(&self, pid: libc::pid_t) -> usize {
