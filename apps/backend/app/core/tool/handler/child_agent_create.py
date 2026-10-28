@@ -28,7 +28,7 @@ from app.core.tool.schemas import (
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
+from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT, TOOL_GROUP_TERMINAL_SESSION
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
@@ -39,6 +39,21 @@ from app.service.depends import (
     get_user_input_service,
     get_task_service,
 )
+
+
+def strip_child_disallowed_tools(definitions: list[ToolDefinition]) -> list[ToolDefinition]:
+    """剥掉子 Agent 不得使用的工具：委派、建 Team、提案配置，以及整个交互终端工具组。
+
+    剥离发生在子 Task 固化 schema 之前，模型看不到也调用不了。终端按工具组剥离：该组新增工具
+    无需同步禁用清单。
+    """
+
+    return [
+        tool
+        for tool in definitions
+        if tool.name not in Constant.Tools.CHILD_DISALLOWED_TOOLS
+        and tool.group != TOOL_GROUP_TERMINAL_SESSION
+    ]
 
 
 class DelegateTaskTool(HandlerBase):
@@ -166,12 +181,7 @@ class DelegateTaskTool(HandlerBase):
             child_task_tools = child_agent_profile.select_tools(
                 get_tool_registry().get_all_definitions()
             )
-            child_final_task_tools = [
-                tool
-                for tool in child_task_tools
-                if tool.name not in Constant.Tools.CHILD_DISALLOWED_TOOLS
-            ]
-
+            child_final_task_tools = strip_child_disallowed_tools(child_task_tools)
 
             child_task = self._task_service.get_or_create_task(
                 workspace_id=execution_context.workspace_id,

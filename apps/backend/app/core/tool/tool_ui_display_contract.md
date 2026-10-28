@@ -19,9 +19,9 @@ Tauri Rust 主进程
 - 工具在 FastAPI 后端进程执行。
 - 展示纯函数负责把执行结果投影成 UI 展示数据：外部工具在 `apps/backend/app/tools/display/`，内部工具（子 Agent、Agent Team、web）在 `apps/backend/app/core/tool/` 各自目录。
 - `ToolDisplayHints` 随 `ToolDefinition` 传给客户端，描述工具的静态展示方式。
-- `ToolObservation.display_data` 承载工具终态 UI 结构化数据；交互 terminal 的运行期原始 bytes 只通过独立的只读 preview WebSocket 实时呈现，不进入 display_data。一次性 terminal 的有限输出仍可按 `terminal-result` 契约进入 display_data。终端输出仅从子进程字节解码为文本，不剥离 ANSI 控制序列、不改写文本、不按字符数截断，也不携带 `truncated` / `stream_truncated` 字段。模型 `content` 的统一输出预算属于另一条边界，不改变 UI 展示数据。
+- `ToolObservation.display_data` 承载工具终态 UI 结构化数据；交互 terminal 的运行期原始 bytes 只通过每会话一条的可写 `terminal-v2` WebSocket 实时呈现，不进入 display_data。一次性 terminal 的有限输出仍可按 `terminal-result` 契约进入 display_data。终端输出仅从子进程字节解码为文本，不剥离 ANSI 控制序列、不改写文本、不按字符数截断，也不携带 `truncated` / `stream_truncated` 字段。模型 `content` 的统一输出预算属于另一条边界，不改变 UI 展示数据。
 - Assistant Transport 可以把展示数据带入事件和 snapshot，以支持前端渲染与重连恢复；展示数据不是任务、Run、Agent context 或文件变更事实源。
-- 一次性 terminal 增量只存在于当前进程的运行期 snapshot，不写入数据库或 Agent context；交互 terminal 增量只存在于 preview subscriber/ring buffer。工具完成后由终态 `display_data` 替换，重新 attach/state 以最终 snapshot 为准。
+- 一次性 terminal 增量只存在于当前进程的运行期 snapshot，不写入数据库或 Agent context；交互 terminal 增量只存在于会话的订阅队列与环形缓冲；会话列表与实时状态由 snapshot 顶层 `terminal_sessions` 投影，工具卡片 display_data 只是调用当时的冻结快照。工具完成后由终态 `display_data` 替换，重新 attach/state 以最终 snapshot 为准。
 - `ToolObservation.artifact_data` 只承载内部工具产物，不进入 UI Transport。文件变更展示数据只服务于工具结果渲染。
 - 后端重启后由已有 snapshot 恢复 UI，不隐式重放旧工具执行。
 
@@ -156,7 +156,7 @@ Transport 投影不得把失败态 `content` 写入 `ToolCallStatusChangedEvent.
 
 ## 3. 内置工具契约
 
-交互式 terminal 工具包含会话发现、创建、读写、信号与关闭能力。
+交互式 terminal 工具包含会话发现、创建、读写（含按键、信号、交接）与关闭能力，共 5 个工具。
 
 | 工具 | 静态展示声明 | `kind` | 动态展示字段 |
 | --- | --- | --- | --- |
@@ -171,9 +171,9 @@ Transport 投影不得把失败态 `content` 写入 `ToolCallStatusChangedEvent.
 | `list_directory` | `trace`、可展开、`list`、`eye` | `directory-list` | `path`、`entries`、`page`、`total_entries` |
 | `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out` |
 | `terminal_list` | `standalone`、不可展开、`none` | `terminal-session` | 本次发现的 `session_count`，不复制可变的会话状态 |
-| `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、可选用途 `label`、shell/初始 cwd、status、generation 和有限 cursor 元数据；原始 PTY 输出只走 preview WebSocket |
-| `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | session/status 元数据；输入接受结果、shell 观察事件及 Agent 游标进入模型 content，原始输出仍由独立预览通道承载，不进入 display_data |
-| `terminal_signal` / `terminal_close` | `standalone`、不可展开、`none` | `terminal-session` | session/status 元数据；signal 额外提供受控的 `signal` |
+| `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、`status`、`initial_cwd`、`shell_kind`、`label`、`integration`（状态字符串）；实时状态读 snapshot `terminal_sessions` |
+| `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`lines`（`[a,b]` 或 null）、`wait_result`（`{until, end_reason, matched_line?}`，长等待挂起时 `end_reason="background"`）、`suspended`；write 另有 `input_type`（line/keys/signal/handoff）与 `input_summary` |
+| `terminal_close` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`exit_code`、`end_reason` |
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
 | `delegate_task` | `standalone`、不可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、状态 |
@@ -182,15 +182,11 @@ Transport 投影不得把失败态 `content` 写入 `ToolCallStatusChangedEvent.
 | `wait_messages` | `standalone`、不可展开、`none`、`clock` | 无（空 `display_data`，走通用卡片） | — |
 | `propose_agent_configuration` | `standalone`、只读草稿卡、`bot` | `agent-configuration-draft` | `status=draft`、`agent_id`、`role`、`description`、`system_prompt` |
 
-交互式 terminal handler 已注册到 Agent tool schema，并继续复用现有 renderer 路由；静态
-创建卡片布局为 `terminal`，操作行布局为 `none`，动态 `kind` 为 `terminal-session`。
-静态 `ToolDisplayHints.variant` 区分 list/start/read/write/signal/close 六种 UI 语义。
-list 仅展示本次发现数量；其他 display_data 只传 session identity、
-状态和有限 cursor 元数据；完整 PTY 输出只走独立的只读 `terminal-preview-v1` WebSocket，
-不进入 Assistant Transport 的工具展示 payload。`terminal_write` 使用 session 内进程级
-`operation_id` 去重，保留最近 4096 次已接受输入的摘要，不缓存输出结果。输入接受与输出读取
-独立：输出游标过期时模型收到 `output_gap=true` 和当前保留窗口；读取失败或 Run 取消不撤销
-已接受的输入。会话归 Task 所有，跨 Run 的卡片按 Task/session 统一投影，不新增数据库表；`data` 保持原始 UTF-8 文本，`submit=true` 时由工具边界显式追加一个真实 CR（0x0D）提交输入，不对字面 `\\r`/`\\n` 或 HTML 实体做隐式解码。
+交互式 terminal handler 复用现有 renderer 路由：创建卡片布局为 `terminal`，操作行布局为 `none`，动态 `kind` 为
+`terminal-session`；`presentation.variant` 为 `terminal-session-start/list/read/write/close` 五种（signal 已并入 write）。
+display_data 只传会话身份与本次调用的摘要；完整 PTY 输出只走每会话一条的可写 `terminal-v2` WebSocket，模型读取的
+带行号文本只进入 content。错误短提示为「用户输入中」「缺少集成」「终端失败」。会话归 Task 所有，会话列表与实时状态
+由 snapshot `terminal_sessions` 投影（不回写工具卡片），契约细节见 `app/tools/terminal_runtime/interaction_contract.md`。
 
 ### 3.1 文件读取
 

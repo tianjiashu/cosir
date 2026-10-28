@@ -65,31 +65,15 @@ def initialize_service_dependencies() -> None:
 
 
 def close_service_dependencies() -> None:
-    """Close storage used by service dependencies and clear cached singletons.
+    """关闭进程内运行时单例（含终端服务）、清空 service 依赖缓存并关闭 SQLite 存储引擎。
 
-    参数:
-        无。
-
-    返回:
-        无。
-
-    异常:
-        无。
-
-    副作用:
-        清空 service 依赖缓存并关闭 SQLite 存储引擎。
+    终端服务只在这里经 ``reset_service_dependencies`` 关闭一次；lifespan 必须先关闭
+    ``background_watches``，再调用本函数。
     """
 
     from app.storage.store_engines import close_storage
     from app.task_runtime.workspace_operation_registry import workspace_operations
 
-    terminal_service = (
-        get_terminal_session_service()
-        if get_terminal_session_service.cache_info().currsize
-        else None
-    )
-    if terminal_service is not None:
-        terminal_service.shutdown()
     reset_service_dependencies()
     workspace_operations.close()
     close_storage()
@@ -167,16 +151,12 @@ def get_terminal_session_service() -> TerminalSessionService:
 
     from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 
-    def observe_terminal_status(change: object) -> None:
-        """把 PTY 生命周期变化转交给 Transport state owner。"""
-
-        from app.tools.terminal_runtime.terminal_session_status import TerminalSessionStatusChange
-
-        if not isinstance(change, TerminalSessionStatusChange):
-            raise TypeError("invalid terminal session status change")
-        get_conversation_task_state_service().refresh_terminal_session(change)
-
-    return TerminalSessionService(status_observer=observe_terminal_status)
+    # 会话列表变化（生命周期、集成、租约、交接）按 Task 整表重投影进 Transport snapshot。
+    return TerminalSessionService(
+        on_task_sessions_changed=lambda task_id: (
+            get_conversation_task_state_service().refresh_terminal_sessions(task_id)
+        )
+    )
 
 
 @lru_cache(maxsize=1)
@@ -415,11 +395,9 @@ def reset_service_dependencies() -> None:
 
 
 def _shutdown_cached_runtime_before_reset() -> None:
-    """Close process-local runtime owners before dropping their cached identities.
+    """丢弃缓存前关闭已构造的终端服务（不顺手构造）；这是终端服务唯一的关闭点。
 
-    ``reset_service_dependencies`` is synchronous and is used by tests and storage-path
-    reconfiguration.  It therefore uses only synchronous close contracts: terminal workers are
-    fenced and process-local indexes are cleared before caches are discarded.
+    关闭失败只记录，不阻断后续缓存清理与存储关闭。
     """
 
     if get_terminal_session_service.cache_info().currsize:

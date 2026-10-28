@@ -15,10 +15,11 @@ from app.models.agent_team.configuration.team_node_definition import TeamNodeDef
 from app.models.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
 from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
 from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
-from app.config.configuration import get_agent_registry
+from app.config.configuration import get_agent_registry, get_tool_registry
 from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
+from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.core.agents.model_settings import ModelSettingsError
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
@@ -72,7 +73,8 @@ def materialize_node_tools(profile: AgentProfile) -> list[str]:
     """按节点 Agent Profile 固化本次运行的节点工具名清单。
 
     节点工具 = Profile 允许的工具 **减去** :attr:`Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS`
-    （禁止节点递归建 Team、提案配置或占用可交互终端）。本清单只做剥离、**不代为追加**：委派与
+    （禁止节点递归建 Team、提案配置）**再减去**交互终端工具组 ``TOOL_GROUP_TERMINAL_SESSION``
+    的全部工具（按组从注册表展开，该组新增工具无需同步清单）。本清单只做剥离、**不代为追加**：委派与
     父子通信工具不在禁用清单内，Profile 声明了它们就照样保留——Team 节点需要把子工作再拆给子
     Agent 并汇总；而 ``delegate_task`` 产生的子 Agent 会被
     :attr:`Constant.Tools.CHILD_DISALLOWED_TOOLS` 剥掉这些工具，避免无限套娃。两条清单的差别
@@ -91,10 +93,13 @@ def materialize_node_tools(profile: AgentProfile) -> list[str]:
         无（节点工具可用性由本函数归一化；工具名合法性已由 Profile 加载期校验）。
     """
 
+    terminal_tools = set(
+        get_tool_registry().tool_groups_to_tool_names([TOOL_GROUP_TERMINAL_SESSION])
+    )
     return [
         name
         for name in profile.allowed_tools
-        if name not in Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS
+        if name not in Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS and name not in terminal_tools
     ]
 
 

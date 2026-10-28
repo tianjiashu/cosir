@@ -1,4 +1,4 @@
-"""终端会话领域错误；观察策略错误不改变命令生命周期。"""
+"""终端会话领域错误；输入租约与等待条件错误不改变命令或会话生命周期。"""
 
 
 class TerminalSessionError(Exception):
@@ -26,22 +26,21 @@ class TerminalSessionStateError(TerminalSessionError):
     code = "TERMINAL_SESSION_STATE_ERROR"
 
 
-class TerminalRepeatedReadError(TerminalSessionError):
-    """连续观察没有新信息；新输出或状态变化后可恢复，不终止程序。"""
+class TerminalInputHeldByUserError(TerminalSessionError):
+    """用户正在该会话输入，Agent 等待租约超时；用户空闲或手动释放后可重试，不影响会话。"""
 
-    code = "TERMINAL_READ_UNCHANGED"
+    code = "TERMINAL_INPUT_HELD_BY_USER"
     retryable = True
 
 
-class TerminalReadInProgressError(TerminalSessionError):
-    """已有 read 正在等待；拒绝并发读取，不阻塞输入或信号。"""
+class TerminalIntegrationRequiredError(TerminalSessionError):
+    """等待条件依赖 shell 集成，而该会话没有可用集成；改用 output_quiet / match。"""
 
-    code = "TERMINAL_READ_IN_PROGRESS"
-    retryable = True
+    code = "TERMINAL_INTEGRATION_REQUIRED"
 
 
 class TerminalSessionCapacityError(TerminalSessionError):
-    """达到 backend 级 session 或 subscriber 容量上限。"""
+    """达到全进程活跃会话上限，或该 Task 的 Agent 会话上限。"""
 
     code = "TERMINAL_SESSION_CAPACITY"
     retryable = True

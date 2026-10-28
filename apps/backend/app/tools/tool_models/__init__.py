@@ -18,7 +18,6 @@ from app.tools.tool_models.terminal_session_args import (
     TerminalCloseArgs,
     TerminalListArgs,
     TerminalReadArgs,
-    TerminalSignalArgs,
     TerminalStartArgs,
     TerminalWriteArgs,
 )
@@ -38,7 +37,6 @@ __all__ = [
     "TerminalCloseArgs",
     "TerminalListArgs",
     "TerminalReadArgs",
-    "TerminalSignalArgs",
     "TerminalStartArgs",
     "TerminalWriteArgs",
     "WindowsExecuteTerminalArgs",

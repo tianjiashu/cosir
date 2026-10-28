@@ -47,6 +47,7 @@ from app.core.agents.agent_profile_config import (
     ensure_system_agent_team_config_dir,
 )
 from app.core.hook import HookContext, HookEvent, HookInterceptor
+from app.core.workflow.wait.background_watches import background_watches
 from app.tools.tool_registration import build_tool_registry
 from app.service.configuration.agent_team_configuration_service import (
     AgentTeamConfigurationService,
@@ -59,7 +60,6 @@ from app.service.depends import (
     close_service_dependencies,
     get_recover_service,
     get_task_service,
-    get_terminal_session_service,
     initialize_service_dependencies,
 )
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -104,33 +104,19 @@ async def _cleanup_startup_failure() -> None:
     """释放启动失败前可能已经初始化的资源。
 
     启动阶段不经 ``yield`` 之后的正常 ``finally`` 块收尾：工具装配中途失败时，
-    terminal worker 与 service 缓存都不会被关闭。本函数只检查**已经填充**的
-    依赖缓存（``cache_info().currsize``），清理过程中绝不顺手构造缺失的服务；清理为尽力而为，
+    actor、terminal worker 与 service 缓存都不会被关闭。终端服务随
+    ``close_service_dependencies`` 关闭（只关已构造的单例，不顺手构造）。清理为尽力而为，
     每项失败只记 ``error`` 日志，不覆盖原始启动异常。
-
-    参数:
-        无。
-
-    返回:
-        无。
-
-    异常:
-        无：所有清理失败都被捕获并记录。
-
-    副作用:
-        关闭已存在的 terminal 会话与 service 依赖缓存。
     """
 
     try:
         # 启动中途失败时可能已有 actor 被拉起，先停下它们。
         await task_runtime_spaces.aclose()
-        if get_terminal_session_service.cache_info().currsize:
-            await asyncio.to_thread(get_terminal_session_service().shutdown)
     except BaseException as exc:
         log.error(
-            "lifespan_startup_terminal_cleanup_failed",
+            "lifespan_startup_actor_cleanup_failed",
             extra={
-                "msg": "startup failure 后 terminal cleanup 失败",
+                "msg": "startup failure 后 actor cleanup 失败",
                 "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
             },
         )
@@ -237,8 +223,15 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     # Task 的 actor 随 space 物化拉起：先绑定事件循环，再为有待处理消息或挂起 Run 的 Task 物化
     # space——重启前已到达的消息由 actor 照常处理，挂起的 Run 照常等唤醒。
     task_runtime_spaces.bind_loop(asyncio.get_running_loop())
-    for task_id in get_task_service().list_task_ids_to_dispatch():
+    background_watches.open()
+    dispatch_task_ids = get_task_service().list_task_ids_to_dispatch()
+    for task_id in dispatch_task_ids:
         task_runtime_spaces.get_or_create(task_id)
+    # 终端会话与后台等待不跨重启：挂起在终端上的 Run 等不到结论，投递一条重启结论把它唤醒；
+    # 其余 Task 在本进程首次驱动时另得一条失效提醒（见 ``terminal_invalidation``）。
+    from app.core.workflow.wait.terminal_invalidation import wake_suspended_terminal_runs
+
+    wake_suspended_terminal_runs(dispatch_task_ids)
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
     # 统一经 HookInterceptor 收口。
@@ -250,12 +243,12 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         try:
             # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
             HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
-            # 先停下全部 actor（取消执行，不调度后续 Run），再关闭终端与服务依赖。
+            # 先禁止后台等待投递（撤销全部等待、等在途投递写完）：之后关闭终端会把会话结束为
+            # closed、唤醒等待线程与交接，它们不得在关闭期间写 task_messages。再停下全部 actor
+            # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
+            await asyncio.to_thread(background_watches.close)
             await task_runtime_spaces.aclose()
-            try:
-                await asyncio.to_thread(get_terminal_session_service().shutdown)
-            finally:
-                await asyncio.to_thread(close_service_dependencies)
+            await asyncio.to_thread(close_service_dependencies)
             # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
             _mark_boot_stopped()
         finally:
