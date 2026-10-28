@@ -23,8 +23,6 @@ type AssistantPerformanceReport = {
 };
 
 type PerformanceProbeOptions = {
-  enabled: boolean;
-  now?: () => number;
   onReport: (report: AssistantPerformanceReport) => void;
 };
 
@@ -59,7 +57,7 @@ type StreamStatus = {
 export type AssistantPerformanceProbe = {
   beginStream: () => void;
   finishStream: (status: StreamStatus) => void;
-  startTiming: () => number | null;
+  startTiming: () => number;
   finishTiming: (startedAt: number | null) => number;
   recordFrame: (measurement: FrameMeasurement) => void;
   recordPublication: (measurement: PublicationMeasurement) => void;
@@ -70,12 +68,11 @@ export type AssistantPerformanceProbe = {
 /**
  * 创建一次 task 级的开发期性能探针。
  *
- * 探针只在显式启用时累计 Transport 和 React commit 统计，并在一次流结束时通过回调
+ * 探针累计 Transport 和 React commit 统计，并在一次流结束时通过回调
  * 输出一份聚合结果；它不写入业务状态、不改变渲染时序，也不在 token 粒度打印日志。
- * 生产构建不创建启用状态的探针。调用方负责决定报告落点，例如 Tauri 前端日志。
+ * 生产构建不创建探针（调用方传 null），关闭采集即不创建。调用方负责决定报告落点，例如 Tauri 前端日志。
  */
 export function createAssistantPerformanceProbe(options: PerformanceProbeOptions): AssistantPerformanceProbe {
-  const now = options.now ?? (() => performance.now());
   let lifecycle: "idle" | "active" | "finishing" = "idle";
   let activeMessageId: string | null = null;
   let currentAnimationFrameTimestamp: number | null = null;
@@ -97,7 +94,6 @@ export function createAssistantPerformanceProbe(options: PerformanceProbeOptions
 
   return {
     beginStream: () => {
-      if (!options.enabled) return;
       emitPendingReport();
       lifecycle = "active";
       activeMessageId = null;
@@ -106,22 +102,22 @@ export function createAssistantPerformanceProbe(options: PerformanceProbeOptions
       report = emptyReport();
     },
     finishStream: (status) => {
-      if (!options.enabled || lifecycle !== "active") return;
+      if (lifecycle !== "active") return;
       lifecycle = "finishing";
       pendingStatus = status;
       setTimeout(emitPendingReport, 0);
     },
-    startTiming: () => options.enabled ? now() : null,
-    finishTiming: (startedAt) => startedAt === null ? 0 : Math.max(0, now() - startedAt),
+    startTiming: () => performance.now(),
+    finishTiming: (startedAt) => startedAt === null ? 0 : Math.max(0, performance.now() - startedAt),
     recordFrame: (measurement) => {
-      if (!options.enabled || lifecycle === "idle") return;
+      if (lifecycle === "idle") return;
       report.frameCount += 1;
       report.mutationCount += measurement.mutationCount;
       report.applyFrameTotalMs += measurement.durationMs;
       report.maxApplyFrameMs = Math.max(report.maxApplyFrameMs, measurement.durationMs);
     },
     recordPublication: (measurement) => {
-      if (!options.enabled || lifecycle === "idle") return;
+      if (lifecycle === "idle") return;
       activeMessageId = measurement.activeMessageId;
       const frameTimestamp = measurement.animationFrameTimestamp ?? null;
       if (
@@ -141,11 +137,11 @@ export function createAssistantPerformanceProbe(options: PerformanceProbeOptions
       report.maxItemCount = Math.max(report.maxItemCount, measurement.itemCount);
     },
     recordTerminalConvergence: () => {
-      if (!options.enabled || lifecycle === "idle") return;
+      if (lifecycle === "idle") return;
       report.terminalConvergenceCount += 1;
     },
     recordReactCommit: (measurement) => {
-      if (!options.enabled || lifecycle === "idle") return;
+      if (lifecycle === "idle") return;
       report.reactCommitCount += 1;
       report.reactActualDurationTotalMs += measurement.actualDurationMs;
       report.maxReactActualDurationMs = Math.max(

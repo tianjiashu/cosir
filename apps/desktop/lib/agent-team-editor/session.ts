@@ -110,7 +110,7 @@ export function createTeamEditorSession(options: {
     const state = store.getState();
     const snapshot = cleanSnapshot({ ...next, configuration: lockIdentity(next.configuration) });
     if (JSON.stringify(state.snapshot) === JSON.stringify(snapshot)) return;
-    publish(snapshot, commitGraphEdit(state.history, state.snapshot, snapshot, { coalesceKey }));
+    publish(snapshot, commitGraphEdit(state.history, state.snapshot, coalesceKey));
   };
   const updateConfiguration = (changes: Partial<Omit<EditorDraft, "nodes" | "transitions">>, coalesceKey?: string) => {
     const { snapshot } = store.getState();

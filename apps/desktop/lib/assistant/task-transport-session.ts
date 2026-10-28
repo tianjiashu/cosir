@@ -86,11 +86,11 @@ export class TaskTransportSession {
     this.store.setPendingCommands([...this.store.getSnapshot().pendingCommands, command]);
     try {
       const { awaitSnapshot } = await submit(command);
-      if (!awaitSnapshot) this.store.clearPendingCommands([command]);
+      if (!awaitSnapshot) this.store.clearPendingCommand(command);
       if (!this.active) void this.open();
     } catch (error) {
       // 请求未发出（如附件已失效）与后端拒绝同属提交失败，交给同一个回调恢复草稿并提示。
-      this.store.clearPendingCommands([command]);
+      this.store.clearPendingCommand(command);
       await this.callbacks().onSubmitError?.(error instanceof Error ? error : new Error(String(error)), [command]);
     }
   }

@@ -1,4 +1,4 @@
-export type StructuredHttpError = {
+type StructuredHttpError = {
   code: string;
   message: string;
   retryable: boolean;
@@ -73,7 +73,7 @@ export async function parseHttpError(response: Response): Promise<HttpError> {
 }
 
 /** 从后端错误响应的不同包装形式中提取统一结构化错误。 */
-export function parseStructuredHttpError(value: unknown): StructuredHttpError | null {
+function parseStructuredHttpError(value: unknown): StructuredHttpError | null {
   if (!isRecord(value)) return null;
 
   if (isStructuredHttpError(value.error)) return value.error;

@@ -1,18 +1,14 @@
 "use client";
 
-import { AlertCircleIcon, ImageIcon, Loader2Icon, XIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { ImageIcon, XIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 type ImageAttachmentCardProps = {
   src?: string | null;
   name: string;
-  loading?: boolean;
-  error?: boolean;
   onRemove?: () => void;
   onPreview?: () => void;
-  remove?: ReactNode;
   className?: string;
 };
 
@@ -20,11 +16,8 @@ type ImageAttachmentCardProps = {
 export function ImageAttachmentCard({
   src,
   name,
-  loading = false,
-  error = false,
   onRemove,
   onPreview,
-  remove,
   className,
 }: ImageAttachmentCardProps) {
   const preview = src ? (
@@ -56,17 +49,7 @@ export function ImageAttachmentCard({
       ) : (
         preview
       )}
-      {loading && (
-        <div className="bg-background/60 absolute inset-0 flex items-center justify-center backdrop-blur-[2px]">
-          <Loader2Icon className="text-muted-foreground size-5 animate-spin" />
-        </div>
-      )}
-      {error && !loading && (
-        <div className="bg-background/70 absolute inset-0 flex items-center justify-center backdrop-blur-[2px]">
-          <AlertCircleIcon className="text-destructive size-5" />
-        </div>
-      )}
-      {remove ?? (onRemove && (
+      {onRemove && (
         <button
           type="button"
           className="bg-foreground/65 text-background hover:bg-foreground/80 focus-ring absolute top-1 right-1 rounded-full p-0.5"
@@ -75,7 +58,7 @@ export function ImageAttachmentCard({
         >
           <XIcon className="size-3.5" />
         </button>
-      ))}
+      )}
     </div>
   );
 }

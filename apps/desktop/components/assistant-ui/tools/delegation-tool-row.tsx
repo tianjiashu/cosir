@@ -51,7 +51,7 @@ export function DelegationToolRow({ artifact: rawArtifact, interactive = false, 
       void frontendLog("INFO", "workbench_agent_open_requested", "主 Thread 请求打开子 Agent Workbench", {
         data: { childTaskId },
       });
-      actions?.openAgent({ taskId: childTaskId, title, role });
+      actions?.openAgent({ taskId: childTaskId, title });
     }
   };
   const requestCancellation = async () => {

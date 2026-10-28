@@ -151,12 +151,6 @@ function useTaskAssistantTransportAdapter(
   return { adapter, open: session.open };
 }
 
-/** runtime 与重开订阅的入口：`open` 供宿主的有限重连与「重新同步」使用（首帧即完整状态）。 */
-export type TaskAssistantTransport<Runtime> = {
-  runtime: Runtime;
-  open: () => Promise<void>;
-};
-
 /**
  * 创建 task 级可写 Transport runtime。
  *

@@ -5,13 +5,11 @@ import type { ReferenceInput } from "@/lib/workspace-references/prepare";
 export function AddReferenceButton({
   workspaceId,
   inputs,
-  label = "添加到对话",
-  question,
+  label,
 }: {
   workspaceId: number;
   inputs: ReferenceInput[];
-  label?: string;
-  question?: string;
+  label: string;
 }) {
   const bridge = useReferenceBridge();
   return (
@@ -24,7 +22,7 @@ export function AddReferenceButton({
         bridge.workspaceId !== workspaceId ||
         !inputs.length
       }
-      onClick={() => void bridge?.add(workspaceId, inputs, question)}
+      onClick={() => void bridge?.add(workspaceId, inputs)}
     >
       <MessageSquarePlusIcon className="size-3.5" />
       {label}

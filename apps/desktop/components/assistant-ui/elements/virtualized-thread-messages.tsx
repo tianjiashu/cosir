@@ -12,21 +12,20 @@ import { VirtualizedThreadMessageRow, type MessageComponents } from "@/component
 type VirtualizedThreadMessagesProps = {
   scrollElementRef: RefObject<HTMLDivElement | null>;
   components: MessageComponents;
-  rowPaddingBottom: string;
-  keepActiveTail?: boolean;
   performanceProbe?: AssistantPerformanceProbe | null;
 };
 
-/** 为可写和只读对话共享按消息 id 定位的虚拟列表；不负责消息内容状态维护。 */
+/**
+ * 按消息 id 定位的对话虚拟列表；不负责消息内容状态维护。
+ * 运行中始终保留末尾两条消息（本轮用户输入与正在输出的回复）挂载，避免流式增长时被移出可见区后丢失测量。
+ */
 export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = memo(function VirtualizedThreadMessages({
   scrollElementRef,
   components,
-  rowPaddingBottom,
-  keepActiveTail = false,
   performanceProbe = null,
 }) {
   const messageIds = unstable_useThreadMessageIds();
-  const activeMessageIds = useAuiState((state) => keepActiveTail && state.thread.isRunning
+  const activeMessageIds = useAuiState((state) => state.thread.isRunning
     ? state.thread.messages.slice(-2).map((message) => message.id).join("|")
     : "");
   const activeIndexes = useMemo(
@@ -39,12 +38,10 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = mem
     estimateSize: () => 120,
     getItemKey: (index) => messageIds[index] ?? index,
     overscan: 8,
-    rangeExtractor: keepActiveTail
-      ? (range) => Array.from(new Set([
-        ...defaultRangeExtractor(range),
-        ...activeIndexes,
-      ])).sort((left, right) => left - right)
-      : undefined,
+    rangeExtractor: (range) => Array.from(new Set([
+      ...defaultRangeExtractor(range),
+      ...activeIndexes,
+    ])).sort((left, right) => left - right),
   });
   const virtualItems = virtualizer.getVirtualItems();
   const firstItem = virtualItems[0];
@@ -71,7 +68,6 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = mem
             index={item.index}
             messageId={messageId}
             components={components}
-            rowPaddingBottom={rowPaddingBottom}
             measureElement={measureElement}
             performanceProbe={performanceProbe}
           />

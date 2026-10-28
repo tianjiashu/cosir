@@ -23,7 +23,7 @@ import {
   type OnReconnect,
   type XYPosition,
 } from "@xyflow/react";
-import { BotIcon, CheckCircle2Icon, CircleHelpIcon, Loader2Icon, Maximize2Icon, NetworkIcon, PlayIcon, Redo2Icon, SaveIcon, ShrinkIcon, Undo2Icon, XIcon } from "lucide-react";
+import { BotIcon, CheckCircle2Icon, CircleHelpIcon, Loader2Icon, Maximize2Icon, NetworkIcon, Redo2Icon, SaveIcon, ShrinkIcon, Undo2Icon, XIcon } from "lucide-react";
 
 import { AgentTeamGraphInspector, type GraphInspectorSelection } from "@/components/agent-team-graph-inspector";
 import { TeamGraphIssuesIndicator } from "@/components/agent-team-graph-issues";
@@ -105,36 +105,11 @@ function isEditableTarget(target: EventTarget | null): boolean {
     && (target.isContentEditable || target.matches("input, textarea, select, button, [role=\"textbox\"]"));
 }
 
-/**
- * 空画布的起步示意：用一条虚线路径说明 START → Agent → END 的编排方式，不拦截画布操作。
- * 放在画布下部：默认 END 节点经 fitView 居中，示意不与它重叠。
- */
-function EmptyCanvasGuide() {
-  return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-[12%] flex justify-center p-6">
-      <div className="bg-background/85 flex flex-col items-center gap-5 rounded-2xl px-8 py-7 backdrop-blur">
-        <div className="flex items-center gap-2" aria-hidden="true">
-          <span className="bg-primary text-primary-foreground inline-flex h-7 items-center gap-1 rounded-full px-3 text-2xs font-semibold"><PlayIcon className="size-2.5 fill-current" />START</span>
-          <span className="border-muted-foreground/40 w-8 border-t-2 border-dashed" />
-          <span className="border-primary/40 bg-primary/5 text-primary flex h-14 w-40 items-center justify-center gap-2 rounded-2xl border-2 border-dashed text-xs font-medium"><BotIcon className="size-4" />第一个 Agent</span>
-          <span className="border-muted-foreground/40 w-8 border-t-2 border-dashed" />
-          <span className="border-success/40 text-success inline-flex h-7 items-center gap-1 rounded-full border px-3 text-2xs font-semibold"><CheckCircle2Icon className="size-3" />END</span>
-        </div>
-        <div className="text-center">
-          <p className="text-sm font-semibold">从左侧拖入第一个 Agent</p>
-          <p className="text-muted-foreground mt-1 text-xs">第一个节点自动成为入口；再从它的状态出口拖线到 END 或下一个 Agent</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function GraphCanvas({
   session,
   profiles,
   onSave,
   onExit,
-  error,
   saving,
   scopeEditable,
   teamIdEditable,
@@ -142,11 +117,10 @@ function GraphCanvas({
 }: {
   session: TeamEditorSession;
   profiles: AgentConfiguration[];
-  onSave?: () => void;
-  onExit?: () => void;
-  error?: string | null;
-  saving?: boolean;
-  scopeEditable?: boolean;
+  onSave: () => void;
+  onExit: () => void;
+  saving: boolean;
+  scopeEditable: boolean;
   teamIdEditable: boolean;
   graphIssues: TeamGraphIssues;
 }) {
@@ -759,11 +733,10 @@ function GraphCanvas({
           <Button type="button" variant="ghost" size="icon-sm" aria-label="撤销" title="撤销 (Ctrl+Z / ⌘Z)" onClick={undo} disabled={!history.past.length}><Undo2Icon /></Button>
           <Button type="button" variant="ghost" size="icon-sm" aria-label="重做" title="重做 (Ctrl+Y / Ctrl+Shift+Z / ⌘Shift+Z)" onClick={redo} disabled={!history.future.length}><Redo2Icon /></Button>
           <Button type="button" variant="ghost" size="icon-sm" aria-label={fullscreen ? "退出全屏画布" : "全屏画布"} title={fullscreen ? "退出全屏画布 (Esc)" : "全屏画布"} onClick={() => setFullscreen((value) => !value)}>{fullscreen ? <ShrinkIcon /> : <Maximize2Icon />}</Button>
-          {onExit && <Button type="button" variant="ghost" size="icon-sm" aria-label="返回 Team 编辑" onClick={() => { setFullscreen(false); onExit(); }}><XIcon /></Button>}
-          {onSave && <Button type="button" size="sm" className="ml-1.5" onClick={onSave} disabled={saving}><SaveIcon />{saving ? "保存中…" : "保存"}</Button>}
+          <Button type="button" variant="ghost" size="icon-sm" aria-label="返回 Team 编辑" onClick={() => { setFullscreen(false); onExit(); }}><XIcon /></Button>
+          <Button type="button" size="sm" className="ml-1.5" onClick={onSave} disabled={saving}><SaveIcon />{saving ? "保存中…" : "保存"}</Button>
         </div>
       </header>
-      {error && <div role="alert" className="shrink-0 border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-xs text-destructive">{error}</div>}
       <div className="flex min-h-0 flex-1">
         <AgentTeamGraphPalette profiles={profiles} onAdd={addProfileToCenter} onBeginDrag={beginAgentDrag} onBeginEndDrag={beginEndDrag} />
         <div
@@ -875,7 +848,6 @@ function GraphCanvas({
               </ReactFlow>
             </AgentTeamEdgeRouteContext.Provider>
           </GraphNodeViewContext.Provider>
-          {!configuration.nodes.length && <EmptyCanvasGuide />}
           {/* 表单视图下画布隐藏但保持挂载，面板随之不渲染，避免与表单的同名字段并存。 */}
           {mode === "canvas" && (selection || teamPanelOpen) && <AgentTeamGraphInspector
             selection={selection}
@@ -884,7 +856,7 @@ function GraphCanvas({
             profiles={profiles}
             endNodeCount={layout.endNodeIds.length}
             teamIdEditable={teamIdEditable}
-            scopeEditable={scopeEditable ?? false}
+            scopeEditable={scopeEditable}
             actions={{
               onDismiss: closePanels,
               onUpdateNode: updateNode,
@@ -908,11 +880,10 @@ function GraphCanvas({
 export function AgentTeamGraphEditor(props: {
   session: TeamEditorSession;
   profiles: AgentConfiguration[];
-  onSave?: () => void;
-  onExit?: () => void;
-  error?: string | null;
-  saving?: boolean;
-  scopeEditable?: boolean;
+  onSave: () => void;
+  onExit: () => void;
+  saving: boolean;
+  scopeEditable: boolean;
   teamIdEditable: boolean;
   graphIssues: TeamGraphIssues;
 }) {

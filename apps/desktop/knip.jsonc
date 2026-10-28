@@ -11,7 +11,7 @@
     "tests/e2e/global-setup.mjs",
     "tests/e2e/test-server.mjs",
     "tests/e2e/**/*.spec.ts",
-    "tests/unit/**/*.test.ts",
+    "tests/unit/**/*.test.{ts,tsx}",
     "tests/tauri-e2e/**/*.spec.mjs"
   ],
   "project": ["**/*.{js,jsx,ts,tsx,mjs,cjs,css}"],

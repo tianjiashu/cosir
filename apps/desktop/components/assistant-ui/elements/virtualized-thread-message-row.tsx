@@ -13,7 +13,6 @@ export type VirtualizedThreadMessageRowProps = {
   index: number;
   messageId: string;
   components: MessageComponents;
-  rowPaddingBottom: string;
   measureElement: (element: HTMLDivElement | null) => void;
   performanceProbe?: AssistantPerformanceProbe | null;
 };
@@ -29,7 +28,6 @@ export const VirtualizedThreadMessageRow = memo(function VirtualizedThreadMessag
   index,
   messageId,
   components,
-  rowPaddingBottom,
   measureElement,
   performanceProbe = null,
 }: VirtualizedThreadMessageRowProps) {
@@ -57,8 +55,7 @@ export const VirtualizedThreadMessageRow = memo(function VirtualizedThreadMessag
     <div
       data-index={index}
       ref={measureElement}
-      className="w-full"
-      style={{ paddingBottom: rowPaddingBottom }}
+      className="w-full pb-6"
     >
       <RenderIsolationBoundary
         scope="message"

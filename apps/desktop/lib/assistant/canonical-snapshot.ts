@@ -2,6 +2,7 @@ import { isCancelledAbort, isTimeoutAbort, withTimeout } from "@/lib/async/abort
 import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
 import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { newTraceId } from "@/lib/trace";
 import { getBackendRuntimeSnapshot } from "@/src/runtime-config";
 
 /**
@@ -20,7 +21,6 @@ export type CanonicalSnapshotOptions = {
   /** 稳定的 snake_case 原因，写入日志用于区分是哪条恢复链路发起的读取。 */
   reason: string;
   timeoutMs: number;
-  traceId?: string;
   /** 调用方的取消信号（卸载、被新请求取代）；触发后结果视为 superseded。 */
   signal?: AbortSignal;
 };
@@ -44,11 +44,13 @@ export async function fetchCanonicalSnapshot(
   };
 
   const { signal, clear } = withTimeout(options.signal, options.timeoutMs);
+  // 每次读取自成一条链路：请求与失败日志共用同一 trace，便于在后端日志里对上这次读取。
+  const traceId = newTraceId();
 
   try {
     const snapshot = await requestAssistantSnapshot(taskId, {
       signal,
-      traceId: options.traceId,
+      traceId,
       timeoutMs: options.timeoutMs,
     });
     if (isCancelledAbort(signal) || !isSameBackend()) return { kind: "superseded" };
@@ -56,7 +58,7 @@ export async function fetchCanonicalSnapshot(
   } catch (error) {
     if (isCancelledAbort(signal) || !isSameBackend()) return { kind: "superseded" };
     void frontendLog("WARNING", "assistant_snapshot_fetch_failed", "读取对话权威快照失败", {
-      traceId: options.traceId,
+      traceId,
       data: { taskId, reason: options.reason, timedOut: isTimeoutAbort(signal), backendGeneration: backend.generation },
       error,
     });

@@ -6,7 +6,7 @@ import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
 
 type WorkbenchContextValue = {
   workspaceId: number | null;
-  openAgent: (input: { taskId: number; title: string; role: string | null }) => void;
+  openAgent: (input: { taskId: number; title: string }) => void;
   openAgentConfigurationDraft: (input: { taskId: number; toolCallId: string; draft: AgentConfigurationDraft }) => void;
   openAgentTeamConfigurationDraft: (input: { taskId: number; toolCallId: string; draft: AgentTeamConfigurationDraft }) => void;
 };

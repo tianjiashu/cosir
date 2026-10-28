@@ -20,10 +20,6 @@ export const notify = {
     toast.success(message, { description: options?.description, action: options?.action });
   },
 
-  info(message: string, options?: { description?: string }) {
-    toast.info(message, { description: options?.description });
-  },
-
   /**
    * 失败提示。传入原始错误时经 userErrorMessage 转换为可展示文案；
    * `title` 说明哪个动作失败，文案本身作为描述。

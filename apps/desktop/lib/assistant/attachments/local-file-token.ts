@@ -5,7 +5,7 @@ import {
 import { LOCAL_FILE_DATA_PREFIX } from "@/lib/assistant/attachments/local-attachment-registry";
 
 /** Stable client-only token used to render a local ordinary attachment inline. */
-export const LOCAL_FILE_TOKEN = /\[\[cosir-file:([^\]]+)\]\]/g;
+const LOCAL_FILE_TOKEN = /\[\[cosir-file:([^\]]+)\]\]/g;
 
 /** 图片附件的受控 locator 前缀（与后端 `cosir-attachment://<id>` 契约一致）。 */
 export const LOCAL_IMAGE_LOCATOR_PREFIX = "cosir-attachment://";

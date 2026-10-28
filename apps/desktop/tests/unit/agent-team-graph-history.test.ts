@@ -1,5 +1,5 @@
 import { importDraft, createIdentityAllocator } from "@/lib/agent-team-editor/model";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   commitGraphEdit,
@@ -29,10 +29,14 @@ function snapshot(name: string): AgentTeamGraphSnapshot {
 }
 
 describe("Agent Team graph edit history", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("undoes and redoes a complete configuration and layout snapshot", () => {
     const initial = snapshot("Review");
     const edited = snapshot("Edited");
-    const afterEdit = commitGraphEdit(createGraphEditHistory(), initial, edited, { now: 1 });
+    const afterEdit = commitGraphEdit(createGraphEditHistory(), initial);
 
     const undo = undoGraphEdit(afterEdit, edited);
     expect(undo?.snapshot).toEqual(initial);
@@ -44,12 +48,11 @@ describe("Agent Team graph edit history", () => {
     const first = snapshot("A");
     const second = snapshot("AB");
     const third = snapshot("ABC");
-    const history = commitGraphEdit(
-      commitGraphEdit(createGraphEditHistory(), first, second, { coalesceKey: "name", now: 10 }),
-      second,
-      third,
-      { coalesceKey: "name", now: 20 },
-    );
+    vi.useFakeTimers();
+    vi.setSystemTime(10);
+    const afterFirst = commitGraphEdit(createGraphEditHistory(), first, "name");
+    vi.setSystemTime(20);
+    const history = commitGraphEdit(afterFirst, second, "name");
 
     expect(undoGraphEdit(history, third)?.snapshot).toEqual(first);
   });
@@ -58,9 +61,9 @@ describe("Agent Team graph edit history", () => {
     const first = snapshot("A");
     const second = snapshot("B");
     const third = snapshot("C");
-    const history = commitGraphEdit(createGraphEditHistory(), first, second, { now: 1 });
+    const history = commitGraphEdit(createGraphEditHistory(), first);
     const undone = undoGraphEdit(history, second)!;
-    const branched = commitGraphEdit(undone.history, first, third, { now: 2 });
+    const branched = commitGraphEdit(undone.history, first);
 
     expect(redoGraphEdit(branched, third)).toBeNull();
   });
@@ -70,7 +73,7 @@ describe("Agent Team graph edit history", () => {
     let current = snapshot("0");
     for (let index = 1; index <= 60; index += 1) {
       const next = snapshot(String(index));
-      history = commitGraphEdit(history, current, next, { now: index * 1000 });
+      history = commitGraphEdit(history, current);
       current = next;
     }
 

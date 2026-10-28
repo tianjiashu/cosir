@@ -7,7 +7,6 @@ export type WorkbenchAgentTab = {
   workspaceId: number;
   taskId: number;
   title: string;
-  role: string | null;
 };
 
 export type AgentConfigurationDraft = Pick<

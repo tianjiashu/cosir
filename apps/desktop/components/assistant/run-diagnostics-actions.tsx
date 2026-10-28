@@ -11,7 +11,7 @@ import { notify } from "@/lib/notify";
 
 export type RunDiagnosticsActionsProps = {
   /** 当前对话所属的 Task 标识，由 Thread 页面上下文提供。 */
-  taskId: number | null | undefined;
+  taskId: number;
   /** 当前 Assistant 消息所属的 Run 标识（只用于诊断与观测页跳转）。 */
   runId: number | null;
   /** 这一轮的结局状态：消息 `outcome.status`，活动中则取 `activity.status`。 */
@@ -45,13 +45,11 @@ export function formatRunDiagnostics({ taskId, runId, status, endReason, errorCo
 
 /** 诊断操作只在终态回复的最后一条消息上提供，避免把中间态误当成最终诊断信息。 */
 export function shouldOfferRunDiagnostics({
-  taskId,
   runId,
   status,
   visible,
 }: RunDiagnosticsActionsProps): boolean {
   return visible
-    && taskId != null
     && runId != null
     && isTerminalRunStatus(status);
 }
@@ -67,7 +65,7 @@ export function RunDiagnosticsActions(props: RunDiagnosticsActionsProps): ReactE
   const navigate = useNavigate();
   const location = useLocation();
 
-  if (!shouldOfferRunDiagnostics(props) || taskId == null || runId == null || status === null) return null;
+  if (!shouldOfferRunDiagnostics(props) || runId == null || status === null) return null;
 
   const copyDiagnostics = () => {
     const text = formatRunDiagnostics({ taskId, runId, status, endReason, errorCode });

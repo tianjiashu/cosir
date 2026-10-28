@@ -26,7 +26,7 @@ describe("ReadonlyThread", () => {
   it("复用调用方 runtime 渲染 Thread，且不提供 composer 写入能力", () => {
     renderToStaticMarkup(<ReadonlyThread taskId={501} />);
 
-    expect(captured.thread).toMatchObject({ readonly: true, autoFocus: false, taskId: 501 });
+    expect(captured.thread).toMatchObject({ readonly: true, taskId: 501 });
   });
 
   // 目的：只读作用域不得再引入 ReadonlyThreadProvider。潜在缺陷：其 ReadonlyThreadRuntimeCore

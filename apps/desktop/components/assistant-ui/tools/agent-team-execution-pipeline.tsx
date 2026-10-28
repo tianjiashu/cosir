@@ -21,7 +21,7 @@ type TeamAgent = NodeVisit["agents"][number];
 
 type AgentTeamExecutionPipelineProps = {
   run: AgentTeamRun;
-  onOpenAgent: (taskId: number, title: string, role: string) => void;
+  onOpenAgent: (taskId: number, title: string) => void;
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -81,7 +81,7 @@ function AgentChip({
       disabled={agent.task_id === null}
       title={[agent.role, agent.agent_id, statusLabel(agent.status), agent.title].filter(Boolean).join(" · ")}
       aria-label={`${agent.role}，${statusLabel(agent.status)}`}
-      onClick={() => agent.task_id !== null && onOpenAgent(agent.task_id, agent.title, agent.role)}
+      onClick={() => agent.task_id !== null && onOpenAgent(agent.task_id, agent.title)}
     >
       <BotIcon
         className={`size-4 shrink-0 ${agent.status === "running" ? "animate-pulse text-primary motion-reduce:animate-none" : "text-muted-foreground"}`}

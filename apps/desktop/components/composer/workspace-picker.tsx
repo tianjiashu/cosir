@@ -15,7 +15,6 @@ type WorkspacePickerProps = {
   selectedWorkspaceId: number | null;
   onWorkspaceChange: (workspaceId: number) => void;
   onWorkspaceCreated: (workspace: Workspace) => Promise<void>;
-  showCreateLabel?: boolean;
 };
 
 /**
@@ -56,7 +55,7 @@ export function useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceCh
 }
 
 /** 只发出选择意图；确认、提交选择和最近工作区偏好由布局目录边界统一处理。 */
-export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceChange, onWorkspaceCreated, showCreateLabel = false }: WorkspacePickerProps) {
+export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceChange, onWorkspaceCreated }: WorkspacePickerProps) {
   const [openMenu, setOpenMenu] = useState(false);
   const { create, creating, error } = useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceChange });
   const selected = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
@@ -72,7 +71,7 @@ export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceCh
 
   return (
     <Popover open={openMenu} onOpenChange={setOpenMenu}>
-      <PopoverTrigger type="button" className={`border-border bg-background hover:bg-muted inline-flex min-w-0 max-w-64 items-center justify-start gap-1.5 rounded-lg border font-medium focus-ring ${showCreateLabel ? "h-7 px-2.5 text-xs" : "h-8 px-2.5 text-sm"}`}>
+      <PopoverTrigger type="button" className="border-border bg-background hover:bg-muted inline-flex min-w-0 max-w-64 items-center justify-start gap-1.5 rounded-lg border font-medium focus-ring h-8 px-2.5 text-sm">
           <FolderIcon className="size-4 shrink-0" />
           <span className="truncate">{selected?.name ?? "选择工作区"}</span>
           <ChevronDownIcon className="text-muted-foreground ml-auto size-3.5 shrink-0" />

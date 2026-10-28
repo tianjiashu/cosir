@@ -23,7 +23,7 @@ const ToolPartImpl = (props: ToolPartRendererProps) => {
   return (
     <div data-tool-call-id={props.toolCallId}>
       <Renderer {...props} />
-      {interactive && taskId !== undefined && (
+      {interactive && (
         <DeferredResultActions
           taskId={taskId}
           toolCallId={props.toolCallId}

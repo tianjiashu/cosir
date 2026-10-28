@@ -18,7 +18,6 @@ type MarkdownConfigurationPanelProps<TDocument extends MarkdownDocumentContract>
   placeholder: string;
   saveLabel: string;
   description?: string;
-  initialMode?: "source" | "split" | "preview";
 };
 
 /**
@@ -33,7 +32,6 @@ export function MarkdownConfigurationPanel<TDocument extends MarkdownDocumentCon
   placeholder,
   saveLabel,
   description,
-  initialMode = "split",
 }: MarkdownConfigurationPanelProps<TDocument>) {
   const state = useMarkdownConfigurationDocument(adapter);
   useUnsavedChanges("settings", adapter.label, state.dirty);
@@ -61,7 +59,6 @@ export function MarkdownConfigurationPanel<TDocument extends MarkdownDocumentCon
       <MarkdownSourcePreviewEditor
         value={state.content}
         onChange={state.setContent}
-        initialMode={initialMode}
         placeholder={placeholder}
         minHeight="0"
         height="max(24rem, calc(100dvh - 15rem))"

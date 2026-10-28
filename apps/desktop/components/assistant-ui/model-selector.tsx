@@ -28,11 +28,9 @@ import {
   subscribeStoredSelection,
   writeStoredSelection,
 } from "@/lib/model-selection-storage";
-import { cn } from "@/lib/utils";
 
 type ModelSelectorProps = {
   scope?: ModelSelectionScope;
-  className?: string;
   onReadyChange?: (ready: boolean) => void;
   runtimeModelContext?: boolean;
   /**
@@ -87,14 +85,12 @@ function toOfficialModel(model: ModelCatalogModel): ModelOption {
 function SelectorView({
   catalogModels,
   selection,
-  className,
   disabled = false,
   onSelectionChange,
   onCatalogChanged,
 }: {
   catalogModels: readonly ModelCatalogModel[];
   selection: ModelSelection;
-  className?: string;
   disabled?: boolean;
   onSelectionChange: (selection: ModelSelection) => void;
   onCatalogChanged: () => void;
@@ -113,7 +109,7 @@ function SelectorView({
 
   return (
     <div
-      className={cn("flex min-w-0 max-w-full flex-wrap items-center gap-2", className)}
+      className="flex min-w-0 max-w-full flex-wrap items-center gap-2"
       title={disabled ? RUN_LAUNCH_LOCKED_HINT : undefined}
     >
       <OfficialModelSelectorRoot
@@ -251,7 +247,7 @@ function SelectorBody({
         <span className="text-muted-foreground text-xs">运行中的模型配置已删除，停止后重新选择</span>
       )}
       {selection && catalog && (
-        <SelectorView catalogModels={catalog.models} selection={selection} className={props.className} disabled={locked} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />
+        <SelectorView catalogModels={catalog.models} selection={selection} disabled={locked} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />
       )}
     </ModelAvailability>
   );

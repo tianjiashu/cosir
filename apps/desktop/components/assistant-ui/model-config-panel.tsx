@@ -23,10 +23,8 @@ import { confirmDiscardUnsaved } from "@/lib/unsaved-changes";
  */
 export function ModelConfigPanel({
   onChanged,
-  onBeforeOpen,
 }: {
   onChanged: () => void;
-  onBeforeOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -40,10 +38,7 @@ export function ModelConfigPanel({
     <>
       <button
         type="button"
-        onClick={() => {
-          onBeforeOpen?.();
-          setOpen(true);
-        }}
+        onClick={() => setOpen(true)}
         className="text-muted-foreground hover:text-foreground inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs"
       >
         <Settings2Icon className="size-3.5" />

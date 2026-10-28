@@ -60,8 +60,6 @@ type ScheduledCommit = {
 type PublicationKind = "stream" | "canonical" | "pending";
 
 export type TransportFrameStoreOptions = {
-  /** 注入宿主 WebView 的动画帧调度器，生产环境默认使用 requestAnimationFrame。 */
-  scheduleCommit?: (callback: (frameTimestamp?: number) => void) => ScheduledCommit;
   /** 注入开发期性能探针；生产构建不传入该能力。 */
   performanceProbe?: AssistantPerformanceProbe;
 };
@@ -139,12 +137,10 @@ export class TransportFrameStore {
   private readonly activityListeners = new Set<ActivityListener>();
   private scheduledCommit: ScheduledCommit | null = null;
   private scheduledFrameTimestamp: number | null = null;
-  private readonly scheduleCommit: (callback: (frameTimestamp?: number) => void) => ScheduledCommit;
   private readonly performanceProbe: AssistantPerformanceProbe | undefined;
 
   public constructor(initialState: TransportState, options: TransportFrameStoreOptions = {}) {
     this.state = initialState;
-    this.scheduleCommit = options.scheduleCommit ?? scheduleWebViewCommit;
     this.performanceProbe = options.performanceProbe;
     this.rebuildAllItems();
     this.snapshot = this.makeSnapshot();
@@ -215,23 +211,14 @@ export class TransportFrameStore {
     this.publish(null, "pending");
   }
 
-  /** 去掉指定的乐观命令（命令被拒）；不传时清空全部。 */
-  public clearPendingCommands(rejectedCommands?: readonly UserAddMessageCommand[]): void {
+  /** 去掉被拒的那条乐观命令：有 commandId 按身份匹配，否则按引用匹配。 */
+  public clearPendingCommand(rejected: UserAddMessageCommand): void {
     if (this.pendingCommands.length === 0) return;
-    if (!rejectedCommands || rejectedCommands.length === 0) {
-      this.pendingCommands = [];
-    } else {
-      const rejectedIds = new Set(
-        rejectedCommands
-          .map((command) => command.commandId)
-          .filter((commandId): commandId is string => typeof commandId === "string"),
-      );
-      this.pendingCommands = this.pendingCommands.filter((command) => (
-        typeof command.commandId === "string"
-          ? !rejectedIds.has(command.commandId)
-          : !rejectedCommands.includes(command)
-      ));
-    }
+    this.pendingCommands = this.pendingCommands.filter((command) => (
+      typeof command.commandId === "string"
+        ? command.commandId !== rejected.commandId
+        : command !== rejected
+    ));
     this.composeItems();
     this.publish(null, "pending");
   }
@@ -267,7 +254,7 @@ export class TransportFrameStore {
 
   /**
    * 乐观命令的收敛：snapshot 里新出现了用户消息（排队或已并入）就按出现顺序去掉同样数量的最早
-   * 乐观命令。命令被拒由提交方按 HTTP 结果经 `clearPendingCommands` 收回，不经这里。
+   * 乐观命令。命令被拒由提交方按 HTTP 结果经 `clearPendingCommand` 收回，不经这里。
    */
   private reconcilePending(previous: TransportState): void {
     if (this.pendingCommands.length === 0) return;
@@ -401,7 +388,7 @@ export class TransportFrameStore {
   private publishOnNextAnimationFrame(): void {
     if (this.scheduledCommit) return;
     this.scheduledFrameTimestamp = null;
-    this.scheduledCommit = this.scheduleCommit((frameTimestamp) => {
+    this.scheduledCommit = scheduleWebViewCommit((frameTimestamp) => {
       this.scheduledCommit = null;
       this.scheduledFrameTimestamp = frameTimestamp ?? null;
       this.publish(this.scheduledFrameTimestamp, "stream");

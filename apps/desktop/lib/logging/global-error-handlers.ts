@@ -8,12 +8,9 @@ let lastWindowErrorAt = 0;
 let suppressedWindowErrors = 0;
 
 /** Register one process-wide, redacted sink for errors outside React boundaries. */
-export function installGlobalFrontendErrorHandlers(target: Window = window): () => void {
-  if (installed) return () => undefined;
+export function installGlobalFrontendErrorHandlers(): void {
+  if (installed) return;
   installed = true;
-  lastWindowErrorKey = "";
-  lastWindowErrorAt = 0;
-  suppressedWindowErrors = 0;
 
   const onError = (event: ErrorEvent): void => {
     const message = event.message.trim().slice(0, 256);
@@ -55,15 +52,6 @@ export function installGlobalFrontendErrorHandlers(target: Window = window): () 
     }).catch(() => undefined);
   };
 
-  target.addEventListener("error", onError);
-  target.addEventListener("unhandledrejection", onUnhandledRejection);
-
-  return () => {
-    target.removeEventListener("error", onError);
-    target.removeEventListener("unhandledrejection", onUnhandledRejection);
-    installed = false;
-    lastWindowErrorKey = "";
-    lastWindowErrorAt = 0;
-    suppressedWindowErrors = 0;
-  };
+  window.addEventListener("error", onError);
+  window.addEventListener("unhandledrejection", onUnhandledRejection);
 }

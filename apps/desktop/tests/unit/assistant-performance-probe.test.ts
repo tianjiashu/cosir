@@ -3,28 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 
 describe("AssistantPerformanceProbe", () => {
-  it("does not collect or report anything when development measurement is disabled", () => {
-    const onReport = vi.fn();
-    const now = vi.fn(() => 10);
-    const probe = createAssistantPerformanceProbe({ enabled: false, now, onReport });
-
-    probe.beginStream();
-    probe.recordFrame({ kind: "mutation", mutationCount: 1, durationMs: 2 });
-    probe.recordPublication({ durationMs: 3, itemCount: 1000, activeMessageId: "active", publicationKind: "stream", terminalConvergence: false });
-    probe.recordReactCommit({ scope: "message-row", id: "active", phase: "update", actualDurationMs: 4 });
-    probe.finishStream({ activityRunId: 1, activityStatus: "completed" });
-
-    expect(onReport).not.toHaveBeenCalled();
-    expect(now).not.toHaveBeenCalled();
-  });
-
   it("aggregates transport and React commit measurements into one stream report", async () => {
     const onReport = vi.fn();
-    const probe = createAssistantPerformanceProbe({
-      enabled: true,
-      now: vi.fn(() => 10),
-      onReport,
-    });
+    const probe = createAssistantPerformanceProbe({ onReport });
 
     probe.beginStream();
     probe.recordFrame({ kind: "mutation", mutationCount: 3, durationMs: 2 });
@@ -58,7 +39,7 @@ describe("AssistantPerformanceProbe", () => {
 
   it("ignores React commits outside an active stream", async () => {
     const onReport = vi.fn();
-    const probe = createAssistantPerformanceProbe({ enabled: true, onReport });
+    const probe = createAssistantPerformanceProbe({ onReport });
 
     probe.recordReactCommit({ scope: "message-row", id: "history", phase: "mount", actualDurationMs: 2 });
     probe.beginStream();
@@ -73,7 +54,7 @@ describe("AssistantPerformanceProbe", () => {
 
   it("waits one task before reporting so the final React commit is included", async () => {
     const onReport = vi.fn();
-    const probe = createAssistantPerformanceProbe({ enabled: true, onReport });
+    const probe = createAssistantPerformanceProbe({ onReport });
 
     probe.beginStream();
     probe.finishStream({ activityRunId: 1, activityStatus: "completed" });
@@ -89,7 +70,7 @@ describe("AssistantPerformanceProbe", () => {
 
   it("counts terminal convergence once and limits active row commits per publication", async () => {
     const onReport = vi.fn();
-    const probe = createAssistantPerformanceProbe({ enabled: true, onReport });
+    const probe = createAssistantPerformanceProbe({ onReport });
 
     probe.beginStream();
     probe.recordPublication({ durationMs: 1, itemCount: 2, activeMessageId: "active", publicationKind: "stream", animationFrameTimestamp: 1, terminalConvergence: false });

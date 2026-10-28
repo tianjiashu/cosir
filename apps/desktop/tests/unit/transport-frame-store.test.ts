@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TransportMessage, TransportState } from "@/lib/assistant/contract";
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
@@ -30,15 +30,12 @@ const command = (text: string, commandId?: string): UserAddMessageCommand => ({
   message: { role: "user", parts: [{ type: "text", text }] },
 });
 
+/** 接管宿主动画帧：回调留给测试手动触发（由 afterEach 还原全局）。 */
 const deferredScheduler = () => {
-  const callbacks: Array<(frameTimestamp?: number) => void> = [];
-  return {
-    callbacks,
-    scheduleCommit: (callback: (frameTimestamp?: number) => void) => {
-      callbacks.push(callback);
-      return { cancel: () => undefined };
-    },
-  };
+  const callbacks: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => callbacks.push(callback));
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  return { callbacks };
 };
 
 const probe = () => ({
@@ -59,6 +56,8 @@ const recordTransitions = (store: TransportFrameStore) => {
 };
 
 describe("TransportFrameStore", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("rejects malformed wire frames before projection", () => {
     expect(() => parseTransportFrame({ kind: "mutation", mutations: [] })).toThrow("task_id");
     expect(() => parseTransportFrame({
@@ -85,7 +84,7 @@ describe("TransportFrameStore", () => {
   it("batches streaming mutations into one animation-frame publication without touching history identities", () => {
     const scheduler = deferredScheduler();
     const historical = Array.from({ length: 1000 }, (_, index) => streaming(`history-${index}`, `old-${index}`));
-    const store = new TransportFrameStore(running([...historical, streaming("active", "partial")]), scheduler);
+    const store = new TransportFrameStore(running([...historical, streaming("active", "partial")]));
     const before = store.getSnapshot().items.slice(0, historical.length);
     let publicationCount = 0;
     store.subscribe(() => { publicationCount += 1; });
@@ -105,7 +104,7 @@ describe("TransportFrameStore", () => {
 
   it("does not defer content mutations that target a historical message", () => {
     const scheduler = deferredScheduler();
-    const store = new TransportFrameStore(running([streaming("history", "old"), streaming("active", "partial")]), scheduler);
+    const store = new TransportFrameStore(running([streaming("history", "old"), streaming("active", "partial")]));
     let publicationCount = 0;
     store.subscribe(() => { publicationCount += 1; });
 
@@ -118,7 +117,7 @@ describe("TransportFrameStore", () => {
   it("reports frame and publication timings through the optional development probe", () => {
     const performanceProbe = probe();
     const scheduler = deferredScheduler();
-    const store = new TransportFrameStore(running([streaming("active", "partial")]), { performanceProbe, ...scheduler });
+    const store = new TransportFrameStore(running([streaming("active", "partial")]), { performanceProbe });
 
     store.applyFrame(mutation([{ kind: "append-text", path: ["messages", 0, "parts", 0, "text"], value: " update" }]));
     scheduler.callbacks.shift()?.(1);
@@ -205,8 +204,9 @@ describe("TransportFrameStore 一轮结束（D2）", () => {
     const transitions = recordTransitions(store);
 
     store.applyFrame(mutation([{ kind: "set", path: ["activity", "status"], value: "cancelled" }]));
-    store.setPendingCommands([command("cleanup")]);
-    store.clearPendingCommands();
+    const cleanup = command("cleanup");
+    store.setPendingCommands([cleanup]);
+    store.clearPendingCommand(cleanup);
     store.applyFrame(mutation([{ kind: "set", path: ["activity", "endReason"], value: "cancelled" }]));
 
     expect(transitions).toEqual([{ kind: "settled", status: "cancelled" }]);
@@ -294,7 +294,7 @@ describe("TransportFrameStore 乐观命令收敛（D8）", () => {
     const first = command("first", "command-1");
     const second = command("second", "command-2");
     store.setPendingCommands([first, second]);
-    store.clearPendingCommands([first]);
+    store.clearPendingCommand(first);
     expect(store.getSnapshot().pendingCommands).toEqual([second]);
   });
 });

@@ -30,7 +30,7 @@ export type ToolPartRoute =
 
 export type ToolPartRendererProps = ToolCallMessagePartProps & {
   /** 拥有该工具 part 的任务：工具取消、审批决定与预览面板都按 Task 寻址。 */
-  taskId?: number;
+  taskId: number;
   /** 只读展示面不提供写入交互（取消工具、停止子 Agent）。 */
   interactive?: boolean;
   /** 用户已请求停止整个 Task 的当前活动，工具级停止入口随之收起。 */

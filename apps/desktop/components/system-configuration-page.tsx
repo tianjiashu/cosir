@@ -624,8 +624,8 @@ export function SystemConfigurationPage({ tab }: { tab: SystemSettingsTabId }) {
       {tab === "agents" && <AgentConfigurationPanel />}
       {tab === "models" && <ModelsPanel />}
       {tab === "agent-teams" && <AgentTeamConfigurationPanel scope="system" />}
-      {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent 提示词" initialMode="split" />}
-      {tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="在这里写入系统级工作约束…" saveLabel="保存全局 AGENTS.md" initialMode="split" />}
+      {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent 提示词" />}
+      {tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="在这里写入系统级工作约束…" saveLabel="保存全局 AGENTS.md" />}
       {tab === "environment" && <EnvironmentPanel />}
       {tab === "terminal-denylist" && <TerminalDenylistConfigurationPanel />}
       {tab === "mcp" && <MCPConfigurationPanel />}

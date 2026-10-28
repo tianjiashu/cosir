@@ -57,7 +57,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
     return {
       ...state,
       workspaceId: input.workspaceId,
-      tabs: existing ? state.tabs.map((tab) => tab.id === id ? { ...tab, title: input.title, role: input.role } : tab) : [...state.tabs, { ...input, id, kind: "agent" }],
+      tabs: existing ? state.tabs.map((tab) => tab.id === id ? { ...tab, title: input.title } : tab) : [...state.tabs, { ...input, id, kind: "agent" }],
       activeTabId: id,
       panelOpen: true,
     };

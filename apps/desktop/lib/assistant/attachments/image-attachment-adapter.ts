@@ -81,7 +81,7 @@ async function resolveAttachment(
   const cacheKey = `${workspaceId}:${digest}`;
   let upload = uploadByDigest.get(cacheKey);
   if (!upload) {
-    upload = uploadAttachment(workspaceId, attachment.file, undefined, { traceId });
+    upload = uploadAttachment(workspaceId, attachment.file, traceId);
     uploadByDigest.set(cacheKey, upload);
     // 失败（含超时）的上传不能留在缓存里，否则重发会直接拿到同一个失败结果。
     void upload.catch(() => {

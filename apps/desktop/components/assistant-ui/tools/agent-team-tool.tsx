@@ -5,6 +5,7 @@ import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon, UsersIcon } f
 import { submitToolDecision, type ToolDecision } from "@/lib/assistant/task-commands";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { newTraceId } from "@/lib/trace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +18,7 @@ import { readAgentTeamPreviewDisplay, type AgentTeamPreviewDisplay } from "./age
 
 /** 渲染器额外收到所属 Task：提交决定按 Task 与 TeamRun 寻址。 */
 type AgentTeamToolProps = ToolCallMessagePartProps & {
-  taskId?: number;
+  taskId: number;
 };
 
 function validateReviewedInputs(
@@ -125,20 +126,17 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
 
   /** 提交决定；后端执行后以消息唤醒主 Agent，失败只影响本卡片的提示状态。 */
   const submitDecision = async (decision: ToolDecision, phase: "confirming" | "rejecting") => {
-    if (taskId === undefined) {
-      setState("failed");
-      setMessage("无法定位该执行方案所属的对话，请刷新页面后重试");
-      return;
-    }
     setState(phase);
     setMessage("");
+    const traceId = newTraceId();
     try {
-      await submitToolDecision(taskId, toolCallId, decision);
+      await submitToolDecision(taskId, toolCallId, decision, { traceId });
       setState("idle");
       // 主 Agent 被决定消息唤醒后的输出经 Task 长订阅到达，这里只刷新 TeamRun 状态。
       void runQuery.refetch();
     } catch (error) {
       void frontendLog("ERROR", "agent_team_decision_submit_failed", "提交 Team 审批决定失败", {
+        traceId,
         data: { taskId, toolCallId, teamRunId: preview.teamRunId, decision: decision.decision },
         error,
       });

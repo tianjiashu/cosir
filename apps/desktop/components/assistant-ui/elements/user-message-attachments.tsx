@@ -37,12 +37,7 @@ export function UserMessageAttachments() {
                   <RenderErrorCard scope="attachment" label="图片附件" onRetry={onRetry} />
                 )}
               >
-                <Image
-                  type="image"
-                  image={part.image}
-                  status={{ type: "complete" }}
-                  display="message-thumbnail"
-                />
+                <Image image={part.image} />
               </PartRenderBoundary>
             );
           case "file":

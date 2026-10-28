@@ -104,9 +104,9 @@ function actionIcon(variant: ActionVariant): ReactNode {
  * 卡片挂载时镜像已由同一份 snapshot 同步好（webkit 实测进入 / 切回 Task 均未出现闪现）。若以后卡片
  * 能早于镜像同步渲染，需把 null 镜像当作「未知」不显示状态。
  */
-function useLiveSession(taskId: number | undefined, sessionId: string | undefined): TerminalSessionEntry | null {
+function useLiveSession(taskId: number, sessionId: string | undefined): TerminalSessionEntry | null {
   return useTerminalWorkbenchStore((state) => (
-    taskId === undefined || sessionId === undefined
+    sessionId === undefined
       ? null
       : state.tasks[taskId]?.sessions?.find((session) => session.sessionId === sessionId) ?? null
   ));
@@ -114,14 +114,14 @@ function useLiveSession(taskId: number | undefined, sessionId: string | undefine
 
 function TerminalSessionStartCard({ artifact, taskId, interactive }: {
   artifact: ReturnType<typeof readToolArtifact>;
-  taskId?: number;
+  taskId: number;
   interactive: boolean;
 }) {
   const data = asRecord(artifact.display_data);
   const sessionId = text(data.session_id);
   const live = useLiveSession(taskId, sessionId);
   const status = live ? terminalStatusPresentation(live.status) : null;
-  const canReveal = interactive && taskId !== undefined && sessionId !== undefined && live !== null;
+  const canReveal = interactive && sessionId !== undefined && live !== null;
   const reveal = canReveal ? () => useTerminalWorkbenchStore.getState().reveal(taskId, sessionId) : undefined;
 
   return (
@@ -164,14 +164,14 @@ function TerminalSessionStartCard({ artifact, taskId, interactive }: {
 function TerminalSessionActionRow({ artifact, variant, taskId, interactive }: {
   artifact: ReturnType<typeof readToolArtifact>;
   variant: ActionVariant;
-  taskId?: number;
+  taskId: number;
   interactive: boolean;
 }) {
   const data = asRecord(artifact.display_data);
   const sessionId = text(data.session_id);
   const live = useLiveSession(taskId, sessionId);
   // 只读线程（子 Agent）与已失效会话不提供跳转。
-  const canReveal = interactive && taskId !== undefined && sessionId !== undefined && live !== null && variant !== "close";
+  const canReveal = interactive && sessionId !== undefined && live !== null && variant !== "close";
   const meta = artifact.error ?? actionMeta(variant, data);
   const reveal = canReveal ? () => useTerminalWorkbenchStore.getState().reveal(taskId, sessionId) : undefined;
   return (

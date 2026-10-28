@@ -158,7 +158,7 @@ export type TransportUsage = {
  * 只有稳定 `code` 与 UI 展示 `message`；`retryable` 属于工具观察（仅面向模型），不在
  * Transport 错误契约内。模型 HTTP 失败时 `message` 可能直接来自响应体的 message 字段。
  */
-export type TransportError = {
+type TransportError = {
   code: string;
   message: string;
 };

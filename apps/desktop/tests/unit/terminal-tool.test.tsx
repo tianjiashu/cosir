@@ -7,11 +7,10 @@ type RenderOptions = {
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
   args?: Record<string, string>;
   display_data?: Record<string, unknown> | null;
-  taskId?: number;
   taskCancelling?: boolean;
 };
 
-function renderTerminal({ status, args = {}, display_data = null, taskId, taskCancelling = false }: RenderOptions): string {
+function renderTerminal({ status, args = {}, display_data = null, taskCancelling = false }: RenderOptions): string {
   return renderToStaticMarkup(
     <TerminalTool
       type="tool-call"
@@ -23,7 +22,7 @@ function renderTerminal({ status, args = {}, display_data = null, taskId, taskCa
       addResult={() => undefined}
       resume={() => undefined}
       respondToApproval={() => undefined}
-      taskId={taskId}
+      taskId={24}
       taskCancelling={taskCancelling}
       artifact={{
         backendStatus: status,
@@ -88,22 +87,20 @@ describe("TerminalTool", () => {
     expect(html).not.toContain("exit ");
   });
 
-  it("shows a separate stop action only for a running terminal call with its task identity", () => {
-    const running = renderTerminal({ status: "running", taskId: 24 });
-    const pending = renderTerminal({ status: "pending", taskId: 24 });
-    const missingTask = renderTerminal({ status: "running" });
-    const taskStopping = renderTerminal({ status: "running", taskId: 24, taskCancelling: true });
+  it("shows a separate stop action only for a running terminal call", () => {
+    const running = renderTerminal({ status: "running" });
+    const pending = renderTerminal({ status: "pending" });
+    const taskStopping = renderTerminal({ status: "running", taskCancelling: true });
 
     expect(running).toContain('aria-label="停止终端命令"');
     expect(running).toContain("停止</span>");
     expect(pending).not.toContain('aria-label="停止终端命令"');
-    expect(missingTask).not.toContain('aria-label="停止终端命令"');
     expect(taskStopping).not.toContain('aria-label="停止终端命令"');
   });
 
   it("hides the stop action after the tool reaches a terminal status", () => {
     for (const status of ["completed", "failed", "cancelled"] as const) {
-      const html = renderTerminal({ status, taskId: 24 });
+      const html = renderTerminal({ status });
       expect(html).not.toContain('aria-label="停止终端命令"');
     }
   });

@@ -9,6 +9,6 @@ import { Thread } from "@/components/assistant-ui/elements/thread.aui";
  * ``ReadonlyThreadRuntimeCore``，该 core 不承载 external state，使 ``thread.state`` 恒为
  * null；Thread 子树中读取 Transport state 的 selector 因此会在渲染期抛错，导致整屏渲染失败。
  */
-export function ReadonlyThread({ taskId }: { taskId?: number }) {
-  return <Thread readonly autoFocus={false} taskId={taskId} />;
+export function ReadonlyThread({ taskId }: { taskId: number }) {
+  return <Thread readonly taskId={taskId} />;
 }

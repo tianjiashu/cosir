@@ -27,7 +27,6 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandSeparator,
 } from "@/components/ui/command";
 import { RadioGroup as RadioGroupPrimitive } from "radix-ui";
 
@@ -517,22 +516,6 @@ function ModelSelectorEmpty({ children, ...props }: ModelSelectorEmptyProps) {
       {children ?? "没有匹配的模型"}
     </CommandEmpty>
   );
-}
-
-type ModelSelectorGroupProps = ComponentPropsWithoutRef<
-  typeof CommandGroup
->;
-
-function ModelSelectorGroup(props: ModelSelectorGroupProps) {
-  return <CommandGroup data-slot="model-selector-group" {...props} />;
-}
-
-type ModelSelectorSeparatorProps = ComponentPropsWithoutRef<
-  typeof CommandSeparator
->;
-
-function ModelSelectorSeparator(props: ModelSelectorSeparatorProps) {
-  return <CommandSeparator data-slot="model-selector-separator" {...props} />;
 }
 
 type ModelSelectorItemProps = Omit<

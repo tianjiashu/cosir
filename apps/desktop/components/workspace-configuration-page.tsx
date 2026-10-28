@@ -98,7 +98,7 @@ export function WorkspaceConfigurationPage({ workspaceId, workspaceName, tab }: 
     >
       {tab === "agents" && <AgentConfigurationPanel api={agentApi} />}
       {tab === "agent-teams" && <AgentTeamConfigurationPanel scope="workspace" workspaceId={workspaceId} />}
-      {tab === "instructions" && <MarkdownConfigurationPanel key={workspaceId} adapter={instructionAdapter} placeholder="写入当前工作区的项目约束…" saveLabel="保存 AGENTS.md" initialMode="split" />}
+      {tab === "instructions" && <MarkdownConfigurationPanel key={workspaceId} adapter={instructionAdapter} placeholder="写入当前工作区的项目约束…" saveLabel="保存 AGENTS.md" />}
       {tab === "fileignore" && <WorkspaceFileIgnorePanel key={workspaceId} workspaceId={workspaceId} />}
     </SettingsPageLayout>
   );

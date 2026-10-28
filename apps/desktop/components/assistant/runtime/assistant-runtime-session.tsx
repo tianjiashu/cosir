@@ -66,7 +66,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const performanceProbe = useMemo(() => {
     if (!import.meta.env.DEV) return null;
     return createAssistantPerformanceProbe({
-      enabled: true,
       onReport: (report) => {
         void frontendLog("INFO", "assistant_render_performance_report", "Assistant 开发期渲染性能报告已采集", {
           traceId,

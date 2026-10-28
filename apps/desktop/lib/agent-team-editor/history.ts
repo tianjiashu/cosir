@@ -9,11 +9,6 @@ export type AgentTeamGraphEditHistory = {
   lastCommitAt: number | null;
 };
 
-type GraphEditOptions = {
-  coalesceKey?: string;
-  now?: number;
-};
-
 const MAX_HISTORY_ENTRIES = 50;
 const COALESCE_WINDOW_MS = 500;
 
@@ -28,19 +23,18 @@ export function createGraphEditHistory(): AgentTeamGraphEditHistory {
 export function commitGraphEdit(
   history: AgentTeamGraphEditHistory,
   current: AgentTeamGraphSnapshot,
-  next: AgentTeamGraphSnapshot,
-  options: GraphEditOptions = {},
+  coalesceKey?: string,
 ): AgentTeamGraphEditHistory {
-  const now = options.now ?? Date.now();
-  const coalesces = options.coalesceKey !== undefined
-    && history.lastCoalesceKey === options.coalesceKey
+  const now = Date.now();
+  const coalesces = coalesceKey !== undefined
+    && history.lastCoalesceKey === coalesceKey
     && history.lastCommitAt !== null
     && now - history.lastCommitAt <= COALESCE_WINDOW_MS;
 
   return {
     past: coalesces ? history.past : [...history.past, current].slice(-MAX_HISTORY_ENTRIES),
     future: [],
-    lastCoalesceKey: options.coalesceKey ?? null,
+    lastCoalesceKey: coalesceKey ?? null,
     lastCommitAt: now,
   };
 }

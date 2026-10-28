@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, ListEndIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon, ZapIcon } from "lucide-react";
-import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FC, type ReactNode } from "react";
+import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FC, type ReactNode } from "react";
 import {
   AuiIf,
   ActionBarPrimitive,
@@ -94,16 +94,10 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { notify } from "@/lib/notify";
 
-type ThreadComponents = {
-  AssistantMessage?: ComponentType;
-};
-
 export type ThreadProps = {
-  components?: ThreadComponents;
-  autoFocus?: boolean;
   /** 只渲染 canonical message UI，不提供写入操作。 */
   readonly?: boolean;
-  taskId?: number;
+  taskId: number;
   workspaceId?: number | null;
   toolGroups?: ToolGroupCatalog[];
   selectedToolGroups?: string[];
@@ -114,6 +108,7 @@ export type ThreadProps = {
   /** 正在 fork 的消息 id；fork 按消息切分。 */
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
+  /** 可写对话必传（由 AssistantThreadSurface 提供）；只读对话不渲染 Composer，不需要。 */
   onResumeBusiness?: () => Promise<void>;
   onCancelRequested?: () => void;
   onCancelResult?: (accepted: boolean) => void;
@@ -122,11 +117,16 @@ export type ThreadProps = {
   performanceProbe?: AssistantPerformanceProbe | null;
 };
 
-const EMPTY_COMPONENTS: ThreadComponents = {};
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
-const ThreadComponentsContext = createContext<ThreadComponents>(EMPTY_COMPONENTS);
-type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancelling" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError"> & { taskId?: number };
-const ThreadContext = createContext<ThreadContextValue>({});
+type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancelling" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "taskId">;
+const ThreadContext = createContext<ThreadContextValue | null>(null);
+
+/** 线程内部组件只在 Thread 下渲染；缺 Provider 是装配错误，直接暴露。 */
+function useThreadContext(): ThreadContextValue {
+  const context = useContext(ThreadContext);
+  if (!context) throw new Error("ThreadContext 只能在 Thread 内使用");
+  return context;
+}
 
 type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
 
@@ -174,13 +174,12 @@ const assistantMessageGroupBy = (
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY_COMPONENTS, autoFocus = true, readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId = null, onForkMessage, onResumeBusiness, onCancelRequested, onCancelResult, cancelling = false, performanceProbe = null }) {
+export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId = null, onForkMessage, onResumeBusiness, onCancelRequested, onCancelResult, cancelling = false, performanceProbe = null }) {
   const isEmpty = useAuiState(isNewChatView);
   const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
     <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, onCancelRequested, onCancelResult, cancelling, readonly }}>
-    <ThreadComponentsContext.Provider value={components}>
       <AttachmentWorkspaceContext.Provider value={workspaceId ?? undefined}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/*
@@ -197,15 +196,12 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY
               <VirtualizedThreadMessages
                 scrollElementRef={viewportRef}
                 components={messageComponents}
-                rowPaddingBottom="1.5rem"
-                keepActiveTail
                 performanceProbe={performanceProbe}
               />
               {!readonly && (
                 <ThreadPrimitive.ViewportFooter className={cn("bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6", !isEmpty && "rounded-t-3xl")}>
                   <ScrollToBottomButton />
                   <ComposerBoundary
-                    autoFocus={autoFocus}
                     taskId={taskId}
                     workspaceRoot={workspaceRoot}
                     performanceProbe={performanceProbe}
@@ -216,7 +212,6 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ components = EMPTY
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
       </AttachmentWorkspaceContext.Provider>
-    </ThreadComponentsContext.Provider>
     </ThreadContext.Provider>
   );
 });
@@ -243,17 +238,15 @@ const ScrollToBottomButton: FC = () => (
 );
 
 const ComposerBoundary = memo(function ComposerBoundary({
-  autoFocus,
   taskId,
   workspaceRoot,
   performanceProbe,
 }: {
-  autoFocus: boolean;
-  taskId?: number;
+  taskId: number;
   workspaceRoot?: string;
   performanceProbe?: AssistantPerformanceProbe | null;
 }) {
-  const composer = <Composer autoFocus={autoFocus} taskId={taskId} workspaceRoot={workspaceRoot} />;
+  const composer = <Composer taskId={taskId} workspaceRoot={workspaceRoot} />;
   if (!performanceProbe) return composer;
   return (
     <Profiler
@@ -270,11 +263,11 @@ const ComposerBoundary = memo(function ComposerBoundary({
   );
 });
 
-const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { autoFocus: boolean; taskId?: number; workspaceRoot?: string }) {
+const Composer = memo(function Composer({ taskId, workspaceRoot }: { taskId: number; workspaceRoot?: string }) {
   // 运行期配置锁定：活动 Run 期间模型与工具显示 Run 冻结的配置且只读，发送也用这份配置。
   const runLaunch = useActiveRunLaunch();
   // 运行中照常可以发送（按投递方式并入或排到下一轮）；只有停止请求在途时不提交，避免与停止交错。
-  const { cancelling = false } = useContext(ThreadContext);
+  const { cancelling = false } = useThreadContext();
   return (
     <ComposerInsertionProvider>
       <ComposerFeedbackProvider>
@@ -288,7 +281,7 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
               persistTaskDraft
               placeholder={COMPOSER_PLACEHOLDER}
               className={COMPOSER_EDITOR_CLASS_NAME}
-              autoFocus={autoFocus}
+              autoFocus
               submitDisabled={cancelling}
               aria-label="消息输入"
             />
@@ -298,14 +291,14 @@ const Composer = memo(function Composer({ autoFocus, taskId, workspaceRoot }: { 
               <TaskContextUsage />
               <div className="min-w-0 flex-1">
                 <ComposerControls
-                  scope={taskId == null ? undefined : { kind: "task", id: taskId }}
+                  scope={{ kind: "task", id: taskId }}
                   runtimeModelContext
                   locked={runLaunch}
                 />
               </div>
             </div>
             <ComposerAttachmentButton workspaceRoot={workspaceRoot} />
-            <ComposerAction taskId={taskId ?? null} />
+            <ComposerAction taskId={taskId} />
           </div>
           <ComposerFeedback />
         </ComposerPrimitive.Root>
@@ -324,7 +317,7 @@ type ToolGroupsLock = { kind: "run"; launch: TransportRunLaunch } | { kind: "que
 
 const ThreadComposerPromptToolbar: FC<{ disabled?: boolean; lock?: ToolGroupsLock }> = ({ disabled = false, lock = null }) => {
   const composer = unstable_useComposerInput();
-  const context = useContext(ThreadContext);
+  const context = useThreadContext();
   const toolGroups = context.toolGroups ?? EMPTY_TOOL_GROUPS;
   const lockedGroups = lock?.kind === "run" ? toolGroupsForNames(lock.launch.banTools, toolGroups) : null;
   return (
@@ -341,13 +334,12 @@ const ThreadComposerPromptToolbar: FC<{ disabled?: boolean; lock?: ToolGroupsLoc
   );
 };
 
-const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
-  const aui = useAui();
+const ComposerAction: FC<{ taskId: number }> = ({ taskId }) => {
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const isDraftEmpty = useAuiState((state) =>
     state.composer.text.trim().length === 0 && state.composer.attachments.length === 0,
   );
-  const { cancelling = false, onResumeBusiness, onCancelRequested, onCancelResult } = useContext(ThreadContext);
+  const { cancelling = false, onResumeBusiness, onCancelRequested, onCancelResult } = useThreadContext();
   const canResume = useAuiState((state) => canResumeStoppedRun(readRuntimeTransportState(state.thread.state)));
   const isCancelling = cancelling;
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
@@ -404,11 +396,7 @@ const ComposerAction: FC<{ taskId: number | null }> = ({ taskId }) => {
       setResuming(true);
       setResumeError(null);
       try {
-        if (onResumeBusiness) {
-          await onResumeBusiness();
-        } else {
-          await Promise.resolve(aui.thread.resumeRun({ parentId: null }));
-        }
+        await onResumeBusiness!();
       } catch (error) {
         resumingRef.current = false;
         setResuming(false);
@@ -496,7 +484,6 @@ const DeliveryToggle: FC<{ delivery: InputDelivery; onChange: (delivery: InputDe
 
 const ThreadMessage: FC = () => {
   const role = useAuiState((state) => state.message.role);
-  const { AssistantMessage = AssistantMessageDefault } = useContext(ThreadComponentsContext);
   return role === "user" ? <UserMessage /> : <AssistantMessage />;
 };
 
@@ -509,7 +496,7 @@ const UserMessage: FC = () => {
     () => hasPendingEditComposerStart(messageId),
     () => false,
   );
-  const readonly = useContext(ThreadContext).readonly === true;
+  const readonly = useThreadContext().readonly === true;
   useEffect(() => {
     if (!pendingEditStart || isEditing || !consumePendingEditComposerStart(messageId)) return;
     try {
@@ -534,7 +521,7 @@ const UserMessageView: FC = () => {
     (part) => part.type === "text" && part.text.trim().length > 0,
   ));
   const queuedDelivery = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages?.find((message) => message.id === messageId)?.delivery ?? null);
-  const readonly = useContext(ThreadContext).readonly === true;
+  const readonly = useThreadContext().readonly === true;
   const canEdit = useAuiState((state) => {
     if (readonly) return false;
     const transportState = readRuntimeTransportState(state.thread.state);
@@ -609,7 +596,7 @@ type EditDraftSnapshot = {
 const UserEditMessage: FC = () => {
   const aui = useAui();
   const message = useAuiState((state) => state.message);
-  const { taskId, workspaceRoot } = useContext(ThreadContext);
+  const { taskId, workspaceRoot } = useThreadContext();
   const transportState = useAuiState((state) => readRuntimeTransportState(state.thread.state));
   const [restoreOverride] = useState(() => takePendingEditComposerDraft(message.id));
   // 编辑意图在挂载时确定一次（被拒后恢复的编辑框沿用被拒命令的意图），经 runConfig 随命令提交；
@@ -831,7 +818,7 @@ const UserEditMessage: FC = () => {
                   <span className="text-muted-foreground text-xs">排队消息沿用发送时的配置</span>
                 ) : (
                   <ComposerControls
-                    scope={taskId == null ? undefined : { kind: "task", id: taskId }}
+                    scope={{ kind: "task", id: taskId }}
                   />
                 )}
               </div>
@@ -861,7 +848,7 @@ const MessageError: FC = () => (
   </MessagePrimitive.Error>
 );
 
-const AssistantMessageDefault: FC = () => {
+const AssistantMessage: FC = () => {
   const messageId = useAuiState((state) => state.message.id);
   const custom = useAuiState((state) => state.message.metadata.custom);
   // 渲染上下文随消息一并投影（见 frame store 的 contextFor），消息渲染只依赖消息自身事实；
@@ -870,7 +857,7 @@ const AssistantMessageDefault: FC = () => {
   const runId = typeof custom?.runId === "number" ? custom.runId : null;
   const outcome = (custom?.outcome ?? null) as TransportOutcome | null;
   const activity = (custom?.activity ?? null) as TransportActivity | null;
-  const { forkingMessageId = null, onForkMessage, cancelling = false, taskId, readonly = false } = useContext(ThreadContext);
+  const { forkingMessageId = null, onForkMessage, cancelling = false, taskId, readonly = false } = useThreadContext();
   // fork 入口挂在每一轮回复的末尾，这一轮到终态（消息带 outcome）后才可用。
   const canFork = !readonly && isRunEnd && outcome !== null;
   const isForking = forkingMessageId === messageId;

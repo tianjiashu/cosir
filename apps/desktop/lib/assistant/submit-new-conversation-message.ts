@@ -60,7 +60,7 @@ export async function submitNewConversationMessage(
 ): Promise<void> {
   const uploadedImages: UploadedAttachment[] = [];
   for (const attachment of input.imageAttachments) {
-    uploadedImages.push(await uploadAttachment(input.workspaceId, attachment.file, undefined, { traceId: input.traceId }));
+    uploadedImages.push(await uploadAttachment(input.workspaceId, attachment.file, input.traceId));
   }
 
   const command = prepareUserCommand({

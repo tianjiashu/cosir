@@ -20,7 +20,6 @@ type RenderIsolationBoundaryProps = {
   resetKey: string;
   fallback: RenderFallback;
   metadata?: RenderIsolationMetadata;
-  onRetry?: () => void;
 };
 
 type RenderIsolationBoundaryState = {
@@ -73,7 +72,6 @@ export class RenderIsolationBoundary extends Component<
 
   private handleRetry = (): void => {
     this.setState({ error: null });
-    this.props.onRetry?.();
   };
 
   render(): ReactNode {

@@ -90,7 +90,7 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
       backendStatus={artifact.backendStatus}
       pollError={runQuery.isError ? userErrorMessage(runQuery.error, "请稍后重试") : null}
       onRetryPoll={() => void runQuery.refetch()}
-      onOpenAgent={(taskId, title, role) => actions?.openAgent({ taskId, title, role })}
+      onOpenAgent={(taskId, title) => actions?.openAgent({ taskId, title })}
     />
   );
 }
@@ -102,7 +102,7 @@ type AgentTeamExecutionContentProps = {
   /** 轮询已放弃时的可读原因；为 null 表示仍在轮询或已正常结束。 */
   pollError?: string | null;
   onRetryPoll?: () => void;
-  onOpenAgent: (taskId: number, title: string, role: string) => void;
+  onOpenAgent: (taskId: number, title: string) => void;
 };
 
 /** 只渲染 TeamRun 查询投影；轮询与卡片状态不参与节点事实判断。 */

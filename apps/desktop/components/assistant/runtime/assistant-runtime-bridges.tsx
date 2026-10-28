@@ -16,7 +16,6 @@ import {
   applyEditDraftToComposer,
   beginEditComposerOperation,
   editableDraftAttachments,
-  isCurrentEditComposerOperation,
   queuePendingEditComposerStart,
   setPendingEditComposerDraft,
 } from "@/lib/assistant/edit-composer-draft";
@@ -143,16 +142,13 @@ export function ComposerRestoreBridge({
       composer: ReturnType<typeof aui.thread.composer>,
       text: string,
       attachments: readonly CreateAttachment[],
-      messageId?: string,
-      generation?: number,
     ) => {
       const result = await applyEditDraftToComposer({
         composer,
         text,
         attachments: editableDraftAttachments(attachments),
-        isStillCurrent: messageId !== undefined && generation !== undefined
-          ? () => isCurrentEditComposerOperation(messageId, generation)
-          : () => true,
+        // 新增消息的恢复没有编辑会话可被替代，始终有效。
+        isStillCurrent: () => true,
       });
       if (result.error) {
         void frontendLog("ERROR", "assistant_composer_restore_failed", "失败消息恢复附件失败", {

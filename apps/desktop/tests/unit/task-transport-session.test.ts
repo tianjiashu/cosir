@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
@@ -26,10 +26,14 @@ function controllableStream() {
   };
 }
 
+afterEach(() => vi.unstubAllGlobals());
+
 const fullFrame = (state: TransportState) => ({ task_id: 7, kind: "full", mutations: [], state });
 
 function setup(callbacks: Partial<TaskTransportSessionCallbacks> = {}, initial = transportState()) {
-  const store = new TransportFrameStore(initial, { scheduleCommit: (callback) => { callback(); return { cancel: () => undefined }; } });
+  // 宿主动画帧同步执行：每次投影立即发布。
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 0; });
+  const store = new TransportFrameStore(initial);
   const fetchImpl = vi.fn<typeof fetch>();
   const all: TaskTransportSessionCallbacks = { headers: () => ({}), ...callbacks };
   const session = new TaskTransportSession(store, "http://127.0.0.1:1/tasks/7/assistant/attach", () => all, fetchImpl);
