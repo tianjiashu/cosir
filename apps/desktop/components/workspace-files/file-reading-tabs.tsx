@@ -13,6 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { fileTabLabel } from "@/lib/workspace-files/tab-label";
 import { cn } from "@/lib/utils";
 import { PANEL_HEADER_CLASS, panelTabClass } from "@/components/ui/panel-tokens";
+import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
 
 /** 仅观察阅读器已产生的元数据错误，不为非活动标签发起额外读取。 */
 function FileTabError({ workspaceId, path }: { workspaceId: number; path: string; }) {
@@ -126,9 +127,9 @@ export function FileReadingTabs({
           {session.tabs.length > 0 && <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild><Button size="icon-sm" variant="ghost" className="shrink-0 self-center" aria-label="全部文件" title="全部文件"><ListIcon /></Button></DropdownMenu.Trigger>
             <DropdownMenu.Portal>
-              <DropdownMenu.Content align="end" className="z-50 max-h-80 max-w-[calc(100vw-1rem)] overflow-auto rounded-md border bg-popover p-1 text-sm shadow-md">
+              <DropdownMenu.Content align="end" className={cn(MENU_CONTENT_CLASS, "max-h-80 max-w-[calc(100vw-1rem)] overflow-auto")}>
                 <DropdownMenu.RadioGroup value={session.active ?? ""} onValueChange={path => open(workspaceId, path)}>
-                  {session.tabs.map(tab => <DropdownMenu.RadioItem key={tab.path} value={tab.path} className="cursor-default rounded px-2 py-1.5 outline-none focus:bg-muted data-[state=checked]:bg-muted">
+                  {session.tabs.map(tab => <DropdownMenu.RadioItem key={tab.path} value={tab.path} className={cn(MENU_ITEM_CLASS, "data-[state=checked]:bg-muted")}>
                     <span className="break-all">{tab.path}</span>{!tab.pinned && <span className="ml-2 text-xs text-muted-foreground">临时预览</span>}
                   </DropdownMenu.RadioItem>)}
                 </DropdownMenu.RadioGroup>

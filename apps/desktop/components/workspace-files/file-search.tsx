@@ -16,6 +16,8 @@ import {
 import { WorkspaceFileIcon } from "./file-icon";
 import { Button } from "@/components/ui/button";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
+import { cn } from "@/lib/utils";
 
 export function FileSearch({
   workspaceId,
@@ -258,10 +260,10 @@ export function FileSearch({
                   </button>
                 </ContextMenu.Trigger>
                 <ContextMenu.Portal>
-                  <ContextMenu.Content className="z-50 min-w-40 rounded-md border bg-popover p-1 text-sm shadow-md">
+                  <ContextMenu.Content className={cn(MENU_CONTENT_CLASS, "min-w-40")}>
                     <ContextMenu.Item
                       disabled={!bridge?.target}
-                      className="cursor-default rounded px-2 py-1.5 outline-none focus:bg-muted data-[disabled]:opacity-50"
+                      className={cn(MENU_ITEM_CLASS, "data-[disabled]:opacity-50")}
                       onSelect={() =>
                         void bridge?.add(
                           workspaceId,

@@ -1,6 +1,6 @@
 import { useHotkeys } from "react-hotkeys-hook";
 
-import { APP_SHORTCUTS } from "@/lib/shortcuts";
+import { APP_SHORTCUTS, isTerminalKeyEvent } from "@/lib/shortcuts";
 
 /**
  * 绑定 ⌘K / Ctrl+K 打开命令面板。输入框与富文本编辑器内同样生效（该组合键不与文本编辑冲突），
@@ -13,7 +13,7 @@ export function useCommandPaletteHotkey(onOpen: () => void): void {
   useHotkeys(
     APP_SHORTCUTS.commandPalette.keys,
     () => onOpen(),
-    { enableOnFormTags: true, enableOnContentEditable: true, preventDefault: true },
+    { enableOnFormTags: true, enableOnContentEditable: true, preventDefault: true, ignoreEventWhen: isTerminalKeyEvent },
     [onOpen],
   );
 }

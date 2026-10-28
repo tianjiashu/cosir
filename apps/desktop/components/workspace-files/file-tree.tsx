@@ -29,6 +29,7 @@ import {
 import { WorkspaceFileIcon } from "./file-icon";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
 
 type TreeItem = {
   id: string;
@@ -487,7 +488,7 @@ function FileRow({
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content
-          className="z-50 min-w-40 rounded-md border bg-popover p-1 text-sm shadow-md"
+          className={cn(MENU_CONTENT_CLASS, "min-w-40")}
           // Portal 的 React 事件仍会冒泡到树；菜单焦点和方向键由 Radix 独占。
           onFocus={(event) => event.stopPropagation()}
           onBlur={(event) => event.stopPropagation()}
@@ -495,7 +496,7 @@ function FileRow({
         >
           {item.entry.kind !== "unavailable" && (
             <ContextMenu.Item
-              className="cursor-default rounded px-2 py-1.5 outline-none focus:bg-muted"
+              className={MENU_ITEM_CLASS}
               onSelect={() =>
                 addEntries(
                   node.isSelected
@@ -515,20 +516,20 @@ function FileRow({
           )}
           {item.entry.kind === "file" && (
             <ContextMenu.Item
-              className="cursor-default rounded px-2 py-1.5 outline-none focus:bg-muted"
+              className={MENU_ITEM_CLASS}
               onSelect={() => openFile(item.entry.path, true)}
             >
               固定预览
             </ContextMenu.Item>
           )}
           <ContextMenu.Item
-            className="cursor-default rounded px-2 py-1.5 outline-none focus:bg-muted"
+            className={MENU_ITEM_CLASS}
             onSelect={() => void copy(false)}
           >
             复制相对路径
           </ContextMenu.Item>
           <ContextMenu.Item
-            className="cursor-default rounded px-2 py-1.5 outline-none focus:bg-muted"
+            className={MENU_ITEM_CLASS}
             onSelect={() => void copy(true)}
           >
             复制绝对路径

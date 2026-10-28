@@ -25,7 +25,6 @@ type TerminalSessionPresentationVariant =
   | "terminal-session-start"
   | "terminal-session-read"
   | "terminal-session-write"
-  | "terminal-session-signal"
   | "terminal-session-close";
 
 export type TransportToolPresentation = {
@@ -113,6 +112,7 @@ export type TransportToolCallPart = {
   child_task_id?: number;
   /** Current AgentProfile.role resolved by the backend. */
   agent_role?: string;
+  /** execute_terminal 流式输出的去重序号，后端投影内部使用；前端只接受、不消费。 */
   terminal_output_seq?: number;
 };
 
@@ -243,6 +243,34 @@ export type TransportQueuedMessage = {
   delivery: InputDelivery;
 };
 
+/** 终端会话生命周期：`starting` / `running` 为活跃，其余为已结束。 */
+export type TerminalSessionStatus = "starting" | "running" | "exited" | "closed" | "failed";
+
+/**
+ * Task 级交互终端会话条目（snapshot 顶层 `terminal_sessions`）。
+ *
+ * 事实源在后端 `TerminalSessionService`，这里只是投影：活跃会话在前、按创建时间排序，已结束
+ * 会话最多保留 10 个。前端标签栏、工具卡片状态都只读它，不自行推断会话存活；后端重启后列表清空。
+ * `label` 为 Agent 指定的用途名，未指定时为空串（标签按「终端 N」编号）。
+ */
+export type TerminalSessionEntry = {
+  sessionId: string;
+  label: string;
+  shellKind: string;
+  createdBy: "agent" | "user";
+  status: TerminalSessionStatus;
+  endReason: string | null;
+  exitCode: number | null;
+  integration: "starting" | "ready" | "unavailable" | "off";
+  /** 当前输入租约持有方；null 为空闲。 */
+  inputHolder: "agent" | "user" | null;
+  /** 集成跟踪到有命令正在执行；无集成（integration 非 ready）时恒为 false，不代表空闲。 */
+  commandRunning: boolean;
+  /** Agent 发起的交接；非空时面板自动打开并提示用户输入。 */
+  handoff: { reason: string } | null;
+  createdAt: string;
+};
+
 /** Task 级 Transport state。 */
 export type TransportState = {
   /** Task 标题，投影自后端 `tasks.title`；变化时由宿主刷新侧栏目录。 */
@@ -252,4 +280,6 @@ export type TransportState = {
   /** 最新 Run 的摘要；Task 尚无 Run 时为 null。 */
   activity: TransportActivity | null;
   queued_messages?: TransportQueuedMessage[];
+  /** 本 Task 的交互终端会话列表（必填，可为空数组）。 */
+  terminal_sessions: TerminalSessionEntry[];
 };

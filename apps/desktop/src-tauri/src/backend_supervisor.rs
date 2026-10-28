@@ -1,3 +1,4 @@
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -326,6 +327,18 @@ impl BackendSupervisor {
             .and_then(|value| value.clone())
     }
 
+    /// 后端处于 ready 时返回其本机地址；其他状态返回 ``None``，调用方据此跳过业务查询。
+    pub fn ready_backend_address(&self) -> Option<SocketAddr> {
+        if !matches!(self.status(), BackendStatus::Ready) {
+            return None;
+        }
+        self.backend_base_url()?
+            .strip_prefix("http://")?
+            .to_socket_addrs()
+            .ok()?
+            .next()
+    }
+
     pub fn lifecycle_generation(&self) -> usize {
         self.inner.lifecycle_generation.load(Ordering::Acquire)
     }
@@ -508,6 +521,26 @@ impl BackendSupervisor {
         Some(generation + 1)
     }
     fn log(&self, message: &str) {
+        self.log_detail(
+            "INFO",
+            "backend_supervisor",
+            message,
+            serde_json::json!({}),
+            None,
+        );
+    }
+
+    /// 写一条带业务字段的桌面结构化日志，供宿主内其他生命周期流程（如退出确认）复用同一日志文件。
+    ///
+    /// 日志文件在后端首次启动前尚未确定时静默跳过；写入失败同样不影响调用方流程。
+    pub fn log_detail(
+        &self,
+        level: &str,
+        caller: &str,
+        event: &str,
+        data: serde_json::Value,
+        error: Option<String>,
+    ) {
         let Ok(path) = self.inner.log_file.lock() else {
             return;
         };
@@ -515,14 +548,14 @@ impl BackendSupervisor {
         let _ = append_json_line(
             path,
             serde_json::json!({
-                "level": "INFO",
+                "level": level,
                 "logger": "coding_agent.desktop",
                 "trace_id": "",
-                "caller": "backend_supervisor",
-                "event": message,
-                "msg": message,
-                "data": {},
-                "error": null,
+                "caller": caller,
+                "event": event,
+                "msg": event,
+                "data": data,
+                "error": error.map(|message| serde_json::json!({"message": message})),
                 "truncated": false
             }),
         );

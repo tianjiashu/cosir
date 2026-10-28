@@ -243,9 +243,38 @@ function validateActivity(value: unknown, path: string): void {
   validateLaunch(activity.launch, `${path}.launch`);
 }
 
+const TERMINAL_SESSION_STATUSES = ["starting", "running", "exited", "closed", "failed"] as const;
+const TERMINAL_INTEGRATION_STATES = ["starting", "ready", "unavailable", "off"] as const;
+
+function validateTerminalSession(value: unknown, path: string, seenIds: Set<string>): void {
+  const session = requireRecord(value, path);
+  requireExactKeys(session, [
+    "sessionId", "label", "shellKind", "createdBy", "status", "endReason", "exitCode",
+    "integration", "inputHolder", "commandRunning", "handoff", "createdAt",
+  ], path);
+  const sessionId = requireString(session.sessionId, `${path}.sessionId`);
+  if (sessionId === "" || seenIds.has(sessionId)) throw new TransportSnapshotValidationError(`${path}.sessionId`, "非空且在 Task 内唯一");
+  seenIds.add(sessionId);
+  requireString(session.label, `${path}.label`);
+  if (requireString(session.shellKind, `${path}.shellKind`).trim() === "") throw new TransportSnapshotValidationError(`${path}.shellKind`, "非空字符串");
+  if (session.createdBy !== "agent" && session.createdBy !== "user") throw new TransportSnapshotValidationError(`${path}.createdBy`, "agent 或 user");
+  if (!(TERMINAL_SESSION_STATUSES as readonly unknown[]).includes(session.status)) throw new TransportSnapshotValidationError(`${path}.status`, "受支持的终端会话状态");
+  if (session.endReason !== null && typeof session.endReason !== "string") throw new TransportSnapshotValidationError(`${path}.endReason`, "字符串或 null");
+  if (session.exitCode !== null && !Number.isInteger(session.exitCode)) throw new TransportSnapshotValidationError(`${path}.exitCode`, "整数或 null");
+  if (!(TERMINAL_INTEGRATION_STATES as readonly unknown[]).includes(session.integration)) throw new TransportSnapshotValidationError(`${path}.integration`, "受支持的集成状态");
+  if (session.inputHolder !== null && session.inputHolder !== "agent" && session.inputHolder !== "user") throw new TransportSnapshotValidationError(`${path}.inputHolder`, "agent、user 或 null");
+  if (typeof session.commandRunning !== "boolean") throw new TransportSnapshotValidationError(`${path}.commandRunning`, "布尔值");
+  if (session.handoff !== null) {
+    const handoff = requireRecord(session.handoff, `${path}.handoff`);
+    requireExactKeys(handoff, ["reason"], `${path}.handoff`);
+    requireString(handoff.reason, `${path}.handoff.reason`);
+  }
+  requireString(session.createdAt, `${path}.createdAt`);
+}
+
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["title", "messages", "activity", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  requireExactKeys(state, ["title", "messages", "activity", "terminal_sessions", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
   if (typeof state.title !== "string" || state.title.trim() === "") throw new TransportSnapshotValidationError("title", "非空字符串");
   const ids = new Set<string>();
   if (!Array.isArray(state.messages)) throw new TransportSnapshotValidationError("messages", "数组");
@@ -274,5 +303,8 @@ export function parseTransportState(value: unknown): TransportState {
     });
   }
   if (state.activity !== null) validateActivity(state.activity, "activity");
+  if (!Array.isArray(state.terminal_sessions)) throw new TransportSnapshotValidationError("terminal_sessions", "数组");
+  const sessionIds = new Set<string>();
+  state.terminal_sessions.forEach((session, index) => validateTerminalSession(session, `terminal_sessions[${index}]`, sessionIds));
   return state as unknown as TransportState;
 }

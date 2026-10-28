@@ -91,7 +91,6 @@ export function AppSidebar({
       </div>
       {!rail && (
         <nav className="flex min-h-0 flex-1 flex-col px-2 pb-4" aria-label="工作区任务列表">
-          <p className="text-muted-foreground shrink-0 truncate px-2 pb-2 text-xs font-medium">我的工作区</p>
           {status === "loading" && <LoadingState size="compact" label="正在加载工作区…" className="px-2" />}
           {status === "error" && <ErrorState className="mx-2 text-xs" message={error} onRetry={() => void load()} />}
           {status === "ready" && workspaces.length === 0 && <EmptyState size="compact" title="暂无工作区" description="在新对话页添加一个本机目录作为工作区。" className="px-2" />}

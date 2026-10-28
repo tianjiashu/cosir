@@ -340,7 +340,6 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     errorCode: part.errorCode ?? null,
     child_task_id: part.child_task_id,
     agent_role: part.agent_role,
-    terminal_output_seq: part.terminal_output_seq,
   };
   const args = part.args ?? {};
 

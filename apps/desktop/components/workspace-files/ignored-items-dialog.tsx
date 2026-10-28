@@ -13,6 +13,8 @@ import {
   useChangeBrowserVisibility,
 } from "@/lib/workspace-files/visibility";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
+import { cn } from "@/lib/utils";
 
 export function FileBrowserMenu({ onManage }: { onManage: () => void }) {
   return (
@@ -26,10 +28,10 @@ export function FileBrowserMenu({ onManage }: { onManage: () => void }) {
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           align="end"
-          className="z-50 min-w-40 rounded-md border bg-popover p-1 text-sm shadow-md"
+          className={cn(MENU_CONTENT_CLASS, "min-w-40")}
         >
           <DropdownMenu.Item
-            className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 outline-none focus:bg-muted"
+            className={cn(MENU_ITEM_CLASS, "flex items-center gap-2")}
             onSelect={onManage}
           >
             <EyeOffIcon className="size-4 text-muted-foreground" />

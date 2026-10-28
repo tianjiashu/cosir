@@ -22,6 +22,7 @@ export const queryKeys = {
     ["cosir", "instruction", kind, workspaceId ?? null] as const,
   environment: () => ["cosir", "environment"] as const,
   terminalDenylist: () => ["cosir", "terminal-denylist"] as const,
+  terminalShells: () => ["cosir", "terminal-shells"] as const,
   workspaceFileIgnore: (workspaceId: number) => ["cosir", "workspace-file-ignore", workspaceId] as const,
   mcpServers: () => ["cosir", "mcp-servers"] as const,
   skills: () => ["cosir", "skills"] as const,

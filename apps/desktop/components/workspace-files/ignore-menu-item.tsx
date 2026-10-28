@@ -1,6 +1,8 @@
 import type { KeyboardEvent } from "react";
 import { ContextMenu } from "radix-ui";
 import { EyeOffIcon } from "lucide-react";
+import { MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
+import { cn } from "@/lib/utils";
 
 export function IgnoreMenuItem({
   paths,
@@ -19,7 +21,7 @@ export function IgnoreMenuItem({
       <ContextMenu.Separator className="my-1 h-px bg-border" />
       <ContextMenu.Item
         disabled={pending}
-        className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 outline-none focus:bg-muted data-[disabled]:opacity-50"
+        className={cn(MENU_ITEM_CLASS, "flex items-center gap-2 data-[disabled]:opacity-50")}
         onSelect={() => onIgnore(paths)}
       >
         <EyeOffIcon className="size-4 text-muted-foreground" />

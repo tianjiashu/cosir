@@ -151,7 +151,7 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
             {artifact.error
               ? <p className="text-destructive mb-1">{artifact.error}</p>
               : output
-                ? <TerminalViewport output={output} outputSeq={artifact.terminal_output_seq} />
+                ? <TerminalViewport output={output} />
                 : <p className="text-muted-foreground px-3 py-2">{isActive ? "等待输出…" : "无输出"}</p>}
           </div>
           {(truncated || timedOut || streamTruncated) && (

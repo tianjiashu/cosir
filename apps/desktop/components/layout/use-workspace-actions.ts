@@ -12,6 +12,7 @@ import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
+import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 
 export type DeleteTarget =
@@ -123,6 +124,10 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
       },
     });
     if (!confirmed) return;
+    // 终端工作台按 taskId 分桶的 UI 状态随 Task 删除一并丢弃（后端已清理其终端会话）。
+    useTerminalWorkbenchStore.getState().forget(target.kind === "task"
+      ? [target.id]
+      : workspaces.find((workspace) => workspace.workspace_id === target.id)?.tasks.map((task) => task.task_id) ?? []);
     if (target.kind === "workspace") {
       closeWorkspaceTabs(target.id);
       useFilesStore.getState().forget(target.id);

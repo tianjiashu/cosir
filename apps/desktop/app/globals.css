@@ -43,6 +43,7 @@
   --color-brand-foreground: var(--brand-foreground);
   --color-terminal: var(--terminal);
   --color-terminal-inset: var(--terminal-inset);
+  --color-terminal-pane: var(--terminal-pane-background);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -129,6 +130,11 @@
   --terminal-foreground: #e4e4e7;
   --terminal-muted: #a1a1aa;
   --terminal-selection: #3f3f46;
+  /* 终端工作台（底部交互终端）跟随应用主题；工具卡片里的终端岛仍恒为深色（见 terminal-surface）。 */
+  --terminal-pane-background: #ffffff;
+  --terminal-pane-foreground: #27272a;
+  --terminal-pane-cursor: #52525b;
+  --terminal-pane-selection: #d4d4d8;
   --skill-foreground: oklch(0.38 0.13 295);
   --skill-background: oklch(0.95 0.035 295);
   --skill-border: oklch(0.82 0.07 295);
@@ -167,6 +173,10 @@
   --panel-shadow: 0 1px 2px oklch(0 0 0 / 0.3), 0 6px 20px oklch(0 0 0 / 0.35);
   --terminal: #111113;
   --terminal-inset: #09090b;
+  --terminal-pane-background: #0a0a0a;
+  --terminal-pane-foreground: #e4e4e7;
+  --terminal-pane-cursor: #a1a1aa;
+  --terminal-pane-selection: #3f3f46;
   --skill-foreground: oklch(0.84 0.08 295);
   --skill-background: oklch(0.29 0.04 295);
   --skill-border: oklch(0.46 0.07 295);
@@ -608,4 +618,10 @@
   .animate-bounce {
     animation: none;
   }
+}
+
+/* 终端工作台里 Agent 输入行的来源标记：xterm 装饰元素占首个单元格，画左侧色条。 */
+.terminal-agent-input-mark {
+  box-shadow: inset 2px 0 0 var(--info);
+  pointer-events: none;
 }

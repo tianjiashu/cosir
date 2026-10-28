@@ -1,9 +1,13 @@
+#[cfg(target_os = "macos")]
+mod app_menu;
+mod backend_http;
 mod backend_process;
 mod backend_readiness;
 mod backend_runtime;
 mod backend_supervisor;
 mod data_paths;
 mod desktop_log;
+mod exit_confirmation;
 mod file_access;
 mod log_paths;
 mod tray;
@@ -63,7 +67,14 @@ pub fn run() {
         .plugin(tauri_plugin_wdio::init())
         .plugin(tauri_plugin_wdio_webdriver::init());
 
-    let builder = builder.manage(BackendSupervisor::default());
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(app_menu::build)
+        .on_menu_event(|app, event| app_menu::handle_event(app, &event));
+
+    let builder = builder
+        .manage(BackendSupervisor::default())
+        .manage(exit_confirmation::ExitConfirmation::default());
 
     #[cfg(feature = "desktop-e2e")]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -124,6 +135,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Cosir Tauri 应用装配失败")
         .run(|app, event| match event {
+            RunEvent::ExitRequested { code, api, .. } => {
+                exit_confirmation::handle_exit_requested(app, code, &api)
+            }
             RunEvent::Exit => app.state::<BackendSupervisor>().stop(),
             #[cfg(target_os = "macos")]
             RunEvent::Reopen {

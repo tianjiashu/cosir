@@ -9,7 +9,7 @@ type DeferFitCallback = () => boolean;
  * 面板打开/关闭或 scrollbar 更新时不会形成 ResizeObserver 反馈循环。
  */
 export class TerminalResizeController {
-  private readonly observer: ResizeObserver | null;
+  private readonly observer: ResizeObserver;
   private frame: number | null = null;
   private disposed = false;
   private pending = false;
@@ -23,17 +23,15 @@ export class TerminalResizeController {
     private readonly fit: FitCallback,
     private readonly shouldDefer: DeferFitCallback = () => false,
   ) {
-    this.observer = typeof ResizeObserver === "undefined"
-      ? null
-      : new ResizeObserver(() => this.request());
-    this.observer?.observe(container);
+    this.observer = new ResizeObserver(() => this.request());
+    this.observer.observe(container);
     this.request();
   }
 
   request(): void {
     if (this.disposed) return;
     this.pending = true;
-    if (this.frame !== null || typeof window === "undefined") return;
+    if (this.frame !== null) return;
     this.frame = window.requestAnimationFrame(() => {
       this.frame = null;
       this.flush();
@@ -44,12 +42,12 @@ export class TerminalResizeController {
     if (this.disposed) return;
     this.disposed = true;
     this.pending = false;
-    this.observer?.disconnect();
-    if (this.retryTimer !== null && typeof window !== "undefined") {
+    this.observer.disconnect();
+    if (this.retryTimer !== null) {
       window.clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
-    if (this.frame !== null && typeof window !== "undefined") {
+    if (this.frame !== null) {
       window.cancelAnimationFrame(this.frame);
       this.frame = null;
     }
@@ -78,7 +76,7 @@ export class TerminalResizeController {
   }
 
   private scheduleRetry(): void {
-    if (this.disposed || this.retryTimer !== null || typeof window === "undefined") return;
+    if (this.disposed || this.retryTimer !== null) return;
     if (this.retryCount >= 5) return;
     const delay = Math.min(250, 16 * 2 ** this.retryCount);
     this.retryCount += 1;

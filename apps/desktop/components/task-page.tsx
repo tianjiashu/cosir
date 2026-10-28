@@ -6,8 +6,8 @@ import { Assistant } from "@/app/assistant";
 import type { InitialConversationAttachment } from "@/components/new-conversation";
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { TerminalPanelHost } from "@/components/terminal/terminal-panel";
-import { useTerminalPanelStore } from "@/components/terminal/terminal-panel-store";
+import { TerminalWorkbench } from "@/components/terminal/terminal-workbench";
+import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { TaskWorkspaceLayout } from "@/components/task-workspace-layout";
@@ -135,9 +135,9 @@ export function TaskPage({
         fallbackClassName="dock-panel bg-background mx-2 mb-2 shrink-0 p-3"
         layout="row"
         // 先关闭再重置边界：重新挂载的 Host 因面板已关闭而不渲染，不会再次触发同一崩溃。
-        escape={{ label: "关闭终端", onClick: (reset) => { useTerminalPanelStore.getState().close(); reset(); } }}
+        escape={{ label: "收起终端", onClick: (reset) => { useTerminalWorkbenchStore.getState().setOpen(taskId, false); reset(); } }}
       >
-        <TerminalPanelHost taskId={taskId} />
+        <TerminalWorkbench taskId={taskId} />
       </IsolatedRegion>
     )}>
       <div className="h-full min-h-0 min-w-0 w-full">

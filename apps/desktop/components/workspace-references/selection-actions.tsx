@@ -5,6 +5,8 @@ import { useReferenceBridge } from "./reference-bridge";
 import type { ReactNode } from "react";
 import { AddReferenceButton } from "./add-reference-button";
 import type { ReferenceInput } from "@/lib/workspace-references/prepare";
+import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
+import { cn } from "@/lib/utils";
 export function ReferenceSelectionMenu({
   workspaceId,
   input,
@@ -19,7 +21,7 @@ export function ReferenceSelectionMenu({
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>{children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
-        <ContextMenu.Content className="z-50 min-w-40 rounded-md border bg-popover p-1 text-sm shadow-md">
+        <ContextMenu.Content className={cn(MENU_CONTENT_CLASS, "min-w-40")}>
           {[
             ["添加选区到对话", undefined],
             ["解释", "请解释这段内容。"],
@@ -29,7 +31,7 @@ export function ReferenceSelectionMenu({
             <ContextMenu.Item
               key={label}
               disabled={!input || !bridge?.target}
-              className="cursor-default rounded px-2 py-1.5 outline-none focus:bg-muted data-[disabled]:opacity-50"
+              className={cn(MENU_ITEM_CLASS, "data-[disabled]:opacity-50")}
               onSelect={() =>
                 input && void bridge?.add(workspaceId, [input], question)
               }

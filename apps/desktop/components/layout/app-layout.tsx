@@ -10,7 +10,7 @@ import {
   useNavigate,
   useOutletContext,
 } from "react-router-dom";
-import { FolderIcon, PanelRightIcon } from "lucide-react";
+import { FolderIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 
 import { BackendRestartButton } from "@/components/backend-restart-button";
@@ -32,7 +32,12 @@ import { Workbench } from "@/components/workbench";
 import { useWorkbenchLayout } from "./use-workbench-layout";
 import { useWorkspaceNavigation } from "./use-workspace-navigation";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { APP_SHORTCUTS } from "@/lib/shortcuts";
+import { APP_SHORTCUTS, isTerminalKeyEvent, withShortcut } from "@/lib/shortcuts";
+import {
+  selectActiveSessionCount,
+  selectTerminalTask,
+  useTerminalWorkbenchStore,
+} from "@/lib/terminal/terminal-workbench-store";
 import { WorkbenchProvider } from "@/lib/workbench/context";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import {
@@ -149,10 +154,19 @@ export function AppLayout() {
   useHotkeys("escape", () => setDrawerOpen(false), { enabled: drawerOpen, enableOnFormTags: true });
 
   // ---- 应用级快捷键（登记见 lib/shortcuts.ts）。输入框内同样生效：这些组合键不与文本编辑冲突。 ----
-  const hotkeyOptions = { enableOnFormTags: true, enableOnContentEditable: true, preventDefault: true } as const;
+  const hotkeyOptions = { enableOnFormTags: true, enableOnContentEditable: true, preventDefault: true, ignoreEventWhen: isTerminalKeyEvent } as const;
   useHotkeys(APP_SHORTCUTS.newConversation.keys, () => startNewConversationRef.current(), hotkeyOptions);
   useHotkeys(APP_SHORTCUTS.toggleSidebar.keys, () => toggleSidebar(), hotkeyOptions, [toggleSidebar]);
   useHotkeys(APP_SHORTCUTS.openSettings.keys, () => navigate("/settings"), hotkeyOptions, [navigate]);
+
+  // ---- 终端工作台：入口在页头，面板在 TaskPage 内，二者经按 taskId 分桶的 store 协作 ----
+  const terminalTaskId = section === "conversation" ? routeTaskId : null;
+  const terminalPanelOpen = useTerminalWorkbenchStore((state) => terminalTaskId === null ? false : selectTerminalTask(terminalTaskId)(state).open);
+  const terminalSessionCount = useTerminalWorkbenchStore((state) => terminalTaskId === null ? 0 : selectActiveSessionCount(terminalTaskId)(state));
+  const toggleTerminal = useCallback(() => {
+    if (terminalTaskId !== null) useTerminalWorkbenchStore.getState().toggle(terminalTaskId);
+  }, [terminalTaskId]);
+  useHotkeys(APP_SHORTCUTS.toggleTerminal.keys, toggleTerminal, { ...hotkeyOptions, enabled: terminalTaskId !== null }, [toggleTerminal]);
 
   // ---- 命令面板（⌘K）：搜索任务、开始新对话、跳转配置 ----
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -277,6 +291,20 @@ export function AppLayout() {
             status={showTaskLayer ? <TaskRunStatusBadge status={catalog.activeTask?.execution_status} /> : undefined}
             actions={(
               <>
+                {terminalTaskId !== null && (
+                  <TooltipIconButton
+                    tooltip={withShortcut(terminalPanelOpen ? "收起终端" : "打开终端", "toggleTerminal")}
+                    aria-label={`终端，${terminalSessionCount} 个运行中会话，${terminalPanelOpen ? "点击收起" : "点击打开"}`}
+                    aria-pressed={terminalPanelOpen}
+                    className={cn("relative size-7", terminalPanelOpen && "bg-muted text-foreground")}
+                    onClick={toggleTerminal}
+                  >
+                    <SquareTerminalIcon />
+                    {terminalSessionCount > 0 && (
+                      <span aria-hidden="true" className="bg-foreground text-background absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-2xs leading-none tabular-nums">{terminalSessionCount}</span>
+                    )}
+                  </TooltipIconButton>
+                )}
                 {filesVisible && catalog.activeWorkspace && (
                   <TooltipIconButton
                     tooltip="浏览工作区文件"

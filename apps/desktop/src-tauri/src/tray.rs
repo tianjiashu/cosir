@@ -11,8 +11,8 @@ const QUIT_MENU_ID: &str = "quit_and_stop_backend";
 
 /// 安装常驻托盘及其显式显示、退出入口。
 ///
-/// 关闭主窗口只会隐藏窗口；托盘退出会请求应用退出，随后由
-/// `BackendSupervisor` 在 Tauri 的退出事件中清理后端进程。菜单名称明确说明退出会停止运行。
+/// 关闭主窗口只会隐藏窗口；托盘退出会请求应用退出（先经 `exit_confirmation` 的
+/// 运行中终端会话确认），随后由 `BackendSupervisor` 在 Tauri 的退出事件中清理后端进程。菜单名称明确说明退出会停止运行。
 ///
 /// 参数:
 ///     app: 已装配 ``BackendSupervisor`` 的 Tauri 应用。

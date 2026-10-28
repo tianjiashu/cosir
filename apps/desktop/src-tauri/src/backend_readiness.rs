@@ -1,7 +1,8 @@
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 use std::time::{Duration, Instant};
+
+use crate::backend_http;
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -53,21 +54,5 @@ fn read_bootstate_failure(path: &Path) -> Option<String> {
 }
 
 fn probe_health(address: SocketAddr) -> Result<(), String> {
-    let mut stream =
-        TcpStream::connect_timeout(&address, PROBE_TIMEOUT).map_err(|error| error.to_string())?;
-    stream
-        .set_read_timeout(Some(PROBE_TIMEOUT))
-        .map_err(|error| error.to_string())?;
-    stream
-        .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-        .map_err(|error| error.to_string())?;
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .map_err(|error| error.to_string())?;
-    if response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200") {
-        Ok(())
-    } else {
-        Err("后端健康检查返回非 200 状态".to_string())
-    }
+    backend_http::get(address, "/health", PROBE_TIMEOUT).map(|_| ())
 }
