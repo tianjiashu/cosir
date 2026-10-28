@@ -44,12 +44,15 @@ async def fixture_lifespan(_app: FastAPI):
             LOG_DIR=storage_dir / "logs",
         )
         init_storage()
-        get_workspace_crud().create("demo", str(root))
+        # 工作区 id 由 SQLite 自增分配，与前端内存测试服务的固定 id 无关；
+        # 经 health 暴露给 spec，由它把浏览器请求的 id 映射到这里。
+        workspace = get_workspace_crud().create("demo", str(root))
         files = get_workspace_files_service()
         watcher = WorkspaceFileWatcher()
         app.dependency_overrides[get_workspace_files_service] = lambda: files
         app.dependency_overrides[get_workspace_file_watcher] = lambda: watcher
         app.state.fixture_root = root
+        app.state.fixture_workspace_id = workspace.id
         app.state.fixture_watcher = watcher
         yield
         watcher.close()
@@ -89,7 +92,7 @@ def watch_status():
 
 @app.get("/__test__/files/health")
 def health():
-    return {"status": "ready"}
+    return {"status": "ready", "workspace_id": app.state.fixture_workspace_id}
 
 
 app.router.lifespan_context = fixture_lifespan

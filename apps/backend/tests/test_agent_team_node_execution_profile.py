@@ -169,6 +169,9 @@ def _stub_preparation_registry(monkeypatch: pytest.MonkeyPatch, child: AgentProf
 
     registry = SimpleNamespace(resolve=lambda scope, agent_id: child)
     monkeypatch.setattr(prep_module, "get_agent_registry", lambda: registry)
+    # 节点工具按交互终端工具组剥离：桩出一个只认终端组的工具注册表。
+    tools = SimpleNamespace(tool_groups_to_tool_names=lambda _groups: ["terminal_start"])
+    monkeypatch.setattr(prep_module, "get_tool_registry", lambda: tools)
 
 
 def _team_configuration() -> dict[str, object]:

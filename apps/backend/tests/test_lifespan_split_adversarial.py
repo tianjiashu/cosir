@@ -745,13 +745,6 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
             recorder.calls.append("recover_runs")
             return []
 
-    class _TerminalService:
-        def initialize(self) -> None:
-            recorder.calls.append("terminal_init")
-
-        def shutdown(self) -> None:
-            recorder.calls.append("terminal_shutdown")
-
     class _Spaces:
         def bind_loop(self, _loop: Any) -> None:
             recorder.calls.append("bind_loop")
@@ -766,11 +759,6 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         lifespan_module,
         "get_recover_service",
         record("get_recover_service", _RecoverService()),
-    )
-    monkeypatch.setattr(
-        lifespan_module,
-        "get_terminal_session_service",
-        record("get_terminal_service", _TerminalService()),
     )
     monkeypatch.setattr(lifespan_module, "task_runtime_spaces", _Spaces())
     monkeypatch.setattr(

@@ -57,6 +57,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
             "contextWindowTotal": None,
             "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
         },
+        "terminal_sessions": [],
     }
     event = ToolCallStatusChangedEvent(
         task_id=2,

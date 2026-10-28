@@ -22,7 +22,7 @@ from app.tools.tool_models.execute_terminal_args import (
     WindowsExecuteTerminalArgs,
 )
 from app.tools.tool_models import ListDirectoryArgs
-from app.tools.tool_models.terminal_session_args import TerminalReadArgs, TerminalWriteArgs
+from app.tools.tool_models.terminal_session_args import TerminalReadArgs
 from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
 from app.core.tool.handler.web.web_extract_args import WebExtractArgs
 from app.core.tool.validation.argument_coercion import coerce_tool_arguments
@@ -58,21 +58,21 @@ class TestWhitelistCoercion:
         assert facts == {"timeout": "str->float"}
 
         read_adapted, read_facts = _coerce(
-            {"session_id": "term_x", "wait_ms": "2"},
-            TerminalWriteArgs,
+            {"session_id": "term_x", "tail": "2"},
+            TerminalReadArgs,
         )
-        assert read_adapted["wait_ms"] == 2  # type: ignore[index]
-        assert read_facts == {"wait_ms": "str->int"}
+        assert read_adapted["tail"] == 2  # type: ignore[index]
+        assert read_facts == {"tail": "str->int"}
 
     def test_integral_float_to_int(self) -> None:
         """``30.0`` 归一为 int 字段的 30。潜在缺陷：strict 下整数值浮点被拒造成无效重试。"""
 
         adapted, facts = _coerce(
-            {"session_id": "term_x", "wait_ms": 30.0},
-            TerminalWriteArgs,
+            {"session_id": "term_x", "tail": 30.0},
+            TerminalReadArgs,
         )
-        assert adapted["wait_ms"] == 30  # type: ignore[index]
-        assert facts == {"wait_ms": "float->int"}
+        assert adapted["tail"] == 30  # type: ignore[index]
+        assert facts == {"tail": "float->int"}
 
     def test_true_false_string_to_bool(self) -> None:
         """仅 ``"true"/"false"``（忽略大小写与空白）归一为布尔。"""
@@ -118,8 +118,8 @@ class TestWhitelistRefusals:
         """``""`` 与 ``"abc"`` 不归一（不把空串当 None，也不猜语义）。"""
 
         for bad in ("", "abc"):
-            adapted, facts = _coerce({"session_id": "term_x", "wait_ms": bad}, TerminalWriteArgs)
-            assert adapted["wait_ms"] == bad  # type: ignore[index]
+            adapted, facts = _coerce({"session_id": "term_x", "tail": bad}, TerminalReadArgs)
+            assert adapted["tail"] == bad  # type: ignore[index]
             assert facts == {}
 
     def test_literal_field_is_never_coerced(self) -> None:
@@ -153,7 +153,7 @@ class TestValidationIntegration:
         assert [item.field for item in result.coercions] == ["timeout"]
 
     def test_terminal_read_rejects_removed_paging_fields(self) -> None:
-        """终端观察只返回当前画面、不提供分页：旧的 ``cursor`` / ``after_seq`` 字段一律拒绝。"""
+        """终端按行读取只认 start_line / limit / tail：旧的 ``cursor`` / ``after_seq`` 字段一律拒绝。"""
         result = validate_tool_arguments({"session_id": "term_x"}, {}, TerminalReadArgs)
         assert result.ok is True
         assert result.coercions == ()
@@ -208,17 +208,12 @@ class TestValidationIntegration:
         """类型类错误必须附带「传 JSON 原生类型」的可操作提示。潜在缺陷：模型无法自纠。"""
 
         result = validate_tool_arguments(
-            {
-                "session_id": "term_x",
-                "operation_id": "op",
-                "input": {"type": "line", "text": ""},
-                "wait_ms": "abc",
-            },
+            {"session_id": "term_x", "tail": "abc"},
             {},
-            TerminalWriteArgs,
+            TerminalReadArgs,
         )
         assert result.ok is False
-        assert "wait_ms" in result.error
+        assert "tail" in result.error
         assert "JSON numbers/booleans" in result.error
 
     def test_non_mapping_arguments_still_rejected(self) -> None:

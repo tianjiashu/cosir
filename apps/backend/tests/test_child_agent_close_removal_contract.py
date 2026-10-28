@@ -85,7 +85,8 @@ _CHILD_TOOL_SPECS = [
     ),
 ]
 
-# 期望被禁用的工具全集（子 Agent 不得使用）：委派/Team 工具 + 配置提案 + terminal_session/ 全族。
+# 期望被禁用的工具名全集（子 Agent 不得使用）：委派/Team 工具 + 配置提案。交互终端按工具组
+# 整体剥离、不在名字清单里（见 ``strip_child_disallowed_tools``）。
 # 说明：子 Agent 不允许继续委派，也不具备提案 Agent / Team 配置的权限；Team 节点（不同清单，
 # 见 ``Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS``）则保留委派与父子通信工具。
 _EXPECTED_BANNED_TOOLS = frozenset(
@@ -97,11 +98,6 @@ _EXPECTED_BANNED_TOOLS = frozenset(
         "child_agent_status",
         "child_agent_send",
         "wait_messages",
-        "terminal_start",
-        "terminal_write",
-        "terminal_read",
-        "terminal_signal",
-        "terminal_close",
     }
 )
 

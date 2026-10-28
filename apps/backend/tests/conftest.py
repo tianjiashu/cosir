@@ -150,6 +150,16 @@ def reset_runtime_singletons() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def reopen_background_watches() -> Iterator[None]:
+    """lifespan 关闭会关闭进程级后台等待登记表（此后不再投递）；同进程后续用例需重新开放。"""
+
+    from app.core.workflow.wait.background_watches import background_watches
+
+    background_watches.open()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """把系统作用域的配置文件目录隔离到用例临时目录。
 

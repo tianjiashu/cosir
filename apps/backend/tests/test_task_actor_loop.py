@@ -90,6 +90,9 @@ class _Ledger:
     def require_current_run(self, _task_id: int) -> SimpleNamespace | None:
         return self.current
 
+    def list_child_tasks(self, _task_id: int) -> list[SimpleNamespace]:
+        return []
+
 
 class _Driver:
     """驱动替身：取光 mailbox 并确认（模拟 prepare_input 消费），按测试给出的状态结束。"""
@@ -146,7 +149,12 @@ def harness(monkeypatch):
         ("get_task_message_queue", queue),
     ):
         monkeypatch.setattr(actor_module.service_depends, getter, lambda fake=fake: fake)
-    space = SimpleNamespace(task_id=_TASK_ID, async_operation=contextlib.nullcontext)
+    # 已告知旧终端失效：本文件不验证首次驱动提醒（见 test_terminal_background_waits）。
+    space = SimpleNamespace(
+        task_id=_TASK_ID,
+        async_operation=contextlib.nullcontext,
+        terminals_invalidation_announced=True,
+    )
     return SimpleNamespace(
         actor=TaskActor(space), queue=queue, ledger=ledger, refreshed=refreshed
     )
@@ -423,3 +431,108 @@ async def test_stop_only_touches_materialized_spaces_and_aclose_aborts_all(regis
     await registry.aclose()
     assert (first.actor.aborted, second.actor.aborted) == (1, 1)
     assert registry.existing_spaces() == ()
+
+
+# ── 后台等待与首次驱动提醒 ─────────────────────────────────────────────────
+
+
+async def test_cancelling_suspended_run_drops_background_watches(harness) -> None:
+    """Run 取消即撤销本 Task 的后台等待：撤销回调被调用，之后的完成返回 False、不再投递。"""
+    from app.core.workflow.wait.background_watches import background_watches
+
+    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run.status = "suspended"
+    cancelled: list[str] = []
+    watch_id = background_watches.register(
+        _TASK_ID, run_id=run.id, label="terminal:t1", on_cancel=lambda: cancelled.append("t1")
+    )
+    other = background_watches.register(_TASK_ID + 1, run_id=None, label="x", on_cancel=lambda: None)
+    try:
+        await harness.actor.cancel("parent")
+        assert run.status == "cancelled"
+        assert cancelled == ["t1"]
+        assert background_watches.pending(_TASK_ID) == []
+        assert background_watches.deliver(watch_id, tool_name="t", result={}) is False
+        # 其他 Task 的等待不受影响。
+        assert background_watches.pending(_TASK_ID + 1) == ["x"]
+    finally:
+        background_watches.drop_task(_TASK_ID + 1)
+        assert background_watches.deliver(other, tool_name="t", result={}) is False
+
+
+async def test_running_run_cancel_drops_watches_when_execution_settles(harness) -> None:
+    from app.core.workflow.wait.background_watches import background_watches
+
+    harness.actor.start()
+    harness.queue.put(_user())
+    await _settle()
+    [run] = harness.ledger.created
+    dropped: list[int] = []
+    signalled_at_drop: list[bool] = []
+
+    def on_cancel() -> None:
+        # 撤销必须先于取走取消信号：取走之后到达的结论不再被丢弃，会开出新 Run。
+        signalled_at_drop.append(actor_module.cancellation_registry.is_cancelled(_TASK_ID))
+        dropped.append(run.id)
+
+    background_watches.register(
+        _TASK_ID, run_id=run.id, label="terminal:t2", on_cancel=on_cancel
+    )
+    await harness.actor.cancel("user")
+    await _finish(run.id, "cancelled")
+    assert dropped == [run.id]
+    assert signalled_at_drop == [True]
+    assert background_watches.pending(_TASK_ID) == []
+    await harness.actor.abort()
+
+
+async def test_completed_run_keeps_background_watches(harness) -> None:
+    """完成或挂起不撤销：后台等待的结论稍后照常投递、开新 Run 或唤醒。"""
+    from app.core.workflow.wait.background_watches import background_watches
+
+    harness.actor.start()
+    harness.queue.put(_user())
+    await _settle()
+    [run] = harness.ledger.created
+    background_watches.register(
+        _TASK_ID, run_id=run.id, label="terminal:t3", on_cancel=lambda: None
+    )
+    await _finish(run.id, "suspended")
+    assert background_watches.pending(_TASK_ID) == ["terminal:t3"]
+    background_watches.drop_task(_TASK_ID)
+    await harness.actor.abort()
+
+
+async def test_first_drive_notice_is_posted_into_the_run_mailbox(harness, monkeypatch) -> None:
+    notice = TaskMessage.of(
+        NoticeBody(content="terminals gone", notice_kind="terminals_invalidated"), message_id=None
+    )
+    calls: list[object] = []
+
+    def first_drive_notice(space):
+        calls.append(space)
+        return notice if len(calls) == 1 else None
+
+    monkeypatch.setattr(actor_module.terminal_invalidation, "first_drive_notice", first_drive_notice)
+    posted: list[TaskMessage] = []
+    original_post = harness.actor.mailbox.post
+
+    def record(message: TaskMessage) -> None:
+        posted.append(message)
+        original_post(message)
+
+    monkeypatch.setattr(harness.actor.mailbox, "post", record)
+    harness.actor.start()
+    user = harness.queue.put(_user())
+    await _settle()
+    [run] = harness.ledger.created
+    assert notice in posted
+    assert _Driver.drives == [(run.id, [user.id, None])] or _Driver.drives == [
+        (run.id, [None, user.id])
+    ]
+    await _finish(run.id)
+    harness.queue.put(_user("again"))
+    await _settle()
+    assert len(calls) == 2
+    assert posted.count(notice) == 1
+    await harness.actor.abort()

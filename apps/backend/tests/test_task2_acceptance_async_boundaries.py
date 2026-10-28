@@ -66,30 +66,15 @@ async def test_startup_failure_dependency_cleanup_runs_off_event_loop(
     owner_thread = threading.get_ident()
     calls: list[str] = []
 
-    class _Terminal:
-        def shutdown(self) -> None:
-            calls.append("terminal_shutdown")
-
-    class _Getter:
-        def __init__(self, value: object) -> None:
-            self.value = value
-
-        def cache_info(self) -> SimpleNamespace:
-            return SimpleNamespace(currsize=1)
-
-        def __call__(self) -> object:
-            return self.value
-
     def close_dependencies() -> None:
         assert threading.get_ident() != owner_thread
         calls.append("close_dependencies")
 
-    monkeypatch.setattr(lifespan_module, "get_terminal_session_service", _Getter(_Terminal()))
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", close_dependencies)
 
     await lifespan_module._cleanup_startup_failure()
 
-    assert calls == ["terminal_shutdown", "close_dependencies"]
+    assert calls == ["close_dependencies"]
 
 
 @pytest.mark.asyncio
@@ -102,13 +87,6 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     class _RecoverService:
         def recover_orphaned_runs(self) -> list[object]:
             return []
-
-    class _Terminal:
-        def initialize(self) -> None:
-            return None
-
-        def shutdown(self) -> None:
-            calls.append("terminal_shutdown")
 
     monkeypatch.setattr(
         lifespan_module, "install_logging_for_current_process", lambda **_kwargs: None
@@ -126,7 +104,6 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
         "get_task_service",
         lambda: SimpleNamespace(list_task_ids_to_dispatch=lambda: set()),
     )
-    monkeypatch.setattr(lifespan_module, "get_terminal_session_service", lambda: _Terminal())
     monkeypatch.setattr(lifespan_module, "build_tool_registry", lambda: object())
     # Registry 只保存内置 profile，用户 JSON 由注册表在作用域首次被读取时按需装载，
     # 因此启动编排不再遍历 workspace 调用装载方法。
@@ -150,4 +127,4 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     async with lifespan_module._lifespan_impl(SimpleNamespace()):
         pass
 
-    assert calls[-2:] == ["terminal_shutdown", "close_dependencies"]
+    assert calls[-1:] == ["close_dependencies"]

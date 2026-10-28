@@ -354,7 +354,7 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
 
     # worker 路径只有宿主环境变量一个来源，测试沿用同一配置边界。
     monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(_worker_path()))
-    terminal = TerminalSessionService(status_observer=lambda _change: None)
+    terminal = TerminalSessionService(on_task_sessions_changed=lambda _task: None)
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )
@@ -397,7 +397,7 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
                 session_id=session_id,
                 operation_id="set-env",
                 input={"type": "line", "text": set_command},
-                wait_ms=0,
+                wait=None,
                 execution_context=first,
             )
             .status
@@ -420,18 +420,13 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
             session_id=session_id,
             operation_id="check-env",
             input={"type": "line", "text": command},
-            wait_ms=0,
+            wait={"until": "match", "pattern": "STATE:kept", "quiet_ms": None,
+                  "timeout_ms": 10000},
             execution_context=second,
         )
-        output = ""
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and "STATE:kept" not in output:
-            result = terminal.read(session_id, task_id=1, run_id=1, wait_ms=3000)
-            output = result["history"]
-            if "screen" in result:
-                output += result["screen"]["text"]
-        assert "STATE:kept" in output
+        result = terminal.read(session_id, task_id=1, run_id=2, is_cancelled=lambda: False)
+        assert "STATE:kept" in result.text
     finally:
         cancellation_registry.consume(1)
         terminal.shutdown()
-    assert terminal.list_sessions(task_id=1, workspace_id=1) == []
+    assert terminal.list_sessions(task_id=1) == []

@@ -343,6 +343,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                 },
             ],
             "activity": _activity(2, "running"),
+            "terminal_sessions": [],
         }
     )
 

@@ -174,12 +174,14 @@ def _parent_run_profile() -> AgentRuntimeConfig:
 def _stub_preparation_lookups(monkeypatch: pytest.MonkeyPatch, child: AgentProfile) -> None:
     """把准备服务对 Agent 注册表的查找替换为最小桩，保留装配逻辑本体。
 
-    节点工具来自 Profile 的 ``allowed_tools``（不经工具系统解析 schema），因此这里只需桩掉
-    节点 Profile 的解析来源。
+    节点工具来自 Profile 的 ``allowed_tools``（不经工具系统解析 schema），因此这里桩掉节点
+    Profile 的解析来源，以及按交互终端工具组剥离时查询的工具注册表。
     """
 
     registry = SimpleNamespace(resolve=lambda scope, agent_id: child)
     monkeypatch.setattr(prep_module, "get_agent_registry", lambda: registry)
+    tools = SimpleNamespace(tool_groups_to_tool_names=lambda _groups: ["terminal_start"])
+    monkeypatch.setattr(prep_module, "get_tool_registry", lambda: tools)
     monkeypatch.setattr(
         prep_module,
         "get_model_config_service",

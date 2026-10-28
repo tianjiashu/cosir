@@ -1,465 +1,227 @@
-"""Terminal session lifecycle projection regressions for Assistant Transport."""
+"""snapshot ``terminal_sessions`` 的契约校验与投影：重建整表填入、变化通知推送 set mutation。
+
+终端会话是进程内事实：重建与刷新只读 ``TerminalSessionService.project_task_sessions``，不回写
+工具卡片，也不为未物化 / 已删除的 Task 物化 space。
+"""
 
 from __future__ import annotations
 
-import json
-from dataclasses import replace
-from datetime import UTC, datetime
+import copy
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
 
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
-)
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.message_metadata import ToolMessageMetadata
-from app.models.task_record import TaskRecord
-from app.tools.terminal_runtime.terminal_session_status import TerminalSessionStatusChange
-from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-from app.storage.model.base import StorageBase
-from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
+from app.assistant_transport.state.conversation_state_snapshot import (
+    empty_snapshot,
+    validate_snapshot,
+)
+from app.assistant_transport.stream import TransportFrame
+from app.service import depends
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-NOW = datetime(2026, 9, 24, tzinfo=UTC)
-
-
-def _task() -> TaskRecord:
-    return TaskRecord(
-        id=1,
-        workspace_id=1,
-        title="terminal task",
-        created_at=NOW,
-        updated_at=NOW,
-        current_run_id=10,
-    )
+pytestmark = pytest.mark.usefixtures("isolated_storage")
 
 
-def _run() -> ConversationRunRecord:
-    return ConversationRunRecord(
-        id=10,
-        task_id=1,
-        status="completed",
-        created_at=NOW,
-        updated_at=NOW,
-    )
-
-
-def _rows(
-    status: str = "running", *, call_id: str = "terminal-call"
-) -> list[ConversationTaskContextRecord]:
-    return [
-        ConversationTaskContextRecord(
-            task_id=1,
-            run_id=10,
-            message={
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": call_id,
-                        "type": "function",
-                        "function": {"name": "terminal_start", "arguments": json.dumps({})},
-                    }
-                ],
-            },
-            include_in_context=True,
-            sequence=1,
-            metadata={},
-        ),
-        ConversationTaskContextRecord(
-            task_id=1,
-            run_id=10,
-            message={"role": "tool", "content": "started", "tool_call_id": call_id},
-            include_in_context=True,
-            sequence=2,
-            metadata=ToolMessageMetadata.model_validate(
-                {
-                    "status": "completed",
-                    "display_data": {
-                        "kind": "terminal-session",
-                        "session_id": "term-1",
-                        "status": status,
-                        "shell_kind": "powershell",
-                    },
-                }
-            ),
-        ),
-    ]
-
-
-class _Sources:
-    def __init__(self, rows: list[ConversationTaskContextRecord]) -> None:
-        self.task = _task()
-        self.rows = rows
-        self.status_change: TerminalSessionStatusChange | None = TerminalSessionStatusChange(
-            task_id=1,
-            session_id="term-1",
-            generation="gen-1",
-            status="running",
-            end_reason=None,
-            exit_code=None,
-        )
-        self.updates: list[tuple[str, str, int | None]] = []
-
-    def get(
-        self,
-        task_id: int,
-        include_in_context: bool = True,
-    ) -> TaskRecord | list[ConversationTaskContextRecord]:
-        assert task_id == 1
-        return self.task if include_in_context else list(self.rows)
-
-    def list_by_task(self, task_id: int) -> list[ConversationRunRecord]:
-        assert task_id == 1
-        return [_run()]
-
-    def get_status_change(
-        self,
-        session_id: str,
-        *,
-        task_id: int,
-    ) -> TerminalSessionStatusChange | None:
-        if task_id != 1 or session_id != "term-1":
-            return None
-        return self.status_change
-
-    def update_terminal_session_display(
-        self,
-        task_id: int,
-        sequence: int,
-        run_id: int,
-        session_id: str,
-        status: str,
-        end_reason: str | None,
-        exit_code: int | None,
-    ) -> None:
-        assert task_id == 1 and run_id in {10, 11} and session_id == "term-1"
-        self.updates.append((status, end_reason or "", exit_code))
-        for index, row in enumerate(self.rows):
-            if row.sequence != sequence:
-                continue
-            metadata = row.metadata.model_dump()
-            display = dict(metadata["display_data"])
-            display.update(
-                status=status,
-                end_reason=end_reason,
-                exit_code=exit_code,
-            )
-            metadata["display_data"] = display
-            self.rows[index] = replace(row, metadata=metadata)
-
-
-def _service(sources: _Sources) -> ConversationTaskStateService:
-    service = ConversationTaskStateService.__new__(ConversationTaskStateService)
-    service._task_source = sources
-    service._run_source = sources
-    service._context_source = sources
-    service._terminal_status_source = sources
-    return service
-
-
-def _display(state: dict[str, object]) -> dict[str, object]:
-    for message in state["messages"]:  # type: ignore[index]
-        for part in message["parts"]:
-            if part.get("toolCallId") == "terminal-call":
-                return part["display_data"]
-    raise AssertionError("terminal tool part not found")
-
-
-@pytest.fixture(autouse=True)
-def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder,
-        "get_tool_display",
-        staticmethod(lambda _name: {}),
-    )
-    ConversationTaskStateService.clear_process_state()
-    yield
-    ConversationTaskStateService.clear_process_state()
-
-
-def test_async_terminal_exit_updates_existing_snapshot_and_persists_metadata() -> None:
-    sources = _Sources(_rows())
-    service = _service(sources)
-
-    state = service.get_state(1)
-    assert _display(state)["status"] == "running"
-
-    frame = service.refresh_terminal_session(
-        TerminalSessionStatusChange(
-            task_id=1,
-            session_id="term-1",
-            generation="gen-1",
-            status="exited",
-            end_reason="shell_exited",
-            exit_code=0,
-        )
-    )
-
-    assert frame is not None
-    assert _display(service.get_state(1)) == {
-        "kind": "terminal-session",
-        "session_id": "term-1",
-        "status": "exited",
-        "shell_kind": "powershell",
-        "end_reason": "shell_exited",
-        "exit_code": 0,
+def _entry(session_id: str = "term_1", **overrides: Any) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "sessionId": session_id,
+        "label": "终端 1",
+        "shellKind": "zsh",
+        "createdBy": "user",
+        "status": "running",
+        "endReason": None,
+        "exitCode": None,
+        "integration": "ready",
+        "inputHolder": None,
+        "commandRunning": False,
+        "handoff": None,
+        "createdAt": "2026-10-27T00:00:00+00:00",
     }
-    assert sources.updates == [("exited", "shell_exited", 0)]
+    entry.update(overrides)
+    return entry
 
 
-def test_terminal_exit_does_not_rewrite_rows_removed_from_transport() -> None:
-    """编辑替换掉的历史（不进上下文、不投影）保持冻结：会话后续状态只写回前端可见的卡片行。"""
-    replaced = [
-        replace(row, include_in_context=False, project_to_transport=False) for row in _rows()
+class _FakeTerminals:
+    """只实现投影用到的 ``project_task_sessions``；按 task 返回可变列表。"""
+
+    def __init__(self) -> None:
+        self.sessions: dict[int, list[dict[str, Any]]] = {}
+        self.calls: list[int] = []
+
+    def project_task_sessions(self, task_id: int) -> list[dict[str, Any]]:
+        self.calls.append(task_id)
+        return copy.deepcopy(self.sessions.get(task_id, []))
+
+
+@pytest.fixture
+def terminals(monkeypatch: pytest.MonkeyPatch) -> _FakeTerminals:
+    fake = _FakeTerminals()
+
+    def accessor() -> _FakeTerminals:
+        return fake
+
+    # 依赖关闭入口会探测 lru_cache 状态；替身声明「从未构造」，关闭时不调用 shutdown。
+    accessor.cache_info = lambda: SimpleNamespace(currsize=0)  # type: ignore[attr-defined]
+    accessor.cache_clear = lambda: None  # type: ignore[attr-defined]
+    monkeypatch.setattr(depends, "get_terminal_session_service", accessor)
+    return fake
+
+
+@pytest.fixture
+def published(monkeypatch: pytest.MonkeyPatch) -> list[TransportFrame]:
+    frames: list[TransportFrame] = []
+    original = ConversationTaskStateService._publish
+
+    def record(self: ConversationTaskStateService, change: TransportFrame) -> None:
+        frames.append(change)
+        original(self, change)
+
+    monkeypatch.setattr(ConversationTaskStateService, "_publish", record)
+    return frames
+
+
+@pytest.fixture
+def task_id(tmp_path) -> int:
+    workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
+    return depends.get_task_crud().create(workspace.id, "终端任务").id
+
+
+# ── 契约校验 ─────────────────────────────────────────────────────────────
+
+
+def test_empty_snapshot_carries_required_terminal_sessions() -> None:
+    state = empty_snapshot()
+    assert state["terminal_sessions"] == []
+    validate_snapshot(state)
+
+
+def test_snapshot_without_terminal_sessions_is_rejected() -> None:
+    state: dict[str, Any] = dict(empty_snapshot())
+    del state["terminal_sessions"]
+    with pytest.raises(ValueError):
+        validate_snapshot(state)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        _entry(status="interrupted"),
+        _entry(createdBy="system"),
+        _entry(integration="maybe"),
+        _entry(inputHolder="both"),
+        _entry(exitCode=True),
+        _entry(handoff={"reason": "x", "extra": 1}),
+        _entry(handoff="x"),
+        _entry(sessionId=""),
+        {**_entry(), "extra": 1},
+        {k: v for k, v in _entry().items() if k != "createdAt"},
+    ],
+)
+def test_invalid_terminal_session_entries_are_rejected(entry: dict[str, Any]) -> None:
+    state = empty_snapshot()
+    state["terminal_sessions"] = [entry]  # type: ignore[list-item]
+    with pytest.raises(ValueError):
+        validate_snapshot(state)
+
+
+def test_valid_entries_including_handoff_and_exit_pass() -> None:
+    state = empty_snapshot()
+    state["terminal_sessions"] = [  # type: ignore[list-item]
+        _entry("a", inputHolder="agent", handoff={"reason": "请输入密码"}, createdBy="agent"),
+        _entry("b", status="exited", endReason="shell_exited", exitCode=0, integration="off"),
     ]
-    sources = _Sources(replaced)
-    service = _service(sources)
-    service.get_state(1)
-
-    service.refresh_terminal_session(
-        TerminalSessionStatusChange(
-            task_id=1,
-            session_id="term-1",
-            generation="gen-1",
-            status="exited",
-            end_reason="shell_exited",
-            exit_code=0,
-        )
-    )
-
-    assert sources.updates == []
-    assert sources.rows == replaced
+    validate_snapshot(state)
 
 
-def test_cold_rebuild_closes_orphaned_running_session_and_keeps_tool_completed() -> None:
-    sources = _Sources(_rows())
-    sources.status_change = None
-    service = _service(sources)
-
-    state = service.get_state(1)
-    display = _display(state)
-
-    assert display["status"] == "closed"
-    assert display["end_reason"] == "backend_restarted"
-    parts = state["messages"][0]["parts"]
-    assert next(part for part in parts if part["type"] == "tool-call")["status"] == "completed"
-    assert sources.updates == [("closed", "backend_restarted", None)]
+def test_duplicate_session_ids_are_rejected() -> None:
+    state = empty_snapshot()
+    state["terminal_sessions"] = [_entry("a"), _entry("a")]  # type: ignore[list-item]
+    with pytest.raises(ValueError):
+        validate_snapshot(state)
 
 
-def test_stale_active_terminal_event_cannot_reopen_closed_display() -> None:
-    sources = _Sources(_rows())
-    service = _service(sources)
-    service.get_state(1)
-
-    service.refresh_terminal_session(
-        TerminalSessionStatusChange(
-            task_id=1,
-            session_id="term-1",
-            generation="gen-1",
-            status="closed",
-            end_reason="run_finished",
-            exit_code=None,
-        )
-    )
-    service.refresh_terminal_session(
-        TerminalSessionStatusChange(
-            task_id=1,
-            session_id="term-1",
-            generation="gen-old",
-            status="running",
-            end_reason=None,
-            exit_code=None,
-        )
-    )
-
-    assert _display(service.get_state(1))["status"] == "closed"
-    assert sources.updates == [("closed", "run_finished", None)]
+# ── 投影 ─────────────────────────────────────────────────────────────────
 
 
-def test_terminal_metadata_update_is_atomic_and_preserves_other_transport_fields() -> None:
-    engine = create_engine("sqlite://")
-    StorageBase.metadata.create_all(engine)
-    try:
-        factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-        crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
-        crud._session_factory = factory
-        with Session(engine) as session:
-            session.add(
-                ConversationTaskContextModel(
-                    message_id="test-message",
-                    task_id=1,
-                    run_id=10,
-                    sequence=2,
-                    message_json=json.dumps(
-                        {"role": "tool", "tool_call_id": "call-1", "content": "running"}
-                    ),
-                    metadata_json=json.dumps(
-                        {
-                            "display_data": {
-                                "kind": "terminal-session",
-                                "session_id": "term-1",
-                                "status": "running",
-                            },
-                            "status": "completed",
-                            "hidden": True,
-                        },
-                    ),
-                )
-            )
-            session.commit()
-
-        crud.update_terminal_session_display(
-            1,
-            2,
-            10,
-            "term-1",
-            "closed",
-            "backend_shutdown",
-            None,
-        )
-
-        crud.update_terminal_session_display(
-            1,
-            2,
-            10,
-            "term-1",
-            "exited",
-            "shell_exited",
-            0,
-        )
-
-        with Session(engine) as session:
-            metadata_json = session.scalar(select(ConversationTaskContextModel.metadata_json))
-        assert metadata_json is not None
-        assert json.loads(metadata_json) == {
-            "display_data": {
-                "kind": "terminal-session",
-                "session_id": "term-1",
-                "status": "closed",
-                "end_reason": "backend_shutdown",
-                "exit_code": None,
-            },
-            "status": "completed",
-            "hidden": True,
-        }
-    finally:
-        engine.dispose()
+def test_rebuild_fills_terminal_sessions_from_service(
+    terminals: _FakeTerminals, task_id: int
+) -> None:
+    terminals.sessions[task_id] = [_entry()]
+    state = ConversationTaskStateService().get_state(task_id)
+    assert state["terminal_sessions"] == [_entry()]
 
 
-# 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
-pytestmark = pytest.mark.usefixtures("backend_env")
+def test_refresh_publishes_set_mutation_only_on_change(
+    terminals: _FakeTerminals, published: list[TransportFrame], task_id: int
+) -> None:
+    service = ConversationTaskStateService()
+    service.get_state(task_id)
+    published.clear()
 
-
-def test_cross_run_references_reconcile_and_receive_async_exit(monkeypatch) -> None:
-    """同一 Task 两个 Run 引用一个 session，冷重建与异步通知均按 session 归属。"""
-    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-
-    sources = _Sources(_rows())
-    later = _rows()
-    later = [replace(row, run_id=11, sequence=row.sequence + 2) for row in later]
-    sources.rows.extend(later)
-    monkeypatch.setattr(sources, "list_by_task", lambda _: [_run(), replace(_run(), id=11)])
-    service = _service(sources)
-    state = service.get_state(1)
-    displays = [
-        part["display_data"]
-        for message in state["messages"]
-        for part in message["parts"]
-        if part.get("display_data", {}).get("session_id") == "term-1"
+    terminals.sessions[task_id] = [_entry()]
+    service.refresh_terminal_sessions(task_id)
+    assert len(published) == 1
+    frame = published[0]
+    assert frame.kind == "mutation"
+    assert [(m.kind, m.path, m.value) for m in frame.mutations] == [
+        ("set", ("terminal_sessions",), [_entry()])
     ]
-    assert len(displays) == 2
-    assert all(display["status"] == "running" for display in displays)
-    service.refresh_terminal_session(replace(sources.status_change, status="exited", exit_code=0))
-    current = task_runtime_spaces.get(1).existing_snapshot()
-    displays = [
-        part["display_data"]
-        for message in current["messages"]
-        for part in message["parts"]
-        if part.get("display_data", {}).get("session_id") == "term-1"
-    ]
-    assert all(display["status"] == "exited" for display in displays)
-    assert [
-        row.metadata.display_data["status"]
-        for row in sources.rows
-        if isinstance(row.metadata, ToolMessageMetadata) and row.metadata.display_data is not None
-    ] == ["exited", "exited"]
+    assert service.get_state(task_id)["terminal_sessions"] == [_entry()]
+
+    service.refresh_terminal_sessions(task_id)
+    assert len(published) == 1, "列表未变化不应再发 mutation"
+
+    terminals.sessions[task_id] = [_entry(status="exited", exitCode=0, endReason="shell_exited")]
+    service.refresh_terminal_sessions(task_id)
+    assert len(published) == 2
+    assert service.get_state(task_id)["terminal_sessions"][0]["status"] == "exited"
 
 
-def test_cross_run_projection_persists_and_reconciles_late_rows_in_sqlite(monkeypatch) -> None:
-    """跨 Run 更新真实存储；退出后才落盘的工具结果在冷重建时补齐，其他 Task 不受影响。"""
-    sources = _Sources(_rows())
-    monkeypatch.setattr(sources, "list_by_task", lambda _: [_run(), replace(_run(), id=11)])
-    service = _service(sources)
-    engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
-    StorageBase.metadata.create_all(engine)
-    crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
-    crud._session_factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    service._context_source = crud
-    try:
-        for row in _rows():
-            crud.create(row)
-            crud.create(replace(row, run_id=11, sequence=row.sequence + 2))
-            crud.create(replace(row, task_id=2))
-        service.get_state(1)
-        exited = replace(
-            sources.status_change, status="exited", end_reason="shell_exited", exit_code=7
-        )
-        sources.status_change = exited
-        service.refresh_terminal_session(exited)
-
-        def persisted_displays(task_id):
-            return [
-                row.metadata.display_data
-                for row in crud.get(task_id, include_in_context=False)
-                if isinstance(row.metadata, ToolMessageMetadata)
-                and row.metadata.display_data is not None
-            ]
-
-        assert [item["exit_code"] for item in persisted_displays(1)] == [7, 7]
-        assert [item["status"] for item in persisted_displays(2)] == ["running"]
-        # 同一 Run 的另一次工具读取可能晚于退出通知持久化，保留当时的 running 快照。
-        for row in _rows(call_id="late-terminal-call"):
-            crud.create(replace(row, run_id=11, sequence=row.sequence + 4))
-        state = service.rebuild_state(1)
-        displays = [
-            part["display_data"]
-            for message in state["messages"]
-            for part in message["parts"]
-            if part.get("display_data", {}).get("session_id") == "term-1"
-        ]
-        assert len(displays) == 3
-        assert all(item["status"] == "exited" and item["exit_code"] == 7 for item in displays)
-        assert [item["exit_code"] for item in persisted_displays(1)] == [7, 7, 7]
-        service.refresh_terminal_session(
-            replace(exited, status="running", end_reason=None, exit_code=None)
-        )
-        assert all(item["status"] == "exited" for item in persisted_displays(1))
-    finally:
-        engine.dispose()
+def test_refresh_skips_unmaterialized_task_without_creating_space(
+    terminals: _FakeTerminals, published: list[TransportFrame], task_id: int
+) -> None:
+    terminals.sessions[task_id] = [_entry()]
+    ConversationTaskStateService().refresh_terminal_sessions(task_id)
+    assert task_runtime_spaces.get(task_id) is None
+    assert published == []
+    assert terminals.calls == []
 
 
-@pytest.fixture(autouse=True)
-def _task_space_sources(monkeypatch):
-    """展示测试显式装配 Task 空间读取源，避免依赖真实主库。"""
-    from types import SimpleNamespace
+def test_refresh_skips_space_without_snapshot(
+    terminals: _FakeTerminals, published: list[TransportFrame], task_id: int
+) -> None:
+    task_runtime_spaces.get_or_create(task_id)
+    ConversationTaskStateService().refresh_terminal_sessions(task_id)
+    assert published == []
+    assert terminals.calls == []
 
-    from app.task_runtime import task_runtime_space as space_module
-    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-    task_runtime_spaces.close()
-    monkeypatch.setattr(
-        space_module, "get_task_service", lambda: SimpleNamespace(get_task=lambda _: _task())
-    )
-    monkeypatch.setattr(
-        space_module,
-        "get_workspace_service",
-        lambda: SimpleNamespace(get_workspace=lambda _: SimpleNamespace(id=1)),
-    )
-    yield
-    task_runtime_spaces.close()
+def test_refresh_after_task_deleted_is_silent(
+    terminals: _FakeTerminals, published: list[TransportFrame], task_id: int
+) -> None:
+    service = ConversationTaskStateService()
+    service.get_state(task_id)
+    service.mark_task_deleted(task_id)
+    published.clear()
+    terminals.sessions[task_id] = [_entry()]
+    service.refresh_terminal_sessions(task_id)
+    assert published == []
+    # 从未物化的 Task 收到通知也不抛错。
+    service.refresh_terminal_sessions(task_id + 1000)
+
+
+def test_snapshot_read_rejects_entries_violating_contract(
+    terminals: _FakeTerminals, task_id: int
+) -> None:
+    """契约校验统一在 ``validate_snapshot``：刷新不重复校验，违约条目在读取快照时暴露。"""
+
+    service = ConversationTaskStateService()
+    service.get_state(task_id)
+    terminals.sessions[task_id] = [_entry(status="bogus")]
+    service.refresh_terminal_sessions(task_id)
+    with pytest.raises(ValueError):
+        service.get_state(task_id)

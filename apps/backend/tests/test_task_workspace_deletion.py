@@ -396,7 +396,7 @@ async def test_delete_task_endpoint_routes_creation_marker_to_guarded_cleanup(
 def test_committed_deletion_closes_task_terminals(storage, tmp_path, monkeypatch, delete_workspace):
     from functools import lru_cache
 
-    from test_terminal_session_service import make_service
+    from terminal_test_support import make_service
 
     from app.service import depends
 
@@ -404,7 +404,7 @@ def test_committed_deletion_closes_task_terminals(storage, tmp_path, monkeypatch
     task = get_task_crud().create(workspace.id, "owner")
     terminal, workers = make_service(monkeypatch)
     terminal.start(
-        task_id=task.id, workspace_id=workspace.id, workspace_root=str(tmp_path), run_id=1
+        task_id=task.id, workspace_root=str(tmp_path), run_id=1, created_by="agent"
     )
     monkeypatch.setattr(depends, "get_terminal_session_service", lru_cache()(lambda: terminal))
     try:
@@ -413,7 +413,7 @@ def test_committed_deletion_closes_task_terminals(storage, tmp_path, monkeypatch
         else:
             get_task_service().delete_task(task.id)
         assert workers[0].closed
-        assert terminal.list_sessions(task_id=task.id, workspace_id=workspace.id) == []
+        assert terminal.list_sessions(task_id=task.id) == []
     finally:
         terminal.shutdown()
 
@@ -421,7 +421,7 @@ def test_committed_deletion_closes_task_terminals(storage, tmp_path, monkeypatch
 def test_failed_task_deletion_does_not_close_or_fence_terminal(storage, tmp_path, monkeypatch):
     from functools import lru_cache
 
-    from test_terminal_session_service import make_service
+    from terminal_test_support import make_service
 
     from app.service import depends
 
@@ -429,7 +429,7 @@ def test_failed_task_deletion_does_not_close_or_fence_terminal(storage, tmp_path
     task = get_task_crud().create(workspace.id, "owner")
     terminal, workers = make_service(monkeypatch)
     terminal.start(
-        task_id=task.id, workspace_id=workspace.id, workspace_root=str(tmp_path), run_id=1
+        task_id=task.id, workspace_root=str(tmp_path), run_id=1, created_by="agent"
     )
     monkeypatch.setattr(depends, "get_terminal_session_service", lru_cache()(lambda: terminal))
 
@@ -444,7 +444,7 @@ def test_failed_task_deletion_does_not_close_or_fence_terminal(storage, tmp_path
         assert not workers[0].closed
         assert (
             terminal.start(
-                task_id=task.id, workspace_id=workspace.id, workspace_root=str(tmp_path), run_id=2
+                task_id=task.id, workspace_root=str(tmp_path), run_id=2, created_by="agent"
             )["status"]
             == "running"
         )
