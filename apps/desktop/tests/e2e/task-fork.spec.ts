@@ -19,7 +19,7 @@ const snapshot = (status: "completed" | "running" | "suspended"): TransportState
     title: "测试对话",
     messages: [...turn(1, "completed"), ...turn(2, status)],
     activity: { runId: 2, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH },
-    terminal_sessions: [],
+    terminal_sessions: [], deferred_results: [],
   };
 };
 

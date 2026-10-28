@@ -7,6 +7,7 @@ import type { InitialConversationAttachment } from "@/components/new-conversatio
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalWorkbench } from "@/components/terminal/terminal-workbench";
+import { useDeferredResultsStore } from "@/lib/task-overview/deferred-results-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
@@ -117,7 +118,10 @@ export function TaskPage({
   }, [initialTaskId, onTaskLoaded, retryToken, taskId]);
 
   // 终端会话镜像只在本 Task 页存在期间有效：离开时清空，回来时等新 snapshot 再挂载窗格（见 store 说明）。
-  useEffect(() => () => useTerminalWorkbenchStore.getState().syncSessions(taskId, null), [taskId]);
+  useEffect(() => () => {
+    useTerminalWorkbenchStore.getState().syncSessions(taskId, null);
+    useDeferredResultsStore.getState().sync(taskId, null);
+  }, [taskId]);
 
   if (error) return (
     <div className="flex h-full items-center justify-center p-6">

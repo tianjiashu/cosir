@@ -1,0 +1,183 @@
+/*
+ * Markdown 内容使用独立的视觉层级，避免直接修改全局 border/radius 影响
+ * 工作区、按钮和弹窗。代码块与表格都只保留单层边框，Mermaid 保留画布
+ * 边界；各块的复制、下载、全屏按钮默认隐藏，悬停或键盘聚焦到块内时显示。
+ *
+ * 本文件覆盖的是 Streamdown 自带的 Tailwind 类（border、p-2、rounded-* 等），
+ * 由 globals.css 以不带 layer 的 @import 引入：未分层样式才能胜过 utilities 层，
+ * 不得再包进 @layer components。对话、文件预览、配置预览的 Streamdown 都在
+ * `.aui-md` 下，一处覆盖全部生效；结构选择器的回归由 e2e markdown-blocks 守护。
+ */
+.aui-md {
+  --markdown-block-border: color-mix(in oklab, var(--foreground) 18%, var(--border));
+  --markdown-canvas-border: var(--border);
+  --markdown-action-background: var(--background);
+}
+
+/* 代码块：单层边框、无阴影，接近 GitHub 的代码阅读体验。 */
+.aui-md [data-streamdown="code-block"] {
+  border-color: var(--markdown-block-border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  box-shadow: none;
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.aui-md [data-streamdown="code-block-header"] {
+  min-height: 2.25rem;
+  border-bottom: 1px solid var(--markdown-canvas-border);
+  background: var(--muted);
+  padding-inline: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.aui-md [data-streamdown="code-block-header"] > span {
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+}
+
+.aui-md [data-streamdown="code-block-body"] {
+  border: 0;
+  border-radius: 0;
+  background: var(--background);
+}
+
+/*
+ * 表格：去掉 Streamdown 的外层卡片，只保留滚动容器这一层边框。
+ * 按钮行在 Streamdown 中没有 data-streamdown 标记，只能按结构定位：
+ * 有按钮时它是 wrapper 的首个子元素，无按钮时 wrapper 只剩滚动容器，
+ * 故用 :not(:last-child) 防误选。升级 Streamdown 时需回归此处结构。
+ */
+.aui-md [data-streamdown="table-wrapper"] {
+  position: relative;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  gap: 0;
+  padding: 0;
+}
+
+.aui-md [data-streamdown="table-wrapper"] > div:first-child:not(:last-child) {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  z-index: 10;
+  border-radius: var(--radius-md);
+  background: var(--markdown-action-background);
+  padding: 0.125rem;
+}
+
+.aui-md [data-streamdown="table-wrapper"] > div:last-child {
+  border-color: var(--markdown-canvas-border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+}
+
+.aui-md [data-streamdown="table-header"] {
+  background: var(--muted);
+}
+
+.aui-md [data-streamdown="table-row"] {
+  transition: background-color 120ms ease;
+}
+
+.aui-md [data-streamdown="table-row"]:hover {
+  background: color-mix(in oklab, var(--accent) 52%, transparent);
+}
+
+/* Mermaid：比代码块更像图表卡片，但不制造过重的双层边框。 */
+.aui-md [data-streamdown="mermaid-block"] {
+  border-color: var(--markdown-block-border);
+  border-radius: var(--radius-lg);
+  background: var(--muted);
+  box-shadow: none;
+}
+
+.aui-md [data-streamdown="mermaid-block"] > div:first-child {
+  min-height: 2.25rem;
+  border-bottom: 1px solid var(--markdown-canvas-border);
+  padding-inline: 0.25rem;
+  color: var(--muted-foreground);
+}
+
+.aui-md [data-streamdown="mermaid-block"] > div:first-child > span {
+  font-size: 0.75rem;
+  letter-spacing: 0.02em;
+}
+
+.aui-md [data-streamdown="mermaid-block"] > div:last-child {
+  border-color: var(--markdown-canvas-border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+}
+
+.aui-md [data-streamdown="code-block-actions"],
+.aui-md [data-streamdown="mermaid-block-actions"] {
+  border-color: transparent;
+  border-radius: var(--radius-md);
+  background: var(--markdown-action-background);
+  box-shadow: none;
+}
+
+.aui-md [data-streamdown="code-block-actions"] button,
+.aui-md [data-streamdown="mermaid-block-actions"] button {
+  min-width: 2rem;
+  min-height: 2rem;
+  border-radius: var(--radius-sm);
+}
+
+.aui-md [data-streamdown="code-block-actions"] button:hover,
+.aui-md [data-streamdown="mermaid-block-actions"] button:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+/*
+ * 块级按钮按需出现：:focus-within 保证键盘 Tab 进入时同样可见。
+ * 只用 opacity 隐藏、不禁用指针：指针落到按钮上时必然已悬停在块内，
+ * 按钮此时已显示，不存在误点不可见按钮的情形。
+ */
+.aui-md [data-streamdown="code-block-actions"],
+.aui-md [data-streamdown="mermaid-block-actions"],
+.aui-md [data-streamdown="table-wrapper"] > div:first-child:not(:last-child) {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.aui-md [data-streamdown="code-block"]:is(:hover, :focus-within) [data-streamdown="code-block-actions"],
+.aui-md [data-streamdown="mermaid-block"]:is(:hover, :focus-within) [data-streamdown="mermaid-block-actions"],
+.aui-md [data-streamdown="table-wrapper"]:is(:hover, :focus-within) > div:first-child:not(:last-child) {
+  opacity: 1;
+}
+
+/*
+ * Streamdown 的 Mermaid 全屏层会把图表重新挂载到 document.body，并在
+ * SVG 上附加 h-auto/w-auto。WebView 在嵌套的 size-full/flex 容器中可能
+ * 无法从百分比尺寸推导 SVG 的实际大小；WebKit 还可能不绘制默认横向
+ * flex 容器中的行内 SVG，表现为全屏控件存在但图形空白。
+ * 这里以 Streamdown 提供的稳定数据标记收敛全屏图表的尺寸约束；不改变
+ * 普通 Mermaid、表格、图片或其他 Markdown 内容的布局。
+ */
+[data-streamdown="mermaid-fullscreen"] [data-streamdown="mermaid"],
+[data-streamdown="mermaid-fullscreen"] [data-streamdown="mermaid"] > *,
+[data-streamdown="mermaid-fullscreen"] [data-streamdown="mermaid"] > * > * {
+  min-width: 0;
+  min-height: 0;
+}
+
+[data-streamdown="mermaid-fullscreen"] [aria-label="Mermaid chart"] {
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+[data-streamdown="mermaid-fullscreen"] [data-streamdown="mermaid"] svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(100dvh - 2rem);
+}

@@ -14,6 +14,8 @@ export const APP_SHORTCUTS = {
   commandPalette: { keys: "mod+k", label: "命令面板" },
   // 与 VS Code 一致：所有平台都是 Ctrl+`（macOS 也不是 ⌘）。终端视图把它让给应用，不送入 shell。
   toggleTerminal: { keys: "ctrl+backquote", label: "切换终端" },
+  // 只在 Markdown 配置面板挂载期间绑定。
+  saveConfiguration: { keys: "mod+s", label: "保存" },
 } as const;
 
 export type AppShortcutId = keyof typeof APP_SHORTCUTS;

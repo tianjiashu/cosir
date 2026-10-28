@@ -32,9 +32,13 @@ export const editorTheme = EditorView.theme({
     lineHeight: "1.7",
     overflow: "auto",
   },
+  // 横向留白放在行上而非内容区：当前行底色才能与行号栏相接，不留断口。
   ".cm-content": {
     minHeight: "100%",
-    padding: "1rem",
+    padding: "1rem 0",
+  },
+  ".cm-line": {
+    padding: "0 1rem",
   },
   ".cm-gutters": {
     backgroundColor: "transparent",

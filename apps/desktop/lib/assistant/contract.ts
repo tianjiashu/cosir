@@ -106,6 +106,11 @@ export type TransportToolCallPart = {
   display_data?: TransportToolDisplayData | null;
   /** 持久化 TeamRun 的定位字段，工具失败后仍可查询流水线。 */
   team_run_id?: number;
+  /**
+   * 延迟结果的后台占位（结论稍后以后台结果回投）：`status === "pending"` 即「后台执行中」。投影自
+   * 占位行 metadata，是卡片状态的事实源；只在为真时出现。
+   */
+  deferred?: true;
   /** 后端显式标记的错误结果。 */
   isError?: boolean | null;
   /** Runtime-only child task locator for Workbench; never rendered as text. */
@@ -271,6 +276,22 @@ export type TerminalSessionEntry = {
   createdAt: string;
 };
 
+/**
+ * Task 后台工作看板条目（snapshot 顶层 `deferred_results`）。
+ *
+ * 事实源是后端进程内的延迟结果登记表：运行中的在前（按登记先后），之后是最近结束的若干条；后端重启后
+ * 清空。只服务看板与「转到后台」按钮（前台等待只存在于这里），工具卡片的状态不读它。
+ */
+export type DeferredResultEntry = {
+  toolCallId: string;
+  kind: "terminal_wait" | "terminal_handoff" | "child_agent";
+  label: string;
+  mode: "foreground" | "background";
+  status: "running" | "completed" | "cancelled";
+  startedAt: string;
+  endedAt: string | null;
+};
+
 /** Task 级 Transport state。 */
 export type TransportState = {
   /** Task 标题，投影自后端 `tasks.title`；变化时由宿主刷新侧栏目录。 */
@@ -282,4 +303,6 @@ export type TransportState = {
   queued_messages?: TransportQueuedMessage[];
   /** 本 Task 的交互终端会话列表（必填，可为空数组）。 */
   terminal_sessions: TerminalSessionEntry[];
+  /** 本 Task 的后台工作看板条目（必填，可为空数组）。 */
+  deferred_results: DeferredResultEntry[];
 };

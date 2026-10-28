@@ -12,6 +12,7 @@ type WorkbenchState = {
   panelWidth: number;
   ensureWorkspace: (workspaceId: number | null) => void;
   openFiles: (workspaceId: number, rootPath: string, workspaceName: string) => void;
+  openTaskOverview: (workspaceId: number) => void;
   openAgentTab: (input: Omit<WorkbenchAgentTab, "id" | "kind">) => void;
   openAgentConfigurationDraftTab: (input: Omit<WorkbenchAgentConfigurationDraftTab, "id" | "kind" | "dirty">) => void;
   updateAgentConfigurationDraft: (tabId: string, draft: WorkbenchAgentConfigurationDraftTab["draft"]) => void;
@@ -43,6 +44,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => ({
   openFiles: (workspaceId, rootPath, workspaceName) => set(state => {
     const id = `workspace-files:${workspaceId}` as const;
     const tab = { id, kind: "files" as const, workspaceId, rootPath, workspaceName, title: "文件" };
+    return { workspaceId, tabs: state.tabs.some(t => t.id === id) ? state.tabs : [...state.tabs, tab], activeTabId: id, panelOpen: true };
+  }),
+  openTaskOverview: (workspaceId) => set(state => {
+    const id = `task-overview:${workspaceId}` as const;
+    const tab = { id, kind: "task-overview" as const, workspaceId, title: "任务概览" };
     return { workspaceId, tabs: state.tabs.some(t => t.id === id) ? state.tabs : [...state.tabs, tab], activeTabId: id, panelOpen: true };
   }),
   openAgentTab: (input) => set((state) => {

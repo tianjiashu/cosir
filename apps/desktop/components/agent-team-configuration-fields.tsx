@@ -16,7 +16,7 @@ export function AgentTeamConfigurationFields({
   onChange: (changes: Partial<Omit<AgentTeamConfigurationDraft, "nodes" | "transitions">>, historyKey?: string) => void;
   teamIdEditable: boolean;
   scopeEditable: boolean;
-  layout: "form" | "dialog";
+  layout: "form" | "panel";
 }) {
   const labelClassName = layout === "form" ? "space-y-1.5 text-sm" : "block space-y-1 text-xs";
   const labelTextClassName = "text-muted-foreground";
@@ -33,7 +33,8 @@ export function AgentTeamConfigurationFields({
           <option value="system">系统级</option>
         </NativeSelect>
       </label>}
-      <div className="grid gap-3 sm:grid-cols-2">
+      {/* 表单视图把短字段排成一行；属性面板较窄，逐行排列。 */}
+      <div className={layout === "form" ? "grid gap-3 sm:grid-cols-[1fr_1fr_8rem]" : "grid gap-3"}>
         <label className={labelClassName}>
           <span className={labelTextClassName}>Team ID</span>
           <Input
@@ -47,20 +48,20 @@ export function AgentTeamConfigurationFields({
           <span className={labelTextClassName}>Team 名称</span>
           <Input value={configuration.name} onChange={(event) => onChange({ name: event.target.value }, "team-name")} />
         </label>
+        <label className={labelClassName}>
+          <span className={labelTextClassName}>最大轮数</span>
+          <Input
+            type="number"
+            min={10}
+            step={1}
+            value={configuration.max_runs}
+            onChange={(event) => onChange({ max_runs: event.target.value }, "team-max-runs")}
+          />
+        </label>
       </div>
       <label className={`block ${labelClassName}`}>
         <span className={labelTextClassName}>用途说明</span>
-        <Textarea className="h-24 min-h-24 max-h-24 resize-none overflow-y-auto" value={configuration.description} onChange={(event) => onChange({ description: event.target.value }, "team-description")} />
-      </label>
-      <label className={`block ${labelClassName}`}>
-        <span className={labelTextClassName}>最大轮数</span>
-        <Input
-          type="number"
-          min={10}
-          step={1}
-          value={configuration.max_runs}
-          onChange={(event) => onChange({ max_runs: event.target.value }, "team-max-runs")}
-        />
+        <Textarea className="h-20 min-h-20 max-h-20 resize-none overflow-y-auto" value={configuration.description} onChange={(event) => onChange({ description: event.target.value }, "team-description")} />
       </label>
     </div>
   );

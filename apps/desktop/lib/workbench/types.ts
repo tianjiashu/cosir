@@ -46,4 +46,17 @@ type WorkbenchFilesTab = {
   workspaceName: string;
 };
 
-export type WorkbenchTab = WorkbenchFilesTab | WorkbenchAgentTab | WorkbenchAgentConfigurationDraftTab | WorkbenchAgentTeamConfigurationDraftTab;
+/** 任务概览：卡片栈（本期只有后台任务卡），内容跟随当前聚焦的 Task，每个工作区至多一个。 */
+type WorkbenchTaskOverviewTab = {
+  id: `task-overview:${number}`;
+  kind: "task-overview";
+  workspaceId: number;
+  title: string;
+};
+
+export type WorkbenchTab =
+  | WorkbenchFilesTab
+  | WorkbenchAgentTab
+  | WorkbenchAgentConfigurationDraftTab
+  | WorkbenchAgentTeamConfigurationDraftTab
+  | WorkbenchTaskOverviewTab;

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 
-import { cancelToolCall } from "@/lib/assistant/cancel-tool-call";
+import { cancelToolCall } from "@/lib/assistant/tool-call-commands";
 
 describe("cancelToolCall", () => {
   beforeEach(() => vi.restoreAllMocks());

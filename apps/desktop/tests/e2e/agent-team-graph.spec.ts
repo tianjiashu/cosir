@@ -43,16 +43,15 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await page.getByRole("navigation", { name: "系统配置分类" }).getByRole("link", { name: "Agent Team", exact: true }).click();
   await page.getByRole("button", { name: "新建 Team" }).click();
   await page.getByRole("button", { name: "画布" }).click();
-  await expect(page.getByLabel("Team ID")).toBeHidden();
-  await expect(page.getByLabel("入口节点")).toBeHidden();
   await expect(page.getByRole("button", { name: "保存配置" })).toBeHidden();
-  await page.getByRole("button", { name: "Team 设置" }).click();
-  const teamSettings = page.getByRole("dialog");
-  await teamSettings.getByLabel("Team ID").fill("review_flow");
-  await teamSettings.getByLabel("Team 名称").fill("Review Flow");
-  await teamSettings.getByLabel("用途说明").fill("审查并修复代码");
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog")).toBeHidden();
+  // 新建 Team 进入画布时属性面板默认展示 Team 信息，取代原先的「Team 设置」对话框。
+  const teamPanel = page.getByRole("region", { name: "Team 属性" });
+  await teamPanel.getByLabel("Team ID").fill("review_flow");
+  await teamPanel.getByLabel("Team 名称").fill("Review Flow");
+  await teamPanel.getByLabel("用途说明").fill("审查并修复代码");
+  await expect(page.getByRole("button", { name: "Team 属性", exact: true })).toContainText("Review Flow");
+  await page.getByRole("button", { name: "关闭 Team 属性" }).click();
+  await expect(teamPanel).toHaveCount(0);
 
   const paletteItem = page.getByLabel("可拖拽子 Agent reviewer");
   await paletteItem.dragTo(page.locator(".react-flow__pane"), { targetPosition: { x: 330, y: 260 }, steps: 12 });
@@ -68,9 +67,9 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await nodeNameInput.press("ControlOrMeta+A");
   await nodeNameInput.pressSequentially("Code Review");
   await expect(nodeNameInput).toHaveValue("Code Review");
-  const fieldLogEvents = await page.evaluate(() => (window as Window & { __cosirFrontendLogs?: { event: string; data?: { field?: string } }[] }).__cosirFrontendLogs?.filter((entry) => entry.event.startsWith("agent_team_graph_node_field_")).map((entry) => entry.event) ?? []);
-  expect(fieldLogEvents).toContain("agent_team_graph_node_field_focused");
-  expect(fieldLogEvents).toContain("agent_team_graph_node_field_changed");
+  const fieldLogEvents = await page.evaluate(() => (window as Window & { __cosirFrontendLogs?: { event: string; data?: { field?: string } }[] }).__cosirFrontendLogs?.filter((entry) => entry.event.startsWith("agent_team_node_field_")).map((entry) => entry.event) ?? []);
+  expect(fieldLogEvents).toContain("agent_team_node_field_focused");
+  expect(fieldLogEvents).toContain("agent_team_node_field_changed");
   await nodeNameInput.press("Backspace");
   await expect(nodeNameInput).toHaveValue("Code Revie");
   await expect(page.locator(".react-flow__node")).toHaveCount(2);
@@ -80,11 +79,13 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await nodeNameInput.pressSequentially("代码审查");
   await expect(nodeNameInput).toHaveValue("代码审查");
 
-  await page.getByRole("button", { name: "全屏画布" }).click();
+  // 切到画布即默认全屏。
   await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toHaveClass(/fixed/);
-  await page.getByRole("button", { name: "Team 设置" }).click();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog")).toBeHidden();
+  // 输入框里的 Escape 不退出全屏；点标题回到 Team 属性。
+  await page.getByRole("textbox", { name: "节点名称" }).press("Escape");
+  await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toHaveClass(/fixed/);
+  await page.getByRole("button", { name: "Team 属性", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Team 属性" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toHaveClass(/fixed/);
 
   await page.getByRole("button", { name: "添加 reviewer" }).click();
@@ -107,6 +108,9 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   expect(endPaletteLogEvents).toContain("agent_team_graph_end_palette_drag_started");
   expect(endPaletteLogEvents).toContain("agent_team_graph_end_palette_drop_completed");
 
+  // 添加节点时画布可能已平移，先按 F 让全部节点回到视野内。
+  await page.locator(".react-flow__pane").click({ position: { x: 10, y: 10 } });
+  await page.keyboard.press("f");
   await page.locator('.react-flow__node[data-id="@@agent-node-0"]').click();
   const nodeEditor = page.getByRole("region", { name: "节点属性编辑器" });
   await nodeEditor.getByRole("button", { name: "添加状态" }).click();
@@ -128,14 +132,15 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await expect(page.locator(".react-flow__edge")).toHaveCount(3);
   const doneEdge = page.locator('.react-flow__edge[data-id="transition-0"]');
   await expect(doneEdge).toHaveAttribute("aria-label", "Edge from @@agent-node-0 to @@agent-node-1");
-  await doneEdge.click({ force: true });
-  await expect(page.getByLabel("转移属性")).toHaveCount(0);
+  // 测试布局里多条连线的端点重连热区与标签重叠，直接向连线派发点击，只验证选中后的属性面板。
+  await doneEdge.dispatchEvent("click");
+  await expect(page.getByRole("region", { name: "转移属性" })).toContainText("done");
   await page.keyboard.press("Delete");
   await expect(page.locator(".react-flow__edge")).toHaveCount(2);
   await page.keyboard.press("Control+z");
   await expect(page.locator(".react-flow__edge")).toHaveCount(3);
   const needsReviewEdge = page.locator('.react-flow__edge[data-id="transition-2"]');
-  await needsReviewEdge.click({ force: true });
+  await needsReviewEdge.dispatchEvent("click");
   const reconnectHandleBounds = await needsReviewEdge.locator(".react-flow__edgeupdater-target").boundingBox();
   const reconnectTargetBounds = await node2Input.boundingBox();
   expect(reconnectHandleBounds).not.toBeNull();
@@ -189,10 +194,11 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await expect(page.getByLabel("Team 名称")).toHaveValue("Review Flow");
   await expect(page.getByLabel("用途说明")).toHaveValue("审查并修复代码");
   await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toBeHidden();
-  await expect(page.getByLabel("入口节点")).toHaveValue("node_1");
+  // 大纲视图里入口节点卡片带 START 标签，取代原先的「入口节点」下拉框。
+  await expect(page.getByRole("article", { name: "节点 代码审查" })).toContainText("START");
   await page.getByRole("button", { name: "画布" }).click();
-  await expect(page.getByLabel("Team ID")).toBeHidden();
-  await expect(page.getByLabel("入口节点")).toBeHidden();
+  await page.getByRole("button", { name: "Team 属性", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Team 属性" }).getByLabel("Team ID")).toHaveValue("review_flow");
   await expect(page.locator('.react-flow__node[data-id^="@@canvas-end-"]')).toHaveCount(2);
   await expect(page.locator(".react-flow__edge")).toHaveCount(3);
   await expect(page.getByRole("button", { name: "撤销" })).toBeEnabled();
@@ -202,7 +208,8 @@ test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", 
   await page.getByRole("button", { name: "撤销" }).click();
   await expect(page.locator('.react-flow__node[data-id="@@agent-node-1"]')).toBeVisible();
   expect(await page.evaluate(() => Object.keys(localStorage).some(key => key.includes("agent-team-layout")))).toBe(false);
-  await page.getByRole("button", { name: "全屏画布", exact: true }).click();
+  // 从表单再次切回画布，同样默认全屏。
+  await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toHaveClass(/fixed/);
   const flowElement = await page.locator(".react-flow").elementHandle();
   await page.getByRole("button", { name: "保存", exact: true }).click();
 
@@ -285,7 +292,7 @@ test("Agent Team 保存把校验交给后端并在失败时弹窗保留草稿", 
   await expect(page.getByLabel("Team 名称")).toHaveValue("Validation test");
 });
 
-test("添加转移不再弹出前端校验提示，未完成草稿提交给后端", async ({ page }) => {
+test("在节点卡片里添加转移不弹前端校验提示，未完成草稿提交给后端", async ({ page }) => {
   const reviewer = {
     agent_id: "reviewer",
     role: "child",
@@ -319,9 +326,10 @@ test("添加转移不再弹出前端校验提示，未完成草稿提交给后�
   await page.goto("/settings");
   await page.getByRole("navigation", { name: "系统配置分类" }).getByRole("link", { name: "Agent Team", exact: true }).click();
   await page.getByRole("button", { name: "新建 Team" }).click();
-  await page.getByRole("button", { name: "添加转移" }).click();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.getByRole("button", { name: "添加节点" }).click();
   await expect(page.locator("[data-team-entry-card]")).toHaveCount(1);
+  await page.getByRole("button", { name: "为 节点 1 添加转移" }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
   await page.getByLabel("Team ID").fill("draft_team");
   await page.getByLabel("Team 名称").fill("Draft Team");
   await page.getByLabel("用途说明").fill("提交未完成草稿");
@@ -330,5 +338,29 @@ test("添加转移不再弹出前端校验提示，未完成草稿提交给后�
   const saveFailure = page.getByRole("dialog");
   await expect(saveFailure.getByText("后端校验：请至少添加一个 Team 节点")).toBeVisible();
   expect((submittedConfiguration as unknown as { transitions: unknown[] }).transitions)
-    .toEqual([{ from_node_id: "", status: "", target_node_id: "END" }]);
+    .toEqual([{ from_node_id: "node_1", status: "done", target_node_id: "END" }]);
+});
+
+test("连续点 + 添加的节点都落在属性面板左侧的可见区域", async ({ page }) => {
+  await page.route("**/configuration/agents", (route) => route.fulfill({ json: [{
+    agent_id: "reviewer", role: "child", description: "", system_prompt: "", allowed_tool_groups: [], max_steps: 20,
+    model_config_id: null, model_settings: {}, source: "user_file", path: ".cosir/agents/reviewer.json", editable: true,
+    deletable: true, validation_status: "valid", validation_error: null, file_name: "reviewer.json",
+  }] }));
+  await page.route("**/configuration/agent-teams", (route) => route.fulfill({ json: [] }));
+  await page.goto("/settings");
+  await page.getByRole("navigation", { name: "系统配置分类" }).getByRole("link", { name: "Agent Team", exact: true }).click();
+  await page.getByRole("button", { name: "新建 Team" }).click();
+  await page.getByRole("button", { name: "画布" }).click();
+  await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toHaveClass(/fixed/);
+  // 避让搜索每圈先向右挪；画布中心被占后，新节点会被推进右侧属性面板的覆盖范围。
+  for (let index = 0; index < 4; index += 1) {
+    await page.getByRole("button", { name: "添加 reviewer" }).click();
+    const inspector = await page.getByRole("complementary", { name: "属性面板" }).boundingBox();
+    const canvas = await page.locator("[data-agent-drop-zone]").boundingBox();
+    await expect.poll(async () => {
+      const box = await page.locator(`.react-flow__node[data-id="@@agent-node-${index}"]`).boundingBox();
+      return box!.x >= canvas!.x && box!.x + box!.width <= inspector!.x && box!.y >= canvas!.y && box!.y + box!.height <= canvas!.y + canvas!.height;
+    }, { message: `第 ${index + 1} 个节点应完整落在可见区域` }).toBe(true);
+  }
 });

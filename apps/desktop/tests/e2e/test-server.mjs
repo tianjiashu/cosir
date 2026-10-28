@@ -34,6 +34,8 @@ let failNextAttach = false;
  * 只模拟 terminal-v2 的最小闭环（attach 续传、input 回显与短租约、resize、exit），不模拟交接。
  */
 const terminalSessions = new Map();
+/** taskId → 后台工作看板条目（snapshot `deferred_results`），由 e2e 经 `__test__/seed-deferred` 种入。 */
+const deferredResults = new Map();
 let nextTerminalId = 1;
 const terminalShells = [
   { kind: "zsh", label: "zsh", isDefault: true, integrationSupported: true },
@@ -60,6 +62,7 @@ function resetTestState() {
     }
   }
   terminalSessions.clear();
+  deferredResults.clear();
   nextTerminalId = 1;
   dropNextCancelledStream = false;
   failNextAttach = false;
@@ -330,9 +333,13 @@ function writeSse(res, frame) {
   res.write(`data: ${JSON.stringify(frame)}\n\n`);
 }
 
-/** wire 上的 Task state：模拟后端把进程内终端会话列表投影进 snapshot 顶层 `terminal_sessions`。 */
+/** wire 上的 Task state：模拟后端把进程内终端会话与后台工作看板投影进 snapshot 顶层。 */
 function wireState(taskId, state = states.get(taskId)) {
-  return { ...state, terminal_sessions: (terminalSessions.get(taskId) ?? []).map((session) => session.entry) };
+  return {
+    ...state,
+    terminal_sessions: (terminalSessions.get(taskId) ?? []).map((session) => session.entry),
+    deferred_results: deferredResults.get(taskId) ?? [],
+  };
 }
 
 /** 向 Task 的全部订阅推送一帧，并记入最近一轮的流日志。 */
@@ -936,6 +943,43 @@ const server = createServer(async (req, res) => {
     }
     jsonResponse(res, 200, {});
     if (states.has(taskId)) commit(taskId, states.get(taskId));
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/__test__/seed-deferred") {
+    // 模拟后端登记表：种入看板条目，经 full 帧推送（前端按 snapshot 收敛）。
+    const body = await readJson(req);
+    const taskId = Number(body.taskId);
+    deferredResults.set(taskId, body.entries);
+    if (states.has(taskId)) commit(taskId, states.get(taskId));
+    jsonResponse(res, 200, { ok: true });
+    return;
+  }
+  const deferredRoute = url.pathname.match(/^\/tasks\/(\d+)\/tool-calls\/([^/]+)\/(cancel|background)$/);
+  if (req.method === "POST" && deferredRoute) {
+    // 与后端一致：登记过的调用按 tool_call_id 撤销或转后台；后台占位随撤销推到 cancelled。
+    const taskId = Number(deferredRoute[1]);
+    const toolCallId = decodeURIComponent(deferredRoute[2]);
+    const entries = deferredResults.get(taskId) ?? [];
+    const target = entries.find((entry) => entry.toolCallId === toolCallId && entry.status === "running");
+    const detach = deferredRoute[3] === "background";
+    if (!target || (detach && target.mode !== "foreground")) {
+      jsonResponse(res, 409, { error: { code: "TOOL_CALL_NOT_DETACHABLE", message: "这次工具调用已结束或不能转到后台", retryable: false } });
+      return;
+    }
+    deferredResults.set(taskId, entries.map((entry) => entry !== target ? entry
+      : detach ? { ...entry, mode: "background" }
+        : { ...entry, status: "cancelled", endedAt: new Date().toISOString() }));
+    const state = states.get(taskId);
+    if (!detach && state) {
+      const messages = state.messages.map((message) => ({
+        ...message,
+        parts: message.parts.map((part) => part.type === "tool-call" && part.toolCallId === toolCallId && part.deferred
+          ? { ...part, status: "cancelled", error: "已取消" } : part),
+      }));
+      states.set(taskId, { ...state, messages });
+    }
+    if (states.has(taskId)) commit(taskId, states.get(taskId));
+    jsonResponse(res, 200, {});
     return;
   }
   if (req.method === "POST" && /^\/tasks\/\d+\/cancel$/.test(url.pathname)) {

@@ -10,10 +10,12 @@ import {
   useNavigate,
   useOutletContext,
 } from "react-router-dom";
-import { FolderIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
+import { FolderIcon, LayoutDashboardIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 
 import { BackendRestartButton } from "@/components/backend-restart-button";
+import { FocusedTaskIdContext } from "@/components/task-overview/focused-task-context";
+import { countRunning, useDeferredResults } from "@/lib/task-overview/deferred-results-store";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { useCommandPaletteHotkey } from "@/components/command-palette/use-command-palette-hotkey";
 import { BackendStatusBanner } from "@/components/backend-status-banner";
@@ -179,6 +181,9 @@ export function AppLayout() {
   const workbenchActiveTabId = useWorkbenchStore((state) => state.activeTabId);
   // 顶栏图标按当前打开的面板高亮：文件标签在前台时「文件」亮，工作台打开时「工作台」亮。
   const filesPanelActive = workbenchPanelOpen && workbenchTabs.some((tab) => tab.kind === "files" && tab.id === workbenchActiveTabId);
+  const overviewPanelActive = workbenchPanelOpen && workbenchTabs.some((tab) => tab.kind === "task-overview" && tab.id === workbenchActiveTabId);
+  // 任务概览的角标：当前聚焦 Task 运行中的后台工作数；有新条目时不自动弹出面板。
+  const runningDeferredCount = countRunning(useDeferredResults(focusedTaskId));
   const setWorkbenchPanelOpen = useWorkbenchStore((state) => state.setPanelOpen);
   // 收起只改变可见性；草稿由工作台会话保留，真正销毁由关闭/工作区切换边界确认。
   const toggleWorkbenchPanel = useCallback(() => {
@@ -320,6 +325,20 @@ export function AppLayout() {
                     <FolderIcon />
                   </TooltipIconButton>
                 )}
+                {focusedTaskId !== null && catalog.activeWorkspace && (
+                  <TooltipIconButton
+                    tooltip="任务概览"
+                    aria-label={`任务概览，${runningDeferredCount} 个后台任务运行中`}
+                    aria-pressed={overviewPanelActive}
+                    className={cn("relative size-7", overviewPanelActive && "bg-muted text-foreground")}
+                    onClick={() => useWorkbenchStore.getState().openTaskOverview(catalog.activeWorkspace!.workspace_id)}
+                  >
+                    <LayoutDashboardIcon />
+                    {runningDeferredCount > 0 && (
+                      <span aria-hidden="true" className="bg-foreground text-background absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-2xs leading-none tabular-nums">{runningDeferredCount}</span>
+                    )}
+                  </TooltipIconButton>
+                )}
                 {workbenchTabs.length > 0 && (
                   <TooltipIconButton
                     tooltip={workbenchPanelOpen ? "收起工作台" : "打开工作台"}
@@ -382,9 +401,11 @@ export function AppLayout() {
           fallbackClassName="dock-panel bg-background m-2 w-80 shrink-0 p-3"
           escape={{ label: "收起工作台", onClick: () => setWorkbenchPanelOpen(false) }}
         >
-          <Workbench filesVisible={filesVisible} workspaceId={workbenchWorkspaceId}
-            width={workbenchLayout.width} minWidth={workbenchLayout.minWidth} maxWidth={workbenchLayout.maxWidth}
-            onWidthChange={workbenchLayout.setWidth} onRequestClose={() => setWorkbenchPanelOpen(false)} />
+          <FocusedTaskIdContext.Provider value={focusedTaskId}>
+            <Workbench filesVisible={filesVisible} workspaceId={workbenchWorkspaceId}
+              width={workbenchLayout.width} minWidth={workbenchLayout.minWidth} maxWidth={workbenchLayout.maxWidth}
+              onWidthChange={workbenchLayout.setWidth} onRequestClose={() => setWorkbenchPanelOpen(false)} />
+          </FocusedTaskIdContext.Provider>
         </IsolatedRegion>
         </div>
       </div>

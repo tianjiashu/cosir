@@ -68,6 +68,25 @@ export type AgentTeamRun = {
   current_node_id: string | null;
 };
 
+/** 后端图结构问题；定位字段指向节点、状态出口或转移在草稿 transitions 中的下标。 */
+export type AgentTeamGraphIssue = {
+  code: string;
+  message: string;
+  node_id: string | null;
+  status: string | null;
+  transition_index: number | null;
+};
+
+type AgentTeamGraphDraft = Pick<AgentTeamConfigurationDraft, "start_node_id" | "nodes" | "transitions">;
+
+/** 检查编辑中草稿的图结构，不保存、不区分作用域；规则与保存校验同源。 */
+export function checkAgentTeamGraph(draft: AgentTeamGraphDraft, options?: RequestOptions): Promise<AgentTeamGraphIssue[]> {
+  return requestJson<{ issues: AgentTeamGraphIssue[] }>(
+    "/configuration/agent-teams/graph-issues",
+    jsonRequestInit(draft, { method: "POST", ...options }),
+  ).then((response) => response.issues);
+}
+
 function teamConfigurationPath(scope: "system" | "workspace", workspaceId?: number, teamId?: string) {
   let root: string;
   if (scope === "system") {

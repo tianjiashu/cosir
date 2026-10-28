@@ -16,7 +16,7 @@ import type {
 export const EMPTY_LAUNCH: TransportRunLaunch = { modelConfigId: null, reasoningEffort: null, banTools: [] };
 
 export function transportState(overrides: Partial<TransportState> = {}): TransportState {
-  return { title: "测试对话", messages: [], activity: null, terminal_sessions: [], ...overrides };
+  return { title: "测试对话", messages: [], activity: null, terminal_sessions: [], deferred_results: [], ...overrides };
 }
 
 export function textPart(text: string): TransportMessagePart {

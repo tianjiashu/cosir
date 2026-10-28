@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useStore } from "zustand";
+import { Redo2Icon, Undo2Icon } from "lucide-react";
 import type { TeamEditorSession, PersistTeam } from "@/lib/agent-team-editor/session";
 import { AgentTeamConfigurationForm } from "@/components/agent-team-configuration-form";
 
@@ -16,6 +17,8 @@ import {
 } from "@/components/ui/dialog";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { AgentTeamGraphEditor } from "@/components/agent-team-graph-editor";
+import { TeamGraphIssuesIndicator } from "@/components/agent-team-graph-issues";
+import { useTeamGraphIssues } from "@/lib/agent-team-editor/use-graph-issues";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
 import { notify } from "@/lib/notify";
@@ -39,6 +42,8 @@ export function AgentTeamConfigurationEditor({ session, profilesByScope, scopeEd
   const { snapshot: { configuration }, baseline, saveError, saving, mode: editorMode, history, dirty } = useStore(session.store);
   const [canvasVisited, setCanvasVisited] = useState(editorMode === "canvas");
   const profiles = profilesByScope[configuration.scope];
+  // 结构检查只在这里发起一次，表单与画布共享结果。
+  const graphIssues = useTeamGraphIssues(session);
   const save = async () => {
     if (await session.save(onSave)) notify.success(session.store.getState().dirty ? "已保存提交版本，仍有新修改待保存" : "Agent Team 配置已保存");
   };
@@ -48,8 +53,10 @@ export function AgentTeamConfigurationEditor({ session, profilesByScope, scopeEd
       <CardHeader>
         <CardTitle>{baseline ? "编辑 Agent Team" : "新建 Agent Team"}</CardTitle>
         <CardAction className="flex flex-wrap items-center justify-end gap-2">
+          {editorMode === "form" && <TeamGraphIssuesIndicator graphIssues={graphIssues} />}
           <span role="status" className="text-xs text-muted-foreground">{saving ? "保存中…" : dirty ? "未保存" : baseline ? "已保存" : "新建草稿"}</span>
-          {editorMode === "form" && <><Button type="button" variant="outline" onClick={session.undo} disabled={!history.past.length}>撤销</Button><Button type="button" variant="outline" onClick={session.redo} disabled={!history.future.length}>重做</Button></> }
+          {/* 与画布顶栏同一套图标按钮；画布全屏时由画布自己的撤销 / 重做接管。 */}
+          {editorMode === "form" && <><Button type="button" variant="ghost" size="icon-sm" aria-label="撤销" title="撤销 (Ctrl+Z / ⌘Z)" onClick={session.undo} disabled={!history.past.length}><Undo2Icon /></Button><Button type="button" variant="ghost" size="icon-sm" aria-label="重做" title="重做 (Ctrl+Y / ⌘Shift+Z)" onClick={session.redo} disabled={!history.future.length}><Redo2Icon /></Button></>}
           <SegmentedControl
             aria-label="编辑模式"
             className="w-40"
@@ -71,6 +78,7 @@ export function AgentTeamConfigurationEditor({ session, profilesByScope, scopeEd
           scopeEditable={scopeEditable && !baseline && !saving}
           teamIdEditable={!baseline && !saving}
           saving={saving}
+          graphIssues={graphIssues}
           onSave={save}
           onCancel={onCancel}
         />
@@ -81,6 +89,7 @@ export function AgentTeamConfigurationEditor({ session, profilesByScope, scopeEd
           profiles={profiles}
           onSave={save}
           onExit={() => session.setMode("form")}
+          graphIssues={graphIssues}
           saving={saving}
           scopeEditable={scopeEditable && !baseline && !saving}
           teamIdEditable={!baseline && !saving}

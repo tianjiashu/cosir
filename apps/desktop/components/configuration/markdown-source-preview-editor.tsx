@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { basicSetup, EditorView } from "codemirror";
 import { Compartment, EditorState } from "@codemirror/state";
+import { placeholder as editorPlaceholder } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 import { Streamdown } from "streamdown";
 
@@ -10,7 +11,7 @@ import {
   editorTheme,
   useEditorSyntaxTheme,
 } from "@/components/code-editor-theme";
-import { Button } from "@/components/ui/button";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { markdownPlugins } from "@/components/markdown-rendering-config";
 import { handleMarkdownKeydown } from "@/components/configuration/markdown-editor-shortcuts";
 
@@ -23,7 +24,11 @@ type MarkdownSourcePreviewEditorProps = {
   readOnly?: boolean;
   placeholder?: string;
   minHeight?: string;
+  /** 固定高度，源码与预览在框内各自滚动；不传则按 minHeight 随内容增长。 */
+  height?: string;
   ariaLabel?: string;
+  /** 工具栏左侧的补充信息（如生效说明）；右侧固定是视图切换。 */
+  toolbarStart?: ReactNode;
 };
 
 function CodeMirrorSourceEditor({
@@ -33,14 +38,13 @@ function CodeMirrorSourceEditor({
   placeholder,
   minHeight,
   ariaLabel = "Markdown 源码编辑器",
-}: Omit<MarkdownSourcePreviewEditorProps, "initialMode">) {
+}: Pick<MarkdownSourcePreviewEditorProps, "value" | "onChange" | "readOnly" | "placeholder" | "minHeight" | "ariaLabel">) {
   const syntaxTheme = useEditorSyntaxTheme();
   const themeCompartment = useRef(new Compartment());
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const suppressChangeRef = useRef(false);
   const onChangeRef = useRef(onChange);
-  const [isEmpty, setIsEmpty] = useState(value.length === 0);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -56,6 +60,8 @@ function CodeMirrorSourceEditor({
         editorTheme,
         themeCompartment.current.of(syntaxTheme),
         EditorView.lineWrapping,
+        // 占位由 CodeMirror 画在首行内容里，天然避开行号栏。
+        ...(placeholder ? [editorPlaceholder(placeholder)] : []),
         EditorState.readOnly.of(readOnly),
         EditorView.editable.of(!readOnly),
         EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
@@ -64,9 +70,7 @@ function CodeMirrorSourceEditor({
         }),
         EditorView.updateListener.of((update) => {
           if (!update.docChanged) return;
-          const nextValue = update.state.doc.toString();
-          setIsEmpty(nextValue.length === 0);
-          if (!suppressChangeRef.current) onChangeRef.current?.(nextValue);
+          if (!suppressChangeRef.current) onChangeRef.current?.(update.state.doc.toString());
         }),
       ],
     });
@@ -86,7 +90,6 @@ function CodeMirrorSourceEditor({
       changes: { from: 0, to: view.state.doc.length, insert: value },
     });
     suppressChangeRef.current = false;
-    setIsEmpty(value.length === 0);
   }, [value]);
 
   useEffect(() => {
@@ -96,22 +99,15 @@ function CodeMirrorSourceEditor({
   }, [syntaxTheme]);
 
   return (
-    <div className="relative h-full" style={{ minHeight }}>
-      <div ref={containerRef} className="h-full" aria-label={ariaLabel} />
-      {isEmpty && placeholder && (
-        <div className="text-muted-foreground pointer-events-none absolute left-4 top-4 text-sm">
-          {placeholder}
-        </div>
-      )}
-    </div>
+    <div ref={containerRef} className="h-full min-h-0" style={{ minHeight }} aria-label={ariaLabel} />
   );
 }
 
-const modeItems: Array<{ id: MarkdownEditorMode; label: string }> = [
-  { id: "source", label: "源码" },
-  { id: "split", label: "分栏" },
-  { id: "preview", label: "预览" },
-];
+const modeOptions = [
+  { value: "source", label: "源码" },
+  { value: "split", label: "分栏" },
+  { value: "preview", label: "预览" },
+] as const satisfies ReadonlyArray<{ value: MarkdownEditorMode; label: string }>;
 
 /**
  * 提供 Markdown 源码、分栏和预览三种视图的受控编辑器。
@@ -126,7 +122,9 @@ export function MarkdownSourcePreviewEditor({
   readOnly = false,
   placeholder,
   minHeight = "28rem",
+  height,
   ariaLabel = "Markdown 源码编辑器",
+  toolbarStart,
 }: MarkdownSourcePreviewEditorProps) {
   const [mode, setMode] = useState<MarkdownEditorMode>(initialMode);
   const source = (
@@ -141,7 +139,7 @@ export function MarkdownSourcePreviewEditor({
   );
   const preview = (
     <div
-      className="aui-md h-full overflow-auto p-4 leading-6"
+      className="aui-md h-full min-h-0 overflow-auto p-4 leading-6"
       style={{ minHeight }}
     >
       {value ? (
@@ -162,36 +160,28 @@ export function MarkdownSourcePreviewEditor({
   );
 
   return (
-    <div className="border-border/70 bg-card/70 overflow-hidden rounded-2xl border shadow-sm">
-      <div className="bg-muted/30 flex items-center justify-end gap-1 border-b px-3 py-2">
-        <div
-          className="bg-background flex rounded-lg border p-0.5"
-          role="tablist"
+    <div className="bg-background flex flex-col overflow-hidden rounded-xl border">
+      <div className="bg-muted/30 flex min-h-11 items-center justify-between gap-3 border-b px-3 py-1.5">
+        <div className="text-muted-foreground min-w-0 text-xs">{toolbarStart}</div>
+        <SegmentedControl
+          size="sm"
+          value={mode}
+          options={modeOptions}
+          onValueChange={setMode}
           aria-label="Markdown 编辑视图"
-        >
-          {modeItems.map((item) => (
-            <Button
-              key={item.id}
-              type="button"
-              variant={mode === item.id ? "secondary" : "ghost"}
-              size="sm"
-              role="tab"
-              aria-selected={mode === item.id}
-              onClick={() => setMode(item.id)}
-            >
-              {item.label}
-            </Button>
-          ))}
-        </div>
+          className="shrink-0"
+        />
       </div>
-      {mode === "source" && <div>{source}</div>}
-      {mode === "preview" && <div>{preview}</div>}
-      {mode === "split" && (
-        <div className="grid divide-y lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-          {source}
-          {preview}
-        </div>
-      )}
+      <div className="min-h-0" style={{ height }}>
+        {mode === "source" && source}
+        {mode === "preview" && preview}
+        {mode === "split" && (
+          <div className="grid h-full grid-rows-2 divide-y lg:grid-cols-2 lg:grid-rows-1 lg:divide-x lg:divide-y-0">
+            {source}
+            {preview}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

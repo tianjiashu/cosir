@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState, type PointerEvent } from "react";
-import { BotIcon, CheckCircle2Icon, GripVerticalIcon, PlusIcon, SearchIcon } from "lucide-react";
+import { CheckCircle2Icon, PlusIcon, SearchIcon } from "lucide-react";
 
+import { AgentAvatar } from "@/components/agent-team-graph-nodes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/state-panel";
@@ -27,35 +28,39 @@ export function AgentTeamGraphPalette({
   }, [profiles, query]);
 
   return (
-    <aside className="bg-card flex w-64 shrink-0 flex-col border-r" aria-label="子 Agent 工具栏">
-      <header className="border-b px-4 py-4">
-        <div className="flex items-center gap-2"><BotIcon className="size-4 text-primary" /><h2 className="text-sm font-semibold">子 Agent</h2></div>
-        <p className="text-muted-foreground mt-1 text-2xs">拖到画布创建节点，也可以点 + 添加</p>
-        <label className="relative mt-3 block"><SearchIcon className="text-muted-foreground absolute left-2.5 top-2.5 size-3.5" /><Input aria-label="搜索子 Agent" className="h-9 pl-8 text-xs" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或用途" /></label>
+    <aside className="bg-card flex w-60 shrink-0 flex-col border-r" aria-label="子 Agent 工具栏">
+      <header className="space-y-3 px-3 pt-4 pb-3">
+        <div className="px-1">
+          <h2 className="text-sm font-semibold">子 Agent</h2>
+          <p className="text-muted-foreground mt-0.5 text-2xs">拖到画布创建节点，或点 + 添加</p>
+        </div>
+        <label className="relative block"><SearchIcon className="text-muted-foreground absolute left-2.5 top-2.5 size-3.5" /><Input aria-label="搜索子 Agent" className="h-9 pl-8 text-xs" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或用途" /></label>
       </header>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-3">
         {filteredProfiles.map((profile) => <article
           key={profile.agent_id}
           onPointerDown={(event) => onBeginDrag(profile, event)}
-          className="border-border/70 bg-background group cursor-grab touch-none rounded-xl border p-3 shadow-sm transition hover:border-primary/40 hover:shadow-md active:cursor-grabbing"
+          className="hover:bg-muted/60 group cursor-grab touch-none rounded-xl p-2 transition-colors active:cursor-grabbing"
           aria-label={`可拖拽子 Agent ${profile.agent_id}`}
         >
-          <div className="flex items-start gap-2">
-            <GripVerticalIcon className="text-muted-foreground mt-0.5 size-4 shrink-0 opacity-50 group-hover:opacity-100" />
-            <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{profile.agent_id}</p><p className="text-muted-foreground mt-0.5 truncate text-2xs">{profile.role}</p></div>
-            <Button type="button" variant="ghost" size="icon-xs" aria-label={`添加 ${profile.agent_id}`} onClick={() => onAdd(profile)}><PlusIcon /></Button>
+          <div className="flex items-center gap-2.5">
+            <AgentAvatar agentId={profile.agent_id} className="size-8" />
+            <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold">{profile.agent_id}</p><p className="text-muted-foreground truncate text-2xs">{profile.role}</p></div>
+            <Button type="button" variant="ghost" size="icon-xs" className="opacity-60 group-hover:opacity-100" aria-label={`添加 ${profile.agent_id}`} onClick={() => onAdd(profile)}><PlusIcon /></Button>
           </div>
-          {profile.description && <p className="text-muted-foreground mt-2 line-clamp-2 text-2xs">{profile.description}</p>}
+          {/* 描述默认一行，悬停时完整展开，列表保持紧凑又不丢信息。 */}
+          {profile.description && <p className="text-muted-foreground mt-1.5 line-clamp-1 pl-10.5 text-2xs leading-4 group-hover:line-clamp-none">{profile.description}</p>}
         </article>)}
         {filteredProfiles.length === 0 && <EmptyState size="compact" className="text-center" title={profiles.length ? "没有匹配的子 Agent" : "当前作用域没有可用的子 Agent"} />}
+      </div>
+      <div className="border-t p-2">
         <article
           onPointerDown={onBeginEndDrag}
-          className="group flex cursor-grab touch-none items-center gap-2 rounded-xl border border-success/30 bg-success/10 p-3 text-success shadow-sm transition hover:border-success/50 hover:shadow-md active:cursor-grabbing"
+          className="border-success/30 text-success hover:bg-success/10 flex cursor-grab touch-none items-center gap-2.5 rounded-xl border border-dashed p-2 transition-colors active:cursor-grabbing"
           aria-label="可拖拽结束出口 END"
         >
-          <GripVerticalIcon className="size-4 shrink-0 opacity-50 group-hover:opacity-100" />
-          <CheckCircle2Icon className="size-4 shrink-0" />
-          <div className="min-w-0"><p className="text-xs font-semibold">END</p><p className="mt-0.5 text-2xs opacity-80">拖入画布添加结束出口</p></div>
+          <span className="bg-success/10 flex size-8 shrink-0 items-center justify-center rounded-xl"><CheckCircle2Icon className="size-4" /></span>
+          <div className="min-w-0"><p className="text-xs font-semibold">END</p><p className="text-2xs opacity-80">拖入画布添加结束出口</p></div>
         </article>
       </div>
     </aside>

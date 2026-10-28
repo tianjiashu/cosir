@@ -12,6 +12,7 @@ import {
   BotIcon,
   UserCogIcon,
   NetworkIcon,
+  LayoutDashboardIcon,
   type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect } from "react";
@@ -34,6 +35,7 @@ const TAB_KIND_ICONS: Record<WorkbenchTab["kind"], LucideIcon> = {
   agent: BotIcon,
   "agent-configuration-draft": UserCogIcon,
   "agent-team-configuration-draft": NetworkIcon,
+  "task-overview": LayoutDashboardIcon,
 };
 
 /** 工具卡片的已保存标记是会话基线的投影，不再参与草稿状态判定。 */

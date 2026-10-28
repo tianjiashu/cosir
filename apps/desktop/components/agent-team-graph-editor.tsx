@@ -23,10 +23,12 @@ import {
   type OnReconnect,
   type XYPosition,
 } from "@xyflow/react";
-import { BotIcon, CheckCircle2Icon, Maximize2Icon, Redo2Icon, SaveIcon, Settings2Icon, ShrinkIcon, Undo2Icon, XIcon } from "lucide-react";
+import { BotIcon, CheckCircle2Icon, CircleHelpIcon, Loader2Icon, Maximize2Icon, NetworkIcon, PlayIcon, Redo2Icon, SaveIcon, ShrinkIcon, Undo2Icon, XIcon } from "lucide-react";
 
-import { AgentTeamConfigurationFields } from "@/components/agent-team-configuration-fields";
-import { AgentTeamGraphNode, AgentTeamGraphTerminalNode, AgentTeamGraphUnresolvedEndpoint, GraphNodeEditorContext } from "@/components/agent-team-graph-nodes";
+import { AgentTeamGraphInspector, type GraphInspectorSelection } from "@/components/agent-team-graph-inspector";
+import { TeamGraphIssuesIndicator } from "@/components/agent-team-graph-issues";
+import { AgentTeamGraphNode, AgentTeamGraphTerminalNode, AgentTeamGraphUnresolvedEndpoint, GraphNodeViewContext } from "@/components/agent-team-graph-nodes";
+import { computeTeamAutoLayout } from "@/components/agent-team-graph-layout";
 import { AgentTeamGraphPalette } from "@/components/agent-team-graph-palette";
 import { AgentTeamEdgeRouteContext, AgentTeamRoutedEdge } from "@/components/agent-team-routed-edge";
 import {
@@ -42,13 +44,16 @@ import {
   type AgentTeamEdgeRoute,
 } from "@/components/agent-team-graph-model";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { EmptyState } from "@/components/ui/state-panel";
 import { FullscreenPortal } from "@/components/ui/fullscreen-portal";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { AgentConfiguration } from "@/lib/api/configuration";
+import type { AgentTeamGraphIssue } from "@/lib/api/agent-teams";
+import type { TeamGraphIssues } from "@/lib/agent-team-editor/use-graph-issues";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { notify } from "@/lib/notify";
 import { useThemeState } from "@/lib/theme/theme-preference";
 import { newTraceId } from "@/lib/trace";
+import { cn } from "@/lib/utils";
 
 const nodeTypes = { team: AgentTeamGraphNode, terminal: AgentTeamGraphTerminalNode, unresolved: AgentTeamGraphUnresolvedEndpoint };
 const edgeTypes = { teamRouted: AgentTeamRoutedEdge };
@@ -78,9 +83,50 @@ function renderedNodeSnapshot(container: HTMLDivElement | null) {
   });
 }
 
+/** 属性面板（w-72 + 右侧间距）在画布上占用的宽度。 */
+const INSPECTOR_RESERVED_WIDTH = 300;
+
+/** Agent 节点的估计尺寸（w-64，高度按两个状态出口估算），用于落点夹取与可见性判断。 */
+const AGENT_NODE_SIZE = { width: 256, height: 160 } as const;
+
+const CANVAS_SHORTCUTS = [
+  ["拖入 Agent / END", "从左侧工具栏"],
+  ["连线", "从状态出口拖到目标"],
+  ["改路径", "选中连线后拖控制点"],
+  ["适配画布", "F"],
+  ["缩放", "+ / -"],
+  ["平移", "按住 Space 拖动"],
+  ["删除", "Delete"],
+  ["撤销 / 重做", "⌘Z / ⇧⌘Z"],
+] as const;
+
 function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement
     && (target.isContentEditable || target.matches("input, textarea, select, button, [role=\"textbox\"]"));
+}
+
+/**
+ * 空画布的起步示意：用一条虚线路径说明 START → Agent → END 的编排方式，不拦截画布操作。
+ * 放在画布下部：默认 END 节点经 fitView 居中，示意不与它重叠。
+ */
+function EmptyCanvasGuide() {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-[12%] flex justify-center p-6">
+      <div className="bg-background/85 flex flex-col items-center gap-5 rounded-2xl px-8 py-7 backdrop-blur">
+        <div className="flex items-center gap-2" aria-hidden="true">
+          <span className="bg-primary text-primary-foreground inline-flex h-7 items-center gap-1 rounded-full px-3 text-2xs font-semibold"><PlayIcon className="size-2.5 fill-current" />START</span>
+          <span className="border-muted-foreground/40 w-8 border-t-2 border-dashed" />
+          <span className="border-primary/40 bg-primary/5 text-primary flex h-14 w-40 items-center justify-center gap-2 rounded-2xl border-2 border-dashed text-xs font-medium"><BotIcon className="size-4" />第一个 Agent</span>
+          <span className="border-muted-foreground/40 w-8 border-t-2 border-dashed" />
+          <span className="border-success/40 text-success inline-flex h-7 items-center gap-1 rounded-full border px-3 text-2xs font-semibold"><CheckCircle2Icon className="size-3" />END</span>
+        </div>
+        <div className="text-center">
+          <p className="text-sm font-semibold">从左侧拖入第一个 Agent</p>
+          <p className="text-muted-foreground mt-1 text-xs">第一个节点自动成为入口；再从它的状态出口拖线到 END 或下一个 Agent</p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function GraphCanvas({
@@ -92,6 +138,7 @@ function GraphCanvas({
   saving,
   scopeEditable,
   teamIdEditable,
+  graphIssues,
 }: {
   session: TeamEditorSession;
   profiles: AgentConfiguration[];
@@ -101,17 +148,20 @@ function GraphCanvas({
   saving?: boolean;
   scopeEditable?: boolean;
   teamIdEditable: boolean;
+  graphIssues: TeamGraphIssues;
 }) {
   const { resolvedTheme } = useThemeState();
   const flow = useReactFlow<TeamGraphNode>();
   const canvasRef = useRef<HTMLDivElement>(null);
-  const { snapshot: { configuration, layout }, history, viewport } = useStore(session.store);
+  const { snapshot: { configuration, layout }, history, viewport, mode, baseline } = useStore(session.store);
   const commitEdit = session.commit;
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedTransition, setSelectedTransition] = useState<string | null>(null);
   const [edgeRoutePreview, setEdgeRoutePreview] = useState<{ routeKey: string; route: AgentTeamEdgeRoute } | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // 新建 Team 先填 ID 与名称，故默认打开 Team 属性；已有 Team 进入画布时保持画布不被遮挡。
+  const [teamPanelOpen, setTeamPanelOpen] = useState(() => baseline === null);
+  const [arranging, setArranging] = useState(false);
   const [dragGhost, setDragGhost] = useState<({ kind: "agent"; agentId: string } | { kind: "end" }) & { x: number; y: number } | null>(null);
   const pointerDragRef = useRef<PaletteDrag | null>(null);
   const connectionTraceRef = useRef<{ traceId: string; kind: "connect" | "reconnect" } | null>(null);
@@ -128,8 +178,13 @@ function GraphCanvas({
     : layout.edgeRoutes, [edgeRoutePreview, layout.edgeRoutes]);
   const edges = useMemo(
     () => createGraphEdges(configuration, layout.endTargets, layout.endNodeIds, visibleEdgeRoutes)
-      .map((edge) => edge.id === selectedTransition ? { ...edge, selected: true } : edge),
-    [configuration, layout.endTargets, layout.endNodeIds, selectedTransition, visibleEdgeRoutes],
+      .map((edge) => {
+        // 有结构问题的转移改用警告色虚线，与状态色区分开。
+        const problem = graphIssues.byTransitionIndex.has(edge.data!.transitionIndex);
+        const style = problem ? { ...edge.style, stroke: "var(--warning)", strokeDasharray: "5 4" } : edge.style;
+        return edge.id === selectedTransition ? { ...edge, selected: true, style: { ...style, strokeWidth: 2.5 } } : { ...edge, style };
+      }),
+    [configuration, graphIssues.byTransitionIndex, layout.endTargets, layout.endNodeIds, selectedTransition, visibleEdgeRoutes],
   );
 
   useEffect(() => {
@@ -138,19 +193,28 @@ function GraphCanvas({
     setNodes((current) => reconcileGraphNodes(current, graphNodes));
   }, [graphNodes]);
 
+  // 每次切到画布都先全屏：嵌入在设置页或工作台时画布扣除左栏与属性面板后放不下节点。
+  // 画布切走后仍保持挂载（见 AgentTeamConfigurationEditor），故按 mode 变化而非挂载触发；
+  // 用户退出全屏后留在嵌入画布，直到下次切回画布。
+  useEffect(() => {
+    if (mode === "canvas") setFullscreen(true);
+  }, [mode]);
+
   useEffect(() => {
     if (!fullscreen) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const exitOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented && !settingsOpen) setFullscreen(false);
+      // 属性面板文本框里的 Escape 属于输入本身，不退出全屏；按钮上的 Escape 照常退出。
+      const typing = event.target instanceof HTMLElement && (event.target.isContentEditable || event.target.matches("input, textarea, select"));
+      if (event.key === "Escape" && !event.defaultPrevented && !typing) setFullscreen(false);
     };
     window.addEventListener("keydown", exitOnEscape);
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", exitOnEscape);
     };
-  }, [fullscreen, settingsOpen]);
+  }, [fullscreen]);
 
   useEffect(() => {
     if (!selectedNodeId && !selectedTransition) return;
@@ -162,6 +226,11 @@ function GraphCanvas({
     setSelectedNodeId(null);
     setSelectedTransition(null);
     setNodes((current) => current.map((node) => node.selected ? { ...node, selected: false } : node));
+  };
+
+  const closePanels = () => {
+    clearSelection();
+    setTeamPanelOpen(false);
   };
 
   const previewEdgeRoute = useCallback((routeKey: string, route: AgentTeamEdgeRoute) => {
@@ -185,6 +254,40 @@ function GraphCanvas({
   const cancelEdgeRoutePreview = useCallback(() => {
     setEdgeRoutePreview(null);
   }, []);
+
+  /**
+   * 一键整理：按当前节点（含实际尺寸）与连线计算分层布局，位置与清空的手动连线路径
+   * 作为一次编辑提交（一步撤销）。节点位置变了，旧的手动路径已不再合适，故一并清除。
+   * 计算期间用户若又改了图，提交时以最新快照为底，只覆盖参与计算的节点位置。
+   */
+  const arrangeLayout = async () => {
+    const traceId = newTraceId();
+    const startedAt = Date.now();
+    setArranging(true);
+    try {
+      const positions = await computeTeamAutoLayout(nodes, edges);
+      const current = session.store.getState().snapshot;
+      commitEdit({
+        configuration: current.configuration,
+        layout: { ...current.layout, positions: { ...current.layout.positions, ...positions }, edgeRoutes: {} },
+      });
+      void frontendLog("INFO", "agent_team_graph_auto_layout_applied", "已整理 Agent Team 画布布局", {
+        traceId,
+        data: { teamId: current.configuration.team_id, nodeCount: Object.keys(positions).length, durationMs: Date.now() - startedAt },
+      });
+      // 等新位置渲染后再适配视口。
+      window.requestAnimationFrame(() => { void flow.fitView({ padding: 0.22, maxZoom: 1, duration: 240 }); });
+    } catch (error) {
+      void frontendLog("ERROR", "agent_team_graph_auto_layout_failed", "整理 Agent Team 画布布局失败", {
+        traceId,
+        data: { teamId: configuration.team_id, nodeCount: nodes.length },
+        error,
+      });
+      notify.error("整理布局失败，画布保持原样", { error, fallback: "排版引擎未能完成计算" });
+    } finally {
+      setArranging(false);
+    }
+  };
 
   const resetEdgeRoute = useCallback((routeKey: string) => {
     const current = session.store.getState().snapshot;
@@ -216,6 +319,10 @@ function GraphCanvas({
     clearSelection();
   };
   const setStartNode = (nodeId: string) => session.updateConfiguration({ start_node_id: nodeId });
+  const deleteTransition = (transitionId: string) => {
+    session.remove({ nodeIds: new Set(), endNodeIds: new Set(), transitionIds: new Set([transitionId]) });
+    clearSelection();
+  };
 
   const addEndNode = (dropPosition?: XYPosition) => {
     const current = session.store.getState().snapshot;
@@ -229,8 +336,6 @@ function GraphCanvas({
       configuration: current.configuration,
       layout: { ...current.layout, endNodeIds: [...current.layout.endNodeIds, endNodeId], positions: { ...current.layout.positions, [endNodeId]: position } },
     });
-    setSelectedNodeId(endNodeId);
-    setSelectedTransition(null);
   };
 
   const deleteEndNode = (endNodeId: string) => {
@@ -243,6 +348,37 @@ function GraphCanvas({
     const nodePosition = findAvailableNodePosition(preferredPosition, nodes.map(item => item.position));
     setSelectedNodeId(session.addNode(profile.agent_id, profile.agent_id, nodePosition));
     setSelectedTransition(null);
+    revealNode(nodePosition);
+  };
+
+  /**
+   * 保证刚放下的 Agent 节点落在面板左侧的可见区域内，否则保持缩放平移画布把它移进来。
+   *
+   * 落点经避让搜索可能被推到画布外或属性面板下（新节点随即被选中，面板必然打开）；
+   * 在放下之后统一处理，覆盖 + 添加、拖入与避让推开等所有来源，避让算法保持纯坐标计算。
+   */
+  const revealNode = (position: XYPosition) => {
+    const bounds = canvasRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const { x, y, zoom } = flow.getViewport();
+    const margin = 16;
+    const nodeWidth = AGENT_NODE_SIZE.width * zoom;
+    const nodeHeight = AGENT_NODE_SIZE.height * zoom;
+    const visibleRight = bounds.width - INSPECTOR_RESERVED_WIDTH;
+    const left = x + position.x * zoom;
+    const top = y + position.y * zoom;
+    const fullyVisible = left >= margin && top >= margin
+      && left + nodeWidth <= visibleRight - margin
+      && top + nodeHeight <= bounds.height - margin;
+    if (fullyVisible) return;
+    // 可见区放得下就居中；嵌入式窄画布放不下时贴左，尽量少被面板遮住。
+    const targetLeft = visibleRight - 2 * margin >= nodeWidth ? (visibleRight - nodeWidth) / 2 : margin;
+    const targetTop = Math.max(margin, (bounds.height - nodeHeight) / 2);
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    void flow.setViewport(
+      { x: targetLeft - position.x * zoom, y: targetTop - position.y * zoom, zoom },
+      { duration: reduceMotion ? 0 : 200 },
+    );
   };
 
   const getNodePositionAt = (clientX: number, clientY: number, width: number, height: number): XYPosition | undefined => {
@@ -259,7 +395,7 @@ function GraphCanvas({
     return flow.screenToFlowPosition({ x: left, y: top });
   };
 
-  const getAgentNodePositionAt = (clientX: number, clientY: number) => getNodePositionAt(clientX, clientY, 256, 160);
+  const getAgentNodePositionAt = (clientX: number, clientY: number) => getNodePositionAt(clientX, clientY, AGENT_NODE_SIZE.width, AGENT_NODE_SIZE.height);
   const getEndNodePositionAt = (clientX: number, clientY: number) => getNodePositionAt(clientX, clientY, 144, 56);
 
   const commitConnection = (connection: Connection, oldEdge?: Edge): void => {
@@ -279,9 +415,10 @@ function GraphCanvas({
     const targetNodeId = targetIsEnd ? END_NODE_ID : targetIndex >= 0 ? current.configuration.nodes[targetIndex].node_id : oldTransition!.target_node_id;
     // 多个视觉 END 都序列化为同一业务目标；具体落点只保存在本地画布布局中。
     const nextTransition = { from_node_id: source, status, target_node_id: targetNodeId };
-    const id = session.editTransition(oldTransition ? oldIndex : null, nextTransition, targetIsEnd ? connection.target : undefined);
+    session.editTransition(oldTransition ? oldIndex : null, nextTransition, targetIsEnd ? connection.target : undefined);
+    // 连线后不自动选中：属性面板浮在画布右侧，连续连线时会挡住下一个目标；需要时点击连线再编辑。
     setSelectedNodeId(null);
-    setSelectedTransition(id);
+    setSelectedTransition(null);
   };
 
   const logConnectionOutcome = (kind: "connect" | "reconnect", connection: Connection, oldEdge?: Edge) => {
@@ -560,6 +697,35 @@ function GraphCanvas({
     setDragGhost(null);
   };
 
+  const agentRoles = useMemo(() => new Map(profiles.map((profile) => [profile.agent_id, profile.role])), [profiles]);
+  const nodeView = useMemo(() => ({
+    selectedNodeId,
+    agentRole: (agentId: string) => agentRoles.get(agentId),
+    nodeIssues: (nodeId: string) => graphIssues.byNodeId.get(nodeId) ?? [],
+  }), [agentRoles, graphIssues.byNodeId, selectedNodeId]);
+
+  // 从问题列表跳到对应位置：转移优先选中连线，否则选中所在节点。
+  const selectIssue = (issue: AgentTeamGraphIssue) => {
+    const transition = issue.transition_index === null ? undefined : configuration.transitions[issue.transition_index];
+    const node = configuration.nodes.find((item) => item.node_id === issue.node_id);
+    setTeamPanelOpen(false);
+    if (transition) {
+      setSelectedNodeId(null);
+      setSelectedTransition(transition.editorId);
+    } else if (node) {
+      setSelectedTransition(null);
+      setSelectedNodeId(node.editorId);
+      revealNode(nodes.find((item) => item.id === node.editorId)?.position ?? { x: 0, y: 0 });
+    }
+  };
+
+  let selection: GraphInspectorSelection = null;
+  const selectedTransitionIndex = selectedTransition ? configuration.transitions.findIndex((edge) => edge.editorId === selectedTransition) : -1;
+  const selectedNodeIndex = selectedNodeId ? configuration.nodes.findIndex((node) => node.editorId === selectedNodeId) : -1;
+  if (selectedTransitionIndex >= 0) selection = { kind: "transition", transitionIndex: selectedTransitionIndex, hasCustomRoute: Boolean(layout.edgeRoutes[selectedTransition!]) };
+  else if (selectedNodeIndex >= 0) selection = { kind: "agent", nodeIndex: selectedNodeIndex };
+  else if (selectedNodeId && layout.endNodeIds.includes(selectedNodeId)) selection = { kind: "terminal", endNodeId: selectedNodeId };
+
   const editor = (
     <section
       onPointerMove={moveAgentDrag}
@@ -570,30 +736,31 @@ function GraphCanvas({
         : "bg-background flex h-[min(76vh,820px)] min-h-[600px] w-full flex-col overflow-hidden"}
       aria-label="Agent Team 画布编辑器"
     >
-      <header className="bg-card flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-xl"><BotIcon className="size-4" /></div>
-          <div className="min-w-0"><h2 className="truncate text-sm font-semibold">{configuration.name || "新建 Agent Team"}</h2></div>
-          <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-            <Button type="button" variant="outline" size="sm" onClick={() => setSettingsOpen(true)}><Settings2Icon />Team 设置</Button>
-            <DialogContent>
-              <DialogHeader><DialogTitle>Team 设置</DialogTitle><DialogDescription>编辑 Team 信息和执行上限。</DialogDescription></DialogHeader>
-              <AgentTeamConfigurationFields
-                configuration={configuration}
-                teamIdEditable={teamIdEditable}
-                scopeEditable={scopeEditable ?? false}
-                layout="dialog"
-                onChange={session.updateConfiguration}
-              />
-            </DialogContent>
-          </Dialog>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button type="button" variant="outline" size="icon-sm" aria-label="撤销" title="撤销 (Ctrl+Z / ⌘Z)" onClick={undo} disabled={!history.past.length}><Undo2Icon /></Button>
-          <Button type="button" variant="outline" size="icon-sm" aria-label="重做" title="重做 (Ctrl+Y / Ctrl+Shift+Z / ⌘Shift+Z)" onClick={redo} disabled={!history.future.length}><Redo2Icon /></Button>
-          <Button type="button" variant="outline" size="icon-sm" aria-label={fullscreen ? "退出全屏画布" : "全屏画布"} title={fullscreen ? "退出全屏画布 (Esc)" : "全屏画布"} onClick={() => setFullscreen((value) => !value)}>{fullscreen ? <ShrinkIcon /> : <Maximize2Icon />}</Button>
+      {/* 全屏时顶栏占据窗口最上方一行：让出标题栏安全区，并作为窗口拖动区。 */}
+      <header
+        data-tauri-drag-region={fullscreen ? "deep" : undefined}
+        className={cn(
+          "bg-card flex h-14 shrink-0 items-center justify-between gap-3 border-b",
+          fullscreen ? "pr-[max(1rem,calc(var(--titlebar-inset-right)+0.5rem))] pl-[max(1rem,calc(var(--titlebar-inset-left)+0.5rem))]" : "px-4",
+        )}
+      >
+        <button type="button" className="hover:bg-muted/60 focus-ring flex min-w-0 items-center gap-3 rounded-lg px-1.5 py-1 text-left transition-colors" aria-label="Team 属性" onClick={() => { clearSelection(); setTeamPanelOpen(true); }}>
+          <span className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-lg"><BotIcon className="size-4" /></span>
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold">{configuration.name || "新建 Agent Team"}</span>
+            <span className="text-muted-foreground block truncate text-2xs">{configuration.nodes.length} 个节点 · {configuration.transitions.length} 条转移</span>
+          </span>
+        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="mr-1.5"><TeamGraphIssuesIndicator graphIssues={graphIssues} onSelect={selectIssue} /></span>
+          <Button type="button" variant="ghost" size="sm" onClick={() => void arrangeLayout()} disabled={arranging || !configuration.nodes.length} title="按执行顺序自动排列节点（可撤销）">
+            {arranging ? <Loader2Icon className="animate-spin" /> : <NetworkIcon className="-rotate-90" />}整理布局
+          </Button>
+          <Button type="button" variant="ghost" size="icon-sm" aria-label="撤销" title="撤销 (Ctrl+Z / ⌘Z)" onClick={undo} disabled={!history.past.length}><Undo2Icon /></Button>
+          <Button type="button" variant="ghost" size="icon-sm" aria-label="重做" title="重做 (Ctrl+Y / Ctrl+Shift+Z / ⌘Shift+Z)" onClick={redo} disabled={!history.future.length}><Redo2Icon /></Button>
+          <Button type="button" variant="ghost" size="icon-sm" aria-label={fullscreen ? "退出全屏画布" : "全屏画布"} title={fullscreen ? "退出全屏画布 (Esc)" : "全屏画布"} onClick={() => setFullscreen((value) => !value)}>{fullscreen ? <ShrinkIcon /> : <Maximize2Icon />}</Button>
           {onExit && <Button type="button" variant="ghost" size="icon-sm" aria-label="返回 Team 编辑" onClick={() => { setFullscreen(false); onExit(); }}><XIcon /></Button>}
-          {onSave && <Button type="button" size="sm" onClick={onSave} disabled={saving}><SaveIcon />{saving ? "保存中…" : "保存"}</Button>}
+          {onSave && <Button type="button" size="sm" className="ml-1.5" onClick={onSave} disabled={saving}><SaveIcon />{saving ? "保存中…" : "保存"}</Button>}
         </div>
       </header>
       {error && <div role="alert" className="shrink-0 border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-xs text-destructive">{error}</div>}
@@ -607,16 +774,7 @@ function GraphCanvas({
           aria-label="Agent Team 画布。使用 Tab 浏览节点和连线，方向键移动选中节点或微调选中连线。"
           onKeyDown={handleCanvasKeyDown}
         >
-          <GraphNodeEditorContext.Provider value={{
-            selectedNodeId,
-            endNodeCount: layout.endNodeIds.length,
-            getCanvasBounds: () => canvasRef.current?.getBoundingClientRect() ?? null,
-            onDismissNode: () => setSelectedNodeId(null),
-            onUpdateNode: updateNode,
-            onSetStartNode: setStartNode,
-            onDeleteNode: deleteNode,
-            onDeleteEndNode: deleteEndNode,
-          }}>
+          <GraphNodeViewContext.Provider value={nodeView}>
             <AgentTeamEdgeRouteContext.Provider value={edgeRouteActions}>
               <ReactFlow
               colorMode={resolvedTheme}
@@ -680,7 +838,7 @@ function GraphCanvas({
               }}
               onNodeClick={(_, node) => { setSelectedNodeId(node.id); setSelectedTransition(null); canvasRef.current?.focus({ preventScroll: true }); }}
               onEdgeClick={(_, edge) => { setSelectedNodeId(null); setSelectedTransition(edge.id); canvasRef.current?.focus({ preventScroll: true }); }}
-              onPaneClick={() => { setSelectedNodeId(null); setSelectedTransition(null); canvasRef.current?.focus({ preventScroll: true }); }}
+              onPaneClick={() => { closePanels(); canvasRef.current?.focus({ preventScroll: true }); }}
               edgesReconnectable
               reconnectRadius={24}
               deleteKeyCode={null}
@@ -701,20 +859,44 @@ function GraphCanvas({
             >
               <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--border)" />
               <Controls position="bottom-left" showInteractive={false} />
-              <Panel position="bottom-right" className="pointer-events-none !bottom-4 !right-4">
-                <div className="bg-card/90 text-muted-foreground flex items-center gap-3 rounded-xl border px-3 py-2 text-2xs shadow-sm backdrop-blur">
-                  <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-primary" />START</span>
-                  <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-muted-foreground" />STEP</span>
-                  <span className="flex items-center gap-1"><span className="size-2 rounded-full bg-success" />END</span>
-                </div>
-              </Panel>
-              <Panel position="top-right" className="pointer-events-none !right-4 !top-4">
-                <div className="bg-card/90 text-muted-foreground rounded-full border px-3 py-1.5 text-2xs shadow-sm backdrop-blur">拖 Agent · 选中连线后拖控制点改路径 · F 适配 · +/- 缩放 · Space 平移 · Delete 删除 · Ctrl/⌘Z 撤销</div>
+              <Panel position="bottom-right" className="!bottom-3 !right-3">
+                <Popover>
+                  <PopoverTrigger render={<Button type="button" variant="outline" size="icon-sm" className="bg-card/90 backdrop-blur" aria-label="画布操作说明" />}>
+                    <CircleHelpIcon />
+                  </PopoverTrigger>
+                  <PopoverContent side="top" align="end" className="w-64">
+                    <p className="text-xs font-semibold">画布操作</p>
+                    <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-xs">
+                      {CANVAS_SHORTCUTS.map(([action, how]) => <div key={action} className="contents"><dt className="text-muted-foreground">{action}</dt><dd className="text-right font-medium">{how}</dd></div>)}
+                    </dl>
+                  </PopoverContent>
+                </Popover>
               </Panel>
               </ReactFlow>
             </AgentTeamEdgeRouteContext.Provider>
-          </GraphNodeEditorContext.Provider>
-          {!configuration.nodes.length && <div className="pointer-events-none absolute inset-0 flex items-center justify-center"><EmptyState className="bg-background/90 py-6 shadow-sm backdrop-blur" icon={<BotIcon className="text-primary size-7" />} title="从左侧添加第一个 Agent" description="拖拽 Agent 或 END 到画布，或点击 Agent 卡片上的 +" /></div>}
+          </GraphNodeViewContext.Provider>
+          {!configuration.nodes.length && <EmptyCanvasGuide />}
+          {/* 表单视图下画布隐藏但保持挂载，面板随之不渲染，避免与表单的同名字段并存。 */}
+          {mode === "canvas" && (selection || teamPanelOpen) && <AgentTeamGraphInspector
+            selection={selection}
+            graphIssues={graphIssues}
+            configuration={configuration}
+            profiles={profiles}
+            endNodeCount={layout.endNodeIds.length}
+            teamIdEditable={teamIdEditable}
+            scopeEditable={scopeEditable ?? false}
+            actions={{
+              onDismiss: closePanels,
+              onUpdateNode: updateNode,
+              onSetStartNode: setStartNode,
+              onDeleteNode: deleteNode,
+              onDeleteEndNode: deleteEndNode,
+              onUpdateTransition: (index, changes) => session.editTransition(index, { ...configuration.transitions[index], ...changes }),
+              onDeleteTransition: deleteTransition,
+              onResetRoute: resetEdgeRoute,
+              onUpdateTeam: session.updateConfiguration,
+            }}
+          />}
         </div>
       </div>
       {dragGhost && <div aria-hidden="true" className={`${dragGhost.kind === "end" ? "bg-success text-success-foreground" : "bg-primary text-primary-foreground"} pointer-events-none fixed z-[200] rounded-lg px-3 py-2 text-xs font-medium shadow-xl`} style={{ left: dragGhost.x + 14, top: dragGhost.y + 14 }}>{dragGhost.kind === "end" ? <CheckCircle2Icon className="mr-2 inline size-3.5" /> : <BotIcon className="mr-2 inline size-3.5" />}{dragGhost.kind === "end" ? "END" : dragGhost.agentId}</div>}
@@ -732,6 +914,7 @@ export function AgentTeamGraphEditor(props: {
   saving?: boolean;
   scopeEditable?: boolean;
   teamIdEditable: boolean;
+  graphIssues: TeamGraphIssues;
 }) {
   return <ReactFlowProvider><GraphCanvas {...props} /></ReactFlowProvider>;
 }

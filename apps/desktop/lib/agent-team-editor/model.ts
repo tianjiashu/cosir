@@ -2,7 +2,7 @@ import type { AgentTeamConfigurationDraft, AgentTeamNodeConfiguration, AgentTeam
 
 export type EditorStatus = AgentTeamStatusConfiguration & { editorId: string };
 export type EditorNode = Omit<AgentTeamNodeConfiguration, "statuses"> & { editorId: string; statuses: EditorStatus[] };
-type EditorTransition = AgentTeamTransitionConfiguration & { editorId: string };
+export type EditorTransition = AgentTeamTransitionConfiguration & { editorId: string };
 export type EditorDraft = Omit<AgentTeamConfigurationDraft, "nodes" | "transitions"> & { nodes: EditorNode[]; transitions: EditorTransition[] };
 export type Position = { x: number; y: number };
 export type EdgeRoute = { axis: "x" | "y"; offset: number };

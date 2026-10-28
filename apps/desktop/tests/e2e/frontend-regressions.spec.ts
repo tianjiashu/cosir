@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
 
-const emptyState = (): TransportState => ({ title: "测试对话", messages: [], activity: null, terminal_sessions: [] });
+const emptyState = (): TransportState => ({ title: "测试对话", messages: [], activity: null, terminal_sessions: [], deferred_results: [] });
 
 test.beforeEach(async ({ request }) => {
   await request.post("http://127.0.0.1:8000/__test__/reset");

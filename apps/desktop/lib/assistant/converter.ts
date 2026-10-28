@@ -334,8 +334,10 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     presentation: part.presentation ?? {},
     display_data: displayData,
     team_run_id: part.team_run_id,
+    deferred: part.deferred,
+    // 取消的短提示由后端给出（如后台占位的「已中断」「未继承」），缺省为「已取消」。
     error: backendStatus === "cancelled"
-      ? "已取消"
+      ? part.error || "已取消"
       : backendStatus === "failed" ? statusHint : null,
     errorCode: part.errorCode ?? null,
     child_task_id: part.child_task_id,

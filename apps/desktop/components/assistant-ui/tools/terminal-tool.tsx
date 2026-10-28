@@ -8,7 +8,7 @@ import { DisclosureRow } from "../elements/disclosure-row.aui";
 import { asRecord, readToolArtifact } from "./types";
 import { ToolStatus } from "./tool-status";
 import { useToolDisclosure } from "./tool-disclosure";
-import { cancelToolCall } from "@/lib/assistant/cancel-tool-call";
+import { cancelToolCall } from "@/lib/assistant/tool-call-commands";
 import { TerminalViewport } from "./terminal-viewport";
 import { DARK_TOOL_CARD_CONTENT_CLASS, DARK_TOOL_CARD_HEADER_CLASS } from "../elements/tool-layout-tokens";
 

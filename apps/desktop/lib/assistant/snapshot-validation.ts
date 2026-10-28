@@ -187,7 +187,7 @@ function validatePart(value: unknown, path: string): void {
     return;
   }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
-  const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "presentation", "display_data", "team_run_id", "isError", "approvalRequestId", "child_task_id", "agent_role", "terminal_output_seq"];
+  const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "presentation", "display_data", "team_run_id", "deferred", "isError", "approvalRequestId", "child_task_id", "agent_role", "terminal_output_seq"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   requireString(part.toolCallId, `${path}.toolCallId`);
   requireString(part.toolName, `${path}.toolName`);
@@ -203,6 +203,7 @@ function validatePart(value: unknown, path: string): void {
   if (hasOwn(part, "isError") && part.isError !== null && typeof part.isError !== "boolean") throw new TransportSnapshotValidationError(`${path}.isError`, "布尔值或 null");
   if (hasOwn(part, "child_task_id") && (!Number.isInteger(part.child_task_id) || (part.child_task_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_task_id`, "正整数");
   if (hasOwn(part, "team_run_id") && (!Number.isInteger(part.team_run_id) || (part.team_run_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.team_run_id`, "正整数");
+  if (hasOwn(part, "deferred") && part.deferred !== true) throw new TransportSnapshotValidationError(`${path}.deferred`, "出现时为 true");
   if (hasOwn(part, "agent_role") && (typeof part.agent_role !== "string" || !part.agent_role.trim())) throw new TransportSnapshotValidationError(`${path}.agent_role`, "非空字符串");
   if (hasOwn(part, "terminal_output_seq") && (!Number.isInteger(part.terminal_output_seq) || (part.terminal_output_seq as number) < 0)) throw new TransportSnapshotValidationError(`${path}.terminal_output_seq`, "非负整数");
   if (part.approvalRequestId !== null && part.approvalRequestId !== undefined) throw new TransportSnapshotValidationError(`${path}.approvalRequestId`, "null 或 undefined");
@@ -272,9 +273,27 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   requireString(session.createdAt, `${path}.createdAt`);
 }
 
+const DEFERRED_KINDS = ["terminal_wait", "terminal_handoff", "child_agent"] as const;
+const DEFERRED_MODES = ["foreground", "background"] as const;
+const DEFERRED_STATUSES = ["running", "completed", "cancelled"] as const;
+
+function validateDeferredResult(value: unknown, path: string, seenIds: Set<string>): void {
+  const entry = requireRecord(value, path);
+  requireExactKeys(entry, ["toolCallId", "kind", "label", "mode", "status", "startedAt", "endedAt"], path);
+  const toolCallId = requireString(entry.toolCallId, `${path}.toolCallId`);
+  if (toolCallId === "" || seenIds.has(toolCallId)) throw new TransportSnapshotValidationError(`${path}.toolCallId`, "非空且在 Task 内唯一");
+  seenIds.add(toolCallId);
+  if (!(DEFERRED_KINDS as readonly unknown[]).includes(entry.kind)) throw new TransportSnapshotValidationError(`${path}.kind`, "受支持的后台工作种类");
+  if (!(DEFERRED_MODES as readonly unknown[]).includes(entry.mode)) throw new TransportSnapshotValidationError(`${path}.mode`, "foreground 或 background");
+  if (!(DEFERRED_STATUSES as readonly unknown[]).includes(entry.status)) throw new TransportSnapshotValidationError(`${path}.status`, "受支持的后台工作状态");
+  requireString(entry.label, `${path}.label`);
+  requireString(entry.startedAt, `${path}.startedAt`);
+  if (entry.endedAt !== null) requireString(entry.endedAt, `${path}.endedAt`);
+}
+
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["title", "messages", "activity", "terminal_sessions", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  requireExactKeys(state, ["title", "messages", "activity", "terminal_sessions", "deferred_results", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
   if (typeof state.title !== "string" || state.title.trim() === "") throw new TransportSnapshotValidationError("title", "非空字符串");
   const ids = new Set<string>();
   if (!Array.isArray(state.messages)) throw new TransportSnapshotValidationError("messages", "数组");
@@ -306,5 +325,8 @@ export function parseTransportState(value: unknown): TransportState {
   if (!Array.isArray(state.terminal_sessions)) throw new TransportSnapshotValidationError("terminal_sessions", "数组");
   const sessionIds = new Set<string>();
   state.terminal_sessions.forEach((session, index) => validateTerminalSession(session, `terminal_sessions[${index}]`, sessionIds));
+  if (!Array.isArray(state.deferred_results)) throw new TransportSnapshotValidationError("deferred_results", "数组");
+  const deferredIds = new Set<string>();
+  state.deferred_results.forEach((entry, index) => validateDeferredResult(entry, `deferred_results[${index}]`, deferredIds));
   return state as unknown as TransportState;
 }

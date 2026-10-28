@@ -6,6 +6,7 @@ import type { ComponentType } from "react";
 import { WorkbenchAgentRunSurface } from "@/components/workbench-agent-run-surface";
 import { AgentConfigurationDraftSurface } from "@/components/agent-configuration-draft-surface";
 import { AgentTeamConfigurationDraftSurface } from "@/components/agent-team-configuration-draft-surface";
+import { TaskOverviewSurface } from "@/components/task-overview/task-overview-surface";
 import type { WorkbenchTab } from "@/lib/workbench/types";
 
 const WorkspaceFilesSurface = lazy(() =>
@@ -14,7 +15,7 @@ const WorkspaceFilesSurface = lazy(() =>
   })),
 );
 
-type WorkbenchSurfaceKind = "files" | "agent" | "agent-configuration-draft" | "agent-team-configuration-draft" | "terminal" | "web" | "file-diff";
+type WorkbenchSurfaceKind = "files" | "agent" | "agent-configuration-draft" | "agent-team-configuration-draft" | "task-overview" | "terminal" | "web" | "file-diff";
 export type WorkbenchSurfaceProps = {
   tab: WorkbenchTab;
   onClose: () => void;
@@ -51,6 +52,7 @@ const workbenchSurfaceRegistry: Partial<Record<WorkbenchSurfaceKind, RegisteredS
   agent: { render: agentSurface },
   "agent-configuration-draft": { render: agentConfigurationDraftSurface },
   "agent-team-configuration-draft": { render: agentTeamConfigurationDraftSurface },
+  "task-overview": { render: () => <TaskOverviewSurface /> },
 };
 
 function UnknownWorkbenchSurface({ kind }: { kind: string }) {

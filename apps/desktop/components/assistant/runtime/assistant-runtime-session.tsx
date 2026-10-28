@@ -15,6 +15,7 @@ import type {
 } from "@/components/assistant/runtime/runtime-types";
 import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { useDeferredResultsStore } from "@/lib/task-overview/deferred-results-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { readStoredToolGroupSelection, writeStoredToolGroupSelection } from "@/lib/tool-group-selection-storage";
 import { newTraceId } from "@/lib/trace";
@@ -170,6 +171,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     cancellation.onStateCommitted(state);
     // 终端会话列表是 snapshot 投影；镜像给页头按钮与终端工作台（它们在 Assistant runtime 之外）。
     useTerminalWorkbenchStore.getState().syncSessions(taskId, state.terminal_sessions);
+    useDeferredResultsStore.getState().sync(taskId, state.deferred_results);
     // 标题事实在后端 tasks.title；snapshot 只负责通知打开中的页面，侧栏目录按既有刷新路径重读。
     if (state.title !== previousTitle) notifyTaskStateChanged();
   }, [cancellation.onStateCommitted, notifyTaskStateChanged, sessionInitialState, taskId]);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useHotkeys } from "react-hotkeys-hook";
 import { Loader2Icon, SaveIcon } from "lucide-react";
 
 import { MarkdownSourcePreviewEditor } from "@/components/configuration/markdown-source-preview-editor";
@@ -11,6 +11,7 @@ import { useMarkdownConfigurationDocument, type MarkdownConfigurationAdapter } f
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { estimateMarkdownTokens, type MarkdownDocumentContract } from "@/lib/markdown-document";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
+import { APP_SHORTCUTS, shortcutLabel } from "@/lib/shortcuts";
 
 type MarkdownConfigurationPanelProps<TDocument extends MarkdownDocumentContract> = {
   adapter: MarkdownConfigurationAdapter<TDocument>;
@@ -36,17 +37,12 @@ export function MarkdownConfigurationPanel<TDocument extends MarkdownDocumentCon
 }: MarkdownConfigurationPanelProps<TDocument>) {
   const state = useMarkdownConfigurationDocument(adapter);
   useUnsavedChanges("settings", adapter.label, state.dirty);
-  const { save } = state;
-  useEffect(() => {
-    const handleSaveShortcut = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        save();
-      }
-    };
-    window.addEventListener("keydown", handleSaveShortcut);
-    return () => window.removeEventListener("keydown", handleSaveShortcut);
-  }, [save]);
+  useHotkeys(
+    APP_SHORTCUTS.saveConfiguration.keys,
+    state.save,
+    { enableOnFormTags: true, enableOnContentEditable: true, preventDefault: true },
+    [state.save],
+  );
   if (!state.document) {
     return state.loadError
       ? <ErrorState className="my-10" message={userErrorMessage(state.loadError, "读取 Markdown 配置失败")} onRetry={state.reload} retryLabel="重新读取" />
@@ -61,18 +57,17 @@ export function MarkdownConfigurationPanel<TDocument extends MarkdownDocumentCon
   return (
     <div className="space-y-4">
       {state.saveError !== null && <Alert tone="destructive">{userErrorMessage(state.saveError, "保存 Markdown 配置失败")}</Alert>}
-      {description && (
-        <p className="text-destructive text-xs font-semibold">
-          {description}
-        </p>
-      )}
+      {/* 固定为视口剩余高度，长文时工具栏与保存栏始终可见；扣除量对应配置页页头、内边距与底栏。 */}
       <MarkdownSourcePreviewEditor
         value={state.content}
         onChange={state.setContent}
         initialMode={initialMode}
         placeholder={placeholder}
+        minHeight="0"
+        height="max(24rem, calc(100dvh - 15rem))"
+        toolbarStart={description}
       />
-      <div className="flex flex-wrap items-end justify-between gap-3 border-t pt-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="text-muted-foreground text-xs">估算 Token</p>
           <p className={`mt-1 font-mono text-sm ${overBudget ? "text-destructive" : ""}`}>
@@ -81,9 +76,10 @@ export function MarkdownConfigurationPanel<TDocument extends MarkdownDocumentCon
           {state.dirty && <p className="text-muted-foreground mt-1 text-xs">有未保存更改</p>}
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={save} disabled={state.saving || overBudget || emptyForbidden}>
+          <Button onClick={state.save} disabled={state.saving || overBudget || emptyForbidden}>
             {state.saving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}
             {saveLabel}
+            <kbd aria-hidden="true" className="text-primary-foreground/70 font-sans text-xs">{shortcutLabel("saveConfiguration")}</kbd>
           </Button>
         </div>
       </div>

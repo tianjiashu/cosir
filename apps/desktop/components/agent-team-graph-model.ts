@@ -90,6 +90,12 @@ export function createGraphEdges(
       target: targetViewId,
       targetHandle: "input",
       label: transition.status,
+      // 状态名做成状态色描边的标签，连线多时也能一眼对上节点出口。
+      labelShowBg: true,
+      labelStyle: { fill: statusColor, fontSize: 11, fontWeight: 600, fontFamily: "var(--app-font-mono)" },
+      labelBgStyle: { fill: "var(--card)", stroke: statusColor, strokeWidth: 1 },
+      labelBgPadding: [6, 3] as [number, number],
+      labelBgBorderRadius: 6,
       data: {
         status: transition.status,
         transitionIndex,
