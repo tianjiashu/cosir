@@ -56,7 +56,8 @@ class WindowsExecuteTerminalArgs(BaseModel):
     command: str = Field(
         min_length=1,
         description=(
-            "Single command line interpreted by the selected shell with Windows syntax: quoting, "
+            "Command or multi-line script (newlines allowed, e.g. several commands or a "
+            "here-string) interpreted as a whole by the selected shell with Windows syntax: quoting, "
             "variable expansion, pipes, and redirection follow that shell, not this tool. It runs "
             "non-interactively with no stdin, so anything that waits for input or opens a pager "
             "hangs until the timeout expires."
@@ -103,7 +104,8 @@ class MacExecuteTerminalArgs(BaseModel):
     command: str = Field(
         min_length=1,
         description=(
-            "Single command line interpreted by the selected shell with POSIX syntax: quoting, "
+            "Command or multi-line script (newlines allowed, e.g. several commands or a heredoc) "
+            "interpreted as a whole by the selected shell with POSIX syntax: quoting, "
             "$VAR expansion, pipes, and redirection follow that shell, not this tool. It runs "
             "non-interactively with no stdin, so anything that waits for input or opens a pager "
             "hangs until the timeout expires."

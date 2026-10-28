@@ -1,7 +1,13 @@
-"""终端工具的 UI 展示数据构造。"""
+"""终端工具的 UI 展示数据构造（纯函数，不执行 IO）。"""
 
+from __future__ import annotations
+
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.tools.terminal_runtime.observation_render import TerminalObservationResult
 
 
 def build_terminal_display_data(
@@ -28,67 +34,41 @@ def build_terminal_display_data(
     }
 
 
-def build_session_display_payload(
-    payload: dict[str, object],
-    *,
-    include_terminal_info: bool = False,
-    extra: dict[str, object] | None = None,
+def build_terminal_session_display_data(
+    payload: Mapping[str, Any], *, include_terminal_info: bool = False
 ) -> dict[str, object]:
-    """从 session 快照中保留允许进入工具展示的元数据。
+    """从 ``describe()`` 的完整输出投影工具卡片字段；动态会话状态以 snapshot 为准。"""
 
-    service 快照还含集成能力和 shell 阶段等 Agent 信息，不进入展示投影。
-    ``extra`` 仅接收调用方已校验的操作元数据，不承载终端输入或输出。
-    """
-
-    fields = (
-        "session_id",
-        "status",
-        "generation",
-        "first_available_seq",
-        "exit_code",
-        "end_reason",
-    )
+    fields: tuple[str, ...] = ("session_id", "status", "exit_code", "end_reason")
     if include_terminal_info:
         fields += ("initial_cwd", "shell_kind", "label")
-    result = {key: payload[key] for key in fields if key in payload}
-    if extra:
-        result.update(extra)
+    result: dict[str, object] = {"kind": "terminal-session"}
+    result.update({key: payload[key] for key in fields})
+    if include_terminal_info:
+        result["integration"] = payload["integration"]["status"]
     return result
 
 
-def build_terminal_session_display_data(
-    payload: dict[str, object],
-    *,
-    include_terminal_info: bool = False,
-    extra: dict[str, object] | None = None,
-) -> dict[str, object]:
-    """构造完整的交互式终端 session 展示 payload。"""
-
-    return {
-        "kind": "terminal-session",
-        **build_session_display_payload(
-            payload,
-            include_terminal_info=include_terminal_info,
-            extra=extra,
-        ),
-    }
-
-
 def build_terminal_session_list_display_data(session_count: int) -> dict[str, object]:
-    """只展示本次发现数量；会话实时状态从 service 获取，不复制到列表卡片。"""
+    """只展示本次发现数量；会话实时状态由 snapshot 的 terminal_sessions 提供。"""
 
     return {"kind": "terminal-session", "session_count": session_count}
 
 
-def build_terminal_observation_display_data(payload: dict[str, Any]) -> dict[str, object]:
-    """从本次观察投影 UI 元数据，不在输入接受后再次查询可能已退役的会话。"""
-    state = payload["state"]
-    return build_terminal_session_display_data(
-        {
-            "session_id": payload["session_id"],
-            "generation": payload["generation"],
-            "status": state["session_status"],
-            "exit_code": state["session_exit_code"],
-            "end_reason": state["session_end_reason"],
-        }
-    )
+def build_terminal_observation_display_data(
+    result: TerminalObservationResult,
+) -> dict[str, object]:
+    """write / read 动作行：会话、实际输入摘要、等待结果与返回行范围；不承载终端输出。"""
+
+    data: dict[str, object] = {
+        "kind": "terminal-session",
+        "session_id": result.session_id,
+        "status": result.status,
+        "lines": list(result.lines) if result.lines is not None else None,
+        "wait_result": dict(result.wait_result) if result.wait_result is not None else None,
+        "suspended": result.suspended,
+    }
+    if result.input_type is not None:
+        data["input_type"] = result.input_type
+        data["input_summary"] = result.input_summary
+    return data

@@ -19,6 +19,18 @@ class ShellSpec:
     integration: str = "auto"
 
 
+# 有集成脚本的 shell：命令边界、退出码与 cwd 可用；其余 shell 降级（只能 output_quiet / match）。
+_KNOWN_SHELLS = frozenset({"bash", "zsh", "fish", "pwsh", "powershell", "cmd"})
+INTEGRATED_SHELLS = frozenset({"zsh", "bash", "powershell", "pwsh"})
+_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "Windows": ("powershell", "pwsh", "cmd"),
+    "Darwin": ("zsh", "bash", "fish", "pwsh"),
+    "Linux": ("bash", "zsh", "fish", "pwsh"),
+}
+_EXECUTABLES = {"powershell": "powershell.exe", "cmd": "cmd.exe"}
+_LABELS = {"powershell": "Windows PowerShell", "pwsh": "PowerShell 7", "cmd": "Command Prompt"}
+
+
 class ShellResolutionError(TerminalSessionError):
     """shell 参数无法解析。"""
 
@@ -55,7 +67,10 @@ class ShellResolver:
             raise ShellResolutionError("custom shell requires an executable path")
         if value not in {"auto", "cmd", "powershell", "pwsh", "bash", "zsh", "fish"}:
             path = ShellResolver._resolve_executable(requested)
-            return ShellSpec(kind="custom", executable=path, argv=(path,), integration=integration)
+            # 指向已知 shell 的路径（如 /opt/homebrew/bin/bash）按该 shell 处理，集成随之可用。
+            name = Path(path).stem.lower()
+            kind = name if name in _KNOWN_SHELLS else "custom"
+            return ShellSpec(kind=kind, executable=path, argv=(path,), integration=integration)
 
         if current_system == "Windows":
             if value == "cmd":
@@ -78,6 +93,38 @@ class ShellResolver:
 
         executable = ShellResolver._resolve_executable(value)
         return ShellSpec(value, executable, (executable,), integration)
+
+    @staticmethod
+    def available(
+        *, system: str | None = None, environ: dict[str, str] | None = None
+    ) -> list[dict[str, object]]:
+        """按宿主平台探测已安装的 shell；人与 Agent 看到同一份清单。
+
+        返回 ``{kind, label, isDefault, integrationSupported}``（camelCase，直接进入
+        snapshot / HTTP / 工具结果）。默认项为 ``shell=auto`` 的解析结果；``$SHELL`` 指向清单外
+        的 shell 时也作为默认项列出。只做 PATH 探测，不启动进程。
+        """
+
+        current_system = system or platform.system()
+        candidates = _CANDIDATES.get(current_system, _CANDIDATES["Linux"])
+        try:
+            default_kind: str | None = ShellResolver.resolve(
+                "auto", system=current_system, environ=environ
+            ).kind
+        except ShellResolutionError:
+            default_kind = None
+        kinds = [kind for kind in candidates if shutil.which(_EXECUTABLES.get(kind, kind))]
+        if default_kind is not None and default_kind not in kinds:
+            kinds.insert(0, default_kind)
+        return [
+            {
+                "kind": kind,
+                "label": _LABELS.get(kind, kind),
+                "isDefault": kind == default_kind,
+                "integrationSupported": kind in INTEGRATED_SHELLS,
+            }
+            for kind in kinds
+        ]
 
     @staticmethod
     def _resolve_executable(value: str) -> str:

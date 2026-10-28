@@ -49,8 +49,11 @@ class _PendingSignal:
 class ProcessTerminalWorker:
     """基于长度前缀 JSON 控制帧的 Terminal Worker client。
 
-    Worker 进程必须先返回 ``handshake``，之后发送 ``output``、``screen``、``shell``、``exit``
-    事件。二进制 PTY 数据使用 base64 字段；shell/PTY 资源由 worker 管理。
+    Worker 进程必须先返回 ``handshake``，之后发送 ``output``、``screen``、``shell``、``error``、
+    ``exit`` 事件。二进制 PTY 数据使用 base64 字段；shell/PTY 资源由 worker 管理。
+
+    事件回调在本对象的读线程内同步执行：回调方不得在其中做阻塞 IO（会话收尾、外部通知由
+    service 移到其他线程）。
     """
 
     def __init__(self, instance_id: str) -> None:
@@ -88,8 +91,6 @@ class ProcessTerminalWorker:
         )
         self._input_queue_lock = threading.Lock()
         self._input_queue_bytes = 0
-        self._exit_lock = threading.Lock()
-        self._exit_emitted = False
         self._handshake_valid = False
         self._handshake_payload: dict[str, object] | None = None
         self._capabilities = frozenset[str]()
@@ -117,19 +118,15 @@ class ProcessTerminalWorker:
     ) -> None:
         """无可见控制台窗口地启动 worker，发送 shell spec 并等待 handshake。
 
-        参数:
-            spec: shell 启动规格（argv 与 shell 类型），PTY 由 worker 侧创建。
-            cwd: 初始工作目录；调用方保证已通过路径安全解析。
-            on_event: worker 事件回调（``output`` / ``status`` / ``exit`` 等）。
-
-        返回:
-            无；握手通过后 writer 与 heartbeat 线程均已启动。
+        本对象一次性使用：每个会话构造一个 worker、只启动一次，``close`` 后不再重启（停止信号、
+        握手状态都不复位）。``cwd`` 由调用方保证已通过路径安全解析；``on_event`` 接收
+        ``output`` / ``screen`` / ``shell`` / ``error`` / ``exit`` 事件。
 
         异常:
-            TerminalWorkerUnavailableError: worker 已启动过、可执行文件无法拉起，或握手超时
-                （可能是 worker 启动慢等瞬时条件，可重试）。
-            TerminalWorkerHandshakeError: 收到握手但实例 / PID / PTY
-                类型不符），属确定性失败，重试同一 worker 二进制不会有不同结果。
+            TerminalWorkerUnavailableError: worker 已启动过、可执行文件无法拉起、握手超时或握手前
+                断开（可能是 worker 启动慢、瞬时崩溃等条件，可重试）。
+            TerminalWorkerHandshakeError: 收到握手但实例 / PID / PTY 类型 / 尺寸不符，属确定性
+                失败，重试同一 worker 二进制不会有不同结果。
 
         副作用:
             启动 worker 子进程与 reader / stderr / writer / heartbeat 线程；失败路径写 WARNING
@@ -171,11 +168,6 @@ class ProcessTerminalWorker:
 
         self._process = process
         self._on_event = on_event
-        self._exit_emitted = False
-        self._handshake_valid = False
-        self._handshake_payload = None
-        self._capabilities = frozenset()
-        self._stop_event.clear()
         threading.Thread(
             target=self._read_events,
             name=f"terminal-worker-reader-{self.instance_id[:8]}",
@@ -195,16 +187,24 @@ class ProcessTerminalWorker:
                 "integration": spec.integration,
             }
         )
-        # 超时与「收到但不合法」是两类故障：前者可能是 worker 启动慢（可重试），后者是确定性
-        # 协议不兼容（重试同一二进制必然失败），必须分开抛出并各自留下可定位的日志。
+        # 超时、握手前断开与「收到但不合法」要分开：前两者可能是 worker 启动慢或瞬时崩溃
+        # （可重试），后者是确定性协议不兼容（重试同一二进制必然失败），各自留下可定位的日志。
         handshake_expired = not self._handshake_event.wait(timeout=HANDSHAKE_TIMEOUT_SECONDS)
         if handshake_expired or not self._handshake_valid:
-            self._log_handshake_failure("timeout" if handshake_expired else "rejected")
-            self.close()
             if handshake_expired:
+                reason = "timeout"
+            elif self._handshake_payload is None:
+                reason = "disconnected"
+            else:
+                reason = "rejected"
+            self._log_handshake_failure(reason)
+            self.close()
+            if reason == "timeout":
                 raise TerminalWorkerUnavailableError(
                     f"terminal worker handshake timed out after {HANDSHAKE_TIMEOUT_SECONDS:g}s"
                 )
+            if reason == "disconnected":
+                raise TerminalWorkerUnavailableError("terminal worker exited before handshake")
             raise TerminalWorkerHandshakeError(self._describe_handshake_mismatch())
         threading.Thread(
             target=self._write_events,
@@ -217,31 +217,54 @@ class ProcessTerminalWorker:
             daemon=True,
         ).start()
 
-    def write(self, input: dict[str, str]) -> None:
-        """将已校验的单次输入入队；worker 负责按键编码并一次写入 PTY。"""
+    def write(self, input: Mapping[str, object]) -> None:
+        """将已校验的单次输入（line / keys / raw）入队；worker 负责编码并一次写入 PTY。"""
+
+        self._enqueue({"type": "write", "input": dict(input)})
+
+    def resize(self, rows: int, columns: int) -> None:
+        """与输入共用有序队列，保证 resize 与前后按键的相对顺序。
+
+        尺寸校验失败由 worker 报非致命错误。
+        """
+
+        self._enqueue({"type": "resize", "rows": rows, "cols": columns})
+
+    def _enqueue(self, message: Mapping[str, object]) -> None:
+        """非阻塞入队；队列满抛背压错误，调用方（含事件循环里的 WS）不会被阻塞。
+
+        write / resize / signal 都经这条队列由写线程按序发出，保证相对顺序；heartbeat 与
+        shutdown 是控制面帧，直接写。
+        """
 
         process = self._process
         if process is None or process.poll() is not None or not self._handshake_valid:
             raise TerminalWorkerUnavailableError("terminal worker is not ready")
-        payload = self._encode_frame({"type": "write", "input": input})
+        payload = self._encode_frame(message)
         with self._input_queue_lock:
+            queued_bytes = self._input_queue_bytes + len(payload)
             if (
                     self._input_queue.full()
-                    or self._input_queue_bytes + len(payload) > Constant.Terminal.MAX_INPUT_QUEUE_BYTES
+                    or queued_bytes > Constant.Terminal.MAX_INPUT_QUEUE_BYTES
             ):
                 raise TerminalWorkerBackpressureError("terminal worker input queue is full")
             self._input_queue.put_nowait(payload)
             self._input_queue_bytes += len(payload)
 
     def signal(self, signal_name: str) -> None:
-        """发送 signal 并等待 worker 确认实际投递结果。"""
+        """经输入同一有序队列发送 signal，并等待 worker 确认实际投递结果。
+
+        不能直接写 stdin：队列里可能还排着先前入队的 line / keys，越过它们会让中断先于命令到达。
+        队列满时抛 ``TerminalWorkerBackpressureError``（与输入一致）。回执由读线程接收，调用方
+        不得持有会被读线程回调获取的锁。
+        """
 
         request_id = uuid.uuid4().hex
         pending = _PendingSignal(threading.Event())
         with self._signal_lock:
             self._pending_signals[request_id] = pending
         try:
-            self._send({"type": "signal", "request_id": request_id, "signal": signal_name})
+            self._enqueue({"type": "signal", "request_id": request_id, "signal": signal_name})
         except Exception:
             with self._signal_lock:
                 self._pending_signals.pop(request_id, None)
@@ -338,15 +361,19 @@ class ProcessTerminalWorker:
             raise TerminalWorkerUnavailableError("terminal worker control pipe is closed") from exc
 
     def _send(self, message: Mapping[str, object]) -> None:
-        """发送一个长度前缀控制帧。"""
+        """发送一个长度前缀控制帧；进程存活检查在 ``_send_payload``。"""
 
-        process = self._process
-        if process is None or process.stdin is None or process.poll() is not None:
-            raise TerminalWorkerUnavailableError("terminal worker is not running")
         self._send_payload(self._encode_frame(message))
 
     def _read_events(self) -> None:
-        """后台读取 worker 事件并转发给 session service。"""
+        """后台读取 worker 事件并转发给 session service。
+
+        shell 的结束只以 worker 自己发出的 ``exit`` 为准（worker 的每条退出路径都恰好发一次）。
+        读线程在未被 ``close`` 时结束，说明 worker 异常断开、协议违约或事件回调出错，一律补发
+        致命错误 ``WORKER_DISCONNECTED``，由会话收敛为 ``failed``；不能伪装成 ``exit``，否则崩溃会被
+        记成 shell 正常退出。worker 已发 exit 后 EOF 也会补发，会话终态已定、迁移幂等，不改写结果。
+        握手前断开不补发：由 ``start`` 抛错、service 记为启动失败，只此一处。
+        """
 
         process = self._process
         if process is None or process.stdout is None:
@@ -354,7 +381,7 @@ class ProcessTerminalWorker:
         try:
             while not self._stop_event.is_set():
                 header = self._read_exact(process.stdout, 4)
-                if not header:
+                if len(header) != 4:
                     break
                 size = struct.unpack(">I", header)[0]
                 if size <= 0 or size > Constant.Terminal.MAX_FRAME_BYTES:
@@ -408,21 +435,20 @@ class ProcessTerminalWorker:
                         },
                     },
                 )
+        except Exception:
+            # 事件回调（会话侧内存更新）出错是本仓缺陷：落日志后按断开收敛，不让线程无声崩掉。
+            log.exception(
+                "terminal_worker_event_handler_failed",
+                extra={
+                    "msg": "Terminal Worker 事件处理失败，会话将收敛为 failed",
+                    "data": {"instance_id": self.instance_id, "worker_pid": process.pid},
+                },
+            )
         finally:
             self._handshake_event.set()
-            if not self._stop_event.is_set():
-                self._emit_exit(process.poll())
-
-    def _emit_exit(self, exit_code: int | None) -> None:
-        """在 worker 自然退出或控制管道异常时通知 session service 一次。"""
-
-        with self._exit_lock:
-            if self._exit_emitted:
-                return
-            self._exit_emitted = True
-        callback = self._on_event
-        if callback is not None:
-            callback({"type": "exit", "exit_code": exit_code})
+            callback = self._on_event
+            if not self._stop_event.is_set() and self._handshake_valid and callback is not None:
+                callback({"type": "error", "code": "WORKER_DISCONNECTED"})
 
     def _validate_handshake(self, event: Mapping[str, object], process_pid: int) -> bool:
         """校验进程外握手的身份、PTY 类型与正整数逻辑尺寸。"""
@@ -439,20 +465,7 @@ class ProcessTerminalWorker:
         )
 
     def _handshake_mismatch_details(self) -> dict[str, object]:
-        """返回握手「期望值 vs 实际收到值」的对照表（仅协议元数据，不含 PTY 内容）。
-
-        参数:
-            无。
-
-        返回:
-            可直接放进日志 ``data`` 或错误消息的键值表；尚未收到握手帧时实际值均为 ``None``。
-
-        异常:
-            无（只读实例状态与进程 PID）。
-
-        副作用:
-            无。
-        """
+        """握手「期望值 vs 实际收到值」对照（仅协议元数据）；未收到握手帧时实际值为 ``None``。"""
 
         received = self._handshake_payload or {}
         process = self._process
@@ -467,20 +480,7 @@ class ProcessTerminalWorker:
         }
 
     def _describe_handshake_mismatch(self) -> str:
-        """构造握手被拒时的错误消息，列出期望与实际身份元数据。
-
-        参数:
-            无。
-
-        返回:
-            含期望/实际字段对照的错误消息文本。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
+        """构造握手被拒时的错误消息，列出期望与实际身份元数据。"""
 
         details = self._handshake_mismatch_details()
         rendered = ", ".join(f"{key}={value!r}" for key, value in details.items())
@@ -490,21 +490,7 @@ class ProcessTerminalWorker:
         )
 
     def _log_handshake_failure(self, reason: str) -> None:
-        """记录握手失败的可排查日志（含失败类别与协议字段对照）。
-
-        参数:
-            reason: 失败类别，``"timeout"``（等待握手超时）或 ``"rejected"``（收到但校验不通过）。
-
-        返回:
-            无。
-
-        异常:
-            无。
-
-        副作用:
-            写 WARNING 日志 ``terminal_worker_handshake_failed``；只记录协议元数据与进程号，
-            不记录任何 PTY 输入输出内容。
-        """
+        """记录握手失败与协议字段对照；reason 取 timeout / disconnected / rejected。"""
 
         process = self._process
         log.warning(

@@ -1,233 +1,175 @@
 """Task 级终端用例与会话集合的唯一所有者。
 
-service 负责归属、容量、创建/删除及外部状态通知；单会话执行由 runtime 协调，
-预览流由 preview 管理。活会话和有限终态历史只存在当前后端进程，不进入 checkpoint。
+service 负责归属、容量、创建 / 删除、外部通知与副作用线程；单会话执行由 runtime 协调，交互
+通道由 ``terminal_stream`` 管理。活会话与有限终态历史只存在当前后端进程，不持久化、不跨重启恢复。
+
+线程边界：
+- worker 读线程只做内存更新；会话终态的 worker 清理在独立线程完成，不阻塞读线程；
+- ``on_task_sessions_changed`` 与交接结论投递都经单线程副作用执行器在锁外串行执行，
+  因此调用方（工具线程、HTTP、WS 所在事件循环）都不会被外部回调阻塞。
 """
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.terminal_runtime.errors import (
     TerminalSessionCapacityError,
     TerminalSessionError,
     TerminalSessionNotFoundError,
     TerminalSessionOwnershipError,
     TerminalSessionStateError,
-    TerminalWorkerUnavailableError,
 )
+from app.tools.terminal_runtime.observation_render import TerminalObservationResult
 from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker
 from app.tools.terminal_runtime.shell_resolver import ShellResolver
-from app.tools.terminal_runtime.terminal_preview import (
-    TerminalPreviewAttachment,
-    TerminalPreviewSubscription,
-)
+from app.tools.terminal_runtime.terminal_input import TerminalWait
 from app.tools.terminal_runtime.terminal_session_runtime import (
     RunCancellationCheck,
     SessionTermination,
     TerminalSessionRuntime,
+    UserInputResult,
 )
-from app.tools.terminal_runtime.terminal_session_status import (
-    TerminalSessionStatusChange,
-    TerminalSessionStatusObserverLike,
+from app.tools.terminal_runtime.terminal_stream import (
+    TerminalStreamAttachment,
+    TerminalStreamSubscription,
 )
+from app.tools.tool_handler.security.path_resolver import PathResolver
+
+_ACTIVE = frozenset({"starting", "running"})
 
 
 class TerminalSessionService:
     """终端归 Task 所有，Run 结束不关闭；Task 删除及后端退出负责资源兜底。"""
 
-    def __init__(self, status_observer: TerminalSessionStatusObserverLike) -> None:
-        """绑定状态回写观察者；装配层必须显式传入，不做默认降级。
+    def __init__(self, on_task_sessions_changed: Callable[[int], None]) -> None:
+        """``on_task_sessions_changed`` 是必需项：会话列表变化必须能投影到 Transport snapshot。
 
-        观察者是显式必需项而非可选钩子：终端生命周期变化必须能投影到 Transport，
-        缺失就让 TypeError 在装配期暴露，避免出现「会话状态没人回写」的静默失效。
+        任何影响 ``project_task_sessions`` 结果的变化（生命周期、集成就绪、租约持有方、交接）都以
+        task_id 回调；回调在副作用线程、锁外执行，失败只记录日志。
         """
-
-        self._max_active_sessions = Constant.Terminal.MAX_ACTIVE_SESSIONS
-        self._ring_buffer_bytes = Constant.Terminal.MAX_RING_BUFFER_BYTES
-        self._status_observer: TerminalSessionStatusObserverLike = status_observer
+        self._on_task_sessions_changed = on_task_sessions_changed
         self._registry: dict[str, TerminalSessionRuntime] = {}
-        self._terminal_history: OrderedDict[str, TerminalSessionRuntime] = OrderedDict()
+        self._ended: OrderedDict[str, TerminalSessionRuntime] = OrderedDict()
         self._registry_lock = threading.RLock()
         self._closing_tasks: set[int] = set()
         self._accepting = True
+        self._effects = ThreadPoolExecutor(max_workers=1, thread_name_prefix="terminal-effects")
+
+    # ------------------------------------------------------------------ 创建与关闭
 
     def start(
         self,
         *,
         task_id: int,
-        workspace_id: int,
         workspace_root: str,
         shell: str = "auto",
         cwd: str | None = None,
         label: str | None = None,
-        run_id: int,
         integration: str = "auto",
+        created_by: Literal["agent", "user"],
+        run_id: int | None,
     ) -> dict[str, object]:
+        """创建会话并返回 Agent 侧元数据；Agent 新建另受每 Task 上限，为用户保留名额。"""
         cwd_path = self._resolve_cwd(workspace_root, cwd)
         spec = ShellResolver.resolve(shell, integration=integration)
         instance_id = uuid.uuid4().hex
-        session_id = f"term_{uuid.uuid4().hex}"
+        session_id = f"term_{uuid.uuid4().hex[:12]}"
         with self._registry_lock:
             self._ensure_accepting()
             if task_id in self._closing_tasks:
                 raise TerminalSessionStateError("task is already closing")
-            active = sum(
-                runtime.status in {"starting", "running"} for runtime in self._registry.values()
-            )
-            if active >= self._max_active_sessions:
+            active = [runtime for runtime in self._registry.values() if runtime.status in _ACTIVE]
+            if len(active) >= Constant.Terminal.MAX_ACTIVE_SESSIONS:
                 raise TerminalSessionCapacityError("maximum active terminal session count reached")
-            # worker 路径不在 service 层配置：只由宿主启动后端时注入的环境变量
-            # ``Constant.Terminal.WORKER_ENV`` 提供，由 worker 构造时自行解析；
-            # 这里显式传 None 表示不覆盖宿主配置。
+            if created_by == "agent" and (
+                sum(r.task_id == task_id and r.created_by == "agent" for r in active)
+                >= Constant.Terminal.MAX_AGENT_SESSIONS_PER_TASK
+            ):
+                raise TerminalSessionCapacityError(
+                    "this task already has the maximum number of agent terminals; "
+                    "reuse one from terminal_list or close one first"
+                )
+            # worker 路径只由宿主注入的环境变量提供，由 worker 构造时自行解析。
             runtime = TerminalSessionRuntime(
                 ProcessTerminalWorker(instance_id),
                 session_id=session_id,
                 task_id=task_id,
-                workspace_id=workspace_id,
-                created_by_run_id=run_id,
+                created_by=created_by,
                 initial_cwd=str(cwd_path),
                 shell_kind=spec.kind,
                 label=label,
                 integration=integration,
-                buffer_limit=self._ring_buffer_bytes,
+                schedule=self._schedule,
+                on_changed=lambda: self._notify_changed(task_id),
             )
+            # 先登记、后握手：握手期间的会话列表刷新已带上新会话，前端按 HTTP 返回的 id 选中时不会被
+            # 一帧尚不含它的列表冲掉（见前端 terminal-workbench-store 的 reconcileActive）。勿改为握手后登记。
             self._registry[session_id] = runtime
+        log.info(
+            "terminal_session_creating",
+            extra={
+                "msg": "创建终端会话",
+                "data": {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "session_id": session_id,
+                    "created_by": created_by,
+                    "shell_kind": spec.kind,
+                },
+            },
+        )
 
         def on_event(event: Mapping[str, object]) -> None:
-            self._on_worker_event(session_id, runtime.generation, event)
+            self._on_worker_event(runtime, event)
 
         try:
-            change = runtime.start(spec, on_event)
+            runtime.start(spec, on_event)
             with self._registry_lock:
                 stale = not self._accepting or task_id in self._closing_tasks
             if stale:
-                # 批量清理会等慢启动退出会话锁；这里不能另取句柄重复关闭。
+                # 批量清理已接管句柄（关闭等握手结束，见 dispose_worker）；
+                # 这里不能另取句柄重复关闭。
                 raise TerminalSessionStateError("task or backend is closing")
-            if change is not None:
-                self._notify_status_changed(runtime, change)
         except Exception as exc:
             self._complete_termination(
                 runtime, runtime.finish("failed", f"worker_start_failed: {type(exc).__name__}")
             )
             raise
-        if integration == "auto":
+        if integration == "auto" and created_by == "agent":
+            # Agent 需要立刻知道能否用 command_returned；用户新建不等，集成就绪后经快照通知。
             runtime.wait_for_integration()
-        return runtime.snapshot()
+        return runtime.describe()
 
-    def write(
-        self,
-        session_id: str,
-        *,
-        task_id: int,
-        input: dict[str, str],
-        operation_id: str,
-        workspace_id: int | None = None,
-        wait_ms: int = 500,
-        is_cancelled: RunCancellationCheck | None = None,
-    ) -> dict[str, Any]:
-        runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
-        self._ensure_accepting()
-        try:
-            return runtime.write(input, operation_id, wait_ms, is_cancelled)
-        except TerminalWorkerUnavailableError:
-            self._complete_termination(runtime, runtime.finish("failed", "worker_unavailable"))
-            raise
-
-    def read(
-        self,
-        session_id: str,
-        *,
-        task_id: int,
-        workspace_id: int | None = None,
-        run_id: int,
-        wait_ms: int = 3000,
-        is_cancelled: RunCancellationCheck | None = None,
-    ) -> dict[str, Any]:
-        runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
-        return runtime.read(run_id, wait_ms, is_cancelled)
-
-    def signal(
-        self,
-        session_id: str,
-        *,
-        task_id: int,
-        workspace_id: int | None = None,
-        signal_name: str,
-    ) -> dict[str, object]:
-        runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
-        self._ensure_accepting()
-        try:
-            return runtime.signal(signal_name)
-        except TerminalWorkerUnavailableError:
-            self._complete_termination(runtime, runtime.finish("failed", "worker_unavailable"))
-            raise
-
-    def close(
-        self,
-        session_id: str,
-        *,
-        task_id: int,
-        workspace_id: int | None = None,
-        reason: str = "agent_closed",
-    ) -> dict[str, object]:
+    def close(self, session_id: str, *, task_id: int) -> dict[str, object]:
         """重复关闭只返回终态；显式关闭的资源清理失败向调用者报告。"""
-        runtime = self._require_runtime(session_id, task_id, workspace_id=workspace_id)
-        error = self._complete_termination(runtime, runtime.finish("closed", reason))
+        runtime = self._require_runtime(session_id, task_id)
+        error = self._complete_termination(runtime, runtime.finish("closed", "closed"))
         if error is not None:
             raise error
-        return runtime.snapshot()
-
-    def snapshot(
-        self, session_id: str, *, task_id: int, workspace_id: int | None = None
-    ) -> dict[str, object]:
-        return self._require_runtime(session_id, task_id, workspace_id=workspace_id).snapshot()
-
-    def list_sessions(self, *, task_id: int, workspace_id: int) -> list[dict[str, object]]:
-        with self._registry_lock:
-            runtimes = [*self._registry.values(), *self._terminal_history.values()]
-        return [
-            runtime.snapshot()
-            for runtime in runtimes
-            if runtime.task_id == task_id and runtime.workspace_id == workspace_id
-        ]
-
-    def get_status_change(
-        self, session_id: str, *, task_id: int
-    ) -> TerminalSessionStatusChange | None:
-        """Transport 冷重建使用；未知或不属于 Task 的会话表示当前进程无此状态。"""
-        with self._registry_lock:
-            runtime = self._registry.get(session_id) or self._terminal_history.get(session_id)
-        if runtime is None or runtime.task_id != task_id:
-            return None
-        return runtime.status_change()
-
-    def subscribe(
-        self, session_id: str, *, task_id: int, after_seq: int | None
-    ) -> TerminalPreviewAttachment:
-        return self._require_runtime(session_id, task_id).subscribe(after_seq)
-
-    def unsubscribe(self, session_id: str, subscription: TerminalPreviewSubscription) -> None:
-        with self._registry_lock:
-            runtime = self._registry.get(session_id)
-        if runtime is not None:
-            runtime.unsubscribe(subscription)
-        subscription.close()
+        return runtime.describe()
 
     def shutdown(self) -> None:
+        """后端退出：结束全部会话并排空副作用。
+
+        结束会话会唤醒后台等待线程与交接；它们的结论经 ``deferred_results.complete`` 投递，lifespan
+        已先 ``close`` 登记表，因此这里不会再写 ``task_messages``。
+        """
         with self._registry_lock:
             self._accepting = False
         self._close_matching(lambda runtime: True, reason="backend_shutdown")
         with self._registry_lock:
-            self._terminal_history.clear()
+            self._ended.clear()
+        self._effects.shutdown(wait=True)
 
     def delete_task_sessions(self, task_ids: Iterable[int]) -> int:
         ids = set(task_ids)
@@ -235,10 +177,127 @@ class TerminalSessionService:
             self._closing_tasks.update(ids)
         count = self._close_matching(lambda runtime: runtime.task_id in ids, reason="task_deleted")
         with self._registry_lock:
-            for session_id, runtime in tuple(self._terminal_history.items()):
+            for session_id, runtime in tuple(self._ended.items()):
                 if runtime.task_id in ids:
-                    self._terminal_history.pop(session_id)
+                    self._ended.pop(session_id)
         return count
+
+    # ------------------------------------------------------------------ Agent 操作
+
+    def write(
+        self,
+        session_id: str,
+        *,
+        task_id: int,
+        operation_id: str,
+        input: Mapping[str, Any],
+        wait: TerminalWait | None,
+        run_id: int | None,
+        tool_call_id: str,
+        is_cancelled: RunCancellationCheck,
+    ) -> TerminalObservationResult:
+        """worker 不可用（含信号回执超时）只作为本次调用的错误返回，不结束会话。
+
+        会话终态只来自 worker 事件流（``exit`` / 致命 ``error`` / 读线程断开）与显式关闭：worker
+        真的死了，读线程会补发致命错误收敛会话；在命令路径上判死会误伤正常会话（回执慢就关掉
+        用户的 shell）。
+        """
+        runtime = self._require_runtime(session_id, task_id)
+        self._ensure_accepting()
+        return runtime.write(
+            input,
+            operation_id,
+            wait,
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            is_cancelled=is_cancelled,
+        )
+
+    def read(
+        self,
+        session_id: str,
+        *,
+        task_id: int,
+        start_line: int | None = None,
+        limit: int | None = None,
+        tail: int | None = None,
+        wait: TerminalWait | None = None,
+        run_id: int | None,
+        tool_call_id: str,
+        is_cancelled: RunCancellationCheck,
+    ) -> TerminalObservationResult:
+        """长等待（超过前台上限）以 ``tool_call_id`` 登记延迟结果，见 ``deferred_results``。"""
+        return self._require_runtime(session_id, task_id).read(
+            start_line=start_line,
+            limit=limit,
+            tail=tail,
+            wait=wait,
+            run_id=run_id,
+            tool_call_id=tool_call_id,
+            is_cancelled=is_cancelled,
+        )
+
+    def list_sessions(
+        self, *, task_id: int, include_ended: bool = False
+    ) -> list[dict[str, object]]:
+        return [runtime.describe() for runtime in self._task_runtimes(task_id, include_ended)]
+
+    # ------------------------------------------------------------------ 用户与交互通道
+
+    def project_task_sessions(self, task_id: int) -> list[dict[str, object]]:
+        """Transport snapshot 条目：活跃会话在前、按创建时间排序，已结束会话最多 10 个。"""
+        return [runtime.snapshot_entry() for runtime in self._task_runtimes(task_id, True)]
+
+    def user_input(self, session_id: str, *, task_id: int, data: bytes) -> UserInputResult:
+        """与 :meth:`write` 相同，worker 不可用只抛给调用方，不结束会话。"""
+        return self._require_runtime(session_id, task_id).user_input(data)
+
+    def resize(self, session_id: str, *, task_id: int, rows: int, cols: int) -> None:
+        self._require_runtime(session_id, task_id).resize(rows, cols)
+
+    def release_user_input(self, session_id: str, *, task_id: int) -> None:
+        self._require_runtime(session_id, task_id).release_user_input()
+
+    def complete_handoff(self, session_id: str, *, task_id: int) -> None:
+        self._require_runtime(session_id, task_id).complete_handoff()
+
+    def subscribe(
+        self,
+        session_id: str,
+        *,
+        task_id: int,
+        after_seq: int | None,
+        loop: asyncio.AbstractEventLoop,
+    ) -> TerminalStreamAttachment:
+        return self._require_runtime(session_id, task_id).subscribe(after_seq, loop)
+
+    def resync_event(
+        self, session_id: str, *, task_id: int, after_seq: int | None
+    ) -> dict[str, object]:
+        return self._require_runtime(session_id, task_id).resync_event(after_seq)
+
+    def unsubscribe(self, session_id: str, subscription: TerminalStreamSubscription) -> None:
+        with self._registry_lock:
+            runtime = self._registry.get(session_id) or self._ended.get(session_id)
+        if runtime is not None:
+            runtime.unsubscribe(subscription)
+        subscription.close()
+
+    def active_session_count(self) -> int:
+        with self._registry_lock:
+            return sum(runtime.status in _ACTIVE for runtime in self._registry.values())
+
+    # ------------------------------------------------------------------ 内部
+
+    def _task_runtimes(self, task_id: int, include_ended: bool) -> list[TerminalSessionRuntime]:
+        with self._registry_lock:
+            active = [r for r in self._registry.values() if r.task_id == task_id]
+            ended = (
+                [r for r in self._ended.values() if r.task_id == task_id] if include_ended else []
+            )
+        active.sort(key=lambda runtime: runtime.created_at)
+        ended = ended[-Constant.Terminal.MAX_ENDED_SESSIONS_PER_TASK :]
+        return [*active, *ended]
 
     def _close_matching(
         self, predicate: Callable[[TerminalSessionRuntime], bool], *, reason: str
@@ -254,22 +313,22 @@ class TerminalSessionService:
         return len(runtimes)
 
     def _on_worker_event(
-        self, session_id: str, generation: str, event: Mapping[str, object]
+        self, runtime: TerminalSessionRuntime, event: Mapping[str, object]
     ) -> None:
-        with self._registry_lock:
-            runtime = self._registry.get(session_id)
-        if runtime is None:
+        """worker 读线程回调：终态收尾（worker.close 会等待进程退出）移到独立线程。"""
+        self._complete_termination_async(runtime, runtime.on_worker_event(event))
+
+    def _complete_termination_async(
+        self, runtime: TerminalSessionRuntime, termination: SessionTermination | None
+    ) -> None:
+        if termination is None:
             return
-        if runtime.generation != generation:
-            log.warning(
-                "terminal_session_stale_worker_event",
-                extra={
-                    "msg": "丢弃旧 Terminal Worker callback",
-                    "data": {"session_id": session_id},
-                },
-            )
-            return
-        self._complete_termination(runtime, runtime.on_worker_event(event))
+        threading.Thread(
+            target=self._complete_termination,
+            args=(runtime, termination),
+            name=f"terminal-dispose-{runtime.session_id[-8:]}",
+            daemon=True,
+        ).start()
 
     def _complete_termination(
         self, runtime: TerminalSessionRuntime, termination: SessionTermination | None
@@ -280,67 +339,22 @@ class TerminalSessionService:
         error = None
         try:
             if termination.worker is not None:
-                termination.worker.close()
+                runtime.dispose_worker(termination.worker)
         except Exception as exc:
             error = exc
             log.exception(
                 "terminal_session_close_worker_failed",
                 extra={
                     "msg": "Terminal Worker 清理失败",
-                    "data": {
-                        "session_id": termination.change.session_id,
-                        "reason": termination.change.end_reason,
-                    },
+                    "data": {"session_id": runtime.session_id, "reason": termination.reason},
                 },
             )
         finally:
             # 批量清理等的是资源释放尝试完成，不等待可能阻塞或重入的观察者。
             termination.disposal_finished.set()
-        self._notify_status_changed(runtime, termination.change)
         self._retire_runtime(runtime)
+        self._notify_changed(runtime.task_id)
         return error
-
-    def _notify_status_changed(
-        self, runtime: TerminalSessionRuntime, change: TerminalSessionStatusChange
-    ) -> None:
-        """按会话串行通知，丢弃被终态超越的 running；不持有会话状态锁。"""
-        with runtime.status_delivery_lock:
-            if runtime.status != change.status:
-                return
-            self._deliver_status_change(runtime.created_by_run_id, change)
-
-    def _deliver_status_change(
-        self, created_by_run_id: int, change: TerminalSessionStatusChange
-    ) -> None:
-        """通知使用迁移时冻结的事实；外部观察者失败不阻断资源收尾。"""
-        log.info(
-            "terminal_session_status_changed",
-            extra={
-                "msg": "Task 终端生命周期变化",
-                "data": {
-                    "task_id": change.task_id,
-                    "created_by_run_id": created_by_run_id,
-                    "session_id": change.session_id,
-                    "status": change.status,
-                    "reason": change.end_reason,
-                },
-            },
-        )
-        try:
-            self._status_observer(change)
-        except Exception:
-            log.exception(
-                "terminal_session_status_observer_failed",
-                extra={
-                    "msg": "Terminal session 状态回写 Transport 失败",
-                    "data": {
-                        "task_id": change.task_id,
-                        "session_id": change.session_id,
-                        "status": change.status,
-                        "reason": change.end_reason,
-                    },
-                },
-            )
 
     def _retire_runtime(self, runtime: TerminalSessionRuntime) -> None:
         session_id = runtime.session_id
@@ -349,23 +363,45 @@ class TerminalSessionService:
                 self._registry.pop(session_id)
             if not self._accepting or runtime.task_id in self._closing_tasks:
                 return
-            self._terminal_history[session_id] = runtime
-            self._terminal_history.move_to_end(session_id)
-            while len(self._terminal_history) > Constant.Terminal.MAX_TERMINAL_HISTORY_SESSIONS:
-                self._terminal_history.popitem(last=False)
+            self._ended[session_id] = runtime
+            self._ended.move_to_end(session_id)
+            task_ended = [sid for sid, r in self._ended.items() if r.task_id == runtime.task_id]
+            for stale in task_ended[: -Constant.Terminal.MAX_ENDED_SESSIONS_PER_TASK]:
+                self._ended.pop(stale)
+            while len(self._ended) > Constant.Terminal.MAX_TERMINAL_HISTORY_SESSIONS:
+                self._ended.popitem(last=False)
 
-    def _require_runtime(
-        self, session_id: str, task_id: int, *, workspace_id: int | None = None
-    ) -> TerminalSessionRuntime:
+    def _schedule(self, effect: Callable[[], None]) -> None:
+        """副作用串行执行；关闭后的提交直接丢弃（进程正在退出，通知已无接收方）。"""
+        try:
+            self._effects.submit(self._run_effect, effect)
+        except RuntimeError:
+            log.info(
+                "terminal_effect_dropped_after_shutdown",
+                extra={"msg": "终端服务已关闭，丢弃副作用", "data": {}},
+            )
+
+    @staticmethod
+    def _run_effect(effect: Callable[[], None]) -> None:
+        try:
+            effect()
+        except Exception:
+            log.exception(
+                "terminal_effect_failed",
+                extra={"msg": "终端副作用执行失败（通知或结论投递）", "data": {}},
+            )
+
+    def _notify_changed(self, task_id: int) -> None:
+        self._schedule(lambda: self._on_task_sessions_changed(task_id))
+
+    def _require_runtime(self, session_id: str, task_id: int) -> TerminalSessionRuntime:
         with self._registry_lock:
-            runtime = self._registry.get(session_id) or self._terminal_history.get(session_id)
-            if runtime is not None:
-                if runtime.task_id != task_id or (
-                    workspace_id is not None and runtime.workspace_id != workspace_id
-                ):
-                    raise TerminalSessionOwnershipError("terminal session does not belong to task")
-                return runtime
-        raise TerminalSessionNotFoundError(session_id)
+            runtime = self._registry.get(session_id) or self._ended.get(session_id)
+        if runtime is None:
+            raise TerminalSessionNotFoundError(session_id)
+        if runtime.task_id != task_id:
+            raise TerminalSessionOwnershipError("terminal session does not belong to task")
+        return runtime
 
     @staticmethod
     def _resolve_cwd(workspace_root: str, cwd: str | None) -> Path:

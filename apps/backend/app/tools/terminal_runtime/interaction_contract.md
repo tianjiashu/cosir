@@ -28,7 +28,7 @@ worker 交出物理行：滚出的 `history`（软换行行不带 `\n`）与当�
 
 `wait{until: command_returned|output_quiet|match|elapsed, pattern, quiet_ms, timeout_ms}`。判定在会话锁内由 worker 事件 `notify_all` 唤醒；`WAIT_CANCEL_CHECK_SECONDS` 时间片只复查 Run 取消，不轮询条件。结束原因：条件名（`matched` 带 `matched_line`）、`timeout`、`elapsed`、`cancelled`、`session_ended`；read 的 `command_returned` 在无执行中命令时返回 `idle`。无集成时 `command_returned` 在参数边界报 `TERMINAL_INTEGRATION_REQUIRED`。write 默认 `output_quiet 500ms / 3s`。
 
-`timeout_ms > 30000`：经 `background_watches.register` 登记，立即返回当前观察并 `suspend`；独立等待线程在条件满足或超时后经 `background_watches.deliver(watch_id, tool_name="terminal_wait")` 投递（出队成功才写库）。Run 取消时撤销回调唤醒线程，不投递；后端关闭时 lifespan 先 `background_watches.close()`，关闭期间结束会话唤醒的等待与交接都不再写 `task_messages`。`match` 条件在行输入时从命令回显行的下一行开始扫描，读取与按键从光标行开始。
+`timeout_ms > 30000`：以本次工具调用的 `tool_call_id` 在 `deferred_results`（`core/workflow/deferred/`，设计见 `docs/plan/deferred-tool-result-design.md`）登记 `terminal_wait` 条目，立即返回当前观察并 `suspend`；独立等待线程在条件满足或超时后经 `deferred_results.complete(tool_call_id, ...)` 投递带 `tool_call_id` 的 `background_result`（出队成功才写库）。Run 停止时撤销该 Task 的全部条目、撤销回调唤醒线程，不投递；后端关闭时 lifespan 先 `deferred_results.close()`，关闭期间结束会话唤醒的等待与交接都不再写 `task_messages`。`match` 条件在行输入时从命令回显行的下一行开始扫描，读取与按键从光标行开始。
 
 ## 输入租约
 
@@ -36,7 +36,7 @@ worker 交出物理行：滚出的 `history`（软换行行不带 `\n`）与当�
 
 ## 交接
 
-`input.handoff` 登记后台等待并 `suspend`，snapshot 与 WS 标出交接。只有用户「交还」（`complete_handoff`）或会话结束时投递 `background_result(tool_name="terminal_handoff")`（含尾部行）；输入租约的空闲或手动释放不结束交接（用户输密码等操作时会停顿）。Run 取消撤销交接，只清提示，终端不受影响。
+`input.handoff` 以本次调用的 `tool_call_id` 登记 `terminal_handoff` 条目并 `suspend`，snapshot 与 WS 标出交接。只有用户「交还」（`complete_handoff`）或会话结束时经 `deferred_results.complete` 投递 `background_result`（含尾部行）；输入租约的空闲或手动释放不结束交接（用户输密码等操作时会停顿）。Run 取消撤销交接，只清提示，终端不受影响。
 
 ## service 与线程边界（`terminal_session_service.py` / `terminal_session_runtime.py`）
 
@@ -49,7 +49,7 @@ worker 交出物理行：滚出的 `history`（软换行行不带 `\n`）与当�
 每会话一条 WS。订阅绑定事件循环与 `asyncio.Queue`，发布经 `loop.call_soon_threadsafe`；背压按帧数与字节数计量，溢出投递一次 `subscriber_overflow`，WS 转为 `resync_required` 并以 1013 关闭；事件循环已关闭时在订阅边界吞掉并记日志。
 
 - 客户端帧：`attach{after_seq}`（首帧）、`input{data_base64}`（≤ 64 KiB）、`resize{rows 2..500, cols 10..1000}`、`release_input{}`、`handoff_done{}`。
-- 服务端帧（带 `protocol`、`session_id`、`generation`）：`attached{rows, columns, status, first_available_seq, next_seq}`、`output{seq, data_base64}`、`geometry{rows, columns}`、`input_mark{by:"agent"}`、`input_rejected{reason: agent_input|session_ended|backpressure}`、`exit{}`（只标记流结束）、`resync_required`、`protocol_error{message}`。
+- 服务端帧（带 `protocol`、`session_id`、`generation`）：`attached{rows, columns, status, first_available_seq, next_seq}`、`output{seq, data_base64}`、`geometry{rows, columns}`、`input_mark{by:"agent"}`、`input_rejected{reason: agent_input|session_ended|backpressure}`、`exit{}`（只标记流结束）、`resync_required`、`protocol_error{code, message}`（`code` 与 HTTP 错误体同源：领域错误的稳定码，控制帧非法为 `TERMINAL_STREAM_PROTOCOL_ERROR`；客户端按 `code` 分支，`message` 只供排查）。
 - 输入租约、交接、终态与退出码只经 snapshot `terminal_sessions` 投影，WS 不重复推送（两条通道无顺序保证，双推会合并出过期值）。
 - 输入直接调用 service（内存更新 + 非阻塞入队），不经线程池。断开只移除订阅，不关闭会话、不取消 Run。
 

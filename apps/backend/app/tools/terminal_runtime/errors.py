@@ -72,8 +72,7 @@ class TerminalWorkerUnavailableError(TerminalSessionError):
 class TerminalWorkerProtocolError(TerminalWorkerUnavailableError):
     """Terminal Worker 控制帧格式无效。
 
-    格式错误在当前进程中不可恢复，故不重试；继承父类以保证既有的
-    ``except TerminalWorkerUnavailableError`` 捕获点仍能收敛 session 失败。
+    格式错误在当前进程中不可恢复，故不重试；读线程捕获后补发 ``WORKER_DISCONNECTED`` 收敛会话。
     """
 
     code = "TERMINAL_WORKER_PROTOCOL_ERROR"

@@ -1,12 +1,13 @@
-"""``terminal_start`` handler：创建 Agent 驱动的交互终端 session。
+"""``terminal_start`` handler：Agent 新建 Task 所有的交互终端。
 
-PTY 创建、shell 解析、cwd 边界校验与终端元数据登记都在 ``TerminalSessionService``；本模块
-只做参数透传、取消前置检查与结果归一化。
+PTY 创建、shell 解析、cwd 边界校验与容量判定都在 ``TerminalSessionService``；本模块只做参数
+透传、取消前置检查与结果归一化。
 """
 
-from typing import ClassVar
+import platform
+from collections.abc import Mapping
+from typing import Any, ClassVar
 
-from app.tools.display.terminal_display import build_terminal_session_display_data
 from app.core.tool.schemas import (
     TOOL_TERMINAL_START,
     ToolDefinition,
@@ -14,44 +15,38 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
+from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
+from app.service import depends as service_depends
+from app.tools.display.terminal_display import build_terminal_session_display_data
+from app.tools.terminal_runtime.shell_resolver import ShellResolutionError, ShellResolver
 from app.tools.tool_handler.terminal_session.common import (
     cancelled,
     cancelled_observation,
-    success_observation,
+    metadata_observation,
     with_terminal_errors,
 )
-from app.tools.tool_handler.terminal_session.descriptions import (
-    build_terminal_session_parameters_schema,
-    describe_terminal_tool,
-)
-from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models import TerminalStartArgs
-from app.service import depends as service_depends
 
 
 class TerminalStartTool(HandlerBase):
-    """创建 Agent 驱动的持久 PTY session，并返回其元数据。
+    """新建持久 PTY 会话并返回元数据（geometry、集成状态、可用按键与信号）。
 
-    职责：把 shell 与 cwd 交给 service 创建会话，返回可供 ``terminal_write`` /
-    ``terminal_read`` / ``terminal_signal`` / ``terminal_close`` 使用的 ``session_id``。
-
-    不负责：不写入输入、不读取输出、不关闭会话；前端不会调用本 handler，只能 attach 本工具
-    返回的只读预览。
-
-    风险级别为 ``high``：会话一旦建立，就是一个仍然存活的本地 shell。
+    会话一旦建立就是一个存活的本地 shell，用户在终端面板里看到同一个终端并可输入。
     """
 
     name = TOOL_TERMINAL_START
     description = (
-        "Start a task-owned interactive shell. Use terminal_list first to reuse existing sessions. "
-        "Sessions survive completed, failed, or cancelled runs until terminal_close, shell exit, "
-        "task deletion, or backend shutdown. There is no idle timeout. "
-        "The frontend only previews its output; use terminal_write/read/signal/close "
-        "to operate the session."
+        "Start a task-owned interactive terminal. Call terminal_list first to reuse an existing "
+        "session (including ones the user opened) and to see which shells are installed. The "
+        "user sees the same terminal in their terminal panel and can type into it. Sessions "
+        "survive completed or cancelled runs until terminal_close, shell exit, task deletion, or "
+        "backend restart. For one-off non-interactive commands or multi-line scripts, prefer "
+        "execute_terminal."
     )
     args_model = TerminalStartArgs
-    timeout_seconds: ClassVar[float] = 10.0
+    timeout_seconds: ClassVar[float] = 15.0
     group = TOOL_GROUP_TERMINAL_SESSION
 
     def execute(
@@ -63,75 +58,41 @@ class TerminalStartTool(HandlerBase):
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        """创建交互终端 session 并返回其元数据。
-
-        参数:
-            shell: 目标 shell；``auto`` 由 ``ShellResolver`` 按宿主平台解析。
-            cwd: 会话初始目录，相对工作区根；None 表示工作区根。
-            label: 可选用途标签，供后续 Run 通过 terminal_list 发现会话。
-            execution_context: 执行上下文；提供会话归属（task / workspace）与取消查询边界。
-
-        返回:
-            成功时为携带 session 元数据的成功观察；run 已取消时为取消观察；领域错误经
-            :func:`with_terminal_errors` 归一化为错误观察。
-
-        异常:
-            ValueError: ``execution_context`` 缺失时抛出，属调用方编程错误。
-
-        副作用:
-            在本机创建 PTY 与 shell 子进程（不打开可见终端窗口），并把会话登记到 session
-            service；不向前端发送任何输入。
-        """
+        """副作用：在本机创建 PTY 与 shell 子进程并登记到 session service。"""
 
         if cancelled(execution_context):
             return cancelled_observation(self.name)
 
         def action() -> ToolObservation:
-            service = service_depends.get_terminal_session_service()
-            payload = service.start(
+            payload = service_depends.get_terminal_session_service().start(
                 task_id=execution_context.task_id,
-                workspace_id=execution_context.workspace_id,
                 workspace_root=str(execution_context.workspace_root),
                 shell=shell,
                 integration=integration,
                 cwd=cwd,
                 label=label,
+                created_by="agent",
                 run_id=execution_context.run_id,
             )
-            return success_observation(
+            return metadata_observation(
                 self.name,
                 payload,
                 summary="Terminal session started.",
                 display_payload=build_terminal_session_display_data(
-                    payload,
-                    include_terminal_info=True,
+                    payload, include_terminal_info=True
                 ),
             )
 
         return with_terminal_errors(self.name, action)
 
     def to_definition(self) -> ToolDefinition:
-        """返回可注册到工具注册表的 ``terminal_start`` 定义。
-
-        返回:
-            ``ToolDefinition``：模型可见描述由 ``descriptions.py`` 按宿主平台补全，
-            ``parameters_schema`` 用宿主专属 shell 与 cwd 说明覆盖，权限 ``shell``、
-            ``execution_mode="thread"``。
-
-        异常:
-            无。
-
-        副作用:
-            无；每次调用重新构造定义，不写注册表、不创建会话。
-        """
-
         return ToolDefinition(
             name=self.name,
             group=self.group,
-            description=describe_terminal_tool(self.name, self.description),
+            description=_host_description(self.description),
             handler=self.execute,
             args_model=self.args_model,
-            parameters_schema=build_terminal_session_parameters_schema(self.name, self.args_model),
+            parameters_schema=_parameters_schema(self.args_model),
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",
@@ -145,3 +106,54 @@ class TerminalStartTool(HandlerBase):
                 show_result=False,
             ),
         )
+
+
+# 以下只生产模型可见文本（英文，属于模型契约）：按当前宿主补全 auto shell 的解析结果与 cwd 路径语法。
+# 执行路径仍是能力检查的权威来源，这里只改善引导，因此 shell 解析失败时安全回退。
+
+
+def _host_description(base: str) -> str:
+    resolved = _resolve_auto_shell_kind()
+    host = f" On this host shell=auto resolves to {resolved}." if resolved else ""
+    return f"{base}{host}"
+
+
+def _parameters_schema(args_model: type[TerminalStartArgs]) -> Mapping[str, Any]:
+    """在 SDK 生成的 strict schema 上补宿主说明：shell 的解析结果与 cwd 的路径语法。"""
+
+    schema = strict_parameters_schema(args_model)
+    properties = schema["properties"]
+    system = platform.system()
+    properties["shell"]["description"] = _shell_parameter_description(
+        system, _resolve_auto_shell_kind()
+    )
+    syntax = "Windows path syntax" if system == "Windows" else "POSIX path syntax"
+    properties["cwd"]["description"] = (
+        f"Initial directory using {syntax}, relative to the workspace; defaults to the "
+        "workspace root and must resolve to an existing directory inside it."
+    )
+    return schema
+
+
+def _resolve_auto_shell_kind() -> str:
+    """``shell=auto`` 在当前宿主上的解析结果；失败返回空串，由调用方降级为「宿主默认」措辞。"""
+
+    try:
+        return ShellResolver.resolve("auto").kind
+    except ShellResolutionError:
+        return ""
+
+
+def _shell_parameter_description(system: str, resolved_kind: str) -> str:
+    resolved = resolved_kind or "the host default"
+    if system == "Windows":
+        return (
+            f"'auto' currently resolves to {resolved}; use 'powershell', 'pwsh' or 'cmd' when "
+            "installed (cmd has no shell integration). Use Windows command syntax."
+        )
+    fallback = "zsh" if system == "Darwin" else "bash"
+    return (
+        f"'auto' uses $SHELL and falls back to {fallback} (currently {resolved}); 'zsh' and "
+        "'bash' support shell integration, 'fish' and custom executables do not. Use POSIX "
+        "shell syntax."
+    )

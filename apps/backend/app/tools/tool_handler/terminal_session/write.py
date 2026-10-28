@@ -1,8 +1,8 @@
-"""交互终端 write 的工具边界；shell 观察由 service 统一管理。"""
+"""``terminal_write`` handler：整行、按键、信号或交接，按条件等待后返回新增行。"""
 
-from typing import ClassVar
+import platform
+from typing import Any, ClassVar
 
-from app.tools.display.terminal_display import build_terminal_observation_display_data
 from app.core.tool.schemas import (
     TOOL_TERMINAL_WRITE,
     ToolDefinition,
@@ -10,48 +10,52 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
+from app.service import depends as service_depends
+from app.tools.terminal_runtime.terminal_input import (
+    TerminalWait,
+    keys_for_platform,
+    signals_for_platform,
+)
 from app.tools.tool_handler.terminal_session.common import (
     cancelled,
     cancelled_observation,
-    success_observation,
+    observation_result,
     with_terminal_errors,
 )
-from app.tools.tool_handler.terminal_session.descriptions import (
-    build_terminal_session_parameters_schema,
-    describe_terminal_tool,
-)
-from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models import TerminalWriteArgs
-from app.service import depends as service_depends
 
 
 class TerminalWriteTool(HandlerBase):
     name = TOOL_TERMINAL_WRITE
     description = (
-        "Submit one complete line with Enter, or one supported control key. A line may be a "
-        "shell command, a multiline continuation, or an answer to a program. Input "
-        "acceptance is not execution. Reuse operation_id only with identical "
-        "input. Cancellation stops waiting, not accepted input. Use returned "
-        "terminal_read for later observations. After the bounded wait, returns the current "
-        "screen, recent history and latest_command state; these snapshots may overlap. "
-        "Old output can be lost; no cursor or pagination is provided. screen.truncated and "
-        "history_truncated mark loss. Screen text replaces the previous view; row_offset and "
-        "first_row_omitted_chars mark omitted prefixes, wrapped_rows uses original row indices. "
-        "latest_command may predate this input; compare command_id instead of treating an old "
-        "result as this input's result. "
-        "Only shell integration proves command return; prompts, timeouts and accepted input do not."
+        "Send input to a terminal and return the lines that appeared after it, as "
+        "'line_number│text'. input is one of: line (one line plus Enter), keys (a key sequence "
+        "such as [\"down\",\"enter\"] or [\"tab\"]), signal (interrupt/suspend/eof), or handoff "
+        "(give keyboard control to the user, e.g. for a password or a confirmation you should "
+        "not answer; you are paused until the user hands it back and a <background_result> from "
+        "terminal_handoff resumes you). wait controls when it returns: command_returned (needs "
+        "shell integration), output_quiet, match (regex on new lines, e.g. 'password:' or "
+        "'Listening on'), or elapsed. Waits up to 30s run inline; longer timeout_ms (e.g. builds "
+        "and test suites) pause you and a <background_result> from terminal_wait resumes you "
+        "when the condition is met or times out, so do not poll. Long output keeps the first "
+        "20 and last 60 lines and marks the omitted range; read it with terminal_read "
+        "start_line. If the user is typing, the write waits up to 10s and then fails with a "
+        "retryable TERMINAL_INPUT_HELD_BY_USER. Reuse operation_id only with identical input. "
+        "For non-interactive multi-line scripts prefer execute_terminal; here submit one line "
+        "at a time."
     )
     args_model = TerminalWriteArgs
-    timeout_seconds: ClassVar[float] = 35.0
+    timeout_seconds: ClassVar[float] = 55.0
     group = TOOL_GROUP_TERMINAL_SESSION
 
     def execute(
         self,
         session_id: str,
         operation_id: str,
-        input: dict[str, str],
-        wait_ms: int = 500,
+        input: dict[str, Any],
+        wait: dict[str, Any] | None = None,
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
@@ -60,47 +64,27 @@ class TerminalWriteTool(HandlerBase):
             return cancelled_observation(self.name)
 
         def action() -> ToolObservation:
-            service = service_depends.get_terminal_session_service()
-            result = service.write(
+            result = service_depends.get_terminal_session_service().write(
                 session_id,
                 task_id=execution_context.task_id,
-                workspace_id=execution_context.workspace_id,
                 operation_id=operation_id,
                 input=input,
-                wait_ms=wait_ms,
+                wait=TerminalWait.model_validate(wait) if wait is not None else None,
+                run_id=execution_context.run_id,
+                tool_call_id=execution_context.tool_call_id,
                 is_cancelled=lambda: cancelled(execution_context),
             )
-            return success_observation(
-                self.name,
-                result,
-                summary="Terminal input accepted.",
-                display_payload=build_terminal_observation_display_data(result),
-            )
+            return observation_result(self.name, result)
 
         return with_terminal_errors(self.name, action)
 
     def to_definition(self) -> ToolDefinition:
-        """返回可注册到工具注册表的 ``terminal_write`` 定义。
-
-        返回:
-            ``ToolDefinition``：模型可见描述由 ``descriptions.py`` 按宿主平台补全，
-            ``parameters_schema`` 用宿主专属 shell 说明覆盖，权限 ``shell``、
-            ``execution_mode="thread"``。
-
-        异常:
-            无。
-
-        副作用:
-            无；每次调用重新构造定义，不写注册表、不读会话状态。
-        """
-
         return ToolDefinition(
             name=self.name,
             group=self.group,
-            description=describe_terminal_tool(self.name, self.description),
+            description=_host_description(self.description),
             handler=self.execute,
             args_model=self.args_model,
-            parameters_schema=build_terminal_session_parameters_schema(self.name, self.args_model),
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",
@@ -114,3 +98,16 @@ class TerminalWriteTool(HandlerBase):
                 show_result=False,
             ),
         )
+
+
+def _host_description(base: str) -> str:
+    """在基准描述后追加当前宿主可用的按键与信号集合（模型契约，英文）。"""
+
+    system = platform.system()
+    keys = ", ".join(keys_for_platform(system))
+    signals = ", ".join(signals_for_platform(system))
+    return (
+        f"{base} Keys on this host: {keys}. Signals on this host: {signals}. A line keeps "
+        "whitespace and adds exactly one Enter; empty text just presses Enter. Keys never "
+        "add Enter unless 'enter' is listed."
+    )
