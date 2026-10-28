@@ -1,7 +1,8 @@
-"""Terminal Worker 握手失败的错误分类与可排查日志测试。
+"""Terminal Worker 握手失败与读线程结束的错误分类、可排查日志测试。
 
-覆盖：握手身份不匹配（确定性）判为不可重试、握手超时仍可重试、两类失败各自的 WARNING 事件与字段
-对照，以及经 ``service_error_observation`` 投影给模型时重试建议文本的变化。
+覆盖：握手身份不匹配（确定性）判为不可重试、握手超时与握手前断开仍可重试、各类失败的 WARNING 事件
+与字段对照、经 ``service_error_observation`` 投影给模型时重试建议文本的变化，以及握手后读线程
+意外结束（断开、事件处理出错）补发致命错误而非伪装成 shell 退出。
 """
 
 from __future__ import annotations
@@ -16,7 +17,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.tools.tool_handler.terminal_session.common import service_error_observation
 from app.tools.terminal_runtime import process_terminal_worker as worker_module
 from app.tools.terminal_runtime.errors import (
     TerminalWorkerHandshakeError,
@@ -25,6 +25,7 @@ from app.tools.terminal_runtime.errors import (
 )
 from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
+from app.tools.tool_handler.terminal_session.common import service_error_observation
 
 _FAKE_WORKER_PID = 4242
 
@@ -292,3 +293,96 @@ def test_spawn_flags_only_require_windows_constant_on_windows(monkeypatch, platf
     with pytest.raises(TerminalWorkerUnavailableError, match="failed to start"):
         worker.start(_spec(), ".", lambda event: None)
     assert captured["creationflags"] == (0x08000000 if platform == "win32" else 0)
+
+
+def _valid_handshake(instance_id: str) -> bytes:
+    return _frame(
+        {
+            "type": "handshake",
+            "instance_id": instance_id,
+            "pid": _FAKE_WORKER_PID,
+            "pty_kind": "unix_pty",
+            "rows": 24,
+            "columns": 80,
+            "capabilities": [],
+        }
+    )
+
+
+def test_disconnect_before_handshake_is_retryable_and_emits_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """握手前 stdout 即 EOF（worker 崩溃）：不是「握手不符」，保持可重试且不上报任何事件。"""
+
+    caplog.set_level(logging.WARNING)
+    _patch_worker_process(monkeypatch, _FakeProcess(b""))
+    events: list[dict[str, object]] = []
+    worker = ProcessTerminalWorker("crash-instance")
+
+    with pytest.raises(TerminalWorkerUnavailableError) as raised:
+        worker.start(_spec(), ".", lambda event: events.append(dict(event)))
+
+    assert not isinstance(raised.value, TerminalWorkerHandshakeError)
+    assert "before handshake" in str(raised.value)
+    assert _handshake_record(caplog).data["reason"] == "disconnected"  # type: ignore[attr-defined]
+    assert events == []
+
+
+def _start_and_collect(
+    monkeypatch: pytest.MonkeyPatch, frames: bytes, on_event=None
+) -> tuple[ProcessTerminalWorker, list[dict[str, object]], threading.Event]:
+    """以「合法握手 + ``frames`` + EOF」启动 worker，收集事件直到收到补发的致命错误。"""
+
+    _patch_worker_process(monkeypatch, _FakeProcess(_valid_handshake("live") + frames))
+    events: list[dict[str, object]] = []
+    disconnected = threading.Event()
+
+    def callback(event):
+        if event.get("type") == "handshake":
+            return
+        events.append(dict(event))
+        if event.get("code") == "WORKER_DISCONNECTED":
+            disconnected.set()
+        elif on_event is not None:
+            on_event(event)
+
+    worker = ProcessTerminalWorker("live")
+    worker.start(_spec(), ".", callback)
+    return worker, events, disconnected
+
+
+def test_reader_end_after_handshake_reports_fatal_error_not_exit(monkeypatch) -> None:
+    """worker 未发 exit 就断开：补发 WORKER_DISCONNECTED，不能伪装成 shell 正常退出。"""
+
+    worker, events, disconnected = _start_and_collect(monkeypatch, b"")
+    assert disconnected.wait(2)
+    worker.close()
+    assert events == [{"type": "error", "code": "WORKER_DISCONNECTED"}]
+
+
+def test_truncated_frame_header_reports_fatal_error(monkeypatch) -> None:
+    """不足 4 字节的半截帧头按断开收敛，不抛未捕获的 ``struct.error``。"""
+
+    worker, events, disconnected = _start_and_collect(monkeypatch, b"\x00\x00")
+    assert disconnected.wait(2)
+    worker.close()
+    assert events == [{"type": "error", "code": "WORKER_DISCONNECTED"}]
+
+
+def test_event_handler_failure_is_logged_and_converges(monkeypatch, caplog) -> None:
+    """事件回调出错：落 ERROR 日志并补发致命错误，后续帧不再分发。"""
+
+    caplog.set_level(logging.ERROR)
+
+    def explode(event):
+        raise KeyError("screen")
+
+    frames = _frame({"type": "output", "data_base64": "eA=="}) * 2
+    worker, events, disconnected = _start_and_collect(monkeypatch, frames, explode)
+    assert disconnected.wait(2)
+    worker.close()
+    assert [event["type"] for event in events] == ["output", "error"]
+    assert any(
+        record.getMessage() == "terminal_worker_event_handler_failed" for record in caplog.records
+    )

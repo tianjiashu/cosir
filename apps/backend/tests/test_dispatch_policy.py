@@ -113,6 +113,22 @@ def test_new_run_takes_the_latest_user_input_launch() -> None:
     assert action == StartRun(_LAUNCH)
 
 
+def test_new_run_takes_the_trigger_call_from_the_same_user_input() -> None:
+    """触发调用与配置取自同一条（最后一条）用户输入：委派子 Run 的结论按它回投父 Agent。"""
+    first = UserInputBody(
+        display_text="a", input_text="a", launch=_OTHER, trigger_tool_call_id="call-1"
+    )
+    last = UserInputBody(
+        display_text="b", input_text="b", launch=_LAUNCH, trigger_tool_call_id="call-2"
+    )
+    pending = [
+        TaskMessage.of(first, delivery="next_run", message_id=1),
+        TaskMessage.of(last, delivery="next_run", message_id=2),
+    ]
+    action = _next(_run("completed", _OTHER), False, pending, pending)
+    assert action == StartRun(_LAUNCH, "call-2")
+
+
 def test_new_run_without_user_input_inherits_the_current_run_launch() -> None:
     pending = [_result(1)]
     action = _next(_run("cancelled", _OTHER), False, pending, pending)

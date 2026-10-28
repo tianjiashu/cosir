@@ -119,6 +119,11 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
 
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", close_dependencies)
     # 启动流程里的 Agent Team 收敛在函数内惰性 import，因此按模块路径打桩（替身不触达存储）。
+    # 重启收尾里的占位中断要写库；替身不触达存储。
+    monkeypatch.setattr(
+        "app.core.workflow.deferred.restart_settlement.interrupt_pending_placeholders",
+        lambda: 0,
+    )
     monkeypatch.setattr(
         "app.core.tool.handler.agent_team.coordinator.get_agent_team_coordinator",
         lambda: SimpleNamespace(recover_after_restart=lambda: []),

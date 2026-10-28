@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,7 +13,7 @@ from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
-from app.core.workflow.wait.background_watches import background_watches
+from app.core.workflow.deferred.deferred_results import deferred_results
 from app.service import depends
 from app.tools.terminal_runtime.errors import (
     TerminalInputHeldByUserError,
@@ -131,11 +132,17 @@ def tool_service(monkeypatch):
         SimpleNamespace(is_cancelled=lambda task_id: False),
     )
     yield service, workers
-    background_watches.drop_task(1)
+    deferred_results.drop_task(1)
 
 
 def _context(tmp_path: Path) -> Any:
-    return SimpleNamespace(task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=5)
+    return SimpleNamespace(
+        task_id=1,
+        workspace_id=1,
+        workspace_root=tmp_path,
+        run_id=5,
+        tool_call_id=f"call-{uuid.uuid4().hex}",
+    )
 
 
 def test_tool_handlers_return_observation_text_and_display_data(tool_service, tmp_path) -> None:

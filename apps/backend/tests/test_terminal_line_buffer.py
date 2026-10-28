@@ -126,6 +126,21 @@ def test_render_both_keeps_head_and_tail_and_marks_omitted_range() -> None:
     assert small.omitted is None and len(small.body) == 50
 
 
+def test_render_both_within_window_over_budget_keeps_the_tail() -> None:
+    # 行数不超过头 20 + 尾 60 但总长超预算：尾部优先，最后一行必须保留，省略区间在中间。
+    lines = [(n, "x" * 1500) for n in range(1, 41)]
+    rendered = render_lines(lines, "both", 18_000)
+    assert rendered.body[-1].startswith("40│")
+    assert rendered.omitted is not None
+    first_omitted, last_omitted = rendered.omitted
+    assert 1 < first_omitted <= last_omitted < 40
+    assert rendered.body[0].startswith("1│")
+    assert sum(len(row) + 1 for row in rendered.body) <= 18_000 + 200
+    # 预算放得下时原样全部返回，不制造省略。
+    fits = render_lines(lines, "both", 100_000)
+    assert fits.omitted is None and len(fits.body) == 40
+
+
 def test_render_budget_trims_tail_mode_from_front_and_head_mode_from_back() -> None:
     lines = [(n, "x" * 50) for n in range(1, 101)]
     tail = render_lines(lines, "tail", 600)

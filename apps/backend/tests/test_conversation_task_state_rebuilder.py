@@ -35,7 +35,13 @@ def _task(task_id: int = 7) -> TaskRecord:
 def test_rebuild_empty_task_returns_valid_empty_snapshot() -> None:
     state = ConversationTaskStateRebuilder.rebuild(_task(), [], [])
 
-    assert state == {"title": "task", "messages": [], "activity": None, "terminal_sessions": []}
+    assert state == {
+        "title": "task",
+        "messages": [],
+        "activity": None,
+        "terminal_sessions": [],
+        "deferred_results": [],
+    }
 
 
 @pytest.mark.parametrize("window", [None, 64_000])
@@ -136,6 +142,7 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
         ],
         "activity": None,
         "terminal_sessions": [],
+        "deferred_results": [],
     }
 
     with pytest.raises(ValueError, match="outcome status must be terminal"):
@@ -156,6 +163,7 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
         ],
         "activity": None,
         "terminal_sessions": [],
+        "deferred_results": [],
     }
 
     with pytest.raises(ValueError, match="only assistant messages carry an outcome"):
@@ -203,6 +211,7 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
         ],
         "activity": None,
         "terminal_sessions": [],
+        "deferred_results": [],
     }
 
     validate_snapshot(state)  # 不应抛 ValueError

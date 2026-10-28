@@ -150,12 +150,16 @@ def reset_runtime_singletons() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def reopen_background_watches() -> Iterator[None]:
-    """lifespan 关闭会关闭进程级后台等待登记表（此后不再投递）；同进程后续用例需重新开放。"""
+def reopen_deferred_results() -> Iterator[None]:
+    """lifespan 关闭会关闭进程级延迟结果登记表（此后不再投递）；同进程后续用例需重新开放。"""
 
-    from app.core.workflow.wait.background_watches import background_watches
+    from app.core.workflow.deferred.deferred_results import deferred_results
 
-    background_watches.open()
+    # 先关再开：清掉上一个用例残留的条目与看板最近结束列表（同一 task_id 会被反复使用）。
+    deferred_results.close()
+    deferred_results.open()
+    # lifespan 会注入看板监听方；同进程后续用例的 snapshot 不能被前一个用例的监听方改写。
+    deferred_results.set_listener(None)
     yield
 
 

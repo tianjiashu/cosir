@@ -60,7 +60,8 @@ class _Terminal:
         self._ops += 1
         return self.service.write(
             self.session_id, task_id=1, operation_id=f"op{self._ops}", input=input,
-            wait=TerminalWait(**wait) if wait else None, run_id=1, is_cancelled=lambda: False,
+            wait=TerminalWait(**wait) if wait else None, run_id=1,
+            tool_call_id=f"call-w{self._ops}", is_cancelled=lambda: False,
         )
 
     def line(self, text: str, **wait: Any) -> Any:
@@ -68,7 +69,9 @@ class _Terminal:
                           **(wait or {"until": "command_returned", "timeout_ms": 10000}))
 
     def read(self, **kwargs: Any) -> Any:
+        self._ops += 1
         return self.service.read(self.session_id, task_id=1, run_id=1,
+                                 tool_call_id=f"call-r{self._ops}",
                                  is_cancelled=lambda: False, **kwargs)
 
 

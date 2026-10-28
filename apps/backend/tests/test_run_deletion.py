@@ -198,6 +198,7 @@ def test_delete_creator_run_preserves_task_terminal(storage, tmp_path, monkeypat
             operation_id="after-run-deletion",
             wait=None,
             run_id=None,
+            tool_call_id="call-after-deletion",
             is_cancelled=lambda: False,
         )
         assert workers[0].writes == [{"type": "line", "text": "still alive"}]

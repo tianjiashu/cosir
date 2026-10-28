@@ -867,7 +867,10 @@ def test_lifespan_logs_recovered_runs_path(
     class _RecoverServiceWithRecovered:
         def recover_orphaned_runs(self) -> list[Any]:
             stubbed_lifespan.calls.append("recover_runs")
-            return [SimpleNamespace(id=101), SimpleNamespace(id=202)]
+            return [
+                SimpleNamespace(id=101, trigger_tool_call_id=None),
+                SimpleNamespace(id=202, trigger_tool_call_id=None),
+            ]
 
     monkeypatch.setattr(
         lifespan_module, "get_recover_service", lambda: _RecoverServiceWithRecovered()

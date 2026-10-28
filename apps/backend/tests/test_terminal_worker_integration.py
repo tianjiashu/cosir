@@ -424,7 +424,9 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
                   "timeout_ms": 10000},
             execution_context=second,
         )
-        result = terminal.read(session_id, task_id=1, run_id=2, is_cancelled=lambda: False)
+        result = terminal.read(
+            session_id, task_id=1, run_id=2, tool_call_id="call-read", is_cancelled=lambda: False
+        )
         assert "STATE:kept" in result.text
     finally:
         cancellation_registry.consume(1)

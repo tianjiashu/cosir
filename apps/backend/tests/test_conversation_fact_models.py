@@ -228,6 +228,7 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch) -> None
         "image_paths",
         "attachments",
         "launch",
+        "trigger_tool_call_id",
     }
 
 

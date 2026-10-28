@@ -152,7 +152,8 @@ async def test_websocket_rejects_input_while_agent_holds(monkeypatch, tmp_path: 
     await _settle(lambda: "attached" in ws.types())
     writer = threading.Thread(target=lambda: service.write(
         session_id, task_id=1, operation_id="op", input={"type": "line", "text": "sleep"},
-        wait=TerminalWait(until="elapsed", timeout_ms=500), run_id=1, is_cancelled=lambda: False))
+        wait=TerminalWait(until="elapsed", timeout_ms=500), run_id=1, tool_call_id="call-op",
+        is_cancelled=lambda: False))
     writer.start()
     await _settle(lambda: "input_mark" in ws.types())
     ws.push({"type": "input", "data_base64": base64.b64encode(b"q").decode()})
@@ -181,11 +182,18 @@ async def test_websocket_handoff_done_and_protocol_errors(monkeypatch, tmp_path:
     assert called == [session_id]
     assert ws.types()[-1] == "protocol_error" and ws.closed_with is not None
     assert ws.closed_with[0] == 1008
+    assert ws.sent[-1]["code"] == "TERMINAL_STREAM_PROTOCOL_ERROR"
 
     missing = FakeWebSocket()
     missing.push({"type": "attach", "after_seq": None})
     await asyncio.wait_for(terminal_session_stream(missing, 2, session_id, service), 2)
+    assert missing.sent[-1]["code"] == "TERMINAL_SESSION_OWNERSHIP_ERROR"
     assert missing.sent[-1]["message"] == "terminal session is not owned by this task"
+
+    unknown = FakeWebSocket()
+    unknown.push({"type": "attach", "after_seq": None})
+    await asyncio.wait_for(terminal_session_stream(unknown, 1, "term_missing", service), 2)
+    assert unknown.sent[-1]["code"] == "TERMINAL_SESSION_NOT_FOUND"
 
 
 @pytest.mark.asyncio

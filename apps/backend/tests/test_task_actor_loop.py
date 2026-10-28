@@ -62,7 +62,9 @@ class _Ledger:
         self.current: SimpleNamespace | None = None
         self.created: list[SimpleNamespace] = []
 
-    def create_run(self, task_id: int, launch: RunLaunch) -> SimpleNamespace:
+    def create_run(
+        self, task_id: int, launch: RunLaunch, trigger_tool_call_id: str | None = None
+    ) -> SimpleNamespace:
         run = SimpleNamespace(
             id=len(self.runs) + 1,
             task_id=task_id,
@@ -70,6 +72,7 @@ class _Ledger:
             agent_id=launch.agent_id,
             model_config_id=launch.model_config_id,
             options=launch.options,
+            trigger_tool_call_id=trigger_tool_call_id,
         )
         self.runs[run.id] = run
         self.current = run
@@ -149,14 +152,21 @@ def harness(monkeypatch):
         ("get_task_message_queue", queue),
     ):
         monkeypatch.setattr(actor_module.service_depends, getter, lambda fake=fake: fake)
-    # 已告知旧终端失效：本文件不验证首次驱动提醒（见 test_terminal_background_waits）。
+    # 撤销时的占位结算写库；记下调用，不触达存储（占位结算见 test_deferred_placeholders）。
+    settled: list[tuple[int, list[str]]] = []
+    monkeypatch.setattr(
+        actor_module.placeholders,
+        "settle_placeholders",
+        lambda task_id, ids, _status, _hint: settled.append((task_id, list(ids))) or len(ids),
+    )
+    # 已告知旧终端失效：本文件不验证首次驱动提醒（见 test_restart_settlement）。
     space = SimpleNamespace(
         task_id=_TASK_ID,
         async_operation=contextlib.nullcontext,
         terminals_invalidation_announced=True,
     )
     return SimpleNamespace(
-        actor=TaskActor(space), queue=queue, ledger=ledger, refreshed=refreshed
+        actor=TaskActor(space), queue=queue, ledger=ledger, refreshed=refreshed, settled=settled
     )
 
 
@@ -433,35 +443,49 @@ async def test_stop_only_touches_materialized_spaces_and_aclose_aborts_all(regis
     assert registry.existing_spaces() == ()
 
 
-# ── 后台等待与首次驱动提醒 ─────────────────────────────────────────────────
+# ── 延迟结果与首次驱动提醒 ─────────────────────────────────────────────────
 
 
-async def test_cancelling_suspended_run_drops_background_watches(harness) -> None:
+async def test_cancelling_suspended_run_drops_deferred_results(harness) -> None:
     """Run 取消即撤销本 Task 的后台等待：撤销回调被调用，之后的完成返回 False、不再投递。"""
-    from app.core.workflow.wait.background_watches import background_watches
+    from app.core.workflow.deferred.deferred_results import deferred_results
 
     run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
     run.status = "suspended"
     cancelled: list[str] = []
-    watch_id = background_watches.register(
-        _TASK_ID, run_id=run.id, label="terminal:t1", on_cancel=lambda: cancelled.append("t1")
+    deferred_results.register(
+        "call-t1",
+        task_id=_TASK_ID,
+        run_id=run.id,
+        kind="terminal_wait",
+        label="terminal:t1",
+        on_cancel=lambda: cancelled.append("t1"),
     )
-    other = background_watches.register(_TASK_ID + 1, run_id=None, label="x", on_cancel=lambda: None)
+    deferred_results.register(
+        "call-x",
+        task_id=_TASK_ID + 1,
+        run_id=None,
+        kind="terminal_wait",
+        label="x",
+        on_cancel=lambda: None,
+    )
     try:
         await harness.actor.cancel("parent")
         assert run.status == "cancelled"
         assert cancelled == ["t1"]
-        assert background_watches.pending(_TASK_ID) == []
-        assert background_watches.deliver(watch_id, tool_name="t", result={}) is False
+        # 被撤销的后台条目随即把占位行推到 cancelled。
+        assert harness.settled == [(_TASK_ID, ["call-t1"])]
+        assert deferred_results.pending(_TASK_ID) == []
+        assert deferred_results.complete("call-t1", {}) is False
         # 其他 Task 的等待不受影响。
-        assert background_watches.pending(_TASK_ID + 1) == ["x"]
+        assert deferred_results.pending(_TASK_ID + 1) == ["x"]
     finally:
-        background_watches.drop_task(_TASK_ID + 1)
-        assert background_watches.deliver(other, tool_name="t", result={}) is False
+        deferred_results.drop_task(_TASK_ID + 1)
+        assert deferred_results.complete("call-x", {}) is False
 
 
 async def test_running_run_cancel_drops_watches_when_execution_settles(harness) -> None:
-    from app.core.workflow.wait.background_watches import background_watches
+    from app.core.workflow.deferred.deferred_results import deferred_results
 
     harness.actor.start()
     harness.queue.put(_user())
@@ -475,31 +499,41 @@ async def test_running_run_cancel_drops_watches_when_execution_settles(harness) 
         signalled_at_drop.append(actor_module.cancellation_registry.is_cancelled(_TASK_ID))
         dropped.append(run.id)
 
-    background_watches.register(
-        _TASK_ID, run_id=run.id, label="terminal:t2", on_cancel=on_cancel
+    deferred_results.register(
+        "call-t2",
+        task_id=_TASK_ID,
+        run_id=run.id,
+        kind="terminal_wait",
+        label="terminal:t2",
+        on_cancel=on_cancel,
     )
     await harness.actor.cancel("user")
     await _finish(run.id, "cancelled")
     assert dropped == [run.id]
     assert signalled_at_drop == [True]
-    assert background_watches.pending(_TASK_ID) == []
+    assert deferred_results.pending(_TASK_ID) == []
     await harness.actor.abort()
 
 
-async def test_completed_run_keeps_background_watches(harness) -> None:
+async def test_completed_run_keeps_deferred_results(harness) -> None:
     """完成或挂起不撤销：后台等待的结论稍后照常投递、开新 Run 或唤醒。"""
-    from app.core.workflow.wait.background_watches import background_watches
+    from app.core.workflow.deferred.deferred_results import deferred_results
 
     harness.actor.start()
     harness.queue.put(_user())
     await _settle()
     [run] = harness.ledger.created
-    background_watches.register(
-        _TASK_ID, run_id=run.id, label="terminal:t3", on_cancel=lambda: None
+    deferred_results.register(
+        "call-t3",
+        task_id=_TASK_ID,
+        run_id=run.id,
+        kind="terminal_wait",
+        label="terminal:t3",
+        on_cancel=lambda: None,
     )
     await _finish(run.id, "suspended")
-    assert background_watches.pending(_TASK_ID) == ["terminal:t3"]
-    background_watches.drop_task(_TASK_ID)
+    assert deferred_results.pending(_TASK_ID) == ["terminal:t3"]
+    deferred_results.drop_task(_TASK_ID)
     await harness.actor.abort()
 
 
@@ -513,7 +547,7 @@ async def test_first_drive_notice_is_posted_into_the_run_mailbox(harness, monkey
         calls.append(space)
         return notice if len(calls) == 1 else None
 
-    monkeypatch.setattr(actor_module.terminal_invalidation, "first_drive_notice", first_drive_notice)
+    monkeypatch.setattr(actor_module.restart_settlement, "first_drive_notice", first_drive_notice)
     posted: list[TaskMessage] = []
     original_post = harness.actor.mailbox.post
 

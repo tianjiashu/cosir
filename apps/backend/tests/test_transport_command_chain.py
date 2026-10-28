@@ -80,7 +80,9 @@ class _Ledger:
         self.runs: dict[int, SimpleNamespace] = {}
         self.current: SimpleNamespace | None = None
 
-    def create_run(self, task_id: int, launch: RunLaunch) -> SimpleNamespace:
+    def create_run(
+        self, task_id: int, launch: RunLaunch, trigger_tool_call_id: str | None = None
+    ) -> SimpleNamespace:
         run = SimpleNamespace(
             id=len(self.runs) + 1,
             task_id=task_id,
@@ -88,6 +90,7 @@ class _Ledger:
             agent_id=launch.agent_id,
             model_config_id=launch.model_config_id,
             options=launch.options,
+            trigger_tool_call_id=trigger_tool_call_id,
         )
         self.runs[run.id] = run
         self.current = run
@@ -276,6 +279,71 @@ async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) ->
     assert chain.actor.driving
     assert chain.service.cancel_tool_call(_TASK_ID, "call-1") is True
     await _finish(chain.ledger.current.id, "completed")
+
+
+def _register_deferred(tool_call_id: str, mode: str, calls: list[str]) -> None:
+    from app.core.workflow.deferred.deferred_results import deferred_results
+
+    deferred_results.register(
+        tool_call_id,
+        task_id=_TASK_ID,
+        run_id=None,
+        kind="terminal_wait",
+        label="terminal_wait:t",
+        mode=mode,  # type: ignore[arg-type]
+        on_cancel=lambda: calls.append("cancel"),
+        on_detach=(lambda: calls.append("detach")) if mode == "foreground" else None,
+    )
+
+
+async def test_cancel_deferred_background_settles_placeholder_and_leaves_notice(
+    chain, monkeypatch
+) -> None:
+    """后台工作不要求 Run 在执行：撤销登记、占位推到 cancelled，并留一条不唤醒的通知。"""
+    settled: list[tuple[int, list[str], str]] = []
+    monkeypatch.setattr(
+        service_module.placeholders,
+        "settle_placeholders",
+        lambda task_id, ids, status, _hint: settled.append((task_id, list(ids), status)) or 1,
+    )
+    calls: list[str] = []
+    _register_deferred("call-bg", "background", calls)
+
+    assert chain.service.cancel_tool_call(_TASK_ID, "call-bg") is True
+
+    assert calls == ["cancel"]
+    assert settled == [(_TASK_ID, ["call-bg"], "cancelled")]
+    [notice] = chain.queue.pending_nowait(_TASK_ID)
+    assert notice.kind == "system_notice" and "call-bg" in notice.body.content
+    assert chain.service.cancel_tool_call(_TASK_ID, "call-bg") is False
+
+
+async def test_cancel_deferred_foreground_only_wakes_the_waiter(chain, monkeypatch) -> None:
+    monkeypatch.setattr(
+        service_module.placeholders,
+        "settle_placeholders",
+        lambda *_a: pytest.fail("foreground entries have no placeholder"),
+    )
+    calls: list[str] = []
+    _register_deferred("call-fg", "foreground", calls)
+
+    assert chain.service.cancel_tool_call(_TASK_ID, "call-fg") is True
+
+    assert calls == ["cancel"]
+    assert chain.queue.pending_nowait(_TASK_ID) == []
+
+
+async def test_background_command_detaches_only_foreground_entries(chain) -> None:
+    from app.core.task_actor import SessionConflictError
+
+    calls: list[str] = []
+    _register_deferred("call-fg", "foreground", calls)
+    chain.service.background_tool_call(_TASK_ID, "call-fg")
+    assert calls == ["detach"]
+    for call_id in ("call-fg", "call-missing"):
+        with pytest.raises(SessionConflictError) as raised:
+            chain.service.background_tool_call(_TASK_ID, call_id)
+        assert raised.value.code == "TOOL_CALL_NOT_DETACHABLE"
 
 
 # ---------------------------------------------------------------------------
