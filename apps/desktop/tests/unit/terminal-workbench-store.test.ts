@@ -34,6 +34,20 @@ describe("终端工作台 store", () => {
     expect(useTerminalWorkbenchStore.getState().tasks[7]?.activeSessionId).toBe("x1");
   });
 
+  it("离开 Task 页清空会话镜像但保留面板偏好；已 forget 的 Task 不被重建", () => {
+    const store = useTerminalWorkbenchStore.getState();
+    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("t2")]);
+    store.select(TASK, "t2");
+    store.setOpen(TASK, true);
+    store.syncSessions(TASK, null);
+    expect(task()).toMatchObject({ sessions: null, open: true, activeSessionId: "t2" });
+    expect(selectActiveSessionCount(TASK)(useTerminalWorkbenchStore.getState())).toBe(0);
+
+    store.forget([TASK]);
+    store.syncSessions(TASK, null);
+    expect(TASK in useTerminalWorkbenchStore.getState().tasks).toBe(false);
+  });
+
   it("没有活跃会话时打开面板才标记自动新建；会话列表未知时也标记，等列表到达再判定", () => {
     const store = useTerminalWorkbenchStore.getState();
     store.toggle(TASK);

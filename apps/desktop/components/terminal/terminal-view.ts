@@ -80,6 +80,8 @@ export class TerminalView {
   /** 容器量到过真实尺寸：此后终端尺寸由人的面板决定；之前采用服务端几何。 */
   private fitted = false;
   private disposed = false;
+  /** 有搜索词在生效：清除时才动高亮与选区，窗格隐藏时不误清用户自己的选区。 */
+  private searching = false;
 
   constructor(private readonly container: HTMLElement, private readonly options: TerminalViewOptions) {
     this.terminal = new Terminal({
@@ -148,6 +150,7 @@ export class TerminalView {
   }
 
   search(term: string, direction: "next" | "previous"): void {
+    this.searching = term.length > 0;
     if (!term) {
       this.searchAddon.clearDecorations();
       this.options.onSearchResults({ index: -1, count: 0 });
@@ -159,6 +162,8 @@ export class TerminalView {
   }
 
   clearSearch(): void {
+    if (!this.searching) return;
+    this.searching = false;
     this.searchAddon.clearDecorations();
     this.terminal.clearSelection();
   }
@@ -218,7 +223,8 @@ export class TerminalView {
         );
         return;
       case "protocol_error":
-        this.flash(frame.message || "终端通道协议错误", "destructive");
+        // message 是后端英文排查文本（连接层已记日志），界面只给受控提示。
+        this.flash("终端通道协议错误", "destructive");
         return;
     }
   }

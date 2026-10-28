@@ -97,7 +97,13 @@ function actionIcon(variant: ActionVariant): ReactNode {
   return <XIcon className="text-muted-foreground size-4" aria-hidden="true" />;
 }
 
-/** 卡片上的会话状态读 snapshot 的实时会话（Task 级终端列表），而不是工具执行那一刻的快照。 */
+/**
+ * 卡片上的会话状态读 snapshot 的实时会话（Task 级终端列表），而不是工具执行那一刻的快照。
+ *
+ * 「镜像尚未同步（sessions 为 null）」与「会话已消失」这里都返回 null、卡片显示「已失效」，没有区分：
+ * 卡片挂载时镜像已由同一份 snapshot 同步好（webkit 实测进入 / 切回 Task 均未出现闪现）。若以后卡片
+ * 能早于镜像同步渲染，需把 null 镜像当作「未知」不显示状态。
+ */
 function useLiveSession(taskId: number | undefined, sessionId: string | undefined): TerminalSessionEntry | null {
   return useTerminalWorkbenchStore((state) => (
     taskId === undefined || sessionId === undefined

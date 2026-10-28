@@ -116,6 +116,9 @@ export function TaskPage({
   // 切换等无关更新时会重建 activeTask 对象引用，若依赖整对象会触发冗余重渲染链。
   }, [initialTaskId, onTaskLoaded, retryToken, taskId]);
 
+  // 终端会话镜像只在本 Task 页存在期间有效：离开时清空，回来时等新 snapshot 再挂载窗格（见 store 说明）。
+  useEffect(() => () => useTerminalWorkbenchStore.getState().syncSessions(taskId, null), [taskId]);
+
   if (error) return (
     <div className="flex h-full items-center justify-center p-6">
       <ErrorState className="w-full max-w-md" message={error} onRetry={() => setRetryToken((value) => value + 1)} />

@@ -152,3 +152,29 @@ test("「+」旁的下拉选 shell 新建，非默认 shell 在标签上标出",
   await expect(panel(page).getByRole("tab")).toHaveText(["终端 1", "终端 2bash"]);
   await expect(panel(page).getByRole("tab", { name: /终端 2/ })).toHaveAttribute("aria-selected", "true");
 });
+
+test("搜索只跟随可见会话：切换标签或收起面板即关闭", async ({ page }) => {
+  await page.goto("/tasks/42");
+  await page.getByRole("button", { name: /^终端，/ }).click();
+  await expect(screen(page, "term-1")).toContainText("term-1 $");
+  const search = panel(page).getByRole("search");
+
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(search).toBeVisible();
+  await search.getByRole("textbox", { name: "在终端中搜索" }).fill("term");
+
+  // 新建并切到另一个会话：搜索不跟过去。
+  await panel(page).getByRole("button", { name: "新建终端" }).click();
+  await expect(panel(page).getByRole("tab", { name: "终端 2" })).toHaveAttribute("aria-selected", "true");
+  await expect(search).toHaveCount(0);
+  await panel(page).getByRole("tab", { name: "终端 1" }).click();
+  await expect(search).toHaveCount(0);
+
+  // 收起再打开面板：搜索同样已关闭。
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(search).toBeVisible();
+  await panel(page).getByRole("button", { name: "关闭终端面板" }).click();
+  await page.getByRole("button", { name: /^终端，/ }).click();
+  await expect(panel(page)).toBeVisible();
+  await expect(search).toHaveCount(0);
+});

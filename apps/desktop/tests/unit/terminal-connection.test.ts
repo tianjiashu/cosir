@@ -169,7 +169,7 @@ describe("TerminalConnection（terminal-v2）", () => {
   it("协议错误不自动重连，手动重连后恢复", () => {
     const { connection, sockets, states } = setup();
     sockets[0].open();
-    sockets[0].receive({ type: "protocol_error", message: "bad attach" });
+    sockets[0].receive({ type: "protocol_error", code: "TERMINAL_STREAM_PROTOCOL_ERROR", message: "bad attach" });
     expect(states.at(-1)).toBe("failed");
     vi.advanceTimersByTime(10_000);
     expect(sockets).toHaveLength(1);
@@ -186,7 +186,8 @@ describe("TerminalConnection（terminal-v2）", () => {
     vi.advanceTimersByTime(500);
     sockets[1].open();
     expect(sockets[1].sent[0]).toEqual({ type: "attach", after_seq: 1 });
-    sockets[1].receive({ type: "protocol_error", message: "terminal session not found", generation: undefined });
+    // 按 code 判定，不依赖文案：措辞变化不影响 expired 判定。
+    sockets[1].receive({ type: "protocol_error", code: "TERMINAL_SESSION_NOT_FOUND", message: "any wording" });
     expect(states.at(-1)).toBe("expired");
     expect(frames.map((frame) => frame.type)).toEqual(["attached"]);
     expect(sockets[1].closed).toBe(true);

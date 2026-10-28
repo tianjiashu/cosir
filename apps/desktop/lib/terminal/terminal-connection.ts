@@ -11,8 +11,8 @@ import { newTraceId, type TraceId } from "@/lib/trace";
  * 与禁用输入。断线只表示订阅中断，不会关闭会话。
  *
  * 帧里的 `generation` 在会话内固定（后端每个会话运行时生成一次），后端重启后旧会话不会以新
- * generation 重现，而是 attach 时直接得到 `protocol_error("terminal session not found")`，因此这里
- * 不跟踪 generation；会话不存在归为 `expired`：停止重连、平静提示，等 snapshot 把它移出列表。
+ * generation 重现，而是 attach 时直接得到 `code` 为 `TERMINAL_SESSION_NOT_FOUND` 的 `protocol_error`，
+ * 因此这里不跟踪 generation；会话不存在归为 `expired`：停止重连、平静提示，等 snapshot 把它移出列表。
  */
 
 type TerminalServerFrame =
@@ -31,7 +31,8 @@ type TerminalServerFrame =
   /** 只标记流结束；终态、退出码与租约、交接一样由 snapshot `terminal_sessions` 投影。 */
   | { type: "exit" }
   | { type: "resync_required"; first_available_seq?: number; next_seq?: number }
-  | { type: "protocol_error"; message?: string };
+  /** `code` 与 HTTP 错误体同源的稳定码，按它分支；`message` 只用于日志。 */
+  | { type: "protocol_error"; code: string; message?: string };
 
 /** 由连接自身消费的帧（output / resync / exit）之外，其余帧原样交给视图。 */
 export type TerminalControlFrame = Exclude<TerminalServerFrame, { type: "output" } | { type: "resync_required" } | { type: "exit" }>;
@@ -42,9 +43,6 @@ export type TerminalControlFrame = Exclude<TerminalServerFrame, { type: "output"
  * - `failed`：其他协议错误或重连耗尽，等用户手动重连。
  */
 export type TerminalConnectionState = "connecting" | "connected" | "reconnecting" | "ended" | "expired" | "failed";
-
-/** 后端 `terminal_api._public_error` 对 TERMINAL_SESSION_NOT_FOUND 的固定消息（WS 以 1008 关闭）。 */
-const SESSION_NOT_FOUND_MESSAGE = "terminal session not found";
 
 export type TerminalConnectionOptions = {
   taskId: number;
@@ -198,12 +196,12 @@ export class TerminalConnection {
         return;
       case "protocol_error":
         this.stopped = true;
-        if (frame.message === SESSION_NOT_FOUND_MESSAGE) {
+        if (frame.code === "TERMINAL_SESSION_NOT_FOUND") {
           // 会话已不在后端（重启或已淘汰）：不是故障，停止重连并交给 snapshot 收敛列表。
           this.log("INFO", "terminal_ws_session_expired", "终端会话已失效，停止重连");
           this.setState("expired");
         } else {
-          this.log("ERROR", "terminal_ws_protocol_error", "终端通道协议错误", { message: frame.message ?? null });
+          this.log("ERROR", "terminal_ws_protocol_error", "终端通道协议错误", { code: frame.code, message: frame.message ?? null });
           this.options.onFrame(frame);
           this.setState("failed");
         }

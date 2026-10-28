@@ -59,7 +59,8 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   const [everOpened, setEverOpened] = useState(open);
   const [mounted, setMounted] = useState<readonly string[]>([]);
   const [runtimes, setRuntimes] = useState<Record<string, TerminalViewRuntime>>({});
-  const [searchOpen, setSearchOpen] = useState(false);
+  // 搜索只属于打开它时可见的那个会话；切走、收起面板即关闭（见下方渲染期收敛）。
+  const [searchSessionId, setSearchSessionId] = useState<string | null>(null);
   const [searchResult, setSearchResult] = useState<{ index: number; count: number } | null>(null);
   const viewsRef = useRef(new Map<string, TerminalView>());
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -122,9 +123,12 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   const handleSearchResults = useCallback((sessionId: string, result: { index: number; count: number }) => {
     if (sessionId === useTerminalWorkbenchStore.getState().tasks[taskId]?.activeSessionId) setSearchResult(result);
   }, [taskId]);
-  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const openSearch = useCallback(() => {
+    setSearchSessionId(useTerminalWorkbenchStore.getState().tasks[taskId]?.activeSessionId ?? null);
+    setSearchResult(null);
+  }, [taskId]);
   const closeSearch = useCallback(() => {
-    setSearchOpen(false);
+    setSearchSessionId(null);
     setSearchResult(null);
     if (activeSessionId) {
       viewsRef.current.get(activeSessionId)?.clearSearch();
@@ -141,9 +145,16 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   }, [bridge]);
 
   const selectSession = (sessionId: string) => {
-    setSearchOpen(false);
     useTerminalWorkbenchStore.getState().select(taskId, sessionId);
   };
+
+  // 切换会话的路径有多条（点标签、卡片跳转、交接、关闭后选相邻、snapshot 回落），不逐条关搜索，
+  // 而在渲染期统一收敛：搜索所属会话不再可见就关闭。旧会话的高亮由窗格隐藏时清除。
+  const searchOpen = open && searchSessionId !== null && searchSessionId === activeSessionId;
+  if (searchSessionId !== null && !searchOpen) {
+    setSearchSessionId(null);
+    setSearchResult(null);
+  }
 
   if (!everOpened) return null;
 

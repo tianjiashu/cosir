@@ -630,10 +630,10 @@ function findTerminalSession(taskId, sessionId) {
   return (terminalSessions.get(taskId) ?? []).find((session) => session.entry.sessionId === sessionId);
 }
 
-/** 与后端 terminal_api 一致：未知会话照常 accept，收到 attach 后发 protocol_error 并以 1008 关闭。 */
+/** 与后端 terminal_stream_api 一致：未知会话照常 accept，收到 attach 后发 protocol_error 并以 1008 关闭。 */
 function rejectMissingTerminalSession(socket, sessionId) {
   socket.once("message", () => {
-    socket.send(JSON.stringify({ protocol: "terminal-v2", session_id: sessionId, type: "protocol_error", message: "terminal session not found" }));
+    socket.send(JSON.stringify({ protocol: "terminal-v2", session_id: sessionId, type: "protocol_error", code: "TERMINAL_SESSION_NOT_FOUND", message: "terminal session not found" }));
     socket.close(1008, "invalid terminal stream protocol");
   });
 }
@@ -645,7 +645,7 @@ function handleTerminalSocket(socket, session) {
     const frame = JSON.parse(String(raw));
     if (!attached) {
       if (frame.type !== "attach") {
-        socket.send(terminalFrame(session, { type: "protocol_error", message: "attach must be first" }));
+        socket.send(terminalFrame(session, { type: "protocol_error", code: "TERMINAL_STREAM_PROTOCOL_ERROR", message: "attach must be first" }));
         socket.close();
         return;
       }

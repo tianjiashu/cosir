@@ -76,7 +76,11 @@ export function TerminalSessionPane({
   }, [resolvedTheme]);
 
   useEffect(() => {
-    if (!visible) return;
+    // 隐藏（切到别的会话、收起面板）即清掉搜索高亮：搜索框只跟随可见会话，留下的高亮会无从关闭。
+    if (!visible) {
+      viewRef.current?.clearSearch();
+      return;
+    }
     viewRef.current?.refresh();
   }, [visible]);
 
