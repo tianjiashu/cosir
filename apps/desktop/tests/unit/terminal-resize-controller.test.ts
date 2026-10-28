@@ -9,6 +9,7 @@ describe("TerminalResizeController", () => {
   beforeEach(() => {
     previousWindow = globalThis.window;
     frames = [];
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: {
@@ -29,6 +30,7 @@ describe("TerminalResizeController", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: previousWindow,

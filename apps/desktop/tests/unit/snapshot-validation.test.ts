@@ -7,6 +7,7 @@ import {
   assistantMessage,
   outcome,
   queuedMessage,
+  terminalSession,
   transportState,
   userMessage,
 } from "./transport-fixtures";
@@ -40,6 +41,34 @@ describe("Transport snapshot validation", () => {
 
   it.each(["runs", "current_run_id", "approvals", "context_window_total"])("拒绝已删除的 Run 视角字段 %s", (field) => {
     expect(() => parseTransportState({ ...transportState(), [field]: [] })).toThrow(TransportSnapshotValidationError);
+  });
+
+  it("terminal_sessions 是必填数组，条目按固定字段校验", () => {
+    const withoutSessions: Record<string, unknown> = { ...transportState() };
+    delete withoutSessions.terminal_sessions;
+    expect(() => parseTransportState(withoutSessions)).toThrow(TransportSnapshotValidationError);
+
+    const snapshot = transportState({
+      terminal_sessions: [
+        terminalSession("t1", { createdBy: "agent", label: "dev server", inputHolder: "agent", handoff: { reason: "需要 sudo 密码" } }),
+        terminalSession("t2", { status: "exited", exitCode: 0, endReason: "shell_exited", integration: "unavailable" }),
+      ],
+    });
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+  });
+
+  it("拒绝重复会话、未知状态与多余字段", () => {
+    expect(() => parseTransportState(transportState({ terminal_sessions: [terminalSession("t1"), terminalSession("t1")] })))
+      .toThrow(/terminal_sessions\[1\]\.sessionId/);
+    expect(() => parseTransportState(transportState({
+      terminal_sessions: [{ ...terminalSession("t1"), status: "interrupted" } as never],
+    }))).toThrow(/terminal_sessions\[0\]\.status/);
+    expect(() => parseTransportState(transportState({
+      terminal_sessions: [{ ...terminalSession("t1"), generation: "g1" } as never],
+    }))).toThrow(TransportSnapshotValidationError);
+    expect(() => parseTransportState(transportState({
+      terminal_sessions: [terminalSession("t1", { handoff: { reason: "x", extra: 1 } as never })],
+    }))).toThrow(/handoff/);
   });
 
   it("rejects a missing messages field instead of treating it as an empty conversation", () => {
@@ -97,6 +126,13 @@ describe("Transport snapshot validation", () => {
     const snapshot = withToolPart(part);
     expect(parseTransportState(snapshot)).toBe(snapshot);
     expect(() => parseTransportState(withToolPart({ ...part, child_task_id: 0 }))).toThrow("child_task_id");
+  });
+
+  it("接受后端 execute_terminal 流式输出的去重序号 terminal_output_seq", () => {
+    const part = { type: "tool-call", toolCallId: "exec-1", toolName: "execute_terminal", status: "running", args: {}, terminal_output_seq: 3 };
+    const snapshot = withToolPart(part);
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+    expect(() => parseTransportState(withToolPart({ ...part, terminal_output_seq: -1 }))).toThrow("terminal_output_seq");
   });
 
   it("accepts the minimal child session display contract", () => {

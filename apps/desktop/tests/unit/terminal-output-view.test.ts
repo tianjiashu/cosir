@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockTerminalInstance = {
   options: Record<string, unknown>;
@@ -46,21 +46,25 @@ vi.mock("@/components/terminal/xterm-appearance", () => ({
   xtermAppearance: () => ({}),
 }));
 
-import { TerminalSession } from "@/components/assistant-ui/tools/terminal-session";
+import { TerminalOutputView } from "@/components/assistant-ui/tools/terminal-output-view";
 
-describe("TerminalSession", () => {
+describe("TerminalOutputView", () => {
   beforeEach(() => {
     mocks.terminals.length = 0;
     mocks.fitAddons.length = 0;
+    // 尺寸控制器的 animation frame 不执行：这里只验证快照回放，不验证布局 fit。
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    vi.stubGlobal("window", { requestAnimationFrame: () => 1, cancelAnimationFrame: () => undefined });
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("replays the cumulative snapshot into every new xterm instance", () => {
-    const first = new TerminalSession({} as HTMLElement);
-    first.applySnapshot({ output: "first\n", outputSeq: 1 });
+    const first = new TerminalOutputView({} as HTMLElement);
+    first.applySnapshot({ output: "first\n" });
     first.dispose();
 
-    const second = new TerminalSession({} as HTMLElement);
-    second.applySnapshot({ output: "first\n", outputSeq: 1 });
+    const second = new TerminalOutputView({} as HTMLElement);
+    second.applySnapshot({ output: "first\n" });
 
     expect(mocks.terminals).toHaveLength(2);
     expect(mocks.terminals[0].write).toHaveBeenCalledWith("first\n", expect.any(Function));
@@ -68,17 +72,17 @@ describe("TerminalSession", () => {
   });
 
   it("converts LF-only pipe output into terminal newlines", () => {
-    const session = new TerminalSession({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement);
     void session;
 
     expect(mocks.terminals[0].options.convertEol).toBe(true);
   });
 
   it("reuses the reconciler for append and reset operations", () => {
-    const session = new TerminalSession({} as HTMLElement);
-    session.applySnapshot({ output: "progress 1", outputSeq: 1 });
-    session.applySnapshot({ output: "progress 1\rprogress 2", outputSeq: 2 });
-    session.applySnapshot({ output: "final screen", outputSeq: 3 });
+    const session = new TerminalOutputView({} as HTMLElement);
+    session.applySnapshot({ output: "progress 1" });
+    session.applySnapshot({ output: "progress 1\rprogress 2" });
+    session.applySnapshot({ output: "final screen" });
 
     const terminal = mocks.terminals[0];
     expect(terminal.write).toHaveBeenNthCalledWith(1, "progress 1", expect.any(Function));
@@ -89,15 +93,15 @@ describe("TerminalSession", () => {
 
   it("coalesces snapshots while xterm is still parsing a write", () => {
     let releaseWrite: (() => void) | undefined;
-    const session = new TerminalSession({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement);
     const xterm = mocks.terminals[0];
     xterm.write.mockImplementationOnce((_text: string, done?: () => void) => {
       releaseWrite = done;
     });
 
-    session.applySnapshot({ output: "one", outputSeq: 1 });
-    session.applySnapshot({ output: "one\ntwo", outputSeq: 2 });
-    session.applySnapshot({ output: "one\ntwo\nthree", outputSeq: 3 });
+    session.applySnapshot({ output: "one" });
+    session.applySnapshot({ output: "one\ntwo" });
+    session.applySnapshot({ output: "one\ntwo\nthree" });
 
     expect(xterm.write).toHaveBeenCalledTimes(1);
     releaseWrite?.();
@@ -108,68 +112,51 @@ describe("TerminalSession", () => {
 
   it("keeps control sequences intact while coalescing cumulative snapshots", () => {
     let releaseWrite: (() => void) | undefined;
-    const session = new TerminalSession({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement);
     const terminal = mocks.terminals[0];
     terminal.write.mockImplementationOnce((_text: string, done?: () => void) => {
       releaseWrite = done;
     });
 
-    session.applySnapshot({ output: "\u001b[", outputSeq: 1 });
-    session.applySnapshot({ output: "\u001b[2Kready", outputSeq: 2 });
+    session.applySnapshot({ output: "\u001b[" });
+    session.applySnapshot({ output: "\u001b[2Kready" });
     releaseWrite?.();
 
     expect(terminal.write).toHaveBeenLastCalledWith("2Kready", expect.any(Function));
   });
 
-  it("ignores an older snapshot while a write is pending", () => {
-    let releaseWrite: (() => void) | undefined;
-    const session = new TerminalSession({} as HTMLElement);
-    const terminal = mocks.terminals[0];
-    terminal.write.mockImplementationOnce((_text: string, done?: () => void) => {
-      releaseWrite = done;
-    });
-
-    session.applySnapshot({ output: "latest", outputSeq: 3 });
-    session.applySnapshot({ output: "older", outputSeq: 2 });
-    releaseWrite?.();
-
-    expect(terminal.write).toHaveBeenCalledTimes(1);
-    expect(terminal.reset).not.toHaveBeenCalled();
-  });
-
   it("recovers after a synchronous xterm write failure", () => {
-    const session = new TerminalSession({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement);
     const terminal = mocks.terminals[0];
     terminal.write.mockImplementationOnce(() => {
       throw new Error("write failed");
     });
 
-    expect(() => session.applySnapshot({ output: "failed", outputSeq: 1 })).not.toThrow();
-    session.applySnapshot({ output: "recovered", outputSeq: 2 });
+    expect(() => session.applySnapshot({ output: "failed" })).not.toThrow();
+    session.applySnapshot({ output: "recovered" });
 
     expect(terminal.write).toHaveBeenCalledTimes(2);
   });
 
   it("does not schedule layout work after disposal", () => {
     let releaseWrite: (() => void) | undefined;
-    const session = new TerminalSession({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement);
     const terminal = mocks.terminals[0];
     terminal.write.mockImplementationOnce((_text: string, done?: () => void) => {
       releaseWrite = done;
     });
 
-    session.applySnapshot({ output: "pending", outputSeq: 1 });
+    session.applySnapshot({ output: "pending" });
     session.dispose();
     releaseWrite?.();
 
     expect(terminal.dispose).toHaveBeenCalledOnce();
   });
 
-  it("disposes xterm resources and schedules an initial fit", () => {
-    const session = new TerminalSession({} as HTMLElement);
+  it("disposes xterm resources", () => {
+    const session = new TerminalOutputView({} as HTMLElement);
     session.dispose();
 
-    expect(mocks.fitAddons[0].fit).toHaveBeenCalledOnce();
     expect(mocks.fitAddons[0].dispose).toHaveBeenCalledOnce();
     expect(mocks.terminals[0].dispose).toHaveBeenCalledOnce();
   });

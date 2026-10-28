@@ -84,7 +84,6 @@ describe("TerminalTool", () => {
     });
 
     expect(html).toContain('data-terminal-viewport="true"');
-    expect(html).toContain('data-terminal-output-seq=""');
     expect(html).toContain("实时输出已达到展示上限");
     expect(html).not.toContain("exit ");
   });

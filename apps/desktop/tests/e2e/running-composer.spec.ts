@@ -30,6 +30,7 @@ function activeState(queued: TransportState["queued_messages"] = []): TransportS
       contextWindowTotal: null, launch: RUN_LAUNCH,
     },
     queued_messages: queued,
+    terminal_sessions: [],
   };
 }
 

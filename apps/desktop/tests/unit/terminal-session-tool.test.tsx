@@ -1,5 +1,22 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { TerminalSessionEntry } from "@/lib/assistant/contract";
+import { terminalSession } from "./transport-fixtures";
+
+// 服务端渲染只读 zustand 的初始状态，这里直接替换 store，让卡片读到受控的 snapshot 会话。
+const store = vi.hoisted(() => ({
+  sessions: [] as TerminalSessionEntry[],
+  reveal: vi.fn(),
+}));
+vi.mock("@/lib/terminal/terminal-workbench-store", () => {
+  const state = () => ({ tasks: { 42: { sessions: store.sessions } } });
+  const useTerminalWorkbenchStore = Object.assign(
+    (selector: (value: ReturnType<typeof state>) => unknown) => selector(state()),
+    { getState: () => ({ reveal: store.reveal }) },
+  );
+  return { useTerminalWorkbenchStore };
+});
 
 import { TerminalSessionTool } from "@/components/assistant-ui/tools/terminal-session-tool";
 
@@ -7,10 +24,10 @@ type RenderOptions = {
   variant: string;
   status?: "pending" | "running" | "completed" | "failed" | "cancelled";
   display_data?: Record<string, unknown> | null;
-  taskId?: number;
+  interactive?: boolean;
 };
 
-function renderSession({ variant, status = "completed", display_data = {}, taskId = 42 }: RenderOptions): string {
+function renderSession({ variant, status = "completed", display_data = {}, interactive = true }: RenderOptions): string {
   return renderToStaticMarkup(
     <TerminalSessionTool
       type="tool-call"
@@ -22,7 +39,8 @@ function renderSession({ variant, status = "completed", display_data = {}, taskI
       addResult={() => undefined}
       resume={() => undefined}
       respondToApproval={() => undefined}
-      taskId={taskId}
+      taskId={42}
+      interactive={interactive}
       artifact={{
         backendStatus: status,
         presentation: { variant, surface: variant.endsWith("start") ? "standalone" : "trace" },
@@ -33,79 +51,61 @@ function renderSession({ variant, status = "completed", display_data = {}, taskI
 }
 
 describe("TerminalSessionTool", () => {
+  beforeEach(() => {
+    store.sessions = [terminalSession("term_demo", { createdBy: "agent", shellKind: "powershell" })];
+  });
+
   it("renders terminal_list as a discovery result", () => {
     const html = renderSession({ variant: "terminal-session-list", display_data: { session_count: 2 } });
     expect(html).toContain("列出终端会话");
     expect(html).toContain("2 个会话");
-    expect(html).not.toContain("关闭终端会话");
   });
 
-  it("renders terminal_start as the session anchor with the only open action", () => {
+  it("start 卡提供「在终端中查看」，状态读 snapshot 的实时会话", () => {
+    store.sessions = [terminalSession("term_demo", { status: "exited", exitCode: 0 })];
     const html = renderSession({
       variant: "terminal-session-start",
-      display_data: {
-        session_id: "term_demo",
-        shell_kind: "powershell",
-        initial_cwd: "H:\\coding-agent",
-        status: "running",
-      },
+      display_data: { session_id: "term_demo", shell_kind: "powershell", initial_cwd: "H:\\coding-agent", status: "running" },
     });
-
-    expect(html).toContain("终端会话");
+    expect(html).toContain("在终端中查看");
     expect(html).toContain("powershell");
-    expect(html).toContain("打开终端");
-  });
-
-  it.each([
-    ["exited", "已退出"],
-    ["failed", "会话失败"],
-    ["closed", "已关闭"],
-  ] as const)("renders terminal session lifecycle status %s independently of tool completion", (status, label) => {
-    const html = renderSession({
-      variant: "terminal-session-start",
-      display_data: {
-        session_id: "term_demo",
-        shell_kind: "powershell",
-        status,
-      },
-    });
-
-    expect(html).toContain(label);
-    expect(html).toContain("已完成");
+    expect(html).toContain("已退出");
     expect(html).not.toContain("运行中");
   });
 
-  it("renders terminal_read as a compact trace without a panel action", () => {
-    const html = renderSession({
-      variant: "terminal-session-read",
-      display_data: { session_id: "term_demo", next_seq: 18, status: "running" },
-    });
-
-    expect(html).toContain("读取终端输出");
-    expect(html).toContain("next seq 18");
-    expect(html).not.toContain("打开终端");
+  it("会话已不在 snapshot（后端重启或超出保留数）时标为已失效且不可跳转", () => {
+    store.sessions = [];
+    const html = renderSession({ variant: "terminal-session-start", display_data: { session_id: "term_demo" } });
+    expect(html).toContain("已失效");
+    expect(html).toMatch(/<button[^>]*disabled/);
   });
 
-  it("shows only the safe submit state for terminal_write", () => {
+  it("只读线程（子 Agent）不提供跳转", () => {
+    const start = renderSession({ variant: "terminal-session-start", display_data: { session_id: "term_demo" }, interactive: false });
+    expect(start).not.toContain("在终端中查看");
+    const write = renderSession({ variant: "terminal-session-write", display_data: { session_id: "term_demo", input_summary: "npm test" }, interactive: false });
+    expect(write).toContain('role="status"');
+  });
+
+  it("write 动作行显示实际输入与等待结果，可点击跳转", () => {
     const html = renderSession({
       variant: "terminal-session-write",
-      display_data: { session_id: "term_demo", submitted: true, status: "running" },
+      display_data: { session_id: "term_demo", input_type: "line", input_summary: "npm test", wait_result: { until: "command_returned", end_reason: "command_returned" }, lines: [12, 40] },
     });
-
-    expect(html).toContain("提交终端输入");
-    expect(html).toContain("已提交");
-    expect(html).not.toContain("打开终端");
-    expect(html).not.toContain("password");
+    expect(html).toContain("终端输入");
+    expect(html).toContain("npm test · 命令已返回");
+    expect(html).toContain('role="button"');
+    expect(html).not.toContain("next seq");
   });
 
-  it("renders the selected signal without exposing a terminal control", () => {
+  it("read 动作行显示行范围；无等待条件时不显示等待结果", () => {
     const html = renderSession({
-      variant: "terminal-session-signal",
-      display_data: { session_id: "term_demo", signal: "interrupt", status: "running" },
+      variant: "terminal-session-read",
+      display_data: { session_id: "term_demo", lines: [120, 182], wait_result: { until: "output_quiet", end_reason: "idle" } },
     });
-
-    expect(html).toContain("发送中断信号");
-    expect(html).not.toContain("打开终端");
+    expect(html).toContain("读取终端");
+    expect(html).toContain("第 120–182 行");
+    expect(html).not.toContain("idle");
   });
 
   it("renders terminal_close as a final trace row", () => {
@@ -113,10 +113,13 @@ describe("TerminalSessionTool", () => {
       variant: "terminal-session-close",
       display_data: { session_id: "term_demo", status: "closed", exit_code: 0 },
     });
-
     expect(html).toContain("关闭终端会话");
-    expect(html).toContain("已关闭");
-    expect(html).toContain("exit 0");
-    expect(html).not.toContain("打开终端");
+    expect(html).toContain("已关闭 · exit 0");
+    expect(html).toContain('role="status"');
+  });
+
+  it("signal 变体已并入 write，按未知变体安全降级", () => {
+    const html = renderSession({ variant: "terminal-session-signal", display_data: { session_id: "term_demo" } });
+    expect(html).toContain("终端会话操作");
   });
 });

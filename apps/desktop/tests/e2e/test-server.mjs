@@ -1,6 +1,7 @@
-/* global structuredClone, setTimeout, URL, console, process */
+/* global structuredClone, setTimeout, clearTimeout, URL, console, process, Buffer */
 
 import { createServer } from "node:http";
+import { WebSocketServer } from "ws";
 
 const HOST = "127.0.0.1";
 const PORT = 8000;
@@ -28,6 +29,17 @@ let nextRunId = 1;
 let testGeneration = 0;
 let dropNextCancelledStream = false;
 let failNextAttach = false;
+/**
+ * 交互终端模拟：taskId -> 会话数组。每个会话持有 snapshot 条目、输出缓冲（seq 递增）与已 attach 的 WS。
+ * 只模拟 terminal-v2 的最小闭环（attach 续传、input 回显与短租约、resize、exit），不模拟交接。
+ */
+const terminalSessions = new Map();
+let nextTerminalId = 1;
+const terminalShells = [
+  { kind: "zsh", label: "zsh", isDefault: true, integrationSupported: true },
+  { kind: "bash", label: "bash", isDefault: false, integrationSupported: true },
+  { kind: "sh", label: "sh", isDefault: false, integrationSupported: false },
+];
 const telemetry = {
   clientCancelCount: 0,
   completedStreamCount: 0,
@@ -41,6 +53,14 @@ function resetTestState() {
   for (const set of subscribers.values()) for (const res of set) res.end();
   subscribers.clear();
   executors.clear();
+  for (const sessions of terminalSessions.values()) {
+    for (const session of sessions) {
+      clearTimeout(session.leaseTimer);
+      for (const socket of session.sockets) socket.terminate();
+    }
+  }
+  terminalSessions.clear();
+  nextTerminalId = 1;
   dropNextCancelledStream = false;
   failNextAttach = false;
   lastStreamBody = "";
@@ -106,7 +126,6 @@ function stateWithExchange(previous, text, runId, assistantText, status) {
     endReason: status === "completed" ? "stop" : status === "failed" ? "max_steps_reached" : status === "cancelled" ? "user_cancelled" : null,
   });
   if (TERMINAL.has(status)) next.messages.at(-1).outcome = outcomeOf(next.activity);
-  next.error = null;
   return next;
 }
 
@@ -311,6 +330,11 @@ function writeSse(res, frame) {
   res.write(`data: ${JSON.stringify(frame)}\n\n`);
 }
 
+/** wire 上的 Task state：模拟后端把进程内终端会话列表投影进 snapshot 顶层 `terminal_sessions`。 */
+function wireState(taskId, state = states.get(taskId)) {
+  return { ...state, terminal_sessions: (terminalSessions.get(taskId) ?? []).map((session) => session.entry) };
+}
+
 /** 向 Task 的全部订阅推送一帧，并记入最近一轮的流日志。 */
 function publish(taskId, frame) {
   const encoded = `data: ${JSON.stringify(frame)}\n\n`;
@@ -321,7 +345,7 @@ function publish(taskId, frame) {
 /** 落定新的 Task 状态：结构变化以 full 帧推送（前端对 full 与 mutation 同一语义收敛）。 */
 function commit(taskId, state) {
   states.set(taskId, state);
-  publish(taskId, { task_id: taskId, kind: "full", mutations: [], state });
+  publish(taskId, { task_id: taskId, kind: "full", mutations: [], state: wireState(taskId) });
 }
 
 function wait(milliseconds) {
@@ -536,7 +560,7 @@ function handleAttach(res, taskId) {
     set.delete(res);
     if (generation === testGeneration && executors.has(taskId)) telemetry.clientCancelCount += 1;
   });
-  writeSse(res, { task_id: taskId, kind: "full", mutations: [], state: states.get(taskId) });
+  writeSse(res, { task_id: taskId, kind: "full", mutations: [], state: wireState(taskId) });
   // seeded 的运行中 Run 没有执行者：首个订阅到来时模拟后端继续执行它。
   if (isActive(states.get(taskId).activity?.status) && states.get(taskId).activity.status === "running" && !executors.has(taskId)) {
     continueRun(taskId);
@@ -555,6 +579,106 @@ function handleQueuedEdit(res, body, taskId, messageId) {
   next.queued_messages.find((message) => message.id === messageId).parts = body.message.parts;
   jsonResponse(res, 200, {});
   commit(taskId, next);
+}
+
+function terminalFrame(session, frame) {
+  return JSON.stringify({ protocol: "terminal-v2", session_id: session.entry.sessionId, generation: "e2e", ...frame });
+}
+
+function appendTerminalOutput(session, text) {
+  const seq = session.output.length + 1;
+  const data = Buffer.from(text, "utf8").toString("base64");
+  session.output.push({ seq, data });
+  for (const socket of session.sockets) socket.send(terminalFrame(session, { type: "output", seq, data_base64: data }));
+}
+
+function createTerminalSession(taskId, shell) {
+  const sessionId = `term-${nextTerminalId++}`;
+  const session = {
+    taskId,
+    entry: {
+      sessionId,
+      label: "",
+      shellKind: shell === "auto" ? "zsh" : shell,
+      createdBy: "user",
+      status: "running",
+      endReason: null,
+      exitCode: null,
+      integration: "ready",
+      inputHolder: null,
+      commandRunning: false,
+      handoff: null,
+      createdAt: new Date().toISOString(),
+    },
+    output: [],
+    sockets: new Set(),
+    rows: 24,
+    columns: 80,
+  };
+  terminalSessions.set(taskId, [...(terminalSessions.get(taskId) ?? []), session]);
+  appendTerminalOutput(session, `${sessionId} $ `);
+  return session;
+}
+
+function setTerminalHolder(session, holder) {
+  if (session.entry.inputHolder === holder) return;
+  session.entry.inputHolder = holder;
+  if (states.has(session.taskId)) commit(session.taskId, states.get(session.taskId));
+}
+
+function findTerminalSession(taskId, sessionId) {
+  return (terminalSessions.get(taskId) ?? []).find((session) => session.entry.sessionId === sessionId);
+}
+
+/** 与后端 terminal_api 一致：未知会话照常 accept，收到 attach 后发 protocol_error 并以 1008 关闭。 */
+function rejectMissingTerminalSession(socket, sessionId) {
+  socket.once("message", () => {
+    socket.send(JSON.stringify({ protocol: "terminal-v2", session_id: sessionId, type: "protocol_error", message: "terminal session not found" }));
+    socket.close(1008, "invalid terminal stream protocol");
+  });
+}
+
+/** 按 terminal-v2 处理一条 WS：首帧 attach 后续传缓冲；input 原样回显，回车换行并补提示符。 */
+function handleTerminalSocket(socket, session) {
+  let attached = false;
+  socket.on("message", (raw) => {
+    const frame = JSON.parse(String(raw));
+    if (!attached) {
+      if (frame.type !== "attach") {
+        socket.send(terminalFrame(session, { type: "protocol_error", message: "attach must be first" }));
+        socket.close();
+        return;
+      }
+      attached = true;
+      const afterSeq = frame.after_seq ?? 0;
+      socket.send(terminalFrame(session, {
+        type: "attached", rows: session.rows, columns: session.columns, status: session.entry.status,
+        first_available_seq: 1, next_seq: session.output.length + 1,
+      }));
+      for (const chunk of session.output) {
+        if (chunk.seq > afterSeq) socket.send(terminalFrame(session, { type: "output", seq: chunk.seq, data_base64: chunk.data }));
+      }
+      if (session.entry.status !== "running") {
+        socket.send(terminalFrame(session, { type: "exit" }));
+        return;
+      }
+      session.sockets.add(socket);
+      socket.on("close", () => session.sockets.delete(socket));
+      return;
+    }
+    if (frame.type === "input") {
+      // 最小租约模拟：人工输入即持有，短暂空闲后释放（真实后端为 3 秒）；与后端一致只经 snapshot 投影。
+      clearTimeout(session.leaseTimer);
+      setTerminalHolder(session, "user");
+      session.leaseTimer = setTimeout(() => setTerminalHolder(session, null), 300);
+      const text = Buffer.from(frame.data_base64, "base64").toString("utf8");
+      appendTerminalOutput(session, text.replace(/\r/g, `\r\n${session.entry.sessionId} $ `));
+    } else if (frame.type === "resize") {
+      session.rows = frame.rows;
+      session.columns = frame.cols;
+      socket.send(terminalFrame(session, { type: "geometry", rows: frame.rows, columns: frame.cols }));
+    }
+  });
 }
 
 const server = createServer(async (req, res) => {
@@ -739,6 +863,28 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { enabled: true });
     return;
   }
+  // 模拟后端重启：进程内终端会话全部消失、连接断开，但 snapshot 尚未回推（由 sync 单独触发）。
+  if (req.method === "POST" && url.pathname === "/__test__/terminal/expire") {
+    const body = await readJson(req);
+    for (const session of terminalSessions.get(body.taskId) ?? []) for (const socket of session.sockets) socket.terminate();
+    terminalSessions.delete(body.taskId);
+    jsonResponse(res, 200, {});
+    return;
+  }
+  // 模拟 shell 集成报告命令开始 / 返回：改 commandRunning 并回推 snapshot。
+  if (req.method === "POST" && url.pathname === "/__test__/terminal/command") {
+    const body = await readJson(req);
+    findTerminalSession(body.taskId, body.sessionId).entry.commandRunning = body.running;
+    if (states.has(body.taskId)) commit(body.taskId, states.get(body.taskId));
+    jsonResponse(res, 200, {});
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/__test__/terminal/sync") {
+    const body = await readJson(req);
+    if (states.has(body.taskId)) commit(body.taskId, states.get(body.taskId));
+    jsonResponse(res, 200, {});
+    return;
+  }
   if (req.method === "POST" && url.pathname === "/__test__/fail-next-attach") {
     failNextAttach = true;
     jsonResponse(res, 200, { enabled: true });
@@ -761,6 +907,35 @@ const server = createServer(async (req, res) => {
     states.set(501, childDelegationState());
     states.set(502, secondChildDelegationState());
     jsonResponse(res, 200, { task_id: TASK_ID, child_task_id: 501, second_child_task_id: 502 });
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/terminal/shells") {
+    jsonResponse(res, 200, { shells: terminalShells });
+    return;
+  }
+  const terminalCreateRoute = url.pathname.match(/^\/tasks\/(\d+)\/terminal\/sessions$/);
+  if (req.method === "POST" && terminalCreateRoute) {
+    const taskId = Number(terminalCreateRoute[1]);
+    const body = await readJson(req);
+    const session = createTerminalSession(taskId, typeof body.shell === "string" ? body.shell : "auto");
+    jsonResponse(res, 200, { sessionId: session.entry.sessionId });
+    if (states.has(taskId)) commit(taskId, states.get(taskId));
+    return;
+  }
+  const terminalSessionRoute = url.pathname.match(/^\/tasks\/(\d+)\/terminal\/sessions\/([^/]+)$/);
+  if (req.method === "DELETE" && terminalSessionRoute) {
+    const taskId = Number(terminalSessionRoute[1]);
+    const session = findTerminalSession(taskId, decodeURIComponent(terminalSessionRoute[2]));
+    if (!session) {
+      jsonResponse(res, 404, { detail: { code: "TERMINAL_SESSION_NOT_FOUND", message: "终端会话不存在", retryable: false } });
+      return;
+    }
+    session.entry = { ...session.entry, status: "closed", endReason: "user_closed", exitCode: null };
+    for (const socket of session.sockets) {
+      socket.send(terminalFrame(session, { type: "exit" }));
+    }
+    jsonResponse(res, 200, {});
+    if (states.has(taskId)) commit(taskId, states.get(taskId));
     return;
   }
   if (req.method === "POST" && /^\/tasks\/\d+\/cancel$/.test(url.pathname)) {
@@ -789,7 +964,7 @@ const server = createServer(async (req, res) => {
       jsonResponse(res, 404, { detail: "task not found" });
       return;
     }
-    jsonResponse(res, 200, states.get(taskId));
+    jsonResponse(res, 200, wireState(taskId));
     return;
   }
   const taskRoute = url.pathname.match(/^\/tasks\/(\d+)\/(messages|resume|messages\/([^/]+)\/rerun)$/);
@@ -813,6 +988,21 @@ const server = createServer(async (req, res) => {
     return;
   }
   jsonResponse(res, 404, { detail: "not found" });
+});
+
+const terminalSockets = new WebSocketServer({ noServer: true });
+server.on("upgrade", (req, socket, head) => {
+  const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
+  const route = url.pathname.match(/^\/tasks\/(\d+)\/terminal\/sessions\/([^/]+)\/stream$/);
+  if (!route) {
+    socket.destroy();
+    return;
+  }
+  const sessionId = decodeURIComponent(route[2]);
+  const session = findTerminalSession(Number(route[1]), sessionId);
+  terminalSockets.handleUpgrade(req, socket, head, (ws) => (
+    session ? handleTerminalSocket(ws, session) : rejectMissingTerminalSession(ws, sessionId)
+  ));
 });
 
 server.listen(PORT, HOST, () => {
