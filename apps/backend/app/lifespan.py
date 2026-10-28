@@ -47,7 +47,7 @@ from app.core.agents.agent_profile_config import (
     ensure_system_agent_team_config_dir,
 )
 from app.core.hook import HookContext, HookEvent, HookInterceptor
-from app.core.workflow.wait.background_watches import background_watches
+from app.core.workflow.deferred.deferred_results import deferred_results
 from app.tools.tool_registration import build_tool_registry
 from app.service.configuration.agent_team_configuration_service import (
     AgentTeamConfigurationService,
@@ -58,6 +58,7 @@ from app.service.configuration.main_agent_prompt_configuration_service import (
 )
 from app.service.depends import (
     close_service_dependencies,
+    get_conversation_task_state_service,
     get_recover_service,
     get_task_service,
     initialize_service_dependencies,
@@ -223,14 +224,25 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     # Task 的 actor 随 space 物化拉起：先绑定事件循环，再为有待处理消息或挂起 Run 的 Task 物化
     # space——重启前已到达的消息由 actor 照常处理，挂起的 Run 照常等唤醒。
     task_runtime_spaces.bind_loop(asyncio.get_running_loop())
-    background_watches.open()
+    deferred_results.open()
+    # 后台工作看板随登记表变化整表重投影进 Transport snapshot（通知线程、锁外）。
+    deferred_results.set_listener(
+        lambda task_id: get_conversation_task_state_service().refresh_deferred_results(task_id)
+    )
     dispatch_task_ids = get_task_service().list_task_ids_to_dispatch()
     for task_id in dispatch_task_ids:
         task_runtime_spaces.get_or_create(task_id)
-    # 终端会话与后台等待不跨重启：挂起在终端上的 Run 等不到结论，投递一条重启结论把它唤醒；
-    # 其余 Task 在本进程首次驱动时另得一条失效提醒（见 ``terminal_invalidation``）。
-    from app.core.workflow.wait.terminal_invalidation import wake_suspended_terminal_runs
+    # 终端会话与延迟结果不跨重启：挂起在终端上的 Run 等不到结论，投递一条重启结论把它唤醒；
+    # 其余 Task 在本进程首次驱动时另得一条失效提醒（见 ``restart_settlement``）。
+    # 委派子 Run 已被恢复流程收敛为 cancelled：按触发调用把结论回投给等它的父 Agent。
+    from app.core.workflow.deferred.restart_settlement import (
+        interrupt_pending_placeholders,
+        settle_restarted_child_runs,
+        wake_suspended_terminal_runs,
+    )
 
+    interrupt_pending_placeholders()
+    settle_restarted_child_runs(recovered_runs)
     wake_suspended_terminal_runs(dispatch_task_ids)
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
@@ -243,10 +255,11 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         try:
             # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
             HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
-            # 先禁止后台等待投递（撤销全部等待、等在途投递写完）：之后关闭终端会把会话结束为
+            # 先禁止延迟结果投递（撤销全部条目、等在途投递写完）：之后关闭终端会把会话结束为
             # closed、唤醒等待线程与交接，它们不得在关闭期间写 task_messages。再停下全部 actor
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
-            await asyncio.to_thread(background_watches.close)
+            await asyncio.to_thread(deferred_results.close)
+            deferred_results.set_listener(None)
             await task_runtime_spaces.aclose()
             await asyncio.to_thread(close_service_dependencies)
             # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
