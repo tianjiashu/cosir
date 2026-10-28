@@ -3,7 +3,7 @@
 import { StreamdownTextPrimitive } from "@assistant-ui/react-streamdown";
 import type { MessagePartStatus } from "@assistant-ui/core";
 
-import { markdownPlugins } from "@/components/markdown-rendering-config";
+import { markdownPlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
 
 type MarkdownTextProps = {
   status?: MessagePartStatus;
@@ -15,6 +15,7 @@ type MarkdownTextProps = {
  * 流式 caret 和链接安全；组件本身不解析内容，也不把渲染结果写回 runtime 或服务端。
  */
 export function MarkdownText({ status }: MarkdownTextProps) {
+  const mermaidOptions = useMermaidOptions();
   return (
     <StreamdownTextPrimitive
       mode="streaming"
@@ -23,7 +24,7 @@ export function MarkdownText({ status }: MarkdownTextProps) {
       shikiTheme={["github-light", "github-dark"]}
       caret={status?.type === "running" ? "block" : undefined}
       linkSafety={{ enabled: true }}
-      mermaid={{ config: { securityLevel: "strict" } }}
+      mermaid={mermaidOptions}
       security={{ allowedProtocols: ["https", "mailto"] }}
       className="aui-md !space-y-3 leading-6"
     />

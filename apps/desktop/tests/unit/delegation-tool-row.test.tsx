@@ -51,6 +51,19 @@ describe("DelegationToolRow", () => {
     expect(html).not.toContain("Traceback: secret=do-not-render");
   });
 
+  it("shows a suspended child Run as waiting", () => {
+    const html = renderDelegationRow(undefined, {
+      kind: "delegation-result",
+      title: "审查代码",
+      child_task_id: 501,
+      role: "Reviewer",
+      status: "suspended",
+    });
+
+    expect(html).toContain("等待中");
+    expect(html).not.toContain("状态未知");
+  });
+
   it("keeps child output out of the parent delegation row", () => {
     const html = renderDelegationRow(undefined, {
       kind: "delegation-result",

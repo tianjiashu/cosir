@@ -1,4 +1,4 @@
-import { DeferredResultsCard } from "./deferred-results-card";
+import { BackgroundTasksCard } from "./background-tasks-card";
 import { useFocusedTaskId } from "./focused-task-context";
 
 /** 工作台「任务概览」：纵向卡片栈，跟随当前聚焦的 Task；以后的上下文用量、改动等卡片加在这里。 */
@@ -9,7 +9,7 @@ export function TaskOverviewSurface() {
   }
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3" data-task-overview={taskId}>
-      <DeferredResultsCard taskId={taskId} />
+      <BackgroundTasksCard taskId={taskId} />
     </div>
   );
 }

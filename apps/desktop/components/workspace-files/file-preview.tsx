@@ -5,6 +5,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getFileInfo } from "@/lib/api/workspace-files";
 import { queryKeys } from "@/lib/query/query-keys";
+import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 import { TextPreview } from "./text-preview";
 import { ImagePreview } from "./image-preview";
@@ -35,15 +36,15 @@ export function FilePreview({
     return (
       <>
         <ReadingToolbar navigation={navigation} />
-        <div role="alert" className="p-4 text-sm">
-          {userErrorMessage(query.error, "文件读取失败")}
-          <Button variant="ghost" onClick={() => void query.refetch()}>
-            重新读取
-          </Button>
-        </div>
+        <ErrorState
+          className="m-4"
+          message={userErrorMessage(query.error, "文件读取失败")}
+          onRetry={() => void query.refetch()}
+          retryLabel="重新读取"
+        />
       </>
     );
-  if (!query.data) return <><ReadingToolbar navigation={navigation} /><p className="p-4 text-sm">正在读取文件信息…</p></>;
+  if (!query.data) return <><ReadingToolbar navigation={navigation} /><LoadingState label="正在读取文件信息…" /></>;
   const info = query.data;
   const view = info.kind === "svg" ? (
     <Button size="sm" variant="ghost" onClick={() => setAsText(!asText)}>{asText ? "图片" : "源码"}</Button>
@@ -58,7 +59,7 @@ export function FilePreview({
     );
   else if (info.kind === "pdf")
     content = (
-      <Suspense fallback={<p className="p-4">正在加载 PDF 阅读器…</p>}>
+      <Suspense fallback={<LoadingState label="正在加载 PDF 阅读器…" />}>
         <PdfPreview workspaceId={workspaceId} info={info} />
       </Suspense>
     );

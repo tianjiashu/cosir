@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { CancelTaskResult } from "@/lib/assistant/cancel-task";
+import type { CancelTaskResult } from "@/lib/assistant/task-commands";
 
 const captured = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
@@ -13,7 +13,7 @@ vi.mock("@/components/ui/button", () => ({
     return null;
   },
 }));
-vi.mock("@/lib/assistant/cancel-task", () => ({
+vi.mock("@/lib/assistant/task-commands", () => ({
   cancelTask: captured.cancelRun,
 }));
 

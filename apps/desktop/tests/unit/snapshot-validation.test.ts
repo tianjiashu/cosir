@@ -154,6 +154,18 @@ describe("Transport snapshot validation", () => {
     expect(parseTransportState(snapshot)).toBe(snapshot);
   });
 
+  it("accepts a suspended child Run status instead of rejecting the whole snapshot", () => {
+    // 子 Agent 卡片的状态是子 Task 的 Run 状态：子 Agent 等审批 / 等消息时为 suspended。
+    const snapshot = withToolPart({
+      type: "tool-call", toolCallId: "status-1", toolName: "child_agent_status", status: "completed", args: {},
+      display_data: {
+        kind: "child-agent-result", operation: "status", child_task_id: 501, status: "suspended",
+        agent_id: "reviewer", agent_name: "审查代码", final_output: null, end_reason: null,
+      },
+    });
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+  });
+
   it("rejects child output embedded in a parent delegation display", () => {
     const snapshot = withToolPart({
       type: "tool-call", toolCallId: "delegate-1", toolName: "delegate_task", status: "completed", args: {},

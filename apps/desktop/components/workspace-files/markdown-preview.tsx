@@ -7,7 +7,7 @@ import { normalizeWorkspaceUrls } from "@/lib/workspace-files/markdown-urls";
 import { useResourceWatch } from "@/lib/workspace-files/resource-watch";
 import type { Components } from "react-markdown";
 import { Streamdown, defaultRehypePlugins } from "streamdown";
-import { markdownPlugins } from "@/components/markdown-rendering-config";
+import { markdownPlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
 import { parentPath } from "@/lib/workspace-files/store";
 import { useImageResource } from "@/lib/workspace-files/resources";
 
@@ -89,6 +89,7 @@ export function MarkdownPreview({
   onSelectText?: (text: string | null) => void;
 }) {
   const host = useRef<HTMLDivElement>(null);
+  const mermaidOptions = useMermaidOptions();
   useEffect(() => {
     const onChange = () => {
       const selection = window.getSelection();
@@ -159,7 +160,7 @@ export function MarkdownPreview({
         rehypePlugins={workspaceRehypePlugins}
         shikiTheme={["github-light", "github-dark"]}
         linkSafety={{ enabled: true }}
-        mermaid={{ config: { securityLevel: "strict" } }}
+        mermaid={mermaidOptions}
         components={components}
       >
         {text}

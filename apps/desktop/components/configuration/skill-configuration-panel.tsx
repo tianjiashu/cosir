@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Switch } from "@/components/ui/switch";
-import { markdownPlugins } from "@/components/markdown-rendering-config";
+import { markdownPlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
 import {
   deleteSystemSkill,
   getSystemSkill,
@@ -41,6 +41,7 @@ export function SkillConfigurationPanel() {
   // 原生文件选择框打开期间按钮尚未禁用，用同步标记挡住连击造成的重复弹框。
   const pickingSource = useRef(false);
   const [detailName, setDetailName] = useState<string | null>(null);
+  const mermaidOptions = useMermaidOptions();
 
   const skillsQuery = useQuery({
     queryKey: queryKeys.skills(),
@@ -196,7 +197,7 @@ export function SkillConfigurationPanel() {
             />
           ) : (
             <div className="aui-md max-h-[60vh] overflow-y-auto rounded-lg border bg-muted/20 p-4 leading-6">
-              <Streamdown mode="static" plugins={markdownPlugins} shikiTheme={["github-light", "github-dark"]} linkSafety={{ enabled: true }} mermaid={{ config: { securityLevel: "strict" } }} className="!space-y-3">
+              <Streamdown mode="static" plugins={markdownPlugins} shikiTheme={["github-light", "github-dark"]} linkSafety={{ enabled: true }} mermaid={mermaidOptions} className="!space-y-3">
                 {detailQuery.data.content}
               </Streamdown>
             </div>

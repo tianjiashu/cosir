@@ -4,7 +4,7 @@ import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
 
 const origin = "http://127.0.0.1:8000";
-const LAUNCH = { modelConfigId: null, reasoningEffort: null, banTools: [] };
+const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
 /** 两轮回复：第一轮已结束（带结局），第二轮处于 `status`。 */
 const snapshot = (status: "completed" | "running" | "suspended"): TransportState => {
   const ended = (runStatus: string) => runStatus === "completed";
@@ -19,7 +19,7 @@ const snapshot = (status: "completed" | "running" | "suspended"): TransportState
     title: "测试对话",
     messages: [...turn(1, "completed"), ...turn(2, status)],
     activity: { runId: 2, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH },
-    terminal_sessions: [], deferred_results: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [],
   };
 };
 

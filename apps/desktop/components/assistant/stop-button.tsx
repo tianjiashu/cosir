@@ -9,7 +9,7 @@ import {
 } from "react";
 import { LoaderCircleIcon, SquareIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cancelTask } from "@/lib/assistant/cancel-task";
+import { cancelTask } from "@/lib/assistant/task-commands";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";

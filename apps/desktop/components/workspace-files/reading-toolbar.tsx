@@ -1,6 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { FolderTreeIcon, MoreHorizontalIcon } from "lucide-react";
-import { toast } from "sonner";
+import { copyText } from "@/lib/clipboard";
+import { workspacePathText } from "@/lib/workspace-files/store";
 import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
@@ -24,18 +25,11 @@ export function ReadingToolbar({ navigation, info, view, actions, options }: {
 }) {
   const [pathOpen, setPathOpen] = useState(false);
   const pathTrigger = useRef<HTMLButtonElement>(null);
-  const copy = async (absolute: boolean) => {
-    const separator = navigation.rootPath.includes("\\") ? "\\" : "/";
-    const path = absolute
-      ? `${navigation.rootPath.replace(/[\\/]$/, "")}${separator}${navigation.path.replaceAll("/", separator)}`
-      : navigation.path;
-    try {
-      await navigator.clipboard.writeText(path);
-      toast.success("路径已复制");
-    } catch {
-      toast.error("无法写入剪贴板");
-    }
-  };
+  const copy = (absolute: boolean) => copyText(workspacePathText(navigation.rootPath, navigation.path, absolute), {
+    success: "路径已复制",
+    logEvent: "workspace_path_copy_failed",
+    logData: { absolute, source: "reading_toolbar" },
+  });
   return (
     <div className="flex shrink-0 items-center gap-1 border-b px-2 py-1 text-xs" aria-label="文件阅读工具栏">
       <TooltipIconButton tooltip={navigation.treeVisible ? "收起目录" : "浏览目录与搜索"}

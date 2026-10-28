@@ -2,9 +2,9 @@ import { useState } from "react";
 import { ArrowDownToLineIcon, LoaderCircleIcon, SquareIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { backgroundToolCall, cancelToolCall } from "@/lib/assistant/tool-call-commands";
+import { backgroundToolCall, cancelToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
-import { useDeferredResults } from "@/lib/task-overview/deferred-results-store";
+import { useForegroundWaits } from "@/lib/task-overview/background-tasks-store";
 
 import type { ToolArtifact } from "./types";
 
@@ -13,7 +13,7 @@ import type { ToolArtifact } from "./types";
  *
  * - 后台占位（`artifact.deferred` 且仍为 `pending`）：显示「后台执行中」与「取消」；状态取自占位行，
  *   取消后等 snapshot 把占位推到 `cancelled`。
- * - 前台等待（看板里有该调用的前台运行条目）：显示「转到后台」；前台条目只存在于 `deferred_results`。
+ * - 前台等待（snapshot `foreground_waits` 列出该调用）：显示「转到后台」；前台等待不进看板。
  *
  * 两类都不是时不渲染。按钮只发命令，请求期间禁用，不做乐观更新。
  */
@@ -26,12 +26,10 @@ export function DeferredResultActions({
   toolCallId: string;
   artifact: ToolArtifact;
 }) {
-  const entries = useDeferredResults(taskId);
+  const foregroundWaits = useForegroundWaits(taskId);
   const [busy, setBusy] = useState(false);
   const background = artifact.deferred === true && artifact.backendStatus === "pending";
-  const foreground = !background && entries.some(
-    (entry) => entry.toolCallId === toolCallId && entry.status === "running" && entry.mode === "foreground",
-  );
+  const foreground = !background && foregroundWaits.includes(toolCallId);
   if (!background && !foreground) return null;
 
   const run = async (action: () => Promise<string | null>) => {

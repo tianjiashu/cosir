@@ -26,9 +26,9 @@ import { createWorkspaceTask, deleteTask, type Workspace, type StartedConversati
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import { useModelCatalog } from "@/lib/model-catalog";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
-import { removeStoredToolGroupSelection, writeStoredToolGroupSelection } from "@/lib/tool-group-selection-storage";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
+import { ImageLightbox } from "@/components/ui/image-lightbox";
 import { getLocalAttachment, getLocalAttachmentById, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import { submitNewConversationMessage, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-new-conversation-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -91,14 +91,9 @@ function NewConversationAttachmentChip({ attachment, onRemove }: {
         onPreview={() => setPreviewOpen(true)}
         onRemove={onRemove}
       />
-      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="p-2 sm:max-w-3xl">
-          <DialogTitle className="sr-only">预览图片：{attachment.name}</DialogTitle>
-          <div className="flex max-h-[80dvh] w-full items-center justify-center overflow-hidden rounded-sm bg-muted">
-            {previewUrl && <img src={previewUrl} alt={attachment.name} className="max-h-[80dvh] max-w-full object-contain" />}
-          </div>
-        </DialogContent>
-      </Dialog>
+      {previewUrl && (
+        <ImageLightbox src={previewUrl} alt={`预览图片：${attachment.name}`} open={previewOpen} onOpenChange={setPreviewOpen} />
+      )}
     </>
   );
 }
@@ -139,10 +134,7 @@ type NewConversationProps = {
   onWorkspaceChange: (workspaceId: number) => void;
   onWorkspaceCreated: () => Promise<void>;
   /** 首条命令已被后端受理且用户仍停留在本页：由宿主导航到新 Task。 */
-  onStarted: (
-    conversation: StartedConversation,
-    disabledToolGroups: string[],
-  ) => void;
+  onStarted: (conversation: StartedConversation) => void;
   /** 新 Task 被保留但不导航（用户已离开本页，或受理结果未知）：宿主只需刷新侧栏。 */
   onTaskListChanged: () => void;
 };
@@ -241,15 +233,13 @@ export function NewConversation({
         creationCommandId,
       });
       provisionalTask = task;
-      writeStoredToolGroupSelection(task.task_id, selectedToolGroups);
       await submitNewConversationMessage({
         taskId: task.task_id,
         workspaceId: selectedWorkspaceId,
         text: trimmedText,
         imageAttachments: sendAttachments.map((attachment) => ({ file: attachment.file, name: attachment.name })),
-        banTools: toolGroups
-          .filter(({ group }) => selectedToolGroups.includes(group))
-          .flatMap(({ tools }) => tools.map(({ name }) => name)),
+        // 首条消息冻结进 Run 的 launch；任务页的工具组默认值从快照取，不另存本地。
+        disabledToolGroups: selectedToolGroups,
         modelConfigId: selection.modelConfigId,
         reasoningEffort: selection.reasoningEffort ?? null,
         traceId,
@@ -260,7 +250,7 @@ export function NewConversation({
       });
       updateDraft(draftId, () => emptyDraft);
       if (stillHere()) {
-        onStarted(task, selectedToolGroups);
+        onStarted(task);
       } else {
         void frontendLog("INFO", "new_conversation_started_after_leave", "用户已离开新对话页，首条消息受理后不再导航", {
           traceId,
@@ -274,7 +264,6 @@ export function NewConversation({
       if (provisionalTask && !possiblyAccepted) {
         try {
           await deleteTask(provisionalTask.task_id, creationCommandId);
-          removeStoredToolGroupSelection(provisionalTask.task_id);
         } catch (cleanupError) {
           void frontendLog("ERROR", "provisional_task_cleanup_failed", "provisional Task 清理失败", {
             traceId,

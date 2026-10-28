@@ -2,20 +2,20 @@ import { useEffect, useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { useDeferredResults } from "@/lib/task-overview/deferred-results-store";
-import { readDeferredCardCollapsed, writeDeferredCardCollapsed } from "@/lib/task-overview/overview-preferences";
+import { useBackgroundTasks } from "@/lib/task-overview/background-tasks-store";
+import { readBackgroundTasksCollapsed, writeBackgroundTasksCollapsed } from "@/lib/task-overview/overview-preferences";
 
-import { DeferredResultRow } from "./deferred-result-row";
+import { BackgroundTaskRow } from "./background-task-row";
 
 /**
  * 「后台任务」卡：运行中的条目逐行列出，已结束的收成一行「N 已完成」，点开展开。
  *
- * 条目只读 snapshot `deferred_results`（后端进程内事实，重启后清空）；没有任何条目时不渲染。
+ * 条目只读 snapshot `background_tasks`（后端进程内事实，重启后清空）；没有任何条目时不渲染。
  * 运行中的条目每秒刷新一次耗时，没有运行中条目时不起计时器。
  */
-export function DeferredResultsCard({ taskId }: { taskId: number }) {
-  const entries = useDeferredResults(taskId);
-  const [collapsed, setCollapsed] = useState(readDeferredCardCollapsed);
+export function BackgroundTasksCard({ taskId }: { taskId: number }) {
+  const entries = useBackgroundTasks(taskId);
+  const [collapsed, setCollapsed] = useState(readBackgroundTasksCollapsed);
   const [showEnded, setShowEnded] = useState(false);
   const running = entries.filter((entry) => entry.status === "running");
   const ended = entries.filter((entry) => entry.status !== "running");
@@ -24,7 +24,7 @@ export function DeferredResultsCard({ taskId }: { taskId: number }) {
 
   const toggle = (open: boolean) => {
     setCollapsed(!open);
-    writeDeferredCardCollapsed(!open);
+    writeBackgroundTasksCollapsed(!open);
   };
 
   return (
@@ -38,7 +38,7 @@ export function DeferredResultsCard({ taskId }: { taskId: number }) {
         <CollapsibleContent>
           <ul className="mt-2 flex flex-col gap-0.5">
             {running.map((entry) => (
-              <DeferredResultRow key={entry.toolCallId} taskId={taskId} entry={entry} now={now} />
+              <BackgroundTaskRow key={entry.toolCallId} taskId={taskId} entry={entry} now={now} />
             ))}
           </ul>
           {ended.length > 0 && (
@@ -55,7 +55,7 @@ export function DeferredResultsCard({ taskId }: { taskId: number }) {
               {showEnded && (
                 <ul className="flex flex-col gap-0.5">
                   {ended.map((entry) => (
-                    <DeferredResultRow key={entry.toolCallId} taskId={taskId} entry={entry} now={now} />
+                    <BackgroundTaskRow key={entry.toolCallId} taskId={taskId} entry={entry} now={now} />
                   ))}
                 </ul>
               )}

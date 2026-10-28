@@ -176,7 +176,8 @@ export type TransportTerminalRunStatus = Extract<TransportRunStatus, "completed"
 export type TransportRunLaunch = {
   modelConfigId: number | null;
   reasoningEffort: string | null;
-  banTools: string[];
+  /** 冻结的是用户关掉的工具组名（不是工具名），composer 锁定期直接按组回显。 */
+  disabledToolGroups: string[];
 };
 
 /**
@@ -277,16 +278,16 @@ export type TerminalSessionEntry = {
 };
 
 /**
- * Task 后台工作看板条目（snapshot 顶层 `deferred_results`）。
+ * Task 后台工作看板条目（snapshot 顶层 `background_tasks`）。
  *
- * 事实源是后端进程内的延迟结果登记表：运行中的在前（按登记先后），之后是最近结束的若干条；后端重启后
- * 清空。只服务看板与「转到后台」按钮（前台等待只存在于这里），工具卡片的状态不读它。
+ * 事实源是后端进程内的延迟结果登记表：只含后台工作（一开始就在后台或已转到后台），运行中的在前（按
+ * 登记先后），之后是最近结束的若干条；后端重启后清空。前台等待不在这里，见 `foreground_waits`。
+ * 工具卡片的状态不读它。
  */
-export type DeferredResultEntry = {
+export type BackgroundTaskEntry = {
   toolCallId: string;
   kind: "terminal_wait" | "terminal_handoff" | "child_agent";
   label: string;
-  mode: "foreground" | "background";
   status: "running" | "completed" | "cancelled";
   startedAt: string;
   endedAt: string | null;
@@ -304,5 +305,7 @@ export type TransportState = {
   /** 本 Task 的交互终端会话列表（必填，可为空数组）。 */
   terminal_sessions: TerminalSessionEntry[];
   /** 本 Task 的后台工作看板条目（必填，可为空数组）。 */
-  deferred_results: DeferredResultEntry[];
+  background_tasks: BackgroundTaskEntry[];
+  /** 正在前台等待、可转到后台的工具调用 id（必填，可为空数组）；只服务工具卡片的「转到后台」。 */
+  foreground_waits: string[];
 };

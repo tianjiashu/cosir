@@ -80,6 +80,11 @@ function normalizeBackendBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, "");
 }
 
+/** 浏览器开发 / 测试（非 Tauri）时的后端地址；桌面生产地址只来自宿主下发的 runtime config。 */
+function developmentBackendBaseUrl(): string {
+  return normalizeBackendBaseUrl(import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8000");
+}
+
 function sameBackendStatus(left: BackendStatusSnapshot, right: BackendStatusSnapshot): boolean {
   if (left === right) return true;
   if (!left || !right || left.state !== right.state) return false;
@@ -194,7 +199,7 @@ async function initializeBackendRuntimeInternal(epoch: number): Promise<string> 
   }
 
   if (!isTauriRuntime()) {
-    const developmentUrl = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8000";
+    const developmentUrl = developmentBackendBaseUrl();
     const config: BackendRuntimeConfig = {
       backendBaseUrl: developmentUrl,
       generation: backendRuntimeGeneration,
@@ -418,9 +423,10 @@ export function restartBackendRuntime(): Promise<BackendRuntimeConfig> {
 
 function resolveBackendBaseUrl(): string {
   if (backendRuntimeUnavailable) return UNAVAILABLE_BACKEND_BASE_URL;
-  return getBackendBaseUrl() ?? import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8000";
+  return getBackendBaseUrl() ?? developmentBackendBaseUrl();
 }
 
 function getBackendBaseUrl(): string | null {
-  return window.__COSIR_RUNTIME_CONFIG__?.backendBaseUrl ?? null;
+  const configured = window.__COSIR_RUNTIME_CONFIG__?.backendBaseUrl;
+  return configured ? normalizeBackendBaseUrl(configured) : null;
 }

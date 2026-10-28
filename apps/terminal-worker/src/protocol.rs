@@ -45,6 +45,9 @@ pub enum ControlFrame {
 pub enum TerminalInput {
     /// Agent 单行输入：拒绝控制字符，追加 Enter。
     Line { text: String },
+    /// Agent 可打印字符：与 `Line` 同样拒绝控制字符，但不追加 Enter
+    /// （全屏程序单键命令、单键确认；多出的 Enter 会落到下一个读输入的程序上）。
+    Text { text: String },
     /// Agent 按键序列：按顺序编码后一次写入。
     Keys { keys: Vec<KeyName> },
     /// 人工输入的原始字节：不过滤控制字符（方向键、Ctrl 组合键、粘贴都原样送达）。
@@ -154,20 +157,31 @@ impl KeyName {
     }
 }
 
+/// worker 是独立进程输入边界：文本拒绝控制字符，不能让 line / text 绕过按键能力。
+/// `reserved` 是随后追加的字节数（Enter），计入 64 KiB 上限。
+fn printable_bytes(text: String, reserved: usize) -> anyhow::Result<Vec<u8>> {
+    if text.chars().any(char::is_control) {
+        anyhow::bail!("text contains control characters");
+    }
+    if text.len() + reserved > MAX_INPUT_BYTES {
+        anyhow::bail!("input exceeds 64 KiB");
+    }
+    Ok(text.into_bytes())
+}
+
 /// 把输入编码为写入 PTY 的字节；`Err` 表示内容被拒，调用方回 `input_rejected` 后继续运行。
 pub fn encode_input(input: TerminalInput, app_cursor: bool) -> anyhow::Result<Vec<u8>> {
     match input {
         TerminalInput::Line { text } => {
-            // worker 是独立进程输入边界；拒绝控制字符，不能让文本绕过按键能力。
-            if text.chars().any(char::is_control) {
-                anyhow::bail!("line contains control characters");
-            }
-            if text.len() + 1 > MAX_INPUT_BYTES {
-                anyhow::bail!("input exceeds 64 KiB including Enter");
-            }
-            let mut bytes = text.into_bytes();
+            let mut bytes = printable_bytes(text, 1)?;
             bytes.push(13);
             Ok(bytes)
+        }
+        TerminalInput::Text { text } => {
+            if text.is_empty() {
+                anyhow::bail!("text must not be empty");
+            }
+            printable_bytes(text, 0)
         }
         TerminalInput::Keys { keys } => {
             if keys.is_empty() || keys.len() > MAX_KEYS_PER_INPUT {
@@ -372,10 +386,30 @@ mod input_tests {
     }
 
     #[test]
+    fn text_sends_printable_characters_without_enter() {
+        let input: TerminalInput = serde_json::from_str(r#"{"type":"text","text":":wq"}"#).unwrap();
+        assert_eq!(encode_input(input, false).unwrap(), b":wq");
+        assert!(encode_input(TerminalInput::Text { text: String::new() }, false).is_err());
+        for text in ["q\r", "\u{1b}", "\t"] {
+            assert!(encode_input(TerminalInput::Text { text: text.into() }, false).is_err());
+        }
+        assert_eq!(
+            encode_input(
+                TerminalInput::Text {
+                    text: "a".repeat(MAX_INPUT_BYTES)
+                },
+                false
+            )
+            .unwrap()
+            .len(),
+            MAX_INPUT_BYTES
+        );
+    }
+
+    #[test]
     fn rejects_old_inputs_newlines_control_characters_and_utf8_overflow() {
         for json in [
             r#"{"type":"key","key":"ctrl_c"}"#,
-            r#"{"type":"text","text":"raw"}"#,
             r#"{"type":"keys","keys":["f1"]}"#,
         ] {
             assert!(serde_json::from_str::<TerminalInput>(json).is_err());

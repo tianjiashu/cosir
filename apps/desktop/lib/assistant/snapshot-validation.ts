@@ -40,9 +40,10 @@ function requirePositiveInteger(value: unknown, path: string): number {
   return value as number;
 }
 
+/** 子 Agent 卡片的状态是子 Task 的 Run 状态（不是工具状态），与后端 `ConversationRunStatus` 同一组值。 */
 function requireKnownChildStatus(value: unknown, path: string): void {
-  if (value !== "pending" && value !== "running" && value !== "completed" && value !== "failed" && value !== "cancelled") {
-    throw new TransportSnapshotValidationError(path, "受支持的子 Agent 状态");
+  if (!(RUN_STATUSES as readonly unknown[]).includes(value)) {
+    throw new TransportSnapshotValidationError(path, "Run 状态");
   }
 }
 
@@ -109,10 +110,10 @@ const USAGE_KEYS = [
 
 function validateLaunch(value: unknown, path: string): void {
   const launch = requireRecord(value, path);
-  requireExactKeys(launch, ["modelConfigId", "reasoningEffort", "banTools"], path);
+  requireExactKeys(launch, ["modelConfigId", "reasoningEffort", "disabledToolGroups"], path);
   requireNullableNonNegativeInteger(launch.modelConfigId, `${path}.modelConfigId`);
   if (launch.reasoningEffort !== null && typeof launch.reasoningEffort !== "string") throw new TransportSnapshotValidationError(`${path}.reasoningEffort`, "字符串或 null");
-  if (!Array.isArray(launch.banTools) || !launch.banTools.every((name) => typeof name === "string")) throw new TransportSnapshotValidationError(`${path}.banTools`, "字符串数组");
+  if (!Array.isArray(launch.disabledToolGroups) || !launch.disabledToolGroups.every((name) => typeof name === "string")) throw new TransportSnapshotValidationError(`${path}.disabledToolGroups`, "字符串数组");
 }
 
 function requireExactKeys(value: Record<string, unknown>, keys: readonly string[], path: string): void {
@@ -273,19 +274,17 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   requireString(session.createdAt, `${path}.createdAt`);
 }
 
-const DEFERRED_KINDS = ["terminal_wait", "terminal_handoff", "child_agent"] as const;
-const DEFERRED_MODES = ["foreground", "background"] as const;
-const DEFERRED_STATUSES = ["running", "completed", "cancelled"] as const;
+const BACKGROUND_TASK_KINDS = ["terminal_wait", "terminal_handoff", "child_agent"] as const;
+const BACKGROUND_TASK_STATUSES = ["running", "completed", "cancelled"] as const;
 
-function validateDeferredResult(value: unknown, path: string, seenIds: Set<string>): void {
+function validateBackgroundTask(value: unknown, path: string, seenIds: Set<string>): void {
   const entry = requireRecord(value, path);
-  requireExactKeys(entry, ["toolCallId", "kind", "label", "mode", "status", "startedAt", "endedAt"], path);
+  requireExactKeys(entry, ["toolCallId", "kind", "label", "status", "startedAt", "endedAt"], path);
   const toolCallId = requireString(entry.toolCallId, `${path}.toolCallId`);
   if (toolCallId === "" || seenIds.has(toolCallId)) throw new TransportSnapshotValidationError(`${path}.toolCallId`, "非空且在 Task 内唯一");
   seenIds.add(toolCallId);
-  if (!(DEFERRED_KINDS as readonly unknown[]).includes(entry.kind)) throw new TransportSnapshotValidationError(`${path}.kind`, "受支持的后台工作种类");
-  if (!(DEFERRED_MODES as readonly unknown[]).includes(entry.mode)) throw new TransportSnapshotValidationError(`${path}.mode`, "foreground 或 background");
-  if (!(DEFERRED_STATUSES as readonly unknown[]).includes(entry.status)) throw new TransportSnapshotValidationError(`${path}.status`, "受支持的后台工作状态");
+  if (!(BACKGROUND_TASK_KINDS as readonly unknown[]).includes(entry.kind)) throw new TransportSnapshotValidationError(`${path}.kind`, "受支持的后台工作种类");
+  if (!(BACKGROUND_TASK_STATUSES as readonly unknown[]).includes(entry.status)) throw new TransportSnapshotValidationError(`${path}.status`, "受支持的后台工作状态");
   requireString(entry.label, `${path}.label`);
   requireString(entry.startedAt, `${path}.startedAt`);
   if (entry.endedAt !== null) requireString(entry.endedAt, `${path}.endedAt`);
@@ -293,7 +292,7 @@ function validateDeferredResult(value: unknown, path: string, seenIds: Set<strin
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["title", "messages", "activity", "terminal_sessions", "deferred_results", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  requireExactKeys(state, ["title", "messages", "activity", "terminal_sessions", "background_tasks", "foreground_waits", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
   if (typeof state.title !== "string" || state.title.trim() === "") throw new TransportSnapshotValidationError("title", "非空字符串");
   const ids = new Set<string>();
   if (!Array.isArray(state.messages)) throw new TransportSnapshotValidationError("messages", "数组");
@@ -325,8 +324,15 @@ export function parseTransportState(value: unknown): TransportState {
   if (!Array.isArray(state.terminal_sessions)) throw new TransportSnapshotValidationError("terminal_sessions", "数组");
   const sessionIds = new Set<string>();
   state.terminal_sessions.forEach((session, index) => validateTerminalSession(session, `terminal_sessions[${index}]`, sessionIds));
-  if (!Array.isArray(state.deferred_results)) throw new TransportSnapshotValidationError("deferred_results", "数组");
-  const deferredIds = new Set<string>();
-  state.deferred_results.forEach((entry, index) => validateDeferredResult(entry, `deferred_results[${index}]`, deferredIds));
+  if (!Array.isArray(state.background_tasks)) throw new TransportSnapshotValidationError("background_tasks", "数组");
+  const backgroundTaskIds = new Set<string>();
+  state.background_tasks.forEach((entry, index) => validateBackgroundTask(entry, `background_tasks[${index}]`, backgroundTaskIds));
+  if (!Array.isArray(state.foreground_waits)) throw new TransportSnapshotValidationError("foreground_waits", "数组");
+  const foregroundIds = new Set<string>();
+  state.foreground_waits.forEach((value, index) => {
+    const toolCallId = requireString(value, `foreground_waits[${index}]`);
+    if (toolCallId === "" || foregroundIds.has(toolCallId)) throw new TransportSnapshotValidationError(`foreground_waits[${index}]`, "非空且在 Task 内唯一");
+    foregroundIds.add(toolCallId);
+  });
   return state as unknown as TransportState;
 }

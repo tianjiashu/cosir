@@ -28,8 +28,6 @@ export const Assistant = ({
   workspaceRoot,
   initialMessage,
   initialAttachments,
-  initialDisabledToolGroups,
-  initialBanTools,
   forkingMessageId,
   onForkMessage,
   onTaskStateChanged,
@@ -39,8 +37,6 @@ export const Assistant = ({
   workspaceRoot?: string;
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
-  initialDisabledToolGroups?: string[];
-  initialBanTools?: string[];
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
   onTaskStateChanged?: () => void;
@@ -69,8 +65,6 @@ export const Assistant = ({
       initialState={initialState}
       initialMessage={initialMessage}
       initialAttachments={initialAttachments}
-      initialDisabledToolGroups={initialDisabledToolGroups}
-      initialBanTools={initialBanTools}
       forkingMessageId={forkingMessageId}
       onForkMessage={onForkMessage}
       onTaskStateChanged={onTaskStateChanged}

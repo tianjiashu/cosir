@@ -1,7 +1,7 @@
 /*
  * Markdown 内容使用独立的视觉层级，避免直接修改全局 border/radius 影响
- * 工作区、按钮和弹窗。代码块与表格都只保留单层边框，Mermaid 保留画布
- * 边界；各块的复制、下载、全屏按钮默认隐藏，悬停或键盘聚焦到块内时显示。
+ * 工作区、按钮和弹窗。代码块、表格与 Mermaid 都只保留单层边框；各块的
+ * 复制、下载、全屏（及 Mermaid 缩放）按钮默认隐藏，悬停或键盘聚焦到块内时显示。
  *
  * 本文件覆盖的是 Streamdown 自带的 Tailwind 类（border、p-2、rounded-* 等），
  * 由 globals.css 以不带 layer 的 @import 引入：未分层样式才能胜过 utilities 层，
@@ -88,17 +88,19 @@
   background: color-mix(in oklab, var(--accent) 52%, transparent);
 }
 
-/* Mermaid：比代码块更像图表卡片，但不制造过重的双层边框。 */
+/*
+ * Mermaid：单层外框 + 页面底色，图表直接落在卡片上，不再套灰底和内层画布框。
+ * 外层 padding/gap 保留 Streamdown 默认值：按钮行靠 -mt-10 叠到标题行上，
+ * 改动二者会让按钮与标题错位。
+ */
 .aui-md [data-streamdown="mermaid-block"] {
   border-color: var(--markdown-block-border);
   border-radius: var(--radius-lg);
-  background: var(--muted);
+  background: var(--background);
   box-shadow: none;
 }
 
 .aui-md [data-streamdown="mermaid-block"] > div:first-child {
-  min-height: 2.25rem;
-  border-bottom: 1px solid var(--markdown-canvas-border);
   padding-inline: 0.25rem;
   color: var(--muted-foreground);
 }
@@ -109,9 +111,34 @@
 }
 
 .aui-md [data-streamdown="mermaid-block"] > div:last-child {
-  border-color: var(--markdown-canvas-border);
-  border-radius: var(--radius-md);
-  background: var(--background);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0.25rem 0.5rem 0.75rem;
+}
+
+/*
+ * Streamdown 的图表包装层是横向 flex 子项、宽度随内容收缩，而 Mermaid 输出的
+ * SVG 是 width="100%" + max-width=原始宽度；百分比宽度在收缩容器里无从参照，
+ * 浏览器回落到替换元素默认的 300px，图表被等比缩成一小块。撑满包装层后，
+ * SVG 以原始宽度显示、超出消息宽度时等比缩小。全屏层自带 size-full，不受影响。
+ */
+.aui-md [data-streamdown="mermaid"] [aria-label="Mermaid chart"] {
+  width: 100%;
+}
+
+/*
+ * 缩放控件与按钮行一样按需出现。控件是 pan-zoom 容器的首个子元素，没有数据
+ * 标记，按结构定位（:not(:last-child) 防止关闭控件后误选图表本身）；升级
+ * Streamdown 时由 e2e markdown-blocks 回归。
+ */
+.aui-md [data-streamdown="mermaid"] > div > div:first-child:not(:last-child) {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.aui-md [data-streamdown="mermaid-block"]:is(:hover, :focus-within) [data-streamdown="mermaid"] > div > div:first-child:not(:last-child) {
+  opacity: 1;
 }
 
 .aui-md [data-streamdown="code-block-actions"],

@@ -1,6 +1,7 @@
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
 import { parseTransportFrame, type TransportFrameStore } from "@/lib/assistant/transport-frame-store";
-import { parseHttpError } from "@/lib/http/errors";
+import { requestOk } from "@/lib/http/client";
+import type { TraceId } from "@/lib/trace";
 
 /** 长订阅结束的原因：`error` 为 null 表示连接被后端正常关闭（EOF）；`resync` 为真表示背压重同步。 */
 export type TransportDisconnect = {
@@ -9,7 +10,8 @@ export type TransportDisconnect = {
 };
 
 export type TaskTransportSessionCallbacks = {
-  headers: () => Promise<Record<string, string>> | Record<string, string>;
+  /** 长订阅请求的链路 id（经 `X-Trace-Id` 传给后端），与本会话的命令共用。 */
+  traceId: TraceId;
   /**
    * 提交一条用户消息。返回 `awaitSnapshot`：为真时乐观消息保留到 snapshot 里出现对应消息（或
    * 命令被拒）才清除；编辑排队消息原地更新、不产生新消息，返回 false 即清。
@@ -36,11 +38,11 @@ type StreamHandle = { controller: AbortController };
 export class TaskTransportSession {
   private active: StreamHandle | null = null;
 
+  /** `attachPath` 是相对后端的路径：基地址在每次打开时取当前后端实例，后端换端口后重开即生效。 */
   public constructor(
     private readonly store: TransportFrameStore,
-    private readonly attachUrl: string,
+    private readonly attachPath: string,
     private readonly callbacks: () => TaskTransportSessionCallbacks,
-    private readonly fetchImpl: typeof fetch = (...args) => fetch(...args),
   ) {}
 
   public get isOpen(): boolean {
@@ -58,15 +60,14 @@ export class TaskTransportSession {
     const handle: StreamHandle = { controller: new AbortController() };
     this.active = handle;
     try {
-      const response = await this.fetchImpl(this.attachUrl, {
-        cache: "no-store",
+      // 非 2xx 由 requestOk 解析为结构化 HttpError（响应体原文不进入错误消息，界面经
+      // userErrorMessage 只展示后端给出的可读原因）。
+      const response = await requestOk(this.attachPath, {
         method: "POST",
-        headers: await this.callbacks().headers(),
+        headers: { Accept: "text/event-stream" },
         signal: handle.controller.signal,
+        traceId: this.callbacks().traceId,
       });
-      // 结构化错误（code / message / retryable）由 parseHttpError 解析为 HttpError；
-      // 响应体原文不进入错误消息，界面经 userErrorMessage 只展示后端给出的可读原因。
-      if (!response.ok) throw await parseHttpError(response);
       if (this.active !== handle) return;
       this.callbacks().onResponse?.(response);
       await this.readSse(response, handle);

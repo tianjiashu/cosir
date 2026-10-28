@@ -7,12 +7,11 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  readFileStream,
   parseSearchBatch,
   SearchBatchContractError,
-  type FileEntry,
   type SearchBatch,
 } from "@/lib/api/workspace-files";
+import { useStreamedSearch } from "./use-streamed-search";
 import { WorkspaceFileIcon } from "./file-icon";
 import { Button } from "@/components/ui/button";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -36,69 +35,31 @@ export function FileSearch({
   const bridge = useReferenceBridge();
   const [selected, setSelected] = useState<string[]>([]);
   const anchor = useRef(0);
-  const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [status, setStatus] = useState("正在搜索…");
-  const [phase, setPhase] = useState<
-    "running" | "complete" | "stopped" | "failed"
-  >("running");
-  const [reasons, setReasons] = useState<Record<string, number>>({});
-  const [skipped, setSkipped] = useState(0);
-  const [offset, setOffset] = useState(0);
-  const [nextOffset, setNextOffset] = useState<number | null>(null);
-  useEffect(() => setOffset(0), [query]);
-  const [retry, setRetry] = useState(0);
-  const control = useRef<AbortController | null>(null);
-  useEffect(() => {
-    const controller = new AbortController();
-    control.current = controller;
-    setEntries([]);
-    setSelected([]);
-    setSkipped(0);
-    setReasons({});
-    setPhase("running");
-    setNextOffset(null);
-    setStatus("正在搜索…");
-    void readFileStream<SearchBatch>(
-      workspaceId,
-      "search",
-      {
-        query,
-        offset,
-      },
-      controller.signal,
-      (batch) => {
-        if (controller.signal.aborted) return;
-        if (batch.error) throw new Error(batch.error);
-        setEntries((previous) => [...previous, ...batch.entries]);
-        setSkipped(batch.skipped);
-        setReasons(batch.skipped_reasons);
-        if (batch.complete) {
-          setStatus("搜索完成");
-          setPhase("complete");
-          setNextOffset(batch.next_offset ?? null);
-        }
-      },
-      parseSearchBatch,
-    ).catch((error) => {
-      if (!controller.signal.aborted) {
-        setPhase("failed");
-        setStatus(userErrorMessage(error, "搜索失败"));
-        if (error instanceof SearchBatchContractError)
-          void frontendLog(
-            "ERROR",
-            "workspace_file_search_contract_invalid",
-            "文件名搜索响应不符合批次契约",
-            {
-              data: { workspaceId, invalidFields: error.invalidFields },
-              error,
-            },
-          );
-      }
-    });
-    return () => {
-      controller.abort();
-    };
-  }, [workspaceId, query, retry, offset]);
+  const search = useStreamedSearch({
+    workspaceId,
+    operation: "search",
+    request: { body: { query } },
+    decode: parseSearchBatch,
+    items: (batch: SearchBatch) => batch.entries,
+    onError: (error) => {
+      if (error instanceof SearchBatchContractError)
+        void frontendLog(
+          "ERROR",
+          "workspace_file_search_contract_invalid",
+          "文件名搜索响应不符合批次契约",
+          { data: { workspaceId, invalidFields: error.invalidFields }, error },
+        );
+    },
+  });
+  const { items: entries, phase, offset } = search;
+  const skipped = search.lastBatch?.skipped ?? 0;
+  const reasons = search.lastBatch?.skipped_reasons ?? {};
+  const status =
+    phase === "complete" ? "搜索完成"
+      : phase === "stopped" ? "已停止"
+        : phase === "failed" ? userErrorMessage(search.error, "搜索失败")
+          : "正在搜索…";
+  useEffect(() => setSelected([]), [query, offset]);
   const host = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: entries.length,
@@ -128,11 +89,7 @@ export function FileSearch({
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => {
-              control.current?.abort();
-              setPhase("stopped");
-              setStatus("已停止");
-            }}
+            onClick={search.stop}
           >
             停止
           </Button>
@@ -141,26 +98,26 @@ export function FileSearch({
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setRetry((v) => v + 1)}
+            onClick={search.retry}
           >
             重新搜索
           </Button>
         )}
-        {phase === "complete" && (offset > 0 || nextOffset !== null) && (
+        {phase === "complete" && (search.hasPrevious || search.hasNext) && (
           <>
             <Button
               size="sm"
               variant="ghost"
-              disabled={offset === 0}
-              onClick={() => setOffset(Math.max(0, offset - 1000))}
+              disabled={!search.hasPrevious}
+              onClick={search.previousPage}
             >
               上一页
             </Button>
             <Button
               size="sm"
               variant="ghost"
-              disabled={nextOffset === null}
-              onClick={() => setOffset(nextOffset!)}
+              disabled={!search.hasNext}
+              onClick={search.nextPage}
             >
               下一页
             </Button>
@@ -184,7 +141,7 @@ export function FileSearch({
             size="sm"
             variant="ghost"
             disabled={phase === "running"}
-            onClick={() => setRetry((v) => v + 1)}
+            onClick={search.retry}
           >
             重新搜索
           </Button>

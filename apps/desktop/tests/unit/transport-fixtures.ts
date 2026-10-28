@@ -12,11 +12,11 @@ import type {
   TransportUsage,
 } from "@/lib/assistant/contract";
 
-const EMPTY_LAUNCH: TransportRunLaunch = { modelConfigId: null, reasoningEffort: null, banTools: [] };
+const EMPTY_LAUNCH: TransportRunLaunch = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
 
 /** 单测共用的 Task 视角 snapshot 构造器：只填契约必填字段，调用方覆盖需要的部分。 */
 export function transportState(overrides: Partial<TransportState> = {}): TransportState {
-  return { title: "测试对话", messages: [], activity: null, terminal_sessions: [], deferred_results: [], ...overrides };
+  return { title: "测试对话", messages: [], activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], ...overrides };
 }
 
 function textPart(text: string): TransportMessagePart {

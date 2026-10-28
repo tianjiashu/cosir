@@ -1,28 +1,28 @@
-import type { TransportToolStatus } from "@/lib/assistant/contract";
+import type { TransportRunStatus } from "@/lib/assistant/contract";
 
-export type ChildAgentLifecycleStatus = Extract<TransportToolStatus, "pending" | "running" | "completed" | "failed" | "cancelled">;
 
 export type DelegationDisplay = {
   title?: string;
   role?: string;
   childAgentId?: string;
   childTaskId?: number;
-  status?: ChildAgentLifecycleStatus;
+  status?: TransportRunStatus;
 };
 
 export type ChildAgentResultDisplay = {
   operation: "send" | "status";
   childTaskId: number;
-  status: ChildAgentLifecycleStatus;
+  status: TransportRunStatus;
   agentId?: string;
   agentName?: string;
   finalOutput?: string;
   endReason?: string;
 };
 
-const CHILD_AGENT_STATUSES = new Set<ChildAgentLifecycleStatus>([
-  "pending",
+// 子 Agent 卡片展示的是子 Task 最新 Run 的状态（含 suspended），不是工具调用状态。
+const CHILD_AGENT_STATUSES = new Set<TransportRunStatus>([
   "running",
+  "suspended",
   "completed",
   "failed",
   "cancelled",
@@ -42,9 +42,9 @@ function positiveId(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
-function childAgentStatus(value: unknown): ChildAgentLifecycleStatus | undefined {
-  return typeof value === "string" && CHILD_AGENT_STATUSES.has(value as ChildAgentLifecycleStatus)
-    ? value as ChildAgentLifecycleStatus
+function childAgentStatus(value: unknown): TransportRunStatus | undefined {
+  return typeof value === "string" && CHILD_AGENT_STATUSES.has(value as TransportRunStatus)
+    ? value as TransportRunStatus
     : undefined;
 }
 
@@ -90,14 +90,3 @@ export function readChildAgentResultDisplay(value: unknown): ChildAgentResultDis
     endReason: typeof data.end_reason === "string" ? data.end_reason : undefined,
   };
 }
-
-export function childAgentStatusLabel(status: ChildAgentLifecycleStatus): string {
-  switch (status) {
-    case "pending": return "准备执行";
-    case "running": return "运行中";
-    case "completed": return "已完成";
-    case "failed": return "失败";
-    case "cancelled": return "已取消";
-  }
-}
-

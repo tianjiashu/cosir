@@ -4,10 +4,25 @@ import { useWorkbenchStore } from "./store";
 import type { WorkbenchTab } from "./types";
 
 /** 草稿是否未保存由会话持有，判定不依赖标签是否激活或面板是否挂载。 */
-export function isWorkbenchDraftDirty(tab: WorkbenchTab): boolean {
+function isWorkbenchDraftDirty(tab: WorkbenchTab): boolean {
   if (tab.kind === "agent-configuration-draft") return tab.dirty;
   if (tab.kind === "agent-team-configuration-draft") return tab.session.store.getState().dirty;
   return false;
+}
+
+/**
+ * 关闭单个草稿标签前的确认：未保存才询问，文案点名草稿，同时开着多个草稿时用户分得清在关哪个。
+ * 标签栏与草稿面板自带的关闭按钮共用这一处；返回 true 表示可以关闭。
+ */
+export async function confirmCloseWorkbenchDraft(tab: WorkbenchTab): Promise<boolean> {
+  if (!isWorkbenchDraftDirty(tab)) return true;
+  return requestConfirmation({
+    title: "关闭配置草稿？",
+    description: `「${tab.title}」尚未保存，关闭后修改会丢失。`,
+    confirmLabel: "放弃并关闭",
+    tone: "destructive",
+    icon: "discard",
+  });
 }
 
 export function hasWorkbenchDrafts(): boolean {

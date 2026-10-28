@@ -8,7 +8,6 @@ import { buildModelCatalog } from "@/lib/model-catalog";
 
 describe("modelSetupState", () => {
   it("maps catalog snapshots to setup states", () => {
-    expect(modelSetupState({ status: "idle", catalog: null })).toBe("loading");
     expect(modelSetupState({ status: "loading", catalog: null })).toBe("loading");
     expect(modelSetupState({ status: "error", catalog: null })).toBe("error");
     expect(modelSetupState({ status: "ready", catalog: buildModelCatalog([]) })).toBe("empty");

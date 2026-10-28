@@ -1,10 +1,11 @@
+import { useElementSize } from "@/hooks/use-element-size";
+import { copyText } from "@/lib/clipboard";
 import { useChangeBrowserVisibility } from "@/lib/workspace-files/visibility";
 import { IgnoreMenuItem, openKeyboardContextMenu } from "./ignore-menu-item";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -21,14 +22,9 @@ import {
 } from "@/lib/api/workspace-files";
 import { queryKeys } from "@/lib/query/query-keys";
 import { HttpError } from "@/lib/http/errors";
-import {
-  fileSession,
-  parentsOf,
-  useFilesStore,
-} from "@/lib/workspace-files/store";
+import { fileSession, parentsOf, useFilesStore, workspacePathText } from "@/lib/workspace-files/store";
 import { WorkspaceFileIcon } from "./file-icon";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
 
 type TreeItem = {
@@ -202,15 +198,7 @@ export function FileTree({
     }),
   ];
   const tree = useRef<TreeApi<TreeItem> | undefined>(undefined);
-  const container = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState(0);
-  useLayoutEffect(() => {
-    const observer = new ResizeObserver((entries) =>
-      setHeight(entries[0].contentRect.height),
-    );
-    if (container.current) observer.observe(container.current);
-    return () => observer.disconnect();
-  }, []);
+  const [container, { height }] = useElementSize<HTMLDivElement>();
   const openState = useMemo(
     () => Object.fromEntries(expanded.map((path) => [idOf(path), true])),
     [expanded],
@@ -386,17 +374,11 @@ function FileRow({
   useEffect(() => {
     if (item.more && !item.error) void loadMore(item.parent!);
   }, [item.more, item.error, item.parent, loadMore]);
-  const copy = async (absolute: boolean) => {
-    try {
-      await navigator.clipboard.writeText(
-        absolute
-          ? `${rootPath.replace(/[\\/]$/, "")}/${item.entry.path}`
-          : item.entry.path || ".",
-      );
-    } catch {
-      toast.error("无法写入剪贴板");
-    }
-  };
+  const copy = (absolute: boolean) => copyText(workspacePathText(rootPath, item.entry.path, absolute), {
+    success: "路径已复制",
+    logEvent: "workspace_path_copy_failed",
+    logData: { absolute, source: "file_tree" },
+  });
   if (item.ignoredEmpty)
     return (
       <div

@@ -16,7 +16,7 @@ export type SubmitNewConversationMessageInput = {
   workspaceId: number;
   text: string;
   imageAttachments: readonly NewConversationImageAttachment[];
-  banTools: readonly string[];
+  disabledToolGroups: readonly string[];
   modelConfigId: number;
   reasoningEffort: string | null;
   /** 同一次提交的上传与发送请求共用的 trace id。 */
@@ -81,7 +81,7 @@ export async function submitNewConversationMessage(
       message: command.message as TaskMessageRequest["message"],
       modelConfigId: input.modelConfigId,
       reasoningEffort: input.reasoningEffort,
-      banTools: [...input.banTools],
+      disabledToolGroups: [...input.disabledToolGroups],
       delivery: "immediate",
     }, { traceId: input.traceId });
   } catch (error) {

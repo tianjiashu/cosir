@@ -113,18 +113,16 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   // 创建后的自动目录同步必须显示新任务，且不能替换 Assistant 会话或中断流。
   await expect(page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "你好" })).toBeVisible();
   await expect(page.getByRole("button", { name: "刷新工作区" })).toHaveCount(0);
-  expect(assistantRequests[0]?.status).toBe(202);
+  expect(assistantRequests[0]?.status).toBe(200);
   expect(assistantRequests[0]?.url).toMatch(/\/tasks\/42\/messages$/);
   expect(assistantRequests[0]?.body).toMatchObject({
     message: { role: "user", parts: [{ type: "text", text: "你好" }] },
     modelConfigId: 1,
-    banTools: ["read_file"],
+    disabledToolGroups: ["文件"],
     delivery: "immediate",
   });
+  // 任务页的工具组取自首条消息冻结进 Run 的配置（快照 activity.launch），不另存本地。
   await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("cosir:tool-group-selection:task:42"))).toBe(
-    JSON.stringify(["文件"]),
-  );
   await expect(page.locator('[data-role="user"]').getByText("你好", { exact: true })).toBeVisible();
   await expect(page.getByText("streaming response", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("思考过程", { exact: true }).first()).toBeVisible();
@@ -143,10 +141,10 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await expect.poll(async () => (await request.get(streamLogUrl)).text()).toContain('"runId":2,"outcome":{"status":"completed"');
   const streamBody = await (await request.get(streamLogUrl)).text();
   await expect.poll(() => assistantRequests.length).toBe(2);
-  expect(assistantRequests[1]?.status).toBe(202);
+  expect(assistantRequests[1]?.status).toBe(200);
   expect(assistantRequests[1]?.url).toMatch(/\/tasks\/42\/messages$/);
   expect(assistantRequests[1]?.body.state).toBeUndefined();
-  expect(assistantRequests[1]?.body.banTools).toEqual(["read_file"]);
+  expect(assistantRequests[1]?.body.disabledToolGroups).toEqual(["文件"]);
   expect(streamBody).toContain('"kind":"mutation"');
   expect(streamBody).toContain('"kind":"append-text"');
   expect(streamBody).toContain("streaming response");
@@ -283,7 +281,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
     response.url().endsWith("/tasks/102/resume") && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "继续运行" }).click();
-  await expect((await resumeResponse).status()).toBe(202);
+  await expect((await resumeResponse).status()).toBe(200);
   await expect(page.getByText("resumed response", { exact: true })).toBeVisible();
   // 业务恢复只投递命令：续跑输出经已有订阅到达，不再额外 attach。
   expect(attachRequests).toHaveLength(2);
@@ -429,7 +427,7 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
     response.url().endsWith("/messages/user-2/rerun") && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "重跑" }).click();
-  await expect((await rerunResponse).status()).toBe(202);
+  await expect((await rerunResponse).status()).toBe(200);
   await expect(page.getByText("second-edited", { exact: true })).toBeVisible();
   await expect.poll(() => assistantRequests.length).toBe(3);
 
@@ -438,7 +436,7 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
   expect(assistantRequests[2]?.body).toMatchObject({ message: { parts: [{ type: "text", text: "second-edited" }] } });
   expect(assistantRequests[2]?.body.runId).toBeUndefined();
   expect(assistantRequests[2]?.body.delivery).toBeUndefined();
-  expect(assistantRequests[2]?.status).toBe(202);
+  expect(assistantRequests[2]?.status).toBe(200);
 });
 
 test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async ({ page, request }) => {

@@ -19,19 +19,13 @@ import { confirmDiscardUnsaved } from "@/lib/unsaved-changes";
  *
  * 未保存守卫使用独立的 "dialog" scope：对话框关闭只询问自己的表单，不牵连配置中心的路由拦截。
  * 对话框内容关闭即卸载，放弃的修改不会在下次打开时重现。
- * 模型选择目录在关闭时经 onChanged 刷新，而不是每次保存后刷新——见 ModelConfigManager 的说明。
  */
-export function ModelConfigPanel({
-  onChanged,
-}: {
-  onChanged: () => void;
-}) {
+export function ModelConfigPanel() {
   const [open, setOpen] = useState(false);
 
   async function closeDialog() {
     if (!(await confirmDiscardUnsaved("dialog"))) return;
     setOpen(false);
-    onChanged();
   }
 
   return (

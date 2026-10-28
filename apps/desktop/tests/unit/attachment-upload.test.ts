@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 
@@ -15,6 +15,8 @@ function stubFetch(implementation: (url: string, init: RequestInit) => Promise<R
 }
 
 describe("uploadAttachment", () => {
+  // http client 按 runtime config 解析后端地址，它读 window；单测跑在 Node 环境，给一个空 window。
+  beforeEach(() => vi.stubGlobal("window", {}));
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();

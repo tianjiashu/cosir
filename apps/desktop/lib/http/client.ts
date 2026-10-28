@@ -2,21 +2,14 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId, type TraceId } from "@/lib/trace";
 import { parseHttpError } from "@/lib/http/errors";
 import { withTimeout } from "@/lib/async/abort-timeout";
-
-declare global {
-  interface Window {
-    __COSIR_RUNTIME_CONFIG__?: {
-      backendBaseUrl?: string;
-    };
-  }
-}
+import { getBackendRuntimeSnapshot } from "@/src/runtime-config";
 
 export type HttpRequestInit = RequestInit & {
   traceId?: TraceId;
   /**
-   * 仅 requestJson 使用：整个请求（含读取响应体）的超时毫秒数，默认
-   * DEFAULT_JSON_TIMEOUT_MS。超时以 TimeoutError 拒绝；长耗时操作（连接测试等）显式放宽。
-   * requestRaw 不设默认超时，因为它承载 SSE 与流式响应。
+   * 超时毫秒数，以 TimeoutError 中止（与调用方 signal 叠加）。requestJson 覆盖到读完响应体，缺省
+   * DEFAULT_JSON_TIMEOUT_MS；requestRaw / requestOk 只覆盖到拿到响应头，且不传就不设超时——它们承载
+   * SSE、流式响应，以及发送这类非幂等命令（超时后结果未知，重发会重复受理）。
    */
   timeoutMs?: number;
 };
@@ -27,39 +20,28 @@ const DEFAULT_JSON_TIMEOUT_MS = 30_000;
 /** 仅透传取消与超时的请求选项，供 lib/api 的读取函数接收 TanStack Query 的 signal。 */
 export type RequestOptions = Pick<HttpRequestInit, "signal" | "timeoutMs">;
 
-/** 去掉 URL 末尾的斜杠，避免拼接路径时产生双斜杠。 */
-function stripTrailingSlash(url: string): string {
-  return url.replace(/\/$/, "");
-}
-
+/** 当前后端实例的基地址；唯一事实源是 runtime-config（含后端不可用期间的占位地址）。 */
 export function getApiBaseUrl(): string {
-  if (typeof window !== "undefined") {
-    const runtimeBaseUrl = window.__COSIR_RUNTIME_CONFIG__?.backendBaseUrl;
-    if (runtimeBaseUrl) return stripTrailingSlash(runtimeBaseUrl);
-  }
-  const developmentUrl = import.meta.env.VITE_BACKEND_URL;
-  if (developmentUrl) return stripTrailingSlash(developmentUrl);
-  return "http://127.0.0.1:8000";
+  return getBackendRuntimeSnapshot().backendBaseUrl;
 }
 
 /**
  * 发起本机 HTTP 请求并返回原始响应。
  *
- * 该函数只负责 URL、公共请求头、缓存策略和网络失败日志，不消费响应体。
+ * 该函数只负责 URL、公共请求头、缓存策略、可选超时和网络失败日志，不消费响应体。
  * JSON 请求、取消请求等上层调用方可以据此保留各自的响应语义。
  */
-export async function requestRaw(
+async function requestRaw(
   path: string,
   init: HttpRequestInit = {},
 ): Promise<Response> {
-  const traceId = init.traceId ?? newTraceId();
-  const requestInit = { ...init };
-  delete requestInit.traceId;
-  delete requestInit.timeoutMs;
+  const { traceId = newTraceId(), timeoutMs, ...requestInit } = init;
+  const timeout = timeoutMs === undefined ? null : withTimeout(requestInit.signal, timeoutMs);
 
   try {
     return await fetch(`${getApiBaseUrl()}${path}`, {
       ...requestInit,
+      signal: timeout?.signal ?? requestInit.signal,
       cache: "no-store",
       headers: {
         Accept: "application/json",
@@ -84,40 +66,39 @@ export async function requestRaw(
   }
 }
 
+/**
+ * 发起请求并要求 2xx：非 2xx 解析为 HttpError 抛出并记日志，成功响应体留给调用方消费。
+ *
+ * 4xx 多是业务冲突或输入被拒（如 409 `MESSAGE_CONSUMED`），记 WARNING；5xx 才是后端故障，记 ERROR，
+ * 避免预期内的冲突淹没真正的错误。
+ */
+export async function requestOk(path: string, init: HttpRequestInit = {}): Promise<Response> {
+  const traceId = init.traceId ?? newTraceId();
+  const response = await requestRaw(path, { ...init, traceId });
+  if (response.ok) return response;
+  const error = await parseHttpError(response);
+  await frontendLog(response.status >= 500 ? "ERROR" : "WARNING", "http_response_error", "前端 HTTP 返回错误", {
+    traceId,
+    data: { path, method: init.method ?? "GET", status: response.status, code: error.code },
+    error,
+  });
+  throw error;
+}
+
 /** 发起 JSON API 请求，并将非 2xx 响应转换为统一的 HttpError。 */
 export async function requestJson<T>(
   path: string,
-  init?: HttpRequestInit,
+  init: HttpRequestInit = {},
 ): Promise<T> {
-  const traceId = init?.traceId ?? newTraceId();
-  const timeout = withTimeout(init?.signal, init?.timeoutMs ?? DEFAULT_JSON_TIMEOUT_MS);
+  const { timeoutMs = DEFAULT_JSON_TIMEOUT_MS, ...requestInit } = init;
+  // 超时要覆盖读完响应体，所以在这里叠加，而不是交给 requestRaw（它只管到响应头）。
+  const timeout = withTimeout(requestInit.signal, timeoutMs);
   try {
-    return await requestJsonWithin<T>(path, { ...(init ?? {}), traceId, signal: timeout.signal });
+    const response = await requestOk(path, { ...requestInit, signal: timeout.signal });
+    return (await response.json()) as T;
   } finally {
     timeout.clear();
   }
-}
-
-async function requestJsonWithin<T>(path: string, requestInit: HttpRequestInit & { traceId: TraceId }): Promise<T> {
-  const traceId = requestInit.traceId;
-  const response = await requestRaw(path, requestInit);
-
-  if (!response.ok) {
-    const error = await parseHttpError(response);
-    await frontendLog("ERROR", "http_response_error", "前端 HTTP 返回错误", {
-      traceId,
-      data: {
-        path,
-        method: requestInit.method ?? "GET",
-        status: response.status,
-        code: error.code,
-      },
-      error,
-    });
-    throw error;
-  }
-
-  return (await response.json()) as T;
 }
 
 /** 构造带 JSON 请求体的请求 init（设置 Content-Type 并序列化 body）。 */

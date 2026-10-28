@@ -84,6 +84,8 @@ describe("TerminalConnection（terminal-v2）", () => {
     vi.useFakeTimers();
     FakeSocket.created = [];
     vi.stubGlobal("WebSocket", FakeSocket);
+    // http client 按 runtime config 解析后端地址，它读 window；单测跑在 Node 环境，给一个空 window。
+    vi.stubGlobal("window", {});
   });
   afterEach(() => {
     vi.useRealTimers();

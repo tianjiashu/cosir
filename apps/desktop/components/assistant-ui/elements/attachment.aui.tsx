@@ -1,11 +1,6 @@
 "use client";
 
-import {
-  type PropsWithChildren,
-  useState,
-  type FC,
-  isValidElement,
-} from "react";
+import { type PropsWithChildren, type FC, isValidElement } from "react";
 import {
   XIcon,
   FileText,
@@ -25,12 +20,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import { ImageLightbox } from "@/components/ui/image-lightbox";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { useAttachmentSrc } from "@/hooks/use-attachment-src";
@@ -45,55 +35,17 @@ import { useTaskComposerDraft } from "@/components/composer/use-task-composer-dr
 import { ComposerEditor } from "@/components/composer/composer-editor";
 
 
-type AttachmentPreviewProps = {
-  src: string;
-};
-
-const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
-  const [isLoaded, setIsLoaded] = useState(false);
-  return (
-    // Local data/blob URLs are generated at runtime.
-    <img
-      src={src}
-      alt="附件预览"
-      className={cn(
-        "block h-auto max-h-[80vh] w-auto max-w-full rounded-sm object-contain transition-opacity duration-300 motion-reduce:transition-none",
-        isLoaded
-          ? "aui-attachment-preview-image-loaded opacity-100"
-          : "aui-attachment-preview-image-loading opacity-0",
-      )}
-      onLoad={() => setIsLoaded(true)}
-    />
-  );
-};
-
 const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
   const src = useAttachmentSrc(useAttachmentWorkspaceId());
 
   if (!src) return children;
 
   return (
-    <Dialog>
-      <DialogTrigger
-        nativeButton={false}
-        className="aui-attachment-preview-trigger cursor-zoom-in"
-        render={
-          isValidElement(children) ? (
-            children
-          ) : (
-            <button type="button">{children}</button>
-          )
-        }
-      />
-      <DialogContent className="aui-attachment-preview-dialog-content [&>button]:bg-foreground/60 [&>button]:hover:bg-foreground/80 [&_svg]:text-background p-2 sm:max-w-3xl [&>button]:rounded-full [&>button]:p-1 [&>button]:opacity-100 [&>button]:ring-0!">
-        <DialogTitle className="aui-sr-only sr-only">
-          图片附件预览
-        </DialogTitle>
-        <div className="aui-attachment-preview bg-background relative mx-auto flex max-h-[80dvh] w-full items-center justify-center overflow-hidden rounded-sm">
-          <AttachmentPreview src={src} />
-        </div>
-      </DialogContent>
-    </Dialog>
+    <ImageLightbox
+      src={src}
+      alt="图片附件预览"
+      trigger={isValidElement(children) ? children : <button type="button" className="cursor-zoom-in">{children}</button>}
+    />
   );
 };
 

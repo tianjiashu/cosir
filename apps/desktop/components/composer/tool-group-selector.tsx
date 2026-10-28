@@ -12,8 +12,8 @@ import type { ToolGroupCatalog } from "@/lib/api/tools";
 type ToolGroupSelectorProps = {
   toolGroups: ToolGroupCatalog[];
   /**
-   * 被关闭（禁用）的工具组。名称沿用上游 ComposerPromptToolbar 的 props；持久化与 banTools
-   * 命令都以禁用列表为契约，界面只是反过来呈现成开关。
+   * 被关闭（禁用）的工具组。名称沿用上游 ComposerPromptToolbar 的 props；发送命令与 Run 冻结的
+   * `disabledToolGroups` 都以禁用的组名为契约，界面只是反过来呈现成开关。
    */
   selectedToolGroups: string[];
   onSelectedToolGroupsChange?: (groups: string[]) => void;
@@ -27,8 +27,8 @@ type ToolGroupSelectorProps = {
 /**
  * 本轮对话可用工具组的开关面板。
  *
- * 用户心智是「开着哪些工具」，因此开关为开表示可用；数据仍是禁用列表（上游存储与
- * 后端 banTools 契约不变），在这里做一次取反。触发按钮只在有组被关闭时提示数量，
+ * 用户心智是「开着哪些工具」，因此开关为开表示可用；数据仍是禁用的组名列表（后端
+ * `disabledToolGroups` 契约），在这里做一次取反。触发按钮只在有组被关闭时提示数量，
  * 默认全开时保持安静。
  */
 export const ToolGroupSelector: FC<ToolGroupSelectorProps> = ({

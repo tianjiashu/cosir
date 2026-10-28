@@ -11,6 +11,11 @@ const STATUS_LABELS: Record<TransportToolStatus, string> = {
   unknown: "状态未知",
 };
 
+/** 工具调用生命周期的唯一文案表；Run / TeamRun 状态各有自己的表，不要拿这里翻译它们。 */
+export function toolStatusLabel(status: TransportToolStatus): string {
+  return STATUS_LABELS[status];
+}
+
 /** 失败与「状态未知」需要用户注意，其余生命周期状态保持低调；未知与工具组摘要统一用 warning。 */
 const STATUS_TONE_CLASS: Partial<Record<TransportToolStatus, string>> = {
   failed: "text-destructive",
@@ -26,7 +31,7 @@ export function ToolStatus({ status, className, prefix }: { status: TransportToo
   return (
     <span className={cn("inline-flex items-center gap-1.5 text-xs", STATUS_TONE_CLASS[status] ?? "text-muted-foreground", className)}>
       <Icon className={cn("size-3.5", status === "running" && "animate-spin")} aria-hidden="true" />
-      {prefix ? `${prefix} · ` : ""}{STATUS_LABELS[status]}
+      {prefix ? `${prefix} · ` : ""}{toolStatusLabel(status)}
     </span>
   );
 }

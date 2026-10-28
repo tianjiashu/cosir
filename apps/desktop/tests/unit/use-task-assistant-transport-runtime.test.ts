@@ -24,8 +24,7 @@ function RuntimeHarness() {
   // 静态渲染不运行 effect，connectionKey 为 null 也不会发起订阅。
   const { runtime } = useTaskAssistantTransportRuntime(501, {
     initialState: INITIAL_STATE,
-    baseUrl: "http://127.0.0.1:1",
-    headers: () => ({}),
+    traceId: "trace-501",
     connectionKey: null,
   });
   return createElement(

@@ -12,7 +12,7 @@ import {
   useEditorSyntaxTheme,
 } from "@/components/code-editor-theme";
 import { SegmentedControl } from "@/components/ui/segmented-control";
-import { markdownPlugins } from "@/components/markdown-rendering-config";
+import { markdownPlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
 import { handleMarkdownKeydown } from "@/components/configuration/markdown-editor-shortcuts";
 
 export type MarkdownEditorMode = "source" | "split" | "preview";
@@ -127,6 +127,7 @@ export function MarkdownSourcePreviewEditor({
   toolbarStart,
 }: MarkdownSourcePreviewEditorProps) {
   const [mode, setMode] = useState<MarkdownEditorMode>(initialMode);
+  const mermaidOptions = useMermaidOptions();
   const source = (
     <CodeMirrorSourceEditor
       value={value}
@@ -148,7 +149,7 @@ export function MarkdownSourcePreviewEditor({
           plugins={markdownPlugins}
           shikiTheme={["github-light", "github-dark"]}
           linkSafety={{ enabled: true }}
-          mermaid={{ config: { securityLevel: "strict" } }}
+          mermaid={mermaidOptions}
           className="!space-y-3"
         >
           {value}

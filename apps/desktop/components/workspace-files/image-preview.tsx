@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FileInfo } from "@/lib/api/workspace-files";
 import { useImageResource } from "@/lib/workspace-files/resources";
+import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 
 export function ImagePreview({
@@ -47,7 +48,7 @@ export function ImagePreview({
       </div>
       <div className="flex min-h-0 flex-1 overflow-auto p-4">
         {resource.error || error ? (
-          <p role="alert">{resource.error ?? "此图片无法解码"}</p>
+          <ErrorState className="m-auto" message={resource.error ?? "此图片无法解码"} />
         ) : resource.url ? (
           <img
             src={resource.url}
@@ -76,7 +77,7 @@ export function ImagePreview({
             }
           />
         ) : (
-          <p>正在读取图片…</p>
+          <LoadingState className="m-auto" label="正在读取图片…" />
         )}
       </div>
     </div>

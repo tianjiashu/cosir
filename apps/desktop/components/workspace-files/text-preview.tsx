@@ -10,12 +10,15 @@ import { ReadingSearchContext } from "@/lib/workspace-files/reading-search";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getText,
-  readFileStream,
+  parseFindTextBatch,
   type FileInfo,
+  type FindTextBatch,
 } from "@/lib/api/workspace-files";
+import { useStreamedSearch } from "./use-streamed-search";
 import { queryKeys } from "@/lib/query/query-keys";
 import { fileSession, useFilesStore } from "@/lib/workspace-files/store";
 import { HttpError } from "@/lib/http/errors";
+import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 import { SearchIcon } from "lucide-react";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
@@ -23,7 +26,6 @@ import { ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
 import { CodePreview } from "./code-preview";
 import { MarkdownPreview } from "./markdown-preview";
 
-type Match = { offset: number; snippet: string; };
 export function TextPreview({
   workspaceId,
   info,
@@ -65,10 +67,8 @@ export function TextPreview({
   const [showSearch, setShowSearch] = useState(false);
   const searchTrigger = useRef<HTMLButtonElement>(null);
   const closeSearch = () => {
-    search.current?.abort();
-    setSearching(false);
+    setSubmitted(null);
     setShowSearch(false);
-    setSearchStatus("");
     searchTrigger.current?.focus();
   };
   const searchInput = useRef<HTMLInputElement>(null);
@@ -83,29 +83,38 @@ export function TextPreview({
   useEffect(() => {
     if (showSearch) searchInput.current?.focus();
   }, [showSearch]);
-  const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
-  const [matches, setMatches] = useState<Match[]>([]);
-  const [searchStatus, setSearchStatus] = useState("");
-  const [matchOffset, setMatchOffset] = useState(0);
-  const [nextMatchOffset, setNextMatchOffset] = useState<number | null>(null);
-  const search = useRef<AbortController | null>(null);
-  useEffect(() => () => search.current?.abort(), []);
-  useEffect(() => {
-    search.current?.abort();
-    setMatches([]);
-    setSearchStatus("");
-    setSearching(false);
-    setMatchOffset(0);
-    setNextMatchOffset(null);
-  }, [encoding]);
+  // 提交的查找词；`generation` 让「同一个词再按一次回车」也重新从第一页查起。
+  const [submitted, setSubmitted] = useState<{ query: string; generation: number } | null>(null);
+  // 编码或文件版本变化时，查找跟着用新参数重跑，结果不会停留在旧内容上。
+  const search = useStreamedSearch({
+    workspaceId,
+    operation: "find-text",
+    request: submitted && {
+      body: { path: info.path, query: submitted.query, encoding, version: info.version },
+      generation: submitted.generation,
+    },
+    decode: parseFindTextBatch,
+    items: (batch: FindTextBatch) => batch.matches,
+  });
+  const matches = search.items;
+  const searching = search.phase === "running";
+  const searchStatus =
+    search.phase === "running" ? "查找中…"
+      : search.phase === "complete" ? "查找完成"
+        : search.phase === "stopped" ? "已停止"
+          : search.phase === "failed" ? userErrorMessage(search.error, "查找失败")
+            : "";
+  const find = () => {
+    if (!query) {
+      setSubmitted(null);
+      return;
+    }
+    setSubmitted((previous) => ({ query, generation: (previous?.generation ?? 0) + 1 }));
+  };
   const previousVersion = useRef(info.version);
   useEffect(() => {
     if (previousVersion.current !== info.version) {
-      search.current?.abort();
-      setMatches([]);
-      setSearchStatus("");
-      setSearching(false);
       setPosition(workspaceId, info.path, {
         offset: 0,
         tail: false,
@@ -156,54 +165,6 @@ export function TextPreview({
       tail: false,
       scrollTop: 0,
     });
-  };
-  const find = async (skip = 0) => {
-    setMatchOffset(skip);
-    setNextMatchOffset(null);
-    search.current?.abort();
-    if (!query) {
-      setSearching(false);
-      return;
-    }
-    const controller = new AbortController();
-    search.current = controller;
-    setMatches([]);
-    setSearching(true);
-    setSearchStatus("查找中…");
-    try {
-      await readFileStream<{
-        matches: Match[];
-        complete: boolean;
-        next_offset?: number | null;
-        error?: string;
-      }>(
-        workspaceId,
-        "find-text",
-        {
-          path: info.path,
-          query,
-          encoding,
-          version: info.version,
-          offset: skip,
-        },
-        controller.signal,
-        (batch) => {
-          if (controller.signal.aborted) return;
-          if (batch.error) throw new Error(batch.error);
-          setMatches((current) => [...current, ...batch.matches]);
-          if (batch.complete) {
-            setSearching(false);
-            setSearchStatus("查找完成");
-            setNextMatchOffset(batch.next_offset ?? null);
-          }
-        },
-      );
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        setSearching(false);
-        setSearchStatus(userErrorMessage(error, "查找失败"));
-      }
-    }
   };
   const source = page.data && (
     <CodePreview
@@ -339,14 +300,14 @@ export function TextPreview({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void find();
+                if (e.key === "Enter") find();
               }}
             />
             <Button
               size="sm"
               variant="ghost"
               disabled={!query.trim()}
-              onClick={() => void find()}
+              onClick={find}
             >
               查找
             </Button>
@@ -354,11 +315,7 @@ export function TextPreview({
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => {
-                  search.current?.abort();
-                  setSearching(false);
-                  setSearchStatus("已停止");
-                }}
+                onClick={search.stop}
               >
                 停止
               </Button>
@@ -378,27 +335,22 @@ export function TextPreview({
           <p>
             {searchStatus} · 本页 {matches.length} 处匹配{" "}
             <button
-              onClick={() => {
-                search.current?.abort();
-                setSearching(false);
-                setMatches([]);
-                setSearchStatus("");
-              }}
+              onClick={() => setSubmitted(null)}
             >
               收起
             </button>
-            {(matchOffset > 0 || nextMatchOffset !== null) && (
+            {(search.hasPrevious || search.hasNext) && (
               <>
                 <button
                   className="min-h-7 px-2"
-                  disabled={matchOffset === 0}
-                  onClick={() => void find(Math.max(0, matchOffset - 500))}
+                  disabled={!search.hasPrevious}
+                  onClick={search.previousPage}
                 >
                   上一页
                 </button>{" "}
                 <button
-                  disabled={nextMatchOffset === null}
-                  onClick={() => void find(nextMatchOffset!)}
+                  disabled={!search.hasNext}
+                  onClick={search.nextPage}
                 >
                   下一页
                 </button>
@@ -420,14 +372,13 @@ export function TextPreview({
         </div>
       )}
       {page.error ? (
-        <div role="alert" className="p-4 text-sm">
-          {userErrorMessage(page.error, "文本读取失败")}
-          <Button variant="ghost" onClick={() => void page.refetch()}>
-            重试
-          </Button>
-        </div>
+        <ErrorState
+          className="m-4"
+          message={userErrorMessage(page.error, "文本读取失败")}
+          onRetry={() => void page.refetch()}
+        />
       ) : page.isPending ? (
-        <p className="p-4 text-sm">正在读取文件…</p>
+        <LoadingState label="正在读取文件…" />
       ) : (
         <ReferenceSelectionMenu
           workspaceId={workspaceId}

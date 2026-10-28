@@ -6,7 +6,7 @@ import { AssistantRuntimeTransportHost } from "@/components/assistant/runtime/as
 import { useRuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
 import { useRuntimeDiagnostics } from "@/components/assistant/runtime/use-runtime-diagnostics";
 import { useBusinessResume } from "@/components/assistant/runtime/use-business-resume";
-import { useRuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
+import { useSubscriptionRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import { useBackendTransitions } from "@/components/assistant/runtime/use-backend-transitions";
 import type {
   AssistantRuntimeProps,
@@ -15,11 +15,10 @@ import type {
 } from "@/components/assistant/runtime/runtime-types";
 import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { useDeferredResultsStore } from "@/lib/task-overview/deferred-results-store";
+import { useBackgroundTasksStore } from "@/lib/task-overview/background-tasks-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
-import { readStoredToolGroupSelection, writeStoredToolGroupSelection } from "@/lib/tool-group-selection-storage";
 import { newTraceId } from "@/lib/trace";
-import { getToolGroups, toolNamesForGroups, type ToolGroupCatalog } from "@/lib/api/tools";
+import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { queryKeys } from "@/lib/query/query-keys";
 import {
@@ -45,8 +44,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   registerResync,
   initialMessage,
   initialAttachments,
-  initialDisabledToolGroups,
-  initialBanTools,
   forkingMessageId,
   onForkMessage,
   onTaskStateChanged,
@@ -56,10 +53,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     getBackendRuntimeSnapshot,
     getBackendRuntimeSnapshot,
   );
-  const {
-    backendBaseUrl,
-    available: backendRuntimeAvailable,
-  } = backendRuntime;
+  const { available: backendRuntimeAvailable } = backendRuntime;
   const backendRef = useRef(backendRuntime);
   backendRef.current = backendRuntime;
   const [traceId] = useState(() => newTraceId());
@@ -74,9 +68,11 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       },
     });
   }, [taskId, traceId]);
-  const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>(() => (
-    readStoredToolGroupSelection(taskId) ?? initialDisabledToolGroups ?? []
-  ));
+  // 默认沿用最近一次 Run 冻结的工具组（后端事实，换设备 / 清存储都一致）；用户改动后到发送前
+  // 只是组件状态，不另存本地。发送时直接传组名，不依赖下面的工具组目录是否已加载。
+  const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>(
+    () => initialState.activity?.launch.disabledToolGroups ?? [],
+  );
   // 后端不可用时不发请求；后端恢复 / 重启后的重新拉取由全局 query 同步统一失效。
   const toolGroupsQuery = useQuery({
     queryKey: queryKeys.toolGroups(),
@@ -98,15 +94,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const onTaskStateChangedRef = useRef(onTaskStateChanged);
   onTaskStateChangedRef.current = onTaskStateChanged;
 
-  const selectedBanTools = useMemo(() => {
-    if (toolGroupsLoading || toolGroupsError) return initialBanTools ?? [];
-    return toolNamesForGroups(selectedToolGroups, toolGroups);
-  }, [initialBanTools, selectedToolGroups, toolGroups, toolGroupsError, toolGroupsLoading]);
-
-  const handleSelectedToolGroupsChange = useCallback((groups: string[]) => {
-    setSelectedToolGroups(groups);
-    writeStoredToolGroupSelection(taskId, groups);
-  }, [taskId]);
   const registerComposerRestore = useCallback((restore: ComposerRestore) => {
     composerRestoreRef.current = restore;
   }, []);
@@ -122,7 +109,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     workspaceId,
     workspaceRoot,
     initialState: sessionInitialState,
-    backendBaseUrl,
     backendRef,
     traceId,
     performanceProbe,
@@ -133,7 +119,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     cancelRequestedRef,
     composerRestoreRef,
   }), [
-    backendBaseUrl,
     notifyTaskStateChanged,
     performanceProbe,
     sessionInitialState,
@@ -145,14 +130,21 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   ]);
 
   useRuntimeDiagnostics(context);
-  const recovery = useRuntimeRecovery(context);
+  const recoveryDeps = useMemo(() => ({
+    taskId: context.taskId,
+    traceId: context.traceId,
+    attach: () => context.attachTransportRef.current,
+    backend: () => context.backendRef.current,
+    setIssue: context.setIssue,
+  }), [context]);
+  const recovery = useSubscriptionRecovery(recoveryDeps);
   const businessResume = useBusinessResume(context);
   const cancellation = useRuntimeCancellation(context);
   // 后端变化的唯一处理点：不可用时停掉重连计时器；恢复后 runtime 按新实例自行重开订阅（首帧即
   // 完整状态），这里只清零预算并提示。
   useBackendTransitions(backendRuntime, {
     onUnavailable: () => {
-      recovery.suspend();
+      recovery.resetBudget();
     },
     onRestored: () => {
       recovery.restored({ message: "本机后端已恢复，正在同步当前对话…", canResync: true });
@@ -170,7 +162,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     cancellation.onStateCommitted(state);
     // 终端会话列表是 snapshot 投影；镜像给页头按钮与终端工作台（它们在 Assistant runtime 之外）。
     useTerminalWorkbenchStore.getState().syncSessions(taskId, state.terminal_sessions);
-    useDeferredResultsStore.getState().sync(taskId, state.deferred_results);
+    useBackgroundTasksStore.getState().sync(taskId, state);
     // 标题事实在后端 tasks.title；snapshot 只负责通知打开中的页面，侧栏目录按既有刷新路径重读。
     if (state.title !== previousTitle) notifyTaskStateChanged();
   }, [cancellation.onStateCommitted, notifyTaskStateChanged, sessionInitialState, taskId]);
@@ -180,12 +172,11 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       recovery={recovery}
       cancellation={cancellation}
       commitTransportState={commitTransportState}
-      selectedBanTools={selectedBanTools}
       registerComposerRestore={registerComposerRestore}
       initialMessageSentRef={initialMessageSentRef}
       toolGroups={toolGroups}
       selectedToolGroups={selectedToolGroups}
-      onSelectedToolGroupsChange={handleSelectedToolGroupsChange}
+      onSelectedToolGroupsChange={setSelectedToolGroups}
       toolGroupsLoading={toolGroupsLoading}
       toolGroupsError={toolGroupsError}
       initialMessage={initialMessage}

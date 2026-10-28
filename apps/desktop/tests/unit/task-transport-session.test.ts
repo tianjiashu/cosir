@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
@@ -26,6 +26,8 @@ function controllableStream() {
   };
 }
 
+// http client 按 runtime config 解析后端地址，它读 window；单测跑在 Node 环境，给一个空 window。
+beforeEach(() => vi.stubGlobal("window", {}));
 afterEach(() => vi.unstubAllGlobals());
 
 const fullFrame = (state: TransportState) => ({ task_id: 7, kind: "full", mutations: [], state });
@@ -35,8 +37,9 @@ function setup(callbacks: Partial<TaskTransportSessionCallbacks> = {}, initial =
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 0; });
   const store = new TransportFrameStore(initial);
   const fetchImpl = vi.fn<typeof fetch>();
-  const all: TaskTransportSessionCallbacks = { headers: () => ({}), ...callbacks };
-  const session = new TaskTransportSession(store, "http://127.0.0.1:1/tasks/7/assistant/attach", () => all, fetchImpl);
+  vi.stubGlobal("fetch", fetchImpl);
+  const all: TaskTransportSessionCallbacks = { traceId: "trace-7", ...callbacks };
+  const session = new TaskTransportSession(store, "/tasks/7/assistant/attach", () => all);
   return { store, fetchImpl, session };
 }
 
@@ -59,7 +62,14 @@ describe("TaskTransportSession 长订阅（D4）", () => {
     expect(store.getSnapshot().state.activity?.status).toBe("completed");
     expect(session.isOpen).toBe(true);
     expect(onDisconnect).not.toHaveBeenCalled();
-    expect(fetchImpl).toHaveBeenCalledWith("http://127.0.0.1:1/tasks/7/assistant/attach", expect.objectContaining({ method: "POST" }));
+    expect(fetchImpl).toHaveBeenCalledWith(
+      expect.stringMatching(/\/tasks\/7\/assistant\/attach$/),
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        headers: expect.objectContaining({ Accept: "text/event-stream", "X-Trace-Id": "trace-7" }),
+      }),
+    );
   });
 
   it("后端关闭连接（EOF）视为意外断开，交给宿主重连；背压重同步带 resync 标记", async () => {

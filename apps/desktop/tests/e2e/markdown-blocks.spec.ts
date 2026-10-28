@@ -4,7 +4,7 @@ import { completedState, seedState } from "./transport-fixtures";
 /*
  * app/markdown.css 覆盖 Streamdown 的块级外观：表格无外框、按钮悬停才出现。
  * 表格按钮行没有 data-streamdown 标记，只能按结构定位，这里守护 Streamdown
- * 升级后结构变化导致覆盖静默失效。
+ * 升级后结构变化导致覆盖静默失效。Mermaid 图表包装层与缩放控件同理。
  */
 const markdown = [
   "| 能力 | API |",
@@ -14,6 +14,16 @@ const markdown = [
   "",
   "```python",
   "print(1)",
+  "```",
+  "",
+  "```mermaid",
+  "sequenceDiagram",
+  "    participant P as 规划(planner)",
+  "    participant C as 实现(coder)",
+  "    participant R as 评审(reviewer)",
+  "    P->>C: ready + 6 段式计划",
+  "    C->>R: done + 产出文件",
+  "    R-->>P: pass",
   "```",
 ].join("\n");
 
@@ -57,4 +67,22 @@ test("代码块按钮悬停才出现", async ({ page }) => {
   await expect.poll(() => style(actions, "opacity")).toBe("0");
   await block.hover();
   await expect.poll(() => style(actions, "opacity")).toBe("1");
+});
+
+test("Mermaid 按原始宽度显示，缩放控件悬停才出现", async ({ page }) => {
+  const block = page.locator('.aui-md [data-streamdown="mermaid-block"]').last();
+  const svg = block.locator('[aria-label="Mermaid chart"] > svg');
+  const zoom = block.getByRole("button", { name: "Zoom in" }).locator("..");
+  await expect(svg).toBeVisible();
+  // 包装层收缩时 SVG 会回落到 300px 默认宽度；撑满后应接近 Mermaid 声明的原始宽度。
+  const { width, maxWidth } = await svg.evaluate((element) => ({
+    width: element.getBoundingClientRect().width,
+    maxWidth: Number.parseFloat(getComputedStyle(element).maxWidth),
+  }));
+  expect(maxWidth).toBeGreaterThan(300);
+  expect(Math.abs(width - maxWidth)).toBeLessThan(2);
+  await page.mouse.move(0, 0);
+  await expect.poll(() => style(zoom, "opacity")).toBe("0");
+  await block.hover();
+  await expect.poll(() => style(zoom, "opacity")).toBe("1");
 });

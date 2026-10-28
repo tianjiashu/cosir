@@ -1,10 +1,9 @@
 import { useMemo, useRef, useState } from "react";
 import { ArrowLeftIcon, CopyIcon, WrapTextIcon } from "lucide-react";
+import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ReadonlyTextViewer } from "@/components/text-viewer/readonly-text-viewer";
-import { frontendLog } from "@/lib/logging/frontend-log";
-import { notify } from "@/lib/notify";
 import type { ContextMessage } from "@/lib/api/context-messages";
 import {
   cacheUsage,
@@ -81,23 +80,11 @@ export function MessageDetail({
   const plainText = tab === "content" && typeof message.content === "string";
   const usage = message.usage_metadata;
   const cache = cacheUsage(message);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      notify.success(tab === "content" ? "已复制内容" : "已复制 JSON");
-    } catch (error) {
-      notify.error("复制失败", { error, fallback: "无法写入剪贴板" });
-      void frontendLog(
-        "WARNING",
-        "context_message_copy_failed",
-        "复制上下文记录失败",
-        {
-          data: { taskId: message.task_id, sequence: message.sequence, tab },
-          error,
-        },
-      );
-    }
-  };
+  const copy = () => copyText(text, {
+    success: tab === "content" ? "已复制内容" : "已复制 JSON",
+    logEvent: "context_message_copy_failed",
+    logData: { taskId: message.task_id, sequence: message.sequence, tab },
+  });
   return (
     <section className="flex h-full min-h-0 flex-col" aria-label="消息详情">
       <div className="shrink-0 space-y-3 border-b px-5 py-3">

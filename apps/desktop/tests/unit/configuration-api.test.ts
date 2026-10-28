@@ -6,17 +6,6 @@ const jsonRequestInit = vi.hoisted(() => vi.fn((body: unknown, init: RequestInit
 vi.mock("@/lib/http/client", () => ({ requestJson, jsonRequestInit }));
 
 describe("configuration API", () => {
-  it("expands selected tool groups and restores only complete groups", async () => {
-    const { toolGroupsForNames, toolNamesForGroups } = await import("@/lib/api/tools");
-    const groups = [
-      { group: "文件", tools: [{ name: "read_file", description: "读取" }, { name: "write_file", description: "写入" }] },
-      { group: "联网", tools: [{ name: "web_search", description: "搜索" }] },
-    ];
-
-    expect(toolNamesForGroups(["联网", "文件"], groups)).toEqual(["read_file", "write_file", "web_search"]);
-    expect(toolGroupsForNames(["read_file", "write_file", "unknown"], groups)).toEqual(["文件"]);
-  });
-
   it("routes Team CRUD through the explicit system or workspace scope", async () => {
     requestJson.mockResolvedValue({ team_id: "review-team" });
     const {

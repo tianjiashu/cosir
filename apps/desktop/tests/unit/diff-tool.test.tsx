@@ -6,7 +6,7 @@ import { DiffTool, parseFileDiff } from "@/components/assistant-ui/tools/diff-to
 function renderDiff(
   status: "pending" | "running" | "completed" | "failed",
   display_data: Record<string, unknown> | null,
-  options: { verb?: string; defaultOpen?: boolean } = {},
+  options: { verb?: string; defaultOpen?: boolean; error?: string } = {},
 ): string {
   return renderToStaticMarkup(
     <DiffTool
@@ -30,6 +30,8 @@ function renderDiff(
           default_open: options.defaultOpen,
         },
         display_data,
+        // 失败提示由 converter 按后端 part.error 收口后放进 artifact，渲染器不读 status_hint。
+        error: options.error ?? null,
       }}
     />,
   );
@@ -197,7 +199,7 @@ describe("DiffTool", () => {
         status: "moved",
         patch: null,
       }],
-    }, { verb: "移动文件" });
+    }, { verb: "移动文件", error: "目标已存在" });
 
     expect(html).toContain("目标已存在");
     expect(html).toContain("失败");

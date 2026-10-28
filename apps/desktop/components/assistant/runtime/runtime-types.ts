@@ -15,8 +15,6 @@ export type AssistantRuntimeProps = {
   initialState: TransportState;
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
-  initialDisabledToolGroups?: string[];
-  initialBanTools?: string[];
   /** 正在 fork 的消息 id：fork 按消息切分，入口挂在带结局的回复上。 */
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
@@ -38,7 +36,6 @@ export type RuntimeSessionContext = {
   workspaceId?: number | null;
   workspaceRoot?: string;
   initialState: TransportState;
-  backendBaseUrl: string;
   /**
    * 当前后端实例的最新快照，由会话在每次渲染时写入。计时器与异步回调读取它判断
    * 后端是否仍可用；后端变化的边沿只由 useBackendTransitions 检测一次。

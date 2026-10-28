@@ -294,7 +294,9 @@ describe("assistant transport converter", () => {
     const pending = toToolCallPart(tool("pending"));
     const running = toToolCallPart(tool("running"));
     const completed = toToolCallPart(tool("completed", { display_data: { kind: "terminal-result" } }));
-    const failed = toToolCallPart(tool("failed", { error: "full diagnostic", display_data: { status_hint: "权限不足" }, errorCode: "DENIED" }));
+    const failed = toToolCallPart(tool("failed", { error: "权限不足", display_data: { status_hint: "权限不足" }, errorCode: "DENIED" }));
+    // 重启收尾的失败只带后端写入的 part.error，没有 status_hint，前端不得改写。
+    const settled = toToolCallPart(tool("failed", { error: "执行异常" }));
     const cancelled = toToolCallPart(tool("cancelled"));
     const delegation = toToolCallPart(tool("running", {
       toolName: "delegate_task",
@@ -306,6 +308,7 @@ describe("assistant transport converter", () => {
     expect(completed).toMatchObject({ isError: false, artifact: { backendStatus: "completed", display_data: { kind: "terminal-result" } } });
     expect(failed).toMatchObject({ isError: true, artifact: { backendStatus: "failed", errorCode: "DENIED" } });
     expect(failed).toMatchObject({ artifact: { error: "权限不足" } });
+    expect(settled).toMatchObject({ artifact: { error: "执行异常" } });
     expect(failed).toMatchObject({ result: { kind: "tool-terminal", status: "failed" } });
     expect(cancelled).toMatchObject({ isError: false, artifact: { backendStatus: "cancelled", error: "已取消" } });
     expect(cancelled).toMatchObject({ result: { kind: "tool-terminal", status: "cancelled" } });

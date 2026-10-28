@@ -1,6 +1,7 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { getModelConfigs, type ModelConfig } from "@/lib/api/model-configs";
+import { queryKeys } from "@/lib/query/query-keys";
 
 export type ModelCatalogModel = {
   optionId: string;
@@ -19,26 +20,10 @@ export type ModelCatalog = {
 };
 
 export type ModelCatalogSnapshot = {
-  status: "idle" | "loading" | "ready" | "error";
+  status: "loading" | "ready" | "error";
   catalog: ModelCatalog | null;
   error: Error | null;
 };
-
-const initialSnapshot: ModelCatalogSnapshot = { status: "idle", catalog: null, error: null };
-let snapshot = initialSnapshot;
-let activeRequest: Promise<ModelCatalog | null> | null = null;
-let activeController: AbortController | null = null;
-let requestGeneration = 0;
-const subscribers = new Set<() => void>();
-
-function notify(): void {
-  for (const subscriber of subscribers) subscriber();
-}
-
-function setSnapshot(next: ModelCatalogSnapshot): void {
-  snapshot = next;
-  notify();
-}
 
 export function modelOptionId(modelConfigId: number): string {
   return `model-config:${modelConfigId}`;
@@ -62,61 +47,21 @@ export function buildModelCatalog(configs: readonly ModelConfig[]): ModelCatalog
   return { models, byOptionId: new Map(models.map((model) => [model.optionId, model])) };
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
-export function getModelCatalogSnapshot(): ModelCatalogSnapshot {
-  return snapshot;
-}
-
-function subscribeModelCatalog(listener: () => void): () => void {
-  subscribers.add(listener);
-  return () => subscribers.delete(listener);
-}
-
-/** 加载启用的模型连接配置目录；桌面 WebView 内所有选择器共享一次请求。 */
-export function loadModelCatalog(options: { force?: boolean } = {}): Promise<ModelCatalog | null> {
-  if (!options.force && snapshot.status === "ready") return Promise.resolve(snapshot.catalog);
-  if (!options.force && activeRequest) return activeRequest;
-
-  activeController?.abort();
-  const controller = new AbortController();
-  const generation = ++requestGeneration;
-  activeController = controller;
-  setSnapshot({ status: "loading", catalog: snapshot.catalog, error: null });
-
-  const request = getModelConfigs({ signal: controller.signal })
-    .then((configs) => {
-      if (controller.signal.aborted || generation !== requestGeneration) return null;
-      const nextCatalog = buildModelCatalog(configs);
-      setSnapshot({ status: "ready", catalog: nextCatalog, error: null });
-      return nextCatalog;
-    })
-    .catch((error: unknown) => {
-      if (controller.signal.aborted || generation !== requestGeneration || isAbortError(error)) return null;
-      const nextError = error instanceof Error ? error : new Error("模型配置加载失败");
-      setSnapshot({ status: "error", catalog: snapshot.catalog, error: nextError });
-      return null;
-    })
-    .finally(() => {
-      if (generation === requestGeneration) {
-        activeRequest = null;
-        activeController = null;
-      }
-    });
-  activeRequest = request;
-  return request;
-}
-
-export function useModelCatalog(): ModelCatalogSnapshot & { retry: () => Promise<ModelCatalog | null> } {
-  const current = useSyncExternalStore(
-    subscribeModelCatalog,
-    getModelCatalogSnapshot,
-    getModelCatalogSnapshot,
-  );
-  useEffect(() => {
-    if (current.status === "idle") void loadModelCatalog();
-  }, [current.status]);
-  return { ...current, retry: () => loadModelCatalog({ force: true }) };
+/**
+ * 启用的模型连接配置目录：与模型配置管理共用 `queryKeys.modelConfigs()` 这一份 react-query 缓存，
+ * 保存 / 删除后的失效与后端换代时的全局失效都会自动刷新目录，不另维护一份缓存。
+ * 后台重拉期间保留旧目录、状态仍为 ready，选择器不会因刷新回到加载态。
+ */
+export function useModelCatalog(): ModelCatalogSnapshot & { retry: () => void } {
+  const query = useQuery({
+    queryKey: queryKeys.modelConfigs(),
+    queryFn: ({ signal }) => getModelConfigs({ signal }),
+    select: buildModelCatalog,
+  });
+  return {
+    status: query.isError ? "error" : query.isSuccess ? "ready" : "loading",
+    catalog: query.data ?? null,
+    error: query.error,
+    retry: () => void query.refetch(),
+  };
 }

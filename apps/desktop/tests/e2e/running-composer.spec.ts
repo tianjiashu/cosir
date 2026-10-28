@@ -14,7 +14,7 @@ import { seedState } from "./transport-fixtures";
 const origin = "http://127.0.0.1:8000";
 const TASK_ID = 42;
 // 活动 Run 冻结的发起配置：运行中发送沿用它，而不是 composer 里的选择。
-const RUN_LAUNCH = { modelConfigId: 2, reasoningEffort: null, banTools: ["web_search"] };
+const RUN_LAUNCH = { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: ["联网工具"] };
 
 function activeState(queued: TransportState["queued_messages"] = []): TransportState {
   return {
@@ -30,7 +30,7 @@ function activeState(queued: TransportState["queued_messages"] = []): TransportS
       contextWindowTotal: null, launch: RUN_LAUNCH,
     },
     queued_messages: queued,
-    terminal_sessions: [], deferred_results: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [],
   };
 }
 
@@ -68,7 +68,7 @@ for (const via of ["button", "enter"] as const) {
       message: { parts: [{ type: "text", text: "运行中追加的消息" }] },
       delivery: "immediate",
       modelConfigId: 2,
-      banTools: ["web_search"],
+      disabledToolGroups: ["联网工具"],
     });
   });
 }

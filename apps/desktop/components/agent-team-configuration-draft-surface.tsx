@@ -18,7 +18,7 @@ import {
   getWorkspaceAgentConfigurations,
   type AgentConfiguration,
 } from "@/lib/api/configuration";
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { confirmCloseWorkbenchDraft } from "@/lib/workbench/drafts";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { queryKeys } from "@/lib/query/query-keys";
 import type { WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
@@ -61,17 +61,7 @@ export function AgentTeamConfigurationDraftSurface({
   const failedQuery = [systemAgentsQuery, workspaceAgentsQuery].find((query) => query.isError);
 
   const close = async () => {
-    if (tab.session.store.getState().dirty) {
-      const discard = await requestConfirmation({
-        title: "关闭 Team 配置草稿？",
-        description: "Agent Team 配置草稿尚未保存，关闭后修改会丢失。",
-        confirmLabel: "放弃并关闭",
-        tone: "destructive",
-        icon: "discard",
-      });
-      if (!discard) return;
-    }
-    onClose();
+    if (await confirmCloseWorkbenchDraft(tab)) onClose();
   };
 
   const save: PersistTeam = async (configuration, identity) => {

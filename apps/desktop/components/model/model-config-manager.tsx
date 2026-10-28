@@ -82,19 +82,16 @@ function toInput(form: FormState): ModelConfigTestInput {
  * - 保存前必须对「当前表单内容」测试通过：测试结果按表单签名绑定，任何字段改动都会使其失效。
  * - 编辑状态随组件卸载丢弃：对话框关闭（内容卸载）或离开配置路由即放弃未保存修改，
  *   离开前的确认由宿主按 `unsavedScope` 负责（对话框自行确认，配置中心走路由拦截）。
- * - 列表经 TanStack Query 读取；模型选择目录（lib/model-catalog）是独立的共享缓存，
- *   本组件不直接写它。`onChanged` 在每次保存 / 删除成功后调用，由宿主决定何时刷新目录——
- *   对话框挂在 composer 的模型下拉里，刷新目录会让下拉进入加载态并卸载对话框，故对话框改为关闭时刷新。
+ * - 列表经 TanStack Query 读取；模型选择目录（lib/model-catalog）共用同一个 query key，
+ *   保存 / 删除后的失效会同时刷新目录，宿主无需另行通知。
  */
 export function ModelConfigManager({
   unsavedScope,
   variant,
-  onChanged,
 }: {
   unsavedScope: UnsavedScope;
   /** dialog：列表限高滚动；page：配置中心面板，随页面滚动。 */
   variant: "dialog" | "page";
-  onChanged?: () => void;
 }) {
   const queryClient = useQueryClient();
   const saveHintId = useId();
@@ -142,7 +139,6 @@ export function ModelConfigManager({
       setBaseline(savedForm);
       setShowApiKey(false);
       notify.success("模型配置已保存");
-      onChanged?.();
     },
   });
 
@@ -153,7 +149,6 @@ export function ModelConfigManager({
       // 被删除的配置正在编辑时清空表单，否则后续保存会对已删除的 id 发起更新。
       if (editingId === configId) resetForm();
       notify.success("模型配置已删除");
-      onChanged?.();
     },
   });
 

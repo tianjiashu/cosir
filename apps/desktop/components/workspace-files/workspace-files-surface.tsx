@@ -1,3 +1,4 @@
+import { useElementSize } from "@/hooks/use-element-size";
 import { useBrowserVisibility } from "@/lib/workspace-files/visibility";
 import { FileBrowserMenu, IgnoredItemsDialog } from "./ignored-items-dialog";
 import { ReferencePreview } from "@/components/workspace-references/reference-preview";
@@ -52,11 +53,10 @@ export function WorkspaceFilesSurface({
     query: string;
   } | null>(null);
   const [reveal, setReveal] = useState(0);
-  const [availableWidth, setAvailableWidth] = useState(0);
+  const [shell, { width: availableWidth }] = useElementSize<HTMLDivElement>();
   const wide = availableWidth >= 650;
   const treeMaxWidth = Math.max(160, Math.min(420, availableWidth - 324));
   const treeWidth = Math.min(session.treeWidth, treeMaxWidth);
-  const shell = useRef<HTMLDivElement>(null);
   const filenameSearch = useRef<HTMLInputElement>(null);
   const searchRequestId = useRef(0);
   const runFilenameSearch = () => {
@@ -71,13 +71,7 @@ export function WorkspaceFilesSurface({
     setQuery("");
     setSearchRequest(null);
   };
-  useLayoutEffect(() => {
-    const observer = new ResizeObserver(([entry]) =>
-      setAvailableWidth(entry.contentRect.width),
-    );
-    observer.observe(shell.current!);
-    return () => observer.disconnect();
-  }, []);
+
   const treeVisible = wide
     ? session.treeVisible
     : session.browsing || !session.active;

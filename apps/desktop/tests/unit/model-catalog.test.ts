@@ -1,8 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-const getModelConfigs = vi.hoisted(() => vi.fn());
-
-vi.mock("@/lib/api/model-configs", () => ({ getModelConfigs }));
+import { buildModelCatalog } from "@/lib/model-catalog";
 
 const configs = (modelName: string) => [{
   config_id: 1,
@@ -21,31 +19,12 @@ const configs = (modelName: string) => [{
   supports_reasoning_effort: true,
 }];
 
-describe("global model catalog", () => {
-  it("builds a flat label from configuration name, model name and context window", async () => {
-    const { buildModelCatalog } = await import("@/lib/model-catalog");
+// 目录的加载、去重与失效由 react-query 负责（与模型配置管理共用 query key），这里只测纯映射。
+describe("model catalog mapping", () => {
+  it("builds a flat label from configuration name, model name and context window", () => {
     const model = buildModelCatalog(configs("demo-model")).models[0];
     expect(model?.configName).toBe("Demo 配置");
     expect(model?.label).toBe("Demo 配置 · demo-model");
     expect(model?.contextWindowK).toBe(128);
-  });
-
-  it("aborts the previous load and ignores its late response", async () => {
-    let resolveFirst: ((value: ReturnType<typeof configs>) => void) | undefined;
-    let resolveSecond: ((value: ReturnType<typeof configs>) => void) | undefined;
-    const first = new Promise<ReturnType<typeof configs>>((resolve) => { resolveFirst = resolve; });
-    const second = new Promise<ReturnType<typeof configs>>((resolve) => { resolveSecond = resolve; });
-    getModelConfigs
-      .mockImplementationOnce((init: RequestInit) => { expect(init.signal).toBeInstanceOf(AbortSignal); return first; })
-      .mockImplementationOnce((init: RequestInit) => { expect(init.signal).toBeInstanceOf(AbortSignal); return second; });
-
-    const { getModelCatalogSnapshot, loadModelCatalog } = await import("@/lib/model-catalog");
-    const firstLoad = loadModelCatalog();
-    const secondLoad = loadModelCatalog({ force: true });
-    expect(getModelConfigs.mock.calls[0]?.[0].signal.aborted).toBe(true);
-    resolveFirst?.(configs("stale-model"));
-    resolveSecond?.(configs("current-model"));
-    await Promise.all([firstLoad, secondLoad]);
-    expect(getModelCatalogSnapshot().catalog?.models[0]?.modelName).toBe("current-model");
   });
 });

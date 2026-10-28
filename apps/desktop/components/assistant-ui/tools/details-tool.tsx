@@ -4,10 +4,12 @@ import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import { DisclosureRow, DisclosureRowStatic } from "../elements/disclosure-row.aui";
 import { asRecord, readToolArtifact, safeExternalUrl } from "./types";
-import { ToolStatus } from "./tool-status";
+import type { TransportToolStatus } from "@/lib/assistant/contract";
+import { ToolStatus, toolStatusLabel } from "./tool-status";
 import { ToolIcon } from "./tool-icons";
 import { useToolDisclosure } from "./tool-disclosure";
-import { childAgentStatusLabel, readChildAgentResultDisplay } from "./child-agent-display";
+import { taskRunStatusPresentation } from "@/components/task-tree/task-run-status";
+import { readChildAgentResultDisplay } from "./child-agent-display";
 import { TOOL_DETAIL_ROW_CLASS, TOOL_DETAIL_TEXT_ROW_CLASS } from "../elements/tool-layout-tokens";
 
 function toolTitle(toolName: string, verb?: string): string {
@@ -20,17 +22,6 @@ function formatFileSize(value: unknown): string {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-function formatToolStatus(status: string): string {
-  switch (status) {
-    case "pending": return "等待中";
-    case "running": return "执行中";
-    case "completed": return "已完成";
-    case "failed": return "失败";
-    case "cancelled": return "已取消";
-    default: return "未知状态";
-  }
 }
 
 function formatUrlSite(value: unknown): string {
@@ -59,7 +50,7 @@ function readFileSummary(data: Record<string, unknown>): string {
   return `${path} · ${range} · ${formatFileSize(data.file_size)}`;
 }
 
-function displaySummary(data: Record<string, unknown>, backendStatus: string): string {
+function displaySummary(data: Record<string, unknown>, backendStatus: TransportToolStatus): string {
   switch (data.kind) {
     case "read-file-meta":
       return readFileSummary(data);
@@ -91,13 +82,14 @@ function displaySummary(data: Record<string, unknown>, backendStatus: string): s
       const urls = Array.isArray(data.urls) ? data.urls : [];
       const firstUrl = urls.length > 0 ? asRecord(urls[0]).url : undefined;
       const target = urls.length > 1 ? `${formatUrlSite(firstUrl)} 等 ${urls.length} 个网站` : formatUrlSite(firstUrl);
-      const overallStatus = typeof data.status_hint === "string" ? data.status_hint : formatToolStatus(backendStatus);
+      const overallStatus = typeof data.status_hint === "string" ? data.status_hint : toolStatusLabel(backendStatus);
       return `${target} · ${overallStatus}`;
     }
     case "child-agent-result": {
-      const status = typeof data.status === "string" ? data.status : backendStatus;
-      const agent = typeof data.agent_name === "string" ? data.agent_name : "子 Agent";
-      return `${agent} · 子 Agent：${formatToolStatus(status)}`;
+      // 子 Agent 卡片展示的是子 Task 最新 Run 的状态（含 suspended），用 Run 状态文案，不用工具调用状态。
+      // 走到这里时 renderer 注册表已保证 readChildAgentResultDisplay 非空。
+      const result = readChildAgentResultDisplay(data)!;
+      return `${result.agentName ?? "子 Agent"} · 子 Agent：${taskRunStatusPresentation(result.status, true)?.label}`;
     }
     case "mcp-tool-result": {
       if (data.action === "call") {
@@ -214,7 +206,7 @@ function ChildAgentResult({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="space-y-1 text-xs">
       <p className="text-muted-foreground">
-        {result.agentName ?? "子 Agent"} · task {result.childTaskId} · {childAgentStatusLabel(result.status)}
+        {result.agentName ?? "子 Agent"} · task {result.childTaskId} · {taskRunStatusPresentation(result.status, true)?.label}
       </p>
       {result.endReason && <p className="text-warning">{result.endReason}</p>}
       {result.finalOutput && <p className="whitespace-pre-wrap break-words text-muted-foreground">{result.finalOutput}</p>}

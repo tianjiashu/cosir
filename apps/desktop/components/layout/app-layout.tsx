@@ -15,7 +15,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 
 import { BackendRestartButton } from "@/components/backend-restart-button";
 import { FocusedTaskIdContext } from "@/components/task-overview/focused-task-context";
-import { countRunning, useDeferredResults } from "@/lib/task-overview/deferred-results-store";
+import { countRunning, useBackgroundTasks } from "@/lib/task-overview/background-tasks-store";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { useCommandPaletteHotkey } from "@/components/command-palette/use-command-palette-hotkey";
 import { BackendStatusBanner } from "@/components/backend-status-banner";
@@ -58,8 +58,6 @@ export type RouteHandle = { section: SidebarSection; files?: boolean };
 type TaskRouteState = {
   initialMessage?: string;
   initialAttachments?: InitialConversationAttachment[];
-  initialDisabledToolGroups?: string[];
-  initialBanTools?: string[];
 };
 
 export type AppOutletContext = {
@@ -183,7 +181,7 @@ export function AppLayout() {
   const filesPanelActive = workbenchPanelOpen && workbenchTabs.some((tab) => tab.kind === "files" && tab.id === workbenchActiveTabId);
   const overviewPanelActive = workbenchPanelOpen && workbenchTabs.some((tab) => tab.kind === "task-overview" && tab.id === workbenchActiveTabId);
   // 任务概览的角标：当前聚焦 Task 运行中的后台工作数；有新条目时不自动弹出面板。
-  const runningDeferredCount = countRunning(useDeferredResults(focusedTaskId));
+  const runningDeferredCount = countRunning(useBackgroundTasks(focusedTaskId));
   const setWorkbenchPanelOpen = useWorkbenchStore((state) => state.setPanelOpen);
   // 收起只改变可见性；草稿由工作台会话保留，真正销毁由关闭/工作区切换边界确认。
   const toggleWorkbenchPanel = useCallback(() => {
@@ -365,8 +363,6 @@ export function AppLayout() {
                   initialTask={catalog.activeTask}
                   initialMessage={taskState?.initialMessage}
                   initialAttachments={taskState?.initialAttachments}
-                  initialDisabledToolGroups={taskState?.initialDisabledToolGroups}
-                  initialBanTools={taskState?.initialBanTools}
                   workspaceRoot={catalog.activeWorkspace?.root_path}
                   forkingMessageId={actions.forkingMessageId}
                   onForkMessage={(messageId) => void actions.forkMessage(messageId)}

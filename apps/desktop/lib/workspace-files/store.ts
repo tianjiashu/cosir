@@ -147,6 +147,18 @@ export const fileSession = (
   sessions: Record<number, FileSession>,
   id: number,
 ) => sessions[id] ?? emptySession;
+
+/**
+ * 复制给用户的路径文本。工作区内路径统一用 `/`；绝对路径按工作区根的分隔符拼接，Windows 根
+ * （含 `\`）下得到原生的 `C:\repo\src` 形式。根目录的相对路径写作 `.`。
+ */
+export function workspacePathText(rootPath: string, path: string, absolute: boolean): string {
+  if (!absolute) return path || ".";
+  const separator = rootPath.includes("\\") ? "\\" : "/";
+  const root = rootPath.replace(/[\\/]$/, "");
+  return path ? `${root}${separator}${path.replaceAll("/", separator)}` : root;
+}
+
 export function parentPath(path: string): string {
   return path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
 }

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import { Tree, type NodeApi, type TreeApi } from "react-arborist";
 
+import { useElementSize } from "@/hooks/use-element-size";
 import type { WorkspaceTask } from "@/lib/api/workspaces";
 import { buildWorkspaceTreeModel, taskTreeNodeId, workspaceTreeNodeId, type WorkspaceSidebarNode, type WorkspaceTreeSource } from "./workspace-tree-model";
 import type { TaskTreeNode } from "./task-tree-model";
@@ -36,22 +37,9 @@ export function WorkspaceTree({
 }: WorkspaceTreeProps) {
   const model = useMemo(() => buildWorkspaceTreeModel(workspaces), [workspaces]);
   const treeRef = useRef<TreeApi<WorkspaceSidebarNode> | undefined>(undefined);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [treeHeight, setTreeHeight] = useState(0);
-
-  const syncTreeHeight = useCallback(() => {
-    const container = containerRef.current;
-    if (container) setTreeHeight(Math.floor(container.getBoundingClientRect().height));
-  }, []);
-
-  useLayoutEffect(() => {
-    syncTreeHeight();
-    const container = containerRef.current;
-    if (!container) return;
-    const observer = new ResizeObserver(syncTreeHeight);
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, [syncTreeHeight]);
+  const [containerRef, containerSize] = useElementSize<HTMLDivElement>();
+  // 取整：小数高度会让虚拟列表在相邻整数间来回重算。
+  const treeHeight = Math.floor(containerSize.height);
 
   const initialOpenState = useMemo(() => {
     if (expandedWorkspaceIds === null) return undefined;

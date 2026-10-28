@@ -23,18 +23,14 @@ export function readToolArtifact(value: unknown): ToolArtifact {
     ? status
     : "unknown";
   const display_data = candidate.display_data ?? null;
-  const displayDataRecord = asRecord(display_data);
   return {
     backendStatus,
     presentation: candidate.presentation ?? {},
     display_data,
     team_run_id: typeof candidate.team_run_id === "number" && Number.isInteger(candidate.team_run_id) && candidate.team_run_id > 0 ? candidate.team_run_id : undefined,
     deferred: candidate.deferred === true ? true : undefined,
-    error: backendStatus === "cancelled"
-      ? typeof candidate.error === "string" && candidate.error ? candidate.error : "已取消"
-      : backendStatus === "failed"
-        ? typeof displayDataRecord.status_hint === "string" ? displayDataRecord.status_hint : "执行失败"
-        : null,
+    // converter 已按后端 part.error 收口失败 / 取消提示，这里只透传。
+    error: typeof candidate.error === "string" ? candidate.error : null,
     errorCode: typeof candidate.errorCode === "string" ? candidate.errorCode : null,
     child_task_id: typeof candidate.child_task_id === "number" && Number.isInteger(candidate.child_task_id) && candidate.child_task_id > 0 ? candidate.child_task_id : undefined,
     agent_role: typeof candidate.agent_role === "string" && candidate.agent_role.trim() ? candidate.agent_role : undefined,

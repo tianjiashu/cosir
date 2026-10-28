@@ -36,7 +36,7 @@ export function ModelAvailability({
     ? "border-input flex h-9 w-full items-center gap-1.5 rounded-lg border px-3 text-sm"
     : "inline-flex h-8 items-center gap-1.5 px-2 text-xs";
 
-  if (status === "loading" || status === "idle") {
+  if (status === "loading") {
     return (
       <span role="status" className={cn(frame, "text-muted-foreground")}>
         <SparklesIcon className="size-3.5 animate-pulse" aria-hidden="true" />加载模型…

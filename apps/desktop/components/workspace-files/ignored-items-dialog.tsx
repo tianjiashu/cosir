@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { DropdownMenu } from "radix-ui";
 import { EyeOffIcon, MoreHorizontalIcon } from "lucide-react";
+import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -66,24 +67,14 @@ export function IgnoredItemsDialog({
           <DialogTitle>管理忽略项</DialogTitle>
         </DialogHeader>
         {settings.isPending ? (
-          <p role="status" className="text-muted-foreground">
-            正在读取忽略项…
-          </p>
+          <LoadingState label="正在读取忽略项…" />
         ) : settings.isError ? (
-          <div role="alert" className="space-y-2">
-            <p>{userErrorMessage(settings.error, "忽略项读取失败")}</p>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void settings.refetch()}
-            >
-              重试
-            </Button>
-          </div>
+          <ErrorState
+            message={userErrorMessage(settings.error, "忽略项读取失败")}
+            onRetry={() => void settings.refetch()}
+          />
         ) : paths.length === 0 ? (
-          <p className="py-6 text-center text-muted-foreground">
-            还没有忽略任何文件或目录
-          </p>
+          <EmptyState title="还没有忽略任何文件或目录" />
         ) : (
           <>
             <input

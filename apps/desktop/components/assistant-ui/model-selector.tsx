@@ -87,13 +87,11 @@ function SelectorView({
   selection,
   disabled = false,
   onSelectionChange,
-  onCatalogChanged,
 }: {
   catalogModels: readonly ModelCatalogModel[];
   selection: ModelSelection;
   disabled?: boolean;
   onSelectionChange: (selection: ModelSelection) => void;
-  onCatalogChanged: () => void;
 }) {
   const officialModels = useMemo(
     () => catalogModels.map(toOfficialModel),
@@ -154,7 +152,7 @@ function SelectorView({
           <OfficialModelSelectorList />
           <OfficialModelSelectorEffort label="推理强度" />
           <div className="border-border/60 mt-1 border-t pt-1">
-            <ModelConfigPanel onChanged={onCatalogChanged} />
+            <ModelConfigPanel />
           </div>
         </OfficialModelSelectorContent>
       </OfficialModelSelectorRoot>
@@ -240,14 +238,14 @@ function SelectorBody({
     props.onReadyChange?.(status === "ready" && selection !== null);
   }, [props.onReadyChange, selection, status]);
 
-  const configure = <ModelConfigPanel onChanged={() => void retry()} />;
+  const configure = <ModelConfigPanel />;
   return (
-    <ModelAvailability status={status} modelCount={catalog?.models.length ?? 0} onRetry={() => void retry()} configure={configure}>
+    <ModelAvailability status={status} modelCount={catalog?.models.length ?? 0} onRetry={retry} configure={configure}>
       {locked && !selectedModel && (
         <span className="text-muted-foreground text-xs">运行中的模型配置已删除，停止后重新选择</span>
       )}
       {selection && catalog && (
-        <SelectorView catalogModels={catalog.models} selection={selection} disabled={locked} onSelectionChange={updateSelection} onCatalogChanged={() => void retry()} />
+        <SelectorView catalogModels={catalog.models} selection={selection} disabled={locked} onSelectionChange={updateSelection} />
       )}
     </ModelAvailability>
   );

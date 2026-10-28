@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import type { MessagePartStatus } from "@assistant-ui/core";
 import { Streamdown } from "streamdown";
 import { MarkdownText } from "@/components/markdown-text";
-import { markdownPlugins } from "@/components/markdown-rendering-config";
+import { markdownPlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
 import { decodeReferences } from "@/lib/workspace-references/codec";
 import { ReferenceChip } from "./reference-chip";
 
@@ -15,6 +15,7 @@ export function UserMessageText({
   status?: MessagePartStatus;
 }) {
   const parts = useMemo(() => decodeReferences(text), [text]);
+  const mermaidOptions = useMermaidOptions();
   if (!parts.some((part) => part.type === "reference"))
     return <MarkdownText status={status} />;
   return (
@@ -29,7 +30,7 @@ export function UserMessageText({
             plugins={markdownPlugins}
             shikiTheme={["github-light", "github-dark"]}
             linkSafety={{ enabled: true }}
-            mermaid={{ config: { securityLevel: "strict" } }}
+            mermaid={mermaidOptions}
             className="contents [&>p]:inline"
           >
             {part.text}

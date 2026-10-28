@@ -12,7 +12,7 @@ import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
-import { useDeferredResultsStore } from "@/lib/task-overview/deferred-results-store";
+import { useBackgroundTasksStore } from "@/lib/task-overview/background-tasks-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 
@@ -39,8 +39,8 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
   const { load, selectWorkspace, selectedWorkspaceId, workspaces } = catalog;
 
-  const startConversation = useCallback((conversation: StartedConversation, disabledToolGroups: string[]) => {
-    navigate(`/tasks/${conversation.task_id}`, { state: { initialDisabledToolGroups: disabledToolGroups } });
+  const startConversation = useCallback((conversation: StartedConversation) => {
+    navigate(`/tasks/${conversation.task_id}`);
     void load();
   }, [load, navigate]);
 
@@ -130,7 +130,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
       ? [target.id]
       : workspaces.find((workspace) => workspace.workspace_id === target.id)?.tasks.map((task) => task.task_id) ?? [];
     useTerminalWorkbenchStore.getState().forget(deletedTaskIds);
-    useDeferredResultsStore.getState().forget(deletedTaskIds);
+    useBackgroundTasksStore.getState().forget(deletedTaskIds);
     if (target.kind === "workspace") {
       closeWorkspaceTabs(target.id);
       useFilesStore.getState().forget(target.id);

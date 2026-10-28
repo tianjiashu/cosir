@@ -4,8 +4,7 @@ import {
 } from "@/src/runtime-config";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { getApiBaseUrl, requestRaw } from "@/lib/http/client";
-import { parseHttpError } from "@/lib/http/errors";
+import { getApiBaseUrl, requestOk } from "@/lib/http/client";
 import { fileUrlPath, type FileInfo } from "@/lib/api/workspace-files";
 import { newTraceId } from "@/lib/trace";
 
@@ -39,11 +38,10 @@ export function useImageResource(
     setState({});
     void (async () => {
       try {
-        const response = await requestRaw(
+        const response = await requestOk(
           fileUrlPath(id, "resource", { path, version }),
           { signal: controller.signal },
         );
-        if (!response.ok) throw await parseHttpError(response);
         const blob = await response.blob();
         if (controller.signal.aborted) return;
         url = URL.createObjectURL(blob);

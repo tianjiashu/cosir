@@ -26,7 +26,8 @@ describe("ToolFallback", () => {
       backendStatus: "failed",
       presentation: { verb: "读取文件", icon: "eye", expand_layout: "none" },
       display_data: { status_hint: "路径无效" },
-      error: "full diagnostic",
+      // 后端把受控短提示（status_hint）写进 part.error，二者一致。
+      error: "路径无效",
       errorCode: "path_outside_workspace",
     });
 

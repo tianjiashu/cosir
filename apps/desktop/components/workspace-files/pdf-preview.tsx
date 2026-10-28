@@ -15,6 +15,7 @@ import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import "pdfjs-dist/web/pdf_viewer.css";
 import type { FileInfo } from "@/lib/api/workspace-files";
 import { pdfResource } from "@/lib/workspace-files/resources";
+import { ErrorState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -191,9 +192,7 @@ export default function PdfPreview({
         </form>
       )}
       {error && (
-        <p role="alert" className="p-3 text-destructive">
-          {error}
-        </p>
+        <ErrorState className="m-3" message={error} />
       )}
       <div className="relative min-h-0 flex-1">
         <div ref={container} className="absolute inset-0 overflow-auto">

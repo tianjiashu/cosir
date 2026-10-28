@@ -1,9 +1,10 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { LoaderCircleIcon, SquareIcon, UsersIcon } from "lucide-react";
+import { CirclePauseIcon, LoaderCircleIcon, SquareIcon, UsersIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { taskRunStatusPresentation } from "@/components/task-tree/task-run-status";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
-import { cancelTask } from "@/lib/assistant/cancel-task";
+import { cancelTask } from "@/lib/assistant/task-commands";
 import { useWorkbenchActions } from "@/lib/workbench/context";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { DisclosureRow } from "../elements/disclosure-row.aui";
@@ -28,8 +29,9 @@ export function DelegationToolRow({ artifact: rawArtifact, interactive = false, 
   const title = display?.title ?? "子 Agent";
   const role = artifact.agent_role ?? display?.role ?? null;
   const childTaskId = artifact.child_task_id ?? display?.childTaskId;
+  // 后端把子 Task 最新 Run 的状态实时投影进 display.status；挂起（等审批 / 等消息）仍可停止。
   const status = display?.status ?? artifact.backendStatus;
-  const isActive = status === "pending" || status === "running";
+  const isActive = status === "pending" || status === "running" || status === "suspended";
   const canOpen = childTaskId !== undefined && actions !== null && actions.workspaceId !== null;
   const canCancel = childTaskId !== undefined
     && isActive
@@ -111,7 +113,7 @@ export function DelegationToolRow({ artifact: rawArtifact, interactive = false, 
           leading={<UsersIcon className="text-muted-foreground size-3.5" aria-hidden="true" />}
           label={<span className="truncate text-sm font-medium" title={title}>{title}</span>}
           meta={meta}
-          trailing={<ToolStatus status={status} />}
+          trailing={status === "suspended" ? <SuspendedStatus /> : <ToolStatus status={status} />}
           tone="terminal"
           className="w-auto min-w-0 flex-1 border-b-0 bg-transparent px-3"
           data-testid="tool-activity-row"
@@ -133,5 +135,15 @@ export function DelegationToolRow({ artifact: rawArtifact, interactive = false, 
         </div>
       </CollapsibleContent>
     </Collapsible>
+  );
+}
+
+/** 子 Run 挂起没有对应的工具状态，文案沿用 Run 状态的统一呈现。 */
+function SuspendedStatus() {
+  return (
+    <span className="text-warning inline-flex items-center gap-1.5 text-xs">
+      <CirclePauseIcon className="size-3.5" aria-hidden="true" />
+      {taskRunStatusPresentation("suspended")?.label}
+    </span>
   );
 }

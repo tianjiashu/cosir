@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useElementSize } from "@/hooks/use-element-size";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/state-panel";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
@@ -13,18 +14,10 @@ export function ObserverResults({
   messages: ContextMessage[];
 }) {
   const nav = useMessageNavigation(messages);
-  const host = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
+  const [host, { width }] = useElementSize<HTMLDivElement>();
   const [preferredWidth, setPreferredWidth] = useState<number | null>(null);
   const previous = useRef(new Set(messages.map((message) => message.sequence)));
   const [newSequences, setNewSequences] = useState<number[]>([]);
-  useEffect(() => {
-    const observer = new ResizeObserver((entries) =>
-      setWidth(entries[0].contentRect.width),
-    );
-    observer.observe(host.current!);
-    return () => observer.disconnect();
-  }, []);
   useEffect(() => {
     const current = new Set(messages.map((message) => message.sequence));
     const added = messages

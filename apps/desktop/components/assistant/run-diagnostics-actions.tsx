@@ -4,10 +4,9 @@ import { ClipboardListIcon, ScanSearchIcon } from "lucide-react";
 import type { ReactElement } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
+import { copyText } from "@/lib/clipboard";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { isTerminalRunStatus } from "@/lib/assistant/contract";
-import { frontendLog } from "@/lib/logging/frontend-log";
-import { notify } from "@/lib/notify";
 
 export type RunDiagnosticsActionsProps = {
   /** 当前对话所属的 Task 标识，由 Thread 页面上下文提供。 */
@@ -68,20 +67,13 @@ export function RunDiagnosticsActions(props: RunDiagnosticsActionsProps): ReactE
   if (!shouldOfferRunDiagnostics(props) || runId == null || status === null) return null;
 
   const copyDiagnostics = () => {
-    const text = formatRunDiagnostics({ taskId, runId, status, endReason, errorCode });
-    // 经 Promise 链调用：环境缺少 clipboard API 时的同步 TypeError 也落到失败分支。
-    void Promise.resolve()
-      .then(() => navigator.clipboard.writeText(text))
-      .then(
-        () => notify.success("已复制诊断信息", { description: `任务 ${taskId} · 轮次 ${runId}` }),
-        (error: unknown) => {
-          notify.error("复制诊断信息失败", { error, fallback: "无法写入剪贴板" });
-          void frontendLog("WARNING", "run_diagnostics_copy_failed", "复制 Run 诊断信息失败", {
-            data: { taskId, runId },
-            error,
-          });
-        },
-      );
+    void copyText(formatRunDiagnostics({ taskId, runId, status, endReason, errorCode }), {
+      success: "已复制诊断信息",
+      description: `任务 ${taskId} · 轮次 ${runId}`,
+      failure: "复制诊断信息失败",
+      logEvent: "run_diagnostics_copy_failed",
+      logData: { taskId, runId },
+    });
   };
 
   const openObserver = () => {

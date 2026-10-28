@@ -14,17 +14,17 @@ import {
   type FrameStoreItem,
 } from "@/lib/assistant/transport-frame-store";
 import { readEditIntent, type UserAddMessageCommand } from "@/lib/assistant/converter";
-import { cancelTask } from "@/lib/assistant/cancel-task";
+import { cancelTask } from "@/lib/assistant/task-commands";
 import { TaskTransportSession, type TransportDisconnect } from "@/lib/assistant/task-transport-session";
+import type { TraceId } from "@/lib/trace";
 
 export type { TransportDisconnect } from "@/lib/assistant/task-transport-session";
 
 export type TaskAssistantTransportOptions = {
   initialState: TransportState;
   adapters?: ExternalStoreAdapter<FrameStoreItem>["adapters"];
-  /** 本机后端基地址；attach / state 端点按 taskId 拼接。 */
-  baseUrl: string;
-  headers: () => Promise<Record<string, string>> | Record<string, string>;
+  /** 长订阅的链路 id；基地址由 http client 按当前后端实例解析，后端换实例经 `connectionKey` 重开。 */
+  traceId: TraceId;
   /**
    * 提交一条用户消息（`sourceId` 存在即编辑）。宿主负责请求体组装与端点选择；后端处理完这一轮
    * 才返回，被拒时抛错（乐观消息随即收回），输出经长订阅到达。返回 `awaitSnapshot`：为真时乐观
@@ -71,17 +71,16 @@ function useTaskAssistantTransportAdapter(
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const optionsRef = useRef(options);
   optionsRef.current = options;
-  const attachUrl = `${options.baseUrl}/tasks/${taskId}/assistant/attach`;
-  const session = useMemo(() => new TaskTransportSession(store, attachUrl, () => {
+  const session = useMemo(() => new TaskTransportSession(store, `/tasks/${taskId}/assistant/attach`, () => {
     const current = optionsRef.current;
     return {
-      headers: current.headers,
+      traceId: current.traceId,
       submitMessage: current.submitMessage,
       onResponse: current.onResponse,
       onDisconnect: current.onDisconnect,
       onSubmitError: current.onError,
     };
-  }), [attachUrl, store]);
+  }), [store, taskId]);
 
   useEffect(() => store.subscribeActivity((transition) => {
     const probe = optionsRef.current.performanceProbe;

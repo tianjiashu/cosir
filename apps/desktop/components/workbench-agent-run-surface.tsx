@@ -3,7 +3,7 @@
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ReadonlyThread } from "@/components/assistant-ui/elements/readonly-thread.aui";
-import { SubscriptionRecovery } from "@/components/assistant/runtime/subscription-recovery";
+import { useSubscriptionRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import { TransportStatus, type TransportIssue } from "@/components/assistant/transport-status";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtim
 
 /**
  * 只读查看子 Task：runtime 挂载即打开一条 Task 长订阅，卸载时关闭；不按 runId 去重或重订。
- * 订阅意外结束交给与主对话共用的 {@link SubscriptionRecovery}：只重开订阅（首帧即完整状态），
+ * 订阅意外结束交给与主对话共用的 `SubscriptionRecovery`：只重开订阅（首帧即完整状态），
  * 已显示的内容与 runtime 都保留；重连耗尽后由用户「重新同步」。
  */
 function AgentRunTransport({ taskId, initialState, onDisconnect, onStateCommit }: {
@@ -29,27 +29,19 @@ function AgentRunTransport({ taskId, initialState, onDisconnect, onStateCommit }
   const [traceId] = useState(() => newTraceId());
   const [issue, setIssue] = useState<TransportIssue | null>(null);
   const openRef = useRef<(() => Promise<void>) | null>(null);
-  const recovery = useMemo(() => new SubscriptionRecovery({
+  const recovery = useSubscriptionRecovery(useMemo(() => ({
     taskId,
     traceId,
     attach: () => openRef.current,
     backend: getBackendRuntimeSnapshot,
     setIssue,
-  }), [taskId, traceId]);
-  useEffect(() => {
-    recovery.setActive(true);
-    return () => recovery.setActive(false);
-  }, [recovery]);
+  }), [taskId, traceId]));
   const { runtime, open } = useTaskAssistantReadonlyTransportRuntime(taskId, {
     initialState,
     readonly: true,
-    baseUrl: backendRuntime.backendBaseUrl,
     // 阅读页按后端 generation 整体重挂（见 WorkbenchAgentRunSurface），这里只需随可用性开关。
     connectionKey: backendRuntime.available ? String(backendRuntime.generation) : null,
-    headers: async () => ({
-      Accept: "text/event-stream",
-      "X-Trace-Id": traceId,
-    }),
+    traceId,
     onResponse: () => {
       void frontendLog("INFO", "workbench_agent_subscription_opened", "Workbench 子 Agent 只读订阅已建立", { traceId, data: { taskId } });
       recovery.markConnected();

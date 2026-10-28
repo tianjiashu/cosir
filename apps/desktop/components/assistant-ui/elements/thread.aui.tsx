@@ -74,7 +74,7 @@ import type { InputDelivery, TransportActivity, TransportOutcome, TransportToolS
 import { readStoredInputDelivery, writeStoredInputDelivery } from "@/lib/input-delivery-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
-import { toolGroupsForNames, type ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tools";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
 import { RUN_LAUNCH_LOCKED_HINT, useActiveRunLaunch } from "@/lib/assistant/run-launch";
 import { AttachmentWorkspaceContext } from "@/components/assistant-ui/elements/attachment-context";
@@ -308,7 +308,7 @@ const Composer = memo(function Composer({ taskId, workspaceRoot }: { taskId: num
 });
 
 /**
- * 工具组配置的锁定来源：`run` 为活动 Run 冻结的配置（按其 banTools 回显、只读）；`queued` 为排队
+ * 工具组配置的锁定来源：`run` 为活动 Run 冻结的配置（按其冻结的工具组名回显、只读）；`queued` 为排队
  * 消息编辑，配置沿用发送时的值且快照不投影它，因此不显示工具组开关。
  */
 const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
@@ -319,7 +319,7 @@ const ThreadComposerPromptToolbar: FC<{ disabled?: boolean; lock?: ToolGroupsLoc
   const composer = unstable_useComposerInput();
   const context = useThreadContext();
   const toolGroups = context.toolGroups ?? EMPTY_TOOL_GROUPS;
-  const lockedGroups = lock?.kind === "run" ? toolGroupsForNames(lock.launch.banTools, toolGroups) : null;
+  const lockedGroups = lock?.kind === "run" ? lock.launch.disabledToolGroups : null;
   return (
     <ComposerPromptToolbar
       toolGroups={toolGroups}

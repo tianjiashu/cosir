@@ -34,8 +34,13 @@ let failNextAttach = false;
  * 只模拟 terminal-v2 的最小闭环（attach 续传、input 回显与短租约、resize、exit），不模拟交接。
  */
 const terminalSessions = new Map();
-/** taskId → 后台工作看板条目（snapshot `deferred_results`），由 e2e 经 `__test__/seed-deferred` 种入。 */
-const deferredResults = new Map();
+/** taskId → 后台工作看板条目（snapshot `background_tasks`），由 e2e 经 `__test__/seed-background-tasks` 种入。 */
+const backgroundTasks = new Map();
+/**
+ * taskId → 前台等待（登记表里的前台条目，wire 上只投影 id 到 `foreground_waits`）。条目带看板字段，
+ * 转到后台时原样移入 `backgroundTasks`，与后端「转后台后才算后台工作」一致。
+ */
+const foregroundWaits = new Map();
 let nextTerminalId = 1;
 const terminalShells = [
   { kind: "zsh", label: "zsh", isDefault: true, integrationSupported: true },
@@ -62,7 +67,8 @@ function resetTestState() {
     }
   }
   terminalSessions.clear();
-  deferredResults.clear();
+  backgroundTasks.clear();
+  foregroundWaits.clear();
   nextTerminalId = 1;
   dropNextCancelledStream = false;
   failNextAttach = false;
@@ -76,7 +82,7 @@ function resetTestState() {
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const isActive = (status) => status === "running" || status === "suspended";
 // 与 /model-configs 唯一的模型一致：运行期配置锁定下，运行中发送沿用这份配置。
-const DEFAULT_LAUNCH = { modelConfigId: 2, reasoningEffort: null, banTools: [] };
+const DEFAULT_LAUNCH = { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: [] };
 
 function taskProjection(task) {
   const activity = states.get(task.task_id)?.activity ?? null;
@@ -183,7 +189,7 @@ function usageFixture(secondRun) {
 }
 
 function completedFixture(runId, userMessage, assistantParts) {
-  const activity = activityOf(runId, "completed", { launch: { modelConfigId: null, reasoningEffort: null, banTools: [] } });
+  const activity = activityOf(runId, "completed", { launch: { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] } });
   return {
     title: "测试对话",
     messages: [
@@ -338,7 +344,8 @@ function wireState(taskId, state = states.get(taskId)) {
   return {
     ...state,
     terminal_sessions: (terminalSessions.get(taskId) ?? []).map((session) => session.entry),
-    deferred_results: deferredResults.get(taskId) ?? [],
+    background_tasks: backgroundTasks.get(taskId) ?? [],
+    foreground_waits: (foregroundWaits.get(taskId) ?? []).map((entry) => entry.toolCallId),
   };
 }
 
@@ -481,6 +488,12 @@ function handleMessage(res, body, taskId, sourceId) {
   }
 
   const runId = nextRunId++;
+  // 与后端一致：本轮冻结请求携带的发起配置，快照 activity.launch 按它投影。
+  const launch = {
+    modelConfigId: body.modelConfigId ?? DEFAULT_LAUNCH.modelConfigId,
+    reasoningEffort: body.reasoningEffort ?? null,
+    disabledToolGroups: body.disabledToolGroups ?? [],
+  };
   const previous = states.get(taskId) ?? emptyState();
   let base = previous;
   if (typeof sourceId === "string") {
@@ -501,12 +514,14 @@ function handleMessage(res, body, taskId, sourceId) {
     initialState.messages.at(-1).parts = toolLifecycleParts(runId, "running", "pending");
     const finalState = stateWithExchange(base, text, runId, "", finalStatus);
     finalState.messages.at(-1).parts = toolLifecycleParts(runId, finalStatus, finalStatus);
+    for (const state of [initialState, finalState]) state.activity.launch = launch;
     void executeToolLifecycle(taskId, runId, initialState, finalState);
     return;
   }
 
   const initialState = stateWithExchange(base, text, runId, "", "running");
   const finalState = stateWithExchange(base, text, runId, "streaming response", "completed");
+  for (const state of [initialState, finalState]) state.activity.launch = launch;
   if (text.startsWith("usage-regression")) {
     const usage = usageFixture(text.includes("second"));
     for (const state of [initialState, finalState]) {
@@ -945,11 +960,12 @@ const server = createServer(async (req, res) => {
     if (states.has(taskId)) commit(taskId, states.get(taskId));
     return;
   }
-  if (req.method === "POST" && url.pathname === "/__test__/seed-deferred") {
-    // 模拟后端登记表：种入看板条目，经 full 帧推送（前端按 snapshot 收敛）。
+  if (req.method === "POST" && url.pathname === "/__test__/seed-background-tasks") {
+    // 模拟后端登记表：种入看板条目与前台等待，经 full 帧推送（前端按 snapshot 收敛）。
     const body = await readJson(req);
     const taskId = Number(body.taskId);
-    deferredResults.set(taskId, body.entries);
+    backgroundTasks.set(taskId, body.entries ?? []);
+    foregroundWaits.set(taskId, body.foregroundWaits ?? []);
     if (states.has(taskId)) commit(taskId, states.get(taskId));
     jsonResponse(res, 200, { ok: true });
     return;
@@ -959,16 +975,23 @@ const server = createServer(async (req, res) => {
     // 与后端一致：登记过的调用按 tool_call_id 撤销或转后台；后台占位随撤销推到 cancelled。
     const taskId = Number(deferredRoute[1]);
     const toolCallId = decodeURIComponent(deferredRoute[2]);
-    const entries = deferredResults.get(taskId) ?? [];
-    const target = entries.find((entry) => entry.toolCallId === toolCallId && entry.status === "running");
+    const entries = backgroundTasks.get(taskId) ?? [];
+    const waits = foregroundWaits.get(taskId) ?? [];
     const detach = deferredRoute[3] === "background";
-    if (!target || (detach && target.mode !== "foreground")) {
+    const target = detach
+      ? waits.find((entry) => entry.toolCallId === toolCallId)
+      : entries.find((entry) => entry.toolCallId === toolCallId && entry.status === "running");
+    if (!target) {
       jsonResponse(res, 409, { error: { code: "TOOL_CALL_NOT_DETACHABLE", message: "这次工具调用已结束或不能转到后台", retryable: false } });
       return;
     }
-    deferredResults.set(taskId, entries.map((entry) => entry !== target ? entry
-      : detach ? { ...entry, mode: "background" }
+    if (detach) {
+      foregroundWaits.set(taskId, waits.filter((entry) => entry !== target));
+      backgroundTasks.set(taskId, [target, ...entries]);
+    } else {
+      backgroundTasks.set(taskId, entries.map((entry) => entry !== target ? entry
         : { ...entry, status: "cancelled", endedAt: new Date().toISOString() }));
+    }
     const state = states.get(taskId);
     if (!detach && state) {
       const messages = state.messages.map((message) => ({

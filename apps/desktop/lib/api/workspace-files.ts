@@ -1,5 +1,4 @@
-import { requestJson, requestRaw, jsonRequestInit } from "@/lib/http/client";
-import { parseHttpError } from "@/lib/http/errors";
+import { requestJson, requestOk, jsonRequestInit } from "@/lib/http/client";
 
 export type FileEntry = {
   path: string;
@@ -51,15 +50,37 @@ export class SearchBatchContractError extends Error {
   }
 }
 
-/** 在 NDJSON 进程边界校验搜索批次；TypeScript 类型断言不会验证网络数据。 */
-export function parseSearchBatch(value: unknown): SearchBatch {
+export type FindTextMatch = { offset: number; snippet: string };
+export type FindTextBatch = {
+  matches: FindTextMatch[];
+  complete: boolean;
+  next_offset?: number | null;
+  error?: string;
+};
+
+/** 两种搜索流共用的批次外壳：非对象直接拒绝；带 `error` 的批次原样交给调用方抛出。 */
+function readBatchEnvelope(value: unknown): { batch: Record<string, unknown>; invalidFields: string[] } | null {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new SearchBatchContractError(["batch"]);
-
   const batch = value as Record<string, unknown>;
-  if (typeof batch.error === "string") return batch as SearchBatch;
-
+  if (typeof batch.error === "string") return null;
   const invalidFields: string[] = [];
+  if (typeof batch.complete !== "boolean") invalidFields.push("complete");
+  if (
+    batch.next_offset !== undefined &&
+    batch.next_offset !== null &&
+    (typeof batch.next_offset !== "number" ||
+      !Number.isInteger(batch.next_offset))
+  )
+    invalidFields.push("next_offset");
+  return { batch, invalidFields };
+}
+
+/** 在 NDJSON 进程边界校验文件名搜索批次；TypeScript 类型断言不会验证网络数据。 */
+export function parseSearchBatch(value: unknown): SearchBatch {
+  const envelope = readBatchEnvelope(value);
+  if (envelope === null) return value as SearchBatch;
+  const { batch, invalidFields } = envelope;
   if (!Array.isArray(batch.entries)) invalidFields.push("entries");
   if (!Number.isInteger(batch.skipped) || (batch.skipped as number) < 0)
     invalidFields.push("skipped");
@@ -73,17 +94,27 @@ export function parseSearchBatch(value: unknown): SearchBatch {
     )
   )
     invalidFields.push("skipped_reasons");
-  if (typeof batch.complete !== "boolean") invalidFields.push("complete");
-  if (
-    batch.next_offset !== undefined &&
-    batch.next_offset !== null &&
-    (typeof batch.next_offset !== "number" ||
-      !Number.isInteger(batch.next_offset))
-  )
-    invalidFields.push("next_offset");
-
   if (invalidFields.length) throw new SearchBatchContractError(invalidFields);
   return batch as SearchBatch;
+}
+
+/** 在 NDJSON 进程边界校验文件内查找批次。 */
+export function parseFindTextBatch(value: unknown): FindTextBatch {
+  const envelope = readBatchEnvelope(value);
+  if (envelope === null) return value as FindTextBatch;
+  const { batch, invalidFields } = envelope;
+  if (
+    !Array.isArray(batch.matches) ||
+    !batch.matches.every(
+      (match) =>
+        typeof match === "object" && match !== null &&
+        Number.isInteger((match as FindTextMatch).offset) &&
+        typeof (match as FindTextMatch).snippet === "string",
+    )
+  )
+    invalidFields.push("matches");
+  if (invalidFields.length) throw new SearchBatchContractError(invalidFields);
+  return batch as FindTextBatch;
 }
 export type WatchEvent = {
   type: "ready" | "changed" | "reconcile" | "heartbeat" | "closed";
@@ -136,7 +167,7 @@ export async function readFileStream<T>(
   onValue: (value: T) => void,
   decode: (value: unknown) => T = (value) => value as T,
 ): Promise<void> {
-  const response = await requestRaw(
+  const response = await requestOk(
     filesPath(id, operation),
     jsonRequestInit(body, {
       method: "POST",
@@ -144,7 +175,6 @@ export async function readFileStream<T>(
       headers: { Accept: "application/x-ndjson" },
     }),
   );
-  if (!response.ok) throw await parseHttpError(response);
   if (!response.body) throw new Error("文件服务未返回数据流");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

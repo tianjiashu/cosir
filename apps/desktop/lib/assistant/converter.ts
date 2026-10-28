@@ -327,18 +327,17 @@ function normalizeToolStatus(status: string | undefined): TransportToolStatus {
 export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["content"][number] {
   const backendStatus = normalizeToolStatus(part.status);
   const displayData = part.display_data ?? null;
-  const displayDataRecord = typeof displayData === "object" && displayData !== null ? displayData as Record<string, unknown> : {};
-  const statusHint = typeof displayDataRecord.status_hint === "string" ? displayDataRecord.status_hint : "执行失败";
   const artifact = {
     backendStatus,
     presentation: part.presentation ?? {},
     display_data: displayData,
     team_run_id: part.team_run_id,
     deferred: part.deferred,
-    // 取消的短提示由后端给出（如后台占位的「已中断」「未继承」），缺省为「已取消」。
+    // 失败 / 取消的短提示由后端给出（status_hint、「执行异常」「已中断」等），前端不重新推导；
+    // 只在缺失时兜底，保证终态卡片总有一句提示。
     error: backendStatus === "cancelled"
       ? part.error || "已取消"
-      : backendStatus === "failed" ? statusHint : null,
+      : backendStatus === "failed" ? part.error || "执行失败" : null,
     errorCode: part.errorCode ?? null,
     child_task_id: part.child_task_id,
     agent_role: part.agent_role,

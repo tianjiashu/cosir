@@ -79,7 +79,7 @@ export function useRuntimeTransport(
   recovery: RuntimeRecovery,
   cancellation: Pick<RuntimeCancellation, "onSettled">,
   onStateCommit: (state: TransportState) => void,
-  selectedBanTools: readonly string[],
+  selectedToolGroups: readonly string[],
 ): RuntimeTransport {
   const attachmentAdapter = useMemo(
     () => context.workspaceId == null ? null : createAttachmentAdapter(context.workspaceId),
@@ -143,11 +143,7 @@ export function useRuntimeTransport(
     initialState: context.initialState,
     connectionKey,
     adapters: attachmentAdapter == null ? undefined : { attachments: attachmentAdapter },
-    baseUrl: context.backendBaseUrl,
-    headers: async () => ({
-      Accept: "text/event-stream",
-      "X-Trace-Id": context.traceId,
-    }),
+    traceId: context.traceId,
     submitMessage: async (command) => {
       const sourceId = getUserAddMessageSourceId(command);
       const editIntent = getUserAddMessageEditIntent(command);
@@ -166,7 +162,7 @@ export function useRuntimeTransport(
       const launch = runLaunch ?? {
         modelConfigId: selection?.modelConfigId ?? null,
         reasoningEffort: selection?.reasoningEffort ?? null,
-        banTools: [...selectedBanTools],
+        disabledToolGroups: [...selectedToolGroups],
       };
       // prepareUserCommand 已剔除 composer-only 的 file part，并为普通文件补齐带路径的描述符。
       const prepared = prepareUserCommand(command) as UserAddMessageCommand;
@@ -182,7 +178,7 @@ export function useRuntimeTransport(
           message,
           modelConfigId: launch.modelConfigId,
           reasoningEffort: launch.reasoningEffort,
-          banTools: launch.banTools,
+          disabledToolGroups: launch.disabledToolGroups,
         };
         taskCommand = sourceId === null
           ? { kind: "send", request }

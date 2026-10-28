@@ -47,7 +47,6 @@ import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Textarea } from "@/components/ui/textarea";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import {
-  loadModelCatalog,
   modelOptionId,
   useModelCatalog,
   type ModelCatalog,
@@ -176,7 +175,7 @@ export function AgentModelSelector({
       variant="field"
       status={status}
       modelCount={catalog?.models.length ?? 0}
-      onRetry={() => void retry()}
+      onRetry={retry}
       configure={<Link to="/settings/models" className={buttonVariants({ variant: "link", size: "sm" })}>配置模型</Link>}
     >
       <ModelSelectorRoot
@@ -609,7 +608,7 @@ function ModelsPanel() {
         <h2 className="font-medium">模型</h2>
         <p className="text-muted-foreground mt-1 text-xs">管理 OpenAI 兼容接口的连接配置，测试连接通过后才能保存。</p>
       </div>
-      <ModelConfigManager unsavedScope="settings" variant="page" onChanged={() => void loadModelCatalog({ force: true })} />
+      <ModelConfigManager unsavedScope="settings" variant="page" />
     </div>
   );
 }

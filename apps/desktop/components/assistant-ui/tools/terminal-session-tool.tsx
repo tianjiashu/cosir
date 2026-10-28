@@ -86,7 +86,10 @@ function actionMeta(variant: ActionVariant, data: Record<string, unknown>): stri
       : "会话已关闭";
     return [status, typeof data.exit_code === "number" ? `exit ${data.exit_code}` : null].filter(Boolean).join(" · ");
   }
-  const lead = variant === "write" ? text(data.input_summary) ?? null : lineRange(data.lines);
+  // 全屏程序期间后端返回整屏（`screen`），没有行号区间。
+  const lead = variant === "write"
+    ? text(data.input_summary) ?? null
+    : data.screen === true ? "全屏画面" : lineRange(data.lines);
   return [lead, waitResultLabel(data.wait_result)].filter(Boolean).join(" · ") || (variant === "write" ? "已输入" : "读取输出");
 }
 

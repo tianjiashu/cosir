@@ -2,7 +2,7 @@
 
 import { Tabs } from "radix-ui";
 import { useStore } from "zustand";
-import { isWorkbenchDraftDirty } from "@/lib/workbench/drafts";
+import { confirmCloseWorkbenchDraft } from "@/lib/workbench/drafts";
 import type { WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
 
 import {
@@ -25,7 +25,6 @@ import { WorkbenchAgentStatusProvider } from "@/lib/workbench/agent-status";
 import { WorkbenchAgentTabStatus } from "@/components/workbench-agent-tab-status";
 import { WorkbenchSurface } from "@/components/workbench-surface";
 import { useWorkbenchStore } from "@/lib/workbench/store";
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { WorkbenchTab } from "@/lib/workbench/types";
 
@@ -110,16 +109,7 @@ export function Workbench({
   const requestCloseTab = useCallback(
     async (tabId: string) => {
       const tab = tabs.find((candidate) => candidate.id === tabId);
-      if (tab && isWorkbenchDraftDirty(tab)) {
-        const discard = await requestConfirmation({
-          title: "关闭配置草稿？",
-          description: `「${tab.title}」尚未保存，关闭后修改会丢失。`,
-          confirmLabel: "放弃并关闭",
-          tone: "destructive",
-          icon: "discard",
-        });
-        if (!discard) return;
-      }
+      if (tab && !(await confirmCloseWorkbenchDraft(tab))) return;
       closeTabNow(tabId);
     },
     [closeTabNow, tabs],

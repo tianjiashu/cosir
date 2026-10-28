@@ -108,6 +108,15 @@ describe("TerminalSessionTool", () => {
     expect(html).not.toContain("idle");
   });
 
+  it("全屏程序期间 read 显示「全屏画面」而不是行号", () => {
+    const html = renderSession({
+      variant: "terminal-session-read",
+      display_data: { session_id: "term_demo", lines: null, screen: true },
+    });
+    expect(html).toContain("全屏画面");
+    expect(html).not.toContain("第 ");
+  });
+
   it("renders terminal_close as a final trace row", () => {
     const html = renderSession({
       variant: "terminal-session-close",

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   submitNewConversationMessage,
@@ -12,12 +12,14 @@ const input: SubmitNewConversationMessageInput = {
   workspaceId: 3,
   text: "hello",
   imageAttachments: [],
-  banTools: [],
+  disabledToolGroups: [],
   modelConfigId: 1,
   reasoningEffort: "high",
   traceId: "0".repeat(32),
 };
 
+// http client 按 runtime config 解析后端地址，它读 window；单测跑在 Node 环境，给一个空 window。
+beforeEach(() => vi.stubGlobal("window", {}));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("submitNewConversationMessage", () => {
