@@ -40,6 +40,8 @@ describe("Agent Team 失败流水线", () => {
         display={{ teamRunId: 17, teamId: "quality", goal: "" }}
         run={run}
         backendStatus="failed"
+        pollError={null}
+        onRetryPoll={() => undefined}
         onOpenAgent={() => undefined}
       />,
     );

@@ -74,7 +74,6 @@ export function AssistantRuntime(props: AssistantRuntimeProps) {
       <TransportStatus issue={issue?.presentation === "dialog" ? null : issue} onRetry={handleResync} />
       {issue?.presentation === "dialog" && (
         <TransportErrorDialog
-          open
           message={issue.message}
           onOpenChange={(open) => { if (!open) setIssue(null); }}
         />

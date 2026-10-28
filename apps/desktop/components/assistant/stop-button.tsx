@@ -16,7 +16,7 @@ import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 
 type StopButtonProps = Omit<ComponentPropsWithoutRef<typeof Button>, "onClick"> & {
-  taskId: number | null;
+  taskId: number;
   onClick?: MouseEventHandler<HTMLButtonElement>;
   onCancelRequested?: () => void;
   onCancelResult?: (accepted: boolean) => void;
@@ -55,12 +55,10 @@ export const StopButton = forwardRef<HTMLButtonElement, StopButtonProps>(
       });
       if (!result.accepted) {
         setFailureMessage(result.message);
-        // cancelTask 的拒绝原因是写给用户的固定文案；只有网络 / 服务端拒绝值得原样重试，
-        // 标识无效时重试没有意义。
-        const retryable = result.reason === "network" || result.reason === "rejected";
+        // 拒绝原因（网络 / 服务端拒绝）都值得原样重试；文案是 cancelTask 写给用户的固定提示。
         notify.error("停止运行失败", {
           error: new UserFacingError(result.message),
-          action: retryable ? { label: "重试", onClick: () => void stop() } : undefined,
+          action: { label: "重试", onClick: () => void stop() },
         });
       }
       requestingRef.current = false;

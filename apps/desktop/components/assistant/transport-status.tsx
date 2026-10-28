@@ -6,7 +6,8 @@ export type TransportIssue = {
   message: string;
   /** 该连接问题是否可以由用户点击“重新同步”恢复；与 Agent 的工具 retryable 无关。 */
   canResync: boolean;
-  presentation?: "dialog" | "status";
+  /** 命令被拒等需要打断用户的错误用弹窗；缺省在对话区顶部的状态条展示。 */
+  presentation?: "dialog";
 };
 
 export function TransportStatus({ issue, onRetry }: {

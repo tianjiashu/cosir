@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { cva, type VariantProps } from "class-variance-authority";
 import { BrainIcon } from "lucide-react";
 import {
   Collapsible,
@@ -23,95 +22,61 @@ export const ANIMATION_DURATION = 200;
 
 const ReasoningPreviewContext = createContext(false);
 
-const reasoningVariants = cva("aui-reasoning-root w-full", {
-  variants: {
-    variant: {
-      outline: "rounded-lg border px-3 py-2",
-      ghost: "",
-      muted: "bg-muted/50 rounded-lg px-3 py-2",
-    },
-  },
-  defaultVariants: {
-    variant: "outline",
-  },
-});
-
 export type ReasoningRootProps = Omit<
   React.ComponentProps<typeof Collapsible>,
-  "open" | "onOpenChange"
-> &
-  VariantProps<typeof reasoningVariants> & {
-    open?: boolean;
-    onOpenChange?: (open: boolean) => void;
-    defaultOpen?: boolean;
-    /**
-     * Whether the reasoning is currently streaming. While `true` the
-     * disclosure is held open with a bottom-pinned live preview; when
-     * streaming ends it returns to `defaultOpen`, and the first manual
-     * toggle takes over the open/close state permanently. The live preview
-     * keeps following the newest tokens while the disclosure is open during
-     * streaming, even after a manual toggle, and pauses while the reader is
-     * scrolled up.
-     */
-    streaming?: boolean;
-    /** Called right before the disclosure animates, on toggle and on streaming transitions. */
-    onAnimationStart?: () => void;
-  };
+  "open" | "onOpenChange" | "defaultOpen"
+> & {
+  /**
+   * Whether the reasoning is currently streaming. While `true` the
+   * disclosure is held open with a bottom-pinned live preview; when
+   * streaming ends it closes once, and the first manual toggle takes over
+   * the open/close state permanently. The live preview keeps following the
+   * newest tokens while the disclosure is open during streaming, even after
+   * a manual toggle, and pauses while the reader is scrolled up.
+   */
+  streaming?: boolean;
+  /** Called right before the disclosure animates, on toggle and on streaming transitions. */
+  onAnimationStart?: () => void;
+};
 
 function ReasoningRoot({
   className,
-  variant,
-  open: controlledOpen,
-  onOpenChange: controlledOnOpenChange,
-  defaultOpen = false,
   streaming,
   onAnimationStart,
   children,
   ...props
 }: ReasoningRootProps) {
-  const [initialOpen] = useState(defaultOpen);
-  const [autoOpen, setAutoOpen] = useState(() => streaming === true || initialOpen);
+  const [autoOpen, setAutoOpen] = useState(() => streaming === true);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
-
-  const isControlled = controlledOpen !== undefined;
-  const isOpen = isControlled
-    ? controlledOpen
-    : (userOpen ?? autoOpen);
+  const isOpen = userOpen ?? autoOpen;
   const isPreview = streaming === true && isOpen;
 
   const prevStreamingRef = useRef(streaming);
   useLayoutEffect(() => {
     if (prevStreamingRef.current === streaming) return;
     prevStreamingRef.current = streaming;
-    if (!isControlled && userOpen === null) {
+    if (userOpen === null) {
       // Streaming always opens the live preview; the matching completion
       // transition closes it exactly once unless the user took control.
       setAutoOpen(streaming === true);
       onAnimationStart?.();
     }
-  }, [streaming, isControlled, userOpen, initialOpen, onAnimationStart]);
+  }, [streaming, userOpen, onAnimationStart]);
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
       onAnimationStart?.();
-      if (!isControlled) {
-        setUserOpen(open);
-      }
-      controlledOnOpenChange?.(open);
+      setUserOpen(open);
     },
-    [onAnimationStart, isControlled, controlledOnOpenChange],
+    [onAnimationStart],
   );
 
   return (
     <Collapsible
       data-slot="reasoning-root"
-      data-variant={variant}
       open={isOpen}
       onOpenChange={handleOpenChange}
-      className={cn(
-        "group/reasoning-root",
-        reasoningVariants({ variant, className }),
-      )}
+      className={cn("aui-reasoning-root w-full", className)}
       style={
         {
           "--animation-duration": `${ANIMATION_DURATION}ms`,
@@ -126,40 +91,19 @@ function ReasoningRoot({
   );
 }
 
-function ReasoningFade({
-  side = "bottom",
-  className,
-  ...props
-}: React.ComponentProps<"div"> & { side?: "top" | "bottom" }) {
-  if (side === "top") {
-    return (
-      <div
-        data-slot="reasoning-fade"
-        className={cn(
-          "aui-reasoning-fade pointer-events-none absolute inset-x-0 top-0 z-10 h-8",
-          "bg-[linear-gradient(to_bottom,var(--color-background),transparent)]",
-          "group-data-[variant=muted]/reasoning-root:bg-[linear-gradient(to_bottom,color-mix(in_oklab,var(--color-muted)_50%,var(--color-background)),transparent)]",
-          "fade-in-0 animate-in",
-          "animation-duration-(--animation-duration)",
-          className,
-        )}
-        {...props}
-      />
-    );
-  }
-
+/** 预览区上下边缘的渐隐遮罩，提示内容在滚动区外仍有延续。 */
+function ReasoningFade({ side = "bottom" }: { side?: "top" | "bottom" }) {
   return (
     <div
       data-slot="reasoning-fade"
       className={cn(
-        "aui-reasoning-fade pointer-events-none absolute inset-x-0 bottom-0 z-10 h-8",
-        "bg-[linear-gradient(to_top,var(--color-background),transparent)]",
-        "group-data-[variant=muted]/reasoning-root:bg-[linear-gradient(to_top,color-mix(in_oklab,var(--color-muted)_50%,var(--color-background)),transparent)]",
+        "aui-reasoning-fade pointer-events-none absolute inset-x-0 z-10 h-8",
+        side === "top"
+          ? "top-0 bg-[linear-gradient(to_bottom,var(--color-background),transparent)]"
+          : "bottom-0 bg-[linear-gradient(to_top,var(--color-background),transparent)]",
         "fade-in-0 animate-in",
         "animation-duration-(--animation-duration)",
-        className,
       )}
-      {...props}
     />
   );
 }

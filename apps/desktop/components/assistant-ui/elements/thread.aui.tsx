@@ -156,8 +156,8 @@ const ToolTraceGroup: FC<ToolTraceGroupProps> = ({ indices, children }) => {
   );
 
   return (
-    <ToolGroupRoot variant="ghost">
-      <ToolGroupTrigger count={summary.total} summary={summary} />
+    <ToolGroupRoot>
+      <ToolGroupTrigger summary={summary} />
       <ToolGroupContent>{children}</ToolGroupContent>
     </ToolGroupRoot>
   );
@@ -900,7 +900,7 @@ const AssistantMessage: FC = () => {
                       <RenderErrorCard scope="part" label="推理分组" onRetry={onRetry} />
                     )}
                   >
-                    <ReasoningRoot variant="ghost" streaming={isReasoningStreaming}>
+                    <ReasoningRoot streaming={isReasoningStreaming}>
                       <ReasoningTrigger active={isReasoningStreaming} />
                       <ReasoningContent aria-busy={isReasoningStreaming}>
                         <ReasoningText>{children}</ReasoningText>

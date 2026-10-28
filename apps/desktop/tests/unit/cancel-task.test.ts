@@ -19,11 +19,4 @@ describe("cancelTask", () => {
     await expect(cancelTask(7)).resolves.toEqual({ accepted: true });
     expect(String(fetchMock.mock.calls[0][0])).toContain("/tasks/7/cancel");
   });
-
-  it("rejects a missing task id without a request", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    await expect(cancelTask(null)).resolves.toEqual(expect.objectContaining({ reason: "invalid_task_id" }));
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
 });

@@ -13,12 +13,9 @@ const CANCEL_REQUEST_TIMEOUT_MS = 15_000;
 
 export type CancelTaskResult =
   | { accepted: true }
-  | { accepted: false; reason: "invalid_task_id" | "rejected" | "network"; message: string };
+  | { accepted: false; reason: "rejected" | "network"; message: string };
 
-export async function cancelTask(taskId: number | null): Promise<CancelTaskResult> {
-  if (taskId === null || !Number.isInteger(taskId)) {
-    return { accepted: false, reason: "invalid_task_id", message: "当前任务标识无效，无法停止。" };
-  }
+export async function cancelTask(taskId: number): Promise<CancelTaskResult> {
   const traceId = newTraceId();
   const { signal, clear } = createTimeoutAbort(CANCEL_REQUEST_TIMEOUT_MS);
   try {

@@ -100,14 +100,14 @@ type AgentTeamExecutionContentProps = {
   run: AgentTeamRun | null;
   backendStatus: ToolArtifact["backendStatus"];
   /** 轮询已放弃时的可读原因；为 null 表示仍在轮询或已正常结束。 */
-  pollError?: string | null;
-  onRetryPoll?: () => void;
+  pollError: string | null;
+  onRetryPoll: () => void;
   onOpenAgent: (taskId: number, title: string) => void;
 };
 
 /** 只渲染 TeamRun 查询投影；轮询与卡片状态不参与节点事实判断。 */
 export function AgentTeamExecutionContent({
-  display, run, backendStatus, pollError = null, onRetryPoll, onOpenAgent,
+  display, run, backendStatus, pollError, onRetryPoll, onOpenAgent,
 }: AgentTeamExecutionContentProps) {
   const currentStatus = run
     ? RUN_STATUS_LABELS[run.status] ?? run.status
@@ -134,9 +134,7 @@ export function AgentTeamExecutionContent({
       {pollError && (
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground" role="status">
           <span className="min-w-0">执行进度读取失败：{pollError}</span>
-          {onRetryPoll && (
-            <Button type="button" variant="ghost" size="sm" onClick={onRetryPoll}>重试</Button>
-          )}
+          <Button type="button" variant="ghost" size="sm" onClick={onRetryPoll}>重试</Button>
         </div>
       )}
 

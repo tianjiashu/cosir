@@ -27,7 +27,6 @@ export function ConfirmHost() {
   return (
     <ConfirmDialog
       key={current.id}
-      open
       title={current.title}
       description={current.description}
       warning={current.warning}

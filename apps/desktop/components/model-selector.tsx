@@ -2,7 +2,6 @@
 
 import {
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -74,37 +73,9 @@ function resolveEffort(
   return efforts?.some((e) => e.id === effort) ? effort : undefined;
 }
 
-function useControllableState<T>({
-  prop,
-  defaultProp,
-  onChange,
-}: {
-  prop: T | undefined;
-  defaultProp: T | undefined;
-  onChange: ((next: T) => void) | undefined;
-}) {
-  const [internal, setInternal] = useState(defaultProp);
-  const isControlled = prop !== undefined;
-  const value = isControlled ? prop : internal;
-  // Read onChange through a ref so inline callbacks don't recreate the setter
-  // (and with it the memoized context value) every render.
-  const onChangeRef = useRef(onChange);
-  useEffect(() => {
-    onChangeRef.current = onChange;
-  });
-  const setValue = useCallback(
-    (next: T) => {
-      if (!isControlled) setInternal(next);
-      onChangeRef.current?.(next);
-    },
-    [isControlled],
-  );
-  return [value, setValue] as const;
-}
-
 type ModelSelectorContextValue = {
   models: readonly ModelOption[];
-  value: string | undefined;
+  value: string;
   setValue: (value: string) => void;
   /** The model matching `value`, derived once for all sub-components. */
   selectedModel: ModelOption | undefined;
@@ -147,46 +118,24 @@ function useModelSelectorEfforts(): {
 
 type ModelSelectorRootProps = {
   models: readonly ModelOption[];
-  value?: string;
-  defaultValue?: string;
-  onValueChange?: (value: string) => void;
+  /** 选择只受控：所选模型的事实在调用方（偏好存储 / 表单），组件不另存一份。 */
+  value: string;
+  onValueChange: (value: string) => void;
   effort?: string;
-  defaultEffort?: string;
   onEffortChange?: (effort: string) => void;
-  open?: boolean;
-  defaultOpen?: boolean;
-  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 };
 
 function ModelSelectorRoot({
   models,
-  value: valueProp,
-  defaultValue,
+  value,
   onValueChange,
-  effort: effortProp,
-  defaultEffort,
+  effort,
   onEffortChange,
-  open: openProp,
-  defaultOpen,
-  onOpenChange,
   children,
 }: ModelSelectorRootProps) {
-  const [value, setValue] = useControllableState({
-    prop: valueProp,
-    defaultProp: defaultValue ?? models[0]?.id,
-    onChange: onValueChange,
-  });
-  const [effort, setEffort] = useControllableState({
-    prop: effortProp,
-    defaultProp: defaultEffort,
-    onChange: onEffortChange,
-  });
-  const [open, setOpen] = useControllableState({
-    prop: openProp,
-    defaultProp: defaultOpen ?? false,
-    onChange: onOpenChange,
-  });
+  const [open, setOpen] = useState(false);
+  const setEffort = useCallback((next: string) => onEffortChange?.(next), [onEffortChange]);
 
   const selectedModel = models.find((m) => m.id === value);
   const efforts = getModelEfforts(selectedModel);
@@ -195,7 +144,7 @@ function ModelSelectorRoot({
     () => ({
       models,
       value,
-      setValue,
+      setValue: onValueChange,
       selectedModel,
       efforts,
       effort: activeEffort,
@@ -205,7 +154,7 @@ function ModelSelectorRoot({
     [
       models,
       value,
-      setValue,
+      onValueChange,
       selectedModel,
       efforts,
       activeEffort,
@@ -216,7 +165,7 @@ function ModelSelectorRoot({
 
   return (
     <ModelSelectorContext.Provider value={contextValue}>
-      <Popover open={open ?? false} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={setOpen}>
         {children}
       </Popover>
     </ModelSelectorContext.Provider>
@@ -518,20 +467,7 @@ function ModelSelectorEmpty({ children, ...props }: ModelSelectorEmptyProps) {
   );
 }
 
-type ModelSelectorItemProps = Omit<
-  ComponentPropsWithoutRef<typeof CommandItem>,
-  "value"
-> & {
-  model: ModelOption;
-};
-
-function ModelSelectorItem({
-  model,
-  className,
-  children,
-  onSelect,
-  ...props
-}: ModelSelectorItemProps) {
+function ModelSelectorItem({ model }: { model: ModelOption }) {
   const { value, setValue, setOpen } = useModelSelectorContext();
   const isSelected = value === model.id;
 
@@ -541,32 +477,23 @@ function ModelSelectorItem({
       value={model.id}
       keywords={[model.name, ...(model.keywords ?? [])]}
       {...(model.disabled ? { disabled: true } : undefined)}
-      onSelect={(selectedValue) => {
+      onSelect={() => {
         setValue(model.id);
         setOpen(false);
-        onSelect?.(selectedValue);
       }}
-      className={cn(
-        "relative items-start gap-2 rounded-lg py-2 ps-3 pe-9 [&_svg:not([class*='size-'])]:size-3.5",
-        className,
-      )}
-      {...props}
+      className="relative items-start gap-2 rounded-lg py-2 ps-3 pe-9 [&_svg:not([class*='size-'])]:size-3.5"
     >
-      {children ?? (
-        <>
-          {model.icon && (
-            <ModelIcon className="mt-[3px]">{model.icon}</ModelIcon>
-          )}
-          <span className="flex min-w-0 flex-col">
-            <span className="truncate font-medium">{model.name}</span>
-            {model.description && (
-              <span className="text-muted-foreground truncate text-xs">
-                {model.description}
-              </span>
-            )}
-          </span>
-        </>
+      {model.icon && (
+        <ModelIcon className="mt-[3px]">{model.icon}</ModelIcon>
       )}
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate font-medium">{model.name}</span>
+        {model.description && (
+          <span className="text-muted-foreground truncate text-xs">
+            {model.description}
+          </span>
+        )}
+      </span>
       {isSelected && (
         <span className="absolute end-3 top-2.5 flex size-4 items-center justify-center">
           <CheckIcon className="size-4" />

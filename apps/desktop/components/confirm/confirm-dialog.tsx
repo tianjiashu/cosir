@@ -14,7 +14,6 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 
 export type ConfirmDialogProps = {
-  open: boolean;
   title: string;
   description: string;
   /** 操作后果的醒目提示（不可恢复、会中断运行等）。 */
@@ -32,14 +31,13 @@ export type ConfirmDialogProps = {
 };
 
 /**
- * 需要用户二次确认的操作对话框（纯呈现）。
+ * 需要用户二次确认的操作对话框（纯呈现，挂载即打开，由调用方决定何时挂载）。
  *
  * 业务代码优先使用 `requestConfirmation()`（lib/confirm/confirm-store.ts），由全局
  * ConfirmHost 渲染本组件并托管 busy / error；只有确认框需要嵌在特定布局中时才直接使用。
  * 不要再使用 `window.confirm`：它在 WebView 中会阻塞且无法呈现忙碌与失败状态。
  */
 export function ConfirmDialog({
-  open,
   title,
   description,
   warning,
@@ -53,7 +51,7 @@ export function ConfirmDialog({
   onConfirm,
 }: ConfirmDialogProps) {
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => { if (!busy) onOpenChange(nextOpen); }}>
+    <Dialog open onOpenChange={(nextOpen) => { if (!busy) onOpenChange(nextOpen); }}>
       <DialogContent>
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>{description}</DialogDescription>

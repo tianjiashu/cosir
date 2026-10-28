@@ -6,7 +6,6 @@ import {
   useState,
 } from "react";
 import { CheckIcon, CircleAlertIcon, LoaderIcon, WrenchIcon, XCircleIcon } from "lucide-react";
-import { cva, type VariantProps } from "class-variance-authority";
 import { useScrollLock } from "@assistant-ui/react";
 import {
   Collapsible,
@@ -20,66 +19,31 @@ import { toolGroupSummaryLabel, type ToolGroupSummary } from "./tool-group-statu
 
 const ANIMATION_DURATION = 200;
 
-const toolGroupVariants = cva("aui-tool-group-root group/tool-group w-full", {
-  variants: {
-    variant: {
-      outline: "rounded-lg border py-3",
-      ghost: "",
-      muted: "border-muted-foreground/30 bg-muted/30 rounded-lg border py-3",
-    },
-  },
-  defaultVariants: { variant: "ghost" },
-});
-
-type ToolGroupRootProps = Omit<
-  React.ComponentProps<typeof Collapsible>,
-  "open" | "onOpenChange"
-> &
-  VariantProps<typeof toolGroupVariants> & {
-    open?: boolean;
-    onOpenChange?: (open: boolean) => void;
-    defaultOpen?: boolean;
-  };
-
+/** 工具轨迹折叠组：只有无边框（ghost）一种外观，开合由组件自身持有，展开动画期间锁定视口滚动。 */
 function ToolGroupRoot({
   className,
-  variant,
-  open: controlledOpen,
-  onOpenChange: controlledOnOpenChange,
-  defaultOpen = false,
   children,
   ...props
-}: ToolGroupRootProps) {
+}: Omit<React.ComponentProps<typeof Collapsible>, "open" | "onOpenChange" | "defaultOpen">) {
   const collapsibleRef = useRef<HTMLDivElement>(null);
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(false);
   const lockScroll = useScrollLock(collapsibleRef, ANIMATION_DURATION);
 
-  const isControlled = controlledOpen !== undefined;
-  const isOpen = isControlled ? controlledOpen : uncontrolledOpen;
-
   const handleOpenChange = useCallback(
-    (open: boolean) => {
+    (next: boolean) => {
       lockScroll();
-      if (!isControlled) {
-        setUncontrolledOpen(open);
-      }
-      controlledOnOpenChange?.(open);
+      setOpen(next);
     },
-    [lockScroll, isControlled, controlledOnOpenChange],
+    [lockScroll],
   );
 
   return (
     <Collapsible
       ref={collapsibleRef}
       data-slot="tool-group-root"
-      data-variant={variant ?? "ghost"}
-      open={isOpen}
+      open={open}
       onOpenChange={handleOpenChange}
-      className={cn(
-        toolGroupVariants({ variant }),
-        "group/tool-group-root",
-        className,
-      )}
+      className={cn("aui-tool-group-root w-full", className)}
       style={
         {
           "--animation-duration": `${ANIMATION_DURATION}ms`,
@@ -93,25 +57,20 @@ function ToolGroupRoot({
 }
 
 function ToolGroupTrigger({
-  count,
-  active = false,
   summary,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
-  count: number;
-  active?: boolean;
-  summary?: ToolGroupSummary;
+  summary: ToolGroupSummary;
 }) {
-  const isActive = summary?.phase === "running" || (summary === undefined && active);
-  const label = summary === undefined ? `${count} 个工具调用` : toolGroupSummaryLabel(summary);
-  const statusIcon = summary?.phase === "failed"
+  const isActive = summary.phase === "running";
+  const statusIcon = summary.phase === "failed"
     ? <CircleAlertIcon className="aui-tool-group-trigger-status text-destructive size-3.5" aria-label={summary.failed === summary.total ? "全部工具执行失败" : "部分工具执行失败"} />
-    : summary?.phase === "cancelled"
+    : summary.phase === "cancelled"
       ? <XCircleIcon className="aui-tool-group-trigger-status text-warning size-3.5" aria-label={summary.cancelled === summary.total ? "全部工具已取消" : "部分工具已取消"} />
-      : summary?.phase === "unknown"
+      : summary.phase === "unknown"
         ? <CircleAlertIcon className="aui-tool-group-trigger-status text-warning size-3.5" aria-label="工具状态待确认" />
-        : summary?.phase === "completed"
+        : summary.phase === "completed"
           ? <CheckIcon className="aui-tool-group-trigger-status text-success size-3.5" aria-label="全部工具已完成" />
           : undefined;
 
@@ -128,12 +87,11 @@ function ToolGroupTrigger({
         <span
           data-slot="tool-group-trigger-label"
           className={cn(
-            "aui-tool-group-trigger-label-wrapper inline-block text-start text-sm leading-none font-medium",
-            "group-data-[variant=ghost]/tool-group-root:font-normal",
+            "aui-tool-group-trigger-label-wrapper inline-block text-start text-sm leading-none font-normal",
             isActive && "shimmer motion-reduce:animate-none",
           )}
         >
-          {label}
+          {toolGroupSummaryLabel(summary)}
         </span>
       }
       trailing={isActive ? (
@@ -144,10 +102,7 @@ function ToolGroupTrigger({
         />
       ) : statusIcon}
       className={cn(
-        "aui-tool-group-trigger origin-left",
-        "group-data-[variant=ghost]/tool-group-root:text-muted-foreground group-data-[variant=ghost]/tool-group-root:hover:text-foreground",
-        "group-data-[variant=outline]/tool-group-root:w-full group-data-[variant=outline]/tool-group-root:px-4",
-        "group-data-[variant=muted]/tool-group-root:w-full group-data-[variant=muted]/tool-group-root:px-4",
+        "aui-tool-group-trigger origin-left text-muted-foreground hover:text-foreground",
         className,
       )}
       {...props}
@@ -178,8 +133,6 @@ function ToolGroupContent({
       <div
         className={cn(
           TOOL_TRACE_CONTENT_CLASS,
-          "group-data-[variant=outline]/tool-group-root:mt-3 group-data-[variant=outline]/tool-group-root:border-t group-data-[variant=outline]/tool-group-root:px-4 group-data-[variant=outline]/tool-group-root:pt-3",
-          "group-data-[variant=muted]/tool-group-root:mt-3 group-data-[variant=muted]/tool-group-root:border-t group-data-[variant=muted]/tool-group-root:px-4 group-data-[variant=muted]/tool-group-root:pt-3",
           "[&>*]:animate-in [&>*]:fade-in-0 [&>*]:blur-in-[2px] [&>*]:slide-in-from-top-1 [&>*]:animation-duration-(--animation-duration) [&>*]:ease-[cubic-bezier(0.32,0.72,0,1)]",
           "[&>*]:motion-reduce:animate-none",
           "[&>*:nth-child(2)]:[animation-delay:40ms]",
