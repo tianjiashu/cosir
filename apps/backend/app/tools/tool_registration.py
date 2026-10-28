@@ -29,14 +29,7 @@ from app.tools.tool_handler.read_file import build_read_file_definition
 from app.tools.tool_handler.replace_tool import build_replace_definition
 from app.tools.tool_handler.search_content import build_search_content_definition
 from app.core.tool.handler.skill_tool import build_skill_definition
-from app.tools.tool_handler.terminal_session import (
-    build_terminal_close_definition,
-    build_terminal_list_definition,
-    build_terminal_read_definition,
-    build_terminal_signal_definition,
-    build_terminal_start_definition,
-    build_terminal_write_definition,
-)
+from app.tools.tool_handler.terminal_session import build_terminal_definitions
 from app.core.tool.handler.wait_messages import build_wait_messages_definition
 from app.core.tool.handler.web_extract import build_web_extract_definition
 from app.core.tool.handler.web_search import build_web_search_definition
@@ -63,12 +56,8 @@ def build_tool_registry() -> ToolRegistry:
     registry.register(build_find_files_definition())
     registry.register(build_list_directory_definition())
     registry.register(build_execute_terminal_definition())
-    registry.register(build_terminal_list_definition())
-    registry.register(build_terminal_start_definition())
-    registry.register(build_terminal_read_definition())
-    registry.register(build_terminal_write_definition())
-    registry.register(build_terminal_signal_definition())
-    registry.register(build_terminal_close_definition())
+    for definition in build_terminal_definitions():
+        registry.register(definition)
     registry.register(build_web_search_definition())
     registry.register(build_web_extract_definition())
     registry.register(build_delegate_task_definition())
