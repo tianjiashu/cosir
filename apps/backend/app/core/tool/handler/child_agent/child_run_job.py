@@ -21,9 +21,9 @@ from concurrent.futures import Future
 from typing import cast
 
 from app.config.logging.logger import log
-from app.core.tool.deferred.deferred_job import ManualJob
-from app.core.tool.deferred.deferred_registry import deferred_registry
-from app.core.tool.deferred.run_deferred import run_deferred
+from app.core.tool.background.deferred_job import ManualJob
+from app.core.tool.background.deferred_registry import deferred_registry
+from app.core.tool.background.run_deferred import run_deferred
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models import ConversationRunRecord
@@ -46,7 +46,7 @@ def run_child(
     enqueue: Callable[[], None],
     placeholder: Callable[[], ToolObservation],
 ) -> ToolObservation:
-    """登记后台作业、投递消息、开始等子 Task 落定，返回标 ``deferred`` 的占位（不挂起）。
+    """登记后台作业、投递消息、开始等子 Task 落定，返回标 ``background`` 的占位（不挂起）。
 
     等待必须在投递之后开始：投递之前子 Task 往往已无事可做，会立刻读到上一次的结论。``enqueue``
     抛出时收回登记（工作没启动，不调撤销回调）并继续上抛。调用方保证 ``event_loop`` 可用。

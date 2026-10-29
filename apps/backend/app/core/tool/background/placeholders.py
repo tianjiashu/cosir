@@ -1,6 +1,6 @@
 """Run 之外结算延迟结果的后台占位行：撤销、用户取消与重启（设计文档「卡片状态」）。
 
-占位行是卡片状态的事实源：后台占位以 ``pending``（``deferred``）写入，结论并入时由 workflow 在 Run
+占位行是卡片状态的事实源：后台占位以 ``pending``（``background``）写入，结论并入时由 workflow 在 Run
 内推到 ``completed``（见 ``tool_observation_projection.settle_deferred_placeholder``）。这里处理不在
 Run 内发生的结算：写库后经 projector 投影，但只投影到已物化的 snapshot——重启收尾会扫过全部 Task，
 不能为每个 Task 物化 space 与 actor；未物化的 snapshot 下次重建自会读到占位行的新状态。投影失败只

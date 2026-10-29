@@ -1,13 +1,14 @@
 """后端重启收尾：让 Agent 知道重启前的后台工作已经结束。
 
 登记表 ``deferred_registry`` 只在进程内、重启后不重建，重启前登记的条目再也不会有结论（设计见
-``docs/plan/deferred-tool-result-design.md`` 规则 6）：
+``docs/plan/background-tool-result-design.md`` 规则 6）：
 
 - **委派子 Agent**（:func:`settle_restarted_child_runs`）：子 Agent 不能挂起（没有
   ``wait_messages``、终端与审批工具），重启时它的 Run 一定是 running，已被恢复流程收敛为
   ``cancelled / runtime_restarted``。父 Agent 的等待随进程丢失，按子 Task 的 ``parent_task_id``
   直接回投这个结论（不对应某次调用，``tool_call_id`` 为 ``None``），唤醒等它的父 Agent。
-- **终端**：会话同样随进程丢失，Agent 上下文里还留着旧 ``session_id``，见下。
+- **终端**：会话与 ``execute_terminal`` 的后台命令同样随进程丢失，Agent 上下文里还留着旧
+  ``session_id``，见下。
 - **Agent Team** 目前前台执行：重启时调用它的父 Run 本身就是 running，已一起被收敛，不需要回投；
   第 5 步 Team 可后台执行后再接入。
 
@@ -15,16 +16,19 @@
 terminals_invalidation_announced`` 记录，space 与进程同寿、只在删除时卸载）：
 
 - **重启唤醒**（:func:`wake_suspended_terminal_runs`，由 ``RecoverService.recover_after_restart``
-  调用）：当前 Run 挂起、且该 Run 调用过终端工具的 Task，可能正等一条再也不会来的终端结论；投递一条
-  ``terminal_wait`` / ``backend_restarted`` 的后台结论把它唤醒（不对应某次调用，``tool_call_id``
-  为 ``None``），正文同时说明全部终端已失效。
+  调用）：当前 Run 挂起、且该 Run 调用过终端工具（交互终端或 ``execute_terminal``）的 Task，可能正等
+  一条再也不会来的后台命令结论或交还；投递一条 ``backend_restart`` / ``backend_restarted`` 的后台结论
+  把它唤醒（不对应某次调用，``tool_call_id`` 为 ``None``），正文说明后台命令已停止、全部终端已失效。
+  交接（``terminal_handoff``）是 HITL：等待中的决定按契约保留不结算，之后交还会报告会话已不在。
 - **首次驱动提醒**（:func:`first_drive_notice`，``RuntimeContext.for_run`` 每次装配时调用）：context 里
   调用过任一交互终端工具的 Task，在本进程第一次驱动时往本次执行的 mailbox 投一条 Run 内
   ``system_notice``（不落库，随 prepare_input 写入 context）。只认 ``terminal_start`` 不够：Agent
   可能只操作过用户新建的终端。
 
-两条路径用同一判定口径：终端工具名按工具组 ``TOOL_GROUP_TERMINAL_SESSION`` 从注册表展开，不在
-core 里手列工具名（core 不依赖 ``app.tools``，工具面由工具层自己声明分组）。
+终端工具名按工具组从注册表展开，不在 core 里手列工具名（core 不依赖 ``app.tools``，工具面由工具层
+自己声明分组）：首次驱动提醒只看交互终端组 ``TOOL_GROUP_TERMINAL_SESSION``（只有会话 id 会失效，
+跑过 ``execute_terminal`` 的 Task 不需要提醒）；重启唤醒另加 ``TOOL_GROUP_TERMINAL``（后台命令也会
+让 Run 挂起）。
 """
 
 from __future__ import annotations
@@ -33,10 +37,10 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from app.config.logging.logger import log
-from app.core.tool.deferred import placeholders
-from app.core.tool.deferred.deferred_registry import deliver_background_result
+from app.core.tool.background import placeholders
+from app.core.tool.background.deferred_registry import deliver_background_result
 from app.core.tool.schemas.tool_names import TOOL_DELEGATE_TASK
-from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
+from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL, TOOL_GROUP_TERMINAL_SESSION
 from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.models import ConversationRunRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
@@ -55,11 +59,17 @@ INVALIDATED_NOTICE = (
     "terminal."
 )
 
+RESTART_WAKE_NOTICE = (
+    "The backend restarted. Background commands you started with execute_terminal were "
+    "stopped, and all interactive terminal sessions are gone (their session ids are no longer "
+    "valid). Run the commands again or call terminal_start if you still need them."
+)
 
-def _terminal_tool_names() -> frozenset[str]:
+
+def _terminal_tool_names(*groups: str) -> frozenset[str]:
     from app.config.configuration import get_tool_registry
 
-    return frozenset(get_tool_registry().tool_groups_to_tool_names([TOOL_GROUP_TERMINAL_SESSION]))
+    return frozenset(get_tool_registry().tool_groups_to_tool_names(list(groups)))
 
 
 def interrupt_pending_placeholders() -> int:
@@ -122,8 +132,9 @@ def wake_suspended_terminal_runs(task_ids: Iterable[int]) -> list[int]:
     启动期调用、同步读库；候选集合是启动时需要调度的 Task，由重启恢复入口传入，与拉起 actor 用
     同一份，不重复查询。
 
-    「挂起在终端上」按该 Run 是否调用过终端工具判定：Run 只记录挂起本身，不记录在等什么。误判
-    （同一 Run 里用过终端、实际在等子 Agent）的代价只是多一次唤醒，模型可以再次 ``wait_messages``。
+    「挂起在终端上」按该 Run 是否调用过终端工具（交互终端或 ``execute_terminal``）判定：Run 只记录
+    挂起本身，不记录在等什么。误判（同一 Run 里用过终端、实际在等子 Agent）的代价只是多一次唤醒，
+    模型可以再次 ``wait_messages``。
     单个 Task 失败记录后继续，不阻断启动。
     """
 
@@ -141,7 +152,9 @@ def wake_suspended_terminal_runs(task_ids: Iterable[int]) -> list[int]:
             current = tasks.require_current_run(task_id)
             if current is None or current.status != ConversationRunStatus.SUSPENDED.value:
                 continue
-            names = names if names is not None else _terminal_tool_names()
+            names = names if names is not None else _terminal_tool_names(
+                TOOL_GROUP_TERMINAL_SESSION, TOOL_GROUP_TERMINAL
+            )
             if not contexts.has_tool_call(task_id, names, run_id=current.id):
                 continue
             # 先记已告知再投递：投递会让 actor 唤醒 Run，首次驱动提醒据此不再重复。
@@ -149,10 +162,10 @@ def wake_suspended_terminal_runs(task_ids: Iterable[int]) -> list[int]:
             delivered = deliver_background_result(
                 task_id,
                 tool_call_id=None,
-                tool_name="terminal_wait",
+                tool_name="backend_restart",
                 result={
                     "end_reason": "backend_restarted",
-                    "message": INVALIDATED_NOTICE,
+                    "message": RESTART_WAKE_NOTICE,
                 },
             )
             if delivered:
@@ -164,7 +177,7 @@ def wake_suspended_terminal_runs(task_ids: Iterable[int]) -> list[int]:
             )
     if woken:
         log.info(
-            "terminal_waits_woken_after_restart",
+            "terminal_runs_woken_after_restart",
             extra={"msg": "重启后已唤醒挂起在终端上的 Run", "data": {"task_ids": woken}},
         )
     return woken
@@ -181,7 +194,7 @@ def first_drive_notice(space: TaskRuntimeSpace) -> TaskMessage | None:
         return None
     space.terminals_invalidation_announced = True
     contexts = service_depends.get_conversation_task_context_service()
-    if not contexts.has_tool_call(space.task_id, _terminal_tool_names()):
+    if not contexts.has_tool_call(space.task_id, _terminal_tool_names(TOOL_GROUP_TERMINAL_SESSION)):
         return None
     log.info(
         "terminals_invalidated_notice_posted",

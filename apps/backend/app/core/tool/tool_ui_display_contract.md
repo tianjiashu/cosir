@@ -156,7 +156,7 @@ Transport 投影不得把失败态 `content` 写入 `ToolCallStatusChangedEvent.
 
 ## 3. 内置工具契约
 
-交互式 terminal 工具包含会话发现、创建、读写（含按键、信号、交接）与关闭能力，共 5 个工具。
+交互式 terminal 工具包含会话发现、创建、读写（含按键、信号）、交接（HITL）与关闭能力，共 6 个工具。
 
 | 工具 | 静态展示声明 | `kind` | 动态展示字段 |
 | --- | --- | --- | --- |
@@ -169,10 +169,11 @@ Transport 投影不得把失败态 `content` 写入 `ToolCallStatusChangedEvent.
 | `search_content` | `trace`、可展开、`list`、`search` | `content-search-results` | `pattern`、`path`、`matches`、`page`、`total_rows`、`match_count`、扫描统计 |
 | `find_files` | `trace`、可展开、`list`、`search` | `file-list` | `pattern`、`path`、`files`、`page`、`match_count` |
 | `list_directory` | `trace`、可展开、`list`、`eye` | `directory-list` | `path`、`entries`、`page`、`total_entries` |
-| `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out` |
+| `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out`；转到后台时为后台占位：`command`、`workdir`、`background: true`（无输出与退出码） |
 | `terminal_list` | `standalone`、不可展开、`none` | `terminal-session` | 本次发现的 `session_count`，不复制可变的会话状态 |
 | `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、`status`、`exit_code`、`initial_cwd`、`shell_kind`、`label`；实时状态读 snapshot `terminal_sessions` |
-| `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`lines`（`[a,b]` 或 null）、`screen`（全屏程序期间返回整屏时为 true，此时 `lines` 为 null）、`wait_result`（`{until, end_reason, matched_line?, matched_screen_row?}`，长等待挂起时 `end_reason="background"`）；write 另有 `input_summary`（实际输入摘要） |
+| `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`lines`（`[a,b]` 或 null）、`screen`（全屏程序期间返回整屏时为 true，此时 `lines` 为 null）、`wait_result`（`{until, end_reason, matched_line?, matched_screen_row?}`，等待只在前台进行）；write 另有 `input_summary`（实际输入摘要） |
+| `terminal_handoff` | `standalone`、不可展开、`none`（HITL `execute`） | `terminal-session` | 与 `terminal_read` / `terminal_write` 相同，`input_summary` 为交接原因；等待占位为 `pending` 时卡片提供「交还」 |
 | `terminal_close` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`exit_code` |
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
@@ -310,6 +311,18 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
   "output": "...",
   "exit_code": 0,
   "timed_out": false
+}
+```
+
+命令转到后台（模型选后台、用户转后台或前台到上限）时，卡片是后台占位：状态为 `pending`，结论只经
+`background_result` 回投给模型，不回写 `display_data`；结论并入或撤销时卡片状态推到终态。
+
+```json
+{
+  "kind": "terminal-result",
+  "command": "npm test",
+  "workdir": "H:/coding-agent",
+  "background": true
 }
 ```
 

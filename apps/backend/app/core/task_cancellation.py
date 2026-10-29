@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 
 from app.config.logging.logger import log
-from app.core.tool.deferred import placeholders
-from app.core.tool.deferred.deferred_registry import deferred_registry
+from app.core.tool.background import placeholders
+from app.core.tool.background.deferred_registry import deferred_registry
 from app.core.workflow.cancel.conversation_run_cancellation_registry import CancelReason
 from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.models import ConversationRunRecord
@@ -54,7 +54,7 @@ class TaskCancellation:
             )
 
     async def drop_deferred_entries(self) -> None:
-        """撤销本 Task 的全部延迟结果（含更早 Run 登记的；终端长等待、交接）：之后到达的完成不再
+        """撤销本 Task 的全部延迟结果（含更早 Run 登记的；后台命令、终端交接）：之后到达的完成不再
         投递，交接状态由撤销回调清除。回调可能取终端服务的锁并触发快照刷新，放进工作线程；回调异常
         由 ``drop_task`` 逐条记录，不会抛到这里。
 

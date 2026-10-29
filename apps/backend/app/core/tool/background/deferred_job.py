@@ -1,12 +1,12 @@
 """延迟结果的作业抽象：工具把耗时工作包装成作业，编排交给 ``run_deferred``。
 
-设计见 ``docs/plan/deferred-tool-result-design.md``「作业与统一执行入口」。作业由执行单元持有（终端
+设计见 ``docs/plan/background-tool-result-design.md``「作业与统一执行入口」。作业由执行单元持有（终端
 会话、子 Task 的 actor 等），只承诺两件事：结论到达时回调恰好一次，以及可以被撤销。登记、前台 /
 后台、转到后台、回投与占位都不归作业管——那是 ``run_deferred`` 的职责。
 
-为什么是抽象基类：使用者有终端条件等待、终端交接、子 Run（之后还有 Team），只有两种形状，所以
-本模块给出两个通用实现——``ThreadJob``（阻塞函数在自己的线程里跑，终端条件等待）与 ``ManualJob``
-（执行单元显式交付，终端交接与子 Run），``run_deferred`` 只认抽象基类。工具侧只构造它们并接上自己的
+为什么是抽象基类：使用者有后台命令、子 Run（之后还有 Team），只有两种形状，所以
+本模块给出两个通用实现——``ThreadJob``（阻塞函数在自己的线程里跑，``execute_terminal`` 的命令）与 ``ManualJob``
+（执行单元显式交付，子 Run），``run_deferred`` 只认抽象基类。工具侧只构造它们并接上自己的
 执行单元，不再各写一套作业类。
 """
 
@@ -46,7 +46,7 @@ class DeferredOutcome:
     """``run_deferred`` 的结果：要么前台拿到的结论，要么一个后台占位的原因。
 
     ``run_deferred`` 不渲染工具观察：结论与占位的渲染（文本、展示数据、是否挂起）属于工具。工具渲染
-    占位时必须标记 ``deferred``，卡片状态以占位行为准。
+    占位时必须标记 ``background``，卡片状态以占位行为准。
     """
 
     result: dict[str, object] | None = None
@@ -83,7 +83,7 @@ class _OnceCallbacks:
 
 
 class ThreadJob(DeferredJob):
-    """把一个阻塞函数放到自己的线程里执行的作业（如终端会话上的条件等待）。
+    """把一个阻塞函数放到自己的线程里执行的作业（如 ``execute_terminal`` 的命令）。
 
     ``work(is_cancelled)`` 返回结论；撤销只置位标记并调用 ``wake`` 唤醒它（例如通知会话条件变量），
     ``work`` 须据 ``is_cancelled`` 尽快以取消结论返回。线程名用于排查。
@@ -113,9 +113,9 @@ class ThreadJob(DeferredJob):
 
 
 class ManualJob(DeferredJob):
-    """由执行单元在合适时机显式 ``finish`` 的作业（如终端交接、子 Agent 的一次 Run）。
+    """由执行单元在合适时机显式 ``finish`` 的作业（如子 Agent 的一次 Run）。
 
-    撤销调用 ``on_cancel``（如清掉交接提示、停止子 Task），再以 ``cancelled_result`` 收尾，保证前台
+    撤销调用 ``on_cancel``（如停止子 Task），再以 ``cancelled_result`` 收尾，保证前台
     等待方总能拿到结论。``finish`` 的调用方负责线程：回调可能写 SQLite，不得在 PTY 读线程里调用。
     """
 

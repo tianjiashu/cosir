@@ -21,8 +21,8 @@ from collections.abc import Callable
 from typing import cast
 
 from app.config.logging.logger import log
-from app.core.tool.deferred.deferred_job import DeferredJob, DeferredOutcome
-from app.core.tool.deferred.deferred_registry import DeferredKind, deferred_registry
+from app.core.tool.background.deferred_job import DeferredJob, DeferredOutcome
+from app.core.tool.background.deferred_registry import DeferredKind, deferred_registry
 
 # 前台等待复查 Run 取消的时间片；作业结论与转后台信号都会立即唤醒，不靠轮询。
 _CANCEL_CHECK_SECONDS = 0.25
@@ -43,7 +43,7 @@ def run_deferred(
 ) -> DeferredOutcome:
     """以本次调用（``tool_call_id``）登记作业并按前台 / 后台取走结论；返回结论或占位原因。
 
-    渲染（观察文本、是否挂起、``deferred`` 标记）交给工具。
+    渲染（观察文本、是否挂起、``background`` 标记）交给工具。
 
     ``detachable`` 为 False 时前台等待不登记为可转后台（看板仍列出、仍可撤销）。同步阻塞：前台时
     阻塞到结论、转后台或 Run 取消，调用方是工具线程。

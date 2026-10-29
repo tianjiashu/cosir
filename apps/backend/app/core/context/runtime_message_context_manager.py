@@ -291,7 +291,7 @@ class RuntimeMessageContextManager:
                     "hidden": previous.hidden,
                     "display_data": metadata.display_data or previous.display_data,
                     "team_run_id": metadata.team_run_id or previous.team_run_id,
-                    "deferred": previous.deferred,
+                    "background": previous.deferred,
                 }
             )
         self.context_store.replace_message(

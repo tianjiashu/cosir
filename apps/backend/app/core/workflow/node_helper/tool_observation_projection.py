@@ -35,7 +35,7 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
             display_data=summary.get("display_data"),
             team_run_id=summary.get("team_run_id"),
             awaiting_decision=summary.get("awaiting_decision", False),
-            deferred=summary.get("deferred", False),
+            deferred=summary.get("background", False),
         )
         event = terminal_event(
             observation,

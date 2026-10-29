@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
 from app.core.events import EventSink
-from app.core.tool.deferred import restart_settlement
+from app.core.tool.background import restart_settlement
 from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     cancellation_registry,
 )

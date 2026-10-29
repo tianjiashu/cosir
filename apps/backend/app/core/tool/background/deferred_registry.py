@@ -1,6 +1,6 @@
 """延迟工具结果登记表：一次工具调用登记一条、结论稍后以 ``background_result`` 回投的工作。
 
-设计见 ``docs/plan/deferred-tool-result-design.md``。条目以 ``tool_call_id`` 为键，每条恰好产出一个
+设计见 ``docs/plan/background-tool-result-design.md``。条目以 ``tool_call_id`` 为键，每条恰好产出一个
 结论；登记表只记录「结论回投给谁、谁在等、撤销时通知谁」，不持有工作本身的执行状态——工作的
 生命周期归各执行单元（终端 runtime 等），登记表不是任何一种 Run 的第二套状态机。
 
@@ -21,7 +21,7 @@
   Task 的全部条目（含更早 Run 登记的）并逐条调用撤销回调，之后到达的 ``complete`` 不投递；用户在
   看板取消单条走 ``cancel``；
 - 关闭：后端关闭时 lifespan 在停 actor、关终端之前调用 ``close``：撤销全部条目并等在途投递落定，
-  此后 ``complete`` 一律不投递。终端关闭会把会话结束为 closed、唤醒等待线程与交接，若不先关闭，
+  此后 ``complete`` 一律不投递。关闭期间仍在跑的后台命令被杀后会以结论回调，若不先关闭，
   这些线程会在服务依赖关闭期间写 ``task_messages``，重启后挂起的 Run 先收到过期结论再收到
   ``backend_restarted``。投递只能经 ``complete``，``close`` 才能保证「关闭期间不写库」。
 
@@ -50,7 +50,7 @@ from app.core.workflow.message_queue.task_message import BackgroundResultBody, T
 
 # 条目种类，同时作为 ``background_result`` 的 ``tool_name``：给模型标明是哪类后台工作，不一定是
 # 可调用的工具名。
-DeferredKind = Literal["terminal_wait", "terminal_handoff", "child_agent"]
+DeferredKind = Literal["terminal_command", "child_agent"]
 DeferredMode = Literal["foreground", "background"]
 DeferredStatus = Literal["running", "completed", "cancelled"]
 ForegroundOutcome = Literal["settled", "detached", "gone"]
@@ -104,7 +104,7 @@ class DeferredRegistry:
         self._closed = False
         self._delivering = 0
         self._listener: Callable[[int], None] | None = None
-        self._notifier = ThreadPoolExecutor(max_workers=1, thread_name_prefix="deferred-notify")
+        self._notifier = ThreadPoolExecutor(max_workers=1, thread_name_prefix="background-notify")
 
     def open(self) -> None:
         """lifespan 启动时开放投递；同一进程内 lifespan 可能多次运行（测试），关闭状态不能残留。"""
@@ -146,7 +146,7 @@ class DeferredRegistry:
         }
         with self._lock:
             if tool_call_id in self._entries:
-                raise ValueError(f"deferred result already registered: {tool_call_id}")
+                raise ValueError(f"background result already registered: {tool_call_id}")
             closed = self._closed
             if not closed:
                 self._entries[tool_call_id] = _Entry(

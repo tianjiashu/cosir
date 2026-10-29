@@ -1,7 +1,7 @@
 """wait_messages 工具：Agent 主动挂起，等后台工作的结论以消息送达。
 
-可等待的工作只以延迟结果登记表 ``deferred_registry`` 为准（委派子 Agent、终端长条件等待、终端交接；
-设计见 ``docs/plan/deferred-tool-result-design.md``）。
+可等待的工作只以延迟结果登记表 ``deferred_registry`` 为准（委派子 Agent、``execute_terminal`` 的后台命令；
+设计见 ``docs/plan/background-tool-result-design.md``）。
 Agent Team 不在等待范围内：``agent_team`` 工具自己阻塞到 Team 落定，结论就是它的工具结果。
 
 取代轮询式等待：调用当步闭合并带 ``suspend``，Run 随即挂起、不占执行者；后台工作每到一个结论、
@@ -12,7 +12,7 @@ Agent Team 不在等待范围内：``agent_team`` 工具自己阻塞到 Team 落
 
 from typing import ClassVar
 
-from app.core.tool.deferred.deferred_registry import deferred_registry
+from app.core.tool.background.deferred_registry import deferred_registry
 from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -50,8 +50,8 @@ class WaitMessagesTool(HandlerBase):
             return tool_error(
                 self.name,
                 (
-                    "nothing to wait for: no child agent is still running and no terminal wait "
-                    "or handoff is open, so you were not paused. Results that already arrived "
+                    "nothing to wait for: no child agent or background command is still running, "
+                    "so you were not paused. Results that already arrived "
                     "are in the conversation or will appear before your next step; do not call "
                     "wait_messages again unless you start new background work."
                 ),

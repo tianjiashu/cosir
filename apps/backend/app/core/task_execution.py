@@ -50,7 +50,6 @@ class TaskExecution:
         # 当前后台执行（驱动一个 Run 的子 task）及其 Run；没有执行时为 ``None``，注销时一起清空。
         self._task: asyncio.Task[None] | None = None
         self._run: ConversationRunRecord | None = None
-        self._run_driver = RunDriver()
 
     @property
     def driving(self) -> bool:
@@ -125,7 +124,9 @@ class TaskExecution:
 
         注销执行与取走信号之间没有 await（与 :meth:`_signal` 互斥），这是信号的唯一清理点。
         """
-        await self._run_driver.drive(run)
+        # 每次驱动现构造：``RunDriver`` 一次构造对应一次驱动；也不能放进构造函数——space 在快照读取
+        # 等许多路径上物化，构造执行登记不应牵出 Run / Task service 与存储的装配。
+        await RunDriver().drive(run)
         if cancellation_registry.is_cancelled(self.task_id):
             # 取走信号前先撤销延迟结果：信号在时迟到结论被 ``deliver_background_result`` 丢弃，
             # 取走之后、撤销之前却会入队并开出新 Run。撤销期间执行仍登记着，新到的取消照常打信号。

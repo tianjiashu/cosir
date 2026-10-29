@@ -28,7 +28,7 @@ class ToolExecutionContext:
             模型配置时的回落值。
         event_loop: 本次 Run 的事件循环。工具在工作线程执行，线程内取不到运行中循环，
             需要回到循环上调度协程（启动子 Run、投递实时输出）时只能用它。
-        event_sink: 本次 Run 的执行事件回调；进程工具的实时输出经它投递。
+        event_sink: 本次 Run 的执行事件回调；``execute_terminal`` 的实时输出经它投递。
         tool_call_id: 单次调用身份，构造时取自该调用；每个调用各一份上下文，
             同批调用不共享。
         user_decision: ``ToolDefinition.user_decision == "execute"`` 的工具在用户决定后（批准或驳回）
