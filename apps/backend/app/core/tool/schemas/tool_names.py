@@ -21,7 +21,6 @@ TOOL_TERMINAL_LIST: Final[str] = "terminal_list"
 TOOL_TERMINAL_START: Final[str] = "terminal_start"
 TOOL_TERMINAL_READ: Final[str] = "terminal_read"
 TOOL_TERMINAL_WRITE: Final[str] = "terminal_write"
-TOOL_TERMINAL_SIGNAL: Final[str] = "terminal_signal"
 TOOL_TERMINAL_CLOSE: Final[str] = "terminal_close"
 TOOL_WEB_SEARCH: Final[str] = "web_search"
 TOOL_WEB_EXTRACT: Final[str] = "web_extract"
@@ -50,7 +49,6 @@ ToolName: TypeAlias = Literal[
     "terminal_start",
     "terminal_read",
     "terminal_write",
-    "terminal_signal",
     "terminal_close",
     "web_search",
     "web_extract",
@@ -80,7 +78,6 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_TERMINAL_START,
     TOOL_TERMINAL_READ,
     TOOL_TERMINAL_WRITE,
-    TOOL_TERMINAL_SIGNAL,
     TOOL_TERMINAL_CLOSE,
     TOOL_WEB_SEARCH,
     TOOL_WEB_EXTRACT,

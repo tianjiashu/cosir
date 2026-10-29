@@ -30,7 +30,7 @@ from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservatio
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
-from app.core.workflow.inbox.task_message import DecisionBody
+from app.core.workflow.message_queue.task_message import DecisionBody
 from app.core.workflow.node_helper.common import emit
 from app.models.enums.error_kind import ErrorKind
 

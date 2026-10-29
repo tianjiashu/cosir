@@ -11,10 +11,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, StringConstraints, model_validator
 
-from app.models.agent_team.configuration.graph_validation import (
-    TeamGraphValidationError,
-    validate_team_graph,
-)
+from app.models.agent_team.configuration.graph_validation import validate_team_graph
 
 AgentTeamIdentifier = Annotated[
     StrictStr,
@@ -136,14 +133,11 @@ class ProposeAgentTeamConfigurationArgs(BaseModel):
             当前已通过参数和图结构校验的提案对象。
 
         异常:
-            ValueError: 提案图结构不符合工具契约时抛出，由 Pydantic 转换为
-                ``ValidationError``。
+            TeamGraphValidationError: 提案图结构不符合工具契约时抛出（一次携带全部问题），
+                由 Pydantic 转换为 ``ValidationError``。
         """
 
-        try:
-            validate_team_graph(self.nodes, self.transitions, self.start_node_id)
-        except TeamGraphValidationError as exc:
-            raise ValueError(str(exc)) from exc
+        validate_team_graph(self.nodes, self.transitions, self.start_node_id)
         return self
 
     team_id: StrictStr = Field(

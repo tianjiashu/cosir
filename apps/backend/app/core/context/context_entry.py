@@ -12,6 +12,6 @@ class ContextEntry:
     message: ChatCompletionMessageParam
     run_id: int | None
     sequence: int
-    # 只有用户消息有身份（inbox 行 id，排队与已消费阶段共用）；其余角色为 None。
+    # 只有用户消息有身份（message_queue 行 id，排队与已消费阶段共用）；其余角色为 None。
     message_id: int | None = None
     metadata: MessageMetadata = field(default_factory=EmptyMessageMetadata)

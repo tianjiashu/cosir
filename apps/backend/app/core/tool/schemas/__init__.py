@@ -2,6 +2,7 @@
 
 from app.core.tool.schemas.tool_call import ToolCall
 from app.core.tool.schemas.tool_definition import ToolDefinition
+from app.core.tool.schemas.tool_deferred import DeferredCapability
 from app.core.tool.schemas.tool_display import ToolDisplayHints
 from app.core.tool.schemas.tool_execution_context import ToolExecutionContext
 from app.core.tool.schemas.tool_names import (
@@ -66,6 +67,7 @@ __all__ = [
     "TOOL_WRITE_FILE",
     "ToolCall",
     "ToolDefinition",
+    "DeferredCapability",
     "ToolDisplayHints",
     "ToolExecutionContext",
     "ToolName",

@@ -128,7 +128,7 @@ def _validate_response(
 async def _structured_output_node(state: ReactExecutionState) -> dict:
     """已完成 Run 的结果支线：成功替换 final_output，失败只记录 end_reason。
 
-    请求使用主线完成前冻结的 context 副本，不消费 inbox；支线不迁移 Run 状态。
+    请求使用主线完成前冻结的 context 副本，不消费 message_queue；支线不迁移 Run 状态。
     """
 
     runtime = _runtime_context()

@@ -171,9 +171,9 @@ Transport 投影不得把失败态 `content` 写入 `ToolCallStatusChangedEvent.
 | `list_directory` | `trace`、可展开、`list`、`eye` | `directory-list` | `path`、`entries`、`page`、`total_entries` |
 | `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out` |
 | `terminal_list` | `standalone`、不可展开、`none` | `terminal-session` | 本次发现的 `session_count`，不复制可变的会话状态 |
-| `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、`status`、`initial_cwd`、`shell_kind`、`label`、`integration`（状态字符串）；实时状态读 snapshot `terminal_sessions` |
-| `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`lines`（`[a,b]` 或 null）、`wait_result`（`{until, end_reason, matched_line?}`，长等待挂起时 `end_reason="background"`）、`suspended`；write 另有 `input_type`（line/keys/signal/handoff）与 `input_summary` |
-| `terminal_close` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`exit_code`、`end_reason` |
+| `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、`status`、`exit_code`、`initial_cwd`、`shell_kind`、`label`；实时状态读 snapshot `terminal_sessions` |
+| `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`lines`（`[a,b]` 或 null）、`screen`（全屏程序期间返回整屏时为 true，此时 `lines` 为 null）、`wait_result`（`{until, end_reason, matched_line?, matched_screen_row?}`，长等待挂起时 `end_reason="background"`）；write 另有 `input_summary`（实际输入摘要） |
+| `terminal_close` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`exit_code` |
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
 | `delegate_task` | `standalone`、不可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、状态 |

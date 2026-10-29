@@ -54,6 +54,9 @@ class ToolObservation:
         awaiting_decision: 本观察是 HITL 工具的等待占位（见 :func:`tool_awaiting_decision`）：模型
             协议上它就是这次调用的最终结果，用户决定后的执行结果另行追加为消息、不覆盖它；投影为
             非终态 ``pending``，执行完成后只更新展示状态。
+        deferred: 本观察是延迟结果的后台占位（结论稍后以 ``background_result`` 回投，见
+            ``core/tool/deferred``）：与 HITL 占位一样投影为 ``pending``，结论并入或撤销时只更新
+            占位行的展示状态；持久化为占位行 metadata 的 ``deferred``，卡片据此显示「后台执行中」。
     """
 
     tool_name: str
@@ -65,3 +68,4 @@ class ToolObservation:
     suspend: bool = False
     artifact_data: dict[str, Any] | None = field(default_factory=dict)
     awaiting_decision: bool = False
+    deferred: bool = False

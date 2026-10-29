@@ -15,29 +15,17 @@ from app.core.workflow.message_queue.task_message import (
     UserInputBody,
 )
 from app.models import ConversationRunRecord
-from app.models.enums.conversation_run_status import ConversationRunStatus
 
 Phase = Literal["driving", "suspended", "idle"]
 """Task 的执行阶段：调度、取消、恢复与静止只按它判定，不各自组合 Run 状态与执行登记。
+
+由 ``TaskActor`` 依当前 Run 与执行登记得出，本模块只消费：
 
 - ``driving``：有执行者。以执行登记为准而不看 Run 状态：workflow 先写终态或挂起，执行者还要跑完
   STOP Hook、收束工具调用才释放，这段时间仍算 ``driving``——此时另开执行会出现两个执行者。
 - ``suspended``：没有执行者且 Run 挂起，等可唤醒消息。
 - ``idle``：没有执行者且 Run 已到终态，或尚无 Run。
 """
-
-
-def phase_of(current: ConversationRunRecord | None, driving: bool) -> Phase:
-    """由当前 Run 与执行登记得出执行阶段。
-
-    不存在「running 但没有执行者」：新 Run 与执行登记在同一次 Task 闸门内完成，``RunDriver``
-    返回前一定把 Run 落定为终态或挂起，重启时遗留的 running Run 先由 lifespan 收敛为 cancelled。
-    """
-    if driving:
-        return "driving"
-    if current is not None and current.status == ConversationRunStatus.SUSPENDED:
-        return "suspended"
-    return "idle"
 
 
 @dataclass(frozen=True)
@@ -99,7 +87,7 @@ def next_action(
     inputs = [message.body for message in pending if isinstance(message.body, UserInputBody)]
     if inputs:
         return StartRun(inputs[-1].launch)
-    launch = _launch_of(current)
+    launch = RunLaunch.from_run(current)
     return StartRun(launch) if launch is not None else Stay()
 
 
@@ -108,15 +96,6 @@ def initial_messages(pending: list[TaskMessage], *, fresh_run: bool) -> list[Tas
     if fresh_run:
         return pending
     return [message for message in pending if message.delivery == "immediate"]
-
-
-def _launch_of(run: ConversationRunRecord | None) -> RunLaunch | None:
-    """沿用一个 Run 的发起配置；模型配置已被删除时无法继承。"""
-    if run is None or run.agent_id is None or run.model_config_id is None:
-        return None
-    return RunLaunch(
-        agent_id=run.agent_id, model_config_id=run.model_config_id, options=run.options
-    )
 
 
 def matches_run(launch: RunLaunch, run: ConversationRunRecord) -> bool:

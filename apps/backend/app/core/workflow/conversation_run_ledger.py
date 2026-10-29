@@ -28,7 +28,7 @@ from app.models.conversation_run_failure import run_terminal_error
 from app.models.conversation_run_usage import ConversationRunUsage
 from app.models.enums.conversation_run_status import RunTransition
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.inbox.task_message import RunLaunch
+from app.core.workflow.message_queue.task_message import RunLaunch
 from app.service import depends as service_depends
 from app.service.depends import get_conversation_event_projector, get_model_config_service
 from app.storage.store_engines import main_session_factory

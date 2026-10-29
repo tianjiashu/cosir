@@ -4,7 +4,7 @@
 （编辑器原样正文、图片与附件描述符）供快照投影、编辑复用与 fork。
 """
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from openai.types.chat import (
     ChatCompletionContentPartImageParam,
@@ -21,6 +21,9 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.message_metadata import UserMessageMetadata
 
+if TYPE_CHECKING:
+    from app.models import ConversationRunRecord
+
 
 class RunLaunch(BaseModel):
     """一个 Run 的发起配置；活动 Run 期间锁定，交接新 Run 与入队校验共用。"""
@@ -30,6 +33,18 @@ class RunLaunch(BaseModel):
     agent_id: str = "main_agent"
     model_config_id: int
     options: ConversationRunOptions = Field(default_factory=ConversationRunOptions)
+
+    @classmethod
+    def from_run(cls, run: "ConversationRunRecord | None") -> "RunLaunch | None":
+        """沿用某个 Run 已冻结的发起配置；Run 缺 Agent 或模型配置（已被删除）时返回 ``None``。"""
+
+        if run is None or run.agent_id is None or run.model_config_id is None:
+            return None
+        return cls(
+            agent_id=run.agent_id,
+            model_config_id=run.model_config_id,
+            options=run.options,
+        )
 
 
 class UserInputBody(EnqueuedMessageBody):

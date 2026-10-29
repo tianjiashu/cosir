@@ -28,7 +28,7 @@ from app.core.tool.schemas import (
 from app.core.tool.schemas.tool_names import TOOL_AGENT_TEAM
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_AGENT_TEAM
-from app.core.workflow.inbox.task_message import DecisionBody
+from app.core.workflow.message_queue.task_message import DecisionBody
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.core.tool.handler.agent_team.args.agent_team_approve_input import AgentTeamApproveInput
@@ -216,8 +216,6 @@ class AgentTeamRunTool(HandlerBase):
         节点回落的模型配置取自创建方案的主 Run 的持久化事实，而不是执行决定时的当前 Run——用户
         审批的是那次 Run 提出的方案。
         """
-        from app.core.run_driver import resolve_agent_config
-
         row = self.agent_team_run_approval.get_for_tool_call(
             execution_context.task_id, execution_context.tool_call_id
         )
@@ -250,7 +248,7 @@ class AgentTeamRunTool(HandlerBase):
                 inputs.configuration,
                 goal=inputs.goal,
                 node_goals=inputs.node_goals,
-                parent_agent=resolve_agent_config(
+                parent_agent=AgentRuntimeConfig.for_run(
                     get_conversation_run_ledger().get_run(row.parent_run_id)
                 ),
             )

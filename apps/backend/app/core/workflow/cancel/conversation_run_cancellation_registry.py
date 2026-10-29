@@ -7,9 +7,9 @@ from typing import Literal
 
 from app.config.logging.logger import log
 
-CancelReason = Literal["user", "edited", "parent"]
-"""取消原因：用户停止、运行中编辑、上游（父 Agent / Team）停止。只有用户停止会给 Agent 留下
-「用户已取消」通知；三者都让下游结果不再回投。"""
+CancelReason = Literal["user", "parent"]
+"""取消原因：用户停止、上游（父 Agent / Team）停止。只有用户停止会给 Agent 留下「用户已取消」
+通知；两者都让下游结果不再回投。"""
 
 
 class ConversationRunCancellationRegistry:

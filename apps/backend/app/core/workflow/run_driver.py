@@ -13,7 +13,6 @@ import asyncio
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.context.tool_call_closure import ContextProtocolError
 from app.core.events import ToolCallsSettledEvent
 from app.core.hook import HookContext, HookEvent, HookInterceptor
@@ -23,17 +22,14 @@ from app.core.llm_provider.model_failure import (
 )
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
-from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models import ConversationRunRecord, ConversationRunStatus
 from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.conversation_run_status import RunTransition
-from app.core.workflow.inbox.task_message import TaskMessage
 from app.service.depends import (
     get_conversation_event_projector,
     get_conversation_run_ledger,
     get_task_service,
-    get_workspace_service,
 )
 
 _STOP_HOOK_STATUSES = frozenset(
@@ -48,33 +44,25 @@ _STOP_HOOK_STATUSES = frozenset(
 class RunDriver:
     """单个 Run 的驱动方：一次构造对应一次驱动，实例不跨 Run 复用。
 
-    构造参数是调度方手里的事实：``run_id``、随本次执行创建的 ``mailbox``、调度方的首次投递
-    ``initial_delivery`` 与结束通知 ``on_finished``。运行期依赖在此装配，驱动步骤各占一个方法，
-    失败落定与结束通知复用同一份实例状态。
+    运行期依赖在此装配，驱动步骤各占一个方法，失败落定复用同一份实例状态。本次执行的其余事实
+    （Task、工作区、Agent 配置、mailbox 与事件回调）由 ``RuntimeContext.for_run`` 只凭 Run 装配。
     """
 
-    def __init__(self, mailbox: RunMailbox) -> None:
-        """``mailbox`` 由调度方随执行创建并持续投递外部队列消息；``initial_delivery`` 是调度方的首次
-        投递（等启动它的那一轮释放 Task 闸门才投递），必须在本驱动的失败边界内执行：它在边界外失败时
-        Run 会停在 running 而没有执行者；``on_finished`` 是结束通知，调度方据此释放执行登记。"""
-        self._mailbox = mailbox
+    def __init__(self) -> None:
+        from app.core.workflow.workflow import ReactLikeWorkflow
         self._ledger = get_conversation_run_ledger()
         self._task_service = get_task_service()
-        self._workspace_service = get_workspace_service()
-
-    def post(self, message: TaskMessage):
-        self._mailbox.post(message)
+        self._workflow = ReactLikeWorkflow()
 
     async def drive(self, run: ConversationRunRecord) -> None:
-        """驱动一次 Run：失败在此落定，结束时通知调度方。
+        """驱动一次 Run：装配运行上下文 → 驱动 workflow，异常在此落定。
 
-        初始投递 → 装配 Agent 运行时配置与运行上下文 → 驱动 workflow；正常终态由 workflow 节点落定。
-        任何 ``Exception``（含初始投递与装配期）在这里分类并落定 failed，再把仍未收束的工具调用批量
-        收束；Run 已落终态时条件迁移落空，不覆盖既有终态。正常收束与失败落定后都调用
-        ``on_finished``；落定自身失败时先记录再上浮（通知已在 ``finally`` 里发生）。
+        正常终态由 workflow 节点落定。任何 ``Exception``（含装配期）在这里分类并落定 failed，再把
+        仍未收束的工具调用批量收束；Run 已落终态时条件迁移落空，不覆盖既有终态。落定自身失败
+        时先记录再上浮。
 
-        ``CancelledError``（进程关闭）照常上浮且不通知：关闭不调度后续 Run，遗留 running Run 由下次
-        启动收敛——所以通知不能无条件放 ``finally``。
+        ``CancelledError``（进程关闭）照常上浮：关闭不调度后续 Run，遗留 running Run 由下次
+        启动收敛。
 
         副作用:
             触发 USER_PROMPT_SUBMIT 与 STOP（正常收束 / 取消 / 挂起）Hook；结束前回收本 Run 遗留的
@@ -83,22 +71,14 @@ class RunDriver:
 
         try:
             task = self._task_service.get_task(run.task_id)
-            workspace = self._workspace_service.get_workspace(task.workspace_id)
             # 无内置实现；Hook 判定 deny 也不阻断已开始的 Run。
             await HookInterceptor.async_safe_fire(
                 HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, turn=run, locatable=None)
             )
-            from app.core.workflow.workflow import ReactLikeWorkflow
 
-            rc = RuntimeContext.for_run(
-                run,
-                task,
-                workspace,
-                AgentRuntimeConfig.for_run(run, task, workspace),
-                self._mailbox,
-                event_sink=get_conversation_event_projector().process
-            )
-            await ReactLikeWorkflow().run(rc)
+
+            rc = RuntimeContext.for_run(run)
+            await self._workflow.run(rc)
             if await self._has_settled(run):
                 await HookInterceptor.async_safe_fire(
                     HookContext.from_locatable(event=HookEvent.STOP, locatable=task, turn=run)
@@ -170,16 +150,6 @@ class RunDriver:
                 reason="runtime_failed",
             )
         )
-
-
-def resolve_agent_config(run: ConversationRunRecord) -> AgentRuntimeConfig:
-    """按 Run 的持久化事实合成其 Agent 运行时配置（规则见 ``AgentRuntimeConfig.for_run``）。
-
-    供 Run 之外的执行方复用父 Agent 配置，如用户批准 Agent Team 时为节点回落模型配置。
-    """
-    task = get_task_service().get_task(run.task_id)
-    workspace = get_workspace_service().get_workspace(task.workspace_id)
-    return AgentRuntimeConfig.for_run(run, task, workspace)
 
 
 def _failure_code_for(exc: BaseException) -> str:

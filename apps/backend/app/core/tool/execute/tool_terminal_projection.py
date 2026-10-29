@@ -168,8 +168,13 @@ def terminal_event(
     一直停在 ``running``。
     """
 
-    # HITL 等待占位不是终态：用户决定后执行完成，才把展示状态推到终态。
-    status = "pending" if observation.awaiting_decision else terminal_status(observation.status)
+    # HITL 等待占位与延迟结果的后台占位都不是终态：用户决定后执行完成、或后台结论并入 / 撤销时，
+    # 才把展示状态推到终态。
+    status = (
+        "pending"
+        if observation.awaiting_decision or observation.deferred
+        else terminal_status(observation.status)
+    )
     return ToolCallStatusChangedEvent(
         task_id=task_id,
         run_id=run_id,
@@ -184,6 +189,7 @@ def terminal_event(
             tool_call_id=tool_call_id,
         ),
         team_run_id=observation.team_run_id,
+        deferred=observation.deferred,
     )
 
 

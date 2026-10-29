@@ -1,7 +1,8 @@
 """Agent 运行时配置：一次 Run 实际执行所用的 Agent，是 Agent 定义与本次模型选择的最终解析。
 
-两个构造入口分工明确：:meth:`AgentRuntimeConfig.for_run` 从 Run / Task / 工作区的持久化事实推导
-定义与模型选择（唯一装配方），:meth:`AgentRuntimeConfig.resolve` 只接受已解析好的定义与模型配置。
+两个构造入口分工明确：:meth:`AgentRuntimeConfig.for_run` 从 Run 的持久化事实（含其 Task 与工作区）
+推导定义与模型选择（唯一装配方），:meth:`AgentRuntimeConfig.resolve` 只接受已解析好的定义与
+模型配置。
 """
 
 from __future__ import annotations
@@ -13,12 +14,12 @@ from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
+from app.models import ConversationRunRecord
 from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.models.conversation_run_options import ReasoningEffort
 from app.models.model_config_record import ModelConfigRecord
 from app.core.tool.handler.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY, build_node_profile
-from app.service.depends import get_model_config_service
+from app.service.depends import get_model_config_service, get_task_service, get_workspace_service
 
 
 @dataclass(frozen=True)
@@ -40,24 +41,23 @@ class AgentRuntimeConfig:
     model: ResolvedModel
 
     @classmethod
-    def for_run(
-        cls,
-        run: ConversationRunRecord,
-        task: TaskRecord,
-        workspace: WorkspaceRecord,
-    ) -> AgentRuntimeConfig:
+    def for_run(cls, run: ConversationRunRecord) -> AgentRuntimeConfig:
         """合成本次 Run 独占的配置；注册表单例与 Team 冻结定义都不被修改。
 
-        定义只由持久化事实推导：按 Run 的 Agent 身份从注册表解析（主 Agent 用系统作用域，其余用
-        Run 所属工作区）；Team 节点 Task 再叠加其 ``extra`` 里冻结的节点快照。连接与能力字段只由
-        本 Run 的 ``model_config_id`` 物化——``api_key`` 不落盘。
+        Task 与工作区由 Run 反查：调用方手里只需要 Run 这一条事实（驱动、委派、Team 审批走同一条
+        路径，不必各自先读一遍 Task / workspace）。定义只由持久化事实推导：按 Run 的 Agent 身份从
+        注册表解析（主 Agent 用系统作用域，其余用 Run 所属工作区）；Team 节点 Task 再叠加其
+        ``extra`` 里冻结的节点快照。连接与能力字段只由本 Run 的 ``model_config_id`` 物化——
+        ``api_key`` 不落盘。
 
         异常:
             RuntimeError: 注册表解析不到该 Agent，或 Run 未记录模型配置。
-            KeyError: ``model_config_id`` 指向的配置已不存在。
+            KeyError: Run 指向的 Task / 工作区已不存在，或 ``model_config_id`` 指向的配置已不存在。
             ModelSettingsError: 模型配置不完整。
         """
 
+        task = get_task_service().get_task(run.task_id)
+        workspace = get_workspace_service().get_workspace(task.workspace_id)
         agent_id = run.agent_id or "main_agent"
         workspace_scope = (
             AgentProfileRegistry.SYSTEM_WORKSPACE

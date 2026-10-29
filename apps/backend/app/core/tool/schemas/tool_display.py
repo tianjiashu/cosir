@@ -19,7 +19,6 @@ ToolDisplayVariant = Literal[
     "terminal-session-start",
     "terminal-session-read",
     "terminal-session-write",
-    "terminal-session-signal",
     "terminal-session-close",
 ]
 

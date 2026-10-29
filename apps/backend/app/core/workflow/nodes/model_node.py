@@ -30,7 +30,7 @@ from app.core.workflow.node_helper.streaming_part_state_machine import (
     StreamingPartStateMachine,
 )
 from app.models.enums.conversation_run_status import RunTransition
-from app.core.workflow.inbox.task_message import NoticeBody, TaskMessage
+from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.service import depends as service_depends
 from app.utils.message_content import content_to_text
 

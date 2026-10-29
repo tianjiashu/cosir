@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 from app.config.logging.logger import log
-from app.core.tool.handler.skill.skill_configuration import SkillConfiguration, read_skill_configuration
+from app.service.configuration.skill_configuration import SkillConfiguration, read_skill_configuration
 from app.utils.path.system_cosir import system_skills_dir
 
 _SKILL_NAME_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")

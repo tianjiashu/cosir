@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-import time
 from typing import Any
 
 from app.config.logging.logger import log
@@ -40,10 +39,8 @@ from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-# 等节点静止期间检查 TeamRun 状态、以及等节点开出新 Run 的轮询间隔；与工具执行层的取消轮询同量级。
+# 等节点落定期间检查 TeamRun 状态的间隔；与工具执行层的取消轮询同量级。
 _NODE_POLL_SECONDS = 0.2
-# 投递节点输入后等节点 actor 开出新 Run 的上限。
-_NODE_RUN_START_TIMEOUT_SECONDS = 30.0
 _ACTIVE_STATUSES = (AgentTeamRunStatus.RUNNING.value, AgentTeamRunStatus.PENDING.value)
 
 
@@ -78,8 +75,8 @@ class AgentTeamCoordinator:
 
         ``team_run`` 是 ``agent_team`` 工具刚由审批门迁移为 ``running`` 的行，本方法不再校验其
         状态。调用方是工具的执行线程（阻塞到落定）；节点输入经 ``task_runtime_spaces.enqueue``
-        投递，本线程经主事件循环 ``event_loop`` 等节点 actor 静止（``wait_idle``），期间记下新 Run
-        并在 TeamRun 不再运行时停下节点（见 :meth:`_await_node_run`）。
+        投递，本线程经主事件循环 ``event_loop`` 等节点 actor 无事可做（``wait_quiescent``），期间
+        记下新 Run 并在 TeamRun 不再运行时停下节点（见 :meth:`_await_node_run`）。
 
         取消：以 TeamRun 自身状态为准，不读父 Task 的取消信号——单一事实源。主 Task 停止时其 actor
         经 :meth:`cancel_for_parent_run_id`、用户在卡片上经 :meth:`cancel` 把 TeamRun 落定
@@ -340,7 +337,6 @@ class AgentTeamCoordinator:
         # 驱动时由 ``AgentRuntimeConfig.for_run`` 从节点 Task 的快照重新合成，不经调度入口在内存中
         # 传递定义。
         build_node_profile(agent_profile, node_runtime)
-        previous_run_id = self._task_service.get_task(node_execution.task_id).current_run_id
         message = get_user_input_service().prepare(
             node_execution.task_id,
             ConversationRunCommand(display_text=input_text),
@@ -350,7 +346,7 @@ class AgentTeamCoordinator:
         )
         task_runtime_spaces.enqueue(node_execution.task_id, message)
         node_run_id = self._await_node_run(
-            event_loop, row.id, state, node_execution, previous_run_id
+            event_loop, row.id, state, node_execution
         )
         return self._ledger.get_run(node_run_id)
 
@@ -360,53 +356,48 @@ class AgentTeamCoordinator:
             team_run_id: int,
             state: AgentTeamRunState,
             node_execution: AgentTeamNodeExecution,
-            previous_run_id: int | None,
     ) -> int:
-        """投递节点输入后阻塞到节点 Run 落定（挂起不算），返回该 Run id；本线程是工作线程。
+        """投递节点输入后阻塞到节点 Task 无事可做，返回它最新 Run 的 id；本线程是工作线程。
+
+        等的是 actor 的「无事可做」（``wait_quiescent``）而不是「静止」：投递之后、新 Run 开出来
+        之前节点 Task 也是静止的，按静止等会读到上一次的 Run。无事可做时最新 Run 就是处理了这次
+        输入的 Run；不是新 Run 说明调度违约，抛 ``RuntimeError`` 由 :meth:`start` 收敛为 TeamRun
+        ``failed``。
+        新 Run 一出现即记入快照并落库，只为执行时间线定位。
 
         本协调器是节点的唯一停止者：TeamRun 的取消入口（:meth:`cancel` 等）只迁移状态，不碰节点；
         这里每 ``_NODE_POLL_SECONDS`` 检查一次 TeamRun，不再运行就停下节点 Task。TeamRun 处于
         running 时 :meth:`start` 必然在执行，所以这条路径不会缺席；单一负责方也就没有「取消入口
-        找不到刚启动的节点」的竞态窗口。
+        找不到刚启动的节点」的竞态窗口。取消只在看到新 Run 之后发：Run 开出来之前节点 actor 没有
+        可停止的对象，发了即落空。
 
-        取消只在看到新 Run 之后发：Run 开出来之前节点 actor 没有可停止的对象，发了即落空。新 Run
-        一出现即记入快照并落库，只为执行时间线定位。节点 Task 只由本协调器顺序投递、投递时必然
-        静止，投递必然新开 Run；超时没开出来说明调度违约，抛 ``RuntimeError`` 由 :meth:`start`
-        收敛为 TeamRun ``failed``。
-
-        为什么轮询而不订阅：本线程是 ``agent_team`` 工具占用的默认线程池线程，整个 Team 期间都被
-        占住（见 ``agent_team_run`` 的类说明）；改为订阅 ``TaskActor.state_changed`` 加进程内停止
-        信号也释放不了它，只省下每个间隔两次本机 SQLite 读取与不到一个间隔的取消延迟，却要多一条
-        跨线程通知通道。重新评估的条件：多个 Team 并发使默认线程池吃紧、或需要在进程关闭时可靠地
-        中断 Team——届时改为 Team 在事件循环上后台执行、主 Run 挂起并经 ``background_result`` 唤醒
-        （复用 ``delegate_task`` 的回投链路），轮询与线程阻塞一并消失。
+        为什么轮询停止状态而不订阅：本线程是 ``agent_team`` 工具占用的默认线程池线程，整个 Team
+        期间都被占住（见 ``agent_team_run`` 的类说明）；改为订阅进程内停止信号也释放不了它，只省下
+        每个间隔一次本机 SQLite 读取与不到一个间隔的取消延迟。重新评估的条件：多个 Team 并发使默认
+        线程池吃紧、或需要在进程关闭时可靠地中断 Team——届时改为 Team 在事件循环上后台执行、主 Run
+        挂起并经 ``background_result`` 唤醒（与委派子 Agent 同一种等待），轮询与线程阻塞一并消失。
         """
 
         actor = task_runtime_spaces.get_or_create(node_execution.task_id).actor
-        deadline = time.monotonic() + _NODE_RUN_START_TIMEOUT_SECONDS
+        known = set(node_execution.conversation_run_ids)
         node_run_id: int | None = None
         cancel_sent = False
         while True:
-            idle = asyncio.run_coroutine_threadsafe(
-                actor.wait_idle(_NODE_POLL_SECONDS), event_loop
+            quiescent = asyncio.run_coroutine_threadsafe(
+                actor.wait_quiescent(_NODE_POLL_SECONDS), event_loop
             ).result()
-            if node_run_id is None:
-                current = self._task_service.get_task(node_execution.task_id).current_run_id
-                if current is None or current == previous_run_id:
-                    if time.monotonic() > deadline:
-                        raise RuntimeError(
-                            f"task {node_execution.task_id} 的节点输入没有启动新 Run"
-                        )
-                    if idle:
-                        # 静止时 ``wait_idle`` 立即返回：新 Run 还没开出来，自行让出间隔。
-                        time.sleep(_NODE_POLL_SECONDS)
-                    continue
+            current = self._task_service.get_task(node_execution.task_id).current_run_id
+            if node_run_id is None and current is not None and current not in known:
                 node_run_id = current
                 node_execution.conversation_run_ids.append(node_run_id)
                 self._persist_running(team_run_id, state)
-            if idle:
+            if quiescent:
+                if node_run_id is None:
+                    raise RuntimeError(
+                        f"task {node_execution.task_id} 的节点输入没有启动新 Run"
+                    )
                 return node_run_id
-            if not cancel_sent and self._stopped(team_run_id):
+            if node_run_id is not None and not cancel_sent and self._stopped(team_run_id):
                 task_runtime_spaces.cancel(node_execution.task_id, "parent")
                 cancel_sent = True
 

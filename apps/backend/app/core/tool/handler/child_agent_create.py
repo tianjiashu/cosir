@@ -17,6 +17,7 @@ from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileType,
 )
+from app.core.tool.handler.child_agent.child_run_job import run_child
 from app.core.tool.handler.child_agent.delegation_display import build_delegation_display_data
 from app.core.tool.schemas import (
     TOOL_DELEGATE_TASK,
@@ -71,8 +72,9 @@ class DelegateTaskTool(HandlerBase):
         "Delegate a focused subtask to a child agent. It runs its own loop with only your "
         "message as input — it cannot see this conversation and cannot delegate further — so "
         "the message must be a self-contained task contract, and the child returns only a "
-        "final summary. Delegation is asynchronous: after creating the child, wait for it "
-        "with wait_messages or continue other non-interfering work. A failed delegation "
+        "final summary. Delegation always runs in the background: after creating the child, "
+        "wait for it with wait_messages or continue other non-interfering work. A failed "
+        "delegation "
         "is terminal — adjust the contract or ask the user rather than retrying identical "
         "arguments. Keep inputs within the stated length limits; an oversized call is "
         "rejected as a tool error, so trim or split the task."
@@ -109,6 +111,8 @@ class DelegateTaskTool(HandlerBase):
             execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """委派一个自由文本子任务给指定 child Agent，并返回启动结果观察。
+
+        一律后台：立即返回占位，子 Run 的结论稍后回投（见 ``child_run_job.run_child``）。
 
         参数:
             child_agent_id: 要运行的 child agent profile 标识。
@@ -199,16 +203,43 @@ class DelegateTaskTool(HandlerBase):
                                 else None)
             child_agent_model_config_id = child_agent_profile.model_config_id
             model_config_id = child_agent_model_config_id or parent_run.model_config_id
-            # 只入队，由子 Task 的 actor 新开 Run，不等子 Run 结束。
-            task_runtime_spaces.enqueue(
-                child_task.id,
-                get_user_input_service().prepare(
+            display = {
+                "title": agent_name,
+                "child_agent_id": child_agent_id,
+                "child_task_id": child_task.id,
+                "role": child_agent_profile.role,
+            }
+
+            def enqueue() -> None:
+                # 子 Task 的 actor 新开 Run；结论由 ``run_child`` 等子 Task 落定后读取。
+                task_runtime_spaces.enqueue(
                     child_task.id,
-                    ConversationRunCommand(display_text=message),
-                    model_config_id,
-                    reasoning_effort,
-                    child_agent_id,
-                ),
+                    get_user_input_service().prepare(
+                        child_task.id,
+                        ConversationRunCommand(display_text=message),
+                        model_config_id,
+                        reasoning_effort,
+                        child_agent_id,
+                    ),
+                )
+
+            def placeholder() -> ToolObservation:
+                return tool_success(
+                    tool_name=self.name,
+                    content=json.dumps(
+                        {
+                            "status": "submitted",
+                            "child_task_id": child_task.id,
+                            "child_agent_id": child_agent_id,
+                            "agent_name": agent_name,
+                        },
+                        separators=(",", ":"),
+                    ),
+                    display_data=build_delegation_display_data(**display, status="running"),
+                )
+
+            return run_child(
+                execution_context, child_task.id, enqueue=enqueue, placeholder=placeholder
             )
 
         except Exception as e:
@@ -227,26 +258,6 @@ class DelegateTaskTool(HandlerBase):
                 tool_name=self.name,
                 content="An error occurred while delegating the task.",
             )
-        return tool_success(
-            tool_name=self.name,
-            content=json.dumps(
-                {
-                    "status": "submitted",
-                    "child_task_id": child_task.id,
-                    "child_agent_id": child_agent_id,
-                    "agent_name": agent_name,
-                },
-                separators=(",", ":"),
-            ),
-            display_data=build_delegation_display_data(
-                title=agent_name,
-                child_agent_id=child_agent_id,
-                child_task_id=child_task.id,
-                status="running",
-                role=child_agent_profile.role,
-            ),
-        )
-
     def to_definition(self) -> ToolDefinition:
         """构建 delegate_task 工具的注册定义。
 

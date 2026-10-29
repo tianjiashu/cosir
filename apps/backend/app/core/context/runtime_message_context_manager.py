@@ -254,6 +254,14 @@ class RuntimeMessageContextManager:
                     return call
         return None
 
+    def tool_result_metadata(self, tool_call_id: str) -> ToolMessageMetadata | None:
+        """按调用身份取工具结果行的展示 metadata（跨 Run）；没有结果行时返回 ``None``。"""
+        for entry in reversed(self._entries):
+            if entry.message["role"] == "tool" and entry.message["tool_call_id"] == tool_call_id:
+                metadata = entry.metadata
+                return metadata if isinstance(metadata, ToolMessageMetadata) else None
+        return None
+
     def update_tool_result_metadata(
         self, tool_call_id: str, metadata: ToolMessageMetadata
     ) -> ToolMessageMetadata:
@@ -283,6 +291,7 @@ class RuntimeMessageContextManager:
                     "hidden": previous.hidden,
                     "display_data": metadata.display_data or previous.display_data,
                     "team_run_id": metadata.team_run_id or previous.team_run_id,
+                    "deferred": previous.deferred,
                 }
             )
         self.context_store.replace_message(

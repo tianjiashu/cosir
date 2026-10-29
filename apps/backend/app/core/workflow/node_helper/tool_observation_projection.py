@@ -6,6 +6,7 @@ from __future__ import annotations
 from openai.types.chat import ChatCompletionToolMessageParam
 
 from app.config.logging.logger import log
+from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.schemas import ToolObservation
 from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
@@ -13,7 +14,7 @@ from app.core.tool.execute.tool_terminal_projection import (
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models.message_metadata import ToolMessageMetadata
-from app.core.workflow.inbox.task_message import ToolResultBody
+from app.core.workflow.message_queue.task_message import ToolResultBody
 
 
 def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
@@ -34,6 +35,7 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
             display_data=summary.get("display_data"),
             team_run_id=summary.get("team_run_id"),
             awaiting_decision=summary.get("awaiting_decision", False),
+            deferred=summary.get("deferred", False),
         )
         event = terminal_event(
             observation,
@@ -52,6 +54,7 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
                 error=event.error,
                 team_run_id=event.team_run_id,
                 hidden=not visible,
+                deferred=observation.deferred,
             ),
         )
         log.info(
@@ -129,6 +132,42 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
         emit(
             event.model_copy(
                 update={"display_data": written.display_data, "team_run_id": written.team_run_id}
+            )
+        )
+
+
+def settle_deferred_placeholder(tool_call_id: str, *, step_id: str) -> None:
+    """后台结论并入 context 后，把这次调用的后台占位推到 ``completed``；只更新展示状态。
+
+    在并入时而不是 ``deferred_registry.complete`` 时结算：工作可能早于占位行写入就完成，并入发生在
+    之后的模型步，占位行一定已写入。已被撤销或重启改为 ``cancelled`` 的占位照样推到 ``completed``
+    （结论确实到了，投影白名单允许 ``cancelled → completed``）；不是后台占位或已完成的不动。
+    """
+    runtime = _runtime_context()
+    context = _message_context()
+    current = context.tool_result_metadata(tool_call_id)
+    if current is None or not current.deferred or current.status == "completed":
+        return
+    written = context.update_tool_result_metadata(
+        tool_call_id, ToolMessageMetadata(status="completed")
+    )
+    log.info(
+        "deferred_placeholder_completed",
+        extra={
+            "msg": "后台结论已并入，占位只更新展示状态",
+            "data": {"run_id": runtime.run.id, "tool_call_id": tool_call_id},
+        },
+    )
+    if not written.hidden:
+        emit(
+            ToolCallStatusChangedEvent(
+                task_id=runtime.run.task_id,
+                run_id=runtime.run.id,
+                step_id=step_id,
+                tool_call_id=tool_call_id,
+                status="completed",
+                display_data=written.display_data,
+                team_run_id=written.team_run_id,
             )
         )
 

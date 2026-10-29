@@ -43,7 +43,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_MCP,
     TOOL_SKILL,
 )
-from app.core.workflow.inbox.task_message import MODEL_INPUT_BODIES
+from app.core.workflow.message_queue.task_message import MODEL_INPUT_BODIES
 from app.service.configuration.file_store import ConfigurationFileStore
 from app.utils.file_utils import read_text_file
 from app.utils.host_platform import host_platform_name
@@ -164,7 +164,7 @@ class SystemPromptBuilder:
         """输入消息协议：模型可能收到的每种带标签 user 消息及其读法。
 
         标签名与读法由各消息类型声明（``TAG`` / ``PROMPT_GUIDE``，见
-        ``core/workflow/inbox/task_message.py``），这里只写通用前言并遍历
+        ``core/workflow/message_queue/task_message.py``），这里只写通用前言并遍历
         ``MODEL_INPUT_BODIES``，改消息格式不必回来同步。静态列出全部类型而不按 ``allowed_tools``
         裁剪：裁剪要反查哪些工具会产生决定或后台结果，让提示词与工具定义耦合，省下的篇幅不值得。
         """
@@ -276,7 +276,7 @@ class SystemPromptBuilder:
     def _build_mcp_catalog() -> str:
         """列出已启用且连接测试通过的 MCP 服务名；工具详情按需发现。"""
 
-        from app.core.tool.handler.mcp.mcp_client import (
+        from app.service.configuration.mcp_client import (
             MCPConfigurationError,
             enabled_servers,
             read_mcp_configuration,
@@ -305,8 +305,8 @@ class SystemPromptBuilder:
     def _build_skill_catalog() -> str:
         """列出启用 Skill 的名称与描述，正文由 Skill 工具按需加载。"""
 
-        from app.core.tool.handler.skill.skill_catalog import SkillCatalog
-        from app.core.tool.handler.skill.skill_configuration import SkillConfigurationError
+        from app.service.configuration.skill_catalog import SkillCatalog
+        from app.service.configuration.skill_configuration import SkillConfigurationError
 
         try:
             skills = [skill for skill in SkillCatalog().list_skills() if skill.enabled]

@@ -44,7 +44,7 @@ class ContextStore:
         """追加 SDK 正文并返回带稳定身份的 working-copy entry。
 
         有外部 Session 时加入用例事务，不自行提交；否则完成单次存储事务。
-        用户消息沿用 inbox 行 id 作为身份，其余消息没有身份（``None``）。调用方分配 sequence；
+        用户消息沿用 message_queue 行 id 作为身份，其余消息没有身份（``None``）。调用方分配 sequence；
         本层不做工具去重，已有结果的覆盖由 RuntimeMessageContextManager 决定。
         数据库写入失败向上传播。
         """

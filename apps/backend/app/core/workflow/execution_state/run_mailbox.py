@@ -7,7 +7,7 @@ import itertools
 import threading
 from collections.abc import Callable
 
-from app.core.workflow.inbox.task_message import TaskMessage
+from app.core.workflow.message_queue.task_message import TaskMessage
 
 
 class RunMailbox:

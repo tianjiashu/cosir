@@ -23,7 +23,7 @@ from app.core.events import UserInputConsumedEvent
 from app.core.workflow.branch import task_title
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.config.configuration import get_tool_registry
-from app.core.workflow.inbox.task_message import DecisionBody
+from app.core.workflow.message_queue.task_message import BackgroundResultBody, DecisionBody
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import (
@@ -34,8 +34,11 @@ from app.core.workflow.node_helper.common import (
     route_state,
 )
 from app.core.workflow.node_helper.finalize_max_steps import _finalize_max_steps
+from app.core.workflow.node_helper.tool_observation_projection import (
+    settle_deferred_placeholder,
+)
 from app.models.enums.conversation_run_status import RunTransition
-from app.core.workflow.inbox.task_message import (
+from app.core.workflow.message_queue.task_message import (
     TaskMessage,
 )
 from app.service import depends as service_depends
@@ -80,8 +83,14 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     consumed_input = False
     while not rc.mailbox.isEmpty():
         message = rc.mailbox.pop()
-        if await asyncio.to_thread(_write_message, message) and message.kind == "user_input":
+        if not await asyncio.to_thread(_write_message, message):
+            continue
+        if message.kind == "user_input":
             consumed_input = True
+        elif isinstance(message.body, BackgroundResultBody) and message.body.tool_call_id:
+            await asyncio.to_thread(
+                settle_deferred_placeholder, message.body.tool_call_id, step_id=step_id
+            )
     # 用户说了新话才值得重新起标题；副本在主线开始流式改写 working copy 前取好。
     patch: dict[str, object] = {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch()}
     if consumed_input and task_title.should_launch(rc, state):

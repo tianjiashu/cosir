@@ -10,7 +10,7 @@ from app.core.tool.schemas import ToolCall, ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.common import _runtime_context
-from app.core.workflow.inbox.task_message import DecisionBody
+from app.core.workflow.message_queue.task_message import DecisionBody
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 
 

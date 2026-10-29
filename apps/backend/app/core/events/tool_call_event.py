@@ -67,6 +67,8 @@ class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
     error: str | None = None
     display_data: dict[str, object] | None = None
     team_run_id: int | None = Field(default=None, gt=0)
+    # 只在后台占位首次写入时为 True；之后的结算事件不带它，part 上已有的标记保留。
+    deferred: bool = False
 
 
 class ToolCallsSettledEvent(WorkflowEventEnvelope):
