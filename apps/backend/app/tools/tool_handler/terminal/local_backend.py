@@ -7,8 +7,9 @@
 显式 shell（``powershell`` / ``pwsh`` / POSIX shell）用 argv 直接启动（``shell=False``），
 避免命令先经过 cmd.exe 解析。``cmd`` 不能走 argv 形态：命令内部的引号会被
 ``list2cmdline`` 转义成 cmd 无法还原的 ``\"``，含引号命令必然失败——取舍与证据见
-``_resolve_command`` 的 docstring。Windows 树杀用系统自带 ``taskkill /F /T``，Job Object
-由 ``tool_handler_runner`` 子进程入口负责，均不引第三方依赖（不重复造轮子）。
+``_resolve_command`` 的 docstring。Windows 树杀用系统自带 ``taskkill /F /T``，不引第三方依赖
+（不重复造轮子）。命令在后端进程的线程里跑（``execute_terminal`` 是 thread 工具，可转到后台），
+超时与取消都由这里杀进程树，没有外层工具子进程兜底。
 """
 
 import contextlib
@@ -17,13 +18,11 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 
-from app.tools.tool_handler.terminal.execution_backend import ExecutionBackend
 from app.tools.tool_handler.terminal.execution_result import ExecutionResult
-from app.tools.tool_handler.terminal.output_collector import (
-    _OutputCollector,
-)
+from app.tools.tool_handler.terminal.output_collector import _OutputCollector
 
 # POSIX-only 进程组信号在 Windows typeshed 中不存在；用 getattr 在模块级取，
 # 既避免 mypy 在 Windows 上报未定义属性，又保证运行时按平台安全支取（None 即跳过）。
@@ -31,9 +30,12 @@ _KILLPG = getattr(os, "killpg", None)
 _GETPGID = getattr(os, "getpgid", None)
 _SIGKILL = getattr(signal, "SIGKILL", None)
 
+# 等待命令时复查取消的时间片：命令退出会立即返回，时间片只决定取消的响应延迟。
+_CANCEL_CHECK_SECONDS = 0.25
 
-class LocalExecutionBackend(ExecutionBackend):
-    """宿主机 shell 执行后端（v1 唯一实现）。"""
+
+class LocalExecutionBackend:
+    """宿主机 shell 执行后端。"""
 
     def execute(
         self,
@@ -42,6 +44,7 @@ class LocalExecutionBackend(ExecutionBackend):
         timeout: float,
         output_sink: Callable[[str], None] | None = None,
         shell: str = "auto",
+        is_cancelled: Callable[[], bool] | None = None,
     ) -> ExecutionResult:
         """在宿主机同步执行一条命令并回收完整输出。
 
@@ -51,19 +54,21 @@ class LocalExecutionBackend(ExecutionBackend):
             timeout: 命令级超时秒数。
             output_sink: 可选实时输出回调；传入时读取线程按字节块回传解码后的原始片段，
                 包括 ANSI 控制序列与敏感文本，不应用模型输出预算或展示字符上限。
-                回调异常不影响命令执行与最终输出。
+                回调不得抛异常（``TerminalOutputStream.emit`` 自行吸收投递故障）。
             shell: shell 名称；``auto`` 使用现有宿主默认 shell，显式值直接启动对应
                 shell，避免嵌套 shell 的二次解析。
+            is_cancelled: 可选取消判定；命令运行期间按时间片复查，命中即强杀进程树。命令在后端
+                进程的线程里跑（可能已转到后台），取消只能由这里落实，不能依赖调用方杀进程。
 
         返回:
-            ``ExecutionResult``；超时返回 ``timed_out=True``、``exit_code=-1`` 且保留
-            已收集的部分输出。
+            ``ExecutionResult``；超时或取消返回 ``exit_code=-1`` 与对应标记，并保留已收集的
+            部分输出。
 
         异常:
             不向上抛出；启动失败转换为 ``exit_code=-1`` 的错误结果。
 
         副作用:
-            派生子进程执行命令；超时经 taskkill(POSIX killpg) 强杀进程树；
+            派生子进程执行命令；超时或取消经 taskkill(POSIX killpg) 强杀进程树；
             传入 ``output_sink`` 时在读取线程中按可用输出块回调它。
         """
         try:
@@ -90,33 +95,44 @@ class LocalExecutionBackend(ExecutionBackend):
         reader = threading.Thread(target=collector.run, daemon=True)
         reader.start()
 
-        timed_out = False
-        try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
+        timed_out = cancelled = False
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            try:
+                process.wait(timeout=max(min(remaining, _CANCEL_CHECK_SECONDS), 0))
+                break
+            except subprocess.TimeoutExpired:
+                if is_cancelled is not None and is_cancelled():
+                    cancelled = True
+                elif remaining <= 0:
+                    timed_out = True
+                else:
+                    continue
             self._kill_tree(process)
             with contextlib.suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=5)
+            break
 
         reader.join(timeout=5)
         if reader.is_alive():
-            # 命令进程虽已结束，遗留子进程仍可能持有 stdout。封存当前一致快照并关闭 sink，
-            # 避免读取线程在工具结果/跨进程完成标记之后继续写入。
+            # 命令进程虽已结束，遗留子进程仍可能持有 stdout。封存当前快照，
+            # 避免读取线程在工具结果返回之后继续写入或旁路。
             collector.seal()
         raw = collector.get()
-        exit_code = -1 if timed_out else (process.returncode or 0)
+        exit_code = -1 if timed_out or cancelled else (process.returncode or 0)
         return ExecutionResult(
             output=raw,
             exit_code=exit_code,
             timed_out=timed_out,
+            cancelled=cancelled,
         )
 
     def _kill_tree(self, process: subprocess.Popen) -> None:
-        """超时强杀整棵进程树（内层命令级超时兜底）。
+        """超时或取消时强杀整棵进程树。
 
         参数:
-            process: 已超时的 ``subprocess.Popen``。
+            process: 已超时或被取消的 ``subprocess.Popen``。
 
         返回:
             无。

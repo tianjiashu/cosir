@@ -33,8 +33,8 @@ class _IncrementalOutputDecoder:
         异常:
             无；编码失败会回退，不支持的字节以替换字符呈现。
 
-            副作用:
-                更新当前输出流的增量解码器状态。
+        副作用:
+            更新当前输出流的增量解码器状态。
         """
         if self._decoder is not None:
             return self._decoder.decode(chunk, final=final)
@@ -78,10 +78,9 @@ class _IncrementalOutputDecoder:
 class _OutputCollector:
     """单读取线程 drain 合并流，保留完整已读取输出并旁路回传原始增量。
 
-    终端 UI 需要把控制字符交给终端模拟器解释，因此这里不能做 head/tail 截断、预算裁剪
-    或插入截断标记。``stream_budget`` 也不再存在；模型上下文的长度控制由统一的
-    ``ToolOutputBudget`` 在 handler 返回后单独负责。若读取线程因进程树清理而被封存，
-    只冻结当前已读取快照，不伪造额外文本或截断标记。
+    终端 UI 需要把控制字符交给终端模拟器解释，因此这里不做 head/tail 截断、预算裁剪或
+    插入截断标记；模型上下文的长度控制由 ``ToolOutputBudget`` 在 handler 返回后负责。
+    ``sink`` 的契约是不抛异常（实时通道自行吸收投递故障），这里不包裹。
     """
 
     def __init__(
@@ -89,120 +88,43 @@ class _OutputCollector:
         stream: Any,
         sink: Callable[[str], None] | None = None,
     ) -> None:
-        """构造输出采集器。
-
-        参数:
-            stream: 子进程合并输出流（``Popen.stdout``），按固定大小字节块读取。
-            sink: 可选实时片段回调。回调失败只关闭实时旁路，不影响最终输出采集。
-
-        返回:
-            无。
-
-        异常:
-            无。
-
-        副作用:
-            保存输出流和 sink 引用，初始化完整输出缓冲；不启动线程或读取流。
-        """
+        """``stream`` 为子进程合并输出流（``Popen.stdout``）；构造时不读流、不起线程。"""
         self._stream = stream
         self._chunks: list[str] = []
         self._sink = sink
-        self._stream_closed = False
         self._sealed = False
         self._state_lock = RLock()
         self._decoder = _IncrementalOutputDecoder()
 
-    def _emit(self, text: str) -> None:
-        """原样发送一段运行期输出；旁路失败时关闭 sink。
-
-        参数:
-            text: 已解码的输出文本块，保留 ANSI 控制序列和敏感文本。
-
-        返回:
-            无。
-
-        异常:
-            不向上抛出；sink 抛错时关闭实时通道，保留最终输出采集。
-
-        副作用:
-            可能调用 sink；sink 失败后关闭实时旁路。
-        """
-        if not text:
-            return
-        with self._state_lock:
-            sink = self._stream_sink_locked()
-            if sink is None:
-                return
-            try:
-                sink(text)
-            except Exception:
-                self._stream_closed = True
-
-    def _stream_sink_locked(self) -> Callable[[str], None] | None:
-        """Return the live callback while it is open and ``_state_lock`` is held."""
-        if self._stream_closed:
-            return None
-        return self._sink
-
     def seal(self) -> None:
-        """Freeze collected output after the bounded reader join expires.
+        """读取线程 join 超时后冻结已读取快照。
 
-        The reader may still be blocked on a descendant-held pipe. Sealing prevents later
-        mutations and sink callbacks before the handler returns, so the process bridge can safely
-        place its completion marker last. It does not add a synthetic marker to the output.
+        遗留子进程仍可能持有管道、读取线程还会醒来；封存后不再收集也不再旁路，保证返回给
+        调用方的结果与实时视图都停在同一处，且不追加任何伪造的截断标记。
         """
         with self._state_lock:
             self._sealed = True
-            self._stream_closed = True
 
-    def _store(self, text: str) -> None:
-        """把解码文本加入完整最终输出缓存。"""
+    def _accept(self, text: str) -> None:
+        """把解码文本加入完整缓存并旁路发送；封存后丢弃。"""
         if not text:
             return
         with self._state_lock:
             if self._sealed:
                 return
             self._chunks.append(text)
+            if self._sink is not None:
+                self._sink(text)
 
     def run(self) -> None:
-        """以固定大小字节块读取至流关闭，填充完整缓存并旁路回传运行期片段。
-
-        参数:
-            无。
-
-        返回:
-            无。
-
-        异常:
-            不处理底层流读取异常；sink 异常由 ``_emit`` 吸收，不影响最终收集。
-
-        副作用:
-            持续消费 ``stream``，更新增量解码器和完整输出缓冲，并可能调用 sink。
-        """
+        """以固定大小字节块读取至流关闭；底层读取异常不处理，由读取线程终止。"""
         read_chunk = getattr(self._stream, "read1", None) or self._stream.read
         while raw_chunk := read_chunk(4096):
-            text = self._decoder.decode(raw_chunk)
-            self._store(text)
-            self._emit(text)
-        final_text = self._decoder.decode(b"", final=True)
-        self._store(final_text)
-        self._emit(final_text)
+            self._accept(self._decoder.decode(raw_chunk))
+        self._accept(self._decoder.decode(b"", final=True))
 
     def get(self) -> str:
-        """返回已读取的完整最终输出。
-
-        参数:
-            无。
-
-        返回:
-            所有已成功读取并解码的文本，原样拼接返回。
-
-        异常:
-            无。
-
-        副作用:
-            无；不修改缓冲内容。
-        """
+        """返回已读取（封存时为封存那一刻）的完整输出。"""
         with self._state_lock:
             return "".join(self._chunks)
 
