@@ -18,8 +18,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_MCP
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.handler.mcp.mcp_args import MCPArgs
-from app.core.tool.handler.mcp.mcp_client import (
+from app.service.configuration.mcp_client import (
     MCPConfigurationError,
     MCPToolCallError,
     MCPToolNotFoundError,
@@ -28,6 +27,7 @@ from app.core.tool.handler.mcp.mcp_client import (
     list_server_tools,
     read_mcp_configuration,
 )
+from app.tools.tool_models.mcp_args import MCPArgs
 
 
 class MCPTool(HandlerBase):

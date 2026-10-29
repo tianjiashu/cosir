@@ -1,7 +1,9 @@
-"""``terminal_list``：发现本 Task 的活跃会话（含用户新建的）与宿主可用 shell。"""
+"""``terminal_list``：本 Task 的会话（含用户新建的、最近结束的）及其当前状态，与宿主可用 shell。"""
 
 from typing import ClassVar
 
+from app.core.tool.results.tool_cancelled import tool_cancelled
+from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_TERMINAL_LIST,
     ToolDefinition,
@@ -14,24 +16,23 @@ from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.service import depends as service_depends
 from app.tools.display.terminal_display import build_terminal_session_list_display_data
 from app.tools.terminal_runtime.shell_resolver import ShellResolver
-from app.tools.tool_handler.terminal_session.common import (
-    cancelled,
-    cancelled_observation,
-    metadata_observation,
-)
+from app.tools.tool_handler.terminal_session.common import cancelled
 from app.tools.tool_models import TerminalListArgs
 
 
 class TerminalListTool(HandlerBase):
-    """从运行时服务发现跨 Run 保留的会话，避免依赖历史消息猜测存活状态。"""
+    """从运行时服务发现跨 Run 保留的会话，避免依赖历史消息猜测存活状态。
+
+    结果是纯文本而非 start / close 那样的 JSON 元数据：每个会话一行，状态措辞与 read / write
+    的 header 同源（``observation_render.session_state_parts``），只保留复用与输入决策要用的事实。
+    """
 
     name = TOOL_TERMINAL_LIST
     description = (
-        "List this task's live terminal sessions (including ones the user opened) and the shells "
-        "installed on this host, with whether each supports shell integration (needed for "
-        "wait until=command_returned and command exit codes/output ranges). Check this before "
-        "terminal_start and when resuming work in a new run. Sessions do not survive a backend "
-        "restart. input_holder shows who is typing; handoff shows an active handoff to the user."
+        "List this task's terminal sessions, one line each: who created it, what it is doing "
+        "now (at prompt, running a command, full-screen app, user typing, ended), its cwd and "
+        "last command result. Also lists the installed shells and which lack shell integration. "
+        "Call it before terminal_start to reuse a session, and when picking up work in a new run."
     )
     args_model = TerminalListArgs
     timeout_seconds: ClassVar[float] = 10.0
@@ -39,14 +40,14 @@ class TerminalListTool(HandlerBase):
 
     def execute(self, execution_context: ToolExecutionContext) -> ToolObservation:
         if cancelled(execution_context):
-            return cancelled_observation(self.name)
+            return tool_cancelled(self.name)
         service = service_depends.get_terminal_session_service()
-        sessions = service.list_sessions(task_id=execution_context.task_id)
-        return metadata_observation(
-            self.name,
-            {"sessions": sessions, "available_shells": ShellResolver.available()},
-            summary="Task terminal sessions.",
-            display_payload=build_terminal_session_list_display_data(len(sessions)),
+        sessions = service.summarize_sessions(task_id=execution_context.task_id)
+        lines = sessions or ["no terminal sessions"]
+        return tool_success(
+            tool_name=self.name,
+            content="\n".join([*lines, _shells_line()]),
+            display_data=build_terminal_session_list_display_data(len(sessions)),
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -69,3 +70,20 @@ class TerminalListTool(HandlerBase):
                 show_result=False,
             ),
         )
+
+
+def _shells_line() -> str:
+    """``shells: zsh (default), bash, fish (no integration)``：只标注默认项与缺集成的例外。"""
+
+    entries = []
+    for shell in ShellResolver.available():
+        notes = [
+            note
+            for note, applies in (
+                ("default", shell["isDefault"]),
+                ("no integration", not shell["integrationSupported"]),
+            )
+            if applies
+        ]
+        entries.append(f"{shell['kind']} ({', '.join(notes)})" if notes else str(shell["kind"]))
+    return "shells: " + (", ".join(entries) or "none detected")

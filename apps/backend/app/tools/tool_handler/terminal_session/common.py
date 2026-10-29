@@ -1,14 +1,12 @@
-"""交互终端工具族的共享辅助：取消检查、领域错误与成功结果归一化为 ``ToolObservation``。
+"""交互终端工具族的共享辅助：取消检查、领域错误与 write / read 观察归一化为 ``ToolObservation``。
 
 展示字段投影由 ``tools/display/terminal_display.py`` 负责；本模块不持有会话状态。
 """
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 
-from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
@@ -34,12 +32,6 @@ def cancelled(context: ToolExecutionContext) -> bool:
     return cancellation_registry.is_cancelled(context.task_id)
 
 
-def cancelled_observation(tool_name: str) -> ToolObservation:
-    """用户取消与执行失败是两种语义，不复用错误观察。"""
-
-    return tool_cancelled(tool_name)
-
-
 def service_error_observation(tool_name: str, exc: TerminalSessionError) -> ToolObservation:
     """把终端领域错误转换为模型可消费的错误观察，并按 retryable 给出重试建议。"""
 
@@ -52,23 +44,6 @@ def service_error_observation(tool_name: str, exc: TerminalSessionError) -> Tool
             else "Fix the session or arguments before retrying."
         ),
         status_hint=_STATUS_HINTS.get(type(exc), "终端失败"),
-    )
-
-
-def metadata_observation(
-    tool_name: str,
-    payload: Mapping[str, object],
-    *,
-    summary: str,
-    display_payload: dict[str, object],
-) -> ToolObservation:
-    """会话元数据（start / list / close）：一行摘要 + 紧凑 JSON。"""
-
-    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return tool_success(
-        tool_name=tool_name,
-        content=f"{summary}\n{encoded}",
-        display_data=display_payload,
     )
 
 

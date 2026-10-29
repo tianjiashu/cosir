@@ -42,6 +42,8 @@ from app.tools.tool_handler.terminal import create_backend
 from app.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.execute_terminal_args import (
+    DEFAULT_COMMAND_TIMEOUT_S,
+    MAX_COMMAND_TIMEOUT_S,
     ExecuteTerminalShell,
     MacExecuteTerminalShell,
     WindowsExecuteTerminalShell,
@@ -49,15 +51,15 @@ from app.tools.tool_models.execute_terminal_args import (
     resolve_execute_terminal_args_model,
 )
 
-# 平台无关的工具描述：命令执行语义（前台、非交互、输出合并、退出码、工作目录边界、命令
-# 策略）在此说明，平台 shell 细节一律由参数模型的 ``shell`` 描述承载，避免同一契约写两遍。
+# 平台无关的工具描述：只写选用与调用决策需要的执行语义（进程不保留状态、无 stdin、时长上限、
+# 命令策略）；平台 shell、命令语法与 workdir 规则由参数模型各字段承载，不在此复述。不点名
+# terminal_* 工具：子 Agent 与 Team 节点只有本工具，交互终端只开放给侧栏主 Agent。
 _DESCRIPTION = (
-    "Execute one foreground, non-interactive command locally in the current workspace. There "
-    "is no interactive stdin, so commands that wait for input or open a pager time out. stdout "
-    "and stderr are merged; the result carries the exit code and bounded output. The working "
-    "directory defaults to the workspace root and must stay inside it, and some destructive "
-    "commands are blocked by the current command policy. Read the shell parameter description "
-    "to pick a shell available on this host and match the command syntax to it."
+    "Run one non-interactive command in a fresh shell process and return its exit code with "
+    "merged stdout/stderr. Nothing carries over between calls (cd, exported variables, shell "
+    "state), so chain dependent steps in one command. There is no stdin: prompts and pagers "
+    "hang until the timeout. Not suited to servers, watchers, or anything running longer than "
+    f"{MAX_COMMAND_TIMEOUT_S:g}s. Some destructive commands are blocked by policy."
 )
 
 
@@ -87,9 +89,7 @@ class ExecuteTerminalTool(HandlerBase):
 
     name = TOOL_EXECUTE_TERMINAL
     description = _DESCRIPTION
-    timeout_seconds = 120.0  # 外层 ToolHandlerRunner 硬保险
-    default_command_timeout = 60.0  # 内层命令级缺省
-    max_command_timeout = 110.0  # 内层钳制上限（< 外层 120 留 10s 收尾）
+    timeout_seconds = 120.0  # 外层 ToolHandlerRunner 硬保险；命令级缺省与钳制见参数模型常量
     group = TOOL_GROUP_TERMINAL
 
 
@@ -251,8 +251,8 @@ class ExecuteTerminalTool(HandlerBase):
                 cmd、PowerShell 或 POSIX shell。该值已由当前平台的参数模型
                 （``WindowsExecuteTerminalArgs`` / ``MacExecuteTerminalArgs``）校验，此处
                 再按本机实际检测结果复核。
-            timeout: 命令级超时秒数；缺省 ``default_command_timeout``，钳制到
-                ``max_command_timeout``。
+            timeout: 命令级超时秒数；缺省 ``DEFAULT_COMMAND_TIMEOUT_S``，钳制到
+                ``MAX_COMMAND_TIMEOUT_S``。
             workdir: 工作目录；缺省 ``execution_context.workspace_root``；相对路径相对
                 该根解析；绝对路径直接使用。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由执行链
@@ -324,7 +324,7 @@ class ExecuteTerminalTool(HandlerBase):
         if err:
             return self._workdir_error_observation(err)
 
-        effective = min(timeout or self.default_command_timeout, self.max_command_timeout)
+        effective = min(timeout or DEFAULT_COMMAND_TIMEOUT_S, MAX_COMMAND_TIMEOUT_S)
         result = create_backend("local").execute(
             command, str(cwd), effective, shell=shell, output_sink=output_sink
         )
@@ -347,7 +347,7 @@ class ExecuteTerminalTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"{content}. "
-                f"Use a larger timeout (up to {self.max_command_timeout:.0f}s) or split "
+                f"Use a larger timeout (up to {MAX_COMMAND_TIMEOUT_S:g}s) or split "
                 "the command into smaller steps.",
                 status_hint="命令超时",
             )

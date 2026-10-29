@@ -2,6 +2,8 @@
 
 from typing import ClassVar
 
+from app.core.tool.results.tool_cancelled import tool_cancelled
+from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_TERMINAL_CLOSE,
     ToolDefinition,
@@ -15,8 +17,6 @@ from app.service import depends as service_depends
 from app.tools.display.terminal_display import build_terminal_session_display_data
 from app.tools.tool_handler.terminal_session.common import (
     cancelled,
-    cancelled_observation,
-    metadata_observation,
     with_terminal_errors,
 )
 from app.tools.tool_models import TerminalCloseArgs
@@ -27,8 +27,8 @@ class TerminalCloseTool(HandlerBase):
 
     name = TOOL_TERMINAL_CLOSE
     description = (
-        "Close a terminal session and its shell process tree. This also ends anything the user "
-        "is running in it; leave sessions the user opened alone unless asked."
+        "Close a session and kill its process tree, including anything the user is running in "
+        "it. Leave sessions the user opened alone unless asked."
     )
     args_model = TerminalCloseArgs
     timeout_seconds: ClassVar[float] = 15.0
@@ -36,17 +36,16 @@ class TerminalCloseTool(HandlerBase):
 
     def execute(self, session_id: str, execution_context: ToolExecutionContext) -> ToolObservation:
         if cancelled(execution_context):
-            return cancelled_observation(self.name)
+            return tool_cancelled(self.name)
 
         def action() -> ToolObservation:
-            payload = service_depends.get_terminal_session_service().close(
+            session = service_depends.get_terminal_session_service().close(
                 session_id, task_id=execution_context.task_id
             )
-            return metadata_observation(
-                self.name,
-                payload,
-                summary="Terminal session closed.",
-                display_payload=build_terminal_session_display_data(payload),
+            return tool_success(
+                tool_name=self.name,
+                content=str(session["summary"]),
+                display_data=build_terminal_session_display_data(session),
             )
 
         return with_terminal_errors(self.name, action)
