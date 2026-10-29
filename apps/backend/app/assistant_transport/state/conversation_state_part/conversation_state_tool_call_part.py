@@ -28,6 +28,8 @@ class ConversationStateToolCallPart(TypedDict):
     display_data: NotRequired[dict[str, object] | None]
     # 指向持久化 TeamRun，失败态也能读取节点进度与诊断。
     team_run_id: NotRequired[int]
+    # 延迟结果的后台占位：``pending`` 即「后台执行中」，投影自占位行 metadata。
+    deferred: NotRequired[bool]
     isError: NotRequired[bool]
     approvalRequestId: NotRequired[None]
     # Runtime delegation locator. It is not rendered as text by the frontend.

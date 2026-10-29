@@ -7,7 +7,7 @@ from typing_extensions import TypedDict
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_part import ConversationStatePart
 from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
-from app.core.workflow.inbox.task_message import Delivery
+from app.core.workflow.message_queue.task_message import Delivery
 
 
 class ConversationStateOutcome(TypedDict):

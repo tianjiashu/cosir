@@ -15,7 +15,7 @@ class ConversationRunLaunch(TypedDict):
 
     modelConfigId: int | None
     reasoningEffort: str | None
-    banTools: list[str]
+    disabledToolGroups: list[str]
 
 
 def run_launch_snapshot(
@@ -24,7 +24,7 @@ def run_launch_snapshot(
     return ConversationRunLaunch(
         modelConfigId=model_config_id,
         reasoningEffort=options.reasoning_effort,
-        banTools=list(options.ban_tools),
+        disabledToolGroups=list(options.disabled_tool_groups),
     )
 
 

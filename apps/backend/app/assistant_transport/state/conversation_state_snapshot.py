@@ -5,9 +5,18 @@ from typing import NotRequired, cast
 from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_state_activity import ConversationStateActivity
+from app.assistant_transport.state.conversation_state_background_task import (
+    ConversationBackgroundTask,
+    validate_background_tasks,
+    validate_foreground_waits,
+)
 from app.assistant_transport.state.conversation_state_message import (
     ConversationQueuedMessage,
     ConversationStateMessage,
+)
+from app.assistant_transport.state.conversation_state_terminal_session import (
+    ConversationTerminalSession,
+    validate_terminal_sessions,
 )
 from app.config.constant import Constant
 from app.models.enums.conversation_run_status import (
@@ -15,7 +24,14 @@ from app.models.enums.conversation_run_status import (
     ConversationRunStatus,
 )
 
-_SNAPSHOT_KEYS = {"title", "messages", "activity"}
+_SNAPSHOT_KEYS = {
+    "title",
+    "messages",
+    "activity",
+    "terminal_sessions",
+    "background_tasks",
+    "foreground_waits",
+}
 _ACTIVITY_KEYS = {
     "runId",
     "status",
@@ -30,7 +46,7 @@ _OUTCOME_KEYS = {"status", "endReason", "error", "usage", "contextWindowTotal"}
 _QUEUED_MESSAGE_KEYS = {"id", "role", "parts", "delivery"}
 _DELIVERIES = {"immediate", "next_run"}
 _RUN_STATUSES = {status.value for status in ConversationRunStatus}
-_LAUNCH_KEYS = {"modelConfigId", "reasoningEffort", "banTools"}
+_LAUNCH_KEYS = {"modelConfigId", "reasoningEffort", "disabledToolGroups"}
 _TEXT_PART_KEYS = {"type", "text", "status"}
 _IMAGE_PART_KEYS = {"type", "image"}
 _FILE_PART_KEYS = {"type", "file", "name", "contentType"}
@@ -45,6 +61,7 @@ _TOOL_PART_KEYS = {
     "presentation",
     "display_data",
     "team_run_id",
+    "background",
     "isError",
     "approvalRequestId",
     "child_task_id",
@@ -67,26 +84,42 @@ class ConversationStateSnapshot(TypedDict):
     对话界面只看 Task：``title`` 投影自 ``tasks.title``（事实源在 Task 表，snapshot 只是让打开中的
     页面实时收到标题变化），``messages`` 按 context 序号扁平排列，``activity`` 是最新 Run 的摘要。
     Run 分组不进 wire，历史回复的结局由消息上的 ``outcome`` 承载。命令被拒不进 snapshot，由命令的
-    HTTP 响应同步返回。
+    HTTP 响应同步返回。``terminal_sessions`` 是本 Task 终端会话的进程内事实（不持久化），
+    投影规则见 ``ConversationTaskStateService.refresh_terminal_sessions``。
+    ``background_tasks``（后台工作看板）与 ``foreground_waits``（可转到后台的前台等待）同样是进程内
+    事实，见 ``refresh_deferred_results``。
     """
 
     queued_messages: NotRequired[list[ConversationQueuedMessage]]
     title: str
     messages: list[ConversationStateMessage]
     activity: ConversationStateActivity | None
+    terminal_sessions: list[ConversationTerminalSession]
+    background_tasks: list[ConversationBackgroundTask]
+    foreground_waits: list[str]
 
 
 def empty_snapshot(title: str = "新对话") -> ConversationStateSnapshot:
     """返回新 Task 的空 snapshot 基线。"""
 
-    return {"title": title, "messages": [], "activity": None}
+    return {
+        "title": title,
+        "messages": [],
+        "activity": None,
+        "terminal_sessions": [],
+        "background_tasks": [],
+        "foreground_waits": [],
+    }
 
 
 def validate_snapshot(state: ConversationStateSnapshot) -> None:
     """严格校验 Task snapshot 的结构与数值边界。"""
 
     if not isinstance(state, dict) or set(state) - {"queued_messages"} != _SNAPSHOT_KEYS:
-        raise ValueError("snapshot must contain title, messages and activity")
+        raise ValueError(
+            "snapshot must contain title, messages, activity, terminal_sessions, "
+            "background_tasks and foreground_waits"
+        )
     if not isinstance(state["title"], str) or not state["title"].strip():
         raise ValueError("snapshot title must be a non-empty string")
     if not isinstance(state["messages"], list):
@@ -105,6 +138,9 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
         _validate_message(message, seen_ids)
     if state["activity"] is not None:
         _validate_activity(state["activity"])
+    validate_terminal_sessions(state["terminal_sessions"])
+    validate_background_tasks(state["background_tasks"])
+    validate_foreground_waits(state["foreground_waits"])
 
 
 def _validate_non_negative_int(value: object, label: str) -> None:
@@ -164,10 +200,10 @@ def _validate_launch(launch: object) -> None:
         raise ValueError("snapshot launch modelConfigId must be an integer or null")
     if launch["reasoningEffort"] is not None and not isinstance(launch["reasoningEffort"], str):
         raise ValueError("snapshot launch reasoningEffort must be a string or null")
-    if not isinstance(launch["banTools"], list) or not all(
-        isinstance(name, str) for name in launch["banTools"]
+    if not isinstance(launch["disabledToolGroups"], list) or not all(
+        isinstance(name, str) for name in launch["disabledToolGroups"]
     ):
-        raise ValueError("snapshot launch banTools must be an array of strings")
+        raise ValueError("snapshot launch disabledToolGroups must be an array of strings")
 
 
 def _validate_message_body(message: object, seen_message_ids: set[str], keys: set[str]) -> None:
@@ -276,6 +312,8 @@ def _validate_part(part: object) -> None:
             or part["team_run_id"] < 1
         ):
             raise ValueError("snapshot team_run_id must be a positive integer")
+        if "background" in part and part["background"] is not True:
+            raise ValueError("snapshot tool background must be true when present")
         if part.get("child_task_id") is not None and (
             not isinstance(part.get("child_task_id"), int)
             or isinstance(part.get("child_task_id"), bool)
