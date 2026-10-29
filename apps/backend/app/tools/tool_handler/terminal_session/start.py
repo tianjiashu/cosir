@@ -38,13 +38,22 @@ class TerminalStartTool(HandlerBase):
     """
 
     name = TOOL_TERMINAL_START
+    # 中文译文：像读文本文件一样读会话输出：逻辑行（已合并软换行）以「<行号>│文本」给出，行号
+    # 是绝对编号、永不复用。「live from」之后的行属于当前屏幕，仍可能被重绘；之前的行已定稿。
+    # 全屏程序（vim、less、top）运行期间，不带 start_line 的读取改为以「s<行>│文本」返回
+    # 整屏；行号仍指向 shell 输出。长输出用 pattern 搜索而不是翻页；需要等条件成立时用 wait
+    # 阻塞，不要轮询。不带 wait 重复读取且内容未变时，只返回一行提示。
     description = (
-        "Start a persistent interactive terminal owned by this task, for dev servers, watchers, "
-        "REPLs, prompts, and full-screen apps. The user sees the same terminal and can type into "
-        "it. It lives across runs until terminal_close, shell exit, task deletion, or backend "
-        "restart; reuse sessions from terminal_list instead of starting duplicates. For one-off "
-        "non-interactive commands use execute_terminal."
+        "Read session output like a text file: logical lines (soft wraps merged) as "
+        "'<line>│text', with absolute line numbers that are never reused. Lines from "
+        "'live from' onward are the current screen and may still be redrawn; earlier lines are "
+        "final. While a full-screen app (vim, less, top) is open, a read without start_line "
+        "returns its screen as 's<row>│text' rows instead; line numbers still address the shell "
+        "output. Search long output with pattern instead of paging, and use wait to block for a "
+        "condition instead of polling. An unchanged repeat read without wait returns a single "
+        "hint line."
     )
+
     args_model = TerminalStartArgs
     timeout_seconds: ClassVar[float] = 15.0
     group = TOOL_GROUP_TERMINAL_SESSION

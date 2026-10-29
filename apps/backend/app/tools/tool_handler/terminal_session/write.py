@@ -24,12 +24,25 @@ from app.tools.tool_models import TerminalWriteArgs
 
 class TerminalWriteTool(HandlerBase):
     name = TOOL_TERMINAL_WRITE
+    # 中文译文：向会话发送一次输入动作，并按 terminal_read 的格式返回这次输入之后出现的行。
+    # 动作四选一：整行（自动带回车）、不带回车的文本（vim 的 :wq、less 里的 q、单键提示）、
+    # 按键序列（方向键、Tab、Enter 等）、信号（interrupt 相当于 Ctrl-C、suspend 相当于 Ctrl-Z、
+    # eof 相当于空行上的 Ctrl-D）——要打断正在运行的程序就发信号。多行脚本仍用
+    # execute_terminal。用户正在打字时会被拒绝（先短暂等待），前台是用户启动的命令时直接拒绝：
+    # 等用户停手，或换一个会话。需要用户亲自输入时（口令、不该由你回答的确认），用
+    # terminal_handoff。
     description = (
-        "Send input to a session and return the lines that appeared after it, in terminal_read's "
-        "format. Submit one line per call; for multi-line scripts use execute_terminal. When the "
-        "user must type instead (passwords, confirmations you should not answer), use "
-        "terminal_handoff."
+        "Send one input action to a session and return the lines that appeared after it, in "
+        "terminal_read's format. The action is one of: a line (sent with Enter), text without "
+        "Enter (TUI commands such as ':wq' in vim or 'q' in less, single-key prompts), a key "
+        "sequence (arrows, Tab, Enter, ...), or a signal (interrupt like Ctrl-C, suspend like "
+        "Ctrl-Z, eof like Ctrl-D) to stop a program that is running. For multi-line scripts use "
+        "execute_terminal. A write is refused while the user is typing (after a short wait) or "
+        "while the user's own command runs in the foreground; wait for them or use another "
+        "session. When the user must type instead (passwords, confirmations you should not "
+        "answer), use terminal_handoff."
     )
+
     args_model = TerminalWriteArgs
     timeout_seconds: ClassVar[float] = 55.0
     group = TOOL_GROUP_TERMINAL_SESSION

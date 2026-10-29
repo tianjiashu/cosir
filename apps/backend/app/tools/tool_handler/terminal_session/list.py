@@ -28,6 +28,9 @@ class TerminalListTool(HandlerBase):
     """
 
     name = TOOL_TERMINAL_LIST
+    # 中文译文：列出本 Task 的终端会话，一行一个：谁创建的、当前在做什么（停在提示符、正在
+    # 跑命令、全屏程序、用户正在输入、已结束）、cwd 与最近一次命令结果。同时列出已安装的
+    # shell，以及哪些缺少 shell 集成。新建会话前先调它复用，接手新 Run 的工作时也先看一眼。
     description = (
         "List this task's terminal sessions, one line each: who created it, what it is doing "
         "now (at prompt, running a command, full-screen app, user typing, ended), its cwd and "

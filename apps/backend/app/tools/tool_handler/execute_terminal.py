@@ -65,13 +65,25 @@ from app.tools.tool_models.execute_terminal_args import (
 # 平台无关的工具描述：只写选用与调用决策需要的执行语义（进程不保留状态、无 stdin、前后台与时长、
 # 命令策略）；平台 shell、命令语法与 workdir 规则由参数模型各字段承载，不在此复述。不点名
 # terminal_* 工具：子 Agent 与 Team 节点只有本工具，交互终端只开放给侧栏主 Agent。
+
+
+# 中文译文：在一个全新的 shell 进程里执行一条非交互命令，返回退出码与合并后的 stdout/stderr。
+# 两次调用之间不保留任何状态（cd、导出的变量、shell 状态），有依赖的步骤要串进同一条命令。
+# 没有 stdin：等待输入或分页器的命令会一直挂到超时。长构建、测试套件等长任务用它：把 timeout
+# 设到足够覆盖，并用 background=true 在此期间继续做别的事。转后台运行的命令（background=true，
+# 或超过前台等待上限）在结束时会把结果作为消息回投，因此不必轮询。不适合永不退出的服务或
+# watcher：它们不会结束，所以收不到结果消息，进程树会在 timeout 到点时被杀。部分破坏性命令
+# 会被策略拦截。
 _DESCRIPTION = (
     "Run one non-interactive command in a fresh shell process and return its exit code with "
     "merged stdout/stderr. Nothing carries over between calls (cd, exported variables, shell "
     "state), so chain dependent steps in one command. There is no stdin: prompts and pagers "
     "hang until the timeout. Use it for long builds, test suites, and other long tasks: set "
-    "timeout to cover them and background=true to keep working meanwhile. Not suited to "
-    "servers or watchers that never exit. Some destructive commands are blocked by policy."
+    "timeout to cover them and background=true to keep working meanwhile. A command running in "
+    "the background (background=true, or past the foreground wait limit) reports its result "
+    "back as a message when it finishes, so there is no need to poll. Not suited to servers or "
+    "watchers that never exit: they never finish, so no result message arrives and the "
+    "process tree is killed at the timeout. Some destructive commands are blocked by policy."
 )
 
 # 取消后的模型文案：命令被强杀，结果未知且可能留下部分副作用。

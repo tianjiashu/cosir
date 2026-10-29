@@ -26,6 +26,8 @@ class TerminalCloseTool(HandlerBase):
     """关闭不可逆：会终止该会话中仍在运行的进程（包括用户在其中启动的）。"""
 
     name = TOOL_TERMINAL_CLOSE
+    # 中文译文：关闭会话并杀掉它的整棵进程树，包括用户正在其中运行的东西。除非用户要求，
+    # 否则不要动用户自己打开的会话。
     description = (
         "Close a session and kill its process tree, including anything the user is running in "
         "it. Leave sessions the user opened alone unless asked."

@@ -1,7 +1,7 @@
 """交互终端 Agent 工具（start / write / read / handoff / list / close）与注册定义构建入口。
 
-所有 handler 复用进程内的终端 session service；用户经 HTTP / WS 使用同一批会话，双方以输入租约
-互斥。``terminal_signal`` 已并入 ``terminal_write`` 的 ``signal`` 输入类型；交接是独立的 HITL 工具
+所有 handler 复用进程内的终端 session service；用户经 HTTP / WS 使用同一批会话，输入仲裁
+只约束 Agent（见 ``TerminalSessionRuntime``）。``terminal_signal`` 已并入 ``terminal_write`` 的 ``signal`` 输入类型；交接是独立的 HITL 工具
 ``terminal_handoff``（``user_decision`` 只能按工具声明，不能只对 write 的某种输入生效）。
 
 注意：子模块 ``list`` 导入后会遮蔽本包命名空间里的内置 ``list``，因此注解延迟求值。

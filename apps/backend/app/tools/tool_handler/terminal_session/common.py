@@ -14,15 +14,17 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import canc
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.tools.display.terminal_display import build_terminal_observation_display_data
 from app.tools.terminal_runtime.errors import (
-    TerminalInputHeldByUserError,
     TerminalIntegrationRequiredError,
     TerminalSessionError,
+    TerminalUserCommandRunningError,
+    TerminalUserTypingError,
 )
 from app.tools.terminal_runtime.render import TerminalObservationResult
 
 # 受控短提示（约 5 字）：只按错误类型映射，不透传异常正文。
 _STATUS_HINTS: dict[type[TerminalSessionError], str] = {
-    TerminalInputHeldByUserError: "用户输入中",
+    TerminalUserTypingError: "用户输入中",
+    TerminalUserCommandRunningError: "用户命令中",
     TerminalIntegrationRequiredError: "缺少集成",
 }
 
