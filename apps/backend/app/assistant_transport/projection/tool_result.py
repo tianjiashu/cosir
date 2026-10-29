@@ -30,7 +30,7 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
         fields["team_run_id"] = metadata.team_run_id
     # 只在为真时写入：结算事件不带标记，不能把 part 上已有的标记清掉。
     if metadata.deferred:
-        fields["background"] = True
+        fields["deferred"] = True
     display = metadata.display_data
     if display is not None and display.get("kind") == "delegation-result":
         child_task_id = display.get("child_task_id")

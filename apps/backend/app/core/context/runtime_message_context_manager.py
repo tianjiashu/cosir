@@ -286,13 +286,14 @@ class RuntimeMessageContextManager:
             raise KeyError(tool_call_id)
         if isinstance(entry.metadata, ToolMessageMetadata):
             previous = entry.metadata
-            metadata = metadata.model_copy(
-                update={
-                    "hidden": previous.hidden,
-                    "display_data": metadata.display_data or previous.display_data,
-                    "team_run_id": metadata.team_run_id or previous.team_run_id,
-                    "background": previous.deferred,
-                }
+            # 显式构造而不用 ``model_copy(update=...)``：后者不校验键名，拼错的键会被静默丢弃。
+            metadata = ToolMessageMetadata(
+                status=metadata.status,
+                error=metadata.error,
+                display_data=metadata.display_data or previous.display_data,
+                team_run_id=metadata.team_run_id or previous.team_run_id,
+                hidden=previous.hidden,
+                deferred=previous.deferred,
             )
         self.context_store.replace_message(
             ConversationTaskContextRecord(

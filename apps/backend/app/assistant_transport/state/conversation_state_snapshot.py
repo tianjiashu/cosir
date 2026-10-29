@@ -61,7 +61,7 @@ _TOOL_PART_KEYS = {
     "presentation",
     "display_data",
     "team_run_id",
-    "background",
+    "deferred",
     "isError",
     "approvalRequestId",
     "child_task_id",
@@ -312,8 +312,8 @@ def _validate_part(part: object) -> None:
             or part["team_run_id"] < 1
         ):
             raise ValueError("snapshot team_run_id must be a positive integer")
-        if "background" in part and part["background"] is not True:
-            raise ValueError("snapshot tool background must be true when present")
+        if "deferred" in part and part["deferred"] is not True:
+            raise ValueError("snapshot tool deferred must be true when present")
         if part.get("child_task_id") is not None and (
             not isinstance(part.get("child_task_id"), int)
             or isinstance(part.get("child_task_id"), bool)

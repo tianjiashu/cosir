@@ -9,10 +9,13 @@ from typing import Any
 import pytest
 
 from app.assistant_transport.projection.tool_call_event_projection import plan_tool_calls_settled
+from app.assistant_transport.projection.tool_result import project_tool_result
+from app.assistant_transport.state.conversation_state_snapshot import _validate_part
 from app.core.events import ToolCallsSettledEvent
 from app.core.tool.background import placeholders
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolObservation
+from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_observation_projection as projection_module
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
@@ -88,6 +91,51 @@ def test_terminal_event_keeps_deferred_placeholders_pending() -> None:
     assert (event.status, event.deferred) == ("pending", True)
 
 
+
+def test_observe_persists_deferred_placeholder_as_pending(monkeypatch) -> None:
+    """后台占位经 tools → observe 交接后仍带 ``deferred``，落库为 pending、实时投影也是 pending。"""
+    written: list[ToolMessageMetadata] = []
+    emitted: list[Any] = []
+    monkeypatch.setattr(
+        projection_module,
+        "_message_context",
+        lambda: SimpleNamespace(add_message=lambda _message, *, metadata: written.append(metadata)),
+    )
+    monkeypatch.setattr(
+        projection_module,
+        "_runtime_context",
+        lambda: SimpleNamespace(run=SimpleNamespace(id=9, task_id=1)),
+    )
+    monkeypatch.setattr(projection_module, "emit", emitted.append)
+    batch = ToolBatch(
+        observations=[
+            ToolObservation(
+                tool_name="execute_terminal",
+                status="success",
+                tool_call_id="call-bg",
+                deferred=True,
+            )
+        ],
+        valid_tool_calls={
+            "call-bg": ValidToolCall(name="execute_terminal", projection="projected")
+        },
+    )
+
+    projection_module.settle_observations(batch, step_id="step-1")
+
+    [metadata] = written
+    assert (metadata.status, metadata.deferred) == ("pending", True)
+    [event] = emitted
+    assert (event.status, event.deferred) == ("pending", True)
+
+
+def test_deferred_placeholder_projects_a_valid_part_field() -> None:
+    """卡片字段与 snapshot 白名单、前端契约同名（``deferred``），否则 snapshot 校验会拒收。"""
+    fields = project_tool_result(ToolMessageMetadata(status="pending", deferred=True))
+
+    assert fields.get("deferred") is True
+    _validate_part({"type": "tool-call", "toolCallId": "c", "toolName": "t", "args": {}, **fields})
+
 def test_run_settlement_skips_deferred_parts() -> None:
     state = {
         "messages": [
@@ -96,7 +144,7 @@ def test_run_settlement_skips_deferred_parts() -> None:
                 "role": "assistant",
                 "runId": 3,
                 "parts": [
-                    {"type": "tool-call", "toolCallId": "a", "status": "pending", "background": True},
+                    {"type": "tool-call", "toolCallId": "a", "status": "pending", "deferred": True},
                     {"type": "tool-call", "toolCallId": "b", "status": "running"},
                 ],
             }
@@ -118,7 +166,7 @@ class _Context:
 
     def update_tool_result_metadata(self, _call_id: str, metadata: ToolMessageMetadata):
         self.updates.append(metadata)
-        return metadata.model_copy(update={"background": True})
+        return metadata
 
 
 @pytest.mark.parametrize("status", ["pending", "cancelled"])

@@ -101,7 +101,7 @@ def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -
 
     assert len(received) == 1
     assert received[0].arguments == '{"path":"a.py"}'
-    assert patch["batch"].observations[0]["tool_call_id"] == "call-1"
+    assert patch["batch"].observations[0].tool_call_id == "call-1"
     assert patch["batch"].suspends() is False
     # 观察只写进返回的批次副本，调用与投影记账原样保留给 observe 结算。
     assert patch["batch"].valid_tool_calls == batch.valid_tool_calls
@@ -291,9 +291,14 @@ def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
         tools_node._tools_node(_state(ToolBatch(calls=[_raw("call-1"), _raw("call-2")])))
     )
 
-    assert [item["suspend"] for item in patch["batch"].observations] == [False, True]
+    assert [item.suspend for item in patch["batch"].observations] == [False, True]
     assert patch["batch"].suspends() is True
 
+
+def _observation(call_id: str = "call-1", *, suspend: bool = False) -> ToolObservation:
+    return ToolObservation(
+        tool_name="review", status="success", tool_call_id=call_id, suspend=suspend
+    )
 
 @pytest.mark.parametrize("suspend", [False, True])
 def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None:
@@ -301,7 +306,7 @@ def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None
     settled: list[tuple[ToolBatch, str]] = []
     batch = ToolBatch(
         calls=[_raw()],
-        observations=[{"tool_call_id": "call-1", "suspend": suspend}],
+        observations=[_observation(suspend=suspend)],
     )
     monkeypatch.setattr(
         observation_node,
@@ -312,7 +317,7 @@ def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None
     patch = asyncio.run(observation_node._observe_node(_state(batch)))
 
     assert settled == [(batch, "step-1")]
-    assert batch.observations == [{"tool_call_id": "call-1", "suspend": suspend}]
+    assert batch.observations == [_observation(suspend=suspend)]
     assert patch == {"next_node": ReactRoute.PREPARE_INPUT}
 
 
@@ -353,7 +358,7 @@ def _gate_state(*, suspend: bool, step_count: int = 1, step_limit: int = 10) -> 
         step_count=step_count,
         step_limit=step_limit,
         next_node=ReactRoute.PREPARE_INPUT,
-        batch=ToolBatch(observations=[{"tool_call_id": "call-1", "suspend": suspend}]),
+        batch=ToolBatch(observations=[_observation(suspend=suspend)]),
     )
 
 
@@ -439,7 +444,10 @@ def test_internal_artifact_does_not_enter_tool_batch_snapshot() -> None:
         tool_call_id="call-1",
         artifact_data={"secret": "internal"},
     )
-    assert "artifact_data" not in tools_node._summary(observation)
+    stripped = tools_node._without_artifact(observation)
+
+    assert stripped.artifact_data is None
+    assert "internal" not in ToolBatch(observations=[stripped]).model_dump_json()
 
 
 def test_observation_persists_before_event_and_hides_unprojected_calls(monkeypatch) -> None:
@@ -460,14 +468,10 @@ def test_observation_persists_before_event_and_hides_unprojected_calls(monkeypat
     )
     monkeypatch.setattr(projection, "emit", lambda event: order.append(event.tool_call_id))
 
-    def summary(call_id: str) -> dict:
-        return {
-            "tool_call_id": call_id,
-            "tool_name": "read_file",
-            "status": "success",
-            "content": "ok",
-            "display_data": {},
-        }
+    def summary(call_id: str) -> ToolObservation:
+        return ToolObservation(
+            tool_name="read_file", status="success", content="ok", tool_call_id=call_id
+        )
 
     batch = ToolBatch(
         observations=[summary("visible"), summary("hidden")],

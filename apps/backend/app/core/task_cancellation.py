@@ -25,7 +25,8 @@ class TaskCancellation:
     挂起 Run 的迁移都归 actor——它们依赖 actor 的执行登记与 Task 闸门。本类不持进程内状态，只读写
     各下游的事实源（TeamRun、延迟结果登记表、子 Task、外部队列）。调用时机：
 
-    - :meth:`cancel_running_teams`：有执行者时在发起停止那一刻，由 ``TaskExecution.cancel`` 调用；
+    - :meth:`cancel_teams`：发起停止那一刻——有执行者时由 ``TaskExecution.cancel``、挂起的 Run 由
+      actor 迁移前调用；
     - :meth:`drop_deferred_entries`：取消「生效」之前（执行收尾取走信号前、挂起 Run 迁移前）；
     - :meth:`after_cancelled`：Run 落定 cancelled 之后。
     """
@@ -33,24 +34,21 @@ class TaskCancellation:
     def __init__(self, task_id: int) -> None:
         self.task_id = task_id
 
-    async def cancel_running_teams(self, run_id: int) -> None:
-        """取消 ``run_id`` 运行中的 TeamRun；失败只记录。
+    async def cancel_teams(self) -> None:
+        """取消本 Task 的全部活动 TeamRun（待确认与运行中）；失败只记录。
 
         ``agent_team`` 工具在线程里阻塞运行 Team，执行中途不检查取消信号：等 Run 落定再取消 Team
         会互等。Coordinator 检出 TeamRun 已取消就停下节点并返回，工具随之结束，Run 才能走到检查点。
-        待确认方案不取消（见 ``cancel_for_parent_run_id``）。
+        按 Task 寻址的理由见 ``cancel_for_parent_task``。
         """
         from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
 
         try:
-            await asyncio.to_thread(get_agent_team_coordinator().cancel_for_parent_run_id, run_id)
+            await asyncio.to_thread(get_agent_team_coordinator().cancel_for_parent_task, self.task_id)
         except Exception:
             log.exception(
                 "task_team_cancel_failed",
-                extra={
-                    "msg": "停止时取消 Agent Team 失败",
-                    "data": {"task_id": self.task_id, "run_id": run_id},
-                },
+                extra={"msg": "停止时取消 Agent Team 失败", "data": {"task_id": self.task_id}},
             )
 
     async def drop_deferred_entries(self) -> None:

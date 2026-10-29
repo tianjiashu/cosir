@@ -254,8 +254,8 @@ class AgentTeamRunApproval:
         """只校验 TeamRun 关联的主 Agent Run 属于该 Task，不要求主 Run 仍在挂起。
 
         主 Agent 在等待审批期间可能被用户消息唤醒并完成；TeamRun 仍是 pending 时用户照样可以
-        批准，结果以后台结果消息唤醒已完成的 Task。主 Agent 被用户取消时待确认 TeamRun 已随之
-        取消，条件迁移会落空，不需要在这里另判主 Run 状态。
+        批准，决定开出新 Run 重放调用、在工具线程里运行 Team。主 Task 停止时待确认 TeamRun 已随之
+        取消（``cancel_for_parent_task``），条件迁移会落空，不需要在这里另判主 Run 状态。
         """
 
         parent_run = self._ledger.get_run(parent_run_id)

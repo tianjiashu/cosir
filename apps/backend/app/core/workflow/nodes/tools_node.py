@@ -14,11 +14,9 @@ from app.core.workflow.message_queue.task_message import DecisionBody
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 
 
-def _summary(observation: ToolObservation) -> dict[str, Any]:
-    """观察摘要只保留模型结算与挂起判定所需字段，内部产物不进入 Run。"""
-    result = dataclasses.asdict(observation)
-    result.pop("artifact_data", None)
-    return result
+def _without_artifact(observation: ToolObservation) -> ToolObservation:
+    """剥掉内部产物：批次随执行状态落库，``artifact_data`` 不进入 Run。"""
+    return dataclasses.replace(observation, artifact_data=None)
 
 
 async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
@@ -53,15 +51,18 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
     # 用户批准后的 HITL 执行带着决定，交给 handler 区分「登记待决」与「按决定执行」。
     decision = DecisionBody.model_validate(batch.decision) if batch.decision else None
     observations = await run_tool_batch(rc, tool_calls, step_id, batch, decision)
-    summaries = [_summary(observation) for observation in observations]
+    settled = [_without_artifact(observation) for observation in observations]
     log.info(
         "tools_node_completed",
         extra={
             "msg": f"工具批次处理完成，step_id={step_id}",
-            "data": {"step_id": step_id, "observations": summaries},
+            "data": {
+                "step_id": step_id,
+                "observations": [dataclasses.asdict(observation) for observation in settled],
+            },
         },
     )
     return {
-        "batch": batch.model_copy(update={"observations": summaries}),
+        "batch": batch.model_copy(update={"observations": settled}),
         "next_node": ReactRoute.OBSERVE,
     }

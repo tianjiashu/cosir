@@ -126,11 +126,22 @@ def test_fork_terminal_history_while_later_run_is_active(fork_store, terminal, l
     assert task_runtime_spaces.existing_spaces() == ()
 
 
-def test_fork_copies_only_projected_rows(fork_store):
-    """不投影的行（编辑替换掉的历史）不进新 Task；只投影不进上下文的行（中断输出）照样复制。"""
+def test_fork_skips_only_edited_out_rows(fork_store):
+    """编辑移出的行不进新 Task；只投影不进上下文（中断输出）与只进上下文不投影（后台结论）的行
+    都按原标志复制。"""
     store = fork_store
     run = append_run(store, "completed")
-    interrupted_sequence = store.context.max_sequence(store.task.id) + 1
+    # 后台结论先并入、再接模型回复：不投影的行在本轮可见行之间，切分点按可见行定位也带得上它。
+    unprojected_sequence = store.context.max_sequence(store.task.id) + 1
+    store.context.append(
+        store.task.id,
+        run.id,
+        {"role": "user", "content": "background conclusion"},
+        unprojected_sequence,
+        metadata=_user_meta("background conclusion"),
+        project_to_transport=False,
+    )
+    interrupted_sequence = unprojected_sequence + 1
     store.context.append(
         store.task.id,
         run.id,
@@ -156,6 +167,10 @@ def test_fork_copies_only_projected_rows(fork_store):
     assert "replaced" not in contents
     interrupted = next(row for row in cloned if row.message.get("content") == "interrupted")
     assert (interrupted.include_in_context, interrupted.project_to_transport) == (False, True)
+    unprojected = next(
+        row for row in cloned if row.message.get("content") == "background conclusion"
+    )
+    assert (unprojected.include_in_context, unprojected.project_to_transport) == (True, False)
 
 
 @pytest.mark.parametrize("status", ["running", "suspended"])

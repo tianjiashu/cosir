@@ -60,7 +60,7 @@ class ToolMessageMetadata(BaseModel):
     error: str | None = None
     team_run_id: int | None = None
     hidden: bool = False
-    # 延迟结果的后台占位（见 ``ToolObservation.background``）：卡片状态的持久化事实源。
+    # 延迟结果的后台占位（见 ``ToolObservation.deferred``）：卡片状态的持久化事实源。
     deferred: bool = False
 
 

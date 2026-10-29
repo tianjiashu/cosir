@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 
 from openai.types.chat import ChatCompletionToolMessageParam
 
@@ -25,18 +26,8 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
     迁移幂等吸收。tool 消息的 metadata 也取自同一个事件，持久化事实与实时投影因此同源。
     """
     runtime = _runtime_context()
-    for summary in batch.observations:
-        call_id = summary["tool_call_id"]
-        observation = ToolObservation(
-            tool_name=summary["tool_name"],
-            status=summary["status"],
-            content=summary["content"],
-            tool_call_id=call_id,
-            display_data=summary.get("display_data"),
-            team_run_id=summary.get("team_run_id"),
-            awaiting_decision=summary.get("awaiting_decision", False),
-            deferred=summary.get("background", False),
-        )
+    for observation in batch.observations:
+        call_id = observation.tool_call_id
         event = terminal_event(
             observation,
             task_id=runtime.run.task_id,
@@ -79,20 +70,14 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
     占位在模型协议上已是这次调用的结果（见 ``tool_awaiting_decision``），决定可能在占位之后的若干
     模型步、甚至之后的 Run 才到，此时原调用早已不是最后一批，不能再写 tool 消息；改写历史行又会
     让后续请求前缀分叉。所以模型从末尾追加的 ``<tool_result>`` 读到结果，卡片从占位行的 metadata
-    读到终态。
+    读到终态。按决定执行的结果是终态：即便 handler 返回的观察带等待或后台标记，也不得让卡片回到
+    ``pending``，所以这里显式清掉这两个标记。
     """
     runtime = _runtime_context()
     context = _message_context()
-    [summary] = batch.observations
-    call_id = summary["tool_call_id"]
-    observation = ToolObservation(
-        tool_name=summary["tool_name"],
-        status=summary["status"],
-        content=summary["content"],
-        tool_call_id=call_id,
-        display_data=summary.get("display_data"),
-        team_run_id=summary.get("team_run_id"),
-    )
+    [executed] = batch.observations
+    observation = dataclasses.replace(executed, awaiting_decision=False, deferred=False)
+    call_id = observation.tool_call_id
     message, metadata = ToolResultBody(
         tool_call_id=call_id,
         tool_name=observation.tool_name,

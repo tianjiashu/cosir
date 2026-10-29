@@ -87,8 +87,9 @@ class ConversationTaskContextService:
         """在外部事务中复制 Task 固定提示词和指定 Run 前缀里序号不晚于 ``max_sequence`` 的 entries。
 
         system prompt 保留 sequence 0；Run context 从 1 开始重新分配。提示词不在目标 Task
-        重建，避免 fork 后改变源 Task 的系统指令。只复制投影到前端的行（含不进上下文的中断输出），
-        编辑替换掉的历史留在源 Task 供观测，不带进新 Task。``max_sequence`` 是切分点所在那一轮的
+        重建，避免 fork 后改变源 Task 的系统指令。只复制仍属于会话的行（见
+        :attr:`ConversationTaskContextRecord.retained`），编辑移出的历史留在源 Task 供观测，不带进新
+        Task。``max_sequence`` 是切分点所在那一轮的
         最后一条：边界 Run 里更晚的轮次不复制。
         """
 
@@ -119,11 +120,11 @@ class ConversationTaskContextService:
                 cloned_count += 1
                 system_prompt_found = True
                 continue
-            # 不投影的行（编辑替换掉的历史）不属于源 Task 可见的会话，不复制；只投影不进上下文的
-            # 行（中断输出、取消占位）照样复制，fork 后的前端历史与源 Task 一致。
+            # 编辑移出的行只留给源 Task 的观测页，不复制；其余行按原标志复制，fork 后的模型上下文
+            # （含不投影的后台结论、用户决定、通知）与前端历史都与源 Task 一致。
             if (
                     source_entry.run_id not in run_id_map
-                    or not source_entry.project_to_transport
+                    or not source_entry.retained
                     or source_entry.sequence > max_sequence
             ):
                 continue

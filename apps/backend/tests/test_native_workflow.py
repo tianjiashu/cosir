@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import app.core.workflow.workflow as module
+from app.core.tool.schemas import ToolObservation
 from app.models.enums.react_route import ReactRoute
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.tool_batch import ToolBatch
@@ -99,7 +100,11 @@ async def test_cancelled_resume_does_not_replay_old_tools(loop, monkeypatch):
                     "function": {"name": "review", "arguments": "{}"},
                 }
             ],
-            observations=[{"tool_call_id": "old", "suspend": True}],
+            observations=[
+                ToolObservation(
+                    tool_name="review", status="success", tool_call_id="old", suspend=True
+                )
+            ],
         ),
     )
     seen: list[ReactExecutionState] = []

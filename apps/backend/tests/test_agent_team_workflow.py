@@ -112,6 +112,37 @@ def test_cancel_returns_current_row_when_team_run_already_settled() -> None:
     assert coordinator.cancel(17) is settled
 
 
+def test_parent_task_stop_cancels_pending_and_running_teams_of_that_task() -> None:
+    """主 Task 停止按 Task 寻址：待确认方案与在新 Run 里执行的 Team 都取消，别的 Task 不受影响。"""
+
+    pending = SimpleNamespace(id=1, parent_task_id=5, parent_run_id=10)
+    # 方案在 Run 10 提出、批准后由 Run 11 执行：按执行中的 Run 匹配会漏掉它。
+    running = SimpleNamespace(id=2, parent_task_id=5, parent_run_id=10)
+    other = SimpleNamespace(id=3, parent_task_id=6, parent_run_id=12)
+    transitions: list[tuple[int, str]] = []
+
+    class _Crud:
+        def list_pending_confirmations(self) -> list[SimpleNamespace]:
+            return [pending]
+
+        def list_active(self) -> list[SimpleNamespace]:
+            return [running, other]
+
+        def update_status_if_in(self, run_id: int, _target: str, _allowed, **kwargs: object):
+            transitions.append((run_id, str(kwargs["end_reason"])))
+            return SimpleNamespace(id=run_id, parent_run_id=10)
+
+    coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
+    coordinator._team_run_crud = _Crud()
+    coordinator._run_archive_service = SimpleNamespace(write_terminal_archive=lambda _run_id: None)
+
+    assert coordinator.cancel_for_parent_task(5) == 2
+    assert transitions == [
+        (1, AgentTeamRunEndReason.PARENT_CANCELLED.value),
+        (2, AgentTeamRunEndReason.PARENT_CANCELLED.value),
+    ]
+
+
 def _driven_coordinator(monkeypatch, run_node) -> tuple[AgentTeamCoordinator, dict[str, object]]:
     """构造只替换存储与节点执行的协调器，驱动真实的 ``start`` 调度循环。"""
 

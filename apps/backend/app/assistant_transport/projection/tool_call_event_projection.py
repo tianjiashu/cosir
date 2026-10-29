@@ -168,7 +168,7 @@ def plan_tool_calls_settled(
 ) -> Sequence[ConversationStateMutation]:
     """把该 Run 下仍 ``pending`` / ``running`` 的 tool-call part 收束为终态，只迁移状态与错误。
 
-    后台占位（``background``）不收束：它的工作在 Run 之外继续，状态只由结论并入或撤销结算（Run 被
+    后台占位（``deferred``）不收束：它的工作在 Run 之外继续，状态只由结论并入或撤销结算（Run 被
     取消时撤销会把它推到 ``cancelled``）。
     """
 
@@ -178,7 +178,7 @@ def plan_tool_calls_settled(
             not isinstance(part, dict)
             or part.get("type") != "tool-call"
             or part.get("status") not in {"pending", "running"}
-            or part.get("background") is True
+            or part.get("deferred") is True
         ):
             continue
         mutations.extend(

@@ -79,15 +79,13 @@ class TaskExecution:
         self._task = asyncio.get_running_loop().create_task(self._drive(run))
 
     async def cancel(self, reason: CancelReason) -> bool:
-        """有执行者时打取消信号，并立即取消这次执行的 Run 运行中的 Team；返回是否打了信号。
+        """有执行者时打取消信号，并立即取消本 Task 的全部活动 Team；返回是否打了信号。
 
-        Team 按这次执行的 Run 寻址，不读「当前 Run」：打完信号之后执行可能已释放、actor 已开出新 Run，
-        按当前 Run 取消会误伤新 Run 的 Team。没有执行者时什么也不做。
+        没有执行者时什么也不做（挂起的 Run 由 actor 自己取消 Team）。
         """
-        run = self._run
         if not self._signal(reason):
             return False
-        await self._cancellation.cancel_running_teams(run.id)
+        await self._cancellation.cancel_teams()
         return True
 
     def _signal(self, reason: CancelReason) -> bool:

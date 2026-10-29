@@ -55,14 +55,14 @@ class ConversationTaskContextCrud:
     def list_pending_deferred(
             self, task_id: int | None = None, session: Session | None = None
     ) -> list[ConversationTaskContextRecord]:
-        """仍为 ``pending`` 的延迟结果后台占位行（tool 行 metadata ``background`` 为真）。
+        """仍为 ``pending`` 的延迟结果后台占位行（tool 行 metadata ``deferred`` 为真）。
 
         ``task_id`` 为 ``None`` 时跨全部 Task（重启收尾用）。按 metadata JSON 过滤，不改表结构。
         """
 
         metadata_json = ConversationTaskContextModel.metadata_json
         stmt = select(ConversationTaskContextModel).where(
-            func.json_extract(metadata_json, "$.background").is_(True),
+            func.json_extract(metadata_json, "$.deferred").is_(True),
             func.json_extract(metadata_json, "$.status") == "pending",
         )
         if task_id is not None:

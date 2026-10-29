@@ -212,8 +212,8 @@ class TaskActor:
     async def cancel(self, reason: CancelReason = "user") -> None:
         """停止当前执行或挂起的 Run；没有可停止的对象时什么也不做。只发起停止，不等执行落定。
 
-        有执行者时打信号并立即取消本 Run 的 Team，由工作流在检查点落定、收尾时传播与接续；挂起的
-        Run 没有执行者，在闸门内直接迁移为 cancelled 并传播。重复取消幂等。快路径只发起停止、不发布
+        有执行者时打信号并立即取消本 Task 的全部活动 Team，由工作流在检查点落定、收尾时传播与接续；
+        挂起的 Run 没有执行者，在闸门内取消 Team、直接迁移为 cancelled 并传播。重复取消幂等。快路径只发起停止、不发布
         状态：阶段仍是 ``driving``，等待方不必被唤醒。
 
         异常:
@@ -230,13 +230,14 @@ class TaskActor:
     async def _cancel_suspended(self, reason: CancelReason) -> bool:
         """挂起的 Run 没有执行者：撤销延迟结果后直接迁移为 cancelled 并传播；调用方持 Task 闸门。
 
-        返回 ``False`` 表示当前阶段不是挂起，本次取消无事可做。不取消 Team：挂起的 Run 没有运行中的
-        Team（``agent_team`` 在工具线程里阻塞到 Team 落定，Run 期间不会挂起），只可能带着待确认
-        方案，按 HITL 契约停止后仍可决定。
+        返回 ``False`` 表示当前阶段不是挂起，本次取消无事可做。挂起的 Run 没有运行中的 Team
+        （``agent_team`` 在工具线程里阻塞到 Team 落定，Run 期间不会挂起），但常带着待确认方案：
+        与运行中停止一样取消，停止即放弃本 Task 的全部 Team 工作。
         """
         current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
         if self._phase(current) != "suspended":
             return False
+        await self._cancellation.cancel_teams()
         # 先撤销延迟结果再迁移：迁移之后才到的结论会被 loop 当作新消息开出新 Run。
         await self._cancellation.drop_deferred_entries()
         cancelled = await asyncio.to_thread(

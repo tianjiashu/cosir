@@ -42,6 +42,16 @@ class ConversationTaskContextRecord:
                 self, "metadata", parse_message_metadata(self.message["role"], self.metadata)
             )
 
+    @property
+    def retained(self) -> bool:
+        """行仍属于会话：模型或前端至少一方在用。
+
+        两个标志都为假的行只由编辑重跑的移出（``exclude_from_sequence``）产生，只留给观测页查看；
+        只进上下文不投影（后台结论、用户决定、通知）或只投影不进上下文（中断输出、取消占位）的行
+        都仍是会话的一部分。
+        """
+        return self.include_in_context or self.project_to_transport
+
     @classmethod
     def _from_model(cls, model: ConversationTaskContextModel) -> ConversationTaskContextRecord:
         """读取边界校验 SDK 正文及对应角色 metadata；旧字段和错误角色结构直接报错。"""

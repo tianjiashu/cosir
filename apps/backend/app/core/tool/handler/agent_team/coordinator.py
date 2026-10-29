@@ -79,7 +79,7 @@ class AgentTeamCoordinator:
         记下新 Run 并在 TeamRun 不再运行时停下节点（见 :meth:`_await_node_run`）。
 
         取消：以 TeamRun 自身状态为准，不读父 Task 的取消信号——单一事实源。主 Task 停止时其 actor
-        经 :meth:`cancel_for_parent_run_id`、用户在卡片上经 :meth:`cancel` 把 TeamRun 落定
+        经 :meth:`cancel_for_parent_task`、用户在卡片上经 :meth:`cancel` 把 TeamRun 落定
         cancelled；本循环每轮持久化快照时（条件更新落空）与节点结束后检出，等待节点期间检出则
         停止节点。
 
@@ -586,16 +586,18 @@ class AgentTeamCoordinator:
                 cancelled += 1
         return cancelled
 
-    def cancel_for_parent_run_id(self, parent_run_id: int) -> int:
-        """取消指定主 Agent Run 正在运行的 Team。
+    def cancel_for_parent_task(self, parent_task_id: int) -> int:
+        """取消主 Agent Task 的全部活动 Team：待确认方案与运行中的 Team。
 
         由主 Task 的 actor 在发起停止时调用（不等主 Run 落定：``agent_team`` 工具阻塞在 Team 上，
         主 Run 要等 Team 停下才能走到检查点），把停止传播到运行中的 Team 及其当前节点 Run。
-        待确认方案不取消：它是一次等待用户决定的 HITL 调用，按 HITL 契约在 Run 停止后仍可决定
-        （批准即开新 Run 执行），与重启后保留 pending 方案一致。
+
+        按 Task 而不按 Run 寻址：TeamRun 的 ``parent_run_id`` 是提出方案的 Run，批准可能发生在它
+        结束之后，由新开的 Run 重放执行，按执行中的 Run 匹配会漏掉它。待确认方案一并取消：停止即
+        放弃这个 Task 进行中的全部 Team 工作，用户要继续须让主 Agent 重新提出方案。
 
         参数:
-            parent_run_id: 主 Agent ConversationRun 标识。
+            parent_task_id: 主 Agent Task 标识。
 
         返回:
             实际从活动态收敛为 ``cancelled`` 的 Team 数量。
@@ -606,8 +608,11 @@ class AgentTeamCoordinator:
         """
 
         cancelled = 0
-        for row in self._team_run_crud.list_active():
-            if row.parent_run_id != parent_run_id:
+        for row in (
+                *self._team_run_crud.list_pending_confirmations(),
+                *self._team_run_crud.list_active(),
+        ):
+            if row.parent_task_id != parent_task_id:
                 continue
             if self._cancel_if_active(row.id, AgentTeamRunEndReason.PARENT_CANCELLED) is not None:
                 cancelled += 1

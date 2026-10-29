@@ -216,7 +216,7 @@ async def chain(monkeypatch):
     monkeypatch.setattr(
         coordinator_module,
         "get_agent_team_coordinator",
-        lambda: SimpleNamespace(cancel_for_parent_run_id=cancelled_teams.append),
+        lambda: SimpleNamespace(cancel_for_parent_task=cancelled_teams.append),
     )
     service = TransportAssistantService.__new__(TransportAssistantService)
     service._tasks = ledger
@@ -498,14 +498,14 @@ async def test_cancelled_run_stops_downstream_with_parent_reason(chain) -> None:
 
     await chain.service.cancel(_TASK_ID)
     # Team 在发起停止时就取消：agent_team 工具阻塞在 Team 上，等 Run 落定会互等。
-    assert chain.cancelled_teams == [run.id]
+    assert chain.cancelled_teams == [_TASK_ID]
     # 子 Task 不阻塞父 Run：等 Run 真正落定 cancelled 后才传播。
     assert chain.child_cancels == []
     await _finish(run.id, "cancelled")
 
     assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
     # 落定后不再重复取消 Team。
-    assert chain.cancelled_teams == [run.id]
+    assert chain.cancelled_teams == [_TASK_ID]
 
 
 async def test_cancelling_a_suspended_run_stops_downstream_immediately(chain) -> None:
@@ -516,8 +516,8 @@ async def test_cancelling_a_suspended_run_stops_downstream_immediately(chain) ->
     await chain.service.cancel(_TASK_ID)
 
     assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
-    # 挂起的 Run 没有运行中的 Team；待确认方案按 HITL 契约保留，停止后仍可决定。
-    assert chain.cancelled_teams == []
+    # 挂起的 Run 常带着待确认方案：停止即放弃本 Task 的全部 Team 工作。
+    assert chain.cancelled_teams == [_TASK_ID]
 
 
 # ---------------------------------------------------------------------------
