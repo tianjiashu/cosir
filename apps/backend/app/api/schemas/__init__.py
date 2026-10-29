@@ -21,7 +21,6 @@ from app.api.schemas.request.ModelConfigTestRequest import ModelConfigTestReques
 from app.api.schemas.request.ModelConfigUpdateRequest import ModelConfigUpdateRequest
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
 from app.api.schemas.response.ContextMessageResponse import ContextMessageResponse
-from app.api.schemas.response.DeleteRunResponse import DeleteRunResponse
 from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse
 from app.api.schemas.response.EnvironmentResponse import (
@@ -46,7 +45,6 @@ __all__ = [
     "ContextMessageResponse",
     "CreateTaskRequest",
     "CreateWorkspaceRequest",
-    "DeleteRunResponse",
     "DeleteTaskResponse",
     "DeleteWorkspaceResponse",
     "EnvironmentChangeRequest",

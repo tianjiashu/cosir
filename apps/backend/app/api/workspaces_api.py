@@ -24,7 +24,6 @@ from app.service.depends import (
     get_workspace_service,
 )
 from app.task_runtime.service.task_service import TaskService
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.datetime_utils import TASK_TITLE_LIMIT, preview
 
 
@@ -117,7 +116,6 @@ async def create_workspace(
 async def delete_workspace(
     workspace_id: int,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
-    task_service: TaskService = Depends(get_task_service),
 ) -> DeleteWorkspaceResponse:
     """删除工作区及其下游任务、轮次与运行记录。
 
@@ -132,15 +130,12 @@ async def delete_workspace(
         HTTPException: 当工作区不存在时抛出。
 
     副作用:
-        先停止工作区内的活动执行并等待释放，再级联删除工作区下的任务、轮次、事件、步骤与
-        durable run。
+        经 ``WorkspaceService.delete_workspace_tree``：先停止工作区内的活动执行并等待释放，再级联
+        删除工作区下的任务、轮次、事件、步骤与 durable run。
     """
 
     try:
-        task_ids = await asyncio.to_thread(task_service.list_task_ids_for_workspace, workspace_id)
-        # 先停下这些 Task 的 actor（停止执行并等它落定），再进删除闸门；持闸门等执行会互相卡住。
-        await task_runtime_spaces.stop(task_ids)
-        await asyncio.to_thread(workspace_service.delete_workspace, workspace_id)
+        await workspace_service.delete_workspace_tree(workspace_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
     except DeletionBusyError as exc:

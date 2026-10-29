@@ -12,7 +12,6 @@ from typing import Annotated, Any
 from fastapi import HTTPException
 from fastapi import Path as PathParameter
 
-from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
 from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.api.configuration.agent_team_error_messages import (
     agent_team_configuration_error_message,
@@ -250,18 +249,6 @@ async def get_agent_team_run(run_id: int) -> AgentTeamRunResponse:
 
     try:
         payload = await asyncio.to_thread(AgentTeamRunService().get_view, run_id)
-        return AgentTeamRunResponse.model_validate(payload)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Team run not found") from exc
-
-
-@app.post("/agent-team/runs/{run_id}/cancel", response_model=AgentTeamRunResponse)
-async def cancel_agent_team_run(run_id: int) -> AgentTeamRunResponse:
-    """取消 TeamRun 及其当前节点。"""
-
-    try:
-        row = await asyncio.to_thread(get_agent_team_coordinator().cancel, run_id)
-        payload = await asyncio.to_thread(AgentTeamRunService().get_view, row.id)
         return AgentTeamRunResponse.model_validate(payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Team run not found") from exc

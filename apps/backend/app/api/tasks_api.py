@@ -3,8 +3,8 @@
 包含任务查询、事件与运行期缓存 取消端点。所有端点通过模块级 ``@app.*`` 装饰器
 直接注册到 ``app.api.app.app`` 单例中。
 
-分层约定：任务查询、轮次列表与事件回放均依赖业务 service；删除前停止执行经
-``task_runtime_spaces.stop``。
+分层约定：任务查询、轮次列表与事件回放均依赖业务 service；删除（停止加删除记录）经
+``TaskService.delete_task_tree``。
 """
 
 import asyncio
@@ -13,7 +13,6 @@ from fastapi import Depends, HTTPException, Query
 
 from app.api.schemas import (
     ContextMessageResponse,
-    DeleteRunResponse,
     DeleteTaskResponse,
     ForkTaskRequest,
     TaskResponse,
@@ -23,7 +22,6 @@ from app.assistant_transport.state.message_identity import turn_of
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
     ProvisionalTaskCleanupConflictError,
-    RunDeletionConflictError,
 )
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.service.conversation_run.conversation_task_context_service import (
@@ -34,7 +32,6 @@ from app.service.depends import (
     get_task_service,
 )
 from app.task_runtime.service.task_service import TaskService
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 @app.get("/context-messages", response_model=list[ContextMessageResponse])
@@ -121,6 +118,7 @@ async def delete_task(
     task_id: int,
     task_service: TaskService = Depends(get_task_service),
     creation_command_id: str | None = Query(default=None, alias="creationCommandId"),
+    with_forks: bool = Query(default=False, alias="withForks"),
 ) -> DeleteTaskResponse:
     """删除单个任务及其级联的轮次与运行时事件。
 
@@ -129,6 +127,7 @@ async def delete_task(
         task_service: 通过依赖注入的任务 service（负责级联清理）。
         creation_command_id: 前端在首条命令未被接受时回收 provisional Task 的创建标记；
             提供时走受控清理，任务树此时尚无 Run，故不经停止执行。
+        with_forks: 为真时连同全部 fork 后代一起删除；默认只删这一个，它的 fork 改挂到上一级。
 
     返回:
         删除结果 ``DeleteTaskResponse``。
@@ -138,8 +137,8 @@ async def delete_task(
             任务已被接受时 409（不可重试）。
 
     副作用:
-        普通删除先停止任务树内的活动执行并等待释放，再级联删除该任务下的轮次、运行时事件与
-        任务自身。
+        普通删除经 ``TaskService.delete_task_tree``：先停止所有权子树的活动执行并等待释放，再级联
+        删除；它的 fork 默认不删除、改挂到上一级，``withForks`` 时一并删除。
     """
 
     try:
@@ -151,11 +150,9 @@ async def delete_task(
                 task_id,
                 creation_command_id,
             )
+            deleted_task_ids = frozenset({task_id})
         else:
-            task_ids = await asyncio.to_thread(task_service.collect_task_tree_ids, task_id)
-            # 先停下整棵任务树的 actor（停止执行并等它落定），再进删除闸门。
-            await task_runtime_spaces.stop(task_ids)
-            await asyncio.to_thread(task_service.delete_task, task_id)
+            deleted_task_ids = await task_service.delete_task_tree(task_id, with_forks=with_forks)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task not found") from exc
     except DeletionBusyError as exc:
@@ -168,48 +165,9 @@ async def delete_task(
             status_code=409,
             detail={"code": exc.code, "message": exc.message, "retryable": False},
         ) from exc
-    return DeleteTaskResponse(task_id=task_id, deleted=True)
+    return DeleteTaskResponse(
+        task_id=task_id, deleted=True, deleted_task_ids=sorted(deleted_task_ids)
+    )
 
 
-@app.delete("/tasks/{task_id}/runs/{run_id}")
-async def delete_run(
-    task_id: int,
-    run_id: int,
-    task_service: TaskService = Depends(get_task_service),
-) -> DeleteRunResponse:
-    """删除单个 run 及其会话历史与产物。
 
-    允许删除 task 内任意位置的 run（含中间），不重排剩余上下文序号。级联清理该 run 的
-    会话消息、命令、委派记录、终端 session 与 run 行。
-
-    参数:
-        task_id: 来自路由的任务标识。
-        run_id: 来自路由的 Conversation Run 标识。
-        task_service: 通过依赖注入的任务 service（负责级联清理）。
-
-    返回:
-        删除结果 ``DeleteRunResponse``。
-
-    异常:
-        HTTPException: 404——task 或 run 不存在/不匹配；409——task 内存在运行中的 run
-            （不可删除）或删除闸门忙。
-
-    副作用:
-        级联删除该 run 及其关联数据；与 delete_task 一致经 asyncio.to_thread 移出 event loop。
-    """
-
-    try:
-        await asyncio.to_thread(task_service.delete_run, task_id, run_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="task or run not found") from exc
-    except RunDeletionConflictError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"code": exc.code, "message": exc.message, "retryable": True},
-        ) from exc
-    except DeletionBusyError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"code": exc.code, "message": exc.message, "retryable": True},
-        ) from exc
-    return DeleteRunResponse(task_id=task_id, run_id=run_id, deleted=True)
