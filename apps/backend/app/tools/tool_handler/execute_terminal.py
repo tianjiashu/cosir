@@ -4,6 +4,10 @@
 ``ToolObservation`` 组装都在 ``ExecuteTerminalTool`` 内完成；不含 subprocess 细节
 （下沉到 ``app.tools.tool_handler.terminal.local_backend``）。
 
+前后台执行：命令包成 ``ThreadJob`` 交给 ``run_deferred``（默认前台，到上限自动转后台，模型可直接选
+后台，用户可把前台等待转走）。所以本工具是 thread 工具：命令要能在本次调用返回后继续跑，作业必须
+由后端进程持有，不能放进每次调用结束即被杀的工具子进程；超时与取消都由执行后端杀进程树。
+
 平台 shell 契约（可下发哪些 shell、命令该用什么语法）的唯一事实源是参数模型
 （``tool_models/execute_terminal_args.py``）：本模块的本机探测直接以该契约为候选清单，只负责
 「怎么在宿主机上找到它」，并把实测可用的 shell 收窄进模型可见 schema，不另立一份 shell 清单。
@@ -34,15 +38,22 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.background.deferred_job import PlaceholderReason, ThreadJob
+from app.core.tool.background.run_deferred import run_deferred
+from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
+from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
-from app.tools.tool_handler.terminal import create_backend
-from app.tools.tool_handler.terminal.execution_result import ExecutionResult
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.tools.display.terminal_display import build_terminal_background_display_data
+from app.tools.tool_handler.terminal import ExecutionResult, LocalExecutionBackend
+from app.tools.tool_handler.terminal.output_stream import TerminalOutputStream
 from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.execute_terminal_args import (
     DEFAULT_COMMAND_TIMEOUT_S,
+    EXECUTE_TERMINAL_DEFERRED,
     MAX_COMMAND_TIMEOUT_S,
     ExecuteTerminalShell,
     MacExecuteTerminalShell,
@@ -51,15 +62,23 @@ from app.tools.tool_models.execute_terminal_args import (
     resolve_execute_terminal_args_model,
 )
 
-# 平台无关的工具描述：只写选用与调用决策需要的执行语义（进程不保留状态、无 stdin、时长上限、
+# 平台无关的工具描述：只写选用与调用决策需要的执行语义（进程不保留状态、无 stdin、前后台与时长、
 # 命令策略）；平台 shell、命令语法与 workdir 规则由参数模型各字段承载，不在此复述。不点名
 # terminal_* 工具：子 Agent 与 Team 节点只有本工具，交互终端只开放给侧栏主 Agent。
 _DESCRIPTION = (
     "Run one non-interactive command in a fresh shell process and return its exit code with "
     "merged stdout/stderr. Nothing carries over between calls (cd, exported variables, shell "
     "state), so chain dependent steps in one command. There is no stdin: prompts and pagers "
-    "hang until the timeout. Not suited to servers, watchers, or anything running longer than "
-    f"{MAX_COMMAND_TIMEOUT_S:g}s. Some destructive commands are blocked by policy."
+    "hang until the timeout. Use it for long builds, test suites, and other long tasks: set "
+    "timeout to cover them and background=true to keep working meanwhile. Not suited to "
+    "servers or watchers that never exit. Some destructive commands are blocked by policy."
+)
+
+# 取消后的模型文案：命令被强杀，结果未知且可能留下部分副作用。
+_CANCELLED_REASON = (
+    "the command was stopped before it finished (the user or the run cancelled it) and its "
+    "process tree was killed. Partial side effects are possible; do not re-run it "
+    "automatically."
 )
 
 
@@ -89,7 +108,8 @@ class ExecuteTerminalTool(HandlerBase):
 
     name = TOOL_EXECUTE_TERMINAL
     description = _DESCRIPTION
-    timeout_seconds = 120.0  # 外层 ToolHandlerRunner 硬保险；命令级缺省与钳制见参数模型常量
+    # thread 工具的 timeout_seconds 只是元数据（执行器不强杀）；命令级缺省与钳制见参数模型常量。
+    timeout_seconds = MAX_COMMAND_TIMEOUT_S
     group = TOOL_GROUP_TERMINAL
 
 
@@ -239,11 +259,11 @@ class ExecuteTerminalTool(HandlerBase):
         shell: ExecuteTerminalShell = "auto",
         timeout: float | None = None,
         workdir: str | None = None,
+        background: bool | None = None,
         *,
         execution_context: ToolExecutionContext,
-        output_sink: Callable[[str], None] | None = None,
     ) -> ToolObservation:
-        """在本机 shell 同步执行一条命令并返回归一化观测。
+        """在本机 shell 执行一条命令（前台或后台）并返回归一化观测。
 
         参数:
             command: 待执行命令。
@@ -255,29 +275,24 @@ class ExecuteTerminalTool(HandlerBase):
                 ``MAX_COMMAND_TIMEOUT_S``。
             workdir: 工作目录；缺省 ``execution_context.workspace_root``；相对路径相对
                 该根解析；绝对路径直接使用。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由执行链
-                在子进程内无条件注入的关键字参数，handler 契约必须接受此 kwarg 以匹配
-                ``ToolHandlerRunner._execute_handler`` 调用约定；本工具为命令执行入口且用户已
-                注入时作为 workdir 的解析边界。本工具对模型可见（已在 agent profile
-                工具集中登记），命令的全部文件系统副作用由 workdir 边界与 deny-list
-                共同约束，而非仅靠 cwd 宣称。
-            output_sink: 可选实时输出回调；由 ``ToolHandlerRunner`` 在子进程内注入，
-                透传给执行后端，使命令输出可在运行期回传父进程做实时展示。
-                为 None 时只省略实时增量，不影响命令执行和终态结果。
+            background: ``True`` 立即转后台；``None`` 取 ``EXECUTE_TERMINAL_DEFERRED`` 的默认（前台）。
+            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。命令的全部文件系统
+                副作用由 workdir 边界与 deny-list 共同约束，而非仅靠 cwd 宣称。
 
         返回:
             ``ToolObservation``。灾难级命令/工作目录不存在/后端异常为
             ``status="error"``；命令正常执行（含非零退出码）为 ``status="success"``。
-            退出码、超时等结构性事实经 ``_render_content`` 并入 ``content`` 的
-            ``[exit_code=N]`` 标记，供模型消费（``data`` 通道仅供前端展示，会在
-            序列化前被清除，不回传模型）。命令因超时强杀时
-            返回 ``status="error"``，明确告知命令未正常结束。
+            退出码等结构性事实经 ``_render_content`` 并入 ``content`` 的 ``[exit_code=N]`` 标记，供
+            模型消费。命令因超时强杀时返回 ``status="error"``，被取消时返回 ``cancelled``。转到后台
+            时返回标 ``background`` 的占位（只有到达前台上限才挂起 Agent），结论稍后以
+            ``background_result`` 回投。
 
         异常:
             不主动向上抛出；均转换为结构化 ``ToolObservation``。
 
         副作用:
-            经后端派生子进程执行命令；命令输出以解码后的原文写入 ``content`` 和展示数据。
+            经后端派生子进程执行命令；前台期间输出经实时通道推给前端，转到后台后不再推送；以本次
+            ``tool_call_id`` 在 ``deferred_registry`` 登记作业。
         """
         log.info(
             "terminal_command_started",
@@ -324,22 +339,62 @@ class ExecuteTerminalTool(HandlerBase):
         if err:
             return self._workdir_error_observation(err)
 
-        effective = min(timeout or DEFAULT_COMMAND_TIMEOUT_S, MAX_COMMAND_TIMEOUT_S)
-        result = create_backend("local").execute(
-            command, str(cwd), effective, shell=shell, output_sink=output_sink
-        )
+        effective_timeout = min(timeout or DEFAULT_COMMAND_TIMEOUT_S, MAX_COMMAND_TIMEOUT_S)
+        tool_call_id = execution_context.tool_call_id
+        channel = TerminalOutputStream.open(execution_context)
+        # 作业线程跑完命令后在这里留下完整结果：前台渲染要完整输出（展示数据不截断），回投载荷
+        # 则要过输出预算，两者不能共用作业结论。
+        finished: list[ExecutionResult] = []
 
-        log.info(
-            "terminal_command_finished",
-            extra={
-                "msg": "终端命令执行完成",
-                "data": {
-                    "exit_code": result.exit_code,
-                    "timed_out": result.timed_out,
+        def work(cancelled: Callable[[], bool]) -> dict[str, object]:
+            result = LocalExecutionBackend().execute(
+                command,
+                str(cwd),
+                effective_timeout,
+                shell=shell,
+                output_sink=channel.emit if channel is not None else None,
+                is_cancelled=cancelled,
+            )
+            log.info(
+                "terminal_command_finished",
+                extra={
+                    "msg": "终端命令执行完成",
+                    "data": {
+                        "tool_call_id": tool_call_id,
+                        "exit_code": result.exit_code,
+                        "timed_out": result.timed_out,
+                        "cancelled": result.cancelled,
+                    },
                 },
-            },
-        )
+            )
+            finished.append(result)
+            return self._background_payload(result, execution_context)
 
+        outcome = run_deferred(
+            # 撤销只置位标记，执行后端按时间片复查取消，不需要额外唤醒。
+            ThreadJob(work, wake=lambda: None, name=f"execute-terminal-{tool_call_id[-8:]}"),
+            task_id=execution_context.task_id,
+            run_id=execution_context.run_id,
+            tool_call_id=tool_call_id,
+            kind="terminal_command",
+            label=f"terminal_command:{command[:80]}",
+            background=EXECUTE_TERMINAL_DEFERRED.resolve_background(background),
+            foreground_limit_s=EXECUTE_TERMINAL_DEFERRED.foreground_limit_s,
+            is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
+        )
+        if channel is not None:
+            # 前台结束或转到后台都关闭实时通道：后台占位已闭合，之后的增量没有可更新的运行中卡片。
+            channel.finish()
+        if outcome.placeholder is not None:
+            return self._placeholder_observation(command, cwd, effective_timeout, outcome.placeholder)
+        return self._result_observation(command, cwd, finished[0])
+
+    def _result_observation(
+        self, command: str, cwd: Path, result: ExecutionResult
+    ) -> ToolObservation:
+        """前台拿到结论时的观察：取消、超时、正常结束（含非零退出码）三种。"""
+        if result.cancelled:
+            return tool_cancelled(self.name, reason=_CANCELLED_REASON)
         content = self._render_content(result.output, result)
         # 超时强杀意味着命令未正常结束，模型无法从退出码判断成败，按瞬态故障
         # 返回 error 并建议加大超时或拆分命令，避免把超时命令的部分输出误判为成功结果。
@@ -362,6 +417,55 @@ class ExecuteTerminalTool(HandlerBase):
                 timed_out=result.timed_out,
             ),
         )
+
+    def _background_payload(
+        self, result: ExecutionResult, execution_context: ToolExecutionContext
+    ) -> dict[str, object]:
+        """转到后台后回投给模型的结论；输出过统一的输出预算（超限保留头尾、完整原文落盘）。
+
+        作业线程里调用：前台拿到结论时不使用它（见 ``finished``），只在转后台后经
+        ``deferred_registry.complete`` 回投。
+        """
+        end_reason = (
+            "cancelled" if result.cancelled else "timed_out" if result.timed_out else "exited"
+        )
+        budgeted = ToolOutputBudget().apply(
+            tool_success(self.name, self._render_content(result.output, result)),
+            execution_context,
+        )
+        return {"end_reason": end_reason, "exit_code": result.exit_code, "output": budgeted.content}
+
+    def _placeholder_observation(
+        self, command: str, cwd: Path, timeout_s: float, reason: PlaceholderReason
+    ) -> ToolObservation:
+        """命令转到后台时的占位（``background``）。
+
+        只有到达前台上限时挂起：Agent 要的是这个结果，只是不该占着工具线程；Agent 主动选后台、或
+        用户把等待转走时不挂起，Agent 先做别的、需要时用 wait_messages 等。
+        """
+        situation = {
+            "background": f"the command is running in the background (timeout {timeout_s:g}s); "
+            "keep working",
+            "detached": "the user moved this command to the background; keep working",
+            "limit": "the command is still running; it moved to the background and you are "
+            "paused now",
+        }[reason]
+        follow_up = (
+            " and resume you"
+            if reason == "limit"
+            else " (use wait_messages if you need to pause for it)"
+        )
+        observation = tool_success(
+            tool_name=self.name,
+            content=(
+                f"{situation}. Its result will arrive as a <background_result> message for this "
+                f"tool call{follow_up}."
+            ),
+            display_data=build_terminal_background_display_data(command=command, workdir=cwd),
+            suspend=reason == "limit",
+        )
+        observation.deferred = True
+        return observation
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成当前注册系统使用的 ``ToolDefinition``。
@@ -387,7 +491,8 @@ class ExecuteTerminalTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
-            execution_mode="process",  # 跑任意 shell，需子进程隔离 + 树杀兜底
+            execution_mode="thread",  # 作业须由后端进程持有才能转到后台，见模块 docstring
+            deferred=EXECUTE_TERMINAL_DEFERRED,
             display=ToolDisplayHints(
                 verb="执行命令",
                 icon="terminal",
@@ -466,8 +571,8 @@ class ExecuteTerminalTool(HandlerBase):
             ``[exit_code=N]`` 标记与输出以换行拼接的文本；命令无输出时只有标记本身。
             ``content`` 是模型唯一可消费文本通道（``data`` 会在序列化前被清除，仅供前端），
             因此退出码这类结构性事实必须并入 ``content``，否则模型无法区分「命令成功但无输
-            出」与「命令失败但无 stderr」。超时**不**并入 ``content``：``execute`` 在
-            ``result.timed_out`` 为真时改走 ``tool_error`` 表达，本方法只负责退出码与输出。
+            出」与「命令失败但无 stderr」。超时与取消**不**并入 ``content``：前台由观察状态表达，
+            后台由回投载荷的 ``end_reason`` 表达，本方法只负责退出码与输出。
 
         异常:
             无。
