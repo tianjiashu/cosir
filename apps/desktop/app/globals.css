@@ -225,6 +225,11 @@
   @apply pointer-events-none sticky top-0 z-10 -mb-6 h-6 shrink-0 bg-linear-to-b from-background to-transparent;
 }
 
+/* 贴在吸底元素（如输入框 footer）上沿之外，让滚到它下面的内容渐隐，而不是被实色背景硬切。 */
+@utility scroll-fade-bottom {
+  @apply pointer-events-none absolute inset-x-0 bottom-full h-6 bg-linear-to-t from-background to-transparent;
+}
+
 /*
  * 标题栏安全区：窗口最上方一行里被系统或自绘窗口按钮占用的宽度，形态由
  * lib/platform.ts 在首帧前写入 data-titlebar。业务组件只读这两个变量让位，不判断平台。

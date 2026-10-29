@@ -5,8 +5,6 @@ export type ToolArtifact = {
   presentation: TransportToolPresentation;
   display_data: TransportToolDisplayData | null;
   team_run_id?: number;
-  /** 延迟结果的后台占位：`backendStatus === "pending"` 即「后台执行中」。 */
-  deferred?: boolean;
   error: string | null;
   errorCode: string | null;
   child_task_id?: number;
@@ -28,7 +26,6 @@ export function readToolArtifact(value: unknown): ToolArtifact {
     presentation: candidate.presentation ?? {},
     display_data,
     team_run_id: typeof candidate.team_run_id === "number" && Number.isInteger(candidate.team_run_id) && candidate.team_run_id > 0 ? candidate.team_run_id : undefined,
-    deferred: candidate.deferred === true ? true : undefined,
     // converter 已按后端 part.error 收口失败 / 取消提示，这里只透传。
     error: typeof candidate.error === "string" ? candidate.error : null,
     errorCode: typeof candidate.errorCode === "string" ? candidate.errorCode : null,

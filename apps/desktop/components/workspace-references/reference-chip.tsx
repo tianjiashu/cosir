@@ -3,11 +3,9 @@ import {
   referenceName,
   type WorkspaceReference,
 } from "@/lib/workspace-references/codec";
-import { useWorkbenchStore } from "@/lib/workbench/store";
-import { parentsOf, useFilesStore } from "@/lib/workspace-files/store";
 import { WorkspaceFileIcon } from "@/components/workspace-files/file-icon";
 import { InlineToken } from "@/components/ui/inline-token";
-import { useReferenceBridge } from "./reference-bridge";
+import { useOpenWorkspacePath } from "./use-open-workspace-path";
 
 /** 草稿和历史共用胶囊；片段预览来自消息正文，只有显式打开路径才访问当前文件。 */
 export function ReferenceChip({
@@ -21,26 +19,17 @@ export function ReferenceChip({
   disabled?: boolean;
   variant?: "message" | "composer";
 }) {
-  const bridge = useReferenceBridge();
+  const opener = useOpenWorkspacePath();
   const name = referenceName(reference);
+  // 引用路径本身就是工作区相对路径（目录引用可能是根目录 ""），不经 `resolve` 换算。
   const open = () => {
-    if (!bridge?.workspaceId || !bridge.workspaceRoot) return;
-    const id = bridge.workspaceId;
-    useWorkbenchStore
-      .getState()
-      .openFiles(id, bridge.workspaceRoot, bridge.workspaceName);
-    const files = useFilesStore.getState();
-    if (reference.kind === "directory")
-      files.patch(id, {
-        browsing: true,
-        treeVisible: true,
-        expanded: [...parentsOf(reference.path), reference.path],
-        reference: null,
-      });
-    else {
-      files.open(id, reference.path, true);
-      if (reference.content !== undefined) files.patch(id, { reference });
+    if (!opener) return;
+    if (reference.kind === "directory") {
+      opener.openDirectory(reference.path);
+      return;
     }
+    // 摘录引用带着选取时的正文，文件面板先展示这段快照，用户可再切到当前文件。
+    opener.openFile(reference.path, reference.content !== undefined ? reference : undefined);
   };
   // 历史消息保留原有胶囊；输入框才使用与正文行高一致的紧凑视图。
   if (variant === "composer") {
@@ -55,7 +44,7 @@ export function ReferenceChip({
           detail={detail}
           description={`${reference.path || "."}${detail ?? ""}`}
           preserveExtension={reference.kind !== "directory"}
-          open={{ label: `查看引用 ${name}`, disabled: !bridge?.workspaceId, onClick: open }}
+          open={{ label: `查看引用 ${name}`, disabled: opener === null, onClick: open }}
           remove={remove ? { label: `移除引用 ${name}`, disabled, onClick: remove } : undefined}
         />
       </span>
@@ -71,7 +60,7 @@ export function ReferenceChip({
       <button
         type="button"
         className="inline-flex min-w-0 items-center gap-1 rounded focus-visible:outline-2 focus-visible:outline-ring"
-        disabled={!bridge?.workspaceId}
+        disabled={opener === null}
         onMouseDown={(event) => event.preventDefault()}
         onClick={open}
         aria-label={`查看引用 ${name}`}

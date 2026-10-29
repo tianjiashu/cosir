@@ -64,3 +64,28 @@ export function writeSidebarWidth(width: number): void {
     // 同收起偏好：写入失败只影响下次启动的默认宽度。
   }
 }
+
+const TERMINAL_PANEL_HEIGHT_KEY = "cosir:terminal-panel-height";
+
+/** 底部终端面板的高度（px）；上限随窗口高度变化，由面板在渲染时收敛，这里只保底下限。 */
+export const TERMINAL_PANEL_HEIGHT = { min: 192, default: 320 } as const;
+
+/** 拖拽得到的终端面板高度偏好（所有 Task 共用）；缺失或非法时用默认值。 */
+export function readTerminalPanelHeight(): number {
+  if (typeof window === "undefined") return TERMINAL_PANEL_HEIGHT.default;
+  try {
+    const value = Number(window.localStorage.getItem(TERMINAL_PANEL_HEIGHT_KEY));
+    return Number.isFinite(value) && value >= TERMINAL_PANEL_HEIGHT.min ? Math.round(value) : TERMINAL_PANEL_HEIGHT.default;
+  } catch {
+    return TERMINAL_PANEL_HEIGHT.default;
+  }
+}
+
+export function writeTerminalPanelHeight(height: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(TERMINAL_PANEL_HEIGHT_KEY, String(Math.round(height)));
+  } catch {
+    // 同侧栏偏好：写入失败只影响下次打开的默认高度。
+  }
+}

@@ -1,27 +1,14 @@
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { DisclosureRowStatic } from "../elements/disclosure-row.aui";
 import { readToolArtifact } from "./types";
-import { ToolIcon } from "./tool-icons";
-import { ToolStatus } from "./tool-status";
+import { ToolCardShell } from "./tool-card-shell";
 
-/** Render-only fallback for a declared tool without a dedicated rich renderer. */
+/**
+ * 没有专用 renderer 的工具（如 `wait_messages`）与未知、格式错误载荷的通用卡片：
+ * 只展示动词、图标与状态，失败 / 取消短提示由外壳统一放在摘要位置。
+ *
+ * 不读取 `display_data`：走到这里说明载荷不可信或不需要展示。
+ */
 export function ToolFallback({ toolName, artifact: rawArtifact }: ToolCallMessagePartProps) {
   const artifact = readToolArtifact(rawArtifact);
-  const title = artifact.presentation.verb ?? toolName;
-  const label = artifact.backendStatus === "failed" ? `工具执行失败：${title}` : title;
-  const meta = artifact.error
-    ?? (Object.keys(artifact.presentation).length > 0
-      ? "仅展示后端状态，不执行客户端工具"
-      : `暂无专用展示器：${toolName}`);
-
-  return (
-    <DisclosureRowStatic
-      role="status"
-      leading={<ToolIcon name={artifact.presentation.icon} aria-hidden="true" />}
-      label={<span className="text-foreground text-sm font-medium">{label}</span>}
-      meta={<span className="text-muted-foreground max-w-[45%] truncate">{meta}</span>}
-      trailing={<ToolStatus status={artifact.backendStatus} />}
-      className={artifact.backendStatus === "failed" ? "text-destructive" : undefined}
-    />
-  );
+  return <ToolCardShell artifact={artifact} title={artifact.presentation.verb ?? toolName} />;
 }

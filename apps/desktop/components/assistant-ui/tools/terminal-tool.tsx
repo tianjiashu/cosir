@@ -37,6 +37,12 @@ function shellBadge(value: unknown): string | null {
   return typeof value === "string" ? SHELL_LABELS[value] ?? null : null;
 }
 
+type TerminalToolProps = ToolCallMessagePartProps & {
+  /** 工具取消按 Task 寻址：后端命中 Task 当前执行中的这次调用。 */
+  taskId: number;
+  taskCancelling?: boolean;
+};
+
 /**
  * 以嵌入式深色终端卡片渲染 execute_terminal 调用。
  *
@@ -44,12 +50,6 @@ function shellBadge(value: unknown): string | null {
  * 真正执行，因此命令能在执行前就渲染出来。运行期间输出来自有界 Transport snapshot
  * 增量；最终输出与退出码由 terminal 终态 display_data 收口。
  */
-type TerminalToolProps = ToolCallMessagePartProps & {
-  /** 工具取消按 Task 寻址：后端命中 Task 当前执行中的这次调用。 */
-  taskId: number;
-  taskCancelling?: boolean;
-};
-
 export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact, taskId, taskCancelling = false }: TerminalToolProps) {
   const artifact = readToolArtifact(rawArtifact);
   const data = artifact.display_data ?? {};
@@ -145,14 +145,14 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
       </div>
       <CollapsibleContent className={DARK_TOOL_CARD_CONTENT_CLASS}>
         <div className="bg-terminal-inset overflow-hidden rounded-lg border">
-          <div className="max-h-72 overflow-hidden px-3 py-2 font-mono text-xs leading-relaxed">
+          <div className="px-3 py-2 font-mono text-xs leading-relaxed">
             {workdir && <p className="text-muted-foreground mb-1 text-2xs">cwd {workdir}</p>}
             {cancellationError && <p className="text-warning mb-1" role="alert">{cancellationError}</p>}
             {artifact.error
               ? <p className="text-destructive mb-1">{artifact.error}</p>
               : output
                 ? <TerminalViewport output={output} />
-                : <p className="text-muted-foreground px-3 py-2">{isActive ? "等待输出…" : "无输出"}</p>}
+                : <p className="text-muted-foreground">{isActive ? "等待输出…" : "无输出"}</p>}
           </div>
           {(truncated || timedOut || streamTruncated) && (
             <p className="border-warning/30 bg-warning/10 text-warning flex items-center gap-1.5 border-t px-3 py-1.5 text-2xs">

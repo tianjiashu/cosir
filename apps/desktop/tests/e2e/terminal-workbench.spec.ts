@@ -98,11 +98,9 @@ test("已结束会话只在查看时挂载视图，切走即释放", async ({ pa
   // 用户关闭的会话不再查看：xterm 与连接随即释放。
   await expect(page.locator("[data-terminal-session]")).toHaveCount(1);
 
-  await panel(page).getByRole("button", { name: "更多终端操作" }).click();
-  await page.getByRole("menuitem", { name: /已结束/ }).press("ArrowRight");
+  await panel(page).getByRole("button", { name: /^已结束的终端/ }).click();
   const endedItem = page.getByRole("menuitem").filter({ hasText: "已关闭" });
-  await expect(endedItem).toBeFocused();
-  await endedItem.press("Enter");
+  await endedItem.click();
   await expect(screen(page, "term-2")).toContainText("bye");
   await expect(page.locator("[data-terminal-session]")).toHaveCount(2);
 
@@ -117,8 +115,8 @@ test("会话在后端失效时停止重连并平静提示，snapshot 移除后�
   await expect(screen(page, "term-1")).toContainText("term-1 $");
 
   await request.post(`${origin}/__test__/terminal/expire`, { data: { taskId: 42 } });
-  await expect(panel(page).getByTestId("terminal-input-blocked")).toContainText("已不在后端");
-  await expect(panel(page).getByTestId("terminal-connection-state")).toHaveCount(0);
+  await expect(panel(page).getByTestId("terminal-status")).toContainText("已不在后端");
+  await expect(panel(page).getByTestId("terminal-status").getByRole("button", { name: "新建终端" })).toBeVisible();
   await expect(panel(page).locator(".text-destructive")).toHaveCount(0);
 
   await request.post(`${origin}/__test__/terminal/sync`, { data: { taskId: 42 } });

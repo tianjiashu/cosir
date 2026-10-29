@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { getSystemSkills, type SystemSkill } from "@/lib/api/system-extensions";
 import { insertSkill, useComposerInsertion } from "@/components/composer/composer-insertion-context";
+import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
 import { queryKeys } from "@/lib/query/query-keys";
 
 const EMPTY_SKILLS: SystemSkill[] = [];
@@ -44,11 +45,11 @@ export function SkillsSelector({ disabled = false }: SkillsSelectorProps) {
       <PopoverTrigger
         type="button"
         disabled={disabled}
-        className="border-border bg-background hover:bg-muted inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
+        className={COMPOSER_ICON_BUTTON_CLASS_NAME}
         aria-label="选择 Skill"
+        title="Skills"
       >
-        <HammerIcon className="size-3.5" />
-        <span>Skills</span>
+        <HammerIcon />
       </PopoverTrigger>
       <PopoverContent align="start" side="top" sideOffset={6} className="w-80 rounded-xl p-0 shadow-lg">
         {loading ? (

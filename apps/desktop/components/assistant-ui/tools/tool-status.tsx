@@ -22,16 +22,23 @@ const STATUS_TONE_CLASS: Partial<Record<TransportToolStatus, string>> = {
   unknown: "text-warning",
 };
 
-export function ToolStatus({ status, className, prefix }: { status: TransportToolStatus; className?: string; prefix?: string }) {
+/**
+ * 工具行尾的状态标记。
+ *
+ * 成功是绝大多数调用的常态，展开工具组时逐行重复「已完成」只增加噪音，所以只显示图标、
+ * 文案留给读屏；其余状态需要用户留意，保留可见文案。
+ */
+export function ToolStatus({ status, className }: { status: TransportToolStatus; className?: string }) {
   const Icon = status === "running" ? LoaderCircleIcon
     : status === "completed" ? CheckIcon
       : status === "failed" ? CircleAlertIcon
         : status === "cancelled" ? XCircleIcon
           : status === "unknown" ? CircleAlertIcon : CircleDashedIcon;
+  const label = toolStatusLabel(status);
   return (
     <span className={cn("inline-flex items-center gap-1.5 text-xs", STATUS_TONE_CLASS[status] ?? "text-muted-foreground", className)}>
-      <Icon className={cn("size-3.5", status === "running" && "animate-spin")} aria-hidden="true" />
-      {prefix ? `${prefix} · ` : ""}{toolStatusLabel(status)}
+      <Icon className={cn("size-3.5", status === "running" && "animate-spin", status === "completed" && "text-success")} aria-hidden="true" />
+      <span className={status === "completed" ? "sr-only" : undefined}>{label}</span>
     </span>
   );
 }

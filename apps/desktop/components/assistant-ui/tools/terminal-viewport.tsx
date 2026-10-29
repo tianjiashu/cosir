@@ -42,12 +42,6 @@ export function TerminalViewport({ output }: TerminalViewportProps) {
     viewRef.current?.applySnapshot({ output });
   }, [output]);
 
-  return (
-    <div
-      className="h-72 min-h-24 overflow-hidden px-3 py-2"
-      data-terminal-viewport="true"
-    >
-      <div ref={containerRef} className="h-full w-full" />
-    </div>
-  );
+  // 高度由 TerminalOutputView 按内容行数决定，这里不设高度、不加留白（留白归卡片容器）。
+  return <div ref={containerRef} className="w-full" data-terminal-viewport="true" />;
 }

@@ -1,6 +1,7 @@
 import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal, type IDisposable, type ILink, type ITheme } from "@xterm/xterm";
 
@@ -13,6 +14,7 @@ import {
   type TerminalControlFrame,
 } from "@/lib/terminal/terminal-connection";
 import { pasteNeedsConfirmation, resolveTerminalKeyAction } from "@/lib/terminal/terminal-keyboard";
+import type { TerminalNotice, TerminalNoticeTone } from "@/lib/terminal/terminal-pane-status";
 
 import { TerminalResizeController } from "./terminal-resize-controller";
 import { xtermPaneFont } from "./xterm-appearance";
@@ -24,7 +26,7 @@ import { xtermPaneFont } from "./xterm-appearance";
 export type TerminalViewRuntime = {
   connection: TerminalConnectionState;
   /** 短暂提示（输入被拒、重新同步）；null 表示无。 */
-  notice: { text: string; tone: "muted" | "warning" | "destructive" } | null;
+  notice: TerminalNotice | null;
 };
 
 export type TerminalViewOptions = {
@@ -63,7 +65,7 @@ function escapeRegExp(value: string): string {
  * 会话只在被查看时存在（何时创建 / 释放由 `terminal-workbench` 决定）。
  *
  * 键盘：按键归属由 `resolveTerminalKeyAction` 判定（复制 / 粘贴 / 搜索 / 交给应用快捷键 / 送入
- * 终端）；IME 组合期间一律交给 xterm。粘贴（快捷键、菜单、原生 paste 事件）统一经大段确认。
+ * 终端）；IME 组合期间一律交给 xterm。粘贴（Ctrl+Shift+V 读剪贴板、原生 paste 事件）统一经大段确认。
  * 输入在未连接或会话结束时禁用（disableStdin），提示由 React 层按 `connection` 常驻显示。
  */
 export class TerminalView {
@@ -95,6 +97,9 @@ export class TerminalView {
     });
     this.terminal.loadAddon(this.fitAddon);
     this.terminal.loadAddon(this.searchAddon);
+    // 默认按 Unicode 6 算字宽，emoji 与部分 CJK 符号会被当成单宽导致光标错位（VS Code 同样启用 11）。
+    this.terminal.loadAddon(new Unicode11Addon());
+    this.terminal.unicode.activeVersion = "11";
     this.terminal.loadAddon(new WebLinksAddon((event, uri) => {
       event.preventDefault();
       window.open(uri, "_blank", "noopener,noreferrer");
@@ -185,7 +190,7 @@ export class TerminalView {
     this.options.onRuntime(this.runtime);
   }
 
-  private flash(text: string, tone: "muted" | "warning" | "destructive"): void {
+  private flash(text: string, tone: TerminalNoticeTone): void {
     if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
     this.update({ notice: { text, tone } });
     this.noticeTimer = setTimeout(() => {
@@ -196,6 +201,8 @@ export class TerminalView {
 
   private handleConnectionState(state: TerminalConnectionState): void {
     this.terminal.options.disableStdin = state !== "connected";
+    // 输入停用时光标不再闪烁，避免看起来还能打字。
+    this.terminal.options.cursorBlink = state === "connected";
     this.update({ connection: state });
   }
 
@@ -272,11 +279,9 @@ export class TerminalView {
   }
 
   private handleKey(event: KeyboardEvent): boolean {
-    if (event.type !== "keydown") {
-      // keyup / keypress 跟随 keydown 的归属：被拦截的组合键不应再以 keypress 漏进终端。
-      return resolveTerminalKeyAction(event, { isMac, hasSelection: this.terminal.hasSelection() }) === "terminal";
-    }
     const action = resolveTerminalKeyAction(event, { isMac, hasSelection: this.terminal.hasSelection() });
+    // keyup / keypress 跟随 keydown 的归属：被拦截的组合键不应再以 keypress 漏进终端。
+    if (event.type !== "keydown") return action === "terminal";
     switch (action) {
       case "terminal":
         return true;

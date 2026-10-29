@@ -33,13 +33,17 @@ export type TerminalTab = {
  * 计算标签栏：活跃会话按 snapshot 顺序在前；当前选中的已结束会话（用户从「已结束」打开、或正在看的
  * 会话刚退出）追加在后，以便继续查看最后画面。只有一个标签时显示「终端」不编号；多个时显示
  * 「终端 N」。Agent 指定的 label 优先作为标签名。
+ *
+ * N 取会话在完整列表（含已结束）里的序号，而不是在可见标签里的位置：关掉「终端 1」后「终端 2」
+ * 不会改名为「终端 1」，关闭确认框里引用的标题也就始终指向用户看到的那个标签。
  */
 export function terminalTabs(sessions: readonly TerminalSessionEntry[], selectedId: string | null): TerminalTab[] {
+  const ordinals = new Map(sessions.map((session, index) => [session.sessionId, index + 1]));
   const visible = sessions.filter((session) => isActiveTerminalSession(session) || session.sessionId === selectedId);
   const single = visible.length === 1;
-  return visible.map((session, index) => ({
+  return visible.map((session) => ({
     session,
-    title: session.label.trim() || (single ? "终端" : `终端 ${index + 1}`),
+    title: session.label.trim() || (single ? "终端" : `终端 ${ordinals.get(session.sessionId)}`),
   }));
 }
 

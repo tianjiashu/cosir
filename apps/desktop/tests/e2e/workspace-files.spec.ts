@@ -356,7 +356,7 @@ for (const theme of ["light", "dark"]) {
   });
 }
 
-test("搜索停止重试、未扫描原因与编码变更取消查找", async ({ page }) => {
+test("搜索停止重试、未扫描原因与编码变更重跑查找", async ({ page }) => {
   await mockFiles(page);
   let releaseSearch!: () => void;
   const searchGate = new Promise<void>((resolve) => {
@@ -406,7 +406,21 @@ test("搜索停止重试、未扫描原因与编码变更取消查找", async ({
   });
   let findStarted = false;
   let findDelivered = false;
+  const findEncodings: string[] = [];
   await page.route("**/files/find-text", async (route) => {
+    const encoding = String(route.request().postDataJSON().encoding);
+    findEncodings.push(encoding);
+    if (encoding === "cp1252") {
+      await route.fulfill({
+        contentType: "application/x-ndjson",
+        body:
+          JSON.stringify({
+            matches: [{ offset: 0, snippet: "新编码结果" }],
+            complete: true,
+          }) + "\n",
+      });
+      return;
+    }
     findStarted = true;
     await findGate;
     await route.fulfill({
@@ -428,12 +442,12 @@ test("搜索停止重试、未扫描原因与编码变更取消查找", async ({
   await surface.getByRole("button", { name: "更多阅读选项", exact: true }).click();
   await page.getByLabel("文本编码").selectOption("cp1252");
   await page.keyboard.press("Escape");
-  await expect(
-    surface.getByRole("button", { name: "停止", exact: true }),
-  ).toHaveCount(0);
+  // 换编码后查找按新编码重跑：旧请求被中止，结果来自新编码。
+  await expect.poll(() => findEncodings.at(-1)).toBe("cp1252");
+  await expect(surface.getByText("新编码结果", { exact: true })).toBeVisible();
+  await expect(surface.getByText(/查找完成/)).toBeVisible();
   releaseFind();
   await expect.poll(() => findDelivered).toBe(true);
-  await expect(surface.getByText(/查找完成/)).toHaveCount(0);
   await expect(
     surface.getByText("旧编码迟到结果", { exact: true }),
   ).toHaveCount(0);

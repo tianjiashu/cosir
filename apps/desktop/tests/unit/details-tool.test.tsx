@@ -121,3 +121,39 @@ describe("DetailsTool", () => {
     expect(extractHtml).not.toContain("must never render");
   });
 });
+
+describe("DetailsTool search highlighting", () => {
+  it("highlights pattern hits on match lines and dims context lines", () => {
+    const html = renderDetails(
+      {
+        kind: "content-search-results",
+        pattern: "TO+DO",
+        matches: [
+          { path: "a.ts", line: 3, content: "// TODO fix", is_match: true },
+          { path: "a.ts", line: 4, content: "TODO in context", is_match: false },
+        ],
+        match_count: 1,
+      },
+      { toolName: "search_content" },
+    );
+
+    expect(html).toContain("<mark");
+    expect(html.match(/<mark/g)).toHaveLength(1);
+    expect(html).toContain("text-muted-foreground");
+  });
+
+  it("falls back to plain text when the backend regex is not valid JavaScript", () => {
+    const html = renderDetails(
+      {
+        kind: "content-search-results",
+        pattern: "(?P<name>TODO)",
+        matches: [{ path: "a.ts", line: 3, content: "TODO", is_match: true }],
+        match_count: 1,
+      },
+      { toolName: "search_content" },
+    );
+
+    expect(html).not.toContain("<mark");
+    expect(html).toContain("TODO");
+  });
+});

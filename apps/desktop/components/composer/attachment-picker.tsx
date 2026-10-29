@@ -17,6 +17,7 @@ import {
   isUnsupportedImagePath,
 } from "@/components/composer/attachment-policy";
 import { useComposerInsertion } from "./composer-insertion-context";
+import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "./composer-surface";
 import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 
 export type PickedComposerAttachment =
@@ -102,7 +103,7 @@ export const AttachmentPicker: FC<AttachmentPickerProps> = ({
           <Button
             variant="ghost"
             size="icon"
-            className="text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 size-7 rounded-full"
+            className={COMPOSER_ICON_BUTTON_CLASS_NAME}
             aria-label={opening ? "正在选择附件" : "添加图片、文件或文件夹"}
             title="添加图片、文件或文件夹"
             disabled={opening || disabled}

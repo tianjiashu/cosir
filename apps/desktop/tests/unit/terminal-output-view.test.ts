@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockTerminalInstance = {
   options: Record<string, unknown>;
+  cols: number;
+  rows: number;
+  buffer: { active: { baseY: number; cursorY: number; cursorX: number } };
+  resize: ReturnType<typeof vi.fn>;
   open: ReturnType<typeof vi.fn>;
   loadAddon: ReturnType<typeof vi.fn>;
   write: ReturnType<typeof vi.fn>;
@@ -11,12 +15,20 @@ type MockTerminalInstance = {
 
 const mocks = vi.hoisted(() => ({
   terminals: [] as MockTerminalInstance[],
-  fitAddons: [] as Array<{ fit: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> }>,
+  fitAddons: [] as Array<{ proposeDimensions: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> }>,
 }));
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class MockTerminal {
     options: Record<string, unknown>;
+    cols = 80;
+    rows = 24;
+    buffer = { active: { baseY: 0, cursorY: 0, cursorX: 0 } };
+    unicode = { activeVersion: "6" };
+    resize = vi.fn((cols: number, rows: number) => {
+      this.cols = cols;
+      this.rows = rows;
+    });
     open = vi.fn();
     loadAddon = vi.fn();
     write = vi.fn((_text: string, done?: () => void) => done?.());
@@ -32,13 +44,17 @@ vi.mock("@xterm/xterm", () => ({
 
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class MockFitAddon {
-    fit = vi.fn();
+    proposeDimensions = vi.fn((): { cols: number; rows: number } | undefined => undefined);
     dispose = vi.fn();
 
     constructor() {
       mocks.fitAddons.push(this);
     }
   },
+}));
+
+vi.mock("@xterm/addon-unicode11", () => ({
+  Unicode11Addon: class MockUnicode11Addon {},
 }));
 
 // 配色从 CSS token 读取，依赖真实 DOM；这里只验证快照回放逻辑。
@@ -151,6 +167,21 @@ describe("TerminalOutputView", () => {
     releaseWrite?.();
 
     expect(terminal.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("sizes rows to the written content and caps them at the visible maximum", () => {
+    const session = new TerminalOutputView({} as HTMLElement);
+    const terminal = mocks.terminals[0];
+    mocks.fitAddons[0].proposeDimensions.mockReturnValue({ cols: 100, rows: 3 });
+
+    // 两行输出、以换行结尾：光标停在第 3 行行首，光标行也要计入，否则首行会被挤出视口。
+    terminal.buffer.active = { baseY: 0, cursorY: 2, cursorX: 0 };
+    session.applySnapshot({ output: "a\nb\n" });
+    expect(terminal.resize).toHaveBeenLastCalledWith(100, 3);
+
+    terminal.buffer.active = { baseY: 40, cursorY: 1, cursorX: 3 };
+    session.applySnapshot({ output: "a\nb\nmore" });
+    expect(terminal.resize).toHaveBeenLastCalledWith(100, 16);
   });
 
   it("disposes xterm resources", () => {

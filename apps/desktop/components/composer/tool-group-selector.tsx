@@ -2,11 +2,11 @@ import { useId, type FC } from "react";
 import { WrenchIcon } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmptyState, LoadingState } from "@/components/ui/state-panel";
 import { Switch } from "@/components/ui/switch";
+import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
 
 type ToolGroupSelectorProps = {
@@ -63,13 +63,14 @@ export const ToolGroupSelector: FC<ToolGroupSelectorProps> = ({
       <PopoverTrigger
         type="button"
         disabled={disabled}
-        className="border-border bg-background hover:bg-muted inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium focus-ring disabled:cursor-not-allowed disabled:opacity-50"
+        className={COMPOSER_ICON_BUTTON_CLASS_NAME}
         aria-label={disabledCount > 0 ? `工具，已关闭 ${disabledCount} 组` : "工具"}
+        title={disabledCount > 0 ? `工具（已关闭 ${disabledCount} 组）` : "工具"}
       >
-        <WrenchIcon className="size-3.5" />
-        <span>工具</span>
+        <WrenchIcon />
+        {/* 有工具组被关闭时只用角标提醒，数量见 title 与弹层头部。 */}
         {disabledCount > 0 && (
-          <Badge size="sm" tone="warning" className="tabular-nums">已关闭 {disabledCount}</Badge>
+          <span aria-hidden="true" className="bg-warning ring-card absolute top-0.5 right-0.5 size-2 rounded-full ring-2" />
         )}
       </PopoverTrigger>
       <PopoverContent align="start" side="top" sideOffset={6} className="w-80 rounded-xl p-2 shadow-lg">

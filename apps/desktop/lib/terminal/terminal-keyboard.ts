@@ -9,7 +9,7 @@
  * - 输入法组合中（IME）一律交给 xterm，不拦截。
  *
  * 普通 Ctrl+V / Cmd+V 返回 `native-paste`：放行浏览器原生粘贴事件，由终端视图在 paste 事件上统一
- * 做大段粘贴确认，菜单粘贴与快捷键粘贴走同一条路径。
+ * 做大段粘贴确认；Ctrl+Shift+V（`paste`）读剪贴板后进入同一个确认入口。
  */
 export type TerminalKeyAction = "terminal" | "copy" | "paste" | "native-paste" | "search" | "app";
 

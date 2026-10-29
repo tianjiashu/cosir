@@ -10,7 +10,7 @@ vi.mock("@/lib/task-overview/background-tasks-store", async (importOriginal) => 
   useForegroundWaits: (taskId: number | null) => (taskId === null ? [] : board.waits.get(taskId) ?? []),
 }));
 
-import { DeferredResultActions } from "@/components/assistant-ui/tools/deferred-result-actions";
+import { ForegroundWaitAction } from "@/components/assistant-ui/tools/foreground-wait-action";
 import { readToolArtifact } from "@/components/assistant-ui/tools/types";
 import { BackgroundTasksCard } from "@/components/task-overview/background-tasks-card";
 import { formatElapsed } from "@/components/task-overview/background-task-row";
@@ -67,33 +67,17 @@ describe("snapshot background_tasks 与工具 part deferred", () => {
       .toThrow(/foreground_waits\[1\]/);
   });
 
-  it("converter 保留后台占位标记，并用后端短提示说明取消原因", () => {
-    const pending = toToolCallPart({ type: "tool-call", toolCallId: "c1", toolName: "terminal_read", args: {}, status: "pending", deferred: true });
-    expect(readToolArtifact((pending as { artifact?: unknown }).artifact).deferred).toBe(true);
+  it("converter 用后端短提示说明后台占位的取消原因", () => {
     const interrupted = toToolCallPart({ type: "tool-call", toolCallId: "c2", toolName: "terminal_read", args: {}, status: "cancelled", error: "已中断", deferred: true });
     expect(readToolArtifact((interrupted as { artifact?: unknown }).artifact).error).toBe("已中断");
   });
 });
 
-describe("DeferredResultActions", () => {
-  const artifact = (status: "pending" | "running" | "completed", deferred?: boolean) => readToolArtifact({
-    backendStatus: status, presentation: {}, display_data: null, deferred,
-  });
-
-  it("后台占位显示「后台执行中」与取消", () => {
-    const html = renderToStaticMarkup(<DeferredResultActions taskId={1} toolCallId="c1" artifact={artifact("pending", true)} />);
-    expect(html).toContain("后台执行中");
-    expect(html).toContain("取消");
-  });
-
-  it("前台等待只在 foreground_waits 列出该调用时提供「转到后台」", () => {
-    expect(renderToStaticMarkup(<DeferredResultActions taskId={1} toolCallId="c1" artifact={artifact("running")} />)).toBe("");
+describe("ForegroundWaitAction", () => {
+  it("只在 foreground_waits 列出该调用时提供「转到后台」", () => {
+    expect(renderToStaticMarkup(<ForegroundWaitAction taskId={1} toolCallId="c1" />)).toBe("");
     board.waits.set(1, ["c1"]);
-    expect(renderToStaticMarkup(<DeferredResultActions taskId={1} toolCallId="c1" artifact={artifact("running")} />)).toContain("转到后台");
-  });
-
-  it("结论到达后不再渲染操作行", () => {
-    expect(renderToStaticMarkup(<DeferredResultActions taskId={1} toolCallId="c1" artifact={artifact("completed", true)} />)).toBe("");
+    expect(renderToStaticMarkup(<ForegroundWaitAction taskId={1} toolCallId="c1" />)).toContain("转到后台");
   });
 });
 

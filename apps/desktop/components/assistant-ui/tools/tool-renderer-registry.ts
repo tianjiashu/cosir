@@ -15,6 +15,7 @@ import { readAgentTeamConfigurationDraftDisplay, readAgentTeamPreviewDisplay } f
 import { readAgentConfigurationDraftDisplay } from "./agent-configuration-draft-display";
 import { readChildAgentResultDisplay, readDelegationDisplay } from "./child-agent-display";
 import { asRecord, readToolArtifact, type ToolArtifact } from "./types";
+import { DETAIL_VIEWS } from "./details/detail-views";
 
 export type ToolPartRoute =
   | "diff"
@@ -37,116 +38,103 @@ export type ToolPartRendererProps = ToolCallMessagePartProps & {
   taskCancelling?: boolean;
 };
 
-type ToolRendererMatchContext = {
-  toolName: string;
-  artifact: ToolArtifact;
-  kind?: string;
-};
-
 export type ToolRendererDefinition = {
   route: ToolPartRoute;
   renderer: ComponentType<ToolPartRendererProps>;
-  matches: (context: ToolRendererMatchContext) => boolean;
+  /** 该 renderer 承接的 `display_data.kind`；所有条目的并集就是已知 kind 清单。 */
+  kinds: readonly string[];
+  /** kind 命中后的专用载荷校验，不通过时继续匹配后续条目，最终回落 fallback。 */
+  accepts?: (artifact: ToolArtifact) => boolean;
+  /** 不看 kind、按 part 身份命中（如 TeamRun 失败后 display_data 只剩短提示）。 */
+  matchesPart?: (artifact: ToolArtifact) => boolean;
+  /** display_data 尚无 kind（运行中、只有静态声明）时按 presentation 命中。 */
+  matchesPresentation?: (artifact: ToolArtifact) => boolean;
 };
-
-const KNOWN_DISPLAY_KINDS = new Set([
-  "read-file-meta",
-  "file-list",
-  "content-search-results",
-  "directory-list",
-  "file-changes",
-  "web-search-results",
-  "web-extract-urls",
-  "terminal-result",
-  "terminal-session",
-  "delegation-result",
-  "child-agent-result",
-  "agent-configuration-draft",
-  "agent-team-approval",
-  "agent-team-execution",
-  "agent-team-configuration-draft",
-  "mcp-tool-result",
-  "skill-content",
-]);
 
 /**
  * 工具展示路由注册表。
  *
  * 条目只描述稳定 artifact 如何选择 renderer，不执行 IO、不读取 React
- * 状态，也不负责展示异常。新增工具展示时只需增加一个匹配条目和对应
- * renderer，ToolPart 本身不再继续增长工具分支。
+ * 状态，也不负责展示异常。新增工具展示时只需增加一个条目和对应
+ * renderer，ToolPart 本身不再继续增长工具分支。条目有序：审批卡排在执行卡之前，
+ * 有效的审批载荷优先于 `team_run_id`。
  */
 const FALLBACK_RENDERER: ToolRendererDefinition = {
   route: "fallback",
   renderer: ToolFallback,
-  matches: () => true,
+  kinds: [],
 };
 
 const TOOL_RENDERER_DEFINITIONS: readonly ToolRendererDefinition[] = [
   {
     route: "agent-team-configuration-draft",
     renderer: AgentTeamConfigurationTool,
-    matches: ({ kind, artifact }) => kind === "agent-team-configuration-draft"
-      && readAgentTeamConfigurationDraftDisplay(artifact.display_data) !== null,
+    kinds: ["agent-team-configuration-draft"],
+    accepts: (artifact) => readAgentTeamConfigurationDraftDisplay(artifact.display_data) !== null,
   },
   {
     route: "agent-team-approval",
     renderer: AgentTeamTool,
-    matches: ({ kind, artifact }) => kind === "agent-team-approval"
-      && readAgentTeamPreviewDisplay(artifact.display_data) !== null,
+    kinds: ["agent-team-approval"],
+    accepts: (artifact) => readAgentTeamPreviewDisplay(artifact.display_data) !== null,
   },
   {
     route: "agent-team-execution",
     renderer: AgentTeamExecutionCard,
-    matches: ({ kind, artifact }) => kind === "agent-team-execution" || artifact.team_run_id !== undefined,
+    kinds: ["agent-team-execution"],
+    matchesPart: (artifact) => artifact.team_run_id !== undefined,
   },
   {
     route: "agent-configuration-draft",
     renderer: AgentConfigurationDraftTool,
-    matches: ({ kind, artifact }) => kind === "agent-configuration-draft"
-      && readAgentConfigurationDraftDisplay(artifact.display_data) !== null,
+    kinds: ["agent-configuration-draft"],
+    accepts: (artifact) => readAgentConfigurationDraftDisplay(artifact.display_data) !== null,
   },
   {
     route: "delegation",
     renderer: DelegationToolRow,
-    matches: ({ kind, artifact }) => kind === "delegation-result"
-      && readDelegationDisplay(artifact.display_data) !== null,
+    kinds: ["delegation-result"],
+    accepts: (artifact) => readDelegationDisplay(artifact.display_data) !== null,
   },
   {
     route: "diff",
     renderer: DiffTool,
-    matches: ({ kind, artifact }) => kind === "file-changes"
-      || artifact.presentation.expand_layout === "diff",
+    kinds: ["file-changes"],
+    matchesPresentation: (artifact) => artifact.presentation.expand_layout === "diff",
   },
   {
     route: "terminal-session",
     renderer: TerminalSessionTool,
-    matches: ({ kind }) => kind === "terminal-session",
+    kinds: ["terminal-session"],
   },
   {
     route: "terminal",
     renderer: TerminalTool,
-    matches: ({ kind, artifact }) => kind === "terminal-result"
-      || artifact.presentation.expand_layout === "terminal",
+    kinds: ["terminal-result"],
+    matchesPresentation: (artifact) => artifact.presentation.expand_layout === "terminal",
   },
   {
     route: "details",
     renderer: DetailsTool,
-    matches: ({ kind, artifact }) => kind === "read-file-meta"
-      || kind === "directory-list"
-      || kind === "file-list"
-      || kind === "content-search-results"
-      || kind === "mcp-tool-result"
-      || kind === "skill-content"
-      || artifact.presentation.expand_layout === "details"
-      || artifact.presentation.expand_layout === "list"
-      || artifact.presentation.expand_layout === "write"
-      || artifact.presentation.expand_layout === "none"
-      || artifact.presentation.verb !== undefined
-      || artifact.presentation.icon !== undefined,
+    kinds: Object.keys(DETAIL_VIEWS),
+    accepts: (artifact) => asRecord(artifact.display_data).kind !== "child-agent-result"
+      || readChildAgentResultDisplay(artifact.display_data) !== null,
+    matchesPresentation: ({ presentation }) => presentation.expand_layout === "details"
+      || presentation.expand_layout === "list"
+      || presentation.expand_layout === "write"
+      || presentation.expand_layout === "none"
+      || presentation.verb !== undefined
+      || presentation.icon !== undefined,
   },
-  FALLBACK_RENDERER,
 ];
+
+const KNOWN_DISPLAY_KINDS = new Set(TOOL_RENDERER_DEFINITIONS.flatMap((definition) => definition.kinds));
+
+function matchesDefinition(definition: ToolRendererDefinition, artifact: ToolArtifact, kind: string | undefined): boolean {
+  if (kind !== undefined && definition.kinds.includes(kind)) return definition.accepts?.(artifact) ?? true;
+  if (definition.matchesPart?.(artifact)) return true;
+  return kind === undefined && (definition.matchesPresentation?.(artifact) ?? false);
+}
 
 /**
  * 将工具 artifact 路由到稳定的展示类别。
@@ -169,11 +157,6 @@ export function resolveToolRenderer(
   if (artifact.display_data !== null && "kind" in displayData && typeof displayData.kind !== "string") return FALLBACK_RENDERER;
 
   const kind = typeof displayData.kind === "string" ? displayData.kind : undefined;
-  const fallback = FALLBACK_RENDERER;
-  if (kind !== undefined && !KNOWN_DISPLAY_KINDS.has(kind)) return fallback;
-  if (kind === "delegation-result" && readDelegationDisplay(artifact.display_data) === null) return fallback;
-  if (kind === "child-agent-result" && readChildAgentResultDisplay(artifact.display_data) === null) return fallback;
-
-  const context = { toolName, artifact, kind };
-  return TOOL_RENDERER_DEFINITIONS.find((definition) => definition.matches(context)) ?? fallback;
+  if (kind !== undefined && !KNOWN_DISPLAY_KINDS.has(kind)) return FALLBACK_RENDERER;
+  return TOOL_RENDERER_DEFINITIONS.find((definition) => matchesDefinition(definition, artifact, kind)) ?? FALLBACK_RENDERER;
 }

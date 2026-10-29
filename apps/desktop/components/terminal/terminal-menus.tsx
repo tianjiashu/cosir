@@ -1,11 +1,10 @@
-import { ChevronDownIcon, EllipsisVerticalIcon } from "lucide-react";
+import { ChevronDownIcon, HistoryIcon } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 
 import { Button } from "@/components/ui/button";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
 import type { TerminalSessionEntry } from "@/lib/assistant/contract";
 import type { TerminalShell } from "@/lib/terminal/terminal-api";
-import type { TerminalConnectionState } from "@/lib/terminal/terminal-connection";
 import { terminalStatusPresentation } from "@/lib/terminal/terminal-sessions";
 import { cn } from "@/lib/utils";
 
@@ -14,15 +13,6 @@ const TERMINAL_MENU_ITEM_CLASS = cn(
   MENU_ITEM_CLASS,
   "flex items-center gap-2 select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
 );
-
-export const TERMINAL_CONNECTION_LABEL: Record<TerminalConnectionState, string> = {
-  connecting: "连接中",
-  connected: "已连接",
-  reconnecting: "重新连接中…",
-  ended: "会话已结束",
-  expired: "会话已失效",
-  failed: "连接失败",
-};
 
 /** 「+」旁的下拉：选 shell 新建终端（「+」本身直接用默认 shell）。 */
 export function TerminalShellMenu({
@@ -64,56 +54,42 @@ export function TerminalShellMenu({
   );
 }
 
-/** ⋮ 菜单：已结束会话（查看最后画面）、当前会话的连接状态与重连。 */
-export function TerminalMoreMenu({
+/**
+ * 已结束会话列表（查看缓冲内的最后画面）。连接状态与重连在面板状态栏就地处理，不放进菜单；
+ * 没有已结束会话时按钮禁用而不隐藏，页头右侧按钮位置保持稳定。
+ */
+export function TerminalEndedMenu({
   ended,
-  connection,
   onOpenEnded,
-  onReconnect,
 }: {
   ended: TerminalSessionEntry[];
-  connection: TerminalConnectionState | null;
   onOpenEnded: (sessionId: string) => void;
-  onReconnect?: () => void;
 }) {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <Button size="icon-sm" variant="ghost" className="text-muted-foreground size-7" aria-label="更多终端操作" title="更多">
-          <EllipsisVerticalIcon />
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          className="text-muted-foreground size-7"
+          aria-label={`已结束的终端（${ended.length}）`}
+          title={ended.length === 0 ? "没有已结束的终端" : `已结束的终端（${ended.length}）`}
+          disabled={ended.length === 0}
+        >
+          <HistoryIcon />
         </Button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content align="end" className={TERMINAL_MENU_CONTENT_CLASS}>
-          <DropdownMenu.Sub>
-            <DropdownMenu.SubTrigger disabled={ended.length === 0} className={TERMINAL_MENU_ITEM_CLASS}>
-              已结束 ({ended.length})
-            </DropdownMenu.SubTrigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.SubContent className={TERMINAL_MENU_CONTENT_CLASS}>
-                {ended.map((session) => (
-                  <DropdownMenu.Item key={session.sessionId} className={TERMINAL_MENU_ITEM_CLASS} onSelect={() => onOpenEnded(session.sessionId)}>
-                    <span className="flex-1 truncate">{session.label.trim() || session.shellKind}</span>
-                    <span className="text-muted-foreground text-2xs">
-                      {terminalStatusPresentation(session.status).label}{session.exitCode !== null ? ` · ${session.exitCode}` : ""}
-                    </span>
-                  </DropdownMenu.Item>
-                ))}
-                <div className="text-muted-foreground px-2 py-1 text-2xs">只能查看缓冲内的最后画面，可能不完整</div>
-              </DropdownMenu.SubContent>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Sub>
-          <DropdownMenu.Separator className="bg-border my-1 h-px" />
-          <DropdownMenu.Label className="text-muted-foreground px-2 py-1 text-2xs">
-            连接：{connection ? TERMINAL_CONNECTION_LABEL[connection] : "未连接"}
-          </DropdownMenu.Label>
-          <DropdownMenu.Item
-            disabled={!onReconnect || connection === "connected" || connection === "ended" || connection === "expired"}
-            className={TERMINAL_MENU_ITEM_CLASS}
-            onSelect={() => onReconnect?.()}
-          >
-            重新连接
-          </DropdownMenu.Item>
+          {ended.map((session) => (
+            <DropdownMenu.Item key={session.sessionId} className={TERMINAL_MENU_ITEM_CLASS} onSelect={() => onOpenEnded(session.sessionId)}>
+              <span className="flex-1 truncate">{session.label.trim() || session.shellKind}</span>
+              <span className="text-muted-foreground text-2xs">
+                {terminalStatusPresentation(session.status).label}{session.exitCode !== null ? ` · ${session.exitCode}` : ""}
+              </span>
+            </DropdownMenu.Item>
+          ))}
+          <div className="text-muted-foreground px-2 py-1 text-2xs">只能查看缓冲内的最后画面，可能不完整</div>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>

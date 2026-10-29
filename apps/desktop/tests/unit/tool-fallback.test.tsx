@@ -31,8 +31,22 @@ describe("ToolFallback", () => {
       errorCode: "path_outside_workspace",
     });
 
-    expect(html).toContain("工具执行失败：读取文件");
+    expect(html).toContain("读取文件");
+    expect(html).toContain("text-destructive");
     expect(html).toContain("路径无效");
     expect(html).not.toContain("未知工具");
+  });
+
+  it("成功态不显示实现说明类副文案", () => {
+    const html = renderFallback({
+      backendStatus: "completed",
+      presentation: { verb: "等待结果", icon: "clock" },
+      display_data: null,
+      error: null,
+      errorCode: null,
+    });
+
+    expect(html).toContain("等待结果");
+    expect(html).not.toContain("仅展示后端状态");
   });
 });

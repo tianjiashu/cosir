@@ -332,7 +332,6 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     presentation: part.presentation ?? {},
     display_data: displayData,
     team_run_id: part.team_run_id,
-    deferred: part.deferred,
     // 失败 / 取消的短提示由后端给出（status_hint、「执行异常」「已中断」等），前端不重新推导；
     // 只在缺失时兜底，保证终态卡片总有一句提示。
     error: backendStatus === "cancelled"

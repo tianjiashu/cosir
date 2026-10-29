@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { createWorkspaceTask, deleteTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import { useModelCatalog } from "@/lib/model-catalog";
+import { cn } from "@/lib/utils";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
@@ -312,16 +313,6 @@ export function NewConversation({
               onWorkspaceCreated={async () => onWorkspaceCreated()}
             />
           </div>
-          <div className="min-w-0 px-2">
-            <ComposerPromptToolbar
-              toolGroups={toolGroups}
-              selectedToolGroups={selectedToolGroups}
-              onSelectedToolGroupsChange={setSelectedToolGroups}
-              toolGroupsLoading={toolGroupsQuery.isPending}
-              toolGroupsError={toolGroupsError}
-              disabled={submitting}
-            />
-          </div>
           {attachments.length > 0 && (
             <div className="flex h-16 min-h-0 max-h-16 min-w-0 flex-nowrap gap-2 overflow-x-auto overflow-y-hidden px-2" aria-label="待发送附件">
               {attachments.map((attachment) => (
@@ -341,13 +332,21 @@ export function NewConversation({
               if (canStart) formRef.current?.requestSubmit();
             }}
             placeholder={COMPOSER_PLACEHOLDER}
-            className={COMPOSER_EDITOR_CLASS_NAME}
+            className={cn(COMPOSER_EDITOR_CLASS_NAME, "min-h-20")}
             disabled={submitting}
             aria-label="新对话内容"
             autoFocus
           />
           <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <ComposerPromptToolbar
+                toolGroups={toolGroups}
+                selectedToolGroups={selectedToolGroups}
+                onSelectedToolGroupsChange={setSelectedToolGroups}
+                toolGroupsLoading={toolGroupsQuery.isPending}
+                toolGroupsError={toolGroupsError}
+                disabled={submitting}
+              />
               <ComposerControls
                 scope={selectedWorkspaceId ? { kind: "workspace", id: selectedWorkspaceId } : undefined}
                 onModelReadyChange={setModelReady}

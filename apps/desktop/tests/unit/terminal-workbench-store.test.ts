@@ -109,6 +109,15 @@ describe("终端标签命名", () => {
     expect(tabs.map((tab) => tab.title)).toEqual(["终端 1", "dev server", "终端 3"]);
   });
 
+  it("编号取会话在完整列表中的序号：关掉前面的会话不让后面的标签改名", () => {
+    const tabs = terminalTabs([
+      terminalSession("t1", { status: "closed" }),
+      terminalSession("t2"),
+      terminalSession("t3"),
+    ], "t2");
+    expect(tabs.map((tab) => tab.title)).toEqual(["终端 2", "终端 3"]);
+  });
+
   it("已结束会话收进「已结束」，只有当前选中的那个留在标签栏", () => {
     const sessions = [terminalSession("t1"), terminalSession("old", { status: "closed" })];
     expect(terminalTabs(sessions, "t1").map((tab) => tab.session.sessionId)).toEqual(["t1"]);

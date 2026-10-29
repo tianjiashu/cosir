@@ -19,9 +19,7 @@ function readTokens() {
 export function xtermAppearance(): Pick<ITerminalOptions, "fontFamily" | "fontSize" | "lineHeight" | "theme"> {
   const read = readTokens();
   return {
-    fontFamily: read("--app-font-mono"),
-    fontSize: 12,
-    lineHeight: 1.35,
+    ...xtermPaneFont(),
     theme: {
       background: read("--terminal-inset"),
       foreground: read("--terminal-foreground"),
@@ -66,6 +64,7 @@ export function xtermPaneTheme(resolvedTheme: "light" | "dark"): ITheme {
   };
 }
 
+/** 卡片终端与工作台终端共用的字体。 */
 export function xtermPaneFont(): Pick<ITerminalOptions, "fontFamily" | "fontSize" | "lineHeight"> {
   return { fontFamily: readTokens()("--app-font-mono"), fontSize: 12, lineHeight: 1.35 };
 }

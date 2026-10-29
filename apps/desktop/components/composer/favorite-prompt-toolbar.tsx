@@ -22,6 +22,7 @@ import {
   type FavoritePrompt,
 } from "@/lib/favorite-prompt-storage";
 import { insertText, useComposerInsertion } from "@/components/composer/composer-insertion-context";
+import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 
 type FavoritePromptToolbarProps = {
@@ -108,16 +109,15 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
   };
 
   return (
-    <div className="flex min-w-0 items-center gap-1.5">
+    <>
       <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
         <PopoverTrigger
           type="button"
-          className="border-border bg-background hover:bg-muted inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium focus-ring"
+          className={COMPOSER_ICON_BUTTON_CLASS_NAME}
           aria-label="选择常用提示词"
+          title="常用提示词"
         >
-          <MessageSquareQuoteIcon className="size-3.5" />
-          <span>常用提示词</span>
-          <span className="text-muted-foreground tabular-nums">{prompts.length}</span>
+          <MessageSquareQuoteIcon />
         </PopoverTrigger>
         <PopoverContent align="start" side="top" className="w-80 rounded-xl p-2">
           <div className="flex items-center justify-between px-2 py-1">
@@ -199,7 +199,7 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }
 

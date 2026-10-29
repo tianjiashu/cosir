@@ -5,12 +5,11 @@ import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { closeTerminalSession, createTerminalSession } from "@/lib/terminal/terminal-api";
+import type { TerminalNotice } from "@/lib/terminal/terminal-pane-status";
 import { isActiveTerminalSession, type TerminalTab } from "@/lib/terminal/terminal-sessions";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 
 const NOTICE_MS = 4000;
-
-export type PanelNotice = { text: string; tone: "muted" | "warning" | "destructive" };
 
 /**
  * 用户新建 / 关闭终端会话：HTTP 命令、失败短提示、日志与关闭后的选中 / 收起。
@@ -23,11 +22,11 @@ export function useTerminalSessionActions(
   tabs: readonly TerminalTab[],
 ) {
   const [creating, setCreating] = useState(false);
-  const [notice, setNotice] = useState<PanelNotice | null>(null);
+  const [notice, setNotice] = useState<TerminalNotice | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const creatingRef = useRef(false);
 
-  const flashNotice = useCallback((next: PanelNotice) => {
+  const flashNotice = useCallback((next: TerminalNotice) => {
     if (noticeTimerRef.current !== null) clearTimeout(noticeTimerRef.current);
     setNotice(next);
     noticeTimerRef.current = setTimeout(() => {

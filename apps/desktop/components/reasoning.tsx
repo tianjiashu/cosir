@@ -170,7 +170,6 @@ function ReasoningContent({
       )}
       {...props}
     >
-      <ReasoningFade side="top" />
       {children}
       {isPreview ? <ReasoningFade /> : null}
     </CollapsibleContent>
@@ -185,6 +184,8 @@ function ReasoningText({
   const isPreview = useContext(ReasoningPreviewContext);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  // 顶部渐隐只在内容确实滚出顶部时出现，否则会把第一行一直盖淡。
+  const [scrolledFromTop, setScrolledFromTop] = useState(false);
 
   useEffect(() => {
     if (!isPreview) return;
@@ -231,29 +232,35 @@ function ReasoningText({
   }, [isPreview]);
 
   return (
-    <div
-      ref={scrollRef}
-      data-slot="reasoning-text"
-      className={cn(
-        "aui-reasoning-text relative z-0 max-h-64 overflow-y-auto ps-6 pt-2 pb-2 leading-relaxed text-pretty",
-        "transform-gpu transition-[transform,opacity] ease-[cubic-bezier(0.32,0.72,0,1)]",
-        "motion-reduce:animate-none",
-        "group-data-open/collapsible-content:animate-in",
-        "group-data-closed/collapsible-content:animate-out",
-        "group-data-open/collapsible-content:fade-in-0",
-        "group-data-closed/collapsible-content:fade-out-0",
-        "group-data-open/collapsible-content:slide-in-from-top-4",
-        "group-data-closed/collapsible-content:slide-out-to-top-4",
-        "group-data-open/collapsible-content:blur-in-[2px]",
-        "group-data-closed/collapsible-content:blur-out-[2px]",
-        "group-data-open/collapsible-content:animation-duration-(--animation-duration)",
-        "group-data-closed/collapsible-content:animation-duration-(--animation-duration)",
-        className,
-      )}
-      {...props}
-    >
-      <div ref={contentRef} className="aui-reasoning-text-content mt-1 flex flex-col gap-1">
-        {children}
+    <div className="relative">
+      {isPreview && scrolledFromTop ? <ReasoningFade side="top" /> : null}
+      <div
+        ref={scrollRef}
+        data-slot="reasoning-text"
+        onScroll={(event) => setScrolledFromTop(event.currentTarget.scrollTop > 0)}
+        className={cn(
+          // 限高只服务流式预览（贴底跟随最新 token）；结束后展开阅读不再套一层内部滚动。
+          "aui-reasoning-text relative z-0 ps-6 pt-2 pb-2 leading-relaxed text-pretty",
+          isPreview && "max-h-64 overflow-y-auto",
+          "transform-gpu transition-[transform,opacity] ease-[cubic-bezier(0.32,0.72,0,1)]",
+          "motion-reduce:animate-none",
+          "group-data-open/collapsible-content:animate-in",
+          "group-data-closed/collapsible-content:animate-out",
+          "group-data-open/collapsible-content:fade-in-0",
+          "group-data-closed/collapsible-content:fade-out-0",
+          "group-data-open/collapsible-content:slide-in-from-top-4",
+          "group-data-closed/collapsible-content:slide-out-to-top-4",
+          "group-data-open/collapsible-content:blur-in-[2px]",
+          "group-data-closed/collapsible-content:blur-out-[2px]",
+          "group-data-open/collapsible-content:animation-duration-(--animation-duration)",
+          "group-data-closed/collapsible-content:animation-duration-(--animation-duration)",
+          className,
+        )}
+        {...props}
+      >
+        <div ref={contentRef} className="aui-reasoning-text-content mt-1 flex flex-col gap-1">
+          {children}
+        </div>
       </div>
     </div>
   );

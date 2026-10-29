@@ -29,24 +29,14 @@ function ReasoningRoot(props: Omit<ReasoningRootProps, "onAnimationStart" | "ref
   );
 }
 
+/** 单个 reasoning part 的正文；折叠外壳由消息分组（group-reasoning）统一提供。 */
 const ReasoningImpl: ReasoningMessagePartComponent = ({ status }) => (
   <MarkdownText status={status} />
 );
 
-const Reasoning = memo(
-  ReasoningImpl,
-) as unknown as ReasoningMessagePartComponent & {
-  Root: typeof ReasoningRoot;
-  Trigger: typeof ReasoningTrigger;
-  Content: typeof ReasoningContent;
-  Text: typeof ReasoningText;
-};
+const Reasoning = memo(ReasoningImpl);
 
 Reasoning.displayName = "Reasoning";
-Reasoning.Root = ReasoningRoot;
-Reasoning.Trigger = ReasoningTrigger;
-Reasoning.Content = ReasoningContent;
-Reasoning.Text = ReasoningText;
 
 export {
   Reasoning,

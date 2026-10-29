@@ -1,13 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Diff, Hunk, parseDiff } from "react-diff-view";
 import type { FileData } from "react-diff-view";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
-import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
+import { cn } from "@/lib/utils";
 import { asRecord, readToolArtifact } from "./types";
-import { ToolStatus } from "./tool-status";
-import { ToolIcon } from "./tool-icons";
-import { DisclosureRow, DisclosureRowStatic } from "../elements/disclosure-row.aui";
-import { useToolDisclosure } from "./tool-disclosure";
+import { ToolCardShell } from "./tool-card-shell";
 import {
   FileOperationCard,
   FileChangeStatusBadge,
@@ -91,12 +89,37 @@ function FileDiff({ change }: { change: FileChange }) {
     return <p className="text-muted-foreground px-3 py-2 text-xs">{message}</p>;
   }
 
-  const { file } = parsed;
+  return <ParsedDiff file={parsed.file} />;
+}
 
+/** 超过这个变更行数的 Diff 默认限高，内部滚动，可一键展开全部。 */
+const COLLAPSED_DIFF_LINE_LIMIT = 24;
+
+/**
+ * 上下统一视图：对话列宽约 700px，左右分栏每侧只剩一半，长行几乎都要横向滚动。
+ * 长 Diff 默认限高，避免一次写入把整条回复撑得很长。
+ */
+function ParsedDiff({ file }: { file: FileData }) {
+  const lineCount = useMemo(() => file.hunks.reduce((sum, hunk) => sum + hunk.changes.length, 0), [file]);
+  const collapsible = lineCount > COLLAPSED_DIFF_LINE_LIMIT;
+  const [expanded, setExpanded] = useState(false);
   return (
-    <Diff viewType="split" diffType={file.type} hunks={file.hunks} className="aui-diff-view overflow-auto text-xs">
-      {(hunks) => hunks.map((hunk, index) => <Hunk key={`${hunk.oldStart}:${hunk.newStart}:${index}`} hunk={hunk} />)}
-    </Diff>
+    <div>
+      <div className={cn("overflow-auto", collapsible && !expanded && "max-h-96")}>
+        <Diff viewType="unified" diffType={file.type} hunks={file.hunks} className="aui-diff-view text-xs">
+          {(hunks) => hunks.map((hunk, index) => <Hunk key={`${hunk.oldStart}:${hunk.newStart}:${index}`} hunk={hunk} />)}
+        </Diff>
+      </div>
+      {collapsible && (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="text-muted-foreground hover:text-foreground w-full border-t px-2.5 py-1 text-left text-xs"
+        >
+          {expanded ? "收起" : `展开全部（${lineCount} 行）`}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -114,24 +137,6 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
   const showDeletions = deletions > 0 && !onlyDeletedChanges;
   const title = artifact.presentation.verb ?? toolName;
   const hasDisplayData = data.kind === "file-changes";
-  const defaultOpen = hasDisplayData && artifact.presentation.default_open === true;
-  const isTerminalState = artifact.backendStatus === "failed" || artifact.backendStatus === "cancelled";
-  const [open, setOpen] = useToolDisclosure(artifact.backendStatus, defaultOpen, { openWhileRunning: false });
-
-  const rowProps = {
-      leading: <ToolIcon name={artifact.presentation.icon} aria-hidden="true" />,
-      label: <span className="text-foreground text-sm font-medium">{title}</span>,
-      meta: isTerminalState ? (
-        <span className="text-destructive">{artifact.error ?? "执行失败"}</span>
-      ) : hasDisplayData ? (
-        <>
-          <span className="text-muted-foreground">{totalFiles} 个文件</span>
-          {showInsertions && <span className="text-success ml-2">+{insertions}</span>}
-          {showDeletions && <span className="ml-2 text-destructive">−{deletions}</span>}
-        </>
-      ) : undefined,
-      trailing: <ToolStatus status={artifact.backendStatus} />,
-  };
 
   const isCompactFileOperation = hasDisplayData
     && changes.length > 0
@@ -150,46 +155,51 @@ export function DiffTool({ toolName, artifact: rawArtifact }: ToolCallMessagePar
     );
   }
 
-  if (!hasDisplayData || artifact.presentation.expandable === false) {
-    return <DisclosureRowStatic {...rowProps} className="group/tool-call" />;
-  }
-
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="group/tool-call">
-      <DisclosureRow {...rowProps} />
-      <CollapsibleContent className="ml-6 space-y-2 pl-2 pt-2">
-        {isTerminalState ? (
-          <p className="text-destructive px-2 text-xs">{artifact.error ?? "执行失败"}</p>
-        ) : (
-          <>
-            {changes.length === 0 && <p className="text-muted-foreground px-2 text-xs">后端没有返回可展示的 Diff。</p>}
-            {changes.map((change) => (
-          <section key={`${change.path}:${change.new_path ?? ""}`} className="overflow-hidden">
-            <header className="flex items-center justify-between gap-2 bg-muted/30 px-2.5 py-1.5 text-xs">
-              <span className="flex min-w-0 items-center gap-2">
-                <FileChangeStatusBadge status={change.status} />
-                {change.status === "moved" ? (
-                  <span className="truncate font-medium" title={`${change.path} → ${change.new_path ?? ""}`}>
-                    {change.path}<span className="mx-1 text-muted-foreground" aria-hidden="true">→</span>{change.new_path ?? "目标路径不可用"}
-                  </span>
-                ) : (
-                  <span className="truncate font-medium">{change.path}</span>
-                )}
-              </span>
-              {change.status !== "deleted" && (Boolean(change.insertions) || Boolean(change.deletions)) && (
-                <span className="shrink-0">
-                  {Boolean(change.insertions) && <span className="text-success">+{change.insertions}</span>}
-                  {Boolean(change.insertions) && Boolean(change.deletions) && " "}
-                  {Boolean(change.deletions) && <span className="text-destructive">−{change.deletions}</span>}
-                </span>
-              )}
-            </header>
-            <FileDiff change={change} />
-          </section>
-            ))}
-          </>
+    <ToolCardShell
+      artifact={artifact}
+      title={title}
+      summary={hasDisplayData ? (
+        <>
+          <span>{totalFiles} 个文件</span>
+          {showInsertions && <span className="text-success ml-2">+{insertions}</span>}
+          {showDeletions && <span className="ml-2 text-destructive">−{deletions}</span>}
+        </>
+      ) : undefined}
+      defaultOpen={hasDisplayData && artifact.presentation.default_open === true}
+      body={hasDisplayData ? (
+        <div className="space-y-2 pt-2">
+          {changes.length === 0 && <p className="text-muted-foreground px-2 text-xs">后端没有返回可展示的 Diff。</p>}
+          {changes.map((change) => <FileChangeSection key={`${change.path}:${change.new_path ?? ""}`} change={change} />)}
+        </div>
+      ) : undefined}
+    />
+  );
+}
+
+function FileChangeSection({ change }: { change: FileChange }) {
+  return (
+    <section className="overflow-hidden">
+      <header className="flex items-center justify-between gap-2 bg-muted/30 px-2.5 py-1.5 text-xs">
+        <span className="flex min-w-0 items-center gap-2">
+          <FileChangeStatusBadge status={change.status} />
+          {change.status === "moved" ? (
+            <span className="truncate font-medium" title={`${change.path} → ${change.new_path ?? ""}`}>
+              {change.path}<span className="mx-1 text-muted-foreground" aria-hidden="true">→</span>{change.new_path ?? "目标路径不可用"}
+            </span>
+          ) : (
+            <WorkspacePathLink path={change.path} className="font-medium" />
+          )}
+        </span>
+        {change.status !== "deleted" && (Boolean(change.insertions) || Boolean(change.deletions)) && (
+          <span className="shrink-0">
+            {Boolean(change.insertions) && <span className="text-success">+{change.insertions}</span>}
+            {Boolean(change.insertions) && Boolean(change.deletions) && " "}
+            {Boolean(change.deletions) && <span className="text-destructive">−{change.deletions}</span>}
+          </span>
         )}
-      </CollapsibleContent>
-    </Collapsible>
+      </header>
+      <FileDiff change={change} />
+    </section>
   );
 }

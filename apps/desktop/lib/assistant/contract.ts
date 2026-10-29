@@ -107,8 +107,8 @@ export type TransportToolCallPart = {
   /** 持久化 TeamRun 的定位字段，工具失败后仍可查询流水线。 */
   team_run_id?: number;
   /**
-   * 延迟结果的后台占位（结论稍后以后台结果回投）：`status === "pending"` 即「后台执行中」。投影自
-   * 占位行 metadata，是卡片状态的事实源；只在为真时出现。
+   * 延迟结果的后台占位（结论稍后以后台结果回投）。投影自占位行 metadata，只在为真时出现；
+   * 前端只做契约校验，不另起展示，卡片状态仍看 `status`。
    */
   deferred?: true;
   /** 后端显式标记的错误结果。 */

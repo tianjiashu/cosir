@@ -58,10 +58,13 @@ function ToolGroupRoot({
 
 function ToolGroupTrigger({
   summary,
+  activeTitle = null,
   className,
   ...props
 }: React.ComponentProps<typeof CollapsibleTrigger> & {
   summary: ToolGroupSummary;
+  /** 运行中最新一个未结束调用的动词，只在 running 阶段显示。 */
+  activeTitle?: string | null;
 }) {
   const isActive = summary.phase === "running";
   const statusIcon = summary.phase === "failed"
@@ -94,6 +97,9 @@ function ToolGroupTrigger({
           {toolGroupSummaryLabel(summary)}
         </span>
       }
+      meta={isActive && activeTitle ? (
+        <span data-slot="tool-group-trigger-active" className="text-foreground/80">{activeTitle}</span>
+      ) : undefined}
       trailing={isActive ? (
         <LoaderIcon
           data-slot="tool-group-trigger-loader"

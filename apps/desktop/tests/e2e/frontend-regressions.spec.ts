@@ -135,7 +135,8 @@ test("工具运行中保持静态状态行，完成拿到展示数据后才可�
   await expect(assistant.getByText("未找到匹配", { exact: true })).toHaveCount(0);
   const toolRow = assistant.getByRole("button", { name: /搜索文件/ });
   await expect(toolRow).toBeVisible({ timeout: 3_000 });
-  const match = assistant.getByText("lifecycle.test.ts:1 lifecycle", { exact: true });
+  // 命中行拆成可点开的「路径:行号」与高亮正文两部分。
+  const match = assistant.getByText("lifecycle.test.ts:1", { exact: true });
   await expect(match).toBeHidden();
   await toolRow.click();
   await expect(match).toBeVisible();

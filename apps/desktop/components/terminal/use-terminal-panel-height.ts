@@ -1,41 +1,40 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
-export const MIN_TERMINAL_PANEL_HEIGHT = 192;
-const DEFAULT_PANEL_HEIGHT = 320;
+import { readTerminalPanelHeight, TERMINAL_PANEL_HEIGHT, writeTerminalPanelHeight } from "@/lib/workspace-preferences";
 
-/** 底部终端面板的高度：拖拽调整、展开 / 还原，最大值随窗口高度（八成）变化。 */
+export const MIN_TERMINAL_PANEL_HEIGHT = TERMINAL_PANEL_HEIGHT.min;
+
+function maxHeightForWindow(): number {
+  return Math.max(MIN_TERMINAL_PANEL_HEIGHT, Math.round(window.innerHeight * 0.8));
+}
+
+/**
+ * 底部终端面板的高度：拖拽调整、展开 / 还原。
+ *
+ * 只保存用户拖拽出的高度（偏好，跨 Task 与重启保留）；实际高度在渲染时派生：展开即上限（窗口高度
+ * 八成），否则把偏好收敛到 [下限, 上限]。窗口临时变矮不会改写偏好，变回来即恢复。TaskPage 按 taskId
+ * 重建，所以高度不能只放在组件 state 里，否则每切一次任务都会回到默认值。
+ */
 export function useTerminalPanelHeight() {
-  const [panelHeight, setPanelHeight] = useState(DEFAULT_PANEL_HEIGHT);
-  const [maxPanelHeight, setMaxPanelHeight] = useState(720);
+  const [preferredHeight, setPreferredHeight] = useState(readTerminalPanelHeight);
+  const [maxPanelHeight, setMaxPanelHeight] = useState(maxHeightForWindow);
   const [expanded, setExpanded] = useState(false);
-  const restoreHeightRef = useRef(DEFAULT_PANEL_HEIGHT);
 
   useEffect(() => {
-    const updateMaxPanelHeight = () => {
-      const nextMaxHeight = Math.max(MIN_TERMINAL_PANEL_HEIGHT, Math.round(window.innerHeight * 0.8));
-      setMaxPanelHeight(nextMaxHeight);
-      setPanelHeight((current) => Math.min(current, nextMaxHeight));
-    };
-    updateMaxPanelHeight();
+    const updateMaxPanelHeight = () => setMaxPanelHeight(maxHeightForWindow());
     window.addEventListener("resize", updateMaxPanelHeight);
     return () => window.removeEventListener("resize", updateMaxPanelHeight);
   }, []);
+  useEffect(() => writeTerminalPanelHeight(preferredHeight), [preferredHeight]);
 
-  const clampPanelHeight = (height: number) => Math.min(Math.max(height, MIN_TERMINAL_PANEL_HEIGHT), maxPanelHeight);
-  const toggleExpanded = () => {
-    if (expanded) {
-      setPanelHeight(clampPanelHeight(restoreHeightRef.current));
-      setExpanded(false);
-      return;
-    }
-    restoreHeightRef.current = panelHeight;
-    setPanelHeight(clampPanelHeight(Math.round(window.innerHeight * 0.72)));
-    setExpanded(true);
-  };
+  const panelHeight = expanded
+    ? maxPanelHeight
+    : Math.min(Math.max(preferredHeight, MIN_TERMINAL_PANEL_HEIGHT), maxPanelHeight);
+  const toggleExpanded = () => setExpanded((current) => !current);
   /** 拖拽调整：退出展开态，以拖拽结果为准。 */
   const resizePanel = (height: number) => {
     setExpanded(false);
-    setPanelHeight(height);
+    setPreferredHeight(height);
   };
 
   return { panelHeight, maxPanelHeight, expanded, toggleExpanded, resizePanel };

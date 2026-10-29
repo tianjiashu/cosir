@@ -9,7 +9,7 @@ import { PANEL_HEADER_CLASS } from "@/components/ui/panel-tokens";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
 import { queryKeys } from "@/lib/query/query-keys";
 import { listTerminalShells } from "@/lib/terminal/terminal-api";
-import type { TerminalConnectionState } from "@/lib/terminal/terminal-connection";
+import { terminalNoticeClass, terminalPaneStatus } from "@/lib/terminal/terminal-pane-status";
 import {
   endedTerminalSessions,
   isActiveTerminalSession,
@@ -21,30 +21,17 @@ import { cn } from "@/lib/utils";
 import { useFilesStore } from "@/lib/workspace-files/store";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 
-import { TERMINAL_CONNECTION_LABEL, TerminalMoreMenu } from "./terminal-menus";
+import { TerminalEndedMenu } from "./terminal-menus";
 import { TerminalSearchBar } from "./terminal-search-bar";
 import { TerminalSessionPane } from "./terminal-session-pane";
 import { TerminalTabBar } from "./terminal-tab-bar";
 import type { TerminalView, TerminalViewRuntime } from "./terminal-view";
 import { MIN_TERMINAL_PANEL_HEIGHT, useTerminalPanelHeight } from "./use-terminal-panel-height";
-import { type PanelNotice, useTerminalSessionActions } from "./use-terminal-session-actions";
-
-function noticeClass(tone: PanelNotice["tone"]): string {
-  return tone === "destructive" ? "text-destructive" : tone === "warning" ? "text-warning" : "text-muted-foreground";
-}
-
-/** 连接状态之上的常驻输入提示：会话结束或断线时输入已禁用，明确告诉用户而不是静默吞键。 */
-function inputBlockedText(connection: TerminalConnectionState | undefined): string | null {
-  if (connection === "ended") return "会话已结束，输入已停用";
-  if (connection === "expired") return "该会话已不在后端（可能因后端重启），输入已停用；可点击「+」新建终端";
-  if (connection === "reconnecting") return "连接中断，正在重新连接（画面保留），输入暂停";
-  if (connection === "failed") return "连接失败，输入已停用；可在 ⋮ 菜单中重新连接";
-  return null;
-}
+import { useTerminalSessionActions } from "./use-terminal-session-actions";
 
 /**
- * Task 级底部终端工作台：会话标签栏（含「+」与选 shell 下拉）、⋮ 菜单（已结束会话 / 重连）、
- * 展开、关闭（只收起，不结束会话）。本组件只做装配：标签栏与菜单、新建 / 关闭、面板高度各在同目录
+ * Task 级底部终端工作台：会话标签栏（含「+」与选 shell 下拉）、已结束会话菜单、展开、关闭（只收起，
+ * 不结束会话），以及页头短提示与页头下方的常驻状态栏（规则见 `terminal-pane-status`）。本组件只做装配：标签栏与菜单、新建 / 关闭、面板高度各在同目录
  * 的组件与 hook 里。
  *
  * 会话列表只读 snapshot 镜像（`useTerminalWorkbenchStore`），新建 / 关闭经 HTTP 后等 snapshot 回推；
@@ -159,8 +146,9 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   if (!everOpened) return null;
 
   const activeView = activeSessionId ? viewsRef.current.get(activeSessionId) : undefined;
-  const blockedText = activeSession ? inputBlockedText(activeRuntime?.connection) : null;
-  const transientNotice = activeRuntime?.notice ?? null;
+  const paneStatus = terminalPaneStatus(activeSession, activeRuntime?.connection);
+  // 面板命令（新建 / 关闭失败）优先于会话视图的短提示：前者是用户刚做的操作。
+  const headerNotice = notice ?? activeRuntime?.notice ?? null;
   const showPlaceholder = tabs.length === 0;
 
   return (
@@ -186,22 +174,12 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
               onCreate={(shell) => void createSession(shell)}
             />
             <div className="ml-auto flex min-w-0 items-center gap-1">
-              {(notice ?? transientNotice) && (
-                <span role="status" className={cn("truncate text-2xs", noticeClass((notice ?? transientNotice)!.tone))}>
-                  {(notice ?? transientNotice)!.text}
+              {headerNotice && (
+                <span role="status" className={cn("truncate text-2xs", terminalNoticeClass(headerNotice.tone))}>
+                  {headerNotice.text}
                 </span>
               )}
-              {activeRuntime && (activeRuntime.connection === "connecting" || activeRuntime.connection === "reconnecting" || activeRuntime.connection === "failed") && (
-                <span className="text-muted-foreground shrink-0 text-2xs" data-testid="terminal-connection-state">
-                  {TERMINAL_CONNECTION_LABEL[activeRuntime.connection]}
-                </span>
-              )}
-              <TerminalMoreMenu
-                ended={ended}
-                connection={activeRuntime?.connection ?? null}
-                onOpenEnded={selectSession}
-                onReconnect={activeView ? () => activeView.reconnect() : undefined}
-              />
+              <TerminalEndedMenu ended={ended} onOpenEnded={selectSession} />
               <TooltipIconButton
                 tooltip={expanded ? "还原高度" : "展开终端"}
                 className="text-muted-foreground size-7"
@@ -235,11 +213,23 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
               </Button>
             </div>
           )}
-          {blockedText && (
-            <div className="text-muted-foreground mx-2 mb-1 rounded-md bg-muted px-3 py-1 text-2xs" role="status" data-testid="terminal-input-blocked">
-              {blockedText}
-              {activeSession?.exitCode != null ? ` · 退出码 ${activeSession.exitCode}` : ""}
-              {activeSession && !isActiveTerminalSession(activeSession) ? " · 画面受缓冲限制可能不完整" : ""}
+          {paneStatus && (
+            <div
+              role="status"
+              className={cn("mx-2 mb-1 flex items-center gap-2 rounded-md bg-muted px-3 py-1 text-2xs", terminalNoticeClass(paneStatus.tone))}
+              data-testid="terminal-status"
+            >
+              <span className="min-w-0 flex-1 truncate">{paneStatus.text}</span>
+              {paneStatus.action === "reconnect" && activeView && (
+                <Button type="button" size="sm" variant="secondary" className="h-5 shrink-0 px-2 text-2xs" onClick={() => activeView.reconnect()}>
+                  重新连接
+                </Button>
+              )}
+              {paneStatus.action === "create" && (
+                <Button type="button" size="sm" variant="secondary" className="h-5 shrink-0 px-2 text-2xs" disabled={creating} onClick={() => void createSession("auto")}>
+                  新建终端
+                </Button>
+              )}
             </div>
           )}
           <div className="relative min-h-0 flex-1">

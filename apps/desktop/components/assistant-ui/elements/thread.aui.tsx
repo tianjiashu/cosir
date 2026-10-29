@@ -140,14 +140,32 @@ type ToolTraceGroupProps = {
  *
  * 没有工具结果时，assistant-ui 会从 assistant message status 推导工具状态；
  * assistant 继续后续步骤时，已完成的工具可能因此仍显示运行中，所以这里直接读取
- * Transport artifact 计算聚合状态。
+ * Transport artifact 计算聚合状态。只有一个调用时不折叠成组：组标题只会复述那一行，
+ * 还要多点一次才能看到它。
  */
 const ToolTraceGroup: FC<ToolTraceGroupProps> = ({ indices, children }) => {
+  if (indices.length === 1) return <>{children}</>;
+  return <CollapsedToolTraceGroup indices={indices}>{children}</CollapsedToolTraceGroup>;
+};
+
+const CollapsedToolTraceGroup: FC<ToolTraceGroupProps> = ({ indices, children }) => {
   const statusKey = useAuiState((state) => indices.map((index) => {
     const part = state.message.parts[index];
     if (part?.type !== "tool-call") return "unknown";
     return readToolArtifact(part.artifact).backendStatus;
   }).join("|"));
+  // 组默认折叠，运行中在标题上露出最新一个未结束调用的动词，让用户知道 Agent 正在做什么。
+  const activeTitle = useAuiState((state) => {
+    for (let i = indices.length - 1; i >= 0; i -= 1) {
+      const part = state.message.parts[indices[i]];
+      if (part?.type !== "tool-call") continue;
+      const artifact = readToolArtifact(part.artifact);
+      if (artifact.backendStatus === "pending" || artifact.backendStatus === "running") {
+        return artifact.presentation.verb ?? part.toolName;
+      }
+    }
+    return null;
+  });
   const summary = useMemo(
     () => summarizeToolGroup(
       (statusKey ? statusKey.split("|") : []) as TransportToolStatus[],
@@ -157,7 +175,7 @@ const ToolTraceGroup: FC<ToolTraceGroupProps> = ({ indices, children }) => {
 
   return (
     <ToolGroupRoot>
-      <ToolGroupTrigger summary={summary} />
+      <ToolGroupTrigger summary={summary} activeTitle={activeTitle} />
       <ToolGroupContent>{children}</ToolGroupContent>
     </ToolGroupRoot>
   );
@@ -199,7 +217,8 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
                 performanceProbe={performanceProbe}
               />
               {!readonly && (
-                <ThreadPrimitive.ViewportFooter className={cn("bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6", !isEmpty && "rounded-t-3xl")}>
+                <ThreadPrimitive.ViewportFooter className="bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6">
+                  <div aria-hidden="true" className="scroll-fade-bottom" />
                   <ScrollToBottomButton />
                   <ComposerBoundary
                     taskId={taskId}
@@ -272,9 +291,6 @@ const Composer = memo(function Composer({ taskId, workspaceRoot }: { taskId: num
     <ComposerInsertionProvider>
       <ComposerFeedbackProvider>
         <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
-          <div className="flex min-w-0 items-center px-1">
-            <ThreadComposerPromptToolbar lock={runLaunch === null ? null : { kind: "run", launch: runLaunch }} />
-          </div>
           <div className="min-h-0 min-w-0 w-full">
             <ComposerAttachments />
             <InlineComposerInput
@@ -288,6 +304,7 @@ const Composer = memo(function Composer({ taskId, workspaceRoot }: { taskId: num
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+              <ThreadComposerPromptToolbar lock={runLaunch === null ? null : { kind: "run", launch: runLaunch }} />
               <TaskContextUsage />
               <div className="min-w-0 flex-1">
                 <ComposerControls
@@ -786,9 +803,6 @@ const UserEditMessage: FC = () => {
       <ComposerInsertionProvider>
         <ComposerFeedbackProvider>
           <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
-            <div className="flex min-w-0 items-center px-1">
-              <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} lock={queuedEdit ? { kind: "queued" } : null} />
-            </div>
             <div className="min-h-0 min-w-0 w-full">
               <ComposerAttachments />
               <InlineComposerInput
@@ -800,27 +814,30 @@ const UserEditMessage: FC = () => {
               />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-              <div className="min-w-0 flex-1">
-                {blockedReason !== null ? (
-                  <span className="text-xs text-warning">
-                    {blockedReason}
-                    {canSwitchToRerun && (
-                      <button
-                        type="button"
-                        className="ml-1 underline underline-offset-2 hover:text-foreground"
-                        onClick={() => setIntent("rerun")}
-                      >
-                        改为编辑并重跑
-                      </button>
-                    )}
-                  </span>
-                ) : queuedEdit ? (
-                  <span className="text-muted-foreground text-xs">排队消息沿用发送时的配置</span>
-                ) : (
-                  <ComposerControls
-                    scope={{ kind: "task", id: taskId }}
-                  />
-                )}
+              <div className="flex min-w-0 flex-1 items-center gap-1">
+                <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} lock={queuedEdit ? { kind: "queued" } : null} />
+                <div className="min-w-0 flex-1">
+                  {blockedReason !== null ? (
+                    <span className="text-xs text-warning">
+                      {blockedReason}
+                      {canSwitchToRerun && (
+                        <button
+                          type="button"
+                          className="ml-1 underline underline-offset-2 hover:text-foreground"
+                          onClick={() => setIntent("rerun")}
+                        >
+                          改为编辑并重跑
+                        </button>
+                      )}
+                    </span>
+                  ) : queuedEdit ? (
+                    <span className="text-muted-foreground text-xs">排队消息沿用发送时的配置</span>
+                  ) : (
+                    <ComposerControls
+                      scope={{ kind: "task", id: taskId }}
+                    />
+                  )}
+                </div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <ComposerAttachmentButton workspaceRoot={workspaceRoot} disabled={isHydrating || isRecoveryActive} />

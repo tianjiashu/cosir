@@ -53,16 +53,14 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   await expect(card).not.toContainText("npm test");
   await expect(card).toContainText("1 已完成");
 
-  // 后台占位卡片：「后台执行中」+ 取消；取消后占位推到 cancelled，看板条目结束。连续工具调用默认收成一组。
+  // 后台占位卡片不另起状态行；取消走看板。连续工具调用默认收成一组。
   await page.getByRole("button", { name: /个工具调用/ }).click();
-  const bgActions = page.locator('[data-deferred-actions="call-bg"]');
-  await expect(bgActions).toContainText("后台执行中");
-  await bgActions.getByRole("button", { name: "取消" }).click();
-  await expect(bgActions).toHaveCount(0);
+  await expect(page.locator('[data-foreground-wait="call-bg"]')).toHaveCount(0);
+  await page.locator('[data-background-task="call-bg"]').getByRole("button", { name: "停止" }).click();
   await expect(card).toContainText("2 已完成");
 
   // 前台等待：只在工具卡片上「转到后台」；转走后才出现在看板，卡片不再提供转后台。
-  const fgActions = page.locator('[data-deferred-actions="call-fg"]');
+  const fgActions = page.locator('[data-foreground-wait="call-fg"]');
   await fgActions.getByRole("button", { name: "转到后台" }).click();
   await expect(fgActions).toHaveCount(0);
   const fgRow = page.locator('[data-background-task="call-fg"]');
