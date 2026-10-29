@@ -1,15 +1,20 @@
 import {
   ArrowDownIcon,
   ArrowUpIcon,
+  KeyboardIcon,
   SquareTerminalIcon,
   TerminalIcon,
   XIcon,
 } from "lucide-react";
-import type { KeyboardEvent, ReactNode } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { TerminalSessionEntry } from "@/lib/assistant/contract";
+import { submitToolDecision } from "@/lib/assistant/task-commands";
+import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { HttpError } from "@/lib/http/errors";
+import { notify } from "@/lib/notify";
 import { terminalStatusPresentation } from "@/lib/terminal/terminal-sessions";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { cn } from "@/lib/utils";
@@ -18,7 +23,7 @@ import { ToolStatus } from "./tool-status";
 import type { ToolPartRendererProps } from "./tool-renderer-registry";
 import { DisclosureRowStatic } from "../elements/disclosure-row.aui";
 
-type TerminalSessionVariant = "start" | "list" | "read" | "write" | "close" | "unknown";
+type TerminalSessionVariant = "start" | "list" | "read" | "write" | "handoff" | "close" | "unknown";
 type ActionVariant = Exclude<TerminalSessionVariant, "start" | "unknown">;
 
 function text(value: unknown): string | undefined {
@@ -31,6 +36,7 @@ function sessionVariant(value: unknown): TerminalSessionVariant {
     case "terminal-session-list": return "list";
     case "terminal-session-read": return "read";
     case "terminal-session-write": return "write";
+    case "terminal-session-handoff": return "handoff";
     case "terminal-session-close": return "close";
     default: return "unknown";
   }
@@ -38,7 +44,7 @@ function sessionVariant(value: unknown): TerminalSessionVariant {
 
 /**
  * 条件等待的结束原因（后端 `wait_result.end_reason`）→ 中文；不据此宣告命令成功。
- * `idle` 为未带等待条件，`background` 为超出工具线程时长、转为挂起等待（完成后通知 Agent）。
+ * `idle` 为未带等待条件。
  */
 const WAIT_END_REASON_LABELS: Record<string, string> = {
   command_returned: "命令已返回",
@@ -48,7 +54,6 @@ const WAIT_END_REASON_LABELS: Record<string, string> = {
   timeout: "等待超时",
   cancelled: "等待已取消",
   session_ended: "会话已结束",
-  background: "转为后台等待",
 };
 
 function waitResultLabel(value: unknown): string | null {
@@ -70,6 +75,7 @@ function actionLabel(variant: ActionVariant): string {
     case "list": return "列出终端会话";
     case "read": return "读取终端";
     case "write": return "终端输入";
+    case "handoff": return "交给你输入";
     case "close": return "关闭终端会话";
   }
 }
@@ -80,6 +86,7 @@ function actionLabel(variant: ActionVariant): string {
  */
 function actionMeta(variant: ActionVariant, data: Record<string, unknown>): string {
   if (variant === "list") return typeof data.session_count === "number" ? `${data.session_count} 个会话` : "会话列表";
+  if (variant === "handoff") return text(data.input_summary) ?? "请在终端中完成输入";
   if (variant === "close") {
     const status = data.status === "closed" || data.status === "exited" || data.status === "failed"
       ? terminalStatusPresentation(data.status).label
@@ -97,6 +104,7 @@ function actionIcon(variant: ActionVariant): ReactNode {
   if (variant === "list") return <TerminalIcon className="text-info size-4" aria-hidden="true" />;
   if (variant === "read") return <ArrowDownIcon className="text-info size-4" aria-hidden="true" />;
   if (variant === "write") return <ArrowUpIcon className="text-info size-4" aria-hidden="true" />;
+  if (variant === "handoff") return <KeyboardIcon className="text-info size-4" aria-hidden="true" />;
   return <XIcon className="text-muted-foreground size-4" aria-hidden="true" />;
 }
 
@@ -164,10 +172,11 @@ function TerminalSessionStartCard({ artifact, taskId, interactive }: {
   );
 }
 
-function TerminalSessionActionRow({ artifact, variant, taskId, interactive }: {
+function TerminalSessionActionRow({ artifact, variant, taskId, toolCallId, interactive }: {
   artifact: ReturnType<typeof readToolArtifact>;
   variant: ActionVariant;
   taskId: number;
+  toolCallId: string;
   interactive: boolean;
 }) {
   const data = asRecord(artifact.display_data);
@@ -193,18 +202,54 @@ function TerminalSessionActionRow({ artifact, variant, taskId, interactive }: {
       leading={actionIcon(variant)}
       label={<span className={cn("text-sm font-medium", artifact.backendStatus === "failed" && "text-destructive")}>{actionLabel(variant)}</span>}
       meta={<span className="text-muted-foreground max-w-[55%] truncate font-mono" title={meta}>{meta}</span>}
-      trailing={<ToolStatus status={artifact.backendStatus} />}
+      trailing={
+        variant === "handoff" && interactive && artifact.backendStatus === "pending"
+          ? <HandoffReturnButton taskId={taskId} toolCallId={toolCallId} />
+          : <ToolStatus status={artifact.backendStatus} />
+      }
     />
   );
 }
 
+/**
+ * 交接卡片上的「交还」：交接是 HITL 调用，等待占位为 `pending` 时可对它作出决定。会话已结束或后端
+ * 重启过时终端面板里没有交接提示，这里是唯一入口；决定执行后卡片随 snapshot 推到终态。
+ */
+function HandoffReturnButton({ taskId, toolCallId }: { taskId: number; toolCallId: string }) {
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await submitToolDecision(taskId, toolCallId, { decision: "approve" });
+    } catch (error) {
+      if (!(error instanceof HttpError && error.status === 409)) notify.error(userErrorMessage(error, "交还失败，请稍后重试"));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Button
+      type="button"
+      size="xs"
+      variant="secondary"
+      disabled={busy}
+      onClick={(event) => {
+        event.stopPropagation();
+        void submit();
+      }}
+    >
+      交还
+    </Button>
+  );
+}
+
 /** 交互终端工具卡片：start 为会话锚点卡，其余为可跳转到对应会话的动作行。 */
-export function TerminalSessionTool({ taskId, interactive = false, artifact: rawArtifact }: ToolPartRendererProps) {
+export function TerminalSessionTool({ taskId, toolCallId, interactive = false, artifact: rawArtifact }: ToolPartRendererProps) {
   const artifact = readToolArtifact(rawArtifact);
   const variant = sessionVariant(asRecord(artifact.presentation).variant);
 
   if (variant === "start") return <TerminalSessionStartCard artifact={artifact} taskId={taskId} interactive={interactive} />;
-  if (variant !== "unknown") return <TerminalSessionActionRow artifact={artifact} variant={variant} taskId={taskId} interactive={interactive} />;
+  if (variant !== "unknown") return <TerminalSessionActionRow artifact={artifact} variant={variant} taskId={taskId} toolCallId={toolCallId} interactive={interactive} />;
 
   return (
     <DisclosureRowStatic

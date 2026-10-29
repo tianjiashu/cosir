@@ -10,7 +10,7 @@ const TASK_ID = 61;
 function entry(toolCallId: string, overrides: Partial<BackgroundTaskEntry> = {}): BackgroundTaskEntry {
   return {
     toolCallId,
-    kind: "terminal_wait",
+    kind: "terminal_command",
     label: `wait ${toolCallId}`,
     status: "running",
     startedAt: new Date(Date.now() - 40_000).toISOString(),

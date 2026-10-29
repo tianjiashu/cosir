@@ -105,12 +105,10 @@ describe("TerminalConnection（terminal-v2）", () => {
     expect(connection.sendInput(new TextEncoder().encode("ls\r"))).toBe(true);
     expect(connection.sendResize(30, 120)).toBe(true);
     connection.releaseInput();
-    connection.handoffDone();
     expect(sockets[0].sent.slice(1)).toEqual([
       { type: "input", data_base64: encodeBase64(new TextEncoder().encode("ls\r")) },
       { type: "resize", rows: 30, cols: 120 },
       { type: "release_input" },
-      { type: "handoff_done" },
     ]);
     expect(vi.mocked(frontendLog).mock.calls.map((call) => call[1])).toContain("terminal_ws_connected");
   });

@@ -37,6 +37,7 @@
 }
 
 .workspace-tree-task {
+  position: relative;
   gap: 8px;
   font-size: 0.8125rem;
   line-height: 1.25rem;
@@ -45,10 +46,55 @@
 .workspace-tree-task-marker {
   position: relative;
   display: flex;
-  flex: 0 0 32px;
+  flex: 0 0 auto;
   height: 16px;
   align-items: center;
   justify-content: center;
+}
+
+/* Fork 引导线：竖线贯穿整行高度，行与行之间首尾相接；横向短线连到本行的状态标记。 */
+.workspace-tree-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  pointer-events: none;
+  --guide-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
+}
+
+.workspace-tree-guide:is([data-guide="pass"], [data-guide="tee"])::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-left: 1px solid var(--guide-color);
+}
+
+.workspace-tree-guide[data-guide="tee"]::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  border-top: 1px solid var(--guide-color);
+}
+
+.workspace-tree-guide[data-guide="end"]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 50%;
+  border-left: 1px solid var(--guide-color);
+  border-bottom: 1px solid var(--guide-color);
+  border-bottom-left-radius: 4px;
+}
+
+/* 嵌套行的状态点贴标记右缘，作为引导线的落点。 */
+.workspace-tree-task-marker[data-nested] {
+  justify-content: flex-end;
 }
 
 .workspace-tree-workspace-actions {

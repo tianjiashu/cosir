@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceTask } from "@/lib/api/workspaces";
-import { buildTaskTreeModel, getTaskAncestorIds } from "@/components/task-tree/task-tree-model";
+import { buildTaskForest } from "@/components/task-tree/task-tree-model";
 
 function task(taskId: number, title: string, options: Partial<WorkspaceTask> = {}): WorkspaceTask {
   return {
@@ -24,9 +24,9 @@ function fork(taskId: number, sourceTaskId: number, title = `Fork ${taskId}`): W
   });
 }
 
-describe("buildTaskTreeModel", () => {
+describe("buildTaskForest", () => {
   it("builds an arbitrarily deep Fork tree and preserves sibling order", () => {
-    const model = buildTaskTreeModel([
+    const roots = buildTaskForest([
       fork(4, 2),
       fork(3, 1),
       fork(2, 1),
@@ -34,27 +34,26 @@ describe("buildTaskTreeModel", () => {
       task(1, "Mainline"),
     ]);
 
-    expect(model.roots.map((node) => node.task_id)).toEqual([1]);
-    expect(model.roots[0].children.map((node) => node.task_id)).toEqual([2, 3]);
-    expect(model.roots[0].children[0].children.map((node) => node.task_id)).toEqual([4, 5]);
-    expect(getTaskAncestorIds(5, model.parentById)).toEqual(new Set([2, 1]));
+    expect(roots.map((node) => node.task_id)).toEqual([1]);
+    expect(roots[0].children.map((node) => node.task_id)).toEqual([2, 3]);
+    expect(roots[0].children[0].children.map((node) => node.task_id)).toEqual([4, 5]);
   });
 
   it("keeps missing-source and cyclic Forks visible as roots", () => {
-    const model = buildTaskTreeModel([
+    const roots = buildTaskForest([
       fork(2, 99),
       fork(3, 4),
       fork(4, 3),
       task(5, "Hidden delegation", { task_type: "delegation" }),
     ]);
 
-    expect(model.roots.map((node) => node.task_id).sort()).toEqual([2, 3, 4]);
-    expect(model.nodesById.has(5)).toBe(false);
+    expect(roots.map((node) => node.task_id).sort()).toEqual([2, 3, 4]);
+    expect(roots.flatMap((node) => node.children)).toEqual([]);
   });
 });
 
 describe("task tree title", () => {
-  const fullTitle = (title: string) => buildTaskTreeModel([task(1, title)]).roots[0].full_title;
+  const fullTitle = (title: string) => buildTaskForest([task(1, title)])[0].full_title;
 
   it("strips inline attachment tokens", () => {
     expect(fullTitle("[[cosir-file:abc]]帮我优化这个文档")).toBe("帮我优化这个文档");

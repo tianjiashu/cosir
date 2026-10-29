@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { selectActiveSessionCount, selectTerminalTask, useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
-import { endedTerminalSessions, mountedTerminalSessionIds, terminalTabs } from "@/lib/terminal/terminal-sessions";
+import { selectTerminalTask, useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
+import { endedTerminalSessions, mountedTerminalSessionIds, terminalBadge, terminalTabs } from "@/lib/terminal/terminal-sessions";
 import { terminalSession } from "./transport-fixtures";
 
 const TASK = 42;
@@ -19,7 +19,36 @@ describe("终端工作台 store", () => {
 
     expect(task()).toMatchObject({ open: true, activeSessionId: "t2" });
     expect(selectTerminalTask(7)(useTerminalWorkbenchStore.getState())).toMatchObject({ open: false, activeSessionId: "x1" });
-    expect(selectActiveSessionCount(TASK)(useTerminalWorkbenchStore.getState())).toBe(2);
+    expect(terminalBadge(task().sessions, task().acknowledgedEnds).count).toBe(2);
+  });
+
+  it("页头角标：未看过的异常结束优先提醒，打开面板即视为看过；否则提示 Agent 正在输入", () => {
+    const store = useTerminalWorkbenchStore.getState();
+    const badge = () => terminalBadge(task().sessions, task().acknowledgedEnds);
+    store.syncSessions(TASK, [
+      terminalSession("t1", { inputHolder: "agent", agentInputCallId: "call-1" }),
+      terminalSession("t2"),
+    ]);
+    expect(badge()).toMatchObject({ count: 2, tone: "agent" });
+    expect(badge().hint).toContain("Agent 正在「终端 1」中输入");
+
+    // 收起时异常退出：标红；正常退出（0）与主动关闭不提醒。
+    store.syncSessions(TASK, [
+      terminalSession("t1", { inputHolder: "agent", agentInputCallId: "call-1" }),
+      terminalSession("t2", { status: "exited", exitCode: 2 }),
+      terminalSession("t3", { status: "closed" }),
+      terminalSession("t4", { status: "exited", exitCode: 0 }),
+    ]);
+    expect(badge()).toMatchObject({ count: 1, tone: "attention" });
+    // 已结束会话不在标签栏里，仍按编号称呼，与用户看到过的标签名一致。
+    expect(badge().hint).toContain("「终端 2」异常结束（退出码 2）");
+
+    store.setOpen(TASK, true);
+    expect(badge().tone).toBe("agent");
+    // 面板开着时结束的会话用户看得见，收起后也不再提醒。
+    store.syncSessions(TASK, [terminalSession("t1", { status: "failed" }), terminalSession("t2", { status: "exited", exitCode: 2 })]);
+    store.setOpen(TASK, false);
+    expect(badge()).toEqual({ count: 0, tone: null, hint: null });
   });
 
   it("Task 删除后 forget 丢弃其桶，其他 Task 不受影响", () => {
@@ -41,7 +70,7 @@ describe("终端工作台 store", () => {
     store.setOpen(TASK, true);
     store.syncSessions(TASK, null);
     expect(task()).toMatchObject({ sessions: null, open: true, activeSessionId: "t2" });
-    expect(selectActiveSessionCount(TASK)(useTerminalWorkbenchStore.getState())).toBe(0);
+    expect(terminalBadge(task().sessions, task().acknowledgedEnds).count).toBe(0);
 
     store.forget([TASK]);
     store.syncSessions(TASK, null);
@@ -66,13 +95,13 @@ describe("终端工作台 store", () => {
     expect(task().open).toBe(false);
 
     const before = task().focusToken;
-    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("a1", { createdBy: "agent", handoff: { reason: "输入密码" } })]);
+    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("a1", { createdBy: "agent", handoff: { reason: "输入密码", toolCallId: "call-handoff" } })]);
     expect(task()).toMatchObject({ open: true, activeSessionId: "a1" });
     expect(task().focusToken).toBe(before + 1);
 
     // 同一交接持续存在不重复抢焦点；用户关了面板也不会被再次弹开。
     store.setOpen(TASK, false);
-    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("a1", { createdBy: "agent", handoff: { reason: "输入密码" }, inputHolder: "user" })]);
+    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("a1", { createdBy: "agent", handoff: { reason: "输入密码", toolCallId: "call-handoff" }, inputHolder: "user" })]);
     expect(task().open).toBe(false);
   });
 

@@ -9,7 +9,7 @@ import { materializeSkillMentions } from "@/lib/assistant/skill-mention-token";
 /**
  * Preserve composer-only ordinary-file tokens at the HTTP boundary and attach
  * the selected local-file descriptors explicitly. The backend resolves paths
- * and persists the binding with the message (inbox body, then context
+ * and persists the binding with the message (message_queue body, then context
  * metadata), so a reloaded WebView does not depend on the in-memory local
  * attachment registry.
  *

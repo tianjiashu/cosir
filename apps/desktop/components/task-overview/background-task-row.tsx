@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BotIcon, CheckIcon, KeyboardIcon, SquareIcon, SquareTerminalIcon, XCircleIcon, type LucideIcon } from "lucide-react";
+import { BotIcon, CheckIcon, SquareIcon, SquareTerminalIcon, XCircleIcon, type LucideIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import type { BackgroundTaskEntry } from "@/lib/assistant/contract";
@@ -8,8 +8,7 @@ import { notify } from "@/lib/notify";
 
 /** 新增延迟结果种类时补一项（见设计文档「新增工具如何接入」）。 */
 const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
-  terminal_wait: SquareTerminalIcon,
-  terminal_handoff: KeyboardIcon,
+  terminal_command: SquareTerminalIcon,
   child_agent: BotIcon,
 };
 

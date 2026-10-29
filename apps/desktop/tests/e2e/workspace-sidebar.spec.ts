@@ -51,7 +51,7 @@ for (const theme of ["light", "dark"]) {
     await expect(selected).toHaveAttribute("aria-current", "page");
     await expect(workspace).toHaveAttribute("aria-selected", "false");
     await expect(page.locator("html")).toHaveCSS("color-scheme", theme);
-    await expect(other.getByRole("img", { name: "等待确认" })).toBeVisible();
+    await expect(other.getByRole("img", { name: "等待中" })).toBeVisible();
     await expect(row(page, "分支任务").getByRole("img", { name: "运行中" })).toBeVisible();
 
     const title = selected.locator(".workspace-tree-title");
@@ -77,8 +77,8 @@ for (const theme of ["light", "dark"]) {
     await expect(other).toHaveAttribute("aria-selected", "false");
 
     await selected.hover();
-    const deleteButton = selected.getByRole("button", { name: `删除 ${longTitle}`, exact: true });
-    await expect(deleteButton).toBeVisible();
+    const menuButton = selected.getByRole("button", { name: `更多操作：${longTitle}`, exact: true });
+    await expect(menuButton).toBeVisible();
     await expect(selected.locator(".workspace-tree-actions")).toHaveCSS("opacity", "1");
     await expect(selected.locator("time")).toHaveCSS("visibility", "hidden");
     expect(await box(title)).toEqual(titleBefore);
@@ -115,12 +115,17 @@ for (const theme of ["light", "dark"]) {
     await expect(selected).toBeFocused();
 
     await page.keyboard.press("Tab");
-    const deleteButton = selected.getByRole("button", { name: `删除 ${longTitle}`, exact: true });
-    await expect(deleteButton).toBeFocused();
+    const menuButton = selected.getByRole("button", { name: `更多操作：${longTitle}`, exact: true });
+    await expect(menuButton).toBeFocused();
     await page.keyboard.press("Space");
+    await expect(page.getByRole("menuitem", { name: "置顶" })).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    // radix 在下一个任务里才移动菜单焦点，确认落到「删除」再按 Enter。
+    await expect(page.getByRole("menuitem", { name: "删除" })).toBeFocused();
+    await page.keyboard.press("Enter");
     await expect(page.getByRole("heading", { name: `删除任务“${longTitle}”？` })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(deleteButton).toBeFocused();
+    await expect(menuButton).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(page.getByRole("button", { name: "系统配置", exact: true })).toBeFocused();
     await expect(page).toHaveURL(/\/tasks\/100$/);
@@ -133,6 +138,69 @@ for (const theme of ["light", "dark"]) {
     await expect(page).toHaveURL(/\/tasks\/102$/);
   });
 }
+
+test("Fork 挂在源任务下：缩进一层，可点击或用方向键折叠", async ({ page, request }) => {
+  await seedSidebar(page, request, "light");
+  await page.goto("/");
+  const source = row(page, longTitle);
+  const forked = row(page, "分支任务");
+  await expect(source).toHaveAttribute("aria-level", "2");
+  await expect(forked).toHaveAttribute("aria-level", "3");
+  // 嵌套的 Fork 由层级表达身份，不再重复显示 Fork 图标。
+  await expect(forked.getByRole("img", { name: "Fork 任务" })).toHaveCount(0);
+  expect((await box(forked.locator(".workspace-tree-title"))).x).toBeGreaterThan((await box(source.locator(".workspace-tree-title"))).x);
+
+  const toggle = source.getByRole("button", { name: `收起 ${longTitle} 的 Fork`, exact: true });
+  await toggle.click();
+  await expect(forked).toHaveCount(0);
+  await expect(page).toHaveURL(/\/$/);
+  await expect(source.getByRole("button", { name: `展开 ${longTitle} 的 Fork`, exact: true })).toHaveAttribute("aria-expanded", "false");
+
+
+  // 点标题打开源任务并让它成为树的焦点行，再用方向键展开 / 收起。
+  await source.locator(".workspace-tree-title").click();
+  await expect(page).toHaveURL(/\/tasks\/100$/);
+  await expect(source).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(forked).toBeVisible();
+  await page.keyboard.press("ArrowLeft");
+  await expect(forked).toHaveCount(0);
+});
+
+test("置顶：顶层任务连同 Fork 移到置顶区并写入偏好，取消后回到工作区", async ({ page, request }) => {
+  await seedSidebar(page, request, "light");
+  await page.goto("/");
+  const source = row(page, longTitle);
+  const pinnedGroup = row(page, "置顶");
+  await expect(pinnedGroup).toHaveCount(0);
+
+  await source.hover();
+  await source.getByRole("button", { name: `更多操作：${longTitle}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "置顶" }).click();
+  await expect(pinnedGroup).toHaveAttribute("aria-level", "1");
+  await expect(source).toHaveAttribute("aria-level", "2");
+  // 置顶区排在工作区之前，Fork 跟随源任务移动。
+  const order = await page.getByRole("treeitem").evaluateAll((items) => items.map((item) => item.getAttribute("aria-label")));
+  expect(order.slice(0, 4)).toEqual(["置顶", longTitle, "分支任务", workspaceName]);
+
+  // 只有顶层任务可置顶，Fork 的菜单里没有置顶项。
+  const forked = row(page, "分支任务");
+  await forked.hover();
+  await forked.getByRole("button", { name: "更多操作：分支任务", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "删除" })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: "置顶" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  // 夹具每次导航都会清空 localStorage，无法跨刷新验证，这里直接断言偏好已写入。
+  expect(await page.evaluate(() => localStorage.getItem("cosir:pinned-tasks:v1"))).toBe("[100]");
+
+  await source.hover();
+  await source.getByRole("button", { name: `更多操作：${longTitle}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "取消置顶" }).click();
+  await expect(pinnedGroup).toHaveCount(0);
+  await expect(source).toHaveAttribute("aria-level", "2");
+  expect(await page.evaluate(() => localStorage.getItem("cosir:pinned-tasks:v1"))).toBe("[]");
+});
 
 test("拖拽侧栏右缘调宽：最宽时 20 字标题完整显示，宽度写入偏好", async ({ page, request }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -187,6 +255,6 @@ test("尾栏按时间实际宽度让位：默认宽度下短时间的行能放�
   expect(await title.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   const before = await box(title);
   await target.hover();
-  await expect(target.getByRole("button", { name: `删除 ${fitting}`, exact: true })).toBeVisible();
+  await expect(target.getByRole("button", { name: `更多操作：${fitting}`, exact: true })).toBeVisible();
   expect(await box(title)).toEqual(before);
 });

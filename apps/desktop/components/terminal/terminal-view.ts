@@ -150,10 +150,6 @@ export class TerminalView {
     if (this.connection.releaseInput()) this.log("INFO", "terminal_input_released", "用户释放终端输入租约");
   }
 
-  handoffDone(): void {
-    if (this.connection.handoffDone()) this.log("INFO", "terminal_handoff_returned", "用户交还终端输入权");
-  }
-
   search(term: string, direction: "next" | "previous"): void {
     this.searching = term.length > 0;
     if (!term) {

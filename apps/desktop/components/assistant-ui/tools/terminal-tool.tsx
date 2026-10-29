@@ -49,6 +49,10 @@ type TerminalToolProps = ToolCallMessagePartProps & {
  * 命令与 shell 优先取自工具参数：参数在 running 态即随状态事件下发，早于子进程
  * 真正执行，因此命令能在执行前就渲染出来。运行期间输出来自有界 Transport snapshot
  * 增量；最终输出与退出码由 terminal 终态 display_data 收口。
+ *
+ * 命令转到后台时卡片是后台占位：`display_data.background` 为真、状态为 `pending`，结论只回投给
+ * Agent、不回写卡片，所以这里只展示后台运行与结束状态；停止仍按 `toolCallId` 取消（后端撤销登记并
+ * 杀进程树）。
  */
 export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact, taskId, taskCancelling = false }: TerminalToolProps) {
   const artifact = readToolArtifact(rawArtifact);
@@ -62,19 +66,22 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
   const truncated = data.truncated === true;
   const streamTruncated = data.stream_truncated === true;
   const timedOut = data.timed_out === true;
+  const inBackground = data.background === true;
   const status = artifact.backendStatus;
   const isActive = status === "pending" || status === "running";
-  const canCancel = toolName === "execute_terminal" && status === "running" && !taskCancelling;
+  // 后台占位不随 Task 停止，取消按钮只看它自己的状态；前台运行中的命令随 Task 停止一并结束。
+  const canCancel = toolName === "execute_terminal"
+    && (inBackground ? status === "pending" : status === "running" && !taskCancelling);
   const [open, setOpen] = useToolDisclosure(status);
   const [cancellationPending, setCancellationPending] = useState(false);
   const [cancellationError, setCancellationError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (status !== "running") {
+    if (!isActive) {
       setCancellationPending(false);
       setCancellationError(null);
     }
-  }, [status]);
+  }, [isActive]);
 
   const requestCancellation = async () => {
     if (!canCancel || cancellationPending) return;
@@ -150,9 +157,15 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
             {cancellationError && <p className="text-warning mb-1" role="alert">{cancellationError}</p>}
             {artifact.error
               ? <p className="text-destructive mb-1">{artifact.error}</p>
-              : output
-                ? <TerminalViewport output={output} />
-                : <p className="text-muted-foreground">{isActive ? "等待输出…" : "无输出"}</p>}
+              : inBackground
+                ? (
+                  <p className="text-muted-foreground" data-terminal-background={isActive ? "running" : "ended"}>
+                    {isActive ? "命令在后台运行，结束后结果会交给 Agent" : "命令已在后台结束，结果已交给 Agent"}
+                  </p>
+                )
+                : output
+                  ? <TerminalViewport output={output} />
+                  : <p className="text-muted-foreground">{isActive ? "等待输出…" : "无输出"}</p>}
           </div>
           {(truncated || timedOut || streamTruncated) && (
             <p className="border-warning/30 bg-warning/10 text-warning flex items-center gap-1.5 border-t px-3 py-1.5 text-2xs">

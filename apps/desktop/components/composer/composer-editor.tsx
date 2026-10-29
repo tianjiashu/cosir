@@ -355,8 +355,9 @@ export function ComposerEditor({
   };
 
   useEffect(() => {
-    // 从树导航打开任务时保留键盘焦点，避免异步挂载的输入框中断方向键与 Tab 操作。
-    if (autoFocus && !document.activeElement?.closest('[role="tree"]')) editor?.commands.focus();
+    // 从树导航打开任务时保留键盘焦点，避免异步挂载的输入框中断方向键与 Tab 操作；
+    // 任务行的「…」菜单渲染在树外的 portal 里，也要排除，否则菜单会被抢焦点关闭。
+    if (autoFocus && !document.activeElement?.closest('[role="tree"], [role="menu"]')) editor?.commands.focus();
   }, [autoFocus, editor]);
 
   const attachmentView = useMemo(() => ({ disabled, hydrating }), [disabled, hydrating]);

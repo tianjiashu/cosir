@@ -1,7 +1,8 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 
 import type { TerminalSessionEntry } from "@/lib/assistant/contract";
-import { isActiveTerminalSession } from "@/lib/terminal/terminal-sessions";
+import { isActiveTerminalSession, terminalBadge } from "@/lib/terminal/terminal-sessions";
 
 /**
  * 每个 Task 的终端工作台 UI 状态。
@@ -12,6 +13,8 @@ import { isActiveTerminalSession } from "@/lib/terminal/terminal-sessions";
  *   会卸掉正在使用的 xterm），再回来时不按过期列表挂载窗格、判定自动新建。
  * - `open` / `activeSessionId` 是纯 UI 偏好：每个 Task 独立记住，切走再回来恢复；不持久化。
  * - `focusToken` 递增即请求把焦点放到当前终端（打开面板、切换标签、从卡片跳转、交接）。
+ * - `acknowledgedEnds` 是用户已经看过的已结束会话：面板打开期间结束的、或打开面板时已在列表里的都算
+ *   看过；页头角标只为没看过的异常结束提醒，避免同一次退出一直标红。
  * - `autoCreate` 表示「本次打开时若没有活跃会话需新建一个默认终端」：打开时 snapshot 可能尚未
  *   到达，由工作台在会话列表已知后执行并清除；只在打开那一刻置位，会话退出不会触发新建。
  *
@@ -23,6 +26,7 @@ export type TerminalWorkbenchTaskState = {
   activeSessionId: string | null;
   focusToken: number;
   autoCreate: boolean;
+  acknowledgedEnds: readonly string[];
 };
 
 type TerminalWorkbenchStore = {
@@ -45,7 +49,12 @@ const EMPTY: TerminalWorkbenchTaskState = {
   activeSessionId: null,
   focusToken: 0,
   autoCreate: false,
+  acknowledgedEnds: [],
 };
+
+function endedIds(sessions: readonly TerminalSessionEntry[] | null): readonly string[] {
+  return (sessions ?? []).filter((session) => !isActiveTerminalSession(session)).map((session) => session.sessionId);
+}
 
 function hasActiveSession(sessions: TerminalSessionEntry[] | null): boolean {
   return Boolean(sessions?.some(isActiveTerminalSession));
@@ -96,20 +105,26 @@ export const useTerminalWorkbenchStore = create<TerminalWorkbenchStore>((set) =>
             activeSessionId: handoff.sessionId,
             focusToken: current.focusToken + 1,
             autoCreate: false,
+            acknowledgedEnds: endedIds(sessions),
           };
         }
-        return { sessions, activeSessionId: reconcileActive(sessions, current.activeSessionId) };
+        // 面板开着时结束的会话用户看得见，直接算看过；收起时只保留仍在列表里的记录，列表外的无需再记。
+        const ended = endedIds(sessions);
+        const acknowledgedEnds = current.open ? ended : current.acknowledgedEnds.filter((id) => ended.includes(id));
+        return { sessions, activeSessionId: reconcileActive(sessions, current.activeSessionId), acknowledgedEnds };
       });
     },
     setOpen: (taskId, open) => update(taskId, (current) => ({
       open,
       autoCreate: open && !current.open && !hasActiveSession(current.sessions),
       focusToken: open ? current.focusToken + 1 : current.focusToken,
+      acknowledgedEnds: open ? endedIds(current.sessions) : current.acknowledgedEnds,
     })),
     toggle: (taskId) => update(taskId, (current) => ({
       open: !current.open,
       autoCreate: !current.open && !hasActiveSession(current.sessions),
       focusToken: current.open ? current.focusToken : current.focusToken + 1,
+      acknowledgedEnds: current.open ? current.acknowledgedEnds : endedIds(current.sessions),
     })),
     select: (taskId, sessionId) => update(taskId, (current) => ({
       activeSessionId: sessionId,
@@ -120,6 +135,7 @@ export const useTerminalWorkbenchStore = create<TerminalWorkbenchStore>((set) =>
       activeSessionId: sessionId,
       autoCreate: false,
       focusToken: current.focusToken + 1,
+      acknowledgedEnds: endedIds(current.sessions),
     })),
     consumeAutoCreate: (taskId) => update(taskId, () => ({ autoCreate: false })),
     forget: (taskIds) => set((state) => {
@@ -136,9 +152,9 @@ export function selectTerminalTask(taskId: number) {
   return (state: { tasks: Record<number, TerminalWorkbenchTaskState> }) => state.tasks[taskId] ?? EMPTY;
 }
 
-/** 页头角标：活跃会话数；snapshot 未到时为 0。 */
-export function selectActiveSessionCount(taskId: number) {
-  return (state: { tasks: Record<number, TerminalWorkbenchTaskState> }) => (
-    state.tasks[taskId]?.sessions?.filter(isActiveTerminalSession).length ?? 0
-  );
+/** 页头角标原料：会话镜像与已看过的结束；角标本身由 `terminalBadge` 派生（返回新对象，不放进 selector）。 */
+export function useTerminalBadge(taskId: number | null) {
+  const sessions = useTerminalWorkbenchStore((state) => (taskId === null ? null : state.tasks[taskId]?.sessions ?? null));
+  const acknowledged = useTerminalWorkbenchStore((state) => (taskId === null ? EMPTY.acknowledgedEnds : state.tasks[taskId]?.acknowledgedEnds ?? EMPTY.acknowledgedEnds));
+  return useMemo(() => terminalBadge(sessions, acknowledged), [acknowledged, sessions]);
 }

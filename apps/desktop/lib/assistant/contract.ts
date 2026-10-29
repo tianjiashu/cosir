@@ -241,7 +241,7 @@ export function isActiveRunStatus(status: string | null | undefined): boolean {
  */
 export type InputDelivery = "immediate" | "next_run";
 
-/** 尚未被模型边界消费的排队用户输入，事实仍在后端 inbox；尚无所属 Run。 */
+/** 尚未被模型边界消费的排队用户输入，事实仍在后端 message_queue；尚无所属 Run。 */
 export type TransportQueuedMessage = {
   id: string;
   role: "user";
@@ -270,10 +270,16 @@ export type TerminalSessionEntry = {
   integration: "starting" | "ready" | "unavailable" | "off";
   /** 当前输入租约持有方；null 为空闲。 */
   inputHolder: "agent" | "user" | null;
+  /**
+   * Agent 持有输入时对应的 terminal_write 调用；经 `cancelToolCall` 取消它即结束等待、释放输入，用户
+   * 可接管。Agent 不持有输入时为 null。
+   */
+  agentInputCallId: string | null;
   /** 集成跟踪到有命令正在执行；无集成（integration 非 ready）时恒为 false，不代表空闲。 */
   commandRunning: boolean;
   /** Agent 发起的交接；非空时面板自动打开并提示用户输入。 */
-  handoff: { reason: string } | null;
+  /** 交接中时的说明与对应的 `terminal_handoff` 调用；「交还」即对该调用作出 HITL 决定。 */
+  handoff: { reason: string; toolCallId: string } | null;
   createdAt: string;
 };
 
@@ -286,7 +292,7 @@ export type TerminalSessionEntry = {
  */
 export type BackgroundTaskEntry = {
   toolCallId: string;
-  kind: "terminal_wait" | "terminal_handoff" | "child_agent";
+  kind: "terminal_command" | "child_agent";
   label: string;
   status: "running" | "completed" | "cancelled";
   startedAt: string;

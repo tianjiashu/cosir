@@ -31,7 +31,8 @@ let dropNextCancelledStream = false;
 let failNextAttach = false;
 /**
  * 交互终端模拟：taskId -> 会话数组。每个会话持有 snapshot 条目、输出缓冲（seq 递增）与已 attach 的 WS。
- * 只模拟 terminal-v2 的最小闭环（attach 续传、input 回显与短租约、resize、exit），不模拟交接。
+ * 只模拟 terminal-v2 的最小闭环（attach 续传、input 回显与短租约、resize、exit），不模拟交接；
+ * Agent 持有输入与 shell 退出经 `__test__/terminal/*` 直接改 snapshot 条目。
  */
 const terminalSessions = new Map();
 /** taskId → 后台工作看板条目（snapshot `background_tasks`），由 e2e 经 `__test__/seed-background-tasks` 种入。 */
@@ -628,6 +629,7 @@ function createTerminalSession(taskId, shell) {
       exitCode: null,
       integration: "ready",
       inputHolder: null,
+      agentInputCallId: null,
       commandRunning: false,
       handoff: null,
       createdAt: new Date().toISOString(),
@@ -901,6 +903,29 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, {});
     return;
   }
+  // 模拟 Agent 的 terminal_write 正在前台等待：会话由 Agent 持有输入（等待只在前台，不进登记表）。
+  if (req.method === "POST" && url.pathname === "/__test__/terminal/agent-input") {
+    const body = await readJson(req);
+    const session = findTerminalSession(body.taskId, body.sessionId);
+    session.entry = { ...session.entry, inputHolder: "agent", agentInputCallId: body.toolCallId };
+    if (states.has(body.taskId)) commit(body.taskId, states.get(body.taskId));
+    jsonResponse(res, 200, {});
+    return;
+  }
+  // 模拟 shell 自己退出（含非 0 退出码）：会话进入 exited，连接收到 exit 帧。
+  if (req.method === "POST" && url.pathname === "/__test__/terminal/exit") {
+    const body = await readJson(req);
+    const session = findTerminalSession(body.taskId, body.sessionId);
+    clearTimeout(session.leaseTimer);
+    session.entry = {
+      ...session.entry, status: "exited", endReason: "shell_exited", exitCode: body.exitCode,
+      inputHolder: null, agentInputCallId: null, commandRunning: false,
+    };
+    for (const socket of session.sockets) socket.send(terminalFrame(session, { type: "exit" }));
+    if (states.has(body.taskId)) commit(body.taskId, states.get(body.taskId));
+    jsonResponse(res, 200, {});
+    return;
+  }
   if (req.method === "POST" && url.pathname === "/__test__/terminal/sync") {
     const body = await readJson(req);
     if (states.has(body.taskId)) commit(body.taskId, states.get(body.taskId));
@@ -978,6 +1003,17 @@ const server = createServer(async (req, res) => {
     const entries = backgroundTasks.get(taskId) ?? [];
     const waits = foregroundWaits.get(taskId) ?? [];
     const detach = deferredRoute[3] === "background";
+    // 与后端一致：取消 Agent 正在等待的 terminal_write，等待以 cancelled 结束，输入租约随之释放。
+    const holding = detach ? [] : (terminalSessions.get(taskId) ?? [])
+      .filter((session) => session.entry.agentInputCallId === toolCallId);
+    if (holding.length > 0) {
+      for (const session of holding) {
+        session.entry = { ...session.entry, inputHolder: null, agentInputCallId: null };
+      }
+      if (states.has(taskId)) commit(taskId, states.get(taskId));
+      jsonResponse(res, 200, {});
+      return;
+    }
     const target = detach
       ? waits.find((entry) => entry.toolCallId === toolCallId)
       : entries.find((entry) => entry.toolCallId === toolCallId && entry.status === "running");

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import {
   PanelLeftCloseIcon,
   PanelLeftOpenIcon,
@@ -8,15 +8,19 @@ import {
   Settings2Icon,
   SquarePenIcon,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import type { DeleteTarget } from "@/components/layout/use-workspace-actions";
 import { ResourceDeleteButton } from "@/components/resource-delete-button";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TaskActionsMenu } from "@/components/task-tree/task-actions-menu";
 import { WorkspaceTree } from "@/components/task-tree/workspace-tree";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import type { WorkspaceTask } from "@/lib/api/workspaces";
+import { frontendLog } from "@/lib/logging/frontend-log";
+import { readPinnedTaskIds, setTaskPinned, subscribePinnedTaskIds } from "@/lib/pinned-task-storage";
 import { withShortcut, type AppShortcutId } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
@@ -70,6 +74,15 @@ export function AppSidebar({
 }: AppSidebarProps) {
   const rail = variant === "rail";
   const { workspaces, status, error, load } = catalog;
+  const pinnedTaskIds = useSyncExternalStore(subscribePinnedTaskIds, readPinnedTaskIds, readPinnedTaskIds);
+
+  const togglePinned = (taskId: number, pinned: boolean) => {
+    const saved = setTaskPinned(taskId, pinned);
+    void frontendLog(saved ? "INFO" : "WARNING", "task_pin_changed", saved ? "任务置顶状态已更新" : "任务置顶状态写入失败", {
+      data: { taskId, pinned, saved },
+    });
+    if (!saved) toast.error(pinned ? "置顶失败" : "取消置顶失败", { description: "本机存储不可用。" });
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden whitespace-nowrap">
@@ -98,6 +111,7 @@ export function AppSidebar({
             <div className="min-h-0 flex-1">
               <WorkspaceTree
                 workspaces={workspaces}
+                pinnedTaskIds={pinnedTaskIds}
                 activeTaskId={section === "conversation" ? focusedTaskId : null}
                 selectedWorkspaceId={catalog.selectedWorkspaceId}
                 expandedWorkspaceIds={catalog.expandedWorkspaceIds}
@@ -112,8 +126,13 @@ export function AppSidebar({
                     onDelete={() => onRequestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length })}
                   />
                 )}
-                renderTaskActions={(task, tabIndex) => (
-                  <ResourceDeleteButton tabIndex={tabIndex} label={task.full_title} onDelete={() => onRequestDelete({ kind: "task", id: task.task_id, label: task.full_title })} />
+                renderTaskActions={(item, tabIndex) => (
+                  <TaskActionsMenu
+                    item={item}
+                    tabIndex={tabIndex}
+                    onTogglePinned={() => togglePinned(item.task.task_id, !item.pinned)}
+                    onDelete={() => onRequestDelete({ kind: "task", id: item.task.task_id, label: item.task.full_title })}
+                  />
                 )}
               />
             </div>

@@ -176,3 +176,54 @@ test("搜索只跟随可见会话：切换标签或收起面板即关闭", async
   await expect(panel(page)).toBeVisible();
   await expect(search).toHaveCount(0);
 });
+
+test("面板收起时异常退出在页头标红，打开面板即视为看过", async ({ page, request }) => {
+  await page.goto("/tasks/42");
+  const entry = page.getByRole("button", { name: /^终端，/ });
+  const badge = entry.locator("[data-terminal-badge]");
+  await entry.click();
+  await expect(screen(page, "term-1")).toContainText("term-1 $");
+  await panel(page).getByRole("button", { name: "新建终端" }).click();
+  await expect(screen(page, "term-2")).toContainText("term-2 $");
+  await panel(page).getByRole("button", { name: "关闭终端面板" }).click();
+  await expect(badge).toHaveAttribute("data-terminal-badge", "none");
+
+  // 正常退出（0）不提醒；非 0 退出标红并在入口说明是哪个终端。
+  await request.post(`${origin}/__test__/terminal/exit`, { data: { taskId: 42, sessionId: "term-1", exitCode: 0 } });
+  await expect(badge).toHaveText("1");
+  await expect(badge).toHaveAttribute("data-terminal-badge", "none");
+  await request.post(`${origin}/__test__/terminal/exit`, { data: { taskId: 42, sessionId: "term-2", exitCode: 2 } });
+  await expect(badge).toHaveAttribute("data-terminal-badge", "attention");
+  await expect(badge).toHaveText("!");
+  await expect(entry).toHaveAccessibleName(/「终端 2」异常结束（退出码 2）/);
+
+  // 打开面板即视为看过；没有活跃会话时照常自动新建一个，角标回到普通计数。
+  await entry.click();
+  await expect(screen(page, "term-3")).toContainText("term-3 $");
+  await expect(badge).toHaveAttribute("data-terminal-badge", "none");
+  await panel(page).getByRole("button", { name: "关闭终端面板" }).click();
+  await expect(badge).toHaveText("1");
+  await expect(badge).toHaveAttribute("data-terminal-badge", "none");
+});
+
+test("Agent 正在输入时页头提示，用户可一键接管输入", async ({ page, request }) => {
+  await page.goto("/tasks/42");
+  const entry = page.getByRole("button", { name: /^终端，/ });
+  await entry.click();
+  await expect(screen(page, "term-1")).toContainText("term-1 $");
+
+  await request.post(`${origin}/__test__/terminal/agent-input`, {
+    data: { taskId: 42, sessionId: "term-1", toolCallId: "call-write" },
+  });
+  await expect(entry.locator("[data-terminal-badge]")).toHaveAttribute("data-terminal-badge", "agent");
+  await expect(entry).toHaveAccessibleName(/Agent 正在「终端」中输入/);
+  const takeOver = panel(page).getByRole("button", { name: "接管输入" });
+  await expect(takeOver).toBeVisible();
+
+  // 接管 = 取消 Agent 这次输入的调用：等待结束、输入权释放，焦点回到终端，可以直接输入。
+  await takeOver.click();
+  await expect(takeOver).toHaveCount(0);
+  await expect(entry.locator("[data-terminal-badge]")).toHaveAttribute("data-terminal-badge", "none");
+  await page.keyboard.type("mine");
+  await expect(screen(page, "term-1")).toContainText("term-1 $ mine");
+});

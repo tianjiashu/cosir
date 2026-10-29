@@ -36,8 +36,8 @@ import { useWorkspaceNavigation } from "./use-workspace-navigation";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { APP_SHORTCUTS, isTerminalKeyEvent, withShortcut } from "@/lib/shortcuts";
 import {
-  selectActiveSessionCount,
   selectTerminalTask,
+  useTerminalBadge,
   useTerminalWorkbenchStore,
 } from "@/lib/terminal/terminal-workbench-store";
 import { WorkbenchProvider } from "@/lib/workbench/context";
@@ -162,7 +162,7 @@ export function AppLayout() {
   // ---- 终端工作台：入口在页头，面板在 TaskPage 内，二者经按 taskId 分桶的 store 协作 ----
   const terminalTaskId = section === "conversation" ? routeTaskId : null;
   const terminalPanelOpen = useTerminalWorkbenchStore((state) => terminalTaskId === null ? false : selectTerminalTask(terminalTaskId)(state).open);
-  const terminalSessionCount = useTerminalWorkbenchStore((state) => terminalTaskId === null ? 0 : selectActiveSessionCount(terminalTaskId)(state));
+  const terminalBadge = useTerminalBadge(terminalTaskId);
   const toggleTerminal = useCallback(() => {
     if (terminalTaskId !== null) useTerminalWorkbenchStore.getState().toggle(terminalTaskId);
   }, [terminalTaskId]);
@@ -296,15 +296,29 @@ export function AppLayout() {
               <>
                 {terminalTaskId !== null && (
                   <TooltipIconButton
-                    tooltip={withShortcut(terminalPanelOpen ? "收起终端" : "打开终端", "toggleTerminal")}
-                    aria-label={`终端，${terminalSessionCount} 个运行中会话，${terminalPanelOpen ? "点击收起" : "点击打开"}`}
+                    tooltip={withShortcut(
+                      [terminalPanelOpen ? "收起终端" : "打开终端", terminalBadge.hint].filter(Boolean).join(" · "),
+                      "toggleTerminal",
+                    )}
+                    aria-label={`终端，${terminalBadge.count} 个运行中会话${terminalBadge.hint ? `，${terminalBadge.hint}` : ""}，${terminalPanelOpen ? "点击收起" : "点击打开"}`}
                     aria-pressed={terminalPanelOpen}
                     className={cn("relative size-7", terminalPanelOpen && "bg-muted text-foreground")}
                     onClick={toggleTerminal}
                   >
                     <SquareTerminalIcon />
-                    {terminalSessionCount > 0 && (
-                      <span aria-hidden="true" className="bg-foreground text-background absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-2xs leading-none tabular-nums">{terminalSessionCount}</span>
+                    {(terminalBadge.count > 0 || terminalBadge.tone !== null) && (
+                      <span
+                        aria-hidden="true"
+                        data-terminal-badge={terminalBadge.tone ?? "none"}
+                        className={cn(
+                          "absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-2xs leading-none tabular-nums",
+                          terminalBadge.tone === "attention" ? "bg-destructive text-destructive-foreground"
+                            : terminalBadge.tone === "agent" ? "bg-info text-info-foreground"
+                              : "bg-foreground text-background",
+                        )}
+                      >
+                        {terminalBadge.count > 0 ? terminalBadge.count : "!"}
+                      </span>
                     )}
                   </TooltipIconButton>
                 )}

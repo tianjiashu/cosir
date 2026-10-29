@@ -14,7 +14,7 @@ export function readStoredInputDelivery(): InputDelivery {
   }
 }
 
-/** 写入投递方式偏好；只影响下一次发送的请求字段，不承载 inbox 事实。 */
+/** 写入投递方式偏好；只影响下一次发送的请求字段，不承载 message_queue 事实。 */
 export function writeStoredInputDelivery(delivery: InputDelivery): void {
   if (typeof window === "undefined") return;
   try {

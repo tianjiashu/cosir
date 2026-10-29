@@ -252,7 +252,7 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   const session = requireRecord(value, path);
   requireExactKeys(session, [
     "sessionId", "label", "shellKind", "createdBy", "status", "endReason", "exitCode",
-    "integration", "inputHolder", "commandRunning", "handoff", "createdAt",
+    "integration", "inputHolder", "agentInputCallId", "commandRunning", "handoff", "createdAt",
   ], path);
   const sessionId = requireString(session.sessionId, `${path}.sessionId`);
   if (sessionId === "" || seenIds.has(sessionId)) throw new TransportSnapshotValidationError(`${path}.sessionId`, "非空且在 Task 内唯一");
@@ -265,16 +265,22 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   if (session.exitCode !== null && !Number.isInteger(session.exitCode)) throw new TransportSnapshotValidationError(`${path}.exitCode`, "整数或 null");
   if (!(TERMINAL_INTEGRATION_STATES as readonly unknown[]).includes(session.integration)) throw new TransportSnapshotValidationError(`${path}.integration`, "受支持的集成状态");
   if (session.inputHolder !== null && session.inputHolder !== "agent" && session.inputHolder !== "user") throw new TransportSnapshotValidationError(`${path}.inputHolder`, "agent、user 或 null");
+  if (session.agentInputCallId !== null && (typeof session.agentInputCallId !== "string" || session.agentInputCallId === "" || session.inputHolder !== "agent")) {
+    throw new TransportSnapshotValidationError(`${path}.agentInputCallId`, "inputHolder 为 agent 时的非空字符串，或 null");
+  }
   if (typeof session.commandRunning !== "boolean") throw new TransportSnapshotValidationError(`${path}.commandRunning`, "布尔值");
   if (session.handoff !== null) {
     const handoff = requireRecord(session.handoff, `${path}.handoff`);
-    requireExactKeys(handoff, ["reason"], `${path}.handoff`);
+    requireExactKeys(handoff, ["reason", "toolCallId"], `${path}.handoff`);
     requireString(handoff.reason, `${path}.handoff.reason`);
+    if (requireString(handoff.toolCallId, `${path}.handoff.toolCallId`) === "") {
+      throw new TransportSnapshotValidationError(`${path}.handoff.toolCallId`, "非空字符串");
+    }
   }
   requireString(session.createdAt, `${path}.createdAt`);
 }
 
-const BACKGROUND_TASK_KINDS = ["terminal_wait", "terminal_handoff", "child_agent"] as const;
+const BACKGROUND_TASK_KINDS = ["terminal_command", "child_agent"] as const;
 const BACKGROUND_TASK_STATUSES = ["running", "completed", "cancelled"] as const;
 
 function validateBackgroundTask(value: unknown, path: string, seenIds: Set<string>): void {

@@ -47,6 +47,49 @@ export function terminalTabs(sessions: readonly TerminalSessionEntry[], selected
   }));
 }
 
+/** 异常结束：会话失败，或 shell 以非 0 退出码退出；用户 / Agent 主动关闭不算。 */
+export function isAbnormalTerminalEnd(session: Pick<TerminalSessionEntry, "status" | "exitCode">): boolean {
+  return session.status === "failed" || (session.status === "exited" && session.exitCode !== null && session.exitCode !== 0);
+}
+
+/**
+ * 页头终端入口的角标：数字是活跃会话数，色调与提示让面板收起时也能看出终端在发生什么。
+ *
+ * - `attention`：有用户还没看过的异常结束（打开面板即视为看过，见 store 的 `acknowledgedEnds`）；
+ * - `agent`：Agent 正持有某个会话的输入；
+ * - `null`：无需提醒。`attention` 优先：结束是已发生的结果，Agent 输入随时会自然结束。
+ */
+export type TerminalBadge = {
+  count: number;
+  tone: "attention" | "agent" | null;
+  /** 提醒的一句话说明（拼进入口的 tooltip 与无障碍标签）；无提醒为 null。 */
+  hint: string | null;
+};
+
+export function terminalBadge(
+  sessions: readonly TerminalSessionEntry[] | null,
+  acknowledgedEnds: readonly string[],
+): TerminalBadge {
+  if (sessions === null) return { count: 0, tone: null, hint: null };
+  const tabs = terminalTabs(sessions, null);
+  // 已结束的会话不在标签栏里，按它在标签栏时的编号称呼（「终端 N」），与用户看到过的名字一致。
+  const titleOf = (session: TerminalSessionEntry) => (
+    tabs.find((tab) => tab.session.sessionId === session.sessionId)?.title
+      ?? (session.label.trim() || `终端 ${sessions.indexOf(session) + 1}`)
+  );
+  const count = tabs.length;
+  const failed = sessions.filter((session) => isAbnormalTerminalEnd(session) && !acknowledgedEnds.includes(session.sessionId));
+  if (failed.length > 0) {
+    const [first] = failed;
+    const detail = first.status === "failed" ? "会话失败" : `退出码 ${first.exitCode}`;
+    const more = failed.length > 1 ? `等 ${failed.length} 个终端` : "";
+    return { count, tone: "attention", hint: `「${titleOf(first)}」${more}异常结束（${detail}）` };
+  }
+  const typing = sessions.find((session) => isActiveTerminalSession(session) && session.inputHolder === "agent");
+  if (typing) return { count, tone: "agent", hint: `Agent 正在「${titleOf(typing)}」中输入` };
+  return { count, tone: null, hint: null };
+}
+
 export function endedTerminalSessions(sessions: readonly TerminalSessionEntry[]): TerminalSessionEntry[] {
   return sessions.filter((session) => !isActiveTerminalSession(session));
 }

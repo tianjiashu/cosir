@@ -3,13 +3,13 @@ import { Tree, type NodeApi, type TreeApi } from "react-arborist";
 
 import { useElementSize } from "@/hooks/use-element-size";
 import type { WorkspaceTask } from "@/lib/api/workspaces";
-import { buildWorkspaceTreeModel, taskTreeNodeId, workspaceTreeNodeId, type WorkspaceSidebarNode, type WorkspaceTreeSource } from "./workspace-tree-model";
-import type { TaskTreeNode } from "./task-tree-model";
+import { buildWorkspaceTreeModel, taskTreeNodeId, workspaceTreeNodeId, type TaskSidebarNode, type WorkspaceSidebarNode, type WorkspaceTreeSource } from "./workspace-tree-model";
 import { WorkspaceTreeActionsContext, WorkspaceTreeNode, WorkspaceTreeRow } from "./workspace-tree-row";
 import "./workspace-tree.css";
 
 type WorkspaceTreeProps = {
   workspaces: WorkspaceTreeSource[];
+  pinnedTaskIds: readonly number[];
   activeTaskId: number | null;
   selectedWorkspaceId: number | null;
   expandedWorkspaceIds: number[] | null;
@@ -18,13 +18,14 @@ type WorkspaceTreeProps = {
   onOpenWorkspaceSettings: (workspaceId: number) => void;
   onSelectTask: (task: WorkspaceTask, workspaceId: number) => void;
   renderWorkspaceActions: (workspace: WorkspaceTreeSource, tabIndex: number) => ReactNode;
-  renderTaskActions: (task: TaskTreeNode, tabIndex: number) => ReactNode;
+  renderTaskActions: (item: TaskSidebarNode, tabIndex: number) => ReactNode;
 };
 
 const ROW_HEIGHT = 38;
 
 export function WorkspaceTree({
   workspaces,
+  pinnedTaskIds,
   activeTaskId,
   selectedWorkspaceId,
   expandedWorkspaceIds,
@@ -35,7 +36,7 @@ export function WorkspaceTree({
   renderWorkspaceActions,
   renderTaskActions,
 }: WorkspaceTreeProps) {
-  const model = useMemo(() => buildWorkspaceTreeModel(workspaces), [workspaces]);
+  const model = useMemo(() => buildWorkspaceTreeModel(workspaces, pinnedTaskIds), [pinnedTaskIds, workspaces]);
   const treeRef = useRef<TreeApi<WorkspaceSidebarNode> | undefined>(undefined);
   const [containerRef, containerSize] = useElementSize<HTMLDivElement>();
   // 取整：小数高度会让虚拟列表在相邻整数间来回重算。
@@ -98,6 +99,7 @@ export function WorkspaceTree({
             onToggle={handleToggle}
             onActivate={(node: NodeApi<WorkspaceSidebarNode>) => {
               if (node.data.kind === "task") onSelectTask(node.data.task, node.data.task.workspace_id);
+              else if (node.data.kind === "pinned") node.toggle();
               else if (node.data.kind === "workspace") {
                 node.open();
                 onSelectWorkspace(node.data.workspace.workspace_id);

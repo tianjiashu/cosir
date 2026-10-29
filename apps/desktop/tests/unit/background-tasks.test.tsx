@@ -25,8 +25,8 @@ import { transportState } from "./transport-fixtures";
 function entry(toolCallId: string, overrides: Partial<BackgroundTaskEntry> = {}): BackgroundTaskEntry {
   return {
     toolCallId,
-    kind: "terminal_wait",
-    label: `terminal_wait:${toolCallId}`,
+    kind: "terminal_command",
+    label: `terminal_command:${toolCallId}`,
     status: "running",
     startedAt: "2026-10-28T08:00:00+00:00",
     endedAt: null,
@@ -41,7 +41,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe("snapshot background_tasks 与工具 part deferred", () => {
+describe("snapshot background_tasks 与工具 part background", () => {
   it("background_tasks 是必填数组，条目按固定字段校验", () => {
     const withoutEntries: Record<string, unknown> = { ...transportState() };
     delete withoutEntries.background_tasks;
@@ -92,7 +92,7 @@ describe("后台任务卡", () => {
     expect(html).toContain("后台任务");
     expect(html).toContain("cd /work &amp;&amp; make");
     expect(html).toContain("1 已完成");
-    expect(html).not.toContain("terminal_wait:done");
+    expect(html).not.toContain("terminal_command:done");
   });
 
   it("运行数与耗时格式", () => {

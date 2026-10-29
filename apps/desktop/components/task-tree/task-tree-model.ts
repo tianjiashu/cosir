@@ -3,16 +3,8 @@ import { stripInlineAttachmentTokens } from "@/lib/assistant/attachments/local-f
 
 export type TaskTreeNode = WorkspaceTask & {
   children: TaskTreeNode[];
-  depth: number;
-  branchIndex: number | null;
   /** 侧栏标题：已剥离内部 token、不截断；按侧栏宽度由 CSS 省略，完整文本在 tooltip 中可见。 */
   full_title: string;
-};
-
-export type TaskTreeModel = {
-  roots: TaskTreeNode[];
-  nodesById: Map<number, TaskTreeNode>;
-  parentById: Map<number, number>;
 };
 
 /**
@@ -79,8 +71,11 @@ function hasParentCycle(taskId: number, parentCandidates: Map<number, number>): 
  * a task or cause recursive rendering to loop forever. Roots are ordered by
  * recent activity; siblings are ordered by creation time to keep a branch's
  * position stable while it is being used.
+ *
+ * 只产出森林本身：层级、父节点与展开祖先由侧栏的 react-arborist 从嵌套结构推导，
+ * 这里不另存深度或父子索引。
  */
-export function buildTaskTreeModel(tasks: WorkspaceTask[]): TaskTreeModel {
+export function buildTaskForest(tasks: WorkspaceTask[]): TaskTreeNode[] {
   const forkTasks = tasks.filter((task) => task.task_type !== "delegation");
   const taskById = new Map(forkTasks.map((task) => [task.task_id, task]));
   const parentCandidates = new Map<number, number>();
@@ -107,36 +102,14 @@ export function buildTaskTreeModel(tasks: WorkspaceTask[]): TaskTreeModel {
   }
   for (const siblings of childrenByParent.values()) siblings.sort(compareByCreatedAt);
 
-  const nodesById = new Map<number, TaskTreeNode>();
-  const makeNode = (task: WorkspaceTask, depth: number, branchIndex: number | null): TaskTreeNode => {
-    const fullTitle = visibleTaskTitle(task.title);
-    const node: TaskTreeNode = {
-      ...task,
-      children: [],
-      depth,
-      branchIndex,
-      full_title: fullTitle,
-    };
-    nodesById.set(task.task_id, node);
-    const children = childrenByParent.get(task.task_id) ?? [];
-    node.children = children.map((child, index) => makeNode(child, depth + 1, index + 1));
-    return node;
-  };
+  const makeNode = (task: WorkspaceTask): TaskTreeNode => ({
+    ...task,
+    full_title: visibleTaskTitle(task.title),
+    children: (childrenByParent.get(task.task_id) ?? []).map(makeNode),
+  });
 
-  const roots = forkTasks
+  return forkTasks
     .filter((task) => !parentById.has(task.task_id))
     .sort(compareByUpdatedAt)
-    .map((task) => makeNode(task, 0, null));
-
-  return { roots, nodesById, parentById };
-}
-
-export function getTaskAncestorIds(taskId: number | null, parentById: Map<number, number>): Set<number> {
-  const ancestors = new Set<number>();
-  let currentId = taskId === null ? undefined : parentById.get(taskId);
-  while (currentId !== undefined && !ancestors.has(currentId)) {
-    ancestors.add(currentId);
-    currentId = parentById.get(currentId);
-  }
-  return ancestors;
+    .map(makeNode);
 }

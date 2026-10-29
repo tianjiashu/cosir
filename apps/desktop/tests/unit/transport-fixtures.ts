@@ -88,6 +88,7 @@ export function terminalSession(sessionId: string, overrides: Partial<TerminalSe
     exitCode: null,
     integration: "ready",
     inputHolder: null,
+    agentInputCallId: null,
     commandRunning: false,
     handoff: null,
     createdAt: "2026-10-27T00:00:00.000Z",

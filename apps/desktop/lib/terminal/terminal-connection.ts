@@ -6,7 +6,7 @@ import { newTraceId, type TraceId } from "@/lib/trace";
  * 每会话一条的可写终端通道（WS `terminal-v2`，契约见 docs/plan/terminal-workbench-design.md 三.6）。
  *
  * 职责：首帧 attach、按 output seq 续传、断线退避重连、resync 时通知调用方清屏、发送 input /
- * resize / release_input / handoff_done。它不持有 xterm，也不判断租约归属（后端仲裁，被拒时收到
+ * resize / release_input。它不持有 xterm，也不判断租约归属（后端仲裁，被拒时收到
  * `input_rejected`）；会话列表与生命周期事实在 Transport snapshot，这里的 `exit` 只用于停止重连
  * 与禁用输入。断线只表示订阅中断，不会关闭会话。
  *
@@ -126,10 +126,6 @@ export class TerminalConnection {
 
   releaseInput(): boolean {
     return this.send({ type: "release_input" });
-  }
-
-  handoffDone(): boolean {
-    return this.send({ type: "handoff_done" });
   }
 
   private send(frame: Record<string, unknown>): boolean {
