@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from app.core.workflow.cancel.conversation_run_cancellation_registry import CancelReason
-    from app.core.workflow.inbox.task_message import TaskMessage
+    from app.core.workflow.message_queue.task_message import TaskMessage
 
 
 class TaskRuntimeSpaceRegistry:

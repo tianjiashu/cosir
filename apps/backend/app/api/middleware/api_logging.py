@@ -23,10 +23,11 @@ def install_request_logging(app, logger: logging.Logger) -> None:
         无。
 
     异常:
-        无。middleware 内部会记录未捕获异常并继续抛出。
+        无。
 
     副作用:
-        在 FastAPI 应用上注册一个 HTTP middleware。
+        在 FastAPI 应用上注册一个 HTTP middleware。CORS 必须注册在它之后（更外层），
+        这里收敛出的 500 才带得上 CORS 头。
     """
 
     @app.middleware("http")
@@ -38,10 +39,12 @@ def install_request_logging(app, logger: logging.Logger) -> None:
             call_next: FastAPI 提供的下一个请求处理器。
 
         返回:
-            下游处理器返回的响应对象。
+            下游处理器返回的响应对象；下游未捕获异常时返回统一结构化错误体的 500。
 
         异常:
-            Exception: 下游未捕获异常会在写入 ``unhandled_exception`` 后继续抛出。
+            无。未捕获异常在此记录后收敛为 500 响应：若继续上抛，响应会由 CORS 之外的
+            ``ServerErrorMiddleware`` 生成、不带 CORS 头，WebView 只看到网络失败，前端会
+            误报「无法连接本机后端」。响应只带通用提示与 trace_id，不透传原始异常。
 
         副作用:
             写入 ``http_request_started``、``http_request_finished``、
@@ -68,7 +71,17 @@ def install_request_logging(app, logger: logging.Logger) -> None:
                         "msg": "HTTP 请求处理未捕获异常",
                     },
                 )
-                raise
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": {
+                            "code": "INTERNAL_ERROR",
+                            "message": f"后端内部错误，详见后端日志（trace_id: {trace_id}）",
+                            "retryable": False,
+                        }
+                    },
+                    headers={"x-trace-id": trace_id},
+                )
             duration_ms = _duration_ms(started_at)
             response.headers.setdefault("x-trace-id", trace_id)
             completed_extra = {

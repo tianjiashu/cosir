@@ -14,6 +14,10 @@ from app.assistant_transport.projection.snapshot_navigation import iter_parts
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
+from app.assistant_transport.state.conversation_state_background_task import (
+    ConversationBackgroundTask,
+    project_background_task,
+)
 from app.assistant_transport.state.conversation_state_message import ConversationQueuedMessage
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
@@ -22,33 +26,30 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     validate_snapshot,
 )
+from app.assistant_transport.state.conversation_state_terminal_session import (
+    ConversationTerminalSession,
+    to_terminal_session,
+)
 from app.assistant_transport.state.message_identity import user_message_id
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
 from app.core.events import WorkflowEvent
+from app.core.workflow.message_queue.task_message import UserInputBody
 from app.models.message_metadata import ToolMessageMetadata
-from app.core.workflow.inbox.task_message import UserInputBody
-from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
-from app.tools.terminal_runtime.terminal_session_status import TerminalSessionStatusChange
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-_CHILD_RUN_STATUSES = frozenset({"pending", "running", "completed", "failed", "cancelled"})
-_TERMINAL_SESSION_ACTIVE_STATUSES = frozenset({"starting", "running"})
-_TERMINAL_SESSION_STATUSES = frozenset(
-    {"starting", "running", "exited", "interrupted", "failed", "closed"}
-)
 
 
 class ConversationTaskStateService:
     """持有进程本地 Transport 状态，并按需从 canonical 记录懒重建。
 
     工作副本是刻意易失的，挂载在 task 的 ``TaskRuntimeSpace`` 中：普通 projector 变更与 subscriber
-    变化都不写数据库行；child Run 与 terminal session 状态投影只会更新已有工具行的 Transport
-    metadata。某个 task 的
+    变化都不写数据库行；child Run 状态投影只会更新已有工具行的 Transport metadata。某个 task 的
     首次读取会加载一个 Task、其全部 Run 与全部 context 行，
-    再把纯 wire 状态构造委托给 ``ConversationTaskStateRebuilder``。之后的读取复用该 task 级的
-    进程内内存快照，直到显式 rebuild 或进程重置。
+    再把纯 wire 状态构造委托给 ``ConversationTaskStateRebuilder``；排队消息与终端会话列表不在
+    canonical context 里，重建后分别从外部队列与 ``TerminalSessionService`` 整表填入。之后的读取
+    复用该 task 级的进程内内存快照，直到显式 rebuild 或进程重置。
 
     参数:
         task_source: Task 的 CRUD 类数据源；默认取进程依赖。
@@ -58,9 +59,9 @@ class ConversationTaskStateService:
     副作用:
         ``get_state`` 可能读取三张 canonical SQLite 表，并只缓存一份内存副本。
             ``apply_planned`` 与 ``publish_state`` 更新进程本地状态并通知 SSE subscriber；child
-            与 terminal 状态投影还会尽力持久化已有工具的 UI metadata。
-        不访问 Run 执行进度、工具 handler 或前端运行时状态；terminal session 只通过
-        ``TerminalSessionService`` 读取进程内生命周期事实。
+            状态投影还会尽力持久化已有工具的 UI metadata。
+        不访问 Run 执行进度、工具 handler 或前端运行时状态；终端会话只通过
+        ``TerminalSessionService.task_runtimes`` 读取进程内事实，不回写工具卡片。
 
     并发:
         ``_lock``（类级 ``RLock``）是每个 ``TaskRuntimeSpace`` 快照工作副本的**唯一串行化点**：
@@ -73,7 +74,6 @@ class ConversationTaskStateService:
     _lock: ClassVar[RLock] = RLock()
     _subscribers: ClassVar[dict[int, set[Subscriber]]] = {}
     _deleted_task_ids: ClassVar[set[int]] = set()
-    _terminal_status_source: TerminalSessionService | None = None
 
     def __init__(
         self,
@@ -84,7 +84,6 @@ class ConversationTaskStateService:
         self._task_source = depends.get_task_crud()
         self._run_source = depends.get_conversation_run_crud()
         self._context_source = depends.get_conversation_task_context_crud()
-        self._terminal_status_source = depends.get_terminal_session_service()
 
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
         """返回已校验的 task 级工作副本，首次访问时懒重建。
@@ -118,21 +117,29 @@ class ConversationTaskStateService:
         再重复追加。snapshot 尚未物化时什么也不做，之后的懒重建自会读到队列。读队列放在锁内，
         让并发刷新按序落定，不会以旧内容覆盖新内容。
         """
-
-        with self._lock:
-            self._ensure_not_deleted(task_id)
-            space = task_runtime_spaces.get_or_create(task_id)
-            if not space.has_snapshot():
-                return
-            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            current = state.get("queued_messages", [])
-            merged = _upsert_queued(current, self._queued_messages(task_id))
-            if merged == current:
-                return
-            mutation = ConversationStateMutation("set", ("queued_messages",), merged)
-            _apply_mutation(state, mutation)
-            self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,)))
-
+        try:
+            with self._lock:
+                self._ensure_not_deleted(task_id)
+                space = task_runtime_spaces.get_or_create(task_id)
+                if not space.has_snapshot():
+                    return
+                state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+                current = state.get("queued_messages", [])
+                merged = _upsert_queued(current, self._queued_messages(task_id))
+                if merged == current:
+                    return
+                mutation = ConversationStateMutation("set", ("queued_messages",), merged)
+                _apply_mutation(state, mutation)
+                self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,)))
+        except Exception as exc:
+            log.exception(
+                "queued_projection_refresh_failed",
+                extra={
+                    "msg": "排队投影刷新失败，照常推进；等后续刷新或重建收敛",
+                    "data": {"task_id": self.task_id},
+                },
+                exc_info=exc,
+            )
     @staticmethod
     def _queued_messages(task_id: int) -> list[ConversationQueuedMessage]:
         from app.service.depends import get_task_message_queue
@@ -142,14 +149,85 @@ class ConversationTaskStateService:
             ConversationQueuedMessage(
                 id=user_message_id(cast(int, item.id)),
                 role="user",
-                parts=ConversationTaskStateRebuilder.build_user_parts(
-                    item.body.presentation()
-                ),
+                parts=ConversationTaskStateRebuilder.build_user_parts(item.body.presentation),
                 delivery=item.delivery,
             )
             for item in get_task_message_queue().pending_nowait(task_id)
             if item.project_to_transport and isinstance(item.body, UserInputBody)
         ]
+
+    def refresh_terminal_sessions(self, task_id: int) -> None:
+        """会话变化通知入口：整表重读该 Task 的终端会话，有变化时发一条 ``set`` mutation。
+
+        由 ``TerminalSessionRuntime.notify_changed`` 经终端副作用执行器调用（非 PTY 读线程、
+        锁外），任意线程可调。只更新已物化的快照：未物化时之后的懒重建自会读到最新列表；Task
+        已删除或 space 不存在时静默返回——删除收尾关闭会话会触发通知，此时已无人订阅。不用
+        ``get_or_create``，否则一次迟到的通知会为已删除或从未打开的 Task 物化 space 与 actor。
+        读服务放在锁内，并发通知按序落定，不会以旧列表覆盖新列表。条目由本进程终端服务按契约
+        产出，这里不重复校验；契约校验统一在 ``validate_snapshot``（读取快照时执行）。
+        """
+
+        with self._lock:
+            if task_id in self._deleted_task_ids:
+                return
+            space = task_runtime_spaces.get(task_id)
+            if space is None or not space.has_snapshot():
+                return
+            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            sessions = self._terminal_sessions(task_id)
+            if sessions == state["terminal_sessions"]:
+                return
+            mutation = ConversationStateMutation("set", ("terminal_sessions",), sessions)
+            _apply_mutation(state, mutation)
+            self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,)))
+
+    def refresh_deferred_results(self, task_id: int) -> None:
+        """延迟结果变化入口：整表重读看板与前台等待，各自有变化时发 ``set`` mutation（同一帧）。
+
+        由登记表的通知线程调用（锁外），规则同 :meth:`refresh_terminal_sessions`：只更新已物化的
+        快照，Task 已删除或 space 不存在时静默返回，不为迟到的通知物化 space。
+        """
+
+        with self._lock:
+            if task_id in self._deleted_task_ids:
+                return
+            space = task_runtime_spaces.get(task_id)
+            if space is None or not space.has_snapshot():
+                return
+            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            mutations = tuple(
+                ConversationStateMutation("set", (key,), value)
+                for key, value in (
+                    ("background_tasks", self._background_tasks(task_id)),
+                    ("foreground_waits", self._foreground_waits(task_id)),
+                )
+                if value != state[key]
+            )
+            if not mutations:
+                return
+            for mutation in mutations:
+                _apply_mutation(state, mutation)
+            self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=mutations))
+
+    @staticmethod
+    def _background_tasks(task_id: int) -> list[ConversationBackgroundTask]:
+        from app.core.tool.background.deferred_registry import deferred_registry
+
+        return [project_background_task(view) for view in deferred_registry.entries(task_id)]
+
+    @staticmethod
+    def _foreground_waits(task_id: int) -> list[str]:
+        from app.core.tool.background.deferred_registry import deferred_registry
+
+        return deferred_registry.foreground_calls(task_id)
+
+    @staticmethod
+    def _terminal_sessions(task_id: int) -> list[ConversationTerminalSession]:
+        from app.service.depends import get_terminal_session_service
+
+        # 校验统一在 validate_snapshot。
+        runtimes = get_terminal_session_service().task_runtimes(task_id)
+        return [to_terminal_session(runtime.snapshot()) for runtime in runtimes]
 
     def rebuild_state(self, task_id: int) -> ConversationStateSnapshot:
         """丢弃进程内 working copy，并立即从 canonical 记录重建该 task 的快照。
@@ -171,9 +249,8 @@ class ConversationTaskStateService:
             sqlalchemy.exc.SQLAlchemyError: canonical 数据源读取失败。
 
         副作用:
-            先卸载该 task 的进程内快照副本，再读 canonical 三张表重建一份；terminal session
-            冷重建可能原子修复遗留的活跃 display metadata；本方法不通知 subscriber（调用方需
-            自行 ``publish_state`` 让客户端收敛）。
+            先卸载该 task 的进程内快照副本，再读 canonical 三张表重建一份（终端会话列表取自
+            进程内服务）；本方法不通知 subscriber（调用方需自行 ``publish_state`` 让客户端收敛）。
 
         并发:
             全程持 ``_lock``，与投影、订阅注册与删除清理互斥。
@@ -204,13 +281,6 @@ class ConversationTaskStateService:
             # not leave the newly materialized parent card at ``running`` forever.
             mutations.extend(
                 self._reconcile_child_delegation_statuses(
-                    state,
-                    persist=True,
-                    parent_task_id=task_id,
-                )
-            )
-            mutations.extend(
-                self._reconcile_terminal_session_statuses(
                     state,
                     persist=True,
                     parent_task_id=task_id,
@@ -352,12 +422,10 @@ class ConversationTaskStateService:
                 context_rows,
             )
             state["queued_messages"] = self._queued_messages(task_id)
+            state["terminal_sessions"] = self._terminal_sessions(task_id)
+            state["background_tasks"] = self._background_tasks(task_id)
+            state["foreground_waits"] = self._foreground_waits(task_id)
             self._reconcile_child_delegation_statuses(state, persist=False)
-            self._reconcile_terminal_session_statuses(
-                state,
-                persist=True,
-                parent_task_id=task_id,
-            )
         except Exception as exc:
             log.exception(
                 "state_rebuild_failed",
@@ -407,9 +475,8 @@ class ConversationTaskStateService:
             parent_task_id = child_task.parent_task_id
             if parent_task_id is None or child_task.current_run_id != run_id:
                 return None
+            # 卡片跟随子 Run 的全部生命周期状态，含 suspended（子 Agent 在等审批或消息）。
             child_run = self._run_source.get(run_id)
-            if child_run.status not in _CHILD_RUN_STATUSES:
-                return None
             if child_run.status != status:
                 log.debug(
                     "parent_delegation_stale_status_event",
@@ -449,146 +516,6 @@ class ConversationTaskStateService:
             for mutation in mutations:
                 _apply_mutation(state, mutation)
             return self.publish_state(parent_task_id, state, tuple(mutations))
-
-    def refresh_terminal_session(
-        self,
-        change: TerminalSessionStatusChange,
-    ) -> TransportFrame | None:
-        """把 backend 内 terminal session 的异步状态投影到已有工具卡片。
-
-        ``TerminalSessionService`` 是 session 生命周期的唯一权威来源；本方法只定位已有的
-        ``terminal-session`` display_data，不根据工具名或缺失 metadata 创建 UI part。父任务
-        尚未物化时仍先原子持久化，之后的冷读可以恢复正确状态。
-        """
-
-        self._validate_terminal_status(change.status)
-        with self._lock:
-            self._persist_terminal_session_display(change)
-            parent_space = task_runtime_spaces.get(change.task_id)
-            if parent_space is None:
-                return None
-            state = parent_space.existing_snapshot()
-            if state is None:
-                return None
-
-            mutations: list[ConversationStateMutation] = []
-            for path, part in iter_parts(state):
-                if not isinstance(part, dict):
-                    continue
-                display = part.get("display_data")
-                if not _matches_terminal_session_display(display, change.session_id):
-                    continue
-                updated_display = _updated_terminal_display(display, change)
-                if updated_display == display:
-                    continue
-                mutations.append(
-                    ConversationStateMutation("set", (*path, "display_data"), updated_display)
-                )
-            if not mutations:
-                return None
-            for mutation in mutations:
-                _apply_mutation(state, mutation)
-            return self.publish_state(change.task_id, state, tuple(mutations))
-
-    def _reconcile_terminal_session_statuses(
-        self,
-        state: ConversationStateSnapshot,
-        *,
-        persist: bool,
-        parent_task_id: int | None = None,
-    ) -> list[ConversationStateMutation]:
-        """按当前进程 terminal registry 收敛已有 terminal display 状态。"""
-
-        if persist and parent_task_id is None:
-            raise ValueError("parent_task_id is required when persisting terminal status")
-        source = self._terminal_status_source
-        if source is None:
-            return []
-
-        mutations: list[ConversationStateMutation] = []
-        for path, part in list(iter_parts(state)):
-            if not isinstance(part, dict):
-                continue
-            display = part.get("display_data")
-            if not _is_active_terminal_display(display):
-                continue
-            session_id = display.get("session_id")
-            if not isinstance(session_id, str) or not session_id:
-                continue
-            change = source.get_status_change(session_id, task_id=parent_task_id or 0)
-            if change is None:
-                change = TerminalSessionStatusChange(
-                    task_id=parent_task_id or 0,
-                    session_id=session_id,
-                    generation="",
-                    status="closed",
-                    end_reason="backend_restarted",
-                    exit_code=None,
-                )
-            self._validate_terminal_status(change.status)
-            updated_display = _updated_terminal_display(display, change)
-            if updated_display == display:
-                continue
-            mutation = ConversationStateMutation("set", (*path, "display_data"), updated_display)
-            _apply_mutation(state, mutation)
-            mutations.append(mutation)
-            if persist and parent_task_id is not None:
-                self._persist_terminal_session_display(change, task_id=parent_task_id)
-        return mutations
-
-    def _persist_terminal_session_display(
-        self,
-        change: TerminalSessionStatusChange,
-        *,
-        task_id: int | None = None,
-    ) -> None:
-        """原子持久化已存在的 terminal-session display。"""
-
-        self._validate_terminal_status(change.status)
-        target_task_id = change.task_id if task_id is None else task_id
-        try:
-            rows = self._context_source.get(target_task_id, include_in_context=False)
-            for row in rows:
-                # 只为前端卡片保持最新状态；已移出投影的行（编辑替换掉的历史）保持冻结。
-                if not row.project_to_transport:
-                    continue
-                if not isinstance(row.metadata, ToolMessageMetadata):
-                    continue
-                display = row.metadata.display_data
-                if not _matches_terminal_session_display(display, change.session_id):
-                    continue
-                if _updated_terminal_display(display, change) == display:
-                    continue
-                # terminal display 只由带 Run 归属的工具观察写入；通用 context 记录类型
-                # 还覆盖无 Run 的系统消息，这里沿用已匹配工具行的实际归属作为更新定位符。
-                self._context_source.update_terminal_session_display(
-                    target_task_id,
-                    row.sequence,
-                    cast(int, row.run_id),
-                    change.session_id,
-                    change.status,
-                    change.end_reason,
-                    change.exit_code,
-                )
-        except Exception:
-            log.exception(
-                "terminal_session_display_persist_failed",
-                extra={
-                    "msg": "Terminal session 状态已投影到内存，但 display metadata 持久化失败",
-                    "data": {
-                        "task_id": target_task_id,
-                        "session_id": change.session_id,
-                        "status": change.status,
-                    },
-                },
-            )
-
-    @staticmethod
-    def _validate_terminal_status(status: str) -> None:
-        """拒绝未声明的 terminal session 生命周期状态。"""
-
-        if status not in _TERMINAL_SESSION_STATUSES:
-            raise ValueError(f"invalid terminal session status: {status}")
 
     def _reconcile_child_delegation_statuses(
         self,
@@ -641,9 +568,7 @@ class ConversationTaskStateService:
                 continue
             if current_run_id is None:
                 continue
-            child_run = self._run_source.get(current_run_id)
-            if child_run.status in _CHILD_RUN_STATUSES:
-                statuses_by_task[child_task_id] = child_run.status
+            statuses_by_task[child_task_id] = self._run_source.get(current_run_id).status
 
         mutations: list[ConversationStateMutation] = []
         changed: dict[int, str] = {}
@@ -679,8 +604,6 @@ class ConversationTaskStateService:
     ) -> None:
         """持久化父任务中指向该子 Task 的动态 child display 状态。"""
 
-        if status not in _CHILD_RUN_STATUSES:
-            return
         try:
             rows = self._context_source.get(parent_task_id, include_in_context=False)
             for row in rows:
@@ -727,50 +650,6 @@ class ConversationTaskStateService:
                         "data": {"task_id": change.task_id},
                     },
                 )
-
-
-def _is_active_terminal_display(value: object) -> bool:
-    """判断 display_data 是否是需要实时收敛的活 terminal session。"""
-
-    return (
-        isinstance(value, dict)
-        and value.get("kind") == "terminal-session"
-        and isinstance(value.get("session_id"), str)
-        and bool(value.get("session_id"))
-        and value.get("status") in _TERMINAL_SESSION_ACTIVE_STATUSES
-    )
-
-
-def _matches_terminal_session_display(value: object, session_id: str) -> bool:
-    """按 kind 与 session_id 精确定位 terminal display。"""
-
-    return (
-        isinstance(value, dict)
-        and value.get("kind") == "terminal-session"
-        and value.get("session_id") == session_id
-    )
-
-
-def _updated_terminal_display(
-    value: object,
-    change: TerminalSessionStatusChange,
-) -> dict[str, object]:
-    """复制 display_data 并仅更新 terminal 生命周期字段。"""
-
-    if not isinstance(value, dict):
-        raise TypeError("terminal display_data must be an object")
-    current_status = value.get("status")
-    if current_status in {"exited", "interrupted", "failed", "closed"}:
-        return dict(value)
-    if current_status == "running" and change.status == "starting":
-        return dict(value)
-    updated = dict(value)
-    updated["status"] = change.status
-    if change.end_reason is not None:
-        updated["end_reason"] = change.end_reason
-    if change.exit_code is not None:
-        updated["exit_code"] = change.exit_code
-    return updated
 
 
 def _is_positive_int(value: object) -> bool:

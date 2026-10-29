@@ -7,6 +7,7 @@ snapshot 的 ``activity`` 为准。Run 输出与状态只经 snapshot 交给前�
 不触发业务执行。
 """
 
+import asyncio
 from collections.abc import Awaitable
 from typing import NoReturn
 
@@ -15,10 +16,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.app import app
 from app.assistant_transport.request import (
+    DecisionRequest,
     EditQueuedMessageRequest,
     RerunMessageRequest,
     SendMessageRequest,
-    DecisionRequest,
 )
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
@@ -226,21 +227,40 @@ async def cancel_task(
     return await _accept(task_id, "cancel", service.cancel(task_id), status_code=202)
 
 
+@app.post("/tasks/{task_id}/tool-calls/{tool_call_id}/background")
+async def background_tool_call(
+    task_id: int,
+    tool_call_id: str,
+    service: TransportAssistantService = Depends(get_transport_assistant_service),
+) -> JSONResponse:
+    """把一次前台等待中的工具调用转到后台：工具立即以「已转后台」占位闭合，结论稍后回投。
+
+    409 ``TOOL_CALL_NOT_DETACHABLE``：这次调用没有前台等待（已结束、本来就在后台或不支持）。
+    结论与转后台同时到达时由登记表裁决，结论先到则本请求 409、工具照常返回结果。
+    """
+
+    async def detach() -> None:
+        await asyncio.to_thread(service.background_tool_call, task_id, tool_call_id)
+
+    return await _accept(task_id, "background_tool_call", detach())
+
+
 @app.post("/tasks/{task_id}/tool-calls/{tool_call_id}/cancel")
 async def cancel_tool_call(
     task_id: int,
     tool_call_id: str,
     service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> Response:
-    """只中止 Task 当前执行中的一次工具调用，Run 与 Agent 继续执行。
+    """取消一次工具调用，Run 与 Agent 继续执行。
 
-    工具级取消信号按 ``(task_id, tool_call_id)`` 记录，命中 Task 当前执行。本端点只表示信号已被
-    接受；工具调用终态由工具执行层与 workflow 落定，前端以 canonical snapshot 为准。
+    登记了延迟结果的调用（前台等待或后台工作）撤销登记，不要求 Run 在执行；其余只给 Task 当前
+    执行中的调用打工具级取消信号。本端点只表示取消已被接受；工具调用终态以 canonical snapshot
+    为准。
 
     异常:
-        HTTPException: Task 当前没有执行，或同一调用已标记过取消时 409。
+        HTTPException: 没有可取消的对象（Task 当前没有执行、调用已结束或已标记过取消）时 409。
     """
-    if not service.cancel_tool_call(task_id, tool_call_id):
+    if not await asyncio.to_thread(service.cancel_tool_call, task_id, tool_call_id):
         raise HTTPException(
             status_code=409, detail="task has no running execution or call is already cancelled"
         )

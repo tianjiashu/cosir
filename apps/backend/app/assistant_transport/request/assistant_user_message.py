@@ -24,7 +24,7 @@ class AssistantUserMessage(BaseModel):
     parts: list[AssistantUserPart] = Field(min_length=1, max_length=32)
     # assistant-ui 当前不会把普通 file content 转换进 command；桌面端在 HTTP 边界
     # 显式补充此字段，后端据此把 token 与本机路径绑定。
-    # 绑定随输入存入 inbox，消费后转入 context。
+    # 绑定随输入存入 message_queue，消费后转入 context。
     attachments: list[AssistantFileAttachment] = Field(default_factory=list, max_length=32)
 
     @property

@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-from app.core.workflow.inbox.task_message import NoticeBody
+from app.core.workflow.message_queue.task_message import NoticeBody
 
 AGENT_CATALOG_CHANGE_NOTICE_TYPE = "agent_catalog_change"
 AgentCatalogChangeAction = Literal["created", "updated", "deleted"]

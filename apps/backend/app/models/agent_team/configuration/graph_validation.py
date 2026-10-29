@@ -6,11 +6,16 @@
 
 图以 ``start_node_id`` 作为唯一入口，以转移目标字面量 ``END`` 表示 Team 结束；节点不再
 携带 ``node_type``。
+
+问题以带稳定代码与定位的 :class:`TeamGraphIssue` 表达：保存时一次性报告全部问题，
+配置编辑器也经同一函数实时取得问题并标到节点与连线上。
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from app.models.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
@@ -37,8 +42,48 @@ class TeamGraphTransition(Protocol):
     target_node_id: str
 
 
+class TeamGraphIssueCode(StrEnum):
+    """图结构问题的稳定代码；面向用户的文案由 API 层按代码生成，不解析英文描述。"""
+
+    NO_NODES = "no_nodes"
+    DUPLICATE_NODE_ID = "duplicate_node_id"
+    INVALID_START = "invalid_start"
+    RESERVED_END_ID = "reserved_end_id"
+    END_AS_SOURCE = "end_as_source"
+    UNKNOWN_SOURCE = "unknown_source"
+    UNDECLARED_STATUS = "undeclared_status"
+    AMBIGUOUS_TRANSITION = "ambiguous_transition"
+    UNKNOWN_TARGET = "unknown_target"
+    STATUS_WITHOUT_TRANSITION = "status_without_transition"
+    UNREACHABLE_NODE = "unreachable_node"
+    DEAD_END_NODE = "dead_end_node"
+
+
+@dataclass(frozen=True)
+class TeamGraphIssue:
+    """一条图结构问题及其定位。
+
+    Attributes:
+        code: 问题类别。
+        detail: 英文描述，供日志与 Agent 工具反馈使用。
+        node_id: 问题所在节点；Team 级问题为 ``None``。
+        status: 涉及的业务状态（缺转移、未声明状态、重复转移）。
+        transition_index: 涉及的转移在 ``transitions`` 中的下标。
+    """
+
+    code: TeamGraphIssueCode
+    detail: str
+    node_id: str | None = None
+    status: str | None = None
+    transition_index: int | None = None
+
+
 class TeamGraphValidationError(ValueError):
-    """Team 节点图不符合静态结构契约时抛出的异常。"""
+    """Team 节点图不符合静态结构契约时抛出，携带全部问题而不只是第一条。"""
+
+    def __init__(self, issues: Sequence[TeamGraphIssue]) -> None:
+        self.issues = tuple(issues)
+        super().__init__("; ".join(issue.detail for issue in self.issues))
 
 
 def validate_team_graph(
@@ -46,108 +91,150 @@ def validate_team_graph(
     transitions: Sequence[TeamGraphTransition],
     start_node_id: str,
 ) -> None:
-    """校验 Team 图的入口、转移关系和可达性。
-
-    参数:
-        nodes: 待校验的节点对象序列；对象只需实现 :class:`TeamGraphNode` 协议。
-        transitions: 待校验的转移对象序列；对象只需实现 :class:`TeamGraphTransition`
-            协议。
-        start_node_id: 图的唯一入口节点标识，必须声明在 ``nodes`` 中。
+    """校验 Team 图；存在任何问题时一次性抛出全部问题。
 
     异常:
-        TeamGraphValidationError: 节点重复、入口无效、``END`` 被用作节点、转移引用无效、
-            存在孤立节点、死路节点、重复转移或状态缺少转移时抛出。
+        TeamGraphValidationError: ``collect_team_graph_issues`` 返回非空时抛出。
+    """
 
-    副作用:
-        不修改输入对象，不读取外部资源，也不产生持久化写入。
+    issues = collect_team_graph_issues(nodes, transitions, start_node_id)
+    if issues:
+        raise TeamGraphValidationError(issues)
+
+
+def collect_team_graph_issues(
+    nodes: Sequence[TeamGraphNode],
+    transitions: Sequence[TeamGraphTransition],
+    start_node_id: str,
+) -> list[TeamGraphIssue]:
+    """收集 Team 图的入口、转移关系与可达性问题。
+
+    保存校验与编辑器实时提示共用本函数，规则只在这里维护一份。问题按节点 / 状态 /
+    转移定位，便于前端标到对应位置。前置结构有问题时跳过依赖它的检查，避免噪声：
+    节点 ID 重复时不判定可达性（无法确定连线归属）；入口无效时不判定从入口可达；
+    引用无效的转移不计入连通关系。
+
+    参数:
+        nodes: 节点序列，只需实现 :class:`TeamGraphNode` 协议。
+        transitions: 转移序列，只需实现 :class:`TeamGraphTransition` 协议。
+        start_node_id: 唯一入口节点标识。
+
+    返回:
+        问题列表；为空表示图结构合法。不修改输入、不访问外部资源。
     """
 
     if not nodes:
-        raise TeamGraphValidationError("Team must contain at least one node")
+        return [TeamGraphIssue(TeamGraphIssueCode.NO_NODES, "Team must contain at least one node")]
 
+    issues: list[TeamGraphIssue] = []
     node_ids = [node.node_id for node in nodes]
-    if len(set(node_ids)) != len(node_ids):
-        raise TeamGraphValidationError("node_id must be unique")
-    node_map = {node.node_id: node for node in nodes}
-
-    start_nodes = [node_id for node_id in node_ids if node_id == start_node_id]
-    if len(start_nodes) != 1:
-        raise TeamGraphValidationError(
-            f"Team must have exactly one start node; '{start_node_id}' must identify it"
+    duplicated = sorted({node_id for node_id in node_ids if node_ids.count(node_id) > 1})
+    issues.extend(
+        TeamGraphIssue(
+            TeamGraphIssueCode.DUPLICATE_NODE_ID,
+            f"node_id must be unique: {node_id}",
+            node_id=node_id,
         )
-    if END_TARGET_NODE_ID in node_map:
-        raise TeamGraphValidationError(
-            f"node_id '{END_TARGET_NODE_ID}' is reserved as the terminal target"
-        )
+        for node_id in duplicated
+    )
+    if END_TARGET_NODE_ID in node_ids:
+        issues.append(TeamGraphIssue(
+            TeamGraphIssueCode.RESERVED_END_ID,
+            f"node_id '{END_TARGET_NODE_ID}' is reserved as the terminal target",
+            node_id=END_TARGET_NODE_ID,
+        ))
+    start_valid = node_ids.count(start_node_id) == 1
+    if not start_valid:
+        issues.append(TeamGraphIssue(
+            TeamGraphIssueCode.INVALID_START,
+            f"Team must have exactly one start node; '{start_node_id}' must identify it",
+        ))
 
+    node_map = {node.node_id: node for node in nodes if node.node_id not in duplicated}
     edge_keys: set[tuple[str, str]] = set()
-    adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_map}
     adjacency[END_TARGET_NODE_ID] = set()
-    reverse_adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    reverse_adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_map}
     reverse_adjacency[END_TARGET_NODE_ID] = set()
-    for transition in transitions:
-        if transition.from_node_id == END_TARGET_NODE_ID:
-            raise TeamGraphValidationError(
+    for index, transition in enumerate(transitions):
+        source_id = transition.from_node_id
+        if source_id == END_TARGET_NODE_ID:
+            issues.append(TeamGraphIssue(
+                TeamGraphIssueCode.END_AS_SOURCE,
                 f"'{END_TARGET_NODE_ID}' is only allowed as a transition target, "
-                "not as from_node_id"
-            )
-        source = node_map.get(transition.from_node_id)
+                "not as from_node_id",
+                transition_index=index,
+            ))
+            continue
+        source = node_map.get(source_id)
         if source is None:
-            raise TeamGraphValidationError("transition references an unknown source node")
-        status_names = {_status_name(status) for status in source.statuses}
-        if transition.status not in status_names:
-            raise TeamGraphValidationError(
-                "status "
-                f"'{transition.status}' is not allowed by node '{transition.from_node_id}'"
-            )
-
-        edge_key = (transition.from_node_id, transition.status)
+            if source_id not in duplicated:
+                issues.append(TeamGraphIssue(
+                    TeamGraphIssueCode.UNKNOWN_SOURCE,
+                    f"transition references an unknown source node: {source_id}",
+                    transition_index=index,
+                ))
+            continue
+        if transition.status not in {_status_name(status) for status in source.statuses}:
+            issues.append(TeamGraphIssue(
+                TeamGraphIssueCode.UNDECLARED_STATUS,
+                f"status '{transition.status}' is not allowed by node '{source_id}'",
+                node_id=source_id, status=transition.status, transition_index=index,
+            ))
+            continue
+        edge_key = (source_id, transition.status)
         if edge_key in edge_keys:
-            raise TeamGraphValidationError(
-                "multiple ambiguous transitions for node/status: "
-                f"{transition.from_node_id}/{transition.status}"
-            )
+            issues.append(TeamGraphIssue(
+                TeamGraphIssueCode.AMBIGUOUS_TRANSITION,
+                f"multiple ambiguous transitions for node/status: {source_id}/{transition.status}",
+                node_id=source_id, status=transition.status, transition_index=index,
+            ))
+            continue
         edge_keys.add(edge_key)
-
         target = transition.target_node_id
         if target != END_TARGET_NODE_ID and target not in node_map:
-            raise TeamGraphValidationError("transition references an unknown target node")
-        adjacency[transition.from_node_id].add(target)
-        reverse_adjacency[target].add(transition.from_node_id)
+            if target not in duplicated:
+                issues.append(TeamGraphIssue(
+                    TeamGraphIssueCode.UNKNOWN_TARGET,
+                    f"transition references an unknown target node: {target}",
+                    node_id=source_id, status=transition.status, transition_index=index,
+                ))
+            continue
+        adjacency[source_id].add(target)
+        reverse_adjacency[target].add(source_id)
 
-    for node in nodes:
-        missing_statuses = [
-            status_name
-            for status in node.statuses
-            if (node.node_id, status_name := _status_name(status)) not in edge_keys
-        ]
-        if missing_statuses:
-            raise TeamGraphValidationError(
-                "node "
-                f"'{node.node_id}' has statuses without transitions: {', '.join(missing_statuses)}"
+    for node_id, node in node_map.items():
+        for status in node.statuses:
+            status_name = _status_name(status)
+            if (node_id, status_name) not in edge_keys:
+                issues.append(TeamGraphIssue(
+                    TeamGraphIssueCode.STATUS_WITHOUT_TRANSITION,
+                    f"node '{node_id}' has statuses without transitions: {status_name}",
+                    node_id=node_id, status=status_name,
+                ))
+
+    if duplicated:
+        return issues
+    if start_valid:
+        reachable = _walk_graph(start_node_id, adjacency)
+        issues.extend(
+            TeamGraphIssue(
+                TeamGraphIssueCode.UNREACHABLE_NODE,
+                f"unreachable nodes: {node_id}",
+                node_id=node_id,
             )
-
-    terminal_targets = {
-        transition.target_node_id
-        for transition in transitions
-        if transition.target_node_id == END_TARGET_NODE_ID
-    }
-    if terminal_targets != {END_TARGET_NODE_ID}:
-        raise TeamGraphValidationError(
-            f"Team must use exactly one logical terminal target '{END_TARGET_NODE_ID}'"
+            for node_id in node_ids if node_id not in reachable
         )
-
-    reachable = _walk_graph(start_node_id, adjacency)
-    unreachable = sorted(set(node_ids) - reachable)
-    if unreachable:
-        raise TeamGraphValidationError(f"unreachable nodes: {', '.join(unreachable)}")
-
     can_reach_end = _walk_graph(END_TARGET_NODE_ID, reverse_adjacency)
-    dead_end_nodes = sorted(set(node_ids) - can_reach_end)
-    if dead_end_nodes:
-        raise TeamGraphValidationError(
-            "nodes cannot reach the terminal END target: " + ", ".join(dead_end_nodes)
+    issues.extend(
+        TeamGraphIssue(
+            TeamGraphIssueCode.DEAD_END_NODE,
+            f"nodes cannot reach the terminal END target: {node_id}",
+            node_id=node_id,
         )
+        for node_id in node_ids if node_id not in can_reach_end
+    )
+    return issues
 
 
 def _status_name(status: TeamGraphStatus) -> str:

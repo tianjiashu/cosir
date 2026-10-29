@@ -14,8 +14,8 @@ from typing import BinaryIO
 
 from app.config.logging.logger import log
 from app.service.configuration.file_store import ConfigurationFileStore
-from app.core.tool.handler.skill.skill_catalog import SkillCatalog, SkillInfo, read_skill_metadata
-from app.core.tool.handler.skill.skill_configuration import SkillConfiguration, read_skill_configuration
+from app.service.configuration.skill_catalog import SkillCatalog, SkillInfo, read_skill_metadata
+from app.service.configuration.skill_configuration import SkillConfiguration, read_skill_configuration
 from app.utils.path.system_cosir import (
     system_cosir_dir,
     system_skills_config_file,

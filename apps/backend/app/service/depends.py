@@ -22,17 +22,17 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.transport_assistant_service import (
         TransportAssistantService,
     )
-    from app.core.conversation_run_ledger import ConversationRunLedger
+    from app.core.workflow.conversation_run_ledger import ConversationRunLedger
+    from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
     from app.service.conversation_run.conversation_task_context_service import (
         ConversationTaskContextService,
     )
-    from app.core.workflow.inbox.task_message_queue import TaskMessageQueue
+    from app.service.conversation_run.tool_decision_service import ToolDecisionService
     from app.service.conversation_run.user_input_service import UserInputService
-    from app.service.recover_service import RecoverService
     from app.service.conversation_run.workspace_service import WorkspaceService
     from app.service.model_config import ModelConfigService
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
-    from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
+    from app.service.recover_service import RecoverService
     from app.service.workspace_files.file_watch import WorkspaceFileWatcher
     from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.task_runtime.service.task_service import TaskService
+    from app.tools.terminal_runtime.session_service import TerminalSessionService
 
 
 def initialize_service_dependencies() -> None:
@@ -68,7 +69,7 @@ def close_service_dependencies() -> None:
     """关闭进程内运行时单例（含终端服务）、清空 service 依赖缓存并关闭 SQLite 存储引擎。
 
     终端服务只在这里经 ``reset_service_dependencies`` 关闭一次；lifespan 必须先关闭
-    ``background_watches``，再调用本函数。
+    ``deferred_registry``，再调用本函数。
     """
 
     from app.storage.store_engines import close_storage
@@ -149,14 +150,9 @@ def get_workspace_crud() -> WorkspaceCrud:
 def get_terminal_session_service() -> TerminalSessionService:
     """返回进程级 terminal session service 单例。"""
 
-    from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
+    from app.tools.terminal_runtime.session_service import TerminalSessionService
 
-    # 会话列表变化（生命周期、集成、租约、交接）按 Task 整表重投影进 Transport snapshot。
-    return TerminalSessionService(
-        on_task_sessions_changed=lambda task_id: (
-            get_conversation_task_state_service().refresh_terminal_sessions(task_id)
-        )
-    )
+    return TerminalSessionService()
 
 
 @lru_cache(maxsize=1)
@@ -301,7 +297,7 @@ def get_conversation_run_ledger() -> ConversationRunLedger:
         RuntimeError: 若存储初始化失败。
     """
 
-    from app.core.conversation_run_ledger import ConversationRunLedger
+    from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 
     return ConversationRunLedger()
 
@@ -310,8 +306,8 @@ def get_conversation_run_ledger() -> ConversationRunLedger:
 def get_recover_service() -> RecoverService:
     """返回进程级启动恢复 service 单例。
 
-    只负责后端启动期收敛遗留 Run（状态迁移 + 工具占位补写）；运行期的 Run 生命周期归属
-    ``get_conversation_run_ledger``。
+    只负责后端启动期的重启恢复（收敛遗留 Run / TeamRun、拉起待调度 Task、延迟结果收尾）；
+    运行期的 Run 生命周期归属 ``get_conversation_run_ledger``。
     """
 
     from app.service.recover_service import RecoverService
@@ -323,7 +319,7 @@ def get_recover_service() -> RecoverService:
 def get_task_message_queue() -> TaskMessageQueue:
     """返回进程级 Task 外部消息队列单例（无进程内状态，只包队列 CRUD）。"""
 
-    from app.core.workflow.inbox.task_message_queue import TaskMessageQueue
+    from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
 
     return TaskMessageQueue()
 
@@ -335,6 +331,15 @@ def get_user_input_service() -> UserInputService:
     from app.service.conversation_run.user_input_service import UserInputService
 
     return UserInputService()
+
+
+@lru_cache(maxsize=1)
+def get_tool_decision_service() -> ToolDecisionService:
+    """返回进程级 HITL 决定入队服务单例（无进程内状态）。"""
+
+    from app.service.conversation_run.tool_decision_service import ToolDecisionService
+
+    return ToolDecisionService()
 
 
 @lru_cache(maxsize=1)
@@ -380,6 +385,7 @@ def reset_service_dependencies() -> None:
     get_recover_service.cache_clear()
     get_task_message_queue.cache_clear()
     get_user_input_service.cache_clear()
+    get_tool_decision_service.cache_clear()
     get_task_service.cache_clear()
     get_workspace_crud.cache_clear()
     get_conversation_run_crud.cache_clear()

@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 
 from app.config.logging.logger import log
-from app.core.workflow.inbox.task_message import NoticeBody, TaskMessage
+from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 

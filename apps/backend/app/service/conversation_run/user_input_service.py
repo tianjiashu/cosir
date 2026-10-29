@@ -18,7 +18,7 @@ from app.models import (
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
-from app.core.workflow.inbox.task_message import Delivery, RunLaunch, TaskMessage, UserInputBody
+from app.core.workflow.message_queue.task_message import Delivery, RunLaunch, TaskMessage, UserInputBody
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.depends import get_model_config_service, get_task_crud
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
@@ -89,14 +89,17 @@ class UserInputService:
             raise UserInputRejectedError("EMPTY_INPUT", "请输入消息内容")
         body = UserInputBody(
             input_text=input_text,
-            image_paths=image_paths,
-            display_text=command.display_text,
-            attachments=file_attachments,
+            presentation=UserInputPresentation(
+                display_text=command.display_text,
+                image_paths=image_paths,
+                attachments=file_attachments,
+            ),
             launch=RunLaunch(
                 agent_id=agent_id,
                 model_config_id=model_config_id,
                 options=ConversationRunOptions(
-                    ban_tools=command.ban_tools, reasoning_effort=reasoning_effort
+                    disabled_tool_groups=command.disabled_tool_groups,
+                    reasoning_effort=reasoning_effort,
                 ),
             ),
         )

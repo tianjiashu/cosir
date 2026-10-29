@@ -13,6 +13,7 @@ class ToolResultFields(TypedDict):
     isError: bool
     display_data: dict[str, object] | None
     team_run_id: NotRequired[int]
+    deferred: NotRequired[bool]
     child_task_id: NotRequired[int]
     agent_role: NotRequired[str]
 
@@ -27,6 +28,9 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
     )
     if metadata.team_run_id is not None:
         fields["team_run_id"] = metadata.team_run_id
+    # 只在为真时写入：结算事件不带标记，不能把 part 上已有的标记清掉。
+    if metadata.deferred:
+        fields["background"] = True
     display = metadata.display_data
     if display is not None and display.get("kind") == "delegation-result":
         child_task_id = display.get("child_task_id")

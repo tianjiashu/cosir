@@ -16,7 +16,14 @@ from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordina
 from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.api.configuration.agent_team_error_messages import (
     agent_team_configuration_error_message,
+    team_graph_issue_message,
 )
+from app.api.schemas.request.AgentTeamGraphIssuesRequest import AgentTeamGraphIssuesRequest
+from app.api.schemas.response.AgentTeamGraphIssuesResponse import (
+    AgentTeamGraphIssueResponse,
+    AgentTeamGraphIssuesResponse,
+)
+from app.models.agent_team.configuration.graph_validation import collect_team_graph_issues
 from app.api.schemas.request.save_agent_team_configuration_request import (
     SaveAgentTeamConfigurationRequest,
 )
@@ -60,6 +67,29 @@ async def save_agent_team_configuration(
             status_code=400,
             detail=agent_team_configuration_error_message(exc),
         ) from exc
+
+
+@app.post("/configuration/agent-teams/graph-issues", response_model=AgentTeamGraphIssuesResponse)
+async def check_agent_team_graph(
+    payload: AgentTeamGraphIssuesRequest,
+) -> AgentTeamGraphIssuesResponse:
+    """检查编辑中 Team 草稿的图结构，返回全部问题；不保存、不区分作用域。
+
+    与保存校验共用 ``collect_team_graph_issues``，编辑器据此实时标注问题。纯计算、
+    无 IO，草稿规模上限为 10 个节点，故不做缓存或限流。
+    """
+
+    issues = collect_team_graph_issues(payload.nodes, payload.transitions, payload.start_node_id)
+    return AgentTeamGraphIssuesResponse(issues=[
+        AgentTeamGraphIssueResponse(
+            code=issue.code,
+            message=team_graph_issue_message(issue),
+            node_id=issue.node_id,
+            status=issue.status,
+            transition_index=issue.transition_index,
+        )
+        for issue in issues
+    ])
 
 
 @app.get("/configuration/agent-teams")

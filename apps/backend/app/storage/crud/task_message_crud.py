@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from app.core.workflow.inbox.task_message import TaskMessage
+from app.core.workflow.message_queue.task_message import TaskMessage
 from app.storage.model.task_message_model import TaskMessageModel
 
 

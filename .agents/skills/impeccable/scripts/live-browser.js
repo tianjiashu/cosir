@@ -2717,7 +2717,7 @@
     if (cyclingShownVariant() >= arrivedVariants) next.style.opacity = '0.3';
     row.appendChild(next);
 
-    // Tune chip stays visible while the deferred parameter phase is running,
+    // Tune chip stays visible while the background parameter phase is running,
     // then becomes interactive as soon as this variant exposes controls.
     const visParams = parseVariantParams(getVisibleVariantEl());
     const hasParams = visParams.length > 0;
@@ -7500,7 +7500,7 @@
         // Mirror of the user-click pick entry in handleClick, minus the
         // pick-mode gate (the agent's intent replaces the toggle); the entry
         // goes through beginNewLiveConfiguration like every other pick so
-        // deferred recovery sees a fresh interaction revision.
+        // background recovery sees a fresh interaction revision.
         selectedElement = el;
         beginNewLiveConfiguration();
         showHighlight(selectedElement);
@@ -7595,7 +7595,7 @@
             // checkpoint may carry an earlier phase for internal bookkeeping,
             // but the bar must not move backward.
             if (shouldAdvancePhase(generationPhase, msg.phase)) generationPhase = msg.phase;
-            // The deferred parameter pass reports through `variant_progress`
+            // The background parameter pass reports through `variant_progress`
             // with publicationKind 'params', not through agent_phase.
             updateBarContent(state === 'CYCLING' ? 'cycling' : 'generating');
             saveSession();
@@ -9645,7 +9645,7 @@ void main() {
       // A restored CYCLING session promises variants already written into
       // source; if they are not there (after retries), the session is an
       // orphan and must self-discard instead of freezing the picker (#439).
-      // GENERATING restores make no such promise: deferred-wrapper flows
+      // GENERATING restores make no such promise: background-wrapper flows
       // legitimately have no wrapper in source until the agent's write lands.
       injectVariantsFromSource(restoreFile, currentSessionId, {
         orphanDiscard: savedState === 'CYCLING' && !isFrameworkComponentPreviewMode(currentPreviewMode),
@@ -10011,7 +10011,7 @@ void main() {
 
   function resumeSession(recoveryRevision = liveInteractionRevision, opts = {}) {
     // Which path resumed matters in the journal: an init resume is a fresh
-    // page load, the deferred-wrapper scout is a mid-page-load arrival. Both
+    // page load, the background-wrapper scout is a mid-page-load arrival. Both
     // used to log the same `browser_resumed`, which made issue #719 take a
     // DOM reconstruction to diagnose.
     const resumeReason = opts.reason || 'browser_resumed';
@@ -10125,7 +10125,7 @@ void main() {
     // A resume can BE the arrival, not just a re-entry after one. The server's
     // generation preflight runs live-wrap with --defer-source-write, so the
     // wrapper and every variant reach the DOM in one HMR batch, and the
-    // deferred-wrapper scout (constructed at init) runs before the variant
+    // background-wrapper scout (constructed at init) runs before the variant
     // MutationObserver (constructed at Go) on that batch. Finish the same
     // transition the observer would have finished. Without hideShaderOverlay
     // the generating shader stays frozen over the target and the session looks
@@ -13503,7 +13503,7 @@ void main() {
     }
 
     // SvelteKit, React, and other frameworks may restore a durable session
-    // before hydration adds its variant wrapper. Keep a deferred-wrapper scout
+    // before hydration adds its variant wrapper. Keep a background-wrapper scout
     // whenever init did not see a runtime wrapper, even if local/server state
     // was already restored successfully. Disconnect on the first wrapper hit.
     if (!resumed || !document.querySelector('[data-impeccable-variants],[data-impeccable-carbonize]')) {
@@ -13513,7 +13513,7 @@ void main() {
         if (!wrapper) return;
         scout.disconnect();
         if (resumeSession(deferredResumeRevision, { reason: 'browser_resumed_deferred_wrapper' })) {
-          console.log('[impeccable] Resumed deferred session ' + currentSessionId + ' (post-hydration).');
+          console.log('[impeccable] Resumed background session ' + currentSessionId + ' (post-hydration).');
         }
       });
       scout.observe(document.body, { childList: true, subtree: true });

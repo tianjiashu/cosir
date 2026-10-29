@@ -38,37 +38,69 @@ class Constant:
         服务侧与子进程，需两侧同步评估，不可只改一侧。
         """
 
-        # 单进程同时活跃的终端会话数上限（全局容量闸门，超出则新建会话被拒）。
+        # 单进程同时活跃的终端会话数上限（全局容量闸门，用户与 Agent 新建都受它约束）。
         MAX_ACTIVE_SESSIONS: int = 32
-        # 终态 session 只保留有限的查询历史，避免 registry/幂等状态随运行时间增长。
-        MAX_TERMINAL_HISTORY_SESSIONS: int = 256
-        # 单会话原始 PTY 与 Agent 文本投影的合计环形缓冲字节上限，超出后最旧输出被丢弃。
+        # Agent 在单个 Task 内新建的活跃会话上限；用户新建只受全局上限，保证 Agent 占不满名额。
+        MAX_AGENT_SESSIONS_PER_TASK: int = 8
+        # 每个 Task 保留的已结束会话数（snapshot 与 terminal_list 可见）。
+        MAX_ENDED_SESSIONS_PER_TASK: int = 10
+        # 全进程已结束会话的总保留上限；每个终态会话仍持有行缓冲与预览缓冲，需整体有界。
+        MAX_TERMINAL_HISTORY_SESSIONS: int = 64
+        # 单会话原始 PTY 输出（预览重放窗口）的字节上限，超出后最旧输出帧被丢弃。
         MAX_RING_BUFFER_BYTES: int = 1024 * 1024
+        # 逻辑行缓冲上限：行数与字符数先到先淘汰最旧已封口行，行号不复用。
+        MAX_BUFFER_LINES: int = 10_000
+        MAX_BUFFER_CHARS: int = 2 * 1024 * 1024
         # 预览队列最大帧数（防止预览消费者堆积）。
-        MAX_PREVIEW_QUEUE_FRAMES: int = 256
+        MAX_STREAM_QUEUE_FRAMES: int = 256
         # 预览队列最大字节数。
-        MAX_PREVIEW_QUEUE_BYTES: int = 1024 * 1024
+        MAX_STREAM_QUEUE_BYTES: int = 1024 * 1024
         # Agent 单次写入终端输入的最大字节数。
         MAX_AGENT_INPUT_BYTES: int = 64 * 1024
+        # 用户单帧原始输入的最大字节数（WS input 帧解码后）。
+        MAX_RAW_INPUT_BYTES: int = 64 * 1024
         # Worker 单次回传输出块的最大字节数（超出分块）。
         MAX_WORKER_OUTPUT_CHUNK_BYTES: int = 16 * 1024
+        # --- Agent 观察与等待 ---
+        # 按行读取的默认尾部行数与单次 limit 上限。
+        READ_DEFAULT_TAIL: int = 40
+        READ_MAX_LIMIT: int = 400
+        # write / 条件等待返回新增行超预算时保留的头尾行数。
+        OBSERVATION_HEAD_LINES: int = 20
+        OBSERVATION_TAIL_LINES: int = 60
+        # 观察文本中单行的最大字符数，超出部分以省略标记代替。
+        OBSERVATION_LINE_MAX_CHARS: int = 2000
+        # 会话意外结束通知附带的尾部行数。
+        END_NOTICE_TAIL_LINES: int = 20
+        # write 默认等待：输出静默 500ms，总超时 3s。
+        WAIT_DEFAULT_QUIET_MS: int = 500
+        WAIT_DEFAULT_TIMEOUT_MS: int = 3000
+        # 条件等待只在前台进行、占着工具线程，总超时上限因此要短；长工作交给 execute_terminal 后台执行。
+        WAIT_MAX_TIMEOUT_MS: int = 30_000
+        # 事件驱动等待的复查时间片：只用于复查 Run 取消信号，条件判定由 worker 事件唤醒。
+        WAIT_CANCEL_CHECK_SECONDS: float = 0.25
+        # start 等待 shell 集成就绪的上限；超时记为 unavailable，迟到的 ready 仍可恢复。
+        INTEGRATION_READY_TIMEOUT_SECONDS: float = 2.0
+        # --- 输入租约 ---
+        # 用户最后一次按键后空闲多久释放租约（executing 时保持到命令返回与空闲超时中更晚者）。
+        USER_LEASE_IDLE_SECONDS: float = 3.0
+        # Agent 输入等待用户租约释放的上限，超时返回可重试错误。
+        AGENT_LEASE_WAIT_SECONDS: float = 10.0
         # --- Worker 子进程协议与约束 ---
         # 单帧最大字节数（Worker 与服务侧帧编解码的共同上限）。
         MAX_FRAME_BYTES: int = 4 * 1024 * 1024
         # Worker 输入队列最大帧数。
         MAX_INPUT_QUEUE_FRAMES: int = 64
-        # Worker 输入队列最大字节数。
-        MAX_INPUT_QUEUE_BYTES: int = 64 * 1024
+        # Worker 输入队列最大字节数（需容纳一帧 base64 编码的最大原始输入）。
+        MAX_INPUT_QUEUE_BYTES: int = 512 * 1024
         # 每个 session 保留的最近已接受输入摘要数；随终态历史淘汰或 Task 删除释放。
         MAX_WRITE_OPERATION_CACHE: int = 4096
         # Worker 子进程启动时注入的环境变量键，用于标识自身为终端 worker。
         WORKER_ENV: str = "CODING_AGENT_TERMINAL_WORKER"
 
-        # --- 预览流（HTTP / WebSocket） ---
-        # 预览控制帧最大字节数。
-        MAX_PREVIEW_CONTROL_BYTES: int = 8 * 1024
-        # 预览轮询间隔（秒）。
-        PREVIEW_POLL_SECONDS: float = 0.25
+        # --- 交互通道（WebSocket terminal-v2） ---
+        # 客户端控制帧最大字节数（需容纳 base64 编码的最大原始输入）。
+        MAX_STREAM_CONTROL_BYTES: int = 128 * 1024
 
     class Run:
         """Conversation Run 失败 / 终态相关的稳定 code 与状态集合。
@@ -344,18 +376,15 @@ class Constant:
         # 同一回复内工具调用的并行 worker 上限（并行批次按此收敛，超出的调用排队执行）。
         MAX_PARALLEL_CALLS: int = 8
 
-        # 「子 Agent 不得使用」的工具名集合：委派与父子通信（``core/tool/child_agent/`` 全部
-        # 工具）加可交互终端（``tool_handler/terminal_session/`` 全部工具）。子 Agent 仍能在 Task
-        # schema 里看到它们，但会被写进 child Run 的 ``ban_tools``，使 bind_tools 结构与实际执行
-        # 权限分离；这两个目录新增工具时必须同步登记。
+        # 「子 Agent 不得使用」的工具名集合：委派、父子通信、Team 与配置提案。子 Agent 的 Task 在创建
+        # 时就把这些工具连同交互终端工具组（``TOOL_GROUP_TERMINAL_SESSION``，按组整体剥离、不在此
+        # 手列）从工具 schema 中剥掉，模型看不到也调用不了（见 ``child_agent_create``）。
         # 名字取自 ``app.core.tool.schemas.tool_names``；本模块是叶子模块、不得 import 任何 ``app``
         # 子模块，故按字面量展开（与 Run 状态等枚举值同一处理），漂移由 tests/ 下「child 工具下线
         # 契约」用例的不变式守住（非空、无重复、全为规范名、且每个名字在活注册表中真实存在）。
         # 该用例会扫描 app/ 源码里的旧工具名文本，本注释刻意不写出那个已下线工具的名字。
-        # 类型沿用迁移前的元组：该用例以「元组内无重复项」作为契约断言，改成 set 会让断言退化为
-        # 恒真。
+        # 类型沿用元组：该用例以「元组内无重复项」作为契约断言，改成 set 会让断言退化为恒真。
         CHILD_DISALLOWED_TOOLS: tuple[str, ...] = (
-            # child_task/：委派与父子通信
             "delegate_task",
             "child_agent_status",
             "child_agent_send",
@@ -363,26 +392,15 @@ class Constant:
             "agent_team",
             "propose_agent_team_configuration",
             "propose_agent_configuration",
-            # terminal_session/：可交互终端
-            "terminal_start",
-            "terminal_write",
-            "terminal_read",
-            "terminal_signal",
-            "terminal_close",
         )
         # 「Team 节点不得使用」的工具名集合。与 ``CHILD_DISALLOWED_TOOLS`` 的差别只有一处：
         # Team 节点要把子工作继续委派给子 Agent，因此**保留**委派与父子通信工具，只禁 Team 自身
-        # 递归建 Team、配置提案与可交互终端（本集合 = ``CHILD_DISALLOWED_TOOLS`` 去掉
-        # child_task/ 的四个委派类工具）。理由同前：节点仍能看到这些 schema，但执行权限被收走。
+        # 递归建 Team 与配置提案。交互终端同样按工具组整体剥离、不在此手列。节点工具在固化
+        # ``allowed_tools`` 时就剥掉（见 ``materialize_node_tools``），节点 Task 的 schema 里没有它们。
         TEAM_NODE_DISALLOWED_TOOLS: frozenset[str] = frozenset(
             {
                 "agent_team",
                 "propose_agent_team_configuration",
                 "propose_agent_configuration",
-                "terminal_start",
-                "terminal_read",
-                "terminal_write",
-                "terminal_signal",
-                "terminal_close",
             }
         )

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 from typing import cast
 
 from sqlalchemy.orm import Session
@@ -20,7 +21,8 @@ from app.core.context.tool_call_closure import (
     plan_tool_call_closures,
 )
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.models.enums.tool_call_status import ToolCallEventStatus
+from app.models.message_metadata import MessageMetadata, ToolMessageMetadata, UserMessageMetadata
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -131,7 +133,7 @@ class ConversationTaskContextService:
                     run_id=run_id_map[source_entry.run_id],
                     message=copy.deepcopy(source_entry.message),
                     message_id=source_entry.message_id,
-                    metadata=copy.deepcopy(source_entry.metadata),
+                    metadata=_uninherited(source_entry.metadata),
                     include_in_context=source_entry.include_in_context,
                     sequence=next_sequence,
                     project_to_transport=source_entry.project_to_transport,
@@ -143,6 +145,34 @@ class ConversationTaskContextService:
         if not system_prompt_found:
             raise RuntimeError(f"task {source_task_id} has no persisted system prompt")
         return cloned_count
+
+    def settle_deferred_placeholders(
+            self,
+            task_id: int | None,
+            tool_call_ids: frozenset[str] | None,
+            status: ToolCallEventStatus,
+            error: str | None,
+    ) -> list[ConversationTaskContextRecord]:
+        """把仍为 ``pending`` 的后台占位行推到终态，返回实际改写的行（新 metadata）。
+
+        Run 之外的结算（撤销、重启）走这里；Run 内的结论并入由 workflow 经 context manager 结算。
+        ``task_id`` 为 ``None`` 表示全部 Task，``tool_call_ids`` 为 ``None`` 表示不按调用过滤。只改
+        metadata、不改正文与可见性：占位仍是这次调用在模型协议上的结果。已到终态的行不动，迟到
+        的结算因此幂等。
+        """
+
+        settled: list[ConversationTaskContextRecord] = []
+        for record in self._crud.list_pending_deferred(task_id):
+            tool_call_id = record.message.get("tool_call_id")
+            if tool_call_ids is not None and tool_call_id not in tool_call_ids:
+                continue
+            metadata = cast(ToolMessageMetadata, record.metadata).model_copy(
+                update={"status": status, "error": error}
+            )
+            updated = dataclasses.replace(record, metadata=metadata)
+            self._crud.replace_message(record.task_id, record.sequence, updated)
+            settled.append(updated)
+        return settled
 
     def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:
         """删除指定 run 的全部 context entry。
@@ -208,6 +238,27 @@ class ConversationTaskContextService:
                     return call["function"]["name"]
         return None
 
+    def has_tool_call(
+            self,
+            task_id: int,
+            tool_names: frozenset[str],
+            *,
+            run_id: int | None = None,
+    ) -> bool:
+        """仍进模型上下文的 assistant 消息里是否调用过 ``tool_names`` 之一；``run_id`` 限定归属 Run。
+
+        只看进上下文的行：模型看不到的调用（被编辑重跑移出）不需要再告知它的后果。
+        """
+        for record in self._crud.get(task_id, include_in_context=True):
+            if record.message["role"] != "assistant":
+                continue
+            if run_id is not None and record.run_id != run_id:
+                continue
+            for call in record.message.get("tool_calls") or ():
+                if call["type"] == "function" and call["function"]["name"] in tool_names:
+                    return True
+        return False
+
     def exclude_from(self, task_id: int, sequence: int, session: Session) -> None:
         """编辑重跑：把 ``sequence`` 及其后的行移出模型上下文与前端投影。
 
@@ -257,3 +308,13 @@ class ConversationTaskContextService:
             repaired.append(slot.call_id)
             next_sequence += 1
         return repaired
+
+
+def _uninherited(metadata: MessageMetadata) -> MessageMetadata:
+    """fork 复制时，仍在等结论的后台占位改为 ``cancelled``：后台工作只属于源 Task，新 Task 收不到
+    它的结论，卡片以短提示「未继承」说明，不另设状态。"""
+
+    copied = copy.deepcopy(metadata)
+    if isinstance(copied, ToolMessageMetadata) and copied.deferred and copied.status == "pending":
+        return copied.model_copy(update={"status": "cancelled", "error": "未继承"})
+    return copied

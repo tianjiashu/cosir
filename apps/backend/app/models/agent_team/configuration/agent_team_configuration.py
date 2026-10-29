@@ -15,10 +15,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
-from app.models.agent_team.configuration.graph_validation import (
-    TeamGraphValidationError,
-    validate_team_graph,
-)
+from app.models.agent_team.configuration.graph_validation import validate_team_graph
 from app.models.agent_team.configuration.team_node_definition import (
     TeamNodeDefinition,
     TeamNodeIdentifier,
@@ -26,14 +23,6 @@ from app.models.agent_team.configuration.team_node_definition import (
 from app.models.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
 
 TeamScope = Literal["system", "workspace"]
-
-
-class TeamConfigurationError(ValueError):
-    """Team 配置不符合静态契约时抛出的领域异常。
-
-    该异常只表示静态配置或图结构无效，不表示 profile、模型或工具运行时资源
-    不可用；运行时资源解析失败由预览构建层负责转换和报告。
-    """
 
 
 class AgentTeamConfiguration(BaseModel):
@@ -55,8 +44,9 @@ class AgentTeamConfiguration(BaseModel):
         scope: 配置作用域；``system`` 表示系统配置，``workspace`` 表示当前工作区配置。
 
     该模型只负责配置解析和不依赖运行时资源的图校验，不读取文件、不解析 Agent
-    profile，也不启动节点执行。校验失败会抛出 ``ValidationError`` 或
-    ``TeamConfigurationError``，由配置 API 或预览工具转换为用户可读错误。
+    profile，也不启动节点执行。校验失败统一抛出 ``ValidationError``；图结构问题以
+    ``TeamGraphValidationError`` 作为其 ``value_error`` 的上下文，由配置 API 按问题代码
+    转换为用户可读错误。
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -101,19 +91,13 @@ class AgentTeamConfiguration(BaseModel):
 
     @model_validator(mode="after")
     def validate_graph(self) -> AgentTeamConfiguration:
-        """调用共享校验器检查节点类型、转移关系和图可达性。
+        """调用共享校验器检查转移关系和图可达性。
 
-        返回:
-            当前已校验的不可变配置对象，便于 Pydantic 的 ``after`` 校验链继续处理。
-
-        异常:
-            TeamConfigurationError: 共享图校验器发现配置不符合静态契约时抛出。
+        ``TeamGraphValidationError`` 是 ``ValueError``，直接上浮由 Pydantic 包成
+        ``ValidationError``，原异常（含全部问题）保留在错误上下文里。
         """
 
-        try:
-            validate_team_graph(self.nodes, self.transitions, self.start_node_id)
-        except TeamGraphValidationError as exc:
-            raise TeamConfigurationError(str(exc)) from exc
+        validate_team_graph(self.nodes, self.transitions, self.start_node_id)
         return self
 
     def node(self, node_id: str) -> TeamNodeDefinition:

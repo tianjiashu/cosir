@@ -24,7 +24,7 @@ class ConversationTaskContextRecord:
     message: ChatCompletionMessageParam
     include_in_context: bool
     sequence: int
-    # 只有用户消息有身份（inbox 行 id）；其余角色为 None。
+    # 只有用户消息有身份（message_queue 行 id）；其余角色为 None。
     message_id: int | None = None
     metadata: MessageMetadata = field(default_factory=EmptyMessageMetadata)
     # 与 ``include_in_context`` 独立：消息可供模型使用但不对前端投影。

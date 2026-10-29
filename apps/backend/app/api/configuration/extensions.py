@@ -16,14 +16,14 @@ from app.api.schemas.response.SkillDeleteResponse import SkillDeleteResponse
 from app.api.schemas.response.SkillDocumentResponse import SkillDocumentResponse
 from app.api.schemas.response.SkillInfoResponse import SkillInfoResponse
 from app.app import app
-from app.service.configuration.mcp_configuration_service import MCPConfigurationService
-from app.service.configuration.skill_configuration_service import SkillConfigurationService
-from app.core.tool.handler.mcp.mcp_client import (
+from app.service.configuration.mcp_client import (
     MCPConfiguration,
     MCPServerConfig,
     server_connection_fingerprint,
 )
-from app.core.tool.handler.skill.skill_catalog import SkillInfo
+from app.service.configuration.mcp_configuration_service import MCPConfigurationService
+from app.service.configuration.skill_catalog import SkillInfo
+from app.service.configuration.skill_configuration_service import SkillConfigurationService
 
 
 @app.get("/configuration/mcp-servers", response_model=MCPServersResponse)

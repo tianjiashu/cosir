@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from openai.types.shared_params import FunctionDefinition
 from pydantic import TypeAdapter
 
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.service.depends import get_task_service, get_workspace_service
 
 if TYPE_CHECKING:
@@ -94,10 +95,16 @@ class TaskRuntimeSpace:
     current_task: TaskRecord = field(init=False)
     # Task 的调度者；在这里创建、由注册表拉起（space 可能在工作线程物化，拉起必须回到事件循环）。
     actor: TaskActor = field(init=False)
+    # Task 级投递通道：每次开始执行时由 actor 清空，运行中 loop 往里投递，prepare_input 取光。
+    # 归 space 持有，``RuntimeContext.for_run`` 才能只凭 Run 装配出本次执行的上下文。
+    mailbox: RunMailbox = field(default_factory=RunMailbox, init=False)
     # 最近一次工具准入通知告诉模型的禁用集合，供下一个 Run 只发增量；``None`` 表示未知（新 Task、
     # fork、后端重启），此时 context 里可能残留其他来源的准入说明，必须重发完整说明。只由
     # ``RuntimeContext.for_run`` 读写，同一 Task 的 Run 由 actor 串行发起，无需加锁。
     announced_ban_tools: frozenset[str] | None = field(default=None, init=False)
+    # 本进程是否已就「旧终端已失效」告知过该 Task（重启唤醒或首次驱动提醒，见
+    # ``core/tool/background/restart_settlement``）；space 与进程同寿，所以「本进程首次」即首次置位。
+    terminals_invalidation_announced: bool = field(default=False, init=False)
 
     @property
     def task_tool_schemas(self) -> tuple[FunctionDefinition, ...]:

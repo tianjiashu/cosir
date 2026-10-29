@@ -36,7 +36,7 @@ class StorageBase(DeclarativeBase):
         """映射完成后给每张表开启 ``sqlite_autoincrement``。
 
         不放在基类 ``__table_args__``：子类一声明自己的索引 / 约束就会整体覆盖它，表退化成
-        SQLite 默认的「复用已删除最大 id」，而 Run、Task、inbox 等表的行 id 是对外身份，复用会
+        SQLite 默认的「复用已删除最大 id」，而 Run、Task、message_queue 等表的行 id 是对外身份，复用会
         让新行与已删除行撞 id。在这里设置后，子类可以自由声明 ``__table_args__``。
         """
         super().__init_subclass__(**kwargs)

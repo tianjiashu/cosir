@@ -11,7 +11,7 @@ from app.storage.model.base import StorageBase
 class ConversationRunModel(StorageBase):
     """Run 生命周期、执行配置与恢复进度的唯一持久化记录。
 
-    用户正文和附件归 inbox/context；Run 只保留模型路由、冻结选项和终态结果。
+    用户正文和附件归 message_queue/context；Run 只保留模型路由、冻结选项和终态结果。
     context_window_total 与本 Run 的 usage 配对，不随后续配置变化。
     """
 

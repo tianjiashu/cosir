@@ -13,6 +13,7 @@
 - **用户命令同步返回。** `submit` / `rerun` / `resume` await 这一轮，拒绝抛 `SessionConflictError`（API 映射 409）；`submit` 返回新建或唤醒的 Run，Coordinator 据此记下节点 Run，`wait_new_run` 删除。
   > 已被取代：后续 `task-command-fire-and-forget-design.md` 把发送改为纯入队（`task_runtime_spaces.enqueue`），actor 不再提供 `submit`。Coordinator 投递后自行等节点 Task 换上新 Run 并分段 `wait_idle`，理由与重新评估条件见 `agent_team/coordinator.py` 的 `_await_node_run`。
 - **编辑重跑不再记待办。** 运行中先打 `edited` 取消，在闸门外等当前执行收尾（有超时），再拿闸门完成移出与重跑；等待期间 `_rerun_pending` 阻止推进，排队消息随重跑出的新 Run 并入。
+  > 已被取代：重跑不再替用户停止。前端只在 activity 为终态时开放入口，后端在 Task 闸门内校验执行阶段为 `idle`，否则 409 `RUN_NOT_STOPPED`；`edited` 取消原因与 `TaskActor.wait_idle` 随之删除。
 - **跨 Task 调用只发起不等待。** `post` / `cancel` / `broadcast` 另起任务交给对方 actor；持自己的闸门去等对方的闸门会让父取消子、子回投父互等死锁。
 - **用户命令编排归 Transport。** 排队消息编辑、重跑前的目标校验与输入解析、存在性检查移到 `TransportAssistantService`；`TaskActors` 只保留多类投递方共用的入口与登记表。
 
@@ -118,6 +119,8 @@ async def _loop(self) -> None:
 
 1. 有执行 → 以 `edited` 打取消信号，actor 记 `pending_rerun`，本批结束；
 2. 无执行（立即或在 `RunFinished` 收尾后）→ 同一事务内 `exclude_from` + 新消息入队 → 推进（`by_user=True`），按本次请求的配置 `StartRun`，兑现回执。
+
+> 已被取代：没有两阶段。`TransportAssistantService.rerun` 在 Task 闸门内确认执行阶段为 `idle`，同一事务内 `exclude_from` + 新消息入队，由 actor 照常推进；非 `idle` 直接 409 `RUN_NOT_STOPPED`。
 
 修复的现存问题：当前 `edit` 先查「是否仍在队列」，不在则走已并入分支；排队消息恰在编辑前被并入且正是最新用户输入时，请求会静默变成「停止当前 Run 并重跑」。
 

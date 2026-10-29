@@ -52,6 +52,31 @@ class ConversationTaskContextCrud:
                 rows = session.scalars(stmt).all()
         return [ConversationTaskContextRecord._from_model(row) for row in rows]
 
+    def list_pending_deferred(
+            self, task_id: int | None = None, session: Session | None = None
+    ) -> list[ConversationTaskContextRecord]:
+        """仍为 ``pending`` 的延迟结果后台占位行（tool 行 metadata ``background`` 为真）。
+
+        ``task_id`` 为 ``None`` 时跨全部 Task（重启收尾用）。按 metadata JSON 过滤，不改表结构。
+        """
+
+        metadata_json = ConversationTaskContextModel.metadata_json
+        stmt = select(ConversationTaskContextModel).where(
+            func.json_extract(metadata_json, "$.background").is_(True),
+            func.json_extract(metadata_json, "$.status") == "pending",
+        )
+        if task_id is not None:
+            stmt = stmt.where(ConversationTaskContextModel.task_id == task_id)
+        stmt = stmt.order_by(
+            ConversationTaskContextModel.task_id.asc(), ConversationTaskContextModel.sequence.asc()
+        )
+        if session is not None:
+            rows = session.scalars(stmt).all()
+        else:
+            with self._session_factory.begin() as session:
+                rows = session.scalars(stmt).all()
+        return [ConversationTaskContextRecord._from_model(row) for row in rows]
+
     def get_for_observation(
             self,
             task_id: int,
@@ -284,66 +309,6 @@ class ConversationTaskContextCrud:
                     status,
                 )
             )
-        )
-        session.execute(statement)
-
-    def update_terminal_session_display(
-            self,
-            task_id: int,
-            sequence: int,
-            run_id: int,
-            session_id: str,
-            status: str,
-            end_reason: str | None,
-            exit_code: int | None,
-            session: Session | None = None,
-    ) -> None:
-        """原子更新精确 terminal session display 的生命周期字段。
-
-        locator 同时约束 task、context sequence、run 和 session_id，只修改已有的
-        ``terminal-session`` display_data，避免异步 PTY 状态回写覆盖并发产生的其它 metadata。
-        """
-
-        if session is None:
-            with self._session_factory.begin() as owned_session:
-                self.update_terminal_session_display(
-                    task_id,
-                    sequence,
-                    run_id,
-                    session_id,
-                    status,
-                    end_reason,
-                    exit_code,
-                    session=owned_session,
-                )
-            return
-
-        metadata_json = ConversationTaskContextModel.metadata_json
-        display_kind = func.json_extract(metadata_json, "$.display_data.kind")
-        display_status = func.json_extract(metadata_json, "$.display_data.status")
-        updated_metadata = func.json_set(
-            metadata_json,
-            "$.display_data.status",
-            status,
-            "$.display_data.end_reason",
-            end_reason,
-            "$.display_data.exit_code",
-            exit_code,
-        )
-        statement = (
-            update(ConversationTaskContextModel)
-            .where(
-                ConversationTaskContextModel.task_id == task_id,
-                ConversationTaskContextModel.sequence == sequence,
-                ConversationTaskContextModel.run_id == run_id,
-                display_kind == "terminal-session",
-                func.json_extract(metadata_json, "$.display_data.session_id") == session_id,
-                # Session lifecycle is monotonic: only an active display may receive a
-                # transition. A delayed terminal event must not overwrite an established
-                # exited/failed/closed state.
-                display_status.in_(("starting", "running")),
-            )
-            .values(metadata_json=updated_metadata)
         )
         session.execute(statement)
 

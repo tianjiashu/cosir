@@ -14,7 +14,7 @@ from app.assistant_transport.request.part import AssistantImagePart, AssistantTe
 from app.config.constant import Constant
 from app.models import ConversationRunAttachmentInput, ConversationRunCommand
 from app.models.conversation_run_options import ReasoningEffort
-from app.core.workflow.inbox.task_message import Delivery
+from app.core.workflow.message_queue.task_message import Delivery
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 
 
@@ -51,11 +51,11 @@ class _MessageCommandRequest(BaseModel):
     message: AssistantUserMessage
 
     def to_run_command(self) -> ConversationRunCommand:
-        """``display_text`` 保持文字与图片的原始顺序；附件绑定随输入进入 inbox。"""
+        """``display_text`` 保持文字与图片的原始顺序；附件绑定随输入进入 message_queue。"""
 
-        return self._run_command(ban_tools=[])
+        return self._run_command(disabled_tool_groups=[])
 
-    def _run_command(self, *, ban_tools: list[str]) -> ConversationRunCommand:
+    def _run_command(self, *, disabled_tool_groups: list[str]) -> ConversationRunCommand:
         parts = self.message.parts
         return ConversationRunCommand(
             display_text=_ordered_display_text(parts),
@@ -66,7 +66,7 @@ class _MessageCommandRequest(BaseModel):
                     if isinstance(part, AssistantImagePart)
                 )
             ),
-            ban_tools=ban_tools,
+            disabled_tool_groups=disabled_tool_groups,
             attachments=[
                 ConversationRunAttachmentInput(
                     id=attachment.id,
@@ -85,19 +85,20 @@ class _LaunchCommandRequest(_MessageCommandRequest):
     # 模型名由后端配置事实读取，请求只携带配置身份。
     modelConfigId: int = Field(ge=1)
     reasoningEffort: ReasoningEffort | None = None
-    banTools: list[StrictStr] = Field(default_factory=list)
+    # 用户关掉的工具组名；后端在运行时按注册表展开为工具名，前端不做换算。
+    disabledToolGroups: list[StrictStr] = Field(default_factory=list)
 
-    @field_validator("banTools")
+    @field_validator("disabledToolGroups")
     @classmethod
-    def _validate_ban_tools(cls, value: list[str]) -> list[str]:
+    def _validate_disabled_tool_groups(cls, value: list[str]) -> list[str]:
         if any(not name.strip() for name in value):
-            raise ValueError("banTools entries must not be blank")
+            raise ValueError("disabledToolGroups entries must not be blank")
         if len(value) != len(set(value)):
-            raise ValueError("banTools entries must be unique")
+            raise ValueError("disabledToolGroups entries must be unique")
         return value
 
     def to_run_command(self) -> ConversationRunCommand:
-        return self._run_command(ban_tools=list(self.banTools))
+        return self._run_command(disabled_tool_groups=list(self.disabledToolGroups))
 
 
 class SendMessageRequest(_LaunchCommandRequest):
@@ -109,7 +110,7 @@ class SendMessageRequest(_LaunchCommandRequest):
 class EditQueuedMessageRequest(_MessageCommandRequest):
     """原地编辑一条排队中（未并入）的用户消息：只带新正文与附件。
 
-    发起配置（模型、推理强度、禁用工具）在发送那一刻已定，编辑沿用，因此请求里没有这些字段。
+    发起配置（模型、推理强度、关掉的工具组）在发送那一刻已定，编辑沿用，因此请求里没有这些字段。
     """
 
 

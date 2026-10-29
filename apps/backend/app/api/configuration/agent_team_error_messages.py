@@ -1,6 +1,16 @@
-"""把 Agent Team 配置领域校验错误转换为可供本机用户修改的提示。"""
+"""把 Agent Team 配置领域校验错误转换为可供本机用户修改的提示。
+
+图结构问题按 :class:`TeamGraphIssueCode` 生成文案，不解析英文描述；保存失败与编辑器
+实时提示共用 :func:`team_graph_issue_message`，两处措辞一致。
+"""
 
 from pydantic import ValidationError
+
+from app.models.agent_team.configuration.graph_validation import (
+    TeamGraphIssue,
+    TeamGraphIssueCode,
+    TeamGraphValidationError,
+)
 
 
 def agent_team_configuration_error_message(error: Exception) -> str:
@@ -8,15 +18,13 @@ def agent_team_configuration_error_message(error: Exception) -> str:
 
     if isinstance(error, ValidationError):
         messages = [
-            _validation_issue_message(item)
+            message
             for item in error.errors(include_context=True)
+            for message in _validation_issue_messages(item)
         ]
         return "\n".join(dict.fromkeys(messages))
 
     message = str(error)
-    graph_message = _graph_issue_message(message)
-    if graph_message:
-        return graph_message
     if message.startswith("Team 节点引用的 child Agent 不可用:"):
         agent_id = message.partition(":")[2].strip()
         return f"节点引用的子 Agent“{agent_id}”当前不可用，请选择当前作用域中的子 Agent。"
@@ -25,7 +33,17 @@ def agent_team_configuration_error_message(error: Exception) -> str:
     return "Agent Team 配置未能保存，请检查 Team 信息、节点状态和转移设置。"
 
 
-def _validation_issue_message(issue: dict[str, object]) -> str:
+def _validation_issue_messages(issue: dict[str, object]) -> list[str]:
+    """图校验错误展开为逐条问题；其余字段错误各对应一条提示。"""
+
+    context = issue.get("ctx")
+    cause = context.get("error") if isinstance(context, dict) else None
+    if isinstance(cause, TeamGraphValidationError):
+        return [team_graph_issue_message(item) for item in cause.issues]
+    return [_field_issue_message(issue)]
+
+
+def _field_issue_message(issue: dict[str, object]) -> str:
     location = issue.get("loc", ())
     field = str(location[-1]) if isinstance(location, tuple) and location else ""
     error_type = str(issue.get("type", ""))
@@ -48,9 +66,6 @@ def _validation_issue_message(issue: dict[str, object]) -> str:
     if error_type == "value_error":
         context = issue.get("ctx")
         detail = str(context.get("error", "")) if isinstance(context, dict) else ""
-        graph_message = _graph_issue_message(detail)
-        if graph_message:
-            return graph_message
         if field == "statuses" and "duplicates" in detail:
             return "同一节点内的业务状态不能重复。"
         if field == "statuses" and "blank" in detail:
@@ -73,29 +88,33 @@ def _validation_issue_message(issue: dict[str, object]) -> str:
     return f"{field_name}不符合要求，请检查后重试。"
 
 
-def _graph_issue_message(message: str) -> str | None:
-    if "Team must contain at least one node" in message:
-        return "请至少添加一个 Team 节点。"
-    if "node_id must be unique" in message:
-        return "存在重复的节点 ID，请为每个节点设置不同的 ID。"
-    if "start_node_id" in message and "not a declared node" in message:
-        return "入口节点不存在，请从当前节点中选择一个入口。"
-    if "reserved as the terminal target" in message:
-        return "节点 ID“END”是保留名称，请为该节点更换 ID。"
-    if "unknown source node" in message:
-        return "有状态转移引用了不存在的来源节点，请选择有效节点。"
-    if "unknown target node" in message:
-        return "有状态转移引用了不存在的目标节点，请选择有效节点或 END。"
-    if "multiple ambiguous transitions" in message:
-        return "同一节点的同一业务状态只能设置一条转移，请合并或删除重复转移。"
-    if "is not allowed by node" in message:
-        return "有状态转移使用了来源节点未定义的业务状态，请调整状态或转移。"
-    if "statuses without transitions" in message:
-        return "有业务状态尚未设置转移目标，请为每个状态连到节点或 END。"
-    if "unreachable nodes" in message:
-        return "有节点无法从入口到达，请调整状态转移连接。"
-    if "cannot reach the terminal END target" in message:
-        return "有节点无法通过状态转移到达 END，请补充结束路径。"
-    if "only allowed as a transition target" in message:
-        return "END 只能作为转移目标，不能作为来源节点。"
-    return None
+def team_graph_issue_message(issue: TeamGraphIssue) -> str:
+    """把一条图结构问题转换为指向具体节点 / 状态的中文提示。"""
+
+    node = f"节点“{issue.node_id}”"
+    status = f"状态“{issue.status}”"
+    match issue.code:
+        case TeamGraphIssueCode.NO_NODES:
+            return "请至少添加一个 Team 节点。"
+        case TeamGraphIssueCode.DUPLICATE_NODE_ID:
+            return f"节点 ID“{issue.node_id}”重复，请为每个节点设置不同的 ID。"
+        case TeamGraphIssueCode.INVALID_START:
+            return "入口节点无效，请把一个节点设为入口。"
+        case TeamGraphIssueCode.RESERVED_END_ID:
+            return "节点 ID“END”是保留名称，请为该节点更换 ID。"
+        case TeamGraphIssueCode.END_AS_SOURCE:
+            return "END 只能作为转移目标，不能作为来源节点。"
+        case TeamGraphIssueCode.UNKNOWN_SOURCE:
+            return "有状态转移的来源节点不存在，请删除或改为有效节点。"
+        case TeamGraphIssueCode.UNDECLARED_STATUS:
+            return f"{node}没有声明{status}，请添加该状态或修改转移。"
+        case TeamGraphIssueCode.AMBIGUOUS_TRANSITION:
+            return f"{node}的{status}设置了多条转移，同一状态只能交给一个目标。"
+        case TeamGraphIssueCode.UNKNOWN_TARGET:
+            return f"{node}的{status}指向了不存在的节点，请改为有效节点或 END。"
+        case TeamGraphIssueCode.STATUS_WITHOUT_TRANSITION:
+            return f"{node}的{status}还没有设置下一步。"
+        case TeamGraphIssueCode.UNREACHABLE_NODE:
+            return f"{node}从入口出发走不到。"
+        case TeamGraphIssueCode.DEAD_END_NODE:
+            return f"{node}之后无法走到 END。"

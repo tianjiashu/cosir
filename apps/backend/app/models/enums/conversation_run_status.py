@@ -33,6 +33,9 @@ ACTIVE_RUN_STATUSES = frozenset({_RUNNING, _SUSPENDED})
 # 写入受控错误契约的终态。
 ERROR_RUN_STATUSES = frozenset({_FAILED, _CANCELLED})
 TERMINAL_RUN_STATUSES = frozenset({_COMPLETED}) | ERROR_RUN_STATUSES
+# 执行结束后自动接续剩余消息的落定状态（且未收到取消）；停止之后到达的消息由调度 loop 判定，
+# 取消与失败不自动接续——留着的消息等新消息到来再一起推进。
+CONTINUE_AFTER_STATUSES = frozenset({_COMPLETED, _SUSPENDED})
 
 
 class RunTransition(Enum):

@@ -159,7 +159,7 @@ class TaskService:
         return self._task.get(task_id)
 
     def collect_task_tree_ids(self, task_id: int) -> set[int]:
-        """返回任务及其递归委派子任务的 id；删除前先停止这些 Task 的执行。"""
+        """返回任务及其递归子任务（含 Team 节点）的 id；删除前先停止这些 Task 的执行。"""
         return self._collect_task_tree_ids(task_id)
 
     def list_task_ids_to_dispatch(self) -> set[int]:
@@ -612,75 +612,26 @@ class TaskService:
             current = self._task.get(parent_id)
         return ancestors
 
-    def _collect_task_tree_ids(self, root_task_id: int, session: Session | None = None) -> set[int]:
-        """收集待删除任务树的全部 task id。
+    def _collect_task_tree_ids(self, root_task_id: int) -> set[int]:
+        """收集任务树（根任务及沿 ``parent_task_id`` 递归的全部子 Task）的 id 集合。"""
 
-        参数:
-            root_task_id: 任务树根节点。
+        with self._session_factory() as session:
+            return set(self._collect_task_tree_ids_postorder(root_task_id, session))
 
-        返回:
-            包含根任务和递归委派子任务的 task id 集合。
+    def _collect_task_tree_ids_postorder(self, root_task_id: int, session: Session) -> list[int]:
+        """按「子任务先于父任务」的顺序返回任务树全部 id。
 
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 查询任务树失败。
-
-        副作用:
-            无；只读取任务关系。
+        ``tasks.parent_task_id`` 是即时检查的自引用外键，父行必须晚于全部子行删除。广度优先
+        发现顺序里父任务总在子任务之前，反转即得所需顺序。子任务按 ``list_child_ids`` 收集、
+        不区分类型：Team 节点 Task 同样挂在父任务下，漏掉会让删除父行时外键失败。
         """
 
-        collected: set[int] = set()
-        frontier = [root_task_id]
-        while frontier:
-            current_id = frontier.pop()
-            if current_id in collected:
-                continue
-            collected.add(current_id)
-            frontier.extend(
-                child.id for child in self._task.list_by_parent_task(current_id, session=session)
-            )
-        return collected
-
-    def _collect_task_tree_ids_postorder(
-        self, root_task_id: int, session: Session | None = None
-    ) -> list[int]:
-        """收集任务树全部 id 并按「子任务先于父任务」的后序返回。
-
-        单条 ``DELETE ... WHERE id IN (...)`` 无法保证父行晚于子行，而 ``tasks.parent_task_id``
-        自引用外键要求父任务行在其所有子任务行之后删除，否则 SQLite 即时外键检查会报
-        ``FOREIGN KEY constraint failed``。故先收集整棵任务树，再以「被本批任务引用为父的
-        节点暂留、其余为叶子」的拓扑方式逐层产出后序列表（叶子在前、根在后）。
-
-        参数:
-            root_task_id: 任务树根节点。
-
-        返回:
-            后序排列的 task id 列表（子任务在前、根任务在后）。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询任务关系失败。
-
-        副作用:
-            无；只读取任务关系。
-        """
-
-        all_ids = self._collect_task_tree_ids(root_task_id, session=session)
-        parent_of: dict[int, int] = {}
-        for current_id in all_ids:
-            for child in self._task.list_by_parent_task(current_id, session=session):
-                parent_of[child.id] = current_id
-
-        remaining = set(all_ids)
-        order: list[int] = []
-        while remaining:
-            parents_in_remaining = {parent_of[tid] for tid in remaining if tid in parent_of}
-            leaves = [tid for tid in remaining if tid not in parents_in_remaining]
-            if not leaves:
-                # 防御性兜底：仅当任务关系出现环时触发，直接收尾避免死循环。
-                order.extend(remaining)
-                break
-            order.extend(leaves)
-            remaining -= set(leaves)
-        return order
+        order = [root_task_id]
+        index = 0
+        while index < len(order):
+            order.extend(self._task.list_child_ids(order[index], session))
+            index += 1
+        return order[::-1]
 
     def delete_task_tree_in_session(
         self, root_task_id: int, session: Session
@@ -695,9 +646,15 @@ class TaskService:
         )
 
     def finalize_deleted_task_spaces(self, result: TaskDeletionResult) -> None:
-        """数据库提交后清理终端和 Task 运行时空间；回滚路径不关闭活会话。"""
+        """数据库提交后清理终端、后台工作看板和 Task 运行时空间；回滚路径不关闭活会话。
+
+        删除前的停止已撤销这些 Task 的延迟结果，这里只清看板保留的最近结束条目。
+        """
+        from app.core.tool.background.deferred_registry import deferred_registry
 
         service_depends.get_terminal_session_service().delete_task_sessions(result.task_ids)
+        for task_id in result.task_ids:
+            deferred_registry.forget_task(task_id)
         self._unload_deleted_task_spaces(set(result.task_ids))
 
     def _unload_deleted_task_spaces(self, task_ids: set[int]) -> None:
@@ -722,7 +679,7 @@ class TaskService:
                 )
 
     def _delete_single_task_in_session(self, task_id: int, session: Session) -> None:
-        """在调用方事务内删除 Task 与全部子产物；外键级联删除未消费 inbox。"""
+        """在调用方事务内删除 Task 与全部子产物；外键级联删除未消费 message_queue。"""
 
         self._task.ensure_task(session, task_id)  # 存在性守卫
         run_ids = self._turn.collect_run_ids_by_task_ids(session, [task_id])

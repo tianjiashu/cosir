@@ -262,7 +262,16 @@ class ConversationTaskStateRebuilder:
                     contextWindowTotal=run.context_window_total,
                     launch=run_launch_snapshot(run.model_config_id, run.options),
                 )
-        return ConversationStateSnapshot(title=task.title, messages=messages, activity=activity)
+        # 终端会话与延迟结果（看板、前台等待）是进程内事实，canonical 记录里没有；由 state service
+        # 在重建后整表填入。
+        return ConversationStateSnapshot(
+            title=task.title,
+            messages=messages,
+            activity=activity,
+            terminal_sessions=[],
+            background_tasks=[],
+            foreground_waits=[],
+        )
 
     @staticmethod
     def _run_messages(

@@ -173,24 +173,11 @@ class TaskCrud:
             candidate = f"{base_title} {suffix}"
         return candidate
 
-    def list_by_parent_task(
-            self, parent_task_id: int, session: Session | None = None
-    ) -> list[TaskRecord]:
-        """展开某父任务下的全部子任务树（当前仅一层，对应 1 父 task ↔ N 子 task）。
+    def list_by_parent_task(self, parent_task_id: int) -> list[TaskRecord]:
+        """返回某父任务直接委派的子 Agent Task（``task_type='delegate_task'``），供展示使用。
 
-        参数:
-            parent_task_id: 父任务标识（整数 id）。
-            session: 可选的调用方事务 session；传入时复用当前事务，不自行提交。
-
-        返回:
-            该父任务的直接子任务列表（``task_type='delegate_task'`` 且 ``parent_task_id`` 匹配）；
-            无匹配时为空列表。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
-
-        副作用:
-            打开一次主库只读 session。
+        只看一层且排除 Agent Team 节点 Task；需要整棵任务树（如删除）时用
+        ``list_child_ids``，不要复用本方法，否则会漏掉其他类型的子 Task。
         """
         stmt = (
             select(TaskModel)
@@ -200,12 +187,19 @@ class TaskCrud:
             )
             .order_by(TaskModel.created_at.asc(), TaskModel.id.asc())
         )
-        if session is not None:
+        with self._session_factory() as session:
             rows = session.scalars(stmt).all()
-        else:
-            with self._session_factory() as owned_session:
-                rows = owned_session.scalars(stmt).all()
         return [TaskRecord.from_model(row) for row in rows]
+
+    def list_child_ids(self, parent_task_id: int, session: Session) -> list[int]:
+        """在调用方事务内返回挂在某父任务下的全部直接子 Task id，不区分 ``task_type``。
+
+        任务树遍历的唯一入口：``tasks.parent_task_id`` 自引用外键对委派子 Task 与 Team 节点
+        Task 一视同仁，按类型过滤会让删除漏掉子行而触发外键失败。
+        """
+        return list(
+            session.scalars(select(TaskModel.id).where(TaskModel.parent_task_id == parent_task_id))
+        )
 
     def list_by_parent_task_ids(self, parent_task_ids: list[int]) -> dict[int, list[TaskRecord]]:
         """批量读取一组任务直接委派的子 Agent Task。"""

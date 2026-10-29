@@ -131,6 +131,7 @@ def plan_tool_call_status_changed(
             error=event.error,
             display_data=event.display_data,
             team_run_id=event.team_run_id,
+            deferred=event.deferred,
         )
     )
     display = fields["display_data"]
@@ -165,7 +166,11 @@ def plan_tool_calls_settled(
     event: ToolCallsSettledEvent,
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
-    """把该 Run 下仍 ``pending`` / ``running`` 的 tool-call part 收束为终态，只迁移状态与错误。"""
+    """把该 Run 下仍 ``pending`` / ``running`` 的 tool-call part 收束为终态，只迁移状态与错误。
+
+    后台占位（``background``）不收束：它的工作在 Run 之外继续，状态只由结论并入或撤销结算（Run 被
+    取消时撤销会把它推到 ``cancelled``）。
+    """
 
     mutations: list[ConversationStateMutation] = []
     for base, part in iter_parts(state, event.run_id):
@@ -173,6 +178,7 @@ def plan_tool_calls_settled(
             not isinstance(part, dict)
             or part.get("type") != "tool-call"
             or part.get("status") not in {"pending", "running"}
+            or part.get("background") is True
         ):
             continue
         mutations.extend(

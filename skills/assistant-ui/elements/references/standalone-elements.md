@@ -1215,13 +1215,13 @@ import { AgentHandoff } from "@/components/assistant-ui/elements/agent-handoff";
 ### background-inbox
 
 ```bash
-npx assistant-ui@latest add elements-background-inbox
+npx assistant-ui@latest add elements-background-message_queue
 ```
 
 Work still going somewhere else, and the results waiting to be collected.
 
 ```tsx
-import { BackgroundInbox, type BackgroundRun } from "@/components/assistant-ui/elements/background-inbox";
+import { BackgroundInbox, type BackgroundRun } from "@/components/assistant-ui/elements/background-message_queue";
 
 const runs: BackgroundRun[] = [{ id: "1", title: "Nightly report", state: "ready", elapsed: "6m", summary: "12 rows" }];
 
