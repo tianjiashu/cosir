@@ -52,5 +52,5 @@ class DecisionBody(EnqueuedMessageBody):
         )
         return (
             ChatCompletionUserMessageParam(role="user", content=content),
-            UserMessageMetadata(kind="decision"),
+            UserMessageMetadata(kind="decision", tool_call_id=self.tool_call_id),
         )

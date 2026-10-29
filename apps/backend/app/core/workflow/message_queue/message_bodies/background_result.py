@@ -49,5 +49,5 @@ class BackgroundResultBody(EnqueuedMessageBody):
         )
         return (
             ChatCompletionUserMessageParam(role="user", content=content),
-            UserMessageMetadata(kind="background_result"),
+            UserMessageMetadata(kind="background_result", tool_call_id=self.tool_call_id),
         )

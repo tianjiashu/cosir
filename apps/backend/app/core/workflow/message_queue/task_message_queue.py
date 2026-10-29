@@ -9,7 +9,7 @@ context 时在同一事务内 :meth:`TaskMessageQueue.ack` 删除；执行结束
 最大消息 id）阻塞，而不是按「非空」：留在队列里尚未被消费的行（如运行中排队的 ``next_run``）
 否则会让它每次都立刻返回，调用方空转、重复投递。
 
-只负责入队、按序读取、原地更新与确认删除，不承载投递策略、输入解析或交接规则。唤醒器是进程内
+只负责入队、按序读取、原地更新、撤回与确认删除，不承载投递策略、输入解析或交接规则。唤醒器是进程内
 状态，不跨重启；重启后首次 ``pending`` 直接读到遗留的行。
 """
 
@@ -92,30 +92,28 @@ class TaskMessageQueue:
                     if not waiters:
                         del self._waiters[task_id]
 
-    def pending_nowait(self, task_id: int) -> list[TaskMessage]:
-        """不阻塞地按入队顺序读取该 Task 全部未确认的消息（可能为空）。"""
+    def pending_nowait(self, task_id: int, *, session: Session | None = None) -> list[TaskMessage]:
+        """不阻塞地按入队顺序读取该 Task 全部未确认的消息（可能为空）；传入 ``session`` 时在调用方
+        事务内读取。"""
+        if session is not None:
+            return self._messages.list_pending(session, task_id)
         with main_session_factory()() as session:
             return self._messages.list_pending(session, task_id)
 
-    def find(self, task_id: int, message_id: int) -> TaskMessage | None:
-        """读一条仍在队列中的消息；已被并入（行已删除）时返回 ``None``，由调用方定语义。"""
-        with main_session_factory()() as session:
-            return self._messages.find(session, task_id, message_id)
+    def withdraw(self, session: Session, task_id: int, message_id: int) -> TaskMessage | None:
+        """在调用方事务内撤回一条仍在队列中的消息（用户删除、立即发送前的移出），返回撤回前的内容。
 
-    def update(self, task_id: int, message_id: int, message: TaskMessage) -> bool:
-        """原地更新仍在队列中的消息正文，身份与属性不变；已被并入（行已删除）时返回 ``False``。
-
-        与 ``prepare_input`` 的确认并发时由这一次条件更新裁决，不另加前置检查。行数不变，不唤醒。
+        已被并入（行已删除）时返回 ``None``，由调用方定语义。与 ``prepare_input`` 的确认并发时由这一次
+        条件删除裁决；已投递进 mailbox 的副本无需撤回：确认时删不到这一行，``prepare_input`` 会跳过它。
+        不唤醒等待方：撤回不会产生需要推进的新消息。
         """
-        with main_session_factory().begin() as session:
-            return self._messages.update_body_if_exists(session, task_id, message_id, message)
+        return self._messages.delete_one_returning(session, task_id, message_id)
 
     def ack(self, session: Session, ids: list[int]) -> dict[int, TaskMessage]:
         """在调用方事务内确认（删除）已并入 context 的行，返回实际删除的行内容（按 id）。
 
         与 context 写入同一事务提交，消息不会丢也不会被并入两次；不在返回值里的 id 已被别的
-        执行确认过，调用方应跳过对应消息。调用方应写入返回的内容而不是 mailbox 里的副本：排队
-        期间的原地编辑只更新了行。
+        执行确认过，调用方应跳过对应消息。调用方应写入返回的内容而不是 mailbox 里的副本。
         """
         return self._messages.delete_returning(session, ids)
 

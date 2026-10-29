@@ -38,5 +38,5 @@ class ToolResultBody(BaseModel):
         )
         return (
             ChatCompletionUserMessageParam(role="user", content=content),
-            UserMessageMetadata(kind="tool_result"),
+            UserMessageMetadata(kind="tool_result", tool_call_id=self.tool_call_id),
         )

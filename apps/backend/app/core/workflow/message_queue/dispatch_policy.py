@@ -2,12 +2,17 @@
 
 Task 的调度 actor（``TaskActor``）读出最新 Run 与队列，交给这里判定，再执行判定结果。规则只读
 消息属性（``kind`` / ``delivery``）与 Task 的执行阶段，投递方不另加判断。
+
+用户输入按 ``delivery`` 分两条通道：``immediate`` 是「现在就处理」（空闲时发送、排队消息被点了
+立即发送），``next_run`` 是排队（活动 Run 期间发送）。一个新 Run 只消费**一条**用户输入（见
+:func:`next_input`），排队消息因此一轮一条依次处理，各用各自发送时的配置；其余种类的消息不受
+此限，新 Run 照常全部接收。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from app.core.workflow.message_queue.task_message import (
     RunLaunch,
@@ -72,8 +77,8 @@ def next_action(
     - 有执行者：投递全部 ``immediate`` 消息，``next_run`` 留给下一个 Run；mailbox 按行 id 去重。
     - 挂起：新到达的 ``immediate`` 消息里有能推进的（``WAKES``，系统通知除外）就唤醒同一个 Run。
     - 终态或尚无 Run：新到达的消息里有能推进的就新开 Run，不区分谁发起——用户停止后到达的后台
-      结果同样会开出新 Run。配置取队列中**最后**一条用户输入（用户最新的选择），没有用户输入时
-      继承当前 Run；无从继承（模型配置已删除、尚无 Run）时不动，消息留在队列里。
+      结果同样会开出新 Run。配置取这个 Run 将消费的那条用户输入（:func:`next_input`），没有用户
+      输入时继承当前 Run；无从继承（模型配置已删除、尚无 Run）时不动，消息留在队列里。
     """
     if phase == "driving":
         return Deliver([message for message in pending if message.delivery == "immediate"])
@@ -84,18 +89,39 @@ def next_action(
         return Wake() if wakes else Stay()
     if not any(type(message.body).WAKES for message in fresh):
         return Stay()
-    inputs = [message.body for message in pending if isinstance(message.body, UserInputBody)]
-    if inputs:
-        return StartRun(inputs[-1].launch)
+    selected = next_input(pending)
+    if selected is not None:
+        return StartRun(cast(UserInputBody, selected.body).launch)
     launch = RunLaunch.from_run(current)
     return StartRun(launch) if launch is not None else Stay()
 
 
+def next_input(pending: list[TaskMessage]) -> TaskMessage | None:
+    """新 Run 要消费的那条用户输入：先取最早的 ``immediate``，没有再取最早的 ``next_run``。
+
+    ``immediate`` 优先：取消后队列里留着旧的排队消息时，用户新发送（或点了立即发送）的那条先跑，
+    旧排队消息等它完成后再依次接续。
+    """
+    inputs = [message for message in pending if isinstance(message.body, UserInputBody)]
+    return next(
+        (message for message in inputs if message.delivery == "immediate"),
+        inputs[0] if inputs else None,
+    )
+
+
 def initial_messages(pending: list[TaskMessage], *, fresh_run: bool) -> list[TaskMessage]:
-    """执行开始时投递的消息：新 Run 接收全部剩余消息；唤醒 / 续跑只接收 ``immediate``。"""
-    if fresh_run:
-        return pending
-    return [message for message in pending if message.delivery == "immediate"]
+    """执行开始时投递的消息。
+
+    新 Run 接收全部非用户输入的消息与 :func:`next_input` 选出的一条用户输入，其余用户输入留在
+    队列里等后续 Run；唤醒 / 续跑只接收 ``immediate``。
+    """
+    if not fresh_run:
+        return [message for message in pending if message.delivery == "immediate"]
+    selected = next_input(pending)
+    return [
+        message for message in pending
+        if not isinstance(message.body, UserInputBody) or message is selected
+    ]
 
 
 def matches_run(launch: RunLaunch, run: ConversationRunRecord) -> bool:

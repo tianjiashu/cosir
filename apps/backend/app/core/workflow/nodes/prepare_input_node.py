@@ -19,13 +19,14 @@ from typing import cast
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.events import UserInputConsumedEvent
+from app.core.events import ToolCallStatusChangedEvent, UserInputConsumedEvent
 from app.core.workflow.branch import task_title
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.config.configuration import get_tool_registry
 from app.core.workflow.message_queue.task_message import BackgroundResultBody, DecisionBody
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.react_route import ReactRoute
+from app.models.message_metadata import ToolMessageMetadata
 from app.core.workflow.node_helper.common import (
     RunStopped,
     _message_context,
@@ -40,6 +41,7 @@ from app.core.workflow.node_helper.tool_observation_projection import (
 from app.models.enums.conversation_run_status import RunTransition
 from app.core.workflow.message_queue.task_message import (
     TaskMessage,
+    UserInputBody,
 )
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
@@ -112,13 +114,28 @@ def _executes_tool(message: TaskMessage) -> bool:
 async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | None:
     """确认并写下这条需要执行的决定；原调用仍在上下文时返回只含该调用的批次，否则交给模型。
 
-    先确认再执行（最多执行一次）：确认删除与决定消息同一事务提交，之后才执行工具。原调用找不到
+    先确认再执行（最多执行一次）：确认删除、决定消息与「等待占位推到 ``running``」同一事务提交，
+    之后才执行工具。占位离开 ``pending`` 后决定入口不再认它在等待，执行期间迟到的重复决定被拒，
+    原调用不会被重放第二次；执行结果由 ``settle_decision_observation`` 推到终态。原调用找不到
     （如已被编辑重跑移出上下文）时无法执行，决定已写入、交给模型并留痕。
     """
     rc = _runtime_context()
     body = cast(DecisionBody, decision.body)
-    if not await asyncio.to_thread(_write_message, decision):
+    if not await asyncio.to_thread(_write_message, decision, claim_decision=True):
         return None
+    claimed = _message_context().tool_result_metadata(body.tool_call_id)
+    if claimed is not None and claimed.status == "running" and not claimed.hidden:
+        emit(
+            ToolCallStatusChangedEvent(
+                task_id=rc.run.task_id,
+                run_id=rc.run.id,
+                step_id=step_id,
+                tool_call_id=body.tool_call_id,
+                status="running",
+                display_data=claimed.display_data,
+                team_run_id=claimed.team_run_id,
+            )
+        )
     call = _message_context().find_tool_call(body.tool_call_id)
     if call is None:
         log.warning(
@@ -149,12 +166,14 @@ async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | No
     return ToolBatch(calls=[call], decision=body.model_dump(mode="json"))
 
 
-def _write_message(task_message: TaskMessage) -> bool:
+def _write_message(task_message: TaskMessage, *, claim_decision: bool = False) -> bool:
     """写入一条消息，返回是否实际写入；工作线程执行。
 
-    外部队列来的消息（``id`` 非空）在同一事务内先确认删除再写入：确认返回删除那一刻的行内容
-    （排队期间的原地编辑以它为准），已被别的执行确认过的消息跳过、返回 ``False``。Run 内通知
-    （``id`` 为 ``None``）只是一条写入，不需要事务。用户输入在提交后发消费事件，供排队投影收敛。
+    外部队列来的消息（``id`` 非空）在同一事务内先确认删除再写入，写入以确认返回的行内容为准；
+    已被别的执行确认或被用户撤回的消息跳过、返回 ``False``。Run 内通知
+    （``id`` 为 ``None``）只是一条写入，不需要事务。用户输入在提交后发消费事件（带展示绑定），供 Transport 投影出 user 消息。
+    ``claim_decision`` 只用于要执行的决定：同一事务把这次调用仍为 ``pending`` 的等待占位推到
+    ``running``（占位已不在上下文时不动）。
     """
     rc = _runtime_context()
     context = _message_context()
@@ -175,10 +194,20 @@ def _write_message(task_message: TaskMessage) -> bool:
             project_to_transport=current.project_to_transport,
             message_id=current.id if current.kind == "user_input" else None,
         )
+        if claim_decision:
+            call_id = cast(DecisionBody, current.body).tool_call_id
+            placeholder = context.tool_result_metadata(call_id)
+            if placeholder is not None and placeholder.status == "pending":
+                context.update_tool_result_metadata(
+                    call_id, ToolMessageMetadata(status="running"), session=session
+                )
     if current.kind == "user_input":
         emit(
             UserInputConsumedEvent(
-                task_id=rc.task.id, run_id=rc.run.id, message_id=cast(int, current.id)
+                task_id=rc.task.id,
+                run_id=rc.run.id,
+                message_id=cast(int, current.id),
+                presentation=cast(UserInputBody, current.body).presentation,
             )
         )
     return True
