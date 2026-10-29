@@ -23,7 +23,7 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
-from app.core.workflow.inbox.task_message import TaskMessage
+from app.core.workflow.message_queue.task_message import TaskMessage
 from app.storage.crud.task_message_crud import TaskMessageCrud
 from app.storage.store_engines import main_session_factory
 

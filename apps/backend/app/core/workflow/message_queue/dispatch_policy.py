@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from app.core.workflow.inbox.task_message import (
+from app.core.workflow.message_queue.task_message import (
     RunLaunch,
     TaskMessage,
     UserInputBody,
@@ -96,10 +96,10 @@ def next_action(
         return Wake() if wakes else Stay()
     if not any(type(message.body).WAKES for message in fresh):
         return Stay()
-    launches = [
-        message.body.launch for message in pending if isinstance(message.body, UserInputBody)
-    ]
-    launch = launches[-1] if launches else _launch_of(current)
+    inputs = [message.body for message in pending if isinstance(message.body, UserInputBody)]
+    if inputs:
+        return StartRun(inputs[-1].launch)
+    launch = _launch_of(current)
     return StartRun(launch) if launch is not None else Stay()
 
 
