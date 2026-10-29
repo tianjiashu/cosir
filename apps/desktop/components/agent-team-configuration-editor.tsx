@@ -8,13 +8,6 @@ import { AgentTeamConfigurationForm } from "@/components/agent-team-configuratio
 
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { AgentTeamGraphEditor } from "@/components/agent-team-graph-editor";
 import { TeamGraphIssuesIndicator } from "@/components/agent-team-graph-issues";
@@ -39,7 +32,7 @@ export function AgentTeamConfigurationEditor({ session, profilesByScope, scopeEd
   onCancel: () => void;
   onSave: PersistTeam;
 }) {
-  const { snapshot: { configuration }, baseline, saveError, saving, mode: editorMode, history, dirty } = useStore(session.store);
+  const { snapshot: { configuration }, baseline, saving, mode: editorMode, history, dirty } = useStore(session.store);
   const [canvasVisited, setCanvasVisited] = useState(editorMode === "canvas");
   const profiles = profilesByScope[configuration.scope];
   // 结构检查只在这里发起一次，表单与画布共享结果。
@@ -95,17 +88,6 @@ export function AgentTeamConfigurationEditor({ session, profilesByScope, scopeEd
           teamIdEditable={!baseline && !saving}
         />
       </div>}
-      <Dialog open={saveError !== null} onOpenChange={(open) => { if (!open) session.clearSaveError(); }}>
-        <DialogContent showCloseButton={false}>
-          <DialogTitle>保存失败</DialogTitle>
-          <DialogDescription className="whitespace-pre-wrap text-destructive">
-            {saveError}
-          </DialogDescription>
-          <DialogFooter>
-            <Button type="button" onClick={() => session.clearSaveError()}>返回修改</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </Card>
   );
 }

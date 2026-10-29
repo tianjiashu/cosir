@@ -10,6 +10,8 @@
 from typing import Literal, get_args
 
 import pytest
+
+from app.models.conversation_input import UserInputPresentation
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from app.core.events import (
@@ -37,8 +39,9 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
             "type": "user_input_consumed",
             "task_id": 1,
             "run_id": 1,
-            # 只带消息身份（message_queue 行 id）：展示 parts 已在排队投影里构造。
+            # 消息身份（message_queue 行 id）与确认删除那一刻的展示绑定。
             "message_id": 1,
+            "presentation": {"display_text": "hello"},
         },
         UserInputConsumedEvent,
     ),
@@ -274,7 +277,9 @@ def test_event_is_frozen() -> None:
         无；只做内存内校验。
     """
 
-    event = UserInputConsumedEvent(task_id=1, run_id=1, message_id=1)
+    event = UserInputConsumedEvent(
+        task_id=1, run_id=1, message_id=1, presentation=UserInputPresentation(display_text="hi")
+    )
     with pytest.raises(ValidationError):
         event.message_id = 2
 

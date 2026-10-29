@@ -169,7 +169,7 @@ Transport 投影不得把失败态 `content` 写入 `ToolCallStatusChangedEvent.
 | `search_content` | `trace`、可展开、`list`、`search` | `content-search-results` | `pattern`、`path`、`matches`、`page`、`total_rows`、`match_count`、扫描统计 |
 | `find_files` | `trace`、可展开、`list`、`search` | `file-list` | `pattern`、`path`、`files`、`page`、`match_count` |
 | `list_directory` | `trace`、可展开、`list`、`eye` | `directory-list` | `path`、`entries`、`page`、`total_entries` |
-| `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out`；转到后台时为后台占位：`command`、`workdir`、`background: true`（无输出与退出码） |
+| `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out`；转到后台时为后台占位：`command`、`workdir`，后台阶段照常增量 `output`，结论并入时写回完整终态（「在后台」由 part 的 `deferred` 表达） |
 | `terminal_list` | `standalone`、不可展开、`none` | `terminal-session` | 本次发现的 `session_count`，不复制可变的会话状态 |
 | `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、`status`、`exit_code`、`initial_cwd`、`shell_kind`、`label`；实时状态读 snapshot `terminal_sessions` |
 | `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`lines`（`[a,b]` 或 null）、`screen`（全屏程序期间返回整屏时为 true，此时 `lines` 为 null）、`wait_result`（`{until, end_reason, matched_line?, matched_screen_row?}`，等待只在前台进行）；write 另有 `input_summary`（实际输入摘要） |
@@ -301,7 +301,7 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
 ### 3.4 终端
 
 终端 UI 展示原始命令、工作目录和完整输出。终端输出按原样呈现，保留 ANSI 控制序列和敏感文本；后端不设置终端 UI 字符预算，不插入截断标记，也不发送 `truncated` / `stream_truncated`。模型 `content` 仍由统一 `ToolOutputBudget` 独立控制，该预算不会改写 `display_data`。日志与可观测性旁路保留各自的长度限制。
-运行期间，后端以有界批次更新当前 Transport snapshot；批次大小只用于事件分帧和调度，不丢弃或改写输出。该增量不持久化，terminal 终态的 `display_data` 会完整替换临时展示内容。
+运行期间，后端以有界批次更新当前 Transport snapshot；批次大小只用于事件分帧和调度，不丢弃或改写输出。实时通道随命令而不是随工具调用结束：转到后台后照常推送。是否追加只看 part 自己的状态（前台 `running`，或带 `deferred` 的 `pending` 后台占位），不看所属 Run；命令结束、取消或撤销时 part 离开这两种状态，迟到的块丢弃。该增量不持久化，terminal 终态的 `display_data` 会替换临时展示内容（已实时流出的 part 以实时累计的输出为准）。
 
 ```json
 {
@@ -314,15 +314,18 @@ UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"�
 }
 ```
 
-命令转到后台（模型选后台、用户转后台或前台到上限）时，卡片是后台占位：状态为 `pending`，结论只经
-`background_result` 回投给模型，不回写 `display_data`；结论并入或撤销时卡片状态推到终态。
+命令转到后台（模型选后台、用户转后台或前台到上限）时，卡片是后台占位：状态为 `pending`，展示数据只有
+命令与工作目录，输出照常实时追加。结论分两份：给模型的载荷过输出预算、经 `background_result` 回投；给
+卡片的完整 `terminal-result`（输出、退出码、`timed_out`）随同一条消息持久化（`placeholder_display_data`，
+不渲染给模型），并入时与 `completed` 一起写回占位。撤销时卡片推到 `cancelled`、不写终态展示。「在后台」
+不写进 `display_data`：所有延迟结果的占位都由工具 part 的 `deferred: true` 表达（投影自占位行
+metadata，持久化、结算后保留），前端统一读取，看板也据此复用同一张卡片。
 
 ```json
 {
   "kind": "terminal-result",
   "command": "npm test",
-  "workdir": "H:/coding-agent",
-  "background": true
+  "workdir": "H:/coding-agent"
 }
 ```
 

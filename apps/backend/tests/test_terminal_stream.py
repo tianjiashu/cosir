@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from terminal_test_support import make_service, start, session_entries
+from terminal_test_support import make_service, start
 
 from app.config.constant import Constant
 from app.tools.terminal_runtime.stream import (
@@ -105,7 +105,7 @@ async def _settle(predicate: Any, timeout: float = 2.0) -> None:
 
 
 @pytest.mark.asyncio
-async def test_websocket_input_resize_release_and_exit(monkeypatch, tmp_path: Path):
+async def test_websocket_input_resize_and_exit(monkeypatch, tmp_path: Path):
     from app.api.terminal_stream_api import terminal_session_stream
 
     service, workers = make_service(monkeypatch)
@@ -118,21 +118,17 @@ async def test_websocket_input_resize_release_and_exit(monkeypatch, tmp_path: Pa
     attached = ws.sent[0]
     assert attached["type"] == "attached" and attached["protocol"] == "terminal-v2"
     assert attached["rows"] == 24 and "input_holder" not in attached
-    holder = lambda: session_entries(service, 1)[0]["inputHolder"]  # noqa: E731
 
-    # 租约只经 snapshot 投影，不在 WS 上推送。
     ws.push({"type": "input", "data_base64": base64.b64encode(b"ls\r").decode()})
-    await _settle(lambda: holder() == "user")
-    assert workers[0].writes[-1]["type"] == "raw"
+    await _settle(lambda: bool(workers[0].writes) and workers[0].writes[-1]["type"] == "raw")
 
     ws.push({"type": "resize", "rows": 30, "cols": 100})
     await _settle(lambda: workers[0].resizes == [(30, 100)])
     workers[0].screen(["$ "], size=(30, 100))
     await _settle(lambda: "geometry" in ws.types())
 
-    ws.push({"type": "release_input"})
-    await _settle(lambda: holder() is None)
-    assert not {"lease", "handoff"} & set(ws.types())
+    # 交接等会话事实只经 snapshot 投影，不在 WS 上推送。
+    assert "handoff" not in ws.types()
 
     workers[0].exit(0)
     await asyncio.wait_for(task, 2)
@@ -140,7 +136,7 @@ async def test_websocket_input_resize_release_and_exit(monkeypatch, tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_websocket_rejects_input_while_agent_holds(monkeypatch, tmp_path: Path):
+async def test_websocket_accepts_input_while_agent_waits(monkeypatch, tmp_path: Path):
     from app.api.terminal_stream_api import terminal_session_stream
     from app.tools.terminal_runtime.inputs import TerminalWait
 
@@ -157,12 +153,12 @@ async def test_websocket_rejects_input_while_agent_holds(monkeypatch, tmp_path: 
     writer.start()
     await _settle(lambda: "input_mark" in ws.types())
     ws.push({"type": "input", "data_base64": base64.b64encode(b"q").decode()})
-    await _settle(lambda: "input_rejected" in ws.types())
-    assert ws.sent[-1]["reason"] == "agent_input"
+    await _settle(lambda: len(workers[0].writes) == 2)
+    assert workers[0].writes[-1] == {"type": "raw", "data_base64": "cQ=="}
+    assert "input_rejected" not in ws.types()
     writer.join(2)
     ws.disconnect()
     await asyncio.wait_for(task, 2)
-    assert workers[0].writes == [{"type": "line", "text": "sleep"}]
 
 
 @pytest.mark.asyncio

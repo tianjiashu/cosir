@@ -81,11 +81,11 @@ class Constant:
         WAIT_CANCEL_CHECK_SECONDS: float = 0.25
         # start 等待 shell 集成就绪的上限；超时记为 unavailable，迟到的 ready 仍可恢复。
         INTEGRATION_READY_TIMEOUT_SECONDS: float = 2.0
-        # --- 输入租约 ---
-        # 用户最后一次按键后空闲多久释放租约（executing 时保持到命令返回与空闲超时中更晚者）。
-        USER_LEASE_IDLE_SECONDS: float = 3.0
-        # Agent 输入等待用户租约释放的上限，超时返回可重试错误。
-        AGENT_LEASE_WAIT_SECONDS: float = 10.0
+        # --- 输入仲裁 ---
+        # 用户最后一次按键后多久内视为「正在打字」：只防 Agent 的输入与用户半行输入拼接。
+        USER_TYPING_IDLE_SECONDS: float = 3.0
+        # Agent 输入等用户停手的上限，超时返回可重试错误。
+        AGENT_TYPING_WAIT_SECONDS: float = 10.0
         # --- Worker 子进程协议与约束 ---
         # 单帧最大字节数（Worker 与服务侧帧编解码的共同上限）。
         MAX_FRAME_BYTES: int = 4 * 1024 * 1024

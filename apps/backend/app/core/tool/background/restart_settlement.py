@@ -1,7 +1,7 @@
 """后端重启收尾：让 Agent 知道重启前的后台工作已经结束。
 
 登记表 ``deferred_registry`` 只在进程内、重启后不重建，重启前登记的条目再也不会有结论（设计见
-``docs/plan/background-tool-result-design.md`` 规则 6）：
+``docs/plan/deferred-tool-result-design.md`` 规则 6）：
 
 - **委派子 Agent**（:func:`settle_restarted_child_runs`）：子 Agent 不能挂起（没有
   ``wait_messages``、终端与审批工具），重启时它的 Run 一定是 running，已被恢复流程收敛为

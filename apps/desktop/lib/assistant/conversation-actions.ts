@@ -1,5 +1,4 @@
 import { isTerminalRunStatus, type TransportState } from "@/lib/assistant/contract";
-import type { EditIntent } from "@/lib/assistant/converter";
 
 export type ComposerAction = "send" | "stop" | "cancelling" | "resume";
 
@@ -32,24 +31,19 @@ export function isEditableLatestUserMessage(
 /**
  * 编辑开始后它的前提是否已失效；返回给用户看的原因，仍有效时为 `null`。
  *
- * 与编辑入口用同一套判定：`queued` 要求消息仍在排队；`rerun` 要求它仍是可编辑重跑的最新一条
- * （见 {@link isEditableLatestUserMessage}）。编辑框据此同时禁用回车与保存按钮；渲染与点击之间
- * 的竞态仍由后端 409 裁决。
+ * 与编辑入口用同一套判定：它仍是可编辑重跑的最新一条（见 {@link isEditableLatestUserMessage}）。
+ * 编辑框据此同时禁用回车与重跑按钮；渲染与点击之间的竞态仍由后端 409 裁决。
  */
 export function editBlockedReason(
   state: TransportState | null | undefined,
   messageId: string,
-  intent: EditIntent,
 ): string | null {
-  if (intent === "queued") {
-    return isQueuedUserMessage(state, messageId) ? null : "这条消息已开始处理，无法再修改。";
-  }
   if (getLatestUserMessageId(state) !== messageId) return "已有更新的消息，这一条无法再编辑并重跑。";
   if (!isEditableLatestUserMessage(state, messageId)) return "当前正在运行，停止后才能编辑并重跑。";
   return null;
 }
 
-/** 排队中（尚未并入）的消息可随时原地编辑，不影响正在运行的 Run。 */
+/** 消息是否仍在排队（尚未并入）；排队消息只在输入框上方的队列区渲染。 */
 export function isQueuedUserMessage(
   state: TransportState | null | undefined,
   messageId: string,

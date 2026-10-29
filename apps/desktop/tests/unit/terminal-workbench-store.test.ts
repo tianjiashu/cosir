@@ -22,19 +22,15 @@ describe("终端工作台 store", () => {
     expect(terminalBadge(task().sessions, task().acknowledgedEnds).count).toBe(2);
   });
 
-  it("页头角标：未看过的异常结束优先提醒，打开面板即视为看过；否则提示 Agent 正在输入", () => {
+  it("页头角标：未看过的异常结束提醒，打开面板即视为看过", () => {
     const store = useTerminalWorkbenchStore.getState();
     const badge = () => terminalBadge(task().sessions, task().acknowledgedEnds);
-    store.syncSessions(TASK, [
-      terminalSession("t1", { inputHolder: "agent", agentInputCallId: "call-1" }),
-      terminalSession("t2"),
-    ]);
-    expect(badge()).toMatchObject({ count: 2, tone: "agent" });
-    expect(badge().hint).toContain("Agent 正在「终端 1」中输入");
+    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("t2")]);
+    expect(badge()).toMatchObject({ count: 2, tone: null, hint: null });
 
     // 收起时异常退出：标红；正常退出（0）与主动关闭不提醒。
     store.syncSessions(TASK, [
-      terminalSession("t1", { inputHolder: "agent", agentInputCallId: "call-1" }),
+      terminalSession("t1"),
       terminalSession("t2", { status: "exited", exitCode: 2 }),
       terminalSession("t3", { status: "closed" }),
       terminalSession("t4", { status: "exited", exitCode: 0 }),
@@ -44,7 +40,7 @@ describe("终端工作台 store", () => {
     expect(badge().hint).toContain("「终端 2」异常结束（退出码 2）");
 
     store.setOpen(TASK, true);
-    expect(badge().tone).toBe("agent");
+    expect(badge().tone).toBeNull();
     // 面板开着时结束的会话用户看得见，收起后也不再提醒。
     store.syncSessions(TASK, [terminalSession("t1", { status: "failed" }), terminalSession("t2", { status: "exited", exitCode: 2 })]);
     store.setOpen(TASK, false);
@@ -101,7 +97,7 @@ describe("终端工作台 store", () => {
 
     // 同一交接持续存在不重复抢焦点；用户关了面板也不会被再次弹开。
     store.setOpen(TASK, false);
-    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("a1", { createdBy: "agent", handoff: { reason: "输入密码", toolCallId: "call-handoff" }, inputHolder: "user" })]);
+    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("a1", { createdBy: "agent", handoff: { reason: "输入密码", toolCallId: "call-handoff" } })]);
     expect(task().open).toBe(false);
   });
 

@@ -12,6 +12,7 @@ from typing import Any, ClassVar
 
 import pytest
 
+from app.core.tool.background.deferred_job import DeferredConclusion
 from app.core import task_actor as actor_module
 from app.core import task_cancellation
 from app.core import task_execution as execution_module
@@ -265,6 +266,38 @@ async def test_cancelled_run_does_not_continue_until_a_new_message(harness) -> N
     await harness.actor.abort()
 
 
+async def test_request_cancel_from_a_worker_thread_runs_cancel_on_the_actor_loop(
+    harness, monkeypatch
+) -> None:
+    calls: list[tuple[str, asyncio.AbstractEventLoop]] = []
+
+    async def cancel(reason: str) -> None:
+        calls.append((reason, asyncio.get_running_loop()))
+
+    monkeypatch.setattr(harness.actor, "cancel", cancel)
+    harness.actor.start()
+
+    await asyncio.to_thread(harness.actor.request_cancel, "parent")
+    await _settle()
+
+    assert calls == [("parent", asyncio.get_running_loop())]
+    await harness.actor.abort()
+
+
+async def test_request_cancel_before_start_is_dropped_without_raising(harness, monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def cancel(reason: str) -> None:
+        calls.append(reason)
+
+    monkeypatch.setattr(harness.actor, "cancel", cancel)
+
+    harness.actor.request_cancel("parent")
+    await _settle()
+
+    assert calls == []
+
+
 async def test_suspended_run_is_woken_by_new_message_not_by_notice(harness) -> None:
     run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
     run.status = "suspended"
@@ -292,6 +325,18 @@ async def test_resume_starts_the_stopped_run_and_rejects_while_running(harness) 
     with pytest.raises(SessionConflictError):
         await harness.actor.resume()
     await harness.actor.abort()
+
+
+async def test_resume_is_rejected_after_stop_for_deletion(harness) -> None:
+    """删除前的停止是墓碑：恢复是唯一不经 loop 开出执行的入口，停止之后不得再放行。"""
+    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run.status = "cancelled"
+
+    await harness.actor.stop()
+
+    with pytest.raises(SessionConflictError):
+        await harness.actor.resume()
+    assert run.status == "cancelled"
 
 
 async def test_stop_waits_for_the_execution_then_stops_the_loop(harness, monkeypatch) -> None:
@@ -559,12 +604,12 @@ async def test_cancelling_suspended_run_drops_deferred_entries(harness) -> None:
         # 被撤销的后台条目随即把占位行推到 cancelled。
         assert harness.settled == [(_TASK_ID, ["call-t1"])]
         assert deferred_registry.pending(_TASK_ID) == []
-        assert deferred_registry.complete("call-t1", {}) is False
+        assert deferred_registry.complete("call-t1", DeferredConclusion({})) is False
         # 其他 Task 的等待不受影响。
         assert deferred_registry.pending(_TASK_ID + 1) == ["x"]
     finally:
         deferred_registry.drop_task(_TASK_ID + 1)
-        assert deferred_registry.complete("call-x", {}) is False
+        assert deferred_registry.complete("call-x", DeferredConclusion({})) is False
 
 
 async def test_running_run_cancel_drops_watches_when_execution_settles(harness) -> None:

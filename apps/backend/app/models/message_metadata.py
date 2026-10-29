@@ -20,6 +20,9 @@ MessageKind = Literal[
 ]
 """Task 消息队列的消息种类；并入 context 后记在 user 消息的 metadata 上，后端规则只读它。"""
 
+CALL_RESULT_KINDS: frozenset[MessageKind] = frozenset({"decision", "background_result", "tool_result"})
+"""回答某次工具调用的消息种类：可带 ``tool_call_id``，归属那次调用而不是它所在的那一轮。"""
+
 
 class UserMessageMetadata(BaseModel):
     """落库的 user 消息都来自 Task 消息队列：``kind`` 记录来源，用户输入另带展示绑定。
@@ -28,16 +31,23 @@ class UserMessageMetadata(BaseModel):
     排队与消费投影都据此判断。模型正文经附件解析后有损（附件名、类型、图片位置与编辑器 token
     顺序都不在其中），snapshot 重建、编辑复用附件与 fork 都只能从 ``presentation`` 取。内部注入
     的 user 指令（如结构化输出）只拼进请求副本、不落库。
+
+    ``tool_call_id`` 记录调用结果类消息（见 :data:`CALL_RESULT_KINDS`）回答的是哪次调用：决定与
+    后台结论可能在发起调用之后的轮次才并入，编辑重跑据它判断这行属于哪一轮（见
+    ``ConversationTaskContextService.exclude_from``）。不对应某次调用的后台结论（重启结论）为 ``None``。
     """
 
     model_config = ConfigDict(extra="forbid")
     kind: MessageKind
     presentation: UserInputPresentation | None = None
+    tool_call_id: str | None = None
 
     @model_validator(mode="after")
     def _presentation_only_for_user_input(self) -> "UserMessageMetadata":
         if (self.kind == "user_input") != (self.presentation is not None):
             raise ValueError("presentation is required for user_input and forbidden otherwise")
+        if self.tool_call_id is not None and self.kind not in CALL_RESULT_KINDS:
+            raise ValueError("tool_call_id is only allowed for call result messages")
         return self
 
 

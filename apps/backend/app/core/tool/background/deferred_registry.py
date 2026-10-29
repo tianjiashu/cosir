@@ -1,6 +1,6 @@
 """延迟工具结果登记表：一次工具调用登记一条、结论稍后以 ``background_result`` 回投的工作。
 
-设计见 ``docs/plan/background-tool-result-design.md``。条目以 ``tool_call_id`` 为键，每条恰好产出一个
+设计见 ``docs/plan/deferred-tool-result-design.md``。条目以 ``tool_call_id`` 为键，每条恰好产出一个
 结论；登记表只记录「结论回投给谁、谁在等、撤销时通知谁」，不持有工作本身的执行状态——工作的
 生命周期归各执行单元（终端 runtime 等），登记表不是任何一种 Run 的第二套状态机。
 
@@ -18,9 +18,9 @@
 - 完成：执行单元产出结论时调用 ``complete``，出队与投递在同一入口（pop-once 防重复投递）；Task
   正在停止时 ``complete`` 不出队，条目由随后的撤销结束（结局只有「投递」与「撤销」两种）；前台
   条目正常结束时调用 ``settle_foreground``，与 ``detach`` 在同一把锁内裁决先后；
-- 撤销：Run 停止（用户停止、编辑重跑、父 Task 停止）时 ``TaskActor`` 调用 ``drop_task``，撤销该
-  Task 的全部条目（含更早 Run 登记的）并逐条调用撤销回调，之后到达的 ``complete`` 不投递；用户在
-  看板取消单条走 ``cancel``；
+- 撤销：Run 停止（用户停止、父 Task 停止）时 ``TaskCancellation`` 调用 ``drop_task``，Task 删除
+  提交后 ``TaskService`` 同样调用，撤销该 Task 的全部条目（含更早 Run 登记的）并逐条调用撤销回调，
+  之后到达的 ``complete`` 不投递；用户在看板取消单条、编辑重跑撤回所在一轮的调用走 ``cancel``；
 - 关闭：后端关闭时 lifespan 在停 actor、关终端之前调用 ``close``：撤销全部条目并等在途投递落定，
   此后 ``complete`` 一律不投递。关闭期间仍在跑的后台命令被杀后会以结论回调，若不先关闭，
   这些线程会在服务依赖关闭期间写 ``task_messages``，重启后挂起的 Run 先收到过期结论再收到
@@ -46,6 +46,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from app.config.logging.logger import log
+from app.core.tool.background.deferred_job import DeferredConclusion
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.message_queue.task_message import BackgroundResultBody, TaskMessage
 
@@ -166,7 +167,7 @@ class DeferredRegistry:
         )
         self._notify(task_id)
 
-    def complete(self, tool_call_id: str, result: dict[str, object]) -> bool:
+    def complete(self, tool_call_id: str, conclusion: DeferredConclusion) -> bool:
         """结束一条登记并把结论投递给它的 Task；已撤销、已完成、已关闭或 Task 正在停止时不投递，
         返回 False。
 
@@ -196,7 +197,11 @@ class DeferredRegistry:
             self._delivering += 1
         try:
             return deliver_background_result(
-                entry.task_id, tool_call_id=tool_call_id, tool_name=entry.kind, result=result
+                entry.task_id,
+                tool_call_id=tool_call_id,
+                tool_name=entry.kind,
+                result=conclusion.result,
+                placeholder_display_data=conclusion.display_data,
             )
         finally:
             with self._lock:
@@ -413,6 +418,7 @@ def deliver_background_result(
     tool_call_id: str | None,
     tool_name: str,
     result: dict[str, object],
+    placeholder_display_data: dict[str, object] | None = None,
 ) -> bool:
     """把后台工作的结论作为 ``background_result`` 投递给 Task，返回是否已入队。
 
@@ -421,6 +427,8 @@ def deliver_background_result(
     （``restart_settlement``）。
     停止期间的结论由 ``DeferredRegistry.complete`` 在锁内拦下，这里不再复查取消信号。
     Task 已删除时入队抛 ``KeyError``，在此记录并返回 False。
+    ``placeholder_display_data`` 是作业给占位卡片的终态展示（见 ``DeferredConclusion``），随消息持久化、
+    并入时写回卡片：结论可能早于占位行写入就到，进程内暂存又扛不住重启，所以只能跟着消息走。
     """
 
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -430,6 +438,7 @@ def deliver_background_result(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
         tool_result=json.dumps(result, ensure_ascii=False),
+        placeholder_display_data=placeholder_display_data,
     )
     try:
         task_runtime_spaces.enqueue(task_id, TaskMessage.of(body))

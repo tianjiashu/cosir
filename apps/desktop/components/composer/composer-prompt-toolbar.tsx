@@ -14,8 +14,6 @@ type ComposerPromptToolbarProps = {
   disabled?: boolean;
   /** 工具组只读时的说明，见 {@link ToolGroupSelector} 的 `lockedHint`。 */
   toolGroupsLockedHint?: string;
-  /** 为 false 时不显示工具组开关（如排队消息编辑：配置沿用发送时的值，界面无从回显）。 */
-  showToolGroups?: boolean;
 };
 
 export function ComposerPromptToolbar({
@@ -26,23 +24,20 @@ export function ComposerPromptToolbar({
   toolGroupsError,
   disabled = false,
   toolGroupsLockedHint,
-  showToolGroups = true,
 }: ComposerPromptToolbarProps) {
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       <FavoritePromptToolbar disabled={disabled} />
       <SkillsSelector disabled={disabled} />
-      {showToolGroups && (
-        <ToolGroupSelector
-          toolGroups={toolGroups}
-          selectedToolGroups={selectedToolGroups}
-          onSelectedToolGroupsChange={onSelectedToolGroupsChange}
-          loading={toolGroupsLoading}
-          error={toolGroupsError}
-          disabled={disabled}
-          lockedHint={toolGroupsLockedHint}
-        />
-      )}
+      <ToolGroupSelector
+        toolGroups={toolGroups}
+        selectedToolGroups={selectedToolGroups}
+        onSelectedToolGroupsChange={onSelectedToolGroupsChange}
+        loading={toolGroupsLoading}
+        error={toolGroupsError}
+        disabled={disabled}
+        lockedHint={toolGroupsLockedHint}
+      />
     </div>
   );
 }

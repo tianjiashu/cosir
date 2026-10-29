@@ -20,6 +20,8 @@ class BackgroundResultBody(EnqueuedMessageBody):
     ``tool_name`` 标明是哪类后台工作，``tool_result`` 是给模型读的 JSON。``tool_call_id`` 是触发它的
     那次调用；终端重启结论与用户在子 Task 里直接发起的子 Run 不对应某次调用，为 ``None``，渲染时
     省略该属性。
+    ``placeholder_display_data`` 只供结论并入时写回这次调用的后台占位卡片（终端命令的完整输出等），
+    不渲染给模型；没有卡片终态的工作（子 Agent、重启告知）为 ``None``。
     不投影：委派卡片跟随子 Task 最新 Run，终端状态走 snapshot ``terminal_sessions``。
     """
 
@@ -40,6 +42,7 @@ class BackgroundResultBody(EnqueuedMessageBody):
     tool_call_id: str | None = None
     tool_name: str
     tool_result: str
+    placeholder_display_data: dict[str, object] | None = None
 
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
         call = f' tool_call_id="{self.tool_call_id}"' if self.tool_call_id else ""

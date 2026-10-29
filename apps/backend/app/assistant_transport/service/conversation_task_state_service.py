@@ -11,6 +11,7 @@ from typing import Any, ClassVar, cast
 
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.projection.snapshot_navigation import iter_parts
+from app.assistant_transport.projection.user_input_projection import build_presentation_parts
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
@@ -104,18 +105,14 @@ class ConversationTaskStateService:
             return state
 
     def refresh_queued_messages(self, task_id: int) -> None:
-        """把外部队列里待处理的用户输入按身份新增或替换进排队投影，只发这一处 mutation。
+        """把排队投影整表同步为外部队列的现状，有变化时发一条 ``set`` mutation。
 
-        调用时机：actor 推进（投递 / 开 Run）之前，以及排队消息原地编辑之后。消费投影
-        （``plan_user_input_consumed``）直接搬移排队条目的 parts、不重建，所以消息进 mailbox 之前
-        排队投影里必须已有它的最新内容。
-
-        只增改、不删除：条目的移除只归消费投影。确认删除与消费投影之间有窗口，这里若按队列整表
-        覆盖，会在窗口内删掉刚被确认的条目，随后消费投影找不到它。快照全量重建时照常整表写入。
+        排队投影只镜像队列表：入队、撤回（删除、立即发送）之后都调这里，不区分增删。消费投影不从
+        这里取内容（事件自带展示绑定），所以确认删除与消费投影之间刷掉这一条也无妨。读队列放在锁内：
+        与消费投影串行，先读后提交的旧结果会被随后的消费投影覆盖，不会把已并入的消息留成排队。
 
         不全量重建：流式输出的 context 可能领先于尚未发出的 Transport delta，重建会提前展示正文
-        再重复追加。snapshot 尚未物化时什么也不做，之后的懒重建自会读到队列。读队列放在锁内，
-        让并发刷新按序落定，不会以旧内容覆盖新内容。
+        再重复追加。snapshot 尚未物化时什么也不做，之后的懒重建自会读到队列。
         """
         try:
             with self._lock:
@@ -124,11 +121,10 @@ class ConversationTaskStateService:
                 if not space.has_snapshot():
                     return
                 state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-                current = state.get("queued_messages", [])
-                merged = _upsert_queued(current, self._queued_messages(task_id))
-                if merged == current:
+                queued = self._queued_messages(task_id)
+                if queued == state.get("queued_messages", []):
                     return
-                mutation = ConversationStateMutation("set", ("queued_messages",), merged)
+                mutation = ConversationStateMutation("set", ("queued_messages",), queued)
                 _apply_mutation(state, mutation)
                 self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,)))
         except Exception as exc:
@@ -136,7 +132,7 @@ class ConversationTaskStateService:
                 "queued_projection_refresh_failed",
                 extra={
                     "msg": "排队投影刷新失败，照常推进；等后续刷新或重建收敛",
-                    "data": {"task_id": self.task_id},
+                    "data": {"task_id": task_id},
                 },
                 exc_info=exc,
             )
@@ -149,7 +145,7 @@ class ConversationTaskStateService:
             ConversationQueuedMessage(
                 id=user_message_id(cast(int, item.id)),
                 role="user",
-                parts=ConversationTaskStateRebuilder.build_user_parts(item.body.presentation),
+                parts=list(build_presentation_parts(item.body.presentation)),
                 delivery=item.delivery,
             )
             for item in get_task_message_queue().pending_nowait(task_id)
@@ -674,18 +670,6 @@ def _matches_dynamic_child_display(value: object, child_task_id: int) -> bool:
     if not _is_dynamic_child_display(value) or not isinstance(value, dict):
         return False
     return value.get("child_task_id") == child_task_id
-
-
-def _upsert_queued(
-        current: list[ConversationQueuedMessage],
-        pending: list[ConversationQueuedMessage],
-) -> list[ConversationQueuedMessage]:
-    """已有条目按身份原位替换，新条目按队列顺序追加；不在 ``pending`` 里的已有条目保留。"""
-
-    latest = {message["id"]: message for message in pending}
-    merged = [latest.pop(message["id"], message) for message in current]
-    merged.extend(message for message in pending if message["id"] in latest)
-    return merged
 
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:

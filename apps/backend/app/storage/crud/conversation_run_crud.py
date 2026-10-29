@@ -21,7 +21,7 @@ from app.models import ConversationRunError, ConversationRunRecord
 from app.models.conversation_run_options import ConversationRunOptions
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.conversation_run_usage import ConversationRunUsage
-from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES, ConversationRunStatus
+from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import to_text
@@ -378,20 +378,6 @@ class ConversationRunCrud:
                 .all()
             )
         return [ConversationRunRecord.from_model(row) for row in rows]
-
-    def has_active_for_task(self, task_id: int) -> bool:
-        """判断 Task 是否存在活跃（running 或 suspended）Run。"""
-
-        with self._session_factory() as session:
-            row_id = session.execute(
-                select(ConversationRunModel.id)
-                .where(ConversationRunModel.task_id == task_id)
-                .where(
-                    ConversationRunModel.status.in_(ACTIVE_RUN_STATUSES)
-                )
-                .limit(1)
-            ).scalar_one_or_none()
-        return row_id is not None
 
     def update_status_if_in(
         self,

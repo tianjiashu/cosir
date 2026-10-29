@@ -14,7 +14,6 @@ from app.assistant_transport.request.part import AssistantImagePart, AssistantTe
 from app.config.constant import Constant
 from app.models import ConversationRunAttachmentInput, ConversationRunCommand
 from app.models.conversation_run_options import ReasoningEffort
-from app.core.workflow.message_queue.task_message import Delivery
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 
 
@@ -102,16 +101,7 @@ class _LaunchCommandRequest(_MessageCommandRequest):
 
 
 class SendMessageRequest(_LaunchCommandRequest):
-    """发送消息；``delivery`` 只在 Task 有活动 Run 时生效（立即并入 / 交给下一个 Run）。"""
-
-    delivery: Delivery = "immediate"
-
-
-class EditQueuedMessageRequest(_MessageCommandRequest):
-    """原地编辑一条排队中（未并入）的用户消息：只带新正文与附件。
-
-    发起配置（模型、推理强度、关掉的工具组）在发送那一刻已定，编辑沿用，因此请求里没有这些字段。
-    """
+    """发送消息；并入时机不由请求决定：后端按 Task 是否有活动 Run 定排队还是立即处理。"""
 
 
 class RerunMessageRequest(_LaunchCommandRequest):

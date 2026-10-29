@@ -40,11 +40,24 @@ export const createWorkspaceTask = (workspaceId: number, input: CreateTaskInput)
 export const getTask = (taskId: number, options?: ReadRequestOptions) => requestJson<WorkspaceTask>(`/tasks/${taskId}`, options);
 export const deleteWorkspace = (workspaceId: number) =>
   requestJson<{ workspace_id: number; deleted: boolean }>(`/workspaces/${workspaceId}`, { method: "DELETE" });
-export const deleteTask = (taskId: number, creationCommandId?: string) =>
-  requestJson<{ task_id: number; deleted: boolean }>(
-    `/tasks/${taskId}${creationCommandId ? `?creationCommandId=${encodeURIComponent(creationCommandId)}` : ""}`,
+export type DeleteTaskOptions = {
+  /** 首条命令未被接受时回收 provisional Task 的创建标记（受控清理）。 */
+  creationCommandId?: string;
+  /** 连同全部 fork 后代一起删除；默认只删这一个，它的 fork 改挂到上一级。 */
+  withForks?: boolean;
+};
+
+/** 返回实际删除的全部 Task id（含委派子 Agent、Team 节点与一并删除的 fork）。 */
+export const deleteTask = (taskId: number, options: DeleteTaskOptions = {}) => {
+  const query = new URLSearchParams();
+  if (options.creationCommandId) query.set("creationCommandId", options.creationCommandId);
+  if (options.withForks) query.set("withForks", "true");
+  const search = query.size > 0 ? `?${query.toString()}` : "";
+  return requestJson<{ task_id: number; deleted: boolean; deleted_task_ids: number[] }>(
+    `/tasks/${taskId}${search}`,
     { method: "DELETE" },
   );
+};
 /**
  * fork 到某条消息所在那一轮回复为止。`messageId` 可以是用户消息 id、`assistant-{用户消息id}` 或
  * `assistant-run-{runId}`，后端按消息切分。

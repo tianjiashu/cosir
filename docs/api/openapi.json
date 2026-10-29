@@ -218,55 +218,6 @@
         }
       }
     },
-    "/tasks/{task_id}/runs/{run_id}": {
-      "delete": {
-        "summary": "Delete Run",
-        "description": "删除单个 run 及其会话历史与产物。\n\n允许删除 task 内任意位置的 run（含中间），不重排剩余上下文序号。级联清理该 run 的\n会话消息、命令、委派记录、终端 session 与 run 行。\n\n参数:\n    task_id: 来自路由的任务标识。\n    run_id: 来自路由的 Conversation Run 标识。\n    task_service: 通过依赖注入的任务 service（负责级联清理）。\n\n返回:\n    删除结果 ``DeleteRunResponse``。\n\n异常:\n    HTTPException: 404——task 或 run 不存在/不匹配；409——task 内存在运行中的 run\n        （不可删除）或删除闸门忙。\n\n副作用:\n    级联删除该 run 及其关联数据；与 delete_task 一致经 asyncio.to_thread 移出 event loop。",
-        "operationId": "delete_run_tasks__task_id__runs__run_id__delete",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          },
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeleteRunResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/health": {
       "get": {
         "summary": "Get Health",
@@ -4563,30 +4514,6 @@
         ],
         "title": "CreateWorkspaceRequest",
         "description": "校验工作区创建请求体。\n\n参数:\n    name: 非空的工作区名称。\n    root_path: 非空的工作区本地路径。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当名称或路径为空白时抛出。\n\n副作用:\n    无。"
-      },
-      "DeleteRunResponse": {
-        "properties": {
-          "task_id": {
-            "type": "integer",
-            "title": "Task Id"
-          },
-          "run_id": {
-            "type": "integer",
-            "title": "Run Id"
-          },
-          "deleted": {
-            "type": "boolean",
-            "title": "Deleted"
-          }
-        },
-        "type": "object",
-        "required": [
-          "task_id",
-          "run_id",
-          "deleted"
-        ],
-        "title": "DeleteRunResponse",
-        "description": "校验并序列化单个 run 删除结果响应。\n\n参数:\n    task_id: run 所属任务标识。\n    run_id: 被删除的 Conversation Run 标识。\n    deleted: 是否删除成功。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "DeleteTaskResponse": {
         "properties": {

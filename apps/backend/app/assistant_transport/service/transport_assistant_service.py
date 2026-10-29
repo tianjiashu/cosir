@@ -12,13 +12,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import cast
 
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 
 from app.assistant_transport.request import (
     DecisionRequest,
-    EditQueuedMessageRequest,
     RerunMessageRequest,
     SendMessageRequest,
 )
@@ -26,11 +27,13 @@ from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
 from app.core.tool.background import placeholders
 from app.core.tool.background.deferred_registry import deferred_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.message_queue.task_message import (
+    Delivery,
     NoticeBody,
     TaskMessage,
     UserInputBody,
@@ -56,7 +59,12 @@ class TransportAssistantService:
     # ── 命令 ──────────────────────────────────────────────────────────────
 
     async def send(self, task_id: int, request: SendMessageRequest) -> None:
-        """发送：有活动 Run 时按 ``delivery`` 立即并入或排到本轮之后，否则新开 Run。
+        """发送：Task 有活动 Run（含挂起）时排队（``next_run``），空闲时立即处理（``immediate``）。
+
+        排队消息在当前 Run 结束后一轮一条依次处理，用户可在队列里改为立即发送或删除；挂起时排队
+        不唤醒 Run。空闲时用 ``immediate``：取消后队列里可能还留着旧的排队消息，新发送的这条应先跑
+        （见 ``dispatch_policy.next_input``）。判定阶段与入队在 Task 闸门内完成，actor 不会在两者
+        之间开出或落定 Run；执行者自行结束不经闸门，此时排队的消息由刚结束的 Run 收尾时接续。
 
         Agent 身份沿用 Task 当前 Run：Task 不绑定 Agent，身份随发起配置走，子 Agent / Team 节点的
         Task 不能因为用户在它的页面里发一条消息就退回 ``main_agent``。尚无 Run 时用 ``main_agent``。
@@ -69,50 +77,69 @@ class TransportAssistantService:
             request.modelConfigId,
             request.reasoningEffort,
             current.agent_id if current is not None and current.agent_id else "main_agent",
-            delivery=request.delivery,
         )
-        await asyncio.to_thread(task_runtime_spaces.enqueue, task_id, message)
+        space = await asyncio.to_thread(task_runtime_spaces.get_or_create, task_id)
+        async with space.async_operation():
+            delivery: Delivery = "immediate" if await space.actor.phase() == "idle" else "next_run"
+            await asyncio.to_thread(
+                task_runtime_spaces.enqueue, task_id, replace(message, delivery=delivery)
+            )
 
-    async def edit_queued(
-            self, task_id: int, message_id: int, request: EditQueuedMessageRequest
-    ) -> None:
-        """原地编辑一条排队中的用户输入：身份、``delivery`` 与发起配置都不变，只改正文与附件。
+    async def send_queued_now(self, task_id: int, message_id: int) -> None:
+        """把一条排队中的用户输入改为立即处理：撤回原行，以 ``immediate`` 重新入队（同一事务）。
 
-        不经 actor：这是对队列行的条件更新，与 ``prepare_input`` 的消费确认由「行仍存在才更新」
-        仲裁，与 Run 状态无关。按原配置的模型校验能力（图片、推理强度），因为消息最终在那个模型
-        上运行。已投递进 mailbox 的旧副本无需撤回：``prepare_input`` 并入时以确认删除返回的行内容
-        为准。消息已被并入时不会转成重跑。
+        重新入队得到新的消息身份，actor 把它当作新到达的消息照常判定：有执行者就并入当前 Run，
+        挂起就唤醒，空闲就以它开新 Run。不原地改 ``delivery``：actor 只按水位之后的新消息推进，
+        原地更新唤不醒它。正文、附件与发起配置原样沿用。
 
         异常:
             SessionConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
-            UserInputRejectedError / ValueError: 输入不合法。
             KeyError: Task 不存在。
         """
-        queued = await asyncio.to_thread(self._queue.find, task_id, message_id)
+        await asyncio.to_thread(self._send_queued_now, task_id, message_id)
+        await asyncio.to_thread(self._states.refresh_queued_messages, task_id)
+
+    def _send_queued_now(self, task_id: int, message_id: int) -> None:
+        with main_session_factory().begin() as session:
+            queued = self._withdraw_user_input(session, task_id, message_id)
+            new_id = task_runtime_spaces.enqueue(
+                task_id, TaskMessage.of(queued.body, delivery="immediate"), session=session
+            )
+        log.info(
+            "queued_message_sent_now",
+            extra={
+                "msg": "排队消息已改为立即处理",
+                "data": {"task_id": task_id, "message_id": message_id, "new_message_id": new_id},
+            },
+        )
+
+    async def delete_queued(self, task_id: int, message_id: int) -> None:
+        """删除一条排队中的用户输入。
+
+        异常:
+            SessionConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
+            KeyError: Task 不存在。
+        """
+        await asyncio.to_thread(self._delete_queued, task_id, message_id)
+        # 撤回不新增行、不唤醒 actor，排队投影由这里刷新。
+        await asyncio.to_thread(self._states.refresh_queued_messages, task_id)
+
+    def _delete_queued(self, task_id: int, message_id: int) -> None:
+        with main_session_factory().begin() as session:
+            self._withdraw_user_input(session, task_id, message_id)
+        log.info(
+            "queued_message_deleted",
+            extra={"msg": "排队消息已删除", "data": {"task_id": task_id, "message_id": message_id}},
+        )
+
+    def _withdraw_user_input(self, session: Session, task_id: int, message_id: int) -> TaskMessage:
+        """在调用方事务内撤回一条排队中的用户输入；不是用户输入时抛错，事务回滚、行保留。"""
+        queued = self._queue.withdraw(session, task_id, message_id)
         if queued is None or not isinstance(queued.body, UserInputBody):
             raise SessionConflictError(
-                "MESSAGE_CONSUMED", "这条消息已开始处理，未作修改", retryable=False
+                "MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False
             )
-        launch = queued.body.launch
-        # 复用原消息的展示绑定：编辑请求里的附件可能只剩 token，路径从原消息恢复。
-        prepared = await asyncio.to_thread(
-            self._inputs.prepare,
-            task_id,
-            request.to_run_command(),
-            launch.model_config_id,
-            launch.options.reasoning_effort,
-            launch.agent_id,
-            reuse=queued.body.presentation,
-        )
-        # 发起配置原样沿用：``prepare`` 按请求重组了 launch（禁用工具为空），这里换回原值。
-        body = cast(UserInputBody, prepared.body).model_copy(update={"launch": launch})
-        edited = TaskMessage.of(body, delivery=queued.delivery)
-        if not await asyncio.to_thread(self._queue.update, task_id, message_id, edited):
-            raise SessionConflictError(
-                "MESSAGE_CONSUMED", "这条消息已开始处理，未作修改", retryable=False
-            )
-        # 原地更新不新增行、不唤醒 actor，排队投影由这里刷新；消费投影搬移的就是这份新内容。
-        await asyncio.to_thread(self._states.refresh_queued_messages, task_id)
+        return queued
 
     async def rerun(self, task_id: int, message_id: int, request: RerunMessageRequest) -> None:
         """编辑最新一条已并入的用户输入并重跑：软删除它及其后 context + 以新消息入队（同一事务）→
@@ -157,15 +184,23 @@ class TransportAssistantService:
         await asyncio.to_thread(self._republish, task_id)
 
     def _replace_latest_input(self, task_id: int, message_id: int, message: TaskMessage) -> None:
-        """调用方持 Task 闸门且已确认静止：复查目标，软删除它及其后 context 并让新消息入队，
-        同一事务提交。"""
+        """调用方持 Task 闸门且已确认静止：复查目标，撤回它所在的一轮并让新消息入队，同一事务提交。
+
+        被撤回的调用可能还有延迟工作在进行（Run 结束后仍在跑的后台命令、委派）：在提交前撤销登记，
+        否则结论到达后照常回投，以一条上下文里找不到调用的孤儿结论开出新 Run。必须在提交前——登记
+        出队是投递的唯一门槛，提交与撤销之间完成的结论已经入队。事务随后失败时撤销不回滚，同外部
+        工具副作用；被撤回的占位已移出上下文与投影，不再结算、也不给模型留通知。
+        """
         with main_session_factory().begin() as session:
             target = self._context.latest_user_input(task_id, session=session)
             if target is None or target.message_id != message_id:
                 raise SessionConflictError(
                     "EDIT_TARGET_STALE", "只能编辑最新一条用户消息，请刷新后重试"
                 )
-            self._context.exclude_from(task_id, target.sequence, session)
+            withdrawn = self._context.exclude_from(task_id, target.sequence, session)
+            for tool_call_id in withdrawn:
+                if deferred_registry.owns(task_id, tool_call_id):
+                    deferred_registry.cancel(tool_call_id, reason="编辑重跑撤回所在一轮，撤销延迟结果")
             task_runtime_spaces.enqueue(task_id, message, session=session)
 
     def _republish(self, task_id: int) -> None:

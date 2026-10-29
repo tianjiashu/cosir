@@ -121,12 +121,16 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
         )
 
 
-def settle_deferred_placeholder(tool_call_id: str, *, step_id: str) -> None:
-    """后台结论并入 context 后，把这次调用的后台占位推到 ``completed``；只更新展示状态。
+def settle_deferred_placeholder(
+    tool_call_id: str, *, display_data: dict[str, object] | None, step_id: str
+) -> None:
+    """后台结论并入 context 后，把这次调用的后台占位推到 ``completed``，并写入作业给卡片的终态展示。
 
     在并入时而不是 ``deferred_registry.complete`` 时结算：工作可能早于占位行写入就完成，并入发生在
     之后的模型步，占位行一定已写入。已被撤销或重启改为 ``cancelled`` 的占位照样推到 ``completed``
     （结论确实到了，投影白名单允许 ``cancelled → completed``）；不是后台占位或已完成的不动。
+    ``display_data`` 为 ``None`` 时沿用占位的展示（子 Agent 卡片跟随子 Task）。写入即持久化；实时累计
+    过输出的卡片由投影保留实时值（见 ``plan_tool_call_status_changed``），两者因此不必对齐。
     """
     runtime = _runtime_context()
     context = _message_context()
@@ -134,7 +138,7 @@ def settle_deferred_placeholder(tool_call_id: str, *, step_id: str) -> None:
     if current is None or not current.deferred or current.status == "completed":
         return
     written = context.update_tool_result_metadata(
-        tool_call_id, ToolMessageMetadata(status="completed")
+        tool_call_id, ToolMessageMetadata(status="completed", display_data=display_data)
     )
     log.info(
         "deferred_placeholder_completed",

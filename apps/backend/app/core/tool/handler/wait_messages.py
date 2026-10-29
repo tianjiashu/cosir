@@ -1,7 +1,7 @@
 """wait_messages 工具：Agent 主动挂起，等后台工作的结论以消息送达。
 
 可等待的工作只以延迟结果登记表 ``deferred_registry`` 为准（委派子 Agent、``execute_terminal`` 的后台命令；
-设计见 ``docs/plan/background-tool-result-design.md``）。
+设计见 ``docs/plan/deferred-tool-result-design.md``）。
 Agent Team 不在等待范围内：``agent_team`` 工具自己阻塞到 Team 落定，结论就是它的工具结果。
 
 取代轮询式等待：调用当步闭合并带 ``suspend``，Run 随即挂起、不占执行者；后台工作每到一个结论、

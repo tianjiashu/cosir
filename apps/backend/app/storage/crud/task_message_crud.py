@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.workflow.message_queue.task_message import TaskMessage
@@ -41,37 +41,27 @@ class TaskMessageCrud:
         )
         return [TaskMessage.of_model(row) for row in session.scalars(statement)]
 
-    def find(self, session: Session, task_id: int, message_id: int) -> TaskMessage | None:
-        """读一条仍在队列中的消息；已被确认删除或不属于该 Task 时返回 ``None``。"""
-
-        row = session.scalar(
-            select(TaskMessageModel).where(
-                TaskMessageModel.id == message_id, TaskMessageModel.task_id == task_id
-            )
-        )
-        return TaskMessage.of_model(row) if row is not None else None
-
     def list_task_ids_with_pending(self, session: Session) -> list[int]:
         """返回外部队列里有待处理消息的 task id。"""
 
         return list(session.scalars(select(TaskMessageModel.task_id).distinct()).all())
 
-    def update_body_if_exists(
-            self, session: Session, task_id: int, message_id: int, message: TaskMessage
-    ) -> bool:
-        """条件更新一条仍在队列中的消息正文；行已被确认删除时返回 ``False``。"""
+    def delete_one_returning(
+            self, session: Session, task_id: int, message_id: int
+    ) -> TaskMessage | None:
+        """删除一条仍在队列中的消息并返回删除前的内容；已被确认删除或不属于该 Task 时返回 ``None``。"""
 
-        result = session.execute(
-            update(TaskMessageModel)
+        row = session.scalar(
+            delete(TaskMessageModel)
             .where(TaskMessageModel.id == message_id, TaskMessageModel.task_id == task_id)
-            .values(payload=message.body.model_dump(mode="json"))
+            .returning(TaskMessageModel)
         )
-        return bool(result.rowcount)
+        return TaskMessage.of_model(row) if row is not None else None
 
     def delete_returning(self, session: Session, ids: list[int]) -> dict[int, TaskMessage]:
         """删除并返回实际删除的行（按 id）；已被删除的行不在结果里，供调用方识别重复确认。
 
-        返回删除那一刻的行内容：排队期间被原地编辑过的消息以此为准，而不是投递时的副本。
+        返回删除那一刻的行内容，调用方以此为准，而不是投递时的副本。
         """
 
         if not ids:

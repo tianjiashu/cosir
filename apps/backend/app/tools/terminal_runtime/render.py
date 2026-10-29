@@ -231,7 +231,9 @@ def session_state_parts(facts: SessionFacts, observation: TerminalObservation) -
         if facts.exit_code is not None:
             parts.append(f"exit {facts.exit_code}")
     elif command is not None:
-        parts.append(f"executing `{command.command}` (cmd {command.number})")
+        # 用户启动的命令要让 Agent 一眼看到：它在跑时 Agent 输入会被拒，先换会话而不是去撞。
+        owner = ", started by user" if command.started_by == "user" else ""
+        parts.append(f"executing `{command.command}` (cmd {command.number}{owner})")
     elif observation.phase == "editing":
         parts.append("at prompt")
     if observation.integration_status != "ready":

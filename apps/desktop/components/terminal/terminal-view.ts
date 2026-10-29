@@ -146,10 +146,6 @@ export class TerminalView {
     this.connection.reconnect();
   }
 
-  releaseInput(): void {
-    if (this.connection.releaseInput()) this.log("INFO", "terminal_input_released", "用户释放终端输入租约");
-  }
-
   search(term: string, direction: "next" | "previous"): void {
     this.searching = term.length > 0;
     if (!term) {
@@ -219,9 +215,7 @@ export class TerminalView {
       case "input_rejected":
         this.log("INFO", "terminal_input_rejected", "终端输入被后端拒绝", { reason: frame.reason });
         this.flash(
-          frame.reason === "agent_input" ? "Agent 正在输入"
-            : frame.reason === "backpressure" ? "输入过快，部分按键未送达"
-              : "会话已结束，输入未送达",
+          frame.reason === "backpressure" ? "输入过快，部分按键未送达" : "会话已结束，输入未送达",
           "warning",
         );
         return;

@@ -252,7 +252,7 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   const session = requireRecord(value, path);
   requireExactKeys(session, [
     "sessionId", "label", "shellKind", "createdBy", "status", "endReason", "exitCode",
-    "integration", "inputHolder", "agentInputCallId", "commandRunning", "handoff", "createdAt",
+    "integration", "commandRunning", "handoff", "createdAt",
   ], path);
   const sessionId = requireString(session.sessionId, `${path}.sessionId`);
   if (sessionId === "" || seenIds.has(sessionId)) throw new TransportSnapshotValidationError(`${path}.sessionId`, "非空且在 Task 内唯一");
@@ -264,10 +264,6 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   if (session.endReason !== null && typeof session.endReason !== "string") throw new TransportSnapshotValidationError(`${path}.endReason`, "字符串或 null");
   if (session.exitCode !== null && !Number.isInteger(session.exitCode)) throw new TransportSnapshotValidationError(`${path}.exitCode`, "整数或 null");
   if (!(TERMINAL_INTEGRATION_STATES as readonly unknown[]).includes(session.integration)) throw new TransportSnapshotValidationError(`${path}.integration`, "受支持的集成状态");
-  if (session.inputHolder !== null && session.inputHolder !== "agent" && session.inputHolder !== "user") throw new TransportSnapshotValidationError(`${path}.inputHolder`, "agent、user 或 null");
-  if (session.agentInputCallId !== null && (typeof session.agentInputCallId !== "string" || session.agentInputCallId === "" || session.inputHolder !== "agent")) {
-    throw new TransportSnapshotValidationError(`${path}.agentInputCallId`, "inputHolder 为 agent 时的非空字符串，或 null");
-  }
   if (typeof session.commandRunning !== "boolean") throw new TransportSnapshotValidationError(`${path}.commandRunning`, "布尔值");
   if (session.handoff !== null) {
     const handoff = requireRecord(session.handoff, `${path}.handoff`);

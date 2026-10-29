@@ -4,8 +4,7 @@
  * 契约是 Task 视角：对话是一条扁平消息列表，Run 只作为消息上的 `runId`（诊断、日志、fork 定位）
  * 与 `activity`（最新 Run 摘要）出现，对话界面不按 runId 比对。后端先推 full 帧再按路径增量
  * 推送 mutation（`messages` / `activity` / `queued_messages` / `error`）。字段与后端
- * `apps/backend/app/assistant_transport/state/` 严格对齐，改动需前后端同步；契约说明见
- * `docs/plan/task-command-fire-and-forget-design.md` 的「wire 契约（实施基准）」。
+ * `apps/backend/app/assistant_transport/state/` 严格对齐，改动需前后端同步。
  *
  * 本文件为纯类型契约，不依赖 React，归位于 `lib/assistant/`，便于无 React 依赖的模块复用。
  */
@@ -107,8 +106,9 @@ export type TransportToolCallPart = {
   /** 持久化 TeamRun 的定位字段，工具失败后仍可查询流水线。 */
   team_run_id?: number;
   /**
-   * 延迟结果的后台占位（结论稍后以后台结果回投）。投影自占位行 metadata，只在为真时出现；
-   * 前端只做契约校验，不另起展示，卡片状态仍看 `status`。
+   * 延迟结果的后台占位（结论稍后以后台结果回投）。投影自占位行 metadata，只在为真时出现，结算后
+   * 保留；converter 交给卡片作为所有工具共用的「在后台」事实（工具不在 `display_data` 里另存）。
+   * 卡片状态仍看 `status`。
    */
   deferred?: true;
   /** 后端显式标记的错误结果。 */
@@ -236,8 +236,8 @@ export function isActiveRunStatus(status: string | null | undefined): boolean {
 }
 
 /**
- * 活动 Run 期间发送消息的投递方式：`immediate` 在下个模型边界并入本轮，`next_run` 交给下一个
- * Run（本轮结束后）。无活动 Run 时后端忽略该字段直接新开 Run。
+ * 排队用户输入的并入时机，由后端决定：`next_run` 是活动 Run 期间发送的排队消息（Run 结束后一轮一条
+ * 处理）；`immediate` 是空闲时发送或被「立即发送」的消息，在下个模型边界并入或马上开新 Run。
  */
 export type InputDelivery = "immediate" | "next_run";
 
@@ -268,13 +268,6 @@ export type TerminalSessionEntry = {
   endReason: string | null;
   exitCode: number | null;
   integration: "starting" | "ready" | "unavailable" | "off";
-  /** 当前输入租约持有方；null 为空闲。 */
-  inputHolder: "agent" | "user" | null;
-  /**
-   * Agent 持有输入时对应的 terminal_write 调用；经 `cancelToolCall` 取消它即结束等待、释放输入，用户
-   * 可接管。Agent 不持有输入时为 null。
-   */
-  agentInputCallId: string | null;
   /** 集成跟踪到有命令正在执行；无集成（integration 非 ready）时恒为 false，不代表空闲。 */
   commandRunning: boolean;
   /** Agent 发起的交接；非空时面板自动打开并提示用户输入。 */

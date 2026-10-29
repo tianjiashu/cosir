@@ -19,9 +19,10 @@ from app.core.workflow.message_queue.task_message import DecisionBody
 from app.core.tool.background.deferred_registry import deferred_registry
 from app.service import depends
 from app.tools.terminal_runtime.errors import (
-    TerminalInputHeldByUserError,
     TerminalIntegrationRequiredError,
     TerminalSessionStateError,
+    TerminalUserCommandRunningError,
+    TerminalUserTypingError,
 )
 from app.tools.terminal_runtime.shell_resolver import ShellResolver
 from app.tools.tool_handler.terminal_session import (
@@ -111,9 +112,12 @@ def test_read_arguments_bound_limits() -> None:
 
 
 def test_error_observations_use_controlled_status_hints() -> None:
-    held = service_error_observation("terminal_write", TerminalInputHeldByUserError("typing"))
-    assert held.display_data["status_hint"] == "用户输入中"
-    assert "Retry after" in (held.content or "")
+    typing = service_error_observation("terminal_write", TerminalUserTypingError("typing"))
+    assert typing.display_data["status_hint"] == "用户输入中"
+    assert "Retry after" in (typing.content or "")
+    busy = service_error_observation("terminal_write", TerminalUserCommandRunningError("busy"))
+    assert busy.display_data["status_hint"] == "用户命令中"
+    assert "Fix the session" in (busy.content or "")
     need = service_error_observation("terminal_write", TerminalIntegrationRequiredError("x"))
     assert need.display_data["status_hint"] == "缺少集成"
     other = service_error_observation("terminal_write", TerminalSessionStateError("x"))

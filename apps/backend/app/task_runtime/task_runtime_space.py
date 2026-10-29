@@ -141,6 +141,19 @@ class TaskRuntimeSpace:
 
         self.actor = TaskActor(self)
 
+    def restart_actor(self) -> None:
+        """换一个新 actor 并拉起；只用于删除失败后的回滚，须在事件循环线程调用。
+
+        删除前的 ``stop`` 停掉了旧 actor 的 loop 且不可逆（``start`` 只拉起一次），删除没提交时
+        Task 仍在，必须有新的调度者。换 actor 而不是卸载 space：space 还持有快照 working copy
+        与订阅，卸载会让正在 attach 的前端收不到后续推送。新 actor 的水位从 0 起，与进程重启后的
+        物化同语义：队列里残留的可推进消息照常判定。
+        """
+        from app.core.task_actor import TaskActor
+
+        self.actor = TaskActor(self)
+        self.actor.start()
+
     def _acquire_lock(self, timeout: float | None) -> bool:
         """在同步线程中取得 Task 操作闸门。"""
 

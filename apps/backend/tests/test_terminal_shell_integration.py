@@ -152,16 +152,13 @@ def test_match_and_keys_and_interrupt(terminal: _Terminal) -> None:
     assert recalled.text.count("recall-me") >= 1, recalled.text
 
 
-def test_user_raw_input_lease_and_resize(terminal: _Terminal) -> None:
+def test_user_raw_input_and_resize(terminal: _Terminal) -> None:
     service, session_id = terminal.service, terminal.session_id
     assert service.require(session_id, 1).user_input(b"echo typed-by-user\r") == "accepted"
-    assert session_entries(service, 1)[0]["inputHolder"] == "user"
     seen = terminal.read(wait=TerminalWait(until="match", pattern="^typed-by-user$",
                                            timeout_ms=5000))
     assert seen.wait_result["end_reason"] == "matched"
     assert "user typed lines" in seen.text
-    service.require(session_id, 1).release_user_input()
-    assert session_entries(service, 1)[0]["inputHolder"] is None
     service.require(session_id, 1).resize(30, 100)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:

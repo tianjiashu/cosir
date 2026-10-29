@@ -12,11 +12,8 @@ export type TransportDisconnect = {
 export type TaskTransportSessionCallbacks = {
   /** 长订阅请求的链路 id（经 `X-Trace-Id` 传给后端），与本会话的命令共用。 */
   traceId: TraceId;
-  /**
-   * 提交一条用户消息。返回 `awaitSnapshot`：为真时乐观消息保留到 snapshot 里出现对应消息（或
-   * 命令被拒）才清除；编辑排队消息原地更新、不产生新消息，返回 false 即清。
-   */
-  submitMessage?: (command: UserAddMessageCommand) => Promise<{ awaitSnapshot: boolean }>;
+  /** 提交一条用户消息；乐观消息保留到 snapshot 里出现对应消息（或命令被拒）才清除。 */
+  submitMessage?: (command: UserAddMessageCommand) => Promise<void>;
   /** 长订阅建立（attach 2xx）。 */
   onResponse?: (response: Response) => void;
   /** 长订阅意外结束（EOF、网络错误、attach 非 2xx）；主动 `close` / 被新的 `open` 替换不回调。 */
@@ -86,8 +83,7 @@ export class TaskTransportSession {
     if (!submit) throw new Error("只读 Transport runtime 不接受消息提交");
     this.store.setPendingCommands([...this.store.getSnapshot().pendingCommands, command]);
     try {
-      const { awaitSnapshot } = await submit(command);
-      if (!awaitSnapshot) this.store.clearPendingCommand(command);
+      await submit(command);
       if (!this.active) void this.open();
     } catch (error) {
       // 请求未发出（如附件已失效）与后端拒绝同属提交失败，交给同一个回调恢复草稿并提示。

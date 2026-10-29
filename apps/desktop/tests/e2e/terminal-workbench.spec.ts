@@ -125,20 +125,6 @@ test("会话在后端失效时停止重连并平静提示，snapshot 移除后�
   await expect(panel(page)).toContainText("没有运行中的终端");
 });
 
-test("输入租约释放不改变标签宽度，「+」位置稳定", async ({ page }) => {
-  await page.goto("/tasks/42");
-  await page.getByRole("button", { name: /^终端，/ }).click();
-  await expect(screen(page, "term-1")).toContainText("term-1 $");
-  const plus = panel(page).getByRole("button", { name: "新建终端" });
-  const before = await plus.boundingBox();
-
-  await page.keyboard.type("x");
-  await expect(panel(page).getByRole("button", { name: "释放输入" })).toBeVisible();
-  expect(await plus.boundingBox()).toEqual(before);
-  await expect(panel(page).getByRole("button", { name: "释放输入" })).toHaveCount(0);
-  expect(await plus.boundingBox()).toEqual(before);
-});
-
 test("「+」旁的下拉选 shell 新建，非默认 shell 在标签上标出", async ({ page }) => {
   await page.goto("/tasks/42");
   await page.getByRole("button", { name: /^终端，/ }).click();
@@ -206,24 +192,3 @@ test("面板收起时异常退出在页头标红，打开面板即视为看过",
   await expect(badge).toHaveAttribute("data-terminal-badge", "none");
 });
 
-test("Agent 正在输入时页头提示，用户可一键接管输入", async ({ page, request }) => {
-  await page.goto("/tasks/42");
-  const entry = page.getByRole("button", { name: /^终端，/ });
-  await entry.click();
-  await expect(screen(page, "term-1")).toContainText("term-1 $");
-
-  await request.post(`${origin}/__test__/terminal/agent-input`, {
-    data: { taskId: 42, sessionId: "term-1", toolCallId: "call-write" },
-  });
-  await expect(entry.locator("[data-terminal-badge]")).toHaveAttribute("data-terminal-badge", "agent");
-  await expect(entry).toHaveAccessibleName(/Agent 正在「终端」中输入/);
-  const takeOver = panel(page).getByRole("button", { name: "接管输入" });
-  await expect(takeOver).toBeVisible();
-
-  // 接管 = 取消 Agent 这次输入的调用：等待结束、输入权释放，焦点回到终端，可以直接输入。
-  await takeOver.click();
-  await expect(takeOver).toHaveCount(0);
-  await expect(entry.locator("[data-terminal-badge]")).toHaveAttribute("data-terminal-badge", "none");
-  await page.keyboard.type("mine");
-  await expect(screen(page, "term-1")).toContainText("term-1 $ mine");
-});

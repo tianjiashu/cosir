@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 from app.api.schemas import ForkTaskRequest
 from app.api.tasks_api import fork_task
+from app.assistant_transport.service.conversation_task_state_rebuilder import ConversationTaskStateRebuilder
 from app.assistant_transport.state.message_identity import leading_reply_id, reply_id, turn_of
 from app.models.conversation_input import UserInputPresentation
 from app.models.errors.task_fork_errors import TaskForkConflictError
@@ -108,7 +109,9 @@ def test_fork_terminal_history_while_later_run_is_active(fork_store, terminal, l
     cloned_runs = store.runs.list_by_task(target.id)
     assert [run.status for run in cloned_runs] == ["completed", terminal]
     assert target.task_type == "fork"
-    assert target.current_run_id is None
+    # 当前 Run 指向克隆出的切分点 Run：activity 由它投影，终态才开放编辑重跑。
+    assert target.current_run_id == cloned_runs[-1].id
+    assert store.tasks.get(target.id).current_run_id == cloned_runs[-1].id
     assert target.tool_schemas == store.task.tool_schemas
     assert target.extra == {
         "fork": {"source_task_id": store.task.id, "source_message_id": boundary.reply}
@@ -124,6 +127,22 @@ def test_fork_terminal_history_while_later_run_is_active(fork_store, terminal, l
     assert store.contexts.get(store.task.id, include_in_context=False) == source_rows
     assert store.runs.get(later.id).status == later_status
     assert task_runtime_spaces.existing_spaces() == ()
+
+
+@pytest.mark.parametrize("terminal", ["completed", "failed", "cancelled"])
+def test_fork_snapshot_activity_is_boundary_run(fork_store, terminal):
+    """fork 后 snapshot 的 activity 是切分点 Run 的终态：前端据此开放编辑重跑。"""
+    store = fork_store
+    append_run(store, "completed")
+    boundary = append_run(store, terminal)
+    target = fork(store, boundary.reply)
+    runs = store.runs.list_by_task(target.id)
+    state = ConversationTaskStateRebuilder.rebuild(
+        store.tasks.get(target.id), runs, store.contexts.get(target.id, include_in_context=False)
+    )
+    assert state["activity"] is not None
+    assert state["activity"]["runId"] == runs[-1].id
+    assert state["activity"]["status"] == terminal
 
 
 def test_fork_skips_only_edited_out_rows(fork_store):

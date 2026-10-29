@@ -3,6 +3,7 @@ import { createTeamEditorSession } from "@/lib/agent-team-editor/session";
 import { exportDraft } from "@/lib/agent-team-editor/model";
 import { teamConfiguration } from "./team-editor-fixture";
 import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
+import { useConfirmStore } from "@/lib/confirm/confirm-store";
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn() }));
 const emptySelection = () => ({ nodeIds: new Set<string>(), endNodeIds: new Set<string>(), transitionIds: new Set<string>() });
 const create = () => createTeamEditorSession({ initial: teamConfiguration, saved: true, workspaceId: 11 });
@@ -122,9 +123,10 @@ describe("Team editing session", () => {
     expect(await session.save(async () => { throw new Error("failure"); })).toBe(false);
     expect(session.store.getState().snapshot).toBe(before.snapshot);
     expect(session.store.getState().baseline).toBe(before.baseline);
-    expect(session.store.getState()).toMatchObject({ saving: false, dirty: true, saveError: expect.any(String) });
+    expect(session.store.getState()).toMatchObject({ saving: false, dirty: true });
+    expect(useConfirmStore.getState().queue.at(-1)).toMatchObject({ title: "保存失败", notice: true });
     expect(await session.save(async value => saved(value))).toBe(true);
-    expect(session.store.getState()).toMatchObject({ dirty: false, saveError: null });
+    expect(session.store.getState()).toMatchObject({ dirty: false });
   });
   it("restores saved layout by business identity after deletion changes session ID allocation", async () => {
     const session = create();

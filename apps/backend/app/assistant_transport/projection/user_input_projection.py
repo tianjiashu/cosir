@@ -14,7 +14,7 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.assistant_transport.state.message_identity import reply_id, user_message_id
 from app.config.constant import Constant
 from app.core.events import UserInputConsumedEvent
-from app.models.conversation_input import image_asset_id
+from app.models.conversation_input import UserInputPresentation, image_asset_id
 from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
 from app.utils.message_tokens import find_message_tokens
 
@@ -99,18 +99,22 @@ def build_user_input_parts(
     return parts
 
 
+def build_presentation_parts(presentation: UserInputPresentation) -> list[UserInputPart]:
+    """按展示绑定构造用户消息 parts；排队投影、消费投影与全量重建共用，三处展示一致。"""
+    return build_user_input_parts(
+        presentation.display_text, presentation.image_paths, presentation.attachments
+    )
+
+
 def plan_user_input_consumed(
     event: UserInputConsumedEvent,
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
-    """把排队消息按身份搬进消息列表，并补其后的助手占位；重复投影按消息身份去重。
+    """按事件自带的展示绑定插入 user 消息并补其后的助手占位，同时移出排队投影；按身份去重。
 
-    排队条目已按展示绑定构造好 parts（actor 先刷新排队投影再投递，消费总在投影之后），这里只搬移
-    不重建，事件因此只带消息身份。快照在消费提交后才懒重建时，消息已从 context 重建出来，按去重
-    跳过。连续消费多条 user 时，同一 Run 尚无输出的助手占位被这条 user 消息原位替换。
-
-    异常:
-        KeyError: 该消息既不在消息列表也不在排队列表——排队投影缺失，属契约错误。
+    不从排队投影里取内容：排队投影只镜像队列表，确认删除之后的任何一次刷新都会刷掉这一条。
+    快照在消费提交后才懒重建时，消息已从 context 重建出来，按去重跳过。连续消费多条 user 时，
+    同一 Run 尚无输出的助手占位被这条 user 消息原位替换。
     """
 
     message_id = user_message_id(event.message_id)
@@ -119,10 +123,6 @@ def plan_user_input_consumed(
     messages = state["messages"]
     if any(m["id"] == message_id for m in messages):
         return []
-    queued = state.get("queued_messages", [])
-    entry = next((m for m in queued if m["id"] == message_id), None)
-    if entry is None:
-        raise KeyError(f"queued message {message_id} not found")
     insert_at = len(messages)
     last = messages[-1] if messages else None
     if (
@@ -132,11 +132,12 @@ def plan_user_input_consumed(
         and not last["parts"]
     ):
         insert_at -= 1
+    queued = state.get("queued_messages", [])
     return [
         ConversationStateMutation(
             "set",
             ("messages", insert_at),
-            message(message_id, "user", list(entry["parts"]), run_id),
+            message(message_id, "user", list(build_presentation_parts(event.presentation)), run_id),
         ),
         ConversationStateMutation(
             "set",

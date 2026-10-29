@@ -123,7 +123,10 @@ for (const theme of ["light", "dark"]) {
     // radix 在下一个任务里才移动菜单焦点，确认落到「删除」再按 Enter。
     await expect(page.getByRole("menuitem", { name: "删除" })).toBeFocused();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("heading", { name: `删除任务“${longTitle}”？` })).toBeVisible();
+    await expect(page.getByRole("heading", { name: `删除任务「${longTitle}」？` })).toBeVisible();
+    // 它有一个 fork：询问只删这个还是一起删。
+    await expect(page.getByRole("button", { name: "只删除这个", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "一起删除 2 个任务", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(menuButton).toBeFocused();
     await page.keyboard.press("Tab");

@@ -1,5 +1,4 @@
 import type { CreateAttachment } from "@assistant-ui/core";
-import type { EditIntent } from "@/lib/assistant/converter";
 import { registerInlineFileMetadata } from "@/lib/assistant/attachments/local-attachment-registry";
 
 import {
@@ -10,8 +9,6 @@ import {
 export type EditComposerDraftOverride = {
   text: string;
   attachments: readonly CreateAttachment[];
-  /** 被拒命令的编辑意图：恢复出的编辑框沿用它，而不是按恢复时的排队状态重新判定。 */
-  intent: EditIntent;
 };
 
 // The edit composer is created by assistant-ui immediately after beginEdit.

@@ -12,6 +12,7 @@ import { toast } from "sonner";
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import type { DeleteTarget } from "@/components/layout/use-workspace-actions";
+import { forkDescendantIds } from "@/components/task-tree/task-tree-model";
 import { ResourceDeleteButton } from "@/components/resource-delete-button";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { TaskActionsMenu } from "@/components/task-tree/task-actions-menu";
@@ -131,7 +132,12 @@ export function AppSidebar({
                     item={item}
                     tabIndex={tabIndex}
                     onTogglePinned={() => togglePinned(item.task.task_id, !item.pinned)}
-                    onDelete={() => onRequestDelete({ kind: "task", id: item.task.task_id, label: item.task.full_title })}
+                    onDelete={() => onRequestDelete({
+                      kind: "task",
+                      id: item.task.task_id,
+                      label: item.task.full_title,
+                      forkCount: forkDescendantIds(item.task).length,
+                    })}
                   />
                 )}
               />

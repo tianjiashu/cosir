@@ -147,14 +147,15 @@ class ConversationTaskContextService:
             raise RuntimeError(f"task {source_task_id} has no persisted system prompt")
         return cloned_count
 
-    def settle_deferred_placeholders(
+    def settle_placeholders(
             self,
             task_id: int | None,
             tool_call_ids: frozenset[str] | None,
             status: ToolCallEventStatus,
             error: str | None,
     ) -> list[ConversationTaskContextRecord]:
-        """把仍为 ``pending`` 的后台占位行推到终态，返回实际改写的行（新 metadata）。
+        """把还在等结果的占位行（``pending`` 的后台占位、``running`` 的 HITL 占位）推到终态，返回
+        实际改写的行（新 metadata）。
 
         Run 之外的结算（撤销、重启）走这里；Run 内的结论并入由 workflow 经 context manager 结算。
         ``task_id`` 为 ``None`` 表示全部 Task，``tool_call_ids`` 为 ``None`` 表示不按调用过滤。只改
@@ -163,7 +164,7 @@ class ConversationTaskContextService:
         """
 
         settled: list[ConversationTaskContextRecord] = []
-        for record in self._crud.list_pending_deferred(task_id):
+        for record in self._crud.list_unsettled_placeholders(task_id):
             tool_call_id = record.message.get("tool_call_id")
             if tool_call_ids is not None and tool_call_id not in tool_call_ids:
                 continue
@@ -174,29 +175,6 @@ class ConversationTaskContextService:
             self._crud.replace_message(record.task_id, record.sequence, updated)
             settled.append(updated)
         return settled
-
-    def delete_by_run_id(self, task_id: int, run_id: int, session: Session | None = None) -> None:
-        """删除指定 run 的全部 context entry。
-
-        参数:
-            task_id: 归属的 Task 标识。
-            run_id: 待删除的 Conversation Run 标识。
-
-        返回:
-            无。
-
-        参数:
-            session: 可选外部事务 Session；传入时复用该事务，不自行提交。
-
-        副作用:
-            删除匹配行；未传入 session 时由 CRUD 自建事务并提交。
-        """
-
-        self._crud.delete_by_run_id(task_id, run_id, session=session)
-        if session is not None:
-            # 外部事务通常关闭 autoflush；编辑用例随后会在同一 session 中重新写入
-            # canonical user 消息，先 flush 才能让幂等读取看见删除事实。
-            session.flush()
 
     def latest_user_input(
             self, task_id: int, session: Session | None = None
@@ -212,14 +190,18 @@ class ConversationTaskContextService:
                 return record
         return None
 
-    def awaiting_decision_tool(self, task_id: int, tool_call_id: str) -> str | None:
+    def awaiting_decision_tool(
+            self, task_id: int, tool_call_id: str, *, session: Session | None = None
+    ) -> str | None:
         """这次调用仍在等用户决定时返回其工具名，否则返回 ``None``。
 
-        等待与否的事实源是工具结果行：HITL 工具首次调用写入的等待占位 metadata 为 ``pending``，
-        决定执行后由结算推到终态。只看仍进模型上下文的行——被编辑重跑移出的调用已无法重放。
-        工具名取自发起这次调用的 assistant 消息，不依赖工具自己的业务事实（如 TeamRun）。
+        等待与否的事实源是工具结果行：HITL 工具首次调用写入的等待占位 metadata 为 ``pending``；
+        ``prepare_input`` 接收决定时在同一事务把它推到 ``running``，执行后由结算推到终态。所以
+        「已决定、执行中」也不算等待，迟到的重复决定不会让原调用再重放一次。只看仍进模型上下文
+        的行——被编辑重跑移出的调用已无法重放。工具名取自发起这次调用的 assistant 消息，不依赖
+        工具自己的业务事实（如 TeamRun）。
         """
-        records = self._crud.get(task_id, include_in_context=True)
+        records = self._crud.get(task_id, include_in_context=True, session=session)
         result = next(
             (
                 record
@@ -260,16 +242,36 @@ class ConversationTaskContextService:
                     return True
         return False
 
-    def exclude_from(self, task_id: int, sequence: int, session: Session) -> None:
-        """编辑重跑：把 ``sequence`` 及其后的行移出模型上下文与前端投影。
+    def exclude_from(self, task_id: int, sequence: int, session: Session) -> frozenset[str]:
+        """编辑重跑：撤回 ``sequence`` 起的这一轮，移出模型上下文与前端投影；返回被撤回的调用 id。
 
-        软删除：行保留供观测页查看。
+        软删除：行保留供观测页查看。只能对最新一条用户输入调用。
 
-        只能对最新一条用户输入调用：它之后的行都是对它的回答，一并移出。在调用方事务内执行，与新
-        消息入队一起提交。``RuntimeMessageContextManager`` 的内存列表每次 ``begin_run`` 从库重建，
-        之后的 Run 自然看不到这些行，不用通知它。
+        按归属而不是只按序号移出：之后的行大多是对它的回答，但更早发起的调用的结果（决定、后台
+        结论、HITL 执行结果）可能在这一轮才并入，序号排在它之后——它们回答的是之前的调用，保留，
+        否则那次调用的占位已推到终态、结果却再也进不了上下文。归属读 metadata 的 ``tool_call_id``。
+
+        返回的调用 id 是这一轮发起的全部调用，调用方据此撤销它们仍在进行的延迟工作。在调用方事务内
+        执行，与新消息入队一起提交。``RuntimeMessageContextManager`` 的内存列表每次 ``begin_run``
+        从库重建，之后的 Run 自然看不到这些行，不用通知它。
         """
-        self._crud.exclude_from_sequence(task_id, sequence, session)
+        records = self._crud.get(task_id, include_in_context=False, session=session)
+        earlier_calls: set[str] = set()
+        withdrawn_calls: set[str] = set()
+        for record in records:
+            if record.message["role"] != "assistant":
+                continue
+            calls = withdrawn_calls if record.sequence >= sequence else earlier_calls
+            calls.update(call["id"] for call in record.message.get("tool_calls") or ())
+        kept_ids = frozenset(
+            cast(int, record.id)
+            for record in records
+            if record.sequence >= sequence
+            and isinstance(record.metadata, UserMessageMetadata)
+            and record.metadata.tool_call_id in earlier_calls
+        )
+        self._crud.exclude_from_sequence(task_id, sequence, session, keep_ids=kept_ids)
+        return frozenset(withdrawn_calls)
 
     def close_unclosed_tool_calls_for_run(
             self, task_id: int, run_id: int, session: Session | None = None

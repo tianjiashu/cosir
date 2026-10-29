@@ -11,7 +11,7 @@ from app.config.logging.logger import log
 
 
 def refresh_task_sessions(task_id: int) -> None:
-    """影响会话条目的变化（生命周期、集成、租约、交接）：整表重投影该 Task 的终端会话列表。"""
+    """影响会话条目的变化（生命周期、集成、交接）：整表重投影该 Task 的终端会话列表。"""
     from app.service import depends
 
     depends.get_conversation_task_state_service().refresh_terminal_sessions(task_id)

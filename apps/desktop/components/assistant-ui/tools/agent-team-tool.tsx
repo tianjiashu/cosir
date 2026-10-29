@@ -14,12 +14,13 @@ import { cn } from "@/lib/utils";
 import { statusColorStyle } from "@/lib/agent-team-status";
 import { AgentTeamExecutionCard, useAgentTeamRunPolling } from "./agent-team-execution-card";
 import { readToolArtifact } from "./types";
+import type { ToolPartRendererProps } from "./tool-renderer-registry";
 import { readAgentTeamPreviewDisplay, type AgentTeamPreviewDisplay } from "./agent-team-display";
 
-/** 渲染器额外收到所属 Task：提交决定按 Task 与 TeamRun 寻址。 */
-type AgentTeamToolProps = ToolCallMessagePartProps & {
-  taskId: number;
-};
+/** 渲染器额外收到所属 Task（提交决定按 Task 与 TeamRun 寻址），以及转交执行卡的停止入口开关。 */
+type AgentTeamToolProps = ToolCallMessagePartProps & Pick<
+  ToolPartRendererProps, "taskId" | "interactive" | "taskCancelling"
+>;
 
 function validateReviewedInputs(
   goal: string,
@@ -73,7 +74,8 @@ function AwaitingReviewStatus({ label = AWAITING_REVIEW_LABEL, className }: { la
  * Agent Team 方案卡：按 TeamRun 状态渲染，不依附工具调用生命周期。
  *
  * `pending` 显示可编辑的审批表单；用户驳回（`cancelled` + `user_rejected`）显示驳回结果；其余状态
- * 交给执行卡。决定提交后后端确定性执行（批准即后台运行 Team），再以消息唤醒主 Agent。
+ * 交给执行卡。决定提交后后端确定性执行：批准即在重放的 `agent_team` 工具线程里阻塞运行 Team，
+ * 落定后结论作为这次调用的工具结果返回。
  */
 export function AgentTeamTool(props: AgentTeamToolProps) {
   const { artifact: rawArtifact, taskId, toolCallId } = props;
@@ -124,7 +126,7 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     );
   }
 
-  /** 提交决定；后端执行后以消息唤醒主 Agent，失败只影响本卡片的提示状态。 */
+  /** 提交决定；后端重放 `agent_team` 调用执行它（批准即阻塞运行 Team），失败只影响本卡片的提示状态。 */
   const submitDecision = async (decision: ToolDecision, phase: "confirming" | "rejecting") => {
     setState(phase);
     setMessage("");

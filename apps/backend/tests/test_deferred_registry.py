@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from app.core.tool.background.deferred_job import DeferredConclusion
 from app.core.tool.background import deferred_registry as deferred_module
 from app.core.tool.background.deferred_registry import (
     DeferredRegistry,
@@ -40,7 +41,12 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, str | None, st
     calls: list[tuple[int, str | None, str]] = []
 
     def deliver(
-        task_id: int, *, tool_call_id: str | None, tool_name: str, result: dict[str, object]
+        task_id: int,
+        *,
+        tool_call_id: str | None,
+        tool_name: str,
+        result: dict[str, object],
+        placeholder_display_data: dict[str, object] | None = None,
     ) -> bool:
         calls.append((task_id, tool_call_id, tool_name))
         return True
@@ -67,8 +73,8 @@ def test_complete_is_pop_once_and_carries_the_call(delivered) -> None:
     registry = DeferredRegistry()
     _register(registry, "call-a", 1, "terminal:a")
     assert registry.pending(1) == ["terminal:a"]
-    assert registry.complete("call-a", {}) is True
-    assert registry.complete("call-a", {}) is False
+    assert registry.complete("call-a", DeferredConclusion({})) is True
+    assert registry.complete("call-a", DeferredConclusion({})) is False
     assert registry.pending(1) == []
     assert delivered == [(1, "call-a", "terminal_command")]
 
@@ -88,14 +94,14 @@ def test_close_cancels_everything_and_blocks_later_delivery(delivered) -> None:
     _register(registry, "call-b", 2, "b", lambda: cancelled.append("b"))
     registry.close()
     assert sorted(cancelled) == ["a", "b"]
-    assert registry.complete(first, {}) is False
+    assert registry.complete(first, DeferredConclusion({})) is False
     late = _register(registry, "call-late", 1, "late")
     assert registry.pending(1) == []
-    assert registry.complete(late, {}) is False
+    assert registry.complete(late, DeferredConclusion({})) is False
     assert delivered == []
     registry.open()
     reopened = _register(registry, "call-c", 1, "c")
-    assert registry.complete(reopened, {}) is True
+    assert registry.complete(reopened, DeferredConclusion({})) is True
 
 
 def test_close_waits_for_in_flight_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -105,7 +111,12 @@ def test_close_waits_for_in_flight_delivery(monkeypatch: pytest.MonkeyPatch) -> 
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
 
     def slow_deliver(
-        task_id: int, *, tool_call_id: str | None, tool_name: str, result: dict[str, object]
+        task_id: int,
+        *,
+        tool_call_id: str | None,
+        tool_name: str,
+        result: dict[str, object],
+        placeholder_display_data: dict[str, object] | None = None,
     ) -> bool:
         entered.set()
         assert release.wait(5)
@@ -115,7 +126,7 @@ def test_close_waits_for_in_flight_delivery(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(deferred_module, "deliver_background_result", slow_deliver)
     registry = DeferredRegistry()
     _register(registry, "call-a", 1, "a")
-    deliverer = threading.Thread(target=lambda: registry.complete("call-a", {}))
+    deliverer = threading.Thread(target=lambda: registry.complete("call-a", DeferredConclusion({})))
     deliverer.start()
     assert entered.wait(2)
     closer = threading.Thread(target=registry.close)
@@ -141,9 +152,9 @@ def test_drop_task_runs_every_callback_even_when_one_fails(delivered) -> None:
     kept = _register(registry, "call-c", 2, "c", lambda: called.append("c"))
     registry.drop_task(1)
     assert sorted(called) == ["b", "boom"]
-    assert registry.complete(first, {}) is False
-    assert registry.complete(second, {}) is False
-    assert registry.complete(kept, {}) is True
+    assert registry.complete(first, DeferredConclusion({})) is False
+    assert registry.complete(second, DeferredConclusion({})) is False
+    assert registry.complete(kept, DeferredConclusion({})) is True
 
 
 def test_discard_removes_without_calling_cancel(delivered) -> None:
@@ -154,7 +165,7 @@ def test_discard_removes_without_calling_cancel(delivered) -> None:
     registry.discard("call-missing")
     assert registry.pending(1) == []
     assert called == []
-    assert registry.complete("call-a", {}) is False
+    assert registry.complete("call-a", DeferredConclusion({})) is False
 
 
 # ── 结论投递 ─────────────────────────────────────────────────────────────
@@ -190,15 +201,22 @@ def test_deliver_enqueues_background_result(enqueued: list[tuple[int, Any]]) -> 
     assert json.loads(message.body.tool_result) == {"end_reason": "condition_met"}
 
 
-def test_deliver_is_dropped_while_task_is_stopping(enqueued: list[tuple[int, Any]]) -> None:
+def test_complete_while_stopping_leaves_entry_for_drop(delivered) -> None:
+    """停止期间到达的结论不投递、不出队：条目留给收尾的 ``drop_task``，结局记为撤销。"""
+    registry = DeferredRegistry()
+    cancelled: list[str] = []
+    _register(registry, "call-a", 6, "a", lambda: cancelled.append("a"))
     cancellation_registry.request_cancel(6, "user")
     try:
-        assert not deliver_background_result(
-            6, tool_call_id=None, tool_name="terminal_command", result={}
-        )
+        assert registry.complete("call-a", DeferredConclusion({})) is False
+        assert registry.pending(6) == ["a"]
+        [dropped] = registry.drop_task(6)
     finally:
         cancellation_registry.consume(6)
-    assert enqueued == []
+    assert dropped.tool_call_id == "call-a"
+    assert cancelled == ["a"]
+    assert [entry.status for entry in registry.entries(6)] == ["cancelled"]
+    assert delivered == []
 
 
 def test_deliver_to_deleted_task_returns_false(enqueued: list[tuple[int, Any]]) -> None:
@@ -285,7 +303,7 @@ def test_foreground_entries_only_surface_as_detachable_calls(delivered) -> None:
     registry.detach("call-f")
     assert registry.foreground_calls(1) == []
     assert [view.tool_call_id for view in registry.entries(1)] == ["call-f", "call-b"]
-    registry.complete("call-f", {})
+    registry.complete("call-f", DeferredConclusion({}))
     assert [(v.tool_call_id, v.status) for v in registry.entries(1)] == [
         ("call-b", "running"),
         ("call-f", "completed"),
@@ -308,7 +326,7 @@ def test_detach_wins_over_a_later_foreground_settle(delivered) -> None:
     assert calls == ["detach"]
     # 等待线程随后结束：转后台已先到，结论必须改走后台回投。
     assert registry.settle_foreground("call-f") == "detached"
-    assert registry.complete("call-f", {}) is True
+    assert registry.complete("call-f", DeferredConclusion({})) is True
     assert delivered == [(1, "call-f", "terminal_command")]
 
 
@@ -341,7 +359,7 @@ def test_entries_list_live_first_then_bounded_history(delivered, monkeypatch) ->
     registry = DeferredRegistry()
     for index in range(3):
         _register(registry, f"call-{index}", 1, f"l{index}")
-        registry.complete(f"call-{index}", {})
+        registry.complete(f"call-{index}", DeferredConclusion({}))
     _register(registry, "call-live", 1, "live")
     views = registry.entries(1)
     assert [view.tool_call_id for view in views] == ["call-live", "call-1", "call-2"]
@@ -388,7 +406,7 @@ def test_snapshot_projection_matches_the_wire_contract(delivered) -> None:
 
     registry = DeferredRegistry()
     _register(registry, "call-a", 1, "terminal_command:t")
-    registry.complete("call-a", {})
+    registry.complete("call-a", DeferredConclusion({}))
     _register(registry, "call-b", 1, "child_task:2")
     entries = [project_background_task(view) for view in registry.entries(1)]
     validate_background_tasks(entries)

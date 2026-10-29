@@ -6,8 +6,7 @@ import { newTraceId, type TraceId } from "@/lib/trace";
  * 每会话一条的可写终端通道（WS `terminal-v2`，契约见 docs/plan/terminal-workbench-design.md 三.6）。
  *
  * 职责：首帧 attach、按 output seq 续传、断线退避重连、resync 时通知调用方清屏、发送 input /
- * resize / release_input。它不持有 xterm，也不判断租约归属（后端仲裁，被拒时收到
- * `input_rejected`）；会话列表与生命周期事实在 Transport snapshot，这里的 `exit` 只用于停止重连
+ * resize。它不持有 xterm；用户输入只在会话已结束或背压时被拒（收到 `input_rejected`）；会话列表与生命周期事实在 Transport snapshot，这里的 `exit` 只用于停止重连
  * 与禁用输入。断线只表示订阅中断，不会关闭会话。
  *
  * 帧里的 `generation` 在会话内固定（后端每个会话运行时生成一次），后端重启后旧会话不会以新
@@ -27,8 +26,8 @@ type TerminalServerFrame =
   | { type: "output"; seq: number; data_base64: string }
   | { type: "geometry"; rows: number; columns: number }
   | { type: "input_mark"; by: "agent" }
-  | { type: "input_rejected"; reason: "agent_input" | "session_ended" | "backpressure" }
-  /** 只标记流结束；终态、退出码与租约、交接一样由 snapshot `terminal_sessions` 投影。 */
+  | { type: "input_rejected"; reason: "session_ended" | "backpressure" }
+  /** 只标记流结束；终态、退出码与交接一样由 snapshot `terminal_sessions` 投影。 */
   | { type: "exit" }
   | { type: "resync_required"; first_available_seq?: number; next_seq?: number }
   /** `code` 与 HTTP 错误体同源的稳定码，按它分支；`message` 只用于日志。 */
@@ -122,10 +121,6 @@ export class TerminalConnection {
 
   sendResize(rows: number, cols: number): boolean {
     return this.send({ type: "resize", rows, cols });
-  }
-
-  releaseInput(): boolean {
-    return this.send({ type: "release_input" });
   }
 
   private send(frame: Record<string, unknown>): boolean {

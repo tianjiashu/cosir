@@ -33,7 +33,6 @@ describe("submitNewConversationMessage", () => {
     expect(JSON.parse(String(init.body))).toMatchObject({
       message: { role: "user", parts: [{ type: "text", text: "hello" }] },
       modelConfigId: 1,
-      delivery: "immediate",
     });
   });
 

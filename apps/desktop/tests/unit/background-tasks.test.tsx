@@ -3,18 +3,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 // 服务端渲染读 store 的初始状态；组件只经 useBackgroundTasks / useForegroundWaits 读，这里换成可控的表。
-const board = vi.hoisted(() => ({ entries: new Map<number, unknown[]>(), waits: new Map<number, string[]>() }));
+const board = vi.hoisted(() => ({ entries: new Map<number, unknown[]>(), waits: new Map<number, string[]>(), parts: new Map<string, unknown>() }));
 vi.mock("@/lib/task-overview/background-tasks-store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/task-overview/background-tasks-store")>(),
   useBackgroundTasks: (taskId: number | null) => (taskId === null ? [] : board.entries.get(taskId) ?? []),
   useForegroundWaits: (taskId: number | null) => (taskId === null ? [] : board.waits.get(taskId) ?? []),
+  useBackgroundTaskPart: (_taskId: number, toolCallId: string) => board.parts.get(toolCallId) ?? null,
 }));
 
 import { ForegroundWaitAction } from "@/components/assistant-ui/tools/foreground-wait-action";
 import { readToolArtifact } from "@/components/assistant-ui/tools/types";
 import { BackgroundTasksCard } from "@/components/task-overview/background-tasks-card";
 import { formatElapsed } from "@/components/task-overview/background-task-row";
-import type { BackgroundTaskEntry } from "@/lib/assistant/contract";
+import type { BackgroundTaskEntry, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/converter";
 import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
 import { backgroundToolCall } from "@/lib/assistant/task-commands";
@@ -34,10 +35,29 @@ function entry(toolCallId: string, overrides: Partial<BackgroundTaskEntry> = {})
   };
 }
 
+function terminalPart(toolCallId: string, overrides: Partial<TransportToolCallPart> = {}): TransportToolCallPart {
+  return {
+    type: "tool-call",
+    toolCallId,
+    toolName: "execute_terminal",
+    args: { command: "make watch" },
+    status: "pending",
+    presentation: { surface: "standalone", expandable: true, expand_layout: "terminal" },
+    display_data: { kind: "terminal-result", command: "make watch", workdir: "/work" },
+    deferred: true,
+    ...overrides,
+  };
+}
+
+function withParts(...parts: TransportToolCallPart[]) {
+  return transportState({ messages: [{ id: "m1", role: "assistant", runId: 1, outcome: null, parts }] as never });
+}
+
 beforeEach(() => {
-  useBackgroundTasksStore.setState({ tasks: {}, foregroundWaits: {} });
+  useBackgroundTasksStore.setState({ tasks: {}, foregroundWaits: {}, parts: {} });
   board.entries.clear();
   board.waits.clear();
+  board.parts.clear();
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -65,6 +85,13 @@ describe("snapshot background_tasks 与工具 part background", () => {
     expect(parseTransportState(snapshot)).toBe(snapshot);
     expect(() => parseTransportState(transportState({ foreground_waits: ["c1", "c1"] })))
       .toThrow(/foreground_waits\[1\]/);
+  });
+
+  it("converter 把 part 的 deferred 交给卡片，作为所有工具共用的「在后台」事实", () => {
+    const placeholder = toToolCallPart(terminalPart("c1"));
+    expect(readToolArtifact((placeholder as { artifact?: unknown }).artifact).deferred).toBe(true);
+    const foreground = toToolCallPart(terminalPart("c2", { deferred: undefined, status: "running" }));
+    expect(readToolArtifact((foreground as { artifact?: unknown }).artifact).deferred).toBe(false);
   });
 
   it("converter 用后端短提示说明后台占位的取消原因", () => {
@@ -104,13 +131,60 @@ describe("后台任务卡", () => {
 
   it("离开 Task 置空、删除 Task 丢弃桶", () => {
     const store = useBackgroundTasksStore.getState();
-    store.sync(1, { background_tasks: [entry("a")], foreground_waits: ["c1"] });
+    store.sync(1, { ...withParts(terminalPart("a")), background_tasks: [entry("a")], foreground_waits: ["c1"] });
     store.sync(1, null);
     expect(useBackgroundTasksStore.getState().tasks[1]).toBeNull();
     expect(useBackgroundTasksStore.getState().foregroundWaits[1]).toBeNull();
+    expect(useBackgroundTasksStore.getState().parts[1]).toBeNull();
     store.forget([1]);
     expect(1 in useBackgroundTasksStore.getState().tasks).toBe(false);
     expect(1 in useBackgroundTasksStore.getState().foregroundWaits).toBe(false);
+    expect(1 in useBackgroundTasksStore.getState().parts).toBe(false);
+  });
+
+  it("按条目 id 镜像同一个 snapshot 工具 part，part 未变时表的引用不变", () => {
+    const store = useBackgroundTasksStore.getState();
+    const part = terminalPart("a");
+    const first = { ...withParts(part, terminalPart("other")), background_tasks: [entry("a")] };
+    store.sync(1, first);
+    const parts = useBackgroundTasksStore.getState().parts[1];
+    expect(parts).toEqual({ a: part });
+    expect(parts?.a).toBe(part);
+
+    // 无关帧（新消息数组、同一 part 引用）不换表，订阅方不重渲染。
+    store.sync(1, { ...first, messages: [...first.messages] });
+    expect(useBackgroundTasksStore.getState().parts[1]).toBe(parts);
+
+    // part 变了（如输出追加）就换成新的 part。
+    const updated = { ...part, status: "completed" };
+    store.sync(1, { ...withParts(updated), background_tasks: [entry("a")] });
+    expect(useBackgroundTasksStore.getState().parts[1]?.a).toBe(updated);
+
+    // 那一轮已不在对话里：条目还在，part 缺失。
+    store.sync(1, { ...withParts(), background_tasks: [entry("a")] });
+    expect(useBackgroundTasksStore.getState().parts[1]).toEqual({});
+  });
+
+  it("展开即对话里的同一张卡片：运行中默认展开，停止只在外壳上", () => {
+    board.entries.set(1, [entry("a", { label: "terminal_command:make watch" })]);
+    board.parts.set("a", terminalPart("a"));
+    const html = renderToStaticMarkup(<BackgroundTasksCard taskId={1} />);
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('data-tool-call-id="a"');
+    expect(html).toContain("后台运行中");
+    expect(html).toContain("在对话中定位");
+    expect(html).not.toContain("停止终端命令");
+    expect(html).not.toContain("转到后台");
+  });
+
+  it("对应 part 不在对话里时只剩外壳，不可展开", () => {
+    board.entries.set(1, [entry("a")]);
+    const html = renderToStaticMarkup(<BackgroundTasksCard taskId={1} />);
+    const row = html.slice(html.indexOf('data-background-task="a"'));
+    expect(row).toContain("terminal_command:a");
+    expect(row).not.toContain('aria-expanded="');
+    expect(html).not.toContain("data-tool-call-id");
+    expect(html).not.toContain("在对话中定位");
   });
 });
 

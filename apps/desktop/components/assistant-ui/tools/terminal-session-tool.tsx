@@ -8,7 +8,6 @@ import {
 } from "lucide-react";
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { TerminalSessionEntry } from "@/lib/assistant/contract";
 import { submitToolDecision } from "@/lib/assistant/task-commands";
@@ -22,6 +21,7 @@ import { asRecord, readToolArtifact } from "./types";
 import { ToolStatus } from "./tool-status";
 import type { ToolPartRendererProps } from "./tool-renderer-registry";
 import { DisclosureRowStatic } from "../elements/disclosure-row.aui";
+import { TERMINAL_CARD_CLASS, TERMINAL_CARD_HEADER_CLASS } from "../elements/tool-layout-tokens";
 
 type TerminalSessionVariant = "start" | "list" | "read" | "write" | "handoff" | "close" | "unknown";
 type ActionVariant = Exclude<TerminalSessionVariant, "start" | "unknown">;
@@ -100,12 +100,13 @@ function actionMeta(variant: ActionVariant, data: Record<string, unknown>): stri
   return [lead, waitResultLabel(data.wait_result)].filter(Boolean).join(" · ") || (variant === "write" ? "已输入" : "读取输出");
 }
 
+/** 动作行与其他低噪音工具行一样用弱化图标；只有交接需要用户动手，用强调色。 */
 function actionIcon(variant: ActionVariant): ReactNode {
-  if (variant === "list") return <TerminalIcon className="text-info size-4" aria-hidden="true" />;
-  if (variant === "read") return <ArrowDownIcon className="text-info size-4" aria-hidden="true" />;
-  if (variant === "write") return <ArrowUpIcon className="text-info size-4" aria-hidden="true" />;
+  if (variant === "list") return <TerminalIcon className="size-4" aria-hidden="true" />;
+  if (variant === "read") return <ArrowDownIcon className="size-4" aria-hidden="true" />;
+  if (variant === "write") return <ArrowUpIcon className="size-4" aria-hidden="true" />;
   if (variant === "handoff") return <KeyboardIcon className="text-info size-4" aria-hidden="true" />;
-  return <XIcon className="text-muted-foreground size-4" aria-hidden="true" />;
+  return <XIcon className="size-4" aria-hidden="true" />;
 }
 
 /**
@@ -134,40 +135,45 @@ function TerminalSessionStartCard({ artifact, taskId, interactive }: {
   const status = live ? terminalStatusPresentation(live.status) : null;
   const canReveal = interactive && sessionId !== undefined && live !== null;
   const reveal = canReveal ? () => useTerminalWorkbenchStore.getState().reveal(taskId, sessionId) : undefined;
+  const cwd = text(data.initial_cwd);
 
+  // 与 execute_terminal 共用终端卡片外壳与表头几何，两者一眼可辨为同一族；会话卡不可折叠，
+  // 正文只有一行 shell 与工作目录。
   return (
-    <div className="terminal-surface border-info/30 flex min-w-0 flex-col gap-2 rounded-xl border px-3 py-2 shadow-sm">
-      <div className="flex min-w-0 items-center gap-2">
-        <TerminalIcon className="text-info size-4 shrink-0" aria-hidden="true" />
-        <span className="font-medium">{text(data.label) ?? "终端会话"}</span>
-        <Badge tone="info" variant="outline" shape="tag" size="sm" className="bg-info/10 font-mono tracking-wide uppercase">
-          session
-        </Badge>
-        <ToolStatus status={artifact.backendStatus} className="ml-auto shrink-0" />
-      </div>
-      <div className="text-muted-foreground flex min-w-0 items-center gap-2 pl-6 text-xs">
-        <code className="text-foreground/80 shrink-0">{text(data.shell_kind) ?? "默认 Shell"}</code>
-        <span aria-hidden="true">·</span>
-        <code className="min-w-0 truncate" title={text(data.initial_cwd) ?? undefined}>{text(data.initial_cwd) ?? "工作目录未知"}</code>
-        {sessionId && (
-          <span className={cn("shrink-0", status?.text ?? "text-muted-foreground")}>· {status?.label ?? "已失效"}</span>
-        )}
-      </div>
-      {interactive && sessionId && (
-        <div className="flex items-center justify-between gap-2 pl-6">
+    <div className={TERMINAL_CARD_CLASS}>
+      <div className={TERMINAL_CARD_HEADER_CLASS}>
+        <DisclosureRowStatic
+          tone="terminal"
+          className="w-auto min-w-0 flex-1 bg-transparent px-3 hover:bg-transparent"
+          leading={<SquareTerminalIcon className="text-info size-4" aria-hidden="true" />}
+          label={<span className="text-sm font-medium">{text(data.label) ?? "终端会话"}</span>}
+          meta={sessionId ? (
+            <span className={cn("inline-flex items-center gap-1.5", status?.text ?? "text-muted-foreground")}>
+              <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
+              {status?.label ?? "已失效"}
+            </span>
+          ) : undefined}
+          trailing={<ToolStatus status={artifact.backendStatus} />}
+        />
+        {interactive && sessionId && (
           <Button
             type="button"
-            variant="secondary"
-            size="sm"
+            variant="ghost"
+            size="xs"
             disabled={reveal === undefined}
-            className="bg-info/10 text-info hover:bg-info/20 h-7 shrink-0 px-2.5"
+            className="text-info hover:bg-info/10 hover:text-info shrink-0"
             onClick={reveal}
           >
             在终端中查看
           </Button>
-        </div>
-      )}
-      {artifact.error && <div className="text-destructive pl-6 text-xs">{artifact.error}</div>}
+        )}
+      </div>
+      <div className="bg-terminal-inset text-muted-foreground flex min-w-0 items-center gap-2 border-t px-3 py-1.5 font-mono text-2xs">
+        <span className="text-foreground/80 shrink-0">{text(data.shell_kind) ?? "默认 Shell"}</span>
+        <span aria-hidden="true">·</span>
+        <span className="min-w-0 truncate" title={cwd}>{cwd ?? "工作目录未知"}</span>
+      </div>
+      {artifact.error && <div className="text-destructive border-t px-3 py-1.5 text-xs">{artifact.error}</div>}
     </div>
   );
 }

@@ -13,7 +13,7 @@ from app.service.attachment.image_normalizer import (
     normalize_image,
 )
 from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
-from tests.transport_fixtures import consumed, queue_user_input
+from tests.transport_fixtures import consumed
 
 
 def test_normalize_rejects_unsupported_bmp(tmp_path: Path) -> None:
@@ -73,12 +73,10 @@ def test_run_initialized_has_no_messages_and_input_event_projects_image() -> Non
     assert snapshot["messages"] == []
 
     image_part = {"type": "image", "image": "cosir-attachment://" + "1" * 64}
-    queue_user_input(
-        snapshot,
-        1,
-        UserInputPresentation(display_text="", image_paths=[f"attachments/{'1' * 64}.png"]),
+    presentation = UserInputPresentation(
+        display_text="", image_paths=[f"attachments/{'1' * 64}.png"]
     )
-    snapshot = _apply_planned(consumed(1, 1, 1), snapshot)
+    snapshot = _apply_planned(consumed(1, 1, 1, presentation), snapshot)
     user_message, assistant_message = snapshot["messages"]
     assert user_message["role"] == "user"
     assert user_message["parts"] == [image_part]

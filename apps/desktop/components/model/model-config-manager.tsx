@@ -20,7 +20,7 @@ import {
   type ModelConfig,
   type ModelConfigTestInput,
 } from "@/lib/api/model-configs";
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
@@ -221,15 +221,10 @@ export function ModelConfigManager({
   }
 
   async function remove(config: ModelConfig) {
-    await requestConfirmation({
-      title: "删除模型配置？",
-      description: `确定删除模型配置「${config.config_name}」吗？使用该配置的对话将无法继续选择它。`,
-      confirmLabel: "删除",
-      busyLabel: "正在删除…",
-      tone: "destructive",
-      icon: "delete",
+    await confirmDelete({
+      target: `模型配置「${config.config_name}」`,
+      consequence: "使用该配置的对话将无法继续选择它。",
       action: () => deleteMutation.mutateAsync(config.config_id),
-      failureFallback: "删除失败，请重试",
     });
   }
 

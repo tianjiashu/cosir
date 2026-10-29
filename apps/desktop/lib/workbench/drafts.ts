@@ -1,4 +1,4 @@
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { confirmDiscard } from "@/lib/confirm/confirm-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { useWorkbenchStore } from "./store";
 import type { WorkbenchTab } from "./types";
@@ -16,12 +16,10 @@ function isWorkbenchDraftDirty(tab: WorkbenchTab): boolean {
  */
 export async function confirmCloseWorkbenchDraft(tab: WorkbenchTab): Promise<boolean> {
   if (!isWorkbenchDraftDirty(tab)) return true;
-  return requestConfirmation({
+  return confirmDiscard({
     title: "关闭配置草稿？",
     description: `「${tab.title}」尚未保存，关闭后修改会丢失。`,
     confirmLabel: "放弃并关闭",
-    tone: "destructive",
-    icon: "discard",
   });
 }
 
@@ -35,12 +33,10 @@ export async function confirmWorkbenchWorkspaceChange(nextWorkspaceId: number | 
   if (workspaceId === nextWorkspaceId) return true;
   const dirty = tabs.filter(isWorkbenchDraftDirty);
   if (dirty.length === 0) return true;
-  const confirmed = await requestConfirmation({
+  const confirmed = await confirmDiscard({
     title: "切换工作区并放弃草稿？",
     description: `以下配置草稿尚未保存：${dirty.map(tab => `「${tab.title}」`).join("、")}。切换后这些修改会丢失。`,
     confirmLabel: "放弃草稿并切换",
-    tone: "destructive",
-    icon: "discard",
   });
   void frontendLog("INFO", "workbench_workspace_change_confirmed", "工作台工作区切换确认结束", {
     data: { workspaceId, nextWorkspaceId, confirmed, draftCount: dirty.length },

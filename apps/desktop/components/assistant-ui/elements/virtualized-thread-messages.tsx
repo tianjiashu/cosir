@@ -7,6 +7,7 @@ import {
 } from "@assistant-ui/react";
 import { memo, useCallback, useMemo, type FC, type RefObject } from "react";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
+import { queuedMessageIdsKey } from "@/lib/assistant/transport-state-operations";
 import { VirtualizedThreadMessageRow, type MessageComponents } from "@/components/assistant-ui/elements/virtualized-thread-message-row";
 
 type VirtualizedThreadMessagesProps = {
@@ -17,6 +18,7 @@ type VirtualizedThreadMessagesProps = {
 
 /**
  * 按消息 id 定位的对话虚拟列表；不负责消息内容状态维护。
+ * 排队消息不在消息流里（由输入框上方的队列区渲染），这里滤掉。
  * 运行中始终保留末尾两条消息（本轮用户输入与正在输出的回复）挂载，避免流式增长时被移出可见区后丢失测量。
  */
 export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = memo(function VirtualizedThreadMessages({
@@ -24,14 +26,19 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = mem
   components,
   performanceProbe = null,
 }) {
-  const messageIds = unstable_useThreadMessageIds();
-  const activeMessageIds = useAuiState((state) => state.thread.isRunning
-    ? state.thread.messages.slice(-2).map((message) => message.id).join("|")
-    : "");
-  const activeIndexes = useMemo(
-    () => activeMessageIds.split("|").map((id) => messageIds.indexOf(id)).filter((index) => index >= 0),
-    [activeMessageIds, messageIds],
-  );
+  const threadMessageIds = unstable_useThreadMessageIds();
+  const queuedIdsKey = useAuiState((state) => queuedMessageIdsKey(state.thread.state));
+  const messageIds = useMemo(() => {
+    if (!queuedIdsKey) return threadMessageIds;
+    const queued = new Set(queuedIdsKey.split("|"));
+    return threadMessageIds.filter((id) => !queued.has(id));
+  }, [queuedIdsKey, threadMessageIds]);
+  const isRunning = useAuiState((state) => state.thread.isRunning);
+  const activeIndexes = useMemo(() => {
+    if (!isRunning) return [];
+    const last = messageIds.length - 1;
+    return [last - 1, last].filter((index) => index >= 0);
+  }, [isRunning, messageIds]);
   const virtualizer = useVirtualizer({
     count: messageIds.length,
     getScrollElement: () => scrollElementRef.current,

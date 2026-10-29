@@ -1,7 +1,7 @@
 """每会话可写交互通道（WebSocket ``terminal-v2``）。
 
-一个 xterm 实例对应一条连接：首帧 ``attach`` 后服务端先重放输出、再推送实时输出与租约 / 交接 /
-尺寸 / 输入标记 / 退出帧；客户端可发送 ``input`` / ``resize`` / ``release_input``（交还交接走 HTTP 决定入口）。
+一个 xterm 实例对应一条连接：首帧 ``attach`` 后服务端先重放输出、再推送实时输出与尺寸 / 输入标记 /
+退出帧；客户端可发送 ``input`` / ``resize``（交还交接走 HTTP 决定入口）。
 连接建立时按 Task 归属取到会话 runtime，之后输入直接调用它（只做内存更新与非阻塞入队），输出由订阅的
 ``asyncio.Queue`` 推送，
 全程没有线程池轮询。断开连接只移除订阅，不关闭会话、不取消 Run。
@@ -34,7 +34,6 @@ from app.tools.terminal_runtime.stream import (
 )
 
 _PROTOCOL_ERROR_CODE = "TERMINAL_STREAM_PROTOCOL_ERROR"
-_REJECT_REASONS = {"rejected_agent_input": "agent_input", "session_ended": "session_ended"}
 
 
 @app.websocket("/tasks/{task_id}/terminal/sessions/{session_id}/stream")
@@ -164,15 +163,12 @@ async def _handle_client_frame(
             except TerminalWorkerBackpressureError:
                 await send({**identity, "type": "input_rejected", "reason": "backpressure"})
                 return
-            if result != "accepted":
-                await send({**identity, "type": "input_rejected", "reason": _REJECT_REASONS[result]})
+            if result == "session_ended":
+                await send({**identity, "type": "input_rejected", "reason": "session_ended"})
         elif kind == "resize":
             _require_keys(frame, {"rows", "cols"})
             rows, cols = _bounded_int(frame["rows"], 2, 500), _bounded_int(frame["cols"], 10, 1000)
             runtime.resize(rows, cols)
-        elif kind == "release_input":
-            _require_keys(frame, set())
-            runtime.release_user_input()
         else:
             raise ValueError(f"unsupported terminal control frame: {kind!r}")
     except TerminalWorkerBackpressureError:

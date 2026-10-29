@@ -1,6 +1,6 @@
 """延迟结果的作业抽象：工具把耗时工作包装成作业，编排交给 ``run_deferred``。
 
-设计见 ``docs/plan/background-tool-result-design.md``「作业与统一执行入口」。作业由执行单元持有（终端
+设计见 ``docs/plan/deferred-tool-result-design.md``「作业与统一执行入口」。作业由执行单元持有（终端
 会话、子 Task 的 actor 等），只承诺两件事：结论到达时回调恰好一次，以及可以被撤销。登记、前台 /
 后台、转到后台、回投与占位都不归作业管——那是 ``run_deferred`` 的职责。
 
@@ -18,7 +18,22 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, cast
 
-JobCallback = Callable[[dict[str, object]], None]
+
+@dataclass(frozen=True)
+class DeferredConclusion:
+    """作业的结论：给模型的 ``result`` 与可选的卡片终态 ``display_data``。
+
+    两者分开是因为受众不同：``result`` 以 ``background_result`` 回投给模型（会过输出预算），
+    ``display_data`` 只在结论并入时写回后台占位卡片（UI 展示契约，不进模型、不截断）。结论只走一条
+    路径（作业 → 路由 → 登记表 → 消息），所以卡片数据随结论一起走，不另开通道。没有卡片终态的作业
+    （子 Agent：卡片跟随子 Task）留 ``None``，占位沿用原展示数据。
+    """
+
+    result: dict[str, object]
+    display_data: dict[str, object] | None = None
+
+
+JobCallback = Callable[[DeferredConclusion], None]
 
 # 占位原因：``background`` 一开始就在后台执行；``detached`` 用户把前台等待转走；``limit`` 前台等待
 # 到达工具声明的上限、自动转后台。是否挂起 Agent 由工具按原因决定（见各工具的占位渲染）。
@@ -49,7 +64,7 @@ class DeferredOutcome:
     占位时必须标记 ``background``，卡片状态以占位行为准。
     """
 
-    result: dict[str, object] | None = None
+    result: DeferredConclusion | None = None
     placeholder: PlaceholderReason | None = None
 
 
@@ -58,7 +73,7 @@ class _OnceCallbacks:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._result: dict[str, object] | None = None
+        self._result: DeferredConclusion | None = None
         self._callbacks: list[JobCallback] = []
         self._done = False
 
@@ -67,10 +82,10 @@ class _OnceCallbacks:
             if not self._done:
                 self._callbacks.append(callback)
                 return
-            result = cast(dict[str, object], self._result)
+            result = cast(DeferredConclusion, self._result)
         callback(result)
 
-    def finish(self, result: dict[str, object]) -> bool:
+    def finish(self, result: DeferredConclusion) -> bool:
         """交付结论；已交付过返回 False（迟到的第二个结论丢弃）。"""
         with self._lock:
             if self._done:
@@ -91,7 +106,7 @@ class ThreadJob(DeferredJob):
 
     def __init__(
         self,
-        work: Callable[[Callable[[], bool]], dict[str, object]],
+        work: Callable[[Callable[[], bool]], DeferredConclusion],
         *,
         wake: Callable[[], None],
         name: str,
@@ -101,7 +116,7 @@ class ThreadJob(DeferredJob):
         self._wake = wake
         threading.Thread(target=self._run, args=(work,), name=name, daemon=True).start()
 
-    def _run(self, work: Callable[[Callable[[], bool]], dict[str, object]]) -> None:
+    def _run(self, work: Callable[[Callable[[], bool]], DeferredConclusion]) -> None:
         self._callbacks.finish(work(self._cancelled.is_set))
 
     def on_done(self, callback: JobCallback) -> None:
@@ -120,13 +135,13 @@ class ManualJob(DeferredJob):
     """
 
     def __init__(
-        self, *, on_cancel: Callable[[], None], cancelled_result: dict[str, object]
+        self, *, on_cancel: Callable[[], None], cancelled_result: DeferredConclusion
     ) -> None:
         self._callbacks = _OnceCallbacks()
         self._on_cancel = on_cancel
         self._cancelled_result = cancelled_result
 
-    def finish(self, result: dict[str, object]) -> bool:
+    def finish(self, result: DeferredConclusion) -> bool:
         return self._callbacks.finish(result)
 
     def on_done(self, callback: JobCallback) -> None:

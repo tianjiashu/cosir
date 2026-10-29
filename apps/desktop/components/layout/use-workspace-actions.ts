@@ -7,7 +7,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import { deleteTask, deleteWorkspace, forkTask, type StartedConversation } from "@/lib/api/workspaces";
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -18,7 +18,8 @@ import { useWorkbenchStore } from "@/lib/workbench/store";
 
 export type DeleteTarget =
   | { kind: "workspace"; id: number; label: string; taskCount: number }
-  | { kind: "task"; id: number; label: string };
+  /** `forkCount` 只用于询问是否一起删除；删哪些以后端为准（它重新收集 fork 后代）。 */
+  | { kind: "task"; id: number; label: string; forkCount: number };
 
 /**
  * 工作区 / 任务的用户动作：开始对话、分叉、删除。
@@ -94,41 +95,50 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
   /**
    * 删除工作区或任务：确认框托管 busy 与失败提示（失败时保持打开可重试）。
    * 删除成功后才关闭工作台标签、离开已删除的当前页并刷新侧栏。
+   *
+   * 任务有 fork 后代时，确认框多一个「一起删除」：主操作仍是只删这一个（它的 fork 改挂到上一级），
+   * 因为它是两者里更可挽回的那个。删掉了哪些 Task 以后端返回为准，前端只用 `forkCount` 询问。
    */
   const requestDelete = useCallback(async (target: DeleteTarget) => {
     const deletingCurrentWorkspace = target.kind === "workspace" && (
       selectedWorkspaceId === target.id
       || workspaces.some((workspace) => workspace.workspace_id === target.id && workspace.tasks.some((task) => task.task_id === focusedTaskId))
     );
-    const confirmed = await requestConfirmation({
-      title: target.kind === "workspace" ? `删除工作区“${target.label}”？` : `删除任务“${target.label}”？`,
-      description: target.kind === "workspace"
-        ? `此操作将永久删除该工作区及其下的 ${target.taskCount} 个任务和全部对话数据。`
-        : "此操作将永久删除该任务及其全部对话数据，不影响所属工作区和其他任务。",
-      warning: "删除后无法撤销。",
-      confirmLabel: "确认删除",
-      busyLabel: "删除中…",
-      tone: "destructive",
-      icon: "delete",
-      failureFallback: "删除失败，请重试",
-      action: async () => {
-        try {
-          if (target.kind === "workspace") await deleteWorkspace(target.id);
-          else await deleteTask(target.id);
-        } catch (cause) {
-          void frontendLog("ERROR", "workspace_resource_delete_failed", "删除工作区资源失败", {
-            data: { kind: target.kind, id: target.id },
-            error: cause,
-          });
-          throw cause;
+    let deletedTaskIds: number[] = [];
+    let deletedWithForks = false;
+    const run = async (withForks: boolean) => {
+      try {
+        if (target.kind === "workspace") {
+          await deleteWorkspace(target.id);
+          deletedTaskIds = workspaces.find((workspace) => workspace.workspace_id === target.id)?.tasks.map((task) => task.task_id) ?? [];
+        } else {
+          deletedTaskIds = (await deleteTask(target.id, { withForks })).deleted_task_ids;
+          deletedWithForks = withForks;
         }
-      },
+      } catch (cause) {
+        void frontendLog("ERROR", "workspace_resource_delete_failed", "删除工作区资源失败", {
+          data: { kind: target.kind, id: target.id, withForks },
+          error: cause,
+        });
+        throw cause;
+      }
+    };
+    const forkCount = target.kind === "task" ? target.forkCount : 0;
+    const confirmed = await confirmDelete({
+      target: target.kind === "workspace" ? `工作区「${target.label}」` : `任务「${target.label}」`,
+      consequence: target.kind === "workspace"
+        ? `将删除该工作区及其下的 ${target.taskCount} 个任务和全部对话数据。`
+        : forkCount > 0
+          ? `这个任务有 ${forkCount} 个 fork 出来的任务。只删除这个时，它们会提升一级保留下来；也可以一起删除。`
+          : "将删除该任务及其全部对话数据，不影响所属工作区和其他任务。",
+      confirmLabel: forkCount > 0 ? "只删除这个" : "删除",
+      action: () => run(false),
+      alternative: forkCount > 0
+        ? { label: `一起删除 ${forkCount + 1} 个任务`, action: () => run(true) }
+        : undefined,
     });
     if (!confirmed) return;
     // 终端工作台与后台工作看板按 taskId 分桶的 UI 状态随 Task 删除一并丢弃（后端已清理对应事实）。
-    const deletedTaskIds = target.kind === "task"
-      ? [target.id]
-      : workspaces.find((workspace) => workspace.workspace_id === target.id)?.tasks.map((task) => task.task_id) ?? [];
     useTerminalWorkbenchStore.getState().forget(deletedTaskIds);
     useBackgroundTasksStore.getState().forget(deletedTaskIds);
     if (target.kind === "workspace") {
@@ -138,10 +148,10 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
         selectWorkspace(null);
         navigate("/");
       }
-    } else if (focusedTaskId === target.id) {
+    } else if (focusedTaskId !== null && deletedTaskIds.includes(focusedTaskId)) {
       navigate("/");
     }
-    notify.success(target.kind === "workspace" ? "工作区已删除" : "任务已删除");
+    notify.success(target.kind === "workspace" ? "工作区已删除" : deletedWithForks ? `已删除 ${forkCount + 1} 个任务` : "任务已删除");
     await load();
   }, [closeWorkspaceTabs, focusedTaskId, load, navigate, selectWorkspace, selectedWorkspaceId, workspaces]);
 

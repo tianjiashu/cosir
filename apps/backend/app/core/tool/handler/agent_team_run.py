@@ -17,6 +17,7 @@ from app.core.tool.handler.agent_team.agent_team_result import team_result_paylo
 from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
 from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
+from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
@@ -279,9 +280,23 @@ class AgentTeamRunTool(HandlerBase):
         final = get_agent_team_coordinator().start(
             confirmed, cast(asyncio.AbstractEventLoop, execution_context.event_loop)
         )
-        observation = tool_success(
-            self.name, json.dumps(team_result_payload(final), ensure_ascii=False)
-        )
+        payload = json.dumps(team_result_payload(final), ensure_ascii=False)
+        if (
+                final.status == AgentTeamRunStatus.CANCELLED.value
+                and final.end_reason == AgentTeamRunEndReason.CANCELLED.value
+        ):
+            # 用户单独停止了这次调用（Coordinator 读到工具级取消信号后以 CANCELLED 落定）：主 Run
+            # 照常继续，按取消而不是成功返回，卡片投影为 cancelled，模型也不会把它当失败重提方案。
+            # 主 Task 停止（PARENT_CANCELLED）不走这里：整个 Run 都在停，结果无人读取。
+            observation = tool_cancelled(
+                self.name,
+                execution_context.tool_call_id,
+                "the user stopped this Agent Team run. Outputs of nodes that finished are in the "
+                "run history below. Do not submit the plan again on your own; ask the user how "
+                f"to proceed. {payload}",
+            )
+        else:
+            observation = tool_success(self.name, payload)
         observation.team_run_id = row.id
         return observation
 

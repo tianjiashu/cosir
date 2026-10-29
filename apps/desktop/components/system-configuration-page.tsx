@@ -76,7 +76,7 @@ import {
   updateMainAgentPromptConfiguration,
 } from "@/lib/api/configuration";
 import type { MarkdownConfigurationAdapter } from "@/hooks/use-markdown-configuration-document";
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import type { RequestOptions } from "@/lib/http/client";
@@ -401,14 +401,9 @@ export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: {
   const toolGroups = toolGroupsQuery.data?.groups;
 
   const removeAgent = async (agent: AgentConfiguration) => {
-    const removed = await requestConfirmation({
-      title: `删除子 Agent「${agent.agent_id}」？`,
-      description: "将删除该子 Agent 的配置文件，此操作无法撤销。",
-      confirmLabel: "删除",
-      busyLabel: "正在删除…",
-      tone: "destructive",
-      icon: "delete",
-      failureFallback: "删除失败，请重试",
+    const removed = await confirmDelete({
+      target: `子 Agent「${agent.agent_id}」`,
+      consequence: "将删除该子 Agent 的配置文件。",
       action: async () => {
         try {
           await api.remove(agent.agent_id);

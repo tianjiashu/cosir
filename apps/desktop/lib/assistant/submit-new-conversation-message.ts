@@ -50,7 +50,7 @@ export function wasCommandPossiblyAccepted(error: unknown): boolean {
  *
  * 本函数只负责附件预上传与请求序列化，不拥有 React 页面状态，也不订阅输出；调用方在成功返回后
  * 负责导航，在异常时按 `wasCommandPossiblyAccepted` 决定是否清理 provisional Task。新 Task 没有
- * 活动 Run，后端必然新开 Run，`delivery` 不起作用。异常语义：
+ * 活动 Run，后端必然立即新开 Run。异常语义：
  * - 上传失败 / 附件失效：原样抛出（HttpError、TimeoutError、UserFacingError），请求未发出。
  * - HTTP 非 2xx：抛 HttpError（含后端结构化原因），后端明确拒绝。
  * - 其余失败：抛 NewConversationDeliveryUnknownError。
@@ -82,7 +82,6 @@ export async function submitNewConversationMessage(
       modelConfigId: input.modelConfigId,
       reasoningEffort: input.reasoningEffort,
       disabledToolGroups: [...input.disabledToolGroups],
-      delivery: "immediate",
     }, { traceId: input.traceId });
   } catch (error) {
     if (error instanceof HttpError) throw error;

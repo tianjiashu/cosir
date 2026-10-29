@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { WorkspaceTask } from "@/lib/api/workspaces";
-import { buildTaskForest } from "@/components/task-tree/task-tree-model";
+import { buildTaskForest, forkDescendantIds } from "@/components/task-tree/task-tree-model";
 
 function task(taskId: number, title: string, options: Partial<WorkspaceTask> = {}): WorkspaceTask {
   return {
@@ -68,5 +68,13 @@ describe("task tree title", () => {
   it("keeps long titles intact; the sidebar ellipsizes them by width", () => {
     const longTitle = "长标题".repeat(30);
     expect(fullTitle(longTitle)).toBe(longTitle);
+  });
+});
+
+describe("forkDescendantIds", () => {
+  it("collects forks of forks but not the node itself", () => {
+    const [root] = buildTaskForest([task(1, "源任务"), fork(2, 1), fork(3, 2), fork(4, 1)]);
+    expect(forkDescendantIds(root).sort()).toEqual([2, 3, 4]);
+    expect(forkDescendantIds(root.children[0])).toEqual([3]);
   });
 });

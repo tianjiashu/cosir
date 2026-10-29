@@ -144,7 +144,7 @@ class TerminalStreamBuffer:
     def publish(self, event_type: str, **fields: object) -> None:
         """推送尺寸、输入标记等与画面绑定的帧，和输出同通道保证顺序。
 
-        输入租约、交接、退出码属于会话事实，只经 snapshot ``terminal_sessions`` 投影，不在 WS 上
+        交接、退出码属于会话事实，只经 snapshot ``terminal_sessions`` 投影，不在 WS 上
         重复推送：两条通道之间没有顺序保证，双推会让前端合并出过期值。
         """
         event = {**self._identity, "type": event_type, **fields}

@@ -13,7 +13,7 @@ import {
   TransportFrameStore,
   type FrameStoreItem,
 } from "@/lib/assistant/transport-frame-store";
-import { readEditIntent, type UserAddMessageCommand } from "@/lib/assistant/converter";
+import type { UserAddMessageCommand } from "@/lib/assistant/converter";
 import { cancelTask } from "@/lib/assistant/task-commands";
 import { TaskTransportSession, type TransportDisconnect } from "@/lib/assistant/task-transport-session";
 import type { TraceId } from "@/lib/trace";
@@ -27,11 +27,10 @@ export type TaskAssistantTransportOptions = {
   traceId: TraceId;
   /**
    * 提交一条用户消息（`sourceId` 存在即编辑）。宿主负责请求体组装与端点选择；后端处理完这一轮
-   * 才返回，被拒时抛错（乐观消息随即收回），输出经长订阅到达。返回 `awaitSnapshot`：为真时乐观
-   * 消息保留到 snapshot 里出现对应消息才清除；编辑排队消息原地更新、不产生新消息，返回 false 即清。
-   * 只读 runtime 不提供。
+   * 才返回，被拒时抛错（乐观消息随即收回），输出经长订阅到达；乐观消息保留到 snapshot 里出现
+   * 对应消息才清除。只读 runtime 不提供。
    */
-  submitMessage?: (command: UserAddMessageCommand) => Promise<{ awaitSnapshot: boolean }>;
+  submitMessage?: (command: UserAddMessageCommand) => Promise<void>;
   /** 长订阅建立（attach 2xx）。 */
   onResponse?: (response: Response) => void;
   /** 一轮输出结束：当前活动从活动态进入终态（含重连 full 帧补发）；挂起不算。 */
@@ -211,12 +210,10 @@ export function toAddMessageCommand(message: AppendMessage): UserAddMessageComma
     }
   }
 
-  const editIntent = message.sourceId ? readEditIntent(message.runConfig) : undefined;
   return {
     type: "add-message",
     sourceId: message.sourceId,
     parentId: message.parentId,
-    ...(editIntent ? { editIntent } : {}),
     message: { role: "user", parts },
   };
 }

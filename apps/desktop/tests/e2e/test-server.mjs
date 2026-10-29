@@ -63,7 +63,6 @@ function resetTestState() {
   executors.clear();
   for (const sessions of terminalSessions.values()) {
     for (const session of sessions) {
-      clearTimeout(session.leaseTimer);
       for (const socket of session.sockets) socket.terminate();
     }
   }
@@ -473,7 +472,7 @@ function commandText(body) {
 
 /**
  * 模拟 POST /tasks/{id}/messages 与 /messages/{messageId}/rerun：受理即 200 `{}`，本轮输出由模拟
- * 执行者推给 Task 长订阅；与生产「命令同步受理 + 常驻订阅」的语义一致。运行中发送（immediate）也开新一轮，
+ * 执行者推给 Task 长订阅；与生产「命令同步受理 + 常驻订阅」的语义一致。运行中发送（生产里排队）也开新一轮，
  * 测试只关心命令与订阅的边界。
  */
 function handleMessage(res, body, taskId, sourceId) {
@@ -591,7 +590,12 @@ function handleAttach(res, taskId) {
 }
 
 /** 编辑排队消息：原地改正文，消息已并入时 409 MESSAGE_CONSUMED。 */
-function handleQueuedEdit(res, body, taskId, messageId) {
+/**
+ * 模拟排队消息的立即发送与删除（编辑也走删除）：与后端一致，立即发送撤回原条目、以新身份按
+ * `immediate` 重新入队；删除只撤回。条目已不在队列时 409 `MESSAGE_CONSUMED`。本测试服务不模拟随后的并入。
+ */
+function handleQueuedWithdraw(res, taskId, messageId, sendNow) {
+  telemetry.requestBodies.push({ taskId, queuedMessageId: messageId, operation: sendNow ? "send_now" : "delete" });
   const state = states.get(taskId);
   const queued = state?.queued_messages?.find((message) => message.id === messageId);
   if (!queued) {
@@ -599,7 +603,8 @@ function handleQueuedEdit(res, body, taskId, messageId) {
     return;
   }
   const next = structuredClone(state);
-  next.queued_messages.find((message) => message.id === messageId).parts = body.message.parts;
+  next.queued_messages = next.queued_messages.filter((message) => message.id !== messageId);
+  if (sendNow) next.queued_messages.push({ ...queued, id: `${messageId}-now`, delivery: "immediate" });
   jsonResponse(res, 200, {});
   commit(taskId, next);
 }
@@ -628,8 +633,6 @@ function createTerminalSession(taskId, shell) {
       endReason: null,
       exitCode: null,
       integration: "ready",
-      inputHolder: null,
-      agentInputCallId: null,
       commandRunning: false,
       handoff: null,
       createdAt: new Date().toISOString(),
@@ -642,12 +645,6 @@ function createTerminalSession(taskId, shell) {
   terminalSessions.set(taskId, [...(terminalSessions.get(taskId) ?? []), session]);
   appendTerminalOutput(session, `${sessionId} $ `);
   return session;
-}
-
-function setTerminalHolder(session, holder) {
-  if (session.entry.inputHolder === holder) return;
-  session.entry.inputHolder = holder;
-  if (states.has(session.taskId)) commit(session.taskId, states.get(session.taskId));
 }
 
 function findTerminalSession(taskId, sessionId) {
@@ -691,10 +688,6 @@ function handleTerminalSocket(socket, session) {
       return;
     }
     if (frame.type === "input") {
-      // 最小租约模拟：人工输入即持有，短暂空闲后释放（真实后端为 3 秒）；与后端一致只经 snapshot 投影。
-      clearTimeout(session.leaseTimer);
-      setTerminalHolder(session, "user");
-      session.leaseTimer = setTimeout(() => setTerminalHolder(session, null), 300);
       const text = Buffer.from(frame.data_base64, "base64").toString("utf8");
       appendTerminalOutput(session, text.replace(/\r/g, `\r\n${session.entry.sessionId} $ `));
     } else if (frame.type === "resize") {
@@ -759,7 +752,7 @@ const server = createServer(async (req, res) => {
     // Task 删除结束它的长订阅。
     for (const subscriber of subscribers.get(taskId) ?? []) subscriber.end();
     subscribers.delete(taskId);
-    jsonResponse(res, 200, { task_id: taskId, deleted: true });
+    jsonResponse(res, 200, { task_id: taskId, deleted: true, deleted_task_ids: [taskId] });
     return;
   }
   if (req.method === "GET" && url.pathname === "/model-configs") {
@@ -903,23 +896,13 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, {});
     return;
   }
-  // 模拟 Agent 的 terminal_write 正在前台等待：会话由 Agent 持有输入（等待只在前台，不进登记表）。
-  if (req.method === "POST" && url.pathname === "/__test__/terminal/agent-input") {
-    const body = await readJson(req);
-    const session = findTerminalSession(body.taskId, body.sessionId);
-    session.entry = { ...session.entry, inputHolder: "agent", agentInputCallId: body.toolCallId };
-    if (states.has(body.taskId)) commit(body.taskId, states.get(body.taskId));
-    jsonResponse(res, 200, {});
-    return;
-  }
   // 模拟 shell 自己退出（含非 0 退出码）：会话进入 exited，连接收到 exit 帧。
   if (req.method === "POST" && url.pathname === "/__test__/terminal/exit") {
     const body = await readJson(req);
     const session = findTerminalSession(body.taskId, body.sessionId);
-    clearTimeout(session.leaseTimer);
     session.entry = {
       ...session.entry, status: "exited", endReason: "shell_exited", exitCode: body.exitCode,
-      inputHolder: null, agentInputCallId: null, commandRunning: false,
+      commandRunning: false,
     };
     for (const socket of session.sockets) socket.send(terminalFrame(session, { type: "exit" }));
     if (states.has(body.taskId)) commit(body.taskId, states.get(body.taskId));
@@ -1003,17 +986,6 @@ const server = createServer(async (req, res) => {
     const entries = backgroundTasks.get(taskId) ?? [];
     const waits = foregroundWaits.get(taskId) ?? [];
     const detach = deferredRoute[3] === "background";
-    // 与后端一致：取消 Agent 正在等待的 terminal_write，等待以 cancelled 结束，输入租约随之释放。
-    const holding = detach ? [] : (terminalSessions.get(taskId) ?? [])
-      .filter((session) => session.entry.agentInputCallId === toolCallId);
-    if (holding.length > 0) {
-      for (const session of holding) {
-        session.entry = { ...session.entry, inputHolder: null, agentInputCallId: null };
-      }
-      if (states.has(taskId)) commit(taskId, states.get(taskId));
-      jsonResponse(res, 200, {});
-      return;
-    }
     const target = detach
       ? waits.find((entry) => entry.toolCallId === toolCallId)
       : entries.find((entry) => entry.toolCallId === toolCallId && entry.status === "running");
@@ -1047,8 +1019,13 @@ const server = createServer(async (req, res) => {
     return;
   }
   const queuedRoute = url.pathname.match(/^\/tasks\/(\d+)\/queued-messages\/([^/]+)$/);
-  if (req.method === "PATCH" && queuedRoute) {
-    handleQueuedEdit(res, await readJson(req), Number(queuedRoute[1]), decodeURIComponent(queuedRoute[2]));
+  if (req.method === "DELETE" && queuedRoute) {
+    handleQueuedWithdraw(res, Number(queuedRoute[1]), decodeURIComponent(queuedRoute[2]), false);
+    return;
+  }
+  const sendNowRoute = url.pathname.match(/^\/tasks\/(\d+)\/queued-messages\/([^/]+)\/send-now$/);
+  if (req.method === "POST" && sendNowRoute) {
+    handleQueuedWithdraw(res, Number(sendNowRoute[1]), decodeURIComponent(sendNowRoute[2]), true);
     return;
   }
   if (req.method === "GET" && /^\/tasks\/\d+$/.test(url.pathname)) {

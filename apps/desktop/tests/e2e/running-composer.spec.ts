@@ -4,7 +4,8 @@ import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
 
 /**
- * 运行中的提交开关：活动 Run 期间照常能发送新消息、能保存排队消息的编辑，按钮与回车一致。
+ * 运行中的提交开关：活动 Run 期间照常能发送新消息（后端排队）、能在队列区立即发送、编辑（放回输入框）
+ * 与删除排队消息，按钮与回车一致。
  *
  * assistant-ui 的 React 层在 `thread.isRunning && !capabilities.queue` 时会禁用发送；本应用的排队在
  * 后端，能否提交由应用自己判定（`useComposerSubmit`）。活动用 `suspended`：它同样是活动态，模拟
@@ -51,104 +52,77 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 for (const via of ["button", "enter"] as const) {
-  test(`运行中可以发送新消息（${via === "button" ? "按钮" : "回车"}），沿用冻结配置与投递方式`, async ({ page, request }) => {
+  test(`运行中可以发送新消息（${via === "button" ? "按钮" : "回车"}），沿用冻结配置、不带投递方式`, async ({ page, request }) => {
     await openActiveTask(page, request, activeState());
     const input = page.getByLabel("消息输入");
     await input.fill("运行中追加的消息");
 
     const sent = page.waitForRequest(isCommand(/^\/tasks\/42\/messages$/, "POST"));
     if (via === "button") {
-      // 运行中的发送按钮按投递方式标注；默认是「立即」。
-      await page.getByRole("button", { name: "立即发送", exact: true }).click();
+      // 运行中发送一律排队，按钮据此标注。
+      await page.getByRole("button", { name: "加入队列", exact: true }).click();
     } else {
       await input.press("Enter");
     }
 
-    expect((await sent).postDataJSON()).toMatchObject({
+    const body = (await sent).postDataJSON();
+    expect(body).toMatchObject({
       message: { parts: [{ type: "text", text: "运行中追加的消息" }] },
-      delivery: "immediate",
       modelConfigId: 2,
       disabledToolGroups: ["联网工具"],
     });
+    expect(body.delivery).toBeUndefined();
   });
 }
 
-test("运行中切换为「排队」后发送，请求带上 next_run 投递方式", async ({ page, request }) => {
-  await openActiveTask(page, request, activeState());
-  // 草稿为空时这里是停止按钮，投递方式开关随草稿出现。
-  await page.getByLabel("消息输入").fill("交给下一轮");
-  await page.getByRole("button", { name: "发送方式：立即", exact: true }).click();
-  await expect(page.getByRole("button", { name: "加入队列", exact: true })).toBeVisible();
+test("排队消息显示在输入框上方的队列区，不在消息流里；可立即发送与删除", async ({ page, request }) => {
+  await openActiveTask(page, request, activeState([
+    { id: "q-1", role: "user", delivery: "next_run",
+      parts: [{ type: "text", text: "第一条排队", status: "completed" }] },
+    { id: "q-2", role: "user", delivery: "next_run",
+      parts: [{ type: "text", text: "第二条排队", status: "completed" }] },
+  ]));
+  const queue = page.getByRole("region", { name: "排队消息" });
+  await expect(queue.getByText("2 条排队", { exact: true })).toBeVisible();
+  // 消息流里只有已并入的消息，排队条目只在队列区出现一次。
+  await expect(page.getByText("第一条排队", { exact: true })).toHaveCount(1);
 
-  const sent = page.waitForRequest(isCommand(/^\/tasks\/42\/messages$/, "POST"));
-  await page.getByLabel("消息输入").press("Enter");
+  const first = queue.locator('[data-role="user"]').filter({ hasText: "第一条排队" });
+  await expect(first.getByText("排队中", { exact: true })).toBeVisible();
+  const sendNow = page.waitForRequest(isCommand(/^\/tasks\/42\/queued-messages\/q-1\/send-now$/, "POST"));
+  await first.getByRole("button", { name: "立即发送", exact: true }).click();
+  await sendNow;
+  // 改为立即处理后以新身份重新入队，标注随之变化，不再提供立即发送。
+  const promoted = queue.locator('[data-role="user"]').filter({ hasText: "第一条排队" });
+  await expect(promoted.getByText("即将处理", { exact: true })).toBeVisible();
+  await expect(promoted.getByRole("button", { name: "立即发送", exact: true })).toHaveCount(0);
 
-  expect((await sent).postDataJSON()).toMatchObject({ delivery: "next_run" });
+  const second = queue.locator('[data-role="user"]').filter({ hasText: "第二条排队" });
+  const deleted = page.waitForRequest(isCommand(/^\/tasks\/42\/queued-messages\/q-2$/, "DELETE"));
+  await second.getByRole("button", { name: "删除", exact: true }).click();
+  await deleted;
+  await expect(page.getByText("第二条排队", { exact: true })).toHaveCount(0);
+  await expect(queue.getByText("1 条排队", { exact: true })).toBeVisible();
 });
 
-for (const via of ["button", "enter"] as const) {
-  test(`运行中可以保存排队消息的编辑（${via === "button" ? "按钮" : "回车"}）`, async ({ page, request }) => {
-    await openActiveTask(page, request, activeState([
-      { id: "q-1", role: "user", delivery: "next_run",
-        parts: [{ type: "text", text: "排队中的消息", status: "completed" }] },
-    ]));
-    const queued = page.locator('[data-role="user"]').filter({ hasText: "排队中的消息" });
-    await expect(queued.getByText("下一轮处理", { exact: true })).toBeVisible();
-    await queued.hover();
-    await queued.getByRole("button", { name: "编辑", exact: true }).click();
-
-    const editInput = page.getByRole("textbox", { name: "编辑消息" });
-    await expect(editInput).toHaveText("排队中的消息");
-    await editInput.fill("改过的排队消息");
-    // 排队编辑沿用发送时的配置，不显示模型与工具控件。
-    await expect(page.getByText("排队消息沿用发送时的配置", { exact: true })).toBeVisible();
-
-    const saved = page.waitForRequest(isCommand(/^\/tasks\/42\/queued-messages\/q-1$/, "PATCH"));
-    if (via === "button") {
-      await page.getByRole("button", { name: "保存", exact: true }).click();
-    } else {
-      await editInput.press("Enter");
-    }
-
-    // 请求体只带正文，不带配置与投递方式；保存后排队消息显示新内容。
-    expect((await saved).postDataJSON()).toEqual({
-      message: { role: "user", parts: [{ type: "text", text: "改过的排队消息" }] },
-    });
-    await expect(page.locator('[data-role="user"]').getByText("改过的排队消息", { exact: true })).toBeVisible();
-  });
-}
-
-test("排队消息在编辑期间被并入：提示原因并禁止提交，回车也不会发出请求", async ({ page, request }) => {
-  const queuedMessage = {
-    id: "q-1", role: "user" as const, delivery: "immediate" as const,
-    parts: [{ type: "text" as const, text: "排队中的消息", status: "completed" as const }],
-  };
-  await openActiveTask(page, request, activeState([queuedMessage]));
-  const queued = page.locator('[data-role="user"]').filter({ hasText: "排队中的消息" });
+test("编辑排队消息：撤回这一条，正文放回输入框并排在已有草稿之前", async ({ page, request }) => {
+  await openActiveTask(page, request, activeState([
+    { id: "q-1", role: "user", delivery: "next_run",
+      parts: [{ type: "text", text: "排队中的消息", status: "completed" }] },
+  ]));
+  const input = page.getByLabel("消息输入");
+  await input.fill("还没发的草稿");
+  const queue = page.getByRole("region", { name: "排队消息" });
+  const queued = queue.locator('[data-role="user"]').filter({ hasText: "排队中的消息" });
   await queued.hover();
+
+  const withdrawn = page.waitForRequest(isCommand(/^\/tasks\/42\/queued-messages\/q-1$/, "DELETE"));
   await queued.getByRole("button", { name: "编辑", exact: true }).click();
-  const editInput = page.getByRole("textbox", { name: "编辑消息" });
-  await expect(editInput).toHaveText("排队中的消息");
+  await withdrawn;
 
-  // 后端把它并入当前 Run：排队投影里没有了，消息进入对话，Run 仍在运行。
-  const consumed = activeState();
-  consumed.messages.push({ ...queuedMessage, runId: 1, outcome: null });
-  delete (consumed.messages.at(-1) as { delivery?: string }).delivery;
-  await seedState(request, TASK_ID, consumed);
-
-  await expect(page.getByText("这条消息已开始处理，无法再修改。", { exact: false })).toBeVisible();
-  await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
-  // 它所在的 Run 还在运行，此刻也不能改为编辑并重跑。
-  await expect(page.getByRole("button", { name: "改为编辑并重跑", exact: true })).toHaveCount(0);
-
-  const commands: string[] = [];
-  page.on("request", (req) => {
-    if (["PATCH", "POST"].includes(req.method()) && /\/tasks\/42\/(queued-messages|messages)/.test(req.url())) {
-      commands.push(`${req.method()} ${new URL(req.url()).pathname}`);
-    }
-  });
-  await editInput.fill("来不及的修改");
-  await editInput.press("Enter");
-  await page.waitForTimeout(300);
-  expect(commands).toEqual([]);
+  // 条目离开队列，内容回到输入框；不再有原地编辑框。
+  await expect(queue).toHaveCount(0);
+  // 编辑器按段落渲染，textContent 不含段间换行。
+  await expect(input).toHaveText(/排队中的消息\s*还没发的草稿/);
+  await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveCount(0);
 });

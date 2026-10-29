@@ -93,7 +93,7 @@ describe("TerminalConnection（terminal-v2）", () => {
     vi.mocked(frontendLog).mockClear();
   });
 
-  it("首帧 attach，连接后可发送 input / resize / release_input / handoff_done", () => {
+  it("首帧 attach，连接后可发送 input / resize", () => {
     const { connection, sockets, states } = setup();
     expect(sockets[0].url).toMatch(/\/tasks\/42\/terminal\/sessions\/t1\/stream\?trace_id=/);
     expect(connection.sendInput(new Uint8Array([0x6c]))).toBe(false);
@@ -104,11 +104,9 @@ describe("TerminalConnection（terminal-v2）", () => {
 
     expect(connection.sendInput(new TextEncoder().encode("ls\r"))).toBe(true);
     expect(connection.sendResize(30, 120)).toBe(true);
-    connection.releaseInput();
     expect(sockets[0].sent.slice(1)).toEqual([
       { type: "input", data_base64: encodeBase64(new TextEncoder().encode("ls\r")) },
       { type: "resize", rows: 30, cols: 120 },
-      { type: "release_input" },
     ]);
     expect(vi.mocked(frontendLog).mock.calls.map((call) => call[1])).toContain("terminal_ws_connected");
   });
@@ -158,7 +156,7 @@ describe("TerminalConnection（terminal-v2）", () => {
     sockets[0].open();
     sockets[0].receive(ATTACHED);
     sockets[0].receive({ type: "input_mark", by: "agent" });
-    sockets[0].receive({ type: "input_rejected", reason: "agent_input" });
+    sockets[0].receive({ type: "input_rejected", reason: "backpressure" });
     sockets[0].receive({ type: "exit" });
     expect(frames.map((frame) => frame.type)).toEqual(["attached", "input_mark", "input_rejected"]);
     expect(states.at(-1)).toBe("ended");

@@ -72,10 +72,16 @@ def _notice(text: str) -> TaskMessage:
 class _Context:
     """context 替身：记录写入与展示 metadata 更新，按身份返回原调用。"""
 
-    def __init__(self, call: dict[str, Any] | None = _CALL) -> None:
+    def __init__(
+        self,
+        call: dict[str, Any] | None = _CALL,
+        placeholder: ToolMessageMetadata | None = None,
+    ) -> None:
         self.call = call
+        self.placeholder = placeholder
         self.added: list[dict[str, Any]] = []
         self.updated: list[tuple[str, ToolMessageMetadata]] = []
+        self.update_sessions: list[Any] = []
 
     def add_message(self, message, **kwargs):
         self.added.append({"message": message, **kwargs})
@@ -84,8 +90,13 @@ class _Context:
     def find_tool_call(self, tool_call_id: str):
         return self.call if self.call and self.call["id"] == tool_call_id else None
 
-    def update_tool_result_metadata(self, tool_call_id, metadata):
+    def tool_result_metadata(self, _tool_call_id: str) -> ToolMessageMetadata | None:
+        return self.placeholder
+
+    def update_tool_result_metadata(self, tool_call_id, metadata, *, session=None):
         self.updated.append((tool_call_id, metadata))
+        self.update_sessions.append(session)
+        self.placeholder = metadata
         return metadata
 
 
@@ -314,6 +325,28 @@ async def test_approval_is_taken_first_and_routes_to_tools_without_the_model() -
 
 
 @pytest.mark.usefixtures("isolated_storage")
+async def test_accepting_a_decision_claims_the_placeholder_in_the_same_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """接收决定即把等待占位推到 running（与确认同一事务）：执行期间迟到的重复决定不再被认作在等待。"""
+    emitted: list[Any] = []
+    monkeypatch.setattr(prepare_input_node, "emit", emitted.append)
+    decision = _decision("approve")
+    rc = _prepare_rc({5: decision})
+    rc.mailbox.post(decision)
+    context = _Context(placeholder=ToolMessageMetadata(status="pending"))
+
+    await _prepare(rc, context)
+
+    [(call_id, metadata)] = context.updated
+    assert (call_id, metadata.status) == ("call-hitl", "running")
+    [session] = context.update_sessions
+    assert session is not None  # 加入了确认的事务，而不是提交后再单独写
+    [event] = emitted
+    assert (event.tool_call_id, event.status) == ("call-hitl", "running")
+
+
+@pytest.mark.usefixtures("isolated_storage")
 async def test_rejection_of_an_execute_tool_also_routes_to_the_tool() -> None:
     """``execute`` 类工具的驳回同样回到工具：它得落定自己的事实，占位也只有执行结果能收尾。"""
     decision = _decision("reject")
@@ -431,7 +464,9 @@ def test_context_finds_call_and_updates_only_tool_result_metadata() -> None:
     replaced: list[Any] = []
     manager = RuntimeMessageContextManager.__new__(RuntimeMessageContextManager)
     manager.current_task_id = 1
-    manager.context_store = SimpleNamespace(replace_message=replaced.append)
+    manager.context_store = SimpleNamespace(
+        replace_message=lambda record, **_kw: replaced.append(record)
+    )
     placeholder = {"role": "tool", "tool_call_id": "call-hitl", "content": "awaiting"}
     manager._entries = [
         ContextEntry({"role": "assistant", "content": None, "tool_calls": [_CALL]}, 1, 3),
@@ -461,7 +496,7 @@ def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
 
     manager = RuntimeMessageContextManager.__new__(RuntimeMessageContextManager)
     manager.current_task_id = 1
-    manager.context_store = SimpleNamespace(replace_message=lambda _record: None)
+    manager.context_store = SimpleNamespace(replace_message=lambda _record, **_kw: None)
     manager._entries = [
         ContextEntry(
             {"role": "tool", "tool_call_id": "call-hitl", "content": "awaiting"},

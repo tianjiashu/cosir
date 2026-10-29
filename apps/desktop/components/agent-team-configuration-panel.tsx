@@ -25,7 +25,7 @@ import {
   getWorkspaceAgentConfigurations,
   type AgentConfiguration,
 } from "@/lib/api/configuration";
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -193,15 +193,9 @@ export function AgentTeamConfigurationPanel({
   });
 
   const remove = (team: AgentTeamConfiguration) => {
-    void requestConfirmation({
-      title: "删除 Agent Team 配置？",
-      description: `将删除 Agent Team 配置“${team.name}”。`,
-      confirmLabel: "删除",
-      busyLabel: "正在删除…",
-      tone: "destructive",
-      icon: "delete",
+    void confirmDelete({
+      target: `Agent Team 配置「${team.name}」`,
       action: () => deleteMutation.mutateAsync(team),
-      failureFallback: "删除失败，请重试",
     });
   };
 

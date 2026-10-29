@@ -7,6 +7,7 @@ import { DEFAULT_AGENT_TEAM_STATUS_COLOR } from "@/lib/agent-team-status";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { createGraphEditHistory, commitGraphEdit, undoGraphEdit, redoGraphEdit, type AgentTeamGraphEditHistory } from "./history";
 import {
   cleanSnapshot, createIdentityAllocator, emptyConfiguration, emptyLayout, exportDraft,
@@ -26,7 +27,6 @@ export type EditorState = {
   history: AgentTeamGraphEditHistory;
   dirty: boolean;
   saving: boolean;
-  saveError: string | null;
   mode: "form" | "canvas";
   viewport: { x: number; y: number; zoom: number } | undefined;
 };
@@ -82,7 +82,7 @@ export function createTeamEditorSession(options: {
   const store = createStore<EditorState>(() => ({
     snapshot: { configuration, layout }, baseline, history: createGraphEditHistory(),
     dirty: !options.saved && options.initial != null,
-    saving: false, saveError: null, mode: "form", viewport: undefined,
+    saving: false, mode: "form", viewport: undefined,
   }));
   // 空白新建在真正修改前不询问放弃；工具生成的草稿从一开始就是未保存内容。
   const initialEmpty = options.initial == null ? businessJSON(configuration) : null;
@@ -99,7 +99,7 @@ export function createTeamEditorSession(options: {
     const configuration = lockIdentity(snapshot.configuration);
     store.setState({
       snapshot: { ...snapshot, configuration }, history,
-      dirty: dirtyAgainst(configuration, state.baseline), saveError: null,
+      dirty: dirtyAgainst(configuration, state.baseline),
     });
     if (state.baseline) {
       persistedLayout = savedLayoutPreferences(state.baseline, snapshot, persistedLayout);
@@ -183,14 +183,13 @@ export function createTeamEditorSession(options: {
     undo: () => travel("undo"), redo: () => travel("redo"),
     setMode: (mode: EditorState["mode"]) => store.setState({ mode }),
     setViewport: (viewport: EditorState["viewport"]) => store.setState({ viewport }),
-    clearSaveError: () => store.setState({ saveError: null }),
     async save(persist: PersistTeam): Promise<boolean> {
       const before = store.getState();
       if (before.saving) return false;
       const submitted = before.snapshot;
       const traceId = newTraceId();
       // 保存是撤销分组的边界，提交后的输入不能与提交前的输入合并。
-      store.setState({ saving: true, saveError: null, history: { ...before.history, lastCoalesceKey: null, lastCommitAt: null } });
+      store.setState({ saving: true, history: { ...before.history, lastCoalesceKey: null, lastCommitAt: null } });
       try {
         const saved = await persist(exportDraft(submitted.configuration), before.baseline
           ? { teamId: before.baseline.team_id, scope: before.baseline.scope } : null);
@@ -208,7 +207,13 @@ export function createTeamEditorSession(options: {
         });
         return true;
       } catch (error) {
-        store.setState({ saving: false, saveError: userErrorMessage(error, "保存失败，请检查配置后重试。") });
+        store.setState({ saving: false });
+        // 草稿、历史与基线都保留，用户关掉弹窗即可接着改；失败原因只需要看一次，不进编辑器状态。
+        void showErrorDialog({
+          title: "保存失败",
+          message: userErrorMessage(error, "保存失败，请检查配置后重试。"),
+          actionLabel: "返回修改",
+        });
         void frontendLog("WARNING", "agent_team_configuration_save_failed", "保存 Team 配置失败", {
           traceId, data: { teamId: submitted.configuration.team_id }, error,
         });

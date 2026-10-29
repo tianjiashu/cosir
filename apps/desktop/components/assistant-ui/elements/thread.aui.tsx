@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, ListEndIcon, Loader2Icon, PencilIcon, PlayIcon, XIcon, ZapIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, Trash2Icon, XIcon, ZapIcon } from "lucide-react";
 import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FC, type ReactNode } from "react";
 import {
   AuiIf,
@@ -14,6 +14,7 @@ import {
   useAuiState,
   type AssistantState,
 } from "@assistant-ui/react";
+import type { CreateAttachment } from "@assistant-ui/core";
 
 import { StopButton } from "@/components/assistant/stop-button";
 import { RunDiagnosticsActions } from "@/components/assistant/run-diagnostics-actions";
@@ -52,7 +53,7 @@ import {
   canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
 import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
-import { editIntentRunConfig, toEditableUserMessageDraft, type EditIntent } from "@/lib/assistant/converter";
+import { EDIT_SESSION_RUN_CONFIG, isContinuedEditSession, toEditableUserMessageDraft } from "@/lib/assistant/converter";
 import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
 import { editableDocumentAttachments } from "@/lib/assistant/editable-user-document";
 import {
@@ -71,7 +72,6 @@ import {
   type EditDraftAttachment,
 } from "@/lib/assistant/edit-composer-draft";
 import type { InputDelivery, TransportActivity, TransportOutcome, TransportToolStatus } from "@/lib/assistant/contract";
-import { readStoredInputDelivery, writeStoredInputDelivery } from "@/lib/input-delivery-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
@@ -79,6 +79,8 @@ import type { TransportRunLaunch } from "@/lib/assistant/contract";
 import { RUN_LAUNCH_LOCKED_HINT, useActiveRunLaunch } from "@/lib/assistant/run-launch";
 import { AttachmentWorkspaceContext } from "@/components/assistant-ui/elements/attachment-context";
 import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/virtualized-thread-messages";
+import { QueuedMessages } from "@/components/assistant-ui/elements/queued-messages";
+import { deleteQueuedTaskMessage, sendQueuedTaskMessageNow } from "@/lib/assistant/task-commands";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { UserMessageAttachments } from "@/components/assistant-ui/elements/user-message-attachments";
 import {
@@ -220,6 +222,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
                 <ThreadPrimitive.ViewportFooter className="bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6">
                   <div aria-hidden="true" className="scroll-fade-bottom" />
                   <ScrollToBottomButton />
+                  <QueuedMessages components={messageComponents} />
                   <ComposerBoundary
                     taskId={taskId}
                     workspaceRoot={workspaceRoot}
@@ -285,7 +288,7 @@ const ComposerBoundary = memo(function ComposerBoundary({
 const Composer = memo(function Composer({ taskId, workspaceRoot }: { taskId: number; workspaceRoot?: string }) {
   // 运行期配置锁定：活动 Run 期间模型与工具显示 Run 冻结的配置且只读，发送也用这份配置。
   const runLaunch = useActiveRunLaunch();
-  // 运行中照常可以发送（按投递方式并入或排到下一轮）；只有停止请求在途时不提交，避免与停止交错。
+  // 运行中照常可以发送（后端排进队列，当前 Run 结束后依次处理）；只有停止请求在途时不提交，避免与停止交错。
   const { cancelling = false } = useThreadContext();
   return (
     <ComposerInsertionProvider>
@@ -304,7 +307,7 @@ const Composer = memo(function Composer({ taskId, workspaceRoot }: { taskId: num
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 px-1">
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-              <ThreadComposerPromptToolbar lock={runLaunch === null ? null : { kind: "run", launch: runLaunch }} />
+              <ThreadComposerPromptToolbar lockedLaunch={runLaunch} />
               <TaskContextUsage />
               <div className="min-w-0 flex-1">
                 <ComposerControls
@@ -324,29 +327,26 @@ const Composer = memo(function Composer({ taskId, workspaceRoot }: { taskId: num
   );
 });
 
-/**
- * 工具组配置的锁定来源：`run` 为活动 Run 冻结的配置（按其冻结的工具组名回显、只读）；`queued` 为排队
- * 消息编辑，配置沿用发送时的值且快照不投影它，因此不显示工具组开关。
- */
 const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
 
-type ToolGroupsLock = { kind: "run"; launch: TransportRunLaunch } | { kind: "queued" } | null;
-
-const ThreadComposerPromptToolbar: FC<{ disabled?: boolean; lock?: ToolGroupsLock }> = ({ disabled = false, lock = null }) => {
+/** `lockedLaunch` 为活动 Run 冻结的配置：工具组按它冻结的组名回显、只读。 */
+const ThreadComposerPromptToolbar: FC<{ disabled?: boolean; lockedLaunch?: TransportRunLaunch | null }> = ({
+  disabled = false,
+  lockedLaunch = null,
+}) => {
   const composer = unstable_useComposerInput();
   const context = useThreadContext();
   const toolGroups = context.toolGroups ?? EMPTY_TOOL_GROUPS;
-  const lockedGroups = lock?.kind === "run" ? lock.launch.disabledToolGroups : null;
+  const lockedGroups = lockedLaunch?.disabledToolGroups ?? null;
   return (
     <ComposerPromptToolbar
       toolGroups={toolGroups}
       selectedToolGroups={lockedGroups ?? context.selectedToolGroups ?? []}
-      onSelectedToolGroupsChange={lock === null ? context.onSelectedToolGroupsChange : undefined}
+      onSelectedToolGroupsChange={lockedLaunch === null ? context.onSelectedToolGroupsChange : undefined}
       toolGroupsLoading={context.toolGroupsLoading}
       toolGroupsError={context.toolGroupsError}
       disabled={disabled || composer.isDisabled}
       toolGroupsLockedHint={lockedGroups === null ? undefined : RUN_LAUNCH_LOCKED_HINT}
-      showToolGroups={lock?.kind !== "queued"}
     />
   );
 };
@@ -362,8 +362,6 @@ const ComposerAction: FC<{ taskId: number }> = ({ taskId }) => {
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
-  // 投递方式只在运行中有意义；偏好存于 storage，提交时由 Transport 宿主读取同一份值。
-  const [delivery, setDelivery] = useState<InputDelivery>(readStoredInputDelivery);
   // toast「重试」持有旧闭包：用 ref 读取当下是否仍可继续、是否已有请求在途，避免重复 business resume。
   const resumingRef = useRef(false);
   const actionRef = useRef(action);
@@ -444,19 +442,10 @@ const ComposerAction: FC<{ taskId: number }> = ({ taskId }) => {
 
   return (
     <div className="flex items-center gap-2">
-      {isRunning && (
-        <DeliveryToggle
-          delivery={delivery}
-          onChange={(next) => {
-            writeStoredInputDelivery(next);
-            setDelivery(next);
-          }}
-        />
-      )}
       {isRunning && <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} onCancelRequested={onCancelRequested} onCancelResult={onCancelResult} />} />}
       <ComposerSendButton
-        aria-label={isRunning ? DELIVERY_LABELS[delivery].send : "发送"}
-        title={isRunning ? DELIVERY_LABELS[delivery].title : undefined}
+        aria-label={isRunning ? "加入队列" : "发送"}
+        title={isRunning ? "加入队列：当前运行结束后依次处理，可在队列里改为立即发送" : undefined}
       >
         <ArrowUpIcon className="size-4" />
       </ComposerSendButton>
@@ -464,39 +453,10 @@ const ComposerAction: FC<{ taskId: number }> = ({ taskId }) => {
   );
 };
 
-const DELIVERY_LABELS: Record<InputDelivery, { toggle: string; send: string; title: string; queued: string }> = {
-  immediate: {
-    toggle: "立即",
-    send: "立即发送",
-    title: "立即发送：在下一步并入当前运行；等待审批时视为驳回并附上这条消息",
-    queued: "下一步并入",
-  },
-  next_run: {
-    toggle: "排队",
-    send: "加入队列",
-    title: "排队发送：交给下一轮，当前运行正常结束后开始；运行中更换模型的消息总是这样发送",
-    queued: "下一轮处理",
-  },
-};
-
-/** 运行中发送消息时切换「立即并入 / 本轮结束后」；无活动 Run 时后端直接新开 Run，不显示。 */
-const DeliveryToggle: FC<{ delivery: InputDelivery; onChange: (delivery: InputDelivery) => void }> = ({ delivery, onChange }) => {
-  const labels = DELIVERY_LABELS[delivery];
-  const Icon = delivery === "immediate" ? ZapIcon : ListEndIcon;
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      className="h-8 gap-1 rounded-full px-2 text-xs text-muted-foreground"
-      aria-label={`发送方式：${labels.toggle}`}
-      title={labels.title}
-      onClick={() => onChange(delivery === "immediate" ? "next_run" : "immediate")}
-    >
-      <Icon className="size-3.5" />
-      {labels.toggle}
-    </Button>
-  );
+/** 排队条目的状态说明：`next_run` 等当前运行结束后依次处理；`immediate` 已改为立即处理、等待并入。 */
+const QUEUED_LABELS: Record<InputDelivery, string> = {
+  next_run: "排队中",
+  immediate: "即将处理",
 };
 
 const ThreadMessage: FC = () => {
@@ -528,8 +488,10 @@ const UserMessage: FC = () => {
       });
     }
   }, [aui, isEditing, messageId, pendingEditStart]);
+  const queued = useAuiState((state) => isQueuedUserMessage(readRuntimeTransportState(state.thread.state), messageId));
   if (isEditing && !readonly) return <UserEditMessage />;
-  return <UserMessageView />;
+  // 排队消息只在输入框上方的队列区渲染（见 QueuedMessages），消息流里已滤掉。
+  return queued ? <QueuedMessageView /> : <UserMessageView />;
 };
 
 const UserMessageView: FC = () => {
@@ -537,20 +499,18 @@ const UserMessageView: FC = () => {
   const hasText = useAuiState((state) => state.message.parts.some(
     (part) => part.type === "text" && part.text.trim().length > 0,
   ));
-  const queuedDelivery = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages?.find((message) => message.id === messageId)?.delivery ?? null);
   const readonly = useThreadContext().readonly === true;
   const canEdit = useAuiState((state) => {
     if (readonly) return false;
     const transportState = readRuntimeTransportState(state.thread.state);
-    // 排队中的消息原地编辑，不影响正在运行的 Run。
-    if (isQueuedUserMessage(transportState, messageId)) return true;
     if (!isEditableLatestUserMessage(transportState, messageId)) return false;
 
     // Transport runtime 可能在 canonical snapshot 到达前乐观渲染新的用户命令；
-    // 此期间不能因为旧 snapshot 仍在，就把上一条用户消息重新标记为可编辑。
+    // 此期间不能因为旧 snapshot 仍在，就把上一条用户消息重新标记为可编辑。排队消息不算：
+    // 它们排在已并入的消息之后，但不妨碍编辑重跑最新一条已并入的消息。
     const latestRenderedUserMessageId = [...state.thread.messages]
       .reverse()
-      .find((message) => message.role === "user")?.id;
+      .find((message) => message.role === "user" && !isQueuedUserMessage(transportState, message.id))?.id;
     return latestRenderedUserMessageId === messageId;
   });
 
@@ -560,7 +520,6 @@ const UserMessageView: FC = () => {
       className="group flex flex-col items-end px-2 [content-visibility:auto] [contain-intrinsic-size:auto_6rem]"
     >
       <div className="flex max-w-[85%] flex-col items-end gap-2">
-        {queuedDelivery && <span className="text-xs text-muted-foreground">{DELIVERY_LABELS[queuedDelivery].queued}</span>}
         <UserMessageAttachments />
         {hasText && (
           <div className="bg-primary/10 text-foreground rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
@@ -587,7 +546,7 @@ const UserMessageView: FC = () => {
           className="flex h-6 gap-1 opacity-0 transition-opacity pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
         >
           {canEdit && (
-            <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip={queuedDelivery ? "编辑" : "编辑并重跑"} aria-label={queuedDelivery ? "编辑" : "编辑并重跑"} size="sm" />}>
+            <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip="编辑并重跑" aria-label="编辑并重跑" size="sm" />}>
               <PencilIcon />
             </ActionBarPrimitive.Edit>
           )}
@@ -610,26 +569,147 @@ type EditDraftSnapshot = {
   messageContentTypes: readonly string[];
 };
 
+type QueuedCommand = "send_now" | "edit" | "delete";
+
+const QUEUED_COMMAND_FAILURE: Record<QueuedCommand, string> = {
+  send_now: "立即发送失败",
+  edit: "编辑失败",
+  delete: "删除失败",
+};
+
+/**
+ * 队列区里的一条排队消息：立即发送、编辑、删除。
+ *
+ * 编辑 = 撤回这一条 + 把正文与附件放回输入框（排在输入框已有内容之前），改完照常发送、重新排队；撤回
+ * 失败（已被并入）时不动输入框。命令只投递，结果以 snapshot 的 `queued_messages` 为准：立即发送后
+ * 条目以新身份重新入队或直接被并入，撤回后条目消失。消息恰好已被并入时后端 409，消费投影随即
+ * 把它移出队列区。
+ */
+const QueuedMessageView: FC = () => {
+  const aui = useAui();
+  const message = useAuiState((state) => state.message);
+  const messageId = message.id;
+  const hasText = useAuiState((state) => state.message.parts.some(
+    (part) => part.type === "text" && part.text.trim().length > 0,
+  ));
+  const delivery = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages
+    ?.find((message) => message.id === messageId)?.delivery ?? "next_run");
+  const { taskId } = useThreadContext();
+  const [busy, setBusy] = useState<QueuedCommand | null>(null);
+
+  const moveToComposer = async () => {
+    // 撤回前取草稿：撤回成功后条目随快照消失，消息作用域也跟着卸载。
+    const draft = message.role === "user" ? toEditableUserMessageDraft(message) : null;
+    await deleteQueuedTaskMessage(taskId, messageId);
+    if (!draft) return;
+    const composer = aui.thread.composer();
+    const current = composer.getState();
+    // 输入框里已有的附件（含上传中的）一并列入草稿：写入器会清掉草稿之外的附件，已在输入框里的
+    // 只按身份去重、不会重新加入，因此这里只需要它们的身份，不要求已完成。
+    const result = await applyEditDraftToComposer({
+      composer,
+      text: current.text.trim() ? `${draft.text}\n\n${current.text}` : draft.text,
+      attachments: editableDraftAttachments([
+        ...editableDocumentAttachments(draft.document),
+        ...(current.attachments as readonly CreateAttachment[]),
+      ]),
+      isStillCurrent: () => true,
+    });
+    if (result.error) {
+      void frontendLog("ERROR", "queued_message_composer_restore_failed", "排队消息放回输入框时附件恢复失败", {
+        data: { taskId, messageId, addedCount: result.addedCount, expectedCount: result.expectedCount },
+        error: result.error,
+      });
+    }
+  };
+
+  const run = async (command: QueuedCommand) => {
+    if (busy !== null) return;
+    setBusy(command);
+    try {
+      if (command === "send_now") await sendQueuedTaskMessageNow(taskId, messageId);
+      else if (command === "edit") await moveToComposer();
+      else await deleteQueuedTaskMessage(taskId, messageId);
+      void frontendLog("INFO", "queued_message_command_accepted", "排队消息命令已受理", {
+        data: { taskId, messageId, command },
+      });
+    } catch (error) {
+      notify.error(QUEUED_COMMAND_FAILURE[command], { error, fallback: "这条消息可能已开始处理，请以对话内容为准" });
+      void frontendLog("WARNING", "queued_message_command_failed", "排队消息命令失败", {
+        data: { taskId, messageId, command },
+        error,
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <MessagePrimitive.Root
+      data-role="user"
+      data-queued={delivery}
+      className="bg-muted/40 flex items-start gap-2 rounded-2xl px-3 py-2"
+    >
+      <div className="min-w-0 flex-1">
+        <span className="text-muted-foreground text-xs">{QUEUED_LABELS[delivery]}</span>
+        <UserMessageAttachments />
+        {hasText && (
+          <div className="text-foreground line-clamp-3 text-sm leading-relaxed wrap-break-word">
+            <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? (
+              <UserMessageText text={part.text} status={part.status} />
+            ) : null}</MessagePrimitive.Parts>
+          </div>
+        )}
+      </div>
+      <ActionBarPrimitive.Root className="flex shrink-0 gap-1">
+        {delivery === "next_run" && (
+          <TooltipIconButton
+            tooltip="立即发送"
+            aria-label="立即发送"
+            size="sm"
+            disabled={busy !== null}
+            onClick={() => void run("send_now")}
+          >
+            {busy === "send_now" ? <Loader2Icon className="animate-spin" /> : <ZapIcon />}
+          </TooltipIconButton>
+        )}
+        <TooltipIconButton
+          tooltip="编辑（放回输入框）"
+          aria-label="编辑"
+          size="sm"
+          disabled={busy !== null}
+          onClick={() => void run("edit")}
+        >
+          {busy === "edit" ? <Loader2Icon className="animate-spin" /> : <PencilIcon />}
+        </TooltipIconButton>
+        <TooltipIconButton
+          tooltip="删除"
+          aria-label="删除"
+          size="sm"
+          disabled={busy !== null}
+          onClick={() => void run("delete")}
+        >
+          {busy === "delete" ? <Loader2Icon className="animate-spin" /> : <Trash2Icon />}
+        </TooltipIconButton>
+      </ActionBarPrimitive.Root>
+    </MessagePrimitive.Root>
+  );
+};
+
 const UserEditMessage: FC = () => {
   const aui = useAui();
   const message = useAuiState((state) => state.message);
   const { taskId, workspaceRoot } = useThreadContext();
   const transportState = useAuiState((state) => readRuntimeTransportState(state.thread.state));
   const [restoreOverride] = useState(() => takePendingEditComposerDraft(message.id));
-  // 编辑意图在挂载时确定一次（被拒后恢复的编辑框沿用被拒命令的意图），经 runConfig 随命令提交；
-  // 排队消息原地编辑只改正文与附件、沿用发送时的配置，已并入的编辑会开新 Run、可改配置。
-  const [intent, setIntent] = useState<EditIntent>(
-    () => restoreOverride?.intent ?? (isQueuedUserMessage(transportState, message.id) ? "queued" : "rerun"),
-  );
-  const queuedEdit = intent === "queued";
-  // 编辑期间前提失效（排队消息已被并入、重跑目标已不是可重跑的最新一条）时给出原因并禁止提交。
-  const blockedReason = editBlockedReason(transportState, message.id, intent);
-  // 排队消息已被并入时，只在它此刻确实能编辑重跑时提供改道入口，由用户明确选择。
-  const canSwitchToRerun = queuedEdit && blockedReason !== null
-    && editBlockedReason(transportState, message.id, "rerun") === null;
+  // 编辑会话可能在消息行重新挂载后继续（见 EDIT_SESSION_RUN_CONFIG）：继续时不再用原消息覆盖草稿。
+  const composerRunConfig = useAuiState((state) => state.composer.runConfig);
+  const [continued] = useState(() => !restoreOverride && isContinuedEditSession(composerRunConfig));
+  // 编辑期间前提失效（已不是可重跑的最新一条、Run 又跑起来了）时给出原因并禁止提交。
+  const blockedReason = editBlockedReason(transportState, message.id);
   useLayoutEffect(() => {
-    aui.composer.setRunConfig(editIntentRunConfig(intent));
-  }, [aui.composer, intent]);
+    aui.composer.setRunConfig(EDIT_SESSION_RUN_CONFIG);
+  }, [aui.composer]);
   const canonicalEditDraft = useMemo(
     () => message.role === "user" ? toEditableUserMessageDraft(message) : null,
     [message],
@@ -639,7 +719,7 @@ const UserEditMessage: FC = () => {
   const editAttachments = canonicalEditDraft && !restoreOverride
     ? editableDocumentAttachments(canonicalEditDraft.document)
     : editDraft?.attachments ?? [];
-  const hydratedMessageId = useRef<string | null>(null);
+  const hydratedMessageId = useRef<string | null>(continued ? message.id : null);
   // 草稿快照：写入内容与 message 对象解耦——写入 effect 只依赖消息身份，后续任何一次
   // transport 更新引起的重渲染都不会再打断正在进行的草稿写入。
   const draftRef = useRef<EditDraftSnapshot | null>(null);
@@ -649,7 +729,7 @@ const UserEditMessage: FC = () => {
     added: 0,
     aborted: null,
   });
-  const [isHydrating, setIsHydrating] = useState(true);
+  const [isHydrating, setIsHydrating] = useState(!continued);
   const isRecoveryActive = useSyncExternalStore(
     subscribeEditComposerOperations,
     () => isEditComposerOperationActive(message.id),
@@ -788,7 +868,7 @@ const UserEditMessage: FC = () => {
       className="min-w-0 px-2"
       onClickCapture={(event) => {
         const label = (event.target as HTMLElement).closest<HTMLElement>("[aria-label]")?.getAttribute("aria-label");
-        if (label !== "取消编辑" && label !== "重跑" && label !== "保存") return;
+        if (label !== "取消编辑" && label !== "重跑") return;
         void frontendLog("INFO", "edit_composer_action_clicked", "编辑框操作按钮被点击", {
           data: {
             action: label,
@@ -815,23 +895,10 @@ const UserEditMessage: FC = () => {
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 px-1">
               <div className="flex min-w-0 flex-1 items-center gap-1">
-                <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} lock={queuedEdit ? { kind: "queued" } : null} />
+                <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} />
                 <div className="min-w-0 flex-1">
                   {blockedReason !== null ? (
-                    <span className="text-xs text-warning">
-                      {blockedReason}
-                      {canSwitchToRerun && (
-                        <button
-                          type="button"
-                          className="ml-1 underline underline-offset-2 hover:text-foreground"
-                          onClick={() => setIntent("rerun")}
-                        >
-                          改为编辑并重跑
-                        </button>
-                      )}
-                    </span>
-                  ) : queuedEdit ? (
-                    <span className="text-muted-foreground text-xs">排队消息沿用发送时的配置</span>
+                    <span className="text-xs text-warning">{blockedReason}</span>
                   ) : (
                     <ComposerControls
                       scope={{ kind: "task", id: taskId }}
@@ -844,7 +911,7 @@ const UserEditMessage: FC = () => {
                 <ComposerPrimitive.Cancel render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
                   <XIcon />
                 </ComposerPrimitive.Cancel>
-                <ComposerSendButton blocked={sendBlocked} aria-label={queuedEdit ? "保存" : "重跑"}>
+                <ComposerSendButton blocked={sendBlocked} aria-label="重跑">
                   <ArrowUpIcon className="size-4" />
                 </ComposerSendButton>
               </div>

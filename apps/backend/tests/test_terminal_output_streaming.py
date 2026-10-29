@@ -46,7 +46,7 @@ from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
-from tests.transport_fixtures import consumed, queue_user_input
+from tests.transport_fixtures import consumed
 
 
 class ChunkStream:
@@ -416,11 +416,7 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
-    # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
-    queue_user_input(
-        projector._state_service.state, 1, UserInputPresentation(display_text="run tool")
-    )
-    projector.process(consumed(7, 9, 1))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(
@@ -452,15 +448,79 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     assert part["terminal_output_seq"] == 2
 
 
+def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None:
+    """转到后台的命令在 Run 挂起后仍在输出：只看 part 自己是否还是活的后台占位，不看 Run。"""
+    state = empty_snapshot()
+    projector = ConversationEventProjector(_MemorySnapshotOwner(state))
+    projector.process(RunInitializedEvent(task_id=7, run_id=9))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
+    projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
+    projector.process(
+        ToolCallCreatedEvent(task_id=7, run_id=9, tool_call_id="call-1", tool_name="execute_terminal")
+    )
+    projector.process(
+        ToolCallStatusChangedEvent(
+            task_id=7, run_id=9, tool_call_id="call-1", status="running", args={"command": "make"}
+        )
+    )
+    projector.process(_terminal_output_update(0, "before "))
+    # 到前台上限转后台：占位 pending + deferred，展示数据不带输出，已流出的输出保留。
+    projector.process(
+        ToolCallStatusChangedEvent(
+            task_id=7,
+            run_id=9,
+            tool_call_id="call-1",
+            status="pending",
+            deferred=True,
+            display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
+        )
+    )
+    projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="suspended"))
+    projector.process(_terminal_output_update(1, "after"))
+
+    part = state["messages"][1]["parts"][0]
+    assert part["display_data"]["output"] == "before after"
+
+    # 结论并入：完整终态写回卡片，实时累计的输出仍是展示上的权威值；之后的迟到块丢弃。
+    projector.process(
+        ToolCallStatusChangedEvent(
+            task_id=7,
+            run_id=9,
+            tool_call_id="call-1",
+            status="completed",
+            display_data={
+                "kind": "terminal-result", "command": "make", "workdir": "/w",
+                "output": "before after", "exit_code": 0, "timed_out": False,
+            },
+        )
+    )
+    projector.process(_terminal_output_update(2, " late"))
+    part = state["messages"][1]["parts"][0]
+    assert part["status"] == "completed" and part["deferred"] is True
+    assert part["display_data"]["output"] == "before after"
+    assert part["display_data"]["exit_code"] == 0
+
+
+def test_runtime_update_skips_a_pending_part_that_is_not_a_background_placeholder() -> None:
+    state = empty_snapshot()
+    projector = ConversationEventProjector(_MemorySnapshotOwner(state))
+    projector.process(RunInitializedEvent(task_id=7, run_id=9))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
+    projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
+    projector.process(
+        ToolCallCreatedEvent(task_id=7, run_id=9, tool_call_id="call-1", tool_name="execute_terminal")
+    )
+    projector.process(_terminal_output_update(0, "early"))
+
+    part = state["messages"][1]["parts"][0]
+    assert part.get("display_data") in (None, {}) or "output" not in part["display_data"]
+
+
 def test_final_terminal_status_preserves_complete_streamed_display_output() -> None:
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
-    # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
-    queue_user_input(
-        projector._state_service.state, 1, UserInputPresentation(display_text="run tool")
-    )
-    projector.process(consumed(7, 9, 1))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(
@@ -550,11 +610,7 @@ def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, Conversat
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=7, run_id=9))
-    # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
-    queue_user_input(
-        projector._state_service.state, 1, UserInputPresentation(display_text="run tool")
-    )
-    projector.process(consumed(7, 9, 1))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(

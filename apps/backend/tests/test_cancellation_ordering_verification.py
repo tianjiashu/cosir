@@ -48,7 +48,7 @@ from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCal
 from app.core.workflow.node_helper import tool_batch_runner
 from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
-from tests.transport_fixtures import consumed, queue_user_input
+from tests.transport_fixtures import consumed
 
 _RUN_ID = 960001
 _TASK_ID = 12
@@ -270,8 +270,7 @@ def _seed_running_execute_terminal(projector: ConversationEventProjector, call_i
 
     projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
     # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
-    queue_user_input(projector._state_service.state, 1, UserInputPresentation(display_text="test"))
-    projector.process(consumed(_TASK_ID, _RUN_ID, 1))
+    projector.process(consumed(_TASK_ID, _RUN_ID, 1, UserInputPresentation(display_text="test")))
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))
     projector.process(
         ToolCallCreatedEvent(

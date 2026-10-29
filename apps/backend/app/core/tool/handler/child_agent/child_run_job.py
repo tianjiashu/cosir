@@ -21,7 +21,7 @@ from concurrent.futures import Future
 from typing import cast
 
 from app.config.logging.logger import log
-from app.core.tool.background.deferred_job import ManualJob
+from app.core.tool.background.deferred_job import DeferredConclusion, ManualJob
 from app.core.tool.background.deferred_registry import deferred_registry
 from app.core.tool.background.run_deferred import run_deferred
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
@@ -64,7 +64,7 @@ def run_child(
 
     job = ManualJob(
         on_cancel=cancel,
-        cancelled_result={"child_task_id": child_task_id, "status": "cancelled"},
+        cancelled_result=DeferredConclusion({"child_task_id": child_task_id, "status": "cancelled"}),
     )
     run_deferred(
         job,
@@ -114,4 +114,4 @@ async def _deliver_conclusion(job: ManualJob, child_task_id: int, tool_call_id: 
             },
         )
         result = {"child_task_id": child_task_id, "status": "failed", "end_reason": "unavailable"}
-    await asyncio.to_thread(job.finish, result)
+    await asyncio.to_thread(job.finish, DeferredConclusion(result))

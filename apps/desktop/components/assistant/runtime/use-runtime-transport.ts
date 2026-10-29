@@ -3,18 +3,15 @@ import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   extractUserAddMessageAttachments,
   extractUserAddMessageText,
-  getUserAddMessageEditIntent,
   getUserAddMessageSourceId,
   type UserAddMessageCommand,
 } from "@/lib/assistant/converter";
 import {
-  editQueuedTaskMessage,
   rerunTaskMessage,
   sendTaskMessage,
   type TaskMessageRequest,
 } from "@/lib/assistant/task-commands";
-import { HttpError } from "@/lib/http/errors";
-import { readStoredInputDelivery } from "@/lib/input-delivery-storage";
+import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { activeRunLaunch } from "@/lib/assistant/run-launch";
 import { readStoredSelection } from "@/lib/model-selection-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -33,10 +30,9 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
 
-/** 一次 composer 提交解析出的 Task 命令：发送、原地编辑排队消息或编辑重跑。 */
+/** 一次 composer 提交解析出的 Task 命令：发送新消息，或编辑重跑（带 `sourceId`）。 */
 type PreparedTaskCommand =
   | { kind: "send"; request: TaskMessageRequest }
-  | { kind: "edit_queued"; messageId: string }
   | { kind: "rerun"; messageId: string; request: TaskMessageRequest };
 
 type RuntimeTransport = ReturnType<typeof useTaskAssistantTransportRuntime>["runtime"];
@@ -58,10 +54,8 @@ function restoreRejectedDraft(context: RuntimeSessionContext, commands: readonly
   if (!failedText.trim() && failedAttachments.length === 0) return;
   if (failedEditCommand) {
     const sourceId = getUserAddMessageSourceId(failedEditCommand);
-    const intent = getUserAddMessageEditIntent(failedEditCommand);
-    // 恢复的编辑框沿用被拒命令的意图：排队编辑因消息已被并入被拒时，不能在恢复后变成重跑。
-    const restored = sourceId !== null && intent !== null
-      && context.composerRestoreRef.current?.restoreEditMessage(sourceId, intent, failedText, failedAttachments) === true;
+    const restored = sourceId !== null
+      && context.composerRestoreRef.current?.restoreEditMessage(sourceId, failedText, failedAttachments) === true;
     if (!restored) {
       context.setIssue({ message: "编辑失败，原消息仍保留，请重新点击编辑重试。", canResync: true });
     }
@@ -102,11 +96,10 @@ export function useRuntimeTransport(
       error,
     });
     restoreRejectedDraft(context, commands);
-    context.setIssue({
+    // 命令被拒要打断用户：草稿已恢复，用弹窗说明原因；连接类问题才进对话区顶部的状态条。
+    void showErrorDialog({
+      title: "发送失败",
       message: userErrorMessage(error, "网络异常，请检查本机后端是否正在运行"),
-      // HTTP 错误体的 retryable 表示「修正条件后能否重试」，这里映射为能否重新同步。
-      canResync: error instanceof HttpError ? error.retryable ?? true : true,
-      presentation: "dialog",
     });
   }, [context]);
 
@@ -146,15 +139,7 @@ export function useRuntimeTransport(
     traceId: context.traceId,
     submitMessage: async (command) => {
       const sourceId = getUserAddMessageSourceId(command);
-      const editIntent = getUserAddMessageEditIntent(command);
       const state = context.latestStateRef.current;
-      // 编辑按开始编辑时定下的意图分两个命令（见 EditIntent）：排队消息原地改（配置由后端沿用），
-      // 已并入的重跑出新 Run。编辑期间前提若已失效，由后端 409 裁决，不在这里按快照改道。
-      if (sourceId !== null && editIntent === null) {
-        // 编辑框挂载即写入意图；缺失是装配错误，不能退回去猜，以免把排队编辑当成重跑。
-        throw new Error("编辑命令缺少编辑意图");
-      }
-      const queuedId = editIntent === "queued" ? sourceId : null;
       // 运行期配置锁定：活动期间发送用它冻结的配置（composer 也只显示这份）；重跑不受锁定——
       // 它会开新 Run，按用户当前选择。
       const runLaunch = sourceId === null ? activeRunLaunch(state) : null;
@@ -167,46 +152,35 @@ export function useRuntimeTransport(
       // prepareUserCommand 已剔除 composer-only 的 file part，并为普通文件补齐带路径的描述符。
       const prepared = prepareUserCommand(command) as UserAddMessageCommand;
       const message = prepared.message as TaskMessageRequest["message"];
-      let taskCommand: PreparedTaskCommand;
-      if (queuedId !== null) {
-        taskCommand = { kind: "edit_queued", messageId: queuedId };
-      } else {
-        if (launch.modelConfigId === null) {
-          throw new UserFacingError(runLaunch ? "当前运行的模型配置已删除，请停止后重新选择" : "请先选择模型后再发送");
-        }
-        const request: TaskMessageRequest = {
-          message,
-          modelConfigId: launch.modelConfigId,
-          reasoningEffort: launch.reasoningEffort,
-          disabledToolGroups: launch.disabledToolGroups,
-        };
-        taskCommand = sourceId === null
-          ? { kind: "send", request }
-          : { kind: "rerun", messageId: sourceId, request };
+      if (launch.modelConfigId === null) {
+        throw new UserFacingError(runLaunch ? "当前运行的模型配置已删除，请停止后重新选择" : "请先选择模型后再发送");
       }
-      const delivery = readStoredInputDelivery();
+      const request: TaskMessageRequest = {
+        message,
+        modelConfigId: launch.modelConfigId,
+        reasoningEffort: launch.reasoningEffort,
+        disabledToolGroups: launch.disabledToolGroups,
+      };
+      const taskCommand: PreparedTaskCommand = sourceId === null
+        ? { kind: "send", request }
+        : { kind: "rerun", messageId: sourceId, request };
       void frontendLog("INFO", "assistant_task_command_prepared", "Task 命令已准备发送", {
         traceId: context.traceId,
         data: {
           taskId: context.taskId,
           operation: taskCommand.kind,
-          delivery: taskCommand.kind === "send" ? delivery : null,
           launchLocked: runLaunch !== null,
           partCount: message.parts.length,
           attachmentCount: message.attachments?.length ?? 0,
         },
       });
       const init = { traceId: context.traceId };
-      if (taskCommand.kind === "edit_queued") {
-        await editQueuedTaskMessage(context.taskId, taskCommand.messageId, message, init);
-      } else if (taskCommand.kind === "send") {
-        await sendTaskMessage(context.taskId, { ...taskCommand.request, delivery }, init);
+      if (taskCommand.kind === "send") {
+        await sendTaskMessage(context.taskId, taskCommand.request, init);
       } else {
         await rerunTaskMessage(context.taskId, taskCommand.messageId, taskCommand.request, init);
       }
       context.setIssue(null);
-      // 排队消息原地更新、不产生新消息 id，乐观消息不等 snapshot 即可清；其余等消息出现。
-      return { awaitSnapshot: taskCommand.kind !== "edit_queued" };
     },
     onResponse: (response) => {
       void frontendLog("INFO", "assistant_transport_subscription_opened", "Task 长订阅已建立", {

@@ -132,7 +132,7 @@ for (const mode of ["new", "task"] as const) {
     await send.click();
     await expect(page.getByRole("dialog")).toContainText("回归测试拒绝发送");
     expect(submitted?.message.attachments).toEqual([expect.objectContaining({ path: "/tmp/notes.md" })]);
-    await page.getByRole("dialog").getByRole("button", { name: "关闭" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
     await expect(input).toContainText("notes.md");
     await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
   });
@@ -232,7 +232,7 @@ test("重载后的历史普通文件可编辑、撤销移除并重跑，路径�
   expect(body).toMatchObject({ message: { parts: [{ type: "text", text: expect.stringContaining("[[cosir-file:historical]]") }] } });
   expect(body.message.attachments).toBeUndefined();
   await expect(page.getByRole("dialog")).toContainText("历史编辑回归拒绝");
-  await page.getByRole("dialog").getByRole("button", { name: "关闭" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
   await expect(input).toContainText("history.md");
   await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
 });
@@ -253,7 +253,7 @@ test("Task 图片上传成功但消息提交失败后，正文与完整图片附
   const body = (await request).postDataJSON();
   expect(body.message.parts).toContainEqual({ type: "image", image: locator });
   await expect(page.getByRole("dialog")).toContainText("图片消息回归拒绝");
-  await page.getByRole("dialog").getByRole("button", { name: "关闭" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
   await expect(input).toHaveText("图片失败恢复");
   await expect(page.locator(".aui-composer-attachments .aui-attachment-root")).toHaveCount(1);
   await expect(send).toBeEnabled();

@@ -61,3 +61,11 @@ export function latestMeasuredContextUsage(value: unknown): {
   }
   return null;
 }
+
+/**
+ * 排队消息 id 以 `|` 拼成的字符串（无排队时为空串），供 `useAuiState` selector 使用：返回原始值，
+ * 队列不变时引用相等，订阅方不会随流式 token 重渲染。队列区与消息流的过滤共用这一份。
+ */
+export function queuedMessageIdsKey(value: unknown): string {
+  return readRuntimeTransportState(value)?.queued_messages?.map((message) => message.id).join("|") ?? "";
+}

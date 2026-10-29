@@ -33,7 +33,7 @@ from app.core.tool.schemas import ToolObservation
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
-from tests.transport_fixtures import consumed, queue_user_input
+from tests.transport_fixtures import consumed
 
 _TASK_ID = 7
 _RUN_ID = 9
@@ -133,8 +133,7 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
     # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
-    queue_user_input(projector._state_service.state, 1, UserInputPresentation(display_text="test"))
-    projector.process(consumed(_TASK_ID, _RUN_ID, 1))
+    projector.process(consumed(_TASK_ID, _RUN_ID, 1, UserInputPresentation(display_text="test")))
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))
     projector.process(
         ToolCallCreatedEvent(

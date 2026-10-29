@@ -17,7 +17,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.app import app
 from app.assistant_transport.request import (
     DecisionRequest,
-    EditQueuedMessageRequest,
     RerunMessageRequest,
     SendMessageRequest,
 )
@@ -111,23 +110,34 @@ async def send_message(
     request: SendMessageRequest,
     service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> JSONResponse:
-    """发送消息：有活动 Run 时按 ``delivery`` 立即并入或排到本轮之后，否则新开 Run。"""
+    """发送消息：有活动 Run（含挂起）时排队，当前 Run 结束后一轮一条依次处理；空闲时立即处理。"""
 
     return await _accept(task_id, "send", service.send(task_id, request))
 
 
-@app.patch("/tasks/{task_id}/queued-messages/{message_id}")
-async def edit_queued_message(
+@app.post("/tasks/{task_id}/queued-messages/{message_id}/send-now")
+async def send_queued_message_now(
     task_id: int,
     message_id: int,
-    request: EditQueuedMessageRequest,
     service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> JSONResponse:
-    """原地编辑排队中的用户消息，不影响 Run，也不经 actor（已并入时 409 ``MESSAGE_CONSUMED``）。"""
+    """把排队中的用户消息改为立即处理：运行中并入当前 Run，挂起时唤醒，空闲时开新 Run（已并入时
+    409 ``MESSAGE_CONSUMED``）。"""
 
     return await _accept(
-        task_id, "edit_queued", service.edit_queued(task_id, message_id, request)
+        task_id, "send_queued_now", service.send_queued_now(task_id, message_id)
     )
+
+
+@app.delete("/tasks/{task_id}/queued-messages/{message_id}")
+async def delete_queued_message(
+    task_id: int,
+    message_id: int,
+    service: TransportAssistantService = Depends(get_transport_assistant_service),
+) -> JSONResponse:
+    """删除排队中的用户消息（已并入时 409 ``MESSAGE_CONSUMED``）。"""
+
+    return await _accept(task_id, "delete_queued", service.delete_queued(task_id, message_id))
 
 
 @app.post("/tasks/{task_id}/messages/{message_id}/rerun")
@@ -137,8 +147,8 @@ async def rerun_message(
     request: RerunMessageRequest,
     service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> JSONResponse:
-    """编辑最新一条已并入的用户消息并重跑：运行中先停止当前 Run 并等它停下，它及其后 context
-    移出，编辑后的消息进入新建的 Run。"""
+    """编辑最新一条已并入的用户消息并重跑：只在 Task 静止时接受（不替用户停止，否则 409
+    ``RUN_NOT_STOPPED``），撤回它所在的一轮，编辑后的消息进入新建的 Run。"""
 
     return await _accept(task_id, "rerun", service.rerun(task_id, message_id, request))
 

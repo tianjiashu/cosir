@@ -1,7 +1,7 @@
 import { useEffect, useId } from "react";
 import { create } from "zustand";
 
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { confirmDiscard } from "@/lib/confirm/confirm-store";
 
 /**
  * 未保存修改的统一守卫。
@@ -44,10 +44,9 @@ export function confirmDiscardUnsaved(scope: UnsavedScope): Promise<boolean> {
       .map((source) => source.label),
   )];
   if (labels.length === 0) return Promise.resolve(true);
-  return requestConfirmation({
+  return confirmDiscard({
     title: "放弃未保存的修改？",
     description: `以下内容尚未保存：${labels.join("、")}。离开后这些修改会丢失。`,
     confirmLabel: "放弃修改",
-    icon: "discard",
   });
 }

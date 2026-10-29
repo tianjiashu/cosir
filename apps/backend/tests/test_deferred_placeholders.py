@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from app.core.tool.background.deferred_job import DeferredConclusion
 from app.assistant_transport.projection.tool_call_event_projection import plan_tool_calls_settled
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_snapshot import _validate_part
@@ -54,7 +55,7 @@ def _metadata(stored, call_id: str) -> ToolMessageMetadata:
 
 
 def test_only_pending_deferred_rows_are_settled(stored) -> None:
-    assert [r.message["tool_call_id"] for r in stored.crud.list_pending_deferred()] == ["call-bg"]
+    assert [r.message["tool_call_id"] for r in stored.crud.list_unsettled_placeholders()] == ["call-bg"]
 
     count = placeholders.settle_placeholders(
         stored.task_id, None, "cancelled", placeholders.INTERRUPTED_HINT
@@ -182,11 +183,14 @@ def test_consumed_result_completes_the_placeholder(monkeypatch, status: str) -> 
     )
     monkeypatch.setattr(projection_module, "emit", emitted.append)
 
-    projection_module.settle_deferred_placeholder("call-bg", step_id="step-2")
+    card = {"kind": "terminal-result", "command": "make", "output": "ok", "exit_code": 0}
+    projection_module.settle_deferred_placeholder("call-bg", display_data=card, step_id="step-2")
 
-    assert [update.status for update in context.updates] == ["completed"]
+    # 作业给卡片的终态展示随结算写入（写入即持久化），投影按实际写入的展示数据发出。
+    [update] = context.updates
+    assert (update.status, update.display_data) == ("completed", card)
     [event] = emitted
-    assert (event.tool_call_id, event.status) == ("call-bg", "completed")
+    assert (event.tool_call_id, event.status, event.display_data) == ("call-bg", "completed", card)
 
 
 @pytest.mark.parametrize(
@@ -207,6 +211,49 @@ def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:
     )
     monkeypatch.setattr(projection_module, "emit", lambda _event: pytest.fail("emitted"))
 
-    projection_module.settle_deferred_placeholder("call-x", step_id="step-2")
+    projection_module.settle_deferred_placeholder("call-x", display_data=None, step_id="step-2")
 
     assert context.updates == []
+
+
+def test_result_arriving_while_stopping_settles_placeholder_as_cancelled(stored) -> None:
+    """停止信号已打出、收尾撤销之前后台工作恰好完成：占位仍随撤销推到 cancelled，不悬空在 pending。"""
+    import asyncio
+
+    from app.core.task_cancellation import TaskCancellation
+    from app.core.tool.background.deferred_registry import deferred_registry
+    from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+
+    deferred_registry.register(
+        "call-bg",
+        task_id=stored.task_id,
+        run_id=None,
+        kind="terminal_command",
+        label="terminal:sleep",
+        on_cancel=lambda: None,
+    )
+    cancellation_registry.request_cancel(stored.task_id, "user")
+    try:
+        assert deferred_registry.complete("call-bg", DeferredConclusion({"exit_code": 0})) is False
+        asyncio.run(TaskCancellation(stored.task_id).cancel_background_task())
+    finally:
+        cancellation_registry.consume(stored.task_id)
+        deferred_registry.drop_task(stored.task_id)
+        deferred_registry.forget_task(stored.task_id)
+
+    assert _metadata(stored, "call-bg").status == "cancelled"
+    assert depends.get_task_message_queue().pending_nowait(stored.task_id) == []
+
+
+def test_restart_interrupts_hitl_calls_whose_decision_was_executing(stored) -> None:
+    """决定已接收、执行被重启打断的 HITL 占位（running）随重启收尾推到「已中断」；仍在等决定的不动。"""
+    from app.core.tool.background.restart_settlement import interrupt_pending_placeholders
+
+    run_id = stored.crud.get(stored.task_id)[0].run_id
+    stored.crud.create(_tool_row(stored.task_id, run_id, 4, "call-claimed", status="running"))
+
+    interrupt_pending_placeholders()
+
+    claimed = _metadata(stored, "call-claimed")
+    assert (claimed.status, claimed.error) == ("cancelled", "已中断")
+    assert _metadata(stored, "call-hitl").status == "pending"

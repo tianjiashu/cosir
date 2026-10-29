@@ -111,7 +111,7 @@ describe("TaskTransportSession 长订阅（D4）", () => {
   });
 
   it("命令 202 不决定是否 attach：订阅已开着就不重开，断着才立即补上", async () => {
-    const submitMessage = vi.fn(async () => ({ awaitSnapshot: true }));
+    const submitMessage = vi.fn(async () => undefined);
     const { fetchImpl, session } = setup({ submitMessage });
     const stream = controllableStream();
     fetchImpl.mockResolvedValueOnce(stream.response);
@@ -130,7 +130,7 @@ describe("TaskTransportSession 长订阅（D4）", () => {
 
 describe("TaskTransportSession 乐观命令（D8）", () => {
   it("202 后乐观消息保留，直到 snapshot 出现该用户消息", async () => {
-    const { store, fetchImpl, session } = setup({ submitMessage: async () => ({ awaitSnapshot: true }) });
+    const { store, fetchImpl, session } = setup({ submitMessage: async () => undefined });
     const stream = controllableStream();
     fetchImpl.mockResolvedValueOnce(stream.response);
     void session.open();
@@ -141,13 +141,6 @@ describe("TaskTransportSession 乐观命令（D8）", () => {
 
     stream.push({ task_id: 7, kind: "mutation", mutations: [{ kind: "set", path: ["messages", 0], value: userMessage("1", 1, "hello") }] });
     await flush();
-    expect(store.getSnapshot().pendingCommands).toHaveLength(0);
-  });
-
-  it("编辑排队消息不产生新消息 id，提交成功即清除乐观消息", async () => {
-    const { store, fetchImpl, session } = setup({ submitMessage: async () => ({ awaitSnapshot: false }) });
-    fetchImpl.mockResolvedValue(controllableStream().response);
-    await session.submit(command("edited"));
     expect(store.getSnapshot().pendingCommands).toHaveLength(0);
   });
 

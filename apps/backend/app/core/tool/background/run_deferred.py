@@ -21,7 +21,7 @@ from collections.abc import Callable
 from typing import cast
 
 from app.config.logging.logger import log
-from app.core.tool.background.deferred_job import DeferredJob, DeferredOutcome
+from app.core.tool.background.deferred_job import DeferredConclusion, DeferredJob, DeferredOutcome
 from app.core.tool.background.deferred_registry import DeferredKind, deferred_registry
 
 # 前台等待复查 Run 取消的时间片；作业结论与转后台信号都会立即唤醒，不靠轮询。
@@ -106,10 +106,10 @@ class _Route:
         self._lock = threading.Lock()
         self._arrived = threading.Event()
         self._background = False
-        self._result: dict[str, object] | None = None
+        self._result: DeferredConclusion | None = None
 
-    def deliver(self, tool_call_id: str) -> Callable[[dict[str, object]], None]:
-        def callback(result: dict[str, object]) -> None:
+    def deliver(self, tool_call_id: str) -> Callable[[DeferredConclusion], None]:
+        def callback(result: DeferredConclusion) -> None:
             with self._lock:
                 self._result = result
                 background = self._background
@@ -133,7 +133,7 @@ class _Route:
     def has_result(self) -> bool:
         return self._arrived.is_set()
 
-    def result(self) -> dict[str, object]:
+    def result(self) -> DeferredConclusion:
         """调用方保证已等到结论（``wait`` 返回 True 之后）。"""
         with self._lock:
-            return cast(dict[str, object], self._result)
+            return cast(DeferredConclusion, self._result)

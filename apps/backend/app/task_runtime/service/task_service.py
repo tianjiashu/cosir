@@ -24,7 +24,6 @@ from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
     ProvisionalTaskCleanupConflictError,
-    RunDeletionConflictError,
 )
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.models.message_metadata import UserMessageMetadata
@@ -177,10 +176,6 @@ class TaskService:
                 ConversationRunStatus.SUSPENDED.value, session=session
             )
         return {*pending, *suspended}
-
-    def list_task_ids_for_workspace(self, workspace_id: int) -> set[int]:
-        """返回工作区下全部 task id（含委派子任务与 Team 节点任务）。"""
-        return set(self._task.list_ids_by_workspace(workspace_id))
 
     def list_child_tasks(self, task_id: int) -> list[TaskRecord]:
         """返回由该任务直接委派的子任务（不含 Agent Team 节点任务）。"""
@@ -362,6 +357,11 @@ class TaskService:
                 session,
                 max_sequence=cut_sequence,
             )
+            # 当前 Run 指向克隆出的切分点 Run：snapshot 的 activity 由它投影，没有指针时前端拿不到
+            # 终态，编辑重跑等「静止后才开放」的入口不会出现；新 Run 也要从它继承发起配置。
+            target = self._task.set_current_run_id(
+                target.id, run_id_map[boundary_run_id], session=session
+            )
         log.info(
             "task_forked",
             extra={
@@ -400,11 +400,72 @@ class TaskService:
         """
         return self._task_reads.list_by_workspace(workspace_id)
 
-    def delete_task(self, task_id: int) -> None:
-        """原子删除任务树并级联清理其下全部子产物。
+    async def delete_task_tree(self, task_id: int, *, with_forks: bool = False) -> frozenset[int]:
+        """删除 Task 的用户用例：删除 = 停止 + 删除记录，停止在任何锁之外；返回实际删除的 Task id。
 
-        删除前先校验任务存在（不存在则抛 ``KeyError``），再按固定的 workspace → task
-        锁顺序取得结构性写操作闸门。在单个 ``BEGIN IMMEDIATE`` 事务内按「子任务先于父任务」
+        先停下所有权子树（沿 ``parent_task_id`` 的委派子 Agent 与 Team 节点）的 actor 并等执行
+        落定，停止即墓碑（见 ``TaskRuntimeSpaceRegistry.stop``）；收集与停止反复到子树不再增长，
+        覆盖父 Agent 在停下前刚委派出的子 Task。再由 :meth:`delete_task` 在一个事务里删除记录。
+        fork 不在所有权子树里，默认不随源 Task 删除、只改挂（见 :meth:`delete_task_tree_in_session`）；
+        ``with_forks`` 为真时把全部 fork 后代（含 fork 的 fork）当作额外的根一并停止和删除。fork 后代
+        只在开头收集一次，删除的就是停下的这批：停止之后才 fork 出来的照常改挂，不会删掉没停下的 Task。
+
+        删除没成功（闸门忙、写库失败）时为已停下的 Task 换上新 actor：Task 仍在，不能留着没有
+        调度者。请求被取消时不回滚——工作线程里的删除可能照常提交，回滚会给已删除的 Task 拉起 actor。
+
+        异常:
+            KeyError: Task 不存在。
+            DeletionBusyError: workspace 正被其他结构性操作占用。
+        """
+
+        fork_ids = (
+            await asyncio.to_thread(self.collect_fork_descendant_ids, task_id)
+            if with_forks
+            else frozenset()
+        )
+        stopped: set[int] = set()
+        try:
+            while True:
+                task_ids: set[int] = set()
+                for root_id in (task_id, *fork_ids):
+                    task_ids |= await asyncio.to_thread(self.collect_task_tree_ids, root_id)
+                if task_ids <= stopped:
+                    break
+                await self._task_register.stop(task_ids - stopped)
+                stopped |= task_ids
+            return await asyncio.to_thread(self.delete_task, task_id, fork_ids)
+        except Exception:
+            self._task_register.restart_stopped(stopped)
+            raise
+
+    def collect_fork_descendant_ids(self, task_id: int) -> frozenset[int]:
+        """返回从 ``task_id`` fork 出的全部后代（fork 的 fork 也算），不含自身。
+
+        fork 来源记在 ``extra.fork.source_task_id``（不是 ``parent_task_id``），所以按工作区读出全部
+        fork 的来源再从根向下展开。来源关系异常成环时，已访问的不重复展开。
+
+        异常:
+            KeyError: Task 不存在。
+        """
+        workspace_id = self._task.get(task_id).workspace_id
+        children: dict[int, list[int]] = {}
+        for fork_id, source_id in self._task.list_fork_sources(workspace_id).items():
+            children.setdefault(source_id, []).append(fork_id)
+        found: set[int] = set()
+        pending = [task_id]
+        while pending:
+            for child_id in children.get(pending.pop(), []):
+                if child_id != task_id and child_id not in found:
+                    found.add(child_id)
+                    pending.append(child_id)
+        return frozenset(found)
+
+    def delete_task(self, task_id: int, fork_ids: frozenset[int] = frozenset()) -> frozenset[int]:
+        """原子删除任务树并级联清理其下全部子产物；调用方须已停下这棵树的 actor。
+
+        删除前先校验任务存在（不存在则抛 ``KeyError``），再取得 workspace 闸门（与 fork、删除
+        Run、删除 workspace 互斥）。不取各 Task 的闸门：它们只仲裁 actor 的调度轮次，actor 已在
+        :meth:`delete_task_tree` 里停下。在单个 ``BEGIN IMMEDIATE`` 事务内按「子任务先于父任务」
         的后序清理每个任务自身及其产物，保证原子性（全删或全不删）。
         提交后卸载进程内 runtime space。Task 删除不负责
         删除图片附件，也不触发 workspace 附件孤儿 GC。删除是高风险操作，保留 start / complete
@@ -412,9 +473,10 @@ class TaskService:
 
         参数:
             task_id: 待删除的任务标识。
+            fork_ids: 一并删除的 fork 后代（各自连同所有权子树），由 :meth:`delete_task_tree` 停下。
 
         返回:
-            无。
+            实际删除的全部 Task id（含各棵所有权子树）。
 
         异常:
             KeyError: 如果指定任务不存在。
@@ -429,16 +491,21 @@ class TaskService:
         task = self._task.get(task_id)
         try:
             with workspace_operations.operation(task.workspace_id, timeout=10):
-                result = self._delete_task_locked(task_id)
+                result = self._delete_task_locked(task_id, fork_ids)
         except TimeoutError as exc:
             raise DeletionBusyError("task", task_id) from exc
         log.info(
             "task_deleted",
             extra={
                 "msg": "task deleted",
-                "data": {"task_id": task_id, "deleted_tasks": len(result.task_ids)},
+                "data": {
+                    "task_id": task_id,
+                    "fork_ids": sorted(fork_ids),
+                    "deleted_tasks": len(result.task_ids),
+                },
             },
         )
+        return result.task_ids
 
     def cleanup_provisional_task(self, task_id: int, creation_command_id: str) -> None:
         """在 Assistant Transport 尚未接受首条命令时受控删除 provisional Task。
@@ -482,109 +549,33 @@ class TaskService:
             },
         )
 
-    def _delete_task_locked(self, task_id: int) -> TaskDeletionResult:
-        """在已持有 workspace 闸门时删除任务树，不触发附件清理。"""
+    def _delete_task_locked(self, task_id: int, fork_ids: frozenset[int]) -> TaskDeletionResult:
+        """在已持有 workspace 闸门时删除任务树（及给定的 fork 后代），不触发附件清理。"""
 
-        task_ids = self._collect_task_tree_ids(task_id)
-        # 先发送取消信号，再取得 task 闸门；节点 executor 需要拿同一闸门完成收尾，
-        # 不能在持有闸门后等待它，否则删除路径会自锁。
         from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
 
-        get_agent_team_coordinator().cancel_for_task_ids(task_ids)
-        locked_ids = self._collect_task_ancestor_ids(task_id) | {task_id}
-        with ExitStack() as stack:
-            for current_id in sorted(locked_ids):
-                stack.enter_context(
-                    self._task_register.get_or_create(current_id).operation(timeout=10)
-                )
-            for current_id in sorted(task_ids - locked_ids):
-                stack.enter_context(
-                    self._task_register.get_or_create(current_id).operation(timeout=10)
-                )
-                locked_ids.add(current_id)
-            result = self._delete_task_after_operations(task_id)
-        return result
+        tree_ids: set[int] = set()
+        for root_id in (task_id, *fork_ids):
+            tree_ids |= self._collect_task_tree_ids(root_id)
+        get_agent_team_coordinator().cancel_for_task_ids(tree_ids)
+        return self._delete_task_after_operations(task_id, fork_ids)
 
-    def _delete_task_after_operations(self, task_id: int) -> TaskDeletionResult:
-        """在 workspace 与任务树闸门均已持有时提交任务树删除。"""
+    def _delete_task_after_operations(
+        self, task_id: int, fork_ids: frozenset[int] = frozenset()
+    ) -> TaskDeletionResult:
+        """在已持有 workspace 闸门时提交任务树删除。"""
 
         log.info(
             "task_delete_start",
-            extra={"msg": "task delete started", "data": {"task_id": task_id}},
-        )
-        with begin_immediate(self._session_factory) as session:
-            result = self.delete_task_tree_in_session(task_id, session)
-        self.finalize_deleted_task_spaces(result)
-        return result
-
-    def delete_run(self, task_id: int, run_id: int) -> None:
-        """删除单个 run 及其会话上下文与执行进度；Task 终端继续保留。
-
-        允许删除 task 内任意位置的 run（含中间），不重排剩余 context 的 ``sequence``。
-        先校验 run 属于该 task（否则 ``KeyError``）；再按 workspace → task 锁顺序取得结构性
-        写操作闸门。task 内存在 ``pending`` / ``running`` 的 active run 时拒绝删除（抛
-        ``RunDeletionConflictError``），该判断在持有 task 闸门后执行，与 run 创建路径互斥。
-        在单个 ``BEGIN IMMEDIATE`` 事务内先删 context 再删 run 行（``tasks.current_run_id`` 由
-        ``ON DELETE SET NULL`` 自动处理，引用该 Run 的 TeamRun 随外键级联删除）。执行进度随 Run
-        行删除。
-
-        不新增 run 级进程内 snapshot 失效入口：Transport 快照刷新由前端在删除后重新拉取/重连
-        处理（见架构边界：允许 context 与 snapshot 最终一致）。
-
-        参数:
-            task_id: run 所属任务标识。
-            run_id: 待删除的 Conversation Run 标识。
-
-        返回:
-            无。
-
-        异常:
-            KeyError: 如果 task 或 run 不存在，或 run 不属于该 task。
-            RunDeletionConflictError: 如果 task 内存在 active run。
-            DeletionBusyError: 如果取得 workspace/task 闸门超时。
-            sqlalchemy.exc.SQLAlchemyError: 如果删除事务失败（回滚）。
-
-        副作用:
-            从 ``conversation_task_contexts`` / ``conversation_runs`` 删除该 run 相关行；执行进度
-            随 Run 行删除。
-        """
-
-        task = self._task.get(task_id)
-        try:
-            with workspace_operations.operation(task.workspace_id, timeout=10):
-                space = self._task_register.get_or_create(task_id)
-                with space.operation(timeout=10):
-                    self.delete_run_locked(task_id, run_id)
-        except TimeoutError as exc:
-            raise DeletionBusyError("task", task_id) from exc
-
-    def delete_run_locked(self, task_id: int, run_id: int) -> None:
-        """在已持 Task 闸门时删除指定 Run 的 context 与记录；Task 终端继续保留。"""
-
-        run = self._turn.get(run_id)
-        if run.task_id != task_id:
-            raise KeyError(run_id)
-        # active run 守卫必须在调用方持有 task 闸门后执行：run 创建同样需要该闸门，
-        # 持锁后重查可避免 get 与持锁之间新启一个 active run 的竞态。
-        if self._turn.has_active_for_task(task_id):
-            raise RunDeletionConflictError(
-                "TASK_HAS_ACTIVE_RUN",
-                f"task {task_id} has an active run; run deletion is rejected",
-            )
-        log.info(
-            "run_delete_start",
             extra={
-                "msg": "run delete started",
-                "data": {"task_id": task_id, "run_id": run_id},
+                "msg": "task delete started",
+                "data": {"task_id": task_id, "fork_ids": sorted(fork_ids)},
             },
         )
         with begin_immediate(self._session_factory) as session:
-            self._context.delete_by_run_id(task_id, run_id, session=session)
-            self._turn.delete_by_ids([run_id], session)
-        log.info(
-            "run_deleted",
-            extra={"msg": "run deleted", "data": {"task_id": task_id, "run_id": run_id}},
-        )
+            result = self.delete_task_tree_in_session(task_id, session, fork_ids=fork_ids)
+        self.finalize_deleted_task_spaces(result)
+        return result
 
     def _collect_task_ancestor_ids(self, task_id: int) -> set[int]:
         """收集 task 自身以上的父 task 标识。
@@ -634,11 +625,26 @@ class TaskService:
         return order[::-1]
 
     def delete_task_tree_in_session(
-        self, root_task_id: int, session: Session
+        self, root_task_id: int, session: Session, *, fork_ids: frozenset[int] = frozenset()
     ) -> TaskDeletionResult:
-        """按后序在同一事务删除任务树，返回提交后需卸载的 Task 集合。"""
+        """按后序在同一事务删除所有权子树，返回提交后需卸载的 Task 集合。
 
-        task_ids_postorder = self._collect_task_tree_ids_postorder(root_task_id, session=session)
+        所有权子树沿 ``parent_task_id``（委派子 Agent、Team 节点）级联删除：它们是被删 Agent 执行的
+        一部分，提升到上一级会把子 Agent 交给没有创建它的 Agent（``child_agent_*`` 按
+        ``parent_task_id`` 授权、重启收尾按它回投结论）。fork 是独立对话，来源在 ``extra.fork``，
+        不在子树里：``fork_ids`` 里的 fork 作为额外的根连同各自子树一起删，其余来源被删的 fork 改挂到
+        被删根的来源（根不是 fork 时成为根），侧栏的 fork 树因此只少一层。fork 之间没有外键，
+        各棵子树内部仍按后序删除即可。
+        """
+
+        task_ids_postorder = [
+            current_id
+            for tree_root_id in (root_task_id, *sorted(fork_ids))
+            for current_id in self._collect_task_tree_ids_postorder(tree_root_id, session=session)
+        ]
+        deleted = frozenset(task_ids_postorder)
+        root = self._task.ensure_task(session, root_task_id)
+        self._task.reparent_forks(root.workspace_id, deleted, _fork_source(root, deleted), session)
         for current_id in task_ids_postorder:
             self._delete_single_task_in_session(current_id, session)
         return TaskDeletionResult(
@@ -646,14 +652,17 @@ class TaskService:
         )
 
     def finalize_deleted_task_spaces(self, result: TaskDeletionResult) -> None:
-        """数据库提交后清理终端、后台工作看板和 Task 运行时空间；回滚路径不关闭活会话。
+        """数据库提交后回收 Task 级资源（终端、延迟结果、看板）与运行时空间；回滚路径一概不碰。
 
-        删除前的停止已撤销这些 Task 的延迟结果，这里只清看板保留的最近结束条目。
+        延迟结果归 Task、比 Run 活得久，必须在这里撤销而不是指望删除前的停止：停止只在有执行者时
+        撤销，空闲（Run 已完成、后台命令还在跑）或挂起（等后台结论）的 Task 没有执行者。撤销会
+        终止后台命令；占位行已随删除消失，不结算。
         """
         from app.core.tool.background.deferred_registry import deferred_registry
 
         service_depends.get_terminal_session_service().delete_task_sessions(result.task_ids)
         for task_id in result.task_ids:
+            deferred_registry.drop_task(task_id)
             deferred_registry.forget_task(task_id)
         self._unload_deleted_task_spaces(set(result.task_ids))
 
@@ -687,6 +696,14 @@ class TaskService:
         self._task_context_crud.delete_by_task_ids([task_id], session)
         self._turn.delete_by_ids(run_ids, session)
         self._task.delete_by_ids([task_id], session)
+
+
+def _fork_source(task: TaskRecord, deleted: frozenset[int]) -> int | None:
+    """被删根的 fork 来源（来源也在删除集里时视为无）：它的 fork 改挂到这里。"""
+    if task.task_type != "fork":
+        return None
+    source = (task.extra or {}).get("fork", {}).get("source_task_id")
+    return source if isinstance(source, int) and source not in deleted else None
 
 
 def _resolve_fork_cut(

@@ -1,4 +1,4 @@
-"""单会话执行协调：会话锁保护输入租约、观察、条件等待、交接及唯一终态迁移。
+"""单会话执行协调：会话锁保护输入仲裁、观察、条件等待、交接及唯一终态迁移。
 
 service 拥有会话集合、Task 归属与容量；本对象不访问 registry。会话锁内只做内存操作：
 外部副作用（snapshot 重投影、会话结束通知、交接代为落定）都在 ``session_effects``，经 service
@@ -9,8 +9,9 @@ service 在锁外调用 ``dispose_worker`` 清理 worker。因此 worker 读线�
 并发约定：
 - 等待都在 ``self._condition`` 上进行：worker 事件 ``notify_all`` 唤醒，
   ``WAIT_CANCEL_CHECK_SECONDS`` 时间片只用于复查 Run 取消信号；
-- 输入租约同一时刻只有一个持有方（``agent`` / ``user`` / 空闲），用户的 Ctrl-C 例外：
-  即使 Agent 持有也送达，并把租约转给用户；
+- 输入仲裁只约束 Agent，用户输入从不被拒：用户最近在打字时 Agent 等其停手（防止拼进用户的半行），
+  前台跑着用户启动的命令时 Agent 输入立即被拒（不往用户的程序里打字）。Agent 不持锁：一次输入是
+  worker 队列里的一帧，用户按键切不开它；终端工具串行执行，同一会话也不会有两个 Agent 输入并发；
 - 需要 worker 回执的 signal 必须在锁外发送：回执由同一读线程接收，持锁发送会与读线程互等；
 - worker 握手（最多数秒）不在会话锁内进行：启动期间快照投影、订阅与 WS 输入都要拿会话锁，
   其中 snapshot 刷新持有全局投影锁、WS 在事件循环里调用，长持会话锁会拖住所有 Task 与事件循环。
@@ -36,10 +37,11 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.tools.terminal_runtime import session_effects
 from app.tools.terminal_runtime.errors import (
-    TerminalInputHeldByUserError,
     TerminalIntegrationRequiredError,
     TerminalSessionError,
     TerminalSessionStateError,
+    TerminalUserCommandRunningError,
+    TerminalUserTypingError,
 )
 from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
 from app.tools.terminal_runtime.render import (
@@ -62,7 +64,7 @@ from app.tools.terminal_runtime.inputs import (
     require_input_capability,
     summarize_input,
 )
-from app.tools.terminal_runtime.observation import TerminalObservation
+from app.tools.terminal_runtime.observation import InputSource, TerminalObservation
 from app.tools.terminal_runtime.stream import (
     TerminalStreamAttachment,
     TerminalStreamBuffer,
@@ -71,11 +73,9 @@ from app.tools.terminal_runtime.wait import WaitBaseline, WaitEvaluator
 
 RunCancellationCheck = Callable[[], bool]
 EffectScheduler = Callable[[Callable[[], None]], None]
-LeaseHolder = Literal["agent", "user"]
-UserInputResult = Literal["accepted", "rejected_agent_input", "session_ended"]
+UserInputResult = Literal["accepted", "session_ended"]
 
 _ACTIVE = frozenset({"starting", "running"})
-_CTRL_C = b"\x03"
 _NONFATAL_WORKER_ERRORS = frozenset(
     {"START_ALREADY_COMPLETE", "PTY_QUERY_RESPONSE_FAILED", "input_rejected", "resize_rejected"}
 )
@@ -118,9 +118,6 @@ class SessionSnapshot:
     end_reason: str | None
     exit_code: int | None
     integration: str
-    input_holder: LeaseHolder | None
-    # 只在 Agent 仍持有租约时给出（租约可能已被用户的 Ctrl-C 转走）。
-    agent_input_call_id: str | None
     command_running: bool
     handoff_reason: str | None
     handoff_call_id: str | None
@@ -189,11 +186,9 @@ class TerminalSessionRuntime:
         self._stream = TerminalStreamBuffer(self.session_id, Constant.Terminal.MAX_RING_BUFFER_BYTES)
         self._observation = TerminalObservation(spec.kind, spec.integration)
         self._accepted_writes: OrderedDict[str, bytes] = OrderedDict()
-        self._lease: LeaseHolder | None = None
-        # Agent 持有租约时对应的 terminal_write 调用；用户「接管输入」据此把它的前台等待转到后台。
-        self._agent_call_id: str | None = None
-        self._user_last_input = 0.0
-        self._lease_watch_running = False
+        self._user_last_input = float("-inf")
+        # 最近一次被接受输入的来源：shell 报告命令开始时据此记下发起方（见 ``TerminalCommand``）。
+        self._last_input_by: InputSource | None = None
         self._user_marks = _UserInputMarks()
         self._handoff: _Handoff | None = None
         # 正在会话条件变量上进行的 Agent 条件等待；会话结束时它们会把结果带给 Agent，不必另发结束通知。
@@ -314,7 +309,6 @@ class TerminalSessionRuntime:
             self._end_reason = reason
             self._exit_code = exit_code
             self._status = status
-            self._lease = None
             self._stream.finish()
             self._condition.notify_all()
             handoff, self._handoff = self._handoff, None
@@ -404,7 +398,7 @@ class TerminalSessionRuntime:
         with self._condition:
             if self._status not in _ACTIVE:
                 return
-            kind = self._observation.shell_event(event)
+            kind = self._observation.shell_event(event, last_input_by=self._last_input_by)
             self._condition.notify_all()
         if kind is None:
             return
@@ -455,8 +449,9 @@ class TerminalSessionRuntime:
     ) -> TerminalObservationResult:
         """投递一次 Agent 输入并按条件等待；输入接受后的取消仍返回接受事实，避免模型重发。
 
-        等待只在前台、在工具线程里进行，输入租约持有到等待结束；长时间的工作交给 ``execute_terminal``
-        的后台执行，不在交互终端里挂着等。交接是独立的 HITL 工具，见 :meth:`begin_handoff`。
+        等待只在前台、在工具线程里进行，期间用户照常可以输入（输入行会标注给 Agent）；长时间的
+        工作交给 ``execute_terminal`` 的后台执行，不在交互终端里挂着等。交接是独立的 HITL 工具，
+        见 :meth:`begin_handoff`；输入仲裁见 :meth:`_admit_agent_input`。
 
         worker 不可用（含信号回执超时）只作为本次调用的错误抛出，不结束会话：会话终态只来自 worker
         事件流（``exit`` / 致命 ``error`` / 读线程断开）与显式关闭，在命令路径上判死会误伤回执慢的
@@ -488,48 +483,45 @@ class TerminalSessionRuntime:
                 raise TerminalSessionStateError("terminal input was not accepted: run cancelled")
             worker = self._mutable_worker()
             require_input_capability(input, worker.capabilities)
-            self._acquire_agent_lease(is_cancelled)
-            self._agent_call_id = tool_call_id
+            self._admit_agent_input(is_cancelled)
+            self._last_input_by = "agent"
             baseline = WaitBaseline.of(
                 self._observation, after_line_input=kind == "line", after_input=True
             )
             if kind in {"line", "text", "keys"}:
                 self._stream.publish("input_mark", by="agent")
-        try:
-            self._deliver_agent_input(worker, input)
-            with self._condition:
-                self._accepted_writes[operation_id] = fingerprint
-                while len(self._accepted_writes) > Constant.Terminal.MAX_WRITE_OPERATION_CACHE:
-                    self._accepted_writes.popitem(last=False)
-                self._last_read = None
-                log.info(
-                    "terminal_agent_input_accepted",
-                    extra={
-                        "msg": "Agent 终端输入已投递",
-                        "data": {
-                            "task_id": self.task_id,
-                            "run_id": run_id,
-                            "session_id": self.session_id,
-                            "operation_id": operation_id,
-                            "input_type": kind,
-                            "wait_until": spec.until,
-                            "timeout_ms": spec.effective_timeout_ms,
-                        },
+        self._deliver_agent_input(worker, input)
+        with self._condition:
+            self._accepted_writes[operation_id] = fingerprint
+            while len(self._accepted_writes) > Constant.Terminal.MAX_WRITE_OPERATION_CACHE:
+                self._accepted_writes.popitem(last=False)
+            self._last_read = None
+            log.info(
+                "terminal_agent_input_accepted",
+                extra={
+                    "msg": "Agent 终端输入已投递",
+                    "data": {
+                        "task_id": self.task_id,
+                        "run_id": run_id,
+                        "session_id": self.session_id,
+                        "tool_call_id": tool_call_id,
+                        "operation_id": operation_id,
+                        "input_type": kind,
+                        "wait_until": spec.until,
+                        "timeout_ms": spec.effective_timeout_ms,
                     },
-                )
-            wait_result = self._wait(WaitEvaluator(spec, baseline), is_cancelled)
-            with self._condition:
-                return self._build_result(
-                    baseline.line,
-                    self._observation.buffer.last_line,
-                    "both",
-                    wait_result=wait_result,
-                    input_type=kind,
-                    input_summary=summary,
-                )
-        finally:
-            with self._condition:
-                self._release_agent_lease()
+                },
+            )
+        wait_result = self._wait(WaitEvaluator(spec, baseline), is_cancelled)
+        with self._condition:
+            return self._build_result(
+                baseline.line,
+                self._observation.buffer.last_line,
+                "both",
+                wait_result=wait_result,
+                input_type=kind,
+                input_summary=summary,
+            )
 
     def _deliver_agent_input(self, worker: ProcessTerminalWorker, input: Mapping[str, Any]) -> None:
         """锁外投递：line / text / keys 只入队；signal 等待 worker 回执，持锁会与读线程互等。"""
@@ -669,7 +661,7 @@ class TerminalSessionRuntime:
     def begin_handoff(self, reason: str, tool_call_id: str) -> TerminalObservationResult:
         """登记一次交接（``terminal_handoff`` 首次调用），返回给卡片展示的当前尾部。
 
-        交接只是会话上的提示与 snapshot 投影：不持输入租约（用户本来就能输入），也不登记延迟结果——
+        交接只是会话上的提示与 snapshot 投影：不改变输入仲裁（用户本来就能输入），也不登记延迟结果——
         等待交给 HITL：工具返回等待占位挂起 Agent，用户交还即对这次调用作出决定。
         """
         with self._condition:
@@ -753,13 +745,36 @@ class TerminalSessionRuntime:
         task_id = self.task_id
         self._schedule(lambda: session_effects.refresh_task_sessions(task_id))
 
-    # ------------------------------------------------------------------ 输入租约
+    # ------------------------------------------------------------------ 输入仲裁
 
-    def _acquire_agent_lease(self, is_cancelled: RunCancellationCheck) -> None:
-        """持锁调用：等用户租约释放最多 ``AGENT_LEASE_WAIT_SECONDS``，超时报可重试错误。"""
-        deadline = time.monotonic() + Constant.Terminal.AGENT_LEASE_WAIT_SECONDS
+    def _user_typing(self) -> bool:
+        return time.monotonic() - self._user_last_input < Constant.Terminal.USER_TYPING_IDLE_SECONDS
+
+    def _admit_agent_input(self, is_cancelled: RunCancellationCheck) -> None:
+        """持锁调用：判定 Agent 这次输入能否送达，不能时抛错；用户输入从不经过这里。
+
+        前台是用户启动的命令时立即拒绝：命令可能长驻，等它返回会让 Agent 无声卡住，往里打字又会落进
+        用户的程序。用户最近在打字时最多等 ``AGENT_TYPING_WAIT_SECONDS`` 让其停手，防止 Agent 的输入
+        拼进用户的半行；这里只看按键时间，不需要用户侧的释放动作。没有 shell 集成的会话看不到命令
+        边界，只有打字判定。
+        """
+        command = self._observation.active_command
+        if command is not None and command.started_by == "user":
+            log.info(
+                "terminal_agent_input_rejected_user_command",
+                extra={
+                    "msg": "前台是用户启动的命令，拒绝 Agent 输入",
+                    "data": {"session_id": self.session_id, "command_number": command.number},
+                },
+            )
+            raise TerminalUserCommandRunningError(
+                f"the user started `{command.command}` in this session and it is still running; "
+                "your input would go into the user's program. Use another session "
+                "(terminal_start) or ask the user"
+            )
+        deadline = time.monotonic() + Constant.Terminal.AGENT_TYPING_WAIT_SECONDS
         waited = False
-        while self._lease is not None:
+        while self._user_typing():
             waited = True
             if self._status not in _ACTIVE:
                 raise TerminalSessionStateError(f"terminal session is {self._status}")
@@ -768,102 +783,43 @@ class TerminalSessionRuntime:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 log.info(
-                    "terminal_agent_lease_timeout",
+                    "terminal_agent_typing_wait_timeout",
                     extra={
-                        "msg": "Agent 等待终端输入租约超时",
-                        "data": {"session_id": self.session_id, "holder": self._lease},
+                        "msg": "Agent 等待用户停止打字超时",
+                        "data": {"session_id": self.session_id},
                     },
                 )
-                if self._lease == "user":
-                    raise TerminalInputHeldByUserError(
-                        "the user is typing in this terminal; retry after they finish "
-                        "(input is released after a few idle seconds)"
-                    )
-                raise TerminalSessionStateError("another agent input is still in progress")
+                raise TerminalUserTypingError(
+                    "the user kept typing in this terminal; "
+                    "retry after they pause for a few seconds"
+                )
+            # 用户按键不唤醒等待者，时间片只为复查停手、取消与会话结束。
             self._condition.wait(min(remaining, Constant.Terminal.WAIT_CANCEL_CHECK_SECONDS))
         if waited:
             log.info(
-                "terminal_agent_lease_acquired_after_wait",
+                "terminal_agent_input_after_user_typing",
                 extra={
-                    "msg": "用户租约释放后 Agent 取得输入",
+                    "msg": "用户停止打字后 Agent 输入送达",
                     "data": {"session_id": self.session_id},
                 },
             )
-        self._set_lease("agent")
-
-    def _release_agent_lease(self) -> None:
-        self._agent_call_id = None
-        if self._lease == "agent":
-            self._set_lease(None)
-
-    def _set_lease(self, holder: LeaseHolder | None) -> None:
-        """持锁调用：租约变化经快照投影给前端（唯一事实源，WS 不另推）；等待者被唤醒复查。"""
-        if self._lease == holder:
-            return
-        self._lease = holder
-        self._condition.notify_all()
-        self.notify_changed()
 
     def user_input(self, data: bytes) -> UserInputResult:
-        """用户原始按键：可在事件循环里直接调用，只做内存更新与非阻塞入队。
+        """用户原始按键：可在事件循环里直接调用，只做内存更新与非阻塞入队；从不因 Agent 被拒。
 
-        先入队、成功后才改租约与输入标注：背压（``TerminalWorkerBackpressureError``）或 worker
-        不可用时按键没有送达，状态必须保持原样。入队非阻塞、不与读线程交互，可在锁内进行。
+        先入队、成功后才记录按键时间、来源与输入标注：背压（``TerminalWorkerBackpressureError``）或
+        worker 不可用时按键没有送达，状态必须保持原样。入队非阻塞、不与读线程交互，可在锁内进行。
         ``starting`` 时 worker 尚未握手，抛 ``TerminalSessionStateError``。
         """
         with self._condition:
             if self._status not in _ACTIVE:
                 return "session_ended"
-            if self._lease == "agent" and data != _CTRL_C:
-                return "rejected_agent_input"
             worker = self._mutable_worker()
             worker.write({"type": "raw", "data_base64": base64.b64encode(data).decode("ascii")})
             self._user_marks.record(self._observation.buffer)
             self._user_last_input = time.monotonic()
-            # Ctrl-C 在 Agent 持有时也送达，并把租约转给用户：人必须始终能停下失控命令。
-            self._set_lease("user")
-            if not self._lease_watch_running:
-                self._lease_watch_running = True
-                threading.Thread(
-                    target=self._watch_user_lease,
-                    name=f"terminal-lease-{self.session_id[-8:]}",
-                    daemon=True,
-                ).start()
+            self._last_input_by = "user"
         return "accepted"
-
-    def _watch_user_lease(self) -> None:
-        """用户租约到期释放：空闲满时长且 shell 不在执行中（无集成时只看空闲）。"""
-        released = False
-        with self._condition:
-            try:
-                while self._lease == "user" and self._status in _ACTIVE:
-                    due = self._user_last_input + Constant.Terminal.USER_LEASE_IDLE_SECONDS
-                    now = time.monotonic()
-                    if now >= due and self._observation.phase != "executing":
-                        self._set_lease(None)
-                        released = True
-                        break
-                    # executing 时等 shell 事件唤醒（命令返回），时间片只是兜底复查。
-                    self._condition.wait(
-                        due - now if now < due else Constant.Terminal.WAIT_CANCEL_CHECK_SECONDS * 4
-                    )
-            finally:
-                self._lease_watch_running = False
-        if released:
-            log.info(
-                "terminal_user_lease_released",
-                extra={
-                    "msg": "用户输入空闲，释放终端租约",
-                    "data": {"session_id": self.session_id},
-                },
-            )
-
-    def release_user_input(self) -> None:
-        """用户主动释放输入租约；不结束交接（交接只由交还即 HITL 决定结束，见 :meth:`end_handoff`）。"""
-        with self._condition:
-            if self._lease != "user":
-                return
-            self._set_lease(None)
 
     def resize(self, rows: int, columns: int) -> None:
         """``starting`` 时只记下最新尺寸，握手完成后由 :meth:`start` 补发。"""
@@ -922,7 +878,7 @@ class TerminalSessionRuntime:
             ended=self._status not in _ACTIVE,
             end_reason=self._end_reason,
             exit_code=self._exit_code,
-            user_typing=self._lease == "user",
+            user_typing=self._user_typing(),
             handed_off=self._handoff is not None,
             user_marks=self._user_marks.lines,
             user_typed_in_screen=self._user_marks.in_screen,
@@ -944,8 +900,6 @@ class TerminalSessionRuntime:
                 end_reason=self._end_reason,
                 exit_code=self._exit_code,
                 integration=self._observation.integration_status,
-                input_holder=self._lease,
-                agent_input_call_id=self._agent_call_id if self._lease == "agent" else None,
                 command_running=self._observation.active_command is not None,
                 handoff_reason=handoff.reason if handoff else None,
                 handoff_call_id=handoff.tool_call_id if handoff else None,

@@ -19,6 +19,8 @@ from app.core.tool.schemas import ToolDefinition
 from app.core.workflow.message_queue.task_message import DecisionBody, TaskMessage
 from app.models.errors.input_errors import UserInputRejectedError
 from app.service import depends as service_depends
+from app.storage.store_engines import main_session_factory
+from app.storage.write_transaction import begin_immediate
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
@@ -42,6 +44,10 @@ class ToolDecisionService:
         ``decision_model``。工具自己的业务状态在执行决定时由工具判定。``source`` 只进日志，区分用户
         决定与运行时代为落定。
 
+        判定与入队在同一个 ``BEGIN IMMEDIATE`` 事务里：两次提交可能来自不同线程（用户交还与运行时
+        代为落定同时发生），分开读写会让两者都通过判定、各入队一条；写锁也让判定与 ``prepare_input``
+        「确认决定 + 占位推到 running」的事务互斥，两次读取看到的是同一时刻的事实。
+
         异常:
             SessionConflictError: ``DECISION_NOT_AWAITED`` / ``DECISION_ALREADY_SUBMITTED``。
             UserInputRejectedError: ``DECISION_DATA_INVALID``。
@@ -49,32 +55,33 @@ class ToolDecisionService:
         """
         context = service_depends.get_conversation_task_context_service()
         queue = service_depends.get_task_message_queue()
-        tool_name = context.awaiting_decision_tool(task_id, tool_call_id)
-        if tool_name is None:
-            raise SessionConflictError("DECISION_NOT_AWAITED", "该操作已不在等待决定，请刷新后重试")
-        if any(
-                isinstance(message.body, DecisionBody) and message.body.tool_call_id == tool_call_id
-                for message in queue.pending_nowait(task_id)
-        ):
-            raise SessionConflictError("DECISION_ALREADY_SUBMITTED", "该决定已提交，正在处理")
-        # 等待占位只会由已注册的 HITL 工具写入，定义必然存在。
-        definition = cast(ToolDefinition, get_tool_registry().get_tool_definition(tool_name))
-        payload = None
-        if decision == "approve" and definition.decision_model is not None:
-            try:
-                payload = definition.decision_model.model_validate(data or {}).model_dump(mode="json")
-            except ValidationError as exc:
-                raise UserInputRejectedError(
-                    "DECISION_DATA_INVALID", "提交的内容不合法，请检查后重试", detail=str(exc)
-                ) from exc
-        body = DecisionBody(
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            decision=decision,
-            feedback=feedback.strip() if feedback and feedback.strip() else None,
-            data=payload,
-        )
-        task_runtime_spaces.enqueue(task_id, TaskMessage.of(body))
+        with begin_immediate(main_session_factory()) as session:
+            tool_name = context.awaiting_decision_tool(task_id, tool_call_id, session=session)
+            if tool_name is None:
+                raise SessionConflictError("DECISION_NOT_AWAITED", "该操作已不在等待决定，请刷新后重试")
+            if any(
+                    isinstance(message.body, DecisionBody) and message.body.tool_call_id == tool_call_id
+                    for message in queue.pending_nowait(task_id, session=session)
+            ):
+                raise SessionConflictError("DECISION_ALREADY_SUBMITTED", "该决定已提交，正在处理")
+            # 等待占位只会由已注册的 HITL 工具写入，定义必然存在。
+            definition = cast(ToolDefinition, get_tool_registry().get_tool_definition(tool_name))
+            payload = None
+            if decision == "approve" and definition.decision_model is not None:
+                try:
+                    payload = definition.decision_model.model_validate(data or {}).model_dump(mode="json")
+                except ValidationError as exc:
+                    raise UserInputRejectedError(
+                        "DECISION_DATA_INVALID", "提交的内容不合法，请检查后重试", detail=str(exc)
+                    ) from exc
+            body = DecisionBody(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                decision=decision,
+                feedback=feedback.strip() if feedback and feedback.strip() else None,
+                data=payload,
+            )
+            task_runtime_spaces.enqueue(task_id, TaskMessage.of(body), session=session)
         log.info(
             "tool_decision_enqueued",
             extra={

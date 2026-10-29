@@ -2,8 +2,8 @@
 
 事实源是进程内的 ``TerminalSessionService``（``task_runtimes`` 各会话的 ``snapshot()``，由
 :func:`to_terminal_session` 映射成本契约的 camelCase 条目）：会话不持久化、不跨后端
-重启，所以列表不从 canonical 记录重建，只在 snapshot 物化与会话变化通知时整表读取。终端画面、租约
-与交接的实时细节走每会话 WebSocket，这里只给工作台标签栏与生命周期所需的摘要。
+重启，所以列表不从 canonical 记录重建，只在 snapshot 物化与会话变化通知时整表读取。终端画面与输入标记
+的实时细节走每会话 WebSocket，这里只给工作台标签栏与生命周期所需的摘要。
 """
 
 from __future__ import annotations
@@ -35,10 +35,6 @@ class ConversationTerminalSession(TypedDict):
     endReason: str | None
     exitCode: int | None
     integration: Literal["starting", "ready", "unavailable", "off"]
-    inputHolder: Literal["agent", "user"] | None
-    # Agent 持有输入时对应的 terminal_write 调用 id（其余时候为 None）：经 ``/tool-calls/{id}/cancel``
-    # 取消它即结束等待、释放租约，用户即可接管输入。
-    agentInputCallId: str | None
     # 集成跟踪到有命令正在执行（started 之后、returned 之前）；无集成时恒为 False，不代表空闲。
     commandRunning: bool
     handoff: ConversationTerminalHandoff | None
@@ -59,8 +55,6 @@ def to_terminal_session(session: SessionSnapshot) -> ConversationTerminalSession
         "integration": cast(
             Literal["starting", "ready", "unavailable", "off"], session.integration
         ),
-        "inputHolder": session.input_holder,
-        "agentInputCallId": session.agent_input_call_id,
         "commandRunning": session.command_running,
         "handoff": (
             {"reason": session.handoff_reason, "toolCallId": session.handoff_call_id}
@@ -75,7 +69,6 @@ TERMINAL_SESSION_KEYS = frozenset(ConversationTerminalSession.__annotations__)
 _CREATED_BY = frozenset({"agent", "user"})
 _STATUSES = frozenset({"starting", "running", "exited", "closed", "failed"})
 _INTEGRATIONS = frozenset({"starting", "ready", "unavailable", "off"})
-_INPUT_HOLDERS = frozenset({"agent", "user"})
 
 
 def validate_terminal_sessions(value: object) -> None:
@@ -106,13 +99,6 @@ def validate_terminal_sessions(value: object) -> None:
             raise ValueError("terminal session status is invalid")
         if entry["integration"] not in _INTEGRATIONS:
             raise ValueError("terminal session integration is invalid")
-        if entry["inputHolder"] is not None and entry["inputHolder"] not in _INPUT_HOLDERS:
-            raise ValueError("terminal session inputHolder is invalid")
-        call_id = entry["agentInputCallId"]
-        if call_id is not None and (not isinstance(call_id, str) or not call_id):
-            raise ValueError("terminal session agentInputCallId must be a non-empty string or null")
-        if call_id is not None and entry["inputHolder"] != "agent":
-            raise ValueError("terminal session agentInputCallId requires inputHolder=agent")
         if not isinstance(entry["commandRunning"], bool):
             raise ValueError("terminal session commandRunning must be a boolean")
         if entry["endReason"] is not None and not isinstance(entry["endReason"], str):

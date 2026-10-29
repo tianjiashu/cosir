@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { TerminalSessionEntry } from "@/lib/assistant/contract";
-import { cancelToolCall, submitToolDecision } from "@/lib/assistant/task-commands";
+import { submitToolDecision } from "@/lib/assistant/task-commands";
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { HttpError } from "@/lib/http/errors";
@@ -80,9 +80,11 @@ export function useTerminalSessionActions(
       const confirmed = await requestConfirmation({
         title: "关闭终端？",
         description: session.commandRunning
-          ? `「${tab.title}」中有正在运行的程序，关闭会将其结束，此操作不可撤销。`
+          ? `「${tab.title}」中有正在运行的程序，关闭会将其结束。`
           : `无法判断「${tab.title}」中是否有程序在运行（shell 集成未就绪），关闭会结束其中的全部程序。`,
+        irreversible: true,
         confirmLabel: "关闭终端",
+        busyLabel: "正在关闭…",
         tone: "destructive",
         icon: "delete",
         failureFallback: "关闭终端失败",
@@ -102,21 +104,6 @@ export function useTerminalSessionActions(
       store.select(taskId, next.session.sessionId);
     }
   };
-
-  /**
-   * 用户接管 Agent 正在输入的会话：取消 Agent 这次输入的工具调用。终端条件等待只在前台进行，取消后
-   * 等待以 `cancelled` 结束、带回截至当时的输出，输入租约随之释放（经 snapshot 推送），然后把焦点给到
-   * 该终端。已取消过时照常聚焦，等租约释放即可输入。
-   */
-  const takeOverInput = useCallback(async (session: TerminalSessionEntry) => {
-    if (session.agentInputCallId === null) return;
-    const result = await cancelToolCall(taskId, session.agentInputCallId);
-    if (result.kind === "failed") {
-      flashNotice({ text: result.message, tone: "destructive" });
-      return;
-    }
-    useTerminalWorkbenchStore.getState().select(taskId, session.sessionId);
-  }, [flashNotice, taskId]);
 
   /**
    * 交还交接：交接是 HITL 调用（`terminal_handoff`），交还即对它作出决定；成功后交接提示随 snapshot
@@ -141,5 +128,5 @@ export function useTerminalSessionActions(
     }
   }, [flashNotice, returningHandoff, taskId]);
 
-  return { creating, notice, createSession, closeTab, takeOverInput, returnHandoff, returningHandoff };
+  return { creating, notice, createSession, closeTab, returnHandoff, returningHandoff };
 }

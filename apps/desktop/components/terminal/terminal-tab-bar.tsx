@@ -1,8 +1,7 @@
-import { BotIcon, KeyboardIcon, KeyboardOffIcon, PlusIcon, UserIcon, XIcon } from "lucide-react";
+import { BotIcon, PlusIcon, UserIcon, XIcon } from "lucide-react";
 
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { panelTabClass } from "@/components/ui/panel-tokens";
-import type { TerminalSessionEntry } from "@/lib/assistant/contract";
 import type { TerminalShell } from "@/lib/terminal/terminal-api";
 import { isActiveTerminalSession, terminalStatusPresentation, type TerminalTab } from "@/lib/terminal/terminal-sessions";
 import { cn } from "@/lib/utils";
@@ -18,8 +17,6 @@ export function TerminalTabBar({
   createDisabled,
   onSelect,
   onClose,
-  onRelease,
-  onTakeOver,
   onCreate,
 }: {
   tabs: readonly TerminalTab[];
@@ -29,8 +26,6 @@ export function TerminalTabBar({
   createDisabled: boolean;
   onSelect: (sessionId: string) => void;
   onClose: (tab: TerminalTab) => void;
-  onRelease: (sessionId: string) => void;
-  onTakeOver: (session: TerminalSessionEntry) => void;
   onCreate: (shell: string) => void;
 }) {
   const defaultShell = shells?.find((shell) => shell.isDefault)?.kind ?? null;
@@ -45,8 +40,6 @@ export function TerminalTabBar({
             showShell={defaultShell !== null && tab.session.shellKind !== defaultShell}
             onSelect={() => onSelect(tab.session.sessionId)}
             onClose={() => onClose(tab)}
-            onRelease={() => onRelease(tab.session.sessionId)}
-            onTakeOver={() => onTakeOver(tab.session)}
           />
         ))}
       </div>
@@ -70,19 +63,14 @@ function TerminalTabButton({
   showShell,
   onSelect,
   onClose,
-  onRelease,
-  onTakeOver,
 }: {
   tab: TerminalTab;
   active: boolean;
   showShell: boolean;
   onSelect: () => void;
   onClose: () => void;
-  onRelease: () => void;
-  onTakeOver: () => void;
 }) {
   const { session } = tab;
-  const holder = session.inputHolder;
   const status = terminalStatusPresentation(session.status);
   const CreatorIcon = session.createdBy === "agent" ? BotIcon : UserIcon;
   return (
@@ -100,25 +88,6 @@ function TerminalTabButton({
         <span className="truncate">{tab.title}</span>
         {showShell && <span className="text-muted-foreground shrink-0 font-mono text-2xs">{session.shellKind}</span>}
       </button>
-      {/* 租约指示固定占位：用户输入后约 3 秒租约自动释放，若按需增删，标签宽度会变、右侧「+」跟着
-          平移，正好落在用户刚打完字去点「+」的时刻，造成首次点击落空。 */}
-      {isActiveTerminalSession(session) && (
-        <span className="flex size-5 shrink-0 items-center justify-center" data-terminal-holder={holder ?? "none"}>
-          {/* Agent 在等输入的结果时可接管：取消它这次调用，等待结束、输入权随之释放。 */}
-          {holder === "agent" && (session.agentInputCallId !== null ? (
-            <TooltipIconButton tooltip="Agent 正在输入，点击接管（中止 Agent 这次输入）" aria-label="接管输入" className="text-info size-5" onClick={onTakeOver}>
-              <KeyboardIcon aria-hidden="true" />
-            </TooltipIconButton>
-          ) : (
-            <KeyboardIcon className="text-info size-3" aria-label="Agent 正在输入" />
-          ))}
-          {holder === "user" && (
-            <TooltipIconButton tooltip="释放输入（允许 Agent 输入）" aria-label="释放输入" className="size-5" onClick={onRelease}>
-              <KeyboardOffIcon aria-hidden="true" />
-            </TooltipIconButton>
-          )}
-        </span>
-      )}
       <TooltipIconButton
         tooltip={isActiveTerminalSession(session) ? "关闭终端" : "从标签栏移除"}
         aria-label={`关闭 ${tab.title}`}

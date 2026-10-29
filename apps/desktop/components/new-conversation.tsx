@@ -20,7 +20,6 @@ import { useCreateWorkspaceFromFolder, WorkspacePicker } from "@/components/comp
 import { CosirMark } from "@/components/cosir-mark";
 import { FirstRunChecklist } from "@/components/onboarding/first-run-checklist";
 import { modelSetupState, shouldShowFirstRunChecklist, startBlockedReason } from "@/components/onboarding/start-readiness";
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { createWorkspaceTask, deleteTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
@@ -33,11 +32,7 @@ import { ImageLightbox } from "@/components/ui/image-lightbox";
 import { getLocalAttachment, getLocalAttachmentById, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import { submitNewConversationMessage, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-new-conversation-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { notify } from "@/lib/notify";
@@ -170,7 +165,6 @@ export function NewConversation({
   const setText = (text: string) => updateDraft(draftId, current => ({ ...current, text }));
   const [submitting, setSubmitting] = useState(false);
   const [modelReady, setModelReady] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const attachments = draft.attachments;
   const setAttachments = (value: SetStateAction<ImageDraftAttachment[]>) => updateDraft(draftId, current => ({ ...current, attachments: typeof value === "function" ? value(current.attachments) : value }));
   const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>([]);
@@ -219,7 +213,6 @@ export function NewConversation({
     const trimmedText = text.trim();
     if (!canStart || !selectedWorkspaceId) return;
     setSubmitting(true);
-    setError(null);
     const sendAttachments = [...attachments];
     const creationCommandId = crypto.randomUUID();
     const traceId = newTraceId();
@@ -264,7 +257,7 @@ export function NewConversation({
       const possiblyAccepted = wasCommandPossiblyAccepted(cause);
       if (provisionalTask && !possiblyAccepted) {
         try {
-          await deleteTask(provisionalTask.task_id, creationCommandId);
+          await deleteTask(provisionalTask.task_id, { creationCommandId });
         } catch (cleanupError) {
           void frontendLog("ERROR", "provisional_task_cleanup_failed", "provisional Task 清理失败", {
             traceId,
@@ -279,7 +272,7 @@ export function NewConversation({
         data: { taskId: provisionalTask?.task_id ?? null, creationCommandId, possiblyAccepted },
         error: cause,
       });
-      if (stillHere()) setError(userErrorMessage(cause, "创建对话失败，请重试"));
+      if (stillHere()) void showErrorDialog({ title: "创建对话失败", message: userErrorMessage(cause, "创建对话失败，请重试") });
       else notify.error("创建对话失败", { error: cause, fallback: "创建对话失败，请重试" });
     } finally {
       if (mountedRef.current) setSubmitting(false);
@@ -375,12 +368,6 @@ export function NewConversation({
           <ComposerFeedback />
           </ComposerFeedbackProvider>
         </ComposerSurface>
-        <Dialog open={Boolean(error)} onOpenChange={(open) => { if (!open) setError(null); }}>
-          <DialogContent>
-            <DialogTitle>创建对话失败</DialogTitle>
-            <Alert tone="destructive">{error}</Alert>
-          </DialogContent>
-        </Dialog>
       </form>
       </ComposerInsertionProvider>
     </div>

@@ -6,9 +6,10 @@ import {
   backgroundToolCall,
   cancelTask,
   cancelToolCall,
-  editQueuedTaskMessage,
+  deleteQueuedTaskMessage,
   rerunTaskMessage,
   resumeTask,
+  sendQueuedTaskMessageNow,
   sendTaskMessage,
   submitToolDecision,
   type TaskMessageRequest,
@@ -36,25 +37,30 @@ beforeEach(() => vi.stubGlobal("window", {}));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("task commands", () => {
-  it("发送消息只按 Task 寻址，携带投递方式而不携带 runId", async () => {
+  it("发送消息只按 Task 寻址，不携带投递方式与 runId（并入时机由后端决定）", async () => {
     vi.stubGlobal("fetch", accepted());
 
-    await expect(sendTaskMessage(7, { ...REQUEST, delivery: "next_run" })).resolves.toBeUndefined();
+    await expect(sendTaskMessage(7, REQUEST)).resolves.toBeUndefined();
 
     const [url, init] = lastCall();
     expect(url).toMatch(/\/tasks\/7\/messages$/);
-    expect(JSON.parse(String(init.body))).toEqual({ ...REQUEST, delivery: "next_run" });
+    expect(JSON.parse(String(init.body))).toEqual(REQUEST);
   });
 
-  it("编辑排队消息用 PATCH 按消息寻址，只带正文，不带发起配置", async () => {
+  it("排队消息立即发送用 POST send-now、删除用 DELETE，都按消息寻址且不带请求体", async () => {
     vi.stubGlobal("fetch", accepted(200));
 
-    await expect(editQueuedTaskMessage(7, "msg/1", REQUEST.message)).resolves.toBeUndefined();
+    await expect(sendQueuedTaskMessageNow(7, "msg/1")).resolves.toBeUndefined();
+    let [url, init] = lastCall();
+    expect(url).toMatch(/\/tasks\/7\/queued-messages\/msg%2F1\/send-now$/);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
 
-    const [url, init] = lastCall();
+    await expect(deleteQueuedTaskMessage(7, "msg/1")).resolves.toBeUndefined();
+    [url, init] = lastCall();
     expect(url).toMatch(/\/tasks\/7\/queued-messages\/msg%2F1$/);
-    expect(init.method).toBe("PATCH");
-    expect(JSON.parse(String(init.body))).toEqual({ message: REQUEST.message });
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
   });
 
   it("编辑重跑按消息寻址，携带发起配置但不含投递方式", async () => {
@@ -80,12 +86,12 @@ describe("task commands", () => {
     expect(JSON.parse(String(lastCall()[1].body))).toEqual({ decision: "approve", data: { goal: "交付" } });
   });
 
-  it("编辑排队消息时消息已并入：409 MESSAGE_CONSUMED 原样抛出", async () => {
+  it("排队消息已不在队列中：409 MESSAGE_CONSUMED 原样抛出", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ detail: { error: { code: "MESSAGE_CONSUMED", message: "消息已被处理", retryable: false } } }),
       { status: 409, headers: { "Content-Type": "application/json" } },
     )));
-    const error = await editQueuedTaskMessage(7, "1", REQUEST.message).catch((cause: unknown) => cause);
+    const error = await deleteQueuedTaskMessage(7, "1").catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(HttpError);
     expect((error as HttpError).code).toBe("MESSAGE_CONSUMED");
   });

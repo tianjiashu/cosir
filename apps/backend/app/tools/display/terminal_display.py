@@ -34,14 +34,15 @@ def build_terminal_display_data(
     }
 
 
-def build_terminal_background_display_data(*, command: str, workdir: Path) -> dict[str, Any]:
-    """命令转到后台时占位卡片的展示数据：还没有输出与退出码，``background`` 标明在后台运行。
+def build_terminal_placeholder_display_data(*, command: str, workdir: Path) -> dict[str, Any]:
+    """命令转到后台时占位卡片的展示数据：只有命令与工作目录，还没有输出与退出码。
 
-    卡片状态仍以 part 生命周期为准（占位为 ``pending``，结论并入或撤销时推到终态）；结论正文只回投
-    给模型，不回写这里。
+    「在后台」不写在这里：它是所有延迟结果共有的事实，由占位行 metadata 的 ``deferred`` 投影到
+    工具 part（持久化、结算时保留），前端统一读取，不按工具各存一份。卡片状态以 part 生命周期为准
+    （占位为 ``pending``，结论并入或撤销时推到终态）。
     """
 
-    return {"kind": "terminal-result", "command": command, "workdir": str(workdir), "background": True}
+    return {"kind": "terminal-result", "command": command, "workdir": str(workdir)}
 
 
 def build_terminal_session_display_data(

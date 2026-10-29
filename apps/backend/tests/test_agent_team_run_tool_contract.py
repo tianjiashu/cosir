@@ -680,3 +680,29 @@ def test_failed_team_reports_its_settled_status(monkeypatch) -> None:
     assert observation.status == "success"
     payload = json.loads(observation.content)
     assert (payload["status"], payload["end_reason"]) == ("failed", "node_run_failed")
+
+
+def test_user_stopped_team_reports_cancelled_with_run_history(monkeypatch) -> None:
+    """用户单独停止这次调用（Coordinator 以 CANCELLED 落定）：按取消返回，并保留档案指引。"""
+    runs = _DecisionRuns()
+    runs.final = SimpleNamespace(id=101, status="cancelled", end_reason="cancelled")
+
+    observation, started, _ = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
+
+    assert started == [101]
+    assert observation.status == "cancelled"
+    assert observation.tool_call_id == "call-team"
+    assert observation.team_run_id == 101
+    assert "the user stopped this Agent Team run" in observation.content
+    assert ".cosir/agent-team-runs/101.json" in observation.content
+
+
+def test_team_stopped_with_its_parent_task_is_not_reported_as_user_stop(monkeypatch) -> None:
+    """主 Task 停止（PARENT_CANCELLED）只是随之落定，不按「用户单独停止」措辞返回。"""
+    runs = _DecisionRuns()
+    runs.final = SimpleNamespace(id=101, status="cancelled", end_reason="parent_cancelled")
+
+    observation, _, _ = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
+
+    assert observation.status == "success"
+    assert json.loads(observation.content)["end_reason"] == "parent_cancelled"

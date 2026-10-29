@@ -29,8 +29,8 @@ _TASK_ID = 31
 def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, dict[str, Any]]]:
     calls: list[tuple[str | None, str, dict[str, Any]]] = []
 
-    def deliver(task_id, *, tool_call_id, tool_name, result) -> bool:
-        calls.append((tool_call_id, tool_name, result))
+    def deliver(task_id, *, tool_call_id, tool_name, result, placeholder_display_data=None) -> bool:
+        calls.append((tool_call_id, tool_name, {**result, "card": placeholder_display_data}))
         return True
 
     monkeypatch.setattr(deferred_module, "deliver_background_result", deliver)
@@ -79,13 +79,16 @@ def test_background_command_returns_a_placeholder_then_delivers(tmp_path, delive
         "kind": "terminal-result",
         "command": "sleep 0.2; echo done",
         "workdir": str(tmp_path.resolve()),
-        "background": True,
     }
     _wait_for(lambda: len(delivered) == 1)
     tool_call_id, tool_name, payload = delivered[0]
     assert (tool_call_id, tool_name) == ("call-bg", "terminal_command")
     assert payload["end_reason"] == "exited" and payload["exit_code"] == 0
     assert "done" in str(payload["output"])
+    # 占位卡片的终态展示随结论走：完整输出与退出码，不经模型的输出预算。
+    card = payload["card"]
+    assert card["kind"] == "terminal-result" and card["exit_code"] == 0
+    assert card["command"] == "sleep 0.2; echo done" and "done" in card["output"]
 
 
 def test_foreground_limit_moves_the_command_to_background_and_suspends(

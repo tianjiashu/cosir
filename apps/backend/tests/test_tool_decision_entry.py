@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from types import SimpleNamespace
 from typing import Any
 
@@ -32,17 +33,22 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         module,
         "task_runtime_spaces",
-        SimpleNamespace(enqueue=lambda task_id, message: enqueued.append((task_id, message))),
+        SimpleNamespace(
+            enqueue=lambda task_id, message, **_kw: enqueued.append((task_id, message))
+        ),
     )
+    # 判定与入队的写事务由真实主库保证（见 ``test_decision_claim.py``）；这里只测校验与载荷。
+    monkeypatch.setattr(module, "main_session_factory", lambda: None)
+    monkeypatch.setattr(module, "begin_immediate", lambda _factory: contextlib.nullcontext())
     monkeypatch.setattr(
         module,
         "get_tool_registry",
         lambda: SimpleNamespace(get_tool_definition=definitions.__getitem__),
     )
     context = SimpleNamespace(
-        awaiting_decision_tool=lambda _task_id, call_id: awaiting.get(call_id)
+        awaiting_decision_tool=lambda _task_id, call_id, **_kw: awaiting.get(call_id)
     )
-    queue = SimpleNamespace(pending_nowait=lambda _task_id: list(queued))
+    queue = SimpleNamespace(pending_nowait=lambda _task_id, **_kw: list(queued))
     monkeypatch.setattr(module.service_depends, "get_conversation_task_context_service", lambda: context)
     monkeypatch.setattr(module.service_depends, "get_task_message_queue", lambda: queue)
     monkeypatch.setattr(

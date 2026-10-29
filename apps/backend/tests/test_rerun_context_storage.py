@@ -8,7 +8,7 @@ import pytest
 
 from app.core.context.context_store import ContextStore
 from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import UserMessageMetadata
+from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.service.depends import get_conversation_task_context_service
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -61,3 +61,46 @@ def test_exclude_from_soft_deletes_target_and_later_rows(task) -> None:
     assert not any(row.project_to_transport for row in excluded)
     # 被移出的输入不再是编辑目标，最新用户输入回退到更早那条。
     assert context.latest_user_input(task.id).message_id == 11
+
+
+def test_exclude_from_keeps_late_results_of_earlier_calls(isolated_storage, tmp_path) -> None:
+    """撤回一轮只撤回它自己：更早调用在这一轮才并入的结果保留，返回这一轮发起的调用。"""
+    workspace = WorkspaceCrud().create("rerun", str(tmp_path))
+    task = TaskCrud().create(workspace.id, "rerun", tool_schemas=[])
+    store = ContextStore()
+
+    def call(call_id: str) -> dict[str, object]:
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": call_id, "type": "function", "function": {"name": "t", "arguments": "{}"}}
+            ],
+        }
+
+    def _placeholder() -> ToolMessageMetadata:
+        return ToolMessageMetadata(status="pending", deferred=True)
+
+    def result_of(call_id: str) -> UserMessageMetadata:
+        return UserMessageMetadata(kind="background_result", tool_call_id=call_id)
+
+    rows = [
+        ({"role": "user", "content": "first"}, _user("first"), 11),
+        (call("call-early"), None, None),
+        ({"role": "tool", "tool_call_id": "call-early", "content": "running"}, _placeholder(), None),
+        ({"role": "user", "content": "second"}, _user("second"), 12),
+        (call("call-late"), None, None),
+        ({"role": "tool", "tool_call_id": "call-late", "content": "running"}, _placeholder(), None),
+        # 第一轮那次调用的结论在第二轮才并入：属于第一轮。
+        ({"role": "user", "content": "early done"}, result_of("call-early"), None),
+        ({"role": "user", "content": "late done"}, result_of("call-late"), None),
+    ]
+    for sequence, (message, metadata, message_id) in enumerate(rows, start=1):
+        store.append(task.id, None, message, sequence, metadata=metadata, message_id=message_id)
+
+    with main_session_factory().begin() as session:
+        withdrawn = get_conversation_task_context_service().exclude_from(task.id, 4, session)
+
+    assert withdrawn == frozenset({"call-late"})
+    included = ConversationTaskContextCrud().get(task.id, include_in_context=True)
+    assert [row.sequence for row in included] == [1, 2, 3, 7]

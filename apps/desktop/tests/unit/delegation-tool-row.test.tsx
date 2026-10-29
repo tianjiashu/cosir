@@ -30,7 +30,7 @@ function renderDelegationRow(interactive?: boolean, displayData: Record<string, 
 }
 
 describe("DelegationToolRow", () => {
-  it("does not duplicate child locators or lifecycle text in the compact row", () => {
+  it("shows the child Run status without child locators or raw payload", () => {
     const html = renderDelegationRow(undefined, {
       kind: "delegation-result",
       title: "审查代码",
@@ -43,10 +43,9 @@ describe("DelegationToolRow", () => {
     });
 
     expect(html).toContain("Reviewer");
-    expect(html).toContain("执行中");
+    expect(html).toContain("运行中");
     expect(html).not.toContain("task 501");
     expect(html).not.toContain("run 902");
-    expect(html).not.toContain("运行中");
     expect(html).not.toContain("不应显示的原始 prompt");
     expect(html).not.toContain("Traceback: secret=do-not-render");
   });
@@ -81,8 +80,8 @@ describe("DelegationToolRow", () => {
   });
 
   it.each([
-    ["failed", "失败"],
-    ["cancelled", "已取消"],
+    ["failed", "运行失败"],
+    ["cancelled", "已停止"],
   ] as const)("projects %s child state with a stable label", (status, label) => {
     const html = renderDelegationRow(undefined, {
       kind: "delegation-result",
@@ -101,7 +100,6 @@ describe("DelegationToolRow", () => {
     const html = renderDelegationRow(true);
 
     expect(html).toContain('aria-label="停止子 Agent：审查代码"');
-    expect(html).toContain(">停止</button>");
   });
 
   it("keeps child cancellation unavailable on read-only surfaces", () => {
@@ -109,5 +107,14 @@ describe("DelegationToolRow", () => {
 
     expect(html).not.toContain("停止子 Agent");
     expect(html).toContain("审查代码");
+  });
+});
+
+describe("DelegationToolRow layout", () => {
+  it("is a static card, not a collapsible disclosure", () => {
+    const html = renderDelegationRow();
+
+    expect(html).not.toContain("disclosure-row-chevron");
+    expect(html).not.toContain("terminal-surface");
   });
 });

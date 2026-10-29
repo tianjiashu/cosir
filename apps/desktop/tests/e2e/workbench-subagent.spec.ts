@@ -30,7 +30,7 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   await expect(page.getByText("子 Agent 已开始工作。", { exact: true })).toBeVisible();
   const row = page.getByTestId("tool-activity-row").filter({ hasText: "审查代码" });
   await expect(row).toContainText("Reviewer");
-  // 行本身只展开内联详情；打开工作台走独立按钮。
+  // 委派卡片不可展开；标题按钮铺满卡片，点卡片即打开工作台。
   const openReviewer = page.getByRole("button", { name: "打开子 Agent工作台：审查代码" });
   await openReviewer.click();
 

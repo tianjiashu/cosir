@@ -37,8 +37,6 @@ def _entry(session_id: str = "term_1", **overrides: Any) -> dict[str, Any]:
         "endReason": None,
         "exitCode": None,
         "integration": "ready",
-        "inputHolder": None,
-        "agentInputCallId": None,
         "commandRunning": False,
         "handoff": None,
         "createdAt": "2026-10-27T00:00:00+00:00",
@@ -67,8 +65,6 @@ class _FakeRuntime:
             end_reason=entry["endReason"],
             exit_code=entry["exitCode"],
             integration=entry["integration"],
-            input_holder=entry["inputHolder"],
-            agent_input_call_id=entry["agentInputCallId"],
             command_running=entry["commandRunning"],
             handoff_reason=handoff["reason"] if handoff else None,
             handoff_call_id=handoff["toolCallId"] if handoff else None,
@@ -143,7 +139,7 @@ def test_snapshot_without_terminal_sessions_is_rejected() -> None:
         _entry(status="interrupted"),
         _entry(createdBy="system"),
         _entry(integration="maybe"),
-        _entry(inputHolder="both"),
+        _entry(commandRunning="yes"),
         _entry(exitCode=True),
         _entry(handoff={"reason": "x", "toolCallId": "call-1", "extra": 1}),
         _entry(handoff={"reason": "x"}),
@@ -164,7 +160,7 @@ def test_valid_entries_including_handoff_and_exit_pass() -> None:
     state = empty_snapshot()
     state["terminal_sessions"] = [  # type: ignore[list-item]
         _entry(
-            "a", inputHolder="agent", handoff={"reason": "请输入密码", "toolCallId": "call-1"},
+            "a", handoff={"reason": "请输入密码", "toolCallId": "call-1"},
             createdBy="agent",
         ),
         _entry("b", status="exited", endReason="shell_exited", exitCode=0, integration="off"),

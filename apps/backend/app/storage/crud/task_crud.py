@@ -173,6 +173,60 @@ class TaskCrud:
             candidate = f"{base_title} {suffix}"
         return candidate
 
+    def list_fork_sources(self, workspace_id: int) -> dict[int, int]:
+        """返回工作区内 fork 与其直接来源的对应（fork id → 来源 id）；没有来源的 fork 不在其中。"""
+
+        with self._session_factory() as session:
+            rows = session.execute(
+                select(TaskModel.id, TaskModel.extra).where(
+                    TaskModel.workspace_id == workspace_id, TaskModel.task_type == "fork"
+                )
+            ).all()
+        sources: dict[int, int] = {}
+        for row_id, extra in rows:
+            fork = (extra or {}).get("fork")
+            source = fork.get("source_task_id") if isinstance(fork, dict) else None
+            if isinstance(source, int):
+                sources[row_id] = source
+        return sources
+
+    def reparent_forks(
+        self,
+        workspace_id: int,
+        source_ids: frozenset[int],
+        new_source_id: int | None,
+        session: Session,
+    ) -> int:
+        """在外部事务中把来源在 ``source_ids`` 里的 fork 改挂到 ``new_source_id``，返回改动行数。
+
+        fork 的来源记在 ``extra.fork.source_task_id``（不是 ``parent_task_id``，后者只承载所有权）。
+        ``new_source_id`` 为 ``None`` 时去掉来源，侧栏把它当作根。``source_ids`` 自身不改：它们随后
+        被删除。刻意不刷新 ``updated_at``：侧栏按它排序，重挂不是对话活动。
+        """
+
+        rows = session.execute(
+            select(TaskModel.id, TaskModel.extra).where(
+                TaskModel.workspace_id == workspace_id,
+                TaskModel.task_type == "fork",
+                TaskModel.id.not_in(source_ids),
+            )
+        ).all()
+        moved = 0
+        for row_id, extra in rows:
+            fork = (extra or {}).get("fork")
+            if not isinstance(fork, dict) or fork.get("source_task_id") not in source_ids:
+                continue
+            fork = {key: value for key, value in fork.items() if key != "source_task_id"}
+            if new_source_id is not None:
+                fork["source_task_id"] = new_source_id
+            session.execute(
+                update(TaskModel)
+                .where(TaskModel.id == row_id)
+                .values(extra={**extra, "fork": fork}, updated_at=TaskModel.updated_at)
+            )
+            moved += 1
+        return moved
+
     def list_by_parent_task(self, parent_task_id: int) -> list[TaskRecord]:
         """返回某父任务直接委派的子 Agent Task（``task_type='delegate_task'``），供展示使用。
 

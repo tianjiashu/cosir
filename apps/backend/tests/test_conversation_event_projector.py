@@ -123,7 +123,7 @@ def _consume(
 ) -> object:
     owner = projector._state_service
     queue_user_input(owner.states.setdefault(task_id, empty_snapshot()), message_id, presentation)
-    return projector.process(consumed(task_id, run_id, message_id))
+    return projector.process(consumed(task_id, run_id, message_id, presentation))
 
 
 def _start(projector: ConversationEventProjector, context_window_total: int | None = None) -> None:
@@ -256,22 +256,19 @@ def test_user_input_supports_attachment_only_and_duplicate_event(
 ) -> None:
     event_projector, snapshots = projector
     _init_run(event_projector)
-    queue_user_input(
-        snapshots.states[1],
-        1,
-        UserInputPresentation(
-            display_text="[[cosir-file:only-file]]",
-            attachments=[
-                {
-                    "id": "only-file",
-                    "name": "a.txt",
-                    "content_type": "text/plain",
-                    "path": "attachments/only-file.txt",
-                }
-            ],
-        ),
+    presentation = UserInputPresentation(
+        display_text="[[cosir-file:only-file]]",
+        attachments=[
+            {
+                "id": "only-file",
+                "name": "a.txt",
+                "content_type": "text/plain",
+                "path": "attachments/only-file.txt",
+            }
+        ],
     )
-    event = consumed(1, 1, 1)
+    queue_user_input(snapshots.states[1], 1, presentation)
+    event = consumed(1, 1, 1, presentation)
 
     first = event_projector.process(event)
     # 同一事件重复投递：按 event_id 去重，不再产出帧。
@@ -887,7 +884,7 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
-        lambda: consumed(1, 1, 1),
+        lambda: consumed(1, 1, 1, UserInputPresentation(display_text="你好")),
     )
     _assert_reapply_changes_nothing(
         event_projector,

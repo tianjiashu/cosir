@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from app.core.tool.background.deferred_job import DeferredConclusion
 from app.assistant_transport.service import transport_assistant_service as service_module
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core import task_actor as actor_module
@@ -196,7 +197,7 @@ async def chain(monkeypatch):
         )
     )
     _Driver.mailbox = actor.mailbox
-    space = SimpleNamespace(actor=actor)
+    space = SimpleNamespace(actor=actor, async_operation=contextlib.nullcontext)
     child_cancels: list[tuple[int, str]] = []
     monkeypatch.setattr(
         service_module,
@@ -206,11 +207,13 @@ async def chain(monkeypatch):
             enqueue=lambda task_id, message, **_kw: queue.put(task_id, message),
         ),
     )
-    # actor 收尾时经注册表停止子 Task、经 Coordinator 停止 Agent Team。
+    # actor 收尾时经子 Task 的 actor 停止子 Task、经 Coordinator 停止 Agent Team。
     monkeypatch.setattr(
         registry_module.task_runtime_spaces,
-        "cancel",
-        lambda task_id, reason: child_cancels.append((task_id, reason)),
+        "get_or_create",
+        lambda task_id: SimpleNamespace(actor=SimpleNamespace(
+            request_cancel=lambda reason: child_cancels.append((task_id, reason))
+        )),
     )
     cancelled_teams: list[int] = []
     monkeypatch.setattr(
@@ -246,14 +249,13 @@ async def chain(monkeypatch):
     cancellation_registry.consume(_CHILD_TASK_ID)
 
 
-def _send_request(text: str, delivery: str = "immediate"):
+def _send_request(text: str):
     from app.assistant_transport.request import SendMessageRequest
 
     return SendMessageRequest.model_validate(
         {
             "message": {"role": "user", "parts": [{"type": "text", "text": text}]},
             "modelConfigId": 1,
-            "delivery": delivery,
         }
     )
 
@@ -286,13 +288,65 @@ async def test_phase_stays_driving_until_the_executor_is_released(chain) -> None
     assert await chain.actor.phase() == "idle"
 
 
+async def test_sends_while_running_queue_and_drain_one_per_run(chain) -> None:
+    """运行中发送排队（``next_run``）不并入当前 Run；Run 完成后一轮只消费一条，依次接续。"""
+    await chain.service.send(_TASK_ID, _send_request("first"))
+    await _settle()
+    first_run = chain.ledger.current
+    assert len(_Driver.consumed) == 1
+
+    await chain.service.send(_TASK_ID, _send_request("second"))
+    await chain.service.send(_TASK_ID, _send_request("third"))
+    await _settle()
+    assert [row.delivery for row in chain.queue.rows] == ["next_run", "next_run"]
+    assert len(_Driver.consumed) == 1
+
+    await _finish(first_run.id, "completed")
+    second_run = chain.ledger.current
+    assert second_run.id != first_run.id
+    assert [row.body.input_text for row in chain.queue.rows] == ["third"]
+
+    await _finish(second_run.id, "completed")
+    assert chain.ledger.current.id != second_run.id
+    assert chain.queue.rows == []
+    await _finish(chain.ledger.current.id, "completed")
+
+
+async def test_queued_inputs_wait_after_cancel_and_a_new_send_runs_first(chain) -> None:
+    """取消不自动接续；空闲时新发送的是 ``immediate``，先于留下的排队消息被新 Run 选中。"""
+    await chain.service.send(_TASK_ID, _send_request("first"))
+    await _settle()
+    await chain.service.send(_TASK_ID, _send_request("queued"))
+    await chain.service.cancel(_TASK_ID)
+    await _finish(chain.ledger.current.id, "cancelled")
+    assert chain.ledger.current.status == "cancelled"
+    # 队列里还有用户取消留下的通知（随下一个 Run 并入）。
+    assert [row.body.input_text for row in chain.queue.rows if isinstance(row.body, UserInputBody)] == [
+        "queued"
+    ]
+
+    await chain.service.send(_TASK_ID, _send_request("fresh"))
+    await _settle()
+    assert chain.ledger.current.status == "running"
+    assert [row.body.input_text for row in chain.queue.rows if isinstance(row.body, UserInputBody)] == [
+        "queued"
+    ]
+    await _finish(chain.ledger.current.id, "completed")
+
+
 async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) -> None:
     """挂起的 Run 没有执行者：工具调用都已闭合，标记了也没人取，返回 False。"""
     run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
     run.status = "suspended"
     assert chain.service.cancel_tool_call(_TASK_ID, "call-1") is False
 
+    # 挂起时用户发送只排队、不唤醒：仍没有执行者。
     await chain.service.send(_TASK_ID, _send_request("hello"))
+    await _settle()
+    assert not chain.actor.driving
+    assert [row.delivery for row in chain.queue.rows] == ["next_run"]
+
+    chain.queue.put(_TASK_ID, TaskMessage.of(BackgroundResultBody(tool_name="probe", tool_result="done")))
     await _settle()
     assert chain.actor.driving
     assert chain.service.cancel_tool_call(_TASK_ID, "call-1") is True
@@ -520,6 +574,40 @@ async def test_cancelling_a_suspended_run_stops_downstream_immediately(chain) ->
     assert chain.cancelled_teams == [_TASK_ID]
 
 
+def _fail_settling(monkeypatch) -> None:
+    def _raise(*_args) -> int:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(service_module.placeholders, "settle_placeholders", _raise)
+
+
+async def test_placeholder_settle_failure_does_not_block_running_cancel(chain, monkeypatch) -> None:
+    """占位结算写库失败只记录：信号照常取走、执行照常注销，Task 不会卡在停止中。"""
+    _fail_settling(monkeypatch)
+    await chain.service.send(_TASK_ID, _send_request("first"))
+    await _settle()
+    run = chain.ledger.current
+    _register_deferred("call-bg", "background", [])
+
+    await chain.service.cancel(_TASK_ID)
+    await _finish(run.id, "cancelled")
+
+    assert not cancellation_registry.is_cancelled(_TASK_ID)
+    assert not chain.actor._execution.driving
+    assert run.status == "cancelled"
+
+
+async def test_placeholder_settle_failure_does_not_block_suspended_cancel(chain, monkeypatch) -> None:
+    _fail_settling(monkeypatch)
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run.status = "suspended"
+    _register_deferred("call-bg", "background", [])
+
+    await chain.service.cancel(_TASK_ID)
+
+    assert run.status == "cancelled"
+
+
 # ---------------------------------------------------------------------------
 # 用户取消给下一个 Run 留通知
 # ---------------------------------------------------------------------------
@@ -609,6 +697,8 @@ class _Context:
             )
             for sequence, kind in enumerate(kinds, start=1)
         ]
+        # 被撤回的这一轮发起的调用 id（真实实现从 assistant 行的 tool_calls 读出）。
+        self.withdrawn_calls: frozenset[str] = frozenset()
 
     def latest_user_input(self, _task_id: int, session: Any = None):
         for row in reversed(self.rows):
@@ -616,10 +706,11 @@ class _Context:
                 return row
         return None
 
-    def exclude_from(self, _task_id: int, sequence: int, _session: Any) -> None:
+    def exclude_from(self, _task_id: int, sequence: int, _session: Any) -> frozenset[str]:
         for row in self.rows:
             if row.sequence >= sequence:
                 row.include_in_context = False
+        return self.withdrawn_calls
 
     def included(self) -> list[int]:
         return [row.sequence for row in self.rows if row.include_in_context]
@@ -678,6 +769,28 @@ async def test_rerun_soft_deletes_target_and_later_rows_then_starts_a_run(rerun)
     assert rerun.republished == [_TASK_ID]
     assert rerun.ledger.current.id != old.id and rerun.ledger.current.status == "running"
     assert _Driver.consumed == [1]
+
+
+async def test_rerun_revokes_deferred_work_of_withdrawn_calls(rerun) -> None:
+    """被撤回的这一轮还在跑的后台工作要撤销：否则结论到达后以孤儿消息开出新 Run。"""
+    from app.core.tool.background.deferred_registry import deferred_registry
+
+    _finished_run(rerun)
+    withdrawn: list[str] = []
+    earlier: list[str] = []
+    _register_deferred("call-withdrawn", "background", withdrawn)
+    _register_deferred("call-earlier", "background", earlier)
+    rerun.context.withdrawn_calls = frozenset({"call-withdrawn"})
+
+    await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
+    await _settle()
+
+    assert withdrawn == ["cancel"]
+    assert not deferred_registry.owns(_TASK_ID, "call-withdrawn")
+    assert deferred_registry.complete("call-withdrawn", DeferredConclusion({"ok": True})) is False
+    # 更早一轮的后台工作不属于被撤回的这一轮，照常进行。
+    assert earlier == [] and deferred_registry.owns(_TASK_ID, "call-earlier")
+    deferred_registry.cancel("call-earlier")
 
 
 async def test_rerun_of_a_non_latest_input_is_rejected_untouched(rerun) -> None:

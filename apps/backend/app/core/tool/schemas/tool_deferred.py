@@ -1,9 +1,9 @@
-"""工具的延迟结果能力声明（``ToolDefinition.background``）。
+"""工具的延迟结果能力声明（``ToolDefinition.deferred``）。
 
 声明了能力的工具在参数模型里显式带一个 ``background`` 字段（用 :func:`background_field` 生成，描述随
 能力的默认值与前台上限变化），handler 把它解析后交给 ``run_deferred``；普通工具不声明，不受影响。
 字段显式写在参数模型里而不是注册时动态补：参数模型是工具契约的唯一事实源，注册不改写它。设计见
-``docs/plan/background-tool-result-design.md``「新增工具如何接入」。
+``docs/plan/deferred-tool-result-design.md``「新增工具如何接入」。
 """
 
 from __future__ import annotations

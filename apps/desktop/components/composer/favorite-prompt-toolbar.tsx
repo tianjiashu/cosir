@@ -23,7 +23,7 @@ import {
 } from "@/lib/favorite-prompt-storage";
 import { insertText, useComposerInsertion } from "@/components/composer/composer-insertion-context";
 import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { confirmDelete } from "@/lib/confirm/confirm-store";
 
 type FavoritePromptToolbarProps = {
   disabled?: boolean;
@@ -93,14 +93,9 @@ export function FavoritePromptToolbar({ disabled = false }: FavoritePromptToolba
   };
 
   const deletePrompt = async (target: FavoritePrompt) => {
-    const confirmed = await requestConfirmation({
-      title: `删除提示词“${target.title}”？`,
-      description: "删除后该提示词将从常用提示词列表中移除。",
-      warning: "删除后无法撤销。",
-      confirmLabel: "确认删除",
-      busyLabel: "删除中…",
-      tone: "destructive",
-      icon: "delete",
+    const confirmed = await confirmDelete({
+      target: `提示词「${target.title}」`,
+      consequence: "删除后该提示词将从常用提示词列表中移除。",
     });
     if (!confirmed) return;
     // 以确认后的最新列表为准：确认框打开期间其它 composer 可能已修改提示词库。

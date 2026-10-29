@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from app.core.tool.background.deferred_job import DeferredConclusion
 from app.core.tool.background import deferred_registry as deferred_module
 from app.core.tool.background.deferred_job import ManualJob, ThreadJob
 from app.core.tool.background.deferred_registry import deferred_registry
@@ -20,7 +21,7 @@ from app.core.tool.schemas.tool_deferred import background_field
 def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, dict[str, Any]]]:
     calls: list[tuple[str | None, dict[str, Any]]] = []
 
-    def deliver(task_id, *, tool_call_id, tool_name, result) -> bool:
+    def deliver(task_id, *, tool_call_id, tool_name, result, placeholder_display_data=None) -> bool:
         calls.append((tool_call_id, result))
         return True
 
@@ -43,7 +44,7 @@ def _run(job: Any, **overrides: Any):
 
 
 def _job() -> ManualJob:
-    return ManualJob(on_cancel=lambda: None, cancelled_result={"end_reason": "cancelled"})
+    return ManualJob(on_cancel=lambda: None, cancelled_result=DeferredConclusion({"end_reason": "cancelled"}))
 
 
 def _in_thread(target):
@@ -64,9 +65,9 @@ def test_foreground_returns_the_result_without_delivery(delivered) -> None:
     job = _job()
     thread, box = _in_thread(lambda: _run(job))
     _wait_registered()
-    job.finish({"value": 1})
+    job.finish(DeferredConclusion({"value": 1}))
     thread.join(2)
-    assert box["outcome"].result == {"value": 1} and box["outcome"].placeholder is None
+    assert box["outcome"].result.result == {"value": 1} and box["outcome"].placeholder is None
     assert delivered == [] and not deferred_registry.owns(1, "call-1")
 
 
@@ -75,13 +76,13 @@ def test_background_returns_placeholder_and_delivers_later(delivered) -> None:
     outcome = _run(job, background=True)
     assert outcome.placeholder == "background"
     assert "call-1" in [view.tool_call_id for view in deferred_registry.entries(1)]
-    job.finish({"value": 2})
+    job.finish(DeferredConclusion({"value": 2}))
     assert delivered == [("call-1", {"value": 2})]
 
 
 def test_result_that_arrived_before_background_start_is_still_delivered(delivered) -> None:
     job = _job()
-    job.finish({"value": 3})
+    job.finish(DeferredConclusion({"value": 3}))
     assert _run(job, background=True).placeholder == "background"
     assert delivered == [("call-1", {"value": 3})]
 
@@ -93,7 +94,7 @@ def test_user_detach_moves_the_wait_to_background(delivered) -> None:
     assert deferred_registry.detach("call-1") == "detached"
     thread.join(2)
     assert box["outcome"].placeholder == "detached"
-    job.finish({"value": 4})
+    job.finish(DeferredConclusion({"value": 4}))
     assert delivered == [("call-1", {"value": 4})]
 
 
@@ -101,7 +102,7 @@ def test_foreground_limit_detaches_automatically(delivered) -> None:
     job = _job()
     outcome = _run(job, foreground_limit_s=0.05)
     assert outcome.placeholder == "limit"
-    job.finish({"value": 5})
+    job.finish(DeferredConclusion({"value": 5}))
     assert delivered == [("call-1", {"value": 5})]
 
 
@@ -110,21 +111,21 @@ def test_non_detachable_foreground_cannot_be_moved(delivered) -> None:
     thread, box = _in_thread(lambda: _run(job, detachable=False))
     _wait_registered()
     assert deferred_registry.detach("call-1") == "not_foreground"
-    job.finish({"value": 6})
+    job.finish(DeferredConclusion({"value": 6}))
     thread.join(2)
-    assert box["outcome"].result == {"value": 6}
+    assert box["outcome"].result.result == {"value": 6}
 
 
 def test_run_cancel_cancels_the_job_and_returns_its_cancel_result(delivered) -> None:
     cancelled = threading.Event()
-    job = ManualJob(on_cancel=cancelled.set, cancelled_result={"end_reason": "cancelled"})
+    job = ManualJob(on_cancel=cancelled.set, cancelled_result=DeferredConclusion({"end_reason": "cancelled"}))
     stop = threading.Event()
     thread, box = _in_thread(lambda: _run(job, is_cancelled=stop.is_set))
     _wait_registered()
     stop.set()
     thread.join(2)
     assert cancelled.is_set()
-    assert box["outcome"].result == {"end_reason": "cancelled"}
+    assert box["outcome"].result.result == {"end_reason": "cancelled"}
     assert delivered == []
 
 
@@ -134,7 +135,7 @@ def test_user_cancel_of_a_foreground_entry_returns_the_cancel_result(delivered) 
     _wait_registered()
     deferred_registry.cancel("call-1")
     thread.join(2)
-    assert box["outcome"].result == {"end_reason": "cancelled"}
+    assert box["outcome"].result.result == {"end_reason": "cancelled"}
 
 
 def test_cancelled_background_job_delivers_nothing(delivered) -> None:
@@ -148,18 +149,18 @@ def test_thread_job_runs_work_off_thread_and_wakes_on_cancel() -> None:
     gate = threading.Condition()
     results: list[dict[str, object]] = []
 
-    def work(is_cancelled) -> dict[str, object]:
+    def work(is_cancelled) -> DeferredConclusion:
         with gate:
             while not is_cancelled():
                 gate.wait(1)
-        return {"end_reason": "cancelled", "thread": threading.current_thread().name}
+        return DeferredConclusion({"end_reason": "cancelled", "thread": threading.current_thread().name})
 
     def wake() -> None:
         with gate:
             gate.notify_all()
 
     job = ThreadJob(work, wake=wake, name="job-test")
-    job.on_done(results.append)
+    job.on_done(lambda conclusion: results.append(conclusion.result))
     job.cancel()
     deadline = time.monotonic() + 2
     while not results:
@@ -171,9 +172,9 @@ def test_thread_job_runs_work_off_thread_and_wakes_on_cancel() -> None:
 def test_manual_job_delivers_once() -> None:
     seen: list[dict[str, object]] = []
     job = _job()
-    job.on_done(seen.append)
-    assert job.finish({"a": 1}) is True
-    assert job.finish({"a": 2}) is False
+    job.on_done(lambda conclusion: seen.append(conclusion.result))
+    assert job.finish(DeferredConclusion({"a": 1})) is True
+    assert job.finish(DeferredConclusion({"a": 2})) is False
     job.cancel()
     assert seen == [{"a": 1}]
 

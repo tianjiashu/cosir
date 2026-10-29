@@ -1,4 +1,4 @@
-"""终端会话领域错误；输入租约与等待条件错误不改变命令或会话生命周期。"""
+"""终端会话领域错误；输入仲裁与等待条件错误不改变命令或会话生命周期。"""
 
 
 class TerminalSessionError(Exception):
@@ -26,11 +26,21 @@ class TerminalSessionStateError(TerminalSessionError):
     code = "TERMINAL_SESSION_STATE_ERROR"
 
 
-class TerminalInputHeldByUserError(TerminalSessionError):
-    """用户正在该会话输入，Agent 等待租约超时；用户空闲或手动释放后可重试，不影响会话。"""
+class TerminalUserTypingError(TerminalSessionError):
+    """用户一直在该会话打字，Agent 等不到空闲；用户停手几秒后可重试，不影响会话。"""
 
-    code = "TERMINAL_INPUT_HELD_BY_USER"
+    code = "TERMINAL_USER_TYPING"
     retryable = True
+
+
+class TerminalUserCommandRunningError(TerminalSessionError):
+    """会话前台正运行用户启动的命令：Agent 输入会落进用户的程序，立即拒绝、不等待。
+
+    不可重试：命令可能长驻（dev server、编辑器、ssh），等待只会让 Agent 卡住；
+    应改用别的会话或询问用户。
+    """
+
+    code = "TERMINAL_USER_COMMAND_RUNNING"
 
 
 class TerminalIntegrationRequiredError(TerminalSessionError):

@@ -37,7 +37,7 @@ import {
   type MCPServerTestResult,
   type MCPTransport,
 } from "@/lib/api/system-extensions";
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
@@ -201,13 +201,9 @@ export function MCPConfigurationPanel() {
   async function deleteServer(server: MCPServerConfiguration) {
     if (!servers) return;
     const next = servers.filter((item) => item.name !== server.name);
-    const deleted = await requestConfirmation({
-      title: "删除 MCP 服务？",
-      description: `删除 MCP 服务“${server.name}”后，Agent 将无法再调用它提供的工具。`,
-      confirmLabel: "删除",
-      busyLabel: "正在删除…",
-      tone: "destructive",
-      icon: "delete",
+    const deleted = await confirmDelete({
+      target: `MCP 服务「${server.name}」`,
+      consequence: "删除后 Agent 将无法再调用它提供的工具。",
       action: () => saveMutation.mutateAsync(next),
       failureFallback: "删除 MCP 服务失败",
     });

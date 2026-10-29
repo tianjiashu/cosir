@@ -50,17 +50,11 @@ describe("Transport snapshot validation", () => {
 
     const snapshot = transportState({
       terminal_sessions: [
-        terminalSession("t1", { createdBy: "agent", label: "dev server", inputHolder: "agent", agentInputCallId: "call-1", handoff: { reason: "需要 sudo 密码", toolCallId: "call-handoff" } }),
+        terminalSession("t1", { createdBy: "agent", label: "dev server", handoff: { reason: "需要 sudo 密码", toolCallId: "call-handoff" } }),
         terminalSession("t2", { status: "exited", exitCode: 0, endReason: "shell_exited", integration: "unavailable" }),
       ],
     });
     expect(parseTransportState(snapshot)).toBe(snapshot);
-  });
-
-  it("agentInputCallId 只在 Agent 持有输入时出现", () => {
-    expect(() => parseTransportState(transportState({
-      terminal_sessions: [terminalSession("t1", { inputHolder: "user", agentInputCallId: "call-1" })],
-    }))).toThrow(/terminal_sessions\[0\]\.agentInputCallId/);
   });
 
   it("拒绝重复会话、未知状态与多余字段", () => {

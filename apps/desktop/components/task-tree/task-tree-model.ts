@@ -75,6 +75,11 @@ function hasParentCycle(taskId: number, parentCandidates: Map<number, number>): 
  * 只产出森林本身：层级、父节点与展开祖先由侧栏的 react-arborist 从嵌套结构推导，
  * 这里不另存深度或父子索引。
  */
+/** 节点下全部 fork 后代的 id（fork 的 fork 也算），不含自身；删除确认据此询问是否一起删。 */
+export function forkDescendantIds(node: TaskTreeNode): number[] {
+  return node.children.flatMap((child) => [child.task_id, ...forkDescendantIds(child)]);
+}
+
 export function buildTaskForest(tasks: WorkspaceTask[]): TaskTreeNode[] {
   const forkTasks = tasks.filter((task) => task.task_type !== "delegation");
   const taskById = new Map(forkTasks.map((task) => [task.task_id, task]));

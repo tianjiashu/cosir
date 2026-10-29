@@ -8,6 +8,9 @@
 可能在工作线程物化，loop 只能回到事件循环上拉起，所以注册表在启动时 :meth:`bind_loop` 记下事件
 循环，之前已物化的 space 在那时补拉起。往外部队列投递一律经 :meth:`enqueue`：先确保 space（及其
 loop）存在，否则重启后没被访问过的 Task 收到消息时没有 loop 在等。
+
+注册表只负责持有 space 与 actor 的生命周期（拉起、删除前停止、进程关闭），不承载取消语义：停止
+一个 Task 经它找到 actor 后调用 ``actor.cancel`` / ``actor.request_cancel``。
 """
 
 from __future__ import annotations
@@ -18,14 +21,9 @@ from typing import TYPE_CHECKING
 
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 
-from app.config.logging.logger import log
-
 if TYPE_CHECKING:
-    from concurrent.futures import Future
-
     from sqlalchemy.orm import Session
 
-    from app.core.workflow.cancel.conversation_run_cancellation_registry import CancelReason
     from app.core.workflow.message_queue.task_message import TaskMessage
 
 
@@ -93,27 +91,29 @@ class TaskRuntimeSpaceRegistry:
         self.get_or_create(task_id)
         return get_task_message_queue().put(task_id, message, session=session)
 
-    def cancel(self, task_id: int, reason: CancelReason) -> None:
-        """从任意线程发起停止一个 Task（上游停止下游、Team 取消节点）；只发起，不等待。
-
-        交给该 Task 的 actor 判定：有执行者打信号，挂起的 Run 直接迁移，没有可停止的对象什么也不做。
-        不在这里直接打取消信号——没有执行者时登记的信号没人取走，会杀死下一个 Run。不等待：调用方
-        可能正持有自己的 Task 闸门，等对方的闸门会让父子互等。
-        """
-        loop = self._loop
-        if loop is None or loop.is_closed():
-            return
-        space = self.get_or_create(task_id)
-        future: Future[None] = asyncio.run_coroutine_threadsafe(space.actor.cancel(reason), loop)
-        future.add_done_callback(lambda done: _log_cancel_failure(task_id, done))
-
     async def stop(self, task_ids: set[int] | list[int]) -> None:
-        """删除前停下这些 Task 的 actor：停止执行并等它落定，再停下 loop。须在删除闸门外调用。"""
+        """删除前停下这些 Task 的 actor：停止执行并等它落定，再停下 loop。须在删除闸门外调用。
+
+        停止即删除的墓碑：之后 loop 不再推进、恢复被拒绝，入队的消息只留在队列里随删除级联清掉。
+        删除没提交时须调用 :meth:`restart_stopped` 回滚。
+        """
 
         for task_id in task_ids:
             space = self.get(task_id)
             if space is not None:
                 await space.actor.stop()
+
+    def restart_stopped(self, task_ids: set[int] | list[int]) -> None:
+        """删除失败后为这些 Task 换上新 actor；须在事件循环线程调用。
+
+        只换已被 :meth:`stop` 停下的：停止之后才物化的 space 带着正常运行的 actor，换掉会让两个
+        loop 同时调度一个 Task。
+        """
+
+        for task_id in task_ids:
+            space = self.get(task_id)
+            if space is not None and space.actor.stopped.is_set():
+                space.restart_actor()
 
     async def aclose(self) -> None:
         """进程关闭：取消全部 actor 的执行与 loop（不调度后续 Run），再清空注册表。"""
@@ -192,15 +192,6 @@ class TaskRuntimeSpaceRegistry:
             self._spaces.clear()
             self._deleted_task_ids.clear()
             self._loop = None
-
-
-def _log_cancel_failure(task_id: int, done: Future[None]) -> None:
-    if not done.cancelled() and done.exception() is not None:
-        log.error(
-            "task_cancel_failed",
-            extra={"msg": "发起停止 Task 失败", "data": {"task_id": task_id}},
-            exc_info=done.exception(),
-        )
 
 
 #: 进程级单例：多 space 的生命周期在 backend 进程内稳定持有一份。

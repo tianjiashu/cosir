@@ -56,12 +56,11 @@ export function isAbnormalTerminalEnd(session: Pick<TerminalSessionEntry, "statu
  * 页头终端入口的角标：数字是活跃会话数，色调与提示让面板收起时也能看出终端在发生什么。
  *
  * - `attention`：有用户还没看过的异常结束（打开面板即视为看过，见 store 的 `acknowledgedEnds`）；
- * - `agent`：Agent 正持有某个会话的输入；
- * - `null`：无需提醒。`attention` 优先：结束是已发生的结果，Agent 输入随时会自然结束。
+ * - `null`：无需提醒。
  */
 export type TerminalBadge = {
   count: number;
-  tone: "attention" | "agent" | null;
+  tone: "attention" | null;
   /** 提醒的一句话说明（拼进入口的 tooltip 与无障碍标签）；无提醒为 null。 */
   hint: string | null;
 };
@@ -85,8 +84,6 @@ export function terminalBadge(
     const more = failed.length > 1 ? `等 ${failed.length} 个终端` : "";
     return { count, tone: "attention", hint: `「${titleOf(first)}」${more}异常结束（${detail}）` };
   }
-  const typing = sessions.find((session) => isActiveTerminalSession(session) && session.inputHolder === "agent");
-  if (typing) return { count, tone: "agent", hint: `Agent 正在「${titleOf(typing)}」中输入` };
   return { count, tone: null, hint: null };
 }
 

@@ -81,8 +81,10 @@ def test_cancelling_team_run_only_transitions_status_and_writes_archive(monkeypa
     )
     monkeypatch.setattr(
         coordinator_module.task_runtime_spaces,
-        "cancel",
-        lambda task_id, reason: captured.update(signalled=(task_id, reason)),
+        "get_or_create",
+        lambda task_id: SimpleNamespace(actor=SimpleNamespace(
+            request_cancel=lambda reason: captured.update(signalled=(task_id, reason))
+        )),
     )
 
     result = coordinator.cancel(17)
@@ -154,7 +156,12 @@ def _driven_coordinator(monkeypatch, run_node) -> tuple[AgentTeamCoordinator, di
             return SimpleNamespace(id=run_id)
 
         def get_by_id(self, run_id):
-            return SimpleNamespace(id=run_id, status=AgentTeamRunStatus.RUNNING.value)
+            return SimpleNamespace(
+                id=run_id,
+                status=AgentTeamRunStatus.RUNNING.value,
+                parent_task_id=1,
+                tool_call_id="call_team",
+            )
 
     coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
     coordinator._team_run_crud = _Crud()
@@ -169,8 +176,10 @@ def _driven_coordinator(monkeypatch, run_node) -> tuple[AgentTeamCoordinator, di
     )
     monkeypatch.setattr(
         coordinator_module.task_runtime_spaces,
-        "cancel",
-        lambda task_id, reason: captured["cancelled"].append((task_id, reason)),
+        "get_or_create",
+        lambda task_id: SimpleNamespace(actor=SimpleNamespace(
+            request_cancel=lambda reason: captured["cancelled"].append((task_id, reason))
+        )),
     )
     return coordinator, captured
 

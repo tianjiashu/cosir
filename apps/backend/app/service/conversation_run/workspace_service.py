@@ -10,8 +10,8 @@
   （委托给 ``TaskService``）。
 """
 
+import asyncio
 import copy
-from contextlib import ExitStack
 from pathlib import Path
 
 from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
@@ -306,13 +306,39 @@ class WorkspaceService:
 
         return [copy.deepcopy(tool.to_model_tool_definition()) for tool in selected_tools]
 
-    def delete_workspace(self, workspace_id: int) -> None:
-        """在单个事务内原子删除 workspace 及其全部 task 产物。
+    async def delete_workspace_tree(self, workspace_id: int) -> None:
+        """删除 workspace 的用户用例：先在锁外停下其下全部 Task 的 actor，再删除记录。
 
-        删除前先校验工作区存在（不存在则抛 ``KeyError``），取得 workspace 闸门和所有现存 task
-        的 task 闸门，再在单个 ``BEGIN IMMEDIATE`` 事务内重新读取 task 树。所有 task 产物与
-        workspace 行必须一并提交；任一步失败都会整体回滚。提交后才卸载
-        进程内 runtime space。
+        与 ``TaskService.delete_task_tree`` 同一套语义：停止即墓碑；收集与停止反复到 Task 集合
+        不再增长；删除没成功时为已停下的 Task 换上新 actor，请求被取消时不回滚。
+
+        异常:
+            KeyError: 工作区不存在。
+            DeletionBusyError: workspace 正被其他结构性操作占用。
+        """
+
+        stopped: set[int] = set()
+        try:
+            while True:
+                task_ids = set(
+                    await asyncio.to_thread(self._task_crud.list_ids_by_workspace, workspace_id)
+                )
+                if task_ids <= stopped:
+                    break
+                await task_runtime_spaces.stop(task_ids - stopped)
+                stopped |= task_ids
+            await asyncio.to_thread(self.delete_workspace, workspace_id)
+        except Exception:
+            task_runtime_spaces.restart_stopped(stopped)
+            raise
+
+    def delete_workspace(self, workspace_id: int) -> None:
+        """在单个事务内原子删除 workspace 及其全部 task 产物；调用方须已停下其下 Task 的 actor。
+
+        删除前先校验工作区存在（不存在则抛 ``KeyError``），取得 workspace 闸门（不取各 Task 的
+        闸门：actor 已在 :meth:`delete_workspace_tree` 里停下），再在单个 ``BEGIN IMMEDIATE`` 事务
+        内重新读取 task 树。所有 task 产物与 workspace 行必须一并提交；任一步失败都会整体回滚（停止
+        之后才新建的 Task 会让剩余行检查失败）。提交后才卸载进程内 runtime space。
 
         参数:
             workspace_id: 待删除的工作区标识。
@@ -334,40 +360,36 @@ class WorkspaceService:
 
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
-                task_ids = set(self._task_crud.list_ids_by_workspace(workspace_id))
-                # 先发送取消信号，再取得 task 闸门，避免运行中的 Team 收尾与删除互相等待。
                 from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
 
-                get_agent_team_coordinator().cancel_for_task_ids(task_ids)
-                with ExitStack() as stack:
-                    self._acquire_task_operations(workspace_id, task_ids, stack)
-                    log.info(
-                        "workspace_delete_start",
-                        extra={
-                            "msg": "workspace delete started",
-                            "data": {"workspace_id": workspace_id},
-                        },
+                get_agent_team_coordinator().cancel_for_task_ids(
+                    set(self._task_crud.list_ids_by_workspace(workspace_id))
+                )
+                log.info(
+                    "workspace_delete_start",
+                    extra={
+                        "msg": "workspace delete started",
+                        "data": {"workspace_id": workspace_id},
+                    },
+                )
+                deleted_task_ids: set[int] = set()
+                with begin_immediate(main_session_factory()) as session:
+                    workspace_record = self._workspace.get_in_session(session, workspace_id)
+                    root_task_ids = self._task_crud.list_root_ids_by_workspace(
+                        workspace_id, session=session
                     )
-                    deleted_task_ids: set[int] = set()
-                    with begin_immediate(main_session_factory()) as session:
-                        workspace_record = self._workspace.get_in_session(session, workspace_id)
-                        root_task_ids = self._task_crud.list_root_ids_by_workspace(
-                            workspace_id, session=session
+                    for task_id in root_task_ids:
+                        result = self._task_service.delete_task_tree_in_session(task_id, session)
+                        deleted_task_ids.update(result.task_ids)
+                    remaining_task_ids = set(
+                        self._task_crud.list_ids_by_workspace(workspace_id, session=session)
+                    )
+                    if remaining_task_ids:
+                        raise RuntimeError(
+                            "workspace contains task rows outside a deletable task tree: "
+                            f"{sorted(remaining_task_ids)}"
                         )
-                        for task_id in root_task_ids:
-                            result = self._task_service.delete_task_tree_in_session(
-                                task_id, session
-                            )
-                            deleted_task_ids.update(result.task_ids)
-                        remaining_task_ids = set(
-                            self._task_crud.list_ids_by_workspace(workspace_id, session=session)
-                        )
-                        if remaining_task_ids:
-                            raise RuntimeError(
-                                "workspace contains task rows outside a deletable task tree: "
-                                f"{sorted(remaining_task_ids)}"
-                            )
-                        self._workspace.delete_in_session(session, workspace_id)
+                    self._workspace.delete_in_session(session, workspace_id)
                 self._task_service.finalize_deleted_task_spaces(
                     TaskDeletionResult(
                         task_ids=frozenset(deleted_task_ids),
@@ -408,38 +430,3 @@ class WorkspaceService:
 
         get_agent_registry().drop_scope(root_path)
         get_agent_team_registry().drop_scope(root_path)
-
-    def _acquire_task_operations(
-        self,
-        workspace_id: int,
-        task_ids: set[int],
-        stack: ExitStack,
-    ) -> None:
-        """在 workspace 闸门内取得并刷新全部 task 操作闸门。
-
-        参数:
-            workspace_id: workspace 标识。
-            task_ids: 初始读取到的 task 标识集合。
-            stack: 负责在调用方离开时逆序释放锁的 ``ExitStack``。
-
-        返回:
-            无。锁由传入的 ``ExitStack`` 持有并在调用方退出时释放。
-
-        异常:
-            TimeoutError: 任一 task 在超时时间内无法取得操作闸门。
-
-        副作用:
-            按 task id 升序取得 task 闸门；在取得已有 task 闸门后再次读取 workspace，
-            覆盖运行中的父 task 在等待期间创建的委派子 task。
-        """
-
-        locked_ids: set[int] = set()
-        pending_ids = set(task_ids)
-        while pending_ids:
-            for task_id in sorted(pending_ids):
-                stack.enter_context(
-                    task_runtime_spaces.get_or_create(task_id).operation(timeout=10)
-                )
-                locked_ids.add(task_id)
-            current_ids = set(self._task_crud.list_ids_by_workspace(workspace_id))
-            pending_ids = current_ids - locked_ids

@@ -69,7 +69,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   }, [open]);
 
   const tabs = useMemo(() => terminalTabs(sessions ?? [], activeSessionId), [activeSessionId, sessions]);
-  const { creating, notice, createSession, closeTab, takeOverInput, returnHandoff, returningHandoff } = useTerminalSessionActions(taskId, sessions, tabs);
+  const { creating, notice, createSession, closeTab, returnHandoff, returningHandoff } = useTerminalSessionActions(taskId, sessions, tabs);
 
   // 打开面板时没有活跃会话：等会话列表已知后自动新建一个默认 shell 终端（只在打开那一刻判定）。
   useEffect(() => {
@@ -170,8 +170,6 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
               createDisabled={creating || sessions === null}
               onSelect={selectSession}
               onClose={(tab) => void closeTab(tab)}
-              onRelease={(sessionId) => viewsRef.current.get(sessionId)?.releaseInput()}
-              onTakeOver={(session) => void takeOverInput(session)}
               onCreate={(shell) => void createSession(shell)}
             />
             <div className="ml-auto flex min-w-0 items-center gap-1">

@@ -91,7 +91,10 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
             consumed_input = True
         elif isinstance(message.body, BackgroundResultBody) and message.body.tool_call_id:
             await asyncio.to_thread(
-                settle_deferred_placeholder, message.body.tool_call_id, step_id=step_id
+                settle_deferred_placeholder,
+                message.body.tool_call_id,
+                display_data=message.body.placeholder_display_data,
+                step_id=step_id,
             )
     # 用户说了新话才值得重新起标题；副本在主线开始流式改写 working copy 前取好。
     patch: dict[str, object] = {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch()}

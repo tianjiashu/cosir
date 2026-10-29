@@ -119,7 +119,6 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
     message: { role: "user", parts: [{ type: "text", text: "你好" }] },
     modelConfigId: 1,
     disabledToolGroups: ["文件"],
-    delivery: "immediate",
   });
   // 任务页的工具组取自首条消息冻结进 Run 的配置（快照 activity.launch），不另存本地。
   await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();

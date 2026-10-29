@@ -4,7 +4,6 @@ from app.assistant_transport.request.assistant_user_message import AssistantUser
 from app.assistant_transport.request.part.assistant_file_attachment import AssistantFileAttachment
 from app.assistant_transport.request.part.assistant_image_part import AssistantImagePart
 from app.assistant_transport.request.task_command_request import (
-    EditQueuedMessageRequest,
     RerunMessageRequest,
     SendMessageRequest,
     DecisionRequest,
@@ -15,7 +14,6 @@ __all__ = [
     "AssistantFileAttachment",
     "AssistantImagePart",
     "AssistantUserMessage",
-    "EditQueuedMessageRequest",
     "RerunMessageRequest",
     "SendMessageRequest",
     "DecisionRequest",

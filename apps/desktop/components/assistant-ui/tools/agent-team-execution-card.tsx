@@ -4,6 +4,7 @@ import { UsersIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { getAgentTeamRun, type AgentTeamRun } from "@/lib/api/agent-teams";
+import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -15,6 +16,7 @@ import { ToolStatus } from "./tool-status";
 import type { ToolPartRendererProps } from "./tool-renderer-registry";
 import type { AgentTeamRunDisplay } from "./agent-team-display";
 import { AgentTeamExecutionPipeline } from "./agent-team-execution-pipeline";
+import { ToolStopButton, useStopRequest } from "./tool-stop-button";
 
 type AgentTeamExecutionCardProps = ToolPartRendererProps & {
   displayOverride?: AgentTeamRunDisplay;
@@ -27,6 +29,32 @@ const RUN_STATUS_LABELS: Record<string, string> = {
   failed: "执行失败",
   cancelled: "已取消",
 };
+
+/** 取消按原因细分：用户单独停止与随对话停止对用户是两件事，其余取消原因沿用「已取消」。 */
+const CANCELLED_REASON_LABELS: Record<string, string> = {
+  cancelled: "已停止",
+  parent_cancelled: "随对话停止",
+};
+
+function runStatusLabel(run: AgentTeamRun): string {
+  if (run.status === "cancelled" && run.end_reason) {
+    const label = CANCELLED_REASON_LABELS[run.end_reason];
+    if (label) return label;
+  }
+  return RUN_STATUS_LABELS[run.status] ?? run.status;
+}
+
+/**
+ * 是否提供单独停止 Team 的入口：只在 TeamRun 运行中、可写面板、且用户没在停止整个 Task 时。
+ * 待确认阶段不在这里——审批卡有「驳回」。
+ */
+export function canStopTeamRun(
+  run: AgentTeamRun | null,
+  interactive: boolean,
+  taskCancelling: boolean,
+): boolean {
+  return run?.status === "running" && interactive && !taskCancelling;
+}
 
 const POLL_INTERVAL_MS = 1_000;
 const MAX_POLL_RETRIES = 4;
@@ -74,6 +102,7 @@ export function useAgentTeamRunPolling(teamRunId: number | undefined) {
 }
 
 export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
+  const { taskId, toolCallId, interactive = false, taskCancelling = false } = props;
   const artifact = readToolArtifact(props.artifact);
   const display = props.displayOverride ?? readAgentTeamRunDisplay(artifact.display_data)
     ?? (artifact.team_run_id !== undefined
@@ -81,16 +110,36 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
       : null);
   const actions = useWorkbenchActions();
   const runQuery = useAgentTeamRunPolling(display?.teamRunId);
+  const run = runQuery.data ?? null;
+  const canStop = canStopTeamRun(run, interactive, taskCancelling);
+  // 「停止中」保持到轮询看到 TeamRun 离开 running：HTTP 只确认取消信号已发出，不乐观改状态。
+  const cancellation = useStopRequest(run?.status === "running");
+
+  const requestStop = () => {
+    if (!canStop) return;
+    void frontendLog("INFO", "agent_team_cancel_requested", "用户请求单独停止 Agent Team", {
+      data: { taskId, toolCallId, teamRunId: display?.teamRunId },
+    });
+    void cancellation.stop(async () => {
+      // 单独停止 Team 就是取消这次 agent_team 调用；Coordinator 读到工具级信号后落定 TeamRun。
+      const result = await cancelToolCall(taskId, toolCallId);
+      return result.kind === "failed" ? result.message : null;
+    });
+  };
 
   if (!display) return null;
   return (
     <AgentTeamExecutionContent
       display={display}
-      run={runQuery.data ?? null}
+      run={run}
       backendStatus={artifact.backendStatus}
       pollError={runQuery.isError ? userErrorMessage(runQuery.error, "请稍后重试") : null}
       onRetryPoll={() => void runQuery.refetch()}
-      onOpenAgent={(taskId, title) => actions?.openAgent({ taskId, title })}
+      onOpenAgent={(childTaskId, title) => actions?.openAgent({ taskId: childTaskId, title })}
+      canStop={canStop}
+      stopping={cancellation.pending}
+      stopError={cancellation.error}
+      onStop={requestStop}
     />
   );
 }
@@ -103,14 +152,21 @@ type AgentTeamExecutionContentProps = {
   pollError: string | null;
   onRetryPoll: () => void;
   onOpenAgent: (taskId: number, title: string) => void;
+  /** 是否显示停止按钮（见 {@link canStopTeamRun}）。 */
+  canStop?: boolean;
+  stopping?: boolean;
+  /** 停止请求被拒或网络失败时的可读原因。 */
+  stopError?: string | null;
+  onStop?: () => void;
 };
 
 /** 只渲染 TeamRun 查询投影；轮询与卡片状态不参与节点事实判断。 */
 export function AgentTeamExecutionContent({
   display, run, backendStatus, pollError, onRetryPoll, onOpenAgent,
+  canStop = false, stopping = false, stopError = null, onStop,
 }: AgentTeamExecutionContentProps) {
   const currentStatus = run
-    ? RUN_STATUS_LABELS[run.status] ?? run.status
+    ? runStatusLabel(run)
     : pollError ? "进度不可用" : "读取进度中";
 
   return (
@@ -129,7 +185,14 @@ export function AgentTeamExecutionContent({
             </p>
           )}
         </div>
+        {(canStop || stopping) && onStop && (
+          <ToolStopButton label="Agent Team" pending={stopping} onClick={onStop} className="shrink-0" />
+        )}
       </header>
+
+      {stopError && (
+        <p className="text-xs text-destructive" role="alert">停止 Agent Team 失败：{stopError}</p>
+      )}
 
       {pollError && (
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground" role="status">

@@ -104,10 +104,19 @@ def test_any_new_message_starts_a_run_after_any_terminal_status(status, make) ->
     assert isinstance(action, StartRun)
 
 
-def test_new_run_takes_the_latest_user_input_launch() -> None:
+def test_new_run_takes_the_launch_of_the_input_it_consumes() -> None:
+    """排队消息一轮一条：新 Run 用最早那条排队输入自己的配置。"""
     pending = [_user(1, _OTHER, "next_run"), _user(2, _LAUNCH, "next_run")]
-    action = _next(_run("completed", _OTHER), False, pending, pending[-1:])
+    action = _next(_run("completed", _LAUNCH), False, pending, pending[-1:])
+    assert action == StartRun(_OTHER)
+
+
+def test_immediate_input_jumps_ahead_of_queued_inputs() -> None:
+    """取消后留着排队消息时，新发送 / 立即发送的那条先跑。"""
+    pending = [_user(1, _OTHER, "next_run"), _user(2, _LAUNCH, "immediate")]
+    action = _next(_run("cancelled", _OTHER), False, pending, pending[-1:])
     assert action == StartRun(_LAUNCH)
+    assert dispatch_policy.initial_messages(pending, fresh_run=True) == [pending[1]]
 
 
 def test_new_run_without_user_input_inherits_the_current_run_launch() -> None:
@@ -145,10 +154,13 @@ def test_suspended_run_ignores_notices_and_next_run_inputs() -> None:
     assert _next(_run("suspended"), False, pending, pending) == Stay()
 
 
-def test_fresh_run_receives_all_pending_resumed_run_only_immediate() -> None:
-    pending = [_user(1, delivery="next_run"), _notice(2)]
-    assert dispatch_policy.initial_messages(pending, fresh_run=True) == pending
-    assert dispatch_policy.initial_messages(pending, fresh_run=False) == [pending[1]]
+def test_fresh_run_receives_one_user_input_resumed_run_only_immediate() -> None:
+    """新 Run 接收全部非用户输入与一条用户输入；唤醒 / 续跑只接收 ``immediate``。"""
+    pending = [_user(1, delivery="next_run"), _notice(2), _user(3, delivery="next_run"), _result(4)]
+    assert dispatch_policy.initial_messages(pending, fresh_run=True) == [
+        pending[0], pending[1], pending[3]
+    ]
+    assert dispatch_policy.initial_messages(pending, fresh_run=False) == [pending[1], pending[3]]
 
 
 def test_ban_tools_compare_as_set() -> None:

@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from app.core.tool.background.deferred_job import DeferredConclusion
 from app.core.tool.background.deferred_job import ManualJob
 from app.core.tool.background.deferred_registry import deferred_registry
 from app.core.tool.handler.child_agent.child_run_job import _deliver_conclusion
@@ -112,9 +113,9 @@ def _child(monkeypatch: pytest.MonkeyPatch, run: Any) -> _ChildActor:
 
 
 def _job() -> tuple[ManualJob, list[dict[str, object]]]:
-    job = ManualJob(on_cancel=lambda: None, cancelled_result={"status": "cancelled"})
+    job = ManualJob(on_cancel=lambda: None, cancelled_result=DeferredConclusion({"status": "cancelled"}))
     seen: list[dict[str, object]] = []
-    job.on_done(seen.append)
+    job.on_done(lambda conclusion: seen.append(conclusion.result))
     return job, seen
 
 

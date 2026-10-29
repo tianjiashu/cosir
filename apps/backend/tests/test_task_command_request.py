@@ -4,7 +4,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.assistant_transport.request import (
-    EditQueuedMessageRequest,
     RerunMessageRequest,
     SendMessageRequest,
     DecisionRequest,
@@ -21,24 +20,18 @@ def _send(**overrides: object) -> SendMessageRequest:
     )
 
 
-def test_send_defaults_to_immediate_delivery_and_maps_command() -> None:
+def test_send_maps_command() -> None:
     request = _send(disabledToolGroups=["联网工具"])
 
     command = request.to_run_command()
-    assert request.delivery == "immediate"
     assert command.display_text == "hello"
     assert command.disabled_tool_groups == ["联网工具"]
-
-
-@pytest.mark.parametrize("delivery", ["immediate", "next_run"])
-def test_send_accepts_both_delivery_modes(delivery: str) -> None:
-    assert _send(delivery=delivery).delivery == delivery
 
 
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"delivery": "later"},
+        {"delivery": "immediate"},
         {"disabledToolGroups": ["联网工具", "联网工具"]},
         {"disabledToolGroups": [" "]},
         {"runId": 1},
@@ -56,22 +49,6 @@ def test_rerun_rejects_delivery() -> None:
         RerunMessageRequest.model_validate(
             {"message": _message(), "modelConfigId": 1, "delivery": "immediate"}
         )
-
-
-@pytest.mark.parametrize(
-    "extra", [{"modelConfigId": 1}, {"reasoningEffort": "high"}, {"disabledToolGroups": ["联网工具"]}]
-)
-def test_queued_edit_carries_no_launch_fields(extra: dict[str, object]) -> None:
-    """排队消息的发起配置在发送时已定：编辑请求不接受配置字段，避免前端误以为能改配置。"""
-    with pytest.raises(ValidationError):
-        EditQueuedMessageRequest.model_validate({"message": _message(), **extra})
-
-
-def test_queued_edit_maps_message_only() -> None:
-    command = EditQueuedMessageRequest.model_validate(
-        {"message": _message("edited")}
-    ).to_run_command()
-    assert (command.display_text, command.disabled_tool_groups) == ("edited", [])
 
 
 def test_ordinary_file_attachment_maps_into_command() -> None:

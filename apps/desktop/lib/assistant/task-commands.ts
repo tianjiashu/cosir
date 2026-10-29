@@ -1,10 +1,10 @@
 /**
- * Task 级业务命令客户端：发送、编辑排队消息、编辑重跑、恢复、用户决定、停止 Task，以及按
- * `tool_call_id` 寻址的取消工具调用与转到后台。
+ * Task 级业务命令客户端：发送、排队消息的立即发送 / 删除（编辑排队消息即删除后放回输入框，不是独立命令）、
+ * 编辑重跑、恢复、用户决定、停止 Task，以及按 `tool_call_id` 寻址的取消工具调用与转到后台。
  *
  * 命令只对 Task（或消息）寻址，不携带 runId：Run 身份与调度规则（立即并入、排队、新开 Run、
  * 唤醒挂起的 Run）全部由后端 Task 调度 actor 决定。后端处理完这一轮才返回：200 表示已受理
- * （新 Run 已启动、已并入或已排队），响应体为空对象；状态冲突（不可恢复、重跑目标已过期等）为
+ * （发送类为消息已持久化入队，开新 Run、并入或唤醒由 actor 随后推进），响应体为空对象；状态冲突（不可恢复、重跑目标已过期等）为
  * 409。Run 输出与状态经 Task 长订阅的 snapshot 到达，本模块不读取 SSE。
  *
  * 异常：发送类命令非 2xx 抛 HttpError（经 requestOk 解析结构化原因并记日志）；网络层失败原样上抛，
@@ -17,12 +17,11 @@ import { HttpError } from "@/lib/http/errors";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
-import type { InputDelivery } from "@/lib/assistant/contract";
 
 /** 停止、取消与转后台都幂等（重复投递后端回 409 或照常受理），超时后可以放心重试。 */
 const IDEMPOTENT_COMMAND_TIMEOUT_MS = 15_000;
 
-/** 用户消息正文；编辑排队消息只带它，与后端 `EditQueuedMessageRequest` 对齐。 */
+/** 用户消息正文（文本、图片与附件）。 */
 export type TaskUserMessage = {
   role: "user";
   parts: Array<{ type: "text"; text: string } | { type: "image"; image: string }>;
@@ -51,39 +50,45 @@ async function postTaskCommand(
   path: string,
   body: unknown,
   init: CommandInit = {},
-  method: "POST" | "PATCH" = "POST",
+  method: "POST" | "PATCH" | "DELETE" = "POST",
 ): Promise<void> {
   const requestInit: HttpRequestInit = { ...init, method };
   await requestOk(path, body === undefined ? requestInit : jsonRequestInit(body, requestInit));
 }
 
+/**
+ * 发送消息。并入时机由后端决定：Task 有活动 Run（含挂起）时排队，Run 结束后一轮一条依次处理；
+ * 空闲时立即处理。排队状态经 snapshot 的 `queued_messages` 投影。
+ */
 export function sendTaskMessage(
   taskId: number,
-  request: TaskMessageRequest & { delivery: InputDelivery },
+  request: TaskMessageRequest,
   init?: CommandInit,
 ): Promise<void> {
   return postTaskCommand(`/tasks/${taskId}/messages`, request, init);
 }
 
-/**
- * 原地编辑排队中（未并入）的用户消息：只改正文与附件，发起配置与投递方式沿用发送时的值，不影响 Run。
- * 消息已被并入时后端 409 `MESSAGE_CONSUMED`，不会转成重跑。
- */
-export function editQueuedTaskMessage(
-  taskId: number,
-  messageId: string,
-  message: TaskUserMessage,
-  init?: CommandInit,
-): Promise<void> {
-  return postTaskCommand(
-    `/tasks/${taskId}/queued-messages/${encodeURIComponent(messageId)}`,
-    { message },
-    init,
-    "PATCH",
-  );
+function queuedMessagePath(taskId: number, messageId: string): string {
+  return `/tasks/${taskId}/queued-messages/${encodeURIComponent(messageId)}`;
 }
 
-/** 编辑最新一条已并入的用户消息并重跑：运行中后端先停止当前 Run，按本次配置开新 Run。 */
+/**
+ * 排队消息改为立即处理：运行中并入当前 Run，挂起时唤醒，空闲时开新 Run。后端以新身份重新入队，
+ * 原条目从队列投影里消失。已被并入时 409 `MESSAGE_CONSUMED`。
+ */
+export function sendQueuedTaskMessageNow(taskId: number, messageId: string, init?: CommandInit): Promise<void> {
+  return postTaskCommand(`${queuedMessagePath(taskId, messageId)}/send-now`, undefined, init);
+}
+
+/**
+ * 删除排队消息（编辑排队消息也走它：先撤回，再把内容放回输入框）。已不在队列中（已被并入或已删除）
+ * 时 409 `MESSAGE_CONSUMED`。
+ */
+export function deleteQueuedTaskMessage(taskId: number, messageId: string, init?: CommandInit): Promise<void> {
+  return postTaskCommand(queuedMessagePath(taskId, messageId), undefined, init, "DELETE");
+}
+
+/** 编辑最新一条已并入的用户消息并重跑：只在 Task 静止时受理（运行中 409 `RUN_NOT_STOPPED`），按本次配置开新 Run。 */
 export function rerunTaskMessage(
   taskId: number,
   messageId: string,

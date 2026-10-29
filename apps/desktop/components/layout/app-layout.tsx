@@ -312,9 +312,7 @@ export function AppLayout() {
                         data-terminal-badge={terminalBadge.tone ?? "none"}
                         className={cn(
                           "absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-2xs leading-none tabular-nums",
-                          terminalBadge.tone === "attention" ? "bg-destructive text-destructive-foreground"
-                            : terminalBadge.tone === "agent" ? "bg-info text-info-foreground"
-                              : "bg-foreground text-background",
+                          terminalBadge.tone === "attention" ? "bg-destructive text-destructive-foreground" : "bg-foreground text-background",
                         )}
                       >
                         {terminalBadge.count > 0 ? terminalBadge.count : "!"}

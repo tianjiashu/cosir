@@ -15,7 +15,7 @@ from openai.types.chat import (
 
 from app.assistant_transport.projection.snapshot_navigation import message
 from app.assistant_transport.projection.tool_result import project_tool_result
-from app.assistant_transport.projection.user_input_projection import build_user_input_parts
+from app.assistant_transport.projection.user_input_projection import build_presentation_parts
 from app.assistant_transport.state.conversation_state_activity import (
     ConversationStateActivity,
     run_launch_snapshot,
@@ -26,7 +26,6 @@ from app.assistant_transport.state.conversation_state_message import (
     ConversationStateOutcome,
 )
 from app.assistant_transport.state.conversation_state_part import (
-    ConversationStatePart,
     ConversationStateTextPart,
     ConversationStateToolCallPart,
 )
@@ -187,17 +186,6 @@ class ConversationTaskStateRebuilder:
         return tool_definition.display.to_dict()
 
     @staticmethod
-    def build_user_parts(presentation: UserInputPresentation) -> list[ConversationStatePart]:
-        """用户消息只按展示绑定投影，不读 SDK 正文（附件解析后的模型正文不适合展示）。"""
-        return [
-            *build_user_input_parts(
-                presentation.display_text,
-                presentation.image_paths,
-                presentation.attachments,
-            )
-        ]
-
-    @staticmethod
     def rebuild(
         task: TaskRecord,
         runs: Sequence[ConversationRunRecord],
@@ -299,9 +287,10 @@ class ConversationTaskStateRebuilder:
                     message(
                         user_message_id(cast(int, row.message_id)),
                         "user",
-                        ConversationTaskStateRebuilder.build_user_parts(
+                        # 用户消息只按展示绑定投影，不读 SDK 正文（附件解析后的模型正文不适合展示）。
+                        list(build_presentation_parts(
                             cast(UserInputPresentation, user_metadata.presentation)
-                        ),
+                        )),
                         run_id,
                     )
                 )

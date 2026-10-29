@@ -8,11 +8,15 @@ export const ASSISTANT_PART_STACK_CLASS = "flex flex-col gap-1";
 
 export const TOOL_TRACE_CONTENT_CLASS = "mt-1 flex flex-col gap-1";
 
-/** 深色工具卡片（根节点带 `terminal-surface`）内部使用：语义 token 由主题岛重定义为深底值。 */
-export const DARK_TOOL_CARD_HEADER_CLASS =
-  "flex min-w-0 items-center gap-1 border-b border-border/60 bg-muted/40 pr-2";
+/**
+ * 终端类卡片（`execute_terminal` 与终端会话锚点卡）的外壳：`terminal-surface` 主题岛在两种主题下
+ * 恒为深色，子元素照常用语义 token。`relative` 供失败时的左侧强调条定位。只给终端用——其他工具
+ * 套上深色岛会和终端卡片混成一类。
+ */
+export const TERMINAL_CARD_CLASS = "terminal-surface relative overflow-hidden rounded-xl border shadow-sm";
 
-export const DARK_TOOL_CARD_CONTENT_CLASS = "ml-6 pb-2 pl-2 pr-2";
+/** 终端卡片表头行。与正文的分隔线由正文顶边承担，收起时不会和卡片边框叠成双线。 */
+export const TERMINAL_CARD_HEADER_CLASS = "flex min-w-0 items-center gap-1 bg-muted/40 pr-2";
 
 export const TOOL_CARD_ROW_CLASS = "flex min-h-7 items-start gap-2 py-1";
 

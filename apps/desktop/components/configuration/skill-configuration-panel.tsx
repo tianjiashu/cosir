@@ -27,7 +27,7 @@ import {
   saveEnabledSkills,
   type SystemSkill,
 } from "@/lib/api/system-extensions";
-import { requestConfirmation } from "@/lib/confirm/confirm-store";
+import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
@@ -115,14 +115,9 @@ export function SkillConfigurationPanel() {
   }
 
   async function removeSkill(skill: SystemSkill) {
-    await requestConfirmation({
-      title: "删除 Skill？",
-      description: `删除 Skill“${skill.name}”及其系统目录文件？`,
-      warning: "系统 Skill 目录中的文件会被删除，无法恢复。",
-      confirmLabel: "删除",
-      busyLabel: "正在删除…",
-      tone: "destructive",
-      icon: "delete",
+    await confirmDelete({
+      target: `Skill「${skill.name}」`,
+      warning: "系统 Skill 目录中的文件会一并删除。",
       action: () => deleteMutation.mutateAsync(skill.name),
       failureFallback: "删除 Skill 失败",
     });

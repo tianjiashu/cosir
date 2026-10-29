@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from app.tools.terminal_runtime.errors import TerminalSessionError
 from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
+
+InputSource = Literal["agent", "user"]
 
 # 在下一次读取输入（提示符已打印之后）才报告 returned 的 shell：结束行取光标行 - 1。
 _RETURN_AFTER_PROMPT_SHELLS = frozenset({"powershell", "pwsh"})
@@ -26,11 +28,14 @@ class TerminalCommand:
 
     ``end_line`` 在命令结束（返回或收敛跟踪）时确定；``result`` 是集成报告的原样结果
     （含 ``code``），只在 returned 时有值；``reason`` 只在 tracking_ended 时有值。
+    ``started_by`` 取命令开始时最近一次被接受输入的来源（会话启动脚本等无输入时为 None）：集成事件
+    不带发起方，而回车一定先于 ``command_started`` 送达，所以「最近一次输入」就是发起命令的那次。
     """
 
     number: int
     command: str
     start_line: int
+    started_by: InputSource | None
     status: str = "executing"
     result: dict[str, Any] | None = None
     reason: str | None = None
@@ -72,8 +77,13 @@ class TerminalObservation:
         self.information_version += 1
         return resized
 
-    def shell_event(self, event: dict[str, Any]) -> str | None:
-        """应用一条集成事件，返回用于日志的事件名；与当前状态矛盾的事件收敛跟踪而不报错。"""
+    def shell_event(
+        self, event: dict[str, Any], *, last_input_by: InputSource | None = None
+    ) -> str | None:
+        """应用一条集成事件，返回用于日志的事件名；与当前状态矛盾的事件收敛跟踪而不报错。
+
+        ``last_input_by`` 由会话 runtime 给出，只在 ``command_started`` 时记为命令发起方。
+        """
         kind = event["kind"]
         if kind == "ready":
             self.integration_status = "ready"
@@ -89,6 +99,7 @@ class TerminalObservation:
                 number=self.command_counter,
                 command=event["command"][:1024],
                 start_line=self.buffer.cursor_line,
+                started_by=last_input_by,
             )
         elif kind == "command_returned":
             command = self.active_command
