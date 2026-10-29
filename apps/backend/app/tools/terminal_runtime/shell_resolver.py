@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.tools.terminal_runtime.errors import TerminalSessionError
+from app.tools.terminal_runtime.errors import ShellResolutionError
 
 
 @dataclass(frozen=True)
@@ -19,8 +19,9 @@ class ShellSpec:
     integration: str = "auto"
 
 
-# 有集成脚本的 shell：命令边界、退出码与 cwd 可用；其余 shell 降级（只能 output_quiet / match）。
+# 可按名称请求的 shell；指向它们的可执行路径也按该 shell 处理。
 _KNOWN_SHELLS = frozenset({"bash", "zsh", "fish", "pwsh", "powershell", "cmd"})
+# 有集成脚本的 shell：命令边界、退出码与 cwd 可用；其余 shell 降级（只能 output_quiet / match）。
 INTEGRATED_SHELLS = frozenset({"zsh", "bash", "powershell", "pwsh"})
 _CANDIDATES: dict[str, tuple[str, ...]] = {
     "Windows": ("powershell", "pwsh", "cmd"),
@@ -29,12 +30,6 @@ _CANDIDATES: dict[str, tuple[str, ...]] = {
 }
 _EXECUTABLES = {"powershell": "powershell.exe", "cmd": "cmd.exe"}
 _LABELS = {"powershell": "Windows PowerShell", "pwsh": "PowerShell 7", "cmd": "Command Prompt"}
-
-
-class ShellResolutionError(TerminalSessionError):
-    """shell 参数无法解析。"""
-
-    code = "TERMINAL_SHELL_UNAVAILABLE"
 
 
 class ShellResolver:
@@ -65,7 +60,7 @@ class ShellResolver:
 
         if value == "custom":
             raise ShellResolutionError("custom shell requires an executable path")
-        if value not in {"auto", "cmd", "powershell", "pwsh", "bash", "zsh", "fish"}:
+        if value != "auto" and value not in _KNOWN_SHELLS:
             path = ShellResolver._resolve_executable(requested)
             # 指向已知 shell 的路径（如 /opt/homebrew/bin/bash）按该 shell 处理，集成随之可用。
             name = Path(path).stem.lower()

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from app.tools.terminal_runtime.errors import TerminalSessionError
@@ -17,6 +18,29 @@ from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
 
 # 在下一次读取输入（提示符已打印之后）才报告 returned 的 shell：结束行取光标行 - 1。
 _RETURN_AFTER_PROMPT_SHELLS = frozenset({"powershell", "pwsh"})
+
+
+@dataclass
+class TerminalCommand:
+    """一条由集成事件界定的命令；``status`` 为 executing / returned / tracking_ended。
+
+    ``end_line`` 在命令结束（返回或收敛跟踪）时确定；``result`` 是集成报告的原样结果
+    （含 ``code``），只在 returned 时有值；``reason`` 只在 tracking_ended 时有值。
+    """
+
+    number: int
+    command: str
+    start_line: int
+    status: str = "executing"
+    result: dict[str, Any] | None = None
+    reason: str | None = None
+    end_line: int | None = None
+
+    @property
+    def output_lines(self) -> tuple[int, int] | None:
+        """已结束命令的输出行闭区间；末行早于起始行（命令无输出）或尚未结束时为 None。"""
+        end = self.end_line
+        return (self.start_line, end) if end is not None and end >= self.start_line else None
 
 
 class TerminalObservation:
@@ -30,20 +54,19 @@ class TerminalObservation:
         self.phase = "unknown"
         self.cwd: str | None = None
         self.command_counter = 0
-        self.latest_command: dict[str, Any] | None = None
+        self.latest_command: TerminalCommand | None = None
         self.integration_status = "starting" if integration == "auto" else "off"
-        self.integration_reason: str | None = None
 
     @property
-    def active_command(self) -> dict[str, Any] | None:
+    def active_command(self) -> TerminalCommand | None:
         command = self.latest_command
-        return command if command is not None and command["status"] == "executing" else None
+        return command if command is not None and command.status == "executing" else None
 
     def output_arrived(self) -> None:
         self.last_output_at = time.monotonic()
 
     def update_screen(self, screen: dict[str, Any], history: list[str]) -> bool:
-        """应用屏幕事件；返回几何尺寸是否变化（供预览推送 geometry 帧）。"""
+        """应用屏幕事件；返回几何尺寸是否变化（供交互通道推送 geometry 帧）。"""
         resized = (self.buffer.rows, self.buffer.columns) != (screen["rows"], screen["columns"])
         self.buffer.apply(screen, history)
         self.information_version += 1
@@ -54,32 +77,26 @@ class TerminalObservation:
         kind = event["kind"]
         if kind == "ready":
             self.integration_status = "ready"
-            self.integration_reason = None
         elif kind == "unavailable":
             self.end_tracking(event["reason"])
             self.integration_status = "unavailable"
-            self.integration_reason = event["reason"]
-            self.phase = "unknown"
         elif kind == "command_started":
             if self.active_command is not None:
                 self.end_tracking("unexpected_command_boundary")
             self.command_counter += 1
-            text = event["command"]
             self.phase = "executing"
-            self.latest_command = {
-                "number": self.command_counter,
-                "command": text[:1024],
-                "status": "executing",
-                "result": None,
-                "reason": None,
-                "start_line": self.buffer.cursor_line,
-                "end_line": None,
-            }
+            self.latest_command = TerminalCommand(
+                number=self.command_counter,
+                command=event["command"][:1024],
+                start_line=self.buffer.cursor_line,
+            )
         elif kind == "command_returned":
             command = self.active_command
             if command is None:
                 return None
-            command.update(status="returned", result=event["result"], end_line=self._end_line())
+            command.status = "returned"
+            command.result = event["result"]
+            command.end_line = self._end_line()
             self.phase = "unknown"  # 只有随后的 prompt 标记才证明回到输入阶段。
         elif kind == "shell_prompt":
             if self.active_command is not None:
@@ -101,28 +118,8 @@ class TerminalObservation:
     def end_tracking(self, reason: str) -> None:
         command = self.active_command
         if command is not None:
-            command.update(status="tracking_ended", reason=reason, end_line=self._end_line())
+            command.status = "tracking_ended"
+            command.reason = reason
+            command.end_line = self._end_line()
             self.information_version += 1
         self.phase = "unknown"
-
-    def command_summary(self) -> dict[str, Any] | None:
-        """最近命令的对外摘要；output_lines 为空区间时为 None（命令无输出）。"""
-        command = self.latest_command
-        if command is None:
-            return None
-        summary: dict[str, Any] = {
-            "number": command["number"],
-            "command": command["command"],
-            "status": command["status"],
-        }
-        if command["status"] == "returned":
-            summary["result"] = command["result"]
-        if command["status"] == "tracking_ended":
-            summary["reason"] = command["reason"]
-        end = command["end_line"]
-        if end is not None:
-            start = command["start_line"]
-            summary["output_lines"] = [start, end] if end >= start else None
-        else:
-            summary["output_from_line"] = command["start_line"]
-        return summary

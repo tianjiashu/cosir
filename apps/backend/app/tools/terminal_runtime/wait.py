@@ -11,8 +11,8 @@ import re
 import time
 from dataclasses import dataclass
 
-from app.tools.terminal_runtime.terminal_input import TerminalWait
-from app.tools.terminal_runtime.terminal_observation import TerminalObservation
+from app.tools.terminal_runtime.inputs import TerminalWait
+from app.tools.terminal_runtime.observation import TerminalObservation
 
 
 @dataclass(frozen=True)
@@ -23,7 +23,11 @@ class WaitBaseline:
     - 行输入（write ``line``）：光标行就是命令回显行，``make && echo BUILD_DONE`` 配
       ``pattern=BUILD_DONE`` 会被回显立即命中，因此从回显行的下一行开始扫描；
     - 读取与按键输入：从光标行开始。读取时光标行可能已有尚未换行的输出（如 ``Password:``
-      提示），应当参与匹配；按键不回显文本，且备用屏幕里光标行本身就是被等待的内容。
+      提示），应当参与匹配；按键不回显文本。
+    全屏程序（备用屏幕）期间不用这些起点，``match`` 扫描整屏（见 :meth:`WaitEvaluator._match`）。
+    ``screen_after_version`` 只在输入后的等待设置：输入前的整屏可能已含 pattern（如在 less 里按
+    down 等一个早已可见的行），不要求重绘会立即误命中，所以须等屏幕在输入后至少更新一次；读取时
+    为 None，当前屏幕即可命中。
     """
 
     line: int
@@ -31,17 +35,21 @@ class WaitBaseline:
     counter: int
     active: int | None
     at: float
+    screen_after_version: int | None
 
     @classmethod
-    def of(cls, observation: TerminalObservation, *, after_line_input: bool) -> WaitBaseline:
+    def of(
+        cls, observation: TerminalObservation, *, after_line_input: bool, after_input: bool
+    ) -> WaitBaseline:
         active = observation.active_command
         line = observation.buffer.cursor_line
         return cls(
             line=line,
             match_from=line + 1 if after_line_input else line,
             counter=observation.command_counter,
-            active=active["number"] if active is not None else None,
+            active=active.number if active is not None else None,
             at=time.monotonic(),
+            screen_after_version=observation.information_version if after_input else None,
         )
 
 
@@ -53,6 +61,7 @@ class WaitEvaluator:
         self.baseline = baseline
         self.deadline = baseline.at + spec.effective_timeout_ms / 1000
         self.matched_line: int | None = None
+        self.matched_screen_row: int | None = None
         self._pattern = re.compile(spec.pattern) if spec.until == "match" and spec.pattern else None
         self._scan_from = baseline.match_from
 
@@ -81,16 +90,22 @@ class WaitEvaluator:
         if command is None:
             return False
         if self.baseline.active is not None:
-            return not (
-                command["number"] == self.baseline.active and command["status"] == "executing"
-            )
-        return bool(
-            command["number"] > self.baseline.counter and command["status"] != "executing"
-        )
+            return not (command.number == self.baseline.active and command.status == "executing")
+        return command.number > self.baseline.counter and command.status != "executing"
 
     def _match(self, observation: TerminalObservation) -> bool:
         assert self._pattern is not None
         buffer = observation.buffer
+        if buffer.alternate:
+            # 全屏程序原地重绘：每次扫整屏，命中记屏幕行（主屏逻辑行此时冻结，不会出现新内容）。
+            after = self.baseline.screen_after_version
+            if after is not None and observation.information_version <= after:
+                return False
+            for row, text in buffer.screen_lines():
+                if self._pattern.search(text):
+                    self.matched_screen_row = row
+                    return True
+            return False
         start = max(self._scan_from, buffer.first_available_line)
         for number, text in buffer.get(start, buffer.last_line):
             if self._pattern.search(text):
@@ -104,4 +119,6 @@ class WaitEvaluator:
         result: dict[str, object] = {"until": self.spec.until, "end_reason": end_reason}
         if self.matched_line is not None:
             result["matched_line"] = self.matched_line
+        if self.matched_screen_row is not None:
+            result["matched_screen_row"] = self.matched_screen_row
         return result

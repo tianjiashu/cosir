@@ -39,6 +39,12 @@ class TerminalIntegrationRequiredError(TerminalSessionError):
     code = "TERMINAL_INTEGRATION_REQUIRED"
 
 
+class ShellResolutionError(TerminalSessionError):
+    """shell 参数无法解析（未知名称、可执行文件不存在或当前平台不支持）。"""
+
+    code = "TERMINAL_SHELL_UNAVAILABLE"
+
+
 class TerminalSessionCapacityError(TerminalSessionError):
     """达到全进程活跃会话上限，或该 Task 的 Agent 会话上限。"""
 
@@ -50,16 +56,14 @@ class TerminalSessionResyncRequiredError(TerminalSessionError):
     """请求 cursor 已早于 ring buffer 当前可用范围。"""
 
     code = "TERMINAL_RESYNC_REQUIRED"
-    retryable = False
 
-    def __init__(self, after_seq: int, first_available_seq: int, next_seq: int) -> None:
+    def __init__(self, after_seq: int, first_available_seq: int) -> None:
         super().__init__(
             f"output cursor {after_seq} is no longer available; "
             f"first available sequence is {first_available_seq}"
         )
+        # API 据此构造 ``resync_required`` 帧（序号窗口由流缓冲在锁内现取）。
         self.after_seq = after_seq
-        self.first_available_seq = first_available_seq
-        self.next_seq = next_seq
 
 
 class TerminalWorkerUnavailableError(TerminalSessionError):

@@ -1,8 +1,10 @@
 """Agent 向终端投递输入与等待条件的参数边界契约。
 
-输入不声明自己是 shell 命令：``line`` 是一整行文字加一次 Enter，``keys`` 是按键序列，``signal``
-是运行时信号，``handoff`` 不写任何字节、只把输入权交给用户。参数模型在工具边界校验宿主平台的
-键集合；会话实际能力另由 worker 握手声明，service 在投递前复查。
+输入不声明自己是 shell 命令：``line`` 是一整行文字加一次 Enter，``text`` 是不带 Enter 的可打印
+字符（全屏程序的单键命令、``y/n`` 单键确认：多一个 Enter 会落到下一个读输入的程序上），``keys``
+是按键序列，``signal`` 是运行时信号。把输入权交给用户是独立的 HITL 工具 ``terminal_handoff``。
+参数模型在工具边界校验宿主平台的键集合；会话实际能力另由 worker 握手声明，runtime 在投递前复查
+（``require_input_capability``）。
 """
 
 from __future__ import annotations
@@ -53,22 +55,42 @@ def _host_signals_schema(schema: dict[str, Any]) -> None:
     schema["enum"] = list(signals_for_platform(platform.system()))
 
 
+def _reject_control_characters(value: str, *, reserved_bytes: int) -> None:
+    """line / text 共用：只检查可打印与字节预算，不解析接收程序的语法；worker 另行复查。"""
+    if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+        raise ValueError("text must not contain CR/LF or terminal control characters")
+    if len(value.encode("utf-8")) + reserved_bytes > Constant.Terminal.MAX_AGENT_INPUT_BYTES:
+        raise ValueError("terminal input exceeds 64 KiB")
+
+
 class InputLine(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     type: Literal["line"]
     text: str = Field(
-        description="One complete line, without CR/LF or control characters. "
-        "Empty sends Enter; whitespace is preserved."
+        description="One line without CR/LF or control characters, sent with one Enter; "
+        "whitespace is kept. Empty just presses Enter."
     )
 
     @field_validator("text")
     @classmethod
     def validate_line(cls, value: str) -> str:
-        """仅在输入边界检查单行与字节预算；不解析接收程序的语法。"""
-        if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
-            raise ValueError("line must not contain CR/LF or terminal control characters")
-        if len(value.encode("utf-8")) + 1 > Constant.Terminal.MAX_AGENT_INPUT_BYTES:
-            raise ValueError("terminal input exceeds 64 KiB including Enter")
+        _reject_control_characters(value, reserved_bytes=1)
+        return value
+
+
+class InputText(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    type: Literal["text"]
+    text: str = Field(
+        min_length=1,
+        description="Characters typed without Enter, e.g. 'q' to quit less, 'y' at a "
+        "single-key prompt, ':wq' in vim (then keys [\"enter\"]).",
+    )
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        _reject_control_characters(value, reserved_bytes=0)
         return value
 
 
@@ -76,8 +98,8 @@ class InputKeys(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
     type: Literal["keys"]
     keys: list[Annotated[str, Field(json_schema_extra=_host_keys_schema)]] = Field(
-        description="1-32 key names sent in order, e.g. [\"down\", \"down\", \"enter\"]. "
-        "Keys never append Enter unless 'enter' is listed."
+        description='1-32 keys sent in order, e.g. ["down", "enter"]; Enter is sent '
+        "only if listed."
     )
 
     @field_validator("keys")
@@ -99,8 +121,8 @@ class InputSignal(BaseModel):
     type: Literal["signal"]
     signal: str = Field(
         json_schema_extra=_host_signals_schema,
-        description="interrupt is Ctrl-C-like, suspend is Ctrl-Z-like (Unix), eof is canonical "
-        "EOF (Unix). Delivery does not mean the program exited.",
+        description="interrupt is like Ctrl-C, suspend like Ctrl-Z, eof like Ctrl-D at an "
+        "empty line. Delivery does not mean the program exited.",
     )
 
     @field_validator("signal")
@@ -112,50 +134,41 @@ class InputSignal(BaseModel):
         return value
 
 
-class InputHandoff(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-    type: Literal["handoff"]
-    reason: str = Field(
-        min_length=1,
-        max_length=200,
-        description="One sentence shown to the user, e.g. 'Enter the sudo password'.",
-    )
-
-
-TerminalInput = InputLine | InputKeys | InputSignal | InputHandoff
+TerminalInput = InputLine | InputText | InputKeys | InputSignal
 
 WaitUntil = Literal["command_returned", "output_quiet", "match", "elapsed"]
 
 
-# 结束条件 + 总超时；超时 > 30s 转为后台等待并挂起 Run。类 docstring 会进入模型 schema，
-# 因此写成模型可读的英文说明。
+# 结束条件 + 总超时。等待只在前台、占着工具线程进行，所以总超时有上限；更长的工作交给
+# execute_terminal 的后台执行。类 docstring 会进入模型 schema，因此写成模型可读的英文说明。
 class TerminalWait(BaseModel):
-    """When to stop waiting: one end condition plus an overall timeout."""
+    """When to return: one end condition plus an overall timeout."""
 
     model_config = ConfigDict(strict=True, extra="forbid")
     until: WaitUntil = Field(
-        description="command_returned: the shell reports the top-level command returned "
-        "(needs shell integration). output_quiet: no output for quiet_ms. match: a line at or "
-        "after the input/cursor line matches pattern. elapsed: just wait timeout_ms."
+        description="command_returned: the shell reports the command returned (needs shell "
+        "integration). output_quiet: no output for quiet_ms. match: pattern matches a line from "
+        "the cursor line on, or the redrawn screen in a full-screen app. elapsed: wait "
+        "timeout_ms."
     )
     pattern: str | None = Field(
         default=None,
         max_length=512,
-        description="Python regular expression for until=match; null otherwise.",
+        description="Python regex for until=match; null otherwise.",
     )
     quiet_ms: int | None = Field(
         default=None,
         ge=100,
         le=60_000,
-        description="Silence length for until=output_quiet (default 500); null otherwise.",
+        description="Silence for until=output_quiet "
+        f"(default {Constant.Terminal.WAIT_DEFAULT_QUIET_MS}); null otherwise.",
     )
     timeout_ms: int | None = Field(
         default=None,
         ge=0,
         le=Constant.Terminal.WAIT_MAX_TIMEOUT_MS,
-        description="Overall timeout (default 3000). Above 30000 the wait continues in the "
-        "background: you are paused and resumed by a <background_result> message when the "
-        "condition is met or the timeout expires.",
+        description=f"Overall limit (default {Constant.Terminal.WAIT_DEFAULT_TIMEOUT_MS}). For "
+        "long builds or test suites, use execute_terminal with background=true instead.",
     )
 
     @model_validator(mode="after")
@@ -180,11 +193,8 @@ class TerminalWait(BaseModel):
         return self.quiet_ms or Constant.Terminal.WAIT_DEFAULT_QUIET_MS
 
 
-DEFAULT_WRITE_WAIT = TerminalWait(
-    until="output_quiet",
-    quiet_ms=Constant.Terminal.WAIT_DEFAULT_QUIET_MS,
-    timeout_ms=Constant.Terminal.WAIT_DEFAULT_TIMEOUT_MS,
-)
+# write 不带 wait 时的默认条件；静默时长与总超时取 ``effective_*`` 的默认值。
+DEFAULT_WRITE_WAIT = TerminalWait(until="output_quiet")
 
 
 def require_input_capability(input: Mapping[str, Any], capabilities: frozenset[str]) -> None:
@@ -209,12 +219,10 @@ def require_input_capability(input: Mapping[str, Any], capabilities: frozenset[s
 
 
 def summarize_input(input: Mapping[str, Any]) -> str:
-    """动作行摘要：行文本、按键名、信号名或交接说明；不承载输出。"""
+    """动作行摘要：行文本、按键名或信号名；不承载输出。"""
     kind = input["type"]
-    if kind == "line":
+    if kind in {"line", "text"}:
         return str(input["text"])
     if kind == "keys":
         return " ".join(input["keys"])
-    if kind == "signal":
-        return str(input["signal"])
-    return str(input["reason"])
+    return str(input["signal"])

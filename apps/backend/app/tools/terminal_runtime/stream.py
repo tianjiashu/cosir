@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import uuid
 from collections import deque
 from dataclasses import dataclass
 
@@ -104,18 +105,22 @@ class _OutputFrame:
 class TerminalStreamBuffer:
     """原始输出窗口与订阅集合；所有方法由所属会话锁保护。"""
 
-    def __init__(self, session_id: str, generation: str, limit: int) -> None:
+    def __init__(self, session_id: str, limit: int) -> None:
         self._session_id = session_id
+        # generation 区分同一 session_id 的输出窗口实例，客户端据此判断 after_seq 是否仍可续接。
         self._identity: StreamEvent = {
             "protocol": PROTOCOL,
             "session_id": session_id,
-            "generation": generation,
+            "generation": f"gen_{uuid.uuid4().hex}",
         }
         self._limit = limit
         self._frames: deque[_OutputFrame] = deque()
         self._bytes = 0
         self._next_seq = 1
         self._subscribers: set[TerminalStreamSubscription] = set()
+        # ``finish`` 与会话终态迁移在同一会话锁内发生：之后的 attach 只回放并返回 exit，
+        # 不再登记订阅。
+        self._finished = False
 
     @property
     def first_available_seq(self) -> int:
@@ -152,7 +157,8 @@ class TerminalStreamBuffer:
         loop: asyncio.AbstractEventLoop,
         *,
         status: str,
-        state: dict[str, object],
+        rows: int,
+        columns: int,
     ) -> TerminalStreamAttachment:
         """after_seq 类型由 API 校验；这里只判断本窗口是否仍能连续回放。
 
@@ -160,9 +166,7 @@ class TerminalStreamBuffer:
         订阅队列，WS 先发 replay 再消费队列即保证顺序。
         """
         if after_seq is not None and after_seq < self.first_available_seq - 1:
-            raise TerminalSessionResyncRequiredError(
-                after_seq, self.first_available_seq, self._next_seq
-            )
+            raise TerminalSessionResyncRequiredError(after_seq, self.first_available_seq)
         subscription = TerminalStreamSubscription(loop, self._session_id)
         replay = tuple(
             self._output_event(frame)
@@ -175,15 +179,15 @@ class TerminalStreamBuffer:
             "first_available_seq": self.first_available_seq,
             "next_seq": self._next_seq,
             "status": status,
-            **state,
+            "rows": rows,
+            "columns": columns,
         }
-        ended = status not in {"starting", "running"}
-        if not ended:
+        if not self._finished:
             self._subscribers.add(subscription)
         return TerminalStreamAttachment(
             attached,
             replay,
-            self._exit_event() if ended else None,
+            self._exit_event() if self._finished else None,
             subscription,
         )
 
@@ -191,6 +195,7 @@ class TerminalStreamBuffer:
         self._subscribers.discard(subscription)
 
     def finish(self) -> None:
+        self._finished = True
         event = self._exit_event()
         for subscriber in self._subscribers:
             subscriber.publish(event)

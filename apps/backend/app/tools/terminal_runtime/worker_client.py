@@ -18,8 +18,9 @@ import threading
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import IO, cast
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -36,14 +37,15 @@ from app.tools.terminal_runtime.shell_resolver import ShellSpec
 WorkerEventCallback = Callable[[Mapping[str, object]], None]
 SIGNAL_ACK_TIMEOUT_SECONDS = 5.0
 HANDSHAKE_TIMEOUT_SECONDS = 5.0
+_STDERR_LINE_MAX_CHARS = 4096
 
 
 @dataclass
 class _PendingSignal:
-    """等待 worker signal_result 的单次请求状态。"""
+    """等待 worker signal_result 的单次请求状态；``result`` 先写入、``event`` 后 set。"""
 
     event: threading.Event
-    result: Mapping[str, object] | None = None
+    result: Mapping[str, object] = field(default_factory=dict)
 
 
 class ProcessTerminalWorker:
@@ -82,7 +84,6 @@ class ProcessTerminalWorker:
         self._executable = executable
         self.instance_id = instance_id
         self._process: subprocess.Popen[bytes] | None = None
-        self._on_event: WorkerEventCallback | None = None
         self._write_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._handshake_event = threading.Event()
@@ -111,10 +112,10 @@ class ProcessTerminalWorker:
         return self._capabilities
 
     def start(
-            self,
-            spec: ShellSpec,
-            cwd: str,
-            on_event: WorkerEventCallback,
+        self,
+        spec: ShellSpec,
+        cwd: str,
+        on_event: WorkerEventCallback,
     ) -> None:
         """无可见控制台窗口地启动 worker，发送 shell spec 并等待 handshake。
 
@@ -123,8 +124,8 @@ class ProcessTerminalWorker:
         ``output`` / ``screen`` / ``shell`` / ``error`` / ``exit`` 事件。
 
         异常:
-            TerminalWorkerUnavailableError: worker 已启动过、可执行文件无法拉起、握手超时或握手前
-                断开（可能是 worker 启动慢、瞬时崩溃等条件，可重试）。
+            TerminalWorkerUnavailableError: 可执行文件无法拉起、握手超时或握手前断开（可能是
+                worker 启动慢、瞬时崩溃等条件，可重试）。
             TerminalWorkerHandshakeError: 收到握手但实例 / PID / PTY 类型 / 尺寸不符，属确定性
                 失败，重试同一 worker 二进制不会有不同结果。
 
@@ -134,8 +135,6 @@ class ProcessTerminalWorker:
             已启动的进程。
         """
 
-        if self._process is not None:
-            raise TerminalWorkerUnavailableError("terminal worker has already started")
         try:
             if sys.platform == "win32":
                 creationflags = subprocess.CREATE_NO_WINDOW
@@ -167,14 +166,16 @@ class ProcessTerminalWorker:
             raise TerminalWorkerUnavailableError(f"failed to start terminal worker: {exc}") from exc
 
         self._process = process
-        self._on_event = on_event
+        # stdout / stderr 固定为 PIPE，必然存在。
         threading.Thread(
             target=self._read_events,
+            args=(process, cast(IO[bytes], process.stdout), on_event),
             name=f"terminal-worker-reader-{self.instance_id[:8]}",
             daemon=True,
         ).start()
         threading.Thread(
             target=self._drain_stderr,
+            args=(process, cast(IO[bytes], process.stderr)),
             name="terminal-worker-stderr",
             daemon=True,
         ).start()
@@ -218,7 +219,7 @@ class ProcessTerminalWorker:
         ).start()
 
     def write(self, input: Mapping[str, object]) -> None:
-        """将已校验的单次输入（line / keys / raw）入队；worker 负责编码并一次写入 PTY。"""
+        """将已校验的单次输入（line / text / keys / raw）入队；worker 负责编码并一次写入 PTY。"""
 
         self._enqueue({"type": "write", "input": dict(input)})
 
@@ -243,10 +244,7 @@ class ProcessTerminalWorker:
         payload = self._encode_frame(message)
         with self._input_queue_lock:
             queued_bytes = self._input_queue_bytes + len(payload)
-            if (
-                    self._input_queue.full()
-                    or queued_bytes > Constant.Terminal.MAX_INPUT_QUEUE_BYTES
-            ):
+            if self._input_queue.full() or queued_bytes > Constant.Terminal.MAX_INPUT_QUEUE_BYTES:
                 raise TerminalWorkerBackpressureError("terminal worker input queue is full")
             self._input_queue.put_nowait(payload)
             self._input_queue_bytes += len(payload)
@@ -274,15 +272,14 @@ class ProcessTerminalWorker:
                 self._pending_signals.pop(request_id, None)
             raise TerminalWorkerUnavailableError("terminal worker signal acknowledgement timed out")
         with self._signal_lock:
-            result = self._pending_signals.pop(request_id, None)
-        if result is None or result.result is None:
-            raise TerminalWorkerUnavailableError("terminal worker signal result is missing")
-        status = result.result.get("status")
+            self._pending_signals.pop(request_id, None)
+        # 事件已 set 意味着 result 已写入：读线程的回执，或 close 收敛的 ``unavailable``。
+        status = pending.result.get("status")
         if status == "applied":
             return
         if status == "unsupported":
             raise TerminalWorkerSignalUnsupportedError(
-                str(result.result.get("reason", "unsupported"))
+                str(pending.result.get("reason", "unsupported"))
             )
         if status == "failed":
             raise TerminalWorkerSignalFailedError("terminal worker failed to deliver signal")
@@ -303,7 +300,6 @@ class ProcessTerminalWorker:
             while True:
                 try:
                     self._input_queue.get_nowait()
-                    self._input_queue.task_done()
                 except queue.Empty:
                     break
             self._input_queue_bytes = 0
@@ -336,7 +332,6 @@ class ProcessTerminalWorker:
             finally:
                 with self._input_queue_lock:
                     self._input_queue_bytes = max(0, self._input_queue_bytes - len(payload))
-                self._input_queue.task_done()
 
     @staticmethod
     def _encode_frame(message: Mapping[str, object]) -> bytes:
@@ -365,7 +360,12 @@ class ProcessTerminalWorker:
 
         self._send_payload(self._encode_frame(message))
 
-    def _read_events(self) -> None:
+    def _read_events(
+        self,
+        process: subprocess.Popen[bytes],
+        stdout: IO[bytes],
+        on_event: WorkerEventCallback,
+    ) -> None:
         """后台读取 worker 事件并转发给 session service。
 
         shell 的结束只以 worker 自己发出的 ``exit`` 为准（worker 的每条退出路径都恰好发一次）。
@@ -375,18 +375,15 @@ class ProcessTerminalWorker:
         握手前断开不补发：由 ``start`` 抛错、service 记为启动失败，只此一处。
         """
 
-        process = self._process
-        if process is None or process.stdout is None:
-            return
         try:
             while not self._stop_event.is_set():
-                header = self._read_exact(process.stdout, 4)
+                header = self._read_exact(stdout, 4)
                 if len(header) != 4:
                     break
                 size = struct.unpack(">I", header)[0]
                 if size <= 0 or size > Constant.Terminal.MAX_FRAME_BYTES:
                     raise TerminalWorkerProtocolError(f"invalid terminal worker frame size: {size}")
-                payload = self._read_exact(process.stdout, size)
+                payload = self._read_exact(stdout, size)
                 if len(payload) != size:
                     break
                 event = json.loads(payload.decode("utf-8"))
@@ -413,14 +410,12 @@ class ProcessTerminalWorker:
                                 pending.result = event
                                 pending.event.set()
                     continue
-                callback = self._on_event
-                if callback is not None:
-                    callback(event)
+                on_event(event)
         except (
-                OSError,
-                json.JSONDecodeError,
-                UnicodeDecodeError,
-                TerminalWorkerUnavailableError,
+            OSError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            TerminalWorkerUnavailableError,
         ) as exc:
             if not self._stop_event.is_set():
                 log.warning(
@@ -446,22 +441,21 @@ class ProcessTerminalWorker:
             )
         finally:
             self._handshake_event.set()
-            callback = self._on_event
-            if not self._stop_event.is_set() and self._handshake_valid and callback is not None:
-                callback({"type": "error", "code": "WORKER_DISCONNECTED"})
+            if not self._stop_event.is_set() and self._handshake_valid:
+                on_event({"type": "error", "code": "WORKER_DISCONNECTED"})
 
     def _validate_handshake(self, event: Mapping[str, object], process_pid: int) -> bool:
         """校验进程外握手的身份、PTY 类型与正整数逻辑尺寸。"""
 
         rows, columns = event.get("rows"), event.get("columns")
         return (
-                event.get("instance_id") == self.instance_id
-                and event.get("pid") == process_pid
-                and event.get("pty_kind") in {"conpty", "unix_pty"}
-                and type(rows) is int
-                and rows > 0
-                and type(columns) is int
-                and columns > 0
+            event.get("instance_id") == self.instance_id
+            and event.get("pid") == process_pid
+            and event.get("pty_kind") in {"conpty", "unix_pty"}
+            and type(rows) is int
+            and rows > 0
+            and type(columns) is int
+            and columns > 0
         )
 
     def _handshake_mismatch_details(self) -> dict[str, object]:
@@ -508,13 +502,10 @@ class ProcessTerminalWorker:
             },
         )
 
-    def _drain_stderr(self) -> None:
+    def _drain_stderr(self, process: subprocess.Popen[bytes], stderr: IO[bytes]) -> None:
         """消费并限长记录 worker stderr，防止诊断管道阻塞。"""
 
-        process = self._process
-        if process is None or process.stderr is None:
-            return
-        for raw_line in process.stderr:
+        for raw_line in stderr:
             line = self._sanitize_worker_stderr(raw_line)
             if line:
                 log.warning(
@@ -540,10 +531,11 @@ class ProcessTerminalWorker:
             except TerminalWorkerUnavailableError:
                 return
 
-    def _read_exact(self, stream: object, size: int) -> bytes:
+    @staticmethod
+    def _read_exact(stream: IO[bytes], size: int) -> bytes:
         """从 binary stream 读取最多指定字节数，EOF 时返回已读取内容。"""
 
-        read = stream.read  # type: ignore[attr-defined]
+        read = stream.read
         chunks: list[bytes] = []
         remaining = size
         while remaining:
@@ -554,11 +546,12 @@ class ProcessTerminalWorker:
             remaining -= len(chunk)
         return b"".join(chunks)
 
-    def _sanitize_worker_stderr(self, raw_line: bytes, *, max_length: int = 4096) -> str:
+    @staticmethod
+    def _sanitize_worker_stderr(raw_line: bytes) -> str:
         """将 worker 诊断行转换为受限、可落盘的日志文本。"""
 
         text = raw_line.decode("utf-8", errors="replace").strip()
         sanitized = "".join(
             character for character in text if character >= " " or character == "\t"
         )
-        return sanitized[:max_length]
+        return sanitized[:_STDERR_LINE_MAX_CHARS]
