@@ -15,7 +15,8 @@
 状态」），占位行的结算由调用方完成，登记表不碰 context。
 
 生命周期（每条恰好结束一次，由 ``_entries`` 的 pop 保证）：
-- 完成：执行单元产出结论时调用 ``complete``，出队与投递在同一入口（pop-once 防重复投递）；前台
+- 完成：执行单元产出结论时调用 ``complete``，出队与投递在同一入口（pop-once 防重复投递）；Task
+  正在停止时 ``complete`` 不出队，条目由随后的撤销结束（结局只有「投递」与「撤销」两种）；前台
   条目正常结束时调用 ``settle_foreground``，与 ``detach`` 在同一把锁内裁决先后；
 - 撤销：Run 停止（用户停止、编辑重跑、父 Task 停止）时 ``TaskActor`` 调用 ``drop_task``，撤销该
   Task 的全部条目（含更早 Run 登记的）并逐条调用撤销回调，之后到达的 ``complete`` 不投递；用户在
@@ -166,16 +167,31 @@ class DeferredRegistry:
         self._notify(task_id)
 
     def complete(self, tool_call_id: str, result: dict[str, object]) -> bool:
-        """结束一条登记并把结论投递给它的 Task；已撤销、已完成或已关闭时不投递，返回 False。
+        """结束一条登记并把结论投递给它的 Task；已撤销、已完成、已关闭或 Task 正在停止时不投递，
+        返回 False。
 
         出队与「在途计数」在同一把锁内：``close`` 要么先于出队（不投递），要么等这次投递落定。
+        Task 正在停止（有取消信号）时不出队：停止期间到达的结论已无人需要，条目留给执行收尾的
+        ``drop_task`` 统一撤销，占位行随撤销推到 ``cancelled``。若在这里出队再丢弃，撤销看不到它，
+        结论也不会并入，占位行就没有任何结算路径。取消信号只在有执行者时打出，且执行收尾先撤销
+        再取走信号，所以留下的条目必然被撤销。
         会同步写 SQLite，调用方不得在 PTY 读线程等热路径上调用。
         """
 
         with self._lock:
-            entry = None if self._closed else self._entries.pop(tool_call_id, None)
-            if entry is None:
+            entry = self._entries.get(tool_call_id)
+            if entry is None or self._closed:
                 return False
+            if cancellation_registry.is_cancelled(entry.task_id):
+                log.info(
+                    "deferred_result_left_for_drop",
+                    extra={
+                        "msg": "Task 正在停止，结论不投递，条目留给撤销",
+                        "data": {"task_id": entry.task_id, "tool_call_id": tool_call_id},
+                    },
+                )
+                return False
+            del self._entries[tool_call_id]
             self._end(tool_call_id, entry, "completed")
             self._delivering += 1
         try:
@@ -228,15 +244,18 @@ class DeferredRegistry:
         self._notify(entry.task_id)
         return "detached"
 
-    def cancel(self, tool_call_id: str) -> DroppedEntry | None:
-        """用户取消单条：出队并调用撤销回调；没有该条目时返回 ``None``。"""
+    def cancel(self, tool_call_id: str, *, reason: str = "用户取消，撤销延迟结果") -> DroppedEntry | None:
+        """撤销单条（用户取消、编辑重跑撤回所在一轮）：出队并调用撤销回调；没有该条目时返回 ``None``。
+
+        ``reason`` 只进日志，区分撤销来源。
+        """
 
         with self._lock:
             entry = self._entries.pop(tool_call_id, None)
             if entry is None:
                 return None
             self._end(tool_call_id, entry, "cancelled")
-        self._cancel_all([(tool_call_id, entry)], "用户取消，撤销延迟结果")
+        self._cancel_all([(tool_call_id, entry)], reason)
         self._notify(entry.task_id)
         return DroppedEntry(tool_call_id, entry.task_id, entry.mode)
 
@@ -292,9 +311,9 @@ class DeferredRegistry:
             ]
 
     def drop_task(self, task_id: int) -> list[DroppedEntry]:
-        """撤销 Task 的全部条目（Run 停止时调用）；回调异常记录后继续，不阻断取消收尾。
+        """撤销 Task 的全部条目（Run 停止、Task 删除提交后调用）；回调异常记录后继续，不阻断收尾。
 
-        返回被撤销的条目，调用方据此结算后台占位行。
+        返回被撤销的条目，Run 停止的调用方据此结算后台占位行（删除时占位行已不在）。
         """
 
         with self._lock:
@@ -314,7 +333,7 @@ class DeferredRegistry:
         ]
 
     def forget_task(self, task_id: int) -> None:
-        """Task 删除后清掉它的最近结束条目（活条目已由删除前的停止撤销）。"""
+        """Task 删除后清掉它的最近结束条目；活条目须先经 :meth:`drop_task` 撤销。"""
 
         with self._lock:
             self._ended.pop(task_id, None)
@@ -400,19 +419,13 @@ def deliver_background_result(
     会同步写 SQLite，调用方不得在终端 PTY 读线程等热路径上直接调用。登记过的条目必须经
     ``DeferredRegistry.complete`` 投递（受关闭门控）；直接调用只用于不对应登记的启动期重启结论
     （``restart_settlement``）。
-    投递前复查 Task 取消信号：停止期间到达的结论已无人需要，丢弃。
+    停止期间的结论由 ``DeferredRegistry.complete`` 在锁内拦下，这里不再复查取消信号。
     Task 已删除时入队抛 ``KeyError``，在此记录并返回 False。
     """
 
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
     data = {"task_id": task_id, "tool_call_id": tool_call_id, "tool_name": tool_name}
-    if cancellation_registry.is_cancelled(task_id):
-        log.info(
-            "background_result_dropped_cancelled",
-            extra={"msg": "Task 正在停止，丢弃后台结论", "data": data},
-        )
-        return False
     body = BackgroundResultBody(
         tool_call_id=tool_call_id,
         tool_name=tool_name,

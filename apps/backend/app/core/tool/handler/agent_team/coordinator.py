@@ -16,6 +16,9 @@ from app.core.tool.handler.agent_team.node_profile import (
     NODE_PROFILE_SNAPSHOT_KEY,
     build_node_profile,
 )
+from app.core.workflow.cancel.tool_call_cancellation_registry import (
+    tool_call_cancellation_registry,
+)
 from app.models import ConversationRunRecord
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_node_definition import TeamNodeDefinition
@@ -79,9 +82,9 @@ class AgentTeamCoordinator:
         记下新 Run 并在 TeamRun 不再运行时停下节点（见 :meth:`_await_node_run`）。
 
         取消：以 TeamRun 自身状态为准，不读父 Task 的取消信号——单一事实源。主 Task 停止时其 actor
-        经 :meth:`cancel_for_parent_task`、用户在卡片上经 :meth:`cancel` 把 TeamRun 落定
-        cancelled；本循环每轮持久化快照时（条件更新落空）与节点结束后检出，等待节点期间检出则
-        停止节点。
+        经 :meth:`cancel_for_parent_task` 把 TeamRun 落定 cancelled；用户取消这次工具调用时由
+        :meth:`_stopped` 检出工具级信号后落定。本循环每轮持久化快照时（条件更新落空）与节点结束后
+        检出，等待节点期间检出则停止节点。
 
         返回:
             落定终态后的 TeamRun 快照。调度异常（含已冻结的节点配置或运行快照无效）不向调用方抛出：
@@ -197,7 +200,7 @@ class AgentTeamCoordinator:
                 else None
             )
             if execution is not None:
-                task_runtime_spaces.cancel(execution.task_id, "parent")
+                task_runtime_spaces.get_or_create(execution.task_id).actor.request_cancel("parent")
         finally:
             # 所有正常终态分支与调度异常共用同一档案出口；写入失败由档案 service 记录，
             # 不覆盖已经收敛的 TeamRun 结果。
@@ -398,13 +401,24 @@ class AgentTeamCoordinator:
                     )
                 return node_run_id
             if node_run_id is not None and not cancel_sent and self._stopped(team_run_id):
-                task_runtime_spaces.cancel(node_execution.task_id, "parent")
+                node_actor = task_runtime_spaces.get_or_create(node_execution.task_id).actor
+                node_actor.request_cancel("parent")
                 cancel_sent = True
 
     def _stopped(self, team_run_id: int) -> bool:
-        """TeamRun 已不在运行（被取消或已收敛）时返回真；节点结束后与节点等待期间据此停下。"""
+        """TeamRun 已不在运行（被取消或已收敛）时返回真；节点结束后与节点等待期间据此停下。
 
-        status = self._team_run_crud.get_by_id(team_run_id).status
+        用户取消这次 ``agent_team`` 调用（``/tool-calls/{id}/cancel``）只给它打工具级取消信号；
+        thread 工具执行中途不检查信号，所以由这里在 TeamRun 仍运行时现读信号，检出即落定
+        cancelled，之后与其他取消一样只以 TeamRun 状态为准。信号在工具返回时由执行层释放。
+        """
+
+        row = self._team_run_crud.get_by_id(team_run_id)
+        if row.status == AgentTeamRunStatus.RUNNING.value and (
+                tool_call_cancellation_registry.is_cancelled(row.parent_task_id, row.tool_call_id)
+        ):
+            row = self.cancel(team_run_id)
+        status = row.status
         if status == AgentTeamRunStatus.RUNNING.value:
             return False
         log.info(
@@ -507,7 +521,7 @@ class AgentTeamCoordinator:
 
         只迁移状态：运行中的节点由 :meth:`start` 的等待循环检出后停下。
 
-        ``end_reason`` 区分用户在卡片上取消与随主 Run 停止（``PARENT_CANCELLED``），写进 TeamRun
+        ``end_reason`` 区分用户取消这次工具调用与随主 Run 停止（``PARENT_CANCELLED``），写进 TeamRun
         与运行档案供诊断。
 
         异常:

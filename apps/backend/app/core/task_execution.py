@@ -128,7 +128,7 @@ class TaskExecution:
         if cancellation_registry.is_cancelled(self.task_id):
             # 取走信号前先撤销延迟结果：信号在时迟到结论被 ``deliver_background_result`` 丢弃，
             # 取走之后、撤销之前却会入队并开出新 Run。撤销期间执行仍登记着，新到的取消照常打信号。
-            await self._cancellation.drop_deferred_entries()
+            await self._cancellation.cancel_background_task()
         self._task = self._run = None
         reason = cancellation_registry.consume(self.task_id)
         await self._on_released(run, reason)

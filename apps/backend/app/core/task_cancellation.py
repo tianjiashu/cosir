@@ -12,11 +12,6 @@ from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.models import ConversationRunRecord
 from app.service import depends as service_depends
 
-_USER_CANCELLED_NOTICE = (
-    "The user stopped your previous turn before it finished. Do not resume that work unless "
-    "the user asks for it."
-)
-
 
 class TaskCancellation:
     """一个 Task 取消时要对下游做的事；由该 Task 的 ``TaskActor`` 持有，并在固定时机调用。
@@ -51,23 +46,37 @@ class TaskCancellation:
                 extra={"msg": "停止时取消 Agent Team 失败", "data": {"task_id": self.task_id}},
             )
 
-    async def drop_deferred_entries(self) -> None:
+    async def cancel_background_task(self) -> None:
         """撤销本 Task 的全部延迟结果（含更早 Run 登记的；后台命令、终端交接）：之后到达的完成不再
         投递，交接状态由撤销回调清除。回调可能取终端服务的锁并触发快照刷新，放进工作线程；回调异常
         由 ``drop_task`` 逐条记录，不会抛到这里。
 
         必须在取消「生效」之前调用，否则两步之间到达的结论会入队并开出新 Run。被撤销的后台条目随即
         把占位行推到 ``cancelled``；前台条目没有占位行，工具线程会自己以取消结果收尾。
+
+        不抛异常：调用方是取消收尾（执行释放前、挂起 Run 迁移前），这里一抛，信号取不走、执行不注销，
+        Task 就永久卡在停止中。撤销登记是必须完成的那一步，它本身不失败；占位只是卡片展示状态，
+        结算写库失败可以接受——记录后照常收尾，残留的 ``pending`` 占位由重启收尾推到「已中断」。
         """
         dropped = await asyncio.to_thread(deferred_registry.drop_task, self.task_id)
         background = [entry.tool_call_id for entry in dropped if entry.mode == "background"]
-        if background:
+        if not background:
+            return
+        try:
             await asyncio.to_thread(
                 placeholders.settle_placeholders,
                 self.task_id,
                 background,
                 "cancelled",
                 placeholders.RUN_STOPPED_HINT,
+            )
+        except Exception:
+            log.exception(
+                "deferred_placeholder_settle_failed",
+                extra={
+                    "msg": "取消时结算后台占位失败，照常收尾；占位留待重启收尾",
+                    "data": {"task_id": self.task_id, "tool_call_ids": background},
+                },
             )
 
     async def after_cancelled(self, run: ConversationRunRecord, reason: CancelReason) -> None:
@@ -85,7 +94,7 @@ class TaskCancellation:
                 service_depends.get_task_service().list_child_tasks, self.task_id
             )
             for child in children:
-                task_runtime_spaces.cancel(child.id, "parent")
+                task_runtime_spaces.get_or_create(child.id).actor.request_cancel("parent")
         except Exception:
             log.exception(
                 "task_cancel_propagation_failed",
@@ -97,7 +106,7 @@ class TaskCancellation:
         if reason != "user":
             return
         notice = TaskMessage.of(
-            NoticeBody(content=_USER_CANCELLED_NOTICE, notice_kind="user_cancelled"),
+            NoticeBody(content="The user stopped your previous turn before it finished.", notice_kind="user_cancelled"),
             delivery="next_run",
         )
         await asyncio.to_thread(

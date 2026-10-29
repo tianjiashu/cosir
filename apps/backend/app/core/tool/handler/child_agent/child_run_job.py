@@ -60,7 +60,7 @@ def run_child(
     def cancel() -> None:
         for future in waiting:
             future.cancel()
-        task_runtime_spaces.cancel(child_task_id, "parent")
+        task_runtime_spaces.get_or_create(child_task_id).actor.request_cancel("parent")
 
     job = ManualJob(
         on_cancel=cancel,

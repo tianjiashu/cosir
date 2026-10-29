@@ -73,10 +73,11 @@ def _terminal_tool_names(*groups: str) -> frozenset[str]:
 
 
 def interrupt_pending_placeholders() -> int:
-    """重启前仍为 ``pending`` 的后台占位全部推到 ``cancelled``（短提示「已中断」），返回行数。
+    """重启前还在等结果的占位全部推到 ``cancelled``（短提示「已中断」），返回行数。
 
-    登记表重启后为空，这些调用不会再由撤销结算。委派占位同样停在「已中断」：重启结论不对应某次
-    调用，并入时不改占位；委派卡片状态跟随子 Task 最新 Run，不受影响。
+    后台占位（``pending``）：登记表重启后为空，这些调用不会再由撤销结算。委派占位同样停在「已中断」：
+    重启结论不对应某次调用，并入时不改占位；委派卡片状态跟随子 Task 最新 Run，不受影响。
+    HITL 占位（``running``，决定已接收、执行被重启打断）：执行不会再发生，决定也不能再提交一次。
     """
 
     return placeholders.settle_placeholders(None, None, "cancelled", placeholders.INTERRUPTED_HINT)

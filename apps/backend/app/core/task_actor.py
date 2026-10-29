@@ -12,7 +12,8 @@ actor 随 ``TaskRuntimeSpace`` 物化而创建，由注册表在事件循环上�
   触发推进；残留消息随下一次推进一并投递。
 - **执行不阻塞 loop。** Run 作为子 asyncio task 运行，loop 继续监听：运行中到达的 ``immediate``
   消息能及时投进 Task 级 mailbox。执行结束时若队列里还有未消费的消息，按刚结束的 Run 状态再推进
-  一次：完成、挂起时接续全部剩余消息；取消、失败不自动接续，持续失败也不会空转。
+  一次：完成、挂起时接续剩余消息（新 Run 只取一条用户输入，排队消息因此一轮一条依次处理）；
+  取消、失败不自动接续，持续失败也不会空转。
 - **停止期间先等执行落定再判定。** 已发起停止时 loop 醒来不往即将作废的 mailbox 投递，而是等这次
   执行（含收尾）结束，再按 ``idle`` 照常判定：用户停下后又发的消息就是这一轮的新消息，自然开新
   Run；停止前排着的不是新消息，不自己跑起来。
@@ -26,7 +27,8 @@ actor 随 ``TaskRuntimeSpace`` 物化而创建，由注册表在事件循环上�
 - **取消编排归 actor。** :meth:`cancel` 有执行者就交给 ``TaskExecution.cancel``（打信号并立即取消
   这次执行的 Agent Team），工作流在检查点落定；挂起的 Run 没有执行者，在闸门内直接迁移为
   cancelled；没有可停止的对象时什么也不登记。取消对下游做什么（取消 Team、撤销延迟结果、停止
-  子 Task、留用户取消通知）在 ``TaskCancellation``，actor 只决定调用时机。
+  子 Task、留用户取消通知）在 ``TaskCancellation``，actor 只决定调用时机。上游停止下游从工具或
+  工作线程发起，经 :meth:`request_cancel` 投递到 actor 所在的事件循环、不等待。
 """
 
 from __future__ import annotations
@@ -51,6 +53,8 @@ from app.models.enums.conversation_run_status import (
 from app.service import depends as service_depends
 
 if TYPE_CHECKING:
+    from concurrent.futures import Future
+
     from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 
 
@@ -87,6 +91,8 @@ class TaskActor:
             self.task_id, self.mailbox, self._cancellation, self._after_drive
         )
         self._loop_task: asyncio.Task[None] | None = None
+        # actor 所在的事件循环，``start`` 时记下；:meth:`request_cancel` 据此从任意线程投递取消。
+        self._event_loop: asyncio.AbstractEventLoop | None = None
         # 已判定过的最大消息 id：之后到达的才算新消息。
         # 外部队列「取出不删除」：行要等 prepare_input 写进 context 时才确认删除
         self._watermark = 0
@@ -118,7 +124,8 @@ class TaskActor:
     def start(self) -> None:
         """在当前事件循环上拉起监听 loop；重复调用无效果。"""
         if self._loop_task is None:
-            self._loop_task = asyncio.get_running_loop().create_task(self._loop())
+            self._event_loop = asyncio.get_running_loop()
+            self._loop_task = self._event_loop.create_task(self._loop())
 
     async def stop(self) -> None:
         """Task 即将删除：停止当前执行并等它落定，再停下 loop。不调度后续 Run。"""
@@ -177,9 +184,11 @@ class TaskActor:
         if self._stopping:
             return
         if fresh:
-            # 先刷新排队投影再投递：消费投影只搬移排队条目，消息进 mailbox 前投影里必须已有它。
-            await asyncio.to_thread(service_depends.get_conversation_task_state_service().refresh_queued_messages,
-                                    self.task_id)
+            # 有新消息入队：把排队投影同步到队列现状（入队方可能在自己的事务里写入，提交后才由这里读到）。
+            await asyncio.to_thread(
+                service_depends.get_conversation_task_state_service().refresh_queued_messages,
+                self.task_id,
+            )
         async with self._space.async_operation():
             current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
             action = dispatch_policy.next_action(self._phase(current), current, pending, fresh)
@@ -227,6 +236,38 @@ class TaskActor:
                 return
         self._publish_state()
 
+    def request_cancel(self, reason: CancelReason) -> None:
+        """从任意线程发起 :meth:`cancel`，只投递、不等待；失败只记录。
+
+        给上游停止下游用（父 Run 取消后传播、撤销委派、Coordinator 停节点）：调用方多在工具或工作
+        线程里，没有可 await 的事件循环；在事件循环上的调用方（``after_cancelled``）正持自己的 Task
+        闸门，等对方的闸门会让父子互等。能 await 且可以等的调用方（HTTP 用户停止）直接用
+        :meth:`cancel`。
+
+        actor 尚未拉起（注册表还没 ``bind_loop``）或事件循环已关闭（进程退出中）时没有执行取消的
+        地方，记录后放弃：前者只在启动瞬间出现，后者遗留的 running Run 由下次启动收敛。
+        """
+        loop = self._event_loop
+        if loop is None or loop.is_closed():
+            log.warning(
+                "task_cancel_request_dropped",
+                extra={
+                    "msg": "actor 未在运行的事件循环上，放弃发起停止",
+                    "data": {"task_id": self.task_id, "reason": reason, "started": loop is not None},
+                },
+            )
+            return
+        future = asyncio.run_coroutine_threadsafe(self.cancel(reason), loop)
+        future.add_done_callback(self._log_cancel_failure)
+
+    def _log_cancel_failure(self, done: Future[None]) -> None:
+        if not done.cancelled() and done.exception() is not None:
+            log.error(
+                "task_cancel_failed",
+                extra={"msg": "发起停止 Task 失败", "data": {"task_id": self.task_id}},
+                exc_info=done.exception(),
+            )
+
     async def _cancel_suspended(self, reason: CancelReason) -> bool:
         """挂起的 Run 没有执行者：撤销延迟结果后直接迁移为 cancelled 并传播；调用方持 Task 闸门。
 
@@ -239,7 +280,7 @@ class TaskActor:
             return False
         await self._cancellation.cancel_teams()
         # 先撤销延迟结果再迁移：迁移之后才到的结论会被 loop 当作新消息开出新 Run。
-        await self._cancellation.drop_deferred_entries()
+        await self._cancellation.cancel_background_task()
         cancelled = await asyncio.to_thread(
             self._ledger.transition, current.id, RunTransition.CANCEL
         )
@@ -251,13 +292,16 @@ class TaskActor:
         """当前 Run 为 cancelled / failed 且没有执行者时，从 prepare_input 续跑同一个 Run。
 
         不经 loop（恢复时通常没有新消息、loop 正挂起），但同样在 Task 闸门内判定与启动：用户恰好
-        同时发了消息时，两边不会各开一个执行。
+        同时发了消息时，两边不会各开一个执行。删除前的停止（``_stopping``）之后拒绝：恢复是唯一
+        不经 loop 就能开出执行的入口，放行会在即将删除的 Task 上留下执行者。
 
         异常:
             SessionConflictError: ``RUN_NOT_RESUMABLE``。
             KeyError: Task 不存在。
         """
         async with self._space.async_operation():
+            if self._stopping:
+                raise SessionConflictError("RUN_NOT_RESUMABLE", "Task 正在删除，不可恢复")
             current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
             resumed = None
             if current is not None and self._phase(current) == "idle":

@@ -49,9 +49,11 @@ class AgentTeamRunTool(HandlerBase):
       通用 HITL 结算追加为 ``<tool_result>``，卡片随之收尾。
 
     Team 的生命周期因此包在这一次工具调用里：主 Agent 不需要 ``wait_messages``，也没有游离于 Run
-    之外的后台执行。代价是 thread 工具执行中途不检查取消信号——主 Run 停止时由 ``TaskActor`` 在打
-    信号的同时取消本 Run 的 TeamRun，Coordinator 检出后停下节点并返回，Run 才能走到检查点落定；
-    用户在卡片上单独停止 Team 走 ``/agent-team/runs/{id}/cancel``，工具照常返回 cancelled 结论。
+    之外的后台执行，单独停止 Team 就是取消这次工具调用（通用 ``/tool-calls/{id}/cancel``），没有
+    TeamRun 专属的取消入口。代价是 thread 工具执行中途不检查取消信号，两种停止都由 Coordinator
+    在等待循环里检出：主 Task 停止时由 ``TaskActor`` 在打信号的同时取消该 Task 的 TeamRun；取消
+    本调用时 Coordinator 现读工具级信号并落定 TeamRun。之后停下节点并返回，工具照常返回 cancelled
+    结论，主 Run 才能走到检查点落定或继续。
 
     审批门由后端强制：模型重复调用只会产生新的待确认方案，推进 TeamRun 只能经用户决定。
     """
@@ -211,8 +213,8 @@ class AgentTeamRunTool(HandlerBase):
     ) -> ToolObservation:
         """按用户决定推进本次调用创建的 TeamRun；结果由通用 HITL 结算追加给模型。
 
-        决定入口只按等待占位与队列做通用校验，不读 TeamRun；入队到这里之间方案可能已被处理（用户
-        在卡片上取消、并发的重复决定）：条件迁移落空时返回失败结果说明现状，不抛异常。
+        决定入口只按等待占位与队列做通用校验，不读 TeamRun；入队到这里之间方案可能已被处理（主 Task
+        停止时一并取消、并发的重复决定）：条件迁移落空时返回失败结果说明现状，不抛异常。
         节点回落的模型配置取自创建方案的主 Run 的持久化事实，而不是执行决定时的当前 Run——用户
         审批的是那次 Run 提出的方案。
         """
