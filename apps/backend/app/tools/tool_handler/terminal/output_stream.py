@@ -26,7 +26,9 @@ class TerminalOutputStream:
     """把读取线程产生的文本合并后，按序投递到事件循环。
 
     ``emit`` 由读取线程调用、``finish`` 由工具线程调用，缓冲与发布在事件循环上进行；
-    ``finish`` 阻塞到已接收文本全部发布后返回，之后到达的 ``emit`` 静默丢弃。``emit`` 不抛异常，
+    ``finish`` 只关闭通道并排空已接收文本、**不阻塞**，之后到达的 ``emit`` 静默丢弃。不等待发布的
+    理由：工具返回后该 part 立刻离开 ``running``，投影会丢弃迟到帧，等待对前端没有可见收益，而事件
+    循环已停止（未 close）时排队的回调永不执行，等待会把工具线程永久挂死。``emit`` 不抛异常，
     采集器据此不再包裹 sink 调用。
     """
 
@@ -45,7 +47,6 @@ class TerminalOutputStream:
         self._draining = False
         self._timer: asyncio.TimerHandle | None = None
         self._closed = False
-        self._finish_waiter: threading.Event | None = None
         self._seq = 0
 
     @classmethod
@@ -77,18 +78,14 @@ class TerminalOutputStream:
             self._wake_loop(self._schedule_drain)
 
     def finish(self) -> None:
-        """等待所有已接收文本帧完成发布，然后关闭通道。"""
-        waiter = threading.Event()
+        """关闭通道，并把已接收文本交给事件循环排空；不阻塞调用方。"""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-            if not (self._pending or self._scheduled or self._draining):
-                return
-            self._finish_waiter = waiter
-
-        self._wake_loop(self._drain)
-        waiter.wait()
+            has_pending = bool(self._pending or self._scheduled or self._draining)
+        if has_pending:
+            self._wake_loop(self._drain)
 
     def _log_data(self, **extra: object) -> dict[str, object]:
         return {
@@ -99,7 +96,7 @@ class TerminalOutputStream:
         }
 
     def _wake_loop(self, callback: Callable[[], None]) -> None:
-        """线程安全地调度事件循环回调；事件循环已关闭时丢弃剩余输出并放行 ``finish``。"""
+        """线程安全地调度事件循环回调；事件循环已关闭时丢弃剩余输出。"""
         try:
             self._loop.call_soon_threadsafe(callback)
         except RuntimeError:
@@ -108,10 +105,6 @@ class TerminalOutputStream:
                 self._closed = True
                 self._pending.clear()
                 self._scheduled = False
-                waiter = self._finish_waiter
-                self._finish_waiter = None
-            if waiter is not None:
-                waiter.set()
             log.warning(
                 "terminal_output_loop_unavailable",
                 extra={
@@ -132,7 +125,7 @@ class TerminalOutputStream:
             self._drain()
 
     def _drain(self) -> None:
-        """发布缓冲文本，并在清空后唤醒等待中的 ``finish``。"""
+        """发布缓冲文本；期间新到的文本再排一次 drain。"""
         with self._lock:
             timer = self._timer
             self._timer = None
@@ -168,20 +161,11 @@ class TerminalOutputStream:
         should_reschedule = False
         with self._lock:
             self._draining = False
-            if self._pending:
-                if not self._scheduled:
-                    self._scheduled = True
-                    should_reschedule = True
-                waiter = None
-            else:
-                waiter = self._finish_waiter if self._closed else None
-                if waiter is not None:
-                    self._finish_waiter = None
+            if self._pending and not self._scheduled:
+                self._scheduled = True
+                should_reschedule = True
         if should_reschedule:
             self._wake_loop(self._schedule_drain)
-            return
-        if waiter is not None:
-            waiter.set()
 
 
 def _iter_chunks(texts: list[str]) -> Iterator[str]:
