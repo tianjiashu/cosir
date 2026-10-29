@@ -1,4 +1,4 @@
-"""Agent Team 在后台执行；Coordinator 以 TeamRun 自身状态判定取消，等待节点静止时检出即停止节点。"""
+"""Agent Team 在后台执行；Coordinator 以 TeamRun 自身状态判定取消，等待节点落定时检出即停止节点。"""
 
 import asyncio
 import threading
@@ -29,14 +29,14 @@ def main_loop() -> Iterator[asyncio.AbstractEventLoop]:
 
 
 class _Node:
-    """节点 actor 与取消信号替身：节点 Task 在被取消前一直不静止。"""
+    """节点 actor 与取消信号替身：节点 Task 在被取消前一直不落定。"""
 
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self.cancelled: list[int] = []
         self._loop = loop
         self._released = asyncio.Event()
 
-    async def wait_idle(self, wait_seconds: float) -> bool:
+    async def wait_quiescent(self, wait_seconds: float) -> bool:
         try:
             await asyncio.wait_for(self._released.wait(), wait_seconds)
         except TimeoutError:
@@ -44,7 +44,7 @@ class _Node:
         return True
 
     def cancel(self, task_id: int, reason: str) -> None:
-        # Coordinator 在工作线程里经注册表发起停止节点 Task；节点随之静止。
+        # Coordinator 在工作线程里经注册表发起停止节点 Task；节点随之落定。
         assert reason == "parent"
         self.cancelled.append(task_id)
         self._loop.call_soon_threadsafe(self._released.set)
@@ -93,7 +93,7 @@ def test_node_wait_stops_node_when_team_run_is_cancelled(
     # 节点启动后 TeamRun 才被取消：等待循环应检出并经调度入口停止节点。
     threading.Timer(0.3, setattr, args=(runs, "status", AgentTeamRunStatus.CANCELLED.value)).start()
 
-    run_id = coordinator._await_node_run(main_loop, _TEAM_RUN, object(), execution, None)
+    run_id = coordinator._await_node_run(main_loop, _TEAM_RUN, object(), execution)
 
     assert run_id == 101
     assert execution.conversation_run_ids == [101]
@@ -116,12 +116,15 @@ def test_node_wait_defers_cancel_until_node_run_appears(
         original_cancel(task_id, reason)
 
     monkeypatch.setattr(coordinator_module.task_runtime_spaces, "cancel", cancel)
-    execution = AgentTeamNodeExecution(node_id="develop", task_id=_NODE_TASK)
+    # 节点上一次执行的 Run 7 已在时间线里：它不是这次输入的 Run。
+    execution = AgentTeamNodeExecution(
+        node_id="develop", task_id=_NODE_TASK, conversation_run_ids=[7]
+    )
 
-    run_id = coordinator._await_node_run(main_loop, _TEAM_RUN, object(), execution, 7)
+    run_id = coordinator._await_node_run(main_loop, _TEAM_RUN, object(), execution)
 
     assert run_id == 101
-    assert seen_before_cancel == [[101]]
+    assert seen_before_cancel == [[7, 101]]
 
 
 @pytest.mark.parametrize(
@@ -134,3 +137,20 @@ def test_coordinator_stops_once_team_run_leaves_running(status: str, stopped: bo
     coordinator._team_run_crud = _TeamRuns(status)
 
     assert coordinator._stopped(_TEAM_RUN) is stopped
+
+
+def test_node_wait_rejects_settling_without_a_new_run(
+    monkeypatch: pytest.MonkeyPatch, main_loop: asyncio.AbstractEventLoop
+) -> None:
+    """节点无事可做时最新 Run 仍是旧的：输入没有开出新 Run，调度违约，交给 ``start`` 收敛为失败。"""
+    node = _Node(main_loop)
+    main_loop.call_soon_threadsafe(node._released.set)
+    coordinator = _waiting_coordinator(
+        monkeypatch, node, _TeamRuns(AgentTeamRunStatus.RUNNING.value), [7]
+    )
+    execution = AgentTeamNodeExecution(
+        node_id="develop", task_id=_NODE_TASK, conversation_run_ids=[7]
+    )
+
+    with pytest.raises(RuntimeError):
+        coordinator._await_node_run(main_loop, _TEAM_RUN, object(), execution)

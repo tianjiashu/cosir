@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.workflow.inbox.task_message import NoticeBody
+from app.core.workflow.message_queue.task_message import NoticeBody
 from app.task_runtime.agent_catalog_change import AgentCatalogChange
 from app.task_runtime.broadcaster import runtime_notice_broadcaster
 from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (

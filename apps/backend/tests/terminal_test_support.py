@@ -12,8 +12,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from app.tools.terminal_runtime.terminal_input import keys_for_platform
-from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
+from app.tools.terminal_runtime.inputs import keys_for_platform
+from app.tools.terminal_runtime.session_service import TerminalSessionService
 
 ALL_KEYS = sorted(set(keys_for_platform("Linux")) | set(keys_for_platform("Windows")))
 
@@ -115,6 +115,7 @@ def make_service(
     *,
     worker_type: type[FakeWorker] = FakeWorker,
     on_changed: Callable[[int], None] | None = None,
+    on_agent_ended: Callable[[int, str], None] | None = None,
 ) -> tuple[TerminalSessionService, list[FakeWorker]]:
     """只在具体构造边界替换 worker，收集每个会话独立创建的替身。"""
 
@@ -127,14 +128,31 @@ def make_service(
         return worker
 
     monkeypatch.setattr(
-        "app.tools.terminal_runtime.terminal_session_service.ProcessTerminalWorker", construct
+        "app.tools.terminal_runtime.session_runtime.ProcessTerminalWorker", construct
     )
     monkeypatch.setattr(
-        "app.tools.terminal_runtime.terminal_session_service.ShellResolver.resolve",
+        "app.tools.terminal_runtime.session_service.ShellResolver.resolve",
         lambda shell, integration="auto", **_: _spec(shell, integration),
     )
-    service = TerminalSessionService(on_task_sessions_changed=on_changed or (lambda _task: None))
-    return service, workers
+    capture_terminal_effects(monkeypatch, on_changed=on_changed, on_agent_ended=on_agent_ended)
+    return TerminalSessionService(), workers
+
+
+def capture_terminal_effects(
+    monkeypatch: Any,
+    *,
+    on_changed: Callable[[int], None] | None = None,
+    on_agent_ended: Callable[[int, str], None] | None = None,
+) -> None:
+    """替换会话对应用层的两个副作用（snapshot 重投影、会话结束通知）；交接落定由各测试自行替换。"""
+    from app.tools.terminal_runtime import session_effects
+
+    monkeypatch.setattr(
+        session_effects, "refresh_task_sessions", on_changed or (lambda _task: None)
+    )
+    monkeypatch.setattr(
+        session_effects, "post_session_ended_notice", on_agent_ended or (lambda _task, _text: None)
+    )
 
 
 def _spec(shell: str, integration: str) -> Any:
@@ -146,18 +164,48 @@ def _spec(shell: str, integration: str) -> Any:
 
 def start(service: TerminalSessionService, tmp_path: Any, *, task_id: int = 1,
           created_by: str = "agent", shell: str = "auto") -> str:
-    meta = service.start(
+    runtime = service.start(
         task_id=task_id,
         workspace_root=str(tmp_path),
         shell=shell,
         created_by=created_by,  # type: ignore[arg-type]
         run_id=1 if created_by == "agent" else None,
     )
-    return str(meta["session_id"])
+    if created_by == "agent":
+        runtime.wait_for_integration()  # 与 terminal_start 工具一致
+    return runtime.session_id
 
 
 def never() -> bool:
     return False
+
+
+def session_view(service: TerminalSessionService, session_id: str, task_id: int = 1) -> Any:
+    """测试检查用：会话当前快照。"""
+    return service.require(session_id, task_id).snapshot()
+
+
+def session_entries(service: TerminalSessionService, task_id: int = 1) -> list[dict[str, Any]]:
+    """该 Task 的 Transport 会话条目（生产投影同一路径：快照 → ``to_terminal_session``）。"""
+    from app.assistant_transport.state.conversation_state_terminal_session import (
+        to_terminal_session,
+    )
+
+    return [dict(to_terminal_session(r.snapshot())) for r in service.task_runtimes(task_id)]
+
+
+def geometry(service: TerminalSessionService, session_id: str, task_id: int = 1) -> tuple[int, int]:
+    """测试检查用：会话当前屏幕尺寸（跟随 worker screen 事件）。"""
+    buffer = service.require(session_id, task_id)._observation.buffer
+    return buffer.rows, buffer.columns
+
+
+def active_session_ids(service: TerminalSessionService, task_id: int = 1) -> list[str]:
+    return [
+        str(entry["sessionId"])
+        for entry in session_entries(service, task_id)
+        if entry["status"] in ("starting", "running")
+    ]
 
 
 def run_in_thread(target: Callable[[], Any]) -> tuple[threading.Thread, dict[str, Any]]:

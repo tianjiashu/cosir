@@ -55,10 +55,11 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
             "error": None,
             "usage": None,
             "contextWindowTotal": None,
-            "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+            "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
         },
         "terminal_sessions": [],
-        "deferred_results": [],
+        "background_tasks": [],
+        "foreground_waits": [],
     }
     event = ToolCallStatusChangedEvent(
         task_id=2,

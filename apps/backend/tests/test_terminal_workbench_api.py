@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -16,13 +17,14 @@ from app.app import app
 from app.service import depends
 from app.service.terminal import terminal_workbench_service
 from app.tools.terminal_runtime.errors import (
+    ShellResolutionError,
     TerminalSessionCapacityError,
     TerminalSessionNotFoundError,
     TerminalSessionOwnershipError,
     TerminalSessionStateError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.shell_resolver import ShellResolutionError, ShellResolver
+from app.tools.terminal_runtime.shell_resolver import ShellResolver
 
 _SHELLS = [{"kind": "zsh", "label": "zsh", "isDefault": True, "integrationSupported": True}]
 
@@ -39,16 +41,16 @@ class _FakeTerminals:
     def active_session_count(self) -> int:
         return 3
 
-    def start(self, **kwargs: Any) -> dict[str, object]:
+    def start(self, **kwargs: Any) -> SimpleNamespace:
         if self.start_error is not None:
             raise self.start_error
         self.started.append(kwargs)
-        return {"session_id": "term_new"}
+        return SimpleNamespace(session_id="term_new")
 
-    def close(self, session_id: str, *, task_id: int) -> dict[str, object]:
+    def close(self, session_id: str, *, task_id: int, by: str) -> dict[str, object]:
         if self.close_error is not None:
             raise self.close_error
-        self.closed.append((session_id, task_id))
+        self.closed.append((session_id, task_id, by))
         return {}
 
 
@@ -176,7 +178,7 @@ def test_close_session(client: TestClient, terminals: _FakeTerminals, workspace:
     response = client.delete(f"/tasks/{task_id}/terminal/sessions/term_a")
     assert response.status_code == 200
     assert response.json() == {}
-    assert terminals.closed == [("term_a", task_id)]
+    assert terminals.closed == [("term_a", task_id, "user")]
 
 
 @pytest.mark.parametrize(

@@ -22,12 +22,12 @@ def _send(**overrides: object) -> SendMessageRequest:
 
 
 def test_send_defaults_to_immediate_delivery_and_maps_command() -> None:
-    request = _send(banTools=["read_file"])
+    request = _send(disabledToolGroups=["联网工具"])
 
     command = request.to_run_command()
     assert request.delivery == "immediate"
     assert command.display_text == "hello"
-    assert command.ban_tools == ["read_file"]
+    assert command.disabled_tool_groups == ["联网工具"]
 
 
 @pytest.mark.parametrize("delivery", ["immediate", "next_run"])
@@ -39,8 +39,8 @@ def test_send_accepts_both_delivery_modes(delivery: str) -> None:
     "overrides",
     [
         {"delivery": "later"},
-        {"banTools": ["read_file", "read_file"]},
-        {"banTools": [" "]},
+        {"disabledToolGroups": ["联网工具", "联网工具"]},
+        {"disabledToolGroups": [" "]},
         {"runId": 1},
         {"modelConfigId": 0},
     ],
@@ -59,7 +59,7 @@ def test_rerun_rejects_delivery() -> None:
 
 
 @pytest.mark.parametrize(
-    "extra", [{"modelConfigId": 1}, {"reasoningEffort": "high"}, {"banTools": ["read_file"]}]
+    "extra", [{"modelConfigId": 1}, {"reasoningEffort": "high"}, {"disabledToolGroups": ["联网工具"]}]
 )
 def test_queued_edit_carries_no_launch_fields(extra: dict[str, object]) -> None:
     """排队消息的发起配置在发送时已定：编辑请求不接受配置字段，避免前端误以为能改配置。"""
@@ -71,7 +71,7 @@ def test_queued_edit_maps_message_only() -> None:
     command = EditQueuedMessageRequest.model_validate(
         {"message": _message("edited")}
     ).to_run_command()
-    assert (command.display_text, command.ban_tools) == ("edited", [])
+    assert (command.display_text, command.disabled_tool_groups) == ("edited", [])
 
 
 def test_ordinary_file_attachment_maps_into_command() -> None:

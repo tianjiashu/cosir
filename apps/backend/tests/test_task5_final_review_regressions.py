@@ -17,7 +17,7 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
-from app.core.conversation_run_ledger import ConversationRunLedger
+from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.core.events import RunInitializedEvent
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -124,14 +124,14 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     service._task = TaskCrud()
     from contextlib import nullcontext
 
-    from app.core.workflow.inbox.task_message import RunLaunch
+    from app.core.workflow.message_queue.task_message import RunLaunch
 
     service._session_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
     monkeypatch.setattr(
-        "app.core.conversation_run_ledger.get_conversation_event_projector", lambda: Projector()
+        "app.core.workflow.conversation_run_ledger.get_conversation_event_projector", lambda: Projector()
     )
     monkeypatch.setattr(
-        "app.core.conversation_run_ledger.get_model_config_service",
+        "app.core.workflow.conversation_run_ledger.get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _config_id: SimpleNamespace(
                 supports_reasoning_effort=False,

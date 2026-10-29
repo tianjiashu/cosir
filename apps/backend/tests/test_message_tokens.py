@@ -46,8 +46,8 @@ def prepare(monkeypatch):
 def test_code_reaches_model_and_history_without_attachment_registry(literal, prepare):
     prepared = prepare(literal)
     assert prepared.input_text == literal
-    assert prepared.display_text == literal
-    assert prepared.attachments == []
+    assert prepared.presentation.display_text == literal
+    assert prepared.presentation.attachments == []
     assert build_user_input_parts(literal, [], []) == [
         {"type": "text", "text": literal, "status": "completed"}
     ]

@@ -89,7 +89,7 @@ def _running_state(part: dict) -> dict:
             "error": None,
             "usage": None,
             "contextWindowTotal": None,
-            "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+            "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
         },
         "error": None,
     }

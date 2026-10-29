@@ -569,7 +569,7 @@ class _DecisionRuns:
 
 def _decide(monkeypatch, runs: _DecisionRuns, decision: str, data=None):
     from app.core.tool.handler import agent_team_run as tool_module
-    from app.core.workflow.inbox.task_message import DecisionBody
+    from app.core.workflow.message_queue.task_message import DecisionBody
 
     started: list[int] = []
 
@@ -592,7 +592,7 @@ def _decide(monkeypatch, runs: _DecisionRuns, decision: str, data=None):
         lambda: SimpleNamespace(get_run=lambda run_id: SimpleNamespace(id=run_id)),
     )
     parent_agent = object()
-    monkeypatch.setattr("app.core.run_driver.resolve_agent_config", lambda _run: parent_agent)
+    monkeypatch.setattr(AgentRuntimeConfig, "for_run", classmethod(lambda _cls, _run: parent_agent))
     tool = _bare_tool()
     tool.agent_team_run_approval = runs
     body = DecisionBody(

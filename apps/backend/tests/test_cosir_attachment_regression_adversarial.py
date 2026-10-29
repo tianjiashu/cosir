@@ -47,7 +47,7 @@ from app.tools.tool_handler.search_content import SearchContentTool
 from app.tools.tool_handler.write_file import WriteFileTool
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.attachment.image_normalizer import ImageNormalizationError
-from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
+from app.tools.terminal_runtime.session_service import TerminalSessionService
 from app.utils.path.validation import is_within_cosir
 
 _ASSET = "a" * 64

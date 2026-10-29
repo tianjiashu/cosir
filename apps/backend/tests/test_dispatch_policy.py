@@ -7,9 +7,9 @@ from datetime import datetime
 
 import pytest
 
-from app.core.workflow.inbox import dispatch_policy
-from app.core.workflow.inbox.dispatch_policy import Deliver, StartRun, Stay, Wake
-from app.core.workflow.inbox.task_message import (
+from app.core.workflow.message_queue import dispatch_policy
+from app.core.workflow.message_queue.dispatch_policy import Deliver, StartRun, Stay, Wake
+from app.core.workflow.message_queue.task_message import (
     BackgroundResultBody,
     DecisionBody,
     Delivery,
@@ -19,7 +19,9 @@ from app.core.workflow.inbox.task_message import (
     UserInputBody,
 )
 from app.models import ConversationRunRecord
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions
+from app.models.enums.conversation_run_status import ConversationRunStatus
 
 _LAUNCH = RunLaunch(model_config_id=1)
 _OTHER = RunLaunch(model_config_id=2)
@@ -42,7 +44,9 @@ def _run(status: str, launch: RunLaunch = _LAUNCH) -> ConversationRunRecord:
 def _user(
     message_id: int, launch: RunLaunch = _LAUNCH, delivery: Delivery = "immediate"
 ) -> TaskMessage:
-    body = UserInputBody(display_text="hi", input_text="hi", launch=launch)
+    body = UserInputBody(
+        input_text="hi", launch=launch, presentation=UserInputPresentation(display_text="hi")
+    )
     return TaskMessage.of(body, delivery=delivery, message_id=message_id)
 
 
@@ -61,28 +65,21 @@ def _result(message_id: int) -> TaskMessage:
     )
 
 
+def _phase(current, driving) -> dispatch_policy.Phase:
+    """与 ``TaskActor._phase`` 相同的判定。
+
+    阶段规则归 actor，这里只是喂给 ``next_action`` 的脚手架。
+    """
+
+    if driving:
+        return "driving"
+    if current is not None and current.status == ConversationRunStatus.SUSPENDED:
+        return "suspended"
+    return "idle"
+
+
 def _next(current, driving, pending, fresh):
-    phase = dispatch_policy.phase_of(current, driving)
-    return dispatch_policy.next_action(phase, current, pending, fresh)
-
-
-@pytest.mark.parametrize(
-    ("status", "driving", "phase"),
-    [
-        # 执行者优先：Run 已落定、执行者还在收尾时仍是 driving。
-        ("running", True, "driving"),
-        ("completed", True, "driving"),
-        ("suspended", True, "driving"),
-        ("suspended", False, "suspended"),
-        ("completed", False, "idle"),
-        ("cancelled", False, "idle"),
-        ("failed", False, "idle"),
-        (None, False, "idle"),
-    ],
-)
-def test_phase_prefers_executor_over_run_status(status, driving, phase) -> None:
-    current = _run(status) if status is not None else None
-    assert dispatch_policy.phase_of(current, driving) == phase
+    return dispatch_policy.next_action(_phase(current, driving), current, pending, fresh)
 
 
 @pytest.mark.parametrize("status", ["completed", "suspended"])
@@ -111,22 +108,6 @@ def test_new_run_takes_the_latest_user_input_launch() -> None:
     pending = [_user(1, _OTHER, "next_run"), _user(2, _LAUNCH, "next_run")]
     action = _next(_run("completed", _OTHER), False, pending, pending[-1:])
     assert action == StartRun(_LAUNCH)
-
-
-def test_new_run_takes_the_trigger_call_from_the_same_user_input() -> None:
-    """触发调用与配置取自同一条（最后一条）用户输入：委派子 Run 的结论按它回投父 Agent。"""
-    first = UserInputBody(
-        display_text="a", input_text="a", launch=_OTHER, trigger_tool_call_id="call-1"
-    )
-    last = UserInputBody(
-        display_text="b", input_text="b", launch=_LAUNCH, trigger_tool_call_id="call-2"
-    )
-    pending = [
-        TaskMessage.of(first, delivery="next_run", message_id=1),
-        TaskMessage.of(last, delivery="next_run", message_id=2),
-    ]
-    action = _next(_run("completed", _OTHER), False, pending, pending)
-    assert action == StartRun(_LAUNCH, "call-2")
 
 
 def test_new_run_without_user_input_inherits_the_current_run_launch() -> None:
@@ -171,7 +152,7 @@ def test_fresh_run_receives_all_pending_resumed_run_only_immediate() -> None:
 
 
 def test_ban_tools_compare_as_set() -> None:
-    options = ConversationRunOptions(ban_tools=["b", "a"])
+    options = ConversationRunOptions(disabled_tool_groups=["b", "a"])
     run = _run("running", RunLaunch(model_config_id=1, options=options))
-    launch = RunLaunch(model_config_id=1, options=ConversationRunOptions(ban_tools=["a", "b"]))
+    launch = RunLaunch(model_config_id=1, options=ConversationRunOptions(disabled_tool_groups=["a", "b"]))
     assert dispatch_policy.matches_run(launch, run)

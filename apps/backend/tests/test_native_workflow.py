@@ -39,7 +39,7 @@ def loop(monkeypatch):
         task_space=SimpleNamespace(task_tool_schemas=(), get_context_manager=lambda **k: context),
     )
     async def prepare_input(state):
-        """inbox 并入节点替身：不触碰真实 inbox，只记录经过并流向 model。"""
+        """message_queue 并入节点替身：不触碰真实 message_queue，只记录经过并流向 model。"""
         if not operations.cancelled:
             calls.append("queue")
         return {"next_node": ReactRoute.MODEL}
@@ -80,7 +80,7 @@ async def test_queue_only_at_model_boundary_and_end_stops_driving(loop, monkeypa
     monkeypatch.setattr(module, "_tools_node", tools)
     monkeypatch.setattr(module, "_observe_node", observe)
     await module.ReactLikeWorkflow().run(loop.ops)
-    # 终态由产出节点就地落定，loop 到 END 只停止驱动；每次模型请求前先经 prepare_input 并入 inbox。
+    # 终态由产出节点就地落定，loop 到 END 只停止驱动；每次模型请求前先经 prepare_input 并入 message_queue。
     assert loop.calls == ["queue", "model", "tools", "observe", "queue", "model"]
     loop.model.close.assert_awaited_once()
 

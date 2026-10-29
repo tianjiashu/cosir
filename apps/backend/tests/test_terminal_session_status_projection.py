@@ -1,12 +1,12 @@
 """snapshot ``terminal_sessions`` 的契约校验与投影：重建整表填入、变化通知推送 set mutation。
 
-终端会话是进程内事实：重建与刷新只读 ``TerminalSessionService.project_task_sessions``，不回写
+终端会话是进程内事实：重建与刷新只读 ``TerminalSessionService.task_runtimes`` 各会话的 ``snapshot()``，不回写
 工具卡片，也不为未物化 / 已删除的 Task 物化 space。
 """
 
 from __future__ import annotations
 
-import copy
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -22,6 +22,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.assistant_transport.stream import TransportFrame
 from app.service import depends
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.tools.terminal_runtime.session_runtime import SessionSnapshot
 
 pytestmark = pytest.mark.usefixtures("isolated_storage")
 
@@ -37,6 +38,7 @@ def _entry(session_id: str = "term_1", **overrides: Any) -> dict[str, Any]:
         "exitCode": None,
         "integration": "ready",
         "inputHolder": None,
+        "agentInputCallId": None,
         "commandRunning": False,
         "handoff": None,
         "createdAt": "2026-10-27T00:00:00+00:00",
@@ -45,16 +47,45 @@ def _entry(session_id: str = "term_1", **overrides: Any) -> dict[str, Any]:
     return entry
 
 
+class _FakeRuntime:
+    """按 Transport 条目反推会话快照，让投影经生产映射 ``to_terminal_session`` 还原同一条目。"""
+
+    def __init__(self, entry: dict[str, Any]) -> None:
+        self._entry = entry
+
+    def snapshot(self) -> SessionSnapshot:
+        entry = self._entry
+        handoff = entry["handoff"]
+        return SessionSnapshot(
+            session_id=entry["sessionId"],
+            label=entry["label"] or None,
+            shell_kind=entry["shellKind"],
+            created_by=entry["createdBy"],
+            initial_cwd="/workspace",
+            created_at=datetime.fromisoformat(entry["createdAt"]),
+            status=entry["status"],
+            end_reason=entry["endReason"],
+            exit_code=entry["exitCode"],
+            integration=entry["integration"],
+            input_holder=entry["inputHolder"],
+            agent_input_call_id=entry["agentInputCallId"],
+            command_running=entry["commandRunning"],
+            handoff_reason=handoff["reason"] if handoff else None,
+            handoff_call_id=handoff["toolCallId"] if handoff else None,
+            summary="",
+        )
+
+
 class _FakeTerminals:
-    """只实现投影用到的 ``project_task_sessions``；按 task 返回可变列表。"""
+    """只实现投影用到的 ``task_runtimes``；``sessions`` 按 task 保存可变条目列表。"""
 
     def __init__(self) -> None:
         self.sessions: dict[int, list[dict[str, Any]]] = {}
         self.calls: list[int] = []
 
-    def project_task_sessions(self, task_id: int) -> list[dict[str, Any]]:
+    def task_runtimes(self, task_id: int) -> list[_FakeRuntime]:
         self.calls.append(task_id)
-        return copy.deepcopy(self.sessions.get(task_id, []))
+        return [_FakeRuntime(entry) for entry in self.sessions.get(task_id, [])]
 
 
 @pytest.fixture
@@ -114,7 +145,8 @@ def test_snapshot_without_terminal_sessions_is_rejected() -> None:
         _entry(integration="maybe"),
         _entry(inputHolder="both"),
         _entry(exitCode=True),
-        _entry(handoff={"reason": "x", "extra": 1}),
+        _entry(handoff={"reason": "x", "toolCallId": "call-1", "extra": 1}),
+        _entry(handoff={"reason": "x"}),
         _entry(handoff="x"),
         _entry(sessionId=""),
         {**_entry(), "extra": 1},
@@ -131,7 +163,10 @@ def test_invalid_terminal_session_entries_are_rejected(entry: dict[str, Any]) ->
 def test_valid_entries_including_handoff_and_exit_pass() -> None:
     state = empty_snapshot()
     state["terminal_sessions"] = [  # type: ignore[list-item]
-        _entry("a", inputHolder="agent", handoff={"reason": "请输入密码"}, createdBy="agent"),
+        _entry(
+            "a", inputHolder="agent", handoff={"reason": "请输入密码", "toolCallId": "call-1"},
+            createdBy="agent",
+        ),
         _entry("b", status="exited", endReason="shell_exited", exitCode=0, integration="off"),
     ]
     validate_snapshot(state)

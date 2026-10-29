@@ -17,13 +17,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.tools.terminal_runtime import process_terminal_worker as worker_module
+from app.tools.terminal_runtime import worker_client as worker_module
 from app.tools.terminal_runtime.errors import (
     TerminalWorkerHandshakeError,
     TerminalWorkerProtocolError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker
+from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
 from app.tools.tool_handler.terminal_session.common import service_error_observation
 
@@ -128,7 +128,7 @@ def _spec() -> ShellSpec:
 
 
 def _patch_worker_process(monkeypatch: pytest.MonkeyPatch, process: _FakeProcess) -> None:
-    """把 ``process_terminal_worker.py`` 使用的 subprocess 替换为受控替身。
+    """把 ``worker_client.py`` 使用的 subprocess 替换为受控替身。
 
     参数:
         monkeypatch: pytest 补丁夹具。
@@ -141,7 +141,7 @@ def _patch_worker_process(monkeypatch: pytest.MonkeyPatch, process: _FakeProcess
         无。
 
     副作用:
-        仅替换 ``process_terminal_worker`` 模块内的 ``subprocess`` 引用，
+        仅替换 ``worker_client`` 模块内的 ``subprocess`` 引用，
         不改动全局 ``subprocess``，避免影响其它测试。
     """
 

@@ -8,8 +8,7 @@ import pytest
 
 from app.config.constant import Constant
 from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
-from app.tools.terminal_runtime.observation_render import render_lines
-from app.tools.terminal_runtime.terminal_observation import TerminalObservation
+from app.tools.terminal_runtime.render import render_lines
 
 
 def screen(rows: list[Any], cursor: tuple[int, int] = (0, 0), alternate: bool = False) -> dict:
@@ -82,37 +81,24 @@ def test_eviction_by_lines_and_chars_advances_first_available_line(
     assert chars.get(1, 1) == []
 
 
-def test_alternate_screen_reads_physical_rows_without_pending_merge() -> None:
+def test_alternate_screen_is_a_separate_view_and_freezes_line_numbers() -> None:
     buffer = TerminalLineBuffer()
-    buffer.apply(screen(["$ vim"], (0, 5)), ["pending-"])
-    buffer.apply(screen([("row1", True), "row2", "~"], (0, 0), alternate=True), [])
+    buffer.apply(screen(["$ echo a", "a", "$ less f"], (2, 8)), ["old\n"])
+    before = texts(buffer)
+    assert before == [(1, "old"), (2, "$ echo a"), (3, "a"), (4, "$ less f")]
+    # 进入全屏程序并重绘两次：逻辑行与光标行保持进入前的样子，屏幕行另走一套编号。
+    buffer.apply(screen([("row1", True), "row2", ":"], (2, 1), alternate=True), [])
     assert buffer.alternate
-    assert texts(buffer) == [(1, "row1"), (2, "row2"), (3, "~")]
-
-
-def test_command_output_lines_follow_cursor_at_shell_events() -> None:
-    observation = TerminalObservation("zsh", "auto")
-    observation.shell_event({"kind": "ready", "shell": "zsh", "version": "5"})
-    observation.update_screen(screen(["$ echo hi", ""], (1, 0)), [])
-    observation.shell_event({"kind": "command_started", "command": "echo hi"})
-    observation.update_screen(screen(["$ echo hi", "hi", "there", ""], (3, 0)), [])
-    observation.shell_event({"kind": "command_returned", "result": {"code": 0}})
-    summary = observation.command_summary()
-    assert summary is not None and summary["output_lines"] == [2, 3]
-    # 无输出：末行早于起始行。
-    observation.update_screen(screen(["$ echo hi", "hi", "there", "$ true", ""], (4, 0)), [])
-    observation.shell_event({"kind": "command_started", "command": "true"})
-    observation.shell_event({"kind": "command_returned", "result": {"code": 0}})
-    assert observation.command_summary()["output_lines"] is None  # type: ignore[index]
-
-
-def test_powershell_returned_ends_at_line_before_prompt() -> None:
-    observation = TerminalObservation("powershell", "auto")
-    observation.update_screen(screen(["PS> dir", ""], (1, 0)), [])
-    observation.shell_event({"kind": "command_started", "command": "dir"})
-    observation.update_screen(screen(["PS> dir", "a", "b", "PS> "], (3, 4)), [])
-    observation.shell_event({"kind": "command_returned", "result": {"code": 0}})
-    assert observation.command_summary()["output_lines"] == [2, 3]  # type: ignore[index]
+    assert texts(buffer) == before and buffer.cursor_line == 4
+    assert buffer.screen_lines() == [(1, "row1"), (2, "row2"), (3, ":")]
+    assert buffer.screen_cursor_row == 3
+    buffer.apply(screen(["row4", "row5", ":"], (2, 1), alternate=True), [])
+    assert texts(buffer) == before
+    assert buffer.screen_lines() == [(1, "row4"), (2, "row5"), (3, ":")]
+    # 退出后主屏重建，行号接着进入前的编号走，屏幕视图清空。
+    buffer.apply(screen(["$ echo a", "a", "$ less f", "$ "], (3, 2)), [])
+    assert not buffer.alternate and buffer.screen_lines() == []
+    assert texts(buffer)[-1] == (5, "$ ")
 
 
 def test_render_both_keeps_head_and_tail_and_marks_omitted_range() -> None:

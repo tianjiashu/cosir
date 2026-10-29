@@ -32,7 +32,7 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.service.recover_service import RecoverService
-from app.core.conversation_run_ledger import ConversationRunLedger
+from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
@@ -842,7 +842,8 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
     from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
     from app.models.enums.react_route import ReactRoute
     from app.core.workflow.nodes import model_node
-    from app.core.workflow.inbox.task_message import RunLaunch, TaskMessage, UserInputBody
+    from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
+    from app.models.conversation_input import UserInputPresentation
     from app.storage.crud.task_message_crud import TaskMessageCrud
 
     run = env.seed_run("running")
@@ -856,7 +857,9 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
     )
     with env.factory.begin() as session:
         body = UserInputBody(
-            input_text="新消息", display_text="新消息", launch=RunLaunch(model_config_id=1)
+            input_text="新消息",
+            launch=RunLaunch(model_config_id=1),
+            presentation=UserInputPresentation(display_text="新消息"),
         )
         TaskMessageCrud().append(session, [(env.task.id, TaskMessage.of(body))])
     manager = _manager(

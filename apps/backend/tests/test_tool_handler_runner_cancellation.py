@@ -15,11 +15,9 @@ Windows 上 multiprocessing 为 spawn：自定义 handler 必须是**模块级�
 
 from __future__ import annotations
 
-import asyncio
 import os
 import threading
 import time
-from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import ClassVar
@@ -28,7 +26,7 @@ import pytest
 from pydantic import BaseModel
 
 from app.core.tool.schemas import ToolDefinition, ToolExecutionContext
-from app.core.tool.execute import tool_handler_runner as runner_module, tool_handler_runner as mod
+from app.core.tool.execute import tool_handler_runner as mod
 from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
@@ -73,14 +71,6 @@ def _assert_runtime_cancelled(observation) -> None:
 
     assert observation.status == "cancelled"
     assert observation.content.startswith("cancelled: the user stopped this tool call mid-execution")
-
-
-def _handler_emits_output(execution_context=None, output_sink=None, **_kwargs):
-    """在真实隔离子进程中发送数个实时片段并返回结果。"""
-    if output_sink is not None:
-        output_sink("first chunk")
-        output_sink("last chunk")
-    return "done"
 
 
 def _handler_sleeps_then_writes(
@@ -192,48 +182,6 @@ def test_process_mode_normal_execution_returns_success() -> None:
     assert observation.status == "success"
     assert observation.content == "hello-from-process"
     assert observation.tool_call_id == "call-1"
-
-
-def test_process_mode_flushes_terminal_output_before_return(monkeypatch: pytest.MonkeyPatch) -> None:
-    """真实 multiprocessing 队列在工具返回前 flush 通用输出通道。"""
-    received: list[str] = []
-    finished: list[bool] = []
-
-    class Channel:
-        def emit(self, text: str) -> None:
-            received.append(text)
-
-        def finish(self) -> None:
-            finished.append(True)
-
-    loop = asyncio.new_event_loop()
-    monkeypatch.setattr(
-        runner_module, "create_process_output_channel", lambda _tool_name, _context: Channel()
-    )
-    tool = _make_tool(
-        _handler_emits_output,
-        name="proc_output",
-        execution_mode="process",
-        timeout_seconds=10.0,
-    )
-
-    context = replace(
-        _make_context(0),
-        tool_call_id="call-output",
-    )
-    try:
-        observation = ToolHandlerRunner().execute(
-            tool,
-            {},
-            context,
-        )
-    finally:
-        loop.close()
-
-    assert observation.status == "success"
-    assert observation.content == "done"
-    assert received == ["first chunk", "last chunk"]
-    assert finished == [True]
 
 
 # ---------------------------------------------------------------------------
@@ -715,49 +663,3 @@ def test_thread_mode_keeps_result_when_cancelled_during_execution() -> None:
     assert observation.status == "success"
 
 
-def test_execute_in_process_uses_runtime_output_channel_factory(monkeypatch) -> None:
-    """运行期 factory 返回通道后，process 路径建立输出队列并收尾通道。"""
-
-    from app.core.tool.execute import tool_handler_runner as mod
-
-    monkeypatch.setattr(mod.multiprocessing, "Process", _FakeProcess)
-    monkeypatch.setattr(mod.multiprocessing, "Queue", _make_fake_queue_factory())
-
-    seen: list[tuple[str, bool]] = []
-    finished = threading.Event()
-
-    class Channel:
-        def emit(self, text: str) -> None:
-            seen.append((text, False))
-
-        def finish(self) -> None:
-            finished.set()
-
-    def _handler_emits(execution_context=None, output_sink=None, **_kwargs):
-        # 子进程入口会把 output_sink 注入 handler（本 fake 在同线程运行）。
-        if output_sink is not None:
-            output_sink("chunk-1")
-        return "done"
-
-    tool = _make_tool(
-        _handler_emits, name="sink_tool", execution_mode="process", timeout_seconds=5.0
-    )
-    loop = asyncio.new_event_loop()
-    monkeypatch.setattr(
-        runner_module, "create_process_output_channel", lambda _tool_name, _context: Channel()
-    )
-    context = replace(
-        _make_context(0),
-        tool_call_id="call-output",
-    )
-    observation = ToolHandlerRunner().execute(
-        tool,
-        {},
-        context,
-    )
-    loop.close()
-
-    assert observation.status == "success"
-    assert observation.content == "done"
-    assert seen == [("chunk-1", False)]
-    assert finished.is_set()

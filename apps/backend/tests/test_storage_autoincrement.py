@@ -20,7 +20,7 @@ def test_every_table_uses_sqlite_autoincrement(table) -> None:
     """子类自定义 ``__table_args__``（索引、约束）不得让表丢掉 AUTOINCREMENT。
 
     回归：基类曾把 ``sqlite_autoincrement`` 放在 ``__table_args__``，声明了自身索引的表会整体
-    覆盖它，SQLite 于是复用已删除的最大 id（Run、inbox 消息等对外身份会撞 id）。
+    覆盖它，SQLite 于是复用已删除的最大 id（Run、message_queue 消息等对外身份会撞 id）。
     """
     ddl = str(CreateTable(table).compile(dialect=sqlite.dialect()))
     assert "AUTOINCREMENT" in ddl

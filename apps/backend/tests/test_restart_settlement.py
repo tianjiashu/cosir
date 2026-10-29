@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.workflow.deferred import restart_settlement
-from app.core.workflow.inbox.task_message import NoticeBody
+from app.core.tool.background import restart_settlement
+from app.core.workflow.message_queue.task_message import NoticeBody
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.service import depends
 
@@ -79,7 +79,7 @@ def restart_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         restart_settlement,
         "_terminal_tool_names",
-        lambda: frozenset({"terminal_start", "terminal_write", "terminal_read"}),
+        lambda *_groups: frozenset({"terminal_start", "terminal_write", "terminal_read"}),
     )
     monkeypatch.setattr(
         task_runtime_spaces,
@@ -104,7 +104,7 @@ def restart_env(monkeypatch: pytest.MonkeyPatch):
 def test_restart_wakes_only_runs_suspended_on_terminals(restart_env) -> None:
     assert restart_settlement.wake_suspended_terminal_runs(restart_env.task_ids) == [1]
     [(task_id, tool_name, result)] = restart_env.delivered
-    assert (task_id, tool_name) == (1, "terminal_wait")
+    assert (task_id, tool_name) == (1, "backend_restart")
     assert result["end_reason"] == "backend_restarted"
     assert restart_env.spaces[1].terminals_invalidation_announced is True
 
@@ -183,29 +183,28 @@ def child_env(monkeypatch: pytest.MonkeyPatch):
     return delivered
 
 
-def _recovered(run_id: int, task_id: int, trigger: str | None) -> SimpleNamespace:
+def _recovered(run_id: int, task_id: int) -> SimpleNamespace:
     return SimpleNamespace(
         id=run_id,
         task_id=task_id,
         status="cancelled",
         end_reason="runtime_restarted",
         final_output=None,
-        trigger_tool_call_id=trigger,
     )
 
 
 def test_restarted_child_run_is_reported_to_its_waiting_parent(child_env) -> None:
+    """父 Agent 的等待随进程丢失：按 ``parent_task_id`` 直接回投，不对应某次调用。"""
     settled = restart_settlement.settle_restarted_child_runs(
         [
-            _recovered(20, 2, "call-delegate"),  # 父挂起在等：回投
-            _recovered(50, 5, "call-other"),  # 父自己也被重启打断：不回投
-            _recovered(90, 9, "call-node"),  # 不是委派子 Task
-            _recovered(21, 2, None),  # 没有触发调用
+            _recovered(20, 2),  # 父挂起在等：回投
+            _recovered(50, 5),  # 父自己也被重启打断：不回投
+            _recovered(90, 9),  # 不是委派子 Task
         ]
     )
     assert settled == [20]
     [(task_id, tool_call_id, tool_name, result)] = child_env
-    assert (task_id, tool_call_id, tool_name) == (1, "call-delegate", "child_agent")
+    assert (task_id, tool_call_id, tool_name) == (1, None, "child_agent")
     assert result == {
         "child_task_id": 2,
         "status": "cancelled",
@@ -214,6 +213,6 @@ def test_restarted_child_run_is_reported_to_its_waiting_parent(child_env) -> Non
     }
 
 
-def test_no_triggered_runs_touches_nothing(child_env, monkeypatch) -> None:
+def test_no_recovered_runs_touches_nothing(child_env, monkeypatch) -> None:
     monkeypatch.setattr(restart_settlement, "service_depends", None)
-    assert restart_settlement.settle_restarted_child_runs([_recovered(1, 2, None)]) == []
+    assert restart_settlement.settle_restarted_child_runs([]) == []

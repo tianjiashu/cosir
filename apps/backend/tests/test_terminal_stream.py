@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from terminal_test_support import make_service, start
+from terminal_test_support import make_service, start, session_entries
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.terminal_stream import (
+from app.tools.terminal_runtime.stream import (
     OVERFLOW_EVENT_TYPE,
     TerminalStreamBuffer,
     TerminalStreamSubscription,
@@ -50,10 +50,10 @@ def test_closed_loop_is_absorbed_at_subscription_boundary() -> None:
 
 @pytest.mark.asyncio
 async def test_stream_attach_replays_then_streams_state_frames() -> None:
-    buffer = TerminalStreamBuffer("s", "g", 1024)
+    buffer = TerminalStreamBuffer("s", 1024)
     buffer.append("YQ==", 1)
     attachment = buffer.attach(
-        None, asyncio.get_running_loop(), status="running", state={"rows": 24, "columns": 80}
+        None, asyncio.get_running_loop(), status="running", rows=24, columns=80
     )
     assert attachment.attached["protocol"] == "terminal-v2"
     assert attachment.attached["next_seq"] == 2 and attachment.replay[0]["seq"] == 1
@@ -118,7 +118,7 @@ async def test_websocket_input_resize_release_and_exit(monkeypatch, tmp_path: Pa
     attached = ws.sent[0]
     assert attached["type"] == "attached" and attached["protocol"] == "terminal-v2"
     assert attached["rows"] == 24 and "input_holder" not in attached
-    holder = lambda: service.project_task_sessions(1)[0]["inputHolder"]  # noqa: E731
+    holder = lambda: session_entries(service, 1)[0]["inputHolder"]  # noqa: E731
 
     # 租约只经 snapshot 投影，不在 WS 上推送。
     ws.push({"type": "input", "data_base64": base64.b64encode(b"ls\r").decode()})
@@ -142,7 +142,7 @@ async def test_websocket_input_resize_release_and_exit(monkeypatch, tmp_path: Pa
 @pytest.mark.asyncio
 async def test_websocket_rejects_input_while_agent_holds(monkeypatch, tmp_path: Path):
     from app.api.terminal_stream_api import terminal_session_stream
-    from app.tools.terminal_runtime.terminal_input import TerminalWait
+    from app.tools.terminal_runtime.inputs import TerminalWait
 
     service, workers = make_service(monkeypatch)
     session_id = start(service, tmp_path)
@@ -150,9 +150,9 @@ async def test_websocket_rejects_input_while_agent_holds(monkeypatch, tmp_path: 
     ws.push({"type": "attach", "after_seq": None})
     task = asyncio.create_task(terminal_session_stream(ws, 1, session_id, service))
     await _settle(lambda: "attached" in ws.types())
-    writer = threading.Thread(target=lambda: service.write(
-        session_id, task_id=1, operation_id="op", input={"type": "line", "text": "sleep"},
-        wait=TerminalWait(until="elapsed", timeout_ms=500), run_id=1, tool_call_id="call-op",
+    writer = threading.Thread(target=lambda: service.require(session_id, 1).write(
+        {"type": "line", "text": "sleep"}, "op",
+        TerminalWait(until="elapsed", timeout_ms=500), run_id=1, tool_call_id="call-op",
         is_cancelled=lambda: False))
     writer.start()
     await _settle(lambda: "input_mark" in ws.types())
@@ -166,20 +166,16 @@ async def test_websocket_rejects_input_while_agent_holds(monkeypatch, tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_websocket_handoff_done_and_protocol_errors(monkeypatch, tmp_path: Path):
+async def test_websocket_protocol_errors(monkeypatch, tmp_path: Path):
+    """交还交接走 HTTP 决定入口，WS 不再接受 ``handoff_done``，与未知帧一样按协议错误关闭。"""
     from app.api.terminal_stream_api import terminal_session_stream
 
     service, _ = make_service(monkeypatch)
     session_id = start(service, tmp_path)
-    called: list[str] = []
-    monkeypatch.setattr(service, "complete_handoff",
-                        lambda sid, *, task_id: called.append(sid))
     ws = FakeWebSocket()
     ws.push({"type": "attach", "after_seq": None})
     ws.push({"type": "handoff_done"})
-    ws.push({"type": "write", "data": "x"})
     await asyncio.wait_for(terminal_session_stream(ws, 1, session_id, service), 2)
-    assert called == [session_id]
     assert ws.types()[-1] == "protocol_error" and ws.closed_with is not None
     assert ws.closed_with[0] == 1008
     assert ws.sent[-1]["code"] == "TERMINAL_STREAM_PROTOCOL_ERROR"

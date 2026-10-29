@@ -515,7 +515,7 @@ def test_team_run_crud_round_trips_persisted_confirmation_state(
         session.add(task)
         session.flush()
         run = ConversationRunModel(
-            options={"ban_tools": [], "reasoning_effort": None},
+            options={"disabled_tool_groups": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
             },
@@ -560,7 +560,7 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
         session.add(task)
         session.flush()
         run = ConversationRunModel(
-            options={"ban_tools": [], "reasoning_effort": None},
+            options={"disabled_tool_groups": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
             },
@@ -638,7 +638,7 @@ def test_create_pending_confirmation_supersedes_previous_pending(tmp_path: Path)
         session.add(task)
         session.flush()
         run = ConversationRunModel(
-            options={"ban_tools": [], "reasoning_effort": None},
+            options={"disabled_tool_groups": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
             },
@@ -699,7 +699,7 @@ def test_supersede_pending_for_parent_unblocks_reproposal(tmp_path: Path) -> Non
         session.add(task)
         session.flush()
         run = ConversationRunModel(
-            options={"ban_tools": [], "reasoning_effort": None},
+            options={"disabled_tool_groups": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
             },
@@ -787,7 +787,7 @@ def test_user_rejection_ends_pending_team_run_idempotently(tmp_path: Path) -> No
         session.add(task)
         session.flush()
         parent_run = ConversationRunModel(
-            options={"ban_tools": [], "reasoning_effort": None},
+            options={"disabled_tool_groups": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
             },
@@ -842,7 +842,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(
         session.add(parent_task)
         session.flush()
         parent_run = ConversationRunModel(
-            options={"ban_tools": [], "reasoning_effort": None},
+            options={"disabled_tool_groups": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
             },
@@ -861,7 +861,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(
         session.add(node_task)
         session.flush()
         node_run = ConversationRunModel(
-            options={"ban_tools": [], "reasoning_effort": None},
+            options={"disabled_tool_groups": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
             },
@@ -880,7 +880,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(
         session.add(child_task)
         session.flush()
         child_run = ConversationRunModel(
-            options={"ban_tools": [], "reasoning_effort": None},
+            options={"disabled_tool_groups": [], "reasoning_effort": None},
             execution_data={
                 "step_count": 0,
             },

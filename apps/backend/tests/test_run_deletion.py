@@ -172,7 +172,7 @@ async def test_delete_run_endpoint_maps_errors() -> None:
 def test_delete_creator_run_preserves_task_terminal(storage, tmp_path, monkeypatch) -> None:
     from functools import lru_cache
 
-    from terminal_test_support import make_service
+    from terminal_test_support import active_session_ids, make_service
 
     from app.service import depends
 
@@ -180,23 +180,18 @@ def test_delete_creator_run_preserves_task_terminal(storage, tmp_path, monkeypat
     task = get_task_crud().create(workspace.id, "terminal owner")
     run = get_conversation_run_crud().create(task.id, status="completed")
     terminal, workers = make_service(monkeypatch)
-    session = terminal.start(
+    runtime = terminal.start(
         task_id=task.id, workspace_root=str(tmp_path), run_id=run.id, created_by="agent"
     )
     monkeypatch.setattr(depends, "get_terminal_session_service", lru_cache()(lambda: terminal))
     try:
         get_task_service().delete_run(task.id, run.id)
         assert not workers[0].closed
-        assert (
-            terminal.list_sessions(task_id=task.id)[0]["session_id"]
-            == session["session_id"]
-        )
-        terminal.write(
-            str(session["session_id"]),
-            task_id=task.id,
-            input={"type": "line", "text": "still alive"},
-            operation_id="after-run-deletion",
-            wait=None,
+        assert active_session_ids(terminal, task.id) == [runtime.session_id]
+        terminal.require(runtime.session_id, task.id).write(
+            {"type": "line", "text": "still alive"},
+            "after-run-deletion",
+            None,
             run_id=None,
             tool_call_id="call-after-deletion",
             is_cancelled=lambda: False,

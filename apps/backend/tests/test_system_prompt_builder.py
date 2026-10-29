@@ -15,7 +15,7 @@ import pytest
 from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.context import system_prompt_builder as spb
-from app.core.workflow.inbox.task_message import MODEL_INPUT_BODIES, MessageBody
+from app.core.workflow.message_queue.task_message import MODEL_INPUT_BODIES, MessageBody
 from app.utils.path import system_cosir as paths
 from app.utils.token_estimator import TokenEstimator
 

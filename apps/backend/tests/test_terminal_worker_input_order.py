@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.tools.terminal_runtime import process_terminal_worker as worker_module
-from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker
+from app.tools.terminal_runtime import worker_client as worker_module
+from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
 from terminal_test_support import wait_until
 
 

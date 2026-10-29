@@ -16,9 +16,10 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.core.events import TaskTitleUpdatedEvent
 from app.core.workflow.branch import task_title
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.inbox.task_message import NoticeBody, RunLaunch, TaskMessage, UserInputBody
+from app.core.workflow.message_queue.task_message import NoticeBody, RunLaunch, TaskMessage, UserInputBody
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import prepare_input_node
+from app.models.conversation_input import UserInputPresentation
 from app.service import depends as service_depends
 from app.utils.datetime_utils import TASK_TITLE_LIMIT
 from tests.runtime_context_stub import runtime_stub
@@ -105,7 +106,9 @@ class _Context:
 
 def _user_input(message_id: int) -> TaskMessage:
     body = UserInputBody(
-        display_text="帮我重构登录", input_text="帮我重构登录", launch=RunLaunch(model_config_id=1)
+        input_text="帮我重构登录",
+        launch=RunLaunch(model_config_id=1),
+        presentation=UserInputPresentation(display_text="帮我重构登录"),
     )
     return TaskMessage.of(body, message_id=message_id)
 

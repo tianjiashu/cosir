@@ -1,25 +1,14 @@
-"""独立对抗性验证：取消终态的时序契约（kill → drain → project）。
+"""独立对抗性验证：取消终态的投影契约。
 
-本文件不复用 ``test_tool_call_cancellation.py`` / ``test_tool_terminal_projection.py`` 的
-用例与思路，而是从**真实执行链路 + 时间戳事件流**的角度独立验证用户声明的规则：
-
-    取消终态不得在检出取消的瞬间变更，必须晚于 ``_force_kill`` 与输出排空，
-    由 ``tool_batch_runner._execute_call`` 在 ``executor.execute`` 返回后经
-    ``terminal_event`` + ``emit`` 单一出口发出。
-
-反循环论证说明：本文件不对被测函数做「替身替换」再断言调用栈，而是
-**包装真实函数 + 委托原实现**，在被测函数真实进入的瞬间记录
-``time.monotonic()`` 时间戳到共享事件流。因此断言的是真实执行时序，
-而非「谁在假实现在被调用的顺序」。事件出口 ``emit`` 只被替换为「记录时间戳后转交真实
-projector」的 sink（生产中 ``emit`` 也只是把事件交给装配方注入的 sink），记录点与真实
-``projector.process`` 指向同一条真实事件。
+取消终态不得在检出取消的瞬间由执行层（runner）变更，只由 ``tool_batch_runner._execute_call`` 在
+``executor.execute`` 返回后经 ``terminal_event`` + ``emit`` 单一出口发出；已流出的终端输出在取消
+终态投影后仍保留在卡片上。
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import threading
 import time
 from pathlib import Path
@@ -54,10 +43,6 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.execute import tool_handler_runner as runner_module, tool_terminal_projection as projection_module
 from app.core.tool.results.tool_cancelled import tool_cancelled
-from app.core.tool.execute import tool_executor as tool_executor_module
-from app.core.tool.execute.tool_executor import ToolExecutor
-from app.core.tool.execute.tool_output_channel import BufferedProcessToolOutputChannel
-from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_batch_runner
@@ -106,48 +91,6 @@ class _ProbeArgs(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
-# ---------------------------------------------------------------------------
-# 时间戳事件流：包装「真实函数」并委托原实现（非替身）
-# ---------------------------------------------------------------------------
-
-
-class _Timeline:
-    """记录 ``(monotonic 时间戳, 标签)`` 的可排序事件流。"""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._entries: list[tuple[float, str]] = []
-
-    def record(self, label: str) -> None:
-        with self._lock:
-            self._entries.append((time.monotonic(), label))
-
-    @property
-    def entries(self) -> list[tuple[float, str]]:
-        with self._lock:
-            return list(self._entries)
-
-    def labels(self) -> list[str]:
-        return [label for _ts, label in sorted(self.entries, key=lambda item: item[0])]
-
-
-class _TimelineProjector:
-    """真实 projector 语义 + 记录真实 ``process`` 调用时间戳与事件。
-
-    不是替身：把事件转交给真实 ``ConversationEventProjector``，保留真实结果。
-    """
-
-    def __init__(self, timeline: _Timeline, inner: ConversationEventProjector) -> None:
-        self._timeline = timeline
-        self._inner = inner
-        self.events: list[Any] = []
-
-    def process(self, raw_event: Any) -> TransportFrame | None:
-        self._timeline.record("projector.process")
-        self.events.append(raw_event)
-        return self._inner.process(raw_event)
-
-
 class _MemorySnapshotOwner:
     """最小 snapshot owner：按事件真实 ``plan`` 产出 mutation 并原地落盘。"""
 
@@ -188,45 +131,6 @@ class _MemorySnapshotOwner:
             kind="mutation",
             mutations=mutations,
         )
-
-
-def _instrument_real_calls(monkeypatch: pytest.MonkeyPatch, timeline: _Timeline) -> None:
-    """包装真实函数：进入时记录时间戳后委托原实现（不改行为）。"""
-
-    original_force_kill = runner_module.ToolHandlerRunner._force_kill
-    original_finish = BufferedProcessToolOutputChannel.finish
-
-    def _force_kill(process: Any) -> None:
-        timeline.record("force_kill")
-        return original_force_kill(process)
-
-    def _finish(self: BufferedProcessToolOutputChannel) -> None:
-        timeline.record("finish_output_channel")
-        return original_finish(self)
-
-    monkeypatch.setattr(runner_module.ToolHandlerRunner, "_force_kill", staticmethod(_force_kill))
-    monkeypatch.setattr(BufferedProcessToolOutputChannel, "finish", _finish)
-
-
-class _RecordingStreamSink:
-    """真实输出通道的事件出口。
-
-    通道由生产路径 ``create_process_output_channel`` 创建，它把增量包成
-    ``ToolCallRuntimeUpdateEvent`` 交给本 sink；本 sink 再转交真实 projector（``on_publish``
-    由用例注入），从而让 snapshot 累积真实的流式 output，用于验证取消终态是否保留它。
-    ``streamed`` 同步留存原始文本便于断言。
-    """
-
-    def __init__(self, timeline: _Timeline, *, on_publish: Any = None) -> None:
-        self._timeline = timeline
-        self._on_publish = on_publish
-        self.streamed: list[str] = []
-
-    def __call__(self, event: Any) -> None:
-        self.streamed.append(event.data.text)
-        if self._on_publish is not None:
-            self._on_publish(event)
-        self._timeline.record("stream_publish")
 
 
 # 真实流式 output 只对 ``execute_terminal`` 投影（见 ToolCallRuntimeUpdateEvent.plan），
@@ -282,160 +186,6 @@ def _clean_registry() -> Any:
     tool_call_cancellation_registry.clear_task(_TASK_ID)
     yield
     tool_call_cancellation_registry.clear_task(_TASK_ID)
-
-
-# ---------------------------------------------------------------------------
-# 判据 1：端到端证明「投影晚于强杀与输出排空」
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_projection_ordering_kill_then_drain_then_project(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """真实 process 工具经 ``_execute_call`` 中途取消：真实时间戳证明 kill → drain → project。
-
-    running 由执行器在 handler 启动前发出恰一次，终态由 ``_execute_call`` 在
-    ``executor.execute`` 返回后发出恰一次。缺陷类型：若取消终态在检出瞬间投影（即时旁路
-    回归），终态时间戳会落在 ``force_kill`` 之前；若投影缺失，终态事件数为 0。
-    """
-
-
-    asyncio.get_running_loop()
-    timeline = _Timeline()
-    marker = tmp_path / "probe_marker.txt"
-
-    # 真实投影对象 + 时间戳包装（委托真实 inner）。
-    owner = _MemorySnapshotOwner(empty_snapshot())
-    real_projector = ConversationEventProjector(owner)
-    real_projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
-    # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
-    queue_user_input(
-        real_projector._state_service.state, 1, UserInputPresentation(display_text="test")
-    )
-    real_projector.process(consumed(_TASK_ID, _RUN_ID, 1))
-    real_projector.process(
-        RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running")
-    )
-    real_projector.process(
-        ToolCallCreatedEvent(
-            task_id=_TASK_ID,
-            run_id=_RUN_ID,
-            tool_call_id="call-cancel",
-            tool_name=_STREAMING_TOOL_NAME,
-        )
-    )
-    projector = _TimelineProjector(timeline, real_projector)
-
-    def _emit(event: Any) -> None:
-        """事件出口：记录工具生命周期事件的时间戳后转交真实 projector。"""
-
-        if isinstance(event, ToolCallStatusChangedEvent):
-            timeline.record(f"emit:{event.status}")
-        projector.process(event)
-
-    monkeypatch.setattr(tool_batch_runner, "emit", _emit)
-    # running 由执行器在 handler 启动前经自己模块的 ``emit`` 发出，同样记入时间线。
-    monkeypatch.setattr(tool_executor_module, "emit", _emit)
-    _instrument_real_calls(monkeypatch, timeline)
-
-    tool = _make_process_tool(_STREAMING_TOOL_NAME)
-    executor = ToolExecutor(registry=ToolRegistry([tool]))
-    stream_sink = _RecordingStreamSink(timeline, on_publish=real_projector.process)
-
-    # 定时器在子进程运行途中标记工具级取消（真实跨线程信号）。
-    # 取消窗口取足够长（Windows spawn 需重新 import 整个 app，约 2~3s 才进入 handler），
-    # 确保 handler 已真实运行并产出实时输出，从而让「输出排空」有实质内容可验。
-    timer = threading.Timer(
-        5.0,
-        tool_call_cancellation_registry.mark_cancelled,
-        args=(_TASK_ID, "call-cancel"),
-    )
-    started = time.monotonic()
-    timer.start()
-    try:
-        observation = await asyncio.to_thread(
-            tool_batch_runner._execute_call,
-            _batch_runtime(executor, workspace_root=tmp_path, event_sink=stream_sink),
-            ToolCall(
-                tool_name=_STREAMING_TOOL_NAME,
-                arguments=json.dumps({"marker_path": str(marker)}),
-                call_id="call-cancel",
-            ),
-            "step-1",
-            _projected_batch("call-cancel"),
-            asyncio.get_running_loop(),
-        )
-    finally:
-        timer.cancel()
-    elapsed = time.monotonic() - started
-
-    # ---- 环境守卫：coverage / 受限 Windows 环境下 spawn 子进程会因 WinError 6 失败 ----
-    # 该限制非产品缺陷（见 test_tool_terminal_projection.py 中的同一说明），无法在本环境
-    # 触发真实取消路径时显式跳过，避免把环境限制误报为时序违例。
-    if "force_kill" not in timeline.labels():
-        pytest.skip(
-            "本环境下 process 工具子进程未能启动（spawn WinError 6 等环境限制），"
-            f"无法观测真实取消时序；observation={observation.status!r} "
-            f"content={(observation.content or '')[:120]!r}"
-        )
-
-    # ---- 时序证据（真实时间戳排序，非替身调用栈）----
-    labels = timeline.labels()
-    assert "force_kill" in labels, "取消路径未强杀子进程（时序无法成立）"
-    assert "finish_output_channel" in labels, "取消路径未收尾输出通道"
-    assert "emit:cancelled" in labels, "取消终态从未投影"
-    running_idx = labels.index("emit:running")
-    kill_idx = labels.index("force_kill")
-    drain_idx = labels.index("finish_output_channel")
-    project_idx = labels.index("emit:cancelled")
-    assert (
-        running_idx < kill_idx < drain_idx < project_idx
-    ), f"时序违例：期望 running<kill<drain<project，实际 {labels}"
-
-    # 时间戳层面的量化间隔（更强的非循环证据）。
-    ordered = sorted(timeline.entries, key=lambda item: item[0])
-    kill_ts = next(ts for ts, label in ordered if label == "force_kill")
-    drain_ts = next(ts for ts, label in ordered if label == "finish_output_channel")
-    project_ts = next(ts for ts, label in ordered if label == "emit:cancelled")
-    assert kill_ts <= drain_ts <= project_ts
-    assert project_ts >= kill_ts, "投影时间戳早于强杀"
-
-    # 输出排空的实质证据：真实流出的增量已发布，且最后一条发布的时间戳早于投影。
-    # 这排除「只验证调用顺序」的循环论证——此处验证的是真实数据被推送的时间点。
-    streamed_len = len("".join(stream_sink.streamed))
-    assert streamed_len > 0, "取消前已产生的实时输出未到达输出通道（排空未发生）"
-    last_publish_ts = max(ts for ts, label in ordered if label == "stream_publish")
-    assert last_publish_ts <= project_ts, "实时输出排空晚于终态投影，前端会先看到终态再补输出"
-
-    # ---- 结果与投影语义 ----
-    assert observation.status == "cancelled"
-    assert elapsed < 15.0, f"取消耗时 {elapsed:.2f}s，疑似未强杀"
-    assert marker.exists() is False, "子进程未被真正打断（标记文件被写出）"
-
-    status_events = [
-        event
-        for event in projector.events
-        if isinstance(event, ToolCallStatusChangedEvent) and event.tool_call_id == "call-cancel"
-    ]
-    assert [event.status for event in status_events] == [
-        "running",
-        "cancelled",
-    ], f"running 与终态应各投影恰一次，实际 {[event.status for event in status_events]}"
-    assert status_events[1].error == "已取消"
-
-    # 真实 snapshot 的 part 终态。
-    part = owner.state["messages"][1]["parts"][0]
-    assert part["status"] == "cancelled"
-
-    # 端到端：取消期间确实流出过真实实时输出（排空有实质内容），且被投影进 snapshot。
-    streamed_text = "".join(stream_sink.streamed)
-    assert streamed_text, "取消前未流出任何实时输出，无法验证保留性"
-    assert part.get("terminal_output_seq", -1) >= 0, "流式增量从未投影进 snapshot"
-
-    # 取消终态不得清空已流出的输出（细节见 ``test_real_cancel_projection_keeps_streamed_output``）。
-    assert part["display_data"].get("output"), "取消终态清空了已流出的实时输出"
 
 
 # ---------------------------------------------------------------------------

@@ -22,8 +22,8 @@ from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.message_metadata import UserMessageMetadata
 from app.models.task_record import TaskRecord
-from app.core import conversation_run_ledger as conversation_run_ledger_module
-from app.core.conversation_run_ledger import ConversationRunLedger
+from app.core.workflow import conversation_run_ledger as conversation_run_ledger_module
+from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 # 任务运行时空间在构造时会读当前 task，因此本文件全部用例都需要隔离主库。
@@ -56,7 +56,7 @@ def _activity(run_id: int, status: str) -> dict[str, object]:
         "error": None,
         "usage": None,
         "contextWindowTotal": None,
-        "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+        "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
     }
 
 
@@ -344,7 +344,8 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             ],
             "activity": _activity(2, "running"),
             "terminal_sessions": [],
-            "deferred_results": [],
+            "background_tasks": [],
+            "foreground_waits": [],
         }
     )
 

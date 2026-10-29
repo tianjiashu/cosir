@@ -7,7 +7,7 @@ import pytest
 
 from app.core.events import RunResultUpdatedEvent, RunStatusChangedEvent
 from app.models.enums.conversation_run_status import RunTransition
-from app.core import conversation_run_ledger as ledger_module
+from app.core.workflow import conversation_run_ledger as ledger_module
 from app.service.depends import (
     get_conversation_run_crud,
     get_conversation_run_ledger,

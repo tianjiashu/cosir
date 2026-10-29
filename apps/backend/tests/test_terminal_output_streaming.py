@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import queue
 import threading
 from collections.abc import Iterable
 from dataclasses import replace
@@ -37,16 +36,12 @@ from app.core.events import (
 from app.tools.display.terminal_display import build_terminal_display_data
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
-from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
-from app.core.tool.execute.tool_output_channel import (
-    BufferedProcessToolOutputChannel,
-    create_process_output_channel,
-)
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal.output_collector import _OutputCollector
+from app.tools.tool_handler.terminal.output_stream import TerminalOutputStream
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models.conversation_input import UserInputPresentation
@@ -211,16 +206,19 @@ def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
                 timed_out=False,
             )
 
-    monkeypatch.setattr(
-        execute_terminal_module, "create_backend", lambda _name: Backend()
-    )
+    monkeypatch.setattr(execute_terminal_module, "LocalExecutionBackend", Backend)
     monkeypatch.setattr(
         execute_terminal_module, "read_terminal_deny_patterns", lambda: ()
     )
     observation = ExecuteTerminalTool().execute(
         command="echo output",
-        execution_context=SimpleNamespace(
+        execution_context=ToolExecutionContext(
+            step_id="step-1",
+            task_id=7,
+            workspace_id=1,
             workspace_root=tmp_path,
+            run_id=1,
+            tool_call_id="call-echo",
         ),
     )
 
@@ -293,8 +291,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
         dispatch_threads.append(threading.get_ident())
         return "stream"
 
-    channel = create_process_output_channel(
-        "execute_terminal",
+    channel = TerminalOutputStream.open(
         ToolExecutionContext(
             step_id="step-1",
             task_id=7,
@@ -306,7 +303,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
             tool_call_id="call-1",
         ),
     )
-    assert isinstance(channel, BufferedProcessToolOutputChannel)
+    assert isinstance(channel, TerminalOutputStream)
     expected = "x" * (Constant.Tools.MAX_OUTPUT_CHARS + 1)
     producer = threading.Thread(target=channel.emit, args=(expected,))
     producer.start()
@@ -334,7 +331,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
 async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Path) -> None:
     """``run_tool_batch`` 在事件循环线程按批次构造执行边界，工具执行发生在循环线程之外。
 
-    通道本身由 ``ToolHandlerRunner`` 在工具执行线程按 ``event_loop`` / ``event_sink`` 创建；本用例
+    通道本身由 ``execute_terminal`` 在工具执行线程按 ``event_loop`` / ``event_sink`` 创建；本用例
     守住这两项与 Run / step 事实确实由批次入口从 ``RuntimeContext`` 取得并透传。
     """
     loop = asyncio.get_running_loop()
@@ -386,11 +383,11 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_process_output_channel_is_built_from_worker_thread(tmp_path: Path) -> None:
+async def test_terminal_output_channel_is_built_from_worker_thread(tmp_path: Path) -> None:
     """工具执行线程里必须能按 ``event_loop`` 建出逐调用通道。
 
     回归：通道创建一度不再接收 ``loop``（改从 ``asyncio.get_running_loop()`` 取），而
-    ``create_process_output_channel`` 在 ``asyncio.to_thread`` 的
+    ``TerminalOutputStream.open`` 在 ``asyncio.to_thread`` 的
     工作线程里调用它——工作线程内没有运行中循环，于是每次 ``execute_terminal`` 都抛
     ``TypeError``、只记一条 ERROR 日志，实时输出静默消失。
     """
@@ -409,97 +406,10 @@ async def test_process_output_channel_is_built_from_worker_thread(tmp_path: Path
     def build_channel() -> Any:
         with pytest.raises(RuntimeError):
             asyncio.get_running_loop()
-        return create_process_output_channel(
-            "execute_terminal", replace(context, tool_call_id="call-1")
-        )
+        return TerminalOutputStream.open(replace(context, tool_call_id="call-1"))
 
     channel = await asyncio.to_thread(build_channel)
-    assert isinstance(channel, BufferedProcessToolOutputChannel)
-
-
-def test_output_queue_completion_waits_for_tail_without_dropping_chunks() -> None:
-    result_queue: queue.Queue[tuple[str, dict[str, object]]] = queue.Queue()
-    result_queue.put(("success", {"result": "done"}))
-    output_queue: queue.Queue[tuple[object, ...]] = queue.Queue()
-    output_queue.put(("delta", "last chunk"))
-    release_completion = threading.Event()
-    received: list[str] = []
-
-    def sink(text: str) -> None:
-        received.append(text)
-        if text == "last chunk":
-            release_completion.set()
-
-    def produce_completion() -> None:
-        assert release_completion.wait(timeout=1)
-        output_queue.put(("complete",))
-
-    producer = threading.Thread(target=produce_completion)
-    producer.start()
-
-    class RunningProcess:
-        def is_alive(self) -> bool:
-            return True
-
-    result = ToolHandlerRunner._wait_for_result(
-        RunningProcess(),
-        result_queue,
-        timeout=1,
-        is_cancelled=lambda: False,
-        output_queue=output_queue,
-        output_sink=sink,
-    )
-    producer.join(timeout=1)
-
-    assert result == ("success", {"result": "done"})
-    assert not producer.is_alive()
-    assert received == ["last chunk"]
-
-
-def test_handler_process_backpressures_full_queue_without_dropping_output(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from app.core.tool.execute import tool_handler_runner as runner_module
-
-    monkeypatch.setattr(runner_module.os, "setsid", lambda: None, raising=False)
-    monkeypatch.setattr(
-        runner_module, "assign_current_process_to_kill_on_close_job", lambda: None
-    )
-    emitted = threading.Event()
-    release = threading.Event()
-
-    class ClosableQueue(queue.Queue[object]):
-        def close(self) -> None:
-            return None
-
-        def join_thread(self) -> None:
-            return None
-
-    def handler(*, output_sink: Any, execution_context: Any) -> str:
-        output_sink("accepted")
-        output_sink("second chunk")
-        emitted.set()
-        assert release.wait(timeout=2)
-        return "done"
-
-    result_queue = ClosableQueue(maxsize=1)
-    output_queue = ClosableQueue(maxsize=1)
-    worker = threading.Thread(
-        target=ToolHandlerRunner._execute_handler,
-        args=(handler, {}, result_queue, None, None, "", output_queue),
-    )
-    worker.start()
-    first_item = output_queue.get(timeout=1)
-    assert emitted.wait(timeout=1)
-    second_item = output_queue.get(timeout=1)
-    release.set()
-    worker.join(timeout=2)
-    completion_item = output_queue.get(timeout=1)
-
-    assert not worker.is_alive()
-    assert first_item == ("delta", "accepted")
-    assert second_item == ("delta", "second chunk")
-    assert completion_item == ("complete",)
+    assert isinstance(channel, TerminalOutputStream)
 
 
 def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() -> None:

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from app.tools.terminal_runtime.errors import TerminalWorkerSignalFailedError
-from app.tools.terminal_runtime.process_terminal_worker import ProcessTerminalWorker
+from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
 
 
@@ -340,21 +340,22 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """真实 PTY 经工具创建后，下一 Run 发现并继续使用原 shell 环境。"""
-    import json
+    from terminal_test_support import active_session_ids, capture_terminal_effects
 
     from app.config.constant import Constant
     from app.core.tool.schemas import ToolExecutionContext
+    from app.tools.terminal_runtime.session_service import TerminalSessionService
     from app.tools.tool_handler.terminal_session import (
         TerminalListTool,
         TerminalReadTool,
         TerminalStartTool,
         TerminalWriteTool,
     )
-    from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
 
     # worker 路径只有宿主环境变量一个来源，测试沿用同一配置边界。
     monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(_worker_path()))
-    terminal = TerminalSessionService(on_task_sessions_changed=lambda _task: None)
+    capture_terminal_effects(monkeypatch)
+    terminal = TerminalSessionService()
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )
@@ -408,9 +409,9 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
         # 第一个 Run 的执行释放取走 Task 信号；同一 Task 的后续 Run 复用终端不受影响。
         cancellation_registry.consume(1)
         listed = TerminalListTool().execute(execution_context=second)
-        payload = json.loads(listed.content.split("\n", 1)[1])
-        assert payload["sessions"][0]["session_id"] == session_id
-        assert payload["sessions"][0]["status"] == "running"
+        session_line = listed.content.split("\n", 1)[0]
+        assert session_line.startswith(f"session {session_id}")
+        assert " · running" in session_line
         command = (
             "echo STATE:%COSIR_TERMINAL_STATE%"
             if os.name == "nt"
@@ -424,11 +425,9 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
                   "timeout_ms": 10000},
             execution_context=second,
         )
-        result = terminal.read(
-            session_id, task_id=1, run_id=2, tool_call_id="call-read", is_cancelled=lambda: False
-        )
+        result = terminal.require(session_id, 1).read(is_cancelled=lambda: False)
         assert "STATE:kept" in result.text
     finally:
         cancellation_registry.consume(1)
         terminal.shutdown()
-    assert terminal.list_sessions(task_id=1) == []
+    assert active_session_ids(terminal) == []

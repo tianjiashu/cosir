@@ -9,13 +9,12 @@
    "Available on this host:" 的值与 ``enum`` 完全一致（含顺序）。
 4. 描述质量：非空 / 无 CJK / 句号结尾 / 类内互不包含 / 不泄漏对端平台字面量。
 5. 工具名不变 + ``ToolRegistry`` 同名去重只保留一个定义。
-6. 进程隔离兼容：pickle 往返后 ``args_model`` 仍指向正确平台类。
+6. 执行模式：thread 工具，声明延迟结果（可转到后台）。
 
 所有断言都指向「契约」而非实现细节；发现缺陷只报告不修复。
 """
 
 import inspect
-import pickle
 import re
 from pathlib import Path
 from typing import Any, cast, get_args
@@ -23,7 +22,6 @@ from typing import Any, cast, get_args
 import pytest
 from pydantic import BaseModel
 
-from app.core.tool.schemas import ToolDefinition
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_models.execute_terminal_args import (
     MacExecuteTerminalArgs,
@@ -374,13 +372,13 @@ def test_schema_does_not_widen_model_contract(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.parametrize("model", [WindowsExecuteTerminalArgs, MacExecuteTerminalArgs])
-def test_all_four_field_descriptions_are_nonempty_english_and_stop_with_period(
+def test_all_field_descriptions_are_nonempty_english_and_stop_with_period(
     model: type[BaseModel],
 ) -> None:
     """四字段描述必须非空、英文、无 CJK、无首尾空白、以句号结尾。"""
 
     properties = model.model_json_schema()["properties"]
-    assert set(properties) == {"shell", "command", "timeout", "workdir"}
+    assert set(properties) == {"shell", "command", "timeout", "workdir", "background"}
     for name, schema in properties.items():
         description = str(schema["description"])
         assert description.strip(), f"{model.__name__}.{name} 描述为空"
@@ -393,7 +391,7 @@ def test_all_four_field_descriptions_are_nonempty_english_and_stop_with_period(
 def test_descriptions_are_mutually_non_contained_within_a_model(
     model: type[BaseModel],
 ) -> None:
-    """类内四个字段描述互不包含，避免复制粘贴造成的冗余契约。"""
+    """类内字段描述互不包含，避免复制粘贴造成的冗余契约。"""
 
     descriptions = [
         str(schema["description"]) for schema in model.model_json_schema()["properties"].values()
@@ -496,57 +494,16 @@ def test_registry_skips_duplicate_name_and_keeps_single_definition(
 
 
 # ----------------------------------------------------------------------
-# 6. 进程隔离兼容（pickle 往返）
+# 6. 执行模式（thread + 延迟结果）
 # ----------------------------------------------------------------------
 
 
-def test_definition_execution_mode_is_process() -> None:
-    """execute_terminal 必须声明 process 隔离（跑任意 shell 需树杀兜底）。"""
+def test_definition_runs_in_thread_with_deferred_capability() -> None:
+    """execute_terminal 是 thread 工具并声明延迟结果：命令要能转到后台，作业必须由后端进程持有。"""
 
     definition = ExecuteTerminalTool().to_definition()
-    assert definition.execution_mode == "process"
-
-
-@pytest.mark.parametrize("platform_name", ["Windows", "Darwin"])
-def test_tool_instance_pickle_roundtrip_keeps_platform_args_model(
-    monkeypatch: pytest.MonkeyPatch,
-    platform_name: str,
-) -> None:
-    """pickle 往返后 args_model 仍指向正确的平台类，且可用 shell 集合不变。
-
-    子进程以 spawn 方式启动时要重新导入 handler；若平台类在往返中退化，
-    子进程会用错契约校验参数。
-    """
-
-    if platform_name == "Windows":
-        _patch_windows_environment(monkeypatch)
-        expected_model: type[BaseModel] = WindowsExecuteTerminalArgs
-    else:
-        _patch_macos_environment(monkeypatch)
-        expected_model = MacExecuteTerminalArgs
-
-    tool = ExecuteTerminalTool()
-    restored = pickle.loads(pickle.dumps(tool))  # noqa: S301 - 测试内固定数据
-
-    assert restored.args_model is expected_model
-    assert restored.args_model is tool.args_model
-    assert restored._available_shells == tool._available_shells
-    assert restored._platform_name == tool._platform_name
-
-
-def test_definition_pickle_roundtrip_keeps_name_and_schema(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """跨进程传递的是 ToolDefinition；往返后名称/schema/args_model 必须一致。"""
-
-    _patch_windows_environment(monkeypatch)
-    definition = ExecuteTerminalTool().to_definition()
-    restored: ToolDefinition = pickle.loads(pickle.dumps(definition))  # noqa: S301
-
-    assert restored.name == definition.name == "execute_terminal"
-    assert restored.args_model is definition.args_model
-    assert dict(restored.parameters_schema) == dict(definition.parameters_schema)
-    assert restored.execution_mode == "process"
+    assert definition.execution_mode == "thread"
+    assert definition.deferred is not None and definition.deferred.default_background is False
 
 
 def test_narrowed_schema_survives_normalization(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -667,6 +624,7 @@ def test_resolver_result_is_usable_as_args_model_directly() -> None:
         "command": "dir",
         "timeout": None,
         "workdir": None,
+        "background": None,
     }
 
 
@@ -742,7 +700,7 @@ def test_accepted_shells_match_declared_literals(model: type[BaseModel]) -> None
 
 
 def test_extra_forbid_covers_all_known_fields_not_only_shell() -> None:
-    """extra='forbid' 必须对四个字段都生效，而不是只拦 shell 的拼写错误。"""
+    """extra='forbid' 必须对全部字段都生效，而不是只拦 shell 的拼写错误。"""
 
     for typo in ("commandd", "timeoutt", "workdirr"):
         result = validate_tool_arguments(

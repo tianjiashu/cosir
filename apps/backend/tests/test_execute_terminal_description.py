@@ -89,7 +89,7 @@ def test_macos_host_selects_macos_args_model(
     assert "Available on this host:" in description
 
 
-def test_tool_description_is_platform_neutral_and_points_to_shell_parameter(
+def test_tool_description_is_platform_neutral(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_windows_environment(monkeypatch, powershell=True)
@@ -98,7 +98,6 @@ def test_tool_description_is_platform_neutral_and_points_to_shell_parameter(
     macos_description = ExecuteTerminalTool().description
 
     assert windows_description == macos_description
-    assert "shell parameter description" in windows_description
     assert "cmd.exe" not in windows_description
     assert "/bin/sh" not in windows_description
 
@@ -126,11 +125,11 @@ def test_platform_shell_descriptions_carry_host_specific_syntax(
 def test_platform_args_descriptions_are_english_complete_and_non_redundant(
     model: type[BaseModel],
 ) -> None:
-    """四个字段都必须有英文完整描述，且不存在重复或跨字段复述的描述文本。"""
+    """每个字段都必须有英文完整描述，且不存在重复或跨字段复述的描述文本。"""
 
     properties = model.model_json_schema()["properties"]
 
-    assert set(properties) == {"command", "shell", "timeout", "workdir"}
+    assert set(properties) == {"command", "shell", "timeout", "workdir", "background"}
     for name, schema in properties.items():
         description = str(schema["description"])
         assert description == description.strip(), name

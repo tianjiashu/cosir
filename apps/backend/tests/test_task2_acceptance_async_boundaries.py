@@ -85,8 +85,8 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     calls: list[str] = []
 
     class _RecoverService:
-        def recover_orphaned_runs(self) -> list[object]:
-            return []
+        def recover_after_restart(self) -> None:
+            pass
 
     monkeypatch.setattr(
         lifespan_module, "install_logging_for_current_process", lambda **_kwargs: None
@@ -97,13 +97,8 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     monkeypatch.setattr(lifespan_module, "_ensure_system_cosir_dir", lambda: None)
     monkeypatch.setattr(lifespan_module, "ensure_system_agent_config_dir", lambda: None)
     monkeypatch.setattr(lifespan_module, "ensure_system_agent_team_config_dir", lambda: None)
+    # 重启恢复整体由替身代替，不触达存储。
     monkeypatch.setattr(lifespan_module, "get_recover_service", lambda: _RecoverService())
-    # 启动时为需要调度的 Task 拉起 actor：替身没有需要拉起的 Task，不触达存储。
-    monkeypatch.setattr(
-        lifespan_module,
-        "get_task_service",
-        lambda: SimpleNamespace(list_task_ids_to_dispatch=lambda: set()),
-    )
     monkeypatch.setattr(lifespan_module, "build_tool_registry", lambda: object())
     # Registry 只保存内置 profile，用户 JSON 由注册表在作用域首次被读取时按需装载，
     # 因此启动编排不再遍历 workspace 调用装载方法。
@@ -118,16 +113,6 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
         calls.append("close_dependencies")
 
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", close_dependencies)
-    # 启动流程里的 Agent Team 收敛在函数内惰性 import，因此按模块路径打桩（替身不触达存储）。
-    # 重启收尾里的占位中断要写库；替身不触达存储。
-    monkeypatch.setattr(
-        "app.core.workflow.deferred.restart_settlement.interrupt_pending_placeholders",
-        lambda: 0,
-    )
-    monkeypatch.setattr(
-        "app.core.tool.handler.agent_team.coordinator.get_agent_team_coordinator",
-        lambda: SimpleNamespace(recover_after_restart=lambda: []),
-    )
 
     async with lifespan_module._lifespan_impl(SimpleNamespace()):
         pass

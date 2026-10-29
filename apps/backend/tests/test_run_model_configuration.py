@@ -57,7 +57,7 @@ def test_run_options_serializes_explicit_reasoning_effort_without_capability_sna
     )
 
     assert extra.model_dump() == {
-        "ban_tools": [],
+        "disabled_tool_groups": [],
         "reasoning_effort": "low",
     }
     assert ConversationRunOptions.model_validate(extra.model_dump()) == extra

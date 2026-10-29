@@ -18,8 +18,8 @@ from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolCall, ToolDefinition
-from app.core.workflow.inbox.run_mailbox import RunMailbox
-from app.core.workflow.inbox.task_message import (
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.core.workflow.message_queue.task_message import (
     DecisionBody,
     NoticeBody,
     TaskMessage,

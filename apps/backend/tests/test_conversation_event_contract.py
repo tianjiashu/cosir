@@ -37,7 +37,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
             "type": "user_input_consumed",
             "task_id": 1,
             "run_id": 1,
-            # 只带消息身份（inbox 行 id）：展示 parts 已在排队投影里构造。
+            # 只带消息身份（message_queue 行 id）：展示 parts 已在排队投影里构造。
             "message_id": 1,
         },
         UserInputConsumedEvent,

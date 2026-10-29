@@ -1,6 +1,6 @@
 """延迟结果登记表、结论投递与 ``wait_messages`` 判定。
 
-终端服务本身不参与：条目由执行单元登记（这里直接调用 ``deferred_results``）。重启收尾见
+终端服务本身不参与：条目由执行单元登记（这里直接调用 ``deferred_registry``）。重启收尾见
 ``test_restart_settlement.py``。
 """
 
@@ -12,24 +12,24 @@ from typing import Any
 
 import pytest
 
+from app.core.tool.background import deferred_registry as deferred_module
+from app.core.tool.background.deferred_registry import (
+    DeferredRegistry,
+    deferred_registry,
+    deliver_background_result,
+)
 from app.core.tool.handler.wait_messages import WaitMessagesTool
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.core.workflow.deferred import deferred_results as deferred_module
-from app.core.workflow.deferred.deferred_results import (
-    DeferredResults,
-    deferred_results,
-    deliver_background_result,
-)
-from app.core.workflow.inbox.task_message import BackgroundResultBody
+from app.core.workflow.message_queue.task_message import BackgroundResultBody
 from app.service import depends
 
 
 @pytest.fixture(autouse=True)
 def _clean_entries():
     yield
-    for task_id in {entry.task_id for entry in deferred_results._entries.values()}:
-        deferred_results.drop_task(task_id)
+    for task_id in {entry.task_id for entry in deferred_registry._entries.values()}:
+        deferred_registry.drop_task(task_id)
 
 
 # ── 登记表 ───────────────────────────────────────────────────────────────
@@ -50,13 +50,13 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, str | None, st
 
 
 def _register(
-    registry: DeferredResults, tool_call_id: str, task_id: int, label: str, on_cancel=None
+    registry: DeferredRegistry, tool_call_id: str, task_id: int, label: str, on_cancel=None
 ) -> str:
     registry.register(
         tool_call_id,
         task_id=task_id,
         run_id=None,
-        kind="terminal_wait",
+        kind="terminal_command",
         label=label,
         on_cancel=on_cancel or (lambda: None),
     )
@@ -64,17 +64,17 @@ def _register(
 
 
 def test_complete_is_pop_once_and_carries_the_call(delivered) -> None:
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     _register(registry, "call-a", 1, "terminal:a")
     assert registry.pending(1) == ["terminal:a"]
     assert registry.complete("call-a", {}) is True
     assert registry.complete("call-a", {}) is False
     assert registry.pending(1) == []
-    assert delivered == [(1, "call-a", "terminal_wait")]
+    assert delivered == [(1, "call-a", "terminal_command")]
 
 
 def test_duplicate_registration_is_rejected(delivered) -> None:
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     _register(registry, "call-a", 1, "a")
     with pytest.raises(ValueError):
         _register(registry, "call-a", 1, "b")
@@ -82,7 +82,7 @@ def test_duplicate_registration_is_rejected(delivered) -> None:
 
 
 def test_close_cancels_everything_and_blocks_later_delivery(delivered) -> None:
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     cancelled: list[str] = []
     first = _register(registry, "call-a", 1, "a", lambda: cancelled.append("a"))
     _register(registry, "call-b", 2, "b", lambda: cancelled.append("b"))
@@ -113,7 +113,7 @@ def test_close_waits_for_in_flight_delivery(monkeypatch: pytest.MonkeyPatch) -> 
         return True
 
     monkeypatch.setattr(deferred_module, "deliver_background_result", slow_deliver)
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     _register(registry, "call-a", 1, "a")
     deliverer = threading.Thread(target=lambda: registry.complete("call-a", {}))
     deliverer.start()
@@ -129,7 +129,7 @@ def test_close_waits_for_in_flight_delivery(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_drop_task_runs_every_callback_even_when_one_fails(delivered) -> None:
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     called: list[str] = []
 
     def boom() -> None:
@@ -146,32 +146,8 @@ def test_drop_task_runs_every_callback_even_when_one_fails(delivered) -> None:
     assert registry.complete(kept, {}) is True
 
 
-def test_complete_or_deliver_uses_the_entry_when_present(delivered) -> None:
-    registry = DeferredResults()
-    registry.register(
-        "call-a",
-        task_id=1,
-        run_id=None,
-        kind="child_agent",
-        label="child_task:2",
-        on_cancel=lambda: None,
-    )
-    assert registry.complete_or_deliver(99, "call-a", "terminal_wait", {}) is True
-    assert registry.pending(1) == []
-    # 有登记时以登记里的 Task 与种类为准，参数里的只是缺登记时的兜底。
-    assert delivered == [(1, "call-a", "child_agent")]
-
-
-def test_complete_or_deliver_still_delivers_without_entry_until_closed(delivered) -> None:
-    registry = DeferredResults()
-    assert registry.complete_or_deliver(1, "call-x", "child_agent", {}) is True
-    registry.close()
-    assert registry.complete_or_deliver(1, "call-y", "child_agent", {}) is False
-    assert delivered == [(1, "call-x", "child_agent")]
-
-
 def test_discard_removes_without_calling_cancel(delivered) -> None:
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     called: list[str] = []
     _register(registry, "call-a", 1, "a", lambda: called.append("a"))
     registry.discard("call-a")
@@ -202,12 +178,12 @@ def enqueued(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, Any]]:
 
 def test_deliver_enqueues_background_result(enqueued: list[tuple[int, Any]]) -> None:
     assert deliver_background_result(
-        5, tool_call_id="call-5", tool_name="terminal_wait", result={"end_reason": "condition_met"}
+        5, tool_call_id="call-5", tool_name="terminal_command", result={"end_reason": "condition_met"}
     )
     [(task_id, message)] = enqueued
     assert task_id == 5
     assert isinstance(message.body, BackgroundResultBody)
-    assert message.body.tool_name == "terminal_wait"
+    assert message.body.tool_name == "terminal_command"
     assert message.body.tool_call_id == "call-5"
     rendered, _ = message.body.render()
     assert 'tool_call_id="call-5"' in rendered["content"]
@@ -218,7 +194,7 @@ def test_deliver_is_dropped_while_task_is_stopping(enqueued: list[tuple[int, Any
     cancellation_registry.request_cancel(6, "user")
     try:
         assert not deliver_background_result(
-            6, tool_call_id=None, tool_name="terminal_wait", result={}
+            6, tool_call_id=None, tool_name="terminal_command", result={}
         )
     finally:
         cancellation_registry.consume(6)
@@ -232,7 +208,7 @@ def test_deliver_to_deleted_task_returns_false(enqueued: list[tuple[int, Any]]) 
 
 
 def test_result_without_call_omits_the_attribute() -> None:
-    body = BackgroundResultBody(tool_name="terminal_wait", tool_result="{}")
+    body = BackgroundResultBody(tool_name="terminal_command", tool_result="{}")
     rendered, _ = body.render()
     assert "tool_call_id" not in rendered["content"]
 
@@ -258,10 +234,10 @@ def test_wait_messages_errors_when_idle_and_suspends_on_pending_entry(tmp_path: 
     assert not idle.suspend
     assert "nothing to wait for" in idle.content
 
-    _register(deferred_results, "call-1", task.id, "terminal_wait:term_1")
+    _register(deferred_registry, "call-1", task.id, "terminal_command:term_1")
     waiting = tool.execute(context)
     assert waiting.suspend
-    assert "terminal_wait:term_1" in waiting.content
+    assert "terminal_command:term_1" in waiting.content
 
 
 def test_wait_messages_description_mentions_terminal_work() -> None:
@@ -270,27 +246,16 @@ def test_wait_messages_description_mentions_terminal_work() -> None:
     assert "child agents" in description
 
 
-@pytest.mark.usefixtures("isolated_storage")
-def test_run_persists_its_trigger_call(tmp_path: Path) -> None:
-    """子 Run 记下触发调用，重启恢复与回投都从 Run 记录读取它。"""
-    workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
-    task = depends.get_task_crud().create(workspace.id, "task")
-    runs = depends.get_conversation_run_crud()
-    created = runs.create(task.id, "running", trigger_tool_call_id="call-delegate")
-    assert runs.get(created.id).trigger_tool_call_id == "call-delegate"
-    assert runs.create(task.id, "running").trigger_tool_call_id is None
-
-
 # ── 前台 / 后台、取消与看板 ─────────────────────────────────────────────
 
 
-def _register_foreground(registry: DeferredResults, tool_call_id: str, calls: list[str]) -> None:
+def _register_foreground(registry: DeferredRegistry, tool_call_id: str, calls: list[str]) -> None:
     registry.register(
         tool_call_id,
         task_id=1,
         run_id=None,
-        kind="terminal_wait",
-        label="terminal_wait:t",
+        kind="terminal_command",
+        label="terminal_command:t",
         mode="foreground",
         on_cancel=lambda: calls.append("cancel"),
         on_detach=lambda: calls.append("detach"),
@@ -298,18 +263,45 @@ def _register_foreground(registry: DeferredResults, tool_call_id: str, calls: li
 
 
 def test_foreground_settles_when_not_detached(delivered) -> None:
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
     assert registry.settle_foreground("call-f") == "settled"
     assert registry.pending(1) == []
     assert delivered == [] and calls == []
-    [ended] = registry.entries(1)
-    assert (ended.mode, ended.status) == ("foreground", "completed")
+    # 前台等待只是一次普通工具调用：不进看板，结束后也不留记录。
+    assert registry.entries(1) == [] and registry.foreground_calls(1) == []
+
+
+def test_foreground_entries_only_surface_as_detachable_calls(delivered) -> None:
+    registry = DeferredRegistry()
+    calls: list[str] = []
+    _register_foreground(registry, "call-f", calls)
+    _register(registry, "call-b", 1, "b")
+    assert [view.tool_call_id for view in registry.entries(1)] == ["call-b"]
+    assert registry.foreground_calls(1) == ["call-f"]
+    assert registry.owns(1, "call-f") and not registry.owns(2, "call-f")
+    # 转到后台后才算后台工作：离开前台列表、进入看板，结束后留在最近结束里。
+    registry.detach("call-f")
+    assert registry.foreground_calls(1) == []
+    assert [view.tool_call_id for view in registry.entries(1)] == ["call-f", "call-b"]
+    registry.complete("call-f", {})
+    assert [(v.tool_call_id, v.status) for v in registry.entries(1)] == [
+        ("call-b", "running"),
+        ("call-f", "completed"),
+    ]
+
+
+def test_cancelled_foreground_entries_leave_no_history(delivered) -> None:
+    registry = DeferredRegistry()
+    calls: list[str] = []
+    _register_foreground(registry, "call-f", calls)
+    assert registry.cancel("call-f") is not None
+    assert calls == ["cancel"] and registry.entries(1) == []
 
 
 def test_detach_wins_over_a_later_foreground_settle(delivered) -> None:
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
     assert registry.detach("call-f") == "detached"
@@ -317,11 +309,11 @@ def test_detach_wins_over_a_later_foreground_settle(delivered) -> None:
     # 等待线程随后结束：转后台已先到，结论必须改走后台回投。
     assert registry.settle_foreground("call-f") == "detached"
     assert registry.complete("call-f", {}) is True
-    assert delivered == [(1, "call-f", "terminal_wait")]
+    assert delivered == [(1, "call-f", "terminal_command")]
 
 
 def test_detach_only_applies_to_live_foreground_entries(delivered) -> None:
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     _register(registry, "call-b", 1, "b")
     assert registry.detach("call-b") == "not_foreground"
     assert registry.detach("call-missing") == "not_found"
@@ -332,7 +324,7 @@ def test_detach_only_applies_to_live_foreground_entries(delivered) -> None:
 
 
 def test_user_cancel_reports_the_mode_and_records_history(delivered) -> None:
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     called: list[str] = []
     _register(registry, "call-b", 1, "b", lambda: called.append("b"))
     dropped = registry.cancel("call-b")
@@ -346,7 +338,7 @@ def test_user_cancel_reports_the_mode_and_records_history(delivered) -> None:
 
 def test_entries_list_live_first_then_bounded_history(delivered, monkeypatch) -> None:
     monkeypatch.setattr(deferred_module, "MAX_ENDED_PER_TASK", 2)
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     for index in range(3):
         _register(registry, f"call-{index}", 1, f"l{index}")
         registry.complete(f"call-{index}", {})
@@ -359,7 +351,7 @@ def test_entries_list_live_first_then_bounded_history(delivered, monkeypatch) ->
 
 
 def test_drop_task_reports_dropped_entries(delivered) -> None:
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     _register(registry, "call-b", 1, "b")
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
@@ -373,7 +365,7 @@ def test_drop_task_reports_dropped_entries(delivered) -> None:
 def test_listener_is_notified_off_the_caller_thread(delivered) -> None:
     import threading
 
-    registry = DeferredResults()
+    registry = DeferredRegistry()
     seen: list[tuple[int, str]] = []
     notified = threading.Event()
 
@@ -385,24 +377,35 @@ def test_listener_is_notified_off_the_caller_thread(delivered) -> None:
     _register(registry, "call-a", 7, "a")
     assert notified.wait(2)
     task_id, thread_name = seen[0]
-    assert task_id == 7 and thread_name.startswith("deferred-notify")
+    assert task_id == 7 and thread_name.startswith("background-notify")
 
 
 def test_snapshot_projection_matches_the_wire_contract(delivered) -> None:
-    from app.assistant_transport.state.conversation_state_deferred_result import (
-        project_deferred_result,
-        validate_deferred_results,
+    from app.assistant_transport.state.conversation_state_background_task import (
+        project_background_task,
+        validate_background_tasks,
     )
 
-    registry = DeferredResults()
-    _register(registry, "call-a", 1, "terminal_wait:t")
+    registry = DeferredRegistry()
+    _register(registry, "call-a", 1, "terminal_command:t")
     registry.complete("call-a", {})
     _register(registry, "call-b", 1, "child_task:2")
-    entries = [project_deferred_result(view) for view in registry.entries(1)]
-    validate_deferred_results(entries)
+    entries = [project_background_task(view) for view in registry.entries(1)]
+    validate_background_tasks(entries)
     assert [(e["toolCallId"], e["status"]) for e in entries] == [
         ("call-b", "running"),
         ("call-a", "completed"),
     ]
     with pytest.raises(ValueError):
-        validate_deferred_results([{**entries[0], "mode": "sideways"}])
+        validate_background_tasks([{**entries[0], "mode": "background"}])
+
+
+def test_foreground_waits_contract() -> None:
+    from app.assistant_transport.state.conversation_state_background_task import (
+        validate_foreground_waits,
+    )
+
+    validate_foreground_waits(["call-a", "call-b"])
+    for invalid in (None, [""], ["a", "a"], [1]):
+        with pytest.raises(ValueError):
+            validate_foreground_waits(invalid)

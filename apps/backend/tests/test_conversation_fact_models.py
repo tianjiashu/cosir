@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
-from app.core.workflow.inbox.task_message import UserInputBody
+from app.core.workflow.message_queue.task_message import UserInputBody
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
@@ -23,7 +23,7 @@ from app.models.message_metadata import ToolMessageMetadata
 from app.models.task_record import TaskRecord
 from app.service.conversation_run import user_input_service as user_input_module
 from app.service.recover_service import RecoverService
-from app.core.conversation_run_ledger import (
+from app.core.workflow.conversation_run_ledger import (
     ConversationRunLedger,
 )
 from app.service.conversation_run.conversation_task_context_service import (
@@ -142,20 +142,19 @@ def test_user_input_body_rejects_legacy_assistant_input_wrapper() -> None:
         )
 
 
-def test_presentation_rejects_image_token_without_uploaded_image() -> None:
-    """正文引用的图片必须有对应资源：投影按同一不变量消费，缺了它只能在入队后炸。"""
-    with pytest.raises(ValueError, match="image tokens"):
-        UserInputPresentation(display_text="你好 [[cosir-image:abc]]")
-
-
-def test_presentation_accepts_image_token_bound_to_uploaded_image() -> None:
+def test_presentation_is_a_plain_binding() -> None:
+    """展示绑定只承载事实，不在模型层重复校验：形状由 ``UserInputService`` 保证。"""
     asset = "a" * 64
     presentation = UserInputPresentation(
         display_text=f"描述\n[[cosir-image:{asset}]]",
         image_paths=[f"attachments/{asset}.png"],
     )
 
-    assert presentation.image_paths == [f"attachments/{asset}.png"]
+    assert presentation.model_dump() == {
+        "display_text": f"描述\n[[cosir-image:{asset}]]",
+        "image_paths": [f"attachments/{asset}.png"],
+        "attachments": [],
+    }
 
 
 def _input_service(monkeypatch, *, supports_reasoning_effort: bool = False) -> UserInputService:
@@ -192,8 +191,8 @@ def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch)
     prepared = service.prepare(7, command, 3).body
 
     assert prepared.input_text == f"请阅读 {attachment_path}"
-    assert prepared.display_text == command.display_text
-    assert prepared.attachments[0]["id"] == "readme"
+    assert prepared.presentation.display_text == command.display_text
+    assert prepared.presentation.attachments[0]["id"] == "readme"
 
 
 def test_prepare_returns_an_unqueued_user_input_message_with_delivery(monkeypatch) -> None:
@@ -214,19 +213,18 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch) -> None
         7,
         ConversationRunCommand(
             display_text="检查项目",
-            ban_tools=["execute_terminal"],
+            disabled_tool_groups=["终端工具"],
         ),
         3,
         "high",
     ).body
-    assert queued.launch.options.ban_tools == ["execute_terminal"]
+    assert queued.launch.options.disabled_tool_groups == ["终端工具"]
     assert queued.launch.options.reasoning_effort == "high"
     assert queued.launch.model_config_id == 3
+    # Run 的配置只随 ``launch`` 走；消息体自身没有散落的执行选项或展示字段。
     assert set(queued.model_dump()) == {
         "input_text",
-        "display_text",
-        "image_paths",
-        "attachments",
+        "presentation",
         "launch",
         "trigger_tool_call_id",
     }
@@ -250,7 +248,7 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment(monkeypatch) -
     prepared = service.prepare(7, command, 3).body
 
     assert prepared.input_text == f"请检查 {attachment_path}"
-    assert prepared.attachments == [
+    assert prepared.presentation.attachments == [
         {
             "id": "references",
             "name": "references",
@@ -286,7 +284,7 @@ def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
     )
     prepared = service.prepare(7, command, 3, None, reuse=previous).body
     assert prepared.input_text == f"请再次阅读 {attachment_path}"
-    assert prepared.attachments[0]["path"] == str(attachment_path)
+    assert prepared.presentation.attachments[0]["path"] == str(attachment_path)
 
 
 def test_prepared_text_does_not_rescan_attachment_paths(monkeypatch) -> None:
@@ -309,7 +307,7 @@ def test_prepared_text_does_not_rescan_attachment_paths(monkeypatch) -> None:
     prepared = service.prepare(7, command, 3).body
 
     assert prepared.input_text == f"看 {path}"
-    assert prepared.attachments[0]["path"] == path
+    assert prepared.presentation.attachments[0]["path"] == path
 
 
 def test_prepare_rejects_image_token_without_uploaded_asset(monkeypatch) -> None:

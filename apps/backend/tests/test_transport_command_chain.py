@@ -22,16 +22,19 @@ import pytest
 from app.assistant_transport.service import transport_assistant_service as service_module
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core import task_actor as actor_module
+from app.core import task_execution as execution_module
 from app.core.task_actor import TaskActor
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
-from app.core.workflow.inbox.task_message import (
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.core.workflow.message_queue.task_message import (
     BackgroundResultBody,
     NoticeBody,
     RunLaunch,
     TaskMessage,
     UserInputBody,
 )
+from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import RunTransition
 from app.core.tool.handler.agent_team import coordinator as coordinator_module
 from app.task_runtime import task_runtime_space_registry as registry_module
@@ -81,7 +84,7 @@ class _Ledger:
         self.current: SimpleNamespace | None = None
 
     def create_run(
-        self, task_id: int, launch: RunLaunch, trigger_tool_call_id: str | None = None
+        self, task_id: int, launch: RunLaunch
     ) -> SimpleNamespace:
         run = SimpleNamespace(
             id=len(self.runs) + 1,
@@ -90,7 +93,6 @@ class _Ledger:
             agent_id=launch.agent_id,
             model_config_id=launch.model_config_id,
             options=launch.options,
-            trigger_tool_call_id=trigger_tool_call_id,
         )
         self.runs[run.id] = run
         self.current = run
@@ -127,9 +129,11 @@ class _Driver:
     # Run 落定后执行者继续收尾（STOP Hook 等）直到事件置位；未登记的 Run 落定即返回。
     linger: dict[int, asyncio.Event]
     consumed: list[int]
+    # 本次执行的 mailbox 归 space 持有（``RunDriver`` 不再接收它），由 fixture 注入。
+    mailbox: RunMailbox = RunMailbox()
 
-    def __init__(self, mailbox) -> None:
-        self._mailbox = mailbox
+    def __init__(self, *_args: object) -> None:
+        self._mailbox = _Driver.mailbox
 
     async def drive(self, run) -> None:
         if cancellation_registry.is_cancelled(run.task_id):
@@ -150,7 +154,11 @@ class _Driver:
 
 
 def _user(text: str = "hi") -> UserInputBody:
-    return UserInputBody(display_text=text, input_text=text, launch=RunLaunch(model_config_id=1))
+    return UserInputBody(
+        input_text=text,
+        launch=RunLaunch(model_config_id=1),
+        presentation=UserInputPresentation(display_text=text),
+    )
 
 
 async def _settle() -> None:
@@ -169,15 +177,25 @@ async def chain(monkeypatch):
     queue, ledger = _Queue(), _Ledger()
     _Driver.queue, _Driver.ledger = queue, ledger
     _Driver.finish, _Driver.settle, _Driver.consumed, _Driver.linger = {}, {}, [], {}
-    monkeypatch.setattr(actor_module, "RunDriver", _Driver)
+    monkeypatch.setattr(execution_module, "RunDriver", _Driver)
     monkeypatch.setattr(actor_module, "_republish", lambda _task_id: None)
+    # 推进前刷新排队投影；本文件不验证投影（见 test_task_actor_loop 的「先刷新再投递」）。
+    states = SimpleNamespace(refresh_queued_messages=lambda _task_id: None)
     for getter, fake in (
         ("get_conversation_run_ledger", ledger),
         ("get_task_service", ledger),
         ("get_task_message_queue", queue),
+        ("get_conversation_task_state_service", states),
     ):
         monkeypatch.setattr(actor_module.service_depends, getter, lambda fake=fake: fake)
-    actor = TaskActor(SimpleNamespace(task_id=_TASK_ID, async_operation=contextlib.nullcontext))
+    actor = TaskActor(
+        SimpleNamespace(
+            task_id=_TASK_ID,
+            async_operation=contextlib.nullcontext,
+            mailbox=RunMailbox(),
+        )
+    )
+    _Driver.mailbox = actor.mailbox
     space = SimpleNamespace(actor=actor)
     child_cancels: list[tuple[int, str]] = []
     monkeypatch.setattr(
@@ -206,9 +224,9 @@ async def chain(monkeypatch):
         prepare=lambda task_id, command, model_config_id, reasoning_effort=None,
         agent_id="main_agent", *, delivery="immediate", reuse=None: TaskMessage.of(
             UserInputBody(
-                display_text=command.display_text,
                 input_text=command.display_text,
                 launch=RunLaunch(agent_id=agent_id, model_config_id=model_config_id),
+                presentation=UserInputPresentation(display_text=command.display_text),
             ),
             delivery=delivery,
         )
@@ -245,27 +263,27 @@ def _send_request(text: str, delivery: str = "immediate"):
 # ---------------------------------------------------------------------------
 
 
-async def test_wait_idle_reads_the_phase_on_a_freshly_started_actor(chain) -> None:
-    """actor 刚拉起、从未推进过：静止与否按当前阶段判定，不依赖推进时缓存的标志。"""
+async def test_phase_reads_the_run_on_a_freshly_started_actor(chain) -> None:
+    """actor 刚拉起、从未推进过：阶段按当前 Run 判定，不依赖推进时缓存的标志。"""
     run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
     run.status = "completed"
-    assert await chain.actor.wait_idle(0.01) is True
+    assert await chain.actor.phase() == "idle"
     run.status = "suspended"
-    assert await chain.actor.wait_idle(0.01) is False
+    assert await chain.actor.phase() == "suspended"
 
 
-async def test_wait_idle_waits_for_the_executor_after_the_run_settled(chain) -> None:
+async def test_phase_stays_driving_until_the_executor_is_released(chain) -> None:
     await chain.service.send(_TASK_ID, _send_request("hello"))
     await _settle()
     run = chain.ledger.current
     _Driver.linger[run.id] = asyncio.Event()
 
     await _finish(run.id, "completed")
-    assert run.status == "completed" and chain.actor.driving
-    assert await chain.actor.wait_idle(0.01) is False
+    assert run.status == "completed" and await chain.actor.phase() == "driving"
 
     _Driver.linger[run.id].set()
-    assert await chain.actor.wait_idle(1) is True
+    await _settle()
+    assert await chain.actor.phase() == "idle"
 
 
 async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) -> None:
@@ -282,14 +300,14 @@ async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) ->
 
 
 def _register_deferred(tool_call_id: str, mode: str, calls: list[str]) -> None:
-    from app.core.workflow.deferred.deferred_results import deferred_results
+    from app.core.tool.background.deferred_registry import deferred_registry
 
-    deferred_results.register(
+    deferred_registry.register(
         tool_call_id,
         task_id=_TASK_ID,
         run_id=None,
-        kind="terminal_wait",
-        label="terminal_wait:t",
+        kind="terminal_command",
+        label="terminal_command:t",
         mode=mode,  # type: ignore[arg-type]
         on_cancel=lambda: calls.append("cancel"),
         on_detach=(lambda: calls.append("detach")) if mode == "foreground" else None,
@@ -686,57 +704,8 @@ async def test_rerun_with_invalid_input_leaves_run_and_context_untouched(rerun) 
     assert rerun.context.included() == [1, 2, 3, 4] and rerun.queue.rows == []
 
 
-async def test_rerun_stops_the_running_run_with_edited_reason(rerun) -> None:
-    await rerun.service.send(_TASK_ID, _send_request("hello"))
-    await _settle()
-    old = rerun.ledger.current
-
-    task = asyncio.create_task(rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的")))
-    await _settle()
-    assert cancellation_registry.is_cancelled(_TASK_ID) and not task.done()
-    await _finish(old.id, "cancelled")
-    await task
-    await _settle()
-
-    assert old.status == "cancelled" and rerun.ledger.current.id != old.id
-    assert rerun.context.included() == [1, 2]
-    # edited 停止不留「用户已取消」通知：新 Run 只并入编辑后的消息。
-    assert _Driver.consumed == [1, 2]
-    assert all(not isinstance(row.body, NoticeBody) for row in rerun.queue.rows)
-
-
-async def test_rerun_cancels_a_suspended_run_directly(rerun) -> None:
-    old = _finished_run(rerun, "suspended")
-
-    await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
-    await _settle()
-
-    assert old.status == "cancelled" and rerun.ledger.current.status == "running"
-    assert rerun.context.included() == [1, 2]
-
-
-async def test_rerun_waits_for_the_executor_not_just_the_run_status(rerun) -> None:
-    """Run 已落定 cancelled、执行者还在收尾：改 context 要等它释放，否则与收尾交错。"""
-    await rerun.service.send(_TASK_ID, _send_request("hello"))
-    await _settle()
-    old = rerun.ledger.current
-    _Driver.linger[old.id] = asyncio.Event()
-
-    task = asyncio.create_task(rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的")))
-    await _settle()
-    await _finish(old.id, "cancelled")
-    assert old.status == "cancelled" and not task.done()
-    assert rerun.context.included() == [1, 2, 3, 4]
-
-    _Driver.linger[old.id].set()
-    await task
-    await _settle()
-    assert rerun.context.included() == [1, 2]
-    assert rerun.ledger.current.id != old.id and rerun.ledger.current.status == "running"
-
-
-async def test_rerun_times_out_when_the_run_does_not_stop(rerun, monkeypatch) -> None:
-    monkeypatch.setattr(service_module, "_RERUN_STOP_WAIT_SECONDS", 0.05)
+async def test_rerun_is_rejected_while_running_without_stopping_the_run(rerun) -> None:
+    """重跑不替用户停止：运行中的 Run 用的是内存上下文，看不到移出，只能拒绝。"""
     await rerun.service.send(_TASK_ID, _send_request("hello"))
     await _settle()
     old = rerun.ledger.current
@@ -745,5 +714,38 @@ async def test_rerun_times_out_when_the_run_does_not_stop(rerun, monkeypatch) ->
         await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
 
     assert error.value.code == "RUN_NOT_STOPPED"
-    assert rerun.context.included() == [1, 2, 3, 4]
+    assert not cancellation_registry.is_cancelled(_TASK_ID)
+    assert old.status == "running" and rerun.context.included() == [1, 2, 3, 4]
+    await _finish(old.id, "completed")
+
+
+async def test_rerun_is_rejected_while_suspended(rerun) -> None:
+    old = _finished_run(rerun, "suspended")
+
+    with pytest.raises(actor_module.SessionConflictError) as error:
+        await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
+
+    assert error.value.code == "RUN_NOT_STOPPED"
+    assert old.status == "suspended" and rerun.context.included() == [1, 2, 3, 4]
+
+
+async def test_rerun_is_rejected_while_the_executor_is_still_settling(rerun) -> None:
+    """Run 已落定 cancelled、执行者还在收尾：此时改 context 会与收尾交错，按执行阶段拒绝。"""
+    await rerun.service.send(_TASK_ID, _send_request("hello"))
+    await _settle()
+    old = rerun.ledger.current
+    _Driver.linger[old.id] = asyncio.Event()
     await _finish(old.id, "cancelled")
+    assert old.status == "cancelled"
+
+    with pytest.raises(actor_module.SessionConflictError) as error:
+        await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
+    assert error.value.code == "RUN_NOT_STOPPED"
+    assert rerun.context.included() == [1, 2, 3, 4]
+
+    _Driver.linger[old.id].set()
+    await _settle()
+    await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
+    await _settle()
+    assert rerun.context.included() == [1, 2]
+    assert rerun.ledger.current.id != old.id and rerun.ledger.current.status == "running"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,8 +13,10 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
+from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
-from app.core.workflow.deferred.deferred_results import deferred_results
+from app.core.workflow.message_queue.task_message import DecisionBody
+from app.core.tool.background.deferred_registry import deferred_registry
 from app.service import depends
 from app.tools.terminal_runtime.errors import (
     TerminalInputHeldByUserError,
@@ -22,6 +25,7 @@ from app.tools.terminal_runtime.errors import (
 )
 from app.tools.terminal_runtime.shell_resolver import ShellResolver
 from app.tools.tool_handler.terminal_session import (
+    TerminalHandoffTool,
     TerminalListTool,
     TerminalReadTool,
     TerminalStartTool,
@@ -30,14 +34,22 @@ from app.tools.tool_handler.terminal_session import (
 )
 from app.tools.tool_handler.terminal_session.common import service_error_observation
 from app.tools.tool_models import TerminalReadArgs, TerminalWriteArgs
-from terminal_test_support import ReadyWorker, make_service
+from terminal_test_support import ReadyWorker, make_service, session_entries
 
 
-def test_exactly_five_terminal_tools_are_built() -> None:
-    names = [definition.name for definition in build_terminal_definitions()]
-    assert names == [
-        "terminal_list", "terminal_start", "terminal_read", "terminal_write", "terminal_close"
+def test_exactly_six_terminal_tools_are_built() -> None:
+    definitions = {definition.name: definition for definition in build_terminal_definitions()}
+    assert list(definitions) == [
+        "terminal_list", "terminal_start", "terminal_read", "terminal_write",
+        "terminal_handoff", "terminal_close",
     ]
+    # 交接复用 HITL：只有它声明需要用户决定，决定之后重放原调用。
+    assert definitions["terminal_handoff"].user_decision == "execute"
+    assert all(
+        definition.user_decision is None
+        for name, definition in definitions.items()
+        if name != "terminal_handoff"
+    )
 
 
 @pytest.mark.parametrize(
@@ -60,12 +72,11 @@ def test_write_schema_keys_and_signals_follow_host(monkeypatch, system, control,
 def test_write_schema_is_strict_and_accepts_every_input_type() -> None:
     schema = strict_parameters_schema(TerminalWriteArgs)
     validator = Draft202012Validator(schema)
-    wait = {"until": "match", "pattern": "ok", "quiet_ms": None, "timeout_ms": 60000}
+    wait = {"until": "match", "pattern": "ok", "quiet_ms": None, "timeout_ms": 30000}
     for input_value in (
         {"type": "line", "text": "ls"},
         {"type": "keys", "keys": ["tab"]},
         {"type": "signal", "signal": "interrupt"},
-        {"type": "handoff", "reason": "password"},
     ):
         validator.validate({"session_id": "s", "operation_id": "o", "input": input_value,
                             "wait": wait})
@@ -132,11 +143,12 @@ def tool_service(monkeypatch):
         SimpleNamespace(is_cancelled=lambda task_id: False),
     )
     yield service, workers
-    deferred_results.drop_task(1)
+    deferred_registry.drop_task(1)
 
 
 def _context(tmp_path: Path) -> Any:
-    return SimpleNamespace(
+    return ToolExecutionContext(
+        step_id="step-1",
         task_id=1,
         workspace_id=1,
         workspace_root=tmp_path,
@@ -148,10 +160,12 @@ def _context(tmp_path: Path) -> Any:
 def test_tool_handlers_return_observation_text_and_display_data(tool_service, tmp_path) -> None:
     service, workers = tool_service
     started = TerminalStartTool().execute(execution_context=_context(tmp_path), label="dev")
-    meta = json.loads((started.content or "").split("\n", 1)[1])
     assert started.display_data["kind"] == "terminal-session"
-    assert started.display_data["integration"] == "ready" and started.display_data["label"] == "dev"
-    session_id = meta["session_id"]
+    assert started.display_data["label"] == "dev"
+    session_id = str(started.display_data["session_id"])
+    # 给模型的是一行摘要，不再是 JSON 元数据；集成就绪时不出现 integration 提示。
+    assert started.content == f'session {session_id} "dev" by agent · zsh · running'
+
     workers[0].screen(["$ "], cursor=(0, 2))
 
     written = TerminalWriteTool().execute(
@@ -166,26 +180,45 @@ def test_tool_handlers_return_observation_text_and_display_data(tool_service, tm
         "session_id": session_id,
         "status": "running",
         "lines": [1, 1],
+        "screen": False,
         "wait_result": {"until": "elapsed", "end_reason": "elapsed"},
-        "suspended": False,
-        "input_type": "line",
         "input_summary": "echo hi",
     }
 
-    handoff = TerminalWriteTool().execute(
-        session_id=session_id, operation_id="op2",
-        input={"type": "handoff", "reason": "password"}, wait=None,
-        execution_context=_context(tmp_path),
+    handoff_context = _context(tmp_path)
+    handoff = TerminalHandoffTool().execute(
+        session_id=session_id, reason="password", execution_context=handoff_context
     )
-    assert handoff.suspend is True and handoff.display_data["input_type"] == "handoff"
+    # 首次调用是 HITL 等待占位：挂起 Agent，交接只登记在会话上。
+    assert handoff.suspend is True and handoff.awaiting_decision is True
+    assert handoff.display_data["input_summary"] == "password"
+    entry = session_entries(service, 1)[0]
+    assert entry["handoff"] == {"reason": "password", "toolCallId": handoff_context.tool_call_id}
+    # 用户交还：决定到达后重放同一调用，报告交接以来的输出并清除交接。
+    workers[0].screen(["$ ", "$ sudo ok"], cursor=(1, 9))
+    returned = TerminalHandoffTool().execute(
+        session_id=session_id,
+        reason="password",
+        execution_context=replace(
+            handoff_context,
+            user_decision=DecisionBody(
+                tool_call_id=handoff_context.tool_call_id,
+                tool_name="terminal_handoff",
+                decision="approve",
+            ),
+        ),
+    )
+    assert returned.status == "success" and not returned.suspend
+    assert "handed the terminal back" in (returned.content or "")
+    assert session_entries(service, 1)[0]["handoff"] is None
 
     read = TerminalReadTool().execute(session_id=session_id, execution_context=_context(tmp_path))
-    assert read.display_data["lines"] == [1, 1] and "input_type" not in read.display_data
+    assert read.display_data["lines"] == [1, 2] and "input_summary" not in read.display_data
 
     listed = TerminalListTool().execute(execution_context=_context(tmp_path))
-    payload = json.loads((listed.content or "").split("\n", 1)[1])
-    assert [s["session_id"] for s in payload["sessions"]] == [session_id]
-    assert "available_shells" in payload
+    session_line, shells_line = (listed.content or "").split("\n")
+    assert session_line.startswith(f'session {session_id} "dev" by agent · zsh · running')
+    assert shells_line.startswith("shells: ")
     assert listed.display_data == {"kind": "terminal-session", "session_count": 1}
 
 
@@ -197,7 +230,7 @@ def test_command_returned_without_integration_is_tool_error(monkeypatch, tmp_pat
         SimpleNamespace(is_cancelled=lambda task_id: False),
     )
     started = TerminalStartTool().execute(execution_context=_context(tmp_path))
-    session_id = json.loads((started.content or "").split("\n", 1)[1])["session_id"]
+    session_id = str(started.display_data["session_id"])
     result = TerminalWriteTool().execute(
         session_id=session_id, operation_id="op", input={"type": "line", "text": "ls"},
         wait={"until": "command_returned", "pattern": None, "quiet_ms": None, "timeout_ms": None},
@@ -205,3 +238,20 @@ def test_command_returned_without_integration_is_tool_error(monkeypatch, tmp_pat
     )
     assert result.status == "error"
     assert "TERMINAL_INTEGRATION_REQUIRED" in (result.content or "")
+
+
+def test_handoff_replay_after_the_session_is_gone_reports_it(tool_service, tmp_path) -> None:
+    """后端重启或会话被淘汰后才交还：会话已不在，结果照常让等待占位收尾。"""
+    context = _context(tmp_path)
+    returned = TerminalHandoffTool().execute(
+        session_id="term_missing",
+        reason="password",
+        execution_context=replace(
+            context,
+            user_decision=DecisionBody(
+                tool_call_id=context.tool_call_id, tool_name="terminal_handoff", decision="approve"
+            ),
+        ),
+    )
+    assert returned.status == "success"
+    assert "no longer exists" in (returned.content or "")

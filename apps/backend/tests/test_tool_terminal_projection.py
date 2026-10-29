@@ -1144,7 +1144,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
         "error": None,
         "usage": None,
         "contextWindowTotal": None,
-        "launch": {"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+        "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
     }
     projector.state_service.publish_state(task_id, state)
 

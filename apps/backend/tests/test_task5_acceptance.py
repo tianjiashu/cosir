@@ -20,7 +20,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
-from app.core.conversation_run_ledger import ConversationRunLedger
+from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.core.events import AssistantTextDeltaEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models import ConversationRunError, ConversationRunStatus
@@ -70,7 +70,7 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
     sequence = store.context.max_sequence(store.task.id) + 1
     message_id = None
     if message["role"] == "user":
-        # 落库的 user 行必须带身份（运行期是 inbox 行 id，见 ``prepare_input``）与展示绑定；
+        # 落库的 user 行必须带身份（运行期是 message_queue 行 id，见 ``prepare_input``）与展示绑定；
         # 测试用 sequence 充当唯一身份、正文作展示文本。
         message_id = sequence
         if metadata is None:
@@ -274,7 +274,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
             raise RuntimeError("SSE failed after commit")
 
     monkeypatch.setattr(
-        "app.core.conversation_run_ledger.get_conversation_event_projector",
+        "app.core.workflow.conversation_run_ledger.get_conversation_event_projector",
         lambda: FailingProjector(),
     )
     stats = ConversationRunUsageStats(**_USAGE)

@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from terminal_test_support import capture_terminal_effects, geometry, session_entries
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.terminal_input import TerminalWait
-from app.tools.terminal_runtime.terminal_session_service import TerminalSessionService
+from app.tools.terminal_runtime.inputs import TerminalWait
+from app.tools.terminal_runtime.session_service import TerminalSessionService
 
 _ROOT = Path(__file__).resolve().parents[3]
 _WORKER = _ROOT / "target" / "debug" / ("terminal-worker.exe" if os.name == "nt" else "terminal-worker")
@@ -37,12 +38,15 @@ def terminal(request: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> A
     # 用户配置可能很慢或吞掉集成，测试使用干净的 HOME。
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ZDOTDIR", str(tmp_path))
-    service = TerminalSessionService(on_task_sessions_changed=lambda _task: None)
-    meta = service.start(
+    capture_terminal_effects(monkeypatch)
+    service = TerminalSessionService()
+    runtime = service.start(
         task_id=1, workspace_root=str(tmp_path), shell=shell,
         created_by="agent", run_id=1,
     )
-    session_id = str(meta["session_id"])
+    runtime.wait_for_integration()  # 与 terminal_start 工具一致
+    meta = runtime.snapshot()
+    session_id = runtime.session_id
     try:
         yield _Terminal(service, session_id, meta)
     finally:
@@ -50,7 +54,7 @@ def terminal(request: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> A
 
 
 class _Terminal:
-    def __init__(self, service: TerminalSessionService, session_id: str, meta: dict) -> None:
+    def __init__(self, service: TerminalSessionService, session_id: str, meta: Any) -> None:
         self.service = service
         self.session_id = session_id
         self.meta = meta
@@ -58,9 +62,8 @@ class _Terminal:
 
     def write(self, input: dict[str, Any], **wait: Any) -> Any:
         self._ops += 1
-        return self.service.write(
-            self.session_id, task_id=1, operation_id=f"op{self._ops}", input=input,
-            wait=TerminalWait(**wait) if wait else None, run_id=1,
+        return self.service.require(self.session_id, 1).write(
+            input, f"op{self._ops}", TerminalWait(**wait) if wait else None, run_id=1,
             tool_call_id=f"call-w{self._ops}", is_cancelled=lambda: False,
         )
 
@@ -69,14 +72,11 @@ class _Terminal:
                           **(wait or {"until": "command_returned", "timeout_ms": 10000}))
 
     def read(self, **kwargs: Any) -> Any:
-        self._ops += 1
-        return self.service.read(self.session_id, task_id=1, run_id=1,
-                                 tool_call_id=f"call-r{self._ops}",
-                                 is_cancelled=lambda: False, **kwargs)
+        return self.service.require(self.session_id, 1).read(is_cancelled=lambda: False, **kwargs)
 
 
 def test_integration_ready_and_command_output_range(terminal: _Terminal) -> None:
-    assert terminal.meta["integration"]["status"] == "ready", terminal.meta
+    assert "shell integration" not in terminal.meta.summary, terminal.meta
     result = terminal.line("printf 'alpha\\nbeta\\n'")
     assert result.wait_result["end_reason"] == "command_returned", result.text
     header = result.text.splitlines()[1]
@@ -104,6 +104,32 @@ def test_long_wrapped_line_is_one_logical_line(terminal: _Terminal) -> None:
     assert any(line.endswith(f"│{text}") for line in result.text.splitlines()), result.text
 
 
+def test_full_screen_app_screen_view_text_input_and_stable_line_numbers(
+    terminal: _Terminal,
+) -> None:
+    if os.name == "nt" or shutil.which("less") is None:
+        pytest.skip("less is not available")
+    terminal.line("echo before-less")
+    marker = next(
+        line for line in terminal.read(tail=10).text.splitlines() if line.endswith("│before-less")
+    )
+    number = int(marker.split("│")[0])
+    opened = terminal.write({"type": "line", "text": "seq 1 200 | less"},
+                            until="match", pattern="^1$", timeout_ms=5000)
+    assert opened.screen and "s1│1" in opened.text, opened.text
+    # 24 行终端里 less 显示 23 行：下移 3 行后才会出现 26。
+    scrolled = terminal.write({"type": "keys", "keys": ["down", "down", "down"]},
+                              until="match", pattern="^26$", timeout_ms=5000)
+    assert scrolled.screen and "s1│4" in scrolled.text, scrolled.text
+    # 全屏期间行号不被屏幕行占用：进入前的输出仍在原行号上。
+    assert terminal.read(start_line=number, limit=1).text.splitlines()[-1] == marker
+    closed = terminal.write({"type": "text", "text": "q"},
+                            until="command_returned", timeout_ms=5000)
+    assert closed.wait_result["end_reason"] == "command_returned", closed.text
+    assert not closed.screen and "s1│" not in closed.text
+    assert terminal.read(start_line=number, limit=1).text.splitlines()[-1] == marker
+
+
 def test_match_and_keys_and_interrupt(terminal: _Terminal) -> None:
     started = terminal.write(
         {"type": "line", "text": "sleep 0.3; echo READY-NOW; sleep 30"},
@@ -111,14 +137,14 @@ def test_match_and_keys_and_interrupt(terminal: _Terminal) -> None:
     )
     assert started.wait_result["end_reason"] == "matched", started.text
     # 命令执行中投影 commandRunning，前端据此决定关闭时是否确认。
-    assert terminal.service.project_task_sessions(1)[0]["commandRunning"] is True
+    assert session_entries(terminal.service, 1)[0]["commandRunning"] is True
     # bash 3.2 在两条简单命令之间（DEBUG trap 内）收到 Ctrl-C 时偶发不报告返回（WP1 已知竞态），
     # 等 sleep 真正开始再中断。
     time.sleep(0.3)
     interrupted = terminal.write({"type": "keys", "keys": ["ctrl_c"]},
                                  until="command_returned", timeout_ms=5000)
     assert interrupted.wait_result["end_reason"] == "command_returned", interrupted.text
-    assert terminal.service.project_task_sessions(1)[0]["commandRunning"] is False
+    assert session_entries(terminal.service, 1)[0]["commandRunning"] is False
     # 历史调出上一条命令：up + enter 重新执行 echo。
     terminal.line("echo recall-me")
     recalled = terminal.write({"type": "keys", "keys": ["up", "enter"]},
@@ -128,21 +154,21 @@ def test_match_and_keys_and_interrupt(terminal: _Terminal) -> None:
 
 def test_user_raw_input_lease_and_resize(terminal: _Terminal) -> None:
     service, session_id = terminal.service, terminal.session_id
-    assert service.user_input(session_id, task_id=1, data=b"echo typed-by-user\r") == "accepted"
-    assert service.project_task_sessions(1)[0]["inputHolder"] == "user"
+    assert service.require(session_id, 1).user_input(b"echo typed-by-user\r") == "accepted"
+    assert session_entries(service, 1)[0]["inputHolder"] == "user"
     seen = terminal.read(wait=TerminalWait(until="match", pattern="^typed-by-user$",
                                            timeout_ms=5000))
     assert seen.wait_result["end_reason"] == "matched"
     assert "user typed lines" in seen.text
-    service.release_user_input(session_id, task_id=1)
-    assert service.project_task_sessions(1)[0]["inputHolder"] is None
-    service.resize(session_id, task_id=1, rows=30, cols=100)
+    service.require(session_id, 1).release_user_input()
+    assert session_entries(service, 1)[0]["inputHolder"] is None
+    service.require(session_id, 1).resize(30, 100)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        if service.list_sessions(task_id=1)[0]["geometry"] == {"rows": 30, "columns": 100}:
+        if geometry(service, session_id) == (30, 100):
             break
         time.sleep(0.05)
-    assert service.list_sessions(task_id=1)[0]["geometry"] == {"rows": 30, "columns": 100}
+    assert geometry(service, session_id) == (30, 100)
     size = terminal.line("stty size")
     assert any(line.endswith("│30 100") for line in size.text.splitlines()), size.text
 

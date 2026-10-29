@@ -79,6 +79,21 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
         task_type="delegate_task",
         parent_task_id=root.id,
     )
+    # Team 节点与委派子 Task 同样挂在 parent_task_id 下；嵌套一层验证后序删除。
+    team_node = get_task_crud().create(
+        workspace.id,
+        "team node",
+        task_type="agent_team_node",
+        parent_task_id=root.id,
+    )
+    nested = get_task_crud().create(
+        workspace.id,
+        "nested",
+        task_type="delegate_task",
+        parent_task_id=team_node.id,
+    )
+    get_conversation_run_crud().create(team_node.id, status="completed")
+    get_conversation_run_crud().create(nested.id, status="completed")
     root_run = get_conversation_run_crud().create(root.id, status="completed")
     child_run = get_conversation_run_crud().create(child.id, status="failed")
     context_crud = get_conversation_task_context_crud()
@@ -186,10 +201,10 @@ def test_task_delete_recollects_children_inside_write_transaction(
     original_collect = service._collect_task_tree_ids
     first_call = True
 
-    def collect_then_pause(task_id: int, session=None) -> set[int]:
+    def collect_then_pause(task_id: int) -> set[int]:
         nonlocal first_call
-        result = original_collect(task_id, session=session)
-        if first_call and session is None:
+        result = original_collect(task_id)
+        if first_call:
             first_call = False
             collected.set()
             assert release.wait(5)
@@ -396,7 +411,7 @@ async def test_delete_task_endpoint_routes_creation_marker_to_guarded_cleanup(
 def test_committed_deletion_closes_task_terminals(storage, tmp_path, monkeypatch, delete_workspace):
     from functools import lru_cache
 
-    from terminal_test_support import make_service
+    from terminal_test_support import active_session_ids, make_service
 
     from app.service import depends
 
@@ -413,7 +428,7 @@ def test_committed_deletion_closes_task_terminals(storage, tmp_path, monkeypatch
         else:
             get_task_service().delete_task(task.id)
         assert workers[0].closed
-        assert terminal.list_sessions(task_id=task.id) == []
+        assert active_session_ids(terminal, task.id) == []
     finally:
         terminal.shutdown()
 
@@ -445,7 +460,7 @@ def test_failed_task_deletion_does_not_close_or_fence_terminal(storage, tmp_path
         assert (
             terminal.start(
                 task_id=task.id, workspace_root=str(tmp_path), run_id=2, created_by="agent"
-            )["status"]
+            ).snapshot().status
             == "running"
         )
     finally:

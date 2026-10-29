@@ -1,16 +1,19 @@
-"""后台结果消息的渲染、父 Agent 用 wait_messages 挂起等待（只看延迟结果登记表），以及子 Run 按触发
-调用回投父 Task。"""
+"""后台结果消息的渲染、父 Agent 用 wait_messages 挂起等待（只看延迟结果登记表），以及委派作业等子
+Task 无事可做后读最新 Run 的结论。"""
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from app.core.tool.background.deferred_job import ManualJob
+from app.core.tool.background.deferred_registry import deferred_registry
+from app.core.tool.handler.child_agent.child_run_job import _deliver_conclusion
 from app.core.tool.handler.wait_messages import WaitMessagesTool
-from app.core.workflow.deferred.deferred_results import deferred_results
-from app.core.workflow.inbox.task_message import BackgroundResultBody
+from app.core.workflow.message_queue.task_message import BackgroundResultBody
 
 _PARENT = 1
 _CHILD = 2
@@ -34,11 +37,11 @@ def test_background_result_renders_tagged_and_escaped() -> None:
 @pytest.fixture(autouse=True)
 def _clean_entries():
     yield
-    deferred_results.drop_task(_PARENT)
+    deferred_registry.drop_task(_PARENT)
 
 
 def _register_child(tool_call_id: str = "call-delegate") -> None:
-    deferred_results.register(
+    deferred_registry.register(
         tool_call_id,
         task_id=_PARENT,
         run_id=1,
@@ -77,123 +80,100 @@ def test_wait_messages_errors_when_nothing_can_wake_it() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 子 Task 的 Run 到终态后，由它的 actor 把结论回投父 Task
+# 委派作业：等子 Task 无事可做，读它最新 Run 的结论交给作业
 # ---------------------------------------------------------------------------
 
-_CHILD_RUN = SimpleNamespace(
-    id=9,
-    status="completed",
-    end_reason="stop",
-    final_output="done",
-    trigger_tool_call_id="call-delegate",
-)
+
+class _ChildActor:
+    def __init__(self) -> None:
+        self.settled = asyncio.Event()
+
+    async def wait_quiescent(self, wait_seconds: float | None = None) -> bool:
+        await self.settled.wait()
+        return True
 
 
-def _child_actor(monkeypatch: pytest.MonkeyPatch, task: SimpleNamespace):
-    from app.core import task_actor as actor_module
-    from app.core.task_actor import TaskActor
+def _child(monkeypatch: pytest.MonkeyPatch, run: Any) -> _ChildActor:
+    from app.service import depends
     from app.task_runtime import task_runtime_space_registry as registry_module
 
-    enqueued: list[tuple[int, Any]] = []
-    monkeypatch.setattr(
-        actor_module.service_depends,
-        "get_task_service",
-        lambda: SimpleNamespace(get_task=lambda _task_id: task),
-    )
+    actor = _ChildActor()
     monkeypatch.setattr(
         registry_module.task_runtime_spaces,
-        "enqueue",
-        lambda task_id, message, **_kw: enqueued.append((task_id, message.body)),
+        "get_or_create",
+        lambda _task_id: SimpleNamespace(actor=actor),
     )
-    return TaskActor(SimpleNamespace(task_id=_CHILD)), enqueued
+    monkeypatch.setattr(
+        depends,
+        "get_task_service",
+        lambda: SimpleNamespace(require_current_run=run),
+    )
+    return actor
+
+
+def _job() -> tuple[ManualJob, list[dict[str, object]]]:
+    job = ManualJob(on_cancel=lambda: None, cancelled_result={"status": "cancelled"})
+    seen: list[dict[str, object]] = []
+    job.on_done(seen.append)
+    return job, seen
 
 
 @pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
-@pytest.mark.parametrize("reason", [None, "user"])
-async def test_delegated_child_reports_each_terminal_run_to_parent(
-    monkeypatch: pytest.MonkeyPatch, status: str, reason: str | None
+async def test_conclusion_is_read_from_the_latest_run_once_the_child_settles(
+    monkeypatch: pytest.MonkeyPatch, status: str
 ) -> None:
-    import json
+    """结论只从 run model 读：不管是哪个 Run 处理了这次输入，落定时的最新 Run 就是结论。"""
+    run = SimpleNamespace(id=9, status=status, end_reason="stop", final_output="done")
+    actor = _child(monkeypatch, lambda _task_id: run)
+    job, seen = _job()
 
-    actor, enqueued = _child_actor(
-        monkeypatch, SimpleNamespace(task_type="delegate_task", parent_task_id=_PARENT)
-    )
-    _register_child()
-    run = SimpleNamespace(**{**vars(_CHILD_RUN), "status": status})
+    waiting = asyncio.create_task(_deliver_conclusion(job, _CHILD, "call-delegate"))
+    await asyncio.sleep(0)
+    assert seen == []
 
-    await actor._report_to_parent(run, reason)
+    actor.settled.set()
+    await waiting
 
-    [(task_id, body)] = enqueued
-    assert task_id == _PARENT
-    assert isinstance(body, BackgroundResultBody) and body.tool_name == "child_agent"
-    assert body.tool_call_id == "call-delegate"
-    assert deferred_results.pending(_PARENT) == []
-    payload = json.loads(body.tool_result)
-    assert (payload["child_task_id"], payload["status"], payload["final_output"]) == (
-        _CHILD,
-        status,
-        "done",
-    )
+    assert seen == [
+        {"child_task_id": _CHILD, "status": status, "end_reason": "stop", "final_output": "done"}
+    ]
 
 
-@pytest.mark.parametrize("reason", ["parent", "edited"])
-async def test_child_stopped_by_parent_or_edit_does_not_report(
-    monkeypatch: pytest.MonkeyPatch, reason: str
-) -> None:
-    """父停止：结论无人需要，回投会把父 Task 又推起来；编辑重跑：紧接着就重跑。"""
-    actor, enqueued = _child_actor(
-        monkeypatch, SimpleNamespace(task_type="delegate_task", parent_task_id=_PARENT)
-    )
-
-    cancelled = SimpleNamespace(**{**vars(_CHILD_RUN), "status": "cancelled"})
-    await actor._report_to_parent(cancelled, reason)
-
-    assert enqueued == []
-
-
-@pytest.mark.parametrize(
-    "task",
-    [
-        SimpleNamespace(task_type="agent_team_node", parent_task_id=_PARENT),
-        SimpleNamespace(task_type="user", parent_task_id=None),
-    ],
-)
-async def test_only_delegated_children_report(
-    monkeypatch: pytest.MonkeyPatch, task: SimpleNamespace
-) -> None:
-    """Team 节点 Task 也挂在主 Task 下，但结论由 Coordinator 收集，不唤醒主 Agent。"""
-    actor, enqueued = _child_actor(monkeypatch, task)
-
-    await actor._report_to_parent(_CHILD_RUN, None)
-
-    assert enqueued == []
-
-
-async def test_child_run_without_a_live_entry_still_reports(
+async def test_failed_wait_finishes_the_job_with_a_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """并入运行中子 Run 的追加消息不登记；子 Run 恰好先结束时它自己开出的新 Run 仍要回投。"""
-    actor, enqueued = _child_actor(
-        monkeypatch, SimpleNamespace(task_type="delegate_task", parent_task_id=_PARENT)
-    )
-    run = SimpleNamespace(**{**vars(_CHILD_RUN), "trigger_tool_call_id": "call-merged"})
+    """子 Task 被删除等读不到结论时以失败结论收尾：父 Agent 不会一直等下去。"""
 
-    await actor._report_to_parent(run, None)
+    def missing(_task_id: int) -> Any:
+        raise KeyError(_task_id)
 
-    [(_, body)] = enqueued
-    assert (body.tool_call_id, body.tool_name) == ("call-merged", "child_agent")
+    actor = _child(monkeypatch, missing)
+    actor.settled.set()
+    job, seen = _job()
+
+    await _deliver_conclusion(job, _CHILD, "call-delegate")
+
+    assert [(result["status"], result["end_reason"]) for result in seen] == [
+        ("failed", "unavailable")
+    ]
 
 
-async def test_child_run_without_trigger_reports_without_call_id(
+async def test_cancelled_wait_leaves_the_cancelled_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """用户在子 Task 里直接发送开出的 Run 没有触发调用，照常回投、不带调用身份。"""
-    actor, enqueued = _child_actor(
-        monkeypatch, SimpleNamespace(task_type="delegate_task", parent_task_id=_PARENT)
+    """撤销作业时等待随之取消，作业已以取消结论收尾，迟到的结论不会覆盖它。"""
+    actor = _child(
+        monkeypatch,
+        lambda _task_id: SimpleNamespace(status="completed", end_reason=None, final_output="x"),
     )
-    run = SimpleNamespace(**{**vars(_CHILD_RUN), "trigger_tool_call_id": None})
+    job, seen = _job()
+    waiting = asyncio.create_task(_deliver_conclusion(job, _CHILD, "call-delegate"))
+    await asyncio.sleep(0)
 
-    await actor._report_to_parent(run, None)
+    job.cancel()
+    waiting.cancel()
+    actor.settled.set()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
 
-    [(_, body)] = enqueued
-    assert body.tool_call_id is None
+    assert seen == [{"status": "cancelled"}]

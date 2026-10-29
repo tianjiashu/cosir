@@ -10,9 +10,9 @@ from pydantic import ValidationError as ModelValidationError
 from app.config.configuration import get_tool_registry
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.handler.agent_team_run import AgentTeamRunTool
-from app.core.tool.handler.mcp_tool import MCPTool
+from app.tools.tool_handler.mcp_tool import MCPTool
 from app.core.tool.handler.agent_team.args.agent_team_args import AgentTeamArgs
-from app.core.tool.handler.mcp.mcp_args import MCPArgs
+from app.tools.tool_models.mcp_args import MCPArgs
 from app.tools.tool_models.read_file_args import ReadFileArgs
 from app.tools.tool_models.terminal_session_args import TerminalWriteArgs
 from app.core.tool.validation.arguments import validate_tool_arguments
@@ -79,12 +79,12 @@ def test_mcp_json_string_is_decoded_once_at_tool_argument_boundary(monkeypatch):
         received.append((server.name, name, arguments))
         return "done"
 
-    monkeypatch.setattr("app.core.tool.handler.mcp_tool.read_mcp_configuration", lambda: None)
+    monkeypatch.setattr("app.tools.tool_handler.mcp_tool.read_mcp_configuration", lambda: None)
     monkeypatch.setattr(
-        "app.core.tool.handler.mcp_tool.enabled_servers",
+        "app.tools.tool_handler.mcp_tool.enabled_servers",
         lambda _: [SimpleNamespace(name="server")],
     )
-    monkeypatch.setattr("app.core.tool.handler.mcp_tool.call_server_tool", call)
+    monkeypatch.setattr("app.tools.tool_handler.mcp_tool.call_server_tool", call)
     observation = MCPTool().execute(**result.arguments)
     assert observation.status == "success"
     assert received == [("server", "remote", value)]
@@ -151,7 +151,6 @@ def test_team_rejects_ambiguous_node_identity(kind):
         {"type": "line", "text": "echo ok"},
         {"type": "keys", "keys": ["ctrl_c"]},
         {"type": "signal", "signal": "interrupt"},
-        {"type": "handoff", "reason": "password"},
     ],
 )
 def test_terminal_strict_union_preserves_input_operations(input_value):

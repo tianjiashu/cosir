@@ -10,9 +10,9 @@ import pytest
 
 from app.assistant_transport.projection.tool_call_event_projection import plan_tool_calls_settled
 from app.core.events import ToolCallsSettledEvent
+from app.core.tool.background import placeholders
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolObservation
-from app.core.workflow.deferred import placeholders
 from app.core.workflow.node_helper import tool_observation_projection as projection_module
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
@@ -96,7 +96,7 @@ def test_run_settlement_skips_deferred_parts() -> None:
                 "role": "assistant",
                 "runId": 3,
                 "parts": [
-                    {"type": "tool-call", "toolCallId": "a", "status": "pending", "deferred": True},
+                    {"type": "tool-call", "toolCallId": "a", "status": "pending", "background": True},
                     {"type": "tool-call", "toolCallId": "b", "status": "running"},
                 ],
             }
@@ -118,7 +118,7 @@ class _Context:
 
     def update_tool_result_metadata(self, _call_id: str, metadata: ToolMessageMetadata):
         self.updates.append(metadata)
-        return metadata.model_copy(update={"deferred": True})
+        return metadata.model_copy(update={"background": True})
 
 
 @pytest.mark.parametrize("status", ["pending", "cancelled"])

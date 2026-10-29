@@ -16,7 +16,7 @@ from app.core.workflow.execution_state.conversation_run_usage_stats import Conve
 from app.models.conversation_run_failure import run_failure_message
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
-from app.core.conversation_run_ledger import ConversationRunLedger
+from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.service.recover_service import RecoverService
 from tests.sdk_fixtures import sdk_completion
 
@@ -200,10 +200,10 @@ def _creation_service(store, monkeypatch, projector):
     service._task = store.tasks
     service._session_factory = store.factory
     monkeypatch.setattr(
-        "app.core.conversation_run_ledger.get_conversation_event_projector", lambda: projector
+        "app.core.workflow.conversation_run_ledger.get_conversation_event_projector", lambda: projector
     )
     monkeypatch.setattr(
-        "app.core.conversation_run_ledger.get_model_config_service",
+        "app.core.workflow.conversation_run_ledger.get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _id: SimpleNamespace(
                 supports_reasoning_effort=False,
@@ -227,8 +227,9 @@ def _creation_service(store, monkeypatch, projector):
 
 def test_create_run_commits_inbox_and_current_run_before_projector(request, monkeypatch):
     """独立连接在事件发布时已能看到整组事实，context 留待模型边界并入。"""
-    from app.core.workflow.inbox.task_message_queue import TaskMessageQueue
-    from app.core.workflow.inbox.task_message import RunLaunch, TaskMessage, UserInputBody
+    from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
+    from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
+    from app.models.conversation_input import UserInputPresentation
 
     store = request.getfixturevalue("canonical_store")
     events = []
@@ -245,7 +246,9 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
 
     service = _creation_service(store, monkeypatch, Projector())
     body = UserInputBody(
-        input_text="hello", display_text="hello", launch=RunLaunch(model_config_id=1)
+        input_text="hello",
+        launch=RunLaunch(model_config_id=1),
+        presentation=UserInputPresentation(display_text="hello"),
     )
     TaskMessageQueue().put(store.task.id, TaskMessage.of(body))
     run = service.create_run(store.task.id, body.launch)
@@ -297,7 +300,7 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
     service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = _RunCrud()
     service._session_factory = None
-    from app.core import conversation_run_ledger as ledger_module
+    from app.core.workflow import conversation_run_ledger as ledger_module
 
     ledger_getter = ledger_module.get_conversation_event_projector
     ledger_module.get_conversation_event_projector = lambda: _Projector()
@@ -339,7 +342,7 @@ def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> 
 
     service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = _RunCrud()
-    from app.core import conversation_run_ledger as ledger_module
+    from app.core.workflow import conversation_run_ledger as ledger_module
 
     original_getter = ledger_module.get_conversation_event_projector
     ledger_module.get_conversation_event_projector = lambda: _Projector()

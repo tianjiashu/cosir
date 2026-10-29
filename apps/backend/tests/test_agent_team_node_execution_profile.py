@@ -141,10 +141,27 @@ def _node_run_profile(
 ) -> AgentRuntimeConfig:
     """生产链路：工厂从节点 Task 的冻结快照与注册表身份合成定义，再按节点 Run 物化。"""
 
-    task = SimpleNamespace(extra={NODE_PROFILE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json")})
+    task = SimpleNamespace(
+        workspace_id=1,
+        extra={NODE_PROFILE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json")},
+    )
     registry = SimpleNamespace(resolve=lambda *_args: registry_profile)
-    with patch.object(runtime_config_module, "get_agent_registry", lambda: registry):
-        return AgentRuntimeConfig.for_run(node_run, task, SimpleNamespace(root_path=""))
+    with (
+        patch.object(runtime_config_module, "get_agent_registry", lambda: registry),
+        patch.object(
+            runtime_config_module,
+            "get_task_service",
+            lambda: SimpleNamespace(get_task=lambda _task_id: task),
+        ),
+        patch.object(
+            runtime_config_module,
+            "get_workspace_service",
+            lambda: SimpleNamespace(
+                get_workspace=lambda _workspace_id: SimpleNamespace(root_path="")
+            ),
+        ),
+    ):
+        return AgentRuntimeConfig.for_run(node_run)
 
 
 def _create_model_config(*, model_name: str, base_url: str) -> int:

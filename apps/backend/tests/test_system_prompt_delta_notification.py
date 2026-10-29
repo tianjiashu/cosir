@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.workflow.inbox.task_message import NoticeBody, notices_to_context
+from app.core.workflow.message_queue.task_message import NoticeBody, notices_to_context
 from app.task_runtime.broadcaster import runtime_notice_broadcaster
 from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
     broadcast_system_prompt_delta,

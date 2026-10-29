@@ -9,10 +9,10 @@ import pytest
 from pydantic import BaseModel
 
 from app.assistant_transport.request import DecisionRequest
-from app.assistant_transport.service import transport_assistant_service as module
+from app.service.conversation_run import tool_decision_service as module
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core.task_actor import SessionConflictError
-from app.core.workflow.inbox.task_message import DecisionBody, TaskMessage
+from app.core.workflow.message_queue.task_message import DecisionBody, TaskMessage
 from app.models.errors.input_errors import UserInputRejectedError
 
 _TASK_ID = 3
@@ -39,12 +39,17 @@ def harness(monkeypatch: pytest.MonkeyPatch):
         "get_tool_registry",
         lambda: SimpleNamespace(get_tool_definition=definitions.__getitem__),
     )
-    service = TransportAssistantService.__new__(TransportAssistantService)
-    service._tasks = SimpleNamespace(get_task=lambda _id: SimpleNamespace(id=_id))
-    service._context = SimpleNamespace(
+    context = SimpleNamespace(
         awaiting_decision_tool=lambda _task_id, call_id: awaiting.get(call_id)
     )
-    service._queue = SimpleNamespace(pending_nowait=lambda _task_id: list(queued))
+    queue = SimpleNamespace(pending_nowait=lambda _task_id: list(queued))
+    monkeypatch.setattr(module.service_depends, "get_conversation_task_context_service", lambda: context)
+    monkeypatch.setattr(module.service_depends, "get_task_message_queue", lambda: queue)
+    monkeypatch.setattr(
+        module.service_depends, "get_tool_decision_service", lambda: module.ToolDecisionService()
+    )
+    service = TransportAssistantService.__new__(TransportAssistantService)
+    service._tasks = SimpleNamespace(get_task=lambda _id: SimpleNamespace(id=_id))
     return SimpleNamespace(
         service=service,
         enqueued=enqueued,

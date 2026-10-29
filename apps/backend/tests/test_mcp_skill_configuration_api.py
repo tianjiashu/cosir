@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from app.app import app
 from app.service.configuration import mcp_configuration_service, skill_configuration_service
-from app.core.tool.handler.mcp import mcp_client
-from app.core.tool.handler.skill import skill_catalog, skill_configuration
+from app.service.configuration import mcp_client
+from app.service.configuration import skill_catalog, skill_configuration
 
 
 def _write_skill(root, name: str) -> None:

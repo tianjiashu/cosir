@@ -34,11 +34,10 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.config.constant import Constant
-from app.core import run_driver
+from app.core.workflow import run_driver
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.llm_provider.model_failure import classify_model_failure
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
-from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models import conversation_run_failure as failure_catalog
 from app.models.conversation_run_failure import (
@@ -100,8 +99,8 @@ def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) 
 
 
 def _drive_run(run_id: int) -> Awaitable[None]:
-    """以空 mailbox 驱动一条 Run。"""
-    return run_driver.RunDriver(RunMailbox()).drive(SimpleNamespace(id=run_id, task_id=3))
+    """驱动一条 Run（本次执行的事实由 ``RuntimeContext.for_run`` 只凭 Run 装配）。"""
+    return run_driver.RunDriver().drive(SimpleNamespace(id=run_id, task_id=3))
 
 
 def _make_runtime(
@@ -117,9 +116,7 @@ def _make_runtime(
     """
 
     tasks = SimpleNamespace(get_task=lambda task_id: SimpleNamespace(id=task_id, workspace_id=9))
-    workspaces = SimpleNamespace(get_workspace=lambda ws_id: SimpleNamespace(id=ws_id))
     monkeypatch.setattr(run_driver, "get_task_service", lambda: tasks)
-    monkeypatch.setattr(run_driver, "get_workspace_service", lambda: workspaces)
     monkeypatch.setattr(
         run_driver,
         "get_conversation_run_ledger",
@@ -161,7 +158,7 @@ def _record_state() -> ConversationStateSnapshot:
         error=None,
         usage=None,
         contextWindowTotal=None,
-        launch={"modelConfigId": None, "reasoningEffort": None, "banTools": []},
+        launch={"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
     )
     return state
 

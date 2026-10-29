@@ -741,9 +741,8 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     registry_stub = SimpleNamespace()
 
     class _RecoverService:
-        def recover_orphaned_runs(self) -> list[Any]:
-            recorder.calls.append("recover_runs")
-            return []
+        def recover_after_restart(self) -> None:
+            recorder.calls.append("recover_after_restart")
 
     class _Spaces:
         def bind_loop(self, _loop: Any) -> None:
@@ -761,11 +760,6 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         record("get_recover_service", _RecoverService()),
     )
     monkeypatch.setattr(lifespan_module, "task_runtime_spaces", _Spaces())
-    monkeypatch.setattr(
-        lifespan_module,
-        "get_task_service",
-        lambda: SimpleNamespace(list_task_ids_to_dispatch=lambda: []),
-    )
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", record("close_deps"))
     monkeypatch.setattr(lifespan_module, "build_tool_registry", lambda: "tool-registry")
     monkeypatch.setattr(
@@ -853,32 +847,23 @@ def test_lifespan_happy_path_marks_ready_then_stopped(
     assert stubbed_lifespan.shutdown_logging_calls == 2
 
 
-def test_lifespan_logs_recovered_runs_path(
+def test_lifespan_recovers_after_binding_loop_and_before_ready(
     stubbed_lifespan: _Recorder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """存在遗留 active run 时必须走「收敛并记 info」分支，不得因日志字段缺项崩溃。"""
-
-    from types import SimpleNamespace
+    """重启恢复会物化 space、投递结论，须在绑定事件循环之后、SESSION_START（就绪）之前执行一次。"""
 
     boot_file = _boot_state_file(monkeypatch, tmp_path)
     _write_phase(boot_file, "booting")
     paths.override(DATA_DIR=tmp_path)
 
-    class _RecoverServiceWithRecovered:
-        def recover_orphaned_runs(self) -> list[Any]:
-            stubbed_lifespan.calls.append("recover_runs")
-            return [
-                SimpleNamespace(id=101, trigger_tool_call_id=None),
-                SimpleNamespace(id=202, trigger_tool_call_id=None),
-            ]
-
-    monkeypatch.setattr(
-        lifespan_module, "get_recover_service", lambda: _RecoverServiceWithRecovered()
-    )
-
     _run_lifespan_once()
 
-    assert "recover_runs" in stubbed_lifespan.calls
+    calls = stubbed_lifespan.calls
+    assert calls.count("recover_after_restart") == 1
+    assert calls.index("bind_loop") < calls.index("recover_after_restart")
+    assert calls.index("set_tool_registry") < calls.index("recover_after_restart")
+    start_event = next(c for c in calls if c.startswith("safe_fire:"))
+    assert calls.index("recover_after_restart") < calls.index(start_event)
     assert _read_state(boot_file)["phase"] == "stopped"
 
 

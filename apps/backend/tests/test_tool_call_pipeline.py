@@ -14,8 +14,8 @@ from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCal
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper import tool_observation_projection as projection
-from app.core.workflow.inbox.run_mailbox import RunMailbox
-from app.core.workflow.inbox.task_message import NoticeBody, TaskMessage
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import observation_node, prepare_input_node, tools_node
 from app.models.enums.conversation_run_status import RunTransition

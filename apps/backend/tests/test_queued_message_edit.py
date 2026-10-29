@@ -21,7 +21,7 @@ from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
 )
 from app.core.task_actor import SessionConflictError
-from app.core.workflow.inbox.task_message import RunLaunch, TaskMessage, UserInputBody
+from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_run_record import ConversationRunRecord
@@ -134,12 +134,14 @@ def test_refresh_publishes_nothing_when_the_projection_is_unchanged(states) -> N
 _LAUNCH = RunLaunch(
     agent_id="child-agent",
     model_config_id=5,
-    options=ConversationRunOptions(ban_tools=["web_search"], reasoning_effort="high"),
+    options=ConversationRunOptions(disabled_tool_groups=["联网工具"], reasoning_effort="high"),
 )
 
 
 def _queued_input(text: str = "old") -> TaskMessage:
-    body = UserInputBody(display_text=text, input_text=text, launch=_LAUNCH)
+    body = UserInputBody(
+        input_text=text, launch=_LAUNCH, presentation=UserInputPresentation(display_text=text)
+    )
     return TaskMessage.of(body, delivery="next_run", message_id=42)
 
 
@@ -178,9 +180,9 @@ def _service(queue: _Queue) -> SimpleNamespace:
         )
         # 真实 ``prepare`` 按请求重组 launch（编辑请求不带禁用工具），这里模拟一份不同的。
         body = UserInputBody(
-            display_text=command.display_text,
             input_text=command.display_text,
             launch=RunLaunch(model_config_id=model_config_id, agent_id=agent_id),
+            presentation=UserInputPresentation(display_text=command.display_text),
         )
         return TaskMessage.of(body)
 
@@ -199,7 +201,7 @@ async def test_edit_keeps_identity_delivery_and_launch_and_refreshes_projection(
 
     [(task_id, message_id, edited)] = queue.updated
     assert (task_id, message_id) == (_TASK_ID, 42)
-    assert edited.body.display_text == "new"
+    assert edited.body.presentation.display_text == "new"
     assert edited.body.launch == _LAUNCH
     assert edited.delivery == "next_run"
     # 能力校验按原配置：消息最终在那个模型上运行；附件路径从原消息的展示绑定恢复。

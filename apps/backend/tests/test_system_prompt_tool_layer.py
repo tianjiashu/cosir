@@ -20,9 +20,9 @@ from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import main_agent
 from app.core.context import system_prompt_builder as spb
 from app.core.tool.schemas.tool_names import TOOL_MCP, TOOL_SKILL
-from app.core.tool.handler.mcp import mcp_client
-from app.core.tool.handler.skill import skill_catalog
-from app.core.tool.handler.skill.skill_catalog import SkillInfo
+from app.service.configuration import mcp_client
+from app.service.configuration import skill_catalog
+from app.service.configuration.skill_catalog import SkillInfo
 from app.utils.path import system_cosir as paths
 
 _DELEGATION_TOOLS = ("read_file", "delegate_task")

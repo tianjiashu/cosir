@@ -290,6 +290,50 @@ def test_live_refresh_follows_child_task_latest_run_and_ignores_old_run_events()
     assert {status for _, _, status in sources.metadata_updates} == {"cancelled"}
 
 
+def test_live_refresh_follows_a_suspended_child_run() -> None:
+    """子 Agent 挂起（等审批 / 等消息）时委派卡片也要跟上，不能停在 running。"""
+    rows = _tool_rows(
+        (
+            "delegate-call",
+            {
+                "kind": "delegation-result",
+                "title": "Review",
+                "child_task_id": 2,
+                "status": "running",
+            },
+        ),
+        (
+            "send-call",
+            {
+                "kind": "child-agent-result",
+                "operation": "send",
+                "child_task_id": 2,
+                "status": "running",
+            },
+        ),
+        (
+            "status-call",
+            {
+                "kind": "child-agent-result",
+                "operation": "status",
+                "child_task_id": 2,
+                "status": "running",
+            },
+        ),
+    )
+    sources = _Sources(rows)
+    service = _service(sources)
+    service.get_state(1)
+
+    sources.runs[21].status = "suspended"
+    service.refresh_parent_delegation(2, 21, "suspended")
+
+    state = service.get_state(1)
+    assert _display_by_call(state, "delegate-call")["status"] == "suspended"
+    assert _display_by_call(state, "send-call")["status"] == "suspended"
+    assert {status for _, _, status in sources.metadata_updates} == {"suspended"}
+
+
 def test_event_projection_persists_status_when_parent_tool_row_arrives_after_child_completion() -> (
     None
 ):
