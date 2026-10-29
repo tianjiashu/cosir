@@ -1,4 +1,4 @@
-"""交互终端工具族的共享辅助：取消检查、领域错误与 write / read 观察归一化为 ``ToolObservation``。
+"""交互终端工具族的共享辅助：取消检查、领域错误与 write / read / handoff 观察归一化为 ``ToolObservation``。
 
 展示字段投影由 ``tools/display/terminal_display.py`` 负责；本模块不持有会话状态。
 """
@@ -11,6 +11,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.tools.display.terminal_display import build_terminal_observation_display_data
 from app.tools.terminal_runtime.errors import (
     TerminalInputHeldByUserError,
@@ -27,9 +28,15 @@ _STATUS_HINTS: dict[type[TerminalSessionError], str] = {
 
 
 def cancelled(context: ToolExecutionContext) -> bool:
-    """查询本工具所属 Task 是否收到停止信号。"""
+    """本 Task 收到停止信号，或用户单独取消了这次调用。
 
-    return cancellation_registry.is_cancelled(context.task_id)
+    条件等待在工具线程里持锁等待，只靠这里复查取消：单次调用的取消也要能打断它，不能只认 Task 级
+    信号（thread 工具的执行器只在 handler 执行前检查一次）。
+    """
+
+    return cancellation_registry.is_cancelled(context.task_id) or (
+        tool_call_cancellation_registry.is_cancelled(context.task_id, context.tool_call_id)
+    )
 
 
 def service_error_observation(tool_name: str, exc: TerminalSessionError) -> ToolObservation:
@@ -48,16 +55,13 @@ def service_error_observation(tool_name: str, exc: TerminalSessionError) -> Tool
 
 
 def observation_result(tool_name: str, result: TerminalObservationResult) -> ToolObservation:
-    """write / read 的观察文本原样交给模型；后台等待与交接声明挂起，后台占位标记 ``deferred``。"""
+    """write / read / handoff 的观察文本原样交给模型，展示数据投影动作行。"""
 
-    observation = tool_success(
+    return tool_success(
         tool_name=tool_name,
         content=result.text,
         display_data=build_terminal_observation_display_data(result),
-        suspend=result.suspended,
     )
-    observation.deferred = result.deferred
-    return observation
 
 
 def with_terminal_errors(

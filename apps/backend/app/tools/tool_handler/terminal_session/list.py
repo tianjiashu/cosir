@@ -41,8 +41,10 @@ class TerminalListTool(HandlerBase):
     def execute(self, execution_context: ToolExecutionContext) -> ToolObservation:
         if cancelled(execution_context):
             return tool_cancelled(self.name)
-        service = service_depends.get_terminal_session_service()
-        sessions = service.summarize_sessions(task_id=execution_context.task_id)
+        runtimes = service_depends.get_terminal_session_service().task_runtimes(
+            execution_context.task_id
+        )
+        sessions = [runtime.summary_line() for runtime in runtimes]
         lines = sessions or ["no terminal sessions"]
         return tool_success(
             tool_name=self.name,

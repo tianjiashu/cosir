@@ -1,7 +1,7 @@
 """``terminal_start`` handler：Agent 新建 Task 所有的交互终端。
 
-PTY 创建、shell 解析、cwd 边界校验与容量判定都在 ``TerminalSessionService``；本模块只做参数
-透传、取消前置检查与结果归一化。
+PTY 创建、shell 解析、cwd 边界校验与容量判定在 ``TerminalSessionService``（与用户新建共用）；
+本模块负责 Agent 专属的部分：新建后等 shell 集成就绪，再把元数据归一化为观察。
 """
 
 import platform
@@ -22,7 +22,8 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.service import depends as service_depends
 from app.tools.display.terminal_display import build_terminal_session_display_data
-from app.tools.terminal_runtime.shell_resolver import ShellResolutionError, ShellResolver
+from app.tools.terminal_runtime.errors import ShellResolutionError
+from app.tools.terminal_runtime.shell_resolver import ShellResolver
 from app.tools.tool_handler.terminal_session.common import (
     cancelled,
     with_terminal_errors,
@@ -63,7 +64,7 @@ class TerminalStartTool(HandlerBase):
             return tool_cancelled(self.name)
 
         def action() -> ToolObservation:
-            session = service_depends.get_terminal_session_service().start(
+            runtime = service_depends.get_terminal_session_service().start(
                 task_id=execution_context.task_id,
                 workspace_root=str(execution_context.workspace_root),
                 shell=shell,
@@ -73,6 +74,10 @@ class TerminalStartTool(HandlerBase):
                 created_by="agent",
                 run_id=execution_context.run_id,
             )
+            if integration == "auto":
+                # Agent 需要立刻知道能否用 command_returned；用户新建不等，集成就绪后经快照通知。
+                runtime.wait_for_integration()
+            session = runtime.describe()
             return tool_success(
                 tool_name=self.name,
                 content=str(session["summary"]),

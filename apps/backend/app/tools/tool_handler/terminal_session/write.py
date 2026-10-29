@@ -13,7 +13,7 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.service import depends as service_depends
-from app.tools.terminal_runtime.terminal_input import TERMINAL_WAIT_DEFERRED, TerminalWait
+from app.tools.terminal_runtime.terminal_input import TerminalWait
 from app.tools.tool_handler.terminal_session.common import (
     cancelled,
     observation_result,
@@ -26,9 +26,9 @@ class TerminalWriteTool(HandlerBase):
     name = TOOL_TERMINAL_WRITE
     description = (
         "Send input to a session and return the lines that appeared after it, in terminal_read's "
-        "format. Submit one line per call; for multi-line scripts use execute_terminal. Use "
-        "input=handoff when the user must type instead (passwords, confirmations you should not "
-        "answer); you are paused until they hand control back."
+        "format. Submit one line per call; for multi-line scripts use execute_terminal. When the "
+        "user must type instead (passwords, confirmations you should not answer), use "
+        "terminal_handoff."
     )
     args_model = TerminalWriteArgs
     timeout_seconds: ClassVar[float] = 55.0
@@ -40,7 +40,6 @@ class TerminalWriteTool(HandlerBase):
         operation_id: str,
         input: dict[str, Any],
         wait: dict[str, Any] | None = None,
-        background: bool | None = None,
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
@@ -49,15 +48,15 @@ class TerminalWriteTool(HandlerBase):
             return tool_cancelled(self.name)
 
         def action() -> ToolObservation:
-            result = service_depends.get_terminal_session_service().write(
-                session_id,
-                task_id=execution_context.task_id,
-                operation_id=operation_id,
-                input=input,
-                wait=TerminalWait.model_validate(wait) if wait is not None else None,
+            runtime = service_depends.get_terminal_session_service().require(
+                session_id, execution_context.task_id
+            )
+            result = runtime.write(
+                input,
+                operation_id,
+                TerminalWait.model_validate(wait) if wait is not None else None,
                 run_id=execution_context.run_id,
                 tool_call_id=execution_context.tool_call_id,
-                background=TERMINAL_WAIT_DEFERRED.resolve_background(background),
                 is_cancelled=lambda: cancelled(execution_context),
             )
             return observation_result(self.name, result)
@@ -74,7 +73,6 @@ class TerminalWriteTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",
-            deferred=TERMINAL_WAIT_DEFERRED,
             display=ToolDisplayHints(
                 verb="输入终端",
                 icon="terminal",

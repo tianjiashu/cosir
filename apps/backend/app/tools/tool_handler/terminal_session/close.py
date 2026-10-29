@@ -40,7 +40,7 @@ class TerminalCloseTool(HandlerBase):
 
         def action() -> ToolObservation:
             session = service_depends.get_terminal_session_service().close(
-                session_id, task_id=execution_context.task_id
+                session_id, task_id=execution_context.task_id, by="agent"
             )
             return tool_success(
                 tool_name=self.name,
