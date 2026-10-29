@@ -23,12 +23,12 @@ from app.tools.tool_handler.delete_tool import build_delete_file_definition
 from app.tools.tool_handler.execute_terminal import build_execute_terminal_definition
 from app.tools.tool_handler.find_files import build_find_files_definition
 from app.tools.tool_handler.list_directory import build_list_directory_definition
-from app.core.tool.handler.mcp_tool import build_mcp_definition
+from app.tools.tool_handler.mcp_tool import build_mcp_definition
 from app.tools.tool_handler.move_tool import build_move_file_definition
 from app.tools.tool_handler.read_file import build_read_file_definition
 from app.tools.tool_handler.replace_tool import build_replace_definition
 from app.tools.tool_handler.search_content import build_search_content_definition
-from app.core.tool.handler.skill_tool import build_skill_definition
+from app.tools.tool_handler.skill_tool import build_skill_definition
 from app.tools.tool_handler.terminal_session import build_terminal_definitions
 from app.core.tool.handler.wait_messages import build_wait_messages_definition
 from app.core.tool.handler.web_extract import build_web_extract_definition

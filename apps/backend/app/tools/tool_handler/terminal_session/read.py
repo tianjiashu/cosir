@@ -13,7 +13,7 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.service import depends as service_depends
-from app.tools.terminal_runtime.terminal_input import TerminalWait
+from app.tools.terminal_runtime.inputs import TerminalWait
 from app.tools.tool_handler.terminal_session.common import (
     cancelled,
     observation_result,

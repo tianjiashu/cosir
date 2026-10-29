@@ -24,7 +24,7 @@ class TerminalListTool(HandlerBase):
     """从运行时服务发现跨 Run 保留的会话，避免依赖历史消息猜测存活状态。
 
     结果是纯文本而非 start / close 那样的 JSON 元数据：每个会话一行，状态措辞与 read / write
-    的 header 同源（``observation_render.session_state_parts``），只保留复用与输入决策要用的事实。
+    的 header 同源（``render.session_state_parts``），只保留复用与输入决策要用的事实。
     """
 
     name = TOOL_TERMINAL_LIST
@@ -44,7 +44,7 @@ class TerminalListTool(HandlerBase):
         runtimes = service_depends.get_terminal_session_service().task_runtimes(
             execution_context.task_id
         )
-        sessions = [runtime.summary_line() for runtime in runtimes]
+        sessions = [runtime.snapshot().summary for runtime in runtimes]
         lines = sessions or ["no terminal sessions"]
         return tool_success(
             tool_name=self.name,

@@ -44,7 +44,7 @@ class TerminalCloseTool(HandlerBase):
             )
             return tool_success(
                 tool_name=self.name,
-                content=str(session["summary"]),
+                content=session.summary,
                 display_data=build_terminal_session_display_data(session),
             )
 

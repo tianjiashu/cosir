@@ -10,7 +10,7 @@
 - ``MacExecuteTerminalArgs``：macOS 宿主，``shell`` 只收 POSIX shell，``command`` /
   ``workdir`` 按 POSIX 语法（``$VAR``、``/Users/...`` 路径）说明。
 
-两个类是各自独立的完整契约（各自声明全部四个字段），不共享基类：平台差异不仅是 ``shell``
+两个类是各自独立的完整契约（各自声明全部字段），不共享基类：平台差异不仅是 ``shell``
 的取值集合，还包括命令语法与路径语法的说明，写成两个自洽的类后，读任何一个类都能拿到该平台
 完整的下发契约。把「另一平台才存在的 shell」暴露给模型只会诱导必然失败的调用（例如在 macOS
 上请求 ``cmd``），因此在参数契约层就按平台收口。
@@ -25,6 +25,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.core.tool.schemas.tool_deferred import DeferredCapability, background_field
+
 # shell 取值集合按平台声明：Windows 与 POSIX 的可执行文件互不存在，故不作成一个大枚举。
 WindowsExecuteTerminalShell = Literal["auto", "cmd", "powershell", "pwsh"]
 MacExecuteTerminalShell = Literal["auto", "sh", "bash", "zsh", "fish", "pwsh"]
@@ -32,102 +34,86 @@ MacExecuteTerminalShell = Literal["auto", "sh", "bash", "zsh", "fish", "pwsh"]
 # 两个平台取值的并集，供 handler 侧类型标注使用（同源派生，不另写一份字面量）。
 ExecuteTerminalShell = WindowsExecuteTerminalShell | MacExecuteTerminalShell
 
+# 命令级超时：handler 按它缺省与钳制，模型可见描述按它插值，二者同源。命令在后端线程里跑、可转到
+# 后台，超时由执行后端杀进程树，没有外层工具子进程的硬超时，所以上限可以覆盖长构建与测试。
+DEFAULT_COMMAND_TIMEOUT_S = 300.0
+MAX_COMMAND_TIMEOUT_S = 3600.0
+
+# 前后台执行：默认前台，前台等到上限仍未结束就自动转后台（结论以 background_result 回投并挂起
+# Agent）；模型可用 ``background`` 一开始就放到后台，用户可把前台等待转走。参数模型（``background``
+# 字段描述）与 handler 都读它，所以放在契约模块。
+EXECUTE_TERMINAL_DEFERRED = DeferredCapability(default_background=False, foreground_limit_s=60.0)
+
+_TIMEOUT_DESCRIPTION = (
+    "Seconds before the command's process tree is killed and the call fails. Defaults to "
+    f"{DEFAULT_COMMAND_TIMEOUT_S:g}, capped at {MAX_COMMAND_TIMEOUT_S:g}. Set it to cover long "
+    "builds or test suites."
+)
+
 
 class WindowsExecuteTerminalArgs(BaseModel):
-    """Windows 宿主上的 execute_terminal 参数。
-
-    与 :class:`MacExecuteTerminalArgs` 是两份互不继承的完整契约：平台差异不仅在 ``shell``
-    的取值集合，还包括命令与路径语法的说明，各自自洽即可独立读懂。下列字段的 ``description``
-    是这些差异的唯一落点。
-    """
+    # 不写类 docstring：它会作为顶层 description 进入模型可见 schema。与 MacExecuteTerminalArgs
+    # 是两份互不继承的完整契约，平台差异（shell 取值、命令与路径语法）只落在下列字段描述里。
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
     shell: WindowsExecuteTerminalShell = Field(
         default="auto",
         description=(
-            "Shell that interprets command. 'auto' runs it through the host default shell "
-            "(cmd.exe on Windows), so use cmd syntax (dir, type, where, %VAR%, &&). Pick "
-            "'powershell' for Windows PowerShell, or 'pwsh' when PowerShell 7 is installed, to "
-            "use PowerShell syntax (Get-ChildItem, $env:VAR, ;) instead. The command must match "
-            "the selected shell; cmd and PowerShell syntax cannot be mixed in one call."
+            "Shell that interprets command. 'auto' uses cmd.exe syntax (dir, type, where, %VAR%, "
+            "&&); 'powershell' (Windows PowerShell) and 'pwsh' (PowerShell 7) use PowerShell "
+            "syntax (Get-ChildItem, $env:VAR, ;). Do not mix the two in one command."
         ),
     )
     command: str = Field(
         min_length=1,
         description=(
-            "Command or multi-line script (newlines allowed, e.g. several commands or a "
-            "here-string) interpreted as a whole by the selected shell with Windows syntax: quoting, "
-            "variable expansion, pipes, and redirection follow that shell, not this tool. It runs "
-            "non-interactively with no stdin, so anything that waits for input or opens a pager "
-            "hangs until the timeout expires."
+            "Command or multi-line script (e.g. several lines or a here-string), interpreted as "
+            "a whole by the selected shell: quoting, expansion, pipes, and redirection follow it."
         ),
     )
-    timeout: float | None = Field(
-        default=None,
-        gt=0,
-        description=(
-            "Command timeout in seconds. Defaults to 60 and is clamped to at most 110; on "
-            "expiry the command's process tree is killed and the call is reported as failed."
-        ),
-    )
+    timeout: float | None = Field(default=None, gt=0, description=_TIMEOUT_DESCRIPTION)
     workdir: str | None = Field(
         default=None,
         description=(
-            "Directory the command runs in, using Windows path syntax such as C:\\repo\\src: "
-            "either an absolute path inside the workspace, or a path relative to the workspace "
-            "root, which is also the default. It must already exist, and paths that leave the "
-            "workspace are rejected."
+            "Directory to run in, e.g. C:\\repo\\src or src: absolute inside the workspace, or "
+            "relative to the workspace root (the default). It must already exist."
         ),
     )
+    background: bool | None = background_field(EXECUTE_TERMINAL_DEFERRED)
 
 
 class MacExecuteTerminalArgs(BaseModel):
-    """macOS 宿主上的 execute_terminal 参数。
-
-    与 :class:`WindowsExecuteTerminalArgs` 是两份互不继承的完整契约，字段说明按 POSIX 语义
-    （``$VAR`` 变量、``/Users/...`` 路径）给出。
-    """
+    # 不写类 docstring（同上）；字段描述按 POSIX 语义给出，Linux 等 POSIX 宿主共用。
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
     shell: MacExecuteTerminalShell = Field(
         default="auto",
         description=(
-            "Shell that interprets command. 'auto' runs it with /bin/sh semantics instead of the "
-            "interactive login zsh, so shell rc files, aliases, and prompt settings do not apply. "
-            "Pick 'sh', 'bash', 'zsh', or 'fish' (or 'pwsh' when PowerShell 7 is installed) to "
-            "use that shell's own syntax (bash [[ ]], zsh arrays, fish builtins); the command "
-            "must match the selected shell."
+            "Shell that interprets command. 'auto' uses /bin/sh, not the interactive login zsh, "
+            "so rc files, aliases, and their PATH additions (nvm, pyenv) do not apply. 'bash', "
+            "'zsh', 'fish', or 'pwsh' enable that shell's own syntax (bash [[ ]], zsh arrays, "
+            "fish builtins)."
         ),
     )
     command: str = Field(
         min_length=1,
         description=(
-            "Command or multi-line script (newlines allowed, e.g. several commands or a heredoc) "
-            "interpreted as a whole by the selected shell with POSIX syntax: quoting, "
-            "$VAR expansion, pipes, and redirection follow that shell, not this tool. It runs "
-            "non-interactively with no stdin, so anything that waits for input or opens a pager "
-            "hangs until the timeout expires."
+            "Command or multi-line script (e.g. several lines or a heredoc), interpreted as a "
+            "whole by the selected shell: quoting, $VAR expansion, pipes, and redirection follow "
+            "it."
         ),
     )
-    timeout: float | None = Field(
-        default=None,
-        gt=0,
-        description=(
-            "Command timeout in seconds. Defaults to 60 and is clamped to at most 110; on "
-            "expiry the command's process tree is killed and the call is reported as failed."
-        ),
-    )
+    timeout: float | None = Field(default=None, gt=0, description=_TIMEOUT_DESCRIPTION)
     workdir: str | None = Field(
         default=None,
         description=(
-            "Directory the command runs in, using POSIX path syntax such as /Users/me/repo/src: "
-            "either an absolute path inside the workspace, or a path relative to the workspace "
-            "root, which is also the default. It must already exist, and paths that leave the "
-            "workspace are rejected."
+            "Directory to run in, e.g. /Users/me/repo/src or src: absolute inside the workspace, "
+            "or relative to the workspace root (the default). It must already exist."
         ),
     )
+    background: bool | None = background_field(EXECUTE_TERMINAL_DEFERRED)
 
 
 def is_windows_host(system_name: str) -> bool:

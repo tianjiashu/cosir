@@ -18,7 +18,7 @@ from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
     TerminalSessionError,
 )
-from app.tools.terminal_runtime.observation_render import TerminalObservationResult
+from app.tools.terminal_runtime.render import TerminalObservationResult
 
 # 受控短提示（约 5 字）：只按错误类型映射，不透传异常正文。
 _STATUS_HINTS: dict[type[TerminalSessionError], str] = {
