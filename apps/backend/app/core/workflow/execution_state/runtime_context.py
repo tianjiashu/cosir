@@ -6,12 +6,12 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from app.config.configuration import get_tool_registry
 from app.core.events import EventSink
 from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     cancellation_registry,
 )
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.execution_state.tool_availability_notice import tool_availability_notice
 from app.core.workflow.inbox.run_mailbox import RunMailbox
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.core.workflow.inbox.task_message import NoticeBody, TaskMessage
@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.llm_provider.openai_model import OpenAIChatModel
     from app.task_runtime.task_runtime_space import TaskRuntimeSpace
+
+# 准入通知的固定前缀：通知文本会成为 canonical 历史的一行，前缀同时充当稳定标识。
+_NOTICE_PREFIX = "Tool availability notice:"
 
 
 @dataclass
@@ -67,23 +70,28 @@ class RuntimeContext:
     ) -> RuntimeContext:
         """为单个 Run 装配运行上下文，并算出本轮的工具准入边界。
 
-        ``allows_tools`` 以 Task 固化的工具名为基准、减去本 Run 的 ``ban_tools``，只供工具执行层在
+        ``allows_tools`` 以 Task 固化的工具名为基准、减去本 Run 冻结的工具组按注册表展开的工具名
+        （组名是用户意图的事实，展开在这里现算，前端不换算），只供工具执行层在
         模型返回调用后做准入拦截。模型绑定始终使用 Task 固化的完整 schema，不得按本轮准入过滤，
         否则会改变同一 Task 的请求前缀并破坏缓存复用。``event_sink`` 由装配方注入（core 不依赖
         Assistant Transport）。
 
         副作用:
             需要时向本次执行的 mailbox 投递本轮工具准入说明（与 space 上次告知的禁用集合比较，
-            规则见 ``tool_availability_notice``），由下一次 prepare_input 写入上下文，并更新
+            规则见 :meth:`tool_availability_notice`），由下一次 prepare_input 写入上下文，并更新
             space 的已告知集合。通知一旦消费即成为 canonical 历史的固定行，是后续 Run 请求前缀
             的一部分，不能改为「只注入本次请求、不落库」，否则下一个 Run 的前缀会从这里分叉。
             投递即视为已告知：通知并入前 Run 就被取消属低概率情形，被禁工具仍由准入拦截兜底。
         """
 
         task_space = task_runtime_spaces.get_or_create(task.id)
-        ban_tools = frozenset(run.options.ban_tools)
+        ban_tools = frozenset(
+            get_tool_registry().tool_groups_to_tool_names(run.options.disabled_tool_groups)
+        )
         allows_tools = frozenset(tool["name"] for tool in task_space.task_tool_schemas) - ban_tools
-        content = tool_availability_notice(task_space.announced_ban_tools, ban_tools, allows_tools)
+        content = cls.tool_availability_notice(
+            task_space.announced_ban_tools, ban_tools, allows_tools
+        )
         if content is not None:
             mailbox.post(
                 TaskMessage.of(NoticeBody(content=content, notice_kind="tool_availability"))
@@ -103,3 +111,67 @@ class RuntimeContext:
     def is_cancelled(self) -> bool:
         """本 Task 是否收到停止信号；只读进程内注册表，节点在多个检查点调用，不查库。"""
         return cancellation_registry.is_cancelled(self.task.id)
+
+    @staticmethod
+    def tool_availability_notice(
+        announced: frozenset[str] | None,
+        banned: frozenset[str],
+        allowed: frozenset[str],
+    ) -> str | None:
+        """返回本轮应投递的工具准入通知文本；``None`` 表示无需通知。
+
+        ``announced`` 是上次已告知模型的禁用集合，``banned`` / ``allowed`` 是本 Run 冻结工具组展开后
+        的禁用与可用工具名（``allows_tools``）。与上次比较、只在必要时生成：通知消费后是 canonical
+        历史的固定行，每个 Run 都重复全量说明会让 context 持续膨胀。工具名一律排序，避免同一集合
+        跨进程产生不同文本（前缀缓存）。
+
+        - ``announced`` 为 ``None``（模型此前被告知了什么未知）：完整说明。
+        - 集合有变化：说明新禁用 / 恢复的工具，并附当前完整禁用列表，使单条通知自洽。
+        - 未变化但仍有禁用：简短提醒，防止模型在长对话里遗忘。
+        - 未变化且全部可用：不通知。
+        """
+
+        if announced is None:
+            return RuntimeContext._full_notice(banned, allowed)
+        if banned == announced:
+            if not banned:
+                return None
+            return (
+                f"{_NOTICE_PREFIX} still disabled for this round, calls to them will be "
+                f"rejected: {RuntimeContext._names(banned)}."
+            )
+        changes = []
+        if newly_banned := banned - announced:
+            changes.append(f"newly disabled: {RuntimeContext._names(newly_banned)}")
+        if re_enabled := announced - banned:
+            changes.append(f"re-enabled: {RuntimeContext._names(re_enabled)}")
+        if not banned:
+            current = "all tools are available now."
+        elif not allowed:
+            current = "all tools are disabled now."
+        else:
+            current = (
+                f"currently disabled, calls to them will be rejected: "
+                f"{RuntimeContext._names(banned)}."
+            )
+        return f"{_NOTICE_PREFIX} changed since last round ({'; '.join(changes)}); {current}"
+
+    @staticmethod
+    def _full_notice(banned: frozenset[str], allowed: frozenset[str]) -> str:
+        """``announced`` 未知时的一次性完整说明：当前禁用清单与可用工具名。"""
+
+        if not banned:
+            return f"{_NOTICE_PREFIX} all tools are available for this round."
+        if not allowed:
+            return f"{_NOTICE_PREFIX} all tools are not available for this round."
+        return (
+            f"{_NOTICE_PREFIX} the following tools are disabled for this round and calls "
+            f"to them will be rejected: {RuntimeContext._names(banned)}. "
+            f"{RuntimeContext._names(allowed)} tools available."
+        )
+
+    @staticmethod
+    def _names(tools: set[str] | frozenset[str]) -> str:
+        """工具名排序后逗号分隔：同一集合跨进程生成同一文本，保住前缀缓存。"""
+
+        return ", ".join(sorted(tools))
