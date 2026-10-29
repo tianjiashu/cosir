@@ -29,6 +29,8 @@ from app.lifespan import lifespan
 
 app = FastAPI(title="coding-agent backend", lifespan=lifespan)
 
+install_request_logging(app, log)
+# CORS 必须最后注册（最外层）：请求日志 middleware 收敛出的 500 才会带上 CORS 头。
 # Desktop WebView connects directly to the dynamically allocated loopback port.
 # Keep this limited to local desktop/dev origins; the backend itself remains
 # bound to 127.0.0.1 and is never exposed as a network service.
@@ -57,7 +59,6 @@ app.add_middleware(
     ],
 )
 
-install_request_logging(app, log)
 install_http_exception_logging(app, log)
 # 框架校验错误的响应形状（RequestValidationError 类型的唯一注册者）。
 install_request_validation_error_handler(app)

@@ -8,7 +8,7 @@
 职责边界：
 
 - 负责：日志管线安装（失败窗口先建最小管线，配置加载后按最终数据根重建）、``Settings``
-  加载、服务依赖初始化、遗留 Run 收敛、Hook 注册表播种、
+  加载、服务依赖初始化、重启恢复（编排见 ``RecoverService``）、Hook 注册表播种、
   工具系统装配、``SESSION_START`` / ``SESSION_END`` 触发、启动状态标记、
   系统级 ``.cosir`` 目录创建。
 - 不负责：HTTP 路由、中间件安装、FastAPI 实例的创建与导出。
@@ -24,11 +24,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
-from app.service.configuration.agent_team_configuration_registry import (
-    AgentTeamConfigurationRegistry,
-    set_agent_team_registry,
-)
 from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
@@ -47,11 +42,17 @@ from app.core.agents.agent_profile_config import (
     ensure_system_agent_team_config_dir,
 )
 from app.core.hook import HookContext, HookEvent, HookInterceptor
-from app.core.workflow.deferred.deferred_results import deferred_results
-from app.tools.tool_registration import build_tool_registry
+from app.core.tool.background.deferred_registry import deferred_registry
+from app.service.configuration.agent_team_configuration_registry import (
+    AgentTeamConfigurationRegistry,
+    set_agent_team_registry,
+)
 from app.service.configuration.agent_team_configuration_service import (
     AgentTeamConfigurationService,
     set_agent_team_configuration_service,
+)
+from app.service.configuration.agent_team_configuration_source import (
+    AgentTeamConfigurationScopeSource,
 )
 from app.service.configuration.main_agent_prompt_configuration_service import (
     MainAgentPromptConfigurationService,
@@ -60,10 +61,10 @@ from app.service.depends import (
     close_service_dependencies,
     get_conversation_task_state_service,
     get_recover_service,
-    get_task_service,
     initialize_service_dependencies,
 )
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.tools.tool_registration import build_tool_registry
 from app.utils.json_utils import JsonFileError, read_json_object
 from app.utils.path import system_cosir as paths
 from app.utils.path.system_cosir import system_cosir_dir
@@ -198,52 +199,16 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     set_agent_team_registry(team_registry)
     set_tool_registry(build_tool_registry())
 
-    # 恢复过程会创建 AgentTeamCoordinator，消费已装配的工具系统，因此统一放在运行时依赖
-    # 就绪之后，并确保在后端 ready 前完成。
-    recovered_runs = get_recover_service().recover_orphaned_runs()
-    if recovered_runs:
-        log.info(
-            "conversation_runs_recovered_after_restart",
-            extra={
-                "msg": "后端启动时已将遗留 active run 收敛为 cancelled",
-                "data": {"run_ids": [run.id for run in recovered_runs]},
-            },
-        )
-    from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
-
-    recovered_team_runs = get_agent_team_coordinator().recover_after_restart()
-    if recovered_team_runs:
-        log.info(
-            "agent_team_runs_recovered_after_restart",
-            extra={
-                "msg": "后端启动时已将遗留 Agent Team 收敛为 cancelled",
-                "data": {"count": recovered_team_runs},
-            },
-        )
-    # 当前产品只启动新鲜 ConversationRun；旧 run 不在启动期隐式重放。
-    # Task 的 actor 随 space 物化拉起：先绑定事件循环，再为有待处理消息或挂起 Run 的 Task 物化
-    # space——重启前已到达的消息由 actor 照常处理，挂起的 Run 照常等唤醒。
+    # 先接好运行时（事件循环、延迟结果登记表与看板监听），再做重启恢复：恢复会物化 space、拉起
+    # actor 并投递重启结论。恢复要消费已装配的工具系统，且须在后端 ready 前完成；步骤顺序见
+    # ``RecoverService.recover_after_restart``。
     task_runtime_spaces.bind_loop(asyncio.get_running_loop())
-    deferred_results.open()
-    # 后台工作看板随登记表变化整表重投影进 Transport snapshot（通知线程、锁外）。
-    deferred_results.set_listener(
+    deferred_registry.open()
+    # 看板与前台等待随登记表变化整表重投影进 Transport snapshot（通知线程、锁外）。
+    deferred_registry.set_listener(
         lambda task_id: get_conversation_task_state_service().refresh_deferred_results(task_id)
     )
-    dispatch_task_ids = get_task_service().list_task_ids_to_dispatch()
-    for task_id in dispatch_task_ids:
-        task_runtime_spaces.get_or_create(task_id)
-    # 终端会话与延迟结果不跨重启：挂起在终端上的 Run 等不到结论，投递一条重启结论把它唤醒；
-    # 其余 Task 在本进程首次驱动时另得一条失效提醒（见 ``restart_settlement``）。
-    # 委派子 Run 已被恢复流程收敛为 cancelled：按触发调用把结论回投给等它的父 Agent。
-    from app.core.workflow.deferred.restart_settlement import (
-        interrupt_pending_placeholders,
-        settle_restarted_child_runs,
-        wake_suspended_terminal_runs,
-    )
-
-    interrupt_pending_placeholders()
-    settle_restarted_child_runs(recovered_runs)
-    wake_suspended_terminal_runs(dispatch_task_ids)
+    get_recover_service().recover_after_restart()
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
     # 统一经 HookInterceptor 收口。
@@ -258,8 +223,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             # 先禁止延迟结果投递（撤销全部条目、等在途投递写完）：之后关闭终端会把会话结束为
             # closed、唤醒等待线程与交接，它们不得在关闭期间写 task_messages。再停下全部 actor
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
-            await asyncio.to_thread(deferred_results.close)
-            deferred_results.set_listener(None)
+            await asyncio.to_thread(deferred_registry.close)
+            deferred_registry.set_listener(None)
             await task_runtime_spaces.aclose()
             await asyncio.to_thread(close_service_dependencies)
             # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
