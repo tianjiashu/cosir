@@ -14,6 +14,7 @@ import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
 import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
+import { TransportHistoryContext } from "@/lib/assistant/transport-history-context";
 
 /**
  * 只读查看子 Task：runtime 挂载即打开一条 Task 长订阅，卸载时关闭；不按 runId 去重或重订。
@@ -36,7 +37,7 @@ function AgentRunTransport({ taskId, initialState, onDisconnect, onStateCommit }
     backend: getBackendRuntimeSnapshot,
     setIssue,
   }), [taskId, traceId]));
-  const { runtime, open } = useTaskAssistantReadonlyTransportRuntime(taskId, {
+  const { runtime, open, loadEarlierHistory } = useTaskAssistantReadonlyTransportRuntime(taskId, {
     initialState,
     readonly: true,
     // 阅读页按后端 generation 整体重挂（见 WorkbenchAgentRunSurface），这里只需随可用性开关。
@@ -62,12 +63,14 @@ function AgentRunTransport({ taskId, initialState, onDisconnect, onStateCommit }
   }, [open]);
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      <div className="flex h-full min-h-0 flex-col">
-        <TransportStatus issue={issue} onRetry={() => recovery.resync(null)} />
-        <div className="min-h-0 flex-1">
-          <AgentReadonlyMessages taskId={taskId} />
+      <TransportHistoryContext.Provider value={loadEarlierHistory}>
+        <div className="flex h-full min-h-0 flex-col">
+          <TransportStatus issue={issue} onRetry={() => recovery.resync(null)} />
+          <div className="min-h-0 flex-1">
+            <AgentReadonlyMessages taskId={taskId} />
+          </div>
         </div>
-      </div>
+      </TransportHistoryContext.Provider>
     </AssistantRuntimeProvider>
   );
 }

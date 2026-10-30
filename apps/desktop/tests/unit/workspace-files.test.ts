@@ -64,12 +64,10 @@ describe("workspace file sessions", () => {
       "apps/backend",
     ]));
   it("Workbench 文件入口不依赖 Agent 标签且不重复打开", () => {
-    useWorkbenchStore.getState().ensureWorkspace(2);
-    useWorkbenchStore.getState().openFiles(2, "/workspace", "workspace");
-    useWorkbenchStore.getState().openFiles(2, "/workspace", "workspace");
-    expect(
-      useWorkbenchStore.getState().tabs.filter((t) => t.kind === "files"),
-    ).toHaveLength(1);
-    expect(useWorkbenchStore.getState().panelOpen).toBe(true);
+    useWorkbenchStore.getState().openFiles(2);
+    useWorkbenchStore.getState().openFiles(2);
+    const session = useWorkbenchStore.getState().sessions[2];
+    expect(session.tabs.filter((t) => t.kind === "files")).toHaveLength(1);
+    expect(session.panelOpen).toBe(true);
   });
 });

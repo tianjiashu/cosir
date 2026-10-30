@@ -1,4 +1,4 @@
-import type { TransportState } from "@/lib/assistant/contract";
+import type { TransportHistoryPage, TransportState } from "@/lib/assistant/contract";
 
 export class TransportSnapshotValidationError extends Error {
   constructor(path: string, expectation: string) {
@@ -292,25 +292,42 @@ function validateBackgroundTask(value: unknown, path: string, seenIds: Set<strin
   if (entry.endedAt !== null) requireString(entry.endedAt, `${path}.endedAt`);
 }
 
-export function parseTransportState(value: unknown): TransportState {
-  const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["title", "messages", "activity", "terminal_sessions", "background_tasks", "foreground_waits", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
-  if (typeof state.title !== "string" || state.title.trim() === "") throw new TransportSnapshotValidationError("title", "非空字符串");
-  const ids = new Set<string>();
-  if (!Array.isArray(state.messages)) throw new TransportSnapshotValidationError("messages", "数组");
-  state.messages.forEach((rawMessage, index) => {
-    const path = `messages[${index}]`;
-    const message = requireRecord(rawMessage, path);
-    requireExactKeys(message, ["id", "role", "parts", "runId", "outcome"], path);
-    validateMessageBody(message, path, ids);
-    if (requireNullableNonNegativeInteger(message.runId, `${path}.runId`) === null) {
-      throw new TransportSnapshotValidationError(`${path}.runId`, "非负整数");
+/**
+ * 校验更早历史的一页。`loadedIds` 是已加载消息的 id：页里的消息必须与它们互不重复（页与窗口在完整
+ * 历史里不重叠，重复说明位置已错乱）。
+ */
+export function parseHistoryPage(value: unknown, loadedIds: ReadonlySet<string>): TransportHistoryPage {
+  const page = requireRecord(value, "history");
+  requireExactKeys(page, ["messages", "messageOffset"], "history");
+  validateMessages(page.messages, "history.messages", new Set(loadedIds));
+  if (requireNullableNonNegativeInteger(page.messageOffset, "history.messageOffset") === null) throw new TransportSnapshotValidationError("history.messageOffset", "非负整数");
+  return page as unknown as TransportHistoryPage;
+}
+
+function validateMessages(value: unknown, path: string, ids: Set<string>): void {
+  if (!Array.isArray(value)) throw new TransportSnapshotValidationError(path, "数组");
+  value.forEach((rawMessage, index) => {
+    const messagePath = `${path}[${index}]`;
+    const message = requireRecord(rawMessage, messagePath);
+    requireExactKeys(message, ["id", "role", "parts", "runId", "outcome"], messagePath);
+    validateMessageBody(message, messagePath, ids);
+    if (requireNullableNonNegativeInteger(message.runId, `${messagePath}.runId`) === null) {
+      throw new TransportSnapshotValidationError(`${messagePath}.runId`, "非负整数");
     }
     if (message.outcome !== null) {
-      if (message.role !== "assistant") throw new TransportSnapshotValidationError(`${path}.outcome`, "user 消息上为 null");
-      validateOutcome(message.outcome, `${path}.outcome`);
+      if (message.role !== "assistant") throw new TransportSnapshotValidationError(`${messagePath}.outcome`, "user 消息上为 null");
+      validateOutcome(message.outcome, `${messagePath}.outcome`);
     }
   });
+}
+
+export function parseTransportState(value: unknown): TransportState {
+  const state = requireRecord(value, "snapshot");
+  requireExactKeys(state, ["title", "messages", "messageOffset", "activity", "terminal_sessions", "background_tasks", "foreground_waits", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  if (typeof state.title !== "string" || state.title.trim() === "") throw new TransportSnapshotValidationError("title", "非空字符串");
+  const ids = new Set<string>();
+  validateMessages(state.messages, "messages", ids);
+  if (requireNullableNonNegativeInteger(state.messageOffset, "messageOffset") === null) throw new TransportSnapshotValidationError("messageOffset", "非负整数");
   if (state.queued_messages !== undefined) {
     if (!Array.isArray(state.queued_messages)) throw new TransportSnapshotValidationError("queued_messages", "数组");
     state.queued_messages.forEach((rawMessage, index) => {

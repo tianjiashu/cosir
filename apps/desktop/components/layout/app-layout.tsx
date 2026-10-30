@@ -32,7 +32,7 @@ import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { Workbench } from "@/components/workbench";
 import { useWorkbenchLayout } from "./use-workbench-layout";
-import { useWorkspaceNavigation } from "./use-workspace-navigation";
+import { useUnsavedRouteGuard } from "./use-unsaved-route-guard";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { APP_SHORTCUTS, isTerminalKeyEvent, withShortcut } from "@/lib/shortcuts";
 import {
@@ -41,7 +41,7 @@ import {
   useTerminalWorkbenchStore,
 } from "@/lib/terminal/terminal-workbench-store";
 import { WorkbenchProvider } from "@/lib/workbench/context";
-import { useWorkbenchStore } from "@/lib/workbench/store";
+import { useWorkbenchSession, useWorkbenchStore } from "@/lib/workbench/store";
 import {
   clampSidebarWidth,
   readSidebarCollapsed,
@@ -114,13 +114,11 @@ export function AppLayout() {
   const focusedTaskId = section === "conversation" ? routeTaskId : keptTaskId;
   const taskState = section === "conversation" ? routeTaskState : keptTaskState;
 
-  const rawCatalog = useWorkspaceCatalog(focusedTaskId, workspaceConfigurationId);
-  const selectWorkspace = useWorkspaceNavigation(rawCatalog, focusedTaskId);
-  const catalog = useMemo(() => ({ ...rawCatalog, selectWorkspace }), [rawCatalog, selectWorkspace]);
-  const currentWorkbenchWorkspaceId = useWorkbenchStore(state => state.workspaceId);
-  // 未知 task 的归属仍在加载时，null 不是离开当前工作区的意图，不销毁已有草稿。
-  const workbenchWorkspaceId = catalog.activeTaskWorkspaceId
-    ?? (focusedTaskId !== null ? currentWorkbenchWorkspaceId : null);
+  const catalog = useWorkspaceCatalog(focusedTaskId, workspaceConfigurationId);
+  useUnsavedRouteGuard();
+  // 工作台显示聚焦任务所在工作区的桶（无任务时为选中工作区）；归属尚在加载时暂不显示，不销毁任何内容。
+  const workbenchWorkspace = catalog.workspaces.find((workspace) => workspace.workspace_id === catalog.activeTaskWorkspaceId);
+  const workbenchWorkspaceId = workbenchWorkspace?.workspace_id ?? null;
   const workbenchLayout = useWorkbenchLayout();
   // 快捷键先于导航函数注册，经 ref 调用最新的实现。
   const startNewConversationRef = useRef<() => void>(() => undefined);
@@ -173,20 +171,24 @@ export function AppLayout() {
   useCommandPaletteHotkey(useCallback(() => setPaletteOpen(true), []));
 
   // ---- 工作台 ----
-  const allWorkbenchTabs = useWorkbenchStore((state) => state.tabs);
-  const workbenchTabs = allWorkbenchTabs.filter(tab => filesVisible || tab.kind !== "files");
-  const workbenchPanelOpen = useWorkbenchStore((state) => state.panelOpen);
-  const workbenchActiveTabId = useWorkbenchStore((state) => state.activeTabId);
-  // 顶栏图标按当前打开的面板高亮：文件标签在前台时「文件」亮，工作台打开时「工作台」亮。
-  const filesPanelActive = workbenchPanelOpen && workbenchTabs.some((tab) => tab.kind === "files" && tab.id === workbenchActiveTabId);
-  const overviewPanelActive = workbenchPanelOpen && workbenchTabs.some((tab) => tab.kind === "task-overview" && tab.id === workbenchActiveTabId);
+  const workbenchSession = useWorkbenchSession(workbenchWorkspaceId);
+  // 配置与观测页不显示文件标签；这是工作台标签可见性的唯一过滤处，工作台与页头按钮共用结果。
+  const workbenchTabs = useMemo(
+    () => workbenchSession.tabs.filter((tab) => filesVisible || tab.kind !== "files"),
+    [filesVisible, workbenchSession.tabs],
+  );
+  const workbenchPanelOpen = workbenchSession.panelOpen && workbenchTabs.length > 0;
+  // 顶栏图标按当前打开的面板高亮：文件 / 概览标签每个工作区至多一个，id 固定。
+  const filesPanelActive = workbenchPanelOpen && workbenchSession.activeTabId === "workspace-files";
+  const overviewPanelActive = workbenchPanelOpen && workbenchSession.activeTabId === "task-overview";
   // 任务概览的角标：当前聚焦 Task 运行中的后台工作数；有新条目时不自动弹出面板。
   const runningDeferredCount = countRunning(useBackgroundTasks(focusedTaskId));
-  const setWorkbenchPanelOpen = useWorkbenchStore((state) => state.setPanelOpen);
-  // 收起只改变可见性；草稿由工作台会话保留，真正销毁由关闭/工作区切换边界确认。
-  const toggleWorkbenchPanel = useCallback(() => {
-    setWorkbenchPanelOpen(!workbenchPanelOpen);
-  }, [setWorkbenchPanelOpen, workbenchPanelOpen]);
+  // 收起只改变可见性；草稿由工作台会话保留，真正销毁只在关闭标签或删除工作区 / Task 时发生。
+  const setWorkbenchPanelOpen = useCallback((open: boolean) => {
+    if (workbenchWorkspaceId !== null) useWorkbenchStore.getState().setPanelOpen(workbenchWorkspaceId, open);
+  }, [workbenchWorkspaceId]);
+  const toggleWorkbenchPanel = useCallback(() => setWorkbenchPanelOpen(!workbenchPanelOpen), [setWorkbenchPanelOpen, workbenchPanelOpen]);
+  useHotkeys(APP_SHORTCUTS.toggleWorkbench.keys, toggleWorkbenchPanel, { ...hotkeyOptions, enabled: workbenchTabs.length > 0 }, [toggleWorkbenchPanel]);
 
   // ---- 导航意图 ----
   const startNewConversation = useCallback(() => {
@@ -239,8 +241,9 @@ export function AppLayout() {
     />
   );
 
+  // 引用跳转与工作台共用同一个工作区来源：文件标签总是打开到当前显示的那个工作台桶里。
   return (
-    <ReferenceBridgeProvider workspaceRoot={catalog.activeWorkspace?.root_path ?? ""} workspaceName={catalog.activeWorkspace?.name ?? "工作区"} target={filesVisible ? (routeTaskId ? `task:${routeTaskId}` : `new:${catalog.selectedWorkspaceId}`) : null} workspaceId={catalog.activeWorkspace?.workspace_id ?? null}>
+    <ReferenceBridgeProvider workspaceRoot={workbenchWorkspace?.root_path ?? ""} workspaceName={workbenchWorkspace?.name ?? "工作区"} target={filesVisible ? (routeTaskId ? `task:${routeTaskId}` : `new:${catalog.selectedWorkspaceId}`) : null} workspaceId={workbenchWorkspaceId}>
     <WorkbenchProvider workspaceId={workbenchWorkspaceId}>
       {/* 根是下沉的窗口底色，侧栏直接铺在上面；主区与停靠卡片在 bg-background 上，二者靠明度差分隔，不画线。 */}
       <div className="bg-canvas relative flex h-dvh min-h-0 overflow-hidden">
@@ -320,28 +323,24 @@ export function AppLayout() {
                     )}
                   </TooltipIconButton>
                 )}
-                {filesVisible && catalog.activeWorkspace && (
+                {filesVisible && workbenchWorkspaceId !== null && (
                   <TooltipIconButton
                     tooltip="浏览工作区文件"
                     aria-label="浏览工作区文件"
                     aria-pressed={filesPanelActive}
                     className={cn("size-7", filesPanelActive && "bg-muted text-foreground")}
-                    onClick={() => useWorkbenchStore.getState().openFiles(
-                      catalog.activeWorkspace!.workspace_id,
-                      catalog.activeWorkspace!.root_path,
-                      catalog.activeWorkspace!.name,
-                    )}
+                    onClick={() => useWorkbenchStore.getState().openFiles(workbenchWorkspaceId)}
                   >
                     <FolderIcon />
                   </TooltipIconButton>
                 )}
-                {focusedTaskId !== null && catalog.activeWorkspace && (
+                {focusedTaskId !== null && workbenchWorkspaceId !== null && (
                   <TooltipIconButton
                     tooltip="任务概览"
                     aria-label={`任务概览，${runningDeferredCount} 个后台任务运行中`}
                     aria-pressed={overviewPanelActive}
                     className={cn("relative size-7", overviewPanelActive && "bg-muted text-foreground")}
-                    onClick={() => useWorkbenchStore.getState().openTaskOverview(catalog.activeWorkspace!.workspace_id)}
+                    onClick={() => useWorkbenchStore.getState().openTaskOverview(workbenchWorkspaceId)}
                   >
                     <LayoutDashboardIcon />
                     {runningDeferredCount > 0 && (
@@ -351,7 +350,7 @@ export function AppLayout() {
                 )}
                 {workbenchTabs.length > 0 && (
                   <TooltipIconButton
-                    tooltip={workbenchPanelOpen ? "收起工作台" : "打开工作台"}
+                    tooltip={withShortcut(workbenchPanelOpen ? "收起工作台" : "打开工作台", "toggleWorkbench")}
                     aria-label={`工作台，${workbenchTabs.length} 个标签，${workbenchPanelOpen ? "点击收起" : "点击打开"}`}
                     aria-pressed={workbenchPanelOpen}
                     className={cn("relative size-7", workbenchPanelOpen && "bg-muted text-foreground")}
@@ -410,9 +409,11 @@ export function AppLayout() {
           escape={{ label: "收起工作台", onClick: () => setWorkbenchPanelOpen(false) }}
         >
           <FocusedTaskIdContext.Provider value={focusedTaskId}>
-            <Workbench filesVisible={filesVisible} workspaceId={workbenchWorkspaceId}
-              width={workbenchLayout.width} minWidth={workbenchLayout.minWidth} maxWidth={workbenchLayout.maxWidth}
-              onWidthChange={workbenchLayout.setWidth} onRequestClose={() => setWorkbenchPanelOpen(false)} />
+            {workbenchWorkspace && workbenchPanelOpen && (
+              <Workbench workspace={workbenchWorkspace} tabs={workbenchTabs} activeTabId={workbenchSession.activeTabId}
+                width={workbenchLayout.width} minWidth={workbenchLayout.minWidth} maxWidth={workbenchLayout.maxWidth}
+                onWidthChange={workbenchLayout.setWidth} onRequestClose={() => setWorkbenchPanelOpen(false)} />
+            )}
           </FocusedTaskIdContext.Provider>
         </IsolatedRegion>
         </div>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
+import { parseHistoryPage, parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
 import type { TransportMessagePart } from "@/lib/assistant/contract";
 import {
   activity,
@@ -196,5 +196,21 @@ describe("Transport snapshot validation", () => {
     const partial = { ...activity(1, "running") } as Partial<ReturnType<typeof activity>>;
     delete partial.error;
     expect(() => parseTransportState(transportState({ activity: partial as never }))).toThrow("activity");
+  });
+});
+
+describe("history window", () => {
+  it("快照必须带非负整数的 messageOffset", () => {
+    expect(parseTransportState(transportState({ messageOffset: 12 })).messageOffset).toBe(12);
+    expect(() => parseTransportState(transportState({ messageOffset: -1 }))).toThrow("messageOffset");
+    const { messageOffset: _omitted, ...missing } = transportState();
+    expect(() => parseTransportState(missing)).toThrow(TransportSnapshotValidationError);
+  });
+
+  it("更早的一页与已加载消息 id 不得重复", () => {
+    const page = { messages: [userMessage("u0", 1), assistantMessage("a0", 1)], messageOffset: 0 };
+    expect(parseHistoryPage(page, new Set(["u1"])).messages).toHaveLength(2);
+    expect(() => parseHistoryPage(page, new Set(["a0"]))).toThrow(TransportSnapshotValidationError);
+    expect(() => parseHistoryPage({ ...page, extra: 1 }, new Set())).toThrow(TransportSnapshotValidationError);
   });
 });

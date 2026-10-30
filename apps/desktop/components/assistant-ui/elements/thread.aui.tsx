@@ -205,8 +205,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
         {/*
           顶部锚点固定本轮用户消息，答案在其下方增长，流式 token 不会持续把滚动位置重新
           钉回底部。这里显式关闭 autoScroll，因为该模式默认值为 false；中途追踪底部会
-          换取稳定视口。消息根节点另外通过 content-visibility 工具跳过屏幕外布局和绘制，
-          当前尚未校准 intrinsic size。
+          换取稳定视口。屏幕外消息只由虚拟列表跳过（见 VirtualizedThreadMessages）。
           视口不能加 CSS scroll-smooth：虚拟列表重新测量行高时会程序化修正 scrollTop，
           平滑滚动会把这些修正变成可见的漂移；只有用户点击「回到底部」才使用平滑滚动。
         */}
@@ -214,6 +213,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
             <div aria-hidden="true" className="scroll-fade-top" />
             <div className={cn("mx-auto flex min-w-0 w-full max-w-3xl flex-1 flex-col px-4 pt-6", isEmpty && "justify-center")}>
               <VirtualizedThreadMessages
+                taskId={taskId}
                 scrollElementRef={viewportRef}
                 components={messageComponents}
                 performanceProbe={performanceProbe}
@@ -517,7 +517,7 @@ const UserMessageView: FC = () => {
   return (
     <MessagePrimitive.Root
       data-role="user"
-      className="group flex flex-col items-end px-2 [content-visibility:auto] [contain-intrinsic-size:auto_6rem]"
+      className="group flex flex-col items-end px-2"
     >
       <div className="flex max-w-[85%] flex-col items-end gap-2">
         <UserMessageAttachments />
@@ -951,7 +951,7 @@ const AssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root
       data-role="assistant"
-      className="relative -mb-6 pb-6 px-2 [content-visibility:auto] [contain-intrinsic-size:auto_24rem]"
+      className="relative -mb-6 pb-6 px-2"
     >
       <div className={cn("aui-assistant-part-stack text-foreground wrap-break-word", ASSISTANT_PART_STACK_CLASS)}>
         <MessagePrimitive.GroupedParts

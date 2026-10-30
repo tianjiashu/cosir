@@ -70,7 +70,7 @@ function useTaskAssistantTransportAdapter(
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const optionsRef = useRef(options);
   optionsRef.current = options;
-  const session = useMemo(() => new TaskTransportSession(store, `/tasks/${taskId}/assistant/attach`, () => {
+  const session = useMemo(() => new TaskTransportSession(store, taskId, () => {
     const current = optionsRef.current;
     return {
       traceId: current.traceId,
@@ -146,7 +146,7 @@ function useTaskAssistantTransportAdapter(
     return base as unknown as ExternalStoreAdapter<FrameStoreItem>;
   }, [onCancel, onNew, onRefetchThread, options.adapters, options.readonly, store, view]);
 
-  return { adapter, open: session.open };
+  return { adapter, open: session.open, loadEarlierHistory: session.loadEarlierHistory };
 }
 
 /**
@@ -160,8 +160,8 @@ export function useTaskAssistantTransportRuntime(
   taskId: number,
   options: TaskAssistantTransportOptions,
 ) {
-  const { adapter, open } = useTaskAssistantTransportAdapter(taskId, options);
-  return { runtime: useExternalStoreRuntime(adapter), open };
+  const { adapter, open, loadEarlierHistory } = useTaskAssistantTransportAdapter(taskId, options);
+  return { runtime: useExternalStoreRuntime(adapter), open, loadEarlierHistory };
 }
 
 /** 创建不挂载嵌套远程 thread list 的只读 Workbench runtime。 */
@@ -169,8 +169,8 @@ export function useTaskAssistantReadonlyTransportRuntime(
   taskId: number,
   options: TaskAssistantTransportOptions,
 ) {
-  const { adapter, open } = useTaskAssistantTransportAdapter(taskId, options);
-  return { runtime: useExternalStoreRuntime(adapter), open };
+  const { adapter, open, loadEarlierHistory } = useTaskAssistantTransportAdapter(taskId, options);
+  return { runtime: useExternalStoreRuntime(adapter), open, loadEarlierHistory };
 }
 
 export function toAddMessageCommand(message: AppendMessage): UserAddMessageCommand {

@@ -17,14 +17,14 @@ export function completedState(
       { id: user.id, role: "user", parts: user.parts, runId, outcome: null },
       { id: `assistant-${user.id}`, role: "assistant", parts: assistantParts, runId, outcome },
     ],
-    activity: { runId, ...outcome, launch: LAUNCH },
+    messageOffset: 0, activity: { runId, ...outcome, launch: LAUNCH },
     terminal_sessions: [], background_tasks: [], foreground_waits: [],
   };
 }
 
 /** 让模拟后端持有这份 state：`/assistant/state` 与 attach 首帧读到的是同一份事实。 */
-/** 种子 state 可省略进程内事实（终端会话、看板、前台等待）：模拟后端按自身的进程内事实注入。 */
-type ProcessFacts = "terminal_sessions" | "background_tasks" | "foreground_waits";
+/** 种子 state 可省略进程内事实（终端会话、看板、前台等待）与 `messageOffset`：模拟后端注入它们，并按历史窗口裁剪。 */
+type ProcessFacts = "terminal_sessions" | "background_tasks" | "foreground_waits" | "messageOffset";
 type SeedState = Omit<TransportState, ProcessFacts> & Partial<Pick<TransportState, ProcessFacts>>;
 
 export async function seedState(request: APIRequestContext, taskId: number, state: SeedState): Promise<void> {

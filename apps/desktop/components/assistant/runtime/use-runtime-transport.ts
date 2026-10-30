@@ -35,7 +35,7 @@ type PreparedTaskCommand =
   | { kind: "send"; request: TaskMessageRequest }
   | { kind: "rerun"; messageId: string; request: TaskMessageRequest };
 
-type RuntimeTransport = ReturnType<typeof useTaskAssistantTransportRuntime>["runtime"];
+type RuntimeTransport = Omit<ReturnType<typeof useTaskAssistantTransportRuntime>, "open">;
 
 /**
  * 被拒命令的草稿恢复：编辑命令回到编辑态，新消息回到输入框。HTTP 拒绝与 actor 拒绝（顶层
@@ -132,7 +132,7 @@ export function useRuntimeTransport(
     recovery.reconnect(resync ? "resync_required" : "disconnected");
   }, [context, recovery]);
 
-  const { runtime, open } = useTaskAssistantTransportRuntime(context.taskId, {
+  const { runtime, open, loadEarlierHistory } = useTaskAssistantTransportRuntime(context.taskId, {
     initialState: context.initialState,
     connectionKey,
     adapters: attachmentAdapter == null ? undefined : { attachments: attachmentAdapter },
@@ -223,5 +223,5 @@ export function useRuntimeTransport(
     attachTransportRef.current = open;
     return () => { attachTransportRef.current = null; };
   }, [attachTransportRef, open]);
-  return runtime;
+  return { runtime, loadEarlierHistory };
 }

@@ -177,14 +177,15 @@ describe("后台任务卡", () => {
     expect(html).not.toContain("转到后台");
   });
 
-  it("对应 part 不在对话里时只剩外壳，不可展开", () => {
+  it("对应 part 未加载（不在已加载的历史里）时只剩外壳、不可展开，仍可定位", () => {
     board.entries.set(1, [entry("a")]);
     const html = renderToStaticMarkup(<BackgroundTasksCard taskId={1} />);
     const row = html.slice(html.indexOf('data-background-task="a"'));
     expect(row).toContain("terminal_command:a");
     expect(row).not.toContain('aria-expanded="');
     expect(html).not.toContain("data-tool-call-id");
-    expect(html).not.toContain("在对话中定位");
+    // 定位由对话列表按需往上翻页，不依赖卡片已加载。
+    expect(html).toContain("在对话中定位");
   });
 });
 

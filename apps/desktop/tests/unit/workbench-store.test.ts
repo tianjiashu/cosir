@@ -1,185 +1,113 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkbenchStore } from "@/lib/workbench/store";
+import type { WorkbenchAgentConfigurationDraftTab, WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
+
+const agentDraft = {
+  agent_id: "reviewer",
+  role: "代码审查",
+  description: "审查代码质量",
+  system_prompt: "请检查代码并给出结论。",
+};
+
+const teamDraft = {
+  team_id: "review-team",
+  name: "Review Team",
+  description: "审查代码",
+  max_runs: 8,
+  start_node_id: "review",
+  nodes: [{ node_id: "review", name: "审查", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] }],
+  transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
+  scope: "workspace" as const,
+};
+
+const session = (workspaceId: number) => useWorkbenchStore.getState().sessions[workspaceId];
+const agentDraftTab = (workspaceId: number, toolCallId: string) => session(workspaceId).tabs
+  .find((tab) => tab.id === `agent-config-draft:${toolCallId}`) as WorkbenchAgentConfigurationDraftTab;
+const teamDraftTab = (workspaceId: number, toolCallId: string) => session(workspaceId).tabs
+  .find((tab) => tab.id === `agent-team-config-draft:${toolCallId}`) as WorkbenchAgentTeamConfigurationDraftTab;
 
 describe("workbench store", () => {
-  it("deduplicates child Agent tabs and isolates workspaces", () => {
-    const store = useWorkbenchStore.getState();
-    store.ensureWorkspace(7);
-    store.openAgentTab({ workspaceId: 7, taskId: 21, title: "审查" });
-    store.openAgentTab({ workspaceId: 7, taskId: 21, title: "审查（更新）" });
-    expect(useWorkbenchStore.getState().tabs).toHaveLength(1);
-    expect(useWorkbenchStore.getState().activeTabId).toBe("agent-task:21");
-    expect(useWorkbenchStore.getState().tabs[0].title).toBe("审查（更新）");
+  beforeEach(() => useWorkbenchStore.setState({ sessions: {} }));
+  afterEach(() => vi.unstubAllGlobals());
 
-    store.ensureWorkspace(8);
-    expect(useWorkbenchStore.getState().tabs).toEqual([]);
-    expect(useWorkbenchStore.getState().activeTabId).toBeNull();
-    store.ensureWorkspace(null);
+  it("按工作区分桶：切换工作区不影响另一个工作区的标签与草稿", () => {
+    const store = useWorkbenchStore.getState();
+    store.openAgent(7, { taskId: 21, title: "审查" });
+    store.openAgent(7, { taskId: 21, title: "审查（更新）" });
+    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    agentDraftTab(7, "call-1").session.setField("description", "改过的描述");
+    store.openFiles(8);
+
+    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-task:21", "agent-config-draft:call-1"]);
+    expect(session(7).tabs[0].title).toBe("审查（更新）");
+    expect(agentDraftTab(7, "call-1").session.store.getState().form.description).toBe("改过的描述");
+    expect(session(8).tabs.map((tab) => tab.id)).toEqual(["workspace-files"]);
   });
 
-  it("closes a child tab without changing backend session state", () => {
+  it("关闭最后一个标签时收起面板，激活项落到相邻标签", () => {
     const store = useWorkbenchStore.getState();
-    store.ensureWorkspace(7);
-    store.openAgentTab({ workspaceId: 7, taskId: 501, title: "审查" });
-    store.closeTab("agent-task:501");
-
-    expect(useWorkbenchStore.getState().tabs).toEqual([]);
-    expect(useWorkbenchStore.getState().panelOpen).toBe(false);
-    store.ensureWorkspace(null);
+    store.openAgent(7, { taskId: 1, title: "一" });
+    store.openAgent(7, { taskId: 2, title: "二" });
+    store.openAgent(7, { taskId: 3, title: "三" });
+    store.activateTab(7, "agent-task:2");
+    store.closeTab(7, "agent-task:2");
+    expect(session(7).activeTabId).toBe("agent-task:3");
+    store.closeTab(7, "agent-task:1");
+    store.closeTab(7, "agent-task:3");
+    expect(session(7)).toMatchObject({ tabs: [], activeTabId: null, panelOpen: false });
   });
 
-  it("keeps an edited configuration draft when switching workbench tabs", () => {
+  it("重复打开同一草稿不覆盖正在编辑的会话", () => {
     const store = useWorkbenchStore.getState();
-    const draft = {
-      agent_id: "reviewer",
-      role: "代码审查",
-      description: "审查代码质量",
-      system_prompt: "请检查代码并给出结论。",
-      allowed_tool_groups: [],
-      max_steps: 100,
-      model_config_id: null,
-      model_settings: {},
-    };
-    store.ensureWorkspace(9);
-    store.openAgentConfigurationDraftTab({
-      workspaceId: 9,
-      taskId: 601,
-      toolCallId: "tool-call-601",
-      title: "reviewer",
-      draft,
-      scope: "workspace",
-    });
-    store.updateAgentConfigurationDraft("agent-config-draft:tool-call-601", {
-      ...draft,
-      description: "审查 TypeScript 代码质量",
-    });
-    store.setDraftDirty("agent-config-draft:tool-call-601", false);
-    store.openAgentTab({ workspaceId: 9, taskId: 602, title: "另一个 Agent" });
-    store.activateTab("agent-config-draft:tool-call-601");
+    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    const opened = agentDraftTab(7, "call-1").session;
+    opened.setField("role", "资深审查");
+    store.openAgent(7, { taskId: 21, title: "其他" });
+    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
 
-    const draftTab = useWorkbenchStore.getState().tabs.find(
-      (tab) => tab.id === "agent-config-draft:tool-call-601",
-    );
-    expect(draftTab?.kind).toBe("agent-configuration-draft");
-    expect(draftTab?.kind === "agent-configuration-draft" && draftTab.draft.description).toBe("审查 TypeScript 代码质量");
-    expect(draftTab?.kind === "agent-configuration-draft" && draftTab.dirty).toBe(false);
-    store.ensureWorkspace(null);
+    expect(agentDraftTab(7, "call-1").session).toBe(opened);
+    expect(session(7).activeTabId).toBe("agent-config-draft:call-1");
   });
 
-  it("tracks saved draft card state without persistence", () => {
+  it("关闭已保存过的草稿记下已保存标记，重新打开时从原始草稿新建会话并清除标记", async () => {
     const store = useWorkbenchStore.getState();
-    store.ensureWorkspace(10);
-    store.openAgentConfigurationDraftTab({
-      workspaceId: 10,
-      taskId: 701,
-      toolCallId: "tool-call-701",
-      title: "tester",
-      draft: {
-        agent_id: "tester",
-        role: "测试",
-        description: "运行测试",
-        system_prompt: "请运行测试。",
-        allowed_tool_groups: [],
-        max_steps: 100,
-        model_config_id: null,
-        model_settings: {},
-      },
-      scope: "workspace",
-    });
-    store.setDraftDirty("agent-config-draft:tool-call-701", false);
-    expect(useWorkbenchStore.getState().savedDraftToolCallIds).toContain("tool-call-701");
-    store.ensureWorkspace(null);
+    store.openAgentTeamConfigurationDraft(7, { taskId: 20, toolCallId: "team-1", draft: teamDraft });
+    await teamDraftTab(7, "team-1").session.save(async () => teamDraft);
+    store.closeTab(7, "agent-team-config-draft:team-1");
+    expect(session(7).savedDraftIds).toEqual(["team-1"]);
+
+    store.openAgentTeamConfigurationDraft(7, { taskId: 20, toolCallId: "team-1", draft: teamDraft });
+    expect(session(7).savedDraftIds).toEqual([]);
+    expect(teamDraftTab(7, "team-1").session.store.getState().dirty).toBe(true);
   });
 
-  it("retains the same Team session and saved identity across tab switching", async () => {
+  it("未保存过的草稿关闭后不记已保存标记", () => {
     const store = useWorkbenchStore.getState();
-    store.ensureWorkspace(11);
-    const draft = {
-      team_id: "review-team",
-      name: "Review Team",
-      description: "审查代码",
-      max_runs: 8,
-      start_node_id: "review",
-      nodes: [{ node_id: "review", name: "审查", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] }],
-      transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
-      scope: "workspace" as const,
-    };
-    store.openAgentTeamConfigurationDraftTab({
-      workspaceId: 11,
-      taskId: 801,
-      toolCallId: "team-tool-call-801",
-      title: draft.name,
-      draft,
-    });
-    const opened = useWorkbenchStore.getState().tabs.find(tab => tab.kind === "agent-team-configuration-draft");
-    if (opened?.kind !== "agent-team-configuration-draft") throw new Error("missing Team session");
-    await opened.session.save(async () => draft);
-    store.setTeamDraftSavedIndicator(opened.id, true);
-    store.activateTab("agent-task:801");
-    store.openAgentTeamConfigurationDraftTab({
-      workspaceId: 11,
-      taskId: 801,
-      toolCallId: "team-tool-call-801",
-      title: draft.name,
-      draft,
-    });
-
-    const tab = useWorkbenchStore.getState().tabs.find(
-      (candidate) => candidate.id === "agent-team-config-draft:team-tool-call-801",
-    );
-    expect(tab?.kind === "agent-team-configuration-draft" && tab.session).toBe(opened.session);
-    expect(tab?.kind === "agent-team-configuration-draft" && tab.session.store.getState().baseline?.scope).toBe("workspace");
-    expect(tab?.kind === "agent-team-configuration-draft" && tab.session.store.getState().dirty).toBe(false);
-    expect(useWorkbenchStore.getState().savedDraftToolCallIds).toContain("team-tool-call-801");
-    store.ensureWorkspace(null);
+    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    store.closeTab(7, "agent-config-draft:call-1");
+    expect(session(7).savedDraftIds).toEqual([]);
   });
 
-  it("does not overwrite an open draft and resets saved state when reopening it", () => {
+  it("删除 Task 时移除属于它的子 Agent 与草稿标签，删除工作区时丢弃整个桶", () => {
     const store = useWorkbenchStore.getState();
-    const draft = {
-      agent_id: "writer",
-      role: "文档",
-      description: "编写文档",
-      system_prompt: "请编写文档。",
-      allowed_tool_groups: [],
-      max_steps: 100,
-      model_config_id: null,
-      model_settings: {},
-    };
-    store.ensureWorkspace(11);
-    store.openAgentConfigurationDraftTab({
-      workspaceId: 11,
-      taskId: 801,
-      toolCallId: "tool-call-801",
-      title: "writer",
-      draft,
-      scope: "workspace",
-    });
-    store.updateAgentConfigurationDraft("agent-config-draft:tool-call-801", { ...draft, description: "编写技术文档" });
-    store.openAgentConfigurationDraftTab({
-      workspaceId: 11,
-      taskId: 801,
-      toolCallId: "tool-call-801",
-      title: "writer",
-      draft,
-      scope: "workspace",
-    });
-    let tab = useWorkbenchStore.getState().tabs.find((item) => item.id === "agent-config-draft:tool-call-801");
-    expect(tab?.kind === "agent-configuration-draft" && tab.draft.description).toBe("编写技术文档");
+    store.openAgent(7, { taskId: 21, title: "子 Agent" });
+    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    store.openFiles(7);
+    store.openAgent(8, { taskId: 31, title: "保留" });
 
-    store.setDraftDirty("agent-config-draft:tool-call-801", false);
-    store.closeTab("agent-config-draft:tool-call-801");
-    store.openAgentConfigurationDraftTab({
-      workspaceId: 11,
-      taskId: 801,
-      toolCallId: "tool-call-801",
-      title: "writer",
-      draft,
-      scope: "workspace",
-    });
-    tab = useWorkbenchStore.getState().tabs.find((item) => item.id === "agent-config-draft:tool-call-801");
-    expect(tab?.kind === "agent-configuration-draft" && tab.dirty).toBe(true);
-    expect(useWorkbenchStore.getState().savedDraftToolCallIds).not.toContain("tool-call-801");
-    store.ensureWorkspace(null);
+    store.forgetTasks([20, 21]);
+    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["workspace-files"]);
+    expect(session(8).tabs.map((tab) => tab.id)).toEqual(["agent-task:31"]);
+
+    store.forgetWorkspace(7);
+    expect(session(7)).toBeUndefined();
+  });
+
+  it("宽度偏好限幅并持久化", () => {
+    const saved = new Map<string, string>();
+    vi.stubGlobal("window", { localStorage: { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) } });
+    useWorkbenchStore.getState().setPanelWidth(5000);
+    expect(useWorkbenchStore.getState().panelWidth).toBe(900);
+    expect(saved.get("cosir:workbench-width")).toBe("900");
   });
 });

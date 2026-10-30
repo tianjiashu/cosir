@@ -15,7 +15,7 @@ export type WorkspacePathOpener = {
 };
 
 /**
- * 在工作台文件面板里打开当前工作区路径的唯一入口（引用胶囊、工具卡片、正文路径共用）。
+ * 在工作台文件面板里打开当前工作区路径的唯一入口（引用胶囊、工具卡片、正文路径、终端链接共用）。
  *
  * 当前工作区来自 `ReferenceBridgeProvider`；没有活动工作区时返回 null，调用方渲染为
  * 纯文本。只改前端面板状态，不读文件、不访问后端。
@@ -24,11 +24,10 @@ export function useOpenWorkspacePath(): WorkspacePathOpener | null {
   const bridge = useReferenceBridge();
   const workspaceId = bridge?.workspaceId ?? null;
   const workspaceRoot = bridge?.workspaceRoot ?? "";
-  const workspaceName = bridge?.workspaceName ?? "";
 
   return useMemo(() => {
     if (workspaceId === null || !workspaceRoot) return null;
-    const showFiles = () => useWorkbenchStore.getState().openFiles(workspaceId, workspaceRoot, workspaceName);
+    const showFiles = () => useWorkbenchStore.getState().openFiles(workspaceId);
     return {
       resolve: (rawPath) => toWorkspacePath(workspaceRoot, rawPath),
       openFile: (path, excerpt) => {
@@ -47,5 +46,5 @@ export function useOpenWorkspacePath(): WorkspacePathOpener | null {
         });
       },
     };
-  }, [workspaceId, workspaceRoot, workspaceName]);
+  }, [workspaceId, workspaceRoot]);
 }

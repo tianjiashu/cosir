@@ -39,7 +39,7 @@ function setup(callbacks: Partial<TaskTransportSessionCallbacks> = {}, initial =
   const fetchImpl = vi.fn<typeof fetch>();
   vi.stubGlobal("fetch", fetchImpl);
   const all: TaskTransportSessionCallbacks = { traceId: "trace-7", ...callbacks };
-  const session = new TaskTransportSession(store, "/tasks/7/assistant/attach", () => all);
+  const session = new TaskTransportSession(store, 7, () => all);
   return { store, fetchImpl, session };
 }
 

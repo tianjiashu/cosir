@@ -14,7 +14,7 @@ function validSnapshot(): TransportState {
   return {
     title: "测试对话",
     messages: [],
-    activity: null,
+    messageOffset: 0, activity: null,
     terminal_sessions: [], background_tasks: [], foreground_waits: [],
   };
 }

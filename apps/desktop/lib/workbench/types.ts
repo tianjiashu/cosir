@@ -1,35 +1,28 @@
-import type { AgentConfigurationInput } from "@/lib/api/configuration";
+import type { AgentEditorSession } from "@/lib/agent-editor/session";
 import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
 
-export type WorkbenchAgentTab = {
+/** 标签按工作区分桶存放（见 store），标签自身不再记录所属工作区。 */
+type WorkbenchAgentTab = {
   id: `agent-task:${number}`;
   kind: "agent";
-  workspaceId: number;
   taskId: number;
   title: string;
 };
 
-export type AgentConfigurationDraft = Pick<
-  AgentConfigurationInput,
-  "agent_id" | "role" | "description" | "system_prompt"
->;
-
+/** 工具生成的子 Agent 配置草稿；编辑状态全部归会话，标签只负责定位与展示。 */
 export type WorkbenchAgentConfigurationDraftTab = {
   id: `agent-config-draft:${string}`;
   kind: "agent-configuration-draft";
-  workspaceId: number;
+  /** 提出草稿的对话 Task；Task 删除时标签随之移除。 */
   taskId: number;
   toolCallId: string;
   title: string;
-  draft: AgentConfigurationInput;
-  scope: "workspace" | "system";
-  dirty: boolean;
+  session: AgentEditorSession;
 };
 
 export type WorkbenchAgentTeamConfigurationDraftTab = {
   id: `agent-team-config-draft:${string}`;
   kind: "agent-team-configuration-draft";
-  workspaceId: number;
   taskId: number;
   toolCallId: string;
   title: string;
@@ -37,25 +30,22 @@ export type WorkbenchAgentTeamConfigurationDraftTab = {
 };
 
 type WorkbenchFilesTab = {
-  id: `workspace-files:${number}`;
+  id: "workspace-files";
   kind: "files";
-  workspaceId: number;
   title: string;
-  rootPath: string;
-  workspaceName: string;
 };
 
 /** 任务概览：卡片栈（本期只有后台任务卡），内容跟随当前聚焦的 Task，每个工作区至多一个。 */
 type WorkbenchTaskOverviewTab = {
-  id: `task-overview:${number}`;
+  id: "task-overview";
   kind: "task-overview";
-  workspaceId: number;
   title: string;
 };
+
+export type WorkbenchDraftTab = WorkbenchAgentConfigurationDraftTab | WorkbenchAgentTeamConfigurationDraftTab;
 
 export type WorkbenchTab =
   | WorkbenchFilesTab
   | WorkbenchAgentTab
-  | WorkbenchAgentConfigurationDraftTab
-  | WorkbenchAgentTeamConfigurationDraftTab
+  | WorkbenchDraftTab
   | WorkbenchTaskOverviewTab;

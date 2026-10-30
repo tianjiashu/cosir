@@ -293,11 +293,22 @@ export type BackgroundTaskEntry = {
 };
 
 /** Task 级 Transport state。 */
+/** 更早历史的一页：完整历史中 `[messageOffset, messageOffset + messages.length)` 这一段。 */
+export type TransportHistoryPage = {
+  messages: TransportMessage[];
+  messageOffset: number;
+};
+
 export type TransportState = {
   /** Task 标题，投影自后端 `tasks.title`；变化时由宿主刷新侧栏目录。 */
   title: string;
-  /** 扁平消息列表，按 context 序号排列。 */
+  /** 扁平消息列表，按 context 序号排列；只含已加载的一段（最近窗口加上往上翻已取到的页）。 */
   messages: TransportMessage[];
+  /**
+   * `messages` 之前还有多少条更早的消息没加载。后端只发最近一段，往上翻时按页取
+   * （`/assistant/messages?end=`）；增量路径里的消息下标是完整历史里的位置，减去它才是本地位置。
+   */
+  messageOffset: number;
   /** 最新 Run 的摘要；Task 尚无 Run 时为 null。 */
   activity: TransportActivity | null;
   queued_messages?: TransportQueuedMessage[];

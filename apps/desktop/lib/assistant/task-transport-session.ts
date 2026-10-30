@@ -1,6 +1,8 @@
+import { requestHistoryPage } from "@/lib/assistant/assistant-snapshot-client";
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
 import { parseTransportFrame, type TransportFrameStore } from "@/lib/assistant/transport-frame-store";
 import { requestOk } from "@/lib/http/client";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import type { TraceId } from "@/lib/trace";
 
 /** 长订阅结束的原因：`error` 为 null 表示连接被后端正常关闭（EOF）；`resync` 为真表示背压重同步。 */
@@ -35,12 +37,39 @@ type StreamHandle = { controller: AbortController };
 export class TaskTransportSession {
   private active: StreamHandle | null = null;
 
-  /** `attachPath` 是相对后端的路径：基地址在每次打开时取当前后端实例，后端换端口后重开即生效。 */
+  /** 请求路径相对后端：基地址在每次请求时取当前后端实例，后端换端口后重开即生效。 */
   public constructor(
     private readonly store: TransportFrameStore,
-    private readonly attachPath: string,
+    private readonly taskId: number,
     private readonly callbacks: () => TaskTransportSessionCallbacks,
   ) {}
+
+  /**
+   * 往上翻一页更早的历史并插到已加载消息前面；已加载到最早或已有在途翻页时什么也不做。
+   *
+   * 失败只记日志、结束在途状态：用户继续往上滚会再触发。位置失效（409）说明窗口已被完整快照
+   * 替换，store 也会按代次丢弃这一页。
+   */
+  public loadEarlierHistory = async (): Promise<void> => {
+    const fetch = this.store.beginHistoryFetch();
+    if (!fetch) return;
+    const loadedIds = new Set(this.store.getSnapshot().state.messages.map((message) => message.id));
+    try {
+      const page = await requestHistoryPage(this.taskId, fetch.end, loadedIds, { traceId: this.callbacks().traceId });
+      if (!this.store.completeHistoryFetch(fetch, page)) {
+        void frontendLog("INFO", "assistant_history_page_discarded", "更早历史的一页已过期，丢弃", {
+          data: { taskId: this.taskId, end: fetch.end },
+        });
+      }
+    } catch (error) {
+      this.store.abortHistoryFetch(fetch);
+      void frontendLog("WARNING", "assistant_history_page_failed", "加载更早的对话历史失败", {
+        traceId: this.callbacks().traceId,
+        data: { taskId: this.taskId, end: fetch.end },
+        error,
+      });
+    }
+  };
 
   public get isOpen(): boolean {
     return this.active !== null;
@@ -59,7 +88,7 @@ export class TaskTransportSession {
     try {
       // 非 2xx 由 requestOk 解析为结构化 HttpError（响应体原文不进入错误消息，界面经
       // userErrorMessage 只展示后端给出的可读原因）。
-      const response = await requestOk(this.attachPath, {
+      const response = await requestOk(`/tasks/${this.taskId}/assistant/attach`, {
         method: "POST",
         headers: { Accept: "text/event-stream" },
         signal: handle.controller.signal,

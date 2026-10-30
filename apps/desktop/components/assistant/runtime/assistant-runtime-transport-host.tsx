@@ -10,6 +10,7 @@ import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-perfor
 import type { TransportState } from "@/lib/assistant/contract";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
 import type { MutableRefObject } from "react";
+import { TransportHistoryContext } from "@/lib/assistant/transport-history-context";
 
 type AssistantRuntimeTransportHostProps = {
   context: RuntimeSessionContext;
@@ -64,7 +65,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
   cancelling,
   performanceProbe,
 }: AssistantRuntimeTransportHostProps) {
-  const runtime = useRuntimeTransport(
+  const { runtime, loadEarlierHistory } = useRuntimeTransport(
     context,
     recovery,
     cancellation,
@@ -74,6 +75,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <TransportHistoryContext.Provider value={loadEarlierHistory}>
       <AssistantThreadSurface
         taskId={context.taskId}
         workspaceId={context.workspaceId}
@@ -98,6 +100,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
         cancelling={cancelling}
         performanceProbe={performanceProbe}
       />
+      </TransportHistoryContext.Provider>
     </AssistantRuntimeProvider>
   );
 });

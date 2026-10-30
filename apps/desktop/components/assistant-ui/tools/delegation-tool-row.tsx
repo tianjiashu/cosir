@@ -36,7 +36,7 @@ export function DelegationToolRow({ artifact: rawArtifact, interactive = false, 
   // 后端把子 Task 最新 Run 的状态实时投影进 display.status；挂起（等审批 / 等消息）仍可停止。
   const status = display?.status ?? artifact.backendStatus;
   const isActive = status === "pending" || status === "running" || status === "suspended";
-  const canOpen = childTaskId !== undefined && actions !== null && actions.workspaceId !== null;
+  const canOpen = childTaskId !== undefined && actions !== null;
   const canCancel = childTaskId !== undefined
     && isActive
     && interactive

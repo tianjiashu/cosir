@@ -18,7 +18,7 @@ import {
   getWorkspaceAgentConfigurations,
   type AgentConfiguration,
 } from "@/lib/api/configuration";
-import { confirmCloseWorkbenchDraft } from "@/lib/workbench/drafts";
+import { confirmCloseWorkbenchTab } from "@/lib/workbench/drafts";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { queryKeys } from "@/lib/query/query-keys";
 import type { WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
@@ -36,9 +36,11 @@ function visibleWorkspaceProfiles(system: AgentConfiguration[], workspace: Agent
  * 保存成功的提示由编辑器统一给出，这里只负责持久化与 Team 列表缓存失效。
  */
 export function AgentTeamConfigurationDraftSurface({
+  workspaceId,
   tab,
   onClose,
 }: {
+  workspaceId: number;
   tab: WorkbenchAgentTeamConfigurationDraftTab;
   onClose: () => void;
 }) {
@@ -48,8 +50,8 @@ export function AgentTeamConfigurationDraftSurface({
     queryFn: ({ signal }) => getAgentConfigurations({ signal }),
   });
   const workspaceAgentsQuery = useQuery({
-    queryKey: queryKeys.agents(tab.workspaceId),
-    queryFn: ({ signal }) => getWorkspaceAgentConfigurations(tab.workspaceId, { signal }),
+    queryKey: queryKeys.agents(workspaceId),
+    queryFn: ({ signal }) => getWorkspaceAgentConfigurations(workspaceId, { signal }),
   });
   const systemAgents = systemAgentsQuery.data;
   const workspaceAgents = workspaceAgentsQuery.data;
@@ -61,16 +63,16 @@ export function AgentTeamConfigurationDraftSurface({
   const failedQuery = [systemAgentsQuery, workspaceAgentsQuery].find((query) => query.isError);
 
   const close = async () => {
-    if (await confirmCloseWorkbenchDraft(tab)) onClose();
+    if (await confirmCloseWorkbenchTab(tab)) onClose();
   };
 
   const save: PersistTeam = async (configuration, identity) => {
     const input = { scope: configuration.scope, configuration } as const;
-    const workspaceId = configuration.scope === "workspace" ? tab.workspaceId : undefined;
+    const targetWorkspaceId = configuration.scope === "workspace" ? workspaceId : undefined;
     const saved = identity
-      ? await updateAgentTeamConfiguration(identity.teamId, input, workspaceId)
-      : await createAgentTeamConfiguration(input, workspaceId);
-    void queryClient.invalidateQueries({ queryKey: queryKeys.agentTeams(workspaceId ?? null) });
+      ? await updateAgentTeamConfiguration(identity.teamId, input, targetWorkspaceId)
+      : await createAgentTeamConfiguration(input, targetWorkspaceId);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.agentTeams(targetWorkspaceId ?? null) });
     return saved;
   };
 

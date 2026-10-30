@@ -89,3 +89,32 @@ export function writeTerminalPanelHeight(height: number): void {
     // 同侧栏偏好：写入失败只影响下次打开的默认高度。
   }
 }
+
+const WORKBENCH_WIDTH_KEY = "cosir:workbench-width";
+
+/** 右侧工作台的宽度偏好范围（px）；窗口变窄时由布局在渲染时再收窄，不改写偏好。 */
+export const WORKBENCH_WIDTH = { min: 320, default: 480, max: 900 } as const;
+
+export function clampWorkbenchWidth(width: number): number {
+  return Math.round(Math.max(WORKBENCH_WIDTH.min, Math.min(WORKBENCH_WIDTH.max, width)));
+}
+
+/** 工作台宽度偏好（所有工作区共用）；缺失或非法时用默认值。 */
+export function readWorkbenchWidth(): number {
+  if (typeof window === "undefined") return WORKBENCH_WIDTH.default;
+  try {
+    const value = Number(window.localStorage.getItem(WORKBENCH_WIDTH_KEY));
+    return Number.isFinite(value) && value > 0 ? clampWorkbenchWidth(value) : WORKBENCH_WIDTH.default;
+  } catch {
+    return WORKBENCH_WIDTH.default;
+  }
+}
+
+export function writeWorkbenchWidth(width: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(WORKBENCH_WIDTH_KEY, String(width));
+  } catch {
+    // 同侧栏偏好：写入失败只影响下次启动的默认宽度。
+  }
+}

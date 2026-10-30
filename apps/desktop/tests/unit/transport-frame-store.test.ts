@@ -298,3 +298,71 @@ describe("TransportFrameStore 乐观命令收敛（D8）", () => {
     expect(store.getSnapshot().pendingCommands).toEqual([second]);
   });
 });
+
+describe("history window", () => {
+  // 完整历史：u0 a0 u1 a1 u2 a2；窗口只带最后一轮（messageOffset 4）。
+  const history = [
+    userMessage("u0", 1), assistantMessage("a0", 1),
+    userMessage("u1", 2), assistantMessage("a1", 2),
+    userMessage("u2", 3), assistantMessage("a2", 3),
+  ];
+  const windowed = () => transportState({ messages: history.slice(4), messageOffset: 4, activity: activity(3, "completed") });
+  const texts = (store: TransportFrameStore) => store.getSnapshot().state.messages.map((message) => (
+    message.parts[0]?.type === "text" ? message.parts[0].text : ""
+  ));
+  const setText = (index: number, text: string) => ({ kind: "set" as const, path: ["messages", index, "parts", 0, "text"], value: text });
+
+  it("增量按完整历史的位置换算到本地；指向未加载消息的增量丢弃", () => {
+    const store = new TransportFrameStore(windowed());
+    store.applyFrame(mutation([setText(5, "new a2"), setText(1, "lost a0")]));
+    expect(texts(store)).toEqual(["hello", "new a2"]);
+    expect(store.getSnapshot().state.messageOffset).toBe(4);
+  });
+
+  it("翻页插到前面并回放请求期间落在页内的增量", () => {
+    const store = new TransportFrameStore(windowed());
+    const fetch = store.beginHistoryFetch();
+    expect(fetch).toEqual({ generation: expect.any(Number), end: 4 });
+    expect(store.beginHistoryFetch()).toBeNull();
+    store.applyFrame(mutation([setText(3, "late a1")]));
+
+    expect(store.completeHistoryFetch(fetch!, { messages: history.slice(2, 4), messageOffset: 2 })).toBe(true);
+    expect(store.getSnapshot().state.messageOffset).toBe(2);
+    expect(store.getSnapshot().state.messages.map((message) => message.id)).toEqual(["u1", "a1", "u2", "a2"]);
+    expect(texts(store)[1]).toBe("late a1");
+    // 插入后，增量继续按新的本地位置落下。
+    store.applyFrame(mutation([setText(2, "u1 edited")]));
+    expect(texts(store)[0]).toBe("u1 edited");
+  });
+
+  it("完整快照替换窗口后，在途的翻页结果作废", () => {
+    const store = new TransportFrameStore(windowed());
+    const fetch = store.beginHistoryFetch()!;
+    store.applyFrame(full(windowed()));
+    expect(store.completeHistoryFetch(fetch, { messages: history.slice(2, 4), messageOffset: 2 })).toBe(false);
+    expect(store.getSnapshot().state.messageOffset).toBe(4);
+  });
+
+  it("与已加载部分不衔接的页丢弃，之后可以重新翻", () => {
+    const store = new TransportFrameStore(windowed());
+    const fetch = store.beginHistoryFetch()!;
+    expect(store.completeHistoryFetch(fetch, { messages: history.slice(0, 2), messageOffset: 0 })).toBe(false);
+    expect(store.beginHistoryFetch()).not.toBeNull();
+  });
+
+  it("插入的旧页与起点更早的新窗口里的用户消息，都不抵消乐观命令", () => {
+    const store = new TransportFrameStore(windowed());
+    store.setPendingCommands([command("pending")]);
+    const fetch = store.beginHistoryFetch()!;
+    store.completeHistoryFetch(fetch, { messages: history.slice(2, 4), messageOffset: 2 });
+    expect(store.getSnapshot().pendingCommands).toHaveLength(1);
+
+    // 编辑重跑移出消息后，新窗口从更早处起：u0 只是之前没加载，不是新出现的。
+    store.applyFrame(full(transportState({ messages: history.slice(0, 4), messageOffset: 0, activity: activity(3, "completed") })));
+    expect(store.getSnapshot().pendingCommands).toHaveLength(1);
+    store.applyFrame(full(transportState({
+      messages: [...history.slice(0, 4), userMessage("u-new", 4)], messageOffset: 0, activity: activity(3, "completed"),
+    })));
+    expect(store.getSnapshot().pendingCommands).toHaveLength(0);
+  });
+});

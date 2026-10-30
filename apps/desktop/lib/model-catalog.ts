@@ -29,6 +29,11 @@ export function modelOptionId(modelConfigId: number): string {
   return `model-config:${modelConfigId}`;
 }
 
+/** 配置引用了目录里不存在（已删除或不可用）的模型时的展示名。 */
+export function unknownModelName(modelConfigId: number): string {
+  return `未知模型（#${modelConfigId}）`;
+}
+
 function mapModel(config: ModelConfig): ModelCatalogModel {
   return {
     optionId: modelOptionId(config.config_id),

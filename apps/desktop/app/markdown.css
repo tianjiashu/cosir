@@ -25,6 +25,18 @@
   padding: 0;
 }
 
+/*
+ * Streamdown 给代码块容器加了内联 `content-visibility: auto; contain-intrinsic-size: auto 200px`。
+ * 对话由虚拟列表跳过屏幕外消息，二者叠加时 overscan 里的代码块按 200px 占位布局，接近视口才
+ * 换成真实高度，虚拟列表每经过一个代码块就要修正一次 scrollTop（见 VirtualizedThreadMessages）。
+ * 只在对话里关掉；文件预览等非虚拟化的 Markdown 仍保留它跳过屏幕外渲染的收益。内联样式只能用
+ * !important 覆盖。
+ */
+.aui-thread-root .aui-md [data-streamdown="code-block"] {
+  content-visibility: visible !important;
+  contain-intrinsic-size: none !important;
+}
+
 .aui-md [data-streamdown="code-block-header"] {
   min-height: 2.25rem;
   border-bottom: 1px solid var(--markdown-canvas-border);

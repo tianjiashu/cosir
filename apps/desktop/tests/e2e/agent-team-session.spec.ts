@@ -69,7 +69,7 @@ test("保存期间的新编辑保留，离开需要确认，第二次保存使�
   await expect(page.getByRole("button", { name: "新建 Team" })).toBeVisible();
 });
 
-test("工作台切换标签保留草稿和历史，非活动 Team 草稿仍参与离开守卫", async ({ page, request }) => {
+test("工作台切换标签与收起都保留 Team 草稿和历史", async ({ page, request }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "会话回归" } });
   await page.route("**/configuration/agents", route => route.fulfill({ json: [] }));
@@ -81,7 +81,7 @@ test("工作台切换标签保留草稿和历史，非活动 Team 草稿仍参�
     const { useWorkbenchStore } = await import(/* @vite-ignore */ modulePath);
     const store = useWorkbenchStore.getState();
     store.setPanelWidth(900);
-    store.openAgentTeamConfigurationDraftTab({ workspaceId: 7, taskId: 42, toolCallId: "session-test", title: "Team 会话", draft });
+    store.openAgentTeamConfigurationDraft(7, { taskId: 42, toolCallId: "session-test", draft: { ...draft, name: "Team 会话" } });
   }, teamConfiguration);
   await page.getByLabel("Team 名称").fill("保留的新名字");
   await page.getByRole("button", { name: "画布", exact: true }).click();
@@ -89,18 +89,19 @@ test("工作台切换标签保留草稿和历史，非活动 Team 草稿仍参�
   await page.evaluate(async () => {
     const modulePath = "/lib/workbench/store.ts";
     const { useWorkbenchStore } = await import(/* @vite-ignore */ modulePath);
-    useWorkbenchStore.getState().openAgentTab({ workspaceId: 7, taskId: 42, title: "另一个标签", role: null });
+    useWorkbenchStore.getState().openAgent(7, { taskId: 42, title: "另一个标签" });
   });
   await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toHaveCount(0);
-  await page.getByRole("button", { name: "收起工作台" }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
-  await page.getByRole("tab", { name: /Team 会话/ }).getByRole("button", { name: "Team 会话", exact: true }).click();
+  // 收起只改变可见性，不询问也不丢弃未激活标签里的草稿。
+  await page.getByRole("button", { name: "收起工作台", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: /工作台，2 个标签，点击打开/ }).click();
+  await page.getByRole("tab", { name: /Team 会话/ }).click();
   await expect(page.getByRole("region", { name: "Agent Team 画布编辑器" })).toBeVisible();
   await page.getByRole("button", { name: "返回 Team 编辑" }).click();
   await expect(page.getByLabel("Team 名称")).toHaveValue("保留的新名字");
   await page.getByRole("button", { name: "撤销", exact: true }).click();
-  await expect(page.getByLabel("Team 名称")).toHaveValue("Review");
+  await expect(page.getByLabel("Team 名称")).toHaveValue("Team 会话");
 });
 
 test("表单逐字修改节点 ID 途中与其他节点重名，转移仍留在原节点", async ({ page }) => {

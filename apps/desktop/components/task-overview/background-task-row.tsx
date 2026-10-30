@@ -11,6 +11,7 @@ import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
 import { useBackgroundTaskPart } from "@/lib/task-overview/background-tasks-store";
 import { cn } from "@/lib/utils";
+import { revealToolCall } from "@/lib/assistant/thread-navigation";
 
 /** 新增延迟结果种类时补一项（见设计文档「新增工具如何接入」）。 */
 const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
@@ -66,11 +67,9 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
           <span className="min-w-0 flex-1 truncate" title={entry.label}>{entry.label}</span>
         )}
         <span className="text-muted-foreground shrink-0 text-xs tabular-nums">{elapsed}</span>
-        {part !== null && (
-          <TooltipIconButton tooltip="在对话中定位" className="size-6" onClick={() => revealToolCard(entry.toolCallId)}>
-            <LocateFixedIcon aria-hidden="true" />
-          </TooltipIconButton>
-        )}
+        <TooltipIconButton tooltip="在对话中定位" className="size-6" onClick={() => void locate(taskId, entry.toolCallId)}>
+          <LocateFixedIcon aria-hidden="true" />
+        </TooltipIconButton>
         {running ? (
           <TooltipIconButton
             tooltip="停止"
@@ -124,9 +123,9 @@ function BackgroundTaskCard({ taskId, part }: { taskId: number; part: TransportT
 
 function noop(): void {}
 
-function revealToolCard(toolCallId: string): void {
-  const card = document.querySelector(`[data-tool-call-id="${CSS.escape(toolCallId)}"]`);
-  card?.scrollIntoView({ block: "center", behavior: "smooth" });
+/** 对话可能只加载了最近一段历史：交给对话列表按需往上翻页再滚过去。 */
+async function locate(taskId: number, toolCallId: string): Promise<void> {
+  if (!(await revealToolCall(taskId, toolCallId))) notify.error("这张卡片已不在当前对话里");
 }
 
 /** 耗时：不足一分钟显示秒，之后显示「分 秒」「时 分」。 */

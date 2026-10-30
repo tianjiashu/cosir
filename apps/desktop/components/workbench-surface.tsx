@@ -1,12 +1,12 @@
 "use client";
 
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ComponentType } from "react";
 
-import type { ComponentType } from "react";
 import { WorkbenchAgentRunSurface } from "@/components/workbench-agent-run-surface";
 import { AgentConfigurationDraftSurface } from "@/components/agent-configuration-draft-surface";
 import { AgentTeamConfigurationDraftSurface } from "@/components/agent-team-configuration-draft-surface";
 import { TaskOverviewSurface } from "@/components/task-overview/task-overview-surface";
+import type { Workspace } from "@/lib/api/workspaces";
 import type { WorkbenchTab } from "@/lib/workbench/types";
 
 const WorkspaceFilesSurface = lazy(() =>
@@ -15,53 +15,33 @@ const WorkspaceFilesSurface = lazy(() =>
   })),
 );
 
-type WorkbenchSurfaceKind = "files" | "agent" | "agent-configuration-draft" | "agent-team-configuration-draft" | "task-overview" | "terminal" | "web" | "file-diff";
-export type WorkbenchSurfaceProps = {
-  tab: WorkbenchTab;
+type SurfaceProps<K extends WorkbenchTab["kind"]> = {
+  workspace: Workspace;
+  tab: Extract<WorkbenchTab, { kind: K }>;
   onClose: () => void;
 };
 
-type RegisteredSurface = {
-  render: ComponentType<WorkbenchSurfaceProps>;
+/**
+ * Workbench 面板注册表：每种标签 kind 恰好对应一个面板，漏写或多写都在编译期报错。
+ * 标签只由前端按 kind 创建，因此没有运行时的未知类型回退。
+ */
+const workbenchSurfaces: { [K in WorkbenchTab["kind"]]: ComponentType<SurfaceProps<K>> } = {
+  files: ({ workspace }) => (
+    <Suspense fallback={<div className="p-4 text-sm">加载文件浏览器…</div>}>
+      <WorkspaceFilesSurface workspaceId={workspace.workspace_id} rootPath={workspace.root_path} workspaceName={workspace.name} />
+    </Suspense>
+  ),
+  agent: ({ tab, onClose }) => <WorkbenchAgentRunSurface taskId={tab.taskId} onClose={onClose} />,
+  "agent-configuration-draft": ({ workspace, tab, onClose }) => (
+    <AgentConfigurationDraftSurface workspaceId={workspace.workspace_id} tab={tab} onClose={onClose} />
+  ),
+  "agent-team-configuration-draft": ({ workspace, tab, onClose }) => (
+    <AgentTeamConfigurationDraftSurface workspaceId={workspace.workspace_id} tab={tab} onClose={onClose} />
+  ),
+  "task-overview": () => <TaskOverviewSurface />,
 };
 
-const agentSurface: ComponentType<WorkbenchSurfaceProps> = ({ tab, onClose }) => {
-  if (tab.kind !== "agent") return <UnknownWorkbenchSurface kind={tab.kind} />;
-  return <WorkbenchAgentRunSurface taskId={tab.taskId} onClose={onClose} />;
-};
-
-const agentConfigurationDraftSurface: ComponentType<WorkbenchSurfaceProps> = ({ tab, onClose }) => {
-  if (tab.kind !== "agent-configuration-draft") return <UnknownWorkbenchSurface kind={tab.kind} />;
-  return <AgentConfigurationDraftSurface tab={tab} onClose={onClose} />;
-};
-
-const agentTeamConfigurationDraftSurface: ComponentType<WorkbenchSurfaceProps> = ({ tab, onClose }) => {
-  if (tab.kind !== "agent-team-configuration-draft") return <UnknownWorkbenchSurface kind={tab.kind} />;
-  return <AgentTeamConfigurationDraftSurface tab={tab} onClose={onClose} />;
-};
-
-/** Workbench 面板渲染注册表；标签生命周期、按需挂载和未知类型回退由共享容器统一管理。 */
-const workbenchSurfaceRegistry: Partial<Record<WorkbenchSurfaceKind, RegisteredSurface>> = {
-  files: {
-    render: ({ tab }) => tab.kind === "files" ? (
-      <Suspense fallback={<div className="p-4 text-sm">加载文件浏览器…</div>}>
-        <WorkspaceFilesSurface workspaceId={tab.workspaceId} rootPath={tab.rootPath} workspaceName={tab.workspaceName} />
-      </Suspense>
-    ) : <UnknownWorkbenchSurface kind={tab.kind} />,
-  },
-  agent: { render: agentSurface },
-  "agent-configuration-draft": { render: agentConfigurationDraftSurface },
-  "agent-team-configuration-draft": { render: agentTeamConfigurationDraftSurface },
-  "task-overview": { render: () => <TaskOverviewSurface /> },
-};
-
-function UnknownWorkbenchSurface({ kind }: { kind: string }) {
-  return <div className="text-muted-foreground flex h-full items-center justify-center p-6 text-sm">暂不支持的工作台类型：{kind}</div>;
-}
-
-export function WorkbenchSurface({ tab, onClose }: WorkbenchSurfaceProps) {
-  const surface = workbenchSurfaceRegistry[tab.kind as WorkbenchSurfaceKind];
-  if (!surface) return <UnknownWorkbenchSurface kind={tab.kind} />;
-  const Renderer = surface.render;
-  return <Renderer tab={tab} onClose={onClose} />;
+export function WorkbenchSurface({ workspace, tab, onClose }: SurfaceProps<WorkbenchTab["kind"]>) {
+  const Surface = workbenchSurfaces[tab.kind] as ComponentType<SurfaceProps<WorkbenchTab["kind"]>>;
+  return <Surface workspace={workspace} tab={tab} onClose={onClose} />;
 }

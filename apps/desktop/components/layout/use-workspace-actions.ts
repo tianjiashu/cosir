@@ -12,6 +12,7 @@ import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
+import { forgetMessageHeights } from "@/lib/assistant/message-height-cache";
 import { useBackgroundTasksStore } from "@/lib/task-overview/background-tasks-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { useWorkbenchStore } from "@/lib/workbench/store";
@@ -36,7 +37,6 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     currentLocationKey.current = location.key;
     return () => { currentLocationKey.current = null; };
   }, [location.key]);
-  const closeWorkspaceTabs = useWorkbenchStore((state) => state.closeWorkspace);
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
   const { load, selectWorkspace, selectedWorkspaceId, workspaces } = catalog;
 
@@ -138,11 +138,13 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
         : undefined,
     });
     if (!confirmed) return;
-    // 终端工作台与后台工作看板按 taskId 分桶的 UI 状态随 Task 删除一并丢弃（后端已清理对应事实）。
+    // 终端工作台、后台工作看板、对话行高缓存与工作台里属于这些 Task 的标签随 Task 删除一并丢弃（后端已清理对应事实）。
     useTerminalWorkbenchStore.getState().forget(deletedTaskIds);
+    useWorkbenchStore.getState().forgetTasks(deletedTaskIds);
     useBackgroundTasksStore.getState().forget(deletedTaskIds);
+    forgetMessageHeights(deletedTaskIds);
     if (target.kind === "workspace") {
-      closeWorkspaceTabs(target.id);
+      useWorkbenchStore.getState().forgetWorkspace(target.id);
       useFilesStore.getState().forget(target.id);
       if (deletingCurrentWorkspace) {
         selectWorkspace(null);
@@ -153,7 +155,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     }
     notify.success(target.kind === "workspace" ? "工作区已删除" : deletedWithForks ? `已删除 ${forkCount + 1} 个任务` : "任务已删除");
     await load();
-  }, [closeWorkspaceTabs, focusedTaskId, load, navigate, selectWorkspace, selectedWorkspaceId, workspaces]);
+  }, [focusedTaskId, load, navigate, selectWorkspace, selectedWorkspaceId, workspaces]);
 
   return { startConversation, forkMessage, forkingMessageId, requestDelete };
 }

@@ -34,27 +34,27 @@ async function seedDrafts(page: Page, team = false) {
     const modulePath = "/lib/workbench/store.ts";
     const { useWorkbenchStore } = await import(modulePath);
     const store = useWorkbenchStore.getState();
-    if (withTeam) store.openAgentTeamConfigurationDraftTab({
-      workspaceId: 7, taskId: 100, toolCallId: "team", title: "未保存Team",
+    if (withTeam) store.openAgentTeamConfigurationDraft(7, {
+      taskId: 100, toolCallId: "team",
       draft: { team_id: "team", name: "未保存Team", description: "", max_runs: 8,
         start_node_id: "review", nodes: [{ node_id: "review", name: "审查", agent_id: "reviewer", statuses: [{ name: "done", color: "#16a34a" }] }],
         transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }], scope: "workspace" },
     });
-    store.openAgentConfigurationDraftTab({
-      workspaceId: 7, taskId: 100, toolCallId: "draft", title: "未保存Agent", scope: "workspace",
-      draft: { agent_id: "draft", role: "审查", description: "保留这份编辑", system_prompt: "检查代码",
-        allowed_tool_groups: [], max_steps: 100, model_config_id: null, model_settings: {} },
+    store.openAgentConfigurationDraft(7, {
+      taskId: 100, toolCallId: "draft",
+      draft: { agent_id: "未保存Agent", role: "审查", description: "保留这份编辑", system_prompt: "检查代码" },
     });
   }, team);
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toBeVisible();
 }
 
+/** 各工作区桶里的标签 id 与面板开合。 */
 async function state(page: Page) {
   return page.evaluate(async () => {
     const modulePath = "/lib/workbench/store.ts";
     const { useWorkbenchStore } = await import(modulePath);
-    const state = useWorkbenchStore.getState();
-    return { workspaceId: state.workspaceId, tabs: state.tabs.map((tab: { id: string }) => tab.id), panelOpen: state.panelOpen };
+    const sessions: Record<number, { tabs: { id: string }[]; panelOpen: boolean }> = useWorkbenchStore.getState().sessions;
+    return Object.fromEntries(Object.entries(sessions).map(([id, session]) => [id, { tabs: session.tabs.map((tab) => tab.id), panelOpen: session.panelOpen }]));
   });
 }
 
@@ -89,7 +89,7 @@ test("窗口和侧栏变化限制实际宽度，End 和鼠标拖动均保留主�
   await page.screenshot({ path: testInfo.outputPath("bounded-workbench.png") });
 });
 
-test("两处收起入口保留编辑，未激活Team和收起的Agent都参与切换确认", async ({ page }) => {
+test("收起入口保留编辑；切到其他工作区的任务不确认、不丢草稿，切回原样恢复", async ({ page }) => {
   await page.goto("/tasks/100");
   await seedDrafts(page, true);
   await page.getByRole("textbox", { name: "描述", exact: true }).fill("新的草稿内容");
@@ -98,18 +98,18 @@ test("两处收起入口保留编辑，未激活Team和收起的Agent都参与�
   await expect(switchDialog(page)).toHaveCount(0);
   await page.getByRole("button", { name: /工作台，2 个标签，点击打开/ }).click();
   await expect(page.getByRole("textbox", { name: "描述", exact: true })).toHaveValue("新的草稿内容");
-  await page.getByRole("button", { name: /工作台，2 个标签，点击收起/ }).click();
-  await expect(switchDialog(page)).toHaveCount(0);
+
   await taskRow(page, 200).click();
-  await expect(switchDialog(page)).toContainText("未保存Team");
-  await expect(switchDialog(page)).toContainText("未保存Agent");
-  await switchDialog(page).getByRole("button", { name: "取消", exact: true }).click();
-  await expect(page).toHaveURL(/\/tasks\/100$/);
-  expect((await state(page)).tabs).toHaveLength(2);
-  await taskRow(page, 200).click();
-  await switchDialog(page).getByRole("button", { name: "放弃草稿并切换" }).click();
   await expect(page).toHaveURL(/\/tasks\/200$/);
-  await expect.poll(() => state(page)).toEqual({ workspaceId: 8, tabs: [], panelOpen: false });
+  await expect(switchDialog(page)).toHaveCount(0);
+  await expect(page.getByRole("complementary", { name: "工作台" })).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: /未保存Agent/ })).toHaveCount(0);
+
+  await taskRow(page, 100).click();
+  await expect(page).toHaveURL(/\/tasks\/100$/);
+  await expect(page.getByRole("tab", { name: /未保存Team/ })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "描述", exact: true })).toHaveValue("新的草稿内容");
+  expect((await state(page))[7]).toEqual({ tabs: ["agent-team-config-draft:team", "agent-config-draft:draft"], panelOpen: true });
 });
 
 test("同工作区任务和配置页保活草稿，真正关闭仍确认", async ({ page }) => {
@@ -125,85 +125,40 @@ test("同工作区任务和配置页保活草稿，真正关闭仍确认", async
   await page.getByRole("button", { name: "关闭 未保存Agent", exact: true }).click();
   await expect(switchDialog(page)).toContainText("关闭配置草稿");
   await switchDialog(page).getByRole("button", { name: "取消", exact: true }).click();
-  expect((await state(page)).tabs).toHaveLength(1);
+  expect((await state(page))[7].tabs).toHaveLength(1);
 });
 
-test("新对话页直接选择工作区，取消不改变选择，确认销毁草稿", async ({ page }) => {
+test("新对话页选择其他工作区和命令面板跳转都不确认，各工作区的工作台互不影响", async ({ page }) => {
   await page.goto("/");
   await seedDrafts(page);
   await page.getByRole("treeitem", { name: "工作区8", exact: true }).click();
-  await expect(switchDialog(page)).toBeVisible();
-  await switchDialog(page).getByRole("button", { name: "取消", exact: true }).click();
-  expect((await state(page)).workspaceId).toBe(7);
-  await expect(page.getByRole("treeitem", { name: "工作区7", exact: true })).toHaveAttribute("aria-current", "true");
-  await page.getByRole("treeitem", { name: "工作区8", exact: true }).click();
-  await switchDialog(page).getByRole("button", { name: "放弃草稿并切换" }).click();
-  await expect.poll(() => state(page)).toEqual({ workspaceId: 8, tabs: [], panelOpen: false });
-});
-
-for (const [unknownId, crossWorkspace] of [[998, false], [999, true]] as const) {
-  test(`历史导航到目录未收录任务${unknownId}，先解析归属再决定丢弃`, async ({ page }) => {
-    await page.goto(`/tasks/${unknownId}`);
-    await taskRow(page, 100).click();
-    await seedDrafts(page);
-    await page.goBack();
-    if (crossWorkspace) {
-      await expect(switchDialog(page)).toBeVisible();
-      await switchDialog(page).getByRole("button", { name: "取消", exact: true }).click();
-      await expect(page).toHaveURL(/\/tasks\/100$/);
-      expect((await state(page)).tabs).toHaveLength(1);
-      await page.goBack();
-      await switchDialog(page).getByRole("button", { name: "放弃草稿并切换" }).click();
-      await expect.poll(() => state(page)).toEqual({ workspaceId: 8, tabs: [], panelOpen: false });
-    } else {
-      await expect(page).toHaveURL(/\/tasks\/998$/);
-      await expect(switchDialog(page)).toHaveCount(0);
-      expect((await state(page)).tabs).toHaveLength(1);
-    }
-  });
-}
-
-test("下拉选择工作区取消时不提前写入最近工作区偏好", async ({ page }) => {
-  await page.goto("/");
-  await seedDrafts(page);
-  const choose = async () => {
-    await page.getByRole("button", { name: "工作区7", exact: true }).click();
-    await page.getByRole("option", { name: /工作区8/ }).click();
-  };
-  await choose();
-  await expect(switchDialog(page)).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem("cosir:last-workspace-id"))).toBe("7");
-  await switchDialog(page).getByRole("button", { name: "取消", exact: true }).click();
-  expect((await state(page)).workspaceId).toBe(7);
-  expect(await page.evaluate(() => localStorage.getItem("cosir:last-workspace-id"))).toBe("7");
-  await choose();
-  await switchDialog(page).getByRole("button", { name: "放弃草稿并切换" }).click();
-  await expect.poll(() => state(page)).toEqual({ workspaceId: 8, tabs: [], panelOpen: false });
-  expect(await page.evaluate(() => localStorage.getItem("cosir:last-workspace-id"))).toBe("8");
-});
-
-test("任务保活时选择后续工作区不销毁草稿，新对话和命令面板真正离开时确认", async ({ page }) => {
-  await page.goto("/tasks/100");
-  await seedDrafts(page);
-  await page.getByRole("treeitem", { name: "工作区8", exact: true }).click();
-  await expect(page).toHaveURL(/\/tasks\/100$/);
   await expect(switchDialog(page)).toHaveCount(0);
-  expect((await state(page)).workspaceId).toBe(7);
-  await page.getByRole("button", { name: "新对话", exact: true }).click();
-  await expect(switchDialog(page)).toBeVisible();
-  await switchDialog(page).getByRole("button", { name: "取消", exact: true }).click();
-  await expect(page).toHaveURL(/\/tasks\/100$/);
-  expect((await state(page)).tabs).toHaveLength(1);
-  await expect(switchDialog(page)).toHaveCount(0);
+  await expect(page.getByRole("treeitem", { name: "工作区8", exact: true })).toHaveAttribute("aria-current", "true");
+  await expect(page.getByRole("tab", { name: /未保存Agent/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  await expect(page.getByRole("tab", { name: /文件/ })).toBeVisible();
+
   await page.getByRole("navigation", { name: "当前位置" }).click();
   const modifier = await page.evaluate(() => /mac/i.test(navigator.userAgent) ? "Meta" : "Control");
   await page.keyboard.press(`${modifier}+k`);
-  await page.getByRole("dialog", { name: "命令面板" }).getByRole("combobox").fill("任务200");
-  await page.getByRole("option", { name: /任务200/ }).click();
-  await expect(page.getByRole("dialog", { name: "切换工作区并放弃草稿？" })).toBeVisible();
-  await switchDialog(page).getByRole("button", { name: "放弃草稿并切换" }).click();
-  await expect(page).toHaveURL(/\/tasks\/200$/);
-  await expect.poll(() => state(page)).toEqual({ workspaceId: 8, tabs: [], panelOpen: false });
+  await page.getByRole("dialog", { name: "命令面板" }).getByRole("combobox").fill("任务100");
+  await page.getByRole("option", { name: /任务100/ }).click();
+  await expect(page).toHaveURL(/\/tasks\/100$/);
+  await expect(page.getByRole("tab", { name: /未保存Agent/ })).toBeVisible();
+  expect(await state(page)).toEqual({
+    7: { tabs: ["agent-config-draft:draft"], panelOpen: true },
+    8: { tabs: ["workspace-files"], panelOpen: true },
+  });
+});
+
+test("切换工作台快捷键收起与展开当前工作区的工作台", async ({ page }) => {
+  await page.goto("/tasks/100");
+  await seedDrafts(page);
+  const modifier = await page.evaluate(() => /mac/i.test(navigator.userAgent) ? "Meta" : "Control");
+  await page.keyboard.press(`${modifier}+Alt+KeyB`);
+  await expect(page.getByRole("complementary", { name: "工作台" })).toHaveCount(0);
+  await page.keyboard.press(`${modifier}+Alt+KeyB`);
+  await expect(page.getByRole("complementary", { name: "工作台" })).toBeVisible();
 });
 
 test("Agent 与未激活 Team 标签直接反映草稿未保存状态", async ({ page }) => {
@@ -216,18 +171,18 @@ test("Agent 与未激活 Team 标签直接反映草稿未保存状态", async ({
   await expect(team).toHaveAttribute("aria-selected", "false");
   await page.evaluate(async () => {
     const modulePath = "/lib/workbench/store.ts";
-    const store = (await import(modulePath)).useWorkbenchStore.getState();
-    const agent = store.tabs.find((tab: {kind: string}) => tab.kind === "agent-configuration-draft");
-    const team = store.tabs.find((tab: {kind: string}) => tab.kind === "agent-team-configuration-draft");
-    store.setDraftDirty(agent.id, false);
+    const tabs = (await import(modulePath)).useWorkbenchStore.getState().sessions[7].tabs;
+    const agent = tabs.find((tab: {kind: string}) => tab.kind === "agent-configuration-draft");
+    const team = tabs.find((tab: {kind: string}) => tab.kind === "agent-team-configuration-draft");
+    agent.session.store.setState({ dirty: false });
     team.session.store.setState({ dirty: false });
   });
   await expect(agent.locator(".sr-only")).toHaveCount(0);
   await expect(team.locator(".sr-only")).toHaveCount(0);
   await page.evaluate(async () => {
     const modulePath = "/lib/workbench/store.ts";
-    const store = (await import(modulePath)).useWorkbenchStore.getState();
-    store.tabs.find((tab: {kind: string}) => tab.kind === "agent-team-configuration-draft").session.updateConfiguration({ description: "新的后台编辑" });
+    const tabs = (await import(modulePath)).useWorkbenchStore.getState().sessions[7].tabs;
+    tabs.find((tab: {kind: string}) => tab.kind === "agent-team-configuration-draft").session.updateConfiguration({ description: "新的后台编辑" });
   });
   await expect(team.locator(".sr-only")).toHaveText("未保存");
   await expect(team).toHaveAttribute("aria-selected", "false");

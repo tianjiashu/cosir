@@ -339,10 +339,26 @@ function writeSse(res, frame) {
   res.write(`data: ${JSON.stringify(frame)}\n\n`);
 }
 
-/** wire 上的 Task state：模拟后端把进程内终端会话与后台工作看板投影进 snapshot 顶层。 */
+/** 与后端 `Constant.Transport.HISTORY_WINDOW_MESSAGES` 一致。 */
+const HISTORY_WINDOW_MESSAGES = 100;
+
+/** 与后端 `snapshot_window._turn_start` 一致：起点往前对齐到一条用户消息。 */
+function turnStart(messages, start) {
+  if (start <= 0) return 0;
+  for (let index = start; index >= 0; index -= 1) if (messages[index].role === "user") return index;
+  return start;
+}
+
+/**
+ * wire 上的 Task state：模拟后端把进程内终端会话与后台工作看板投影进 snapshot 顶层，并像后端一样
+ * 只带最近一段消息（`messageOffset` 为前面没带的条数）。这里保存的始终是完整历史。
+ */
 function wireState(taskId, state = states.get(taskId)) {
+  const start = turnStart(state.messages, state.messages.length - HISTORY_WINDOW_MESSAGES);
   return {
     ...state,
+    messages: state.messages.slice(start),
+    messageOffset: start,
     terminal_sessions: (terminalSessions.get(taskId) ?? []).map((session) => session.entry),
     background_tasks: backgroundTasks.get(taskId) ?? [],
     foreground_waits: (foregroundWaits.get(taskId) ?? []).map((entry) => entry.toolCallId),
@@ -1045,6 +1061,19 @@ const server = createServer(async (req, res) => {
       return;
     }
     jsonResponse(res, 200, wireState(taskId));
+    return;
+  }
+  const historyRoute = url.pathname.match(/^\/tasks\/(\d+)\/assistant\/messages$/);
+  if (req.method === "GET" && historyRoute) {
+    // 与后端 `history_page` 一致：完整历史中 end 之前的一页，越界（快照已被替换）时 409。
+    const messages = states.get(Number(historyRoute[1]))?.messages ?? [];
+    const end = Number(url.searchParams.get("end"));
+    if (end > messages.length) {
+      jsonResponse(res, 409, { detail: { error: { code: "HISTORY_STALE", message: "对话已更新，请重新加载更早的消息", retryable: false } } });
+      return;
+    }
+    const start = turnStart(messages, end - HISTORY_WINDOW_MESSAGES);
+    jsonResponse(res, 200, { messages: messages.slice(start, end), messageOffset: start });
     return;
   }
   const taskRoute = url.pathname.match(/^\/tasks\/(\d+)\/(messages|resume|messages\/([^/]+)\/rerun)$/);

@@ -4,6 +4,7 @@ import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-perfor
 import {
   isActiveRunStatus,
   isTerminalRunStatus,
+  type TransportHistoryPage,
   type TransportMessage,
   type TransportQueuedMessage,
   type TransportRunStatus,
@@ -28,6 +29,11 @@ export type TransportFrameEnvelope = {
   state?: TransportState;
   resync_reason?: string | null;
 };
+
+type TransportMutation = TransportFrameEnvelope["mutations"][number];
+
+/** 一次往上翻页：`end` 是请求时的 `messageOffset`，`generation` 用来认出期间被完整快照替换的窗口。 */
+export type HistoryFetch = { generation: number; end: number };
 
 export type FrameStoreItem =
   | { kind: "canonical"; message: TransportMessage | TransportQueuedMessage; context: TransportMessageRenderContext }
@@ -125,6 +131,11 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
  *
  * 「一轮输出结束」只由这里判定：每次 state 变化后比较 `activity.status`，活动态（运行中 / 挂起）
  * 进入终态时向活动监听者发一次 `settled`。连接断开是另一件事，由 transport hook 处理，这里不感知。
+ *
+ * 历史窗口：`state.messages` 只含已加载的一段，`messageOffset` 是它前面还没加载的条数。增量路径里的
+ * 消息下标是完整历史里的位置，只在 `localize` 这一处换算成本地位置；指向未加载消息的增量丢弃，
+ * 那一页加载时后端会给出它当时的内容。翻页请求在途时这些增量先缓存，页到达后回放落在页内的，
+ * 免得页内容恰好在请求期间更新而丢失。位置只在完整快照处才会变：完整快照替换窗口、作废在途翻页。
  */
 export class TransportFrameStore {
   private state: TransportState;
@@ -138,6 +149,8 @@ export class TransportFrameStore {
   private scheduledCommit: ScheduledCommit | null = null;
   private scheduledFrameTimestamp: number | null = null;
   private readonly performanceProbe: AssistantPerformanceProbe | undefined;
+  private historyGeneration = 0;
+  private historyFetch: (HistoryFetch & { buffered: TransportMutation[] }) | null = null;
 
   public constructor(initialState: TransportState, options: TransportFrameStoreOptions = {}) {
     this.state = initialState;
@@ -180,10 +193,19 @@ export class TransportFrameStore {
       return;
     }
 
+    const mutations = frame.mutations.flatMap((mutation) => {
+      const local = this.localize(mutation);
+      if (local === null && this.historyFetch) this.historyFetch.buffered.push(mutation);
+      return local === null ? [] : [local];
+    });
+    if (mutations.length === 0) {
+      this.recordFrame(frame, startedAt);
+      return;
+    }
     const previous = this.state;
     const contentOnlyIndexes = new Set<number>();
     let structural = false;
-    for (const mutation of frame.mutations) {
+    for (const mutation of mutations) {
       if (isMessageContentMutation(mutation, this.state)) {
         contentOnlyIndexes.add(mutation.path[1] as number);
       } else {
@@ -203,6 +225,40 @@ export class TransportFrameStore {
       else this.publishNow();
     }
     this.recordFrame(frame, startedAt);
+  }
+
+  /** 开始往上翻一页；已加载到最早或已有在途翻页时返回 null。 */
+  public beginHistoryFetch(): HistoryFetch | null {
+    if (this.state.messageOffset === 0 || this.historyFetch) return null;
+    this.historyFetch = { generation: this.historyGeneration, end: this.state.messageOffset, buffered: [] };
+    return { generation: this.historyGeneration, end: this.state.messageOffset };
+  }
+
+  /**
+   * 把取到的一页插到已加载消息前面，并回放请求期间落在这一页里的增量。窗口已被完整快照替换、
+   * 或这一页与已加载部分不衔接时丢弃，返回 false。
+   *
+   * 不经过 `reconcilePending`：页里的用户消息是更早的历史，不是刚并入的乐观命令。
+   */
+  public completeHistoryFetch(fetch: HistoryFetch, page: TransportHistoryPage): boolean {
+    const current = this.historyFetch;
+    if (!current || current.generation !== fetch.generation || current.generation !== this.historyGeneration) return false;
+    this.historyFetch = null;
+    if (page.messageOffset + page.messages.length !== this.state.messageOffset) return false;
+    this.cancelScheduledCommit();
+    this.state = { ...this.state, messages: [...page.messages, ...this.state.messages], messageOffset: page.messageOffset };
+    for (const mutation of current.buffered) {
+      const local = this.localize(mutation);
+      if (local !== null) this.state = applyMutation(this.state, local);
+    }
+    this.rebuildAllItems();
+    this.publishNow();
+    return true;
+  }
+
+  /** 翻页失败或被放弃：结束在途状态，之后可以重新翻。 */
+  public abortHistoryFetch(fetch: HistoryFetch): void {
+    if (this.historyFetch?.generation === fetch.generation && this.historyFetch.end === fetch.end) this.historyFetch = null;
   }
 
   public setPendingCommands(commands: readonly UserAddMessageCommand[]): void {
@@ -245,6 +301,9 @@ export class TransportFrameStore {
   private replaceState(state: TransportState): void {
     const previous = this.state;
     this.cancelScheduledCommit();
+    // 完整快照重新划定窗口：已加载的旧页随之丢弃，在途翻页按代次作废。
+    this.historyGeneration += 1;
+    this.historyFetch = null;
     this.state = state;
     this.rebuildAllItems();
     this.reconcilePending(previous);
@@ -252,14 +311,25 @@ export class TransportFrameStore {
     this.emitActivityTransition(previous);
   }
 
+  /** 把完整历史里的消息位置换成本地位置；指向尚未加载的更早消息时返回 null。 */
+  private localize(mutation: TransportMutation): TransportMutation | null {
+    const [head, index, ...rest] = mutation.path;
+    if (head !== "messages" || typeof index !== "number") return mutation;
+    const local = index - this.state.messageOffset;
+    return local < 0 ? null : { ...mutation, path: ["messages", local, ...rest] };
+  }
+
   /**
    * 乐观命令的收敛：snapshot 里新出现了用户消息（排队或已并入）就按出现顺序去掉同样数量的最早
    * 乐观命令。命令被拒由提交方按 HTTP 结果经 `clearPendingCommand` 收回，不经这里。
+   *
+   * 只数完整历史里不早于此前窗口起点的消息：新窗口可能比旧窗口起得更早（编辑重跑移出消息后整体
+   * 前移），那些更早的用户消息只是之前没加载，不是刚出现的。
    */
   private reconcilePending(previous: TransportState): void {
     if (this.pendingCommands.length === 0) return;
-    const known = userMessageIds(previous);
-    const appeared = [...userMessageIds(this.state)].filter((id) => !known.has(id)).length;
+    const known = userMessageIds(previous, previous.messageOffset);
+    const appeared = [...userMessageIds(this.state, previous.messageOffset)].filter((id) => !known.has(id)).length;
     if (appeared === 0) return;
     this.pendingCommands = this.pendingCommands.slice(appeared);
     this.composeItems();
@@ -426,7 +496,7 @@ const QUEUED_CONTEXT: TransportMessageRenderContext = {
   activity: null,
 };
 
-/** 判断 mutation 是否只改写某条已存在消息的内部内容（不增删消息、不改结局）。 */
+/** 判断 mutation 是否只改写某条已存在消息的内部内容（不增删消息、不改结局）。路径已是本地位置。 */
 function isMessageContentMutation(
   mutation: TransportFrameEnvelope["mutations"][number],
   state: TransportState,
@@ -447,9 +517,12 @@ function outcomeStatusOf(messages: readonly TransportMessage[], runId: number): 
   return "completed";
 }
 
-function userMessageIds(state: TransportState): Set<string> {
+/** 完整历史中位置不早于 `from` 的用户消息 id，加上排队消息。 */
+function userMessageIds(state: TransportState, from: number): Set<string> {
   const ids = new Set<string>();
-  for (const message of state.messages) if (message.role === "user") ids.add(message.id);
+  state.messages.forEach((message, index) => {
+    if (message.role === "user" && state.messageOffset + index >= from) ids.add(message.id);
+  });
   for (const message of state.queued_messages ?? []) ids.add(message.id);
   return ids;
 }

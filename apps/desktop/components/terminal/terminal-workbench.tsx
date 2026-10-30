@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { PanelDock } from "@/components/ui/panel-dock";
 import { PANEL_HEADER_CLASS } from "@/components/ui/panel-tokens";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
+import { useOpenWorkspacePath } from "@/components/workspace-references/use-open-workspace-path";
 import { queryKeys } from "@/lib/query/query-keys";
 import { listTerminalShells } from "@/lib/terminal/terminal-api";
 import { terminalNoticeClass, terminalPaneStatus } from "@/lib/terminal/terminal-pane-status";
@@ -18,8 +19,6 @@ import {
 } from "@/lib/terminal/terminal-sessions";
 import { selectTerminalTask, useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { cn } from "@/lib/utils";
-import { useFilesStore } from "@/lib/workspace-files/store";
-import { useWorkbenchStore } from "@/lib/workbench/store";
 
 import { TerminalEndedMenu } from "./terminal-menus";
 import { TerminalSearchBar } from "./terminal-search-bar";
@@ -122,14 +121,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
       viewsRef.current.get(activeSessionId)?.focus();
     }
   }, [activeSessionId]);
-  const openWorkspaceFile = useMemo(() => {
-    if (!bridge?.workspaceId || !bridge.workspaceRoot) return undefined;
-    const { workspaceId, workspaceRoot, workspaceName } = bridge;
-    return (relativePath: string) => {
-      useWorkbenchStore.getState().openFiles(workspaceId, workspaceRoot, workspaceName);
-      useFilesStore.getState().open(workspaceId, relativePath, true);
-    };
-  }, [bridge]);
+  const workspacePath = useOpenWorkspacePath();
 
   const selectSession = (sessionId: string) => {
     useTerminalWorkbenchStore.getState().select(taskId, sessionId);
@@ -243,7 +235,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
                 onRuntime={handleRuntime}
                 onSearchResults={handleSearchResults}
                 onOpenSearch={openSearch}
-                onOpenWorkspaceFile={openWorkspaceFile}
+                onOpenWorkspaceFile={workspacePath?.openFile}
                 registerView={registerView}
               />
             ))}
