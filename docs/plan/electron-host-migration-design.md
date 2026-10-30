@@ -1,8 +1,8 @@
 # Cosir 桌面宿主迁移到 Electron 技术方案
 
-**状态**：待评审方案
+**状态**：P0 验证已通过（macOS），待评审
 **日期**：2026-10-30
-**适用范围**：`apps/desktop`（宿主、preload、前端宿主适配层、打包、桌面 E2E），后端只涉及一处父进程存活契约
+**适用范围**：`apps/desktop`（宿主、preload、前端宿主适配层、打包、桌面 E2E），后端只涉及父进程存活契约与 CORS 来源两处
 
 ## 1. 结论
 
@@ -19,7 +19,8 @@ WKWebView 不支持 CDP，Tauri 的 CEF 运行时目前只有社区维护的 alp
   开发与打包脚本、桌面 E2E。
 - **不动的**：Python 后端的业务代码、React 业务组件、Assistant Transport、SQLite、终端 worker（独立的 Rust 程序，
   由后端拉起）。
-- **后端唯一的改动**：新增「宿主管道断开就退出」的存活契约，替代 Windows Job Object（见 5.3）。
+- **后端只有两处改动**：新增「宿主管道断开就退出」的存活契约，替代 Windows Job Object（见 5.3）；CORS 白名单加入
+  `app://cosir` 来源，删除 Tauri 的三个来源（见 5.5，P0 验证中发现）。
 
 迁移分四个阶段（第 10 节）。P1 只要求和现在的功能对等，浏览器能力在 P3 落地，详细设计另写文档；本文第 6 节只确定
 它对宿主架构的约束，确保 P1 的结构不需要返工。
@@ -199,7 +200,12 @@ preload 只暴露下面这些方法，不暴露 `ipcRenderer` 本身：
 
 **正常停止**：
 
-- POSIX：spawn 时 `detached: true` 让后端成为进程组长，停止时先给进程组发 SIGTERM，等 5 秒后发 SIGKILL。
+- POSIX：spawn 时 `detached: true` 让后端成为进程组长，停止时先给进程组发 SIGTERM，等 3 秒后发 SIGKILL。
+- P0 实测：只要前端连着 `/task-status/stream` 这类长连接，uvicorn 收到 SIGTERM 后会卡在等待流式响应结束，
+  5 秒内退不出，最终只能 SIGKILL。现在的 Rust 宿主在 macOS 上本来就是直接 SIGKILL，所以 lifespan 的关闭清理
+  目前并不执行，这是现状就有的问题。P1 保持「SIGTERM + 短超时 + SIGKILL」，不阻塞退出；让长连接在关闭时
+  主动结束、从而使优雅关闭真正生效，作为后端的独立跟进项（可以设置 uvicorn 的 `timeout_graceful_shutdown`，
+  或让流式端点在 lifespan 关闭时收尾）。
 - Windows：`taskkill /PID <pid> /T`，超时后加 `/F`（和现在一致）。
 - 工具子进程和终端 worker 仍由后端自己的关闭流程负责清理，宿主只兜底。
 
@@ -224,6 +230,8 @@ preload 只暴露下面这些方法，不暴露 `ipcRenderer` 本身：
   `setWindowOpenHandler` 一律拒绝新窗口，外链交给 `shell.openExternal`。
 - 权限：`session.setPermissionRequestHandler` 默认拒绝。
 - 打包版加载前端用自定义协议 `app://`（`protocol.handle`），不直接用 `file://`，以免相对路径和 CSP 出问题。
+  页面来源因此是 `app://cosir`，后端 CORS 白名单必须加上它（P0 中前端请求后端被 CORS 拦下，才发现这一点）；
+  开发模式仍从 Vite（`http://127.0.0.1:3000`）加载，已经在白名单里。
 - 每个 IPC 入口都校验入参（`ipc.ts` 是信任边界），main 侧其他模块直接信任 `ipc.ts` 的结果，不重复校验。
 
 ### 5.6 日志与诊断
@@ -250,7 +258,8 @@ preload 只暴露下面这些方法，不暴露 `ipcRenderer` 本身：
 5. **生命周期**：标签页属于进程内协调状态，不跨重启恢复；删除 Task 时后端通过管道通知宿主关闭对应标签页；
    宿主重启后所有标签页消失，后端按「旧终端失效」同样的方式处理。
 6. **弹层遮挡**：`WebContentsView` 盖在 DOM 上方，React 的弹层画不到它上面。方案是弹层打开时先隐藏视图，用最后一帧
-   截图占位；P0 阶段要验证这样做的体验可以接受，否则退回 `<webview>` 标签。
+   截图占位。P0 实测：截图 10～15ms，切换到占位 25～28ms，恢复 1ms，肉眼察觉不到；`capturePage` 偶发
+   `UnknownVizError`（6 次自测、33 次截图里出现 1 次），失败时退回空白占位，不能阻塞弹层打开。
 
 P1 在 `host-contract.ts` 和 supervisor 的环境变量注入处为 3 留好接入点，但不实现管道服务端。
 
@@ -285,7 +294,7 @@ P1 在 `host-contract.ts` 和 supervisor 的环境变量注入处为 3 留好接
 **修改**：
 
 - 前端：3.3 节列出的 8 个文件、6 个拖动区文件、`globals.css`（拖动区样式）；
-- 后端：lifespan 加 stdin 存活检测；
+- 后端：lifespan 加 stdin 存活检测；`app.py` 的 CORS 白名单加 `app://cosir`、删 Tauri 来源；
 - 构建：`package.json`（依赖和脚本）、`scripts/stage-*.mjs`（资源路径）、`playwright.config.ts`、CI 工作流；
 - 文档：AGENTS.md 的相关章节、`apps/desktop/AGENTS.md`、README。
 
@@ -318,7 +327,26 @@ P1 和 P2 可以合并成一个 PR 落地，也可以分开；P1 合入后主干
 
 回滚：P1 合入前都在分支上进行，可以直接放弃；合入后按绿地项目原则不保留 Tauri，回滚就是 revert 对应提交。
 
-## 12. 待决问题
+## 12. P0 验证结果（2026-10-30，macOS，Electron 44.7.2）
+
+验证代码是用完即弃的，放在会话临时目录里，没有进入仓库。后端用的是仓库当前代码的副本（只在副本里给 CORS
+白名单加了 `app://cosir`），数据目录用临时目录，没有碰 `~/.cosir`。连续跑了 3 次自测，结果一致。
+
+| 验证点 | 结果 | 数据 |
+|---|---|---|
+| V1 Electron 拉起后端、用 `app://` 加载真实前端、`window.cosirHost` | 通过 | 窗口 0.4～0.8s 显示，后端 1.0～1.3s 就绪；`cosirHost.backend.runtimeConfig()` 返回正确配置；页面里没有 `require` / `process`（隔离生效）。**发现**：CORS 白名单缺 `app://cosir`（见 5.5）；没有启动门禁时，前端首个请求会早于后端就绪，P1 的 `cosirHost` 门禁负责解决 |
+| V2 `WebContentsView` + CDP | 通过 | 无障碍树快照 11～13ms，按 uid 点击 4ms（含滚动到可见）；`Input.insertText` 输入中文正常；外网页面（example.com）可以打开并生成快照 |
+| V3 Python 经 Unix socket 调用宿主 | 通过 | 打开网页、快照、点击、取值四次调用总计约 17ms（单次 0.3～9ms），整个 Python 进程往返 30～41ms |
+| V4 弹层遮挡的截图占位方案 | 通过，需要兜底 | 见第 6 节第 6 点 |
+| V5 宿主被 SIGKILL 后子进程靠 stdin EOF 退出 | 通过 | 子进程 119ms 内退出，没有残留进程 |
+| 附带：停止后端 | 发现现状问题 | 长连接让 SIGTERM 优雅关闭超过 5 秒，见 5.3 |
+
+**没有覆盖的部分**：Windows（命名管道、`taskkill`、`titleBarOverlay`）没有验证，放到 P1 一开始在 Windows 上补测；
+打包后的签名和公证留给 P2。
+
+**结论**：四个关键假设都成立，没有触发「回到第 1 节重新评估」的条件，可以进入 P1。
+
+## 13. 待决问题
 
 1. 打包工具：本文推荐 electron-builder，另一个选项是 Electron Forge。
 2. 主窗口状态推送：是否在 P1 就加 `backend.onStatusChanged`，还是先保持现在的纯轮询。
