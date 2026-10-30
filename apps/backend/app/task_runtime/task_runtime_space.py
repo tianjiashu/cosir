@@ -12,7 +12,7 @@ copy；持久化的 task / run / context 记录仍由 SQLite 负责。多个 spa
 本类除 ``_context_guard`` 外不自行加锁，这是刻意的单一闸门设计，不是遗漏：
 
 - **snapshot working copy（``_snapshot``）没有任何内部锁，是刻意的。** 其全部读写入口
-  （``get_snapshot`` / ``existing_snapshot`` / ``replace_snapshot`` / ``unload_snapshot``）
+  （``get_snapshot`` / ``get_working_snapshot`` / ``replace_snapshot`` / ``unload_snapshot``）
   的生产调用方只有 ``ConversationTaskStateService``；该 service 的类级 ``_lock``（RLock）是
   snapshot working copy 的**唯一序列化点**，已在懒加载、事件投影、subscriber 注册、删除清理
   所有路径上覆盖。此前额外存在的 ``_snapshot_guard`` 与外层 ``_lock`` 是同一临界区里的双层锁
@@ -281,17 +281,6 @@ class TaskRuntimeSpace:
         """snapshot 是否已物化；不复制、不触发懒加载。调用方约定同 ``get_snapshot``。"""
 
         return self._snapshot is not None
-
-    def existing_snapshot(self) -> ConversationStateSnapshot | None:
-        """返回已物化的 task snapshot，不触发数据库读取或懒加载。
-
-        尚未物化或已被 ``unload_snapshot`` 清理时返回 None。
-
-        并发:
-            与 ``get_snapshot`` 同一约定：不自行加锁，调用方须经 ``ConversationTaskStateService``。
-        """
-
-        return copy.deepcopy(self._snapshot) if self._snapshot is not None else None
 
     def replace_snapshot(self, snapshot: ConversationStateSnapshot) -> None:
         """替换 task 的进程内 snapshot working copy。

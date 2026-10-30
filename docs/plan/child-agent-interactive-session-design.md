@@ -602,7 +602,7 @@ Child Run 自身的状态通过既有 Run status event 和 Child Task snapshot �
 - `apps/backend/app/storage/store_engines.py`：删除 `DelegationModel` 注册，绿地项目允许直接移除旧 `delegations` 表。
 - `apps/backend/app/assistant_transport/service/conversation_task_state_service.py` 和 rebuilder：从 Child Task/Run + parent checkpoint/transport locator 冷读恢复 Child locator。
 - `apps/backend/app/core/tools/tool_registry.py`：注册期拒绝 async handler 的非法 Protocol、并行声明或缺失参数契约。
-- `apps/desktop/components/workbench-agent-run-surface.tsx` 及相关 Workbench/assistant tool renderer：复用 terminal 的 surface 生命周期、状态栏和显式停止动作。
+- `apps/desktop/components/workbench/agent-run-surface.tsx` 及相关 Workbench/assistant tool renderer：复用 terminal 的 surface 生命周期、状态栏和显式停止动作。
 
 `ConversationRunExecutor` 的具体依赖方向固定为：executor 持有 `ChildAgentSessionService`；`ChildAgentSessionService` 依赖 Task/Run service 和 terminal service；`ConversationRunStateService` 只依赖窄的 `RunFinalizationObserver` Protocol；具体 `ChildAgentRunFinalizationCoordinator` 依赖 session service 和 Run reader，由 composition root 显式注入；Tool Handler 只通过 session service，不直接访问 CRUD；lifespan 只通过 executor 的 `close()` 触发进程级收尾。启动 recovery 使用独立的 `ChildAgentRecoveryHook`，在 session registry 初始化前完成 post-commit 收敛，禁止触发 live completion callback。禁止 executor、Tool Handler、Transport SSE 和 API 各自维护一份 child registry 或 completion callback。
 

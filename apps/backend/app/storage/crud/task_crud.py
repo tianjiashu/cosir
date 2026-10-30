@@ -344,6 +344,19 @@ class TaskCrud:
             if not result.rowcount:
                 raise KeyError(task_id)
 
+    def list_by_workspace(self, workspace_id: int) -> list[TaskRecord]:
+        """侧栏的 user / fork 任务，按更新时间倒序；委派子任务与 Team 节点不在侧栏。"""
+        stmt = (
+            select(TaskModel)
+            .where(
+                TaskModel.workspace_id == workspace_id,
+                TaskModel.task_type.in_(("user", "fork")),
+            )
+            .order_by(TaskModel.updated_at.desc(), TaskModel.id.desc())
+        )
+        with self._session_factory() as session:
+            return [TaskRecord.from_model(row) for row in session.scalars(stmt).all()]
+
     def list_ids_by_workspace(self, workspace_id: int, session: Session | None = None) -> list[int]:
         """仅返回某工作区下全部 task 的整数 id 列表。
 

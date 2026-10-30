@@ -255,6 +255,7 @@ class ConversationTaskStateRebuilder:
         return ConversationStateSnapshot(
             title=task.title,
             messages=messages,
+            messageOffset=0,
             activity=activity,
             terminal_sessions=[],
             background_tasks=[],

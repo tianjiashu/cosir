@@ -27,6 +27,7 @@ from app.models.enums.conversation_run_status import (
 _SNAPSHOT_KEYS = {
     "title",
     "messages",
+    "messageOffset",
     "activity",
     "terminal_sessions",
     "background_tasks",
@@ -88,11 +89,17 @@ class ConversationStateSnapshot(TypedDict):
     投影规则见 ``ConversationTaskStateService.refresh_terminal_sessions``。
     ``background_tasks``（后台工作看板）与 ``foreground_waits``（可转到后台的前台等待）同样是进程内
     事实，见 ``refresh_deferred_results``。
+
+    ``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；
+    后端工作副本始终是完整历史（恒为 0），
+    只有发给前端的完整快照按窗口裁剪（见 ``snapshot_window``）。增量路径里的消息下标始终是完整历史
+    里的位置；位置只在完整快照处才会变（投影只在末尾追加或原位替换消息），前端据此换算。
     """
 
     queued_messages: NotRequired[list[ConversationQueuedMessage]]
     title: str
     messages: list[ConversationStateMessage]
+    messageOffset: int
     activity: ConversationStateActivity | None
     terminal_sessions: list[ConversationTerminalSession]
     background_tasks: list[ConversationBackgroundTask]
@@ -105,6 +112,7 @@ def empty_snapshot(title: str = "新对话") -> ConversationStateSnapshot:
     return {
         "title": title,
         "messages": [],
+        "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
         "background_tasks": [],
@@ -117,9 +125,10 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
 
     if not isinstance(state, dict) or set(state) - {"queued_messages"} != _SNAPSHOT_KEYS:
         raise ValueError(
-            "snapshot must contain title, messages, activity, terminal_sessions, "
+            "snapshot must contain title, messages, messageOffset, activity, terminal_sessions, "
             "background_tasks and foreground_waits"
         )
+    _validate_non_negative_int(state["messageOffset"], "messageOffset")
     if not isinstance(state["title"], str) or not state["title"].strip():
         raise ValueError("snapshot title must be a non-empty string")
     if not isinstance(state["messages"], list):

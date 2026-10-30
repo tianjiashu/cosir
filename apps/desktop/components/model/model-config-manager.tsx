@@ -4,8 +4,6 @@ import { useEffect, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2Icon, EyeIcon, EyeOffIcon, Loader2Icon, Trash2Icon, XCircleIcon } from "lucide-react";
 
-import { ClaudeSubscriptionConnection, ClaudeSubscriptionModelSelect } from "@/components/model/claude-subscription-connection";
-import { useClaudeSubscription } from "@/components/model/use-claude-subscription";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -20,7 +18,6 @@ import {
   testDraftModelConfig,
   updateModelConfig,
   type ModelConfig,
-  type ModelProvider,
   type ModelConfigTestInput,
 } from "@/lib/api/model-configs";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
@@ -31,7 +28,53 @@ import { queryKeys } from "@/lib/query/query-keys";
 import { useUnsavedChanges, type UnsavedScope } from "@/lib/unsaved-changes";
 import { cn } from "@/lib/utils";
 
-import { changeProvider, emptyForm, selectClaudeModel, toForm, toInput, type FormState } from "@/lib/model-config-form";
+type FormState = {
+  configName: string;
+  baseUrl: string;
+  apiKey: string;
+  modelName: string;
+  contextWindowK: string;
+  supportsThinking: boolean;
+  supportsReasoningEffort: boolean;
+  supportsImage: boolean;
+};
+
+const emptyForm: FormState = {
+  configName: "",
+  baseUrl: "",
+  apiKey: "",
+  modelName: "",
+  contextWindowK: "128",
+  supportsThinking: false,
+  supportsReasoningEffort: false,
+  supportsImage: false,
+};
+
+function toForm(config: ModelConfig): FormState {
+  return {
+    configName: config.config_name,
+    baseUrl: config.base_url,
+    apiKey: config.api_key,
+    modelName: config.model_name,
+    contextWindowK: String(config.context_window_k),
+    supportsThinking: config.supports_thinking,
+    supportsReasoningEffort: config.supports_reasoning_effort,
+    supportsImage: config.supports_image,
+  };
+}
+
+function toInput(form: FormState): ModelConfigTestInput {
+  return {
+    config_name: form.configName.trim(),
+    base_url: form.baseUrl.trim(),
+    api_key: form.apiKey.trim(),
+    model_name: form.modelName.trim(),
+    context_window_k: Number(form.contextWindowK),
+    supports_thinking: form.supportsThinking,
+    supports_reasoning_effort: form.supportsReasoningEffort,
+    supports_image: form.supportsImage,
+  };
+}
 
 /**
  * 模型连接配置的增删改与连接测试，供 composer 的模型设置对话框与配置中心「模型」标签共用。
@@ -60,17 +103,12 @@ export function ModelConfigManager({
   const [discoveredModels, setDiscoveredModels] = useState<string[] | null>(null);
   const [discoveryHint, setDiscoveryHint] = useState<string | null>(null);
 
-  const testMutation = useMutation({
-    mutationFn: ({ input }: { input: ModelConfigTestInput; authVersion: number }) => testDraftModelConfig(input),
-  });
-  const claude = useClaudeSubscription(form.provider === "claude_subscription", () => testMutation.reset());
-  const connectionReady = form.provider !== "claude_subscription" || (claude.connected && !claude.busy);
   const formInput = toInput(form);
   const formSignature = JSON.stringify(formInput);
   const formComplete = Boolean(
-    connectionReady && formInput.config_name &&
+    formInput.config_name &&
       formInput.base_url &&
-      (formInput.provider === "claude_subscription" || formInput.api_key) &&
+      formInput.api_key &&
       formInput.model_name &&
       Number.isInteger(formInput.context_window_k) &&
       formInput.context_window_k > 0,
@@ -83,17 +121,17 @@ export function ModelConfigManager({
     queryFn: ({ signal }) => getModelConfigs({ signal }),
   });
 
+  const testMutation = useMutation({ mutationFn: testDraftModelConfig });
   // 测试结果只对发起测试时的表单内容有效；表单改动后既不展示旧结果，也不允许保存。
   const testIsCurrent = testMutation.variables !== undefined
-    && JSON.stringify(testMutation.variables.input) === formSignature
-    && (form.provider !== "claude_subscription" || testMutation.variables.authVersion === claude.authVersion);
+    && JSON.stringify(testMutation.variables) === formSignature;
   const testPassed = formComplete && testIsCurrent && testMutation.data?.success === true;
 
   const saveMutation = useMutation({
     mutationFn: ({ configId, input }: { configId: number | null; input: ModelConfigTestInput; form: FormState }) => {
       if (configId === null) return createModelConfig(input);
       const { api_key, ...savedFields } = input;
-      return updateModelConfig(configId, { ...savedFields, ...(input.provider === "claude_subscription" || api_key ? { api_key } : {}) });
+      return updateModelConfig(configId, { ...savedFields, ...(api_key ? { api_key } : {}) });
     },
     onSuccess: (savedConfig, { configId, form: savedForm }) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.modelConfigs() });
@@ -119,7 +157,7 @@ export function ModelConfigManager({
     const apiKey = form.apiKey.trim();
     setDiscoveredModels(null);
     setDiscoveryHint(null);
-    if (form.provider === "claude_subscription" || !baseUrl || !apiKey) return;
+    if (!baseUrl || !apiKey) return;
 
     const controller = new AbortController();
     let active = true;
@@ -157,7 +195,7 @@ export function ModelConfigManager({
       controller.abort();
     };
     // 只按连接参数重新发现；模型名改动不应触发请求，读取的是发起时的取值。
-  }, [form.apiKey, form.baseUrl, form.provider]);
+  }, [form.apiKey, form.baseUrl]);
 
   function loadForm(next: FormState, configId: number | null) {
     setForm(next);
@@ -179,7 +217,7 @@ export function ModelConfigManager({
 
   function testDraft() {
     if (!formComplete || testMutation.isPending) return;
-    testMutation.mutate({ input: formInput, authVersion: claude.authVersion });
+    testMutation.mutate(formInput);
   }
 
   async function remove(config: ModelConfig) {
@@ -203,9 +241,7 @@ export function ModelConfigManager({
           }
         : null
     : null;
-  const saveHint = !connectionReady
-    ? "请先登录 Claude，再测试并保存模型配置"
-    : testPassed || testMutation.isPending
+  const saveHint = testPassed || testMutation.isPending
     ? null
     : formComplete
       ? "请先测试连接，通过后才能保存"
@@ -235,7 +271,7 @@ export function ModelConfigManager({
             <div className="min-w-0">
               <div className="flex items-center gap-2 text-sm font-medium">
                 {config.config_name}
-                {config.enabled && (config.provider === "claude_subscription" || config.api_key_configured) ? <CheckCircle2Icon className="text-success size-4" /> : <XCircleIcon className="text-muted-foreground size-4" />}
+                {config.enabled && config.api_key_configured ? <CheckCircle2Icon className="text-success size-4" /> : <XCircleIcon className="text-muted-foreground size-4" />}
               </div>
               <p className="text-muted-foreground truncate text-xs">{config.model_name} · {config.context_window_k}K · {config.base_url}</p>
             </div>
@@ -256,27 +292,13 @@ export function ModelConfigManager({
           <h3 className="text-sm font-medium">{editingId === null ? "添加模型配置" : "编辑模型配置"}</h3>
           {editingId !== null && <Button variant="ghost" size="sm" onClick={resetForm}>取消编辑</Button>}
         </div>
-        <label className="grid min-w-0 gap-1 text-xs">连接方式
-          <NativeSelect value={form.provider} onChange={(event) => {
-            const provider = event.target.value as ModelProvider;
-            setForm(changeProvider(form, provider));
-          }}>
-            <option value="openai">OpenAI 兼容 API</option>
-            <option value="claude_subscription">Claude 订阅</option>
-          </NativeSelect>
-        </label>
-        {form.provider === "claude_subscription" && <ClaudeSubscriptionConnection connection={claude} disabled={busy || testMutation.isPending} />}
         <label className="grid min-w-0 gap-1 text-xs">配置名称<Input value={form.configName} onChange={(event) => setForm({ ...form, configName: event.target.value })} placeholder="例如：DeepSeek 官方" /></label>
-        {form.provider === "openai" && <>
         <label className="grid min-w-0 gap-1 text-xs">API Base URL<Input value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label>
         <label className="grid min-w-0 gap-1 text-xs">API Key<div className="relative min-w-0"><Input type={showApiKey ? "text" : "password"} className="pr-9" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} placeholder="请输入 API Key" /><button type="button" className="text-muted-foreground hover:text-foreground absolute inset-y-0 right-0 inline-flex w-8 items-center justify-center" onClick={() => setShowApiKey((visible) => !visible)} aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}>{showApiKey ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}</button></div></label>
-        </>}
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1 text-xs">
             模型名称
-            {form.provider === "claude_subscription" ? (
-              <ClaudeSubscriptionModelSelect connection={claude} modelName={form.modelName} onSelect={(model) => setForm((current) => selectClaudeModel(current, model))} />
-            ) : discoveredModels ? (
+            {discoveredModels ? (
               <NativeSelect
                 value={form.modelName}
                 onChange={(event) => setForm({ ...form, modelName: event.target.value })}

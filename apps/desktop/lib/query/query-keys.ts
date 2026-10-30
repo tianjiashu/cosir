@@ -27,8 +27,6 @@ export const queryKeys = {
   skills: () => ["cosir", "skills"] as const,
   skill: (name: string) => ["cosir", "skill", name] as const,
   toolGroups: () => ["cosir", "tool-groups"] as const,
-  claudeSubscriptionStatus: () => ["cosir", "claude-subscription", "status"] as const,
-  claudeSubscriptionModels: () => ["cosir", "claude-subscription", "models"] as const,
   modelConfigs: () => ["cosir", "model-configs"] as const,
   contextMessages: (query: unknown) => ["cosir", "context-messages", query] as const,
 };

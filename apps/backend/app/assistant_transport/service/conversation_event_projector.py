@@ -12,7 +12,7 @@ from app.assistant_transport.stream import TransportFrame
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.events import WorkflowEvent, WorkflowEventEnvelope
-from app.service.depends import get_conversation_task_state_service
+from app.service.depends import get_conversation_task_state_service, get_task_status_feed
 
 _EVENT_ADAPTER: TypeAdapter[WorkflowEvent] = TypeAdapter(WorkflowEvent)
 _KNOWN_EVENT_TYPES = {
@@ -196,7 +196,10 @@ class ConversationEventProjector:
                         },
                     },
                 )
-            return change
+        # Task 执行状态推送：只有 Run 开始与状态迁移会改变它；在投影锁外发布（要读库）。
+        if event.type in ("run_initialized", "run_status_changed"):
+            get_task_status_feed().publish(event.task_id)
+        return change
 
     @staticmethod
     def _parse(raw_event: object) -> WorkflowEvent | None:

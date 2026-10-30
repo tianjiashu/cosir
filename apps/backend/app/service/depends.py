@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from app.service.model_config import ModelConfigService
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
     from app.service.recover_service import RecoverService
+    from app.service.task_status.task_status_feed import TaskStatusFeed
     from app.service.workspace_files.file_watch import WorkspaceFileWatcher
     from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
@@ -205,6 +206,14 @@ def get_workspace_files_service() -> WorkspaceFilesService:
     from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
 
     return WorkspaceFilesService()
+
+
+@lru_cache(maxsize=1)
+def get_task_status_feed() -> TaskStatusFeed:
+    """进程级 Task 执行状态推送；Run 事件经 projector 触发发布。"""
+    from app.service.task_status.task_status_feed import TaskStatusFeed
+
+    return TaskStatusFeed()
 
 
 @lru_cache(maxsize=1)

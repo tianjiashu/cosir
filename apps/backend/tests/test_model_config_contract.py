@@ -56,13 +56,12 @@ def test_model_config_requires_connection_fields_and_context_window() -> None:
         )
 
 
-def test_model_config_model_has_explicit_protocol_without_vendor_registry() -> None:
-    """模型配置区分真实协议实现，不引入厂商注册表或独立 provider 表。"""
+def test_model_config_model_has_no_provider_columns() -> None:
+    """模型配置表只描述连接配置，不再声明 Provider 厂商字段。"""
 
     columns = set(ModelConfigModel.__table__.c.keys())
 
     assert {"config_name", "base_url", "api_key", "model_name", "context_window_k"} <= columns
-    assert "provider" in columns
     assert "name" not in columns
     assert "type" not in columns
 

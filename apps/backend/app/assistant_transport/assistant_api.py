@@ -11,7 +11,7 @@ import asyncio
 from collections.abc import Awaitable
 from typing import NoReturn
 
-from fastapi import Depends, HTTPException, Response
+from fastapi import Depends, HTTPException, Query, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.app import app
@@ -24,6 +24,7 @@ from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.assistant_transport.state.snapshot_window import HistoryPage
 from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
 from app.models.errors.input_errors import UserInputRejectedError
@@ -215,10 +216,29 @@ async def assistant_transport_state(
                 "run_id": activity["runId"] if activity is not None else None,
                 "run_status": activity["status"] if activity is not None else None,
                 "message_count": len(state["messages"]),
+                "message_offset": state["messageOffset"],
             },
         },
     )
     return state
+
+
+@app.get("/tasks/{task_id}/assistant/messages")
+async def assistant_history_page(
+    task_id: int,
+    end: int = Query(ge=0),
+    service: TransportAssistantService = Depends(get_transport_assistant_service),
+) -> HistoryPage:
+    """完整历史中位置 ``end`` 之前的一页，前端往上翻时取；``end`` 失效（快照已被替换）时 409。"""
+
+    try:
+        return service.get_history_page(task_id, end)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    except ValueError:
+        _raise_transport_error(
+            409, "HISTORY_STALE", "对话已更新，请重新加载更早的消息", retryable=False
+        )
 
 
 @app.post("/tasks/{task_id}/cancel")

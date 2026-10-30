@@ -28,7 +28,6 @@ from app.models.errors.deletion_errors import (
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.models.message_metadata import UserMessageMetadata
 from app.service import depends as service_depends
-from app.storage.queries.task_read_queries import TaskReadQueries
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -78,7 +77,6 @@ class TaskService:
         self._state = service_depends.get_conversation_task_state_service()
         self._task_context_crud = service_depends.get_conversation_task_context_crud()
         self._session_factory = main_session_factory()
-        self._task_reads = TaskReadQueries(self._session_factory)
 
     def get_or_create_task(
         self,
@@ -199,14 +197,13 @@ class TaskService:
         return self._turn.get(task.current_run_id)
 
     def get_task(self, task_id: int) -> TaskRecord:
-        """按标识取单个任务，并附带派生的执行态。
+        """按标识取单个任务。
 
         参数:
             task_id: 任务标识。
 
         返回:
-            对应的 ``TaskRecord``，其 ``execution_status`` 从 ``current_run_id`` 指向的 Run 投影；
-            无当前 Run 时为空，不维护额外状态机。
+            对应的 ``TaskRecord``；执行状态不在这里，见 ``TaskStatusFeed``。
 
         异常:
             KeyError: 如果指定任务不存在。
@@ -215,7 +212,7 @@ class TaskService:
         副作用:
             无（仅读取）。
         """
-        return self._task_reads.get(task_id)
+        return self._task.get(task_id)
 
     def update_title(self, task_id: int, title: str) -> None:
         """写入 Task 标题；不进 Task 闸门：单列覆盖，与 Run 调度、删除没有需要互斥的不变量。
@@ -398,7 +395,7 @@ class TaskService:
         副作用:
             无（仅读取）。
         """
-        return self._task_reads.list_by_workspace(workspace_id)
+        return self._task.list_by_workspace(workspace_id)
 
     async def delete_task_tree(self, task_id: int, *, with_forks: bool = False) -> frozenset[int]:
         """删除 Task 的用户用例：删除 = 停止 + 删除记录，停止在任何锁之外；返回实际删除的 Task id。

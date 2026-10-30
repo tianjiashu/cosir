@@ -26,7 +26,6 @@ class TaskRecord:
     updated_at: datetime
     extra: dict[str, Any] | None = None
     tool_schemas: list[dict[str, Any]] = field(default_factory=list)
-    execution_status: str | None = None
     task_type: str = "user"
     parent_task_id: int | None = None
     current_run_id: int | None = None
@@ -58,7 +57,7 @@ class TaskRecord:
             无。
 
         返回:
-            包含任务字段的字典；``current_run_id``、``execution_status`` 与
+            包含任务字段的字典；``current_run_id`` 与
             ``parent_task_id`` 可能为 None。
 
         异常:

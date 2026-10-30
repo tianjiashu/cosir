@@ -7,15 +7,14 @@ from app.utils.datetime_utils import to_text
 class TaskResponse(BaseModel):
     """校验并序列化任务状态响应。
 
-    Task 不绑定 Agent：本响应不含 agent_id，Agent 身份固化在各 Run 上。界面只看 Task：不下发
-    ``current_run_id``（它是后端的当前 Run 指针，对话界面的 Run 身份只在 snapshot 里供诊断），
-    只下发它投影出的 ``execution_status``。
+    Task 不绑定 Agent：本响应不含 agent_id，Agent 身份固化在各 Run 上。不下发 ``current_run_id``
+    （后端的当前 Run 指针，对话界面的 Run 身份只在 snapshot 里供诊断），也不下发执行状态：
+    界面的 Task 状态只来自 ``GET /task-status/stream``，不在这里留第二个读取口。
 
     参数:
         task_id: 任务标识。
         workspace_id: 所属工作区标识。
         title: 任务标题。
-        execution_status: Task 当前 Run 状态的读取投影，不持久化；无 Run 时为 None。
         task_type: 任务类型，``"user"`` 为用户创建，``"fork"`` 为历史分支，
             ``"delegate_task"`` 为委派子任务。
         parent_task_id: 父任务标识，仅委派子任务有值。
@@ -36,7 +35,6 @@ class TaskResponse(BaseModel):
     workspace_id: int
     title: str
     extra: dict[str, object] | None = None
-    execution_status: str | None = None
     task_type: str = "user"
     parent_task_id: int | None = None
     created_at: str
@@ -70,7 +68,6 @@ class TaskResponse(BaseModel):
             workspace_id=record.workspace_id,
             title=record.title,
             extra=record.extra,
-            execution_status=record.execution_status,
             task_type=record.task_type,
             parent_task_id=record.parent_task_id,
             created_at=to_text(record.created_at),

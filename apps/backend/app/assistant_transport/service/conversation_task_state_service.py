@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from threading import RLock
 from typing import Any, ClassVar, cast
@@ -22,7 +22,9 @@ from app.assistant_transport.state.conversation_state_background_task import (
 from app.assistant_transport.state.conversation_state_message import ConversationQueuedMessage
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
+    SnapshotPath,
 )
+from app.assistant_transport.state.conversation_state_part import ConversationStatePart
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     validate_snapshot,
@@ -32,11 +34,13 @@ from app.assistant_transport.state.conversation_state_terminal_session import (
     to_terminal_session,
 )
 from app.assistant_transport.state.message_identity import user_message_id
+from app.assistant_transport.state.snapshot_window import HistoryPage, history_page
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
-from app.core.events import WorkflowEvent
+from app.core.events import RunStatusChangedEvent, WorkflowEvent
 from app.core.workflow.message_queue.task_message import UserInputBody
+from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.message_metadata import ToolMessageMetadata
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -103,6 +107,23 @@ class ConversationTaskStateService:
             state = space.get_snapshot(lambda: self._rebuild(task_id))
             validate_snapshot(state)
             return state
+
+    def get_history_page(self, task_id: int, end: int) -> HistoryPage:
+        """完整历史中位置 ``end`` 之前的一页；只拷贝这一页，不拷贝整份工作副本。
+
+        位置与增量路径同一口径（完整历史里的下标），只在完整快照处才会变；``end`` 越界说明
+        客户端的窗口来自已被替换的快照。
+
+        异常:
+            KeyError: Task 不存在或在本进程内已被删除。
+            ValueError: ``end`` 超出当前历史。
+        """
+
+        with self._lock:
+            self._ensure_not_deleted(task_id)
+            space = task_runtime_spaces.get_or_create(task_id)
+            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            return copy.deepcopy(history_page(state["messages"], end))
 
     def refresh_queued_messages(self, task_id: int) -> None:
         """把排队投影整表同步为外部队列的现状，有变化时发一条 ``set`` mutation。
@@ -272,16 +293,19 @@ class ConversationTaskStateService:
             mutations = list(plan_event(event, state))
             for mutation in mutations:
                 _apply_mutation(state, mutation)
-            # A child can finish before the parent tool 消息 is persisted. Reconcile any
-            # already-present child display payload after every event so that this race does
-            # not leave the newly materialized parent card at ``running`` forever.
-            mutations.extend(
-                self._reconcile_child_delegation_statuses(
-                    state,
-                    persist=True,
-                    parent_task_id=task_id,
+            # 子 Run 可能早于父任务的工具消息落库就结束：卡片物化时补一次对账，否则会一直停在
+            # ``running``。只有本批改写过的消息可能新出现委派卡片，只对账它们；流式 token 只追加
+            # 正文，不扫历史、不查库（这条路径持类级全局锁，历史越长、并发 Task 越多越贵）。
+            touched = _touched_message_indexes(mutations)
+            if touched is None or touched:
+                mutations.extend(
+                    self._reconcile_child_delegation_statuses(
+                        state,
+                        persist=True,
+                        parent_task_id=task_id,
+                        message_indexes=touched,
+                    )
                 )
-            )
             # 仅追加的 token 帧不会改变快照形状或任何生命周期不变量。
             # ``_apply_mutation`` 中的 path/type 检查对这条热路径已足够；
             # 结构性变更仍付出完整校验代价。
@@ -294,7 +318,35 @@ class ConversationTaskStateService:
             )
             if mutations:
                 self._publish(change)
+            if isinstance(event, RunStatusChangedEvent):
+                self._unload_if_unwatched(task_id)
             return change
+
+    def _unload_if_unwatched(self, task_id: int) -> None:
+        """没有订阅者且 Run 不在运行时卸载工作副本；须持 ``_lock`` 调用。
+
+        工作副本只是投影缓存：没人看、也没有流式输出在往里写时留着它只占内存（每个打开过的长对话
+        一份完整历史，进程生命周期内不释放）。下次读取或事件到达时按 canonical 记录重建。Run 还在
+        运行时不卸载：流式正文没落库，重建会丢掉正在输出的内容。在最后一个订阅者离开、以及 Run
+        状态变化（结束、挂起）这两个时刻判断。
+        """
+
+        if self._subscribers.get(task_id):
+            return
+        space = task_runtime_spaces.get(task_id)
+        if space is None or not space.has_snapshot():
+            return
+        activity = space.get_working_snapshot(lambda: self._rebuild(task_id))["activity"]
+        if activity is not None and activity["status"] == ConversationRunStatus.RUNNING.value:
+            return
+        space.unload_snapshot()
+        log.info(
+            "state_snapshot_unloaded",
+            extra={
+                "msg": "无人订阅且 Run 不在运行，卸载 Transport 快照工作副本",
+                "data": {"task_id": task_id},
+            },
+        )
 
     def publish_state(
         self,
@@ -351,6 +403,8 @@ class ConversationTaskStateService:
                     subscriber.close()
                     if not subscribers:
                         self._subscribers.pop(task_id, None)
+                        if task_id not in self._deleted_task_ids:
+                            self._unload_if_unwatched(task_id)
 
         return subscriber, unsubscribe, first_frame
 
@@ -489,11 +543,9 @@ class ConversationTaskStateService:
             status = child_run.status
             self._persist_child_display_status(parent_task_id, child_task_id, status)
             parent_space = task_runtime_spaces.get(parent_task_id)
-            if parent_space is None:
+            if parent_space is None or not parent_space.has_snapshot():
                 return None
-            state = parent_space.existing_snapshot()
-            if state is None:
-                return None
+            state = parent_space.get_working_snapshot(lambda: self._rebuild(parent_task_id))
 
             mutations: list[ConversationStateMutation] = []
             for path, part in iter_parts(state):
@@ -509,9 +561,15 @@ class ConversationTaskStateService:
                 )
             if not mutations:
                 return None
+            # 只改了几张卡片：原地改工作副本、发增量帧，不为一个状态推整份快照。
             for mutation in mutations:
                 _apply_mutation(state, mutation)
-            return self.publish_state(parent_task_id, state, tuple(mutations))
+            validate_snapshot(state)
+            change = TransportFrame(
+                task_id=parent_task_id, kind="mutation", mutations=tuple(mutations)
+            )
+            self._publish(change)
+            return change
 
     def _reconcile_child_delegation_statuses(
         self,
@@ -519,6 +577,7 @@ class ConversationTaskStateService:
         *,
         persist: bool,
         parent_task_id: int | None = None,
+        message_indexes: set[int] | None = None,
     ) -> list[ConversationStateMutation]:
         """按已有 child display locator 修正其缓存的 canonical Run 状态。
 
@@ -531,6 +590,7 @@ class ConversationTaskStateService:
             persist: 是否把发生变化的 metadata 同步回父任务 context；冷重建传 False，
                 事件投影传 True。
             parent_task_id: 事件投影时用于持久化 metadata 的父任务标识；冷重建无需提供。
+            message_indexes: 只对账这些消息；None 为全部（冷重建）。
 
         返回:
             已应用到 state 的 display_data set mutations。
@@ -544,7 +604,7 @@ class ConversationTaskStateService:
             raise ValueError("parent_task_id is required when persisting child status")
 
         child_task_ids: set[int] = set()
-        for _, part in iter_parts(state):
+        for _, part in _parts_of(state, message_indexes):
             if not isinstance(part, dict):
                 continue
             display = part.get("display_data")
@@ -568,7 +628,7 @@ class ConversationTaskStateService:
 
         mutations: list[ConversationStateMutation] = []
         changed: dict[int, str] = {}
-        for path, part in list(iter_parts(state)):
+        for path, part in list(_parts_of(state, message_indexes)):
             if not isinstance(part, dict):
                 continue
             display = part.get("display_data")
@@ -670,6 +730,42 @@ def _matches_dynamic_child_display(value: object, child_task_id: int) -> bool:
     if not _is_dynamic_child_display(value) or not isinstance(value, dict):
         return False
     return value.get("child_task_id") == child_task_id
+
+
+def _touched_message_indexes(
+    mutations: list[ConversationStateMutation],
+) -> set[int] | None:
+    """本批变更改写过的消息下标；替换整份 state 或整个消息列表时为 None（全部）。
+
+    ``append-text`` 只追加文本，不会引入或改写展示数据，不计入。
+    """
+
+    touched: set[int] = set()
+    for mutation in mutations:
+        if mutation.kind == "append-text":
+            continue
+        path = mutation.path
+        if not path or path == ("messages",):
+            return None
+        if path[0] == "messages" and isinstance(path[1], int):
+            touched.add(path[1])
+    return touched
+
+
+def _parts_of(
+    state: ConversationStateSnapshot, message_indexes: set[int] | None
+) -> Iterator[tuple[SnapshotPath, ConversationStatePart]]:
+    """``message_indexes`` 为 None 时遍历全部 part，否则只遍历这些消息的 part。"""
+
+    if message_indexes is None:
+        yield from iter_parts(state)
+        return
+    messages = state["messages"]
+    for message_index in sorted(message_indexes):
+        if message_index >= len(messages):
+            continue
+        for part_index, part in enumerate(messages[message_index]["parts"]):
+            yield ("messages", message_index, "parts", part_index), part
 
 
 def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:

@@ -27,6 +27,7 @@ from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
+from app.assistant_transport.state.snapshot_window import HistoryPage, window_snapshot
 from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
 from app.core.tool.background import placeholders
@@ -321,7 +322,7 @@ class TransportAssistantService:
         return response
 
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
-        """读取 Task 的 canonical snapshot。
+        """读取 Task 的 canonical snapshot（按历史窗口只带最近一段消息）。
 
         先校验 Task 存在：空 Task 与不存在的 Task 在投影层都表现为空消息列表，只能在这里区分。
 
@@ -329,7 +330,17 @@ class TransportAssistantService:
             KeyError: Task 不存在。
         """
         self._tasks.get_task(task_id)
-        return self._states.get_state(task_id)
+        return window_snapshot(self._states.get_state(task_id))
+
+    def get_history_page(self, task_id: int, end: int) -> HistoryPage:
+        """完整历史中位置 ``end`` 之前的一页（前端往上翻时取）。
+
+        异常:
+            KeyError: Task 不存在。
+            ValueError: ``end`` 来自已被替换的完整快照，页位置已失效。
+        """
+        self._tasks.get_task(task_id)
+        return self._states.get_history_page(task_id, end)
 
 
 _DEFERRED_CANCELLED_NOTICE = (

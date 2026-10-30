@@ -10,6 +10,7 @@ from typing import Any
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
+from app.assistant_transport.state.snapshot_window import window_snapshot
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import SubscriberClosed
 from app.config.logging.logger import log
@@ -132,7 +133,10 @@ class AssistantTransportStreamService:
     async def stream_envelopes(
         self, task_id: int, is_cancelled: Callable[[], bool]
     ) -> AsyncIterator[str]:
-        """将帧编码为紧凑的 ``data: ...`` SSE 记录，静默边界编码为注释行。"""
+        """将帧编码为紧凑的 ``data: ...`` SSE 记录，静默边界编码为注释行。
+
+        full 帧的 state 在这里按历史窗口裁剪：首帧、重新发布都只带最近一段消息。
+        """
 
         async for frame in self.stream(task_id, is_cancelled):
             if frame is None:
@@ -148,7 +152,7 @@ class AssistantTransportStreamService:
                 "resync_reason": frame.resync_reason,
             }
             if frame.state is not None:
-                payload["state"] = frame.state
+                payload["state"] = window_snapshot(frame.state)
             yield f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
 

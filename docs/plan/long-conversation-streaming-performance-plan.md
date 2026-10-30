@@ -1,6 +1,7 @@
 # 长历史对话与流式渲染性能改造方案（按当前代码重设计）
 
-> 状态：重新设计，尚未实施。
+> 状态：P3（虚拟列表）与 P4（历史窗口）已落地，实现见 `components/assistant-ui/elements/virtualized-thread-messages.tsx`
+> 与第 9 节；落地后关于 `content-visibility` 与行高估计的结论见 13.3 节。其余阶段的完成情况以代码为准，本文不逐项跟踪。
 >
 > 本文是性能改造方案，不是执行指令集合。它以当前工作树代码为事实基础；工作树中其
 > 他未提交改动不属于本文范围，也不应因实施本文而回退。
@@ -428,31 +429,29 @@ experimental 类型扩散到 backend、domain 或 storage。未知/已删除 id 
 - tool 展开/折叠、复制、terminal/diff 交互和 action bar 仍可用；
 - attach、cancel、retry、edit、fork 不依赖 index 稳定性。
 
-## 9. P4：未来的历史窗口（本轮不实施）
+## 9. P4：历史窗口（已落地，2026-10-30）
 
-虚拟化只减少 DOM/React mount，不减少完整 Transport state 的传输、解析、converter 的轻量
-扫描或 SQLite JSON 读写。只有 profile 证明这些才是主要瓶颈时，才另立 history-window 方案。
+实测（合成长对话，1200 轮 / 约 5–6MB 快照）下最费的不是首屏，而是完整快照的频率：此前每开一个
+新 Run 都从库里整份重建并推送完整快照，子 Agent 状态回写也推整份。落地内容：
 
-未来目标应保持：
+1. **完整快照变少。** 新 Run 只经 `RunInitializedEvent` 增量切换 `activity`（删除 `TaskActor` 的整份
+   重建发布）；子 Agent 状态回写改发增量帧。完整快照只剩订阅首帧、编辑重跑与背压重新同步。
+2. **窗口只在出口裁剪。** 后端工作副本仍是完整历史，投影与增量协议不变；完整快照离开后端时由
+   `assistant_transport/state/snapshot_window.py` 只取最近约 100 条（起点对齐到用户消息），附
+   `messageOffset`。更早的历史经 `GET /tasks/{id}/assistant/messages?end=` 按页取，投影与快照一致。
+3. **位置不变量。** 增量路径里的消息下标是完整历史里的位置；投影没有插入 / 删除原语，只在末尾追加或
+   原位替换，删除消息只发生在编辑重跑（完整快照）。所以位置只在完整快照处才变，前端
+   `TransportFrameStore.localize` 一处换算、丢弃指向未加载消息的增量；翻页在途时缓存这些增量、页到
+   达后回放落在页内的；完整快照按代次作废在途翻页。插入旧页不经乐观命令收敛，收敛只数不早于此前
+   窗口起点的用户消息。
+4. **前端翻页与定位。** 虚拟列表滚到接近顶部时预取上一页（只由滚动触发），插入后按「第一条可见消息
+   + 偏移」在 layout effect 恢复视口，不用 TanStack `anchorTo: "end"`（会追底）。看板「在对话中定位」
+   经 `thread-navigation` 交给列表按需翻页再 `scrollToIndex`，不再查 DOM。
+5. **工作副本释放。** 没有订阅者且 Run 不在运行时卸载快照工作副本，下次读取或事件到达时重建。
 
-```text
-backend canonical snapshot/context
-  └─ 完整、可恢复、按现有 owner 写入
-
-assistant-ui transport projection
-  └─ 明确的当前窗口 + history cursor
-```
-
-不能在前端直接 `slice()` 后把旧消息当作不存在。单独方案必须决定：
-
-- history cursor 与 task/run/thread 的绑定、失效和重连；
-- 前插历史使用专用 API、custom command 还是新 state schema；
-- 当前 active Run 是否允许加载历史；
-- 编辑、删除、fork、root set 如何使 cursor 失效；
-- SQLite 是否仍用单 JSON snapshot，还是引入可分页的本地事实表；
-- UI history window 与 `RuntimeMessageContextManager` 的 context/compaction 如何保持边界。
-
-P4 不应由 converter、assistant-ui runtime 或 Transport subscriber 临时决定。
+未做：冷启动重建仍读整个 Task 的上下文行（工具配对与结局放置需要整个 Run）；工具输出不按需加载；
+前端不主动卸载已翻到的旧页。回归由 e2e `history-window`（翻页、视口不跳、定位未加载卡片）与后端
+`test_snapshot_window`、状态生命周期测试守护。
 
 ## 10. 明确非目标：Transport subscriber-local 合帧
 
@@ -561,6 +560,23 @@ Run 对象缓存又会在每个 text append 时失效整个 Run。必须使用 r
 
 `content-visibility` 主要减少 paint；若 profile 显示 React 仍在遍历/更新全部 message，
 继续调 CSS 不会解决问题，应进入 P3 评审。
+
+**P3 落地后的结论（2026-10-30）：虚拟列表与 `content-visibility` 不能叠加。** 对话已按 P3
+虚拟化（`VirtualizedThreadMessages`），屏幕外消息只由虚拟列表跳过。overscan 里已挂载但在视口外
+的行若带 `content-visibility: auto`，浏览器按 `contain-intrinsic-size` 占位布局，虚拟列表量到假
+高度，行接近视口时再按真实高度修正 scrollTop；行卸载后重新挂载又回到占位高度，每经过一次修正
+一次，WKWebView 的惯性滚动因此被打断。消息根节点上的 `content-visibility` 已删除；Streamdown
+在代码块容器上内联了同样的样式，`markdown.css` 只在对话（`.aui-thread-root`）里覆盖掉，文件预览
+等非虚拟化的 Markdown 保留。
+
+行高的初始值依次取按消息 id 记下的实测值（`lib/assistant/message-height-cache.ts`，跨挂载保留、
+列宽变化即作废）与按内容的估计（`lib/assistant/message-height-estimate.ts`），代替固定 120px。
+估计逐行区分标题（按级别）、列表、表格、代码与正文，并计入用户附件与折叠的追踪组，常量用单一特性
+的消息逐项实测，误差在 ±4px 内；展开的工具卡片、公式与 Mermaid 不建模，靠缓存兜底。滚动修正量由
+e2e `thread-scroll-stability` 守护：60 轮长对话首次向上经过约 1.3k px（固定估计约 9.4k px）、同一
+挂载再经过约 120px（叠加 content-visibility 时约 2–5k px）、切走再回来为 0。
+`ThreadPrimitive.Viewport` 在 `autoScroll={false}` 下翻看历史时不写 scrollTop（只在新 Run 置顶本轮
+提问与「回到底部」时写），8.3 节设想的自有 scroll owner 暂无必要。
 
 ### 13.4 full state 与历史窗口
 

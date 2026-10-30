@@ -70,12 +70,6 @@ class SessionConflictError(ValueError):
         self.code = code
         self.retryable = retryable
 
-def _republish(task_id: int) -> None:
-    """从 canonical 记录重建并发布快照：新开 Run 会改写已投影的历史。"""
-    states = service_depends.get_conversation_task_state_service()
-    states.publish_state(task_id, states.rebuild_state(task_id))
-
-
 class TaskActor:
     """一个 Task 的调度者；``start`` / ``stop`` 等方法只能在事件循环线程调用。"""
 
@@ -203,19 +197,10 @@ class TaskActor:
                 if woken is not None:
                     self._start(woken, pending, fresh_run=False)
             elif isinstance(action, dispatch_policy.StartRun):
+                # 新 Run 只改当前活动：``create_run`` 提交后投影 RunInitializedEvent，前端经增量收到，
+                # 不重建、不推整份快照（长对话里每轮重发全部历史）。
                 run = await asyncio.to_thread(self._ledger.create_run, self.task_id, action.launch)
                 self._start(run, pending, fresh_run=True)
-                try:
-                    await asyncio.to_thread(_republish, self.task_id)
-                except Exception as exc:
-                    log.exception(
-                        "run_snapshot_publish_failed",
-                        extra={
-                            "msg": "新 Run 已启动，但快照发布失败；等后续事件或重建收敛",
-                            "data": {"task_id": self.task_id, "run_id": run.id},
-                        },
-                        exc_info=exc,
-                    )
         self._publish_state()
 
     async def cancel(self, reason: CancelReason = "user") -> None:

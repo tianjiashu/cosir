@@ -71,6 +71,7 @@ install_transport_request_error_handler(app)
 # 必须使用 importlib.import_module 而非 ``import app.api.xxx``：后者会把顶层包名
 # ``app`` 绑定到本模块全局命名空间，覆盖此处创建的 FastAPI 实例。
 importlib.import_module("app.api.tasks_api")
+importlib.import_module("app.api.task_status_api")
 importlib.import_module("app.api.workspaces_api")
 importlib.import_module("app.api.workspace_files_api")
 importlib.import_module("app.api.model_configs_api")

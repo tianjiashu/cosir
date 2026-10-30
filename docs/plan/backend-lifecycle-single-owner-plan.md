@@ -252,7 +252,7 @@ Banner 只做三件事：
 - `apps/desktop/components/assistant/runtime/assistant-runtime-bridges.tsx`
 - `apps/desktop/components/assistant/runtime/runtime-types.ts`
 - `apps/desktop/components/assistant/runtime/use-runtime-recovery.ts`
-- `apps/desktop/components/workbench-agent-run-surface.tsx`
+- `apps/desktop/components/workbench/agent-run-surface.tsx`
 - `apps/desktop/src-tauri/src/backend_supervisor.rs`
 
 这些文件不改变 Assistant Transport endpoint 或业务 resume 语义；其中 Assistant runtime
