@@ -179,7 +179,6 @@ async def chain(monkeypatch):
     _Driver.queue, _Driver.ledger = queue, ledger
     _Driver.finish, _Driver.settle, _Driver.consumed, _Driver.linger = {}, {}, [], {}
     monkeypatch.setattr(execution_module, "RunDriver", _Driver)
-    monkeypatch.setattr(actor_module, "_republish", lambda _task_id: None)
     # 推进前刷新排队投影；本文件不验证投影（见 test_task_actor_loop 的「先刷新再投递」）。
     states = SimpleNamespace(refresh_queued_messages=lambda _task_id: None)
     for getter, fake in (

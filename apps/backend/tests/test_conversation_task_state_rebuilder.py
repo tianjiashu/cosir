@@ -38,6 +38,7 @@ def test_rebuild_empty_task_returns_valid_empty_snapshot() -> None:
     assert state == {
         "title": "task",
         "messages": [],
+        "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
         "background_tasks": [],
@@ -141,6 +142,7 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
                 "outcome": {"status": "running", "endReason": None, "error": None, "usage": None, "contextWindowTotal": None},
             }
         ],
+        "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
         "background_tasks": [],
@@ -163,6 +165,7 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
                 "outcome": {"status": "completed", "endReason": None, "error": None, "usage": None, "contextWindowTotal": None},
             }
         ],
+        "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
         "background_tasks": [],
@@ -212,6 +215,7 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
                 "outcome": None,
             }
         ],
+        "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
         "background_tasks": [],

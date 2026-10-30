@@ -149,6 +149,7 @@ async def test_attach_without_run_pushes_full_frame_and_stays_open() -> None:
     assert first.state == {
         "title": "subscription task",
         "messages": [],
+        "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
         "background_tasks": [],
@@ -293,6 +294,7 @@ async def test_attach_envelopes_encode_task_view_frames_without_run_fields() -> 
     assert first["state"] == {
         "title": "subscription task",
         "messages": [],
+        "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
         "background_tasks": [],

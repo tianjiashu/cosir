@@ -148,7 +148,6 @@ def harness(monkeypatch):
     _Driver.drives, _Driver.finish, _Driver.settle = [], {}, {}
     _Driver.ledger, _Driver.queue = ledger, queue
     monkeypatch.setattr(execution_module, "RunDriver", _Driver)
-    monkeypatch.setattr(actor_module, "_republish", lambda _task_id: None)
     refreshed: list[list[int | None]] = []
     # 记下每次刷新排队投影时队列里已有的消息，用来断言「先刷新、再投递」。
     states = SimpleNamespace(

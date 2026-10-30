@@ -13,8 +13,10 @@ from sqlalchemy.orm import Session
 
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
+    _touched_message_indexes,
 )
-from app.core.events import RunInitializedEvent
+from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
+from app.core.events import RunInitializedEvent, ToolCallStatusChangedEvent
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
@@ -371,12 +373,49 @@ def test_event_projection_persists_status_when_parent_tool_row_arrives_after_chi
     service.get_state(1)
 
     sources.runs[21].status = "completed"
-    # 任意真实事件都会触发子 Agent 状态对账；重复的 Run 初始化本身不产生变更。
-    change = service.apply_planned(RunInitializedEvent(task_id=1, run_id=10))
+    # 父任务的工具卡片写入（这一批改写了卡片所在的消息）时对账，补上早结束的子 Run 状态。
+    change = service.apply_planned(ToolCallStatusChangedEvent(
+        task_id=1,
+        run_id=10,
+        tool_call_id="delegate-call",
+        status="completed",
+        display_data={"kind": "delegation-result", "title": "Review", "child_task_id": 2, "status": "running"},
+    ))
 
     assert change.mutations
     assert _display_by_call(service.get_state(1), "delegate-call")["status"] == "completed"
     assert [sequence for _, sequence, _ in sources.metadata_updates] == [2, 3]
+
+
+def test_events_that_touch_no_message_skip_child_status_reconcile() -> None:
+    """对账只看本批改写过的消息：不碰消息的事件（及流式追加）不扫历史、不查库。"""
+    rows = _tool_rows(
+        ("delegate-call", {"kind": "delegation-result", "title": "Review", "child_task_id": 2, "status": "running"}),
+        ("send-call", {"kind": "child-agent-result", "operation": "send", "child_task_id": 2, "status": "running"}),
+        ("status-call", {"kind": "child-agent-result", "operation": "status", "child_task_id": 2, "status": "running"}),
+    )
+    sources = _Sources(rows)
+    service = _service(sources)
+    service.get_state(1)
+
+    sources.runs[21].status = "completed"
+    service.apply_planned(RunInitializedEvent(task_id=1, run_id=10))
+
+    assert _display_by_call(service.get_state(1), "delegate-call")["status"] == "running"
+    assert sources.metadata_updates == []
+
+
+def test_touched_message_indexes_ignores_text_appends() -> None:
+    def mutation(kind: str, *path: str | int) -> ConversationStateMutation:
+        return ConversationStateMutation(kind, path, "x")  # type: ignore[arg-type]
+
+    assert _touched_message_indexes([mutation("append-text", "messages", 4, "parts", 0, "text")]) == set()
+    assert _touched_message_indexes([
+        mutation("set", "messages", 3, "parts", 1, "display_data"),
+        mutation("set", "activity"),
+    ]) == {3}
+    assert _touched_message_indexes([mutation("set", "messages")]) is None
+    assert _touched_message_indexes([mutation("set")]) is None
 
 
 def test_context_crud_updates_only_child_display_status_and_keeps_concurrent_metadata() -> None:

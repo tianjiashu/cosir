@@ -5,11 +5,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
 from app.api.tasks_api import get_task
 from app.app import app
-from app.assistant_transport.assistant_api import assistant_transport_state
+from app.assistant_transport.assistant_api import assistant_history_page, assistant_transport_state
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
 from app.assistant_transport.request.task_command_request import _ordered_display_text
 from app.assistant_transport.service.transport_assistant_service import (
@@ -17,8 +18,8 @@ from app.assistant_transport.service.transport_assistant_service import (
 )
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import RunTransition
-from app.service.recover_service import RecoverService
 from app.service.depends import get_workspace_service
+from app.service.recover_service import RecoverService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
@@ -26,11 +27,12 @@ def _snapshot(
     run_id: int | None = None, status: str = "running", end_reason: str | None = None
 ) -> dict[str, object]:
     if run_id is None:
-        return {"messages": [], "activity": None}
+        return {"messages": [], "messageOffset": 0, "activity": None}
     return {
         "messages": [
             {"id": "1", "role": "user", "parts": [], "runId": run_id, "outcome": None}
         ],
+        "messageOffset": 0,
         "activity": {
             "runId": run_id,
             "status": status,
@@ -270,7 +272,22 @@ async def test_state_endpoint_returns_task_view_snapshot() -> None:
     result = await assistant_transport_state(1, _TransportService())
 
     assert result == snapshot
-    assert set(result) == {"messages", "activity"}
+    assert set(result) == {"messages", "messageOffset", "activity"}
+
+
+@pytest.mark.asyncio
+async def test_history_page_maps_a_stale_position_to_409() -> None:
+    class _TransportService:
+        def get_history_page(self, _task_id: int, end: int) -> dict[str, object]:
+            if end > 3:
+                raise ValueError("stale")
+            return {"messages": [], "messageOffset": 0}
+
+    assert await assistant_history_page(1, 3, _TransportService()) == {"messages": [], "messageOffset": 0}
+    with pytest.raises(HTTPException) as caught:
+        await assistant_history_page(1, 9, _TransportService())
+    assert caught.value.status_code == 409
+    assert caught.value.detail["error"]["code"] == "HISTORY_STALE"
 
 
 async def test_task_gate_waits_without_blocking_event_loop(tmp_path: Path) -> None:

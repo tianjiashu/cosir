@@ -14,6 +14,7 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
+from app.core.events import RunStatusChangedEvent
 from app.models import ConversationRunStatus
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_failure import run_failure_message, run_terminal_error
@@ -232,7 +233,7 @@ def test_state_snapshot_is_lazily_rebuilt_once_per_task_runtime_space() -> None:
         assert reads == {"task": 1, "runs": 1, "context": 1}
         space = task_runtime_spaces.get(7)
         assert space is not None
-        assert space.existing_snapshot() == first
+        assert space.has_snapshot()
     finally:
         task_runtime_spaces.close()
         ConversationTaskStateService.clear_process_state()
@@ -342,6 +343,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     "outcome": None,
                 },
             ],
+            "messageOffset": 0,
             "activity": _activity(2, "running"),
             "terminal_sessions": [],
             "background_tasks": [],
@@ -471,3 +473,48 @@ def test_terminal_error_contract_carries_only_code_and_message() -> None:
         )
         is None
     )
+
+
+class _RunSources:
+    """一个 Task、一条 Run、没有 context 行；Run 状态可改。"""
+
+    def __init__(self, status: str) -> None:
+        self.run = _run(2, status)
+
+    def get(self, _task_id: int, include_in_context: bool = True) -> object:
+        return _task() if include_in_context else []
+
+    def list_by_task(self, _task_id: int) -> list[ConversationRunRecord]:
+        return [self.run]
+
+
+@pytest.mark.asyncio
+async def test_snapshot_unloads_when_last_subscriber_leaves_an_idle_task() -> None:
+    sources = _RunSources("completed")
+    service = _make_state_service(sources, sources, sources)
+    _, first_unsubscribe, _ = service.subscribe_with_snapshot(7)
+    _, second_unsubscribe, _ = service.subscribe_with_snapshot(7)
+    space = task_runtime_spaces.get(7)
+    assert space is not None and space.has_snapshot()
+
+    first_unsubscribe()
+    assert space.has_snapshot()
+    second_unsubscribe()
+    assert not space.has_snapshot()
+
+
+@pytest.mark.asyncio
+async def test_running_snapshot_is_kept_until_the_run_stops_unwatched() -> None:
+    """流式正文没落库：运行中不卸载，Run 停下且无人订阅时再卸载。"""
+    sources = _RunSources("running")
+    service = _make_state_service(sources, sources, sources)
+    _, unsubscribe, _ = service.subscribe_with_snapshot(7)
+    unsubscribe()
+    space = task_runtime_spaces.get(7)
+    assert space is not None and space.has_snapshot()
+
+    sources.run = _run(2, "completed")
+    service.apply_planned(
+        RunStatusChangedEvent(task_id=7, run_id=2, status=ConversationRunStatus.COMPLETED)
+    )
+    assert not space.has_snapshot()
