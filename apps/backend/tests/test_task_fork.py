@@ -15,7 +15,6 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.models.message_metadata import UserMessageMetadata
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.storage.queries.task_read_queries import TaskReadQueries
 from app.task_runtime.service.task_service import TaskService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
@@ -37,7 +36,6 @@ def fork_store(request, monkeypatch):
     service._turn = store.runs
     service._context = store.context_service
     service._session_factory = store.factory
-    service._task_reads = TaskReadQueries(store.factory)
     store.service = service
     store.context.create_system_prompt(store.task.id, {"role": "system", "content": "固定系统指令"})
 

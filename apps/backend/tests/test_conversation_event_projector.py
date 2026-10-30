@@ -1113,3 +1113,22 @@ def test_first_output_of_run_without_user_input_creates_leading_reply(
     assert (reply["id"], reply["role"], reply["outcome"]) == ("assistant-run-2", "assistant", None)
     assert reply["parts"][0]["text"] == "结论"
     assert reply["parts"][1]["toolCallId"] == "call-9"
+
+
+def test_run_events_publish_the_task_execution_status(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """侧栏等处的状态推送只在 Run 开始与状态迁移时触发，其余事件（如流式正文）不读库。"""
+    from app.assistant_transport.service import conversation_event_projector as projector_module
+
+    published: list[int] = []
+    monkeypatch.setattr(
+        projector_module, "get_task_status_feed", lambda: type("Feed", (), {"publish": staticmethod(published.append)})()
+    )
+    event_projector, _ = projector
+    _init_run(event_projector)
+    _append_user_input(event_projector)
+    event_projector.process(RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED))
+
+    assert published == [1, 1]
