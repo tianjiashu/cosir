@@ -13,7 +13,7 @@ import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { forgetMessageHeights } from "@/lib/assistant/message-height-cache";
-import { useBackgroundTasksStore } from "@/lib/task-overview/background-tasks-store";
+import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 

@@ -95,7 +95,7 @@ test("看板定位能翻到还没加载的卡片", async ({ page, request }) => 
   await openAtBottom(page);
   await expect(page.locator('[data-tool-call-id="call-old"]')).toHaveCount(0);
 
-  await page.getByRole("button", { name: /^任务概览/ }).click();
+  await page.getByRole("button", { name: /^会话侧栏/ }).click();
   const row = page.getByRole("region", { name: "后台任务" }).locator('[data-background-task="call-old"]');
   await row.getByRole("button", { name: "在对话中定位" }).click();
   const card = page.locator('.aui-thread-root [data-tool-call-id="call-old"]');

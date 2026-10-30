@@ -17,11 +17,16 @@ async function seedSidebar(page: Page, request: APIRequestContext, theme: string
   await page.route(`${origin}/workspaces`, (route) => route.fulfill({ json: [workspace, { ...workspace, workspace_id: 8, name: "其他工作区", root_path: "/workspace/other" }] }));
   await page.route(`${origin}/workspaces/8/tasks`, (route) => route.fulfill({ json: [] }));
   const tasks = [
-    { task_id: 100, workspace_id: 7, title: longTitle, task_type: "user", execution_status: null, created_at: updatedAt, updated_at: updatedAt },
-    { task_id: 101, workspace_id: 7, title: "核对运行状态", task_type: "user", execution_status: "suspended", created_at: updatedAt, updated_at: "2026-01-01T00:00:00Z" },
-    { task_id: 102, workspace_id: 7, title: "分支任务", task_type: "fork", extra: { fork: { source_task_id: 100 } }, execution_status: "running", created_at: updatedAt, updated_at: updatedAt },
+    { task_id: 100, workspace_id: 7, title: longTitle, task_type: "user", created_at: updatedAt, updated_at: updatedAt },
+    { task_id: 101, workspace_id: 7, title: "核对运行状态", task_type: "user", created_at: updatedAt, updated_at: "2026-01-01T00:00:00Z" },
+    { task_id: 102, workspace_id: 7, title: "分支任务", task_type: "fork", extra: { fork: { source_task_id: 100 } }, created_at: updatedAt, updated_at: updatedAt },
   ];
   await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: tasks }));
+  // 状态点只读状态推送：一帧整表即可（流结束后客户端重连，再拿到同一张表）。
+  const statuses = { 100: null, 101: "suspended", 102: "running" };
+  await page.route(`${origin}/task-status/stream`, (route) => route.fulfill({
+    contentType: "application/x-ndjson", body: `${JSON.stringify({ type: "full", statuses })}\n`,
+  }));
   // 只读展示夹具按浏览器隔离，避免其他测试重置共享内存服务时影响任务切换。
   for (const task of tasks) {
     await page.route(`${origin}/tasks/${task.task_id}`, (route) => route.fulfill({ json: task }));
@@ -210,7 +215,7 @@ test("拖拽侧栏右缘调宽：最宽时 20 字标题完整显示，宽度写�
   await seedSidebar(page, request, "light");
   const twentyChars = "检查侧栏标题在最大宽度下能否完整显示二十";
   const now = new Date().toISOString();
-  const titled = { task_id: 103, workspace_id: 7, title: twentyChars, task_type: "user", execution_status: null, created_at: now, updated_at: now };
+  const titled = { task_id: 103, workspace_id: 7, title: twentyChars, task_type: "user", created_at: now, updated_at: now };
   // 后注册的路由优先：只给这条用例追加一个 20 字标题的任务。
   await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: [titled] }));
   await page.route(`${origin}/tasks/103`, (route) => route.fulfill({ json: titled }));
@@ -238,7 +243,7 @@ test("拖拽侧栏右缘调宽：最宽时 20 字标题完整显示，宽度写�
   await page.keyboard.press("Home");
   await expect(handle).toHaveAttribute("aria-valuenow", "240");
   // 夹具每次导航都会清空 localStorage，这里直接断言写入的偏好，而不是刷新后读回。
-  expect(await page.evaluate(() => localStorage.getItem("cosir:sidebar-width"))).toBe("240");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("cosir:layout") ?? "null")?.state?.sidebarWidth)).toBe(240);
 });
 
 test("尾栏按时间实际宽度让位：默认宽度下短时间的行能放下更长标题，悬停换成操作也不位移", async ({ page, request }) => {
@@ -246,7 +251,7 @@ test("尾栏按时间实际宽度让位：默认宽度下短时间的行能放�
   await seedSidebar(page, request, "light");
   const fitting = "调研沙箱改Python可行性";
   const now = new Date(Date.now() - 60_000).toISOString();
-  const titled = { task_id: 104, workspace_id: 7, title: fitting, task_type: "user", execution_status: null, created_at: now, updated_at: now };
+  const titled = { task_id: 104, workspace_id: 7, title: fitting, task_type: "user", created_at: now, updated_at: now };
   await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: [titled] }));
   await page.route(`${origin}/tasks/104`, (route) => route.fulfill({ json: titled }));
   await seedState(request, 104, { title: fitting, messages: [], activity: null });

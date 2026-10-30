@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import type { WorkbenchAgentConfigurationDraftTab, WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
 
@@ -28,7 +28,6 @@ const teamDraftTab = (workspaceId: number, toolCallId: string) => session(worksp
 
 describe("workbench store", () => {
   beforeEach(() => useWorkbenchStore.setState({ sessions: {} }));
-  afterEach(() => vi.unstubAllGlobals());
 
   it("按工作区分桶：切换工作区不影响另一个工作区的标签与草稿", () => {
     const store = useWorkbenchStore.getState();
@@ -103,11 +102,16 @@ describe("workbench store", () => {
     expect(session(7)).toBeUndefined();
   });
 
-  it("宽度偏好限幅并持久化", () => {
-    const saved = new Map<string, string>();
-    vi.stubGlobal("window", { localStorage: { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => saved.set(key, value) } });
-    useWorkbenchStore.getState().setPanelWidth(5000);
-    expect(useWorkbenchStore.getState().panelWidth).toBe(900);
-    expect(saved.get("cosir:workbench-width")).toBe("900");
+  it("删除 Task 移除已保存过的草稿时不记已保存标记，未受影响的工作区桶保持原引用", async () => {
+    const store = useWorkbenchStore.getState();
+    store.openAgentTeamConfigurationDraft(7, { taskId: 20, toolCallId: "team-1", draft: teamDraft });
+    await teamDraftTab(7, "team-1").session.save(async () => teamDraft);
+    store.openAgent(8, { taskId: 31, title: "保留" });
+    const untouched = session(8);
+
+    store.forgetTasks([20]);
+    expect(session(7).tabs).toEqual([]);
+    expect(session(7).savedDraftIds).toEqual([]);
+    expect(session(8)).toBe(untouched);
   });
 });

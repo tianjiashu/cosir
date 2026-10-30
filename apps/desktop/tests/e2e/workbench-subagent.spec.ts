@@ -21,8 +21,11 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   await page.addInitScript(() => window.localStorage.clear());
   const attachRequests: string[] = [];
   const businessWrites: string[] = [];
+  // 订阅按收到响应计：开发模式 StrictMode 首次挂载随即中止的请求不算。
+  page.on("response", (response) => {
+    if (response.url().endsWith("/tasks/501/assistant/attach") && response.request().method() === "POST") attachRequests.push(response.url());
+  });
   page.on("request", (request) => {
-    if (request.url().endsWith("/tasks/501/assistant/attach") && request.method() === "POST") attachRequests.push(request.url());
     if (request.method() === "POST" && (/\/tasks\/\d+\/(messages|resume)|\/tool-calls\/[^/]+\/decision/.test(request.url()) || request.url().includes("/cancel"))) businessWrites.push(request.url());
   });
 
@@ -58,8 +61,8 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
 test("两个并行子 Agent 分别订阅，切换回标签页重新订阅并保留内容", async ({ page }) => {
   await page.addInitScript(() => window.localStorage.clear());
   const attachRequests: string[] = [];
-  page.on("request", (request) => {
-    if (request.url().includes("/assistant/attach") && request.method() === "POST") attachRequests.push(request.url());
+  page.on("response", (response) => {
+    if (response.url().includes("/assistant/attach") && response.request().method() === "POST") attachRequests.push(response.url());
   });
 
   await page.goto("/tasks/42");

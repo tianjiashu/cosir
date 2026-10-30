@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 // 服务端渲染读 store 的初始状态；组件只经 useBackgroundTasks / useForegroundWaits 读，这里换成可控的表。
 const board = vi.hoisted(() => ({ entries: new Map<number, unknown[]>(), waits: new Map<number, string[]>(), parts: new Map<string, unknown>() }));
-vi.mock("@/lib/task-overview/background-tasks-store", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@/lib/task-overview/background-tasks-store")>(),
+vi.mock("@/lib/background-tasks/store", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/background-tasks/store")>(),
   useBackgroundTasks: (taskId: number | null) => (taskId === null ? [] : board.entries.get(taskId) ?? []),
   useForegroundWaits: (taskId: number | null) => (taskId === null ? [] : board.waits.get(taskId) ?? []),
   useBackgroundTaskPart: (_taskId: number, toolCallId: string) => board.parts.get(toolCallId) ?? null,
@@ -13,13 +13,13 @@ vi.mock("@/lib/task-overview/background-tasks-store", async (importOriginal) => 
 
 import { ForegroundWaitAction } from "@/components/assistant-ui/tools/foreground-wait-action";
 import { readToolArtifact } from "@/components/assistant-ui/tools/types";
-import { BackgroundTasksCard } from "@/components/task-overview/background-tasks-card";
-import { formatElapsed } from "@/components/task-overview/background-task-row";
+import { BackgroundTasksBody, BackgroundTasksSummary } from "@/components/task-rail/background-tasks-card";
+import { formatElapsed } from "@/components/task-rail/background-task-row";
 import type { BackgroundTaskEntry, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/converter";
 import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
 import { backgroundToolCall } from "@/lib/assistant/task-commands";
-import { countRunning, useBackgroundTasksStore } from "@/lib/task-overview/background-tasks-store";
+import { countRunning, useBackgroundTasksStore } from "@/lib/background-tasks/store";
 
 import { transportState } from "./transport-fixtures";
 
@@ -109,17 +109,20 @@ describe("ForegroundWaitAction", () => {
 });
 
 describe("后台任务卡", () => {
-  it("没有条目时不渲染，运行中在前、已结束收成「N 已完成」", () => {
-    expect(renderToStaticMarkup(<BackgroundTasksCard taskId={1} />)).toBe("");
+  it("卡片始终存在：没有条目时摘要为「无」、正文为空状态；运行中在前、已结束收成「N 已完成」", () => {
+    expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("无");
+    expect(renderToStaticMarkup(<BackgroundTasksBody taskId={1} />)).toContain("没有后台任务");
     board.entries.set(1, [
       entry("run", { label: "cd /work && make" }),
       entry("done", { status: "completed", endedAt: "2026-10-28T08:00:42+00:00" }),
     ]);
-    const html = renderToStaticMarkup(<BackgroundTasksCard taskId={1} />);
-    expect(html).toContain("后台任务");
+    expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("1 个运行中");
+    const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
     expect(html).toContain("cd /work &amp;&amp; make");
     expect(html).toContain("1 已完成");
     expect(html).not.toContain("terminal_command:done");
+    board.entries.set(1, [entry("done", { status: "completed", endedAt: "2026-10-28T08:00:42+00:00" })]);
+    expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("1 已完成");
   });
 
   it("运行数与耗时格式", () => {
@@ -168,7 +171,7 @@ describe("后台任务卡", () => {
   it("展开即对话里的同一张卡片：运行中默认展开，停止只在外壳上", () => {
     board.entries.set(1, [entry("a", { label: "terminal_command:make watch" })]);
     board.parts.set("a", terminalPart("a"));
-    const html = renderToStaticMarkup(<BackgroundTasksCard taskId={1} />);
+    const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain('data-tool-call-id="a"');
     expect(html).toContain("后台运行中");
@@ -179,7 +182,7 @@ describe("后台任务卡", () => {
 
   it("对应 part 未加载（不在已加载的历史里）时只剩外壳、不可展开，仍可定位", () => {
     board.entries.set(1, [entry("a")]);
-    const html = renderToStaticMarkup(<BackgroundTasksCard taskId={1} />);
+    const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
     const row = html.slice(html.indexOf('data-background-task="a"'));
     expect(row).toContain("terminal_command:a");
     expect(row).not.toContain('aria-expanded="');

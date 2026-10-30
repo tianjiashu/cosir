@@ -44,7 +44,7 @@ test.beforeEach(async ({ request }) => {
 
 test("看板只列后台工作；前台等待在卡片上转到后台后才进看板", async ({ page }) => {
   await page.goto(`/tasks/${TASK_ID}`);
-  const entryButton = page.getByRole("button", { name: /^任务概览，1 个后台任务运行中/ });
+  const entryButton = page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ });
   await expect(entryButton).toBeVisible();
   await entryButton.click();
 
@@ -69,5 +69,5 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   await expect(fgActions).toHaveCount(0);
   const fgRow = page.locator('[data-background-task="call-fg"]');
   await expect(fgRow.getByRole("button", { name: "停止" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /^任务概览，1 个后台任务运行中/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ })).toBeVisible();
 });

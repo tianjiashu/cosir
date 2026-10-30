@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildModelCatalog } from "@/lib/model-catalog";
 
 const configs = (modelName: string) => [{
+  provider: "openai" as const,
   config_id: 1,
   config_name: "Demo 配置",
   base_url: "https://example.com/v1",

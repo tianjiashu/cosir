@@ -17,6 +17,7 @@ import {
   mountedTerminalSessionIds,
   terminalTabs,
 } from "@/lib/terminal/terminal-sessions";
+import { TERMINAL_PANEL_HEIGHT } from "@/lib/layout-preferences";
 import { selectTerminalTask, useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +26,7 @@ import { TerminalSearchBar } from "./terminal-search-bar";
 import { TerminalSessionPane } from "./terminal-session-pane";
 import { TerminalTabBar } from "./terminal-tab-bar";
 import type { TerminalView, TerminalViewRuntime } from "./terminal-view";
-import { MIN_TERMINAL_PANEL_HEIGHT, useTerminalPanelHeight } from "./use-terminal-panel-height";
+import { useTerminalPanelHeight } from "./use-terminal-panel-height";
 import { useTerminalSessionActions } from "./use-terminal-session-actions";
 
 /**
@@ -145,7 +146,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
 
   return (
     <div className={open ? "contents" : "hidden"} data-terminal-workbench={open ? "open" : "closed"}>
-      <PanelDock side="bottom" size={panelHeight} minSize={MIN_TERMINAL_PANEL_HEIGHT} maxSize={maxPanelHeight}
+      <PanelDock side="bottom" size={panelHeight} minSize={TERMINAL_PANEL_HEIGHT.min} maxSize={maxPanelHeight}
         onSizeChange={resizePanel} resizeLabel="调整终端面板高度">
         <section
           ref={sectionRef}

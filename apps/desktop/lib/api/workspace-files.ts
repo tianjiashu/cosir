@@ -1,4 +1,5 @@
 import { requestJson, requestOk, jsonRequestInit } from "@/lib/http/client";
+import { readNdjson } from "@/lib/http/ndjson";
 
 export type FileEntry = {
   path: string;
@@ -175,25 +176,7 @@ export async function readFileStream<T>(
       headers: { Accept: "application/x-ndjson" },
     }),
   );
-  if (!response.body) throw new Error("文件服务未返回数据流");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let pending = "";
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      pending += decoder.decode(value, { stream: !done });
-      const lines = pending.split("\n");
-      pending = lines.pop() ?? "";
-      for (const line of lines)
-        if (line.trim()) onValue(decode(JSON.parse(line)));
-      if (done) break;
-    }
-    if (pending.trim()) onValue(decode(JSON.parse(pending)));
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
+  await readNdjson(response, onValue, decode);
 }
 
 export type BrowserVisibility = { ignored_paths: string[]; revision: string };

@@ -7,6 +7,7 @@ import { formatRelativeTime } from "@/lib/format/relative-time";
 import { cn } from "@/lib/utils";
 import { TaskRunStatusDot } from "./task-run-status";
 import type { TaskSidebarNode, WorkspaceSidebarNode, WorkspaceTreeSource } from "./workspace-tree-model";
+import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
 
 /** 当前项由路由与工作区选择决定；树的键盘焦点不构成第二份导航状态。 */
 export function WorkspaceTreeRow({ node, innerRef, attrs, children }: RowRendererProps<WorkspaceSidebarNode>) {
@@ -160,6 +161,7 @@ function branchGuides(node: NodeApi<WorkspaceSidebarNode>): BranchGuide[] {
 
 function WorkspaceTaskRow({ node, style, item, actions }: Pick<NodeRendererProps<WorkspaceSidebarNode>, "node" | "style"> & { item: TaskSidebarNode; actions: ReactNode }) {
   const task = item.task;
+  const status = useTaskExecutionStatus(task.task_id);
   const nested = node.level > ROOT_TASK_LEVEL;
   // 嵌套行的 Fork 身份由层级表达；源任务已不在列表中、被提为顶层的 Fork 仍保留图标。
   const showForkIcon = task.task_type === "fork" && !nested;
@@ -173,7 +175,7 @@ function WorkspaceTaskRow({ node, style, item, actions }: Pick<NodeRendererProps
       ))}
       <span className="workspace-tree-task-marker" style={{ flexBasis: TASK_MARKER_WIDTH }} data-nested={nested || undefined}>
         {showForkIcon && <GitForkIcon className="size-3.5 text-muted-foreground" aria-label="Fork 任务" />}
-        <TaskRunStatusDot status={task.execution_status} className={showForkIcon ? "absolute -top-0.5 right-0 size-1.5" : undefined} />
+        <TaskRunStatusDot status={status} className={showForkIcon ? "absolute -top-0.5 right-0 size-1.5" : undefined} />
       </span>
       <span className="flex min-w-0 flex-1 items-center gap-1">
         <span className="workspace-tree-title min-w-0 truncate" title={item.workspaceName ? `${task.full_title}\n工作区：${item.workspaceName}` : task.full_title}>{task.full_title}</span>

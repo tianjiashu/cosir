@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("模型配置编辑回显密码态 API Key，保存后保持窗口打开", async ({ page }) => {
   const config = {
+    provider: "openai",
     config_id: 2,
     config_name: "Demo",
     base_url: "https://api.example.com/v1",

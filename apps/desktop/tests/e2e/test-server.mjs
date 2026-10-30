@@ -1,4 +1,4 @@
-/* global structuredClone, setTimeout, clearTimeout, URL, console, process, Buffer */
+/* global structuredClone, setTimeout, setInterval, clearInterval, URL, console, process, Buffer */
 
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
@@ -56,6 +56,8 @@ const telemetry = {
 
 function resetTestState() {
   testGeneration += 1;
+  lastPublishedStatus.clear();
+  for (const res of statusSubscribers) writeStatusFrame(res, { type: "full", statuses: {} });
   tasks.clear();
   states.clear();
   for (const set of subscribers.values()) for (const res of set) res.end();
@@ -83,11 +85,6 @@ const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const isActive = (status) => status === "running" || status === "suspended";
 // 与 /model-configs 唯一的模型一致：运行期配置锁定下，运行中发送沿用这份配置。
 const DEFAULT_LAUNCH = { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: [] };
-
-function taskProjection(task) {
-  const activity = states.get(task.task_id)?.activity ?? null;
-  return { ...task, execution_status: activity?.status ?? null };
-}
 
 const emptyState = () => ({ title: "新对话", messages: [], activity: null });
 
@@ -376,6 +373,24 @@ function publish(taskId, frame) {
 function commit(taskId, state) {
   states.set(taskId, state);
   publish(taskId, { task_id: taskId, kind: "full", mutations: [], state: wireState(taskId) });
+  publishTaskStatus(taskId);
+}
+
+/** 模拟后端 `/task-status/stream` 的订阅者；与后端一样，Task 的执行状态取当前活动的状态。 */
+const statusSubscribers = new Set();
+const executionStatus = (taskId) => states.get(taskId)?.activity?.status ?? null;
+
+function writeStatusFrame(res, frame) {
+  res.write(`${JSON.stringify(frame)}\n`);
+}
+
+/** 只在状态真的变了时推送，与后端「Run 开始或状态迁移才发布」一致。 */
+const lastPublishedStatus = new Map();
+function publishTaskStatus(taskId) {
+  const status = executionStatus(taskId);
+  if (lastPublishedStatus.has(taskId) && lastPublishedStatus.get(taskId) === status) return;
+  lastPublishedStatus.set(taskId, status);
+  for (const res of statusSubscribers) writeStatusFrame(res, { type: "changed", statuses: { [taskId]: status } });
 }
 
 function wait(milliseconds) {
@@ -400,6 +415,7 @@ async function execute(taskId, { initialState, chunks, finalState, prefixReasoni
     const cancelled = settle(states.get(taskId), "cancelled");
     if (executor.drop) {
       states.set(taskId, cancelled);
+      publishTaskStatus(taskId);
       for (const res of subscribers.get(taskId) ?? []) res.destroy();
       return;
     }
@@ -728,6 +744,19 @@ const server = createServer(async (req, res) => {
 
   const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
 
+  if (req.method === "GET" && url.pathname === "/task-status/stream") {
+    res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+    const statuses = Object.fromEntries([...states.keys()].map((taskId) => [taskId, executionStatus(taskId)]));
+    for (const [taskId, status] of Object.entries(statuses)) lastPublishedStatus.set(Number(taskId), status);
+    writeStatusFrame(res, { type: "full", statuses });
+    statusSubscribers.add(res);
+    const heartbeat = setInterval(() => writeStatusFrame(res, { type: "heartbeat" }), 2000);
+    res.on("close", () => {
+      clearInterval(heartbeat);
+      statusSubscribers.delete(res);
+    });
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/health") {
     jsonResponse(res, 200, { status: "ok" });
     return;
@@ -742,7 +771,7 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.method === "GET" && url.pathname === `/workspaces/${WORKSPACE_ID}/tasks`) {
-    jsonResponse(res, 200, [...tasks.values()].filter(task => task.task_type !== "delegate_task").map(taskProjection));
+    jsonResponse(res, 200, [...tasks.values()].filter(task => task.task_type !== "delegate_task"));
     return;
   }
   if (req.method === "POST" && url.pathname === `/workspaces/${WORKSPACE_ID}/tasks`) {
@@ -752,11 +781,11 @@ const server = createServer(async (req, res) => {
       task_id: TASK_ID,
       workspace_id: WORKSPACE_ID,
       title: text.slice(0, 40),
-      execution_status: null,
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(TASK_ID, emptyState());
+    publishTaskStatus(TASK_ID);
     jsonResponse(res, 200, tasks.get(TASK_ID));
     return;
   }
@@ -820,11 +849,11 @@ const server = createServer(async (req, res) => {
       task_id: taskId,
       workspace_id: WORKSPACE_ID,
       title,
-      execution_status: null,
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(taskId, emptyState());
+    publishTaskStatus(taskId);
     jsonResponse(res, 200, { task_id: taskId });
     return;
   }
@@ -843,11 +872,11 @@ const server = createServer(async (req, res) => {
       task_id: TASK_ID,
       workspace_id: WORKSPACE_ID,
       title: text.slice(0, 40),
-      execution_status: "running",
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(TASK_ID, stateWithExchange(emptyState(), text, 899, "", "running"));
+    publishTaskStatus(TASK_ID);
     executors.delete(TASK_ID);
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
@@ -857,11 +886,11 @@ const server = createServer(async (req, res) => {
       task_id: TASK_ID,
       workspace_id: WORKSPACE_ID,
       title: "工具追踪视觉回归",
-      execution_status: null,
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(TASK_ID, toolTraceState());
+    publishTaskStatus(TASK_ID);
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
   }
@@ -870,11 +899,11 @@ const server = createServer(async (req, res) => {
       task_id: TASK_ID,
       workspace_id: WORKSPACE_ID,
       title: "网页搜索标题展示回归",
-      execution_status: null,
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(TASK_ID, webSearchState());
+    publishTaskStatus(TASK_ID);
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
   }
@@ -883,11 +912,11 @@ const server = createServer(async (req, res) => {
       task_id: TASK_ID,
       workspace_id: WORKSPACE_ID,
       title: "Mermaid 全屏回归",
-      execution_status: null,
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(TASK_ID, mermaidState());
+    publishTaskStatus(TASK_ID);
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
   }
@@ -941,17 +970,19 @@ const server = createServer(async (req, res) => {
       task_id: TASK_ID,
       workspace_id: WORKSPACE_ID,
       title: "委派主任务",
-      execution_status: "completed",
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(TASK_ID, delegationState());
+    publishTaskStatus(TASK_ID);
     for (const id of [501, 502]) tasks.set(id, {
       task_id: id, workspace_id: WORKSPACE_ID, title: `子任务${id}`, task_type: "delegate_task",
       created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(501, childDelegationState());
+    publishTaskStatus(501);
     states.set(502, secondChildDelegationState());
+    publishTaskStatus(502);
     jsonResponse(res, 200, { task_id: TASK_ID, child_task_id: 501, second_child_task_id: 502 });
     return;
   }
@@ -1024,6 +1055,7 @@ const server = createServer(async (req, res) => {
           ? { ...part, status: "cancelled", error: "已取消" } : part),
       }));
       states.set(taskId, { ...state, messages });
+      publishTaskStatus(taskId);
     }
     if (states.has(taskId)) commit(taskId, states.get(taskId));
     jsonResponse(res, 200, {});
@@ -1051,7 +1083,7 @@ const server = createServer(async (req, res) => {
       jsonResponse(res, 404, { detail: "task not found" });
       return;
     }
-    jsonResponse(res, 200, { ...taskProjection(task), task_type: task.task_type ?? "user" });
+    jsonResponse(res, 200, { ...task, task_type: task.task_type ?? "user" });
     return;
   }
   if (req.method === "GET" && url.pathname.startsWith("/tasks/") && url.pathname.endsWith("/assistant/state")) {

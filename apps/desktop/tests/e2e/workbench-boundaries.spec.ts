@@ -4,7 +4,7 @@ import { seedState } from "./transport-fixtures";
 
 const origin = "http://127.0.0.1:8000";
 const task = (task_id: number, workspace_id: number) => ({
-  task_id, workspace_id, title: `任务${task_id}`, task_type: "user", execution_status: null,
+  task_id, workspace_id, title: `任务${task_id}`, task_type: "user",
   created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
 });
 

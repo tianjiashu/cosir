@@ -31,7 +31,7 @@ async function seedView(page: Page, request: APIRequestContext, status: "complet
 
 const target = {
   task_id: 44, workspace_id: 7, title: "历史分支", task_type: "fork",
-  execution_status: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+  created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
 };
 
 test.beforeEach(async ({ request }) => {

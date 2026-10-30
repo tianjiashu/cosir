@@ -4,7 +4,6 @@ import { createAgentEditorSession } from "@/lib/agent-editor/session";
 import { createTeamEditorSession } from "@/lib/agent-team-editor/session";
 import type { AgentConfigurationInput } from "@/lib/api/configuration";
 import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
-import { clampWorkbenchWidth, readWorkbenchWidth, writeWorkbenchWidth } from "@/lib/workspace-preferences";
 import type { WorkbenchDraftTab, WorkbenchTab } from "./types";
 
 /** 一个工作区的工作台：标签、激活项与面板开合。 */
@@ -30,10 +29,7 @@ type WorkbenchState = {
    * 不销毁任何标签或草稿。草稿只在关闭标签（未保存时确认）与删除工作区 / Task 时丢弃。
    */
   sessions: Record<number, WorkbenchSession>;
-  /** 宽度是全局用户偏好，持久化在 workspace-preferences。 */
-  panelWidth: number;
   openFiles: (workspaceId: number) => void;
-  openTaskOverview: (workspaceId: number) => void;
   openAgent: (workspaceId: number, input: { taskId: number; title: string }) => void;
   openAgentConfigurationDraft: (workspaceId: number, input: AgentDraftInput) => void;
   openAgentTeamConfigurationDraft: (workspaceId: number, input: TeamDraftInput) => void;
@@ -41,9 +37,8 @@ type WorkbenchState = {
   closeTab: (workspaceId: number, tabId: string) => void;
   setPanelOpen: (workspaceId: number, open: boolean) => void;
   forgetWorkspace: (workspaceId: number) => void;
-  /** 删除 Task 后移除属于它们的子 Agent 与草稿标签。 */
+  /** 删除 Task 后移除属于它们的子 Agent 与草稿标签；只移除，不记「已保存」（见 `rememberSavedDraft`）。 */
   forgetTasks: (taskIds: readonly number[]) => void;
-  setPanelWidth: (width: number) => void;
 };
 
 const EMPTY_WORKBENCH_SESSION: WorkbenchSession = { tabs: [], activeTabId: null, panelOpen: false, savedDraftIds: [] };
@@ -74,19 +69,25 @@ function openTab(
   return { tabs: [...session.tabs, tab], activeTabId: id, panelOpen: true, savedDraftIds };
 }
 
+/** 移除标签并修正激活项（落到相邻标签）与面板开合；没有标签被移除时返回原引用。 */
 function withoutTabs(session: WorkbenchSession, removed: (tab: WorkbenchTab) => boolean): WorkbenchSession {
   const index = session.tabs.findIndex((tab) => tab.id === session.activeTabId);
   const tabs = session.tabs.filter((tab) => !removed(tab));
   if (tabs.length === session.tabs.length) return session;
-  // 关闭即丢弃未保存的修改，所以只要保存过，配置文件里留下的就是已保存的版本。
-  const savedDraftIds = [...new Set([
-    ...session.savedDraftIds,
-    ...session.tabs.flatMap((tab) => removed(tab) && isDraftTab(tab) && tab.session.store.getState().baseline !== null ? [tab.toolCallId] : []),
-  ])];
   const activeTabId = tabs.some((tab) => tab.id === session.activeTabId)
     ? session.activeTabId
     : tabs[Math.min(Math.max(index, 0), tabs.length - 1)]?.id ?? null;
-  return { tabs, activeTabId, panelOpen: tabs.length > 0 && session.panelOpen, savedDraftIds };
+  return { ...session, tabs, activeTabId, panelOpen: tabs.length > 0 && session.panelOpen };
+}
+
+/**
+ * 关闭草稿标签时记下「已保存」。关闭即丢弃未保存的修改，所以只要保存过，配置文件里留下的就是已保存的版本。
+ * 只由关闭标签调用：删除 Task 时卡片随 Task 一起消失，标记无人读取，不记。
+ */
+function rememberSavedDraft(session: WorkbenchSession, closed: WorkbenchTab): WorkbenchSession {
+  if (!isDraftTab(closed) || closed.session.store.getState().baseline === null) return session;
+  if (session.savedDraftIds.includes(closed.toolCallId)) return session;
+  return { ...session, savedDraftIds: [...session.savedDraftIds, closed.toolCallId] };
 }
 
 export const useWorkbenchStore = create<WorkbenchState>((set) => {
@@ -95,12 +96,8 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
   }));
   return {
     sessions: {},
-    panelWidth: readWorkbenchWidth(),
     openFiles: (workspaceId) => update(workspaceId, (session) => openTab(session, "workspace-files", () => ({
       id: "workspace-files", kind: "files", title: "文件",
-    }))),
-    openTaskOverview: (workspaceId) => update(workspaceId, (session) => openTab(session, "task-overview", () => ({
-      id: "task-overview", kind: "task-overview", title: "任务概览",
     }))),
     openAgent: (workspaceId, { taskId, title }) => update(workspaceId, (session) => openTab(
       session,
@@ -133,7 +130,11 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
       }),
     )),
     activateTab: (workspaceId, activeTabId) => update(workspaceId, (session) => ({ ...session, activeTabId, panelOpen: true })),
-    closeTab: (workspaceId, tabId) => update(workspaceId, (session) => withoutTabs(session, (tab) => tab.id === tabId)),
+    closeTab: (workspaceId, tabId) => update(workspaceId, (session) => {
+      const closed = session.tabs.find((tab) => tab.id === tabId);
+      if (!closed) return session;
+      return rememberSavedDraft(withoutTabs(session, (tab) => tab === closed), closed);
+    }),
     setPanelOpen: (workspaceId, panelOpen) => update(workspaceId, (session) => ({ ...session, panelOpen })),
     forgetWorkspace: (workspaceId) => set((state) => {
       const sessions = { ...state.sessions };
@@ -146,11 +147,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
         withoutTabs(session, (tab) => "taskId" in tab && taskIds.includes(tab.taskId)),
       ])),
     })),
-    setPanelWidth: (width) => {
-      const panelWidth = clampWorkbenchWidth(width);
-      writeWorkbenchWidth(panelWidth);
-      set({ panelWidth });
-    },
   };
 });
 

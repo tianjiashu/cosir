@@ -15,7 +15,7 @@ import type {
 } from "@/components/assistant/runtime/runtime-types";
 import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { useBackgroundTasksStore } from "@/lib/task-overview/background-tasks-store";
+import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { newTraceId } from "@/lib/trace";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";

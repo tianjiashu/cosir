@@ -8,7 +8,6 @@ import {
   BotIcon,
   UserCogIcon,
   NetworkIcon,
-  LayoutDashboardIcon,
   type LucideIcon,
 } from "lucide-react";
 import { useCallback } from "react";
@@ -18,11 +17,10 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { PANEL_HEADER_CLASS, panelTabClass } from "@/components/ui/panel-tokens";
-import { WorkbenchAgentTabStatus } from "@/components/workbench-agent-tab-status";
-import { WorkbenchSurface } from "@/components/workbench-surface";
+import { WorkbenchAgentTabStatus } from "./agent-tab-status";
+import { WorkbenchSurface } from "./surface";
 import type { Workspace } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { WorkbenchAgentStatusProvider } from "@/lib/workbench/agent-status";
 import { confirmCloseWorkbenchTab, useWorkbenchTabDirty } from "@/lib/workbench/drafts";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import type { WorkbenchTab } from "@/lib/workbench/types";
@@ -33,7 +31,6 @@ const TAB_KIND_ICONS: Record<WorkbenchTab["kind"], LucideIcon> = {
   agent: BotIcon,
   "agent-configuration-draft": UserCogIcon,
   "agent-team-configuration-draft": NetworkIcon,
-  "task-overview": LayoutDashboardIcon,
 };
 
 /** 草稿标签直接订阅会话，未激活标签也能及时显示未保存状态。 */
@@ -92,7 +89,6 @@ export function Workbench({
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   return (
-    <WorkbenchAgentStatusProvider workspaceId={workspaceId} tabs={tabs}>
       <PanelDock side="right" size={width} minSize={minWidth} maxSize={maxWidth}
         onSizeChange={onWidthChange} resizeLabel="调整工作台宽度">
       <Tabs.Root
@@ -154,6 +150,5 @@ export function Workbench({
         ))}
       </Tabs.Root>
       </PanelDock>
-    </WorkbenchAgentStatusProvider>
   );
 }

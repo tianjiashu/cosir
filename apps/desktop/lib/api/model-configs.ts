@@ -3,7 +3,10 @@ import { postJson, requestJson, sendJson, type RequestOptions } from "@/lib/http
 /** 连接测试会真实请求模型接口（含首 token 等待），明显长于默认 JSON 超时。 */
 const CONNECTION_TEST_TIMEOUT_MS = 120_000;
 
+export type ModelProvider = "openai" | "claude_subscription";
+
 export type ModelConfig = {
+  provider: ModelProvider;
   config_id: number;
   config_name: string;
   base_url: string;
@@ -21,6 +24,7 @@ export type ModelConfig = {
 };
 
 export type ModelConfigCreateInput = {
+  provider: ModelProvider;
   config_name: string;
   base_url: string;
   api_key: string;

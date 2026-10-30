@@ -2,7 +2,7 @@
 
 import { ReferenceBridgeProvider, ReferenceTargetScope } from "@/components/workspace-references/reference-bridge";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   Outlet,
   useLocation,
@@ -10,14 +10,14 @@ import {
   useNavigate,
   useOutletContext,
 } from "react-router-dom";
-import { FolderIcon, LayoutDashboardIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
+import { FolderIcon, LayoutListIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 
 import { BackendRestartButton } from "@/components/backend-restart-button";
-import { FocusedTaskIdContext } from "@/components/task-overview/focused-task-context";
-import { countRunning, useBackgroundTasks } from "@/lib/task-overview/background-tasks-store";
+import { TaskRail } from "@/components/task-rail/task-rail";
+import { useTaskRail } from "@/components/task-rail/use-task-rail";
+import { TASK_RAIL_WIDTH } from "@/lib/task-rail/placement";
 import { CommandPalette } from "@/components/command-palette/command-palette";
-import { useCommandPaletteHotkey } from "@/components/command-palette/use-command-palette-hotkey";
 import { BackendStatusBanner } from "@/components/backend-status-banner";
 import { AppSidebar, SidebarToggleButton, type SidebarSection } from "@/components/layout/sidebar/app-sidebar";
 import { PageHeader, type Crumb } from "@/components/layout/page-header";
@@ -28,29 +28,24 @@ import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { findSettingsTab, SYSTEM_SETTINGS_TABS, WORKSPACE_SETTINGS_TABS } from "@/components/settings/settings-tabs";
 import { TaskPage } from "@/components/task-page";
 import { TaskRunStatusBadge } from "@/components/task-tree/task-run-status";
+import { CountBadge } from "@/components/ui/count-badge";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
-import { Workbench } from "@/components/workbench";
-import { useWorkbenchLayout } from "./use-workbench-layout";
+import { Workbench } from "@/components/workbench/workbench";
+import { useWorkbenchPanel } from "./use-workbench-panel";
 import { useUnsavedRouteGuard } from "./use-unsaved-route-guard";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { APP_SHORTCUTS, isTerminalKeyEvent, withShortcut } from "@/lib/shortcuts";
+import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS, withShortcut } from "@/lib/shortcuts";
 import {
   selectTerminalTask,
   useTerminalBadge,
   useTerminalWorkbenchStore,
 } from "@/lib/terminal/terminal-workbench-store";
 import { WorkbenchProvider } from "@/lib/workbench/context";
-import { useWorkbenchSession, useWorkbenchStore } from "@/lib/workbench/store";
-import {
-  clampSidebarWidth,
-  readSidebarCollapsed,
-  readSidebarWidth,
-  SIDEBAR_WIDTH,
-  writeSidebarCollapsed,
-  writeSidebarWidth,
-} from "@/lib/workspace-preferences";
+import { SIDEBAR_WIDTH, useLayoutPreferences } from "@/lib/layout-preferences";
 import { cn } from "@/lib/utils";
+import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
+import { useTaskStatusStream } from "@/lib/task-status/use-task-status-stream";
 
 /** 路由表上每个子路由通过 handle 声明自己属于哪个区域（见 src/router.tsx）。 */
 export type RouteHandle = { section: SidebarSection; files?: boolean };
@@ -115,33 +110,32 @@ export function AppLayout() {
   const taskState = section === "conversation" ? routeTaskState : keptTaskState;
 
   const catalog = useWorkspaceCatalog(focusedTaskId, workspaceConfigurationId);
+  useTaskStatusStream();
+  const activeTaskStatus = useTaskExecutionStatus(catalog.activeTask?.task_id);
   useUnsavedRouteGuard();
   // 工作台显示聚焦任务所在工作区的桶（无任务时为选中工作区）；归属尚在加载时暂不显示，不销毁任何内容。
   const workbenchWorkspace = catalog.workspaces.find((workspace) => workspace.workspace_id === catalog.activeTaskWorkspaceId);
   const workbenchWorkspaceId = workbenchWorkspace?.workspace_id ?? null;
-  const workbenchLayout = useWorkbenchLayout();
+  const workbench = useWorkbenchPanel(workbenchWorkspaceId, filesVisible);
   // 快捷键先于导航函数注册，经 ref 调用最新的实现。
   const startNewConversationRef = useRef<() => void>(() => undefined);
   const actions = useWorkspaceActions(catalog, focusedTaskId);
 
   // ---- 侧栏：宽屏停靠（可收起并记住），窄屏图标栏 + 抽屉 ----
   const narrow = useMediaQuery(NARROW_VIEWPORT_QUERY);
-  const [dockedCollapsed, setDockedCollapsed] = useState(readSidebarCollapsed);
+  const dockedCollapsed = useLayoutPreferences((state) => state.sidebarCollapsed);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const sidebarRail = narrow || dockedCollapsed;
   // 展开宽度是用户偏好：拖拽右缘调整，宽屏停靠与窄屏抽屉共用。
-  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
-  const resizeSidebar = useCallback((width: number) => setSidebarWidth(clampSidebarWidth(width)), []);
-  useEffect(() => writeSidebarWidth(sidebarWidth), [sidebarWidth]);
+  const sidebarWidth = useLayoutPreferences((state) => state.sidebarWidth);
+  const resizeSidebar = useLayoutPreferences((state) => state.setSidebarWidth);
   const toggleSidebar = useCallback(() => {
     if (narrow) {
       setDrawerOpen((open) => !open);
       return;
     }
-    setDockedCollapsed((collapsed) => {
-      writeSidebarCollapsed(!collapsed);
-      return !collapsed;
-    });
+    const { sidebarCollapsed, setSidebarCollapsed } = useLayoutPreferences.getState();
+    setSidebarCollapsed(!sidebarCollapsed);
   }, [narrow]);
   useEffect(() => {
     if (!narrow) setDrawerOpen(false);
@@ -151,44 +145,27 @@ export function AppLayout() {
   }, [location.pathname]);
   useHotkeys("escape", () => setDrawerOpen(false), { enabled: drawerOpen, enableOnFormTags: true });
 
-  // ---- 应用级快捷键（登记见 lib/shortcuts.ts）。输入框内同样生效：这些组合键不与文本编辑冲突。 ----
-  const hotkeyOptions = { enableOnFormTags: true, enableOnContentEditable: true, preventDefault: true, ignoreEventWhen: isTerminalKeyEvent } as const;
-  useHotkeys(APP_SHORTCUTS.newConversation.keys, () => startNewConversationRef.current(), hotkeyOptions);
-  useHotkeys(APP_SHORTCUTS.toggleSidebar.keys, () => toggleSidebar(), hotkeyOptions, [toggleSidebar]);
-  useHotkeys(APP_SHORTCUTS.openSettings.keys, () => navigate("/settings"), hotkeyOptions, [navigate]);
+  // ---- 应用级快捷键（登记见 lib/shortcuts.ts）；工作台与会话侧栏的快捷键由各自的 hook 注册 ----
+  useHotkeys(APP_SHORTCUTS.newConversation.keys, () => startNewConversationRef.current(), APP_HOTKEY_OPTIONS);
+  useHotkeys(APP_SHORTCUTS.toggleSidebar.keys, () => toggleSidebar(), APP_HOTKEY_OPTIONS, [toggleSidebar]);
+  useHotkeys(APP_SHORTCUTS.openSettings.keys, () => navigate("/settings"), APP_HOTKEY_OPTIONS, [navigate]);
 
   // ---- 终端工作台：入口在页头，面板在 TaskPage 内，二者经按 taskId 分桶的 store 协作 ----
-  const terminalTaskId = section === "conversation" ? routeTaskId : null;
-  const terminalPanelOpen = useTerminalWorkbenchStore((state) => terminalTaskId === null ? false : selectTerminalTask(terminalTaskId)(state).open);
-  const terminalBadge = useTerminalBadge(terminalTaskId);
+  // 对话页的 Task：终端与会话侧栏都只属于对话区，配置 / 观测页不显示。
+  const conversationTaskId = section === "conversation" ? routeTaskId : null;
+  const terminalPanelOpen = useTerminalWorkbenchStore((state) => conversationTaskId === null ? false : selectTerminalTask(conversationTaskId)(state).open);
+  const terminalBadge = useTerminalBadge(conversationTaskId);
   const toggleTerminal = useCallback(() => {
-    if (terminalTaskId !== null) useTerminalWorkbenchStore.getState().toggle(terminalTaskId);
-  }, [terminalTaskId]);
-  useHotkeys(APP_SHORTCUTS.toggleTerminal.keys, toggleTerminal, { ...hotkeyOptions, enabled: terminalTaskId !== null }, [toggleTerminal]);
+    if (conversationTaskId !== null) useTerminalWorkbenchStore.getState().toggle(conversationTaskId);
+  }, [conversationTaskId]);
+  useHotkeys(APP_SHORTCUTS.toggleTerminal.keys, toggleTerminal, { ...APP_HOTKEY_OPTIONS, enabled: conversationTaskId !== null }, [toggleTerminal]);
+
+  // ---- 会话侧栏：开关、摆放、页头角标与快捷键见 useTaskRail ----
+  const rail = useTaskRail(conversationTaskId);
 
   // ---- 命令面板（⌘K）：搜索任务、开始新对话、跳转配置 ----
   const [paletteOpen, setPaletteOpen] = useState(false);
-  useCommandPaletteHotkey(useCallback(() => setPaletteOpen(true), []));
-
-  // ---- 工作台 ----
-  const workbenchSession = useWorkbenchSession(workbenchWorkspaceId);
-  // 配置与观测页不显示文件标签；这是工作台标签可见性的唯一过滤处，工作台与页头按钮共用结果。
-  const workbenchTabs = useMemo(
-    () => workbenchSession.tabs.filter((tab) => filesVisible || tab.kind !== "files"),
-    [filesVisible, workbenchSession.tabs],
-  );
-  const workbenchPanelOpen = workbenchSession.panelOpen && workbenchTabs.length > 0;
-  // 顶栏图标按当前打开的面板高亮：文件 / 概览标签每个工作区至多一个，id 固定。
-  const filesPanelActive = workbenchPanelOpen && workbenchSession.activeTabId === "workspace-files";
-  const overviewPanelActive = workbenchPanelOpen && workbenchSession.activeTabId === "task-overview";
-  // 任务概览的角标：当前聚焦 Task 运行中的后台工作数；有新条目时不自动弹出面板。
-  const runningDeferredCount = countRunning(useBackgroundTasks(focusedTaskId));
-  // 收起只改变可见性；草稿由工作台会话保留，真正销毁只在关闭标签或删除工作区 / Task 时发生。
-  const setWorkbenchPanelOpen = useCallback((open: boolean) => {
-    if (workbenchWorkspaceId !== null) useWorkbenchStore.getState().setPanelOpen(workbenchWorkspaceId, open);
-  }, [workbenchWorkspaceId]);
-  const toggleWorkbenchPanel = useCallback(() => setWorkbenchPanelOpen(!workbenchPanelOpen), [setWorkbenchPanelOpen, workbenchPanelOpen]);
-  useHotkeys(APP_SHORTCUTS.toggleWorkbench.keys, toggleWorkbenchPanel, { ...hotkeyOptions, enabled: workbenchTabs.length > 0 }, [toggleWorkbenchPanel]);
+  useHotkeys(APP_SHORTCUTS.commandPalette.keys, () => setPaletteOpen(true), APP_HOTKEY_OPTIONS);
 
   // ---- 导航意图 ----
   const startNewConversation = useCallback(() => {
@@ -284,7 +261,7 @@ export function AppLayout() {
           图标栏，头部左侧补足差值。安全区为 0 的平台上两者都退回头部默认内边距。
         */}
         <div
-          ref={workbenchLayout.containerRef}
+          ref={workbench.containerRef}
           className={cn(
             "bg-background flex min-h-0 min-w-0 flex-1 [--header-inset-right:var(--titlebar-inset-right)] has-[[data-workbench-dock]]:[--header-inset-right:0px]",
             sidebarRail && "[--header-inset-left:calc(var(--titlebar-inset-left)-3rem)]",
@@ -294,10 +271,10 @@ export function AppLayout() {
           <PageHeader
             leading={sidebarRail ? <SidebarToggleButton collapsed onToggle={toggleSidebar} /> : undefined}
             crumbs={crumbs}
-            status={showTaskLayer ? <TaskRunStatusBadge status={catalog.activeTask?.execution_status} /> : undefined}
+            status={showTaskLayer ? <TaskRunStatusBadge status={activeTaskStatus} /> : undefined}
             actions={(
               <>
-                {terminalTaskId !== null && (
+                {conversationTaskId !== null && (
                   <TooltipIconButton
                     tooltip={withShortcut(
                       [terminalPanelOpen ? "收起终端" : "打开终端", terminalBadge.hint].filter(Boolean).join(" · "),
@@ -310,16 +287,9 @@ export function AppLayout() {
                   >
                     <SquareTerminalIcon />
                     {(terminalBadge.count > 0 || terminalBadge.tone !== null) && (
-                      <span
-                        aria-hidden="true"
-                        data-terminal-badge={terminalBadge.tone ?? "none"}
-                        className={cn(
-                          "absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-2xs leading-none tabular-nums",
-                          terminalBadge.tone === "attention" ? "bg-destructive text-destructive-foreground" : "bg-foreground text-background",
-                        )}
-                      >
+                      <CountBadge data-terminal-badge={terminalBadge.tone ?? "none"} tone={terminalBadge.tone === "attention" ? "attention" : "default"}>
                         {terminalBadge.count > 0 ? terminalBadge.count : "!"}
-                      </span>
+                      </CountBadge>
                     )}
                   </TooltipIconButton>
                 )}
@@ -327,75 +297,91 @@ export function AppLayout() {
                   <TooltipIconButton
                     tooltip="浏览工作区文件"
                     aria-label="浏览工作区文件"
-                    aria-pressed={filesPanelActive}
-                    className={cn("size-7", filesPanelActive && "bg-muted text-foreground")}
-                    onClick={() => useWorkbenchStore.getState().openFiles(workbenchWorkspaceId)}
+                    aria-pressed={workbench.filesActive}
+                    className={cn("size-7", workbench.filesActive && "bg-muted text-foreground")}
+                    onClick={workbench.openFiles}
                   >
                     <FolderIcon />
                   </TooltipIconButton>
                 )}
-                {focusedTaskId !== null && workbenchWorkspaceId !== null && (
+                {conversationTaskId !== null && (
                   <TooltipIconButton
-                    tooltip="任务概览"
-                    aria-label={`任务概览，${runningDeferredCount} 个后台任务运行中`}
-                    aria-pressed={overviewPanelActive}
-                    className={cn("relative size-7", overviewPanelActive && "bg-muted text-foreground")}
-                    onClick={() => useWorkbenchStore.getState().openTaskOverview(workbenchWorkspaceId)}
+                    ref={rail.buttonRef}
+                    tooltip={withShortcut(rail.open ? "收起会话侧栏" : "打开会话侧栏", "toggleTaskRail")}
+                    aria-label={`会话侧栏，${rail.runningCount} 个后台任务运行中`}
+                    aria-pressed={rail.open}
+                    className={cn("relative size-7", rail.open && "bg-muted text-foreground")}
+                    onClick={rail.toggle}
                   >
-                    <LayoutDashboardIcon />
-                    {runningDeferredCount > 0 && (
-                      <span aria-hidden="true" className="bg-foreground text-background absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-2xs leading-none tabular-nums">{runningDeferredCount}</span>
-                    )}
+                    <LayoutListIcon />
+                    {rail.runningCount > 0 && <CountBadge>{rail.runningCount}</CountBadge>}
                   </TooltipIconButton>
                 )}
-                {workbenchTabs.length > 0 && (
+                {workbench.tabs.length > 0 && (
                   <TooltipIconButton
-                    tooltip={withShortcut(workbenchPanelOpen ? "收起工作台" : "打开工作台", "toggleWorkbench")}
-                    aria-label={`工作台，${workbenchTabs.length} 个标签，${workbenchPanelOpen ? "点击收起" : "点击打开"}`}
-                    aria-pressed={workbenchPanelOpen}
-                    className={cn("relative size-7", workbenchPanelOpen && "bg-muted text-foreground")}
-                    onClick={toggleWorkbenchPanel}
+                    tooltip={withShortcut(workbench.open ? "收起工作台" : "打开工作台", "toggleWorkbench")}
+                    aria-label={`工作台，${workbench.tabs.length} 个标签，${workbench.open ? "点击收起" : "点击打开"}`}
+                    aria-pressed={workbench.open}
+                    className={cn("relative size-7", workbench.open && "bg-muted text-foreground")}
+                    onClick={workbench.toggle}
                   >
                     <PanelRightIcon />
                     {/* 标签数作为角标：图标化后仍能一眼看出工作台里有几样东西。 */}
-                    <span aria-hidden="true" className="bg-foreground text-background absolute -top-0.5 -right-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-2xs leading-none tabular-nums">{workbenchTabs.length}</span>
+                    <CountBadge>{workbench.tabs.length}</CountBadge>
                   </TooltipIconButton>
                 )}
                 <BackendRestartButton />
               </>
             )}
           />
-          <div className="relative min-h-0 flex-1 overflow-hidden">
-            {focusedTaskId !== null && (
-              <div className="h-full" inert={!showTaskLayer} aria-hidden={!showTaskLayer || undefined}>
-                <ReferenceTargetScope.Provider value={`task:${focusedTaskId}`}><TaskPage
-                  key={focusedTaskId}
-                  taskId={focusedTaskId}
-                  initialTask={catalog.activeTask}
-                  initialMessage={taskState?.initialMessage}
-                  initialAttachments={taskState?.initialAttachments}
-                  workspaceRoot={catalog.activeWorkspace?.root_path}
-                  forkingMessageId={actions.forkingMessageId}
-                  onForkMessage={(messageId) => void actions.forkMessage(messageId)}
-                  onTaskLoaded={catalog.handleTaskLoaded}
-                  onTaskStateChanged={() => {
-                    if (catalog.activeTaskWorkspaceId !== null) void catalog.refreshWorkspaceTasks(catalog.activeTaskWorkspaceId);
-                  }}
-                /></ReferenceTargetScope.Provider>
-              </div>
-            )}
-            {!showTaskLayer && (
-              <div className={cn("bg-background h-full", focusedTaskId !== null && "absolute inset-0 z-10")}>
-                <IsolatedRegion
-                  region={section}
-                  label={crumbs.at(-1)?.label ?? "页面"}
-                  resetKey={location.pathname}
-                  fallbackClassName="flex h-full items-center justify-center p-6"
-                  escape={section === "conversation" ? undefined : { label: "返回对话", onClick: () => navigate(conversationPath) }}
-                >
-                  <Outlet context={outletContext} />
-                </IsolatedRegion>
-              </div>
+          {/*
+            对话层与会话侧栏同一行：侧栏固定时占一列，浮起时叠在这一行右上角（见 TaskRail）。
+            崩溃兜底只能给 class，经 `--task-rail-width` 与侧栏取同一个宽度常量。
+          */}
+          <div ref={rail.rowRef} style={{ "--task-rail-width": `${TASK_RAIL_WIDTH}px` } as CSSProperties} className="relative flex min-h-0 flex-1 overflow-hidden">
+            <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+              {focusedTaskId !== null && (
+                <div className="h-full" inert={!showTaskLayer} aria-hidden={!showTaskLayer || undefined}>
+                  <ReferenceTargetScope.Provider value={`task:${focusedTaskId}`}><TaskPage
+                    key={focusedTaskId}
+                    taskId={focusedTaskId}
+                    initialTask={catalog.activeTask}
+                    initialMessage={taskState?.initialMessage}
+                    initialAttachments={taskState?.initialAttachments}
+                    workspaceRoot={catalog.activeWorkspace?.root_path}
+                    forkingMessageId={actions.forkingMessageId}
+                    onForkMessage={(messageId) => void actions.forkMessage(messageId)}
+                    onTaskLoaded={catalog.handleTaskLoaded}
+                    onTaskStateChanged={() => {
+                      if (catalog.activeTaskWorkspaceId !== null) void catalog.refreshWorkspaceTasks(catalog.activeTaskWorkspaceId);
+                    }}
+                  /></ReferenceTargetScope.Provider>
+                </div>
+              )}
+              {!showTaskLayer && (
+                <div className={cn("bg-background h-full", focusedTaskId !== null && "absolute inset-0 z-10")}>
+                  <IsolatedRegion
+                    region={section}
+                    label={crumbs.at(-1)?.label ?? "页面"}
+                    resetKey={location.pathname}
+                    fallbackClassName="flex h-full items-center justify-center p-6"
+                    escape={section === "conversation" ? undefined : { label: "返回对话", onClick: () => navigate(conversationPath) }}
+                  >
+                    <Outlet context={outletContext} />
+                  </IsolatedRegion>
+                </div>
+              )}
+            </div>
+            {conversationTaskId !== null && rail.open && (
+              <IsolatedRegion
+                region="task-rail"
+                label="会话侧栏"
+                resetKey={`task-rail:${conversationTaskId}`}
+                fallbackClassName="dock-panel bg-background m-2 w-(--task-rail-width) shrink-0 p-3"
+                escape={{ label: "收起会话侧栏", onClick: rail.close }}
+              >
+                <TaskRail taskId={conversationTaskId} placement={rail.placement} onClose={rail.close} />
+              </IsolatedRegion>
             )}
           </div>
         </main>
@@ -404,17 +390,15 @@ export function AppLayout() {
           region="workbench"
           label="工作台"
           // 收起会改变 resetKey，从而清除崩溃状态；下次打开重新挂载。
-          resetKey={`workbench:${workbenchWorkspaceId ?? "none"}:${workbenchPanelOpen ? "open" : "closed"}`}
+          resetKey={`workbench:${workbenchWorkspaceId ?? "none"}:${workbench.open ? "open" : "closed"}`}
           fallbackClassName="dock-panel bg-background m-2 w-80 shrink-0 p-3"
-          escape={{ label: "收起工作台", onClick: () => setWorkbenchPanelOpen(false) }}
+          escape={{ label: "收起工作台", onClick: () => workbench.setOpen(false) }}
         >
-          <FocusedTaskIdContext.Provider value={focusedTaskId}>
-            {workbenchWorkspace && workbenchPanelOpen && (
-              <Workbench workspace={workbenchWorkspace} tabs={workbenchTabs} activeTabId={workbenchSession.activeTabId}
-                width={workbenchLayout.width} minWidth={workbenchLayout.minWidth} maxWidth={workbenchLayout.maxWidth}
-                onWidthChange={workbenchLayout.setWidth} onRequestClose={() => setWorkbenchPanelOpen(false)} />
-            )}
-          </FocusedTaskIdContext.Provider>
+          {workbenchWorkspace && workbench.open && (
+            <Workbench workspace={workbenchWorkspace} tabs={workbench.tabs} activeTabId={workbench.activeTabId}
+              width={workbench.width} minWidth={workbench.minWidth} maxWidth={workbench.maxWidth}
+              onWidthChange={workbench.setWidth} onRequestClose={() => workbench.setOpen(false)} />
+          )}
         </IsolatedRegion>
         </div>
       </div>

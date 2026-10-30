@@ -7,7 +7,7 @@ import type { InitialConversationAttachment } from "@/components/new-conversatio
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalWorkbench } from "@/components/terminal/terminal-workbench";
-import { useBackgroundTasksStore } from "@/lib/task-overview/background-tasks-store";
+import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { userErrorMessage } from "@/lib/errors/user-error-message";

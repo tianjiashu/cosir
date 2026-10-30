@@ -9,7 +9,7 @@ import type { BackgroundTaskEntry, TransportToolCallPart } from "@/lib/assistant
 import { toToolCallPart } from "@/lib/assistant/converter";
 import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
-import { useBackgroundTaskPart } from "@/lib/task-overview/background-tasks-store";
+import { useBackgroundTaskPart } from "@/lib/background-tasks/store";
 import { cn } from "@/lib/utils";
 import { revealToolCall } from "@/lib/assistant/thread-navigation";
 

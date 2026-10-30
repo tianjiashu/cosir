@@ -7,8 +7,6 @@
  */
 export const queryKeys = {
   all: ["cosir"] as const,
-  workbenchAgent: (workspaceId: number, taskId: number, generation: number) =>
-    ["cosir", "workbench-agent", workspaceId, taskId, generation] as const,
   files: (id: number) => ["cosir", "files", id] as const,
   browserVisibility: (id: number) => ["cosir", "files", id, "visibility"] as const,
   fileDirectory: (id: number, path: string, revision: string) => ["cosir", "files", id, "directory", path, revision] as const,
@@ -29,6 +27,8 @@ export const queryKeys = {
   skills: () => ["cosir", "skills"] as const,
   skill: (name: string) => ["cosir", "skill", name] as const,
   toolGroups: () => ["cosir", "tool-groups"] as const,
+  claudeSubscriptionStatus: () => ["cosir", "claude-subscription", "status"] as const,
+  claudeSubscriptionModels: () => ["cosir", "claude-subscription", "models"] as const,
   modelConfigs: () => ["cosir", "model-configs"] as const,
   contextMessages: (query: unknown) => ["cosir", "context-messages", query] as const,
 };

@@ -2,10 +2,9 @@
 
 import { lazy, Suspense, type ComponentType } from "react";
 
-import { WorkbenchAgentRunSurface } from "@/components/workbench-agent-run-surface";
-import { AgentConfigurationDraftSurface } from "@/components/agent-configuration-draft-surface";
-import { AgentTeamConfigurationDraftSurface } from "@/components/agent-team-configuration-draft-surface";
-import { TaskOverviewSurface } from "@/components/task-overview/task-overview-surface";
+import { WorkbenchAgentRunSurface } from "./agent-run-surface";
+import { AgentConfigurationDraftSurface } from "./agent-configuration-draft-surface";
+import { AgentTeamConfigurationDraftSurface } from "./agent-team-configuration-draft-surface";
 import type { Workspace } from "@/lib/api/workspaces";
 import type { WorkbenchTab } from "@/lib/workbench/types";
 
@@ -38,7 +37,6 @@ const workbenchSurfaces: { [K in WorkbenchTab["kind"]]: ComponentType<SurfacePro
   "agent-team-configuration-draft": ({ workspace, tab, onClose }) => (
     <AgentTeamConfigurationDraftSurface workspaceId={workspace.workspace_id} tab={tab} onClose={onClose} />
   ),
-  "task-overview": () => <TaskOverviewSurface />,
 };
 
 export function WorkbenchSurface({ workspace, tab, onClose }: SurfaceProps<WorkbenchTab["kind"]>) {

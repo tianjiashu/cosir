@@ -23,24 +23,31 @@ function snapshot(runId: number | null, status = "completed", text = "阅读内�
 type Snapshot = ReturnType<typeof snapshot>;
 type Fixture = {
   states: Map<number, Snapshot>;
-  errors: Map<number, number>;
-  reads: Map<number, number>;
   snapshots: Map<number, number>;
+  /** 真正建立的订阅数：开发模式 StrictMode 挂载后立即中止的那次不算。 */
   attaches: Map<number, number>;
   connections: Map<number, Set<ServerResponse>>;
+  statusConnections: Set<ServerResponse>;
+  /** 推送新的完整状态；当前活动的状态变了时，同时经状态推送发出（与后端一致）。 */
   push: (id: number, state: Snapshot) => void;
   dropStreams: boolean;
+  refuseStatus: boolean;
 };
 const test = base.extend<{ agent: Fixture }>({
   agent: async ({ page }, use) => {
     const fixture: Fixture = {
       states: new Map([[100, snapshot(null)], [501, snapshot(1, "running")], [502, snapshot(2, "completed")]]),
-      errors: new Map(), reads: new Map(), snapshots: new Map(), attaches: new Map(), connections: new Map(),
-      dropStreams: false,
+      snapshots: new Map(), attaches: new Map(), connections: new Map(), statusConnections: new Set(),
+      dropStreams: false, refuseStatus: false,
       push(id, state) {
+        const before = fixture.states.get(id)?.activity?.status ?? null;
         fixture.states.set(id, state);
         // Task 长订阅：活动到终态也不断开。
         for (const response of fixture.connections.get(id) ?? []) response.write(frame(id, state));
+        const after = state.activity?.status ?? null;
+        if (after !== before) {
+          for (const response of fixture.statusConnections) response.write(`${JSON.stringify({ type: "changed", statuses: { [id]: after } })}\n`);
+        }
       },
     };
     function frame(id: number, state: Snapshot) {
@@ -50,30 +57,43 @@ const test = base.extend<{ agent: Fixture }>({
       res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:4173");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Trace-Id");
       if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
+      if (req.url === "/task-status/stream") {
+        if (fixture.refuseStatus) { res.writeHead(503); res.end(); return; }
+        res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
+        const statuses = Object.fromEntries([...fixture.states].map(([id, state]) => [id, state.activity?.status ?? null]));
+        res.write(`${JSON.stringify({ type: "full", statuses })}\n`);
+        fixture.statusConnections.add(res);
+        res.on("close", () => fixture.statusConnections.delete(res));
+        return;
+      }
       const id = Number(req.url!.split("/")[2]);
+      const openedAt = Date.now();
+      let endedByServer = false;
       fixture.attaches.set(id, (fixture.attaches.get(id) ?? 0) + 1);
       const connections = fixture.connections.get(id) ?? new Set();
       fixture.connections.set(id, connections);
       connections.add(res);
-      res.on("close", () => connections.delete(res));
+      res.on("close", () => {
+        connections.delete(res);
+        // 客户端几乎立刻中止：开发模式 StrictMode 的首次挂载，不算一次订阅。
+        if (!endedByServer && Date.now() - openedAt < 300) fixture.attaches.set(id, fixture.attaches.get(id)! - 1);
+      });
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
       res.write(frame(id, fixture.states.get(id)!));
-      if (fixture.dropStreams) res.end();
+      if (fixture.dropStreams) { endedByServer = true; res.end(); }
     });
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as { port: number };
     await page.addInitScript(() => { localStorage.clear(); localStorage.setItem("cosir:last-workspace-id", "7"); });
     await page.route(`${origin}/workspaces`, route => route.fulfill({ json: [{ workspace_id: 7, name: "验收工作区", root_path: "/workspace", created_at: "", updated_at: "" }] }));
     const task = (id: number) => ({ task_id: id, workspace_id: 7, title: `任务${id}`, task_type: id === 100 ? "user" : "delegate_task",
-      execution_status: fixture.states.get(id)?.activity?.status ?? null,
       created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
     await page.route(`${origin}/workspaces/7/tasks`, route => route.fulfill({ json: [task(100)] }));
     await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/\d+$/, route => {
       const id = Number(route.request().url().split("/").at(-1));
-      fixture.reads.set(id, (fixture.reads.get(id) ?? 0) + 1);
-      const status = fixture.errors.get(id);
-      return route.fulfill(status ? { status, json: { detail: "读取失败" } } : { json: task(id) });
+      return route.fulfill({ json: task(id) });
     });
+    await page.route(`${origin}/task-status/stream`, route => route.continue({ url: `http://127.0.0.1:${address.port}/task-status/stream` }));
     await page.route(`${origin}/tasks/*/assistant/state`, route => {
       const id = Number(route.request().url().split("/")[4]);
       fixture.snapshots.set(id, (fixture.snapshots.get(id) ?? 0) + 1);
@@ -95,18 +115,16 @@ async function open(page: Page, ids: number[]) {
 }
 const tab = (page: Page, id: number) => page.getByRole("tab", { name: new RegExp(`Agent${id}`) });
 
-test("非激活标签刷新、收起暂停、展开更新、关闭不取消 Run", async ({ page, agent }) => {
+test("非激活标签跟随状态推送，收起再展开仍是最新，关闭不取消 Run", async ({ page, agent }) => {
   await open(page, [501, 502]);
   await expect(tab(page, 501)).toHaveAccessibleName("运行中 Agent501");
+  // 非激活标签只读状态推送，不读快照、不订阅对话。
   expect(agent.snapshots.get(501)).toBeUndefined();
   expect(agent.attaches.get(501)).toBeUndefined();
-  agent.states.set(501, snapshot(1, "failed"));
-  await expect(tab(page, 501)).toHaveAccessibleName("运行失败 Agent501", { timeout: 6_000 });
+  agent.push(501, snapshot(1, "failed"));
+  await expect(tab(page, 501)).toHaveAccessibleName("运行失败 Agent501");
   await page.getByRole("button", { name: "收起工作台", exact: true }).click();
-  const count = agent.reads.get(501);
-  await page.waitForTimeout(3_300);
-  expect(agent.reads.get(501)).toBe(count);
-  agent.states.set(501, snapshot(3, "running"));
+  agent.push(501, snapshot(3, "running"));
   await page.getByRole("button", { name: /工作台，2 个标签，点击打开/ }).click();
   await expect(tab(page, 501)).toHaveAccessibleName("运行中 Agent501");
   await page.getByRole("button", { name: "关闭 Agent501", exact: true }).click();
@@ -114,7 +132,7 @@ test("非激活标签刷新、收起暂停、展开更新、关闭不取消 Run"
 });
 
 test("挂起继续订阅，SSE 状态变化刷新标签，后续新 Run 经同一订阅接续", async ({ page, agent }, testInfo) => {
-  agent.states.set(501, snapshot(1, "suspended", "等待确认内容"));
+  agent.push(501, snapshot(1, "suspended", "等待确认内容"));
   await open(page, [501]);
   await expect.poll(() => agent.attaches.get(501)).toBe(1);
   await expect(tab(page, 501)).toHaveAccessibleName("等待中 Agent501");
@@ -135,7 +153,7 @@ test("挂起继续订阅，SSE 状态变化刷新标签，后续新 Run 经同�
 });
 
 test("已停止的子 Task 也常驻订阅，恢复经同一订阅到达", async ({ page, agent }) => {
-  agent.states.set(501, snapshot(1, "cancelled", "已停止的内容"));
+  agent.push(501, snapshot(1, "cancelled", "已停止的内容"));
   await open(page, [501]);
   await expect(tab(page, 501)).toHaveAccessibleName("已停止 Agent501");
   await expect(page.getByText("已停止的内容", { exact: true })).toBeVisible();
@@ -145,22 +163,16 @@ test("已停止的子 Task 也常驻订阅，恢复经同一订阅到达", async
   expect(agent.attaches.get(501)).toBe(1);
 });
 
-test("摘要读取失败有界且保留旧状态，404 停止观察", async ({ page, agent }) => {
+test("状态推送断开时标签保留上次状态并标为未同步，重连后恢复", async ({ page, agent }) => {
   await open(page, [501, 502]);
   await expect(tab(page, 501)).toHaveAccessibleName("运行中 Agent501");
-  agent.errors.set(501, 500);
-  const before = agent.reads.get(501)!;
-  await expect(tab(page, 501)).toHaveAccessibleName("状态未同步，上次为运行中 Agent501", { timeout: 12_000 });
-  expect(agent.reads.get(501)).toBe(before + 3);
-  await page.waitForTimeout(3_300);
-  expect(agent.reads.get(501)).toBe(before + 3);
-  agent.errors.set(501, 404);
-  await page.getByRole("button", { name: "收起工作台", exact: true }).click();
-  await page.getByRole("button", { name: /工作台，2 个标签，点击打开/ }).click();
-  await expect(tab(page, 501)).toHaveAccessibleName("任务已不存在 Agent501");
-  const missingCount = agent.reads.get(501);
-  await page.waitForTimeout(3_300);
-  expect(agent.reads.get(501)).toBe(missingCount);
+  agent.refuseStatus = true;
+  for (const response of agent.statusConnections) response.end();
+  await expect(tab(page, 501)).toHaveAccessibleName("状态未同步，上次为运行中 Agent501");
+  agent.states.set(501, snapshot(1, "completed"));
+  agent.refuseStatus = false;
+  // 重连后的整表帧带回断开期间的变化。
+  await expect(tab(page, 501)).toHaveAccessibleName("已完成 Agent501", { timeout: 10_000 });
 });
 
 test("意外 EOF 与主对话同一套有限重连，只重开订阅不重读 snapshot，手动重试恢复完整预算", async ({ page, agent }) => {
@@ -183,26 +195,4 @@ test("意外 EOF 与主对话同一套有限重连，只重开订阅不重读 sn
   await expect.poll(() => agent.attaches.get(501)).toBe(12);
   await expect(exhausted).toBeVisible();
   expect(agent.snapshots.get(501)).toBe(initialReads);
-});
-
-
-test("窗口隐藏暂停标签查询，可见时刷新且不重建阅读页", async ({ page, agent }) => {
-  await open(page, [501]);
-  await expect.poll(() => agent.attaches.get(501)).toBe(1);
-  await expect(tab(page, 501)).toHaveAccessibleName("运行中 Agent501");
-  const snapshots = agent.snapshots.get(501);
-  await page.evaluate(() => {
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  const count = agent.reads.get(501);
-  await page.waitForTimeout(3_300);
-  expect(agent.reads.get(501)).toBe(count);
-  await page.evaluate(() => {
-    Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  await expect.poll(() => agent.reads.get(501)).toBeGreaterThan(count!);
-  expect(agent.snapshots.get(501)).toBe(snapshots);
-  expect(agent.attaches.get(501)).toBe(1);
 });

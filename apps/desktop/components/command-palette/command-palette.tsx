@@ -18,6 +18,7 @@ import { formatRelativeTime } from "@/lib/format/relative-time";
 import { shortcutLabel } from "@/lib/shortcuts";
 
 import { buildCommandPaletteModel, type CommandPaletteCommand } from "./command-palette-model";
+import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
 
 export type CommandPaletteProps = {
   open: boolean;
@@ -73,7 +74,7 @@ export function CommandPalette({ open, onOpenChange, workspaces, onSelectTask, o
                 >
                   <MessageSquareIcon className="text-muted-foreground" />
                   <span className="min-w-0 truncate">{task.title}</span>
-                  <TaskRunStatusDot status={task.execution_status} />
+                  <TaskStatusDot taskId={task.task_id} />
                   <span className="shrink-0 truncate text-xs text-muted-foreground">{workspaceName}</span>
                   <CommandShortcut className="shrink-0 tracking-normal">{formatRelativeTime(task.updated_at, now)}</CommandShortcut>
                 </CommandItem>
@@ -105,4 +106,8 @@ function CommandRow({ command, onRun }: { command: CommandPaletteCommand; onRun:
       {command.shortcut ? <CommandShortcut>{shortcutLabel(command.shortcut)}</CommandShortcut> : null}
     </CommandItem>
   );
+}
+
+function TaskStatusDot({ taskId }: { taskId: number }) {
+  return <TaskRunStatusDot status={useTaskExecutionStatus(taskId)} />;
 }

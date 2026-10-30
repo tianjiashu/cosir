@@ -71,6 +71,10 @@ async function scrollUpThroughHistory(page: Page): Promise<Pass> {
   });
 }
 
+test.beforeEach(async ({ request }) => {
+  await request.post(`${origin}/__test__/reset`);
+});
+
 test("长对话向上滚动时虚拟列表少修正 scrollTop，切走再回来沿用实测行高", async ({ page, request }) => {
   test.setTimeout(90_000);
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: OTHER_TASK_ID, title: "另一个对话" } });

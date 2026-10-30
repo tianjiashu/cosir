@@ -21,11 +21,7 @@ import { TransportHistoryContext } from "@/lib/assistant/transport-history-conte
  * 订阅意外结束交给与主对话共用的 `SubscriptionRecovery`：只重开订阅（首帧即完整状态），
  * 已显示的内容与 runtime 都保留；重连耗尽后由用户「重新同步」。
  */
-function AgentRunTransport({ taskId, initialState, onDisconnect, onStateCommit }: {
-  taskId: number; initialState: TransportState;
-  onDisconnect: () => void;
-  onStateCommit: (state: TransportState) => void;
-}) {
+function AgentRunTransport({ taskId, initialState }: { taskId: number; initialState: TransportState }) {
   const backendRuntime = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
   const [traceId] = useState(() => newTraceId());
   const [issue, setIssue] = useState<TransportIssue | null>(null);
@@ -53,9 +49,7 @@ function AgentRunTransport({ taskId, initialState, onDisconnect, onStateCommit }
         traceId, data: { taskId, resync }, error: error ?? undefined,
       });
       recovery.reconnect(resync ? "resync_required" : "disconnected");
-      onDisconnect();
     },
-    onStateCommit,
   });
   useEffect(() => {
     openRef.current = open;
@@ -100,14 +94,5 @@ function AgentReader({ taskId, onClose }: { taskId: number; onClose: () => void 
     <ErrorState className="m-4" message={reader.error.message} onRetry={reader.retry} retryLabel="重新同步" />
   );
   if (!reader.snapshot) return <LoadingState label="正在同步子 Agent…" className="h-full" />;
-  return <div className="flex h-full min-h-0 flex-col">
-    {reader.statusError && <Alert tone="warning" className="m-4 mb-0" title="运行状态暂未同步" action={
-      <Button type="button" variant="outline" size="sm" disabled={reader.refreshingStatus} onClick={reader.refreshStatus}>刷新状态</Button>
-    }>下方保留已读取的内容。</Alert>}
-    <div className="min-h-0 flex-1">
-      {/* 订阅断开时顺带刷新状态摘要：任务被删除时由 404 显示「已不存在」。 */}
-      <AgentRunTransport taskId={taskId} initialState={reader.snapshot} onDisconnect={reader.refreshStatus}
-        onStateCommit={reader.onStateCommit} />
-    </div>
-  </div>;
+  return <AgentRunTransport taskId={taskId} initialState={reader.snapshot} />;
 }

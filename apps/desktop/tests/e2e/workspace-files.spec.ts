@@ -463,9 +463,9 @@ test("阅读工具栏在窄宽度保持单行，菜单与搜索焦点独立", as
   await surface.getByRole("treeitem", { name: "README.md", exact: true }).click();
   for (const width of [320, 480, 650]) {
     await page.evaluate(async width => {
-      const modulePath = "/lib/workbench/store.ts";
-      const { useWorkbenchStore } = await import(modulePath);
-      useWorkbenchStore.getState().setPanelWidth(width);
+      const modulePath = "/lib/layout-preferences.ts";
+      const { useLayoutPreferences } = await import(modulePath);
+      useLayoutPreferences.getState().setWorkbenchWidth(width);
     }, width);
     const toolbar = surface.getByLabel("文件阅读工具栏");
     await expect(toolbar).toBeVisible();
@@ -491,8 +491,8 @@ test("阅读工具栏在窄宽度保持单行，菜单与搜索焦点独立", as
   await page.keyboard.press("Escape");
   await expect(surface.getByLabel("全文件查找")).toBeHidden();
   await page.evaluate(async () => {
-    const modulePath = "/lib/workbench/store.ts";
-    (await import(modulePath)).useWorkbenchStore.getState().setPanelWidth(480);
+    const modulePath = "/lib/layout-preferences.ts";
+    (await import(modulePath)).useLayoutPreferences.getState().setWorkbenchWidth(480);
   });
   await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
   await expect(surface.getByRole("textbox", { name: "搜索工作区文件名" })).toBeFocused();

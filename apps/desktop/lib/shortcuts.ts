@@ -4,7 +4,7 @@ import { isMac } from "@/lib/platform";
  * 应用级快捷键的唯一登记处：按键（react-hotkeys-hook 语法，`mod` = macOS ⌘ / 其他平台 Ctrl）
  * 与展示文案都从这里取，tooltip 与命令面板显示的组合键因此与实际绑定一致。
  *
- * 绑定由 AppLayout / 命令面板通过 useHotkeys 注册；新增快捷键先在这里登记并检查
+ * 绑定由 AppLayout 及其拆出的面板 hook 通过 useHotkeys 注册（选项统一用 `APP_HOTKEY_OPTIONS`）；新增快捷键先在这里登记并检查
  * 与 WebView / 系统保留键（⌘Q、⌘W、⌘R 等）以及编辑器内快捷键不冲突。
  */
 export const APP_SHORTCUTS = {
@@ -16,6 +16,7 @@ export const APP_SHORTCUTS = {
   toggleTerminal: { keys: "ctrl+backquote", label: "切换终端" },
   // 与 VS Code 的辅助侧栏一致。
   toggleWorkbench: { keys: "mod+alt+b", label: "切换工作台" },
+  toggleTaskRail: { keys: "mod+alt+r", label: "切换会话侧栏" },
   // 只在 Markdown 配置面板挂载期间绑定。
   saveConfiguration: { keys: "mod+s", label: "保存" },
 } as const;
@@ -43,11 +44,19 @@ export function withShortcut(label: string, id: AppShortcutId): string {
 
 /**
  * 焦点在交互终端（xterm）里时，Ctrl 组合键属于终端（Ctrl+N 下一行、Ctrl+B 后退、Ctrl+K 删到行尾），
- * 应用快捷键不得抢走；macOS 的应用快捷键用 ⌘，不受影响。各处 useHotkeys 以 `ignoreEventWhen` 接入。
+ * 应用快捷键不得抢走；macOS 的应用快捷键用 ⌘，不受影响。经 `APP_HOTKEY_OPTIONS.ignoreEventWhen` 统一接入。
  * 切换终端（Ctrl+`）不受此限，终端视图会把它让给应用。
  */
-export function isTerminalKeyEvent(event: KeyboardEvent): boolean {
+function isTerminalKeyEvent(event: KeyboardEvent): boolean {
   if (!event.ctrlKey || event.code === "Backquote") return false;
   const target = event.target;
   return target instanceof Element && target.closest(".xterm") !== null;
 }
+
+/** 应用级快捷键的 useHotkeys 选项：输入框内同样生效（这些组合键不与文本编辑冲突），终端里的 Ctrl 组合键让给终端。 */
+export const APP_HOTKEY_OPTIONS = {
+  enableOnFormTags: true,
+  enableOnContentEditable: true,
+  preventDefault: true,
+  ignoreEventWhen: isTerminalKeyEvent,
+} as const;

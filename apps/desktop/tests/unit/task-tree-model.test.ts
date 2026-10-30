@@ -9,7 +9,6 @@ function task(taskId: number, title: string, options: Partial<WorkspaceTask> = {
     workspace_id: 1,
     title,
     task_type: "user",
-    execution_status: null,
 
     created_at: `2026-01-0${taskId}T00:00:00.000Z`,
     updated_at: `2026-01-0${taskId}T00:00:00.000Z`,

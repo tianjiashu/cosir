@@ -4,7 +4,7 @@ import { ArrowDownToLineIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { backgroundToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
-import { useForegroundWaits } from "@/lib/task-overview/background-tasks-store";
+import { useForegroundWaits } from "@/lib/background-tasks/store";
 
 /**
  * 前台等待的「转到后台」，由 `ToolPart` 对所有工具统一挂载，不按工具名分支。

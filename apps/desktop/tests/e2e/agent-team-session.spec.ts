@@ -78,9 +78,11 @@ test("工作台切换标签与收起都保留 Team 草稿和历史", async ({ pa
   // 通过真实工作台装配入口创建工具草稿；后续操作及断言均使用页面。
   await page.evaluate(async draft => {
     const modulePath = "/lib/workbench/store.ts";
+    const layoutModulePath = "/lib/layout-preferences.ts";
     const { useWorkbenchStore } = await import(/* @vite-ignore */ modulePath);
+    const { useLayoutPreferences } = await import(/* @vite-ignore */ layoutModulePath);
+    useLayoutPreferences.getState().setWorkbenchWidth(900);
     const store = useWorkbenchStore.getState();
-    store.setPanelWidth(900);
     store.openAgentTeamConfigurationDraft(7, { taskId: 42, toolCallId: "session-test", draft: { ...draft, name: "Team 会话" } });
   }, teamConfiguration);
   await page.getByLabel("Team 名称").fill("保留的新名字");
