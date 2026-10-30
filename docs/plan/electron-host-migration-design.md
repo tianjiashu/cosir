@@ -21,8 +21,10 @@ WKWebView 不支持 CDP，Tauri 的 CEF 运行时目前只有社区维护的 alp
   由后端拉起）。
 - **后端只有两处改动**：新增「宿主管道断开就退出」的存活契约，替代 Windows Job Object（见 5.3）；CORS 白名单加入
   `app://cosir` 来源，删除 Tauri 的三个来源（见 5.5，P0 验证中发现）。
+- **借迁移一并完成的结构化改造**（5.7）：附件的按钮、粘贴、拖放三个入口合成一条「`File` + 按需取路径」的链路，
+  拖放普通文件从此可用；后端状态从轮询改为宿主推送。同时删除只为 WKWebView 存在的 `webkit` 测试项目（5.8）。
 
-迁移分四个阶段（第 10 节）。P1 只要求和现在的功能对等，浏览器能力在 P3 落地，详细设计另写文档；本文第 6 节只确定
+迁移分四个阶段（第 10 节）。P1 在功能对等之外只包含上面两项结构化改造，浏览器能力在 P3 落地，详细设计另写文档；本文第 6 节只确定
 它对宿主架构的约束，确保 P1 的结构不需要返工。
 
 ## 2. 目标与非目标
@@ -39,7 +41,8 @@ WKWebView 不支持 CDP，Tauri 的 CEF 运行时目前只有社区维护的 alp
 
 - 不把后端改写成 Node，也不把任何业务逻辑放进 main 进程。
 - 不改 Assistant Transport、snapshot、Run 语义和数据库结构。
-- P1 不新增能力：不做自动更新、开机自启、系统通知，也不做浏览器功能。
+- P1 不新增能力：不做自动更新、开机自启、系统通知，也不做浏览器功能。拖放普通文件可用是 5.7 A 结构化改造的
+  自然结果，不是额外功能。
 - 不兼容旧的 Tauri 安装与数据（绿地项目）；`~/.cosir` 下的数据目录与日志格式保持不变，所以也不需要迁移。
 
 ## 3. 代码事实
@@ -161,16 +164,16 @@ preload 只暴露下面这些方法，不暴露 `ipcRenderer` 本身：
 | `backend_status` | `backend.status()` | supervisor 状态 |
 | `backend_runtime_config` | `backend.runtimeConfig()` | `{ backendBaseUrl, generation, status }`，结构不变 |
 | `restart_backend` | `backend.restart()` | 重置崩溃恢复次数后重启 |
-| （前端目前靠轮询） | `backend.onStatusChanged(cb)` | 状态变化时推送；推送只是缩短等待，轮询保留作对账 |
+| （前端目前靠轮询） | `backend.onStatusChanged(cb)` | 状态变化时推送完整快照，取代前端轮询（5.7 B） |
 | `write_frontend_log` | `log.write(entry)` | 按 `FrontendLogEntry` 字段做白名单校验后写入 frontend 日志 |
-| `read_selected_attachment_file` | `files.readSelectedAttachment(path)` | 只读、有大小上限、必须是普通文件 |
-| `resolve_selected_attachment_path` | `files.resolveSelectedPath(path)` | 规范化路径，文件和目录都允许 |
-| `plugin-dialog` 的 `open` | `dialog.open(options)` | `dialog.showOpenDialog`，参数只透传目录、多选、标题、过滤器 |
+| `read_selected_attachment_file`、`resolve_selected_attachment_path` | 删除，改为 `files.pathOf(file)` | 在 preload 里调用 `webUtils.getPathForFile`，不经过 main，也不传文件内容（5.7 A） |
+| `plugin-dialog` 的 `open` | `dialog.openDirectory(options)` | `dialog.showOpenDialog`，只用于选目录（工作区、附件文件夹、Skill）；选文件改用 `<input type="file">`（5.7 A） |
 | `getCurrentWindow` | 删除 | Windows 改用系统原生的窗口按钮（5.4） |
 | `isTauri` / `__TAURI__` | `window.cosirHost !== undefined` | 由 `lib/platform.ts` 统一判断 |
 
-文件选择仍然以原生对话框作为用户授权边界：`files.*` 只接受用户刚在对话框里选中的路径。main 进程记住最近一次
-选择结果并校验，避免渲染进程随意读文件。
+用户授权边界：渲染进程只能对自己手里的 `File` 对象取路径，而 `File` 只能来自用户的选择、粘贴或拖放，所以
+`files.pathOf` 无法用来探测任意路径；目录路径只来自原生对话框。渲染进程拿到路径后**只把它作为附件描述交给后端**，
+不自己读取工作区文件（AGENTS.md 的前端边界不变）。
 
 渲染进程侧，`lib/desktop-host/` 是唯一出口，`runtime-config.ts`、`frontend-log.ts`、附件、工作区和 Skill 的选择器
 都改为从这里引用。浏览器开发模式（不在 Electron 里运行）下没有 `cosirHost`，沿用现在的约定：`VITE_BACKEND_URL`，默认 `http://127.0.0.1:8000`。
@@ -242,6 +245,71 @@ preload 只暴露下面这些方法，不暴露 `ipcRenderer` 本身：
   专用的 `webview_diagnostics.rs`。
 - 日志写失败不影响宿主运行，这一点和现在一样。
 
+### 5.7 借迁移完成的结构化改造（P1 一并完成）
+
+这两项都是「换宿主时顺手做比以后单独做便宜」的结构化改造：宿主这一层反正要整体重写，相关调用方也都要改一遍。
+
+**A. 附件三个入口合成一条链路（收益最大）**
+
+现状（代码事实）：WebView 里的 `File` 对象拿不到本机路径，附件因此分成三套：
+
+- 附件按钮：Tauri 原生对话框拿路径，经 `resolve_selected_attachment_path` 规范化；图片再经
+  `read_selected_attachment_file` 把字节以 `number[]` JSON 数组传回前端（`attachment-picker.tsx`），一张 5MB 的
+  图片会膨胀成几十 MB 的 JSON。
+- 粘贴、拖放：拿不到路径，普通文件只能拒绝，提示「请使用附件按钮选择文件」
+  （`composer-external-files.ts` 的 `local-path-required`）。按 Tauri 文档，Windows 上默认还会拦截 HTML5 拖放，
+  所以从资源管理器拖文件进来在真实应用里基本不可用（根据代码和文档推断，未在 Tauri 应用里实测）。
+- 路径对应关系靠登记：`local-attachment-registry.ts` 用 `WeakMap<File, metadata>` 把选择器拿到的路径挂到
+  `File` 上，后续环节才能查到。
+
+改造后：
+
+- 三个入口都只产出 `File`：附件按钮用 `<input type="file" multiple>`（Electron 中打开的就是系统原生对话框，
+  返回可读的 `File`），粘贴和拖放本来就是 `File`；需要路径时统一调用 `files.pathOf(file)`。
+- 从 Finder / 资源管理器拖进来的普通文件、文件夹、图片都能接纳。
+- 删除：两个文件读取 IPC、`registerLocalAttachment` / `getLocalAttachment` 那层 `WeakMap` 登记、
+  `local-path-required` 拒绝分支、附件选择器里的逐个路径解析循环。按 id 查元数据的表保留（草稿里的 token 靠它）。
+- 取舍（已确认）：`<input type="file">` 不能指定初始目录，选文件时不再默认打开工作区根目录。换来的是三个入口一条链路、
+  不再经 IPC 传字节，判断值得；选目录仍用 `dialog.openDirectory`，保留初始目录。
+
+**B. 后端状态从轮询改成推送**
+
+现状：`src/runtime-config.ts`（432 行）启动时每 250ms、之后每 2 秒轮询一次宿主，再用操作版本号（epoch）
+防止过期结果覆盖新结果。
+
+改造后：main 进程在状态或 generation 变化时，经 `backend.onStatusChanged` 推送一份完整快照
+（`{ backendBaseUrl, generation, status }`）；渲染进程启动时 `runtimeConfig()` 取一次初值，之后只订阅。
+删除轮询循环与大部分 epoch 竞态处理；generation 比较保留，这是防止旧进程状态覆盖的唯一判据。
+说明：Tauri 也支持事件推送，这一项并不依赖 Electron，只是宿主整体重写时一并完成成本最低。
+
+### 5.8 只为 WKWebView 存在的代码
+
+| 位置 | 为什么存在 | 处理 |
+|---|---|---|
+| `playwright.config.ts` 的 `webkit` 项目（17 个 spec 再跑一遍） | 模拟 macOS 的 WKWebView | **P1 删除**。E2E 只跑 Chromium，与真实运行内核一致 |
+| `lib/keyboard/ime.ts` 的三重判断，以及调用方维护的组字标记（如 `composer-editor.tsx` 的 `isComposingRef`） | WKWebView 上屏时会先触发 `compositionend`，再送出 `isComposing=false` 的回车 | P1 之后实测 Chromium 中文输入法，确认后只保留 `isComposing` 与 keyCode 229，删调用方的组字标记 |
+| `app/markdown.css` 的 Mermaid 全屏尺寸修正、`globals.css` 不用 `mask-image` 的约束 | WebKit 绘制与滚动性能问题 | P1 之后在 Chromium 下实测，不再需要就删除并更新注释 |
+| `lib/assistant/message-height-estimate.ts` | 注释以 WKWebView 惯性滚动为例 | **保留**：估算准确对任何内核的虚拟列表都有益，只更新注释 |
+
+原则：只有实测确认不再需要才删除，不凭推测删兼容代码。
+
+### 5.9 迁移后可以加强的能力（P1 之后，各自单独评估）
+
+| 能力 | 现状 | Electron 做法 |
+|---|---|---|
+| 外链统一用系统浏览器打开 | Markdown 的 `target="_blank"`、终端的 `window.open` 没有统一入口；项目未装 Tauri opener 插件，推测点击多半无反应（未实测） | `setWindowOpenHandler` + `shell.openExternal`，一处接管（这条随 5.5 的导航限制在 P1 就会生效） |
+| 系统通知 | 只有应用内 toast；窗口隐藏到托盘后，Run 完成或等待审批时用户不知道 | `Notification`，在 Run 落定、等待用户决定时提醒；属于产品新功能，单独设计 |
+| 渲染进程崩溃自动恢复 | 只有 Windows 有 WebView2 诊断，没有恢复 | `render-process-gone` 后有限次 `reload()`，两个平台一致 |
+| 真实桌面 E2E | WDIO 一套、Playwright 一套 | Playwright `_electron.launch`，与现有 E2E 共用 fixture |
+| 内置浏览器 | 无 | 第 6 节，P3 |
+
+### 5.10 换宿主后要坚持的边界
+
+- **不把业务逻辑放进 main 进程**：main 只管进程、窗口、文件授权、浏览器视图。
+- **能拿到本机路径不等于前端可以读文件**：路径只作为附件描述交给后端，由后端读取。
+- **安全要自己守**：Tauri 默认能力最小、按需开放；Electron 的 main 进程拥有完整 Node 能力，preload 每多暴露一个
+  方法都是一次授权。新增宿主能力必须同时更新 `shared/host-contract.ts` 与 `ipc.ts` 的入参校验。
+
 ## 6. 内置浏览器对宿主的约束（P3 详细设计另文）
 
 本节只确定 P1 必须预留的结构：
@@ -282,7 +350,7 @@ P1 在 `host-contract.ts` 和 supervisor 的环境变量注入处为 3 留好接
 |---|---|
 | main 进程单测（Vitest，node 环境） | 移植 Rust 单测：崩溃恢复次数有限、generation 比较、健康检查重试只推进一次、解释器解析规则、环境变量注入、日志分片 |
 | 后端单测 | stdin 读到 EOF 后走正常关闭流程；不设 `CODING_AGENT_PARENT_PIPE` 时不启用检测 |
-| 渲染进程 | 现有 Vitest 与 Playwright（Vite + 内存测试服务）不变；`lib/desktop-host/` 补一个缺少 `cosirHost` 时的 fallback 用例 |
+| 渲染进程 | 现有 Vitest 与 Playwright（Vite + 内存测试服务）保留，**删除 `webkit` 项目**；`lib/desktop-host/` 补缺少 `cosirHost` 时的 fallback 用例；附件改造补「粘贴 / 拖放普通文件被接纳」用例，删除 `local-path-required` 相关断言；状态推送补订阅与 generation 过期的用例 |
 | 桌面 E2E | 用 Playwright 的 `_electron.launch` 改写 `desktop-smoke`：启动后进入 ready、关闭窗口隐藏到托盘、单实例、退出时清理后端进程。**删除 WDIO、`wdio.tauri.conf.mjs`、`tauri-plugin-wdio` 和 `desktop-e2e` feature** |
 | 手工验收 | macOS 和 Windows 各跑一遍：托盘、Cmd+Q 和托盘退出的确认、强杀宿主后后端在数秒内退出、打包版能找到后端和 terminal-worker |
 
@@ -293,13 +361,16 @@ P1 在 `host-contract.ts` 和 supervisor 的环境变量注入处为 3 留好接
 
 **修改**：
 
-- 前端：3.3 节列出的 8 个文件、6 个拖动区文件、`globals.css`（拖动区样式）；
+- 前端：3.3 节列出的 8 个文件、6 个拖动区文件、`globals.css`（拖动区样式）；附件链路
+  （`composer-external-files.ts`、`assistant-composer-attachments.ts`、`local-attachment-registry.ts`、
+  `new-conversation.tsx`）；`src/runtime-config.ts` 改为推送订阅；
 - 后端：lifespan 加 stdin 存活检测；`app.py` 的 CORS 白名单加 `app://cosir`、删 Tauri 来源；
 - 构建：`package.json`（依赖和脚本）、`scripts/stage-*.mjs`（资源路径）、`playwright.config.ts`、CI 工作流；
 - 文档：AGENTS.md 的相关章节、`apps/desktop/AGENTS.md`、README。
 
 **删除**：`apps/desktop/src-tauri/` 整个目录、`@tauri-apps/*` 依赖、`components/layout/window-controls.tsx`、
-`scripts/run-tauri-*.mjs`、`scripts/stage-portable.mjs`、`wdio.tauri.conf.mjs`、`tests/tauri-e2e/`；根 Cargo
+`scripts/run-tauri-*.mjs`、`scripts/stage-portable.mjs`、`wdio.tauri.conf.mjs`、`tests/tauri-e2e/`、Playwright 的
+`webkit` 项目、附件的 `WeakMap` 路径登记与 `local-path-required` 分支、`runtime-config.ts` 的轮询循环；根 Cargo
 workspace 里的 desktop 成员也移除，只保留 terminal-worker。
 
 **明确不改**：后端业务代码、Assistant Transport、React 业务组件、终端 worker、`~/.cosir` 下的目录结构和日志格式。
@@ -309,11 +380,12 @@ workspace 里的 desktop 成员也移除，只保留 terminal-worker。
 | 阶段 | 内容 | 完成标准 |
 |---|---|---|
 | **P0 技术验证**（独立分支，可以随时放弃） | 最小 Electron 壳：加载 Vite 前端、开发模式拉起后端、`window.cosirHost` 跑通 `runtimeConfig`；嵌入一个 `WebContentsView`，用 CDP 跑通「打开网页、无障碍树快照、按 uid 点击」；Python 经 Unix socket 或命名管道调用一次；验证弹层遮挡方案；验证 stdin EOF 检测 | 四个验证点都有可行结论；任何一个不可行就回到本文第 1 节重新评估 |
-| **P1 宿主替换** | 第 5 节全部内容；前端改走 `lib/desktop-host/`；后端存活契约；Electron 版桌面 E2E；删除 Tauri；重写 AGENTS.md 相关章节 | 现有单测、E2E 和新的桌面冒烟测试全部通过；第 8 节手工验收在 macOS 上通过 |
+| **P1 宿主替换** | 第 5 节全部内容（含 5.7 的两项结构化改造与删除 `webkit` 项目）；前端改走 `lib/desktop-host/`；后端存活契约；Electron 版桌面 E2E；删除 Tauri；重写 AGENTS.md 相关章节 | 现有单测、E2E 和新的桌面冒烟测试全部通过；第 8 节手工验收在 macOS 上通过 |
 | **P2 打包与发布** | electron-builder、签名与公证、Windows 安装包和便携版、CI | 两个平台都能出可安装的包，打包版通过第 8 节手工验收 |
 | **P3 浏览器能力** | 另写详细设计：BrowserHost、管道服务端、后端 `browser_*` 工具、工作台浏览器面板、展示数据契约、安全策略 | Agent 能在内置浏览器里完成一个真实任务，用户可以直接接管 |
 
-P1 和 P2 可以合并成一个 PR 落地，也可以分开；P1 合入后主干上就只有 Electron 宿主。
+P1 和 P2 可以合并成一个 PR 落地，也可以分开；P1 合入后主干上就只有 Electron 宿主。5.8 的实测清理与 5.9 的加强项
+在 P1 之后按需逐项进行，不阻塞 P2、P3。
 
 ## 11. 风险与对策
 
@@ -323,6 +395,8 @@ P1 和 P2 可以合并成一个 PR 落地，也可以分开；P1 合入后主干
 | 弹层遮挡浏览器视图 | P3 体验变差 | P0 验证截图占位方案；不行就改用 `<webview>`，并接受它的稳定性风险 |
 | 签名和公证流程变化 | P2 延期 | P2 独立成阶段，不阻塞 P1 合入 |
 | 安装包体积和内存上涨 | 资源占用 | 已知代价；P2 记录实际数据，作为后续优化的基线 |
+| preload 暴露面扩大导致渲染进程越权 | 渲染进程借 IPC 读写任意文件 | 坚持 5.5 与 5.10：沙箱、白名单方法、入参只在 `ipc.ts` 校验；附件不提供「按路径读文件」接口 |
+| 选文件不再默认打开工作区目录 | 体验小幅变化 | 已知取舍（5.7 A）；如反馈强烈，再给 `<input>` 前加一个「从工作区选择」的入口 |
 | 迁移期间宿主行为回归 | 托盘、退出、恢复等细节出错 | 先把 Rust 单测移植成 Vitest 再改实现；第 8 节手工验收清单逐项核对 |
 
 回滚：P1 合入前都在分支上进行，可以直接放弃；合入后按绿地项目原则不保留 Tauri，回滚就是 revert 对应提交。
@@ -349,8 +423,7 @@ P1 和 P2 可以合并成一个 PR 落地，也可以分开；P1 合入后主干
 ## 13. 待决问题
 
 1. 打包工具：本文推荐 electron-builder，另一个选项是 Electron Forge。
-2. 主窗口状态推送：是否在 P1 就加 `backend.onStatusChanged`，还是先保持现在的纯轮询。
-3. 浏览器分区粒度：按工作区还是按 Task。本文倾向按工作区，这样同一工作区里的登录状态能共用，留到 P3 定稿。
+2. 浏览器分区粒度：按工作区还是按 Task。本文倾向按工作区，这样同一工作区里的登录状态能共用，留到 P3 定稿。
 
 ## 附录 A：Claude 与 Codex 的实现依据
 
