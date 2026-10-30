@@ -16,7 +16,7 @@ describe("统一 Composer 附件接入", () => {
     const result = await addComposerFiles([nativeFile("notes.md"), image], { addImage, isCurrent: () => true });
 
     expect(addImage).toHaveBeenCalledExactlyOnceWith(image);
-    expect(result).toEqual({ attachments: [{ id: "notes.md", name: "notes.md", kind: "file" }], problems: [] });
+    expect(result).toEqual({ attachments: [{ id: "notes.md", name: "notes.md" }], problems: [] });
   });
 
   it("在入口拒绝没有真实路径的普通文件和不支持的图片", async () => {

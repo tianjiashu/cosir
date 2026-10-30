@@ -141,9 +141,10 @@ for (const mode of ["new", "task"] as const) {
     const { input, send } = await openComposer(page, mode);
     await transfer(input, "paste", "paste.png", "image/png", "混合正文");
     await expect(input).toHaveText("混合正文");
-    await expect(page.getByRole("img", { name: mode === "new" ? "paste.png" : "图片附件", exact: true })).toHaveCount(1);
+    // 两种输入框共用同一缩略图，图片以文件名标注。
+    await expect(page.getByRole("img", { name: "paste.png", exact: true })).toHaveCount(1);
     await transfer(input, "drop", "drop.jpg", "image/jpeg");
-    await expect(page.getByRole("img", { name: mode === "new" ? "drop.jpg" : "图片附件", exact: true })).toHaveCount(mode === "new" ? 1 : 2);
+    await expect(page.getByRole("img", { name: "drop.jpg", exact: true })).toHaveCount(1);
     await transfer(input, "paste", "unknown.md", "text/plain");
     await expect(page.getByRole("alert")).toContainText("请使用附件按钮选择文件");
     await transfer(input, "drop", "animation.gif", "image/gif");
@@ -246,7 +247,7 @@ test("Task 图片上传成功但消息提交失败后，正文与完整图片附
   } }));
   await page.route(`${api}/workspaces/7/attachments/${assetId}*`, route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9X8AAAAASUVORK5CYII=", "base64") }));
   await transfer(input, "paste", "uploaded.png", "image/png", "图片失败恢复");
-  await expect(page.locator(".aui-composer-attachments .aui-attachment-root")).toHaveCount(1);
+  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-attachment"]')).toHaveCount(1);
   const request = page.waitForRequest(req => req.url() === `${api}/tasks/100/messages` && req.method() === "POST");
   await page.route(`${api}/tasks/100/messages`, route => route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "图片消息回归拒绝", retryable: true } } } }));
   await send.click();
@@ -255,6 +256,6 @@ test("Task 图片上传成功但消息提交失败后，正文与完整图片附
   await expect(page.getByRole("dialog")).toContainText("图片消息回归拒绝");
   await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
   await expect(input).toHaveText("图片失败恢复");
-  await expect(page.locator(".aui-composer-attachments .aui-attachment-root")).toHaveCount(1);
+  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-attachment"]')).toHaveCount(1);
   await expect(send).toBeEnabled();
 });

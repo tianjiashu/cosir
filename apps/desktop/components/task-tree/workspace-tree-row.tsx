@@ -23,6 +23,7 @@ export function WorkspaceTreeRow({ node, innerRef, attrs, children }: RowRendere
       aria-selected={current}
       aria-current={current ? (item.kind === "task" ? "page" : "true") : undefined}
       data-current={current || undefined}
+      data-kind={item.kind}
       onFocus={(event) => event.stopPropagation()}
       onClick={node.handleClick}
       onKeyDown={(event) => {

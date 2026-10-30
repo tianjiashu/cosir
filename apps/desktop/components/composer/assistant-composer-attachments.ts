@@ -17,7 +17,7 @@ export async function addComposerFiles(
     if (!port.isCurrent()) return { attachments: [], problems: [] };
     const local = getLocalAttachment(file);
     if (local?.kind === "file") {
-      attachments.push({ id: local.id, name: local.name, kind: "file" });
+      attachments.push({ id: local.id, name: local.name });
       continue;
     }
     try {

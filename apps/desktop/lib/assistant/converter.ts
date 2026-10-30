@@ -1,5 +1,4 @@
 import { isActiveRunStatus } from "@/lib/assistant/contract";
-import { mapMarkdownText } from "@/lib/assistant/markdown-literals";
 import type { MessageStatus } from "@assistant-ui/core";
 import type { CompleteAttachment, CreateAttachment, RunConfig } from "@assistant-ui/core";
 import type {
@@ -21,8 +20,8 @@ import type {
   TransportToolStatus,
 } from "@/lib/assistant/contract";
 import { getLocalAttachmentById, LOCAL_FILE_DATA_PREFIX } from "@/lib/assistant/attachments/local-attachment-registry";
-import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
-import { restoreSkillMentionTokens } from "@/lib/assistant/skill-mention-token";
+import { localFileTokenIds, splitLocalFileTokens } from "@/lib/assistant/attachments/local-file-token";
+import { materializeSkillMentions, restoreSkillMentionTokens } from "@/lib/assistant/skill-mention-token";
 import {
   createEditableUserDocument,
   editableDocumentAttachments,
@@ -117,20 +116,6 @@ function toTextPart(part: TransportTextPart, role: TransportMessage["role"]): Th
   return { type: "text", text: part.text, status: role === "user" && part.status === undefined ? { type: "complete" } : toPartStatus(part.status) };
 }
 
-function hideLocalFileTokens(text: string): string {
-  // Keep the token in the underlying editable text for edit/resend recovery,
-  // but render it as an HTML comment so internal IDs never appear in chat UI.
-  return mapMarkdownText(text, part => part.replace(/\[\[cosir-(?:file|image):[^\]]+\]\]/g, (token) => `<!-- ${token} -->`));
-}
-
-function revealLocalFileTokens(text: string): string {
-  return mapMarkdownText(text, part => part.replace(/<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->/g, "$1"));
-}
-
-function revealEditableFileTokens(text: string): string {
-  return mapMarkdownText(revealLocalFileTokens(text), part => part.replace(/\[\[cosir-image:[^\]]+\]\]/g, ""));
-}
-
 function toImageAttachment(part: TransportImagePart, index: number): CompleteAttachment {
   return {
     id: part.image,
@@ -213,11 +198,6 @@ function attachmentForUserPart(
  * no runtime or persistence side effects.
  */
 export function toEditableUserMessageDraft(message: ThreadUserMessage): EditableUserMessageDraft {
-  const knownAttachmentTokens = new Set(
-    message.content
-      .filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
-      .flatMap((part) => localFileTokenIds(part.text).map(id => `file:${id}`)),
-  );
   const orderedAttachments: CompleteAttachment[] = [];
   const seenAttachmentIds = new Set<string>();
   const textParts: string[] = [];
@@ -232,7 +212,7 @@ export function toEditableUserMessageDraft(message: ThreadUserMessage): Editable
 
   message.content.forEach((part, index) => {
     if (part.type === "text") {
-      textParts.push(`${pendingTokens}${restoreSkillMentionTokens(revealEditableFileTokens(part.text))}`);
+      textParts.push(`${pendingTokens}${restoreSkillMentionTokens(part.text)}`);
       pendingTokens = "";
       previousWasText = true;
       return;
@@ -258,12 +238,7 @@ export function toEditableUserMessageDraft(message: ThreadUserMessage): Editable
       previousWasText = false;
       return;
     }
-    const tokenId = attachment.id;
-    if (knownAttachmentTokens.has(`file:${tokenId}`)) {
-      previousWasText = false;
-      return;
-    }
-    const token = `[[cosir-file:${tokenId}]]`;
+    const token = `[[cosir-file:${attachment.id}]]`;
     if (previousWasText && textParts.length > 0) {
       textParts[textParts.length - 1] += token;
     } else if (message.content[index + 1]?.type === "text") {
@@ -429,10 +404,7 @@ function toThreadMessageWithContext(
     .map((part) => {
       switch (part.type) {
         case "text":
-          return toTextPart(
-            message.role === "user" ? { ...part, text: hideLocalFileTokens(part.text) } : part,
-            message.role,
-          );
+          return toTextPart(part, message.role);
         case "reasoning":
           return toReasoningPart(part);
         case "tool-call":
@@ -521,21 +493,57 @@ export function getUserAddMessageSourceId(command: unknown): string | null {
     : null;
 }
 
+/**
+ * 乐观消息按后端 canonical 形状投影（见后端 `build_user_input_parts`）：正文里的普通文件 token
+ * 在原位换成 file part（同一文件只占首次出现的位置），Skill token 物化成发送后的标记；
+ * 没有 token 的 file part 追加在后。
+ * 这样消息气泡与编辑草稿只处理一种形状，乐观消息被 canonical 替换时附件不挪位。
+ */
 export function toPendingUserMessage(command: unknown): ThreadMessage | null {
   if (!isUserAddMessageCommand(command)) return null;
+  const toFilePart = (part: Extract<UserAddMessageCommand["message"]["parts"][number], { type: "file" }>): TransportMessagePart => ({
+    type: "file",
+    file: part.data,
+    name: part.filename ?? "附件",
+    contentType: part.mimeType,
+  });
+  const filesById = new Map(command.message.parts.flatMap((part) => (
+    part.type === "file" && part.data.startsWith(LOCAL_FILE_DATA_PREFIX)
+      ? [[part.data.slice(LOCAL_FILE_DATA_PREFIX.length), part] as const]
+      : []
+  )));
+  const placed = new Set<object>();
+  const placedIds = new Set<string>();
   const messageParts: TransportMessagePart[] = [];
   for (const part of command.message.parts) {
     if (part.type === "text") {
-      if (part.text.length > 0) messageParts.push({ type: "text", text: part.text });
+      for (const piece of splitLocalFileTokens(materializeSkillMentions(part.text))) {
+        if (piece.type === "text") {
+          messageParts.push({ type: "text", text: piece.text });
+          continue;
+        }
+        if (placedIds.has(piece.token)) continue;
+        placedIds.add(piece.token);
+        const file = filesById.get(piece.token);
+        if (file) {
+          placed.add(file);
+          messageParts.push(toFilePart(file));
+          continue;
+        }
+        // 输入框里的普通文件只以 token 存在、命令不带 file part，名称从本机附件登记取；
+        // 登记已失效也占住原位，后端会以「附件不可用」拒绝这条命令。
+        const local = getLocalAttachmentById(piece.token);
+        messageParts.push({
+          type: "file",
+          file: `${LOCAL_FILE_DATA_PREFIX}${piece.token}`,
+          name: local?.name ?? "附件",
+          contentType: local?.contentType ?? "application/octet-stream",
+        });
+      }
     } else if (part.type === "image") {
       messageParts.push({ type: "image", image: part.image });
-    } else {
-      messageParts.push({
-        type: "file",
-        file: part.data,
-        name: part.filename ?? "附件",
-        contentType: part.mimeType,
-      });
+    } else if (!placed.has(part)) {
+      messageParts.push(toFilePart(part));
     }
   }
   if (messageParts.length === 0) return null;

@@ -27,8 +27,7 @@ import { useModelCatalog } from "@/lib/model-catalog";
 import { cn } from "@/lib/utils";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
 import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
-import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
-import { ImageLightbox } from "@/components/ui/image-lightbox";
+import { ImageAttachmentCard, ImageAttachmentStrip } from "@/components/composer/image-attachment-card";
 import { getLocalAttachment, getLocalAttachmentById, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import { submitNewConversationMessage, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-new-conversation-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -71,7 +70,6 @@ function NewConversationAttachmentChip({ attachment, onRemove }: {
   onRemove: () => void;
 }) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
     const url = URL.createObjectURL(attachment.file);
@@ -79,19 +77,7 @@ function NewConversationAttachmentChip({ attachment, onRemove }: {
     return () => URL.revokeObjectURL(url);
   }, [attachment.file]);
 
-  return (
-    <>
-      <ImageAttachmentCard
-        src={previewUrl}
-        name={attachment.name}
-        onPreview={() => setPreviewOpen(true)}
-        onRemove={onRemove}
-      />
-      {previewUrl && (
-        <ImageLightbox src={previewUrl} alt={`预览图片：${attachment.name}`} open={previewOpen} onOpenChange={setPreviewOpen} />
-      )}
-    </>
-  );
+  return <ImageAttachmentCard src={previewUrl} name={attachment.name} onRemove={onRemove} />;
 }
 
 function NewConversationInput({ addImage, ...props }: Omit<ComponentProps<typeof ComposerEditor>, "onExternalFiles"> & {
@@ -280,12 +266,15 @@ export function NewConversation({
   };
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-5xl items-center justify-center px-6">
+    // 上下留白 2:3，把视觉中心放在略高于正中处；内容超高（首次引导展开）时整页滚动。
+    <div className="mx-auto grid h-full w-full max-w-conversation grid-rows-[2fr_auto_3fr] overflow-y-auto px-6">
       <ComposerInsertionProvider key={draftId}>
-      <form ref={formRef} onSubmit={submit} className="w-full">
-        <div className="mb-8 flex flex-col items-center gap-3 text-center">
-          <CosirMark className="text-foreground size-16" />
-          <h1 className="text-5xl font-semibold tracking-[0.12em]">COSIR</h1>
+      <form ref={formRef} onSubmit={submit} className="row-start-2 w-full">
+        <div className="mb-6 flex flex-col items-center gap-4 text-center">
+          <CosirMark className="text-foreground size-11" />
+          <h1 className="max-w-full truncate text-2xl font-medium" title={selectedWorkspace?.name}>
+            {selectedWorkspace ? `在 ${selectedWorkspace.name} 里想做什么？` : "想做什么？"}
+          </h1>
         </div>
         {showChecklist && (
           <FirstRunChecklist
@@ -306,17 +295,15 @@ export function NewConversation({
               onWorkspaceCreated={async () => onWorkspaceCreated()}
             />
           </div>
-          {attachments.length > 0 && (
-            <div className="flex h-16 min-h-0 max-h-16 min-w-0 flex-nowrap gap-2 overflow-x-auto overflow-y-hidden px-2" aria-label="待发送附件">
-              {attachments.map((attachment) => (
-                <NewConversationAttachmentChip
-                  key={attachment.path}
-                  attachment={attachment}
-                  onRemove={() => setAttachments((current) => current.filter((item) => item.path !== attachment.path))}
-                />
-              ))}
-            </div>
-          )}
+          <ImageAttachmentStrip>
+            {attachments.map((attachment) => (
+              <NewConversationAttachmentChip
+                key={attachment.path}
+                attachment={attachment}
+                onRemove={() => setAttachments((current) => current.filter((item) => item.path !== attachment.path))}
+              />
+            ))}
+          </ImageAttachmentStrip>
           <NewConversationInput
             addImage={addImage}
             value={text}
@@ -355,13 +342,17 @@ export function NewConversation({
               {blockedReason && (
                 <span id={blockedReasonId} className="text-muted-foreground px-1 text-xs">{blockedReason}</span>
               )}
+              {/* 没有草稿时只留图标，避免禁用态的文字按钮抢占视线；可访问名称始终是「开始对话」。 */}
               <Button
                 type="submit"
+                size={hasDraft ? "default" : "icon"}
                 className="shrink-0 rounded-full"
                 disabled={!canStart}
+                aria-label="开始对话"
+                title="开始对话"
                 aria-describedby={blockedReason ? blockedReasonId : undefined}
               >
-              {submitting ? <Loader2Icon className="animate-spin" /> : <SendIcon />}开始对话
+              {submitting ? <Loader2Icon className="animate-spin" /> : <SendIcon />}{hasDraft && "开始对话"}
               </Button>
             </div>
           </div>

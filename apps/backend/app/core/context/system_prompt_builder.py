@@ -276,7 +276,7 @@ class SystemPromptBuilder:
     def _build_mcp_catalog() -> str:
         """列出已启用且连接测试通过的 MCP 服务名；工具详情按需发现。"""
 
-        from app.service.configuration.mcp_client import (
+        from app.service.configuration.mcp_configuration import (
             MCPConfigurationError,
             enabled_servers,
             read_mcp_configuration,

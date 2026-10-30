@@ -10,8 +10,7 @@ from collections.abc import Callable
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
+from app.core.workflow.cancel.tool_call_cancellation_registry import should_stop_call
 from app.tools.display.terminal_display import build_terminal_observation_display_data
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
@@ -36,9 +35,7 @@ def cancelled(context: ToolExecutionContext) -> bool:
     信号（thread 工具的执行器只在 handler 执行前检查一次）。
     """
 
-    return cancellation_registry.is_cancelled(context.task_id) or (
-        tool_call_cancellation_registry.is_cancelled(context.task_id, context.tool_call_id)
-    )
+    return should_stop_call(context.task_id, context.tool_call_id)
 
 
 def service_error_observation(tool_name: str, exc: TerminalSessionError) -> ToolObservation:

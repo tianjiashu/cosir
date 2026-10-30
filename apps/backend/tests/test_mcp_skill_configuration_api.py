@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.app import app
 from app.service.configuration import mcp_configuration_service, skill_configuration_service
-from app.service.configuration import mcp_client
+from app.service.configuration import mcp_configuration
 from app.service.configuration import skill_catalog, skill_configuration
 
 
@@ -24,7 +24,7 @@ def test_mcp_configuration_can_be_read_and_replaced(tmp_path, monkeypatch) -> No
     path = tmp_path / "mcp_servers.json"
     monkeypatch.setattr(mcp_configuration_service, "system_mcp_servers_file", lambda: path)
     monkeypatch.setattr(mcp_configuration_service, "system_cosir_dir", lambda: tmp_path)
-    monkeypatch.setattr(mcp_client, "system_mcp_servers_file", lambda: path)
+    monkeypatch.setattr(mcp_configuration, "system_mcp_servers_file", lambda: path)
     client = TestClient(app)
 
     assert client.get("/configuration/mcp-servers").json() == {"servers": []}
@@ -82,7 +82,7 @@ def test_mcp_server_becomes_agent_available_only_after_saved_config_lists_tools(
     path = tmp_path / "mcp_servers.json"
     monkeypatch.setattr(mcp_configuration_service, "system_mcp_servers_file", lambda: path)
     monkeypatch.setattr(mcp_configuration_service, "system_cosir_dir", lambda: tmp_path)
-    monkeypatch.setattr(mcp_client, "system_mcp_servers_file", lambda: path)
+    monkeypatch.setattr(mcp_configuration, "system_mcp_servers_file", lambda: path)
 
     result = {"fail": False}
 
@@ -138,7 +138,7 @@ def test_invalid_utf8_mcp_configuration_is_a_client_error(tmp_path, monkeypatch)
     path = tmp_path / "mcp_servers.json"
     path.write_bytes(b"\xff")
     monkeypatch.setattr(mcp_configuration_service, "system_mcp_servers_file", lambda: path)
-    monkeypatch.setattr(mcp_client, "system_mcp_servers_file", lambda: path)
+    monkeypatch.setattr(mcp_configuration, "system_mcp_servers_file", lambda: path)
 
     response = TestClient(app).get("/configuration/mcp-servers")
 

@@ -16,7 +16,7 @@ from app.api.schemas.response.SkillDeleteResponse import SkillDeleteResponse
 from app.api.schemas.response.SkillDocumentResponse import SkillDocumentResponse
 from app.api.schemas.response.SkillInfoResponse import SkillInfoResponse
 from app.app import app
-from app.service.configuration.mcp_client import (
+from app.service.configuration.mcp_configuration import (
     MCPConfiguration,
     MCPServerConfig,
     server_connection_fingerprint,

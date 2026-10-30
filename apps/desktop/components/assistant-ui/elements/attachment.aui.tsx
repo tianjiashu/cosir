@@ -1,33 +1,17 @@
 "use client";
 
-import { type PropsWithChildren, type FC, isValidElement } from "react";
+import type { FC, PropsWithChildren } from "react";
 import {
-  XIcon,
-  FileText,
-  Loader2Icon,
-  AlertCircleIcon,
-} from "lucide-react";
-import {
-  AttachmentPrimitive,
   ComposerPrimitive,
   unstable_useComposerInput,
   useAuiState,
   useAui,
 } from "@assistant-ui/react";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { ImageLightbox } from "@/components/ui/image-lightbox";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { useAttachmentSrc } from "@/hooks/use-attachment-src";
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { cn } from "@/lib/utils";
-import { ImageAttachmentCard } from "@/components/composer/image-attachment-card";
+import { ImageAttachmentCard, ImageAttachmentStrip } from "@/components/composer/image-attachment-card";
 import { AttachmentPicker } from "@/components/composer/attachment-picker";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
 import { useComposerFeedback } from "@/components/composer/composer-feedback";
@@ -35,193 +19,36 @@ import { useTaskComposerDraft } from "@/components/composer/use-task-composer-dr
 import { ComposerEditor } from "@/components/composer/composer-editor";
 
 
-const AttachmentPreviewDialog: FC<PropsWithChildren> = ({ children }) => {
-  const src = useAttachmentSrc(useAttachmentWorkspaceId());
-
-  if (!src) return children;
-
-  return (
-    <ImageLightbox
-      src={src}
-      alt="图片附件预览"
-      trigger={isValidElement(children) ? children : <button type="button" className="cursor-zoom-in">{children}</button>}
-    />
-  );
-};
-
-const AttachmentThumb: FC = () => {
-  const src = useAttachmentSrc(useAttachmentWorkspaceId());
-  return <ImageAttachmentCard src={src} name="图片附件" className="aui-attachment-tile-avatar rounded-none border-0 shadow-none" />;
-};
-
-const AttachmentUI: FC = () => {
+/**
+ * 输入框附件条里的一张图片：把 assistant-ui 的附件状态映射成共用缩略图的参数。
+ * 普通文件是正文里的行内胶囊，不进附件条；已发送消息里的图片由 UserMessageImages 渲染。
+ */
+const ComposerImageAttachment: FC = () => {
   const aui = useAui();
-  const isComposer = aui.attachment.source !== "message";
-
-  const isImage = useAuiState((s) => s.attachment.type === "image");
-  const typeLabel = useAuiState((s) => {
-    const type = s.attachment.type;
-    switch (type) {
-      case "image":
-        return "图片";
-      case "document":
-        return "文档";
-      case "file":
-        return "文件";
-      default:
-        return type;
-    }
-  });
-
-  const uploadState = useAuiState((s) =>
-    s.attachment.status.type === "running"
-      ? "uploading"
-      : s.attachment.status.type === "incomplete" &&
-          s.attachment.status.reason === "error"
-        ? "error"
-        : undefined,
-  );
-  const isUploading = uploadState === "uploading";
-  const isError = uploadState === "error";
-
-  const errorMessage = useAuiState((s) =>
-    s.attachment.status.type === "incomplete" &&
-    s.attachment.status.reason === "error"
-      ? (s.attachment.status.message ?? "上传失败")
-      : undefined,
-  );
-
-  if (!isImage) {
-    return (
-      <AttachmentPrimitive.Root
-        className={cn(
-          "aui-attachment-file-chip bg-muted/70 text-foreground inline-flex max-w-64 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs",
-          isError && "border-destructive/50 text-destructive",
-        )}
-        title={errorMessage}
-      >
-        {isUploading ? (
-          <Loader2Icon className="text-muted-foreground size-3.5 shrink-0 animate-spin" />
-        ) : (
-          <FileText className="text-muted-foreground size-3.5 shrink-0" />
-        )}
-        <span className="min-w-0 truncate font-medium"><AttachmentPrimitive.Name /></span>
-        {isComposer && <AttachmentRemove compact />}
-      </AttachmentPrimitive.Root>
-    );
-  }
-
+  const src = useAttachmentSrc(useAttachmentWorkspaceId());
+  const name = useAuiState((s) => s.attachment.name);
+  const status = useAuiState((s) => s.attachment.status);
+  const failed = status.type === "incomplete" && status.reason === "error";
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <AttachmentPrimitive.Root
-          className={cn(
-            "aui-attachment-root relative",
-            isComposer &&
-              "h-16 min-h-16 w-16 min-w-16 shrink-0 animate-in fade-in-0 zoom-in-95 duration-200 motion-reduce:animate-none",
-            isImage &&
-              !isComposer &&
-              "aui-attachment-root-message only:*:first:size-24",
-          )}
-        >
-          <AttachmentPreviewDialog>
-            <TooltipTrigger
-              render={
-                <div
-                  className={cn(
-                    "aui-attachment-tile bg-muted hover:after:bg-foreground/10 focus-visible:ring-ring/50 relative size-16 cursor-pointer overflow-hidden rounded-[calc(var(--composer-radius,1.5rem)-var(--composer-padding,8px))] transition-transform outline-none after:pointer-events-none after:absolute after:inset-0 after:rounded-[inherit] after:ring-1 after:ring-foreground/10 after:transition-colors after:ring-inset focus-visible:ring-1 active:scale-[0.96] motion-reduce:transition-none",
-                    isError &&
-                      "after:ring-destructive/60",
-                  )}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`${typeLabel}附件${
-                    isError
-                      ? "，上传失败"
-                      : isUploading
-                        ? "，上传中"
-                        : ""
-                  }`}
-                />
-              }
-            >
-              <AttachmentThumb />
-              {isUploading && (
-                <div
-                  aria-hidden="true"
-                  className="aui-attachment-tile-uploading bg-background/60 animate-in fade-in-0 absolute inset-0 flex items-center justify-center backdrop-blur-[2px] motion-reduce:animate-none"
-                >
-                  <Loader2Icon className="text-muted-foreground size-4 animate-spin" />
-                </div>
-              )}
-              {isError && (
-                <div
-                  aria-hidden="true"
-                  className="aui-attachment-tile-error bg-background/70 animate-in fade-in-0 absolute inset-0 flex items-center justify-center backdrop-blur-[2px] motion-reduce:animate-none"
-                >
-                  <AlertCircleIcon className="text-destructive size-4" />
-                </div>
-              )}
-            </TooltipTrigger>
-          </AttachmentPreviewDialog>
-          {isComposer && <AttachmentRemove />}
-        </AttachmentPrimitive.Root>
-        <TooltipContent side="top">
-          <AttachmentPrimitive.Name />
-          {errorMessage && (
-            <p className="aui-attachment-error-message">{errorMessage}</p>
-          )}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-};
-
-const AttachmentRemove: FC<{ compact?: boolean }> = ({ compact = false }) => {
-  return (
-    <AttachmentPrimitive.Remove
-      render={
-        <TooltipIconButton
-          tooltip="移除附件"
-          className={cn(
-            "aui-attachment-tile-remove size-5 rounded-full active:scale-[0.96] motion-reduce:transition-none",
-            compact
-              ? "text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
-              : "absolute end-1 top-1 bg-foreground/50! text-background after:absolute after:-inset-1.5 hover:bg-foreground/70! hover:text-background!",
-          )}
-          side="top"
-        />
-      }
-    >
-      <XIcon className="aui-attachment-remove-icon size-3 stroke-[2.5]" />
-    </AttachmentPrimitive.Remove>
+    <ImageAttachmentCard
+      src={src}
+      name={name}
+      state={status.type === "running" ? "uploading" : failed ? "error" : "ready"}
+      errorMessage={failed ? (status.message ?? "上传失败") : undefined}
+      onRemove={() => void aui.attachment.remove()}
+    />
   );
 };
 
 export const ComposerAttachments: FC = () => {
   return (
-    <div className="aui-composer-attachments flex h-16 min-h-16 max-h-16 min-w-0 w-full shrink-0 flex-row items-center gap-2 overflow-x-auto overflow-y-hidden empty:hidden">
+    <ImageAttachmentStrip>
       <ComposerPrimitive.Attachments>
-        {({ attachment }) => attachment.type === "image" ? <AttachmentUI /> : null}
+        {({ attachment }) => attachment.type === "image" ? <ComposerImageAttachment /> : null}
       </ComposerPrimitive.Attachments>
-    </div>
+    </ImageAttachmentStrip>
   );
 };
-
-export const UserMessageFilePart: FC<{
-  filename: string;
-  mimeType: string;
-}> = ({ filename, mimeType }) => (
-  <span
-    data-slot="user-message-file-part"
-    data-content-type={mimeType}
-    className="bg-muted/70 text-foreground inline-flex max-w-64 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 align-middle text-xs"
-    title={filename}
-  >
-    <FileText className="text-muted-foreground size-3.5 shrink-0" />
-    <span className="min-w-0 truncate font-medium">{filename}</span>
-  </span>
-);
 
 /**
  * 输入框的提交开关：回车与发送按钮共用。

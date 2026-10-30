@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 
 from app.config.logging.logger import log
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
 class ToolCallCancellationRegistry:
@@ -68,3 +69,15 @@ class ToolCallCancellationRegistry:
 
 
 tool_call_cancellation_registry = ToolCallCancellationRegistry()
+
+
+def should_stop_call(task_id: int, tool_call_id: str) -> bool:
+    """本 Task 收到停止信号，或用户单独取消了这次调用。
+
+    给在工具线程里长时间等待的 thread 工具轮询用：执行器只在 handler 执行前检查一次，等待期间
+    到达的取消（两类信号任一）只能靠工具自己现读这里发现。
+    """
+
+    if cancellation_registry.is_cancelled(task_id):
+        return True
+    return tool_call_cancellation_registry.is_cancelled(task_id, tool_call_id)

@@ -8,13 +8,13 @@ from dataclasses import dataclass
 
 from app.config.logging.logger import log
 from app.service.configuration.file_store import ConfigurationFileStore
-from app.service.configuration.mcp_client import (
+from app.service.configuration.mcp_configuration import (
     MCPConfiguration,
     MCPServerConfig,
-    list_server_tools,
     read_mcp_configuration,
     server_connection_fingerprint,
 )
+from app.tools.mcp.client import describe_exception, list_server_tools
 from app.utils.path.system_cosir import system_cosir_dir, system_mcp_servers_file
 
 MCP_TEST_TIMEOUT_SECONDS = 20
@@ -99,10 +99,10 @@ class MCPConfigurationService:
                 "configuration_mcp_server_test_failed",
                 extra={
                     "msg": "MCP 服务连接测试失败",
-                    "data": {"server_name": server.name, "error_type": type(exc).__name__},
+                    "data": {"server_name": server.name, "error": describe_exception(exc)},
                 },
             )
-            return MCPServerTestResult(success=False, tools=[], error=str(exc))
+            return MCPServerTestResult(success=False, tools=[], error=describe_exception(exc))
         configuration = self.read()
         saved_server = next(
             (item for item in configuration.servers if item.name == server.name), None

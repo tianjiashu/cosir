@@ -11,16 +11,16 @@ from starlette.responses import PlainTextResponse
 
 from app.tools.tool_handler.mcp_tool import MCPTool
 from app.tools.tool_handler.skill_tool import SkillTool
-from app.service.configuration.mcp_client import (
+from app.service.configuration.mcp_configuration import (
     MCPConfigurationError,
     MCPServerConfig,
-    _stdio_parameters,
-    call_server_tool,
     enabled_servers,
-    list_server_tools,
     read_mcp_configuration,
     server_connection_fingerprint,
 )
+from app.tools.mcp.client import _stdio_parameters, call_result_text, list_server_tools
+from app.tools.mcp.connection_pool import MCPConnectionPool
+from app.utils.path import system_cosir
 from app.service.configuration.skill_catalog import SkillCatalog, SkillLoadError
 from app.service.configuration.skill_configuration import read_skill_configuration
 
@@ -100,7 +100,7 @@ def test_mcp_configuration_reads_enabled_servers(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("app.service.configuration.mcp_client.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr("app.service.configuration.mcp_configuration.system_mcp_servers_file", lambda: config_path)
 
     configuration = read_mcp_configuration()
 
@@ -112,7 +112,7 @@ def test_mcp_configuration_excludes_enabled_servers_without_successful_connectio
 ):
     config_path = tmp_path / "mcp_servers.json"
     config_path.write_text('{"servers":[{"name":"one","command":"python"}]}', encoding="utf-8")
-    monkeypatch.setattr("app.service.configuration.mcp_client.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr("app.service.configuration.mcp_configuration.system_mcp_servers_file", lambda: config_path)
 
     assert enabled_servers(read_mcp_configuration()) == []
 
@@ -120,14 +120,10 @@ def test_mcp_configuration_excludes_enabled_servers_without_successful_connectio
 def test_mcp_tool_does_not_discover_or_call_an_untested_server(tmp_path, monkeypatch):
     config_path = tmp_path / "mcp_servers.json"
     config_path.write_text('{"servers":[{"name":"one","command":"python"}]}', encoding="utf-8")
-    monkeypatch.setattr("app.service.configuration.mcp_client.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr("app.service.configuration.mcp_configuration.system_mcp_servers_file", lambda: config_path)
     monkeypatch.setattr(
-        "app.tools.tool_handler.mcp_tool.list_server_tools",
-        lambda server: pytest.fail("untested MCP server must not be discovered"),
-    )
-    monkeypatch.setattr(
-        "app.tools.tool_handler.mcp_tool.call_server_tool",
-        lambda *args: pytest.fail("untested MCP server must not be called"),
+        "app.service.depends.get_mcp_connection_pool",
+        lambda: pytest.fail("untested MCP server must not be discovered or called"),
     )
 
     tool = MCPTool()
@@ -144,7 +140,7 @@ def test_mcp_configuration_rejects_duplicate_names(tmp_path, monkeypatch):
         '{"servers":[{"name":"same","command":"one"},' '{"name":"same","command":"two"}]}',
         encoding="utf-8",
     )
-    monkeypatch.setattr("app.service.configuration.mcp_client.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr("app.service.configuration.mcp_configuration.system_mcp_servers_file", lambda: config_path)
 
     with pytest.raises(MCPConfigurationError, match="必须唯一"):
         read_mcp_configuration()
@@ -192,13 +188,19 @@ def test_mcp_http_transports_list_and_call_tools(transport, path):
                 headers={"x-mcp-test": "present"},
             )
             tools = await list_server_tools(config)
-            result = await call_server_tool(config, "echo", {"value": "ok"})
+            pool = MCPConnectionPool()
+            try:
+                result = await asyncio.wrap_future(
+                    pool.submit(pool.call_tool(config, "echo", {"value": "ok"}))
+                )
+            finally:
+                await asyncio.to_thread(pool.close)
         finally:
             server.should_exit = True
             await server_task
 
         assert [tool["name"] for tool in tools] == ["echo"]
-        assert json.loads(result) == {"echo": "ok"}
+        assert json.loads(call_result_text(result)) == {"echo": "ok"}
 
     asyncio.run(exercise_transport())
 
@@ -251,16 +253,22 @@ def test_mcp_tool_lists_and_calls_local_server(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("app.service.configuration.mcp_client.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr("app.service.configuration.mcp_configuration.system_mcp_servers_file", lambda: config_path)
+    monkeypatch.setattr(system_cosir, "LOG_DIR", tmp_path / "logs")
+    pool = MCPConnectionPool()
+    monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
     tool = MCPTool()
 
-    listing = tool.execute(action="list")
-    call = tool.execute(
-        action="call",
-        server_name="test-server",
-        tool_name="echo",
-        arguments={"value": "ok"},
-    )
+    try:
+        listing = tool.execute(action="list")
+        call = tool.execute(
+            action="call",
+            server_name="test-server",
+            tool_name="echo",
+            arguments={"value": "ok"},
+        )
+    finally:
+        pool.close()
 
     assert listing.status == "success"
     assert json.loads(listing.content)[0]["tools"][0]["name"] == "echo"

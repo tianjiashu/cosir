@@ -12,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 export function ThreadSkeleton(): ReactElement {
   return (
     <div role="status" aria-label="正在加载任务" data-testid="task-thread-skeleton" className="flex h-full min-h-0 w-full flex-col">
-      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-6 overflow-hidden px-6 pt-6">
+      <div className="mx-auto flex min-h-0 w-full max-w-conversation flex-1 flex-col gap-6 overflow-hidden px-6 pt-6">
         <Skeleton className="h-10 w-2/5 self-end rounded-2xl" />
         <div className="flex flex-col gap-2.5">
           <Skeleton className="h-4 w-11/12" />
@@ -25,7 +25,7 @@ export function ThreadSkeleton(): ReactElement {
           <Skeleton className="h-4 w-2/3" />
         </div>
       </div>
-      <div className="mx-auto w-full max-w-3xl px-4 pb-4 md:pb-6">
+      <div className="mx-auto w-full max-w-conversation px-4 pb-4 md:pb-6">
         <Skeleton className="h-28 w-full rounded-3xl" />
       </div>
     </div>

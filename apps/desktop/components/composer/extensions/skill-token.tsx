@@ -2,8 +2,7 @@
 
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
-import { HammerIcon } from "lucide-react";
-import { InlineToken } from "@/components/ui/inline-token";
+import { SkillChip } from "@/components/composer/token-chips";
 import { removeComposerToken } from "./remove-composer-token";
 import { useComposerEditorView } from "@/components/composer/composer-editor-context";
 import { createSkillMentionToken } from "@/lib/assistant/skill-mention-token";
@@ -21,11 +20,8 @@ function SkillTokenView({ node, editor, getPos }: NodeViewProps) {
       data-skill-name={name}
       className="cosir-composer-token-node"
     >
-      <InlineToken
-        icon={<HammerIcon />}
+      <SkillChip
         name={name}
-        description={`Skill：${name}`}
-        tone="skill"
         remove={{
           label: `移除 Skill ${name}`,
           disabled: context.disabled,

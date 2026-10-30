@@ -292,9 +292,10 @@ function ModelSelectorValue({
     >
       {selectedModel.icon && <ModelIcon>{selectedModel.icon}</ModelIcon>}
       <span className="truncate font-medium">{selectedModel.triggerName ?? selectedModel.name}</span>
+      {/* 选项标签与系统配置下拉共用，那里有字段名作上下文；触发器上单独一个「低」看不出含义，故加前缀。 */}
       {effortName && (
-        <span className="text-muted-foreground min-w-7.5 truncate text-center">
-          {effortName}
+        <span className="text-muted-foreground shrink-0 whitespace-nowrap" title={`推理强度：${effortName}`}>
+          推理 {effortName}
         </span>
       )}
     </span>

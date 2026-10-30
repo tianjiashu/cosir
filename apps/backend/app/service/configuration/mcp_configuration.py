@@ -1,17 +1,15 @@
-"""面向本机单用户 Agent 的 MCP 客户端与传输配置。"""
+"""系统级 MCP 服务配置的数据契约与读取规则。
+
+只描述「连哪些服务、怎么连、哪些已通过连接测试」；建立连接与会话由 ``app/tools/mcp/`` 负责。
+放在 service 层是因为 ``core/context`` 构建系统提示词目录也要读它，而 core 不得导入 ``app.tools``。
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from typing import Any, Literal
+from typing import Literal
 
-from mcp import ClientSession
-from mcp.client.sse import sse_client
-from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.config.logging.logger import log
@@ -117,104 +115,3 @@ def server_connection_fingerprint(server: MCPServerConfig) -> str:
     connection = server.model_dump(mode="json", exclude={"enabled"})
     serialized = json.dumps(connection, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-
-async def list_server_tools(server: MCPServerConfig) -> list[dict[str, Any]]:
-    """短连接到一个 MCP 服务并返回模型可读的工具目录。"""
-
-    async with _client_session(server) as client:
-        result = await client.list_tools()
-    return [
-        {
-            "name": tool.name,
-            "description": tool.description or "",
-            "input_schema": tool.inputSchema,
-        }
-        for tool in result.tools
-    ]
-
-
-async def call_server_tool(
-    server: MCPServerConfig,
-    tool_name: str,
-    arguments: dict[str, Any],
-) -> str:
-    """短连接到一个 MCP 服务，校验工具存在后执行并归一化返回内容。"""
-
-    async with _client_session(server) as client:
-        tools = await client.list_tools()
-        if not any(tool.name == tool_name for tool in tools.tools):
-            raise MCPToolNotFoundError(server.name, tool_name)
-        result = await client.call_tool(tool_name, arguments)
-
-    if result.isError:
-        raise MCPToolCallError(_content_text(result.content))
-    structured_content = getattr(result, "structuredContent", None)
-    if structured_content is not None:
-        return json.dumps(structured_content, ensure_ascii=False, indent=2)
-    return _content_text(result.content)
-
-
-class MCPToolNotFoundError(LookupError):
-    """服务中不存在请求的 MCP 工具。"""
-
-    def __init__(self, server_name: str, tool_name: str) -> None:
-        super().__init__(f"服务 {server_name} 未公开工具 {tool_name}")
-
-
-class MCPToolCallError(RuntimeError):
-    """MCP 服务将工具调用作为错误结果返回。"""
-
-
-def _stdio_parameters(server: MCPServerConfig) -> StdioServerParameters:
-    """只把服务显式配置的变量传给子进程；SDK 会补入命令启动所需的默认环境白名单。"""
-
-    return StdioServerParameters(
-        command=server.command,
-        args=server.args,
-        env=server.env,
-    )
-
-
-@asynccontextmanager
-async def _client_session(server: MCPServerConfig) -> AsyncIterator[ClientSession]:
-    """按服务配置建立 MCP 客户端会话，统一初始化和释放传输资源。"""
-
-    if server.transport == "stdio":
-        async with (
-            stdio_client(_stdio_parameters(server)) as (read, write),
-            ClientSession(read, write) as client,
-        ):
-            await client.initialize()
-            yield client
-        return
-
-    if server.transport == "sse":
-        async with (
-            sse_client(server.url, headers=server.headers) as (read, write),
-            ClientSession(read, write) as client,
-        ):
-            await client.initialize()
-            yield client
-        return
-
-    http_client = create_mcp_http_client(headers=server.headers)
-    async with (
-        http_client,
-        streamable_http_client(server.url, http_client=http_client) as (read, write, _),
-        ClientSession(read, write) as client,
-    ):
-        await client.initialize()
-        yield client
-
-
-def _content_text(content: list[Any]) -> str:
-    """保留 MCP 文本块供模型使用，其他块只列出类型避免回传二进制载荷。"""
-
-    parts: list[str] = []
-    for item in content:
-        if item.type == "text":
-            parts.append(item.text)
-        else:
-            parts.append(f"[{item.type} content returned]")
-    return "\n".join(parts)

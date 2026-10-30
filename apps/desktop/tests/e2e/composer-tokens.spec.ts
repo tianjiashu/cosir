@@ -5,7 +5,7 @@ import { completedState, seedState } from "./transport-fixtures";
 
 const undo = process.platform === "darwin" ? "Meta+z" : "Control+z";
 const redo = process.platform === "darwin" ? "Meta+Shift+z" : "Control+Shift+z";
-const file = { type: "attachmentToken", attrs: { kind: "file", tokenId: "token-file" } };
+const file = { type: "attachmentToken", attrs: { tokenId: "token-file" } };
 const skill = { type: "skillToken", attrs: { name: "review-code" } };
 const reference = { type: "workspaceReference", attrs: { reference: {
   kind: "snippet", path: "src/very-long-component-name-that-needs-truncation.tsx",
@@ -19,9 +19,6 @@ async function setDocument(input: Locator, content: JSONContent[]) {
     const registry = await import(modulePath);
     registry.registerInlineFileMetadata({
       id: "token-file", name: "very-long-attachment-filename-that-needs-truncation.md", contentType: "text/markdown",
-    });
-    registry.registerLocalAttachment(new File([""], "screen.png"), {
-      id: "token-image", name: "screen.png", path: "/tmp/screen.png", kind: "image", contentType: "image/png",
     });
     const editor = (element as HTMLElement & { editor: Editor }).editor;
     editor.commands.setContent({ type: "doc", content });
@@ -57,11 +54,10 @@ for (const theme of ["light", "dark"]) {
         { type: "paragraph", content: [file] },
         { type: "paragraph", content: [reference] },
         { type: "paragraph", content: [
-          { type: "attachmentToken", attrs: { kind: "image", tokenId: "token-image" } },
-          { type: "attachmentToken", attrs: { kind: "file", tokenId: "missing" } },
+          { type: "attachmentToken", attrs: { tokenId: "missing" } },
         ] },
       ]);
-      await expect(input.locator("[data-inline-token]")).toHaveCount(5);
+      await expect(input.locator("[data-inline-token]")).toHaveCount(4);
       const metrics = await input.evaluate(element => {
         const bounds = element.getBoundingClientRect();
         return {
@@ -82,11 +78,11 @@ for (const theme of ["light", "dark"]) {
       expect(metrics.tokens.every(token => token.height === 24 && token.fits)).toBe(true);
       expect(metrics.tokens.every(token => token.labelHeight <= 22)).toBe(true);
       expect(metrics.overflow).toBe(false);
-      await expect(input.locator(".cosir-inline-token-extension")).toHaveText([".md", ".tsx", ".png"]);
+      await expect(input.locator(".cosir-inline-token-extension")).toHaveText([".md", ".tsx"]);
       await expect(input.locator(".cosir-inline-token-detail")).toHaveText(" · L12–28");
       expect(await historyStyle()).toEqual(before);
-      await expect(history.locator("[data-inline-token]")).toHaveCount(0);
-      expect(before[2]).toBe("12px");
+      // 历史引用与输入框共用同一胶囊外观。
+      await expect(history.locator("[data-inline-token]")).toHaveCount(1);
       await input.screenshot({ path: testInfo.outputPath("tokens.png"), animations: "disabled" });
       await input.locator("[data-attachment-token] [data-inline-token]").first().hover();
       await expect(page.getByRole("tooltip")).toContainText("very-long-attachment-filename-that-needs-truncation.md");
@@ -96,7 +92,7 @@ for (const theme of ["light", "dark"]) {
 
 for (const [name, token, removeLabel] of [
   ["附件", file, "移除附件 very-long-attachment-filename-that-needs-truncation.md"],
-  ["失效附件", { type: "attachmentToken", attrs: { kind: "file", tokenId: "missing" } }, "移除附件"],
+  ["失效附件", { type: "attachmentToken", attrs: { tokenId: "missing" } }, "移除附件"],
   ["Skill", skill, "移除 Skill review-code"],
   ["引用", reference, "移除引用 very-long-component-name-that-needs-truncation.tsx · L12–28"],
 ] as const) {

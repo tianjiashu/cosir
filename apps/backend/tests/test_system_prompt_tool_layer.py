@@ -20,7 +20,7 @@ from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import main_agent
 from app.core.context import system_prompt_builder as spb
 from app.core.tool.schemas.tool_names import TOOL_MCP, TOOL_SKILL
-from app.service.configuration import mcp_client
+from app.service.configuration import mcp_configuration
 from app.service.configuration import skill_catalog
 from app.service.configuration.skill_catalog import SkillInfo
 from app.utils.path import system_cosir as paths
@@ -152,19 +152,19 @@ def test_tool_layer_injects_enabled_mcp_and_skill_catalogs(monkeypatch) -> None:
     """只向声明了对应工具的 Agent 注入启用服务和 Skill 元数据。"""
 
     monkeypatch.setattr(
-        mcp_client,
+        mcp_configuration,
         "read_mcp_configuration",
-        lambda: mcp_client.MCPConfiguration(
+        lambda: mcp_configuration.MCPConfiguration(
             servers=[
-                mcp_client.MCPServerConfig(name="local-tools", command="mcp-server"),
-                mcp_client.MCPServerConfig(name="not-tested", command="mcp-server"),
-                mcp_client.MCPServerConfig(
+                mcp_configuration.MCPServerConfig(name="local-tools", command="mcp-server"),
+                mcp_configuration.MCPServerConfig(name="not-tested", command="mcp-server"),
+                mcp_configuration.MCPServerConfig(
                     name="disabled-server", command="mcp-server", enabled=False
                 ),
             ],
             tested_servers={
-                "local-tools": mcp_client.server_connection_fingerprint(
-                    mcp_client.MCPServerConfig(name="local-tools", command="mcp-server")
+                "local-tools": mcp_configuration.server_connection_fingerprint(
+                    mcp_configuration.MCPServerConfig(name="local-tools", command="mcp-server")
                 )
             },
         ),

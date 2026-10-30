@@ -22,7 +22,6 @@ import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
 import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
-import { UserMessageText } from "@/components/workspace-references/user-message-text";
 import { MarkdownText } from "@/components/markdown-text";
 import { PartRenderBoundary } from "@/components/assistant-ui/elements/part-render-boundary";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
@@ -82,7 +81,8 @@ import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/vi
 import { QueuedMessages } from "@/components/assistant-ui/elements/queued-messages";
 import { deleteQueuedTaskMessage, sendQueuedTaskMessageNow } from "@/lib/assistant/task-commands";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
-import { UserMessageAttachments } from "@/components/assistant-ui/elements/user-message-attachments";
+import { UserMessageContent, useHasUserMessageContent } from "@/components/assistant-ui/elements/user-message-content";
+import { UserMessageImages } from "@/components/assistant-ui/elements/user-message-images";
 import {
   ComposerAttachmentButton,
   ComposerSendButton,
@@ -211,7 +211,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
         */}
         <ThreadPrimitive.Viewport ref={viewportRef} turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto">
             <div aria-hidden="true" className="scroll-fade-top" />
-            <div className={cn("mx-auto flex min-w-0 w-full max-w-3xl flex-1 flex-col px-4 pt-6", isEmpty && "justify-center")}>
+            <div className={cn("mx-auto flex min-w-0 w-full max-w-conversation flex-1 flex-col px-4 pt-6", isEmpty && "justify-center")}>
               <VirtualizedThreadMessages
                 taskId={taskId}
                 scrollElementRef={viewportRef}
@@ -496,9 +496,9 @@ const UserMessage: FC = () => {
 
 const UserMessageView: FC = () => {
   const messageId = useAuiState((state) => state.message.id);
-  const hasText = useAuiState((state) => state.message.parts.some(
-    (part) => part.type === "text" && part.text.trim().length > 0,
-  ));
+  const hasContent = useHasUserMessageContent();
+  // 渲染失败时的纯文本兜底：只拼正文，胶囊所在位置留空。
+  const userText = useAuiState((state) => state.message.parts.map((part) => part.type === "text" ? part.text : "").join(""));
   const readonly = useThreadContext().readonly === true;
   const canEdit = useAuiState((state) => {
     if (readonly) return false;
@@ -520,24 +520,25 @@ const UserMessageView: FC = () => {
       className="group flex flex-col items-end px-2"
     >
       <div className="flex max-w-[85%] flex-col items-end gap-2">
-        <UserMessageAttachments />
-        {hasText && (
+        <UserMessageImages />
+        {hasContent && (
           <div className="bg-primary/10 text-foreground rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
-            <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? (
-              <PartRenderBoundary
-                renderer="用户 Markdown"
-                fallback={({ onRetry }) => (
-                  <RenderErrorCard
-                    scope="markdown"
-                    label="用户内容"
-                    fallbackText={part.text}
-                    onRetry={onRetry}
-                  />
-                )}
-              >
-                <UserMessageText text={part.text} status={part.status} />
-              </PartRenderBoundary>
-            ) : null}</MessagePrimitive.Parts>
+            {/* 正文与行内胶囊是一个整体渲染单元（见 UserMessageContent），按消息隔离而不是按 part。 */}
+            <RenderIsolationBoundary
+              scope="message"
+              resetKey={messageId}
+              metadata={{ messageId, renderer: "用户 Markdown" }}
+              fallback={({ onRetry }) => (
+                <RenderErrorCard
+                  scope="markdown"
+                  label="用户内容"
+                  fallbackText={userText}
+                  onRetry={onRetry}
+                />
+              )}
+            >
+              <UserMessageContent />
+            </RenderIsolationBoundary>
           </div>
         )}
       </div>
@@ -589,9 +590,7 @@ const QueuedMessageView: FC = () => {
   const aui = useAui();
   const message = useAuiState((state) => state.message);
   const messageId = message.id;
-  const hasText = useAuiState((state) => state.message.parts.some(
-    (part) => part.type === "text" && part.text.trim().length > 0,
-  ));
+  const hasContent = useHasUserMessageContent();
   const delivery = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages
     ?.find((message) => message.id === messageId)?.delivery ?? "next_run");
   const { taskId } = useThreadContext();
@@ -652,12 +651,10 @@ const QueuedMessageView: FC = () => {
     >
       <div className="min-w-0 flex-1">
         <span className="text-muted-foreground text-xs">{QUEUED_LABELS[delivery]}</span>
-        <UserMessageAttachments />
-        {hasText && (
+        <UserMessageImages />
+        {hasContent && (
           <div className="text-foreground line-clamp-3 text-sm leading-relaxed wrap-break-word">
-            <MessagePrimitive.Parts>{({ part }) => part.type === "text" ? (
-              <UserMessageText text={part.text} status={part.status} />
-            ) : null}</MessagePrimitive.Parts>
+            <UserMessageContent />
           </div>
         )}
       </div>

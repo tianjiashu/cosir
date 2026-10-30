@@ -6,7 +6,6 @@ import json
 import uuid
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -143,8 +142,8 @@ def tool_service(monkeypatch):
     service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
     monkeypatch.setattr(depends, "get_terminal_session_service", lambda: service)
     monkeypatch.setattr(
-        "app.tools.tool_handler.terminal_session.common.cancellation_registry",
-        SimpleNamespace(is_cancelled=lambda task_id: False),
+        "app.tools.tool_handler.terminal_session.common.should_stop_call",
+        lambda task_id, tool_call_id: False,
     )
     yield service, workers
     deferred_registry.drop_task(1)
@@ -230,8 +229,8 @@ def test_command_returned_without_integration_is_tool_error(monkeypatch, tmp_pat
     service, _ = make_service(monkeypatch)
     monkeypatch.setattr(depends, "get_terminal_session_service", lambda: service)
     monkeypatch.setattr(
-        "app.tools.tool_handler.terminal_session.common.cancellation_registry",
-        SimpleNamespace(is_cancelled=lambda task_id: False),
+        "app.tools.tool_handler.terminal_session.common.should_stop_call",
+        lambda task_id, tool_call_id: False,
     )
     started = TerminalStartTool().execute(execution_context=_context(tmp_path))
     session_id = str(started.display_data["session_id"])

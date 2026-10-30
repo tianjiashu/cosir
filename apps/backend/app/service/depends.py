@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.task_runtime.service.task_service import TaskService
+    from app.tools.mcp.connection_pool import MCPConnectionPool
     from app.tools.terminal_runtime.session_service import TerminalSessionService
 
 
@@ -67,9 +68,9 @@ def initialize_service_dependencies() -> None:
 
 
 def close_service_dependencies() -> None:
-    """关闭进程内运行时单例（含终端服务）、清空 service 依赖缓存并关闭 SQLite 存储引擎。
+    """关闭进程内运行时单例（含终端服务与 MCP 连接池）、清空 service 依赖缓存并关闭 SQLite 引擎。
 
-    终端服务只在这里经 ``reset_service_dependencies`` 关闭一次；lifespan 必须先关闭
+    终端服务与 MCP 连接池只在这里经 ``reset_service_dependencies`` 关闭一次；lifespan 必须先关闭
     ``deferred_registry``，再调用本函数。
     """
 
@@ -154,6 +155,15 @@ def get_terminal_session_service() -> TerminalSessionService:
     from app.tools.terminal_runtime.session_service import TerminalSessionService
 
     return TerminalSessionService()
+
+
+@lru_cache(maxsize=1)
+def get_mcp_connection_pool() -> MCPConnectionPool:
+    """返回进程级 MCP 长连接池单例；循环线程与连接都在首次使用时才建立。"""
+
+    from app.tools.mcp.connection_pool import MCPConnectionPool
+
+    return MCPConnectionPool()
 
 
 @lru_cache(maxsize=1)
@@ -410,10 +420,23 @@ def reset_service_dependencies() -> None:
 
 
 def _shutdown_cached_runtime_before_reset() -> None:
-    """丢弃缓存前关闭已构造的终端服务（不顺手构造）；这是终端服务唯一的关闭点。
+    """丢弃缓存前关闭已构造的终端服务与 MCP 连接池（不顺手构造）；这是二者唯一的关闭点。
 
     关闭失败只记录，不阻断后续缓存清理与存储关闭。
     """
+
+    if get_mcp_connection_pool.cache_info().currsize:
+        try:
+            get_mcp_connection_pool().close()
+        except BaseException as exc:
+            log.error(
+                "service_dependency_mcp_pool_reset_failed",
+                extra={
+                    "msg": "service dependency reset 的 MCP 连接池关闭失败",
+                    "data": {"error_type": type(exc).__name__, "error": str(exc)[:500]},
+                },
+            )
+    get_mcp_connection_pool.cache_clear()
 
     if get_terminal_session_service.cache_info().currsize:
         try:

@@ -1,9 +1,12 @@
 """所有工具统一 strict，且模型输入仍能走到原有执行与等待边界。"""
 
+import asyncio
 import json
+from concurrent.futures import Future
 from types import SimpleNamespace
 
 import pytest
+from mcp import types
 from jsonschema import Draft202012Validator, ValidationError
 from pydantic import ValidationError as ModelValidationError
 
@@ -75,16 +78,22 @@ def test_mcp_json_string_is_decoded_once_at_tool_argument_boundary(monkeypatch):
     assert result.arguments["arguments"] == value
     received = []
 
-    async def call(server, name, arguments):
-        received.append((server.name, name, arguments))
-        return "done"
+    class _Pool:
+        async def call_tool(self, server, name, arguments):
+            received.append((server.name, name, arguments))
+            return types.CallToolResult(content=[types.TextContent(type="text", text="done")])
+
+        def submit(self, coroutine):
+            future = Future()
+            future.set_result(asyncio.run(coroutine))
+            return future
 
     monkeypatch.setattr("app.tools.tool_handler.mcp_tool.read_mcp_configuration", lambda: None)
     monkeypatch.setattr(
         "app.tools.tool_handler.mcp_tool.enabled_servers",
         lambda _: [SimpleNamespace(name="server")],
     )
-    monkeypatch.setattr("app.tools.tool_handler.mcp_tool.call_server_tool", call)
+    monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", _Pool)
     observation = MCPTool().execute(**result.arguments)
     assert observation.status == "success"
     assert received == [("server", "remote", value)]

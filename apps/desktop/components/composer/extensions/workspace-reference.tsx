@@ -14,7 +14,6 @@ function ReferenceView({ node, editor, getPos }: NodeViewProps) {
   return (
     <NodeViewWrapper as="span" contentEditable={false} className="cosir-composer-token-node">
       <ReferenceChip
-        variant="composer"
         reference={node.attrs.reference as WorkspaceReference}
         disabled={context.disabled}
         remove={() => removeComposerToken({ node, editor, getPos })}

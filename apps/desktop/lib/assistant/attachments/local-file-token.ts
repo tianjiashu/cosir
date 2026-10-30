@@ -1,6 +1,7 @@
 import {
   markdownSegments,
   mapMarkdownText,
+  splitMarkdownTokens,
 } from "@/lib/assistant/markdown-literals";
 import { LOCAL_FILE_DATA_PREFIX } from "@/lib/assistant/attachments/local-attachment-registry";
 
@@ -16,6 +17,11 @@ export function localFileTokenIds(text: string): string[] {
     .flatMap((part) =>
       [...part.text.matchAll(LOCAL_FILE_TOKEN)].map((match) => match[1]),
     );
+}
+
+/** 按位置切出普通文件 token 的 id；与后端 `build_user_input_parts` 的切分一致，供乐观消息对齐 parts 顺序。 */
+export function splitLocalFileTokens(text: string) {
+  return splitMarkdownTokens(text, LOCAL_FILE_TOKEN, (match) => match[1] ?? null);
 }
 
 /** 注释包裹或裸写形式的内联附件 token（含图片），用于从用户可见文本中剔除。 */

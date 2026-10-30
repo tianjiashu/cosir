@@ -75,7 +75,7 @@ function ImagePreview({ src, alt }: { src: string; alt: string }) {
 }
 
 /**
- * 用户消息里的图片附件缩略图（唯一调用方为 `UserMessageAttachments`）。
+ * 用户消息里的图片附件缩略图（唯一调用方为 `UserMessageImages`）。
  * 附件 locator 经 `resolveTransportImageSrc` 解析为可显示地址，解析不到时显示占位图标。
  */
 function ImageImpl({ image }: { image: string }) {

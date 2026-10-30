@@ -8,7 +8,7 @@ import {
   toToolCallPart,
   type TransportMessageRenderContext,
 } from "@/lib/assistant/converter";
-import { registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
+import { registerInlineFileMetadata, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import type { TransportMessage, TransportToolCallPart } from "@/lib/assistant/contract";
 import { activity, outcome, usage } from "./transport-fixtures";
 
@@ -134,33 +134,32 @@ describe("assistant transport converter", () => {
     });
   });
 
-  it("keeps ordinary files as ordered message parts while hiding internal tokens", () => {
-    const converted = toThreadMessage(
-      {
-        id: "user-2",
-        role: "user",
-        parts: [
-          { type: "text", text: "请查看 [[cosir-file:file-1]]" },
-          {
-            type: "file",
-            file: "cosir-local-file:file-1",
-            name: "notes.md",
-            contentType: "text/markdown",
-          },
-        ],
-      },
-      completedRun(1),
-    );
+  // 目的：乐观消息与后端 canonical 同形，气泡在原位渲染文件、Skill 胶囊，canonical 到达时附件不挪位。
+  it("乐观消息把文件 token 换成原位 file part，并物化 Skill 标记", () => {
+    const pending = toPendingUserMessage({ type: "add-message", commandId: "pending-tokens", message: { role: "user", parts: [
+      { type: "text", text: "请用 [[cosir-skill:review-code]] 看 [[cosir-file:file-1]] 和 `[[cosir-file:file-2]]`" },
+      { type: "file", data: "cosir-local-file:file-1", filename: "notes.md", mimeType: "text/markdown" },
+      { type: "file", data: "cosir-local-file:file-3", filename: "extra.md", mimeType: "text/markdown" },
+    ] } });
 
-    expect(converted.content).toMatchObject([
-      { type: "text", text: "请查看 <!-- [[cosir-file:file-1]] -->" },
-      {
-        type: "file",
-        data: "cosir-local-file:file-1",
-        filename: "notes.md",
-        mimeType: "text/markdown",
-        sourceType: "id",
-      },
+    expect(pending?.content).toMatchObject([
+      { type: "text", text: "请用 【Skill: review-code】 看 " },
+      { type: "file", data: "cosir-local-file:file-1", filename: "notes.md" },
+      { type: "text", text: " 和 `[[cosir-file:file-2]]`" },
+      { type: "file", data: "cosir-local-file:file-3", filename: "extra.md" },
+    ]);
+  });
+
+  it("输入框里只有 token 的普通文件从本机登记取名称并占住原位", () => {
+    registerInlineFileMetadata({ id: "token-only", name: "plan.md", contentType: "text/markdown" });
+    const pending = toPendingUserMessage({ type: "add-message", commandId: "pending-token-only", message: { role: "user", parts: [
+      { type: "text", text: "[[cosir-file:token-only]] 和 [[cosir-file:token-only]][[cosir-file:gone]]" },
+    ] } });
+
+    expect(pending?.content).toMatchObject([
+      { type: "file", data: "cosir-local-file:token-only", filename: "plan.md", mimeType: "text/markdown" },
+      { type: "text", text: " 和 " },
+      { type: "file", data: "cosir-local-file:gone", filename: "附件" },
     ]);
   });
 

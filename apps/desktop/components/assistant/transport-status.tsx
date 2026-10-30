@@ -15,7 +15,7 @@ export function TransportStatus({ issue, onRetry }: {
   if (!issue) return null;
   return (
     <div role="status" className={cn("border-b px-4 py-2 text-xs", issue.canResync ? "border-warning/30 bg-warning/10 text-warning" : "border-destructive/30 bg-destructive/10 text-destructive")}>
-      <div className="mx-auto flex max-w-3xl items-center gap-2">
+      <div className="mx-auto flex max-w-conversation items-center gap-2">
         <WifiOffIcon className="size-3.5 shrink-0" aria-hidden="true" />
         <span className="min-w-0 flex-1">{issue.message}</span>
         {issue.canResync && onRetry ? (

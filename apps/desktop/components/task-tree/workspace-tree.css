@@ -18,6 +18,20 @@
   font-weight: 600;
 }
 
+/* 工作区成为当前项只表示「新对话将建在这里」，不是所在页面：去掉底色，
+   只加粗并点亮图标，底色留给当前 Task，二者不会被误读为同一种选中。 */
+.workspace-tree-row[data-current][data-kind="workspace"] {
+  background: transparent;
+}
+
+.workspace-tree-row[data-current][data-kind="workspace"]:hover {
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+
+.workspace-tree-row[data-current][data-kind="workspace"] svg.text-muted-foreground {
+  color: var(--foreground);
+}
+
 .workspace-tree-row:focus-visible {
   outline: 2px solid var(--muted-foreground);
   outline-offset: -2px;

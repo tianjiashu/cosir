@@ -1,7 +1,4 @@
-import {
-  markdownSegments,
-  mapMarkdownText,
-} from "@/lib/assistant/markdown-literals";
+import { markdownSegments } from "@/lib/assistant/markdown-literals";
 import {
   decodeReferences,
   encodeReference,
@@ -13,15 +10,12 @@ import {
   parseSkillMentionName,
 } from "@/lib/assistant/skill-mention-token";
 
-const COMPOSER_TOKEN = /\[\[cosir-(file|image|skill):([^\]]+)\]\]/g;
-const HIDDEN_ATTACHMENT_TOKEN =
-  /<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->/g;
+// 正文里只有普通文件与 Skill 两种 token；图片走输入框上方的附件条，不进正文。
+const COMPOSER_TOKEN = /\[\[cosir-(file|skill):([^\]]+)\]\]/g;
 
 export type InlineComposerAttachment = {
   id: string;
   name: string;
-  kind?: "file" | "image";
-  tokenId?: string;
 };
 
 export type InlineComposerSkill = {
@@ -41,10 +35,7 @@ export type ComposerInsertionCommand =
  * 将持久化/受控文本转换为编辑器文档。附件、Skill token 在编辑期间是原子节点，
  * 普通文本里的相似字符串只在外部值重新装载时解析，避免每次击键都重建选区。
  */
-export function parseComposerDocument(value: string): JSONContent {
-  const text = mapMarkdownText(value, (part) =>
-    part.replace(HIDDEN_ATTACHMENT_TOKEN, "$1"),
-  );
+export function parseComposerDocument(text: string): JSONContent {
   const paragraphs: JSONContent[][] = [[]];
   const appendText = (part: string) => {
     const lines = part.split("\n");
@@ -85,7 +76,7 @@ export function parseComposerDocument(value: string): JSONContent {
         } else {
           paragraphs[paragraphs.length - 1]?.push({
             type: "attachmentToken",
-            attrs: { kind, tokenId },
+            attrs: { tokenId },
           });
         }
       }
@@ -142,10 +133,7 @@ export function insertionCommandContent(
     }));
   return command.attachments.map((attachment) => ({
     type: "attachmentToken",
-    attrs: {
-      kind: attachment.kind ?? "file",
-      tokenId: attachment.tokenId ?? attachment.id,
-    },
+    attrs: { tokenId: attachment.id },
   }));
 }
 
@@ -165,10 +153,8 @@ export function shouldPreservePendingEditorValue(
 function serializeInlineNode(node: JSONContent): string {
   if (node.type === "text") return node.text ?? "";
   if (node.type === "hardBreak") return "\n";
-  if (node.type === "attachmentToken") {
-    const kind = node.attrs?.kind === "image" ? "image" : "file";
-    return `[[cosir-${kind}:${String(node.attrs?.tokenId ?? "")}]]`;
-  }
+  if (node.type === "attachmentToken")
+    return `[[cosir-file:${String(node.attrs?.tokenId ?? "")}]]`;
   if (node.type === "workspaceReference")
     return encodeReference(node.attrs?.reference as WorkspaceReference);
   if (node.type === "skillToken") {

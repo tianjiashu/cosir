@@ -19,25 +19,20 @@ describe("composer document conversion", () => {
     "第一行\n\n末行\n",
     "<script>alert(1)</script> & 保持为普通文本",
     "[[cosir-file:missing]] 是手写文本",
+    // 图片不进正文，同形文本不是 token。
+    "[[cosir-image:image-1]] 是手写文本",
   ])("纯文本往返保持不变：%j", (text) => {
     expect(serializeComposerDocument(parseComposerDocument(text))).toBe(text);
   });
 
-  it("把附件、图片和 Skill token 解析为原子节点并保持顺序", () => {
-    const value = "开头 [[cosir-file:file-1]] [[cosir-image:image-1]] [[cosir-skill:research%20notes]] 结尾";
+  it("把附件和 Skill token 解析为原子节点并保持顺序", () => {
+    const value = "开头 [[cosir-file:file-1]] [[cosir-skill:research%20notes]] 结尾";
     const document = parseComposerDocument(value);
 
     expect(document.content?.[0]?.content?.map((node) => node.type)).toEqual([
-      "text", "attachmentToken", "text", "attachmentToken", "text", "skillToken", "text",
+      "text", "attachmentToken", "text", "skillToken", "text",
     ]);
     expect(serializeComposerDocument(document)).toBe(value);
-  });
-
-  it("编辑 canonical 消息时去掉附件 token 外层注释", () => {
-    const canonical = "查看 <!-- [[cosir-file:file-1]] -->\n下一行";
-
-    expect(serializeComposerDocument(parseComposerDocument(canonical)))
-      .toBe("查看 [[cosir-file:file-1]]\n下一行");
   });
 
   it("把外部插入命令转换成有序的行内节点", () => {
@@ -45,7 +40,7 @@ describe("composer document conversion", () => {
       insertionCommandContent({ type: "insert-text", text: "多行\n提示" }),
       insertionCommandContent({
         type: "insert-attachments",
-        attachments: [{ id: "file-1", name: "notes.md" }, { id: "image-1", name: "shot.png", kind: "image" }],
+        attachments: [{ id: "file-1", name: "notes.md" }],
       }),
       insertionCommandContent({ type: "insert-skill", skill: { name: "research" } }),
     ];
@@ -55,7 +50,7 @@ describe("composer document conversion", () => {
     };
 
     expect(serializeComposerDocument(document)).toBe(
-      "多行\n提示[[cosir-file:file-1]][[cosir-image:image-1]][[cosir-skill:research]]",
+      "多行\n提示[[cosir-file:file-1]][[cosir-skill:research]]",
     );
   });
 
