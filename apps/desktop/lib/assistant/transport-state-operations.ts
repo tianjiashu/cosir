@@ -16,7 +16,7 @@ function isTransportState(value: unknown): value is TransportState {
   const candidate = value as { messages?: unknown; activity?: unknown };
   if (!Array.isArray(candidate.messages)) return false;
   return candidate.activity === null
-    || (typeof candidate.activity === "object" && candidate.activity !== undefined
+    || (typeof candidate.activity === "object"
       && typeof (candidate.activity as { status?: unknown }).status === "string");
 }
 
