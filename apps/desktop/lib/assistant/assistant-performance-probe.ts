@@ -152,7 +152,7 @@ export function createAssistantPerformanceProbe(options: PerformanceProbeOptions
         if (measurement.id === activeMessageId) {
           report.activeRowCommitCount += 1;
           activeRowCommitsInFrame += 1;
-          // 一个 publication 对应一个由 frame store 标记的宿主 WebView 动画帧。
+          // 一个 publication 对应一个由 frame store 标记的渲染进程动画帧。
           // 该计数用于确认同一帧没有重复提交 active row。
           report.maxActiveRowCommitsPerFrame = Math.max(
             report.maxActiveRowCommitsPerFrame,

@@ -458,7 +458,7 @@ export class TransportFrameStore {
   private publishOnNextAnimationFrame(): void {
     if (this.scheduledCommit) return;
     this.scheduledFrameTimestamp = null;
-    this.scheduledCommit = scheduleWebViewCommit((frameTimestamp) => {
+    this.scheduledCommit = scheduleAnimationFrameCommit((frameTimestamp) => {
       this.scheduledCommit = null;
       this.scheduledFrameTimestamp = frameTimestamp ?? null;
       this.publish(this.scheduledFrameTimestamp, "stream");
@@ -543,7 +543,7 @@ function sameContext(left: TransportMessageRenderContext, right: TransportMessag
     && left.activity === right.activity;
 }
 
-function scheduleWebViewCommit(callback: (frameTimestamp?: number) => void): ScheduledCommit {
+function scheduleAnimationFrameCommit(callback: (frameTimestamp?: number) => void): ScheduledCommit {
   if (typeof requestAnimationFrame === "function") {
     const handle = requestAnimationFrame((frameTimestamp) => callback(frameTimestamp));
     return { cancel: () => cancelAnimationFrame(handle) };

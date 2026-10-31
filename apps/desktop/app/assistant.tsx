@@ -7,19 +7,11 @@ import { ThreadSkeleton } from "@/components/assistant/thread-skeleton";
 import { useState } from "react";
 
 /**
- * 桌面端主入口：先拉取服务端首屏历史，state 就绪后再挂载 runtime。
+ * 对话页入口：先拉取服务端首屏 state，就绪后再挂载 runtime。
  *
- * 关键约束（任务书 §3.5）：`useAssistantTransportRuntime` 只在 runtime 首次创建时
- * 捕获一次 `initialState`，之后无论如何变化都不再生效。因此本组件在挂载后立即
- * 经 `useAssistantInitialState` 拉取服务端 state，待数据就绪才渲染内层
- * `AssistantRuntime`。taskId 变化时 hook 先返回 null，旧 runtime 在新快照就绪前
- * 被卸载；这使 task 切换成为明确的页面生命周期，而不是依赖 key 重置活动请求。
- *
- * 本文件为瘦入口：只负责「拉取状态 → 三分支渲染（加载/错误/就绪）」，不再承载
- * 消息投递、runtime 装配等子职责（已拆至 components/assistant/ 下）。
- *
- * @param taskId - 当前任务 id。
- * @returns 加载中显示与 TaskPage 共用的 ThreadSkeleton；出错显示错误提示与「重试」按钮；就绪后挂载对话 runtime。
+ * runtime 只在首次创建时捕获一次 `initialState`，之后的变化不再生效，所以必须先取后挂。
+ * taskId 变化时 hook 先返回 null，旧 runtime 在新快照就绪前被卸载；这使 task 切换成为
+ * 明确的页面生命周期，而不是依赖 key 重置活动请求。
  */
 export const Assistant = ({
   taskId,

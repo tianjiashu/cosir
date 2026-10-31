@@ -141,7 +141,7 @@ export class TaskTransportSession {
     }
     buffer += decoder.decode();
     if (buffer.trim()) applyRecord(buffer);
-    // SSE EOF 可能早于宿主 WebView 的下一次动画帧；先提交最后一批 active row 内容。
+    // SSE EOF 可能早于渲染进程的下一次动画帧；先提交最后一批 active row 内容。
     if (this.active === handle) this.store.flushScheduledPublication();
   }
 }

@@ -96,7 +96,7 @@ export class BrowserHost {
     });
   }
 
-  /** Task 删除提交后由后端通知；也用于宿主退出前的收尾。 */
+  /** Task 删除提交后由后端通知（宿主退出走 `closeAll`）。 */
   dropTasks(taskIds: readonly number[]): void {
     for (const taskId of taskIds) {
       for (const tabId of this.table.tabsOf(taskId)) this.close(tabId);

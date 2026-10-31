@@ -56,7 +56,7 @@ function httpMessage(error: HttpError): string | null {
   return null;
 }
 
-/** fetch 在连接失败时抛 TypeError，各 WebView 的文案不同（Failed to fetch / Load failed / NetworkError…）。 */
+/** fetch 在连接失败时抛 TypeError，各浏览器内核的文案不同（Failed to fetch / Load failed / NetworkError…）。 */
 function isNetworkFailure(error: Error): boolean {
   // 只认 fetch 的网络失败文案；其余 TypeError 是程序缺陷，必须走兜底文案而不是误报「连不上后端」。
   return (error.name === "TypeError" || error.name === "NetworkError")
