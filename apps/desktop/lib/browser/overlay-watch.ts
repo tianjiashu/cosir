@@ -24,7 +24,7 @@ const IGNORED_TAGS = new Set(["SCRIPT", "STYLE", "TEMPLATE", "LINK", "META"]);
 /** portal 容器常是 0×0 的包装层，可见内容在里面几层；不往更深处找，代价可控。 */
 const MAX_DEPTH = 3;
 
-export function intersects(a: Rect, b: Rect): boolean {
+function intersects(a: Rect, b: Rect): boolean {
   return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 }
 

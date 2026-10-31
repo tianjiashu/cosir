@@ -16,7 +16,7 @@ type BrowserTabsState = {
   replace: (tabs: readonly BrowserTabSummary[]) => void;
 };
 
-export const useBrowserTabsStore = create<BrowserTabsState>()((set) => ({
+const useBrowserTabsStore = create<BrowserTabsState>()((set) => ({
   tabs: [],
   replace: (tabs) => set({ tabs }),
 }));

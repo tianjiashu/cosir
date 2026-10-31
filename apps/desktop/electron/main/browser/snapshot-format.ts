@@ -13,7 +13,7 @@
  */
 
 /** `Accessibility.getFullAXTree` 返回的节点里本模块用到的字段。 */
-export type AXValue = { value?: unknown };
+type AXValue = { value?: unknown };
 export type AXNode = {
   nodeId: string;
   ignored?: boolean;
@@ -34,7 +34,7 @@ export type FormattedSnapshot = {
   frames: number;
 };
 
-export const SNAPSHOT_CHAR_BUDGET = 12_000;
+const SNAPSHOT_CHAR_BUDGET = 12_000;
 const NAME_MAX_CHARS = 200;
 
 const INTERACTIVE_ROLES = new Set([
