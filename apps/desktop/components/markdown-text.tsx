@@ -1,5 +1,3 @@
-"use client";
-
 import { StreamdownTextPrimitive } from "@assistant-ui/react-streamdown";
 import type { MessagePartStatus } from "@assistant-ui/core";
 import type { ComponentProps } from "react";

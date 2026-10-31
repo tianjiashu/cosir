@@ -1,9 +1,7 @@
-"use client";
-
 import { useMemo, useState, type PointerEvent } from "react";
 import { CheckCircle2Icon, PlusIcon, SearchIcon } from "lucide-react";
 
-import { AgentAvatar } from "@/components/agent-team-graph-nodes";
+import { AgentAvatar } from "@/components/agent-team/graph-nodes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/state-panel";

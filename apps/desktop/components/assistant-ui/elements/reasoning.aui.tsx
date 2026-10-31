@@ -1,5 +1,3 @@
-"use client";
-
 import { memo, useRef } from "react";
 import {
   useScrollLock,

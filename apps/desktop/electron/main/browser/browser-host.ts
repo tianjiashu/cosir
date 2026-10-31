@@ -2,10 +2,12 @@ import type { BrowserWindow, Rectangle } from "electron";
 
 import { logDesktopEvent } from "../desktop-log";
 import { HostMethodError } from "../host-link/methods";
-import { BrowserTab, DETACHED_VIEWPORT, type PageSnapshot, type TabCreator, type TabSummary } from "./browser-tab";
+import type { BrowserNavigation, BrowserPlacement, BrowserTabCreator, BrowserTabLimits, BrowserTabSummary } from "../../shared/host-contract";
+import { BrowserTab, DETACHED_VIEWPORT, type PageSnapshot } from "./browser-tab";
 import type { ActResult } from "./page-input";
-import type { ActRequest, NavigateRequest, NavigateTarget, ScreenshotRequest, SnapshotRequest, TabsRequest } from "./params";
-import { TabTable, type TabLimits } from "./tab-table";
+import type { ActRequest, NavigateRequest, ScreenshotRequest, SnapshotRequest, TabsRequest } from "./params";
+import { TabTable } from "./tab-table";
+import { isWebProtocol, urlProtocol } from "./web-url";
 
 /** 一次导航或快照的结果；字段名与后端 `app/tools/tool_handler/browser/` 读取的一致。 */
 export type PageResult = {
@@ -26,10 +28,7 @@ export type ActOutcome = PageResult & { completed: number; failure: ActResult["f
 export type ScreenshotResult = { tab_id: string; url: string; title: string; image: string };
 
 /** 本 Task 的一个标签（`browser_tabs` 的列表项）。 */
-export type TaskTab = { tab_id: string; title: string; url: string; current: boolean; created_by: TabCreator };
-
-/** 浏览器面板里占位区域的矩形，CSS 像素、相对窗口内容区。 */
-export type Placement = { x: number; y: number; width: number; height: number };
+export type TaskTab = { tab_id: string; title: string; url: string; current: boolean; created_by: BrowserTabCreator };
 
 /**
  * 内置浏览器的唯一所有者：标签表、全部 `BrowserTab` 与「哪个视图挂在窗口上」。宿主工具链路的方法
@@ -44,13 +43,13 @@ export type Placement = { x: number; y: number; width: number; height: number };
 export class BrowserHost {
   private readonly table = new TabTable();
   private readonly tabs = new Map<string, BrowserTab>();
-  private readonly listeners = new Set<(tabs: TabSummary[]) => void>();
+  private readonly listeners = new Set<(tabs: BrowserTabSummary[]) => void>();
   private attached: BrowserTab | null = null;
   /**
    * 最近一次请求带来的上限。页面自己弹出的新窗口没有请求可带上限，只能用它——上限的事实源仍是后端配置，
    * 宿主不另存配置，至多滞后一次请求。
    */
-  private latestLimits: TabLimits | null = null;
+  private latestLimits: BrowserTabLimits | null = null;
 
   constructor(private readonly window: () => BrowserWindow | null) {}
 
@@ -111,17 +110,17 @@ export class BrowserHost {
   // 用户侧（渲染进程 IPC）：用户能看到并操作全部 Task 的标签页，所以按 tabId 寻址、不校验 Task。
   // ---------------------------------------------------------------------------
 
-  list(): TabSummary[] {
+  list(): BrowserTabSummary[] {
     return [...this.tabs.values()].map((tab) => tab.summary());
   }
 
-  onChange(listener: (tabs: TabSummary[]) => void): () => void {
+  onChange(listener: (tabs: BrowserTabSummary[]) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   /** 把标签挂到主窗口的给定矩形；`null` 摘下。矩形按页面缩放换算成窗口坐标。 */
-  place(tabId: string, placement: Placement | null): void {
+  place(tabId: string, placement: BrowserPlacement | null): void {
     const tab = this.require(tabId);
     const window = this.window();
     if (!placement || !window || placement.width < 1 || placement.height < 1) {
@@ -146,7 +145,7 @@ export class BrowserHost {
    * 用户在浏览器面板点「+」：在该 Task 里开一个标签（与 Agent 开的同等，Agent 经 `browser_tabs` 看得到、
    * 也能操作，行为与交互终端一致），设为当前标签。上限由渲染进程从配置中心读来随请求带上。
    */
-  async userOpen(taskId: number, limits: TabLimits, url?: string): Promise<string> {
+  async userOpen(taskId: number, limits: BrowserTabLimits, url?: string): Promise<string> {
     this.latestLimits = limits;
     const tab = await this.open(taskId, limits, "user");
     this.table.select(taskId, tab.tabId);
@@ -154,7 +153,7 @@ export class BrowserHost {
     return tab.tabId;
   }
 
-  async userNavigate(tabId: string, target: NavigateTarget): Promise<void> {
+  async userNavigate(tabId: string, target: BrowserNavigation): Promise<void> {
     await this.require(tabId).navigate(target, new AbortController().signal);
   }
 
@@ -165,7 +164,7 @@ export class BrowserHost {
 
   // ---------------------------------------------------------------------------
 
-  private async open(taskId: number, limits: TabLimits, createdBy: TabCreator): Promise<BrowserTab> {
+  private async open(taskId: number, limits: BrowserTabLimits, createdBy: BrowserTabCreator): Promise<BrowserTab> {
     this.table.assertCanOpen(taskId, limits);
     const tabId = this.table.add(taskId);
     try {
@@ -186,8 +185,7 @@ export class BrowserHost {
   /** 页面要开新窗口：在同一 Task 里开新标签（当前标签不变），超出上限就只告诉模型被拦了。 */
   private openPopup(opener: BrowserTab, url: string): void {
     const limits = this.latestLimits;
-    const protocol = URL.canParse(url) ? new URL(url).protocol : "";
-    if (!limits || (protocol !== "http:" && protocol !== "https:")) {
+    if (!limits || !isWebProtocol(urlProtocol(url))) {
       opener.note(`the page tried to open ${url.slice(0, 200)} in a new window; it was blocked`);
       return;
     }
@@ -256,7 +254,7 @@ export class BrowserHost {
 }
 
 /** 页面上报的是 CSS 像素；页面被缩放（Cmd + / -）时乘上缩放系数才是窗口坐标。 */
-function toWindowBounds(placement: Placement, zoom: number): Rectangle {
+function toWindowBounds(placement: BrowserPlacement, zoom: number): Rectangle {
   return {
     x: Math.round(placement.x * zoom),
     y: Math.round(placement.y * zoom),

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { RouterProvider } from "react-router-dom";
-import { BackendStartupScreen } from "@/components/backend-startup-screen";
+import { BackendStartupScreen } from "@/components/backend/startup-screen";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ConfirmHost } from "@/components/confirm/confirm-host";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { useBackendQuerySync } from "@/lib/query/use-backend-query-sync";
 import {
   initializeBackendRuntime,
   restartBackendRuntime,
-} from "@/src/runtime-config";
+} from "@/lib/backend/runtime-config";
 import { createAppRouter } from "@/src/router";
 
 /** 路由在首次就绪后才创建：创建即开始监听 history，启动门禁期间不需要它。 */

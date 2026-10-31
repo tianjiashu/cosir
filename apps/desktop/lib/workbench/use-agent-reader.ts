@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import type { TransportState } from "@/lib/assistant/contract";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
+import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 type ReaderError = { message: string; missing: boolean };
 
@@ -17,7 +17,7 @@ type ReaderError = { message: string; missing: boolean };
  * 状态就是订阅里的当前活动。
  */
 export function useAgentReader(taskId: number) {
-  const backend = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
+  const backend = useBackendRuntime();
   const available = backend.available;
   const [snapshot, setSnapshot] = useState<TransportState | null>(null);
   const [error, setError] = useState<ReaderError | null>(null);

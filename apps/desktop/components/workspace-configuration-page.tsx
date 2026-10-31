@@ -1,5 +1,3 @@
-"use client";
-
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderIcon, Loader2Icon, SaveIcon } from "lucide-react";
@@ -8,7 +6,7 @@ import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { WORKSPACE_SETTINGS_TABS, type WorkspaceSettingsTabId } from "@/components/settings/settings-tabs";
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
 import { AgentConfigurationPanel, type AgentConfigurationApi } from "@/components/system-configuration-page";
-import { AgentTeamConfigurationPanel } from "@/components/agent-team-configuration-panel";
+import { AgentTeamConfigurationPanel } from "@/components/agent-team/configuration-panel";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -26,7 +24,7 @@ import {
   type WorkspaceInstructionConfiguration,
 } from "@/lib/api/configuration";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import type { MarkdownConfigurationAdapter } from "@/hooks/use-markdown-configuration-document";
+import type { MarkdownConfigurationAdapter } from "@/components/configuration/use-markdown-configuration-document";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";

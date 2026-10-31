@@ -6,7 +6,7 @@
  * （use-runtime-transport.ts 等）都必须引用本模块，禁止各自重写 key 构造或解析逻辑。
  */
 
-import { REASONING_EFFORT_VALUES } from "@/lib/model-selection-constants";
+import { REASONING_EFFORT_VALUES } from "@/lib/model/selection-constants";
 
 export type ModelSelection = {
   modelConfigId: number;

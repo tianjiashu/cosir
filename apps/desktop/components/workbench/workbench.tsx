@@ -1,5 +1,3 @@
-"use client";
-
 import { Tabs } from "radix-ui";
 import {
   XIcon,
@@ -11,10 +9,11 @@ import {
 } from "lucide-react";
 import { useCallback } from "react";
 
+import type { DockSizing } from "@/components/layout/dock-frame";
 import { PanelDock } from "@/components/ui/panel-dock";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { PANEL_HEADER_CLASS, panelTabClass } from "@/components/ui/panel-tokens";
 import { WorkbenchAgentTabStatus } from "./agent-tab-status";
 import { WorkbenchSurface } from "./surface";
@@ -49,15 +48,12 @@ export function Workbench({
   tabs,
   activeTabId,
   onRequestClose,
-  width, minWidth, maxWidth, onWidthChange,
+  sizing: { width, minWidth, maxWidth, onWidthChange },
 }: {
   workspace: Workspace;
   tabs: WorkbenchTab[];
   activeTabId: string | null;
-  width: number;
-  minWidth: number;
-  maxWidth: number;
-  onWidthChange: (width: number) => void;
+  sizing: DockSizing;
   onRequestClose: () => void;
 }) {
   const workspaceId = workspace.workspace_id;

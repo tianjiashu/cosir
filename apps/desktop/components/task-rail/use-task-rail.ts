@@ -4,7 +4,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { useElementSize } from "@/hooks/use-element-size";
 import { countRunning, useBackgroundTasks } from "@/lib/background-tasks/store";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/shortcuts";
+import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/keyboard/shortcuts";
 import { taskRailPlacement } from "@/lib/task-rail/placement";
 import { useTaskRailStore } from "@/lib/task-rail/store";
 

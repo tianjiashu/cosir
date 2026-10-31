@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { BookOpenTextIcon, MessageSquareQuoteIcon, PencilIcon, Trash2Icon } from "lucide-react";
 

@@ -1,3 +1,5 @@
+import { ATTACHMENT_ASSET_ID } from "@/lib/assistant/attachments/attachment-locator";
+
 /** `display_data.kind = "image-read"` 的载荷（后端 `app/tools/display/image_display.py`）。 */
 export type ImageReadDisplay = {
   images: { path: string; assetId: string; width: number; height: number }[];
@@ -5,7 +7,6 @@ export type ImageReadDisplay = {
   failures: { path: string; hint: string }[];
 };
 
-const ASSET_ID = /^[0-9a-f]{64}$/;
 
 /** 校验展示载荷；形状不对返回 null，由注册表回落通用卡片。单个条目不合法时只丢这一条。 */
 export function readImageReadDisplay(value: unknown): ImageReadDisplay | null {
@@ -14,7 +15,7 @@ export function readImageReadDisplay(value: unknown): ImageReadDisplay | null {
   if (data.kind !== "image-read" || !Array.isArray(data.images) || !Array.isArray(data.failures)) return null;
   const images = data.images.flatMap((item: unknown) => {
     const image = item as Record<string, unknown> | null;
-    if (typeof image?.path !== "string" || typeof image.asset_id !== "string" || !ASSET_ID.test(image.asset_id)) return [];
+    if (typeof image?.path !== "string" || typeof image.asset_id !== "string" || !ATTACHMENT_ASSET_ID.test(image.asset_id)) return [];
     const width = typeof image.width === "number" ? image.width : 0;
     const height = typeof image.height === "number" ? image.height : 0;
     return [{ path: image.path, assetId: image.asset_id, width, height }];

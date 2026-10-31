@@ -1,5 +1,3 @@
-"use client";
-
 import { ThreadPrimitive } from "@assistant-ui/react";
 import { memo, Profiler, type ComponentProps } from "react";
 

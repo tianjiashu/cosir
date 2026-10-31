@@ -1,5 +1,3 @@
-"use client";
-
 import { AlertTriangleIcon, CheckCircle2Icon, CircleSlashIcon } from "lucide-react";
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";

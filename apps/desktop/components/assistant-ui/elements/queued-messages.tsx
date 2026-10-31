@@ -1,5 +1,3 @@
-"use client";
-
 import { ThreadPrimitive, useAuiState } from "@assistant-ui/react";
 import { memo, type FC } from "react";
 

@@ -1,5 +1,3 @@
-"use client";
-
 import { defaultRangeExtractor, measureElement as measureRowElement, useVirtualizer } from "@tanstack/react-virtual";
 import {
   unstable_useThreadMessageIds,

@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
-vi.mock("@/src/runtime-config", () => ({ getBackendRuntimeSnapshot: () => mocks.backend }));
+vi.mock("@/lib/backend/runtime-config", () => ({ getBackendRuntimeSnapshot: () => mocks.backend }));
 vi.mock("@/lib/assistant/assistant-snapshot-client", () => ({
   requestAssistantSnapshot: mocks.requestAssistantSnapshot,
 }));

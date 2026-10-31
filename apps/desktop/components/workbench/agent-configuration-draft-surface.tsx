@@ -1,5 +1,3 @@
-"use client";
-
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "zustand";
 import { BotIcon, Loader2Icon, SaveIcon } from "lucide-react";
@@ -8,7 +6,6 @@ import { AgentConfigurationForm } from "@/components/configuration/agent-configu
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
-import { getToolGroups } from "@/lib/api/tools";
 import { createAgentConfiguration, createWorkspaceAgentConfiguration, updateAgentConfiguration, updateWorkspaceAgentConfiguration } from "@/lib/api/configuration";
 import type { PersistAgent } from "@/lib/agent-editor/session";
 import { confirmCloseWorkbenchTab } from "@/lib/workbench/drafts";
@@ -18,6 +15,7 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import type { WorkbenchAgentConfigurationDraftTab } from "@/lib/workbench/types";
+import { toolGroupsQueryOptions } from "@/lib/query/query-options";
 
 /**
  * 在 Workbench 中编辑并显式保存一次工具生成的子 Agent 配置草稿。
@@ -36,8 +34,7 @@ export function AgentConfigurationDraftSurface({
 }) {
   const queryClient = useQueryClient();
   const toolGroupsQuery = useQuery({
-    queryKey: queryKeys.toolGroups(),
-    queryFn: ({ signal }) => getToolGroups({ signal }),
+    ...toolGroupsQueryOptions(),
   });
 
   const persist: PersistAgent = (input, { scope, agentId }) => {

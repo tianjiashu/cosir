@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TransportState } from "@/lib/assistant/contract";
 import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 const INITIAL_STATE_TIMEOUT_MS = 30_000;
 
@@ -31,11 +31,7 @@ export type AssistantInitialStateResult = {
 export function useAssistantInitialState(
   taskId: number,
 ): AssistantInitialStateResult {
-  const backendRuntime = useSyncExternalStore(
-    subscribeBackendRuntime,
-    getBackendRuntimeSnapshot,
-    getBackendRuntimeSnapshot,
-  );
+  const backendRuntime = useBackendRuntime();
   const [loadedState, setLoadedState] = useState<{ taskId: number; state: TransportState } | null>(null);
   const [loadError, setLoadError] = useState<{ taskId: number; message: string } | null>(null);
   const [retryToken, setRetryToken] = useState(0);

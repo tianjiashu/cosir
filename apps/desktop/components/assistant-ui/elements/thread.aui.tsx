@@ -1,5 +1,3 @@
-"use client";
-
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, Trash2Icon, XIcon, ZapIcon } from "lucide-react";
 import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FC, type ReactNode } from "react";
 import {
@@ -43,7 +41,7 @@ import { ASSISTANT_PART_STACK_CLASS } from "@/components/assistant-ui/elements/t
 import { ToolPart } from "@/components/assistant-ui/tools/tool-part";
 import { readToolArtifact } from "@/components/assistant-ui/tools/types";
 import { Button } from "@/components/ui/button";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import {
   deriveComposerAction,
   editBlockedReason,
@@ -223,11 +221,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
                   <div aria-hidden="true" className="scroll-fade-bottom" />
                   <ScrollToBottomButton />
                   <QueuedMessages components={messageComponents} />
-                  <ComposerBoundary
-                    taskId={taskId}
-                    workspaceRoot={workspaceRoot}
-                    performanceProbe={performanceProbe}
-                  />
+                  <ComposerBoundary performanceProbe={performanceProbe} />
                 </ThreadPrimitive.ViewportFooter>
               )}
             </div>
@@ -260,15 +254,11 @@ const ScrollToBottomButton: FC = () => (
 );
 
 const ComposerBoundary = memo(function ComposerBoundary({
-  taskId,
-  workspaceRoot,
   performanceProbe,
 }: {
-  taskId: number;
-  workspaceRoot?: string;
   performanceProbe?: AssistantPerformanceProbe | null;
 }) {
-  const composer = <Composer taskId={taskId} workspaceRoot={workspaceRoot} />;
+  const composer = <Composer />;
   if (!performanceProbe) return composer;
   return (
     <Profiler
@@ -285,11 +275,11 @@ const ComposerBoundary = memo(function ComposerBoundary({
   );
 });
 
-const Composer = memo(function Composer({ taskId, workspaceRoot }: { taskId: number; workspaceRoot?: string }) {
+const Composer = memo(function Composer() {
   // 运行期配置锁定：活动 Run 期间模型与工具显示 Run 冻结的配置且只读，发送也用这份配置。
   const runLaunch = useActiveRunLaunch();
   // 运行中照常可以发送（后端排进队列，当前 Run 结束后依次处理）；只有停止请求在途时不提交，避免与停止交错。
-  const { cancelling = false } = useThreadContext();
+  const { cancelling = false, taskId, workspaceRoot } = useThreadContext();
   return (
     <ComposerInsertionProvider>
       <ComposerFeedbackProvider>
@@ -318,7 +308,7 @@ const Composer = memo(function Composer({ taskId, workspaceRoot }: { taskId: num
               </div>
             </div>
             <ComposerAttachmentButton workspaceRoot={workspaceRoot} />
-            <ComposerAction taskId={taskId} />
+            <ComposerAction />
           </div>
           <ComposerFeedback />
         </ComposerPrimitive.Root>
@@ -351,12 +341,12 @@ const ThreadComposerPromptToolbar: FC<{ disabled?: boolean; lockedLaunch?: Trans
   );
 };
 
-const ComposerAction: FC<{ taskId: number }> = ({ taskId }) => {
+const ComposerAction: FC = () => {
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const isDraftEmpty = useAuiState((state) =>
     state.composer.text.trim().length === 0 && state.composer.attachments.length === 0,
   );
-  const { cancelling = false, onResumeBusiness, onCancelRequested, onCancelResult } = useThreadContext();
+  const { cancelling = false, onResumeBusiness, onCancelRequested, onCancelResult, taskId } = useThreadContext();
   const canResume = useAuiState((state) => canResumeStoppedRun(readRuntimeTransportState(state.thread.state)));
   const isCancelling = cancelling;
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });

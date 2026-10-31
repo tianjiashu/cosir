@@ -3,7 +3,7 @@ import { Maximize2Icon, Minimize2Icon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { HandoffBanner } from "@/components/handoff/handoff-banner";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { PanelDock } from "@/components/ui/panel-dock";
 import { PANEL_HEADER_CLASS } from "@/components/ui/panel-tokens";
@@ -19,7 +19,7 @@ import {
   mountedTerminalSessionIds,
   terminalTabs,
 } from "@/lib/terminal/terminal-sessions";
-import { TERMINAL_PANEL_HEIGHT } from "@/lib/layout-preferences";
+import { TERMINAL_PANEL_HEIGHT } from "@/lib/layout/preferences";
 import { selectTerminalTask, useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { cn } from "@/lib/utils";
 

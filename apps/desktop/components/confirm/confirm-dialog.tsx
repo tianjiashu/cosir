@@ -1,5 +1,3 @@
-"use client";
-
 import { useRef, type ReactNode } from "react";
 
 import { Alert } from "@/components/ui/alert";

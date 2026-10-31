@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { TERMINAL_PANEL_HEIGHT, useLayoutPreferences } from "@/lib/layout-preferences";
+import { TERMINAL_PANEL_HEIGHT, useLayoutPreferences } from "@/lib/layout/preferences";
 
 function maxHeightForWindow(): number {
   return Math.max(TERMINAL_PANEL_HEIGHT.min, Math.round(window.innerHeight * 0.8));

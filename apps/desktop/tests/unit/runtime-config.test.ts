@@ -37,7 +37,7 @@ async function loadWithHost(initial: BackendSnapshot) {
     },
   };
   vi.resetModules();
-  return { runtime: await import("@/src/runtime-config"), backend: host.current.backend };
+  return { runtime: await import("@/lib/backend/runtime-config"), backend: host.current.backend };
 }
 
 describe("backend runtime projection", () => {
@@ -127,7 +127,7 @@ describe("backend runtime projection", () => {
   it("uses the development URL and a ready status outside the desktop host", async () => {
     host.current = null;
     vi.resetModules();
-    const runtime = await import("@/src/runtime-config");
+    const runtime = await import("@/lib/backend/runtime-config");
 
     await runtime.initializeBackendRuntime();
     expect(runtime.getBackendStatusSnapshot()).toEqual({ state: "ready" });

@@ -1,3 +1,4 @@
+import { IMAGE_LOCATOR } from "@/lib/assistant/attachments/attachment-locator";
 import type { TransportHistoryPage, TransportState } from "@/lib/assistant/contract";
 
 export class TransportSnapshotValidationError extends Error {
@@ -168,7 +169,7 @@ function validatePart(value: unknown, path: string): void {
   if (type === "image") {
     requireExactKeys(part, ["type", "image"], path);
     const image = requireString(part.image, `${path}.image`);
-    if (!/^cosir-attachment:\/\/[0-9a-f]{64}$/.test(image)) {
+    if (!IMAGE_LOCATOR.test(image)) {
       throw new TransportSnapshotValidationError(`${path}.image`, "合法的附件 locator");
     }
     return;

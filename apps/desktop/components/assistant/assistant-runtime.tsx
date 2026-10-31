@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { TransportStatus, type TransportIssue } from "@/components/assistant/transport-status";

@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { SparklesIcon } from "lucide-react";
 import { useAui } from "@assistant-ui/react";
@@ -14,12 +12,12 @@ import {
   ModelSelectorValue as OfficialModelSelectorValue,
   DEFAULT_EFFORT_OPTIONS as BACKEND_REASONING_EFFORTS,
   type ModelOption,
-} from "@/components/model-selector";
+} from "@/components/model/model-selector";
 import { ModelAvailability } from "@/components/model/model-availability";
 import { ModelConfigPanel } from "@/components/assistant-ui/model-config-panel";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
 import { RUN_LAUNCH_LOCKED_HINT } from "@/lib/assistant/run-launch";
-import { useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
+import { useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
 import {
   scopeSuffix,
   type ModelSelection,
@@ -27,7 +25,7 @@ import {
   readStoredSelection,
   subscribeStoredSelection,
   writeStoredSelection,
-} from "@/lib/model-selection-storage";
+} from "@/lib/model/selection-storage";
 
 type ModelSelectorProps = {
   scope?: ModelSelectionScope;
@@ -163,7 +161,6 @@ function SelectorView({
 function useScopedSelection(scope: ModelSelectionScope | undefined) {
   const catalogState = useModelCatalog();
   const key = scopeKey(scope);
-  const [unscopedSelection, setUnscopedSelection] = useState<ModelSelection | null>(null);
   const subscribe = useCallback(
     (listener: () => void) => (scope ? subscribeStoredSelection(scope, listener) : () => undefined),
     [key],
@@ -186,7 +183,6 @@ function useScopedSelection(scope: ModelSelectionScope | undefined) {
     );
     setSelectionState({ scopeKey: key, selection: nextSelection });
     if (scope && nextSelection) writeStoredSelection(scope, nextSelection);
-    if (!scope) setUnscopedSelection(nextSelection);
   }, [catalogState.catalog, catalogState.status, key, storedSelection]);
 
   const selection = scope
@@ -194,11 +190,10 @@ function useScopedSelection(scope: ModelSelectionScope | undefined) {
       ? getSelection(catalogState.catalog.models, storedSelection)
       : null
     : selectionState.scopeKey === key
-      ? unscopedSelection ?? selectionState.selection
+      ? selectionState.selection
       : null;
   const updateSelection = (nextSelection: ModelSelection) => {
     setSelectionState({ scopeKey: key, selection: nextSelection });
-    if (!scope) setUnscopedSelection(nextSelection);
     if (scope) writeStoredSelection(scope, nextSelection);
   };
 

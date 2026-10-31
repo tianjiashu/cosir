@@ -1,5 +1,3 @@
-"use client";
-
 import { useMemo } from "react";
 import { MessagePrimitive, useAuiState, type ThreadUserMessage } from "@assistant-ui/react";
 import { Streamdown } from "streamdown";

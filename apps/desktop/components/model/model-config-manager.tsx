@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2Icon, EyeIcon, EyeOffIcon, Loader2Icon, Trash2Icon, XCircleIcon } from "lucide-react";
@@ -82,7 +80,7 @@ function toInput(form: FormState): ModelConfigTestInput {
  * - 保存前必须对「当前表单内容」测试通过：测试结果按表单签名绑定，任何字段改动都会使其失效。
  * - 编辑状态随组件卸载丢弃：对话框关闭（内容卸载）或离开配置路由即放弃未保存修改，
  *   离开前的确认由宿主按 `unsavedScope` 负责（对话框自行确认，配置中心走路由拦截）。
- * - 列表经 TanStack Query 读取；模型选择目录（lib/model-catalog）共用同一个 query key，
+ * - 列表经 TanStack Query 读取；模型选择目录（lib/model/catalog）共用同一个 query key，
  *   保存 / 删除后的失效会同时刷新目录，宿主无需另行通知。
  */
 export function ModelConfigManager({

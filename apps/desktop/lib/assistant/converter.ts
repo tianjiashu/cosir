@@ -308,15 +308,19 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     deferred: part.deferred === true,
   };
   const args = part.args ?? {};
+  // 各状态的公共字段；分支只补 result / isError。未完成态（pending / running）不得带 result 或 isError 键。
+  const base = {
+    type: "tool-call" as const,
+    toolCallId: part.toolCallId,
+    toolName: part.toolName,
+    args: args as ReadonlyJSONObject,
+    argsText: JSON.stringify(args, null, 2),
+    artifact,
+  };
 
   if (backendStatus === "failed") {
     return {
-      type: "tool-call",
-      toolCallId: part.toolCallId,
-      toolName: part.toolName,
-      args: args as ReadonlyJSONObject,
-      argsText: JSON.stringify(args, null, 2),
-      artifact,
+      ...base,
       // Assistant UI's optional client-side tracker uses result presence to
       // close a tool-call stream. This is a sanitized UI sentinel only: the
       // canonical backend status/error stays in artifact and the raw
@@ -328,12 +332,7 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
 
   if (backendStatus === "cancelled") {
     return {
-      type: "tool-call",
-      toolCallId: part.toolCallId,
-      toolName: part.toolName,
-      args: args as ReadonlyJSONObject,
-      argsText: JSON.stringify(args, null, 2),
-      artifact,
+      ...base,
       // See the failed branch above. Never place the backend exception or
       // tool output in this sentinel.
       result: { kind: "tool-terminal", status: "cancelled" },
@@ -343,24 +342,14 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
 
   if (backendStatus === "unknown") {
     return {
-      type: "tool-call",
-      toolCallId: part.toolCallId,
-      toolName: part.toolName,
-      args: args as ReadonlyJSONObject,
-      argsText: JSON.stringify(args, null, 2),
-      artifact,
+      ...base,
       result: { kind: "tool-unknown", message: "工具状态未知，等待后端确认" },
       isError: true,
     };
   }
 
   return {
-    type: "tool-call",
-    toolCallId: part.toolCallId,
-    toolName: part.toolName,
-    args: args as ReadonlyJSONObject,
-    argsText: JSON.stringify(args, null, 2),
-    artifact,
+    ...base,
     ...(backendStatus === "completed" ? { isError: part.isError ?? false } : {}),
   };
 }
@@ -394,7 +383,8 @@ export function toAssistantMessageStatus(context: TransportMessageRenderContext)
   return { type: "complete", reason: "stop" };
 }
 
-function toThreadMessageWithContext(
+/** Project one canonical or queued message with its precomputed render context. */
+export function toThreadMessageWithRenderContext(
   message: Pick<TransportMessage, "id" | "role" | "parts">,
   context: TransportMessageRenderContext,
 ): ThreadMessage {
@@ -466,14 +456,6 @@ function toThreadMessageWithContext(
     },
   };
   return assistantMessage;
-}
-
-/** Project one canonical or queued message with its precomputed render context. */
-export function toThreadMessageWithRenderContext(
-  message: Pick<TransportMessage, "id" | "role" | "parts">,
-  context: TransportMessageRenderContext,
-): ThreadMessage {
-  return toThreadMessageWithContext(message, context);
 }
 
 export function extractUserAddMessageText(command: unknown): string {

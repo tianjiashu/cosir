@@ -3,7 +3,7 @@ import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-cli
 import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
-import { getBackendRuntimeSnapshot } from "@/src/runtime-config";
+import { getBackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 
 /**
  * 读取 canonical snapshot 的结果。

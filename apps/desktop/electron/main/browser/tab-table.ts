@@ -1,7 +1,8 @@
+import type { BrowserTabLimits } from "../../shared/host-contract";
 import { HostMethodError } from "../host-link/methods";
 
-/** 两个标签上限；事实源是后端配置中心，每次请求随参数带来，宿主不另存配置。 */
-export type TabLimits = { perTask: number; total: number };
+/** 标签 id 的格式，与 `add` 的生成规则（`t` + 序号）是同一条约定；宿主入参校验据此判定。 */
+export const TAB_ID = /^t\d+$/;
 
 /**
  * 标签页的归属与上限：`tabId → taskId`，以及每个 Task 的当前标签。不碰 Electron，只管簿记。
@@ -17,7 +18,7 @@ export class TabTable {
   private readonly current = new Map<number, string>();
 
   /** 超出上限时抛 `TAB_LIMIT`，消息说明是本 Task 满了还是全局满了。 */
-  assertCanOpen(taskId: number, limits: TabLimits): void {
+  assertCanOpen(taskId: number, limits: BrowserTabLimits): void {
     if (this.tabsOf(taskId).length >= limits.perTask) {
       throw new HostMethodError("TAB_LIMIT", `this task already has ${limits.perTask} tabs open (per-task limit)`);
     }

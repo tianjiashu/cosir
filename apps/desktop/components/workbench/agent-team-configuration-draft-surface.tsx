@@ -1,33 +1,21 @@
-"use client";
-
 import type { PersistTeam } from "@/lib/agent-team-editor/session";
 
 import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { UsersIcon } from "lucide-react";
 
-import { AgentTeamConfigurationEditor } from "@/components/agent-team-configuration-editor";
+import { AgentTeamConfigurationEditor } from "@/components/agent-team/configuration-editor";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import {
   createAgentTeamConfiguration,
   updateAgentTeamConfiguration,
-  type AgentTeamConfigurationDraft,
 } from "@/lib/api/agent-teams";
-import {
-  getAgentConfigurations,
-  getWorkspaceAgentConfigurations,
-  type AgentConfiguration,
-} from "@/lib/api/configuration";
+import { visibleWorkspaceProfiles, type AgentProfilesByScope } from "@/lib/agent-team-editor/agent-profiles";
 import { confirmCloseWorkbenchTab } from "@/lib/workbench/drafts";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { queryKeys } from "@/lib/query/query-keys";
 import type { WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
-
-type ProfilesByScope = Record<AgentTeamConfigurationDraft["scope"], AgentConfiguration[]>;
-
-function visibleWorkspaceProfiles(system: AgentConfiguration[], workspace: AgentConfiguration[]) {
-  return [...new Map([...system, ...workspace].map((profile) => [profile.agent_id, profile])).values()];
-}
+import { agentConfigurationsQueryOptions } from "@/lib/query/query-options";
 
 /**
  * 在 Workbench 中编辑并显式保存一次工具生成的 Team 配置草稿。
@@ -46,16 +34,14 @@ export function AgentTeamConfigurationDraftSurface({
 }) {
   const queryClient = useQueryClient();
   const systemAgentsQuery = useQuery({
-    queryKey: queryKeys.agents(null),
-    queryFn: ({ signal }) => getAgentConfigurations({ signal }),
+    ...agentConfigurationsQueryOptions(null),
   });
   const workspaceAgentsQuery = useQuery({
-    queryKey: queryKeys.agents(workspaceId),
-    queryFn: ({ signal }) => getWorkspaceAgentConfigurations(workspaceId, { signal }),
+    ...agentConfigurationsQueryOptions(workspaceId),
   });
   const systemAgents = systemAgentsQuery.data;
   const workspaceAgents = workspaceAgentsQuery.data;
-  const profiles = useMemo<ProfilesByScope | null>(() => (
+  const profiles = useMemo<AgentProfilesByScope | null>(() => (
     systemAgents && workspaceAgents
       ? { system: systemAgents, workspace: visibleWorkspaceProfiles(systemAgents, workspaceAgents) }
       : null

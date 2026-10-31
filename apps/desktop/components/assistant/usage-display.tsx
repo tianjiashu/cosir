@@ -1,5 +1,3 @@
-"use client";
-
 import { GaugeIcon, ZapIcon } from "lucide-react";
 import type { ReactElement } from "react";
 import { useAuiState } from "@assistant-ui/react";

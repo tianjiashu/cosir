@@ -1,19 +1,4 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
-import { getApiBaseUrl } from "@/lib/http/client";
-
-/** 把 Transport 图片定位（`cosir-attachment://<asset id>`）解析为可显示地址；data/blob/http(s) 原样放行，其余为 undefined。 */
-export const resolveTransportImageSrc = (
-  src: string,
-  workspaceId?: number,
-): string | undefined => {
-  const locator = src.match(/^cosir-attachment:\/\/([0-9a-f]{64})$/)?.[1];
-  if (locator && workspaceId !== undefined) {
-    return `${getApiBaseUrl()}/workspaces/${workspaceId}/attachments/${locator}/content`;
-  }
-  return /^(?:data:|blob:|https?:\/\/)/i.test(src) ? src : undefined;
-};
 
 /**
  * 为一组本地 `File` 维护对象 URL：新出现的文件建一个，离开列表的立即释放，卸载时全部释放。

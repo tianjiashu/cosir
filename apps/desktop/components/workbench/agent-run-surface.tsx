@@ -1,7 +1,5 @@
-"use client";
-
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ReadonlyThread } from "@/components/assistant-ui/elements/readonly-thread.aui";
 import { useSubscriptionRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import { TransportStatus, type TransportIssue } from "@/components/assistant/transport-status";
@@ -9,12 +7,13 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { useAgentReader } from "@/lib/workbench/use-agent-reader";
-import { useTaskAssistantReadonlyTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
+import { useTaskAssistantTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
 import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
-import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
+import { getBackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 import { TransportHistoryContext } from "@/lib/assistant/transport-history-context";
+import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 /**
  * 只读查看子 Task：runtime 挂载即打开一条 Task 长订阅，卸载时关闭；不按 runId 去重或重订。
@@ -22,7 +21,7 @@ import { TransportHistoryContext } from "@/lib/assistant/transport-history-conte
  * 已显示的内容与 runtime 都保留；重连耗尽后由用户「重新同步」。
  */
 function AgentRunTransport({ taskId, initialState }: { taskId: number; initialState: TransportState }) {
-  const backendRuntime = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
+  const backendRuntime = useBackendRuntime();
   const [traceId] = useState(() => newTraceId());
   const [issue, setIssue] = useState<TransportIssue | null>(null);
   const openRef = useRef<(() => Promise<void>) | null>(null);
@@ -33,7 +32,7 @@ function AgentRunTransport({ taskId, initialState }: { taskId: number; initialSt
     backend: getBackendRuntimeSnapshot,
     setIssue,
   }), [taskId, traceId]));
-  const { runtime, open, loadEarlierHistory } = useTaskAssistantReadonlyTransportRuntime(taskId, {
+  const { runtime, open, loadEarlierHistory } = useTaskAssistantTransportRuntime(taskId, {
     initialState,
     readonly: true,
     // 阅读页按后端 generation 整体重挂（见 WorkbenchAgentRunSurface），这里只需随可用性开关。
@@ -75,7 +74,7 @@ function AgentReadonlyMessages({ taskId }: { taskId: number }) {
 
 /** 后端换代或任务切换时释放旧观察会话；不取消业务 Run。 */
 export function WorkbenchAgentRunSurface({ taskId, onClose }: { taskId: number; onClose: () => void }) {
-  const backend = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
+  const backend = useBackendRuntime();
   return <AgentReader key={`${taskId}:${backend.generation}`} taskId={taskId} onClose={onClose} />;
 }
 

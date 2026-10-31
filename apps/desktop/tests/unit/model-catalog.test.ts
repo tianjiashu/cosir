@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildModelCatalog } from "@/lib/model-catalog";
+import { buildModelCatalog } from "@/lib/model/catalog";
 
 const configs = (modelName: string) => [{
   config_id: 1,

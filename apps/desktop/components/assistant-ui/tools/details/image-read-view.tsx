@@ -1,8 +1,8 @@
 import { useMemo } from "react";
-import { useImageGallery } from "@/components/image-gallery";
+import { useImageGallery } from "@/components/image/image-gallery";
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
-import { ImageThumbnail } from "@/components/image-thumbnail";
-import { resolveTransportImageSrc } from "@/hooks/use-attachment-src";
+import { ImageThumbnail } from "@/components/image/image-thumbnail";
+import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
 import { readImageReadDisplay, type ImageReadDisplay } from "../image-read-display";
 import type { DetailView } from "./detail-view";
 
@@ -10,7 +10,7 @@ import type { DetailView } from "./detail-view";
 function ImageReadThumbnails({ images }: { images: ImageReadDisplay["images"] }) {
   const workspaceId = useAttachmentWorkspaceId();
   const pictures = useMemo(
-    () => images.map((image) => ({ src: resolveTransportImageSrc(`cosir-attachment://${image.assetId}`, workspaceId), alt: image.path })),
+    () => images.map((image) => ({ src: attachmentContentUrl(image.assetId, workspaceId), alt: image.path })),
     [images, workspaceId],
   );
   const gallery = useImageGallery(pictures);

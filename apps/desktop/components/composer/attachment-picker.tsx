@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, type FC } from "react";
 import { FilePlusIcon, FolderOpenIcon, PaperclipIcon } from "lucide-react";
 

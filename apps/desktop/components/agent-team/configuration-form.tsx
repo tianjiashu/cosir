@@ -1,14 +1,12 @@
-"use client";
-
 import { useStore } from "zustand";
 import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PlayIcon, PlusIcon, SaveIcon, UnplugIcon } from "lucide-react";
 
-import { AgentTeamConfigurationFields } from "@/components/agent-team-configuration-fields";
-import { TeamGraphIssueList } from "@/components/agent-team-graph-issues";
-import { AgentAvatar } from "@/components/agent-team-graph-nodes";
-import { TeamNodeFields, TeamTransitionFields } from "@/components/agent-team-node-fields";
+import { AgentTeamConfigurationFields } from "@/components/agent-team/configuration-fields";
+import { TeamGraphIssueList } from "@/components/agent-team/graph-issues";
+import { AgentAvatar } from "@/components/agent-team/graph-nodes";
+import { TeamNodeFields, TeamTransitionFields } from "@/components/agent-team/node-fields";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/state-panel";
 import type { AgentConfiguration } from "@/lib/api/configuration";

@@ -9,7 +9,7 @@ import {
   uploadAttachment,
   type UploadedAttachment,
 } from "./attachment-upload";
-import { LOCAL_IMAGE_LOCATOR_PREFIX } from "./local-file-token";
+import { LOCAL_IMAGE_LOCATOR_PREFIX } from "./attachment-locator";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";

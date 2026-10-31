@@ -1,9 +1,7 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
 import { ArrowRightIcon, FlagIcon, Trash2Icon } from "lucide-react";
 
-import { AgentTeamStatusEditor } from "@/components/agent-team-status-editor";
+import { AgentTeamStatusEditor } from "@/components/agent-team/status-editor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";

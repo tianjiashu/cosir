@@ -1,5 +1,3 @@
-"use client";
-
 import { useStore } from "zustand";
 import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -25,12 +23,12 @@ import {
 } from "@xyflow/react";
 import { BotIcon, CheckCircle2Icon, CircleHelpIcon, Loader2Icon, Maximize2Icon, NetworkIcon, Redo2Icon, SaveIcon, ShrinkIcon, Undo2Icon, XIcon } from "lucide-react";
 
-import { AgentTeamGraphInspector, type GraphInspectorSelection } from "@/components/agent-team-graph-inspector";
-import { TeamGraphIssuesIndicator } from "@/components/agent-team-graph-issues";
-import { AgentTeamGraphNode, AgentTeamGraphTerminalNode, AgentTeamGraphUnresolvedEndpoint, GraphNodeViewContext } from "@/components/agent-team-graph-nodes";
-import { computeTeamAutoLayout } from "@/components/agent-team-graph-layout";
-import { AgentTeamGraphPalette } from "@/components/agent-team-graph-palette";
-import { AgentTeamEdgeRouteContext, AgentTeamRoutedEdge } from "@/components/agent-team-routed-edge";
+import { AgentTeamGraphInspector, type GraphInspectorSelection } from "@/components/agent-team/graph-inspector";
+import { TeamGraphIssuesIndicator } from "@/components/agent-team/graph-issues";
+import { AgentTeamGraphNode, AgentTeamGraphTerminalNode, AgentTeamGraphUnresolvedEndpoint, GraphNodeViewContext } from "@/components/agent-team/graph-nodes";
+import { computeTeamAutoLayout } from "@/components/agent-team/graph-layout";
+import { AgentTeamGraphPalette } from "@/components/agent-team/graph-palette";
+import { AgentTeamEdgeRouteContext, AgentTeamRoutedEdge } from "@/components/agent-team/routed-edge";
 import {
   createGraphEdges,
   createGraphNodes,
@@ -42,7 +40,7 @@ import {
   unresolvedEndpointViewId,
   type TeamGraphNode,
   type AgentTeamEdgeRoute,
-} from "@/components/agent-team-graph-model";
+} from "@/components/agent-team/graph-model";
 import { Button } from "@/components/ui/button";
 import { FullscreenPortal } from "@/components/ui/fullscreen-portal";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";

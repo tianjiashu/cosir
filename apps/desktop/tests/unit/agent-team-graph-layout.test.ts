@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTeamElkGraph, computeTeamAutoLayout } from "@/components/agent-team-graph-layout";
-import { createGraphEdges, createGraphNodes } from "@/components/agent-team-graph-model";
+import { buildTeamElkGraph, computeTeamAutoLayout } from "@/components/agent-team/graph-layout";
+import { createGraphEdges, createGraphNodes } from "@/components/agent-team/graph-model";
 import { createIdentityAllocator, importDraft } from "@/lib/agent-team-editor/model";
 import { teamConfiguration } from "./team-editor-fixture";
 

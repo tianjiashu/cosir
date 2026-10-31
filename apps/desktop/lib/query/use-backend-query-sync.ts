@@ -1,9 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef } from "react";
 
 import { classifyBackendTransition } from "@/lib/backend/backend-transition";
 import { queryKeys } from "@/lib/query/query-keys";
-import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
+import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 /**
  * 后端恢复或换实例后让全部页面级查询重新拉取——查询缓存与后端实例的唯一同步点。
@@ -14,7 +14,7 @@ import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtim
  */
 export function useBackendQuerySync(): void {
   const queryClient = useQueryClient();
-  const backend = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
+  const backend = useBackendRuntime();
   const previousRef = useRef(backend);
 
   useEffect(() => {

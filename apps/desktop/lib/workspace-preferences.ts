@@ -1,6 +1,6 @@
 /**
  * 最近工作区：启动时恢复上次选中的工作区，属于导航记忆，只由工作区目录（`use-workspace-catalog`）
- * 读写；界面尺寸偏好在 `lib/layout-preferences.ts`。
+ * 读写；界面尺寸偏好在 `lib/layout/preferences.ts`。
  */
 const LAST_WORKSPACE_KEY = "cosir:last-workspace-id";
 

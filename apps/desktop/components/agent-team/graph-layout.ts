@@ -1,7 +1,7 @@
 import type { XYPosition } from "@xyflow/react";
 import type { ElkExtendedEdge, ElkNode, ElkPort } from "elkjs/lib/elk-api";
 
-import type { TeamGraphEdge, TeamGraphNode } from "@/components/agent-team-graph-model";
+import type { TeamGraphEdge, TeamGraphNode } from "@/components/agent-team/graph-model";
 
 /** 节点尚未被测量（首帧、隐藏中）时的估计尺寸。 */
 const FALLBACK_SIZE = {

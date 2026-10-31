@@ -1,10 +1,8 @@
-"use client";
-
 import { createContext, useContext, useEffect, type CSSProperties } from "react";
 import { Handle, Position, useUpdateNodeInternals, type NodeProps } from "@xyflow/react";
 import { AlertTriangleIcon, CheckCircle2Icon, PlayIcon } from "lucide-react";
 
-import { statusHandleId, type TeamGraphNode } from "@/components/agent-team-graph-model";
+import { statusHandleId, type TeamGraphNode } from "@/components/agent-team/graph-model";
 import type { AgentTeamGraphIssue } from "@/lib/api/agent-teams";
 import { cn } from "@/lib/utils";
 

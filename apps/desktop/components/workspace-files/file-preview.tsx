@@ -3,12 +3,11 @@ import { ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getFileInfo } from "@/lib/api/workspace-files";
-import { queryKeys } from "@/lib/query/query-keys";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 import { TextPreview } from "./text-preview";
 import { ImagePreview } from "./image-preview";
+import { fileInfoQueryOptions } from "@/lib/query/query-options";
 const PdfPreview = lazy(() => import("./pdf-preview"));
 
 export function FilePreview({
@@ -21,8 +20,7 @@ export function FilePreview({
   navigation: ReadingNavigation;
 }) {
   const query = useQuery({
-    queryKey: queryKeys.fileInfo(workspaceId, path),
-    queryFn: ({ signal }) => getFileInfo(workspaceId, path, signal),
+    ...fileInfoQueryOptions(workspaceId, path),
   });
   const [asText, setAsText] = useState(false);
   const [updated, setUpdated] = useState(false);

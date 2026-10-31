@@ -1,5 +1,3 @@
-"use client";
-
 import { useFilesStore } from "@/lib/workspace-files/store";
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";

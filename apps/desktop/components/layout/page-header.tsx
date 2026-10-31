@@ -1,5 +1,3 @@
-"use client";
-
 import { Fragment, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChevronRightIcon } from "lucide-react";

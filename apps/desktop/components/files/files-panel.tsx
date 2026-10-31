@@ -1,8 +1,8 @@
 import { FolderTreeIcon, XIcon } from "lucide-react";
 import { lazy, Suspense } from "react";
 
-import { DockFrame } from "@/components/layout/dock-frame";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { DockFrame, type DockSizing } from "@/components/layout/dock-frame";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import type { Workspace } from "@/lib/api/workspaces";
 
 const WorkspaceFilesSurface = lazy(() =>
@@ -15,21 +15,15 @@ const WorkspaceFilesSurface = lazy(() =>
  * 文件面板：当前工作区的文件浏览器，独立的停靠面板（不与工作台的子 Agent、草稿标签混排）。
  * 浏览状态（打开的文件、展开的目录）按工作区存在 `lib/workspace-files/store`，收起面板不丢。
  */
-export function FilesPanel({ workspace, width, minWidth, maxWidth, onWidthChange, onClose }: {
+export function FilesPanel({ workspace, sizing, onClose }: {
   workspace: Workspace;
-  width: number;
-  minWidth: number;
-  maxWidth: number;
-  onWidthChange: (width: number) => void;
+  sizing: DockSizing;
   onClose: () => void;
 }) {
   return (
     <DockFrame
       label="文件"
-      width={width}
-      minWidth={minWidth}
-      maxWidth={maxWidth}
-      onWidthChange={onWidthChange}
+      sizing={sizing}
       header={(
         <>
           <FolderTreeIcon className="text-muted-foreground ml-1 size-3.5 shrink-0" aria-hidden="true" />

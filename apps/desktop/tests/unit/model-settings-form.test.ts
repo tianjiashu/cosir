@@ -4,7 +4,7 @@ import {
   modelSettingsFromForm,
   modelSettingsToForm,
   type ModelSettingsForm,
-} from "@/lib/model-settings-form";
+} from "@/lib/model/settings-form";
 
 describe("model settings form conversion", () => {
   it("将后端 JSON 覆盖项回填为结构化表单值", () => {

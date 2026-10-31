@@ -1,5 +1,3 @@
-"use client";
-
 import { ReferenceBridgeProvider, ReferenceTargetScope } from "@/components/workspace-references/reference-bridge";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -13,12 +11,12 @@ import {
 import { FolderIcon, GlobeIcon, LayoutListIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 
-import { BackendRestartButton } from "@/components/backend-restart-button";
+import { BackendRestartButton } from "@/components/backend/restart-button";
 import { TaskRail } from "@/components/task-rail/task-rail";
 import { useTaskRail } from "@/components/task-rail/use-task-rail";
 import { TASK_RAIL_WIDTH } from "@/lib/task-rail/placement";
 import { CommandPalette } from "@/components/command-palette/command-palette";
-import { BackendStatusBanner } from "@/components/backend-status-banner";
+import { BackendStatusBanner } from "@/components/backend/status-banner";
 import { AppSidebar, SidebarToggleButton, type SidebarSection } from "@/components/layout/sidebar/app-sidebar";
 import { PageHeader, type Crumb } from "@/components/layout/page-header";
 import { useWorkspaceActions } from "@/components/layout/use-workspace-actions";
@@ -29,7 +27,7 @@ import { TaskPage } from "@/components/task-page";
 import { TaskRunStatusBadge } from "@/components/task-tree/task-run-status";
 import { CountBadge } from "@/components/ui/count-badge";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Workbench } from "@/components/workbench/workbench";
 import { BrowserPanel } from "@/components/browser/browser-panel";
 import { FilesPanel } from "@/components/files/files-panel";
@@ -37,14 +35,14 @@ import { desktopHost } from "@/lib/desktop-host";
 import { useDockPanels } from "./use-dock-panels";
 import { useUnsavedRouteGuard } from "./use-unsaved-route-guard";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS, withShortcut } from "@/lib/shortcuts";
+import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS, withShortcut } from "@/lib/keyboard/shortcuts";
 import {
   selectTerminalTask,
   useTerminalBadge,
   useTerminalWorkbenchStore,
 } from "@/lib/terminal/terminal-workbench-store";
 import { WorkbenchProvider } from "@/lib/workbench/context";
-import { SIDEBAR_WIDTH, useLayoutPreferences } from "@/lib/layout-preferences";
+import { SIDEBAR_WIDTH, useLayoutPreferences } from "@/lib/layout/preferences";
 import { cn } from "@/lib/utils";
 import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
 import { useTaskStatusStream } from "@/lib/task-status/use-task-status-stream";
@@ -134,7 +132,7 @@ export function AppLayout() {
   }, [location.pathname]);
   useHotkeys("escape", () => setDrawerOpen(false), { enabled: drawerOpen, enableOnFormTags: true });
 
-  // ---- 应用级快捷键（登记见 lib/shortcuts.ts）；工作台与会话侧栏的快捷键由各自的 hook 注册 ----
+  // ---- 应用级快捷键（登记见 lib/keyboard/shortcuts.ts）；工作台与会话侧栏的快捷键由各自的 hook 注册 ----
   useHotkeys(APP_SHORTCUTS.newConversation.keys, () => startNewConversationRef.current(), APP_HOTKEY_OPTIONS);
   useHotkeys(APP_SHORTCUTS.toggleSidebar.keys, () => toggleSidebar(), APP_HOTKEY_OPTIONS, [toggleSidebar]);
   useHotkeys(APP_SHORTCUTS.openSettings.keys, () => navigate("/settings"), APP_HOTKEY_OPTIONS, [navigate]);
@@ -398,14 +396,13 @@ export function AppLayout() {
         >
           {dock.sizing && dock.panel === "workbench" && workbenchWorkspace && (
             <Workbench workspace={workbenchWorkspace} tabs={dock.workbenchTabs} activeTabId={dock.workbenchActiveTabId}
-              width={dock.sizing.width} minWidth={dock.sizing.minWidth} maxWidth={dock.sizing.maxWidth}
-              onWidthChange={dock.sizing.onWidthChange} onRequestClose={dock.close} />
+              sizing={dock.sizing} onRequestClose={dock.close} />
           )}
           {dock.sizing && dock.panel === "files" && workbenchWorkspace && (
-            <FilesPanel workspace={workbenchWorkspace} {...dock.sizing} onClose={dock.close} />
+            <FilesPanel workspace={workbenchWorkspace} sizing={dock.sizing} onClose={dock.close} />
           )}
           {dock.sizing && dock.panel === "browser" && (
-            <BrowserPanel taskId={dock.browserTaskId} {...dock.sizing}
+            <BrowserPanel taskId={dock.browserTaskId} sizing={dock.sizing}
               maximized={dock.browserMaximized} onToggleMaximized={dock.toggleBrowserMaximized} onClose={dock.close} />
           )}
         </IsolatedRegion>

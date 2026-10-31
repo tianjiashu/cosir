@@ -1,5 +1,3 @@
-"use client";
-
 export type TraceId = string;
 
 /** 生成 128-bit、无分隔符的小写十六进制 trace id。 */

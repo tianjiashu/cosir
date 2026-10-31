@@ -48,16 +48,12 @@ export type AgentTeamConfigurationDraftDisplay = {
   nodeCount: number;
 };
 
-function positiveId(value: unknown): number | undefined {
+function positiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function positiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function statusList(value: unknown): AgentTeamStatusConfiguration[] | undefined {
@@ -87,14 +83,14 @@ function recordList(value: unknown): Record<string, unknown>[] | undefined {
 export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDisplay | null {
   const data = asRecord(value);
   if (data.kind !== "agent-team-approval") return null;
-  const teamRunId = positiveId(data.team_run_id);
+  const teamRunId = positiveInteger(data.team_run_id);
   const teamId = text(data.team_id);
   const name = text(data.name);
   const goal = text(data.goal);
   const startNode = text(data.start_node);
-  const parentTaskId = positiveId(data.parent_task_id);
-  const parentRunId = positiveId(data.parent_run_id);
-  const workspaceId = positiveId(data.workspace_id);
+  const parentTaskId = positiveInteger(data.parent_task_id);
+  const parentRunId = positiveInteger(data.parent_run_id);
+  const workspaceId = positiveInteger(data.workspace_id);
   const configuration = asRecord(data.configuration);
   if (teamRunId === undefined || !teamId || !name || !goal || !startNode || parentTaskId === undefined || parentRunId === undefined || workspaceId === undefined || Object.keys(configuration).length === 0) return null;
   const edges = recordList(data.edges);
@@ -146,7 +142,7 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
 export function readAgentTeamRunDisplay(value: unknown): AgentTeamRunDisplay | null {
   const data = asRecord(value);
   if (data.kind !== "agent-team-execution") return null;
-  const teamRunId = positiveId(data.team_run_id);
+  const teamRunId = positiveInteger(data.team_run_id);
   const teamId = text(data.team_id);
   if (teamRunId === undefined || !teamId) return null;
   return { teamRunId, teamId, goal: text(data.goal) ?? "" };

@@ -4,7 +4,7 @@ import { ActivityIcon, SquarePenIcon } from "lucide-react";
 import { SYSTEM_SETTINGS_TABS } from "@/components/settings/settings-tabs";
 import type { WorkspaceTreeSource } from "@/components/task-tree/workspace-tree-model";
 import type { WorkspaceTask } from "@/lib/api/workspaces";
-import type { AppShortcutId } from "@/lib/shortcuts";
+import type { AppShortcutId } from "@/lib/keyboard/shortcuts";
 
 /**
  * 命令面板的纯数据模型：把工作区任务、固定操作与配置入口按查询词过滤、排序并截断。
@@ -23,7 +23,7 @@ export type CommandPaletteTaskEntry = {
   workspaceName: string;
 };
 
-/** 面板内的固定命令。`kind` 决定选中后回调哪一个 prop；`shortcut` 指向 lib/shortcuts 中的登记项，用于展示组合键。 */
+/** 面板内的固定命令。`kind` 决定选中后回调哪一个 prop；`shortcut` 指向 lib/keyboard/shortcuts 中的登记项，用于展示组合键。 */
 export type CommandPaletteCommand = { id: string; label: string; icon: LucideIcon; shortcut?: AppShortcutId } & (
   | { kind: "new-conversation" }
   | { kind: "navigate"; path: string }

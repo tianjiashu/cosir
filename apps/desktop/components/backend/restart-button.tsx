@@ -1,13 +1,11 @@
-"use client";
-
 import { useCallback, useState } from "react";
 import { RotateCwIcon } from "lucide-react";
 
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Spinner } from "@/components/ui/spinner";
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { canRestartBackendRuntime, restartBackendRuntime } from "@/src/runtime-config";
+import { canRestartBackendRuntime, restartBackendRuntime } from "@/lib/backend/runtime-config";
 
 /**
  * 用户显式「重启后端」的唯一入口：顶栏开发期按钮与后端状态横幅共用。

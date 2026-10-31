@@ -1,5 +1,3 @@
-"use client";
-
 import { Fragment, useState, type ReactNode } from "react";
 
 /**
@@ -22,7 +20,8 @@ export function ImageStack({ count, renderTile }: { count: number; renderTile: (
         {expanded ? "收起" : `展开 ${count}`}
       </button>
       {expanded ? (
-        <div className="flex flex-wrap justify-end gap-2">
+        // 最宽三列（与行高估计的每行张数一致），胶囊因此贴着图片而不是被推到行首；窄时照常折行。
+        <div className="flex max-w-[calc(3*10rem+1rem)] flex-wrap justify-end gap-2">
           {Array.from({ length: count }, (_, index) => <Fragment key={index}>{renderTile(index)}</Fragment>)}
         </div>
       ) : (

@@ -1,5 +1,3 @@
-"use client";
-
 import { createContext, useContext, useRef, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   BaseEdge,
@@ -10,7 +8,7 @@ import {
 } from "@xyflow/react";
 import { RotateCcwIcon } from "lucide-react";
 
-import type { AgentTeamEdgeRoute, TeamGraphEdge, TeamGraphNode } from "@/components/agent-team-graph-model";
+import type { AgentTeamEdgeRoute, TeamGraphEdge, TeamGraphNode } from "@/components/agent-team/graph-model";
 
 type RouteEditActions = {
   preview: (routeKey: string, route: AgentTeamEdgeRoute) => void;

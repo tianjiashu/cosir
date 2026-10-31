@@ -1,5 +1,3 @@
-"use client";
-
 import type { ReactNode } from "react";
 import { CircleAlertIcon, RotateCwIcon, Trash2Icon, Undo2Icon } from "lucide-react";
 

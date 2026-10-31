@@ -1,6 +1,6 @@
 import { BotIcon, PlusIcon, UserIcon, XIcon } from "lucide-react";
 
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { panelTabClass } from "@/components/ui/panel-tokens";
 import type { TerminalShell } from "@/lib/terminal/terminal-api";
 import { isActiveTerminalSession, terminalStatusPresentation, type TerminalTab } from "@/lib/terminal/terminal-sessions";

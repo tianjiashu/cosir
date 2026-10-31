@@ -4,11 +4,11 @@ import {
   splitMarkdownTokens,
 } from "@/lib/assistant/markdown-literals";
 
+import { LOCAL_IMAGE_LOCATOR_PREFIX } from "./attachment-locator";
+
 /** Stable client-only token used to render a local ordinary attachment inline. */
 const LOCAL_FILE_TOKEN = /\[\[cosir-file:([^\]]+)\]\]/g;
 
-/** 图片附件的受控 locator 前缀（与后端 `cosir-attachment://<id>` 契约一致）。 */
-export const LOCAL_IMAGE_LOCATOR_PREFIX = "cosir-attachment://";
 
 /** 普通文件附件的受控 locator 前缀：`cosir-local-file:<id>`，id 指向本机附件登记（格式校验见 snapshot-validation）。 */
 const LOCAL_FILE_LOCATOR_PREFIX = "cosir-local-file:";

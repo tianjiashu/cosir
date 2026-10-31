@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 import { Settings2Icon } from "lucide-react";
 

@@ -1,7 +1,5 @@
-"use client";
-
 import { ErrorState } from "@/components/ui/state-panel";
-import { useAssistantInitialState } from "@/hooks/use-assistant-initial-state";
+import { useAssistantInitialState } from "@/components/assistant/use-assistant-initial-state";
 import { AssistantRuntime } from "@/components/assistant/assistant-runtime";
 import { ThreadSkeleton } from "@/components/assistant/thread-skeleton";
 import { useState } from "react";

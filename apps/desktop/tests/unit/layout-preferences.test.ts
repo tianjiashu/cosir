@@ -6,7 +6,7 @@ import {
   TERMINAL_PANEL_HEIGHT,
   DOCK_PANEL_WIDTH,
   useLayoutPreferences,
-} from "@/lib/layout-preferences";
+} from "@/lib/layout/preferences";
 
 const DEFAULTS = {
   sidebarCollapsed: false,

@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { DockPanel } from "@/lib/layout-preferences";
+import type { DockPanel } from "@/lib/layout/preferences";
 
 /**
  * 右侧停靠区显示哪个面板：文件、内置浏览器、工作台（子 Agent 与配置草稿）三选一，同一时刻只显示一个，

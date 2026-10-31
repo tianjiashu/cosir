@@ -1,9 +1,7 @@
-"use client";
-
 import type { ReactNode } from "react";
 import { RefreshCwIcon, SparklesIcon } from "lucide-react";
 
-import type { ModelCatalogSnapshot } from "@/lib/model-catalog";
+import type { ModelCatalogSnapshot } from "@/lib/model/catalog";
 import { cn } from "@/lib/utils";
 
 /**

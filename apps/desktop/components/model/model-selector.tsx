@@ -1,5 +1,3 @@
-"use client";
-
 import {
   useCallback,
   useMemo,
@@ -13,7 +11,7 @@ import {
 import { cva, type VariantProps } from "class-variance-authority";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { REASONING_EFFORT_VALUES } from "@/lib/model-selection-constants";
+import { REASONING_EFFORT_VALUES } from "@/lib/model/selection-constants";
 import {
   Popover,
   PopoverContent,

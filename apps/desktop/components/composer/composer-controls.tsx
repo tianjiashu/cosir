@@ -1,8 +1,6 @@
-"use client";
-
 import { ModelSelector } from "@/components/assistant-ui/model-selector";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
-import type { ModelSelectionScope } from "@/lib/model-selection-storage";
+import type { ModelSelectionScope } from "@/lib/model/selection-storage";
 
 type ComposerControlsProps = {
   scope?: ModelSelectionScope;

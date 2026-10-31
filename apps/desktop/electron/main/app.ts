@@ -56,11 +56,12 @@ function bootstrap(): void {
     host: { platform: process.platform, pid: process.pid, version: app.getVersion() },
     methods: hostMethods,
   });
-  browser.onChange((tabs) => {
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send(HOST_CHANNEL.browserTabsChanged, tabs);
-  });
+  const broadcast = (channel: string, payload: unknown) => {
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, payload);
+  };
+  browser.onChange((tabs) => broadcast(HOST_CHANNEL.browserTabsChanged, tabs));
   supervisor.onChange((snapshot) => {
-    for (const window of BrowserWindow.getAllWindows()) window.webContents.send(HOST_CHANNEL.backendChanged, snapshot);
+    broadcast(HOST_CHANNEL.backendChanged, snapshot);
     hostLink.follow(snapshot);
   });
 

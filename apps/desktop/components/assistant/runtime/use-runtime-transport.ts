@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import {
   extractUserAddMessageAttachments,
@@ -13,7 +13,7 @@ import {
 } from "@/lib/assistant/task-commands";
 import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { activeRunLaunch } from "@/lib/assistant/run-launch";
-import { readStoredSelection } from "@/lib/model-selection-storage";
+import { readStoredSelection } from "@/lib/model/selection-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { TransportRunStatus, TransportState } from "@/lib/assistant/contract";
 import { transportMessageCount } from "@/lib/assistant/transport-state-operations";
@@ -28,7 +28,7 @@ import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attac
 import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
-import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
+import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 /** 一次 composer 提交解析出的 Task 命令：发送新消息，或编辑重跑（带 `sourceId`）。 */
 type PreparedTaskCommand =
@@ -80,7 +80,7 @@ export function useRuntimeTransport(
     [context.workspaceId],
   );
   // 订阅身份跟随本机后端实例：不可用时不订阅，换实例（generation 变化）时 runtime 自行重开。
-  const backend = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
+  const backend = useBackendRuntime();
   const connectionKey = backend.available ? String(backend.generation) : null;
 
   /** 命令提交被拒或未能发出（HTTP 非 2xx、网络失败、附件失效）：弹窗提示并恢复草稿。 */

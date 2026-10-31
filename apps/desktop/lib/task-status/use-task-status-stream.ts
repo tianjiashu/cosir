@@ -1,10 +1,10 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect } from "react";
 
 import { readNdjson } from "@/lib/http/ndjson";
 import { requestOk } from "@/lib/http/client";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { useTaskStatusStore } from "@/lib/task-status/task-status-store";
-import { getBackendRuntimeSnapshot, subscribeBackendRuntime } from "@/src/runtime-config";
+import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 type StatusFrame =
   | { type: "full" | "changed"; statuses: Record<number, string | null> }
@@ -18,7 +18,7 @@ type StatusFrame =
  * 未连接。
  */
 export function useTaskStatusStream(): void {
-  const backend = useSyncExternalStore(subscribeBackendRuntime, getBackendRuntimeSnapshot, getBackendRuntimeSnapshot);
+  const backend = useBackendRuntime();
 
   useEffect(() => {
     const store = useTaskStatusStore.getState();

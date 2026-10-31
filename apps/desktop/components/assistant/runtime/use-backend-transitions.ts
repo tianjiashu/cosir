@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { classifyBackendTransition, type BackendTransition } from "@/lib/backend/backend-transition";
-import type { BackendRuntimeSnapshot } from "@/src/runtime-config";
+import type { BackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 
 export type BackendTransitionHandlers = {
   /** 后端变为不可用：停止一切依赖当前实例的请求与计时器，但保留会话与界面。 */

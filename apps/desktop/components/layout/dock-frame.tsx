@@ -4,6 +4,14 @@ import { PanelDock } from "@/components/ui/panel-dock";
 import { PANEL_HEADER_CLASS } from "@/components/ui/panel-tokens";
 import { cn } from "@/lib/utils";
 
+/** 停靠面板的宽度与可拖范围（`use-dock-panels` 按可用宽度算出，面板只转交给外框）。 */
+export type DockSizing = {
+  width: number;
+  minWidth: number;
+  maxWidth: number;
+  onWidthChange: (width: number) => void;
+};
+
 /**
  * 右侧停靠面板（文件、内置浏览器）共用的外框：停靠槽、可拖宽度、卡片外观与头部一行。
  *
@@ -13,19 +21,13 @@ import { cn } from "@/lib/utils";
  */
 export function DockFrame({
   label,
-  width,
-  minWidth,
-  maxWidth,
-  onWidthChange,
+  sizing: { width, minWidth, maxWidth, onWidthChange },
   fill = false,
   header,
   children,
 }: {
   label: string;
-  width: number;
-  minWidth: number;
-  maxWidth: number;
-  onWidthChange: (width: number) => void;
+  sizing: DockSizing;
   fill?: boolean;
   header: ReactNode;
   children: ReactNode;

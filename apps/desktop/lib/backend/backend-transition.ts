@@ -1,4 +1,4 @@
-import type { BackendRuntimeSnapshot } from "@/src/runtime-config";
+import type { BackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 
 /**
  * 后端实例变化的边沿判定，供 Assistant 会话（useBackendTransitions）与页面查询缓存

@@ -1,5 +1,3 @@
-"use client";
-
 import { create } from "zustand";
 import type { ComponentProps, SetStateAction } from "react";
 
@@ -22,23 +20,23 @@ import { FirstRunChecklist } from "@/components/onboarding/first-run-checklist";
 import { modelSetupState, shouldShowFirstRunChecklist, startBlockedReason } from "@/components/onboarding/start-readiness";
 import { Button } from "@/components/ui/button";
 import { createWorkspaceTask, deleteTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
-import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
-import { useModelCatalog } from "@/lib/model-catalog";
+import type { ToolGroupCatalog } from "@/lib/api/tools";
+import { useModelCatalog } from "@/lib/model/catalog";
 import { cn } from "@/lib/utils";
-import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
+import { readStoredSelection, writeStoredSelection } from "@/lib/model/selection-storage";
 import { AttachmentPicker } from "@/components/composer/attachment-picker";
 import { ImageAttachmentStrip } from "@/components/composer/image-attachment-strip";
-import { ImageThumbnail } from "@/components/image-thumbnail";
-import { useImageGallery } from "@/components/image-gallery";
-import { useObjectUrls } from "@/hooks/use-attachment-src";
+import { ImageThumbnail } from "@/components/image/image-thumbnail";
+import { useImageGallery } from "@/components/image/image-gallery";
+import { useObjectUrls } from "@/hooks/use-object-urls";
 import { submitNewConversationMessage, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-new-conversation-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { notify } from "@/lib/notify";
-import { queryKeys } from "@/lib/query/query-keys";
 import { newTraceId } from "@/lib/trace";
+import { toolGroupsQueryOptions } from "@/lib/query/query-options";
 
 /** 新对话页的待发图片：提交时才上传，草稿里只保存 File 本身。 */
 type ImageDraftAttachment = { id: string; name: string; file: File };
@@ -136,8 +134,7 @@ export function NewConversation({
   const setAttachments = (value: SetStateAction<ImageDraftAttachment[]>) => updateDraft(draftId, current => ({ ...current, attachments: typeof value === "function" ? value(current.attachments) : value }));
   const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>([]);
   const toolGroupsQuery = useQuery({
-    queryKey: queryKeys.toolGroups(),
-    queryFn: ({ signal }) => getToolGroups({ signal }),
+    ...toolGroupsQueryOptions(),
   });
   const toolGroups = toolGroupsQuery.data?.groups ?? EMPTY_TOOL_GROUPS;
   const toolGroupsError = toolGroupsQuery.isError

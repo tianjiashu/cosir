@@ -21,7 +21,7 @@ import { HttpError } from "@/lib/http/errors";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 import { SearchIcon } from "lucide-react";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
 import { CodePreview } from "./code-preview";
 import { MarkdownPreview } from "./markdown-preview";

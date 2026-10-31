@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createGraphEdges, createGraphNodes, findAvailableNodePosition, isEndViewId, reconcileGraphNodes, statusFromHandleId, statusHandleId } from "@/components/agent-team-graph-model";
+import { createGraphEdges, createGraphNodes, findAvailableNodePosition, isEndViewId, reconcileGraphNodes, statusFromHandleId, statusHandleId } from "@/components/agent-team/graph-model";
 import { createIdentityAllocator, importDraft } from "@/lib/agent-team-editor/model";
 import { teamConfiguration } from "./team-editor-fixture";
 const draft = (changes: Partial<typeof teamConfiguration> = {}) => importDraft({ ...teamConfiguration, ...changes }, createIdentityAllocator());

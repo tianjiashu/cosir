@@ -3,7 +3,7 @@ import { FolderTreeIcon, MoreHorizontalIcon } from "lucide-react";
 import { copyText } from "@/lib/clipboard";
 import { workspacePathText } from "@/lib/workspace-files/store";
 import { Button } from "@/components/ui/button";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import type { FileInfo } from "@/lib/api/workspace-files";
 

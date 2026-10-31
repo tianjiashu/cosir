@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { FirstRunChecklist } from "@/components/onboarding/first-run-checklist";
 import { modelSetupState, shouldShowFirstRunChecklist, startBlockedReason } from "@/components/onboarding/start-readiness";
-import { buildModelCatalog } from "@/lib/model-catalog";
+import { buildModelCatalog } from "@/lib/model/catalog";
 
 describe("modelSetupState", () => {
   it("maps catalog snapshots to setup states", () => {

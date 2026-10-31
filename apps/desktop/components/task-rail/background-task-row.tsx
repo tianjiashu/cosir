@@ -4,7 +4,7 @@ import { BotIcon, CheckIcon, ChevronRightIcon, LocateFixedIcon, SquareIcon, Squa
 import { ToolPart } from "@/components/assistant-ui/tools/tool-part";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import type { BackgroundTaskEntry, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/converter";
 import { cancelToolCall } from "@/lib/assistant/task-commands";

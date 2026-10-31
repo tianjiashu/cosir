@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import {
   fileSession,
   parentPath,

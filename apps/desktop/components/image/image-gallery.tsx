@@ -1,5 +1,3 @@
-"use client";
-
 import { useState, type ReactNode } from "react";
 import { ImageLightbox, type LightboxImage } from "@/components/ui/image-lightbox";
 

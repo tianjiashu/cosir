@@ -1,8 +1,6 @@
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useMemo, useLayoutEffect, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getFileInfo } from "@/lib/api/workspace-files";
-import { queryKeys } from "@/lib/query/query-keys";
 import { normalizeWorkspaceUrls } from "@/lib/workspace-files/markdown-urls";
 import { useResourceWatch } from "@/lib/workspace-files/resource-watch";
 import type { Components } from "react-markdown";
@@ -10,6 +8,7 @@ import { Streamdown, defaultRehypePlugins } from "streamdown";
 import { markdownPlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
 import { parentPath } from "@/lib/workspace-files/store";
 import { useImageResource } from "@/lib/workspace-files/resources";
+import { fileInfoQueryOptions } from "@/lib/query/query-options";
 
 const workspaceRehypePlugins = [
   defaultRehypePlugins.raw,
@@ -55,8 +54,7 @@ function LocalImage({
 }) {
   useResourceWatch(path);
   const metadata = useQuery({
-    queryKey: queryKeys.fileInfo(id, path),
-    queryFn: ({ signal }) => getFileInfo(id, path, signal),
+    ...fileInfoQueryOptions(id, path),
   });
   const image = useImageResource(id, path, metadata.data?.version);
   if (metadata.error)

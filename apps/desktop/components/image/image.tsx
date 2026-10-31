@@ -1,5 +1,3 @@
-"use client";
-
 import { memo, useState, useEffect, useRef, type PropsWithChildren } from "react";
 import { ImageIcon, ImageOffIcon } from "lucide-react";
 import { cn } from "@/lib/utils";

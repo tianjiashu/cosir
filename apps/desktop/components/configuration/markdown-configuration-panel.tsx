@@ -1,5 +1,3 @@
-"use client";
-
 import { useHotkeys } from "react-hotkeys-hook";
 import { Loader2Icon, SaveIcon } from "lucide-react";
 
@@ -7,11 +5,11 @@ import { MarkdownSourcePreviewEditor } from "@/components/configuration/markdown
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
-import { useMarkdownConfigurationDocument, type MarkdownConfigurationAdapter } from "@/hooks/use-markdown-configuration-document";
+import { useMarkdownConfigurationDocument, type MarkdownConfigurationAdapter } from "@/components/configuration/use-markdown-configuration-document";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { estimateMarkdownTokens, type MarkdownDocumentContract } from "@/lib/markdown-document";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
-import { APP_SHORTCUTS, shortcutLabel } from "@/lib/shortcuts";
+import { APP_SHORTCUTS, shortcutLabel } from "@/lib/keyboard/shortcuts";
 
 type MarkdownConfigurationPanelProps<TDocument extends MarkdownDocumentContract> = {
   adapter: MarkdownConfigurationAdapter<TDocument>;

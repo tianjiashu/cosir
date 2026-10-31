@@ -1,10 +1,10 @@
 import { useMemo } from "react";
 import { ArrowUpRightIcon, GlobeIcon, HandIcon } from "lucide-react";
 
-import { Image } from "@/components/image";
-import { useImageGallery } from "@/components/image-gallery";
+import { Image } from "@/components/image/image";
+import { useImageGallery } from "@/components/image/image-gallery";
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
-import { resolveTransportImageSrc } from "@/hooks/use-attachment-src";
+import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
 import { Button } from "@/components/ui/button";
 import { useBrowserTab } from "@/lib/browser/tabs-store";
 import { useHandBack } from "@/lib/handoff/use-hand-back";
@@ -29,7 +29,7 @@ export function BrowserPageTool({ artifact: rawArtifact, toolCallId, taskId, int
   const liveTab = useBrowserTab(display?.tabId ?? "");
   const { handBack, returning } = useHandBack(taskId);
   const workspaceId = useAttachmentWorkspaceId();
-  const screenshotSrc = display?.screenshot ? resolveTransportImageSrc(`cosir-attachment://${display.screenshot}`, workspaceId) : undefined;
+  const screenshotSrc = display?.screenshot ? attachmentContentUrl(display.screenshot, workspaceId) : undefined;
   const gallery = useImageGallery(useMemo(() => (screenshotSrc ? [{ src: screenshotSrc, alt: "网页截图" }] : []), [screenshotSrc]));
   if (!display) return null;
 

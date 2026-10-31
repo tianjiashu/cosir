@@ -1,5 +1,3 @@
-"use client";
-
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
 import { SkillsSelector } from "@/components/composer/skills-selector";
 import { ToolGroupSelector } from "@/components/composer/tool-group-selector";

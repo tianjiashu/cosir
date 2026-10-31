@@ -2,7 +2,7 @@ import { createStore } from "zustand/vanilla";
 
 import type { AgentConfiguration, AgentConfigurationInput } from "@/lib/api/configuration";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
-import { modelSettingsFromForm, modelSettingsToForm, type ModelSettingsForm } from "@/lib/model-settings-form";
+import { modelSettingsFromForm, modelSettingsToForm, type ModelSettingsForm } from "@/lib/model/settings-form";
 
 export type AgentConfigurationScope = "workspace" | "system";
 

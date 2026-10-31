@@ -18,17 +18,20 @@ import {
 } from "@/lib/assistant/converter";
 import { parseTransportState } from "@/lib/assistant/snapshot-validation";
 
-export type TransportFrameEnvelope = {
+type TransportFrameBase = {
   task_id: number;
-  kind: "full" | "mutation" | "resync_required";
   mutations: Array<{
     kind: "set" | "append-text";
     path: Array<string | number>;
     value: unknown;
   }>;
-  state?: TransportState;
   resync_reason?: string | null;
 };
+
+/** full 帧必带 state（`parseTransportFrame` 是唯一入口，在那里强制）；其余帧的 state 可有可无。 */
+export type TransportFrameEnvelope =
+  | (TransportFrameBase & { kind: "full"; state: TransportState })
+  | (TransportFrameBase & { kind: "mutation" | "resync_required"; state?: TransportState });
 
 type TransportMutation = TransportFrameEnvelope["mutations"][number];
 
@@ -111,13 +114,13 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
   if (frame.resync_reason !== undefined && frame.resync_reason !== null && typeof frame.resync_reason !== "string") {
     throw new Error("transport frame resync_reason is invalid");
   }
-  return {
+  const base = {
     task_id: frame.task_id as number,
-    kind,
     mutations,
-    state: frame.state === undefined ? undefined : parseTransportState(frame.state),
     resync_reason: frame.resync_reason as string | null | undefined,
   };
+  if (kind === "full") return { ...base, kind, state: parseTransportState(frame.state) };
+  return { ...base, kind, state: frame.state === undefined ? undefined : parseTransportState(frame.state) };
 }
 
 /**
@@ -186,7 +189,6 @@ export class TransportFrameStore {
       return;
     }
     if (frame.kind === "full") {
-      if (!frame.state) throw new Error("full transport frame must include state");
       this.resyncRequired = false;
       this.replaceState(frame.state);
       this.recordFrame(frame, startedAt);

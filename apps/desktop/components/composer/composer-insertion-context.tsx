@@ -1,5 +1,3 @@
-"use client";
-
 import { createContext, useCallback, useContext, useMemo, useRef, type PropsWithChildren } from "react";
 import type { InlineComposerAttachment, InlineComposerSkill, ComposerInsertionCommand } from "@/components/composer/composer-document";
 

@@ -1,12 +1,9 @@
-import {
-  getBackendRuntimeSnapshot,
-  subscribeBackendRuntime,
-} from "@/src/runtime-config";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { getApiBaseUrl, requestOk } from "@/lib/http/client";
 import { fileUrlPath, type FileInfo } from "@/lib/api/workspace-files";
 import { newTraceId } from "@/lib/trace";
+import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 export function pdfResource(id: number, info: FileInfo) {
   return {
@@ -21,11 +18,7 @@ export function useImageResource(
   path: string,
   version: string | undefined,
 ) {
-  const backend = useSyncExternalStore(
-    subscribeBackendRuntime,
-    getBackendRuntimeSnapshot,
-    getBackendRuntimeSnapshot,
-  );
+  const backend = useBackendRuntime();
   const [state, setState] = useState<{
     url?: string;
     error?: string;

@@ -1,5 +1,3 @@
-"use client";
-
 import { useAuiState } from "@assistant-ui/react";
 
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";

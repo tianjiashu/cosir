@@ -4,7 +4,7 @@ import type { CreateAttachment } from "@assistant-ui/core";
 import type { TransportState } from "@/lib/assistant/contract";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportIssue } from "@/components/assistant/transport-status";
-import type { BackendRuntimeSnapshot } from "@/src/runtime-config";
+import type { BackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 
 export type AssistantRuntimeProps = {
   taskId: number;

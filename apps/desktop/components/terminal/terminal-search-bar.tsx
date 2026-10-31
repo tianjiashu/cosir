@@ -1,7 +1,7 @@
 import { ChevronDownIcon, ChevronUpIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 
 type TerminalSearchBarProps = {
   result: { index: number; count: number } | null;

@@ -1,6 +1,8 @@
 import { HostMethodError } from "../host-link/methods";
 import { SUPPORTED_KEYS } from "./page-input";
-import type { TabLimits } from "./tab-table";
+import { TAB_ID } from "./tab-table";
+import { isWebProtocol } from "./web-url";
+import { BROWSER_NAVIGATION_ACTIONS, type BrowserNavigation, type BrowserTabLimits } from "../../shared/host-contract";
 
 /**
  * `browser.*` 方法的入参校验：链路只保证 `params` 是 JSON 值，这里是宿主侧唯一的校验点，
@@ -8,9 +10,7 @@ import type { TabLimits } from "./tab-table";
  * `NAVIGATION_BLOCKED`（模型可据此换地址，而不是当作调用写错）。
  */
 
-export type NavigateTarget = { url: string } | { action: "back" | "forward" | "reload" };
-
-export type NavigateRequest = { taskId: number; tab?: string; newTab: boolean; target: NavigateTarget; limits: TabLimits };
+export type NavigateRequest = { taskId: number; tab?: string; newTab: boolean; target: BrowserNavigation; limits: BrowserTabLimits };
 export type SnapshotRequest = { taskId: number; tab?: string };
 export type ScreenshotRequest = SnapshotRequest & { fullPage: boolean };
 export type TabsRequest = { taskId: number; action: "list" | "select" | "close"; tab?: string };
@@ -29,14 +29,11 @@ export type ActRequest = SnapshotRequest & { actions: PageAction[] };
 const MAX_ACTIONS = 10;
 const REF = /^e\d+$/;
 
-const TAB_ID = /^t\d+$/;
-const ACTIONS = ["back", "forward", "reload"] as const;
-
 export function parseNavigate(params: unknown): NavigateRequest {
   const value = object(params);
-  const target: NavigateTarget = value.url !== undefined
+  const target: BrowserNavigation = value.url !== undefined
     ? { url: httpUrl(value.url) }
-    : { action: oneOf(value.action, ACTIONS, "action") };
+    : { action: oneOf(value.action, BROWSER_NAVIGATION_ACTIONS, "action") };
   const newTab = value.new_tab === undefined ? false : boolean(value.new_tab, "new_tab");
   if (newTab && !("url" in target)) throw invalid("new_tab needs a url");
   return { taskId: taskId(value.task_id), tab: optionalTab(value.tab), newTab, target, limits: limits(value.limits) };
@@ -113,7 +110,7 @@ export function parseDropTasks(params: unknown): number[] {
   return value.task_ids.map(taskId);
 }
 
-/** 只允许 http(s)：`file:`、`javascript:`、`chrome:` 等都不能经 Agent 打开。 */
+/** Agent 打开的地址：先要求是合法的绝对地址（INVALID_PARAMS），再按 `isWebProtocol` 判定（NAVIGATION_BLOCKED）。 */
 export function httpUrl(value: unknown): string {
   if (typeof value !== "string" || value.length > 4096) throw invalid("url must be a string");
   let url: URL;
@@ -122,7 +119,7 @@ export function httpUrl(value: unknown): string {
   } catch {
     throw invalid(`not a valid absolute URL: ${value.slice(0, 200)}`);
   }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
+  if (!isWebProtocol(url.protocol)) {
     throw new HostMethodError("NAVIGATION_BLOCKED", `only http and https pages can be opened (got ${url.protocol})`);
   }
   return url.href;
@@ -154,7 +151,7 @@ function optionalTab(value: unknown): string | undefined {
   return value;
 }
 
-function limits(value: unknown): TabLimits {
+function limits(value: unknown): BrowserTabLimits {
   const { per_task: perTask, total } = object(value);
   if (!positive(perTask) || !positive(total)) throw invalid("limits must carry positive per_task and total");
   return { perTask, total };

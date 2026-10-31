@@ -70,12 +70,14 @@ export type OpenDirectoryOptions = {
 
 export type HostPlatform = "darwin" | "win32" | "linux";
 
+/** 谁开的标签：用户与 Agent 都能在 Task 里新开（与交互终端一致）。 */
+export type BrowserTabCreator = "agent" | "user";
+
 /** 内置浏览器的一个标签页（宿主事实，见 `electron/main/browser/browser-host.ts`）；每个标签属于一个 Task。 */
 export type BrowserTabSummary = {
   tabId: string;
   taskId: number;
-  /** 谁开的：用户与 Agent 都能在 Task 里新开标签（与交互终端一致）。 */
-  createdBy: "agent" | "user";
+  createdBy: BrowserTabCreator;
   url: string;
   title: string;
   loading: boolean;
@@ -85,8 +87,13 @@ export type BrowserTabSummary = {
 /** 浏览器面板占位区域的矩形：CSS 像素、相对窗口内容区（即 `getBoundingClientRect`）。 */
 export type BrowserPlacement = { x: number; y: number; width: number; height: number };
 
-/** 用户在地址栏的导航：打开地址，或后退 / 前进 / 刷新。 */
-export type BrowserNavigation = { url: string } | { action: "back" | "forward" | "reload" };
+export const BROWSER_NAVIGATION_ACTIONS = ["back", "forward", "reload"] as const;
+
+/** 导航目标：打开地址，或后退 / 前进 / 刷新（用户地址栏与 Agent 的 `browser.navigate` 共用）。 */
+export type BrowserNavigation = { url: string } | { action: (typeof BROWSER_NAVIGATION_ACTIONS)[number] };
+
+/** 两个标签上限；事实源是后端配置中心，每次请求随参数带来，宿主不另存配置。 */
+export type BrowserTabLimits = { perTask: number; total: number };
 
 export const THEME_SOURCES = ["system", "light", "dark"] as const;
 type ThemeSource = (typeof THEME_SOURCES)[number];
@@ -122,7 +129,7 @@ export type CosirHost = {
      * 在 Task 里新开标签（可直接打开地址），返回标签 id。`limits` 取自配置中心的两个标签上限：宿主不存配置，
      * 超出时抛出带原因的错误。
      */
-    open(taskId: number, limits: { perTask: number; total: number }, url?: string): Promise<string>;
+    open(taskId: number, limits: BrowserTabLimits, url?: string): Promise<string>;
     /**
      * 把标签的网页画面放到页面的这个矩形上；`null` 收起。同一时刻只有一个标签显示，放上新的会收起旧的。
      * 网页是叠在页面之上的原生画面，不参与 CSS 层叠。

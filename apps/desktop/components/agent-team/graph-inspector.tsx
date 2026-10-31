@@ -1,12 +1,10 @@
-"use client";
-
 import type { ReactNode } from "react";
 import { ArrowRightIcon, CheckCircle2Icon, RotateCcwIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
 
-import { AgentTeamConfigurationFields } from "@/components/agent-team-configuration-fields";
-import { TeamGraphIssueList } from "@/components/agent-team-graph-issues";
-import { AgentAvatar } from "@/components/agent-team-graph-nodes";
-import { TeamNodeFields, TeamTransitionFields } from "@/components/agent-team-node-fields";
+import { AgentTeamConfigurationFields } from "@/components/agent-team/configuration-fields";
+import { TeamGraphIssueList } from "@/components/agent-team/graph-issues";
+import { AgentAvatar } from "@/components/agent-team/graph-nodes";
+import { TeamNodeFields, TeamTransitionFields } from "@/components/agent-team/node-fields";
 import { Button } from "@/components/ui/button";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { AgentTeamNodeConfiguration, AgentTeamTransitionConfiguration } from "@/lib/api/agent-teams";

@@ -2,10 +2,8 @@ import { Tabs, DropdownMenu } from "radix-ui";
 import { PinIcon, XIcon, ListIcon, TriangleAlertIcon } from "lucide-react";
 import { useCallback, useLayoutEffect, useRef, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getFileInfo } from "@/lib/api/workspace-files";
-import { queryKeys } from "@/lib/query/query-keys";
 import { ReadingSearchContext } from "@/lib/workspace-files/reading-search";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { fileSession, useFilesStore } from "@/lib/workspace-files/store";
 import { WorkspaceFileIcon } from "./file-icon";
 import { Button } from "@/components/ui/button";
@@ -14,12 +12,12 @@ import { fileTabLabel } from "@/lib/workspace-files/tab-label";
 import { cn } from "@/lib/utils";
 import { PANEL_HEADER_CLASS, panelTabClass } from "@/components/ui/panel-tokens";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
+import { fileInfoQueryOptions } from "@/lib/query/query-options";
 
 /** 仅观察阅读器已产生的元数据错误，不为非活动标签发起额外读取。 */
 function FileTabError({ workspaceId, path }: { workspaceId: number; path: string; }) {
   const { isError } = useQuery({
-    queryKey: queryKeys.fileInfo(workspaceId, path),
-    queryFn: ({ signal }) => getFileInfo(workspaceId, path, signal),
+    ...fileInfoQueryOptions(workspaceId, path),
     enabled: false,
   });
   return isError ? <span title="文件读取失败" role="status" className="shrink-0"><TriangleAlertIcon aria-hidden="true" className="size-3.5" /><span className="sr-only">文件读取失败</span></span> : null;

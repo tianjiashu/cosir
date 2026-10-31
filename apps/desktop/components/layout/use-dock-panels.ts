@@ -2,13 +2,14 @@ import { useCallback, useMemo } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 
 import { useElementSize } from "@/hooks/use-element-size";
+import type { DockSizing } from "@/components/layout/dock-frame";
 import { PANEL_DOCK_GUTTER } from "@/components/ui/panel-dock";
 import { useTaskBrowserTabs } from "@/lib/browser/tabs-store";
 import { useBrowserPanelStore } from "@/lib/browser/panel-store";
 import { useDockStore } from "@/lib/layout/dock-store";
-import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/shortcuts";
+import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/keyboard/shortcuts";
 import { useWorkbenchSession } from "@/lib/workbench/store";
-import { DOCK_PANEL_WIDTH, useLayoutPreferences, type DockPanel } from "@/lib/layout-preferences";
+import { DOCK_PANEL_WIDTH, useLayoutPreferences, type DockPanel } from "@/lib/layout/preferences";
 
 const MAIN_MIN_WIDTH = 400;
 
@@ -55,7 +56,7 @@ export function useDockPanels({ workspaceId, filesVisible, conversationTaskId }:
   const [containerRef, { width: availableWidth }] = useElementSize<HTMLDivElement>();
   const widths = useLayoutPreferences((state) => state.dockWidths);
   const setDockWidth = useLayoutPreferences((state) => state.setDockWidth);
-  const sizing = useMemo(() => {
+  const sizing = useMemo((): DockSizing | null => {
     if (panel === null) return null;
     const range = DOCK_PANEL_WIDTH[panel];
     const maxWidth = Math.max(0, Math.min(range.max, availableWidth - MAIN_MIN_WIDTH - PANEL_DOCK_GUTTER));

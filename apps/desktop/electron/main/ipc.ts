@@ -4,14 +4,17 @@ import { BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent } 
 import type { BackendSupervisor } from "./backend/supervisor";
 import type { BrowserHost } from "./browser/browser-host";
 import { httpUrl } from "./browser/params";
+import { TAB_ID } from "./browser/tab-table";
 import { appendJsonLine } from "./desktop-log";
 import { appLogDir } from "./paths";
 import {
+  BROWSER_NAVIGATION_ACTIONS,
   FRONTEND_LOG_LEVELS,
   HOST_CHANNEL,
   THEME_SOURCES,
   type BrowserNavigation,
   type BrowserPlacement,
+  type BrowserTabLimits,
   type FrontendLogEntry,
   type HostReply,
   type OpenDirectoryOptions,
@@ -54,8 +57,6 @@ export function registerHostIpc(supervisor: BackendSupervisor, browser: BrowserH
   handle(HOST_CHANNEL.browserClose, (_event, tabId) => browser.userClose(parseTabId(tabId)));
 }
 
-const TAB_ID = /^t\d+$/;
-
 /** 地址栏输入：没写协议的按 https 补全；协议只允许 http(s)（与 Agent 走同一条校验）。 */
 function parseNavigationUrl(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) throw new Error("网址不能为空");
@@ -67,7 +68,6 @@ function parseNavigationUrl(value: unknown): string {
     throw new Error("只能打开 http 或 https 网址");
   }
 }
-const NAVIGATION_ACTIONS = ["back", "forward", "reload"] as const;
 
 function parseTabId(value: unknown): string {
   if (typeof value !== "string" || !TAB_ID.test(value)) throw new Error("标签页标识不合法");
@@ -79,7 +79,7 @@ function parseTaskId(value: unknown): number {
   return value as number;
 }
 
-function parseLimits(value: unknown): { perTask: number; total: number } {
+function parseLimits(value: unknown): BrowserTabLimits {
   if (!isPlainObject(value)) throw new Error("标签上限不合法");
   const { perTask, total } = value;
   if (!Number.isSafeInteger(perTask) || !Number.isSafeInteger(total) || (perTask as number) <= 0 || (total as number) <= 0) {
@@ -102,7 +102,7 @@ function parsePlacement(value: unknown): BrowserPlacement {
 function parseNavigation(value: unknown): BrowserNavigation {
   if (!isPlainObject(value)) throw new Error("导航参数不合法");
   if (typeof value.url === "string") return { url: parseNavigationUrl(value.url) };
-  if (!isOneOf(NAVIGATION_ACTIONS, value.action)) throw new Error("导航参数不合法");
+  if (!isOneOf(BROWSER_NAVIGATION_ACTIONS, value.action)) throw new Error("导航参数不合法");
   return { action: value.action };
 }
 

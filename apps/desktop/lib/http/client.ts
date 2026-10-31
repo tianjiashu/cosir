@@ -2,7 +2,7 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId, type TraceId } from "@/lib/trace";
 import { parseHttpError } from "@/lib/http/errors";
 import { withTimeout } from "@/lib/async/abort-timeout";
-import { getBackendRuntimeSnapshot } from "@/src/runtime-config";
+import { getBackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 
 export type HttpRequestInit = RequestInit & {
   traceId?: TraceId;

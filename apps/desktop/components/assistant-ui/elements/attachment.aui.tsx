@@ -1,5 +1,3 @@
-"use client";
-
 import { createContext, useContext, useMemo, type FC, type PropsWithChildren } from "react";
 import {
   ComposerPrimitive,
@@ -9,11 +7,12 @@ import {
 } from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
 import type { Attachment } from "@assistant-ui/react";
-import { resolveTransportImageSrc, useObjectUrls } from "@/hooks/use-attachment-src";
-import { useImageGallery } from "@/components/image-gallery";
+import { useObjectUrls } from "@/hooks/use-object-urls";
+import { resolveTransportImageSrc } from "@/lib/assistant/attachments/image-src";
+import { useImageGallery } from "@/components/image/image-gallery";
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
 import { ImageAttachmentStrip } from "@/components/composer/image-attachment-strip";
-import { ImageThumbnail } from "@/components/image-thumbnail";
+import { ImageThumbnail } from "@/components/image/image-thumbnail";
 import { AttachmentPicker } from "@/components/composer/attachment-picker";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
 import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
@@ -63,14 +62,15 @@ export const ComposerAttachments: FC = () => {
   const attachments = useAuiState((s) => s.composer.attachments);
   const images = useMemo(() => attachments.filter((attachment) => attachment.type === "image"), [attachments]);
   const urls = useObjectUrls(useMemo(() => images.flatMap((image) => (image.file ? [image.file] : [])), [images]));
+  const srcs = useMemo(() => images.map((image) => composerImageSrc(image, urls, workspaceId)), [images, urls, workspaceId]);
   const gallery = useImageGallery(useMemo(
-    () => images.map((image) => ({ src: composerImageSrc(image, urls, workspaceId), alt: image.name })),
-    [images, urls, workspaceId],
+    () => images.map((image, index) => ({ src: srcs[index], alt: image.name })),
+    [images, srcs],
   ));
   const context = useMemo(() => ({
-    srcById: new Map(images.map((image) => [image.id, composerImageSrc(image, urls, workspaceId)])),
+    srcById: new Map(images.map((image, index) => [image.id, srcs[index]])),
     open: (id: string) => gallery.open(images.findIndex((image) => image.id === id)),
-  }), [gallery.open, images, urls, workspaceId]);
+  }), [gallery.open, images, srcs]);
 
   return (
     <ComposerImagesContext.Provider value={context}>

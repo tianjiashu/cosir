@@ -1,11 +1,9 @@
-"use client";
-
 import { ClipboardListIcon, ScanSearchIcon } from "lucide-react";
 import type { ReactElement } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { copyText } from "@/lib/clipboard";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { isTerminalRunStatus } from "@/lib/assistant/contract";
 
 export type RunDiagnosticsActionsProps = {

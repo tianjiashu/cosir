@@ -1,5 +1,3 @@
-"use client";
-
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 
 /**

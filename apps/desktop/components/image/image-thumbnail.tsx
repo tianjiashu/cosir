@@ -1,5 +1,3 @@
-"use client";
-
 import type { ReactNode } from "react";
 import { AlertCircleIcon, ImageIcon, Loader2Icon, XIcon } from "lucide-react";
 
@@ -22,7 +20,7 @@ type ImageThumbnailProps = {
  * 方形裁切缩略图：输入框待发送图片与工具结果（`read_image`）共用外观、状态遮罩与名称提示。
  *
  * 只负责呈现与转发移除意图；图片从哪来、何时上传、移除后草稿如何变化由调用方负责。
- * 要完整显示整张图（用户消息里的图片、网页截图）用 `components/image.tsx`，不用这里。
+ * 要完整显示整张图（用户消息里的图片、网页截图）用 `components/image/image.tsx`，不用这里。
  */
 export function ImageThumbnail({ src, name, state = "ready", errorMessage, onRemove, onOpen }: ImageThumbnailProps) {
   const statusLabel = state === "uploading" ? "，上传中" : state === "error" ? "，上传失败" : "";

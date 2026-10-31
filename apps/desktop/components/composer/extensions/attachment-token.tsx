@@ -1,5 +1,3 @@
-"use client";
-
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { FileChip } from "@/components/composer/token-chips";

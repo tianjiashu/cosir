@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { type TransportIssue } from "@/components/assistant/transport-status";
@@ -19,13 +19,10 @@ import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
 import { useHandoffStore } from "@/lib/handoff/store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { newTraceId } from "@/lib/trace";
-import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tools";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { queryKeys } from "@/lib/query/query-keys";
-import {
-  getBackendRuntimeSnapshot,
-  subscribeBackendRuntime,
-} from "@/src/runtime-config";
+import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
+import { toolGroupsQueryOptions } from "@/lib/query/query-options";
 
 const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
 
@@ -47,11 +44,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   onForkMessage,
   onTaskStateChanged,
 }: RuntimeSessionProps) {
-  const backendRuntime = useSyncExternalStore(
-    subscribeBackendRuntime,
-    getBackendRuntimeSnapshot,
-    getBackendRuntimeSnapshot,
-  );
+  const backendRuntime = useBackendRuntime();
   const { available: backendRuntimeAvailable } = backendRuntime;
   const backendRef = useRef(backendRuntime);
   backendRef.current = backendRuntime;
@@ -74,8 +67,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   );
   // 后端不可用时不发请求；后端恢复 / 重启后的重新拉取由全局 query 同步统一失效。
   const toolGroupsQuery = useQuery({
-    queryKey: queryKeys.toolGroups(),
-    queryFn: ({ signal }) => getToolGroups({ signal }),
+    ...toolGroupsQueryOptions(),
     enabled: backendRuntimeAvailable,
   });
   const toolGroups = toolGroupsQuery.data?.groups ?? EMPTY_TOOL_GROUPS;

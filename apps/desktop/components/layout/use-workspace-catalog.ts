@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { WorkspaceTreeSource } from "@/components/task-tree/workspace-tree-model";

@@ -1,3 +1,5 @@
+import { ATTACHMENT_ASSET_ID } from "@/lib/assistant/attachments/attachment-locator";
+
 /** `display_data.kind = "browser-page"` 的载荷（后端 `app/tools/display/browser_display.py`）。 */
 export type BrowserPageDisplay = {
   tabId: string;
@@ -10,7 +12,6 @@ export type BrowserPageDisplay = {
 };
 
 const TAB_ID = /^t\d+$/;
-const ASSET_ID = /^[0-9a-f]{64}$/;
 
 /** 校验展示载荷；形状不对返回 null，由注册表回落通用卡片。 */
 export function readBrowserPageDisplay(value: unknown): BrowserPageDisplay | null {
@@ -19,7 +20,7 @@ export function readBrowserPageDisplay(value: unknown): BrowserPageDisplay | nul
   if (data.kind !== "browser-page" || typeof data.tab_id !== "string" || !TAB_ID.test(data.tab_id)) return null;
   if (typeof data.url !== "string" || typeof data.title !== "string") return null;
   const display: BrowserPageDisplay = { tabId: data.tab_id, url: data.url, title: data.title };
-  if (typeof data.screenshot === "string" && ASSET_ID.test(data.screenshot)) display.screenshot = data.screenshot;
+  if (typeof data.screenshot === "string" && ATTACHMENT_ASSET_ID.test(data.screenshot)) display.screenshot = data.screenshot;
   if (typeof data.handoff_reason === "string" && data.handoff_reason.trim()) display.handoffReason = data.handoff_reason;
   return display;
 }

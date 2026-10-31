@@ -1,21 +1,14 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { readFileStream, type WatchEvent } from "@/lib/api/workspace-files";
 import { queryKeys } from "@/lib/query/query-keys";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import {
-  getBackendRuntimeSnapshot,
-  subscribeBackendRuntime,
-} from "@/src/runtime-config";
+import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 /** 每次重连先重新读取；不依赖文件系统事件完整重放，端口换代会取消旧请求。 */
 export function useFileWatch(id: number, paths: string[]) {
   const client = useQueryClient();
-  const backend = useSyncExternalStore(
-    subscribeBackendRuntime,
-    getBackendRuntimeSnapshot,
-    getBackendRuntimeSnapshot,
-  );
+  const backend = useBackendRuntime();
   const pathKey = JSON.stringify([...new Set(paths)].sort());
   useEffect(() => {
     const controller = new AbortController();

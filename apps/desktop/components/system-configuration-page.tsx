@@ -1,5 +1,3 @@
-"use client";
-
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "zustand";
@@ -19,7 +17,7 @@ import { AppearanceSettingsPanel } from "@/components/settings/appearance-settin
 import { SYSTEM_SETTINGS_TABS, type SystemSettingsTabId } from "@/components/settings/settings-tabs";
 import { EnvironmentConfigurationForm, type EnvironmentFieldValue } from "@/components/environment-configuration-form";
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
-import { AgentTeamConfigurationPanel } from "@/components/agent-team-configuration-panel";
+import { AgentTeamConfigurationPanel } from "@/components/agent-team/configuration-panel";
 import { TerminalDenylistConfigurationPanel } from "@/components/terminal-denylist-configuration-panel";
 import { MCPConfigurationPanel } from "@/components/configuration/mcp-configuration-panel";
 import { SkillConfigurationPanel } from "@/components/configuration/skill-configuration-panel";
@@ -30,13 +28,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
-import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tools";
 import {
   modelOptionId,
   unknownModelName,
   useModelCatalog,
   type ModelCatalog,
-} from "@/lib/model-catalog";
+} from "@/lib/model/catalog";
 import {
   createAgentConfiguration,
   deleteAgentConfiguration,
@@ -55,7 +53,7 @@ import {
   updateGlobalInstructionConfiguration,
   updateMainAgentPromptConfiguration,
 } from "@/lib/api/configuration";
-import type { MarkdownConfigurationAdapter } from "@/hooks/use-markdown-configuration-document";
+import type { MarkdownConfigurationAdapter } from "@/components/configuration/use-markdown-configuration-document";
 import { createAgentEditorSession } from "@/lib/agent-editor/session";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
@@ -65,6 +63,7 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
+import { toolGroupsQueryOptions } from "@/lib/query/query-options";
 
 
 /**
@@ -178,8 +177,7 @@ export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: {
     queryFn: ({ signal }) => api.list({ signal }),
   });
   const toolGroupsQuery = useQuery({
-    queryKey: queryKeys.toolGroups(),
-    queryFn: ({ signal }) => getToolGroups({ signal }),
+    ...toolGroupsQueryOptions(),
   });
   const { catalog } = useModelCatalog();
   const [editing, setEditing] = useState<AgentConfiguration | null | undefined>(undefined);

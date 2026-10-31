@@ -1,5 +1,3 @@
-"use client";
-
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useStore } from "zustand";
@@ -15,7 +13,7 @@ import {
   ModelSelectorTrigger,
   ModelSelectorValue,
   type ModelOption,
-} from "@/components/model-selector";
+} from "@/components/model/model-selector";
 import { buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -23,8 +21,8 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentConfigurationScope, AgentEditorSession } from "@/lib/agent-editor/session";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
-import { modelOptionId, unknownModelName, useModelCatalog, type ModelCatalogModel } from "@/lib/model-catalog";
-import type { ModelSettingsForm } from "@/lib/model-settings-form";
+import { modelOptionId, unknownModelName, useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
+import type { ModelSettingsForm } from "@/lib/model/settings-form";
 
 /** 子 Agent 仍不可授予交互终端会话和配置生成能力。 */
 const NON_ASSIGNABLE_TOOL_GROUPS = new Set(["交互终端工具", "配置生成工具"]);

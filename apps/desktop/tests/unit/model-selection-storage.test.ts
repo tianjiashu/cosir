@@ -5,7 +5,7 @@ import {
   selectionStorageKey,
   subscribeStoredSelection,
   writeStoredSelection,
-} from "@/lib/model-selection-storage";
+} from "@/lib/model/selection-storage";
 
 const storage = new Map<string, string>();
 

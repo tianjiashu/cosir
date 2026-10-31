@@ -1,5 +1,3 @@
-"use client";
-
 import { Trash2Icon, Undo2Icon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";

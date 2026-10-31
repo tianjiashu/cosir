@@ -1,9 +1,5 @@
-import {
-  getBackendRuntimeSnapshot,
-  subscribeBackendRuntime,
-} from "@/src/runtime-config";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as pdfjs from "pdfjs-dist";
 import {
   EventBus,
@@ -17,6 +13,7 @@ import type { FileInfo } from "@/lib/api/workspace-files";
 import { pdfResource } from "@/lib/workspace-files/resources";
 import { ErrorState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
+import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -28,11 +25,7 @@ export default function PdfPreview({
   workspaceId: number;
   info: FileInfo;
 }) {
-  const backend = useSyncExternalStore(
-    subscribeBackendRuntime,
-    getBackendRuntimeSnapshot,
-    getBackendRuntimeSnapshot,
-  );
+  const backend = useBackendRuntime();
   const container = useRef<HTMLDivElement>(null);
   const viewerElement = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<PDFViewer | null>(null);

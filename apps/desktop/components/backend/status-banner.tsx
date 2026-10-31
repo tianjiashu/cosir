@@ -1,12 +1,10 @@
-"use client";
-
 import { useSyncExternalStore } from "react";
 
-import { useBackendRestart } from "@/components/backend-restart-button";
+import { useBackendRestart } from "@/components/backend/restart-button";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
-import { getBackendStatusSnapshot, subscribeBackendStatus } from "@/src/runtime-config";
+import { getBackendStatusSnapshot, subscribeBackendStatus } from "@/lib/backend/runtime-config";
 
 /**
  * 首次就绪之后，后端所有非就绪状态的唯一呈现位置。

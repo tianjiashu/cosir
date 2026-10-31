@@ -1,4 +1,4 @@
-import type { ModelCatalogSnapshot } from "@/lib/model-catalog";
+import type { ModelCatalogSnapshot } from "@/lib/model/catalog";
 
 /**
  * 新对话页「能否开始」的前置条件判定：工作区与模型。

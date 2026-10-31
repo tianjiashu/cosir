@@ -4,8 +4,10 @@ import { logDesktopEvent } from "../desktop-log";
 import { HostMethodError } from "../host-link/methods";
 import { BROWSER_PARTITION } from "./browser-session";
 import { runActions, type ActResult } from "./page-input";
-import type { NavigateTarget, PageAction } from "./params";
+import type { BrowserNavigation, BrowserTabCreator, BrowserTabSummary } from "../../shared/host-contract";
+import type { PageAction } from "./params";
 import { formatSnapshot, type AXNode, type FormattedSnapshot } from "./snapshot-format";
+import { isWebProtocol, urlProtocol } from "./web-url";
 
 /** 视图不在浏览器面板显示时的视口；挂上面板后改为占位矩形的尺寸。 */
 export const DETACHED_VIEWPORT = { x: 0, y: 0, width: 1280, height: 800 };
@@ -24,20 +26,6 @@ const AGENT_INPUT_GRACE_MS = 500;
 const FULL_PAGE_MAX_HEIGHT = 4_000;
 
 export type PageSnapshot = FormattedSnapshot & { url: string; title: string; loading: boolean; notes: string[] };
-
-/** 谁开的标签：与交互终端一样，用户与 Agent 都能在 Task 里新开，列表里标出来。 */
-export type TabCreator = "agent" | "user";
-
-/** 标签页的展示摘要：浏览器面板据此显示，字段与 `host-contract.ts` 的 `BrowserTabSummary` 一致。 */
-export type TabSummary = {
-  tabId: string;
-  taskId: number;
-  createdBy: TabCreator;
-  url: string;
-  title: string;
-  loading: boolean;
-  crashed: boolean;
-};
 
 export type TabEvents = {
   /** 页面要开新窗口（已拒绝原生窗口），由 `BrowserHost` 决定是否在同 Task 里开新标签。 */
@@ -74,7 +62,7 @@ export class BrowserTab {
   private constructor(
     readonly tabId: string,
     readonly taskId: number,
-    readonly createdBy: TabCreator,
+    readonly createdBy: BrowserTabCreator,
     events: TabEvents,
   ) {
     this.view = new WebContentsView({
@@ -118,7 +106,7 @@ export class BrowserTab {
     });
   }
 
-  static async create(tabId: string, taskId: number, createdBy: TabCreator, events: TabEvents): Promise<BrowserTab> {
+  static async create(tabId: string, taskId: number, createdBy: BrowserTabCreator, events: TabEvents): Promise<BrowserTab> {
     const tab = new BrowserTab(tabId, taskId, createdBy, events);
     await tab.view.webContents.loadURL("about:blank");
     tab.attachDebugger();
@@ -128,7 +116,7 @@ export class BrowserTab {
   }
 
   /** 导航并等主框架加载完成；失败带回 Chromium 的 `ERR_*` 说明。 */
-  async navigate(target: NavigateTarget, signal: AbortSignal): Promise<void> {
+  async navigate(target: BrowserNavigation, signal: AbortSignal): Promise<void> {
     const contents = this.view.webContents;
     const history = contents.navigationHistory;
     if ("action" in target && target.action === "back" && !history.canGoBack()) {
@@ -216,7 +204,7 @@ export class BrowserTab {
     return `data:image/${format};base64,${data}`;
   }
 
-  summary(): TabSummary {
+  summary(): BrowserTabSummary {
     const contents = this.view.webContents;
     return {
       tabId: this.tabId,
@@ -285,8 +273,8 @@ export class BrowserTab {
   }
 
   private blockNonWebNavigation(event: Electron.Event, url: string): void {
-    const protocol = URL.canParse(url) ? new URL(url).protocol : "";
-    if (protocol === "http:" || protocol === "https:") return;
+    const protocol = urlProtocol(url);
+    if (isWebProtocol(protocol)) return;
     event.preventDefault();
     this.note(`the page tried to navigate to a ${protocol || "non-web"} address; it was blocked`);
   }

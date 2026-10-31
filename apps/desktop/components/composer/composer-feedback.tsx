@@ -1,5 +1,3 @@
-"use client";
-
 import { createContext, useCallback, useContext, useMemo, useState, type PropsWithChildren } from "react";
 import { XIcon } from "lucide-react";
 

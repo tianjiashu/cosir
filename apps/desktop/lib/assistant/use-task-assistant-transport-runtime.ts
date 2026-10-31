@@ -150,22 +150,13 @@ function useTaskAssistantTransportAdapter(
 }
 
 /**
- * 创建 task 级可写 Transport runtime。
+ * 创建 task 级 Transport runtime；只读与否由 `options.readonly` 决定（只读时不挂 onNew 等写入入口）。
  *
  * task 导航和持久化身份由 Workbench 负责，本 runtime 只拥有当前 task 的
  * TransportFrameStore；因此直接使用 external-store runtime，避免引入远程
  * thread-list 的异步绑定阶段。该函数不创建额外线程列表，也不写入后端事实。
  */
 export function useTaskAssistantTransportRuntime(
-  taskId: number,
-  options: TaskAssistantTransportOptions,
-) {
-  const { adapter, open, loadEarlierHistory } = useTaskAssistantTransportAdapter(taskId, options);
-  return { runtime: useExternalStoreRuntime(adapter), open, loadEarlierHistory };
-}
-
-/** 创建不挂载嵌套远程 thread list 的只读 Workbench runtime。 */
-export function useTaskAssistantReadonlyTransportRuntime(
   taskId: number,
   options: TaskAssistantTransportOptions,
 ) {

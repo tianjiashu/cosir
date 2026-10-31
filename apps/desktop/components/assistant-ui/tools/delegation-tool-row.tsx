@@ -44,15 +44,15 @@ export function DelegationToolRow({ artifact: rawArtifact, interactive = false, 
   const cancellation = useStopRequest(isActive);
 
   const open = () => {
-    if (canOpen && childTaskId !== undefined) {
+    if (canOpen) {
       void frontendLog("INFO", "workbench_agent_open_requested", "主 Thread 请求打开子 Agent Workbench", {
         data: { childTaskId },
       });
-      actions?.openAgent({ taskId: childTaskId, title });
+      actions.openAgent({ taskId: childTaskId, title });
     }
   };
   const requestCancellation = () => {
-    if (!canCancel || childTaskId === undefined) return;
+    if (!canCancel) return;
     void frontendLog("INFO", "delegation_child_run_cancel_requested", "用户请求停止子 Agent", {
       data: { child_task_id: childTaskId },
     });

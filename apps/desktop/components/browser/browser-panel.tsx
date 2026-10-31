@@ -3,8 +3,8 @@ import { useState, type FormEvent } from "react";
 
 import { BrowserView } from "@/components/browser/browser-view";
 import { HandoffBanner } from "@/components/handoff/handoff-banner";
-import { DockFrame } from "@/components/layout/dock-frame";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { DockFrame, type DockSizing } from "@/components/layout/dock-frame";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/state-panel";
@@ -28,12 +28,9 @@ import { cn } from "@/lib/utils";
  * 交接中的标签带一个手形标记，选中时内容上方显示交接提示。关闭交接中的标签即交还：宿主无法把「标签关了」
  * 告诉后端，用户在这里关掉它是唯一能及时唤醒 Agent 的时机；重放时后端报告标签已不在。
  */
-export function BrowserPanel({ taskId, width, minWidth, maxWidth, onWidthChange, maximized, onToggleMaximized, onClose }: {
+export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onClose }: {
   taskId: number | null;
-  width: number;
-  minWidth: number;
-  maxWidth: number;
-  onWidthChange: (width: number) => void;
+  sizing: DockSizing;
   maximized: boolean;
   onToggleMaximized: () => void;
   onClose: () => void;
@@ -64,10 +61,7 @@ export function BrowserPanel({ taskId, width, minWidth, maxWidth, onWidthChange,
   return (
     <DockFrame
       label="浏览器"
-      width={width}
-      minWidth={minWidth}
-      maxWidth={maxWidth}
-      onWidthChange={onWidthChange}
+      sizing={sizing}
       fill={maximized}
       header={(
         <>

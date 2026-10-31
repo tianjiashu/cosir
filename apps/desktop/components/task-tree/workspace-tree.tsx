@@ -56,7 +56,7 @@ export function WorkspaceTree({
       const id = workspaceTreeNodeId(workspace.workspace_id);
       const shouldOpen = expandedWorkspaceIds.includes(workspace.workspace_id);
       if (shouldOpen && !treeRef.current?.isOpen(id)) treeRef.current?.open(id);
-      else if (!shouldOpen && treeRef.current?.isOpen(id)) treeRef.current?.close(id);
+      else if (!shouldOpen && treeRef.current?.isOpen(id)) treeRef.current.close(id);
     }
   }, [expandedWorkspaceIds, model, workspaces]);
 

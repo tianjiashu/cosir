@@ -1,5 +1,3 @@
-"use client";
-
 import { useSyncExternalStore, type ReactNode } from "react";
 import {
   PanelLeftCloseIcon,
@@ -14,7 +12,7 @@ import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog
 import type { DeleteTarget } from "@/components/layout/use-workspace-actions";
 import { forkDescendantIds } from "@/components/task-tree/task-tree-model";
 import { ResourceDeleteButton } from "@/components/resource-delete-button";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { TaskActionsMenu } from "@/components/task-tree/task-actions-menu";
 import { WorkspaceTree } from "@/components/task-tree/workspace-tree";
 import { Button } from "@/components/ui/button";
@@ -22,7 +20,7 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-pane
 import type { WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { readPinnedTaskIds, setTaskPinned, subscribePinnedTaskIds } from "@/lib/pinned-task-storage";
-import { withShortcut, type AppShortcutId } from "@/lib/shortcuts";
+import { withShortcut, type AppShortcutId } from "@/lib/keyboard/shortcuts";
 import { cn } from "@/lib/utils";
 
 export type SidebarSection = "conversation" | "settings" | "workspace-settings" | "observer";

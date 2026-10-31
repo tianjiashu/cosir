@@ -48,13 +48,14 @@ export function useThreadHistoryPaging({
       const top = element.scrollTop;
       return virtualizer.measurementsCache.find((candidate) => candidate.end > top);
     };
+    /** 记下顶部那一行作为插入前的锚点，并返回它（同一次同步回调里布局与 scrollTop 不变，只需查一次）。 */
     const record = () => {
       const item = itemAtTop();
       anchorRef.current = item ? { id: String(item.key), delta: item.start - element.scrollTop } : null;
+      return item;
     };
     const onScroll = () => {
-      record();
-      const item = itemAtTop();
+      const item = record();
       if (loadEarlier && item !== undefined && item.index <= PREFETCH_ROWS + OVERSCAN_ROWS) void loadEarlier();
     };
     record();

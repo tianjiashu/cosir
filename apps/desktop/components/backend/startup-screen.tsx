@@ -1,5 +1,5 @@
 import { CosirMark } from "@/components/cosir-mark";
-import "./backend-startup-screen.css";
+import "./startup-screen.css";
 
 type BackendStartupScreenProps = {
   exiting?: boolean;

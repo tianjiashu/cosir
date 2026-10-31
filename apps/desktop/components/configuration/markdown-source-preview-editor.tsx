@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { basicSetup, EditorView } from "codemirror";
 import { Compartment, EditorState } from "@codemirror/state";

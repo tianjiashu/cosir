@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/command";
 import type { WorkspaceTask } from "@/lib/api/workspaces";
 import { formatRelativeTime } from "@/lib/format/relative-time";
-import { shortcutLabel } from "@/lib/shortcuts";
+import { shortcutLabel } from "@/lib/keyboard/shortcuts";
 
 import { buildCommandPaletteModel, type CommandPaletteCommand } from "./command-palette-model";
 import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";

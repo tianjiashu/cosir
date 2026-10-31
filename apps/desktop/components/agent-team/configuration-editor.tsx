@@ -1,23 +1,18 @@
-"use client";
-
 import { useState } from "react";
 import { useStore } from "zustand";
 import { Redo2Icon, Undo2Icon } from "lucide-react";
 import type { TeamEditorSession, PersistTeam } from "@/lib/agent-team-editor/session";
-import { AgentTeamConfigurationForm } from "@/components/agent-team-configuration-form";
+import { AgentTeamConfigurationForm } from "@/components/agent-team/configuration-form";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardHeader, CardTitle } from "@/components/ui/card";
 import { SegmentedControl } from "@/components/ui/segmented-control";
-import { AgentTeamGraphEditor } from "@/components/agent-team-graph-editor";
-import { TeamGraphIssuesIndicator } from "@/components/agent-team-graph-issues";
+import { AgentTeamGraphEditor } from "@/components/agent-team/graph-editor";
+import { TeamGraphIssuesIndicator } from "@/components/agent-team/graph-issues";
 import { useTeamGraphIssues } from "@/lib/agent-team-editor/use-graph-issues";
-import type { AgentConfiguration } from "@/lib/api/configuration";
-import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";
+import type { AgentProfilesByScope } from "@/lib/agent-team-editor/agent-profiles";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
-
-type AgentProfilesByScope = Record<AgentTeamConfiguration["scope"], AgentConfiguration[]>;
 
 const EDITOR_MODE_OPTIONS = [
   { value: "form", label: "表单" },

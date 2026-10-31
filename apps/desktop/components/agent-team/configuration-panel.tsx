@@ -1,13 +1,11 @@
-"use client";
-
 import { createTeamEditorSession, type TeamEditorSession, type PersistTeam } from "@/lib/agent-team-editor/session";
-import { TeamEditorUnsavedGuard } from "@/components/team-editor-unsaved-guard";
+import { TeamEditorUnsavedGuard } from "@/components/agent-team/unsaved-guard";
 import { confirmDiscardUnsaved } from "@/lib/unsaved-changes";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BotIcon, PlusIcon, Settings2Icon, Trash2Icon, UsersIcon } from "lucide-react";
 
-import { AgentTeamConfigurationEditor } from "@/components/agent-team-configuration-editor";
+import { AgentTeamConfigurationEditor } from "@/components/agent-team/configuration-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -20,20 +18,17 @@ import {
   updateAgentTeamConfiguration,
   type AgentTeamConfiguration,
 } from "@/lib/api/agent-teams";
-import {
-  getAgentConfigurations,
-  getWorkspaceAgentConfigurations,
-  type AgentConfiguration,
-} from "@/lib/api/configuration";
+import { getWorkspaceAgentConfigurations } from "@/lib/api/configuration";
+import { visibleWorkspaceProfiles, type AgentProfilesByScope } from "@/lib/agent-team-editor/agent-profiles";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
+import { agentConfigurationsQueryOptions } from "@/lib/query/query-options";
 
 type Scope = AgentTeamConfiguration["scope"];
-type ProfilesByScope = Record<Scope, AgentConfiguration[]>;
 
 function requireWorkspaceId(workspaceId?: number): number {
   if (workspaceId === undefined) throw new UserFacingError("工作区不可用");
@@ -142,8 +137,7 @@ export function AgentTeamConfigurationPanel({
     enabled: workspaceReady,
   });
   const systemAgentsQuery = useQuery({
-    queryKey: queryKeys.agents(null),
-    queryFn: ({ signal }) => getAgentConfigurations({ signal }),
+    ...agentConfigurationsQueryOptions(null),
   });
   const workspaceAgentsQuery = useQuery({
     queryKey: queryKeys.agents(workspaceId ?? null),
@@ -153,15 +147,11 @@ export function AgentTeamConfigurationPanel({
 
   const systemAgents = systemAgentsQuery.data;
   const workspaceAgents = workspaceAgentsQuery.data;
-  const profiles = useMemo<ProfilesByScope | null>(() => {
+  const profiles = useMemo<AgentProfilesByScope | null>(() => {
     if (!systemAgents) return null;
     if (scope === "system") return { system: systemAgents, workspace: systemAgents };
     if (!workspaceAgents) return null;
-    // 工作区可见 = 系统 + 工作区，同名时工作区覆盖系统。
-    return {
-      system: systemAgents,
-      workspace: [...new Map([...systemAgents, ...workspaceAgents].map((agent) => [agent.agent_id, agent])).values()],
-    };
+    return { system: systemAgents, workspace: visibleWorkspaceProfiles(systemAgents, workspaceAgents) };
   }, [scope, systemAgents, workspaceAgents]);
 
   const save: PersistTeam = async (configuration, identity) => {

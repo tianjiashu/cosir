@@ -1,8 +1,6 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
 
-import { Assistant } from "@/app/assistant";
+import { Assistant } from "@/components/assistant/assistant";
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalWorkbench } from "@/components/terminal/terminal-workbench";
