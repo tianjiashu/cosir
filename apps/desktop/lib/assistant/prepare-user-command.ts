@@ -41,8 +41,6 @@ export function prepareUserCommand(command: unknown): unknown {
       if (isEdit) return [];
       throw new LocalAttachmentUnavailableError();
     }
-    // 图片随 image part 发送，不作为普通文件描述符。
-    if (local.kind !== "file") return [];
     return [{
       id: local.id,
       name: local.name,

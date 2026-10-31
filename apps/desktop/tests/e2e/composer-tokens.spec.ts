@@ -117,12 +117,11 @@ for (const [name, token, removeLabel] of [
   });
 }
 
-test("键盘可聚焦查看和移除，禁用编辑器不能移除", async ({ page, browserName }) => {
+test("键盘可聚焦查看和移除，禁用编辑器不能移除", async ({ page }) => {
   const input = page.getByLabel("消息输入", { exact: true });
   await setDocument(input, [{ type: "paragraph", content: [skill, reference] }]);
   await input.focus();
-  // macOS WebKit 的完整控件导航使用 Option+Tab，保留宿主的原生键盘约定。
-  await page.keyboard.press(process.platform === "darwin" && browserName === "webkit" ? "Alt+Tab" : "Tab");
+  await page.keyboard.press("Tab");
   const remove = input.getByRole("button", { name: "移除 Skill review-code" });
   await expect(remove).toBeFocused();
   await page.keyboard.press("Enter");

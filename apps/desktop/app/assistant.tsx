@@ -5,7 +5,6 @@ import { useAssistantInitialState } from "@/hooks/use-assistant-initial-state";
 import { AssistantRuntime } from "@/components/assistant/assistant-runtime";
 import { ThreadSkeleton } from "@/components/assistant/thread-skeleton";
 import { useState } from "react";
-import type { InitialConversationAttachment } from "@/components/new-conversation";
 
 /**
  * 桌面端主入口：先拉取服务端首屏历史，state 就绪后再挂载 runtime。
@@ -26,8 +25,6 @@ export const Assistant = ({
   taskId,
   workspaceId,
   workspaceRoot,
-  initialMessage,
-  initialAttachments,
   forkingMessageId,
   onForkMessage,
   onTaskStateChanged,
@@ -35,8 +32,6 @@ export const Assistant = ({
   taskId: number;
   workspaceId?: number | null;
   workspaceRoot?: string;
-  initialMessage?: string;
-  initialAttachments?: InitialConversationAttachment[];
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
   onTaskStateChanged?: () => void;
@@ -63,8 +58,6 @@ export const Assistant = ({
       workspaceId={sessionWorkspaceId}
       workspaceRoot={workspaceRoot}
       initialState={initialState}
-      initialMessage={initialMessage}
-      initialAttachments={initialAttachments}
       forkingMessageId={forkingMessageId}
       onForkMessage={onForkMessage}
       onTaskStateChanged={onTaskStateChanged}

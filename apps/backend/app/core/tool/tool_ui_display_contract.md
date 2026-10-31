@@ -9,8 +9,8 @@
 本项目是单用户、本机运行的桌面 Agent。工具 UI 展示不新增进程或服务：
 
 ```text
-Tauri Rust 主进程
-└─ WebView2 / React 前端
+Electron main 进程（桌面宿主）
+└─ 渲染进程 / React 前端
    └─ localhost Assistant Transport
       └─ FastAPI 后端进程
          └─ 工具 handler + tools/display 展示数据构建

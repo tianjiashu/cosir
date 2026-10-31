@@ -10,11 +10,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { useAttachmentSrc } from "@/hooks/use-attachment-src";
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
-import { frontendLog } from "@/lib/logging/frontend-log";
 import { ImageAttachmentCard, ImageAttachmentStrip } from "@/components/composer/image-attachment-card";
 import { AttachmentPicker } from "@/components/composer/attachment-picker";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
-import { useComposerFeedback } from "@/components/composer/composer-feedback";
 import { useTaskComposerDraft } from "@/components/composer/use-task-composer-draft";
 import { ComposerEditor } from "@/components/composer/composer-editor";
 
@@ -137,18 +135,11 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
 
 export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: boolean }> = ({ workspaceRoot, disabled = false }) => {
   const aui = useAui();
-  const feedback = useComposerFeedback();
-  const addFiles = useComposerFiles((file) => aui.composer.addAttachment(file));
-
   return (
     <AttachmentPicker
       workspaceRoot={workspaceRoot}
       disabled={disabled}
-      onPicked={(picked) => addFiles(picked.map(({ file }) => file))}
-      onError={(message) => {
-        feedback.show(message);
-        void frontendLog("WARNING", "attachment_picker_rejected", message, { data: {} });
-      }}
+      addImage={(file) => aui.composer.addAttachment(file)}
     />
   );
 };

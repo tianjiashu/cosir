@@ -51,7 +51,7 @@ export class SearchBatchContractError extends Error {
   }
 }
 
-export type FindTextMatch = { offset: number; snippet: string };
+type FindTextMatch = { offset: number; snippet: string };
 export type FindTextBatch = {
   matches: FindTextMatch[];
   complete: boolean;

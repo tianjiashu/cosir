@@ -1,242 +1,136 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+import type { BackendSnapshot } from "@/electron/shared/host-contract";
 
-import { invoke } from "@tauri-apps/api/core";
-import {
-  getBackendStatusError,
-  getBackendRuntimeSnapshot,
-  getBackendStatusSnapshot,
-  initializeBackendRuntime,
-  refreshBackendRuntime,
-  restartBackendRuntime,
-  startBackendRuntimeMonitor,
-  subscribeBackendRuntime,
-  subscribeBackendStatus,
-  type BackendStatus,
-} from "@/src/runtime-config";
+type Host = {
+  backend: {
+    snapshot: ReturnType<typeof vi.fn>;
+    restart: ReturnType<typeof vi.fn>;
+    onChange: (listener: (snapshot: BackendSnapshot) => void) => () => void;
+  };
+};
 
-const invokeMock = vi.mocked(invoke);
+let push: (snapshot: BackendSnapshot) => void = () => undefined;
+const host = vi.hoisted(() => ({ current: null as Host | null }));
+vi.mock("@/lib/desktop-host", () => ({
+  get desktopHost() {
+    return host.current;
+  },
+}));
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
+const ready = (generation: number, port = 49152): BackendSnapshot => ({
+  generation,
+  status: { state: "ready" },
+  backendBaseUrl: `http://127.0.0.1:${port}`,
+});
+
+/** 每个用例重新加载模块：投影是模块级状态，用例之间不能互相污染。 */
+async function loadWithHost(initial: BackendSnapshot) {
+  host.current = {
+    backend: {
+      snapshot: vi.fn().mockResolvedValue(initial),
+      restart: vi.fn(),
+      onChange: (listener) => {
+        push = listener;
+        return () => undefined;
+      },
+    },
+  };
+  vi.resetModules();
+  return { runtime: await import("@/src/runtime-config"), backend: host.current.backend };
 }
 
-function enableTauriRuntime() {
-  vi.stubGlobal("window", {
-    __TAURI_INTERNALS__: {},
-    __COSIR_RUNTIME_CONFIG__: undefined,
-    setTimeout: globalThis.setTimeout,
-    setInterval: globalThis.setInterval,
-    clearInterval: globalThis.clearInterval,
-  });
-}
-
-describe("backend runtime startup", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    enableTauriRuntime();
-  });
-
-  it("fails immediately when the supervisor reports a safe failure", async () => {
-    invokeMock.mockResolvedValueOnce({
-      state: "failed",
-      message: "本地 Agent 后端启动失败，请点击重试",
-    });
-
-    await expect(initializeBackendRuntime()).rejects.toThrow("请点击重试");
-    expect(invokeMock).toHaveBeenCalledWith("backend_status");
-    expect(invokeMock).not.toHaveBeenCalledWith("backend_runtime_config");
-  });
-
-  it("uses the runtime config only after backend_status is ready", async () => {
-    invokeMock
-      .mockResolvedValueOnce({ state: "starting" })
-      .mockResolvedValueOnce({ state: "ready" })
-      .mockResolvedValueOnce({
-        backendBaseUrl: "http://127.0.0.1:49152/",
-        generation: 1,
-        status: { state: "ready" },
-      });
-
-    await expect(initializeBackendRuntime()).resolves.toBe("http://127.0.0.1:49152");
-    expect(invokeMock.mock.calls.map(([command]) => command)).toEqual([
-      "backend_status",
-      "backend_status",
-      "backend_runtime_config",
-    ]);
-    expect(getBackendStatusError({ state: "ready" })).toBeNull();
-  });
-
-  it("keeps supervisor messages and does not invent failure details", () => {
-    const failed: BackendStatus = { state: "failed", message: "启动失败：配置无效" };
-    expect(getBackendStatusError(failed)?.message).toBe("启动失败：配置无效");
-    const emptyMessageError = getBackendStatusError({ state: "failed", message: "" });
-    expect(emptyMessageError?.message).toContain("请点击重试");
-    expect(getBackendStatusError({ state: "stopped" })?.message).toContain("未运行");
-  });
-
-  it("publishes a new generation when a restarted backend reuses its URL", () => {
-    invokeMock.mockResolvedValueOnce({
-      backendBaseUrl: "http://127.0.0.1:49152",
-      generation: 9,
-      status: { state: "ready" },
-    });
-
-    return restartBackendRuntime().then(() => {
-      const before = getBackendRuntimeSnapshot();
-      invokeMock.mockResolvedValueOnce({
-        backendBaseUrl: "http://127.0.0.1:49152",
-        generation: before.generation + 1,
-        status: { state: "ready" },
-      });
-
-      return restartBackendRuntime().then(() => {
-        const after = getBackendRuntimeSnapshot();
-        expect(after.backendBaseUrl).toBe(before.backendBaseUrl);
-        expect(after.generation).toBe(before.generation + 1);
-      });
-    });
-  });
-
-  it("ignores a stale runtime config response", async () => {
-    const previous = getBackendRuntimeSnapshot();
-    const acceptedGeneration = previous.generation + 2;
-    invokeMock.mockResolvedValueOnce({
-      backendBaseUrl: "http://127.0.0.1:49152",
-      generation: acceptedGeneration,
-      status: { state: "ready" },
-    });
-    await restartBackendRuntime();
-
-    invokeMock.mockResolvedValueOnce({
-      backendBaseUrl: "http://127.0.0.1:49153",
-      generation: acceptedGeneration - 1,
-      status: { state: "ready" },
-    });
-    await expect(restartBackendRuntime()).rejects.toThrow("无法应用");
-
-    const current = getBackendRuntimeSnapshot();
-    expect(current.backendBaseUrl).toBe("http://127.0.0.1:0");
-    expect(current.generation).toBe(acceptedGeneration);
-  });
-
-  it("does not publish a ready status for a same-generation URL conflict", async () => {
-    const current = getBackendRuntimeSnapshot();
-    const generation = current.generation + 1;
-    invokeMock.mockResolvedValueOnce({
-      backendBaseUrl: "http://127.0.0.1:49155",
-      generation,
-      status: { state: "ready" },
-    });
-    await restartBackendRuntime();
-
-    const statusBefore = getBackendStatusSnapshot();
-    invokeMock
-      .mockResolvedValueOnce({ state: "ready" })
-      .mockResolvedValueOnce({
-        backendBaseUrl: "http://127.0.0.1:49156",
-        generation,
-        status: { state: "ready" },
-      });
-    await refreshBackendRuntime();
-
-    expect(getBackendRuntimeSnapshot()).toEqual({
-      backendBaseUrl: "http://127.0.0.1:49155",
-      generation,
-      available: true,
-    });
-    expect(getBackendStatusSnapshot()).toEqual(statusBefore);
-  });
-
-  it("keeps status and runtime notifications independent", async () => {
-    const runtimeListener = vi.fn();
-    const statusListener = vi.fn();
-    const unsubscribeRuntime = subscribeBackendRuntime(runtimeListener);
-    const unsubscribeStatus = subscribeBackendStatus(statusListener);
-
-    invokeMock.mockResolvedValueOnce({ state: "starting" });
-    await refreshBackendRuntime();
-    expect(statusListener).toHaveBeenCalledTimes(1);
-    expect(runtimeListener).toHaveBeenCalledTimes(1);
-
-    runtimeListener.mockClear();
-    statusListener.mockClear();
-    invokeMock.mockResolvedValueOnce({ state: "failed", message: "后端暂不可用" });
-    await refreshBackendRuntime();
-    expect(statusListener).toHaveBeenCalledTimes(1);
-    expect(runtimeListener).not.toHaveBeenCalled();
-
-    invokeMock
-      .mockResolvedValueOnce({ state: "ready" })
-      .mockResolvedValueOnce({
-        backendBaseUrl: "http://127.0.0.1:49152",
-        generation: getBackendRuntimeSnapshot().generation + 1,
-        status: { state: "ready" },
-      });
-    await refreshBackendRuntime();
-    expect(runtimeListener).toHaveBeenCalledTimes(1);
-    expect(statusListener).toHaveBeenCalledTimes(2);
-    expect(getBackendStatusSnapshot()?.state).toBe("ready");
-
-    unsubscribeRuntime();
-    unsubscribeStatus();
-  });
-
-  it("does not let an old initialize response overwrite a newer restart", async () => {
-    const pendingStatus = deferred<BackendStatus>();
-    invokeMock.mockReturnValueOnce(pendingStatus.promise);
-    const oldInitialize = initializeBackendRuntime();
+describe("backend runtime projection", () => {
+  it("resolves the boot gate once a pushed snapshot reports ready", async () => {
+    const { runtime } = await loadWithHost({ generation: 1, status: { state: "starting" }, backendBaseUrl: null });
+    const boot = runtime.initializeBackendRuntime();
     await Promise.resolve();
+    push(ready(1));
 
-    const nextGeneration = getBackendRuntimeSnapshot().generation + 1;
-    const callsBeforeRestart = invokeMock.mock.calls.length;
-    invokeMock.mockResolvedValueOnce({
-      backendBaseUrl: "http://127.0.0.1:49154",
-      generation: nextGeneration,
-      status: { state: "ready" },
-    });
-    await restartBackendRuntime();
-
-    pendingStatus.resolve({ state: "ready" });
-    await expect(oldInitialize).rejects.toThrow("生命周期操作已被更新");
-    expect(getBackendRuntimeSnapshot().backendBaseUrl).toBe("http://127.0.0.1:49154");
-    expect(getBackendRuntimeSnapshot().generation).toBe(nextGeneration);
-    expect(invokeMock.mock.calls.slice(callsBeforeRestart).map(([command]) => command)).toEqual([
-      "restart_backend",
-    ]);
+    await expect(boot).resolves.toBeUndefined();
+    expect(runtime.getBackendRuntimeSnapshot()).toEqual({ backendBaseUrl: "http://127.0.0.1:49152", generation: 1, available: true });
+    expect(runtime.getBackendStatusSnapshot()).toEqual({ state: "ready" });
   });
 
-  it("publishes a failed status when restart cannot be completed", async () => {
-    invokeMock.mockRejectedValueOnce(new Error("restart command failed"));
-
-    await expect(restartBackendRuntime()).rejects.toThrow("restart command failed");
-    expect(getBackendStatusSnapshot()).toEqual({
-      state: "failed",
-      message: "restart command failed",
-    });
-    expect(getBackendRuntimeSnapshot().backendBaseUrl).toBe("http://127.0.0.1:0");
+  it("fails the boot gate with the supervisor's own message", async () => {
+    const { runtime } = await loadWithHost({ generation: 1, status: { state: "failed", message: "启动失败：配置无效" }, backendBaseUrl: null });
+    await expect(runtime.initializeBackendRuntime()).rejects.toThrow("启动失败：配置无效");
   });
 
-  it("starts only one monitor and cleanup invalidates its refresh", () => {
-    const setIntervalSpy = vi.spyOn(window, "setInterval");
-    const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+  // 目的：订阅已存在时再次进入门禁（开发期热更新重跑）按已接受的快照立即判定；潜在缺陷：后端早已就绪，
+  // 门禁却只等下一次推送，永远等不到。
+  it("settles a repeated boot gate from the already accepted snapshot", async () => {
+    const { runtime } = await loadWithHost(ready(1));
+    await runtime.initializeBackendRuntime();
 
-    const dispose = startBackendRuntimeMonitor();
-    expect(startBackendRuntimeMonitor()).toBe(dispose);
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    await expect(runtime.initializeBackendRuntime()).resolves.toBeUndefined();
+  });
 
-    dispose();
-    dispose();
-    expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+  // 目的：旧实例的迟到快照不能覆盖新实例；潜在缺陷：重启后旧进程的 failed 推送把界面打回错误态。
+  it("ignores a snapshot from an older generation", async () => {
+    const { runtime } = await loadWithHost(ready(3));
+    await runtime.initializeBackendRuntime();
 
-    setIntervalSpy.mockRestore();
-    clearIntervalSpy.mockRestore();
+    push({ generation: 2, status: { state: "failed", message: "旧实例退出" }, backendBaseUrl: null });
+
+    expect(runtime.getBackendStatusSnapshot()).toEqual({ state: "ready" });
+    expect(runtime.getBackendRuntimeSnapshot().generation).toBe(3);
+  });
+
+  // 目的：两份投影先一起更新再通知；潜在缺陷：订阅方在状态回调里读到旧地址或旧 generation。
+  it("updates both projections before notifying, and only notifies what changed", async () => {
+    const { runtime } = await loadWithHost(ready(1));
+    await runtime.initializeBackendRuntime();
+    const seen: string[] = [];
+    runtime.subscribeBackendStatus(() => seen.push(`status:${runtime.getBackendRuntimeSnapshot().available}`));
+    runtime.subscribeBackendRuntime(() => seen.push(`runtime:${runtime.getBackendStatusSnapshot()?.state}`));
+
+    push({ generation: 2, status: { state: "starting" }, backendBaseUrl: null });
+    push({ generation: 2, status: { state: "starting" }, backendBaseUrl: null });
+
+    expect(seen).toEqual(["status:false", "runtime:starting"]);
+    expect(runtime.getBackendRuntimeSnapshot().backendBaseUrl).toBe("http://127.0.0.1:0");
+  });
+
+  it("publishes a new generation when a restarted backend reuses its URL", async () => {
+    const { runtime, backend } = await loadWithHost(ready(1));
+    await runtime.initializeBackendRuntime();
+    const changes = vi.fn();
+    runtime.subscribeBackendRuntime(changes);
+    backend.restart.mockResolvedValueOnce(ready(2));
+
+    await runtime.restartBackendRuntime();
+
+    expect(runtime.getBackendRuntimeSnapshot()).toMatchObject({ backendBaseUrl: "http://127.0.0.1:49152", generation: 2 });
+    expect(changes).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one in-flight restart and surfaces the supervisor failure as a user-facing error", async () => {
+    const { runtime, backend } = await loadWithHost(ready(1));
+    backend.restart.mockRejectedValueOnce(new Error("本地 Agent 后端正在启动，请等待启动完成"));
+
+    const first = runtime.restartBackendRuntime();
+    const second = runtime.restartBackendRuntime();
+
+    expect(second).toBe(first);
+    await expect(first).rejects.toMatchObject({ name: "UserFacingError", message: "本地 Agent 后端正在启动，请等待启动完成" });
+    expect(backend.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps supervisor messages and does not invent failure details", async () => {
+    const { runtime } = await loadWithHost(ready(1));
+    expect(runtime.getBackendStatusError({ state: "ready" })).toBeNull();
+    expect(runtime.getBackendStatusError({ state: "failed", message: "" })?.message).toContain("请点击重试");
+    expect(runtime.getBackendStatusError({ state: "stopped" })?.message).toContain("未运行");
+  });
+
+  it("uses the development URL and a ready status outside the desktop host", async () => {
+    host.current = null;
+    vi.resetModules();
+    const runtime = await import("@/src/runtime-config");
+
+    await runtime.initializeBackendRuntime();
+    expect(runtime.getBackendStatusSnapshot()).toEqual({ state: "ready" });
+    expect(runtime.getBackendRuntimeSnapshot()).toMatchObject({ backendBaseUrl: "http://127.0.0.1:8000", available: true });
   });
 });

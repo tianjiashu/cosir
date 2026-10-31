@@ -235,8 +235,8 @@
 /*
  * 标题栏安全区：窗口最上方一行里被系统或自绘窗口按钮占用的宽度，形态由
  * lib/platform.ts 在首帧前写入 data-titlebar。业务组件只读这两个变量让位，不判断平台。
- * mac-overlay：左上角原生红绿灯（位置见 tauri.conf.json 的 trafficLightPosition）；
- * windows-custom：右上角 WindowControls 的三个按钮（3 × 46px）。
+ * mac-overlay：左上角原生红绿灯（位置见 electron/main/window.ts 的 trafficLightPosition）；
+ * windows-overlay：右上角系统窗口按钮（titleBarOverlay，3 × 46px）。
  */
 :root {
   --titlebar-inset-left: 0px;
@@ -245,8 +245,20 @@
 :root[data-titlebar="mac-overlay"] {
   --titlebar-inset-left: 84px;
 }
-:root[data-titlebar="windows-custom"] {
+:root[data-titlebar="windows-overlay"] {
   --titlebar-inset-right: 138px;
+}
+
+/*
+ * 窗口拖动区：标题栏一行（页面头部、侧栏顶部、工作台标签行等）按住即可拖动窗口。
+ * Chromium 里拖动区内的元素默认不响应点击，所以这里统一把可交互元素排除出去，
+ * 业务组件只需在容器上加 app-drag-region，不必逐个标注按钮。
+ */
+.app-drag-region {
+  -webkit-app-region: drag;
+}
+.app-drag-region :is(button, a, input, textarea, select, summary, label, [role="button"], [role="tab"], [role="menuitem"], [tabindex], [contenteditable]) {
+  -webkit-app-region: no-drag;
 }
 
 /* 与 Button / Input 一致的键盘焦点环；自绘控件统一使用，避免各自发明 ring 样式。 */

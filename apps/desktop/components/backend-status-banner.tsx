@@ -16,7 +16,7 @@ import { getBackendStatusSnapshot, subscribeBackendStatus } from "@/src/runtime-
  * - starting：supervisor 正在启动或自动崩溃恢复，无需用户操作。
  * - failed / stopped：自动恢复已耗尽或进程未运行，只提供显式「重启后端」；
  *   此时没有运行中的任务可中断，因此不再二次确认。
- * runtime monitor 每次轮询都会重新发布状态，偶发的状态读取失败在下一次成功轮询后自动消失。
+ * 状态由宿主 supervisor 推送，横幅只订阅投影，不自行轮询。
  */
 export function BackendStatusBanner() {
   const status = useSyncExternalStore(

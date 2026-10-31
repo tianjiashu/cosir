@@ -5,7 +5,6 @@ on:
     branches:
       - "main"
     paths:
-      - "apps/backend/**"
       - "apps/desktop/**"
       - "apps/terminal-worker/**"
       - "Cargo.toml"
@@ -15,7 +14,6 @@ on:
     branches:
       - "main"
     paths:
-      - "apps/backend/**"
       - "apps/desktop/**"
       - "apps/terminal-worker/**"
       - "Cargo.toml"
@@ -43,13 +41,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
-        with:
-          version: latest-known
-          enable-cache: true
-          cache-dependency-glob: apps/backend/uv.lock
-
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -64,13 +55,6 @@ jobs:
         run: npm ci
         working-directory: apps/desktop
 
-      - name: Install Linux Tauri dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version '^2'
-
       - name: Stage release Worker
         run: npm run stage:terminal-worker
         working-directory: apps/desktop
@@ -81,16 +65,3 @@ jobs:
         run: npm run test:terminal-worker-bundle
         working-directory: apps/desktop
 
-      - name: Build desktop installer
-        run: npm run tauri:build -- --no-sign --ci
-        working-directory: apps/desktop
-        env:
-          COSIR_TERMINAL_WORKER_TARGET: ${{ matrix.target }}
-
-      - name: Verify packaged resource and startup
-        run: npm run test:terminal-worker-bundle
-        working-directory: apps/desktop
-        env:
-          COSIR_TERMINAL_VERIFY_PACKAGED: "true"
-          COSIR_TERMINAL_WORKER_TARGET: ${{ matrix.target }}
-          COSIR_TERMINAL_RESOURCE_DIR: ../../target/${{ matrix.target }}/release

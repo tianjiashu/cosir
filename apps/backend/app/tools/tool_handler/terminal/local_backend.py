@@ -77,6 +77,8 @@ class LocalExecutionBackend:
                 command_argv,
                 shell=use_shell,
                 cwd=str(cwd),
+                # 不继承后端的 stdin：那是宿主的存活管道，永远不会 EOF，读 stdin 的命令会一直挂到超时。
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 start_new_session=(os.name == "posix"),

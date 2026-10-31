@@ -23,7 +23,6 @@ import { AppSidebar, SidebarToggleButton, type SidebarSection } from "@/componen
 import { PageHeader, type Crumb } from "@/components/layout/page-header";
 import { useWorkspaceActions } from "@/components/layout/use-workspace-actions";
 import { useWorkspaceCatalog, type WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
-import type { InitialConversationAttachment } from "@/components/new-conversation";
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { findSettingsTab, SYSTEM_SETTINGS_TABS, WORKSPACE_SETTINGS_TABS } from "@/components/settings/settings-tabs";
 import { TaskPage } from "@/components/task-page";
@@ -49,11 +48,6 @@ import { useTaskStatusStream } from "@/lib/task-status/use-task-status-stream";
 
 /** 路由表上每个子路由通过 handle 声明自己属于哪个区域（见 src/router.tsx）。 */
 export type RouteHandle = { section: SidebarSection; files?: boolean };
-
-type TaskRouteState = {
-  initialMessage?: string;
-  initialAttachments?: InitialConversationAttachment[];
-};
 
 export type AppOutletContext = {
   catalog: WorkspaceCatalog;
@@ -93,21 +87,14 @@ export function AppLayout() {
   const routeTaskId = section === "conversation" ? parsePositiveId(params.taskId) : null;
   const workspaceConfigurationId = section === "workspace-settings" ? parsePositiveId(params.workspaceId) : null;
 
-  // 最近一个任务：对话区为当前路由任务；其余区域沿用上一次的任务（保活）。对话区的值必须在
-  // 渲染时同步得出——用 effect 回填会让新挂载的任务页先拿到旧的路由 state，丢掉首条消息。
+  // 最近一个任务：对话区为当前路由任务；其余区域沿用上一次的任务（保活）。
   const [keptTaskId, setKeptTaskId] = useState<number | null>(routeTaskId);
-  const [keptTaskState, setKeptTaskState] = useState<TaskRouteState | null>(null);
-  const routeTaskState = section === "conversation" && routeTaskId !== null
-    ? (location.state as TaskRouteState | null)
-    : null;
   useEffect(() => {
     if (section !== "conversation") return;
     setKeptTaskId(routeTaskId);
-    setKeptTaskState(routeTaskState);
-  }, [routeTaskId, routeTaskState, section]);
+  }, [routeTaskId, section]);
   const filesVisible = Boolean((leaf?.handle as RouteHandle | undefined)?.files) && (!params.taskId || routeTaskId !== null);
   const focusedTaskId = section === "conversation" ? routeTaskId : keptTaskId;
-  const taskState = section === "conversation" ? routeTaskState : keptTaskState;
 
   const catalog = useWorkspaceCatalog(focusedTaskId, workspaceConfigurationId);
   useTaskStatusStream();
@@ -346,8 +333,6 @@ export function AppLayout() {
                     key={focusedTaskId}
                     taskId={focusedTaskId}
                     initialTask={catalog.activeTask}
-                    initialMessage={taskState?.initialMessage}
-                    initialAttachments={taskState?.initialAttachments}
                     workspaceRoot={catalog.activeWorkspace?.root_path}
                     forkingMessageId={actions.forkingMessageId}
                     onForkMessage={(messageId) => void actions.forkMessage(messageId)}

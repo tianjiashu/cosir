@@ -5,11 +5,10 @@ import { AssistantThreadSurface } from "@/components/assistant/runtime/assistant
 import { useRuntimeTransport } from "@/components/assistant/runtime/use-runtime-transport";
 import type { RuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
 import type { RuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
-import type { AssistantRuntimeProps, RuntimeSessionContext, ComposerRestore } from "@/components/assistant/runtime/runtime-types";
+import type { RuntimeSessionContext, ComposerRestore } from "@/components/assistant/runtime/runtime-types";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportState } from "@/lib/assistant/contract";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
-import type { MutableRefObject } from "react";
 import { TransportHistoryContext } from "@/lib/assistant/transport-history-context";
 
 type AssistantRuntimeTransportHostProps = {
@@ -18,18 +17,14 @@ type AssistantRuntimeTransportHostProps = {
   cancellation: RuntimeCancellation;
   commitTransportState: (state: TransportState) => void;
   registerComposerRestore: (restore: ComposerRestore) => void;
-  initialMessageSentRef: MutableRefObject<boolean>;
   toolGroups: ToolGroupCatalog[];
   selectedToolGroups: string[];
   onSelectedToolGroupsChange: (groups: string[]) => void;
   toolGroupsLoading: boolean;
   toolGroupsError: string | null;
-  initialMessage?: string;
-  initialAttachments?: AssistantRuntimeProps["initialAttachments"];
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
   onResumeBusiness: () => Promise<void>;
-  onInitialMessageError: (message: string) => void;
   onCancelRequested: () => void;
   onCancelResult: (accepted: boolean) => void;
   cancelling: boolean;
@@ -48,18 +43,14 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
   cancellation,
   commitTransportState,
   registerComposerRestore,
-  initialMessageSentRef,
   toolGroups,
   selectedToolGroups,
   onSelectedToolGroupsChange,
   toolGroupsLoading,
   toolGroupsError,
-  initialMessage,
-  initialAttachments,
   forkingMessageId,
   onForkMessage,
   onResumeBusiness,
-  onInitialMessageError,
   onCancelRequested,
   onCancelResult,
   cancelling,
@@ -80,15 +71,9 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
         taskId={context.taskId}
         workspaceId={context.workspaceId}
         workspaceRoot={context.workspaceRoot}
-        initialMessage={initialMessage}
-        initialAttachments={initialAttachments}
         forkingMessageId={forkingMessageId}
         onForkMessage={onForkMessage}
-        initialState={context.initialState}
         registerComposerRestore={registerComposerRestore}
-        initialMessageSentRef={initialMessageSentRef}
-        traceId={context.traceId}
-        onInitialMessageError={onInitialMessageError}
         toolGroups={toolGroups}
         selectedToolGroups={selectedToolGroups}
         onSelectedToolGroupsChange={onSelectedToolGroupsChange}

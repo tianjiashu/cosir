@@ -1,9 +1,8 @@
-import { memo, type MutableRefObject } from "react";
+import { memo } from "react";
 
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import {
   ComposerRestoreBridge,
-  InitialMessageBridge,
   RuntimeRenderDiagnostics,
 } from "@/components/assistant/runtime/assistant-runtime-bridges";
 import type {
@@ -11,7 +10,6 @@ import type {
   ComposerRestore,
 } from "@/components/assistant/runtime/runtime-types";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
-import type { TransportState } from "@/lib/assistant/contract";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
 
 type AssistantThreadSurfaceProps = Pick<
@@ -19,16 +17,10 @@ type AssistantThreadSurfaceProps = Pick<
   | "taskId"
   | "workspaceId"
   | "workspaceRoot"
-  | "initialMessage"
-  | "initialAttachments"
   | "forkingMessageId"
   | "onForkMessage"
 > & {
-  initialState: TransportState;
   registerComposerRestore: (restore: ComposerRestore) => void;
-  initialMessageSentRef: MutableRefObject<boolean>;
-  traceId: string;
-  onInitialMessageError: (message: string) => void;
   toolGroups: ToolGroupCatalog[];
   selectedToolGroups: string[];
   onSelectedToolGroupsChange: (groups: string[]) => void;
@@ -52,15 +44,9 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
   taskId,
   workspaceId,
   workspaceRoot,
-  initialMessage,
-  initialAttachments,
   forkingMessageId,
   onForkMessage,
-  initialState,
   registerComposerRestore,
-  initialMessageSentRef,
-  traceId,
-  onInitialMessageError,
   toolGroups,
   selectedToolGroups,
   onSelectedToolGroupsChange,
@@ -95,15 +81,6 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
           performanceProbe={performanceProbe}
         />
       </div>
-      <InitialMessageBridge
-        text={initialMessage}
-        attachments={initialAttachments}
-        sentRef={initialMessageSentRef}
-        initialState={initialState}
-        taskId={taskId}
-        traceId={traceId}
-        onError={onInitialMessageError}
-      />
     </>
   );
 });

@@ -1,21 +1,19 @@
-import { invoke } from "@tauri-apps/api/core";
+import type { BackendSnapshot, BackendStatus } from "@/electron/shared/host-contract";
+import { desktopHost } from "@/lib/desktop-host";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
-declare global {
-  interface Window {
-    __COSIR_RUNTIME_CONFIG__?: { backendBaseUrl?: string };
-    __TAURI_INTERNALS__?: unknown;
-    __TAURI__?: unknown;
-  }
-}
-
-const runtimeListeners = new Set<() => void>();
-const statusListeners = new Set<() => void>();
-const STARTUP_TIMEOUT_MS = 95_000;
-const RUNTIME_MONITOR_INTERVAL_MS = 2_000;
-const UNAVAILABLE_BACKEND_BASE_URL = "http://127.0.0.1:0";
-const BACKEND_UNAVAILABLE_MESSAGE = "暂时无法读取本地 Agent 后端状态，正在重新检查…";
+/**
+ * 渲染进程里后端地址与状态的唯一投影。
+ *
+ * 桌面宿主中，事实源是宿主 supervisor：启动时取一次快照，之后只订阅它的推送，不轮询。快照带
+ * `generation`，比当前已接受的更旧的一律丢弃，旧后端实例的状态不会覆盖新实例。不在宿主中（浏览器开发、
+ * E2E）时地址取 `VITE_BACKEND_URL`，状态恒为 ready。
+ *
+ * 两类订阅分开：`subscribeBackendRuntime` 只在地址或 generation 变化时通知（Assistant 会话据此重连），
+ * `subscribeBackendStatus` 只在状态变化时通知（启动页与状态横幅）。两份投影先同时更新再通知，
+ * 订阅方不会看到「新 generation + 旧状态」。
+ */
 
 export type BackendRuntimeSnapshot = {
   backendBaseUrl: string;
@@ -23,274 +21,99 @@ export type BackendRuntimeSnapshot = {
   available: boolean;
 };
 
-export type BackendStatus =
-  | { state: "starting" | "ready" | "stopped" }
-  | { state: "failed"; message: string };
+type BackendStatusSnapshot = BackendStatus | null;
 
-export type BackendStatusSnapshot = BackendStatus | null;
+const UNAVAILABLE_BACKEND_BASE_URL = "http://127.0.0.1:0";
 
-export type BackendRuntimeConfig = {
-  backendBaseUrl: string;
-  generation: number;
-  status: BackendStatus;
+const runtimeListeners = new Set<() => void>();
+const statusListeners = new Set<() => void>();
+const hostSnapshotListeners = new Set<(snapshot: BackendSnapshot) => void>();
+
+let runtimeSnapshot: BackendRuntimeSnapshot = {
+  backendBaseUrl: desktopHost ? UNAVAILABLE_BACKEND_BASE_URL : developmentBackendBaseUrl(),
+  generation: 0,
+  available: !desktopHost,
 };
-
-let backendRuntimeGeneration = 0;
-let backendRuntimeSnapshot: BackendRuntimeSnapshot | null = null;
-let acceptedBackendBaseUrl: string | null = null;
-let acceptedBackendGeneration = 0;
-let backendStatusSnapshot: BackendStatusSnapshot = null;
-let operationEpoch = 0;
-let initializeInFlight: Promise<string> | null = null;
-let refreshInFlight: Promise<void> | null = null;
-let restartInFlight: Promise<BackendRuntimeConfig> | null = null;
-let monitorDisposer: (() => void) | null = null;
-let backendRuntimeUnavailable = false;
-
-class BackendRuntimeOperationSupersededError extends Error {
-  constructor() {
-    super("后端生命周期操作已被更新的操作取代");
-    this.name = "BackendRuntimeOperationSupersededError";
-  }
-}
-
-function isTauriRuntime(): boolean {
-  return Boolean(window.__TAURI_INTERNALS__ || window.__TAURI__);
-}
-
-/** 仅允许开发期的桌面宿主展示后端重启入口。 */
-export function canRestartBackendRuntime(): boolean {
-  return import.meta.env.DEV && typeof window !== "undefined" && isTauriRuntime();
-}
-
-function beginOperation(): number {
-  operationEpoch += 1;
-  return operationEpoch;
-}
-
-function assertCurrentOperation(epoch: number): void {
-  if (epoch !== operationEpoch) throw new BackendRuntimeOperationSupersededError();
-}
-
-function isSuperseded(error: unknown): boolean {
-  return error instanceof BackendRuntimeOperationSupersededError;
-}
+let statusSnapshot: BackendStatusSnapshot = null;
+let acceptedSnapshot: BackendSnapshot | null = null;
+let hostSubscription: (() => void) | null = null;
+let restartInFlight: Promise<void> | null = null;
 
 function normalizeBackendBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, "");
 }
 
-/** 浏览器开发 / 测试（非 Tauri）时的后端地址；桌面生产地址只来自宿主下发的 runtime config。 */
+/** 浏览器开发 / 测试（不在桌面宿主中）时的后端地址；桌面地址只来自宿主快照。 */
 function developmentBackendBaseUrl(): string {
   return normalizeBackendBaseUrl(import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8000");
 }
 
-function sameBackendStatus(left: BackendStatusSnapshot, right: BackendStatusSnapshot): boolean {
+function sameStatus(left: BackendStatusSnapshot, right: BackendStatusSnapshot): boolean {
   if (left === right) return true;
   if (!left || !right || left.state !== right.state) return false;
   return left.state !== "failed" || right.state !== "failed" || left.message === right.message;
 }
 
-function publishBackendStatus(status: BackendStatusSnapshot): void {
-  if (sameBackendStatus(backendStatusSnapshot, status)) return;
-  backendStatusSnapshot = status;
-  for (const listener of statusListeners) listener();
-}
-
-function notifyRuntimeListeners(): void {
-  for (const listener of runtimeListeners) listener();
-}
-
-function readSupervisorStatus(): Promise<BackendStatus> {
-  return invoke<BackendStatus>("backend_status");
-}
-
-function readSupervisorConfig(): Promise<BackendRuntimeConfig> {
-  return invoke<BackendRuntimeConfig>("backend_runtime_config");
-}
-
-function applySupervisorConfig(config: BackendRuntimeConfig): { accepted: boolean; runtimeChanged: boolean } {
-  const normalizedBaseUrl = normalizeBackendBaseUrl(config.backendBaseUrl);
-
-  if (acceptedBackendBaseUrl !== null && config.generation < acceptedBackendGeneration) {
-    // Polling responses can arrive out of order. A stale supervisor snapshot must not
-    // move the frontend back to an older backend instance.
-    return { accepted: false, runtimeChanged: false };
-  }
-
-  if (
-    acceptedBackendBaseUrl !== null
-    && config.generation === acceptedBackendGeneration
-    && acceptedBackendBaseUrl !== normalizedBaseUrl
-  ) {
-    void frontendLog(
-      "WARNING",
-      "backend_runtime_config_conflict",
-      "拒绝相同 generation 的不同后端地址",
-      { data: { generation: config.generation } },
-    );
-    return { accepted: false, runtimeChanged: false };
-  }
-
-  const runtimeChanged =
-    backendRuntimeSnapshot?.backendBaseUrl !== normalizedBaseUrl
-    || backendRuntimeSnapshot?.generation !== config.generation
-    || backendRuntimeSnapshot?.available !== true;
-
-  backendRuntimeGeneration = config.generation;
-  acceptedBackendBaseUrl = normalizedBaseUrl;
-  acceptedBackendGeneration = config.generation;
-  backendRuntimeUnavailable = false;
-  window.__COSIR_RUNTIME_CONFIG__ = { backendBaseUrl: normalizedBaseUrl };
-  backendRuntimeSnapshot = {
-    backendBaseUrl: normalizedBaseUrl,
-    generation: backendRuntimeGeneration,
-    available: true,
+/** 应用一份宿主快照；过期快照被丢弃。 */
+function applyHostSnapshot(snapshot: BackendSnapshot): void {
+  if (acceptedSnapshot && snapshot.generation < acceptedSnapshot.generation) return;
+  acceptedSnapshot = snapshot;
+  const ready = snapshot.status.state === "ready" && snapshot.backendBaseUrl !== null;
+  const nextRuntime: BackendRuntimeSnapshot = {
+    // 宿主给出的地址由 supervisor 拼成 `http://127.0.0.1:<port>`，不带尾斜杠，不需要规范化。
+    backendBaseUrl: ready ? snapshot.backendBaseUrl! : UNAVAILABLE_BACKEND_BASE_URL,
+    generation: snapshot.generation,
+    available: ready,
   };
-  return { accepted: true, runtimeChanged };
+  const runtimeChanged = nextRuntime.backendBaseUrl !== runtimeSnapshot.backendBaseUrl
+    || nextRuntime.generation !== runtimeSnapshot.generation
+    || nextRuntime.available !== runtimeSnapshot.available;
+  const statusChanged = !sameStatus(statusSnapshot, snapshot.status);
+  if (runtimeChanged) runtimeSnapshot = nextRuntime;
+  if (statusChanged) statusSnapshot = snapshot.status;
+  if (statusChanged) for (const listener of statusListeners) listener();
+  if (runtimeChanged) for (const listener of runtimeListeners) listener();
+  for (const listener of hostSnapshotListeners) listener(snapshot);
 }
 
-function commitSupervisorConfig(config: BackendRuntimeConfig): boolean {
-  const result = applySupervisorConfig(config);
-  if (!result.accepted) return false;
-  // Both projections are updated before either listener set is notified. Consumers
-  // therefore never observe a new runtime generation with the previous status.
-  publishBackendStatus(config.status);
-  if (result.runtimeChanged) notifyRuntimeListeners();
-  return true;
-}
-
-function invalidateBackendRuntimeProjection(): boolean {
-  const runtimeChanged =
-    !backendRuntimeUnavailable
-    || backendRuntimeSnapshot?.backendBaseUrl !== UNAVAILABLE_BACKEND_BASE_URL;
-  backendRuntimeUnavailable = true;
-  window.__COSIR_RUNTIME_CONFIG__ = { backendBaseUrl: UNAVAILABLE_BACKEND_BASE_URL };
-  backendRuntimeSnapshot = {
-    backendBaseUrl: UNAVAILABLE_BACKEND_BASE_URL,
-    generation: backendRuntimeGeneration,
-    available: false,
-  };
-  return runtimeChanged;
-}
-
-function publishUnavailableStatus(status: BackendStatusSnapshot): void {
-  const runtimeChanged = invalidateBackendRuntimeProjection();
-  publishBackendStatus(status);
-  if (runtimeChanged) notifyRuntimeListeners();
-}
-
-function getRestartFailureMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return "本地 Agent 后端重启失败，请点击重试";
-}
-
-function waitForNextStartupPoll(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 250));
-}
-
-async function initializeBackendRuntimeInternal(epoch: number): Promise<string> {
-  const configured = getBackendBaseUrl();
-  if (configured && !isTauriRuntime()) {
-    publishBackendStatus({ state: "ready" });
-    return normalizeBackendBaseUrl(configured);
-  }
-
-  if (!isTauriRuntime()) {
-    const developmentUrl = developmentBackendBaseUrl();
-    const config: BackendRuntimeConfig = {
-      backendBaseUrl: developmentUrl,
-      generation: backendRuntimeGeneration,
-      status: { state: "ready" },
-    };
-    assertCurrentOperation(epoch);
-    commitSupervisorConfig(config);
-    return normalizeBackendBaseUrl(developmentUrl);
-  }
-
-  const deadline = Date.now() + STARTUP_TIMEOUT_MS;
-  let lastError = "本地 Agent 后端尚未就绪";
-  while (Date.now() < deadline) {
-    assertCurrentOperation(epoch);
-
-    let status: BackendStatus;
-    try {
-      status = await readSupervisorStatus();
-      assertCurrentOperation(epoch);
-      if (status.state === "ready") publishBackendStatus(status);
-      else publishUnavailableStatus(status);
-    } catch (error) {
-      if (isSuperseded(error)) throw error;
-      if (error instanceof Error && error.message) lastError = error.message;
-      await waitForNextStartupPoll();
-      continue;
-    }
-
-    const statusError = getBackendStatusError(status);
-    if (statusError) throw statusError;
-
-    if (status.state === "ready") {
-      try {
-        const config = await readSupervisorConfig();
-        assertCurrentOperation(epoch);
-        const configError = getBackendStatusError(config.status);
-        if (configError) throw configError;
-        if (!commitSupervisorConfig(config)) {
-          throw new UserFacingError("收到无法应用的后端运行时配置");
-        }
-        return normalizeBackendBaseUrl(config.backendBaseUrl);
-    } catch (error) {
-      if (isSuperseded(error)) throw error;
-      if (error instanceof Error && error.message) lastError = error.message;
-      if (epoch === operationEpoch) {
-        publishUnavailableStatus({ state: "failed", message: lastError });
-      }
-    }
-    }
-
-    await waitForNextStartupPoll();
-  }
-  // lastError 只来自本模块的中文文案或 UserFacingError（Tauri invoke 以字符串拒绝，不会进入这里）。
-  throw new UserFacingError(lastError);
+/** 订阅宿主推送（整个页面生命周期只订阅一次），并取一次当前快照补齐订阅之前的状态。 */
+function ensureHostSubscription(host: NonNullable<typeof desktopHost>): void {
+  if (hostSubscription) return;
+  hostSubscription = host.backend.onChange((snapshot) => {
+    applyHostSnapshot(snapshot);
+  });
+  void host.backend.snapshot().then(applyHostSnapshot, (error: unknown) => {
+    void frontendLog("ERROR", "backend_snapshot_read_failed", "读取宿主后端状态失败", { error });
+  });
 }
 
 /** 返回当前后端实例快照，供 React runtime 外部 store 订阅使用。 */
 export function getBackendRuntimeSnapshot(): BackendRuntimeSnapshot {
-  const backendBaseUrl = resolveBackendBaseUrl();
-  if (backendRuntimeSnapshot?.backendBaseUrl !== backendBaseUrl) {
-    backendRuntimeSnapshot = {
-      backendBaseUrl,
-      generation: backendRuntimeGeneration,
-      available: !backendRuntimeUnavailable,
-    };
-  }
-  return backendRuntimeSnapshot;
+  return runtimeSnapshot;
 }
 
-/** 返回当前后端生命周期状态快照，供启动页和状态 Banner 订阅使用。 */
+/** 返回当前后端生命周期状态快照，供启动页和状态横幅订阅使用。 */
 export function getBackendStatusSnapshot(): BackendStatusSnapshot {
-  return backendStatusSnapshot;
+  return statusSnapshot;
 }
 
-/** 订阅 Tauri supervisor 切换后端进程或端口的通知。 */
+/** 订阅后端地址或 generation 的变化（切换进程、端口或重启）。 */
 export function subscribeBackendRuntime(listener: () => void): () => void {
   runtimeListeners.add(listener);
   return () => runtimeListeners.delete(listener);
 }
 
-/** 订阅 Tauri supervisor 的状态投影，不会触发 Assistant runtime listener。 */
+/** 订阅后端生命周期状态的变化，不会触发 Assistant runtime listener。 */
 export function subscribeBackendStatus(listener: () => void): () => void {
   statusListeners.add(listener);
   return () => statusListeners.delete(listener);
 }
 
 /**
- * 将 Tauri supervisor 的终态转换为启动错误。
+ * 将宿主 supervisor 的终态转换为启动错误。
  *
- * supervisor 返回的 message 是后端启动事实的安全摘要；前端只在状态明确为
- * failed/stopped 时展示它，不根据网络超时或其它本地猜测伪造后端错误。
+ * supervisor 返回的 message 是后端启动事实的安全摘要；前端只在状态明确为 failed / stopped 时展示它，
+ * 不根据网络超时或其它本地猜测伪造后端错误。
  */
 export function getBackendStatusError(status: BackendStatus): Error | null {
   if (status.state === "failed") {
@@ -303,130 +126,69 @@ export function getBackendStatusError(status: BackendStatus): Error | null {
   return null;
 }
 
-/** 启动门禁只调用这一处 supervisor 查询链；旧启动响应不会再发布状态或配置。 */
-export function initializeBackendRuntime(): Promise<string> {
-  if (initializeInFlight) return initializeInFlight;
+/** 仅允许开发期的桌面宿主展示后端重启入口。 */
+export function canRestartBackendRuntime(): boolean {
+  return import.meta.env.DEV && desktopHost !== null;
+}
 
-  const epoch = beginOperation();
-  const promise = initializeBackendRuntimeInternal(epoch).finally(() => {
-    if (initializeInFlight === promise) initializeInFlight = null;
+/**
+ * 启动门禁：等到后端就绪，失败时抛出可展示的错误；地址经 `getBackendRuntimeSnapshot` 读取。
+ *
+ * 先按已接受的最新快照判定一次（订阅早已存在时，例如开发期热更新重跑门禁），再等推送：快照进入 ready
+ * 即成功，进入 failed / stopped 即失败，其间的 starting（含崩溃恢复）继续等。这里不另设超时：宿主
+ * supervisor 的每次启动尝试都有时限，用尽后必定推送 failed；前端再计时只会在宿主仍在重试时误报失败。
+ */
+export function initializeBackendRuntime(): Promise<void> {
+  const host = desktopHost;
+  if (!host) {
+    applyDevelopmentReady();
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve, reject) => {
+    const settle = (snapshot: BackendSnapshot) => {
+      if (snapshot.status.state === "ready" && snapshot.backendBaseUrl) {
+        finish();
+        resolve();
+        return;
+      }
+      const error = getBackendStatusError(snapshot.status);
+      if (error) {
+        finish();
+        reject(error);
+      }
+    };
+    const finish = () => {
+      hostSnapshotListeners.delete(settle);
+    };
+    hostSnapshotListeners.add(settle);
+    if (acceptedSnapshot) settle(acceptedSnapshot);
+    ensureHostSubscription(host);
   });
-  initializeInFlight = promise;
-  return promise;
 }
 
-async function refreshBackendRuntimeInternal(epoch: number): Promise<void> {
-  if (!isTauriRuntime()) return;
-
-  let status: BackendStatus;
-  try {
-    status = await readSupervisorStatus();
-    assertCurrentOperation(epoch);
-  } catch (error) {
-    if (isSuperseded(error)) throw error;
-    if (epoch === operationEpoch) {
-      publishUnavailableStatus({ state: "failed", message: BACKEND_UNAVAILABLE_MESSAGE });
-    }
-    return;
-  }
-
-  if (status.state !== "ready") {
-    publishUnavailableStatus(status);
-    return;
-  }
-
-  try {
-    const config = await readSupervisorConfig();
-    assertCurrentOperation(epoch);
-    if (getBackendStatusError(config.status)) {
-      publishUnavailableStatus(config.status);
-      return;
-    }
-    commitSupervisorConfig(config);
-  } catch (error) {
-    if (isSuperseded(error)) throw error;
-    if (epoch === operationEpoch) {
-      publishUnavailableStatus({ state: "failed", message: BACKEND_UNAVAILABLE_MESSAGE });
-    }
-  }
+function applyDevelopmentReady(): void {
+  if (statusSnapshot?.state === "ready") return;
+  statusSnapshot = { state: "ready" };
+  for (const listener of statusListeners) listener();
 }
 
-/** 运行期状态同步采用单飞请求，避免 Banner 和 monitor 各自轮询。 */
-export function refreshBackendRuntime(): Promise<void> {
-  if (restartInFlight) return restartInFlight.then(() => undefined, () => undefined);
-  if (initializeInFlight) return initializeInFlight.then(() => undefined, () => undefined);
-  if (refreshInFlight) return refreshInFlight;
-
-  const epoch = beginOperation();
-  const promise = refreshBackendRuntimeInternal(epoch)
-    .catch((error: unknown) => {
-      if (isSuperseded(error)) return;
-      throw error;
-    })
-    .finally(() => {
-      if (refreshInFlight === promise) refreshInFlight = null;
-    });
-  refreshInFlight = promise;
-  return promise;
-}
-
-/** 启动唯一前端 monitor；清理会使未完成的 refresh 结果失效。 */
-export function startBackendRuntimeMonitor(): () => void {
-  if (!isTauriRuntime()) return () => undefined;
-  if (monitorDisposer) return monitorDisposer;
-
-  let disposed = false;
-  const poll = () => {
-    if (!disposed) void refreshBackendRuntime().catch(() => undefined);
-  };
-  const timer = window.setInterval(poll, RUNTIME_MONITOR_INTERVAL_MS);
-  const disposer = () => {
-    if (disposed) return;
-    disposed = true;
-    window.clearInterval(timer);
-    if (monitorDisposer === disposer) monitorDisposer = null;
-    beginOperation();
-  };
-  monitorDisposer = disposer;
-  void refreshBackendRuntime().catch(() => undefined);
-  return disposer;
-}
-
-/** 运行期唯一前端重启入口；并发 retry 复用同一个 supervisor command。 */
-export function restartBackendRuntime(): Promise<BackendRuntimeConfig> {
+/**
+ * 运行期唯一的前端重启入口；并发调用复用同一次宿主重启。宿主的 restart 只在就绪时返回（否则抛出），
+ * 成功即已应用新快照；失败时宿主已把 failed 快照推给横幅，这里把同一原因作为错误抛出。
+ */
+export function restartBackendRuntime(): Promise<void> {
   if (restartInFlight) return restartInFlight;
-
-  const epoch = beginOperation();
-  publishUnavailableStatus({ state: "starting" });
-  const promise = invoke<BackendRuntimeConfig>("restart_backend")
-    .then((config) => {
-      assertCurrentOperation(epoch);
-      const configError = getBackendStatusError(config.status);
-      if (configError) throw configError;
-      if (!commitSupervisorConfig(config)) {
-        throw new UserFacingError("收到无法应用的后端运行时配置");
-      }
-      return config;
-    })
-    .catch((error: unknown) => {
-      if (!isSuperseded(error) && epoch === operationEpoch) {
-        publishUnavailableStatus({ state: "failed", message: getRestartFailureMessage(error) });
-      }
-      throw error;
+  // 只有桌面宿主里才有重启入口（启动门禁的重试与开发期重启按钮都依赖宿主）。
+  const host = desktopHost!;
+  ensureHostSubscription(host);
+  const promise = host.backend.restart()
+    .then(applyHostSnapshot, (error: unknown) => {
+      // 宿主应答里的失败消息是 supervisor 给出的中文安全摘要，按用户可见错误抛出。
+      throw error instanceof Error && error.message ? new UserFacingError(error.message) : error;
     })
     .finally(() => {
       if (restartInFlight === promise) restartInFlight = null;
     });
   restartInFlight = promise;
   return promise;
-}
-
-function resolveBackendBaseUrl(): string {
-  if (backendRuntimeUnavailable) return UNAVAILABLE_BACKEND_BASE_URL;
-  return getBackendBaseUrl() ?? developmentBackendBaseUrl();
-}
-
-function getBackendBaseUrl(): string | null {
-  const configured = window.__COSIR_RUNTIME_CONFIG__?.backendBaseUrl;
-  return configured ? normalizeBackendBaseUrl(configured) : null;
 }

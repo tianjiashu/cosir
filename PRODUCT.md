@@ -26,7 +26,7 @@ Cosir 首先服务项目所有者自己的本地编程工作。用户在本机�
 
 ## Operating Context
 
-- 产品是 Windows/macOS 桌面应用，Tauri 承载 React/Vite 界面，本机 Python/FastAPI 后端执行 Agent 工作。上面的 `web` 是 Impeccable 对界面技术的分类，不表示公网网站或移动端产品。
+- 产品是 Windows/macOS 桌面应用，Electron 承载 React/Vite 界面，本机 Python/FastAPI 后端执行 Agent 工作。上面的 `web` 是 Impeccable 对界面技术的分类，不表示公网网站或移动端产品。
 - 用户以本地目录建立 workspace，在工作区中创建、继续和切换任务，通过 Workbench 查看相关执行与内容。
 - 模型请求发送到用户配置的 Provider。本机运行不等于离线推理。
 - 界面已有中文文案及浅色、深色和跟随系统外观的能力。初始化产品背景不更换现有界面的视觉体系。

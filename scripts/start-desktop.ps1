@@ -51,12 +51,6 @@ function Start-ElevatedLauncher {
     }
 }
 
-function Get-CosirProcess {
-    $sessionId = (Get-Process -Id $PID).SessionId
-    return Get-Process -Name "cosir-desktop" -ErrorAction SilentlyContinue |
-        Where-Object { $_.SessionId -eq $sessionId }
-}
-
 function Test-LocalPortInUse {
     param([Parameter(Mandatory = $true)][int]$Port)
 
@@ -78,7 +72,7 @@ if (-not (Test-Path (Join-Path $desktopRoot "package.json"))) {
 }
 
 if ((Test-RestrictedDesktopUser) -and -not $ElevatedChild -and -not $NoElevation) {
-    Write-Step "The current context cannot write the WebView2 data directory; requesting desktop permissions."
+    Write-Step "The current context cannot write the desktop app data directory; requesting desktop permissions."
     Start-ElevatedLauncher
     exit 0
 }
@@ -90,28 +84,11 @@ if ($null -eq $npm) {
 
 $cargo = Get-Command cargo.exe -ErrorAction SilentlyContinue
 if ($null -eq $cargo) {
-    throw "cargo.exe was not found. Install Rust and cargo-tauri first."
+    throw "cargo.exe was not found. Install Rust first (it builds the Terminal Worker)."
 }
 
-$existingProcess = @(Get-CosirProcess)
-if ($existingProcess.Count -gt 0) {
-    $windowProcess = $existingProcess | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-    if ($null -ne $windowProcess) {
-        $windowText = if ([string]::IsNullOrWhiteSpace($windowProcess.MainWindowTitle)) {
-            ""
-        }
-        else {
-            "($($windowProcess.MainWindowTitle))"
-        }
-        Write-Step "Cosir is already running$windowText; no duplicate instance will be started."
-    }
-    else {
-        $processIds = ($existingProcess | Select-Object -ExpandProperty Id) -join ", "
-        Write-Step "Cosir is already starting (PID $processIds); no duplicate instance will be started."
-    }
-    exit 0
-}
-
+# The app itself is single-instance (a second launch focuses the existing window); a running
+# development session is caught by the port check below.
 $portIsBusy = Test-LocalPortInUse -Port 3000
 if ($portIsBusy) {
     $listeners = @(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue)
@@ -131,12 +108,12 @@ if (-not (Test-Path (Join-Path $desktopRoot "node_modules"))) {
     throw "apps/desktop/node_modules was not found. Run npm install from the repository root first."
 }
 
-Write-Step "Starting Tauri; the development Terminal Worker, Vite, and local FastAPI backend are managed by the app lifecycle."
+Write-Step "Starting Electron; the development Terminal Worker, Vite, and local FastAPI backend are managed by the dev entry and app lifecycle."
 Push-Location $desktopRoot
 try {
-    & $npm.Source run tauri:dev
+    & $npm.Source run electron:dev
     if ($LASTEXITCODE -ne 0) {
-        throw "Tauri failed to start (exit code: $LASTEXITCODE). Check whether port 3000 is available."
+        throw "Electron failed to start (exit code: $LASTEXITCODE). Check whether port 3000 is available."
     }
 }
 finally {

@@ -6,7 +6,7 @@ import {
 } from "@/components/workspace-references/reference-bridge";
 import {
   decodeReferences,
-  referenceIdentity,
+  encodeReference,
 } from "@/lib/workspace-references/codec";
 import { WorkspaceReferenceNode } from "./extensions/workspace-reference";
 import { ReferenceMention } from "@/components/workspace-references/reference-mention";
@@ -274,12 +274,12 @@ export function ComposerEditor({
           decodeReferences(serializeComposerDocument(editor.getJSON())).flatMap(
             (part) =>
               part.type === "reference"
-                ? [referenceIdentity(part.reference)]
+                ? [encodeReference(part.reference)]
                 : [],
           ),
         );
         const unique = references.filter((ref) => {
-          const key = referenceIdentity(ref);
+          const key = encodeReference(ref);
           if (keys.has(key)) return false;
           keys.add(key);
           return true;

@@ -147,7 +147,7 @@ class Settings:
             ValueError: ``MAIN_AGENT_MAX_STEPS`` 不是正整数时抛出。
 
         副作用:
-            加载 ``.env`` / ``.env.local`` 到进程环境；覆盖本类全部静态属性；经 ``paths.reset``
+            加载系统 ``.cosir/.env`` 到进程环境；覆盖本类全部静态属性；经 ``paths.reset``
             按当前环境重新对齐固定路径（数据根 / 日志目录 / 主业务库与运行期缓存 文件）。
         """
         cls._load_env_file()

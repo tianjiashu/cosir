@@ -1,6 +1,6 @@
 # Cosir 桌面宿主迁移到 Electron 技术方案
 
-**状态**：P0 验证已通过（macOS），待评审
+**状态**：P1 已在 `claude/electron-host` 分支实现（macOS 验证，未合入）；实现与本文的出入见第 14 节，第 14 节优先
 **日期**：2026-10-30
 **适用范围**：`apps/desktop`（宿主、preload、前端宿主适配层、打包、桌面 E2E），后端只涉及父进程存活契约与 CORS 来源两处
 
@@ -212,6 +212,8 @@ preload 只暴露下面这些方法，不暴露 `ipcRenderer` 本身：
 - Windows：`taskkill /PID <pid> /T`，超时后加 `/F`（和现在一致）。
 - 工具子进程和终端 worker 仍由后端自己的关闭流程负责清理，宿主只兜底。
 
+> **修订（P1 审查后）**：正常停止改为**关闭后端 stdin**，与宿主消失走同一条 EOF 路径；后端设 `timeout_graceful_shutdown=2` 后，宿主宽限期 8 秒内 lifespan 能完成收尾，超时再强杀进程树（POSIX 进程组 SIGKILL / Windows `taskkill /T /F`），强杀后最多再等 3 秒。上面的 SIGTERM 与不带 `/F` 的 `taskkill` 已删除：前者同时打到整个进程组、与后端自己的清理抢跑，后者结束不了没有窗口的控制台进程。
+
 ### 5.4 窗口、托盘与退出
 
 | 行为 | Electron 实现 |
@@ -357,7 +359,7 @@ P1 在 `host-contract.ts` 和 supervisor 的环境变量注入处为 3 留好接
 ## 9. 变更范围
 
 **新增**：`apps/desktop/electron/`（main、preload、shared）、`apps/desktop/lib/desktop-host/`、electron-builder
-配置、main 与 preload 的构建和开发脚本、`tests/electron-e2e/`。
+配置、main 与 preload 的构建和开发脚本、`tests/desktop-e2e/`。
 
 **修改**：
 
@@ -424,6 +426,58 @@ P1 和 P2 可以合并成一个 PR 落地，也可以分开；P1 合入后主干
 
 1. 打包工具：本文推荐 electron-builder，另一个选项是 Electron Forge。
 2. 浏览器分区粒度：按工作区还是按 Task。本文倾向按工作区，这样同一工作区里的登录状态能共用，留到 P3 定稿。
+
+## 14. P1 实施记录（2026-10-30，`claude/electron-host` 分支）
+
+P1 的五步已全部完成，Tauri 已从仓库删除。下面是实现与前文方案的出入，以及方案里没写到、实施中才确定的事项；与前文冲突时以本节为准。
+
+**宿主控制面（修正 5.2）**
+
+- 后端状态改为一个快照类型 `BackendSnapshot = { generation, status, backendBaseUrl }`：`backend.snapshot()`、`backend.restart()`
+  与推送 `backend.onChange()` 都用它，取代原表里的 `status` / `runtimeConfig` / `onStatusChanged` 三件套。`backendBaseUrl`
+  只在 ready 时非空；渲染进程按 `generation` 丢弃过期快照，不再轮询。
+- 新增 `window.setThemeSource(source)`：传外观**偏好**（system / light / dark）而不是解析后的明暗，宿主设为
+  `nativeTheme.themeSource`。原因：固定成明或暗后，页面的 `prefers-color-scheme` 就不再跟随系统。Windows 窗口按钮颜色随之切换。
+- 宿主应答统一为 `HostReply`（`ok` / 中文 `message`），由 preload 还原成 `Error`，避免 Electron 原生的「Error invoking remote method…」前缀进入界面。
+- `files.pathOf` 在 preload 里直接调用 `webUtils.getPathForFile`，不经 main。
+
+**附件链路（修正 5.7 A 与第 9 节）**
+
+- `local-path-required` 分支**保留**：没有本机路径的普通文件（剪贴板里复制的内存数据、浏览器开发模式）确实存在，只能拒绝；
+  提示改为「不是本机文件（如剪贴板中的内容），无法作为附件」。删掉的是 `WeakMap<File>` 路径登记、两个读文件 IPC，以及按路径
+  判断图片类型的 `attachment-policy.ts`（与 `attachment-upload.ts` 按 `File` 判断的规则重复）。
+- 图片不再进登记表（图片按字节上传，用不到路径），登记表只剩「普通文件与文件夹，按 token id 查」。
+- 一并删除了一条早已无人设置的死链路：路由状态里的 `initialMessage` / `initialAttachments` 从 `AppLayout` 透传 6 层到
+  `InitialMessageBridge`，生产代码里没有任何地方设置它们，而它依赖被删的 `WeakMap` 登记。
+- 新对话页去掉了「同一路径不重复添加」的去重（只有新对话页有，Task 输入框没有）；三个入口统一后，若需要去重应放在
+  `useComposerFiles` 一处，本次不做。
+
+**后端（补充 5.3）**
+
+- 存活检测在 `app/parent_watch.py`：读到 stdin EOF 后用 `pthread_kill` 把 SIGINT 投给主线程（`raise_signal` 只投给调用线程，
+  主线程阻塞在 IO 上时不会被唤醒），走 uvicorn 优雅关闭；15 秒内没关完就强制退出。实测宿主被 SIGKILL 后后端 0.4 秒内退出，
+  且 lifespan 收尾执行了。
+- P0 发现的「长连接让优雅关闭卡住」已在本次修复：uvicorn 设 `timeout_graceful_shutdown=2`，到时取消剩余连接再进入 lifespan
+  关闭。宿主停止的宽限期为 3 秒，之后强杀进程组。
+- CORS 白名单加入 `app://cosir`，删除三个 Tauri 来源。
+
+**测试与工具（修正第 8 节）**
+
+- 桌面 E2E 在 `tests/desktop-e2e/`，配置 `playwright.desktop.config.ts`，入口 `npm run test:e2e:desktop`：覆盖启动到工作区界面、
+  关闭窗口只隐藏且后端存活、退出时停止后端。为隔离数据，**宿主也读取 `CODING_AGENT_DATA_DIR`**（与直跑后端同一变量）作为数据根；
+  Electron 在 macOS 上不认 `HOME` 环境变量，这是唯一可靠的隔离入口，开发期也可以用它指向临时数据目录。
+- 浏览器 E2E 里需要文件选择框的用例改用 `tests/e2e/fake-desktop-host.ts` 注入最小宿主，只替代操作系统边界：只有经选择框交给
+  页面的 `File` 才有路径，与真实 Electron 一致。
+- main 进程的 supervisor 规则（崩溃恢复只一次、generation 取代、健康检查重试、停止后不再发布）移植为 Vitest 用例。
+- Terminal Worker 的开发构建抽到 `scripts/cargo-target.mjs` 的 `buildDevelopmentTerminalWorker`，开发入口与桌面 E2E 共用。
+- CI 删除了 Tauri CLI 安装、安装包构建与已安装包验证三步；安装包回到 P2。`stage-backend.mjs` 的目标平台改读
+  `COSIR_TERMINAL_WORKER_TARGET`（原来读的 `TAURI_ENV_TARGET_TRIPLE` 只有 Tauri 会设置）。
+
+**尚未验证**
+
+- Windows：命名管道、`taskkill`、`titleBarOverlay` 透明底色与按钮颜色、`start-desktop.ps1`。
+- 5.8 列出的 WKWebView 兼容代码尚未在 Chromium 下复测，保持原样；后端 `transport_stream_service.py` 里为 WebKit 补发静默注释行的
+  做法同样待复测。
 
 ## 附录 A：Claude 与 Codex 的实现依据
 

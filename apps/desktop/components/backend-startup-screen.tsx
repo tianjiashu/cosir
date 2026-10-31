@@ -13,9 +13,8 @@ type BackendStartupScreenProps = {
 export function BackendStartupScreen({ exiting = false }: BackendStartupScreenProps) {
   return (
     <div
-      className="backend-startup-screen"
-      // 叠加式 / 无边框标题栏下，启动期间整屏都可拖动窗口。
-      data-tauri-drag-region="deep"
+      // 隐藏标题栏后，启动期间整屏都可拖动窗口。
+      className="backend-startup-screen app-drag-region"
       data-state={exiting ? "exiting" : "starting"}
       aria-busy={!exiting}
       aria-hidden={exiting || undefined}

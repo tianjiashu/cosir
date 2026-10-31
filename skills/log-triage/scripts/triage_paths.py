@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""log-triage 的落盘路径推导（与后端 ``app/utils/paths.py`` 同一事实）。
+"""log-triage 的落盘路径推导（与后端 ``app/utils/path/system_cosir.py`` 同一事实）。
 
 单一职责：把「数据根 → ``.cosir`` 下固定路径」的推导集中在一处，供 ``query_logs.py`` 与
 ``query_app_db.py`` 共用，避免两个脚本各自手写一份、随后端布局漂移而查错目录。
@@ -10,9 +10,10 @@
 - 不负责：读写文件、打开数据库、渲染输出（见各脚本与 ``appdb_*`` 模块）。
 
 设计边界：**不导入 ``app.*``**——本 skill 必须能在后端未启动、启动失败或 UI 打不开时运行，
-因此这里复制后端的推导规则而非复用其代码。事实源：``apps/backend/app/utils/paths.py``
-（``DATA_DIR`` 只认 ``CODING_AGENT_DATA_DIR``，其余路径统一落在 ``<DATA_DIR>/.cosir/`` 下）与
-``apps/desktop/src-tauri/src/data_paths.rs::system_data_root``（决定桌面宿主注入哪个目录）；
+因此这里复制后端的推导规则而非复用其代码。事实源：``apps/backend/app/utils/path/system_cosir.py``
+（``DATA_DIR`` 取 ``CODING_AGENT_DATA_DIR``，未设置时 macOS / Windows 回落用户主目录；其余路径统一落在
+``<DATA_DIR>/.cosir/`` 下）与
+``apps/desktop/electron/main/paths.ts::systemDataRoot``（决定桌面宿主注入哪个目录）；
 任一变更都必须同步本文件。
 """
 
@@ -28,12 +29,12 @@ LOG_DIR_NAME = "logs"
 STORAGE_DIR_NAME = "storage"
 APP_DB_FILE_NAME = "app.sqlite3"
 
-# Tauri 的 bundle identifier（apps/desktop/src-tauri/tauri.conf.json），只在非 macOS/Windows
+# Electron 应用名（apps/desktop/electron/main/app.ts 的 app.setName），只在非 macOS/Windows
 # 平台参与桌面数据根拼接（见 :func:`desktop_data_root`）。
-_DESKTOP_BUNDLE_ID = "com.cosir.desktop"
+_DESKTOP_APP_NAME = "Cosir"
 
-# 桌面宿主注入 CODING_AGENT_DATA_DIR 的目录（``data_paths.rs::system_data_root``）：
-# macOS 与 Windows 是**用户主目录**，其余平台是 Tauri ``app_data_dir()``。
+# 桌面宿主注入 CODING_AGENT_DATA_DIR 的目录（``paths.ts::systemDataRoot``）：
+# macOS 与 Windows 是**用户主目录**，其余平台是 Electron ``app.getPath("userData")``。
 _DESKTOP_USES_HOME_DIR = ("win32", "darwin")
 
 
@@ -70,8 +71,8 @@ def repository_root() -> Path:
 def desktop_data_root() -> Path:
     """返回桌面宿主注入 ``CODING_AGENT_DATA_DIR`` 的目录（等价于 ``system_data_root``）。
 
-    事实源 ``apps/desktop/src-tauri/src/data_paths.rs``：**macOS 与 Windows 使用当前用户主
-    目录**（``.cosir`` 直接落在 ``~/.cosir``），其余桌面平台沿用 Tauri ``app_data_dir()``。
+    事实源 ``apps/desktop/electron/main/paths.ts``：**macOS 与 Windows 使用当前用户主
+    目录**（``.cosir`` 直接落在 ``~/.cosir``），其余桌面平台使用 Electron 的 ``userData`` 目录。
     这与历史布局（Windows ``%APPDATA%\\com.cosir.desktop``、macOS
     ``~/Library/Application Support/com.cosir.desktop``）不同——旧目录若仍存在，属于布局
     变更前的残留，**不得**被当作当前数据根，否则会稳定查到一份早已停止更新的库与日志。
@@ -80,29 +81,29 @@ def desktop_data_root() -> Path:
         无。
 
     返回:
-        Windows / macOS 为用户主目录；其余平台为 ``$XDG_DATA_HOME``（缺省
-        ``~/.local/share``）下的 ``com.cosir.desktop``。
+        Windows / macOS 为用户主目录；其余平台为 ``$XDG_CONFIG_HOME``（缺省
+        ``~/.config``）下的 ``Cosir``。
 
     异常:
         无。
 
     副作用:
-        读取 ``XDG_DATA_HOME`` 环境变量（非 macOS/Windows 分支）并解析用户主目录。
+        读取 ``XDG_CONFIG_HOME`` 环境变量（非 macOS/Windows 分支）并解析用户主目录。
     """
 
     if sys.platform in _DESKTOP_USES_HOME_DIR:
         return Path.home()
-    xdg = os.environ.get("XDG_DATA_HOME", "").strip()
-    base = Path(xdg) if xdg else Path.home() / ".local" / "share"
-    return base / _DESKTOP_BUNDLE_ID
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / _DESKTOP_APP_NAME
 
 
 def data_root() -> Path:
     """解析数据根，顺序与后端一致：显式环境变量 → 已存在的桌面数据根 → 仓库根。
 
-    与后端的差异：后端只认 ``CODING_AGENT_DATA_DIR``，缺失即回落仓库根；而排查脚本在两个
-    位置**都可能有数据**（桌面应用与直跑后端各自维护一份 ``.cosir``），因此这里优先选择
-    「已经存在 ``.cosir`` 子树」的那一个——桌面应用在使用时，排查者要看的通常是它的数据。
+    与后端的差异：后端在 macOS / Windows 上缺失变量时回落用户主目录（与桌面数据根相同），不会用仓库根；
+    排查脚本额外以仓库根兜底，只为查看旧版本留在 ``<repo>/.cosir`` 的数据。桌面数据根必须已有 ``.cosir``
+    子树才算命中——桌面应用在使用时，排查者要看的通常是它的数据。
 
     参数:
         无。

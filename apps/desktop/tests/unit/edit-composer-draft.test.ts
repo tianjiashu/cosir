@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { getLocalAttachmentById, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
+import { getLocalAttachmentById, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 
 import {
   applyEditDraftToComposer,
@@ -162,7 +162,7 @@ describe("edit draft composer write", () => {
     });
     expect(stub.addedIds).toEqual([]);
     expect(stub.removedIds).toEqual(["stale", "lift-copy"]);
-    expect(getLocalAttachmentById("keep")).toMatchObject({ name: "keep.md", kind: "file" });
+    expect(getLocalAttachmentById("keep")).toMatchObject({ name: "keep.md" });
     expect(stub.text()).toBe("[[cosir-file:keep]]文字");
   });
 
@@ -212,12 +212,10 @@ describe("edit draft composer write", () => {
   });
 
   it("历史展示元数据不会覆盖撤销所需的真实本机路径", async () => {
-    registerLocalAttachment(new File([], "native.md"), {
-      id: "native", name: "native.md", path: "/workspace/native.md", contentType: "text/plain", kind: "file",
-    });
+    const id = registerLocalFile({ name: "native.md", path: "/workspace/native.md", contentType: "text/plain" });
     const stub = createComposerStub();
-    await applyEditDraftToComposer({ composer: stub.composer, text: "[[cosir-file:native]]", attachments: [draftFile("native")], isStillCurrent: () => true });
-    expect(getLocalAttachmentById("native")?.path).toBe("/workspace/native.md");
+    await applyEditDraftToComposer({ composer: stub.composer, text: `[[cosir-file:${id}]]`, attachments: [draftFile(id)], isStillCurrent: () => true });
+    expect(getLocalAttachmentById(id)?.path).toBe("/workspace/native.md");
     expect(stub.attachments()).toEqual([]);
   });
 

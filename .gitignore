@@ -39,20 +39,12 @@ apps/backend/.env.local
 .workspace_event/
 .workspace_payload/
 
-# Tauri 生成产物（gen/ 仍按 crate 相对路径生成）
-apps/desktop/src-tauri/gen/
 # 统一 Rust 构建产物目录（由仓库根 .cargo/config.toml 的 target-dir 指定）：
 # 保留 target 目录本身，忽略其中的全部构建产物（靠 .gitkeep 维持目录被跟踪）
 /target/*
 !/target/.gitkeep
-# Rust / Tauri crate 构建产物（原先由工具逐文件列出，收敛为目录规则；两目录内无被跟踪文件）
-/apps/desktop/src-tauri/target/
+# Rust crate 构建产物（目录内无被跟踪文件）
 /apps/terminal-worker/target/
-# Tauri bundle staging（由 build:bundle 按当前平台生成）
-apps/desktop/src-tauri/resources/terminal-worker/
-!apps/desktop/src-tauri/resources/backend/
-apps/desktop/src-tauri/resources/backend/*
-!apps/desktop/src-tauri/resources/backend/.gitkeep
 apps/backend/.venv-packaging/
 apps/backend/build/
 apps/backend/dist/
@@ -93,11 +85,6 @@ task3_pytest*.log
 # git worktree 工作目录（由 git worktree 管理，不纳入 main 跟踪）
 .worktrees/
 
-# 临时验证程序（调试用，非源码）
-apps/desktop/src-tauri/verify_stem.rs
-apps/desktop/src-tauri/verify_stem.exe
-apps/desktop/src-tauri/verify_stem.pdb
-
 
 # 桌面端临时调试产物（vitest/tsc 输出、覆盖率缓存、日志转储）
 apps/desktop/coverage-tmp/
@@ -118,7 +105,6 @@ temp_gen_out.txt
 # 本地 IDE 配置（Trae）
 .trae/
 /.uv-cache*
-/.tauri-target-terminal/
 /.cargo/
 .superpowers
 /apps/backend/.pytest*

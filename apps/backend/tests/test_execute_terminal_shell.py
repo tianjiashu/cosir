@@ -161,3 +161,21 @@ def test_local_backend_runs_explicit_cmd_with_quoted_multiword_argument(tmp_path
     assert result.exit_code == 0
     assert "alpha beta gamma" in result.output
     assert "Cannot open" not in result.output
+
+
+@pytest.mark.skipif(os.name != "posix", reason="用 dup2 替换 fd 0 模拟宿主存活管道")
+def test_local_backend_does_not_inherit_backend_stdin(tmp_path: Path) -> None:
+    """目的：命令拿到空 stdin 立即 EOF。潜在缺陷：后端 stdin 是宿主从不写入的存活管道，
+    命令继承它后，读 stdin 的命令（如 ``cat``）会一直挂到超时。"""
+    read_end, write_end = os.pipe()
+    saved_stdin = os.dup(0)
+    os.dup2(read_end, 0)
+    try:
+        result = LocalExecutionBackend().execute("cat", str(tmp_path), 5, shell="auto")
+    finally:
+        os.dup2(saved_stdin, 0)
+        for fd in (saved_stdin, read_end, write_end):
+            os.close(fd)
+
+    assert result.timed_out is False
+    assert result.exit_code == 0

@@ -1,6 +1,5 @@
 import type { MutableRefObject } from "react";
 import type { CreateAttachment } from "@assistant-ui/core";
-import type { InitialConversationAttachment } from "@/components/new-conversation";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
@@ -12,8 +11,6 @@ export type AssistantRuntimeProps = {
   workspaceId?: number | null;
   workspaceRoot?: string;
   initialState: TransportState;
-  initialMessage?: string;
-  initialAttachments?: InitialConversationAttachment[];
   /** 正在 fork 的消息 id：fork 按消息切分，入口挂在带结局的回复上。 */
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;

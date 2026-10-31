@@ -4,7 +4,7 @@
  * 负责什么：持久化用户置顶的 taskId 列表（最近置顶的在前），供侧栏决定摆放位置。
  * 不负责什么：不是 Task 事实，后端不知道置顶；不校验 id 是否仍存在——Task id 由 SQLite
  * `sqlite_autoincrement` 分配、删除后不复用，残留 id 由侧栏渲染时忽略即可，无需清理。
- * 副作用：读写 WebView localStorage；存储不可用时读取返回空列表，写入返回 false。
+ * 副作用：读写 渲染进程 localStorage；存储不可用时读取返回空列表，写入返回 false。
  */
 
 const STORAGE_KEY = "cosir:pinned-tasks:v1";

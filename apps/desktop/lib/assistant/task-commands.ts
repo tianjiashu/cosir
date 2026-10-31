@@ -22,7 +22,7 @@ import { newTraceId } from "@/lib/trace";
 const IDEMPOTENT_COMMAND_TIMEOUT_MS = 15_000;
 
 /** 用户消息正文（文本、图片与附件）。 */
-export type TaskUserMessage = {
+type TaskUserMessage = {
   role: "user";
   parts: Array<{ type: "text"; text: string } | { type: "image"; image: string }>;
   attachments?: Array<{ id: string; name: string; contentType: string; path: string }>;

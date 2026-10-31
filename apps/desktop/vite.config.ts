@@ -69,7 +69,6 @@ function getVendorChunk(packageName: string): string | undefined {
   if (packageName === "@react-symbols/icons") return "vendor-file-icons";
   if (isMarkdownPackage(packageName)) return "vendor-markdown";
   if (["react-diff-view", "diff"].includes(packageName)) return "vendor-content";
-  if (packageName.startsWith("@tauri-apps/")) return "vendor-tauri";
   if (packageName === "react-router" || packageName === "react-router-dom" || packageName === "@remix-run/router") {
     return "vendor-router";
   }

@@ -712,8 +712,8 @@ function GraphCanvas({
     >
       {/* 全屏时顶栏占据窗口最上方一行：让出标题栏安全区，并作为窗口拖动区。 */}
       <header
-        data-tauri-drag-region={fullscreen ? "deep" : undefined}
         className={cn(
+          fullscreen && "app-drag-region",
           "bg-card flex h-14 shrink-0 items-center justify-between gap-3 border-b",
           fullscreen ? "pr-[max(1rem,calc(var(--titlebar-inset-right)+0.5rem))] pl-[max(1rem,calc(var(--titlebar-inset-left)+0.5rem))]" : "px-4",
         )}

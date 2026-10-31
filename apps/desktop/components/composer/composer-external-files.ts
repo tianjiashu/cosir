@@ -1,5 +1,5 @@
 import { isSupportedImageFile, isUnsupportedImageFile } from "@/lib/assistant/attachments/attachment-upload";
-import { getLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
+import { desktopHost } from "@/lib/desktop-host";
 
 export type ComposerFileProblem = {
   name: string;
@@ -11,17 +11,28 @@ export type ComposerExternalFileResult<TAttachment> = {
   problems: readonly ComposerFileProblem[];
 };
 
+type AcceptedComposerFile =
+  | { kind: "image"; file: File }
+  | { kind: "file"; file: File; path: string };
+
+/**
+ * 附件按钮、粘贴、拖放共用的分类：支持的图片按字节上传；其余文件必须有本机路径（后端按路径读取）。
+ *
+ * 没有路径的普通文件只会是内存里的数据（如剪贴板里复制的内容、浏览器开发模式），只能拒绝。
+ */
 export function classifyComposerExternalFiles(files: readonly File[]) {
-  const accepted: File[] = [];
+  const accepted: AcceptedComposerFile[] = [];
   const problems: ComposerFileProblem[] = [];
 
   for (const file of files) {
     if (isUnsupportedImageFile(file)) {
       problems.push({ name: file.name, reason: "unsupported-image" });
-    } else if (!isSupportedImageFile(file) && !getLocalAttachment(file)?.path) {
-      problems.push({ name: file.name, reason: "local-path-required" });
+    } else if (isSupportedImageFile(file)) {
+      accepted.push({ kind: "image", file });
     } else {
-      accepted.push(file);
+      const path = desktopHost?.files.pathOf(file) ?? "";
+      if (path) accepted.push({ kind: "file", file, path });
+      else problems.push({ name: file.name, reason: "local-path-required" });
     }
   }
 
@@ -35,7 +46,7 @@ export function summarizeComposerFileProblems(problems: readonly ComposerFilePro
   const failedCount = problems.filter((problem) => problem.reason === "add-failed").length;
   return [
     unsupportedCount > 0 && `图片附件仅支持 JPEG 和 PNG，已跳过 ${unsupportedCount} 个文件。`,
-    pathCount > 0 && `${pathCount} 个普通文件无法取得本机路径，请使用附件按钮选择文件。`,
+    pathCount > 0 && `${pathCount} 个文件不是本机文件（如剪贴板中的内容），无法作为附件。`,
     failedCount > 0 && `${failedCount} 个附件添加失败，请重试。`,
   ].filter(Boolean).join(" ");
 }

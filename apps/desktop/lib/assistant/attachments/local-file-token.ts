@@ -3,13 +3,24 @@ import {
   mapMarkdownText,
   splitMarkdownTokens,
 } from "@/lib/assistant/markdown-literals";
-import { LOCAL_FILE_DATA_PREFIX } from "@/lib/assistant/attachments/local-attachment-registry";
 
 /** Stable client-only token used to render a local ordinary attachment inline. */
 const LOCAL_FILE_TOKEN = /\[\[cosir-file:([^\]]+)\]\]/g;
 
 /** 图片附件的受控 locator 前缀（与后端 `cosir-attachment://<id>` 契约一致）。 */
 export const LOCAL_IMAGE_LOCATOR_PREFIX = "cosir-attachment://";
+
+/** 普通文件附件的受控 locator 前缀：`cosir-local-file:<id>`，id 指向本机附件登记（格式校验见 snapshot-validation）。 */
+const LOCAL_FILE_LOCATOR_PREFIX = "cosir-local-file:";
+
+export function localFileLocator(id: string): string {
+  return `${LOCAL_FILE_LOCATOR_PREFIX}${id}`;
+}
+
+/** 取出普通文件 locator 里的登记 id；不是普通文件 locator（路径、远程地址、图片）时为 undefined。 */
+export function localFileIdFromLocator(locator: string | undefined): string | undefined {
+  return locator?.startsWith(LOCAL_FILE_LOCATOR_PREFIX) ? locator.slice(LOCAL_FILE_LOCATOR_PREFIX.length) : undefined;
+}
 
 export function localFileTokenIds(text: string): string[] {
   return markdownSegments(text)
@@ -81,9 +92,8 @@ export function inlineAttachmentTokenId(
   const fileContent = attachment.content?.find(
     (content) => content.type === "file",
   );
-  if (fileContent?.data?.startsWith(LOCAL_FILE_DATA_PREFIX)) {
-    return fileContent.data.slice(LOCAL_FILE_DATA_PREFIX.length);
-  }
+  const localFileId = localFileIdFromLocator(fileContent?.data);
+  if (localFileId !== undefined) return localFileId;
   const imageContent = attachment.content?.find(
     (content) => content.type === "image",
   );

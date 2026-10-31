@@ -31,20 +31,12 @@ app = FastAPI(title="coding-agent backend", lifespan=lifespan)
 
 install_request_logging(app, log)
 # CORS 必须最后注册（最外层）：请求日志 middleware 收敛出的 500 才会带上 CORS 头。
-# Desktop WebView connects directly to the dynamically allocated loopback port.
-# Keep this limited to local desktop/dev origins; the backend itself remains
-# bound to 127.0.0.1 and is never exposed as a network service.
+# 桌面渲染进程直接连本机动态端口。来源只放本机桌面与开发来源：构建产物的页面来源是 app://cosir
+# （见 electron/main/app-protocol.ts），开发期是 Vite 与测试服务；后端只绑定 127.0.0.1，不是网络服务。
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:3000",
-        "http://localhost:3000",
-        "http://127.0.0.1:4173",
-        "http://localhost:4173",
-        "tauri://localhost",
-        "http://tauri.localhost",
-        "https://tauri.localhost",
-    ],
+    allow_origins=["app://cosir"],
+    # 开发期来源（Vite、预览、E2E 测试服务）端口不固定，统一按本机地址放行。
     allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost)(:\d+)?$",
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],

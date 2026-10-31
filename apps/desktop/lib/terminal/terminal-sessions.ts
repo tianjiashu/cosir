@@ -48,7 +48,7 @@ export function terminalTabs(sessions: readonly TerminalSessionEntry[], selected
 }
 
 /** 异常结束：会话失败，或 shell 以非 0 退出码退出；用户 / Agent 主动关闭不算。 */
-export function isAbnormalTerminalEnd(session: Pick<TerminalSessionEntry, "status" | "exitCode">): boolean {
+function isAbnormalTerminalEnd(session: Pick<TerminalSessionEntry, "status" | "exitCode">): boolean {
   return session.status === "failed" || (session.status === "exited" && session.exitCode !== null && session.exitCode !== 0);
 }
 

@@ -50,7 +50,7 @@ export function taskTreeNodeId(taskId: number): string {
   return `task:${taskId}`;
 }
 
-export const PINNED_GROUP_NODE_ID = "pinned";
+const PINNED_GROUP_NODE_ID = "pinned";
 
 /** Fork 作为源任务的子节点进入侧栏树，由 react-arborist 承载缩进、折叠与 `aria-level`。 */
 function toForkSidebarNode(task: TaskTreeNode): WorkspaceSidebarNode {

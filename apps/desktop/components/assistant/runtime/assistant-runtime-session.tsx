@@ -42,8 +42,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   initialState,
   setIssue,
   registerResync,
-  initialMessage,
-  initialAttachments,
   forkingMessageId,
   onForkMessage,
   onTaskStateChanged,
@@ -90,16 +88,12 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const attachTransportRef = useRef<(() => Promise<void>) | null>(null);
   const cancelRequestedRef = useRef(false);
   const composerRestoreRef = useRef<ComposerRestore | null>(null);
-  const initialMessageSentRef = useRef(false);
   const onTaskStateChangedRef = useRef(onTaskStateChanged);
   onTaskStateChangedRef.current = onTaskStateChanged;
 
   const registerComposerRestore = useCallback((restore: ComposerRestore) => {
     composerRestoreRef.current = restore;
   }, []);
-  const handleInitialMessageError = useCallback((message: string) => {
-    setIssue({ message, canResync: true });
-  }, [setIssue]);
   const notifyTaskStateChanged = useCallback(() => {
     onTaskStateChangedRef.current?.();
   }, []);
@@ -173,18 +167,14 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       cancellation={cancellation}
       commitTransportState={commitTransportState}
       registerComposerRestore={registerComposerRestore}
-      initialMessageSentRef={initialMessageSentRef}
       toolGroups={toolGroups}
       selectedToolGroups={selectedToolGroups}
       onSelectedToolGroupsChange={setSelectedToolGroups}
       toolGroupsLoading={toolGroupsLoading}
       toolGroupsError={toolGroupsError}
-      initialMessage={initialMessage}
-      initialAttachments={initialAttachments}
       forkingMessageId={forkingMessageId}
       onForkMessage={onForkMessage}
       onResumeBusiness={businessResume.resumeBusinessRun}
-      onInitialMessageError={handleInitialMessageError}
       onCancelRequested={cancellation.onRequested}
       onCancelResult={cancellation.onResult}
       cancelling={cancellation.cancelling}

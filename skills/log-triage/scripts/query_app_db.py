@@ -2,7 +2,7 @@
 """本地业务数据库排查 CLI（log-triage skill 内置）。
 
 单一职责：CLI 表现层——解析参数、把子命令分发给对应查询模块、把结果渲染为文本或 JSON。
-脚本以只读方式直连 ``storage/app.sqlite3``，不启动 FastAPI / Tauri / LangGraph，也不导入
+脚本以只读方式直连 ``storage/app.sqlite3``，不启动 FastAPI / 桌面宿主 / LangGraph，也不导入
 ``app.*``，因此可在服务未启动、启动失败或 UI 打不开时使用。
 
 职责边界：

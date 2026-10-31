@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 
 import { Assistant } from "@/app/assistant";
-import type { InitialConversationAttachment } from "@/components/new-conversation";
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalWorkbench } from "@/components/terminal/terminal-workbench";
@@ -18,8 +17,6 @@ import { ThreadSkeleton } from "@/components/assistant/thread-skeleton";
 type TaskSessionProps = {
   taskId: number;
   initialTask?: WorkspaceTask;
-  initialMessage?: string;
-  initialAttachments?: InitialConversationAttachment[];
   workspaceRoot?: string;
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
@@ -36,8 +33,6 @@ type TaskSessionProps = {
 export function TaskPage({
   taskId,
   initialTask,
-  initialMessage,
-  initialAttachments,
   workspaceRoot,
   forkingMessageId,
   onForkMessage,
@@ -148,8 +143,6 @@ export function TaskPage({
           taskId={taskId}
           workspaceId={loadedTask.workspace_id}
           workspaceRoot={workspaceRoot}
-          initialMessage={initialMessage}
-          initialAttachments={initialAttachments}
           forkingMessageId={forkingMessageId}
           onForkMessage={onForkMessage}
           onTaskStateChanged={onTaskStateChanged}

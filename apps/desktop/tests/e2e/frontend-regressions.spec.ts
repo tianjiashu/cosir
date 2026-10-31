@@ -230,7 +230,7 @@ test("侧栏任务列表失败时不阻塞已确认 Task 的 Assistant", async (
   await expect(page.locator('nav[aria-label="工作区任务列表"]')).toContainText("加载失败");
 });
 
-test("侧栏点击 Task 会同步 Tauri WebView 内部路由", async ({ page, request }) => {
+test("侧栏点击 Task 会同步渲染进程内部路由", async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "路由回归任务" } });
   await page.addInitScript(() => window.localStorage.clear());
 

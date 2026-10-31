@@ -91,7 +91,7 @@ export function AppSidebar({
         窗口最上方一行，同时是标题栏拖动区。图标栏只有 56px，放不下 macOS 红绿灯，
         这一行在图标栏下留空，展开开关改由 AppLayout 放进页面头部（紧跟红绿灯）。
       */}
-      <div data-tauri-drag-region="deep" className={cn("flex h-14 shrink-0 items-center justify-between pr-3", !rail && "pl-[max(0.75rem,var(--titlebar-inset-left))]")}>
+      <div className={cn("app-drag-region flex h-14 shrink-0 items-center justify-between pr-3", !rail && "pl-[max(0.75rem,var(--titlebar-inset-left))]")}>
         {!rail && (
           <>
             <span className="truncate text-sm font-semibold">工作区</span>

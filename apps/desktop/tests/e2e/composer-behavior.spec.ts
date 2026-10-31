@@ -1,4 +1,5 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type FileChooser, type Locator, type Page } from "@playwright/test";
+import { installFakeDesktopHost } from "./fake-desktop-host";
 import { completedState, seedState } from "./transport-fixtures";
 
 const api = "http://127.0.0.1:8000";
@@ -6,25 +7,24 @@ const undo = process.platform === "darwin" ? "Meta+z" : "Control+z";
 const redo = process.platform === "darwin" ? "Meta+Shift+z" : "Control+Shift+z";
 const selectAll = process.platform === "darwin" ? "Meta+a" : "Control+a";
 
-async function nativePicker(page: Page, delayed = false) {
-  await page.evaluate((delayed) => {
-    Object.assign(window, { __TAURI_INTERNALS__: {
-      invoke: async (command: string) => {
-        if (command === "plugin:dialog|open") return ["/tmp/notes.md"];
-        if (command === "resolve_selected_attachment_path") {
-          if (!delayed) return "/tmp/notes.md";
-          return new Promise<string>((resolve) => Object.assign(window, { resolvePicked: resolve }));
-        }
-        if (command === "write_frontend_log") return;
-        throw new Error(`Unexpected test IPC: ${command}`);
-      },
-    } });
-  }, delayed);
+const pickedNotes = { name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("# notes") };
+
+/**
+ * 经附件按钮打开系统文件选择框（只替代操作系统边界）。返回选择框：调用方可以先切走会话，
+ * 再交付文件，模拟用户迟迟才选好的情形。
+ */
+async function openNativePicker(page: Page): Promise<FileChooser> {
   await page.getByRole("button", { name: "添加图片、文件或文件夹", exact: true }).click();
+  const chooser = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "选择文件或图片", exact: true }).click();
-  if (delayed) await page.waitForFunction(() => "resolvePicked" in window);
-  else await expect(page.locator("[data-attachment-token]")).toHaveCount(1);
+  const fileChooser = await chooser;
   await page.keyboard.press("Escape");
+  return fileChooser;
+}
+
+async function nativePicker(page: Page) {
+  await (await openNativePicker(page)).setFiles(pickedNotes);
+  await expect(page.locator("[data-attachment-token]")).toHaveCount(1);
 }
 
 async function transfer(input: Locator, kind: "paste" | "drop", name: string, type: string, text = "") {
@@ -40,6 +40,7 @@ async function transfer(input: Locator, kind: "paste" | "drop", name: string, ty
 }
 
 async function openComposer(page: Page, mode: "new" | "task") {
+  await installFakeDesktopHost(page);
   await page.goto(mode === "new" ? "/" : "/tasks/100");
   if (mode === "new") {
     await page.getByRole("button", { name: "选择工作区" }).click();
@@ -84,7 +85,7 @@ test("工作区 A→B→A 保留各自草稿，撤销不会带回另一工作区
   await expect(input).toHaveText("草稿 A");
 });
 
-test("原生选择在路径解析期间切换工作区，迟到文件不会写入任一草稿", async ({ page }) => {
+test("原生选择框打开期间切换工作区，迟到文件不会写入任一草稿", async ({ page }) => {
   await page.route("**/workspaces", async route => {
     const response = await route.fetch();
     const workspaces = await response.json();
@@ -92,10 +93,10 @@ test("原生选择在路径解析期间切换工作区，迟到文件不会写�
   });
   await page.route("**/workspaces/8/tasks", route => route.fulfill({ json: [] }));
   const { input, send } = await openComposer(page, "new");
-  await nativePicker(page, true);
+  const chooser = await openNativePicker(page);
   await page.getByRole("button", { name: "demo", exact: true }).click();
   await page.getByRole("option", { name: /workspace-B/ }).click();
-  await page.evaluate(() => (window as unknown as { resolvePicked: (path: string) => void }).resolvePicked("/tmp/notes.md"));
+  await chooser.setFiles(pickedNotes);
   await expect.poll(() => page.evaluate(() => (window as unknown as { __cosirFrontendLogs?: { event: string }[] }).__cosirFrontendLogs?.some(log => log.event === "composer_attachment_selection_discarded"))).toBe(true);
   await expect(input).toHaveText("");
   await expect(send).toBeDisabled();
@@ -146,7 +147,7 @@ for (const mode of ["new", "task"] as const) {
     await transfer(input, "drop", "drop.jpg", "image/jpeg");
     await expect(page.getByRole("img", { name: "drop.jpg", exact: true })).toHaveCount(1);
     await transfer(input, "paste", "unknown.md", "text/plain");
-    await expect(page.getByRole("alert")).toContainText("请使用附件按钮选择文件");
+    await expect(page.getByRole("alert")).toContainText("不是本机文件");
     await transfer(input, "drop", "animation.gif", "image/gif");
     await expect(page.getByRole("alert")).toContainText("仅支持 JPEG 和 PNG");
     await expect(input.locator("[data-attachment-token]")).toHaveCount(0);
@@ -165,10 +166,10 @@ test("Task 草稿离开后恢复普通文件，原生选择迟到结果不会写
   await expect(input).toContainText("草稿 A");
   await expect(input).toContainText("notes.md");
   await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
-  await nativePicker(page, true);
+  const chooser = await openNativePicker(page);
   await page.getByText("草稿101", { exact: true }).click();
   await expect(input).toHaveText("草稿 B");
-  await page.evaluate(() => (window as unknown as { resolvePicked: (path: string) => void }).resolvePicked("/tmp/notes.md"));
+  await chooser.setFiles(pickedNotes);
   await expect(input).toHaveText("草稿 B");
   await page.getByText("草稿100", { exact: true }).click();
   await expect(input.locator("[data-attachment-token]")).toHaveCount(1);
@@ -197,10 +198,10 @@ test("Shift+Enter 换行，组合输入 Enter 不提交，普通 Enter 只发送
 test("Task 保活但已进入配置页时，迟到文件不写入隐藏草稿", async ({ page }) => {
   const { input } = await openComposer(page, "task");
   await input.fill("保留正文");
-  await nativePicker(page, true);
+  const chooser = await openNativePicker(page);
   await page.getByRole("button", { name: "系统配置", exact: true }).click();
   await expect.poll(() => input.evaluate(element => Boolean(element.closest("[inert]")))).toBe(true);
-  await page.evaluate(() => (window as unknown as { resolvePicked: (path: string) => void }).resolvePicked("/tmp/notes.md"));
+  await chooser.setFiles(pickedNotes);
   await expect.poll(() => page.evaluate(() => (window as unknown as { __cosirFrontendLogs?: { event: string }[] }).__cosirFrontendLogs?.some(log => log.event === "composer_attachment_selection_discarded"))).toBe(true);
   await page.getByText("草稿100", { exact: true }).click();
   await expect(input).toHaveText("保留正文");

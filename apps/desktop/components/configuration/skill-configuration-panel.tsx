@@ -2,7 +2,6 @@
 
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { open } from "@tauri-apps/plugin-dialog";
 import { Loader2Icon, PlusIcon, PuzzleIcon, Trash2Icon } from "lucide-react";
 import { Streamdown } from "streamdown";
 
@@ -28,6 +27,9 @@ import {
   type SystemSkill,
 } from "@/lib/api/system-extensions";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
+import { desktopHost } from "@/lib/desktop-host";
+import { pickLocalFiles } from "@/lib/desktop-host/pick-local-files";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
@@ -94,15 +96,12 @@ export function SkillConfigurationPanel() {
   async function selectAndImport(sourceType: ImportSource) {
     if (pickingSource.current || importMutation.isPending) return;
     pickingSource.current = true;
-    let sourcePath: string | string[] | null;
+    let sourcePath: string | null;
     try {
+      if (!desktopHost) throw new UserFacingError("只能在桌面应用中导入 Skill");
       sourcePath = sourceType === "directory"
-        ? await open({ directory: true, multiple: false, title: "选择要导入的 Skill 文件夹" })
-        : await open({
-            multiple: false,
-            title: "选择要导入的 Skill ZIP",
-            filters: [{ name: "Skill ZIP", extensions: ["zip"] }],
-          });
+        ? await desktopHost.dialog.openDirectory({ title: "选择要导入的 Skill 文件夹" })
+        : (await pickLocalFiles({ accept: ".zip" }))[0]?.path || null;
     } catch (error) {
       void frontendLog("ERROR", "skill_import_picker_failed", "打开 Skill 导入选择框失败", { data: { sourceType }, error });
       notify.error("无法打开文件选择框", { error, fallback: "请重试或重启应用" });
@@ -110,7 +109,7 @@ export function SkillConfigurationPanel() {
     } finally {
       pickingSource.current = false;
     }
-    if (typeof sourcePath !== "string") return;
+    if (!sourcePath) return;
     importMutation.mutate({ sourcePath, sourceType });
   }
 

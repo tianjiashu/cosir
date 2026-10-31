@@ -1,23 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import {
-  projectCargoEnvironment,
-  projectTargetDirectory,
-  targetUsesWindowsExecutable,
-} from "./cargo-target.mjs";
+import { projectCargoEnvironment, terminalWorkerExecutableName } from "./cargo-target.mjs";
+import { repositoryRoot, targetDirectory as buildArtifactsRoot } from "./project-paths.mjs";
 
-const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const repositoryRoot = path.resolve(desktopRoot, "..", "..");
-const buildArtifactsRoot = projectTargetDirectory(repositoryRoot);
 const workspaceManifestPath = path.join(repositoryRoot, "Cargo.toml");
 const targetTriple = (
-  process.env.COSIR_TERMINAL_WORKER_TARGET || process.env.TAURI_ENV_TARGET_TRIPLE || ""
+  process.env.COSIR_TERMINAL_WORKER_TARGET || ""
 ).trim();
-const executableName = targetUsesWindowsExecutable(targetTriple)
-  ? "terminal-worker.exe"
-  : "terminal-worker";
+const executableName = terminalWorkerExecutableName(targetTriple);
 const releaseRoot = targetTriple
   ? path.join(buildArtifactsRoot, targetTriple, "release")
   : path.join(buildArtifactsRoot, "release");
@@ -34,15 +25,13 @@ function runCargoBuild() {
     "--locked",
     "--manifest-path",
     workspaceManifestPath,
-    "--target-dir",
-    buildArtifactsRoot,
   ];
   if (targetTriple) {
     args.push("--target", targetTriple);
   }
   const result = spawnSync(process.platform === "win32" ? "cargo.exe" : "cargo", args, {
     cwd: repositoryRoot,
-    env: projectCargoEnvironment(repositoryRoot),
+    env: projectCargoEnvironment(),
     stdio: "inherit",
     windowsHide: true,
   });

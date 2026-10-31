@@ -1,17 +1,10 @@
 import { useAui, useAuiState } from "@assistant-ui/react";
 import type { CreateAttachment } from "@assistant-ui/core";
-import { useEffect, type MutableRefObject } from "react";
+import { useEffect } from "react";
 
-import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { readRuntimeTransportState, transportMessageCount } from "@/lib/assistant/transport-state-operations";
+import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
 import type { ComposerRestore } from "@/components/assistant/runtime/runtime-types";
-import type { PickedComposerAttachment } from "@/components/composer/attachment-picker";
-import {
-  getLocalAttachment,
-  registerLocalAttachment,
-  registerInlineFileMetadata,
-} from "@/lib/assistant/attachments/local-attachment-registry";
 import {
   applyEditDraftToComposer,
   beginEditComposerOperation,
@@ -19,8 +12,6 @@ import {
   queuePendingEditComposerStart,
   setPendingEditComposerDraft,
 } from "@/lib/assistant/edit-composer-draft";
-import { inlineAttachmentTokenId } from "@/lib/assistant/attachments/local-file-token";
-import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 export function RuntimeRenderDiagnostics({ taskId }: { taskId: number }) {
   const messageCount = useAuiState((state) => state.thread.messages.length);
@@ -33,97 +24,6 @@ export function RuntimeRenderDiagnostics({ taskId }: { taskId: number }) {
       data: { taskId, messageCount, activityRunId, activityStatus, isRunning },
     });
   }, [activityRunId, activityStatus, isRunning, messageCount, taskId]);
-
-  return null;
-}
-
-export function InitialMessageBridge({
-  text,
-  attachments = [],
-  sentRef,
-  initialState,
-  taskId,
-  traceId,
-  onError,
-}: {
-  text?: string;
-  attachments?: readonly (PickedComposerAttachment | CreateAttachment)[];
-  sentRef: MutableRefObject<boolean>;
-  initialState: TransportState;
-  taskId: number;
-  traceId?: string;
-  onError?: (message: string) => void;
-}) {
-  const aui = useAui();
-
-  useEffect(() => {
-    if (
-      !text?.trim() && attachments.length === 0
-      || sentRef.current
-      || transportMessageCount(initialState) > 0
-      || initialState.activity !== null
-    ) return;
-    const composer = aui.thread.composer();
-    composer.setText(text ?? "");
-    let cancelled = false;
-    const reportError = (error: unknown, stage: "add_attachment" | "send") => {
-      if (cancelled) return;
-      const message = userErrorMessage(error, "初始消息发送失败，请重试");
-      void frontendLog("ERROR", "assistant_initial_message_failed", "初始消息发送失败", {
-        traceId,
-        data: { taskId, attachmentCount: attachments.length, stage },
-        error,
-      });
-      onError?.(message);
-    };
-
-    void (async () => {
-      try {
-        for (const attachment of attachments) {
-          if (cancelled) return;
-          if ("path" in attachment && !getLocalAttachment(attachment.file)) {
-            registerLocalAttachment(attachment.file, {
-              id: attachment.id,
-              path: attachment.path,
-              name: attachment.name,
-              contentType: attachment.file.type,
-              kind: attachment.kind,
-            });
-          }
-          if ("path" in attachment) {
-            if (attachment.kind === "image") await composer.addAttachment(attachment.file);
-          } else if (attachment.type === "file") {
-            for (const file of editableDraftAttachments([attachment])) {
-              registerInlineFileMetadata({
-                id: inlineAttachmentTokenId(file),
-                name: file.name,
-                contentType: file.contentType ?? "application/octet-stream",
-              });
-            }
-          } else {
-            await composer.addAttachment(attachment);
-          }
-        }
-        const timer = window.setTimeout(() => {
-          if (cancelled || sentRef.current) return;
-          try {
-            sentRef.current = true;
-            void Promise.resolve(composer.send()).catch((error: unknown) => {
-              sentRef.current = false;
-              reportError(error, "send");
-            });
-          } catch (error) {
-            sentRef.current = false;
-            reportError(error, "send");
-          }
-        }, 0);
-        if (cancelled) window.clearTimeout(timer);
-      } catch (error) {
-        reportError(error, "add_attachment");
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [attachments, aui, initialState, onError, sentRef, taskId, text, traceId]);
 
   return null;
 }

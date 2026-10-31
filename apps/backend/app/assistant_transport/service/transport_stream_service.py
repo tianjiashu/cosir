@@ -30,7 +30,7 @@ class AssistantTransportStreamService:
     注册与其首帧之间漏掉任何变更。
 
     静默边界：每批帧发完、订阅队列安静下来时补发一个 SSE 注释行（前端只读 ``data:`` 记录，
-    会跳过它）。WebKit（macOS 上的 Tauri WebView）会扣住流在静默前的最后一段数据，
+    会跳过它）。WebKit（原 Tauri 宿主在 macOS 上的 WebView；迁到 Electron 后待在 Chromium 下复测）会扣住流在静默前的最后一段数据，
     要等后续字节到来才交给 JS；不补这一行，Run 结束、挂起等审批、长工具执行前的最后一批帧
     都会卡住，直到下一轮数据或重连。这一行就是那个「后续字节」，不能删。
     """

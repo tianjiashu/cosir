@@ -42,9 +42,9 @@ allowed-tools: Read,Write,Bash
 ## 1. 证据源与落盘位置（唯一事实清单）
 
 `<repo>` = 仓库根；`<数据根>` = 桌面宿主注入 `CODING_AGENT_DATA_DIR` 的目录
-（事实源 `apps/desktop/src-tauri/src/data_paths.rs::system_data_root`）：**Windows 与 macOS 是
+（事实源 `apps/desktop/electron/main/paths.ts::systemDataRoot`）：**Windows 与 macOS 是
 用户主目录**（`.cosir` 落在 `%USERPROFILE%\.cosir` / `~/.cosir`），
-其余桌面平台是 Tauri `app_data_dir()` ⇒ `~/.local/share/com.cosir.desktop`。
+其余桌面平台是 Electron `userData` ⇒ `~/.config/Cosir`；宿主自身也设置了 `CODING_AGENT_DATA_DIR` 时以它为准。
 
 > ⚠️ **历史布局残留**：Windows 旧的 `%APPDATA%\com.cosir.desktop\.cosir\`、
 > macOS 旧的 `~/Library/Application Support/com.cosir.desktop/.cosir/` 可能仍留在磁盘上
@@ -58,23 +58,23 @@ allowed-tools: Read,Write,Bash
 | 源 | 位置 | 形态 | 查询方式 |
 |----|------|------|----------|
 | 前端日志 | `<数据根>/.cosir/logs/frontend-YYYY-MM-DD.log` | JSONL，字段 ts/level/logger/trace_id/caller/event/msg/data/error/truncated（`logger=coding_agent.frontend`） | 直接 `Read`/grep；trace_id 可反查后端 |
-| 桌面宿主日志 | `<数据根>/.cosir/logs/desktop-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.desktop`）；WebView2 进程失败等宿主级诊断 | 直接 `Read` |
-| 后端控制台原文 | `<数据根>/.cosir/logs/backend-console-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.backend_console`、`event=backend_console_output`、`data.stream=stdout\|stderr`）；**`trace_id` 恒为空串**（Rust 侧写死），不能用于反查 | 直接 `Read`/grep（启动崩溃第一现场） |
+| 桌面宿主日志 | `<数据根>/.cosir/logs/desktop-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.desktop`）；后端启停、窗口、退出确认、渲染进程崩溃（`render_process_gone`）等宿主级诊断 | 直接 `Read` |
+| 后端控制台原文 | `<数据根>/.cosir/logs/backend-console-YYYY-MM-DD.log` | 同字段结构（`logger=coding_agent.backend_console`、`event=backend_console_output`、`data.stream=stdout\|stderr`）；**`trace_id` 恒为空串**（宿主侧写死），不能用于反查 | 直接 `Read`/grep（启动崩溃第一现场） |
 | 后端结构化日志 | `<数据根>/.cosir/logs/backend-YYYY-MM-DD.log` | 固定 JSONL：ts/level/logger/trace_id/caller/event/msg/data/error/truncated | `query_logs.py`（只读扫描，支持 trace/级别/时间窗过滤） |
 | 业务库 / Agent 回放 | `<数据根>/.cosir/storage/app.sqlite3` | 见 §3 表清单 | `query_app_db.py`（只读直连，不启动服务） |
 | LangGraph checkpoint | `<数据根>/.cosir/storage/langgraph_checkpoints.sqlite` | `checkpoints` / `writes`，按 `thread_id` 分片 | `sqlite3` 直连；`thread_id` = `conversation_runs.checkpoint_thread_id` |
-| 后端启动状态 | `<数据根>/.cosir/runtime/backend.bootstate.json` | JSON（`phase` / 失败原因） | `Read`；Tauri 据此判定启动失败 |
+| 后端启动状态 | `<数据根>/.cosir/runtime/backend.bootstate.json` | JSON（`phase` / 失败原因） | `Read`；宿主据此判定启动失败 |
 
 **数据根怎么定（唯一事实源：`apps/backend/app/utils/path/system_cosir.py`）**：
-`DATA_DIR = CODING_AGENT_DATA_DIR or 仓库根`，其余路径**全部**由它派生到 `<DATA_DIR>/.cosir/` 下。
+`DATA_DIR = CODING_AGENT_DATA_DIR`，未设置时 macOS / Windows 回落用户主目录、其他平台启动报错；其余路径**全部**由它派生到 `<DATA_DIR>/.cosir/` 下。
 
-- **经桌面宿主启动（含 `tauri dev`）**：Rust `spawn_backend` **无条件**注入
-  `CODING_AGENT_DATA_DIR`，取值来自 `data_paths.rs::system_data_root`——**Windows / macOS 是用户
-  主目录**（`backend_supervisor.rs`，**没有 dev/prod 分支**）⇒ 数据根 = `%USERPROFILE%` / `~`，
+- **经桌面宿主启动（含 `npm run electron:dev`）**：宿主 `spawnBackend` **无条件**注入
+  `CODING_AGENT_DATA_DIR`，取值来自 `paths.ts::systemDataRoot`——**Windows / macOS 是用户
+  主目录**（`electron/main/backend/supervisor.ts`，**没有 dev/prod 分支**）⇒ 数据根 = `%USERPROFILE%` / `~`，
   日志/库/checkpoint 全在 `%USERPROFILE%\.cosir\` / `~/.cosir/` 里。
   **用户报 bug 时通常要看的就是这一份。**
-- **绕过 Tauri 直跑后端**（`uv run --project apps/backend python -m app`、pytest）：不注入该变量
-  ⇒ 数据根回落仓库根 ⇒ `<repo>/.cosir/`。
+- **绕过桌面宿主直跑后端**（`uv run --project apps/backend python -m app`、pytest）：不注入该变量
+  ⇒ macOS / Windows 数据根同样是用户主目录 ⇒ 与桌面应用共用 `~/.cosir/`（`%USERPROFILE%\.cosir\`）。
 
 > ⚠️ `CODING_AGENT_LOG_DIR` / `CODING_AGENT_DATABASE_FILE` / `CODING_AGENT_CHECKPOINT_FILE`
 > **均已废弃**，入口只剩 `CODING_AGENT_DATA_DIR`。
@@ -141,9 +141,9 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 });
 ```
 
-- 前端日志与后端日志**同为同一套字段的同构结构**（`logger=coding_agent.frontend`、`caller=desktop.frontend`）；`event` 必须 snake_case，且 Rust 侧 `write_frontend_log` 强制 `trace_id` 为 32 位 hex（`len()==32` 且逐字符校验）。
+- 前端日志与后端日志**同为同一套字段的同构结构**（`logger=coding_agent.frontend`、`caller=desktop.frontend`）；`event` 必须 snake_case，且宿主侧 `log.write`（`electron/main/ipc.ts`）强制 `trace_id` 为 32 位小写 hex。
 - `error` 只保留 `type`，message 固定为「客户端请求失败（错误正文已省略）」。
-- 落盘经 Tauri IPC `write_frontend_log`；纯浏览器 `vite dev` 没有该 IPC，只写控制台与内存环形缓冲，**不会落盘**。
+- 落盘经宿主 `window.cosirHost.log.write`；纯浏览器 `vite dev` 没有宿主，只写控制台与内存环形缓冲，**不会落盘**。
 
 ---
 
@@ -200,7 +200,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 ### 阶段 B — 拉取证据
 
 > 脚本位置：本 skill 内置 `scripts/query_logs.py`、`scripts/query_app_db.py`（及其 `appdb_*.py` 查询模块），
-> **从仓库根**执行命令即可；脚本不依赖 CWD 定位数据（优先命中桌面数据根，仓库根只作兜底）。
+> **从仓库根**执行命令即可；脚本不依赖 CWD 定位数据（优先命中桌面数据根；仓库根只为查看旧版本留在 `<repo>/.cosir` 的数据兜底）。
 > 所有 Python 脚本一律 `uv run --project apps/backend python <script>`（Python 3.11，uv 托管）。
 > 输出若含中文/表情符号，脚本已自行把 stdout 切到 UTF-8，Windows GBK 控制台不会再崩。
 
@@ -271,12 +271,12 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py m
    - 日志必须分级（DEBUG/INFO/WARNING/ERROR），调试日志不得污染生产默认输出。
    - 补日志改动需同步更新对应函数 docstring，遵循项目「单一职责 / 不重复造轮子」铁律。
 2. **复现问题（优先自己复现）**：
-   - 后端逻辑 bug：写/跑 pytest 复现（`uv run --project apps/backend pytest <test>`）；新日志会落
-     `<repo>/.cosir/logs/backend-*.log`（pytest 不注入 `CODING_AGENT_DATA_DIR`，数据根回落仓库根），
+   - 后端逻辑 bug：写/跑 pytest 复现（`uv run --project apps/backend pytest <test>`）；未注入
+     `CODING_AGENT_DATA_DIR` 时新日志落 `<用户主目录>/.cosir/logs/backend-*.log`（与桌面应用同一份），
      业务状态落临时库。
    - 可端到端触发：起后端（`uv run --project apps/backend python -m app`）后调 API（curl 等），
      确认日志落盘与 `app.sqlite3` 状态变化。
-   - 前端纯 UI 交互（点击流、视觉、白屏）：**只能请用户复现** —— 明确要求「在 `tauri dev` 下操作复现，
+   - 前端纯 UI 交互（点击流、视觉、白屏）：**只能请用户复现** —— 明确要求「在 `npm run electron:dev` 下操作复现，
      并把 `<数据根>/.cosir/logs/frontend-YYYY-MM-DD.log` 的最近片段贴给你」。纯浏览器 `vite dev` 不落盘。
    - 复现后必须能定位到具体 `run_id`：`query_app_db.py runs --limit 5` 找到新 run，再用 `run <RUN_ID>` 看全貌。
 3. 复现后回到阶段 B，用新证据重新定位；不要停在「可能是 X」。
@@ -360,8 +360,8 @@ stuck       [--limit N]
 > `uv run --project apps/backend ruff check --config apps/backend/pyproject.toml skills/log-triage/scripts skills/log-triage/test`。
 >
 > **路径解析约定**（实现见 `scripts/triage_paths.py`，与 `apps/backend/app/utils/path/system_cosir.py`
-> 和 `apps/desktop/src-tauri/src/data_paths.rs` 同源）：数据根按「`CODING_AGENT_DATA_DIR` →
-> 已存在的桌面数据根（Windows/macOS = **用户主目录**，其余平台 = `app_data_dir()`）→ 仓库根
+> 和 `apps/desktop/electron/main/paths.ts` 同源）：数据根按「`CODING_AGENT_DATA_DIR` →
+> 已存在的桌面数据根（Windows/macOS = **用户主目录**，其余平台 = Electron `userData`）→ 仓库根
 > （向上查找含 `apps/backend` 的目录）」顺序判定，因此桌面应用在跑时默认查的就是它那份
 > `.cosir`；业务库 = `<数据根>/.cosir/storage/app.sqlite3`，日志目录 = `<数据根>/.cosir/logs`。
 > 需要查另一份时用 `--db` / `--log-file` 显式覆盖（输出里的 `data root:` 一行会说明本次用的是

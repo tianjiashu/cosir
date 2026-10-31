@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 
+import { desktopHost } from "@/lib/desktop-host";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
 export type ThemePreference = "light" | "dark" | "system";
@@ -52,6 +53,10 @@ function applyTheme(next: ThemeState): void {
   document
     .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
     ?.setAttribute("content", THEME_COLORS[next.resolvedTheme]);
+  // 原生外观（系统对话框、菜单、Windows 窗口按钮）跟随同一偏好；同步失败只影响原生部分，不打断主题切换。
+  desktopHost?.window.setThemeSource(next.preference).catch((error: unknown) => {
+    void frontendLog("WARNING", "native_theme_sync_failed", "同步原生外观失败", { error });
+  });
 }
 
 function publish(next: ThemeState): void {
@@ -73,7 +78,7 @@ function handleStorage(event: StorageEvent): void {
 
 /**
  * 在 React 挂载前读取用户偏好并接管首屏脚本；只有 system 模式监听操作系统变化。
- * 偏好保存在 WebView localStorage，主题类和系统状态栏颜色则由此模块统一应用。
+ * 偏好保存在 渲染进程 localStorage，主题类和系统状态栏颜色则由此模块统一应用。
  */
 export function installThemePreferenceSync(): () => void {
   state = { preference: readPreference(), resolvedTheme: "light" };

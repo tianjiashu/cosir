@@ -1,7 +1,8 @@
 """后端应用启动入口。
 
 开发环境通过 ``python -m app`` 从 ``apps/backend`` 目录启动；桌面发布版由 PyInstaller
-冻结入口调用本模块，后端进程的创建、监控和清理仍由 Tauri Rust 宿主负责。
+冻结入口调用本模块，后端进程的创建、监控和清理由 Electron 桌面宿主负责；宿主消失时后端经
+``app.parent_watch`` 自行退出。
 
 可通过环境变量覆盖运行参数：
 
@@ -22,6 +23,7 @@ from app.bootstate import (
 from app.config.constant import Constant
 from app.config.logging.configuration import install_logging_for_current_process
 from app.config.settings import Settings
+from app.parent_watch import install_parent_watch_from_env
 from app.service.depends import initialize_service_dependencies
 from app.utils.path import system_cosir as paths
 
@@ -67,6 +69,7 @@ def main() -> None:
         port = int(os.environ.get("CODING_AGENT_PORT", "8000"))
         reload_enabled = os.environ.get("CODING_AGENT_RELOAD", "true").lower() == "true"
         log_level = os.environ.get("CODING_AGENT_LOG_LEVEL", "info").lower()
+        install_parent_watch_from_env()
 
         uvicorn.run(
             "app.app:app",
@@ -78,6 +81,10 @@ def main() -> None:
             access_log=False,
             ws_ping_interval=30,
             ws_ping_timeout=90,
+            # 前端常驻的长连接（Task 订阅、执行状态流）不会自己结束；不设上限时优雅关闭会一直等它们，
+            # 宿主宽限期一到只能强杀，lifespan 的收尾从不执行。到时限后 uvicorn 取消剩余连接再进入
+            # lifespan 关闭；宿主的宽限期（``STOP_GRACE_MS``）须大于这里加上收尾耗时。
+            timeout_graceful_shutdown=2,
         )
     except Exception as exc:
         if boot_state_file is not None:

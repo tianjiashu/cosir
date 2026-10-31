@@ -1,23 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { registerInlineFileMetadata, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
+import { registerInlineFileMetadata, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 
 describe("prepare user command", () => {
   it("preserves ordinary-file tokens and adds explicit local attachment metadata", () => {
-    registerLocalAttachment(new File([], "报告 final.md", { type: "text/markdown" }), {
-      id: "local-file-prepare",
+    const id = registerLocalFile({
       path: "C:\\workspace\\报告 final.md",
       name: "报告 final.md",
       contentType: "text/markdown",
-      kind: "file",
     });
     const prepared = prepareUserCommand({
       type: "add-message",
       message: {
         role: "user",
         parts: [
-          { type: "text", text: "读取 [[cosir-file:local-file-prepare]]" },
+          { type: "text", text: `读取 [[cosir-file:${id}]]` },
           { type: "image", image: "cosir-attachment://" + "a".repeat(64) },
         ],
       },
@@ -27,11 +25,11 @@ describe("prepare user command", () => {
       message: {
         role: "user",
         parts: [
-          { type: "text", text: "读取 [[cosir-file:local-file-prepare]]" },
+          { type: "text", text: `读取 [[cosir-file:${id}]]` },
           { type: "image", image: "cosir-attachment://" + "a".repeat(64) },
         ],
         attachments: [{
-          id: "local-file-prepare",
+          id,
           name: "报告 final.md",
           contentType: "text/markdown",
           path: "C:\\workspace\\报告 final.md",

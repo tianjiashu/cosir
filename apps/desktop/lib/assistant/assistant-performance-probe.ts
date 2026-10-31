@@ -70,7 +70,7 @@ export type AssistantPerformanceProbe = {
  *
  * 探针累计 Transport 和 React commit 统计，并在一次流结束时通过回调
  * 输出一份聚合结果；它不写入业务状态、不改变渲染时序，也不在 token 粒度打印日志。
- * 生产构建不创建探针（调用方传 null），关闭采集即不创建。调用方负责决定报告落点，例如 Tauri 前端日志。
+ * 生产构建不创建探针（调用方传 null），关闭采集即不创建。调用方负责决定报告落点，例如宿主前端日志。
  */
 export function createAssistantPerformanceProbe(options: PerformanceProbeOptions): AssistantPerformanceProbe {
   let lifecycle: "idle" | "active" | "finishing" = "idle";

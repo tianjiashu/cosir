@@ -53,7 +53,6 @@ const eslintConfig = defineConfig([
     // Ignore stale build output from the pre-Vite toolchain.
     ".next/**",
     "**/.next/**",
-    "src-tauri/target/**",
     "out/**",
     "build/**",
     "dist/**",

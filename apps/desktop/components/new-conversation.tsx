@@ -10,10 +10,9 @@ import { Loader2Icon, SendIcon } from "lucide-react";
 
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { ComposerEditor, COMPOSER_EDITOR_CLASS_NAME, COMPOSER_PLACEHOLDER } from "@/components/composer/composer-editor";
-import { ComposerFeedback, ComposerFeedbackProvider, useComposerFeedback } from "@/components/composer/composer-feedback";
+import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
 import { ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
-import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
 import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
 import { ComposerSurface } from "@/components/composer/composer-surface";
 import { useCreateWorkspaceFromFolder, WorkspacePicker } from "@/components/composer/workspace-picker";
@@ -26,9 +25,8 @@ import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
 import { useModelCatalog } from "@/lib/model-catalog";
 import { cn } from "@/lib/utils";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
-import { AttachmentPicker, type PickedComposerAttachment } from "@/components/composer/attachment-picker";
+import { AttachmentPicker } from "@/components/composer/attachment-picker";
 import { ImageAttachmentCard, ImageAttachmentStrip } from "@/components/composer/image-attachment-card";
-import { getLocalAttachment, getLocalAttachmentById, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
 import { submitNewConversationMessage, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-new-conversation-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { showErrorDialog } from "@/lib/confirm/confirm-store";
@@ -38,31 +36,15 @@ import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import { newTraceId } from "@/lib/trace";
 
-export type InitialConversationAttachment = PickedComposerAttachment;
-
-type ImageDraftAttachment = Extract<PickedComposerAttachment, { kind: "image" }>;
+/** 新对话页的待发图片：提交时才上传，草稿里只保存 File 本身。 */
+type ImageDraftAttachment = { id: string; name: string; file: File };
 
 function imageAttachment(file: File): ImageDraftAttachment {
-  const local = getLocalAttachment(file);
-  if (local) return { ...local, kind: "image", file };
   const id = crypto.randomUUID();
-  const kind = "image";
+  // 剪贴板截图没有文件名，补一个，上传与展示都需要。
   const name = file.name || `粘贴图片-${id}.png`;
-  const path = `clipboard:${id}`;
   const namedFile = file.name ? file : new File([file], name, { type: file.type, lastModified: file.lastModified });
-  return {
-    id,
-    kind,
-    path,
-    name,
-    file: registerLocalAttachment(namedFile, {
-      id,
-      path,
-      name,
-      contentType: namedFile.type,
-      kind,
-    }),
-  };
+  return { id, name, file: namedFile };
 }
 
 function NewConversationAttachmentChip({ attachment, onRemove }: {
@@ -85,24 +67,6 @@ function NewConversationInput({ addImage, ...props }: Omit<ComponentProps<typeof
 }) {
   const addFiles = useComposerFiles(addImage);
   return <ComposerEditor {...props} onExternalFiles={addFiles} />;
-}
-
-function NewConversationAttachmentPicker({ workspaceRoot, existingPaths, addImage, disabled }: {
-  workspaceRoot?: string;
-  existingPaths: ReadonlySet<string>;
-  addImage: (file: File) => void;
-  disabled: boolean;
-}) {
-  const addFiles = useComposerFiles(addImage);
-  const feedback = useComposerFeedback();
-  return (
-    <AttachmentPicker
-      workspaceRoot={workspaceRoot}
-      disabled={disabled}
-      onPicked={(picked) => addFiles(picked.filter((attachment) => !existingPaths.has(attachment.path.toLowerCase())).map(({ file }) => file))}
-      onError={feedback.show}
-    />
-  );
 }
 
 type NewConversationProps = {
@@ -164,13 +128,6 @@ export function NewConversation({
     : null;
   const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
   const addImage = (file: File) => setAttachments((current) => [...current, imageAttachment(file)]);
-  const existingPaths = new Set([
-    ...attachments.map((attachment) => attachment.path.toLowerCase()),
-    ...localFileTokenIds(text).flatMap((id) => {
-      const path = getLocalAttachmentById(id)?.path;
-      return path ? [path.toLowerCase()] : [];
-    }),
-  ]);
   const hasDraft = Boolean(text.trim() || attachments.length > 0);
   const modelState = modelSetupState(useModelCatalog());
   const workspaceCreation = useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceChange });
@@ -298,9 +255,9 @@ export function NewConversation({
           <ImageAttachmentStrip>
             {attachments.map((attachment) => (
               <NewConversationAttachmentChip
-                key={attachment.path}
+                key={attachment.id}
                 attachment={attachment}
-                onRemove={() => setAttachments((current) => current.filter((item) => item.path !== attachment.path))}
+                onRemove={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}
               />
             ))}
           </ImageAttachmentStrip>
@@ -333,9 +290,8 @@ export function NewConversation({
               />
             </div>
             <div className="flex items-center gap-1">
-              <NewConversationAttachmentPicker
+              <AttachmentPicker
                 workspaceRoot={selectedWorkspace?.root_path}
-                existingPaths={existingPaths}
                 addImage={addImage}
                 disabled={submitting}
               />

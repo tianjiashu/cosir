@@ -15,7 +15,7 @@
 ``<DATA_DIR>/.cosir/config/skills.json``
 ``<DATA_DIR>/.cosir/skills/``
 
-本模块只做路径推导，不创建目录、不读写文件。目录创建由 Tauri 宿主、日志配置和存储初始化
+本模块只做路径推导，不创建目录、不读写文件。目录创建由桌面宿主、日志配置和存储初始化
 各自负责；``Settings.load`` 在加载系统 ``.env`` 后调用 ``reset``，使环境变量与固定路径重新对齐。
 
 ``.cosir`` 基名由 ``app.utils.path.workspace_cosir.COSIR_DIR_NAME`` 固定，不作为配置项。
@@ -66,7 +66,7 @@ def _env_path(name: str) -> Path | None:
 def _resolve_data_dir() -> Path:
     """解析系统应用数据根。
 
-    桌面模式使用 Tauri 注入的 ``CODING_AGENT_DATA_DIR``；直接运行后端时，macOS 与
+    桌面模式使用宿主（Electron main 进程）注入的 ``CODING_AGENT_DATA_DIR``；直接运行后端时，macOS 与
     Windows 使用当前用户主目录。其他平台不支持未注入数据根的运行方式：必须由桌面宿主注入
     ``CODING_AGENT_DATA_DIR``，否则抛出异常。``.cosir`` 子目录由本模块统一追加，不允许
     日志或数据库 各自选择根目录。

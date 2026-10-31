@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { CheckIcon, ChevronDownIcon, FolderIcon, FolderPlusIcon, Loader2Icon } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { createWorkspace, type Workspace } from "@/lib/api/workspaces";
+import { desktopHost } from "@/lib/desktop-host";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
 type WorkspacePickerProps = {
@@ -35,8 +36,9 @@ export function useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceCh
     setCreating(true);
     setError(null);
     try {
-      const picked = await open({ directory: true, multiple: false, title: "选择工作区文件夹" });
-      if (typeof picked !== "string") return false;
+      if (!desktopHost) throw new UserFacingError("只能在桌面应用中添加工作区");
+      const picked = await desktopHost.dialog.openDirectory({ title: "选择工作区文件夹" });
+      if (picked === null) return false;
       const name = picked.split(/[\\/]/).filter(Boolean).at(-1) ?? "新工作区";
       const workspace = await createWorkspace({ name, root_path: picked });
       await onWorkspaceCreated(workspace);

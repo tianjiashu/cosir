@@ -2,71 +2,24 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { projectTargetDirectory, targetUsesWindowsExecutable } from "./cargo-target.mjs";
+import { terminalWorkerExecutableName } from "./cargo-target.mjs";
+import { repositoryRoot, targetDirectory } from "./project-paths.mjs";
 
-const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const repositoryRoot = path.resolve(desktopRoot, "..", "..");
-const targetDirectory = projectTargetDirectory(repositoryRoot);
 const targetTriple = (
-  process.env.COSIR_TERMINAL_WORKER_TARGET || process.env.TAURI_ENV_TARGET_TRIPLE || ""
+  process.env.COSIR_TERMINAL_WORKER_TARGET || ""
 ).trim();
-const executableName = targetUsesWindowsExecutable(targetTriple)
-  ? "terminal-worker.exe"
-  : "terminal-worker";
+const executableName = terminalWorkerExecutableName(targetTriple);
 const instanceId = `bundle-smoke-${Date.now()}`;
-const verifyPackaged = process.env.COSIR_TERMINAL_VERIFY_PACKAGED === "true";
-
-if (verifyPackaged && !process.env.COSIR_TERMINAL_RESOURCE_DIR) {
-  throw new Error(
-    "打包资源验证必须通过 COSIR_TERMINAL_RESOURCE_DIR 显式指定安装包资源目录",
-  );
-}
-const candidateResourceRoots = (
-  verifyPackaged
-    ? [process.env.COSIR_TERMINAL_RESOURCE_DIR]
-    : [process.env.COSIR_TERMINAL_RESOURCE_DIR, path.join(targetDirectory, "resources")]
-)
-  .filter(Boolean)
-  .map((candidate) => path.resolve(candidate));
-const resourceRoot = findResourceRoot(candidateResourceRoots);
-assert.ok(resourceRoot, `未找到 Tauri Terminal Worker resource，检查路径：${candidateResourceRoots.join(", ")}`);
+// 安装包形态的验证随 P2 打包一起补；现在只验证 stage 产物（可用 COSIR_TERMINAL_RESOURCE_DIR 指向别处）。
+const resourceRoot = path.resolve(process.env.COSIR_TERMINAL_RESOURCE_DIR || path.join(targetDirectory, "resources"));
 const workerPath = path.join(resourceRoot, "terminal-worker", executableName);
-
-function findResourceRoot(candidates) {
-  for (const candidate of candidates) {
-    const directPath = path.join(candidate, "terminal-worker", executableName);
-    if (fs.existsSync(directPath)) return candidate;
-    if (!verifyPackaged || !fs.existsSync(candidate)) continue;
-
-    const pending = [{ directory: candidate, depth: 0 }];
-    while (pending.length > 0) {
-      const current = pending.shift();
-      if (!current) continue;
-      let entries;
-      try {
-        entries = fs.readdirSync(current.directory, { withFileTypes: true });
-      } catch {
-        continue;
-      }
-      for (const entry of entries) {
-        if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
-        const directory = path.join(current.directory, entry.name);
-        if (fs.existsSync(path.join(directory, "terminal-worker", executableName))) {
-          return directory;
-        }
-        if (current.depth < 5) pending.push({ directory, depth: current.depth + 1 });
-      }
-    }
-  }
-  return undefined;
-}
 
 assert.equal(fs.existsSync(workerPath), true, `Terminal Worker resource 不存在：${workerPath}`);
 if (process.platform !== "win32") {
   assert.equal(fs.statSync(workerPath).mode & 0o111, 0o111, "Terminal Worker 没有执行权限");
 }
 
+/** 控制帧与事件帧的结构以 `apps/terminal-worker/src/protocol.rs` 为准（4 字节大端长度 + JSON）；协议变更时须同步这里。 */
 function frame(message) {
   const payload = Buffer.from(JSON.stringify(message), "utf8");
   const header = Buffer.alloc(4);
@@ -132,7 +85,7 @@ function waitForWorker() {
         events.push(event);
         buffer = buffer.subarray(size + 4);
         if (event.type === "handshake") {
-          child.stdin.write(frame({ type: "write", data_base64: shellSpec().input.toString("base64") }));
+          child.stdin.write(frame({ type: "write", input: { type: "raw", data_base64: shellSpec().input.toString("base64") } }));
         }
         if (event.type === "exit") exitSeen = true;
         if (exitSeen && events.some((candidate) => candidate.type === "output")) finish();
@@ -145,6 +98,8 @@ function waitForWorker() {
       shell: spec.shell,
       shell_kind: process.platform === "win32" ? "cmd" : path.basename(spec.shell[0]),
       cwd: repositoryRoot,
+      // 只验证资源能启动、PTY 能收发；不注入 shell 集成脚本，避免冒烟结果依赖用户的 shell 配置。
+      integration: "off",
     }));
   });
 }

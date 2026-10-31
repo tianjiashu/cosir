@@ -101,7 +101,7 @@ export function Workbench({
         aria-label="工作台"
       >
         {/* 卡片位于窗口右上角：标签行是标题栏拖动区，并给 Windows 自绘窗口按钮让位（卡片已离窗口右缘 8px）。 */}
-        <div data-tauri-drag-region="deep" className={cn(PANEL_HEADER_CLASS, "pr-[max(0.5rem,calc(var(--titlebar-inset-right)-0.5rem))]")}>
+        <div className={cn("app-drag-region", PANEL_HEADER_CLASS, "pr-[max(0.5rem,calc(var(--titlebar-inset-right)-0.5rem))]")}>
           <Tabs.List
             className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
             aria-label="工作台标签页"

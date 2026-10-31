@@ -2,7 +2,7 @@
 
 **面向本地代码仓库的 AI 编程桌面 Agent。** 选择一个项目目录，配置模型服务，然后用自然语言描述任务。Cosir 可以在工作区中检查和修改代码、运行命令，并把执行过程与文件差异呈现在桌面界面里。
 
-Cosir 是一个**单用户、本机运行**的桌面应用。它使用 Tauri 承载桌面窗口，由本机 Python 后端运行 Agent；模型推理则通过你配置的 Provider 完成。
+Cosir 是一个**单用户、本机运行**的桌面应用。它使用 Electron 承载桌面窗口，由本机 Python 后端运行 Agent；模型推理则通过你配置的 Provider 完成。
 
 <p align="center">
   <img src="docs/architecture/main.png" alt="Cosir 桌面 Agent 工作台界面" width="1200">
@@ -118,9 +118,9 @@ Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 
 ## 运行方式与数据
 
-- Tauri Rust 主进程负责桌面窗口和后端进程生命周期。关闭窗口会隐藏到系统托盘；从托盘退出应用时会清理后端进程。
+- Electron main 进程负责桌面窗口和后端进程生命周期。关闭窗口会隐藏到系统托盘；从托盘或 Cmd+Q 退出应用时会清理后端进程；宿主意外退出时后端也会自行退出。
 - React 前端通过本机 HTTP/SSE 连接 FastAPI 后端。后端只绑定回环地址，不作为公网服务运行。
-- 任务、对话、Provider 配置等数据保存在本机 SQLite：`<DATA_DIR>/.cosir/storage/app.sqlite3`（macOS 的 `<DATA_DIR>` 为用户主目录，Windows 为 `%USERPROFILE%`；绕过 Tauri 直接跑后端时 macOS/Windows 同样使用用户主目录，其他平台回落到仓库根）。图片附件保存在工作区的 `.cosir/Attachment/` 目录。
+- 任务、对话、Provider 配置等数据保存在本机 SQLite：`<DATA_DIR>/.cosir/storage/app.sqlite3`（macOS 的 `<DATA_DIR>` 为用户主目录，Windows 为 `%USERPROFILE%`；绕过桌面宿主直接跑后端时 macOS/Windows 同样使用用户主目录，其他平台回落到仓库根）。图片附件保存在工作区的 `.cosir/Attachment/` 目录。
 - 模型请求会发送到你配置的 Provider。**本机运行不等于离线推理**；请按所用 Provider 的数据处理政策评估代码和提示词内容。
 
 ### 安全与当前限制
@@ -135,9 +135,8 @@ Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 ### 环境要求
 
 - Node.js 22（仓库 CI 使用的版本）
-- Rust stable、Cargo，以及 Tauri CLI 2
+- Rust stable 与 Cargo（构建 Terminal Worker）
 - Python 3.11 或更高版本和 [uv](https://docs.astral.sh/uv/)
-- 当前操作系统所需的 [Tauri 原生构建依赖](https://v2.tauri.app/start/prerequisites/)
 
 ### 启动桌面开发版
 
@@ -146,8 +145,7 @@ Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 ```bash
 git clone https://github.com/tianjiashu/cosir.git
 cd cosir
-npm ci --prefix apps/desktop                # 安装前端依赖
-cargo install tauri-cli --version "^2"      # 安装 Tauri CLI（提供 cargo tauri 子命令）
+npm ci --prefix apps/desktop                # 安装前端与 Electron 依赖（Electron 本体首次运行时下载）
 uv sync --project apps/backend              # 按 uv.lock 准备后端 Python 依赖
 ```
 
@@ -155,18 +153,18 @@ uv sync --project apps/backend              # 按 uv.lock 准备后端 Python �
 
 ```bash
 cd apps/desktop
-npm run tauri:dev
+npm run electron:dev
 ```
 
 也可以从仓库根目录执行 `scripts/start-desktop.sh`（Windows 使用
 `scripts/start-desktop.cmd`）。统一开发入口会构建 workspace 中的 Terminal
-Worker，注入其绝对路径，并在启动 Tauri 前确认产物存在。
+Worker，注入其绝对路径，并在启动 Electron 前确认产物存在。
 
-开发启动时，Tauri 会启动 Vite 前端，并在 debug 模式下先用 `uv` 按 `apps/backend/uv.lock` 同步后端依赖、解析出解释器，再由宿主**直接托管该解释器**（`python -m app`）——`uv` 只参与环境解析，不作为被监督的进程。首次启动后，在界面中打开**模型设置**，配置 Provider 和模型，再选择一个本地文件夹创建工作区。
+开发启动时，入口先启动 Vite 前端，再启动 Electron；宿主在未打包时先用 `uv` 按 `apps/backend/uv.lock` 同步后端依赖、解析出解释器，再**直接托管该解释器**（`python -m app`）——`uv` 只参与环境解析，不作为被监督的进程。首次启动后，在界面中打开**模型设置**，配置 Provider 和模型，再选择一个本地文件夹创建工作区。
 
-> `tauri.conf.json` 的 `bundle.resources` 仍由开发入口自动创建占位目录；开发后端实际使用 workspace 构建出的 `target/debug/terminal-worker`，不会读取 release staging 资源。正式打包时，`npm run build:bundle` 会生成真实的后端与 release 版 Terminal Worker 资源。
+开发后端使用 workspace 构建出的 `target/debug/terminal-worker`。`npm run build:bundle` 会生成真实的后端与 release 版 Terminal Worker 资源；安装包打包尚未接入。
 
-Rust 桌面宿主、Terminal Worker 以及发布资源 staging 统一使用仓库根目录的 `target/`；构建入口会覆盖外部 `CARGO_TARGET_DIR`，避免桌面程序、Worker 和后端资源落入不同构建目录。
+前端、Electron 宿主、Terminal Worker 以及发布资源 staging 统一使用仓库根目录的 `target/`；构建入口会覆盖外部 `CARGO_TARGET_DIR`，避免产物落入不同构建目录。
 
 ## 开发与测试
 
@@ -176,8 +174,9 @@ Rust 桌面宿主、Terminal Worker 以及发布资源 staging 统一使用仓�
 cd apps/desktop
 npm run build
 npm run test:unit
-npx playwright install chromium webkit
+npx playwright install chromium
 npm run test:e2e
+npm run test:e2e:desktop   # 驱动真实 Electron 宿主与后端（数据写入临时目录）
 ```
 
 后端测试从仓库根目录运行：
@@ -187,14 +186,12 @@ uv sync --project apps/backend --group dev
 uv run --project apps/backend pytest
 ```
 
-Playwright E2E 使用 Vite 和测试服务，不覆盖真实 Tauri IPC、动态后端端口或后端崩溃恢复。桌面端另有 `npm run test:e2e:tauri` 测试入口。
-
-全屏回归 `tests/e2e/fullscreen.spec.ts` 同时运行 Chromium 与 WebKit，覆盖 Windows/macOS
-渲染引擎的布局差异；其余浏览器用例默认只运行 Chromium。
+Playwright E2E 使用 Vite 和测试服务，不覆盖真实宿主 IPC、动态后端端口或后端崩溃恢复；桌面 E2E 覆盖宿主的启动、关闭隐藏与退出清理。
+桌面端在 Windows 与 macOS 上都运行同一个 Chromium，浏览器用例只运行 Chromium。
 
 ## 技术栈
 
-- **桌面端**：Tauri 2、Rust
+- **桌面端**：Electron
 - **前端**：React 19、TypeScript、Vite
 - **后端**：Python 3.11+、FastAPI、LangGraph
 - **本地持久化**：SQLite
@@ -204,7 +201,7 @@ Playwright E2E 使用 Vite 和测试服务，不覆盖真实 Tauri IPC、动态�
 
 ```text
 apps/
-├── desktop/         Tauri 桌面宿主与 React 前端
+├── desktop/         Electron 桌面宿主与 React 前端
 ├── backend/         FastAPI、Agent Runtime、工具和 SQLite 存储
 └── terminal-worker/ 本机 PTY 终端 Worker
 

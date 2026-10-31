@@ -1,14 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { projectCargoEnvironment, projectTargetDirectory } from "./cargo-target.mjs";
+import { projectCargoEnvironment } from "./cargo-target.mjs";
+import { repositoryRoot, targetDirectory as buildArtifactsRoot } from "./project-paths.mjs";
 
-const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const repositoryRoot = path.resolve(desktopRoot, "..", "..");
 const backendRoot = path.join(repositoryRoot, "apps", "backend");
 const packagingEnvironment = path.join(backendRoot, ".venv-packaging");
-const buildArtifactsRoot = projectTargetDirectory(repositoryRoot);
 const distributionRoot = path.join(buildArtifactsRoot, "backend");
 const buildRoot = path.join(buildArtifactsRoot, "pyinstaller");
 const appName = "cosir-backend";
@@ -54,7 +51,8 @@ function resolveUv() {
 }
 
 function validateTargetHost() {
-  const target = (process.env.TAURI_ENV_TARGET_TRIPLE || "").trim().toLowerCase();
+  // 发布构建的目标平台与 Terminal Worker 共用同一个 target triple（CI 矩阵经此变量传入）。
+  const target = (process.env.COSIR_TERMINAL_WORKER_TARGET || "").trim().toLowerCase();
   if (!target) return;
   const targetOs = target.includes("windows")
     ? "win32"
@@ -74,7 +72,7 @@ function validateTargetHost() {
     throw new Error(`PyInstaller 不能交叉构建目标 ${target}；请在对应操作系统上构建。`);
   }
   if (targetArch && targetArch !== process.arch) {
-    throw new Error(`当前 Python 架构 ${process.arch} 与 Tauri 目标 ${target} 不一致。`);
+    throw new Error(`当前 Python 架构 ${process.arch} 与构建目标 ${target} 不一致。`);
   }
 }
 
@@ -86,7 +84,7 @@ const unixPyinstallerPath = path.join(packagingEnvironment, "bin", pyinstallerEx
 const actualPyinstallerPath = process.platform === "win32" ? pyinstallerPath : unixPyinstallerPath;
 
 const syncEnvironment = {
-  ...projectCargoEnvironment(repositoryRoot),
+  ...projectCargoEnvironment(),
   UV_PROJECT_ENVIRONMENT: packagingEnvironment,
   UV_CACHE_DIR: process.env.UV_CACHE_DIR || path.join(repositoryRoot, ".uv-cache"),
 };
@@ -131,7 +129,7 @@ if (!fs.existsSync(packagedExecutable)) {
 }
 
 assertWithin(buildArtifactsRoot, sourceRoot, "后端构建产物");
-assertWithin(buildArtifactsRoot, stagingRoot, "Tauri 后端资源目录");
+assertWithin(buildArtifactsRoot, stagingRoot, "后端资源目录");
 fs.mkdirSync(path.dirname(stagingRoot), { recursive: true });
 fs.mkdirSync(stagingRoot, { recursive: true });
 for (const entry of fs.readdirSync(stagingRoot)) {

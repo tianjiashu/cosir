@@ -1,8 +1,8 @@
 """环境变量配置的 HTTP 路由。
 
 负责 ``/configuration/environment`` 的读取与写入：读取返回脱敏后的字段视图，写入把请求的变更
-集合转换为 service 的变更对象并落盘。白名单 schema、来源解析、敏感字段脱敏与 ``.env.local``
-override 由 ``EnvironmentConfigurationService`` 承担，本模块不直接读写文件。
+集合转换为 service 的变更对象并落盘。白名单 schema、来源解析与敏感字段脱敏由
+``EnvironmentConfigurationService`` 承担，本模块不直接读写文件。
 """
 
 from __future__ import annotations

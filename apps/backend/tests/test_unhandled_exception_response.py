@@ -15,13 +15,13 @@ def test_unhandled_exception_returns_structured_500_with_cors_headers() -> None:
 
     try:
         response = TestClient(app, raise_server_exceptions=False).get(
-            "/__test__/boom", headers={"Origin": "http://tauri.localhost"}
+            "/__test__/boom", headers={"Origin": "app://cosir"}
         )
     finally:
         app.router.routes.pop()
 
     assert response.status_code == 500
-    assert response.headers["access-control-allow-origin"] == "http://tauri.localhost"
+    assert response.headers["access-control-allow-origin"] == "app://cosir"
     error = response.json()["error"]
     assert error["code"] == "INTERNAL_ERROR"
     assert "raw internal detail" not in error["message"]

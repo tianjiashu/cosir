@@ -19,8 +19,13 @@ import type {
   TransportToolCallPart,
   TransportToolStatus,
 } from "@/lib/assistant/contract";
-import { getLocalAttachmentById, LOCAL_FILE_DATA_PREFIX } from "@/lib/assistant/attachments/local-attachment-registry";
-import { localFileTokenIds, splitLocalFileTokens } from "@/lib/assistant/attachments/local-file-token";
+import { getLocalAttachmentById } from "@/lib/assistant/attachments/local-attachment-registry";
+import {
+  localFileIdFromLocator,
+  localFileLocator,
+  localFileTokenIds,
+  splitLocalFileTokens,
+} from "@/lib/assistant/attachments/local-file-token";
 import { materializeSkillMentions, restoreSkillMentionTokens } from "@/lib/assistant/skill-mention-token";
 import {
   createEditableUserDocument,
@@ -128,9 +133,7 @@ function toImageAttachment(part: TransportImagePart, index: number): CompleteAtt
 }
 
 function toFileAttachment(part: { file: string; id?: string; name: string; contentType: string }): CompleteAttachment | null {
-  const localId = part.file.startsWith(LOCAL_FILE_DATA_PREFIX)
-    ? part.file.slice(LOCAL_FILE_DATA_PREFIX.length)
-    : undefined;
+  const localId = localFileIdFromLocator(part.file);
   const id = part.id ?? localId;
   // A file path or remote locator is content data, never an attachment identity.
   // Only explicit IDs and our local-file locator can be restored safely.
@@ -168,9 +171,7 @@ function attachmentForUserPart(
       ?? toImageAttachment({ type: "image", image: part.image }, 0);
   }
 
-  const localId = part.data.startsWith(LOCAL_FILE_DATA_PREFIX)
-    ? part.data.slice(LOCAL_FILE_DATA_PREFIX.length)
-    : undefined;
+  const localId = localFileIdFromLocator(part.data);
   return attachments.find((attachment) =>
     attachment.type !== "image"
       && (attachment.id === localId
@@ -507,11 +508,11 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     name: part.filename ?? "附件",
     contentType: part.mimeType,
   });
-  const filesById = new Map(command.message.parts.flatMap((part) => (
-    part.type === "file" && part.data.startsWith(LOCAL_FILE_DATA_PREFIX)
-      ? [[part.data.slice(LOCAL_FILE_DATA_PREFIX.length), part] as const]
-      : []
-  )));
+  const filesById = new Map(command.message.parts.flatMap((part) => {
+    if (part.type !== "file") return [];
+    const localId = localFileIdFromLocator(part.data);
+    return localId === undefined ? [] : [[localId, part] as const];
+  }));
   const placed = new Set<object>();
   const placedIds = new Set<string>();
   const messageParts: TransportMessagePart[] = [];
@@ -535,7 +536,7 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
         const local = getLocalAttachmentById(piece.token);
         messageParts.push({
           type: "file",
-          file: `${LOCAL_FILE_DATA_PREFIX}${piece.token}`,
+          file: localFileLocator(piece.token),
           name: local?.name ?? "附件",
           contentType: local?.contentType ?? "application/octet-stream",
         });
@@ -580,7 +581,7 @@ export function extractUserAddMessageAttachments(command: unknown): CreateAttach
     knownIds.add(id);
     const attachment = toFileAttachment({
       id,
-      file: `${LOCAL_FILE_DATA_PREFIX}${id}`,
+      file: localFileLocator(id),
       name: local.name,
       contentType: local.contentType,
     });

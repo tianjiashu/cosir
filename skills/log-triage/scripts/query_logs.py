@@ -22,7 +22,7 @@ def default_log_dir() -> Path:
     """返回默认日志目录：``<数据根>/.cosir/logs``。
 
     数据根按与后端一致的规则解析（见 :mod:`triage_paths`）：显式 ``CODING_AGENT_DATA_DIR``
-    → 已存在的桌面数据根（Windows ``%APPDATA%\\com.cosir.desktop``）→ 仓库根。桌面应用正在
+    → 已存在的桌面数据根（macOS / Windows 为用户主目录）→ 仓库根。桌面应用正在
     运行时日志落在桌面数据根下，不在仓库内。
     """
 

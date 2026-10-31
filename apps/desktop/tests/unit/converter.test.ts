@@ -8,7 +8,7 @@ import {
   toToolCallPart,
   type TransportMessageRenderContext,
 } from "@/lib/assistant/converter";
-import { registerInlineFileMetadata, registerLocalAttachment } from "@/lib/assistant/attachments/local-attachment-registry";
+import { registerInlineFileMetadata, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 import type { TransportMessage, TransportToolCallPart } from "@/lib/assistant/contract";
 import { activity, outcome, usage } from "./transport-fixtures";
 
@@ -69,25 +69,23 @@ describe("assistant transport converter", () => {
   });
 
   it("rebuilds ordinary attachments from inline token ids for failure restore", () => {
-    const file = registerLocalAttachment(new File([], "设计 说明.md", { type: "text/markdown" }), {
-      id: "local-file-restore",
+    const id = registerLocalFile({
       path: "C:\\workspace\\设计 说明.md",
       name: "设计 说明.md",
       contentType: "text/markdown",
-      kind: "file",
     });
     const attachments = extractUserAddMessageAttachments({
       type: "add-message",
       message: {
         role: "user",
-        parts: [{ type: "text", text: "请查看 [[cosir-file:local-file-restore]]" }],
+        parts: [{ type: "text", text: `请查看 [[cosir-file:${id}]]` }],
       },
     });
-    expect(file.name).toBe("设计 说明.md");
     expect(attachments).toMatchObject([{
-      id: "local-file-restore",
+      id,
       type: "file",
-      content: [{ data: "cosir-local-file:local-file-restore" }],
+      name: "设计 说明.md",
+      content: [{ data: `cosir-local-file:${id}` }],
     }]);
   });
 

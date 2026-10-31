@@ -12,7 +12,7 @@ import { canRestartBackendRuntime, restartBackendRuntime } from "@/src/runtime-c
 /**
  * 用户显式「重启后端」的唯一入口：顶栏开发期按钮与后端状态横幅共用。
  *
- * 重启由 Tauri supervisor 执行并重置其崩溃恢复预算；失败状态由
+ * 重启由宿主 supervisor 执行并重置其崩溃恢复预算；失败状态由
  * runtime-config 发布给横幅，这里只负责 busy 态与结构化日志，不另行展示错误。
  * `source` 只用于区分日志来源。
  */

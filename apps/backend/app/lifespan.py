@@ -320,7 +320,7 @@ def _ensure_system_cosir_dir() -> None:
 
     系统级 ``.cosir`` 用于承载跨 workspace 的系统级配置：**目录名固定为 ``.cosir``**，
     位置由 ``system_cosir_dir()`` 给出（macOS 为 ``~/.cosir``、Windows 为
-    ``%USERPROFILE%\\.cosir``；其他 Tauri 平台使用其应用数据目录下的 ``.cosir``；直接运行
+    ``%USERPROFILE%\\.cosir``；其他平台由桌面宿主注入的数据根（Electron 应用数据目录）下的 ``.cosir``；直接运行
     后端时 macOS/Windows 使用用户主目录，其他平台使用仓库根）。workspace 级 ``.cosir``
     由 ``WorkspaceService`` 在创建工作区时创建，与本函数无关。
 

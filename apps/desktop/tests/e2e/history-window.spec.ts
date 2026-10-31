@@ -30,7 +30,7 @@ function longConversation(): SeedState {
 
 const viewport = (page: Page) => page.locator(".aui-thread-root .overflow-y-auto").first();
 
-/** 打开对话并停在底部：不依赖首次落底（无头 WebKit 偶发停在顶部，改动前同样存在）。 */
+/** 打开对话并停在底部：不依赖首次落底（曾在已移除的无头 WebKit 项目里偶发停在顶部）。 */
 async function openAtBottom(page: Page): Promise<void> {
   await page.goto(`/tasks/${TASK_ID}`);
   await expect(page.locator(".aui-thread-root [data-index]").first()).toBeVisible();

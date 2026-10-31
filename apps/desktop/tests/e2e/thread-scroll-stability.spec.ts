@@ -82,7 +82,7 @@ test("长对话向上滚动时虚拟列表少修正 scrollTop，切走再回来�
   await seedState(request, TASK_ID, longConversation());
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/tasks/${TASK_ID}`);
-  // 只等消息行出来，不断言打开时落在底部：无头 WebKit 下首次落底偶发失败（改动前同样存在），
+  // 只等消息行出来，不断言打开时落在底部：曾在已移除的无头 WebKit 项目里首次落底偶发失败，
   // 测量本身会先把视口滚到底。
   const rows = page.locator(".aui-thread-root [data-index]");
   await expect(rows.first()).toBeVisible();

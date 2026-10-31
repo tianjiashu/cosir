@@ -180,4 +180,3 @@ export function decodeReferences(text: string): ReferencePart[] {
     parts.push({ type: "text", text: text.slice(cursor) });
   return parts;
 }
-export const referenceIdentity = encodeReference;

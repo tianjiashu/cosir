@@ -11,9 +11,9 @@
 除非代码事实或明确需求证明必要，不引入认证、多租户、云端队列、Redis、Postgres、Kubernetes 或公网服务安全方案。
 
 ```text
-Tauri 桌面应用
-├─ Rust 主进程：窗口、IPC、后端生命周期
-├─ WebView2：React 前端
+Electron 桌面应用
+├─ main 进程（apps/desktop/electron/main）：窗口、托盘、宿主 IPC、后端生命周期
+├─ 渲染进程（Chromium）：React 前端，经 preload 暴露的 window.cosirHost 访问宿主
 └─ Python/FastAPI 后端子进程
    ├─ Agent Runtime / 原生 ReAct workflow（OpenAI SDK）
    ├─ 本机 SQLite
@@ -98,34 +98,38 @@ Tauri 桌面应用
 
 - React 诊断日志使用 `frontendLog(level, event, msg, { traceId, data, error })`；后端使用 `log.info`、`log.warning`、`log.error` 或 `log.exception`，通过 `extra={"msg": "...", "data": {...}}` 附带说明和业务字段。
 - `event` 使用稳定的 snake_case 名称；`task_id`、`run_id` 等标识放入 `data`。同一执行链路复用同一 `trace_id`；前端 HTTP 请求通过 `X-Trace-Id` 传入后端，后端绑定日志上下文。
-- 前端 Tauri 日志查看系统级 `.cosir/logs/frontend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；浏览器开发模式查看 WebView/浏览器控制台。
+- 前端日志查看系统级 `.cosir/logs/frontend-YYYY-MM-DD.log`（经宿主写入，同日大小分片为 `.1.log`、`.2.log`）；浏览器开发模式没有宿主，只看浏览器控制台。
 - 后端运行日志查看系统级 `.cosir/logs/backend-YYYY-MM-DD.log`（同日大小分片为 `.1.log`、`.2.log`）；启动、停止或崩溃问题查看系统级 `.cosir/logs/desktop-YYYY-MM-DD.log`、`backend-console-YYYY-MM-DD.log` 及其大小分片；`backend.bootstate.json` 位于系统级 `.cosir/runtime/`。
-- 系统级 `.cosir` 由 Tauri 按平台放在用户主目录：**macOS 为 `~/.cosir`，Windows 为 `%USERPROFILE%\.cosir`**；经桌面宿主启动（含 `tauri dev`）时 `CODING_AGENT_DATA_DIR` 由 `spawn_backend` 按 `data_dir` 是否提供**条件注入**，桌面宿主恒传用户主目录，故等价于主目录，无 dev/prod 分支；后端统一追加 `.cosir`。绕过 Tauri 直跑后端时，macOS/Windows 同样回落到用户主目录，其他平台回落到 `<repo>`。系统运行数据包括 `.env`、SQLite、日志和 runtime；工作区级 `.cosir` 仍位于各工作区根目录下。
-- 日志和观测是诊断旁路，不是业务事实。目前不做脱敏，日志或观测失败不得阻断 Agent 主流程。
+- 系统级 `.cosir` 由宿主按平台放在用户主目录：**macOS 为 `~/.cosir`，Windows 为 `%USERPROFILE%\.cosir`**，其他平台为 Electron 应用数据目录（`electron/main/paths.ts`）；设置了 `CODING_AGENT_DATA_DIR` 时宿主以它为数据根（桌面 E2E 与开发期隔离数据用）。宿主拉起后端时恒注入 `CODING_AGENT_DATA_DIR`，开发与打包无分支；后端统一追加 `.cosir`。绕过宿主直跑后端时，macOS/Windows 同样回落到用户主目录，其他平台必须显式设置 `CODING_AGENT_DATA_DIR`（否则启动报错）。系统运行数据包括 `.env`、SQLite、日志和 runtime；工作区级 `.cosir` 仍位于各工作区根目录下。
+- 日志和观测是诊断旁路，不是业务事实。后端日志目前不做脱敏；前端日志只对错误消息与堆栈里形似凭据的文本脱敏（`lib/logging/frontend-log.ts`）。日志或观测失败不得阻断 Agent 主流程。
 
 ## 进程生命周期边界
 
-- Tauri Rust 主进程是桌面宿主，也是 FastAPI 后端子进程生命周期的唯一所有者。React 不得直接创建、停止或重启后端进程。
-- Tauri 显示 WebView 后在后台启动后端；窗口显示与后端 readiness 解耦。React 通过 boot gate 呈现 `starting`、`ready`、`failed`，不得假定页面出现时后端已经可用。
-- 后端绑定 `127.0.0.1`，桌面模式由 Tauri 动态分配端口。前端必须读取 runtime config，不得硬编码生产端口；开发或测试 fallback 端口不是桌面生产契约。
-- Tauri 负责等待 bootstate 与 `/health`、报告失败、有限重试以及退出时清理后端进程树。`/health` 仅表示 liveness，不代表数据库和模型已全部可用。
+- Electron main 进程是桌面宿主，也是 FastAPI 后端子进程生命周期的唯一所有者（`electron/main/backend/supervisor.ts`）。React 不得直接创建、停止或重启后端进程。
+- 宿主显示窗口后在后台启动后端；窗口显示与后端 readiness 解耦。React 通过 boot gate 呈现 `starting`、`ready`、`failed`，不得假定页面出现时后端已经可用。
+- 后端绑定 `127.0.0.1`，桌面模式由宿主动态分配端口。前端只从宿主的后端快照（`window.cosirHost.backend`，带 `generation`，过期快照丢弃）取地址，订阅推送、不轮询，不得硬编码生产端口；开发或测试 fallback 端口不是桌面生产契约。
+- 宿主负责等待 bootstate 与 `/health`、报告失败、有限重试以及退出时清理后端进程树（先关闭后端 stdin 请求优雅退出，宽限期后强杀进程树）。`/health` 仅表示 liveness，不代表数据库和模型已全部可用。
+- 宿主存活契约：后端的 stdin 是宿主持有、从不写入的管道（`CODING_AGENT_PARENT_PIPE=stdin`），后端读到 EOF 即经 uvicorn 优雅关闭自行退出（`app/parent_watch.py`）。宿主主动停止时关闭这条管道，宿主崩溃或被强杀时由操作系统关闭它，两者是同一条退出路径，后端不会被遗留成孤儿进程。
+- 关闭主窗口只隐藏到托盘；真正退出只有一条路径：托盘「退出并停止运行」、Cmd+Q、应用菜单与 Dock 退出都经 `before-quit` → 退出确认（有运行中终端会话时提醒）→ `will-quit` 停止后端。应用单实例，二次启动只唤起已有窗口。
 - 后端 lifespan 负责初始化和关闭数据库、各 Task 的调度 actor（经 `task_runtime_spaces`）与 Run 执行、运行期依赖与观测组件。工具子进程由工具执行层负责取消、超时和进程树清理。
 - MCP 服务连接归进程级 `MCPConnectionPool`（`app/tools/mcp/`）所有：在独立事件循环线程上每个服务一条长连接（stdio 服务即常驻子进程，stderr 落 `.cosir/logs/mcp/`），首次调用时建立、连接指纹变化或断线后重建、空闲回收，后端退出时经 `close_service_dependencies` 关闭；失败的调用不在池内重放。配置文件是唯一事实源，池不接收变更通知；配置界面的连接测试仍走一次性短连接，不进池。
-- 交互终端归 Task 所有，允许同一 Task 的后续 Run 复用。Run 完成、失败、取消或历史 Run 删除不关闭终端；Agent 显式关闭、shell 自然退出、Task 删除提交后或后端退出时清理。活会话由 `TerminalSessionService` 管理，不进入 Run 执行进度，不跨后端重启恢复。会话列表与实时状态投影进 snapshot 顶层 `terminal_sessions`；人和 Agent 都可新建会话与输入，用户输入从不被拒，Agent 输入在用户打字时等其停手、前台是用户启动的命令时立即被拒，前端经每会话一条可写 `terminal-v2` WebSocket 交互；终端工具只开放给侧栏对话 Task 的主 Agent（设计见 `docs/plan/terminal-workbench-design.md`）。
+- 交互终端归 Task 所有，允许同一 Task 的后续 Run 复用。Run 完成、失败、取消或历史 Run 删除不关闭终端；Agent 显式关闭、shell 自然退出、Task 删除提交后或后端退出时清理。活会话由 `TerminalSessionService` 管理，不进入 Run 执行进度，不跨后端重启恢复。会话列表与实时状态投影进 snapshot 顶层 `terminal_sessions`；人和 Agent 都可新建会话与输入，用户输入从不被拒，Agent 输入在用户打字时等其停手、前台是用户启动的命令时立即被拒，前端经每会话一条可写 `terminal-v2` WebSocket 交互；终端工具只开放给侧栏对话 Task 的主 Agent。
 - 后端崩溃恢复必须有限且串行，不得无限重启。恢复耗尽后由用户显式重启；生命周期 generation 用于防止旧进程或旧线程覆盖当前状态。
 - 后端重启时，遗留 running Run（含 child Run）收敛为 `cancelled`，显式恢复从 prepare_input node 重新进入模型循环；`suspended` Run 没有执行者也没有未闭合调用，原样保留，等可唤醒消息继续同一个 Run。workflow 只有 prepare_input 一个入口，调用方不传恢复模式。inbox 保留，不得隐式重放旧 Agent 执行。进程内 registry、subscriber、后台 Team 任务和运行任务不跨重启恢复（遗留 running TeamRun 由 Coordinator 收敛为 cancelled，pending TeamRun 保留可决定）。重启恢复（收敛、拉起待调度 Task、延迟结果收尾）只由 `RecoverService.recover_after_restart` 按序编排，lifespan 接好运行时后调用这一个入口。
 
 ## 进程间接口边界
 
-### Tauri IPC
+### 宿主控制面（Electron IPC）
 
-前端与 Rust 宿主之间的控制面仅包括：
+前端与宿主之间的控制面只经 preload 暴露的 `window.cosirHost`，契约（通道名与载荷类型）唯一定义在 `apps/desktop/electron/shared/host-contract.ts`，入参只在 main 的 `electron/main/ipc.ts` 校验；渲染进程只经 `lib/desktop-host/` 取用，业务组件不得直接读 `window.cosirHost`。当前能力：
 
-- `backend_status`、`backend_runtime_config`、`restart_backend`、`write_frontend_log`
-- `file_access`：`read_selected_attachment_file`、`resolve_selected_attachment_path`
-- 窗口外框：不新增自定义命令，前端直接使用 Tauri 内置 window API（拖动区 `data-tauri-drag-region`、最小化、最大化切换、关闭，权限见 `capabilities/main.json`）。macOS 用叠加式标题栏保留原生红绿灯（`tauri.conf.json`），Windows 去掉原生边框、由 `WindowControls` 自绘按钮（`tauri.windows.conf.json`）；关闭仍走宿主的 CloseRequested（隐藏到托盘）。标题栏形态只在 `lib/platform.ts` 判断，页面布局只读 `globals.css` 的左右安全区变量让位。
+- `backend`：`snapshot`、`restart`、`onChange`（后端状态推送）
+- `log.write`：前端结构化日志落盘
+- `dialog.openDirectory`：原生目录选择（目录授权边界）；选文件走 `<input type="file">`，本机路径经 `files.pathOf(file)`（`webUtils.getPathForFile`）取得，渲染进程只能对用户交给页面的 `File` 取路径，路径只作为附件描述交给后端，前端不读工作区文件
+- `window.setThemeSource`：同步外观偏好到原生外观（系统对话框、Windows 窗口按钮）
+- 窗口外框：macOS 隐藏标题栏保留原生红绿灯，Windows 隐藏标题栏并由系统窗口按钮叠在右上角（`titleBarOverlay`）；拖动区用 CSS 类 `app-drag-region`（`globals.css` 统一把其中的可交互元素排除）。标题栏形态只在 `lib/platform.ts` 判断，页面布局只读 `globals.css` 的左右安全区变量让位。
 
-新增桌面能力前必须判断其属于宿主控制面还是后端业务接口。React 业务组件不得绕过现有 runtime/logging 边界自行管理进程。
+渲染进程开启 `contextIsolation` 与 `sandbox`，不得开放 Node 能力；页面只能停留在自身来源，站外链接交给系统浏览器，新窗口一律拒绝。新增桌面能力前必须判断其属于宿主控制面还是后端业务接口；属于宿主的，同步更新 `host-contract.ts` 与 `ipc.ts` 的入参校验。React 业务组件不得绕过现有 runtime/logging 边界自行管理进程。
 
 ### 本机 HTTP 与 Assistant Transport
 
@@ -151,17 +155,17 @@ Tauri 桌面应用
 - Task inbox 是两级消息队列。外部队列（`task_messages` 表，`TaskMessageQueue`）是持久化事实源，只负责入队、按序读取、撤回与确认，按入队顺序保存尚未并入 context 的消息（`TaskMessage`：按 `kind` 判别的 body、`delivery`、`project_to_transport`）；只有用户输入能交接新 Run、携带发起配置（`RunLaunch`），发起配置不进入 context。所有消息进模型时都是 user 角色，来源由 context metadata 的 `kind` 表达，后端规则只读 `kind`、不解析正文；通知合成一条带 `<system_notice>` 标签的 user 消息排在用户输入前。何时并入只看 `delivery`（`immediate` 在当前执行的下一次模型请求前并入，`next_run` 只交给下一个 Run；用户输入据此分两条通道：活动 Run 期间发送的排队为 `next_run`，空闲时发送或被立即发送的为 `immediate`），是否投影只看 `project_to_transport`；判定规则在 `dispatch_policy`（纯函数），`TaskActor` 只执行判定结果。运行期配置锁定：活动 Run 期间前端锁定配置控件、以当前 Run 冻结的 `launch` 发送（主防线，不做配置比较）；后端入队边界不校验配置（`immediate` 输入并入当前 Run，`next_run` 输入交给下一个 Run，新 Run 用它消费的那条输入的配置）。内部队列（`RunMailbox`）随每次执行创建、不持久化，只是投递通道：新 Run 的初始投递取全部非用户输入的消息与一条用户输入（排队消息因此一轮一条依次处理），续跑 / 等待恢复与运行中只投递 `immediate`；Run 内产生的通知（工具准入、续写）直接投进 mailbox、不落库。每次普通模型调用前，`prepare_input` 取光 mailbox，在同一事务内确认（删除）外部行并写入 context，写入以确认删除那一刻的行内容为准；投递不删行，执行结束、取消或重启丢掉 mailbox 时未确认消息仍在外部队列。一条 Run 可包含多条 user message。最终回答结束当前 Run，旧执行者释放后才为剩余 inbox 新建 Run（收到停止请求时不交接；取消、失败后排队消息留着，等新消息或用户立即发送）。没有活动 Run（含取消、失败后）时发送即推进出新 Run，且先于留下的排队消息；Run 挂起（如等审批）时用户发送只排队、不唤醒，要唤醒由用户对排队消息立即发送（`immediate` 唤醒同一个 Run、消息随之并入）；等待中的 HITL 决定不受影响，仍由决定命令处理。
 - 排队投影只镜像外部队列：入队、撤回之后整表刷新（`refresh_queued_messages`），不区分增删；消费投影按 `UserInputConsumedEvent` 自带的展示绑定构造 user 消息、不从排队条目里搬，所以两者之间没有顺序约束。编辑排队消息不是后端命令：前端撤回这一条、把正文与附件放回输入框（排在已有草稿之前），改完照常发送。编辑重跑按「改 context + 接收消息」处理已并入的消息：只在 Task 静止（无执行者、最新 Run 已到终态）时接受，不替用户停止——运行中的 Run 用的是 `begin_run` 时建好的内存上下文，看不到移出，前端也只在终态时开放入口；目标须为最新一条已投影的用户输入（按 metadata `kind` 判断）；撤回它所在的一轮：它及其后 context 不删除，移出模型上下文与前端投影（保留供观测页查看，fork 不复制），但更早调用在这一轮才并入的结果（决定、后台结论、HITL 执行结果，按 metadata `tool_call_id` 归属）保留；这一轮发起的调用仍在进行的延迟工作在提交前撤销；编辑后的消息以新消息身份入队，移出、撤销与入队同一事务提交，随后推进出新 Run。Run 只会前进，不重置旧 Run。外部工具副作用不回滚。
 - `task_runtime`、取消 registry、snapshot subscriber 等属于当前后端进程内的协调状态，不是持久化事实。
-- WebView `localStorage` 只保存用户偏好（模型选择、最近 workspace、收藏提示词等）；各类偏好由对应 storage module 管理，不得存储任务或对话事实。
+- 渲染进程 `localStorage` 只保存用户偏好（模型选择、最近 workspace、收藏提示词等）；各类偏好由对应 storage module 管理，不得存储任务或对话事实。
 
 ## 前端架构
 
-- React 负责页面、用户交互、HTTP/SSE 客户端和渲染状态；Rust/Tauri 负责窗口与本地进程控制。前端不得直接访问 SQLite、Agent Runtime 或工作区文件来绕过后端业务边界。
+- React 负责页面、用户交互、HTTP/SSE 客户端和渲染状态；Electron main 进程负责窗口与本地进程控制。前端不得直接访问 SQLite、Agent Runtime 或工作区文件来绕过后端业务边界。
 - 后端 snapshot 是对话、Run、usage 和 tool parts 的权威读取来源。Assistant UI runtime state 只用于当前渲染和传输控制，不得原样写回后端作为事实。
 - `AppLayout`（react-router 布局路由，路由表见 `src/router.tsx`）是 workspace/task 导航的稳定容器；`TaskPage`、初始 snapshot 和 Assistant runtime 按 `taskId` 建立，并由布局直接渲染：切到配置或上下文观测时最近的任务页保活，只有进入其他任务或新对话才替换。普通 workspace 数据刷新不应无故卸载正在执行的 Assistant runtime。
 - 会话侧栏（`components/task-rail/`）属于对话区：只在对话页显示当前 Task 的状态摘要卡片（后台任务等，卡片注册表按 id 装配），宽度足够时固定为对话右侧一列、不够时浮在对话区右上角；卡片顺序、折叠与开关是全局 localStorage 偏好。工作台（界面在 `components/workbench/`，状态在 `lib/workbench/`）按工作区存放需要大面积阅读或编辑的标签（文件、子 Agent、配置草稿），二者不互相承载。
 - transport resume/attach 只重新订阅 Task；business resume 才继续后端执行。前端实现和命名必须保持两种语义可辨认。
 - 业务命令统一经 `lib/assistant/task-commands.ts` 按 Task / 消息寻址；后端处理完这一轮才返回，命令被拒以 HTTP 409 同步抛出（发送类命令收回乐观消息、恢复草稿），全部输出由 Task 长订阅推送。「一轮输出结束」按 `activity` 从活动态（`running` / `suspended`）落到终态判定（`onActivitySettled`），不按 Run 身份比对；fork 入口挂在带 `outcome` 的消息上，请求按 `messageId` 切分。运行中发送一律由后端排队，前端不选投递方式；排队消息不进消息流，在输入框上方的队列区（`components/assistant-ui/elements/queued-messages.tsx`）按 id 渲染为线程消息，提供立即发送、编辑（撤回后放回输入框）与删除；活动 Run 期间模型与工具控件只读，发送使用当前 Run 冻结的 `launch`（`lib/assistant/run-launch.ts`）；排队消息的 `delivery` 由后端 snapshot 投影，前端不自行推断。
-- 前端测试分层：Vitest 验证模块行为；Playwright E2E 用 Vite + 内存测试服务，WDIO 经 `desktop-e2e` 驱动真实 Tauri 窗口；都不覆盖后端崩溃恢复，不得视为完整集成测试。
+- 前端测试分层：Vitest 验证模块行为（含 main 进程的 supervisor 规则）；Playwright E2E 用 Vite + 内存测试服务；桌面 E2E（`playwright.desktop.config.ts`）用 Playwright 驱动真实 Electron 宿主与后端，只覆盖进程与窗口行为；都不覆盖后端崩溃恢复，不得视为完整集成测试。
 
 ## 工具 UI 渲染边界
 
@@ -194,7 +198,7 @@ Tauri 桌面应用
 
 ## 代码目录边界
 
-- `apps/desktop/src-tauri/`：桌面宿主、Tauri IPC、后端进程生命周期与桌面日志。
+- `apps/desktop/electron/`：桌面宿主——`main/`（窗口、托盘、退出流程、宿主 IPC、桌面日志，`backend/` 为后端进程生命周期）、`preload/`（`window.cosirHost`）、`shared/host-contract.ts`（宿主控制面契约）、`resources/`（图标）。
 - `apps/desktop/`：`src/`（React 入口）、`app/`（根组件与全局样式）、`components/`（页面与展示）、`hooks/`、`lib/`（api/http/assistant/logging 等客户端与契约）。
 - `apps/backend/app/api/`：HTTP 路由、schema 与错误映射。
 - `apps/backend/app/assistant_transport/`：Assistant wire 协议、SSE、用户命令编排（`TransportAssistantService`）、snapshot 与事件投影。
@@ -223,3 +227,10 @@ Tauri 桌面应用
 - [ ] **防覆盖未观察内容**：模型读取文件后若文件被外部修改，`write_file` / `patch_write` / `apply_patch` 当前会直接写入，不再拒绝。
 - [ ] **同路径写入串行化**：没有路径锁，多个 Task（如父子 Agent）可同时写同一文件；单次写入由 `atomic_write` 保证原子性，但两次写入之间可能相互覆盖。
 - [ ] **重复只读调用拦截**：重复的 `read_file` / `search_content` / `find_files` 会照常执行，不再提前返回或阻断。
+
+Electron 桌面宿主目前只在 macOS 上验证过，以下 Windows 行为尚未实测（逐项验证后勾掉；方案与已验证范围见 `docs/plan/electron-host-migration-design.md` 第 12、14 节）：
+
+- [ ] **后端进程树清理**：退出时关闭 stdin 后后端优雅退出并清掉工具子进程、Terminal Worker；宽限期后 `taskkill /T /F` 兜底。
+- [ ] **宿主存活契约**：宿主被强杀后，后端经 stdin EOF（`app/parent_watch.py`，Windows 分支用 `raise_signal`）自行优雅退出，不留孤儿进程。
+- [ ] **窗口外框**：`titleBarOverlay` 透明底色、窗口按钮颜色随外观偏好切换、右上角安全区让位（`lib/platform.ts` / `globals.css`）。
+- [ ] **启动与测试入口**：`scripts/start-desktop.ps1`、`npm run electron:dev`、`npm run test:e2e:desktop` 在 Windows 上可用。

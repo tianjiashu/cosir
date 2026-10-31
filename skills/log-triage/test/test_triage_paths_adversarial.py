@@ -195,19 +195,19 @@ class TestPlatformDesktopRoot:
         monkeypatch.setattr(tp, "repository_root", lambda: _make_root_with_cosir(tmp_path / "r"))
         assert tp.data_root() == tmp_path / "r"
 
-    # 目的：Linux 下 XDG_DATA_HOME 生效。潜在缺陷：忽略 XDG 变量。
+    # 目的：Linux 下 XDG_CONFIG_HOME 生效（Electron userData）。潜在缺陷：忽略 XDG 变量。
     def test_linux_xdg_home(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setenv("XDG_DATA_HOME", "/xdg/data")
+        monkeypatch.setenv("XDG_CONFIG_HOME", "/xdg/config")
         # 用 Path 比较：本机为 Windows，字符串会被规范化为反斜杠
-        assert tp.desktop_data_root() == Path("/xdg/data") / "com.cosir.desktop"
+        assert tp.desktop_data_root() == Path("/xdg/config") / "Cosir"
 
-    # 目的：Linux 无 XDG_DATA_HOME 时回退 ~/.local/share。潜在缺陷：缺省路径写错。
+    # 目的：Linux 无 XDG_CONFIG_HOME 时回退 ~/.config。潜在缺陷：缺省路径写错。
     def test_linux_xdg_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/home/u")))
-        assert tp.desktop_data_root() == Path("/home/u/.local/share") / "com.cosir.desktop"
+        assert tp.desktop_data_root() == Path("/home/u/.config") / "Cosir"
 
     # 目的：macOS 与 Windows 同源，数据根是用户主目录（``~/.cosir``），不再是 Application Support。
     def test_macos_uses_home_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,9 +9,6 @@ import {
   uploadAttachment,
   type UploadedAttachment,
 } from "./attachment-upload";
-import {
-  getLocalAttachment,
-} from "./local-attachment-registry";
 import { LOCAL_IMAGE_LOCATOR_PREFIX } from "./local-file-token";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -33,9 +30,8 @@ export function createAttachmentAdapter(workspaceId: number): AttachmentAdapter 
     accept: "image/*,.png,.jpg,.jpeg",
     async add({ file }) {
       if (!isSupportedImageFile(file)) throw new UserFacingError("图片附件仅支持 JPEG 和 PNG 格式");
-      const local = getLocalAttachment(file);
       return {
-        id: local?.id ?? `pending-attachment:${crypto.randomUUID()}`,
+        id: `pending-attachment:${crypto.randomUUID()}`,
         type: "image",
         name: file.name,
         contentType: file.type,
