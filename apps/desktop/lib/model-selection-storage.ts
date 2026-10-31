@@ -108,16 +108,10 @@ function parseStoredSelection(
  * 任何失败路径（window 不存在、localStorage 被禁用、JSON.parse 失败、字段
  * 缺失或类型不符）均返回 null，不抛异常。
  */
-export function getStoredSelectionSnapshot(
-  scope?: ModelSelectionScope,
-): Partial<ModelSelection> | null {
-  return getCachedSelection(scope);
-}
-
 export function readStoredSelection(
   scope?: ModelSelectionScope,
 ): Partial<ModelSelection> | null {
-  return getStoredSelectionSnapshot(scope);
+  return getCachedSelection(scope);
 }
 
 export function subscribeStoredSelection(

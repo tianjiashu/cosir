@@ -24,7 +24,7 @@ import {
   scopeSuffix,
   type ModelSelection,
   type ModelSelectionScope,
-  getStoredSelectionSnapshot,
+  readStoredSelection,
   subscribeStoredSelection,
   writeStoredSelection,
 } from "@/lib/model-selection-storage";
@@ -169,7 +169,7 @@ function useScopedSelection(scope: ModelSelectionScope | undefined) {
     [key],
   );
   const getSnapshot = useCallback(
-    () => (scope ? getStoredSelectionSnapshot(scope) : null),
+    () => (scope ? readStoredSelection(scope) : null),
     [key],
   );
   const storedSelection = useSyncExternalStore(subscribe, getSnapshot, () => null);
