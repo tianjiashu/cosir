@@ -14,7 +14,6 @@ describe("parseHttpError", () => {
       status: 400,
       code: "MODEL_REQUIRED",
       message: "请选择模型",
-      retryable: false,
     });
   });
 
@@ -28,7 +27,6 @@ describe("parseHttpError", () => {
       status: 409,
       code: "TASK_MISMATCH",
       message: "任务不匹配",
-      retryable: false,
     });
   });
 

@@ -7,21 +7,18 @@ type StructuredHttpError = {
 export class HttpError extends Error {
   readonly status: number;
   readonly code?: string;
-  readonly retryable?: boolean;
 
   constructor(
     message: string,
     options: {
       status: number;
       code?: string;
-      retryable?: boolean;
     },
   ) {
     super(message);
     this.name = "HttpError";
     this.status = options.status;
     this.code = options.code;
-    this.retryable = options.retryable;
   }
 }
 
@@ -46,7 +43,6 @@ export async function parseHttpError(response: Response): Promise<HttpError> {
       return new HttpError(structured.message, {
         status: response.status,
         code: structured.code,
-        retryable: structured.retryable,
       });
     }
 
@@ -54,9 +50,6 @@ export async function parseHttpError(response: Response): Promise<HttpError> {
       return new HttpError(parsed.detail.message, {
         status: response.status,
         code: typeof parsed.detail.code === "string" ? parsed.detail.code : undefined,
-        retryable: typeof parsed.detail.retryable === "boolean"
-          ? parsed.detail.retryable
-          : undefined,
       });
     }
 
@@ -86,6 +79,7 @@ function parseStructuredHttpError(value: unknown): StructuredHttpError | null {
   return null;
 }
 
+// retryable 只作为「这是后端结构化错误」的形状判据，前端不消费它的取值。
 function isStructuredHttpError(value: unknown): value is StructuredHttpError {
   if (!isRecord(value)) return false;
   return typeof value.code === "string"
