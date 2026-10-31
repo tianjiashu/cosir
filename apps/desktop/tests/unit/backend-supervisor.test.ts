@@ -130,7 +130,7 @@ describe("BackendSupervisor", () => {
     let release!: () => void;
     waitMock.mockImplementationOnce(async ({ isCurrent }) => {
       await new Promise<void>((resolve) => (release = resolve));
-      return isCurrent() ? { ok: true } : { ok: false, superseded: true, message: "superseded" };
+      return isCurrent() ? { ok: true } : { ok: false, superseded: true };
     });
     const supervisor = new BackendSupervisor("test-host-token");
     const starting = supervisor.start();

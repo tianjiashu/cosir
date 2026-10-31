@@ -16,10 +16,10 @@ export async function waitForBackend(options: {
   timeoutMs: number;
   isAlive: () => boolean;
   isCurrent: () => boolean;
-}): Promise<{ ok: true } | { ok: false; superseded: boolean; message: string }> {
+}): Promise<{ ok: true } | { ok: false; superseded: true } | { ok: false; superseded: false; message: string }> {
   const deadline = Date.now() + options.timeoutMs;
   while (Date.now() < deadline) {
-    if (!options.isCurrent()) return { ok: false, superseded: true, message: "后端启动已被新的生命周期操作取消" };
+    if (!options.isCurrent()) return { ok: false, superseded: true };
     if (!options.isAlive()) return { ok: false, superseded: false, message: "本地 Agent 后端进程在健康检查前退出" };
     const failure = readBootstateFailure(options.bootstateFile);
     if (failure) return { ok: false, superseded: false, message: failure };
