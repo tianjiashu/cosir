@@ -164,6 +164,17 @@ def reopen_deferred_registry() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def reset_handoff_registry() -> Iterator[None]:
+    """进程级交接登记表：每个用例从空表开始（同一 task_id 与调用 id 会被反复使用）。"""
+
+    from app.core.tool.handoff.handoff_registry import handoff_registry
+
+    handoff_registry.close()
+    handoff_registry.set_listener(None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """把系统作用域的配置文件目录隔离到用例临时目录。
 

@@ -38,7 +38,6 @@ def _entry(session_id: str = "term_1", **overrides: Any) -> dict[str, Any]:
         "exitCode": None,
         "integration": "ready",
         "commandRunning": False,
-        "handoff": None,
         "createdAt": "2026-10-27T00:00:00+00:00",
     }
     entry.update(overrides)
@@ -53,7 +52,6 @@ class _FakeRuntime:
 
     def snapshot(self) -> SessionSnapshot:
         entry = self._entry
-        handoff = entry["handoff"]
         return SessionSnapshot(
             session_id=entry["sessionId"],
             label=entry["label"] or None,
@@ -66,8 +64,6 @@ class _FakeRuntime:
             exit_code=entry["exitCode"],
             integration=entry["integration"],
             command_running=entry["commandRunning"],
-            handoff_reason=handoff["reason"] if handoff else None,
-            handoff_call_id=handoff["toolCallId"] if handoff else None,
             summary="",
         )
 
@@ -141,9 +137,7 @@ def test_snapshot_without_terminal_sessions_is_rejected() -> None:
         _entry(integration="maybe"),
         _entry(commandRunning="yes"),
         _entry(exitCode=True),
-        _entry(handoff={"reason": "x", "toolCallId": "call-1", "extra": 1}),
-        _entry(handoff={"reason": "x"}),
-        _entry(handoff="x"),
+        {**_entry(), "handoff": None},
         _entry(sessionId=""),
         {**_entry(), "extra": 1},
         {k: v for k, v in _entry().items() if k != "createdAt"},
@@ -156,13 +150,10 @@ def test_invalid_terminal_session_entries_are_rejected(entry: dict[str, Any]) ->
         validate_snapshot(state)
 
 
-def test_valid_entries_including_handoff_and_exit_pass() -> None:
+def test_valid_entries_including_exit_pass() -> None:
     state = empty_snapshot()
     state["terminal_sessions"] = [  # type: ignore[list-item]
-        _entry(
-            "a", handoff={"reason": "请输入密码", "toolCallId": "call-1"},
-            createdBy="agent",
-        ),
+        _entry("a", createdBy="agent"),
         _entry("b", status="exited", endReason="shell_exited", exitCode=0, integration="off"),
     ]
     validate_snapshot(state)

@@ -11,11 +11,13 @@ from typing import Any
 import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
+from terminal_test_support import ReadyWorker, make_service
 
+from app.core.tool.background.deferred_registry import deferred_registry
+from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.workflow.message_queue.task_message import DecisionBody
-from app.core.tool.background.deferred_registry import deferred_registry
 from app.service import depends
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
@@ -34,7 +36,6 @@ from app.tools.tool_handler.terminal_session import (
 )
 from app.tools.tool_handler.terminal_session.common import service_error_observation
 from app.tools.tool_models import TerminalReadArgs, TerminalWriteArgs
-from terminal_test_support import ReadyWorker, make_service, session_entries
 
 
 def test_exactly_six_terminal_tools_are_built() -> None:
@@ -192,11 +193,15 @@ def test_tool_handlers_return_observation_text_and_display_data(tool_service, tm
     handoff = TerminalHandoffTool().execute(
         session_id=session_id, reason="password", execution_context=handoff_context
     )
-    # 首次调用是 HITL 等待占位：挂起 Agent，交接只登记在会话上。
+    # 首次调用是 HITL 等待占位：挂起 Agent，交接登记在交接登记表。
     assert handoff.suspend is True and handoff.awaiting_decision is True
     assert handoff.display_data["input_summary"] == "password"
-    entry = session_entries(service, 1)[0]
-    assert entry["handoff"] == {"reason": "password", "toolCallId": handoff_context.tool_call_id}
+    [lease] = handoff_registry.leases(1)
+    assert (lease.surface, lease.resource_id, lease.tool_call_id) == (
+        "terminal",
+        session_id,
+        handoff_context.tool_call_id,
+    )
     # 用户交还：决定到达后重放同一调用，报告交接以来的输出并清除交接。
     workers[0].screen(["$ ", "$ sudo ok"], cursor=(1, 9))
     returned = TerminalHandoffTool().execute(
@@ -213,7 +218,7 @@ def test_tool_handlers_return_observation_text_and_display_data(tool_service, tm
     )
     assert returned.status == "success" and not returned.suspend
     assert "handed the terminal back" in (returned.content or "")
-    assert session_entries(service, 1)[0]["handoff"] is None
+    assert handoff_registry.leases(1) == []
 
     read = TerminalReadTool().execute(session_id=session_id, execution_context=_context(tmp_path))
     assert read.display_data["lines"] == [1, 2] and "input_summary" not in read.display_data

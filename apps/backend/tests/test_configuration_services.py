@@ -360,7 +360,7 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
     assert secret["masked"] is True
 
     groups = service.read_grouped()
-    assert [group["id"] for group in groups] == ["general", "web"]
+    assert [group["id"] for group in groups] == ["general", "web", "browser"]
     response = EnvironmentResponse(groups=groups)
     assert response.groups[0].fields[0].name == "DEFAULT_LANGUAGE"
     max_steps = next(

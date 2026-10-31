@@ -43,6 +43,7 @@ def test_rebuild_empty_task_returns_valid_empty_snapshot() -> None:
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
+        "handoffs": [],
     }
 
 
@@ -147,6 +148,7 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
+        "handoffs": [],
     }
 
     with pytest.raises(ValueError, match="outcome status must be terminal"):
@@ -170,6 +172,7 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
+        "handoffs": [],
     }
 
     with pytest.raises(ValueError, match="only assistant messages carry an outcome"):
@@ -220,6 +223,7 @@ def test_validate_snapshot_tolerates_none_presentation() -> None:
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
+        "handoffs": [],
     }
 
     validate_snapshot(state)  # 不应抛 ValueError

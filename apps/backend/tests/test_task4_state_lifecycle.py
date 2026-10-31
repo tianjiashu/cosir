@@ -348,6 +348,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             "terminal_sessions": [],
             "background_tasks": [],
             "foreground_waits": [],
+            "handoffs": [],
         }
     )
 

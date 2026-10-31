@@ -12,14 +12,14 @@ from typing import Any
 
 import pytest
 from terminal_test_support import (
-    session_entries,
     FakeWorker,
     ReadyWorker,
     active_session_ids,
+    geometry,
     make_service,
     never,
     run_in_thread,
-    geometry,
+    session_entries,
     session_view,
     start,
     wait_until,
@@ -28,6 +28,7 @@ from terminal_test_support import (
 from app.config.constant import Constant
 from app.core.tool.background import deferred_registry as deferred_module
 from app.core.tool.background.deferred_registry import deferred_registry
+from app.core.tool.handoff.handoff_registry import HandoffConflictError, handoff_registry
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
     TerminalSessionCapacityError,
@@ -250,7 +251,7 @@ def test_task_runtimes_orders_active_first_and_keeps_ten_ended(monkeypatch, tmp_
     assert [e["sessionId"] for e in entries[1:]] == ended[2:]
     assert set(entries[0]) == {
         "sessionId", "label", "shellKind", "createdBy", "status", "endReason", "exitCode",
-        "integration", "commandRunning", "handoff",
+        "integration", "commandRunning",
         "createdAt",
     }
     assert entries[0]["integration"] == "unavailable"
@@ -532,25 +533,25 @@ def _begin(service: Any, session_id: str, tool_call_id: str = "call-handoff", re
     return service.require(session_id, 1).begin_handoff(reason, tool_call_id)
 
 
-def test_handoff_is_a_session_hint_ended_by_the_decision_replay(
+def test_handoff_is_registered_and_ended_by_the_decision_replay(
     monkeypatch, tmp_path, decisions
 ) -> None:
-    """交接只登记在会话上（不改变输入仲裁、不登记延迟结果）；决定重放时报告交接以来的输出并清除。"""
+    """交接只登记在交接登记表（不改变输入仲裁、不登记延迟结果）；重放取回登记，报告交接以来的输出。"""
     service, workers = make_service(monkeypatch)
     session_id = start(service, tmp_path)
     workers[0].screen(["$ sudo make install", "Password:"], cursor=(1, 9))
     shown = _begin(service, session_id, reason="Enter sudo password")
     assert shown.input_type == "handoff" and shown.input_summary == "Enter sudo password"
-    entry = session_entries(service, 1)[0]
-    assert entry["handoff"] == {"reason": "Enter sudo password", "toolCallId": "call-handoff"}
+    lease = handoff_registry.on_resource("terminal", session_id)
+    assert lease is not None and lease.tool_call_id == "call-handoff" and lease.task_id == 1
     assert deferred_registry.pending(1) == []
-    with pytest.raises(TerminalSessionStateError):
+    with pytest.raises(HandoffConflictError):
         _begin(service, session_id, tool_call_id="call-other")
 
     workers[0].screen(["$ sudo make install", "Password:", "installed"], cursor=(2, 9))
-    returned = service.require(session_id, 1).end_handoff("call-handoff")
+    returned = service.require(session_id, 1).end_handoff(handoff_registry.end("call-handoff"))
     assert "handed the terminal back" in returned.text and "installed" in returned.text
-    assert session_entries(service, 1)[0]["handoff"] is None
+    assert handoff_registry.on_resource("terminal", session_id) is None
     assert decisions == []
 
 
@@ -564,20 +565,33 @@ def test_user_typing_pause_does_not_end_handoff(monkeypatch, tmp_path, decisions
     time.sleep(0.2)
     service.require(session_id, 1).user_input(b"et")
     time.sleep(0.2)
-    assert session_entries(service, 1)[0]["handoff"] is not None
+    assert handoff_registry.on_resource("terminal", session_id) is not None
     assert decisions == []
 
 
 def test_session_end_settles_the_handoff_on_the_users_behalf(monkeypatch, tmp_path, decisions):
-    """shell 意外退出时代为落定那次调用，Agent 不会一直挂着；重放时报告会话已结束。"""
+    """shell 意外退出时经登记表代为落定那次调用，Agent 不会一直挂着；重放时报告会话已结束。"""
     service, workers = make_service(monkeypatch)
     session_id = start(service, tmp_path)
     _begin(service, session_id)
     workers[0].exit(1)
     wait_until(lambda: len(decisions) == 1)
     assert decisions == [(1, "call-handoff", "reject", "runtime")]
-    returned = service.require(session_id, 1).end_handoff("call-handoff")
+    assert handoff_registry.leases(1) == []
+    returned = service.require(session_id, 1).end_handoff(handoff_registry.end("call-handoff"))
     assert "ended before the user handed it back" in returned.text
+
+
+def test_withdrawn_handoff_frees_the_session(monkeypatch, tmp_path, decisions):
+    """编辑重跑撤回交接所在一轮：登记被丢弃，会话不再显示交接中，可以再次交接（回归：曾永远卡在交接中）。"""
+    service, _ = make_service(monkeypatch)
+    session_id = start(service, tmp_path)
+    _begin(service, session_id)
+    handoff_registry.drop(1, ["call-handoff"])
+    assert "handed off to user" not in service.require(session_id, 1).snapshot().summary
+    _begin(service, session_id, tool_call_id="call-again")
+    assert handoff_registry.on_resource("terminal", session_id).tool_call_id == "call-again"
+    assert decisions == []
 
 
 def test_backend_shutdown_keeps_the_pending_handoff_decision(monkeypatch, tmp_path, decisions):

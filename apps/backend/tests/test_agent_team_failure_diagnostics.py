@@ -61,6 +61,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
+        "handoffs": [],
     }
     event = ToolCallStatusChangedEvent(
         task_id=2,

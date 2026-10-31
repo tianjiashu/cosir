@@ -154,6 +154,7 @@ async def test_attach_without_run_pushes_full_frame_and_stays_open() -> None:
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
+        "handoffs": [],
         "queued_messages": [],
     }
     await _settle()
@@ -299,6 +300,7 @@ async def test_attach_envelopes_encode_task_view_frames_without_run_fields() -> 
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
+        "handoffs": [],
         "queued_messages": [],
     }
     assert set(first) == {"task_id", "kind", "mutations", "resync_reason", "state"}

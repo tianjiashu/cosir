@@ -98,6 +98,8 @@ _EXPECTED_BANNED_TOOLS = frozenset(
         "child_agent_status",
         "child_agent_send",
         "wait_messages",
+        # 子 Task 在前端只读，用户无法交还浏览器交接。
+        "browser_handoff",
     }
 )
 

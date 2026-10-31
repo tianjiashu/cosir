@@ -792,6 +792,30 @@ async def test_rerun_revokes_deferred_work_of_withdrawn_calls(rerun) -> None:
     deferred_registry.cancel("call-earlier")
 
 
+async def test_rerun_ends_handoffs_started_in_the_withdrawn_turn(rerun) -> None:
+    """被撤回的这一轮发起的交接随之结束：否则资源一直显示交接中，也无法再次交接。"""
+    from app.core.tool.handoff.handoff_registry import HandoffLease, handoff_registry
+
+    _finished_run(rerun)
+    for call_id, resource in (("call-withdrawn", "term_a"), ("call-earlier", "term_b")):
+        handoff_registry.begin(
+            HandoffLease(
+                tool_call_id=call_id,
+                task_id=_TASK_ID,
+                tool_name="terminal_handoff",
+                surface="terminal",
+                resource_id=resource,
+                reason="password",
+            )
+        )
+    rerun.context.withdrawn_calls = frozenset({"call-withdrawn"})
+
+    await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
+    await _settle()
+
+    assert [lease.tool_call_id for lease in handoff_registry.leases(_TASK_ID)] == ["call-earlier"]
+
+
 async def test_rerun_of_a_non_latest_input_is_rejected_untouched(rerun) -> None:
     _finished_run(rerun)
 
