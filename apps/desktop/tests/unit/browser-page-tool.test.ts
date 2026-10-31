@@ -23,8 +23,8 @@ describe("browser-page display", () => {
   });
 
   it("routes browser tools by display kind, falling back on bad payloads", () => {
-    expect(routeToolPart("browser_navigate", { presentation: {}, display_data: PAGE })).toBe("browser-page");
-    expect(routeToolPart("browser_handoff", { presentation: {}, display_data: { ...PAGE, handoff_reason: "sign in" } })).toBe("browser-page");
-    expect(routeToolPart("browser_navigate", { presentation: {}, display_data: { kind: "browser-page" } })).toBe("fallback");
+    expect(routeToolPart({ presentation: {}, display_data: PAGE })).toBe("browser-page");
+    expect(routeToolPart({ presentation: {}, display_data: { ...PAGE, handoff_reason: "sign in" } })).toBe("browser-page");
+    expect(routeToolPart({ presentation: {}, display_data: { kind: "browser-page" } })).toBe("fallback");
   });
 });

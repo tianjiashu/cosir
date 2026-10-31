@@ -5,7 +5,7 @@ import { safeExternalUrl } from "@/components/assistant-ui/tools/types";
 
 describe("tool renderer routing", () => {
   it("routes an explicit read_file data kind to details", () => {
-    expect(routeToolPart("read_file", {
+    expect(routeToolPart({
       backendStatus: "completed",
       presentation: { expand_layout: "none", expandable: false },
       display_data: { kind: "read-file-meta", path: "README.md" },
@@ -13,22 +13,22 @@ describe("tool renderer routing", () => {
   });
 
   it("uses the declared presentation when read_file has no semantic data", () => {
-    expect(routeToolPart("read_file", { presentation: { expand_layout: "none" }, display_data: null })).toBe("details");
+    expect(routeToolPart({ presentation: { expand_layout: "none" }, display_data: null })).toBe("details");
   });
 
   it("uses an explicit safe fallback for unknown tools", () => {
-    expect(routeToolPart("future_tool", { presentation: {}, display_data: null })).toBe("fallback");
+    expect(routeToolPart({ presentation: {}, display_data: null })).toBe("fallback");
   });
 
   it("does not let an unknown display kind bypass the fallback", () => {
-    expect(routeToolPart("future_tool", {
+    expect(routeToolPart({
       presentation: { expand_layout: "none", verb: "未来工具" },
       display_data: { kind: "future-display-kind" },
     })).toBe("fallback");
   });
 
   it("routes generic list data through the details renderer", () => {
-    expect(routeToolPart("web_search", {
+    expect(routeToolPart({
       backendStatus: "completed",
       presentation: { expand_layout: "list" },
       display_data: { kind: "web-search-results", results: [{ title: "result", url: "https://example.com" }] },
@@ -36,18 +36,18 @@ describe("tool renderer routing", () => {
   });
 
   it("routes MCP and Skill results through the details renderer", () => {
-    expect(routeToolPart("mcp", {
+    expect(routeToolPart({
       presentation: { expand_layout: "details" },
       display_data: { kind: "mcp-tool-result", action: "list", servers: [] },
     })).toBe("details");
-    expect(routeToolPart("skill", {
+    expect(routeToolPart({
       presentation: { expand_layout: "details" },
       display_data: { kind: "skill-content", action: "list", skills: [] },
     })).toBe("details");
   });
 
   it("routes delegation refs to the dedicated activity row", () => {
-    expect(routeToolPart("delegate_task", {
+    expect(routeToolPart({
       backendStatus: "running",
       presentation: { surface: "standalone", expand_layout: "none" },
       display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501 },
@@ -57,7 +57,7 @@ describe("tool renderer routing", () => {
   });
 
   it("keeps a failed TeamRun on the execution card after its display data becomes a short hint", () => {
-    expect(routeToolPart("agent_team", {
+    expect(routeToolPart({
       backendStatus: "failed",
       presentation: { expand_layout: "details" },
       display_data: { status_hint: "执行失败" },
@@ -67,7 +67,7 @@ describe("tool renderer routing", () => {
 
   it("routes wait_messages, which has no display data, to the generic fallback card", () => {
     // 挂起只是控制流；卡片只需动词与状态，不需要专用 kind。
-    expect(routeToolPart("wait_messages", {
+    expect(routeToolPart({
       backendStatus: "completed",
       presentation: { expand_layout: "none", verb: "等待结果" },
       display_data: {},
@@ -75,7 +75,7 @@ describe("tool renderer routing", () => {
   });
 
   it("sends malformed display data to the fallback without trusting presentation", () => {
-    expect(routeToolPart("child_agent_status", {
+    expect(routeToolPart({
       backendStatus: "completed",
       presentation: { expand_layout: "details", verb: "读取子 Agent 状态" },
       display_data: { kind: 42, messages: "not-an-array" },
@@ -83,7 +83,7 @@ describe("tool renderer routing", () => {
   });
 
   it("sends malformed delegation payloads to the fallback", () => {
-    expect(routeToolPart("delegate_task", {
+    expect(routeToolPart({
       backendStatus: "completed",
       presentation: { expand_layout: "none" },
       display_data: { kind: "delegation-result", title: "子 Agent", child_task_id: 0 },
@@ -91,7 +91,7 @@ describe("tool renderer routing", () => {
   });
 
   it("routes interactive terminal sessions to the task-scoped readonly panel", () => {
-    expect(routeToolPart("terminal_start", {
+    expect(routeToolPart({
       backendStatus: "completed",
       presentation: { variant: "terminal-session-start", expand_layout: "terminal" },
       display_data: { kind: "terminal-session", session_id: "term_demo" },

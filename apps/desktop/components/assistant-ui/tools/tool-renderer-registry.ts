@@ -153,15 +153,12 @@ function matchesDefinition(definition: ToolRendererDefinition, artifact: ToolArt
  * 格式错误的 display_data、未知 kind 或专用 payload 校验失败时必须进入
  * fallback；不会猜测工具名称，也不会让不受信任的 presentation 绕过校验。
  */
-export function routeToolPart(toolName: string, rawArtifact: unknown): ToolPartRoute {
-  return resolveToolRenderer(toolName, rawArtifact).route;
+export function routeToolPart(rawArtifact: unknown): ToolPartRoute {
+  return resolveToolRenderer(rawArtifact).route;
 }
 
 /** 根据同一份注册定义解析实际 React renderer，避免路由和组件映射分离。 */
-export function resolveToolRenderer(
-  toolName: string,
-  rawArtifact: unknown,
-): ToolRendererDefinition {
+export function resolveToolRenderer(rawArtifact: unknown): ToolRendererDefinition {
   const artifact = readToolArtifact(rawArtifact);
   const displayData = asRecord(artifact.display_data);
   if (artifact.display_data !== null && Object.keys(displayData).length === 0) return FALLBACK_RENDERER;

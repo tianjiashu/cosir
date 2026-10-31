@@ -27,8 +27,8 @@ describe("image-read display", () => {
   });
 
   it("routes read_image by display kind, falling back on bad payloads", () => {
-    expect(routeToolPart("read_image", { presentation: {}, display_data: DISPLAY })).toBe("details");
-    expect(routeToolPart("read_image", { presentation: {}, display_data: { kind: "image-read" } })).toBe("fallback");
+    expect(routeToolPart({ presentation: {}, display_data: DISPLAY })).toBe("details");
+    expect(routeToolPart({ presentation: {}, display_data: { kind: "image-read" } })).toBe("fallback");
   });
 
   it("summarizes image count and partial failures", () => {

@@ -16,7 +16,7 @@ export { routeToolPart } from "./tool-renderer-registry";
  * 在这里对所有工具统一挂载，renderer 不感知。
  */
 const ToolPartImpl = (props: ToolPartRendererProps) => {
-  const Renderer = resolveToolRenderer(props.toolName, props.artifact).renderer;
+  const Renderer = resolveToolRenderer(props.artifact).renderer;
   const { taskId, interactive = true } = props;
   // `data-tool-call-id` 供看板按调用定位到这张卡片。
   return (
