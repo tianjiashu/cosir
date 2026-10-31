@@ -8,7 +8,6 @@ import { activity, transportState, userMessage } from "./transport-fixtures";
 
 const command = (text: string): UserAddMessageCommand => ({
   type: "add-message",
-  commandId: `c-${text}`,
   message: { role: "user", parts: [{ type: "text", text }] },
 });
 

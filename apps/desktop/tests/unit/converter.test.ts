@@ -36,7 +36,7 @@ const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportT
 
 describe("assistant transport converter", () => {
   it("乐观用户消息复用渲染上下文，保持身份与附件顺序且不伪造 Run 事实", () => {
-    const command = { type: "add-message", commandId: "pending-context", message: { role: "user", parts: [
+    const command = { type: "add-message", message: { role: "user", parts: [
       { type: "text", text: "查看文件和图片" },
       { type: "file", data: "cosir-local-file:one", filename: "notes.md", mimeType: "text/markdown" },
       { type: "image", image: "cosir-attachment://image-one" },
@@ -134,7 +134,7 @@ describe("assistant transport converter", () => {
 
   // 目的：乐观消息与后端 canonical 同形，气泡在原位渲染文件、Skill 胶囊，canonical 到达时附件不挪位。
   it("乐观消息把文件 token 换成原位 file part，并物化 Skill 标记", () => {
-    const pending = toPendingUserMessage({ type: "add-message", commandId: "pending-tokens", message: { role: "user", parts: [
+    const pending = toPendingUserMessage({ type: "add-message", message: { role: "user", parts: [
       { type: "text", text: "请用 [[cosir-skill:review-code]] 看 [[cosir-file:file-1]] 和 `[[cosir-file:file-2]]`" },
       { type: "file", data: "cosir-local-file:file-1", filename: "notes.md", mimeType: "text/markdown" },
       { type: "file", data: "cosir-local-file:file-3", filename: "extra.md", mimeType: "text/markdown" },
@@ -150,7 +150,7 @@ describe("assistant transport converter", () => {
 
   it("输入框里只有 token 的普通文件从本机登记取名称并占住原位", () => {
     registerInlineFileMetadata({ id: "token-only", name: "plan.md", contentType: "text/markdown" });
-    const pending = toPendingUserMessage({ type: "add-message", commandId: "pending-token-only", message: { role: "user", parts: [
+    const pending = toPendingUserMessage({ type: "add-message", message: { role: "user", parts: [
       { type: "text", text: "[[cosir-file:token-only]] 和 [[cosir-file:token-only]][[cosir-file:gone]]" },
     ] } });
 

@@ -48,9 +48,7 @@ export function isContinuedEditSession(runConfig: RunConfig | undefined): boolea
 
 export type UserAddMessageCommand = {
   type: "add-message";
-  commandId?: string;
   sourceId?: string | null;
-  parentId?: string | null;
   message: {
     role: "user";
     attachments?: ReadonlyArray<{
@@ -87,11 +85,10 @@ export type TransportMessageRenderContext = {
 const optimisticCommandIds = new WeakMap<object, string>();
 
 /**
- * 为一个 assistant-ui command 提供稳定的幂等标识。
+ * 为一条乐观命令提供稳定的消息标识（`toPendingUserMessage` 据此生成乐观消息 id）。
  *
- * WeakMap 保证同一个 runtime 内，converter 和 request transformer 对同一
- * command 使用同一个 ID；UUID 保证 WebView/页面重载后重新创建的模块实例
- * 不会从相同的递增序列重新开始，避免命令 ID 撞上后端已有记录。
+ * WeakMap 保证同一条 command 每次转换都得到同一个 id，乐观消息在重渲染间保持身份；
+ * UUID 保证页面重载后重新创建的模块实例不会从相同序列重新开始。
  */
 export function getOrCreateTransportCommandId(command: object): string {
   const existing = optimisticCommandIds.get(command);

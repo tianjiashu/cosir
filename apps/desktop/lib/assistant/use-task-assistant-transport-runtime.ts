@@ -213,7 +213,6 @@ export function toAddMessageCommand(message: AppendMessage): UserAddMessageComma
   return {
     type: "add-message",
     sourceId: message.sourceId,
-    parentId: message.parentId,
     message: { role: "user", parts },
   };
 }

@@ -24,9 +24,8 @@ const mutation = (mutations: TransportFrameEnvelope["mutations"]): TransportFram
 });
 const full = (state: TransportState): TransportFrameEnvelope => ({ task_id: 1, kind: "full", mutations: [], state });
 
-const command = (text: string, commandId?: string): UserAddMessageCommand => ({
+const command = (text: string): UserAddMessageCommand => ({
   type: "add-message",
-  ...(commandId ? { commandId } : {}),
   message: { role: "user", parts: [{ type: "text", text }] },
 });
 
@@ -277,13 +276,13 @@ describe("TransportFrameStore 运行中判定（D3）", () => {
 describe("TransportFrameStore 乐观命令收敛（D8）", () => {
   it("snapshot 出现新的用户消息才清除对应的乐观命令，活动与内容变化不清", () => {
     const store = new TransportFrameStore(transportState({ messages: [userMessage("1", 1)], activity: activity(1, "completed") }));
-    store.setPendingCommands([command("first", "c1"), command("second", "c2")]);
+    store.setPendingCommands([command("first"), command("second")]);
 
     store.applyFrame(mutation([{ kind: "set", path: ["activity"], value: activity(2, "running") }]));
     expect(store.getSnapshot().pendingCommands).toHaveLength(2);
 
     store.applyFrame(mutation([{ kind: "set", path: ["messages", 1], value: userMessage("2", 2, "first") }]));
-    expect(store.getSnapshot().pendingCommands.map((item) => item.commandId)).toEqual(["c2"]);
+    expect(store.getSnapshot().pendingCommands.map((item) => item.message.parts[0])).toEqual([{ type: "text", text: "second" }]);
 
     store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [queuedMessage("3", "second")] }]));
     expect(store.getSnapshot().pendingCommands).toEqual([]);
@@ -291,8 +290,8 @@ describe("TransportFrameStore 乐观命令收敛（D8）", () => {
 
   it("clears only the rejected command pending projection", () => {
     const store = new TransportFrameStore(transportState());
-    const first = command("first", "command-1");
-    const second = command("second", "command-2");
+    const first = command("first");
+    const second = command("second");
     store.setPendingCommands([first, second]);
     store.clearPendingCommand(first);
     expect(store.getSnapshot().pendingCommands).toEqual([second]);

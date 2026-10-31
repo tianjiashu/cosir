@@ -267,14 +267,10 @@ export class TransportFrameStore {
     this.publish(null, "pending");
   }
 
-  /** 去掉被拒的那条乐观命令：有 commandId 按身份匹配，否则按引用匹配。 */
+  /** 去掉被拒的那条乐观命令（按引用匹配：提交方拿着的就是放进来的同一个对象）。 */
   public clearPendingCommand(rejected: UserAddMessageCommand): void {
     if (this.pendingCommands.length === 0) return;
-    this.pendingCommands = this.pendingCommands.filter((command) => (
-      typeof command.commandId === "string"
-        ? command.commandId !== rejected.commandId
-        : command !== rejected
-    ));
+    this.pendingCommands = this.pendingCommands.filter((command) => command !== rejected);
     this.composeItems();
     this.publish(null, "pending");
   }
