@@ -44,6 +44,35 @@ test("starts the host, reaches the workspace shell and isolates its data under t
   }
 });
 
+/** 读出临时数据根下全部后端结构化日志行里的事件名（含同日大小分片）。 */
+function backendLogEvents(home: string): string[] {
+  const logDir = path.join(home, ".cosir", "logs");
+  if (!fs.existsSync(logDir)) return [];
+  return fs.readdirSync(logDir)
+    .filter((name) => name.startsWith("backend-") && !name.startsWith("backend-console") && name.endsWith(".log"))
+    .flatMap((name) => fs.readFileSync(path.join(logDir, name), "utf8").split("\n"))
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return String((JSON.parse(line) as { event?: unknown }).event ?? "");
+      } catch {
+        return "";
+      }
+    });
+}
+
+// 宿主工具链路：宿主用注入后端的同一个 token 连上 `/host/link`；token 不一致时后端只会记 host_link_rejected。
+test("the host connects its tool link to the backend", async () => {
+  const { app, page, home } = await launchDesktop();
+  try {
+    await expect(page.getByRole("navigation", { name: "工作区任务列表" })).toBeVisible({ timeout: 120_000 });
+    await expect.poll(() => backendLogEvents(home).includes("host_link_connected"), { timeout: 15_000 }).toBe(true);
+    expect(backendLogEvents(home)).not.toContain("host_link_rejected");
+  } finally {
+    await app.close();
+  }
+});
+
 test("closing the main window only hides it; the backend keeps running", async () => {
   const { app, page } = await launchDesktop();
   try {

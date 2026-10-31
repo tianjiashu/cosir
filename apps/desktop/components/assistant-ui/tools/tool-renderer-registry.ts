@@ -1,6 +1,8 @@
 import type { ComponentType } from "react";
 import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 
+import { BrowserPageTool } from "./browser-page-tool";
+import { readBrowserPageDisplay } from "./browser-page-display";
 import { DelegationToolRow } from "./delegation-tool-row";
 import { DetailsTool } from "./details-tool";
 import { DiffTool } from "./diff-tool";
@@ -13,7 +15,7 @@ import { AgentTeamExecutionCard } from "./agent-team-execution-card";
 import { AgentTeamConfigurationTool } from "./agent-team-configuration-tool";
 import { readAgentTeamConfigurationDraftDisplay, readAgentTeamPreviewDisplay } from "./agent-team-display";
 import { readAgentConfigurationDraftDisplay } from "./agent-configuration-draft-display";
-import { readChildAgentResultDisplay, readDelegationDisplay } from "./child-agent-display";
+import { readDelegationDisplay } from "./child-agent-display";
 import { asRecord, readToolArtifact, type ToolArtifact } from "./types";
 import { DETAIL_VIEWS } from "./details/detail-views";
 
@@ -22,6 +24,7 @@ export type ToolPartRoute =
   | "terminal"
   | "terminal-session"
   | "delegation"
+  | "browser-page"
   | "agent-configuration-draft"
   | "agent-team-approval"
   | "agent-team-execution"
@@ -97,6 +100,12 @@ const TOOL_RENDERER_DEFINITIONS: readonly ToolRendererDefinition[] = [
     accepts: (artifact) => readDelegationDisplay(artifact.display_data) !== null,
   },
   {
+    route: "browser-page",
+    renderer: BrowserPageTool,
+    kinds: ["browser-page"],
+    accepts: (artifact) => readBrowserPageDisplay(artifact.display_data) !== null,
+  },
+  {
     route: "diff",
     renderer: DiffTool,
     kinds: ["file-changes"],
@@ -117,8 +126,10 @@ const TOOL_RENDERER_DEFINITIONS: readonly ToolRendererDefinition[] = [
     route: "details",
     renderer: DetailsTool,
     kinds: Object.keys(DETAIL_VIEWS),
-    accepts: (artifact) => asRecord(artifact.display_data).kind !== "child-agent-result"
-      || readChildAgentResultDisplay(artifact.display_data) !== null,
+    accepts: (artifact) => {
+      const data = asRecord(artifact.display_data);
+      return DETAIL_VIEWS[data.kind as string]?.accepts?.(data) ?? true;
+    },
     matchesPresentation: ({ presentation }) => presentation.expand_layout === "details"
       || presentation.expand_layout === "list"
       || presentation.expand_layout === "write"

@@ -50,7 +50,7 @@ describe("Transport snapshot validation", () => {
 
     const snapshot = transportState({
       terminal_sessions: [
-        terminalSession("t1", { createdBy: "agent", label: "dev server", handoff: { reason: "需要 sudo 密码", toolCallId: "call-handoff" } }),
+        terminalSession("t1", { createdBy: "agent", label: "dev server" }),
         terminalSession("t2", { status: "exited", exitCode: 0, endReason: "shell_exited", integration: "unavailable" }),
       ],
     });
@@ -66,9 +66,24 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(transportState({
       terminal_sessions: [{ ...terminalSession("t1"), generation: "g1" } as never],
     }))).toThrow(TransportSnapshotValidationError);
+    // 交接不在会话条目上，在顶层 `handoffs`。
     expect(() => parseTransportState(transportState({
-      terminal_sessions: [terminalSession("t1", { handoff: { reason: "x", extra: 1 } as never })],
-    }))).toThrow(/handoff/);
+      terminal_sessions: [{ ...terminalSession("t1"), handoff: null } as never],
+    }))).toThrow(TransportSnapshotValidationError);
+  });
+
+  it("handoffs 是必填数组：字段固定、资源类型受控、调用与资源各自唯一", () => {
+    const withoutHandoffs: Record<string, unknown> = { ...transportState() };
+    delete withoutHandoffs.handoffs;
+    expect(() => parseTransportState(withoutHandoffs)).toThrow(/snapshot/);
+
+    const entry = { toolCallId: "c1", toolName: "browser_handoff", surface: "browser" as const, resourceId: "t1", reason: "登录" };
+    const snapshot = transportState({ handoffs: [entry, { ...entry, toolCallId: "c2", surface: "terminal", resourceId: "t1" }] });
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+
+    expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, surface: "editor" } as never] }))).toThrow(/handoffs\[0\]\.surface/);
+    expect(() => parseTransportState(transportState({ handoffs: [entry, { ...entry, toolCallId: "c2" }] }))).toThrow(/handoffs\[1\]/);
+    expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, extra: 1 } as never] }))).toThrow(TransportSnapshotValidationError);
   });
 
   it("rejects a missing messages field instead of treating it as an empty conversation", () => {

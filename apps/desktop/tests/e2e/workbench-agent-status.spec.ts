@@ -17,7 +17,7 @@ function snapshot(runId: number | null, status = "completed", text = "阅读内�
     messageOffset: 0,
     activity: { runId, status, endReason: null, error: null, usage: null, contextWindowTotal: null,
       launch: { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: [] } },
-    terminal_sessions: [], background_tasks: [], foreground_waits: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 }
 type Snapshot = ReturnType<typeof snapshot>;

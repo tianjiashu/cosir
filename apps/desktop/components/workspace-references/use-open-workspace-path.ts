@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { WorkspaceReference } from "@/lib/workspace-references/codec";
-import { useWorkbenchStore } from "@/lib/workbench/store";
+import { useDockStore } from "@/lib/layout/dock-store";
 import { parentsOf, useFilesStore } from "@/lib/workspace-files/store";
 import { toWorkspacePath } from "@/lib/workspace-files/workspace-path";
 import { useReferenceBridge } from "./reference-bridge";
@@ -8,14 +8,14 @@ import { useReferenceBridge } from "./reference-bridge";
 export type WorkspacePathOpener = {
   /** 换算成工作区相对路径；不可打开（工作区外、越界）时返回 null。 */
   resolve: (rawPath: string) => string | null;
-  /** 在工作台文件面板打开文件标签；`path` 须是工作区相对路径，`excerpt` 是要先展示的引用快照。 */
+  /** 在文件面板打开文件标签；`path` 须是工作区相对路径，`excerpt` 是要先展示的引用快照。 */
   openFile: (path: string, excerpt?: WorkspaceReference) => void;
   /** 在文件树里展开并定位目录。 */
   openDirectory: (path: string) => void;
 };
 
 /**
- * 在工作台文件面板里打开当前工作区路径的唯一入口（引用胶囊、工具卡片、正文路径、终端链接共用）。
+ * 在文件面板里打开当前工作区路径的唯一入口（引用胶囊、工具卡片、正文路径、终端链接共用）。
  *
  * 当前工作区来自 `ReferenceBridgeProvider`；没有活动工作区时返回 null，调用方渲染为
  * 纯文本。只改前端面板状态，不读文件、不访问后端。
@@ -27,7 +27,8 @@ export function useOpenWorkspacePath(): WorkspacePathOpener | null {
 
   return useMemo(() => {
     if (workspaceId === null || !workspaceRoot) return null;
-    const showFiles = () => useWorkbenchStore.getState().openFiles(workspaceId);
+    // 文件面板显示当前工作区的文件状态（`useFilesStore` 按工作区存放），这里只需把它亮出来。
+    const showFiles = () => useDockStore.getState().show("files");
     return {
       resolve: (rawPath) => toWorkspacePath(workspaceRoot, rawPath),
       openFile: (path, excerpt) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import type { FC, PropsWithChildren } from "react";
+import { createContext, useContext, useMemo, type FC, type PropsWithChildren } from "react";
 import {
   ComposerPrimitive,
   unstable_useComposerInput,
@@ -8,14 +8,21 @@ import {
   useAui,
 } from "@assistant-ui/react";
 import { Button } from "@/components/ui/button";
-import { useAttachmentSrc } from "@/hooks/use-attachment-src";
+import type { Attachment } from "@assistant-ui/react";
+import { resolveTransportImageSrc, useObjectUrls } from "@/hooks/use-attachment-src";
+import { useImageGallery } from "@/components/image-gallery";
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
-import { ImageAttachmentCard, ImageAttachmentStrip } from "@/components/composer/image-attachment-card";
+import { ImageAttachmentStrip } from "@/components/composer/image-attachment-strip";
+import { ImageThumbnail } from "@/components/image-thumbnail";
 import { AttachmentPicker } from "@/components/composer/attachment-picker";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
+import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
 import { useTaskComposerDraft } from "@/components/composer/use-task-composer-draft";
 import { ComposerEditor } from "@/components/composer/composer-editor";
 
+
+/** 输入框图片组：缩略图与灯箱共用的地址，以及按附件 id 打开灯箱。 */
+const ComposerImagesContext = createContext<{ srcById: ReadonlyMap<string, string | undefined>; open: (id: string) => void } | null>(null);
 
 /**
  * 输入框附件条里的一张图片：把 assistant-ui 的附件状态映射成共用缩略图的参数。
@@ -23,30 +30,68 @@ import { ComposerEditor } from "@/components/composer/composer-editor";
  */
 const ComposerImageAttachment: FC = () => {
   const aui = useAui();
-  const src = useAttachmentSrc(useAttachmentWorkspaceId());
+  const images = useContext(ComposerImagesContext)!;
+  const id = useAuiState((s) => s.attachment.id);
   const name = useAuiState((s) => s.attachment.name);
   const status = useAuiState((s) => s.attachment.status);
   const failed = status.type === "incomplete" && status.reason === "error";
   return (
-    <ImageAttachmentCard
-      src={src}
+    <ImageThumbnail
+      src={images.srcById.get(id)}
       name={name}
       state={status.type === "running" ? "uploading" : failed ? "error" : "ready"}
       errorMessage={failed ? (status.message ?? "上传失败") : undefined}
       onRemove={() => void aui.attachment.remove()}
+      onOpen={() => images.open(id)}
     />
   );
 };
 
+/** 待发图片的地址：本地文件取对象 URL，已上传的（编辑重跑放回输入框的）按附件定位解析。 */
+function composerImageSrc(attachment: Attachment, urls: ReadonlyMap<File, string>, workspaceId: number | undefined) {
+  if (attachment.file) return urls.get(attachment.file);
+  const image = attachment.content?.find((part) => part.type === "image")?.image;
+  return image ? resolveTransportImageSrc(image, workspaceId) : undefined;
+}
+
+/**
+ * 输入框的待发图片条。地址与放大预览在这一层建一次：灯箱能在全部待发图片间翻看，
+ * 单张缩略图只经上下文取自己的地址。
+ */
 export const ComposerAttachments: FC = () => {
+  const workspaceId = useAttachmentWorkspaceId();
+  const attachments = useAuiState((s) => s.composer.attachments);
+  const images = useMemo(() => attachments.filter((attachment) => attachment.type === "image"), [attachments]);
+  const urls = useObjectUrls(useMemo(() => images.flatMap((image) => (image.file ? [image.file] : [])), [images]));
+  const gallery = useImageGallery(useMemo(
+    () => images.map((image) => ({ src: composerImageSrc(image, urls, workspaceId), alt: image.name })),
+    [images, urls, workspaceId],
+  ));
+  const context = useMemo(() => ({
+    srcById: new Map(images.map((image) => [image.id, composerImageSrc(image, urls, workspaceId)])),
+    open: (id: string) => gallery.open(images.findIndex((image) => image.id === id)),
+  }), [gallery.open, images, urls, workspaceId]);
+
   return (
-    <ImageAttachmentStrip>
-      <ComposerPrimitive.Attachments>
-        {({ attachment }) => attachment.type === "image" ? <ComposerImageAttachment /> : null}
-      </ComposerPrimitive.Attachments>
-    </ImageAttachmentStrip>
+    <ComposerImagesContext.Provider value={context}>
+      <ImageAttachmentStrip>
+        <ComposerPrimitive.Attachments>
+          {({ attachment }) => attachment.type === "image" ? <ComposerImageAttachment /> : null}
+        </ComposerPrimitive.Attachments>
+      </ImageAttachmentStrip>
+      {gallery.lightbox}
+    </ComposerImagesContext.Provider>
   );
 };
+
+/** assistant-ui composer 作为附件入口的图片集合；数量现读 composer 状态，不订阅。 */
+function useComposerImageSink(): ComposerImageSink {
+  const aui = useAui();
+  return {
+    add: (file) => aui.composer.addAttachment(file),
+    count: () => aui.composer().getState().attachments.filter((attachment) => attachment.type === "image").length,
+  };
+}
 
 /**
  * 输入框的提交开关：回车与发送按钮共用。
@@ -111,8 +156,7 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
 }) => {
   const composer = unstable_useComposerInput();
   const restoringDraft = useTaskComposerDraft(persistTaskDraft);
-  const aui = useAui();
-  const addFiles = useComposerFiles((file) => aui.composer.addAttachment(file));
+  const addFiles = useComposerFiles(useComposerImageSink());
   const { canSubmit, submit } = useComposerSubmit(submitDisabled);
 
   return (
@@ -134,12 +178,12 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
 };
 
 export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: boolean }> = ({ workspaceRoot, disabled = false }) => {
-  const aui = useAui();
+  const images = useComposerImageSink();
   return (
     <AttachmentPicker
       workspaceRoot={workspaceRoot}
       disabled={disabled}
-      addImage={(file) => aui.composer.addAttachment(file)}
+      images={images}
     />
   );
 };

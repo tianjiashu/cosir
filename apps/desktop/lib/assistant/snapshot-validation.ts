@@ -252,7 +252,7 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   const session = requireRecord(value, path);
   requireExactKeys(session, [
     "sessionId", "label", "shellKind", "createdBy", "status", "endReason", "exitCode",
-    "integration", "commandRunning", "handoff", "createdAt",
+    "integration", "commandRunning", "createdAt",
   ], path);
   const sessionId = requireString(session.sessionId, `${path}.sessionId`);
   if (sessionId === "" || seenIds.has(sessionId)) throw new TransportSnapshotValidationError(`${path}.sessionId`, "非空且在 Task 内唯一");
@@ -265,14 +265,6 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   if (session.exitCode !== null && !Number.isInteger(session.exitCode)) throw new TransportSnapshotValidationError(`${path}.exitCode`, "整数或 null");
   if (!(TERMINAL_INTEGRATION_STATES as readonly unknown[]).includes(session.integration)) throw new TransportSnapshotValidationError(`${path}.integration`, "受支持的集成状态");
   if (typeof session.commandRunning !== "boolean") throw new TransportSnapshotValidationError(`${path}.commandRunning`, "布尔值");
-  if (session.handoff !== null) {
-    const handoff = requireRecord(session.handoff, `${path}.handoff`);
-    requireExactKeys(handoff, ["reason", "toolCallId"], `${path}.handoff`);
-    requireString(handoff.reason, `${path}.handoff.reason`);
-    if (requireString(handoff.toolCallId, `${path}.handoff.toolCallId`) === "") {
-      throw new TransportSnapshotValidationError(`${path}.handoff.toolCallId`, "非空字符串");
-    }
-  }
   requireString(session.createdAt, `${path}.createdAt`);
 }
 
@@ -323,7 +315,7 @@ function validateMessages(value: unknown, path: string, ids: Set<string>): void 
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["title", "messages", "messageOffset", "activity", "terminal_sessions", "background_tasks", "foreground_waits", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  requireExactKeys(state, ["title", "messages", "messageOffset", "activity", "terminal_sessions", "background_tasks", "foreground_waits", "handoffs", ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
   if (typeof state.title !== "string" || state.title.trim() === "") throw new TransportSnapshotValidationError("title", "非空字符串");
   const ids = new Set<string>();
   validateMessages(state.messages, "messages", ids);
@@ -352,6 +344,25 @@ export function parseTransportState(value: unknown): TransportState {
     const toolCallId = requireString(value, `foreground_waits[${index}]`);
     if (toolCallId === "" || foregroundIds.has(toolCallId)) throw new TransportSnapshotValidationError(`foreground_waits[${index}]`, "非空且在 Task 内唯一");
     foregroundIds.add(toolCallId);
+  });
+  if (!Array.isArray(state.handoffs)) throw new TransportSnapshotValidationError("handoffs", "数组");
+  const handoffCalls = new Set<string>();
+  const handoffResources = new Set<string>();
+  state.handoffs.forEach((raw, index) => {
+    const path = `handoffs[${index}]`;
+    const entry = requireRecord(raw, path);
+    requireExactKeys(entry, ["toolCallId", "toolName", "surface", "resourceId", "reason"], path);
+    const toolCallId = requireString(entry.toolCallId, `${path}.toolCallId`);
+    const resourceId = requireString(entry.resourceId, `${path}.resourceId`);
+    requireString(entry.toolName, `${path}.toolName`);
+    requireString(entry.reason, `${path}.reason`);
+    if (entry.surface !== "terminal" && entry.surface !== "browser") throw new TransportSnapshotValidationError(`${path}.surface`, "terminal 或 browser");
+    const resource = `${entry.surface}:${resourceId}`;
+    if (toolCallId === "" || resourceId === "" || handoffCalls.has(toolCallId) || handoffResources.has(resource)) {
+      throw new TransportSnapshotValidationError(path, "调用与资源非空且唯一");
+    }
+    handoffCalls.add(toolCallId);
+    handoffResources.add(resource);
   });
   return state as unknown as TransportState;
 }

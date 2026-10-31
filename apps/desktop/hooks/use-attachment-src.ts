@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useAuiState } from "@assistant-ui/react";
-import { useShallow } from "zustand/react/shallow";
+import { useEffect, useRef, useState } from "react";
 import { getApiBaseUrl } from "@/lib/http/client";
 
+/** 把 Transport 图片定位（`cosir-attachment://<asset id>`）解析为可显示地址；data/blob/http(s) 原样放行，其余为 undefined。 */
 export const resolveTransportImageSrc = (
   src: string,
   workspaceId?: number,
@@ -16,37 +15,34 @@ export const resolveTransportImageSrc = (
   return /^(?:data:|blob:|https?:\/\/)/i.test(src) ? src : undefined;
 };
 
-const useFileSrc = (file: File | undefined) => {
-  const [entry, setEntry] = useState<{ file: File; url: string } | undefined>(
-    undefined,
-  );
+/**
+ * 为一组本地 `File` 维护对象 URL：新出现的文件建一个，离开列表的立即释放，卸载时全部释放。
+ *
+ * 在图片组这一层建一次，缩略图与灯箱共用同一个地址；`files` 的引用变化才重新对账，调用方应传入
+ * 稳定的数组（store 里的列表或 `useMemo` 结果）。未建好之前（首帧）对应文件没有地址，缩略图显示占位。
+ */
+export function useObjectUrls(files: readonly File[]): ReadonlyMap<File, string> {
+  const cache = useRef(new Map<File, string>());
+  const [urls, setUrls] = useState<ReadonlyMap<File, string>>(() => new Map());
 
   useEffect(() => {
-    if (!file) return;
-    const objectUrl = URL.createObjectURL(file);
-    const timer = window.setTimeout(() => {
-      setEntry({ file, url: objectUrl });
-    }, 0);
-    return () => {
-      window.clearTimeout(timer);
-      URL.revokeObjectURL(objectUrl);
-    };
-  }, [file]);
+    const current = cache.current;
+    for (const [file, url] of current) {
+      if (!files.includes(file)) {
+        URL.revokeObjectURL(url);
+        current.delete(file);
+      }
+    }
+    for (const file of files) {
+      if (!current.has(file)) current.set(file, URL.createObjectURL(file));
+    }
+    setUrls(new Map(current));
+  }, [files]);
 
-  return file && entry && entry.file === file ? entry.url : undefined;
-};
+  useEffect(() => () => {
+    for (const url of cache.current.values()) URL.revokeObjectURL(url);
+    cache.current.clear();
+  }, []);
 
-export const useAttachmentSrc = (workspaceId?: number) => {
-  const { file, src } = useAuiState(
-    useShallow((s): { file?: File; src?: string } => {
-      if (s.attachment.type !== "image") return {};
-      if (s.attachment.file) return { file: s.attachment.file };
-      const src = s.attachment.content?.filter((c) => c.type === "image")[0]
-        ?.image;
-      if (!src) return {};
-      return { src };
-    }),
-  );
-
-  return useFileSrc(file) ?? (src ? resolveTransportImageSrc(src, workspaceId) : undefined);
-};
+  return urls;
+}

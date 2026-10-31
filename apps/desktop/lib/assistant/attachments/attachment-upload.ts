@@ -12,6 +12,12 @@ export type UploadedAttachment = {
   status: "ready";
 };
 
+/**
+ * 一条消息最多携带的图片数。镜像后端 `Constant.Attachment.MAX_IMAGES_PER_REQUEST`（事实源在后端，发送时
+ * 按它拒绝整条消息）；前端在添加入口先拦下，避免选了超量图片、发送时逐张上传完才被整体拒绝。
+ */
+export const MAX_IMAGES_PER_MESSAGE = 20;
+
 const SUPPORTED_IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png"]);
 const UNSUPPORTED_IMAGE_EXTENSIONS = new Set(["gif", "webp", "bmp", "tif", "tiff"]);
 

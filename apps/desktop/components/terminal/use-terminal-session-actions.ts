@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { TerminalSessionEntry } from "@/lib/assistant/contract";
-import { submitToolDecision } from "@/lib/assistant/task-commands";
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { closeTerminalSession, createTerminalSession } from "@/lib/terminal/terminal-api";
 import type { TerminalNotice } from "@/lib/terminal/terminal-pane-status";
@@ -14,7 +12,8 @@ import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-sto
 const NOTICE_MS = 4000;
 
 /**
- * 用户新建 / 关闭终端会话、接管 Agent 输入与交还交接：HTTP 命令、失败短提示、日志与之后的选中 / 收起。
+ * 用户新建 / 关闭终端会话、接管 Agent 输入：HTTP 命令、失败短提示、日志与之后的选中 / 收起。交还交接见
+ * `lib/handoff/use-hand-back.ts`。
  *
  * 会话列表只读 snapshot：命令成功后不改本地列表，等 snapshot 回推；这里只调整选中与面板开合。
  */
@@ -24,7 +23,6 @@ export function useTerminalSessionActions(
   tabs: readonly TerminalTab[],
 ) {
   const [creating, setCreating] = useState(false);
-  const [returningHandoff, setReturningHandoff] = useState(false);
   const [notice, setNotice] = useState<TerminalNotice | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const creatingRef = useRef(false);
@@ -105,28 +103,5 @@ export function useTerminalSessionActions(
     }
   };
 
-  /**
-   * 交还交接：交接是 HITL 调用（`terminal_handoff`），交还即对它作出决定；成功后交接提示随 snapshot
-   * 消失，Agent 被唤醒。已提交或已不在等待（409）只是重复点击或会话刚结束，平静提示即可。
-   */
-  const returnHandoff = useCallback(async (session: TerminalSessionEntry) => {
-    if (session.handoff === null || returningHandoff) return;
-    setReturningHandoff(true);
-    try {
-      await submitToolDecision(taskId, session.handoff.toolCallId, { decision: "approve" });
-      void frontendLog("INFO", "terminal_handoff_returned", "用户交还终端输入权", {
-        data: { taskId, sessionId: session.sessionId, toolCallId: session.handoff.toolCallId },
-      });
-    } catch (error) {
-      const conflict = error instanceof HttpError && error.status === 409;
-      flashNotice({
-        text: conflict ? "交接已处理，稍后会同步" : userErrorMessage(error, "交还失败，请稍后重试"),
-        tone: conflict ? "muted" : "destructive",
-      });
-    } finally {
-      setReturningHandoff(false);
-    }
-  }, [flashNotice, returningHandoff, taskId]);
-
-  return { creating, notice, createSession, closeTab, returnHandoff, returningHandoff };
+  return { creating, notice, createSession, closeTab };
 }

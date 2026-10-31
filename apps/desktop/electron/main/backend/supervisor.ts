@@ -38,6 +38,9 @@ export class BackendSupervisor {
   private starting: Promise<void> | null = null;
   private readonly listeners = new Set<(snapshot: BackendSnapshot) => void>();
 
+  /** `hostToken` 在宿主进程生命周期内不变，每次拉起后端都注入同一个值。 */
+  constructor(private readonly hostToken: string) {}
+
   snapshot(): BackendSnapshot {
     return { generation: this.generation, status: this.status, backendBaseUrl: this.backendBaseUrl };
   }
@@ -122,6 +125,7 @@ export class BackendSupervisor {
         bootstateFile,
         dataDir: systemDataRoot(),
         consoleLogFile: path.join(appLogDir(), "backend-console.log"),
+        hostToken: this.hostToken,
       });
       let spawnError: Error | null = null;
       child.once("error", (error) => {

@@ -48,13 +48,18 @@ async function seedDrafts(page: Page, team = false) {
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toBeVisible();
 }
 
-/** 各工作区桶里的标签 id 与面板开合。 */
+/** 各工作区桶里的标签 id（空桶不列），以及右侧停靠区当前显示的面板。 */
 async function state(page: Page) {
   return page.evaluate(async () => {
     const modulePath = "/lib/workbench/store.ts";
+    const dockModulePath = "/lib/layout/dock-store.ts";
     const { useWorkbenchStore } = await import(modulePath);
-    const sessions: Record<number, { tabs: { id: string }[]; panelOpen: boolean }> = useWorkbenchStore.getState().sessions;
-    return Object.fromEntries(Object.entries(sessions).map(([id, session]) => [id, { tabs: session.tabs.map((tab) => tab.id), panelOpen: session.panelOpen }]));
+    const { useDockStore } = await import(dockModulePath);
+    const sessions: Record<number, { tabs: { id: string }[] }> = useWorkbenchStore.getState().sessions;
+    const tabs = Object.fromEntries(Object.entries(sessions)
+      .filter(([, session]) => session.tabs.length > 0)
+      .map(([id, session]) => [id, session.tabs.map((tab) => tab.id)]));
+    return { tabs, panel: useDockStore.getState().panel as string | null };
   });
 }
 
@@ -109,7 +114,7 @@ test("收起入口保留编辑；切到其他工作区的任务不确认、不�
   await expect(page).toHaveURL(/\/tasks\/100$/);
   await expect(page.getByRole("tab", { name: /未保存Team/ })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "描述", exact: true })).toHaveValue("新的草稿内容");
-  expect((await state(page))[7]).toEqual({ tabs: ["agent-team-config-draft:team", "agent-config-draft:draft"], panelOpen: true });
+  expect(await state(page)).toEqual({ tabs: { 7: ["agent-team-config-draft:team", "agent-config-draft:draft"] }, panel: "workbench" });
 });
 
 test("同工作区任务和配置页保活草稿，真正关闭仍确认", async ({ page }) => {
@@ -125,7 +130,7 @@ test("同工作区任务和配置页保活草稿，真正关闭仍确认", async
   await page.getByRole("button", { name: "关闭 未保存Agent", exact: true }).click();
   await expect(switchDialog(page)).toContainText("关闭配置草稿");
   await switchDialog(page).getByRole("button", { name: "取消", exact: true }).click();
-  expect((await state(page))[7].tabs).toHaveLength(1);
+  expect((await state(page)).tabs[7]).toHaveLength(1);
 });
 
 test("新对话页选择其他工作区和命令面板跳转都不确认，各工作区的工作台互不影响", async ({ page }) => {
@@ -135,8 +140,9 @@ test("新对话页选择其他工作区和命令面板跳转都不确认，各�
   await expect(switchDialog(page)).toHaveCount(0);
   await expect(page.getByRole("treeitem", { name: "工作区8", exact: true })).toHaveAttribute("aria-current", "true");
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toHaveCount(0);
+  // 文件是独立面板，不进工作台的标签桶。
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
-  await expect(page.getByRole("tab", { name: /文件/ })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "文件" })).toBeVisible();
 
   await page.getByRole("navigation", { name: "当前位置" }).click();
   const modifier = await page.evaluate(() => /mac/i.test(navigator.userAgent) ? "Meta" : "Control");
@@ -144,11 +150,11 @@ test("新对话页选择其他工作区和命令面板跳转都不确认，各�
   await page.getByRole("dialog", { name: "命令面板" }).getByRole("combobox").fill("任务100");
   await page.getByRole("option", { name: /任务100/ }).click();
   await expect(page).toHaveURL(/\/tasks\/100$/);
+  await expect(page.getByRole("complementary", { name: "文件" })).toBeVisible();
+  await page.getByRole("button", { name: /工作台，1 个标签，点击打开/ }).click();
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toBeVisible();
-  expect(await state(page)).toEqual({
-    7: { tabs: ["agent-config-draft:draft"], panelOpen: true },
-    8: { tabs: ["workspace-files"], panelOpen: true },
-  });
+  // 停靠区是全局的一个选择：工作区 7 的工作台有标签，回到它时仍是刚才选中的文件面板，切到工作台后草稿原样还在。
+  expect(await state(page)).toEqual({ tabs: { 7: ["agent-config-draft:draft"] }, panel: "workbench" });
 });
 
 test("切换工作台快捷键收起与展开当前工作区的工作台", async ({ page }) => {

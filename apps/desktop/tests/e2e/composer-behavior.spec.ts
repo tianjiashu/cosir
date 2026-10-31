@@ -39,6 +39,17 @@ async function transfer(input: Locator, kind: "paste" | "drop", name: string, ty
   }, { kind, name, type, text });
 }
 
+/** 一次粘贴多张图片（同一个剪贴板事件），模拟一次选中一批文件。 */
+async function pasteImages(input: Locator, names: readonly string[]) {
+  await input.focus();
+  await input.evaluate((element, names) => {
+    const data = new DataTransfer();
+    const bytes = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9X8AAAAASUVORK5CYII="), c => c.charCodeAt(0));
+    for (const name of names) data.items.add(new File([bytes], name, { type: "image/png" }));
+    element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  }, names);
+}
+
 async function openComposer(page: Page, mode: "new" | "task") {
   await installFakeDesktopHost(page);
   await page.goto(mode === "new" ? "/" : "/tasks/100");
@@ -153,6 +164,17 @@ for (const mode of ["new", "task"] as const) {
     await expect(input.locator("[data-attachment-token]")).toHaveCount(0);
     await expect(send).toBeEnabled();
   });
+
+  // 目的：超量图片在添加入口拦下；潜在缺陷：选了超量图片，发送时逐张上传完才被后端整条拒绝。
+  test(`${mode} 图片超过单条消息上限时只接纳前 20 张并在入口反馈`, async ({ page }) => {
+    const { input } = await openComposer(page, mode);
+    const thumbnails = page.locator('[data-slot="image-attachment-strip"] [data-slot="image-thumbnail"]');
+    await pasteImages(input, Array.from({ length: 18 }, (_, index) => `first-${index}.png`));
+    await expect(thumbnails).toHaveCount(18);
+    await pasteImages(input, ["a.png", "b.png", "c.png", "d.png"]);
+    await expect(thumbnails).toHaveCount(20);
+    await expect(page.getByRole("alert")).toContainText("一条消息最多 20 张图片，已跳过 2 张");
+  });
 }
 
 test("Task 草稿离开后恢复普通文件，原生选择迟到结果不会写入新 Task", async ({ page }) => {
@@ -248,7 +270,7 @@ test("Task 图片上传成功但消息提交失败后，正文与完整图片附
   } }));
   await page.route(`${api}/workspaces/7/attachments/${assetId}*`, route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9X8AAAAASUVORK5CYII=", "base64") }));
   await transfer(input, "paste", "uploaded.png", "image/png", "图片失败恢复");
-  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-attachment"]')).toHaveCount(1);
+  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-thumbnail"]')).toHaveCount(1);
   const request = page.waitForRequest(req => req.url() === `${api}/tasks/100/messages` && req.method() === "POST");
   await page.route(`${api}/tasks/100/messages`, route => route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "图片消息回归拒绝", retryable: true } } } }));
   await send.click();
@@ -257,6 +279,6 @@ test("Task 图片上传成功但消息提交失败后，正文与完整图片附
   await expect(page.getByRole("dialog")).toContainText("图片消息回归拒绝");
   await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
   await expect(input).toHaveText("图片失败恢复");
-  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-attachment"]')).toHaveCount(1);
+  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-thumbnail"]')).toHaveCount(1);
   await expect(send).toBeEnabled();
 });

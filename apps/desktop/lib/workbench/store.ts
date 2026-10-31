@@ -4,13 +4,16 @@ import { createAgentEditorSession } from "@/lib/agent-editor/session";
 import { createTeamEditorSession } from "@/lib/agent-team-editor/session";
 import type { AgentConfigurationInput } from "@/lib/api/configuration";
 import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
+import { useDockStore } from "@/lib/layout/dock-store";
 import type { WorkbenchDraftTab, WorkbenchTab } from "./types";
 
-/** 一个工作区的工作台：标签、激活项与面板开合。 */
+/**
+ * 一个工作区的工作台：标签与激活项。面板显不显示是停靠区的事（`useDockStore`），不在这里：
+ * 打开标签时顺带把停靠区切到工作台。
+ */
 type WorkbenchSession = {
   tabs: WorkbenchTab[];
   activeTabId: string | null;
-  panelOpen: boolean;
   /** 关闭时已保存过的草稿（按 toolCallId）：只服务工具卡片在标签关闭后的「已保存」显示。 */
   savedDraftIds: readonly string[];
 };
@@ -29,19 +32,17 @@ type WorkbenchState = {
    * 不销毁任何标签或草稿。草稿只在关闭标签（未保存时确认）与删除工作区 / Task 时丢弃。
    */
   sessions: Record<number, WorkbenchSession>;
-  openFiles: (workspaceId: number) => void;
   openAgent: (workspaceId: number, input: { taskId: number; title: string }) => void;
   openAgentConfigurationDraft: (workspaceId: number, input: AgentDraftInput) => void;
   openAgentTeamConfigurationDraft: (workspaceId: number, input: TeamDraftInput) => void;
   activateTab: (workspaceId: number, tabId: string) => void;
   closeTab: (workspaceId: number, tabId: string) => void;
-  setPanelOpen: (workspaceId: number, open: boolean) => void;
   forgetWorkspace: (workspaceId: number) => void;
   /** 删除 Task 后移除属于它们的子 Agent 与草稿标签；只移除，不记「已保存」（见 `rememberSavedDraft`）。 */
   forgetTasks: (taskIds: readonly number[]) => void;
 };
 
-const EMPTY_WORKBENCH_SESSION: WorkbenchSession = { tabs: [], activeTabId: null, panelOpen: false, savedDraftIds: [] };
+const EMPTY_WORKBENCH_SESSION: WorkbenchSession = { tabs: [], activeTabId: null, savedDraftIds: [] };
 
 export function isDraftTab(tab: WorkbenchTab): tab is WorkbenchDraftTab {
   return tab.kind === "agent-configuration-draft" || tab.kind === "agent-team-configuration-draft";
@@ -60,16 +61,15 @@ function openTab(
       ...session,
       tabs: refresh ? session.tabs.map((tab) => tab.id === id ? refresh(tab) : tab) : session.tabs,
       activeTabId: id,
-      panelOpen: true,
     };
   }
   const tab = create();
   // 新会话是工具产出的原始草稿，此前关闭时记下的「已保存」不再适用。
   const savedDraftIds = isDraftTab(tab) ? session.savedDraftIds.filter((toolCallId) => toolCallId !== tab.toolCallId) : session.savedDraftIds;
-  return { tabs: [...session.tabs, tab], activeTabId: id, panelOpen: true, savedDraftIds };
+  return { tabs: [...session.tabs, tab], activeTabId: id, savedDraftIds };
 }
 
-/** 移除标签并修正激活项（落到相邻标签）与面板开合；没有标签被移除时返回原引用。 */
+/** 移除标签并修正激活项（落到相邻标签）；没有标签被移除时返回原引用。 */
 function withoutTabs(session: WorkbenchSession, removed: (tab: WorkbenchTab) => boolean): WorkbenchSession {
   const index = session.tabs.findIndex((tab) => tab.id === session.activeTabId);
   const tabs = session.tabs.filter((tab) => !removed(tab));
@@ -77,7 +77,7 @@ function withoutTabs(session: WorkbenchSession, removed: (tab: WorkbenchTab) => 
   const activeTabId = tabs.some((tab) => tab.id === session.activeTabId)
     ? session.activeTabId
     : tabs[Math.min(Math.max(index, 0), tabs.length - 1)]?.id ?? null;
-  return { ...session, tabs, activeTabId, panelOpen: tabs.length > 0 && session.panelOpen };
+  return { ...session, tabs, activeTabId };
 }
 
 /**
@@ -94,18 +94,20 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
   const update = (workspaceId: number, change: (session: WorkbenchSession) => WorkbenchSession) => set((state) => ({
     sessions: { ...state.sessions, [workspaceId]: change(state.sessions[workspaceId] ?? EMPTY_WORKBENCH_SESSION) },
   }));
+  // 打开或激活标签就是要看它：停靠区切到工作台。
+  const reveal = (workspaceId: number, change: (session: WorkbenchSession) => WorkbenchSession) => {
+    update(workspaceId, change);
+    useDockStore.getState().show("workbench");
+  };
   return {
     sessions: {},
-    openFiles: (workspaceId) => update(workspaceId, (session) => openTab(session, "workspace-files", () => ({
-      id: "workspace-files", kind: "files", title: "文件",
-    }))),
-    openAgent: (workspaceId, { taskId, title }) => update(workspaceId, (session) => openTab(
+    openAgent: (workspaceId, { taskId, title }) => reveal(workspaceId, (session) => openTab(
       session,
       `agent-task:${taskId}`,
       () => ({ id: `agent-task:${taskId}`, kind: "agent", taskId, title }),
       (tab) => ({ ...tab, title }),
     )),
-    openAgentConfigurationDraft: (workspaceId, { taskId, toolCallId, draft }) => update(workspaceId, (session) => openTab(
+    openAgentConfigurationDraft: (workspaceId, { taskId, toolCallId, draft }) => reveal(workspaceId, (session) => openTab(
       session,
       `agent-config-draft:${toolCallId}`,
       () => ({
@@ -117,7 +119,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
         session: createAgentEditorSession({ initial: draft, saved: false, scope: "workspace" }),
       }),
     )),
-    openAgentTeamConfigurationDraft: (workspaceId, { taskId, toolCallId, draft }) => update(workspaceId, (session) => openTab(
+    openAgentTeamConfigurationDraft: (workspaceId, { taskId, toolCallId, draft }) => reveal(workspaceId, (session) => openTab(
       session,
       `agent-team-config-draft:${toolCallId}`,
       () => ({
@@ -129,13 +131,12 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
         session: createTeamEditorSession({ initial: { ...draft, scope: "workspace" }, saved: false, workspaceId }),
       }),
     )),
-    activateTab: (workspaceId, activeTabId) => update(workspaceId, (session) => ({ ...session, activeTabId, panelOpen: true })),
+    activateTab: (workspaceId, activeTabId) => update(workspaceId, (session) => ({ ...session, activeTabId })),
     closeTab: (workspaceId, tabId) => update(workspaceId, (session) => {
       const closed = session.tabs.find((tab) => tab.id === tabId);
       if (!closed) return session;
       return rememberSavedDraft(withoutTabs(session, (tab) => tab === closed), closed);
     }),
-    setPanelOpen: (workspaceId, panelOpen) => update(workspaceId, (session) => ({ ...session, panelOpen })),
     forgetWorkspace: (workspaceId) => set((state) => {
       const sessions = { ...state.sessions };
       delete sessions[workspaceId];

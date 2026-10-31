@@ -2,12 +2,16 @@ import path from "node:path";
 import { BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent } from "electron";
 
 import type { BackendSupervisor } from "./backend/supervisor";
+import type { BrowserHost } from "./browser/browser-host";
+import { httpUrl } from "./browser/params";
 import { appendJsonLine } from "./desktop-log";
 import { appLogDir } from "./paths";
 import {
   FRONTEND_LOG_LEVELS,
   HOST_CHANNEL,
   THEME_SOURCES,
+  type BrowserNavigation,
+  type BrowserPlacement,
   type FrontendLogEntry,
   type HostReply,
   type OpenDirectoryOptions,
@@ -19,7 +23,7 @@ import {
  * 这里是渲染进程到宿主的信任边界：每个通道的入参只在这一层校验，main 的其他模块直接信任本层传入的值。
  * 处理器的失败（含入参不合法）统一转成 `HostReply`，消息原样回给渲染进程，由 preload 还原为带中文消息的 `Error`。
  */
-export function registerHostIpc(supervisor: BackendSupervisor): void {
+export function registerHostIpc(supervisor: BackendSupervisor, browser: BrowserHost): void {
   handle(HOST_CHANNEL.backendSnapshot, () => supervisor.snapshot());
   handle(HOST_CHANNEL.backendRestart, () => supervisor.restart());
   handle(HOST_CHANNEL.logWrite, (_event, entry) => {
@@ -36,6 +40,70 @@ export function registerHostIpc(supervisor: BackendSupervisor): void {
     if (!isOneOf(THEME_SOURCES, source)) throw new Error("外观偏好不合法");
     nativeTheme.themeSource = source;
   });
+  handle(HOST_CHANNEL.browserTabs, () => browser.list());
+  handle(HOST_CHANNEL.browserOpen, (_event, taskId, limits, url) => browser.userOpen(
+    parseTaskId(taskId),
+    parseLimits(limits),
+    url === undefined ? undefined : parseNavigationUrl(url),
+  ));
+  handle(HOST_CHANNEL.browserPlace, (_event, tabId, placement) => {
+    browser.place(parseTabId(tabId), placement === null ? null : parsePlacement(placement));
+  });
+  handle(HOST_CHANNEL.browserFreeze, (_event, tabId) => browser.freeze(parseTabId(tabId)));
+  handle(HOST_CHANNEL.browserNavigate, (_event, tabId, navigation) => browser.userNavigate(parseTabId(tabId), parseNavigation(navigation)));
+  handle(HOST_CHANNEL.browserClose, (_event, tabId) => browser.userClose(parseTabId(tabId)));
+}
+
+const TAB_ID = /^t\d+$/;
+
+/** 地址栏输入：没写协议的按 https 补全；协议只允许 http(s)（与 Agent 走同一条校验）。 */
+function parseNavigationUrl(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error("网址不能为空");
+  const text = value.trim();
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(text) ? text : `https://${text}`;
+  try {
+    return httpUrl(withScheme);
+  } catch {
+    throw new Error("只能打开 http 或 https 网址");
+  }
+}
+const NAVIGATION_ACTIONS = ["back", "forward", "reload"] as const;
+
+function parseTabId(value: unknown): string {
+  if (typeof value !== "string" || !TAB_ID.test(value)) throw new Error("标签页标识不合法");
+  return value;
+}
+
+function parseTaskId(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) throw new Error("任务标识不合法");
+  return value as number;
+}
+
+function parseLimits(value: unknown): { perTask: number; total: number } {
+  if (!isPlainObject(value)) throw new Error("标签上限不合法");
+  const { perTask, total } = value;
+  if (!Number.isSafeInteger(perTask) || !Number.isSafeInteger(total) || (perTask as number) <= 0 || (total as number) <= 0) {
+    throw new Error("标签上限不合法");
+  }
+  return { perTask: perTask as number, total: total as number };
+}
+
+function parsePlacement(value: unknown): BrowserPlacement {
+  if (!isPlainObject(value)) throw new Error("显示区域不合法");
+  const { x, y, width, height } = value;
+  const numbers = [x, y, width, height];
+  if (!numbers.every((item) => typeof item === "number" && Number.isFinite(item)) || (width as number) < 0 || (height as number) < 0) {
+    throw new Error("显示区域不合法");
+  }
+  return { x: x as number, y: y as number, width: width as number, height: height as number };
+}
+
+/** 地址栏的导航：打开地址，或后退 / 前进 / 刷新。 */
+function parseNavigation(value: unknown): BrowserNavigation {
+  if (!isPlainObject(value)) throw new Error("导航参数不合法");
+  if (typeof value.url === "string") return { url: parseNavigationUrl(value.url) };
+  if (!isOneOf(NAVIGATION_ACTIONS, value.action)) throw new Error("导航参数不合法");
+  return { action: value.action };
 }
 
 function handle<T>(channel: string, handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => T | Promise<T>): void {

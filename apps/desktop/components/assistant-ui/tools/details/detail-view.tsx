@@ -12,6 +12,8 @@ import { safeExternalUrl } from "../types";
  * 失败与取消由 `ToolCardShell` 统一处理，这里只会拿到成功或进行中的载荷。
  */
 export type DetailView = {
+  /** 该 kind 的专用载荷校验；不通过时注册表回落通用 fallback，`summary` / `body` 因此可信任载荷形状。 */
+  accepts?: (data: Record<string, unknown>) => boolean;
   /**
    * 可展开卡片的整行是折叠按钮，摘要里不能再放可点击元素；只有没有展开内容的
    * 静态行（如读文件）才在摘要里放路径链接。

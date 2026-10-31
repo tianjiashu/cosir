@@ -359,6 +359,7 @@ function wireState(taskId, state = states.get(taskId)) {
     terminal_sessions: (terminalSessions.get(taskId) ?? []).map((session) => session.entry),
     background_tasks: backgroundTasks.get(taskId) ?? [],
     foreground_waits: (foregroundWaits.get(taskId) ?? []).map((entry) => entry.toolCallId),
+    handoffs: [],
   };
 }
 
@@ -666,7 +667,6 @@ function createTerminalSession(taskId, shell) {
       exitCode: null,
       integration: "ready",
       commandRunning: false,
-      handoff: null,
       createdAt: new Date().toISOString(),
     },
     output: [],

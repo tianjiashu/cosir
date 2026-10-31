@@ -6,14 +6,11 @@ import {
   TerminalIcon,
   XIcon,
 } from "lucide-react";
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { TerminalSessionEntry } from "@/lib/assistant/contract";
-import { submitToolDecision } from "@/lib/assistant/task-commands";
-import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { HttpError } from "@/lib/http/errors";
-import { notify } from "@/lib/notify";
+import { useHandBack } from "@/lib/handoff/use-hand-back";
 import { terminalStatusPresentation } from "@/lib/terminal/terminal-sessions";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { cn } from "@/lib/utils";
@@ -219,29 +216,19 @@ function TerminalSessionActionRow({ artifact, variant, taskId, toolCallId, inter
 
 /**
  * 交接卡片上的「交还」：交接是 HITL 调用，等待占位为 `pending` 时可对它作出决定。会话已结束或后端
- * 重启过时终端面板里没有交接提示，这里是唯一入口；决定执行后卡片随 snapshot 推到终态。
+ * 重启过时面板里没有交接提示（snapshot `handoffs` 为空），这里是唯一入口；决定执行后卡片随 snapshot 推到终态。
  */
 function HandoffReturnButton({ taskId, toolCallId }: { taskId: number; toolCallId: string }) {
-  const [busy, setBusy] = useState(false);
-  const submit = async () => {
-    setBusy(true);
-    try {
-      await submitToolDecision(taskId, toolCallId, { decision: "approve" });
-    } catch (error) {
-      if (!(error instanceof HttpError && error.status === 409)) notify.error(userErrorMessage(error, "交还失败，请稍后重试"));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { handBack, returning } = useHandBack(taskId);
   return (
     <Button
       type="button"
       size="xs"
       variant="secondary"
-      disabled={busy}
+      disabled={returning}
       onClick={(event) => {
         event.stopPropagation();
-        void submit();
+        void handBack(toolCallId);
       }}
     >
       交还

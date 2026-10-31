@@ -14,6 +14,7 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { forgetMessageHeights } from "@/lib/assistant/message-height-cache";
 import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
+import { useHandoffStore } from "@/lib/handoff/store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 
@@ -142,6 +143,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     useTerminalWorkbenchStore.getState().forget(deletedTaskIds);
     useWorkbenchStore.getState().forgetTasks(deletedTaskIds);
     useBackgroundTasksStore.getState().forget(deletedTaskIds);
+    useHandoffStore.getState().forget(deletedTaskIds);
     forgetMessageHeights(deletedTaskIds);
     if (target.kind === "workspace") {
       useWorkbenchStore.getState().forgetWorkspace(target.id);

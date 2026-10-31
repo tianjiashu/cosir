@@ -2,12 +2,14 @@ import { useQuery } from "@tanstack/react-query";
 import { Maximize2Icon, Minimize2Icon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { HandoffBanner } from "@/components/handoff/handoff-banner";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { PanelDock } from "@/components/ui/panel-dock";
 import { PANEL_HEADER_CLASS } from "@/components/ui/panel-tokens";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
 import { useOpenWorkspacePath } from "@/components/workspace-references/use-open-workspace-path";
+import { useHandoffOn } from "@/lib/handoff/store";
 import { queryKeys } from "@/lib/query/query-keys";
 import { listTerminalShells } from "@/lib/terminal/terminal-api";
 import { terminalNoticeClass, terminalPaneStatus } from "@/lib/terminal/terminal-pane-status";
@@ -69,7 +71,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   }, [open]);
 
   const tabs = useMemo(() => terminalTabs(sessions ?? [], activeSessionId), [activeSessionId, sessions]);
-  const { creating, notice, createSession, closeTab, returnHandoff, returningHandoff } = useTerminalSessionActions(taskId, sessions, tabs);
+  const { creating, notice, createSession, closeTab } = useTerminalSessionActions(taskId, sessions, tabs);
 
   // 打开面板时没有活跃会话：等会话列表已知后自动新建一个默认 shell 终端（只在打开那一刻判定）。
   useEffect(() => {
@@ -81,7 +83,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   const ended = useMemo(() => endedTerminalSessions(sessions ?? []), [sessions]);
   const activeSession = sessions?.find((session) => session.sessionId === activeSessionId) ?? null;
   const activeRuntime = activeSessionId ? runtimes[activeSessionId] : undefined;
-  const activeHandoff = activeSession?.handoff ?? null;
+  const activeHandoff = useHandoffOn(taskId, "terminal", activeSessionId);
 
   const shellsQuery = useQuery({
     queryKey: queryKeys.terminalShells(),
@@ -190,21 +192,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
               </TooltipIconButton>
             </div>
           </header>
-          {activeHandoff && (
-            <div role="alert" className="bg-info/10 text-foreground mx-2 mb-1 flex items-center gap-2 rounded-md px-3 py-1.5 text-xs" data-testid="terminal-handoff-banner">
-              <span className="min-w-0 flex-1 truncate">Agent 需要你输入：{activeHandoff.reason || "请在终端中完成输入"}</span>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                className="h-6 shrink-0 px-2"
-                onClick={() => { if (activeSession) void returnHandoff(activeSession); }}
-                disabled={returningHandoff}
-              >
-                交还
-              </Button>
-            </div>
-          )}
+          {activeHandoff && <HandoffBanner taskId={taskId} entry={activeHandoff} />}
           {paneStatus && (
             <div
               role="status"

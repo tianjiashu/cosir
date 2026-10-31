@@ -28,7 +28,7 @@ test.beforeEach(async ({ page, request }) => {
   await expect(page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ })).toBeVisible();
 });
 
-test("宽窗口固定为一列；打开工作台后浮起、不挤对话，关掉工作台恢复固定", async ({ page }, testInfo) => {
+test("宽窗口固定为一列；打开右侧面板后浮起、不挤对话，关掉面板恢复固定", async ({ page }, testInfo) => {
   await railButton(page).click();
   await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
   await expect(card(page)).toContainText("1 个运行中");
@@ -36,11 +36,11 @@ test("宽窗口固定为一列；打开工作台后浮起、不挤对话，关�
   await page.screenshot({ path: testInfo.outputPath("rail-docked.png") });
 
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
-  await expect(page.getByRole("complementary", { name: "工作台" })).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "文件" })).toBeVisible();
   await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
   await page.screenshot({ path: testInfo.outputPath("rail-floating.png") });
 
-  await page.getByRole("button", { name: "收起工作台", exact: true }).click();
+  await page.getByRole("button", { name: "收起文件", exact: true }).click();
   await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
 });
 
@@ -104,4 +104,24 @@ test("快捷键切换会话侧栏", async ({ page }) => {
   await expect(rail(page)).toBeVisible();
   await page.keyboard.press(`${modifier}+Alt+KeyR`);
   await expect(rail(page)).toHaveCount(0);
+});
+
+test("右侧面板把对话区压窄时，输入框底栏按自身宽度让位，中文状态不竖排", async ({ page }, testInfo) => {
+  await page.route(`${origin}/model-configs`, route => route.fulfill({ json: [] }));
+  await page.setViewportSize({ width: 1100, height: 900 });
+  await page.reload();
+  await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  await expect(page.getByRole("complementary", { name: "文件" })).toBeVisible();
+  // 窗口仍宽于按窗口判断的断点，只有输入框自己变窄：底栏要按输入框宽度收窄。
+  const empty = page.getByText("暂无可用模型", { exact: true });
+  await expect(empty).toBeVisible();
+  expect((await empty.boundingBox())!.height).toBeLessThan(24);
+  const settings = page.getByRole("button", { name: "模型设置", exact: true });
+  await expect(settings).toBeVisible();
+  await expect(settings.getByText("模型设置")).toBeHidden();
+  await page.screenshot({ path: testInfo.outputPath("narrow-composer.png") });
+
+  // 收起面板、输入框变宽后文字回来。
+  await page.getByRole("button", { name: "收起文件", exact: true }).click();
+  await expect(settings.getByText("模型设置")).toBeVisible();
 });

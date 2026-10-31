@@ -2,7 +2,6 @@
 
 import { Tabs } from "radix-ui";
 import {
-  FolderTreeIcon,
   XIcon,
   PanelRightCloseIcon,
   BotIcon,
@@ -27,7 +26,6 @@ import type { WorkbenchTab } from "@/lib/workbench/types";
 
 /** 标签图标按 tab 种类区分：子 Agent 运行与两类配置草稿一眼可辨。新增 kind 时此表强制补齐。 */
 const TAB_KIND_ICONS: Record<WorkbenchTab["kind"], LucideIcon> = {
-  files: FolderTreeIcon,
   agent: BotIcon,
   "agent-configuration-draft": UserCogIcon,
   "agent-team-configuration-draft": NetworkIcon,
@@ -97,7 +95,7 @@ export function Workbench({
         role="complementary"
         className="dock-panel bg-background flex min-h-0 flex-col"
         style={{ width }}
-        data-workbench-dock
+        data-dock-panel
         aria-label="工作台"
       >
         {/* 卡片位于窗口右上角：标签行是标题栏拖动区，并给 Windows 自绘窗口按钮让位（卡片已离窗口右缘 8px）。 */}

@@ -106,7 +106,7 @@ test("真实后端：内部链接、原子替换实时更新、搜索和退出",
   await expect(
     surface.getByRole("button", { name: /main.py.*src\/main.py/ }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "关闭 文件", exact: true }).click();
+  await page.getByRole("button", { name: "收起文件", exact: true }).click();
   await expect(surface).toHaveCount(0);
 });
 
@@ -146,7 +146,7 @@ test("真实后端：Markdown 相对图片更新、大文件从末尾反向阅�
   await surface.getByRole("button", { name: "上一段", exact: true }).click();
   await expect(segment).not.toHaveText(tail!);
   await expect(surface.locator(".cm-content")).toContainText("中文😀 line");
-  await page.getByRole("button", { name: "关闭 文件", exact: true }).click();
+  await page.getByRole("button", { name: "收起文件", exact: true }).click();
   await expect
     .poll(
       async () =>
@@ -416,7 +416,7 @@ test("引用：目录与文件通过右键添加、选中文本可附带问题",
   await expect(input.locator('[data-workspace-reference="file"]')).toHaveCount(
     1,
   );
-  // 树行菜单操作后文件已激活，窄工作台需返回目录再选择下一个文件。
+  // 树行菜单操作后文件已激活，窄文件面板需返回目录再选择下一个文件。
   await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
   await surface
     .getByRole("button", { name: "展开目录 src", exact: true })

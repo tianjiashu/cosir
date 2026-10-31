@@ -1,4 +1,5 @@
 import type { ThreadMessage } from "@assistant-ui/react";
+import { shouldStackImages } from "./image-stack-policy";
 
 /**
  * 按消息内容粗估虚拟列表行高（px，含行间距），只作首次测量前的初始值。
@@ -33,6 +34,8 @@ const USER_LINE_UNITS = 44;
 const ATTACHMENT_GAP = 8;
 const IMAGE_HEIGHT = 130;
 const IMAGES_PER_ROW = 3;
+// 超过阈值时收成一叠（`ImageStack`），收起态只有一张图的高度加错开的层。
+const IMAGE_STACK_HEIGHT = IMAGE_HEIGHT + 6;
 const FILE_CHIP_HEIGHT = 30;
 const FILES_PER_ROW = 3;
 
@@ -46,7 +49,8 @@ function userHeight(message: ThreadMessage): number {
     else if (part.type === "file") files += 1;
   }
   const blocks: number[] = [];
-  if (images > 0) blocks.push(Math.ceil(images / IMAGES_PER_ROW) * (IMAGE_HEIGHT + ATTACHMENT_GAP) - ATTACHMENT_GAP);
+  if (shouldStackImages(images)) blocks.push(IMAGE_STACK_HEIGHT);
+  else if (images > 0) blocks.push(Math.ceil(images / IMAGES_PER_ROW) * (IMAGE_HEIGHT + ATTACHMENT_GAP) - ATTACHMENT_GAP);
   if (files > 0) blocks.push(Math.ceil(files / FILES_PER_ROW) * (FILE_CHIP_HEIGHT + ATTACHMENT_GAP) - ATTACHMENT_GAP);
   if (text.trim()) blocks.push(USER_BUBBLE_PADDING + textLines(text, USER_LINE_UNITS) * USER_LINE_HEIGHT);
   return ROW_GAP + USER_CHROME + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blocks.length - 1) * ATTACHMENT_GAP;

@@ -12,6 +12,8 @@ export type BackendLaunch = {
   bootstateFile: string;
   dataDir: string;
   consoleLogFile: string;
+  /** 宿主工具链路的认证 token（见 `host-link/client.ts`），后端据此只接受本宿主的连接。 */
+  hostToken: string;
 };
 
 /**
@@ -24,7 +26,7 @@ export type BackendLaunch = {
  * POSIX 上 `detached` 让后端成为进程组长，强杀兜底时可以对整组发信号（含后端拉起的工具子进程）。
  * stdout / stderr 逐行写入 `backend-console` 日志，用于排查后端在结构化日志可用之前的启动与崩溃问题。
  */
-export function spawnBackend({ runtime, port, bootstateFile, dataDir, consoleLogFile }: BackendLaunch): ChildProcess {
+export function spawnBackend({ runtime, port, bootstateFile, dataDir, consoleLogFile, hostToken }: BackendLaunch): ChildProcess {
   const args = runtime.mode === "python-module" ? ["-m", "app"] : [];
   const child = spawn(runtime.launcher, args, {
     cwd: runtime.backendDir,
@@ -40,6 +42,7 @@ export function spawnBackend({ runtime, port, bootstateFile, dataDir, consoleLog
       CODING_AGENT_DATA_DIR: dataDir,
       CODING_AGENT_TERMINAL_WORKER: runtime.terminalWorker,
       CODING_AGENT_PARENT_PIPE: "stdin",
+      CODING_AGENT_HOST_TOKEN: hostToken,
     },
   });
   forwardConsole(child.stdout, consoleLogFile, "stdout");

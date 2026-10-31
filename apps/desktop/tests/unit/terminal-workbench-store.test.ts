@@ -84,20 +84,10 @@ describe("终端工作台 store", () => {
     expect(task()).toMatchObject({ open: true, autoCreate: false });
   });
 
-  it("交接从无到有时自动打开面板并聚焦该会话；Agent 新开会话不弹出", () => {
+  it("Agent 新开会话不弹出面板（交接弹出由 lib/handoff 负责）", () => {
     const store = useTerminalWorkbenchStore.getState();
     store.syncSessions(TASK, [terminalSession("t1")]);
     store.syncSessions(TASK, [terminalSession("t1"), terminalSession("a1", { createdBy: "agent" })]);
-    expect(task().open).toBe(false);
-
-    const before = task().focusToken;
-    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("a1", { createdBy: "agent", handoff: { reason: "输入密码", toolCallId: "call-handoff" } })]);
-    expect(task()).toMatchObject({ open: true, activeSessionId: "a1" });
-    expect(task().focusToken).toBe(before + 1);
-
-    // 同一交接持续存在不重复抢焦点；用户关了面板也不会被再次弹开。
-    store.setOpen(TASK, false);
-    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("a1", { createdBy: "agent", handoff: { reason: "输入密码", toolCallId: "call-handoff" } })]);
     expect(task().open).toBe(false);
   });
 

@@ -41,7 +41,7 @@ function longConversation(): TransportState {
   }
   return {
     title: "长对话", messages, messageOffset: 0, activity: { runId: PAIRS, ...OUTCOME, launch: LAUNCH },
-    terminal_sessions: [], background_tasks: [], foreground_waits: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 }
 

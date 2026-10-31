@@ -16,6 +16,14 @@ export const HOST_CHANNEL = {
   logWrite: "cosir:log.write",
   dialogOpenDirectory: "cosir:dialog.open-directory",
   windowThemeSource: "cosir:window.theme-source",
+  browserTabs: "cosir:browser.tabs",
+  browserOpen: "cosir:browser.open",
+  /** main → 渲染进程的推送：任一标签的增删、地址、标题、加载或崩溃状态变化时发送全部标签。 */
+  browserTabsChanged: "cosir:browser.tabs-changed",
+  browserPlace: "cosir:browser.place",
+  browserFreeze: "cosir:browser.freeze",
+  browserNavigate: "cosir:browser.navigate",
+  browserClose: "cosir:browser.close",
 } as const;
 
 /**
@@ -62,6 +70,24 @@ export type OpenDirectoryOptions = {
 
 export type HostPlatform = "darwin" | "win32" | "linux";
 
+/** 内置浏览器的一个标签页（宿主事实，见 `electron/main/browser/browser-host.ts`）；每个标签属于一个 Task。 */
+export type BrowserTabSummary = {
+  tabId: string;
+  taskId: number;
+  /** 谁开的：用户与 Agent 都能在 Task 里新开标签（与交互终端一致）。 */
+  createdBy: "agent" | "user";
+  url: string;
+  title: string;
+  loading: boolean;
+  crashed: boolean;
+};
+
+/** 浏览器面板占位区域的矩形：CSS 像素、相对窗口内容区（即 `getBoundingClientRect`）。 */
+export type BrowserPlacement = { x: number; y: number; width: number; height: number };
+
+/** 用户在地址栏的导航：打开地址，或后退 / 前进 / 刷新。 */
+export type BrowserNavigation = { url: string } | { action: "back" | "forward" | "reload" };
+
 export const THEME_SOURCES = ["system", "light", "dark"] as const;
 type ThemeSource = (typeof THEME_SOURCES)[number];
 
@@ -87,6 +113,25 @@ export type CosirHost = {
      * 随之切换。传偏好而不是结果，是因为固定成明或暗之后，页面的 `prefers-color-scheme` 就不再跟随系统。
      */
     setThemeSource(source: ThemeSource): Promise<void>;
+  };
+  browser: {
+    listTabs(): Promise<BrowserTabSummary[]>;
+    /** 订阅标签变化（推送全部标签），返回取消订阅函数。 */
+    onTabsChanged(listener: (tabs: BrowserTabSummary[]) => void): () => void;
+    /**
+     * 在 Task 里新开标签（可直接打开地址），返回标签 id。`limits` 取自配置中心的两个标签上限：宿主不存配置，
+     * 超出时抛出带原因的错误。
+     */
+    open(taskId: number, limits: { perTask: number; total: number }, url?: string): Promise<string>;
+    /**
+     * 把标签的网页画面放到页面的这个矩形上；`null` 收起。同一时刻只有一个标签显示，放上新的会收起旧的。
+     * 网页是叠在页面之上的原生画面，不参与 CSS 层叠。
+     */
+    place(tabId: string, placement: BrowserPlacement | null): Promise<void>;
+    /** 当前画面的一帧（JPEG data URL），弹层遮住网页区域时先放这张图再收起画面。 */
+    freeze(tabId: string): Promise<string>;
+    navigate(tabId: string, navigation: BrowserNavigation): Promise<void>;
+    close(tabId: string): Promise<void>;
   };
   files: {
     /**

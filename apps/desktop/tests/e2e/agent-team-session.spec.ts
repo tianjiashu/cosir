@@ -81,7 +81,7 @@ test("工作台切换标签与收起都保留 Team 草稿和历史", async ({ pa
     const layoutModulePath = "/lib/layout-preferences.ts";
     const { useWorkbenchStore } = await import(/* @vite-ignore */ modulePath);
     const { useLayoutPreferences } = await import(/* @vite-ignore */ layoutModulePath);
-    useLayoutPreferences.getState().setWorkbenchWidth(900);
+    useLayoutPreferences.getState().setDockWidth("workbench", 900);
     const store = useWorkbenchStore.getState();
     store.openAgentTeamConfigurationDraft(7, { taskId: 42, toolCallId: "session-test", draft: { ...draft, name: "Team 会话" } });
   }, teamConfiguration);

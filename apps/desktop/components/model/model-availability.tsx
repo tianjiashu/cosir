@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils";
  * 目录已就绪且有模型时渲染 children，由调用方处理选中值。
  *
  * - inline：composer 内的紧凑样式；field：表单字段样式（带边框、与输入框等高）。
+ * - 状态文字是用户必须看到的，不收成图标：单行、放不下时省略号，`title` 给全文。中文每个字之间都可断行，
+ *   不禁止换行的话，在可收缩的 flex 行里会被压成一字一行。
  * - configure：目录为空或出错时提供的去配置入口（模型配置对话框或配置中心链接）。
  */
 export function ModelAvailability({
@@ -31,15 +33,16 @@ export function ModelAvailability({
   variant?: "inline" | "field";
   children: ReactNode;
 }) {
-  const group = variant === "field" ? "flex w-full items-center gap-1" : "inline-flex items-center gap-1";
+  const group = variant === "field" ? "flex w-full min-w-0 items-center gap-1" : "inline-flex min-w-0 max-w-full items-center gap-1";
   const frame = variant === "field"
-    ? "border-input flex h-9 w-full items-center gap-1.5 rounded-lg border px-3 text-sm"
-    : "inline-flex h-8 items-center gap-1.5 px-2 text-xs";
+    ? "border-input flex h-9 w-full min-w-0 items-center gap-1.5 rounded-lg border px-3 text-sm"
+    : "inline-flex h-8 min-w-0 items-center gap-1.5 px-2 text-xs";
+  const label = (text: string) => <span className="min-w-0 truncate" title={text}>{text}</span>;
 
   if (status === "loading") {
     return (
       <span role="status" className={cn(frame, "text-muted-foreground")}>
-        <SparklesIcon className="size-3.5 animate-pulse" aria-hidden="true" />加载模型…
+        <SparklesIcon className="size-3.5 shrink-0 animate-pulse" aria-hidden="true" />{label("加载模型…")}
       </span>
     );
   }
@@ -47,7 +50,7 @@ export function ModelAvailability({
     return (
       <span className={group}>
         <button type="button" onClick={onRetry} className={cn(frame, "text-destructive hover:bg-destructive/10 focus-ring rounded-lg")}>
-          <RefreshCwIcon className="size-3.5" aria-hidden="true" />模型加载失败，重试
+          <RefreshCwIcon className="size-3.5 shrink-0" aria-hidden="true" />{label("模型加载失败，重试")}
         </button>
         {configure}
       </span>
@@ -56,7 +59,7 @@ export function ModelAvailability({
   if (modelCount === 0) {
     return (
       <span className={group}>
-        <span className={cn(frame, "text-muted-foreground")}>暂无可用模型</span>
+        <span className={cn(frame, "text-muted-foreground")}>{label("暂无可用模型")}</span>
         {configure}
       </span>
     );

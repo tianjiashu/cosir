@@ -338,7 +338,7 @@ for (const theme of ["light", "dark"]) {
     }
     // 为主区留足空间后，通过实际可用宽度验证并排阅读断点。
     await page.setViewportSize({ width: 1620, height: 900 });
-    const outer = page.getByRole("separator", { name: "调整工作台宽度" });
+    const outer = page.getByRole("separator", { name: "调整文件宽度" });
     await expect(outer).toHaveAttribute("aria-valuemax", "900");
     await outer.focus();
     await outer.press("End");
@@ -465,7 +465,7 @@ test("阅读工具栏在窄宽度保持单行，菜单与搜索焦点独立", as
     await page.evaluate(async width => {
       const modulePath = "/lib/layout-preferences.ts";
       const { useLayoutPreferences } = await import(modulePath);
-      useLayoutPreferences.getState().setWorkbenchWidth(width);
+      useLayoutPreferences.getState().setDockWidth("files", width);
     }, width);
     const toolbar = surface.getByLabel("文件阅读工具栏");
     await expect(toolbar).toBeVisible();
@@ -473,7 +473,7 @@ test("阅读工具栏在窄宽度保持单行，菜单与搜索焦点独立", as
     const bounds = await toolbar.boundingBox();
     expect(bounds!.height).toBeLessThan(46);
     const body = await surface.getByRole("heading", { name: "Workspace preview" }).boundingBox();
-    const panel = await page.getByRole("complementary", { name: "工作台" }).boundingBox();
+    const panel = await page.getByRole("complementary", { name: "文件" }).boundingBox();
     expect(body!.y - panel!.y).toBeLessThan(160);
     await page.screenshot({ path: testInfo.outputPath(`reading-${width}.png`) });
   }
@@ -492,7 +492,7 @@ test("阅读工具栏在窄宽度保持单行，菜单与搜索焦点独立", as
   await expect(surface.getByLabel("全文件查找")).toBeHidden();
   await page.evaluate(async () => {
     const modulePath = "/lib/layout-preferences.ts";
-    (await import(modulePath)).useLayoutPreferences.getState().setWorkbenchWidth(480);
+    (await import(modulePath)).useLayoutPreferences.getState().setDockWidth("files", 480);
   });
   await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
   await expect(surface.getByRole("textbox", { name: "搜索工作区文件名" })).toBeFocused();
@@ -553,7 +553,7 @@ test("文件菜单开关不锁定主对话，长消息滚动位置和节点保�
   for (let cycle = 0; cycle < 3; cycle++) {
     await trigger.click();
     await expect(page.getByRole("menuitem", { name: "管理忽略项" })).toBeVisible();
-    // 普通面板菜单不能把整个工作台变成不可访问、不可点击的模态背景。
+    // 普通面板菜单不能把整个文件面板变成不可访问、不可点击的模态背景。
     await expect(page.locator("body")).not.toHaveAttribute("data-scroll-locked");
     await expect(page.locator("body")).not.toHaveCSS("pointer-events", "none");
     await expect(page.getByRole("main")).toBeVisible();

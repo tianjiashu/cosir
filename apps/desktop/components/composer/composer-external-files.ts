@@ -1,9 +1,9 @@
-import { isSupportedImageFile, isUnsupportedImageFile } from "@/lib/assistant/attachments/attachment-upload";
+import { isSupportedImageFile, isUnsupportedImageFile, MAX_IMAGES_PER_MESSAGE } from "@/lib/assistant/attachments/attachment-upload";
 import { desktopHost } from "@/lib/desktop-host";
 
 export type ComposerFileProblem = {
   name: string;
-  reason: "unsupported-image" | "local-path-required" | "add-failed";
+  reason: "unsupported-image" | "local-path-required" | "add-failed" | "image-limit";
 };
 
 export type ComposerExternalFileResult<TAttachment> = {
@@ -44,9 +44,11 @@ export function summarizeComposerFileProblems(problems: readonly ComposerFilePro
   const unsupportedCount = problems.filter((problem) => problem.reason === "unsupported-image").length;
   const pathCount = problems.filter((problem) => problem.reason === "local-path-required").length;
   const failedCount = problems.filter((problem) => problem.reason === "add-failed").length;
+  const limitCount = problems.filter((problem) => problem.reason === "image-limit").length;
   return [
     unsupportedCount > 0 && `图片附件仅支持 JPEG 和 PNG，已跳过 ${unsupportedCount} 个文件。`,
     pathCount > 0 && `${pathCount} 个文件不是本机文件（如剪贴板中的内容），无法作为附件。`,
     failedCount > 0 && `${failedCount} 个附件添加失败，请重试。`,
+    limitCount > 0 && `一条消息最多 ${MAX_IMAGES_PER_MESSAGE} 张图片，已跳过 ${limitCount} 张。`,
   ].filter(Boolean).join(" ");
 }

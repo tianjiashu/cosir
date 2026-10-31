@@ -15,11 +15,12 @@ import { useComposerFeedback } from "./composer-feedback";
 import { insertAttachments, useComposerInsertion } from "./composer-insertion-context";
 import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "./composer-surface";
 import { useComposerFiles } from "./use-composer-files";
+import type { ComposerImageSink } from "./assistant-composer-attachments";
 
 type AttachmentPickerProps = {
   workspaceRoot?: string;
   /** 图片交给所在输入框（新对话草稿或 assistant-ui composer）；普通文件与文件夹以行内 token 插入正文。 */
-  addImage: (file: File) => void | Promise<void>;
+  images: ComposerImageSink;
   disabled?: boolean;
 };
 
@@ -29,11 +30,11 @@ type AttachmentPickerProps = {
  * 选文件走系统文件选择框，得到的 `File` 与粘贴、拖放一样交给 `useComposerFiles`，三个入口只有一条接纳链路。
  * 文件夹没有 `File` 可交，由宿主的目录对话框给出路径，登记后直接以 token 插入；对话框以工作区根目录为起点。
  */
-export const AttachmentPicker: FC<AttachmentPickerProps> = ({ workspaceRoot, addImage, disabled = false }) => {
+export const AttachmentPicker: FC<AttachmentPickerProps> = ({ workspaceRoot, images, disabled = false }) => {
   const [opening, setOpening] = useState(false);
   const insertion = useComposerInsertion();
   const feedback = useComposerFeedback();
-  const addFiles = useComposerFiles(addImage);
+  const addFiles = useComposerFiles(images);
 
   const choose = async (directory: boolean) => {
     if (opening || disabled) return;

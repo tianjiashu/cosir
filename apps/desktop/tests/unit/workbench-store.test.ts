@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { useDockStore } from "@/lib/layout/dock-store";
 import { useWorkbenchStore } from "@/lib/workbench/store";
 import type { WorkbenchAgentConfigurationDraftTab, WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
 
@@ -35,15 +36,15 @@ describe("workbench store", () => {
     store.openAgent(7, { taskId: 21, title: "审查（更新）" });
     store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
     agentDraftTab(7, "call-1").session.setField("description", "改过的描述");
-    store.openFiles(8);
+    store.openAgent(8, { taskId: 30, title: "另一个工作区" });
 
     expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-task:21", "agent-config-draft:call-1"]);
     expect(session(7).tabs[0].title).toBe("审查（更新）");
     expect(agentDraftTab(7, "call-1").session.store.getState().form.description).toBe("改过的描述");
-    expect(session(8).tabs.map((tab) => tab.id)).toEqual(["workspace-files"]);
+    expect(session(8).tabs.map((tab) => tab.id)).toEqual(["agent-task:30"]);
   });
 
-  it("关闭最后一个标签时收起面板，激活项落到相邻标签", () => {
+  it("关闭标签时激活项落到相邻标签；关完后没有标签（面板随之不显示，见 useDockPanels）", () => {
     const store = useWorkbenchStore.getState();
     store.openAgent(7, { taskId: 1, title: "一" });
     store.openAgent(7, { taskId: 2, title: "二" });
@@ -53,7 +54,7 @@ describe("workbench store", () => {
     expect(session(7).activeTabId).toBe("agent-task:3");
     store.closeTab(7, "agent-task:1");
     store.closeTab(7, "agent-task:3");
-    expect(session(7)).toMatchObject({ tabs: [], activeTabId: null, panelOpen: false });
+    expect(session(7)).toMatchObject({ tabs: [], activeTabId: null });
   });
 
   it("重复打开同一草稿不覆盖正在编辑的会话", () => {
@@ -91,11 +92,11 @@ describe("workbench store", () => {
     const store = useWorkbenchStore.getState();
     store.openAgent(7, { taskId: 21, title: "子 Agent" });
     store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
-    store.openFiles(7);
+    store.openAgent(7, { taskId: 22, title: "保留" });
     store.openAgent(8, { taskId: 31, title: "保留" });
 
     store.forgetTasks([20, 21]);
-    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["workspace-files"]);
+    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-task:22"]);
     expect(session(8).tabs.map((tab) => tab.id)).toEqual(["agent-task:31"]);
 
     store.forgetWorkspace(7);
@@ -113,5 +114,15 @@ describe("workbench store", () => {
     expect(session(7).tabs).toEqual([]);
     expect(session(7).savedDraftIds).toEqual([]);
     expect(session(8)).toBe(untouched);
+  });
+
+  // 目的：打开标签就是要看它；潜在缺陷：标签加进去了，停靠区却还停在文件或浏览器面板。
+  it("打开标签把停靠区切到工作台，激活与关闭不改动停靠区", () => {
+    useDockStore.getState().show("browser");
+    useWorkbenchStore.getState().openAgent(7, { taskId: 21, title: "子任务" });
+    expect(useDockStore.getState().panel).toBe("workbench");
+    useDockStore.getState().show("files");
+    useWorkbenchStore.getState().closeTab(7, "agent-task:21");
+    expect(useDockStore.getState().panel).toBe("files");
   });
 });

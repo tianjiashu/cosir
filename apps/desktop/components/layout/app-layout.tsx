@@ -10,7 +10,7 @@ import {
   useNavigate,
   useOutletContext,
 } from "react-router-dom";
-import { FolderIcon, LayoutListIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
+import { FolderIcon, GlobeIcon, LayoutListIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 
 import { BackendRestartButton } from "@/components/backend-restart-button";
@@ -31,7 +31,10 @@ import { CountBadge } from "@/components/ui/count-badge";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/tooltip-icon-button";
 import { Workbench } from "@/components/workbench/workbench";
-import { useWorkbenchPanel } from "./use-workbench-panel";
+import { BrowserPanel } from "@/components/browser/browser-panel";
+import { FilesPanel } from "@/components/files/files-panel";
+import { desktopHost } from "@/lib/desktop-host";
+import { useDockPanels } from "./use-dock-panels";
 import { useUnsavedRouteGuard } from "./use-unsaved-route-guard";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS, withShortcut } from "@/lib/shortcuts";
@@ -103,7 +106,6 @@ export function AppLayout() {
   // 工作台显示聚焦任务所在工作区的桶（无任务时为选中工作区）；归属尚在加载时暂不显示，不销毁任何内容。
   const workbenchWorkspace = catalog.workspaces.find((workspace) => workspace.workspace_id === catalog.activeTaskWorkspaceId);
   const workbenchWorkspaceId = workbenchWorkspace?.workspace_id ?? null;
-  const workbench = useWorkbenchPanel(workbenchWorkspaceId, filesVisible);
   // 快捷键先于导航函数注册，经 ref 调用最新的实现。
   const startNewConversationRef = useRef<() => void>(() => undefined);
   const actions = useWorkspaceActions(catalog, focusedTaskId);
@@ -140,6 +142,8 @@ export function AppLayout() {
   // ---- 终端工作台：入口在页头，面板在 TaskPage 内，二者经按 taskId 分桶的 store 协作 ----
   // 对话页的 Task：终端与会话侧栏都只属于对话区，配置 / 观测页不显示。
   const conversationTaskId = section === "conversation" ? routeTaskId : null;
+  // 右侧停靠区：文件、内置浏览器、工作台三选一，各自独立（见 useDockPanels / lib/layout/dock-store）。
+  const dock = useDockPanels({ workspaceId: workbenchWorkspaceId, filesVisible, conversationTaskId });
   const terminalPanelOpen = useTerminalWorkbenchStore((state) => conversationTaskId === null ? false : selectTerminalTask(conversationTaskId)(state).open);
   const terminalBadge = useTerminalBadge(conversationTaskId);
   const toggleTerminal = useCallback(() => {
@@ -248,13 +252,14 @@ export function AppLayout() {
           图标栏，头部左侧补足差值。安全区为 0 的平台上两者都退回头部默认内边距。
         */}
         <div
-          ref={workbench.containerRef}
+          ref={dock.containerRef}
           className={cn(
-            "bg-background flex min-h-0 min-w-0 flex-1 [--header-inset-right:var(--titlebar-inset-right)] has-[[data-workbench-dock]]:[--header-inset-right:0px]",
+            "bg-background flex min-h-0 min-w-0 flex-1 [--header-inset-right:var(--titlebar-inset-right)] has-[[data-dock-panel]]:[--header-inset-right:0px]",
             sidebarRail && "[--header-inset-left:calc(var(--titlebar-inset-left)-3rem)]",
           )}
         >
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {/* 浏览器铺满时对话区让出整行；用 hidden 而不是卸载：任务页与 Assistant runtime 保持挂载。 */}
+        <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col", dock.browserMaximized && "hidden")}>
           <PageHeader
             leading={sidebarRail ? <SidebarToggleButton collapsed onToggle={toggleSidebar} /> : undefined}
             crumbs={crumbs}
@@ -280,13 +285,25 @@ export function AppLayout() {
                     )}
                   </TooltipIconButton>
                 )}
-                {filesVisible && workbenchWorkspaceId !== null && (
+                {conversationTaskId !== null && desktopHost !== null && (
+                  <TooltipIconButton
+                    tooltip={dock.panel === "browser" ? "收起浏览器" : "打开浏览器"}
+                    aria-label={`浏览器，${dock.conversationTabCount} 个标签页，${dock.panel === "browser" ? "点击收起" : "点击打开"}`}
+                    aria-pressed={dock.panel === "browser"}
+                    className={cn("relative size-7", dock.panel === "browser" && "bg-muted text-foreground")}
+                    onClick={() => dock.toggle("browser")}
+                  >
+                    <GlobeIcon />
+                    {dock.conversationTabCount > 0 && <CountBadge>{dock.conversationTabCount}</CountBadge>}
+                  </TooltipIconButton>
+                )}
+                {dock.available.files && (
                   <TooltipIconButton
                     tooltip="浏览工作区文件"
                     aria-label="浏览工作区文件"
-                    aria-pressed={workbench.filesActive}
-                    className={cn("size-7", workbench.filesActive && "bg-muted text-foreground")}
-                    onClick={workbench.openFiles}
+                    aria-pressed={dock.panel === "files"}
+                    className={cn("size-7", dock.panel === "files" && "bg-muted text-foreground")}
+                    onClick={() => dock.toggle("files")}
                   >
                     <FolderIcon />
                   </TooltipIconButton>
@@ -304,17 +321,17 @@ export function AppLayout() {
                     {rail.runningCount > 0 && <CountBadge>{rail.runningCount}</CountBadge>}
                   </TooltipIconButton>
                 )}
-                {workbench.tabs.length > 0 && (
+                {dock.available.workbench && (
                   <TooltipIconButton
-                    tooltip={withShortcut(workbench.open ? "收起工作台" : "打开工作台", "toggleWorkbench")}
-                    aria-label={`工作台，${workbench.tabs.length} 个标签，${workbench.open ? "点击收起" : "点击打开"}`}
-                    aria-pressed={workbench.open}
-                    className={cn("relative size-7", workbench.open && "bg-muted text-foreground")}
-                    onClick={workbench.toggle}
+                    tooltip={withShortcut(dock.panel === "workbench" ? "收起工作台" : "打开工作台", "toggleWorkbench")}
+                    aria-label={`工作台，${dock.workbenchTabs.length} 个标签，${dock.panel === "workbench" ? "点击收起" : "点击打开"}`}
+                    aria-pressed={dock.panel === "workbench"}
+                    className={cn("relative size-7", dock.panel === "workbench" && "bg-muted text-foreground")}
+                    onClick={() => dock.toggle("workbench")}
                   >
                     <PanelRightIcon />
                     {/* 标签数作为角标：图标化后仍能一眼看出工作台里有几样东西。 */}
-                    <CountBadge>{workbench.tabs.length}</CountBadge>
+                    <CountBadge>{dock.workbenchTabs.length}</CountBadge>
                   </TooltipIconButton>
                 )}
                 <BackendRestartButton />
@@ -372,17 +389,24 @@ export function AppLayout() {
         </main>
 
         <IsolatedRegion
-          region="workbench"
-          label="工作台"
-          // 收起会改变 resetKey，从而清除崩溃状态；下次打开重新挂载。
-          resetKey={`workbench:${workbenchWorkspaceId ?? "none"}:${workbench.open ? "open" : "closed"}`}
+          region="dock"
+          label="右侧面板"
+          // 换面板或收起会改变 resetKey，从而清除崩溃状态；下次打开重新挂载。
+          resetKey={`dock:${dock.panel ?? "none"}:${workbenchWorkspaceId ?? "none"}`}
           fallbackClassName="dock-panel bg-background m-2 w-80 shrink-0 p-3"
-          escape={{ label: "收起工作台", onClick: () => workbench.setOpen(false) }}
+          escape={{ label: "收起面板", onClick: dock.close }}
         >
-          {workbenchWorkspace && workbench.open && (
-            <Workbench workspace={workbenchWorkspace} tabs={workbench.tabs} activeTabId={workbench.activeTabId}
-              width={workbench.width} minWidth={workbench.minWidth} maxWidth={workbench.maxWidth}
-              onWidthChange={workbench.setWidth} onRequestClose={() => workbench.setOpen(false)} />
+          {dock.sizing && dock.panel === "workbench" && workbenchWorkspace && (
+            <Workbench workspace={workbenchWorkspace} tabs={dock.workbenchTabs} activeTabId={dock.workbenchActiveTabId}
+              width={dock.sizing.width} minWidth={dock.sizing.minWidth} maxWidth={dock.sizing.maxWidth}
+              onWidthChange={dock.sizing.onWidthChange} onRequestClose={dock.close} />
+          )}
+          {dock.sizing && dock.panel === "files" && workbenchWorkspace && (
+            <FilesPanel workspace={workbenchWorkspace} {...dock.sizing} onClose={dock.close} />
+          )}
+          {dock.sizing && dock.panel === "browser" && (
+            <BrowserPanel taskId={dock.browserTaskId} {...dock.sizing}
+              maximized={dock.browserMaximized} onToggleMaximized={dock.toggleBrowserMaximized} onClose={dock.close} />
           )}
         </IsolatedRegion>
         </div>

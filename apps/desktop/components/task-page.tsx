@@ -7,6 +7,7 @@ import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalWorkbench } from "@/components/terminal/terminal-workbench";
 import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
+import { useHandoffStore } from "@/lib/handoff/store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
@@ -112,6 +113,7 @@ export function TaskPage({
   useEffect(() => () => {
     useTerminalWorkbenchStore.getState().syncSessions(taskId, null);
     useBackgroundTasksStore.getState().sync(taskId, null);
+    useHandoffStore.getState().sync(taskId, null);
   }, [taskId]);
 
   if (error) return (

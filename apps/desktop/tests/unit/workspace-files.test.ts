@@ -4,7 +4,7 @@ import {
   parentsOf,
   useFilesStore,
 } from "@/lib/workspace-files/store";
-import { useWorkbenchStore } from "@/lib/workbench/store";
+import { useDockStore } from "@/lib/layout/dock-store";
 
 describe("workspace file sessions", () => {
   beforeEach(() => useFilesStore.setState({ sessions: {} }));
@@ -63,11 +63,11 @@ describe("workspace file sessions", () => {
       "apps",
       "apps/backend",
     ]));
-  it("Workbench 文件入口不依赖 Agent 标签且不重复打开", () => {
-    useWorkbenchStore.getState().openFiles(2);
-    useWorkbenchStore.getState().openFiles(2);
-    const session = useWorkbenchStore.getState().sessions[2];
-    expect(session.tabs.filter((t) => t.kind === "files")).toHaveLength(1);
-    expect(session.panelOpen).toBe(true);
+  it("文件是独立面板：打开文件入口只切换停靠区，不进工作台标签", () => {
+    useDockStore.getState().close();
+    useDockStore.getState().toggle("files");
+    expect(useDockStore.getState().panel).toBe("files");
+    useDockStore.getState().toggle("files");
+    expect(useDockStore.getState().panel).toBeNull();
   });
 });

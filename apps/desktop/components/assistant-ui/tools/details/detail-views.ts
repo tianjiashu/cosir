@@ -1,6 +1,7 @@
 import { childAgentView } from "./child-agent-view";
 import type { DetailView } from "./detail-view";
 import { mcpView, skillView } from "./extension-views";
+import { imageReadView } from "./image-read-view";
 import { readFileView } from "./read-file-view";
 import { webExtractView, webSearchView } from "./web-views";
 import { contentSearchView, directoryListView, fileListView } from "./workspace-list-views";
@@ -19,6 +20,7 @@ export const DETAIL_VIEWS: Readonly<Record<string, DetailView>> = {
   "web-search-results": webSearchView,
   "web-extract-urls": webExtractView,
   "child-agent-result": childAgentView,
+  "image-read": imageReadView,
   "mcp-tool-result": mcpView,
   "skill-content": skillView,
 };

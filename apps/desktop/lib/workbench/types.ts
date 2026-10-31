@@ -29,15 +29,9 @@ export type WorkbenchAgentTeamConfigurationDraftTab = {
   session: TeamEditorSession;
 };
 
-type WorkbenchFilesTab = {
-  id: "workspace-files";
-  kind: "files";
-  title: string;
-};
-
 export type WorkbenchDraftTab = WorkbenchAgentConfigurationDraftTab | WorkbenchAgentTeamConfigurationDraftTab;
 
+/** 工作台只放子 Agent 与配置草稿；文件与内置浏览器是各自独立的停靠面板（`lib/layout/dock-store.ts`）。 */
 export type WorkbenchTab =
-  | WorkbenchFilesTab
   | WorkbenchAgentTab
   | WorkbenchDraftTab;

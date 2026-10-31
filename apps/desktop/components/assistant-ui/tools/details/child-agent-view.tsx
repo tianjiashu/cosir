@@ -6,9 +6,10 @@ import type { DetailView } from "./detail-view";
  * `child-agent-result`（`child_agent_send` / `child_agent_status`）。
  *
  * 摘要里的状态是子 Task 最新 Run 的状态（含 suspended），用 Run 状态文案而不是工具调用
- * 状态；行尾的工具状态只表示这次查询 / 发送本身。renderer 注册表已保证载荷有效。
+ * 状态；行尾的工具状态只表示这次查询 / 发送本身。载荷有效性由 `accepts` 在路由时保证。
  */
 export const childAgentView: DetailView = {
+  accepts: (data) => readChildAgentResultDisplay(data) !== null,
   summary: (data) => {
     const result = readChildAgentResultDisplay(data)!;
     return `${result.agentName ?? "子 Agent"} · 子 Agent：${taskRunStatusPresentation(result.status, true)?.label}`;

@@ -2,10 +2,7 @@
 
 import { memo, useState, useEffect, useRef, type PropsWithChildren } from "react";
 import { ImageIcon, ImageOffIcon } from "lucide-react";
-import { ImageLightbox } from "@/components/ui/image-lightbox";
 import { cn } from "@/lib/utils";
-import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
-import { resolveTransportImageSrc } from "@/hooks/use-attachment-src";
 
 /** 消息缩略图的固定尺寸外框。 */
 function ImageRoot({ children }: PropsWithChildren) {
@@ -62,6 +59,8 @@ function ImagePreview({ src, alt }: { src: string; alt: string }) {
           ref={imgRef}
           src={src}
           alt={alt}
+          loading="lazy"
+          decoding="async"
           className={cn(
             "block h-full w-full object-contain",
             !loaded && "invisible",
@@ -75,13 +74,13 @@ function ImagePreview({ src, alt }: { src: string; alt: string }) {
 }
 
 /**
- * 用户消息里的图片附件缩略图（唯一调用方为 `UserMessageImages`）。
- * 附件 locator 经 `resolveTransportImageSrc` 解析为可显示地址，解析不到时显示占位图标。
+ * 按比例完整显示的图片缩略图：用户消息里的图片与网页截图。要方形裁切的小图用 `ImageThumbnail`。
+ *
+ * 地址由调用方解析好再传入（解析不到时显示占位图标）；放大预览由图片组（`useImageGallery`）持有，
+ * 这里只经 `onOpen` 请求打开。
  */
-function ImageImpl({ image }: { image: string }) {
-  const imageSrc = resolveTransportImageSrc(image, useAttachmentWorkspaceId());
-
-  if (!imageSrc) {
+function ImageImpl({ src, onOpen }: { src: string | undefined; onOpen?: () => void }) {
+  if (!src) {
     return (
       <ImageRoot>
         <div className="bg-muted/50 flex h-full items-center justify-center p-4">
@@ -93,15 +92,13 @@ function ImageImpl({ image }: { image: string }) {
 
   return (
     <ImageRoot>
-      <ImageLightbox
-        src={imageSrc}
-        alt="图片内容"
-        trigger={
-          <div className="aui-image-zoom-trigger h-full cursor-zoom-in" aria-label="点击放大图片">
-            <ImagePreview src={imageSrc} alt="图片内容" />
-          </div>
-        }
-      />
+      {onOpen ? (
+        <button type="button" className="aui-image-zoom-trigger block size-full cursor-zoom-in" aria-label="点击放大图片" onClick={onOpen}>
+          <ImagePreview src={src} alt="图片内容" />
+        </button>
+      ) : (
+        <ImagePreview src={src} alt="图片内容" />
+      )}
     </ImageRoot>
   );
 }

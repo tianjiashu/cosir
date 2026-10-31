@@ -1,38 +1,55 @@
 "use client";
 
-import { MessagePrimitive, useAuiState } from "@assistant-ui/react";
+import { Fragment, useMemo } from "react";
+import { useAuiState } from "@assistant-ui/react";
+import { useShallow } from "zustand/react/shallow";
 import { Image } from "@/components/image";
-import { PartRenderBoundary } from "@/components/assistant-ui/elements/part-render-boundary";
+import { useImageGallery } from "@/components/image-gallery";
+import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
+import { ImageStack } from "@/components/assistant-ui/elements/image-stack";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
+import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
+import { resolveTransportImageSrc } from "@/hooks/use-attachment-src";
+import { shouldStackImages } from "@/lib/assistant/image-stack-policy";
 
 /**
  * 将用户消息中的图片 part 渲染为气泡上方的预览区。
  *
  * 普通文件不在这里：它们是正文里的行内胶囊，由 `UserMessageContent` 在原位渲染。
- * 图片复用共享 Image 组件，以保持加载失败处理、transport 定位解析和点击放大行为一致；
- * 本组件只负责布局（位于文本气泡上方并右对齐），每张图的渲染异常由独立 Boundary 隔离。
+ * 本组件负责布局（位于文本气泡上方并右对齐，超过阈值收成一叠）与这一组图片的放大预览：地址在这里
+ * 解析一次，缩略图与灯箱共用，点任意一张都能在整组里左右翻看。每张图的渲染异常由独立 Boundary 隔离（这里不在 part 作用域里渲染，所以不用 `PartRenderBoundary`）。
  */
 export function UserMessageImages() {
-  const hasImages = useAuiState((state) => state.message.parts.some((part) => part.type === "image"));
+  const locators = useAuiState(useShallow((state) => state.message.parts.flatMap((part) => (part.type === "image" ? [part.image] : []))));
+  const messageId = useAuiState((state) => state.message.id);
+  const workspaceId = useAttachmentWorkspaceId();
+  const images = useMemo(
+    () => locators.map((locator) => ({ src: resolveTransportImageSrc(locator, workspaceId), alt: "图片内容" })),
+    [locators, workspaceId],
+  );
+  const gallery = useImageGallery(images);
 
-  if (!hasImages) return null;
+  if (images.length === 0) return null;
+
+  const renderTile = (index: number) => (
+    <RenderIsolationBoundary
+      scope="part"
+      resetKey={`${messageId}:image:${index}:${locators[index]}`}
+      metadata={{ messageId, renderer: "图片附件", attachmentType: "image" }}
+      fallback={({ onRetry }) => (
+        <RenderErrorCard scope="attachment" label="图片附件" onRetry={onRetry} />
+      )}
+    >
+      <Image src={images[index].src} onOpen={() => gallery.open(index)} />
+    </RenderIsolationBoundary>
+  );
 
   return (
-    <div
-      data-slot="user-message-images"
-      className="flex max-w-full flex-wrap justify-end gap-2"
-    >
-      <MessagePrimitive.Parts>{({ part }) => part.type === "image" ? (
-        <PartRenderBoundary
-          renderer="图片附件"
-          metadata={{ attachmentType: "image" }}
-          fallback={({ onRetry }) => (
-            <RenderErrorCard scope="attachment" label="图片附件" onRetry={onRetry} />
-          )}
-        >
-          <Image image={part.image} />
-        </PartRenderBoundary>
-      ) : null}</MessagePrimitive.Parts>
+    <div data-slot="user-message-images" className="flex max-w-full flex-wrap justify-end gap-2">
+      {shouldStackImages(images.length)
+        ? <ImageStack count={images.length} renderTile={renderTile} />
+        : images.map((_, index) => <Fragment key={index}>{renderTile(index)}</Fragment>)}
+      {gallery.lightbox}
     </div>
   );
 }

@@ -200,7 +200,7 @@ export function TaskContextUsage(): ReactElement {
         {presentation.status === "unknown"
           ? <GaugeIcon className="size-3.5" aria-hidden="true" />
           : <UsageRing percent={percent} tone={presentation.tone} />}
-        <span className="hidden sm:inline">{presentation.label}</span>
+        <span className="hidden @lg:inline">{presentation.label}</span>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 max-w-[calc(100vw-1rem)]">
         <PopoverHeader>

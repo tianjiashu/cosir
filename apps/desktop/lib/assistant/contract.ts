@@ -270,9 +270,6 @@ export type TerminalSessionEntry = {
   integration: "starting" | "ready" | "unavailable" | "off";
   /** 集成跟踪到有命令正在执行；无集成（integration 非 ready）时恒为 false，不代表空闲。 */
   commandRunning: boolean;
-  /** Agent 发起的交接；非空时面板自动打开并提示用户输入。 */
-  /** 交接中时的说明与对应的 `terminal_handoff` 调用；「交还」即对该调用作出 HITL 决定。 */
-  handoff: { reason: string; toolCallId: string } | null;
   createdAt: string;
 };
 
@@ -290,6 +287,21 @@ export type BackgroundTaskEntry = {
   status: "running" | "completed" | "cancelled";
   startedAt: string;
   endedAt: string | null;
+};
+
+/**
+ * 一次进行中的交接（snapshot 顶层 `handoffs`）：Agent 把一个资源交给用户、等用户交还。
+ *
+ * 事实源是后端进程内的交接登记表，按登记先后排列，同一资源至多一条；后端重启后清空（工具卡片上的交还入口
+ * 仍在）。`surface` + `resourceId` 指向交出去的资源（终端会话 id、浏览器标签 id），「交还」即对 `toolCallId`
+ * 作出 HITL 决定。
+ */
+export type HandoffEntry = {
+  toolCallId: string;
+  toolName: string;
+  surface: "terminal" | "browser";
+  resourceId: string;
+  reason: string;
 };
 
 /** Task 级 Transport state。 */
@@ -318,4 +330,6 @@ export type TransportState = {
   background_tasks: BackgroundTaskEntry[];
   /** 正在前台等待、可转到后台的工具调用 id（必填，可为空数组）；只服务工具卡片的「转到后台」。 */
   foreground_waits: string[];
+  /** 进行中的交接（必填，可为空数组）；面板的交接提示与自动弹出读它。 */
+  handoffs: HandoffEntry[];
 };

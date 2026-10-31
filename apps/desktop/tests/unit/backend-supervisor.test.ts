@@ -54,7 +54,7 @@ async function settle() {
 
 describe("BackendSupervisor", () => {
   it("publishes ready with the backend address after a successful start", async () => {
-    const supervisor = new BackendSupervisor();
+    const supervisor = new BackendSupervisor("test-host-token");
     const snapshots: unknown[] = [];
     supervisor.onChange((snapshot) => snapshots.push(snapshot.status.state));
 
@@ -65,11 +65,13 @@ describe("BackendSupervisor", () => {
     expect(snapshot.backendBaseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(snapshot.generation).toBe(1);
     expect(snapshots).toEqual(["starting", "ready"]);
+    // 宿主工具链路的 token 随每次拉起注入后端；不注入时后端拒绝宿主连接。
+    expect(spawnMock).toHaveBeenCalledWith(expect.objectContaining({ hostToken: "test-host-token" }));
   });
 
   // 目的：自动恢复只有一次；潜在缺陷：反复崩溃被无限重启掩盖，用户永远看不到失败。
   it("recovers from a crash once, then reports failure instead of restarting forever", async () => {
-    const supervisor = new BackendSupervisor();
+    const supervisor = new BackendSupervisor("test-host-token");
     await supervisor.start();
 
     children[0].crash();
@@ -84,7 +86,7 @@ describe("BackendSupervisor", () => {
   });
 
   it("restart resets the crash recovery budget", async () => {
-    const supervisor = new BackendSupervisor();
+    const supervisor = new BackendSupervisor("test-host-token");
     await supervisor.start();
     children[0].crash();
     await settle();
@@ -104,7 +106,7 @@ describe("BackendSupervisor", () => {
       .mockResolvedValueOnce({ ok: false, superseded: false, message: "后端在 90 秒内未通过健康检查" })
       .mockResolvedValueOnce({ ok: false, superseded: false, message: "后端在 90 秒内未通过健康检查" })
       .mockResolvedValueOnce({ ok: true });
-    const supervisor = new BackendSupervisor();
+    const supervisor = new BackendSupervisor("test-host-token");
 
     await supervisor.start();
 
@@ -115,7 +117,7 @@ describe("BackendSupervisor", () => {
 
   it("reports the last attempt's reason once every attempt fails", async () => {
     waitMock.mockResolvedValue({ ok: false, superseded: false, message: "本地 Agent 后端启动失败（ImportError）：缺少依赖" });
-    const supervisor = new BackendSupervisor();
+    const supervisor = new BackendSupervisor("test-host-token");
 
     await supervisor.start();
 
@@ -130,7 +132,7 @@ describe("BackendSupervisor", () => {
       await new Promise<void>((resolve) => (release = resolve));
       return isCurrent() ? { ok: true } : { ok: false, superseded: true, message: "superseded" };
     });
-    const supervisor = new BackendSupervisor();
+    const supervisor = new BackendSupervisor("test-host-token");
     const starting = supervisor.start();
     await settle();
 
@@ -143,7 +145,7 @@ describe("BackendSupervisor", () => {
   });
 
   it("does not treat an intentional stop as a crash", async () => {
-    const supervisor = new BackendSupervisor();
+    const supervisor = new BackendSupervisor("test-host-token");
     await supervisor.start();
 
     await supervisor.stop();
@@ -160,7 +162,7 @@ describe("BackendSupervisor", () => {
       await new Promise<void>((resolve) => (release = resolve));
       return { ok: true };
     });
-    const supervisor = new BackendSupervisor();
+    const supervisor = new BackendSupervisor("test-host-token");
     const starting = supervisor.start();
     await settle();
 
@@ -172,7 +174,7 @@ describe("BackendSupervisor", () => {
   // 目的：停旧进程的宽限期也受启动守卫保护；潜在缺陷：连点重启时第二次趁旧进程还没退出插进来，
   // 第一次醒来覆盖并清掉守卫，留下无人看守的启动，还向用户报「重启失败」。
   it("refuses a second restart while the first is still stopping the old process", async () => {
-    const supervisor = new BackendSupervisor();
+    const supervisor = new BackendSupervisor("test-host-token");
     await supervisor.start();
     let releaseStop!: () => void;
     vi.mocked(stopProcessTree).mockImplementationOnce(() => new Promise<void>((resolve) => (releaseStop = resolve)));

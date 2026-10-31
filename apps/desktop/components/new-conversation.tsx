@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import type { ComponentProps, SetStateAction } from "react";
 
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2Icon, SendIcon } from "lucide-react";
@@ -13,6 +13,7 @@ import { ComposerEditor, COMPOSER_EDITOR_CLASS_NAME, COMPOSER_PLACEHOLDER } from
 import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
 import { ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
+import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
 import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
 import { ComposerSurface } from "@/components/composer/composer-surface";
 import { useCreateWorkspaceFromFolder, WorkspacePicker } from "@/components/composer/workspace-picker";
@@ -26,7 +27,10 @@ import { useModelCatalog } from "@/lib/model-catalog";
 import { cn } from "@/lib/utils";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model-selection-storage";
 import { AttachmentPicker } from "@/components/composer/attachment-picker";
-import { ImageAttachmentCard, ImageAttachmentStrip } from "@/components/composer/image-attachment-card";
+import { ImageAttachmentStrip } from "@/components/composer/image-attachment-strip";
+import { ImageThumbnail } from "@/components/image-thumbnail";
+import { useImageGallery } from "@/components/image-gallery";
+import { useObjectUrls } from "@/hooks/use-attachment-src";
 import { submitNewConversationMessage, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-new-conversation-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { showErrorDialog } from "@/lib/confirm/confirm-store";
@@ -47,25 +51,38 @@ function imageAttachment(file: File): ImageDraftAttachment {
   return { id, name, file: namedFile };
 }
 
-function NewConversationAttachmentChip({ attachment, onRemove }: {
-  attachment: ImageDraftAttachment;
-  onRemove: () => void;
+/** 新对话页的待发图片条：对象 URL 与放大预览在这一层建一次，灯箱能在全部待发图片间翻看。 */
+function NewConversationImages({ attachments, onRemove }: {
+  attachments: readonly ImageDraftAttachment[];
+  onRemove: (id: string) => void;
 }) {
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    const url = URL.createObjectURL(attachment.file);
-    setPreviewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [attachment.file]);
-
-  return <ImageAttachmentCard src={previewUrl} name={attachment.name} onRemove={onRemove} />;
+  const urls = useObjectUrls(useMemo(() => attachments.map((attachment) => attachment.file), [attachments]));
+  const gallery = useImageGallery(useMemo(
+    () => attachments.map((attachment) => ({ src: urls.get(attachment.file), alt: attachment.name })),
+    [attachments, urls],
+  ));
+  return (
+    <>
+      <ImageAttachmentStrip>
+        {attachments.map((attachment, index) => (
+          <ImageThumbnail
+            key={attachment.id}
+            src={urls.get(attachment.file)}
+            name={attachment.name}
+            onRemove={() => onRemove(attachment.id)}
+            onOpen={() => gallery.open(index)}
+          />
+        ))}
+      </ImageAttachmentStrip>
+      {gallery.lightbox}
+    </>
+  );
 }
 
-function NewConversationInput({ addImage, ...props }: Omit<ComponentProps<typeof ComposerEditor>, "onExternalFiles"> & {
-  addImage: (file: File) => void;
+function NewConversationInput({ images, ...props }: Omit<ComponentProps<typeof ComposerEditor>, "onExternalFiles"> & {
+  images: ComposerImageSink;
 }) {
-  const addFiles = useComposerFiles(addImage);
+  const addFiles = useComposerFiles(images);
   return <ComposerEditor {...props} onExternalFiles={addFiles} />;
 }
 
@@ -127,7 +144,11 @@ export function NewConversation({
     ? userErrorMessage(toolGroupsQuery.error, "工具组加载失败")
     : null;
   const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
-  const addImage = (file: File) => setAttachments((current) => [...current, imageAttachment(file)]);
+  const images: ComposerImageSink = {
+    add: (file) => setAttachments((current) => [...current, imageAttachment(file)]),
+    // 现读 store：同一批文件逐张添加时，草稿列表已在上一次 add 后更新。
+    count: () => useNewTaskDrafts.getState().drafts[currentDraftId.current]?.attachments.length ?? 0,
+  };
   const hasDraft = Boolean(text.trim() || attachments.length > 0);
   const modelState = modelSetupState(useModelCatalog());
   const workspaceCreation = useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceChange });
@@ -252,17 +273,12 @@ export function NewConversation({
               onWorkspaceCreated={async () => onWorkspaceCreated()}
             />
           </div>
-          <ImageAttachmentStrip>
-            {attachments.map((attachment) => (
-              <NewConversationAttachmentChip
-                key={attachment.id}
-                attachment={attachment}
-                onRemove={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}
-              />
-            ))}
-          </ImageAttachmentStrip>
+          <NewConversationImages
+            attachments={attachments}
+            onRemove={(id) => setAttachments((current) => current.filter((item) => item.id !== id))}
+          />
           <NewConversationInput
-            addImage={addImage}
+            images={images}
             value={text}
             onChange={setText}
             onSubmit={() => {
@@ -292,7 +308,7 @@ export function NewConversation({
             <div className="flex items-center gap-1">
               <AttachmentPicker
                 workspaceRoot={selectedWorkspace?.root_path}
-                addImage={addImage}
+                images={images}
                 disabled={submitting}
               />
               {blockedReason && (

@@ -16,6 +16,7 @@ import type {
 import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
+import { useHandoffStore } from "@/lib/handoff/store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { newTraceId } from "@/lib/trace";
 import { getToolGroups, type ToolGroupCatalog } from "@/lib/api/tools";
@@ -157,6 +158,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     // 终端会话列表是 snapshot 投影；镜像给页头按钮与终端工作台（它们在 Assistant runtime 之外）。
     useTerminalWorkbenchStore.getState().syncSessions(taskId, state.terminal_sessions);
     useBackgroundTasksStore.getState().sync(taskId, state);
+    useHandoffStore.getState().sync(taskId, state.handoffs);
     // 标题事实在后端 tasks.title；snapshot 只负责通知打开中的页面，侧栏目录按既有刷新路径重读。
     if (state.title !== previousTitle) notifyTaskStateChanged();
   }, [cancellation.onStateCommitted, notifyTaskStateChanged, sessionInitialState, taskId]);

@@ -135,7 +135,7 @@ function SelectorView({
         <OfficialModelSelectorTrigger
           variant="ghost"
           size="sm"
-          className="min-w-0 max-w-full sm:max-w-60"
+          className="min-w-0 max-w-full @lg:max-w-60"
           aria-label="选择模型"
           disabled={disabled}
         >
@@ -205,6 +205,8 @@ function useScopedSelection(scope: ModelSelectionScope | undefined) {
   return { ...catalogState, selection, updateSelection };
 }
 
+const DELETED_LOCKED_MODEL_HINT = "运行中的模型配置已删除，停止后重新选择";
+
 /** 锁定配置转成选择器的选择；模型配置已删除时为 null。 */
 function lockedSelection(launch: TransportRunLaunch): ModelSelection | null {
   if (launch.modelConfigId === null) return null;
@@ -242,7 +244,7 @@ function SelectorBody({
   return (
     <ModelAvailability status={status} modelCount={catalog?.models.length ?? 0} onRetry={retry} configure={configure}>
       {locked && !selectedModel && (
-        <span className="text-muted-foreground text-xs">运行中的模型配置已删除，停止后重新选择</span>
+        <span className="text-muted-foreground min-w-0 truncate text-xs" title={DELETED_LOCKED_MODEL_HINT}>{DELETED_LOCKED_MODEL_HINT}</span>
       )}
       {selection && catalog && (
         <SelectorView catalogModels={catalog.models} selection={selection} disabled={locked} onSelectionChange={updateSelection} />
