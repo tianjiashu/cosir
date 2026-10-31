@@ -18,14 +18,13 @@ export type ModelSelectionScope =
   | { kind: "task"; id: number };
 
 const STORAGE_KEY_PREFIX = "cosir:model-config-selection:";
-const DEFAULT_TASK_KEY = "default";
 const selectionSnapshotCache = new Map<string, {
   raw: string | null;
   value: Partial<ModelSelection> | null;
 }>();
 const selectionSubscribers = new Map<string, Set<() => void>>();
 
-function getCachedSelection(scope?: ModelSelectionScope): Partial<ModelSelection> | null {
+function getCachedSelection(scope: ModelSelectionScope): Partial<ModelSelection> | null {
   if (typeof window === "undefined") return null;
   const key = selectionStorageKey(scope);
   let raw: string | null;
@@ -41,7 +40,7 @@ function getCachedSelection(scope?: ModelSelectionScope): Partial<ModelSelection
   return value;
 }
 
-function notifySelection(scope?: ModelSelectionScope): void {
+function notifySelection(scope: ModelSelectionScope): void {
   for (const listener of selectionSubscribers.get(selectionStorageKey(scope)) ?? []) listener();
 }
 
@@ -49,13 +48,12 @@ function notifySelection(scope?: ModelSelectionScope): void {
  * 构造 localStorage 中模型选择项的 key。工作区与任务即使使用同一个数字
  * ID，也必须生成不同的 key，避免页面级选择污染任务级选择。
  */
-export function scopeSuffix(scope?: ModelSelectionScope): string {
-  return scope ? `${scope.kind}:${scope.id}` : "";
+export function scopeSuffix(scope: ModelSelectionScope): string {
+  return `${scope.kind}:${scope.id}`;
 }
 
-export function selectionStorageKey(scope?: ModelSelectionScope): string {
-  const suffix = scopeSuffix(scope);
-  return `${STORAGE_KEY_PREFIX}${suffix || DEFAULT_TASK_KEY}`;
+export function selectionStorageKey(scope: ModelSelectionScope): string {
+  return `${STORAGE_KEY_PREFIX}${scopeSuffix(scope)}`;
 }
 
 /**
@@ -104,12 +102,12 @@ function parseStoredSelection(
 /**
  * 读取指定作用域的模型选择结果。
  *
- * 不在 workspace 与 task 之间回落。未提供作用域时只读取显式 default key。
+ * 不在 workspace 与 task 之间回落。
  * 任何失败路径（window 不存在、localStorage 被禁用、JSON.parse 失败、字段
  * 缺失或类型不符）均返回 null，不抛异常。
  */
 export function readStoredSelection(
-  scope?: ModelSelectionScope,
+  scope: ModelSelectionScope,
 ): Partial<ModelSelection> | null {
   return getCachedSelection(scope);
 }
