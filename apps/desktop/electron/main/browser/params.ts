@@ -1,4 +1,5 @@
 import { HostMethodError } from "../host-link/methods";
+import { SUPPORTED_KEYS } from "./page-input";
 import type { TabLimits } from "./tab-table";
 
 /**
@@ -55,15 +56,15 @@ export function parseTabs(params: unknown): TabsRequest {
   return { taskId: taskId(value.task_id), action, tab };
 }
 
-export function parseAct(params: unknown, supportedKeys: readonly string[]): ActRequest {
+export function parseAct(params: unknown): ActRequest {
   const value = object(params);
   if (!Array.isArray(value.actions) || value.actions.length === 0 || value.actions.length > MAX_ACTIONS) {
     throw invalid(`actions must be a list of 1 to ${MAX_ACTIONS} actions`);
   }
-  return { ...parseSnapshot(params), actions: value.actions.map((item) => parseAction(item, supportedKeys)) };
+  return { ...parseSnapshot(params), actions: value.actions.map(parseAction) };
 }
 
-function parseAction(item: unknown, supportedKeys: readonly string[]): PageAction {
+function parseAction(item: unknown): PageAction {
   const action = object(item);
   switch (action.type) {
     case "click":
@@ -78,7 +79,7 @@ function parseAction(item: unknown, supportedKeys: readonly string[]): PageActio
         submit: action.submit === undefined || action.submit === null ? false : boolean(action.submit, "submit"),
       };
     case "press":
-      return { type: "press", key: oneOf(action.key, supportedKeys, "key") };
+      return { type: "press", key: oneOf(action.key, SUPPORTED_KEYS, "key") };
     case "select":
       if (!Array.isArray(action.values) || action.values.length === 0 || !action.values.every((item) => typeof item === "string")) {
         throw invalid("select needs values");
