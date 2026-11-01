@@ -23,7 +23,7 @@ const listeners = new Set<() => void>();
 let systemQuery: MediaQueryList | null = null;
 
 function logStorageFailure(message: string, error: unknown): void {
-  void frontendLog("WARNING", "theme_preference_storage_failed", message, { error }).catch(() => undefined);
+  void frontendLog("WARNING", "theme_preference_storage_failed", message, { error });
 }
 
 function isThemePreference(value: unknown): value is ThemePreference {

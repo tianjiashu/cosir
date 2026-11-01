@@ -2,12 +2,13 @@ import { HostMethodError } from "../host-link/methods";
 import type { PageAction } from "./params";
 
 /**
- * 在页面上执行一组动作（点击、输入、按键、选择、滚动、等待）。只经 CDP 合成输入；Agent 与用户输入的区分
- * 见 `BrowserTab.act`。
+ * 在页面上执行一组动作（点击、悬停、输入、按键、选择、滚动、等待）。只经 CDP 合成输入；Agent 与用户输入的
+ * 区分见 `BrowserTab.act`。
  *
- * 元素由快照里的 ref 指定，经 `resolveRef` 换成 `backendNodeId`；节点已不在页面上（导航、重渲染）报
- * `REF_STALE`，模型重新看快照即可。动作按序执行、遇错即停：已完成的动作不回滚，结果里说明停在哪一步，
- * 调用方随后照常返回新快照——新快照里有新的 ref，模型能直接接着做。
+ * 元素由快照里的 ref 指定：ref 按节点稳定、可能来自更早的快照，所以每次动作前都向页面确认节点还在文档里
+ * （`element`）——已删除或已脱离文档的节点一律报 `REF_STALE`，不让焦点落空后把字输进别的元素。
+ * 动作按序执行、遇错即停：已完成的动作不回滚，结果里说明停在哪一步，调用方随后照常返回新快照，模型能直接
+ * 接着做。
  */
 
 /** `BrowserTab` 交给本模块的最小能力；不为它单独引入接口类型。 */
@@ -26,7 +27,7 @@ export type ActResult = {
 const MAX_WAIT_SECONDS = 15;
 const POLL_MS = 250;
 
-/** CDP 键盘事件需要的字段；`text` 只给会产生字符的键（回车提交表单靠它）。 */
+/** CDP 键盘事件需要的字段；`text` 只给会产生字符的键（回车提交表单靠它）。单个字母与数字由 `keySpec` 现算。 */
 const KEYS: Record<string, { code: string; keyCode: number; text?: string }> = {
   Enter: { code: "Enter", keyCode: 13, text: "\r" },
   Tab: { code: "Tab", keyCode: 9 },
@@ -43,7 +44,22 @@ const KEYS: Record<string, { code: string; keyCode: number; text?: string }> = {
   PageDown: { code: "PageDown", keyCode: 34 },
   Space: { code: "Space", keyCode: 32, text: " " },
 };
-export const SUPPORTED_KEYS = Object.keys(KEYS);
+const CHARACTER_KEY = /^[a-z0-9]$/;
+
+export function isSupportedKey(key: string): boolean {
+  return Object.hasOwn(KEYS, key) || CHARACTER_KEY.test(key);
+}
+
+/**
+ * 修饰键。`ControlOrMeta` 在 macOS 上是 Meta、其他平台是 Control（与 Playwright 同名约定），模型不必知道
+ * 宿主平台。只保证页面自己处理的快捷键（如 Cmd+Enter 发送）：macOS 上 CDP 合成的编辑快捷键（全选、撤销等）
+ * 还需另传编辑命令才会生效，这里不提供，编辑文字用 `type`。
+ */
+export const MODIFIERS = ["Alt", "Control", "Meta", "Shift", "ControlOrMeta"] as const;
+export type Modifier = (typeof MODIFIERS)[number];
+
+/** CDP `Input.dispatchKeyEvent` 的修饰键位。 */
+const MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 } as const;
 
 export async function runActions(session: PageSession, actions: readonly PageAction[], signal: AbortSignal): Promise<ActResult> {
   for (const [index, action] of actions.entries()) {
@@ -62,14 +78,20 @@ export async function runActions(session: PageSession, actions: readonly PageAct
 async function run(session: PageSession, action: PageAction, signal: AbortSignal): Promise<void> {
   switch (action.type) {
     case "click": {
-      const { x, y } = await center(session, session.resolveRef(action.ref));
+      const { x, y } = await center(session, await element(session, action.ref));
       await session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
       await session.cdp("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
       await session.cdp("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
       return;
     }
+    case "hover": {
+      // 悬停状态留到下一次鼠标移动；之后的 click 会移走指针，靠延迟收起的菜单一般能容忍。
+      const { x, y } = await center(session, await element(session, action.ref));
+      await session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      return;
+    }
     case "type": {
-      const backendNodeId = session.resolveRef(action.ref);
+      const backendNodeId = await element(session, action.ref);
       await session.cdp("DOM.scrollIntoViewIfNeeded", { backendNodeId });
       await session.cdp("DOM.focus", { backendNodeId });
       if (action.clear) await callOn(session, backendNodeId, CLEAR_FIELD);
@@ -78,34 +100,74 @@ async function run(session: PageSession, action: PageAction, signal: AbortSignal
       return;
     }
     case "press":
-      await press(session, action.key);
+      if (action.ref) {
+        const backendNodeId = await element(session, action.ref);
+        await session.cdp("DOM.scrollIntoViewIfNeeded", { backendNodeId });
+        await session.cdp("DOM.focus", { backendNodeId });
+      }
+      await press(session, action.key, action.modifiers);
       return;
     case "select": {
-      const problem = await callOn(session, session.resolveRef(action.ref), SELECT_OPTIONS, [action.values]);
+      const problem = await callOn(session, await element(session, action.ref), SELECT_OPTIONS, [action.values]);
       if (problem) throw new HostMethodError("ACTION_FAILED", problem);
       return;
     }
-    case "scroll": {
-      if (action.ref) {
-        await session.cdp("DOM.scrollIntoViewIfNeeded", { backendNodeId: session.resolveRef(action.ref) });
-        return;
-      }
-      // 不用 CDP 滚轮：视图不挂在窗口上时它永远不返回（实测）。
-      const sign = action.direction === "down" ? 1 : -1;
-      await session.cdp("Runtime.evaluate", { expression: `window.scrollBy(0, ${sign} * Math.round(innerHeight * 0.8))` });
+    case "scroll":
+      await scroll(session, action.direction, action.ref);
       return;
-    }
     case "wait_for":
-      await waitFor(session, action.text, Math.min(action.seconds ?? 5, MAX_WAIT_SECONDS), signal);
+      await waitFor(session, action, Math.min(action.seconds ?? 5, MAX_WAIT_SECONDS), signal);
       return;
   }
 }
 
-async function press(session: PageSession, key: string): Promise<void> {
-  const spec = KEYS[key];
-  const base = { key: key === "Space" ? " " : key, code: spec.code, windowsVirtualKeyCode: spec.keyCode, nativeVirtualKeyCode: spec.keyCode };
-  await session.cdp("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(spec.text ? { text: spec.text } : {}) });
+/** ref → 节点，并确认它还在文档里：删除的节点 CDP 报找不到，脱离文档但未回收的节点要问页面。 */
+async function element(session: PageSession, ref: string): Promise<number> {
+  const backendNodeId = session.resolveRef(ref);
+  if (await callOn(session, backendNodeId, IS_CONNECTED)) {
+    throw new HostMethodError("REF_STALE", `the element ${ref} is no longer on the page; use a ref from the latest snapshot`);
+  }
+  return backendNodeId;
+}
+
+async function press(session: PageSession, key: string, modifiers: readonly Modifier[] = []): Promise<void> {
+  const bits = modifiers.reduce((sum, item) => sum | MODIFIER_BITS[resolveModifier(item)], 0);
+  const spec = keySpec(key, modifiers.includes("Shift"));
+  // 按住 Alt / Control / Meta 时是快捷键，不产生字符；只按 Shift 时照常产生（大写）字符。
+  const text = bits & ~MODIFIER_BITS.Shift ? undefined : spec.text;
+  const base = { key: spec.key, code: spec.code, windowsVirtualKeyCode: spec.keyCode, nativeVirtualKeyCode: spec.keyCode, modifiers: bits };
+  await session.cdp("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(text ? { text } : {}) });
   await session.cdp("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+}
+
+function resolveModifier(modifier: Modifier): keyof typeof MODIFIER_BITS {
+  if (modifier !== "ControlOrMeta") return modifier;
+  return process.platform === "darwin" ? "Meta" : "Control";
+}
+
+function keySpec(key: string, shift: boolean): { key: string; code: string; keyCode: number; text?: string } {
+  const named = KEYS[key];
+  if (named) return { key: key === "Space" ? " " : key, ...named };
+  const char = shift ? key.toUpperCase() : key;
+  const digit = /\d/.test(key);
+  return { key: char, code: digit ? `Digit${key}` : `Key${key.toUpperCase()}`, keyCode: key.toUpperCase().charCodeAt(0), text: char };
+}
+
+/**
+ * 有方向时滚动一屏左右：带 ref 滚动包含该元素的可滚动区域（虚拟列表只渲染可见部分，只有滚它才有后面的
+ * 内容），不带 ref 滚动整页；滚不动报 `SCROLL_END`，让无限滚动的批次停下而不是空转。只有 ref 时把元素滚入
+ * 视野（截图前定位用；点击与输入会自己滚）。不用 CDP 滚轮：视图不挂在窗口上时它永远不返回（实测）。
+ */
+async function scroll(session: PageSession, direction: "up" | "down" | undefined, ref: string | undefined): Promise<void> {
+  if (direction === undefined) {
+    await session.cdp("DOM.scrollIntoViewIfNeeded", { backendNodeId: await element(session, ref!) });
+    return;
+  }
+  const down = direction === "down";
+  const problem = ref
+    ? await callOn(session, await element(session, ref), SCROLL_AREA, [down])
+    : await evaluate(session, `(${SCROLL_AREA}).call(document.documentElement, ${down})`);
+  if (problem) throw new HostMethodError("SCROLL_END", problem);
 }
 
 /** 先滚动到可见，再取内容框中心；没有布局（隐藏、零尺寸）报 `NOT_INTERACTABLE`。 */
@@ -121,7 +183,7 @@ async function center(session: PageSession, backendNodeId: number): Promise<{ x:
   return { x: (quad[0] + quad[2] + quad[4] + quad[6]) / 4, y: (quad[1] + quad[3] + quad[5] + quad[7]) / 4 };
 }
 
-/** 在元素上执行一段固定的页面函数（只用于清空输入框与选择选项，不对外开放任意脚本）。 */
+/** 在元素上执行一段本模块固定的页面函数（不对外开放任意脚本）；约定返回空串表示成功，否则是问题说明。 */
 async function callOn(session: PageSession, backendNodeId: number, fn: string, args: unknown[] = []): Promise<string> {
   const { object } = await session.cdp<{ object: { objectId: string } }>("DOM.resolveNode", { backendNodeId });
   const { result } = await session.cdp<{ result: { value?: unknown } }>("Runtime.callFunctionOn", {
@@ -132,6 +194,30 @@ async function callOn(session: PageSession, backendNodeId: number, fn: string, a
   });
   return typeof result.value === "string" ? result.value : "";
 }
+
+async function evaluate(session: PageSession, expression: string): Promise<string> {
+  const { result } = await session.cdp<{ result: { value?: unknown } }>("Runtime.evaluate", { expression, returnByValue: true });
+  return typeof result.value === "string" ? result.value : "";
+}
+
+const IS_CONNECTED = `function () { return this.isConnected ? "" : "detached"; }`;
+
+/**
+ * 从元素往上找最近的可滚动区域（含自身），找不到就滚整页。`behavior: "instant"` 绕过页面的平滑滚动：
+ * 否则滚动异步进行，立刻比较位置会误判为滚不动。
+ */
+const SCROLL_AREA = `function (down) {
+  const page = document.scrollingElement || document.documentElement;
+  const scrollable = (node) => /(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight;
+  let target = this;
+  while (target && target !== document.body && target !== document.documentElement && !scrollable(target)) target = target.parentElement;
+  if (!target || target === document.body || target === document.documentElement) target = page;
+  const before = target.scrollTop;
+  const height = target === page ? innerHeight : target.clientHeight;
+  target.scrollBy({ top: (down ? 1 : -1) * Math.round(height * 0.8), behavior: "instant" });
+  if (target.scrollTop !== before) return "";
+  return (target === page ? "the page" : "this area") + " is already at the " + (down ? "bottom" : "top");
+}`;
 
 const CLEAR_FIELD = `function () {
   if ("value" in this) { this.value = ""; this.dispatchEvent(new Event("input", { bubbles: true })); }
@@ -153,21 +239,30 @@ const SELECT_OPTIONS = `function (values) {
   return "";
 }`;
 
-async function waitFor(session: PageSession, text: string | undefined, seconds: number, signal: AbortSignal): Promise<void> {
+/** 等文字出现（`text`）或消失（`textGone`），都没有就是单纯暂停。按 `innerText` 判断，隐藏的元素不算在页面上。 */
+async function waitFor(
+  session: PageSession,
+  target: { text?: string; textGone?: string },
+  seconds: number,
+  signal: AbortSignal,
+): Promise<void> {
   const deadline = Date.now() + seconds * 1000;
+  const text = target.text ?? target.textGone;
   if (text === undefined) {
     await sleep(seconds * 1000, signal);
     return;
   }
+  const wanted = target.text !== undefined;
   while (Date.now() < deadline && !signal.aborted) {
     const { result } = await session.cdp<{ result: { value?: unknown } }>("Runtime.evaluate", {
       expression: `Boolean(document.body && document.body.innerText.includes(${JSON.stringify(text)}))`,
       returnByValue: true,
     });
-    if (result.value === true) return;
+    if (result.value === wanted) return;
     await sleep(POLL_MS, signal);
   }
-  throw new HostMethodError("WAIT_TIMEOUT", `the text ${JSON.stringify(text)} did not appear within ${seconds} seconds`);
+  const outcome = wanted ? `did not appear within ${seconds} seconds` : `is still on the page after ${seconds} seconds`;
+  throw new HostMethodError("WAIT_TIMEOUT", `the text ${JSON.stringify(text)} ${outcome}`);
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {

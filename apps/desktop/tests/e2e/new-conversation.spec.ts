@@ -304,7 +304,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   expect(logs.filter((entry) => entry.event === "assistant_runtime_unmounted")).toHaveLength(0);
 });
 
-test("不可恢复时继续运行被调度拒绝，顶层错误显示在对话区", async ({ page, request }) => {
+test("不可恢复时继续运行被同步拒绝，提示错误并复位按钮", async ({ page, request }) => {
   await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 105, title: "拒绝恢复" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
@@ -320,7 +320,7 @@ test("不可恢复时继续运行被调度拒绝，顶层错误显示在对话�
   await page.getByRole("button", { name: "停止" }).click();
   await expect(page.getByRole("button", { name: "继续运行" })).toBeVisible();
 
-  // 让 Run 不再是用户取消：模拟后端判定不可恢复，拒绝以顶层 error 投影回来。
+  // 让 Run 不再是用户取消：模拟后端判定不可恢复，恢复命令以 409 RUN_NOT_RESUMABLE 同步拒绝。
   const state = await (await request.get("http://127.0.0.1:8000/tasks/105/assistant/state")).json();
   state.activity.endReason = "max_steps_reached";
   await request.post("http://127.0.0.1:8000/__test__/seed-state", { data: { taskId: 105, state } });
@@ -329,12 +329,12 @@ test("不可恢复时继续运行被调度拒绝，顶层错误显示在对话�
   // 被拒即复位按钮，不等 15 秒的无响应超时（expect 默认 5 秒内必须完成）。
   await expect(page.getByRole("button", { name: "继续运行" })).toBeEnabled();
 
-  // 同样的原因再被拒一次：错误值只差 seq，按钮照样复位。
+  // 同样的原因再被拒一次：每次拒绝各自提示，按钮照样复位。
   await page.getByRole("button", { name: "继续运行" }).click();
   await expect(page.getByRole("button", { name: "正在继续运行" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "继续运行" })).toBeEnabled();
   const logs = await frontendLogs(page);
-  expect(logs.filter((entry) => entry.event === "composer_resume_rejected")).toHaveLength(2);
+  expect(logs.filter((entry) => entry.event === "composer_resume_failed")).toHaveLength(2);
 });
 
 test("取消后订阅断开时，前端有限重连并解除停止状态", async ({ page, request }) => {
@@ -479,7 +479,7 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   await expect((await failureResponse).status()).toBe(400);
 
   await expect(page.getByRole("dialog")).toContainText("编辑重跑被测试后端拒绝");
-  await page.getByRole("dialog").getByRole("button", { name: "关闭" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
   await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveText("edit-failure");
   await expect(topComposer).toHaveText("keep draft");
 });

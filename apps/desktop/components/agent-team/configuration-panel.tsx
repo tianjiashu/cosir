@@ -18,22 +18,14 @@ import {
   updateAgentTeamConfiguration,
   type AgentTeamConfiguration,
 } from "@/lib/api/agent-teams";
-import { getWorkspaceAgentConfigurations } from "@/lib/api/configuration";
 import { visibleWorkspaceProfiles, type AgentProfilesByScope } from "@/lib/agent-team-editor/agent-profiles";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import { agentConfigurationsQueryOptions } from "@/lib/query/query-options";
 
-type Scope = AgentTeamConfiguration["scope"];
-
-function requireWorkspaceId(workspaceId?: number): number {
-  if (workspaceId === undefined) throw new UserFacingError("工作区不可用");
-  return workspaceId;
-}
 
 function TeamConfigurationCard({
   team,
@@ -115,34 +107,29 @@ function TeamConfigurationCard({
  * 按实际文件作用域管理 Team 配置；workspace 面板展示可见配置但只编辑本地所有项。
  *
  * Team 列表与子 Agent 列表都是查询缓存（键见 queryKeys），保存 / 删除后只失效本作用域的
- * Team 列表；workspace 作用域在 workspaceId 就绪前查询保持禁用，就绪后自动读取。
+ * Team 列表。workspace 作用域必带 workspaceId（由 props 类型保证），system 作用域没有它。
  */
-export function AgentTeamConfigurationPanel({
-  scope,
-  workspaceId,
-}: {
-  scope: Scope;
-  workspaceId?: number;
-}) {
+export function AgentTeamConfigurationPanel(props: { scope: "system" } | { scope: "workspace"; workspaceId: number }) {
+  const { scope } = props;
+  const workspaceId = props.scope === "workspace" ? props.workspaceId : undefined;
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<TeamEditorSession | null>(null);
-  const workspaceReady = scope === "system" || workspaceId !== undefined;
-  const teamsKey = queryKeys.agentTeams(scope === "system" ? null : workspaceId ?? null);
+  const teamsKey = queryKeys.agentTeams(workspaceId ?? null);
 
   const teamsQuery = useQuery({
     queryKey: teamsKey,
-    queryFn: ({ signal }) => scope === "system"
-      ? getSystemAgentTeamConfigurations({ signal })
-      : getWorkspaceAgentTeamConfigurations(requireWorkspaceId(workspaceId), { signal }),
-    enabled: workspaceReady,
+    queryFn: workspaceId === undefined
+      ? ({ signal }) => getSystemAgentTeamConfigurations({ signal })
+      : ({ signal }) => getWorkspaceAgentTeamConfigurations(workspaceId, { signal }),
   });
   const systemAgentsQuery = useQuery({
     ...agentConfigurationsQueryOptions(null),
   });
+  // system 作用域下不需要工作区列表，但 hook 不能按条件调用：这时它与上面同键同函数（agents(null)），
+  // 只是不主动拉取。不能给同一个键换一个拉取函数——失效刷新会用到最后挂上的那个观察者的函数。
   const workspaceAgentsQuery = useQuery({
-    queryKey: queryKeys.agents(workspaceId ?? null),
-    queryFn: ({ signal }) => getWorkspaceAgentConfigurations(requireWorkspaceId(workspaceId), { signal }),
-    enabled: scope === "workspace" && workspaceId !== undefined,
+    ...agentConfigurationsQueryOptions(workspaceId ?? null),
+    enabled: workspaceId !== undefined,
   });
 
   const systemAgents = systemAgentsQuery.data;
@@ -156,10 +143,9 @@ export function AgentTeamConfigurationPanel({
 
   const save: PersistTeam = async (configuration, identity) => {
     const input = { scope, configuration: { ...configuration, scope } } as const;
-    const workspace = scope === "workspace" ? requireWorkspaceId(workspaceId) : undefined;
     const saved = identity
-      ? await updateAgentTeamConfiguration(identity.teamId, input, workspace)
-      : await createAgentTeamConfiguration(input, workspace);
+      ? await updateAgentTeamConfiguration(identity.teamId, input, workspaceId)
+      : await createAgentTeamConfiguration(input, workspaceId);
     void queryClient.invalidateQueries({ queryKey: teamsKey });
     return saved;
   };
@@ -168,7 +154,7 @@ export function AgentTeamConfigurationPanel({
     mutationFn: (team: AgentTeamConfiguration) => deleteAgentTeamConfiguration(
       team.team_id,
       scope,
-      scope === "workspace" ? requireWorkspaceId(workspaceId) : undefined,
+      workspaceId,
     ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: teamsKey });

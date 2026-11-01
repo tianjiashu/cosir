@@ -37,7 +37,7 @@ export function installGlobalFrontendErrorHandlers(): void {
         suppressedSinceLastReport: suppressed,
       },
       error: event.error,
-    }).catch(() => undefined);
+    });
   };
 
   const onUnhandledRejection = (event: PromiseRejectionEvent): void => {
@@ -49,7 +49,7 @@ export function installGlobalFrontendErrorHandlers(): void {
         reasonType: event.reason?.constructor?.name ?? typeof event.reason,
       },
       error: event.reason,
-    }).catch(() => undefined);
+    });
   };
 
   window.addEventListener("error", onError);

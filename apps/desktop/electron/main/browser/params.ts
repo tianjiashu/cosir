@@ -1,5 +1,5 @@
 import { HostMethodError } from "../host-link/methods";
-import { SUPPORTED_KEYS } from "./page-input";
+import { isSupportedKey, MODIFIERS, type Modifier } from "./page-input";
 import { TAB_ID } from "./tab-table";
 import { isWebProtocol } from "./web-url";
 import { BROWSER_NAVIGATION_ACTIONS, type BrowserNavigation, type BrowserTabLimits } from "../../shared/host-contract";
@@ -11,19 +11,24 @@ import { BROWSER_NAVIGATION_ACTIONS, type BrowserNavigation, type BrowserTabLimi
  */
 
 export type NavigateRequest = { taskId: number; tab?: string; newTab: boolean; target: BrowserNavigation; limits: BrowserTabLimits };
-export type SnapshotRequest = { taskId: number; tab?: string };
-export type ScreenshotRequest = SnapshotRequest & { fullPage: boolean };
+/** 指向本 Task 的某个标签（省略即当前标签）。 */
+type TabRequest = { taskId: number; tab?: string };
+export type SnapshotRequest = TabRequest & { fromLine: number };
+export type ScreenshotRequest = TabRequest & { fullPage: boolean };
 export type TabsRequest = { taskId: number; action: "list" | "select" | "close"; tab?: string };
 
 export type PageAction =
   | { type: "click"; ref: string }
   | { type: "type"; ref: string; text: string; clear: boolean; submit: boolean }
-  | { type: "press"; key: string }
+  | { type: "hover"; ref: string }
+  | { type: "press"; key: string; modifiers: Modifier[]; ref?: string }
   | { type: "select"; ref: string; values: string[] }
-  | { type: "scroll"; direction: "up" | "down"; ref?: string }
-  | { type: "wait_for"; text?: string; seconds?: number };
+  /** 有方向：滚动整页，或（带 ref）滚动包含该元素的可滚动区域；只有 ref：把元素滚入视野。 */
+  | { type: "scroll"; direction?: "up" | "down"; ref?: string }
+  /** `text` 与 `textGone` 至多一个；三者至少一个。 */
+  | { type: "wait_for"; text?: string; textGone?: string; seconds?: number };
 
-export type ActRequest = SnapshotRequest & { actions: PageAction[] };
+export type ActRequest = TabRequest & { actions: PageAction[] };
 
 /** 一次调用最多几个动作：太长的序列中途页面变化的概率大，不如分几次看快照。 */
 const MAX_ACTIONS = 10;
@@ -42,7 +47,7 @@ export function parseNavigate(params: unknown): NavigateRequest {
 export function parseScreenshot(params: unknown): ScreenshotRequest {
   const value = object(params);
   const fullPage = value.full_page === undefined ? false : boolean(value.full_page, "full_page");
-  return { ...parseSnapshot(params), fullPage };
+  return { ...parseTab(value), fullPage };
 }
 
 export function parseTabs(params: unknown): TabsRequest {
@@ -58,7 +63,7 @@ export function parseAct(params: unknown): ActRequest {
   if (!Array.isArray(value.actions) || value.actions.length === 0 || value.actions.length > MAX_ACTIONS) {
     throw invalid(`actions must be a list of 1 to ${MAX_ACTIONS} actions`);
   }
-  return { ...parseSnapshot(params), actions: value.actions.map(parseAction) };
+  return { ...parseTab(value), actions: value.actions.map(parseAction) };
 }
 
 function parseAction(item: unknown): PageAction {
@@ -72,27 +77,43 @@ function parseAction(item: unknown): PageAction {
         type: "type",
         ref: ref(action.ref),
         text: action.text,
-        clear: action.clear === undefined || action.clear === null ? false : boolean(action.clear, "clear"),
-        submit: action.submit === undefined || action.submit === null ? false : boolean(action.submit, "submit"),
+        clear: absent(action.clear) ? false : boolean(action.clear, "clear"),
+        submit: absent(action.submit) ? false : boolean(action.submit, "submit"),
       };
-    case "press":
-      return { type: "press", key: oneOf(action.key, SUPPORTED_KEYS, "key") };
+    case "hover":
+      return { type: "hover", ref: ref(action.ref) };
+    case "press": {
+      if (typeof action.key !== "string" || !isSupportedKey(action.key)) throw invalid("press needs a supported key");
+      const modifiers = absent(action.modifiers) ? [] : action.modifiers;
+      if (!Array.isArray(modifiers)) throw invalid("modifiers must be a list");
+      return {
+        type: "press",
+        key: action.key,
+        modifiers: modifiers.map((item) => oneOf(item, MODIFIERS, "modifier")),
+        ...(absent(action.ref) ? {} : { ref: ref(action.ref) }),
+      };
+    }
     case "select":
       if (!Array.isArray(action.values) || action.values.length === 0 || !action.values.every((item) => typeof item === "string")) {
         throw invalid("select needs values");
       }
       return { type: "select", ref: ref(action.ref), values: action.values as string[] };
     case "scroll": {
-      const direction = oneOf(action.direction ?? "down", ["up", "down"] as const, "direction");
-      return action.ref === undefined || action.ref === null ? { type: "scroll", direction } : { type: "scroll", direction, ref: ref(action.ref) };
+      if (absent(action.direction) && absent(action.ref)) throw invalid("scroll needs a direction, a ref, or both");
+      return {
+        type: "scroll",
+        ...(absent(action.direction) ? {} : { direction: oneOf(action.direction, ["up", "down"] as const, "direction") }),
+        ...(absent(action.ref) ? {} : { ref: ref(action.ref) }),
+      };
     }
     case "wait_for": {
-      const text = action.text === undefined || action.text === null ? undefined : action.text;
-      const seconds = action.seconds === undefined || action.seconds === null ? undefined : action.seconds;
-      if (text !== undefined && (typeof text !== "string" || !text)) throw invalid("wait_for text must be a non-empty string");
+      const text = optionalText(action.text, "text");
+      const textGone = optionalText(action.text_gone, "text_gone");
+      const seconds = absent(action.seconds) ? undefined : action.seconds;
       if (seconds !== undefined && (typeof seconds !== "number" || !(seconds > 0))) throw invalid("wait_for seconds must be positive");
-      if (text === undefined && seconds === undefined) throw invalid("wait_for needs text or seconds");
-      return { type: "wait_for", text: text as string | undefined, seconds: seconds as number | undefined };
+      if (text !== undefined && textGone !== undefined) throw invalid("wait_for takes text or text_gone, not both");
+      if (text === undefined && textGone === undefined && seconds === undefined) throw invalid("wait_for needs text, text_gone or seconds");
+      return { type: "wait_for", text, textGone, seconds: seconds as number | undefined };
     }
     default:
       throw invalid(`unknown action type: ${String(action.type)}`);
@@ -101,6 +122,12 @@ function parseAction(item: unknown): PageAction {
 
 export function parseSnapshot(params: unknown): SnapshotRequest {
   const value = object(params);
+  const fromLine = absent(value.from_line) ? 1 : value.from_line;
+  if (!positive(fromLine)) throw invalid("from_line must be a positive integer");
+  return { ...parseTab(value), fromLine };
+}
+
+function parseTab(value: Record<string, unknown>): TabRequest {
   return { taskId: taskId(value.task_id), tab: optionalTab(value.tab) };
 }
 
@@ -145,8 +172,19 @@ function boolean(value: unknown, field: string): boolean {
   return value;
 }
 
+/** 后端不发未填的可选字段；`null` 也按缺省理解，宿主测试与链路之外的调用方可能带上。 */
+function absent(value: unknown): value is undefined | null {
+  return value === undefined || value === null;
+}
+
+function optionalText(value: unknown, field: string): string | undefined {
+  if (absent(value)) return undefined;
+  if (typeof value !== "string" || !value) throw invalid(`wait_for ${field} must be a non-empty string`);
+  return value;
+}
+
 function optionalTab(value: unknown): string | undefined {
-  if (value === undefined || value === null) return undefined;
+  if (absent(value)) return undefined;
   if (typeof value !== "string" || !TAB_ID.test(value)) throw invalid("tab must look like t1");
   return value;
 }

@@ -47,10 +47,12 @@ describe("TerminalTool", () => {
     expect(html).not.toContain("exit ");
   });
 
-  it("falls back to the tool name when neither args nor display data carry a command", () => {
+  // 展示不从工具名派生：参数还在流式到达、没有命令文本时，显示静态声明的动作名。
+  it("falls back to the declared verb when neither args nor display data carry a command", () => {
     const html = renderTerminal({ status: "running" });
 
-    expect(html).toContain("execute_terminal");
+    expect(html).toContain("运行命令");
+    expect(html).not.toContain("execute_terminal");
   });
 
   it("does not repeat a zero exit code next to the success status", () => {

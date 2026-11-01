@@ -20,7 +20,7 @@ export const Assistant = ({
   onTaskStateChanged,
 }: {
   taskId: number;
-  workspaceId?: number | null;
+  workspaceId: number;
   workspaceRoot?: string;
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;

@@ -98,6 +98,24 @@ describe("tool renderer routing", () => {
     })).toBe("terminal-session");
   });
 
+  // 目的：会话工具在还没有 kind 的阶段（排队、运行中、失败）也走会话卡。潜在缺陷：只按布局兜底时，
+  // terminal_start（布局为 terminal）落进一次性命令卡、显示停止按钮，其余会话工具落进通用行，完成时外形突变。
+  it.each([
+    ["terminal_start 运行中", "running", { variant: "terminal-session-start", expand_layout: "terminal" }, null],
+    ["terminal_start 失败", "failed", { variant: "terminal-session-start", expand_layout: "terminal" }, { status_hint: "启动失败" }],
+    ["terminal_read 运行中", "running", { variant: "terminal-session-read", expand_layout: "none", verb: "读取终端" }, null],
+  ])("routes %s without a kind to the session card", (_label, backendStatus, presentation, displayData) => {
+    expect(routeToolPart({ backendStatus, presentation, display_data: displayData })).toBe("terminal-session");
+  });
+
+  it("keeps one-off commands without a kind on the terminal command card", () => {
+    expect(routeToolPart({
+      backendStatus: "running",
+      presentation: { verb: "执行命令", expand_layout: "terminal" },
+      display_data: null,
+    })).toBe("terminal");
+  });
+
   it("allows only http(s) URLs from tool display data", () => {
     expect(safeExternalUrl("https://example.com/a")).toBe("https://example.com/a");
     expect(safeExternalUrl("javascript:alert(1)")).toBeNull();

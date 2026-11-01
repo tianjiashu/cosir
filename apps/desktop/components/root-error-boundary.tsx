@@ -33,7 +33,7 @@ export class RootErrorBoundary extends Component<
       traceId,
       data: { componentStack: info.componentStack ?? "" },
       error,
-    }).catch(() => undefined);
+    });
   }
 
   private handleReload = (): void => {

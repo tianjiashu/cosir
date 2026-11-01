@@ -8,7 +8,7 @@ import type { BackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 
 export type AssistantRuntimeProps = {
   taskId: number;
-  workspaceId?: number | null;
+  workspaceId: number;
   workspaceRoot?: string;
   initialState: TransportState;
   /** 正在 fork 的消息 id：fork 按消息切分，入口挂在带结局的回复上。 */
@@ -28,7 +28,7 @@ export type ComposerRestore = {
 
 export type RuntimeSessionContext = {
   taskId: number;
-  workspaceId?: number | null;
+  workspaceId: number;
   workspaceRoot?: string;
   initialState: TransportState;
   /**

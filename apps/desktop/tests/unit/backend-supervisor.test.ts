@@ -144,6 +144,17 @@ describe("BackendSupervisor", () => {
     expect(stopProcessTree).toHaveBeenCalledWith(children[0]);
   });
 
+  // 目的：宿主退出是终态。潜在缺陷：stop() 之后的重启把正在退出的宿主的后端重新拉起，留下孤儿进程。
+  it("never launches the backend again after stop", async () => {
+    const supervisor = new BackendSupervisor("test-host-token");
+    await supervisor.start();
+
+    await supervisor.stop();
+    await expect(supervisor.restart()).rejects.toThrow();
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not treat an intentional stop as a crash", async () => {
     const supervisor = new BackendSupervisor("test-host-token");
     await supervisor.start();

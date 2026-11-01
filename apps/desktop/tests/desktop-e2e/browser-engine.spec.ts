@@ -28,6 +28,16 @@ const PAGES: Record<string, string> = {
     <a href="/second" target="_blank">Popup</a>
     <script>document.querySelector('select').addEventListener('change', (e) => { document.title = 'color:' + e.target.value; });</script>`,
   "/done": `<title>Done</title><p>Search finished</p>`,
+  "/rich": `<title>Rich</title>
+    <button onmouseenter="document.getElementById('items').hidden = false">Menu</button>
+    <div id="items" hidden><a href="#picked">Hidden item</a></div>
+    <div style="height: 100px; overflow: auto"><div style="height: 150px"><button>Inside</button></div></div>
+    <p id="loading">Loading</p>
+    <script>
+      setTimeout(() => document.getElementById("loading").remove(), 300);
+      document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "k") document.title = "shortcut"; });
+    </script>
+    ${Array.from({ length: 800 }, (_, i) => `<a href="#i${i}">Item ${i}</a><br>`).join("")}`,
 };
 
 let server: http.Server;
@@ -223,12 +233,11 @@ test("acts on the page through refs: select, wait, type and submit", async () =>
   const query = refOf(page.snapshot, "textbox", "Query");
 
   const first = pageOf(await call("act", { taskId: 20, actions: [
-    { type: "scroll", direction: "down" },
     { type: "select", ref: select, values: ["Blue"] },
     { type: "click", ref: load },
     { type: "wait_for", text: "loaded later", seconds: 5 },
   ] })) as ActPage;
-  expect(first).toMatchObject({ completed: 4, failure: null, title: "color:b" });
+  expect(first).toMatchObject({ completed: 3, failure: null, title: "color:b" });
   expect(first.snapshot).toContain("loaded later");
 
   const submitted = pageOf(await call("act", { taskId: 20, actions: [{ type: "type", ref: query, text: "cosir", clear: true, submit: true }] })) as ActPage;
@@ -238,6 +247,38 @@ test("acts on the page through refs: select, wait, type and submit", async () =>
   // 目的：导航后旧 ref 一律失效；潜在缺陷：旧序号恰好指到新页面的另一个元素，点错东西。
   const stale = pageOf(await call("act", { taskId: 20, actions: [{ type: "click", ref: load }] })) as ActPage;
   expect(stale).toMatchObject({ completed: 0, failure: { index: 0, code: "REF_STALE" }, title: "Done" });
+});
+
+// 目的：长页面后半段的元素也能读到并操作，ref 跨快照不变；潜在缺陷：截断之后的内容对 Agent 永远不可见。
+test("pages long snapshots with stable refs, then hovers, presses shortcuts and scrolls areas", async () => {
+  const page = pageOf(await call("navigate", { taskId: 24, target: { url: `${origin}/rich` }, limits: roomy }));
+  const note = page.snapshot.split("\n").at(-1)!;
+  expect(note).toMatch(/read on with from_line=\d+$/);
+  const menu = refOf(page.snapshot, "button", "Menu");
+  const inside = refOf(page.snapshot, "button", "Inside");
+
+  // 按截断提示一页页往下读，直到最后一页。
+  let rest = page.snapshot;
+  for (let next = rest.match(/read on with from_line=(\d+)$/); next; next = rest.match(/read on with from_line=(\d+)$/)) {
+    rest = pageOf(await call("snapshot", { taskId: 24, fromLine: Number(next[1]) })).snapshot;
+  }
+  const last = refOf(rest, "link", "Item 799");
+  expect(refOf(pageOf(await call("snapshot", { taskId: 24, fromLine: 1 })).snapshot, "button", "Menu")).toBe(menu);
+
+  const acted = pageOf(await call("act", { taskId: 24, actions: [
+    { type: "wait_for", textGone: "Loading", seconds: 5 },
+    { type: "hover", ref: menu },
+    { type: "press", key: "k", modifiers: ["ControlOrMeta"] },
+    { type: "scroll", direction: "down", ref: inside },
+    { type: "scroll", direction: "down" },
+    { type: "scroll", ref: last },
+  ] })) as ActPage;
+  expect(acted).toMatchObject({ completed: 6, failure: null, title: "shortcut" });
+  expect(acted.snapshot).toContain("Hidden item");
+
+  // 目的：滚到底要报出来；潜在缺陷：无限滚动的批次空转，模型以为加载了更多。
+  const end = pageOf(await call("act", { taskId: 24, actions: [{ type: "scroll", direction: "down", ref: inside }] })) as ActPage;
+  expect(end).toMatchObject({ completed: 0, failure: { code: "SCROLL_END", message: "this area is already at the bottom" } });
 });
 
 test("blocks file choosers and opens target=_blank links as tabs of the same task", async () => {

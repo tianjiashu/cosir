@@ -38,7 +38,6 @@ import {
 import {
   createAgentConfiguration,
   deleteAgentConfiguration,
-  getAgentConfigurations,
   getEnvironmentConfiguration,
   getGlobalInstructionConfiguration,
   getMainAgentPromptConfiguration,
@@ -58,12 +57,11 @@ import { createAgentEditorSession } from "@/lib/agent-editor/session";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
-import type { RequestOptions } from "@/lib/http/client";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
-import { toolGroupsQueryOptions } from "@/lib/query/query-options";
+import { agentConfigurationsQueryOptions, toolGroupsQueryOptions } from "@/lib/query/query-options";
 
 
 /**
@@ -72,7 +70,6 @@ import { toolGroupsQueryOptions } from "@/lib/query/query-options";
  */
 export type AgentConfigurationApi = {
   workspaceId: number | null;
-  list: (options?: RequestOptions) => Promise<AgentConfiguration[]>;
   create: (input: AgentConfigurationInput) => Promise<AgentConfiguration>;
   update: (agentId: string, input: AgentConfigurationInput) => Promise<AgentConfiguration>;
   remove: (agentId: string) => Promise<void>;
@@ -80,7 +77,6 @@ export type AgentConfigurationApi = {
 
 const systemAgentConfigurationApi: AgentConfigurationApi = {
   workspaceId: null,
-  list: getAgentConfigurations,
   create: createAgentConfiguration,
   update: updateAgentConfiguration,
   remove: deleteAgentConfiguration,
@@ -173,8 +169,7 @@ function AgentEditor({
 export function AgentConfigurationPanel({ api = systemAgentConfigurationApi }: { api?: AgentConfigurationApi }) {
   const queryClient = useQueryClient();
   const agentsQuery = useQuery({
-    queryKey: queryKeys.agents(api.workspaceId),
-    queryFn: ({ signal }) => api.list({ signal }),
+    ...agentConfigurationsQueryOptions(api.workspaceId),
   });
   const toolGroupsQuery = useQuery({
     ...toolGroupsQueryOptions(),

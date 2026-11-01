@@ -98,7 +98,7 @@ export type ThreadProps = {
   /** 只渲染 canonical message UI，不提供写入操作。 */
   readonly?: boolean;
   taskId: number;
-  workspaceId?: number | null;
+  workspaceId: number;
   toolGroups?: ToolGroupCatalog[];
   selectedToolGroups?: string[];
   onSelectedToolGroupsChange?: (groups: string[]) => void;
@@ -198,7 +198,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
     <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, onCancelRequested, onCancelResult, cancelling, readonly }}>
-      <AttachmentWorkspaceContext.Provider value={workspaceId ?? undefined}>
+      <AttachmentWorkspaceContext.Provider value={workspaceId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/*
           顶部锚点固定本轮用户消息，答案在其下方增长，流式 token 不会持续把滚动位置重新

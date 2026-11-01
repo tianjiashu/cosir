@@ -15,7 +15,6 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   createWorkspaceAgentConfiguration,
   deleteWorkspaceAgentConfiguration,
-  getWorkspaceAgentConfigurations,
   getWorkspaceFileIgnoreConfiguration,
   getWorkspaceInstructionConfiguration,
   updateWorkspaceAgentConfiguration,
@@ -68,7 +67,6 @@ function WorkspaceFileIgnorePanel({ workspaceId }: { workspaceId: number }) {
 export function WorkspaceConfigurationPage({ workspaceId, workspaceName, tab }: { workspaceId: number; workspaceName: string; tab: WorkspaceSettingsTabId }) {
   const agentApi = useMemo<AgentConfigurationApi>(() => ({
     workspaceId,
-    list: (options) => getWorkspaceAgentConfigurations(workspaceId, options),
     create: (input) => createWorkspaceAgentConfiguration(workspaceId, input),
     update: (agentId, input) => updateWorkspaceAgentConfiguration(workspaceId, agentId, input),
     remove: (agentId) => deleteWorkspaceAgentConfiguration(workspaceId, agentId),

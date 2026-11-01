@@ -34,6 +34,7 @@ export class BackendSupervisor {
   private backendBaseUrl: string | null = null;
   private child: ChildProcess | null = null;
   private crashRecoveryAttempts = 0;
+  // 宿主退出的终态：stop() 置位后不再复位，之后任何启动都因 isCurrent 为 false 而不拉起进程。
   private shuttingDown = false;
   private starting: Promise<void> | null = null;
   private readonly listeners = new Set<(snapshot: BackendSnapshot) => void>();
@@ -52,7 +53,6 @@ export class BackendSupervisor {
 
   /** 宿主启动时调用一次；结果只经状态快照发布，不抛出。 */
   start(): Promise<void> {
-    this.shuttingDown = false;
     this.generation += 1;
     return this.launch(this.generation);
   }
@@ -60,7 +60,6 @@ export class BackendSupervisor {
   /** 用户显式重启：停掉当前进程、重置崩溃恢复次数后重新启动；未能就绪时抛出带原因的错误。 */
   async restart(): Promise<BackendSnapshot> {
     if (this.starting) throw new Error("本地 Agent 后端正在启动，请等待启动完成");
-    this.shuttingDown = false;
     this.generation += 1;
     const generation = this.generation;
     this.crashRecoveryAttempts = 0;

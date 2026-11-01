@@ -20,7 +20,7 @@ import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
  * 订阅意外结束交给与主对话共用的 `SubscriptionRecovery`：只重开订阅（首帧即完整状态），
  * 已显示的内容与 runtime 都保留；重连耗尽后由用户「重新同步」。
  */
-function AgentRunTransport({ taskId, initialState }: { taskId: number; initialState: TransportState }) {
+function AgentRunTransport({ taskId, workspaceId, initialState }: { taskId: number; workspaceId: number; initialState: TransportState }) {
   const backendRuntime = useBackendRuntime();
   const [traceId] = useState(() => newTraceId());
   const [issue, setIssue] = useState<TransportIssue | null>(null);
@@ -60,7 +60,7 @@ function AgentRunTransport({ taskId, initialState }: { taskId: number; initialSt
         <div className="flex h-full min-h-0 flex-col">
           <TransportStatus issue={issue} onRetry={() => recovery.resync(null)} />
           <div className="min-h-0 flex-1">
-            <AgentReadonlyMessages taskId={taskId} />
+            <AgentReadonlyMessages taskId={taskId} workspaceId={workspaceId} />
           </div>
         </div>
       </TransportHistoryContext.Provider>
@@ -68,17 +68,22 @@ function AgentRunTransport({ taskId, initialState }: { taskId: number; initialSt
   );
 }
 
-function AgentReadonlyMessages({ taskId }: { taskId: number }) {
-  return <ReadonlyThread taskId={taskId} />;
+function AgentReadonlyMessages({ taskId, workspaceId }: { taskId: number; workspaceId: number }) {
+  return <ReadonlyThread taskId={taskId} workspaceId={workspaceId} />;
 }
 
-/** 后端换代或任务切换时释放旧观察会话；不取消业务 Run。 */
-export function WorkbenchAgentRunSurface({ taskId, onClose }: { taskId: number; onClose: () => void }) {
+/**
+ * 后端换代或任务切换时释放旧观察会话；不取消业务 Run。
+ *
+ * `workspaceId` 是工作台所在工作区：子 Agent 与 Team 节点 Task 都沿用父 Task 的工作区，
+ * 工作台又按工作区存放标签，所以它就是子 Task 附件（用户图片、工具截图）所在的工作区。
+ */
+export function WorkbenchAgentRunSurface({ taskId, workspaceId, onClose }: { taskId: number; workspaceId: number; onClose: () => void }) {
   const backend = useBackendRuntime();
-  return <AgentReader key={`${taskId}:${backend.generation}`} taskId={taskId} onClose={onClose} />;
+  return <AgentReader key={`${taskId}:${backend.generation}`} taskId={taskId} workspaceId={workspaceId} onClose={onClose} />;
 }
 
-function AgentReader({ taskId, onClose }: { taskId: number; onClose: () => void }) {
+function AgentReader({ taskId, workspaceId, onClose }: { taskId: number; workspaceId: number; onClose: () => void }) {
   const reader = useAgentReader(taskId);
   if (reader.missing) return (
     <Alert tone="warning" className="m-4" title="子 Agent 任务已不存在" action={(
@@ -93,5 +98,5 @@ function AgentReader({ taskId, onClose }: { taskId: number; onClose: () => void 
     <ErrorState className="m-4" message={reader.error.message} onRetry={reader.retry} retryLabel="重新同步" />
   );
   if (!reader.snapshot) return <LoadingState label="正在同步子 Agent…" className="h-full" />;
-  return <AgentRunTransport taskId={taskId} initialState={reader.snapshot} />;
+  return <AgentRunTransport taskId={taskId} workspaceId={workspaceId} initialState={reader.snapshot} />;
 }

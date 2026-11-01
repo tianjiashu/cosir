@@ -17,7 +17,9 @@ type SurfaceProps<K extends WorkbenchTab["kind"]> = {
  * 标签只由前端按 kind 创建，因此没有运行时的未知类型回退。
  */
 const workbenchSurfaces: { [K in WorkbenchTab["kind"]]: ComponentType<SurfaceProps<K>> } = {
-  agent: ({ tab, onClose }) => <WorkbenchAgentRunSurface taskId={tab.taskId} onClose={onClose} />,
+  agent: ({ workspace, tab, onClose }) => (
+    <WorkbenchAgentRunSurface taskId={tab.taskId} workspaceId={workspace.workspace_id} onClose={onClose} />
+  ),
   "agent-configuration-draft": ({ workspace, tab, onClose }) => (
     <AgentConfigurationDraftSurface workspaceId={workspace.workspace_id} tab={tab} onClose={onClose} />
   ),

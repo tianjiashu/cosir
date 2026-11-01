@@ -20,7 +20,7 @@ const root = ReactDOM.createRoot(document.getElementById("root")!, {
         componentStack: errorInfo.componentStack?.trim().slice(0, 4096) || null,
       },
       error,
-    }).catch(() => undefined);
+    });
   },
 });
 

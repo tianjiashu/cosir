@@ -6,6 +6,7 @@ import { BROWSER_PARTITION } from "./browser-session";
 import { runActions, type ActResult } from "./page-input";
 import type { BrowserNavigation, BrowserTabCreator, BrowserTabSummary } from "../../shared/host-contract";
 import type { PageAction } from "./params";
+import { RefRegistry } from "./ref-registry";
 import { formatSnapshot, type AXNode, type FormattedSnapshot } from "./snapshot-format";
 import { isWebProtocol, urlProtocol } from "./web-url";
 
@@ -56,7 +57,7 @@ export class BrowserTab {
   private lastUserInputAt = 0;
   /** 在此之前到达的输入事件来自 Agent 自己的动作，不算用户输入（见构造函数里的说明）。 */
   private agentInputUntil = 0;
-  private refs = new Map<string, number>();
+  private readonly refs = new RefRegistry();
   private notes: string[] = [];
 
   private constructor(
@@ -136,11 +137,11 @@ export class BrowserTab {
     await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
   }
 
-  async snapshot(): Promise<PageSnapshot> {
+  /** 读整棵无障碍树并从 `fromLine` 起输出；ref 按节点稳定分配（`RefRegistry`），不随快照替换。 */
+  async snapshot(fromLine = 1): Promise<PageSnapshot> {
     this.assertAlive();
     const { nodes } = await this.cdp<{ nodes: AXNode[] }>("Accessibility.getFullAXTree");
-    const formatted = formatSnapshot(nodes);
-    this.refs = formatted.refs;
+    const formatted = formatSnapshot(nodes, this.refs, { fromLine });
     const contents = this.view.webContents;
     const notes = this.notes;
     this.notes = [];
@@ -168,9 +169,9 @@ export class BrowserTab {
     }
   }
 
-  /** ref → CDP `backendNodeId`；不在最近一次快照里（含导航后）报 `REF_STALE`。 */
+  /** ref → CDP `backendNodeId`；从没登记过（含导航前的 ref）报 `REF_STALE`。节点是否还在页面上由 `page-input.ts` 确认。 */
   resolveRef(ref: string): number {
-    const backendNodeId = this.refs.get(ref);
+    const backendNodeId = this.refs.resolve(ref);
     if (backendNodeId === undefined) {
       throw new HostMethodError("REF_STALE", `ref ${ref} is not on the current page; take a new snapshot`);
     }

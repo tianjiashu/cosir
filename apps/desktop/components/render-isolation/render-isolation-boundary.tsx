@@ -67,7 +67,7 @@ export class RenderIsolationBoundary extends Component<
         componentStack: info.componentStack ?? "",
       },
       error,
-    }).catch(() => undefined);
+    });
   }
 
   private handleRetry = (): void => {

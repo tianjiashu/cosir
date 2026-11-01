@@ -66,7 +66,7 @@ export class BrowserHost {
 
   async snapshot(request: SnapshotRequest): Promise<PageResult> {
     const tab = this.tabFor(request.taskId, request.tab);
-    return this.result(tab, await tab.snapshot());
+    return this.result(tab, await tab.snapshot(request.fromLine));
   }
 
   /** 按序执行动作，无论停在哪一步都返回之后的快照（新快照带新 ref，模型能接着做）。 */

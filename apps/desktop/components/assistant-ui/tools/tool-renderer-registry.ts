@@ -6,7 +6,7 @@ import { readBrowserPageDisplay } from "./browser-page-display";
 import { DelegationToolRow } from "./delegation-tool-row";
 import { DetailsTool } from "./details-tool";
 import { DiffTool } from "./diff-tool";
-import { TerminalSessionTool } from "./terminal-session-tool";
+import { isTerminalSessionVariant, TerminalSessionTool } from "./terminal-session-tool";
 import { TerminalTool } from "./terminal-tool";
 import { ToolFallback } from "./tool-fallback";
 import { AgentConfigurationDraftTool } from "./agent-configuration-draft-tool";
@@ -115,6 +115,9 @@ const TOOL_RENDERER_DEFINITIONS: readonly ToolRendererDefinition[] = [
     route: "terminal-session",
     renderer: TerminalSessionTool,
     kinds: ["terminal-session"],
+    // 排队、运行中与失败时还没有 kind：按 variant 认出会话工具，免得 `terminal_start`（布局声明为 terminal）
+    // 落进一次性命令卡、其余会话工具落进通用行，卡片外形在完成时才突变。
+    matchesPresentation: (artifact) => isTerminalSessionVariant(artifact.presentation.variant),
   },
   {
     route: "terminal",

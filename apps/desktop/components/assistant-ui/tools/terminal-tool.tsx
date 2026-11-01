@@ -66,7 +66,8 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
   const artifact = readToolArtifact(rawArtifact);
   const data = artifact.display_data ?? {};
   const argRecord = asRecord(args);
-  const command = text(argRecord.command) ?? text(data.command) ?? toolName;
+  // 参数还在流式到达时没有命令文本：与其他卡片一致，先显示静态声明的动作名，再回落到工具名。
+  const command = text(argRecord.command) ?? text(data.command) ?? text(artifact.presentation.verb) ?? toolName;
   const shell = shellLabel(argRecord.shell ?? data.shell);
   const workdir = text(argRecord.workdir) ?? text(data.workdir);
   const output = text(data.output) ?? "";
@@ -79,8 +80,7 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
   const isActive = status === "pending" || status === "running";
   const commandFailed = status === "failed" || (exitCode !== undefined && exitCode !== 0);
   // 后台占位不随 Task 停止，取消按钮只看它自己的状态；前台运行中的命令随 Task 停止一并结束。
-  const canCancel = toolName === "execute_terminal"
-    && interactive
+  const canCancel = interactive
     && (inBackground ? status === "pending" : status === "running" && !taskCancelling);
   // 展开跟随「命令还活着」而不是工具状态：转到后台后占位是 pending，但输出仍在追加，收起会藏住它。
   const commandLive = status === "running" || (inBackground && status === "pending");

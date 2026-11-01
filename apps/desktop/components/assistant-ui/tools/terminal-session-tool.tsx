@@ -39,6 +39,11 @@ function sessionVariant(value: unknown): TerminalSessionVariant {
   }
 }
 
+/** 是否交互终端会话工具（`terminal_*`）：按静态展示声明的 variant 判定，供注册表在没有 kind 的阶段路由。 */
+export function isTerminalSessionVariant(variant: unknown): boolean {
+  return sessionVariant(variant) !== "unknown";
+}
+
 /**
  * 条件等待的结束原因（后端 `wait_result.end_reason`）→ 中文；不据此宣告命令成功。
  * `idle` 为未带等待条件。
