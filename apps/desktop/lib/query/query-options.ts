@@ -9,6 +9,8 @@ import { queryOptions } from "@tanstack/react-query";
 import { getAgentConfigurations, getWorkspaceAgentConfigurations } from "@/lib/api/configuration";
 import { getToolGroups } from "@/lib/api/tools";
 import { getFileInfo } from "@/lib/api/workspace-files";
+import { getSystemSkills } from "@/lib/api/system-extensions";
+import { getModelConfigs } from "@/lib/api/model-configs";
 import { queryKeys } from "@/lib/query/query-keys";
 
 export const toolGroupsQueryOptions = () => queryOptions({
@@ -27,4 +29,14 @@ export const agentConfigurationsQueryOptions = (workspaceId: number | null) => q
 export const fileInfoQueryOptions = (workspaceId: number, path: string) => queryOptions({
   queryKey: queryKeys.fileInfo(workspaceId, path),
   queryFn: ({ signal }) => getFileInfo(workspaceId, path, signal),
+});
+
+export const skillsQueryOptions = () => queryOptions({
+  queryKey: queryKeys.skills(),
+  queryFn: ({ signal }) => getSystemSkills({ signal }),
+});
+
+export const modelConfigsQueryOptions = () => queryOptions({
+  queryKey: queryKeys.modelConfigs(),
+  queryFn: ({ signal }) => getModelConfigs({ signal }),
 });

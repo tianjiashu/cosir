@@ -5,9 +5,7 @@ import { runActions, type PageSession } from "@/electron/main/browser/page-input
 import { parseAct, parseDropTasks, parseNavigate, parseSnapshot, type PageAction } from "@/electron/main/browser/params";
 import { RefRegistry } from "@/electron/main/browser/ref-registry";
 import { formatSnapshot, type AXNode } from "@/electron/main/browser/snapshot-format";
-import { TabTable } from "@/electron/main/browser/tab-table";
 
-const LIMITS = { perTask: 2, total: 3 };
 
 function codeOf(run: () => unknown): string {
   try {
@@ -18,43 +16,6 @@ function codeOf(run: () => unknown): string {
   }
   return "no error";
 }
-
-describe("TabTable", () => {
-  // 目的：上限两层都生效且消息可区分；潜在缺陷：子 Agent 一多就把宿主内存吃满。
-  it("enforces the per-task and the global limit separately", () => {
-    const table = new TabTable();
-    table.add(1);
-    table.add(1);
-    expect(() => table.assertCanOpen(1, LIMITS)).toThrow(/per-task/);
-    table.add(2);
-    expect(() => table.assertCanOpen(3, LIMITS)).toThrow(/global/);
-    expect(codeOf(() => table.assertCanOpen(3, LIMITS))).toBe("TAB_LIMIT");
-  });
-
-  // 目的：标签归属是硬边界；潜在缺陷：子 Agent 读到或操作父 Agent 的页面。
-  it("hides other tasks' tabs behind TAB_NOT_FOUND", () => {
-    const table = new TabTable();
-    const tab = table.add(1);
-    expect(table.require(1)).toBe(tab);
-    expect(table.require(1, tab)).toBe(tab);
-    expect(codeOf(() => table.require(2, tab))).toBe("TAB_NOT_FOUND");
-    expect(codeOf(() => table.require(2))).toBe("TAB_NOT_FOUND");
-  });
-
-  it("falls back to the newest remaining tab when the current one closes, never reusing ids", () => {
-    const table = new TabTable();
-    const first = table.add(1);
-    const second = table.add(1);
-    const third = table.add(1);
-    table.select(1, first);
-    table.remove(first);
-    expect(table.require(1)).toBe(third);
-    table.remove(third);
-    table.remove(second);
-    expect(table.hasCurrent(1)).toBe(false);
-    expect(table.add(1)).toBe("t4");
-  });
-});
 
 describe("params", () => {
   const base = { task_id: 7, limits: { per_task: 5, total: 20 } };

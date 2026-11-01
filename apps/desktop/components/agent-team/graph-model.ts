@@ -4,6 +4,7 @@ import type { EditorDraft as AgentTeamConfigurationDraft, EditorNode as AgentTea
 import { DEFAULT_END_VIEW_ID, END_VIEW_ID_PREFIX, END_NODE_ID } from "@/lib/agent-team-editor/model";
 export {   END_NODE_ID } from "@/lib/agent-team-editor/model";
 import { findAgentTeamStatus } from "@/lib/agent-team-status";
+import type { NodeIdIndex } from "@/lib/agent-team-editor/node-id-index";
 
 type TeamGraphNodeData = {
   kind: "agent";
@@ -51,20 +52,15 @@ export function statusFromHandleId(handleId: string | null | undefined): string 
 
 export function createGraphEdges(
   configuration: AgentTeamConfigurationDraft,
+  nodeIds: NodeIdIndex,
   endTargets: Record<string, string>,
   endNodeIds: string[],
   edgeRoutes: Record<string, AgentTeamEdgeRoute> = {},
 ): TeamGraphEdge[] {
   return configuration.transitions.flatMap((transition, transitionIndex) => {
-    const sourceIndices = configuration.nodes
-      .map((node, index) => node.node_id === transition.from_node_id ? index : -1)
-      .filter((index) => index >= 0);
-    const sourceIndex = sourceIndices.length === 1 ? sourceIndices[0] : -1;
-    const source = configuration.nodes[sourceIndex];
-    const targetIndices = configuration.nodes
-      .map((node, index) => node.node_id === transition.target_node_id ? index : -1)
-      .filter((index) => index >= 0);
-    const targetExists = transition.target_node_id === END_NODE_ID || targetIndices.length === 1;
+    const sourceIndex = nodeIds.get(transition.from_node_id);
+    const source = sourceIndex == null ? undefined : configuration.nodes[sourceIndex];
+    const targetIndex = nodeIds.get(transition.target_node_id);
     const duplicateIndex = configuration.transitions
       .slice(0, transitionIndex)
       .filter((item) => item.from_node_id === transition.from_node_id && item.status === transition.status).length;
@@ -77,8 +73,8 @@ export function createGraphEdges(
       : unresolvedEndpointViewId("source", transition.editorId);
     const targetViewId = transition.target_node_id === END_NODE_ID
       ? endTargets[transition.editorId] ?? endNodeIds[0] ?? DEFAULT_END_VIEW_ID
-      : targetExists
-        ? configuration.nodes[targetIndices[0]].editorId
+      : targetIndex != null
+        ? configuration.nodes[targetIndex].editorId
         : unresolvedEndpointViewId("target", transition.editorId);
     const statusColor = findAgentTeamStatus(source?.statuses ?? [], transition.status)?.color
       ?? "color-mix(in oklab, var(--muted-foreground) 45%, transparent)";
@@ -113,6 +109,7 @@ export function createGraphEdges(
 
 export function createGraphNodes(
   configuration: AgentTeamConfigurationDraft,
+  nodeIds: NodeIdIndex,
   positions: Record<string, XYPosition>,
   endNodeIds: string[],
 ): TeamGraphNode[] {
@@ -127,7 +124,7 @@ export function createGraphNodes(
       isStart: node.node_id === configuration.start_node_id,
       orphanStatuses: configuration.transitions
         .filter((transition) => transition.from_node_id === node.node_id && !node.statuses.some((status) => status.name === transition.status))
-        .filter(() => configuration.nodes.filter((item) => item.node_id === node.node_id).length === 1)
+        .filter(() => nodeIds.get(node.node_id) === index)
         .map((transition) => transition.status),
     },
   }));
@@ -140,11 +137,11 @@ export function createGraphNodes(
     selectable: true,
   }));
   configuration.transitions.forEach((transition, transitionIndex) => {
-    const sourceMatches = configuration.nodes.filter((node) => node.node_id === transition.from_node_id).length;
-    const sourceExists = sourceMatches === 1;
-    const targetMatches = configuration.nodes.filter((node) => node.node_id === transition.target_node_id).length;
+    const sourceIndex = nodeIds.get(transition.from_node_id);
+    const sourceExists = sourceIndex != null;
+    const targetIndex = nodeIds.get(transition.target_node_id);
     const targetExists = transition.target_node_id === END_NODE_ID
-      || targetMatches === 1;
+      || targetIndex != null;
     if (!sourceExists) nodes.push({
       id: unresolvedEndpointViewId("source", transition.editorId),
       type: "unresolved",
@@ -154,7 +151,7 @@ export function createGraphNodes(
         side: "source",
         transitionIndex,
         status: transition.status,
-        label: sourceMatches > 1
+        label: sourceIndex === null
           ? `来源节点 ID 重复，请先修正：${transition.from_node_id}`
           : `未找到来源节点：${transition.from_node_id || "（空）"}`,
       },
@@ -170,7 +167,7 @@ export function createGraphNodes(
         side: "target",
         transitionIndex,
         status: transition.status,
-        label: targetMatches > 1
+        label: targetIndex === null
           ? `目标节点 ID 重复，请先修正：${transition.target_node_id}`
           : `未找到目标节点：${transition.target_node_id || "（空）"}`,
       },

@@ -1,7 +1,7 @@
+import { modelConfigsQueryOptions } from "@/lib/query/query-options";
 import { useQuery } from "@tanstack/react-query";
 
-import { getModelConfigs, type ModelConfig } from "@/lib/api/model-configs";
-import { queryKeys } from "@/lib/query/query-keys";
+import { type ModelConfig } from "@/lib/api/model-configs";
 
 export type ModelCatalogModel = {
   optionId: string;
@@ -59,8 +59,7 @@ export function buildModelCatalog(configs: readonly ModelConfig[]): ModelCatalog
  */
 export function useModelCatalog(): ModelCatalogSnapshot & { retry: () => void } {
   const query = useQuery({
-    queryKey: queryKeys.modelConfigs(),
-    queryFn: ({ signal }) => getModelConfigs({ signal }),
+    ...modelConfigsQueryOptions(),
     select: buildModelCatalog,
   });
   return {

@@ -1,4 +1,3 @@
-/* global structuredClone, setTimeout, setInterval, clearInterval, URL, console, process, Buffer */
 
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";

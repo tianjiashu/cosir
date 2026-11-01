@@ -10,6 +10,26 @@ const task = () => selectTerminalTask(TASK)(useTerminalWorkbenchStore.getState()
 describe("终端工作台 store", () => {
   beforeEach(() => useTerminalWorkbenchStore.setState({ tasks: {} }));
 
+  it("同一会话投影再次同步不分配状态或通知订阅者", () => {
+    const sessions = [terminalSession("t1")];
+    const store = useTerminalWorkbenchStore.getState();
+    store.syncSessions(TASK, sessions);
+    const before = useTerminalWorkbenchStore.getState();
+    let notifications = 0;
+    const unsubscribe = useTerminalWorkbenchStore.subscribe(() => { notifications += 1; });
+    try {
+      store.syncSessions(TASK, sessions);
+      expect(useTerminalWorkbenchStore.getState()).toBe(before);
+      expect(notifications).toBe(0);
+      store.syncSessions(TASK, [terminalSession("t1", { status: "exited", exitCode: 2 })]);
+      expect(notifications).toBe(1);
+      expect(task().activeSessionId).toBe("t1");
+      expect(task().sessions?.[0].status).toBe("exited");
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("按 Task 独立记住面板开关与选中会话", () => {
     const store = useTerminalWorkbenchStore.getState();
     store.syncSessions(TASK, [terminalSession("t1"), terminalSession("t2")]);

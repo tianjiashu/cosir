@@ -24,14 +24,16 @@ export type HostIdentity = { platform: string; pid: number; version: string };
 
 type Target = { generation: number; url: string };
 
+/** 请求 id 只在单条连接内唯一；旧 handler 收尾只能访问它所属连接的登记。 */
+type Connection = { socket: WebSocket; inflight: Map<number, AbortController> };
+
 type RequestFrame = { id?: unknown; method?: unknown; params?: unknown; meta?: unknown };
 
 export class HostLinkClient {
   private target: Target | null = null;
-  private socket: WebSocket | null = null;
+  private connection: Connection | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryDelay = INITIAL_RETRY_MS;
-  private readonly inflight = new Map<number, AbortController>();
 
   constructor(
     private readonly options: { token: string; host: HostIdentity; methods: HostMethodRegistry },
@@ -51,17 +53,21 @@ export class HostLinkClient {
 
   private connect(target: Target): void {
     const socket = new WebSocket(target.url);
-    this.socket = socket;
+    const connection: Connection = { socket, inflight: new Map() };
+    this.connection = connection;
     socket.onopen = () => {
+      if (this.connection !== connection) return;
       socket.send(JSON.stringify({ type: "hello", token: this.options.token, host: this.options.host }));
       this.retryDelay = INITIAL_RETRY_MS;
       logDesktopEvent("INFO", "host_link", "host_link_connected", { generation: target.generation });
     };
-    socket.onmessage = (event) => this.receive(socket, event.data);
+    socket.onmessage = (event) => {
+      if (this.connection === connection) this.receive(connection, event.data);
+    };
     socket.onclose = (event) => {
-      if (this.socket !== socket) return;
-      this.socket = null;
-      this.abortInflight();
+      if (this.connection !== connection) return;
+      this.connection = null;
+      this.abortInflight(connection);
       if (event.code === CLOSE_UNAUTHORIZED) {
         logDesktopEvent("ERROR", "host_link", "host_link_rejected", { generation: target.generation });
         return;
@@ -83,18 +89,20 @@ export class HostLinkClient {
   private disconnect(): void {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
-    this.abortInflight();
-    const socket = this.socket;
-    this.socket = null;
-    socket?.close(1000);
+    const connection = this.connection;
+    this.connection = null;
+    if (connection) {
+      this.abortInflight(connection);
+      connection.socket.close(1000);
+    }
   }
 
-  private abortInflight(): void {
-    for (const controller of this.inflight.values()) controller.abort();
-    this.inflight.clear();
+  private abortInflight(connection: Connection): void {
+    for (const controller of connection.inflight.values()) controller.abort();
+    connection.inflight.clear();
   }
 
-  private receive(socket: WebSocket, data: unknown): void {
+  private receive(connection: Connection, data: unknown): void {
     let frame: RequestFrame;
     try {
       frame = JSON.parse(String(data)) as RequestFrame;
@@ -108,15 +116,15 @@ export class HostLinkClient {
     }
     if (frame.method === CANCEL_METHOD) {
       const id = (frame.params as { id?: unknown } | undefined)?.id;
-      if (typeof id === "number") this.inflight.get(id)?.abort();
+      if (typeof id === "number") connection.inflight.get(id)?.abort();
       return;
     }
     const meta = (frame.meta ?? {}) as HostCallMeta;
-    void this.dispatch(socket, typeof frame.id === "number" ? frame.id : null, frame.method, frame.params ?? null, meta);
+    void this.dispatch(connection, typeof frame.id === "number" ? frame.id : null, frame.method, frame.params ?? null, meta);
   }
 
   /** `id` 为 null 是通知：照常执行，不应答。 */
-  private async dispatch(socket: WebSocket, id: number | null, method: string, params: unknown, meta: HostCallMeta): Promise<void> {
+  private async dispatch({ socket, inflight }: Connection, id: number | null, method: string, params: unknown, meta: HostCallMeta): Promise<void> {
     const handler = this.options.methods.get(method);
     if (!handler) {
       logDesktopEvent("WARNING", "host_link", "host_method_not_found", { method, ...meta });
@@ -124,7 +132,7 @@ export class HostLinkClient {
       return;
     }
     const controller = new AbortController();
-    if (id !== null) this.inflight.set(id, controller);
+    if (id !== null) inflight.set(id, controller);
     try {
       const result = await handler(params, { signal: controller.signal, meta });
       // 已撤销的调用后端不再等待，应答只会被丢弃。
@@ -138,7 +146,7 @@ export class HostLinkClient {
       logDesktopEvent("ERROR", "host_link", "host_method_failed", { method, ...meta }, error);
       reply(socket, { id, error: { code: "INTERNAL", message: "the host method failed unexpectedly" } });
     } finally {
-      if (id !== null) this.inflight.delete(id);
+      if (id !== null) inflight.delete(id);
     }
   }
 }

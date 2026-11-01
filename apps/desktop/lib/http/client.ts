@@ -63,6 +63,8 @@ async function requestRaw(
       error,
     });
     throw error;
+  } finally {
+    timeout?.clear();
   }
 }
 

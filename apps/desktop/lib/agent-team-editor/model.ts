@@ -1,4 +1,5 @@
 import type { AgentTeamConfigurationDraft, AgentTeamNodeConfiguration, AgentTeamStatusConfiguration, AgentTeamTransitionConfiguration } from "@/lib/api/agent-teams";
+import { indexNodeIds } from "./node-id-index";
 
 export type EditorStatus = AgentTeamStatusConfiguration & { editorId: string };
 export type EditorNode = Omit<AgentTeamNodeConfiguration, "statuses"> & { editorId: string; statuses: EditorStatus[] };
@@ -43,7 +44,7 @@ export function nextNodeId(nodes: EditorNode[]): string {
 export function updateNodeInConfiguration(configuration: EditorDraft, index: number, changes: Partial<EditorNode>): EditorDraft {
   const current = configuration.nodes[index];
   const nextId = changes.node_id ?? current.node_id;
-  const rename = nextId !== current.node_id && configuration.nodes.filter(node => node.node_id === current.node_id).length === 1;
+  const rename = nextId !== current.node_id && indexNodeIds(configuration.nodes).get(current.node_id) === index;
   return { ...configuration,
     nodes: configuration.nodes.map((node, i) => i === index ? { ...node, ...changes, editorId: node.editorId } : node),
     transitions: rename ? configuration.transitions.map(edge => ({ ...edge,

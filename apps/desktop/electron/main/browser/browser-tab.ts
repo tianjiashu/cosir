@@ -9,6 +9,7 @@ import type { PageAction } from "./params";
 import { RefRegistry } from "./ref-registry";
 import { formatSnapshot, type AXNode, type FormattedSnapshot } from "./snapshot-format";
 import { isWebProtocol, urlProtocol } from "./web-url";
+import { waitForInitialization } from "./initialization";
 
 /** 视图不在浏览器面板显示时的视口；挂上面板后改为占位矩形的尺寸。 */
 export const DETACHED_VIEWPORT = { x: 0, y: 0, width: 1280, height: 800 };
@@ -60,7 +61,7 @@ export class BrowserTab {
   private readonly refs = new RefRegistry();
   private notes: string[] = [];
 
-  private constructor(
+  constructor(
     readonly tabId: string,
     readonly taskId: number,
     readonly createdBy: BrowserTabCreator,
@@ -107,17 +108,18 @@ export class BrowserTab {
     });
   }
 
-  static async create(tabId: string, taskId: number, createdBy: BrowserTabCreator, events: TabEvents): Promise<BrowserTab> {
-    const tab = new BrowserTab(tabId, taskId, createdBy, events);
-    await tab.view.webContents.loadURL("about:blank");
-    tab.attachDebugger();
-    await tab.cdp("Page.enable");
-    await tab.cdp("Page.setInterceptFileChooserDialog", { enabled: true });
-    return tab;
+  /** 视图先交给 Host 登记，再异步初始化；关闭时的 signal 使所有初始化等待立即结束。 */
+  async initialize(signal: AbortSignal): Promise<void> {
+    await waitForInitialization(this.view.webContents.loadURL("about:blank"), signal);
+    signal.throwIfAborted();
+    this.attachDebugger();
+    await this.cdp("Page.enable", {}, signal);
+    await this.cdp("Page.setInterceptFileChooserDialog", { enabled: true }, signal);
   }
 
   /** 导航并等主框架加载完成；失败带回 Chromium 的 `ERR_*` 说明。 */
   async navigate(target: BrowserNavigation, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) throw new HostMethodError("CANCELLED", "navigation was cancelled");
     const contents = this.view.webContents;
     const history = contents.navigationHistory;
     if ("action" in target && target.action === "back" && !history.canGoBack()) {
@@ -318,23 +320,25 @@ export class BrowserTab {
   }
 
   /** CDP 命令带时限：渲染进程卡死时命令会一直不返回。 */
-  private cdp<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  private cdp<T = unknown>(method: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
     // 只在本模块与 page-input.ts 里用固定的方法集合，不向链路透传任意 CDP。
     const command = this.view.webContents.debugger.sendCommand(method, params) as Promise<T>;
     return new Promise<T>((resolve, reject) => {
+      const clear = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const fail = (error: unknown) => { clear(); reject(error); };
+      const onAbort = () => fail(signal!.reason);
       const timer = setTimeout(
-        () => reject(new HostMethodError("PAGE_UNRESPONSIVE", `the page did not respond to ${method}`)),
+        () => fail(new HostMethodError("PAGE_UNRESPONSIVE", `the page did not respond to ${method}`)),
         CDP_TIMEOUT_MS,
       );
+      signal?.addEventListener("abort", onAbort, { once: true });
       command.then(
-        (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        (error: unknown) => {
-          clearTimeout(timer);
-          reject(error);
-        },
+        (value) => { clear(); resolve(value); },
+        fail,
       );
     });
   }

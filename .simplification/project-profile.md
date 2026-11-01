@@ -21,13 +21,13 @@
 
 在 `apps/desktop` 目录下执行：
 
-| 用途 | 命令 | 基线状态（2026-10-31） |
+| 用途 | 命令 | 最近验证状态（2026-11-01 第二轮） |
 |---|---|---|
 | 类型检查（渲染进程） | `npx tsc --noEmit -p .` | 通过 |
 | 类型检查（宿主） | `npx tsc --noEmit -p electron` | 通过 |
-| Lint | `npm run lint` | 50 个既有错误：49 个 `no-undef` 来自 `scripts/*.mjs` 与 `tests/desktop-e2e`（ESLint 未给 Node 脚本配 Node 全局变量），1 个测试文件中的未使用变量；生产代码无错误 |
-| 单元测试 | `npm run test:unit` | 通过：101 个文件、632 个用例 |
-| 端到端测试 | `npm run test:e2e`；桌面 E2E `npm run test:e2e:desktop`（需构建） | 首轮未运行 |
-| 构建 | `npm run build` | 首轮未运行 |
+| Lint | `npm run lint` | 通过：已为 Node `.mjs` 配置 `globals.node`，保留 `no-undef` 规则 |
+| 单元测试 | `npm run test:unit` | 通过：109 个文件、692 个用例 |
+| 端到端测试 | `npm run test:e2e`；桌面 E2E `npm run test:e2e:desktop`（需构建） | 前端 145 通过、2 失败、9 未运行；真实 Electron 浏览器引擎 15 通过。完整桌面冒烟被基线后端 `DeferredEntry` 导入错误阻断；详见第二轮报告 |
+| 构建 | `npm run build` | 通过；存在既有 CSS `::highlight` 识别与 bundle 大小提示 |
 
 后端（`apps/backend`）的工具链待后端纳入精简范围时补充。

@@ -171,6 +171,45 @@ describe("HostLinkClient", () => {
     expect(socket.sent).toHaveLength(1);
   });
 
+  it.each(["generation", "reconnect"])("isolates reused request IDs across %s changes", async (change) => {
+    vi.useFakeTimers();
+    const pending: { signal: AbortSignal; finish: () => void }[] = [];
+    const methods = new HostMethodRegistry();
+    methods.register("demo.slow", (_params, { signal }) => new Promise<void>((resolve) => {
+      pending.push({ signal, finish: resolve });
+    }));
+    const link = client(methods);
+    link.follow(ready(1));
+    const old = FakeSocket.instances[0];
+    old.open();
+    old.deliver({ id: 1, method: "demo.slow" });
+
+    if (change === "generation") link.follow(ready(2));
+    else {
+      old.drop(1006);
+      vi.advanceTimersByTime(1_000);
+    }
+    const current = FakeSocket.instances[1];
+    current.open();
+    current.deliver({ id: 1, method: "demo.slow" });
+    expect(pending[0].signal.aborted).toBe(true);
+
+    // 旧连接排队中的帧和迟到的 handler 收尾都不能触碰新连接。
+    old.deliver({ method: "$/cancel", params: { id: 1 } });
+    old.deliver({ id: 2, method: "demo.slow" });
+    expect(pending).toHaveLength(2);
+    expect(pending[1].signal.aborted).toBe(false);
+    pending[0].finish();
+    await vi.advanceTimersByTimeAsync(0);
+
+    current.deliver({ method: "$/cancel", params: { id: 1 } });
+    expect(pending[1].signal.aborted).toBe(true);
+    pending[1].finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(current.sent).toHaveLength(1);
+    expect(old.sent).toHaveLength(1);
+  });
+
   // 目的：同一 generation 内断线自动恢复；潜在缺陷：一次抖动后浏览器工具永久不可用。
   it("reconnects with backoff after an unexpected close, but not after a token rejection", () => {
     vi.useFakeTimers();

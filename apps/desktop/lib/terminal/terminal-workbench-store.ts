@@ -94,12 +94,15 @@ export const useTerminalWorkbenchStore = create<TerminalWorkbenchStore>((set) =>
         });
         return;
       }
-      update(taskId, (current) => {
-        if (current.sessions === sessions) return {};
+      set((state) => {
+        const current = state.tasks[taskId] ?? EMPTY;
+        if (current.sessions === sessions) return state;
         // 面板开着时结束的会话用户看得见，直接算看过；收起时只保留仍在列表里的记录，列表外的无需再记。
         const ended = endedIds(sessions);
         const acknowledgedEnds = current.open ? ended : current.acknowledgedEnds.filter((id) => ended.includes(id));
-        return { sessions, activeSessionId: reconcileActive(sessions, current.activeSessionId), acknowledgedEnds };
+        return { tasks: { ...state.tasks, [taskId]: {
+          ...current, sessions, activeSessionId: reconcileActive(sessions, current.activeSessionId), acknowledgedEnds,
+        } } };
       });
     },
     setOpen: (taskId, open) => update(taskId, (current) => ({

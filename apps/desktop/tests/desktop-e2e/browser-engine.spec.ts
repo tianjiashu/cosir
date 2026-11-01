@@ -139,8 +139,8 @@ test("keeps scripted navigation to local files from leaving the page", async () 
 test("recovers from a renderer crash by navigating again", async () => {
   await navigate(1, { url: `${origin}/form` });
   await app.evaluate(() => {
-    const { host } = (globalThis as unknown as { browserHarness: { host: { tabs: Map<string, { view: Electron.WebContentsView }> } } }).browserHarness;
-    host.tabs.get("t1")!.view.webContents.forcefullyCrashRenderer();
+    const { host } = (globalThis as unknown as { browserHarness: { host: { tabs: Map<string, { tab: { view: Electron.WebContentsView } }> } } }).browserHarness;
+    host.tabs.get("t1")!.tab.view.webContents.forcefullyCrashRenderer();
   });
   await expect.poll(async () => {
     const outcome = await call("snapshot", { taskId: 1 });
@@ -178,7 +178,7 @@ test("places one tab at a time on the window and freezes a frame", async () => {
 
   const placement = await app.evaluate((_electron, { first, second }) => {
     type Harness = {
-      host: { place(tabId: string, rect: unknown): void; freeze(tabId: string): Promise<string>; tabs: Map<string, { view: Electron.WebContentsView }> };
+      host: { place(tabId: string, rect: unknown): void; freeze(tabId: string): Promise<string>; tabs: Map<string, { tab: { view: Electron.WebContentsView } }> };
       window: Electron.BrowserWindow;
     };
     const { host, window } = (globalThis as unknown as { browserHarness: Harness }).browserHarness;
@@ -188,8 +188,8 @@ test("places one tab at a time on the window and freezes a frame", async () => {
     const withFirst = window.contentView.children.length;
     host.place(second, rect);
     const withSecond = window.contentView.children.length;
-    const firstAttached = window.contentView.children.includes(host.tabs.get(first)!.view);
-    const placed = host.tabs.get(second)!.view.getBounds();
+    const firstAttached = window.contentView.children.includes(host.tabs.get(first)!.tab.view);
+    const placed = host.tabs.get(second)!.tab.view.getBounds();
     host.place(second, null);
     return {
       base,
@@ -198,7 +198,7 @@ test("places one tab at a time on the window and freezes a frame", async () => {
       firstAttached,
       placed,
       after: window.contentView.children.length,
-      detached: host.tabs.get(second)!.view.getBounds(),
+      detached: host.tabs.get(second)!.tab.view.getBounds(),
     };
   }, { first, second });
 
@@ -323,5 +323,27 @@ test("screenshots in CSS pixels and manages the task's tabs", async () => {
   const first = (listed as unknown as { value: { tab_id: string }[] }).value[0].tab_id;
   expect(await call("manageTabs", { taskId: 23, action: "select", tab: first })).toMatchObject({ ok: true, value: [{ tab_id: first, current: true }, { current: false }] });
   expect(await call("manageTabs", { taskId: 23, action: "close", tab: first })).toMatchObject({ ok: true, value: [{ tab_id: second.tab_id, current: true }] });
+});
+
+// 目的：初始化前就归 Host 持有；删除 Task 同时回收真实 Chromium 资源，迟到初始化不能复活标签。
+test("drops a tab during initialization and destroys its webContents", async () => {
+  const result = await app.evaluate(async () => {
+    type HarnessHost = {
+      userOpen(taskId: number, limits: { perTask: number; total: number }): Promise<string>;
+      manageTabs(request: { taskId: number; action: "list" }): { tab_id: string }[];
+      dropTasks(ids: number[]): void;
+      tabs: Map<string, { tab: { view: Electron.WebContentsView } }>;
+    };
+    const { host } = (globalThis as unknown as { browserHarness: { host: HarnessHost } }).browserHarness;
+    const opening = host.userOpen(99, { perTask: 5, total: 50 });
+    const listed = host.manageTabs({ taskId: 99, action: "list" });
+    const contents = host.tabs.get(listed[0].tab_id)!.tab.view.webContents;
+    const destroyed = new Promise<void>((resolve) => contents.once("destroyed", () => resolve()));
+    host.dropTasks([99]);
+    const code = await opening.then(() => "opened", (error: { code: string }) => error.code);
+    await destroyed;
+    return { listed: listed.length, code, destroyed: contents.isDestroyed(), remaining: host.manageTabs({ taskId: 99, action: "list" }) };
+  });
+  expect(result).toEqual({ listed: 1, code: "TAB_NOT_FOUND", destroyed: true, remaining: [] });
 });
 

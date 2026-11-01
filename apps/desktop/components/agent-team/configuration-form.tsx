@@ -1,3 +1,5 @@
+import { buildTeamOutline } from "@/lib/agent-team-editor/outline";
+import { indexNodeIds } from "@/lib/agent-team-editor/node-id-index";
 import { useStore } from "zustand";
 import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -12,52 +14,6 @@ import { EmptyState } from "@/components/ui/state-panel";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import type { EditorDraft, EditorNode } from "@/lib/agent-team-editor/model";
 import type { TeamGraphIssues } from "@/lib/agent-team-editor/use-graph-issues";
-
-type TeamOutline = {
-  /** 从入口沿转移可达的节点下标，按广度优先的执行顺序排列。 */
-  connected: number[];
-  /** 入口出发走不到的节点下标，保持原有顺序。 */
-  unconnected: number[];
-  /** 来源节点不存在或 ID 重复、无法挂到某张节点卡片下的转移下标。 */
-  dangling: number[];
-};
-
-/**
- * 把图结构排成大纲：只按转移关系排序与分组，帮助阅读执行流程。
- * 不复刻后端图校验（可达性、终止性等仍以保存时的后端结果为准）。
- */
-function buildOutline(configuration: EditorDraft): TeamOutline {
-  const uniqueIndex = new Map<string, number>();
-  const duplicated = new Set<string>();
-  configuration.nodes.forEach((node, index) => {
-    if (uniqueIndex.has(node.node_id)) duplicated.add(node.node_id);
-    else uniqueIndex.set(node.node_id, index);
-  });
-  for (const id of duplicated) uniqueIndex.delete(id);
-
-  const connected: number[] = [];
-  const visited = new Set<number>();
-  const start = uniqueIndex.get(configuration.start_node_id);
-  const queue = start === undefined ? [] : [start];
-  if (start !== undefined) visited.add(start);
-  while (queue.length) {
-    const index = queue.shift()!;
-    connected.push(index);
-    for (const transition of configuration.transitions) {
-      if (transition.from_node_id !== configuration.nodes[index].node_id) continue;
-      const target = uniqueIndex.get(transition.target_node_id);
-      if (target === undefined || visited.has(target)) continue;
-      visited.add(target);
-      queue.push(target);
-    }
-  }
-  return {
-    connected,
-    unconnected: configuration.nodes.map((_, index) => index).filter((index) => !visited.has(index)),
-    dangling: configuration.transitions.map((_, index) => index)
-      .filter((index) => !uniqueIndex.has(configuration.transitions[index].from_node_id)),
-  };
-}
 
 /**
  * 表单模式的「大纲视图」：节点按执行顺序排成卡片，每张卡片内编辑节点字段与它发出的转移。
@@ -85,7 +41,8 @@ export function AgentTeamConfigurationForm({
   onCancel: () => void;
 }) {
   const configuration = useStore(session.store, state => state.snapshot.configuration);
-  const outline = useMemo(() => buildOutline(configuration), [configuration]);
+  const nodeIds = useMemo(() => indexNodeIds(configuration.nodes), [configuration.nodes]);
+  const outline = useMemo(() => buildTeamOutline(configuration, nodeIds), [configuration, nodeIds]);
   const [highlightSequence, setHighlightSequence] = useState<number | null>(null);
   const nodeListRef = useRef<HTMLElement | null>(null);
   const additionSequence = useRef(0);
@@ -119,6 +76,7 @@ export function AgentTeamConfigurationForm({
       node={node}
       index={index}
       configuration={configuration}
+      uniqueId={nodeIds.get(node.node_id) === index}
       profiles={profiles}
       highlighted={highlightSequence !== null && index === lastNodeIndex}
       graphIssues={graphIssues}
@@ -188,10 +146,11 @@ export function AgentTeamConfigurationForm({
   );
 }
 
-function TeamNodeCard({ node, index, configuration, profiles, highlighted, graphIssues, session, onRemoveTransition }: {
+function TeamNodeCard({ node, index, configuration, uniqueId, profiles, highlighted, graphIssues, session, onRemoveTransition }: {
   node: EditorNode;
   index: number;
   configuration: EditorDraft;
+  uniqueId: boolean;
   profiles: AgentConfiguration[];
   highlighted: boolean;
   graphIssues: TeamGraphIssues;
@@ -201,7 +160,6 @@ function TeamNodeCard({ node, index, configuration, profiles, highlighted, graph
   const isStart = node.node_id === configuration.start_node_id;
   const role = profiles.find((profile) => profile.agent_id === node.agent_id)?.role;
   // ID 重复时转移无法确定归属，统一放进「来源无效」分组，避免在两张卡片下重复出现。
-  const uniqueId = configuration.nodes.filter((item) => item.node_id === node.node_id).length === 1;
   const outgoing = uniqueId
     ? configuration.transitions.flatMap((transition, transitionIndex) => transition.from_node_id === node.node_id ? [{ transition, transitionIndex }] : [])
     : [];

@@ -1,3 +1,4 @@
+import { indexNodeIds } from "@/lib/agent-team-editor/node-id-index";
 import { useStore } from "zustand";
 import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -139,9 +140,10 @@ function GraphCanvas({
   const connectionTraceRef = useRef<{ traceId: string; kind: "connect" | "reconnect" } | null>(null);
   const nodeDragTraceRef = useRef(new Map<string, { traceId: string; startedAt: number }>());
   const viewportTraceRef = useRef<string | null>(null);
+  const nodeIds = useMemo(() => indexNodeIds(configuration.nodes), [configuration.nodes]);
   const graphNodes = useMemo(
-    () => createGraphNodes(configuration, layout.positions, layout.endNodeIds),
-    [configuration, layout.positions, layout.endNodeIds],
+    () => createGraphNodes(configuration, nodeIds, layout.positions, layout.endNodeIds),
+    [configuration, nodeIds, layout.positions, layout.endNodeIds],
   );
   const [nodes, setNodes] = useState(graphNodes);
   const graphNodesRef = useRef(graphNodes);
@@ -149,14 +151,14 @@ function GraphCanvas({
     ? { ...layout.edgeRoutes, [edgeRoutePreview.routeKey]: edgeRoutePreview.route }
     : layout.edgeRoutes, [edgeRoutePreview, layout.edgeRoutes]);
   const edges = useMemo(
-    () => createGraphEdges(configuration, layout.endTargets, layout.endNodeIds, visibleEdgeRoutes)
+    () => createGraphEdges(configuration, nodeIds, layout.endTargets, layout.endNodeIds, visibleEdgeRoutes)
       .map((edge) => {
         // 有结构问题的转移改用警告色虚线，与状态色区分开。
         const problem = graphIssues.byTransitionIndex.has(edge.data!.transitionIndex);
         const style = problem ? { ...edge.style, stroke: "var(--warning)", strokeDasharray: "5 4" } : edge.style;
         return edge.id === selectedTransition ? { ...edge, selected: true, style: { ...style, strokeWidth: 2.5 } } : { ...edge, style };
       }),
-    [configuration, graphIssues.byTransitionIndex, layout.endTargets, layout.endNodeIds, selectedTransition, visibleEdgeRoutes],
+    [configuration, nodeIds, graphIssues.byTransitionIndex, layout.endTargets, layout.endNodeIds, selectedTransition, visibleEdgeRoutes],
   );
 
   useEffect(() => {

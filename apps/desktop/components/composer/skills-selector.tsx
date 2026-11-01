@@ -1,3 +1,4 @@
+import { skillsQueryOptions } from "@/lib/query/query-options";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { HammerIcon } from "lucide-react";
@@ -5,10 +6,9 @@ import { HammerIcon } from "lucide-react";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
-import { getSystemSkills, type SystemSkill } from "@/lib/api/system-extensions";
+import { type SystemSkill } from "@/lib/api/system-extensions";
 import { insertSkill, useComposerInsertion } from "@/components/composer/composer-insertion-context";
 import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
-import { queryKeys } from "@/lib/query/query-keys";
 
 const EMPTY_SKILLS: SystemSkill[] = [];
 
@@ -26,8 +26,7 @@ export function SkillsSelector({ disabled = false }: SkillsSelectorProps) {
   const [open, setOpen] = useState(false);
   // 与配置中心的 Skill 列表共用缓存：启用 / 禁用后由配置侧失效 skills()，这里无需自行刷新。
   const skillsQuery = useQuery({
-    queryKey: queryKeys.skills(),
-    queryFn: ({ signal }) => getSystemSkills({ signal }),
+    ...skillsQueryOptions(),
     enabled: open,
   });
   const skills = skillsQuery.data ?? EMPTY_SKILLS;

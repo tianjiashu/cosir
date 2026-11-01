@@ -1,6 +1,6 @@
 import { HostMethodError } from "../host-link/methods";
 import { isSupportedKey, MODIFIERS, type Modifier } from "./page-input";
-import { TAB_ID } from "./tab-table";
+import { BROWSER_TAB_ID } from "../../shared/host-contract";
 import { isWebProtocol } from "./web-url";
 import { BROWSER_NAVIGATION_ACTIONS, type BrowserNavigation, type BrowserTabLimits } from "../../shared/host-contract";
 
@@ -185,7 +185,7 @@ function optionalText(value: unknown, field: string): string | undefined {
 
 function optionalTab(value: unknown): string | undefined {
   if (absent(value)) return undefined;
-  if (typeof value !== "string" || !TAB_ID.test(value)) throw invalid("tab must look like t1");
+  if (typeof value !== "string" || !BROWSER_TAB_ID.test(value)) throw invalid("tab must look like t1");
   return value;
 }
 

@@ -1,5 +1,6 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import js from "@eslint/js";
+import globals from "globals";
 import tseslint from "typescript-eslint";
 
 const RAW_PALETTE =
@@ -20,6 +21,11 @@ function rawStyleSelectors() {
 const eslintConfig = defineConfig([
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    // 构建和测试入口运行在 Node；保留 no-undef 检查，只声明真实运行环境。
+    files: ["**/*.mjs"],
+    languageOptions: { globals: globals.node },
+  },
   {
     files: ["**/*.{ts,tsx}"],
     rules: {

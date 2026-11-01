@@ -132,7 +132,7 @@ Electron 桌面应用
 - 后端 lifespan 负责初始化和关闭数据库、各 Task 的调度 actor（经 `task_runtime_spaces`）与 Run 执行、运行期依赖与观测组件。工具子进程由工具执行层负责取消、超时和进程树清理。
 - MCP 服务连接归进程级 `MCPConnectionPool`（`app/tools/mcp/`）所有：在独立事件循环线程上每个服务一条长连接（stdio 服务即常驻子进程，stderr 落 `.cosir/logs/mcp/`），首次调用时建立、连接指纹变化或断线后重建、空闲回收，后端退出时经 `close_service_dependencies` 关闭；失败的调用不在池内重放。配置文件是唯一事实源，池不接收变更通知；配置界面的连接测试仍走一次性短连接，不进池。
 - 交互终端归 Task 所有，允许同一 Task 的后续 Run 复用。Run 完成、失败、取消或历史 Run 删除不关闭终端；Agent 显式关闭、shell 自然退出、Task 删除提交后或后端退出时清理。活会话由 `TerminalSessionService` 管理，不进入 Run 执行进度，不跨后端重启恢复。会话列表与实时状态投影进 snapshot 顶层 `terminal_sessions`；人和 Agent 都可新建会话与输入，用户输入从不被拒，Agent 输入在用户打字时等其停手、前台是用户启动的命令时立即被拒，前端经每会话一条可写 `terminal-v2` WebSocket 交互；终端工具只开放给侧栏对话 Task 的主 Agent。
-- 内置浏览器的标签页归宿主所有（`electron/main/browser/BrowserHost`，每个标签一个 `WebContentsView` 加一个 CDP 会话），每个标签绑定一个 Task、只有该 Task 的 Agent 能操作；不持久化，后端重启不影响，宿主退出即全部消失，Task 删除提交后由后端经宿主工具链路通知回收。全部 Task 共用一个持久分区 `persist:cosir-browser`（与应用自身会话隔离、只允许 http(s)、站点权限与下载一律拒绝、JS 弹窗与文件选择框自动拦下）；标签上限的事实源是后端配置中心，随每次请求带给宿主。
+- 内置浏览器的标签页归宿主所有（`electron/main/browser/BrowserHost`，每个标签一个 `WebContentsView` 加一个 CDP 会话），每个标签绑定一个 Task、只有该 Task 的 Agent 能操作；不持久化，后端重启不影响，宿主退出即全部消失，Task 删除提交后由后端经宿主工具链路通知回收。初始化中的标签同样由宿主持有、计入上限并可关闭；Task 删除或宿主退出时一并取消初始化，迟到完成不得恢复标签。全部 Task 共用一个持久分区 `persist:cosir-browser`（与应用自身会话隔离、只允许 http(s)、站点权限与下载一律拒绝、JS 弹窗与文件选择框自动拦下）；标签上限的事实源是后端配置中心，随每次请求带给宿主。
 - 后端崩溃恢复必须有限且串行，不得无限重启。恢复耗尽后由用户显式重启；生命周期 generation 用于防止旧进程或旧线程覆盖当前状态。
 - 后端重启时，遗留 running Run（含 child Run）收敛为 `cancelled`，显式恢复从 prepare_input node 重新进入模型循环；`suspended` Run 没有执行者也没有未闭合调用，原样保留，等可唤醒消息继续同一个 Run。workflow 只有 prepare_input 一个入口，调用方不传恢复模式。inbox 保留，不得隐式重放旧 Agent 执行。进程内 registry、subscriber、后台 Team 任务和运行任务不跨重启恢复（遗留 running TeamRun 由 Coordinator 收敛为 cancelled，pending TeamRun 保留可决定）。重启恢复（收敛、拉起待调度 Task、延迟结果收尾）只由 `RecoverService.recover_after_restart` 按序编排，lifespan 接好运行时后调用这一个入口。
 
@@ -153,7 +153,7 @@ Electron 桌面应用
 
 ### 宿主工具链路（后端工具 → 宿主方法）
 
-后端工具调用宿主（Electron main）能力的通用通道，不属于任何具体能力：链路只认「方法名 + JSON 参数」，宿主侧方法注册表（`electron/main/host-link/methods.ts`）按名分发，后端工具只经 `app/tools/host/host_call.py` 的 `call_host` 调用（等待、取消、时限与链路错误映射都在这里收口）。宿主是客户端：随 supervisor 快照在后端 ready 时连 WebSocket `/host/link`、generation 变化时换连接；首帧 `hello` 出示宿主拉起后端时注入的 `CODING_AGENT_HOST_TOKEN`，不一致即 4003 拒绝（网页也能连本机 WebSocket，token 是唯一身份依据）。请求只由后端发起；后端同一时刻只保留最新一条连接，断开或被顶替时未决请求以 `UNAVAILABLE` 失败，链路内不重放。渲染进程不在这条链路上，不作为工具执行端；需要用户在界面上作答的工具仍走 HITL 决定命令。当前注册的能力是内置浏览器（`browser.*`，`electron/main/browser/methods.ts`）。
+后端工具调用宿主（Electron main）能力的通用通道，不属于任何具体能力：链路只认「方法名 + JSON 参数」，宿主侧方法注册表（`electron/main/host-link/methods.ts`）按名分发，后端工具只经 `app/tools/host/host_call.py` 的 `call_host` 调用（等待、取消、时限与链路错误映射都在这里收口）。宿主是客户端：随 supervisor 快照在后端 ready 时连 WebSocket `/host/link`、generation 变化时换连接；首帧 `hello` 出示宿主拉起后端时注入的 `CODING_AGENT_HOST_TOKEN`，不一致即 4003 拒绝（网页也能连本机 WebSocket，token 是唯一身份依据）。请求只由后端发起；请求 ID 与取消登记归单条连接所有，旧连接的收尾不能操作新连接的同号请求。后端同一时刻只保留最新一条连接，断开或被顶替时未决请求以 `UNAVAILABLE` 失败，链路内不重放。渲染进程不在这条链路上，不作为工具执行端；需要用户在界面上作答的工具仍走 HITL 决定命令。当前注册的能力是内置浏览器（`browser.*`，`electron/main/browser/methods.ts`）。
 
 ### 本机 HTTP 与 Assistant Transport
 

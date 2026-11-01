@@ -1,3 +1,4 @@
+import { skillsQueryOptions } from "@/lib/query/query-options";
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2Icon, PlusIcon, PuzzleIcon, Trash2Icon } from "lucide-react";
@@ -20,7 +21,6 @@ import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/com
 import {
   deleteSystemSkill,
   getSystemSkill,
-  getSystemSkills,
   importSystemSkill,
   saveEnabledSkills,
   type SystemSkill,
@@ -46,8 +46,7 @@ export function SkillConfigurationPanel() {
   const linkComponents = useMarkdownLinkComponents("configuration", { webOnly: true });
 
   const skillsQuery = useQuery({
-    queryKey: queryKeys.skills(),
-    queryFn: ({ signal }) => getSystemSkills({ signal }),
+    ...skillsQueryOptions(),
   });
   const detailQuery = useQuery({
     queryKey: queryKeys.skill(detailName ?? ""),

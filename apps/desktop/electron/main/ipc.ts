@@ -4,7 +4,7 @@ import { BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent } 
 import type { BackendSupervisor } from "./backend/supervisor";
 import type { BrowserHost } from "./browser/browser-host";
 import { httpUrl } from "./browser/params";
-import { TAB_ID } from "./browser/tab-table";
+import { BROWSER_TAB_ID } from "../shared/host-contract";
 import { appendJsonLine } from "./desktop-log";
 import { appLogDir } from "./paths";
 import {
@@ -70,7 +70,7 @@ function parseNavigationUrl(value: unknown): string {
 }
 
 function parseTabId(value: unknown): string {
-  if (typeof value !== "string" || !TAB_ID.test(value)) throw new Error("标签页标识不合法");
+  if (typeof value !== "string" || !BROWSER_TAB_ID.test(value)) throw new Error("标签页标识不合法");
   return value;
 }
 

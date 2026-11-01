@@ -1,3 +1,4 @@
+import { indexNodeIds } from "@/lib/agent-team-editor/node-id-index";
 import { describe, expect, it } from "vitest";
 
 import { buildTeamElkGraph, computeTeamAutoLayout } from "@/components/agent-team/graph-layout";
@@ -10,12 +11,12 @@ const config = importDraft(teamConfiguration, createIdentityAllocator());
 const [reviewer, fixer] = config.nodes;
 const END = "@@canvas-end-1";
 // 故意把 fixer 和 END 摆在入口左边，验证整理结果不受原布局误导。
-const nodes = createGraphNodes(config, {
+const nodes = createGraphNodes(config, indexNodeIds(config.nodes), {
   [reviewer.editorId]: { x: 800, y: 0 },
   [fixer.editorId]: { x: 0, y: 400 },
   [END]: { x: -300, y: 0 },
 }, [END]);
-const edges = createGraphEdges(config, {}, [END]);
+const edges = createGraphEdges(config, indexNodeIds(config.nodes), {}, [END]);
 
 describe("Agent Team auto layout", () => {
   it("pins START first and END last, with status ports in on-node order", () => {
@@ -62,8 +63,8 @@ describe("Agent Team auto layout", () => {
         { from_node_id: "review", status: "needs_fix", target_node_id: "code" },
       ],
     }, createIdentityAllocator());
-    const pipelineNodes = createGraphNodes(pipeline, {}, [END]);
-    const positions = await computeTeamAutoLayout(pipelineNodes, createGraphEdges(pipeline, {}, [END]));
+    const pipelineNodes = createGraphNodes(pipeline, indexNodeIds(pipeline.nodes), {}, [END]);
+    const positions = await computeTeamAutoLayout(pipelineNodes, createGraphEdges(pipeline, indexNodeIds(pipeline.nodes), {}, [END]));
     const x = (nodeId: string) => positions[pipeline.nodes.find((node) => node.node_id === nodeId)!.editorId].x;
 
     expect([x("plan"), x("code"), x("test"), x("review"), positions[END].x]).toEqual(

@@ -1,3 +1,6 @@
+/** 宿主标签 id 为 t 加单调序号，IPC 与工具入参共用该格式。 */
+export const BROWSER_TAB_ID = /^t\d+$/;
+
 /**
  * 渲染进程与 Electron 宿主之间的唯一控制面契约：IPC 通道名与载荷类型。
  *

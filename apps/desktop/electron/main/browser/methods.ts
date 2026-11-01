@@ -14,9 +14,9 @@ import { parseAct, parseDropTasks, parseNavigate, parseScreenshot, parseSnapshot
  */
 export function registerBrowserMethods(methods: HostMethodRegistry, browser: BrowserHost): void {
   methods.register("browser.navigate", (params, { signal }) => browser.navigate(parseNavigate(params), signal));
-  methods.register("browser.snapshot", async (params) => browser.snapshot(parseSnapshot(params)));
+  methods.register("browser.snapshot", async (params, { signal }) => browser.snapshot(parseSnapshot(params), signal));
   methods.register("browser.act", (params, { signal }) => browser.act(parseAct(params), signal));
-  methods.register("browser.screenshot", async (params) => browser.screenshot(parseScreenshot(params)));
+  methods.register("browser.screenshot", async (params, { signal }) => browser.screenshot(parseScreenshot(params), signal));
   methods.register("browser.tabs", async (params) => browser.manageTabs(parseTabs(params)));
   methods.register("browser.dropTasks", async (params) => {
     browser.dropTasks(parseDropTasks(params));

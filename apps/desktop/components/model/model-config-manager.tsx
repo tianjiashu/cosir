@@ -1,3 +1,4 @@
+import { modelConfigsQueryOptions } from "@/lib/query/query-options";
 import { useEffect, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2Icon, EyeIcon, EyeOffIcon, Loader2Icon, Trash2Icon, XCircleIcon } from "lucide-react";
@@ -12,7 +13,6 @@ import {
   createModelConfig,
   deleteModelConfig,
   discoverModelConfigs,
-  getModelConfigs,
   testDraftModelConfig,
   updateModelConfig,
   type ModelConfig,
@@ -115,8 +115,7 @@ export function ModelConfigManager({
   useUnsavedChanges(unsavedScope, "模型配置", dirty);
 
   const configsQuery = useQuery({
-    queryKey: queryKeys.modelConfigs(),
-    queryFn: ({ signal }) => getModelConfigs({ signal }),
+    ...modelConfigsQueryOptions(),
   });
 
   const testMutation = useMutation({ mutationFn: testDraftModelConfig });

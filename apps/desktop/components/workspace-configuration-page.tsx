@@ -5,7 +5,7 @@ import { FolderIcon, Loader2Icon, SaveIcon } from "lucide-react";
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { WORKSPACE_SETTINGS_TABS, type WorkspaceSettingsTabId } from "@/components/settings/settings-tabs";
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
-import { AgentConfigurationPanel, type AgentConfigurationApi } from "@/components/system-configuration-page";
+import { AgentConfigurationPanel, type AgentConfigurationApi } from "@/components/configuration/agent-configuration-panel";
 import { AgentTeamConfigurationPanel } from "@/components/agent-team/configuration-panel";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
