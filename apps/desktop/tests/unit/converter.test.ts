@@ -30,7 +30,8 @@ const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportT
   toolName: "execute_terminal",
   status,
   args: { command: "npm test" },
-  presentation: { expand_layout: "terminal" },
+  presentation: { verb: "执行命令", icon: "terminal" },
+  awaitingUser: false,
   ...extra,
 });
 
@@ -309,23 +310,39 @@ describe("assistant transport converter", () => {
     expect(failed).toMatchObject({ result: { kind: "tool-terminal", status: "failed" } });
     expect(cancelled).toMatchObject({ isError: false, artifact: { backendStatus: "cancelled", error: "已取消" } });
     expect(cancelled).toMatchObject({ result: { kind: "tool-terminal", status: "cancelled" } });
-    expect(delegation).toMatchObject({ artifact: { child_task_id: 22 } });
+    expect(delegation).toMatchObject({ artifact: { childTaskId: 22 } });
   });
 
-  it("hides a tool result when the generic presentation disables it", () => {
-    const converted = toToolCallPart(tool("completed", {
+  // 目的：标题、等待用户与展示声明原样进 artifact，调用行只读这里；潜在缺陷：缺省 heading 被补成空对象后
+  // 调用行会显示空标题而不是回落到 verb。
+  it("把标题、等待用户与展示声明原样带进 artifact，缺省 heading 为 null", () => {
+    const awaiting = toToolCallPart(tool("pending", {
+      toolName: "browser_handoff",
+      heading: { title: "交给你登录", target: "https://example.com" },
+      awaitingUser: true,
+    }));
+    expect(awaiting).toMatchObject({
+      artifact: {
+        backendStatus: "pending",
+        awaitingUser: true,
+        heading: { title: "交给你登录", target: "https://example.com" },
+        presentation: { verb: "执行命令", icon: "terminal" },
+      },
+    });
+    expect(awaiting).not.toHaveProperty("result");
+
+    const completed = toToolCallPart(tool("completed", {
       toolName: "web_extract",
-      presentation: { expand_layout: "list", show_result: false },
       display_data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
     }));
-
-    expect(converted).not.toHaveProperty("result");
-    expect(converted).toMatchObject({
+    expect(completed).not.toHaveProperty("result");
+    expect(completed).toMatchObject({
       artifact: {
+        heading: null,
+        awaitingUser: false,
         display_data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
       },
     });
-    expect(JSON.stringify(converted)).not.toContain("private document body");
   });
 
   it("keeps unknown tool and run states explicitly non-success", () => {

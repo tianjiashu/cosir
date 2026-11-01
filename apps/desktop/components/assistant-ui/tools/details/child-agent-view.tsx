@@ -10,7 +10,7 @@ import type { DetailView } from "./detail-view";
  */
 export const childAgentView: DetailView = {
   accepts: (data) => readChildAgentResultDisplay(data) !== null,
-  summary: (data) => {
+  meta: (data) => {
     const result = readChildAgentResultDisplay(data)!;
     return `${result.agentName ?? "子 Agent"} · 子 Agent：${taskRunStatusPresentation(result.status, true)?.label}`;
   },

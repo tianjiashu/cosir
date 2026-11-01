@@ -2,13 +2,13 @@ import { FileIcon, FolderIcon, LinkIcon } from "lucide-react";
 import { WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
 import { cn } from "@/lib/utils";
 import { TOOL_DETAIL_ROW_CLASS, TOOL_DETAIL_TEXT_ROW_CLASS } from "../../elements/tool-layout-tokens";
-import { asRecord } from "../types";
+import { asRecord } from "../display-utils";
 import { DetailEmpty, DetailHint, readArray, readString, type DetailView } from "./detail-view";
 import { HighlightedMatch } from "./highlighted-match";
 
 /** `file-list`：按 glob 找到的文件路径，可在文件面板打开。 */
 export const fileListView: DetailView = {
-  summary: (data) => {
+  meta: (data) => {
     const count = typeof data.match_count === "number" ? data.match_count : readArray(data.files).length;
     return `${readString(data.pattern, "搜索")} · ${count} 个文件`;
   },
@@ -38,7 +38,7 @@ export const fileListView: DetailView = {
  * 列表可能只是其中一页。路径可点开，命中片段按搜索模式高亮，上下文行降低对比度。
  */
 export const contentSearchView: DetailView = {
-  summary: (data) => {
+  meta: (data) => {
     const count = typeof data.match_count === "number" ? data.match_count : 0;
     return `${readString(data.pattern, "搜索")} · ${count} 个命中`;
   },
@@ -74,7 +74,7 @@ export const contentSearchView: DetailView = {
 
 /** `directory-list`：分页列出的目录条目（`path` 为绝对路径）；空目录与「当前页为空」文案不同。 */
 export const directoryListView: DetailView = {
-  summary: (data) => {
+  meta: (data) => {
     const count = typeof data.total_entries === "number" ? data.total_entries : readArray(data.entries).length;
     return `${readString(data.path, "目录未知")} · ${count} 个条目`;
   },

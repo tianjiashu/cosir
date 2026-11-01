@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { readBrowserPageDisplay } from "@/components/assistant-ui/tools/browser-page-display";
-import { routeToolPart } from "@/components/assistant-ui/tools/tool-renderer-registry";
+import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
+import { browserPageView } from "@/components/assistant-ui/tools/views/browser-page-view";
+import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 
 const PAGE = { kind: "browser-page", tab_id: "t2", url: "https://example.com/", title: "Example" };
 const SHA = "a".repeat(64);
@@ -23,8 +25,11 @@ describe("browser-page display", () => {
   });
 
   it("routes browser tools by display kind, falling back on bad payloads", () => {
-    expect(routeToolPart({ presentation: {}, display_data: PAGE })).toBe("browser-page");
-    expect(routeToolPart({ presentation: {}, display_data: { ...PAGE, handoff_reason: "sign in" } })).toBe("browser-page");
-    expect(routeToolPart({ presentation: {}, display_data: { kind: "browser-page" } })).toBe("fallback");
+    const artifact = (display_data: Record<string, unknown>): ToolArtifact => ({
+      backendStatus: "completed", presentation: {}, heading: null, awaitingUser: false, background: false, display_data, error: null, errorCode: null,
+    });
+    expect(resolveCallView(artifact(PAGE))?.view).toBe(browserPageView);
+    expect(resolveCallView(artifact({ ...PAGE, handoff_reason: "sign in" }))?.view).toBe(browserPageView);
+    expect(resolveCallView(artifact({ kind: "browser-page" }))).toBeNull();
   });
 });

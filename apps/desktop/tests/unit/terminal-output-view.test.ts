@@ -59,7 +59,8 @@ vi.mock("@xterm/addon-unicode11", () => ({
 
 // 配色从 CSS token 读取，依赖真实 DOM；这里只验证快照回放逻辑。
 vi.mock("@/components/terminal/xterm-appearance", () => ({
-  xtermAppearance: () => ({}),
+  xtermPaneFont: () => ({}),
+  xtermCardTheme: () => ({}),
 }));
 
 import { TerminalOutputView } from "@/components/assistant-ui/tools/terminal-output-view";
@@ -75,11 +76,11 @@ describe("TerminalOutputView", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("replays the cumulative snapshot into every new xterm instance", () => {
-    const first = new TerminalOutputView({} as HTMLElement);
+    const first = new TerminalOutputView({} as HTMLElement, "light");
     first.applySnapshot({ output: "first\n" });
     first.dispose();
 
-    const second = new TerminalOutputView({} as HTMLElement);
+    const second = new TerminalOutputView({} as HTMLElement, "light");
     second.applySnapshot({ output: "first\n" });
 
     expect(mocks.terminals).toHaveLength(2);
@@ -88,14 +89,14 @@ describe("TerminalOutputView", () => {
   });
 
   it("converts LF-only pipe output into terminal newlines", () => {
-    const session = new TerminalOutputView({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement, "light");
     void session;
 
     expect(mocks.terminals[0].options.convertEol).toBe(true);
   });
 
   it("reuses the reconciler for append and reset operations", () => {
-    const session = new TerminalOutputView({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement, "light");
     session.applySnapshot({ output: "progress 1" });
     session.applySnapshot({ output: "progress 1\rprogress 2" });
     session.applySnapshot({ output: "final screen" });
@@ -109,7 +110,7 @@ describe("TerminalOutputView", () => {
 
   it("coalesces snapshots while xterm is still parsing a write", () => {
     let releaseWrite: (() => void) | undefined;
-    const session = new TerminalOutputView({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement, "light");
     const xterm = mocks.terminals[0];
     xterm.write.mockImplementationOnce((_text: string, done?: () => void) => {
       releaseWrite = done;
@@ -128,7 +129,7 @@ describe("TerminalOutputView", () => {
 
   it("keeps control sequences intact while coalescing cumulative snapshots", () => {
     let releaseWrite: (() => void) | undefined;
-    const session = new TerminalOutputView({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement, "light");
     const terminal = mocks.terminals[0];
     terminal.write.mockImplementationOnce((_text: string, done?: () => void) => {
       releaseWrite = done;
@@ -142,7 +143,7 @@ describe("TerminalOutputView", () => {
   });
 
   it("recovers after a synchronous xterm write failure", () => {
-    const session = new TerminalOutputView({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement, "light");
     const terminal = mocks.terminals[0];
     terminal.write.mockImplementationOnce(() => {
       throw new Error("write failed");
@@ -156,7 +157,7 @@ describe("TerminalOutputView", () => {
 
   it("does not schedule layout work after disposal", () => {
     let releaseWrite: (() => void) | undefined;
-    const session = new TerminalOutputView({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement, "light");
     const terminal = mocks.terminals[0];
     terminal.write.mockImplementationOnce((_text: string, done?: () => void) => {
       releaseWrite = done;
@@ -170,7 +171,7 @@ describe("TerminalOutputView", () => {
   });
 
   it("sizes rows to the written content and caps them at the visible maximum", () => {
-    const session = new TerminalOutputView({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement, "light");
     const terminal = mocks.terminals[0];
     mocks.fitAddons[0].proposeDimensions.mockReturnValue({ cols: 100, rows: 3 });
 
@@ -185,7 +186,7 @@ describe("TerminalOutputView", () => {
   });
 
   it("disposes xterm resources", () => {
-    const session = new TerminalOutputView({} as HTMLElement);
+    const session = new TerminalOutputView({} as HTMLElement, "light");
     session.dispose();
 
     expect(mocks.fitAddons[0].dispose).toHaveBeenCalledOnce();

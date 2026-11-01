@@ -12,11 +12,11 @@ function snapshot(runId: number | null, status = "completed", text = "阅读内�
     messages: [{
       id: `assistant-run-${runId}`, role: "assistant", runId,
       parts: [{ type: "text", text, status: ended ? "completed" : "running" }],
-      outcome: ended ? { status, endReason: null, error: null, usage: null, contextWindowTotal: null } : null,
+      outcome: ended ? { status, endReason: null, error: null, usage: null, contextWindowTotal: null, durationMs: null } : null,
     }],
     messageOffset: 0,
     activity: { runId, status, endReason: null, error: null, usage: null, contextWindowTotal: null,
-      launch: { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: [] } },
+      launch: { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: [] }, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 }

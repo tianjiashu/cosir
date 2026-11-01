@@ -4,7 +4,8 @@ import { Terminal } from "@xterm/xterm";
 
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalResizeController } from "@/components/terminal/terminal-resize-controller";
-import { xtermAppearance } from "@/components/terminal/xterm-appearance";
+import { xtermCardTheme, xtermPaneFont } from "@/components/terminal/xterm-appearance";
+import type { ITheme } from "@xterm/xterm";
 
 import { reconcileTerminalOutput } from "./terminal-output-reconciler";
 import { TerminalWriteScheduler } from "./terminal-write-scheduler";
@@ -35,12 +36,13 @@ export class TerminalOutputView {
   private renderedSnapshot: TerminalSnapshot = { output: "" };
   private disposed = false;
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, resolvedTheme: "light" | "dark") {
     this.fitAddon = new FitAddon();
     this.terminal = new Terminal({
       // unicode 版本切换属于 proposed API。
       allowProposedApi: true,
-      allowTransparency: false,
+      // 背景透明：视窗落在容器的 `--surface` 底面上，跟随主题换面，不再是恒深色的终端岛。
+      allowTransparency: true,
       // Windows 管道工具常只输出 LF 不带 CR；真实终端会把它当作回到行首的新行，
       // xterm 需要此选项才能在一次性、非交互输出里保持同样表现。
       convertEol: true,
@@ -49,7 +51,8 @@ export class TerminalOutputView {
       cursorInactiveStyle: "none",
       disableStdin: true,
       scrollback: 5000,
-      ...xtermAppearance(),
+      ...xtermPaneFont(),
+      theme: xtermCardTheme(resolvedTheme),
     });
 
     this.terminal.loadAddon(this.fitAddon);
@@ -71,6 +74,12 @@ export class TerminalOutputView {
       () => this.layout(),
       () => this.writeScheduler.isRunning,
     );
+  }
+
+  /** 主题切换时换配色；xterm 会按新色板重绘已有内容。 */
+  setTheme(theme: ITheme): void {
+    if (this.disposed) return;
+    this.terminal.options.theme = theme;
   }
 
   /** 把累计的 Transport 快照应用到本视口，同一快照只写一次。 */

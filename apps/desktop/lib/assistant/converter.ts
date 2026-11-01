@@ -27,6 +27,7 @@ import {
   splitLocalFileTokens,
 } from "@/lib/assistant/attachments/local-file-token";
 import { materializeSkillMentions, restoreSkillMentionTokens } from "@/lib/assistant/skill-mention-token";
+import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 import {
   createEditableUserDocument,
   editableDocumentAttachments,
@@ -285,17 +286,18 @@ function normalizeToolStatus(status: string | undefined): TransportToolStatus {
 /**
  * 把后端 tool-call part 映射为 assistant-ui part。
  *
- * `artifact` 是 UI-only 适配数据，保留后端五态、presentation、display_data 和错误；
- * 它不会被发送回后端，也不会成为对话事实。assistant-ui 的标准字段只承载
+ * `artifact`（形状见 `tool-artifact.ts`）是 UI-only 适配数据，保留后端五态、展示声明、标题、等待用户
+ * 与展示数据；它不会被发送回后端，也不会成为对话事实。assistant-ui 的标准字段只承载
  * args/argsText/isError，renderer 从 artifact 读取后端展示声明。
  */
 export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["content"][number] {
   const backendStatus = normalizeToolStatus(part.status);
-  const displayData = part.display_data ?? null;
-  const artifact = {
+  const artifact: ToolArtifact = {
     backendStatus,
     presentation: part.presentation ?? {},
-    display_data: displayData,
+    heading: part.heading ?? null,
+    awaitingUser: part.awaitingUser,
+    display_data: part.display_data ?? null,
     team_run_id: part.team_run_id,
     // 失败 / 取消的短提示由后端给出（status_hint、「执行异常」「已中断」等），前端不重新推导；
     // 只在缺失时兜底，保证终态卡片总有一句提示。
@@ -303,7 +305,7 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
       ? part.error || "已取消"
       : backendStatus === "failed" ? part.error || "执行失败" : null,
     errorCode: part.errorCode ?? null,
-    child_task_id: part.child_task_id,
+    childTaskId: part.child_task_id,
     agent_role: part.agent_role,
     background: part.background === true,
   };

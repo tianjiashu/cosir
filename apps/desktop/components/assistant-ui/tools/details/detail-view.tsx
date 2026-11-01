@@ -1,26 +1,14 @@
 import type { ReactNode } from "react";
 import { LinkIcon } from "lucide-react";
-import type { TransportToolStatus } from "@/lib/assistant/contract";
 import { TOOL_DETAIL_ROW_CLASS } from "../../elements/tool-layout-tokens";
-import { safeExternalUrl } from "../types";
+import { safeExternalUrl } from "../display-utils";
+import type { CallView } from "../call-view";
 
 /**
- * 一种成功态 `display_data.kind` 在低噪音工具卡里的投影。
- *
- * `summary` 是折叠行上的一句话；`body` 返回展开内容，返回 null 表示这份载荷没有值得
- * 展开的内容（卡片因此渲染为静态行）。二者都是纯函数，只读后端已投影的展示数据，
- * 失败与取消由 `ToolCardShell` 统一处理，这里只会拿到成功或进行中的载荷。
+ * 走通用列表视图的 kind 用同一个 `CallView` 契约：`meta` 是行上的一句摘要，`body` 是展开列表。
+ * 可展开行整行是折叠按钮，摘要里不能再放可点击元素；只有没有展开内容的静态行（如读文件）才在摘要里放路径链接。
  */
-export type DetailView = {
-  /** 该 kind 的专用载荷校验；不通过时注册表回落通用 fallback，`summary` / `body` 因此可信任载荷形状。 */
-  accepts?: (data: Record<string, unknown>) => boolean;
-  /**
-   * 可展开卡片的整行是折叠按钮，摘要里不能再放可点击元素；只有没有展开内容的
-   * 静态行（如读文件）才在摘要里放路径链接。
-   */
-  summary: (data: Record<string, unknown>, status: TransportToolStatus) => ReactNode;
-  body?: (data: Record<string, unknown>) => ReactNode;
-};
+export type DetailView = CallView;
 
 export function DetailEmpty({ children }: { children: ReactNode }) {
   return <p className="text-muted-foreground text-xs">{children}</p>;

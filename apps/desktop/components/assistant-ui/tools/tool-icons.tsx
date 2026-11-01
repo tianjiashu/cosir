@@ -1,5 +1,6 @@
 import { createElement, type ComponentProps } from "react";
 import {
+  BotIcon,
   ClockIcon,
   EyeIcon,
   FileSymlinkIcon,
@@ -7,17 +8,22 @@ import {
   GitCompareIcon,
   GlobeIcon,
   InfoIcon,
+  KeyboardIcon,
   NetworkIcon,
   SendIcon,
   UsersIcon,
   SearchIcon,
   TerminalIcon,
+  WorkflowIcon,
   WrenchIcon,
+  XIcon,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+/** 后端 `ToolDisplayHints.icon` 的取值表（lucide 图标名）；没登记的名字回落到扳手。 */
 const TOOL_ICON_MAP: Record<string, LucideIcon> = {
+  bot: BotIcon,
   clock: ClockIcon,
   eye: EyeIcon,
   "git-compare": GitCompareIcon,
@@ -25,12 +31,15 @@ const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   "file-symlink": FileSymlinkIcon,
   globe: GlobeIcon,
   info: InfoIcon,
+  keyboard: KeyboardIcon,
   network: NetworkIcon,
   search: SearchIcon,
   send: SendIcon,
   terminal: TerminalIcon,
-  wrench: WrenchIcon,
   users: UsersIcon,
+  workflow: WorkflowIcon,
+  wrench: WrenchIcon,
+  x: XIcon,
 };
 
 export function ToolIcon({

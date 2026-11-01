@@ -12,6 +12,13 @@ import {
   userMessage,
 } from "./transport-fixtures";
 
+/** 去掉一个必填字段，模拟漂移的后端快照。 */
+function without(value: object, key: string): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...value };
+  delete copy[key];
+  return copy;
+}
+
 const withToolPart = (part: Record<string, unknown>) => transportState({
   messages: [assistantMessage("assistant-run-1", 1, [part as unknown as TransportMessagePart])],
   activity: activity(1, "running"),
@@ -132,19 +139,19 @@ describe("Transport snapshot validation", () => {
   });
 
   it("rejects invalid tool lifecycle state with a diagnostic path", () => {
-    const snapshot = withToolPart({ type: "tool-call", toolCallId: "t1", toolName: "read_file", status: "future", args: {} });
+    const snapshot = withToolPart({ type: "tool-call", awaitingUser: false, toolCallId: "t1", toolName: "read_file", status: "future", args: {} });
     expect(() => parseTransportState(snapshot)).toThrow("messages[0].parts[0].status");
   });
 
   it("accepts a positive child Run locator and rejects invalid locators", () => {
-    const part = { type: "tool-call", toolCallId: "delegate-1", toolName: "delegate_task", status: "running", args: {}, child_task_id: 501 };
+    const part = { type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "running", args: {}, child_task_id: 501 };
     const snapshot = withToolPart(part);
     expect(parseTransportState(snapshot)).toBe(snapshot);
     expect(() => parseTransportState(withToolPart({ ...part, child_task_id: 0 }))).toThrow("child_task_id");
   });
 
   it("接受后端 execute_terminal 流式输出的去重序号 terminal_output_seq", () => {
-    const part = { type: "tool-call", toolCallId: "exec-1", toolName: "execute_terminal", status: "running", args: {}, terminal_output_seq: 3 };
+    const part = { type: "tool-call", awaitingUser: false, toolCallId: "exec-1", toolName: "execute_terminal", status: "running", args: {}, terminal_output_seq: 3 };
     const snapshot = withToolPart(part);
     expect(parseTransportState(snapshot)).toBe(snapshot);
     expect(() => parseTransportState(withToolPart({ ...part, terminal_output_seq: -1 }))).toThrow("terminal_output_seq");
@@ -152,7 +159,7 @@ describe("Transport snapshot validation", () => {
 
   it("accepts the minimal child session display contract", () => {
     const snapshot = withToolPart({
-      type: "tool-call", toolCallId: "delegate-1", toolName: "delegate_task", status: "completed", args: {},
+      type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "completed", args: {},
       display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501, status: "completed" },
     });
     expect(parseTransportState(snapshot)).toBe(snapshot);
@@ -160,7 +167,7 @@ describe("Transport snapshot validation", () => {
 
   it("accepts the child agent send/status result contract", () => {
     const snapshot = withToolPart({
-      type: "tool-call", toolCallId: "status-1", toolName: "child_agent_status", status: "completed", args: {},
+      type: "tool-call", awaitingUser: false, toolCallId: "status-1", toolName: "child_agent_status", status: "completed", args: {},
       display_data: {
         kind: "child-agent-result", operation: "status", child_task_id: 501, status: "completed",
         agent_id: "reviewer", agent_name: "审查代码", final_output: "已完成审查。", end_reason: null,
@@ -172,7 +179,7 @@ describe("Transport snapshot validation", () => {
   it("accepts a suspended child Run status instead of rejecting the whole snapshot", () => {
     // 子 Agent 卡片的状态是子 Task 的 Run 状态：子 Agent 等审批 / 等消息时为 suspended。
     const snapshot = withToolPart({
-      type: "tool-call", toolCallId: "status-1", toolName: "child_agent_status", status: "completed", args: {},
+      type: "tool-call", awaitingUser: false, toolCallId: "status-1", toolName: "child_agent_status", status: "completed", args: {},
       display_data: {
         kind: "child-agent-result", operation: "status", child_task_id: 501, status: "suspended",
         agent_id: "reviewer", agent_name: "审查代码", final_output: null, end_reason: null,
@@ -183,7 +190,7 @@ describe("Transport snapshot validation", () => {
 
   it("rejects child output embedded in a parent delegation display", () => {
     const snapshot = withToolPart({
-      type: "tool-call", toolCallId: "delegate-1", toolName: "delegate_task", status: "completed", args: {},
+      type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "completed", args: {},
       display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501, status: "completed", final_output: "不应进入父级委派卡片" },
     });
     expect(() => parseTransportState(snapshot)).toThrow("已知字段");
@@ -207,6 +214,46 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(broken)).toThrow("messages[0].outcome.error");
   });
 
+  // 目的：等待用户是后端每次显式写的事实，缺省会让「排队待执行」与「等你操作」再次混在 pending 里。
+  it("工具调用的 awaitingUser 必须是布尔值，缺省或非布尔都拒绝", () => {
+    const base = { type: "tool-call", toolCallId: "h1", toolName: "browser_handoff", status: "pending", args: {} };
+    expect(() => parseTransportState(withToolPart(base))).toThrow("messages[0].parts[0].awaitingUser");
+    expect(() => parseTransportState(withToolPart({ ...base, awaitingUser: "true" }))).toThrow("awaitingUser");
+    const awaiting = withToolPart({ ...base, awaitingUser: true });
+    expect(parseTransportState(awaiting)).toBe(awaiting);
+  });
+
+  it("heading 是 title + target 的固定形状，title 非空白、target 字符串或 null", () => {
+    const base = { type: "tool-call", awaitingUser: false, toolCallId: "r1", toolName: "read_file", status: "running", args: { path: "a.ts" } };
+    const ok = withToolPart({ ...base, heading: { title: "读取文件", target: "a.ts" } });
+    expect(parseTransportState(ok)).toBe(ok);
+    const noTarget = withToolPart({ ...base, heading: { title: "等待消息", target: null } });
+    expect(parseTransportState(noTarget)).toBe(noTarget);
+    expect(() => parseTransportState(withToolPart({ ...base, heading: { title: "读取文件" } }))).toThrow("heading");
+    expect(() => parseTransportState(withToolPart({ ...base, heading: { title: " ", target: null } }))).toThrow("heading.title");
+    expect(() => parseTransportState(withToolPart({ ...base, heading: { title: "读取文件", target: 1 } }))).toThrow("heading.target");
+  });
+
+  it("presentation 只剩 verb 与 icon，已删除的分组 / 布局字段再出现即拒绝", () => {
+    const base = { type: "tool-call", awaitingUser: false, toolCallId: "r1", toolName: "read_file", status: "running", args: {} };
+    const ok = withToolPart({ ...base, presentation: { verb: "读取文件", icon: "eye" } });
+    expect(parseTransportState(ok)).toBe(ok);
+    expect(() => parseTransportState(withToolPart({ ...base, presentation: { verb: "读取文件", surface: "standalone" } }))).toThrow("presentation");
+    expect(() => parseTransportState(withToolPart({ ...base, presentation: { expand_layout: "terminal" } }))).toThrow("presentation");
+    expect(() => parseTransportState(withToolPart({ ...base, presentation: { verb: 3 } }))).toThrow("presentation.verb");
+  });
+
+  it("结局带 durationMs（非负整数或 null），活动带 ISO 的 startedAt", () => {
+    const timed = transportState({ messages: [assistantMessage("a1", 1, [], outcome("completed", { durationMs: 192_000 }))] });
+    expect(parseTransportState(timed)).toBe(timed);
+    expect(() => parseTransportState(transportState({
+      messages: [assistantMessage("a1", 1, [], outcome("completed", { durationMs: -1 }))],
+    }))).toThrow("outcome.durationMs");
+    expect(() => parseTransportState(transportState({ messages: [assistantMessage("a1", 1, [], without(outcome("completed"), "durationMs") as never)] }))).toThrow("outcome");
+    expect(() => parseTransportState(transportState({ activity: activity(1, "running", { startedAt: "not a date" }) }))).toThrow("activity.startedAt");
+    expect(() => parseTransportState(transportState({ activity: without(activity(1, "running"), "startedAt") as never }))).toThrow("activity");
+  });
+
   it("rejects an activity without the error field instead of tolerating a partial snapshot", () => {
     const partial = { ...activity(1, "running") } as Partial<ReturnType<typeof activity>>;
     delete partial.error;
@@ -218,8 +265,7 @@ describe("history window", () => {
   it("快照必须带非负整数的 messageOffset", () => {
     expect(parseTransportState(transportState({ messageOffset: 12 })).messageOffset).toBe(12);
     expect(() => parseTransportState(transportState({ messageOffset: -1 }))).toThrow("messageOffset");
-    const { messageOffset: _omitted, ...missing } = transportState();
-    expect(() => parseTransportState(missing)).toThrow(TransportSnapshotValidationError);
+    expect(() => parseTransportState(without(transportState(), "messageOffset"))).toThrow(TransportSnapshotValidationError);
   });
 
   it("更早的一页与已加载消息 id 不得重复", () => {

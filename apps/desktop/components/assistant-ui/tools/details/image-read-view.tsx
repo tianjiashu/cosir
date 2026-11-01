@@ -23,7 +23,7 @@ function ImageReadThumbnails({ images }: { images: ImageReadDisplay["images"] })
  */
 export const imageReadView: DetailView = {
   accepts: (data) => readImageReadDisplay(data) !== null,
-  summary: (data) => {
+  meta: (data) => {
     const { images, failures } = readImageReadDisplay(data)!;
     return failures.length ? `${images.length} 张，${failures.length} 张未读取` : `${images.length} 张`;
   },

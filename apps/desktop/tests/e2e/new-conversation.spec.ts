@@ -115,7 +115,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
   await expect(page.locator('[data-role="user"]').getByText("你好", { exact: true })).toBeVisible();
   await expect(page.getByText("streaming response", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("思考过程", { exact: true }).first()).toBeVisible();
+  await expect(page.locator('[data-slot="reasoning-item"]').first()).toBeVisible();
   await expect(page.getByRole("button", { name: "发送", exact: true })).toBeVisible();
 
   const messageInput = page.getByLabel("消息输入");

@@ -10,15 +10,17 @@ import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useWorkbenchActions } from "@/lib/workbench/context";
-import { readToolArtifact, type ToolArtifact } from "./types";
+import { SURFACE_CARD_CLASS } from "@/components/assistant-ui/turn/turn-tokens";
+import { cn } from "@/lib/utils";
+import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 import { readAgentTeamRunDisplay } from "./agent-team-display";
-import { ToolStatus } from "./tool-status";
-import type { ToolPartRendererProps } from "./tool-renderer-registry";
+import type { ArtifactCardProps } from "./artifact-card";
+import { CallStatus } from "./call-status";
 import type { AgentTeamRunDisplay } from "./agent-team-display";
 import { AgentTeamExecutionPipeline } from "./agent-team-execution-pipeline";
 import { ToolStopButton, useStopRequest } from "./tool-stop-button";
 
-type AgentTeamExecutionCardProps = ToolPartRendererProps & {
+type AgentTeamExecutionCardProps = ArtifactCardProps & {
   displayOverride?: AgentTeamRunDisplay;
 };
 
@@ -102,8 +104,7 @@ export function useAgentTeamRunPolling(teamRunId: number | undefined) {
 }
 
 export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
-  const { taskId, toolCallId, interactive = false, taskCancelling = false } = props;
-  const artifact = readToolArtifact(props.artifact);
+  const { taskId, toolCallId, artifact, interactive = false, taskCancelling = false } = props;
   const display = props.displayOverride ?? readAgentTeamRunDisplay(artifact.display_data)
     ?? (artifact.team_run_id !== undefined
       ? { teamRunId: artifact.team_run_id, teamId: "", goal: "" }
@@ -170,13 +171,13 @@ export function AgentTeamExecutionContent({
     : pollError ? "进度不可用" : "读取进度中";
 
   return (
-    <section className="space-y-3 rounded-xl border border-border/70 bg-card p-3 shadow-sm" aria-label="Agent Team 执行进度">
+    <section className={cn(SURFACE_CARD_CLASS, "space-y-3 p-3")} aria-label="Agent Team 执行进度">
       <header className="flex items-start gap-2">
         <UsersIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">{run?.team_id || display.teamId || "Agent Team"}</span>
-            {!run && <ToolStatus status={backendStatus} className="text-muted-foreground" />}
+            {!run && <CallStatus status={backendStatus} />}
             <span className="text-xs text-muted-foreground">{currentStatus}</span>
           </div>
           {(run?.goal || display.goal) && (

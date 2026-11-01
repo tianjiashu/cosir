@@ -31,6 +31,9 @@
   --container-conversation: 48rem;
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
+  /* 回合里过程区的字号（设计 §5.9：调用行、区头 13px）：介于 xs 与 sm 之间，正文仍用 sm。 */
+  --text-2sm: 0.8125rem;
+  --text-2sm--line-height: 1.25rem;
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -45,8 +48,7 @@
   --color-link: var(--link);
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
-  --color-terminal: var(--terminal);
-  --color-terminal-inset: var(--terminal-inset);
+  --color-surface: var(--surface);
   --color-terminal-pane: var(--terminal-pane-background);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
@@ -132,12 +134,13 @@
   --canvas: oklch(0.97 0.002 90);
   /* 停靠卡片（工作台、终端）浮在主区之上的投影。 */
   --panel-shadow: 0 1px 2px oklch(0 0 0 / 0.04), 0 6px 20px oklch(0 0 0 / 0.06);
-  --terminal: #18181b;
-  --terminal-inset: #09090b;
-  --terminal-foreground: #e4e4e7;
-  --terminal-muted: #a1a1aa;
-  --terminal-selection: #3f3f46;
-  /* 终端工作台（底部交互终端）跟随应用主题；工具卡片里的终端岛仍恒为深色（见 terminal-surface）。 */
+  /*
+   * 对话流里的底色面：产物卡、调用行展开体（命令输出、搜索结果、diff）都落在它上面，不画边框。
+   * 浅色下是 muted 的 70% 透明，深色下换成 card（比背景高一档，纯透明的 muted 在深底上几乎看不见）。
+   * 等待用户卡与结局卡用 info / destructive 的 6–7% 着色面，不另设 token。
+   */
+  --surface: color-mix(in oklab, var(--muted) 70%, transparent);
+  /* 终端（工作台与对话里的命令输出）跟随应用主题；xterm 读不了 oklch，这几个必须是十六进制。 */
   --terminal-pane-background: #ffffff;
   --terminal-pane-foreground: #27272a;
   --terminal-pane-cursor: #52525b;
@@ -179,8 +182,7 @@
   --ring: oklch(0.556 0 0);
   --canvas: oklch(0.115 0 0);
   --panel-shadow: 0 1px 2px oklch(0 0 0 / 0.3), 0 6px 20px oklch(0 0 0 / 0.35);
-  --terminal: #111113;
-  --terminal-inset: #09090b;
+  --surface: var(--card);
   --terminal-pane-background: #0a0a0a;
   --terminal-pane-foreground: #e4e4e7;
   --terminal-pane-cursor: #a1a1aa;
@@ -191,30 +193,8 @@
 }
 
 /*
- * 终端岛：终端类卡片在两种主题下都保持深色。这里在容器上重定义语义 token，
- * 子元素照常使用 text-foreground / text-muted-foreground / border-border /
- * text-success 等类即可，无需为深底另写一套原始色板。
- */
-@utility terminal-surface {
-  color-scheme: dark;
-  --foreground: var(--terminal-foreground);
-  --muted-foreground: var(--terminal-muted);
-  --muted: oklch(1 0 0 / 6%);
-  --accent: oklch(1 0 0 / 8%);
-  --accent-foreground: var(--terminal-foreground);
-  --border: oklch(1 0 0 / 10%);
-  --ring: oklch(0.556 0 0);
-  --success: oklch(0.845 0.143 164.978);
-  --warning: oklch(0.879 0.169 91.605);
-  --destructive: oklch(0.808 0.114 19.571);
-  --info: oklch(0.828 0.111 230.318);
-  background-color: var(--terminal);
-  color: var(--foreground);
-}
-
-/*
  * 停靠面板卡片（工作台、终端面板及其崩溃降级）：只定义外观，留白与调整手柄归
- * PanelDock。背景不在这里给出——终端岛用自己的深色底，与 bg-* 同层工具类比较
+ * PanelDock。背景不在这里给出——终端面板用自己的 bg-terminal-pane，与 bg-* 同层工具类比较
  * 先后顺序不可靠，由调用方显式设置。overflow-hidden 让子元素背景不越过圆角。
  */
 @utility dock-panel {
@@ -540,4 +520,13 @@ body > :not(#root) > * {
 .terminal-agent-input-mark {
   box-shadow: inset 2px 0 0 var(--info);
   pointer-events: none;
+}
+
+/*
+ * 对话里的命令输出视窗（`TerminalViewport`）落在 `--surface` 底面上、xterm 主题背景为透明；但 xterm.css 给
+ * `.xterm-viewport` 写死了黑底（只为 macOS 滚动条不透明），xterm 只把主题背景写到内层滚动元素，这里把它清掉。
+ * xterm.css 随组件晚于本文件加载，选择器要比它的 `.xterm .xterm-viewport` 更具体才能盖过。
+ */
+[data-terminal-viewport] .xterm .xterm-viewport {
+  background-color: transparent;
 }

@@ -16,7 +16,9 @@ import { API_ORIGIN as origin } from "./e2e-env";
 const TASK_ID = 4201;
 const OTHER_TASK_ID = 4202;
 const PAIRS = 60;
-const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
+const ACTIVITY_OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
+// `durationMs` 只属于结局；activity 是固定字段的白名单。
+const OUTCOME = { ...ACTIVITY_OUTCOME, durationMs: null };
 const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
 
 function answer(index: number): string {
@@ -40,7 +42,7 @@ function longConversation(): TransportState {
     } as TransportState["messages"][number]);
   }
   return {
-    title: "长对话", messages, messageOffset: 0, activity: { runId: PAIRS, ...OUTCOME, launch: LAUNCH },
+    title: "长对话", messages, messageOffset: 0, activity: { runId: PAIRS, ...ACTIVITY_OUTCOME, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 }

@@ -9,17 +9,12 @@ describe("AgentConfigurationDraftTool", () => {
     const markup = renderToStaticMarkup(
       <WorkbenchProvider workspaceId={1}>
         <AgentConfigurationDraftTool
-          type="tool-call"
-          toolName="propose-agent-configuration"
-          args={{}}
-          argsText="{}"
-          status={{ type: "complete", reason: "stop" } as never}
-          addResult={() => undefined}
-          resume={() => undefined}
-          respondToApproval={() => undefined}
           artifact={{
             backendStatus: "completed",
             presentation: {},
+            heading: null,
+            awaitingUser: false,
+            background: false,
             display_data: {
               kind: "agent-configuration-draft",
               status: "draft",

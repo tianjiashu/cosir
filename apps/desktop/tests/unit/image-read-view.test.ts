@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { readImageReadDisplay } from "@/components/assistant-ui/tools/image-read-display";
+import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
 import { imageReadView } from "@/components/assistant-ui/tools/details/image-read-view";
-import { routeToolPart } from "@/components/assistant-ui/tools/tool-renderer-registry";
+import type { CallViewContext } from "@/components/assistant-ui/tools/call-view";
+import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 
 const SHA = "b".repeat(64);
 const DISPLAY = {
@@ -27,12 +29,16 @@ describe("image-read display", () => {
   });
 
   it("routes read_image by display kind, falling back on bad payloads", () => {
-    expect(routeToolPart({ presentation: {}, display_data: DISPLAY })).toBe("details");
-    expect(routeToolPart({ presentation: {}, display_data: { kind: "image-read" } })).toBe("fallback");
+    const artifact = (display_data: Record<string, unknown>): ToolArtifact => ({
+      backendStatus: "completed", presentation: {}, heading: null, awaitingUser: false, background: false, display_data, error: null, errorCode: null,
+    });
+    expect(resolveCallView(artifact(DISPLAY))?.view).toBe(imageReadView);
+    expect(resolveCallView(artifact({ kind: "image-read" }))).toBeNull();
   });
 
   it("summarizes image count and partial failures", () => {
-    expect(imageReadView.summary(DISPLAY, "completed")).toBe("1 张，1 张未读取");
-    expect(imageReadView.summary({ ...DISPLAY, failures: [] }, "completed")).toBe("1 张");
+    const context = {} as CallViewContext;
+    expect(imageReadView.meta!(DISPLAY, context)).toBe("1 张，1 张未读取");
+    expect(imageReadView.meta!({ ...DISPLAY, failures: [] }, context)).toBe("1 张");
   });
 });

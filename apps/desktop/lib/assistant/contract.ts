@@ -19,27 +19,27 @@ type KnownTransportToolStatus =
 /** 后端五态之外的值只用于安全显示，不得被解释为 pending 或 completed。 */
 export type TransportToolStatus = KnownTransportToolStatus | "unknown";
 
-type TerminalSessionPresentationVariant =
-  | "terminal-session-list"
-  | "terminal-session-start"
-  | "terminal-session-read"
-  | "terminal-session-write"
-  | "terminal-session-close";
-
+/**
+ * 工具的静态展示声明：随 `ToolDefinition` 固化、不含动态结果。只有两个字段——`verb` 是调用行
+ * 没有 `heading` 时的标题回落，`icon` 是行首图标名；分组、展开布局等都不再由后端声明，
+ * 回合分区与展开体由前端按 `display_data.kind` 与 `turn-layout` 决定。
+ */
 export type TransportToolPresentation = {
   verb?: string;
   icon?: string;
-  /** Stable semantic renderer variant; never contains dynamic tool output. */
-  variant?: TerminalSessionPresentationVariant;
-  surface?: "trace" | "standalone";
-  expandable?: boolean;
-  expand_layout?: "none" | "details" | "list" | "diff" | "write" | "terminal";
-  default_open?: boolean;
-  show_result?: boolean;
-  [key: string]: unknown;
 };
 
-/** 工具的通用展示数据；具体字段由 presentation.expand_layout 解释。 */
+/**
+ * 调用标题：后端按工具统一投影的「意图 + 目标」（如 `读取文件` + `src/a.ts`，命令则是模型写的
+ * `description` + 命令本身）。running 时与 `args` 同帧下发、冷重建按同一函数从持久化参数算出；
+ * 参数未通过准入时缺省，前端回落到 `presentation.verb`。
+ */
+export type TransportToolHeading = {
+  title: string;
+  target: string | null;
+};
+
+/** 工具的通用展示数据；具体字段由 `kind` 决定，前端按 kind 选视图。 */
 type GenericTransportToolData = {
   kind?: string;
   [key: string]: unknown;
@@ -91,7 +91,7 @@ export type TransportToolCallPart = {
   type: "tool-call";
   toolCallId: string;
   toolName: string;
-  /** 解析后的参数对象（可能因流式未完成而不完整）。 */
+  /** 解析后的参数对象。参数不流式：排队（pending）时为空对象，进入 running 后才一次给全。 */
   args: Record<string, unknown>;
   /** 工具执行错误文本；成功时为空。 */
   error?: string | null;
@@ -99,8 +99,16 @@ export type TransportToolCallPart = {
   status?: string;
   /** 后端在失败时提供的稳定错误标识（可选）。 */
   errorCode?: string;
-  /** 后端声明的工具展示布局；它只影响 renderer，不改变工具生命周期。 */
+  /** 工具的静态展示声明；只影响调用行的图标与标题回落，不改变工具生命周期。 */
   presentation?: TransportToolPresentation;
+  /** 调用标题；参数未通过准入时缺省。 */
+  heading?: TransportToolHeading;
+  /**
+   * 是否在等用户决定（HITL 审批、交接）。后端在投影工具结果时一处计算（占位行 `pending` 且不是后台
+   * 占位）、每次显式写；前端据此把调用提进「等待用户」区，不从 `status === "pending"` 推断——
+   * pending 同时也表示「排队待执行」。
+   */
+  awaitingUser: boolean;
   /** 后端治理后的 UI 展示数据，前端不得从 args 推导展示内容。 */
   display_data?: TransportToolDisplayData | null;
   /** 持久化 TeamRun 的定位字段，工具失败后仍可查询流水线。 */
@@ -113,7 +121,7 @@ export type TransportToolCallPart = {
   background?: true;
   /** 后端显式标记的错误结果。 */
   isError?: boolean | null;
-  /** Runtime-only child task locator for Workbench; never rendered as text. */
+  /** 委派 / 子 Agent 调用指向的子 Task；委派行据此读任务状态推送、点击打开子任务，不渲染为文本。 */
   child_task_id?: number;
   /** Current AgentProfile.role resolved by the backend. */
   agent_role?: string;
@@ -191,6 +199,8 @@ export type TransportOutcome = {
   usage: TransportUsage | null;
   /** 该 Run 冻结的窗口上限，与 `usage` 同属一个 Run：上下文占用的「已用 / 上限」只能成对取。 */
   contextWindowTotal: number | null;
+  /** Run 从创建到终态的耗时（毫秒）；旧数据缺时间戳时为 null。运行中的耗时由前端按 `activity.startedAt` 本地计时。 */
+  durationMs: number | null;
 };
 
 /** 单条 Transport 消息：Task 级扁平消息列表中的 canonical 消息。 */
@@ -217,6 +227,8 @@ export type TransportActivity = {
   /** 创建 Run 时冻结的模型上下文窗口上限。 */
   contextWindowTotal: number | null;
   launch: TransportRunLaunch;
+  /** Run 创建时刻（ISO 8601）；运行中回合脚注据此本地计时，终态后以 `outcome.durationMs` 为准。 */
+  startedAt: string;
 };
 
 const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set(["completed", "failed", "cancelled"]);

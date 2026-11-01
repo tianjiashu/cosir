@@ -12,7 +12,7 @@ vi.mock("@/lib/background-tasks/store", async (importOriginal) => ({
 }));
 
 import { ForegroundWaitAction } from "@/components/assistant-ui/tools/foreground-wait-action";
-import { readToolArtifact } from "@/components/assistant-ui/tools/types";
+import { readToolArtifact } from "@/lib/assistant/tool-artifact";
 import { BackgroundTasksBody, BackgroundTasksSummary } from "@/components/task-rail/background-tasks-card";
 import { formatElapsed } from "@/components/task-rail/background-task-row";
 import type { BackgroundTaskEntry, TransportToolCallPart } from "@/lib/assistant/contract";
@@ -42,7 +42,8 @@ function terminalPart(toolCallId: string, overrides: Partial<TransportToolCallPa
     toolName: "execute_terminal",
     args: { command: "make watch" },
     status: "pending",
-    presentation: { surface: "standalone", expandable: true, expand_layout: "terminal" },
+    presentation: { verb: "执行命令", icon: "terminal" },
+    awaitingUser: false,
     display_data: { kind: "terminal-result", command: "make watch", workdir: "/work" },
     background: true,
     ...overrides,
@@ -95,7 +96,7 @@ describe("snapshot background_tasks 与工具 part background", () => {
   });
 
   it("converter 用后端短提示说明后台占位的取消原因", () => {
-    const interrupted = toToolCallPart({ type: "tool-call", toolCallId: "c2", toolName: "terminal_read", args: {}, status: "cancelled", error: "已中断", background: true });
+    const interrupted = toToolCallPart({ type: "tool-call", toolCallId: "c2", toolName: "terminal_read", args: {}, status: "cancelled", error: "已中断", background: true, awaitingUser: false });
     expect(readToolArtifact((interrupted as { artifact?: unknown }).artifact).error).toBe("已中断");
   });
 });

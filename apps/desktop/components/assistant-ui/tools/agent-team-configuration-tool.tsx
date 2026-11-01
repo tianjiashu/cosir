@@ -1,22 +1,22 @@
-import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { PencilIcon, UsersIcon } from "lucide-react";
 
+import { SURFACE_CARD_CLASS } from "@/components/assistant-ui/turn/turn-tokens";
 import { Button } from "@/components/ui/button";
 import { useWorkbenchActions } from "@/lib/workbench/context";
 import { useDraftSaved } from "@/lib/workbench/drafts";
-import { readToolArtifact } from "./types";
+import { cn } from "@/lib/utils";
 import { readAgentTeamConfigurationDraftDisplay } from "./agent-team-display";
+import type { ArtifactCardProps } from "./artifact-card";
 
-/** Team 配置候选卡；编辑和保存由 Workbench 负责。 */
-export function AgentTeamConfigurationTool({ artifact: rawArtifact, taskId, toolCallId }: ToolCallMessagePartProps & { taskId: number }) {
-  const artifact = readToolArtifact(rawArtifact);
+/** 产物区的 Team 配置候选卡；编辑和保存由 Workbench 负责。 */
+export function AgentTeamConfigurationTool({ artifact, taskId, toolCallId }: ArtifactCardProps) {
   const draft = readAgentTeamConfigurationDraftDisplay(artifact.display_data);
   const actions = useWorkbenchActions();
   const saved = useDraftSaved(actions?.workspaceId ?? null, toolCallId);
   if (!draft) return null;
   const canEdit = actions !== null;
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border/70 bg-card px-3 py-2.5 shadow-sm">
+    <div data-slot="agent-team-configuration-draft-card" className={cn(SURFACE_CARD_CLASS, "flex items-center gap-3 px-3 py-2.5")}>
       <UsersIcon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium">{draft.name}</div>

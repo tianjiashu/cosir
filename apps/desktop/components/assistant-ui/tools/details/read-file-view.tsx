@@ -1,5 +1,5 @@
 import { WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
-import { asRecord } from "../types";
+import { asRecord } from "../display-utils";
 import type { DetailView } from "./detail-view";
 
 function formatFileSize(value: unknown): string {
@@ -32,7 +32,7 @@ function readStartLine(data: Record<string, unknown>): number | undefined {
  * 截断提示也并入摘要，不提供展开内容——因此行是静态的，路径可以直接点开。
  */
 export const readFileView: DetailView = {
-  summary: (data) => {
+  meta: (data) => {
     const parts = [lineRangeLabel(data), formatFileSize(data.file_size)];
     if (data.truncated === true) parts.push(typeof data.status_hint === "string" ? data.status_hint : "文件过大，已截断");
     const rest = ` · ${parts.join(" · ")}`;

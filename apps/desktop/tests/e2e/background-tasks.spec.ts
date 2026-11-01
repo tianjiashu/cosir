@@ -26,8 +26,8 @@ test.beforeEach(async ({ request }) => {
     1,
     { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] },
     [
-      { type: "tool-call", toolCallId: "call-bg", toolName: "terminal_read", args: {}, status: "pending", background: true },
-      { type: "tool-call", toolCallId: "call-fg", toolName: "terminal_read", args: {}, status: "running" },
+      { type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "terminal_read", args: {}, status: "pending", background: true },
+      { type: "tool-call", awaitingUser: false, toolCallId: "call-fg", toolName: "terminal_read", args: {}, status: "running" },
     ],
   ));
   await request.post(`${origin}/__test__/seed-background-tasks`, {
@@ -57,8 +57,8 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   await expect(bgRow.locator('[data-tool-call-id="call-bg"]')).toBeVisible();
   await expect(bgRow.getByRole("button", { name: "停止" })).toHaveCount(1);
 
-  // 后台占位卡片不另起状态行；取消走看板。连续工具调用默认收成一组。
-  await page.getByRole("button", { name: /个工具调用/ }).click();
+  // 后台占位行不另起状态行；取消走看板。回合已结束，过程区默认收起，先展开。
+  await page.getByRole("button", { name: /已处理/ }).click();
   await expect(page.locator('[data-foreground-wait="call-bg"]')).toHaveCount(0);
   await page.locator('[data-background-task="call-bg"]').getByRole("button", { name: "停止" }).click();
   await expect(card).toContainText("2 已完成");

@@ -13,12 +13,12 @@ const snapshot = (status: "completed" | "running" | "suspended"): TransportState
       parts: [{ type: "text" as const, text: `问题 ${runId}`, status: "completed" as const }] },
     { id: `assistant-u-${runId}`, role: "assistant" as const, runId,
       parts: [{ type: "text" as const, text: `回答 ${runId}`, status: ended(runStatus) ? "completed" as const : "running" as const }],
-      outcome: ended(runStatus) ? { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null } : null },
+      outcome: ended(runStatus) ? { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: null } : null },
   ];
   return {
     title: "测试对话",
     messages: [...turn(1, "completed"), ...turn(2, status)],
-    messageOffset: 0, activity: { runId: 2, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH },
+    messageOffset: 0, activity: { runId: 2, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 };

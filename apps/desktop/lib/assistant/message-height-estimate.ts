@@ -1,6 +1,8 @@
 import type { ThreadMessage } from "@assistant-ui/react";
 import { IMAGE_TILE_GAP, IMAGE_TILE_SIZE } from "@/lib/image/tile-size";
 import { IMAGES_PER_ROW, shouldStackImages } from "./image-stack-policy";
+import { transportPartsOf } from "./thread-message-parts";
+import { projectTurn, type ProcessItem, type TurnPhase } from "./turn-layout";
 
 /**
  * 按消息内容粗估虚拟列表行高（px，含行间距），只作首次测量前的初始值。
@@ -8,8 +10,9 @@ import { IMAGES_PER_ROW, shouldStackImages } from "./image-stack-policy";
  * 估计越接近真实高度，行首次挂载时虚拟列表对 scrollTop 的修正就越小：向上滚动时每条新挂载的行
  * 都会按「真实 − 估计」补偿滚动位置，固定常量（曾为 120px，而回答常见 700px 以上）会让补偿量
  * 达到数百像素，惯性滚动会因此被打断（最初在已移除的 WKWebView 宿主上观察到）。真实高度仍以测量为准，这里只逐行区分 Markdown
- * 的块类型（标题、列表、表格、代码、正文）与用户附件；工具卡片、思考过程按折叠态计，展开的卡片、
- * 公式与 Mermaid 不建模。常量用单一特性的消息在 `max-w-3xl` 对话列宽下逐项实测得出。
+ * 的块类型（标题、列表、表格、代码、正文）与用户附件；回合的过程区按阶段默认开合计（用户手动展开、
+ * 调用行展开体不建模），公式与 Mermaid 不建模。正文常量用单一特性的消息在 `max-w-3xl` 对话列宽下逐项
+ * 实测得出。
  */
 export function estimateMessageHeight(message: ThreadMessage | undefined): number {
   if (!message) return ROW_GAP + ASSISTANT_CHROME;
@@ -56,24 +59,59 @@ function userHeight(message: ThreadMessage): number {
   return ROW_GAP + USER_CHROME + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blocks.length - 1) * ATTACHMENT_GAP;
 }
 
-// 回答：底部操作栏与留白；各 part 之间的间距。相邻的思考过程与工具调用合成一组折叠的追踪行
-// （`assistantMessageGroupBy`），组内每多一项多一行。
-const ASSISTANT_CHROME = 28;
-const PART_GAP = 12;
-const TRACE_GROUP = 36;
-const TRACE_ITEM = 28;
+// 回答：脚注（操作栏及其前面的区间距）与留白；各区之间的间距。回合按 `projectTurn` 分区计高（规则与渲染
+// 同源，见 `turn-layout.ts`）：过程区结束后收成一行区头、运行中展开并只露活跃尾部；等待卡与产物卡常显；结论按
+// Markdown 逐块计。正文与脚注常量按 `Turn` 落地后实测（纯正文回答 136px、单行调用 + 正文 176px）校准，
+// 区卡常量仍是按设计稿（§5.9）取的预估值。
+const ASSISTANT_CHROME = 40;
+const ZONE_GAP = 12;
+const PROCESS_HEADER = 28;
+const PROCESS_ITEM = 28;
+const EARLIER_ROW = 24;
+const ATTENTION_CARD = 96;
+const CHANGES_CARD_CHROME = 40;
+const CHANGES_FILE_ROW = 28;
+const STANDALONE_ARTIFACT_CARD = 120;
 
 function assistantHeight(message: ThreadMessage): number {
-  let height = ROW_GAP + ASSISTANT_CHROME;
-  let inTrace = false;
-  for (const part of message.content) {
-    const trace = part.type === "reasoning" || part.type === "tool-call";
-    if (trace) height += inTrace ? TRACE_ITEM : TRACE_GROUP + PART_GAP;
-    else if (part.type === "text") height += markdownHeight(part.text) + PART_GAP;
-    inTrace = trace;
+  const layout = projectTurn(transportPartsOf(message.content), turnPhase(message));
+  const blocks: number[] = [];
+
+  const { process } = layout;
+  if (process.items.length > 0) {
+    if (layout.phase === "running") {
+      let height = process.flat ? 0 : PROCESS_HEADER;
+      if (process.earlierCount > 0) height += EARLIER_ROW;
+      for (const item of process.tail) height += processItemHeight(item);
+      blocks.push(height);
+    } else if (process.flat) {
+      blocks.push(process.items.reduce((sum, item) => sum + processItemHeight(item), 0));
+    } else {
+      blocks.push(PROCESS_HEADER);
+    }
   }
-  return height;
+  for (let index = 0; index < layout.attention.length; index += 1) blocks.push(ATTENTION_CARD);
+  for (const card of layout.artifacts) {
+    blocks.push(card.kind === "changes" ? CHANGES_CARD_CHROME + card.files.length * CHANGES_FILE_ROW : STANDALONE_ARTIFACT_CARD);
+  }
+  if (layout.answer.length > 0) {
+    blocks.push(layout.answer.reduce((sum, item) => sum + markdownHeight(item.part.text), 0));
+  }
+  // 每个区后面都有一段区间距（最后一区与操作栏之间也是），正文常量按此口径实测。
+  return ROW_GAP + ASSISTANT_CHROME + blocks.reduce((sum, block) => sum + block + ZONE_GAP, 0);
 }
+
+function processItemHeight(item: ProcessItem): number {
+  return item.kind === "narration" ? markdownHeight(item.part.text) : PROCESS_ITEM;
+}
+
+/** 运行中（含挂起）的消息按 assistant-ui 状态判定；挂起时过程区同样收起，只多出等待卡。 */
+function turnPhase(message: ThreadMessage): TurnPhase {
+  if (message.status?.type !== "running") return "settled";
+  const activity = (message.metadata?.custom as { activity?: { status?: string } } | undefined)?.activity;
+  return activity?.status === "suspended" ? "suspended" : "running";
+}
+
 
 // Markdown（`.aui-md`，块间距 `space-y-3`）。标题按级别取行高，含上下外边距。
 const BLOCK_GAP = 12;

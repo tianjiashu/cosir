@@ -9,6 +9,7 @@ import type {
   TransportRunStatus,
   TransportState,
   TransportTerminalRunStatus,
+  TransportToolCallPart,
   TransportUsage,
 } from "@/lib/assistant/contract";
 
@@ -21,6 +22,11 @@ export function transportState(overrides: Partial<TransportState> = {}): Transpo
 
 function textPart(text: string): TransportMessagePart {
   return { type: "text", text };
+}
+
+/** 工具调用 part 构造器：默认 running、不等用户，调用方覆盖需要的部分。 */
+export function toolCallPart(toolCallId: string, toolName: string, overrides: Partial<TransportToolCallPart> = {}): TransportToolCallPart {
+  return { type: "tool-call", toolCallId, toolName, status: "running", args: {}, awaitingUser: false, ...overrides };
 }
 
 export function userMessage(id: string, runId: number, text = "hello"): TransportMessage {
@@ -40,7 +46,7 @@ export function outcome(
   status: TransportTerminalRunStatus,
   overrides: Partial<TransportOutcome> = {},
 ): TransportOutcome {
-  return { status, endReason: status === "completed" ? "stop" : null, error: null, usage: null, contextWindowTotal: null, ...overrides };
+  return { status, endReason: status === "completed" ? "stop" : null, error: null, usage: null, contextWindowTotal: null, durationMs: null, ...overrides };
 }
 
 export function activity(
@@ -56,6 +62,7 @@ export function activity(
     usage: null,
     contextWindowTotal: null,
     launch: EMPTY_LAUNCH,
+    startedAt: "2026-10-27T00:00:00.000Z",
     ...overrides,
   };
 }

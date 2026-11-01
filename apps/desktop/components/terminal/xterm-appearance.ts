@@ -7,26 +7,13 @@ import type { ITerminalOptions, ITheme } from "@xterm/xterm";
  * token 读取实际值，保证 xterm 与周围容器使用同一套事实源。终端色 token 约定为十六进制 sRGB，
  * xterm 无法解析 oklch。
  *
- * 两种外观：
- * - `xtermAppearance()`：工具卡片里的终端岛（`terminal-surface`），两种主题下恒为深色。
- * - `xtermPaneTheme()`：底部终端工作台，跟随应用亮 / 暗主题；主题切换时由视图重新读取。
+ * 两处终端共用 `xtermPaneTheme`，都跟随应用亮 / 暗主题：底部终端工作台直接用它；对话里的命令输出视窗
+ * （`TerminalOutputView`）用 `xtermCardTheme`——同一套前景与 ANSI 色板，背景透明，由容器的 `--surface`
+ * 底面透出（`--surface` 是 color-mix，xterm 读不了，所以不把它交给 xterm）。
  */
 function readTokens() {
   const tokens = getComputedStyle(document.documentElement);
   return (name: string) => tokens.getPropertyValue(name).trim();
-}
-
-export function xtermAppearance(): Pick<ITerminalOptions, "fontFamily" | "fontSize" | "lineHeight" | "theme"> {
-  const read = readTokens();
-  return {
-    ...xtermPaneFont(),
-    theme: {
-      background: read("--terminal-inset"),
-      foreground: read("--terminal-foreground"),
-      cursor: read("--terminal-muted"),
-      selectionBackground: read("--terminal-selection"),
-    },
-  };
 }
 
 /**
@@ -62,6 +49,11 @@ export function xtermPaneTheme(resolvedTheme: "light" | "dark"): ITheme {
     cursorAccent: read("--terminal-pane-background"),
     selectionBackground: read("--terminal-pane-selection"),
   };
+}
+
+/** 对话里命令输出视窗的配色：工作台的前景与色板，背景透明（容器须开 `allowTransparency`）。 */
+export function xtermCardTheme(resolvedTheme: "light" | "dark"): ITheme {
+  return { ...xtermPaneTheme(resolvedTheme), background: "#00000000" };
 }
 
 /** 卡片终端与工作台终端共用的字体。 */

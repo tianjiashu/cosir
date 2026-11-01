@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon, UsersIcon } from "lucide-react";
 
 import { submitToolDecision, type ToolDecision } from "@/lib/assistant/task-commands";
@@ -12,15 +11,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { statusColorStyle } from "@/lib/agent-team-status";
+import { SURFACE_CARD_CLASS } from "@/components/assistant-ui/turn/turn-tokens";
 import { AgentTeamExecutionCard, useAgentTeamRunPolling } from "./agent-team-execution-card";
-import { readToolArtifact } from "./types";
-import type { ToolPartRendererProps } from "./tool-renderer-registry";
+import type { ArtifactCardProps } from "./artifact-card";
 import { readAgentTeamPreviewDisplay, type AgentTeamPreviewDisplay } from "./agent-team-display";
-
-/** 渲染器额外收到所属 Task（提交决定按 Task 与 TeamRun 寻址），以及转交执行卡的停止入口开关。 */
-type AgentTeamToolProps = ToolCallMessagePartProps & Pick<
-  ToolPartRendererProps, "taskId" | "interactive" | "taskCancelling"
->;
 
 function validateReviewedInputs(
   goal: string,
@@ -45,6 +39,13 @@ function validateReviewedInputs(
 
 /** 待确认态的卡片状态文案：它来自 TeamRun 的 `pending`，不是工具生命周期状态。 */
 const AWAITING_REVIEW_LABEL = "等待确认";
+
+/** 决定已提交、等待占位尚未随 snapshot 推到终态的短暂窗口里，表单按 TeamRun 的实际状态说明。 */
+const DECIDED_LABELS: Record<string, string> = { running: "已确认，执行中", completed: "已执行完成", failed: "执行失败", cancelled: "已取消" };
+
+function runStatusLabelOf(status: string): string {
+  return DECIDED_LABELS[status] ?? status;
+}
 
 function NodeStatusBadge({ status }: { status: AgentTeamPreviewDisplay["nodes"][number]["statuses"][number] }) {
   return (
@@ -71,15 +72,42 @@ function AwaitingReviewStatus({ label = AWAITING_REVIEW_LABEL, className }: { la
 }
 
 /**
- * Agent Team 方案卡：按 TeamRun 状态渲染，不依附工具调用生命周期。
- *
- * `pending` 显示可编辑的审批表单；用户驳回（`cancelled` + `user_rejected`）显示驳回结果；其余状态
- * 交给执行卡。决定提交后后端确定性执行：批准即在重放的 `agent_team` 工具线程里阻塞运行 Team，
- * 落定后结论作为这次调用的工具结果返回。
+ * 产物区的 Team 卡：按 TeamRun 状态渲染，不依附工具调用生命周期。用户驳回（`cancelled` + `user_rejected`）
+ * 显示驳回结果；其余交给执行卡。待确认（`pending`）阶段这张卡不出现——审批表单在等待卡里（`AgentTeamApproval`），
+ * 由回合投影按 `awaitingUser` 决定放哪一边。
  */
-export function AgentTeamTool(props: AgentTeamToolProps) {
-  const { artifact: rawArtifact, taskId, toolCallId } = props;
-  const artifact = readToolArtifact(rawArtifact);
+export function AgentTeamTool(props: ArtifactCardProps) {
+  const { artifact } = props;
+  const preview = readAgentTeamPreviewDisplay(artifact.display_data);
+  const runQuery = useAgentTeamRunPolling(preview?.teamRunId);
+  const teamRun = runQuery.data ?? null;
+  if (!preview) return null;
+  if (teamRun && teamRun.status === "cancelled" && teamRun.end_reason === "user_rejected") {
+    return (
+      <div className={cn(SURFACE_CARD_CLASS, "space-y-2 p-3")} aria-label="已驳回的 Agent Team 方案">
+        <div className="flex items-center gap-2">
+          <UsersIcon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+          <span className="font-medium text-sm">{preview.name}</span>
+          <span className="text-xs text-muted-foreground">已驳回</span>
+        </div>
+        <p className="text-muted-foreground text-xs">主 Agent 会根据审阅意见重新生成方案。</p>
+      </div>
+    );
+  }
+  return (
+    <AgentTeamExecutionCard
+      {...props}
+      displayOverride={{ teamRunId: preview.teamRunId, teamId: preview.teamId, goal: teamRun?.goal ?? preview.goal }}
+    />
+  );
+}
+
+/**
+ * 等待卡里的审批表单：TeamRun `pending` 时可编辑、可提交；决定提交后后端确定性执行——批准即在重放的
+ * `agent_team` 工具线程里阻塞运行 Team，落定后结论作为这次调用的工具结果返回；驳回即落定。
+ * 表单没有自己的外壳（等待卡已是带边框的容器）。
+ */
+export function AgentTeamApproval({ artifact, taskId, toolCallId, interactive = true }: ArtifactCardProps) {
   const preview = readAgentTeamPreviewDisplay(artifact.display_data);
   const runQuery = useAgentTeamRunPolling(preview?.teamRunId);
   const teamRun = runQuery.data ?? null;
@@ -89,12 +117,12 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
   const [nodeGoals, setNodeGoals] = useState<AgentTeamPreviewDisplay["nodeGoals"]>(preview?.nodeGoals ?? {});
   const [feedback, setFeedback] = useState("");
   const isPending = teamRun?.status === "pending";
-  const formDisabled = !isPending || state === "confirming" || state === "rejecting";
+  const formDisabled = !interactive || !isPending || state === "confirming" || state === "rejecting";
   const reviewStatusLabel = isPending
     ? AWAITING_REVIEW_LABEL
     : runQuery.isError
       ? "无法读取方案状态"
-      : "正在同步方案状态";
+      : teamRun ? runStatusLabelOf(teamRun.status) : "正在同步方案状态";
   const teamRunStatus = teamRun?.status ?? null;
 
   useEffect(() => {
@@ -105,26 +133,6 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
   }, [preview?.teamRunId, taskId, teamRunStatus, toolCallId]);
 
   if (!preview) return null;
-  if (teamRun && teamRun.status === "cancelled" && teamRun.end_reason === "user_rejected") {
-    return (
-      <div className="space-y-2 rounded-xl border border-border/70 bg-card p-3 shadow-sm" aria-label="已驳回的 Agent Team 方案">
-        <div className="flex items-center gap-2">
-          <UsersIcon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
-          <span className="font-medium text-sm">{preview.name}</span>
-          <span className="text-xs text-muted-foreground">已驳回</span>
-        </div>
-        <p className="text-muted-foreground text-xs">主 Agent 会根据审阅意见重新生成方案。</p>
-      </div>
-    );
-  }
-  if (teamRun && teamRun.status !== "pending") {
-    return (
-      <AgentTeamExecutionCard
-        {...props}
-        displayOverride={{ teamRunId: preview.teamRunId, teamId: preview.teamId, goal: teamRun.goal }}
-      />
-    );
-  }
 
   /** 提交决定；后端重放 `agent_team` 调用执行它（批准即阻塞运行 Team），失败只影响本卡片的提示状态。 */
   const submitDecision = async (decision: ToolDecision, phase: "confirming" | "rejecting") => {
@@ -177,9 +185,8 @@ export function AgentTeamTool(props: AgentTeamToolProps) {
     await submitDecision({ decision: "reject", feedback: trimmedFeedback }, "rejecting");
   };
   return (
-    <div className="space-y-3 rounded-xl border border-border/70 bg-card p-3 shadow-sm">
+    <div className="space-y-3" data-slot="agent-team-approval">
       <div className="flex items-start gap-3">
-        <UsersIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">{preview.name}</span>

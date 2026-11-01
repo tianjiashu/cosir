@@ -1,10 +1,10 @@
-import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { AgentTeamTool } from "@/components/assistant-ui/tools/agent-team-tool";
+import { AgentTeamApproval, AgentTeamTool } from "@/components/assistant-ui/tools/agent-team-tool";
 import type { AgentTeamRun } from "@/lib/api/agent-teams";
+import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 import { createQueryClient } from "@/lib/query/query-client";
 import { queryKeys } from "@/lib/query/query-keys";
 
@@ -37,21 +37,22 @@ const PREVIEW: Record<string, unknown> = {
   ],
 };
 
-/** 卡片按 TeamRun 状态渲染；静态渲染不发请求，用预置的查询缓存模拟后端返回。 */
-function renderAgentTeamTool(teamRun: Partial<AgentTeamRun> | null): string {
-  const part = {
-    toolName: "agent_team",
-    toolCallId: "call-1",
-    args: {},
-    result: undefined,
-    artifact: {
-      backendStatus: "completed",
-      presentation: {},
-      display_data: PREVIEW,
-      error: null,
-      errorCode: null,
-    },
-  } as unknown as ToolCallMessagePartProps;
+const ARTIFACT: ToolArtifact = {
+  backendStatus: "completed",
+  presentation: {},
+  heading: null,
+  awaitingUser: false,
+  background: false,
+  display_data: PREVIEW,
+  error: null,
+  errorCode: null,
+};
+
+/**
+ * 审批表单（等待卡）与产物卡按 TeamRun 状态渲染；静态渲染不发请求，用预置的查询缓存模拟后端返回。
+ * 放哪一边由回合投影按 `awaitingUser` 决定，这里分别直接渲染两者。
+ */
+function renderAgentTeamTool(teamRun: Partial<AgentTeamRun> | null, surface: "approval" | "artifact" = "artifact"): string {
   const client = createQueryClient();
   if (teamRun) {
     client.setQueryData(queryKeys.agentTeamRun(17), {
@@ -67,14 +68,16 @@ function renderAgentTeamTool(teamRun: Partial<AgentTeamRun> | null): string {
   }
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
-      <AgentTeamTool {...part} taskId={3} />
+      {surface === "approval"
+        ? <AgentTeamApproval artifact={ARTIFACT} taskId={3} toolCallId="call-1" />
+        : <AgentTeamTool artifact={ARTIFACT} taskId={3} toolCallId="call-1" />}
     </QueryClientProvider>,
   );
 }
 
 describe("AgentTeamTool 按 TeamRun 状态渲染", () => {
   it("TeamRun 待确认时显示可提交的审批表单，与工具调用已完成无关", () => {
-    const html = renderAgentTeamTool({ status: "pending" });
+    const html = renderAgentTeamTool({ status: "pending" }, "approval");
 
     expect(html).toContain("等待确认");
     expect(html).not.toContain("Agent Team 执行进度");
@@ -83,7 +86,7 @@ describe("AgentTeamTool 按 TeamRun 状态渲染", () => {
   });
 
   it("TeamRun 状态尚未读到时保留审批卡但禁止提交", () => {
-    const html = renderAgentTeamTool(null);
+    const html = renderAgentTeamTool(null, "approval");
 
     expect(html).toContain("正在同步方案状态");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>确认执行<\/button>/);
@@ -106,5 +109,12 @@ describe("AgentTeamTool 按 TeamRun 状态渲染", () => {
       expect(html).not.toContain("已驳回");
       expect(html).toContain("Agent Team 执行进度");
     }
+  });
+
+  it("决定已提交、占位尚未推到终态的窗口里，审批表单按 TeamRun 实际状态说明并禁止再提交", () => {
+    const html = renderAgentTeamTool({ status: "running" }, "approval");
+
+    expect(html).toContain("已确认，执行中");
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>确认执行<\/button>/);
   });
 });

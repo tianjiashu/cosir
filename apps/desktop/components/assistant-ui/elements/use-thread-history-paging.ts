@@ -2,6 +2,7 @@ import { useAui, type ThreadMessage } from "@assistant-ui/react";
 import type { Virtualizer } from "@tanstack/react-virtual";
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
+import { useDisclosureStore } from "@/lib/assistant/disclosure-store";
 import { useLoadEarlierHistory } from "@/lib/assistant/transport-history-context";
 import { registerThreadNavigator } from "@/lib/assistant/thread-navigation";
 import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
@@ -16,7 +17,8 @@ type ThreadVirtualizer = Virtualizer<HTMLDivElement, Element>;
 
 /**
  * 对话虚拟列表的历史分页：滚到接近顶部时预取上一页；页插到前面后保持视口不跳；为本 Task 登记
- * 「定位到工具卡片」的导航器（必要时一页页往上翻）。
+ * 「定位到调用」的导航器（必要时一页页往上翻；找到后先把所在过程区与这条调用置为展开，再滚过去——
+ * 结束后的过程区默认收起，不展开就滚不到那一行）。
  *
  * 不用 TanStack 的 `anchorTo: "end"`：它同时会在接近底部时追底，和对话「流式输出不追底」冲突。这里在
  * 每次滚动时记下第一条可见消息与它相对视口顶的偏移，插入后在 layout effect 里按新位置恢复；插入行
@@ -82,6 +84,7 @@ export function useThreadHistoryPaging({
         const messageId = thread.messages.find((message) => hasToolCall(message, toolCallId))?.id;
         const index = messageId === undefined ? -1 : latest.current.messageIds.indexOf(messageId);
         if (index >= 0) {
+          useDisclosureStore.getState().reveal(taskId, toolCallId, messageId!);
           latest.current.virtualizer.scrollToIndex(index, { align: "center" });
           await nextFrames(2);
           document.querySelector(`[data-tool-call-id="${CSS.escape(toolCallId)}"]`)

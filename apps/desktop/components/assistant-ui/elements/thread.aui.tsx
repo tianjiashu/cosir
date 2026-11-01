@@ -1,10 +1,9 @@
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, GitForkIcon, Loader2Icon, PencilIcon, PlayIcon, Trash2Icon, XIcon, ZapIcon } from "lucide-react";
-import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FC, type ReactNode } from "react";
+import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, PlayIcon, Trash2Icon, XIcon, ZapIcon } from "lucide-react";
+import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FC } from "react";
 import {
   AuiIf,
   ActionBarPrimitive,
   ComposerPrimitive,
-  ErrorPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
   unstable_useComposerInput,
@@ -15,31 +14,13 @@ import {
 import type { CreateAttachment } from "@assistant-ui/core";
 
 import { StopButton } from "@/components/assistant/stop-button";
-import { RunDiagnosticsActions } from "@/components/assistant/run-diagnostics-actions";
-import { RunUsageDisplay, TaskContextUsage } from "@/components/assistant/usage-display";
+import { TaskContextUsage } from "@/components/assistant/usage-display";
 import { ComposerControls } from "@/components/composer/composer-controls";
 import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
 import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
-import { MarkdownText } from "@/components/markdown-text";
-import { PartRenderBoundary } from "@/components/assistant-ui/elements/part-render-boundary";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningRoot,
-  ReasoningText,
-  ReasoningTrigger,
-} from "@/components/assistant-ui/elements/reasoning.aui";
-import {
-  ToolGroupContent,
-  ToolGroupRoot,
-  ToolGroupTrigger,
-} from "@/components/assistant-ui/elements/tool-group.aui";
-import { summarizeToolGroup } from "@/components/assistant-ui/elements/tool-group-status";
-import { ASSISTANT_PART_STACK_CLASS } from "@/components/assistant-ui/elements/tool-layout-tokens";
-import { ToolPart } from "@/components/assistant-ui/tools/tool-part";
-import { readToolArtifact } from "@/components/assistant-ui/tools/types";
+import { Turn } from "@/components/assistant-ui/turn/turn";
 import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import {
@@ -68,7 +49,7 @@ import {
   takePendingEditComposerDraft,
   type EditDraftAttachment,
 } from "@/lib/assistant/edit-composer-draft";
-import type { InputDelivery, TransportActivity, TransportOutcome, TransportToolStatus } from "@/lib/assistant/contract";
+import type { InputDelivery } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
@@ -128,68 +109,6 @@ function useThreadContext(): ThreadContextValue {
   if (!context) throw new Error("ThreadContext 只能在 Thread 内使用");
   return context;
 }
-
-type AssistantGroupKey = "group-reasoning" | "group-tool-trace";
-
-type ToolTraceGroupProps = {
-  indices: readonly number[];
-  children: ReactNode;
-};
-
-/**
- * 使用各工具的后端生命周期状态渲染聚合后的工具轨迹。
- *
- * 没有工具结果时，assistant-ui 会从 assistant message status 推导工具状态；
- * assistant 继续后续步骤时，已完成的工具可能因此仍显示运行中，所以这里直接读取
- * Transport artifact 计算聚合状态。只有一个调用时不折叠成组：组标题只会复述那一行，
- * 还要多点一次才能看到它。
- */
-const ToolTraceGroup: FC<ToolTraceGroupProps> = ({ indices, children }) => {
-  if (indices.length === 1) return <>{children}</>;
-  return <CollapsedToolTraceGroup indices={indices}>{children}</CollapsedToolTraceGroup>;
-};
-
-const CollapsedToolTraceGroup: FC<ToolTraceGroupProps> = ({ indices, children }) => {
-  const statusKey = useAuiState((state) => indices.map((index) => {
-    const part = state.message.parts[index];
-    if (part?.type !== "tool-call") return "unknown";
-    return readToolArtifact(part.artifact).backendStatus;
-  }).join("|"));
-  // 组默认折叠，运行中在标题上露出最新一个未结束调用的动词，让用户知道 Agent 正在做什么。
-  const activeTitle = useAuiState((state) => {
-    for (let i = indices.length - 1; i >= 0; i -= 1) {
-      const part = state.message.parts[indices[i]];
-      if (part?.type !== "tool-call") continue;
-      const artifact = readToolArtifact(part.artifact);
-      if (artifact.backendStatus === "pending" || artifact.backendStatus === "running") {
-        return artifact.presentation.verb ?? part.toolName;
-      }
-    }
-    return null;
-  });
-  const summary = useMemo(
-    () => summarizeToolGroup(
-      (statusKey ? statusKey.split("|") : []) as TransportToolStatus[],
-    ),
-    [statusKey],
-  );
-
-  return (
-    <ToolGroupRoot>
-      <ToolGroupTrigger summary={summary} activeTitle={activeTitle} />
-      <ToolGroupContent>{children}</ToolGroupContent>
-    </ToolGroupRoot>
-  );
-};
-
-const assistantMessageGroupBy = (
-  part: { type: string; artifact?: unknown },
-): readonly AssistantGroupKey[] => {
-  if (part.type === "reasoning") return ["group-reasoning"];
-  if (part.type !== "tool-call") return [];
-  const surface = readToolArtifact(part.artifact).presentation.surface;
-  return surface === "standalone" ? [] : ["group-tool-trace"];
-};
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
@@ -914,168 +833,18 @@ const UserEditMessage: FC = () => {
   );
 };
 
-const MessageError: FC = () => (
-  <MessagePrimitive.Error>
-    <ErrorPrimitive.Root className="border-destructive bg-destructive/10 text-destructive mt-2 rounded-md border p-3 text-sm">
-      <ErrorPrimitive.Message className="line-clamp-2" />
-    </ErrorPrimitive.Root>
-  </MessagePrimitive.Error>
-);
-
+/**
+ * 助手消息 = 一个回合（`Turn`）：分区、开合与脚注都在回合组件里，这里只接上线程级上下文。
+ * 渲染上下文（`isRunEnd` / `outcome` / `activity`）随消息一并投影（见 frame store 的 contextFor），消息渲染
+ * 只依赖消息自身事实；不回查 `thread.state`，只读作用域也能正常渲染。
+ */
 const AssistantMessage: FC = () => {
-  const messageId = useAuiState((state) => state.message.id);
-  const custom = useAuiState((state) => state.message.metadata.custom);
-  // 渲染上下文随消息一并投影（见 frame store 的 contextFor），消息渲染只依赖消息自身事实；
-  // 不回查 ``thread.state``，只读作用域也能正常渲染。
-  const isRunEnd = custom?.isRunEnd === true;
-  const runId = typeof custom?.runId === "number" ? custom.runId : null;
-  const outcome = (custom?.outcome ?? null) as TransportOutcome | null;
-  const activity = (custom?.activity ?? null) as TransportActivity | null;
   const { forkingMessageId = null, onForkMessage, cancelling = false, taskId, readonly = false } = useThreadContext();
-  // fork 入口挂在每一轮回复的末尾，这一轮到终态（消息带 outcome）后才可用。
-  const canFork = !readonly && isRunEnd && outcome !== null;
-  const isForking = forkingMessageId === messageId;
-  const usage = outcome?.usage ?? activity?.usage ?? null;
-  const status = outcome?.status ?? activity?.status ?? null;
-
   return (
-    <MessagePrimitive.Root
-      data-role="assistant"
-      className="relative -mb-6 pb-6 px-2"
-    >
-      <div className={cn("aui-assistant-part-stack text-foreground wrap-break-word", ASSISTANT_PART_STACK_CLASS)}>
-        <MessagePrimitive.GroupedParts
-          groupBy={assistantMessageGroupBy}
-        >
-          {({ part, children }) => {
-            switch (part.type) {
-              case "group-tool-trace": {
-                return (
-                  <RenderIsolationBoundary
-                    scope="part"
-                    resetKey={`tool-trace:${part.indices.join(",")}`}
-                    metadata={{ renderer: "tool-trace-group", partIndices: part.indices }}
-                    fallback={({ onRetry }) => (
-                      <RenderErrorCard scope="part" label="工具分组" onRetry={onRetry} />
-                    )}
-                  >
-                    <ToolTraceGroup indices={part.indices}>{children}</ToolTraceGroup>
-                  </RenderIsolationBoundary>
-                );
-              }
-              case "group-reasoning": {
-                const isReasoningStreaming = part.status.type === "running";
-                return (
-                  <RenderIsolationBoundary
-                    scope="part"
-                    resetKey={`reasoning:${part.indices.join(",")}`}
-                    metadata={{ renderer: "reasoning-group", partIndices: part.indices }}
-                    fallback={({ onRetry }) => (
-                      <RenderErrorCard scope="part" label="推理分组" onRetry={onRetry} />
-                    )}
-                  >
-                    <ReasoningRoot streaming={isReasoningStreaming}>
-                      <ReasoningTrigger active={isReasoningStreaming} />
-                      <ReasoningContent aria-busy={isReasoningStreaming}>
-                        <ReasoningText>{children}</ReasoningText>
-                      </ReasoningContent>
-                    </ReasoningRoot>
-                  </RenderIsolationBoundary>
-                );
-              }
-              case "text":
-                return (
-                  <PartRenderBoundary
-                    renderer="Assistant Markdown"
-                    fallback={({ onRetry }) => (
-                      <RenderErrorCard
-                        scope="markdown"
-                        label="Assistant 内容"
-                        fallbackText={part.text}
-                        onRetry={onRetry}
-                      />
-                    )}
-                  >
-                    <MarkdownText status={part.status} />
-                  </PartRenderBoundary>
-                );
-              case "reasoning":
-                return (
-                  <PartRenderBoundary
-                    renderer="推理 Markdown"
-                    fallback={({ onRetry }) => (
-                      <RenderErrorCard
-                        scope="markdown"
-                        label="推理内容"
-                        fallbackText={part.text}
-                        onRetry={onRetry}
-                      />
-                    )}
-                  >
-                    <Reasoning {...part} />
-                  </PartRenderBoundary>
-                );
-              case "tool-call":
-                return (
-                  <PartRenderBoundary
-                    renderer="工具 renderer"
-                    metadata={{ toolName: part.toolName }}
-                    fallback={({ onRetry }) => (
-                      <RenderErrorCard
-                        scope="tool"
-                        label={part.toolName}
-                        onRetry={onRetry}
-                      />
-                    )}
-                  >
-                    <ToolPart
-                      {...part}
-                      taskId={taskId}
-                      interactive={!readonly}
-                      taskCancelling={cancelling}
-                    />
-                  </PartRenderBoundary>
-                );
-              case "file":
-              case "image":
-              case "data":
-              case "source":
-                return null;
-              default:
-                return null;
-            }
-          }}
-        </MessagePrimitive.GroupedParts>
-        <MessageError />
+    <MessagePrimitive.Root data-role="assistant" className="relative -mb-6 px-2 pb-6">
+      <div className="text-foreground wrap-break-word">
+        <Turn taskId={taskId} readonly={readonly} cancelling={cancelling} forkingMessageId={forkingMessageId} onForkMessage={onForkMessage} />
       </div>
-      {!readonly && (
-        <RunUsageDisplay usage={usage} running={activity !== null && outcome === null} visible={isRunEnd && (outcome !== null || activity !== null)} />
-      )}
-      <ActionBarPrimitive.Root className="mt-1 flex gap-1">
-        <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" size="sm" />}>
-          <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
-          <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
-        </ActionBarPrimitive.Copy>
-        {!readonly && isRunEnd && (
-          <TooltipIconButton
-            tooltip={canFork ? "从此处 Fork 新任务" : "此轮结束后才能 Fork"}
-            size="sm"
-            aria-label="从此处 Fork 新任务"
-            disabled={!canFork || forkingMessageId !== null}
-            onClick={() => onForkMessage?.(messageId)}
-          >
-            {isForking ? <Loader2Icon className="animate-spin" /> : <GitForkIcon />}
-          </TooltipIconButton>
-        )}
-        <RunDiagnosticsActions
-          taskId={taskId}
-          runId={runId}
-          status={status}
-          endReason={outcome?.endReason ?? null}
-          errorCode={outcome?.error?.code ?? null}
-          visible={isRunEnd}
-        />
-      </ActionBarPrimitive.Root>
     </MessagePrimitive.Root>
   );
 };

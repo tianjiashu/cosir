@@ -11,7 +11,7 @@ import { API_ORIGIN as origin } from "./e2e-env";
  */
 const TASK_ID = 4501;
 const PAIRS = 160;
-const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
+const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: null };
 const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
 
 type SeedState = Omit<TransportState, "messageOffset" | "terminal_sessions" | "background_tasks" | "foreground_waits" | "handoffs">;
@@ -22,10 +22,12 @@ function longConversation(pairs = PAIRS): SeedState {
     messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}`, status: "completed" }], runId: index + 1, outcome: null } as TransportState["messages"][number]);
     const parts: TransportState["messages"][number]["parts"] = [{ type: "text", text: `第 ${index} 轮回答。${"说明。".repeat(20)}`, status: "completed" }];
     // 第 3 轮带一张后台命令卡片：远在最近窗口之外。
-    if (index === 3) parts.unshift({ type: "tool-call", toolCallId: "call-old", toolName: "terminal_read", args: {}, status: "pending", background: true } as never);
+    if (index === 3) parts.unshift({ type: "tool-call", awaitingUser: false, toolCallId: "call-old", toolName: "terminal_read", args: {}, status: "pending", background: true } as never);
     messages.push({ id: `a-${index}`, role: "assistant", runId: index + 1, outcome: OUTCOME, parts } as TransportState["messages"][number]);
   }
-  return { title: "长对话", messages, activity: { runId: pairs, ...OUTCOME, launch: LAUNCH } };
+  // `durationMs` 只属于结局；activity 是固定字段的白名单，多一个键整份快照就无效。
+  const activity = { runId: pairs, status: OUTCOME.status, endReason: OUTCOME.endReason, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" };
+  return { title: "长对话", messages, activity };
 }
 
 const viewport = (page: Page) => page.locator(".aui-thread-root .overflow-y-auto").first();

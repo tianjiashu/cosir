@@ -22,10 +22,12 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
 
   await page.goto("/tasks/42");
   await expect(page.getByText("子 Agent 已开始工作。", { exact: true })).toBeVisible();
-  const row = page.getByTestId("tool-activity-row").filter({ hasText: "审查代码" });
+  // 回合已结束，两次委派收在过程区里；展开后每次委派一行：标题是子任务名、目标是子 Agent 名、行尾「打开」。
+  await page.getByRole("button", { name: /已处理/ }).click();
+  const row = page.locator('[data-tool-call-id="delegate-ref-500"]');
+  await expect(row).toContainText("审查代码");
   await expect(row).toContainText("Reviewer");
-  // 委派卡片不可展开；标题按钮铺满卡片，点卡片即打开工作台。
-  const openReviewer = page.getByRole("button", { name: "打开子 Agent工作台：审查代码" });
+  const openReviewer = page.getByRole("button", { name: "打开子 Agent 工作台：审查代码" });
   await openReviewer.click();
 
   await expect(page.getByRole("complementary", { name: "工作台" })).toBeVisible();
@@ -54,8 +56,9 @@ test("两个并行子 Agent 分别订阅，切换回标签页重新订阅并保�
 
   await page.goto("/tasks/42");
   await expect(page.getByText("子 Agent 已开始工作。", { exact: true })).toBeVisible();
-  const reviewer = page.getByRole("button", { name: "打开子 Agent工作台：审查代码" });
-  const tester = page.getByRole("button", { name: "打开子 Agent工作台：检查测试" });
+  await page.getByRole("button", { name: /已处理/ }).click();
+  const reviewer = page.getByRole("button", { name: "打开子 Agent 工作台：审查代码" });
+  const tester = page.getByRole("button", { name: "打开子 Agent 工作台：检查测试" });
   await reviewer.click();
   await expect(page.getByRole("tab", { name: /审查代码/ })).toBeVisible();
   await expect.poll(() => reviewerSubscriptions(page)).toBe(1);

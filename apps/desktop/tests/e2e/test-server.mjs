@@ -95,6 +95,7 @@ const activityOf = (runId, status, overrides = {}) => ({
   usage: null,
   contextWindowTotal: null,
   launch: DEFAULT_LAUNCH,
+  startedAt: "2026-10-27T00:00:00.000Z",
   ...overrides,
 });
 
@@ -104,6 +105,7 @@ const outcomeOf = (activity) => ({
   error: activity.error,
   usage: activity.usage,
   contextWindowTotal: activity.contextWindowTotal,
+  durationMs: null,
 });
 
 const textMessage = (id, role, text, status, runId) => ({
@@ -149,13 +151,13 @@ function settle(state, status, overrides = {}) {
 function toolLifecycleParts(runId, status, toolStatus) {
   return [
     {
-      type: "tool-call",
+      type: "tool-call", awaitingUser: false,
       toolCallId: `tool-lifecycle-${runId}`,
       toolName: "search_content",
       args: { pattern: "lifecycle" },
       status: toolStatus,
       error: null,
-      presentation: { verb: "搜索文件", icon: "search", surface: "standalone", expandable: true, expand_layout: "list" },
+      presentation: { verb: "搜索文件", icon: "search" },
       display_data: toolStatus === "completed"
         ? {
             kind: "content-search-results",
@@ -204,29 +206,87 @@ function toolTraceState() {
   }, [
     { type: "reasoning", text: "先分析项目结构", status: "completed" },
     {
-      type: "tool-call",
+      type: "tool-call", awaitingUser: false,
       toolCallId: "trace-read-file",
       toolName: "read_file",
       args: { path: "README.md" },
       status: "completed",
       error: null,
-      presentation: { verb: "读取文件", icon: "eye", expandable: false, expand_layout: "none" },
+      presentation: { verb: "读取文件", icon: "eye" },
       display_data: null,
       isError: false,
     },
     {
-      type: "tool-call",
+      type: "tool-call", awaitingUser: false,
       toolCallId: "trace-search-files",
       toolName: "search_content",
       args: { pattern: "assistant-ui" },
       status: "completed",
       error: null,
-      presentation: { verb: "搜索文件", icon: "search", expandable: false, expand_layout: "none" },
+      presentation: { verb: "搜索文件", icon: "search" },
       display_data: null,
       isError: false,
     },
     { type: "text", text: "检查完成", status: "completed" },
   ]);
+}
+
+/**
+ * 交替序列（设计文档 §5 场景 A–D 的合成）：思考 → 叙述 → 搜索 → 叙述 → 失败的命令 → 改动 → 交接（等待用户）→ 结论。
+ * `phase` 为 running 时结论还没出、最后一步是正在运行的命令；settled 时回合已结束，带耗时。
+ */
+function alternatingSequenceState(phase) {
+  const runId = 79;
+  const call = (toolCallId, toolName, verb, icon, heading, status, extra = {}) => ({
+    type: "tool-call", awaitingUser: false, toolCallId, toolName, args: {}, status, error: null,
+    presentation: { verb, icon }, heading, display_data: null, isError: false, ...extra,
+  });
+  const parts = [
+    { type: "reasoning", text: "先找调度循环在哪里。搜 setInterval 和 tick 相关命名。", status: "completed" },
+    { type: "text", text: "先找调度循环在哪里。", status: "completed" },
+    call("alt-search", "search_content", "搜索内容", "search", { title: "搜索内容", target: "setInterval|tick in src/" }, "completed", {
+      display_data: {
+        kind: "content-search-results", pattern: "tick", path: "src", match_count: 2,
+        matches: [{ path: "src/task.ts", line: 22, content: "const TICK_MS = 250", is_match: true }, { path: "src/config.ts", line: 31, content: "tick", is_match: true }],
+      },
+    }),
+    { type: "text", text: "tick 是写死的常量，配置模块已有校验工具，可以直接加字段。", status: "completed" },
+    call("alt-typecheck", "execute_terminal", "执行命令", "terminal", { title: "运行类型检查", target: "bun run typecheck" }, "failed", {
+      error: "命令执行失败", isError: true, display_data: { status_hint: "命令执行失败" },
+    }),
+    call("alt-patch", "apply_patch", "修改文件", "git-compare", { title: "修改文件", target: "src/config.ts" }, "completed", {
+      display_data: {
+        kind: "file-changes",
+        diff_stats: { total_files: 2, total_insertions: 30, total_deletions: 6 },
+        changes: [
+          { path: "src/config.ts", status: "modified", insertions: 9, deletions: 2, patch: "diff --git a/src/config.ts b/src/config.ts\n--- a/src/config.ts\n+++ b/src/config.ts\n@@ -31 +31,2 @@\n-export const tick = 250\n+export const tickMs = read('scheduler.tickMs', 250)\n+export const tickRange = [50, 5000]\n" },
+          { path: "src/task.ts", status: "modified", insertions: 21, deletions: 4, patch: null },
+        ],
+      },
+    }),
+  ];
+  if (phase === "running") {
+    parts.push(call("alt-test", "execute_terminal", "执行命令", "terminal", { title: "运行单元测试", target: "bun test tests/task.test.ts" }, "running", {
+      display_data: { kind: "terminal-result", command: "bun test tests/task.test.ts", workdir: "/work", output: "bun test v1.1\n\ntests/task.test.ts:\n✓ tick reads config\n" },
+    }));
+  } else {
+    parts.push(
+      call("alt-handoff", "terminal_handoff", "交给你输入", "keyboard", { title: "请你输入 sudo 密码", target: "终端 2" }, "pending", {
+        awaitingUser: true,
+        display_data: { kind: "terminal-session", session_id: "term-alt", status: "running", input_summary: "输入完成后点「交还」，Agent 会继续安装" },
+      }),
+      { type: "text", text: "已把调度间隔改为读配置项 `scheduler.tickMs`，默认值仍是 250。\n\n新增 3 个单测，`bun test` 全部通过。", status: "completed" },
+    );
+  }
+  const activity = activityOf(runId, phase === "running" ? "running" : "completed", { endReason: phase === "running" ? null : "stop" });
+  return {
+    title: "测试对话",
+    messages: [
+      { id: "user-alternating", role: "user", parts: [{ type: "text", text: "把调度 tick 改成可配置，并补测试", status: "completed" }], runId, outcome: null },
+      { id: "assistant-user-alternating", role: "assistant", parts, runId, outcome: phase === "running" ? null : { ...outcomeOf(activity), durationMs: 192_000 } },
+    ],
+    activity,
+  };
 }
 
 function webSearchState() {
@@ -236,7 +296,7 @@ function webSearchState() {
     parts: [{ type: "text", text: "搜索 assistant-ui", status: "completed" }],
   }, [
     {
-      type: "tool-call",
+      type: "tool-call", awaitingUser: false,
       toolCallId: "trace-web-search",
       toolName: "web_search",
       args: { query: "assistant-ui" },
@@ -245,10 +305,6 @@ function webSearchState() {
       presentation: {
         verb: "网页搜索",
         icon: "globe",
-        surface: "standalone",
-        expandable: true,
-        expand_layout: "list",
-        default_open: true,
       },
       display_data: {
         kind: "web-search-results",
@@ -282,24 +338,26 @@ function delegationState() {
     parts: [{ type: "text", text: "请委派一个审查任务", status: "completed" }],
   }, [
     {
-      type: "tool-call",
+      type: "tool-call", awaitingUser: false,
       toolCallId: "delegate-ref-500",
       toolName: "delegate_task",
       args: { child_agent_id: "delegate_reviewer", title: "审查代码", prompt: "请审查当前改动" },
       status: "completed",
-      presentation: { verb: "委派 Agent", icon: "users", surface: "standalone", expandable: false, expand_layout: "none" },
+      presentation: { verb: "委派 Agent", icon: "users" },
+      heading: { title: "审查代码", target: "Reviewer" },
       display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501 },
       child_task_id: 501,
       agent_role: "Reviewer",
       isError: false,
     },
     {
-      type: "tool-call",
+      type: "tool-call", awaitingUser: false,
       toolCallId: "delegate-ref-501",
       toolName: "delegate_task",
       args: { child_agent_id: "delegate_tester", title: "检查测试", prompt: "请检查相关测试" },
       status: "completed",
-      presentation: { verb: "委派 Agent", icon: "users", surface: "standalone", expandable: false, expand_layout: "none" },
+      presentation: { verb: "委派 Agent", icon: "users" },
+      heading: { title: "检查测试", target: "Tester" },
       display_data: { kind: "delegation-result", title: "检查测试", role: "Tester", child_task_id: 502 },
       child_task_id: 502,
       agent_role: "Tester",
@@ -878,6 +936,23 @@ const server = createServer(async (req, res) => {
     });
     states.set(TASK_ID, toolTraceState());
     publishTaskStatus(TASK_ID);
+    jsonResponse(res, 200, { task_id: TASK_ID });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/__test__/seed-alternating") {
+    const body = await readJson(req);
+    tasks.set(TASK_ID, {
+      task_id: TASK_ID,
+      workspace_id: WORKSPACE_ID,
+      title: "交替序列回合",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    });
+    states.set(TASK_ID, alternatingSequenceState(body.phase === "running" ? "running" : "settled"));
+    publishTaskStatus(TASK_ID);
+    // 运行中的样子要稳定：登记一个不推进的执行者，attach 时不会把它当作遗留 Run 续跑成 resumed response。
+    if (body.phase === "running") executors.set(TASK_ID, { runId: 79, cancelled: false, drop: false });
+    else executors.delete(TASK_ID);
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
   }

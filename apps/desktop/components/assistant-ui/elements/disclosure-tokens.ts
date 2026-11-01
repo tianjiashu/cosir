@@ -1,3 +1,0 @@
-/** Shared geometry for the low-noise disclosure rows used by reasoning and tools. */
-export const DISCLOSURE_ROW_CLASS =
-  "aui-disclosure-row flex min-h-8 w-full min-w-0 items-center gap-2 py-1.5 text-left text-sm leading-5 transition-[color,background-color,scale] active:scale-[0.995]";

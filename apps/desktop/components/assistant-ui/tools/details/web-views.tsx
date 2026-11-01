@@ -1,5 +1,5 @@
-import { toolStatusLabel } from "../tool-status";
-import { asRecord, safeExternalUrl } from "../types";
+import { toolStatusLabel } from "../call-status";
+import { asRecord, safeExternalUrl } from "../display-utils";
 import { DetailEmpty, DetailHint, ExternalLinkRow, readArray, readString, type DetailView } from "./detail-view";
 
 function siteOf(value: unknown): string {
@@ -10,7 +10,7 @@ function siteOf(value: unknown): string {
 
 /** `web-search-results`：只展示标题链接，摘要正文属于模型上下文，不进入卡片。 */
 export const webSearchView: DetailView = {
-  summary: (data) => `${readString(data.query, "搜索")} · ${readArray(data.results).length} 个结果`,
+  meta: (data) => `${readString(data.query, "搜索")} · ${readArray(data.results).length} 个结果`,
   body: (data) => {
     const results = readArray(data.results).map(asRecord).filter((item) => typeof item.url === "string" && item.url);
     if (results.length === 0) return <DetailEmpty>未找到匹配</DetailEmpty>;
@@ -31,11 +31,11 @@ export const webSearchView: DetailView = {
 
 /** `web-extract-urls`：只列出抓取了哪些站点，抓取正文不进入卡片。 */
 export const webExtractView: DetailView = {
-  summary: (data, status) => {
+  meta: (data, { artifact }) => {
     const urls = readArray(data.urls);
     const firstUrl = urls.length > 0 ? asRecord(urls[0]).url : undefined;
     const target = urls.length > 1 ? `${siteOf(firstUrl)} 等 ${urls.length} 个网站` : siteOf(firstUrl);
-    return `${target} · ${typeof data.status_hint === "string" ? data.status_hint : toolStatusLabel(status)}`;
+    return `${target} · ${typeof data.status_hint === "string" ? data.status_hint : toolStatusLabel(artifact.backendStatus)}`;
   },
   body: (data) => {
     const urls = readArray(data.urls).map(asRecord).filter((item) => typeof item.url === "string" && item.url);

@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { BotIcon, CheckIcon, ChevronRightIcon, LocateFixedIcon, SquareIcon, SquareTerminalIcon, XCircleIcon, type LucideIcon } from "lucide-react";
 
-import { ToolPart } from "@/components/assistant-ui/tools/tool-part";
+import { CallRow } from "@/components/assistant-ui/tools/call-row";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import type { BackgroundTaskEntry, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/converter";
+import { readToolArtifact } from "@/lib/assistant/tool-artifact";
 import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
 import { useBackgroundTaskPart } from "@/lib/background-tasks/store";
@@ -21,11 +22,11 @@ const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
 
 /**
  * 看板的一行：所有种类共用的外壳（种类图标、标题、耗时、停止、在对话中定位），展开后就是对话里
- * 同一张工具卡片。
+ * 同一条调用行（`CallRow`，含它的展开体）。
  *
- * 外壳只读 snapshot `background_tasks`；卡片读同一个 snapshot 工具 part（按 `toolCallId` 镜像，见
- * `useBackgroundTaskPart`），由 renderer 注册表按 `display_data.kind` 决定长什么样，这里不按种类分支。
- * 卡片以只读方式渲染：同一调用只留外壳上这一个停止入口（`cancelToolCall`，对所有种类语义一致）。
+ * 外壳只读 snapshot `background_tasks`；调用行读同一个 snapshot 工具 part（按 `toolCallId` 镜像，见
+ * `useBackgroundTaskPart`），由 kind 视图注册表按 `display_data.kind` 决定长什么样，这里不按种类分支。
+ * 调用行以只读方式渲染：同一调用只留外壳上这一个停止入口（`cancelToolCall`，对所有种类语义一致）。
  * 对应 part 已不在对话里（如编辑重跑移出那一轮）时只剩外壳。运行中的条目默认展开。
  * 操作只发命令，结果等 snapshot 回推。
  */
@@ -93,35 +94,30 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
   );
 }
 
-/** 对话里同一张工具卡片的只读渲染；renderer 出错只影响这一条，不拖垮看板。 */
+/** 对话里同一条调用行的只读渲染；视图出错只影响这一条，不拖垮看板。 */
 function BackgroundTaskCard({ taskId, part }: { taskId: number; part: TransportToolCallPart }) {
   const converted = toToolCallPart(part);
   if (converted.type !== "tool-call") return null;
-  const complete = part.status === "completed" || part.status === "failed" || part.status === "cancelled";
   return (
     <div className="mt-1 mb-2 pl-6">
       <RenderIsolationBoundary
         scope="part"
         resetKey={part.toolCallId}
-        metadata={{ partId: part.toolCallId, partType: "tool-call", renderer: "后台任务卡片" }}
+        metadata={{ partId: part.toolCallId, partType: "tool-call", renderer: "后台任务调用行" }}
         fallback={({ onRetry }) => <RenderErrorCard scope="tool" label={part.toolName} onRetry={onRetry} />}
       >
-        <ToolPart
-          {...converted}
-          // 后端驱动的工具不经前端回填结果；assistant-ui 的回调在只读面上没有意义。
-          status={complete ? { type: "complete" } : { type: "running" }}
-          addResult={noop}
-          resume={noop}
-          respondToApproval={noop}
+        <CallRow
           taskId={taskId}
+          toolCallId={part.toolCallId}
+          toolName={part.toolName}
+          args={part.args}
+          artifact={readToolArtifact(converted.artifact)}
           interactive={false}
         />
       </RenderIsolationBoundary>
     </div>
   );
 }
-
-function noop(): void {}
 
 /** 对话可能只加载了最近一段历史：交给对话列表按需往上翻页再滚过去。 */
 async function locate(taskId: number, toolCallId: string): Promise<void> {

@@ -1,4 +1,4 @@
-import { asRecord } from "../types";
+import { asRecord } from "../display-utils";
 import { DetailEmpty, readArray, type DetailView } from "./detail-view";
 
 /**
@@ -6,7 +6,7 @@ import { DetailEmpty, readArray, type DetailView } from "./detail-view";
  * 卡片只显示调用了哪个服务的哪个工具，因此没有展开内容。
  */
 export const mcpView: DetailView = {
-  summary: (data) => data.action === "call"
+  meta: (data) => data.action === "call"
     ? `${String(data.server_name ?? "MCP 服务")} · ${String(data.tool_name ?? "工具")}`
     : `发现 ${readArray(data.servers).length} 个 MCP 服务`,
   body: (data) => {
@@ -42,7 +42,7 @@ export const mcpView: DetailView = {
 
 /** `skill-content`：`list` 列出可用 Skill；`load` 的正文只进模型上下文，只显示 Skill 名。 */
 export const skillView: DetailView = {
-  summary: (data) => data.action === "list"
+  meta: (data) => data.action === "list"
     ? `发现 ${readArray(data.skills).length} 个 Skill`
     : String(data.skill_name ?? "Skill"),
   body: (data) => {

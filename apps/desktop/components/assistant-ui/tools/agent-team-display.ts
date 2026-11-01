@@ -1,4 +1,4 @@
-import { asRecord } from "./types";
+import { asRecord } from "./display-utils";
 import type { AgentTeamConfiguration, AgentTeamStatusConfiguration } from "@/lib/api/agent-teams";
 
 

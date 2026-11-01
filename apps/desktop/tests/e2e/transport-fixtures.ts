@@ -11,14 +11,16 @@ export function completedState(
   user: { id: string; parts: TransportMessagePart[] },
   assistantParts: TransportMessagePart[],
 ): TransportState {
-  const outcome = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
+  // `durationMs` 只属于结局；activity 是固定字段的白名单，多一个键整份快照就无效。
+  const activityOutcome = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
+  const outcome = { ...activityOutcome, durationMs: null };
   return {
     title: "测试对话",
     messages: [
       { id: user.id, role: "user", parts: user.parts, runId, outcome: null },
       { id: `assistant-${user.id}`, role: "assistant", parts: assistantParts, runId, outcome },
     ],
-    messageOffset: 0, activity: { runId, ...outcome, launch: LAUNCH },
+    messageOffset: 0, activity: { runId, ...activityOutcome, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 }

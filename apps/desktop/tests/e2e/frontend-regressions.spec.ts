@@ -44,24 +44,24 @@ test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输�
   await expect(page.locator('[data-role="user"]').getByText("这条消息不能进入对话", { exact: true })).toHaveCount(0);
 });
 
-test("工具追踪视觉回归：Reasoning 和工具组都有图标且完成后收起", async ({ page, request }) => {
+test("回合结束后思考与多次调用收进过程区，展开后按顺序出现", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
   await page.goto("/tasks/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
-  await expect(assistant.getByText("思考过程", { exact: true })).toBeVisible();
-  await expect(assistant.getByText("2 个工具调用 · 全部成功", { exact: true })).toBeVisible();
-  await expect(assistant.locator('[data-slot="reasoning-trigger-icon"]')).toHaveCount(1);
-  await expect(assistant.locator('[data-slot="tool-group-trigger-icon"]')).toHaveCount(1);
+  const head = assistant.getByRole("button", { name: /已处理/ });
+  await expect(head).toBeVisible();
+  await expect(head).toContainText("读取文件 1 · 搜索文件 1");
   await expect(assistant.getByText("先分析项目结构", { exact: true })).toHaveCount(0);
   await expect(assistant.getByText("读取文件", { exact: true })).toHaveCount(0);
-  // 图标有无与收起状态已由上面的 DOM 断言兜住；截图只守整体外观，容忍浏览器重装带来的少量抗锯齿像素差异。
-  await expect(assistant).toHaveScreenshot("assistant-tool-trace.png", { animations: "disabled", maxDiffPixels: 20 });
 
-  await assistant.getByRole("button", { name: /2 个工具调用 · 全部成功/ }).click();
+  await head.click();
+  await expect(assistant.locator('[data-slot="reasoning-item"]')).toContainText("先分析项目结构");
   await expect(assistant.getByText("读取文件", { exact: true })).toBeVisible();
   await expect(assistant.getByText("搜索文件", { exact: true })).toBeVisible();
   await expect(assistant.getByText(/未知工具/)).toHaveCount(0);
+  // 成功不画对勾。
+  await expect(assistant.locator(".lucide-check")).toHaveCount(0);
 });
 
 test("网页搜索结果只显示标题并保留标题链接", async ({ page, request }) => {
@@ -69,6 +69,8 @@ test("网页搜索结果只显示标题并保留标题链接", async ({ page, re
   await page.goto("/tasks/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
+  // 单次调用直接平铺为一行，展开体默认收起。
+  await assistant.getByRole("button", { name: /网页搜索/ }).click();
   const resultLink = assistant.getByRole("link", { name: "Assistant UI 官方文档" });
   await expect(resultLink).toBeVisible();
   await expect(resultLink).toHaveAttribute("href", "https://assistant-ui.com/docs");
@@ -109,9 +111,10 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
   const assistant = page.locator('[data-role="assistant"]').last();
-  await expect(assistant.getByText("思考过程", { exact: true })).toBeVisible();
-  await expect(assistant.getByText(/正在推理/)).toBeVisible();
-  await expect(assistant.locator('[data-slot="reasoning-content"]')).toBeVisible();
+  const reasoning = assistant.locator('[data-slot="reasoning-item"]');
+  // 流式时思考行写「思考中 · 最新一行」，全文默认收起。
+  await expect(reasoning).toContainText("思考中 · 正在推理");
+  await expect(assistant.locator('[data-slot="collapsible-content"]')).toHaveCount(0);
 
   await expect(assistant.getByText("streaming response", { exact: true })).toBeVisible({ timeout: 5_000 });
   await expect.poll(async () => {
@@ -119,13 +122,14 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
     const telemetry = await response.json() as { completedStreamCount: number };
     return telemetry.completedStreamCount;
   }).toBeGreaterThan(0);
+  await expect(reasoning).toContainText("思考 · 推理完成");
   await expect(assistant.getByText("推理完成", { exact: true })).toHaveCount(0);
 
-  await assistant.getByRole("button", { name: "思考过程" }).click();
+  await reasoning.getByRole("button").click();
   await expect(assistant.getByText("推理完成", { exact: true })).toBeVisible();
 });
 
-test("工具运行中保持静态状态行，完成拿到展示数据后才可展开且默认收起", async ({ page, request }) => {
+test("工具运行中保持单行，完成拿到展示数据后才可展开且默认收起", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "工具生命周期回归" } });
   await page.goto("/tasks/42");
   await page.getByLabel("消息输入").fill("tool-lifecycle");
@@ -152,8 +156,9 @@ test("失败的工具在流结束后显示失败而不是执行中", async ({ pa
 
   const assistant = page.locator('[data-role="assistant"]').last();
   await expect(assistant.getByText("搜索文件", { exact: true })).toBeVisible();
-  await expect(assistant.getByText("失败", { exact: true })).toBeVisible({ timeout: 3_000 });
-  await expect(assistant.getByText("执行中", { exact: true })).toHaveCount(0);
+  await expect(assistant.getByText("执行失败", { exact: true })).toBeVisible({ timeout: 3_000 });
+  await expect(assistant.locator('[data-call-status="failed"]')).toHaveCount(1);
+  await expect(assistant.locator('[data-call-status="running"]')).toHaveCount(0);
   await expect(page.getByRole("button", { name: "停止" })).toHaveCount(0);
 });
 
@@ -166,8 +171,91 @@ test("取消的工具在流结束后显示已取消而不是执行中", async ({
   const assistant = page.locator('[data-role="assistant"]').last();
   await expect(assistant.getByText("搜索文件", { exact: true })).toBeVisible();
   await expect(assistant.getByText("已取消", { exact: true }).first()).toBeVisible({ timeout: 3_000 });
-  await expect(assistant.getByText("执行中", { exact: true })).toHaveCount(0);
+  await expect(assistant.locator('[data-call-status="cancelled"]')).toHaveCount(1);
+  await expect(assistant.locator('[data-call-status="running"]')).toHaveCount(0);
   await expect(page.getByRole("button", { name: "停止" })).toHaveCount(0);
+});
+
+const SHOTS = "../../docs/plan/assets/conversation-rendering";
+/** 对照截图用高视口：吸底的输入框不盖住回合。 */
+const SHOT_VIEWPORT = { width: 960, height: 1400 };
+
+test("交替序列：结束后过程收起带计数，结论、改动卡与等待卡常显，展开后调用行按顺序出现", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/seed-alternating`, { data: { phase: "settled" } });
+  await page.setViewportSize(SHOT_VIEWPORT);
+  await page.goto("/tasks/42");
+
+  const assistant = page.locator('[data-role="assistant"]').last();
+  const head = assistant.getByRole("button", { name: /已处理/ });
+  await expect(head).toContainText("已处理 3 分 12 秒");
+  await expect(head).toContainText("搜索内容 1 · 执行命令 1 · 修改文件 1 · 交给你输入 1");
+  await expect(head).toContainText("1 个失败");
+  // 过程收起：叙述与调用行都不在 DOM 里。
+  await expect(assistant.getByText("先找调度循环在哪里。", { exact: true })).toHaveCount(0);
+  await expect(assistant.locator('[data-tool-call-id="alt-search"]')).toHaveCount(0);
+  // 结论、改动卡与等待卡常显。
+  await expect(assistant.getByText(/已把调度间隔改为读配置项/)).toBeVisible();
+  const changes = assistant.locator('[data-slot="changes-card"]');
+  await expect(changes).toContainText("本轮改动 2 个文件");
+  await expect(changes).toContainText("+30");
+  await expect(changes).toContainText("−6");
+  const attention = assistant.locator('[data-slot="attention-card"]');
+  await expect(attention).toContainText("请你输入 sudo 密码");
+  await expect(attention).toContainText("输入完成后点「交还」");
+  await expect(attention.getByRole("button", { name: "交还" })).toBeVisible();
+  await assistant.screenshot({ path: `${SHOTS}/impl-settled.png`, animations: "disabled" });
+
+  await head.click();
+  const rows = assistant.locator("[data-tool-call-id]").filter({ has: page.locator('[data-slot="call-row"]') });
+  await expect(rows).toHaveCount(4);
+  await expect(rows.nth(0)).toContainText("搜索内容");
+  await expect(rows.nth(0)).toContainText("setInterval|tick in src/");
+  await expect(rows.nth(1)).toContainText("运行类型检查");
+  await expect(rows.nth(1)).toContainText("命令执行失败");
+  await expect(rows.nth(1).locator('[data-call-status="failed"]')).toHaveCount(1);
+  await expect(rows.nth(2)).toContainText("修改文件");
+  await expect(rows.nth(3)).toContainText("请你输入 sudo 密码");
+  await expect(rows.nth(3)).toContainText("等你操作");
+  await expect(assistant.getByText("先找调度循环在哪里。", { exact: true })).toBeVisible();
+  await expect(assistant.locator('[data-slot="reasoning-item"]')).toContainText("思考 · 先找调度循环在哪里。");
+  await assistant.screenshot({ path: `${SHOTS}/impl-expanded.png`, animations: "disabled" });
+
+  // 改动卡点开文件展开 diff。
+  await changes.getByRole("button", { name: /src\/config\.ts/ }).click();
+  await expect(changes.locator(".aui-diff-view")).toBeVisible();
+});
+
+test("交替序列：运行中过程区展开、区头显示当前动作，命令输出跟随主题展开", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/seed-alternating`, { data: { phase: "running" } });
+  await page.setViewportSize(SHOT_VIEWPORT);
+  await page.goto("/tasks/42");
+
+  const assistant = page.locator('[data-role="assistant"]').last();
+  const head = assistant.locator('[data-slot="process-head"]');
+  await expect(head).toContainText("运行单元测试");
+  await expect(head).toContainText("搜索内容 1 · 执行命令 2 · 修改文件 1");
+  const running = assistant.locator('[data-tool-call-id="alt-test"]');
+  await expect(running).toContainText("bun test tests/task.test.ts");
+  await expect(running.locator('[data-terminal-viewport="true"]')).toBeVisible();
+  await expect(running.locator('[data-call-status="running"]')).toHaveCount(1);
+  await expect(assistant.locator('[data-slot="changes-card"]')).toContainText("本轮改动 2 个文件");
+  await assistant.screenshot({ path: `${SHOTS}/impl-running.png`, animations: "disabled" });
+});
+
+test("交替序列：深色主题下回合正常渲染", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/seed-alternating`, { data: { phase: "settled" } });
+  await page.addInitScript(() => window.localStorage.setItem("cosir.theme-preference", "dark"));
+  await page.setViewportSize(SHOT_VIEWPORT);
+  await page.goto("/tasks/42");
+
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  const assistant = page.locator('[data-role="assistant"]').last();
+  await expect(assistant.getByRole("button", { name: /已处理/ })).toBeVisible();
+  await expect(assistant.locator('[data-slot="changes-card"]')).toBeVisible();
+  await expect(assistant.locator('[data-slot="attention-card"]')).toBeVisible();
+  await assistant.getByRole("button", { name: /已处理/ }).click();
+  await expect(assistant.locator('[data-tool-call-id="alt-search"]')).toBeVisible();
+  await assistant.screenshot({ path: `${SHOTS}/impl-dark.png`, animations: "disabled" });
 });
 
 test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage footer", async ({ page, request }) => {
