@@ -35,6 +35,7 @@ from app.core.tool.validation.arguments import validate_tool_arguments
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _TOOL_MODULE = "app.tools.tool_handler.execute_terminal"
+_SHELLS_MODULE = "app.tools.shell.host_shells"
 
 # execute 的形参必须是「args_model 字段 + 执行链注入的 execution_context / output_sink」。
 _EXECUTION_INJECTED_PARAMS = {"execution_context", "output_sink"}
@@ -64,27 +65,7 @@ def _patch_windows_environment(
         "powershell.exe": "C:/Windows/System32/powershell.exe" if powershell else None,
         "pwsh.exe": "C:/Program Files/PowerShell/pwsh.exe" if pwsh else None,
     }
-    monkeypatch.setattr(f"{_TOOL_MODULE}.shutil.which", lambda name: available.get(name))
-
-
-class _FakePath:
-    """替身 ``pathlib.Path``：只实现 handler 探测 ``/bin/sh`` 所需的最小接口。
-
-    既是替换用的「类」（``_FakePath(bin_sh_exists=...)``），也是可调用的构造器
-    （``_FakePath("/bin/sh")`` 返回自身），两次调用都代表同一个查询结果。
-    """
-
-    def __init__(self, *_args: Any, bin_sh_exists: bool = True, **_kwargs: Any) -> None:
-        self._bin_sh_exists = bin_sh_exists
-
-    def __call__(self, *_args: Any, **_kwargs: Any) -> "_FakePath":
-        return self
-
-    def is_file(self) -> bool:
-        return self._bin_sh_exists
-
-    def __repr__(self) -> str:
-        return "<FakePath>"
+    monkeypatch.setattr(f"{_SHELLS_MODULE}.shutil.which", lambda name: available.get(name))
 
 
 def _patch_macos_environment(
@@ -99,9 +80,9 @@ def _patch_macos_environment(
     available = {name: f"/usr/bin/{name}" for name in extra}
     for name in ("bash", "zsh", "fish", "pwsh"):
         available.setdefault(name, None)
-    monkeypatch.setattr(f"{_TOOL_MODULE}.shutil.which", lambda name: available.get(name))
-    monkeypatch.setattr(f"{_TOOL_MODULE}.Path", _FakePath(bin_sh_exists=bin_sh))
-    monkeypatch.setattr(f"{_TOOL_MODULE}.os.access", lambda *_a, **_k: bin_sh)
+    monkeypatch.setattr(f"{_SHELLS_MODULE}.shutil.which", lambda name: available.get(name))
+    monkeypatch.setattr(f"{_SHELLS_MODULE}.os.path.isfile", lambda _path: bin_sh)
+    monkeypatch.setattr(f"{_SHELLS_MODULE}.os.access", lambda *_a, **_k: bin_sh)
 
 
 def _model_shell_schema(tool: ExecuteTerminalTool) -> dict[str, Any]:
@@ -503,7 +484,7 @@ def test_definition_runs_in_thread_with_deferred_capability() -> None:
 
     definition = ExecuteTerminalTool().to_definition()
     assert definition.execution_mode == "thread"
-    assert definition.deferred is not None and definition.deferred.default_background is False
+    assert definition.background is not None and definition.background.default_background is False
 
 
 def test_narrowed_schema_survives_normalization(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -529,7 +510,7 @@ def test_windows_comspec_alone_is_enough_for_cmd(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(f"{_TOOL_MODULE}.platform.system", lambda: "Windows")
     monkeypatch.setenv("COMSPEC", "C:/Windows/System32/cmd.exe")
-    monkeypatch.setattr(f"{_TOOL_MODULE}.shutil.which", lambda name: None)
+    monkeypatch.setattr(f"{_SHELLS_MODULE}.shutil.which", lambda name: None)
     tool = ExecuteTerminalTool()
     assert "cmd" in tool._available_shells
     assert _model_shell_schema(tool)["enum"] == ["auto", "cmd"]
@@ -656,7 +637,7 @@ def test_resolver_and_shell_detection_agree_on_casing(
 ) -> None:
     """平台选型与 shell 探测对平台名大小写的敏感度必须一致。
 
-    观察到的实现差异：``resolve_execute_terminal_args_model`` 大小写不敏感
+    曾观察到的实现差异：``resolve_execute_terminal_args_model`` 大小写不敏感
     （'windows' 也返回 Windows 类），而 ``ExecuteTerminalTool._detect_available_shells``
     用 ``platform_name == "Windows"`` 精确比较。若宿主上报小写平台名，二者会分叉：
     args_model 是 Windows 契约（Literal=auto/cmd/powershell/pwsh），枚举却走 POSIX 分支
@@ -668,11 +649,11 @@ def test_resolver_and_shell_detection_agree_on_casing(
     # 固定 Windows 探测环境：COMSPEC 存在、cmd/powershell 命中、/bin/sh 存在。
     monkeypatch.setenv("COMSPEC", "C:/Windows/System32/cmd.exe")
     monkeypatch.setattr(
-        f"{_TOOL_MODULE}.shutil.which",
+        f"{_SHELLS_MODULE}.shutil.which",
         lambda name: {"cmd.exe": "C:/cmd.exe", "powershell.exe": "C:/ps.exe"}.get(name),
     )
-    monkeypatch.setattr(f"{_TOOL_MODULE}.Path", _FakePath(bin_sh_exists=True))
-    monkeypatch.setattr(f"{_TOOL_MODULE}.os.access", lambda *_a, **_k: True)
+    monkeypatch.setattr(f"{_SHELLS_MODULE}.os.path.isfile", lambda _path: True)
+    monkeypatch.setattr(f"{_SHELLS_MODULE}.os.access", lambda *_a, **_k: True)
 
     for name in ("Windows", "windows", "WINDOWS"):
         model_is_windows = resolve_execute_terminal_args_model(name) is WindowsExecuteTerminalArgs

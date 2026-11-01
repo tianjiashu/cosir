@@ -41,9 +41,9 @@ def stored(tmp_path: Path, isolated_storage):
     task = depends.get_task_crud().create(workspace.id, "task")
     run = depends.get_conversation_run_crud().create(task.id, "completed")
     crud = depends.get_conversation_task_context_crud()
-    crud.create(_tool_row(task.id, run.id, 1, "call-bg", status="pending", deferred=True))
+    crud.create(_tool_row(task.id, run.id, 1, "call-bg", status="pending", background=True))
     crud.create(_tool_row(task.id, run.id, 2, "call-hitl", status="pending"))
-    crud.create(_tool_row(task.id, run.id, 3, "call-done", status="completed", deferred=True))
+    crud.create(_tool_row(task.id, run.id, 3, "call-done", status="completed", background=True))
     return SimpleNamespace(task_id=task.id, crud=crud)
 
 
@@ -63,7 +63,7 @@ def test_only_pending_deferred_rows_are_settled(stored) -> None:
 
     assert count == 1
     settled = _metadata(stored, "call-bg")
-    assert (settled.status, settled.error, settled.deferred) == ("cancelled", "已中断", True)
+    assert (settled.status, settled.error, settled.background) == ("cancelled", "已中断", True)
     # HITL 等待占位与已完成的后台占位不动。
     assert _metadata(stored, "call-hitl").status == "pending"
     assert _metadata(stored, "call-done").status == "completed"
@@ -78,7 +78,7 @@ def test_settlement_filters_by_call(stored) -> None:
 
 
 def test_fork_marks_waiting_background_placeholders_uninherited() -> None:
-    waiting = ToolMessageMetadata(status="pending", deferred=True)
+    waiting = ToolMessageMetadata(status="pending", background=True)
     copied = _uninherited(waiting)
     assert (copied.status, copied.error) == ("cancelled", "未继承")
     assert waiting.status == "pending"  # 源 Task 的行不受影响
@@ -87,9 +87,9 @@ def test_fork_marks_waiting_background_placeholders_uninherited() -> None:
 
 
 def test_terminal_event_keeps_deferred_placeholders_pending() -> None:
-    observation = ToolObservation(tool_name="terminal_write", status="success", deferred=True)
+    observation = ToolObservation(tool_name="terminal_write", status="success", background=True)
     event = terminal_event(observation, task_id=1, run_id=2, step_id="s", tool_call_id="c")
-    assert (event.status, event.deferred) == ("pending", True)
+    assert (event.status, event.background) == ("pending", True)
 
 
 
@@ -114,7 +114,7 @@ def test_observe_persists_deferred_placeholder_as_pending(monkeypatch) -> None:
                 tool_name="execute_terminal",
                 status="success",
                 tool_call_id="call-bg",
-                deferred=True,
+                background=True,
             )
         ],
         valid_tool_calls={
@@ -125,16 +125,16 @@ def test_observe_persists_deferred_placeholder_as_pending(monkeypatch) -> None:
     projection_module.settle_observations(batch, step_id="step-1")
 
     [metadata] = written
-    assert (metadata.status, metadata.deferred) == ("pending", True)
+    assert (metadata.status, metadata.background) == ("pending", True)
     [event] = emitted
-    assert (event.status, event.deferred) == ("pending", True)
+    assert (event.status, event.background) == ("pending", True)
 
 
 def test_deferred_placeholder_projects_a_valid_part_field() -> None:
-    """卡片字段与 snapshot 白名单、前端契约同名（``deferred``），否则 snapshot 校验会拒收。"""
-    fields = project_tool_result(ToolMessageMetadata(status="pending", deferred=True))
+    """卡片字段与 snapshot 白名单、前端契约同名（``background``），否则 snapshot 校验会拒收。"""
+    fields = project_tool_result(ToolMessageMetadata(status="pending", background=True))
 
-    assert fields.get("deferred") is True
+    assert fields.get("background") is True
     _validate_part({"type": "tool-call", "toolCallId": "c", "toolName": "t", "args": {}, **fields})
 
 def test_run_settlement_skips_deferred_parts() -> None:
@@ -145,7 +145,12 @@ def test_run_settlement_skips_deferred_parts() -> None:
                 "role": "assistant",
                 "runId": 3,
                 "parts": [
-                    {"type": "tool-call", "toolCallId": "a", "status": "pending", "deferred": True},
+                    {
+                        "type": "tool-call",
+                        "toolCallId": "a",
+                        "status": "pending",
+                        "background": True,
+                    },
                     {"type": "tool-call", "toolCallId": "b", "status": "running"},
                 ],
             }
@@ -173,7 +178,7 @@ class _Context:
 @pytest.mark.parametrize("status", ["pending", "cancelled"])
 def test_consumed_result_completes_the_placeholder(monkeypatch, status: str) -> None:
     """结论并入即推到 completed；重启改成 cancelled 的占位在结论到达后同样推到 completed。"""
-    context = _Context(ToolMessageMetadata(status=status, deferred=True))
+    context = _Context(ToolMessageMetadata(status=status, background=True))
     emitted: list[Any] = []
     monkeypatch.setattr(projection_module, "_message_context", lambda: context)
     monkeypatch.setattr(
@@ -198,7 +203,7 @@ def test_consumed_result_completes_the_placeholder(monkeypatch, status: str) -> 
     [
         None,
         ToolMessageMetadata(status="pending"),
-        ToolMessageMetadata(status="completed", deferred=True),
+        ToolMessageMetadata(status="completed", background=True),
     ],
 )
 def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:

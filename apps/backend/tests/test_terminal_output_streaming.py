@@ -471,7 +471,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
             run_id=9,
             tool_call_id="call-1",
             status="pending",
-            deferred=True,
+            background=True,
             display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
         )
     )
@@ -496,7 +496,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     )
     projector.process(_terminal_output_update(2, " late"))
     part = state["messages"][1]["parts"][0]
-    assert part["status"] == "completed" and part["deferred"] is True
+    assert part["status"] == "completed" and part["background"] is True
     assert part["display_data"]["output"] == "before after"
     assert part["display_data"]["exit_code"] == 0
 

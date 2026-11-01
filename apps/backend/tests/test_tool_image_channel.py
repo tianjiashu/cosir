@@ -69,10 +69,10 @@ def test_saved_tool_image_reaches_the_model_request(
     monkeypatch.setattr(vision_input, "AttachmentService", lambda: service)
     [resolved] = vision_input.resolve_messages_for_model([message], workspace_id=7)
     text, image = resolved["content"]
-    assert text == {
-        "type": "text",
-        "text": '<tool_image tool_call_id="call-1" tool_name="demo_capture" />',
-    }
+    assert text["type"] == "text"
+    # ``time`` 是投递时间，随执行而变：只固定标签形状与归属字段。
+    assert text["text"].startswith('<tool_image time="')
+    assert text["text"].endswith('tool_call_id="call-1" tool_name="demo_capture" />')
     url = image["image_url"]["url"]
     assert url.startswith("data:image/png;base64,")
     assert base64.b64decode(url.split(",", 1)[1]).startswith(b"\x89PNG")

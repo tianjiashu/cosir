@@ -222,12 +222,7 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch) -> None
     assert queued.launch.options.reasoning_effort == "high"
     assert queued.launch.model_config_id == 3
     # Run 的配置只随 ``launch`` 走；消息体自身没有散落的执行选项或展示字段。
-    assert set(queued.model_dump()) == {
-        "input_text",
-        "presentation",
-        "launch",
-        "trigger_tool_call_id",
-    }
+    assert set(queued.model_dump()) == {"input_text", "presentation", "launch"}
 
 
 def test_run_service_accepts_directory_as_one_ordinary_attachment(monkeypatch) -> None:

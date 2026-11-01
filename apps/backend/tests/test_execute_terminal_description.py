@@ -21,6 +21,7 @@ from app.tools.tool_models.execute_terminal_args import (
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _TOOL_MODULE = "app.tools.tool_handler.execute_terminal"
+_SHELLS_MODULE = "app.tools.shell.host_shells"
 
 
 def _patch_windows_environment(monkeypatch: pytest.MonkeyPatch, *, powershell: bool) -> None:
@@ -36,7 +37,7 @@ def _patch_windows_environment(monkeypatch: pytest.MonkeyPatch, *, powershell: b
         "pwsh.exe": None,
     }
     monkeypatch.setattr(
-        f"{_TOOL_MODULE}.shutil.which",
+        f"{_SHELLS_MODULE}.shutil.which",
         lambda name: available.get(name),
     )
 
@@ -46,7 +47,7 @@ def _patch_macos_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(f"{_TOOL_MODULE}.platform.system", lambda: "Darwin")
     available = {"bash": "/bin/bash", "zsh": "/bin/zsh", "fish": None, "pwsh": None}
-    monkeypatch.setattr(f"{_TOOL_MODULE}.shutil.which", lambda name: available.get(name))
+    monkeypatch.setattr(f"{_SHELLS_MODULE}.shutil.which", lambda name: available.get(name))
 
 
 def _model_properties(tool: ExecuteTerminalTool) -> dict[str, dict[str, object]]:
@@ -180,7 +181,7 @@ def test_detected_shells_are_derived_from_the_platform_contract(
     """探测候选取自契约：全部视为已安装时，enum 必须等于契约取值的完整投影（含顺序）。"""
 
     monkeypatch.setattr(f"{_TOOL_MODULE}.platform.system", lambda: "Windows")
-    monkeypatch.setattr(f"{_TOOL_MODULE}.shutil.which", lambda name: f"C:/fake/{name}")
+    monkeypatch.setattr(f"{_SHELLS_MODULE}.shutil.which", lambda name: f"C:/fake/{name}")
     enum = list(_model_properties(ExecuteTerminalTool())["shell"]["enum"])
 
     assert enum == list(get_args(WindowsExecuteTerminalShell))
@@ -193,7 +194,7 @@ def test_platform_name_casing_keeps_model_and_detection_on_the_same_platform(
 
     monkeypatch.setattr(f"{_TOOL_MODULE}.platform.system", lambda: "windows")
     monkeypatch.setattr(
-        f"{_TOOL_MODULE}.shutil.which",
+        f"{_SHELLS_MODULE}.shutil.which",
         lambda name: "C:/Windows/System32/cmd.exe" if name == "cmd.exe" else None,
     )
     tool = ExecuteTerminalTool()

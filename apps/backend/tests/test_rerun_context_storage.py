@@ -79,7 +79,7 @@ def test_exclude_from_keeps_late_results_of_earlier_calls(isolated_storage, tmp_
         }
 
     def _placeholder() -> ToolMessageMetadata:
-        return ToolMessageMetadata(status="pending", deferred=True)
+        return ToolMessageMetadata(status="pending", background=True)
 
     def result_of(call_id: str) -> UserMessageMetadata:
         return UserMessageMetadata(kind="background_result", tool_call_id=call_id)

@@ -138,7 +138,7 @@ def test_page_content_fences_the_snapshot_and_reports_context(
     }
     _install(monkeypatch, page)
 
-    content = BrowserSnapshotTool().execute("t1", execution_context=context).content
+    content = BrowserSnapshotTool().execute("t1", None, execution_context=context).content
 
     assert content.startswith("tab t1 · Example · https://example.com/ (still loading)")
     assert "other tabs in this task: t2" in content
@@ -184,6 +184,94 @@ def test_navigate_args_need_exactly_one_target() -> None:
         BrowserNavigateArgs(url="https://example.com/", action="reload")
     with pytest.raises(ValidationError):
         BrowserSnapshotArgs(tab="tab-1")
+
+
+def test_snapshot_pages_from_the_given_line(
+    monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
+) -> None:
+    link = _install(monkeypatch, PAGE)
+
+    BrowserSnapshotTool().execute(None, 120, execution_context=context)
+    BrowserSnapshotTool().execute(None, None, execution_context=context)
+
+    assert link.calls[0][1]["from_line"] == 120
+    # 不分页时不发：宿主按缺省从第 1 行读。
+    assert "from_line" not in link.calls[1][1]
+
+
+def _actions(*actions: dict[str, Any]) -> list[dict[str, Any]]:
+    """走执行器真实的参数路径（schema + 参数模型），返回 handler 拿到的动作字典。"""
+
+    definition = BrowserActTool().to_definition()
+    validation = validate_tool_arguments(
+        {"actions": list(actions), "tab": None},
+        definition.parameters_schema,
+        definition.args_model,
+    )
+    assert validation.ok, validation.error
+    return validation.arguments["actions"]
+
+
+def test_new_actions_reach_the_host_without_unset_fields(
+    monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
+) -> None:
+    link = _install(monkeypatch, {**PAGE, "completed": 4, "failure": None})
+    actions = _actions(
+        {"type": "hover", "ref": "e3"},
+        {"type": "press", "key": "k", "modifiers": ["ControlOrMeta"], "ref": None},
+        {"type": "scroll", "direction": "down", "ref": "e8"},
+        {"type": "wait_for", "text": None, "text_gone": "Loading", "seconds": None},
+    )
+
+    BrowserActTool().execute(actions, None, execution_context=context)
+
+    assert link.calls[0][1]["actions"] == [
+        {"type": "hover", "ref": "e3"},
+        {"type": "press", "key": "k", "modifiers": ["ControlOrMeta"]},
+        {"type": "scroll", "direction": "down", "ref": "e8"},
+        {"type": "wait_for", "text_gone": "Loading"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"type": "scroll", "direction": None, "ref": None},
+        {"type": "wait_for", "text": "a", "text_gone": "b", "seconds": None},
+        {"type": "wait_for", "text": None, "text_gone": None, "seconds": None},
+        {"type": "press", "key": "K", "modifiers": None, "ref": None},
+        {"type": "press", "key": "F5", "modifiers": None, "ref": None},
+    ],
+)
+def test_action_models_reject_meaningless_combinations(action: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        BrowserActArgs.model_validate({"actions": [action], "tab": None})
+
+
+def test_scroll_end_comes_back_with_advice(
+    monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
+) -> None:
+    outcome = {
+        **PAGE,
+        "completed": 0,
+        "failure": {
+            "index": 0,
+            "code": "SCROLL_END",
+            "message": "the page is already at the bottom",
+        },
+    }
+    _install(monkeypatch, outcome)
+
+    observation = BrowserActTool().execute(
+        _actions({"type": "scroll", "direction": "down", "ref": None}),
+        None,
+        execution_context=context,
+    )
+
+    assert observation.status == "success"
+    assert "failed (SCROLL_END): the page is already at the bottom. Nothing further" in (
+        observation.content
+    )
 
 
 def test_models_export_strict_schemas() -> None:

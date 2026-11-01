@@ -13,8 +13,8 @@ from app.core.tool.background import deferred_registry as deferred_module
 from app.core.tool.background.deferred_job import ManualJob, ThreadJob
 from app.core.tool.background.deferred_registry import deferred_registry
 from app.core.tool.background.run_deferred import run_deferred
-from app.core.tool.schemas import DeferredCapability, ToolDefinition
-from app.core.tool.schemas.tool_deferred import background_field
+from app.core.tool.schemas import BackgroundCapability, ToolDefinition
+from app.core.tool.schemas.tool_background import background_field
 
 
 @pytest.fixture
@@ -182,7 +182,7 @@ def test_manual_job_delivers_once() -> None:
 def test_deferred_tools_must_declare_the_background_argument() -> None:
     from pydantic import BaseModel
 
-    capability = DeferredCapability(default_background=False, foreground_limit_s=None)
+    capability = BackgroundCapability(default_background=False, foreground_limit_s=None)
 
     class Plain(BaseModel):
         x: int
@@ -194,7 +194,7 @@ def test_deferred_tools_must_declare_the_background_argument() -> None:
     def definition(model):
         return ToolDefinition(
             name="probe", group="g", description="d", handler=lambda **_: None,
-            args_model=model, deferred=capability,
+            args_model=model, background=capability,
         )
 
     with pytest.raises(ValueError):

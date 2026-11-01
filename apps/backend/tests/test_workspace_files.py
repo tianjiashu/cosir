@@ -156,10 +156,12 @@ def test_http_contract_and_resource_range(files, workspace_root):
             client.get("/workspaces/1/files/info", params={"path": "data.txt"}).json()["kind"]
             == "text"
         )
-        assert client.get("/workspaces/1/files/info", params={"path": "missing"}).status_code == 404
-        assert (
-            client.get("/workspaces/2/files/info", params={"path": "data.txt"}).status_code == 404
-        )
+        missing_file = client.get("/workspaces/1/files/info", params={"path": "missing"})
+        assert missing_file.status_code == 404
+        assert missing_file.json()["detail"]["code"] == "FILE_NOT_FOUND"
+        missing_workspace = client.get("/workspaces/2/files/info", params={"path": "data.txt"})
+        assert missing_workspace.status_code == 404
+        assert missing_workspace.json()["detail"]["code"] == "WORKSPACE_NOT_FOUND"
         assert (
             client.get("/workspaces/1/files/info", params={"path": "../escape"}).status_code == 400
         )

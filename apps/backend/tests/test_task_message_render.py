@@ -11,7 +11,10 @@ def test_user_input_lists_each_image_path_on_its_own_line() -> None:
         presentation=UserInputPresentation(display_text="看图", image_paths=["/a.png", "/b.png"]),
     )
 
-    assert body.text.endswith(">看图\nimage_paths:\n- /a.png\n- /b.png</user_input>")
+    assert body.text.endswith(
+        ">看图\nimage_paths:\n- /a.png\n- /b.png"
+        "\n\nOutput rules: follow <output_layer>.</user_input>"
+    )
 
 
 def test_user_input_without_images_has_no_image_paths_field() -> None:
@@ -22,3 +25,16 @@ def test_user_input_without_images_has_no_image_paths_field() -> None:
     )
 
     assert "image_paths" not in body.text
+    assert body.text.endswith("\n\nOutput rules: follow <output_layer>.</user_input>")
+
+def test_user_input_with_images_only_still_carries_its_tag() -> None:
+    """有图无字也发标签：输入协议承诺每条 user 消息都被一个标签包裹。"""
+
+    body = UserInputBody(
+        input_text="",
+        launch=RunLaunch(model_config_id=1),
+        presentation=UserInputPresentation(display_text="", image_paths=["/a.png"]),
+    )
+
+    assert body.text.startswith("<user_input time=")
+    assert body.text.endswith("</user_input>")

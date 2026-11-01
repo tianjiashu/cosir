@@ -122,7 +122,7 @@ def test_send_merged_into_a_running_child_is_not_registered(monkeypatch, tmp_pat
 
     assert observation.status == "success"
     assert '"status":"merged"' in observation.content
-    assert observation.deferred is False
+    assert observation.background is False
     assert deferred_registry.pending(_PARENT) == []
     assert scheduled == []
     [kwargs] = prepared
@@ -133,7 +133,7 @@ def test_send_that_starts_a_new_run_is_registered(monkeypatch, tmp_path) -> None
     observation, prepared, scheduled = _send(monkeypatch, tmp_path, child_status="completed")
 
     assert '"status":"submitted"' in observation.content
-    assert observation.deferred is True
+    assert observation.background is True
     assert deferred_registry.pending(_PARENT) == [f"child_task:{_CHILD}"]
     assert len(scheduled) == 1
     [kwargs] = prepared
@@ -159,4 +159,4 @@ def test_child_tools_always_run_in_the_background() -> None:
 
     assert "background" not in DelegateTaskArgs.model_fields
     assert "background" not in ChildAgentSendArgs.model_fields
-    assert child_agent_send.ChildAgentSendTool().to_definition().deferred is None
+    assert child_agent_send.ChildAgentSendTool().to_definition().background is None

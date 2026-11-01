@@ -90,21 +90,36 @@ def test_enforce_budget_is_unlimited_without_token_limit():
     assert spb.SystemPromptBuilder._enforce_budget(body) == body
 
 
-def test_message_context_advertises_markdown_rendering_capabilities():
-    out = spb.SystemPromptBuilder._build_message_context(_profile(), "/workspace")
+def test_output_layer_advertises_rendering_and_link_rules():
+    """输出契约独立成层：Markdown 能力与链接格式写在这里，不再混进运行期事实。"""
 
+    out = spb.SystemPromptBuilder._build_output_layer()
+
+    assert out.startswith("<output_layer>") and out.endswith("</output_layer>")
     assert (
         "- Markdown output: LaTeX math (`$$...$$`), Mermaid diagrams (including "
         "`sequenceDiagram`), CJK-friendly formatting, and syntax-highlighted fenced "
         "code are supported; use them when helpful."
     ) in out
+    assert "put line numbers in the fragment, e.g. `[app.ts:42](src/app.ts#L42)`" in out
+    assert "- User language: " in out
+
+
+def test_runtime_context_no_longer_carries_output_rules():
+    """运行期事实层只管事实：输出契约都搬去 output_layer，避免同一规则两处维护。"""
+
+    out = spb.SystemPromptBuilder._build_message_context("/workspace")
+
+    assert "Markdown output" not in out
+    assert "User language" not in out
+    assert "- Workspace rules: " in out
 
 
 def test_message_context_declares_every_input_message_tag():
     """消息协议须覆盖全部入队消息类型：render 不附带读法说明，漏登记即模型不知其含义。"""
 
     assert set(get_args(MessageBody)) <= set(MODEL_INPUT_BODIES)
-    out = spb.SystemPromptBuilder._build_message_context(_profile(), "/workspace")
+    out = spb.SystemPromptBuilder._build_message_context("/workspace")
 
     for body in MODEL_INPUT_BODIES:
         assert f"  - <{body.TAG}>: {body.PROMPT_GUIDE}" in out

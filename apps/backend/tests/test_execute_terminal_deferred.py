@@ -15,7 +15,7 @@ import pytest
 
 from app.core.tool.background import deferred_registry as deferred_module
 from app.core.tool.background.deferred_registry import deferred_registry
-from app.core.tool.schemas import DeferredCapability, ToolExecutionContext
+from app.core.tool.schemas import BackgroundCapability, ToolExecutionContext
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal import LocalExecutionBackend
@@ -61,7 +61,7 @@ def test_foreground_command_returns_its_result_without_registering(tmp_path, del
     observation = ExecuteTerminalTool().execute(
         command="echo hello", execution_context=_context(tmp_path, "call-fg")
     )
-    assert observation.status == "success" and not observation.deferred
+    assert observation.status == "success" and not observation.background
     assert observation.content.startswith("[exit_code=0]") and "hello" in observation.content
     assert not deferred_registry.owns(_TASK_ID, "call-fg")
     assert delivered == []
@@ -74,7 +74,7 @@ def test_background_command_returns_a_placeholder_then_delivers(tmp_path, delive
         execution_context=_context(tmp_path, "call-bg"),
     )
     # Agent 主动选后台：先做别的，不挂起。
-    assert observation.deferred and not observation.suspend
+    assert observation.background and not observation.suspend
     assert observation.display_data == {
         "kind": "terminal-result",
         "command": "sleep 0.2; echo done",
@@ -96,13 +96,13 @@ def test_foreground_limit_moves_the_command_to_background_and_suspends(
 ) -> None:
     monkeypatch.setattr(
         execute_terminal_module,
-        "EXECUTE_TERMINAL_DEFERRED",
-        DeferredCapability(default_background=False, foreground_limit_s=0.1),
+        "EXECUTE_TERMINAL_BACKGROUND",
+        BackgroundCapability(default_background=False, foreground_limit_s=0.1),
     )
     observation = ExecuteTerminalTool().execute(
         command="sleep 0.5; echo late", execution_context=_context(tmp_path, "call-limit")
     )
-    assert observation.deferred and observation.suspend
+    assert observation.background and observation.suspend
     assert "<background_result>" in observation.content
     _wait_for(lambda: len(delivered) == 1)
     assert "late" in str(delivered[0][2]["output"])

@@ -125,15 +125,23 @@ def test_error_observations_use_controlled_status_hints() -> None:
 
 
 def test_shell_resolver_lists_installed_shells_with_integration(monkeypatch) -> None:
-    installed = {"zsh", "bash", "pwsh"}
-    monkeypatch.setattr(
-        "app.tools.terminal_runtime.shell_resolver.shutil.which",
-        lambda value: f"/bin/{value}" if value in installed else None,
-    )
+    # Windows 按 <shell>.exe 定位，POSIX 按名字定位（见 host_shells.find_shell）；与真实
+    # shutil.which 一致，传入已安装 shell 的路径（$SHELL）时原样返回。
+    installed = {"zsh", "bash", "pwsh", "pwsh.exe"}
+
+    def which(value: str) -> str | None:
+        name = value.removeprefix("/bin/")
+        return f"/bin/{name}" if name in installed else None
+
+    monkeypatch.setattr("app.tools.shell.host_shells.shutil.which", which)
+    # /bin/sh 按固定路径探测，不经 PATH。
+    monkeypatch.setattr("app.tools.shell.host_shells.os.path.isfile", lambda _path: True)
+    monkeypatch.setattr("app.tools.shell.host_shells.os.access", lambda *_a, **_k: True)
     shells = ShellResolver.available(system="Darwin", environ={"SHELL": "/bin/zsh"})
-    assert [s["kind"] for s in shells] == ["zsh", "bash", "pwsh"]
-    assert shells[0]["isDefault"] is True and shells[1]["isDefault"] is False
-    assert [s["integrationSupported"] for s in shells] == [True, True, True]
+    # 顺序即 shell 目录的声明顺序，与 execute_terminal 的 enum 一致；默认项单独标记。
+    assert [s["kind"] for s in shells] == ["sh", "bash", "zsh", "pwsh"]
+    assert [s["isDefault"] for s in shells] == [False, False, True, False]
+    assert [s["integrationSupported"] for s in shells] == [False, True, True, True]
     windows = ShellResolver.available(system="Windows", environ={})
     assert [s["kind"] for s in windows] == ["pwsh"]
 

@@ -97,4 +97,5 @@ def health():
 
 app.router.lifespan_context = fixture_lifespan
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8766, log_level="warning")
+    # 端口由 spec 按 E2E slot 传入（apps/desktop/tests/e2e/e2e-env.ts），并行运行各用各的。
+    uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[1]), log_level="warning")
