@@ -2,6 +2,8 @@
 
 from typing import ClassVar
 
+from app.core.tool.handoff.conflict import handoff_conflict_observation
+from app.core.tool.handoff.handoff_registry import HandoffConflictError, handoff_registry
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
@@ -29,12 +31,13 @@ _SESSION_GONE = (
 
 
 class TerminalHandoffTool(HandlerBase):
-    """交接复用 HITL：首次调用登记交接并返回等待占位（挂起 Agent），用户交还即对这次调用作出决定，
-    决定到达后 ``prepare_input`` 绕过模型重放本调用，报告交接以来的输出。
+    """交接 = HITL + 把会话交给用户（``handoff_registry``）：首次调用登记交接并返回等待占位（挂起
+    Agent），用户交还即对这次调用作出决定，决定到达后 ``prepare_input`` 绕过模型重放本调用，取回登记
+    并报告交接以来的输出。
 
-    交接只是会话上的提示，不改变输入仲裁、不登记延迟结果。会话在交接中意外结束（shell 退出、用户
-    关闭）时由终端运行时代为作出决定，Agent 不会一直挂着；后端关闭不代为落定，等待中的决定按 HITL
-    契约保留，之后交还会报告会话已不在。
+    交接不改变输入仲裁、不登记延迟结果。会话在交接中意外结束（shell 退出、用户关闭）时由终端运行时
+    经登记表代为作出决定，Agent 不会一直挂着；后端关闭不代为落定，等待中的决定按 HITL 契约保留，
+    之后交还会报告会话已不在。
     """
 
     name = TOOL_TERMINAL_HANDOFF
@@ -63,7 +66,12 @@ class TerminalHandoffTool(HandlerBase):
         if execution_context.user_decision is None:
 
             def begin() -> ToolObservation:
-                result = service.require(session_id, task_id).begin_handoff(reason, tool_call_id)
+                try:
+                    result = service.require(session_id, task_id).begin_handoff(
+                        reason, tool_call_id
+                    )
+                except HandoffConflictError as exc:
+                    return handoff_conflict_observation(self.name, exc)
                 return tool_awaiting_decision(
                     self.name,
                     tool_call_id,
@@ -72,9 +80,12 @@ class TerminalHandoffTool(HandlerBase):
 
             return with_terminal_errors(self.name, begin)
 
+        # 先取回登记：会话已不在时登记也要结束，资源一侧不会再提示交接中。
+        handoff = handoff_registry.end(tool_call_id)
+
         def end() -> ToolObservation:
             try:
-                result = service.require(session_id, task_id).end_handoff(tool_call_id)
+                result = service.require(session_id, task_id).end_handoff(handoff)
             except TerminalSessionNotFoundError:
                 return tool_success(self.name, _SESSION_GONE)
             return observation_result(self.name, result)

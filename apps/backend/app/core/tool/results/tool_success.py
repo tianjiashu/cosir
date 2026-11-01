@@ -8,7 +8,7 @@
 """
 
 import copy
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.core.tool.schemas import ToolObservation
@@ -21,6 +21,7 @@ def tool_success(
     display_data: Mapping[str, Any] | None = None,
     suspend: bool = False,
     artifact_data: Mapping[str, Any] | None = None,
+    images: Sequence[str] = (),
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
 
@@ -33,6 +34,8 @@ def tool_success(
         display_data: 仅供客户端展示消费的结构化数据；会写入
             ``ToolObservation.display_data``，不会回传给模型。
         suspend: 调用结束后 Agent 应挂起等待消息（见 ``ToolObservation.suspend``）。
+        images: 给模型看的图片（``AttachmentService.save_image`` 返回的相对路径）；工具定义须声明
+            ``returns_images``，模型不支持图片时准入门禁会先拒绝。
 
     返回:
         :class:`ToolObservation`：``status="success"``。
@@ -61,6 +64,7 @@ def tool_success(
         content=content,
         tool_call_id=tool_call_id,
         suspend=suspend,
+        images=tuple(images),
     )
     observation.display_data = copy.deepcopy(dict(display_data or {}))
     observation.artifact_data = copy.deepcopy(dict(artifact_data or {}))

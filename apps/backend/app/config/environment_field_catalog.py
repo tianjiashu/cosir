@@ -15,6 +15,9 @@ from app.models.environment.environment_group import EnvironmentGroup
 ENVIRONMENT_GROUPS: tuple[EnvironmentGroup, ...] = (
     EnvironmentGroup("general", "基础配置", "控制 Agent 的通用运行行为。"),
     EnvironmentGroup("web", "网页工具", "配置网页搜索与正文提取使用的 Firecrawl 凭证和服务地址。"),
+    EnvironmentGroup(
+        "browser", "浏览器", "限制内置浏览器同时打开的标签页数量；调小不会关闭已打开的标签。"
+    ),
 )
 
 ENVIRONMENT_FIELDS: dict[str, EnvironmentField] = {
@@ -59,5 +62,27 @@ ENVIRONMENT_FIELDS: dict[str, EnvironmentField] = {
         False,
         "",
         placeholder=Constant.Web.FIRECRAWL_DEFAULT_BASE_URL,
+    ),
+    "BROWSER_MAX_TABS_PER_TASK": EnvironmentField(
+        "BROWSER_MAX_TABS_PER_TASK",
+        "integer",
+        "input",
+        "browser",
+        "每个任务的标签上限",
+        False,
+        5,
+        placeholder="请输入正整数",
+        minimum=1,
+    ),
+    "BROWSER_MAX_TABS": EnvironmentField(
+        "BROWSER_MAX_TABS",
+        "integer",
+        "input",
+        "browser",
+        "全部任务的标签上限",
+        False,
+        20,
+        placeholder="请输入正整数",
+        minimum=1,
     ),
 }

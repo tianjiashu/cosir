@@ -294,7 +294,7 @@ class RuntimeMessageContextManager:
                 display_data=metadata.display_data or previous.display_data,
                 team_run_id=metadata.team_run_id or previous.team_run_id,
                 hidden=previous.hidden,
-                deferred=previous.deferred,
+                background=previous.background,
             )
         self.context_store.replace_message(
             ConversationTaskContextRecord(

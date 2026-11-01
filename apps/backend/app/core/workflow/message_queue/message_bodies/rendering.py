@@ -1,6 +1,15 @@
-"""消息渲染的公共零件：标签转义与渲染时刻，供各类 body 复用。"""
+"""消息渲染的公共零件：标签转义、渲染时刻与带图片的 user 消息，供各类 body 复用。"""
 
+from collections.abc import Sequence
 from datetime import datetime
+
+from openai.types.chat import (
+    ChatCompletionContentPartImageParam,
+    ChatCompletionContentPartParam,
+    ChatCompletionContentPartTextParam,
+    ChatCompletionUserMessageParam,
+)
+from openai.types.chat.chat_completion_content_part_image_param import ImageURL
 
 
 def escape_tag(text: str, tag: str) -> str:
@@ -16,3 +25,25 @@ def render_time() -> str:
     """
 
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def user_message_with_images(
+    text: str, image_paths: Sequence[str]
+) -> ChatCompletionUserMessageParam:
+    """文字加附件图片的 user 消息；没有图片时正文就是纯文字。
+
+    图片只写本地定位符 ``cosir-attachment://<workspace 相对路径>``，发请求前才由 ``vision_input``
+    解析成 data URL，context 里不落 base64。用户上传的图片与工具产出的图片共用这一个拼装点。
+    """
+    if not image_paths:
+        return ChatCompletionUserMessageParam(role="user", content=text)
+    content: list[ChatCompletionContentPartParam] = []
+    if text:
+        content.append(ChatCompletionContentPartTextParam(text=text, type="text"))
+    content.extend(
+        ChatCompletionContentPartImageParam(
+            image_url=ImageURL(url=f"cosir-attachment://{path}"), type="image_url"
+        )
+        for path in image_paths
+    )
+    return ChatCompletionUserMessageParam(role="user", content=content)

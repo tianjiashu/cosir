@@ -318,6 +318,6 @@ def _uninherited(metadata: MessageMetadata) -> MessageMetadata:
     它的结论，卡片以短提示「未继承」说明，不另设状态。"""
 
     copied = copy.deepcopy(metadata)
-    if isinstance(copied, ToolMessageMetadata) and copied.deferred and copied.status == "pending":
+    if isinstance(copied, ToolMessageMetadata) and copied.background and copied.status == "pending":
         return copied.model_copy(update={"status": "cancelled", "error": "未继承"})
     return copied

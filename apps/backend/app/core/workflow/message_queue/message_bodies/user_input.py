@@ -6,17 +6,14 @@
 
 from typing import TYPE_CHECKING, ClassVar
 
-from openai.types.chat import (
-    ChatCompletionContentPartImageParam,
-    ChatCompletionContentPartParam,
-    ChatCompletionContentPartTextParam,
-    ChatCompletionUserMessageParam,
-)
-from openai.types.chat.chat_completion_content_part_image_param import ImageURL
+from openai.types.chat import ChatCompletionUserMessageParam
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.workflow.message_queue.message_bodies.base import EnqueuedMessageBody, TaskMessageKind
-from app.core.workflow.message_queue.message_bodies.rendering import render_time
+from app.core.workflow.message_queue.message_bodies.rendering import (
+    render_time,
+    user_message_with_images,
+)
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.message_metadata import UserMessageMetadata
@@ -62,33 +59,30 @@ class UserInputBody(EnqueuedMessageBody):
     input_text: str
     launch: RunLaunch
     presentation: UserInputPresentation
-    # 父 Agent 经 delegate_task / child_agent_send 投递时那次调用的身份；用户直接输入为 None。
-    # 不属于发起配置：不参与运行期配置比较，只随新 Run 记到 Run 上（见 ``StartRun``）。
-    trigger_tool_call_id: str | None = None
 
     @property
     def text(self) -> str:
+        """标签正文：用户输入、图片清单，末端附一句「按 ``<output_layer>`` 输出」的提醒。
+
+        提醒每轮都写进 canonical 历史（约 6 token）：长对话里模型会按自己的习惯漂移格式（尤其
+        回复语言与文件链接），靠系统提示词之外的最近一句把它拉回来。代价是历史随轮次线性增长，
+        且这句位于 ``<user_input>`` 内、会被读成用户引言——规则本体在 ``<output_layer>``，
+        这里只指路，不重复内容。
+        """
+
         img_paths = "".join(f"\n- {path}" for path in self.presentation.image_paths)
         if img_paths:
             img_paths = "\nimage_paths:" + img_paths
-        return (f'<{self.TAG} time="{render_time()}">'
-                f"{self.input_text}{img_paths}"
-                f"</{self.TAG}>")
+        return (
+            f'<{self.TAG} time="{render_time()}">'
+            f"{self.input_text}{img_paths}"
+            f"\n\nOutput rules: follow <output_layer>."
+            f"</{self.TAG}>"
+        )
 
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
         """模型正文（图片用本地 locator，发请求前才解析，不落盘 base64）与展示绑定分开返回。"""
 
         metadata = UserMessageMetadata(kind="user_input", presentation=self.presentation)
-        if not self.presentation.image_paths:
-            return ChatCompletionUserMessageParam(role="user", content=self.text), metadata
-        content: list[ChatCompletionContentPartParam] = []
-        if self.input_text:
-            content.append(ChatCompletionContentPartTextParam(text=self.text, type="text"))
-        content.extend(
-            ChatCompletionContentPartImageParam(
-                image_url=ImageURL(url=f"cosir-attachment://{path}"),
-                type="image_url"
-            )
-            for path in self.presentation.image_paths
-        )
-        return ChatCompletionUserMessageParam(role="user", content=content), metadata
+        # 有图无字也照常发标签：输入协议承诺每条 user 消息都带一个标签，空标签比无标签好认。
+        return user_message_with_images(self.text, self.presentation.image_paths), metadata

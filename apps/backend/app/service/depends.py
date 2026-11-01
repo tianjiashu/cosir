@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.task_runtime.service.task_service import TaskService
+    from app.tools.host.host_link import HostLink
     from app.tools.mcp.connection_pool import MCPConnectionPool
     from app.tools.terminal_runtime.session_service import TerminalSessionService
 
@@ -164,6 +165,15 @@ def get_mcp_connection_pool() -> MCPConnectionPool:
     from app.tools.mcp.connection_pool import MCPConnectionPool
 
     return MCPConnectionPool()
+
+
+@lru_cache(maxsize=1)
+def get_host_link() -> HostLink:
+    """返回进程级宿主工具链路；连接由宿主主动建立，断开时未决请求随之失败，不需要关闭钩子。"""
+
+    from app.tools.host.host_link import HostLink
+
+    return HostLink()
 
 
 @lru_cache(maxsize=1)
@@ -417,6 +427,7 @@ def reset_service_dependencies() -> None:
     get_conversation_task_context_service.cache_clear()
     get_model_config_service.cache_clear()
     get_model_discovery_service.cache_clear()
+    get_host_link.cache_clear()
 
 
 def _shutdown_cached_runtime_before_reset() -> None:

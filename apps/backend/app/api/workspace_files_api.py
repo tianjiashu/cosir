@@ -37,11 +37,17 @@ T = TypeVar("T")
 
 @contextmanager
 def file_errors() -> Iterator[None]:
-    """文件系统错误在 HTTP 边界唯一映射；流启动后的错误通过流内 error 收敛。"""
+    """文件系统错误在 HTTP 边界唯一映射；流启动后的错误通过流内 error 收敛。
+
+    两种「不存在」带不同的错误码：``FILE_NOT_FOUND`` 是目标的一种状态（已删除、移动或从未存在），前端
+    据此不开标签、展示为中性的「文件不存在」；``WORKSPACE_NOT_FOUND`` 是整个工作区不可用。
+    """
     try:
         yield
-    except (KeyError, FileNotFoundError) as exc:
-        raise HTTPException(404, "文件或工作区已不存在") from exc
+    except KeyError as exc:
+        raise HTTPException(404, {"code": "WORKSPACE_NOT_FOUND", "message": "工作区已不存在"}) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, {"code": "FILE_NOT_FOUND", "message": "文件不存在"}) from exc
     except PermissionError as exc:
         raise HTTPException(403, "无法访问文件，或链接目标位于工作区之外") from exc
     except FileConflictError as exc:

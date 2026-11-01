@@ -32,6 +32,7 @@ from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
 from app.core.tool.background import placeholders
 from app.core.tool.background.deferred_registry import deferred_registry
+from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.message_queue.task_message import (
     Delivery,
@@ -202,6 +203,8 @@ class TransportAssistantService:
             for tool_call_id in withdrawn:
                 if deferred_registry.owns(task_id, tool_call_id):
                     deferred_registry.cancel(tool_call_id, reason="编辑重跑撤回所在一轮，撤销延迟结果")
+            # 这一轮发起的交接随之结束：否则资源一直显示交接中，也无法再次交接。
+            handoff_registry.drop(task_id, withdrawn)
             task_runtime_spaces.enqueue(task_id, message, session=session)
 
     def _republish(self, task_id: int) -> None:

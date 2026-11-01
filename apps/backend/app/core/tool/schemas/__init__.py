@@ -2,7 +2,7 @@
 
 from app.core.tool.schemas.tool_call import ToolCall
 from app.core.tool.schemas.tool_definition import ToolDefinition
-from app.core.tool.schemas.tool_deferred import DeferredCapability
+from app.core.tool.schemas.tool_background import BackgroundCapability
 from app.core.tool.schemas.tool_display import ToolDisplayHints
 from app.core.tool.schemas.tool_execution_context import ToolExecutionContext
 from app.core.tool.schemas.tool_names import (
@@ -21,6 +21,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_PROPOSE_AGENT_CONFIGURATION,
     TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
     TOOL_READ_FILE,
+    TOOL_READ_IMAGE,
     TOOL_REPLACE,
     TOOL_SEARCH_CONTENT,
     TOOL_SKILL,
@@ -32,6 +33,12 @@ from app.core.tool.schemas.tool_names import (
     TOOL_TERMINAL_WRITE,
     TOOL_WAIT_MESSAGES,
     TOOL_WEB_EXTRACT,
+    TOOL_BROWSER_NAVIGATE,
+    TOOL_BROWSER_SNAPSHOT,
+    TOOL_BROWSER_ACT,
+    TOOL_BROWSER_SCREENSHOT,
+    TOOL_BROWSER_TABS,
+    TOOL_BROWSER_HANDOFF,
     TOOL_WEB_SEARCH,
     TOOL_WRITE_FILE,
     ToolName,
@@ -54,6 +61,7 @@ __all__ = [
     "TOOL_PROPOSE_AGENT_CONFIGURATION",
     "TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION",
     "TOOL_READ_FILE",
+    "TOOL_READ_IMAGE",
     "TOOL_REPLACE",
     "TOOL_SEARCH_CONTENT",
     "TOOL_SKILL",
@@ -65,11 +73,17 @@ __all__ = [
     "TOOL_TERMINAL_WRITE",
     "TOOL_WAIT_MESSAGES",
     "TOOL_WEB_EXTRACT",
+    "TOOL_BROWSER_NAVIGATE",
+    "TOOL_BROWSER_SNAPSHOT",
+    "TOOL_BROWSER_ACT",
+    "TOOL_BROWSER_SCREENSHOT",
+    "TOOL_BROWSER_TABS",
+    "TOOL_BROWSER_HANDOFF",
     "TOOL_WEB_SEARCH",
     "TOOL_WRITE_FILE",
     "ToolCall",
     "ToolDefinition",
-    "DeferredCapability",
+    "BackgroundCapability",
     "ToolDisplayHints",
     "ToolExecutionContext",
     "ToolName",

@@ -172,7 +172,7 @@ def terminal_event(
     # 才把展示状态推到终态。
     status = (
         "pending"
-        if observation.awaiting_decision or observation.deferred
+        if observation.awaiting_decision or observation.background
         else terminal_status(observation.status)
     )
     return ToolCallStatusChangedEvent(
@@ -189,7 +189,7 @@ def terminal_event(
             tool_call_id=tool_call_id,
         ),
         team_run_id=observation.team_run_id,
-        deferred=observation.deferred,
+        background=observation.background,
     )
 
 

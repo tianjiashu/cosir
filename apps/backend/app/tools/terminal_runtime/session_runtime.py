@@ -1,7 +1,8 @@
 """单会话执行协调：会话锁保护输入仲裁、观察、条件等待、交接及唯一终态迁移。
 
 service 拥有会话集合、Task 归属与容量；本对象不访问 registry。会话锁内只做内存操作：
-外部副作用（snapshot 重投影、会话结束通知、交接代为落定）都在 ``session_effects``，经 service
+外部副作用（snapshot 重投影、会话结束通知）都在 ``session_effects``（交接的代为落定在
+``handoff_registry``），经 service
 注入的 ``schedule`` 交给 service 的单线程副作用执行器；终态迁移的赢家由
 service 在锁外调用 ``dispose_worker`` 清理 worker。因此 worker 读线程回调本对象时只会短暂持锁，
 不做阻塞 IO。
@@ -31,10 +32,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
+from app.core.tool.handoff.handoff_registry import HandoffLease, handoff_registry
+from app.core.tool.schemas.tool_names import TOOL_TERMINAL_HANDOFF
 from app.tools.terminal_runtime import session_effects
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
@@ -43,7 +46,14 @@ from app.tools.terminal_runtime.errors import (
     TerminalUserCommandRunningError,
     TerminalUserTypingError,
 )
+from app.tools.terminal_runtime.inputs import (
+    DEFAULT_WRITE_WAIT,
+    TerminalWait,
+    require_input_capability,
+    summarize_input,
+)
 from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
+from app.tools.terminal_runtime.observation import InputSource, TerminalObservation
 from app.tools.terminal_runtime.render import (
     KeepMode,
     LineSearch,
@@ -53,23 +63,16 @@ from app.tools.terminal_runtime.render import (
     render_observation,
     render_session_summary,
 )
-from app.tools.terminal_runtime.worker_client import (
-    ProcessTerminalWorker,
-    WorkerEventCallback,
-)
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
-from app.tools.terminal_runtime.inputs import (
-    DEFAULT_WRITE_WAIT,
-    TerminalWait,
-    require_input_capability,
-    summarize_input,
-)
-from app.tools.terminal_runtime.observation import InputSource, TerminalObservation
 from app.tools.terminal_runtime.stream import (
     TerminalStreamAttachment,
     TerminalStreamBuffer,
 )
 from app.tools.terminal_runtime.wait import WaitBaseline, WaitEvaluator
+from app.tools.terminal_runtime.worker_client import (
+    ProcessTerminalWorker,
+    WorkerEventCallback,
+)
 
 RunCancellationCheck = Callable[[], bool]
 EffectScheduler = Callable[[Callable[[], None]], None]
@@ -92,15 +95,6 @@ _FATAL_WORKER_ERROR_REASONS = {
 
 
 @dataclass(frozen=True)
-class _Handoff:
-    """进行中的交接：按发起它的 ``terminal_handoff`` 调用寻址，交还时从 ``from_line`` 报告用户做了什么。"""
-
-    tool_call_id: str
-    reason: str
-    from_line: int
-
-
-@dataclass(frozen=True)
 class SessionSnapshot:
     """会话在某一时刻的只读事实，取自同一次会话锁内。
 
@@ -119,8 +113,6 @@ class SessionSnapshot:
     exit_code: int | None
     integration: str
     command_running: bool
-    handoff_reason: str | None
-    handoff_call_id: str | None
     # 给模型的一行摘要（start / close / list 共用）：身份、创建者、当前状态与最近命令。
     summary: str
 
@@ -183,14 +175,15 @@ class TerminalSessionRuntime:
         self._start_lock = threading.Lock()
         self._pending_geometry: tuple[int, int] | None = None
         self._disposal_finished = threading.Event()
-        self._stream = TerminalStreamBuffer(self.session_id, Constant.Terminal.MAX_RING_BUFFER_BYTES)
+        self._stream = TerminalStreamBuffer(
+            self.session_id, Constant.Terminal.MAX_RING_BUFFER_BYTES
+        )
         self._observation = TerminalObservation(spec.kind, spec.integration)
         self._accepted_writes: OrderedDict[str, bytes] = OrderedDict()
         self._user_last_input = float("-inf")
         # 最近一次被接受输入的来源：shell 报告命令开始时据此记下发起方（见 ``TerminalCommand``）。
         self._last_input_by: InputSource | None = None
         self._user_marks = _UserInputMarks()
-        self._handoff: _Handoff | None = None
         # 正在会话条件变量上进行的 Agent 条件等待；会话结束时它们会把结果带给 Agent，不必另发结束通知。
         self._agent_waits = 0
         # 上一次无等待读取的（信息版本, 状态, 请求参数），用于识别「无变化的重复读取」。
@@ -299,7 +292,7 @@ class TerminalSessionRuntime:
         关闭）；Agent 自己关闭、启动失败（错误直接返回给调用方）、Task 删除与后端关闭不需要告知。
         仅当会话由 Agent 创建、且没有条件等待或交接会把 ``session_ended`` 带回给它时，经副作用
         执行器投递一条结束通知（系统通知，不唤醒 Run，随下一次推进并入）。交接中的会话结束、且这次
-        结束需要告知时，由运行时代用户落定那次 HITL 调用（见 ``session_effects.settle_handoff``）；后端关闭与
+        结束需要告知时，由运行时代用户落定那次 HITL 调用（``handoff_registry.settle``）；后端关闭与
         Task 删除不代为落定：等待中的决定按 HITL 契约保留，之后交还会报告会话已不在。
         """
         with self._condition:
@@ -311,7 +304,8 @@ class TerminalSessionRuntime:
             self._status = status
             self._stream.finish()
             self._condition.notify_all()
-            handoff, self._handoff = self._handoff, None
+            # 交接中结束：取登记要在会话锁内，与 ``begin_handoff`` 的登记原子地裁决先后。
+            handoff = handoff_registry.on_resource("terminal", self.session_id)
             notice = (
                 render_end_notice(
                     self._facts(), self._observation, label=self.label, created_by=self.created_by
@@ -340,7 +334,10 @@ class TerminalSessionRuntime:
             self._schedule(lambda: session_effects.post_session_ended_notice(self.task_id, notice))
         if handoff is not None and announce:
             self._schedule(
-                lambda: session_effects.settle_handoff(self.task_id, handoff.tool_call_id)
+                lambda: handoff_registry.settle(
+                    handoff.tool_call_id,
+                    "the terminal session ended before the user handed it back",
+                )
             )
         return True
 
@@ -661,84 +658,60 @@ class TerminalSessionRuntime:
     def begin_handoff(self, reason: str, tool_call_id: str) -> TerminalObservationResult:
         """登记一次交接（``terminal_handoff`` 首次调用），返回给卡片展示的当前尾部。
 
-        交接只是会话上的提示与 snapshot 投影：不改变输入仲裁（用户本来就能输入），也不登记延迟结果——
-        等待交给 HITL：工具返回等待占位挂起 Agent，用户交还即对这次调用作出决定。
+        交接事实在 ``handoff_registry``（会话上不另记一份）；在会话锁内登记，与会话结束原子地裁决
+        先后——结束时看得到这条登记，才能代用户落定。交接不改变输入仲裁（用户本来就能输入），也不
+        登记延迟结果：等待交给 HITL，用户交还即对这次调用作出决定。``memo`` 记下交接那一刻的末行，
+        交还时从这里报告用户做了什么。
+
+        异常:
+            HandoffConflictError: 这个会话已在交接中。
         """
         with self._condition:
             self._mutable_worker()
-            if self._handoff is not None:
-                raise TerminalSessionStateError("a handoff is already active for this session")
             buffer = self._observation.buffer
-            self._handoff = _Handoff(
-                tool_call_id=tool_call_id, reason=reason, from_line=buffer.last_line
+            handoff_registry.begin(
+                HandoffLease(
+                    tool_call_id=tool_call_id,
+                    task_id=self.task_id,
+                    tool_name=TOOL_TERMINAL_HANDOFF,
+                    surface="terminal",
+                    resource_id=self.session_id,
+                    reason=reason,
+                    memo=buffer.last_line,
+                )
             )
-            result = self._build_result(
+            return self._build_result(
                 self._default_tail_start(),
                 buffer.last_line,
                 "tail",
                 input_type="handoff",
                 input_summary=reason,
             )
-        log.info(
-            "terminal_handoff_started",
-            extra={
-                "msg": "Agent 把终端输入权交给用户",
-                "data": {
-                    "task_id": self.task_id,
-                    "session_id": self.session_id,
-                    "tool_call_id": tool_call_id,
-                },
-            },
-        )
-        self.notify_changed()
-        return result
 
-    def end_handoff(self, tool_call_id: str) -> TerminalObservationResult:
-        """交接的决定到达后重放 ``terminal_handoff``：清除交接，报告交接以来的输出。
+    def end_handoff(self, handoff: HandoffLease | None) -> TerminalObservationResult:
+        """交接的决定到达后重放 ``terminal_handoff``：报告交接以来的输出。
 
-        会话仍活着时从交接那一刻的末行报告到现在（用户输入的行照常标注）；会话已结束时报告尾部并
-        说明。交接已不在（重复决定、已被清除）时同样只给尾部，不报错：决定只会执行一次，结果总要
-        让等待占位收尾。
+        ``handoff`` 是工具从登记表取回的那条；已不在（重复决定、被代为落定、后端重启过）时只给尾部，
+        不报错：决定只会执行一次，结果总要让等待占位收尾。会话已结束时报告尾部并说明。
         """
         with self._condition:
-            handoff = self._handoff
-            if handoff is not None and handoff.tool_call_id == tool_call_id:
-                self._handoff = None
-            else:
-                handoff = None
             buffer = self._observation.buffer
             if self._status not in _ACTIVE:
-                result = self._build_result(
+                return self._build_result(
                     self._default_tail_start(),
                     buffer.last_line,
                     "tail",
                     note="the session ended before the user handed it back",
                     input_type="handoff",
                 )
-            else:
-                result = self._build_result(
-                    handoff.from_line if handoff is not None else self._default_tail_start(),
-                    buffer.last_line,
-                    "both",
-                    note="the user handed the terminal back to you",
-                    input_type="handoff",
-                    input_summary=handoff.reason if handoff is not None else None,
-                )
-        log.info(
-            "terminal_handoff_completed",
-            extra={
-                "msg": "终端交接结束",
-                "data": {
-                    "task_id": self.task_id,
-                    "session_id": self.session_id,
-                    "tool_call_id": tool_call_id,
-                    "active": self._status in _ACTIVE,
-                },
-            },
-        )
-        if handoff is not None:
-            self.notify_changed()
-        return result
+            return self._build_result(
+                cast(int, handoff.memo) if handoff is not None else self._default_tail_start(),
+                buffer.last_line,
+                "both",
+                note="the user handed the terminal back to you",
+                input_type="handoff",
+                input_summary=handoff.reason if handoff is not None else None,
+            )
 
     def notify_changed(self) -> None:
         """影响 snapshot 会话条目的变化：经副作用线程整表重投影（见 ``session_effects``）。"""
@@ -879,7 +852,7 @@ class TerminalSessionRuntime:
             end_reason=self._end_reason,
             exit_code=self._exit_code,
             user_typing=self._user_typing(),
-            handed_off=self._handoff is not None,
+            handed_off=handoff_registry.on_resource("terminal", self.session_id) is not None,
             user_marks=self._user_marks.lines,
             user_typed_in_screen=self._user_marks.in_screen,
         )
@@ -888,7 +861,6 @@ class TerminalSessionRuntime:
 
     def snapshot(self) -> SessionSnapshot:
         with self._condition:
-            handoff = self._handoff
             return SessionSnapshot(
                 session_id=self.session_id,
                 label=self.label,
@@ -901,8 +873,6 @@ class TerminalSessionRuntime:
                 exit_code=self._exit_code,
                 integration=self._observation.integration_status,
                 command_running=self._observation.active_command is not None,
-                handoff_reason=handoff.reason if handoff else None,
-                handoff_call_id=handoff.tool_call_id if handoff else None,
                 summary=render_session_summary(
                     self._facts(), self._observation, label=self.label, created_by=self.created_by
                 ),

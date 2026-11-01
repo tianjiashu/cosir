@@ -379,7 +379,8 @@ class Constant:
         # 同一回复内工具调用的并行 worker 上限（并行批次按此收敛，超出的调用排队执行）。
         MAX_PARALLEL_CALLS: int = 8
 
-        # 「子 Agent 不得使用」的工具名集合：委派、父子通信、Team 与配置提案。子 Agent 的 Task 在创建
+        # 「子 Agent 不得使用」的工具名集合：委派、父子通信、Team、配置提案，以及需要用户在界面上交还的
+        # 浏览器交接（子 Task 在前端只读，交接会永远挂着；浏览器的其余工具照常开放）。子 Agent 的 Task 在创建
         # 时就把这些工具连同交互终端工具组（``TOOL_GROUP_TERMINAL_SESSION``，按组整体剥离、不在此
         # 手列）从工具 schema 中剥掉，模型看不到也调用不了（见 ``child_agent_create``）。
         # 名字取自 ``app.core.tool.schemas.tool_names``；本模块是叶子模块、不得 import 任何 ``app``
@@ -395,15 +396,18 @@ class Constant:
             "agent_team",
             "propose_agent_team_configuration",
             "propose_agent_configuration",
+            "browser_handoff",
         )
         # 「Team 节点不得使用」的工具名集合。与 ``CHILD_DISALLOWED_TOOLS`` 的差别只有一处：
         # Team 节点要把子工作继续委派给子 Agent，因此**保留**委派与父子通信工具，只禁 Team 自身
-        # 递归建 Team 与配置提案。交互终端同样按工具组整体剥离、不在此手列。节点工具在固化
+        # 递归建 Team、配置提案与浏览器交接（节点 Task 同样只读）。交互终端同样按工具组整体剥离、不在此
+        # 手列。节点工具在固化
         # ``allowed_tools`` 时就剥掉（见 ``materialize_node_tools``），节点 Task 的 schema 里没有它们。
         TEAM_NODE_DISALLOWED_TOOLS: frozenset[str] = frozenset(
             {
                 "agent_team",
                 "propose_agent_team_configuration",
                 "propose_agent_configuration",
+                "browser_handoff",
             }
         )

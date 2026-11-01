@@ -260,6 +260,7 @@ class ConversationTaskStateRebuilder:
             terminal_sessions=[],
             background_tasks=[],
             foreground_waits=[],
+            handoffs=[],
         )
 
     @staticmethod

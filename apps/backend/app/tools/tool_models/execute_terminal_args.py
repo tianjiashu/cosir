@@ -25,11 +25,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.tool.schemas.tool_deferred import DeferredCapability, background_field
+from app.core.tool.schemas.tool_background import BackgroundCapability, background_field
+from app.tools.shell.host_shells import PosixShell, WindowsShell
+from app.utils.host_platform import is_windows
 
-# shell 取值集合按平台声明：Windows 与 POSIX 的可执行文件互不存在，故不作成一个大枚举。
-WindowsExecuteTerminalShell = Literal["auto", "cmd", "powershell", "pwsh"]
-MacExecuteTerminalShell = Literal["auto", "sh", "bash", "zsh", "fish", "pwsh"]
+# shell 取值由 shell 目录按平台声明，这里只在前面加上本工具语义的 auto（/bin/sh 或 COMSPEC）。
+WindowsExecuteTerminalShell = Literal["auto", WindowsShell]
+MacExecuteTerminalShell = Literal["auto", PosixShell]
 
 # 两个平台取值的并集，供 handler 侧类型标注使用（同源派生，不另写一份字面量）。
 ExecuteTerminalShell = WindowsExecuteTerminalShell | MacExecuteTerminalShell
@@ -42,7 +44,9 @@ MAX_COMMAND_TIMEOUT_S = 3600.0
 # 前后台执行：默认前台，前台等到上限仍未结束就自动转后台（结论以 background_result 回投并挂起
 # Agent）；模型可用 ``background`` 一开始就放到后台，用户可把前台等待转走。参数模型（``background``
 # 字段描述）与 handler 都读它，所以放在契约模块。
-EXECUTE_TERMINAL_DEFERRED = DeferredCapability(default_background=False, foreground_limit_s=60.0)
+EXECUTE_TERMINAL_BACKGROUND = BackgroundCapability(
+    default_background=False, foreground_limit_s=60.0
+)
 
 _TIMEOUT_DESCRIPTION = (
     "Seconds before the command's process tree is killed and the call fails. Defaults to "
@@ -80,7 +84,7 @@ class WindowsExecuteTerminalArgs(BaseModel):
             "relative to the workspace root (the default). It must already exist."
         ),
     )
-    background: bool | None = background_field(EXECUTE_TERMINAL_DEFERRED)
+    background: bool | None = background_field(EXECUTE_TERMINAL_BACKGROUND)
 
 
 class MacExecuteTerminalArgs(BaseModel):
@@ -113,32 +117,7 @@ class MacExecuteTerminalArgs(BaseModel):
             "or relative to the workspace root (the default). It must already exist."
         ),
     )
-    background: bool | None = background_field(EXECUTE_TERMINAL_DEFERRED)
-
-
-def is_windows_host(system_name: str) -> bool:
-    """判断注入的平台名是否 Windows（大小写与首尾空白容错）。
-
-    「是不是 Windows」在本仓有两个消费方：选参数模型（:func:`resolve_execute_terminal_args_model`）
-    与探测本机 shell（``ExecuteTerminalTool._detect_available_shells``）。二者必须共用同一判定口径，
-    否则同一个平台名可能同时选中 Windows 参数契约却按 POSIX 分支探测 shell，使模型可见 ``enum``
-    出现本平台不存在的取值。
-
-    参数:
-        system_name: 宿主平台名，取 ``platform.system()`` 的形态（``"Windows"`` / ``"windows"`` /
-            ``" windows "`` 等）。
-
-    返回:
-        是 Windows 时返回 True，其它一律 False。
-
-    异常:
-        无。
-
-    副作用:
-        无（纯函数，不读环境、不启动进程）。
-    """
-
-    return system_name.strip().lower() == "windows"
+    background: bool | None = background_field(EXECUTE_TERMINAL_BACKGROUND)
 
 
 def resolve_execute_terminal_args_model(
@@ -162,4 +141,6 @@ def resolve_execute_terminal_args_model(
         无（纯函数，不读环境、不启动进程）。
     """
 
-    return WindowsExecuteTerminalArgs if is_windows_host(system_name) else MacExecuteTerminalArgs
+    # 与 shell 探测共用 is_windows：口径一旦分叉，会选中 Windows 契约却按 POSIX 探测 shell，
+    # 使模型可见 enum 出现本平台不存在的取值。
+    return WindowsExecuteTerminalArgs if is_windows(system_name) else MacExecuteTerminalArgs

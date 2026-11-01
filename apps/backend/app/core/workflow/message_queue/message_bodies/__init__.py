@@ -20,6 +20,7 @@ from app.core.workflow.message_queue.message_bodies.base import EnqueuedMessageB
 from app.core.workflow.message_queue.message_bodies.decision import DecisionBody
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag, render_time
+from app.core.workflow.message_queue.message_bodies.tool_image import ToolImageBody
 from app.core.workflow.message_queue.message_bodies.tool_result import ToolResultBody
 from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch, UserInputBody
 
@@ -32,6 +33,7 @@ __all__ = [
     "NoticeBody",
     "RunLaunch",
     "TaskMessageKind",
+    "ToolImageBody",
     "ToolResultBody",
     "UserInputBody",
     "escape_tag",
@@ -40,7 +42,7 @@ __all__ = [
 ]
 
 # 入队消息的联合类型；``ToolResultBody`` 不在其中（它只在 Run 内直接写 context）。
-MessageBody = UserInputBody | NoticeBody | DecisionBody | BackgroundResultBody
+MessageBody = UserInputBody | NoticeBody | DecisionBody | BackgroundResultBody | ToolImageBody
 
 # 进模型的全部带标签 user 消息类型，顺序即系统提示词里消息协议的列出顺序；新增类型须加入。
 MODEL_INPUT_BODIES: tuple[type[EnqueuedMessageBody | ToolResultBody], ...] = (
@@ -48,10 +50,12 @@ MODEL_INPUT_BODIES: tuple[type[EnqueuedMessageBody | ToolResultBody], ...] = (
     NoticeBody,
     DecisionBody,
     ToolResultBody,
+    ToolImageBody,
     BackgroundResultBody,
 )
 
 # 持久化读回：按 ``kind`` 列还原 body。与上面两个清单同处一文件，新增类型三处一起改。
 _BODY_OF_KIND: dict[str, type[MessageBody]] = {
-    body.KIND: body for body in (UserInputBody, NoticeBody, DecisionBody, BackgroundResultBody)
+    body.KIND: body
+    for body in (UserInputBody, NoticeBody, DecisionBody, BackgroundResultBody, ToolImageBody)
 }

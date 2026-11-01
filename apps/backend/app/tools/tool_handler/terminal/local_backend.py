@@ -14,15 +14,16 @@
 
 import contextlib
 import os
-import shutil
 import signal
 import subprocess
 import threading
 import time
 from collections.abc import Callable
 
+from app.tools.shell.host_shells import find_shell
 from app.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal.output_collector import _OutputCollector
+from app.utils.host_platform import is_windows
 
 # POSIX-only 进程组信号在 Windows typeshed 中不存在；用 getattr 在模块级取，
 # 既避免 mypy 在 Windows 上报未定义属性，又保证运行时按平台安全支取（None 即跳过）。
@@ -191,42 +192,20 @@ def _resolve_command(command: str, shell: str) -> tuple[str | list[str], bool]:
     if shell == "auto":
         return command, True
 
-    if os.name == "nt":
-        # cmd 与 auto 等价：命令原文交给 <COMSPEC> /c 解释，避免 list2cmdline 把命令内部的
-        # 引号转义成 cmd 无法还原的 \"（见 docstring「转义职责」）。cmd 不可用时由 Popen
-        # 自身报错，并被 execute 统一转为启动失败结果。
-        if shell == "cmd":
-            return command, True
-        if shell in {"powershell", "pwsh"}:
-            executable_name = "powershell.exe" if shell == "powershell" else "pwsh.exe"
-            executable = shutil.which(executable_name)
-            if not executable:
-                raise ValueError(f"{executable_name} is not available")
-            return [
-                executable,
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                command,
-            ], False
-        raise ValueError(f"shell '{shell}' is not available on Windows")
-
-    if shell in {"sh", "bash", "zsh", "fish"}:
-        executable = "/bin/sh" if shell == "sh" else shutil.which(shell)
-        if not executable:
-            raise ValueError(f"{shell} is not available")
-        return [executable, "-c", command], False
-    if shell in {"powershell", "pwsh"}:
-        executable = shutil.which("pwsh")
-        if not executable:
-            raise ValueError("pwsh is not available")
-        return [
-            executable,
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            command,
-        ], False
-    raise ValueError(f"unsupported shell '{shell}'")
+    windows = is_windows()
+    # cmd 与 auto 等价：命令原文交给 <COMSPEC> /c 解释，避免 list2cmdline 把命令内部的
+    # 引号转义成 cmd 无法还原的 \"（见 docstring「转义职责」）。cmd 不可用时由 Popen
+    # 自身报错，并被 execute 统一转为启动失败结果。
+    if windows and shell == "cmd":
+        return command, True
+    # 可下发的 shell 由平台参数模型约束（POSIX 契约没有 powershell），这里只拼装启动形态。
+    if shell == "pwsh" or (windows and shell == "powershell"):
+        launch = ("-NoLogo", "-NoProfile", "-NonInteractive", "-Command")
+    elif not windows and shell in {"sh", "bash", "zsh", "fish"}:
+        launch = ("-c",)
+    else:
+        raise ValueError(f"unsupported shell '{shell}'")
+    executable = find_shell(shell)
+    if executable is None:
+        raise ValueError(f"{shell} is not available")
+    return [executable, *launch, command], False

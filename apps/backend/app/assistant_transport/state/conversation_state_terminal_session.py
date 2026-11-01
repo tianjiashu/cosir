@@ -3,7 +3,8 @@
 事实源是进程内的 ``TerminalSessionService``（``task_runtimes`` 各会话的 ``snapshot()``，由
 :func:`to_terminal_session` 映射成本契约的 camelCase 条目）：会话不持久化、不跨后端
 重启，所以列表不从 canonical 记录重建，只在 snapshot 物化与会话变化通知时整表读取。终端画面与输入标记
-的实时细节走每会话 WebSocket，这里只给工作台标签栏与生命周期所需的摘要。
+的实时细节走每会话 WebSocket，这里只给工作台标签栏与生命周期所需的摘要；会话是否在交接中见
+snapshot 顶层 ``handoffs``。
 """
 
 from __future__ import annotations
@@ -14,14 +15,6 @@ from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from app.tools.terminal_runtime.session_runtime import SessionSnapshot
-
-
-class ConversationTerminalHandoff(TypedDict):
-    """Agent 把终端交给用户输入时的说明；交还（HITL 决定执行）或会话结束后条目上的 ``handoff`` 回到
-    ``None``。``toolCallId`` 是那次 ``terminal_handoff`` 调用，前端「交还」即对它作出决定。"""
-
-    reason: str
-    toolCallId: str
 
 
 class ConversationTerminalSession(TypedDict):
@@ -37,7 +30,6 @@ class ConversationTerminalSession(TypedDict):
     integration: Literal["starting", "ready", "unavailable", "off"]
     # 集成跟踪到有命令正在执行（started 之后、returned 之前）；无集成时恒为 False，不代表空闲。
     commandRunning: bool
-    handoff: ConversationTerminalHandoff | None
     createdAt: str
 
 
@@ -56,11 +48,6 @@ def to_terminal_session(session: SessionSnapshot) -> ConversationTerminalSession
             Literal["starting", "ready", "unavailable", "off"], session.integration
         ),
         "commandRunning": session.command_running,
-        "handoff": (
-            {"reason": session.handoff_reason, "toolCallId": session.handoff_call_id}
-            if session.handoff_reason is not None and session.handoff_call_id is not None
-            else None
-        ),
         "createdAt": session.created_at.isoformat(),
     }
 
@@ -108,11 +95,3 @@ def validate_terminal_sessions(value: object) -> None:
             not isinstance(exit_code, int) or isinstance(exit_code, bool)
         ):
             raise ValueError("terminal session exitCode must be an integer or null")
-        handoff = entry["handoff"]
-        if handoff is not None and (
-            not isinstance(handoff, dict)
-            or set(handoff) != {"reason", "toolCallId"}
-            or not isinstance(handoff["reason"], str)
-            or not isinstance(handoff["toolCallId"], str)
-        ):
-            raise ValueError("terminal session handoff must be null or {reason, toolCallId}")

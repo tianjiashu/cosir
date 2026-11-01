@@ -5,6 +5,12 @@ from app.core.agents.model_settings import ModelSettings
 from app.core.tool.schemas.tool_names import (
     TOOL_AGENT_TEAM,
     TOOL_APPLY_PATCH,
+    TOOL_BROWSER_ACT,
+    TOOL_BROWSER_HANDOFF,
+    TOOL_BROWSER_NAVIGATE,
+    TOOL_BROWSER_SCREENSHOT,
+    TOOL_BROWSER_SNAPSHOT,
+    TOOL_BROWSER_TABS,
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_STATUS,
     TOOL_DELEGATE_TASK,
@@ -17,6 +23,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_PROPOSE_AGENT_CONFIGURATION,
     TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
     TOOL_READ_FILE,
+    TOOL_READ_IMAGE,
     TOOL_REPLACE,
     TOOL_SEARCH_CONTENT,
     TOOL_SKILL,
@@ -116,6 +123,7 @@ def main_agent(*, system_prompt: str = "", max_steps: int = 300) -> AgentProfile
         role="main_agent",
         allowed_tools=[
             TOOL_READ_FILE,
+            TOOL_READ_IMAGE,
             TOOL_WRITE_FILE,
             TOOL_REPLACE,
             TOOL_APPLY_PATCH,
@@ -133,6 +141,12 @@ def main_agent(*, system_prompt: str = "", max_steps: int = 300) -> AgentProfile
             TOOL_TERMINAL_CLOSE,
             TOOL_WEB_SEARCH,
             TOOL_WEB_EXTRACT,
+            TOOL_BROWSER_NAVIGATE,
+            TOOL_BROWSER_SNAPSHOT,
+            TOOL_BROWSER_ACT,
+            TOOL_BROWSER_SCREENSHOT,
+            TOOL_BROWSER_TABS,
+            TOOL_BROWSER_HANDOFF,
             TOOL_DELEGATE_TASK,
             TOOL_CHILD_AGENT_SEND,
             TOOL_CHILD_AGENT_STATUS,
@@ -154,10 +168,10 @@ def general_child_agent() -> AgentProfile:
     """构建由代码维护的通用委派子 Agent（进程启动时注册的默认 CHILD）。
 
     该 profile 由代码维护、不从 JSON 加载（可被同名 JSON 覆盖）。工具面覆盖读写文件、搜索、
-    终端与网页，并**声明**了委派 / 父子通信工具：是否真正可用由执行方过滤决定——作为
+    终端、网页与内置浏览器，并**声明**了委派 / 父子通信工具：是否真正可用由执行方过滤决定——作为
     ``delegate_task`` 子 Agent 运行时它们被 ``CHILD_DISALLOWED_TOOLS`` 剥掉（子 Agent 不得再
     委派），作为 Agent Team 节点运行时则保留（节点需要把子工作再拆出去）。可交互终端不在
-    工具面内。``description`` 面向主 Agent 说明何时该选它，``system_prompt`` 面向子 Agent
+    工具面内；内置浏览器开放除交接（``browser_handoff``，需要用户在界面上交还）以外的工具。``description`` 面向主 Agent 说明何时该选它，``system_prompt`` 面向子 Agent
     强调「按指令做、不越界」。
 
     参数:
@@ -189,6 +203,7 @@ def general_child_agent() -> AgentProfile:
         # 可用工具：读写文件 + 搜索 + 终端 + 网页 + 委派/父子通信（后者由执行方按场景过滤）。
         allowed_tools=[
             TOOL_READ_FILE,
+            TOOL_READ_IMAGE,
             TOOL_WRITE_FILE,
             TOOL_REPLACE,
             TOOL_APPLY_PATCH,
@@ -200,6 +215,11 @@ def general_child_agent() -> AgentProfile:
             TOOL_EXECUTE_TERMINAL,
             TOOL_WEB_SEARCH,
             TOOL_WEB_EXTRACT,
+            TOOL_BROWSER_NAVIGATE,
+            TOOL_BROWSER_SNAPSHOT,
+            TOOL_BROWSER_ACT,
+            TOOL_BROWSER_SCREENSHOT,
+            TOOL_BROWSER_TABS,
             TOOL_DELEGATE_TASK,
             TOOL_CHILD_AGENT_SEND,
             TOOL_CHILD_AGENT_STATUS,
@@ -252,6 +272,7 @@ def only_read_child_agent() -> AgentProfile:
         # 只读工具面：无写 / 补丁 / 删除 / 移动，无可交互终端；委派工具由执行方按场景过滤。
         allowed_tools=[
             TOOL_READ_FILE,
+            TOOL_READ_IMAGE,
             TOOL_SEARCH_CONTENT,
             TOOL_FIND_FILES,
             TOOL_LIST_DIRECTORY,

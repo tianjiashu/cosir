@@ -55,7 +55,12 @@ class WorkspaceFilesService:
         self._lock = threading.Lock()
 
     def root(self, workspace_id: int) -> Path:
-        return Path(self.workspace_crud.get(workspace_id).root_path).resolve(strict=True)
+        """工作区根目录。工作区记录不存在或根目录已被删除都抛 ``KeyError``：「工作区不在」与「文件不在」
+        （``FileNotFoundError``）是两种结局，HTTP 边界据此给出不同的错误码，前端按码区分展示。"""
+        try:
+            return Path(self.workspace_crud.get(workspace_id).root_path).resolve(strict=True)
+        except FileNotFoundError as exc:
+            raise KeyError(f"workspace {workspace_id} root is missing") from exc
 
     def path(self, workspace_id: int, relative: str) -> Path:
         return resolve_path(self.root(workspace_id), relative)

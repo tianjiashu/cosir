@@ -43,6 +43,7 @@ from app.core.agents.agent_profile_config import (
 )
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.tool.background.deferred_registry import deferred_registry
+from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,
     set_agent_team_registry,
@@ -208,6 +209,10 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     deferred_registry.set_listener(
         lambda task_id: get_conversation_task_state_service().refresh_deferred_results(task_id)
     )
+    # 进行中的交接随登记表变化整表重投影进 snapshot 顶层 ``handoffs``。
+    handoff_registry.set_listener(
+        lambda task_id: get_conversation_task_state_service().refresh_handoffs(task_id)
+    )
     get_recover_service().recover_after_restart()
 
     # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
@@ -225,6 +230,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
             await asyncio.to_thread(deferred_registry.close)
             deferred_registry.set_listener(None)
+            handoff_registry.set_listener(None)
+            handoff_registry.close()
             await task_runtime_spaces.aclose()
             await asyncio.to_thread(close_service_dependencies)
             # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。

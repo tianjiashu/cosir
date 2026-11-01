@@ -9,6 +9,8 @@
 - ``CODING_AGENT_PORT``：监听端口，默认 ``8000``。
 - ``CODING_AGENT_RELOAD``：是否开启热重载，默认 ``true``。
 - ``CODING_AGENT_LOG_LEVEL``：uvicorn 日志级别，默认 ``info``。
+- ``CODING_AGENT_HOST_TOKEN``：宿主工具链路的认证 token，由桌面宿主随机生成并注入；缺失时
+  ``/host/link`` 拒绝一切连接（见 ``app.tools.host.host_link``）。
 """
 
 import os

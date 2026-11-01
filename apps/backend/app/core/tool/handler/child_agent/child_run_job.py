@@ -88,7 +88,7 @@ def run_child(
         )
     )
     observation = placeholder()
-    observation.deferred = True
+    observation.background = True
     return observation
 
 

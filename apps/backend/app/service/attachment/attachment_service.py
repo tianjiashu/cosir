@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import stat
@@ -51,7 +52,9 @@ def _assert_real_directory(path: Path, *, create: bool) -> Path:
     """确保附件目录是普通目录，并拒绝符号链接或 reparse point。"""
 
     if path.exists() or _is_reparse_point(path):
-        if _is_reparse_point(path) or _normal_path(path.resolve(strict=False)) != _normal_path(path):
+        if _is_reparse_point(path) or _normal_path(path.resolve(strict=False)) != _normal_path(
+            path
+        ):
             raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用")
         if not path.is_dir():
             raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用")
@@ -61,7 +64,9 @@ def _assert_real_directory(path: Path, *, create: bool) -> Path:
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用") from exc
+        raise ImageNormalizationError(
+            "ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用"
+        ) from exc
     if _is_reparse_point(path) or _normal_path(path.resolve(strict=False)) != _normal_path(path):
         raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用")
     return path
@@ -84,6 +89,14 @@ class AttachmentDescriptor:
     height: int
     locator: str
     status: str
+
+
+@dataclass(frozen=True, slots=True)
+class SavedImage:
+    """工具产出图片的发布结果：附件描述，以及模型请求里引用它用的 workspace 相对路径。"""
+
+    descriptor: AttachmentDescriptor
+    path: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +178,9 @@ class AttachmentService:
         files: list[Path] = []
         for path in candidates:
             if _is_reparse_point(path):
-                raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用")
+                raise ImageNormalizationError(
+                    "ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用"
+                )
             if path.is_file() and _asset_id_from_name(path.name) == asset_id:
                 files.append(self._inside(directory, path))
         return files
@@ -173,9 +188,8 @@ class AttachmentService:
     async def upload(self, workspace_id: int, file: UploadFile) -> AttachmentDescriptor:
         """校验、规范化并幂等保存一张 workspace 级 JPEG/PNG 图片。
 
-        上传不要求 Task 或 Run 已存在，也不建立任何消息引用。方法先把原始流写入
-        workspace 临时目录，再按统一策略处理 EXIF 方向和最长边，最后以规范化后
-        字节的 SHA-256 作为资源标识，将最终图片原子发布到正式附件目录。
+        上传不要求 Task 或 Run 已存在，也不建立任何消息引用。原始流先写入 workspace 临时目录，
+        再交给与 :meth:`save_image` 共用的发布内核（:meth:`_publish`）。
 
         参数:
             workspace_id: 附件归属的工作区标识。
@@ -196,12 +210,11 @@ class AttachmentService:
         """
 
         workspace_dirs = self._dirs(workspace_id)
-        directory = workspace_dirs.attachment_dir
-        staging_dir = workspace_attachment_staging_dir(workspace_dirs.workspace_root)
-        source_tmp = staging_dir / f".{uuid4().hex}.raw.part"
-        normalized_tmp: Path | None = None
+        source_tmp = (
+            workspace_attachment_staging_dir(workspace_dirs.workspace_root)
+            / f".{uuid4().hex}.raw.part"
+        )
         source_created = False
-        normalized_created = False
         total = 0
         try:
             with source_tmp.open("xb") as output:
@@ -211,69 +224,149 @@ class AttachmentService:
                     if total > Constant.Attachment.MAX_UPLOAD_BYTES:
                         raise ImageNormalizationError("ATTACHMENT_FILE_TOO_LARGE", "附件文件过大")
                     output.write(chunk)
+            descriptor, _ = self._publish(
+                workspace_id, workspace_dirs, source_tmp, file.filename, total
+            )
+            return descriptor
+        except OSError as exc:
+            raise ImageNormalizationError(
+                "ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用"
+            ) from exc
+        finally:
+            if source_created:
+                source_tmp.unlink(missing_ok=True)
+            await file.close()
 
-            normalized_tmp = staging_dir / f".{uuid4().hex}.normalized.part"
-            normalized = normalize_image(source_tmp, normalized_tmp)
-            normalized_created = True
+    def save_image(self, workspace_id: int, data: bytes, name: str) -> SavedImage:
+        """工具在内存里产出的图片（如浏览器截图）按与上传完全相同的规则规范化并幂等发布。
+
+        本机已有的图片文件走 :meth:`import_image`。与 :meth:`upload` 共用发布内核：同一套 EXIF 方向、最长边与大小策略，同一个附件目录。
+        返回值另带 workspace 相对路径——模型请求里的图片定位符用它（见 ``vision_input``），
+        不用 asset id。同步阻塞 IO，只在工具线程调用。
+
+        异常:
+            ``KeyError``: workspace 不存在。
+            ``ImageNormalizationError``: 图片过大、不是有效图片或附件目录不可用。
+        """
+
+        if len(data) > Constant.Attachment.MAX_UPLOAD_BYTES:
+            raise ImageNormalizationError("ATTACHMENT_FILE_TOO_LARGE", "附件文件过大")
+        workspace_dirs = self._dirs(workspace_id)
+        source_tmp = (
+            workspace_attachment_staging_dir(workspace_dirs.workspace_root)
+            / f".{uuid4().hex}.raw.part"
+        )
+        try:
+            source_tmp.write_bytes(data)
+            descriptor, target = self._publish(
+                workspace_id, workspace_dirs, source_tmp, name, len(data)
+            )
+            return SavedImage(descriptor=descriptor, path=self.relative_path(workspace_id, target))
+        except OSError as exc:
+            raise ImageNormalizationError(
+                "ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用"
+            ) from exc
+        finally:
+            source_tmp.unlink(missing_ok=True)
+
+    def import_image(self, workspace_id: int, source: Path) -> SavedImage:
+        """本机已有的图片文件（工作区内外均可，如 ``read_image`` 读到的路径）按上传规则规范化并幂等发布。
+
+        源文件只读、直接作为规范化输入，不先复制进暂存区；规范化产物仍写在本工作区的暂存目录里。
+        同一份内容重复导入得到同一个 asset（SHA-256 去重），导入已发布的附件本身也是幂等的。
+        同步阻塞 IO，只在工具线程调用。
+
+        异常:
+            ``KeyError``: workspace 不存在。
+            ``ImageNormalizationError``: 文件不存在或不可读（``ATTACHMENT_NOT_FOUND``）、不是普通文件
+                （``ATTACHMENT_NOT_A_FILE``）、过大、不是有效图片、格式不支持或附件目录不可用。
+        """
+
+        try:
+            source_stat = source.stat()
+        except OSError as exc:
+            raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "图片文件不存在或不可读") from exc
+        if not stat.S_ISREG(source_stat.st_mode):
+            raise ImageNormalizationError("ATTACHMENT_NOT_A_FILE", "路径不是普通文件")
+        if source_stat.st_size > Constant.Attachment.MAX_UPLOAD_BYTES:
+            raise ImageNormalizationError("ATTACHMENT_FILE_TOO_LARGE", "附件文件过大")
+        workspace_dirs = self._dirs(workspace_id)
+        try:
+            descriptor, target = self._publish(
+                workspace_id, workspace_dirs, source, source.name, source_stat.st_size
+            )
+        except OSError as exc:
+            raise ImageNormalizationError(
+                "ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用"
+            ) from exc
+        return SavedImage(descriptor=descriptor, path=self.relative_path(workspace_id, target))
+
+    def _publish(
+        self,
+        workspace_id: int,
+        workspace_dirs: _WorkspaceAttachmentDirs,
+        source: Path,
+        name: str | None,
+        source_bytes: int,
+    ) -> tuple[AttachmentDescriptor, Path]:
+        """发布内核：规范化源文件，以规范化后字节的 SHA-256 为资源标识原子发布到附件目录。
+
+        上传、工具内存图片与本机图片文件三个入口共用这里，图片规则只有这一份。``source`` 只读；
+        调用方负责清理自己建的暂存源文件，规范化产物由这里清理。返回描述与正式文件路径。
+        """
+
+        directory = workspace_dirs.attachment_dir
+        normalized_tmp = (
+            workspace_attachment_staging_dir(workspace_dirs.workspace_root)
+            / f".{uuid4().hex}.normalized.part"
+        )
+        try:
+            normalized = normalize_image(source, normalized_tmp)
             if normalized.byte_size > DEFAULT_IMAGE_INPUT_POLICY.single_image_max_bytes:
                 raise ImageNormalizationError("ATTACHMENT_FILE_TOO_LARGE", "规范化后的图片过大")
-
             digest = hashlib.sha256()
             with normalized.path.open("rb") as normalized_file:
                 for chunk in iter(lambda: normalized_file.read(1024 * 1024), b""):
                     digest.update(chunk)
             asset_id = digest.hexdigest()
             target = directory / f"{asset_id}.{normalized.target_format}"
-            try:
-                # Hard-link 是不覆盖发布：并发上传相同规范化内容时只保留一个正式文件。
+            # Hard-link 是不覆盖发布：并发发布相同规范化内容时只保留一个正式文件。
+            with contextlib.suppress(FileExistsError):
                 os.link(normalized.path, target)
-            except FileExistsError:
-                pass
-            finally:
-                normalized.path.unlink(missing_ok=True)
-            files = self._files(directory, asset_id)
-            if not files or target not in files:
-                raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用")
-
-            descriptor = AttachmentDescriptor(
-                asset_id=asset_id,
-                name=file.filename or f"{asset_id}.{normalized.target_format}",
-                content_type=normalized.content_type,
-                byte_size=normalized.byte_size,
-                width=normalized.width,
-                height=normalized.height,
-                locator=f"cosir-attachment://{asset_id}",
-                status="ready",
-            )
-            log.info(
-                "attachment_uploaded",
-                extra={
-                    "msg": "图片附件已规范化并按 SHA-256 保存",
-                    "data": {
-                        "workspace_id": workspace_id,
-                        "asset_id": asset_id,
-                        "source_bytes": total,
-                        "stored_bytes": normalized.byte_size,
-                        "width": normalized.width,
-                        "height": normalized.height,
-                    },
-                },
-            )
-            return descriptor
-        except OSError as exc:
-            if source_created:
-                source_tmp.unlink(missing_ok=True)
-            if normalized_created and normalized_tmp is not None:
-                normalized_tmp.unlink(missing_ok=True)
-            raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用") from exc
         finally:
-            if source_created:
-                source_tmp.unlink(missing_ok=True)
-            if normalized_created and normalized_tmp is not None:
-                normalized_tmp.unlink(missing_ok=True)
-            await file.close()
+            normalized_tmp.unlink(missing_ok=True)
+        files = self._files(directory, asset_id)
+        if not files or target not in files:
+            raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用")
+        descriptor = AttachmentDescriptor(
+            asset_id=asset_id,
+            name=name or f"{asset_id}.{normalized.target_format}",
+            content_type=normalized.content_type,
+            byte_size=normalized.byte_size,
+            width=normalized.width,
+            height=normalized.height,
+            locator=f"cosir-attachment://{asset_id}",
+            status="ready",
+        )
+        log.info(
+            "attachment_uploaded",
+            extra={
+                "msg": "图片附件已规范化并按 SHA-256 保存",
+                "data": {
+                    "workspace_id": workspace_id,
+                    "asset_id": asset_id,
+                    "source_bytes": source_bytes,
+                    "stored_bytes": normalized.byte_size,
+                    "width": normalized.width,
+                    "height": normalized.height,
+                },
+            },
+        )
+        return descriptor, target
 
-    def resolve_content(self, workspace_id: int, asset_id: str, *, expected_kind: str | None = None) -> tuple[Path, str]:
+    def resolve_content(
+        self, workspace_id: int, asset_id: str, *, expected_kind: str | None = None
+    ) -> tuple[Path, str]:
         """返回已发布图片文件及其 MIME 类型，不重新解析图片内容。"""
 
         if expected_kind not in (None, "image"):
@@ -323,7 +416,9 @@ class AttachmentService:
             total_bytes += stored.byte_size
             paths.append(self.relative_path(workspace_id, stored.path))
         if total_bytes > DEFAULT_IMAGE_INPUT_POLICY.request_total_max_bytes:
-            raise ImageNormalizationError("ATTACHMENT_REQUEST_TOO_LARGE", "图片总大小超过统一输入限制")
+            raise ImageNormalizationError(
+                "ATTACHMENT_REQUEST_TOO_LARGE", "图片总大小超过统一输入限制"
+            )
         return paths
 
     def resolve_for_model(self, workspace_id: int, image_path: str) -> StoredImage:
@@ -351,4 +446,5 @@ class AttachmentService:
         checked = self._inside(dirs.attachment_dir, path)
         return checked.relative_to(dirs.workspace_root).as_posix()
 
-__all__ = ["AttachmentDescriptor", "AttachmentService"]
+
+__all__ = ["AttachmentDescriptor", "AttachmentService", "SavedImage"]

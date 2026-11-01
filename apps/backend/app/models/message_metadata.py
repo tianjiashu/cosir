@@ -16,11 +16,19 @@ class EmptyMessageMetadata(BaseModel):
 
 
 MessageKind = Literal[
-    "user_input", "notice", "decision", "agent_result", "background_result", "tool_result"
+    "user_input",
+    "notice",
+    "decision",
+    "agent_result",
+    "background_result",
+    "tool_result",
+    "tool_image",
 ]
 """Task 消息队列的消息种类；并入 context 后记在 user 消息的 metadata 上，后端规则只读它。"""
 
-CALL_RESULT_KINDS: frozenset[MessageKind] = frozenset({"decision", "background_result", "tool_result"})
+CALL_RESULT_KINDS: frozenset[MessageKind] = frozenset(
+    {"decision", "background_result", "tool_result", "tool_image"}
+)
 """回答某次工具调用的消息种类：可带 ``tool_call_id``，归属那次调用而不是它所在的那一轮。"""
 
 
@@ -70,8 +78,8 @@ class ToolMessageMetadata(BaseModel):
     error: str | None = None
     team_run_id: int | None = None
     hidden: bool = False
-    # 延迟结果的后台占位（见 ``ToolObservation.deferred``）：卡片状态的持久化事实源。
-    deferred: bool = False
+    # 延迟结果的后台占位（见 ``ToolObservation.background``）：卡片状态的持久化事实源。
+    background: bool = False
 
 
 MessageMetadata = (

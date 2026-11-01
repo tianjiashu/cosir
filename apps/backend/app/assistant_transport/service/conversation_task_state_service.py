@@ -19,6 +19,10 @@ from app.assistant_transport.state.conversation_state_background_task import (
     ConversationBackgroundTask,
     project_background_task,
 )
+from app.assistant_transport.state.conversation_state_handoff import (
+    ConversationHandoff,
+    project_handoff,
+)
 from app.assistant_transport.state.conversation_state_message import ConversationQueuedMessage
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
@@ -225,6 +229,32 @@ class ConversationTaskStateService:
             for mutation in mutations:
                 _apply_mutation(state, mutation)
             self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=mutations))
+
+    def refresh_handoffs(self, task_id: int) -> None:
+        """交接变化入口：整表重读该 Task 的进行中交接，有变化时发一条 ``set`` mutation。
+
+        由交接登记表的通知线程调用（锁外），规则同 :meth:`refresh_terminal_sessions`。
+        """
+
+        with self._lock:
+            if task_id in self._deleted_task_ids:
+                return
+            space = task_runtime_spaces.get(task_id)
+            if space is None or not space.has_snapshot():
+                return
+            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            handoffs = self._handoffs(task_id)
+            if handoffs == state["handoffs"]:
+                return
+            mutation = ConversationStateMutation("set", ("handoffs",), handoffs)
+            _apply_mutation(state, mutation)
+            self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,)))
+
+    @staticmethod
+    def _handoffs(task_id: int) -> list[ConversationHandoff]:
+        from app.core.tool.handoff.handoff_registry import handoff_registry
+
+        return [project_handoff(lease) for lease in handoff_registry.leases(task_id)]
 
     @staticmethod
     def _background_tasks(task_id: int) -> list[ConversationBackgroundTask]:
@@ -475,6 +505,7 @@ class ConversationTaskStateService:
             state["terminal_sessions"] = self._terminal_sessions(task_id)
             state["background_tasks"] = self._background_tasks(task_id)
             state["foreground_waits"] = self._foreground_waits(task_id)
+            state["handoffs"] = self._handoffs(task_id)
             self._reconcile_child_delegation_statuses(state, persist=False)
         except Exception as exc:
             log.exception(

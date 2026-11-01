@@ -15,7 +15,7 @@ from app.core.tool.execute.tool_terminal_projection import (
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models.message_metadata import ToolMessageMetadata
-from app.core.workflow.message_queue.task_message import ToolResultBody
+from app.core.workflow.message_queue.task_message import TaskMessage, ToolImageBody, ToolResultBody
 
 
 def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
@@ -45,7 +45,7 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
                 error=event.error,
                 team_run_id=event.team_run_id,
                 hidden=not visible,
-                deferred=observation.deferred,
+                background=observation.background,
             ),
         )
         log.info(
@@ -76,7 +76,7 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
     runtime = _runtime_context()
     context = _message_context()
     [executed] = batch.observations
-    observation = dataclasses.replace(executed, awaiting_decision=False, deferred=False)
+    observation = dataclasses.replace(executed, awaiting_decision=False, background=False)
     call_id = observation.tool_call_id
     message, metadata = ToolResultBody(
         tool_call_id=call_id,
@@ -135,7 +135,7 @@ def settle_deferred_placeholder(
     runtime = _runtime_context()
     context = _message_context()
     current = context.tool_result_metadata(tool_call_id)
-    if current is None or not current.deferred or current.status == "completed":
+    if current is None or not current.background or current.status == "completed":
         return
     written = context.update_tool_result_metadata(
         tool_call_id, ToolMessageMetadata(status="completed", display_data=display_data)
@@ -174,3 +174,27 @@ def to_tool_model_message(observation: ToolObservation) -> ChatCompletionToolMes
         "content": content or observation.status,
         "tool_call_id": observation.tool_call_id,
     }
+
+
+def post_tool_images(batch: ToolBatch) -> None:
+    """把本批成功观察带的图片投进 mailbox，下一次请求模型前由 prepare_input 写进 context。
+
+    必须在整批 tool 消息写完之后调用：assistant 的 tool_calls 与对应 tool 消息之间不能插入 user
+    消息。走 mailbox 而不是在这里直接写 context，复用「Run 内消息只进 mailbox」的同一通道与同一个
+    并入点（prepare_input），图片的写入时机与通知、后台结论一致。
+    """
+    with_images = [o for o in batch.observations if o.status == "success" and o.images]
+    if not with_images:
+        return
+    mailbox = _runtime_context().mailbox
+    for observation in with_images:
+        mailbox.post(
+            TaskMessage.of(
+                ToolImageBody(
+                    tool_call_id=observation.tool_call_id,
+                    tool_name=observation.tool_name,
+                    image_paths=list(observation.images),
+                )
+            )
+        )
+

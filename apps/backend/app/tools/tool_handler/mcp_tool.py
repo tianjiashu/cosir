@@ -1,21 +1,20 @@
 """Agent 侧 MCP 工具目录与调用入口。
 
 以 thread 模式运行：连接由进程级 ``MCPConnectionPool`` 常驻持有，handler 在工具线程里把协程投到
-池的事件循环上，自己轮询取消信号与调用时限（thread 工具的执行器只在执行前检查一次取消，也不做
-硬超时）。取消或超时只撤销这次请求，连接保留供下次复用。
+池的事件循环上，经 ``wait_for_call`` 等待并轮询取消信号与调用时限（thread 工具的执行器只在执行前
+检查一次取消，也不做硬超时）。取消或超时只撤销这次请求，连接保留供下次复用。
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-import time
-from concurrent.futures import FIRST_COMPLETED, Future, wait
-from typing import Any, TypeVar
+from typing import Any
 
 from mcp import types
 
 from app.config.logging.logger import log
+from app.core.tool.execute.thread_wait import ToolCallStopped, wait_for_call
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -28,7 +27,6 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_MCP
-from app.core.workflow.cancel.tool_call_cancellation_registry import should_stop_call
 from app.service import depends as service_depends
 from app.service.configuration.mcp_configuration import (
     MCPConfigurationError,
@@ -45,17 +43,10 @@ from app.tools.mcp.client import (
 )
 from app.tools.tool_models.mcp_args import MCPArgs
 
-T = TypeVar("T")
-
 # 单次调用（含必要的建连）的时限；thread 工具没有执行器硬超时，由 handler 自己执行。
 CALL_TIMEOUT_SECONDS = 90.0
 # ``list`` 并发发现各服务，单个服务的时限；慢服务只让自己的条目失败，不拖累整份目录。
 DISCOVERY_TIMEOUT_SECONDS = 20.0
-_POLL_SECONDS = 0.1
-
-
-class _CallStopped(Exception):
-    """等待池内请求期间检出取消；请求已撤销。"""
 
 
 class MCPTool(HandlerBase):
@@ -135,8 +126,10 @@ class MCPTool(HandlerBase):
             )
 
         try:
-            outcomes = _wait(pool.submit(discover_all()), execution_context)
-        except _CallStopped:
+            outcomes = wait_for_call(
+                pool.submit(discover_all()), execution_context, CALL_TIMEOUT_SECONDS
+            )
+        except ToolCallStopped:
             return tool_cancelled(self.name)
         except TimeoutError:
             return tool_error(
@@ -170,11 +163,13 @@ class MCPTool(HandlerBase):
     ) -> ToolObservation:
         pool = service_depends.get_mcp_connection_pool()
         try:
-            result = _wait(
-                pool.submit(pool.call_tool(server, tool_name, arguments)), execution_context
+            result = wait_for_call(
+                pool.submit(pool.call_tool(server, tool_name, arguments)),
+                execution_context,
+                CALL_TIMEOUT_SECONDS,
             )
             content = call_result_text(result)
-        except _CallStopped:
+        except ToolCallStopped:
             return tool_cancelled(self.name)
         except TimeoutError:
             return tool_error(
@@ -239,32 +234,6 @@ class MCPTool(HandlerBase):
                 default_open=False,
             ),
         )
-
-
-def _wait(future: Future[T], execution_context: ToolExecutionContext | None) -> T:
-    """在工具线程里等待池内请求，期间轮询取消与时限；命中任一即撤销请求。
-
-    撤销会取消池循环上的协程（SDK 随之放弃这次请求），连接本身保留。
-
-    异常:
-        _CallStopped: 检出 Task 停止或本次调用被单独取消。
-        TimeoutError: 超过 ``CALL_TIMEOUT_SECONDS``。
-        其余: 池内协程抛出的异常原样上浮。
-    """
-
-    deadline = time.monotonic() + CALL_TIMEOUT_SECONDS
-    while True:
-        done, _ = wait([future], timeout=_POLL_SECONDS, return_when=FIRST_COMPLETED)
-        if done:
-            return future.result()
-        if execution_context is not None and should_stop_call(
-            execution_context.task_id, execution_context.tool_call_id
-        ):
-            future.cancel()
-            raise _CallStopped
-        if time.monotonic() >= deadline:
-            future.cancel()
-            raise TimeoutError
 
 
 def _catalog_observation(catalog: list[dict[str, Any]]) -> ToolObservation:

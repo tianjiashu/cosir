@@ -7,7 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
-from app.core.tool.schemas.tool_deferred import BACKGROUND_FIELD, DeferredCapability
+from app.core.tool.schemas.tool_background import BACKGROUND_FIELD, BackgroundCapability
 from app.core.tool.schemas.tool_display import ToolDisplayHints
 
 
@@ -53,13 +53,16 @@ class ToolDefinition:
     # 非 None 的工具一批里只能单独调用（见 ``tool_batch_runner``），每个 Task 同时最多一个等待中的
     # 调用由工具自己的事实源保证。
     user_decision: Literal["execute", "reply"] | None = None
+    # 产出图片给模型看（观察的 ``images``）：本次 Run 的模型不支持图片输入时，准入门禁直接拒绝，
+    # 不进 handler——判定只在 ``ToolAccessGate`` 一处，各工具不再各写一遍。
+    returns_images: bool = False
     # 批准时随决定提交的载荷（``DecisionBody.data``）的形状，与 ``args_model`` 对称：决定入口按它
     # 校验前端输入，不合法同步拒绝；``None`` 表示决定不带载荷。只对 ``user_decision`` 非 None 的工具
     # 有意义。
     decision_model: type[BaseModel] | None = None
-    # 延迟结果能力（见 ``tool_deferred``）：声明后参数模型必须带 ``background`` 字段，handler 把它
+    # 后台执行能力（见 ``tool_background``）：声明后参数模型必须带 ``background`` 字段，handler 把它
     # 与本声明交给 ``run_deferred``；``None`` 是普通工具。
-    deferred: DeferredCapability | None = None
+    background: BackgroundCapability | None = None
 
     def normalized(self) -> "ToolDefinition":
         """注册时固定 strict 参数 schema，模型调用阶段不再转换。
@@ -67,8 +70,10 @@ class ToolDefinition:
         显式 schema 由平台投影从 strict_parameters_schema 生成；其余由统一出口生成。声明了延迟结果
         能力却没在参数模型里带 ``background`` 字段是装配缺陷，注册时就抛 ``ValueError``。
         """
-        if self.deferred is not None and BACKGROUND_FIELD not in self.args_model.model_fields:
-            raise ValueError(f"{self.name}: deferred tools must declare a background argument")
+        if self.background is not None and BACKGROUND_FIELD not in self.args_model.model_fields:
+            raise ValueError(
+                f"{self.name}: background-capable tools must declare a background argument"
+            )
         if self.parameters_schema:
             return self
         # ``replace`` 而不是逐字段重建：逐字段写法曾漏掉 ``user_decision``，注册后的 HITL 工具

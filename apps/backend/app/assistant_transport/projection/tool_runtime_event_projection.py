@@ -51,7 +51,7 @@ def _plan_terminal_output(
     part: ConversationStateToolCallPart,
     base: tuple[str | int, ...],
 ) -> Sequence[ConversationStateMutation]:
-    """命令还活着时追加输出块：前台调用是 ``running``，转到后台的是带 ``deferred`` 的 ``pending`` 占位。
+    """命令还活着时追加输出块：前台调用是 ``running``，转到后台的是带 ``background`` 的 ``pending`` 占位。
 
     命令结束、取消或被撤销时 part 都会离开这两种状态，迟到的块因此自然丢弃；``seq`` 另外挡住重复帧。
     """
@@ -61,7 +61,7 @@ def _plan_terminal_output(
     if (
         not isinstance(data, TerminalOutputDeltaData)
         or part.get("toolName") != TOOL_EXECUTE_TERMINAL
-        or not (status == "running" or (status == "pending" and part.get("deferred") is True))
+        or not (status == "running" or (status == "pending" and part.get("background") is True))
     ):
         return []
     previous_seq = part.get("terminal_output_seq")

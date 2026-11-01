@@ -8,7 +8,7 @@ from typing import ClassVar, Literal
 from openai.types.chat import ChatCompletionUserMessageParam
 from pydantic import BaseModel, ConfigDict
 
-from app.core.workflow.message_queue.message_bodies.rendering import escape_tag
+from app.core.workflow.message_queue.message_bodies.rendering import escape_tag, render_time
 from app.models.message_metadata import UserMessageMetadata
 
 
@@ -33,7 +33,8 @@ class ToolResultBody(BaseModel):
 
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
         content = (
-            f'<{self.TAG} tool_call_id="{self.tool_call_id}" tool_name="{self.tool_name}" '
+            f'<{self.TAG} time="{render_time()}" tool_call_id="{self.tool_call_id}" '
+            f'tool_name="{self.tool_name}" '
             f'status="{self.status}">\n{escape_tag(self.content, self.TAG)}\n</{self.TAG}>'
         )
         return (

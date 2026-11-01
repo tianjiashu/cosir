@@ -12,7 +12,9 @@ from pydantic import BaseModel, ConfigDict
 
 from app.models.message_metadata import UserMessageMetadata
 
-TaskMessageKind = Literal["user_input", "system_notice", "background_result", "user_decision"]
+TaskMessageKind = Literal[
+    "user_input", "system_notice", "background_result", "user_decision", "tool_image"
+]
 
 
 class EnqueuedMessageBody(BaseModel, ABC):

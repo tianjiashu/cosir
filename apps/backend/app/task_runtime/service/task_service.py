@@ -649,18 +649,25 @@ class TaskService:
         )
 
     def finalize_deleted_task_spaces(self, result: TaskDeletionResult) -> None:
-        """数据库提交后回收 Task 级资源（终端、延迟结果、看板）与运行时空间；回滚路径一概不碰。
+        """数据库提交后回收 Task 级资源（终端、浏览器标签、延迟结果、看板）与运行时空间；回滚路径
+        一概不碰。
 
         延迟结果归 Task、比 Run 活得久，必须在这里撤销而不是指望删除前的停止：停止只在有执行者时
         撤销，空闲（Run 已完成、后台命令还在跑）或挂起（等后台结论）的 Task 没有执行者。撤销会
         终止后台命令；占位行已随删除消失，不结算。
         """
         from app.core.tool.background.deferred_registry import deferred_registry
+        from app.core.tool.handoff.handoff_registry import handoff_registry
 
         service_depends.get_terminal_session_service().delete_task_sessions(result.task_ids)
+        # 浏览器标签页归宿主所有：发后即忘的通知，宿主未连接时标签页也已不在（链路记日志）。
+        service_depends.get_host_link().notify(
+            "browser.dropTasks", {"task_ids": sorted(result.task_ids)}
+        )
         for task_id in result.task_ids:
             deferred_registry.drop_task(task_id)
             deferred_registry.forget_task(task_id)
+            handoff_registry.drop_task(task_id)
         self._unload_deleted_task_spaces(set(result.task_ids))
 
     def _unload_deleted_task_spaces(self, task_ids: set[int]) -> None:

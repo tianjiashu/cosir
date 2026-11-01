@@ -10,6 +10,10 @@ from app.assistant_transport.state.conversation_state_background_task import (
     validate_background_tasks,
     validate_foreground_waits,
 )
+from app.assistant_transport.state.conversation_state_handoff import (
+    ConversationHandoff,
+    validate_handoffs,
+)
 from app.assistant_transport.state.conversation_state_message import (
     ConversationQueuedMessage,
     ConversationStateMessage,
@@ -32,6 +36,7 @@ _SNAPSHOT_KEYS = {
     "terminal_sessions",
     "background_tasks",
     "foreground_waits",
+    "handoffs",
 }
 _ACTIVITY_KEYS = {
     "runId",
@@ -62,7 +67,7 @@ _TOOL_PART_KEYS = {
     "presentation",
     "display_data",
     "team_run_id",
-    "deferred",
+    "background",
     "isError",
     "approvalRequestId",
     "child_task_id",
@@ -88,7 +93,7 @@ class ConversationStateSnapshot(TypedDict):
     HTTP 响应同步返回。``terminal_sessions`` 是本 Task 终端会话的进程内事实（不持久化），
     投影规则见 ``ConversationTaskStateService.refresh_terminal_sessions``。
     ``background_tasks``（后台工作看板）与 ``foreground_waits``（可转到后台的前台等待）同样是进程内
-    事实，见 ``refresh_deferred_results``。
+    事实，见 ``refresh_deferred_results``；``handoffs``（进行中的交接）也是，见 ``refresh_handoffs``。
 
     ``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；
     后端工作副本始终是完整历史（恒为 0），
@@ -104,6 +109,7 @@ class ConversationStateSnapshot(TypedDict):
     terminal_sessions: list[ConversationTerminalSession]
     background_tasks: list[ConversationBackgroundTask]
     foreground_waits: list[str]
+    handoffs: list[ConversationHandoff]
 
 
 def empty_snapshot(title: str = "新对话") -> ConversationStateSnapshot:
@@ -117,6 +123,7 @@ def empty_snapshot(title: str = "新对话") -> ConversationStateSnapshot:
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
+        "handoffs": [],
     }
 
 
@@ -126,7 +133,7 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     if not isinstance(state, dict) or set(state) - {"queued_messages"} != _SNAPSHOT_KEYS:
         raise ValueError(
             "snapshot must contain title, messages, messageOffset, activity, terminal_sessions, "
-            "background_tasks and foreground_waits"
+            "background_tasks, foreground_waits and handoffs"
         )
     _validate_non_negative_int(state["messageOffset"], "messageOffset")
     if not isinstance(state["title"], str) or not state["title"].strip():
@@ -150,6 +157,7 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     validate_terminal_sessions(state["terminal_sessions"])
     validate_background_tasks(state["background_tasks"])
     validate_foreground_waits(state["foreground_waits"])
+    validate_handoffs(state["handoffs"])
 
 
 def _validate_non_negative_int(value: object, label: str) -> None:
@@ -321,8 +329,8 @@ def _validate_part(part: object) -> None:
             or part["team_run_id"] < 1
         ):
             raise ValueError("snapshot team_run_id must be a positive integer")
-        if "deferred" in part and part["deferred"] is not True:
-            raise ValueError("snapshot tool deferred must be true when present")
+        if "background" in part and part["background"] is not True:
+            raise ValueError("snapshot tool background must be true when present")
         if part.get("child_task_id") is not None and (
             not isinstance(part.get("child_task_id"), int)
             or isinstance(part.get("child_task_id"), bool)

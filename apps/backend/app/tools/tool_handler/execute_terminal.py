@@ -9,17 +9,15 @@
 由后端进程持有，不能放进每次调用结束即被杀的工具子进程；超时与取消都由执行后端杀进程树。
 
 平台 shell 契约（可下发哪些 shell、命令该用什么语法）的唯一事实源是参数模型
-（``tool_models/execute_terminal_args.py``）：本模块的本机探测直接以该契约为候选清单，只负责
-「怎么在宿主机上找到它」，并把实测可用的 shell 收窄进模型可见 schema，不另立一份 shell 清单。
+（``tool_models/execute_terminal_args.py``）：本模块的本机探测直接以该契约为候选清单，经
+``app.tools.shell.host_shells`` 定位，把实测可用的 shell 收窄进模型可见 schema，不另立一份
+shell 清单。
 """
 
-import os
 import platform
-import shutil
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import get_args
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -53,14 +51,12 @@ from app.tools.tool_handler.terminal.output_stream import TerminalOutputStream
 from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.execute_terminal_args import (
     DEFAULT_COMMAND_TIMEOUT_S,
-    EXECUTE_TERMINAL_DEFERRED,
+    EXECUTE_TERMINAL_BACKGROUND,
     MAX_COMMAND_TIMEOUT_S,
     ExecuteTerminalShell,
-    MacExecuteTerminalShell,
-    WindowsExecuteTerminalShell,
-    is_windows_host,
     resolve_execute_terminal_args_model,
 )
+from app.tools.shell.host_shells import available_shells
 
 # 平台无关的工具描述：只写选用与调用决策需要的执行语义（进程不保留状态、无 stdin、前后台与时长、
 # 命令策略）；平台 shell、命令语法与 workdir 规则由参数模型各字段承载，不在此复述。不点名
@@ -148,17 +144,11 @@ class ExecuteTerminalTool(HandlerBase):
 
     @staticmethod
     def _detect_available_shells(platform_name: str) -> tuple[str, ...]:
-        """按参数契约探测本机真正可用的 shell，只查可执行文件不启动 shell。
+        """探测本机真正可用的 shell，只查可执行文件不启动 shell。
 
-        候选值直接取自当前平台参数类的 ``shell`` Literal（``get_args``），顺序即契约声明顺序，
-        因此「契约新增或移除某个 shell」会自动同步到本机探测与模型可见 ``enum``——本方法不维护
-        第二份 shell 清单，只描述「怎么在宿主机上找到它」：Windows 按 ``<shell>.exe`` 查 PATH
-        （``cmd`` 除 PATH 外只要 ``COMSPEC`` 已设置即视为可用，与 ``local_backend`` 用
-        ``shell=True`` 交由 ``COMSPEC`` 解释的口径一致），POSIX 按名字查 PATH（``sh`` 是软链，
-        按绝对路径探测以免依赖 PATH 是否包含 ``/bin``）。
-
-        返回值的顺序即模型可见 ``enum`` 的顺序，``'auto'`` 恒为首位；平台名由 ``__init__`` 传入，
-        且与参数模型选型共用 ``is_windows_host``，不在本方法重复探测 ``platform.system()``。
+        候选清单与定位都来自 shell 目录（``host_shells.available_shells``），参数模型的 ``Literal``
+        也由同一份声明派生，所以本机探测、模型可见 ``enum`` 与参数校验始终一致，顺序即目录声明
+        顺序，``'auto'`` 恒为首位。平台名由 ``__init__`` 传入，与参数模型选型共用 ``is_windows``。
 
         参数:
             platform_name: ``platform.system()`` 的取值（``__init__`` 已去除首尾空白并兜底为
@@ -172,25 +162,10 @@ class ExecuteTerminalTool(HandlerBase):
             无。
 
         副作用:
-            只读进程环境（``COMSPEC``）与 PATH（``shutil.which``）、探测 ``/bin/sh`` 是否存在；
-            不启动任何进程。
+            只读进程环境与文件系统（见 ``find_shell``），不启动任何进程。
         """
 
-        windows = is_windows_host(platform_name)
-        contract = WindowsExecuteTerminalShell if windows else MacExecuteTerminalShell
-        shells: list[str] = ["auto"]
-        for shell in get_args(contract):
-            if shell == "auto":
-                continue
-            if windows:
-                if shutil.which(f"{shell}.exe") or (shell == "cmd" and os.environ.get("COMSPEC")):
-                    shells.append(shell)
-            elif shell == "sh":
-                if Path("/bin/sh").is_file() and os.access("/bin/sh", os.X_OK):
-                    shells.append(shell)
-            elif shutil.which(shell):
-                shells.append(shell)
-        return tuple(shells)
+        return ("auto", *available_shells(system=platform_name))
 
     def _build_parameters_schema(self) -> dict[str, object]:
         """构造模型可见参数 schema：平台契约取参数模型，本机收敛只做收窄。
@@ -287,7 +262,7 @@ class ExecuteTerminalTool(HandlerBase):
                 ``MAX_COMMAND_TIMEOUT_S``。
             workdir: 工作目录；缺省 ``execution_context.workspace_root``；相对路径相对
                 该根解析；绝对路径直接使用。
-            background: ``True`` 立即转后台；``None`` 取 ``EXECUTE_TERMINAL_DEFERRED`` 的默认（前台）。
+            background: ``True`` 立即转后台；``None`` 取 ``EXECUTE_TERMINAL_BACKGROUND`` 的默认（前台）。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。命令的全部文件系统
                 副作用由 workdir 边界与 deny-list 共同约束，而非仅靠 cwd 宣称。
 
@@ -394,8 +369,8 @@ class ExecuteTerminalTool(HandlerBase):
             tool_call_id=tool_call_id,
             kind="terminal_command",
             label=f"terminal_command:{command[:80]}",
-            background=EXECUTE_TERMINAL_DEFERRED.resolve_background(background),
-            foreground_limit_s=EXECUTE_TERMINAL_DEFERRED.foreground_limit_s,
+            background=EXECUTE_TERMINAL_BACKGROUND.resolve_background(background),
+            foreground_limit_s=EXECUTE_TERMINAL_BACKGROUND.foreground_limit_s,
             is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
         )
         if outcome.placeholder is not None:
@@ -493,7 +468,7 @@ class ExecuteTerminalTool(HandlerBase):
             display_data=build_terminal_placeholder_display_data(command=command, workdir=cwd),
             suspend=reason == "limit",
         )
-        observation.deferred = True
+        observation.background = True
         return observation
 
     def to_definition(self) -> ToolDefinition:
@@ -521,7 +496,7 @@ class ExecuteTerminalTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",  # 作业须由后端进程持有才能转到后台，见模块 docstring
-            deferred=EXECUTE_TERMINAL_DEFERRED,
+            background=EXECUTE_TERMINAL_BACKGROUND,
             display=ToolDisplayHints(
                 verb="执行命令",
                 icon="terminal",

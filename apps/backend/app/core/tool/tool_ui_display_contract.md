@@ -161,6 +161,7 @@ Transport 投影不得把失败态 `content` 写入 `ToolCallStatusChangedEvent.
 | 工具 | 静态展示声明 | `kind` | 动态展示字段 |
 | --- | --- | --- | --- |
 | `read_file` | `trace`、不可展开、`none`、`eye` | `read-file-meta` | `path`、实际展示的 `line_range`、`file_size`；文件过大截断时附带固定 `status_hint` |
+| `read_image` | `trace`、可展开、`details`、`eye` | `image-read` | `images`（每项 `path`、`asset_id`、`width`、`height`，图片本身随工具图片通道交给模型）、`failures`（每项 `path` 与受控中文短提示 `hint`）；部分失败仍是成功态，全部失败走错误态（`status_hint=无法读取图片`） |
 | `write_file` | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | `changes`、`diff_stats` |
 | `patch_write`（replace） | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | 与 `write_file` 相同 |
 | `apply_patch` | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | 只含既有文件 `modified` 的多文件 `changes`、`diff_stats` |
@@ -173,7 +174,7 @@ Transport 投影不得把失败态 `content` 写入 `ToolCallStatusChangedEvent.
 | `terminal_list` | `standalone`、不可展开、`none` | `terminal-session` | 本次发现的 `session_count`，不复制可变的会话状态 |
 | `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、`status`、`exit_code`、`initial_cwd`、`shell_kind`、`label`；实时状态读 snapshot `terminal_sessions` |
 | `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`lines`（`[a,b]` 或 null）、`screen`（全屏程序期间返回整屏时为 true，此时 `lines` 为 null）、`wait_result`（`{until, end_reason, matched_line?, matched_screen_row?}`，等待只在前台进行）；write 另有 `input_summary`（实际输入摘要） |
-| `terminal_handoff` | `standalone`、不可展开、`none`（HITL `execute`） | `terminal-session` | 与 `terminal_read` / `terminal_write` 相同，`input_summary` 为交接原因；等待占位为 `pending` 时卡片提供「交还」 |
+| `terminal_handoff` | `standalone`、不可展开、`none`（HITL `execute`） | `terminal-session` | 与 `terminal_read` / `terminal_write` 相同，`input_summary` 为交接原因；等待占位为 `pending` 时卡片提供「交还」；进行中的交接另见 snapshot 顶层 `handoffs`（面板提示与弹出读它，不读卡片） |
 | `terminal_close` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`exit_code` |
 | `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
 | `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
@@ -401,6 +402,8 @@ task，只使用明确的 `child_task_id`，不从文本中解析链接。
 app/tools/display/
 ├─ file_change_display.py
 ├─ filesystem_display.py
+├─ image_display.py
+├─ browser_display.py
 └─ terminal_display.py
 app/core/tool/
 ├─ child_agent/{child_agent_display.py, delegation_display.py, agent_configuration_display.py}
@@ -410,6 +413,8 @@ app/core/tool/
 
 - `file_change_display.py`：`file-changes` 这一个 `kind` 的全部投影——内容修改类 diff 投影，以及删除类的「目标 + 状态」摘要（`build_file_delete_display_data`）。
 - `filesystem_display.py`：读取、搜索、目录的展示投影。
+- `image_display.py`：`read_image` 读到的图片与未读成路径的投影。
+- `browser_display.py`：内置浏览器页面（含截图、交接原因）的投影。
 - `terminal_display.py`：投影原始终端命令和输出。
 - `web_display.py`：搜索结果与正文提取状态投影。
 - `delegation_display.py`：委派结果的最小状态投影。

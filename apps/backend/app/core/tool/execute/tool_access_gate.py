@@ -100,7 +100,8 @@ class ToolAccessGate:
     ) -> ToolGateOutcome:
         """按顺序执行四段准入检查并返回判定结果。
 
-        检查顺序：注册表命中 → Agent profile 权限门禁 → 参数解码与校验 → PreToolUse Hook。
+        检查顺序：注册表命中 → Agent profile 权限门禁 → 图片能力（``returns_images`` 的工具要求本次
+        Run 的模型支持图片）→ 参数解码与校验 → PreToolUse Hook。
         任一环节拒绝即短路返回 ``denial``，不继续后续检查、不执行工具、不触发
         PostToolUse Hook。全部通过时返回 ``admitted=True`` 的判定结果。
 
@@ -144,6 +145,18 @@ class ToolAccessGate:
                     f"tool is not allowed: {tool.name}. "
                     "This tool is disabled for the current run. Do not call it again.",
                     tool_call_id=call.call_id,
+                )
+            )
+
+        agent = execution_context.agent
+        if tool.returns_images and agent is not None and not agent.model.supports_image:
+            return ToolGateOutcome(
+                denial=tool_error(
+                    tool.name,
+                    f"{tool.name} returns images, but the current model cannot read images. "
+                    "Use a text-only alternative instead of calling it again.",
+                    tool_call_id=call.call_id,
+                    status_hint="模型不支持图片",
                 )
             )
 
