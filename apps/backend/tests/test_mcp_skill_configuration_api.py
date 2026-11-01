@@ -6,9 +6,13 @@ import zipfile
 from fastapi.testclient import TestClient
 
 from app.app import app
-from app.service.configuration import mcp_configuration_service, skill_configuration_service
-from app.service.configuration import mcp_configuration
-from app.service.configuration import skill_catalog, skill_configuration
+from app.service.configuration import (
+    mcp_configuration,
+    mcp_configuration_service,
+    skill_catalog,
+    skill_configuration,
+    skill_configuration_service,
+)
 
 
 def _write_skill(root, name: str) -> None:

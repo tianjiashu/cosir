@@ -9,7 +9,7 @@
    "Available on this host:" 的值与 ``enum`` 完全一致（含顺序）。
 4. 描述质量：非空 / 无 CJK / 句号结尾 / 类内互不包含 / 不泄漏对端平台字面量。
 5. 工具名不变 + ``ToolRegistry`` 同名去重只保留一个定义。
-6. 执行模式：thread 工具，声明延迟结果（可转到后台）。
+6. 执行模式：thread 工具，声明后台结果（可转到后台）。
 
 所有断言都指向「契约」而非实现细节；发现缺陷只报告不修复。
 """
@@ -484,12 +484,12 @@ def test_registry_skips_duplicate_name_and_keeps_single_definition(
 
 
 # ----------------------------------------------------------------------
-# 6. 执行模式（thread + 延迟结果）
+# 6. 执行模式（thread + 后台结果）
 # ----------------------------------------------------------------------
 
 
-def test_definition_runs_in_thread_with_deferred_capability() -> None:
-    """execute_terminal 是 thread 工具并声明延迟结果：命令要能转到后台，作业必须由后端进程持有。"""
+def test_definition_runs_in_thread_with_background_capability() -> None:
+    """execute_terminal 是 thread 工具并声明后台结果：命令要能转到后台，作业必须由后端进程持有。"""
 
     definition = ExecuteTerminalTool().to_definition()
     assert definition.execution_mode == "thread"

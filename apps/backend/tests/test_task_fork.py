@@ -9,12 +9,14 @@ from fastapi import HTTPException
 
 from app.api.schemas import ForkTaskRequest
 from app.api.tasks_api import fork_task
-from app.assistant_transport.service.conversation_task_state_rebuilder import ConversationTaskStateRebuilder
+from app.assistant_transport.service.conversation_task_state_rebuilder import (
+    ConversationTaskStateRebuilder,
+)
 from app.assistant_transport.state.message_identity import leading_reply_id, reply_id, turn_of
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.conversation_input import UserInputPresentation
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.models.message_metadata import UserMessageMetadata
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.task_runtime.service.task_service import TaskService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations

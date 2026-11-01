@@ -4,9 +4,9 @@
 投影层只把 ``content`` 原样转交模型，空内容时回落为 ``status``。
 """
 
-from app.core.tool.schemas import ToolObservation
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
+from app.core.tool.schemas import ToolObservation
 from app.core.workflow.node_helper.tool_observation_projection import (
     to_tool_model_message as _to_message,
 )

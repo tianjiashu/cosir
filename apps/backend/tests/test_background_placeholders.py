@@ -8,20 +8,26 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background.deferred_job import DeferredConclusion
 from app.assistant_transport.projection.tool_call_event_projection import plan_tool_calls_settled
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_snapshot import _validate_part
 from app.core.events import ToolCallsSettledEvent
 from app.core.tool.background import placeholders
+from app.core.tool.background.job import BackgroundConclusion
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_observation_projection as projection_module
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
 from app.service import depends
 from app.service.conversation_run.conversation_task_context_service import _uninherited
+
+_WORK = BackgroundWork(
+    kind="terminal_command", label="make", started_at="2026-01-01T00:00:00+00:00"
+)
+_ENDED_AT = "2026-01-01T00:01:00+00:00"
+_FINISHED_WORK = _WORK.model_copy(update={"ended_at": _ENDED_AT})
 
 
 def _tool_row(task_id: int, run_id: int, sequence: int, call_id: str, **metadata: Any):
@@ -41,9 +47,11 @@ def stored(tmp_path: Path, isolated_storage):
     task = depends.get_task_crud().create(workspace.id, "task")
     run = depends.get_conversation_run_crud().create(task.id, "completed")
     crud = depends.get_conversation_task_context_crud()
-    crud.create(_tool_row(task.id, run.id, 1, "call-bg", status="pending", background=True))
+    crud.create(_tool_row(task.id, run.id, 1, "call-bg", status="pending", background=_WORK))
     crud.create(_tool_row(task.id, run.id, 2, "call-hitl", status="pending"))
-    crud.create(_tool_row(task.id, run.id, 3, "call-done", status="completed", background=True))
+    crud.create(
+        _tool_row(task.id, run.id, 3, "call-done", status="completed", background=_FINISHED_WORK)
+    )
     return SimpleNamespace(task_id=task.id, crud=crud)
 
 
@@ -54,7 +62,7 @@ def _metadata(stored, call_id: str) -> ToolMessageMetadata:
     raise AssertionError(call_id)
 
 
-def test_only_pending_deferred_rows_are_settled(stored) -> None:
+def test_only_pending_background_rows_are_settled(stored) -> None:
     assert [r.message["tool_call_id"] for r in stored.crud.list_unsettled_placeholders()] == ["call-bg"]
 
     count = placeholders.settle_placeholders(
@@ -63,10 +71,13 @@ def test_only_pending_deferred_rows_are_settled(stored) -> None:
 
     assert count == 1
     settled = _metadata(stored, "call-bg")
-    assert (settled.status, settled.error, settled.background) == ("cancelled", "已中断", True)
+    assert (settled.status, settled.error) == ("cancelled", "已中断")
+    assert settled.background.started_at == _WORK.started_at
+    assert settled.background.ended_at is not None
     # HITL 等待占位与已完成的后台占位不动。
     assert _metadata(stored, "call-hitl").status == "pending"
     assert _metadata(stored, "call-done").status == "completed"
+    assert _metadata(stored, "call-done").background == _FINISHED_WORK
     # 迟到的再次结算幂等。
     assert placeholders.settle_placeholders(stored.task_id, None, "cancelled", None) == 0
 
@@ -78,23 +89,28 @@ def test_settlement_filters_by_call(stored) -> None:
 
 
 def test_fork_marks_waiting_background_placeholders_uninherited() -> None:
-    waiting = ToolMessageMetadata(status="pending", background=True)
+    waiting = ToolMessageMetadata(status="pending", background=_WORK)
     copied = _uninherited(waiting)
     assert (copied.status, copied.error) == ("cancelled", "未继承")
     assert waiting.status == "pending"  # 源 Task 的行不受影响
+    assert waiting.background.ended_at is None
+    assert copied.background.started_at == _WORK.started_at
+    assert copied.background.ended_at is not None
+    finished = ToolMessageMetadata(status="completed", background=_FINISHED_WORK)
+    assert _uninherited(finished).background == _FINISHED_WORK
     hitl = ToolMessageMetadata(status="pending")
     assert _uninherited(hitl).status == "pending"
 
 
-def test_terminal_event_keeps_deferred_placeholders_pending() -> None:
-    observation = ToolObservation(tool_name="terminal_write", status="success", background=True)
+def test_terminal_event_keeps_background_placeholders_pending() -> None:
+    observation = ToolObservation(tool_name="terminal_write", status="success", background=_WORK)
     event = terminal_event(observation, task_id=1, run_id=2, step_id="s", tool_call_id="c")
-    assert (event.status, event.background) == ("pending", True)
+    assert (event.status, event.background) == ("pending", _WORK)
 
 
 
-def test_observe_persists_deferred_placeholder_as_pending(monkeypatch) -> None:
-    """后台占位经 tools → observe 交接后仍带 ``deferred``，落库为 pending、实时投影也是 pending。"""
+def test_observe_persists_background_placeholder_as_pending(monkeypatch) -> None:
+    """后台占位经 tools → observe 交接后仍带 ``background``，落库为 pending、实时投影也是 pending。"""
     written: list[ToolMessageMetadata] = []
     emitted: list[Any] = []
     monkeypatch.setattr(
@@ -114,7 +130,7 @@ def test_observe_persists_deferred_placeholder_as_pending(monkeypatch) -> None:
                 tool_name="execute_terminal",
                 status="success",
                 tool_call_id="call-bg",
-                background=True,
+                background=_WORK,
             )
         ],
         valid_tool_calls={
@@ -125,19 +141,24 @@ def test_observe_persists_deferred_placeholder_as_pending(monkeypatch) -> None:
     projection_module.settle_observations(batch, step_id="step-1")
 
     [metadata] = written
-    assert (metadata.status, metadata.background) == ("pending", True)
+    assert (metadata.status, metadata.background) == ("pending", _WORK)
     [event] = emitted
-    assert (event.status, event.background) == ("pending", True)
+    assert (event.status, event.background) == ("pending", _WORK)
 
 
-def test_deferred_placeholder_projects_a_valid_part_field() -> None:
+def test_background_placeholder_projects_a_valid_part_field() -> None:
     """卡片字段与 snapshot 白名单、前端契约同名（``background``），否则 snapshot 校验会拒收。"""
-    fields = project_tool_result(ToolMessageMetadata(status="pending", background=True))
+    fields = project_tool_result(ToolMessageMetadata(status="pending", background=_WORK))
 
-    assert fields.get("background") is True
+    assert fields.get("background") == {
+        "kind": _WORK.kind,
+        "label": _WORK.label,
+        "startedAt": _WORK.started_at,
+        "endedAt": None,
+    }
     _validate_part({"type": "tool-call", "toolCallId": "c", "toolName": "t", "args": {}, **fields})
 
-def test_run_settlement_skips_deferred_parts() -> None:
+def test_run_settlement_skips_background_parts() -> None:
     state = {
         "messages": [
             {
@@ -149,7 +170,12 @@ def test_run_settlement_skips_deferred_parts() -> None:
                         "type": "tool-call",
                         "toolCallId": "a",
                         "status": "pending",
-                        "background": True,
+                        "background": {
+                            "kind": "terminal_command",
+                            "label": "build",
+                            "startedAt": "2026-01-01T00:00:00+00:00",
+                            "endedAt": None,
+                        },
                     },
                     {"type": "tool-call", "toolCallId": "b", "status": "running"},
                 ],
@@ -178,7 +204,11 @@ class _Context:
 @pytest.mark.parametrize("status", ["pending", "cancelled"])
 def test_consumed_result_completes_the_placeholder(monkeypatch, status: str) -> None:
     """结论并入即推到 completed；重启改成 cancelled 的占位在结论到达后同样推到 completed。"""
-    context = _Context(ToolMessageMetadata(status=status, background=True))
+    context = _Context(
+        ToolMessageMetadata(
+            status=status, background=_WORK if status == "pending" else _FINISHED_WORK,
+        )
+    )
     emitted: list[Any] = []
     monkeypatch.setattr(projection_module, "_message_context", lambda: context)
     monkeypatch.setattr(
@@ -189,13 +219,17 @@ def test_consumed_result_completes_the_placeholder(monkeypatch, status: str) -> 
     monkeypatch.setattr(projection_module, "emit", emitted.append)
 
     card = {"kind": "terminal-result", "command": "make", "output": "ok", "exit_code": 0}
-    projection_module.settle_deferred_placeholder("call-bg", display_data=card, step_id="step-2")
+    projection_module.settle_background_placeholder(
+        "call-bg", display_data=card, ended_at=_ENDED_AT, step_id="step-2"
+    )
 
     # 作业给卡片的终态展示随结算写入（写入即持久化），投影按实际写入的展示数据发出。
     [update] = context.updates
     assert (update.status, update.display_data) == ("completed", card)
+    assert update.background == _FINISHED_WORK
     [event] = emitted
     assert (event.tool_call_id, event.status, event.display_data) == ("call-bg", "completed", card)
+    assert event.background == _FINISHED_WORK
 
 
 @pytest.mark.parametrize(
@@ -203,7 +237,7 @@ def test_consumed_result_completes_the_placeholder(monkeypatch, status: str) -> 
     [
         None,
         ToolMessageMetadata(status="pending"),
-        ToolMessageMetadata(status="completed", background=True),
+        ToolMessageMetadata(status="completed", background=_FINISHED_WORK),
     ],
 )
 def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:
@@ -216,7 +250,9 @@ def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:
     )
     monkeypatch.setattr(projection_module, "emit", lambda _event: pytest.fail("emitted"))
 
-    projection_module.settle_deferred_placeholder("call-x", display_data=None, step_id="step-2")
+    projection_module.settle_background_placeholder(
+        "call-x", display_data=None, ended_at=_ENDED_AT, step_id="step-2"
+    )
 
     assert context.updates == []
 
@@ -226,10 +262,12 @@ def test_result_arriving_while_stopping_settles_placeholder_as_cancelled(stored)
     import asyncio
 
     from app.core.task_cancellation import TaskCancellation
-    from app.core.tool.background.deferred_registry import deferred_registry
-    from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+    from app.core.tool.background.registry import background_registry
+    from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+        cancellation_registry,
+    )
 
-    deferred_registry.register(
+    background_registry.register(
         "call-bg",
         task_id=stored.task_id,
         run_id=None,
@@ -239,12 +277,11 @@ def test_result_arriving_while_stopping_settles_placeholder_as_cancelled(stored)
     )
     cancellation_registry.request_cancel(stored.task_id, "user")
     try:
-        assert deferred_registry.complete("call-bg", DeferredConclusion({"exit_code": 0})) is False
+        assert background_registry.complete("call-bg", BackgroundConclusion({"exit_code": 0})) is False
         asyncio.run(TaskCancellation(stored.task_id).cancel_background_task())
     finally:
         cancellation_registry.consume(stored.task_id)
-        deferred_registry.drop_task(stored.task_id)
-        deferred_registry.forget_task(stored.task_id)
+        background_registry.drop_task(stored.task_id)
 
     assert _metadata(stored, "call-bg").status == "cancelled"
     assert depends.get_task_message_queue().pending_nowait(stored.task_id) == []

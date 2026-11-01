@@ -12,11 +12,11 @@ import pytest
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.events import RunStatusChangedEvent
-from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models.conversation_run_failure import run_failure_message
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.core.workflow.conversation_run_ledger import ConversationRunLedger
+from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.models.conversation_run_failure import run_failure_message
+from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.service.recover_service import RecoverService
 from tests.sdk_fixtures import sdk_completion
 
@@ -227,8 +227,8 @@ def _creation_service(store, monkeypatch, projector):
 
 def test_create_run_commits_inbox_and_current_run_before_projector(request, monkeypatch):
     """独立连接在事件发布时已能看到整组事实，context 留待模型边界并入。"""
-    from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
     from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
+    from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
     from app.models.conversation_input import UserInputPresentation
 
     store = request.getfixturevalue("canonical_store")

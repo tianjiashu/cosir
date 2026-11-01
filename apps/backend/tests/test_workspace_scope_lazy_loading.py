@@ -22,8 +22,6 @@ from pathlib import Path
 
 import pytest
 
-from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
-from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
 from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_source
@@ -31,6 +29,12 @@ from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.service.configuration.agent_configuration_service import AgentConfigurationService
+from app.service.configuration.agent_team_configuration_registry import (
+    AgentTeamConfigurationRegistry,
+)
+from app.service.configuration.agent_team_configuration_source import (
+    AgentTeamConfigurationScopeSource,
+)
 
 _JOIN_TIMEOUT = 10.0
 

@@ -98,7 +98,12 @@ async def test_consumed_message_is_a_non_retryable_conflict(harness, command) ->
 async def test_non_user_input_is_rejected_and_kept(harness, command) -> None:
     """撤回在事务里先删后判：不是用户输入时回滚，行保留。"""
     result = harness.queue.put(
-        harness.task_id, TaskMessage.of(BackgroundResultBody(tool_name="probe", tool_result="x"))
+        harness.task_id,
+        TaskMessage.of(
+            BackgroundResultBody(
+                ended_at="2026-01-01T00:01:00+00:00", tool_name="probe", tool_result="x"
+            )
+        ),
     )
 
     with pytest.raises(SessionConflictError):

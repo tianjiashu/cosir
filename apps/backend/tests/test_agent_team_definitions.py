@@ -8,31 +8,35 @@ from pydantic import ValidationError
 from sqlalchemy import inspect
 from sqlalchemy.orm import sessionmaker
 
-from app.service.configuration import agent_team_configuration_source as configuration_scope_source
+from app.core.tool.handler.agent_team.agent_team_preparation_service import (
+    AgentTeamPreparationResult,
+)
+from app.core.tool.handler.agent_team.agent_team_run_approval import AgentTeamRunApproval
+from app.core.tool.handler.agent_team.args.agent_team_approve_input import AgentTeamApproveInput
+from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.args.propose_agent_team_configuration_args import (
+    ProposeAgentTeamConfigurationArgs,
+)
+from app.core.tool.handler.propose_agent_team_configuration import (
+    ProposeAgentTeamConfigurationTool,
+)
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
-from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
-from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
-from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
 from app.models.agent_team.state.agent_team_run_state import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
     AgentTeamRunState,
 )
-from app.core.tool.handler.propose_agent_team_configuration import (
-    ProposeAgentTeamConfigurationTool,
-)
-from app.core.tool.handler.agent_team.args.agent_team_approve_input import AgentTeamApproveInput
-from app.core.tool.handler.agent_team.args.propose_agent_team_configuration_args import (
-    ProposeAgentTeamConfigurationArgs,
-)
-from app.core.tool.handler.agent_team.agent_team_preparation_service import (
-    AgentTeamPreparationResult,
-)
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
-from app.core.tool.handler.agent_team.agent_team_run_approval import AgentTeamRunApproval
+from app.service.configuration import agent_team_configuration_source as configuration_scope_source
+from app.service.configuration.agent_team_configuration_registry import (
+    AgentTeamConfigurationRegistry,
+)
 from app.service.configuration.agent_team_configuration_service import (
     AgentTeamConfigurationService,
+)
+from app.service.configuration.agent_team_configuration_source import (
+    AgentTeamConfigurationScopeSource,
 )
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.engine_cache import create_sqlite_engine

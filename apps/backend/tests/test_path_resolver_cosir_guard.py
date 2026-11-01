@@ -12,8 +12,8 @@
 
 from pathlib import Path
 
-
 from app.core.tool.schemas import ToolExecutionContext
+from app.tools.terminal_runtime.session_service import TerminalSessionService
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.delete_tool import DeleteTool
 from app.tools.tool_handler.move_tool import MoveTool
@@ -21,7 +21,6 @@ from app.tools.tool_handler.read_file import ReadFileTool
 from app.tools.tool_handler.replace_tool import ReplaceTool
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.write_file import WriteFileTool
-from app.tools.terminal_runtime.session_service import TerminalSessionService
 
 
 def _context(root: Path) -> ToolExecutionContext:

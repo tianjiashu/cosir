@@ -6,19 +6,19 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.llm_provider.message_codec import assistant_message
-from app.core.tool.schemas import ToolCall, ToolObservation
 from app.core.tool.execute import tool_executor as tool_executor_module
+from app.core.tool.schemas import ToolCall, ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.enums.react_route import ReactRoute
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper import tool_observation_projection as projection
-from app.core.workflow.execution_state.run_mailbox import RunMailbox
-from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import observation_node, prepare_input_node, tools_node
 from app.models.enums.conversation_run_status import RunTransition
+from app.models.enums.react_route import ReactRoute
 from tests.runtime_context_stub import install_runtime_singletons, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 from tests.tool_executor_fakes import emit_running

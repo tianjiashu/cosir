@@ -13,7 +13,7 @@ from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 from terminal_test_support import ReadyWorker, make_service
 
-from app.core.tool.background.deferred_registry import deferred_registry
+from app.core.tool.background.registry import background_registry
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
@@ -155,7 +155,7 @@ def tool_service(monkeypatch):
         lambda task_id, tool_call_id: False,
     )
     yield service, workers
-    deferred_registry.drop_task(1)
+    background_registry.drop_task(1)
 
 
 def _context(tmp_path: Path) -> Any:

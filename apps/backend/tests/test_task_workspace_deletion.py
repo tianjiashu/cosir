@@ -515,14 +515,14 @@ def test_deleting_a_root_keeps_its_forks_as_roots(storage, tmp_path) -> None:
         get_task_crud().get(child)
 
 
-def test_deleting_an_idle_task_revokes_its_deferred_work(storage, tmp_path) -> None:
+def test_deleting_an_idle_task_revokes_its_background_work(storage, tmp_path) -> None:
     """后台工作归 Task、比 Run 活得久：空闲 Task 没有执行者，删除提交后也要撤销并终止它。"""
-    from app.core.tool.background.deferred_registry import deferred_registry
+    from app.core.tool.background.registry import background_registry
 
     workspace = get_workspace_crud().create("idle", str(tmp_path))
     task = get_task_crud().create(workspace.id, "idle").id
     cancelled: list[str] = []
-    deferred_registry.register(
+    background_registry.register(
         "call-bg",
         task_id=task,
         run_id=None,
@@ -534,7 +534,7 @@ def test_deleting_an_idle_task_revokes_its_deferred_work(storage, tmp_path) -> N
     get_task_service().delete_task(task)
 
     assert cancelled == ["call-bg"]
-    assert deferred_registry.drop_task(task) == []
+    assert background_registry.drop_task(task) == []
 
 
 @pytest.mark.parametrize("delete_workspace", [False, True])

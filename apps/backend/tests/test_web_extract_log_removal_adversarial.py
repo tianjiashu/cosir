@@ -45,8 +45,8 @@ from app.core.tool.handler.web.firecrawl_client import (
     FirecrawlClient,
     FirecrawlRequestError,
     FirecrawlUnavailableError,
+    WebExtractItem,
 )
-from app.core.tool.handler.web.firecrawl_client import WebExtractItem
 from app.core.tool.handler.web_extract import WebExtractTool
 from tests.test_web_search_extract_tools import (
     FakeClient,

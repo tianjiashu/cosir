@@ -1,4 +1,4 @@
-"""统一执行入口 run_deferred 与通用作业：前台 / 后台、转到后台、到上限、Run 取消与撤销。"""
+"""统一执行入口 run_background_work 与通用作业：前台 / 后台、转到后台、到上限、Run 取消与撤销。"""
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background import deferred_registry as deferred_module
-from app.core.tool.background.deferred_job import DeferredConclusion, ManualJob, ThreadJob
-from app.core.tool.background.deferred_registry import deferred_registry
-from app.core.tool.background.run_deferred import run_deferred
+from app.core.tool.background import registry as background_module
+from app.core.tool.background.job import BackgroundConclusion, ManualJob, ThreadJob
+from app.core.tool.background.registry import background_registry
+from app.core.tool.background.run import run_background_work
 from app.core.tool.schemas import BackgroundCapability, ToolDefinition
 from app.core.tool.schemas.tool_background import background_field
 
@@ -24,7 +24,7 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, dict[st
         calls.append((tool_call_id, result))
         return True
 
-    monkeypatch.setattr(deferred_module, "deliver_background_result", deliver)
+    monkeypatch.setattr(background_module, "deliver_background_result", deliver)
     return calls
 
 
@@ -35,15 +35,15 @@ def _run(job: Any, **overrides: Any):
         "tool_call_id": "call-1",
         "kind": "terminal_command",
         "label": "t",
-        "background": False,
+        "mode": "foreground",
         "foreground_limit_s": None,
         "is_cancelled": lambda: False,
     }
-    return run_deferred(job, **{**options, **overrides})
+    return run_background_work(job, **{**options, **overrides})
 
 
 def _job() -> ManualJob:
-    return ManualJob(on_cancel=lambda: None, cancelled_result=DeferredConclusion({"end_reason": "cancelled"}))
+    return ManualJob(on_cancel=lambda: None, cancelled_result=BackgroundConclusion({"end_reason": "cancelled"}))
 
 
 def _in_thread(target):
@@ -55,7 +55,7 @@ def _in_thread(target):
 
 def _wait_registered(tool_call_id: str = "call-1") -> None:
     deadline = time.monotonic() + 2
-    while not deferred_registry.owns(1, tool_call_id):
+    while not background_registry.owns(1, tool_call_id):
         assert time.monotonic() < deadline, "not registered"
         time.sleep(0.01)
 
@@ -64,25 +64,30 @@ def test_foreground_returns_the_result_without_delivery(delivered) -> None:
     job = _job()
     thread, box = _in_thread(lambda: _run(job))
     _wait_registered()
-    job.finish(DeferredConclusion({"value": 1}))
+    job.finish(BackgroundConclusion({"value": 1}))
     thread.join(2)
     assert box["outcome"].result.result == {"value": 1} and box["outcome"].placeholder is None
-    assert delivered == [] and not deferred_registry.owns(1, "call-1")
+    assert delivered == [] and not background_registry.owns(1, "call-1")
 
 
 def test_background_returns_placeholder_and_delivers_later(delivered) -> None:
     job = _job()
-    outcome = _run(job, background=True)
+    outcome = _run(job, mode="background")
     assert outcome.placeholder == "background"
-    assert "call-1" in [view.tool_call_id for view in deferred_registry.entries(1)]
-    job.finish(DeferredConclusion({"value": 2}))
+    assert background_registry.live_background(1) == {"call-1": outcome.work}
+    assert (outcome.work.kind, outcome.work.label, outcome.work.ended_at) == (
+        "terminal_command",
+        "t",
+        None,
+    )
+    job.finish(BackgroundConclusion({"value": 2}))
     assert delivered == [("call-1", {"value": 2})]
 
 
 def test_result_that_arrived_before_background_start_is_still_delivered(delivered) -> None:
     job = _job()
-    job.finish(DeferredConclusion({"value": 3}))
-    assert _run(job, background=True).placeholder == "background"
+    job.finish(BackgroundConclusion({"value": 3}))
+    assert _run(job, mode="background").placeholder == "background"
     assert delivered == [("call-1", {"value": 3})]
 
 
@@ -90,10 +95,10 @@ def test_user_detach_moves_the_wait_to_background(delivered) -> None:
     job = _job()
     thread, box = _in_thread(lambda: _run(job))
     _wait_registered()
-    assert deferred_registry.detach("call-1") == "detached"
+    assert background_registry.detach("call-1") == "detached"
     thread.join(2)
     assert box["outcome"].placeholder == "detached"
-    job.finish(DeferredConclusion({"value": 4}))
+    job.finish(BackgroundConclusion({"value": 4}))
     assert delivered == [("call-1", {"value": 4})]
 
 
@@ -101,7 +106,7 @@ def test_foreground_limit_detaches_automatically(delivered) -> None:
     job = _job()
     outcome = _run(job, foreground_limit_s=0.05)
     assert outcome.placeholder == "limit"
-    job.finish(DeferredConclusion({"value": 5}))
+    job.finish(BackgroundConclusion({"value": 5}))
     assert delivered == [("call-1", {"value": 5})]
 
 
@@ -109,15 +114,15 @@ def test_non_detachable_foreground_cannot_be_moved(delivered) -> None:
     job = _job()
     thread, box = _in_thread(lambda: _run(job, detachable=False))
     _wait_registered()
-    assert deferred_registry.detach("call-1") == "not_foreground"
-    job.finish(DeferredConclusion({"value": 6}))
+    assert background_registry.detach("call-1") == "not_foreground"
+    job.finish(BackgroundConclusion({"value": 6}))
     thread.join(2)
     assert box["outcome"].result.result == {"value": 6}
 
 
 def test_run_cancel_cancels_the_job_and_returns_its_cancel_result(delivered) -> None:
     cancelled = threading.Event()
-    job = ManualJob(on_cancel=cancelled.set, cancelled_result=DeferredConclusion({"end_reason": "cancelled"}))
+    job = ManualJob(on_cancel=cancelled.set, cancelled_result=BackgroundConclusion({"end_reason": "cancelled"}))
     stop = threading.Event()
     thread, box = _in_thread(lambda: _run(job, is_cancelled=stop.is_set))
     _wait_registered()
@@ -132,15 +137,15 @@ def test_user_cancel_of_a_foreground_entry_returns_the_cancel_result(delivered) 
     job = _job()
     thread, box = _in_thread(lambda: _run(job))
     _wait_registered()
-    deferred_registry.cancel("call-1")
+    background_registry.cancel("call-1")
     thread.join(2)
     assert box["outcome"].result.result == {"end_reason": "cancelled"}
 
 
 def test_cancelled_background_job_delivers_nothing(delivered) -> None:
     job = _job()
-    _run(job, background=True)
-    deferred_registry.drop_task(1)
+    _run(job, mode="background")
+    background_registry.drop_task(1)
     assert delivered == []
 
 
@@ -148,11 +153,11 @@ def test_thread_job_runs_work_off_thread_and_wakes_on_cancel() -> None:
     gate = threading.Condition()
     results: list[dict[str, object]] = []
 
-    def work(is_cancelled) -> DeferredConclusion:
+    def work(is_cancelled) -> BackgroundConclusion:
         with gate:
             while not is_cancelled():
                 gate.wait(1)
-        return DeferredConclusion({"end_reason": "cancelled", "thread": threading.current_thread().name})
+        return BackgroundConclusion({"end_reason": "cancelled", "thread": threading.current_thread().name})
 
     def wake() -> None:
         with gate:
@@ -172,13 +177,13 @@ def test_manual_job_delivers_once() -> None:
     seen: list[dict[str, object]] = []
     job = _job()
     job.on_done(lambda conclusion: seen.append(conclusion.result))
-    assert job.finish(DeferredConclusion({"a": 1})) is True
-    assert job.finish(DeferredConclusion({"a": 2})) is False
+    assert job.finish(BackgroundConclusion({"a": 1})) is True
+    assert job.finish(BackgroundConclusion({"a": 2})) is False
     job.cancel()
     assert seen == [{"a": 1}]
 
 
-def test_deferred_tools_must_declare_the_background_argument() -> None:
+def test_background_tools_must_declare_the_background_argument() -> None:
     from pydantic import BaseModel
 
     capability = BackgroundCapability(default_background=False, foreground_limit_s=None)

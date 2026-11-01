@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.tools.tool_handler.find_files import FindFilesTool
 from app.tools.tool_handler.search.content_engine import search_content
 from app.tools.tool_handler.search.errors import SearchCancelled, SearchTimedOut
@@ -13,7 +14,6 @@ from app.tools.tool_handler.search.gitignore_rules import GitignoreMatcher
 from app.tools.tool_handler.search.result import ContentSearchPage
 from app.tools.tool_handler.search.scope import SearchScope
 from app.tools.tool_handler.search_content import SearchContentTool
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
 def _context(root: Path, *, task_id: int = 1) -> ToolExecutionContext:

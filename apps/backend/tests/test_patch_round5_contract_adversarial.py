@@ -39,8 +39,8 @@ from app.tools.tool_handler.patch_write import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
-from app.utils import atomic_write
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
+from app.utils import atomic_write
 
 PARAM_DESCRIPTION = ApplyPatchArgs.model_fields["patch"].description or ""
 

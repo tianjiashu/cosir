@@ -20,6 +20,10 @@ from pydantic import ValidationError
 from app.config.configuration import get_tool_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
+from app.core.tool.handler.agent_team import agent_team_preparation_service as prep_module
+from app.core.tool.handler.agent_team.agent_team_preparation_service import (
+    AgentTeamPreparationService,
+)
 from app.core.tool.handler.agent_team.args.agent_team_args import AgentTeamArgs
 from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
 from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
@@ -30,13 +34,13 @@ from app.core.tool.tool_grouping import TOOL_GROUP_AGENT_TEAM
 from app.core.tool.tool_registry import ToolRegistry
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.model_config_record import ModelConfigRecord
-from app.core.tool.handler.agent_team import agent_team_preparation_service as prep_module
 from app.service.configuration import agent_team_configuration_registry as team_registry_module
-from app.core.tool.handler.agent_team.agent_team_preparation_service import (
-    AgentTeamPreparationService,
+from app.service.configuration.agent_team_configuration_registry import (
+    AgentTeamConfigurationRegistry,
 )
-from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
-from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
+from app.service.configuration.agent_team_configuration_source import (
+    AgentTeamConfigurationScopeSource,
+)
 
 # --------------------------------------------------------------------------- #
 # 夹具与构造助手

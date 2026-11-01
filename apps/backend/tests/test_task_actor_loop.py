@@ -12,11 +12,11 @@ from typing import Any, ClassVar
 
 import pytest
 
-from app.core.tool.background.deferred_job import DeferredConclusion
 from app.core import task_actor as actor_module
 from app.core import task_cancellation
 from app.core import task_execution as execution_module
 from app.core.task_actor import SessionConflictError, TaskActor
+from app.core.tool.background.job import BackgroundConclusion
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.message_queue.task_message import (
     BackgroundResultBody,
@@ -139,7 +139,9 @@ def _notice() -> NoticeBody:
 
 
 def _result() -> BackgroundResultBody:
-    return BackgroundResultBody(tool_name="probe", tool_result="done")
+    return BackgroundResultBody(
+        ended_at="2026-01-01T00:01:00+00:00", tool_name="probe", tool_result="done"
+    )
 
 
 @pytest.fixture
@@ -162,7 +164,7 @@ def harness(monkeypatch):
         ("get_conversation_task_state_service", states),
     ):
         monkeypatch.setattr(actor_module.service_depends, getter, lambda fake=fake: fake)
-    # 撤销时的占位结算写库；记下调用，不触达存储（占位结算见 test_deferred_placeholders）。
+    # 撤销时的占位结算写库；记下调用，不触达存储（占位结算见 test_background_placeholders）。
     settled: list[tuple[int, list[str]]] = []
     monkeypatch.setattr(
         task_cancellation.placeholders,
@@ -570,17 +572,17 @@ async def test_stop_only_touches_materialized_spaces_and_aclose_aborts_all(regis
     assert registry.existing_spaces() == ()
 
 
-# ── 延迟结果与首次驱动提醒 ─────────────────────────────────────────────────
+# ── 后台结果与首次驱动提醒 ─────────────────────────────────────────────────
 
 
-async def test_cancelling_suspended_run_drops_deferred_entries(harness) -> None:
+async def test_cancelling_suspended_run_drops_background_entries(harness) -> None:
     """Run 取消即撤销本 Task 的后台等待：撤销回调被调用，之后的完成返回 False、不再投递。"""
-    from app.core.tool.background.deferred_registry import deferred_registry
+    from app.core.tool.background.registry import background_registry
 
     run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
     run.status = "suspended"
     cancelled: list[str] = []
-    deferred_registry.register(
+    background_registry.register(
         "call-t1",
         task_id=_TASK_ID,
         run_id=run.id,
@@ -588,7 +590,7 @@ async def test_cancelling_suspended_run_drops_deferred_entries(harness) -> None:
         label="terminal:t1",
         on_cancel=lambda: cancelled.append("t1"),
     )
-    deferred_registry.register(
+    background_registry.register(
         "call-x",
         task_id=_TASK_ID + 1,
         run_id=None,
@@ -602,17 +604,17 @@ async def test_cancelling_suspended_run_drops_deferred_entries(harness) -> None:
         assert cancelled == ["t1"]
         # 被撤销的后台条目随即把占位行推到 cancelled。
         assert harness.settled == [(_TASK_ID, ["call-t1"])]
-        assert deferred_registry.pending(_TASK_ID) == []
-        assert deferred_registry.complete("call-t1", DeferredConclusion({})) is False
+        assert background_registry.pending(_TASK_ID) == []
+        assert background_registry.complete("call-t1", BackgroundConclusion({})) is False
         # 其他 Task 的等待不受影响。
-        assert deferred_registry.pending(_TASK_ID + 1) == ["x"]
+        assert background_registry.pending(_TASK_ID + 1) == ["x"]
     finally:
-        deferred_registry.drop_task(_TASK_ID + 1)
-        assert deferred_registry.complete("call-x", DeferredConclusion({})) is False
+        background_registry.drop_task(_TASK_ID + 1)
+        assert background_registry.complete("call-x", BackgroundConclusion({})) is False
 
 
 async def test_running_run_cancel_drops_watches_when_execution_settles(harness) -> None:
-    from app.core.tool.background.deferred_registry import deferred_registry
+    from app.core.tool.background.registry import background_registry
 
     harness.actor.start()
     harness.queue.put(_user())
@@ -626,7 +628,7 @@ async def test_running_run_cancel_drops_watches_when_execution_settles(harness) 
         signalled_at_drop.append(execution_module.cancellation_registry.is_cancelled(_TASK_ID))
         dropped.append(run.id)
 
-    deferred_registry.register(
+    background_registry.register(
         "call-t2",
         task_id=_TASK_ID,
         run_id=run.id,
@@ -638,19 +640,19 @@ async def test_running_run_cancel_drops_watches_when_execution_settles(harness) 
     await _finish(run.id, "cancelled")
     assert dropped == [run.id]
     assert signalled_at_drop == [True]
-    assert deferred_registry.pending(_TASK_ID) == []
+    assert background_registry.pending(_TASK_ID) == []
     await harness.actor.abort()
 
 
-async def test_completed_run_keeps_deferred_entries(harness) -> None:
+async def test_completed_run_keeps_background_entries(harness) -> None:
     """完成或挂起不撤销：后台等待的结论稍后照常投递、开新 Run 或唤醒。"""
-    from app.core.tool.background.deferred_registry import deferred_registry
+    from app.core.tool.background.registry import background_registry
 
     harness.actor.start()
     harness.queue.put(_user())
     await _settle()
     [run] = harness.ledger.created
-    deferred_registry.register(
+    background_registry.register(
         "call-t3",
         task_id=_TASK_ID,
         run_id=run.id,
@@ -659,6 +661,6 @@ async def test_completed_run_keeps_deferred_entries(harness) -> None:
         on_cancel=lambda: None,
     )
     await _finish(run.id, "suspended")
-    assert deferred_registry.pending(_TASK_ID) == ["terminal:t3"]
-    deferred_registry.drop_task(_TASK_ID)
+    assert background_registry.pending(_TASK_ID) == ["terminal:t3"]
+    background_registry.drop_task(_TASK_ID)
     await harness.actor.abort()

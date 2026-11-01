@@ -10,10 +10,10 @@ import pytest
 
 from app.core.tool.handler.agent_team import coordinator as coordinator_module
 from app.core.tool.handler.agent_team.coordinator import AgentTeamCoordinator
-from app.models.agent_team.state.agent_team_run_state import AgentTeamNodeExecution
 from app.core.workflow.cancel.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
+from app.models.agent_team.state.agent_team_run_state import AgentTeamNodeExecution
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 
 _TEAM_RUN = 3

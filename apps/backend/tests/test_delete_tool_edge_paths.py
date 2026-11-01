@@ -14,11 +14,11 @@ from pathlib import Path
 import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.tools.tool_handler.delete_tool import (
     DELETE_FILE_DESCRIPTION,
     DeleteTool,
 )
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
 def _context(root: Path, run_id: int = 5150) -> ToolExecutionContext:

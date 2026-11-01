@@ -10,11 +10,11 @@ import pytest
 from pydantic import BaseModel
 
 from app.assistant_transport.request import DecisionRequest
-from app.service.conversation_run import tool_decision_service as module
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core.task_actor import SessionConflictError
 from app.core.workflow.message_queue.task_message import DecisionBody, TaskMessage
 from app.models.errors.input_errors import UserInputRejectedError
+from app.service.conversation_run import tool_decision_service as module
 
 _TASK_ID = 3
 _CALL_ID = "call-1"

@@ -61,7 +61,10 @@ def _decision(message_id: int) -> TaskMessage:
 
 def _result(message_id: int) -> TaskMessage:
     return TaskMessage.of(
-        BackgroundResultBody(tool_name="probe", tool_result="done"), message_id=message_id
+        BackgroundResultBody(
+            ended_at="2026-01-01T00:01:00+00:00", tool_name="probe", tool_result="done"
+        ),
+        message_id=message_id,
     )
 
 

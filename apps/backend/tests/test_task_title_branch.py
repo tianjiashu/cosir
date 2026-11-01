@@ -16,7 +16,12 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 from app.core.events import TaskTitleUpdatedEvent
 from app.core.workflow.branch import task_title
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.message_queue.task_message import NoticeBody, RunLaunch, TaskMessage, UserInputBody
+from app.core.workflow.message_queue.task_message import (
+    NoticeBody,
+    RunLaunch,
+    TaskMessage,
+    UserInputBody,
+)
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import prepare_input_node
 from app.models.conversation_input import UserInputPresentation

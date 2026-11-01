@@ -8,7 +8,7 @@ import pytest
 
 from app.core.context.context_store import ContextStore
 from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
 from app.service.depends import get_conversation_task_context_service
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -79,7 +79,9 @@ def test_exclude_from_keeps_late_results_of_earlier_calls(isolated_storage, tmp_
         }
 
     def _placeholder() -> ToolMessageMetadata:
-        return ToolMessageMetadata(status="pending", background=True)
+        return ToolMessageMetadata(status="pending", background=BackgroundWork(
+            kind="terminal_command", label="test", started_at="2026-01-01T00:00:00+00:00",
+        ))
 
     def result_of(call_id: str) -> UserMessageMetadata:
         return UserMessageMetadata(kind="background_result", tool_call_id=call_id)

@@ -29,6 +29,7 @@ import pytest
 
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
+from app.tools.terminal_runtime.session_service import TerminalSessionService
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.delete_tool import DeleteTool
 from app.tools.tool_handler.find_files import FindFilesTool
@@ -39,7 +40,6 @@ from app.tools.tool_handler.replace_tool import ReplaceTool
 from app.tools.tool_handler.search_content import SearchContentTool
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.write_file import WriteFileTool
-from app.tools.terminal_runtime.session_service import TerminalSessionService
 from app.utils.path import system_cosir as paths
 from app.utils.path.system_cosir import COSIR_DIR_NAME, system_cosir_dir
 from app.utils.path.validation import is_within_cosir

@@ -13,8 +13,8 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background import deferred_registry as deferred_module
-from app.core.tool.background.deferred_registry import deferred_registry
+from app.core.tool.background import registry as background_module
+from app.core.tool.background.registry import background_registry
 from app.core.tool.schemas import BackgroundCapability, ToolExecutionContext
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
@@ -33,10 +33,10 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
         calls.append((tool_call_id, tool_name, {**result, "card": placeholder_display_data}))
         return True
 
-    monkeypatch.setattr(deferred_module, "deliver_background_result", deliver)
+    monkeypatch.setattr(background_module, "deliver_background_result", deliver)
     monkeypatch.setattr(execute_terminal_module, "read_terminal_deny_patterns", lambda: ())
     yield calls
-    deferred_registry.drop_task(_TASK_ID)
+    background_registry.drop_task(_TASK_ID)
 
 
 def _context(tmp_path: Path, tool_call_id: str) -> ToolExecutionContext:
@@ -63,7 +63,7 @@ def test_foreground_command_returns_its_result_without_registering(tmp_path, del
     )
     assert observation.status == "success" and not observation.background
     assert observation.content.startswith("[exit_code=0]") and "hello" in observation.content
-    assert not deferred_registry.owns(_TASK_ID, "call-fg")
+    assert not background_registry.owns(_TASK_ID, "call-fg")
     assert delivered == []
 
 
@@ -75,6 +75,10 @@ def test_background_command_returns_a_placeholder_then_delivers(tmp_path, delive
     )
     # Agent 主动选后台：先做别的，不挂起。
     assert observation.background and not observation.suspend
+    assert (observation.background.kind, observation.background.label) == (
+        "terminal_command", "test",
+    )
+    assert observation.background.ended_at is None
     assert observation.display_data == {
         "kind": "terminal-result",
         "command": "sleep 0.2; echo done",
@@ -118,7 +122,7 @@ def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delive
         background=True,
         execution_context=_context(tmp_path, "call-cancel"),
     )
-    dropped = deferred_registry.cancel("call-cancel")
+    dropped = background_registry.cancel("call-cancel")
     assert dropped is not None and dropped.mode == "background"
     time.sleep(2.5)
     # 进程树被杀：命令没有跑完；撤销后的结论被登记表丢弃，不回投。

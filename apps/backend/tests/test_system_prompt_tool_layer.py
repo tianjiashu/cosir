@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-from app.service.configuration import agent_team_configuration_registry as team_registry
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
@@ -20,8 +19,8 @@ from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import main_agent
 from app.core.context import system_prompt_builder as spb
 from app.core.tool.schemas.tool_names import TOOL_MCP, TOOL_SKILL
-from app.service.configuration import mcp_configuration
-from app.service.configuration import skill_catalog
+from app.service.configuration import agent_team_configuration_registry as team_registry
+from app.service.configuration import mcp_configuration, skill_catalog
 from app.service.configuration.skill_catalog import SkillInfo
 from app.utils.path import system_cosir as paths
 

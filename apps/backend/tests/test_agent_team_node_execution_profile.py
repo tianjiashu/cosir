@@ -26,22 +26,22 @@ from unittest.mock import patch
 
 import pytest
 
-from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
-from app.core.tool.handler.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY
-from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
-from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents import agent_runtime_config as runtime_config_module
+from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.models.conversation_run_options import ConversationRunOptions
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.model_config_record import ModelConfigRecord
 from app.core.tool.handler.agent_team import agent_team_preparation_service as prep_module
 from app.core.tool.handler.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationService,
 )
+from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
+from app.models.conversation_run_options import ConversationRunOptions
+from app.models.conversation_run_record import ConversationRunRecord
+from app.models.model_config_record import ModelConfigRecord
 from app.service.depends import get_model_config_service
 
 # --------------------------------------------------------------------------- #

@@ -14,9 +14,9 @@ from app.assistant_transport.service.conversation_task_state_service import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
 from app.core.events import UserInputConsumedEvent
+from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
 from app.core.workflow.message_queue.task_message import TaskMessage, UserInputBody
 from app.models.conversation_input import UserInputPresentation
-from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
 from app.service import depends
 from app.storage.store_engines import main_session_factory
 

@@ -11,8 +11,8 @@ from typing import Any
 
 from app.assistant_transport.projection.user_input_projection import build_user_input_parts
 from app.core.events import UserInputConsumedEvent
-from app.models.conversation_input import UserInputPresentation
 from app.core.workflow.message_queue.task_message import Delivery
+from app.models.conversation_input import UserInputPresentation
 
 
 def queue_user_input(

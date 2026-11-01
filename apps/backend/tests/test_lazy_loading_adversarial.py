@@ -30,21 +30,25 @@ from pathlib import Path
 
 import pytest
 
-from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
-from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
 from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import general_child_agent, main_agent
+from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.service.configuration.agent_configuration_service import (
     AgentConfigurationError,
     AgentConfigurationService,
 )
+from app.service.configuration.agent_team_configuration_registry import (
+    AgentTeamConfigurationRegistry,
+)
 from app.service.configuration.agent_team_configuration_service import (
     AgentTeamConfigurationService,
+)
+from app.service.configuration.agent_team_configuration_source import (
+    AgentTeamConfigurationScopeSource,
 )
 from app.utils.scope_config_directory import ScopeDirectoryError, read_scope_json_files
 from app.utils.workspace_scope import SYSTEM_SCOPE, normalize_scope_path

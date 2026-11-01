@@ -19,12 +19,13 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background.deferred_job import DeferredConclusion
 from app.assistant_transport.service import transport_assistant_service as service_module
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core import task_actor as actor_module
 from app.core import task_execution as execution_module
 from app.core.task_actor import TaskActor
+from app.core.tool.background.job import BackgroundConclusion
+from app.core.tool.handler.agent_team import coordinator as coordinator_module
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
@@ -37,7 +38,6 @@ from app.core.workflow.message_queue.task_message import (
 )
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import RunTransition
-from app.core.tool.handler.agent_team import coordinator as coordinator_module
 from app.task_runtime import task_runtime_space_registry as registry_module
 
 _TASK_ID = 41
@@ -345,17 +345,24 @@ async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) ->
     assert not chain.actor.driving
     assert [row.delivery for row in chain.queue.rows] == ["next_run"]
 
-    chain.queue.put(_TASK_ID, TaskMessage.of(BackgroundResultBody(tool_name="probe", tool_result="done")))
+    chain.queue.put(
+        _TASK_ID,
+        TaskMessage.of(
+            BackgroundResultBody(
+                ended_at="2026-01-01T00:01:00+00:00", tool_name="probe", tool_result="done"
+            )
+        ),
+    )
     await _settle()
     assert chain.actor.driving
     assert chain.service.cancel_tool_call(_TASK_ID, "call-1") is True
     await _finish(chain.ledger.current.id, "completed")
 
 
-def _register_deferred(tool_call_id: str, mode: str, calls: list[str]) -> None:
-    from app.core.tool.background.deferred_registry import deferred_registry
+def _register_background_work(tool_call_id: str, mode: str, calls: list[str]) -> None:
+    from app.core.tool.background.registry import background_registry
 
-    deferred_registry.register(
+    background_registry.register(
         tool_call_id,
         task_id=_TASK_ID,
         run_id=None,
@@ -367,7 +374,7 @@ def _register_deferred(tool_call_id: str, mode: str, calls: list[str]) -> None:
     )
 
 
-async def test_cancel_deferred_background_settles_placeholder_and_leaves_notice(
+async def test_cancel_background_work_background_settles_placeholder_and_leaves_notice(
     chain, monkeypatch
 ) -> None:
     """后台工作不要求 Run 在执行：撤销登记、占位推到 cancelled，并留一条不唤醒的通知。"""
@@ -378,7 +385,7 @@ async def test_cancel_deferred_background_settles_placeholder_and_leaves_notice(
         lambda task_id, ids, status, _hint: settled.append((task_id, list(ids), status)) or 1,
     )
     calls: list[str] = []
-    _register_deferred("call-bg", "background", calls)
+    _register_background_work("call-bg", "background", calls)
 
     assert chain.service.cancel_tool_call(_TASK_ID, "call-bg") is True
 
@@ -389,14 +396,14 @@ async def test_cancel_deferred_background_settles_placeholder_and_leaves_notice(
     assert chain.service.cancel_tool_call(_TASK_ID, "call-bg") is False
 
 
-async def test_cancel_deferred_foreground_only_wakes_the_waiter(chain, monkeypatch) -> None:
+async def test_cancel_background_work_foreground_only_wakes_the_waiter(chain, monkeypatch) -> None:
     monkeypatch.setattr(
         service_module.placeholders,
         "settle_placeholders",
         lambda *_a: pytest.fail("foreground entries have no placeholder"),
     )
     calls: list[str] = []
-    _register_deferred("call-fg", "foreground", calls)
+    _register_background_work("call-fg", "foreground", calls)
 
     assert chain.service.cancel_tool_call(_TASK_ID, "call-fg") is True
 
@@ -408,7 +415,7 @@ async def test_background_command_detaches_only_foreground_entries(chain) -> Non
     from app.core.task_actor import SessionConflictError
 
     calls: list[str] = []
-    _register_deferred("call-fg", "foreground", calls)
+    _register_background_work("call-fg", "foreground", calls)
     chain.service.background_tool_call(_TASK_ID, "call-fg")
     assert calls == ["detach"]
     for call_id in ("call-fg", "call-missing"):
@@ -586,7 +593,7 @@ async def test_placeholder_settle_failure_does_not_block_running_cancel(chain, m
     await chain.service.send(_TASK_ID, _send_request("first"))
     await _settle()
     run = chain.ledger.current
-    _register_deferred("call-bg", "background", [])
+    _register_background_work("call-bg", "background", [])
 
     await chain.service.cancel(_TASK_ID)
     await _finish(run.id, "cancelled")
@@ -600,7 +607,7 @@ async def test_placeholder_settle_failure_does_not_block_suspended_cancel(chain,
     _fail_settling(monkeypatch)
     run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
     run.status = "suspended"
-    _register_deferred("call-bg", "background", [])
+    _register_background_work("call-bg", "background", [])
 
     await chain.service.cancel(_TASK_ID)
 
@@ -671,7 +678,12 @@ async def test_background_result_after_stop_starts_a_run(chain) -> None:
     await _finish(chain.ledger.current.id, "cancelled")
 
     chain.queue.put(
-        _TASK_ID, TaskMessage.of(BackgroundResultBody(tool_name="probe", tool_result="done"))
+        _TASK_ID,
+        TaskMessage.of(
+            BackgroundResultBody(
+                ended_at="2026-01-01T00:01:00+00:00", tool_name="probe", tool_result="done"
+            )
+        ),
     )
     await _settle()
 
@@ -770,26 +782,26 @@ async def test_rerun_soft_deletes_target_and_later_rows_then_starts_a_run(rerun)
     assert _Driver.consumed == [1]
 
 
-async def test_rerun_revokes_deferred_work_of_withdrawn_calls(rerun) -> None:
+async def test_rerun_revokes_background_work_of_withdrawn_calls(rerun) -> None:
     """被撤回的这一轮还在跑的后台工作要撤销：否则结论到达后以孤儿消息开出新 Run。"""
-    from app.core.tool.background.deferred_registry import deferred_registry
+    from app.core.tool.background.registry import background_registry
 
     _finished_run(rerun)
     withdrawn: list[str] = []
     earlier: list[str] = []
-    _register_deferred("call-withdrawn", "background", withdrawn)
-    _register_deferred("call-earlier", "background", earlier)
+    _register_background_work("call-withdrawn", "background", withdrawn)
+    _register_background_work("call-earlier", "background", earlier)
     rerun.context.withdrawn_calls = frozenset({"call-withdrawn"})
 
     await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
     await _settle()
 
     assert withdrawn == ["cancel"]
-    assert not deferred_registry.owns(_TASK_ID, "call-withdrawn")
-    assert deferred_registry.complete("call-withdrawn", DeferredConclusion({"ok": True})) is False
+    assert not background_registry.owns(_TASK_ID, "call-withdrawn")
+    assert background_registry.complete("call-withdrawn", BackgroundConclusion({"ok": True})) is False
     # 更早一轮的后台工作不属于被撤回的这一轮，照常进行。
-    assert earlier == [] and deferred_registry.owns(_TASK_ID, "call-earlier")
-    deferred_registry.cancel("call-earlier")
+    assert earlier == [] and background_registry.owns(_TASK_ID, "call-earlier")
+    background_registry.cancel("call-earlier")
 
 
 async def test_rerun_ends_handoffs_started_in_the_withdrawn_turn(rerun) -> None:

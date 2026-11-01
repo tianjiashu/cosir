@@ -153,16 +153,16 @@ def reset_runtime_singletons() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def reopen_deferred_registry() -> Iterator[None]:
-    """lifespan 关闭会关闭进程级延迟结果登记表（此后不再投递）；同进程后续用例需重新开放。"""
+def reopen_background_registry() -> Iterator[None]:
+    """lifespan 关闭会关闭进程级后台结果登记表（此后不再投递）；同进程后续用例需重新开放。"""
 
-    from app.core.tool.background.deferred_registry import deferred_registry
+    from app.core.tool.background.registry import background_registry
 
-    # 先关再开：清掉上一个用例残留的条目与看板最近结束列表（同一 task_id 会被反复使用）。
-    deferred_registry.close()
-    deferred_registry.open()
+    # 先关再开：清掉上一个用例残留的活条目（同一 task_id 会被反复使用）。
+    background_registry.close()
+    background_registry.open()
     # lifespan 会注入看板监听方；同进程后续用例的 snapshot 不能被前一个用例的监听方改写。
-    deferred_registry.set_listener(None)
+    background_registry.set_listener(None)
     yield
 
 

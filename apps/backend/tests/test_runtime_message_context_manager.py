@@ -11,6 +11,7 @@ from app.core.context.runtime_message_context_manager import RuntimeMessageConte
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import (
+    BackgroundWork,
     EmptyMessageMetadata,
     ToolMessageMetadata,
     UserMessageMetadata,
@@ -94,6 +95,27 @@ def _ai_message(*call_ids: str) -> ChatCompletionAssistantMessageParam:
             for call_id in call_ids
         ],
     }
+
+
+def test_background_completion_updates_work_and_preserves_existing_card():
+    """完成时间必须写回真实 context manager，不能在合并 metadata 时被旧的 pending 记录覆盖。"""
+    store = _ContextStore(max_sequence=2)
+    manager = _manager(store)
+    work = BackgroundWork(
+        kind="child_agent", label="research", started_at="2026-01-01T00:00:00+00:00",
+    )
+    card = {"kind": "child-agent", "child_task_id": 11}
+    manager._entries = [ContextEntry(
+        {"role": "tool", "tool_call_id": "c", "content": "placeholder"}, 2, 2,
+        metadata=ToolMessageMetadata(status="pending", background=work, display_data=card),
+    )]
+    ended = work.model_copy(update={"ended_at": "2026-01-01T00:01:00+00:00"})
+    written = manager.update_tool_result_metadata(
+        "c", ToolMessageMetadata(status="completed", background=ended)
+    )
+    assert written.background == ended and written.display_data == card
+    assert store.appended[0][2].metadata.background == ended
+    assert manager.tool_result_metadata("c").background == ended
 
 
 def test_runtime_message_context_manager_owns_next_sequence_after_run_restart() -> None:

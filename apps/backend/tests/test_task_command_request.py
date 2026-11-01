@@ -4,9 +4,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.assistant_transport.request import (
+    DecisionRequest,
     RerunMessageRequest,
     SendMessageRequest,
-    DecisionRequest,
 )
 
 

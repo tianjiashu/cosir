@@ -9,8 +9,6 @@ from mcp.server.fastmcp import FastMCP
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import PlainTextResponse
 
-from app.tools.tool_handler.mcp_tool import MCPTool
-from app.tools.tool_handler.skill_tool import SkillTool
 from app.service.configuration.mcp_configuration import (
     MCPConfigurationError,
     MCPServerConfig,
@@ -18,11 +16,13 @@ from app.service.configuration.mcp_configuration import (
     read_mcp_configuration,
     server_connection_fingerprint,
 )
-from app.tools.mcp.client import _stdio_parameters, call_result_text, list_server_tools
-from app.tools.mcp.connection_pool import MCPConnectionPool
-from app.utils.path import system_cosir
 from app.service.configuration.skill_catalog import SkillCatalog, SkillLoadError
 from app.service.configuration.skill_configuration import read_skill_configuration
+from app.tools.mcp.client import _stdio_parameters, call_result_text, list_server_tools
+from app.tools.mcp.connection_pool import MCPConnectionPool
+from app.tools.tool_handler.mcp_tool import MCPTool
+from app.tools.tool_handler.skill_tool import SkillTool
+from app.utils.path import system_cosir
 
 
 def _write_skill(directory, name: str, description: str, body: str = "说明正文"):

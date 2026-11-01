@@ -25,11 +25,9 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.service.configuration import agent_team_configuration_registry as agent_team_registry_module
-from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
-from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
 from app.config.constant import Constant
-from app.core.tool.schemas import ALL_TOOL_NAMES, ToolName
+from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
+from app.core.tool.handler.child_agent.child_agent_status_args import ChildAgentStatusArgs
 from app.core.tool.handler.child_agent_send import (
     ChildAgentSendTool,
     build_child_agent_send_definition,
@@ -38,16 +36,24 @@ from app.core.tool.handler.child_agent_status import (
     ChildAgentStatusTool,
     build_child_agent_status_definition,
 )
+from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
 from app.core.tool.handler.wait_messages import (
     WaitMessagesTool,
     build_wait_messages_definition,
 )
-from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
-from app.core.tool.handler.child_agent.child_agent_status_args import ChildAgentStatusArgs
-from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
-from app.tools.tool_registration import build_tool_registry
+from app.core.tool.schemas import ALL_TOOL_NAMES, ToolName
+from app.service.configuration import (
+    agent_team_configuration_registry as agent_team_registry_module,
+)
+from app.service.configuration.agent_team_configuration_registry import (
+    AgentTeamConfigurationRegistry,
+)
+from app.service.configuration.agent_team_configuration_source import (
+    AgentTeamConfigurationScopeSource,
+)
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
+from app.tools.tool_registration import build_tool_registry
 from app.utils.path import system_cosir as paths
 
 # 被删除的工具名（唯一事实源：本测试的待验证目标）。

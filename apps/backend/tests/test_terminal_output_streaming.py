@@ -40,6 +40,7 @@ from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservatio
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 from app.models.conversation_input import UserInputPresentation
+from app.models.message_metadata import BackgroundWork
 from app.tools.display.terminal_display import build_terminal_display_data
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
@@ -468,14 +469,16 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
         )
     )
     projector.process(_terminal_output_update(0, "before "))
-    # 到前台上限转后台：占位 pending + deferred，展示数据不带输出，已流出的输出保留。
+    # 到前台上限转后台：占位 pending + background，展示数据不带输出，已流出的输出保留。
     projector.process(
         ToolCallStatusChangedEvent(
             task_id=7,
             run_id=9,
             tool_call_id="call-1",
             status="pending",
-            background=True,
+            background=BackgroundWork(
+                kind="terminal_command", label="make", started_at=_RUN_CREATED_AT.isoformat(),
+            ),
             display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
         )
     )
@@ -500,7 +503,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     )
     projector.process(_terminal_output_update(2, " late"))
     part = state["messages"][1]["parts"][0]
-    assert part["status"] == "completed" and part["background"] is True
+    assert part["status"] == "completed" and "background" in part
     assert part["display_data"]["output"] == "before after"
     assert part["display_data"]["exit_code"] == 0
 

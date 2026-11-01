@@ -4,6 +4,11 @@ import json
 
 import pytest
 
+from app.core.tool.schemas import ToolExecutionContext
+from app.service.configuration import terminal_denylist_configuration_service as config_module
+from app.service.configuration.terminal_denylist_configuration_service import (
+    TerminalDenylistConfigurationService,
+)
 from app.tools.policy import terminal_denylist_configuration as terminal_reader
 from app.tools.policy.terminal_denylist import (
     DEFAULT_DENY_PATTERNS,
@@ -12,11 +17,6 @@ from app.tools.policy.terminal_denylist import (
 )
 from app.tools.policy.terminal_denylist_configuration import (
     TerminalDenylistConfigurationError,
-)
-from app.core.tool.schemas import ToolExecutionContext
-from app.service.configuration import terminal_denylist_configuration_service as config_module
-from app.service.configuration.terminal_denylist_configuration_service import (
-    TerminalDenylistConfigurationService,
 )
 
 

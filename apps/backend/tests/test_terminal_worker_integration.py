@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from app.tools.terminal_runtime.errors import TerminalWorkerSignalFailedError
-from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
+from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
 
 
 def _worker_path() -> Path:

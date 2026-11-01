@@ -7,8 +7,8 @@ import pytest
 
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.handler import child_agent_send
+from app.core.tool.schemas import ToolExecutionContext
 
 
 @pytest.mark.asyncio
