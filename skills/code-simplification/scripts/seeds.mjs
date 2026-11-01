@@ -1,7 +1,7 @@
 // 给标准 §6.2 的「选种子」排序：把一个尽量笨的分组（路径前缀）算成可比数值。
 //
 // 用法：node <skill>/scripts/seeds.mjs [--candidates <文件>] [--depth 2] [--days 90] [--top 12] [--json]
-//   --candidates  总入口 run-all 的机读输出（JSON 数组或每行一个对象，每项含 path，
+//   --candidates  总入口 run-all --json 的输出（JSON 数组，每项含仓库相对的 path，
 //                 见 references/detection-scripts.md「统一输出」）。不给时只统计变更热度与代码量。
 //   --depth       分组用的路径段数，默认 2（如 app/tools）。它只是粗排的分组手段，
 //                 **不是能力定义**：范围由种子扩散决定（标准 §6.2），不靠这份分组。
@@ -10,10 +10,12 @@
 //
 // 排序按候选密度（候选数 ÷ 生产代码行数），热度与行数只作参考列。分数只用来挑前几个种子，
 // 不是结论：种子是文件或目录，不是「某个能力」。
+// 热点文件：组内「近 N 天提交数 × 缩进复杂度」最高的生产文件（lib/indent.mjs），改得勤又绕的地方
+// 精简收益最大，可直接当作文件种子。
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
 
-import { fail, git, isTest, repositoryRoot } from "./lib/repo.mjs";
+import { indentProfile } from "./lib/indent.mjs";
+import { fail, git, isLockfile, isTest, readText } from "./lib/repo.mjs";
 
 function parseArgs(argv) {
   const options = { candidates: null, depth: 2, days: 90, top: 12, json: false };
@@ -45,65 +47,56 @@ function countLines(text) {
   return text.endsWith("\n") ? newlines : newlines + 1;
 }
 
-function productionLines(files) {
-  let total = 0;
+// 组内生产代码行数（候选密度的分母）与热点文件；二进制与读不到的文件跳过。
+function productionStats(files, fileCommits) {
+  let lines = 0;
+  let hotspot = null;
   for (const file of files) {
     if (isTest(file)) continue;
-    try {
-      const buffer = readFileSync(join(repositoryRoot, file));
-      if (buffer.includes(0)) continue; // 二进制
-      total += countLines(buffer.toString("utf8"));
-    } catch {
-      // 文件在列表里但读不到：跳过，代码量只作分母。
-    }
+    const text = readText(file);
+    if (text === null) continue;
+    lines += countLines(text);
+    const commits = fileCommits.get(file) ?? 0;
+    if (commits === 0 || isLockfile(file)) continue;
+    const score = commits * indentProfile(text).total;
+    if (!hotspot || score > hotspot.score) hotspot = { path: file, commits, score };
   }
-  return total;
-}
-
-// 候选位置可能是「文件:行」或纯符号；只取仓库相对路径部分。
-function candidatePath(item) {
-  const raw = String(item.path ?? item.location ?? "").trim();
-  if (!raw || !raw.includes("/")) return null;
-  return raw.replace(/:\d+(-\d+)?$/, "");
+  return { lines, hotspot };
 }
 
 function readCandidates(path) {
-  const raw = readFileSync(path, "utf8").trim();
-  if (!raw) return [];
-  const items = raw.startsWith("[")
-    ? JSON.parse(raw)
-    : raw.split("\n").filter(Boolean).map((line) => JSON.parse(line));
-  if (!Array.isArray(items)) fail("--candidates 需要 JSON 数组或每行一个对象");
+  const items = JSON.parse(readFileSync(path, "utf8"));
+  if (!Array.isArray(items)) fail("--candidates 需要 JSON 数组");
   return items;
 }
 
-// 近 N 天每个分组的变更热度与共动度。
+// 近 N 天每个分组的变更热度与共动度，以及每个文件的提交数（热点用）。
 // 热度：该分组被多少个提交动过（同一提交动多个分组时各记一次）。
 // 共动：动到该分组的那些提交里，平均还动了几个别的分组——「一次需求牵动几个目录」的代理指标（E1）。
 function commitsByGroup(depth, days) {
   const commits = new Map();
   const coChangeSum = new Map();
+  const fileCommits = new Map();
   const log = git("log", `--since=${days} days ago`, "--name-only", "--pretty=format:__commit__");
   for (const block of log.split("__commit__")) {
-    const groups = new Set(
-      block
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((path) => groupOf(path, depth)),
-    );
+    const paths = block
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const path of paths) fileCommits.set(path, (fileCommits.get(path) ?? 0) + 1);
+    const groups = new Set(paths.map((path) => groupOf(path, depth)));
     for (const group of groups) {
       commits.set(group, (commits.get(group) ?? 0) + 1);
       coChangeSum.set(group, (coChangeSum.get(group) ?? 0) + (groups.size - 1));
     }
   }
-  return { commits, coChangeSum };
+  return { commits, coChangeSum, fileCommits };
 }
 
 const options = parseArgs(process.argv.slice(2));
 const tracked = git("ls-files").split("\n").filter(Boolean);
 const candidates = options.candidates ? readCandidates(options.candidates) : null;
-const { commits: heat, coChangeSum } = commitsByGroup(options.depth, options.days);
+const { commits: heat, coChangeSum, fileCommits } = commitsByGroup(options.depth, options.days);
 
 const filesByGroup = new Map();
 for (const file of tracked) {
@@ -116,9 +109,8 @@ for (const file of tracked) {
 const foundByGroup = new Map();
 let unattributed = 0;
 let testCandidates = 0;
-for (const item of candidates ?? []) {
-  const path = candidatePath(item);
-  if (path === null) {
+for (const { path } of candidates ?? []) {
+  if (!path) {
     unattributed += 1;
     continue;
   }
@@ -132,7 +124,7 @@ for (const item of candidates ?? []) {
 }
 
 const rows = [...filesByGroup.entries()].map(([group, files]) => {
-  const lines = productionLines(files);
+  const { lines, hotspot } = productionStats(files, fileCommits);
   const found = candidates ? (foundByGroup.get(group) ?? 0) : null;
   const commits = heat.get(group) ?? 0;
   return {
@@ -143,6 +135,7 @@ const rows = [...filesByGroup.entries()].map(([group, files]) => {
     density: found === null || lines === 0 ? null : (found / lines) * 1000,
     commits,
     coChange: commits === 0 ? null : (coChangeSum.get(group) ?? 0) / commits,
+    hotspot,
   };
 });
 
@@ -171,9 +164,9 @@ if (options.json) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 } else {
   process.stdout.write(
-    `| 分组（前 ${options.depth} 段路径） | 候选数 | 文件数 | 生产行数 | 候选密度（每千行） | 近 ${options.days} 天提交 | 共动分组（平均） |\n`,
+    `| 分组（前 ${options.depth} 段路径） | 候选数 | 文件数 | 生产行数 | 候选密度（每千行） | 近 ${options.days} 天提交 | 共动分组（平均） | 热点文件 |\n`,
   );
-  process.stdout.write("|---|---|---|---|---|---|---|\n");
+  process.stdout.write("|---|---|---|---|---|---|---|---|\n");
   for (const row of shown) {
     const cells = [
       row.group,
@@ -183,6 +176,7 @@ if (options.json) {
       row.density === null ? "—" : row.density.toFixed(2),
       String(row.commits),
       row.coChange === null ? "—" : row.coChange.toFixed(1),
+      row.hotspot === null ? "—" : `${row.hotspot.path}（${row.hotspot.commits} 次）`,
     ];
     process.stdout.write(`| ${cells.join(" | ")} |\n`);
   }

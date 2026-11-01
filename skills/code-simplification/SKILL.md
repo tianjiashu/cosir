@@ -7,8 +7,8 @@ description: >-
   Do not use during feature development or bug fixing.
 compatibility: Requires a git repository. Bundled scripts require Node.js 18 or later.
 metadata:
-  version: "1.3"
-  standard-version: "1.3"
+  version: "1.5"
+  standard-version: "1.5"
 ---
 
 # code-simplification：执行一轮精简
@@ -30,11 +30,11 @@ metadata:
 | `.simplification/project-profile.md` | 项目画像（标准 §0）与构建、静态检查、测试命令，首轮创建，之后修订 |
 | `.simplification/reports/YYYY-MM-DD.md` | 每轮执行报告（标准 §9）；同日多轮加后缀 `-2`、`-3` |
 | `.simplification/plans/YYYY-MM-DD.md` | 可选：关卡一的计划，候选多、需要人类离线审阅时写 |
-| `.simplification/scripts/` | 全部检测器：索引 `README.md`、总入口 `run-all`、各检测器脚本，跨轮复用、按需演进（见下方「检测脚本」） |
+| `.simplification/scripts/` | 全部检测器与指标采集器：索引 `README.md`、总入口 `run-all`、各脚本，跨轮复用、按需演进（见下方「检测脚本」） |
 
 ## 检测脚本
 
-检测器集中在 `.simplification/scripts/`，只经总入口 `run-all`（支持 `--json`）运行；分档、约定与演进见 [references/detection-scripts.md](references/detection-scripts.md)。脚本只给线索：没报不等于没有问题（业务规则的语义重复只能按标准 §4.2 人工枚举），报了也要结合上下文确认。项目 CI 已由 lint 拦截的 L1 类问题，不在精简轮重复处理。
+检测器与指标采集器集中在 `.simplification/scripts/`，只经总入口 `run-all` 运行（`--json` 机读输出，`--metrics` 只跑采集器）；分档、指标三层、约定与演进见 [references/detection-scripts.md](references/detection-scripts.md)。下文 `<run-all>` 指项目的总入口命令。脚本只给线索：没报不等于没有问题（业务规则的语义重复只能按标准 §4.2 人工枚举），报了也要结合上下文确认。项目 CI 已由 lint 拦截的 L1 类问题，不在精简轮重复处理。
 
 ## 运行前提
 
@@ -82,7 +82,7 @@ git update-ref refs/simplification/YYYY-MM-DD-base "$snapshot"   # 固定引用�
 - 首轮：按 §0 的 8 个维度建立画像，每个结论注明来源（文档、代码、人类说明）。**不要求先给仓库做全局功能分解**：仓库再大再乱，这一步的全局判断都最容易出错，范围从局部种子推导（阶段 2）。画像里只写能验证的事实；架构文档里已有的分解可以照抄，但不要为了选范围去造一张。
 - 同时记录**工具链**，供后续阶段使用：
   - 构建、静态检查（类型检查、lint）、测试的命令；
-  - 检测器：找出项目已有的死代码检测、重复检测、复杂度统计、相关 linter 规则；首轮为它们写包装脚本，登记到 `.simplification/scripts/README.md`，并建立总入口 `run-all`；之后各轮核对索引是否仍与项目工具一致；
+  - 检测器与采集器：找出项目已有的死代码检测、重复检测、复杂度与依赖统计、相关 linter 规则；首轮按 detection-scripts.md 的配方为它们写包装脚本（产出候选的是检测器，产出 E5–E7 整体数值的是采集器），登记到 `.simplification/scripts/README.md`，并建立总入口 `run-all`；之后各轮核对索引是否仍与项目工具一致；
   - 查找来源依次为：项目的 Agent 指引与贡献文档、构建与包管理配置、CI 配置。找不到的标为「无」，不要临时引入新工具。
 - 画像与构建、静态检查、测试命令写入 `.simplification/project-profile.md`，检测器只登记在索引里，不在画像中重复。之后各轮核对是否仍成立，有变化就修订并在报告中标出。
 - 有无法从文档或代码确定的维度，**先问人类**，得到答复前不进入下一阶段。
@@ -91,33 +91,34 @@ git update-ref refs/simplification/YYYY-MM-DD-base "$snapshot"   # 固定引用�
 
 **一轮从一个种子出发**：一个文件、一个目录或一处符号。不要求先给仓库做全局分解。
 
-**全仓只读扫描**：`run-all --json` 不传范围（全量，只为挑种子），拿到全仓候选清单，它不用于本轮执行。
+**全仓只读扫描**：`<run-all> --json > <临时目录>/repo-candidates.json` 不传范围（全量，只为挑种子），它不用于本轮执行。
 
 **排序列出候选种子**：
 
 ```bash
-node <skill目录>/scripts/seeds.mjs --candidates <临时目录>/candidates.json --days 90
+node <skill目录>/scripts/seeds.mjs --candidates <临时目录>/repo-candidates.json --days 90
 ```
 
-表按路径前缀粗排，给出每个分组（默认前两段路径）的候选数、文件数、生产行数、候选密度与近期提交数。分组只是筛子，不是能力定义：从密度最高的几行里挑一个具体的文件或目录当种子。把表、人类的痛感、上一轮留下的候选种子一并摆出来，给出「本轮种子」与依据；仓库太大时可以缩到 `--depth 3` 再看一层。
+表按路径前缀粗排，给出每个分组（默认前两段路径）的候选数、文件数、生产行数、候选密度、近期提交数与热点文件。分组只是筛子，不是能力定义：从密度最高的几行里挑一个具体的文件或目录当种子。把表、人类的痛感、上一轮留下的候选种子一并摆出来，给出「本轮种子」与依据；仓库太大时可以缩到 `--depth 3` 再看一层。
 
 **取范围与基线**：
 
 ```bash
 node <skill目录>/scripts/scope.mjs --seed <种子路径> --json > <临时目录>/scope.json
-node <skill目录>/scripts/metrics.mjs snapshot --scope <临时目录>/scope.json --out <临时目录>/before.json
+<run-all> --json --scope <临时目录>/scope.json > <临时目录>/candidates.json
+<run-all> --metrics --json --scope <临时目录>/scope.json > <临时目录>/collected.json
+node <skill目录>/scripts/metrics.mjs snapshot --scope <临时目录>/scope.json --candidates <临时目录>/candidates.json --collected <临时目录>/collected.json --out <临时目录>/before.json
 ```
 
-- 脚本只按路径取种子的文件；调用方、数据流与同一事实源的别处由你按 §6.2「扩散」补齐，补到的路径作为额外的 `--seed` 传进去，不用手改 scope.json。
+- 脚本只按路径取种子的文件；调用方、数据流与同一事实源的别处由你按 §6.2「扩散」补齐（`scope.json` 的 `coChange.pairs` 是同一事实源的线索），补到的路径作为额外的 `--seed` 传进去，不用手改 scope.json。
 - 种子在关卡一一并确认；人类换种子时重做本阶段的基线与范围。
-- 复检（可选）：`scope.mjs --base` 给出上一轮基准以来变更过的文件，只做只读快扫，发现的问题并入候选清单参与挑种子，不在本轮直接改。
-- 脚本采集不了的指标（E1–E4、E6、E8，以及工具缺失时的 E5、E7），按标准 §7 人工统计，标注「估算」。
+- 指标按 detection-scripts.md「指标三层」取值：E1 改动前证据取 `coChange`；E4、E8 由 `metrics.mjs` 按条款数候选（检测器下界）；E5–E7 取项目采集器，没有 E7 采集器时退回缩进近似；其余按标准 §7 人工统计，标注「估算」。
 - `metrics.mjs snapshot` 在工作区干净时记录 HEAD，有未提交改动时自动对工作区做快照，因此三种执行方式下的前后对比都只反映本轮改动。
 - 临时文件放在会话临时目录，不写进仓库。
 
 ### 3. 识别候选（标准 §4、§5.1、§5.2）
 
-1. **跑检测器**：`run-all --json --scope scope.json` 只跑本轮范围，拿到候选清单（挑种子时的全仓清单不用于本轮执行）。一档结果直接列为候选；二档结果逐项按 §5.2 假死清单、§4.3 四步判定确认。
+1. **读候选**：阶段 2 的 `candidates.json` 就是本轮范围的候选清单，不再重跑（挑种子时的全仓清单不用于本轮执行）。一档结果直接列为候选；二档结果逐项按 §5.2 假死清单、§4.3 四步判定确认。
 2. **枚举业务不变量**（标准 §4.2）：在范围内列出「谁能写哪些字段、状态经哪几步流转、这条政策在哪些分支判定、派生值由什么推出」，逐条数表达点，得到 M1 候选。业务代码的收益主要从这里来，检测器给不出这类候选。
 3. **补脚本**：发现某项检查以后还会重复、且可以确定性完成，按 [references/detection-scripts.md](references/detection-scripts.md) 写成检测器、登记到索引，再重新运行总入口。
 4. **人工判断**：阅读范围内的代码，对照 §4.1–§4.4 独立判断。三档条款完全依赖这一步；一档、二档条款也要留意脚本漏报的地方。不要因为检测器没有输出就跳过阅读。
@@ -146,7 +147,10 @@ L2 按业务链路分组呈现，一条链路一组，人类可以按链路整�
 ### 7. 验收与报告 —— 关卡二（标准 §8、§9）
 
 ```bash
-node <skill目录>/scripts/metrics.mjs snapshot --scope <临时目录>/scope.json --since <本轮基准> --out <临时目录>/after.json
+node <skill目录>/scripts/scope.mjs --seed <同阶段 2 的全部种子> --since <本轮基准> --json > <临时目录>/scope-after.json
+<run-all> --json --scope <临时目录>/scope-after.json > <临时目录>/candidates-after.json
+<run-all> --metrics --json --scope <临时目录>/scope-after.json > <临时目录>/collected-after.json
+node <skill目录>/scripts/metrics.mjs snapshot --scope <临时目录>/scope-after.json --candidates <临时目录>/candidates-after.json --collected <临时目录>/collected-after.json --out <临时目录>/after.json
 node <skill目录>/scripts/metrics.mjs compare <临时目录>/before.json <临时目录>/after.json
 ```
 
