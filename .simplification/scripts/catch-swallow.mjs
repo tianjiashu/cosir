@@ -46,7 +46,7 @@ function containsThrow(node) {
 
 function report(file, source, node, transform, evidence) {
   const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-  emit(DETECTOR, { transform, tier: 2, file, line, evidence });
+  emit(DETECTOR, { transform, tier: 2, path: file, line, evidence });
 }
 
 for (const file of targets) {

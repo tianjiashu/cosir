@@ -1,8 +1,9 @@
 // 检测器共用的工具：仓库根、本轮范围、前端模块解析与统一输出。
 //
 // 统一输出：每个候选一行 JSON，写到 stdout，字段为
-//   { detector, transform, tier, file, line, symbol, evidence }
-// file 为相对仓库根的路径；line、symbol 没有时为 null。run-all.mjs 负责汇总。
+//   { detector, transform, tier, path, line, symbol, evidence }
+// path 为相对仓库根的路径（code-simplification skill 的 seeds.mjs、metrics.mjs 按它归属候选）；
+// line、symbol 没有时为 null。run-all.mjs 负责汇总。
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -41,6 +42,6 @@ export function inScope(scope, repoRelativePath) {
 export const fromDesktop = (desktopRelativePath) => join("apps/desktop", desktopRelativePath);
 export const toRepoRelative = (absolutePath) => relative(repositoryRoot, absolutePath);
 
-export function emit(detector, { transform, tier, file, line = null, symbol = null, evidence }) {
-  process.stdout.write(`${JSON.stringify({ detector, transform, tier, file, line, symbol, evidence })}\n`);
+export function emit(detector, { transform, tier, path, line = null, symbol = null, evidence }) {
+  process.stdout.write(`${JSON.stringify({ detector, transform, tier, path, line, symbol, evidence })}\n`);
 }

@@ -90,7 +90,7 @@ try {
       }
       const transform = RULES[message.ruleId];
       if (transform) {
-        emit(DETECTOR, { transform, tier: 2, file, line: message.line, evidence: `${message.ruleId}：${message.message}` });
+        emit(DETECTOR, { transform, tier: 2, path: file, line: message.line, evidence: `${message.ruleId}：${message.message}` });
       }
     }
   }

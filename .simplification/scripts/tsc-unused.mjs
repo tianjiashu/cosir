@@ -39,7 +39,7 @@ for (const project of PROJECTS) {
       const file = fromDesktop(d.file);
       if (!inScope(scope, file)) continue;
       const symbol = d.message.match(/'([^']+)'/)?.[1] ?? null;
-      emit(DETECTOR, { transform, tier, file, line: d.line, symbol, evidence: `${d.code} ${label}：${d.message}` });
+      emit(DETECTOR, { transform, tier, path: file, line: d.line, symbol, evidence: `${d.code} ${label}：${d.message}` });
     }
   }
 }

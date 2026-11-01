@@ -24,14 +24,14 @@ for (const file of files) {
 for (const dir of [...directories].sort()) {
   const name = basename(dir);
   if (MEANINGLESS.test(name)) {
-    emit(DETECTOR, { transform: "S8", tier: 1, file: dir, evidence: `目录名「${name}」不表达内容` });
+    emit(DETECTOR, { transform: "S8", tier: 1, path: dir, evidence: `目录名「${name}」不表达内容` });
   }
   if (GENERIC.test(name)) {
     const count = readdirSync(join(repositoryRoot, dir), { withFileTypes: true }).filter(
       (entry) => entry.isFile() && /\.(ts|tsx|mjs|js)$/.test(entry.name),
     ).length;
     if (count > GENERIC_FILE_LIMIT) {
-      emit(DETECTOR, { transform: "C4", tier: 2, file: dir, evidence: `通用目录直接包含 ${count} 个源文件（阈值 ${GENERIC_FILE_LIMIT}），检查是否该按能力拆分` });
+      emit(DETECTOR, { transform: "C4", tier: 2, path: dir, evidence: `通用目录直接包含 ${count} 个源文件（阈值 ${GENERIC_FILE_LIMIT}），检查是否该按能力拆分` });
     }
   }
 }

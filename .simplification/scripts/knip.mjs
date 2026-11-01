@@ -42,7 +42,7 @@ for (const issue of report.issues) {
       emit(DETECTOR, {
         transform,
         tier: 2,
-        file,
+        path: file,
         line: item.line ?? null,
         symbol: kind === "files" ? null : item.name,
         evidence: `knip：${label}`,
