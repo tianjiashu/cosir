@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent, type RefObject } from "react";
 import {
   closestCenter,
   DndContext,
@@ -12,8 +12,9 @@ import {
 import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 
+import { useElementSize } from "@/hooks/use-element-size";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { TASK_RAIL_WIDTH, type TaskRailPlacement } from "@/lib/task-rail/placement";
+import { TASK_RAIL_WIDTH, taskRailPlacement } from "@/lib/task-rail/placement";
 import { useTaskRailStore, type RailCardId } from "@/lib/task-rail/store";
 import { cn } from "@/lib/utils";
 
@@ -29,16 +30,23 @@ const ANNOUNCEMENTS: Announcements = {
   onDragCancel: ({ active }) => `已取消拖动「${title(active.id)}」`,
 };
 
+/** 浮层最高占对话视口的这个比例，不盖住底部的输入框。 */
+const FLOATING_MAX_HEIGHT_RATIO = 0.6;
+
 /**
- * 会话侧栏：当前对话 Task 的状态摘要卡片栈（目前只有「后台任务」），属于对话区，由 AppLayout 在对话页挂载。
+ * 会话侧栏：当前对话 Task 的状态摘要卡片栈（目前只有「后台任务」）。它是对话画布上的附注，不是窗格：
+ * AppLayout 经 `ConversationAsideContext` 把它交给线程视口，放在与内容列同一个网格里、粘在顶部
+ * （见 `conversation-aside.tsx`），所以滚动条在视口最外侧，底部终端也不必给它让宽度。
  *
- * 摆放由调用方按整行宽度决定（`taskRailPlacement`）：`docked` 固定为对话右侧一列，`floating` 浮在
- * 对话区右上角、不占宽度。两种摆放是同一个节点只换样式，切换时卡片不重挂，展开状态与计时都保留。
+ * 摆放按对话视口宽度决定（`taskRailPlacement`）：`docked` 占网格右列，`floating` 与内容列叠在同一格
+ * 右上角、不占宽度。两种摆放是同一个节点只换网格位置，切换时卡片不重挂，展开状态与计时都保留。
  * 浮层是非模态的：点对话区不会关闭它（侧栏里是要盯着看的进度）；焦点在侧栏内时按 Esc 关闭，
  * 拖动中按 Esc 是 dnd-kit 的取消拖动，不关闭侧栏；关闭后焦点交还页头按钮由调用方负责（见 `useTaskRail`）。
- * 浮层最高只占这一行的六成，不盖住底部的输入框与终端面板。卡片顺序与折叠是全局偏好（`useTaskRailStore`）。
+ * 高度按视口封顶，卡片多了在侧栏内部滚动。卡片顺序与折叠是全局偏好（`useTaskRailStore`）。
  */
-export function TaskRail({ taskId, placement, onClose }: { taskId: number; placement: TaskRailPlacement; onClose: () => void }) {
+export function TaskRail({ taskId, viewportRef, onClose }: { taskId: number; viewportRef: RefObject<HTMLDivElement | null>; onClose: () => void }) {
+  const [, viewport] = useElementSize(viewportRef);
+  const placement = taskRailPlacement(viewport.width);
   const order = useTaskRailStore((state) => state.order);
   const setOrder = useTaskRailStore((state) => state.setOrder);
   const [dragging, setDragging] = useState(false);
@@ -64,13 +72,16 @@ export function TaskRail({ taskId, placement, onClose }: { taskId: number; place
     <aside
       aria-label="会话侧栏"
       data-task-rail={placement}
-      style={{ width: TASK_RAIL_WIDTH }}
+      style={{
+        width: TASK_RAIL_WIDTH,
+        maxHeight: placement === "docked" ? viewport.height : viewport.height * FLOATING_MAX_HEIGHT_RATIO,
+      }}
       onKeyDown={onKeyDown}
       className={cn(
-        "flex min-h-0 shrink-0 flex-col gap-2 overflow-y-auto",
+        "row-start-1 z-20 flex min-h-0 flex-col gap-2 self-start overflow-y-auto",
         placement === "docked"
-          ? "h-full py-2 pr-2"
-          : "dock-panel bg-background absolute top-2 right-2 z-20 max-h-[60%] p-2",
+          ? "sticky top-0 col-start-2 py-2 pr-2"
+          : "dock-panel bg-background sticky top-2 col-start-1 mt-2 mr-2 justify-self-end p-2",
       )}
     >
       <DndContext

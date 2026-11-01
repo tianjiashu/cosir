@@ -233,8 +233,8 @@ class ConversationTaskStateRebuilder:
                     contextWindowTotal=run.context_window_total,
                     launch=run_launch_snapshot(run.model_config_id, run.options),
                 )
-        # 终端会话与延迟结果（看板、前台等待）是进程内事实，canonical 记录里没有；由 state service
-        # 在重建后整表填入。
+        # 终端会话、看板、前台等待与交接都含进程内事实（看板要合并登记表的活条目），由 state service
+        # 在重建后填入。
         return ConversationStateSnapshot(
             title=task.title,
             messages=messages,

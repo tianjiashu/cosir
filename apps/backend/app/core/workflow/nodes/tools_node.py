@@ -8,10 +8,10 @@ from typing import Any
 from app.config.logging.logger import log
 from app.core.tool.schemas import ToolCall, ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.enums.react_route import ReactRoute
-from app.core.workflow.node_helper.common import _runtime_context
 from app.core.workflow.message_queue.task_message import DecisionBody
+from app.core.workflow.node_helper.common import _runtime_context
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
+from app.models.enums.react_route import ReactRoute
 
 
 def _without_artifact(observation: ToolObservation) -> ToolObservation:

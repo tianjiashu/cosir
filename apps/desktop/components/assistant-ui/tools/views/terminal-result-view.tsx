@@ -14,7 +14,7 @@ function exitCode(data: Record<string, unknown>): number | undefined {
 
 /**
  * 「命令还活着」：转到后台后占位是 `pending`，但输出仍在追加，展开体要跟着它而不是工具状态。
- * `background` 是所有延迟结果共用的事实（part 级），不读 `display_data`。
+ * `background` 是所有后台结果共用的事实（part 级），不读 `display_data`。
  */
 function commandLive({ artifact }: CallViewContext): boolean {
   return artifact.backendStatus === "running" || (artifact.background && artifact.backendStatus === "pending");

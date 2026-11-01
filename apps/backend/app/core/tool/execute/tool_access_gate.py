@@ -20,13 +20,13 @@ from typing import Any
 from app.config.logging.logger import log
 from app.core.hook import HookContext, HookDecision, HookEvent, HookInterceptor, HookResult
 from app.core.llm_provider.message_codec import decode_tool_arguments
+from app.core.tool.results.tool_error import tool_error
 from app.core.tool.schemas import (
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.results.tool_error import tool_error
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.tool.validation.arguments import (
     ToolArgumentValidation,

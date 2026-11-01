@@ -11,6 +11,7 @@ import {
 import { FolderIcon, GlobeIcon, LayoutListIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 
+import { ConversationAsideContext, type ConversationAside } from "@/components/assistant-ui/elements/conversation-aside";
 import { TaskRail } from "@/components/task-rail/task-rail";
 import { useTaskRail } from "@/components/task-rail/use-task-rail";
 import { TASK_RAIL_WIDTH } from "@/lib/task-rail/placement";
@@ -155,6 +156,21 @@ export function AppLayout() {
 
   // ---- 会话侧栏：开关、摆放、页头角标与快捷键见 useTaskRail ----
   const rail = useTaskRail(conversationTaskId);
+  // 只在对话页、侧栏打开时给对话视口一个附注；崩溃兜底占网格右列，与固定时的位置一致。
+  const conversationAside = useMemo<ConversationAside | null>(
+    () => conversationTaskId === null || !rail.open ? null : (viewportRef) => (
+      <IsolatedRegion
+        region="task-rail"
+        label="会话侧栏"
+        resetKey={`task-rail:${conversationTaskId}`}
+        fallbackClassName="dock-panel bg-background col-start-2 row-start-1 m-2 w-(--task-rail-width) self-start p-3"
+        escape={{ label: "收起会话侧栏", onClick: rail.close }}
+      >
+        <TaskRail taskId={conversationTaskId} viewportRef={viewportRef} onClose={rail.close} />
+      </IsolatedRegion>
+    ),
+    [conversationTaskId, rail.open, rail.close],
+  );
 
   // ---- 命令面板（⌘K）：搜索任务、开始新对话、跳转配置 ----
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -341,51 +357,41 @@ export function AppLayout() {
             )}
           />
           {/*
-            对话层与会话侧栏同一行：侧栏固定时占一列，浮起时叠在这一行右上角（见 TaskRail）。
-            崩溃兜底只能给 class，经 `--task-rail-width` 与侧栏取同一个宽度常量。
+            会话侧栏不在这里占列：它是对话画布上的附注，经 ConversationAsideContext 交给对话视口，
+            与内容列同在滚动容器的网格里（见 conversation-aside.tsx）。崩溃兜底只能给 class，经
+            `--task-rail-width` 与侧栏取同一个宽度常量。
           */}
-          <div ref={rail.rowRef} style={{ "--task-rail-width": `${TASK_RAIL_WIDTH}px` } as CSSProperties} className="relative flex min-h-0 flex-1 overflow-hidden">
-            <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-              {focusedTaskId !== null && (
-                <div className="h-full" inert={!showTaskLayer} aria-hidden={!showTaskLayer || undefined}>
-                  <ReferenceTargetScope.Provider value={`task:${focusedTaskId}`}><TaskPage
-                    key={focusedTaskId}
-                    taskId={focusedTaskId}
-                    initialTask={catalog.activeTask}
-                    workspaceRoot={catalog.activeWorkspace?.root_path}
-                    forkingMessageId={actions.forkingMessageId}
-                    onForkMessage={(messageId) => void actions.forkMessage(messageId)}
-                    onTaskLoaded={catalog.handleTaskLoaded}
-                    onTaskStateChanged={() => {
-                      if (catalog.activeTaskWorkspaceId !== null) void catalog.refreshWorkspaceTasks(catalog.activeTaskWorkspaceId);
-                    }}
-                  /></ReferenceTargetScope.Provider>
-                </div>
-              )}
-              {!showTaskLayer && (
-                <div className={cn("bg-background h-full", focusedTaskId !== null && "absolute inset-0 z-10")}>
-                  <IsolatedRegion
-                    region={section}
-                    label={crumbs.at(-1)?.label ?? "页面"}
-                    resetKey={location.pathname}
-                    fallbackClassName="flex h-full items-center justify-center p-6"
-                    escape={section === "conversation" ? undefined : { label: "返回对话", onClick: () => navigate(conversationPath) }}
-                  >
-                    <Outlet context={outletContext} />
-                  </IsolatedRegion>
-                </div>
-              )}
-            </div>
-            {conversationTaskId !== null && rail.open && (
-              <IsolatedRegion
-                region="task-rail"
-                label="会话侧栏"
-                resetKey={`task-rail:${conversationTaskId}`}
-                fallbackClassName="dock-panel bg-background m-2 w-(--task-rail-width) shrink-0 p-3"
-                escape={{ label: "收起会话侧栏", onClick: rail.close }}
-              >
-                <TaskRail taskId={conversationTaskId} placement={rail.placement} onClose={rail.close} />
-              </IsolatedRegion>
+          <div style={{ "--task-rail-width": `${TASK_RAIL_WIDTH}px` } as CSSProperties} className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+            {focusedTaskId !== null && (
+              <div className="h-full" inert={!showTaskLayer} aria-hidden={!showTaskLayer || undefined}>
+                <ConversationAsideContext.Provider value={conversationAside}>
+                <ReferenceTargetScope.Provider value={`task:${focusedTaskId}`}><TaskPage
+                  key={focusedTaskId}
+                  taskId={focusedTaskId}
+                  initialTask={catalog.activeTask}
+                  workspaceRoot={catalog.activeWorkspace?.root_path}
+                  forkingMessageId={actions.forkingMessageId}
+                  onForkMessage={(messageId) => void actions.forkMessage(messageId)}
+                  onTaskLoaded={catalog.handleTaskLoaded}
+                  onTaskStateChanged={() => {
+                    if (catalog.activeTaskWorkspaceId !== null) void catalog.refreshWorkspaceTasks(catalog.activeTaskWorkspaceId);
+                  }}
+                /></ReferenceTargetScope.Provider>
+                </ConversationAsideContext.Provider>
+              </div>
+            )}
+            {!showTaskLayer && (
+              <div className={cn("bg-background h-full", focusedTaskId !== null && "absolute inset-0 z-10")}>
+                <IsolatedRegion
+                  region={section}
+                  label={crumbs.at(-1)?.label ?? "页面"}
+                  resetKey={location.pathname}
+                  fallbackClassName="flex h-full items-center justify-center p-6"
+                  escape={section === "conversation" ? undefined : { label: "返回对话", onClick: () => navigate(conversationPath) }}
+                >
+                  <Outlet context={outletContext} />
+                </IsolatedRegion>
+              </div>
             )}
           </div>
         </main>

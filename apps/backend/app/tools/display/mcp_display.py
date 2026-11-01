@@ -3,7 +3,6 @@
 from typing import Any
 
 
-
 def build_mcp_call_display_data(*, server_name: str, tool_name: str) -> dict[str, Any]:
     return {
         "kind": "mcp-tool-result",

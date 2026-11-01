@@ -4,7 +4,6 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 
-
 def build_web_search_display_data(
     *, query: str, results: Iterable[Mapping[str, Any]]
 ) -> dict[str, Any]:

@@ -14,13 +14,13 @@ import asyncio
 import copy
 from pathlib import Path
 
-from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.config.configuration import get_agent_registry, get_tool_registry
 from app.config.logging.logger import log
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.models import TaskRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
+from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
 from app.task_runtime.service.task_service import TaskDeletionResult

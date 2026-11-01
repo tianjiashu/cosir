@@ -61,7 +61,7 @@ def _plan_terminal_output(
     if (
         not isinstance(data, TerminalOutputDeltaData)
         or part.get("toolName") != TOOL_EXECUTE_TERMINAL
-        or not (status == "running" or (status == "pending" and part.get("background") is True))
+        or not (status == "running" or (status == "pending" and "background" in part))
     ):
         return []
     previous_seq = part.get("terminal_output_seq")

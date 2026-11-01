@@ -17,16 +17,19 @@ TeamRun），等待占位也只有执行结果能收尾。``reply`` 类工具的
 import asyncio
 from typing import cast
 
+from app.config.configuration import get_tool_registry
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent, UserInputConsumedEvent
 from app.core.workflow.branch import task_title
-from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.config.configuration import get_tool_registry
-from app.core.workflow.message_queue.task_message import BackgroundResultBody, DecisionBody
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.enums.react_route import ReactRoute
-from app.models.message_metadata import ToolMessageMetadata
+from app.core.workflow.execution_state.tool_batch import ToolBatch
+from app.core.workflow.message_queue.task_message import (
+    BackgroundResultBody,
+    DecisionBody,
+    TaskMessage,
+    UserInputBody,
+)
 from app.core.workflow.node_helper.common import (
     RunStopped,
     _message_context,
@@ -36,13 +39,11 @@ from app.core.workflow.node_helper.common import (
 )
 from app.core.workflow.node_helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflow.node_helper.tool_observation_projection import (
-    settle_deferred_placeholder,
+    settle_background_placeholder,
 )
 from app.models.enums.conversation_run_status import RunTransition
-from app.core.workflow.message_queue.task_message import (
-    TaskMessage,
-    UserInputBody,
-)
+from app.models.enums.react_route import ReactRoute
+from app.models.message_metadata import ToolMessageMetadata
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
 
@@ -91,9 +92,10 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
             consumed_input = True
         elif isinstance(message.body, BackgroundResultBody) and message.body.tool_call_id:
             await asyncio.to_thread(
-                settle_deferred_placeholder,
+                settle_background_placeholder,
                 message.body.tool_call_id,
                 display_data=message.body.placeholder_display_data,
+                ended_at=message.body.ended_at,
                 step_id=step_id,
             )
     # 用户说了新话才值得重新起标题；副本在主线开始流式改写 working copy 前取好。

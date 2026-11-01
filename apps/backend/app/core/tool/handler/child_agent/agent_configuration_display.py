@@ -3,7 +3,6 @@
 from typing import Any
 
 
-
 def build_agent_configuration_draft_display_data(
     *,
     agent_id: str,

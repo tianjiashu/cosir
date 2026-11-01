@@ -156,7 +156,7 @@ export type CancelToolCallResult =
   | { kind: "failed"; reason: "rejected" | "network"; message: string };
 
 /**
- * 取消一次工具调用：登记了延迟结果的调用（前台等待或后台工作）不要求 Run 在执行，其余只命中 Task
+ * 取消一次工具调用：登记了后台结果的调用（前台等待或后台工作）不要求 Run 在执行，其余只命中 Task
  * 当前执行中的调用。调用成功不代表工具已经结束。后端 409 表示已没有可取消的对象（已标记过、调用已
  * 结束或 Task 没有执行），对界面都意味着无需再次请求，统一视为 already_signalled。
  */

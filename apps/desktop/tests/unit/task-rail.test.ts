@@ -20,7 +20,7 @@ describe("会话侧栏偏好", () => {
 });
 
 describe("会话侧栏摆放", () => {
-  it("整行放下侧栏后对话还有 640px 就固定，否则浮起", () => {
+  it("对话视口放下侧栏后还有 640px 就固定，否则浮起", () => {
     expect(taskRailPlacement(TASK_RAIL_WIDTH + 640)).toBe("docked");
     expect(taskRailPlacement(TASK_RAIL_WIDTH + 639)).toBe("floating");
     expect(taskRailPlacement(0)).toBe("floating");

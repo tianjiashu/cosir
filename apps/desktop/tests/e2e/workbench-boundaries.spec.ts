@@ -152,7 +152,9 @@ test("同工作区任务和配置页保活草稿，真正关闭仍确认", async
 test("新对话页选择其他工作区和命令面板跳转都不确认，各工作区的工作台互不影响", async ({ page }) => {
   await page.goto("/");
   await seedDrafts(page);
-  await page.getByRole("treeitem", { name: "工作区8", exact: true }).click();
+  await page.getByRole("button", { name: "选择工作区，当前 工作区7" }).click();
+  await page.getByRole("listbox", { name: "工作区列表" }).getByRole("option", { name: "工作区8 /workspace/8" }).click();
+  await expect(page.getByRole("button", { name: "选择工作区，当前 工作区8" })).toBeVisible();
   await expect(switchDialog(page)).toHaveCount(0);
   await expect(page.getByRole("treeitem", { name: "工作区8", exact: true })).toHaveAttribute("aria-current", "true");
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toHaveCount(0);

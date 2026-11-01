@@ -4,7 +4,7 @@
 ``ToolObservation`` 组装都在 ``ExecuteTerminalTool`` 内完成；不含 subprocess 细节
 （下沉到 ``app.tools.tool_handler.terminal.local_backend``）。
 
-前后台执行：命令包成 ``ThreadJob`` 交给 ``run_deferred``（默认前台，到上限自动转后台，模型可直接选
+前后台执行：命令包成 ``ThreadJob`` 交给 ``run_background_work``（默认前台，到上限自动转后台，模型可直接选
 后台，用户可把前台等待转走）。所以本工具是 thread 工具：命令要能在本次调用返回后继续跑，作业必须
 由后端进程持有，不能放进每次调用结束即被杀的工具子进程；超时与取消都由执行后端杀进程树。
 
@@ -21,8 +21,8 @@ from pathlib import Path
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tool.background.deferred_job import DeferredConclusion, PlaceholderReason, ThreadJob
-from app.core.tool.background.run_deferred import run_deferred
+from app.core.tool.background.job import BackgroundConclusion, PlaceholderReason, ThreadJob
+from app.core.tool.background.run import run_background_work
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
@@ -37,6 +37,7 @@ from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.models.message_metadata import BackgroundWork
 from app.tools.display.terminal_display import (
     build_terminal_display_data,
     build_terminal_placeholder_display_data,
@@ -286,7 +287,7 @@ class ExecuteTerminalTool(HandlerBase):
 
         副作用:
             经后端派生子进程执行命令；前台期间输出经实时通道推给前端，转到后台后不再推送；以本次
-            ``tool_call_id`` 在 ``deferred_registry`` 登记作业。
+            ``tool_call_id`` 在 ``background_registry`` 登记作业。
         """
         log.info(
             "terminal_command_started",
@@ -339,7 +340,7 @@ class ExecuteTerminalTool(HandlerBase):
         # 作业线程跑完命令后在这里留下完整结果：前台拿到结论时按它渲染观察（模型正文另过预算）。
         finished: list[ExecutionResult] = []
 
-        def work(cancelled: Callable[[], bool]) -> DeferredConclusion:
+        def work(cancelled: Callable[[], bool]) -> BackgroundConclusion:
             # 实时通道随命令而不是随工具调用结束：转到后台后命令还在跑，输出照常推给占位卡片。
             try:
                 result = LocalExecutionBackend().execute(
@@ -368,7 +369,7 @@ class ExecuteTerminalTool(HandlerBase):
             finished.append(result)
             return self._background_conclusion(command, cwd, result, execution_context)
 
-        outcome = run_deferred(
+        outcome = run_background_work(
             # 撤销只置位标记，执行后端按时间片复查取消，不需要额外唤醒。
             ThreadJob(work, wake=lambda: None, name=f"execute-terminal-{tool_call_id[-8:]}"),
             task_id=execution_context.task_id,
@@ -376,13 +377,17 @@ class ExecuteTerminalTool(HandlerBase):
             tool_call_id=tool_call_id,
             kind="terminal_command",
             label=description,
-            background=EXECUTE_TERMINAL_BACKGROUND.resolve_background(background),
+            mode=(
+                "background"
+                if EXECUTE_TERMINAL_BACKGROUND.resolve_background(background)
+                else "foreground"
+            ),
             foreground_limit_s=EXECUTE_TERMINAL_BACKGROUND.foreground_limit_s,
             is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
         )
         if outcome.placeholder is not None:
             return self._placeholder_observation(
-                command, cwd, effective_timeout, outcome.placeholder, outcome.started_at
+                command, cwd, effective_timeout, outcome.placeholder, outcome.work
             )
         return self._result_observation(command, cwd, finished[0])
 
@@ -421,12 +426,12 @@ class ExecuteTerminalTool(HandlerBase):
         cwd: Path,
         result: ExecutionResult,
         execution_context: ToolExecutionContext,
-    ) -> DeferredConclusion:
+    ) -> BackgroundConclusion:
         """转到后台后的结论：给模型的载荷过统一输出预算（超限保留头尾、完整原文落盘）；给占位卡片
         的终态展示是完整输出（展示契约不截断），并入时写回卡片。
 
         作业线程里调用：前台拿到结论时不使用它（见 ``finished``），只在转后台后经
-        ``deferred_registry.complete`` 回投。撤销的命令没有卡片终态（占位随撤销推到 ``cancelled``）。
+        ``background_registry.complete`` 回投。撤销的命令没有卡片终态（占位随撤销推到 ``cancelled``）。
         """
         end_reason = (
             "cancelled" if result.cancelled else "timed_out" if result.timed_out else "exited"
@@ -435,7 +440,7 @@ class ExecuteTerminalTool(HandlerBase):
             tool_success(self.name, self._render_content(result.output, result)),
             execution_context,
         )
-        return DeferredConclusion(
+        return BackgroundConclusion(
             {"end_reason": end_reason, "exit_code": result.exit_code, "output": budgeted.content},
             display_data=None
             if result.cancelled
@@ -449,7 +454,8 @@ class ExecuteTerminalTool(HandlerBase):
         )
 
     def _placeholder_observation(
-        self, command: str, cwd: Path, timeout_s: float, reason: PlaceholderReason
+        self, command: str, cwd: Path, timeout_s: float, reason: PlaceholderReason,
+        work: BackgroundWork,
     ) -> ToolObservation:
         """命令转到后台时的占位（``background``）。
 
@@ -477,7 +483,7 @@ class ExecuteTerminalTool(HandlerBase):
             display_data=build_terminal_placeholder_display_data(command=command, workdir=cwd),
             suspend=reason == "limit",
         )
-        observation.background = BackgroundWork(started_at=started_at)
+        observation.background = work
         return observation
 
     def to_definition(self) -> ToolDefinition:

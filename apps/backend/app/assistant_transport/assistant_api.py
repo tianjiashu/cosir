@@ -283,7 +283,7 @@ async def cancel_tool_call(
 ) -> Response:
     """取消一次工具调用，Run 与 Agent 继续执行。
 
-    登记了延迟结果的调用（前台等待或后台工作）撤销登记，不要求 Run 在执行；其余只给 Task 当前
+    登记了后台结果的调用（前台等待或后台工作）撤销登记，不要求 Run 在执行；其余只给 Task 当前
     执行中的调用打工具级取消信号。本端点只表示取消已被接受；工具调用终态以 canonical snapshot
     为准。
 

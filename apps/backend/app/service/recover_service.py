@@ -14,7 +14,7 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 class RecoverService:
-    """后端启动期的重启恢复：收敛遗留 running Run / TeamRun，拉起待调度 Task，再为延迟结果收尾。
+    """后端启动期的重启恢复：收敛遗留 running Run / TeamRun，拉起待调度 Task，再为后台结果收尾。
 
     不动 suspended Run 与 message_queue，不隐式重放旧执行。
     """
@@ -30,7 +30,7 @@ class RecoverService:
     def recover_after_restart(self) -> None:
         """重启恢复的唯一入口。
 
-        调用方须已 ``task_runtime_spaces.bind_loop`` 并打开 ``deferred_registry``：本入口会
+        调用方须已 ``task_runtime_spaces.bind_loop`` 并打开 ``background_registry``：本入口会
         物化 space（拉起 actor）并投递重启结论。
 
         顺序即契约：

@@ -31,7 +31,7 @@ from app.assistant_transport.state.snapshot_window import HistoryPage, window_sn
 from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
 from app.core.tool.background import placeholders
-from app.core.tool.background.deferred_registry import deferred_registry
+from app.core.tool.background.registry import background_registry
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.message_queue.task_message import (
@@ -201,8 +201,8 @@ class TransportAssistantService:
                 )
             withdrawn = self._context.exclude_from(task_id, target.sequence, session)
             for tool_call_id in withdrawn:
-                if deferred_registry.owns(task_id, tool_call_id):
-                    deferred_registry.cancel(tool_call_id, reason="编辑重跑撤回所在一轮，撤销延迟结果")
+                if background_registry.owns(task_id, tool_call_id):
+                    background_registry.cancel(tool_call_id, reason="编辑重跑撤回所在一轮，撤销后台结果")
             # 这一轮发起的交接随之结束：否则资源一直显示交接中，也无法再次交接。
             handoff_registry.drop(task_id, withdrawn)
             task_runtime_spaces.enqueue(task_id, message, session=session)
@@ -236,7 +236,7 @@ class TransportAssistantService:
     def cancel_tool_call(self, task_id: int, tool_call_id: str) -> bool:
         """取消一次工具调用；没有可取消的对象（或已标记过）时返回 ``False``。
 
-        这次调用登记了延迟结果时撤销登记，不要求 Run 在执行（后台工作本来就在 Run 之外）：前台条目
+        这次调用登记了后台结果时撤销登记，不要求 Run 在执行（后台工作本来就在 Run 之外）：前台条目
         由撤销回调唤醒工具线程、以取消结果收尾；后台条目把占位行推到 ``cancelled``，并给模型留一条
         不唤醒的通知——用户主动取消即接管，Agent 下次推进时一并读到。没有登记时只中止当前执行中
         的工具调用：看执行者而不是 Run 状态，挂起的 Run 没有执行者，标记了也没人取。
@@ -245,14 +245,14 @@ class TransportAssistantService:
             KeyError: Task 不存在。
         """
         self._tasks.get_task(task_id)
-        if deferred_registry.owns(task_id, tool_call_id):
-            return self._cancel_deferred(task_id, tool_call_id)
+        if background_registry.owns(task_id, tool_call_id):
+            return self._cancel_background_work(task_id, tool_call_id)
         if task_runtime_spaces.get_or_create(task_id).actor.driving:
             return tool_call_cancellation_registry.mark_cancelled(task_id, tool_call_id)
         return False
 
-    def _cancel_deferred(self, task_id: int, tool_call_id: str) -> bool:
-        dropped = deferred_registry.cancel(tool_call_id)
+    def _cancel_background_work(self, task_id: int, tool_call_id: str) -> bool:
+        dropped = background_registry.cancel(tool_call_id)
         if dropped is None:
             # 与完成或 Run 停止撤销竞争失败：条目已结束，没有可取消的对象。
             return False
@@ -264,8 +264,8 @@ class TransportAssistantService:
                 task_id,
                 TaskMessage.of(
                     NoticeBody(
-                        content=_DEFERRED_CANCELLED_NOTICE.format(tool_call_id=tool_call_id),
-                        notice_kind="deferred_result_cancelled",
+                        content=_BACKGROUND_CANCELLED_NOTICE.format(tool_call_id=tool_call_id),
+                        notice_kind="background_result_cancelled",
                     )
                 ),
             )
@@ -281,8 +281,8 @@ class TransportAssistantService:
         self._tasks.get_task(task_id)
         # 先按 Task 寻址，避免转走别的 Task 的调用；结论与转后台的先后由登记表在锁内裁决。
         if (
-                not deferred_registry.owns(task_id, tool_call_id)
-                or deferred_registry.detach(tool_call_id) != "detached"
+                not background_registry.owns(task_id, tool_call_id)
+                or background_registry.detach(tool_call_id) != "detached"
         ):
             raise SessionConflictError(
                 "TOOL_CALL_NOT_DETACHABLE", "这次工具调用已结束或不能转到后台", retryable=False
@@ -346,7 +346,7 @@ class TransportAssistantService:
         return self._states.get_history_page(task_id, end)
 
 
-_DEFERRED_CANCELLED_NOTICE = (
+_BACKGROUND_CANCELLED_NOTICE = (
     "The user cancelled the background work started by tool call {tool_call_id}; its result "
     "will not arrive. Do not wait for it or start it again unless the user asks."
 )

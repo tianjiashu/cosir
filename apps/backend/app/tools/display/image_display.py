@@ -4,7 +4,6 @@
 from typing import Any
 
 
-
 def build_read_image_display_data(
     images: list[dict[str, Any]], failures: list[dict[str, str]]
 ) -> dict[str, Any]:

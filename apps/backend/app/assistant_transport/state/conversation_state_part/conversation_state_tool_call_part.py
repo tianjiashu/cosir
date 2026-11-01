@@ -10,6 +10,16 @@ from app.models.enums.tool_call_status import ToolCallEventStatus
 ToolCallStatus = ToolCallEventStatus
 
 
+class ConversationBackgroundWork(TypedDict):
+    """后台占位上的工作记录（``BackgroundWork`` 的 wire 形状）。卡片只看它在不在；看板从工作副本里
+    的这些记录投影，所以它们随 part 进入快照，看板不另外查库。"""
+
+    kind: Literal["terminal_command", "child_agent"]
+    label: str
+    startedAt: str
+    endedAt: str | None
+
+
 class ConversationStateToolCallPart(TypedDict):
     """工具调用及其生命周期的 UI part。
 
@@ -31,8 +41,8 @@ class ConversationStateToolCallPart(TypedDict):
     display_data: NotRequired[dict[str, object] | None]
     # 指向持久化 TeamRun，失败态也能读取节点进度与诊断。
     team_run_id: NotRequired[int]
-    # 延迟结果的后台占位：``pending`` 即「后台执行中」，投影自占位行 metadata。
-    background: NotRequired[bool]
+    # 后台占位的工作记录：存在即后台占位，``pending`` 即「后台执行中」；投影自占位行 metadata。
+    background: NotRequired[ConversationBackgroundWork]
     isError: NotRequired[bool]
     approvalRequestId: NotRequired[None]
     # 子 Task 定位：``delegation-result`` 与 ``child-agent-result(operation=send)`` 都提升到 part，

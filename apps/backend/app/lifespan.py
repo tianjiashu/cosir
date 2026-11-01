@@ -42,7 +42,7 @@ from app.core.agents.agent_profile_config import (
     ensure_system_agent_team_config_dir,
 )
 from app.core.hook import HookContext, HookEvent, HookInterceptor
-from app.core.tool.background.deferred_registry import deferred_registry
+from app.core.tool.background.registry import background_registry
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,
@@ -200,14 +200,14 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     set_agent_team_registry(team_registry)
     set_tool_registry(build_tool_registry())
 
-    # 先接好运行时（事件循环、延迟结果登记表与看板监听），再做重启恢复：恢复会物化 space、拉起
+    # 先接好运行时（事件循环、后台结果登记表与看板监听），再做重启恢复：恢复会物化 space、拉起
     # actor 并投递重启结论。恢复要消费已装配的工具系统，且须在后端 ready 前完成；步骤顺序见
     # ``RecoverService.recover_after_restart``。
     task_runtime_spaces.bind_loop(asyncio.get_running_loop())
-    deferred_registry.open()
+    background_registry.open()
     # 看板与前台等待随登记表变化整表重投影进 Transport snapshot（通知线程、锁外）。
-    deferred_registry.set_listener(
-        lambda task_id: get_conversation_task_state_service().refresh_deferred_results(task_id)
+    background_registry.set_listener(
+        lambda task_id: get_conversation_task_state_service().refresh_background_results(task_id)
     )
     # 进行中的交接随登记表变化整表重投影进 snapshot 顶层 ``handoffs``。
     handoff_registry.set_listener(
@@ -225,11 +225,11 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         try:
             # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
             HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
-            # 先禁止延迟结果投递（撤销全部条目、等在途投递写完）：之后关闭终端会把会话结束为
+            # 先禁止后台结果投递（撤销全部条目、等在途投递写完）：之后关闭终端会把会话结束为
             # closed、唤醒等待线程与交接，它们不得在关闭期间写 task_messages。再停下全部 actor
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
-            await asyncio.to_thread(deferred_registry.close)
-            deferred_registry.set_listener(None)
+            await asyncio.to_thread(background_registry.close)
+            background_registry.set_listener(None)
             handoff_registry.set_listener(None)
             handoff_registry.close()
             await task_runtime_spaces.aclose()

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.config.logging.logger import log
+from app.service.configuration.file_store import ConfigurationFileStore
 from app.tools.tool_handler.search.gitignore_rules import (
     build_gitwildmatch_spec,
     valid_rule_lines,
@@ -19,7 +20,6 @@ from app.tools.tool_handler.search.ignore_rules import (
     FILEIGNORE_MAX_RULES,
     ignore_file_path,
 )
-from app.service.configuration.file_store import ConfigurationFileStore
 
 
 class WorkspaceFileIgnoreConfigurationError(ValueError):

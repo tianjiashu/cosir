@@ -17,7 +17,7 @@ export type ToolArtifact = {
   errorCode: string | null;
   childTaskId?: number;
   agent_role?: string;
-  /** 延迟结果的后台占位（投影自 part `background`，结算后保留）：所有工具共用的「在后台」事实。 */
+  /** 后台结果的后台占位（投影自 part `background`，结算后保留）：所有工具共用的「在后台」事实。 */
   background: boolean;
 };
 

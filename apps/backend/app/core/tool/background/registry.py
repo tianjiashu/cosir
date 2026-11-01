@@ -1,6 +1,6 @@
-"""延迟工具结果登记表：一次工具调用登记一条、结论稍后以 ``background_result`` 回投的工作。
+"""后台结果登记表：一次工具调用登记一条、结论稍后以 ``background_result`` 回投的工作。
 
-设计见 ``docs/plan/deferred-tool-result-design.md``。条目以 ``tool_call_id`` 为键，每条恰好产出一个
+条目以 ``tool_call_id`` 为键，每条恰好产出一个
 结论；登记表只记录「结论回投给谁、谁在等、撤销时通知谁」，不持有工作本身的执行状态——工作的
 生命周期归各执行单元（终端 runtime 等），登记表不是任何一种 Run 的第二套状态机。
 
@@ -46,14 +46,13 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from app.config.logging.logger import log
-from app.core.tool.background.deferred_job import DeferredConclusion
+from app.core.tool.background.job import BackgroundConclusion
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.message_queue.task_message import BackgroundResultBody, TaskMessage
+from app.models.message_metadata import BackgroundKind, BackgroundWork
 
-# 条目种类，同时作为 ``background_result`` 的 ``tool_name``：给模型标明是哪类后台工作，不一定是
-# 可调用的工具名。
-DeferredKind = Literal["terminal_command", "child_agent"]
-DeferredMode = Literal["foreground", "background"]
+# 工作种类与原始标签由 BackgroundWork 持有；登记表只额外描述进程内执行方式。
+BackgroundMode = Literal["foreground", "background"]
 ForegroundOutcome = Literal["settled", "detached", "gone"]
 DetachOutcome = Literal["detached", "not_found", "not_foreground"]
 
@@ -62,10 +61,8 @@ DetachOutcome = Literal["detached", "not_found", "not_foreground"]
 class _Entry:
     task_id: int
     run_id: int | None
-    kind: DeferredKind
-    label: str
-    mode: DeferredMode
-    started_at: str
+    work: BackgroundWork
+    mode: BackgroundMode
     on_cancel: Callable[[], None]
     on_detach: Callable[[], None] | None
 
@@ -76,11 +73,11 @@ class DroppedEntry:
 
     tool_call_id: str
     task_id: int
-    mode: DeferredMode
+    mode: BackgroundMode
 
 
-class DeferredRegistry:
-    """按 ``tool_call_id`` 登记未完成的延迟结果；线程安全，任意线程可调用。"""
+class BackgroundRegistry:
+    """按 ``tool_call_id`` 登记未完成的后台结果；线程安全，任意线程可调用。"""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -109,13 +106,13 @@ class DeferredRegistry:
         *,
         task_id: int,
         run_id: int | None,
-        kind: DeferredKind,
+        kind: BackgroundKind,
         label: str,
         on_cancel: Callable[[], None],
-        mode: DeferredMode = "background",
+        mode: BackgroundMode = "background",
         on_detach: Callable[[], None] | None = None,
-    ) -> str:
-        """登记一条延迟结果，返回登记时刻（工作的开始时间，工具写进后台占位的记录）；``on_cancel``
+    ) -> BackgroundWork:
+        """登记一条后台结果，返回同一份工作描述（工具原样写进后台占位）；``on_cancel``
         在撤销时调用（锁外、只调一次）。
 
         前台条目须给 ``on_detach``：转到后台时调用，唤醒还在等的工具线程。``tool_call_id`` 由调用方
@@ -130,30 +127,30 @@ class DeferredRegistry:
             "kind": kind,
             "mode": mode,
         }
-        started_at = _now()
+        work = BackgroundWork(kind=kind, label=label, started_at=_now())
         with self._lock:
             if tool_call_id in self._entries:
                 raise ValueError(f"background result already registered: {tool_call_id}")
             closed = self._closed
             if not closed:
                 self._entries[tool_call_id] = _Entry(
-                    task_id, run_id, kind, label, mode, started_at, on_cancel, on_detach
+                    task_id, run_id, work, mode, on_cancel, on_detach
                 )
                 pending = sum(entry.task_id == task_id for entry in self._entries.values())
         if closed:
             log.info(
-                "deferred_result_rejected_closed",
-                extra={"msg": "后端正在关闭，延迟结果不登记", "data": data},
+                "background_result_rejected_closed",
+                extra={"msg": "后端正在关闭，后台结果不登记", "data": data},
             )
-            return started_at
+            return work
         log.info(
-            "deferred_result_registered",
-            extra={"msg": "登记延迟结果", "data": {**data, "label": label, "pending": pending}},
+            "background_result_registered",
+            extra={"msg": "登记后台结果", "data": {**data, "label": label, "pending": pending}},
         )
         self._notify(task_id)
-        return started_at
+        return work
 
-    def complete(self, tool_call_id: str, conclusion: DeferredConclusion) -> bool:
+    def complete(self, tool_call_id: str, conclusion: BackgroundConclusion) -> bool:
         """结束一条登记并把结论投递给它的 Task；已撤销、已完成、已关闭或 Task 正在停止时不投递，
         返回 False。
 
@@ -171,7 +168,7 @@ class DeferredRegistry:
                 return False
             if cancellation_registry.is_cancelled(entry.task_id):
                 log.info(
-                    "deferred_result_left_for_drop",
+                    "background_result_left_for_drop",
                     extra={
                         "msg": "Task 正在停止，结论不投递，条目留给撤销",
                         "data": {"task_id": entry.task_id, "tool_call_id": tool_call_id},
@@ -184,7 +181,7 @@ class DeferredRegistry:
             return deliver_background_result(
                 entry.task_id,
                 tool_call_id=tool_call_id,
-                tool_name=entry.kind,
+                tool_name=entry.work.kind,
                 result=conclusion.result,
                 placeholder_display_data=conclusion.display_data,
             )
@@ -224,7 +221,7 @@ class DeferredRegistry:
             entry.mode = "background"
             on_detach = entry.on_detach
         log.info(
-            "deferred_result_detached",
+            "background_result_detached",
             extra={
                 "msg": "前台等待转到后台",
                 "data": {"task_id": entry.task_id, "tool_call_id": tool_call_id},
@@ -234,7 +231,7 @@ class DeferredRegistry:
         self._notify(entry.task_id)
         return "detached"
 
-    def cancel(self, tool_call_id: str, *, reason: str = "用户取消，撤销延迟结果") -> DroppedEntry | None:
+    def cancel(self, tool_call_id: str, *, reason: str = "用户取消，撤销后台结果") -> DroppedEntry | None:
         """撤销单条（用户取消、编辑重跑撤回所在一轮）：出队并调用撤销回调；没有该条目时返回 ``None``。
 
         ``reason`` 只进日志，区分撤销来源。
@@ -255,9 +252,9 @@ class DeferredRegistry:
             entry = self._entries.pop(tool_call_id, None)
         if entry is not None:
             log.info(
-                "deferred_result_discarded",
+                "background_result_discarded",
                 extra={
-                    "msg": "工作未启动，收回延迟结果登记",
+                    "msg": "工作未启动，收回后台结果登记",
                     "data": {"task_id": entry.task_id, "tool_call_id": tool_call_id},
                 },
             )
@@ -267,7 +264,9 @@ class DeferredRegistry:
         """返回 Task 下未完成条目的标签，供 ``wait_messages`` 判定与提示。"""
 
         with self._lock:
-            return [entry.label for entry in self._entries.values() if entry.task_id == task_id]
+            return [
+                entry.work.label for entry in self._entries.values() if entry.task_id == task_id
+            ]
 
     def owns(self, task_id: int, tool_call_id: str) -> bool:
         """这次调用是否有属于该 Task 的活条目（前台或后台；接口层判定寻址是否属于该 Task）。"""
@@ -276,15 +275,16 @@ class DeferredRegistry:
             entry = self._entries.get(tool_call_id)
             return entry is not None and entry.task_id == task_id
 
-    def live_background(self, task_id: int) -> dict[str, str]:
-        """Task 下还在跑的后台工作：``tool_call_id`` → 登记时刻，按登记先后；前台条目不在其中。
+    def live_background(self, task_id: int) -> dict[str, BackgroundWork]:
+        """Task 下还在跑的后台工作：``tool_call_id`` → 工作记录，按登记先后；前台条目不在其中。
 
-        看板据此判断哪些工作仍在运行（已结束的记录在占位行上，见模块说明）。
+        看板据此判断哪些工作仍在运行（已结束的记录在占位行上，见模块说明）。带完整记录而不只是
+        调用 id：并行批次里占位行要等整批结束才写入，这段时间看板只能从这里拿到名字与开始时间。
         """
 
         with self._lock:
             return {
-                tool_call_id: entry.started_at
+                tool_call_id: entry.work
                 for tool_call_id, entry in self._entries.items()
                 if entry.task_id == task_id and entry.mode == "background"
             }
@@ -315,7 +315,7 @@ class DeferredRegistry:
             ]
             for tool_call_id, _ in dropped:
                 del self._entries[tool_call_id]
-        self._cancel_all(dropped, "Run 停止，撤销延迟结果")
+        self._cancel_all(dropped, "Run 停止，撤销后台结果")
         if dropped:
             self._notify(task_id)
         return [
@@ -334,7 +334,7 @@ class DeferredRegistry:
             self._entries.clear()
             while self._delivering:
                 self._settled.wait()
-        self._cancel_all(dropped, "后端关闭，撤销延迟结果")
+        self._cancel_all(dropped, "后端关闭，撤销后台结果")
 
     def _notify(self, task_id: int) -> None:
         """锁外把变化交给通知线程；监听方异常记录后丢弃，看板是诊断旁路、不影响结论投递。"""
@@ -348,8 +348,8 @@ class DeferredRegistry:
                 listener(task_id)
             except Exception:
                 log.exception(
-                    "deferred_result_listener_failed",
-                    extra={"msg": "延迟结果变化通知失败", "data": {"task_id": task_id}},
+                    "background_result_listener_failed",
+                    extra={"msg": "后台结果变化通知失败", "data": {"task_id": task_id}},
                 )
 
         self._notifier.submit(run)
@@ -359,15 +359,15 @@ class DeferredRegistry:
         """锁外逐条调用撤销回调；回调异常记录后继续，不阻断取消或关闭收尾。"""
 
         for tool_call_id, entry in dropped:
-            data = {"task_id": entry.task_id, "tool_call_id": tool_call_id, "kind": entry.kind}
+            data = {"task_id": entry.task_id, "tool_call_id": tool_call_id, "kind": entry.work.kind}
             try:
                 entry.on_cancel()
             except Exception:
                 log.exception(
-                    "deferred_result_cancel_failed",
-                    extra={"msg": "撤销延迟结果的回调失败", "data": data},
+                    "background_result_cancel_failed",
+                    extra={"msg": "撤销后台结果的回调失败", "data": data},
                 )
-            log.info("deferred_result_dropped", extra={"msg": msg, "data": data})
+            log.info("background_result_dropped", extra={"msg": msg, "data": data})
 
 
 def _now() -> str:
@@ -386,11 +386,11 @@ def deliver_background_result(
     """把后台工作的结论作为 ``background_result`` 投递给 Task，返回是否已入队。
 
     会同步写 SQLite，调用方不得在终端 PTY 读线程等热路径上直接调用。登记过的条目必须经
-    ``DeferredRegistry.complete`` 投递（受关闭门控）；直接调用只用于不对应登记的启动期重启结论
+    ``BackgroundRegistry.complete`` 投递（受关闭门控）；直接调用只用于不对应登记的启动期重启结论
     （``restart_settlement``）。
-    停止期间的结论由 ``DeferredRegistry.complete`` 在锁内拦下，这里不再复查取消信号。
+    停止期间的结论由 ``BackgroundRegistry.complete`` 在锁内拦下，这里不再复查取消信号。
     Task 已删除时入队抛 ``KeyError``，在此记录并返回 False。
-    ``placeholder_display_data`` 是作业给占位卡片的终态展示（见 ``DeferredConclusion``），随消息持久化、
+    ``placeholder_display_data`` 是作业给占位卡片的终态展示（见 ``BackgroundConclusion``），随消息持久化、
     并入时写回卡片：结论可能早于占位行写入就到，进程内暂存又扛不住重启，所以只能跟着消息走。
     """
 
@@ -402,6 +402,7 @@ def deliver_background_result(
         tool_name=tool_name,
         tool_result=json.dumps(result, ensure_ascii=False),
         placeholder_display_data=placeholder_display_data,
+        ended_at=_now(),
     )
     try:
         task_runtime_spaces.enqueue(task_id, TaskMessage.of(body))
@@ -415,4 +416,4 @@ def deliver_background_result(
     return True
 
 
-deferred_registry = DeferredRegistry()
+background_registry = BackgroundRegistry()

@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 
-from app.core.workflow.run_driver import RunDriver
 from app.core.task_cancellation import TaskCancellation
 from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     CancelReason,
@@ -26,6 +25,7 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import (
 )
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.message_queue.task_message import TaskMessage
+from app.core.workflow.run_driver import RunDriver
 from app.models import ConversationRunRecord
 
 OnReleased = Callable[[ConversationRunRecord, CancelReason | None], Awaitable[None]]
@@ -126,7 +126,7 @@ class TaskExecution:
         # 等许多路径上物化，构造执行登记不应牵出 Run / Task service 与存储的装配。
         await RunDriver().drive(run)
         if cancellation_registry.is_cancelled(self.task_id):
-            # 取走信号前先撤销延迟结果：信号在时迟到结论被 ``deliver_background_result`` 丢弃，
+            # 取走信号前先撤销后台结果：信号在时迟到结论被 ``deliver_background_result`` 丢弃，
             # 取走之后、撤销之前却会入队并开出新 Run。撤销期间执行仍登记着，新到的取消照常打信号。
             await self._cancellation.cancel_background_task()
         self._task = self._run = None

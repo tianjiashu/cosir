@@ -19,7 +19,6 @@ from app.tools.tool_handler.patch_write.patch_diff import (
     format_git_diff,
 )
 
-
 # 补丁里的目标文件：只认 ``diff --git a/<path> b/<path>`` 头；标题不做完整解析，解析与校验归工具。
 _PATCH_FILE_HEADER = re.compile(r"^diff --git a/(\S+) b/", re.MULTILINE)
 

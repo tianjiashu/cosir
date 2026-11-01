@@ -57,6 +57,7 @@ import type { TransportRunLaunch } from "@/lib/assistant/contract";
 import { RUN_LAUNCH_LOCKED_HINT, useActiveRunLaunch } from "@/lib/assistant/run-launch";
 import { AttachmentWorkspaceContext } from "@/components/assistant-ui/elements/attachment-context";
 import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/virtualized-thread-messages";
+import { ConversationAsideSlot } from "@/components/assistant-ui/elements/conversation-aside";
 import { QueuedMessages } from "@/components/assistant-ui/elements/queued-messages";
 import { deleteQueuedTaskMessage, sendQueuedTaskMessageNow } from "@/lib/assistant/task-commands";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
@@ -130,21 +131,25 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
         */}
         <ThreadPrimitive.Viewport ref={viewportRef} turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto">
             <div aria-hidden="true" className="scroll-fade-top" />
-            <div className={cn("mx-auto flex min-w-0 w-full max-w-conversation flex-1 flex-col px-4 pt-6", isEmpty && "justify-center")}>
-              <VirtualizedThreadMessages
-                taskId={taskId}
-                scrollElementRef={viewportRef}
-                components={messageComponents}
-                performanceProbe={performanceProbe}
-              />
-              {!readonly && (
-                <ThreadPrimitive.ViewportFooter className="bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6">
-                  <div aria-hidden="true" className="scroll-fade-bottom" />
-                  <ScrollToBottomButton />
-                  <QueuedMessages components={messageComponents} />
-                  <ComposerBoundary performanceProbe={performanceProbe} />
-                </ThreadPrimitive.ViewportFooter>
-              )}
+            {/* 内容列与对话附注同处一个网格，附注在滚动容器里、滚动条在最外侧（见 ConversationAsideSlot）。 */}
+            <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto]">
+              <div className={cn("col-start-1 row-start-1 mx-auto flex min-w-0 w-full max-w-conversation flex-col px-4 pt-6", isEmpty && "justify-center")}>
+                <VirtualizedThreadMessages
+                  taskId={taskId}
+                  scrollElementRef={viewportRef}
+                  components={messageComponents}
+                  performanceProbe={performanceProbe}
+                />
+                {!readonly && (
+                  <ThreadPrimitive.ViewportFooter className="bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6">
+                    <div aria-hidden="true" className="scroll-fade-bottom" />
+                    <ScrollToBottomButton />
+                    <QueuedMessages components={messageComponents} />
+                    <ComposerBoundary performanceProbe={performanceProbe} />
+                  </ThreadPrimitive.ViewportFooter>
+                )}
+              </div>
+              <ConversationAsideSlot viewportRef={viewportRef} />
             </div>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>

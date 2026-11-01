@@ -8,14 +8,14 @@ from openai.types.chat import ChatCompletionToolMessageParam
 
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tool.schemas import ToolObservation
 from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
 )
-from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
+from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.models.message_metadata import ToolMessageMetadata
 from app.core.workflow.message_queue.task_message import TaskMessage, ToolImageBody, ToolResultBody
+from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
+from app.models.message_metadata import ToolMessageMetadata
 
 
 def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
@@ -76,7 +76,7 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
     runtime = _runtime_context()
     context = _message_context()
     [executed] = batch.observations
-    observation = dataclasses.replace(executed, awaiting_decision=False, background=False)
+    observation = dataclasses.replace(executed, awaiting_decision=False, background=None)
     call_id = observation.tool_call_id
     message, metadata = ToolResultBody(
         tool_call_id=call_id,
@@ -121,12 +121,12 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
         )
 
 
-def settle_deferred_placeholder(
-    tool_call_id: str, *, display_data: dict[str, object] | None, step_id: str
+def settle_background_placeholder(
+    tool_call_id: str, *, display_data: dict[str, object] | None, ended_at: str, step_id: str
 ) -> None:
     """后台结论并入 context 后，把这次调用的后台占位推到 ``completed``，并写入作业给卡片的终态展示。
 
-    在并入时而不是 ``deferred_registry.complete`` 时结算：工作可能早于占位行写入就完成，并入发生在
+    在并入时而不是 ``background_registry.complete`` 时结算：工作可能早于占位行写入就完成，并入发生在
     之后的模型步，占位行一定已写入。已被撤销或重启改为 ``cancelled`` 的占位照样推到 ``completed``
     （结论确实到了，投影白名单允许 ``cancelled → completed``）；不是后台占位或已完成的不动。
     ``display_data`` 为 ``None`` 时沿用占位的展示（子 Agent 卡片跟随子 Task）。写入即持久化；实时累计
@@ -138,10 +138,13 @@ def settle_deferred_placeholder(
     if current is None or not current.background or current.status == "completed":
         return
     written = context.update_tool_result_metadata(
-        tool_call_id, ToolMessageMetadata(status="completed", display_data=display_data)
+        tool_call_id, ToolMessageMetadata(
+            status="completed", display_data=display_data,
+            background=current.background.model_copy(update={"ended_at": ended_at}),
+        )
     )
     log.info(
-        "deferred_placeholder_completed",
+        "background_placeholder_completed",
         extra={
             "msg": "后台结论已并入，占位只更新展示状态",
             "data": {"run_id": runtime.run.id, "tool_call_id": tool_call_id},
@@ -157,6 +160,7 @@ def settle_deferred_placeholder(
                 status="completed",
                 display_data=written.display_data,
                 team_run_id=written.team_run_id,
+                background=written.background,
             )
         )
 

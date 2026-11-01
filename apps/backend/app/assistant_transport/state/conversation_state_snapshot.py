@@ -8,6 +8,7 @@ from app.assistant_transport.state.conversation_state_activity import Conversati
 from app.assistant_transport.state.conversation_state_background_task import (
     ConversationBackgroundTask,
     validate_background_tasks,
+    validate_background_work,
     validate_foreground_waits,
 )
 from app.assistant_transport.state.conversation_state_handoff import (
@@ -93,8 +94,9 @@ class ConversationStateSnapshot(TypedDict):
     Run 分组不进 wire，历史回复的结局由消息上的 ``outcome`` 承载。命令被拒不进 snapshot，由命令的
     HTTP 响应同步返回。``terminal_sessions`` 是本 Task 终端会话的进程内事实（不持久化），
     投影规则见 ``ConversationTaskStateService.refresh_terminal_sessions``。
-    ``background_tasks``（后台工作看板）与 ``foreground_waits``（可转到后台的前台等待）同样是进程内
-    事实，见 ``refresh_deferred_results``；``handoffs``（进行中的交接）也是，见 ``refresh_handoffs``。
+    ``background_tasks`` 的历史来自持久化占位，活状态来自后台结果登记表；
+    ``foreground_waits``（可转到后台的前台等待）是进程内事实，二者见 ``refresh_background_results``。
+    ``handoffs``（进行中的交接）也是进程内事实，见 ``refresh_handoffs``。
 
     ``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；
     后端工作副本始终是完整历史（恒为 0），
@@ -333,8 +335,8 @@ def _validate_part(part: object) -> None:
             or part["team_run_id"] < 1
         ):
             raise ValueError("snapshot team_run_id must be a positive integer")
-        if "background" in part and part["background"] is not True:
-            raise ValueError("snapshot tool background must be true when present")
+        if "background" in part:
+            validate_background_work(part["background"])
         if part.get("child_task_id") is not None and (
             not isinstance(part.get("child_task_id"), int)
             or isinstance(part.get("child_task_id"), bool)

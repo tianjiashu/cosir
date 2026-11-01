@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.utils.atomic_write import atomic_write_text
 from app.tools.tool_handler.patch_write.fuzzy_match import (
     format_no_match_hint,
     fuzzy_find_and_replace,
@@ -12,6 +11,7 @@ from app.tools.tool_handler.patch_write.fuzzy_match import (
 from app.tools.tool_handler.patch_write.patch_diff import FileDiffResult
 from app.tools.tool_handler.patch_write.patch_parser import Hunk, PatchOperation
 from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.utils.atomic_write import atomic_write_text
 
 
 class PatchApplyError(RuntimeError):

@@ -179,7 +179,7 @@ def plan_tool_calls_settled(
             not isinstance(part, dict)
             or part.get("type") != "tool-call"
             or part.get("status") not in {"pending", "running"}
-            or part.get("background") is True
+            or "background" in part
         ):
             continue
         mutations.extend(

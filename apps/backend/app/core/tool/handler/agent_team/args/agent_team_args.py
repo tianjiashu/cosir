@@ -8,8 +8,8 @@ from pydantic import (
     model_validator,
 )
 
-from app.models.agent_team.configuration.team_node_definition import TeamNodeIdentifier
 from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
+from app.models.agent_team.configuration.team_node_definition import TeamNodeIdentifier
 
 
 class AgentTeamNodeGoalArgs(AgentTeamNodeGoal):

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+from datetime import UTC, datetime
 from typing import cast
 
 from sqlalchemy.orm import Session
@@ -164,12 +165,18 @@ class ConversationTaskContextService:
         """
 
         settled: list[ConversationTaskContextRecord] = []
+        ended_at = datetime.now(UTC).isoformat()
         for record in self._crud.list_unsettled_placeholders(task_id):
             tool_call_id = record.message.get("tool_call_id")
             if tool_call_ids is not None and tool_call_id not in tool_call_ids:
                 continue
-            metadata = cast(ToolMessageMetadata, record.metadata).model_copy(
-                update={"status": status, "error": error}
+            previous = cast(ToolMessageMetadata, record.metadata)
+            metadata = previous.model_copy(
+                update={
+                    "status": status, "error": error,
+                    "background": previous.background.model_copy(update={"ended_at": ended_at})
+                    if previous.background is not None else None,
+                }
             )
             updated = dataclasses.replace(record, metadata=metadata)
             self._crud.replace_message(record.task_id, record.sequence, updated)
@@ -319,5 +326,10 @@ def _uninherited(metadata: MessageMetadata) -> MessageMetadata:
 
     copied = copy.deepcopy(metadata)
     if isinstance(copied, ToolMessageMetadata) and copied.background and copied.status == "pending":
-        return copied.model_copy(update={"status": "cancelled", "error": "未继承"})
+        return copied.model_copy(update={
+            "status": "cancelled", "error": "未继承",
+            "background": copied.background.model_copy(
+                update={"ended_at": datetime.now(UTC).isoformat()}
+            ),
+        })
     return copied

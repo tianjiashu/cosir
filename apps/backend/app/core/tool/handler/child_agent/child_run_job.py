@@ -1,6 +1,6 @@
-"""委派子 Agent 的延迟结果作业：``delegate_task`` 与开新 Run 的 ``child_agent_send`` 共用。
+"""委派子 Agent 的后台结果作业：``delegate_task`` 与开新 Run 的 ``child_agent_send`` 共用。
 
-作业以父调用的 ``tool_call_id`` 登记在 ``deferred_registry``，回投由 ``run_deferred`` 完成。结论不靠
+作业以父调用的 ``tool_call_id`` 登记在 ``background_registry``，回投由 ``run_background_work`` 完成。结论不靠
 子 Run 记下「是哪次调用触发了我」：投递之后在事件循环上等子 Task 无事可做
 （``TaskActor.wait_quiescent``），再读它最新 Run 的 run model——子 Agent 的结论一定写在那里。父 Agent
 连发几条输入时，它们并入同一个 Run 或接续出新 Run，几次调用的等待在同一次落定时醒来、读到同一个
@@ -21,9 +21,9 @@ from concurrent.futures import Future
 from typing import cast
 
 from app.config.logging.logger import log
-from app.core.tool.background.deferred_job import DeferredConclusion, ManualJob
-from app.core.tool.background.deferred_registry import deferred_registry
-from app.core.tool.background.run_deferred import run_deferred
+from app.core.tool.background.job import BackgroundConclusion, ManualJob
+from app.core.tool.background.registry import background_registry
+from app.core.tool.background.run import run_background_work
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models import ConversationRunRecord
@@ -65,23 +65,23 @@ def run_child(
 
     job = ManualJob(
         on_cancel=cancel,
-        cancelled_result=DeferredConclusion({"child_task_id": child_task_id, "status": "cancelled"}),
+        cancelled_result=BackgroundConclusion({"child_task_id": child_task_id, "status": "cancelled"}),
     )
-    run_deferred(
+    outcome = run_background_work(
         job,
         task_id=execution_context.task_id,
         run_id=execution_context.run_id,
         tool_call_id=tool_call_id,
         kind="child_agent",
         label=label,
-        background=True,
+        mode="background",
         foreground_limit_s=None,
         is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
     )
     try:
         enqueue()
     except Exception:
-        deferred_registry.discard(tool_call_id)
+        background_registry.discard(tool_call_id)
         raise
     waiting.append(
         asyncio.run_coroutine_threadsafe(
@@ -89,7 +89,7 @@ def run_child(
         )
     )
     observation = placeholder()
-    observation.background = True
+    observation.background = outcome.work
     return observation
 
 
@@ -115,4 +115,4 @@ async def _deliver_conclusion(job: ManualJob, child_task_id: int, tool_call_id: 
             },
         )
         result = {"child_task_id": child_task_id, "status": "failed", "end_reason": "unavailable"}
-    await asyncio.to_thread(job.finish, DeferredConclusion(result))
+    await asyncio.to_thread(job.finish, BackgroundConclusion(result))

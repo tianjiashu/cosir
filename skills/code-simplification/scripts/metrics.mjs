@@ -9,21 +9,12 @@
 // 规模（E9）不依赖快照里的文件清单，直接取两次快照提交之间的 git numstat，所以本轮新建、删除的文件都计入。
 // 复杂度（E7）依赖 lizard，重复率（E5）依赖 jscpd；工具不在 PATH 上时该项记为不可用，
 // 由 Agent 按标准 §1 人工估算并标注「估算」。其余指标（E1–E4、E6、E8）需要判断，不在脚本范围内。
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// 仓库根由 git 从当前目录确定，与本 skill 安装在哪里无关。
-const repositoryRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
-
-// 按路径约定识别测试文件，语言无关；生产与测试代码分开统计（标准 E9）。
-const TEST_PATH = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$|_test\.[^/]+$/;
-
-// 关闭 core.quotePath：否则非 ASCII 路径会以转义加引号的形式输出，与磁盘上的真实路径对不上。
-function git(...args) {
-  return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repositoryRoot, encoding: "utf8" }).trim();
-}
+import { git, isTest, repositoryRoot } from "./lib/repo.mjs";
 
 function toolAvailable(name) {
   const probe = spawnSync(process.platform === "win32" ? "where" : "which", [name], { stdio: "ignore" });
@@ -89,7 +80,7 @@ function snapshot(args) {
     }
   }
   const existing = [...files].filter((file) => existsSync(join(repositoryRoot, file)));
-  const production = existing.filter((file) => !TEST_PATH.test(file));
+  const production = existing.filter((file) => !isTest(file));
 
   // 有未提交改动时对工作区做快照（不改动工作区、暂存区与 stash 列表），前后两次快照都含同样的未提交改动，
   // 相减后只剩本轮改动；工作区干净时 stash create 输出为空，直接用 HEAD。
@@ -109,7 +100,7 @@ function lineDelta(fromCommit, toCommit) {
   for (const line of git("diff", "--numstat", "-M", `${fromCommit}..${toCommit}`).split("\n").filter(Boolean)) {
     const [added, deleted, path] = line.split("\t");
     if (added === "-") continue; // 二进制文件
-    const bucket = TEST_PATH.test(path) ? totals.test : totals.production;
+    const bucket = isTest(path) ? totals.test : totals.production;
     bucket.added += Number(added);
     bucket.deleted += Number(deleted);
   }

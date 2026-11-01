@@ -1,7 +1,7 @@
 """Run 之外结算还在等结果的占位行：撤销、用户取消与重启（设计文档「卡片状态」）。
 
-占位行是卡片状态的事实源：后台占位以 ``pending``（``deferred``）写入，结论并入时由 workflow 在 Run
-内推到 ``completed``（见 ``tool_observation_projection.settle_deferred_placeholder``）；HITL 等待占位
+占位行是卡片状态的事实源：后台占位以 ``pending`` 写入，结论并入时由 workflow 在 Run
+内推到 ``completed``（见 ``tool_observation_projection.settle_background_placeholder``）；HITL 等待占位
 接收决定时推到 ``running``，执行结果由 ``settle_decision_observation`` 结算。这里处理不在
 Run 内发生的结算：写库后经 projector 投影，但只投影到已物化的 snapshot——重启收尾会扫过全部 Task，
 不能为每个 Task 物化 space 与 actor；未物化的 snapshot 下次重建自会读到占位行的新状态。投影失败只
@@ -11,10 +11,12 @@ Run 内发生的结算：写库后经 projector 投影，但只投影到已物�
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import cast
 
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
 from app.models.enums.tool_call_status import ToolCallEventStatus
+from app.models.message_metadata import ToolMessageMetadata
 from app.service import depends as service_depends
 
 # 卡片短提示（约 5 字）：区分「被谁结束」，状态本身都是 ``cancelled``。
@@ -58,11 +60,12 @@ def settle_placeholders(
                     tool_call_id=tool_call_id,
                     status=status,
                     error=hint,
+                    background=cast(ToolMessageMetadata, record.metadata).background,
                 )
             )
         except (KeyError, ValueError):
             log.warning(
-                "deferred_placeholder_projection_skipped",
+                "background_placeholder_projection_skipped",
                 extra={
                     "msg": "后台占位已结算，snapshot 投影跳过（下次重建读到）",
                     "data": {"task_id": record.task_id, "tool_call_id": tool_call_id},
@@ -71,7 +74,7 @@ def settle_placeholders(
             )
     if settled:
         log.info(
-            "deferred_placeholders_settled",
+            "background_placeholders_settled",
             extra={
                 "msg": "后台占位行已结算",
                 "data": {"task_id": task_id, "status": status, "count": len(settled)},

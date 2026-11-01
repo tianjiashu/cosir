@@ -26,7 +26,7 @@ actor 随 ``TaskRuntimeSpace`` 物化而创建，由注册表在事件循环上�
   的不变量都在那里；actor 只决定何时启动、释放后怎么处理（:meth:`_after_drive`）。
 - **取消编排归 actor。** :meth:`cancel` 有执行者就交给 ``TaskExecution.cancel``（打信号并立即取消
   这次执行的 Agent Team），工作流在检查点落定；挂起的 Run 没有执行者，在闸门内直接迁移为
-  cancelled；没有可停止的对象时什么也不登记。取消对下游做什么（取消 Team、撤销延迟结果、停止
+  cancelled；没有可停止的对象时什么也不登记。取消对下游做什么（取消 Team、撤销后台结果、停止
   子 Task、留用户取消通知）在 ``TaskCancellation``，actor 只决定调用时机。上游停止下游从工具或
   工作线程发起，经 :meth:`request_cancel` 投递到 actor 所在的事件循环、不等待。
 """
@@ -254,7 +254,7 @@ class TaskActor:
             )
 
     async def _cancel_suspended(self, reason: CancelReason) -> bool:
-        """挂起的 Run 没有执行者：撤销延迟结果后直接迁移为 cancelled 并传播；调用方持 Task 闸门。
+        """挂起的 Run 没有执行者：撤销后台结果后直接迁移为 cancelled 并传播；调用方持 Task 闸门。
 
         返回 ``False`` 表示当前阶段不是挂起，本次取消无事可做。挂起的 Run 没有运行中的 Team
         （``agent_team`` 在工具线程里阻塞到 Team 落定，Run 期间不会挂起），但常带着待确认方案：
@@ -264,7 +264,7 @@ class TaskActor:
         if self._phase(current) != "suspended":
             return False
         await self._cancellation.cancel_teams()
-        # 先撤销延迟结果再迁移：迁移之后才到的结论会被 loop 当作新消息开出新 Run。
+        # 先撤销后台结果再迁移：迁移之后才到的结论会被 loop 当作新消息开出新 Run。
         await self._cancellation.cancel_background_task()
         cancelled = await asyncio.to_thread(
             self._ledger.transition, current.id, RunTransition.CANCEL

@@ -14,7 +14,7 @@
 - 上下文保存模型原始参数，归一化后的执行参数不反写上下文；本次契约不改变等待与恢复边界。
 - 只用于展示的参数：`execute_terminal.description`（参数模型首个字段、必填）是模型用用户语言写的一句
   意图，只进前端调用行标题（工具目录，见 `tool_ui_display_contract.md` 2.1）与后台看板标签
-  （`run_deferred(label=...)`），不可信；执行、安全策略、日志与终态展示只认 `command`。新增这类展示
+  （`run_background_work(label=...)`），不可信；执行、安全策略、日志与终态展示只认 `command`。新增这类展示
   参数时遵守同一边界：执行与安全逻辑不读它。
 - 展示外壳（图标、动词、调用行标题）不在 `ToolDefinition` 上：前端工具目录按工具名 + 参数查表。新增
   工具要在 `apps/desktop/lib/assistant/tool-catalog.ts` 登记，注册表守卫会检查。

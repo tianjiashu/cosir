@@ -3,7 +3,6 @@
 from typing import Any
 
 
-
 def build_delegation_display_data(
     *,
     title: str,

@@ -304,7 +304,7 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     errorCode: part.errorCode ?? null,
     childTaskId: part.child_task_id,
     agent_role: part.agent_role,
-    background: part.background === true,
+    background: part.background !== undefined,
   };
   const args = part.args ?? {};
   // 各状态的公共字段；分支只补 result / isError。未完成态（pending / running）不得带 result 或 isError 键。

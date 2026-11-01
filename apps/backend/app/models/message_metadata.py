@@ -69,18 +69,24 @@ class AssistantMessageMetadata(BaseModel):
     usage: CompletionUsage | None = None
 
 
+BackgroundKind = Literal["terminal_command", "child_agent"]
+
+
 class BackgroundWork(BaseModel):
     """一次后台工作的持久化记录，挂在这次调用的后台占位行上，看板与卡片都从它重建。
 
     为什么不单独建表：后台工作就是对话里的一次工具调用，占位行已经随对话 fork、编辑重跑撤回、Task
     删除；记录挂在它上面，看板就是对话的一个投影，没有第二个事实源要手工同步。工作是否还在跑
-    不在这里（进程内 ``deferred_registry`` 的活条目才是），这里只记重启后还需要的事实。
+    不在这里（进程内 ``background_registry`` 的活条目才是），这里只记重启后还需要的事实。
 
     时间都是 UTC ISO 字符串，取自工作本身而不是行的时间戳：fork 复制行时会重新生成时间戳。
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    # 登记延迟结果的时刻（转到后台的调用是它开始前台等待的时刻）。
+    kind: BackgroundKind
+    # 启动时的原始命令意图 / 子 Task 名快照；UI 动词、图标与本地化仍归前端。
+    label: str
+    # 登记后台结果的时刻（转到后台的调用是它开始前台等待的时刻）。
     started_at: str
     # 结论到达、被撤销或被重启中断的时刻；还在等结论时为 ``None``。
     ended_at: str | None = None
@@ -95,7 +101,7 @@ class ToolMessageMetadata(BaseModel):
     error: str | None = None
     team_run_id: int | None = None
     hidden: bool = False
-    # 延迟结果的后台占位（见 ``ToolObservation.background``）：存在即后台占位，卡片状态与看板条目
+    # 后台结果的后台占位（见 ``ToolObservation.background``）：存在即后台占位，卡片状态与看板条目
     # 的持久化事实源。
     background: BackgroundWork | None = None
 

@@ -33,7 +33,7 @@ worker 交出物理行：滚出的 `history`（软换行行不带 `\n`）与当�
 
 `wait{until: command_returned|output_quiet|match|elapsed, pattern, quiet_ms, timeout_ms}`。判定在会话锁内由 worker 事件 `notify_all` 唤醒；`WAIT_CANCEL_CHECK_SECONDS` 时间片只复查取消（Task 停止或用户取消这次调用），不轮询条件。结束原因：条件名（`matched` 带 `matched_line`）、`timeout`、`elapsed`、`cancelled`、`session_ended`；read 的 `command_returned` 在无执行中命令时返回 `idle`。无集成时 `command_returned` 在参数边界报 `TERMINAL_INTEGRATION_REQUIRED`。write 默认 `output_quiet 500ms / 3s`。
 
-等待只在前台、在工具线程里持会话锁进行，不登记延迟结果，总超时上限 30s（`WAIT_MAX_TIMEOUT_MS`）：交互终端只服务短交互，长构建与测试交给 `execute_terminal` 的后台执行。后端关闭时 lifespan 先 `deferred_registry.close()`，关闭期间结束会话唤醒的交接不再写 `task_messages`。`match` 条件在行输入时从命令回显行的下一行开始扫描，读取与按键从光标行开始。
+等待只在前台、在工具线程里持会话锁进行，不登记后台结果，总超时上限 30s（`WAIT_MAX_TIMEOUT_MS`）：交互终端只服务短交互，长构建与测试交给 `execute_terminal` 的后台执行。后端关闭时 lifespan 先 `background_registry.close()`，关闭期间结束会话唤醒的交接不再写 `task_messages`。`match` 条件在行输入时从命令回显行的下一行开始扫描，读取与按键从光标行开始。
 
 ## 输入仲裁
 
@@ -46,7 +46,7 @@ Agent 不持锁：一次输入是 worker 输入队列里的一帧，用户按键
 
 ## 交接
 
-`terminal_handoff` 是 `execute` 型 HITL 工具（`user_decision` 只能按工具声明，所以不是 `terminal_write` 的一种输入）。首次调用在会话上登记交接（`_Handoff`：调用 id、原因、交接时的末行），返回等待占位挂起 Agent；交接不改变输入仲裁、不登记延迟结果，snapshot 条目的 `handoff` 给出 `{reason, toolCallId}`。用户「交还」（终端面板提示或聊天卡片上的按钮）即经通用决定入口对这次调用作出决定（`ToolDecisionService.submit`），决定到达后 `prepare_input` 绕过模型重放本调用：`end_handoff` 清除交接，报告交接以来的输出（会话已结束时报告尾部，会话已不在时报告不存在）。用户停止打字不结束交接（用户输密码等操作时会停顿）。交接中的会话意外结束（shell 退出、worker 故障、用户关闭）时由运行时代为提交决定（`reject`，`source=runtime`），Agent 不会一直挂着；后端关闭与 Task 删除不代为落定，Run 停止也不清除交接——等待中的决定按 HITL 契约保留，之后仍可交还。
+`terminal_handoff` 是 `execute` 型 HITL 工具（`user_decision` 只能按工具声明，所以不是 `terminal_write` 的一种输入）。首次调用在会话上登记交接（`_Handoff`：调用 id、原因、交接时的末行），返回等待占位挂起 Agent；交接不改变输入仲裁、不登记后台结果，snapshot 条目的 `handoff` 给出 `{reason, toolCallId}`。用户「交还」（终端面板提示或聊天卡片上的按钮）即经通用决定入口对这次调用作出决定（`ToolDecisionService.submit`），决定到达后 `prepare_input` 绕过模型重放本调用：`end_handoff` 清除交接，报告交接以来的输出（会话已结束时报告尾部，会话已不在时报告不存在）。用户停止打字不结束交接（用户输密码等操作时会停顿）。交接中的会话意外结束（shell 退出、worker 故障、用户关闭）时由运行时代为提交决定（`reject`，`source=runtime`），Agent 不会一直挂着；后端关闭与 Task 删除不代为落定，Run 停止也不清除交接——等待中的决定按 HITL 契约保留，之后仍可交还。
 
 ## service 与线程边界（`session_service.py` / `session_runtime.py` / `session_effects.py`）
 

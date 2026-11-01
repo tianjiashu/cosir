@@ -2,11 +2,11 @@ import { create } from "zustand";
 
 import type { BackgroundTaskEntry, TransportState, TransportToolCallPart } from "@/lib/assistant/contract";
 
-type DeferredResults = Pick<TransportState, "background_tasks" | "foreground_waits" | "messages">;
+type BackgroundResults = Pick<TransportState, "background_tasks" | "foreground_waits" | "messages">;
 type ToolParts = Readonly<Record<string, TransportToolCallPart>>;
 
 /**
- * 每个 Task 的延迟结果：snapshot `background_tasks`（看板）与 `foreground_waits`（可转后台的前台等待）
+ * 每个 Task 的后台结果：snapshot `background_tasks`（看板）与 `foreground_waits`（可转后台的前台等待）
  * 的只读镜像，外加看板条目对应的工具 part（`parts`，按 `toolCallId`）：看板展开即渲染对话里的同一张
  * 卡片，两处读同一个 snapshot part，不另存展示数据。
  *
@@ -19,7 +19,7 @@ type BackgroundTasksStore = {
   tasks: Record<number, BackgroundTaskEntry[] | null>;
   foregroundWaits: Record<number, string[] | null>;
   parts: Record<number, ToolParts | null>;
-  sync: (taskId: number, results: DeferredResults | null) => void;
+  sync: (taskId: number, results: BackgroundResults | null) => void;
   /** Task（或其所在工作区）删除成功后丢弃该 Task 的桶。 */
   forget: (taskIds: readonly number[]) => void;
 };

@@ -6,9 +6,9 @@ const CONVERSATION_MIN_WIDTH = 640;
 export type TaskRailPlacement = "docked" | "floating";
 
 /**
- * 侧栏的摆放方式。`rowWidth` 是「对话 + 侧栏」整行的宽度：量整行而不是对话区，
- * 否则侧栏一固定对话就变窄、随即又判为浮起，来回抖动。打开工作台与窗口变窄都只是让这一行变窄。
+ * 侧栏的摆放方式。`viewportWidth` 是对话视口（滚动容器）的宽度：侧栏是视口里的附注，固定与否都不改变
+ * 视口宽度，所以按它判断不会来回抖动。打开右侧面板与窗口变窄都只是让视口变窄。
  */
-export function taskRailPlacement(rowWidth: number): TaskRailPlacement {
-  return rowWidth - TASK_RAIL_WIDTH >= CONVERSATION_MIN_WIDTH ? "docked" : "floating";
+export function taskRailPlacement(viewportWidth: number): TaskRailPlacement {
+  return viewportWidth - TASK_RAIL_WIDTH >= CONVERSATION_MIN_WIDTH ? "docked" : "floating";
 }

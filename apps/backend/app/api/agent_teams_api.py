@@ -12,23 +12,23 @@ from typing import Annotated, Any
 from fastapi import HTTPException
 from fastapi import Path as PathParameter
 
-from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.api.configuration.agent_team_error_messages import (
     agent_team_configuration_error_message,
     team_graph_issue_message,
 )
 from app.api.schemas.request.AgentTeamGraphIssuesRequest import AgentTeamGraphIssuesRequest
-from app.api.schemas.response.AgentTeamGraphIssuesResponse import (
-    AgentTeamGraphIssueResponse,
-    AgentTeamGraphIssuesResponse,
-)
-from app.models.agent_team.configuration.graph_validation import collect_team_graph_issues
 from app.api.schemas.request.save_agent_team_configuration_request import (
     SaveAgentTeamConfigurationRequest,
 )
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
+from app.api.schemas.response.AgentTeamGraphIssuesResponse import (
+    AgentTeamGraphIssueResponse,
+    AgentTeamGraphIssuesResponse,
+)
 from app.app import app
+from app.models.agent_team.configuration.graph_validation import collect_team_graph_issues
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
+from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.service.configuration.agent_team_configuration_service import (
     get_agent_team_configuration_service,
 )

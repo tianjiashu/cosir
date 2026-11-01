@@ -16,14 +16,18 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from app.core.agents.agent_profile import AgentProfileType
 from app.models.agent_team.configuration.agent_team_configuration import (
     AgentTeamConfiguration,
     TeamScope,
     configuration_document,
 )
-from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
-from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
-from app.core.agents.agent_profile import AgentProfileType
+from app.service.configuration.agent_team_configuration_registry import (
+    AgentTeamConfigurationRegistry,
+)
+from app.service.configuration.agent_team_configuration_source import (
+    AgentTeamConfigurationScopeSource,
+)
 from app.service.configuration.file_store import ConfigurationFileStore
 
 

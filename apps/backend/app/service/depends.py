@@ -72,7 +72,7 @@ def close_service_dependencies() -> None:
     """关闭进程内运行时单例（含终端服务与 MCP 连接池）、清空 service 依赖缓存并关闭 SQLite 引擎。
 
     终端服务与 MCP 连接池只在这里经 ``reset_service_dependencies`` 关闭一次；lifespan 必须先关闭
-    ``deferred_registry``，再调用本函数。
+    ``background_registry``，再调用本函数。
     """
 
     from app.storage.store_engines import close_storage
@@ -335,7 +335,7 @@ def get_conversation_run_ledger() -> ConversationRunLedger:
 def get_recover_service() -> RecoverService:
     """返回进程级启动恢复 service 单例。
 
-    只负责后端启动期的重启恢复（收敛遗留 Run / TeamRun、拉起待调度 Task、延迟结果收尾）；
+    只负责后端启动期的重启恢复（收敛遗留 Run / TeamRun、拉起待调度 Task、后台结果收尾）；
     运行期的 Run 生命周期归属 ``get_conversation_run_ledger``。
     """
 

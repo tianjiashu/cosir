@@ -13,7 +13,7 @@ import { notify } from "@/lib/notify";
 import { useBackgroundTaskPart } from "@/lib/background-tasks/store";
 import { cn } from "@/lib/utils";
 
-/** 新增延迟结果种类时补一项（见设计文档「新增工具如何接入」）。 */
+/** 新增后台结果种类时补一项（种类的事实源是后端 `BackgroundKind`）。 */
 const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
   terminal_command: SquareTerminalIcon,
   child_agent: BotIcon,
@@ -26,7 +26,8 @@ const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
  * 外壳只读 snapshot `background_tasks`；调用行读同一个 snapshot 工具 part（按 `toolCallId` 镜像，见
  * `useBackgroundTaskPart`），由 kind 视图注册表按 `display_data.kind` 决定长什么样，这里不按种类分支。
  * 调用行以只读方式渲染：同一调用只留外壳上这一个停止入口（`cancelToolCall`，对所有种类语义一致）。
- * 对应 part 已不在对话里（如编辑重跑移出那一轮）时只剩外壳。运行中的条目默认展开。
+ * 对应 part 已不在对话里（如编辑重跑移出那一轮）时只剩外壳。运行中的条目默认展开。收尾中（工作已结束、
+ * 对话里的占位还没落定）不计时、不能停止，只标「收尾中」，等 snapshot 回推完成或取消。
  * 操作只发命令，结果等 snapshot 回推。
  */
 export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entry: BackgroundTaskEntry; now: number }) {
@@ -35,7 +36,9 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
   const running = entry.status === "running";
   const [expanded, setExpanded] = useState(running);
   const Icon = KIND_ICONS[entry.kind];
-  const elapsed = formatElapsed(Date.parse(entry.startedAt), entry.endedAt === null ? now : Date.parse(entry.endedAt));
+  const elapsed = entry.status === "settling"
+    ? null
+    : formatElapsed(Date.parse(entry.startedAt), entry.endedAt === null ? now : Date.parse(entry.endedAt));
   const open = expanded && part !== null;
 
   const run = async (action: () => Promise<string | null>) => {
@@ -66,8 +69,10 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
         ) : (
           <span className="min-w-0 flex-1 truncate" title={entry.label}>{entry.label}</span>
         )}
-        <span className="text-muted-foreground shrink-0 text-xs tabular-nums">{elapsed}</span>
-        {running ? (
+        {elapsed !== null && <span className="text-muted-foreground shrink-0 text-xs tabular-nums">{elapsed}</span>}
+        {entry.status === "settling" ? (
+          <span className="text-muted-foreground shrink-0 text-xs">收尾中</span>
+        ) : running ? (
           <TooltipIconButton
             tooltip="停止"
             className="size-6"

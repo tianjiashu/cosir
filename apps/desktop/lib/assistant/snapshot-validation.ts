@@ -206,7 +206,7 @@ function validatePart(value: unknown, path: string): void {
   if (hasOwn(part, "isError") && part.isError !== null && typeof part.isError !== "boolean") throw new TransportSnapshotValidationError(`${path}.isError`, "布尔值或 null");
   if (hasOwn(part, "child_task_id") && (!Number.isInteger(part.child_task_id) || (part.child_task_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_task_id`, "正整数");
   if (hasOwn(part, "team_run_id") && (!Number.isInteger(part.team_run_id) || (part.team_run_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.team_run_id`, "正整数");
-  if (hasOwn(part, "background") && part.background !== true) throw new TransportSnapshotValidationError(`${path}.background`, "出现时为 true");
+  if (hasOwn(part, "background")) validateBackgroundWork(part.background, `${path}.background`);
   if (hasOwn(part, "agent_role") && (typeof part.agent_role !== "string" || !part.agent_role.trim())) throw new TransportSnapshotValidationError(`${path}.agent_role`, "非空字符串");
   if (hasOwn(part, "terminal_output_seq") && (!Number.isInteger(part.terminal_output_seq) || (part.terminal_output_seq as number) < 0)) throw new TransportSnapshotValidationError(`${path}.terminal_output_seq`, "非负整数");
   if (part.approvalRequestId !== null && part.approvalRequestId !== undefined) throw new TransportSnapshotValidationError(`${path}.approvalRequestId`, "null 或 undefined");
@@ -276,7 +276,16 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
 }
 
 const BACKGROUND_TASK_KINDS = ["terminal_command", "child_agent"] as const;
-const BACKGROUND_TASK_STATUSES = ["running", "completed", "cancelled"] as const;
+const BACKGROUND_TASK_STATUSES = ["running", "settling", "completed", "cancelled"] as const;
+
+function validateBackgroundWork(value: unknown, path: string): void {
+  const work = requireRecord(value, path);
+  requireExactKeys(work, ["kind", "label", "startedAt", "endedAt"], path);
+  if (!(BACKGROUND_TASK_KINDS as readonly unknown[]).includes(work.kind)) throw new TransportSnapshotValidationError(`${path}.kind`, "受支持的后台工作种类");
+  requireString(work.label, `${path}.label`);
+  requireString(work.startedAt, `${path}.startedAt`);
+  if (work.endedAt !== null) requireString(work.endedAt, `${path}.endedAt`);
+}
 
 function validateBackgroundTask(value: unknown, path: string, seenIds: Set<string>): void {
   const entry = requireRecord(value, path);

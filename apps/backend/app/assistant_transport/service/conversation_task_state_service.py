@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from threading import RLock
 from typing import Any, ClassVar, cast
@@ -16,7 +16,7 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 )
 from app.assistant_transport.state.conversation_state_background_task import (
     ConversationBackgroundTask,
-    project_background_task,
+    project_background_tasks,
 )
 from app.assistant_transport.state.conversation_state_handoff import (
     ConversationHandoff,
@@ -39,7 +39,8 @@ from app.assistant_transport.state.snapshot_window import HistoryPage, history_p
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
-from app.core.events import RunStatusChangedEvent, WorkflowEvent
+from app.core.events import RunStatusChangedEvent, ToolCallStatusChangedEvent, WorkflowEvent
+from app.core.tool.background.registry import background_registry
 from app.core.workflow.message_queue.task_message import UserInputBody
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -196,8 +197,8 @@ class ConversationTaskStateService:
             _apply_mutation(state, mutation)
             self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,)))
 
-    def refresh_deferred_results(self, task_id: int) -> None:
-        """延迟结果变化入口：整表重读看板与前台等待，各自有变化时发 ``set`` mutation（同一帧）。
+    def refresh_background_results(self, task_id: int) -> None:
+        """后台结果变化入口：整表重读看板与前台等待，各自有变化时发 ``set`` mutation（同一帧）。
 
         由登记表的通知线程调用（锁外），规则同 :meth:`refresh_terminal_sessions`：只更新已物化的
         快照，Task 已删除或 space 不存在时静默返回，不为迟到的通知物化 space。
@@ -213,7 +214,7 @@ class ConversationTaskStateService:
             mutations = tuple(
                 ConversationStateMutation("set", (key,), value)
                 for key, value in (
-                    ("background_tasks", self._background_tasks(task_id)),
+                    ("background_tasks", self._background_tasks(task_id, state)),
                     ("foreground_waits", self._foreground_waits(task_id)),
                 )
                 if value != state[key]
@@ -251,16 +252,19 @@ class ConversationTaskStateService:
         return [project_handoff(lease) for lease in handoff_registry.leases(task_id)]
 
     @staticmethod
-    def _background_tasks(task_id: int) -> list[ConversationBackgroundTask]:
-        from app.core.tool.background.deferred_registry import deferred_registry
-
-        return [project_background_task(view) for view in deferred_registry.entries(task_id)]
+    def _background_tasks(
+        task_id: int, state: ConversationStateSnapshot
+    ) -> list[ConversationBackgroundTask]:
+        """从工作副本里的工具 part 与登记表活条目投影看板；纯内存，可在快照锁内调用。"""
+        return project_background_tasks(
+            state["messages"], background_registry.live_background(task_id)
+        )
 
     @staticmethod
     def _foreground_waits(task_id: int) -> list[str]:
-        from app.core.tool.background.deferred_registry import deferred_registry
+        from app.core.tool.background.registry import background_registry
 
-        return deferred_registry.foreground_calls(task_id)
+        return background_registry.foreground_calls(task_id)
 
     @staticmethod
     def _terminal_sessions(task_id: int) -> list[ConversationTerminalSession]:
@@ -317,6 +321,14 @@ class ConversationTaskStateService:
             mutations = list(plan_event(event, state))
             for mutation in mutations:
                 _apply_mutation(state, mutation)
+            # 看板由工具 part 派生：只有带后台记录的事件会改变它（占位写入、并入、撤销、重启中断），
+            # token 帧等其余事件不重算。
+            if isinstance(event, ToolCallStatusChangedEvent) and event.background is not None:
+                background = self._background_tasks(task_id, state)
+                if background != state["background_tasks"]:
+                    mutation = ConversationStateMutation("set", ("background_tasks",), background)
+                    _apply_mutation(state, mutation)
+                    mutations.append(mutation)
             # 仅追加的 token 帧不会改变快照形状或任何生命周期不变量。
             # ``_apply_mutation`` 中的 path/type 检查对这条热路径已足够；
             # 结构性变更仍付出完整校验代价。
@@ -484,7 +496,7 @@ class ConversationTaskStateService:
             )
             state["queued_messages"] = self._queued_messages(task_id)
             state["terminal_sessions"] = self._terminal_sessions(task_id)
-            state["background_tasks"] = self._background_tasks(task_id)
+            state["background_tasks"] = self._background_tasks(task_id, state)
             state["foreground_waits"] = self._foreground_waits(task_id)
             state["handoffs"] = self._handoffs(task_id)
         except Exception as exc:
@@ -564,7 +576,7 @@ def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStat
 
 
 def _requires_full_snapshot_validation(
-    mutations: tuple[ConversationStateMutation, ...],
+    mutations: Sequence[ConversationStateMutation],
 ) -> bool:
     """返回一批变更是否会改变快照结构或生命周期形状。"""
 

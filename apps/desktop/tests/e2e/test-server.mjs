@@ -1086,14 +1086,14 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { ok: true });
     return;
   }
-  const deferredRoute = url.pathname.match(/^\/tasks\/(\d+)\/tool-calls\/([^/]+)\/(cancel|background)$/);
-  if (req.method === "POST" && deferredRoute) {
+  const backgroundRoute = url.pathname.match(/^\/tasks\/(\d+)\/tool-calls\/([^/]+)\/(cancel|background)$/);
+  if (req.method === "POST" && backgroundRoute) {
     // 与后端一致：登记过的调用按 tool_call_id 撤销或转后台；后台占位随撤销推到 cancelled。
-    const taskId = Number(deferredRoute[1]);
-    const toolCallId = decodeURIComponent(deferredRoute[2]);
+    const taskId = Number(backgroundRoute[1]);
+    const toolCallId = decodeURIComponent(backgroundRoute[2]);
     const entries = backgroundTasks.get(taskId) ?? [];
     const waits = foregroundWaits.get(taskId) ?? [];
-    const detach = deferredRoute[3] === "background";
+    const detach = backgroundRoute[3] === "background";
     const target = detach
       ? waits.find((entry) => entry.toolCallId === toolCallId)
       : entries.find((entry) => entry.toolCallId === toolCallId && entry.status === "running");
@@ -1112,7 +1112,7 @@ const server = createServer(async (req, res) => {
     if (!detach && state) {
       const messages = state.messages.map((message) => ({
         ...message,
-        parts: message.parts.map((part) => part.type === "tool-call" && part.toolCallId === toolCallId && part.deferred
+        parts: message.parts.map((part) => part.type === "tool-call" && part.toolCallId === toolCallId && part.background
           ? { ...part, status: "cancelled", error: "已取消" } : part),
       }));
       states.set(taskId, { ...state, messages });

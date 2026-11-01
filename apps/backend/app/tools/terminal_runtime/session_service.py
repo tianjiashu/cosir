@@ -31,11 +31,11 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionOwnershipError,
     TerminalSessionStateError,
 )
-from app.tools.terminal_runtime.shell_resolver import ShellResolver
 from app.tools.terminal_runtime.session_runtime import (
     SessionSnapshot,
     TerminalSessionRuntime,
 )
+from app.tools.terminal_runtime.shell_resolver import ShellResolver
 from app.tools.tool_handler.security.path_resolver import PathResolver
 
 

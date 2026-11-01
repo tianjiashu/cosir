@@ -5,12 +5,12 @@
 
 from app.config.logging.logger import log
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.enums.react_route import ReactRoute
 from app.core.workflow.node_helper.tool_observation_projection import (
     post_tool_images,
     settle_decision_observation,
     settle_observations,
 )
+from app.models.enums.react_route import ReactRoute
 
 
 async def _observe_node(state: ReactExecutionState) -> dict[str, object]:

@@ -93,11 +93,11 @@ export type TransportToolCallPart = {
   /** 持久化 TeamRun 的定位字段，工具失败后仍可查询流水线。 */
   team_run_id?: number;
   /**
-   * 延迟结果的后台占位（结论稍后以后台结果回投）。投影自占位行 metadata，只在为真时出现，结算后
-   * 保留；converter 交给卡片作为所有工具共用的「在后台」事实（工具不在 `display_data` 里另存）。
+   * 后台工作的占位（结论稍后以 `background_result` 回投）上的工作记录。投影自占位行 metadata，只在是后台
+   * 占位时出现，结算后保留；卡片只看它在不在（所有工具共用的「在后台」事实），后端看板从这些记录投影。
    * 卡片状态仍看 `status`。
    */
-  background?: true;
+  background?: TransportBackgroundWork;
   /** 后端显式标记的错误结果。 */
   isError?: boolean | null;
   /** 委派 / 子 Agent 调用指向的子 Task；委派行据此读任务状态推送、点击打开子任务，不渲染为文本。 */
@@ -264,19 +264,30 @@ export type TerminalSessionEntry = {
   createdAt: string;
 };
 
+/** 工具 part 上的后台工作记录（后端 `BackgroundWork`）。 */
+export type TransportBackgroundWork = {
+  kind: "terminal_command" | "child_agent";
+  label: string;
+  startedAt: string;
+  /** 结论到达、被撤销或被重启中断的时刻；还在等结论时为 null。 */
+  endedAt: string | null;
+};
+
 /**
  * Task 后台工作看板条目（snapshot 顶层 `background_tasks`）。
  *
- * 事实源是后端进程内的延迟结果登记表：只含后台工作（一开始就在后台或已转到后台），运行中的在前（按
- * 登记先后），之后是最近结束的若干条；后端重启后清空。前台等待不在这里，见 `foreground_waits`。
+ * 后端从工作副本里带后台记录的工具 part 与登记表活条目投影：只含后台工作（一开始就在后台或已转到后台），
+ * 进行中的在前（按开始先后），之后是最近结束的若干条；重启后保留历史。前台等待见 `foreground_waits`。
+ * `settling`：工作已结束、对话里的占位还没落定（结论待并入或撤销待结算），马上会变成完成或取消。
  * 工具卡片的状态不读它。
  */
 export type BackgroundTaskEntry = {
   toolCallId: string;
-  kind: "terminal_command" | "child_agent";
+  kind: TransportBackgroundWork["kind"];
   label: string;
-  status: "running" | "completed" | "cancelled";
+  status: "running" | "settling" | "completed" | "cancelled";
   startedAt: string;
+  /** 进行中（运行、收尾）时为 null。 */
   endedAt: string | null;
 };
 

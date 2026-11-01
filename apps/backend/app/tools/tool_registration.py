@@ -5,11 +5,6 @@
 """
 
 from app.core.tool.handler.agent_team_run import build_agent_team_run_definition
-from app.core.tool.handler.propose_agent_team_configuration import (
-    build_propose_agent_team_configuration_definition,
-)
-from app.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
-from app.tools.tool_handler.browser import build_browser_definitions
 from app.core.tool.handler.child_agent_create import build_delegate_task_definition
 from app.core.tool.handler.child_agent_send import (
     build_child_agent_send_definition,
@@ -20,6 +15,15 @@ from app.core.tool.handler.child_agent_status import (
 from app.core.tool.handler.propose_agent_configuration import (
     build_propose_agent_configuration_definition,
 )
+from app.core.tool.handler.propose_agent_team_configuration import (
+    build_propose_agent_team_configuration_definition,
+)
+from app.core.tool.handler.wait_messages import build_wait_messages_definition
+from app.core.tool.handler.web_extract import build_web_extract_definition
+from app.core.tool.handler.web_search import build_web_search_definition
+from app.core.tool.tool_registry import ToolRegistry
+from app.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
+from app.tools.tool_handler.browser import build_browser_definitions
 from app.tools.tool_handler.delete_tool import build_delete_file_definition
 from app.tools.tool_handler.execute_terminal import build_execute_terminal_definition
 from app.tools.tool_handler.find_files import build_find_files_definition
@@ -32,11 +36,7 @@ from app.tools.tool_handler.replace_tool import build_replace_definition
 from app.tools.tool_handler.search_content import build_search_content_definition
 from app.tools.tool_handler.skill_tool import build_skill_definition
 from app.tools.tool_handler.terminal_session import build_terminal_definitions
-from app.core.tool.handler.wait_messages import build_wait_messages_definition
-from app.core.tool.handler.web_extract import build_web_extract_definition
-from app.core.tool.handler.web_search import build_web_search_definition
 from app.tools.tool_handler.write_file import build_write_file_definition
-from app.core.tool.tool_registry import ToolRegistry
 
 
 def build_tool_registry() -> ToolRegistry:

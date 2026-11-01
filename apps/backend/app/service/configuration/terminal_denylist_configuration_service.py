@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.config.logging.logger import log
+from app.service.configuration.file_store import ConfigurationFileStore
 from app.tools.policy.terminal_denylist_configuration import (
     compile_terminal_deny_patterns,
     read_terminal_deny_patterns,
 )
-from app.service.configuration.file_store import ConfigurationFileStore
 from app.utils.path.system_cosir import system_cosir_dir, system_terminal_denylist_file
 
 

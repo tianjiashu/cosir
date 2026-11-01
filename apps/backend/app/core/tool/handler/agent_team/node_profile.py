@@ -7,10 +7,10 @@
 
 from dataclasses import replace
 
-from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
+from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 
 NODE_PROFILE_SNAPSHOT_KEY = "agent_team_profile_snapshot"
 

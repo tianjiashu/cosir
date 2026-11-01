@@ -61,13 +61,13 @@ class ToolDefinition:
     # 有意义。
     decision_model: type[BaseModel] | None = None
     # 后台执行能力（见 ``tool_background``）：声明后参数模型必须带 ``background`` 字段，handler 把它
-    # 与本声明交给 ``run_deferred``；``None`` 是普通工具。
+    # 与本声明交给 ``run_background_work``；``None`` 是普通工具。
     background: BackgroundCapability | None = None
 
     def normalized(self) -> "ToolDefinition":
         """注册时固定 strict 参数 schema，模型调用阶段不再转换。
 
-        显式 schema 由平台投影从 strict_parameters_schema 生成；其余由统一出口生成。声明了延迟结果
+        显式 schema 由平台投影从 strict_parameters_schema 生成；其余由统一出口生成。声明了后台结果
         能力却没在参数模型里带 ``background`` 字段是装配缺陷，注册时就抛 ``ValueError``。
         """
         if self.background is not None and BACKGROUND_FIELD not in self.args_model.model_fields:

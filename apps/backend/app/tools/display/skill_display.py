@@ -3,7 +3,6 @@
 from typing import Any
 
 
-
 def build_skill_list_display_data(skills: list[dict[str, Any]]) -> dict[str, Any]:
     return {"kind": "skill-content", "action": "list", "skills": skills}
 

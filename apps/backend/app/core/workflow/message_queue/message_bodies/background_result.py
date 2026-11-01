@@ -15,7 +15,7 @@ class BackgroundResultBody(EnqueuedMessageBody):
     唤醒挂起的 Agent，Run 已结束时开新 Run。子 Task 每次 Run 到终态投递一条（多次追加消息就
     有多条，逐条到达）；因父 Agent 停止（或被编辑重跑）而取消的子 Run 不投递——结论已无人需要。
     后台命令（``terminal_command``，``execute_terminal`` 转到后台）在命令结束或超时时投递；Run 取消时
-    被撤销、不投递（见 ``deferred_registry``）。终端交接走 HITL 决定，不经这里。
+    被撤销、不投递（见 ``background_registry``）。终端交接走 HITL 决定，不经这里。
     后端重启时挂起在终端上的 Run 收到一条 ``backend_restart``（见 ``restart_settlement``）。
     ``tool_name`` 标明是哪类后台工作，``tool_result`` 是给模型读的 JSON。``tool_call_id`` 是触发它的
     那次调用；终端重启结论与用户在子 Task 里直接发起的子 Run 不对应某次调用，为 ``None``，渲染时
@@ -43,6 +43,8 @@ class BackgroundResultBody(EnqueuedMessageBody):
     tool_name: str
     tool_result: str
     placeholder_display_data: dict[str, object] | None = None
+    # 结论产生并回投的时刻，随队列持久化；消费可能晚得多，不能届时重取墙钟。
+    ended_at: str
 
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
         call = f' tool_call_id="{self.tool_call_id}"' if self.tool_call_id else ""

@@ -3,6 +3,10 @@
 from copy import deepcopy
 from typing import NotRequired, TypedDict
 
+from app.assistant_transport.state.conversation_state_background_task import (
+    project_background_work,
+)
+from app.assistant_transport.state.conversation_state_part import ConversationBackgroundWork
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata
 
@@ -18,7 +22,7 @@ class ToolResultFields(TypedDict):
     awaitingUser: bool
     display_data: dict[str, object] | None
     team_run_id: NotRequired[int]
-    background: NotRequired[bool]
+    background: NotRequired[ConversationBackgroundWork]
     child_task_id: NotRequired[int]
     agent_role: NotRequired[str]
 
@@ -33,14 +37,14 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
         status=metadata.status,
         error=metadata.error if metadata.status in {"failed", "cancelled"} else None,
         isError=metadata.status == "failed",
-        awaitingUser=metadata.status == "pending" and not metadata.background,
+        awaitingUser=metadata.status == "pending" and metadata.background is None,
         display_data=deepcopy(metadata.display_data),
     )
     if metadata.team_run_id is not None:
         fields["team_run_id"] = metadata.team_run_id
-    # 只在为真时写入：结算事件不带标记，不能把 part 上已有的标记清掉。
-    if metadata.background:
-        fields["background"] = True
+    # 只在有记录时写入：不带记录的事件不能把 part 上已有的记录清掉。
+    if metadata.background is not None:
+        fields["background"] = project_background_work(metadata.background)
     display = metadata.display_data
     if display is not None and _refers_to_child_task(display):
         child_task_id = display.get("child_task_id")

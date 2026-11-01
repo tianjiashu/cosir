@@ -77,7 +77,7 @@ class ChildAgentSendTool(HandlerBase):
 
         返回:
             成功时返回包含 ``child_task_id`` 与 ``status`` 的 JSON 文本：``merged`` 表示子 Run
-            仍在运行、消息将并入它（不单独登记延迟结果，结论随触发那个 Run 的调用回投），
+            仍在运行、消息将并入它（不单独登记后台结果，结论随触发那个 Run 的调用回投），
             ``submitted`` 表示将开出新 Run（以本次调用登记，结论按它回投）；不回传 run_id。
             父事件循环不可用、子任务不存在、无法确定 child Agent 或输入解析失败时返回错误观察。
 

@@ -26,7 +26,7 @@ test.beforeEach(async ({ request }) => {
     1,
     { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] },
     [
-      { type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "terminal_read", args: {}, status: "pending", background: true },
+      { type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "terminal_read", args: {}, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
       { type: "tool-call", awaitingUser: false, toolCallId: "call-fg", toolName: "terminal_read", args: {}, status: "running" },
     ],
   ));

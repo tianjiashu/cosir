@@ -55,7 +55,7 @@ class ConversationTaskContextCrud:
     def list_unsettled_placeholders(
             self, task_id: int | None = None, session: Session | None = None
     ) -> list[ConversationTaskContextRecord]:
-        """还在等结果的占位行：仍为 ``pending`` 的后台占位（metadata ``background`` 为真），
+        """还在等结果的占位行：仍为 ``pending`` 的后台占位（metadata ``background`` 是工作记录），
         以及已接收决定、执行中（``running``）的 HITL 等待占位。
 
         tool 行只有这两类会以非终态落库（普通观察写入即终态），所以按状态即可识别。``task_id`` 为
@@ -67,7 +67,7 @@ class ConversationTaskContextCrud:
         stmt = select(ConversationTaskContextModel).where(
             or_(
                 and_(
-                    func.json_extract(metadata_json, "$.background").is_(True),
+                    func.json_type(metadata_json, "$.background") == "object",
                     status == "pending",
                 ),
                 status == "running",

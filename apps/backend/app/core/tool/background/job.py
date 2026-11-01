@@ -1,12 +1,12 @@
-"""延迟结果的作业抽象：工具把耗时工作包装成作业，编排交给 ``run_deferred``。
+"""后台工作的作业抽象：工具把耗时工作包装成作业，编排交给 ``run_background_work``。
 
-设计见 ``docs/plan/deferred-tool-result-design.md``「作业与统一执行入口」。作业由执行单元持有（终端
+作业由执行单元持有（终端
 会话、子 Task 的 actor 等），只承诺两件事：结论到达时回调恰好一次，以及可以被撤销。登记、前台 /
-后台、转到后台、回投与占位都不归作业管——那是 ``run_deferred`` 的职责。
+后台、转到后台、回投与占位都不归作业管——那是 ``run_background_work`` 的职责。
 
 为什么是抽象基类：使用者有后台命令、子 Run（之后还有 Team），只有两种形状，所以
 本模块给出两个通用实现——``ThreadJob``（阻塞函数在自己的线程里跑，``execute_terminal`` 的命令）与 ``ManualJob``
-（执行单元显式交付，子 Run），``run_deferred`` 只认抽象基类。工具侧只构造它们并接上自己的
+（执行单元显式交付，子 Run），``run_background_work`` 只认抽象基类。工具侧只构造它们并接上自己的
 执行单元，不再各写一套作业类。
 """
 
@@ -18,9 +18,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal, cast
 
+from app.models.message_metadata import BackgroundWork
+
 
 @dataclass(frozen=True)
-class DeferredConclusion:
+class BackgroundConclusion:
     """作业的结论：给模型的 ``result`` 与可选的卡片终态 ``display_data``。
 
     两者分开是因为受众不同：``result`` 以 ``background_result`` 回投给模型（会过输出预算），
@@ -33,14 +35,14 @@ class DeferredConclusion:
     display_data: dict[str, object] | None = None
 
 
-JobCallback = Callable[[DeferredConclusion], None]
+JobCallback = Callable[[BackgroundConclusion], None]
 
 # 占位原因：``background`` 一开始就在后台执行；``detached`` 用户把前台等待转走；``limit`` 前台等待
 # 到达工具声明的上限、自动转后台。是否挂起 Agent 由工具按原因决定（见各工具的占位渲染）。
 PlaceholderReason = Literal["background", "detached", "limit"]
 
 
-class DeferredJob(ABC):
+class BackgroundJob(ABC):
     """一份进行中的耗时工作；实现显式继承本类（``ThreadJob`` / ``ManualJob``）。"""
 
     @abstractmethod
@@ -57,16 +59,15 @@ class DeferredJob(ABC):
 
 
 @dataclass(frozen=True)
-class DeferredOutcome:
-    """``run_deferred`` 的结果：要么前台拿到的结论，要么一个后台占位的原因。
+class BackgroundOutcome:
+    """``run_background_work`` 的结果：要么前台拿到的结论，要么一个后台占位的原因。
 
-    ``run_deferred`` 不渲染工具观察：结论与占位的渲染（文本、展示数据、是否挂起）属于工具。工具渲染
-    占位时必须带上 ``background``（以 ``started_at`` 为开始时间），卡片与看板都以占位行为准。
+    ``run_background_work`` 不渲染工具观察：结论与占位的渲染（文本、展示数据、是否挂起）属于工具。工具渲染
+    占位时把 ``work`` 原样交给 ``background``；描述与登记时间只在登记入口确定一次。
     """
 
-    # 登记延迟结果的时刻，即工作的开始时间。
-    started_at: str
-    result: DeferredConclusion | None = None
+    work: BackgroundWork
+    result: BackgroundConclusion | None = None
     placeholder: PlaceholderReason | None = None
 
 
@@ -75,7 +76,7 @@ class _OnceCallbacks:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._result: DeferredConclusion | None = None
+        self._result: BackgroundConclusion | None = None
         self._callbacks: list[JobCallback] = []
         self._done = False
 
@@ -84,10 +85,10 @@ class _OnceCallbacks:
             if not self._done:
                 self._callbacks.append(callback)
                 return
-            result = cast(DeferredConclusion, self._result)
+            result = cast(BackgroundConclusion, self._result)
         callback(result)
 
-    def finish(self, result: DeferredConclusion) -> bool:
+    def finish(self, result: BackgroundConclusion) -> bool:
         """交付结论；已交付过返回 False（迟到的第二个结论丢弃）。"""
         with self._lock:
             if self._done:
@@ -99,7 +100,7 @@ class _OnceCallbacks:
         return True
 
 
-class ThreadJob(DeferredJob):
+class ThreadJob(BackgroundJob):
     """把一个阻塞函数放到自己的线程里执行的作业（如 ``execute_terminal`` 的命令）。
 
     ``work(is_cancelled)`` 返回结论；撤销只置位标记并调用 ``wake`` 唤醒它（例如通知会话条件变量），
@@ -108,7 +109,7 @@ class ThreadJob(DeferredJob):
 
     def __init__(
         self,
-        work: Callable[[Callable[[], bool]], DeferredConclusion],
+        work: Callable[[Callable[[], bool]], BackgroundConclusion],
         *,
         wake: Callable[[], None],
         name: str,
@@ -118,7 +119,7 @@ class ThreadJob(DeferredJob):
         self._wake = wake
         threading.Thread(target=self._run, args=(work,), name=name, daemon=True).start()
 
-    def _run(self, work: Callable[[Callable[[], bool]], DeferredConclusion]) -> None:
+    def _run(self, work: Callable[[Callable[[], bool]], BackgroundConclusion]) -> None:
         self._callbacks.finish(work(self._cancelled.is_set))
 
     def on_done(self, callback: JobCallback) -> None:
@@ -129,7 +130,7 @@ class ThreadJob(DeferredJob):
         self._wake()
 
 
-class ManualJob(DeferredJob):
+class ManualJob(BackgroundJob):
     """由执行单元在合适时机显式 ``finish`` 的作业（如子 Agent 的一次 Run）。
 
     撤销调用 ``on_cancel``（如停止子 Task），再以 ``cancelled_result`` 收尾，保证前台
@@ -137,13 +138,13 @@ class ManualJob(DeferredJob):
     """
 
     def __init__(
-        self, *, on_cancel: Callable[[], None], cancelled_result: DeferredConclusion
+        self, *, on_cancel: Callable[[], None], cancelled_result: BackgroundConclusion
     ) -> None:
         self._callbacks = _OnceCallbacks()
         self._on_cancel = on_cancel
         self._cancelled_result = cancelled_result
 
-    def finish(self, result: DeferredConclusion) -> bool:
+    def finish(self, result: BackgroundConclusion) -> bool:
         return self._callbacks.finish(result)
 
     def on_done(self, callback: JobCallback) -> None:

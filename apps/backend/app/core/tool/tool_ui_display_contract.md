@@ -48,11 +48,13 @@ Electron main 进程（桌面宿主）
 
 参数不可信：`args` 是模型原样参数，排队时为空对象，目录里每个取值都容忍缺字段；目录里没有的工具退回工具名与扳手图标。`execute_terminal.description` 只用于展示：执行、安全策略、日志与终态展示只认 `command`，需要用户批准命令的界面展示原命令。
 
-后端唯一还要的「名字」是后台看板条目与 `wait_messages` 提示里的 `label`：由工具从模型给的事实里取（命令的 `description`、子 Agent 的名字），经 `run_deferred(label=...)` 登记，不含动词文案。
+后端唯一还要的「名字」是后台看板条目与 `wait_messages` 提示里的 `label`：由工具从模型给的事实里取（命令的 `description`、子 Agent 的名字），经 `run_background_work(label=...)` 登记，不含动词文案。
+
+后台占位的 part 带 `background` 工作记录 `{kind, label, startedAt, endedAt}`（投影自占位行 metadata 的 `BackgroundWork`）：卡片只看它在不在；看板 `background_tasks` 由后端从工作副本里这些记录与登记表活条目投影，状态为 `running`（登记表里还活着）、`settling`（工作已结束、占位还没落定）、`completed`、`cancelled`。
 
 ### 2.3 `awaitingUser`：等你操作
 
-`project_tool_result`（`assistant_transport/projection/tool_result.py`）一处计算：占位行 `status == "pending"` 且不是后台占位（`background` 为假）即为真——HITL 等决定、交接等交还。每次结果投影都显式写，决定到达、重放后清回 `false`；`ToolCallsSettledEvent` 收束时也写 `false`。实时与冷重建同口径。前端据此把调用放进「等待用户」区，不再从 `pending` 自行推断。
+`project_tool_result`（`assistant_transport/projection/tool_result.py`）一处计算：占位行 `status == "pending"` 且不是后台占位（没有 `background` 工作记录）即为真——HITL 等决定、交接等交还。每次结果投影都显式写，决定到达、重放后清回 `false`；`ToolCallsSettledEvent` 收束时也写 `false`。实时与冷重建同口径。前端据此把调用放进「等待用户」区，不再从 `pending` 自行推断。
 
 ### 2.4 `display_data`：动态展示数据
 
@@ -210,7 +212,7 @@ Transport 不把失败态 `content` 写入 `ToolCallStatusChangedEvent.error`；
 
 终端展示原始命令、工作目录和完整输出，输出原样（保留 ANSI 与敏感文本）、不设 UI 字符预算、不插截断标记。运行期间后端以有界批次更新 snapshot，批次只用于分帧，不丢弃或改写输出；实时通道随命令而不随调用结束，转到后台后照常推送。是否追加只看 part 自己的状态（前台 `running`，或带 `background` 的 `pending` 占位），不看所属 Run；命令结束、取消或撤销后迟到的块丢弃。终态 `display_data` 替换临时内容（已实时流出的 part 以实时累计输出为准）。
 
-命令转到后台（模型选后台、用户转后台或前台到上限）时卡片是后台占位：状态 `pending`、`background: true`，展示数据只有命令与工作目录。结论分两份：给模型的载荷过输出预算、经 `background_result` 回投；给卡片的完整 `terminal-result` 随同一条消息持久化，并入时与 `completed` 一起写回。撤销时卡片推到 `cancelled`、不写终态展示。「在后台」不写进 `display_data`：所有延迟结果的占位都由 part 的 `background: true` 表达（投影自占位行 metadata，结算后保留）。
+命令转到后台（模型选后台、用户转后台或前台到上限）时卡片是后台占位：状态 `pending`、`background: true`，展示数据只有命令与工作目录。结论分两份：给模型的载荷过输出预算、经 `background_result` 回投；给卡片的完整 `terminal-result` 随同一条消息持久化，并入时与 `completed` 一起写回。撤销时卡片推到 `cancelled`、不写终态展示。「在后台」不写进 `display_data`：所有后台结果的占位都由 part 的 `background: true` 表达（投影自占位行 metadata，结算后保留）。
 
 超时属于 `tool_error`：只展示失败与「命令超时」，不展示输出或退出码。
 

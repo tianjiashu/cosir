@@ -15,13 +15,15 @@ import { ForegroundWaitAction } from "@/components/assistant-ui/tools/foreground
 import { readToolArtifact } from "@/lib/assistant/tool-artifact";
 import { BackgroundTasksBody, BackgroundTasksSummary } from "@/components/task-rail/background-tasks-card";
 import { formatElapsed } from "@/components/task-rail/background-task-row";
-import type { BackgroundTaskEntry, TransportToolCallPart } from "@/lib/assistant/contract";
+import type { BackgroundTaskEntry, TransportBackgroundWork, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/converter";
 import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
 import { backgroundToolCall } from "@/lib/assistant/task-commands";
 import { countRunning, useBackgroundTasksStore } from "@/lib/background-tasks/store";
 
 import { transportState } from "./transport-fixtures";
+
+const WORK = { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } satisfies TransportBackgroundWork;
 
 function entry(toolCallId: string, overrides: Partial<BackgroundTaskEntry> = {}): BackgroundTaskEntry {
   return {
@@ -44,7 +46,7 @@ function terminalPart(toolCallId: string, overrides: Partial<TransportToolCallPa
     status: "pending",
     awaitingUser: false,
     display_data: { kind: "terminal-result", command: "make watch", workdir: "/work" },
-    background: true,
+    background: WORK,
     ...overrides,
   };
 }
@@ -77,6 +79,18 @@ describe("snapshot background_tasks 与工具 part background", () => {
       .toThrow(/background_tasks\[0\]/);
   });
 
+  // 目的：part 的 background 是后端 BackgroundWork 的固定形状；潜在缺陷：沿用旧的 true 或缺字段时卡片仍显示「后台」、看板却没有记录可读。
+  it("工具 part 的 background 是固定字段的工作记录", () => {
+    const withPart = (background: unknown) => transportState({
+      messages: [{ id: "a1", role: "assistant", runId: 1, outcome: null, parts: [{ ...terminalPart("c1"), background } as never] }],
+    });
+    const ok = withPart(WORK);
+    expect(parseTransportState(ok)).toBe(ok);
+    expect(() => parseTransportState(withPart(true))).toThrow(/background/);
+    expect(() => parseTransportState(withPart({ ...WORK, endedAt: undefined }))).toThrow(/background/);
+    expect(() => parseTransportState(withPart({ ...WORK, kind: "unknown" }))).toThrow(/background\.kind/);
+  });
+
   it("foreground_waits 是必填的唯一 id 数组", () => {
     const withoutWaits: Record<string, unknown> = { ...transportState() };
     delete withoutWaits.foreground_waits;
@@ -95,7 +109,7 @@ describe("snapshot background_tasks 与工具 part background", () => {
   });
 
   it("converter 用后端短提示说明后台占位的取消原因", () => {
-    const interrupted = toToolCallPart({ type: "tool-call", toolCallId: "c2", toolName: "terminal_read", args: {}, status: "cancelled", error: "已中断", background: true, awaitingUser: false });
+    const interrupted = toToolCallPart({ type: "tool-call", toolCallId: "c2", toolName: "terminal_read", args: {}, status: "cancelled", error: "已中断", background: { ...WORK, endedAt: "2026-10-28T08:05:00+00:00" }, awaitingUser: false });
     expect(readToolArtifact((interrupted as { artifact?: unknown }).artifact).error).toBe("已中断");
   });
 });
@@ -123,6 +137,17 @@ describe("后台任务卡", () => {
     expect(html).not.toContain("terminal_command:done");
     board.entries.set(1, [entry("done", { status: "completed", endedAt: "2026-10-28T08:00:42+00:00" })]);
     expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("1 已完成");
+  });
+
+  // 目的：工作结束、占位还没落定时条目留在进行中；潜在缺陷：被算进「已完成」或继续计时、露出停止按钮。
+  it("收尾中的条目留在进行中：不计时、不能停止，摘要报「收尾中」", () => {
+    board.entries.set(1, [entry("a", { status: "settling" })]);
+    expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("收尾中");
+    const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
+    expect(html).toContain("收尾中");
+    expect(html).not.toContain("已完成");
+    expect(html).not.toContain("停止");
+    expect(html).not.toMatch(/\d+s</);
   });
 
   it("运行数与耗时格式", () => {

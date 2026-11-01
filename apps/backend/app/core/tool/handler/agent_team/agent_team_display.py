@@ -7,6 +7,7 @@ from app.core.tool.handler.agent_team.args.propose_agent_team_configuration_args
     ProposeAgentTeamConfigurationArgs,
 )
 
+
 def build_agent_team_preview_display_data(
     preview_fields: Mapping[str, Any],
     *,

@@ -14,11 +14,14 @@ from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
+from app.core.tool.handler.agent_team.node_profile import (
+    NODE_PROFILE_SNAPSHOT_KEY,
+    build_node_profile,
+)
 from app.models import ConversationRunRecord
 from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
 from app.models.conversation_run_options import ReasoningEffort
 from app.models.model_config_record import ModelConfigRecord
-from app.core.tool.handler.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY, build_node_profile
 from app.service.depends import get_model_config_service, get_task_service, get_workspace_service
 
 

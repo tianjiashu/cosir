@@ -13,7 +13,7 @@ test.beforeEach(async ({ page, request }) => {
   await request.post(`${origin}/__test__/reset`);
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "会话侧栏" } });
   await seedState(request, TASK_ID, completedState(1, { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] }, [
-    { type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "terminal_read", args: {}, status: "pending", background: true },
+    { type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "terminal_read", args: {}, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
   ]));
   await request.post(`${origin}/__test__/seed-background-tasks`, {
     data: {
@@ -42,6 +42,25 @@ test("宽窗口固定为一列；打开右侧面板后浮起、不挤对话，�
 
   await page.getByRole("button", { name: "收起文件", exact: true }).click();
   await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+});
+
+// 目的：侧栏是对话画布上的附注；潜在缺陷：侧栏另占一整列时，滚动条竖在对话与侧栏之间、底部终端被它挤窄。
+test("固定的侧栏在对话视口里：靠视口最右侧，底部终端延伸到侧栏下方", async ({ page }, testInfo) => {
+  await railButton(page).click();
+  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  const thread = page.locator(".aui-thread-root");
+  await expect(thread.getByRole("complementary", { name: "会话侧栏" })).toBeVisible();
+  const threadBox = (await thread.boundingBox())!;
+  const railBox = (await rail(page).boundingBox())!;
+  // 侧栏贴着视口右缘（只隔自身内边距与可能的滚动条），视口的滚动条因此在侧栏外侧。
+  expect(threadBox.x + threadBox.width - (railBox.x + railBox.width)).toBeLessThan(24);
+
+  await page.getByRole("button", { name: /^终端，/ }).click();
+  const terminal = page.getByRole("region", { name: "终端工作台" });
+  await expect(terminal).toBeVisible();
+  const terminalBox = (await terminal.boundingBox())!;
+  expect(terminalBox.x + terminalBox.width).toBeGreaterThan(railBox.x + railBox.width - 24);
+  await page.screenshot({ path: testInfo.outputPath("rail-docked-with-terminal.png") });
 });
 
 test("浮层非模态：点对话区不关闭，焦点在侧栏内按 Esc 关闭", async ({ page }) => {
