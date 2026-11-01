@@ -1,0 +1,42 @@
+/*
+ * 两层点阵同尺寸、同原点（都铺满容器），品牌色层的点正好压在底纹的点上。
+ * `isolation: isolate` 让 -1 层级的点阵落在页面内容之下、容器自身背景之上，内容无需额外定位。
+ */
+.new-conversation-backdrop {
+  --backdrop-dot-gap: 20px;
+  position: relative;
+  isolation: isolate;
+  height: 100%;
+}
+
+.new-conversation-backdrop__dots,
+.new-conversation-backdrop__spot {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background-size: var(--backdrop-dot-gap) var(--backdrop-dot-gap);
+  pointer-events: none;
+}
+
+/* 以输入框所在的视觉中心（页面上下留白 2:3）向外渐隐，视线落在输入框上。 */
+.new-conversation-backdrop__dots {
+  background-image: radial-gradient(circle, color-mix(in oklab, var(--foreground) 16%, transparent) 1px, transparent 1.5px);
+  mask-image: radial-gradient(ellipse 65% 60% at 50% 42%, #000 35%, transparent 100%);
+}
+
+.new-conversation-backdrop__spot {
+  background-image: radial-gradient(circle, var(--brand) 1.5px, transparent 2px);
+  mask-image: radial-gradient(circle 180px at var(--backdrop-spot-x, -999px) var(--backdrop-spot-y, -999px), #000, transparent);
+  opacity: 0;
+  transition: opacity 240ms ease-out;
+}
+
+.new-conversation-backdrop[data-spot] .new-conversation-backdrop__spot {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-conversation-backdrop__spot {
+    display: none;
+  }
+}

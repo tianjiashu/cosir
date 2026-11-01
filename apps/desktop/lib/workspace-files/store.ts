@@ -1,3 +1,4 @@
+import type { LineRange } from "@/lib/links/resolve-link";
 import type { WorkspaceReference } from "@/lib/workspace-references/codec";
 import { create } from "zustand";
 
@@ -9,10 +10,14 @@ export type ReadingPosition = {
   scrollTop: number;
   encoding?: string;
   previewScrollTop?: number;
+  /** 待定位的行范围（链接带行号打开时写入）；文本预览选中并居中后清除，之后照常按 `scrollTop` 恢复。 */
+  reveal?: LineRange;
 };
+/** 有渲染形态的文件（Markdown、SVG、无内置预览的二进制）看渲染结果还是源码；纯文本只有源码。 */
+export type ReadingView = "rendered" | "source";
 export type ReadingPreference = {
   wrap?: boolean;
-  mode?: "source" | "preview" | "split";
+  view?: ReadingView;
 };
 export type FileSession = {
   reference: WorkspaceReference | null;
@@ -24,6 +29,13 @@ export type FileSession = {
   treeWidth: number;
   treeVisible: boolean;
   browsing: boolean;
+  /** 目录栏文件名搜索框里的文字；改动即撤销已提交的搜索，按 Enter 才提交。 */
+  searchText: string;
+  /**
+   * 已提交的文件名搜索；`id` 让同一个词再搜一次也重新开始。放在会话里而不是面板组件里：链接点到工作区里
+   * 不存在的文件时，打开入口要替用户发起「查找同名文件」（`searchFilename`）。
+   */
+  searchRequest: { query: string; id: number } | null;
 };
 const fresh = (): FileSession => ({
   reference: null,
@@ -35,6 +47,8 @@ const fresh = (): FileSession => ({
   treeWidth: 230,
   treeVisible: true,
   browsing: true,
+  searchText: "",
+  searchRequest: null,
 });
 const emptySession = fresh();
 export const useFilesStore = create<{
@@ -45,6 +59,8 @@ export const useFilesStore = create<{
   forget: (id: number) => void;
   preference: (id: number, path: string, patch: ReadingPreference) => void;
   position: (id: number, path: string, patch: Partial<ReadingPosition>) => void;
+  /** 提交一次文件名搜索并亮出目录栏（窄面板时从阅读切到浏览）。 */
+  searchFilename: (id: number, query: string) => void;
 }>((set) => ({
   sessions: {},
   patch: (id, patch) =>
@@ -116,6 +132,22 @@ export const useFilesStore = create<{
               ...session.preferences,
               [path]: { ...session.preferences[path], ...patch },
             },
+          },
+        },
+      };
+    }),
+  searchFilename: (id, query) =>
+    set((state) => {
+      const session = state.sessions[id] ?? fresh();
+      return {
+        sessions: {
+          ...state.sessions,
+          [id]: {
+            ...session,
+            searchText: query,
+            searchRequest: { query, id: (session.searchRequest?.id ?? 0) + 1 },
+            treeVisible: true,
+            browsing: true,
           },
         },
       };

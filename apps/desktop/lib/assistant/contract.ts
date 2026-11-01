@@ -110,7 +110,7 @@ export type TransportToolCallPart = {
    * 保留；converter 交给卡片作为所有工具共用的「在后台」事实（工具不在 `display_data` 里另存）。
    * 卡片状态仍看 `status`。
    */
-  deferred?: true;
+  background?: true;
   /** 后端显式标记的错误结果。 */
   isError?: boolean | null;
   /** Runtime-only child task locator for Workbench; never rendered as text. */

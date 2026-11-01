@@ -1,8 +1,8 @@
 import { expect, test, type FileChooser, type Locator, type Page } from "@playwright/test";
 import { installFakeDesktopHost } from "./fake-desktop-host";
 import { completedState, seedState } from "./transport-fixtures";
+import { API_ORIGIN as api } from "./e2e-env";
 
-const api = "http://127.0.0.1:8000";
 const undo = process.platform === "darwin" ? "Meta+z" : "Control+z";
 const redo = process.platform === "darwin" ? "Meta+Shift+z" : "Control+Shift+z";
 const selectAll = process.platform === "darwin" ? "Meta+a" : "Control+a";
@@ -83,13 +83,13 @@ test("工作区 A→B→A 保留各自草稿，撤销不会带回另一工作区
   await page.route("**/workspaces/8/tasks", route => route.fulfill({ json: [] }));
   const { input } = await openComposer(page, "new");
   await input.fill("草稿 A");
-  await page.getByRole("button", { name: "demo", exact: true }).click();
+  await page.getByRole("button", { name: "选择工作区，当前 demo" }).click();
   await page.getByRole("option", { name: /workspace-B/ }).click();
   await expect(input).toHaveText("");
   await input.press(undo);
   await expect(input).toHaveText("");
   await input.fill("草稿 B");
-  await page.getByRole("button", { name: "workspace-B", exact: true }).click();
+  await page.getByRole("button", { name: "选择工作区，当前 workspace-B" }).click();
   await page.getByRole("option", { name: /demo/ }).click();
   await expect(input).toHaveText("草稿 A");
   await input.press(undo);
@@ -105,13 +105,13 @@ test("原生选择框打开期间切换工作区，迟到文件不会写入任�
   await page.route("**/workspaces/8/tasks", route => route.fulfill({ json: [] }));
   const { input, send } = await openComposer(page, "new");
   const chooser = await openNativePicker(page);
-  await page.getByRole("button", { name: "demo", exact: true }).click();
+  await page.getByRole("button", { name: "选择工作区，当前 demo" }).click();
   await page.getByRole("option", { name: /workspace-B/ }).click();
   await chooser.setFiles(pickedNotes);
   await expect.poll(() => page.evaluate(() => (window as unknown as { __cosirFrontendLogs?: { event: string }[] }).__cosirFrontendLogs?.some(log => log.event === "composer_attachment_selection_discarded"))).toBe(true);
   await expect(input).toHaveText("");
   await expect(send).toBeDisabled();
-  await page.getByRole("button", { name: "workspace-B", exact: true }).click();
+  await page.getByRole("button", { name: "选择工作区，当前 workspace-B" }).click();
   await page.getByRole("option", { name: /demo/ }).click();
   await expect(input).toHaveText("");
   await expect(send).toBeDisabled();
@@ -168,7 +168,7 @@ for (const mode of ["new", "task"] as const) {
   // 目的：超量图片在添加入口拦下；潜在缺陷：选了超量图片，发送时逐张上传完才被后端整条拒绝。
   test(`${mode} 图片超过单条消息上限时只接纳前 20 张并在入口反馈`, async ({ page }) => {
     const { input } = await openComposer(page, mode);
-    const thumbnails = page.locator('[data-slot="image-attachment-strip"] [data-slot="image-thumbnail"]');
+    const thumbnails = page.locator('[data-slot="image-attachment-strip"] [data-slot="image-tile"]');
     await pasteImages(input, Array.from({ length: 18 }, (_, index) => `first-${index}.png`));
     await expect(thumbnails).toHaveCount(18);
     await pasteImages(input, ["a.png", "b.png", "c.png", "d.png"]);
@@ -270,7 +270,7 @@ test("Task 图片上传成功但消息提交失败后，正文与完整图片附
   } }));
   await page.route(`${api}/workspaces/7/attachments/${assetId}*`, route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9X8AAAAASUVORK5CYII=", "base64") }));
   await transfer(input, "paste", "uploaded.png", "image/png", "图片失败恢复");
-  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-thumbnail"]')).toHaveCount(1);
+  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-tile"]')).toHaveCount(1);
   const request = page.waitForRequest(req => req.url() === `${api}/tasks/100/messages` && req.method() === "POST");
   await page.route(`${api}/tasks/100/messages`, route => route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "图片消息回归拒绝", retryable: true } } } }));
   await send.click();
@@ -279,6 +279,6 @@ test("Task 图片上传成功但消息提交失败后，正文与完整图片附
   await expect(page.getByRole("dialog")).toContainText("图片消息回归拒绝");
   await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
   await expect(input).toHaveText("图片失败恢复");
-  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-thumbnail"]')).toHaveCount(1);
+  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-tile"]')).toHaveCount(1);
   await expect(send).toBeEnabled();
 });

@@ -4,6 +4,7 @@ import { Loader2Icon, SaveIcon } from "lucide-react";
 import { MarkdownSourcePreviewEditor } from "@/components/configuration/markdown-source-preview-editor";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { useMarkdownConfigurationDocument, type MarkdownConfigurationAdapter } from "@/components/configuration/use-markdown-configuration-document";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
@@ -74,7 +75,7 @@ export function MarkdownConfigurationPanel<TDocument extends MarkdownDocumentCon
           <Button onClick={state.save} disabled={state.saving || overBudget || emptyForbidden}>
             {state.saving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}
             {saveLabel}
-            <kbd aria-hidden="true" className="text-primary-foreground/70 font-sans text-xs">{shortcutLabel("saveConfiguration")}</kbd>
+            <Kbd aria-hidden="true" className="text-primary-foreground/70 h-auto bg-transparent px-0">{shortcutLabel("saveConfiguration")}</Kbd>
           </Button>
         </div>
       </div>

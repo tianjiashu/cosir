@@ -1,18 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <path
-    d="M766 254C696 200 610 174 516 174C326 174 194 308 194 512C194 716 326 850 516 850C610 850 696 824 766 770"
-    fill="none"
-    stroke="#F8FAFC"
-    stroke-linecap="round"
-    stroke-width="154"
-  />
-  <path
-    d="M418 420L516 512L418 604"
-    fill="none"
-    stroke="#CFFAFE"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-    stroke-width="64"
-  />
-  <circle cx="766" cy="512" r="62" fill="#22D3EE"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="192 192 640 640">
+  <g fill="#000000">
+    <path d="M348 232H752V348H396L328 416V608L396 676H752V792H348L208 652V372Z"/>
+    <path d="M456 400L608 512L456 624L412 564L484 512L412 460Z"/>
+    <rect x="632" y="556" width="184" height="68"/>
+  </g>
 </svg>

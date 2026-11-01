@@ -10,5 +10,7 @@
     "tests/unit/**/*.test.{ts,tsx}",
     "tests/desktop-e2e/**/*.spec.ts"
   ],
-  "project": ["**/*.{js,jsx,ts,tsx,mjs,cjs,css}"]
+  "project": ["**/*.{js,jsx,ts,tsx,mjs,cjs,css}"],
+  // macOS 自带的图标打包工具，scripts/generate-icons.mjs 生成 .icns 用。
+  "ignoreBinaries": ["iconutil"]
 }

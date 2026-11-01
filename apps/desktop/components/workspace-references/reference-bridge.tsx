@@ -27,6 +27,9 @@ type Bridge = {
   workspaceRoot: string;
   workspaceName: string;
   register: (target: string, receiver: Receiver) => () => void;
+  /** 「添加到对话」入口能否点：有可见的对话输入框且属于这个工作区。各入口只用它决定禁用态。 */
+  canAdd: (workspace: number) => boolean;
+  /** 唯一的添加边界：再次确认目标输入框仍在（可能刚切走），不在就提示；准备失败的引用逐条提示。 */
   add: (
     workspace: number,
     inputs: ReferenceInput[],
@@ -101,6 +104,10 @@ export function ReferenceBridgeProvider({
     },
     [],
   );
+  const canAdd = useCallback(
+    (workspace: number) => target !== null && workspace === workspaceId,
+    [target, workspaceId],
+  );
   const value = useMemo(
     () => ({
       target,
@@ -108,9 +115,10 @@ export function ReferenceBridgeProvider({
       workspaceRoot,
       workspaceName,
       register,
+      canAdd,
       add,
     }),
-    [target, workspaceId, workspaceRoot, workspaceName, register, add],
+    [target, workspaceId, workspaceRoot, workspaceName, register, canAdd, add],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

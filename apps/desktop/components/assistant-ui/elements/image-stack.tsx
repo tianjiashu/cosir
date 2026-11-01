@@ -1,5 +1,11 @@
 import { Fragment, useState, type ReactNode } from "react";
 
+import { IMAGE_TILE_GAP, IMAGE_TILE_SIZE } from "@/lib/image/tile-size";
+import { IMAGES_PER_ROW } from "@/lib/assistant/image-stack-policy";
+
+/** 展开后最宽排几张（与行高估计的每行张数一致），胶囊因此贴着图片而不是被推到行首；窄时照常折行。 */
+const EXPANDED_MAX_WIDTH = IMAGES_PER_ROW * IMAGE_TILE_SIZE.regular.width + (IMAGES_PER_ROW - 1) * IMAGE_TILE_GAP;
+
 /**
  * 多图收成一叠：收起时只显示第一张、后面错开露出两层，旁边是「展开 N」；展开后全部铺开，胶囊变成「收起」。
  *
@@ -20,8 +26,7 @@ export function ImageStack({ count, renderTile }: { count: number; renderTile: (
         {expanded ? "收起" : `展开 ${count}`}
       </button>
       {expanded ? (
-        // 最宽三列（与行高估计的每行张数一致），胶囊因此贴着图片而不是被推到行首；窄时照常折行。
-        <div className="flex max-w-[calc(3*10rem+1rem)] flex-wrap justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2" style={{ maxWidth: EXPANDED_MAX_WIDTH }}>
           {Array.from({ length: count }, (_, index) => <Fragment key={index}>{renderTile(index)}</Fragment>)}
         </div>
       ) : (

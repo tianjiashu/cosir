@@ -115,9 +115,18 @@ function usePreloadNeighbors(images: readonly LightboxImage[], index: number | n
   }, [images, index]);
 }
 
-/** 点图片也关闭；用普通点击而不是渲染成 Close 按钮，图片在无障碍树里仍是图片。 */
+/** 高宽比超过它的图（整页截图等）按宽度铺满、上下滚动；完整缩进一屏只剩一条细线，看不清。 */
+const TALL_IMAGE_RATIO = 2.5;
+
+/**
+ * 点图片也关闭；用普通点击而不是渲染成 Close 按钮，图片在无障碍树里仍是图片。
+ *
+ * 普通图片整张完整显示；长图加载后改为在可滚动的容器里按宽度铺满（不超过原始宽度，不放大），
+ * 打开时停在顶部。是否为长图要等加载出原始尺寸才知道，加载期间按普通图片处理。
+ */
 function LightboxPicture({ image, onClose }: { image: LightboxImage; onClose: () => void }) {
   const [state, setState] = useState<"loading" | "loaded" | "error">(image.src ? "loading" : "error");
+  const [tallWidth, setTallWidth] = useState<number | null>(null);
   if (state === "error") {
     return (
       <div className="text-background/80 relative flex flex-col items-center gap-2 text-sm" role="alert">
@@ -126,17 +135,38 @@ function LightboxPicture({ image, onClose }: { image: LightboxImage; onClose: ()
       </div>
     );
   }
+  const picture = (
+    <img
+      src={image.src}
+      alt={image.alt}
+      className={cn(
+        "relative cursor-zoom-out",
+        tallWidth === null ? "max-h-[90vh] max-w-[90vw] object-contain" : "block h-auto w-full",
+        state === "loading" && "invisible",
+      )}
+      onClick={onClose}
+      onLoad={(event) => {
+        const { naturalWidth, naturalHeight } = event.currentTarget;
+        if (naturalWidth > 0 && naturalHeight / naturalWidth > TALL_IMAGE_RATIO) setTallWidth(naturalWidth);
+        setState("loaded");
+      }}
+      onError={() => setState("error")}
+    />
+  );
   return (
     <>
       {state === "loading" && <ImageIcon className="text-background/60 absolute size-8 animate-pulse" aria-hidden="true" />}
-      <img
-        src={image.src}
-        alt={image.alt}
-        className={cn("relative max-h-[90vh] max-w-[90vw] cursor-zoom-out object-contain", state === "loading" && "invisible")}
-        onClick={onClose}
-        onLoad={() => setState("loaded")}
-        onError={() => setState("error")}
-      />
+      {tallWidth === null ? picture : (
+        <div
+          data-slot="lightbox-scroll"
+          tabIndex={0}
+          aria-label="长图，可上下滚动"
+          className="relative max-h-[90vh] w-[90vw] overflow-y-auto overscroll-contain rounded-sm outline-none"
+          style={{ maxWidth: tallWidth }}
+        >
+          {picture}
+        </div>
+      )}
     </>
   );
 }

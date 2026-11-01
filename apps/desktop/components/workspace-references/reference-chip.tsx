@@ -29,7 +29,7 @@ export function ReferenceChip({
       return;
     }
     // 摘录引用带着选取时的正文，文件面板先展示这段快照，用户可再切到当前文件。
-    opener.openFile(reference.path, reference.content !== undefined ? reference : undefined);
+    void opener.openFile(reference.path, reference.content !== undefined ? { excerpt: reference } : undefined);
   };
   const fileName = reference.path.split("/").at(-1) || "工作区";
   const detail = reference.kind === "excerpt" ? " · 摘录"

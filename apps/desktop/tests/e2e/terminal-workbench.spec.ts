@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
+import { API_ORIGIN as origin } from "./e2e-env";
 
-const origin = "http://127.0.0.1:8000";
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${origin}/__test__/reset`);
@@ -166,29 +166,30 @@ test("搜索只跟随可见会话：切换标签或收起面板即关闭", async
 test("面板收起时异常退出在页头标红，打开面板即视为看过", async ({ page, request }) => {
   await page.goto("/tasks/42");
   const entry = page.getByRole("button", { name: /^终端，/ });
-  const badge = entry.locator("[data-terminal-badge]");
+  // 页头只画状态点不画数字：会话数在无障碍标签与 tooltip 里，红点只表示「有没看过的异常结束」。
+  const attention = entry.locator('[data-status-dot="attention"]');
   await entry.click();
   await expect(screen(page, "term-1")).toContainText("term-1 $");
   await panel(page).getByRole("button", { name: "新建终端" }).click();
   await expect(screen(page, "term-2")).toContainText("term-2 $");
   await panel(page).getByRole("button", { name: "关闭终端面板" }).click();
-  await expect(badge).toHaveAttribute("data-terminal-badge", "none");
+  await expect(entry).toHaveAccessibleName(/^终端，2 个运行中会话/);
+  await expect(attention).toHaveCount(0);
 
   // 正常退出（0）不提醒；非 0 退出标红并在入口说明是哪个终端。
   await request.post(`${origin}/__test__/terminal/exit`, { data: { taskId: 42, sessionId: "term-1", exitCode: 0 } });
-  await expect(badge).toHaveText("1");
-  await expect(badge).toHaveAttribute("data-terminal-badge", "none");
+  await expect(entry).toHaveAccessibleName(/^终端，1 个运行中会话/);
+  await expect(attention).toHaveCount(0);
   await request.post(`${origin}/__test__/terminal/exit`, { data: { taskId: 42, sessionId: "term-2", exitCode: 2 } });
-  await expect(badge).toHaveAttribute("data-terminal-badge", "attention");
-  await expect(badge).toHaveText("!");
+  await expect(attention).toHaveCount(1);
   await expect(entry).toHaveAccessibleName(/「终端 2」异常结束（退出码 2）/);
 
-  // 打开面板即视为看过；没有活跃会话时照常自动新建一个，角标回到普通计数。
+  // 打开面板即视为看过；没有活跃会话时照常自动新建一个，红点消失。
   await entry.click();
   await expect(screen(page, "term-3")).toContainText("term-3 $");
-  await expect(badge).toHaveAttribute("data-terminal-badge", "none");
+  await expect(attention).toHaveCount(0);
   await panel(page).getByRole("button", { name: "关闭终端面板" }).click();
-  await expect(badge).toHaveText("1");
-  await expect(badge).toHaveAttribute("data-terminal-badge", "none");
+  await expect(entry).toHaveAccessibleName(/^终端，1 个运行中会话/);
+  await expect(attention).toHaveCount(0);
 });
 

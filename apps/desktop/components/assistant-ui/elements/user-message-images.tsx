@@ -1,7 +1,7 @@
 import { Fragment, useMemo } from "react";
 import { useAuiState } from "@assistant-ui/react";
 import { useShallow } from "zustand/react/shallow";
-import { Image } from "@/components/image/image";
+import { ImageTile } from "@/components/image/image-tile";
 import { useImageGallery } from "@/components/image/image-gallery";
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
 import { ImageStack } from "@/components/assistant-ui/elements/image-stack";
@@ -22,7 +22,7 @@ export function UserMessageImages() {
   const messageId = useAuiState((state) => state.message.id);
   const workspaceId = useAttachmentWorkspaceId();
   const images = useMemo(
-    () => locators.map((locator) => ({ src: resolveTransportImageSrc(locator, workspaceId), alt: "图片内容" })),
+    () => locators.map((locator, index) => ({ src: resolveTransportImageSrc(locator, workspaceId), alt: `图片 ${index + 1}` })),
     [locators, workspaceId],
   );
   const gallery = useImageGallery(images);
@@ -38,7 +38,7 @@ export function UserMessageImages() {
         <RenderErrorCard scope="attachment" label="图片附件" onRetry={onRetry} />
       )}
     >
-      <Image src={images[index].src} onOpen={() => gallery.open(index)} />
+      <ImageTile src={images[index].src} alt={`图片 ${index + 1}`} onOpen={() => gallery.open(index)} />
     </RenderIsolationBoundary>
   );
 

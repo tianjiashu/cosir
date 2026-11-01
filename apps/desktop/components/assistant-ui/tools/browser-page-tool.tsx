@@ -1,8 +1,7 @@
 import { useMemo } from "react";
 import { ArrowUpRightIcon, GlobeIcon, HandIcon } from "lucide-react";
 
-import { Image } from "@/components/image/image";
-import { useImageGallery } from "@/components/image/image-gallery";
+import { ImageStrip } from "@/components/image/image-strip";
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
 import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
 import { Button } from "@/components/ui/button";
@@ -16,7 +15,7 @@ import { ToolStatus } from "./tool-status";
 import { readToolArtifact } from "./types";
 
 /**
- * 内置浏览器工具的卡片：页面标题与地址，点一下在浏览器面板里看实时页面；截图带缩略图；交接时给出要用户做的事
+ * 内置浏览器工具的卡片：页面标题与地址，点一下在浏览器面板里看实时页面；截图按对话图片的统一外观显示缩略图；交接时给出要用户做的事
  * 与「交还给 Agent」。
  *
  * 地址与标题是调用当时的展示快照，不是事实源：标签页可能已经导航或关闭（关闭后不再提供打开入口）。
@@ -30,7 +29,7 @@ export function BrowserPageTool({ artifact: rawArtifact, toolCallId, taskId, int
   const { handBack, returning } = useHandBack(taskId);
   const workspaceId = useAttachmentWorkspaceId();
   const screenshotSrc = display?.screenshot ? attachmentContentUrl(display.screenshot, workspaceId) : undefined;
-  const gallery = useImageGallery(useMemo(() => (screenshotSrc ? [{ src: screenshotSrc, alt: "网页截图" }] : []), [screenshotSrc]));
+  const screenshots = useMemo(() => (screenshotSrc ? [{ src: screenshotSrc, alt: "网页截图" }] : []), [screenshotSrc]);
   if (!display) return null;
 
   const title = display.title || display.url || "新标签页";
@@ -67,8 +66,7 @@ export function BrowserPageTool({ artifact: rawArtifact, toolCallId, taskId, int
           )}
         </div>
       )}
-      {display.screenshot && <Image src={screenshotSrc} onOpen={() => gallery.open(0)} />}
-      {gallery.lightbox}
+      {screenshots.length > 0 && <ImageStrip images={screenshots} label="网页截图" />}
     </div>
   );
 }

@@ -15,17 +15,16 @@ export function ReferencePreview({
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="space-y-2 border-b p-3 text-sm">
-        <p className="font-medium">{referenceName(reference)}</p>
-        <p className="break-all text-xs text-muted-foreground">
-          {reference.path}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          引用片段 · 内容保存在消息正文中，行号是选取时的来源说明。
-        </p>
+      {/* 路径已在阅读工具栏里；这里只用一行说明它是消息里的片段，不是文件当前内容。 */}
+      <div role="note" className="mx-2 mb-1 flex shrink-0 items-center gap-2 rounded-md bg-muted/60 py-1 pr-1 pl-2 text-xs">
+        <span className="min-w-0 flex-1 truncate" title="内容保存在消息正文中，行号是选取时的来源说明">
+          <span className="font-medium">{referenceName(reference)}</span>
+          <span className="text-muted-foreground"> · 消息里的引用片段，不是文件当前内容</span>
+        </span>
         <Button
           size="sm"
-          variant="outline"
+          variant="ghost"
+          className="shrink-0"
           onClick={() =>
             useFilesStore.getState().patch(workspaceId, { reference: null })
           }

@@ -53,3 +53,8 @@ npm run test:unit         # Vitest, including the main-process supervisor rules
 npm run test:e2e          # Playwright against Vite and the in-memory test service
 npm run test:e2e:desktop  # Playwright driving the real Electron host and backend
 ```
+
+`test:e2e` starts its own Vite (4173), test service (8000) and output directory
+(`test-results/slot-0`), and fails if a port is already taken. To run several
+suites at once, give each a different slot: `COSIR_E2E_SLOT=1 npm run test:e2e`
+shifts every port by 1 and uses `test-results/slot-1` (see `tests/e2e/e2e-env.ts`).

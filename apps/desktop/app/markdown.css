@@ -14,6 +14,52 @@
   --markdown-action-background: var(--background);
 }
 
+/*
+ * 可点击的文字一律用链接色（--link），与正文区分：Markdown 链接（工作区文件、网页、页内锚点）与
+ * 行内代码里可打开的路径。颜色只在这里定义，链接组件（components/links/markdown-links.tsx）不带
+ * 颜色类；下划线平时半透明、悬停加深。可点的行内代码用虚线下划线，与普通行内代码区分。
+ */
+.aui-md [data-streamdown="link"] {
+  color: var(--link);
+  text-decoration-line: underline;
+  text-decoration-color: color-mix(in oklab, var(--link) 40%, transparent);
+  text-underline-offset: 3px;
+}
+
+.aui-md [data-streamdown="link"]:hover {
+  text-decoration-color: currentColor;
+}
+
+.aui-md [data-slot="workspace-code-link"] > code {
+  color: var(--link);
+  text-decoration: underline dashed color-mix(in oklab, var(--link) 50%, transparent);
+  text-underline-offset: 3px;
+}
+
+.aui-md [data-slot="workspace-code-link"]:hover > code {
+  text-decoration-color: currentColor;
+}
+
+/* 任务列表只留勾选框，不再叠一个圆点（GitHub 同款）。 */
+.aui-md li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+
+/* 脚注的返回符号按文字显示，不渲染成彩色 emoji。 */
+.aui-md [data-footnote-backref] {
+  font-variant-emoji: text;
+}
+
+.aui-md kbd {
+  border: 1px solid var(--markdown-block-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--muted);
+  padding: 0 0.35em;
+  font-family: var(--app-font-mono);
+  font-size: 0.85em;
+}
+
 /* 代码块：单层边框、无阴影，接近 GitHub 的代码阅读体验。 */
 .aui-md [data-streamdown="code-block"] {
   border-color: var(--markdown-block-border);

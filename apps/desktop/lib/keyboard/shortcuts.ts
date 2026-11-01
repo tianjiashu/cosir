@@ -19,15 +19,26 @@ export const APP_SHORTCUTS = {
   toggleTaskRail: { keys: "mod+alt+r", label: "切换会话侧栏" },
   // 只在 Markdown 配置面板挂载期间绑定。
   saveConfiguration: { keys: "mod+s", label: "保存" },
+  // 只在文件面板内生效（见 `lib/workspace-files/reading-commands.ts`）；与 Cursor 的「Add to Chat」一致。
+  findInFile: { keys: "mod+f", label: "查找" },
+  addToChat: { keys: "mod+l", label: "添加到对话" },
 } as const;
 
 export type AppShortcutId = keyof typeof APP_SHORTCUTS;
 
 const KEY_LABELS: Record<string, string> = { comma: ",", period: ".", slash: "/", enter: "↵", escape: "Esc", backquote: "`" };
 
-/** 把登记的按键转换为当前平台的展示形式，例如 macOS 上的「⌘N」、Windows 上的「Ctrl+N」。 */
+/** 登记的应用快捷键在当前平台的展示形式，例如 macOS 上的「⌘N」、Windows 上的「Ctrl+N」。 */
 export function shortcutLabel(id: AppShortcutId): string {
-  const parts = APP_SHORTCUTS[id].keys.split("+").map((part) => {
+  return formatKeys(APP_SHORTCUTS[id].keys);
+}
+
+/**
+ * 把 react-hotkeys-hook 语法的按键组合转换为当前平台的展示形式。不在登记表里的按键（如输入框的
+ * 回车发送，规则在 `components/composer/composer-editor-policy.ts`）也经这里展示，平台符号只此一份。
+ */
+export function formatKeys(keys: string): string {
+  const parts = keys.split("+").map((part) => {
     if (part === "mod") return isMac ? "⌘" : "Ctrl";
     if (part === "ctrl") return isMac ? "⌃" : "Ctrl";
     if (part === "shift") return isMac ? "⇧" : "Shift";

@@ -1,40 +1,47 @@
 import {
-  SelectionActions,
   selectedReference,
   ReferenceSelectionMenu,
   type TextSelection,
 } from "@/components/workspace-references/selection-actions";
+import { AddToChatButton } from "./add-to-chat-button";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { ReadingSearchContext } from "@/lib/workspace-files/reading-search";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   getText,
-  parseFindTextBatch,
   type FileInfo,
-  type FindTextBatch,
 } from "@/lib/api/workspace-files";
-import { useStreamedSearch } from "./use-streamed-search";
 import { queryKeys } from "@/lib/query/query-keys";
 import { fileSession, useFilesStore } from "@/lib/workspace-files/store";
 import { HttpError } from "@/lib/http/errors";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
 import { SearchIcon } from "lucide-react";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
+import { useTextFind } from "./text-find";
+import { OutlineButton } from "./outline-button";
+import type { TextViewerHandle } from "@/components/text-viewer/readonly-text-viewer";
 import { CodePreview } from "./code-preview";
 import { MarkdownPreview } from "./markdown-preview";
 
+/**
+ * 文本类文件的阅读器：分段读取、全文件查找、编码与换行，源码用只读编辑器显示，Markdown 的渲染视图
+ * （`rendered`）用同一份文本渲染。看渲染还是源码由 `FilePreview` 决定并传入，这里只在需要行的场合
+ * （点击查找结果）把偏好切回源码。
+ */
 export function TextPreview({
   workspaceId,
   info,
   navigation,
+  rendered,
   view,
 }: {
   workspaceId: number;
   info: FileInfo;
   navigation: ReadingNavigation;
+  rendered: boolean;
   view?: ReactNode;
 }) {
   const [selection, setSelection] = useState<TextSelection | null>(null);
@@ -43,12 +50,7 @@ export function TextPreview({
     (s) => fileSession(s.sessions, workspaceId).positions[info.path],
   );
   const setPosition = useFilesStore((s) => s.position);
-  const open = useFilesStore((s) => s.open);
   const queryClient = useQueryClient();
-  const openDocument = useCallback(
-    (path: string) => open(workspaceId, path),
-    [open, workspaceId],
-  );
   const offset = position?.offset ?? 0;
   const encoding = position?.encoding ?? info.encoding ?? "utf-8";
   const tail = position?.tail ?? false;
@@ -60,58 +62,9 @@ export function TextPreview({
   );
   const setPreference = useFilesStore((s) => s.preference);
   const wrap = preference?.wrap ?? false;
-  const mode =
-    preference?.mode ?? (info.kind === "markdown" ? "preview" : "source");
-  const setMode = (mode: "source" | "preview" | "split") =>
-    setPreference(workspaceId, info.path, { mode });
-  const [showSearch, setShowSearch] = useState(false);
   const searchTrigger = useRef<HTMLButtonElement>(null);
-  const closeSearch = () => {
-    setSubmitted(null);
-    setShowSearch(false);
-    searchTrigger.current?.focus();
-  };
-  const searchInput = useRef<HTMLInputElement>(null);
-  const registerSearch = useContext(ReadingSearchContext)!;
-  useEffect(() => {
-    registerSearch(() => {
-      setShowSearch(true);
-      searchInput.current?.focus();
-    });
-    return () => registerSearch(null);
-  }, [registerSearch]);
-  useEffect(() => {
-    if (showSearch) searchInput.current?.focus();
-  }, [showSearch]);
-  const [query, setQuery] = useState("");
-  // 提交的查找词；`generation` 让「同一个词再按一次回车」也重新从第一页查起。
-  const [submitted, setSubmitted] = useState<{ query: string; generation: number } | null>(null);
-  // 编码或文件版本变化时，查找跟着用新参数重跑，结果不会停留在旧内容上。
-  const search = useStreamedSearch({
-    workspaceId,
-    operation: "find-text",
-    request: submitted && {
-      body: { path: info.path, query: submitted.query, encoding, version: info.version },
-      generation: submitted.generation,
-    },
-    decode: parseFindTextBatch,
-    items: (batch: FindTextBatch) => batch.matches,
-  });
-  const matches = search.items;
-  const searching = search.phase === "running";
-  const searchStatus =
-    search.phase === "running" ? "查找中…"
-      : search.phase === "complete" ? "查找完成"
-        : search.phase === "stopped" ? "已停止"
-          : search.phase === "failed" ? userErrorMessage(search.error, "查找失败")
-            : "";
-  const find = () => {
-    if (!query) {
-      setSubmitted(null);
-      return;
-    }
-    setSubmitted((previous) => ({ query, generation: (previous?.generation ?? 0) + 1 }));
-  };
+  const editor = useRef<TextViewerHandle>(null);
+  const markdownHost = useRef<HTMLDivElement>(null);
   const previousVersion = useRef(info.version);
   useEffect(() => {
     if (previousVersion.current !== info.version) {
@@ -158,6 +111,33 @@ export function TextPreview({
       });
     }
   }, [page.error, workspaceId, info.path, queryClient, setPosition]);
+  // 带行号打开（`ReadingPosition.reveal`）：整份加载的文件在源码里选中并居中；分段读取的大文件没有
+  // 行号到字节偏移的换算，只停在开头并说明。切到源码视图由 `FilePreview` 负责。
+  const reveal = position?.reveal;
+  const wholeFile = page.data?.offset === 0 && page.data.next_offset === null;
+  const [revealSkipped, setRevealSkipped] = useState(false);
+  useEffect(() => {
+    if (reveal && page.data && !wholeFile) {
+      setRevealSkipped(true);
+      setPosition(workspaceId, info.path, { reveal: undefined });
+    }
+  }, [reveal, page.data, wholeFile, workspaceId, info.path, setPosition]);
+  const find = useTextFind({
+    workspaceId,
+    info,
+    encoding,
+    rendered,
+    wholeFile,
+    contentKey: `${rendered}:${info.version}:${encoding}:${page.data?.offset}`,
+    editor,
+    markdownHost,
+    trigger: searchTrigger,
+    // 整文件查找的结果在别的分段里：切到源码、从命中处读起（只有分段读取的大文件会走到这里）。
+    onJump: (next) => {
+      if (rendered) setPreference(workspaceId, info.path, { view: "source" });
+      go(next);
+    },
+  });
   const go = (next: number) => {
     setPosition(workspaceId, info.path, {
       offset: next,
@@ -168,6 +148,7 @@ export function TextPreview({
   };
   const source = page.data && (
     <CodePreview
+      ref={editor}
       key={`${info.path}:${page.data.offset}`}
       text={page.data.text}
       name={info.name}
@@ -176,14 +157,17 @@ export function TextPreview({
         setExcerpt(null);
       }}
       wrap={wrap}
+      reveal={wholeFile ? reveal : undefined}
+      onRevealed={() => setPosition(workspaceId, info.path, { reveal: undefined })}
       scrollTop={position?.scrollTop ?? 0}
       onScroll={(scrollTop) =>
         setPosition(workspaceId, info.path, { scrollTop })
       }
     />
   );
-  const rendered = page.data && (
+  const markdown = page.data && (
     <MarkdownPreview
+      hostRef={markdownHost}
       text={page.data.text}
       onSelectText={(value) => {
         setExcerpt(value);
@@ -191,7 +175,6 @@ export function TextPreview({
       }}
       workspaceId={workspaceId}
       path={info.path}
-      open={openDocument}
       scrollTop={position?.previewScrollTop ?? 0}
       onScroll={(previewScrollTop) =>
         setPosition(workspaceId, info.path, { previewScrollTop })
@@ -203,32 +186,33 @@ export function TextPreview({
       className="flex h-full min-h-0 flex-col"
       onKeyDownCapture={(event) => {
         // 弹出层及其仍持有焦点的触发器先处理 Escape，阅读器其它区域保持原有收起查找行为。
-        if (event.key === "Escape" && showSearch &&
+        if (event.key === "Escape" && find.open &&
           event.currentTarget.contains(event.target as Node) &&
           !(event.target as HTMLElement).closest('[aria-haspopup][aria-expanded="true"]')) {
           event.preventDefault();
-          closeSearch();
+          find.close();
         }
       }}
     >
       <ReadingToolbar navigation={navigation} info={info}
-        view={<>{view}        {info.kind === "markdown" && (
-          <select
-            aria-label="Markdown 视图"
-            className="rounded border bg-background p-1"
-            value={mode}
-            onChange={(e) => setMode(e.target.value as typeof mode)}
-          >
-            <option value="source">源码</option>
-            <option value="preview">预览</option>
-            <option value="split">分栏</option>
-          </select>
-        )}
+        view={<>
+          {view}
+          {info.kind === "markdown" && page.data && (
+            <OutlineButton
+              text={page.data.text}
+              partial={!wholeFile}
+              onSelect={({ line }) => {
+                if (rendered)
+                  markdownHost.current?.querySelector(`[data-source-line="${line}"]`)?.scrollIntoView({ block: "start" });
+                else editor.current?.revealLine(line);
+              }}
+            />
+          )}
         </>}
         actions={<>
-          <TooltipIconButton ref={searchTrigger} tooltip="查找文件内容" aria-label="查找文件内容" className="size-8 shrink-0" aria-expanded={showSearch}
-            onClick={() => showSearch ? closeSearch() : setShowSearch(true)}><SearchIcon /></TooltipIconButton>
-          <SelectionActions
+          <TooltipIconButton ref={searchTrigger} tooltip="查找文件内容" aria-label="查找文件内容" className="size-8 shrink-0" aria-expanded={find.open}
+            onClick={find.toggle}><SearchIcon /></TooltipIconButton>
+          <AddToChatButton
             workspaceId={workspaceId}
             path={info.path}
             selection={selection}
@@ -236,9 +220,10 @@ export function TextPreview({
           />
         </>}
         options={<>
-          <select
+          <NativeSelect
             aria-label="文本编码"
-            className="max-w-28 rounded border bg-background p-1"
+            size="sm"
+            wrapperClassName="w-32"
             value={encoding}
             onChange={(event) => {
               setTail(false);
@@ -265,8 +250,8 @@ export function TextPreview({
             ].map((value) => (
               <option key={value}>{value}</option>
             ))}
-          </select>
-          {mode !== "preview" && (
+          </NativeSelect>
+          {!rendered && (
             <Button
               size="sm"
               variant="ghost"
@@ -279,126 +264,40 @@ export function TextPreview({
             </Button>
           )}
           <span className="text-muted-foreground">
-            {mode === "preview"
-              ? "Ctrl/Cmd+F 查找文件内容"
-              : "Ctrl/Cmd+F 全文件查找 · Alt+G 跳转当前段行"}
+            {rendered
+              ? "Ctrl/Cmd+F 查找 · Enter / Shift+Enter 下一处 / 上一处"
+              : "Ctrl/Cmd+F 查找 · Alt+G 跳转到行"}
           </span>
-
         </>}
       />
-      {showSearch && (
-        <div className="border-b p-2 text-xs">
-          <p className="mb-1 text-muted-foreground">
-            查找整个文件（包括未加载的分段），结果打开对应源码片段。
-          </p>
-          <div className="flex items-center gap-1">
-            <input
-              ref={searchInput}
-              aria-label="全文件查找"
-              placeholder="全文件查找"
-              className="min-w-0 flex-1 rounded border bg-background px-2 py-1"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") find();
-              }}
-            />
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={!query.trim()}
-              onClick={find}
-            >
-              查找
-            </Button>
-            {searching && (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={search.stop}
-              >
-                停止
-              </Button>
-            )}
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={closeSearch}
-            >
-              收起查找
-            </Button>
-          </div>
-        </div>
-      )}
-      {showSearch && searchStatus && (
-        <div className="max-h-36 shrink-0 overflow-auto border-b px-2 text-xs">
-          <p>
-            {searchStatus} · 本页 {matches.length} 处匹配{" "}
-            <button
-              onClick={() => setSubmitted(null)}
-            >
-              收起
-            </button>
-            {(search.hasPrevious || search.hasNext) && (
-              <>
-                <button
-                  className="min-h-7 px-2"
-                  disabled={!search.hasPrevious}
-                  onClick={search.previousPage}
-                >
-                  上一页
-                </button>{" "}
-                <button
-                  disabled={!search.hasNext}
-                  onClick={search.nextPage}
-                >
-                  下一页
-                </button>
-              </>
-            )}
-          </p>
-          {matches.map((match, index) => (
-            <button
-              key={index}
-              className="block w-full truncate py-1 text-left hover:bg-muted"
-              onClick={() => {
-                setMode("source");
-                go(match.offset);
-              }}
-            >
-              {match.snippet}
-            </button>
-          ))}
-        </div>
-      )}
-      {page.error ? (
-        <ErrorState
-          className="m-4"
-          message={userErrorMessage(page.error, "文本读取失败")}
-          onRetry={() => void page.refetch()}
-        />
-      ) : page.isPending ? (
-        <LoadingState label="正在读取文件…" />
-      ) : (
-        <ReferenceSelectionMenu
-          workspaceId={workspaceId}
-          input={selectedReference(info.path, selection, excerpt)}
-        >
-          <div className="flex min-h-0 flex-1">
-            {mode !== "preview" && (
-              <div className="min-h-0 min-w-0 flex-1">{source}</div>
-            )}
-            {mode !== "source" && (
-              <div className="min-h-0 min-w-0 flex-1 border-l">{rendered}</div>
-            )}
-          </div>
-        </ReferenceSelectionMenu>
-      )}
+      {/* 查找浮层挂在不随读取状态变化的容器上：换编码、换分段时查找条与输入的词都保留。 */}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        {find.overlay}
+        {page.error ? (
+          <ErrorState
+            className="m-4"
+            message={userErrorMessage(page.error, "文本读取失败")}
+            onRetry={() => void page.refetch()}
+          />
+        ) : page.isPending ? (
+          <LoadingState label="正在读取文件…" />
+        ) : (
+          <ReferenceSelectionMenu
+            workspaceId={workspaceId}
+            input={selectedReference(info.path, selection, excerpt)}
+          >
+            <div className="min-h-0 min-w-0 flex-1">{rendered ? markdown : source}</div>
+          </ReferenceSelectionMenu>
+        )}
+      </div>
       {info.size > 2 * 1024 * 1024 && (
         <div className="flex flex-wrap items-center gap-1 shrink-0 border-t px-2 py-1 text-xs">
           <span>
             分段阅读 · {page.data?.offset ?? offset} / {info.size} 字节
           </span>
+          {revealSkipped && (
+            <span className="text-muted-foreground">· 大文件不支持按行定位，已打开开头</span>
+          )}
           <Button size="sm" variant="ghost" onClick={() => go(0)}>
             开头
           </Button>

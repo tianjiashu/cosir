@@ -93,6 +93,7 @@ import { ComposerInsertionProvider } from "@/components/composer/composer-insert
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { notify } from "@/lib/notify";
+import { LinkTaskContext } from "@/components/links/use-open-link";
 
 export type ThreadProps = {
   /** 只渲染 canonical message UI，不提供写入操作。 */
@@ -199,6 +200,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
   return (
     <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, onCancelRequested, onCancelResult, cancelling, readonly }}>
       <AttachmentWorkspaceContext.Provider value={workspaceId}>
+      <LinkTaskContext.Provider value={taskId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/*
           顶部锚点固定本轮用户消息，答案在其下方增长，流式 token 不会持续把滚动位置重新
@@ -227,6 +229,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
             </div>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
+      </LinkTaskContext.Provider>
       </AttachmentWorkspaceContext.Provider>
     </ThreadContext.Provider>
   );

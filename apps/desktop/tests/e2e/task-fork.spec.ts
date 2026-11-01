@@ -2,8 +2,8 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 
 import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
+import { API_ORIGIN as origin } from "./e2e-env";
 
-const origin = "http://127.0.0.1:8000";
 const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
 /** 两轮回复：第一轮已结束（带结局），第二轮处于 `status`。 */
 const snapshot = (status: "completed" | "running" | "suspended"): TransportState => {

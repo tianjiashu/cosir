@@ -1,5 +1,8 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+
+import { createQueryClient } from "@/lib/query/query-client";
 
 import { DetailsTool } from "@/components/assistant-ui/tools/details-tool";
 
@@ -8,6 +11,7 @@ function renderDetails(
   options: { toolName?: string; presentation?: Record<string, unknown> } = {},
 ): string {
   return renderToStaticMarkup(
+    <QueryClientProvider client={createQueryClient()}>
     <DetailsTool
       type="tool-call"
       toolName={options.toolName ?? "web_search"}
@@ -23,7 +27,8 @@ function renderDetails(
         presentation: options.presentation ?? { expand_layout: "list", default_open: true },
         display_data: data,
       }}
-    />,
+    />
+    </QueryClientProvider>,
   );
 }
 

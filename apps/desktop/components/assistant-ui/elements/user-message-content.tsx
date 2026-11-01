@@ -4,7 +4,8 @@ import { Streamdown } from "streamdown";
 
 import { FileChip, SkillChip } from "@/components/composer/token-chips";
 import { MarkdownText } from "@/components/markdown-text";
-import { markdownPlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
+import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
+import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
 import { ReferenceChip } from "@/components/workspace-references/reference-chip";
 import { userMessageSegments } from "@/lib/assistant/user-message-segments";
 
@@ -20,6 +21,7 @@ export function UserMessageContent() {
   const parts = useAuiState((state) => state.message.parts) as ThreadUserMessage["content"];
   const segments = useMemo(() => userMessageSegments(parts), [parts]);
   const mermaidOptions = useMermaidOptions();
+  const components = useMarkdownLinkComponents("message");
 
   if (segments.every((segment) => segment.type === "text")) {
     return (
@@ -38,9 +40,10 @@ export function UserMessageContent() {
                 key={index}
                 mode="static"
                 plugins={markdownPlugins}
+                rehypePlugins={markdownRehypePlugins}
                 shikiTheme={["github-light", "github-dark"]}
-                linkSafety={{ enabled: true }}
                 mermaid={mermaidOptions}
+                components={components}
                 className="contents [&>p]:inline"
               >
                 {segment.text}

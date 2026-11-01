@@ -76,6 +76,9 @@ describe("command palette model", () => {
     expect(settingsKeyword.settings).toHaveLength(SYSTEM_SETTINGS_TABS.length);
     expect(settingsKeyword.actions).toEqual([]);
     expect(buildCommandPaletteModel([], "新建").actions.map((command) => command.label)).toEqual(["新对话"]);
+    // 重启后端只在调用方允许时（开发期宿主）列出。
+    expect(buildCommandPaletteModel([], "重启").actions).toEqual([]);
+    expect(buildCommandPaletteModel([], "重启", { canRestartBackend: true }).actions.map((command) => command.label)).toEqual(["重启后端"]);
     expect(buildCommandPaletteModel(workspaces, "zzz")).toEqual({ tasks: [], actions: [], settings: [] });
   });
 });

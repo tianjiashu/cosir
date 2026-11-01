@@ -1,5 +1,6 @@
 import { expect, test, type Locator } from "@playwright/test";
 import type { Editor } from "@tiptap/core";
+import { API_ORIGIN } from "./e2e-env";
 
 const placeholder = "描述要做的事，例如：帮我查找登录相关代码…";
 
@@ -39,8 +40,8 @@ for (const surface of [
 ]) {
   for (const width of [1280, 640]) {
     test(`${surface.name}输入框在 ${width}px 下占位与光标对齐，清空后恢复`, async ({ page, request }, testInfo) => {
-      await request.post("http://127.0.0.1:8000/__test__/reset");
-      await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "占位对齐回归" } });
+      await request.post(`${API_ORIGIN}/__test__/reset`);
+      await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "占位对齐回归" } });
       await page.setViewportSize({ width, height: 900 });
       await page.goto(surface.path);
       const input = page.getByRole("textbox", { name: surface.label, exact: true });

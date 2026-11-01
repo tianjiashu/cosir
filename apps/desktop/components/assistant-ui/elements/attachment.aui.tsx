@@ -12,7 +12,7 @@ import { resolveTransportImageSrc } from "@/lib/assistant/attachments/image-src"
 import { useImageGallery } from "@/components/image/image-gallery";
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
 import { ImageAttachmentStrip } from "@/components/composer/image-attachment-strip";
-import { ImageThumbnail } from "@/components/image/image-thumbnail";
+import { ImageTile } from "@/components/image/image-tile";
 import { AttachmentPicker } from "@/components/composer/attachment-picker";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
 import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
@@ -35,9 +35,11 @@ const ComposerImageAttachment: FC = () => {
   const status = useAuiState((s) => s.attachment.status);
   const failed = status.type === "incomplete" && status.reason === "error";
   return (
-    <ImageThumbnail
+    <ImageTile
+      size="compact"
       src={images.srcById.get(id)}
-      name={name}
+      alt={name}
+      title={name}
       state={status.type === "running" ? "uploading" : failed ? "error" : "ready"}
       errorMessage={failed ? (status.message ?? "上传失败") : undefined}
       onRemove={() => void aui.attachment.remove()}

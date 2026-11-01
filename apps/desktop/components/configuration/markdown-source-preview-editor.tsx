@@ -10,7 +10,8 @@ import {
   useEditorSyntaxTheme,
 } from "@/components/code-editor-theme";
 import { SegmentedControl } from "@/components/ui/segmented-control";
-import { markdownPlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
+import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
+import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
 import { handleMarkdownKeydown } from "@/components/configuration/markdown-editor-shortcuts";
 
 export type MarkdownEditorMode = "source" | "split" | "preview";
@@ -126,6 +127,7 @@ export function MarkdownSourcePreviewEditor({
 }: MarkdownSourcePreviewEditorProps) {
   const [mode, setMode] = useState<MarkdownEditorMode>(initialMode);
   const mermaidOptions = useMermaidOptions();
+  const linkComponents = useMarkdownLinkComponents("configuration", { webOnly: true });
   const source = (
     <CodeMirrorSourceEditor
       value={value}
@@ -145,9 +147,10 @@ export function MarkdownSourcePreviewEditor({
         <Streamdown
           mode="static"
           plugins={markdownPlugins}
+          rehypePlugins={markdownRehypePlugins}
           shikiTheme={["github-light", "github-dark"]}
-          linkSafety={{ enabled: true }}
           mermaid={mermaidOptions}
+          components={linkComponents}
           className="!space-y-3"
         >
           {value}

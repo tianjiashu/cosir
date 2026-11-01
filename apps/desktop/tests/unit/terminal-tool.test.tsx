@@ -8,11 +8,11 @@ type RenderOptions = {
   args?: Record<string, string>;
   display_data?: Record<string, unknown> | null;
   taskCancelling?: boolean;
-  deferred?: boolean;
+  background?: boolean;
   interactive?: boolean;
 };
 
-function renderTerminal({ status, args = {}, display_data = null, taskCancelling = false, deferred = false, interactive }: RenderOptions): string {
+function renderTerminal({ status, args = {}, display_data = null, taskCancelling = false, background = false, interactive }: RenderOptions): string {
   return renderToStaticMarkup(
     <TerminalTool
       type="tool-call"
@@ -28,7 +28,7 @@ function renderTerminal({ status, args = {}, display_data = null, taskCancelling
       taskCancelling={taskCancelling}
       interactive={interactive}
       artifact={{
-        deferred,
+        background,
         backendStatus: status,
         presentation: { verb: "运行命令", surface: "standalone", expandable: true, expand_layout: "terminal" },
         display_data,
@@ -80,12 +80,12 @@ describe("TerminalTool", () => {
     expect(html).toContain('data-terminal-failed="true"');
   });
 
-  it("marks a deferred placeholder in the header instead of a pending status", () => {
+  it("marks a background placeholder in the header instead of a pending status", () => {
     const html = renderTerminal({
       status: "pending",
       args: { command: "pnpm dev" },
       display_data: { kind: "terminal-result", command: "pnpm dev" },
-      deferred: true,
+      background: true,
     });
 
     expect(html).toContain("后台");
@@ -99,7 +99,7 @@ describe("TerminalTool", () => {
       status: "pending",
       args: { command: "make watch" },
       display_data: { kind: "terminal-result", command: "make watch", output: "step 1" },
-      deferred: true,
+      background: true,
     });
     expect(running).toContain('data-terminal-viewport="true"');
     expect(running).toContain("后台运行中");
@@ -108,14 +108,14 @@ describe("TerminalTool", () => {
       status: "completed",
       args: { command: "make" },
       display_data: { kind: "terminal-result", command: "make", output: "", exit_code: 3 },
-      deferred: true,
+      background: true,
     });
     // 结束后与前台一样收起，表头仍给出结论。
     expect(ended).toContain("exit 3");
   });
 
   it("leaves the stop action to a read-only surface's own controls", () => {
-    const html = renderTerminal({ status: "pending", deferred: true, interactive: false });
+    const html = renderTerminal({ status: "pending", background: true, interactive: false });
 
     expect(html).toContain("后台运行中");
     expect(html).not.toContain('aria-label="停止终端命令"');

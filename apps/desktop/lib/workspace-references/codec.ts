@@ -59,10 +59,16 @@ export function encodeReference(ref: WorkspaceReference): string {
   ).trimEnd();
   return `\n\n${value}\n\n`;
 }
-function decodeLink(link: Link): WorkspaceReference | null {
+/**
+ * 解析一个引用地址（`cosir-file:src/a.ts#L3-L5` 等），只校验地址本身：路径不越界、行范围有序。
+ *
+ * 用户消息解码（`decodeLink`）在此之上再要求「只有片段带行号」；对话正文的链接打开（`lib/links`）
+ * 直接用这里的结果，模型照抄引用地址时也能打开并定位。
+ */
+export function parseReferenceUrl(url: string): WorkspaceReference | null {
   const match =
     /^(cosir-file|cosir-dir|cosir-snippet|cosir-excerpt):([^#]*)(?:#L([1-9]\d*)-L([1-9]\d*))?$/.exec(
-      link.url,
+      url,
     );
   if (!match) return null;
   try {
@@ -81,9 +87,7 @@ function decodeLink(link: Link): WorkspaceReference | null {
     const endLine = match[4] ? Number(match[4]) : undefined;
     if (
       startLine &&
-      (!Number.isSafeInteger(endLine) ||
-        endLine! < startLine ||
-        kind !== "snippet")
+      (!Number.isSafeInteger(endLine) || endLine! < startLine)
     )
       return null;
     return {
@@ -94,6 +98,10 @@ function decodeLink(link: Link): WorkspaceReference | null {
   } catch {
     return null;
   }
+}
+function decodeLink(link: Link): WorkspaceReference | null {
+  const reference = parseReferenceUrl(link.url);
+  return reference?.startLine && reference.kind !== "snippet" ? null : reference;
 }
 
 /** 仅转换明确的引用链接；片段必须由独立来源段落及完整围栏组成，示例代码内部不递归解析。 */

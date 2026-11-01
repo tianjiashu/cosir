@@ -2,11 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { installFakeDesktopHost } from "./fake-desktop-host";
-
-const REAL_BACKEND = "http://127.0.0.1:8766";
+import { API_ORIGIN, REAL_BACKEND_ORIGIN as REAL_BACKEND, REAL_BACKEND_PORT } from "./e2e-env";
 
 let server: ChildProcess;
-// 真实后端夹具的工作区 id 由 SQLite 自增分配，与前端内存测试服务（8000）的
+// 真实后端夹具的工作区 id 由 SQLite 自增分配，与前端内存测试服务的
 // 固定 workspace id 无关；beforeAll 从夹具 health 读取，文件请求改写时统一映射。
 let realWorkspaceId: number;
 
@@ -18,7 +17,7 @@ async function routeFilesToRealBackend(page: import("@playwright/test").Page) {
         .request()
         .url()
         .replace(
-          /^http:\/\/127\.0\.0\.1:8000\/workspaces\/\d+\//,
+          new RegExp(`^${API_ORIGIN}/workspaces/\\d+/`),
           `${REAL_BACKEND}/workspaces/${realWorkspaceId}/`,
         ),
     }),
@@ -34,7 +33,7 @@ test.beforeAll(async ({ request }) => {
   );
   server = spawn(
     python,
-    [path.join(backend, "tests/fixtures/workspace_files_server.py")],
+    [path.join(backend, "tests/fixtures/workspace_files_server.py"), String(REAL_BACKEND_PORT)],
     { cwd: backend, stdio: "pipe" },
   );
   let output = "";
@@ -71,10 +70,12 @@ test("真实后端：内部链接、原子替换实时更新、搜索和退出",
   page,
   request,
 }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
   await routeFilesToRealBackend(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "工作区 demo", exact: true }).click();
+  // 行内「+」只在悬停时出现，先悬停工作区行。
+  await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
+  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await surface
@@ -89,9 +90,9 @@ test("真实后端：内部链接、原子替换实时更新、搜索和退出",
   });
   await expect(surface.getByText("文件已更新", { exact: true })).toBeVisible();
   await request.post(`${REAL_BACKEND}/__test__/files/delete`);
-  await expect(surface.getByRole("alert")).toContainText(
-    "文件或工作区已不存在",
-  );
+  // 真实后端返回 FILE_NOT_FOUND：中性的「文件不存在」而不是错误；文件恢复后由监听自动刷新，无需重新读取。
+  await expect(surface.getByText("文件不存在", { exact: true })).toBeVisible();
+  await expect(surface.getByRole("alert")).toHaveCount(0);
   await request.post(`${REAL_BACKEND}/__test__/files/update`);
   await expect(surface.locator(".cm-content")).toContainText("after update", {
     timeout: 10000,
@@ -114,14 +115,15 @@ test("真实后端：Markdown 相对图片更新、大文件从末尾反向阅�
   page,
   request,
 }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
   await routeFilesToRealBackend(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "工作区 demo", exact: true }).click();
+  // 行内「+」只在悬停时出现，先悬停工作区行。
+  await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
+  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await surface.getByText("README.md", { exact: true }).click();
-  await surface.getByLabel("Markdown 视图").selectOption("preview");
   const asset = surface.getByRole("img", { name: "asset", exact: true });
   await expect(asset).toBeVisible();
   await expect
@@ -175,7 +177,9 @@ async function referenceWorkspace(
   }, theme);
   await routeFilesToRealBackend(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "工作区 demo", exact: true }).click();
+  // 行内「+」只在悬停时出现，先悬停工作区行。
+  await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
+  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   return page.getByTestId("workspace-files-surface");
 }
@@ -184,7 +188,7 @@ test("引用：片段原文、打开来源、删除来源、拒绝发送保留�
   page,
   request,
 }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${REAL_BACKEND}/__test__/files/update`);
   const surface = await referenceWorkspace(page);
   await surface
@@ -195,13 +199,13 @@ test("引用：片段原文、打开来源、删除来源、拒绝发送保留�
     .locator(".cm-lineNumbers .cm-gutterElement")
     .filter({ hasText: /^1$/ })
     .click();
-  await surface.getByRole("button", { name: "引用选区", exact: true }).click();
+  await surface.getByRole("button", { name: "添加选区到对话", exact: true }).click();
   const input = page.getByLabel("新对话内容");
   const capsule = input.locator("[data-workspace-reference]");
   await expect(capsule).toHaveCount(1);
   await expect(capsule).toContainText("main.py · L1–1");
   await capsule.getByRole("button").first().click();
-  await expect(surface).toContainText("内容保存在消息正文中");
+  await expect(surface).toContainText("消息里的引用片段，不是文件当前内容");
   await surface
     .getByRole("button", { name: "打开当前文件", exact: true })
     .click();
@@ -247,7 +251,7 @@ test("引用：@ 搜索去重、设置页隐藏文件并恢复草稿", async ({
   page,
   request,
 }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${REAL_BACKEND}/__test__/files/update`);
   await referenceWorkspace(page);
   const input = page.getByLabel("新对话内容");
@@ -274,7 +278,7 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史及编辑重�
   page,
   request,
 }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
   await referenceWorkspace(page);
   const text =
     '请检查 [src/](cosir-dir:src/) [main.py](cosir-file:src/main.py)\n\n[main.py](cosir-snippet:src/main.py#L1-L2)\n\n```py\nprint("saved content")\n# [[cosir-file:example]] [[cosir-skill:example]]\n```\n\n';
@@ -343,11 +347,11 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史及编辑重�
 });
 
 test("引用：Task 混合草稿切换后恢复附件并可移除", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", {
+  await request.post(`${API_ORIGIN}/__test__/reset`);
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, {
     data: { taskId: 100, title: "混合草稿甲" },
   });
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", {
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, {
     data: { taskId: 101, title: "混合草稿乙" },
   });
   await installFakeDesktopHost(page);
@@ -398,7 +402,7 @@ test("引用：目录与文件通过右键添加、选中文本可附带问题",
   page,
   request,
 }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${REAL_BACKEND}/__test__/files/update`);
   const surface = await referenceWorkspace(page);
   await surface
@@ -439,7 +443,7 @@ for (const theme of ["light", "dark"]) {
     page,
     request,
   }, testInfo) => {
-    await request.post("http://127.0.0.1:8000/__test__/reset");
+    await request.post(`${API_ORIGIN}/__test__/reset`);
     const visibilityUrl = `${REAL_BACKEND}/workspaces/${realWorkspaceId}/files/visibility`;
     await request.patch(visibilityUrl, {
       data: {
@@ -530,7 +534,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   page,
   request,
 }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
   const api = `${REAL_BACKEND}/workspaces/${realWorkspaceId}/files/visibility`;
   const surface = await referenceWorkspace(page);
   const src = surface.getByText("src", { exact: true });

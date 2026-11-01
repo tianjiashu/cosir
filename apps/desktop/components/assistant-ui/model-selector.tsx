@@ -149,9 +149,6 @@ function SelectorView({
           <OfficialModelSelectorSearch placeholder="搜索模型…" />
           <OfficialModelSelectorList />
           <OfficialModelSelectorEffort label="推理强度" />
-          <div className="border-border/60 mt-1 border-t pt-1">
-            <ModelConfigPanel />
-          </div>
         </OfficialModelSelectorContent>
       </OfficialModelSelectorRoot>
     </div>

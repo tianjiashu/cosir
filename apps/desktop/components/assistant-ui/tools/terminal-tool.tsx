@@ -57,7 +57,7 @@ type TerminalToolProps = ToolCallMessagePartProps & {
  * 但对用户而言命令失败了），`exit 0` 与成功对勾重复，不显示。cwd、截断、超时等辅助信息
  * 收进输出下方的状态栏，不混进输出正文。
  *
- * 命令转到后台时卡片是后台占位：part 的 `deferred` 为真（所有延迟结果共用的事实，不读
+ * 命令转到后台时卡片是后台占位：part 的 `background` 为真（所有延迟结果共用的事实，不读
  * `display_data`）、状态为 `pending`，表头带「后台」标注（收起时也可见）。后台阶段输出照常实时
  * 追加，结论并入时完整输出与退出码写回卡片，所以与前台一样渲染输出；还没有输出时给一句后台状态。
  * 停止仍按 `toolCallId` 取消（后端撤销登记并杀进程树）。
@@ -75,7 +75,7 @@ export function TerminalTool({ toolName, toolCallId, args, artifact: rawArtifact
   const truncated = data.truncated === true;
   const streamTruncated = data.stream_truncated === true;
   const timedOut = data.timed_out === true;
-  const inBackground = artifact.deferred;
+  const inBackground = artifact.background;
   const status = artifact.backendStatus;
   const isActive = status === "pending" || status === "running";
   const commandFailed = status === "failed" || (exitCode !== undefined && exitCode !== 0);

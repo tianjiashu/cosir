@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { API_ORIGIN } from "./e2e-env";
 
 /**
  * 在页面脚本加载前注入一个最小的桌面宿主（`window.cosirHost`），只替代操作系统边界：
@@ -9,7 +10,7 @@ import type { Page } from "@playwright/test";
  * （粘贴、拖放测试数据）没有路径。`directory` 是目录选择框要返回的路径，null 表示用户取消。
  */
 export async function installFakeDesktopHost(page: Page, options: { directory?: string | null } = {}) {
-  await page.addInitScript(({ directory }) => {
+  await page.addInitScript(({ directory, backendBaseUrl }) => {
     // 选择框的 <input> 不一定挂在文档上，所以在读取 files 时记录，而不是监听 change 冒泡。
     const pickedFiles = new WeakSet<File>();
     const filesDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files")!;
@@ -21,7 +22,7 @@ export async function installFakeDesktopHost(page: Page, options: { directory?: 
         return files;
       },
     });
-    const snapshot = { generation: 1, status: { state: "ready" }, backendBaseUrl: "http://127.0.0.1:8000" };
+    const snapshot = { generation: 1, status: { state: "ready" }, backendBaseUrl };
     Object.assign(window, {
       cosirHost: {
         platform: "linux",
@@ -46,5 +47,5 @@ export async function installFakeDesktopHost(page: Page, options: { directory?: 
         },
       },
     });
-  }, { directory: options.directory ?? null });
+  }, { directory: options.directory ?? null, backendBaseUrl: API_ORIGIN });
 }

@@ -59,7 +59,7 @@ export const contentSearchView: DetailView = {
                 key={`${path}${line}-${index}`}
                 className={cn(TOOL_DETAIL_ROW_CLASS, isContext && "text-muted-foreground")}
               >
-                <WorkspacePathLink path={path} className="max-w-[45%] shrink-0">{path}{line}</WorkspacePathLink>
+                <WorkspacePathLink path={path} line={typeof item.line === "number" ? item.line : undefined} className="max-w-[45%] shrink-0">{path}{line}</WorkspacePathLink>
                 <span className="min-w-0 truncate font-mono">
                   {isContext ? readString(item.content, "") : <HighlightedMatch text={readString(item.content, "")} pattern={pattern} />}
                 </span>

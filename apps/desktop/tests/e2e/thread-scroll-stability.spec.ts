@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import type { TransportState } from "@/lib/assistant/contract";
 
 import { seedState } from "./transport-fixtures";
+import { API_ORIGIN as origin } from "./e2e-env";
 
 /**
  * 长对话向上滚动时，虚拟列表对 scrollTop 的被动修正量。
@@ -14,7 +15,6 @@ import { seedState } from "./transport-fixtures";
  */
 const TASK_ID = 4201;
 const OTHER_TASK_ID = 4202;
-const origin = "http://127.0.0.1:8000";
 const PAIRS = 60;
 const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
 const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };

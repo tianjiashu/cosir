@@ -3,8 +3,8 @@ import { expect, test } from "@playwright/test";
 import type { BackgroundTaskEntry } from "@/lib/assistant/contract";
 
 import { completedState, seedState } from "./transport-fixtures";
+import { API_ORIGIN as origin } from "./e2e-env";
 
-const origin = "http://127.0.0.1:8000";
 const TASK_ID = 61;
 
 function entry(toolCallId: string, overrides: Partial<BackgroundTaskEntry> = {}): BackgroundTaskEntry {
@@ -26,7 +26,7 @@ test.beforeEach(async ({ request }) => {
     1,
     { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] },
     [
-      { type: "tool-call", toolCallId: "call-bg", toolName: "terminal_read", args: {}, status: "pending", deferred: true },
+      { type: "tool-call", toolCallId: "call-bg", toolName: "terminal_read", args: {}, status: "pending", background: true },
       { type: "tool-call", toolCallId: "call-fg", toolName: "terminal_read", args: {}, status: "running" },
     ],
   ));

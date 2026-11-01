@@ -15,7 +15,7 @@ export type Crumb = { label: string; to?: string };
  *
  * 头部位于窗口最上方一行，整行是标题栏拖动区（可点击元素由 globals.css 的 app-drag-region 规则排除）。
  * 左右内边距读 `--header-inset-left/right`：由 AppLayout 按「此刻谁在窗口左上 / 右上角」
- * 换算自标题栏安全区，头部自身不判断平台与布局。
+ * （红绿灯、Windows 窗口按钮、停靠卡片）换算，头部自身不判断平台与布局。
  */
 export function PageHeader({
   crumbs,
@@ -27,7 +27,7 @@ export function PageHeader({
   crumbs: Crumb[];
   status?: ReactNode;
   actions?: ReactNode;
-  /** 标题前的控件（侧栏为图标栏时的展开开关）。 */
+  /** 面包屑前的控件（侧栏隐藏时的侧栏开关）；作为本行拖动区的后代才能被点击。 */
   leading?: ReactNode;
   className?: string;
 }) {

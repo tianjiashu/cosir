@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
+import { API_ORIGIN } from "./e2e-env";
 
 test.beforeEach(async ({ request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
 });
 
 test("Agent 工具栏拖拽、画布内编辑、多 END 落点与全屏保存", async ({ page }) => {

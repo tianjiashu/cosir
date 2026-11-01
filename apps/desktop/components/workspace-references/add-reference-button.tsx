@@ -17,12 +17,8 @@ export function AddReferenceButton({
       type="button"
       size="sm"
       variant="ghost"
-      disabled={
-        !bridge?.target ||
-        bridge.workspaceId !== workspaceId ||
-        !inputs.length
-      }
-      onClick={() => void bridge?.add(workspaceId, inputs)}
+      disabled={!bridge?.canAdd(workspaceId) || !inputs.length}
+      onClick={() => bridge?.add(workspaceId, inputs)}
     >
       <MessageSquarePlusIcon className="size-3.5" />
       {label}

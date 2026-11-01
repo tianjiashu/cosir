@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
 import { test as base, expect, type Page } from "@playwright/test";
+import { API_ORIGIN as origin } from "./e2e-env";
 
-const origin = "http://127.0.0.1:8000";
 const terminal = (status: string) => ["completed", "failed", "cancelled"].includes(status);
 /** Task 视角 snapshot：一轮回复 + 当前活动；终态时结局写在回复上。 */
 function snapshot(runId: number | null, status = "completed", text = "阅读内容") {
@@ -54,7 +54,7 @@ const test = base.extend<{ agent: Fixture }>({
       return `data: ${JSON.stringify({ kind: "full", task_id: id, state, mutations: [] })}\n\n`;
     }
     const server = createServer((req, res) => {
-      res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:4173");
+      res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Trace-Id");
       if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
       if (req.url === "/task-status/stream") {
@@ -89,7 +89,7 @@ const test = base.extend<{ agent: Fixture }>({
     const task = (id: number) => ({ task_id: id, workspace_id: 7, title: `任务${id}`, task_type: id === 100 ? "user" : "delegate_task",
       created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
     await page.route(`${origin}/workspaces/7/tasks`, route => route.fulfill({ json: [task(100)] }));
-    await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/\d+$/, route => {
+    await page.route(`${origin}/tasks/*`, route => {
       const id = Number(route.request().url().split("/").at(-1));
       return route.fulfill({ json: task(id) });
     });

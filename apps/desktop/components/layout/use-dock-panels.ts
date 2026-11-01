@@ -27,7 +27,7 @@ export function useDockPanels({ workspaceId, filesVisible, conversationTaskId }:
   conversationTaskId: number | null;
 }) {
   const selected = useDockStore((state) => state.panel);
-  const browserMaximized = useDockStore((state) => state.browserMaximized);
+  const maximized = useDockStore((state) => state.maximized);
   const workbenchSession = useWorkbenchSession(workspaceId);
   const workbenchTabs = workbenchSession.tabs;
   const pinnedBrowserTask = useBrowserPanelStore((state) => state.taskId);
@@ -47,9 +47,9 @@ export function useDockPanels({ workspaceId, filesVisible, conversationTaskId }:
     useDockStore.getState().toggle(next);
   }, []);
   const close = useCallback(() => useDockStore.getState().close(), []);
-  const toggleBrowserMaximized = useCallback(() => {
+  const toggleMaximized = useCallback(() => {
     const store = useDockStore.getState();
-    store.setBrowserMaximized(!store.browserMaximized);
+    store.setMaximized(!store.maximized);
   }, []);
   useHotkeys(APP_SHORTCUTS.toggleWorkbench.keys, () => toggle("workbench"), { ...APP_HOTKEY_OPTIONS, enabled: available.workbench }, [toggle, available.workbench]);
 
@@ -78,8 +78,9 @@ export function useDockPanels({ workspaceId, filesVisible, conversationTaskId }:
     browserTaskId,
     /** 页头地球按钮的角标：当前对话的标签数。 */
     conversationTabCount: conversationTabs.length,
-    browserMaximized: panel === "browser" && browserMaximized,
-    toggleBrowserMaximized,
+    /** 当前面板铺满对话区（主区隐藏）；面板不可显示时不算。 */
+    maximized: panel !== null && maximized,
+    toggleMaximized,
     containerRef,
     sizing,
   };

@@ -1,6 +1,6 @@
 import { ReferenceBridgeProvider, ReferenceTargetScope } from "@/components/workspace-references/reference-bridge";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Outlet,
   useLocation,
@@ -11,13 +11,15 @@ import {
 import { FolderIcon, GlobeIcon, LayoutListIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 
-import { BackendRestartButton } from "@/components/backend/restart-button";
 import { TaskRail } from "@/components/task-rail/task-rail";
 import { useTaskRail } from "@/components/task-rail/use-task-rail";
 import { TASK_RAIL_WIDTH } from "@/lib/task-rail/placement";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { BackendStatusBanner } from "@/components/backend/status-banner";
-import { AppSidebar, SidebarToggleButton, type SidebarSection } from "@/components/layout/sidebar/app-sidebar";
+import { confirmBackendRestart } from "@/components/backend/backend-restart";
+import { canRestartBackendRuntime } from "@/lib/backend/runtime-config";
+import { AppSidebar, type SidebarSection } from "@/components/layout/sidebar/app-sidebar";
+import { SidebarControls } from "@/components/layout/sidebar/sidebar-controls";
 import { PageHeader, type Crumb } from "@/components/layout/page-header";
 import { useWorkspaceActions } from "@/components/layout/use-workspace-actions";
 import { useWorkspaceCatalog, type WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
@@ -25,7 +27,7 @@ import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { findSettingsTab, SYSTEM_SETTINGS_TABS, WORKSPACE_SETTINGS_TABS } from "@/components/settings/settings-tabs";
 import { TaskPage } from "@/components/task-page";
 import { TaskRunStatusBadge } from "@/components/task-tree/task-run-status";
-import { CountBadge } from "@/components/ui/count-badge";
+import { StatusDot } from "@/components/ui/status-dot";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Workbench } from "@/components/workbench/workbench";
@@ -75,7 +77,8 @@ function parsePositiveId(value: string | undefined): number | null {
  *   inert），回来时 Assistant 会话、草稿与运行中的订阅都还在；只有进入另一个任务或新对话才替换。
  *   任务页始终由这里渲染（不经 Outlet），因此路由切换不会重建它。
  * - 未保存修改。离开配置路由（含切换配置标签）前统一经 useBlocker 询问，页面内不再各自确认。
- * - 窄屏（≤1024px）侧栏为图标栏，展开时以抽屉覆盖主区域；宽屏停靠，收起偏好持久化。
+ * - 侧栏：宽屏停靠，收起即整个隐藏（偏好持久化）；窄屏（≤1024px）平时隐藏，打开时以抽屉覆盖主区域。
+ *   开关（`SidebarControls`）钉在红绿灯右侧，不随侧栏状态移动：总是渲染在此刻左上角那一行的拖动区里。
  */
 export function AppLayout() {
   const navigate = useNavigate();
@@ -105,14 +108,15 @@ export function AppLayout() {
   const workbenchWorkspace = catalog.workspaces.find((workspace) => workspace.workspace_id === catalog.activeTaskWorkspaceId);
   const workbenchWorkspaceId = workbenchWorkspace?.workspace_id ?? null;
   // 快捷键先于导航函数注册，经 ref 调用最新的实现。
-  const startNewConversationRef = useRef<() => void>(() => undefined);
+  const startNewConversationRef = useRef<(workspaceId?: number) => void>(() => undefined);
   const actions = useWorkspaceActions(catalog, focusedTaskId);
 
-  // ---- 侧栏：宽屏停靠（可收起并记住），窄屏图标栏 + 抽屉 ----
+  // ---- 侧栏：宽屏停靠（可收起并记住），窄屏抽屉 ----
   const narrow = useMediaQuery(NARROW_VIEWPORT_QUERY);
   const dockedCollapsed = useLayoutPreferences((state) => state.sidebarCollapsed);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const sidebarRail = narrow || dockedCollapsed;
+  const sidebarDocked = !narrow && !dockedCollapsed;
+  const sidebarOpen = narrow ? drawerOpen : sidebarDocked;
   // 展开宽度是用户偏好：拖拽右缘调整，宽屏停靠与窄屏抽屉共用。
   const sidebarWidth = useLayoutPreferences((state) => state.sidebarWidth);
   const resizeSidebar = useLayoutPreferences((state) => state.setSidebarWidth);
@@ -157,9 +161,13 @@ export function AppLayout() {
   useHotkeys(APP_SHORTCUTS.commandPalette.keys, () => setPaletteOpen(true), APP_HOTKEY_OPTIONS);
 
   // ---- 导航意图 ----
-  const startNewConversation = useCallback(() => {
+  // 开始新对话的唯一入口（侧栏「新对话」与工作区「+」、⌘N、命令面板）：带工作区时先显式选中它，
+  // 不带时沿用当前选择。选中工作区只经这类显式意图改变，点侧栏工作区行不会改。
+  const { selectWorkspace } = catalog;
+  const startNewConversation = useCallback((workspaceId?: number) => {
+    if (workspaceId !== undefined) selectWorkspace(workspaceId);
     navigate("/");
-  }, [navigate]);
+  }, [navigate, selectWorkspace]);
   startNewConversationRef.current = startNewConversation;
   const selectTask = useCallback((task: { task_id: number }) => {
     navigate(`/tasks/${task.task_id}`);
@@ -191,13 +199,14 @@ export function AppLayout() {
   const showTaskLayer = section === "conversation" && routeTaskId !== null;
   const outletContext = useMemo<AppOutletContext>(() => ({ catalog, actions }), [actions, catalog]);
 
-  const sidebar = (variant: "rail" | "expanded") => (
+  // 侧栏开关只有一份状态，同一时刻只渲染在此刻左上角那一行：侧栏可见（停靠或抽屉）时在侧栏头部，否则在页面头部。
+  const sidebarControls = <SidebarControls open={sidebarOpen} onToggle={toggleSidebar} onNewConversation={() => startNewConversation()} />;
+  const sidebar = (headerControls: ReactNode) => (
     <AppSidebar
+      headerControls={headerControls}
       catalog={catalog}
       focusedTaskId={focusedTaskId}
       section={section}
-      variant={variant}
-      onToggle={toggleSidebar}
       onNewConversation={startNewConversation}
       onSelectTask={selectTask}
       onOpenSettings={() => navigate("/settings")}
@@ -214,52 +223,55 @@ export function AppLayout() {
       {/* 根是下沉的窗口底色，侧栏直接铺在上面；主区与停靠卡片在 bg-background 上，二者靠明度差分隔，不画线。 */}
       <div className="bg-canvas relative flex h-dvh min-h-0 overflow-hidden">
         <BackendStatusBanner />
-        <aside
-          style={sidebarRail ? undefined : { width: sidebarWidth }}
-          className={cn(
-            "relative flex min-h-0 shrink-0 flex-col",
-            sidebarRail && "w-14",
-            // 收起 / 展开有过渡；拖拽调宽时关掉，否则宽度追着指针慢半拍。
-            !narrow && "transition-[width] duration-200 motion-reduce:transition-none [&:has(>[role=separator]:active)]:transition-none",
-          )}
-        >
-          {sidebar(sidebarRail ? "rail" : "expanded")}
-          {!sidebarRail && (
-            <PanelResizeHandle
-              className="absolute inset-y-0 -right-1 bg-transparent [&>svg]:opacity-0 hover:[&>svg]:opacity-100 focus-visible:[&>svg]:opacity-100"
-              label="调整侧栏宽度"
-              value={sidebarWidth}
-              min={SIDEBAR_WIDTH.min}
-              max={SIDEBAR_WIDTH.max}
-              onChange={resizeSidebar}
-            />
-          )}
-        </aside>
+        {/* 收起时宽度过渡到 0 而不是卸载：有收起动画，侧栏滚动位置与展开状态也保留；inert 让它不可聚焦。 */}
+        {!narrow && (
+          <aside
+            style={{ width: sidebarDocked ? sidebarWidth : 0 }}
+            inert={!sidebarDocked}
+            className={cn(
+              "relative flex min-h-0 shrink-0 flex-col",
+              // 拖拽调宽时关掉过渡，否则宽度追着指针慢半拍。
+              "transition-[width] duration-200 motion-reduce:transition-none [&:has(>[role=separator]:active)]:transition-none",
+            )}
+          >
+            {sidebar(sidebarDocked ? sidebarControls : null)}
+            {sidebarDocked && (
+              <PanelResizeHandle
+                className="absolute inset-y-0 -right-1 bg-transparent [&>svg]:opacity-0 hover:[&>svg]:opacity-100 focus-visible:[&>svg]:opacity-100"
+                label="调整侧栏宽度"
+                value={sidebarWidth}
+                min={SIDEBAR_WIDTH.min}
+                max={SIDEBAR_WIDTH.max}
+                onChange={resizeSidebar}
+              />
+            )}
+          </aside>
+        )}
         {narrow && drawerOpen && (
           <>
             <div className="absolute inset-0 z-40 bg-black/20" aria-hidden="true" onClick={() => setDrawerOpen(false)} />
             <aside style={{ width: sidebarWidth }} className="bg-canvas absolute inset-y-0 left-0 z-50 flex min-h-0 flex-col shadow-xl" aria-label="侧栏">
-              {sidebar("expanded")}
+              {sidebar(sidebarControls)}
             </aside>
           </>
         )}
 
         {/*
           页面头部让位：右上角有工作台卡片时由卡片标签行让位，否则头部让位（以 DOM 中是否
-          渲染了工作台为准，工作台自身还有多种不渲染的情形）；侧栏为 56px 图标栏时红绿灯越过
-          图标栏，头部左侧补足差值。安全区为 0 的平台上两者都退回头部默认内边距。
+          渲染了工作台为准，工作台自身还有多种不渲染的情形）；侧栏不停靠时头部就是左上角那一行，
+          左侧让出红绿灯（与侧栏头部同一内边距，侧栏开关因此不移位）。
         */}
         <div
           ref={dock.containerRef}
           className={cn(
             "bg-background flex min-h-0 min-w-0 flex-1 [--header-inset-right:var(--titlebar-inset-right)] has-[[data-dock-panel]]:[--header-inset-right:0px]",
-            sidebarRail && "[--header-inset-left:calc(var(--titlebar-inset-left)-3rem)]",
+            !sidebarDocked && "[--header-inset-left:var(--titlebar-inset-left)]",
           )}
         >
         {/* 浏览器铺满时对话区让出整行；用 hidden 而不是卸载：任务页与 Assistant runtime 保持挂载。 */}
-        <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col", dock.browserMaximized && "hidden")}>
+        <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col", dock.maximized && "hidden")}>
           <PageHeader
-            leading={sidebarRail ? <SidebarToggleButton collapsed onToggle={toggleSidebar} /> : undefined}
+            leading={sidebarOpen ? undefined : sidebarControls}
             crumbs={crumbs}
             status={showTaskLayer ? <TaskRunStatusBadge status={activeTaskStatus} /> : undefined}
             actions={(
@@ -267,7 +279,7 @@ export function AppLayout() {
                 {conversationTaskId !== null && (
                   <TooltipIconButton
                     tooltip={withShortcut(
-                      [terminalPanelOpen ? "收起终端" : "打开终端", terminalBadge.hint].filter(Boolean).join(" · "),
+                      [terminalPanelOpen ? "收起终端" : "打开终端", terminalBadge.count > 0 && `${terminalBadge.count} 个会话`, terminalBadge.hint].filter(Boolean).join(" · "),
                       "toggleTerminal",
                     )}
                     aria-label={`终端，${terminalBadge.count} 个运行中会话${terminalBadge.hint ? `，${terminalBadge.hint}` : ""}，${terminalPanelOpen ? "点击收起" : "点击打开"}`}
@@ -276,23 +288,18 @@ export function AppLayout() {
                     onClick={toggleTerminal}
                   >
                     <SquareTerminalIcon />
-                    {(terminalBadge.count > 0 || terminalBadge.tone !== null) && (
-                      <CountBadge data-terminal-badge={terminalBadge.tone ?? "none"} tone={terminalBadge.tone === "attention" ? "attention" : "default"}>
-                        {terminalBadge.count > 0 ? terminalBadge.count : "!"}
-                      </CountBadge>
-                    )}
+                    {terminalBadge.tone === "attention" && <StatusDot tone="attention" />}
                   </TooltipIconButton>
                 )}
                 {conversationTaskId !== null && desktopHost !== null && (
                   <TooltipIconButton
-                    tooltip={dock.panel === "browser" ? "收起浏览器" : "打开浏览器"}
+                    tooltip={[dock.panel === "browser" ? "收起浏览器" : "打开浏览器", dock.conversationTabCount > 0 && `${dock.conversationTabCount} 个标签页`].filter(Boolean).join(" · ")}
                     aria-label={`浏览器，${dock.conversationTabCount} 个标签页，${dock.panel === "browser" ? "点击收起" : "点击打开"}`}
                     aria-pressed={dock.panel === "browser"}
-                    className={cn("relative size-7", dock.panel === "browser" && "bg-muted text-foreground")}
+                    className={cn("size-7", dock.panel === "browser" && "bg-muted text-foreground")}
                     onClick={() => dock.toggle("browser")}
                   >
                     <GlobeIcon />
-                    {dock.conversationTabCount > 0 && <CountBadge>{dock.conversationTabCount}</CountBadge>}
                   </TooltipIconButton>
                 )}
                 {dock.available.files && (
@@ -309,30 +316,27 @@ export function AppLayout() {
                 {conversationTaskId !== null && (
                   <TooltipIconButton
                     ref={rail.buttonRef}
-                    tooltip={withShortcut(rail.open ? "收起会话侧栏" : "打开会话侧栏", "toggleTaskRail")}
+                    tooltip={withShortcut([rail.open ? "收起会话侧栏" : "打开会话侧栏", rail.runningCount > 0 && `${rail.runningCount} 个后台任务运行中`].filter(Boolean).join(" · "), "toggleTaskRail")}
                     aria-label={`会话侧栏，${rail.runningCount} 个后台任务运行中`}
                     aria-pressed={rail.open}
                     className={cn("relative size-7", rail.open && "bg-muted text-foreground")}
                     onClick={rail.toggle}
                   >
                     <LayoutListIcon />
-                    {rail.runningCount > 0 && <CountBadge>{rail.runningCount}</CountBadge>}
+                    {rail.runningCount > 0 && <StatusDot tone="activity" />}
                   </TooltipIconButton>
                 )}
                 {dock.available.workbench && (
                   <TooltipIconButton
-                    tooltip={withShortcut(dock.panel === "workbench" ? "收起工作台" : "打开工作台", "toggleWorkbench")}
+                    tooltip={withShortcut(`${dock.panel === "workbench" ? "收起工作台" : "打开工作台"} · ${dock.workbenchTabs.length} 个标签`, "toggleWorkbench")}
                     aria-label={`工作台，${dock.workbenchTabs.length} 个标签，${dock.panel === "workbench" ? "点击收起" : "点击打开"}`}
                     aria-pressed={dock.panel === "workbench"}
-                    className={cn("relative size-7", dock.panel === "workbench" && "bg-muted text-foreground")}
+                    className={cn("size-7", dock.panel === "workbench" && "bg-muted text-foreground")}
                     onClick={() => dock.toggle("workbench")}
                   >
                     <PanelRightIcon />
-                    {/* 标签数作为角标：图标化后仍能一眼看出工作台里有几样东西。 */}
-                    <CountBadge>{dock.workbenchTabs.length}</CountBadge>
                   </TooltipIconButton>
                 )}
-                <BackendRestartButton />
               </>
             )}
           />
@@ -399,11 +403,12 @@ export function AppLayout() {
               sizing={dock.sizing} onRequestClose={dock.close} />
           )}
           {dock.sizing && dock.panel === "files" && workbenchWorkspace && (
-            <FilesPanel workspace={workbenchWorkspace} sizing={dock.sizing} onClose={dock.close} />
+            <FilesPanel workspace={workbenchWorkspace} sizing={dock.sizing}
+              maximized={dock.maximized} onToggleMaximized={dock.toggleMaximized} onClose={dock.close} />
           )}
           {dock.sizing && dock.panel === "browser" && (
             <BrowserPanel taskId={dock.browserTaskId} sizing={dock.sizing}
-              maximized={dock.browserMaximized} onToggleMaximized={dock.toggleBrowserMaximized} onClose={dock.close} />
+              maximized={dock.maximized} onToggleMaximized={dock.toggleMaximized} onClose={dock.close} />
           )}
         </IsolatedRegion>
         </div>
@@ -415,6 +420,7 @@ export function AppLayout() {
         onSelectTask={selectTask}
         onNewConversation={() => startNewConversationRef.current()}
         onNavigate={navigate}
+        onRestartBackend={canRestartBackendRuntime() ? () => confirmBackendRestart("command_palette") : undefined}
       />
     </WorkbenchProvider></ReferenceBridgeProvider>
   );

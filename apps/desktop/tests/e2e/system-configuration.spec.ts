@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
+import { API_ORIGIN } from "./e2e-env";
 
 test.beforeEach(async ({ request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
 });
 
 test("系统配置入口固定在左侧栏底部", async ({ page }) => {
@@ -42,7 +43,7 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
       ? route.fulfill({ json: [reviewer] })
       : route.fulfill({ json: reviewer })
   ));
-  await page.route("http://127.0.0.1:8000/configuration/global-instructions", (route) => route.fulfill({
+  await page.route(`${API_ORIGIN}/configuration/global-instructions`, (route) => route.fulfill({
     json: {
       content: "# 本机约束",
       path: ".cosir/AGENTS.md",
@@ -51,7 +52,7 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
       effective_on: "next_run",
     },
   }));
-  await page.route("http://127.0.0.1:8000/configuration/main-agent-prompt", (route) => route.fulfill({
+  await page.route(`${API_ORIGIN}/configuration/main-agent-prompt`, (route) => route.fulfill({
     json: {
       content: "# 主 Agent 协议",
       path: ".cosir/main_agent_system_prompt.md",
@@ -62,13 +63,13 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
     },
   }));
   let terminalPatterns = ["\\brm\\b"];
-  await page.route("http://127.0.0.1:8000/configuration/terminal-denylist", (route) => {
+  await page.route(`${API_ORIGIN}/configuration/terminal-denylist`, (route) => {
     if (route.request().method() === "PUT") {
       terminalPatterns = (route.request().postDataJSON() as { patterns: string[] }).patterns;
     }
     return route.fulfill({ json: { patterns: terminalPatterns } });
   });
-  await page.route("http://127.0.0.1:8000/configuration/environment", (route) => route.fulfill({
+  await page.route(`${API_ORIGIN}/configuration/environment`, (route) => route.fulfill({
     json: {
       groups: [{
         id: "web",
@@ -99,10 +100,12 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
 
   await page.goto("/settings");
 
-  // /settings 重定向到第一个分类；页面标题由统一的页面头部面包屑承担。
-  await expect(page).toHaveURL(/\/settings\/agents$/);
-  await expect(page.getByRole("navigation", { name: "当前位置" })).toContainText("系统配置");
+  // /settings 重定向到导航的第一个分类（不绑定是哪一个，顺序归 settings-tabs）；页面标题由统一的页面头部面包屑承担。
   const settingsNav = page.getByRole("navigation", { name: "系统配置分类" });
+  await expect(settingsNav.getByRole("link").first()).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("navigation", { name: "当前位置" })).toContainText("系统配置");
+  await settingsNav.getByRole("link", { name: "子 Agent" }).click();
+  await expect(page).toHaveURL(/\/settings\/agents$/);
   await expect(page.getByText("集中管理子 Agent、全局指令与运行环境。敏感值只在本机配置文件中保存，不会进入对话或日志。", { exact: true })).toHaveCount(0);
   await expect(settingsNav.getByRole("link", { name: "子 Agent" })).toBeVisible();
   await expect(settingsNav.getByRole("link", { name: "全局 AGENTS.md" })).toBeVisible();

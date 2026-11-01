@@ -2,11 +2,12 @@ import { expect, test } from "@playwright/test";
 
 import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
+import { API_ORIGIN } from "./e2e-env";
 
 const emptyState = (): TransportState => ({ title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [] });
 
 test.beforeEach(async ({ request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
 });
 
 test("直接打开不存在的 Task 会显示错误而不是永久等待", async ({ page }) => {
@@ -17,8 +18,8 @@ test("直接打开不存在的 Task 会显示错误而不是永久等待", async
 });
 
 test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输入", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "拒绝发送回归" } });
-  await page.route("http://127.0.0.1:8000/tasks/42/messages", async (route) => {
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "拒绝发送回归" } });
+  await page.route(`${API_ORIGIN}/tasks/42/messages`, async (route) => {
     await route.fulfill({
       status: 400,
       contentType: "application/json",
@@ -44,7 +45,7 @@ test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输�
 });
 
 test("工具追踪视觉回归：Reasoning 和工具组都有图标且完成后收起", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-tool-trace");
+  await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
   await page.goto("/tasks/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
@@ -54,7 +55,8 @@ test("工具追踪视觉回归：Reasoning 和工具组都有图标且完成后�
   await expect(assistant.locator('[data-slot="tool-group-trigger-icon"]')).toHaveCount(1);
   await expect(assistant.getByText("先分析项目结构", { exact: true })).toHaveCount(0);
   await expect(assistant.getByText("读取文件", { exact: true })).toHaveCount(0);
-  await expect(assistant).toHaveScreenshot("assistant-tool-trace.png", { animations: "disabled" });
+  // 图标有无与收起状态已由上面的 DOM 断言兜住；截图只守整体外观，容忍浏览器重装带来的少量抗锯齿像素差异。
+  await expect(assistant).toHaveScreenshot("assistant-tool-trace.png", { animations: "disabled", maxDiffPixels: 20 });
 
   await assistant.getByRole("button", { name: /2 个工具调用 · 全部成功/ }).click();
   await expect(assistant.getByText("读取文件", { exact: true })).toBeVisible();
@@ -63,7 +65,7 @@ test("工具追踪视觉回归：Reasoning 和工具组都有图标且完成后�
 });
 
 test("网页搜索结果只显示标题并保留标题链接", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-web-search");
+  await request.post(`${API_ORIGIN}/__test__/seed-web-search`);
   await page.goto("/tasks/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
@@ -75,7 +77,7 @@ test("网页搜索结果只显示标题并保留标题链接", async ({ page, re
 });
 
 test("Mermaid 时序图全屏后仍保留可见 SVG", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-mermaid");
+  await request.post(`${API_ORIGIN}/__test__/seed-mermaid`);
   await page.goto("/tasks/42");
 
   const diagram = page.locator('[data-streamdown="mermaid-block"]').last();
@@ -99,7 +101,7 @@ test("Mermaid 时序图全屏后仍保留可见 SVG", async ({ page, request }) 
 });
 
 test("Reasoning 在真实流式完成后自动收起且仍可手动展开", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "Reasoning 状态回归" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "Reasoning 状态回归" } });
   await page.goto("/tasks/42");
   await expect(page.getByLabel("消息输入")).toBeVisible();
 
@@ -113,7 +115,7 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
 
   await expect(assistant.getByText("streaming response", { exact: true })).toBeVisible({ timeout: 5_000 });
   await expect.poll(async () => {
-    const response = await request.get("http://127.0.0.1:8000/__test__/telemetry");
+    const response = await request.get(`${API_ORIGIN}/__test__/telemetry`);
     const telemetry = await response.json() as { completedStreamCount: number };
     return telemetry.completedStreamCount;
   }).toBeGreaterThan(0);
@@ -124,7 +126,7 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
 });
 
 test("工具运行中保持静态状态行，完成拿到展示数据后才可展开且默认收起", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "工具生命周期回归" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "工具生命周期回归" } });
   await page.goto("/tasks/42");
   await page.getByLabel("消息输入").fill("tool-lifecycle");
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -143,7 +145,7 @@ test("工具运行中保持静态状态行，完成拿到展示数据后才可�
 });
 
 test("失败的工具在流结束后显示失败而不是执行中", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "失败工具生命周期回归" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "失败工具生命周期回归" } });
   await page.goto("/tasks/42");
   await page.getByLabel("消息输入").fill("tool-lifecycle-failed");
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -156,7 +158,7 @@ test("失败的工具在流结束后显示失败而不是执行中", async ({ pa
 });
 
 test("取消的工具在流结束后显示已取消而不是执行中", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "取消工具生命周期回归" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "取消工具生命周期回归" } });
   await page.goto("/tasks/42");
   await page.getByLabel("消息输入").fill("tool-lifecycle-cancelled");
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -169,7 +171,7 @@ test("取消的工具在流结束后显示已取消而不是执行中", async ({
 });
 
 test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage footer", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "用量展示回归" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "用量展示回归" } });
   await page.goto("/tasks/42");
   const input = page.getByLabel("消息输入");
   const contextMeter = page.getByTestId("task-context-usage");
@@ -221,8 +223,8 @@ test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage foo
 });
 
 test("侧栏任务列表失败时不阻塞已确认 Task 的 Assistant", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 104, title: "侧栏失败任务" } });
-  await page.route("http://127.0.0.1:8000/workspaces/7/tasks", (route) => route.fulfill({ status: 503, body: "sidebar unavailable" }));
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 104, title: "侧栏失败任务" } });
+  await page.route(`${API_ORIGIN}/workspaces/7/tasks`, (route) => route.fulfill({ status: 503, body: "sidebar unavailable" }));
 
   await page.goto("/tasks/104");
 
@@ -231,7 +233,7 @@ test("侧栏任务列表失败时不阻塞已确认 Task 的 Assistant", async (
 });
 
 test("侧栏点击 Task 会同步渲染进程内部路由", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "路由回归任务" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "路由回归任务" } });
   await page.addInitScript(() => window.localStorage.clear());
 
   await page.goto("/");
@@ -245,16 +247,16 @@ test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", 
     { workspace_id: 7, name: "workspace-a", root_path: "C:/a", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" },
     { workspace_id: 8, name: "workspace-b", root_path: "C:/b", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" },
   ];
-  await page.route("http://127.0.0.1:8000/workspaces", (route) => route.fulfill({ json: workspaces }));
-  await page.route("http://127.0.0.1:8000/workspaces/7/tasks", (route) => route.fulfill({ json: [{ task_id: 42, workspace_id: 7, title: "任务 A", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
-  await page.route("http://127.0.0.1:8000/workspaces/8/tasks", (route) => route.fulfill({ json: [{ task_id: 43, workspace_id: 8, title: "任务 B", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
-  await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)$/, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
+  await page.route(`${API_ORIGIN}/workspaces`, (route) => route.fulfill({ json: workspaces }));
+  await page.route(`${API_ORIGIN}/workspaces/7/tasks`, (route) => route.fulfill({ json: [{ task_id: 42, workspace_id: 7, title: "任务 A", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
+  await page.route(`${API_ORIGIN}/workspaces/8/tasks`, (route) => route.fulfill({ json: [{ task_id: 43, workspace_id: 8, title: "任务 B", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
+  await page.route(`${API_ORIGIN}/tasks/{42,43}`, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
   // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
   for (const taskId of [42, 43]) await seedState(request, taskId, emptyState());
-  await page.route("http://127.0.0.1:8000/model-configs", (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
+  await page.route(`${API_ORIGIN}/model-configs`, (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
   // Task 由路径寻址，workspace 归属由后端从 Task 事实解析；这里只需核对请求命中的 Task。
   const requestUrls: string[] = [];
-  await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/\d+\/messages$/, async (route) => {
+  await page.route(`${API_ORIGIN}/tasks/*/messages`, async (route) => {
     requestUrls.push(route.request().url());
     await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "TASK_WORKSPACE_MISMATCH", message: "mismatch", retryable: false } }) });
   });
@@ -281,20 +283,20 @@ test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", 
 });
 
 test("同一侧栏内切换 Task 不会重新加载整个侧栏", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "任务 A" } });
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 43, title: "任务 B" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "任务 A" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 43, title: "任务 B" } });
 
   let workspaceRequestCount = 0;
   let workspaceTaskRequestCount = 0;
-  await page.route("http://127.0.0.1:8000/workspaces", async (route) => {
+  await page.route(`${API_ORIGIN}/workspaces`, async (route) => {
     workspaceRequestCount += 1;
     await route.continue();
   });
-  await page.route("http://127.0.0.1:8000/workspaces/7/tasks", async (route) => {
+  await page.route(`${API_ORIGIN}/workspaces/7/tasks`, async (route) => {
     workspaceTaskRequestCount += 1;
     await route.continue();
   });
-  await page.route("http://127.0.0.1:8000/model-configs", (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
+  await page.route(`${API_ORIGIN}/model-configs`, (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem("cosir:model-config-selection:task:42", JSON.stringify({ modelConfigId: 2, reasoningEffort: null }));
@@ -314,12 +316,12 @@ test("同一侧栏内切换 Task 不会重新加载整个侧栏", async ({ page,
 });
 
 test("Assistant Transport 会展示后端结构化错误", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 103, title: "错误回归任务" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 103, title: "错误回归任务" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem("cosir:model-config-selection:task:103", JSON.stringify({ modelConfigId: 2, reasoningEffort: null }));
   });
-  await page.route("http://127.0.0.1:8000/tasks/103/messages", (route) => route.fulfill({
+  await page.route(`${API_ORIGIN}/tasks/103/messages`, (route) => route.fulfill({
     status: 400,
     contentType: "application/json",
     body: JSON.stringify({ detail: { error: { code: "MODEL_SELECTION_REQUIRED", message: "请先选择模型和模型提供商", retryable: false } } }),
@@ -339,21 +341,21 @@ test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace �
   let workspaceLoadCount = 0;
   const workspaceA = { workspace_id: 7, name: "workspace-a", root_path: "C:/a", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" };
   const workspaceB = { workspace_id: 8, name: "workspace-b", root_path: "C:/b", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" };
-  await page.route("http://127.0.0.1:8000/workspaces", async (route) => {
+  await page.route(`${API_ORIGIN}/workspaces`, async (route) => {
     workspaceLoadCount += 1;
     if (workspaceLoadCount === 1) return route.fulfill({ json: [workspaceA] });
     await new Promise((resolve) => setTimeout(resolve, 300));
     return route.fulfill({ json: [workspaceA, workspaceB] });
   });
-  await page.route("http://127.0.0.1:8000/workspaces/7/tasks", (route) => route.fulfill({ json: [{ task_id: 42, workspace_id: 7, title: "任务 A", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
-  await page.route("http://127.0.0.1:8000/workspaces/8/tasks", (route) => route.fulfill({ json: [{ task_id: 43, workspace_id: 8, title: "任务 B", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
-  await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/(42|43)$/, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
+  await page.route(`${API_ORIGIN}/workspaces/7/tasks`, (route) => route.fulfill({ json: [{ task_id: 42, workspace_id: 7, title: "任务 A", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
+  await page.route(`${API_ORIGIN}/workspaces/8/tasks`, (route) => route.fulfill({ json: [{ task_id: 43, workspace_id: 8, title: "任务 B", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
+  await page.route(`${API_ORIGIN}/tasks/{42,43}`, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
   // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
   for (const taskId of [42, 43]) await seedState(request, taskId, emptyState());
-  await page.route("http://127.0.0.1:8000/model-configs", (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
+  await page.route(`${API_ORIGIN}/model-configs`, (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
   // Task 由路径寻址，workspace 归属由后端从 Task 事实解析；这里只需核对请求命中的 Task。
   const requestUrls: string[] = [];
-  await page.route(/http:\/\/127\.0\.0\.1:8000\/tasks\/\d+\/messages$/, async (route) => {
+  await page.route(`${API_ORIGIN}/tasks/*/messages`, async (route) => {
     requestUrls.push(route.request().url());
     await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: { error: { code: "TASK_WORKSPACE_MISMATCH", message: "mismatch", retryable: false } } }) });
   });

@@ -53,7 +53,8 @@ function isAbnormalTerminalEnd(session: Pick<TerminalSessionEntry, "status" | "e
 }
 
 /**
- * 页头终端入口的角标：数字是活跃会话数，色调与提示让面板收起时也能看出终端在发生什么。
+ * 页头终端入口的状态：会话数写进入口的 tooltip 与无障碍标签（不画数字角标），`attention` 时画红点，
+ * 让面板收起时也能看出终端需要处理。
  *
  * - `attention`：有用户还没看过的异常结束（打开面板即视为看过，见 store 的 `acknowledgedEnds`）；
  * - `null`：无需提醒。

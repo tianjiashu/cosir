@@ -1,6 +1,6 @@
-import path from "node:path";
 import { Menu, nativeImage, Tray } from "electron";
 
+import { iconPath } from "./app-icon";
 import { logDesktopEvent } from "./desktop-log";
 
 /** 托盘对象必须一直被引用，否则被垃圾回收后图标会从系统托盘消失。 */
@@ -14,7 +14,8 @@ let tray: Tray | null = null;
  */
 export function installTray({ show, quit }: { show: () => void; quit: () => void }): void {
   const iconName = process.platform === "darwin" ? "tray-macos.png" : "tray-windows.png";
-  const icon = nativeImage.createFromPath(path.join(__dirname, "resources", "icons", iconName));
+  // 同目录的 `@2x` 由 nativeImage 按屏幕倍率自动选用。
+  const icon = nativeImage.createFromPath(iconPath(iconName));
   // macOS 菜单栏图标用模板图，跟随系统明暗自动着色。
   if (process.platform === "darwin") icon.setTemplateImage(true);
   tray = new Tray(icon);

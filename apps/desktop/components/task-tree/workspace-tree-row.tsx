@@ -1,8 +1,7 @@
 import { createContext, useContext, type ReactNode } from "react";
-import { ChevronDownIcon, ChevronRightIcon, FolderIcon, GitForkIcon, PinIcon, Settings2Icon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, FolderIcon, GitForkIcon, PinIcon } from "lucide-react";
 import type { NodeApi, NodeRendererProps, RowRendererProps } from "react-arborist";
 
-import { Button } from "@/components/ui/button";
 import { formatRelativeTime } from "@/lib/format/relative-time";
 import { cn } from "@/lib/utils";
 import { TaskRunStatusDot } from "./task-run-status";
@@ -53,8 +52,8 @@ function sidebarNodeLabel(item: WorkspaceSidebarNode): string {
 
 const PINNED_GROUP_LABEL = "置顶";
 
+/** 行尾操作全部由侧栏装配；树只负责摆放与键盘交互，不知道具体有哪些操作。 */
 type RowActions = {
-  onOpenWorkspaceSettings: (workspaceId: number) => void;
   renderWorkspaceActions: (workspace: WorkspaceTreeSource, tabIndex: number) => ReactNode;
   renderTaskActions: (item: TaskSidebarNode, tabIndex: number) => ReactNode;
 };
@@ -64,7 +63,7 @@ export const WorkspaceTreeActionsContext = createContext<RowActions | null>(null
 
 export function WorkspaceTreeNode({ node, style }: NodeRendererProps<WorkspaceSidebarNode>) {
   // 此 renderer 始终由 WorkspaceTree 的 Provider 装配。
-  const { onOpenWorkspaceSettings, renderWorkspaceActions, renderTaskActions } = useContext(WorkspaceTreeActionsContext)!;
+  const { renderWorkspaceActions, renderTaskActions } = useContext(WorkspaceTreeActionsContext)!;
   const item = node.data;
   // 只让焦点行的操作进入 Tab 序列，方向键移动仍交给 react-arborist。
   const tabIndex = node.isFocused ? 0 : -1;
@@ -94,36 +93,29 @@ export function WorkspaceTreeNode({ node, style }: NodeRendererProps<WorkspaceSi
   }
   if (item.kind === "workspace") {
     const workspace = item.workspace;
+    // 工作区行只展开 / 收起：选中哪个工作区由「+」、新对话页的选择器或打开任务显式决定，点击行不改选择。
     return (
       <div style={style} className="workspace-tree-node">
         <button
           type="button"
           tabIndex={tabIndex}
-          className="focus-ring flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
+          className="focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 text-left text-sm"
           aria-expanded={node.isOpen}
-          aria-label={`${node.isOpen ? "收起" : "展开"}工作区 ${workspace.name}`}
+          aria-label={`工作区 ${workspace.name}，${node.isOpen ? "点击收起" : "点击展开"}`}
+          title={workspace.name}
           onClick={(event) => { event.stopPropagation(); node.toggle(); }}
         >
-          {node.isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
-        </button>
-        <button
-          type="button"
-          tabIndex={tabIndex}
-          className="focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 text-left text-sm"
-          aria-label={`工作区 ${workspace.name}`}
-          title={workspace.name}
-          onClick={(event) => { event.stopPropagation(); node.activate(); }}
-        >
-          <FolderIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="flex size-7 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
+            {node.isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
+          </span>
+          <FolderIcon className="-ml-2 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <span className="workspace-tree-title truncate">{workspace.name}</span>
-          <span className="shrink-0 text-xs font-normal tabular-nums text-muted-foreground" aria-label={`${workspace.tasks.length} 个任务`}>{workspace.tasks.length}</span>
         </button>
         {workspace.taskLoadError && <span className="shrink-0 text-xs text-destructive" title={workspace.taskLoadError}>加载失败</span>}
-        <div className="workspace-tree-workspace-actions workspace-tree-actions" onClick={(event) => event.stopPropagation()}>
-          <Button variant="ghost" size="icon-sm" tabIndex={tabIndex} className="text-muted-foreground" aria-label={`工作区配置：${workspace.name}`} title={`配置 ${workspace.name}`} onClick={() => onOpenWorkspaceSettings(workspace.workspace_id)}>
-            <Settings2Icon className="size-4" />
-          </Button>
-          {renderWorkspaceActions(workspace, tabIndex)}
+        {/* 任务数与行内操作叠在同一格，悬停或聚焦时换成操作（与任务行的时间 / 操作同一做法）。 */}
+        <div className="workspace-tree-task-tail">
+          <span className="workspace-tree-time pr-1 text-xs tabular-nums text-muted-foreground" aria-label={`${workspace.tasks.length} 个任务`}>{workspace.tasks.length}</span>
+          <div className="workspace-tree-actions" onClick={(event) => event.stopPropagation()}>{renderWorkspaceActions(workspace, tabIndex)}</div>
         </div>
       </div>
     );

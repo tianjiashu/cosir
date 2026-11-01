@@ -35,7 +35,7 @@ describe("workspace file sessions", () => {
   it("阅读偏好跨关闭与重新打开保留，关闭工作区后释放", () => {
     const store = useFilesStore.getState();
     store.open(1, "README.md", true);
-    store.preference(1, "README.md", { mode: "split", wrap: true });
+    store.preference(1, "README.md", { view: "source", wrap: true });
     store.position(1, "README.md", { previewScrollTop: 180 });
     store.open(1, "main.py");
     expect(fileSession(useFilesStore.getState().sessions, 1).browsing).toBe(
@@ -51,7 +51,7 @@ describe("workspace file sessions", () => {
       fileSession(useFilesStore.getState().sessions, 1).preferences[
         "README.md"
       ],
-    ).toEqual({ mode: "split", wrap: true });
+    ).toEqual({ view: "source", wrap: true });
     store.forget(1);
     expect(
       fileSession(useFilesStore.getState().sessions, 1).preferences,

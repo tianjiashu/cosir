@@ -1,8 +1,8 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 import { seedState } from "./transport-fixtures";
+import { API_ORIGIN as origin, WEB_ORIGIN } from "./e2e-env";
 
-const origin = "http://127.0.0.1:8000";
 const longTitle = "检查工作区任务列表中的超长中文标题与EnglishIdentifierWithoutSpaces".repeat(3);
 const workspaceName = "cosir-用于验证长名称的本地工作区";
 
@@ -146,6 +146,23 @@ for (const theme of ["light", "dark"]) {
     await expect(page).toHaveURL(/\/tasks\/102$/);
   });
 }
+
+test("点工作区行只展开收起、不改选中工作区；「+」在该工作区开始新对话", async ({ page, request }) => {
+  await seedSidebar(page, request, "light");
+  await page.goto("/tasks/100");
+  const other = row(page, "其他工作区");
+  await other.click();
+  await expect(page).toHaveURL(/\/tasks\/100$/);
+  // 行点击不再悄悄改写选中工作区：回到新对话页仍是上次的工作区。
+  await page.getByRole("button", { name: "新对话", exact: true }).click();
+  await expect(page.getByRole("button", { name: `选择工作区，当前 ${workspaceName}` })).toBeVisible();
+
+  await page.goto("/tasks/100");
+  await other.hover();
+  await other.getByRole("button", { name: "在 其他工作区 中新建对话" }).click();
+  await expect(page).toHaveURL(`${WEB_ORIGIN}/`);
+  await expect(page.getByRole("button", { name: "选择工作区，当前 其他工作区" })).toBeVisible();
+});
 
 test("Fork 挂在源任务下：缩进一层，可点击或用方向键折叠", async ({ page, request }) => {
   await seedSidebar(page, request, "light");

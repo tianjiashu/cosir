@@ -3,12 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import type { BackgroundTaskEntry, TransportState } from "@/lib/assistant/contract";
 
 import { seedState } from "./transport-fixtures";
+import { API_ORIGIN as origin } from "./e2e-env";
 
 /**
  * 长对话的历史窗口：打开时只带最近一段（模拟后端与真实后端同为约 100 条），往上滚接近顶部时
  * 预取上一页插到前面且视口不跳；看板「在对话中定位」能翻到尚未加载的卡片。
  */
-const origin = "http://127.0.0.1:8000";
 const TASK_ID = 4501;
 const PAIRS = 160;
 const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
@@ -16,16 +16,16 @@ const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups:
 
 type SeedState = Omit<TransportState, "messageOffset" | "terminal_sessions" | "background_tasks" | "foreground_waits" | "handoffs">;
 
-function longConversation(): SeedState {
+function longConversation(pairs = PAIRS): SeedState {
   const messages: TransportState["messages"] = [];
-  for (let index = 0; index < PAIRS; index += 1) {
+  for (let index = 0; index < pairs; index += 1) {
     messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}`, status: "completed" }], runId: index + 1, outcome: null } as TransportState["messages"][number]);
     const parts: TransportState["messages"][number]["parts"] = [{ type: "text", text: `第 ${index} 轮回答。${"说明。".repeat(20)}`, status: "completed" }];
     // 第 3 轮带一张后台命令卡片：远在最近窗口之外。
-    if (index === 3) parts.unshift({ type: "tool-call", toolCallId: "call-old", toolName: "terminal_read", args: {}, status: "pending", deferred: true } as never);
+    if (index === 3) parts.unshift({ type: "tool-call", toolCallId: "call-old", toolName: "terminal_read", args: {}, status: "pending", background: true } as never);
     messages.push({ id: `a-${index}`, role: "assistant", runId: index + 1, outcome: OUTCOME, parts } as TransportState["messages"][number]);
   }
-  return { title: "长对话", messages, activity: { runId: PAIRS, ...OUTCOME, launch: LAUNCH } };
+  return { title: "长对话", messages, activity: { runId: pairs, ...OUTCOME, launch: LAUNCH } };
 }
 
 const viewport = (page: Page) => page.locator(".aui-thread-root .overflow-y-auto").first();
@@ -101,4 +101,24 @@ test("看板定位能翻到还没加载的卡片", async ({ page, request }) => 
   const card = page.locator('.aui-thread-root [data-tool-call-id="call-old"]');
   await expect(card).toBeVisible({ timeout: 10_000 });
   await expect(card).toBeInViewport();
+});
+
+test("对话区被隐藏再显示后，停在顶部的视口不跳", async ({ page, request }) => {
+  // 浏览器面板铺满时对话区（main）被 display:none 隐藏；这里直接切换同一个类模拟。用全部加载得下的
+  // 短对话停在顶部：顶部是隐藏期间 0 高度最容易引发连续滚动补偿的位置，且不会触发往前翻页。
+  const taskId = TASK_ID + 1;
+  await request.post(`${origin}/__test__/seed-task`, { data: { taskId, title: "短对话" } });
+  await seedState(request, taskId, longConversation(40));
+  await page.goto(`/tasks/${taskId}`);
+  await expect(page.locator(".aui-thread-root [data-index]").first()).toBeVisible();
+  await viewport(page).evaluate((element) => { element.scrollTop = 0; });
+  await expect(page.getByText("问题 0", { exact: true })).toBeInViewport();
+
+  const main = page.locator("main").first();
+  await main.evaluate((element) => element.classList.add("hidden"));
+  await expect(main).toBeHidden();
+  await main.evaluate((element) => element.classList.remove("hidden"));
+  await expect(page.getByText("问题 0", { exact: true })).toBeInViewport();
+  await page.waitForTimeout(300);
+  expect(await viewport(page).evaluate((element) => element.scrollTop)).toBe(0);
 });

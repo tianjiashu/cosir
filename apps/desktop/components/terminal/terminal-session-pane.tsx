@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 
+import type { LinkTarget } from "@/lib/links/resolve-link";
 import { useThemeState } from "@/lib/theme/theme-preference";
 import { cn } from "@/lib/utils";
 
@@ -16,7 +17,7 @@ type TerminalSessionPaneProps = {
   onRuntime: (sessionId: string, runtime: TerminalViewRuntime) => void;
   onSearchResults: (sessionId: string, result: { index: number; count: number }) => void;
   onOpenSearch: () => void;
-  onOpenWorkspaceFile?: (relativePath: string) => void;
+  onOpenLink: (target: LinkTarget) => void;
   registerView: (sessionId: string, view: TerminalView | null) => void;
 };
 
@@ -37,7 +38,7 @@ export function TerminalSessionPane({
   onRuntime,
   onSearchResults,
   onOpenSearch,
-  onOpenWorkspaceFile,
+  onOpenLink,
   registerView,
 }: TerminalSessionPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -45,8 +46,8 @@ export function TerminalSessionPane({
   const { resolvedTheme } = useThemeState();
   // 回调与工作区根目录经 ref 读取最新值：xterm 与 WS 只按会话身份创建一次，不因父组件重渲染或
   // 根目录变化（如目录加载完成）重建——重建会丢掉超出后端缓冲的历史。
-  const latestRef = useRef({ onRuntime, onSearchResults, onOpenSearch, onOpenWorkspaceFile, workspaceRoot });
-  latestRef.current = { onRuntime, onSearchResults, onOpenSearch, onOpenWorkspaceFile, workspaceRoot };
+  const latestRef = useRef({ onRuntime, onSearchResults, onOpenSearch, onOpenLink, workspaceRoot });
+  latestRef.current = { onRuntime, onSearchResults, onOpenSearch, onOpenLink, workspaceRoot };
   const initialThemeRef = useRef(resolvedTheme);
 
   useLayoutEffect(() => {
@@ -60,7 +61,7 @@ export function TerminalSessionPane({
       onRuntime: (runtime) => latestRef.current.onRuntime(sessionId, runtime),
       onSearchResults: (result) => latestRef.current.onSearchResults(sessionId, result),
       onOpenSearch: () => latestRef.current.onOpenSearch(),
-      onOpenWorkspaceFile: (path) => latestRef.current.onOpenWorkspaceFile?.(path),
+      onOpenLink: (target) => latestRef.current.onOpenLink(target),
     });
     viewRef.current = view;
     registerView(sessionId, view);

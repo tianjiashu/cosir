@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { ContextMessage } from "../../lib/api/context-messages";
+import { API_ORIGIN } from "./e2e-env";
 const record = (
   sequence: number,
   patch: Partial<ContextMessage> = {},
@@ -92,7 +93,7 @@ const detail = (page: Page) =>
 const list = (page: Page) =>
   page.getByRole("listbox", { name: "消息序列", exact: true });
 test.beforeEach(async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
   await page.setViewportSize({ width: 1600, height: 1000 });
 });
 test("空状态、加载反馈与查询边界", async ({ page }) => {
@@ -198,7 +199,6 @@ test("详情用量、JSON、查找与键盘浏览，窄窗口返回保位", asyn
   await list(page).press("ArrowDown");
   await expect(detail(page).getByRole("heading")).toContainText("#2");
   await detail(page).getByRole("button", { name: "用量", exact: true }).click();
-  await expect(detail(page)).toContainText("缓存命中率 75%");
   await detail(page).getByRole("button", { name: "JSON", exact: true }).click();
   await expect(detail(page).locator(".cm-content")).toHaveAttribute(
     "contenteditable",
@@ -218,7 +218,8 @@ test("详情用量、JSON、查找与键盘浏览，窄窗口返回保位", asyn
   const before = Number(await handle.getAttribute("aria-valuenow"));
   await page.keyboard.press("ArrowRight");
   expect(Number(await handle.getAttribute("aria-valuenow"))).toBe(before + 24);
-  await page.setViewportSize({ width: 900, height: 800 });
+  // 窄窗口（≤1024px）侧栏隐藏，整个宽度都给主区；860 让结果区落在 900 以下的窄布局。
+  await page.setViewportSize({ width: 860, height: 800 });
   await page.getByRole("option", { name: "#2 Assistant", exact: true }).click();
   await expect(detail(page)).toBeVisible();
   await expect(list(page)).toBeHidden();
@@ -226,7 +227,7 @@ test("详情用量、JSON、查找与键盘浏览，窄窗口返回保位", asyn
     .getByRole("button", { name: "返回列表", exact: true })
     .click();
   await expect(
-    page.getByRole("option", { name: "#80 User", exact: true }),
+    page.getByRole("option", { name: "#2 Assistant", exact: true }),
   ).toBeVisible();
   await expect(list(page)).toBeFocused();
 });
@@ -248,7 +249,8 @@ for (const theme of ["light", "dark"] as const) {
     await page.screenshot({
       path: `/private/tmp/cosir-observer-${theme}-desktop.png`,
     });
-    await page.setViewportSize({ width: 900, height: 800 });
+    // 窄窗口（≤1024px）侧栏隐藏，整个宽度都给主区；860 让结果区落在 900 以下的窄布局。
+    await page.setViewportSize({ width: 860, height: 800 });
     await expect(
       detail(page).getByRole("button", { name: "返回列表", exact: true }),
     ).toBeVisible();

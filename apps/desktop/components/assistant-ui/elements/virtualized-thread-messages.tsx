@@ -1,4 +1,4 @@
-import { defaultRangeExtractor, measureElement as measureRowElement, useVirtualizer } from "@tanstack/react-virtual";
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import {
   unstable_useThreadMessageIds,
   useAui,
@@ -12,6 +12,7 @@ import { estimateMessageHeight } from "@/lib/assistant/message-height-estimate";
 import { queuedMessageIdsKey } from "@/lib/assistant/transport-state-operations";
 import { VirtualizedThreadMessageRow, type MessageComponents } from "@/components/assistant-ui/elements/virtualized-thread-message-row";
 import { useThreadHistoryPaging } from "@/components/assistant-ui/elements/use-thread-history-paging";
+import { measureRenderedElement } from "@/lib/virtual/measure-rendered-element";
 
 type VirtualizedThreadMessagesProps = {
   /** 行高缓存按 Task 分桶。 */
@@ -64,12 +65,12 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = mem
       return (messageId === undefined ? undefined : rememberedMessageHeight(taskId, width, messageId))
         ?? estimateMessageHeight(messagesById(aui.thread().getState().messages).get(messageId ?? ""));
     },
-    measureElement: (element, entry, instance) => {
-      const size = measureRowElement(element, entry, instance);
+    // 浏览器铺满时对话区被隐藏：隐藏期间的读数既不进虚拟列表缓存，也不进按列宽分桶的行高记忆
+    // （列宽读成 0 会把整桶换掉）。
+    measureElement: (element, entry, instance) => measureRenderedElement(element, entry, instance, (size) => {
       const messageId = messageIds[instance.indexFromElement(element)];
       if (messageId !== undefined) rememberMessageHeight(taskId, element.clientWidth, messageId, size);
-      return size;
-    },
+    }),
     getItemKey: (index) => messageIds[index] ?? index,
     overscan: 8,
     rangeExtractor: (range) => Array.from(new Set([

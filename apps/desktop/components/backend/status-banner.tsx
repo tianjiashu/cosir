@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-import { useBackendRestart } from "@/components/backend/restart-button";
+import { useBackendRestart } from "@/components/backend/backend-restart";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
@@ -30,7 +30,9 @@ export function BackendStatusBanner() {
 
   return (
     // 外层不透明底色承托内层半透明语义色，避免浮层透出下方内容。
-    <div className="bg-background fixed inset-x-0 top-0 z-50 shadow-md">
+    // 放在标题栏那一行（h-14）下面：盖在拖动区上的浮层在 Electron 里点不动（拖动区按 DOM 顺序合并，
+    // 横幅排在侧栏头部、页面头部之前），「重启后端」是故障时的恢复入口，必须能点。
+    <div className="bg-background fixed inset-x-0 top-14 z-50 shadow-md">
       <div
         role={unavailable ? "alert" : "status"}
         className={cn(

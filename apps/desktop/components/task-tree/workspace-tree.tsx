@@ -14,8 +14,6 @@ type WorkspaceTreeProps = {
   selectedWorkspaceId: number | null;
   expandedWorkspaceIds: number[] | null;
   onWorkspaceExpansionChange: (workspaceId: number, expanded: boolean) => void;
-  onSelectWorkspace: (workspaceId: number) => void;
-  onOpenWorkspaceSettings: (workspaceId: number) => void;
   onSelectTask: (task: WorkspaceTask, workspaceId: number) => void;
   renderWorkspaceActions: (workspace: WorkspaceTreeSource, tabIndex: number) => ReactNode;
   renderTaskActions: (item: TaskSidebarNode, tabIndex: number) => ReactNode;
@@ -30,8 +28,6 @@ export function WorkspaceTree({
   selectedWorkspaceId,
   expandedWorkspaceIds,
   onWorkspaceExpansionChange,
-  onSelectWorkspace,
-  onOpenWorkspaceSettings,
   onSelectTask,
   renderWorkspaceActions,
   renderTaskActions,
@@ -74,7 +70,7 @@ export function WorkspaceTree({
   return (
     <div ref={containerRef} className="h-full min-h-0 min-w-0">
       {treeHeight > 0 && model.length > 0 && (
-        <WorkspaceTreeActionsContext.Provider value={{ onOpenWorkspaceSettings, renderWorkspaceActions, renderTaskActions }}>
+        <WorkspaceTreeActionsContext.Provider value={{ renderWorkspaceActions, renderTaskActions }}>
           <Tree<WorkspaceSidebarNode>
             ref={treeRef}
             dndRootElement={containerRef.current}
@@ -99,11 +95,8 @@ export function WorkspaceTree({
             onToggle={handleToggle}
             onActivate={(node: NodeApi<WorkspaceSidebarNode>) => {
               if (node.data.kind === "task") onSelectTask(node.data.task, node.data.task.workspace_id);
-              else if (node.data.kind === "pinned") node.toggle();
-              else if (node.data.kind === "workspace") {
-                node.open();
-                onSelectWorkspace(node.data.workspace.workspace_id);
-              }
+              // 置顶分组与工作区都只是分组：激活即展开 / 收起，不改变选中的工作区。
+              else if (node.data.kind !== "placeholder") node.toggle();
             }}
           >
             {WorkspaceTreeNode}

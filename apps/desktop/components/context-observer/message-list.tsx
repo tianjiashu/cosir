@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { measureRenderedElement } from "@/lib/virtual/measure-rendered-element";
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -41,6 +42,8 @@ export function MessageList({
     estimateSize: () => 104,
     overscan: 6,
     getItemKey: (index) => nav.rows[index].sequence,
+    // 窄窗口打开详情时列表被隐藏，隐藏期间的 0 高度不能进缓存，否则返回列表时整体下跳。
+    measureElement: measureRenderedElement,
   });
   useEffect(() => {
     if (!visible || !nav.scroll || !nav.rows.length) return;

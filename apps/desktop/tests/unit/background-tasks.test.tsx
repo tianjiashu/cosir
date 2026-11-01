@@ -44,7 +44,7 @@ function terminalPart(toolCallId: string, overrides: Partial<TransportToolCallPa
     status: "pending",
     presentation: { surface: "standalone", expandable: true, expand_layout: "terminal" },
     display_data: { kind: "terminal-result", command: "make watch", workdir: "/work" },
-    deferred: true,
+    background: true,
     ...overrides,
   };
 }
@@ -87,15 +87,15 @@ describe("snapshot background_tasks 与工具 part background", () => {
       .toThrow(/foreground_waits\[1\]/);
   });
 
-  it("converter 把 part 的 deferred 交给卡片，作为所有工具共用的「在后台」事实", () => {
+  it("converter 把 part 的 background 交给卡片，作为所有工具共用的「在后台」事实", () => {
     const placeholder = toToolCallPart(terminalPart("c1"));
-    expect(readToolArtifact((placeholder as { artifact?: unknown }).artifact).deferred).toBe(true);
-    const foreground = toToolCallPart(terminalPart("c2", { deferred: undefined, status: "running" }));
-    expect(readToolArtifact((foreground as { artifact?: unknown }).artifact).deferred).toBe(false);
+    expect(readToolArtifact((placeholder as { artifact?: unknown }).artifact).background).toBe(true);
+    const foreground = toToolCallPart(terminalPart("c2", { background: undefined, status: "running" }));
+    expect(readToolArtifact((foreground as { artifact?: unknown }).artifact).background).toBe(false);
   });
 
   it("converter 用后端短提示说明后台占位的取消原因", () => {
-    const interrupted = toToolCallPart({ type: "tool-call", toolCallId: "c2", toolName: "terminal_read", args: {}, status: "cancelled", error: "已中断", deferred: true });
+    const interrupted = toToolCallPart({ type: "tool-call", toolCallId: "c2", toolName: "terminal_read", args: {}, status: "cancelled", error: "已中断", background: true });
     expect(readToolArtifact((interrupted as { artifact?: unknown }).artifact).error).toBe("已中断");
   });
 });

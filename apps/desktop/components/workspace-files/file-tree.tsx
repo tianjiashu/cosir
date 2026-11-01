@@ -321,8 +321,9 @@ export function FileTree({
                   if (!ok) pendingFocus.current = null;
                 });
               }}
+              canAdd={!!bridge?.canAdd(workspaceId)}
               addEntries={(entries) =>
-                void bridge?.add(
+                bridge?.add(
                   workspaceId,
                   entries.map((entry) => ({
                     path: entry.path,
@@ -356,6 +357,7 @@ function FileRow({
   openFile,
   loadMore,
   retry,
+  canAdd,
   addEntries,
   ignoreEntries,
   pending,
@@ -365,6 +367,8 @@ function FileRow({
   ignoreEntries: (paths: string[]) => void;
   pending: boolean;
   onManageIgnored: () => void;
+  /** 有可用的对话输入框（`bridge.canAdd`）；否则「添加到对话」禁用。 */
+  canAdd: boolean;
   addEntries: (entries: FileEntry[]) => void;
   openFile: (path: string, pinned?: boolean) => void;
   loadMore: (path: string) => Promise<void>;
@@ -478,7 +482,8 @@ function FileRow({
         >
           {item.entry.kind !== "unavailable" && (
             <ContextMenu.Item
-              className={MENU_ITEM_CLASS}
+              disabled={!canAdd}
+              className={cn(MENU_ITEM_CLASS, "data-[disabled]:opacity-50")}
               onSelect={() =>
                 addEntries(
                   node.isSelected

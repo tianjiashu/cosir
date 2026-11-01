@@ -15,7 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Switch } from "@/components/ui/switch";
-import { markdownPlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
+import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
+import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
 import {
   deleteSystemSkill,
   getSystemSkill,
@@ -42,6 +43,7 @@ export function SkillConfigurationPanel() {
   const pickingSource = useRef(false);
   const [detailName, setDetailName] = useState<string | null>(null);
   const mermaidOptions = useMermaidOptions();
+  const linkComponents = useMarkdownLinkComponents("configuration", { webOnly: true });
 
   const skillsQuery = useQuery({
     queryKey: queryKeys.skills(),
@@ -189,7 +191,7 @@ export function SkillConfigurationPanel() {
             />
           ) : (
             <div className="aui-md max-h-[60vh] overflow-y-auto rounded-lg border bg-muted/20 p-4 leading-6">
-              <Streamdown mode="static" plugins={markdownPlugins} shikiTheme={["github-light", "github-dark"]} linkSafety={{ enabled: true }} mermaid={mermaidOptions} className="!space-y-3">
+              <Streamdown mode="static" plugins={markdownPlugins} rehypePlugins={markdownRehypePlugins} shikiTheme={["github-light", "github-dark"]} mermaid={mermaidOptions} components={linkComponents} className="!space-y-3">
                 {detailQuery.data.content}
               </Streamdown>
             </div>

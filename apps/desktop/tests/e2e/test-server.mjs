@@ -4,7 +4,8 @@ import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 
 const HOST = "127.0.0.1";
-const PORT = 8000;
+// 端口由 playwright.config.ts 经环境变量传入（见 e2e-env.ts）；手动直跑时回落到 slot 0 的 8000。
+const PORT = Number(process.env.COSIR_E2E_API_PORT ?? 8000);
 const TASK_ID = 42;
 const WORKSPACE_ID = 7;
 
@@ -49,7 +50,6 @@ const terminalShells = [
   { kind: "sh", label: "sh", isDefault: false, integrationSupported: false },
 ];
 const telemetry = {
-  clientCancelCount: 0,
   completedStreamCount: 0,
   requestBodies: [],
 };
@@ -76,7 +76,6 @@ function resetTestState() {
   failNextAttach = false;
   lastStreamBody = "";
   nextRunId = 1;
-  telemetry.clientCancelCount = 0;
   telemetry.completedStreamCount = 0;
   telemetry.requestBodies = [];
 }
@@ -320,10 +319,6 @@ function secondChildDelegationState() {
 
 function jsonResponse(res, status, value) {
   res.writeHead(status, {
-    "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
-    "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "Access-Control-Expose-Headers": "X-Cosir-Task-Id",
     "Content-Type": "application/json; charset=utf-8",
   });
   res.end(JSON.stringify(value));
@@ -598,10 +593,6 @@ function handleAttach(res, taskId) {
     return;
   }
   res.writeHead(200, {
-    "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
-    "Access-Control-Allow-Headers": "Content-Type, X-Trace-Id",
-    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-    "Access-Control-Expose-Headers": "X-Cosir-Task-Id",
     "X-Cosir-Task-Id": String(taskId),
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
@@ -610,11 +601,7 @@ function handleAttach(res, taskId) {
   const set = subscribers.get(taskId) ?? new Set();
   subscribers.set(taskId, set);
   set.add(res);
-  const generation = testGeneration;
-  res.on("close", () => {
-    set.delete(res);
-    if (generation === testGeneration && executors.has(taskId)) telemetry.clientCancelCount += 1;
-  });
+  res.on("close", () => set.delete(res));
   writeSse(res, { task_id: taskId, kind: "full", mutations: [], state: wireState(taskId) });
   // seeded 的运行中 Run 没有执行者：首个订阅到来时模拟后端继续执行它。
   if (isActive(states.get(taskId).activity?.status) && states.get(taskId).activity.status === "running" && !executors.has(taskId)) {
@@ -731,7 +718,8 @@ function handleTerminalSocket(socket, session) {
 }
 
 const server = createServer(async (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:4173");
+  // CORS 头只在这里设一次（writeHead 会合并）；回写请求来源，不绑定某个 Vite 端口，并行运行各用各的。
+  res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Trace-Id");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Expose-Headers", "X-Cosir-Task-Id");
@@ -831,7 +819,6 @@ const server = createServer(async (req, res) => {
   }
   if (req.method === "GET" && url.pathname === "/__test__/last-stream") {
     res.writeHead(200, {
-      "Access-Control-Allow-Origin": "http://127.0.0.1:4173",
       "Content-Type": "text/plain; charset=utf-8",
     });
     res.end(lastStreamBody);
@@ -960,9 +947,19 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, {});
     return;
   }
+  // 下一次到达的 attach（不分 Task）返回 503。开发模式 StrictMode 挂载时会多发一次随即被中止的
+  // attach，挂载前注入会被那次请求吃掉、重连路径根本不走；必须等订阅建立（前端「订阅已建立」日志）
+  // 之后再注入，配合 drop-subscriptions 触发重连。
   if (req.method === "POST" && url.pathname === "/__test__/fail-next-attach") {
     failNextAttach = true;
     jsonResponse(res, 200, { enabled: true });
+    return;
+  }
+  // 模拟后端连接中断：断开该 Task 的全部长订阅（不改 state、不结束 Run），前端应进入有限重连。
+  if (req.method === "POST" && url.pathname === "/__test__/drop-subscriptions") {
+    const body = await readJson(req);
+    for (const subscriber of subscribers.get(body.taskId) ?? []) subscriber.destroy();
+    jsonResponse(res, 200, {});
     return;
   }
   if (req.method === "POST" && url.pathname === "/__test__/seed-delegation") {

@@ -74,7 +74,7 @@ export function FileSearch({
           <AddReferenceButton
             workspaceId={workspaceId}
             inputs={selected.map((path) => ({ path, kind: "file" }))}
-            label={`添加所选 ${selected.length} 项`}
+            label={`添加到对话（${selected.length}）`}
           />
         )}
 
@@ -219,10 +219,10 @@ export function FileSearch({
                 <ContextMenu.Portal>
                   <ContextMenu.Content className={cn(MENU_CONTENT_CLASS, "min-w-40")}>
                     <ContextMenu.Item
-                      disabled={!bridge?.target}
+                      disabled={!bridge?.canAdd(workspaceId)}
                       className={cn(MENU_ITEM_CLASS, "data-[disabled]:opacity-50")}
                       onSelect={() =>
-                        void bridge?.add(
+                        bridge?.add(
                           workspaceId,
                           (selected.includes(entry.path)
                             ? selected

@@ -13,7 +13,7 @@ const browser: HandoffEntry = { toolCallId: "c2", toolName: "browser_handoff", s
 afterEach(() => {
   useHandoffStore.setState({ tasks: {} });
   useTerminalWorkbenchStore.setState({ tasks: {} });
-  useDockStore.setState({ panel: null, browserMaximized: false });
+  useDockStore.setState({ panel: null, maximized: false });
   useBrowserPanelStore.setState({ taskId: null, selected: {} });
 });
 

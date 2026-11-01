@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { ActivityIcon, SquarePenIcon } from "lucide-react";
+import { ActivityIcon, RotateCwIcon, SquarePenIcon } from "lucide-react";
 
 import { SYSTEM_SETTINGS_TABS } from "@/components/settings/settings-tabs";
 import type { WorkspaceTreeSource } from "@/components/task-tree/workspace-tree-model";
@@ -26,6 +26,7 @@ export type CommandPaletteTaskEntry = {
 /** 面板内的固定命令。`kind` 决定选中后回调哪一个 prop；`shortcut` 指向 lib/keyboard/shortcuts 中的登记项，用于展示组合键。 */
 export type CommandPaletteCommand = { id: string; label: string; icon: LucideIcon; shortcut?: AppShortcutId } & (
   | { kind: "new-conversation" }
+  | { kind: "restart-backend" }
   | { kind: "navigate"; path: string }
 );
 
@@ -48,6 +49,12 @@ const ACTION_COMMANDS: readonly SearchableCommand[] = [
     keywords: ["新建", "任务", "new", "conversation", "chat"],
   },
 ];
+
+/** 少用且会中断运行中任务的操作，只在调用方允许时（开发期宿主）列出，不常驻页头。 */
+const RESTART_BACKEND_COMMAND: SearchableCommand = {
+  command: { kind: "restart-backend", id: "action:restart-backend", label: "重启后端", icon: RotateCwIcon },
+  keywords: ["重启", "后端", "restart", "backend"],
+};
 
 const SETTINGS_COMMANDS: readonly SearchableCommand[] = [
   ...SYSTEM_SETTINGS_TABS.map((tab): SearchableCommand => ({
@@ -91,11 +98,15 @@ export function filterCommandPaletteTasks(workspaces: WorkspaceTreeSource[], que
   return matched.slice(0, terms.length > 0 ? MATCHED_TASK_LIMIT : RECENT_TASK_LIMIT);
 }
 
-export function buildCommandPaletteModel(workspaces: WorkspaceTreeSource[], query: string): CommandPaletteModel {
+export function buildCommandPaletteModel(
+  workspaces: WorkspaceTreeSource[],
+  query: string,
+  { canRestartBackend = false }: { canRestartBackend?: boolean } = {},
+): CommandPaletteModel {
   const terms = queryTerms(query);
   return {
     tasks: filterCommandPaletteTasks(workspaces, query),
-    actions: filterCommands(ACTION_COMMANDS, terms),
+    actions: filterCommands(canRestartBackend ? [...ACTION_COMMANDS, RESTART_BACKEND_COMMAND] : ACTION_COMMANDS, terms),
     settings: filterCommands(SETTINGS_COMMANDS, terms),
   };
 }

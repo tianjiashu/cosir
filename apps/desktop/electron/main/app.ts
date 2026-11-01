@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { app, BrowserWindow } from "electron";
 
 import { HOST_CHANNEL } from "../shared/host-contract";
+import { applyDockIcon } from "./app-icon";
 import { handleAppProtocol, registerAppScheme } from "./app-protocol";
 import { BackendSupervisor } from "./backend/supervisor";
 import { BrowserHost } from "./browser/browser-host";
@@ -17,6 +18,7 @@ import { isolateUserDataInExplicitDataRoot } from "./paths";
 import { installTray } from "./tray";
 import {
   createMainWindow,
+  disableHttpCacheForDevServer,
   followNativeThemeInTitleBar,
   getMainWindow,
   markQuitting,
@@ -44,6 +46,7 @@ if (!app.requestSingleInstanceLock()) {
 
 function bootstrap(): void {
   registerAppScheme();
+  disableHttpCacheForDevServer();
   // 宿主工具链路的认证 token：同一个值注入后端、由链路客户端在首帧出示。
   const hostToken = randomBytes(32).toString("hex");
   const supervisor = new BackendSupervisor(hostToken);
@@ -75,6 +78,7 @@ function bootstrap(): void {
     configureBrowserSession();
     registerHostIpc(supervisor, browser);
     followNativeThemeInTitleBar();
+    applyDockIcon();
     // 窗口先出现，后端在后台启动；前端经启动门禁呈现 starting / ready / failed。
     createMainWindow();
     installTray({ show: showMainWindow, quit: () => app.quit() });

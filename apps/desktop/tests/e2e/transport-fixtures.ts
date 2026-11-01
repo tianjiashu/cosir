@@ -1,6 +1,7 @@
 import type { APIRequestContext } from "@playwright/test";
 
 import type { TransportMessagePart, TransportState } from "@/lib/assistant/contract";
+import { API_ORIGIN } from "./e2e-env";
 
 /** E2E 共用的 Task 视角 snapshot 构造器，与 tests/e2e/test-server.mjs 的契约一致。 */
 const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
@@ -28,5 +29,5 @@ type ProcessFacts = "terminal_sessions" | "background_tasks" | "foreground_waits
 type SeedState = Omit<TransportState, ProcessFacts> & Partial<Pick<TransportState, ProcessFacts>>;
 
 export async function seedState(request: APIRequestContext, taskId: number, state: SeedState): Promise<void> {
-  await request.post("http://127.0.0.1:8000/__test__/seed-state", { data: { taskId, state } });
+  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId, state } });
 }

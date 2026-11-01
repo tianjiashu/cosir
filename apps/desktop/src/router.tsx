@@ -2,7 +2,7 @@ import { createBrowserRouter, Navigate, useMatches } from "react-router-dom";
 
 import { AppLayout, useAppOutlet, type RouteHandle } from "@/components/layout/app-layout";
 import { ContextObserverPage } from "@/components/context-observer-page";
-import { NewConversation } from "@/components/new-conversation";
+import { NewConversation } from "@/components/new-conversation/new-conversation";
 import {
   findSettingsTab,
   SYSTEM_SETTINGS_TABS,

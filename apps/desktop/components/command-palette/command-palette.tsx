@@ -27,6 +27,8 @@ export type CommandPaletteProps = {
   onSelectTask: (task: WorkspaceTask, workspaceId: number) => void;
   onNewConversation: () => void;
   onNavigate: (path: string) => void;
+  /** 提供时列出「重启后端」（只在开发期宿主，见 `canRestartBackendRuntime`）。 */
+  onRestartBackend?: () => void;
 };
 
 /**
@@ -39,9 +41,10 @@ export type CommandPaletteProps = {
  *
  * 选中任一条目先关闭面板再回调，查询词在关闭时清空，下次打开从最近任务开始。
  */
-export function CommandPalette({ open, onOpenChange, workspaces, onSelectTask, onNewConversation, onNavigate }: CommandPaletteProps) {
+export function CommandPalette({ open, onOpenChange, workspaces, onSelectTask, onNewConversation, onNavigate, onRestartBackend }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
-  const model = useMemo(() => buildCommandPaletteModel(workspaces, query), [workspaces, query]);
+  const canRestartBackend = onRestartBackend !== undefined;
+  const model = useMemo(() => buildCommandPaletteModel(workspaces, query, { canRestartBackend }), [workspaces, query, canRestartBackend]);
   const now = new Date();
 
   const changeOpen = (next: boolean) => {
@@ -52,6 +55,7 @@ export function CommandPalette({ open, onOpenChange, workspaces, onSelectTask, o
   const runCommand = (command: CommandPaletteCommand) => {
     changeOpen(false);
     if (command.kind === "new-conversation") onNewConversation();
+    else if (command.kind === "restart-backend") onRestartBackend!();
     else onNavigate(command.path);
   };
 

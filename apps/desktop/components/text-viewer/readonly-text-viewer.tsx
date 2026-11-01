@@ -1,5 +1,5 @@
 import { lineNumbers } from "@codemirror/view";
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react";
 import { basicSetup, EditorView } from "codemirror";
 import { Compartment, EditorState, EditorSelection } from "@codemirror/state";
 import { LanguageDescription } from "@codemirror/language";
@@ -9,6 +9,16 @@ import {
   editorTheme,
   useEditorSyntaxTheme,
 } from "@/components/code-editor-theme";
+import type { LineRange } from "@/lib/links/resolve-link";
+import type { FindDirection, FindResult } from "@/lib/find/next-match";
+import { findHighlights, findInEditor } from "./editor-find";
+
+/** 父组件经 ref 驱动编辑器（查找条、大纲都在编辑器外）；编辑器尚未建好时 `find` 返回 null、`revealLine` 不做事。 */
+export type TextViewerHandle = {
+  find: (term: string, direction: FindDirection) => FindResult | null;
+  /** 选中当前文本的第 `line` 行（1 起，超出末行收到末行）并滚到视口顶部附近。 */
+  revealLine: (line: number) => void;
+};
 
 export type TextSelection = {
   from: number;
@@ -29,6 +39,9 @@ export function ReadonlyTextViewer({
   firstLine = 1,
   ariaLabel,
   selectLines = false,
+  reveal,
+  onRevealed,
+  ref,
 }: {
   text: string;
   name: string;
@@ -39,6 +52,10 @@ export function ReadonlyTextViewer({
   ariaLabel: string;
   selectLines?: boolean;
   onSelection?: (selection: TextSelection | null) => void;
+  /** 要选中并居中的行（相对本段文本，1 起算）；超出末行时收到末行。处理后回调 `onRevealed`。 */
+  reveal?: LineRange;
+  onRevealed?: () => void;
+  ref?: Ref<TextViewerHandle>;
 }) {
   const highlight = useMemo(
     () => text.split("\n").every((line) => line.length < 50_000),
@@ -48,8 +65,22 @@ export function ReadonlyTextViewer({
   const themeCompartment = useRef(new Compartment());
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  useImperativeHandle(ref, () => ({
+    find: (term, direction) => (view.current ? findInEditor(view.current, term, direction) : null),
+    revealLine: (line) => {
+      const instance = view.current;
+      if (!instance) return;
+      const target = instance.state.doc.line(Math.min(Math.max(line, 1), instance.state.doc.lines));
+      instance.dispatch({
+        selection: EditorSelection.range(target.from, target.to),
+        effects: EditorView.scrollIntoView(target.from, { y: "start", yMargin: 24 }),
+      });
+    },
+  }), []);
   const latest = useRef({ onScroll, scrollTop, onSelection });
   latest.current = { onScroll, scrollTop, onSelection };
+  const onRevealedRef = useRef(onRevealed);
+  onRevealedRef.current = onRevealed;
   useEffect(() => {
     if (!host.current) return;
     let disposed = false;
@@ -60,6 +91,7 @@ export function ReadonlyTextViewer({
         doc: text,
         extensions: [
           basicSetup,
+          findHighlights,
           lineNumbers({
             formatNumber: (line) => String(line + firstLine - 1),
             domEventHandlers: selectLines
@@ -149,6 +181,19 @@ export function ReadonlyTextViewer({
     });
     instance.scrollDOM.scrollTop = top;
   }, [text]);
+  // 排在建 view 的 effect 之后：首次挂载时先恢复 scrollTop，再由这里覆盖为目标行。
+  useEffect(() => {
+    const instance = view.current;
+    if (!instance || !reveal) return;
+    const doc = instance.state.doc;
+    const first = doc.line(Math.min(reveal.start, doc.lines));
+    const last = doc.line(Math.min(Math.max(reveal.end, reveal.start), doc.lines));
+    instance.dispatch({
+      selection: EditorSelection.range(first.from, last.to),
+      effects: EditorView.scrollIntoView(first.from, { y: "center" }),
+    });
+    onRevealedRef.current?.();
+  }, [reveal, text, wrap]);
   useEffect(() => {
     view.current?.dispatch({
       effects: themeCompartment.current.reconfigure(syntaxTheme),

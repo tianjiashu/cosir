@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Page, type Request } from "@
 
 import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
+import { API_ORIGIN as origin } from "./e2e-env";
 
 /**
  * 运行中的提交开关：活动 Run 期间照常能发送新消息（后端排队）、能在队列区立即发送、编辑（放回输入框）
@@ -12,7 +13,6 @@ import { seedState } from "./transport-fixtures";
  * 后端不会自行续跑，页面能稳定停在「运行中」。
  */
 
-const origin = "http://127.0.0.1:8000";
 const TASK_ID = 42;
 // 活动 Run 冻结的发起配置：运行中发送沿用它，而不是 composer 里的选择。
 const RUN_LAUNCH = { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: ["联网工具"] };

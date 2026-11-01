@@ -35,7 +35,7 @@ export function FirstRunChecklist({
   addWorkspaceError,
 }: FirstRunChecklistProps) {
   return (
-    <section aria-label="开始前的准备" className="border-border/60 bg-muted/40 mb-3 rounded-xl border px-3 py-2.5">
+    <section aria-label="开始前的准备" className="border-border/60 bg-card mb-3 rounded-xl border px-3 py-2.5">
       <p className="text-muted-foreground mb-2 text-xs">开始对话前，先完成以下准备：</p>
       <ol className="space-y-1.5">
         <ChecklistStep

@@ -74,12 +74,12 @@ function DesktopApp() {
   }, [boot]);
 
   if (boot === "failed") return <BootFailure key={retryToken} error={error ?? "启动失败"} onRetry={() => { setBoot("starting"); setError(null); setRetryToken((value) => value + 1); }} />;
-  if (boot !== "ready") return <BackendStartupScreen />;
 
+  // 启动遮罩在同一位置从 starting 保持到退场结束，不因 ready 重新挂载（入场动画与等待计时不会重来）。
   return (
     <>
-      <AppRouter />
-      {!showApp && <BackendStartupScreen exiting />}
+      {boot === "ready" && <AppRouter />}
+      {!showApp && <BackendStartupScreen exiting={boot === "ready"} />}
     </>
   );
 }

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { PanelDock } from "@/components/ui/panel-dock";
 import { PANEL_HEADER_CLASS } from "@/components/ui/panel-tokens";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
-import { useOpenWorkspacePath } from "@/components/workspace-references/use-open-workspace-path";
+import { useOpenLink } from "@/components/links/use-open-link";
 import { useHandoffOn } from "@/lib/handoff/store";
 import { queryKeys } from "@/lib/query/query-keys";
 import { listTerminalShells } from "@/lib/terminal/terminal-api";
@@ -24,7 +24,7 @@ import { selectTerminalTask, useTerminalWorkbenchStore } from "@/lib/terminal/te
 import { cn } from "@/lib/utils";
 
 import { TerminalEndedMenu } from "./terminal-menus";
-import { TerminalSearchBar } from "./terminal-search-bar";
+import { FindBar } from "@/components/ui/find-bar";
 import { TerminalSessionPane } from "./terminal-session-pane";
 import { TerminalTabBar } from "./terminal-tab-bar";
 import type { TerminalView, TerminalViewRuntime } from "./terminal-view";
@@ -124,7 +124,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
       viewsRef.current.get(activeSessionId)?.focus();
     }
   }, [activeSessionId]);
-  const workspacePath = useOpenWorkspacePath();
+  const links = useOpenLink("terminal", taskId);
 
   const selectSession = (sessionId: string) => {
     useTerminalWorkbenchStore.getState().select(taskId, sessionId);
@@ -224,7 +224,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
                 onRuntime={handleRuntime}
                 onSearchResults={handleSearchResults}
                 onOpenSearch={openSearch}
-                onOpenWorkspaceFile={workspacePath?.openFile}
+                onOpenLink={links.open}
                 registerView={registerView}
               />
             ))}
@@ -234,7 +234,9 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
               </div>
             )}
             {searchOpen && activeView && (
-              <TerminalSearchBar
+              <FindBar
+                label="在终端中搜索"
+                className="absolute top-2 right-4 z-10"
                 result={searchResult}
                 onSearch={(term, direction) => activeView.search(term, direction)}
                 onClose={closeSearch}

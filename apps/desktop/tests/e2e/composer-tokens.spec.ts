@@ -2,6 +2,7 @@ import { expect, test, type Locator } from "@playwright/test";
 import type { Editor, JSONContent } from "@tiptap/core";
 
 import { completedState, seedState } from "./transport-fixtures";
+import { API_ORIGIN } from "./e2e-env";
 
 const undo = process.platform === "darwin" ? "Meta+z" : "Control+z";
 const redo = process.platform === "darwin" ? "Meta+Shift+z" : "Control+Shift+z";
@@ -26,8 +27,8 @@ async function setDocument(input: Locator, content: JSONContent[]) {
 }
 
 test.beforeEach(async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 100, title: "行内标签" } });
+  await request.post(`${API_ORIGIN}/__test__/reset`);
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 100, title: "行内标签" } });
   await seedState(request, 100, completedState(70, {
     id: "history-user",
     parts: [{ type: "text", text: "查看 [src/main.ts](cosir-file:src/main.ts)", status: "completed" }],

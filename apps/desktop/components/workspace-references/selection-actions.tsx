@@ -3,10 +3,13 @@ export type { TextSelection } from "@/components/text-viewer/readonly-text-viewe
 import { ContextMenu } from "radix-ui";
 import { useReferenceBridge } from "./reference-bridge";
 import type { ReactNode } from "react";
-import { AddReferenceButton } from "./add-reference-button";
 import type { ReferenceInput } from "@/lib/workspace-references/prepare";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
 import { cn } from "@/lib/utils";
+/**
+ * 阅读器正文的右键菜单：把当前选区添加到对话，或连同一句预设提问一起添加。没有选区或没有可用的对话输入框时
+ * 菜单项禁用（可用性只看 `bridge.canAdd`，真正添加时由 `bridge.add` 再确认）。
+ */
 export function ReferenceSelectionMenu({
   workspaceId,
   input,
@@ -23,17 +26,17 @@ export function ReferenceSelectionMenu({
       <ContextMenu.Portal>
         <ContextMenu.Content className={cn(MENU_CONTENT_CLASS, "min-w-40")}>
           {[
-            ["添加选区到对话", undefined],
+            ["添加到对话", undefined],
             ["解释", "请解释这段内容。"],
             ["检查问题", "请检查这段内容的潜在问题。"],
             ["设计测试", "请为这段代码设计有意义的测试。"],
           ].map(([label, question]) => (
             <ContextMenu.Item
               key={label}
-              disabled={!input || !bridge?.target}
+              disabled={!input || !bridge?.canAdd(workspaceId)}
               className={cn(MENU_ITEM_CLASS, "data-[disabled]:opacity-50")}
               onSelect={() =>
-                input && void bridge?.add(workspaceId, [input], question)
+                input && bridge?.add(workspaceId, [input], question)
               }
             >
               {label}
@@ -64,26 +67,4 @@ export function selectedReference(
         : {}),
     };
   return null;
-}
-
-/** 将当前预览中的选区作为引用添加；没有选区时引用整个文件。 */
-export function SelectionActions({
-  workspaceId,
-  path,
-  selection = null,
-  excerpt = null,
-}: {
-  workspaceId: number;
-  path: string;
-  selection?: TextSelection | null;
-  excerpt?: string | null;
-}) {
-  const input = selectedReference(path, selection, excerpt);
-  return (
-    <AddReferenceButton
-      workspaceId={workspaceId}
-      inputs={[input ?? { path, kind: "file" }]}
-      label={input ? "引用选区" : "引用文件"}
-    />
-  );
 }

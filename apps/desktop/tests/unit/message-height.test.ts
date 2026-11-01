@@ -19,15 +19,15 @@ describe("estimateMessageHeight", () => {
     expect(estimateMessageHeight(user(text("请帮我看看。".repeat(20))))).toBe(142);
     expect(estimateMessageHeight(user(text("看这个"), file))).toBe(134);
     expect(estimateMessageHeight(user(text("看这些"), file, file, file))).toBe(134);
-    expect(estimateMessageHeight(user(image))).toBe(183);
+    expect(estimateMessageHeight(user(image))).toBe(149);
   });
 
   // 目的：估计与渲染共用收叠阈值；潜在缺陷：多图消息已收成一叠，估计仍按逐行铺开算，向上滚动时被逐行修正数百像素。
   it("用户消息：阈值以内的图片逐行铺开，超过阈值按收起的一叠计高", () => {
     const images = (count: number) => user(...Array.from({ length: count }, () => image));
-    expect(estimateMessageHeight(images(5))).toBe(183 + 138);
-    expect(estimateMessageHeight(images(6))).toBe(189);
-    expect(estimateMessageHeight(images(20))).toBe(189);
+    expect(estimateMessageHeight(images(5))).toBe(149 + 104);
+    expect(estimateMessageHeight(images(6))).toBe(149);
+    expect(estimateMessageHeight(images(20))).toBe(149);
   });
 
   it("回答：标题按级别、列表项、表格行、代码行分别计高", () => {

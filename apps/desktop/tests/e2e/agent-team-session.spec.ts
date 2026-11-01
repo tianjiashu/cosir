@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { teamConfiguration } from "../unit/team-editor-fixture";
+import { API_ORIGIN } from "./e2e-env";
 const team = { ...teamConfiguration, scope: "system" as const, max_runs: 10 };
 const node = (page: Page, index: number) => page.locator(`.react-flow__node[data-id="@@agent-node-${index}"]`);
 const transform = (page: Page, index: number) => node(page, index).evaluate(element => element.style.transform);
@@ -8,7 +9,7 @@ async function openSettings(page: Page) {
   await page.goto("/settings");
   await page.getByRole("navigation", { name: "系统配置分类" }).getByRole("link", { name: "Agent Team", exact: true }).click();
 }
-test.beforeEach(async ({ request }) => { await request.post("http://127.0.0.1:8000/__test__/reset"); });
+test.beforeEach(async ({ request }) => { await request.post(`${API_ORIGIN}/__test__/reset`); });
 
 test("表单删除不转移节点位置，跨视图撤销还原布局与保存基线", async ({ page }) => {
   await page.route("**/configuration/agent-teams", route => route.fulfill({ json: [team] }));
@@ -71,7 +72,7 @@ test("保存期间的新编辑保留，离开需要确认，第二次保存使�
 
 test("工作台切换标签与收起都保留 Team 草稿和历史", async ({ page, request }) => {
   await page.setViewportSize({ width: 1600, height: 1000 });
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "会话回归" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "会话回归" } });
   await page.route("**/configuration/agents", route => route.fulfill({ json: [] }));
   await page.goto("/tasks/42");
   await expect(page.getByLabel("消息输入")).toBeVisible();

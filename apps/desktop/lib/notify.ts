@@ -16,6 +16,11 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 type NotifyAction = { label: string; onClick: () => void };
 
 export const notify = {
+  /** 中性提示：不是失败，而是告知结果并给出下一步（如链接指向的文件不存在，附「查找同名文件」）。 */
+  info(message: string, options?: { description?: string; action?: NotifyAction }) {
+    toast.info(message, { description: options?.description, action: options?.action });
+  },
+
   success(message: string, options?: { description?: string; action?: NotifyAction }) {
     toast.success(message, { description: options?.description, action: options?.action });
   },

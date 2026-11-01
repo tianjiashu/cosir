@@ -1,31 +1,18 @@
 import { useMemo } from "react";
-import { useImageGallery } from "@/components/image/image-gallery";
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
-import { ImageThumbnail } from "@/components/image/image-thumbnail";
+import { ImageStrip } from "@/components/image/image-strip";
 import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
 import { readImageReadDisplay, type ImageReadDisplay } from "../image-read-display";
 import type { DetailView } from "./detail-view";
 
-/** 读到的图片并排成方形缩略图，路径放进悬停提示；点开后在这一组里左右翻看。地址按消息附件同一规则解析。 */
+/** 读到的图片按对话图片的统一外观横排，路径放进悬停提示；地址按消息附件同一规则解析。 */
 function ImageReadThumbnails({ images }: { images: ImageReadDisplay["images"] }) {
   const workspaceId = useAttachmentWorkspaceId();
   const pictures = useMemo(
-    () => images.map((image) => ({ src: attachmentContentUrl(image.assetId, workspaceId), alt: image.path })),
+    () => images.map((image) => ({ src: attachmentContentUrl(image.assetId, workspaceId), alt: image.path, title: image.path })),
     [images, workspaceId],
   );
-  const gallery = useImageGallery(pictures);
-  return (
-    <>
-      <ul className="flex flex-wrap gap-2" aria-label="读取的图片">
-        {pictures.map((image, index) => (
-          <li key={image.alt}>
-            <ImageThumbnail src={image.src} name={image.alt} onOpen={() => gallery.open(index)} />
-          </li>
-        ))}
-      </ul>
-      {gallery.lightbox}
-    </>
-  );
+  return <ImageStrip images={pictures} label="读取的图片" />;
 }
 
 /**

@@ -1,8 +1,8 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
 import { seedState } from "./transport-fixtures";
+import { API_ORIGIN as origin } from "./e2e-env";
 
-const origin = "http://127.0.0.1:8000";
 const task = (task_id: number, workspace_id: number) => ({
   task_id, workspace_id, title: `任务${task_id}`, task_type: "user",
   created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
@@ -81,14 +81,30 @@ test("窗口和侧栏变化限制实际宽度，End 和鼠标拖动均保留主�
     const panel = (await page.getByRole("complementary", { name: "工作台" }).boundingBox())!;
     expect(panel.x + panel.width).toBeLessThanOrEqual(width + 1);
   }
-  await page.getByRole("button", { name: "收起侧栏", exact: true }).click();
+  // 侧栏开关钉在左上角：收起、展开都在同一位置，状态由 aria-expanded 表达；收起即整个隐藏。
+  // 它总是所在那一行拖动区的后代（展开时在侧栏头部，收起时在页面头部）：Electron 按 DOM 顺序合并拖动区，
+  // 做成跨列浮层会被后面的拖动区盖掉而点不动，而 Playwright 不认拖动区，只能这样守住结构。
+  const sidebarToggle = page.getByRole("button", { name: "切换侧栏", exact: true });
+  const dragRowOf = () => sidebarToggle.evaluate((element) => {
+    const row = element.closest(".app-drag-region");
+    return row?.closest("aside") ? "sidebar" : row?.tagName === "HEADER" ? "page-header" : "none";
+  });
+  const togglePosition = (await sidebarToggle.boundingBox())!;
+  await expect(sidebarToggle).toHaveAttribute("aria-expanded", "true");
+  expect(await dragRowOf()).toBe("sidebar");
+  await sidebarToggle.click();
+  await expect(sidebarToggle).toHaveAttribute("aria-expanded", "false");
+  expect(await dragRowOf()).toBe("page-header");
+  await expect.poll(async () => (await page.locator("aside").first().boundingBox())?.width ?? 0).toBe(0);
+  expect(await sidebarToggle.boundingBox()).toEqual(togglePosition);
   await expect(resize).toHaveAttribute("aria-valuenow", "736");
   const grip = (await resize.boundingBox())!;
   await page.mouse.move(grip.x + 3, grip.y + 100);
   await page.mouse.down();
   await page.mouse.move(0, grip.y + 100);
   await page.mouse.up();
-  await page.getByRole("button", { name: "展开侧栏", exact: true }).click();
+  await sidebarToggle.click();
+  await expect(sidebarToggle).toHaveAttribute("aria-expanded", "true");
   await expect.poll(async () => (await page.locator("aside").first().boundingBox())!.width).toBe(288);
   await expect.poll(async () => (await page.getByRole("main").boundingBox())!.width).toBeGreaterThanOrEqual(399);
   await page.screenshot({ path: testInfo.outputPath("bounded-workbench.png") });

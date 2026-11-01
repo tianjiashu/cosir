@@ -1,5 +1,6 @@
 import type { ThreadMessage } from "@assistant-ui/react";
-import { shouldStackImages } from "./image-stack-policy";
+import { IMAGE_TILE_GAP, IMAGE_TILE_SIZE } from "@/lib/image/tile-size";
+import { IMAGES_PER_ROW, shouldStackImages } from "./image-stack-policy";
 
 /**
  * 按消息内容粗估虚拟列表行高（px，含行间距），只作首次测量前的初始值。
@@ -31,11 +32,10 @@ const USER_CHROME = 29;
 const USER_BUBBLE_PADDING = 20;
 const USER_LINE_HEIGHT = 23;
 const USER_LINE_UNITS = 44;
-const ATTACHMENT_GAP = 8;
-const IMAGE_HEIGHT = 130;
-const IMAGES_PER_ROW = 3;
-// 超过阈值时收成一叠（`ImageStack`），收起态只有一张图的高度加错开的层。
-const IMAGE_STACK_HEIGHT = IMAGE_HEIGHT + 6;
+const ATTACHMENT_GAP = IMAGE_TILE_GAP;
+const IMAGE_HEIGHT = IMAGE_TILE_SIZE.regular.height;
+// 超过阈值时收成一叠（`ImageStack`）：错开的两层是 transform，不占布局高度，收起态与单张图同高。
+const IMAGE_STACK_HEIGHT = IMAGE_HEIGHT;
 const FILE_CHIP_HEIGHT = 30;
 const FILES_PER_ROW = 3;
 

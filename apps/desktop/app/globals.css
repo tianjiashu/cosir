@@ -42,6 +42,7 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+  --color-link: var(--link);
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
   --color-terminal: var(--terminal);
@@ -118,7 +119,10 @@
   --warning-foreground: oklch(0.985 0 0);
   --info: oklch(0.5 0.134 242.749);
   --info-foreground: oklch(0.985 0 0);
-  --brand: oklch(0.715 0.143 215.221);
+  /* 可点击文字（Markdown 链接、可打开的路径）；不用中性的 --primary，否则与正文同色。 */
+  --link: oklch(0.55 0.19 255);
+  /* 品牌荧光绿（应用图标 #b6ff3b）；浅色背景上压暗一档才看得清。 */
+  --brand: oklch(0.707 0.181 129.18);
   --brand-foreground: oklch(0.205 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
@@ -167,7 +171,8 @@
   --warning-foreground: oklch(0.279 0.077 45.635);
   --info: oklch(0.746 0.16 232.661);
   --info-foreground: oklch(0.293 0.066 243.157);
-  --brand: oklch(0.789 0.154 211.53);
+  --link: oklch(0.7 0.16 252);
+  --brand: oklch(0.919 0.224 128.65);
   --brand-foreground: oklch(0.205 0 0);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
@@ -259,6 +264,42 @@
 }
 .app-drag-region :is(button, a, input, textarea, select, summary, label, [role="button"], [role="tab"], [role="menuitem"], [tabindex], [contenteditable]) {
   -webkit-app-region: no-drag;
+}
+/*
+ * Chromium 按 DOM 顺序合并拖动区（后出现的覆盖先出现的），没声明 app-region 的浮层盖在拖动区上时，下面照样
+ * 拖窗口。挂在 #root 之外的 portal 层（菜单、弹层、对话框、全屏画布）排在所有拖动区之后，这里统一声明
+ * no-drag，从顶部一行下拉的菜单因此点得到；app-region 不继承，portal 容器可能是 display: contents，所以
+ * 连它的直接子元素一起声明。portal 内自己的头部（如全屏画布）仍可用 app-drag-region 重新设为拖动区。
+ */
+body > :not(#root),
+body > :not(#root) > * {
+  -webkit-app-region: no-drag;
+}
+
+/*
+ * 查找命中的高亮（FindBar 驱动）：源码视图是 CodeMirror 的 mark 装饰，渲染视图（Markdown）是 CSS Custom
+ * Highlight API 的命名高亮，二者共用这两档颜色。当前处更深，其余命中更浅；颜色随 --warning 跟随深浅色。
+ */
+:root {
+  --find-match: color-mix(in oklab, var(--warning) 28%, transparent);
+  --find-match-current: color-mix(in oklab, var(--warning) 62%, transparent);
+}
+/* 分开写：选择器列表里有一项不被识别，整条规则都会作废。 */
+.cm-findMatch {
+  background-color: var(--find-match);
+}
+.cm-findMatch-current {
+  background-color: var(--find-match-current);
+}
+/* 当前命中同时是编辑器选区，basicSetup 的「同文高亮」会把其余命中染成另一种颜色；查找期间让位给查找高亮。 */
+.cm-editor:has(.cm-findMatch-current) .cm-selectionMatch {
+  background-color: transparent;
+}
+::highlight(cosir-find) {
+  background-color: var(--find-match);
+}
+::highlight(cosir-find-current) {
+  background-color: var(--find-match-current);
 }
 
 /* 与 Button / Input 一致的键盘焦点环；自绘控件统一使用，避免各自发明 ring 样式。 */

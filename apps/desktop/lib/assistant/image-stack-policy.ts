@@ -9,3 +9,6 @@ const IMAGE_STACK_THRESHOLD = 5;
 export function shouldStackImages(count: number): boolean {
   return count > IMAGE_STACK_THRESHOLD;
 }
+
+/** 用户消息图片每行最多几张：展开的一叠按它限宽，行高估计按它折行。 */
+export const IMAGES_PER_ROW = 3;

@@ -1,6 +1,7 @@
 import type { TransportState } from "../../lib/assistant/contract";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { seedState } from "./transport-fixtures";
+import { API_ORIGIN } from "./e2e-env";
 
 async function expectViewportCoverage(page: Page, surface: Locator) {
   await expect.poll(() => surface.evaluate((element) => {
@@ -13,11 +14,11 @@ async function expectViewportCoverage(page: Page, surface: Locator) {
 }
 
 test.beforeEach(async ({ request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/reset");
+  await request.post(`${API_ORIGIN}/__test__/reset`);
 });
 
 test("画布全屏覆盖保活任务布局，退出与弹窗保留编辑状态", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-task", { data: { taskId: 42, title: "全屏回归" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "全屏回归" } });
   await page.route("**/configuration/agent-teams", (route) => route.request().method() === "POST"
     ? route.fulfill({ status: 400, json: { detail: "测试保存失败" } })
     : route.fulfill({ json: [] }));
@@ -80,7 +81,7 @@ test("画布全屏覆盖保活任务布局，退出与弹窗保留编辑状态",
 });
 
 test("Mermaid 全屏避开消息裁剪，窗口缩放与两种退出入口可用", async ({ page, request }) => {
-  await request.post("http://127.0.0.1:8000/__test__/seed-mermaid");
+  await request.post(`${API_ORIGIN}/__test__/seed-mermaid`);
   await page.goto("/tasks/42");
   const diagram = page.locator('[data-streamdown="mermaid-block"]').last();
   await expect(diagram.locator('[aria-label="Mermaid chart"] > svg')).toBeVisible();
@@ -104,15 +105,15 @@ test("消息图片放大避开消息裁剪，关闭后恢复焦点与滚动", as
     contentType: "image/svg+xml",
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200"><rect width="300" height="200" fill="teal"/></svg>',
   }));
-  await request.post("http://127.0.0.1:8000/__test__/seed-mermaid");
+  await request.post(`${API_ORIGIN}/__test__/seed-mermaid`);
   // 改写 seeded state 并交回模拟后端：state 读取与 attach 首帧共用同一份事实。
-  const snapshot = await (await request.get("http://127.0.0.1:8000/tasks/42/assistant/state")).json() as TransportState;
+  const snapshot = await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json() as TransportState;
   snapshot.messages.find((message) => message.role === "user")!.parts = [{
     type: "image", image: `cosir-attachment://${"a".repeat(64)}`,
   }];
   await seedState(request, 42, snapshot);
   await page.goto("/tasks/42");
-  const enter = page.getByRole("button", { name: "点击放大图片" });
+  const enter = page.getByRole("button", { name: /^预览图片 图片 \d+$/ });
   await enter.click();
   const surface = page.getByRole("dialog", { name: "放大的图片" });
   await expectViewportCoverage(page, surface);

@@ -13,6 +13,7 @@ import {
   type TerminalConnectionState,
   type TerminalControlFrame,
 } from "@/lib/terminal/terminal-connection";
+import { resolveLink, type LinkTarget } from "@/lib/links/resolve-link";
 import { pasteNeedsConfirmation, resolveTerminalKeyAction } from "@/lib/terminal/terminal-keyboard";
 import type { TerminalNotice, TerminalNoticeTone } from "@/lib/terminal/terminal-pane-status";
 
@@ -34,14 +35,15 @@ export type TerminalViewOptions = {
   sessionId: string;
   theme: ITheme;
   /**
-   * 读取当前工作区根目录：终端里以它开头的绝对路径可点击，在文件面板打开。每次识别链接时读取，
-   * 视图因此只按会话身份创建一次，根目录到达或变化不重建 xterm 与连接。
+   * 读取当前工作区根目录：终端里以它开头的绝对路径（可带 `:行[:列]`）可点击，在文件面板打开。每次
+   * 识别链接时读取，视图因此只按会话身份创建一次，根目录到达或变化不重建 xterm 与连接。
    */
   getWorkspaceRoot: () => string | undefined;
   onRuntime: (runtime: TerminalViewRuntime) => void;
   onOpenSearch: () => void;
   onSearchResults: (result: { index: number; count: number }) => void;
-  onOpenWorkspaceFile?: (relativePath: string) => void;
+  /** 打开识别出的链接（`useOpenLink`）：网址与工作区路径都经这一个入口，确认与分派不在终端里做。 */
+  onOpenLink: (target: LinkTarget) => void;
 };
 
 const RESIZE_SEND_DELAY_MS = 120;
@@ -102,7 +104,8 @@ export class TerminalView {
     this.terminal.unicode.activeVersion = "11";
     this.terminal.loadAddon(new WebLinksAddon((event, uri) => {
       event.preventDefault();
-      window.open(uri, "_blank", "noopener,noreferrer");
+      const target = resolveLink(uri, { workspaceRoot: null });
+      if (target) this.options.onOpenLink(target);
     }));
     this.terminal.open(container);
     this.terminal.attachCustomKeyEventHandler((event) => this.handleKey(event));
@@ -339,29 +342,34 @@ export class TerminalView {
     this.terminal.focus();
   }
 
+  /**
+   * 识别以工作区根开头的绝对路径。相对路径不识别：它相对的是 shell 当前目录，终端不知道，按工作区根
+   * 解析会打开错的文件。
+   */
   private registerWorkspacePathLinks(): void {
     let cached: { root: string; pattern: RegExp } | null = null;
     this.disposables.push(this.terminal.registerLinkProvider({
       provideLinks: (lineNumber, callback) => {
         const rawRoot = this.options.getWorkspaceRoot();
-        if (!rawRoot || !this.options.onOpenWorkspaceFile) {
+        if (!rawRoot) {
           callback(undefined);
           return;
         }
         const root = rawRoot.replace(/[\\/]+$/, "");
         if (cached?.root !== root) {
-          cached = { root, pattern: new RegExp(`${escapeRegExp(root)}[\\\\/][^\\s'"\`:;,()<>\\[\\]]+`, "g") };
+          cached = { root, pattern: new RegExp(`${escapeRegExp(root)}[\\\\/][^\\s'"\`:;,()<>\\[\\]]+(?::\\d+(?::\\d+)?)?`, "g") };
         }
         const { pattern } = cached;
         const line = this.terminal.buffer.active.getLine(lineNumber - 1)?.translateToString(true) ?? "";
         const links: ILink[] = [];
         for (const match of line.matchAll(pattern)) {
+          const target = resolveLink(match[0], { workspaceRoot: root });
+          if (target?.kind !== "workspace") continue;
           const start = match.index ?? 0;
-          const relative = match[0].slice(root.length + 1).replace(/\\/g, "/");
           links.push({
             text: match[0],
             range: { start: { x: start + 1, y: lineNumber }, end: { x: start + match[0].length, y: lineNumber } },
-            activate: () => this.options.onOpenWorkspaceFile?.(relative),
+            activate: () => this.options.onOpenLink(target),
           });
         }
         callback(links.length > 0 ? links : undefined);
