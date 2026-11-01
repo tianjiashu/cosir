@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+
 if TYPE_CHECKING:
     from app.tools.terminal_runtime.render import TerminalObservationResult
     from app.tools.terminal_runtime.session_runtime import SessionSnapshot

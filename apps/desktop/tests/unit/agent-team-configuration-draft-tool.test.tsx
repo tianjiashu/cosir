@@ -11,8 +11,6 @@ describe("AgentTeamConfigurationTool", () => {
         <AgentTeamConfigurationTool
           artifact={{
             backendStatus: "completed",
-            presentation: {},
-            heading: null,
             awaitingUser: false,
             background: false,
             display_data: {

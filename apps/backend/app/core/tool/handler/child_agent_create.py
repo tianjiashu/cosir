@@ -18,28 +18,29 @@ from app.core.agents.agent_profile import (
     AgentProfileType,
 )
 from app.core.tool.handler.child_agent.child_run_job import run_child
-from app.core.tool.handler.child_agent.delegation_display import build_delegation_display_data
-from app.core.tool.schemas import (
-    TOOL_DELEGATE_TASK,
-    ToolDefinition,
-    ToolDisplayHints,
-    ToolExecutionContext,
-    ToolObservation,
+from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
+from app.core.tool.handler.child_agent.delegation_display import (
+    build_delegation_display_data,
 )
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT, TOOL_GROUP_TERMINAL_SESSION
+from app.core.tool.schemas import (
+    TOOL_DELEGATE_TASK,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
+from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT, TOOL_GROUP_TERMINAL_SESSION
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models import ConversationRunCommand
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.service.depends import (
     get_conversation_run_ledger,
-    get_user_input_service,
     get_task_service,
+    get_user_input_service,
 )
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 def strip_child_disallowed_tools(definitions: list[ToolDefinition]) -> list[ToolDefinition]:
@@ -235,11 +236,15 @@ class DelegateTaskTool(HandlerBase):
                         },
                         separators=(",", ":"),
                     ),
-                    display_data=build_delegation_display_data(**display, status="running"),
+                    display_data=build_delegation_display_data(**display),
                 )
 
             return run_child(
-                execution_context, child_task.id, enqueue=enqueue, placeholder=placeholder
+                execution_context,
+                child_task.id,
+                label=agent_name,
+                enqueue=enqueue,
+                placeholder=placeholder,
             )
 
         except Exception as e:
@@ -289,14 +294,6 @@ class DelegateTaskTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             execution_mode="thread",
             parallel_mode="parallel",
-            display=ToolDisplayHints(
-                verb="委派任务",
-                icon="users",
-                surface="standalone",
-                expandable=False,
-                expand_layout="details",
-                show_result=False,
-            ),
         )
 
 

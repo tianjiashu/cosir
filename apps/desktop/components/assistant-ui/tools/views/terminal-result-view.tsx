@@ -22,7 +22,7 @@ function commandLive({ artifact }: CallViewContext): boolean {
 
 function TerminalResultBody({ data, context }: { data: Record<string, unknown>; context: CallViewContext }) {
   const { artifact } = context;
-  const command = text(data.command) ?? artifact.heading?.target;
+  const command = text(data.command) ?? text(context.args.command);
   const output = text(data.output) ?? "";
   const workdir = text(data.workdir);
   const live = commandLive(context);

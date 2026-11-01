@@ -56,7 +56,8 @@ def plan_tool_call_created(
         "toolName": event.tool_name,
         "status": "pending",
         "error": None,
-        "presentation": copy.deepcopy(event.presentation),
+        # 刚创建的 ``pending`` 是「准备执行」不是「等你操作」；后者由结果投影按占位行判定。
+        "awaitingUser": False,
         "isError": False,
         "approvalRequestId": None,
     }
@@ -85,7 +86,7 @@ def plan_tool_call_status_changed(
 
     base = find_tool(state, event.tool_call_id)
     if base is None:
-        # 状态事件不携带 toolName / presentation，缺少 part 时无法补建合法 part；此处只
+        # 状态事件不携带 toolName，缺少 part 时无法补建合法 part；此处只
         # 降级为「展示事实缺失」并继续后续投影，绝不让展示层缺口中断 Agent 执行。
         log.warning(
             "tool_call_part_missing_for_status_change",
@@ -190,6 +191,8 @@ def plan_tool_calls_settled(
                     "已取消" if event.status == "cancelled" else "执行异常",
                 ),
                 ConversationStateMutation("set", (*base, "isError"), event.status == "failed"),
+                # 收束后不再 ``pending``，「等你操作」随之结束（与 project_tool_result 同口径）。
+                ConversationStateMutation("set", (*base, "awaitingUser"), False),
             ]
         )
     return mutations

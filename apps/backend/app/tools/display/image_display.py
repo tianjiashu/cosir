@@ -1,6 +1,8 @@
-"""``read_image`` 的展示数据投影：读到的图片（附件 asset id）与没读成的路径及短提示。"""
+"""``read_image`` 的展示数据投影：读到的图片（附件 asset id）与没读成的路径
+及短提示。"""
 
 from typing import Any
+
 
 
 def build_read_image_display_data(

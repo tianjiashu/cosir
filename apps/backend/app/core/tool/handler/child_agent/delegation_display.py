@@ -3,26 +3,25 @@
 from typing import Any
 
 
+
 def build_delegation_display_data(
     *,
     title: str,
     child_agent_id: str,
     delegation_id: int | None = None,
     child_task_id: int | None = None,
-    status: str,
     role: str | None = None,
 ) -> dict[str, Any]:
-    """构造父级委派生命周期展示数据，不携带 prompt 或 child 正文。
+    """构造父级委派展示数据，不携带 prompt 或 child 正文。
 
-    子 Agent 的最终输出属于 child task 的结果，不属于父级委派卡片。父级卡片只保留
-    可追踪的 locator、角色和生命周期，避免长文本进入紧凑的工具轨迹。
+    子 Agent 的最终输出属于 child task 的结果，不属于父级委派卡片；子 Task 的运行状态也不在这里：
+    展示数据不是事实源，前端按 ``child_task_id`` 读应用级任务状态推送。
     """
 
     data: dict[str, Any] = {
         "kind": "delegation-result",
         "title": title,
         "child_agent_id": child_agent_id,
-        "status": status,
     }
     if role:
         data["role"] = role

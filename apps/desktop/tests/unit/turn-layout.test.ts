@@ -8,14 +8,12 @@ const text = (value: string): TransportMessagePart => ({ type: "text", text: val
 const reasoning = (value: string): TransportMessagePart => ({ type: "reasoning", text: value });
 const call = (id: string, overrides: Partial<TransportToolCallPart> = {}): TransportToolCallPart => toolCallPart(id, "read_file", {
   status: "completed",
-  presentation: { verb: "读取文件", icon: "eye" },
-  heading: { title: "读取文件", target: `${id}.ts` },
+  args: { path: `${id}.ts` },
   ...overrides,
 });
 const changes = (id: string, files: Array<Record<string, unknown>>) => call(id, {
   toolName: "apply_patch",
-  presentation: { verb: "修改文件", icon: "git-compare" },
-  heading: { title: "修改文件", target: null },
+  args: {},
   display_data: { kind: "file-changes", changes: files },
 });
 
@@ -26,7 +24,7 @@ describe("projectTurn 分区", () => {
   it("思考 / 调用 / 叙述交替：结论是最后一个非正文 part 之后的正文，其余按原序进过程", () => {
     const parts = [
       reasoning("先看结构"), call("c1"), text("看完目录，接着搜实现。"), reasoning("再搜"),
-      call("c2", { presentation: { verb: "搜索内容", icon: "search" }, heading: { title: "搜索内容", target: "foo" } }), call("c3"), text("结论第一段"), text("结论第二段"),
+      call("c2", { toolName: "search_content", args: { pattern: "foo", path: "." } }), call("c3"), text("结论第一段"), text("结论第二段"),
     ];
     const layout = projectTurn(parts, "settled");
     expect(layout.answer.map((item) => item.part.text)).toEqual(["结论第一段", "结论第二段"]);
@@ -58,8 +56,8 @@ describe("projectTurn 分区", () => {
   it("运行中途没有结论：整段都是过程，当前动作取最新未结束的调用", () => {
     const layout = projectTurn([
       reasoning("想"), call("c1", { status: "completed" }),
-      call("c2", { status: "running", heading: { title: "执行命令", target: "npm test" } }),
-      call("c3", { status: "pending", heading: { title: "读取文件", target: "b.ts" } }),
+      call("c2", { status: "running", toolName: "execute_terminal", args: { description: "运行测试", command: "npm test" } }),
+      call("c3", { status: "pending", args: {} }),
     ], "running");
     expect(layout.answer).toEqual([]);
     // 最新的未结束调用是排队中的 c3，当前动作取它的标题。
@@ -91,20 +89,19 @@ describe("projectTurn 分区", () => {
     expect(projectTurn([call("c1"), call("c2"), text("答")], "settled").process.flat).toBe(false);
   });
 
-  it("标题回落：heading.title → presentation.verb → 工具名", () => {
+  it("标题按工具目录：登记的工具用动词，未登记的工具退回工具名", () => {
     expect(callTitle(call("c1"))).toBe("读取文件");
-    expect(callTitle(toolCallPart("c2", "web_search", { presentation: { verb: "搜索网页" } }))).toBe("搜索网页");
-    expect(callTitle(toolCallPart("c3", "wait_messages"))).toBe("wait_messages");
-    const layout = projectTurn([toolCallPart("c2", "web_search", { presentation: { verb: "搜索网页" } }), toolCallPart("c3", "wait_messages")], "settled");
-    expect(layout.process.verbCounts).toEqual([{ label: "搜索网页", count: 1 }, { label: "wait_messages", count: 1 }]);
+    expect(callTitle(toolCallPart("c2", "web_search", { args: { query: "x" } }))).toBe("网页搜索");
+    expect(callTitle(toolCallPart("c3", "future_tool"))).toBe("future_tool");
+    const layout = projectTurn([toolCallPart("c2", "web_search"), toolCallPart("c3", "future_tool")], "settled");
+    expect(layout.process.verbCounts).toEqual([{ label: "网页搜索", count: 1 }, { label: "future_tool", count: 1 }]);
   });
 
   it("区头计数按动词聚合，不按各异的意图标题", () => {
     const run = (id: string, title: string) => toolCallPart(id, "execute_terminal", {
-      presentation: { verb: "执行命令", icon: "terminal" },
-      heading: { title, target: "bun test" },
+      args: { description: title, command: "bun test" },
     });
-    const layout = projectTurn([run("c1", "安装依赖"), run("c2", "运行单元测试"), toolCallPart("c3", "read_file", { presentation: { verb: "读取文件" } })], "settled");
+    const layout = projectTurn([run("c1", "安装依赖"), run("c2", "运行单元测试"), toolCallPart("c3", "read_file")], "settled");
     expect(layout.process.verbCounts).toEqual([{ label: "执行命令", count: 2 }, { label: "读取文件", count: 1 }]);
     expect(callTitle(run("c1", "安装依赖"))).toBe("安装依赖");
   });
@@ -112,7 +109,7 @@ describe("projectTurn 分区", () => {
 
 describe("projectTurn 等待用户、失败与活跃尾部", () => {
   it("awaitingUser 的调用提进等待区，同时留在过程里", () => {
-    const handoff = toolCallPart("h1", "browser_handoff", { status: "pending", awaitingUser: true, heading: { title: "交给你登录", target: null } });
+    const handoff = toolCallPart("h1", "browser_handoff", { status: "pending", awaitingUser: true, args: { reason: "交给你登录" } });
     const layout = projectTurn([call("c1"), handoff], "suspended");
     expect(layout.attention).toEqual([{ index: 1, part: handoff }]);
     expect(layout.process.items.map((item) => item.index)).toEqual([0, 1]);
@@ -173,7 +170,7 @@ describe("projectTurn 产物", () => {
     expect(card.callIndexes).toEqual([0, 1, 2, 3]);
     // 改动行在过程里也有：产物卡与过程行是同一批调用的两种视角。
     expect(layout.process.callCount).toBe(4);
-    expect(layout.process.verbCounts).toEqual([{ label: "修改文件", count: 4 }]);
+    expect(layout.process.verbCounts).toEqual([{ label: "应用补丁", count: 4 }]);
   });
 
   it("最终状态优先级：deleted > moved > added > modified，低优先级不覆盖高优先级", () => {
@@ -203,7 +200,7 @@ describe("projectTurn 产物", () => {
   });
 
   it("运行中尚无展示数据的写入调用只在过程里，完成后才出现在产物区", () => {
-    const running = toolCallPart("w1", "write_file", { status: "running", heading: { title: "写入文件", target: "a.ts" } });
+    const running = toolCallPart("w1", "write_file", { status: "running", args: { path: "a.ts" } });
     expect(projectTurn([running], "running").artifacts).toEqual([]);
     expect(projectTurn([changes("w1", [{ path: "a.ts", status: "added", insertions: 5 }])], "running").artifacts).toHaveLength(1);
   });

@@ -9,7 +9,6 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_BROWSER_SCREENSHOT,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -17,7 +16,9 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_BROWSER
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.attachment.image_normalizer import ImageNormalizationError
-from app.tools.display.browser_display import build_browser_page_display_data
+from app.tools.display.browser_display import (
+    build_browser_page_display_data,
+)
 from app.tools.host.errors import HostCallError
 from app.tools.host.host_call import call_host
 from app.tools.tool_handler.browser.common import browser_error_observation, host_params
@@ -98,5 +99,4 @@ class BrowserScreenshotTool(HandlerBase):
             execution_mode="thread",
             parallel_mode="serial",
             returns_images=True,
-            display=ToolDisplayHints(verb="网页截图", icon="globe"),
         )

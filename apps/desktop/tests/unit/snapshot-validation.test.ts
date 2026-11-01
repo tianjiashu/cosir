@@ -223,24 +223,13 @@ describe("Transport snapshot validation", () => {
     expect(parseTransportState(awaiting)).toBe(awaiting);
   });
 
-  it("heading 是 title + target 的固定形状，title 非空白、target 字符串或 null", () => {
+  // 目的：展示外壳已归前端工具目录，后端不再下发；再出现即视为前后端漂移。
+  it("tool-call part 不再接受 presentation / heading", () => {
     const base = { type: "tool-call", awaitingUser: false, toolCallId: "r1", toolName: "read_file", status: "running", args: { path: "a.ts" } };
-    const ok = withToolPart({ ...base, heading: { title: "读取文件", target: "a.ts" } });
+    const ok = withToolPart(base);
     expect(parseTransportState(ok)).toBe(ok);
-    const noTarget = withToolPart({ ...base, heading: { title: "等待消息", target: null } });
-    expect(parseTransportState(noTarget)).toBe(noTarget);
-    expect(() => parseTransportState(withToolPart({ ...base, heading: { title: "读取文件" } }))).toThrow("heading");
-    expect(() => parseTransportState(withToolPart({ ...base, heading: { title: " ", target: null } }))).toThrow("heading.title");
-    expect(() => parseTransportState(withToolPart({ ...base, heading: { title: "读取文件", target: 1 } }))).toThrow("heading.target");
-  });
-
-  it("presentation 只剩 verb 与 icon，已删除的分组 / 布局字段再出现即拒绝", () => {
-    const base = { type: "tool-call", awaitingUser: false, toolCallId: "r1", toolName: "read_file", status: "running", args: {} };
-    const ok = withToolPart({ ...base, presentation: { verb: "读取文件", icon: "eye" } });
-    expect(parseTransportState(ok)).toBe(ok);
-    expect(() => parseTransportState(withToolPart({ ...base, presentation: { verb: "读取文件", surface: "standalone" } }))).toThrow("presentation");
-    expect(() => parseTransportState(withToolPart({ ...base, presentation: { expand_layout: "terminal" } }))).toThrow("presentation");
-    expect(() => parseTransportState(withToolPart({ ...base, presentation: { verb: 3 } }))).toThrow("presentation.verb");
+    expect(() => parseTransportState(withToolPart({ ...base, presentation: { verb: "读取文件", icon: "eye" } }))).toThrow("已知字段");
+    expect(() => parseTransportState(withToolPart({ ...base, heading: { title: "读取文件", target: "a.ts" } }))).toThrow("已知字段");
   });
 
   it("结局带 durationMs（非负整数或 null），活动带 ISO 的 startedAt", () => {

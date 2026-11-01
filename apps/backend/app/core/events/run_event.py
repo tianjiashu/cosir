@@ -6,6 +6,7 @@
 不负责：消息内容与工具调用生命周期（分别见 ``message_event``、``tool_call_event``）。
 """
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import Field, StrictInt
@@ -24,6 +25,8 @@ class RunInitializedEvent(WorkflowEventEnvelope):
     事件追加。Run 只前进：编辑重跑新建 Run，不替换已有 Run。
 
     Attributes:
+        created_at: Run 记录的创建时间，由领域侧从落库的记录填入；投影为 ``activity.startedAt``，
+            前端据此做运行中的本地计时。投影器不读墙钟，所以必填。
         context_window_total: 创建 Run 时冻结的窗口上限，随该 Run 而非 Task 投影。
         model_config_id / options: 创建 Run 时冻结的发起配置，供前端执行运行期配置锁定。
 
@@ -33,6 +36,7 @@ class RunInitializedEvent(WorkflowEventEnvelope):
 
     # 判别式字段显式给出默认值：生产者不必重复书写字面量，判别式路由行为不变。
     type: Literal["run_initialized"] = "run_initialized"
+    created_at: datetime
     context_window_total: StrictInt | None = Field(default=None, ge=0)
     model_config_id: StrictInt | None = None
     options: ConversationRunOptions = Field(default_factory=ConversationRunOptions)
@@ -53,6 +57,9 @@ class RunStatusChangedEvent(WorkflowEventEnvelope):
             ``None``。
         error: Run 终态的错误契约（稳定 ``code`` + UI 展示 ``message``）；模型 HTTP 失败时
             ``message`` 可直接来自响应体；非终态迁移与 ``completed`` 为 ``None``。
+        changed_at: 迁移落库的时间，由领域侧从更新后的记录（``updated_at``）填入；终态时与
+            ``activity.startedAt`` 相减得到结局的 ``durationMs``。投影器不读墙钟：缺省时结局耗时
+            为 ``None``。
 
     异常:
         pydantic.ValidationError: ``status`` 不在枚举内，或出现未声明字段时抛出。
@@ -63,6 +70,7 @@ class RunStatusChangedEvent(WorkflowEventEnvelope):
     end_reason: str | None = None
     usage_stats: ConversationRunUsageStats | None = None
     error: ConversationRunError | None = None
+    changed_at: datetime | None = None
 
 
 class RunResultUpdatedEvent(WorkflowEventEnvelope):

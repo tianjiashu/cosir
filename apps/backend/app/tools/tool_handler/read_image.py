@@ -15,7 +15,6 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_READ_IMAGE,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -24,7 +23,9 @@ from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
 from app.service.attachment.attachment_service import AttachmentService, SavedImage
 from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
-from app.tools.display.image_display import build_read_image_display_data
+from app.tools.display.image_display import (
+    build_read_image_display_data,
+)
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models import ReadImageArgs
 
@@ -186,10 +187,6 @@ class ReadImageTool(HandlerBase):
             # 发布附件要用进程内的 workspace service，只能在线程里执行。
             execution_mode="thread",
             returns_images=True,
-            display=ToolDisplayHints(
-                verb="查看图片",
-                icon="eye",
-                expandable=True,
-                expand_layout="details",
-            ),
+            # 只读、彼此独立：模型一次发出的多个读取真正并发执行（见 tool_batch_runner）。
+            parallel_mode="parallel",
         )

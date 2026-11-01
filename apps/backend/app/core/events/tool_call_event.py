@@ -21,10 +21,7 @@ class ToolCallCreatedEvent(WorkflowEventEnvelope):
 
     Attributes:
         tool_call_id: 工具调用在 Task 内唯一的稳定标识（模型提供或由执行链生成）。
-        tool_name: 被调用工具名。
-        presentation: 「怎么展示」的静态外壳声明，由 ``ToolDefinition.display``
-            （``ToolDisplayHints``）经 ``to_dict()`` 序列化得到，**同一种工具每次调用完全相同**；
-            不含 Callable、摘要文本或条目内容，**不进入模型上下文**。
+        tool_name: 被调用工具名。前端按它查工具目录表得到图标、动词与标题规则，后端不下发展示外壳。
 
     异常:
         pydantic.ValidationError: 标识或工具名为空，或出现未声明字段时抛出。
@@ -33,7 +30,6 @@ class ToolCallCreatedEvent(WorkflowEventEnvelope):
     type: Literal["tool_call_created"] = "tool_call_created"
     tool_call_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
-    presentation: dict[str, object] = Field(default_factory=dict)
 
 
 class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
@@ -52,6 +48,7 @@ class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
         tool_call_id: 目标工具调用标识。
         status: 迁移后的状态。
         args: 已完成解析的工具入参；通常随 ``running`` 一起发送，为 ``None`` 时保留已有参数。
+            前端的调用行标题（意图 · 目标）就从它和工具名算出。
         error: 面向展示的短错误提示；仅失败时非空，不能承载完整诊断。
         display_data: 面向 UI 的结构化展示结果；不进入模型上下文。
         team_run_id: 可选的 TeamRun 定位信息；不承载运行状态或错误正文。

@@ -12,7 +12,6 @@ from app.core.tool.background import deferred_registry as deferred_module
 from app.core.tool.background.deferred_job import DeferredConclusion, ManualJob, ThreadJob
 from app.core.tool.background.deferred_registry import deferred_registry
 from app.core.tool.background.run_deferred import run_deferred
-from app.core.tool.schemas.tool_heading import ToolHeading
 from app.core.tool.schemas import BackgroundCapability, ToolDefinition
 from app.core.tool.schemas.tool_background import background_field
 
@@ -35,7 +34,7 @@ def _run(job: Any, **overrides: Any):
         "run_id": 2,
         "tool_call_id": "call-1",
         "kind": "terminal_command",
-        "heading": ToolHeading(title="t", target=None),
+        "label": "t",
         "background": False,
         "foreground_limit_s": None,
         "is_cancelled": lambda: False,

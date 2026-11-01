@@ -4,6 +4,7 @@ import { useScrollLock } from "@assistant-ui/react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DISCLOSURE_ANIMATION_MS, DISCLOSURE_CONTENT_CLASS } from "@/components/assistant-ui/turn/turn-tokens";
 import { callKey, useDisclosure } from "@/lib/assistant/disclosure-store";
+import { toolHeading, toolIconName } from "@/lib/assistant/tool-catalog";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 import { cn } from "@/lib/utils";
 import { CallStatus } from "./call-status";
@@ -24,11 +25,6 @@ export type CallRowProps = {
   /** 用户已请求停止整个 Task 的当前活动，工具级停止入口随之收起。 */
   taskCancelling?: boolean;
 };
-
-/** 标题规则与 `turn-layout.callTitle` 同源：`heading.title` → `presentation.verb` → 工具名。 */
-function rowTitle({ heading, presentation }: ToolArtifact, toolName: string): string {
-  return heading?.title ?? presentation.verb ?? toolName;
-}
 
 const ROW_CLASS = "flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-1.5 -mx-1.5 py-0.5 text-left text-2sm";
 
@@ -55,8 +51,10 @@ export const CallRow = memo(function CallRow({ taskId, toolCallId, toolName, arg
   const collapsibleRef = useRef<HTMLDivElement>(null);
   const lockScroll = useScrollLock(collapsibleRef, DISCLOSURE_ANIMATION_MS);
 
-  const title = rowTitle(artifact, toolName);
-  const target = artifact.heading?.target ?? null;
+  // 标题与 `turn-layout.callTitle` 同源：都按工具目录从参数算出。
+  const { title, target } = toolHeading(toolName, args);
+  // 参数不流式：排队时参数还没到，标题只是动词，闪烁提示「还在准备」。
+  const awaitingArgs = status === "pending" && Object.keys(args).length === 0;
   const kindMeta = resolved?.view.meta?.(resolved.data, context);
   const stateMeta: ReactNode = failed
     ? <span className="text-destructive">{artifact.error ?? "执行失败"}</span>
@@ -71,13 +69,13 @@ export const CallRow = memo(function CallRow({ taskId, toolCallId, toolName, arg
 
   const contents = (
     <>
-      <ToolIcon name={artifact.presentation.icon} className="text-muted-foreground size-3.5" aria-hidden="true" />
+      <ToolIcon name={toolIconName(toolName)} className="text-muted-foreground size-3.5" aria-hidden="true" />
       <span
         data-slot="call-title"
         className={cn(
           "shrink-0 truncate",
           failed ? "text-destructive" : cancelled ? "text-muted-foreground line-through" : unfinished ? "text-foreground" : "text-muted-foreground",
-          status === "pending" && artifact.heading === null && "shimmer motion-reduce:animate-none",
+          awaitingArgs && "shimmer motion-reduce:animate-none",
         )}
         title={title}
       >

@@ -74,9 +74,8 @@ class UserInputBody(EnqueuedMessageBody):
         if img_paths:
             img_paths = "\nimage_paths:" + img_paths
         return (
-            f'<{self.TAG} time="{render_time()}">'
+            f'<{self.TAG} time="{render_time()}" hint:"Output please follow <output_layer> rules ">'
             f"{self.input_text}{img_paths}"
-            f"\n\nOutput rules: follow <output_layer>."
             f"</{self.TAG}>"
         )
 

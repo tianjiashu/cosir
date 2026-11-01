@@ -187,56 +187,6 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
         validate_snapshot(invalid_state)  # type: ignore[arg-type]
 
 
-def test_get_tool_display_returns_empty_dict_for_missing_definition(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # 未注册工具 / 无 display 时返回 {} 而非 None，保证重建快照的 presentation
-    # 是合法对象、能通过 validate_snapshot（修复前返回 None 会让整张快照冷读崩）。
-
-    class _FakeRegistry:
-        def get_tool_definition(self, _name: str):
-            return None
-
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
-        lambda: _FakeRegistry(),
-    )
-    assert ConversationTaskStateRebuilder.get_tool_display("unknown_tool") == {}
-
-
-def test_validate_snapshot_tolerates_none_presentation() -> None:
-    # 防御性：presentation 为显式 None 视作缺省，不再使整张快照校验崩溃
-    # （旧实现 ``isinstance(part.get("presentation", {}), dict)`` 会命中 None）。
-    state = {
-        "title": "task",
-        "messages": [
-            {
-                "id": "m1",
-                "role": "assistant",
-                "parts": [
-                    {
-                        "type": "tool-call",
-                        "toolCallId": "c1",
-                        "toolName": "read_file",
-                        "status": "cancelled",
-                        "presentation": None,
-                    }
-                ],
-                "runId": 1,
-                "outcome": None,
-            }
-        ],
-        "messageOffset": 0,
-        "activity": None,
-        "terminal_sessions": [],
-        "background_tasks": [],
-        "foreground_waits": [],
-        "handoffs": [],
-    }
-
-    validate_snapshot(state)  # 不应抛 ValueError
-
-
 def test_rebuild_keeps_interrupted_output_stopped_even_when_run_is_active() -> None:
     """已落库的中断输出已停止生成，后续 Run 继续执行也不能把旧文本恢复为 running。"""
 
@@ -299,14 +249,6 @@ def test_rebuild_keeps_interrupted_output_when_run_is_cancelled() -> None:
 def test_rebuild_restores_child_task_locator_and_workspace_role_from_display_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _ToolRegistry:
-        def get_tool_definition(self, _name: str):
-            return None
-
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
-        lambda: _ToolRegistry(),
-    )
     row = ConversationTaskContextRecord(
         id=1,
         task_id=7,

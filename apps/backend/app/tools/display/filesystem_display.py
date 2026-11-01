@@ -1,11 +1,11 @@
-"""文件系统工具的 UI 展示数据构造。
+"""文件读取、搜索、目录工具的 UI 展示数据构造。
 
-本模块只负责把已完成的文件读取、搜索、目录和删除结果投影为客户端数据；不执行
-文件系统操作，也不构造模型可见的正文或错误诊断。
+只把已完成的结果投影为客户端数据；不执行文件系统操作，也不构造模型可见的正文或错误诊断。
 """
 
 from collections.abc import Iterable, Mapping
 from typing import Any
+
 
 _SEARCH_LINE_DISPLAY_LIMIT = 240
 

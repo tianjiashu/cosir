@@ -12,11 +12,13 @@ import { ProcessBlock, processHeading } from "@/components/assistant-ui/turn/pro
 import type { TransportMessagePart, TransportToolCallPart } from "@/lib/assistant/contract";
 import { projectTurn, type TurnPhase } from "@/lib/assistant/turn-layout";
 
+// 动词来自前端工具目录：按动词挑一个对应的真实工具；命令的标题是模型写的 description。
+const TOOL_BY_VERB: Record<string, string> = { 读取文件: "read_file", 执行命令: "execute_terminal", 搜索内容: "search_content" };
+
 function call(id: string, verb: string, status: TransportToolCallPart["status"] = "completed", title?: string): TransportToolCallPart {
   return {
-    type: "tool-call", toolCallId: id, toolName: verb, args: {}, status, awaitingUser: false,
-    presentation: { verb, icon: "eye" },
-    ...(title ? { heading: { title, target: null } } : {}),
+    type: "tool-call", toolCallId: id, toolName: TOOL_BY_VERB[verb], status, awaitingUser: false,
+    args: title ? { description: title, command: "bun test" } : {},
   };
 }
 

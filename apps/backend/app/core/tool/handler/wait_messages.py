@@ -19,7 +19,6 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_WAIT_MESSAGES,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -75,14 +74,6 @@ class WaitMessagesTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             execution_mode="thread",
             parallel_mode="serial",
-            display=ToolDisplayHints(
-                verb="等待结果",
-                icon="clock",
-                surface="standalone",
-                expandable=False,
-                expand_layout="none",
-                show_result=False,
-            ),
         )
 
 

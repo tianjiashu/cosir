@@ -41,6 +41,7 @@ _SNAPSHOT_KEYS = {
 _ACTIVITY_KEYS = {
     "runId",
     "status",
+    "startedAt",
     "endReason",
     "error",
     "usage",
@@ -48,7 +49,7 @@ _ACTIVITY_KEYS = {
     "launch",
 }
 _MESSAGE_KEYS = {"id", "role", "parts", "runId", "outcome"}
-_OUTCOME_KEYS = {"status", "endReason", "error", "usage", "contextWindowTotal"}
+_OUTCOME_KEYS = {"status", "endReason", "error", "usage", "contextWindowTotal", "durationMs"}
 _QUEUED_MESSAGE_KEYS = {"id", "role", "parts", "delivery"}
 _DELIVERIES = {"immediate", "next_run"}
 _RUN_STATUSES = {status.value for status in ConversationRunStatus}
@@ -64,7 +65,7 @@ _TOOL_PART_KEYS = {
     "args",
     "error",
     "errorCode",
-    "presentation",
+    "awaitingUser",
     "display_data",
     "team_run_id",
     "background",
@@ -171,6 +172,8 @@ def _validate_activity(activity: object) -> None:
     _validate_non_negative_int(activity["runId"], "activity runId")
     if activity["status"] not in _RUN_STATUSES:
         raise ValueError("snapshot activity status is invalid")
+    if not isinstance(activity["startedAt"], str) or not activity["startedAt"]:
+        raise ValueError("snapshot activity startedAt must be a non-empty string")
     if activity["endReason"] is not None and not isinstance(activity["endReason"], str):
         raise ValueError("snapshot activity endReason must be a string or null")
     if activity["contextWindowTotal"] is not None:
@@ -193,6 +196,8 @@ def _validate_outcome(outcome: object) -> None:
         _validate_usage(outcome["usage"])
     if outcome["contextWindowTotal"] is not None:
         _validate_non_negative_int(outcome["contextWindowTotal"], "outcome contextWindowTotal")
+    if outcome["durationMs"] is not None:
+        _validate_non_negative_int(outcome["durationMs"], "outcome durationMs")
     if outcome["error"] is not None:
         _validate_error(outcome["error"])
 
@@ -318,9 +323,8 @@ def _validate_part(part: object) -> None:
             raise ValueError("snapshot tool isError must be a boolean")
         if part.get("args") is not None and not isinstance(part.get("args"), dict):
             raise ValueError("snapshot tool args must be an object")
-        presentation = part.get("presentation")
-        if presentation is not None and not isinstance(presentation, dict):
-            raise ValueError("snapshot tool presentation must be an object")
+        if "awaitingUser" in part and not isinstance(part["awaitingUser"], bool):
+            raise ValueError("snapshot tool awaitingUser must be a boolean")
         if part.get("display_data") is not None and not isinstance(part.get("display_data"), dict):
             raise ValueError("snapshot tool display_data must be an object or null")
         if part.get("team_run_id") is not None and (

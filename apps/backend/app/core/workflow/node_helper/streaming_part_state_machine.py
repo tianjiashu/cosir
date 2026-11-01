@@ -304,11 +304,8 @@ class StreamingPartStateMachine:
             return False
         # 只为本轮放行的工具创建卡片；被拦调用仍保留在模型协议中，由执行层返回错误观察。
         # 注册表是进程级可变事实（MCP 工具可热更新）：调用方过滤后仍可能被注销，此时不建卡片。
-        definition = get_tool_registry().get_tool_definition(tool_name)
-        if definition is None:
+        if get_tool_registry().get_tool_definition(tool_name) is None:
             return False
-        display = definition.display
-        presentation: dict[str, object] = display.to_dict() if display is not None else {}
         self._emit(
             ToolCallCreatedEvent(
                 task_id=self._task_id,
@@ -316,7 +313,6 @@ class StreamingPartStateMachine:
                 step_id=self._step_id,
                 tool_call_id=call_id,
                 tool_name=tool_name,
-                presentation=presentation,
             )
         )
         return True

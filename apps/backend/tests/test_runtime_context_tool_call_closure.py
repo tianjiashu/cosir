@@ -112,16 +112,6 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
     context_service._store = context_store
     workspace = workspaces.create("closure", str(tmp_path))
     task = tasks.create(workspace.id, "tool call closure")
-    # 快照重建会按工具名查 display 定义；本文件只验证配对/状态契约，给出最小合法
-    # presentation（``validate_snapshot`` 要求它是对象），不依赖工具注册表装配。
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder,
-        "get_tool_display",
-        staticmethod(lambda _name: {"verb": "read"}),
-    )
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
-    )
 
     def seed_run(status: str) -> SimpleNamespace:
         """用真实 run CRUD 建一条 Run，并返回快照重建所需的最小 Run 事实。"""

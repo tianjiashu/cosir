@@ -8,27 +8,32 @@
 - 参数校验模型放在 ``app.tools.tool_models.ReadFileArgs``，由 Pydantic 负责。
 - 对外注册仍通过 ``build_read_file_definition`` 返回 ``ToolDefinition``，暂不改变注册逻辑。
 - 工具执行只读文件系统，不写入任何文件，不执行 shell 命令。
+- 分页由工具自己按字符预算完成，预算低于模型通道上限 ``Constant.Tools.MAX_OUTPUT_CHARS``：
+  通用的 ``ToolOutputBudget`` 超限时保留头尾、挖掉中段，对文件内容来说会让模型丢失中间几十行
+  且不知道丢了什么；工具内分页则在整行边界停下并给出下一段的 offset。每页都带
+  ``lines a-b of N`` 页头与 ``[end of file]`` / 续读 offset 页尾，模型不必再去 ``wc -l``。
 """
 
 from pathlib import Path
 from typing import ClassVar
 
-from app.tools.display.filesystem_display import build_read_file_display_data
+from app.config.constant import Constant
+from app.core.tool.results.tool_error import os_error_message, tool_error
+from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_READ_FILE,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.results.tool_error import os_error_message, tool_error
-from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
-from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tool.tool_base import HandlerBase
+from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
+from app.tools.display.filesystem_display import (
+    build_read_file_display_data,
+)
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models import ReadFileArgs
 from app.tools.tool_models.text_read_result import TextReadResult
-
 
 
 class ReadFileTool(HandlerBase):
@@ -40,11 +45,6 @@ class ReadFileTool(HandlerBase):
     """
 
     name = TOOL_READ_FILE
-    description = (
-        "Read a text file and return numbered lines ('LINE_NUM| CONTENT'). Output is "
-        "capped at about 100K characters and truncated at a line boundary when needed. "
-        "Files larger than 5 MB, images, and other binary files cannot be read."
-    )
     args_model = ReadFileArgs
     timeout_seconds = 10.0
     group = TOOL_GROUP_SEARCH
@@ -83,12 +83,24 @@ class ReadFileTool(HandlerBase):
     }
 
     max_limit = 2_000
-    max_content_chars = 100_000
+    # 页头与页尾占用的字符预留；正文行预算 = 模型通道上限 - 预留，保证整条结果不会再被
+    # ``ToolOutputBudget`` 中段截断。
+    page_frame_reserve = 200
+    max_content_chars = Constant.Tools.MAX_OUTPUT_CHARS - page_frame_reserve
     max_line_chars = 2_000
     binary_sample_bytes = 4_096
     utf8_bom = "\ufeff"
     # 单文件体积硬上限：超过此值的文件一律禁止读取，分页也不放行。
     max_file_bytes = 5_000_000
+
+    description = (
+        "Read a text file as numbered lines ('LINE_NUM| CONTENT'). One call returns at most "
+        f"`limit` lines and about {max_content_chars // 1000}K characters, whichever comes "
+        "first. The first line reports `lines a-b of N` (N is the file's total line count) "
+        "and the last line is `[end of file]` or the offset to continue from, so there is no "
+        "need to count lines or page by other means. Files larger than 5 MB, images, and other "
+        "binary files cannot be read."
+    )
 
     def __init__(self) -> None:
         """初始化 read_file 工具实例。
@@ -172,10 +184,10 @@ class ReadFileTool(HandlerBase):
                 status_hint="无法读取",
             )
 
-        normalized_offset, normalized_limit = self._normalize_read_pagination(offset, limit)
-        end_line: int | str | None = (
-            "END" if result.next_offset is None and result.end_line is not None else result.end_line
-        )
+        normalized_offset, _ = self._normalize_read_pagination(offset, limit)
+        # 展示契约（tool_ui_display_contract.md 3.1）：读到文件尾渲染为 ``L<start>-END``，
+        # 空文件与 offset 越界也算读到尾。
+        end_line: int | str | None = "END" if result.next_offset is None else result.end_line
         return tool_success(
             tool_name=self.name,
             content=result.content,
@@ -212,13 +224,8 @@ class ReadFileTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             resource_keys=("filesystem",),
-            display=ToolDisplayHints(
-                verb="读取文件",
-                icon="eye",
-                expandable=False,
-                expand_layout="none",
-                show_result=False,
-            ),
+            # 只读、彼此独立：模型一次发出的多个读取真正并发执行（见 tool_batch_runner）。
+            parallel_mode="parallel",
         )
 
     def _normalize_read_pagination(self, offset: int, limit: int) -> tuple[int, int]:
@@ -251,8 +258,10 @@ class ReadFileTool(HandlerBase):
             limit: 最多读取多少行。
 
         返回:
-            ``TextReadResult``。成功时 ``content`` 包含带行号文本；失败（文件不存在、
-            是目录、超过 5MB 体积上限、二进制或编码错误）时 ``error`` 非空。
+            ``TextReadResult``。成功时 ``content`` 为带页头页尾的行号文本（格式见
+            ``_page_content``）；失败（文件不存在、是目录、超过 5MB 体积上限、二进制或编码
+            错误）时 ``error`` 非空。本页在 ``limit`` 行或字符预算（``max_content_chars``）
+            先到者处停下，只有后者记为 ``truncated``。
 
         异常:
             不主动向上抛出文件系统异常。读取失败时 ``error`` 同时给出错误事实与修正建议。
@@ -304,19 +313,19 @@ class ReadFileTool(HandlerBase):
         next_offset = None
         end_line = None
         truncated = False
-        hint = ""
         total_lines = 0
         current_chars = 0
         try:
             with path.open("r", encoding="utf-8", errors="strict") as file:
+                # 整文件扫到底：页头要报文件总行数，而文件已限制在 5 MB 内，多扫一遍的代价
+                # 远小于模型另起一次调用去数行数。本页选够之后只计数、不再渲染。
                 for line_number, raw_line in enumerate(file, start=1):
                     total_lines = line_number
-                    if line_number < offset:
+                    if line_number < offset or next_offset is not None:
                         continue
                     if len(selected) >= limit:
                         next_offset = line_number
-                        hint = f"Use offset={next_offset} to continue reading."
-                        break
+                        continue
 
                     line = raw_line.rstrip("\r\n")
                     if line_number == 1 and line.startswith(self.utf8_bom):
@@ -327,11 +336,7 @@ class ReadFileTool(HandlerBase):
                     if current_chars + addition > self.max_content_chars:
                         next_offset = line_number
                         truncated = True
-                        hint = (
-                            "Output was truncated by character budget. "
-                            f"Use offset={next_offset} to continue reading."
-                        )
-                        break
+                        continue
 
                     selected.append((line_number, line))
                     end_line = line_number
@@ -352,19 +357,54 @@ class ReadFileTool(HandlerBase):
                 ),
             )
 
-        content = self._line_numbered_content(selected)
-        if hint:
-            content = f"{content}\n\n{hint}" if content else hint
-
         return TextReadResult(
-            content=content,
+            content=self._page_content(
+                selected,
+                offset=offset,
+                total_lines=total_lines,
+                next_offset=next_offset,
+                truncated=truncated,
+            ),
             total_lines=total_lines,
             file_size=self._safe_file_size(path),
             next_offset=next_offset,
-            hint=hint,
             end_line=end_line,
             truncated=truncated,
         )
+
+    def _page_content(
+        self,
+        selected: list[tuple[int, str]],
+        *,
+        offset: int,
+        total_lines: int,
+        next_offset: int | None,
+        truncated: bool,
+    ) -> str:
+        """组装一页的模型可见文本：页头 ``[lines a-b of N]``、带行号正文、页尾。
+
+        页尾只有两种：``[end of file]`` 或下一段的 offset（因字符预算停下时注明原因，模型据此
+        知道本页没到 ``limit`` 不是文件短）。空文件与 offset 越界各给一行事实代替正文，避免
+        空字符串让模型分不清「文件空」与「读漏了」。
+        """
+
+        if total_lines == 0:
+            return "[empty file]\n[end of file]"
+        if not selected:
+            return (
+                f"[offset {offset} is past the end: the file has {total_lines} lines]\n"
+                "[end of file]"
+            )
+        first, _ = selected[0]
+        last, _ = selected[-1]
+        header = f"[lines {first}-{last} of {total_lines}]"
+        if next_offset is None:
+            footer = "[end of file]"
+        elif truncated:
+            footer = f"[stopped at the character budget; continue with offset={next_offset}]"
+        else:
+            footer = f"[continue with offset={next_offset}]"
+        return f"{header}\n{self._line_numbered_content(selected)}\n{footer}"
 
     def _is_likely_binary(self, path: Path) -> bool:
         """判断文件是否像二进制文件。

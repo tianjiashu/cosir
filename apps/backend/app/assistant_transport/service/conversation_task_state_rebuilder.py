@@ -37,7 +37,6 @@ from app.assistant_transport.state.message_identity import (
     reply_id,
     user_message_id,
 )
-from app.config.configuration import get_tool_registry
 from app.core.llm_provider.message_codec import display_arguments
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_record import ConversationRunRecord
@@ -45,6 +44,7 @@ from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.models.task_record import TaskRecord
+from app.utils.datetime_utils import to_text
 from app.utils.message_content import content_to_text
 
 
@@ -141,15 +141,14 @@ class ConversationTaskStateRebuilder:
                         continue
                     if call["id"] in hidden_call_ids:
                         continue
+                    arguments = display_arguments(call["function"]["arguments"])
                     tool_part = ConversationStateToolCallPart(
                         type="tool-call",
                         toolCallId=call["id"],
                         toolName=call["function"]["name"],
-                        args=display_arguments(call["function"]["arguments"]),
-                        presentation=ConversationTaskStateRebuilder.get_tool_display(
-                            call["function"]["name"]
-                        ),
+                        args=arguments,
                         status="cancelled",
+                        awaitingUser=False,
                     )
                     tool_parts[call["id"]] = tool_part
             if message["role"] == "tool" and isinstance(row.metadata, ToolMessageMetadata):
@@ -163,27 +162,6 @@ class ConversationTaskStateRebuilder:
                 tool_part.update(project_tool_result(row.metadata))
 
         return tool_parts
-
-    @staticmethod
-    def get_tool_display(tool_name: str) -> dict[str, object]:
-        """返回 ``tool_name`` 的静态展示声明（已序列化为 dict）。
-
-        参数:
-            tool_name: AI 工具调用携带的已注册工具名。
-
-        返回:
-            ``ToolDisplayHints`` 序列化后的 dict。当 ``tool_name`` 为空、工具未注册或未声明
-            ``display`` 时返回**空 dict**（绝不返回 ``None``），以保证重建出的快照 part 的
-            ``presentation`` 字段始终是合法对象、能通过 ``validate_snapshot``；这与流式投影
-            路径在同一「缺少展示声明」场景下恒发 ``{}`` 的行为保持一致。
-        """
-        if not tool_name:
-            return {}
-        tool_registry = get_tool_registry()
-        tool_definition = tool_registry.get_tool_definition(tool_name)
-        if not tool_definition or not tool_definition.display:
-            return {}
-        return tool_definition.display.to_dict()
 
     @staticmethod
     def rebuild(
@@ -232,18 +210,23 @@ class ConversationTaskStateRebuilder:
                     (m for m in reversed(run_messages) if m["role"] == "assistant"), None
                 )
                 if assistant is not None:
+                    # 终态后 ``updated_at`` 还可能被结果改写（标题支线写回用量）再推一点，与实时
+                    # 投影的终态时间差在秒级以内，耗时只供展示，不另存终态时间戳。
+                    elapsed = run.updated_at - run.created_at
                     assistant["outcome"] = ConversationStateOutcome(
                         status=run.status,
                         endReason=run.end_reason,
                         error=ConversationTaskStateRebuilder.build_run_error(run),
                         usage=run.usage,
                         contextWindowTotal=run.context_window_total,
+                        durationMs=max(0, int(elapsed.total_seconds() * 1000)),
                     )
             messages.extend(run_messages)
             if run.id == task.current_run_id:
                 activity = ConversationStateActivity(
                     runId=run.id,
                     status=run.status,
+                    startedAt=to_text(run.created_at),
                     endReason=run.end_reason,
                     error=ConversationTaskStateRebuilder.build_run_error(run),
                     usage=run.usage,
@@ -313,21 +296,18 @@ class ConversationTaskStateRebuilder:
         ai_message: ChatCompletionAssistantMessageParam,
         tool_parts: dict[str, ConversationStateToolCallPart],
     ) -> None:
-        if ai_message.get("reasoning_content") is not None:
+        # 只在正文非空时建 part：实时链路只在收到 delta 时才建 text / reasoning part，而只带工具调用
+        # 的 assistant 记录 ``content`` 常是 ``""``；冷重建若照样追加空 part，刷新后回合里会多出
+        # 实时快照没有的空正文，把本应连续的调用序列切开。
+        reasoning = content_to_text(ai_message.get("reasoning_content"))
+        if reasoning:
             assistant["parts"].append(
-                ConversationStateTextPart(
-                    type="reasoning",
-                    text=content_to_text(ai_message.get("reasoning_content")),
-                    status="completed",
-                )
+                ConversationStateTextPart(type="reasoning", text=reasoning, status="completed")
             )
-        if ai_message.get("content") is not None:
+        content = content_to_text(ai_message.get("content"))
+        if content:
             assistant["parts"].append(
-                ConversationStateTextPart(
-                    type="text",
-                    text=content_to_text(ai_message.get("content")),
-                    status="completed",
-                )
+                ConversationStateTextPart(type="text", text=content, status="completed")
             )
         calls = cast(
             list[ChatCompletionMessageFunctionToolCallParam],

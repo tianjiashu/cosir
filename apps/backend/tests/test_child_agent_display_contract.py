@@ -79,14 +79,6 @@ def test_parent_delegation_display_never_carries_child_output() -> None:
 def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder,
-        "get_tool_display",
-        staticmethod(lambda _name: {}),
-    )
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
-    )
     rows = [
         ConversationTaskContextRecord(
             task_id=1,

@@ -3,7 +3,6 @@
 from app.core.tool.schemas.tool_call import ToolCall
 from app.core.tool.schemas.tool_definition import ToolDefinition
 from app.core.tool.schemas.tool_background import BackgroundCapability
-from app.core.tool.schemas.tool_display import ToolDisplayHints
 from app.core.tool.schemas.tool_execution_context import ToolExecutionContext
 from app.core.tool.schemas.tool_names import (
     ALL_TOOL_NAMES,
@@ -84,7 +83,6 @@ __all__ = [
     "ToolCall",
     "ToolDefinition",
     "BackgroundCapability",
-    "ToolDisplayHints",
     "ToolExecutionContext",
     "ToolName",
     "ToolObservation",

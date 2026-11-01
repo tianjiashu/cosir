@@ -42,7 +42,6 @@ function terminalPart(toolCallId: string, overrides: Partial<TransportToolCallPa
     toolName: "execute_terminal",
     args: { command: "make watch" },
     status: "pending",
-    presentation: { verb: "执行命令", icon: "terminal" },
     awaitingUser: false,
     display_data: { kind: "terminal-result", command: "make watch", workdir: "/work" },
     background: true,

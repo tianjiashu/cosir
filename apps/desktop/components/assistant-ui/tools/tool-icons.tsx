@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/** 后端 `ToolDisplayHints.icon` 的取值表（lucide 图标名）；没登记的名字回落到扳手。 */
+/** 工具目录（`lib/assistant/tool-catalog.ts`）里 `icon` 的取值表（lucide 图标名）；没登记的名字回落到扳手。 */
 const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   bot: BotIcon,
   clock: ClockIcon,

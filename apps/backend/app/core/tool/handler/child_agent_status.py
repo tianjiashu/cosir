@@ -3,19 +3,20 @@
 import json
 from typing import ClassVar
 
-from app.core.tool.handler.child_agent.child_agent_display import build_child_agent_result_display_data
+from app.core.tool.handler.child_agent.child_agent_display import (
+    build_child_agent_result_display_data,
+)
+from app.core.tool.handler.child_agent.child_agent_status_args import ChildAgentStatusArgs
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_CHILD_AGENT_STATUS,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.results.tool_error import tool_error
-from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.handler.child_agent.child_agent_status_args import ChildAgentStatusArgs
+from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.service.depends import get_conversation_run_ledger, get_task_service
 
 
@@ -125,7 +126,6 @@ class ChildAgentStatusTool(HandlerBase):
             display_data=build_child_agent_result_display_data(
                 operation="status",
                 child_task_id=child_task_id,
-                status=run.status,
                 agent_id=run.agent_id,
                 agent_name=child_task.title,
                 final_output=run.final_output,
@@ -157,14 +157,6 @@ class ChildAgentStatusTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             execution_mode="thread",
-            display=ToolDisplayHints(
-                verb="读取子 Agent 状态",
-                icon="info",
-                surface="standalone",
-                expandable=False,
-                expand_layout="details",
-                show_result=False,
-            ),
         )
 
 

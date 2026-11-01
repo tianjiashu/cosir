@@ -237,18 +237,6 @@ def test_t2_pre_tool_use_hook_deny_and_argument_rewrite(
 # ============================================================================
 
 
-class _FakeRebuildRegistry:
-    """冷重建用的假工具注册表：未注册名返回 None，已注册名无 display 声明。"""
-
-    def __init__(self, names: tuple[str, ...]) -> None:
-        self._names = set(names)
-
-    def get_tool_definition(self, name: str) -> Any:
-        if name not in self._names:
-            return None
-        return SimpleNamespace(display=None, heading=None)
-
-
 def _ai_row(tool_calls: list[dict[str, Any]]) -> ConversationTaskContextRecord:
     return ConversationTaskContextRecord(
         id=1,
@@ -288,10 +276,6 @@ def test_t4_cold_rebuild_skips_the_hidden_disabled_call(
     修复后实际观测：只返回 ``normal-1`` 一个 part；隐藏调用被整条跳过。
     """
 
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
-        lambda: _FakeRebuildRegistry(("read_file", "write_file")),
-    )
     rows = [
         _ai_row(
             [
@@ -345,10 +329,6 @@ def test_t4_cold_rebuild_hidden_call_without_result_stays_cancelled(
     （只在 ToolMessage 分支写入）。
     """
 
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
-        lambda: _FakeRebuildRegistry(("read_file", "write_file")),
-    )
     rows = [
         _ai_row(
             [
@@ -390,10 +370,6 @@ def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
     隐藏的 ``hidden-1`` 不出现，整张快照通过 ``validate_snapshot``。
     """
 
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
-        lambda: _FakeRebuildRegistry(("read_file", "write_file")),
-    )
     run = SimpleNamespace(
         id=1,
         task_id=7,
@@ -464,10 +440,6 @@ def test_t4_orphan_tool_message_raises_runtime_error(
     是否符合预期：符合（冷重建对损坏上下文显式失败，不静默丢弃结果行）。
     """
 
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
-        lambda: _FakeRebuildRegistry(("read_file",)),
-    )
     rows = [
         _ai_row(
             [
@@ -515,33 +487,6 @@ def test_t4_build_run_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
             ConversationTaskStateRebuilder.build_run_error(bad)
 
 
-def test_t4_get_tool_display_uses_declaration_when_present(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """T4-g：``get_tool_display`` 命中带 ``display`` 的注册工具时返回其序列化声明。
-
-    实际观测：返回 ``{"verb": "读取文件", "icon": "eye"}``；
-    空名 / 未注册 / 无 display 均返回 ``{}``。
-    是否符合预期：符合（保证 part.presentation 恒为合法对象）。
-    """
-
-    class _Registry:
-        @staticmethod
-        def get_tool_definition(name: str) -> Any:
-            if name != "read_file":
-                return None
-            display = SimpleNamespace(to_dict=lambda: {"verb": "读取文件"})
-            return SimpleNamespace(heading=None, display=display)
-
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
-        _Registry,
-    )
-    assert ConversationTaskStateRebuilder.get_tool_display("read_file") == {"verb": "读取文件"}
-    assert ConversationTaskStateRebuilder.get_tool_display("") == {}
-    assert ConversationTaskStateRebuilder.get_tool_display("ghost_tool") == {}
-
-
 def test_t4_delegation_display_data_backfills_child_locators(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -552,10 +497,6 @@ def test_t4_delegation_display_data_backfills_child_locators(
     是否符合预期：符合（旧委派记录的 role 回填既定行为）。
     """
 
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
-        lambda: _FakeRebuildRegistry(("delegate_task",)),
-    )
     rows = [
         _ai_row(
             [

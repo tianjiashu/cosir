@@ -13,13 +13,14 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_BROWSER_HANDOFF,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_BROWSER
-from app.tools.display.browser_display import build_browser_page_display_data
+from app.tools.display.browser_display import (
+    build_browser_page_display_data,
+)
 from app.tools.host.errors import HostCallError
 from app.tools.host.host_call import call_host
 from app.tools.tool_handler.browser.common import (
@@ -125,5 +126,4 @@ class BrowserHandoffTool(HandlerBase):
             resource_keys=("browser",),
             execution_mode="thread",
             user_decision="execute",
-            display=ToolDisplayHints(verb="交给你操作网页", icon="globe", surface="standalone"),
         )

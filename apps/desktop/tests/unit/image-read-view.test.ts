@@ -30,7 +30,7 @@ describe("image-read display", () => {
 
   it("routes read_image by display kind, falling back on bad payloads", () => {
     const artifact = (display_data: Record<string, unknown>): ToolArtifact => ({
-      backendStatus: "completed", presentation: {}, heading: null, awaitingUser: false, background: false, display_data, error: null, errorCode: null,
+      backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null, errorCode: null,
     });
     expect(resolveCallView(artifact(DISPLAY))?.view).toBe(imageReadView);
     expect(resolveCallView(artifact({ kind: "image-read" }))).toBeNull();

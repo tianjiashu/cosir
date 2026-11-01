@@ -153,8 +153,7 @@ class ConversationEventProjector:
             KeyError: 事件引用的消息、part 或工具调用不存在。
 
         副作用:
-            更新进程内 Transport state 并通知订阅者；父委派 display metadata 收敛时可能
-            写回已有 context 行。
+            更新进程内 Transport state 并通知订阅者。
         """
 
         event = self._parse(raw_event)
@@ -176,13 +175,6 @@ class ConversationEventProjector:
                 )
                 return None
             change = self._state_service.apply_planned(event)
-            if event.type == "run_status_changed":
-                # 子 Run 状态同步到父任务的委派卡片；是 state service 的契约方法，直接调用。
-                self._state_service.refresh_parent_delegation(
-                    event.task_id,
-                    event.run_id,
-                    event.status.value,
-                )
             # 事件可能先于 run 骨架抵达；空投影不能被永久去重，否则后续无法重放。
             if change.mutations and self._dedup_window.add(event.event_id):
                 log.warning(

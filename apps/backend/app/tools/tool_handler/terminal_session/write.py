@@ -6,7 +6,6 @@ from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import (
     TOOL_TERMINAL_WRITE,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -86,14 +85,5 @@ class TerminalWriteTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",
-            display=ToolDisplayHints(
-                verb="输入终端",
-                icon="terminal",
-                variant="terminal-session-write",
-                surface="standalone",
-                expandable=False,
-                expand_layout="none",
-                show_result=False,
-            ),
         )
 

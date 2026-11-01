@@ -7,12 +7,15 @@ import { revealHandoff } from "@/lib/handoff/reveal";
 import { useHandoffStore } from "@/lib/handoff/store";
 import { useHandBack } from "@/lib/handoff/use-hand-back";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
+import { toolHeading, toolIconName } from "@/lib/assistant/tool-catalog";
 import { cn } from "@/lib/utils";
 
 export type AttentionCardProps = {
   taskId: number;
   toolCallId: string;
   toolName: string;
+  /** 模型给的原样参数；卡片标题按工具名 + 参数查目录表算出，与调用行同源。 */
+  args: Record<string, unknown>;
   artifact: ToolArtifact;
   interactive?: boolean;
   taskCancelling?: boolean;
@@ -39,11 +42,11 @@ const HANDOFF_KINDS = new Set(["browser-page", "terminal-session"]);
  * 登记表为空、面板里没有提示条，这里仍是交还的唯一入口。Team 审批：表单整个放进卡里。其余等待决定的工具
  * 只有标题与说明（决定由各自的界面给出）。
  */
-export function AttentionCard({ taskId, toolCallId, toolName, artifact, interactive = true, taskCancelling = false }: AttentionCardProps) {
+export function AttentionCard({ taskId, toolCallId, toolName, args, artifact, interactive = true, taskCancelling = false }: AttentionCardProps) {
   const handoff = useHandoffStore((state) => state.tasks[taskId]?.find((entry) => entry.toolCallId === toolCallId) ?? null);
   const { handBack, returning } = useHandBack(taskId);
   const kind = typeof artifact.display_data?.kind === "string" ? artifact.display_data.kind : null;
-  const title = artifact.heading?.title ?? artifact.presentation.verb ?? toolName;
+  const { title } = toolHeading(toolName, args);
   const description = attentionDescription(artifact);
   const canHandBack = interactive && (handoff !== null || (kind !== null && HANDOFF_KINDS.has(kind)));
 
@@ -57,7 +60,7 @@ export function AttentionCard({ taskId, toolCallId, toolName, artifact, interact
         "border border-[color-mix(in_oklab,var(--info)_38%,transparent)] bg-[color-mix(in_oklab,var(--info)_6%,transparent)]",
       )}
     >
-      <ToolIcon name={artifact.presentation.icon} className="text-info mt-0.5 size-3.5" aria-hidden="true" />
+      <ToolIcon name={toolIconName(toolName)} className="text-info mt-0.5 size-3.5" aria-hidden="true" />
       <div className="min-w-0 flex-1">
         <p className="font-semibold">{title}</p>
         {description && <p className="text-muted-foreground mt-0.5 break-words">{description}</p>}

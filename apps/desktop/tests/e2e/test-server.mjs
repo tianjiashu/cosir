@@ -157,7 +157,6 @@ function toolLifecycleParts(runId, status, toolStatus) {
       args: { pattern: "lifecycle" },
       status: toolStatus,
       error: null,
-      presentation: { verb: "搜索文件", icon: "search" },
       display_data: toolStatus === "completed"
         ? {
             kind: "content-search-results",
@@ -212,7 +211,6 @@ function toolTraceState() {
       args: { path: "README.md" },
       status: "completed",
       error: null,
-      presentation: { verb: "读取文件", icon: "eye" },
       display_data: null,
       isError: false,
     },
@@ -223,7 +221,6 @@ function toolTraceState() {
       args: { pattern: "assistant-ui" },
       status: "completed",
       error: null,
-      presentation: { verb: "搜索文件", icon: "search" },
       display_data: null,
       isError: false,
     },
@@ -237,24 +234,25 @@ function toolTraceState() {
  */
 function alternatingSequenceState(phase) {
   const runId = 79;
-  const call = (toolCallId, toolName, verb, icon, heading, status, extra = {}) => ({
-    type: "tool-call", awaitingUser: false, toolCallId, toolName, args: {}, status, error: null,
-    presentation: { verb, icon }, heading, display_data: null, isError: false, ...extra,
+  // 图标、动词与标题由前端工具目录按工具名 + 参数算出，夹具只给真实形状的参数。
+  const call = (toolCallId, toolName, args, status, extra = {}) => ({
+    type: "tool-call", awaitingUser: false, toolCallId, toolName, args, status, error: null,
+    display_data: null, isError: false, ...extra,
   });
   const parts = [
     { type: "reasoning", text: "先找调度循环在哪里。搜 setInterval 和 tick 相关命名。", status: "completed" },
     { type: "text", text: "先找调度循环在哪里。", status: "completed" },
-    call("alt-search", "search_content", "搜索内容", "search", { title: "搜索内容", target: "setInterval|tick in src/" }, "completed", {
+    call("alt-search", "search_content", { pattern: "setInterval|tick", path: "src/" }, "completed", {
       display_data: {
         kind: "content-search-results", pattern: "tick", path: "src", match_count: 2,
         matches: [{ path: "src/task.ts", line: 22, content: "const TICK_MS = 250", is_match: true }, { path: "src/config.ts", line: 31, content: "tick", is_match: true }],
       },
     }),
     { type: "text", text: "tick 是写死的常量，配置模块已有校验工具，可以直接加字段。", status: "completed" },
-    call("alt-typecheck", "execute_terminal", "执行命令", "terminal", { title: "运行类型检查", target: "bun run typecheck" }, "failed", {
+    call("alt-typecheck", "execute_terminal", { description: "运行类型检查", command: "bun run typecheck" }, "failed", {
       error: "命令执行失败", isError: true, display_data: { status_hint: "命令执行失败" },
     }),
-    call("alt-patch", "apply_patch", "修改文件", "git-compare", { title: "修改文件", target: "src/config.ts" }, "completed", {
+    call("alt-patch", "apply_patch", { patch: "diff --git a/src/config.ts b/src/config.ts\n" }, "completed", {
       display_data: {
         kind: "file-changes",
         diff_stats: { total_files: 2, total_insertions: 30, total_deletions: 6 },
@@ -266,12 +264,12 @@ function alternatingSequenceState(phase) {
     }),
   ];
   if (phase === "running") {
-    parts.push(call("alt-test", "execute_terminal", "执行命令", "terminal", { title: "运行单元测试", target: "bun test tests/task.test.ts" }, "running", {
+    parts.push(call("alt-test", "execute_terminal", { description: "运行单元测试", command: "bun test tests/task.test.ts" }, "running", {
       display_data: { kind: "terminal-result", command: "bun test tests/task.test.ts", workdir: "/work", output: "bun test v1.1\n\ntests/task.test.ts:\n✓ tick reads config\n" },
     }));
   } else {
     parts.push(
-      call("alt-handoff", "terminal_handoff", "交给你输入", "keyboard", { title: "请你输入 sudo 密码", target: "终端 2" }, "pending", {
+      call("alt-handoff", "terminal_handoff", { session_id: "term-alt", reason: "enter the sudo password" }, "pending", {
         awaitingUser: true,
         display_data: { kind: "terminal-session", session_id: "term-alt", status: "running", input_summary: "输入完成后点「交还」，Agent 会继续安装" },
       }),
@@ -302,10 +300,6 @@ function webSearchState() {
       args: { query: "assistant-ui" },
       status: "completed",
       error: null,
-      presentation: {
-        verb: "网页搜索",
-        icon: "globe",
-      },
       display_data: {
         kind: "web-search-results",
         query: "assistant-ui",
@@ -341,10 +335,8 @@ function delegationState() {
       type: "tool-call", awaitingUser: false,
       toolCallId: "delegate-ref-500",
       toolName: "delegate_task",
-      args: { child_agent_id: "delegate_reviewer", title: "审查代码", prompt: "请审查当前改动" },
+      args: { child_agent_id: "delegate_reviewer", agent_name: "审查代码", message: "请审查当前改动" },
       status: "completed",
-      presentation: { verb: "委派 Agent", icon: "users" },
-      heading: { title: "审查代码", target: "Reviewer" },
       display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501 },
       child_task_id: 501,
       agent_role: "Reviewer",
@@ -354,10 +346,8 @@ function delegationState() {
       type: "tool-call", awaitingUser: false,
       toolCallId: "delegate-ref-501",
       toolName: "delegate_task",
-      args: { child_agent_id: "delegate_tester", title: "检查测试", prompt: "请检查相关测试" },
+      args: { child_agent_id: "delegate_tester", agent_name: "检查测试", message: "请检查相关测试" },
       status: "completed",
-      presentation: { verb: "委派 Agent", icon: "users" },
-      heading: { title: "检查测试", target: "Tester" },
       display_data: { kind: "delegation-result", title: "检查测试", role: "Tester", child_task_id: 502 },
       child_task_id: 502,
       agent_role: "Tester",

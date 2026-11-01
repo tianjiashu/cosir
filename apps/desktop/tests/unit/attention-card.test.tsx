@@ -15,8 +15,6 @@ import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
   return {
     backendStatus: "pending",
-    presentation: { verb: "交给你操作", icon: "keyboard" },
-    heading: { title: "请你输入 sudo 密码", target: "终端 2" },
     awaitingUser: true,
     background: false,
     display_data: { kind: "terminal-session", session_id: "s1", status: "running", input_summary: "输入完成后交还" },
@@ -26,16 +24,18 @@ function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
   };
 }
 
-function render(overrides: Partial<ToolArtifact> = {}, interactive = true): string {
-  return renderToStaticMarkup(<AttentionCard taskId={7} toolCallId="call-1" toolName="terminal_handoff" artifact={artifact(overrides)} interactive={interactive} />);
+function render(overrides: Partial<ToolArtifact> = {}, interactive = true, toolName = "terminal_handoff"): string {
+  return renderToStaticMarkup(
+    <AttentionCard taskId={7} toolCallId="call-1" toolName={toolName} args={{ session_id: "s1", reason: "enter the sudo password" }} artifact={artifact(overrides)} interactive={interactive} />,
+  );
 }
 
 beforeEach(() => handoffs.clear());
 
 describe("AttentionCard", () => {
-  it("标题取 heading.title，说明取交接原因；是对话流里唯一带边框、用信息蓝的容器", () => {
+  it("标题按工具目录取动词，说明取交接原因；是对话流里唯一带边框、用信息蓝的容器", () => {
     const html = render();
-    expect(html).toContain("请你输入 sudo 密码");
+    expect(html).toContain("交给用户输入");
     expect(html).toContain("输入完成后交还");
     expect(html).toContain("border-[color-mix(in_oklab,var(--info)_38%,transparent)]");
     expect(html).toContain("lucide-keyboard");
@@ -54,8 +54,8 @@ describe("AttentionCard", () => {
 
   it("只读面不提供交还；非交接类等待只有标题与说明", () => {
     expect(render({}, false)).not.toContain(">交还<");
-    const generic = render({ display_data: { kind: "future-decision", status_hint: "请在面板里作答" }, heading: { title: "等待决定", target: null } });
-    expect(generic).toContain("等待决定");
+    const generic = render({ display_data: { kind: "future-decision", status_hint: "请在面板里作答" } }, true, "future_tool");
+    expect(generic).toContain("future_tool");
     expect(generic).toContain("请在面板里作答");
     expect(generic).not.toContain(">交还<");
   });

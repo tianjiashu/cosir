@@ -21,7 +21,6 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_MCP,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -33,6 +32,10 @@ from app.service.configuration.mcp_configuration import (
     MCPServerConfig,
     enabled_servers,
     read_mcp_configuration,
+)
+from app.tools.display.mcp_display import (
+    build_mcp_call_display_data,
+    build_mcp_catalog_display_data,
 )
 from app.tools.mcp.client import (
     MCPToolCallError,
@@ -207,12 +210,7 @@ class MCPTool(HandlerBase):
         return tool_success(
             self.name,
             content,
-            display_data={
-                "kind": "mcp-tool-result",
-                "action": "call",
-                "server_name": server.name,
-                "tool_name": tool_name,
-            },
+            display_data=build_mcp_call_display_data(server_name=server.name, tool_name=tool_name),
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -226,13 +224,6 @@ class MCPTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             resource_keys=("mcp",),
-            display=ToolDisplayHints(
-                verb="调用 MCP",
-                icon="network",
-                expandable=True,
-                expand_layout="details",
-                default_open=False,
-            ),
         )
 
 
@@ -240,7 +231,7 @@ def _catalog_observation(catalog: list[dict[str, Any]]) -> ToolObservation:
     return tool_success(
         TOOL_MCP,
         json.dumps(catalog, ensure_ascii=False, indent=2),
-        display_data={"kind": "mcp-tool-result", "action": "list", "servers": catalog},
+        display_data=build_mcp_catalog_display_data(catalog),
     )
 
 

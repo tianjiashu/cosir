@@ -207,7 +207,6 @@ def test_tool_definition_default_contract_values_after_field_removal() -> None:
     assert definition.parameters_schema == {}
     assert definition.timeout_seconds == 10.0
     assert definition.resource_keys == ()
-    assert definition.display is None
     assert definition.execution_mode == "thread"
     assert definition.parallel_mode == "serial"
     assert "description_provider" not in field_names
@@ -292,7 +291,6 @@ def test_normalized_preserves_every_carried_contract_field() -> None:
     assert normalized.parallel_mode == "parallel"
     assert normalized.args_model is _ProbeArgs
     assert normalized.handler is definition.handler
-    assert normalized.display is definition.display
     # 参数 schema 被派生，故二者不相等；派生后应幂等。
     assert normalized.normalized() == normalized
 

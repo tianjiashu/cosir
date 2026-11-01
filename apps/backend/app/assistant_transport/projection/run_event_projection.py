@@ -27,6 +27,7 @@ from app.config.logging.logger import log
 from app.core.events import RunInitializedEvent, RunResultUpdatedEvent, RunStatusChangedEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES, ConversationRunStatus
+from app.utils.datetime_utils import from_text, to_text
 
 # Run 状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）一律丢弃。
 # ``cancelled -> running`` 与 ``suspended -> running`` 是合法恢复 / 唤醒迁移，由
@@ -72,6 +73,15 @@ def _outcome_path(message_index: int) -> SnapshotPath:
     return ("messages", message_index, "outcome")
 
 
+def _duration_ms(started_at: str, event: RunStatusChangedEvent) -> int | None:
+    """Run 创建到终态的毫秒数：两端都来自 Run 记录的时间戳，事件没带终态时间时为 ``None``。"""
+
+    if event.changed_at is None:
+        return None
+    elapsed = event.changed_at - from_text(started_at)
+    return max(0, int(elapsed.total_seconds() * 1000))
+
+
 def plan_run_initialized(
     event: RunInitializedEvent,
     state: ConversationStateSnapshot,
@@ -110,6 +120,7 @@ def plan_run_initialized(
             ConversationStateActivity(
                 runId=event.run_id,
                 status=ConversationRunStatus.RUNNING.value,
+                startedAt=to_text(event.created_at),
                 endReason=None,
                 error=None,
                 usage=None,
@@ -162,6 +173,7 @@ def plan_run_status_changed(
                     "error": event.error,
                     "usage": usage if usage is not None else activity["usage"],
                     "contextWindowTotal": activity["contextWindowTotal"],
+                    "durationMs": _duration_ms(activity["startedAt"], event),
                 },
             )
         )
@@ -201,12 +213,14 @@ def _plan_historical_status(
         _log_status_dropped(event, outcome["status"])
         return []
     usage = _merged_usage(outcome["usage"], event.usage_stats)
+    # 旧 Run 的起点不在 snapshot 上（activity 已指向新 Run），耗时沿用首次终态写下的值。
     updated: ConversationStateOutcome = {
         "status": target,
         "endReason": event.end_reason,
         "error": event.error,
         "usage": usage if usage is not None else outcome["usage"],
         "contextWindowTotal": outcome["contextWindowTotal"],
+        "durationMs": outcome["durationMs"],
     }
     if updated == outcome:
         return []

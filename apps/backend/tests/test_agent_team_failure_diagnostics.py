@@ -44,7 +44,6 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
                         "toolCallId": "call-1",
                         "toolName": "agent_team",
                         "status": "running",
-                        "presentation": {},
                         "display_data": {"kind": "agent-team-approval", "team_run_id": 17},
                     }
                 ],
@@ -171,14 +170,6 @@ def test_failed_node_visit_exposes_status_without_error_body_or_runtime_snapshot
 def test_cold_rebuild_keeps_failed_team_run_locator(monkeypatch) -> None:
     """刷新页面后从 ToolMessage 元数据恢复定位信息，不依赖进程内快照。"""
 
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder,
-        "get_tool_display",
-        staticmethod(lambda _name: {}),
-    )
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
-    )
     rows = [
         ConversationTaskContextRecord(
             task_id=2,

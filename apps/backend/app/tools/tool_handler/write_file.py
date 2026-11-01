@@ -13,29 +13,30 @@ success content 提供简短警告，不改变写入成功状态。
 
 from pathlib import Path
 
-from app.utils.atomic_write import atomic_write_text
-from app.tools.display.file_change_display import build_file_change_display_data
-from app.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
-from app.core.tool.schemas import (
-    TOOL_WRITE_FILE,
-    ToolDefinition,
-    ToolDisplayHints,
-    ToolExecutionContext,
-    ToolObservation,
-)
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import (
     os_error_message,
     tool_error,
 )
 from app.core.tool.results.tool_success import tool_success
+from app.core.tool.schemas import (
+    TOOL_WRITE_FILE,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
+from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.tools.display.file_change_display import (
+    build_file_change_display_data,
+)
+from app.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
 from app.tools.tool_handler.patch_write.line_numbered import looks_like_line_numbered
 from app.tools.tool_handler.patch_write.patch_diff import FileDiffResult
 from app.tools.tool_handler.security.path_resolver import PathResolver
-from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.write_file_args import WriteFileArgs
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.utils.atomic_write import atomic_write_text
 
 
 class WriteFileTool(HandlerBase):
@@ -209,14 +210,6 @@ class WriteFileTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             resource_keys=("filesystem",),
-            display=ToolDisplayHints(
-                verb="写入文件",
-                icon="git-compare",
-                surface="standalone",
-                expandable=True,
-                expand_layout="diff",
-                show_result=False,
-            ),
         )
 
 

@@ -1,22 +1,14 @@
-import type {
-  TransportToolDisplayData,
-  TransportToolHeading,
-  TransportToolPresentation,
-  TransportToolStatus,
-} from "@/lib/assistant/contract";
+import type { TransportToolDisplayData, TransportToolStatus } from "@/lib/assistant/contract";
 
 /**
  * 工具调用 part 挂在 assistant-ui `artifact` 上的 UI 适配数据。
  *
  * assistant-ui 的 `ToolCallMessagePart` 只承载 args / argsText / result / isError，后端的生命周期五态、
- * 展示声明与展示数据放不进去，converter 把它们原样收进 `artifact`；渲染只读这里，不从 `args` /
- * `result` 反推。它不会回写后端，也不是对话事实。
+ * 等待用户与展示数据放不进去，converter 把它们原样收进 `artifact`；状态与展示数据只读这里，不从 `args` /
+ * `result` 反推（图标、动词与调用标题按工具名查 `tool-catalog.ts`）。它不会回写后端，也不是对话事实。
  */
 export type ToolArtifact = {
   backendStatus: TransportToolStatus;
-  presentation: TransportToolPresentation;
-  /** 调用标题；缺省（参数未通过准入）时为 null，调用行回落到 `presentation.verb`。 */
-  heading: TransportToolHeading | null;
   /** 是否在等用户决定；投影自 part `awaitingUser`，不从 `pending` 推断。 */
   awaitingUser: boolean;
   display_data: TransportToolDisplayData | null;
@@ -31,8 +23,6 @@ export type ToolArtifact = {
 
 const EMPTY_ARTIFACT: ToolArtifact = {
   backendStatus: "unknown",
-  presentation: {},
-  heading: null,
   awaitingUser: false,
   display_data: null,
   error: null,
@@ -42,13 +32,6 @@ const EMPTY_ARTIFACT: ToolArtifact = {
 
 function positiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
-function readHeading(value: unknown): TransportToolHeading | null {
-  if (typeof value !== "object" || value === null) return null;
-  const candidate = value as Partial<TransportToolHeading>;
-  if (typeof candidate.title !== "string" || candidate.title.trim() === "") return null;
-  return { title: candidate.title, target: typeof candidate.target === "string" ? candidate.target : null };
 }
 
 /**
@@ -64,8 +47,6 @@ export function readToolArtifact(value: unknown): ToolArtifact {
     : "unknown";
   return {
     backendStatus,
-    presentation: candidate.presentation ?? {},
-    heading: readHeading(candidate.heading),
     awaitingUser: candidate.awaitingUser === true,
     display_data: candidate.display_data ?? null,
     team_run_id: positiveInteger(candidate.team_run_id),

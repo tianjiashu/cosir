@@ -8,25 +8,26 @@
 删除代价不随文件体积增长。
 """
 
-from app.tools.display.file_change_display import build_file_delete_display_data
-from app.core.tool.schemas import (
-    TOOL_DELETE_FILE,
-    ToolDefinition,
-    ToolDisplayHints,
-    ToolExecutionContext,
-    ToolObservation,
-)
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import os_error_message, tool_error
 from app.core.tool.results.tool_success import tool_success
+from app.core.tool.schemas import (
+    TOOL_DELETE_FILE,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
+from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.tools.display.file_change_display import (
+    build_file_delete_display_data,
+)
 from app.tools.tool_handler.security.file_operation_paths import (
     resolve_workspace_relative_path,
 )
 from app.tools.tool_handler.security.path_resolver import PathResolver
-from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.delete_file_args import DeleteFileArgs
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 DELETE_FILE_DESCRIPTION = (
     "Delete exactly one existing file inside the active workspace. Directories are not supported. "
@@ -146,14 +147,6 @@ class DeleteTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             resource_keys=("filesystem",),
-            display=ToolDisplayHints(
-                verb="删除文件",
-                icon="file-x",
-                surface="standalone",
-                expandable=False,
-                expand_layout="none",
-                show_result=False,
-            ),
         )
 
 

@@ -5,7 +5,6 @@ from typing import ClassVar
 from app.core.tool.schemas import (
     TOOL_BROWSER_SNAPSHOT,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -73,5 +72,4 @@ class BrowserSnapshotTool(HandlerBase):
             resource_keys=("browser",),
             execution_mode="thread",
             parallel_mode="serial",
-            display=ToolDisplayHints(verb="读取网页", icon="globe"),
         )

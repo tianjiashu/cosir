@@ -5,18 +5,19 @@ from typing import ClassVar
 from app.core.tool.handler.child_agent.agent_configuration_display import (
     build_agent_configuration_draft_display_data,
 )
-from app.core.tool.schemas import (
-    TOOL_PROPOSE_AGENT_CONFIGURATION,
-    ToolDefinition,
-    ToolDisplayHints,
-    ToolExecutionContext,
-    ToolObservation,
+from app.core.tool.handler.child_agent.propose_agent_configuration_args import (
+    ProposeAgentConfigurationArgs,
 )
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_CONFIGURATION
+from app.core.tool.schemas import (
+    TOOL_PROPOSE_AGENT_CONFIGURATION,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.handler.child_agent.propose_agent_configuration_args import ProposeAgentConfigurationArgs
+from app.core.tool.tool_grouping import TOOL_GROUP_CONFIGURATION
 
 
 class ProposeAgentConfigurationTool(HandlerBase):
@@ -92,14 +93,6 @@ class ProposeAgentConfigurationTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             execution_mode="thread",
-            display=ToolDisplayHints(
-                verb="生成子 Agent 配置草稿",
-                icon="bot",
-                surface="standalone",
-                expandable=False,
-                expand_layout="details",
-                show_result=False,
-            ),
         )
 
 

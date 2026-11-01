@@ -5,18 +5,20 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from app.tools.display.filesystem_display import build_content_search_display_data
-from app.core.tool.schemas import (
-    TOOL_SEARCH_CONTENT,
-    ToolDefinition,
-    ToolDisplayHints,
-    ToolExecutionContext,
-    ToolObservation,
-)
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
+from app.core.tool.schemas import (
+    TOOL_SEARCH_CONTENT,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
+from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
+from app.tools.display.filesystem_display import (
+    build_content_search_display_data,
+)
 from app.tools.tool_handler.search.content_engine import search_content
 from app.tools.tool_handler.search.errors import (
     InvalidSearchPattern,
@@ -27,7 +29,6 @@ from app.tools.tool_handler.search.errors import (
 )
 from app.tools.tool_handler.search.scope import SearchScope
 from app.tools.tool_handler.security.path_resolver import PathResolver
-from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.search_content_args import SearchContentArgs
 
 SEARCH_CONTENT_DESCRIPTION = (
@@ -157,13 +158,8 @@ class SearchContentTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             resource_keys=("filesystem",),
             execution_mode="thread",
-            display=ToolDisplayHints(
-                verb="搜索内容",
-                icon="search",
-                expandable=True,
-                expand_layout="list",
-                show_result=False,
-            ),
+            # 只读、彼此独立：模型一次发出的多个读取真正并发执行（见 tool_batch_runner）。
+            parallel_mode="parallel",
         )
 
 

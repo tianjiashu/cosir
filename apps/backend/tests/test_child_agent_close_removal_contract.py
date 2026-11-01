@@ -402,7 +402,6 @@ def test_child_tool_to_definition_is_consistent(
     assert definition.args_model is args_model
     assert definition.execution_mode == "thread"
     assert definition.timeout_seconds > 0
-    assert definition.display is not None
     assert definition.handler is not None
 
     built = factory()

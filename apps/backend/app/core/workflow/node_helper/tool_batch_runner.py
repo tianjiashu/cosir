@@ -42,7 +42,10 @@ async def run_tool_batch(
         batch: ToolBatch,
         decision: DecisionBody | None = None,
 ) -> list[ToolObservation]:
-    """执行一批工具调用，返回与每个调用一一对应的观察：先串行组（入参顺序），再并行组（入参顺序）。
+    """执行一批工具调用，返回与每个调用一一对应的观察，顺序与 ``calls`` 相同。
+
+    执行顺序是先串行组（逐个）再并行组（并发），但返回按调用顺序重排：观察随后按序写成 tool 消息，
+    模型看到的结果顺序必须与它发出调用的顺序一致，否则并行与串行混排时结果会错位。
 
     单个调用的执行链路异常收口为该调用的 error 观察，本函数不抛出。协程被取消时，已在线程里
     运行的工具不会被强杀（取消由工具自己轮询信号），尚未开始的并行调用随线程池关闭丢弃。
@@ -53,15 +56,17 @@ async def run_tool_batch(
     if len(calls) > 1 and any(_requires_user_decision(call) for call in calls):
         return _reject_mixed_decision_batch(rc, calls, step_id, batch)
     loop = asyncio.get_running_loop()
-    serial = [call for call in calls if not _is_parallel(call)]
-    parallel = [call for call in calls if _is_parallel(call)]
-    observations = [
-        await asyncio.to_thread(_execute_call, rc, call, step_id, batch, loop, decision)
-        for call in serial
-    ]
+    serial = [(index, call) for index, call in enumerate(calls) if not _is_parallel(call)]
+    parallel = [(index, call) for index, call in enumerate(calls) if _is_parallel(call)]
+    observations: dict[int, ToolObservation] = {}
+    for index, call in serial:
+        observations[index] = await asyncio.to_thread(
+            _execute_call, rc, call, step_id, batch, loop, decision
+        )
     if parallel:
-        observations.extend(await _run_parallel(rc, parallel, step_id, batch, loop))
-    return observations
+        results = await _run_parallel(rc, [call for _, call in parallel], step_id, batch, loop)
+        observations.update(zip((index for index, _ in parallel), results, strict=True))
+    return [observations[index] for index in range(len(calls))]
 
 
 async def _run_parallel(

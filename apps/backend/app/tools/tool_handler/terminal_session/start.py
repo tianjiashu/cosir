@@ -13,7 +13,6 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_TERMINAL_START,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -21,7 +20,9 @@ from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.service import depends as service_depends
-from app.tools.display.terminal_display import build_terminal_session_display_data
+from app.tools.display.terminal_display import (
+    build_terminal_session_display_data,
+)
 from app.tools.terminal_runtime.errors import ShellResolutionError
 from app.tools.terminal_runtime.shell_resolver import ShellResolver
 from app.tools.tool_handler.terminal_session.common import (
@@ -38,20 +39,24 @@ class TerminalStartTool(HandlerBase):
     """
 
     name = TOOL_TERMINAL_START
-    # 中文译文：像读文本文件一样读会话输出：逻辑行（已合并软换行）以「<行号>│文本」给出，行号
-    # 是绝对编号、永不复用。「live from」之后的行属于当前屏幕，仍可能被重绘；之前的行已定稿。
-    # 全屏程序（vim、less、top）运行期间，不带 start_line 的读取改为以「s<行>│文本」返回
-    # 整屏；行号仍指向 shell 输出。长输出用 pattern 搜索而不是翻页；需要等条件成立时用 wait
-    # 阻塞，不要轮询。不带 wait 重复读取且内容未变时，只返回一行提示。
+    # 中文译文：新建一个交互 shell 会话：一个持续存活的本地 shell，带 PTY，用户在终端面板里
+    # 看到同一个终端并可以输入。与 execute_terminal 不同，cwd、环境变量与运行中的程序在多次
+    # terminal_write / terminal_read 之间保持；用它运行 dev server、REPL、watch 任务和交互程序。
+    # 返回 session_id（后续调用用它寻址）、shell、cwd 与集成状态。label 是显示在标签页和
+    # terminal_list 里的用途简述；cwd 是起始目录（工作区内、必须存在）；integration=auto 在 shell
+    # 支持时启用 shell 集成（命令边界、退出码、cwd 跟踪，terminal_write 的 command_returned 等待
+    # 依赖它），off 则关闭。先 terminal_list 看能否复用已有会话；会话归 Task，跨 Run 保留。
     description = (
-        "Read session output like a text file: logical lines (soft wraps merged) as "
-        "'<line>│text', with absolute line numbers that are never reused. Lines from "
-        "'live from' onward are the current screen and may still be redrawn; earlier lines are "
-        "final. While a full-screen app (vim, less, top) is open, a read without start_line "
-        "returns its screen as 's<row>│text' rows instead; line numbers still address the shell "
-        "output. Search long output with pattern instead of paging, and use wait to block for a "
-        "condition instead of polling. An unchanged repeat read without wait returns a single "
-        "hint line."
+        "Start a new interactive shell session: a live local shell with a PTY that the user "
+        "sees in the terminal panel and can type into. Unlike execute_terminal, the cwd, "
+        "environment and running program persist across terminal_write / terminal_read calls; "
+        "use it for dev servers, REPLs, watch tasks and interactive programs. Returns the "
+        "session_id to address later calls, the shell, cwd and integration status. label is a "
+        "short purpose shown on the tab and in terminal_list; cwd is the start directory "
+        "(inside the workspace, must exist); integration=auto enables shell integration where "
+        "the shell supports it (command boundaries, exit codes, cwd tracking, needed for "
+        "terminal_write's command_returned wait), off disables it. Check terminal_list first to "
+        "reuse an existing session; sessions belong to the task and survive across runs."
     )
 
     args_model = TerminalStartArgs
@@ -108,15 +113,6 @@ class TerminalStartTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",
-            display=ToolDisplayHints(
-                verb="启动终端",
-                icon="terminal",
-                variant="terminal-session-start",
-                surface="standalone",
-                expandable=True,
-                expand_layout="terminal",
-                show_result=False,
-            ),
         )
 
 

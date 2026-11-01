@@ -7,14 +7,15 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_TERMINAL_CLOSE,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.service import depends as service_depends
-from app.tools.display.terminal_display import build_terminal_session_display_data
+from app.tools.display.terminal_display import (
+    build_terminal_session_display_data,
+)
 from app.tools.tool_handler.terminal_session.common import (
     cancelled,
     with_terminal_errors,
@@ -62,13 +63,4 @@ class TerminalCloseTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",
-            display=ToolDisplayHints(
-                verb="关闭终端",
-                icon="x",
-                variant="terminal-session-close",
-                surface="standalone",
-                expandable=False,
-                expand_layout="none",
-                show_result=False,
-            ),
         )

@@ -6,7 +6,6 @@ from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import (
     TOOL_TERMINAL_READ,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -82,13 +81,4 @@ class TerminalReadTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",
-            display=ToolDisplayHints(
-                verb="读取终端",
-                icon="terminal",
-                variant="terminal-session-read",
-                surface="standalone",
-                expandable=False,
-                expand_layout="none",
-                show_result=False,
-            ),
         )

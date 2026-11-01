@@ -33,11 +33,13 @@ class ConversationStateActivity(TypedDict):
 
     是最新 Run 的投影而不是第二套状态机：事实源仍是 ``ConversationRunModel.status``。
     ``runId`` 只供事件路由（旧 Run 的迟到事件不能覆盖它）与诊断，前端不按它比对。
-    ``error`` 只在 Run 进入失败 / 取消终态时携带 ``code`` + UI ``message``。
+    ``error`` 只在 Run 进入失败 / 取消终态时携带 ``code`` + UI ``message``。``startedAt`` 是 Run
+    记录的创建时间（ISO 8601），前端据此做运行中的本地计时；终态耗时在 ``outcome.durationMs``。
     """
 
     runId: int
     status: str
+    startedAt: str
     endReason: str | None
     error: ConversationStateError | None
     usage: ConversationStateUsage | None

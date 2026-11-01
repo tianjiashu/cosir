@@ -152,15 +152,6 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
 def test_rebuilder_scopes_same_provider_tool_call_id_per_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # 重建按 AI 消息的 tool_calls 配对工具结果；tool registry 未在本测试初始化，给出最小展示。
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder,
-        "get_tool_display",
-        staticmethod(lambda _name: {"verb": "Read"}),
-    )
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
-    )
     call_id = "provider-call-reused"
     rows = [
         _context_row(101, 11, {"role": "user", "content": "one"}, 1),

@@ -4,6 +4,7 @@ import type {
   TransportTextPart,
   TransportToolCallPart,
 } from "@/lib/assistant/contract";
+import { toolHeading, toolVerb } from "@/lib/assistant/tool-catalog";
 
 /**
  * 回合投影：把一条助手消息的扁平 parts 分成过程 / 等待用户 / 产物 / 结论四区（设计见
@@ -41,8 +42,7 @@ export type ReasoningItem = { kind: "reasoning"; index: number; part: TransportR
 export type CallItem = { kind: "call"; index: number; part: TransportToolCallPart };
 export type ProcessItem = NarrationItem | ReasoningItem | CallItem;
 
-/** 区头按动词计数的一项：`label` 是 `heading.title`，没有则 `presentation.verb`，再没有则工具名。 */
-/** 区头计数的键是工具动词（`presentation.verb`），不是调用标题：命令的标题是每条各异的意图，按它计数会把「执行命令 4」拆成四个 1。 */
+/** 区头计数的键是工具动词（`toolVerb`），不是调用标题：命令的标题是每条各异的意图，按它计数会把「执行命令 4」拆成四个 1。 */
 export type VerbCount = { label: string; count: number };
 
 export type ProcessLayout = {
@@ -104,14 +104,14 @@ export type TurnLayout = {
   answer: AnswerItem[];
 };
 
-/** 调用行标题：`heading.title` → `presentation.verb` → 工具名。 */
+/** 调用行标题：按工具目录从参数算出，与调用行同源。 */
 export function callTitle(part: TransportToolCallPart): string {
-  return part.heading?.title ?? callVerb(part);
+  return toolHeading(part.toolName, part.args).title;
 }
 
-/** 工具动词：静态展示声明的 verb，没有声明时退回工具名。 */
+/** 工具动词：目录里登记的动词，未登记时退回工具名。 */
 export function callVerb(part: TransportToolCallPart): string {
-  return part.presentation?.verb ?? part.toolName;
+  return toolVerb(part.toolName);
 }
 
 function isUnfinished(part: TransportToolCallPart): boolean {

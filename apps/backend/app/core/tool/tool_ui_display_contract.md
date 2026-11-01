@@ -1,8 +1,8 @@
 # Tool UI 展示契约
 
-状态：方案契约，适用于当前全部内置工具。
+状态：现行契约，适用于全部内置工具（34 个）。`tests/test_tool_registry_display_guard.py` 守卫两件事：每个注册工具都在前端工具目录（`apps/desktop/lib/assistant/tool-catalog.ts`）与第 3 节表格里有条目，代码里产出的每个展示 `kind` 都必须在表里登记。
 
-本文定义工具执行结果如何被桌面端 UI 展示。
+本文定义工具调用在桌面端如何展示：后端给出哪些事实、前端据此做什么决定。
 
 ## 1. 运行边界
 
@@ -13,54 +13,55 @@ Electron main 进程（桌面宿主）
 └─ 渲染进程 / React 前端
    └─ localhost Assistant Transport
       └─ FastAPI 后端进程
-         └─ 工具 handler + tools/display 展示数据构建
+         └─ 工具 handler + 展示数据纯函数
 ```
 
 - 工具在 FastAPI 后端进程执行。
-- 展示纯函数负责把执行结果投影成 UI 展示数据：外部工具在 `apps/backend/app/tools/display/`，内部工具（子 Agent、Agent Team、web）在 `apps/backend/app/core/tool/` 各自目录。
-- `ToolDisplayHints` 随 `ToolDefinition` 传给客户端，描述工具的静态展示方式。
-- `ToolObservation.display_data` 承载工具终态 UI 结构化数据；交互 terminal 的运行期原始 bytes 只通过每会话一条的可写 `terminal-v2` WebSocket 实时呈现，不进入 display_data。一次性 terminal 的有限输出仍可按 `terminal-result` 契约进入 display_data。终端输出仅从子进程字节解码为文本，不剥离 ANSI 控制序列、不改写文本、不按字符数截断，也不携带 `truncated` / `stream_truncated` 字段。模型 `content` 的统一输出预算属于另一条边界，不改变 UI 展示数据。
-- Assistant Transport 可以把展示数据带入事件和 snapshot，以支持前端渲染与重连恢复；展示数据不是任务、Run、Agent context 或文件变更事实源。
-- 一次性 terminal 增量只存在于当前进程的运行期 snapshot，不写入数据库或 Agent context；交互 terminal 增量只存在于会话的订阅队列与环形缓冲；会话列表与实时状态由 snapshot 顶层 `terminal_sessions` 投影，工具卡片 display_data 只是调用当时的冻结快照。工具完成后由终态 `display_data` 替换，重新 attach/state 以最终 snapshot 为准。
-- `ToolObservation.artifact_data` 只承载内部工具产物，不进入 UI Transport。文件变更展示数据只服务于工具结果渲染。
+- 展示外壳（图标、动词、调用行标题）归前端：工具名是封闭集合，前端工具目录按 `toolName` + `args` 查表得出；后端不声明、不下发任何展示文案。
+- 展示数据纯函数与工具同侧：外部工具在 `apps/backend/app/tools/display/`，内部工具（子 Agent、Agent Team、web）在 `apps/backend/app/core/tool/handler/` 各自目录。它们不执行 IO。
+- `ToolObservation.display_data` 承载工具终态的 UI 结构化数据；交互终端的运行期原始 bytes 只经每会话一条可写 `terminal-v2` WebSocket 呈现，不进 display_data。一次性终端（`execute_terminal`）的输出按 `terminal-result` 契约进入 display_data，原样、不剥 ANSI、不截断，也没有 `truncated` / `stream_truncated` 字段。模型 `content` 的统一输出预算是另一条边界，不改变 UI 展示数据。
+- Assistant Transport 把展示数据带入事件与 snapshot，服务前端渲染与重连恢复；展示数据不是任务、Run、Agent context、文件变更或子 Task 状态的事实源。
+- 一次性终端的输出增量只存在于当前进程的运行期 snapshot；交互终端增量只存在于会话的订阅队列与环形缓冲；会话列表与实时状态由 snapshot 顶层 `terminal_sessions` 投影，工具卡片 display_data 只是调用当时的冻结快照。
+- `ToolObservation.artifact_data` 只承载内部工具产物，不进入 UI Transport。
 - 后端重启后由已有 snapshot 恢复 UI，不隐式重放旧工具执行。
 
-## 2. 两层契约
+## 2. 契约分层
 
-### 2.1 `ToolDisplayHints`：静态声明
+工具 part（`ConversationStateToolCallPart`）上与展示有关的字段：
 
-位置：`apps/backend/app/core/tool/schemas/tool_display.py`
+| 字段 | 来源 | 何时写 |
+| --- | --- | --- |
+| `toolName` / `args` | 模型的工具调用 | 创建时写工具名；`args` 随 `status=running` 一次给全，冷重建从持久化参数读 |
+| `awaitingUser` | `project_tool_result`（按占位行 metadata） | 每次结果投影都显式写；创建时为 `false` |
+| `display_data` | `ToolObservation.display_data`（工具展示纯函数） | 终态（或后台 / HITL 占位）写入 |
 
-`ToolDisplayHints` 只声明"这个工具通常如何展示"，不包含动态结果，也不包含渲染函数。
+### 2.1 展示外壳：前端工具目录
 
-字段语义：
+位置：`apps/desktop/lib/assistant/tool-catalog.ts`。每个工具一条：
 
-- `verb`：客户端标题动词，例如"读取文件""执行命令"。
-- `icon`：客户端使用的图标名。
-- `variant`：稳定的 renderer 语义变体；用于同一 `kind` 下的不同展示形态，不携带动态结果或用户输入。
-- `surface`：`trace` 表示普通执行轨迹，`standalone` 表示需要独立强调的结果。
-- `expandable`：是否允许展开。
-- `expand_layout`：客户端使用的通用布局：`none`、`details`、`list`、`diff`、`write`、`terminal`。
-- `default_open`：完成后的默认展开偏好，不代表执行状态。
-- `show_result`：是否把模型结果正文暴露给客户端；不影响 `display_data`。
+- `verb`：动词，如「读取文件」。区头按它计数（命令的标题每条各异，按标题计数会把「执行命令 4」拆成四个 1），也是没有自定义意图时的标题。
+- `icon`：lucide 图标名，取值表在 `components/assistant-ui/tools/tool-icons.tsx`。
+- `target(args)`：目标，路径、模式、会话、地址、子 Agent 等；没有目标的工具不给。多目标只写首个、其余 `+N`（`read_image`、`web_extract`、`apply_patch`、`browser_act`）；多行输入只取首个非空行；组合目标（`"pattern" in path`、`a → b`）各段齐全才拼。
+- `title(args)`：自定义意图，只有 `execute_terminal`（模型写的 `description`）与 `delegate_task`（`agent_name`）需要，取不到时回落到 `verb`。
 
-约束：
+为什么归前端：工具名是封闭集合，标签、图标、i18n 都是客户端的事；哪个参数是目标虽然是工具的知识，但投影的输入 `args` 前端本来就有。按工具名**查表**是声明式的，允许；按工具名写**渲染分支**仍然禁止，展开体与元信息只按 `display_data.kind` 选视图。
 
-- 不按工具名在前端编写专用渲染分支。
-- 不把 query、path、命令输出、diff 或摘要文本写入 `ToolDisplayHints`。
-- `surface`、布局和默认展开只是静态 UI 意图，执行状态仍以 Transport tool-call status 为准。
+参数不可信：`args` 是模型原样参数，排队时为空对象，目录里每个取值都容忍缺字段；目录里没有的工具退回工具名与扳手图标。`execute_terminal.description` 只用于展示：执行、安全策略、日志与终态展示只认 `command`，需要用户批准命令的界面展示原命令。
 
-### 2.2 `display_data`：动态展示数据
+后端唯一还要的「名字」是后台看板条目与 `wait_messages` 提示里的 `label`：由工具从模型给的事实里取（命令的 `description`、子 Agent 的名字），经 `run_deferred(label=...)` 登记，不含动词文案。
+
+### 2.3 `awaitingUser`：等你操作
+
+`project_tool_result`（`assistant_transport/projection/tool_result.py`）一处计算：占位行 `status == "pending"` 且不是后台占位（`background` 为假）即为真——HITL 等决定、交接等交还。每次结果投影都显式写，决定到达、重放后清回 `false`；`ToolCallsSettledEvent` 收束时也写 `false`。实时与冷重建同口径。前端据此把调用放进「等待用户」区，不再从 `pending` 自行推断。
+
+### 2.4 `display_data`：动态展示数据
 
 位置：`apps/backend/app/core/tool/schemas/tool_observation.py`
 
-成功态非空 `display_data` 是面向客户端的结构化 JSON 数据，必须有稳定的 `kind` 字段：
+成功态非空 `display_data` 是面向客户端的结构化 JSON，必须有稳定的 `kind`：
 
 ```json
-{
-  "kind": "<stable-display-kind>",
-  "...": "UI-safe structured fields"
-}
+{ "kind": "<stable-display-kind>", "...": "UI-safe structured fields" }
 ```
 
 约束：
@@ -68,390 +69,207 @@ Electron main 进程（桌面宿主）
 - 只放客户端渲染所需的事实：目标、列表、统计、diff、分页、有限状态信息。
 - 不放 `content`、堆栈、原始异常、完整 prompt、原始 provider 响应或凭据。
 - 不由客户端从 `result`、`args` 或模型正文推导展示结果。
-- 不把 `display_data` 当作后端业务事实源。
+- 不把 `display_data` 当作后端业务事实源：子 Task 的运行状态不在 `delegation-result` / `child-agent-result` 里镜像，前端按 part 的 `child_task_id` 读应用级任务状态推送（`GET /task-status/stream`）。
 - 字段投影和敏感字段过滤必须先于 Transport；安全 allowlist 不能由大小预算替代。
-- `display_data` 仅服务前端展示，不按模型 `content` 预算截断；工具自身业务语义需要截断时，必须通过明确的 `truncated` 标记表达。
-- 外层工具状态使用 Transport 的 `pending`、`running`、`completed`、`failed`、`cancelled`，不在 payload 中重复建立第二套 Run 状态机。
-- 错误态 `display_data` 按第 2.3 节的短提示规则处理，不要求 `kind`。
-- 失败时 UI 默认只展示由 `ToolObservation.status` 投影出的失败状态"失败"，以及 `tool_error` `display_data` 中由后端受控生成的短提示；不得把模型侧的完整错误原因直接展示给用户。
+- `display_data` 只服务前端展示，不按模型 `content` 预算截断；工具自身业务语义需要截断时，用明确的 `truncated` 标记表达。
+- 外层工具状态使用 Transport 的 `pending`、`running`、`completed`、`failed`、`cancelled`，不在 payload 里建第二套状态机。
+- 错误态 `display_data` 按 2.5 节的短提示规则处理，不带成功态 `kind`。
 
-错误态不在 `display_data` 中携带目标、结果或其它业务字段。无法生成安全短提示时，错误 `display_data` 仍只返回通用短提示，不把未经筛选的原始参数传给 UI。
+### 2.5 错误展示策略
 
-### 2.3 错误展示策略
+工具侧的重试提示只是写进 `tool_error` 的 `content` 的自然语言建议，不是观察字段；它既不进 Transport tool-call part，也不进 Run 级错误契约（`ConversationRunError` / `ConversationStateError` 只有 `code` / `message`）。
 
-工具侧的重试提示只是调用点写进 `tool_error` 的 `content` 的自然语言建议，不是观察字段；它既不进入 Transport tool-call part，也不进入 Run 级错误契约（`ConversationRunError` / `ConversationStateError` 只有 `code` / `message`）。Transport/HTTP 错误体上的 `retryable` 是另一套「客户端能否重试」的传输层契约，与工具侧无关。
-
-错误信息分为三个通道，不能混用：
+错误信息分三个通道，不能混用：
 
 ```text
 ToolObservation.content（失败态）
   └─ tool_error 拼好的诊断与修正建议，只面向模型，不自动展示给用户
 
 ToolObservation.display_data.status_hint
-  └─ tool_error 错误态唯一允许的 UI 数据，约 5 个字的受控短提示
+  └─ tool_error 错误态唯一允许的 UI 数据，约 5 个字、最长 8 个字符的受控短提示
 
 Transport tool-call status
-  └─ pending / running / completed / failed / cancelled 等生命周期状态
+  └─ pending / running / completed / failed / cancelled 生命周期状态
 ```
 
-错误态以及部分成功、截断等非完整结果的工具行遵循以下规则：
+规则：
 
-- 必须从 `ToolObservation.status` 得到状态；`display_data` 不得定义或覆盖状态。
-- `tool_error` 的 `display_data` 只能是 `{"status_hint": "..."}`，提示建议约 5 个字，最多 8 个字符。
-- Agent Team 的持久化运行 ID 走工具调用 part 的独立 `team_run_id` 定位字段，成功与失败均可携带；它不是错误文案或第二份运行状态，冷重建从 ToolMessage 的 Transport metadata 恢复。
-- `status_hint` 必须来自后端明确的分类映射，不得直接复制失败文本、异常字符串或 provider 原始响应。
-- 没有安全且有价值的分类时使用通用提示"执行失败"；客户端仍只显示"失败 + 短提示"。
-- 取消态显示"已取消"，不显示为失败；部分成功可以使用"部分成功"等受控提示。
+- 状态必须从 `ToolObservation.status` 得到；`display_data` 不得定义或覆盖状态。
+- `tool_error` 的 `display_data` 只能是 `{"status_hint": "..."}`；`status_hint` 来自后端的分类映射（`normalize_status_hint`：省略或超长时退到该工具的默认提示，再退到「执行失败」），不得复制失败文本、异常字符串或 provider 原始响应。
+- 取消态显示「已取消」，不显示为失败；部分成功用「部分成功」等受控提示。
+- Agent Team 的持久化运行 ID 走 part 的 `team_run_id`，成功与失败都可携带；它不是错误文案或第二份运行状态。
 - UI 不展示堆栈、完整网络错误、模型 prompt、凭据或大段模型正文。
 
-示例：
-
-```json
-{
-  "status_hint": "文件不存在"
-}
-```
-
-客户端的紧凑展示类似：
-
-```text
-读取文件  · 失败 · 文件不存在
-```
-
-其中"失败"来自 `ToolObservation.status` 的 Transport 投影，"文件不存在"来自错误 `display_data.status_hint`；模型仍然可以从失败态 `content` 获得完整修正建议。
-
-Transport 投影必须遵循以下固定映射：
+Transport 投影的固定映射：
 
 ```text
 ToolObservation.status == "success"   → tool-call status "completed"，error 为空
 ToolObservation.status == "error"     → tool-call status "failed"，error 为 status_hint
-ToolObservation.status == "cancelled" → tool-call status "cancelled"，error 为"已取消"
+ToolObservation.status == "cancelled" → tool-call status "cancelled"，error 为「已取消」
 ```
 
-Transport 投影不得把失败态 `content` 写入 `ToolCallStatusChangedEvent.error`。完整诊断只通过模型上下文写回；进程恢复时的
-`ToolCallsSettledEvent` 也只能写入"执行异常""已取消"等短提示。
+Transport 不把失败态 `content` 写入 `ToolCallStatusChangedEvent.error`；进程恢复时的 `ToolCallsSettledEvent` 也只写「执行异常」「已取消」。错误态 `display_data` 不再包含对应工具成功态的 `kind`、path、URL、结果列表、diff 或终端输出。
 
-错误态的 `display_data` 不得再包含对应工具成功态的 `kind`、path、URL、结果列表、diff 或终端输出。成功态仍按各工具章节定义完整的 UI 数据；例如 `read_file` 因文件过大截断时可以在成功数据中携带"文件过大，已截断"，这不属于 `tool_error`。
+### 2.6 各工具错误短提示（与代码对齐）
 
-### 2.4 各工具错误短提示
+| 工具 | 默认提示 | 具体提示 |
+| --- | --- | --- |
+| `read_file` | `读取失败` | `无法读取`、`路径无效` |
+| `read_image` | `执行失败` | `无法读取图片`（全部失败才是错误态；部分失败是成功态的 `failures`） |
+| `write_file` | `写入失败` | — |
+| `patch_write` | `替换失败` | — |
+| `apply_patch` | `补丁失败` | — |
+| `delete_file` | `删除失败` | — |
+| `move_file` | `移动失败` | — |
+| `search_content` | `搜索失败` | `搜索超时`、`正则无效` |
+| `find_files` | `搜索失败` | `搜索超时` |
+| `list_directory` | `列举失败` | — |
+| `execute_terminal` | `命令失败` | `命令超时` |
+| `terminal_*` | `执行失败` | `用户输入中`、`用户命令中`、`缺少集成`、`终端失败`、`已在交接中` |
+| `web_search` | `搜索失败` | — |
+| `web_extract` | `提取失败` | `部分成功`（成功态） |
+| `browser_*` | `执行失败` | `标签不存在`、`标签已满`、`地址被拦截`、`页面加载失败`、`页面崩溃`、`页面无响应`、`用户正在操作`、`已在交接中`、`截图保存失败`、`宿主不可用`、`宿主超时` |
+| `delegate_task` | `委派失败` | — |
+| `wait_messages` | `执行失败` | `无可等待` |
+| 任一声明 `returns_images` 的工具 | — | `模型不支持图片`（准入门禁） |
 
-以下提示是 UI 文案，不是内部错误码，也不是模型侧的失败文本。同一工具应优先使用表中的具体提示，无法判断时使用"执行失败"。
-
-| 工具 | 建议短提示 |
-| --- | --- |
-| `read_file` | `文件不存在`、`无法读取`、`非文本文件`、`路径无效` |
-| `write_file` | `写入失败`、`路径无效`、`无法写入` |
-| `replace` | `未找到文本`、`内容冲突`、`替换失败` |
-| `apply_patch` | `补丁无效`、`目标已变更`、`应用失败` |
-| `delete_file` | `删除失败`、`路径无效`、`目录不支持` |
-| `move_file` | `移动失败`、`路径无效`、`目标已存在` |
-| `search_content` / `find_files` | `搜索失败`、`正则无效`、`路径不存在` |
-| `list_directory` | `目录不存在`、`无法读取`、`路径无效` |
-| `execute_terminal` | `命令超时`、`命令失败`、`目录无效`、`命令被拦截` |
-| `web_search` | `服务未配置`、`网络失败`、`搜索失败` |
-| `web_extract` | `服务未配置`、`网络失败`、`提取失败`、`URL 无效` |
-| `delegate_task` | `委派失败`、`子任务失败`、`子 Agent 不存在` |
-
-文件写入后的语法检查不属于 UI 感知范围：即使检查失败，也不生成"语法检查失败"短提示，不进入错误 `display_data`，并按文件写入本身的 UI 结果处理。
+文件写入后的语法检查不属于 UI：即使检查失败也不生成短提示，按文件写入本身的结果展示。
 
 ## 3. 内置工具契约
 
-交互式 terminal 工具包含会话发现、创建、读写（含按键、信号）、交接（HITL）与关闭能力，共 6 个工具。
+每行：`kind` 列是该工具成功态会产出的展示 `kind`（「无」= 空 `display_data`，走通用调用行）；`heading` 列是前端目录算出的 `title · target`。
 
-| 工具 | 静态展示声明 | `kind` | 动态展示字段 |
+| 工具 | `kind` | `heading` | 动态展示字段 |
 | --- | --- | --- | --- |
-| `read_file` | `trace`、不可展开、`none`、`eye` | `read-file-meta` | `path`、实际展示的 `line_range`、`file_size`；文件过大截断时附带固定 `status_hint` |
-| `read_image` | `trace`、可展开、`details`、`eye` | `image-read` | `images`（每项 `path`、`asset_id`、`width`、`height`，图片本身随工具图片通道交给模型）、`failures`（每项 `path` 与受控中文短提示 `hint`）；部分失败仍是成功态，全部失败走错误态（`status_hint=无法读取图片`） |
-| `write_file` | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | `changes`、`diff_stats` |
-| `patch_write`（replace） | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | 与 `write_file` 相同 |
-| `apply_patch` | `standalone`、可展开、`diff`、`git-compare` | `file-changes` | 只含既有文件 `modified` 的多文件 `changes`、`diff_stats` |
-| `delete_file` | `standalone`、不可展开、`none`、`file-x` | `file-changes` | 一条 `deleted` 变更，只含 `path` 与 `status`（`patch` 为 `null`，**不携带被删内容**）；前端以紧凑操作卡片展示 |
-| `move_file` | `standalone`、不可展开、`none`、`file-symlink` | `file-changes` | 一条 `moved` 变更；同时提供源路径与目标路径；前端以紧凑操作卡片展示 |
-| `search_content` | `trace`、可展开、`list`、`search` | `content-search-results` | `pattern`、`path`、`matches`、`page`、`total_rows`、`match_count`、扫描统计 |
-| `find_files` | `trace`、可展开、`list`、`search` | `file-list` | `pattern`、`path`、`files`、`page`、`match_count` |
-| `list_directory` | `trace`、可展开、`list`、`eye` | `directory-list` | `path`、`entries`、`page`、`total_entries` |
-| `execute_terminal` | `standalone`、可展开、`terminal`、`terminal` | `terminal-result` | 运行期间原样增量 `output`；终态原样 `command` 和 `output`，以及 `workdir`、`exit_code`、`timed_out`；转到后台时为后台占位：`command`、`workdir`，后台阶段照常增量 `output`，结论并入时写回完整终态（「在后台」由 part 的 `deferred` 表达） |
-| `terminal_list` | `standalone`、不可展开、`none` | `terminal-session` | 本次发现的 `session_count`，不复制可变的会话状态 |
-| `terminal_start` | `standalone`、可展开、`terminal`、`terminal` | `terminal-session` | `session_id`、`status`、`exit_code`、`initial_cwd`、`shell_kind`、`label`；实时状态读 snapshot `terminal_sessions` |
-| `terminal_read` / `terminal_write` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`lines`（`[a,b]` 或 null）、`screen`（全屏程序期间返回整屏时为 true，此时 `lines` 为 null）、`wait_result`（`{until, end_reason, matched_line?, matched_screen_row?}`，等待只在前台进行）；write 另有 `input_summary`（实际输入摘要） |
-| `terminal_handoff` | `standalone`、不可展开、`none`（HITL `execute`） | `terminal-session` | 与 `terminal_read` / `terminal_write` 相同，`input_summary` 为交接原因；等待占位为 `pending` 时卡片提供「交还」；进行中的交接另见 snapshot 顶层 `handoffs`（面板提示与弹出读它，不读卡片） |
-| `terminal_close` | `standalone`、不可展开、`none` | `terminal-session` | `session_id`、`status`、`exit_code` |
-| `web_search` | `standalone`、可展开、`list`、`globe` | `web-search-results` | `query`、`results`；结果只含 `title`、`url` |
-| `web_extract` | `trace`、低噪声列表、`list`、`globe` | `web-extract-urls` | `urls`；每项只含 `url` |
-| `delegate_task` | `standalone`、不可展开、`details`、`users` | `delegation-result` | `title`、`child_agent_id`、`delegation_id`、`child_task_id`、状态 |
-| `child_agent_send` | `standalone`、不可展开、`details`、`send` | `child-agent-result` | `operation`、`child_task_id`、状态、agent 标识、最终摘要、终态原因 |
-| `child_agent_status` | `standalone`、不可展开、`details`、`info` | `child-agent-result` | `operation`、`child_task_id`、状态、agent 标识、最终摘要、终态原因 |
-| `wait_messages` | `standalone`、不可展开、`none`、`clock` | 无（空 `display_data`，走通用卡片） | — |
-| `propose_agent_configuration` | `standalone`、只读草稿卡、`bot` | `agent-configuration-draft` | `status=draft`、`agent_id`、`role`、`description`、`system_prompt` |
-
-交互式 terminal handler 复用现有 renderer 路由：创建卡片布局为 `terminal`，操作行布局为 `none`，动态 `kind` 为
-`terminal-session`；`presentation.variant` 为 `terminal-session-start/list/read/write/close` 五种（signal 已并入 write）。
-display_data 只传会话身份与本次调用的摘要；完整 PTY 输出只走每会话一条的可写 `terminal-v2` WebSocket，模型读取的
-带行号文本只进入 content。错误短提示为「用户输入中」「缺少集成」「终端失败」。会话归 Task 所有，会话列表与实时状态
-由 snapshot `terminal_sessions` 投影（不回写工具卡片），契约细节见 `app/tools/terminal_runtime/interaction_contract.md`。
+| `read_file` | `read-file-meta` | 读取文件 · `path` | `path`、实际展示的 `line_range`、`file_size`；因字符预算截断时附 `truncated` 与固定 `status_hint` |
+| `read_image` | `image-read` | 查看图片 · 首个 `path` +N | `images`（每项 `path`、`asset_id`、`width`、`height`）、`failures`（每项 `path`、`hint`） |
+| `write_file` | `file-changes` | 写入文件 · `path` | `changes`、`diff_stats` |
+| `patch_write` | `file-changes` | 替换文本 · `path` | 与 `write_file` 相同 |
+| `apply_patch` | `file-changes` | 应用补丁 · 补丁首个文件 +N | 只含既有文件 `modified` 的多文件 `changes`、`diff_stats` |
+| `delete_file` | `file-changes` | 删除文件 · `path` | 一条 `deleted` 变更，只含 `path` 与 `status`（`patch` 为 `null`，不携带被删内容） |
+| `move_file` | `file-changes` | 移动文件 · `source → destination` | 一条 `moved` 变更，含源路径与目标路径 |
+| `search_content` | `content-search-results` | 搜索内容 · `"pattern" in path` | `pattern`、`path`、`matches`、`page`、`total_rows`、`match_count`、扫描统计 |
+| `find_files` | `file-list` | 查找文件 · `pattern in path` | `pattern`、`path`、`files`、`page`、`match_count` |
+| `list_directory` | `directory-list` | 查看目录 · `path` | `path`、`entries`、`page`、`total_entries` |
+| `execute_terminal` | `terminal-result` | `description` · 命令首行 | 终态 `command`、`workdir`、`output`、`exit_code`、`timed_out`；后台占位只有 `command`、`workdir`，输出照常实时追加（见 3.4） |
+| `terminal_list` | `terminal-session` | 列出终端 · 无 | `session_count` |
+| `terminal_start` | `terminal-session` | 启动终端 · `label` 或 `shell` | `session_id`、`status`、`exit_code`、`initial_cwd`、`shell_kind`、`label`；实时状态读 snapshot `terminal_sessions` |
+| `terminal_read` | `terminal-session` | 读取终端 · `session_id` | `session_id`、`status`、`lines`、`screen`、`wait_result` |
+| `terminal_write` | `terminal-session` | 输入终端 · `session_id · 输入摘要` | 同上，另有 `input_summary` |
+| `terminal_handoff` | `terminal-session` | 交给用户输入 · `session_id` | 同 `terminal_write`，`input_summary` 为交接原因；等待占位 `pending` 且 `awaitingUser` 时卡片提供「交还」；进行中的交接另见 snapshot 顶层 `handoffs` |
+| `terminal_close` | `terminal-session` | 关闭终端 · `session_id` | `session_id`、`status`、`exit_code` |
+| `web_search` | `web-search-results` | 网页搜索 · `query` | `query`、`results`（每项只有 `title`、`url`） |
+| `web_extract` | `web-extract-urls` | 网页正文提取 · 首个 `url` +N | `urls`（每项只有 `url`）；部分成功带 `status_hint` |
+| `browser_navigate` | `browser-page` | 打开网页 · `url` 或 `action` | `tab_id`、`url`、`title` |
+| `browser_snapshot` | `browser-page` | 读取网页 · `tab` | 同上 |
+| `browser_act` | `browser-page` | 操作网页 · 首个动作类型 +N | 同上 |
+| `browser_screenshot` | `browser-page` | 网页截图 · `full page` 或 `tab` | 同上，另有 `screenshot`（附件 asset id） |
+| `browser_tabs` | 无 | 管理标签页 · `action [tab]` | — |
+| `browser_handoff` | `browser-page` | 交给你操作网页 · `reason` | 同 `browser-page`，另有 `handoff_reason`；等待占位 `awaitingUser` |
+| `delegate_task` | `delegation-result` | `agent_name` · `child_agent_id` | `title`、`child_agent_id`、`role`、`delegation_id`、`child_task_id`；无状态字段（见 3.7） |
+| `child_agent_send` | `child-agent-result` | 发送给子 Agent · `#child_task_id` | `operation=send`、`child_task_id`、`agent_id`、`agent_name`、`final_output`、`end_reason` |
+| `child_agent_status` | `child-agent-result` | 读取子 Agent 状态 · `#child_task_id` | `operation=status`，其余同上（查询时刻的快照） |
+| `wait_messages` | 无 | 等待结果 · 无 | — |
+| `propose_agent_configuration` | `agent-configuration-draft` | 生成子 Agent 配置草稿 · `agent_id` | `status=draft`、`agent_id`、`role`、`description`、`system_prompt` |
+| `propose_agent_team_configuration` | `agent-team-configuration-draft` | 生成 Agent Team 配置草稿 · `name` | `status=draft`、`team_id`、`name`、配置预览（不含 system prompt 与密钥） |
+| `agent_team` | `agent-team-approval` | 运行已有 Agent Team · `team_id` | 目标、节点、边、配置与 `team_run_id`；是否待确认由前端按 `team_run_id` 读 TeamRun 状态 |
+| `mcp` | `mcp-tool-result` | 调用 MCP · `server/tool`（list 为服务名或无） | `action=call`：`server_name`、`tool_name`；`action=list`：`servers` |
+| `skill` | `skill-content` | 加载 Skill · `skill_name[/resource_path]`（list 无） | `action=load`：`skill_name`、`resource_path`；`action=list`：`skills` |
 
 ### 3.1 文件读取
 
-`read_file` 的 UI 只展示读取目标、实际展示的起止行号和文件大小；不展示正文、总行数或下一页 offset。读到文件行尾时，行号范围固定渲染为 `L<start>-END`，例如 `L1-END`；尚未读到行尾时渲染为 `L<start>-L<end>`。只有因文件过大导致输出被字符预算截断时，额外固定展示"文件过大，已截断"。普通分页到达 `limit` 不属于该提示。正文和继续读取所需的 `next_offset` 继续通过 `content` 进入模型通道。
+`read_file` 只展示读取目标、实际展示的起止行号和文件大小；不展示正文、总行数或下一页 offset。读到行尾时范围渲染为 `L<start>-END`，否则 `L<start>-L<end>`。只有因字符预算截断时额外带 `truncated: true` 与固定 `status_hint: "文件过大，已截断"`；分页到达 `limit` 不算截断。
 
 ```json
-{
-  "kind": "read-file-meta",
-  "path": "apps/backend/app/tools/tool_handler/read_file.py",
-  "line_range": {
-    "start": 1,
-    "end": 200
-  },
-  "file_size": 18320
-}
+{ "kind": "read-file-meta", "path": "app/main.py", "line_range": { "start": 1, "end": 200 }, "file_size": 18320 }
 ```
-
-读到文件行尾时：
-
-```json
-{
-  "kind": "read-file-meta",
-  "path": "small.py",
-  "line_range": {
-    "start": 1,
-    "end": "END"
-  },
-  "file_size": 920
-}
-```
-
-客户端应将上述范围显示为 `L1-END`。
-
-发生截断时：
-
-```json
-{
-  "kind": "read-file-meta",
-  "path": "large.log",
-  "line_range": {
-    "start": 1,
-    "end": 500
-  },
-  "file_size": 10485760,
-  "truncated": true,
-  "status_hint": "文件过大，已截断"
-}
-```
-
-`line_range` 表示实际返回给模型的正文所覆盖的范围，而不是请求的 `offset` / `limit`；`end` 为数字时显示为 `L<start>-L<end>`，读到文件行尾时直接使用字符串 `"END"` 并显示为 `L<start>-END`。空文件或没有返回行时，`end` 可以为 `null`。`truncated` 和固定 `status_hint` 仅在确实因为文件过大、字符预算不足而截断时出现；如果只是因为分页 `limit` 到达页末，不能设置 `truncated`，也不能显示"文件过大，已截断"。
 
 ### 3.2 文件修改
 
-`write_file`、`replace`、`apply_patch`、`delete_file`、`move_file` 共用 `file-changes`。`apply_patch` 只返回既有文件的 `modified` 状态；`delete_file` 返回 `deleted`，`move_file` 返回 `moved` 与 `new_path`。`display_data.changes` 只携带可由客户端直接解析的 Git 风格 `patch`、`status`、路径和增删行数，不携带完整文件正文；Diff patch 不因模型输出预算截断。`delete_file` 不携带 `patch`（恒为 `null`）、增删计数恒为 0，因为删除展示只需表达路径与状态。
-
-UI 为各变更状态显示不同颜色的状态标记：`added` 使用绿色"新增"，`deleted` 使用红色"已删除"，`moved` 使用蓝色"已移动"并显示 `source → destination`，`modified` 使用中性"修改"。摘要行只显示大于零的增删统计；纯移动与删除都不显示 `+0 / −0`。移动和删除不进入 Diff 展开器，而是以不可展开的紧凑操作卡片展示路径、变更状态和执行状态；即使收到历史载荷里携带的删除 Diff 也不解析渲染，两者都不显示"没有文本差异"。
+`write_file`、`patch_write`、`apply_patch`、`delete_file`、`move_file` 共用 `file-changes`。`changes` 只携带客户端可直接解析的 Git 风格 `patch`、`status`、路径和增删行数，不携带完整正文；patch 不因模型输出预算截断。`delete_file` 不携带 `patch`（恒为 `null`）、增删计数恒为 0；`move_file` 返回 `moved` 与 `new_path`。
 
 ```json
 {
   "kind": "file-changes",
   "changes": [
-    {
-      "path": "src/example.py",
-      "new_path": null,
-      "status": "modified",
+    { "path": "src/example.py", "new_path": null, "status": "modified",
       "patch": "diff --git a/src/example.py b/src/example.py\n--- a/src/example.py\n+++ b/src/example.py\n@@ -1,2 +1,3 @@\n ...",
-      "insertions": 2,
-      "deletions": 1
-    }
+      "insertions": 2, "deletions": 1 }
   ],
-  "diff_stats": {
-    "total_files": 1,
-    "total_insertions": 2,
-    "total_deletions": 1
-  }
+  "diff_stats": { "total_files": 1, "total_insertions": 2, "total_deletions": 1 }
 }
 ```
 
-非删除变更的 `patch` 必须以 `diff --git` 开头，并包含标准 `---`、`+++` 和 hunk 头；客户端不得根据 `before`/`after` 重新拼接 patch。`delete_file` 除外：它不产生 `patch`，客户端按 `status` 渲染删除摘要，不解析 Diff。持久化状态与 `display_data` 是两个不同边界：展示预算只能影响 `display_data`，工具展示不得依赖未包含在展示契约中的持久化字段。
-
-文件写入后的语法检查属于后端和模型通道，不属于 UI 展示契约。无论语法检查是否通过，`display_data` 都只描述实际发生的文件变更，不得加入 `verification`、`syntax_errors` 或诊断正文。
-
-如果文件写入本身已经成功，即使后置语法检查发现问题，UI 仍按正常文件变更展示；工具 UI 状态不能因此显示"写入失败"。语法检查诊断可以继续通过模型侧的 `content` 供 Agent 自修复，但不得投影到 UI Transport 的错误展示字段或 `display_data`。
+非删除变更的 `patch` 以 `diff --git` 开头并含标准 `---` / `+++` 与 hunk 头；客户端不得按 `before` / `after` 重拼。语法检查诊断只走模型通道，不进 `display_data`。
 
 ### 3.3 搜索和目录
 
-`search_content`、`find_files` 和 `list_directory` 都使用列表布局，但必须保持不同的 `kind`。
-`search_content` 的命中行通过有界的 `content-search-results.matches` 展示，不解析模型正文。
-
-```json
-{
-  "kind": "content-search-results",
-  "pattern": "ToolObservation",
-  "path": ".",
-  "matches": [{"path": "apps/backend/app/core/tool/schemas/tool_observation.py", "line": 1, "content": "...", "is_match": true}],
-  "page": {
-    "offset": 0,
-    "limit": 50,
-    "has_more": false,
-    "next_offset": null
-  },
-  "total_rows": 1,
-  "match_count": 1,
-  "scanned_files": 1,
-  "skipped_files": 0
-}
-```
-
-目录条目至少包含 `name`、`type`、`path`。`type` 使用 `file`、`dir`、`link` 等稳定值。
+`search_content`、`find_files`、`list_directory` 各用自己的 `kind`。`search_content` 的命中行经有界的 `matches` 展示，不解析模型正文；目录条目至少含 `name`、`type`、`path`。
 
 ### 3.4 终端
 
-终端 UI 展示原始命令、工作目录和完整输出。终端输出按原样呈现，保留 ANSI 控制序列和敏感文本；后端不设置终端 UI 字符预算，不插入截断标记，也不发送 `truncated` / `stream_truncated`。模型 `content` 仍由统一 `ToolOutputBudget` 独立控制，该预算不会改写 `display_data`。日志与可观测性旁路保留各自的长度限制。
-运行期间，后端以有界批次更新当前 Transport snapshot；批次大小只用于事件分帧和调度，不丢弃或改写输出。实时通道随命令而不是随工具调用结束：转到后台后照常推送。是否追加只看 part 自己的状态（前台 `running`，或带 `deferred` 的 `pending` 后台占位），不看所属 Run；命令结束、取消或撤销时 part 离开这两种状态，迟到的块丢弃。该增量不持久化，terminal 终态的 `display_data` 会替换临时展示内容（已实时流出的 part 以实时累计的输出为准）。
+终端展示原始命令、工作目录和完整输出，输出原样（保留 ANSI 与敏感文本）、不设 UI 字符预算、不插截断标记。运行期间后端以有界批次更新 snapshot，批次只用于分帧，不丢弃或改写输出；实时通道随命令而不随调用结束，转到后台后照常推送。是否追加只看 part 自己的状态（前台 `running`，或带 `background` 的 `pending` 占位），不看所属 Run；命令结束、取消或撤销后迟到的块丢弃。终态 `display_data` 替换临时内容（已实时流出的 part 以实时累计输出为准）。
+
+命令转到后台（模型选后台、用户转后台或前台到上限）时卡片是后台占位：状态 `pending`、`background: true`，展示数据只有命令与工作目录。结论分两份：给模型的载荷过输出预算、经 `background_result` 回投；给卡片的完整 `terminal-result` 随同一条消息持久化，并入时与 `completed` 一起写回。撤销时卡片推到 `cancelled`、不写终态展示。「在后台」不写进 `display_data`：所有延迟结果的占位都由 part 的 `background: true` 表达（投影自占位行 metadata，结算后保留）。
+
+超时属于 `tool_error`：只展示失败与「命令超时」，不展示输出或退出码。
+
+### 3.5 网页
+
+`web_search` 的结果项只有 `title`、`url`，不带摘要或排名。`web_extract` 只展示 URL 列表（每项只有 `url`，保持后端顺序），不展示正文、metadata、原始响应或逐站点错误；网站名称和图标由前端从 URL 处理。整体成功、失败、部分成功由 Transport 状态与受控短提示表达。
+
+### 3.6 内置浏览器
+
+六个 `browser_*` 工具共用 `browser-page`（`browser_tabs` 没有展示数据）：标签、地址与标题，截图带附件 asset id，交接带要用户做的事。快照正文只给模型。卡片据 `tab_id` 在浏览器面板打开实时页面。
+
+### 3.7 委派与子 Agent
+
+`delegate_task` 的卡片展示委派身份，不展示完整 prompt，也不混入子 Agent 工具的 diff、终端输出或正文：
 
 ```json
-{
-  "kind": "terminal-result",
-  "command": "npm test",
-  "workdir": "H:/coding-agent",
-  "output": "...",
-  "exit_code": 0,
-  "timed_out": false
-}
+{ "kind": "delegation-result", "title": "Review the parser", "child_agent_id": "reviewer", "role": "Reviewer", "child_task_id": 34 }
 ```
 
-命令转到后台（模型选后台、用户转后台或前台到上限）时，卡片是后台占位：状态为 `pending`，展示数据只有
-命令与工作目录，输出照常实时追加。结论分两份：给模型的载荷过输出预算、经 `background_result` 回投；给
-卡片的完整 `terminal-result`（输出、退出码、`timed_out`）随同一条消息持久化（`placeholder_display_data`，
-不渲染给模型），并入时与 `completed` 一起写回占位。撤销时卡片推到 `cancelled`、不写终态展示。「在后台」
-不写进 `display_data`：所有延迟结果的占位都由工具 part 的 `deferred: true` 表达（投影自占位行
-metadata，持久化、结算后保留），前端统一读取，看板也据此复用同一张卡片。
+子 Agent 按 Task 寻址：展示数据只携带 `child_task_id`，不携带 run_id；`delegation-result` 与 `child-agent-result(operation=send)` 的 `child_task_id` 都提升到 part，委派行据此读应用级任务状态推送显示子 Task 的运行状态。展示数据里没有状态字段，后端也不再回写它。`child_agent_send` 与 `child_agent_status` 用同一形状，只以 `operation` 区分；子 Agent 的结论不经工具展示，而是由子 Task 的 actor 以 `background_result` 回投父 Task；`wait_messages` 只让父 Agent 挂起，没有展示数据。
 
-```json
-{
-  "kind": "terminal-result",
-  "command": "npm test",
-  "workdir": "H:/coding-agent"
-}
-```
+### 3.8 Agent Team
 
-超时属于 `tool_error`：UI 只展示失败状态和短提示"命令超时"，不展示终端输出或其它结果字段。
-执行器可以继续把已收集的部分输出放在面向模型的诊断通道中，但不得进入错误 `display_data`；
-退出码也不能被 UI 当作正常完成的可靠依据。
+`agent_team` 首次调用建 pending TeamRun 并返回 `agent-team-approval` 预览卡；是否待确认由前端按 part 的 `team_run_id` 读 TeamRun 状态，不在 `display_data` 里放审批声明。`propose_agent_team_configuration` 返回不含 system prompt 与密钥的配置草稿。
 
-### 3.6 网页搜索
+## 4. 展示纯函数的位置
 
-`web_search` 使用独立的结果契约，不复用文件列表的语义。UI 不展示摘要或排名；每个结果只保留标题和可跳转 URL：
-
-```json
-{
-  "kind": "web-search-results",
-  "query": "local-first desktop agent",
-  "results": [
-    {
-      "title": "Example",
-      "url": "https://example.com/page"
-    }
-  ]
-}
-```
-
-客户端可以打开已经返回的 URL，但不得因此重新调用搜索服务或绕过后端网络边界。
-
-### 3.7 网页正文提取
-
-`web_extract` 的 UI 只展示 URL，不展示正文、metadata、原始响应或逐站点错误详情。前端根据 URL 解析网站名称和 favicon，并把 URL 作为可点击链接；不需要后端提供网站名称。
-
-```json
-{
-  "kind": "web-extract-urls",
-  "urls": [
-    {
-      "url": "https://example.com/page"
-    }
-  ]
-}
-```
-
-多 URL 调用保持后端返回的 URL 顺序。工具整体的成功、失败、取消或部分成功由 Transport tool-call status 和受控短提示表达，不在 URL 项中加入 provider 或错误正文。若将来需要正文预览，应新增明确的、限长的 preview 契约，不能把现有模型正文隐式暴露给 UI。
-
-### 3.8 委派
-
-`delegate_task` 的父工具 UI 展示委派生命周期，不展示完整 prompt，也不把 child 工具的 diff、终端输出或正文混入父工具 payload。
-
-```json
-{
-  "kind": "delegation-result",
-  "title": "Review the parser",
-  "child_agent_id": "reviewer",
-  "delegation_id": 12,
-  "child_task_id": 34,
-  "status": "completed"
-}
-```
-
-子 Agent 一律按 Task 寻址：展示数据只携带 `child_task_id`，不携带 run_id。消息交给子任务后
-并入哪条 Run 由后端调度决定；`delegation-result` 与 `child-agent-result(operation=send)` 的
-`status` 是子 Task 最新 Run 的状态，由后端随子 Run 状态事件刷新。如果客户端支持跳转 child
-task，只使用明确的 `child_task_id`，不从文本中解析链接。
-
-`child_agent_send` 与 `child_agent_status` 使用同一安全结果形状，仅通过 `operation` 区分
-「提交消息」与「读取最新 Run」。子 Agent 的结论不经工具展示：每次子 Run 到终态由子 Task 的 actor 以
-`background_result` 消息回投父 Task；`wait_messages` 只让父 Agent 挂起，调用当步闭合，没有展示数据。
-
-## 4. 展示数据构建位置
-
-展示构建方法按展示语义拆分，避免每个 handler 内联大段字典；外部工具的放在 `apps/backend/app/tools/display/`，内部工具的与工具同目录：
+每个展示模块持有该工具族的 `display_data` 构造函数；handler 只引用，不内联字典：
 
 ```text
 app/tools/display/
-├─ file_change_display.py
-├─ filesystem_display.py
-├─ image_display.py
-├─ browser_display.py
-└─ terminal_display.py
-app/core/tool/
-├─ child_agent/{child_agent_display.py, delegation_display.py, agent_configuration_display.py}
+├─ filesystem_display.py   read_file / search_content / find_files / list_directory
+├─ file_change_display.py  write_file / patch_write / apply_patch / delete_file / move_file
+├─ image_display.py        read_image
+├─ terminal_display.py     execute_terminal / terminal_*
+├─ browser_display.py      browser_*
+├─ mcp_display.py          mcp
+└─ skill_display.py        skill
+app/core/tool/handler/
+├─ child_agent/{delegation_display.py, child_agent_display.py, agent_configuration_display.py}
 ├─ agent_team/agent_team_display.py
 └─ web/web_display.py
 ```
 
-- `file_change_display.py`：`file-changes` 这一个 `kind` 的全部投影——内容修改类 diff 投影，以及删除类的「目标 + 状态」摘要（`build_file_delete_display_data`）。
-- `filesystem_display.py`：读取、搜索、目录的展示投影。
-- `image_display.py`：`read_image` 读到的图片与未读成路径的投影。
-- `browser_display.py`：内置浏览器页面（含截图、交接原因）的投影。
-- `terminal_display.py`：投影原始终端命令和输出。
-- `web_display.py`：搜索结果与正文提取状态投影。
-- `delegation_display.py`：委派结果的最小状态投影。
+函数接收领域结果，返回新的普通字典；不执行工具、网络请求、数据库写入或前端渲染。
 
-builder 应接收已校验的参数和领域结果，返回新的普通字典；不得执行额外工具、网络请求、数据库写入或前端渲染。
-
-## 5. 迁移和验收要求
+## 5. 验收要求
 
 ### 后端
 
-- 所有内置工具的 `ToolDefinition` 都声明 `ToolDisplayHints`。
-- 每个成功、失败、取消路径都能在安全范围内构建对应的 `display_data`。
-- 失败路径的 `display_data` 只提供 `status_hint`，状态取自 `ToolObservation.status`，不把失败文本投影到 UI。
-- `display_data` 在 allowlist 投影后再进入统一大小预算；当前实现的第一道闸门是「工具不产生内容型载荷」——`delete_file` 不携带被删内容、`move_file` 只携带 rename 元数据，展示数据体积不随目标文件体积增长。
-- `web_search` 的 UI 数据不得出现 description 或 position；结果项只允许 `title` 和 `url`。
-- `web_extract` 的 UI 数据不得出现 content、metadata、逐站点状态或 Firecrawl 原始 payload；只允许 URL 列表。
-- 文件已修改但语法检查失败时，UI 数据只保留实际变更；语法检查诊断不得进入 UI。
-- `artifact_data` 不进入 Assistant Transport。
-- `ToolObservation.content` 不被当作通用 UI 展示数据的替代来源。
+- 全部注册工具在前端工具目录里都有条目；守卫测试按注册表遍历。
+- 每条成功、失败、取消路径都能在安全范围内构建对应的 `display_data`；失败只给 `status_hint`。
+- `display_data` 在 allowlist 投影后再进入统一大小预算：`delete_file` 不携带被删内容、`move_file` 只携带 rename 元数据，体积不随目标文件增长。
+- `web_search` 不出现 description / position；`web_extract` 不出现 content / metadata / 逐站点状态 / provider 原始 payload。
+- `artifact_data` 不进入 Assistant Transport；`ToolObservation.content` 不被当作通用 UI 展示数据来源。
 
 ### 前端
 
-- 主要依据 `data.kind` 和 `ToolDisplayHints.expand_layout` 路由布局。
-- 不从 `args` 或 `result` 补推执行结果。
-- `web_extract` renderer 永远不渲染正文，即使收到意外字段也必须忽略。
-- 未知 `kind` 使用安全 fallback，不导致消息流崩溃。
-- `file-changes` 中 `status === "deleted"` 的变更只渲染目标路径与“已删除”状态：不解析 `patch`（历史载荷里可能仍带有删除 Diff），不渲染被删内容。
-- 变更集面板对“删除”类文件组只显示删除摘要，不展示删除内容；删除内容仍可由回退恢复。
-- `trace` 工具保持低噪声；diff、终端和网页搜索等结果工具可以使用独立展示区域。
-
-### 当前实现迁移注意事项
-
-以下问题在实现本契约时需要一并处理：
-
-1. `execute_terminal.py` 的成功分支应使用 `display_data=`，当前源码使用了 `data=`。
-2. `delegation_executor.py` 的成功委派结果同样应使用 `display_data=`，并补充父级委派展示数据。
-3. `web_search`、`web_extract` 应补充稳定的 `kind`，不能只依赖通用 `entries`。
-4. 错误分支不得补充目标、query、URL 或结果数据；只允许受控 `status_hint`。
-5. 终端 `command` 和 `output` 按原文契约呈现。
-6. 通用 `DisplayDataBudget` 不能承担字段安全过滤；尤其网页提取必须先做字段级 allowlist。
+- 调用行的图标、标题与目标按工具目录从 `toolName` + `args` 算出；分区按 `display_data.kind` 与 `awaitingUser`，不按工具名写渲染分支，状态与结果也不从 `args` / `result` 推断。
+- 未知 `kind` 走安全兜底，不让消息流崩溃。
+- `file-changes` 里 `status === "deleted"` 的变更只渲染路径与「已删除」，不解析 `patch`。
+- 子 Task 状态只读应用级任务状态推送，不读展示数据。

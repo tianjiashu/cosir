@@ -13,19 +13,20 @@ import os
 from pathlib import Path
 from typing import Any
 
-from app.tools.display.filesystem_display import build_directory_display_data
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_LIST_DIRECTORY,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.results.tool_error import tool_error
-from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
-from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.core.tool.tool_base import HandlerBase
+from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
+from app.tools.display.filesystem_display import (
+    build_directory_display_data,
+)
+from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models.list_directory_args import ListDirectoryArgs
 
 
@@ -45,7 +46,8 @@ class ListDirectoryTool(HandlerBase):
 
     name = TOOL_LIST_DIRECTORY
     description = (
-        "List a directory's entries: name, type (file|dir|link), path. Read-only. "
+        "List a directory's entries as 'type  name' (type is file|dir|link; names are relative "
+        "to the listed directory). Read-only. "
         'Pass path="." for the workspace root; relative paths resolve against the root. '
         "Hidden entries are skipped unless include_hidden is true; use include_globs to show "
         "only entries whose name matches given patterns. Use it when the request does not name "
@@ -185,7 +187,9 @@ class ListDirectoryTool(HandlerBase):
             # 误导模型对链接目录的理解。
             entry_type = "link" if entry.is_symlink() else "dir" if entry.is_dir() else "file"
             entry_path = self._normalize_posix_path((resolved / entry.name).as_posix())
-            entries.append(f"{entry_type:4s}  {entry.name}  ({entry_path})")
+            # 模型通道只给类型与名字：条目名相对所列目录即唯一，绝对路径只会把每行撑长；
+            # 展示数据仍带绝对 ``path``，供前端拼接后续调用。
+            entries.append(f"{entry_type:4s}  {entry.name}")
             entry_dicts.append(
                 {
                     "name": entry.name,
@@ -272,13 +276,8 @@ class ListDirectoryTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             resource_keys=("filesystem",),
-            display=ToolDisplayHints(
-                verb="查看目录",
-                icon="eye",
-                expandable=True,
-                expand_layout="list",
-                show_result=False,
-            ),
+            # 只读、彼此独立：模型一次发出的多个读取真正并发执行（见 tool_batch_runner）。
+            parallel_mode="parallel",
         )
 
 

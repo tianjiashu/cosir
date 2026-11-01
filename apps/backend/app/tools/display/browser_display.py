@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
+
 def build_browser_page_display_data(
     page: dict[str, Any],
     *,

@@ -18,14 +18,6 @@ def test_rebuild_pairs_disabled_tool_closure_with_metadata(
 ) -> None:
     """禁用调用的 ToolMessage 参与冷重建时，必须有完整的状态 metadata。"""
 
-    class _ToolRegistry:
-        def get_tool_definition(self, _name: str):
-            return None
-
-    monkeypatch.setattr(
-        "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",
-        lambda: _ToolRegistry(),
-    )
     rows = [
         ConversationTaskContextRecord(
             id=1,

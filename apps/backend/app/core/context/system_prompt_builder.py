@@ -11,6 +11,9 @@
 T. ``<tool_layer>`` 工具能力目录层：按 ``AgentRuntimeConfig.allowed_tools`` 投影当前 Agent 可用的
    子 Agent、Team、MCP 服务和 Skill 目录；只读取对应能力需要的本机配置，不连接 MCP 服务。
    该层只消费调用方传入的工具名集合，不自行推导工具可用性。
+W. ``<work_layer>`` 工作方式层：工具选择（专用文件工具优先于 shell 里的 cat/grep/find）、独立读取
+   并行发出、过程叙述与收尾方式。固定文案、按 ``allowed_tools`` 条件拼接，只引用当前 Agent 真有的
+   工具；既没有文件工具也没有 ``execute_terminal`` 的 Agent 不生成该层。
 3. ``<global_layer>`` 系统级全局指令层：来源唯一、路径固定为 ``<system_cosir_dir>/AGENTS.md``
    （由 ``app.utils.path.system_cosir.system_instruction_file`` 计算），作为跨所有 workspace 生效的
    全局提示词；文件缺失时创建空白文件供用户编辑并降级为空，读取失败（权限/编码/IO）时同样降级为空，
@@ -24,8 +27,8 @@ T. ``<tool_layer>`` 工具能力目录层：按 ``AgentRuntimeConfig.allowed_too
 空层块（``""``）不参与拼接，避免相邻层之间出现多余空行。
 
 各层预算的唯一事实源是 ``Constant.SystemPrompt``：Agent 系统预设、全局指令、Workspace 指令三层各
-有一个 token 上限，决定该层最多注入多少内容（超限按 token 估算截断前缀）；Layer 1 与 Layer T 的
-内容由构造方保证有界，不再施加预算。这些数值都是固定常量、不经环境变量覆盖，故不在 ``Settings``；
+有一个 token 上限，决定该层最多注入多少内容（超限按 token 估算截断前缀）；Layer 1、Layer T 与
+Layer W 的内容由构造方保证有界，不再施加预算。这些数值都是固定常量、不经环境变量覆盖，故不在 ``Settings``；
 本模块不再自带任何预算字面量。
 """
 
@@ -42,8 +45,16 @@ from app.config.settings import Settings
 from app.core.tool.schemas.tool_names import (
     TOOL_AGENT_TEAM,
     TOOL_DELEGATE_TASK,
+    TOOL_EXECUTE_TERMINAL,
+    TOOL_FIND_FILES,
+    TOOL_LIST_DIRECTORY,
     TOOL_MCP,
+    TOOL_READ_FILE,
+    TOOL_READ_IMAGE,
+    TOOL_SEARCH_CONTENT,
     TOOL_SKILL,
+    TOOL_WEB_EXTRACT,
+    TOOL_WEB_SEARCH,
 )
 from app.core.workflow.message_queue.task_message import MODEL_INPUT_BODIES
 from app.service.configuration.file_store import ConfigurationFileStore
@@ -71,7 +82,7 @@ def _prompt_json(value: object) -> str:
 
 
 class SystemPromptBuilder:
-    """按五层结构构建本地 coding-agent 的系统提示词。
+    """按层构建本地 coding-agent 的系统提示词（层序见模块说明）。
 
     本类为无状态工具类，所有构建逻辑均为静态方法，不持有实例状态。
     """
@@ -81,7 +92,7 @@ class SystemPromptBuilder:
         agent: AgentRuntimeConfig,
         workspace_root: str,
     ) -> str:
-        """构建完整系统提示词文本（五层）。
+        """构建完整系统提示词文本。
 
         参数:
             agent: 当前执行主体的 Agent 档案；其 ``allowed_tools`` 决定工具能力目录层
@@ -89,7 +100,8 @@ class SystemPromptBuilder:
             workspace_root: 当前工作区根目录。
 
         返回:
-            由层块拼接出的系统提示词（空层块不参与拼接）；Layer T 根据可用工具投影对应目录。
+            由层块拼接出的系统提示词（空层块不参与拼接）；Layer T 根据可用工具投影对应目录，
+            Layer W 按可用工具条件拼接工作方式。
 
         异常:
             RuntimeError: ``allowed_tools`` 含委派工具、但进程级 Agent 目录尚未初始化时，由
@@ -104,10 +116,11 @@ class SystemPromptBuilder:
         tool_layer = SystemPromptBuilder._build_tool_layer(
             workspace_root, agent.allowed_tools
         )
+        work_layer = SystemPromptBuilder._build_work_layer(agent.allowed_tools)
         global_layer = SystemPromptBuilder._build_global_layer()
         layer3 = SystemPromptBuilder._build_workspace_layer(workspace_root)
         output_layer = SystemPromptBuilder._build_output_layer()
-        blocks = [layer1, layer2, tool_layer, global_layer, layer3, output_layer]
+        blocks = [layer1, layer2, tool_layer, work_layer, global_layer, layer3, output_layer]
         return "\n\n".join(block for block in blocks if block)
 
     # --- Layer 1: 动态变量层（运行期事实，不读文件） ---
@@ -116,7 +129,9 @@ class SystemPromptBuilder:
         """构建动态变量层：身份、输入消息协议、操作系统、工作区根目录与写入边界。
 
         文案为英文（读者是模型，与工具描述、子 Agent 选择指南保持同一语言）。本层只承载
-        当前实现确认的运行期事实。
+        当前实现确认的运行期事实：路径边界的说法对应 ``PathResolver`` 的两条解析路径——只读工具
+        走 ``resolve_without_boundary``（可读工作区外），写类工具走 ``resolve_within_workspace``
+        （限制在工作区内且拒绝 ``.cosir/``）；这里不点名工具，因为本层不按 ``allowed_tools`` 裁剪。
 
         参数:
             workspace_root: 当前工作区根目录。
@@ -137,10 +152,12 @@ class SystemPromptBuilder:
             f"- OS: {host_platform_name()}",
             f"- Workspace root: {workspace_root}",
             (
-                "- Workspace rules: all code lives under the workspace root. File tools refuse "
-                "paths outside it and treat .cosir/ (runtime metadata) as read-only. Shell "
-                "commands are not sandboxed: they can reach anything they are given, including "
-                "paths outside the workspace and .cosir/, so never modify either."
+                "- Workspace rules: all code lives under the workspace root. Read-only file tools "
+                "also accept absolute paths outside it; tools that write, edit, delete, or move "
+                "files only work inside it, and .cosir/ is a reserved read-only area (runtime "
+                "metadata) they refuse. Shell commands are not sandboxed: they can reach anything "
+                "they are given, including paths outside the workspace and .cosir/, so never "
+                "modify either."
             ),
             "</runtime_context>",
         ]
@@ -315,6 +332,75 @@ class SystemPromptBuilder:
             "following its instructions):\n"
             f"{_prompt_json(entries)}"
         )
+
+    # --- Layer W: 工作方式层（固定文案，按可用工具条件拼接） ---
+    @staticmethod
+    def _build_work_layer(available_tool_names: Collection[str]) -> str:
+        """构建工作方式层：工具选择、并行读取、过程叙述与收尾。
+
+        每一条只在当前 Agent 真有对应工具时出现，避免引导模型去调不存在的工具：文件工具条
+        只列它有的那几个，「不要用 shell 读文件」只在它同时有文件工具和 ``execute_terminal`` 时
+        出现，并行条只在它有只读工具（文件读取、搜索、网页）时出现。叙述与收尾两条不依赖
+        具体工具，但既没有文件工具也没有 ``execute_terminal`` 的 Agent 整层不生成——它的工作
+        方式不由这里定义。
+
+        参数:
+            available_tool_names: 该 Agent 声明的可用工具名集合。
+
+        返回:
+            包裹在 ``<work_layer>`` 标签内的工作方式文本；不生成时返回 ``""``。
+        """
+        tools = set(available_tool_names)
+        file_tools = [
+            (TOOL_READ_FILE, "read_file to read"),
+            (TOOL_SEARCH_CONTENT, "search_content to search"),
+            (TOOL_FIND_FILES, "find_files to find"),
+            (TOOL_LIST_DIRECTORY, "list_directory to list"),
+        ]
+        file_roles = [role for name, role in file_tools if name in tools]
+        has_terminal = TOOL_EXECUTE_TERMINAL in tools
+        if not file_roles and not has_terminal:
+            return ""
+        read_only_tools = {
+            TOOL_READ_FILE,
+            TOOL_READ_IMAGE,
+            TOOL_SEARCH_CONTENT,
+            TOOL_FIND_FILES,
+            TOOL_LIST_DIRECTORY,
+            TOOL_WEB_SEARCH,
+            TOOL_WEB_EXTRACT,
+        }
+
+        lines = ["<work_layer>"]
+        if file_roles:
+            sentence = f"- Use dedicated tools for files: {', '.join(file_roles)}."
+            if has_terminal:
+                sentence += (
+                    " Use execute_terminal for builds, tests, git and running programs, not for "
+                    "cat/sed/head/grep/rg/find/ls."
+                )
+            lines.append(sentence)
+        if tools & read_only_tools:
+            lines.append(
+                "- Independent reads and searches go out together as parallel tool calls in one "
+                "response."
+            )
+        lines.extend(
+            [
+                (
+                    "- Keep the user oriented. Before the first tool call, say in one sentence "
+                    "what you are about to do. When something you find changes the plan, say so "
+                    "in one sentence. Do not narrate every call; these lines are shown to the "
+                    "user while you work."
+                ),
+                (
+                    "- When done, lead with the result. Mention anything you could not verify or "
+                    "any failure you did not resolve."
+                ),
+                "</work_layer>",
+            ]
+        )
+        return "\n".join(lines)
 
     # --- Layer G: 系统级全局指令层（system_cosir_dir/AGENTS.md，跨 workspace 生效） ---
     @staticmethod

@@ -4,19 +4,22 @@ from __future__ import annotations
 
 import json
 
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_SKILL,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.results.tool_error import tool_error
-from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_SKILL
 from app.core.tool.tool_base import HandlerBase
+from app.core.tool.tool_grouping import TOOL_GROUP_SKILL
 from app.service.configuration.skill_catalog import SkillCatalog, SkillLoadError
 from app.service.configuration.skill_configuration import SkillConfigurationError
+from app.tools.display.skill_display import (
+    build_skill_content_display_data,
+    build_skill_list_display_data,
+)
 from app.tools.tool_models.skill_args import SkillArgs
 
 
@@ -57,7 +60,7 @@ class SkillTool(HandlerBase):
             return tool_success(
                 self.name,
                 json.dumps(payload, ensure_ascii=False, indent=2),
-                display_data={"kind": "skill-content", "action": "list", "skills": payload},
+                display_data=build_skill_list_display_data(payload),
             )
         if skill_name is None:
             return tool_error(
@@ -83,12 +86,9 @@ class SkillTool(HandlerBase):
         return tool_success(
             self.name,
             content,
-            display_data={
-                "kind": "skill-content",
-                "action": "load",
-                "skill_name": skill.name,
-                "resource_path": resource_path or "SKILL.md",
-            },
+            display_data=build_skill_content_display_data(
+                skill_name=skill.name, resource_path=resource_path or "SKILL.md"
+            ),
         )
 
     def to_definition(self) -> ToolDefinition:
@@ -102,13 +102,6 @@ class SkillTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             resource_keys=("skill", "filesystem"),
-            display=ToolDisplayHints(
-                verb="加载 Skill",
-                icon="info",
-                expandable=False,
-                expand_layout="details",
-                default_open=False,
-            ),
         )
 
 

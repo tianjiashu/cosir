@@ -10,6 +10,7 @@
 - 不负责：读取文件内容、回退业务事实或渲染规则。
 """
 
+import re
 from typing import Any
 
 from app.tools.tool_handler.patch_write.patch_diff import (
@@ -17,6 +18,10 @@ from app.tools.tool_handler.patch_write.patch_diff import (
     build_diff_stats,
     format_git_diff,
 )
+
+
+# 补丁里的目标文件：只认 ``diff --git a/<path> b/<path>`` 头；标题不做完整解析，解析与校验归工具。
+_PATCH_FILE_HEADER = re.compile(r"^diff --git a/(\S+) b/", re.MULTILINE)
 
 
 def build_file_change_display_data(results: list[FileDiffResult]) -> dict[str, Any]:

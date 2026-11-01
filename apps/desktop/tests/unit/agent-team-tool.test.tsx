@@ -39,8 +39,6 @@ const PREVIEW: Record<string, unknown> = {
 
 const ARTIFACT: ToolArtifact = {
   backendStatus: "completed",
-  presentation: {},
-  heading: null,
   awaitingUser: false,
   background: false,
   display_data: PREVIEW,

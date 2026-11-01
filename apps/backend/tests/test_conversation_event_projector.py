@@ -402,14 +402,6 @@ def test_tool_lifecycle_and_settlement(
             run_id=1,
             tool_call_id="call-1",
             tool_name="read_file",
-            presentation={
-                "verb": "读取文件",
-                "icon": "eye",
-                "surface": "trace",
-                "expandable": False,
-                "expand_layout": "none",
-                "default_open": False,
-            },
         )
     )
     event_projector.process(
@@ -438,7 +430,6 @@ def test_tool_lifecycle_and_settlement(
     )
     parts = _messages(snapshots.states[1], 1)[1]["parts"]
     assert parts[0]["status"] == "completed"
-    assert parts[0]["presentation"]["expandable"] is False
     assert parts[0]["display_data"] == {"kind": "read-file-meta", "path": "a.py", "total_lines": 10}
     assert parts[1]["status"] == "failed"
     assert parts[1]["error"] == "执行异常"

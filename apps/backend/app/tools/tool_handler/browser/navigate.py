@@ -5,7 +5,6 @@ from typing import ClassVar
 from app.core.tool.schemas import (
     TOOL_BROWSER_NAVIGATE,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -74,5 +73,4 @@ class BrowserNavigateTool(HandlerBase):
             resource_keys=("browser",),
             execution_mode="thread",
             parallel_mode="serial",
-            display=ToolDisplayHints(verb="打开网页", icon="globe"),
         )

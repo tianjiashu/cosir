@@ -1200,7 +1200,6 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
                     "status": "running",
                     "error": None,
                     "isError": False,
-                    "presentation": {},
                 }
             ],
             "runId": 5,

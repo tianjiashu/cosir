@@ -5,20 +5,21 @@ from typing import ClassVar
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tool.handler.web.web_display import build_web_search_display_data
+from app.core.tool.handler.web.firecrawl_client import FirecrawlClient, FirecrawlUnavailableError
+from app.core.tool.handler.web.web_display import (
+    build_web_search_display_data,
+)
+from app.core.tool.handler.web.web_search_args import WebSearchArgs
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_WEB_SEARCH,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.results.tool_error import tool_error
-from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_WEB
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.handler.web.firecrawl_client import FirecrawlClient, FirecrawlUnavailableError
-from app.core.tool.handler.web.web_search_args import WebSearchArgs
+from app.core.tool.tool_grouping import TOOL_GROUP_WEB
 
 
 class WebSearchTool(HandlerBase):
@@ -115,14 +116,8 @@ class WebSearchTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             resource_keys=("network",),
             execution_mode="thread",
-            display=ToolDisplayHints(
-                verb="网页搜索",
-                icon="globe",
-                surface="standalone",
-                expandable=True,
-                expand_layout="list",
-                show_result=False,
-            ),
+            # 只读、彼此独立：模型一次发出的多个读取真正并发执行（见 tool_batch_runner）。
+            parallel_mode="parallel",
         )
 
 

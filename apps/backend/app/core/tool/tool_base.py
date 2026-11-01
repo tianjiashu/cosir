@@ -99,8 +99,7 @@ class HandlerBase(ABC):
         """返回当前工具的可注册定义。
 
         子类必须返回一个包含完整元数据的 ``ToolDefinition`` 实例，其
-        ``handler`` 回调指向本实例的 ``execute`` 方法，``display`` 为纯静态的
-        ``ToolDisplayHints`` 声明（不含任何渲染函数）。
+        ``handler`` 回调指向本实例的 ``execute`` 方法。
 
         参数:
             无。

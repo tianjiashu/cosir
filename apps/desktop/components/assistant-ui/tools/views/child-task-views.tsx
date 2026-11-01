@@ -67,8 +67,10 @@ function childTaskIdOf(context: CallViewContext, fromDisplay: number | undefined
   return context.artifact.childTaskId ?? fromDisplay;
 }
 
-function rowTitle(context: CallViewContext, fallback: string | undefined): string {
-  return context.artifact.heading?.title ?? fallback ?? "子 Agent";
+/** 子 Agent 的名字：展示数据里的优先，排队时参数里的 `agent_name` 也行。 */
+function rowTitle(context: CallViewContext, fromDisplay: string | undefined): string {
+  const fromArgs = typeof context.args.agent_name === "string" && context.args.agent_name.trim() ? context.args.agent_name : undefined;
+  return fromDisplay ?? fromArgs ?? "子 Agent";
 }
 
 /** `delegation-result`（`delegate_task`）：没有展开体，子 Agent 的过程与结论都在工作台里。 */

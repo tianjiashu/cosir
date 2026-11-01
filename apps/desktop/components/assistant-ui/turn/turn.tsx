@@ -73,6 +73,7 @@ function AttentionByIndex({ index, taskId, interactive, taskCancelling }: { inde
         taskId={taskId}
         toolCallId={part.toolCallId}
         toolName={part.toolName}
+        args={(part.args ?? {}) as Record<string, unknown>}
         artifact={readToolArtifact(part.artifact)}
         interactive={interactive}
         taskCancelling={taskCancelling}

@@ -4,22 +4,21 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
 from app.config.logging.logger import log
+from app.core.tool.handler.agent_team.args.propose_agent_team_configuration_args import (
+    ProposeAgentTeamConfigurationArgs,
+)
+from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
 from app.core.tool.schemas.tool_names import TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION
-from app.core.tool.results.tool_error import tool_error
-from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_CONFIGURATION
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.handler.agent_team.args.propose_agent_team_configuration_args import (
-    ProposeAgentTeamConfigurationArgs,
-)
+from app.core.tool.tool_grouping import TOOL_GROUP_CONFIGURATION
 
 
 class ProposeAgentTeamConfigurationTool(HandlerBase):
@@ -108,14 +107,6 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             execution_mode="thread",
-            display=ToolDisplayHints(
-                verb="生成 Agent Team 配置草稿",
-                icon="users",
-                surface="standalone",
-                expandable=True,
-                expand_layout="details",
-                show_result=False,
-            ),
         )
 
 

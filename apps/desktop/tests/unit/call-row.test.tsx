@@ -16,8 +16,6 @@ import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
   return {
     backendStatus: "completed",
-    presentation: { verb: "读取文件", icon: "eye" },
-    heading: null,
     awaitingUser: false,
     background: false,
     display_data: null,
@@ -27,9 +25,11 @@ function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
   };
 }
 
-function render(overrides: Partial<ToolArtifact> = {}, props: { interactive?: boolean; taskCancelling?: boolean } = {}): string {
+type RenderProps = { interactive?: boolean; taskCancelling?: boolean; toolName?: string; args?: Record<string, unknown> };
+
+function render(overrides: Partial<ToolArtifact> = {}, { toolName = "read_file", args = {}, ...props }: RenderProps = {}): string {
   return renderToStaticMarkup(
-    <CallRow taskId={7} toolCallId="call-1" toolName="read_file" args={{}} artifact={artifact(overrides)} {...props} />,
+    <CallRow taskId={7} toolCallId="call-1" toolName={toolName} args={args} artifact={artifact(overrides)} {...props} />,
   );
 }
 
@@ -39,21 +39,30 @@ beforeEach(() => {
 });
 
 describe("CallRow 标题与目标", () => {
-  it("标题取 heading.title，目标取 heading.target", () => {
-    const html = render({ heading: { title: "运行后端单元测试", target: "uv run pytest -q" } });
-    expect(html).toContain("运行后端单元测试");
-    expect(html).toContain("uv run pytest -q");
-    expect(html).toContain("lucide-eye");
+  it("标题、目标与图标按工具目录从参数算出", () => {
+    const read = render({}, { args: { path: "src/a.ts" } });
+    expect(read).toContain("读取文件");
+    expect(read).toContain("src/a.ts");
+    expect(read).toContain("lucide-eye");
   });
 
-  it("没有 heading 时回落到 presentation.verb，再没有回落到工具名", () => {
-    expect(render()).toContain("读取文件");
-    expect(render({ presentation: {} })).toContain("read_file");
+  it("命令的标题是模型写的 description，目标是命令首行", () => {
+    const html = render({}, { toolName: "execute_terminal", args: { description: "运行后端单元测试", command: "uv run pytest -q\necho done" } });
+    expect(html).toContain("运行后端单元测试");
+    expect(html).toContain("uv run pytest -q");
+    expect(html).not.toContain("echo done");
+    expect(html).toContain("lucide-terminal");
+  });
+
+  it("目录里没有的工具退回工具名与扳手图标", () => {
+    const html = render({}, { toolName: "future_tool" });
+    expect(html).toContain("future_tool");
+    expect(html).toContain("lucide-wrench");
   });
 
   it("排队且还没有参数时标题闪烁，参数到达后不再闪烁", () => {
     expect(render({ backendStatus: "pending" })).toContain("shimmer");
-    expect(render({ backendStatus: "pending", heading: { title: "读取文件", target: "a.ts" } })).not.toContain("shimmer");
+    expect(render({ backendStatus: "pending" }, { args: { path: "a.ts" } })).not.toContain("shimmer");
   });
 });
 
@@ -95,7 +104,6 @@ describe("CallRow 附加态", () => {
 describe("CallRow kind 视图", () => {
   it("有展开体的 kind 整行是折叠按钮，元信息来自视图", () => {
     const html = render({
-      presentation: { verb: "搜索内容", icon: "search" },
       display_data: { kind: "content-search-results", pattern: "tick", match_count: 3, matches: [{ path: "a.ts", line: 1, content: "tick" }] },
     });
     expect(html).toMatch(/<button[^>]*aria-expanded="false"[^>]*data-slot="call-row"/);
@@ -111,10 +119,8 @@ describe("CallRow kind 视图", () => {
 
   it("命令退出码非 0 时元信息给 exit N 并默认展开输出", () => {
     const html = render({
-      presentation: { verb: "执行命令", icon: "terminal" },
-      heading: { title: "运行类型检查", target: "bun run typecheck" },
       display_data: { kind: "terminal-result", command: "bun run typecheck", output: "error TS2304", exit_code: 2, workdir: "/w" },
-    });
+    }, { toolName: "execute_terminal", args: { description: "运行类型检查", command: "bun run typecheck" } });
     expect(html).toContain("exit 2");
     expect(html).toContain('data-terminal-viewport="true"');
   });
@@ -130,7 +136,6 @@ describe("CallRow kind 视图", () => {
   it("委派行的状态读任务状态推送，不读展示数据", () => {
     taskStatuses.set(501, "running");
     const html = render({
-      presentation: { verb: "委派 Agent", icon: "users" },
       childTaskId: 501,
       display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501, status: "completed" },
     });

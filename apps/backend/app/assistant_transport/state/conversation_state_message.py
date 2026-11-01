@@ -15,7 +15,8 @@ class ConversationStateOutcome(TypedDict):
 
     让对话界面不必按 Run 分组也能显示历史回复的「已取消 / 失败 / 用量」；Run 被恢复时清空。
     ``contextWindowTotal`` 是该 Run 冻结的窗口上限，与 ``usage`` 同属一个 Run：上下文占用的
-    「已用 / 上限」必须同源，两轮之间换了模型也不会拿新窗口配旧用量。
+    「已用 / 上限」必须同源，两轮之间换了模型也不会拿新窗口配旧用量。``durationMs`` 是 Run 创建到
+    终态的毫秒数，只从 Run 记录的时间戳推导（投影器不读墙钟）；事件没带终态时间时为 ``None``。
     """
 
     status: str
@@ -23,6 +24,7 @@ class ConversationStateOutcome(TypedDict):
     error: ConversationStateError | None
     usage: ConversationStateUsage | None
     contextWindowTotal: int | None
+    durationMs: int | None
 
 
 class ConversationStateMessage(TypedDict):

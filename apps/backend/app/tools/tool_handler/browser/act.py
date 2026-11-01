@@ -5,7 +5,6 @@ from typing import Any, ClassVar
 from app.core.tool.schemas import (
     TOOL_BROWSER_ACT,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -87,5 +86,4 @@ class BrowserActTool(HandlerBase):
             resource_keys=("browser",),
             execution_mode="thread",
             parallel_mode="serial",
-            display=ToolDisplayHints(verb="操作网页", icon="globe"),
         )

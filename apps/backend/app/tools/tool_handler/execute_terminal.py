@@ -21,7 +21,26 @@ from pathlib import Path
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.tools.display.terminal_display import build_terminal_display_data
+from app.core.tool.background.deferred_job import DeferredConclusion, PlaceholderReason, ThreadJob
+from app.core.tool.background.run_deferred import run_deferred
+from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+from app.core.tool.results.tool_cancelled import tool_cancelled
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.results.tool_success import tool_success
+from app.core.tool.schemas import (
+    TOOL_EXECUTE_TERMINAL,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
+from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
+from app.core.tool.tool_base import HandlerBase
+from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.tools.display.terminal_display import (
+    build_terminal_display_data,
+    build_terminal_placeholder_display_data,
+)
 from app.tools.policy.terminal_denylist import (
     DangerousCommandVerdict,
     detect_dangerous_command,
@@ -29,26 +48,9 @@ from app.tools.policy.terminal_denylist import (
 from app.tools.policy.terminal_denylist_configuration import (
     read_terminal_deny_patterns,
 )
-from app.core.tool.schemas import (
-    TOOL_EXECUTE_TERMINAL,
-    ToolDefinition,
-    ToolDisplayHints,
-    ToolExecutionContext,
-    ToolObservation,
-)
-from app.core.tool.background.deferred_job import DeferredConclusion, PlaceholderReason, ThreadJob
-from app.core.tool.background.run_deferred import run_deferred
-from app.core.tool.execute.tool_output_budget import ToolOutputBudget
-from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
-from app.core.tool.results.tool_cancelled import tool_cancelled
-from app.core.tool.results.tool_error import tool_error
-from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.tools.display.terminal_display import build_terminal_placeholder_display_data
+from app.tools.shell.host_shells import available_shells
 from app.tools.tool_handler.terminal import ExecutionResult, LocalExecutionBackend
 from app.tools.tool_handler.terminal.output_stream import TerminalOutputStream
-from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.execute_terminal_args import (
     DEFAULT_COMMAND_TIMEOUT_S,
     EXECUTE_TERMINAL_BACKGROUND,
@@ -56,7 +58,6 @@ from app.tools.tool_models.execute_terminal_args import (
     ExecuteTerminalShell,
     resolve_execute_terminal_args_model,
 )
-from app.tools.shell.host_shells import available_shells
 
 # 平台无关的工具描述：只写选用与调用决策需要的执行语义（进程不保留状态、无 stdin、前后台与时长、
 # 命令策略）；平台 shell、命令语法与 workdir 规则由参数模型各字段承载，不在此复述。不点名
@@ -64,22 +65,24 @@ from app.tools.shell.host_shells import available_shells
 
 
 # 中文译文：在一个全新的 shell 进程里执行一条非交互命令，返回退出码与合并后的 stdout/stderr。
-# 两次调用之间不保留任何状态（cd、导出的变量、shell 状态），有依赖的步骤要串进同一条命令。
-# 没有 stdin：等待输入或分页器的命令会一直挂到超时。长构建、测试套件等长任务用它：把 timeout
-# 设到足够覆盖，并用 background=true 在此期间继续做别的事。转后台运行的命令（background=true，
-# 或超过前台等待上限）在结束时会把结果作为消息回投，因此不必轮询。不适合永不退出的服务或
-# watcher：它们不会结束，所以收不到结果消息，进程树会在 timeout 到点时被杀。部分破坏性命令
-# 会被策略拦截。
+# 用于构建、测试、git 和运行程序；读文件、搜索、列目录有专用工具，不要用它跑 cat/sed/head/grep/
+# rg/find/ls。两次调用之间不保留任何状态（cd、导出的变量、shell 状态）。没有 stdin：等待输入或
+# 分页器的命令会一直挂到超时。长构建、测试套件等长任务：把 timeout 设到足够覆盖，并用
+# background=true 在此期间继续做别的事。转后台运行的命令（background=true，或超过前台等待上限）
+# 在结束时会把结果作为消息回投，因此不必轮询。不适合永不退出的服务或 watcher：它们不会结束，
+# 所以收不到结果消息，进程树会在 timeout 到点时被杀。部分破坏性命令会被策略拦截。
 _DESCRIPTION = (
     "Run one non-interactive command in a fresh shell process and return its exit code with "
-    "merged stdout/stderr. Nothing carries over between calls (cd, exported variables, shell "
-    "state), so chain dependent steps in one command. There is no stdin: prompts and pagers "
-    "hang until the timeout. Use it for long builds, test suites, and other long tasks: set "
-    "timeout to cover them and background=true to keep working meanwhile. A command running in "
-    "the background (background=true, or past the foreground wait limit) reports its result "
-    "back as a message when it finishes, so there is no need to poll. Not suited to servers or "
-    "watchers that never exit: they never finish, so no result message arrives and the "
-    "process tree is killed at the timeout. Some destructive commands are blocked by policy."
+    "merged stdout/stderr. Use it for builds, tests, git and running programs; reading files, "
+    "searching and listing directories have dedicated tools, so do not use it for "
+    "cat/sed/head/grep/rg/find/ls. Nothing carries over between calls (cd, exported variables, "
+    "shell state). There is no stdin: prompts and pagers hang until the timeout. For long "
+    "builds, test suites, and other long tasks set timeout to cover them and background=true to "
+    "keep working meanwhile. A command running in the background (background=true, or past the "
+    "foreground wait limit) reports its result back as a message when it finishes, so there is "
+    "no need to poll. Not suited to servers or watchers that never exit: they never finish, so "
+    "no result message arrives and the process tree is killed at the timeout. Some destructive "
+    "commands are blocked by policy."
 )
 
 # 取消后的模型文案：命令被强杀，结果未知且可能留下部分副作用。
@@ -242,6 +245,7 @@ class ExecuteTerminalTool(HandlerBase):
 
     def execute(
         self,
+        description: str,
         command: str,
         shell: ExecuteTerminalShell = "auto",
         timeout: float | None = None,
@@ -253,6 +257,9 @@ class ExecuteTerminalTool(HandlerBase):
         """在本机 shell 执行一条命令（前台或后台）并返回归一化观测。
 
         参数:
+            description: 模型给的一句意图，只用于展示：前端拿它作调用行标题，这里只拿它作后台
+                看板条目与 ``wait_messages`` 提示里的标签。执行、安全策略、日志与终态展示只认
+                ``command``。
             command: 待执行命令。
             shell: shell 选择；``auto`` 保持宿主默认 shell，也可显式选择本机可用的
                 cmd、PowerShell 或 POSIX shell。该值已由当前平台的参数模型
@@ -368,7 +375,7 @@ class ExecuteTerminalTool(HandlerBase):
             run_id=execution_context.run_id,
             tool_call_id=tool_call_id,
             kind="terminal_command",
-            label=f"terminal_command:{command[:80]}",
+            label=description,
             background=EXECUTE_TERMINAL_BACKGROUND.resolve_background(background),
             foreground_limit_s=EXECUTE_TERMINAL_BACKGROUND.foreground_limit_s,
             is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
@@ -497,14 +504,6 @@ class ExecuteTerminalTool(HandlerBase):
             resource_keys=("shell",),
             execution_mode="thread",  # 作业须由后端进程持有才能转到后台，见模块 docstring
             background=EXECUTE_TERMINAL_BACKGROUND,
-            display=ToolDisplayHints(
-                verb="执行命令",
-                icon="terminal",
-                surface="standalone",
-                expandable=True,
-                expand_layout="terminal",
-                show_result=False,
-            ),
         )
         return replace(definition, parameters_schema=self._build_parameters_schema())
 

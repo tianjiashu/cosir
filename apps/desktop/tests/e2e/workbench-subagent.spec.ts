@@ -26,7 +26,7 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   await page.getByRole("button", { name: /已处理/ }).click();
   const row = page.locator('[data-tool-call-id="delegate-ref-500"]');
   await expect(row).toContainText("审查代码");
-  await expect(row).toContainText("Reviewer");
+  await expect(row).toContainText("delegate_reviewer");
   const openReviewer = page.getByRole("button", { name: "打开子 Agent 工作台：审查代码" });
   await openReviewer.click();
 

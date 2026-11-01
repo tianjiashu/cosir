@@ -43,7 +43,9 @@ def run_deferred(
 ) -> DeferredOutcome:
     """以本次调用（``tool_call_id``）登记作业并按前台 / 后台取走结论；返回结论或占位原因。
 
-    渲染（观察文本、是否挂起、``background`` 标记）交给工具。
+    渲染（观察文本、是否挂起、``background`` 标记）交给工具。``label`` 是看板条目与 ``wait_messages``
+    提示里这项工作的名字，由工具从模型给的事实里取（命令的 ``description``、子 Agent 的名字），不含
+    前端才有的动词文案。
 
     ``detachable`` 为 False 时前台等待不登记为可转后台（看板仍列出、仍可撤销）。同步阻塞：前台时
     阻塞到结论、转后台或 Run 取消，调用方是工具线程。

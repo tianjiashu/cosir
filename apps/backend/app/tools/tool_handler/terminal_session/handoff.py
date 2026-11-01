@@ -9,14 +9,15 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_TERMINAL_HANDOFF,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.service import depends as service_depends
-from app.tools.display.terminal_display import build_terminal_observation_display_data
+from app.tools.display.terminal_display import (
+    build_terminal_observation_display_data,
+)
 from app.tools.terminal_runtime.errors import TerminalSessionNotFoundError
 from app.tools.tool_handler.terminal_session.common import (
     observation_result,
@@ -103,13 +104,4 @@ class TerminalHandoffTool(HandlerBase):
             resource_keys=("shell",),
             execution_mode="thread",
             user_decision="execute",
-            display=ToolDisplayHints(
-                verb="交给用户输入",
-                icon="keyboard",
-                variant="terminal-session-handoff",
-                surface="standalone",
-                expandable=False,
-                expand_layout="none",
-                show_result=False,
-            ),
         )

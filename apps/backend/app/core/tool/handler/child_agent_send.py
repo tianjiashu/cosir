@@ -4,32 +4,33 @@ from typing import ClassVar
 
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileConfigError, AgentProfileType
-from app.core.tool.handler.child_agent.child_agent_display import build_child_agent_result_display_data
+from app.core.tool.handler.child_agent.child_agent_display import (
+    build_child_agent_result_display_data,
+)
+from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
 from app.core.tool.handler.child_agent.child_run_job import run_child
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_CHILD_AGENT_SEND,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.results.tool_error import tool_error
-from app.core.tool.results.tool_success import tool_success
-from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
+from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
+from app.core.workflow.message_queue.dispatch_policy import matches_run
+from app.core.workflow.message_queue.task_message import RunLaunch
 from app.models import ConversationRunCommand
 from app.models.conversation_run_options import ConversationRunOptions
-from app.core.workflow.message_queue.task_message import RunLaunch
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-from app.core.workflow.message_queue.dispatch_policy import matches_run
 from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES
 from app.service.depends import (
     get_conversation_run_ledger,
-    get_user_input_service,
     get_task_service,
+    get_user_input_service,
     get_workspace_service,
 )
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 class ChildAgentSendTool(HandlerBase):
@@ -193,7 +194,6 @@ class ChildAgentSendTool(HandlerBase):
                     display_data=build_child_agent_result_display_data(
                         operation="send",
                         child_task_id=child_task_id,
-                        status="running",
                         agent_id=current_run.agent_id,
                         agent_name=child_task.title,
                         final_output=None,
@@ -209,6 +209,7 @@ class ChildAgentSendTool(HandlerBase):
             return run_child(
                 execution_context,
                 child_task_id,
+                label=child_task.title,
                 enqueue=enqueue,
                 placeholder=lambda: observation("submitted"),
             )
@@ -254,14 +255,6 @@ class ChildAgentSendTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             execution_mode="thread",
-            display=ToolDisplayHints(
-                verb="发送给子 Agent",
-                icon="send",
-                surface="standalone",
-                expandable=False,
-                expand_layout="details",
-                show_result=False,
-            ),
         )
 
 

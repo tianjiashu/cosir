@@ -219,7 +219,6 @@ def test_definition_advertises_only_running_existing_teams() -> None:
     assert definition.name == TOOL_AGENT_TEAM == "agent_team"
     assert definition.group == TOOL_GROUP_AGENT_TEAM
     assert definition.execution_mode == "thread"
-    assert definition.display is not None
 
     # 必须显式否定「创建 / 修改配置」的能力，并声明 Team 不存在时先让用户创建。
     assert "Run an existing Agent Team configuration" in definition.description
@@ -227,14 +226,6 @@ def test_definition_advertises_only_running_existing_teams() -> None:
     assert "if the Team does not exist, ask the user to create it first" in definition.description
     # 回归守卫：旧文案（把本工具说成「准备一份已配置 Team 的执行方案」）不得回归。
     assert "Prepare a configured Agent Team execution plan" not in definition.description
-
-    verb = definition.display.verb
-    assert isinstance(verb, str)
-    assert verb != ""
-    assert verb.strip() == verb
-    assert verb == "运行已有 Agent Team"
-    for forbidden in ("prepare", "configur", "配置", "准备", "创建"):
-        assert forbidden not in verb.lower(), f"verb 不得出现误导词 {forbidden!r}: {verb!r}"
 
 
 def test_model_facing_projection_carries_the_new_contract() -> None:
@@ -276,9 +267,6 @@ def test_registry_round_trip_preserves_description_and_verb(monkeypatch) -> None
     registered = registry.get_tool_definition("agent_team")
     assert registered is not None
     assert registered.description == direct.description
-    assert registered.display is not None
-    assert registered.display.verb == direct.display.verb
-    assert registered.display == direct.display
     assert registered.to_model_tool_definition() == direct.to_model_tool_definition()
     assert registry.get_schema("agent_team") == direct.to_model_tool_definition()["parameters"]
 
@@ -300,7 +288,6 @@ def test_assembled_tool_registry_exposes_identical_agent_team_definition(
         direct.group,
         direct.description,
     )
-    assert assembled.display == direct.display
     assert assembled.execution_mode == direct.execution_mode
     assert "agent_team" in assembled_tool_registry.get_all_tool_names()
     # 同组的配置提案工具与执行工具必须能同时存在（职责边界：一个提案、一个运行）。

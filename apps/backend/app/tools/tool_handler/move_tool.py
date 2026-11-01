@@ -10,27 +10,28 @@ UI 展示通道也不进入模型通道，因此本模块只对源文件做**有
 
 import os
 
-from app.tools.display.file_change_display import build_file_change_display_data
-from app.core.tool.schemas import (
-    TOOL_MOVE_FILE,
-    ToolDefinition,
-    ToolDisplayHints,
-    ToolExecutionContext,
-    ToolObservation,
-)
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import os_error_message, tool_error
 from app.core.tool.results.tool_success import tool_success
+from app.core.tool.schemas import (
+    TOOL_MOVE_FILE,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
+from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.tools.display.file_change_display import (
+    build_file_change_display_data,
+)
 from app.tools.tool_handler.patch_write.patch_diff import FileDiffResult
 from app.tools.tool_handler.security.file_operation_paths import (
     ensure_utf8_text_file,
     resolve_workspace_relative_path,
 )
 from app.tools.tool_handler.security.path_resolver import PathResolver
-from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.move_file_args import MoveFileArgs
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 MOVE_FILE_DESCRIPTION = (
     "Move one existing UTF-8 text file to a new path inside the active workspace. Directories "
@@ -246,14 +247,6 @@ class MoveTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             resource_keys=("filesystem",),
-            display=ToolDisplayHints(
-                verb="移动文件",
-                icon="file-symlink",
-                surface="standalone",
-                expandable=False,
-                expand_layout="none",
-                show_result=False,
-            ),
         )
 
 

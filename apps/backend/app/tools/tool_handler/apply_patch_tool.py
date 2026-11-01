@@ -5,19 +5,22 @@
 """
 
 from app.config.logging.logger import log
-from app.tools.display.file_change_display import build_file_change_display_data
-from app.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
-from app.core.tool.schemas import (
-    TOOL_APPLY_PATCH,
-    ToolDefinition,
-    ToolDisplayHints,
-    ToolExecutionContext,
-    ToolObservation,
-)
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
+from app.core.tool.schemas import (
+    TOOL_APPLY_PATCH,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
+from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.tools.display.file_change_display import (
+    build_file_change_display_data,
+)
+from app.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
 from app.tools.tool_handler.patch_write.patch_apply import (
     PatchApplyError,
     apply_all_with_diff,
@@ -27,9 +30,7 @@ from app.tools.tool_handler.patch_write.patch_parser import (
     parse_git_unified_diff_detailed,
 )
 from app.tools.tool_handler.security.path_resolver import PathResolver
-from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 
 
 class ApplyPatchTool(HandlerBase):
@@ -246,14 +247,6 @@ class ApplyPatchTool(HandlerBase):
             args_model=self.args_model,
             timeout_seconds=self.timeout_seconds,
             resource_keys=("filesystem",),
-            display=ToolDisplayHints(
-                verb="应用补丁",
-                icon="git-compare",
-                surface="standalone",
-                expandable=True,
-                expand_layout="diff",
-                show_result=False,
-            ),
         )
 
 

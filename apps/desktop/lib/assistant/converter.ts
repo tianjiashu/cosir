@@ -286,16 +286,13 @@ function normalizeToolStatus(status: string | undefined): TransportToolStatus {
 /**
  * 把后端 tool-call part 映射为 assistant-ui part。
  *
- * `artifact`（形状见 `tool-artifact.ts`）是 UI-only 适配数据，保留后端五态、展示声明、标题、等待用户
- * 与展示数据；它不会被发送回后端，也不会成为对话事实。assistant-ui 的标准字段只承载
- * args/argsText/isError，renderer 从 artifact 读取后端展示声明。
+ * `artifact`（形状见 `tool-artifact.ts`）是 UI-only 适配数据，保留后端五态、等待用户与展示数据；它不会
+ * 被发送回后端，也不会成为对话事实。assistant-ui 的标准字段只承载 args/argsText/isError。
  */
 export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["content"][number] {
   const backendStatus = normalizeToolStatus(part.status);
   const artifact: ToolArtifact = {
     backendStatus,
-    presentation: part.presentation ?? {},
-    heading: part.heading ?? null,
     awaitingUser: part.awaitingUser,
     display_data: part.display_data ?? null,
     team_run_id: part.team_run_id,

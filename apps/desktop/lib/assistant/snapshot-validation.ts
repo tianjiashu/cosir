@@ -189,7 +189,7 @@ function validatePart(value: unknown, path: string): void {
     return;
   }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
-  const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "presentation", "heading", "awaitingUser", "display_data", "team_run_id", "background", "isError", "approvalRequestId", "child_task_id", "agent_role", "terminal_output_seq"];
+  const allowed = ["type", "toolCallId", "toolName", "status", "args", "error", "errorCode", "awaitingUser", "display_data", "team_run_id", "background", "isError", "approvalRequestId", "child_task_id", "agent_role", "terminal_output_seq"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   requireString(part.toolCallId, `${path}.toolCallId`);
   requireString(part.toolName, `${path}.toolName`);
@@ -200,8 +200,6 @@ function validatePart(value: unknown, path: string): void {
   if (hasOwn(part, "args") && part.args !== null && !isRecord(part.args)) throw new TransportSnapshotValidationError(`${path}.args`, "对象或 null");
   if (hasOwn(part, "error") && part.error !== null && typeof part.error !== "string") throw new TransportSnapshotValidationError(`${path}.error`, "字符串或 null");
   if (hasOwn(part, "errorCode") && part.errorCode !== null && part.errorCode !== undefined && typeof part.errorCode !== "string") throw new TransportSnapshotValidationError(`${path}.errorCode`, "字符串或 null");
-  if (hasOwn(part, "presentation")) validatePresentation(part.presentation, `${path}.presentation`);
-  if (hasOwn(part, "heading")) validateHeading(part.heading, `${path}.heading`);
   // 后端每次显式写：缺省会让「排队待执行」与「等你操作」再次混在 pending 里。
   if (typeof part.awaitingUser !== "boolean") throw new TransportSnapshotValidationError(`${path}.awaitingUser`, "布尔值");
   if (hasOwn(part, "display_data")) validateDisplayData(part.display_data, `${path}.display_data`);
@@ -212,24 +210,6 @@ function validatePart(value: unknown, path: string): void {
   if (hasOwn(part, "agent_role") && (typeof part.agent_role !== "string" || !part.agent_role.trim())) throw new TransportSnapshotValidationError(`${path}.agent_role`, "非空字符串");
   if (hasOwn(part, "terminal_output_seq") && (!Number.isInteger(part.terminal_output_seq) || (part.terminal_output_seq as number) < 0)) throw new TransportSnapshotValidationError(`${path}.terminal_output_seq`, "非负整数");
   if (part.approvalRequestId !== null && part.approvalRequestId !== undefined) throw new TransportSnapshotValidationError(`${path}.approvalRequestId`, "null 或 undefined");
-}
-
-/** 静态展示声明只剩 `verb` 与 `icon`；其余字段（分组、布局）已从契约删除，再出现即视为前后端漂移。 */
-function validatePresentation(value: unknown, path: string): void {
-  const presentation = requireRecord(value, path);
-  if (Object.keys(presentation).some((key) => key !== "verb" && key !== "icon")) throw new TransportSnapshotValidationError(path, "只含 verb / icon");
-  for (const key of ["verb", "icon"] as const) {
-    if (hasOwn(presentation, key) && presentation[key] !== undefined && typeof presentation[key] !== "string") {
-      throw new TransportSnapshotValidationError(`${path}.${key}`, "字符串");
-    }
-  }
-}
-
-function validateHeading(value: unknown, path: string): void {
-  const heading = requireRecord(value, path);
-  requireExactKeys(heading, ["title", "target"], path);
-  if (requireString(heading.title, `${path}.title`).trim() === "") throw new TransportSnapshotValidationError(`${path}.title`, "非空白字符串");
-  if (heading.target !== null && typeof heading.target !== "string") throw new TransportSnapshotValidationError(`${path}.target`, "字符串或 null");
 }
 
 const RUN_STATUSES = ["running", "suspended", "completed", "failed", "cancelled"] as const;

@@ -9,12 +9,18 @@ from typing import cast
 
 from app.config.logging.logger import log
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
-from app.core.tool.handler.agent_team.args.agent_team_args import AgentTeamArgs
 from app.core.tool.handler.agent_team.agent_team_display import (
     build_agent_team_preview_display_data,
 )
+from app.core.tool.handler.agent_team.agent_team_preparation_service import (
+    AgentTeamPreparationService,
+)
 from app.core.tool.handler.agent_team.agent_team_result import team_result_payload
+from app.core.tool.handler.agent_team.agent_team_run_approval import AgentTeamRunApproval
+from app.core.tool.handler.agent_team.args.agent_team_approve_input import AgentTeamApproveInput
+from app.core.tool.handler.agent_team.args.agent_team_args import AgentTeamArgs
 from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
 from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_cancelled import tool_cancelled
@@ -22,7 +28,6 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -32,10 +37,6 @@ from app.core.tool.tool_grouping import TOOL_GROUP_AGENT_TEAM
 from app.core.workflow.message_queue.task_message import DecisionBody
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
-from app.core.tool.handler.agent_team.args.agent_team_approve_input import AgentTeamApproveInput
-from app.core.tool.handler.agent_team.agent_team_preparation_service import AgentTeamPreparationService
-from app.core.tool.handler.agent_team.agent_team_run_approval import AgentTeamRunApproval
-from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
 from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.service.depends import get_conversation_run_ledger
 
@@ -319,16 +320,6 @@ class AgentTeamRunTool(HandlerBase):
             execution_mode="thread",
             user_decision="execute",
             decision_model=AgentTeamApproveInput,
-            display=ToolDisplayHints(
-                # verb 与同组 propose 工具的中文口径一致；原英文 "Prepare Agent Team
-                # execution plan" 会被读成「配置 Team」，与工具实际职责不符。
-                verb="运行已有 Agent Team",
-                icon="workflow",
-                surface="standalone",
-                expandable=True,
-                expand_layout="details",
-                show_result=False,
-            ),
         )
 
 

@@ -37,12 +37,16 @@ class ToolArgumentValidation:
         coercions: 本次校验**之前**发生的宽容归一事实（strict 白名单内，见
             ``argument_coercion``）；无归一时为空元组。仅供可观测落盘，不参与判定——
             归一后仍以 strict 校验结果为准。
+        model: 传入 ``args_model`` 且校验通过时的参数实例；调用标题投影
+            （``ToolDefinition.heading``）直接拿它，不从 ``arguments`` 再校验一遍——``model_dump``
+            后的字典未必能再通过 strict 校验（如 MCP 的 ``arguments`` 字段只收 JSON 字符串）。
     """
 
     ok: bool
     arguments: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     coercions: tuple[ArgumentCoercion, ...] = ()
+    model: BaseModel | None = None
 
 
 def validate_tool_arguments(
@@ -105,6 +109,7 @@ def validate_tool_arguments(
             ok=True,
             arguments=model.model_dump(),
             coercions=coercions,
+            model=model,
         )
 
     if not schema:

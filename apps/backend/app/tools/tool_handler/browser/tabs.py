@@ -6,7 +6,6 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_BROWSER_TABS,
     ToolDefinition,
-    ToolDisplayHints,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -70,5 +69,4 @@ class BrowserTabsTool(HandlerBase):
             resource_keys=("browser",),
             execution_mode="thread",
             parallel_mode="serial",
-            display=ToolDisplayHints(verb="管理标签页", icon="globe"),
         )

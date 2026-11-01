@@ -8,7 +8,6 @@ from pydantic import BaseModel
 
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.schemas.tool_background import BACKGROUND_FIELD, BackgroundCapability
-from app.core.tool.schemas.tool_display import ToolDisplayHints
 
 
 @dataclass(frozen=True)
@@ -38,7 +37,8 @@ class ToolDefinition:
     parameters_schema: Mapping[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 10.0
     resource_keys: Sequence[str] = field(default_factory=tuple)
-    display: ToolDisplayHints | None = None
+    # 工具叫什么、用什么图标、调用行标题怎么从参数拼，都是前端的事（``lib/assistant/tool-catalog.ts``
+    # 按工具名查表）；后端只下发工具名与参数，不声明任何展示外壳。
     # 隔离执行模式（仅 executor 读取，不进模型可见结构）："thread"=当前线程直跑
     # handler，无子进程/Queue/pickle/日志桥、无硬超时强杀；"process"=子进程隔离 +
     # 硬超时强杀（terminate→kill→进程组/Job Object 树杀）+ 跨进程日志桥。

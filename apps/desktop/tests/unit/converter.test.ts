@@ -30,7 +30,6 @@ const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportT
   toolName: "execute_terminal",
   status,
   args: { command: "npm test" },
-  presentation: { verb: "执行命令", icon: "terminal" },
   awaitingUser: false,
   ...extra,
 });
@@ -313,21 +312,16 @@ describe("assistant transport converter", () => {
     expect(delegation).toMatchObject({ artifact: { childTaskId: 22 } });
   });
 
-  // 目的：标题、等待用户与展示声明原样进 artifact，调用行只读这里；潜在缺陷：缺省 heading 被补成空对象后
-  // 调用行会显示空标题而不是回落到 verb。
-  it("把标题、等待用户与展示声明原样带进 artifact，缺省 heading 为 null", () => {
+  // 目的：等待用户与展示数据原样进 artifact，调用行只读这里；参数留在 assistant-ui 的 args 上，标题由前端目录算。
+  it("把等待用户与展示数据原样带进 artifact，参数留在 args", () => {
     const awaiting = toToolCallPart(tool("pending", {
       toolName: "browser_handoff",
-      heading: { title: "交给你登录", target: "https://example.com" },
+      args: { reason: "交给你登录" },
       awaitingUser: true,
     }));
     expect(awaiting).toMatchObject({
-      artifact: {
-        backendStatus: "pending",
-        awaitingUser: true,
-        heading: { title: "交给你登录", target: "https://example.com" },
-        presentation: { verb: "执行命令", icon: "terminal" },
-      },
+      args: { reason: "交给你登录" },
+      artifact: { backendStatus: "pending", awaitingUser: true },
     });
     expect(awaiting).not.toHaveProperty("result");
 
@@ -338,7 +332,6 @@ describe("assistant transport converter", () => {
     expect(completed).not.toHaveProperty("result");
     expect(completed).toMatchObject({
       artifact: {
-        heading: null,
         awaitingUser: false,
         display_data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
       },

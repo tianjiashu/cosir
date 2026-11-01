@@ -19,26 +19,6 @@ type KnownTransportToolStatus =
 /** 后端五态之外的值只用于安全显示，不得被解释为 pending 或 completed。 */
 export type TransportToolStatus = KnownTransportToolStatus | "unknown";
 
-/**
- * 工具的静态展示声明：随 `ToolDefinition` 固化、不含动态结果。只有两个字段——`verb` 是调用行
- * 没有 `heading` 时的标题回落，`icon` 是行首图标名；分组、展开布局等都不再由后端声明，
- * 回合分区与展开体由前端按 `display_data.kind` 与 `turn-layout` 决定。
- */
-export type TransportToolPresentation = {
-  verb?: string;
-  icon?: string;
-};
-
-/**
- * 调用标题：后端按工具统一投影的「意图 + 目标」（如 `读取文件` + `src/a.ts`，命令则是模型写的
- * `description` + 命令本身）。running 时与 `args` 同帧下发、冷重建按同一函数从持久化参数算出；
- * 参数未通过准入时缺省，前端回落到 `presentation.verb`。
- */
-export type TransportToolHeading = {
-  title: string;
-  target: string | null;
-};
-
 /** 工具的通用展示数据；具体字段由 `kind` 决定，前端按 kind 选视图。 */
 type GenericTransportToolData = {
   kind?: string;
@@ -91,7 +71,10 @@ export type TransportToolCallPart = {
   type: "tool-call";
   toolCallId: string;
   toolName: string;
-  /** 解析后的参数对象。参数不流式：排队（pending）时为空对象，进入 running 后才一次给全。 */
+  /**
+   * 解析后的参数对象。参数不流式：排队（pending）时为空对象，进入 running 后才一次给全。
+   * 后端不下发图标、动词或标题，前端按 `toolName` + `args` 查 `tool-catalog.ts`。
+   */
   args: Record<string, unknown>;
   /** 工具执行错误文本；成功时为空。 */
   error?: string | null;
@@ -99,10 +82,6 @@ export type TransportToolCallPart = {
   status?: string;
   /** 后端在失败时提供的稳定错误标识（可选）。 */
   errorCode?: string;
-  /** 工具的静态展示声明；只影响调用行的图标与标题回落，不改变工具生命周期。 */
-  presentation?: TransportToolPresentation;
-  /** 调用标题；参数未通过准入时缺省。 */
-  heading?: TransportToolHeading;
   /**
    * 是否在等用户决定（HITL 审批、交接）。后端在投影工具结果时一处计算（占位行 `pending` 且不是后台
    * 占位）、每次显式写；前端据此把调用提进「等待用户」区，不从 `status === "pending"` 推断——

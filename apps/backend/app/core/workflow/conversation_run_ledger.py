@@ -72,6 +72,7 @@ class ConversationRunLedger:
             RunInitializedEvent(
                 task_id=task_id,
                 run_id=run.id,
+                created_at=run.created_at,
                 context_window_total=run.context_window_total,
                 model_config_id=run.model_config_id,
                 options=run.options,
@@ -152,6 +153,7 @@ class ConversationRunLedger:
                 end_reason=end_reason,
                 usage_stats=usage_stats,
                 error=error,
+                changed_at=record.updated_at,
             )
         )
         return record

@@ -20,9 +20,6 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.orm import sessionmaker
 
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
-)
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
@@ -359,16 +356,6 @@ def canonical_store(tmp_path: Path, monkeypatch):
     context_service._store = context_store
     workspace = workspaces.create("acceptance", str(tmp_path))
     task = tasks.create(workspace.id, "canonical conversation_run")
-    # 快照重建按工具名查 display 定义；本夹具只验证状态契约，给出最小合法 presentation
-    # （``validate_snapshot`` 要求它是对象），不依赖工具系统装配。
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder,
-        "get_tool_display",
-        staticmethod(lambda _name: {"verb": "Read"}),
-    )
-    monkeypatch.setattr(
-        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
-    )
     ConversationTaskStateService.clear_process_state()
     # ConversationTaskStateService 现在从 depends 取 CRUD 单例；这里把三个 getter 指向本夹具的临时库
     # CRUD，使 state 服务与 store 中的 CRUD 读写同一份临时数据（保留测试隔离，不污染全局库）。

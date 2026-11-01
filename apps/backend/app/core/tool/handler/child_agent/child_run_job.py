@@ -43,6 +43,7 @@ def run_child(
     execution_context: ToolExecutionContext,
     child_task_id: int,
     *,
+    label: str,
     enqueue: Callable[[], None],
     placeholder: Callable[[], ToolObservation],
 ) -> ToolObservation:
@@ -72,7 +73,7 @@ def run_child(
         run_id=execution_context.run_id,
         tool_call_id=tool_call_id,
         kind="child_agent",
-        label=f"child_task:{child_task_id}",
+        label=label,
         background=True,
         foreground_limit_s=None,
         is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
