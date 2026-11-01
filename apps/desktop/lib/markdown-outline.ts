@@ -28,7 +28,8 @@ export function markdownOutline(text: string): OutlineHeading[] {
 }
 
 /**
- * rehype 插件：给标题元素写上 `data-source-line`（源码行号），渲染视图据此滚动到大纲选中的标题。
+ * rehype 插件：给标题元素写上 `data-source-line`（源码行号）。文件阅读器的大纲跳转、Markdown 编辑器
+ * 切到预览时的定位都按它找标题；由 `StaticMarkdown` 统一装配。
  *
  * 须排在 HTML 清洗之后（清洗会丢掉不在白名单里的属性，但保留节点位置）。Streamdown 的 static 模式整篇
  * 一次解析，位置就是全文行号，与 `markdownOutline` 一致；标题组件把额外属性透传到 DOM。

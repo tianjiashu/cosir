@@ -4,6 +4,8 @@
   "entry": [
     "electron/main/app.ts",
     "electron/preload/index.ts",
+    "electron/preload/browser-page.ts",
+    "tests/desktop-e2e/browser-harness/main.ts",
     "scripts/*.mjs",
     "tests/e2e/test-server.mjs",
     "tests/e2e/**/*.spec.ts",

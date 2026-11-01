@@ -2,7 +2,6 @@ import { skillsQueryOptions } from "@/lib/query/query-options";
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2Icon, PlusIcon, PuzzleIcon, Trash2Icon } from "lucide-react";
-import { Streamdown } from "streamdown";
 
 import {
   Dialog,
@@ -17,7 +16,7 @@ import { Card } from "@/components/ui/card";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Switch } from "@/components/ui/switch";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
-import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
+import { StaticMarkdown } from "@/components/static-markdown";
 import {
   deleteSystemSkill,
   getSystemSkill,
@@ -42,7 +41,6 @@ export function SkillConfigurationPanel() {
   // 原生文件选择框打开期间按钮尚未禁用，用同步标记挡住连击造成的重复弹框。
   const pickingSource = useRef(false);
   const [detailName, setDetailName] = useState<string | null>(null);
-  const mermaidOptions = useMermaidOptions();
   const linkComponents = useMarkdownLinkComponents("configuration", { webOnly: true });
 
   const skillsQuery = useQuery({
@@ -190,9 +188,7 @@ export function SkillConfigurationPanel() {
             />
           ) : (
             <div className="aui-md max-h-[60vh] overflow-y-auto rounded-lg border bg-muted/20 p-4 leading-6">
-              <Streamdown mode="static" plugins={markdownPlugins} rehypePlugins={markdownRehypePlugins} shikiTheme={["github-light", "github-dark"]} mermaid={mermaidOptions} components={linkComponents} className="!space-y-3">
-                {detailQuery.data.content}
-              </Streamdown>
+              <StaticMarkdown components={linkComponents} className="!space-y-3">{detailQuery.data.content}</StaticMarkdown>
             </div>
           )}
         </DialogContent>

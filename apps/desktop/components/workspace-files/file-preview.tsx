@@ -1,5 +1,6 @@
 import { AddToChatButton } from "./add-to-chat-button";
-import { ReadingToolbar, ViewToggle, type ReadingNavigation } from "./reading-toolbar";
+import { ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
+import { ViewToggle } from "@/components/ui/view-toggle";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { LoadingState } from "@/components/ui/state-panel";
@@ -58,7 +59,7 @@ export function FilePreview({
     );
   if (!query.data) return <><ReadingToolbar navigation={navigation} /><LoadingState label="正在读取文件信息…" /></>;
   const info = query.data;
-  const toggle = SWITCHABLE.has(info.kind) ? <ViewToggle view={view} onChange={setView} /> : undefined;
+  const toggle = SWITCHABLE.has(info.kind) ? <ViewToggle rendered={view === "rendered"} onToggle={() => setView(view === "rendered" ? "source" : "rendered")} /> : undefined;
   let content;
   if (view === "source" || info.kind === "markdown")
     content = (

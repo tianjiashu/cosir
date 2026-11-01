@@ -1,9 +1,8 @@
 import { useRef, useState, type ReactNode } from "react";
-import { CodeXmlIcon, EyeIcon, MoreHorizontalIcon } from "lucide-react";
+import { MoreHorizontalIcon } from "lucide-react";
 import { copyText } from "@/lib/clipboard";
-import { workspacePathText, type ReadingView } from "@/lib/workspace-files/store";
+import { workspacePathText } from "@/lib/workspace-files/store";
 import { Button } from "@/components/ui/button";
-import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import type { FileInfo } from "@/lib/api/workspace-files";
 
@@ -69,19 +68,5 @@ export function ReadingToolbar({ navigation, info, view, actions, options }: {
         </Popover>
       )}
     </div>
-  );
-}
-
-/** 渲染视图与源码之间的一键切换：图标表示点下去会去哪一边。 */
-export function ViewToggle({ view, onChange }: {
-  view: ReadingView;
-  onChange: (view: ReadingView) => void;
-}) {
-  const label = view === "rendered" ? "查看源码" : "查看预览";
-  return (
-    <TooltipIconButton tooltip={label} aria-label={label} className="size-8 shrink-0"
-      onClick={() => onChange(view === "rendered" ? "source" : "rendered")}>
-      {view === "rendered" ? <CodeXmlIcon /> : <EyeIcon />}
-    </TooltipIconButton>
   );
 }

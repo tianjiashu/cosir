@@ -13,12 +13,12 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-pane
 import {
   createAgentTeamConfiguration,
   deleteAgentTeamConfiguration,
-  getSystemAgentTeamConfigurations,
-  getWorkspaceAgentTeamConfigurations,
+  getAgentTeamConfigurations,
   updateAgentTeamConfiguration,
   type AgentTeamConfiguration,
 } from "@/lib/api/agent-teams";
 import { visibleWorkspaceProfiles, type AgentProfilesByScope } from "@/lib/agent-team-editor/agent-profiles";
+import { configurationScope } from "@/lib/api/configuration";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -107,20 +107,17 @@ function TeamConfigurationCard({
  * 按实际文件作用域管理 Team 配置；workspace 面板展示可见配置但只编辑本地所有项。
  *
  * Team 列表与子 Agent 列表都是查询缓存（键见 queryKeys），保存 / 删除后只失效本作用域的
- * Team 列表。workspace 作用域必带 workspaceId（由 props 类型保证），system 作用域没有它。
+ * Team 列表。`workspaceId` 为 null 时是系统级。
  */
-export function AgentTeamConfigurationPanel(props: { scope: "system" } | { scope: "workspace"; workspaceId: number }) {
-  const { scope } = props;
-  const workspaceId = props.scope === "workspace" ? props.workspaceId : undefined;
+export function AgentTeamConfigurationPanel({ workspaceId }: { workspaceId: number | null }) {
+  const scope = configurationScope(workspaceId);
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<TeamEditorSession | null>(null);
-  const teamsKey = queryKeys.agentTeams(workspaceId ?? null);
+  const teamsKey = queryKeys.agentTeams(workspaceId);
 
   const teamsQuery = useQuery({
     queryKey: teamsKey,
-    queryFn: workspaceId === undefined
-      ? ({ signal }) => getSystemAgentTeamConfigurations({ signal })
-      : ({ signal }) => getWorkspaceAgentTeamConfigurations(workspaceId, { signal }),
+    queryFn: ({ signal }) => getAgentTeamConfigurations(workspaceId, { signal }),
   });
   const systemAgentsQuery = useQuery({
     ...agentConfigurationsQueryOptions(null),
@@ -128,8 +125,8 @@ export function AgentTeamConfigurationPanel(props: { scope: "system" } | { scope
   // system 作用域下不需要工作区列表，但 hook 不能按条件调用：这时它与上面同键同函数（agents(null)），
   // 只是不主动拉取。不能给同一个键换一个拉取函数——失效刷新会用到最后挂上的那个观察者的函数。
   const workspaceAgentsQuery = useQuery({
-    ...agentConfigurationsQueryOptions(workspaceId ?? null),
-    enabled: workspaceId !== undefined,
+    ...agentConfigurationsQueryOptions(workspaceId),
+    enabled: workspaceId !== null,
   });
 
   const systemAgents = systemAgentsQuery.data;
@@ -142,20 +139,15 @@ export function AgentTeamConfigurationPanel(props: { scope: "system" } | { scope
   }, [scope, systemAgents, workspaceAgents]);
 
   const save: PersistTeam = async (configuration, identity) => {
-    const input = { scope, configuration: { ...configuration, scope } } as const;
     const saved = identity
-      ? await updateAgentTeamConfiguration(identity.teamId, input, workspaceId)
-      : await createAgentTeamConfiguration(input, workspaceId);
+      ? await updateAgentTeamConfiguration(workspaceId, identity.teamId, configuration)
+      : await createAgentTeamConfiguration(workspaceId, configuration);
     void queryClient.invalidateQueries({ queryKey: teamsKey });
     return saved;
   };
 
   const deleteMutation = useMutation({
-    mutationFn: (team: AgentTeamConfiguration) => deleteAgentTeamConfiguration(
-      team.team_id,
-      scope,
-      workspaceId,
-    ),
+    mutationFn: (team: AgentTeamConfiguration) => deleteAgentTeamConfiguration(workspaceId, team.team_id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: teamsKey });
       notify.success("Agent Team 配置已删除");

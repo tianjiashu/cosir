@@ -19,14 +19,16 @@ export const HOST_CHANNEL = {
   logWrite: "cosir:log.write",
   dialogOpenDirectory: "cosir:dialog.open-directory",
   windowThemeSource: "cosir:window.theme-source",
-  browserTabs: "cosir:browser.tabs",
+  browserState: "cosir:browser.state",
   browserOpen: "cosir:browser.open",
-  /** main → 渲染进程的推送：任一标签的增删、地址、标题、加载或崩溃状态变化时发送全部标签。 */
-  browserTabsChanged: "cosir:browser.tabs-changed",
+  /** main → 渲染进程的推送：标签（增删、地址、标题、加载、崩溃、弹窗）或下载任一变化时发送完整状态。 */
+  browserStateChanged: "cosir:browser.state-changed",
   browserPlace: "cosir:browser.place",
   browserFreeze: "cosir:browser.freeze",
   browserNavigate: "cosir:browser.navigate",
   browserClose: "cosir:browser.close",
+  browserAnswerDialog: "cosir:browser.answer-dialog",
+  browserRevealDownload: "cosir:browser.reveal-download",
 } as const;
 
 /**
@@ -76,15 +78,61 @@ export type HostPlatform = "darwin" | "win32" | "linux";
 /** 谁开的标签：用户与 Agent 都能在 Task 里新开（与交互终端一致）。 */
 export type BrowserTabCreator = "agent" | "user";
 
+export const BROWSER_DIALOG_TYPES = ["alert", "confirm", "prompt"] as const;
+
+/**
+ * 页面弹出、尚未作答的 JS 弹窗。页面在作答前一直停着；用户（面板提示条）与 Agent（`browser_act` 的 `dialog`
+ * 动作）都能作答，作答按 `id` 指明是哪一个，不是当前那个就不生效（防止过时的点击答给紧接着弹出的新弹窗）。
+ */
+export type BrowserDialog = {
+  /** 宿主内单调递增。 */
+  id: number;
+  type: (typeof BROWSER_DIALOG_TYPES)[number];
+  message: string;
+  /** `prompt` 的默认值；其余类型为空串。 */
+  defaultText: string;
+};
+
+/** 弹窗的答复：`text` 只对 `prompt` 有意义（接受时作为返回值，缺省用默认值）。 */
+export type BrowserDialogAnswer = { accept: boolean; text?: string };
+
+/**
+ * Task 的一次下载，存进 Task 所在工作区的下载目录。下载归 Task 而不归标签（与浏览器的下载归 profile 一致）：
+ * 触发它的标签关掉（常见于弹出页下载后自己关闭）不会取消下载。
+ */
+export type BrowserDownload = {
+  id: string;
+  taskId: number;
+  /** 触发下载的标签（之后可能已关闭）。 */
+  tabId: string;
+  filename: string;
+  /** 落盘的本机绝对路径。 */
+  path: string;
+  state: "progressing" | "completed" | "cancelled" | "interrupted";
+  receivedBytes: number;
+  /** 未知大小时为 0。 */
+  totalBytes: number;
+};
+
 /** 内置浏览器的一个标签页（宿主事实，见 `electron/main/browser/browser-host.ts`）；每个标签属于一个 Task。 */
 export type BrowserTabSummary = {
   tabId: string;
   taskId: number;
   createdBy: BrowserTabCreator;
+  /** 页面用 `window.open` / `target=_blank` 开出的标签记下来源标签（来源已关闭时仍保留 id）；否则为 null。 */
+  openerId: string | null;
   url: string;
   title: string;
   loading: boolean;
   crashed: boolean;
+  dialog: BrowserDialog | null;
+};
+
+/** 内置浏览器的完整状态（宿主事实），推送与读取都是这一份。 */
+export type BrowserState = {
+  tabs: BrowserTabSummary[];
+  /** 各 Task 最近的下载，旧的在前。 */
+  downloads: BrowserDownload[];
 };
 
 /** 浏览器面板占位区域的矩形：CSS 像素、相对窗口内容区（即 `getBoundingClientRect`）。 */
@@ -97,6 +145,12 @@ export type BrowserNavigation = { url: string } | { action: (typeof BROWSER_NAVI
 
 /** 两个标签上限；事实源是后端配置中心，每次请求随参数带来，宿主不另存配置。 */
 export type BrowserTabLimits = { perTask: number; total: number };
+
+/**
+ * 新开标签需要的后端事实（后端按 Task 解析：`GET /tasks/{id}/browser-context`，Agent 侧经工具参数带来）：
+ * 上限，以及这个 Task 所在工作区的下载目录（本机绝对路径）。下载目录在标签创建时定下，页面开出的标签沿用来源标签的。
+ */
+export type BrowserTabContext = { limits: BrowserTabLimits; downloadDir: string };
 
 export const THEME_SOURCES = ["system", "light", "dark"] as const;
 type ThemeSource = (typeof THEME_SOURCES)[number];
@@ -125,14 +179,14 @@ export type CosirHost = {
     setThemeSource(source: ThemeSource): Promise<void>;
   };
   browser: {
-    listTabs(): Promise<BrowserTabSummary[]>;
-    /** 订阅标签变化（推送全部标签），返回取消订阅函数。 */
-    onTabsChanged(listener: (tabs: BrowserTabSummary[]) => void): () => void;
+    state(): Promise<BrowserState>;
+    /** 订阅状态变化（每次推送完整状态），返回取消订阅函数。 */
+    onStateChanged(listener: (state: BrowserState) => void): () => void;
     /**
-     * 在 Task 里新开标签（可直接打开地址），返回标签 id。`limits` 取自配置中心的两个标签上限：宿主不存配置，
-     * 超出时抛出带原因的错误。
+     * 在 Task 里新开标签（可直接打开地址），返回标签 id。`context` 由后端按 Task 给出：宿主不存配置，
+     * 超出上限时抛出带原因的错误。
      */
-    open(taskId: number, limits: BrowserTabLimits, url?: string): Promise<string>;
+    open(taskId: number, context: BrowserTabContext, url?: string): Promise<string>;
     /**
      * 把标签的网页画面放到页面的这个矩形上；`null` 收起。同一时刻只有一个标签显示，放上新的会收起旧的。
      * 网页是叠在页面之上的原生画面，不参与 CSS 层叠。
@@ -142,6 +196,10 @@ export type CosirHost = {
     freeze(tabId: string): Promise<string>;
     navigate(tabId: string, navigation: BrowserNavigation): Promise<void>;
     close(tabId: string): Promise<void>;
+    /** 回答标签上 `dialogId` 这个弹窗；它已不是当前弹窗（被 Agent 答过、换成了新的）时什么也不做。 */
+    answerDialog(tabId: string, dialogId: number, answer: BrowserDialogAnswer): Promise<void>;
+    /** 在系统文件管理器里显示某次下载（按 id 寻址，不接受任意路径）。 */
+    revealDownload(downloadId: string): Promise<void>;
   };
   files: {
     /**

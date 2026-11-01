@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
-import type { AgentConfiguration, AgentConfigurationInput } from "@/lib/api/configuration";
+import { configurationScope, createAgentConfiguration, deleteAgentConfiguration, updateAgentConfiguration, type AgentConfiguration } from "@/lib/api/configuration";
 import { modelOptionId, unknownModelName, useModelCatalog, type ModelCatalog } from "@/lib/model/catalog";
 import { createAgentEditorSession } from "@/lib/agent-editor/session";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
@@ -21,17 +21,6 @@ import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
 import { agentConfigurationsQueryOptions, toolGroupsQueryOptions } from "@/lib/query/query-options";
-
-/**
- * 子 Agent 配置的作用域适配：系统级与工作区级共用同一套列表 / 编辑界面。
- * `workspaceId` 决定查询键（null 为系统级），保存与删除后按它失效对应列表。
- */
-export type AgentConfigurationApi = {
-  workspaceId: number | null;
-  create: (input: AgentConfigurationInput) => Promise<AgentConfiguration>;
-  update: (agentId: string, input: AgentConfigurationInput) => Promise<AgentConfiguration>;
-  remove: (agentId: string) => Promise<void>;
-};
 
 /** 子 Agent 卡片上的模型名：目录就绪后找不到即视为已删除的配置；目录未就绪时只给编号，避免误报「未知」。 */
 function agentModelLabel(modelConfigId: number, catalog: ModelCatalog | null): string {
@@ -49,17 +38,17 @@ async function leaveEditor(onClose: () => void) {
 function AgentEditor({
   initial,
   toolGroups,
-  api,
+  workspaceId,
   onClose,
 }: {
   initial: AgentConfiguration | null;
   toolGroups: ToolGroupCatalog[];
-  api: AgentConfigurationApi;
+  workspaceId: number | null;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
   const [session] = useState(() => createAgentEditorSession({
-    initial, saved: initial !== null, scope: api.workspaceId === null ? "system" : "workspace",
+    initial, saved: initial !== null, scope: configurationScope(workspaceId),
   }));
   const dirty = useStore(session.store, (state) => state.dirty);
   const saving = useStore(session.store, (state) => state.saving);
@@ -67,19 +56,19 @@ function AgentEditor({
 
   const mutation = useMutation({
     mutationFn: () => session.save((input, { agentId }) => (
-      agentId ? api.update(agentId, input) : api.create(input)
+      agentId ? updateAgentConfiguration(workspaceId, agentId, input) : createAgentConfiguration(workspaceId, input)
     )),
     onSuccess: async (saved) => {
       if (!saved) return;
       // 等列表刷新后再关闭编辑器，避免返回时短暂显示旧列表。
-      await queryClient.invalidateQueries({ queryKey: queryKeys.agents(api.workspaceId) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agents(workspaceId) });
       notify.success("配置更改成功");
       onClose();
     },
     onError: (error) => {
       if (error instanceof UserFacingError) return;
       void frontendLog("ERROR", "agent_configuration_save_failed", "保存子 Agent 配置失败", {
-        data: { agentId: session.store.getState().form.agent_id, workspaceId: api.workspaceId, isNew: !initial },
+        data: { agentId: session.store.getState().form.agent_id, workspaceId, isNew: !initial },
         error,
       });
     },
@@ -100,10 +89,11 @@ function AgentEditor({
   );
 }
 
-export function AgentConfigurationPanel({ api }: { api: AgentConfigurationApi }) {
+/** 某一作用域自己的子 Agent 列表与编辑：`workspaceId` 为 null 时是系统级。 */
+export function AgentConfigurationPanel({ workspaceId }: { workspaceId: number | null }) {
   const queryClient = useQueryClient();
   const agentsQuery = useQuery({
-    ...agentConfigurationsQueryOptions(api.workspaceId),
+    ...agentConfigurationsQueryOptions(workspaceId),
   });
   const toolGroupsQuery = useQuery({
     ...toolGroupsQueryOptions(),
@@ -119,21 +109,21 @@ export function AgentConfigurationPanel({ api }: { api: AgentConfigurationApi })
       consequence: "将删除该子 Agent 的配置文件。",
       action: async () => {
         try {
-          await api.remove(agent.agent_id);
+          await deleteAgentConfiguration(workspaceId, agent.agent_id);
         } catch (error) {
           void frontendLog("ERROR", "agent_configuration_delete_failed", "删除子 Agent 配置失败", {
-            data: { agentId: agent.agent_id, workspaceId: api.workspaceId },
+            data: { agentId: agent.agent_id, workspaceId },
             error,
           });
           throw error;
         }
-        await queryClient.invalidateQueries({ queryKey: queryKeys.agents(api.workspaceId) });
+        await queryClient.invalidateQueries({ queryKey: queryKeys.agents(workspaceId) });
       },
     });
     if (removed) notify.success(`已删除子 Agent「${agent.agent_id}」`);
   };
 
-  if (editing !== undefined && toolGroups) return <AgentEditor api={api} toolGroups={toolGroups} initial={editing} onClose={() => setEditing(undefined)} />;
+  if (editing !== undefined && toolGroups) return <AgentEditor workspaceId={workspaceId} toolGroups={toolGroups} initial={editing} onClose={() => setEditing(undefined)} />;
   if (!agents || !toolGroups) {
     const loadError = agentsQuery.error ?? toolGroupsQuery.error;
     return loadError

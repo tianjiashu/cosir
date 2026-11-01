@@ -5,7 +5,7 @@ import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/att
 import { ImageStrip } from "@/components/image/image-strip";
 import { Button } from "@/components/ui/button";
 import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
-import { useBrowserTab } from "@/lib/browser/tabs-store";
+import { useBrowserTab } from "@/lib/browser/host-state-store";
 import { useWorkbenchActions } from "@/lib/workbench/context";
 import { readBrowserPageDisplay, type BrowserPageDisplay } from "../browser-page-display";
 import type { CallView } from "../call-view";

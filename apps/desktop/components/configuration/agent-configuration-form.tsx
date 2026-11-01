@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useStore } from "zustand";
 
-import { MarkdownSourcePreviewEditor } from "@/components/configuration/markdown-source-preview-editor";
+import { MarkdownEditor } from "@/components/markdown-editor/markdown-editor";
 import { ModelAvailability } from "@/components/model/model-availability";
 import {
   DEFAULT_EFFORT_OPTIONS,
@@ -19,7 +19,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
-import type { AgentConfigurationScope, AgentEditorSession } from "@/lib/agent-editor/session";
+import type { AgentEditorSession } from "@/lib/agent-editor/session";
+import type { ConfigurationScope } from "@/lib/api/configuration";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
 import { modelOptionId, unknownModelName, useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
 import type { ModelSettingsForm } from "@/lib/model/settings-form";
@@ -158,7 +159,7 @@ export function AgentConfigurationForm({
   return (
     <div className="@container space-y-5">
       {scopeEditable && (
-        <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">保存范围</span><NativeSelect value={scope} disabled={identityLocked || saving} onChange={(event) => session.setScope(event.target.value as AgentConfigurationScope)}><option value="workspace">当前工作区</option><option value="system">系统级</option></NativeSelect></label>
+        <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">保存范围</span><NativeSelect value={scope} disabled={identityLocked || saving} onChange={(event) => session.setScope(event.target.value as ConfigurationScope)}><option value="workspace">当前工作区</option><option value="system">系统级</option></NativeSelect></label>
       )}
       <div className="grid gap-4 @md:grid-cols-2">
         <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Agent ID</span><Input value={form.agent_id} disabled={identityLocked} onChange={(event) => setField("agent_id", event.target.value)} placeholder="主 Agent 调用时使用的 Agent ID" /></label>
@@ -167,14 +168,14 @@ export function AgentConfigurationForm({
       <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">描述</span><Textarea className="h-24 min-h-24 max-h-24 resize-none overflow-y-auto" value={form.description} onChange={(event) => setField("description", event.target.value)} placeholder="向主 Agent 说明这个子 Agent 负责什么" /></label>
       <div className="space-y-1.5 text-sm">
         <span className="text-muted-foreground">系统提示词</span>
-        <MarkdownSourcePreviewEditor
-          value={form.system_prompt}
-          onChange={(value) => setField("system_prompt", value)}
-          initialMode="source"
-          minHeight="12rem"
-          placeholder="定义该子 Agent 的边界、工作方式与输出要求…"
-          ariaLabel="子 Agent 系统提示词编辑器"
-        />
+        <div className="h-80">
+          <MarkdownEditor
+            value={form.system_prompt}
+            onChange={(value) => setField("system_prompt", value)}
+            placeholder="定义该子 Agent 的边界、工作方式与输出要求…"
+            ariaLabel="子 Agent 系统提示词编辑器"
+          />
+        </div>
       </div>
       <div className="grid gap-4 @md:grid-cols-3">
         <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">最大步数</span><Input type="number" min={1} max={10000} value={form.max_steps} onChange={(event) => setField("max_steps", event.target.value)} /></label>

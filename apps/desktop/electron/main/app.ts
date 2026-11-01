@@ -62,7 +62,7 @@ function bootstrap(): void {
   const broadcast = (channel: string, payload: unknown) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, payload);
   };
-  browser.onChange((tabs) => broadcast(HOST_CHANNEL.browserTabsChanged, tabs));
+  browser.onChange((state) => broadcast(HOST_CHANNEL.browserStateChanged, state));
   supervisor.onChange((snapshot) => {
     broadcast(HOST_CHANNEL.backendChanged, snapshot);
     hostLink.follow(snapshot);
@@ -75,7 +75,7 @@ function bootstrap(): void {
   void app.whenReady().then(() => {
     handleAppProtocol();
     restrictSessionPermissions();
-    configureBrowserSession();
+    configureBrowserSession(browser);
     registerHostIpc(supervisor, browser);
     followNativeThemeInTitleBar();
     applyDockIcon();

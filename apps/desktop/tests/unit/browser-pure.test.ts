@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { BrowserDialog, BrowserDialogAnswer } from "@/electron/shared/host-contract";
 import { HostMethodError } from "@/electron/main/host-link/methods";
 import { runActions, type PageSession } from "@/electron/main/browser/page-input";
 import { parseAct, parseDropTasks, parseNavigate, parseSnapshot, type PageAction } from "@/electron/main/browser/params";
@@ -18,13 +19,19 @@ function codeOf(run: () => unknown): string {
 }
 
 describe("params", () => {
-  const base = { task_id: 7, limits: { per_task: 5, total: 20 } };
+  const base = { task_id: 7, limits: { per_task: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
 
   it("accepts a url or a history action", () => {
     expect(parseNavigate({ ...base, url: "https://example.com/a" }).target).toEqual({ url: "https://example.com/a" });
-    expect(parseNavigate({ ...base, action: "back", tab: "t3" })).toMatchObject({ tab: "t3", target: { action: "back" } });
-    expect(parseSnapshot({ task_id: 7, tab: null })).toEqual({ taskId: 7, tab: undefined, fromLine: 1 });
-    expect(parseSnapshot({ task_id: 7, from_line: 40 })).toMatchObject({ fromLine: 40 });
+    expect(parseNavigate({ ...base, action: "back", tab: "t3" })).toMatchObject({
+      tab: "t3", target: { action: "back" }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+    });
+    expect(parseSnapshot({ ...base, tab: null })).toEqual({
+      taskId: 7, tab: undefined, fromLine: 1, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+    });
+    expect(parseSnapshot({ ...base, from_line: 40 })).toMatchObject({ fromLine: 40 });
+    // 每个请求都带上下文（宿主据此刷新上限）。
+    expect(codeOf(() => parseSnapshot({ task_id: 7 }))).toBe("INVALID_PARAMS");
     expect(parseDropTasks({ task_ids: [1, 2] })).toEqual([1, 2]);
   });
 
@@ -36,18 +43,21 @@ describe("params", () => {
     expect(codeOf(() => parseNavigate({ ...base, action: "home" }))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate({ url: "https://a.b", limits: base.limits }))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate({ ...base, url: "https://a.b", tab: "../t1" }))).toBe("INVALID_PARAMS");
-    expect(codeOf(() => parseNavigate({ task_id: 7, url: "https://a.b", limits: { per_task: 0, total: 1 } }))).toBe("INVALID_PARAMS");
-    expect(codeOf(() => parseSnapshot({ task_id: 7, from_line: 0 }))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate({ ...base, url: "https://a.b", limits: { per_task: 0, total: 1 } }))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate({ ...base, url: "https://a.b", download_dir: "relative/dir" }))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseSnapshot({ ...base, from_line: 0 }))).toBe("INVALID_PARAMS");
   });
 
   it("parses the action set, filling defaults the backend leaves out", () => {
-    const { actions } = parseAct({ task_id: 7, actions: [
+    const { actions } = parseAct({ ...base, actions: [
       { type: "hover", ref: "e3" },
       { type: "press", key: "k", modifiers: ["ControlOrMeta"], ref: "e4" },
       { type: "press", key: "Enter" },
       { type: "scroll", direction: "down", ref: "e5" },
       { type: "scroll", ref: "e5" },
       { type: "wait_for", text_gone: "Loading" },
+      { type: "dialog", accept: true, text: null },
+      { type: "dialog", accept: true, text: "Ada", id: 4 },
     ] });
     expect(actions).toEqual([
       { type: "hover", ref: "e3" },
@@ -56,16 +66,21 @@ describe("params", () => {
       { type: "scroll", direction: "down", ref: "e5" },
       { type: "scroll", ref: "e5" },
       { type: "wait_for", text: undefined, textGone: "Loading", seconds: undefined },
+      { type: "dialog", accept: true },
+      { type: "dialog", accept: true, text: "Ada", id: 4 },
     ]);
   });
 
   // 目的：宿主是进程边界上唯一的校验点；潜在缺陷：后端 schema 放过的组合在页面上执行出意外动作。
   it("rejects malformed actions", () => {
-    const act = (action: Record<string, unknown>) => () => parseAct({ task_id: 7, actions: [action] });
+    const act = (action: Record<string, unknown>) => () => parseAct({ ...base, actions: [action] });
     expect(codeOf(act({ type: "press", key: "F5" }))).toBe("INVALID_PARAMS");
     expect(codeOf(act({ type: "press", key: "K" }))).toBe("INVALID_PARAMS");
     expect(codeOf(act({ type: "press", key: "a", modifiers: ["Hyper"] }))).toBe("INVALID_PARAMS");
     expect(codeOf(act({ type: "scroll" }))).toBe("INVALID_PARAMS");
+    expect(codeOf(act({ type: "dialog" }))).toBe("INVALID_PARAMS");
+    expect(codeOf(act({ type: "dialog", accept: true, text: 3 }))).toBe("INVALID_PARAMS");
+    expect(codeOf(act({ type: "dialog", accept: true, id: 0 }))).toBe("INVALID_PARAMS");
     expect(codeOf(act({ type: "wait_for", text: "a", text_gone: "b" }))).toBe("INVALID_PARAMS");
     expect(codeOf(act({ type: "wait_for" }))).toBe("INVALID_PARAMS");
   });
@@ -142,13 +157,30 @@ describe("formatSnapshot", () => {
   });
 });
 
-/** 记下每条 CDP 命令；页面函数的返回值由 `answers` 按函数片段决定，默认空串（成功）。 */
-function fakeSession(answers: Record<string, unknown> = {}): { session: PageSession; calls: [string, Record<string, unknown>][] } {
+/**
+ * 记下每条 CDP 命令；页面函数的返回值由 `answers` 按函数片段决定，默认空串（成功）。
+ * `dialogOn` 选中的那条命令上页面弹窗：宿主让它以 DIALOG_OPEN 失败（页面停在事件处理里，命令回不来）。
+ */
+function fakeSession(
+  answers: Record<string, unknown> = {},
+  { scale = 1, dialogOn, initialDialog = null }: {
+    scale?: number;
+    dialogOn?: (method: string, params: Record<string, unknown>) => boolean;
+    initialDialog?: BrowserDialog | null;
+  } = {},
+): { session: PageSession; calls: [string, Record<string, unknown>][]; answered: [number, BrowserDialogAnswer][] } {
   const calls: [string, Record<string, unknown>][] = [];
+  const answered: [number, BrowserDialogAnswer][] = [];
+  let dialog: BrowserDialog | null = initialDialog;
   const answer = (code: string) => Object.entries(answers).find(([fragment]) => code.includes(fragment))?.[1] ?? "";
+  const paused = () => (dialog ? new HostMethodError("DIALOG_OPEN", `the page is paused: it is showing a ${dialog.type} dialog (#${dialog.id})`) : null);
   const session: PageSession = {
     cdp: async <T,>(method: string, params: Record<string, unknown> = {}) => {
       calls.push([method, params]);
+      if (dialogOn?.(method, params)) {
+        dialog = { id: 7, type: "confirm", message: "delete?", defaultText: "" };
+        throw paused();
+      }
       if (method === "DOM.resolveNode") return { object: { objectId: "obj" } } as T;
       if (method === "DOM.getBoxModel") return { model: { content: [0, 0, 10, 0, 10, 20, 0, 20] } } as T;
       if (method === "Runtime.callFunctionOn") return { result: { value: answer(String(params.functionDeclaration)) } } as T;
@@ -160,13 +192,71 @@ function fakeSession(answers: Record<string, unknown> = {}): { session: PageSess
       return Number(ref.slice(1));
     },
     settle: async () => undefined,
+    toInput: ({ x, y }) => ({ x: x * scale, y: y * scale }),
+    paused,
+    dialog: () => dialog,
+    answerDialog: (id, reply) => {
+      dialog = null;
+      answered.push([id, reply]);
+    },
   };
-  return { session, calls };
+  return { session, calls, answered };
 }
+
+const mouse = (type: string) => (method: string, params: Record<string, unknown>) => method === "Input.dispatchMouseEvent" && params.type === type;
 
 const run = (session: PageSession, ...actions: PageAction[]) => runActions(session, actions, new AbortController().signal);
 
 describe("runActions", () => {
+  // 目的：面板缩放显示固定视口时，CDP 合成输入的坐标是视图坐标；潜在缺陷：不换算就点到别处（实测缩放 0.5 时落点翻倍）。
+  it("converts element centres from CSS pixels to input coordinates", async () => {
+    const { session, calls } = fakeSession({}, { scale: 0.5 });
+    await run(session, { type: "click", ref: "e2" });
+    const mouse = calls.filter(([method]) => method === "Input.dispatchMouseEvent").map(([, params]) => [params.x, params.y]);
+    expect(mouse).toEqual([[2.5, 5], [2.5, 5], [2.5, 5]]);
+  });
+
+  // 目的：点删除弹出确认、同批确认；潜在缺陷：弹窗让 click 被误判失败，或后续动作挂到 CDP 超时。
+  it("treats a dialog opened on an action's effect command as its effect and answers it in the same batch", async () => {
+    const { session, answered } = fakeSession({}, { dialogOn: mouse("mouseReleased") });
+    const outcome = await run(session, { type: "click", ref: "e2" }, { type: "dialog", accept: true });
+    expect(outcome).toEqual({ completed: 2, failure: null });
+    expect(answered).toEqual([[7, { accept: true, text: undefined }]]);
+  });
+
+  // 目的：只有动作自己触发的弹窗才算动作生效；潜在缺陷：页面在别的时机弹窗时，点击没发生、等待没等到却报完成，
+  // 同批的 dialog 还会把一个没看见的弹窗答掉。
+  it("fails an action when the dialog appears before its effect, and does not count a wait as done", async () => {
+    const hovered = fakeSession({}, { dialogOn: mouse("mouseMoved") });
+    const click = await run(hovered.session, { type: "click", ref: "e2" }, { type: "dialog", accept: true });
+    expect(click).toMatchObject({ completed: 0, failure: { index: 0, code: "DIALOG_OPEN" } });
+    expect(hovered.answered).toEqual([]);
+
+    const waiting = fakeSession({}, { dialogOn: (method) => method === "Runtime.evaluate" });
+    const wait = await run(waiting.session, { type: "wait_for", text: "Done", seconds: 1 });
+    expect(wait).toMatchObject({ completed: 0, failure: { index: 0, code: "DIALOG_OPEN" } });
+  });
+
+  // 目的：作答必须对准看见的那个弹窗；潜在缺陷：调用开始时已有的弹窗被一个不带编号的作答答掉，或答给了换上来的新弹窗。
+  it("answers a dialog that was already open only by its id", async () => {
+    const initialDialog = { id: 3, type: "alert" as const, message: "hi", defaultText: "" };
+    const unnamed = fakeSession({}, { initialDialog });
+    expect(await run(unnamed.session, { type: "dialog", accept: true })).toMatchObject({ completed: 0, failure: { code: "DIALOG_MISMATCH" } });
+    expect(await run(unnamed.session, { type: "dialog", accept: true, id: 4 })).toMatchObject({ completed: 0, failure: { code: "DIALOG_MISMATCH" } });
+    expect(unnamed.answered).toEqual([]);
+    expect(await run(unnamed.session, { type: "dialog", accept: true, id: 3 })).toEqual({ completed: 1, failure: null });
+    expect(unnamed.answered).toEqual([[3, { accept: true, text: undefined }]]);
+  });
+
+  it("stops other actions while the page is paused, and refuses to answer a dialog that is not there", async () => {
+    const opened = fakeSession({}, { dialogOn: mouse("mouseReleased") });
+    const blocked = await run(opened.session, { type: "click", ref: "e2" }, { type: "hover", ref: "e2" });
+    expect(blocked).toMatchObject({ completed: 1, failure: { index: 1, code: "DIALOG_OPEN" } });
+
+    const none = await run(fakeSession().session, { type: "dialog", accept: false });
+    expect(none).toMatchObject({ completed: 0, failure: { index: 0, code: "NO_DIALOG" } });
+  });
+
   // 目的：稳定 ref 可能来自更早的快照；潜在缺陷：焦点落在已脱离文档的节点上，字输进别的元素。
   it("refuses refs whose element left the document", async () => {
     const { session, calls } = fakeSession({ isConnected: "detached" });

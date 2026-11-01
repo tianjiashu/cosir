@@ -25,25 +25,28 @@ export function SettingsPageLayout<Id extends string>({
   children: ReactNode;
 }) {
   return (
-    <div className="h-full overflow-y-auto">
-      <div aria-hidden="true" className="scroll-fade-top" />
-      <div className="mx-auto grid w-full max-w-6xl gap-6 px-5 py-6 lg:grid-cols-[12rem_minmax(0,1fr)] lg:gap-8 lg:px-8">
-        <nav className="flex gap-1 overflow-x-auto lg:sticky lg:top-6 lg:block lg:space-y-1 lg:self-start" aria-label={navLabel}>
-          {tabs.map(({ id, label, icon: Icon }) => (
-            <NavLink
-              key={id}
-              to={`${basePath}/${id}`}
-              className={({ isActive }) => cn(
-                "focus-ring flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors lg:w-full",
-                isActive ? "bg-muted text-foreground font-medium" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-              )}
-            >
-              <Icon className="size-4 shrink-0" aria-hidden="true" />
-              <span className="truncate">{label}</span>
-            </NavLink>
-          ))}
-        </nav>
-        <div className="min-w-0 space-y-4">
+    <div className="mx-auto flex h-full w-full max-w-6xl flex-col px-5 lg:flex-row lg:gap-8 lg:px-8">
+      <nav className="flex shrink-0 gap-1 overflow-x-auto pt-6 lg:block lg:w-48 lg:space-y-1" aria-label={navLabel}>
+        {tabs.map(({ id, label, icon: Icon }) => (
+          <NavLink
+            key={id}
+            to={`${basePath}/${id}`}
+            className={({ isActive }) => cn(
+              "focus-ring flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors lg:w-full",
+              isActive ? "bg-muted text-foreground font-medium" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+            )}
+          >
+            <Icon className="size-4 shrink-0" aria-hidden="true" />
+            <span className="truncate">{label}</span>
+          </NavLink>
+        ))}
+      </nav>
+      {/* 只有内容区滚动，导航不动。内容列至少撑满内容区且高度确定：普通面板随内容变长、由内容区滚动，
+          文档类面板（Markdown 编辑）用 flex-1 填满剩余高度，保存栏不会被挤出视口。 */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pb-6">
+        <div aria-hidden="true" className="scroll-fade-top" />
+        {/* 上内边距在渐隐层之后：初始时渐隐只盖住留白，不盖住内容。 */}
+        <div className="flex shrink-0 grow flex-col gap-4 pt-6">
           {intro}
           {children}
         </div>

@@ -16,6 +16,8 @@ export const electronBuildOptions = {
   entryPoints: {
     main: path.join(desktopRoot, "electron", "main", "app.ts"),
     preload: path.join(desktopRoot, "electron", "preload", "index.ts"),
+    // 内置浏览器网页的 preload（`browser-session.ts` 以 `__dirname/browser-page-preload.cjs` 定位）。
+    "browser-page-preload": path.join(desktopRoot, "electron", "preload", "browser-page.ts"),
   },
   outdir: electronOutDir,
   outExtension: { ".js": ".cjs" },

@@ -12,8 +12,10 @@ import {
   FRONTEND_LOG_LEVELS,
   HOST_CHANNEL,
   THEME_SOURCES,
+  type BrowserDialogAnswer,
   type BrowserNavigation,
   type BrowserPlacement,
+  type BrowserTabContext,
   type BrowserTabLimits,
   type FrontendLogEntry,
   type HostReply,
@@ -43,10 +45,10 @@ export function registerHostIpc(supervisor: BackendSupervisor, browser: BrowserH
     if (!isOneOf(THEME_SOURCES, source)) throw new Error("外观偏好不合法");
     nativeTheme.themeSource = source;
   });
-  handle(HOST_CHANNEL.browserTabs, () => browser.list());
-  handle(HOST_CHANNEL.browserOpen, (_event, taskId, limits, url) => browser.userOpen(
+  handle(HOST_CHANNEL.browserState, () => browser.state());
+  handle(HOST_CHANNEL.browserOpen, (_event, taskId, context, url) => browser.userOpen(
     parseTaskId(taskId),
-    parseLimits(limits),
+    parseTabContext(context),
     url === undefined ? undefined : parseNavigationUrl(url),
   ));
   handle(HOST_CHANNEL.browserPlace, (_event, tabId, placement) => {
@@ -55,6 +57,12 @@ export function registerHostIpc(supervisor: BackendSupervisor, browser: BrowserH
   handle(HOST_CHANNEL.browserFreeze, (_event, tabId) => browser.freeze(parseTabId(tabId)));
   handle(HOST_CHANNEL.browserNavigate, (_event, tabId, navigation) => browser.userNavigate(parseTabId(tabId), parseNavigation(navigation)));
   handle(HOST_CHANNEL.browserClose, (_event, tabId) => browser.userClose(parseTabId(tabId)));
+  handle(HOST_CHANNEL.browserAnswerDialog, (_event, tabId, dialogId, answer) => browser.userAnswerDialog(
+    parseTabId(tabId),
+    parseDialogId(dialogId),
+    parseDialogAnswer(answer),
+  ));
+  handle(HOST_CHANNEL.browserRevealDownload, (_event, downloadId) => browser.revealDownload(parseDownloadId(downloadId)));
 }
 
 /** 地址栏输入：没写协议的按 https 补全；协议只允许 http(s)（与 Agent 走同一条校验）。 */
@@ -77,6 +85,32 @@ function parseTabId(value: unknown): string {
 function parseTaskId(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) <= 0) throw new Error("任务标识不合法");
   return value as number;
+}
+
+/** 下载目录来自后端（`GET /tasks/{id}/browser-context`），渲染进程只转交；这里只确认是绝对路径。 */
+function parseTabContext(value: unknown): BrowserTabContext {
+  if (!isPlainObject(value) || typeof value.downloadDir !== "string" || !path.isAbsolute(value.downloadDir)) {
+    throw new Error("标签上下文不合法");
+  }
+  return { limits: parseLimits(value.limits), downloadDir: value.downloadDir };
+}
+
+function parseDialogAnswer(value: unknown): BrowserDialogAnswer {
+  if (!isPlainObject(value) || typeof value.accept !== "boolean") throw new Error("弹窗答复不合法");
+  if (value.text === undefined) return { accept: value.accept };
+  if (typeof value.text !== "string" || value.text.length > 10_000) throw new Error("弹窗答复不合法");
+  return { accept: value.accept, text: value.text };
+}
+
+function parseDialogId(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) throw new Error("弹窗标识不合法");
+  return value as number;
+}
+
+/** 只确认形状；认不认识这个下载由宿主的下载登记判断（`DOWNLOAD_NOT_FOUND`）。 */
+function parseDownloadId(value: unknown): string {
+  if (typeof value !== "string" || !value || value.length > 64) throw new Error("下载标识不合法");
+  return value;
 }
 
 function parseLimits(value: unknown): BrowserTabLimits {

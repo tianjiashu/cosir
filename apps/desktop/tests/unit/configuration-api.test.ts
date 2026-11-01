@@ -6,11 +6,12 @@ const jsonRequestInit = vi.hoisted(() => vi.fn((body: unknown, init: RequestInit
 vi.mock("@/lib/http/client", () => ({ requestJson, jsonRequestInit }));
 
 describe("configuration API", () => {
-  it("routes Team CRUD through the explicit system or workspace scope", async () => {
+  it("routes Team CRUD by owner and derives both body scopes from it", async () => {
     requestJson.mockResolvedValue({ team_id: "review-team" });
     const {
       createAgentTeamConfiguration,
       deleteAgentTeamConfiguration,
+      getAgentTeamConfigurations,
       updateAgentTeamConfiguration,
     } = await import("@/lib/api/agent-teams");
     const configuration = {
@@ -24,30 +25,78 @@ describe("configuration API", () => {
       scope: "workspace" as const,
     };
 
-    await createAgentTeamConfiguration({ scope: "workspace", configuration }, 3);
-    expect(requestJson).toHaveBeenCalledWith(
+    await createAgentTeamConfiguration(3, configuration);
+    expect(requestJson).toHaveBeenLastCalledWith(
       "/workspaces/3/configuration/agent-teams",
       expect.objectContaining({ method: "POST" }),
     );
-    await updateAgentTeamConfiguration("review-team", {
-      scope: "system",
-      configuration: { ...configuration, scope: "system" },
-    });
-    expect(requestJson).toHaveBeenCalledWith(
+    expect(jsonRequestInit).toHaveBeenLastCalledWith({ scope: "workspace", configuration }, { method: "POST" });
+
+    await updateAgentTeamConfiguration(null, "review-team", configuration);
+    expect(requestJson).toHaveBeenLastCalledWith(
       "/configuration/agent-teams/review-team",
       expect.objectContaining({ method: "PUT" }),
     );
-    await deleteAgentTeamConfiguration("review-team", "workspace", 3);
-    expect(requestJson).toHaveBeenCalledWith(
-      "/workspaces/3/configuration/agent-teams/review-team",
-      { method: "DELETE" },
+    expect(jsonRequestInit).toHaveBeenLastCalledWith(
+      { scope: "system", configuration: { ...configuration, scope: "system" } },
+      { method: "PUT" },
     );
+
+    await updateAgentTeamConfiguration(3, "review-team", configuration);
+    expect(requestJson).toHaveBeenLastCalledWith(
+      "/workspaces/3/configuration/agent-teams/review-team",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    await deleteAgentTeamConfiguration(3, "review-team");
+    expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agent-teams/review-team", { method: "DELETE" });
+    await deleteAgentTeamConfiguration(null, "review-team");
+    expect(requestJson).toHaveBeenLastCalledWith("/configuration/agent-teams/review-team", { method: "DELETE" });
+    await getAgentTeamConfigurations(null);
+    expect(requestJson).toHaveBeenLastCalledWith("/configuration/agent-teams", undefined);
+    await getAgentTeamConfigurations(3);
+    expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agent-teams", undefined);
+  });
+
+  it("routes sub-Agent CRUD to the system or the workspace collection", async () => {
+    requestJson.mockResolvedValue({ agent_id: "reviewer" });
+    const {
+      createAgentConfiguration,
+      deleteAgentConfiguration,
+      getAgentConfigurations,
+      updateAgentConfiguration,
+    } = await import("@/lib/api/configuration");
+    const input = {
+      agent_id: "reviewer",
+      role: "child",
+      description: "review",
+      system_prompt: "read only",
+      allowed_tool_groups: ["文件"],
+      max_steps: 100,
+      model_config_id: null,
+      model_settings: {},
+    };
+
+    await getAgentConfigurations(null);
+    expect(requestJson).toHaveBeenLastCalledWith("/configuration/agents", undefined);
+    await getAgentConfigurations(3);
+    expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents", undefined);
+    await createAgentConfiguration(null, input);
+    expect(requestJson).toHaveBeenLastCalledWith("/configuration/agents", expect.objectContaining({ method: "POST" }));
+    await createAgentConfiguration(3, input);
+    expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents", expect.objectContaining({ method: "POST" }));
+    await updateAgentConfiguration(3, "a/b", input);
+    expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents/a%2Fb", expect.objectContaining({ method: "PUT" }));
+    await deleteAgentConfiguration(null, "reviewer");
+    expect(requestJson).toHaveBeenLastCalledWith("/configuration/agents/reviewer", { method: "DELETE" });
+    await deleteAgentConfiguration(3, "reviewer");
+    expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents/reviewer", { method: "DELETE" });
   });
 
   it("sends agent model overrides without configuration version metadata", async () => {
+    jsonRequestInit.mockClear();
     requestJson.mockResolvedValueOnce({ agent_id: "reviewer" });
     const { updateAgentConfiguration } = await import("@/lib/api/configuration");
-    await updateAgentConfiguration("reviewer", {
+    await updateAgentConfiguration(null, "reviewer", {
       agent_id: "reviewer",
       role: "child",
       description: "review",

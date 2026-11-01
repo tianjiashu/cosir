@@ -3,7 +3,7 @@ import { ListTreeIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
-import { markdownOutline, type OutlineHeading } from "@/lib/workspace-files/markdown-outline";
+import { markdownOutline, type OutlineHeading } from "@/lib/markdown-outline";
 import { cn } from "@/lib/utils";
 
 /**

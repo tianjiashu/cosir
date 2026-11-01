@@ -4,7 +4,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { useElementSize } from "@/hooks/use-element-size";
 import type { DockSizing } from "@/components/layout/dock-frame";
 import { PANEL_DOCK_GUTTER } from "@/components/ui/panel-dock";
-import { useTaskBrowserTabs } from "@/lib/browser/tabs-store";
+import { useTaskBrowserTabs } from "@/lib/browser/host-state-store";
 import { useBrowserPanelStore } from "@/lib/browser/panel-store";
 import { useDockStore } from "@/lib/layout/dock-store";
 import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/keyboard/shortcuts";

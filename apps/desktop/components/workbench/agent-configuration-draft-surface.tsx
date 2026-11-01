@@ -6,7 +6,7 @@ import { AgentConfigurationForm } from "@/components/configuration/agent-configu
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
-import { createAgentConfiguration, createWorkspaceAgentConfiguration, updateAgentConfiguration, updateWorkspaceAgentConfiguration } from "@/lib/api/configuration";
+import { createAgentConfiguration, updateAgentConfiguration, type ConfigurationScope } from "@/lib/api/configuration";
 import type { PersistAgent } from "@/lib/agent-editor/session";
 import { confirmCloseWorkbenchTab } from "@/lib/workbench/drafts";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
@@ -37,18 +37,15 @@ export function AgentConfigurationDraftSurface({
     ...toolGroupsQueryOptions(),
   });
 
-  const persist: PersistAgent = (input, { scope, agentId }) => {
-    if (scope === "workspace") {
-      return agentId ? updateWorkspaceAgentConfiguration(workspaceId, agentId, input) : createWorkspaceAgentConfiguration(workspaceId, input);
-    }
-    return agentId ? updateAgentConfiguration(agentId, input) : createAgentConfiguration(input);
-  };
+  const owner = (scope: ConfigurationScope) => (scope === "workspace" ? workspaceId : null);
+  const persist: PersistAgent = (input, { scope, agentId }) => (
+    agentId ? updateAgentConfiguration(owner(scope), agentId, input) : createAgentConfiguration(owner(scope), input)
+  );
   const saveMutation = useMutation({
     mutationFn: () => tab.session.save(persist),
     onSuccess: (saved) => {
       if (!saved) return;
-      const scope = tab.session.store.getState().scope;
-      void queryClient.invalidateQueries({ queryKey: queryKeys.agents(scope === "workspace" ? workspaceId : null) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.agents(owner(tab.session.store.getState().scope)) });
       notify.success("配置已保存");
     },
     onError: (cause) => {

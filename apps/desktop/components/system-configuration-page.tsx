@@ -2,11 +2,11 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2Icon, SaveIcon } from "lucide-react";
 
-import { AgentConfigurationPanel, type AgentConfigurationApi } from "@/components/configuration/agent-configuration-panel";
+import { AgentConfigurationPanel } from "@/components/configuration/agent-configuration-panel";
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { AppearanceSettingsPanel } from "@/components/settings/appearance-settings-panel";
 import { SYSTEM_SETTINGS_TABS, type SystemSettingsTabId } from "@/components/settings/settings-tabs";
-import { EnvironmentConfigurationForm, type EnvironmentFieldValue } from "@/components/environment-configuration-form";
+import { EnvironmentConfigurationForm } from "@/components/environment-configuration-form";
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
 import { AgentTeamConfigurationPanel } from "@/components/agent-team/configuration-panel";
 import { TerminalDenylistConfigurationPanel } from "@/components/terminal-denylist-configuration-panel";
@@ -17,49 +17,38 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import {
-  createAgentConfiguration,
-  deleteAgentConfiguration,
   getEnvironmentConfiguration,
   getGlobalInstructionConfiguration,
   getMainAgentPromptConfiguration,
   type EnvironmentField,
   type EnvironmentGroup,
-  type GlobalInstructionConfiguration,
-  type MainAgentPromptConfiguration,
-  updateAgentConfiguration,
   updateEnvironmentConfiguration,
   updateGlobalInstructionConfiguration,
   updateMainAgentPromptConfiguration,
 } from "@/lib/api/configuration";
-import type { MarkdownConfigurationAdapter } from "@/components/configuration/use-markdown-configuration-document";
+import type { ConfigurationDocumentAdapter } from "@/components/configuration/use-configuration-document";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import type { MarkdownDocumentContract } from "@/lib/markdown-document";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 
 
-const systemAgentConfigurationApi: AgentConfigurationApi = {
-  workspaceId: null,
-  create: createAgentConfiguration,
-  update: updateAgentConfiguration,
-  remove: deleteAgentConfiguration,
-};
-
-const globalInstructionConfigurationAdapter: MarkdownConfigurationAdapter<GlobalInstructionConfiguration> = {
+const globalInstructionConfigurationAdapter: ConfigurationDocumentAdapter<MarkdownDocumentContract> = {
   queryKey: queryKeys.instruction("global"),
   label: "全局 AGENTS.md",
   load: getGlobalInstructionConfiguration,
   save: updateGlobalInstructionConfiguration,
-  allowEmpty: true,
+  saveFailedEvent: "markdown_configuration_save_failed",
 };
 
-const mainAgentPromptConfigurationAdapter: MarkdownConfigurationAdapter<MainAgentPromptConfiguration> = {
+const mainAgentPromptConfigurationAdapter: ConfigurationDocumentAdapter<MarkdownDocumentContract> = {
   queryKey: queryKeys.instruction("main-agent-prompt"),
   label: "主 Agent 提示词",
   load: getMainAgentPromptConfiguration,
   save: updateMainAgentPromptConfiguration,
-  allowEmpty: false,
+  saveFailedEvent: "markdown_configuration_save_failed",
 };
 
 
@@ -153,7 +142,7 @@ function EnvironmentEditor({ groups }: { groups: EnvironmentGroup[] }) {
       <fieldset disabled={mutation.isPending} className="m-0 min-w-0 border-0 p-0">
         <EnvironmentConfigurationForm
           groups={groups}
-          values={values as Record<string, EnvironmentFieldValue>}
+          values={values}
           onChange={(field, value) => {
             edit(field, value);
             setClearSecrets((current) => {
@@ -189,7 +178,7 @@ function EnvironmentEditor({ groups }: { groups: EnvironmentGroup[] }) {
 
 /**
  * 配置中心的「模型」标签：与 composer 模型设置对话框共用 ModelConfigManager。
- * 这里不在下拉之内，保存 / 删除后立即强制刷新模型选择目录，让各处选择器（含保活的任务页）及时看到变化。
+ * 保存 / 删除后的模型目录刷新由 ModelConfigManager 失效共享查询缓存完成，这里不另做。
  */
 function ModelsPanel() {
   return (
@@ -210,10 +199,10 @@ export function SystemConfigurationPage({ tab }: { tab: SystemSettingsTabId }) {
   return (
     <SettingsPageLayout tabs={SYSTEM_SETTINGS_TABS} basePath="/settings" navLabel="系统配置分类">
       {tab === "appearance" && <AppearanceSettingsPanel />}
-      {tab === "agents" && <AgentConfigurationPanel api={systemAgentConfigurationApi} />}
+      {tab === "agents" && <AgentConfigurationPanel workspaceId={null} />}
       {tab === "models" && <ModelsPanel />}
-      {tab === "agent-teams" && <AgentTeamConfigurationPanel scope="system" />}
-      {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent 提示词" />}
+      {tab === "agent-teams" && <AgentTeamConfigurationPanel workspaceId={null} />}
+      {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} requireContent description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent 提示词" />}
       {tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="在这里写入系统级工作约束…" saveLabel="保存全局 AGENTS.md" />}
       {tab === "environment" && <EnvironmentPanel />}
       {tab === "terminal-denylist" && <TerminalDenylistConfigurationPanel />}

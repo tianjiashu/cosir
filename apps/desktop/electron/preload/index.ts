@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   HOST_CHANNEL,
   type BackendSnapshot,
-  type BrowserTabSummary,
+  type BrowserState,
   type CosirHost,
   type HostPlatform,
   type HostReply,
@@ -41,17 +41,19 @@ const host: CosirHost = {
     setThemeSource: (source) => call(HOST_CHANNEL.windowThemeSource, source),
   },
   browser: {
-    listTabs: () => call(HOST_CHANNEL.browserTabs),
-    open: (taskId, limits, url) => call(HOST_CHANNEL.browserOpen, taskId, limits, url),
-    onTabsChanged: (listener) => {
-      const forward = (_event: Electron.IpcRendererEvent, tabs: BrowserTabSummary[]) => listener(tabs);
-      ipcRenderer.on(HOST_CHANNEL.browserTabsChanged, forward);
-      return () => ipcRenderer.removeListener(HOST_CHANNEL.browserTabsChanged, forward);
+    state: () => call(HOST_CHANNEL.browserState),
+    open: (taskId, context, url) => call(HOST_CHANNEL.browserOpen, taskId, context, url),
+    onStateChanged: (listener) => {
+      const forward = (_event: Electron.IpcRendererEvent, state: BrowserState) => listener(state);
+      ipcRenderer.on(HOST_CHANNEL.browserStateChanged, forward);
+      return () => ipcRenderer.removeListener(HOST_CHANNEL.browserStateChanged, forward);
     },
     place: (tabId, placement) => call(HOST_CHANNEL.browserPlace, tabId, placement),
     freeze: (tabId) => call(HOST_CHANNEL.browserFreeze, tabId),
     navigate: (tabId, navigation) => call(HOST_CHANNEL.browserNavigate, tabId, navigation),
     close: (tabId) => call(HOST_CHANNEL.browserClose, tabId),
+    answerDialog: (tabId, dialogId, answer) => call(HOST_CHANNEL.browserAnswerDialog, tabId, dialogId, answer),
+    revealDownload: (downloadId) => call(HOST_CHANNEL.browserRevealDownload, downloadId),
   },
   files: {
     pathOf: (file) => webUtils.getPathForFile(file),

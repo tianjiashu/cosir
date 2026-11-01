@@ -1,7 +1,9 @@
-import { GlobeIcon, HandIcon, Maximize2Icon, Minimize2Icon, PlusIcon, XIcon } from "lucide-react";
+import { GlobeIcon, HandIcon, Maximize2Icon, MessageSquareWarningIcon, Minimize2Icon, PlusIcon, XIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { BrowserView } from "@/components/browser/browser-view";
+import { BrowserDialogBanner } from "@/components/browser/dialog-banner";
+import { DownloadBar } from "@/components/browser/download-bar";
 import { HandoffBanner } from "@/components/handoff/handoff-banner";
 import { DockFrame, type DockSizing } from "@/components/layout/dock-frame";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -10,8 +12,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/state-panel";
 import { panelTabClass } from "@/components/ui/panel-tokens";
 import { openUserTab } from "@/lib/browser/open-tab";
-import { useBrowserPanelStore } from "@/lib/browser/panel-store";
-import { useTaskBrowserTabs } from "@/lib/browser/tabs-store";
+import { displayedTab, useBrowserPanelStore } from "@/lib/browser/panel-store";
+import { useTaskBrowserDownloads, useTaskBrowserTabs } from "@/lib/browser/host-state-store";
 import { desktopHost } from "@/lib/desktop-host";
 import { useHandoffStore } from "@/lib/handoff/store";
 import { useHandBack } from "@/lib/handoff/use-hand-back";
@@ -21,12 +23,14 @@ import { cn } from "@/lib/utils";
 /**
  * 浏览器面板：一个 Task 的标签页（Agent 与用户开的都在这里），独立的停靠面板，不与工作台混排。
  *
- * 标签条只列这个 Task 的标签（宿主事实，经 `tabs-store` 镜像）；选中项存在 `panel-store`，选中的标签关闭后
- * 回落到最新的标签。`+` 与空状态里的地址栏都经 `openUserTab` 在这个 Task 里新开标签。关闭标签就是关掉
- * 宿主里的标签页（Agent 也就看不到了），与在交互终端里关闭会话一致。
+ * 标签条只列这个 Task 的标签（宿主事实，经 `host-state-store` 镜像）；显示哪个标签由 `panel-store` 决定（选中项、
+ * 弹窗开出的标签跟随、关闭后回到来源或最新的标签，规则都在那里）。`+` 与空状态里的地址栏都经 `openUserTab`
+ * 在这个 Task 里新开标签。关闭标签就是关掉宿主里的标签页（Agent 也就看不到了），与在交互终端里关闭会话一致。
  *
- * 交接中的标签带一个手形标记，选中时内容上方显示交接提示。关闭交接中的标签即交还：宿主无法把「标签关了」
- * 告诉后端，用户在这里关掉它是唯一能及时唤醒 Agent 的时机；重放时后端报告标签已不在。
+ * 「等你操作」的状态在标签条上各有标记、选中时在网页上方显示提示条（都在原生画面占位区之外）：待答的网页
+ * 弹窗优先于交接，因为弹窗不答页面就停着。关闭交接中的标签即交还：宿主无法把「标签关了」告诉后端，用户在
+ * 这里关掉它是唯一能及时唤醒 Agent 的时机；重放时后端报告标签已不在。这个 Task 最近的下载显示在面板底部：下载归
+ * Task 不归标签（弹出页下载后常自己关掉），所以与显示哪个标签、有没有标签都无关。
  */
 export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onClose }: {
   taskId: number | null;
@@ -36,9 +40,10 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
   onClose: () => void;
 }) {
   const tabs = useTaskBrowserTabs(taskId ?? -1);
+  const downloads = useTaskBrowserDownloads(taskId ?? -1);
   const selectedId = useBrowserPanelStore((state) => (taskId === null ? undefined : state.selected[taskId]));
   const select = useBrowserPanelStore((state) => state.select);
-  const active = tabs.find((tab) => tab.tabId === selectedId) ?? tabs.at(-1);
+  const active = displayedTab(tabs, selectedId);
   const host = desktopHost;
   const canOpen = host !== null && taskId !== null;
   const handoffs = useHandoffStore((state) => (taskId === null ? null : state.tasks[taskId]));
@@ -79,11 +84,13 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
                     title={`${title}${tab.createdBy === "agent" ? " · Agent 打开" : ""}`}
                     onClick={() => select(tab.taskId, tab.tabId)}
                   >
-                    {tab.loading
-                      ? <Spinner className="size-3.5 shrink-0" />
-                      : handoffOf(tab.tabId)
-                        ? <HandIcon className="text-info size-3.5 shrink-0" aria-label="交接中" />
-                        : <GlobeIcon className="size-3.5 shrink-0" aria-hidden="true" />}
+                    {tab.dialog
+                      ? <MessageSquareWarningIcon className="text-info size-3.5 shrink-0" aria-label="网页弹窗待处理" />
+                      : tab.loading
+                        ? <Spinner className="size-3.5 shrink-0" />
+                        : handoffOf(tab.tabId)
+                          ? <HandIcon className="text-info size-3.5 shrink-0" aria-label="交接中" />
+                          : <GlobeIcon className="size-3.5 shrink-0" aria-hidden="true" />}
                     <span className="truncate">{title}</span>
                   </button>
                   <TooltipIconButton tooltip="关闭标签页" side="bottom" className="size-6 shrink-0 opacity-60 hover:opacity-100" aria-label={`关闭 ${title}`} onClick={() => closeTab(tab.tabId)}>
@@ -113,12 +120,21 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
         <EmptyState className="m-4" icon={<GlobeIcon />} title="打开一个对话后使用浏览器" description="标签页归属于对话：Agent 与你在同一个对话里看到同一组标签。" />
       ) : active ? (
         <>
+          {active.dialog && (
+            <BrowserDialogBanner
+              key={active.dialog.id}
+              host={host}
+              tabId={active.tabId}
+              dialog={active.dialog}
+            />
+          )}
           {activeHandoff && <HandoffBanner taskId={taskId} entry={activeHandoff} />}
           <BrowserView key={active.tabId} host={host} tabId={active.tabId} url={active.url} loading={active.loading} crashed={active.crashed} />
         </>
       ) : (
         <NewTabPrompt onOpen={openTab} />
       )}
+      {host && taskId !== null && downloads.length > 0 && <DownloadBar key={taskId} host={host} downloads={downloads} />}
     </DockFrame>
   );
 }

@@ -14,11 +14,13 @@ export const browserHarnessBundle = path.join(targetDirectory, "electron-browser
  */
 export default async function globalSetup() {
   process.env.CODING_AGENT_TERMINAL_WORKER = buildDevelopmentTerminalWorker();
+  // 网页 preload 与生产同名、同目录（`browser-session.ts` 以 `__dirname` 定位它）。
   await esbuild.build({
     ...electronBuildOptions,
-    entryPoints: [path.join(desktopRoot, "tests", "desktop-e2e", "browser-harness", "main.ts")],
-    outdir: undefined,
-    outfile: browserHarnessBundle,
-    outExtension: undefined,
+    entryPoints: {
+      main: path.join(desktopRoot, "tests", "desktop-e2e", "browser-harness", "main.ts"),
+      "browser-page-preload": electronBuildOptions.entryPoints["browser-page-preload"],
+    },
+    outdir: path.dirname(browserHarnessBundle),
   });
 }

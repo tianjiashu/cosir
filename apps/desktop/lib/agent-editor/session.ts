@@ -1,10 +1,8 @@
 import { createStore } from "zustand/vanilla";
 
-import type { AgentConfiguration, AgentConfigurationInput } from "@/lib/api/configuration";
+import type { AgentConfiguration, AgentConfigurationInput, ConfigurationScope } from "@/lib/api/configuration";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { modelSettingsFromForm, modelSettingsToForm, type ModelSettingsForm } from "@/lib/model/settings-form";
-
-export type AgentConfigurationScope = "workspace" | "system";
 
 /** 表单值：数字与模型参数保持输入框原文，保存时再统一校验转换。 */
 type AgentEditorForm = Omit<AgentConfigurationInput, "max_steps" | "model_settings"> & {
@@ -15,13 +13,13 @@ type AgentEditorForm = Omit<AgentConfigurationInput, "max_steps" | "model_settin
 /** 本次保存的目标：`agentId` 为 null 时 create，否则 update 这份已保存的配置。 */
 export type PersistAgent = (
   input: AgentConfigurationInput,
-  target: { scope: AgentConfigurationScope; agentId: string | null },
+  target: { scope: ConfigurationScope; agentId: string | null },
 ) => Promise<AgentConfiguration>;
 
 type AgentEditorState = {
   form: AgentEditorForm;
   /** 保存范围；首存后与 Agent ID 一起锁定。 */
-  scope: AgentConfigurationScope;
+  scope: ConfigurationScope;
   /** 最近一次保存成功的表单；null 表示尚未保存过。 */
   baseline: AgentEditorForm | null;
   /** 已保存配置的 Agent ID；非 null 后再保存走 update。 */
@@ -66,12 +64,12 @@ function inputFromForm(form: AgentEditorForm): AgentConfigurationInput {
 export function createAgentEditorSession(options: {
   initial: Partial<AgentConfigurationInput> | null;
   saved: boolean;
-  scope: AgentConfigurationScope;
+  scope: ConfigurationScope;
 }) {
   const form = editorForm(options.initial);
   const baseline = options.saved ? form : null;
   const blank = options.initial === null ? JSON.stringify({ form, scope: options.scope }) : null;
-  const dirtyAgainst = (next: AgentEditorForm, scope: AgentConfigurationScope, saved: AgentEditorForm | null) => (
+  const dirtyAgainst = (next: AgentEditorForm, scope: ConfigurationScope, saved: AgentEditorForm | null) => (
     saved ? JSON.stringify(next) !== JSON.stringify(saved) : JSON.stringify({ form: next, scope }) !== blank
   );
   const store = createStore<AgentEditorState>(() => ({
@@ -91,7 +89,7 @@ export function createAgentEditorSession(options: {
       store.setState({ form: next, dirty: dirtyAgainst(next, state.scope, state.baseline) });
     },
     /** 保存中或已保存后范围锁定，调用不生效（视图同时禁用控件）。 */
-    setScope(scope: AgentConfigurationScope) {
+    setScope(scope: ConfigurationScope) {
       const state = store.getState();
       if (state.saving || state.savedAgentId !== null) return;
       store.setState({ scope, dirty: dirtyAgainst(state.form, scope, state.baseline) });

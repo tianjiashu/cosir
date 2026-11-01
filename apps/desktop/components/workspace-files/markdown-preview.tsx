@@ -3,18 +3,14 @@ import { useMemo, useLayoutEffect, type ComponentProps, type RefObject } from "r
 import { useDomSelection } from "@/hooks/use-dom-selection";
 import { useQuery } from "@tanstack/react-query";
 import { useResourceWatch } from "@/lib/workspace-files/resource-watch";
-import { Streamdown, type ExtraProps } from "streamdown";
+import type { ExtraProps } from "streamdown";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
 import { useOpenLink } from "@/components/links/use-open-link";
-import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
+import { StaticMarkdown } from "@/components/static-markdown";
 import { parentPath } from "@/lib/workspace-files/store";
 import { useImageResource } from "@/lib/workspace-files/resources";
 import { fileInfoQueryOptions } from "@/lib/query/query-options";
-import { rehypeHeadingLines } from "@/lib/workspace-files/markdown-outline";
 import { fileReadProblem } from "@/lib/workspace-files/read-problem";
-
-// 模块级单例：插件数组每次渲染都新建会让 Streamdown 重新解析整篇文档。
-const previewRehypePlugins = [...markdownRehypePlugins, rehypeHeadingLines];
 
 function LocalImage({
   id,
@@ -63,7 +59,6 @@ export function MarkdownPreview({
   onScroll: (top: number) => void;
   onSelectText?: (text: string | null) => void;
 }) {
-  const mermaidOptions = useMermaidOptions();
   useDomSelection(host, (value) => onSelectText?.(value));
   useLayoutEffect(() => {
     if (host.current) host.current.scrollTop = scrollTop;
@@ -97,16 +92,7 @@ export function MarkdownPreview({
     >
       {/* 限制行宽：面板铺满时正文仍保持易读的行长。 */}
       <div className="aui-md mx-auto max-w-3xl">
-      <Streamdown
-        mode="static"
-        plugins={markdownPlugins}
-        rehypePlugins={previewRehypePlugins}
-        shikiTheme={["github-light", "github-dark"]}
-        mermaid={mermaidOptions}
-        components={components}
-      >
-        {text}
-      </Streamdown>
+        <StaticMarkdown components={components}>{text}</StaticMarkdown>
       </div>
     </div>
   );

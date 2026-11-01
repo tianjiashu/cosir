@@ -1,14 +1,21 @@
 import { HostMethodError } from "../host-link/methods";
+import type { BrowserDialog, BrowserDialogAnswer } from "../../shared/host-contract";
 import type { PageAction } from "./params";
 
 /**
- * 在页面上执行一组动作（点击、悬停、输入、按键、选择、滚动、等待）。只经 CDP 合成输入；Agent 与用户输入的
+ * 在页面上执行一组动作（点击、悬停、输入、按键、选择、滚动、等待、回答弹窗）。只经 CDP 合成输入；Agent 与用户输入的
  * 区分见 `BrowserTab.act`。
  *
  * 元素由快照里的 ref 指定：ref 按节点稳定、可能来自更早的快照，所以每次动作前都向页面确认节点还在文档里
  * （`element`）——已删除或已脱离文档的节点一律报 `REF_STALE`，不让焦点落空后把字输进别的元素。
  * 动作按序执行、遇错即停：已完成的动作不回滚，结果里说明停在哪一步，调用方随后照常返回新快照，模型能直接
  * 接着做。
+ *
+ * 弹窗：页面停住时（本标签或同进程别的标签在弹窗）CDP 命令回不来，以 `DIALOG_OPEN` 失败。只有动作在它的
+ * 「生效命令」（`effect`：点击的按下与松开、悬停的移动、输入与按键、选择、滚动）上遇到它，才说明是动作自己触发
+ * 的弹窗、动作已生效，按完成处理并记下这个弹窗；其余位置（定位元素、`wait_for` 轮询……）遇到它就是失败——页面
+ * 自己在别的时机弹了窗，动作并没有发生。`dialog` 动作只回答指明 id 的弹窗，或本批前面的动作弹出的那个，所以
+ * 「点删除 + 确认」能在同一批里完成，又不会把确认答给一个没看见的弹窗。
  */
 
 /** `BrowserTab` 交给本模块的最小能力；不为它单独引入接口类型。 */
@@ -17,7 +24,20 @@ export type PageSession = {
   resolveRef(ref: string): number;
   /** 动作可能触发导航：等主框架加载结束（有时限，超时不算失败）。 */
   settle(): Promise<void>;
+  /** CSS 像素 → CDP 输入坐标（视图坐标）：面板缩放显示视口时两者不同。 */
+  toInput(point: { x: number; y: number }): { x: number; y: number };
+  /** 页面停着的原因（本标签或同进程别的标签有待答弹窗）；没停时为 null。 */
+  paused(): HostMethodError | null;
+  /** 本标签待答的弹窗。 */
+  dialog(): BrowserDialog | null;
+  answerDialog(id: number, answer: BrowserDialogAnswer): void;
 };
+
+/** 动作的生效命令遇到弹窗：动作已生效，弹窗是它触发的。 */
+class DialogOpenedByAction extends Error {}
+
+/** 本批执行中的共享状态：前面的动作弹出的弹窗（`dialog` 动作省略 id 时只能回答它）。 */
+type Batch = { openedDialog: number | null };
 
 export type ActResult = {
   completed: number;
@@ -62,32 +82,48 @@ export type Modifier = (typeof MODIFIERS)[number];
 const MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 } as const;
 
 export async function runActions(session: PageSession, actions: readonly PageAction[], signal: AbortSignal): Promise<ActResult> {
+  const batch: Batch = { openedDialog: null };
   for (const [index, action] of actions.entries()) {
     if (signal.aborted) return { completed: index, failure: { index, code: "CANCELLED", message: "the call was cancelled" } };
+    const paused = session.paused();
+    if (paused && action.type !== "dialog") return { completed: index, failure: { index, code: paused.code, message: paused.message } };
     try {
-      await run(session, action, signal);
+      await run(session, action, signal, batch);
       await session.settle();
     } catch (error) {
-      const failure = describe(error);
-      return { completed: index, failure: { index, ...failure } };
+      if (error instanceof DialogOpenedByAction) {
+        batch.openedDialog = session.dialog()?.id ?? null;
+        continue;
+      }
+      return { completed: index, failure: { index, ...describe(error) } };
     }
   }
   return { completed: actions.length, failure: null };
 }
 
-async function run(session: PageSession, action: PageAction, signal: AbortSignal): Promise<void> {
+/** 动作的生效命令：它遇到弹窗说明弹窗是这个动作触发的（见模块说明）。 */
+async function effect<T>(command: Promise<T>): Promise<T> {
+  try {
+    return await command;
+  } catch (error) {
+    if (error instanceof HostMethodError && error.code === "DIALOG_OPEN") throw new DialogOpenedByAction();
+    throw error;
+  }
+}
+
+async function run(session: PageSession, action: PageAction, signal: AbortSignal, batch: Batch): Promise<void> {
   switch (action.type) {
     case "click": {
-      const { x, y } = await center(session, await element(session, action.ref));
+      const { x, y } = session.toInput(await center(session, await element(session, action.ref)));
       await session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
-      await session.cdp("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
-      await session.cdp("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+      await effect(session.cdp("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 }));
+      await effect(session.cdp("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 }));
       return;
     }
     case "hover": {
       // 悬停状态留到下一次鼠标移动；之后的 click 会移走指针，靠延迟收起的菜单一般能容忍。
-      const { x, y } = await center(session, await element(session, action.ref));
-      await session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      const { x, y } = session.toInput(await center(session, await element(session, action.ref)));
+      await effect(session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }));
       return;
     }
     case "type": {
@@ -95,7 +131,7 @@ async function run(session: PageSession, action: PageAction, signal: AbortSignal
       await session.cdp("DOM.scrollIntoViewIfNeeded", { backendNodeId });
       await session.cdp("DOM.focus", { backendNodeId });
       if (action.clear) await callOn(session, backendNodeId, CLEAR_FIELD);
-      await session.cdp("Input.insertText", { text: action.text });
+      await effect(session.cdp("Input.insertText", { text: action.text }));
       if (action.submit) await press(session, "Enter");
       return;
     }
@@ -108,7 +144,7 @@ async function run(session: PageSession, action: PageAction, signal: AbortSignal
       await press(session, action.key, action.modifiers);
       return;
     case "select": {
-      const problem = await callOn(session, await element(session, action.ref), SELECT_OPTIONS, [action.values]);
+      const problem = await effect(callOn(session, await element(session, action.ref), SELECT_OPTIONS, [action.values]));
       if (problem) throw new HostMethodError("ACTION_FAILED", problem);
       return;
     }
@@ -118,6 +154,17 @@ async function run(session: PageSession, action: PageAction, signal: AbortSignal
     case "wait_for":
       await waitFor(session, action, Math.min(action.seconds ?? 5, MAX_WAIT_SECONDS), signal);
       return;
+    case "dialog": {
+      const current = session.dialog();
+      if (!current) throw new HostMethodError("NO_DIALOG", "this tab is not showing a dialog");
+      const expected = action.id ?? batch.openedDialog;
+      if (expected !== current.id) {
+        const asked = action.id === undefined ? "no earlier action in this call opened it" : `not #${action.id}`;
+        throw new HostMethodError("DIALOG_MISMATCH", `the tab is showing dialog #${current.id}; ${asked}`);
+      }
+      session.answerDialog(current.id, { accept: action.accept, text: action.text });
+      return;
+    }
   }
 }
 
@@ -136,8 +183,8 @@ async function press(session: PageSession, key: string, modifiers: readonly Modi
   // 按住 Alt / Control / Meta 时是快捷键，不产生字符；只按 Shift 时照常产生（大写）字符。
   const text = bits & ~MODIFIER_BITS.Shift ? undefined : spec.text;
   const base = { key: spec.key, code: spec.code, windowsVirtualKeyCode: spec.keyCode, nativeVirtualKeyCode: spec.keyCode, modifiers: bits };
-  await session.cdp("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(text ? { text } : {}) });
-  await session.cdp("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  await effect(session.cdp("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(text ? { text } : {}) }));
+  await effect(session.cdp("Input.dispatchKeyEvent", { type: "keyUp", ...base }));
 }
 
 function resolveModifier(modifier: Modifier): keyof typeof MODIFIER_BITS {
@@ -165,12 +212,12 @@ async function scroll(session: PageSession, direction: "up" | "down" | undefined
   }
   const down = direction === "down";
   const problem = ref
-    ? await callOn(session, await element(session, ref), SCROLL_AREA, [down])
-    : await evaluate(session, `(${SCROLL_AREA}).call(document.documentElement, ${down})`);
+    ? await effect(callOn(session, await element(session, ref), SCROLL_AREA, [down]))
+    : await effect(evaluate(session, `(${SCROLL_AREA}).call(document.documentElement, ${down})`));
   if (problem) throw new HostMethodError("SCROLL_END", problem);
 }
 
-/** 先滚动到可见，再取内容框中心；没有布局（隐藏、零尺寸）报 `NOT_INTERACTABLE`。 */
+/** 先滚动到可见，再取内容框中心（CSS 像素）；没有布局（隐藏、零尺寸）报 `NOT_INTERACTABLE`。 */
 async function center(session: PageSession, backendNodeId: number): Promise<{ x: number; y: number }> {
   await session.cdp("DOM.scrollIntoViewIfNeeded", { backendNodeId });
   let quad: number[];

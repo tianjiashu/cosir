@@ -388,7 +388,7 @@ function ModelSelectorContent({
       <Command
         className="bg-transparent"
         shouldFilter={!unfiltered}
-        {...(value !== undefined ? { defaultValue: value } : {})}
+        defaultValue={value}
       >
         {unfiltered && <ModelSelectorFocusAnchor />}
         {children ?? (

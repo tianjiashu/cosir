@@ -6,12 +6,21 @@ import { isImeComposing } from "@/lib/keyboard/ime";
 type InlineMarkdownMarker = "**" | "*" | "~~" | "`";
 type BlockMarkdownKind = "bullet" | "ordered" | "quote";
 
-const LIST_LINE_PATTERN = /^(\s*)(?:(?:[-*+])\s+|(?:\d+[.)])\s+|>\s?)/;
+// 块前缀的切换规则：判定、移除与「任一列表行」的并集都由这张表推出。
+// 回车续写用 `listContinuationPrefix` 的另一条规则（引用后必须有空白），不由它推出。
+const BLOCK_MARKERS: Record<BlockMarkdownKind, string> = {
+  bullet: "[-*+]\\s+",
+  ordered: "\\d+[.)]\\s+",
+  quote: ">\\s?",
+};
+const BLOCK_PREFIX = Object.fromEntries(
+  Object.entries(BLOCK_MARKERS).map(([kind, marker]) => [kind, new RegExp(`^(\\s*)${marker}`)]),
+) as Record<BlockMarkdownKind, RegExp>;
+const LIST_LINE_PATTERN = new RegExp(`^(\\s*)(?:${Object.values(BLOCK_MARKERS).join("|")})`);
 
-function dispatchTransaction(view: EditorView, transaction: TransactionSpec | null): boolean {
-  if (!transaction) return false;
-  view.dispatch({ ...transaction, userEvent: "input", scrollIntoView: true });
-  return true;
+/** 行首空白（缩进）；与正则 `\s` 是同一组空白字符。 */
+function leadingWhitespace(text: string): string {
+  return text.slice(0, text.length - text.trimStart().length);
 }
 
 function getTouchedLines(state: EditorState): Array<{ from: number; to: number; text: string }> {
@@ -34,7 +43,17 @@ function getTouchedLines(state: EditorState): Array<{ from: number; to: number; 
     });
 }
 
-function inlineTransaction(state: EditorState, marker: InlineMarkdownMarker): TransactionSpec {
+/**
+ * 对当前选择应用或移除行内 Markdown 标记。
+ *
+ * 该函数只生成 CodeMirror 事务，不直接修改编辑器状态；调用方应将返回值交给
+ * `EditorState.update` 或 `EditorView.dispatch`。有选中文本时包裹文本，没有选择时
+ * 插入一对标记并把光标放在标记中间，重复执行会移除已有标记。
+ */
+export function toggleInlineMarkdown(
+  state: EditorState,
+  marker: InlineMarkdownMarker,
+): TransactionSpec {
   return state.changeByRange((range) => {
     const selectedText = state.sliceDoc(range.from, range.to);
     const before = state.sliceDoc(Math.max(0, range.from - marker.length), range.from);
@@ -87,37 +106,12 @@ function inlineTransaction(state: EditorState, marker: InlineMarkdownMarker): Tr
   });
 }
 
-/**
- * 对当前选择应用或移除行内 Markdown 标记。
- *
- * 该函数只生成 CodeMirror 事务，不直接修改编辑器状态；调用方应将返回值交给
- * `EditorState.update` 或 `EditorView.dispatch`。有选中文本时包裹文本，没有选择时
- * 插入一对标记并把光标放在标记中间，重复执行会移除已有标记。
- */
-export function toggleInlineMarkdown(
-  state: EditorState,
-  marker: InlineMarkdownMarker,
-): TransactionSpec {
-  return inlineTransaction(state, marker);
-}
-
-function blockPrefix(kind: BlockMarkdownKind, line: string): string {
-  const indentation = line.match(/^\s*/)?.[0] ?? "";
-  if (kind === "ordered") return `${indentation}1. `;
+/** 要写入的块前缀；编号列表用调用方给的序号。 */
+function blockPrefix(kind: BlockMarkdownKind, line: string, orderedNumber: number): string {
+  const indentation = leadingWhitespace(line);
+  if (kind === "ordered") return `${indentation}${orderedNumber}. `;
   if (kind === "quote") return `${indentation}> `;
   return `${indentation}- `;
-}
-
-function hasBlockPrefix(kind: BlockMarkdownKind, line: string): boolean {
-  if (kind === "ordered") return /^\s*\d+[.)]\s+/.test(line);
-  if (kind === "quote") return /^\s*>\s?/.test(line);
-  return /^\s*[-*+]\s+/.test(line);
-}
-
-function removeBlockPrefix(kind: BlockMarkdownKind, line: string): string {
-  if (kind === "ordered") return line.replace(/^(\s*)\d+[.)]\s+/, "$1");
-  if (kind === "quote") return line.replace(/^(\s*)>\s?/, "$1");
-  return line.replace(/^(\s*)[-*+]\s+/, "$1");
 }
 
 /**
@@ -131,14 +125,14 @@ export function toggleBlockMarkdown(
   kind: BlockMarkdownKind,
 ): TransactionSpec {
   const lines = getTouchedLines(state);
-  const shouldRemove = lines.length > 0 && lines.every((line) => hasBlockPrefix(kind, line.text));
+  const shouldRemove = lines.every((line) => BLOCK_PREFIX[kind].test(line.text));
   let orderedNumber = 1;
   const changes = lines.map((line) => {
     if (shouldRemove) {
-      return { from: line.from, to: line.to, insert: removeBlockPrefix(kind, line.text) };
+      return { from: line.from, to: line.to, insert: line.text.replace(BLOCK_PREFIX[kind], "$1") };
     }
 
-    const prefix = kind === "ordered" ? blockPrefix(kind, line.text).replace("1. ", `${orderedNumber}. `) : blockPrefix(kind, line.text);
+    const prefix = blockPrefix(kind, line.text, orderedNumber);
     orderedNumber += kind === "ordered" ? 1 : 0;
     const existingPrefix = line.text.match(LIST_LINE_PATTERN)?.[0];
     if (existingPrefix) {
@@ -216,7 +210,7 @@ export function indentMarkdownList(state: EditorState, outdent = false): Transac
 
   const changes = lines.map((line) => {
     if (outdent) {
-      const whitespace = line.text.match(/^(\s*)/)?.[1] ?? "";
+      const whitespace = leadingWhitespace(line.text);
       const removeLength = whitespace.endsWith("\t") ? 1 : Math.min(2, whitespace.length);
       return { from: line.from, to: line.from + removeLength, insert: "" };
     }
@@ -230,11 +224,11 @@ export function indentMarkdownList(state: EditorState, outdent = false): Transac
  * 处理 Markdown 编辑器的快捷键事件。
  *
  * 返回 `true` 表示事件已被编辑器消费，调用方无需再次执行浏览器默认行为；返回
- * `false` 表示交给 CodeMirror 其余 keymap 处理。只读状态下不修改文档。
+ * `false` 表示交给 CodeMirror 其余 keymap 处理。
  * 输入法组字期间的按键（包括确认候选词的 Enter）一律交还 CodeMirror，否则会误续列表前缀。
  */
 export function handleMarkdownKeydown(view: EditorView, event: KeyboardEvent): boolean {
-  if (view.state.readOnly || isImeComposing(event, view.composing)) return false;
+  if (isImeComposing(event, view.composing)) return false;
 
   const modifier = event.metaKey || event.ctrlKey;
   const key = event.key.toLowerCase();
@@ -258,5 +252,6 @@ export function handleMarkdownKeydown(view: EditorView, event: KeyboardEvent): b
 
   if (!transaction) return false;
   event.preventDefault();
-  return dispatchTransaction(view, transaction);
+  view.dispatch({ ...transaction, userEvent: "input", scrollIntoView: true });
+  return true;
 }

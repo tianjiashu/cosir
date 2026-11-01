@@ -1,8 +1,15 @@
+import path from "node:path";
+
 import { HostMethodError } from "../host-link/methods";
 import { isSupportedKey, MODIFIERS, type Modifier } from "./page-input";
-import { BROWSER_TAB_ID } from "../../shared/host-contract";
 import { isWebProtocol } from "./web-url";
-import { BROWSER_NAVIGATION_ACTIONS, type BrowserNavigation, type BrowserTabLimits } from "../../shared/host-contract";
+import {
+  BROWSER_NAVIGATION_ACTIONS,
+  BROWSER_TAB_ID,
+  type BrowserNavigation,
+  type BrowserTabContext,
+  type BrowserTabLimits,
+} from "../../shared/host-contract";
 
 /**
  * `browser.*` 方法的入参校验：链路只保证 `params` 是 JSON 值，这里是宿主侧唯一的校验点，
@@ -10,12 +17,17 @@ import { BROWSER_NAVIGATION_ACTIONS, type BrowserNavigation, type BrowserTabLimi
  * `NAVIGATION_BLOCKED`（模型可据此换地址，而不是当作调用写错）。
  */
 
-export type NavigateRequest = { taskId: number; tab?: string; newTab: boolean; target: BrowserNavigation; limits: BrowserTabLimits };
+/**
+ * 每个请求都带后端给出的标签上下文：宿主据此刷新上限（页面开出的标签没有请求可带，用最近一次的），下载目录
+ * 只在这次请求新建标签时用。
+ */
+type TaskRequest = { taskId: number; context: BrowserTabContext };
 /** 指向本 Task 的某个标签（省略即当前标签）。 */
-type TabRequest = { taskId: number; tab?: string };
+type TabRequest = TaskRequest & { tab?: string };
+export type NavigateRequest = TabRequest & { newTab: boolean; target: BrowserNavigation };
 export type SnapshotRequest = TabRequest & { fromLine: number };
 export type ScreenshotRequest = TabRequest & { fullPage: boolean };
-export type TabsRequest = { taskId: number; action: "list" | "select" | "close"; tab?: string };
+export type TabsRequest = TabRequest & { action: "list" | "select" | "close" };
 
 export type PageAction =
   | { type: "click"; ref: string }
@@ -26,7 +38,9 @@ export type PageAction =
   /** 有方向：滚动整页，或（带 ref）滚动包含该元素的可滚动区域；只有 ref：把元素滚入视野。 */
   | { type: "scroll"; direction?: "up" | "down"; ref?: string }
   /** `text` 与 `textGone` 至多一个；三者至少一个。 */
-  | { type: "wait_for"; text?: string; textGone?: string; seconds?: number };
+  | { type: "wait_for"; text?: string; textGone?: string; seconds?: number }
+  /** 回答待答的 JS 弹窗：指明 id，或省略而回答本批前面的动作弹出的那个；`text` 只对 prompt 有意义。 */
+  | { type: "dialog"; accept: boolean; text?: string; id?: number };
 
 export type ActRequest = TabRequest & { actions: PageAction[] };
 
@@ -41,7 +55,7 @@ export function parseNavigate(params: unknown): NavigateRequest {
     : { action: oneOf(value.action, BROWSER_NAVIGATION_ACTIONS, "action") };
   const newTab = value.new_tab === undefined ? false : boolean(value.new_tab, "new_tab");
   if (newTab && !("url" in target)) throw invalid("new_tab needs a url");
-  return { taskId: taskId(value.task_id), tab: optionalTab(value.tab), newTab, target, limits: limits(value.limits) };
+  return { ...parseTab(value), newTab, target };
 }
 
 export function parseScreenshot(params: unknown): ScreenshotRequest {
@@ -53,9 +67,9 @@ export function parseScreenshot(params: unknown): ScreenshotRequest {
 export function parseTabs(params: unknown): TabsRequest {
   const value = object(params);
   const action = oneOf(value.action, ["list", "select", "close"] as const, "action");
-  const tab = optionalTab(value.tab);
-  if (action !== "list" && tab === undefined) throw invalid(`${action} needs a tab`);
-  return { taskId: taskId(value.task_id), action, tab };
+  const request = { ...parseTab(value), action };
+  if (action !== "list" && request.tab === undefined) throw invalid(`${action} needs a tab`);
+  return request;
 }
 
 export function parseAct(params: unknown): ActRequest {
@@ -115,6 +129,16 @@ function parseAction(item: unknown): PageAction {
       if (text === undefined && textGone === undefined && seconds === undefined) throw invalid("wait_for needs text, text_gone or seconds");
       return { type: "wait_for", text, textGone, seconds: seconds as number | undefined };
     }
+    case "dialog": {
+      if (!absent(action.text) && (typeof action.text !== "string" || action.text.length > 10_000)) throw invalid("dialog text must be a string");
+      if (!absent(action.id) && !positive(action.id)) throw invalid("dialog id must be a positive integer");
+      return {
+        type: "dialog",
+        accept: boolean(action.accept, "accept"),
+        ...(absent(action.text) ? {} : { text: action.text as string }),
+        ...(absent(action.id) ? {} : { id: action.id as number }),
+      };
+    }
     default:
       throw invalid(`unknown action type: ${String(action.type)}`);
   }
@@ -128,7 +152,7 @@ export function parseSnapshot(params: unknown): SnapshotRequest {
 }
 
 function parseTab(value: Record<string, unknown>): TabRequest {
-  return { taskId: taskId(value.task_id), tab: optionalTab(value.tab) };
+  return { taskId: taskId(value.task_id), tab: optionalTab(value.tab), context: tabContext(value) };
 }
 
 export function parseDropTasks(params: unknown): number[] {
@@ -187,6 +211,13 @@ function optionalTab(value: unknown): string | undefined {
   if (absent(value)) return undefined;
   if (typeof value !== "string" || !BROWSER_TAB_ID.test(value)) throw invalid("tab must look like t1");
   return value;
+}
+
+/** 后端随请求带来的标签上下文：上限与 Task 所在工作区的下载目录（本机绝对路径）。 */
+function tabContext(value: Record<string, unknown>): BrowserTabContext {
+  const downloadDir = value.download_dir;
+  if (typeof downloadDir !== "string" || !path.isAbsolute(downloadDir)) throw invalid("download_dir must be an absolute path");
+  return { limits: limits(value.limits), downloadDir };
 }
 
 function limits(value: unknown): BrowserTabLimits {

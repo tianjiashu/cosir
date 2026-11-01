@@ -17,6 +17,11 @@ import { notify } from "@/lib/notify";
  * 占位区域只上报「想放在哪」，摆放事实在宿主（同一时刻只挂一个标签）。组件卸载（切标签、收起面板、
  * 离开对话页）即收起画面，页面在后台继续工作，Agent 不受影响。弹层盖到占位区域时先放冻结帧再收起画面，
  * 弹层消失后恢复实时画面（设计稿 §6.1）。
+ *
+ * 网页按固定视口渲染：宿主 `place` 把 1280×800 的画面等比缩放、居中放进占位矩形（Agent 截图与坐标都基于
+ * 这个视口，不随面板宽度变），宽高比不同时占位区域会有留白，留白露出这里的底色。冻结帧是同一视口的截图，
+ * 所以 `<img>` 用 `object-contain` 居中——与宿主同一摆放规则，换上冻结帧时画面不跳；宿主的摆放规则变了，
+ * 这里要一起改。
  */
 export function BrowserView({ host, tabId, url, loading, crashed }: {
   host: CosirHost;
@@ -124,7 +129,7 @@ export function BrowserView({ host, tabId, url, loading, crashed }: {
         />
       </form>
       <div ref={slot} className="bg-muted/30 relative min-h-0 flex-1" data-browser-slot={tabId}>
-        {frozen && <img src={frozen} alt="" className="absolute inset-0 size-full" />}
+        {frozen && <img src={frozen} alt="" className="absolute inset-0 size-full object-contain" />}
         {crashed && (
           <div className="absolute inset-0 flex items-center justify-center">
             <EmptyState

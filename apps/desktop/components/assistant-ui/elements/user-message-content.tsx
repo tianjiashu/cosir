@@ -1,11 +1,10 @@
 import { useMemo } from "react";
 import { MessagePrimitive, useAuiState, type ThreadUserMessage } from "@assistant-ui/react";
-import { Streamdown } from "streamdown";
 
 import { FileChip, SkillChip } from "@/components/composer/token-chips";
 import { MarkdownText } from "@/components/markdown-text";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
-import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
+import { StaticMarkdown } from "@/components/static-markdown";
 import { ReferenceChip } from "@/components/workspace-references/reference-chip";
 import { userMessageSegments } from "@/lib/assistant/user-message-segments";
 
@@ -20,7 +19,6 @@ export function UserMessageContent() {
   // 本组件只挂在用户消息下，parts 恒为用户消息的内容形状。
   const parts = useAuiState((state) => state.message.parts) as ThreadUserMessage["content"];
   const segments = useMemo(() => userMessageSegments(parts), [parts]);
-  const mermaidOptions = useMermaidOptions();
   const components = useMarkdownLinkComponents("message");
 
   if (segments.every((segment) => segment.type === "text")) {
@@ -36,18 +34,9 @@ export function UserMessageContent() {
         switch (segment.type) {
           case "text":
             return (
-              <Streamdown
-                key={index}
-                mode="static"
-                plugins={markdownPlugins}
-                rehypePlugins={markdownRehypePlugins}
-                shikiTheme={["github-light", "github-dark"]}
-                mermaid={mermaidOptions}
-                components={components}
-                className="contents [&>p]:inline"
-              >
+              <StaticMarkdown key={index} components={components} className="contents [&>p]:inline">
                 {segment.text}
-              </Streamdown>
+              </StaticMarkdown>
             );
           case "reference":
             return <ReferenceChip key={index} reference={segment.reference} />;

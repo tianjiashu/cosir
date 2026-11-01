@@ -96,20 +96,37 @@ export type EnvironmentGroup = {
   fields: EnvironmentField[];
 };
 
-export async function getAgentConfigurations(options?: RequestOptions): Promise<AgentConfiguration[]> {
-  return requestJson<AgentConfiguration[]>("/configuration/agents", options);
+/** 子 Agent 与 Team 配置的作用域：系统级，或某个工作区自己的。 */
+export type ConfigurationScope = "system" | "workspace";
+
+/**
+ * 子 Agent 与 Team 配置的拥有者统一以 `workspaceId` 表达（null 为系统级，与查询键同一约定）；
+ * 路径、请求体里的作用域名都由它推出，调用方不再另传一份。
+ */
+export function configurationScope(workspaceId: number | null): ConfigurationScope {
+  return workspaceId === null ? "system" : "workspace";
 }
 
-export async function createAgentConfiguration(input: AgentConfigurationInput): Promise<AgentConfiguration> {
-  return requestJson<AgentConfiguration>("/configuration/agents", jsonRequestInit(input, { method: "POST" }));
+function agentConfigurationPath(workspaceId: number | null, agentId?: string) {
+  const root = workspaceId === null ? "/configuration/agents" : `/workspaces/${workspaceId}/configuration/agents`;
+  return agentId === undefined ? root : `${root}/${encodeURIComponent(agentId)}`;
 }
 
-export async function updateAgentConfiguration(agentId: string, input: AgentConfigurationInput): Promise<AgentConfiguration> {
-  return requestJson<AgentConfiguration>(`/configuration/agents/${encodeURIComponent(agentId)}`, jsonRequestInit(input, { method: "PUT" }));
+/** 某一作用域自己的子 Agent 配置（工作区列表不含继承来的系统级配置）。 */
+export function getAgentConfigurations(workspaceId: number | null, options?: RequestOptions): Promise<AgentConfiguration[]> {
+  return requestJson<AgentConfiguration[]>(agentConfigurationPath(workspaceId), options);
 }
 
-export async function deleteAgentConfiguration(agentId: string): Promise<void> {
-  await requestJson(`/configuration/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" });
+export function createAgentConfiguration(workspaceId: number | null, input: AgentConfigurationInput): Promise<AgentConfiguration> {
+  return requestJson<AgentConfiguration>(agentConfigurationPath(workspaceId), jsonRequestInit(input, { method: "POST" }));
+}
+
+export function updateAgentConfiguration(workspaceId: number | null, agentId: string, input: AgentConfigurationInput): Promise<AgentConfiguration> {
+  return requestJson<AgentConfiguration>(agentConfigurationPath(workspaceId, agentId), jsonRequestInit(input, { method: "PUT" }));
+}
+
+export async function deleteAgentConfiguration(workspaceId: number | null, agentId: string): Promise<void> {
+  await requestJson(agentConfigurationPath(workspaceId, agentId), { method: "DELETE" });
 }
 
 export function getGlobalInstructionConfiguration(options?: RequestOptions): Promise<GlobalInstructionConfiguration> {
@@ -145,22 +162,6 @@ export function updateTerminalDenylistConfiguration(patterns: string[]): Promise
     "/configuration/terminal-denylist",
     jsonRequestInit({ patterns }, { method: "PUT" }),
   );
-}
-
-export function getWorkspaceAgentConfigurations(workspaceId: number, options?: RequestOptions): Promise<AgentConfiguration[]> {
-  return requestJson<AgentConfiguration[]>(`/workspaces/${workspaceId}/configuration/agents`, options);
-}
-
-export function createWorkspaceAgentConfiguration(workspaceId: number, input: AgentConfigurationInput): Promise<AgentConfiguration> {
-  return requestJson<AgentConfiguration>(`/workspaces/${workspaceId}/configuration/agents`, jsonRequestInit(input, { method: "POST" }));
-}
-
-export function updateWorkspaceAgentConfiguration(workspaceId: number, agentId: string, input: AgentConfigurationInput): Promise<AgentConfiguration> {
-  return requestJson<AgentConfiguration>(`/workspaces/${workspaceId}/configuration/agents/${encodeURIComponent(agentId)}`, jsonRequestInit(input, { method: "PUT" }));
-}
-
-export function deleteWorkspaceAgentConfiguration(workspaceId: number, agentId: string): Promise<void> {
-  return requestJson(`/workspaces/${workspaceId}/configuration/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" }).then(() => undefined);
 }
 
 export function getWorkspaceInstructionConfiguration(workspaceId: number, options?: RequestOptions): Promise<WorkspaceInstructionConfiguration> {

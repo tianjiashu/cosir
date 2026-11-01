@@ -1,13 +1,11 @@
 import { WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
+import { formatByteSize } from "@/lib/format/byte-size";
 import { asRecord } from "../display-utils";
 import type { DetailView } from "./detail-view";
 
 function formatFileSize(value: unknown): string {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "文件大小未知";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  return formatByteSize(value);
 }
 
 function lineRangeLabel(data: Record<string, unknown>): string {

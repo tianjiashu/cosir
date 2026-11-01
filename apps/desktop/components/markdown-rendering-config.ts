@@ -8,11 +8,10 @@ import "katex/dist/katex.min.css";
 import { useThemeState, type ThemeState } from "@/lib/theme/theme-preference";
 
 /**
- * 对话 Markdown 的稳定插件配置。
+ * 所有 Markdown 渲染面共用的 Streamdown 插件配置（流式的 `MarkdownText` 与整篇渲染的 `StaticMarkdown`）。
  *
- * 该配置只声明 Streamdown 的解析与展示能力，不负责消息状态、流式传输或持久化。
- * 模块级单例保证消息 token 更新时不会重新创建插件对象，具体渲染仍由
- * `StreamdownTextPrimitive` 按当前消息 part 的状态决定。
+ * 该配置只声明解析与展示能力，不负责消息状态、流式传输或持久化。模块级单例保证消息 token 更新时
+ * 不会重新创建插件对象。
  */
 export const markdownPlugins = {
   code,

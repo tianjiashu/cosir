@@ -10,9 +10,13 @@ import { configureBrowserSession } from "../../../electron/main/browser/browser-
 app.on("window-all-closed", () => undefined);
 
 void app.whenReady().then(() => {
-  configureBrowserSession();
+  // 不打扰正在用电脑的人：不显示窗口、不在 Dock 里出现、不抢焦点。视图挂在隐藏窗口上时摆放、缩放与点击照常
+  // （实测）；后台标签的点击靠焦点模拟，与窗口是否可见无关。
+  app.dock?.hide();
   // 摆放用例需要一个主窗口；内容无关紧要。
-  const window = new BrowserWindow({ width: 1000, height: 700, show: true });
+  const window = new BrowserWindow({ width: 1000, height: 700, show: false });
   void window.loadURL("about:blank");
-  (globalThis as { browserHarness?: unknown }).browserHarness = { host: new BrowserHost(() => window), window };
+  const host = new BrowserHost(() => window);
+  configureBrowserSession(host);
+  (globalThis as { browserHarness?: unknown }).browserHarness = { host, window };
 });

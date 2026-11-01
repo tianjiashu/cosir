@@ -9,7 +9,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import type { EnvironmentField, EnvironmentGroup } from "@/lib/api/configuration";
 
-export type EnvironmentFieldValue = string | boolean | undefined;
+type EnvironmentFieldValue = string | boolean | undefined;
 
 type EnvironmentFieldControlProps = {
   field: EnvironmentField;
@@ -26,7 +26,7 @@ type EnvironmentFieldControlProps = {
  * 根据后端字段元数据渲染单个环境配置控件。
  *
  * 组件只负责展示和派发用户操作，不负责保存、脱敏或解释环境变量业务语义；这些行为由
- * 配置页面和后端 service 负责。未知控件类型不会静默降级为可写输入框。
+ * 配置页面和后端 service 负责。
  */
 export function EnvironmentFieldControl({
   field,
@@ -146,8 +146,7 @@ type EnvironmentConfigurationFormProps = {
 /**
  * 渲染由后端控制分组和字段元数据的环境配置表单。
  *
- * 表单不直接访问 HTTP，也不生成 changes 请求；调用方可以复用它实现不同的保存策略或预览
- * 模式，同时保持字段组件和分组布局一致。
+ * 表单不直接访问 HTTP，也不生成 changes 请求；保存策略由调用方（系统配置页的环境变量编辑器）负责。
  */
 export function EnvironmentConfigurationForm({
   groups,

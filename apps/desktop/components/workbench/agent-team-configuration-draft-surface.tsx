@@ -53,12 +53,11 @@ export function AgentTeamConfigurationDraftSurface({
   };
 
   const save: PersistTeam = async (configuration, identity) => {
-    const input = { scope: configuration.scope, configuration } as const;
-    const targetWorkspaceId = configuration.scope === "workspace" ? workspaceId : undefined;
+    const owner = configuration.scope === "workspace" ? workspaceId : null;
     const saved = identity
-      ? await updateAgentTeamConfiguration(identity.teamId, input, targetWorkspaceId)
-      : await createAgentTeamConfiguration(input, targetWorkspaceId);
-    void queryClient.invalidateQueries({ queryKey: queryKeys.agentTeams(targetWorkspaceId ?? null) });
+      ? await updateAgentTeamConfiguration(owner, identity.teamId, configuration)
+      : await createAgentTeamConfiguration(owner, configuration);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.agentTeams(owner) });
     return saved;
   };
 

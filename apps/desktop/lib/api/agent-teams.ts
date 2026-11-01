@@ -1,9 +1,5 @@
+import { configurationScope, type ConfigurationScope } from "@/lib/api/configuration";
 import { jsonRequestInit, requestJson, type RequestOptions } from "@/lib/http/client";
-
-export type AgentTeamConfigurationInput = {
-  scope: "system" | "workspace";
-  configuration: AgentTeamConfigurationDraft;
-};
 
 export type AgentTeamStatusConfiguration = {
   name: string;
@@ -31,7 +27,7 @@ export type AgentTeamConfiguration = {
   start_node_id: string;
   nodes: AgentTeamNodeConfiguration[];
   transitions: AgentTeamTransitionConfiguration[];
-  scope: "system" | "workspace";
+  scope: ConfigurationScope;
 };
 
 export type AgentTeamConfigurationDraft = Omit<AgentTeamConfiguration, "max_runs"> & {
@@ -87,58 +83,45 @@ export function checkAgentTeamGraph(draft: AgentTeamGraphDraft, options?: Reques
   ).then((response) => response.issues);
 }
 
-function teamConfigurationPath(scope: "system" | "workspace", workspaceId?: number, teamId?: string) {
-  let root: string;
-  if (scope === "system") {
-    root = "/configuration/agent-teams";
-  } else {
-    if (workspaceId === undefined) throw new Error("workspace_id is required for workspace Team configuration");
-    root = `/workspaces/${encodeURIComponent(workspaceId)}/configuration/agent-teams`;
-  }
+function teamConfigurationPath(workspaceId: number | null, teamId?: string) {
+  const root = workspaceId === null ? "/configuration/agent-teams" : `/workspaces/${encodeURIComponent(workspaceId)}/configuration/agent-teams`;
   return teamId === undefined ? root : `${root}/${encodeURIComponent(teamId)}`;
 }
 
+/** 写请求体：外层与配置里的 `scope` 都由拥有者推出，与路径一致。 */
+function teamConfigurationInit(workspaceId: number | null, configuration: AgentTeamConfigurationDraft, method: "POST" | "PUT") {
+  const scope = configurationScope(workspaceId);
+  return jsonRequestInit({ scope, configuration: { ...configuration, scope } }, { method });
+}
+
 export function createAgentTeamConfiguration(
-  input: AgentTeamConfigurationInput,
-  workspaceId?: number,
+  workspaceId: number | null,
+  configuration: AgentTeamConfigurationDraft,
 ): Promise<AgentTeamConfiguration> {
   return requestJson<AgentTeamConfiguration>(
-    teamConfigurationPath(input.scope, workspaceId),
-    jsonRequestInit(input, { method: "POST" }),
+    teamConfigurationPath(workspaceId),
+    teamConfigurationInit(workspaceId, configuration, "POST"),
   );
 }
 
 export function updateAgentTeamConfiguration(
+  workspaceId: number | null,
   teamId: string,
-  input: AgentTeamConfigurationInput,
-  workspaceId?: number,
+  configuration: AgentTeamConfigurationDraft,
 ): Promise<AgentTeamConfiguration> {
   return requestJson<AgentTeamConfiguration>(
-    teamConfigurationPath(input.scope, workspaceId, teamId),
-    jsonRequestInit(input, { method: "PUT" }),
+    teamConfigurationPath(workspaceId, teamId),
+    teamConfigurationInit(workspaceId, configuration, "PUT"),
   );
 }
 
-export function deleteAgentTeamConfiguration(
-  teamId: string,
-  scope: "system" | "workspace",
-  workspaceId?: number,
-): Promise<void> {
-  return requestJson(teamConfigurationPath(scope, workspaceId, teamId), { method: "DELETE" }).then(() => undefined);
+export function deleteAgentTeamConfiguration(workspaceId: number | null, teamId: string): Promise<void> {
+  return requestJson(teamConfigurationPath(workspaceId, teamId), { method: "DELETE" }).then(() => undefined);
 }
 
-export function getSystemAgentTeamConfigurations(options?: RequestOptions): Promise<AgentTeamConfiguration[]> {
-  return requestJson<AgentTeamConfiguration[]>("/configuration/agent-teams", options);
-}
-
-export function getWorkspaceAgentTeamConfigurations(
-  workspaceId: number,
-  options?: RequestOptions,
-): Promise<AgentTeamConfiguration[]> {
-  return requestJson<AgentTeamConfiguration[]>(
-    `/workspaces/${encodeURIComponent(workspaceId)}/configuration/agent-teams`,
-    options,
-  );
+/** 工作区列表是该工作区可见的配置（含继承来的系统级），每项带自己的 `scope`。 */
+export function getAgentTeamConfigurations(workspaceId: number | null, options?: RequestOptions): Promise<AgentTeamConfiguration[]> {
+  return requestJson<AgentTeamConfiguration[]>(teamConfigurationPath(workspaceId), options);
 }
 
 export function getAgentTeamRun(runId: number, options?: RequestOptions): Promise<AgentTeamRun> {

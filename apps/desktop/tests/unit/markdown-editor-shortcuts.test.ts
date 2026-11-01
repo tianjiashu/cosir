@@ -9,7 +9,7 @@ import {
   insertMarkdownLink,
   toggleBlockMarkdown,
   toggleInlineMarkdown,
-} from "@/components/configuration/markdown-editor-shortcuts";
+} from "@/components/markdown-editor/shortcuts";
 
 function applyTransaction(state: EditorState, transaction: ReturnType<typeof toggleInlineMarkdown> | null) {
   return transaction ? state.update(transaction).state : state;
