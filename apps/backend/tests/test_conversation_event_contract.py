@@ -7,11 +7,10 @@
 联合，本测试立即失败，避免「事件已定义但消费者永远收不到」的静默缺陷。
 """
 
+from datetime import UTC, datetime
 from typing import Literal, get_args
 
 import pytest
-
-from app.models.conversation_input import UserInputPresentation
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from app.core.events import (
@@ -27,13 +26,25 @@ from app.core.events import (
     WorkflowEvent,
     WorkflowEventEnvelope,
 )
+from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import ConversationRunStatus
+
+# RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
+_RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _ADAPTER: TypeAdapter[WorkflowEvent] = TypeAdapter(WorkflowEvent)
 
 # 每种事件的最小合法载荷与其期望类型；``type`` 是判别式路由的唯一依据。
 _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
-    ({"type": "run_initialized", "task_id": 1, "run_id": 1}, RunInitializedEvent),
+    (
+        {
+            "type": "run_initialized",
+            "task_id": 1,
+            "run_id": 1,
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+        RunInitializedEvent,
+    ),
     (
         {
             "type": "user_input_consumed",
@@ -178,7 +189,7 @@ def test_envelope_defaults_and_optional_fields() -> None:
         无；只做内存内校验。
     """
 
-    event = RunInitializedEvent(task_id=7, run_id=42)
+    event = RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=42)
     assert event.step_id is None
     assert event.occurred_at.tzinfo is not None
     assert event.model_dump()["task_id"] == 7
@@ -217,9 +228,26 @@ def test_envelope_defaults_and_optional_fields() -> None:
             "reason": "r",
         },
         {"type": "run_status_changed", "task_id": 1, "run_id": 1, "status": "half_done"},
-        {"type": "run_initialized", "task_id": 0, "run_id": 1},
-        {"type": "run_initialized", "task_id": 1, "run_id": 1, "typo_field": 1},
-        {"type": "run_initialized", "task_id": 1, "run_id": 1, "image_paths": []},
+        {
+            "type": "run_initialized",
+            "task_id": 0,
+            "run_id": 1,
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+        {
+            "type": "run_initialized",
+            "task_id": 1,
+            "run_id": 1,
+            "typo_field": 1,
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
+        {
+            "type": "run_initialized",
+            "task_id": 1,
+            "run_id": 1,
+            "image_paths": [],
+            "created_at": "2026-01-01T00:00:00+00:00",
+        },
         {
             "type": "user_input_appended",
             "task_id": 1,
@@ -384,7 +412,7 @@ def test_type_annotation_shape_is_literal() -> None:
         无；只做类型反射。
     """
 
-    event: WorkflowEvent = RunInitializedEvent(task_id=1, run_id=1)
+    event: WorkflowEvent = RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=1)
     annotation = type(event).model_fields["type"].annotation
     assert get_args(annotation) == ("run_initialized",)
     assert isinstance(event.type, str)

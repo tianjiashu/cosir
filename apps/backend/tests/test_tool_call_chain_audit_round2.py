@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -34,6 +35,9 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 from tests.transport_fixtures import consumed
+
+# RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
+_RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _TASK_ID = 7
 _RUN_ID = 9
@@ -101,9 +105,6 @@ class _MemorySnapshotOwner:
     def get_state(self, _task_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
 
-    def refresh_parent_delegation(self, _child_task_id: int, _run_id: int, _status: str) -> None:
-        """单任务内存 owner 没有父委派卡片可同步；生产实现见 ConversationTaskStateService。"""
-        return None
 
     def apply_planned(self, event: Any) -> TransportFrame:
         mutations = tuple(plan_event(event, copy.deepcopy(self.state)))
@@ -131,7 +132,7 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
 
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=_RUN_ID))
     # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
     projector.process(consumed(_TASK_ID, _RUN_ID, 1, UserInputPresentation(display_text="test")))
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))
@@ -353,7 +354,9 @@ def test_p4_memory_reorders_but_persisted_order_is_never_fixed() -> None:
         metadata=ToolMessageMetadata(status="completed"),
     )
 
-    persisted_before = [message.get("tool_call_id") for _, _, message, _, _ in context_store.appended]
+    persisted_before = [
+        message.get("tool_call_id") for _, _, message, _, _ in context_store.appended
+    ]
     assert persisted_before == [None, "valid-1", "blocked-1"], f"落库顺序={persisted_before}"
 
     loaded = manager.load_message()
@@ -361,7 +364,9 @@ def test_p4_memory_reorders_but_persisted_order_is_never_fixed() -> None:
     # 内存工作副本被重排为 tool_calls 顺序。
     assert tool_messages == ["blocked-1", "valid-1"], f"内存顺序={tool_messages}"
     # 数据库侧没有任何改写：append 记录不变，replace 为空。
-    persisted_after = [message.get("tool_call_id") for _, _, message, _, _ in context_store.appended]
+    persisted_after = [
+        message.get("tool_call_id") for _, _, message, _, _ in context_store.appended
+    ]
     assert persisted_after == persisted_before, "数据库落库顺序未被修正（缺陷：永不修正）"
     assert context_store.replaced == []
 

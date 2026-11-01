@@ -17,8 +17,8 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
-from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.core.events import RunInitializedEvent
+from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
@@ -29,6 +29,9 @@ from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import initialize_app_schema
+
+# RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
+_RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _timestamp(second: int = 0) -> datetime:
@@ -90,7 +93,7 @@ def test_workflow_event_dispatcher_swallows_projector_failure() -> None:
         raise RuntimeError("projector unavailable")
 
     with execution_scope(SimpleNamespace(event_sink=failing_sink), SimpleNamespace()):
-        emit(RunInitializedEvent(task_id=7, run_id=11))
+        emit(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=11))
 
 
 def test_direct_create_does_not_append_user_event_after_canonical_user_write(
@@ -105,6 +108,7 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
         context_window_total=128_000,
         model_config_id=1,
         options=ConversationRunOptions(),
+        created_at=_RUN_CREATED_AT,
     )
 
     class RunCrud:
@@ -153,6 +157,9 @@ def test_rebuilder_scopes_same_provider_tool_call_id_per_run(
         ConversationTaskStateRebuilder,
         "get_tool_display",
         staticmethod(lambda _name: {"verb": "Read"}),
+    )
+    monkeypatch.setattr(
+        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
     )
     call_id = "provider-call-reused"
     rows = [

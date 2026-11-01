@@ -89,6 +89,7 @@ def _running_state(part: dict) -> dict:
             "error": None,
             "usage": None,
             "contextWindowTotal": None,
+            "startedAt": "2026-01-01T00:00:00+00:00",
             "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
         },
         "error": None,
@@ -120,6 +121,9 @@ def _running_state(part: dict) -> dict:
 def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch):
     monkeypatch.setattr(
         ConversationTaskStateRebuilder, "get_tool_display", staticmethod(lambda _: {})
+    )
+    monkeypatch.setattr(
+        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
     )
     call = ConversationTaskContextRecord(
         task_id=1,

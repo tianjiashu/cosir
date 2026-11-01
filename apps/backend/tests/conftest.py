@@ -31,10 +31,16 @@ from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_config, agent_profile_source
 from app.core.context.context_store import ContextStore
 from app.core.tool.execute.tool_executor import ToolExecutor
+from app.service.configuration import (
+    agent_team_configuration_registry as agent_team_registry_module,
+)
 from app.service.configuration import agent_team_configuration_source as configuration_scope_source
-from app.service.configuration import agent_team_configuration_registry as agent_team_registry_module
-from app.service.configuration.agent_team_configuration_source import AgentTeamConfigurationScopeSource
-from app.service.configuration.agent_team_configuration_registry import AgentTeamConfigurationRegistry
+from app.service.configuration.agent_team_configuration_registry import (
+    AgentTeamConfigurationRegistry,
+)
+from app.service.configuration.agent_team_configuration_source import (
+    AgentTeamConfigurationScopeSource,
+)
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
@@ -359,6 +365,9 @@ def canonical_store(tmp_path: Path, monkeypatch):
         ConversationTaskStateRebuilder,
         "get_tool_display",
         staticmethod(lambda _name: {"verb": "Read"}),
+    )
+    monkeypatch.setattr(
+        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
     )
     ConversationTaskStateService.clear_process_state()
     # ConversationTaskStateService 现在从 depends 取 CRUD 单例；这里把三个 getter 指向本夹具的临时库

@@ -134,7 +134,8 @@ def test_send_that_starts_a_new_run_is_registered(monkeypatch, tmp_path) -> None
 
     assert '"status":"submitted"' in observation.content
     assert observation.background is True
-    assert deferred_registry.pending(_PARENT) == [f"child_task:{_CHILD}"]
+    # 直接调用 handler 没有执行器填入的调用标题，看板标签退到 kind。
+    assert deferred_registry.pending(_PARENT) == ["child_agent"]
     assert len(scheduled) == 1
     [kwargs] = prepared
     assert kwargs["delivery"] == "next_run"

@@ -28,14 +28,14 @@ from app.core.context.context_entry import ContextEntry
 from app.core.context.context_store import ContextStore
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.context.tool_call_closure import ContextProtocolError
+from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
-from app.service.recover_service import RecoverService
-from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
+from app.service.recover_service import RecoverService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -119,6 +119,9 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
         "get_tool_display",
         staticmethod(lambda _name: {"verb": "read"}),
     )
+    monkeypatch.setattr(
+        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
+    )
 
     def seed_run(status: str) -> SimpleNamespace:
         """用真实 run CRUD 建一条 Run，并返回快照重建所需的最小 Run 事实。"""
@@ -135,6 +138,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
             usage=None,
             # 快照重建会投影 Run 级受控错误；桩必须与真实记录的字段集保持同形。
             error=None,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
         )
 
     store = SimpleNamespace(
@@ -840,10 +845,10 @@ def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
 async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeypatch):
     """上下文有孤儿结果时模型请求前即失败：原始结果与外部队列中的输入都保持原状。"""
     from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-    from app.models.enums.react_route import ReactRoute
-    from app.core.workflow.nodes import model_node
     from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
+    from app.core.workflow.nodes import model_node
     from app.models.conversation_input import UserInputPresentation
+    from app.models.enums.react_route import ReactRoute
     from app.storage.crud.task_message_crud import TaskMessageCrud
 
     run = env.seed_run("running")

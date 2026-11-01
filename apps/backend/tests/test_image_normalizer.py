@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,9 @@ from app.service.attachment.image_normalizer import (
 )
 from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
 from tests.transport_fixtures import consumed
+
+# RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
+_RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def test_normalize_rejects_unsupported_bmp(tmp_path: Path) -> None:
@@ -69,7 +73,9 @@ def _apply_planned(event, snapshot):
 def test_run_initialized_has_no_messages_and_input_event_projects_image() -> None:
     """Run 骨架不预置 user 消息；用户输入事件把图片 locator 原样投影为独立 user 消息。"""
 
-    snapshot = _apply_planned(RunInitializedEvent(task_id=1, run_id=1), empty_snapshot())
+    snapshot = _apply_planned(
+        RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=1), empty_snapshot()
+    )
     assert snapshot["messages"] == []
 
     image_part = {"type": "image", "image": "cosir-attachment://" + "1" * 64}

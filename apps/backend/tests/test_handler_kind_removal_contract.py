@@ -638,7 +638,7 @@ def test_parallel_batch_runs_concurrently_off_the_event_loop_thread() -> None:
 
 
 def test_mixed_serial_and_parallel_batch_yields_one_observation_per_call() -> None:
-    """串行 + 并行混合批次：每个调用恰好一条观察，无丢失、无重复。"""
+    """串行 + 并行混合批次：每个调用恰好一条观察，且按调用顺序返回。"""
 
     executor = _SleepingExecutor()
     operations = _operations_with_executor(
@@ -658,10 +658,8 @@ def test_mixed_serial_and_parallel_batch_yields_one_observation_per_call() -> No
 
     observation_ids = asyncio.run(scenario())
 
-    assert len(observation_ids) == 4
-    assert set(observation_ids) == {"s-0", "s-1", "p-0", "p-1"}
-    # 串行组按输入顺序排在前，并行组整体追加在后（既有契约）。
-    assert observation_ids[:2] == ["s-0", "s-1"]
+    # 执行是先串行再并行，但观察按调用顺序返回：模型读到的结果顺序必须与它发出的顺序一致。
+    assert observation_ids == ["s-0", "p-0", "s-1", "p-1"]
 
 
 def test_empty_batch_returns_no_observations() -> None:

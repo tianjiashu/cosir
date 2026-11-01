@@ -36,9 +36,9 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_snapshot,
 )
 from app.config.constant import Constant
-from app.core.workflow import run_driver
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.events import RunStatusChangedEvent
+from app.core.workflow import run_driver
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models.conversation_run_failure import (
@@ -112,6 +112,7 @@ def _running_state() -> ConversationStateSnapshot:
         error=None,
         usage=None,
         contextWindowTotal=None,
+        startedAt="2026-01-01T00:00:00+00:00",
         launch={"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
     )
     return state

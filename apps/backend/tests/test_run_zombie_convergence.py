@@ -7,10 +7,14 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from app.assistant_transport.projection.event_projection import plan_event
 from app.config.logging.logger import log
 from app.core.events import RunInitializedEvent
+
+# RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
+_RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _TASK_ID = 7
 
@@ -25,6 +29,7 @@ def _activity(run_id: int, status: str) -> dict:
         "error": None,
         "usage": None,
         "contextWindowTotal": None,
+        "startedAt": "2026-01-01T00:00:00+00:00",
         "launch": None,
     }
 
@@ -52,7 +57,13 @@ def test_run_initialized_skeleton_drop_is_logged() -> None:
     }
     records, handler = _capture_warnings()
     try:
-        assert plan_event(RunInitializedEvent(task_id=_TASK_ID, run_id=11), diverged) == []
+        assert (
+            plan_event(
+                RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=11),
+                diverged,
+            )
+            == []
+        )
     finally:
         log.removeHandler(handler)
     assert any(

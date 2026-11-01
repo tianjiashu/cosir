@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import json
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -36,13 +37,8 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
 )
-from app.core.tool.schemas import (
-    ToolCall,
-    ToolDefinition,
-    ToolExecutionContext,
-    ToolObservation,
-)
-from app.core.tool.execute import tool_terminal_projection as projection_module, tool_executor as tool_executor_module
+from app.core.tool.execute import tool_executor as tool_executor_module
+from app.core.tool.execute import tool_terminal_projection as projection_module
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.execute.tool_terminal_projection import (
     normalize_display_data,
@@ -50,13 +46,22 @@ from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
     terminal_status,
 )
-from app.tools.tool_handler.read_file import ReadFileTool
+from app.core.tool.schemas import (
+    ToolCall,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
+from app.tools.tool_handler.read_file import ReadFileTool
 from tests.runtime_context_stub import runtime_stub
 from tests.tool_executor_fakes import emit_running
+
+# RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
+_RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 # 同步用例没有运行中的事件循环；只有进程工具的实时输出与子 Run 调度会用到它。
 _NO_LOOP: Any = None
@@ -76,9 +81,6 @@ class _MemorySnapshotOwner:
     def get_state(self, _task_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
 
-    def refresh_parent_delegation(self, _child_task_id: int, _run_id: int, _status: str) -> None:
-        """单任务内存 owner 没有父委派卡片可同步；生产实现见 ConversationTaskStateService。"""
-        return None
 
     def apply_planned(self, event: Any) -> TransportFrame:
         mutations = tuple(plan_event(event, copy.deepcopy(self.state)))
@@ -377,7 +379,7 @@ def test_projection_module_does_not_reach_global_projector() -> None:
 
 def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: str) -> None:
     projector = ConversationEventProjector(owner)
-    projector.process(RunInitializedEvent(task_id=task_id, run_id=run_id))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=task_id, run_id=run_id))
     projector.process(RunStatusChangedEvent(task_id=task_id, run_id=run_id, status="running"))
     owner.state["messages"].append(
         {
@@ -515,10 +517,16 @@ def test_success_emits_running_then_completed(
     """成功路径：先 running（携带展示参数），后恰一次 completed（display_data 不丢）。"""
 
     recorder = _install_recorder(monkeypatch)
-    rc, batch = _runtime(tmp_path, _make_read_file_executor(tmp_path), projected={"call-ok": "read_file"})
+    rc, batch = _runtime(
+        tmp_path, _make_read_file_executor(tmp_path), projected={"call-ok": "read_file"}
+    )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"), "step-1", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"),
+        "step-1",
+        batch,
+        _NO_LOOP,
     )
 
     assert observation.status == "success"
@@ -579,7 +587,11 @@ def test_unknown_tool_emits_failed_without_running(
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-unknown"), "s", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-unknown"),
+        "s",
+        batch,
+        _NO_LOOP,
     )
 
     assert observation.status == "error"
@@ -602,7 +614,11 @@ def test_profile_denied_tool_emits_failed_without_running(
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-denied"), "s", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-denied"),
+        "s",
+        batch,
+        _NO_LOOP,
     )
 
     assert observation.status == "error"
@@ -616,10 +632,16 @@ def test_invalid_arguments_emit_failed_without_running(
     """参数非法：门禁拒绝，不发 running，恰一次 failed 终态。"""
 
     recorder = _install_recorder(monkeypatch)
-    rc, batch = _runtime(tmp_path, _make_read_file_executor(tmp_path), projected={"call-bad": "read_file"})
+    rc, batch = _runtime(
+        tmp_path, _make_read_file_executor(tmp_path), projected={"call-bad": "read_file"}
+    )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments='{"nonexistent": 1}', call_id="call-bad"), "s", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="read_file", arguments='{"nonexistent": 1}', call_id="call-bad"),
+        "s",
+        batch,
+        _NO_LOOP,
     )
 
     assert observation.status == "error"
@@ -646,7 +668,11 @@ def test_invisible_call_emits_nothing(
 
     for tool_name, call_id in (("no_such_tool", "call-unregistered"), ("read_file", "call-banned")):
         tool_batch_runner._execute_call(
-            rc, ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id), "s", batch, _NO_LOOP
+            rc,
+            ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id),
+            "s",
+            batch,
+            _NO_LOOP,
         )
 
     assert recorder.events == []
@@ -716,7 +742,11 @@ def test_malformed_display_data_still_emits_failed_terminal(
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="bad_display", arguments="{}", call_id="call-bad-display"), "s", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="bad_display", arguments="{}", call_id="call-bad-display"),
+        "s",
+        batch,
+        _NO_LOOP,
     )
 
     assert observation.status == "error"
@@ -742,8 +772,12 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
 
     with execution_scope(rc, SimpleNamespace()):  # type: ignore[arg-type]
         observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"), "s", batch, _NO_LOOP
-    )
+            rc,
+            ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"),
+            "s",
+            batch,
+            _NO_LOOP,
+        )
 
     assert observation.status == "success"
     assert "hello world" in observation.content
@@ -786,12 +820,18 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
 
     with caplog.at_level("ERROR"):
         observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-boom"), "s", batch, _NO_LOOP
-    )
+            rc,
+            ToolCall(tool_name="read_file", arguments="{}", call_id="call-boom"),
+            "s",
+            batch,
+            _NO_LOOP,
+        )
 
     assert observation.status == "error"
     assert observation.tool_call_id == "call-boom"
-    assert observation.content.startswith("internal execution error in the tool pipeline: RuntimeError")
+    assert observation.content.startswith(
+        "internal execution error in the tool pipeline: RuntimeError"
+    )
     assert "inner pipeline exploded" not in observation.content
     assert recorder.statuses("call-boom") == ["failed"]
     event = recorder.events[0]
@@ -813,10 +853,16 @@ def test_executor_exception_after_start_closes_running_card(
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-late"), "s", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="read_file", arguments="{}", call_id="call-late"),
+        "s",
+        batch,
+        _NO_LOOP,
     )
 
-    assert observation.content.startswith("internal execution error in the tool pipeline: ValueError")
+    assert observation.content.startswith(
+        "internal execution error in the tool pipeline: ValueError"
+    )
     assert recorder.statuses("call-late") == ["running", "failed"]
 
 
@@ -832,7 +878,11 @@ def test_executor_exception_on_invisible_call_emits_nothing(
     rc, batch = _runtime(tmp_path, _RaisingExecutor(RuntimeError("x")))
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments="{}", call_id="call-hidden"), "s", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="read_file", arguments="{}", call_id="call-hidden"),
+        "s",
+        batch,
+        _NO_LOOP,
     )
 
     assert observation.status == "error"
@@ -908,7 +958,11 @@ def test_projection_happens_in_parent_for_process_isolated_tool(
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="process_probe", arguments="{}", call_id="call-proc"), "s", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="process_probe", arguments="{}", call_id="call-proc"),
+        "s",
+        batch,
+        _NO_LOOP,
     )
 
     # 无论子进程链路是否成功（Windows + coverage 下 spawn 可能失败，属环境限制），父进程都必须
@@ -942,7 +996,11 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
     )
 
     observation = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="suspend_probe", arguments="{}", call_id="call-suspend"), "s", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="suspend_probe", arguments="{}", call_id="call-suspend"),
+        "s",
+        batch,
+        _NO_LOOP,
     )
 
     assert observation.status == "success"
@@ -959,7 +1017,7 @@ def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
 
     owner = _MemorySnapshotOwner(empty_snapshot())
     projector = ConversationEventProjector(owner)
-    projector.process(RunInitializedEvent(task_id=1, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=9))
     projector.process(RunStatusChangedEvent(task_id=1, run_id=9, status="running"))
     owner.state["messages"].append(
         {"id": "assistant-9", "role": "assistant", "parts": [], "runId": 9, "outcome": None}
@@ -1045,8 +1103,12 @@ def test_parallel_batch_projects_each_call_independently(
         call_id = f"call-{index}"
         barrier.wait()
         results[call_id] = tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments=json.dumps({"path": name}), call_id=call_id), "s", batch, _NO_LOOP
-    )
+            rc,
+            ToolCall(tool_name="read_file", arguments=json.dumps({"path": name}), call_id=call_id),
+            "s",
+            batch,
+            _NO_LOOP,
+        )
 
     threads = [threading.Thread(target=run, args=(i,)) for i in range(4)]
     for thread in threads:
@@ -1077,10 +1139,18 @@ def test_mixed_batch_distinct_statuses_do_not_cross_talk(
     )
 
     tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="read_file", arguments='{"path": "good.txt"}', call_id="call-good"), "s", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="read_file", arguments='{"path": "good.txt"}', call_id="call-good"),
+        "s",
+        batch,
+        _NO_LOOP,
     )
     tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-bad"), "s", batch, _NO_LOOP
+        rc,
+        ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-bad"),
+        "s",
+        batch,
+        _NO_LOOP,
     )
 
     assert recorder.statuses("call-good") == ["running", "completed"]
@@ -1144,6 +1214,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
         "error": None,
         "usage": None,
         "contextWindowTotal": None,
+        "startedAt": "2026-01-01T00:00:00+00:00",
         "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
     }
     projector.state_service.publish_state(task_id, state)

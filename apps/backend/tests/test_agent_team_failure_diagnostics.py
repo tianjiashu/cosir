@@ -3,12 +3,6 @@
 import json
 from types import SimpleNamespace
 
-from app.core.tool.handler.agent_team.coordinator import AgentTeamCoordinator
-from app.models.agent_team.state.agent_team_run_state import (
-    AgentTeamNodeExecution,
-    AgentTeamRunRuntime,
-    AgentTeamRunState,
-)
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
@@ -16,12 +10,20 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import ToolCallStatusChangedEvent
+from app.core.tool.handler.agent_team.agent_team_run_archive_service import (
+    AgentTeamRunArchiveService,
+)
+from app.core.tool.handler.agent_team.coordinator import AgentTeamCoordinator
+from app.models.agent_team.state.agent_team_run_state import (
+    AgentTeamNodeExecution,
+    AgentTeamRunRuntime,
+    AgentTeamRunState,
+)
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 from app.service.agent_team import agent_team_execution_timeline
 from app.service.agent_team import agent_team_run_service as run_service_module
 from app.service.agent_team.agent_team_execution_timeline import project_node_visits
-from app.core.tool.handler.agent_team.agent_team_run_archive_service import AgentTeamRunArchiveService
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 
 
@@ -56,6 +58,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
             "error": None,
             "usage": None,
             "contextWindowTotal": None,
+            "startedAt": "2026-01-01T00:00:00+00:00",
             "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
         },
         "terminal_sessions": [],
@@ -172,6 +175,9 @@ def test_cold_rebuild_keeps_failed_team_run_locator(monkeypatch) -> None:
         ConversationTaskStateRebuilder,
         "get_tool_display",
         staticmethod(lambda _name: {}),
+    )
+    monkeypatch.setattr(
+        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
     )
     rows = [
         ConversationTaskContextRecord(

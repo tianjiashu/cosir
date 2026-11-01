@@ -7,6 +7,7 @@ import copy
 import threading
 from collections.abc import Iterable
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -33,20 +34,23 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
 )
-from app.tools.display.terminal_display import build_terminal_display_data
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
-from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
 from app.core.tool.execute.tool_terminal_projection import terminal_event
+from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
+from app.core.workflow.execution_state.tool_batch import ToolBatch
+from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
+from app.models.conversation_input import UserInputPresentation
+from app.tools.display.terminal_display import build_terminal_display_data
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal.output_collector import _OutputCollector
 from app.tools.tool_handler.terminal.output_stream import TerminalOutputStream
-from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
-from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
 from tests.transport_fixtures import consumed
+
+# RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
+_RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class ChunkStream:
@@ -211,7 +215,7 @@ def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
         execute_terminal_module, "read_terminal_deny_patterns", lambda: ()
     )
     observation = ExecuteTerminalTool().execute(
-        command="echo output",
+        description="test", command="echo output",
         execution_context=ToolExecutionContext(
             step_id="step-1",
             task_id=7,
@@ -415,7 +419,7 @@ async def test_terminal_output_channel_is_built_from_worker_thread(tmp_path: Pat
 def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() -> None:
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
@@ -452,7 +456,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     """转到后台的命令在 Run 挂起后仍在输出：只看 part 自己是否还是活的后台占位，不看 Run。"""
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
@@ -504,7 +508,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
 def test_runtime_update_skips_a_pending_part_that_is_not_a_background_placeholder() -> None:
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
@@ -519,7 +523,7 @@ def test_runtime_update_skips_a_pending_part_that_is_not_a_background_placeholde
 def test_final_terminal_status_preserves_complete_streamed_display_output() -> None:
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(
@@ -576,9 +580,6 @@ class _MemorySnapshotOwner:
     def get_state(self, _task_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
 
-    def refresh_parent_delegation(self, _child_task_id: int, _run_id: int, _status: str) -> None:
-        """单任务内存 owner 没有父委派卡片可同步；生产实现见 ConversationTaskStateService。"""
-        return None
 
     def apply_planned(self, event: Any) -> TransportFrame:
         mutations = tuple(plan_event(event, copy.deepcopy(self.state)))
@@ -609,7 +610,7 @@ def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, Conversat
     """建一个已实时流出终端输出、仍在 running 的 ``execute_terminal`` part。"""
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
     projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
     projector.process(

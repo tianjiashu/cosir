@@ -17,16 +17,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
 from app.core.tool.handler.child_agent.child_agent_status_args import ChildAgentStatusArgs
 from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
-from app.tools.tool_models.execute_terminal_args import (
-    MacExecuteTerminalArgs,
-    WindowsExecuteTerminalArgs,
-)
-from app.tools.tool_models import ListDirectoryArgs
-from app.tools.tool_models.terminal_session_args import TerminalReadArgs
 from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
 from app.core.tool.handler.web.web_extract_args import WebExtractArgs
 from app.core.tool.validation.argument_coercion import coerce_tool_arguments
 from app.core.tool.validation.arguments import validate_tool_arguments
+from app.tools.tool_models import ListDirectoryArgs
+from app.tools.tool_models.execute_terminal_args import (
+    MacExecuteTerminalArgs,
+    WindowsExecuteTerminalArgs,
+)
+from app.tools.tool_models.terminal_session_args import TerminalReadArgs
 
 
 class _IntOrStrModel(BaseModel):
@@ -51,7 +51,13 @@ class TestWhitelistCoercion:
         """本次事故的真实形态：``"30"``（float 字段）与 ``"2"``（int 字段）必须被还原。"""
 
         adapted, facts = _coerce(
-            {"command": "pwd && uname -a", "shell": "auto", "timeout": "30", "workdir": "."},
+            {
+                "description": "test",
+                "command": "pwd && uname -a",
+                "shell": "auto",
+                "timeout": "30",
+                "workdir": ".",
+            },
             MacExecuteTerminalArgs,
         )
         assert adapted["timeout"] == 30.0  # type: ignore[index]
@@ -98,7 +104,13 @@ class TestWhitelistCoercion:
     def test_native_arguments_are_idempotent(self) -> None:
         """合规的原生参数不产生任何归一事实（避免把正常调用记成模型缺陷）。"""
 
-        arguments = {"command": "pwd", "shell": "auto", "timeout": 30, "workdir": "."}
+        arguments = {
+            "description": "test",
+            "command": "pwd",
+            "shell": "auto",
+            "timeout": 30,
+            "workdir": ".",
+        }
         adapted, facts = _coerce(arguments, MacExecuteTerminalArgs)
         assert adapted == arguments
         assert facts == {}
@@ -125,14 +137,18 @@ class TestWhitelistRefusals:
     def test_literal_field_is_never_coerced(self) -> None:
         """``Literal`` 字段（shell/signal）不做任何归一。潜在缺陷：宽松会把非法枚举放行。"""
 
-        adapted, facts = _coerce({"command": "pwd", "shell": "zsh3"}, MacExecuteTerminalArgs)
+        adapted, facts = _coerce(
+            {"description": "test", "command": "pwd", "shell": "zsh3"}, MacExecuteTerminalArgs
+        )
         assert adapted["shell"] == "zsh3"  # type: ignore[index]
         assert facts == {}
 
     def test_unknown_field_is_preserved_for_strict_rejection(self) -> None:
         """未知字段不归一也不丢弃，交给 strict 的 ``extra="forbid"`` 报错。"""
 
-        adapted, facts = _coerce({"command": "pwd", "shelll": "auto"}, MacExecuteTerminalArgs)
+        adapted, facts = _coerce(
+            {"description": "test", "command": "pwd", "shelll": "auto"}, MacExecuteTerminalArgs
+        )
         assert adapted["shelll"] == "auto"  # type: ignore[index]
         assert facts == {}
 
@@ -144,7 +160,13 @@ class TestValidationIntegration:
         """qwen 真实形态（``timeout: "30"``）必须通过，并带出归一事实。"""
 
         result = validate_tool_arguments(
-            {"command": "pwd && uname -a", "shell": "auto", "timeout": "30", "workdir": "."},
+            {
+                "description": "test",
+                "command": "pwd && uname -a",
+                "shell": "auto",
+                "timeout": "30",
+                "workdir": ".",
+            },
             {},
             MacExecuteTerminalArgs,
         )
@@ -165,7 +187,13 @@ class TestValidationIntegration:
         """deepseek 形态（``timeout: 30`` 原生数字）通过且不产生事实。"""
 
         result = validate_tool_arguments(
-            {"command": "pwd && uname -a", "shell": "auto", "timeout": 30, "workdir": "."},
+            {
+                "description": "test",
+                "command": "pwd && uname -a",
+                "shell": "auto",
+                "timeout": 30,
+                "workdir": ".",
+            },
             {},
             MacExecuteTerminalArgs,
         )
@@ -178,7 +206,7 @@ class TestValidationIntegration:
         """``gt=0`` 仍优先生效：``"0"`` 归一成 0 后同样被拒（归一不绕过业务约束）。"""
 
         result = validate_tool_arguments(
-            {"command": "pwd", "timeout": bad},
+            {"description": "test", "command": "pwd", "timeout": bad},
             {},
             MacExecuteTerminalArgs,
         )
@@ -189,7 +217,7 @@ class TestValidationIntegration:
         """枚举与未知字段仍按 strict 拒绝（未被归一削弱）。"""
 
         bad_shell = validate_tool_arguments(
-            {"command": "pwd", "shell": None},
+            {"description": "test", "command": "pwd", "shell": None},
             {},
             MacExecuteTerminalArgs,
         )
@@ -197,7 +225,7 @@ class TestValidationIntegration:
         assert "shell" in bad_shell.error
 
         unknown = validate_tool_arguments(
-            {"command": "pwd", "shelll": "auto"},
+            {"description": "test", "command": "pwd", "shelll": "auto"},
             {},
             MacExecuteTerminalArgs,
         )
@@ -257,7 +285,7 @@ class TestWhitelistBoundaries:
         """两个平台契约模型的宽容行为必须对称（避免只在 macOS 上被验证）。"""
 
         result = validate_tool_arguments(
-            {"command": "pwd", "shell": "auto", "timeout": "30"},
+            {"description": "test", "command": "pwd", "shell": "auto", "timeout": "30"},
             {},
             WindowsExecuteTerminalArgs,
         )

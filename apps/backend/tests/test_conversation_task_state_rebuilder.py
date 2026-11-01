@@ -9,8 +9,8 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
-from app.models.conversation_input import UserInputPresentation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
@@ -140,7 +140,15 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
                 "role": "assistant",
                 "parts": [],
                 "runId": 1,
-                "outcome": {"status": "running", "endReason": None, "error": None, "usage": None, "contextWindowTotal": None},
+                "outcome": {
+                    "status": "running",
+                    "endReason": None,
+                    "error": None,
+                    "usage": None,
+                    "contextWindowTotal": None,
+                    "durationMs": None,
+                    "durationMs": None,
+                },
             }
         ],
         "messageOffset": 0,
@@ -164,7 +172,7 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
                 "role": "user",
                 "parts": [],
                 "runId": 1,
-                "outcome": {"status": "completed", "endReason": None, "error": None, "usage": None, "contextWindowTotal": None},
+                "outcome": {"status": "completed", "endReason": None, "error": None, "usage": None, "contextWindowTotal": None, "durationMs": None},
             }
         ],
         "messageOffset": 0,

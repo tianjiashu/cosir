@@ -1,58 +1,34 @@
-"""Static Tool UI declarations for long-running tool shells."""
+"""工具静态展示声明：只剩 verb / icon，口径不得暗示错误能力。"""
 
 from app.core.tool.handler.agent_team_run import AgentTeamRunTool
-from app.core.tool.handler.child_agent_create import DelegateTaskTool
-from app.core.tool.handler.child_agent_send import ChildAgentSendTool
-from app.core.tool.handler.child_agent_status import ChildAgentStatusTool
 from app.core.tool.handler.wait_messages import WaitMessagesTool
+from app.core.tool.schemas import ToolDisplayHints
 
 
-def test_child_agent_tools_declare_standalone_details_rows() -> None:
-    """Child Agent 工具声明 standalone 展示面，且都不可展开。
+def test_display_hints_only_declare_verb_and_icon() -> None:
+    """分区、能否展开、布局都由前端按 kind 与 awaitingUser 决定，后端声明只剩两个字段。"""
 
-    目的：固化 child_task/ 三个工具当前的 ``ToolDisplayHints`` 契约——三个工具都在
-    独立区域强调结果（``standalone``），``expand_layout`` 统一为 ``details``，**都不**
-    把模型结果正文暴露给客户端（``show_result=False``），也都不提供展开面
-    （``delegate_task`` 的委派生命周期由独立卡片直接呈现，不再展开细节）。
-    潜在缺陷：某个工具漏声明 ``display``，或展开面/结果暴露面与 UI 契约漂移，
-    导致前端无法按 ``kind`` / ``expand_layout`` 正确路由。
-    """
-
-    delegate, send, status = (
-        DelegateTaskTool.to_definition(object.__new__(DelegateTaskTool)),
-        ChildAgentSendTool.to_definition(object.__new__(ChildAgentSendTool)),
-        ChildAgentStatusTool.to_definition(object.__new__(ChildAgentStatusTool)),
-    )
-
-    for definition in (delegate, send, status):
-        display = definition.display
-        assert display is not None
-        assert display.surface == "standalone"
-        assert display.expand_layout == "details"
-        assert display.show_result is False
-
-    assert all(
-        definition.display.expandable is False for definition in (delegate, send, status)
-    )
+    assert ToolDisplayHints(verb="读取文件", icon="eye").to_dict() == {
+        "verb": "读取文件",
+        "icon": "eye",
+    }
 
 
-def test_wait_messages_declares_a_plain_row_without_result() -> None:
-    """挂起只是控制流：等待工具只显示动词与状态，不展开、不暴露结果正文、不产出展示 kind。"""
+def test_wait_messages_heading_has_no_target() -> None:
+    """挂起只是控制流：标题只有动词，没有目标，也不产出展示 kind。"""
 
-    display = WaitMessagesTool.to_definition(object.__new__(WaitMessagesTool)).display
-    assert display is not None
-    assert (display.surface, display.expand_layout) == ("standalone", "none")
-    assert display.expandable is False and display.show_result is False
+    definition = WaitMessagesTool.to_definition(object.__new__(WaitMessagesTool))
+    assert definition.display is not None and definition.heading is not None
+    heading = definition.heading(definition.args_model())
+    assert (heading.title, heading.target) == (definition.display.verb, None)
 
 
 def test_agent_team_run_tool_advertises_only_running_existing_teams() -> None:
     """``agent_team`` 只运行已存在的 Team，描述与展示标题都不得暗示它能创建/配置 Team。
 
-    目的：固化「运行」与「配置」的职责边界。历史上描述写作 "Prepare a configured Agent
-    Team execution plan"、标题同样是英文 Prepare 口径，实测让模型在用户说「帮我配置个
-    team」时反复选中本工具，而它只接受已存在的配置，于是以 ``agent_team_run_creation_invalid``
-    失败收场。潜在缺陷：描述或标题重新出现「配置 / 准备 / Prepare / Configure」这类口径，
-    再次把模型引向错误工具。
+    历史上描述写作 "Prepare a configured Agent Team execution plan"、标题同样是英文 Prepare
+    口径，实测让模型在用户说「帮我配置个 team」时反复选中本工具，而它只接受已存在的配置，于是以
+    ``agent_team_run_creation_invalid`` 失败收场。
     """
 
     definition = AgentTeamRunTool.to_definition(object.__new__(AgentTeamRunTool))

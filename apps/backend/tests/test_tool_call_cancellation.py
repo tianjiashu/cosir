@@ -29,11 +29,12 @@ from pydantic import BaseModel
 
 from app.assistant_transport.projection.event_projection import plan_event
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
-from app.core.tool.execute import tool_handler_runner, tool_terminal_projection, tool_executor as tool_executor_module
-from app.core.tool.results.tool_cancelled import tool_cancelled
+from app.core.tool.execute import tool_executor as tool_executor_module
+from app.core.tool.execute import tool_handler_runner, tool_terminal_projection
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
+from app.core.tool.results.tool_cancelled import tool_cancelled
+from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
@@ -514,6 +515,7 @@ def _running_tool_state(tool_call_id: str = "call-9") -> dict[str, Any]:
             "error": None,
             "usage": None,
             "contextWindowTotal": None,
+            "startedAt": "2026-01-01T00:00:00+00:00",
             "launch": None,
         },
     }

@@ -115,6 +115,81 @@ def test_runtime_context_no_longer_carries_output_rules():
     assert "- Workspace rules: " in out
 
 
+def test_runtime_context_states_read_write_path_boundaries():
+    """路径边界说法须与 PathResolver 的两条解析路径一致：只读可出工作区，写类限制在工作区内。"""
+
+    out = spb.SystemPromptBuilder._build_message_context("/workspace")
+
+    assert "Read-only file tools also accept absolute paths outside it" in out
+    assert ".cosir/ is a reserved read-only area" in out
+    assert "File tools refuse paths outside it" not in out
+
+
+def test_work_layer_lists_only_the_file_tools_the_agent_has():
+    """工作方式层只引用当前 Agent 真有的工具：没有 search_content 就不提它。"""
+
+    out = spb.SystemPromptBuilder._build_work_layer(
+        ["read_file", "list_directory", "execute_terminal"]
+    )
+
+    assert out.startswith("<work_layer>") and out.endswith("</work_layer>")
+    assert "read_file to read, list_directory to list." in out
+    assert "search_content" not in out
+    assert "find_files" not in out
+    assert "Use execute_terminal for builds, tests, git and running programs" in out
+    assert "parallel tool calls in one response" in out
+    assert "Before the first tool call, say in one sentence" in out
+    assert "When done, lead with the result." in out
+
+
+def test_work_layer_omits_shell_guidance_without_execute_terminal():
+    """没有 execute_terminal 的 Agent 不被告知「别用 shell 读文件」。"""
+
+    out = spb.SystemPromptBuilder._build_work_layer(["read_file", "search_content"])
+
+    assert "- Use dedicated tools for files: read_file to read, search_content to search." in out
+    assert "execute_terminal" not in out
+    assert "parallel tool calls" in out
+
+
+def test_work_layer_with_only_terminal_keeps_narration_but_no_file_guidance():
+    """只有 execute_terminal 的 Agent：无文件工具条、无并行条，保留叙述与收尾。"""
+
+    out = spb.SystemPromptBuilder._build_work_layer(["execute_terminal"])
+
+    assert "Use dedicated tools for files" not in out
+    assert "parallel tool calls" not in out
+    assert "Before the first tool call" in out
+    assert "lead with the result" in out
+
+
+def test_work_layer_absent_without_file_or_terminal_tools():
+    """既无文件工具也无 execute_terminal 的 Agent（如只有 web_search）不生成该层。"""
+
+    assert spb.SystemPromptBuilder._build_work_layer([]) == ""
+    assert spb.SystemPromptBuilder._build_work_layer(["web_search", "delegate_task"]) == ""
+
+
+def test_build_places_work_layer_between_tool_and_global_layers(
+    redirect_system_cosir: Path, tmp_path: Path
+):
+    _write_global(redirect_system_cosir, "GLOBAL INSTRUCTION BODY")
+    workspace_root = tmp_path / "ws"
+    workspace_root.mkdir()
+    profile = AgentProfile(
+        agent_id="main",
+        role="main",
+        allowed_tools=["read_file", "execute_terminal"],
+        agent_type=AgentProfileType.MAIN,
+        system_prompt="Test main system prompt.",
+    )
+    prompt = spb.SystemPromptBuilder.build(profile, str(workspace_root))
+
+    assert prompt.index("<agent_layer>") < prompt.index("<work_layer>")
+    assert prompt.index("<work_layer>") < prompt.index("<global_layer>")
+    assert "<work_layer>" not in spb.SystemPromptBuilder.build(_profile(), str(workspace_root))
+
+
 def test_message_context_declares_every_input_message_tag():
     """消息协议须覆盖全部入队消息类型：render 不附带读法说明，漏登记即模型不知其含义。"""
 

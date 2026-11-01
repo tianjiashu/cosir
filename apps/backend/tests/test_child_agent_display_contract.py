@@ -42,7 +42,6 @@ def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> Non
     result = build_child_agent_result_display_data(
         operation="status",
         child_task_id=2,
-        status="completed",
         agent_id="reviewer",
         agent_name="Review",
         final_output="summary",
@@ -52,7 +51,6 @@ def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> Non
         "kind": "child-agent-result",
         "operation": "status",
         "child_task_id": 2,
-        "status": "completed",
         "agent_id": "reviewer",
         "agent_name": "Review",
         "final_output": "summary",
@@ -65,7 +63,6 @@ def test_parent_delegation_display_never_carries_child_output() -> None:
         title="Review",
         child_agent_id="reviewer",
         child_task_id=2,
-        status="completed",
         role="Reviewer",
     )
 
@@ -74,7 +71,6 @@ def test_parent_delegation_display_never_carries_child_output() -> None:
         "title": "Review",
         "child_agent_id": "reviewer",
         "child_task_id": 2,
-        "status": "completed",
         "role": "Reviewer",
     }
     assert "final_output" not in display
@@ -87,6 +83,9 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
         ConversationTaskStateRebuilder,
         "get_tool_display",
         staticmethod(lambda _name: {}),
+    )
+    monkeypatch.setattr(
+        ConversationTaskStateRebuilder, "get_tool_heading", staticmethod(lambda _name, _args: None)
     )
     rows = [
         ConversationTaskContextRecord(
@@ -130,7 +129,6 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
                         "title": "Review",
                         "child_agent_id": "reviewer",
                         "child_task_id": 2,
-                        "status": "running",
                     },
                 }
             ),

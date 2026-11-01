@@ -59,7 +59,7 @@ def _wait_for(predicate, timeout: float = 5.0) -> None:
 
 def test_foreground_command_returns_its_result_without_registering(tmp_path, delivered) -> None:
     observation = ExecuteTerminalTool().execute(
-        command="echo hello", execution_context=_context(tmp_path, "call-fg")
+        description="test", command="echo hello", execution_context=_context(tmp_path, "call-fg")
     )
     assert observation.status == "success" and not observation.background
     assert observation.content.startswith("[exit_code=0]") and "hello" in observation.content
@@ -69,7 +69,7 @@ def test_foreground_command_returns_its_result_without_registering(tmp_path, del
 
 def test_background_command_returns_a_placeholder_then_delivers(tmp_path, delivered) -> None:
     observation = ExecuteTerminalTool().execute(
-        command="sleep 0.2; echo done",
+        description="test", command="sleep 0.2; echo done",
         background=True,
         execution_context=_context(tmp_path, "call-bg"),
     )
@@ -100,7 +100,9 @@ def test_foreground_limit_moves_the_command_to_background_and_suspends(
         BackgroundCapability(default_background=False, foreground_limit_s=0.1),
     )
     observation = ExecuteTerminalTool().execute(
-        command="sleep 0.5; echo late", execution_context=_context(tmp_path, "call-limit")
+        description="test",
+        command="sleep 0.5; echo late",
+        execution_context=_context(tmp_path, "call-limit"),
     )
     assert observation.background and observation.suspend
     assert "<background_result>" in observation.content
@@ -111,6 +113,7 @@ def test_foreground_limit_moves_the_command_to_background_and_suspends(
 def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delivered) -> None:
     marker = tmp_path / "finished"
     ExecuteTerminalTool().execute(
+        description="test",
         command=f"sleep 2; touch {marker}",
         background=True,
         execution_context=_context(tmp_path, "call-cancel"),
@@ -123,11 +126,14 @@ def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delive
     assert delivered == []
 
 
-def test_background_payload_goes_through_the_output_budget(tmp_path, delivered, monkeypatch) -> None:
+def test_background_payload_goes_through_the_output_budget(
+    tmp_path, delivered, monkeypatch
+) -> None:
     from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 
     monkeypatch.setattr(execute_terminal_module, "ToolOutputBudget", lambda: ToolOutputBudget(200))
     ExecuteTerminalTool().execute(
+        description="test",
         command="seq 1 2000",
         background=True,
         execution_context=_context(tmp_path, "call-big"),
@@ -150,4 +156,3 @@ def test_local_backend_kills_the_command_when_cancelled(tmp_path) -> None:
     assert time.monotonic() - started < 1.5
     time.sleep(2)
     assert not marker.exists()
-

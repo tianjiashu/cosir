@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -36,19 +37,23 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
 )
+from app.core.tool.execute import tool_handler_runner as runner_module
+from app.core.tool.execute import tool_terminal_projection as projection_module
+from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import (
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
 )
-from app.core.tool.execute import tool_handler_runner as runner_module, tool_terminal_projection as projection_module
-from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
 from app.core.workflow.node_helper import tool_batch_runner
 from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
 from tests.transport_fixtures import consumed
+
+# RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
+_RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _RUN_ID = 960001
 _TASK_ID = 12
@@ -102,9 +107,6 @@ class _MemorySnapshotOwner:
 
         return copy.deepcopy(self.state)
 
-    def refresh_parent_delegation(self, _child_task_id: int, _run_id: int, _status: str) -> None:
-        """单任务内存 owner 没有父委派卡片可同步；生产实现见 ConversationTaskStateService。"""
-        return None
 
     def apply_planned(self, event: Any) -> TransportFrame:
         import copy
@@ -268,7 +270,7 @@ async def test_cancel_path_never_touches_shared_projection(
 def _seed_running_execute_terminal(projector: ConversationEventProjector, call_id: str) -> None:
     """在真实 projector 上初始化一个 ``execute_terminal`` 的 running part。"""
 
-    projector.process(RunInitializedEvent(task_id=_TASK_ID, run_id=_RUN_ID))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=_RUN_ID))
     # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
     projector.process(consumed(_TASK_ID, _RUN_ID, 1, UserInputPresentation(display_text="test")))
     projector.process(RunStatusChangedEvent(task_id=_TASK_ID, run_id=_RUN_ID, status="running"))

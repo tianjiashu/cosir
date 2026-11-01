@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,16 +17,16 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.events import ToolCallCreatedEvent, ToolCallStatusChangedEvent
 from app.core.hook.hook_event import HookDecision
 from app.core.hook.hook_result import HookResult
+from app.core.tool.execute.tool_access_gate import ToolAccessGate
 from app.core.tool.schemas import (
     ToolCall,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.execute.tool_access_gate import ToolAccessGate
-from app.tools.tool_handler.read_file import ReadFileTool
 from app.core.tool.tool_registry import ToolRegistry
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.tools.tool_handler.read_file import ReadFileTool
 
 # ============================================================================
 # 共享装配
@@ -245,7 +246,7 @@ class _FakeRebuildRegistry:
     def get_tool_definition(self, name: str) -> Any:
         if name not in self._names:
             return None
-        return SimpleNamespace(display=None)
+        return SimpleNamespace(display=None, heading=None)
 
 
 def _ai_row(tool_calls: list[dict[str, Any]]) -> ConversationTaskContextRecord:
@@ -406,7 +407,8 @@ def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
         options=ConversationRunOptions(),
         image_paths=None,
         extra=None,
-        created_at=None,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     task = SimpleNamespace(id=7, title="task", current_run_id=1, context_window_total=None)
     rows = [
@@ -528,7 +530,8 @@ def test_t4_get_tool_display_uses_declaration_when_present(
         def get_tool_definition(name: str) -> Any:
             if name != "read_file":
                 return None
-            return SimpleNamespace(display=SimpleNamespace(to_dict=lambda: {"verb": "读取文件"}))
+            display = SimpleNamespace(to_dict=lambda: {"verb": "读取文件"})
+            return SimpleNamespace(heading=None, display=display)
 
     monkeypatch.setattr(
         "app.assistant_transport.service.conversation_task_state_rebuilder.get_tool_registry",

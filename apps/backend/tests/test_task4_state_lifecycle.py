@@ -15,6 +15,8 @@ from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
 from app.core.events import RunStatusChangedEvent
+from app.core.workflow import conversation_run_ledger as conversation_run_ledger_module
+from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.models import ConversationRunStatus
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_failure import run_failure_message, run_terminal_error
@@ -23,8 +25,6 @@ from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.message_metadata import UserMessageMetadata
 from app.models.task_record import TaskRecord
-from app.core.workflow import conversation_run_ledger as conversation_run_ledger_module
-from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 # 任务运行时空间在构造时会读当前 task，因此本文件全部用例都需要隔离主库。
@@ -57,6 +57,7 @@ def _activity(run_id: int, status: str) -> dict[str, object]:
         "error": None,
         "usage": None,
         "contextWindowTotal": None,
+        "startedAt": "2026-01-01T00:00:00+00:00",
         "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
     }
 
@@ -367,7 +368,7 @@ def test_transition_propagates_post_commit_projector_failure(
 
     class RunCrud:
         def update_status_if_in(self, **_kwargs: object) -> SimpleNamespace:
-            return SimpleNamespace(task_id=7)
+            return SimpleNamespace(task_id=7, updated_at=datetime(2026, 9, 12, tzinfo=UTC))
 
         def get(self, _run_id: int) -> SimpleNamespace:
             return SimpleNamespace(status="running")

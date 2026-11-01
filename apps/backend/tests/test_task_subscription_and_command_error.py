@@ -26,6 +26,9 @@ from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.task_record import TaskRecord
 
+# RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
+_RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
+
 pytestmark = pytest.mark.usefixtures("isolated_storage")
 
 _TASK_ID = 7
@@ -174,14 +177,18 @@ async def test_one_connection_survives_run_completion_new_run_cancel_and_suspend
     def _status(run_id: int, status: ConversationRunStatus) -> None:
         service.apply_planned(RunStatusChangedEvent(task_id=_TASK_ID, run_id=run_id, status=status))
 
-    service.apply_planned(RunInitializedEvent(task_id=_TASK_ID, run_id=1))
+    service.apply_planned(
+        RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=1)
+    )
     _status(1, ConversationRunStatus.RUNNING)
     _status(1, ConversationRunStatus.COMPLETED)
     await _settle()
     assert not collector.task.done()
 
     # 同一条连接上看到新 Run 开始、挂起、唤醒与取消。
-    service.apply_planned(RunInitializedEvent(task_id=_TASK_ID, run_id=2))
+    service.apply_planned(
+        RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=2)
+    )
     _status(2, ConversationRunStatus.RUNNING)
     _status(2, ConversationRunStatus.SUSPENDED)
     await _settle()
@@ -218,7 +225,9 @@ async def test_idle_boundary_follows_each_burst_exactly_once() -> None:
     # 首个 full 帧之后同样需要边界，否则 attach 的首帧也可能被扣住。
     assert collector.idle_after == [1]
 
-    service.apply_planned(RunInitializedEvent(task_id=_TASK_ID, run_id=1))
+    service.apply_planned(
+        RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=1)
+    )
     service.apply_planned(
         RunStatusChangedEvent(task_id=_TASK_ID, run_id=1, status=ConversationRunStatus.RUNNING)
     )
