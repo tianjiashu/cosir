@@ -1,13 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import type { BackgroundTaskEntry, TransportState } from "@/lib/assistant/contract";
+import type { TransportState } from "@/lib/assistant/contract";
 
 import { seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin } from "./e2e-env";
 
 /**
  * 长对话的历史窗口：打开时只带最近一段（模拟后端与真实后端同为约 100 条），往上滚接近顶部时
- * 预取上一页插到前面且视口不跳；看板「在对话中定位」能翻到尚未加载的卡片。
+ * 预取上一页插到前面且视口不跳。
  */
 const TASK_ID = 4501;
 const PAIRS = 160;
@@ -86,23 +86,6 @@ test("插入上一页后，视口里的内容停在原处", async ({ page }) => 
   expect(before).not.toBeNull();
   expect(after).not.toBeNull();
   expect(Math.abs(after! - before!.top)).toBeLessThan(4);
-});
-
-test("看板定位能翻到还没加载的卡片", async ({ page, request }) => {
-  const entry: BackgroundTaskEntry = {
-    toolCallId: "call-old", kind: "terminal_command", label: "make old", status: "running",
-    startedAt: new Date(Date.now() - 40_000).toISOString(), endedAt: null,
-  };
-  await request.post(`${origin}/__test__/seed-background-tasks`, { data: { taskId: TASK_ID, entries: [entry], foregroundWaits: [] } });
-  await openAtBottom(page);
-  await expect(page.locator('[data-tool-call-id="call-old"]')).toHaveCount(0);
-
-  await page.getByRole("button", { name: /^会话侧栏/ }).click();
-  const row = page.getByRole("region", { name: "后台任务" }).locator('[data-background-task="call-old"]');
-  await row.getByRole("button", { name: "在对话中定位" }).click();
-  const card = page.locator('.aui-thread-root [data-tool-call-id="call-old"]');
-  await expect(card).toBeVisible({ timeout: 10_000 });
-  await expect(card).toBeInViewport();
 });
 
 test("对话区被隐藏再显示后，停在顶部的视口不跳", async ({ page, request }) => {

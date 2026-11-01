@@ -243,7 +243,6 @@ AssistantMessage
 - **一个状态组件**：`CallStatus` 只表达工具生命周期（运行中 / 失败 / 取消）与两个附加态（在后台、等待用户），取代现在 7 种写法。退出码非 0 仍按现在的约定显示 `exit N`，由终端 kind 视图给出元信息，不改工具状态。
 - **委派行**：状态读 `useTaskExecutionStatus(child_task_id)`（`apps/desktop/lib/task-status/task-status-store.ts:28`），点击打开子任务；不再读 `display_data.status`。
 - **开合状态集中**：`apps/desktop/lib/assistant/disclosure-store.ts`（zustand，不持久化，按 Task 分桶），键为 `process:{messageId}`、`call:{toolCallId}`、`reasoning:{messageId}:{index}`。值只记用户覆盖；没有覆盖时按规则：过程区 `phase==='running'` 展开，否则收起；命令行运行中展开；失败行在过程区展开时带出输出尾部。虚拟列表卸载再挂载不丢状态（F6）。
-- **定位到调用**：看板「定位」先调 `disclosure-store.reveal(toolCallId)` 展开所在过程区再滚动，不再依赖卡片已挂载。
 - **单调用不加区头**：过程里只有 1 次调用时直接平铺该行（加思考行），不出现「已处理 · 读取文件 1」这种要多点一次的区头；0 次调用时只有思考行。
 - **复制只复制结论**：脚注的复制按钮复制 `Answer` 的正文，不再用 assistant-ui 默认的「全部 text part 拼接」。
 - **虚拟列表**：粒度仍是整条消息；结束后的回合高度变得紧凑且可预期，同步更新 `message-height-estimate.ts` 的估算（当前估算还假定「思考 + 工具合成一组」，已与实现漂移）。

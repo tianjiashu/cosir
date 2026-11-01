@@ -37,16 +37,6 @@ describe("disclosure store", () => {
     expect(resolveDisclosure(2, callKey("c1"), false)).toBe(false);
   });
 
-  // 目的：看板「定位到调用」在卡片尚未挂载时也要能展开所在过程区；潜在缺陷：只展开调用、过程区仍收起，滚动目标不在文档里。
-  it("reveal 把所在过程区与该调用一起置为展开，并覆盖用户之前的收起", () => {
-    const { set, reveal } = useDisclosureStore.getState();
-    set(1, processKey("m1"), false);
-    set(1, callKey("c1"), false);
-    reveal(1, "c1", "m1");
-    expect(resolveDisclosure(1, processKey("m1"), false)).toBe(true);
-    expect(resolveDisclosure(1, callKey("c1"), false)).toBe(true);
-  });
-
   it("clearTask 丢掉整桶，不影响其他 Task", () => {
     const { set, clearTask } = useDisclosureStore.getState();
     set(1, callKey("c1"), true);

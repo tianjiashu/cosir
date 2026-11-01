@@ -61,9 +61,11 @@ class DeferredOutcome:
     """``run_deferred`` 的结果：要么前台拿到的结论，要么一个后台占位的原因。
 
     ``run_deferred`` 不渲染工具观察：结论与占位的渲染（文本、展示数据、是否挂起）属于工具。工具渲染
-    占位时必须标记 ``background``，卡片状态以占位行为准。
+    占位时必须带上 ``background``（以 ``started_at`` 为开始时间），卡片与看板都以占位行为准。
     """
 
+    # 登记延迟结果的时刻，即工作的开始时间。
+    started_at: str
     result: DeferredConclusion | None = None
     placeholder: PlaceholderReason | None = None
 

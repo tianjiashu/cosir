@@ -78,7 +78,7 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = mem
       ...activeIndexes,
     ])).sort((left, right) => left - right),
   });
-  useThreadHistoryPaging({ taskId, virtualizer, messageIds, scrollElementRef });
+  useThreadHistoryPaging({ virtualizer, messageIds, scrollElementRef });
   const virtualItems = virtualizer.getVirtualItems();
   const firstItem = virtualItems[0];
   const lastItem = virtualItems.at(-1);

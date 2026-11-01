@@ -175,20 +175,17 @@ describe("后台任务卡", () => {
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain('data-tool-call-id="a"');
     expect(html).toContain("后台运行中");
-    expect(html).toContain("在对话中定位");
     expect(html).not.toContain("停止终端命令");
     expect(html).not.toContain("转到后台");
   });
 
-  it("对应 part 未加载（不在已加载的历史里）时只剩外壳、不可展开，仍可定位", () => {
+  it("对应 part 未加载（不在已加载的历史里）时只剩外壳、不可展开", () => {
     board.entries.set(1, [entry("a")]);
     const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
     const row = html.slice(html.indexOf('data-background-task="a"'));
     expect(row).toContain("terminal_command:a");
     expect(row).not.toContain('aria-expanded="');
     expect(html).not.toContain("data-tool-call-id");
-    // 定位由对话列表按需往上翻页，不依赖卡片已加载。
-    expect(html).toContain("在对话中定位");
   });
 });
 

@@ -53,7 +53,7 @@ def run_deferred(
 
     route = _Route()
     detached = threading.Event()
-    deferred_registry.register(
+    started_at = deferred_registry.register(
         tool_call_id,
         task_id=task_id,
         run_id=run_id,
@@ -66,7 +66,7 @@ def run_deferred(
     if background:
         route.to_background(tool_call_id)
         job.on_done(route.deliver(tool_call_id))
-        return DeferredOutcome(placeholder="background")
+        return DeferredOutcome(started_at=started_at, placeholder="background")
 
     job.on_done(route.deliver(tool_call_id))
     deadline = None if foreground_limit_s is None else time.monotonic() + foreground_limit_s
@@ -75,7 +75,7 @@ def run_deferred(
             break
         if detached.is_set():
             route.to_background(tool_call_id)
-            return DeferredOutcome(placeholder="detached")
+            return DeferredOutcome(started_at=started_at, placeholder="detached")
         if deadline is not None and time.monotonic() >= deadline:
             # 到上限按「转到后台」处理：同一条登记表路径，与用户转后台的竞态由登记表裁决。
             if deferred_registry.detach(tool_call_id) == "detached":
@@ -87,7 +87,7 @@ def run_deferred(
                         "data": {"task_id": task_id, "tool_call_id": tool_call_id},
                     },
                 )
-                return DeferredOutcome(placeholder="limit")
+                return DeferredOutcome(started_at=started_at, placeholder="limit")
             deadline = None
     if not route.has_result():
         # Run 被取消：撤销作业并等它以取消结论收尾，前台照常返回结果。
@@ -97,8 +97,8 @@ def run_deferred(
     if outcome == "detached":
         # 转后台恰好先于结论被裁决：结论已在手，按后台回投。
         deferred_registry.complete(tool_call_id, route.result())
-        return DeferredOutcome(placeholder="detached")
-    return DeferredOutcome(result=route.result())
+        return DeferredOutcome(started_at=started_at, placeholder="detached")
+    return DeferredOutcome(started_at=started_at, result=route.result())
 
 
 class _Route:

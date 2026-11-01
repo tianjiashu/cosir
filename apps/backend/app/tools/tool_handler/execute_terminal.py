@@ -381,7 +381,9 @@ class ExecuteTerminalTool(HandlerBase):
             is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
         )
         if outcome.placeholder is not None:
-            return self._placeholder_observation(command, cwd, effective_timeout, outcome.placeholder)
+            return self._placeholder_observation(
+                command, cwd, effective_timeout, outcome.placeholder, outcome.started_at
+            )
         return self._result_observation(command, cwd, finished[0])
 
     def _result_observation(
@@ -475,7 +477,7 @@ class ExecuteTerminalTool(HandlerBase):
             display_data=build_terminal_placeholder_display_data(command=command, workdir=cwd),
             suspend=reason == "limit",
         )
-        observation.background = True
+        observation.background = BackgroundWork(started_at=started_at)
         return observation
 
     def to_definition(self) -> ToolDefinition:

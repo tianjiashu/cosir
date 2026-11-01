@@ -10,6 +10,7 @@ from pydantic import Field
 
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 from app.models.enums.tool_call_status import ToolCallEventStatus
+from app.models.message_metadata import BackgroundWork
 
 
 class ToolCallCreatedEvent(WorkflowEventEnvelope):
@@ -64,8 +65,8 @@ class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
     error: str | None = None
     display_data: dict[str, object] | None = None
     team_run_id: int | None = Field(default=None, gt=0)
-    # 只在后台占位首次写入时为 True；之后的结算事件不带它，part 上已有的标记保留。
-    background: bool = False
+    # 后台工作记录：占位写入与结算（并入、撤销、重启中断）时带上最新值；``None`` 时 part 上已有的保留。
+    background: BackgroundWork | None = None
 
 
 class ToolCallsSettledEvent(WorkflowEventEnvelope):

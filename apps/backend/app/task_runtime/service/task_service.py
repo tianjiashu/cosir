@@ -666,7 +666,6 @@ class TaskService:
         )
         for task_id in result.task_ids:
             deferred_registry.drop_task(task_id)
-            deferred_registry.forget_task(task_id)
             handoff_registry.drop_task(task_id)
         self._unload_deleted_task_spaces(set(result.task_ids))
 

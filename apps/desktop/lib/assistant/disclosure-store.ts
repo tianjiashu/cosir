@@ -3,9 +3,9 @@ import { create } from "zustand";
 /**
  * 回合内各区的开合状态，按 Task 分桶、不持久化。
  *
- * 为什么不放组件局部 state：虚拟列表卸载再挂载会丢开合；看板「定位到调用」要在卡片尚未挂载时就把所在
- * 过程区展开。这里只记用户覆盖（true / false），没有覆盖时由组件按规则给默认值（过程区运行中展开、
- * 否则收起；命令行运行中展开……），所以阶段变化不会被旧覆盖卡住——覆盖只在用户点过之后才存在。
+ * 为什么不放组件局部 state：虚拟列表卸载再挂载会丢开合。这里只记用户覆盖（true / false），没有覆盖时
+ * 由组件按规则给默认值（过程区运行中展开、否则收起；命令行运行中展开……），所以阶段变化不会被旧覆盖卡住——
+ * 覆盖只在用户点过之后才存在。
  *
  * 键：`process:{messageId}`（过程区）、`call:{toolCallId}`（调用行展开体）、
  * `reasoning:{messageId}:{partIndex}`（思考行）。Task 删除时 `clearTask` 整桶丢掉。
@@ -24,8 +24,6 @@ type DisclosureState = {
   set: (taskId: number, key: DisclosureKey, open: boolean) => void;
   /** 清掉某个键的覆盖，之后回到默认规则。 */
   reset: (taskId: number, key: DisclosureKey) => void;
-  /** 看板「定位到调用」：把调用所在的过程区与该调用一起置为展开，再由调用方滚动。 */
-  reveal: (taskId: number, toolCallId: string, messageId: string) => void;
   clearTask: (taskId: number) => void;
 };
 
@@ -39,12 +37,6 @@ export const useDisclosureStore = create<DisclosureState>()((set) => ({
     if (!bucket || !(key in bucket)) return state;
     return { tasks: { ...state.tasks, [taskId]: without(bucket, key) } };
   }),
-  reveal: (taskId, toolCallId, messageId) => set((state) => ({
-    tasks: {
-      ...state.tasks,
-      [taskId]: { ...state.tasks[taskId], [processKey(messageId)]: true, [callKey(toolCallId)]: true },
-    },
-  })),
   clearTask: (taskId) => set((state) => (taskId in state.tasks ? { tasks: without(state.tasks, taskId) } : state)),
 }));
 

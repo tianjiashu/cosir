@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BotIcon, CheckIcon, ChevronRightIcon, LocateFixedIcon, SquareIcon, SquareTerminalIcon, XCircleIcon, type LucideIcon } from "lucide-react";
+import { BotIcon, CheckIcon, ChevronRightIcon, SquareIcon, SquareTerminalIcon, XCircleIcon, type LucideIcon } from "lucide-react";
 
 import { CallRow } from "@/components/assistant-ui/tools/call-row";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
@@ -12,7 +12,6 @@ import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
 import { useBackgroundTaskPart } from "@/lib/background-tasks/store";
 import { cn } from "@/lib/utils";
-import { revealToolCall } from "@/lib/assistant/thread-navigation";
 
 /** 新增延迟结果种类时补一项（见设计文档「新增工具如何接入」）。 */
 const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
@@ -21,7 +20,7 @@ const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
 };
 
 /**
- * 看板的一行：所有种类共用的外壳（种类图标、标题、耗时、停止、在对话中定位），展开后就是对话里
+ * 看板的一行：所有种类共用的外壳（种类图标、标题、耗时、停止），展开后就是对话里
  * 同一条调用行（`CallRow`，含它的展开体）。
  *
  * 外壳只读 snapshot `background_tasks`；调用行读同一个 snapshot 工具 part（按 `toolCallId` 镜像，见
@@ -68,9 +67,6 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
           <span className="min-w-0 flex-1 truncate" title={entry.label}>{entry.label}</span>
         )}
         <span className="text-muted-foreground shrink-0 text-xs tabular-nums">{elapsed}</span>
-        <TooltipIconButton tooltip="在对话中定位" className="size-6" onClick={() => void locate(taskId, entry.toolCallId)}>
-          <LocateFixedIcon aria-hidden="true" />
-        </TooltipIconButton>
         {running ? (
           <TooltipIconButton
             tooltip="停止"
@@ -117,11 +113,6 @@ function BackgroundTaskCard({ taskId, part }: { taskId: number; part: TransportT
       </RenderIsolationBoundary>
     </div>
   );
-}
-
-/** 对话可能只加载了最近一段历史：交给对话列表按需往上翻页再滚过去。 */
-async function locate(taskId: number, toolCallId: string): Promise<void> {
-  if (!(await revealToolCall(taskId, toolCallId))) notify.error("这张卡片已不在当前对话里");
 }
 
 /** 耗时：不足一分钟显示秒，之后显示「分 秒」「时 分」。 */
