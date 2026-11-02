@@ -6,7 +6,9 @@
 
 from app.core.tool.schemas import ToolDefinition
 from app.tools.tool_handler.browser.act import BrowserActTool
+from app.tools.tool_handler.browser.evaluate import BrowserEvaluateTool
 from app.tools.tool_handler.browser.handoff import BrowserHandoffTool
+from app.tools.tool_handler.browser.logs import BrowserLogsTool
 from app.tools.tool_handler.browser.navigate import BrowserNavigateTool
 from app.tools.tool_handler.browser.screenshot import BrowserScreenshotTool
 from app.tools.tool_handler.browser.snapshot import BrowserSnapshotTool
@@ -22,6 +24,8 @@ def build_browser_definitions() -> list[ToolDefinition]:
             BrowserActTool(),
             BrowserScreenshotTool(),
             BrowserTabsTool(),
+            BrowserLogsTool(),
+            BrowserEvaluateTool(),
             BrowserHandoffTool(),
         )
     ]
@@ -29,7 +33,9 @@ def build_browser_definitions() -> list[ToolDefinition]:
 
 __all__ = [
     "BrowserActTool",
+    "BrowserEvaluateTool",
     "BrowserHandoffTool",
+    "BrowserLogsTool",
     "BrowserNavigateTool",
     "BrowserScreenshotTool",
     "BrowserSnapshotTool",

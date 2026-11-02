@@ -30,7 +30,7 @@ from app.core.events.tool_runtime_event import (
     TerminalOutputDeltaData,
     ToolCallRuntimeUpdateEvent,
 )
-from app.core.events.user_input_event import UserInputConsumedEvent
+from app.core.events.input_consumed_event import InputConsumedEvent
 from app.core.events.workflow_event import WorkflowEvent
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 
@@ -48,7 +48,7 @@ __all__ = [
     "ToolCallRuntimeUpdateEvent",
     "ToolCallStatusChangedEvent",
     "ToolCallsSettledEvent",
-    "UserInputConsumedEvent",
+    "InputConsumedEvent",
     "WorkflowEvent",
     "WorkflowEventEnvelope",
 ]
