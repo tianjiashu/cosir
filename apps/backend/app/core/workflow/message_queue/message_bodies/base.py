@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from app.models.message_metadata import UserMessageMetadata
 
 TaskMessageKind = Literal[
-    "user_input", "system_notice", "background_result", "user_decision", "tool_image"
+    "user_input", "agent_message", "system_notice", "background_result", "user_decision"
 ]
 
 
@@ -21,7 +21,8 @@ class EnqueuedMessageBody(BaseModel, ABC):
     """一条可入队消息的领域正文。
 
     子类必须给出 ``KIND`` / ``TAG`` / ``PROMPT_GUIDE`` 与三个推进开关：``PRIORITY``（并入 context
-    的写入顺序）、``DEFAULT_PROJECTED``（是否投影到前端）、``WAKES``（能否单独推进 Run）。
+    的写入顺序）、``DEFAULT_PROJECTED``（是否投影到前端）、``WAKES``（能否单独推进 Run）。能交接新
+    Run 的输入（携带 ``launch``、一个 Run 只消费一条）见 :data:`LaunchInputBody`。
     """
 
     model_config = ConfigDict(extra="forbid")

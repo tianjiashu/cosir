@@ -1,4 +1,4 @@
-"""系统通知消息：配置广播（持久化行）或 Run 内提示（只进 mailbox）。"""
+"""系统通知消息：配置广播（外部队列行）或 Run 内提示（``RuntimeContext.notices``，不入队）。"""
 
 from collections.abc import Sequence
 from typing import ClassVar

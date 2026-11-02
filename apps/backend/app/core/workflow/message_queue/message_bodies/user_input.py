@@ -45,13 +45,12 @@ class RunLaunch(BaseModel):
 
 
 class UserInputBody(EnqueuedMessageBody):
-    """用户输入：入队前已解析好正文与附件，唯一可编辑、可交接新 Run 的消息。"""
+    """用户输入：入队前已解析好正文与附件；唯一可编辑的消息，与 Agent 消息一样可交接新 Run。"""
 
     KIND: ClassVar[TaskMessageKind] = "user_input"
     TAG: ClassVar[str] = "user_input"
     PROMPT_GUIDE: ClassVar[str] = (
-        "the user talking to you, and the only source of new requests. `image_paths` lists "
-        "attached images by local path."
+        "the user talking to you. `image_paths` lists attached images by local path."
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = True
