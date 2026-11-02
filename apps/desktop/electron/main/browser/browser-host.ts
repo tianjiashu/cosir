@@ -1,7 +1,7 @@
 import { dialog, shell, type BrowserWindow, type DownloadItem, type Rectangle, type WebContents, type WindowOpenHandlerResponse } from "electron";
 
 import { logDesktopEvent } from "../desktop-log";
-import { HostMethodError } from "../host-link/methods";
+import type { HostMethodError } from "../host-link/methods";
 import type {
   BrowserDialog,
   BrowserDialogAnswer,
@@ -12,47 +12,54 @@ import type {
   BrowserTabCreator,
   BrowserTabLimits,
 } from "../../shared/host-contract";
-import { BrowserTab, type PageSnapshot } from "./browser-tab";
+import { BrowserTab, type EvaluateOutcome, type PageSnapshot } from "./browser-tab";
 import { browserPageWebPreferences, type BrowserSessionEvents } from "./browser-session";
 import { BrowserDownloads } from "./downloads";
+import { browserError } from "./errors";
 import type { ActResult } from "./page-input";
-import type { ActRequest, NavigateRequest, ScreenshotRequest, SnapshotRequest, TabsRequest } from "./params";
-import { VIEWPORT } from "./tab-viewport";
-import { waitForInitialization } from "./initialization";
+import type { ActRequest, EvaluateRequest, LogsRequest, NavigateRequest, ScreenshotRequest, SnapshotRequest, TabRequest, TabsRequest } from "./params";
+import type { Emulation } from "./tab-emulation";
+import type { ConsoleEntry, LogPage, NetworkEntry, PageDigest } from "./tab-log";
+import { abortable } from "./abortable";
 import { isWebProtocol, urlProtocol } from "./web-url";
 
-/** 弹窗的线上形状（后端 `common.page_observation` 读取）。 */
-type PageDialog = { id: number; type: BrowserDialog["type"]; message: string; default_text: string };
+/** 页面类结果（页面、动作、日志、执行 JS、截图）共用的页头：标签、地址、加载、主文档状态码与生效的模拟。线上形状见 `wire.ts`。 */
+export type PageHead = { tabId: string; url: string; title: string; loading: boolean; status: number | null; emulation: Emulation };
 
-/** 一次导航或快照的结果；字段名与后端 `app/tools/tool_handler/browser/` 读取的一致。 */
-export type PageResult = {
-  tab_id: string;
-  url: string;
-  title: string;
-  loading: boolean;
+/** 一次导航或快照的结果，附「Agent 上次拿到页面结果以来」的页面事件与日志计数。 */
+export type PageResult = PageHead & PageDigest & {
   /** 有待答的弹窗时为空串（页面停着，读不到）。 */
   snapshot: string;
   frames: number;
-  notes: string[];
   /** 本 Task 的其他标签 id（模型可经 `tab` 参数切过去）。 */
-  other_tabs: string[];
-  dialog: PageDialog | null;
+  otherTabs: string[];
+  dialog: BrowserDialog | null;
 };
 
 /** 一次动作序列的结果：执行到哪一步、停在哪（若有），以及之后的页面。 */
-export type ActOutcome = PageResult & { completed: number; failure: ActResult["failure"] };
+export type ActOutcome = PageResult & ActResult;
 
-export type ScreenshotResult = { tab_id: string; url: string; title: string; image: string };
+export type LogsResult = PageHead & ({ kind: "console" } & LogPage<ConsoleEntry> | { kind: "network" } & LogPage<NetworkEntry>);
+
+export type EvaluateResult = PageHead & EvaluateOutcome;
+
+export type ScreenshotResult = PageHead & { image: string };
 
 /** 本 Task 的一个标签（`browser_tabs` 的列表项）。 */
-export type TaskTab = { tab_id: string; title: string; url: string; current: boolean; created_by: BrowserTabCreator };
+export type TaskTab = { tabId: string; title: string; url: string; current: boolean; createdBy: BrowserTabCreator };
+
+/** 冻结帧每条 CDP 命令的时限：等不到就不要帧、直接收起画面，免得原生画面长时间盖住应用的弹层。 */
+const FREEZE_TIMEOUT_MS = 1_000;
 
 type TabEntry = { tab: BrowserTab; ready: Promise<void>; controller: AbortController };
 
 /**
  * 内置浏览器的唯一所有者：含初始化作业的标签登记、全部 `BrowserTab`、下载登记（`BrowserDownloads`）与
  * 「哪个视图挂在窗口上」。宿主工具链路的方法（`methods.ts`，Agent 用）与渲染进程 IPC（`ipc.ts`，用户用）
- * 都只经这里操作，不各自持有视图。
+ * 都只经这里操作，不各自持有视图。面向 Agent 的结果是领域类型，线上形状只在 `wire.ts` 转换。
+ *
+ * 「上次以来」只在这里消费：页面结果（navigate / snapshot / act）组装时取一次标签日志的 `digest`；截图、日志
+ * 读取、执行 JS 与交接的首次调用（读的是标签列表）都不碰它，交还时读的是快照、照常消费。
  *
  * 标签页与下载都是宿主进程事实：不持久化，后端重启不影响，宿主退出即全部消失；Task 删除后由后端通知
  * `dropTasks` 回收。入参已由 `params.ts` / `ipc.ts` 校验，这里直接信任。
@@ -65,9 +72,11 @@ type TabEntry = { tab: BrowserTab; ready: Promise<void>; controller: AbortContro
  * JS 弹窗停住的是整个渲染进程，「页面为什么停着」按进程判断（`pausedBy`），弹窗打开时同进程标签在途的
  * CDP 一起失败。
  *
+ * Agent 的操作经 `operate` 带上「请求取消或标签关闭」的组合信号：标签中途关闭时一律以 `TAB_NOT_FOUND` 结束。
+ *
  * 摆放：同一时刻至多一个视图挂在主窗口上（浏览器面板只渲染激活标签）。挂上新视图时摘下旧的；摘下的视图
- * 恢复视口大小继续在后台工作。视图在占位矩形里按视口等比缩放、居中（渲染进程的冻结帧用同一规则：
- * `object-contain`）。摆放状态只有这里一处事实，渲染进程只上报「我想把哪个标签放在哪里」。
+ * 恢复视口大小继续在后台工作。挂哪个、挂到哪由这里决定（`place` / `detach` 是唯一入口），渲染进程只上报「我想把
+ * 哪个标签放在哪里」；占位矩形交给标签的设备模拟，视图在其中怎么等比摆放归它（`TabEmulation.viewBounds`）。
  */
 export class BrowserHost implements BrowserSessionEvents {
   private readonly tabs = new Map<string, TabEntry>();
@@ -88,40 +97,59 @@ export class BrowserHost implements BrowserSessionEvents {
 
   constructor(private readonly window: () => BrowserWindow | null) {}
 
-  /** 要求新标签、或该 Task 还没有标签时先新开一个，再导航；返回导航后的快照。 */
+  /**
+   * 要求新标签、或该 Task 还没有标签时先新开一个；先把要求的设备模拟设上（之后的加载按新视口布局），再导航；
+   * 返回导航后的快照。
+   */
   async navigate(request: NavigateRequest, signal: AbortSignal): Promise<PageResult> {
     this.track(request.context);
-    const tab = request.newTab || (!request.tab && !this.current.has(request.taskId))
+    const entry = request.newTab || (!request.tab && !this.current.has(request.taskId))
       ? await this.open(request.taskId, request.context, "agent", true, signal)
-      : await this.readyTab(this.select(request.taskId, request.tab), signal);
-    await tab.navigate(request.target, signal);
-    return this.result(tab, await tab.snapshot());
+      : this.select(request.taskId, request.tab);
+    return this.operate(entry, signal, async (tab, scoped) => {
+      await tab.navigate(request.target, scoped, request.emulation);
+      return this.result(tab, await tab.snapshot());
+    }, "ready");
   }
 
-  async snapshot(request: SnapshotRequest, signal?: AbortSignal): Promise<PageResult> {
-    this.track(request.context);
-    const tab = await this.usableTab(this.tabFor(request.taskId, request.tab), signal);
-    return this.result(tab, await tab.snapshot(request.fromLine));
+  async snapshot(request: SnapshotRequest, signal: AbortSignal): Promise<PageResult> {
+    return this.operate(this.agentEntry(request), signal, async (tab) => this.result(tab, await tab.snapshot(request.fromLine)));
   }
 
   /** 按序执行动作，无论停在哪一步都返回之后的快照（新快照带新 ref，模型能接着做）。 */
   async act(request: ActRequest, signal: AbortSignal): Promise<ActOutcome> {
-    this.track(request.context);
-    const entry = this.tabFor(request.taskId, request.tab);
-    const tab = await this.usableTab(entry, signal);
-    const outcome = await tab.act(request.actions, signal);
-    // 在初始化中的标签上答完弹窗后，初始化会接着做完；读快照前等它（或页面又停住）。
-    await this.usableTab(entry, signal);
-    return { ...this.result(tab, await tab.snapshot()), ...outcome };
+    const entry = this.agentEntry(request);
+    return this.operate(entry, signal, async (tab, scoped) => {
+      const outcome = await tab.act(request.actions, scoped);
+      // 在初始化中的标签上答完弹窗后，初始化会接着做完；读快照前等它（或页面又停住）。
+      await this.usableTab(entry, scoped);
+      return { ...this.result(tab, await tab.snapshot()), ...outcome };
+    });
   }
 
-  async screenshot(request: ScreenshotRequest, signal?: AbortSignal): Promise<ScreenshotResult> {
-    this.track(request.context);
-    const tab = await this.readyTab(this.tabFor(request.taskId, request.tab), signal);
-    // JPEG：同样的视口，体积比 PNG 小得多，更不容易碰到附件的单图大小上限。
-    const image = await tab.screenshot("jpeg", { quality: 85, fullPage: request.fullPage });
-    const { url, title } = tab.summary();
-    return { tab_id: tab.tabId, url, title, image };
+  async screenshot(request: ScreenshotRequest, signal: AbortSignal): Promise<ScreenshotResult> {
+    return this.operate(this.agentEntry(request), signal, async (tab) => {
+      // JPEG：同样的视口，体积比 PNG 小得多，更不容易碰到附件的单图大小上限。
+      const image = await tab.screenshot("jpeg", { quality: 85, fullPage: request.fullPage });
+      return { ...this.head(tab), image };
+    });
+  }
+
+  /** 读标签的 console 或网络日志：只读缓冲，不发 CDP，页面停住时照样能读。 */
+  async logs(request: LogsRequest, signal: AbortSignal): Promise<LogsResult> {
+    return this.operate(this.agentEntry(request), signal, async (tab) => {
+      const head = this.head(tab);
+      return request.query.kind === "console"
+        ? { ...head, kind: "console", ...tab.log.read(request.query) }
+        : { ...head, kind: "network", ...tab.log.read(request.query) };
+    });
+  }
+
+  async evaluate(request: EvaluateRequest, signal: AbortSignal): Promise<EvaluateResult> {
+    return this.operate(this.agentEntry(request), signal, async (tab, scoped) => {
+      const outcome = await tab.evaluate(request.expression, scoped);
+      return { ...this.head(tab), ...outcome };
+    });
   }
 
   /** 本 Task 的标签管理：列出、切换当前标签、关闭；都返回操作后的标签列表。 */
@@ -132,7 +160,7 @@ export class BrowserHost implements BrowserSessionEvents {
     const current = this.current.get(request.taskId);
     return this.tabsOf(request.taskId).map(({ tab }) => {
       const { url, title, createdBy } = tab.summary();
-      return { tab_id: tab.tabId, title, url, current: tab.tabId === current, created_by: createdBy };
+      return { tabId: tab.tabId, title, url, current: tab.tabId === current, createdBy };
     });
   }
 
@@ -168,7 +196,7 @@ export class BrowserHost implements BrowserSessionEvents {
   }
 
   permissionDenied(source: WebContents, permission: string): void {
-    this.byContents(source)?.tab.note(`the site asked for the "${permission}" permission; it was denied (site permissions are not available)`);
+    this.byContents(source)?.tab.log.note(`the site asked for the "${permission}" permission; it was denied (site permissions are not available)`);
   }
 
   // ---------------------------------------------------------------------------
@@ -184,7 +212,7 @@ export class BrowserHost implements BrowserSessionEvents {
     return () => this.listeners.delete(listener);
   }
 
-  /** 把标签挂到主窗口的给定矩形（视图在其中按视口等比缩放、居中）；`null` 摘下。 */
+  /** 把标签挂到主窗口的给定矩形（视图在其中按视口等比摆放）；`null` 摘下。 */
   place(tabId: string, placement: BrowserPlacement | null): void {
     const { tab } = this.require(tabId);
     const window = this.window();
@@ -197,14 +225,15 @@ export class BrowserHost implements BrowserSessionEvents {
       window.contentView.addChildView(tab.view);
       this.attached = tab;
     }
-    tab.show(toWindowBounds(fitViewport(placement), window.webContents.getZoomFactor()));
+    tab.show(toWindowBounds(placement, window.webContents.getZoomFactor()));
   }
 
   /** 冻结帧：遮挡弹层出现时页面先放这张图，再摘下视图（设计稿 §6.1）。 */
   async freeze(tabId: string): Promise<string> {
-    // 冻结帧要和实时画面一样清晰：按屏幕像素出图，不缩到 CSS 像素。
-    const tab = await this.readyTab(this.require(tabId));
-    return tab.screenshot("jpeg", { quality: 70, devicePixels: true });
+    // 原生画面要一直盖着弹层到这里返回，所以不等初始化（收养的弹出页可能要等到第一次加载结束，至多 30 秒；调试器
+    // 还没附加时截图立即失败），主线程被占着时也只等很短（`FREEZE_TIMEOUT_MS`）：失败时渲染进程直接收起画面。
+    // 冻结帧要和实时画面一样清晰：按屏幕像素出图。
+    return this.require(tabId).tab.screenshot("jpeg", { quality: 70, devicePixels: true, timeoutMs: FREEZE_TIMEOUT_MS });
   }
 
   /**
@@ -213,14 +242,16 @@ export class BrowserHost implements BrowserSessionEvents {
    */
   async userOpen(taskId: number, context: BrowserTabContext, url?: string): Promise<string> {
     this.track(context);
-    const tab = await this.open(taskId, context, "user", true);
-    if (url) await tab.navigate({ url }, new AbortController().signal);
-    return tab.tabId;
+    const entry = await this.open(taskId, context, "user", true);
+    // 用户侧没有可取消的请求：等待只跟随标签生命周期（关掉标签即结束）。
+    if (url) await entry.tab.navigate({ url }, entry.controller.signal);
+    return entry.tab.tabId;
   }
 
   async userNavigate(tabId: string, target: BrowserNavigation): Promise<void> {
-    const tab = await this.readyTab(this.require(tabId));
-    await tab.navigate(target, new AbortController().signal);
+    const entry = this.require(tabId);
+    const tab = await this.readyTab(entry);
+    await tab.navigate(target, entry.controller.signal);
   }
 
   userClose(tabId: string): void {
@@ -244,14 +275,56 @@ export class BrowserHost implements BrowserSessionEvents {
     this.latestLimits = context.limits;
   }
 
-  private async open(taskId: number, context: BrowserTabContext, createdBy: BrowserTabCreator, activate: boolean, signal?: AbortSignal): Promise<BrowserTab> {
+  /** Agent 请求的标签条目：刷新上限、按 Task 找到标签（跨 Task 与不存在都报 TAB_NOT_FOUND）。 */
+  private agentEntry(request: TabRequest): TabEntry {
+    this.track(request.context);
+    return this.tabFor(request.taskId, request.tab);
+  }
+
+  /**
+   * Agent 对一个标签的一次操作：先等标签可用（`until`），再带着「请求取消或标签关闭」的组合信号执行。标签中途关闭
+   * （页面自己 `window.close()`、用户关掉、Task 删除）时一律以 `TAB_NOT_FOUND` 结束：在途的 CDP 与加载等待被这个
+   * 信号打断；关闭之后才冒出来的错误（对已销毁的目标发命令、读已销毁的 webContents）也换成关闭的原因，不当作
+   * 宿主内部错误；操作碰巧在关闭后才返回（页面销毁时 Chromium 会结束在等的 Promise），结果说的是已经不在的标签，
+   * 同样报关闭。
+   */
+  private async operate<T>(
+    entry: TabEntry,
+    signal: AbortSignal,
+    run: (tab: BrowserTab, signal: AbortSignal) => Promise<T>,
+    until: "usable" | "ready" = "usable",
+  ): Promise<T> {
+    const scoped = AbortSignal.any([signal, entry.controller.signal]);
+    const assertOpen = () => {
+      entry.controller.signal.throwIfAborted();
+      // 「destroyed」事件可能晚于命令失败到达（注销与中止都在它之后）：直接问 webContents。
+      if (entry.tab.contents.isDestroyed()) throw browserError("TAB_NOT_FOUND", `tab ${entry.tab.tabId} was closed`);
+    };
+    let result: T;
+    try {
+      const tab = until === "ready" ? await this.readyTab(entry, scoped) : await this.usableTab(entry, scoped);
+      result = await run(tab, scoped);
+    } catch (error) {
+      assertOpen();
+      throw error;
+    }
+    assertOpen();
+    return result;
+  }
+
+  private head(tab: BrowserTab): PageHead {
+    const { url, title, loading } = tab.summary();
+    return { tabId: tab.tabId, url, title, loading, status: tab.status, emulation: tab.currentEmulation };
+  }
+
+  private async open(taskId: number, context: BrowserTabContext, createdBy: BrowserTabCreator, activate: boolean, signal?: AbortSignal): Promise<TabEntry> {
     this.assertCapacity(taskId, context.limits);
     signal?.throwIfAborted();
     const entry = this.register({ taskId, createdBy, openerId: null, downloadDir: context.downloadDir }, activate);
     try {
       await this.readyTab(entry, signal);
       logDesktopEvent("INFO", "browser", "browser_tab_opened", { task_id: taskId, tab_id: entry.tab.tabId, created_by: createdBy });
-      return entry.tab;
+      return entry;
     } catch (error) {
       this.close(entry.tab.tabId);
       throw error;
@@ -265,7 +338,7 @@ export class BrowserHost implements BrowserSessionEvents {
    */
   private windowOpen(opener: BrowserTab, url: string): WindowOpenHandlerResponse {
     const refuse = (why: string): WindowOpenHandlerResponse => {
-      opener.note(`the page tried to open ${url.slice(0, 200)} in a new window; ${why}`);
+      opener.log.note(`the page tried to open ${url.slice(0, 200)} in a new window; ${why}`);
       logDesktopEvent("INFO", "browser", "browser_popup_dropped", { task_id: opener.taskId, reason: why });
       return { action: "deny" };
     };
@@ -295,19 +368,19 @@ export class BrowserHost implements BrowserSessionEvents {
           () => logDesktopEvent("INFO", "browser", "browser_popup_opened", { task_id: tab.taskId, tab_id: tab.tabId }),
           () => (tab.contents.isDestroyed() ? this.gone(tab) : this.close(tab.tabId)),
         );
-        opener.note(`the page opened ${url.slice(0, 200)} in a new tab ${tab.tabId}`);
+        opener.log.note(`the page opened ${url.slice(0, 200)} in a new tab ${tab.tabId}`);
         return tab.contents;
       },
     };
   }
 
   private assertCapacity(taskId: number, limits: BrowserTabLimits): void {
-    if (this.closed) throw new HostMethodError("UNAVAILABLE", "the browser is shutting down");
+    if (this.closed) throw browserError("UNAVAILABLE", "the browser is shutting down");
     if (this.tabsOf(taskId).length >= limits.perTask) {
-      throw new HostMethodError("TAB_LIMIT", `this task already has ${limits.perTask} tabs open (per-task limit)`);
+      throw browserError("TAB_LIMIT", `this task already has ${limits.perTask} tabs open (per-task limit)`);
     }
     if (this.tabs.size >= limits.total) {
-      throw new HostMethodError("TAB_LIMIT", `the browser already has ${limits.total} tabs open across all tasks (global limit)`);
+      throw browserError("TAB_LIMIT", `the browser already has ${limits.total} tabs open across all tasks (global limit)`);
     }
   }
 
@@ -325,6 +398,7 @@ export class BrowserHost implements BrowserSessionEvents {
         onChange: () => this.publish(),
         onGone: () => this.gone(tab),
         onDialogOpened: () => this.pauseProcess(tab),
+        onDialogClosed: () => this.resumeProcess(tab),
         pausedBy: () => this.pausedBy(tab),
         chooseFiles: (multiple) => this.chooseFiles(multiple),
       },
@@ -341,11 +415,22 @@ export class BrowserHost implements BrowserSessionEvents {
     return entry;
   }
 
-  /** 页面自己关掉了（`window.close()`，常见于弹窗式登录完成后）：注销，并告诉来源标签。 */
+  /**
+   * 页面自己关掉了（`window.close()`，常见于弹窗式登录完成、弹出页下载之后）：注销，并把它还没交给 Agent 的备注
+   * （如下载结果）转给来源标签——没有来源时给 Task 的当前标签——不随标签一起消失。
+   */
   private gone(tab: BrowserTab): void {
     if (this.tabs.get(tab.tabId)?.tab !== tab) return;
     this.close(tab.tabId);
-    if (tab.openerId) this.tabs.get(tab.openerId)?.tab.note(`tab ${tab.tabId} (opened by this page) closed itself`);
+    const opener = tab.openerId ? this.tabs.get(tab.openerId)?.tab : undefined;
+    const heir = opener ?? this.tabs.get(this.current.get(tab.taskId) ?? "")?.tab;
+    const unread = tab.log.undeliveredNotes();
+    if (!heir) {
+      logDesktopEvent("INFO", "browser", "browser_note_dropped", { task_id: tab.taskId, tab_id: tab.tabId, count: unread.length });
+      return;
+    }
+    for (const note of unread) heir.log.note(`in tab ${tab.tabId}: ${note}`);
+    heir.log.note(`tab ${tab.tabId}${opener ? " (opened by this page)" : ""} closed itself`);
   }
 
   /**
@@ -353,13 +438,13 @@ export class BrowserHost implements BrowserSessionEvents {
    * 本标签自己的。只陈述事实，下一步怎么做由后端的建议表给。
    */
   private pausedBy(tab: BrowserTab): HostMethodError | null {
-    if (tab.dialog) return new HostMethodError("DIALOG_OPEN", `the page is paused: it is showing ${describeDialog(tab.dialog)}`);
+    if (tab.dialog) return browserError("DIALOG_OPEN", `the page is paused: it is showing ${describeDialog(tab.dialog)}`);
     const processId = tab.processId;
     if (processId === null) return null;
     for (const { tab: other } of this.tabs.values()) {
       if (other.dialog && other.processId === processId) {
         const owner = other.taskId === tab.taskId ? "this task" : "another task";
-        return new HostMethodError("DIALOG_OPEN", `the page is paused: tab ${other.tabId} (${owner}) shares its browser process and is showing ${describeDialog(other.dialog)}`);
+        return browserError("DIALOG_OPEN", `the page is paused: tab ${other.tabId} (${owner}) shares its browser process and is showing ${describeDialog(other.dialog)}`);
       }
     }
     return null;
@@ -367,16 +452,25 @@ export class BrowserHost implements BrowserSessionEvents {
 
   /** `opener` 弹窗了：同进程标签（含它自己）在途的 CDP 与加载等待立即结束。 */
   private pauseProcess(opener: BrowserTab): void {
-    const processId = opener.processId;
-    for (const { tab } of this.tabs.values()) {
-      if (tab === opener || (processId !== null && tab.processId === processId)) tab.interruptCdp(this.pausedBy(tab)!);
-    }
+    for (const tab of this.sameProcess(opener)) tab.interruptCdp(this.pausedBy(tab)!);
+  }
+
+  /** `owner` 的弹窗答完或被取消了：同进程标签（含它自己）补设弹窗期间被闸住的设备模拟。 */
+  private resumeProcess(owner: BrowserTab): void {
+    for (const tab of this.sameProcess(owner)) tab.resyncEmulation();
+  }
+
+  /** 与 `tab` 同一渲染进程的已登记标签（含它自己；正在注销、已不在登记里的标签不再操作）。 */
+  private sameProcess(tab: BrowserTab): BrowserTab[] {
+    const processId = tab.processId;
+    return [...this.tabs.values()].map((entry) => entry.tab)
+      .filter((other) => other === tab || (processId !== null && other.processId === processId));
   }
 
   /** 下载备注落到触发它的标签；那个标签已关闭时落到 Task 的当前标签（Agent 下次看的就是它）。 */
   private noteTask(taskId: number, tabId: string, text: string): void {
     const target = this.tabs.get(tabId)?.tab ?? this.tabs.get(this.current.get(taskId) ?? "")?.tab;
-    if (target) target.note(text);
+    if (target) target.log.note(text);
     else logDesktopEvent("INFO", "browser", "browser_note_dropped", { task_id: taskId, tab_id: tabId });
   }
 
@@ -398,7 +492,7 @@ export class BrowserHost implements BrowserSessionEvents {
   /** 归属检查只在 Host 入口做，跨 Task 与不存在统一报 TAB_NOT_FOUND。 */
   private tabFor(taskId: number, tabId?: string): TabEntry {
     const entry = this.tabs.get(tabId ?? this.current.get(taskId) ?? "");
-    if (!entry || entry.tab.taskId !== taskId) throw new HostMethodError("TAB_NOT_FOUND", tabId ? `tab ${tabId} is not open in this task` : "this task has no open tab");
+    if (!entry || entry.tab.taskId !== taskId) throw browserError("TAB_NOT_FOUND", tabId ? `tab ${tabId} is not open in this task` : "this task has no open tab");
     return entry;
   }
 
@@ -410,13 +504,13 @@ export class BrowserHost implements BrowserSessionEvents {
 
   private require(tabId: string): TabEntry {
     const entry = this.tabs.get(tabId);
-    if (!entry) throw new HostMethodError("TAB_NOT_FOUND", `tab ${tabId} is not open`);
+    if (!entry) throw browserError("TAB_NOT_FOUND", `tab ${tabId} is not open`);
     return entry;
   }
 
-  /** 现有标签的请求取消只停止本次等待；新建调用失败时由 open 回收其拥有的标签。 */
+  /** 等初始化完成；请求取消只停止本次等待，新建调用失败时由 open 回收其拥有的标签。 */
   private async readyTab(entry: TabEntry, signal: AbortSignal = entry.controller.signal): Promise<BrowserTab> {
-    await waitForInitialization(entry.ready, signal);
+    await abortable(entry.ready, signal);
     entry.controller.signal.throwIfAborted();
     return entry.tab;
   }
@@ -425,11 +519,15 @@ export class BrowserHost implements BrowserSessionEvents {
    * 就绪，或页面停住（弹窗）时提前返回：收养的标签加载中弹窗时初始化在等作答，读弹窗与回答它都不需要调试器；
    * 被别的标签的弹窗停住时，随后的 CDP 会以 `DIALOG_OPEN` 指明是哪个标签。
    */
-  private async usableTab(entry: TabEntry, signal: AbortSignal = entry.controller.signal): Promise<BrowserTab> {
+  private async usableTab(entry: TabEntry, signal: AbortSignal): Promise<BrowserTab> {
     const { tab } = entry;
     if (!tab.dialog) {
-      const paused = new Promise<void>((resolve) => tab.pausedSignal.addEventListener("abort", () => resolve(), { once: true }));
-      await waitForInitialization(Promise.race([entry.ready, paused]), signal);
+      const paused = tab.pausedSignal;
+      try {
+        await abortable(entry.ready, AbortSignal.any([signal, paused]));
+      } catch (error) {
+        if (!paused.aborted || signal.aborted) throw error;
+      }
     }
     entry.controller.signal.throwIfAborted();
     return tab;
@@ -458,7 +556,7 @@ export class BrowserHost implements BrowserSessionEvents {
       if (remaining) this.current.set(tab.taskId, remaining.tab.tabId);
       else this.current.delete(tab.taskId);
     }
-    controller.abort(new HostMethodError("TAB_NOT_FOUND", `tab ${tabId} was closed`));
+    controller.abort(browserError("TAB_NOT_FOUND", `tab ${tabId} was closed`));
     tab.close();
     logDesktopEvent("INFO", "browser", "browser_tab_closed", { task_id: tab.taskId, tab_id: tabId });
     this.publish();
@@ -469,31 +567,21 @@ export class BrowserHost implements BrowserSessionEvents {
     for (const listener of this.listeners) listener(state);
   }
 
+  /** 页面结果：页头、快照，以及「上次以来」——这里是它唯一的消费点。 */
   private result(tab: BrowserTab, page: PageSnapshot): PageResult {
     return {
-      tab_id: tab.tabId,
-      url: page.url,
-      title: page.title,
-      loading: page.loading,
+      ...this.head(tab),
       snapshot: page.text,
       frames: page.frames,
-      notes: page.notes,
-      other_tabs: this.tabsOf(tab.taskId).map(({ tab: other }) => other.tabId).filter((tabId) => tabId !== tab.tabId),
-      dialog: page.dialog && { id: page.dialog.id, type: page.dialog.type, message: page.dialog.message, default_text: page.dialog.defaultText },
+      ...tab.log.digest(),
+      otherTabs: this.tabsOf(tab.taskId).map(({ tab: other }) => other.tabId).filter((tabId) => tabId !== tab.tabId),
+      dialog: page.dialog,
     };
   }
 }
 
 function describeDialog(dialog: BrowserDialog): string {
   return `${dialog.type === "alert" ? "an" : "a"} ${dialog.type} dialog (#${dialog.id})`;
-}
-
-/** 占位矩形里按视口等比缩放、居中的矩形（CSS 像素）。 */
-function fitViewport(placement: BrowserPlacement): BrowserPlacement {
-  const scale = Math.min(placement.width / VIEWPORT.width, placement.height / VIEWPORT.height);
-  const width = VIEWPORT.width * scale;
-  const height = VIEWPORT.height * scale;
-  return { x: placement.x + (placement.width - width) / 2, y: placement.y + (placement.height - height) / 2, width, height };
 }
 
 /** 页面上报的是 CSS 像素；页面被缩放（Cmd + / -）时乘上缩放系数才是窗口坐标。 */

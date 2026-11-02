@@ -8,7 +8,8 @@ import type { DownloadItem, IpcMainEvent } from "electron";
 vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
 import { BrowserDownloads } from "@/electron/main/browser/downloads";
 import { PageDialogs } from "@/electron/main/browser/page-dialogs";
-import { TabViewport } from "@/electron/main/browser/tab-viewport";
+import { waitForLoad } from "@/electron/main/browser/page-loading";
+import { DEFAULT_EMULATION, TabEmulation } from "@/electron/main/browser/tab-emulation";
 
 const ipcEvent = () => ({ returnValue: undefined as unknown }) as IpcMainEvent & { returnValue: unknown };
 
@@ -122,28 +123,170 @@ describe("BrowserDownloads", () => {
   });
 });
 
-describe("TabViewport", () => {
+describe("TabEmulation", () => {
+  type Send = (method: string, params: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<unknown>;
+  const metricsCalls = (send: ReturnType<typeof vi.fn<Send>>) => send.mock.calls.filter(([method]) => method === "Emulation.setDeviceMetricsOverride");
+  const live = () => new AbortController().signal;
+  /** 面板上的占位矩形（窗口坐标）。 */
+  const box = (width: number, height: number) => ({ x: 0, y: 0, width, height });
+
+  // 目的：同样宽度的再次摆放（提示条、下载条让占位区域上下移动）之后，缩放还能继续更新；潜在缺陷：同步
+  // 标记被一个同步跑完的任务占住，以后的设置全被跳过（真实应用验收中出现过：铺满后网页不放大）。
+  it("keeps following the panel after a placement that changes nothing", async () => {
+    const send = vi.fn<Send>(async () => undefined);
+    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    emulation.show(box(640, 400));
+    await emulation.start(new AbortController().signal);
+    emulation.show(box(640, 400));
+    emulation.show(box(1280, 800));
+    await vi.waitFor(() => expect(emulation.toInput({ x: 100, y: 10 })).toEqual({ x: 100, y: 10 }));
+    emulation.hide();
+    emulation.show(box(640, 400));
+    await vi.waitFor(() => expect(emulation.toInput({ x: 100, y: 10 })).toEqual({ x: 50, y: 5 }));
+  });
+
   // 目的：合成点击按页面上已生效的缩放换算；潜在缺陷：设备模拟没设上（失败、被弹窗闸住、还在途）时按想要的比例换算，点到别处。
   it("converts input with the applied scale and catches up after a failure", async () => {
     let fail = false;
-    const apply = vi.fn(async () => { if (fail) throw new Error("paused"); });
-    const viewport = new TabViewport(apply, vi.fn());
-    viewport.show(640);
-    expect(apply).not.toHaveBeenCalled();
-    await viewport.start(new AbortController().signal);
-    expect(apply).toHaveBeenLastCalledWith(expect.objectContaining({ width: 1280, height: 800, scale: 0.5 }), expect.anything());
-    expect(viewport.toInput({ x: 100, y: 10 })).toEqual({ x: 50, y: 5 });
+    const send = vi.fn<Send>(async () => { if (fail) throw new Error("paused"); });
+    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    emulation.show(box(640, 400));
+    expect(send).not.toHaveBeenCalled();
+    await emulation.start(new AbortController().signal);
+    expect(metricsCalls(send).at(-1)).toEqual(["Emulation.setDeviceMetricsOverride", expect.objectContaining({ width: 1280, height: 800, scale: 0.5 }), expect.anything()]);
+    expect(emulation.toInput({ x: 100, y: 10 })).toEqual({ x: 50, y: 5 });
 
     fail = true;
-    viewport.show(1280);
-    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(2));
-    expect(viewport.toInput({ x: 100, y: 10 })).toEqual({ x: 50, y: 5 });
+    emulation.show(box(1280, 800));
+    await vi.waitFor(() => expect(metricsCalls(send)).toHaveLength(2));
+    expect(emulation.toInput({ x: 100, y: 10 })).toEqual({ x: 50, y: 5 });
+    // 失败后停下等外部触发：不原地重试（被弹窗闸住时命令立即失败，重试只会空转）。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(metricsCalls(send)).toHaveLength(2);
 
     fail = false;
-    viewport.resync();
-    await vi.waitFor(() => expect(viewport.toInput({ x: 100, y: 10 })).toEqual({ x: 100, y: 10 }));
-    expect(viewport.isShown).toBe(true);
-    viewport.hide();
-    expect(viewport.isShown).toBe(false);
+    emulation.resync();
+    await vi.waitFor(() => expect(emulation.toInput({ x: 100, y: 10 })).toEqual({ x: 100, y: 10 }));
+    expect(emulation.isShown).toBe(true);
+    emulation.hide();
+    expect(emulation.isShown).toBe(false);
+  });
+
+  // 目的：Agent 改视口后再导航，页面按新视口布局；潜在缺陷：设置还在途就开始加载，或深浅色与视口互相覆盖。
+  it("waits for an agent's change to take effect, sends only what changed, and moves the view with it", async () => {
+    const send = vi.fn<Send>(async () => undefined);
+    const metricsApplied = vi.fn();
+    const emulation = new TabEmulation(send, vi.fn(), metricsApplied);
+    await emulation.start(new AbortController().signal);
+    send.mockClear();
+    await emulation.set({ ...DEFAULT_EMULATION, colorScheme: "dark" }, live());
+    expect(send.mock.calls.map(([method]) => method)).toEqual(["Emulation.setEmulatedMedia"]);
+    expect(send).toHaveBeenCalledWith("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] }, expect.anything());
+
+    send.mockClear();
+    metricsApplied.mockClear();
+    await emulation.set({ width: 390, height: 844, mobile: true, colorScheme: "dark" }, live());
+    expect(send.mock.calls.map(([method]) => method)).toEqual(["Emulation.setDeviceMetricsOverride", "Emulation.setTouchEmulationEnabled"]);
+    expect(emulation.current).toEqual({ width: 390, height: 844, mobile: true, colorScheme: "dark" });
+    // 后台视图与视口同大；视口生效时通知（视图 bounds 跟着它）。
+    expect(emulation.viewBounds).toEqual({ x: 0, y: 0, width: 390, height: 844 });
+    expect(metricsApplied).toHaveBeenCalledWith(expect.objectContaining({ width: 390, height: 844, scale: 1 }));
+
+    // 挂到面板上：在占位矩形里等比、水平居中、顶部对齐。
+    emulation.show({ x: 100, y: 40, width: 600, height: 422 });
+    expect(emulation.viewBounds).toEqual({ x: 303, y: 40, width: 195, height: 422 });
+    await vi.waitFor(() => expect(emulation.toInput({ x: 100, y: 10 })).toEqual({ x: 50, y: 5 }));
+  });
+
+  // 目的：挂在面板上时改视口，一条命令就设对缩放；潜在缺陷：缩放按旧摆放宽度除以新视口算，先错一帧再补一轮。
+  it("sets the right scale in one command when the viewport changes while shown", async () => {
+    const send = vi.fn<Send>(async () => undefined);
+    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    emulation.show(box(600, 700));
+    await emulation.start(new AbortController().signal);
+    send.mockClear();
+    await emulation.set({ ...DEFAULT_EMULATION, width: 390, height: 844, mobile: false }, live());
+    const scale = Math.min(600 / 390, 700 / 844);
+    expect(metricsCalls(send)).toEqual([["Emulation.setDeviceMetricsOverride", expect.objectContaining({ width: 390, height: 844, scale }), expect.anything()]]);
+    expect(emulation.viewBounds).toEqual({ x: Math.round((600 - 390 * scale) / 2), y: 0, width: Math.round(390 * scale), height: 700 });
+  });
+
+  // 目的：失败的要求不残留；潜在缺陷：结果报着没生效的视口，或等哪次弹窗答完被悄悄补设。
+  it("reports a failed agent change, keeps reporting what is in effect, and drops the request", async () => {
+    const send = vi.fn<Send>(async () => undefined);
+    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    await emulation.start(new AbortController().signal);
+    const paused = new Error("paused");
+    send.mockRejectedValue(paused);
+    await expect(emulation.set({ ...DEFAULT_EMULATION, width: 800 }, live())).rejects.toBe(paused);
+    expect(metricsCalls(send).length).toBeLessThanOrEqual(2);
+    expect(emulation.current).toEqual(DEFAULT_EMULATION);
+    expect(emulation.viewBounds).toEqual({ x: 0, y: 0, width: 1280, height: 800 });
+
+    send.mockResolvedValue(undefined);
+    send.mockClear();
+    emulation.resync();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(metricsCalls(send)).toHaveLength(0);
+  });
+
+  // 目的：Agent 取消调用只结束它自己的等待；潜在缺陷：共用的追赶随第一个调用方的取消停下，面板摆放的缩放卡在旧值。
+  it("lets a cancelled agent change go without stalling the shared catch-up", async () => {
+    let release!: () => void;
+    const send = vi.fn<Send>(async () => undefined);
+    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    await emulation.start(new AbortController().signal);
+    send.mockImplementationOnce(() => new Promise<undefined>((resolve) => { release = () => resolve(undefined); }));
+    const owner = new AbortController();
+    const change = emulation.set({ ...DEFAULT_EMULATION, width: 640, height: 400 }, owner.signal);
+    emulation.show(box(1280, 800));
+    owner.abort(new Error("cancelled"));
+    await expect(change).rejects.toThrow("cancelled");
+    release();
+    // 取消的要求不再追；摆放带来的缩放照常追上（1280 宽视口放进 1280 宽的占位，缩放 1）。
+    await vi.waitFor(() => expect(emulation.current).toEqual(DEFAULT_EMULATION));
+    expect(emulation.toInput({ x: 100, y: 10 })).toEqual({ x: 100, y: 10 });
+  });
+
+  // 目的：同一次设置里前一条命令成功、后一条失败时如实记下；潜在缺陷：整次不记导致缩放按旧值换算、点偏，
+  // 或之后一次无关的摆放 / 弹窗答复把已生效的部分悄悄撤回。
+  it("keeps the commands that took effect when a later one fails, without reverting them later", async () => {
+    const send = vi.fn<Send>(async () => undefined);
+    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    emulation.show(box(640, 400));
+    await emulation.start(new AbortController().signal);
+    send.mockImplementation(async (method) => { if (method === "Emulation.setEmulatedMedia") throw new Error("paused"); });
+    await expect(emulation.set({ width: 320, height: 200, mobile: false, colorScheme: "dark" }, live())).rejects.toThrow("paused");
+    // 视口命令已生效：报告与输入换算都按它（320 宽放进 640 宽的占位，缩放 2）。
+    expect(emulation.current).toEqual({ width: 320, height: 200, mobile: false, colorScheme: null });
+    expect(emulation.toInput({ x: 100, y: 10 })).toEqual({ x: 200, y: 20 });
+
+    send.mockReset();
+    send.mockResolvedValue(undefined);
+    emulation.resync();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("waitForLoad", () => {
+  // 目的：加载中标签被关掉时干净地结束；潜在缺陷：对已销毁的 webContents 调 stop() 在监听器里抛出，主进程弹出
+  // 未捕获异常框，等待永不落定、计时器 30 秒后再抛一次。
+  it("ends when the tab goes away mid-load without touching the destroyed contents", async () => {
+    vi.useFakeTimers();
+    try {
+      const contents = Object.assign(new EventEmitter(), {
+        isDestroyed: () => true,
+        stop: vi.fn(() => { throw new Error("Object has been destroyed"); }),
+      });
+      const owner = new AbortController();
+      const loading = waitForLoad(contents as never, { signal: owner.signal, paused: new AbortController().signal, timeoutMs: 30_000, log: {} });
+      owner.abort();
+      await expect(loading).rejects.toMatchObject({ code: "CANCELLED" });
+      expect(contents.stop).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

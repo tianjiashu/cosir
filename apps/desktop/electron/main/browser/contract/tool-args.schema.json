@@ -1,0 +1,798 @@
+{
+  "browser_act": {
+    "$defs": {
+      "ClickAction": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "description": "Element ref such as e12 from a snapshot of the current page.",
+            "pattern": "^e\\d+$",
+            "title": "Ref",
+            "type": "string"
+          },
+          "type": {
+            "const": "click",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "type"
+        ],
+        "title": "ClickAction",
+        "type": "object"
+      },
+      "DialogAction": {
+        "additionalProperties": false,
+        "properties": {
+          "accept": {
+            "description": "true to accept (OK), false to dismiss (Cancel) the open page dialog.",
+            "title": "Accept",
+            "type": "boolean"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Dialog id from a browser result; only that dialog is answered. Leave null only for a dialog opened by an earlier action in this same call (e.g. click Delete, then dialog accept); otherwise the action fails with DIALOG_MISMATCH.",
+            "title": "Id"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "maxLength": 10000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Answer for a prompt dialog when accepting; null keeps the default answer. Ignored for other dialogs.",
+            "title": "Text"
+          },
+          "type": {
+            "const": "dialog",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accept",
+          "id",
+          "text",
+          "type"
+        ],
+        "title": "DialogAction",
+        "type": "object"
+      },
+      "HoverAction": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "description": "Element to move the mouse over, e.g. to open a menu that shows on hover.",
+            "pattern": "^e\\d+$",
+            "title": "Ref",
+            "type": "string"
+          },
+          "type": {
+            "const": "hover",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "type"
+        ],
+        "title": "HoverAction",
+        "type": "object"
+      },
+      "PressAction": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Enter",
+                  "Tab",
+                  "Escape",
+                  "Backspace",
+                  "Delete",
+                  "ArrowUp",
+                  "ArrowDown",
+                  "ArrowLeft",
+                  "ArrowRight",
+                  "Home",
+                  "End",
+                  "PageUp",
+                  "PageDown",
+                  "Space"
+                ],
+                "type": "string"
+              },
+              {
+                "pattern": "^[a-z0-9]$",
+                "type": "string"
+              }
+            ],
+            "description": "A named key, or a single lowercase letter or digit for shortcuts.",
+            "title": "Key"
+          },
+          "modifiers": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "Alt",
+                    "Control",
+                    "Meta",
+                    "Shift",
+                    "ControlOrMeta"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Keys held down while pressing, for shortcuts the page handles (e.g. ControlOrMeta with Enter to send). ControlOrMeta is Cmd on macOS and Ctrl elsewhere. Editing shortcuts such as select-all or undo are not supported; edit text with type.",
+            "title": "Modifiers"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "pattern": "^e\\d+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Focus this element before pressing; null presses on the focused element.",
+            "title": "Ref"
+          },
+          "type": {
+            "const": "press",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "modifiers",
+          "ref",
+          "type"
+        ],
+        "title": "PressAction",
+        "type": "object"
+      },
+      "ScrollAction": {
+        "additionalProperties": false,
+        "properties": {
+          "direction": {
+            "anyOf": [
+              {
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Scroll by about one screenful. Without ref this scrolls the page; with ref it scrolls the scrollable area containing that element (lists, chat logs, panels). Fails with SCROLL_END when it cannot move further.",
+            "title": "Direction"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "pattern": "^e\\d+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "With a direction: the element whose scrollable area to scroll. With a null direction: bring this element into view, e.g. before a screenshot.",
+            "title": "Ref"
+          },
+          "type": {
+            "const": "scroll",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "direction",
+          "ref",
+          "type"
+        ],
+        "title": "ScrollAction",
+        "type": "object"
+      },
+      "SelectAction": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "description": "Element ref such as e12 from a snapshot of the current page.",
+            "pattern": "^e\\d+$",
+            "title": "Ref",
+            "type": "string"
+          },
+          "type": {
+            "const": "select",
+            "title": "Type",
+            "type": "string"
+          },
+          "values": {
+            "description": "Option values or visible labels to select. Native select lists only; for a custom dropdown, click the field and then the option.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "ref",
+          "type",
+          "values"
+        ],
+        "title": "SelectAction",
+        "type": "object"
+      },
+      "TypeAction": {
+        "additionalProperties": false,
+        "properties": {
+          "clear": {
+            "default": false,
+            "description": "Clear the field first.",
+            "title": "Clear",
+            "type": "boolean"
+          },
+          "ref": {
+            "description": "Element ref such as e12 from a snapshot of the current page.",
+            "pattern": "^e\\d+$",
+            "title": "Ref",
+            "type": "string"
+          },
+          "submit": {
+            "default": false,
+            "description": "Press Enter after typing.",
+            "title": "Submit",
+            "type": "boolean"
+          },
+          "text": {
+            "description": "Text to type into the field.",
+            "maxLength": 10000,
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "type",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "clear",
+          "ref",
+          "submit",
+          "text",
+          "type"
+        ],
+        "title": "TypeAction",
+        "type": "object"
+      },
+      "WaitForAction": {
+        "additionalProperties": false,
+        "properties": {
+          "seconds": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "maximum": 15,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "With text or text_gone: the maximum wait (null means 5). Otherwise: the length of a plain pause.",
+            "title": "Seconds"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Wait until this text appears on the page.",
+            "title": "Text"
+          },
+          "text_gone": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Wait until this text is gone from the page, e.g. a loading message.",
+            "title": "Text Gone"
+          },
+          "type": {
+            "const": "wait_for",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seconds",
+          "text",
+          "text_gone",
+          "type"
+        ],
+        "title": "WaitForAction",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "actions": {
+        "description": "Actions to run in order; stops at the first failure.",
+        "items": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClickAction"
+            },
+            {
+              "$ref": "#/$defs/HoverAction"
+            },
+            {
+              "$ref": "#/$defs/TypeAction"
+            },
+            {
+              "$ref": "#/$defs/PressAction"
+            },
+            {
+              "$ref": "#/$defs/SelectAction"
+            },
+            {
+              "$ref": "#/$defs/ScrollAction"
+            },
+            {
+              "$ref": "#/$defs/WaitForAction"
+            },
+            {
+              "$ref": "#/$defs/DialogAction"
+            }
+          ]
+        },
+        "maxItems": 10,
+        "minItems": 1,
+        "title": "Actions",
+        "type": "array"
+      },
+      "tab": {
+        "anyOf": [
+          {
+            "pattern": "^t\\d+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "title": "Tab"
+      }
+    },
+    "required": [
+      "actions",
+      "tab"
+    ],
+    "title": "BrowserActArgs",
+    "type": "object"
+  },
+  "browser_evaluate": {
+    "additionalProperties": false,
+    "properties": {
+      "expression": {
+        "description": "JavaScript expression evaluated in the page; its value comes back as JSON. Use an IIFE such as (() => { ... })() for statements; a returned Promise is awaited.",
+        "maxLength": 20000,
+        "minLength": 1,
+        "title": "Expression",
+        "type": "string"
+      },
+      "tab": {
+        "anyOf": [
+          {
+            "pattern": "^t\\d+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "title": "Tab"
+      }
+    },
+    "required": [
+      "expression",
+      "tab"
+    ],
+    "title": "BrowserEvaluateArgs",
+    "type": "object"
+  },
+  "browser_logs": {
+    "additionalProperties": false,
+    "properties": {
+      "failed_only": {
+        "default": false,
+        "description": "network only: only requests that failed or got a status of 400 or more.",
+        "title": "Failed Only",
+        "type": "boolean"
+      },
+      "kind": {
+        "description": "console for console messages and uncaught errors, network for requests.",
+        "enum": [
+          "console",
+          "network"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "level": {
+        "anyOf": [
+          {
+            "enum": [
+              "error",
+              "warning",
+              "info",
+              "debug"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "console only: the lowest level to include, e.g. warning for warnings and errors. Null includes all levels.",
+        "title": "Level"
+      },
+      "limit": {
+        "default": 50,
+        "description": "Maximum number of entries.",
+        "maximum": 200,
+        "minimum": 1,
+        "title": "Limit",
+        "type": "integer"
+      },
+      "pattern": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Only entries whose text or URL contains this, ignoring case.",
+        "title": "Pattern"
+      },
+      "since": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Read entries from this sequence number on, oldest first; pass the next value of your last browser_logs result to read only new entries. Null returns the newest entries of the current page.",
+        "title": "Since"
+      },
+      "tab": {
+        "anyOf": [
+          {
+            "pattern": "^t\\d+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "title": "Tab"
+      }
+    },
+    "required": [
+      "failed_only",
+      "kind",
+      "level",
+      "limit",
+      "pattern",
+      "since",
+      "tab"
+    ],
+    "title": "BrowserLogsArgs",
+    "type": "object"
+  },
+  "browser_navigate": {
+    "$defs": {
+      "BrowserViewport": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "description": "Viewport height in CSS pixels.",
+            "maximum": 2160,
+            "minimum": 240,
+            "title": "Height",
+            "type": "integer"
+          },
+          "mobile": {
+            "default": false,
+            "description": "Emulate a phone: mobile meta viewport and touch input.",
+            "title": "Mobile",
+            "type": "boolean"
+          },
+          "width": {
+            "description": "Viewport width in CSS pixels.",
+            "maximum": 3840,
+            "minimum": 320,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "height",
+          "mobile",
+          "width"
+        ],
+        "title": "BrowserViewport",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "action": {
+        "anyOf": [
+          {
+            "enum": [
+              "back",
+              "forward",
+              "reload"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "History action on the tab instead of opening a URL. Leave null when using url.",
+        "title": "Action"
+      },
+      "color_scheme": {
+        "anyOf": [
+          {
+            "enum": [
+              "light",
+              "dark",
+              "auto"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Emulate the page's prefers-color-scheme before loading; auto follows the app's appearance. It stays until changed again; null keeps the current one.",
+        "title": "Color Scheme"
+      },
+      "new_tab": {
+        "default": false,
+        "description": "Open the URL in a new tab of this task; tab is ignored when true.",
+        "title": "New Tab",
+        "type": "boolean"
+      },
+      "tab": {
+        "anyOf": [
+          {
+            "pattern": "^t\\d+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "title": "Tab"
+      },
+      "url": {
+        "anyOf": [
+          {
+            "maxLength": 4096,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Absolute http(s) URL to open. Leave null when using action.",
+        "title": "Url"
+      },
+      "viewport": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BrowserViewport"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Change the tab's viewport before loading, e.g. 390x844 mobile to check a phone layout. It stays until changed again; null keeps the current one."
+      }
+    },
+    "required": [
+      "action",
+      "color_scheme",
+      "new_tab",
+      "tab",
+      "url",
+      "viewport"
+    ],
+    "title": "BrowserNavigateArgs",
+    "type": "object"
+  },
+  "browser_screenshot": {
+    "additionalProperties": false,
+    "properties": {
+      "full_page": {
+        "default": false,
+        "description": "Capture the whole page (height capped) instead of the viewport.",
+        "title": "Full Page",
+        "type": "boolean"
+      },
+      "tab": {
+        "anyOf": [
+          {
+            "pattern": "^t\\d+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "title": "Tab"
+      }
+    },
+    "required": [
+      "full_page",
+      "tab"
+    ],
+    "title": "BrowserScreenshotArgs",
+    "type": "object"
+  },
+  "browser_snapshot": {
+    "additionalProperties": false,
+    "properties": {
+      "from_line": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Line to start from when a long snapshot was cut off; the cut-off note gives the number. Pass null to read from the top.",
+        "title": "From Line"
+      },
+      "tab": {
+        "anyOf": [
+          {
+            "pattern": "^t\\d+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "title": "Tab"
+      }
+    },
+    "required": [
+      "from_line",
+      "tab"
+    ],
+    "title": "BrowserSnapshotArgs",
+    "type": "object"
+  },
+  "browser_tabs": {
+    "additionalProperties": false,
+    "properties": {
+      "action": {
+        "description": "list this task's tabs, select one as the current tab, or close one you no longer need.",
+        "enum": [
+          "list",
+          "select",
+          "close"
+        ],
+        "title": "Action",
+        "type": "string"
+      },
+      "tab": {
+        "anyOf": [
+          {
+            "pattern": "^t\\d+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Tab id for select or close; null for list.",
+        "title": "Tab"
+      }
+    },
+    "required": [
+      "action",
+      "tab"
+    ],
+    "title": "BrowserTabsArgs",
+    "type": "object"
+  }
+}

@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TabEvents, TabOptions } from "@/electron/main/browser/browser-tab";
-import { waitForInitialization } from "@/electron/main/browser/initialization";
+import { abortable } from "@/electron/main/browser/abortable";
 
 vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
 vi.mock("@/electron/main/browser/browser-tab", () => ({
-  get BrowserTab() { return FakeTab; }, VIEWPORT: { width: 1280, height: 800 },
+  get BrowserTab() { return FakeTab; },
 }));
 vi.mock("@/electron/main/browser/browser-session", () => ({ browserPageWebPreferences: () => ({}) }));
 import { BrowserHost } from "@/electron/main/browser/browser-host";
@@ -19,7 +19,6 @@ class FakeTab {
   fail!: (error: Error) => void;
   pending = new Promise<void>((resolve, reject) => { this.finish = resolve; this.fail = reject; });
   close = vi.fn();
-  note = vi.fn();
   navigate = vi.fn().mockResolvedValue(undefined);
   snapshot = vi.fn().mockResolvedValue({ text: "page", url: "", title: "", loading: false, frames: 0, notes: [], dialog: null });
   readonly contents = { isDestroyed: () => false };
@@ -27,6 +26,13 @@ class FakeTab {
   processId = 1;
   readonly pausedSignal = new AbortController().signal;
   interruptCdp = vi.fn();
+  readonly log = {
+    note: vi.fn(),
+    undeliveredNotes: vi.fn((): string[] => []),
+    digest: vi.fn(() => ({ notes: [], newLogs: { consoleErrors: 0, consoleWarnings: 0, failedRequests: 0 } })),
+  };
+  readonly status = null;
+  readonly currentEmulation = { width: 1280, height: 800, mobile: false, colorScheme: null };
   readonly tabId: string; readonly taskId: number; readonly events: TabEvents; readonly options: TabOptions;
   get openerId() { return this.options.openerId; }
   get downloadDir() { return this.options.downloadDir; }
@@ -36,7 +42,7 @@ class FakeTab {
     this.tabId = options.tabId; this.taskId = options.taskId; this.events = options.events;
     FakeTab.instances.push(this);
   }
-  initialize(signal: AbortSignal) { return waitForInitialization(this.pending, signal); }
+  initialize(signal: AbortSignal) { return abortable(this.pending, signal); }
   summary() {
     return { tabId: this.tabId, taskId: this.taskId, createdBy: this.createdBy, openerId: this.openerId, url: "", title: "", loading: true, crashed: false, dialog: null };
   }
@@ -52,13 +58,13 @@ describe("BrowserHost 资源生命周期", () => {
   it("初始化中即可列出标签；快照等待初始化，且不跨 Task 访问", async () => {
     const host = new BrowserHost(() => null);
     const opening = host.userOpen(1, limits);
-    expect(host.manageTabs({ taskId: 1, action: "list", context: limits })).toMatchObject([{ tab_id: "t1", current: true }]);
-    const snapshot = host.snapshot({ taskId: 1, fromLine: 1, context: limits });
-    await expect(host.snapshot({ taskId: 2, tab: "t1", fromLine: 1, context: limits })).rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
+    expect(host.manageTabs({ taskId: 1, action: "list", context: limits })).toMatchObject([{ tabId: "t1", current: true }]);
+    const snapshot = host.snapshot({ taskId: 1, fromLine: 1, context: limits }, new AbortController().signal);
+    await expect(host.snapshot({ taskId: 2, tab: "t1", fromLine: 1, context: limits }, new AbortController().signal)).rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
     expect(tab().snapshot).not.toHaveBeenCalled();
     tab().finish();
     await expect(opening).resolves.toBe("t1");
-    await expect(snapshot).resolves.toMatchObject({ tab_id: "t1", snapshot: "page" });
+    await expect(snapshot).resolves.toMatchObject({ tabId: "t1", snapshot: "page" });
   });
 
   it("初始化中的标签计入每 Task 与全局上限", async () => {
@@ -130,13 +136,16 @@ describe("BrowserHost 资源生命周期", () => {
     const returned = (response as { createWindow: (options: unknown) => unknown }).createWindow({ webContents: adopted });
     expect(tab(1).options).toMatchObject({ taskId: 1, openerId: "t1", downloadDir: context().downloadDir, adopted });
     expect(returned).toBe(tab(1).contents);
-    expect(tab().note).toHaveBeenCalledWith(expect.stringContaining("in a new tab t2"));
+    expect(tab().log.note).toHaveBeenCalledWith(expect.stringContaining("in a new tab t2"));
     tab(1).finish(); await flush();
-    expect(host.manageTabs({ taskId: 1, action: "list", context: limits }).find((item) => item.current)?.tab_id).toBe("t1");
+    expect(host.manageTabs({ taskId: 1, action: "list", context: limits }).find((item) => item.current)?.tabId).toBe("t1");
+    tab(1).log.undeliveredNotes.mockReturnValue(["the download \"a.csv\" finished"]);
     tab(1).events.onGone();
     expect(host.state().tabs.map((item: { tabId: string }) => item.tabId)).toEqual(["t1"]);
+    // 未读备注（如下载结果）转给来源标签，不随标签消失。
+    expect(tab().log.note).toHaveBeenCalledWith('in tab t2: the download "a.csv" finished');
     expect(tab(1).close).toHaveBeenCalledTimes(1);
-    expect(tab().note).toHaveBeenLastCalledWith("tab t2 (opened by this page) closed itself");
+    expect(tab().log.note).toHaveBeenLastCalledWith("tab t2 (opened by this page) closed itself");
   });
 
   it("非网页地址、超出上限与宿主退出后都拒绝开窗", async () => {
@@ -145,7 +154,7 @@ describe("BrowserHost 资源生命周期", () => {
     tab().finish(); await first;
     expect(tab().events.onWindowOpen("file:///etc/passwd")).toEqual({ action: "deny" });
     expect(tab().events.onWindowOpen("https://example.com")).toEqual({ action: "deny" });
-    expect(tab().note).toHaveBeenLastCalledWith(expect.stringContaining("per-task limit"));
+    expect(tab().log.note).toHaveBeenLastCalledWith(expect.stringContaining("per-task limit"));
     host.closeAll();
     expect(tab().events.onWindowOpen("https://example.com")).toEqual({ action: "deny" });
     expect(FakeTab.instances).toHaveLength(1);
@@ -157,7 +166,7 @@ describe("BrowserHost 资源生命周期", () => {
     FakeTab.instances.forEach((item) => item.finish());
     await Promise.all(openings);
     host.userClose("t3");
-    expect(host.manageTabs({ taskId: 1, action: "list", context: limits }).find((item) => item.current)?.tab_id).toBe("t2");
+    expect(host.manageTabs({ taskId: 1, action: "list", context: limits }).find((item) => item.current)?.tabId).toBe("t2");
   });
 
   // 目的：弹窗停住的是整个渲染进程；潜在缺陷：同进程的另一个标签 CDP 空等 10 秒报「无响应」，Agent 不知道该去哪答。
@@ -194,7 +203,7 @@ describe("BrowserHost 资源生命周期", () => {
     expect(item.cancelled).toBe(false);
     item.emit("done", {}, "completed");
     expect(host.state().downloads).toMatchObject([{ taskId: 1, tabId: "t2", state: "completed" }]);
-    expect(tab(0).note).toHaveBeenCalledWith(expect.stringContaining('the download "report.csv" finished'));
+    expect(tab(0).log.note).toHaveBeenCalledWith(expect.stringContaining('the download "report.csv" finished'));
     host.dropTasks([1]);
     expect(host.state().downloads).toEqual([]);
   });

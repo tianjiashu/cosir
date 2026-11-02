@@ -2,10 +2,13 @@ import { app, BrowserWindow } from "electron";
 
 import { BrowserHost } from "../../../electron/main/browser/browser-host";
 import { configureBrowserSession } from "../../../electron/main/browser/browser-session";
+import { registerBrowserMethods } from "../../../electron/main/browser/methods";
+import { HostMethodRegistry } from "../../../electron/main/host-link/methods";
 
 /**
- * 只供 `browser-engine.spec.ts` 使用的 Electron 入口：在真实 Electron 里直接驱动 `BrowserHost`，
- * 不经后端与链路。由 `global-setup.mjs` 打包，生产代码不含任何测试钩子。
+ * 只供 `browser-engine.spec.ts` 使用的 Electron 入口：在真实 Electron 里直接驱动 `BrowserHost`，或经与生产相同的
+ * 方法注册表（`invoke`：按导出的 schema 校验蛇形参数、按 `wire.ts` 出线上形状）调用，不经后端与 WebSocket。
+ * 由 `global-setup.mjs` 打包，生产代码不含任何测试钩子。
  */
 app.on("window-all-closed", () => undefined);
 
@@ -18,5 +21,8 @@ void app.whenReady().then(() => {
   void window.loadURL("about:blank");
   const host = new BrowserHost(() => window);
   configureBrowserSession(host);
-  (globalThis as { browserHarness?: unknown }).browserHarness = { host, window };
+  const methods = new HostMethodRegistry();
+  registerBrowserMethods(methods, host);
+  const invoke = (method: string, params: unknown) => methods.get(method)!(params, { signal: new AbortController().signal, meta: {} });
+  (globalThis as { browserHarness?: unknown }).browserHarness = { host, window, invoke };
 });

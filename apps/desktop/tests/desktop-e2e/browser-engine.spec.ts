@@ -33,6 +33,12 @@ const PAGES: Record<string, string> = {
   "/popup-download": `<title>Popup download</title><button onclick="window.open('/download-and-close')">Export</button>`,
   "/download-and-close": `<title>Exporting</title><script>location.href = "/report.csv"; setTimeout(() => window.close(), 300)</script>`,
   "/two-dialogs": `<title>Two</title><script>setTimeout(() => { alert("first"); document.title = "second:" + confirm("second?"); }, 0)</script>`,
+  "/responsive": `<title>Responsive</title><meta name="viewport" content="width=device-width, initial-scale=1"><p>Hi</p>`,
+  "/noisy": `<title>Noisy</title><script>
+    console.log("hello log"); console.warn("careful now"); console.error("bad thing");
+    setTimeout(() => { throw new Error("uncaught boom"); }, 0);
+    fetch("/api/missing").catch(() => undefined);
+  </script>`,
   "/far": `<title>Far</title><button style="position: absolute; left: 1100px; top: 700px" onclick="document.title = 'far clicked'">Far</button>`,
   "/escape": `<title>Escape</title><script>setTimeout(() => { location.href = "file:///etc/hosts"; }, 0)</script>`,
   "/ua": `<script>document.title = navigator.userAgent</script>`,
@@ -93,8 +99,8 @@ test.afterAll(async () => {
 });
 
 type Page = {
-  tab_id: string; url: string; title: string; snapshot: string; notes: string[]; other_tabs: string[];
-  dialog: { id: number; type: string; message: string; default_text: string } | null;
+  tabId: string; url: string; title: string; snapshot: string; notes: string[]; otherTabs: string[];
+  dialog: { id: number; type: string; message: string; defaultText: string } | null;
 };
 type Outcome = { ok: true; value: Page } | { ok: false; code: string; message: string };
 
@@ -119,11 +125,56 @@ function call(method: "navigate" | "snapshot" | "act" | "screenshot" | "manageTa
   }, { method, request, downloadDir: DOWNLOAD_DIR });
 }
 
+type LinkOutcome = { ok: true; value: Record<string, unknown> } | { ok: false; code: string; message: string };
+
+/** 后端照参数模型的 `model_dump()` 发送：每个字段都在，未填的为 null。这里按方法与动作类型补齐。 */
+const WIRE_DEFAULTS: Record<string, Record<string, unknown>> = {
+  "browser.navigate": { url: null, action: null, tab: null, new_tab: false, viewport: null, color_scheme: null },
+  "browser.snapshot": { tab: null, from_line: null },
+  "browser.act": { tab: null },
+  "browser.logs": { since: null, level: null, failed_only: false, pattern: null, limit: 50, tab: null },
+  "browser.evaluate": { tab: null },
+  "browser.tabs": { tab: null },
+};
+const ACTION_DEFAULTS: Record<string, Record<string, unknown>> = {
+  dialog: { text: null, id: null },
+  click: {},
+};
+
+function wireParams(method: string, params: Record<string, unknown>): Record<string, unknown> {
+  const filled = { ...WIRE_DEFAULTS[method], ...params };
+  if (Array.isArray(filled.actions)) {
+    filled.actions = (filled.actions as Record<string, unknown>[]).map((action) => ({ ...ACTION_DEFAULTS[action.type as string], ...action }));
+  }
+  if (filled.viewport && typeof filled.viewport === "object") filled.viewport = { mobile: false, ...filled.viewport };
+  return filled;
+}
+
+/** 按后端发来的线上形状调用方法（经注册表、schema 校验与 `wire.ts`），覆盖链路两端的适配层。 */
+function link(method: string, taskId: number, params: Record<string, unknown>): Promise<LinkOutcome> {
+  params = wireParams(method, params);
+  return app.evaluate(async (_electron, { method, taskId, params, downloadDir }) => {
+    const { invoke } = (globalThis as unknown as { browserHarness: { invoke: (method: string, params: unknown) => Promise<unknown> } }).browserHarness;
+    try {
+      const value = await invoke(method, { task_id: taskId, limits: { per_task: 5, total: 50 }, download_dir: downloadDir, ...params });
+      return { ok: true as const, value: value as Record<string, unknown> };
+    } catch (error) {
+      const failure = error as { code?: string; message?: string };
+      return { ok: false as const, code: failure.code ?? "UNKNOWN", message: failure.message ?? String(error) };
+    }
+  }, { method, taskId, params, downloadDir: DOWNLOAD_DIR });
+}
+
+function valueOf(outcome: LinkOutcome): Record<string, unknown> {
+  if (!outcome.ok) throw new Error(`expected success, got ${outcome.code}: ${outcome.message}`);
+  return outcome.value;
+}
+
 const navigate = (taskId: number, target: Record<string, unknown>, tab?: string) => call("navigate", { taskId, tab, target, context: context(LIMITS) });
 
 test("opens a tab on first navigation and returns a snapshot with refs", async () => {
   const page = pageOf(await navigate(1, { url: `${origin}/form` }));
-  expect(page).toMatchObject({ tab_id: "t1", title: "Form", other_tabs: [], notes: [] });
+  expect(page).toMatchObject({ tabId: "t1", title: "Form", otherTabs: [], notes: [] });
   expect(page.snapshot).toContain(`heading "Sign up" [level=1]`);
   expect(page.snapshot).toMatch(/textbox "Email" \[ref=e\d+\] value="a@b.c"/);
   expect(page.snapshot).toMatch(/button "Send" \[ref=e\d+\] \[disabled\]/);
@@ -133,7 +184,7 @@ test("opens a tab on first navigation and returns a snapshot with refs", async (
 test("supports history navigation within the task's current tab", async () => {
   await navigate(1, { url: `${origin}/second` });
   const back = await navigate(1, { action: "back" });
-  expect(back).toMatchObject({ ok: true, value: { tab_id: "t1", title: "Form" } });
+  expect(back).toMatchObject({ ok: true, value: { tabId: "t1", title: "Form" } });
   const reload = await navigate(1, { action: "reload" });
   expect(reload).toMatchObject({ ok: true, value: { title: "Form" } });
 });
@@ -148,7 +199,7 @@ test("reports load failures with the Chromium error", async () => {
 test("pauses on JavaScript dialogs until the agent or the user answers", async () => {
   const opened = pageOf(await navigate(1, { url: `${origin}/dialog` }));
   const shown = opened.dialog ?? pageOf(await call("snapshot", { taskId: 1 })).dialog;
-  expect(shown).toMatchObject({ type: "confirm", message: "Continue?", default_text: "" });
+  expect(shown).toMatchObject({ type: "confirm", message: "Continue?", defaultText: "" });
   expect(await call("screenshot", { taskId: 1, fullPage: false })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
   const blocked = pageOf(await call("act", { taskId: 1, actions: [{ type: "press", key: "Tab" }] })) as ActPage;
   expect(blocked).toMatchObject({ completed: 0, failure: { code: "DIALOG_OPEN" } });
@@ -202,7 +253,7 @@ test("recovers from a renderer crash by navigating again", async () => {
 
 // 目的：标签归属是硬边界、上限生效、删除后回收；潜在缺陷：子 Agent 操作父 Agent 的页面或标签无限增长。
 test("keeps tabs per task, enforces limits and drops a task's tabs", async () => {
-  const taskOneTab = pageOf(await navigate(1, { url: `${origin}/second` })).tab_id;
+  const taskOneTab = pageOf(await navigate(1, { url: `${origin}/second` })).tabId;
   expect(await navigate(2, { url: `${origin}/second` })).toMatchObject({ ok: true });
   expect(await call("snapshot", { taskId: 2, tab: taskOneTab })).toMatchObject({ ok: false, code: "TAB_NOT_FOUND" });
   expect(await navigate(3, { url: `${origin}/second` })).toMatchObject({ ok: true });
@@ -223,8 +274,8 @@ test("presents a standard Chrome user agent", async () => {
 
 // 目的：工作台同一时刻只挂一个原生画面、摘下后回到后台视口；潜在缺陷：切标签后旧画面残留在窗口上盖住页面。
 test("places one tab at a time on the window and freezes a frame", async () => {
-  const first = pageOf(await call("navigate", { taskId: 6, target: { url: `${origin}/form` }, context: context(roomy) })).tab_id;
-  const second = pageOf(await call("navigate", { taskId: 7, target: { url: `${origin}/second` }, context: context(roomy) })).tab_id;
+  const first = pageOf(await call("navigate", { taskId: 6, target: { url: `${origin}/form` }, context: context(roomy) })).tabId;
+  const second = pageOf(await call("navigate", { taskId: 7, target: { url: `${origin}/second` }, context: context(roomy) })).tabId;
 
   const placement = await app.evaluate((_electron, { first, second }) => {
     type Harness = {
@@ -255,8 +306,8 @@ test("places one tab at a time on the window and freezes a frame", async () => {
   expect(placement.withFirst).toBe(placement.base + 1);
   expect(placement.withSecond).toBe(placement.base + 1);
   expect(placement.firstAttached).toBe(false);
-  // 300×200 的占位区域里按 1280×800 等比缩放、居中：300×187.5，上下各留 6.25。
-  expect(placement.placed).toEqual({ x: 10, y: 26, width: 300, height: 188 });
+  // 300×200 的占位区域里按 1280×800 等比缩放、水平居中、顶部对齐：300×187.5，下方留白。
+  expect(placement.placed).toEqual({ x: 10, y: 20, width: 300, height: 188 });
   expect(placement.after).toBe(placement.base);
   expect(placement.detached).toEqual({ x: 0, y: 0, width: 1280, height: 800 });
 
@@ -369,10 +420,10 @@ test("screenshots in CSS pixels and manages the task's tabs", async () => {
   expect(size).toEqual({ width: 1280, height: 800 });
 
   const listed = await call("manageTabs", { taskId: 23, action: "list" });
-  expect(listed).toMatchObject({ ok: true, value: [{ current: false }, { tab_id: second.tab_id, current: true, title: "Second" }] });
-  const first = (listed as unknown as { value: { tab_id: string }[] }).value[0].tab_id;
-  expect(await call("manageTabs", { taskId: 23, action: "select", tab: first })).toMatchObject({ ok: true, value: [{ tab_id: first, current: true }, { current: false }] });
-  expect(await call("manageTabs", { taskId: 23, action: "close", tab: first })).toMatchObject({ ok: true, value: [{ tab_id: second.tab_id, current: true }] });
+  expect(listed).toMatchObject({ ok: true, value: [{ current: false }, { tabId: second.tabId, current: true, title: "Second" }] });
+  const first = (listed as unknown as { value: { tabId: string }[] }).value[0].tabId;
+  expect(await call("manageTabs", { taskId: 23, action: "select", tab: first })).toMatchObject({ ok: true, value: [{ tabId: first, current: true }, { current: false }] });
+  expect(await call("manageTabs", { taskId: 23, action: "close", tab: first })).toMatchObject({ ok: true, value: [{ tabId: second.tabId, current: true }] });
 });
 
 // 目的：初始化前就归 Host 持有；删除 Task 同时回收真实 Chromium 资源，迟到初始化不能复活标签。
@@ -380,19 +431,20 @@ test("drops a tab during initialization and destroys its webContents", async () 
   const result = await app.evaluate(async () => {
     type HarnessHost = {
       userOpen(taskId: number, context: { limits: { perTask: number; total: number }; downloadDir: string }): Promise<string>;
-      manageTabs(request: { taskId: number; action: "list" }): { tab_id: string }[];
+      manageTabs(request: { taskId: number; action: "list"; context: unknown }): { tabId: string }[];
       dropTasks(ids: number[]): void;
       tabs: Map<string, { tab: { view: Electron.WebContentsView } }>;
     };
     const { host } = (globalThis as unknown as { browserHarness: { host: HarnessHost } }).browserHarness;
-    const opening = host.userOpen(99, { limits: { perTask: 5, total: 50 }, downloadDir: "/tmp" });
-    const listed = host.manageTabs({ taskId: 99, action: "list" });
-    const contents = host.tabs.get(listed[0].tab_id)!.tab.view.webContents;
+    const context = { limits: { perTask: 5, total: 50 }, downloadDir: "/tmp" };
+    const opening = host.userOpen(99, context);
+    const listed = host.manageTabs({ taskId: 99, action: "list", context });
+    const contents = host.tabs.get(listed[0].tabId)!.tab.view.webContents;
     const destroyed = new Promise<void>((resolve) => contents.once("destroyed", () => resolve()));
     host.dropTasks([99]);
     const code = await opening.then(() => "opened", (error: { code: string }) => error.code);
     await destroyed;
-    return { listed: listed.length, code, destroyed: contents.isDestroyed(), remaining: host.manageTabs({ taskId: 99, action: "list" }) };
+    return { listed: listed.length, code, destroyed: contents.isDestroyed(), remaining: host.manageTabs({ taskId: 99, action: "list", context }) };
   });
   expect(result).toEqual({ listed: 1, code: "TAB_NOT_FOUND", destroyed: true, remaining: [] });
 });
@@ -405,7 +457,7 @@ test("keeps the opener for windows the page opens, and drops them when they clos
   // 备注读一次就清空：每次快照的都收起来。
   const notes = [...pageOf(await call("act", { taskId: 30, actions: [{ type: "click", ref: signIn }] })).notes];
   const look = async () => {
-    const opener = pageOf(await call("snapshot", { taskId: 30, tab: page.tab_id }));
+    const opener = pageOf(await call("snapshot", { taskId: 30, tab: page.tabId }));
     notes.push(...opener.notes);
     return opener.title;
   };
@@ -428,7 +480,7 @@ test("saves downloads into the tab's download directory and reports them", async
   const downloads = await app.evaluate((_electron, tabId) => {
     const { host } = (globalThis as unknown as { browserHarness: { host: { state(): { downloads: { tabId: string }[] } } } }).browserHarness;
     return host.state().downloads.filter((item) => item.tabId === tabId);
-  }, page.tab_id);
+  }, page.tabId);
   expect(downloads).toMatchObject([{ filename: "report.csv", path: target, state: "completed" }]);
   // 小文件可能在动作返回前就下完：「完成」备注随动作结果或之后的快照到来。
   const notes = [...clicked.notes, ...pageOf(await call("snapshot", { taskId: 31 })).notes].join("\n");
@@ -444,7 +496,7 @@ test("keeps the agent's viewport fixed and clicks accurately while the tab is sh
     host.place(tabId, { x: 0, y: 0, width: 640, height: 400 });
     await new Promise((resolve) => setTimeout(resolve, 300));
     return host.tabs.get(tabId)!.tab.view.webContents.executeJavaScript("innerWidth");
-  }, page.tab_id);
+  }, page.tabId);
   expect(width).toBe(1280);
   const clicked = pageOf(await call("act", { taskId: 32, actions: [{ type: "click", ref: refOf(page.snapshot, "button", "Far") }] }));
   expect(clicked.title).toBe("far clicked");
@@ -453,13 +505,13 @@ test("keeps the agent's viewport fixed and clicks accurately while the tab is sh
   expect(size).toEqual({ width: 1280, height: 800 });
   await app.evaluate((_electron, tabId) => {
     (globalThis as unknown as { browserHarness: { host: { place(tabId: string, rect: unknown): void } } }).browserHarness.host.place(tabId, null);
-  }, page.tab_id);
+  }, page.tabId);
 });
 
 /** 当前 Task 的标签 id 列表。 */
 async function tabIds(taskId: number): Promise<string[]> {
   const tabs = await call("manageTabs", { taskId, action: "list" });
-  return tabs.ok ? (tabs.value as unknown as { tab_id: string }[]).map((item) => item.tab_id) : [];
+  return tabs.ok ? (tabs.value as unknown as { tabId: string }[]).map((item) => item.tabId) : [];
 }
 
 // 目的：页面开出的窗口一加载就弹窗时等人作答；潜在缺陷：初始化撞上弹窗失败，标签被直接关掉。
@@ -498,13 +550,13 @@ test("tells a tab that shares a paused process which tab to answer", async () =>
   const popup = (await tabIds(42))[1];
   await expect.poll(async () => pageOf(await call("snapshot", { taskId: 42, tab: popup })).dialog?.type).toBe("confirm");
   const started = Date.now();
-  const opener = await call("snapshot", { taskId: 42, tab: page.tab_id });
+  const opener = await call("snapshot", { taskId: 42, tab: page.tabId });
   expect(opener).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
   expect(opener.ok ? "" : opener.message).toContain(`tab ${popup} (this task)`);
   expect(Date.now() - started).toBeLessThan(5_000);
   const dialog = pageOf(await call("snapshot", { taskId: 42, tab: popup })).dialog!;
   await call("act", { taskId: 42, tab: popup, actions: [{ type: "dialog", accept: true, id: dialog.id }] });
-  expect(await call("snapshot", { taskId: 42, tab: page.tab_id })).toMatchObject({ ok: true });
+  expect(await call("snapshot", { taskId: 42, tab: page.tabId })).toMatchObject({ ok: true });
 });
 
 // 目的：下载归 Task 不归标签；潜在缺陷：弹出页下载后自己关闭，下载被一起取消、结果也没人收到。
@@ -526,3 +578,116 @@ test("finishes a download started by a window that then closes itself", async ()
   expect(states).toEqual(["completed"]);
 });
 
+
+// 目的：主文档的 HTTP 状态码要报出来；潜在缺陷：404 / 500 页面按成功返回，Agent 以为页面正常。也经线上路径核对字段。
+test("reports the main document's HTTP status over the wire", async () => {
+  const missing = valueOf(await link("browser.navigate", 50, { url: `${origin}/does-not-exist` }));
+  expect(missing).toMatchObject({ status: 404, emulation: { width: 1280, height: 800, mobile: false, color_scheme: null } });
+  // 主文档请求在导航提交前就记下，仍算这个页面的：默认读取（不给 since）就看得到它。
+  const documents = valueOf(await link("browser.logs", 50, { kind: "network", failed_only: true }));
+  expect(documents.entries).toMatchObject([{ url: `${origin}/does-not-exist`, status: 404, resource_type: "Document" }]);
+  const ok = valueOf(await link("browser.navigate", 50, { url: `${origin}/form` }));
+  expect(ok).toMatchObject({ status: 200, title: "Form", new_logs: { console_errors: 0, console_warnings: 0, failed_requests: 0 } });
+  // 主框架没加载成功：页面已不是上一个文档，不能沿用它的状态码。
+  expect(await link("browser.navigate", 50, { url: "http://127.0.0.1:9/" })).toMatchObject({ ok: false, code: "NAVIGATION_FAILED" });
+  expect(valueOf(await link("browser.snapshot", 50, {})).status).toBeNull();
+  expect(await link("browser.act", 50, { actions: [{ type: "click", ref: "e1", bogus: true }] })).toMatchObject({ ok: false, code: "INVALID_PARAMS" });
+});
+
+// 目的：编码时排查页面问题要看得到 console 与网络；潜在缺陷：异常与失败请求丢失，或读日志吞掉了页面结果的计数。
+test("captures console messages, uncaught errors and failed requests, and pages through them", async () => {
+  const page = valueOf(await link("browser.navigate", 51, { url: `${origin}/noisy` }));
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const errors = valueOf(await link("browser.logs", 51, { kind: "console", level: "error" }));
+  const texts = (errors.entries as { text: string }[]).map((entry) => entry.text).join("\n");
+  expect(texts).toContain("bad thing");
+  expect(texts).toContain("uncaught boom");
+  expect(texts).not.toContain("hello log");
+  expect(texts).not.toContain("Electron Security Warning");
+  const failed = valueOf(await link("browser.logs", 51, { kind: "network", failed_only: true }));
+  expect(failed.entries).toMatchObject([{ method: "GET", url: `${origin}/api/missing`, status: 404, resource_type: "Fetch" }]);
+  // 读日志不消费页面结果的「上次以来」：导航结果与随后快照的计数合起来恰好是全部新错误（不重复、不遗漏）。
+  const snapshot = valueOf(await link("browser.snapshot", 51, {}));
+  const counted = (result: Record<string, unknown>) => result.new_logs as { console_errors: number; failed_requests: number };
+  expect(counted(snapshot).console_errors + counted(page).console_errors).toBe(2);
+  expect(counted(snapshot).failed_requests + counted(page).failed_requests).toBe(1);
+  expect(valueOf(await link("browser.snapshot", 51, {})).new_logs).toEqual({ console_errors: 0, console_warnings: 0, failed_requests: 0 });
+  const all = valueOf(await link("browser.logs", 51, { kind: "console", since: 0 }));
+  const fresh = valueOf(await link("browser.logs", 51, { kind: "console", since: all.next as number }));
+  expect(fresh.entries).toEqual([]);
+});
+
+// 目的：执行 JS 拿到值或错误，脚本弹窗时页面停住要报出来；潜在缺陷：抛错被当作调用失败，或弹窗让调用挂到超时。
+test("evaluates expressions, reports script errors and dialogs the script opens", async () => {
+  await link("browser.navigate", 52, { url: `${origin}/form` });
+  // 经 Electron 的 debugger 传回的对象键按字母序（Chromium 内部的有序字典），按 JSON 语义比较。
+  const object = valueOf(await link("browser.evaluate", 52, { expression: "({ title: document.title, n: [1, 2].length })" }));
+  expect(object).toMatchObject({ truncated: false, error: null, dialog: null });
+  expect(JSON.parse(object.value as string)).toEqual({ title: "Form", n: 2 });
+  expect(valueOf(await link("browser.evaluate", 52, { expression: "new Promise((resolve) => setTimeout(() => resolve('later'), 50))" }))).toMatchObject({ value: "\"later\"" });
+  expect(valueOf(await link("browser.evaluate", 52, { expression: "undefined" }))).toMatchObject({ value: "undefined" });
+  const failed = valueOf(await link("browser.evaluate", 52, { expression: "missingThing.prop" }));
+  expect(failed).toMatchObject({ value: null, dialog: null });
+  expect(String(failed.error)).toContain("ReferenceError");
+  // 抛出原始值（没有 Error 的描述）时报出值本身。
+  expect(String(valueOf(await link("browser.evaluate", 52, { expression: "Promise.reject('nope')" })).error)).toContain('"nope"');
+  const paused = valueOf(await link("browser.evaluate", 52, { expression: "document.title = 'answered:' + confirm('Proceed?')" }));
+  expect(paused).toMatchObject({ value: null, error: null, dialog: { type: "confirm", message: "Proceed?" } });
+  // 弹窗开着时再执行脚本：脚本根本没跑，整次失败，不能把这个弹窗算到新脚本头上。
+  expect(await link("browser.evaluate", 52, { expression: "1" })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
+  const answered = valueOf(await link("browser.act", 52, { actions: [{ type: "dialog", accept: true, id: (paused.dialog as { id: number }).id }] }));
+  expect(answered).toMatchObject({ completed: 1, failure: null, dialog: null });
+  await expect.poll(async () => valueOf(await link("browser.evaluate", 52, { expression: "document.title" })).value).toBe("\"answered:true\"");
+  // 只在等一个不落定的 Promise 时主线程空闲：超时后不能发打断（会误杀页面接下来执行的脚本），页面照常运转。
+  await link("browser.evaluate", 52, { expression: "window.ticks = 0; setInterval(() => window.ticks++, 20); 0" });
+  const waited = valueOf(await link("browser.evaluate", 52, { expression: "new Promise(() => {})" }));
+  expect(String(waited.error)).toContain("waiting on a Promise");
+  const before = Number(valueOf(await link("browser.evaluate", 52, { expression: "window.ticks" })).value);
+  await expect.poll(async () => Number(valueOf(await link("browser.evaluate", 52, { expression: "window.ticks" })).value)).toBeGreaterThan(before);
+  // 转 JSON 卡住（getter 永不返回）同样被打断，标签还能接着用。
+  const getter = valueOf(await link("browser.evaluate", 52, { expression: "({ get x() { while (true) {} } })" }));
+  expect(String(getter.error)).toContain("was stopped");
+  expect(valueOf(await link("browser.evaluate", 52, { expression: "2 + 2" })).value).toBe("4");
+  // 死循环超时后被打断：标签还能接着用，不会一直卡在占满的主线程上。
+  const looped = valueOf(await link("browser.evaluate", 52, { expression: "while (true) {}" }));
+  expect(String(looped.error)).toContain("was stopped");
+  expect(valueOf(await link("browser.evaluate", 52, { expression: "1 + 1" })).value).toBe("2");
+  // 标签在执行途中关掉：以 TAB_NOT_FOUND 结束，不挂到时限、也不报成宿主内部错误。
+  const hanging = link("browser.evaluate", 52, { expression: "new Promise(() => {})" });
+  valueOf(await link("browser.tabs", 52, { action: "close" }));
+  expect(await hanging).toMatchObject({ ok: false, code: "TAB_NOT_FOUND" });
+});
+
+// 目的：测试响应式与深浅色；潜在缺陷：模拟只改一半（视口变了深浅色没变）、导航后丢失，或面板摆放没跟上新长宽比。
+test("emulates a viewport and colour scheme before loading, and keeps them across navigations", async () => {
+  // 手机布局下，没声明 viewport meta 的页面按 980px 的桌面宽度排版（与真实手机一致），所以用声明了的页面。
+  // 先挂到面板上（占位 800×800）：改视口后视图要按新长宽比重新摆放。
+  const opened = valueOf(await link("browser.navigate", 53, { url: `${origin}/responsive` }));
+  const placed = () => app.evaluate((_electron, tabId) => {
+    type Harness = { host: { tabs: Map<string, { tab: { view: Electron.WebContentsView } }> } };
+    return (globalThis as unknown as { browserHarness: Harness }).browserHarness.host.tabs.get(tabId)!.tab.view.getBounds();
+  }, opened.tab_id as string);
+  await app.evaluate((_electron, tabId) => {
+    (globalThis as unknown as { browserHarness: { host: { place(tabId: string, rect: unknown): void } } }).browserHarness.host.place(tabId, { x: 0, y: 0, width: 800, height: 800 });
+  }, opened.tab_id as string);
+  expect(await placed()).toEqual({ x: 0, y: 0, width: 800, height: 500 });
+  const page = valueOf(await link("browser.navigate", 53, { url: `${origin}/responsive`, viewport: { width: 390, height: 844, mobile: true }, color_scheme: "dark" }));
+  expect(page.emulation).toEqual({ width: 390, height: 844, mobile: true, color_scheme: "dark" });
+  // 390×844 放进 800×800：高度顶满，宽 370，水平居中。
+  await expect.poll(placed).toEqual({ x: 215, y: 0, width: 370, height: 800 });
+  const probe = "[innerWidth, matchMedia('(prefers-color-scheme: dark)').matches, navigator.maxTouchPoints > 0]";
+  expect(valueOf(await link("browser.evaluate", 53, { expression: probe })).value).toBe("[390,true,true]");
+  await link("browser.navigate", 53, { url: `${origin}/responsive?again` });
+  expect(valueOf(await link("browser.evaluate", 53, { expression: probe })).value).toBe("[390,true,true]");
+  const shot = await call("screenshot", { taskId: 53, fullPage: false });
+  const size = await app.evaluate(({ nativeImage }, image) => nativeImage.createFromDataURL(image).getSize(), (shot as unknown as { value: { image: string } }).value.image);
+  expect(size).toEqual({ width: 390, height: 844 });
+  await app.evaluate((_electron, tabId) => {
+    (globalThis as unknown as { browserHarness: { host: { place(tabId: string, rect: unknown): void } } }).browserHarness.host.place(tabId, null);
+  }, opened.tab_id as string);
+  const reset = valueOf(await link("browser.navigate", 53, { action: "reload", viewport: { width: 1280, height: 800 }, color_scheme: "auto" }));
+  expect(reset.emulation).toEqual({ width: 1280, height: 800, mobile: false, color_scheme: null });
+  // 不在面板上时，视图随生效的视口改尺寸（合成输入要落在视图之内）。
+  expect(await placed()).toEqual({ x: 0, y: 0, width: 1280, height: 800 });
+  expect(valueOf(await link("browser.evaluate", 53, { expression: "[innerWidth, navigator.maxTouchPoints > 0]" })).value).toBe("[1280,false]");
+});

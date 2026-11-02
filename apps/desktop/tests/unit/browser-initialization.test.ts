@@ -29,7 +29,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("BrowserTab 初始化与 Host 清理", () => {
-  it.each(["load", "Page.enable", "Page.setInterceptFileChooserDialog", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"])("在 %s 等待中删除 Task，停止后续步骤并释放资源", async (stage) => {
+  it.each(["load", "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"])("在 %s 等待中删除 Task，停止后续步骤并释放资源", async (stage) => {
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });
     if (stage === "load") contents.loadURL.mockReturnValue(pending);
@@ -51,7 +51,7 @@ describe("BrowserTab 初始化与 Host 清理", () => {
     expect(host.state().tabs).toEqual([]);
   });
 
-  it.each(["load", "attach", "Page.enable", "Page.setInterceptFileChooserDialog", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"])("%s 失败由 Host 关闭一次，不遗留计时器或标签", async (stage) => {
+  it.each(["load", "attach", "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"])("%s 失败由 Host 关闭一次，不遗留计时器或标签", async (stage) => {
     const error = new Error(`${stage} failed`);
     if (stage === "load") contents.loadURL.mockRejectedValue(error);
     else if (stage === "attach") contents.debugger.attach.mockImplementation(() => { throw error; });
@@ -66,12 +66,15 @@ describe("BrowserTab 初始化与 Host 清理", () => {
 
   // 目的：后台标签也能被 Agent 点击；潜在缺陷：没挂过窗口的视图收不到合成鼠标事件，而桌面 E2E 因 Playwright
   // 自己开了焦点模拟测不出来，只能在这里守住初始化顺序。
-  it("初始化开启焦点模拟并固定视口", async () => {
+  it("初始化开启网络日志、焦点模拟，并设上默认的设备模拟", async () => {
     const host = new BrowserHost(() => null);
     await host.userOpen(1, limits);
     const methods = contents.debugger.sendCommand.mock.calls.map(([method]) => method);
-    expect(methods).toEqual(["Page.enable", "Page.setInterceptFileChooserDialog", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"]);
-    expect(contents.debugger.sendCommand).toHaveBeenLastCalledWith("Emulation.setDeviceMetricsOverride", expect.objectContaining({ width: 1280, height: 800, scale: 1 }));
+    expect(methods).toEqual([
+      "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Emulation.setFocusEmulationEnabled",
+      "Emulation.setDeviceMetricsOverride", "Emulation.setTouchEmulationEnabled", "Emulation.setEmulatedMedia",
+    ]);
+    expect(contents.debugger.sendCommand).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", expect.objectContaining({ width: 1280, height: 800, scale: 1, mobile: false }));
     host.closeAll();
   });
 
@@ -97,7 +100,8 @@ describe("BrowserTab 初始化与 Host 清理", () => {
     // 精确构造 ready 完成后、navigate 续执行前的取消，避免依赖真实线程调度概率。
     const entry = (host as unknown as { tabs: Map<string, { ready: Promise<void> }> }).tabs.get("t1")!;
     void entry.ready.then(() => queueMicrotask(() => owner.abort()));
-    await expect(opening).rejects.toMatchObject({ code: "CANCELLED" });
+    // 被取消的请求不会应答（`host-link/client.ts`），拒绝原因无关紧要；要紧的是没有发起加载、标签留着。
+    await expect(opening).rejects.toThrow();
     expect(contents.loadURL.mock.calls).toEqual([["about:blank"]]);
     expect(contents.close).not.toHaveBeenCalled();
     expect(host.state().tabs).toHaveLength(1);

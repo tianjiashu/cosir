@@ -1,6 +1,7 @@
 import { HostMethodError } from "../host-link/methods";
 import type { BrowserDialog, BrowserDialogAnswer } from "../../shared/host-contract";
-import type { PageAction } from "./params";
+import { browserError } from "./errors";
+import type { Modifier, PageAction } from "./params";
 
 /**
  * 在页面上执行一组动作（点击、悬停、输入、按键、选择、滚动、等待、回答弹窗）。只经 CDP 合成输入；Agent 与用户输入的
@@ -44,7 +45,6 @@ export type ActResult = {
   failure: { index: number; code: string; message: string } | null;
 };
 
-const MAX_WAIT_SECONDS = 15;
 const POLL_MS = 250;
 
 /** CDP 键盘事件需要的字段；`text` 只给会产生字符的键（回车提交表单靠它）。单个字母与数字由 `keySpec` 现算。 */
@@ -66,25 +66,25 @@ const KEYS: Record<string, { code: string; keyCode: number; text?: string }> = {
 };
 const CHARACTER_KEY = /^[a-z0-9]$/;
 
+/** 契约（后端参数模型导出的 schema）里的按键都要在这里有对应：单测按 schema 逐个核对。 */
 export function isSupportedKey(key: string): boolean {
   return Object.hasOwn(KEYS, key) || CHARACTER_KEY.test(key);
 }
 
 /**
- * 修饰键。`ControlOrMeta` 在 macOS 上是 Meta、其他平台是 Control（与 Playwright 同名约定），模型不必知道
- * 宿主平台。只保证页面自己处理的快捷键（如 Cmd+Enter 发送）：macOS 上 CDP 合成的编辑快捷键（全选、撤销等）
- * 还需另传编辑命令才会生效，这里不提供，编辑文字用 `type`。
+ * CDP `Input.dispatchKeyEvent` 的修饰键位。修饰键只保证页面自己处理的快捷键（如 Cmd+Enter 发送）：macOS 上 CDP
+ * 合成的编辑快捷键（全选、撤销等）还需另传编辑命令才会生效，这里不提供，编辑文字用 `type`。
  */
-export const MODIFIERS = ["Alt", "Control", "Meta", "Shift", "ControlOrMeta"] as const;
-export type Modifier = (typeof MODIFIERS)[number];
-
-/** CDP `Input.dispatchKeyEvent` 的修饰键位。 */
 const MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 } as const;
+
+export function isSupportedModifier(modifier: string): boolean {
+  return modifier === "ControlOrMeta" || Object.hasOwn(MODIFIER_BITS, modifier);
+}
 
 export async function runActions(session: PageSession, actions: readonly PageAction[], signal: AbortSignal): Promise<ActResult> {
   const batch: Batch = { openedDialog: null };
   for (const [index, action] of actions.entries()) {
-    if (signal.aborted) return { completed: index, failure: { index, code: "CANCELLED", message: "the call was cancelled" } };
+    if (signal.aborted) return { completed: index, failure: { index, ...describe(stopped(signal)) } };
     const paused = session.paused();
     if (paused && action.type !== "dialog") return { completed: index, failure: { index, code: paused.code, message: paused.message } };
     try {
@@ -145,22 +145,23 @@ async function run(session: PageSession, action: PageAction, signal: AbortSignal
       return;
     case "select": {
       const problem = await effect(callOn(session, await element(session, action.ref), SELECT_OPTIONS, [action.values]));
-      if (problem) throw new HostMethodError("ACTION_FAILED", problem);
+      if (problem) throw browserError("ACTION_FAILED", problem);
       return;
     }
     case "scroll":
       await scroll(session, action.direction, action.ref);
       return;
     case "wait_for":
-      await waitFor(session, action, Math.min(action.seconds ?? 5, MAX_WAIT_SECONDS), signal);
+      // 省略时等 5 秒（与参数说明一致）；上限由契约 schema 保证。
+      await waitFor(session, action, action.seconds ?? 5, signal);
       return;
     case "dialog": {
       const current = session.dialog();
-      if (!current) throw new HostMethodError("NO_DIALOG", "this tab is not showing a dialog");
+      if (!current) throw browserError("NO_DIALOG", "this tab is not showing a dialog");
       const expected = action.id ?? batch.openedDialog;
       if (expected !== current.id) {
-        const asked = action.id === undefined ? "no earlier action in this call opened it" : `not #${action.id}`;
-        throw new HostMethodError("DIALOG_MISMATCH", `the tab is showing dialog #${current.id}; ${asked}`);
+        const asked = action.id === undefined ? "pass its id (only a dialog that an earlier action in this call is known to have opened can be answered without one)" : `not #${action.id}`;
+        throw browserError("DIALOG_MISMATCH", `the tab is showing dialog #${current.id}; ${asked}`);
       }
       session.answerDialog(current.id, { accept: action.accept, text: action.text });
       return;
@@ -172,7 +173,7 @@ async function run(session: PageSession, action: PageAction, signal: AbortSignal
 async function element(session: PageSession, ref: string): Promise<number> {
   const backendNodeId = session.resolveRef(ref);
   if (await callOn(session, backendNodeId, IS_CONNECTED)) {
-    throw new HostMethodError("REF_STALE", `the element ${ref} is no longer on the page; use a ref from the latest snapshot`);
+    throw browserError("REF_STALE", `the element ${ref} is no longer on the page; use a ref from the latest snapshot`);
   }
   return backendNodeId;
 }
@@ -214,7 +215,7 @@ async function scroll(session: PageSession, direction: "up" | "down" | undefined
   const problem = ref
     ? await effect(callOn(session, await element(session, ref), SCROLL_AREA, [down]))
     : await effect(evaluate(session, `(${SCROLL_AREA}).call(document.documentElement, ${down})`));
-  if (problem) throw new HostMethodError("SCROLL_END", problem);
+  if (problem) throw browserError("SCROLL_END", problem);
 }
 
 /** 先滚动到可见，再取内容框中心（CSS 像素）；没有布局（隐藏、零尺寸）报 `NOT_INTERACTABLE`。 */
@@ -225,7 +226,7 @@ async function center(session: PageSession, backendNodeId: number): Promise<{ x:
     quad = (await session.cdp<{ model: { content: number[] } }>("DOM.getBoxModel", { backendNodeId })).model.content;
   } catch (error) {
     if (isMissingNode(error)) throw error;
-    throw new HostMethodError("NOT_INTERACTABLE", "the element is not visible on the page");
+    throw browserError("NOT_INTERACTABLE", "the element is not visible on the page");
   }
   return { x: (quad[0] + quad[2] + quad[4] + quad[6]) / 4, y: (quad[1] + quad[3] + quad[5] + quad[7]) / 4 };
 }
@@ -300,7 +301,8 @@ async function waitFor(
     return;
   }
   const wanted = target.text !== undefined;
-  while (Date.now() < deadline && !signal.aborted) {
+  while (Date.now() < deadline) {
+    if (signal.aborted) throw stopped(signal);
     const { result } = await session.cdp<{ result: { value?: unknown } }>("Runtime.evaluate", {
       expression: `Boolean(document.body && document.body.innerText.includes(${JSON.stringify(text)}))`,
       returnByValue: true,
@@ -309,17 +311,28 @@ async function waitFor(
     await sleep(POLL_MS, signal);
   }
   const outcome = wanted ? `did not appear within ${seconds} seconds` : `is still on the page after ${seconds} seconds`;
-  throw new HostMethodError("WAIT_TIMEOUT", `the text ${JSON.stringify(text)} ${outcome}`);
+  throw browserError("WAIT_TIMEOUT", `the text ${JSON.stringify(text)} ${outcome}`);
 }
 
+/** 暂停 `ms`；调用取消或标签关闭时以 `stopped` 的原因提前结束（不当成等待超时）。 */
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
       clearTimeout(timer);
+      reject(stopped(signal));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
       resolve();
-    }, { once: true });
+    }, ms);
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/** 动作序列为什么停了：标签关闭等宿主给出的原因原样带回，其余（请求被取消）按 `CANCELLED`。 */
+function stopped(signal: AbortSignal): HostMethodError {
+  return signal.reason instanceof HostMethodError ? signal.reason : browserError("CANCELLED", "the call was cancelled");
 }
 
 function isMissingNode(error: unknown): boolean {

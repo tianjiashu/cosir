@@ -4,7 +4,6 @@ import path from "node:path";
 import type { DownloadItem } from "electron";
 
 import { logDesktopEvent } from "../desktop-log";
-import { HostMethodError } from "../host-link/methods";
 import type { BrowserDownload } from "../../shared/host-contract";
 
 /** 每个 Task 留几次已结束的下载（面板下载条与回答「下到哪了」够用）；进行中的从不挤掉。 */
@@ -93,7 +92,7 @@ export class BrowserDownloads {
 
   pathOf(downloadId: string): string {
     const entry = this.entries.find(({ download }) => download.id === downloadId);
-    if (!entry) throw new HostMethodError("DOWNLOAD_NOT_FOUND", `download ${downloadId} is not known`);
+    if (!entry) throw new Error("这次下载已不在列表里");
     return entry.download.path;
   }
 

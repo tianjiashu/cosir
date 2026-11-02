@@ -68,6 +68,7 @@ export function registerHostIpc(supervisor: BackendSupervisor, browser: BrowserH
 /** 地址栏输入：没写协议的按 https 补全；协议只允许 http(s)（与 Agent 走同一条校验）。 */
 function parseNavigationUrl(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) throw new Error("网址不能为空");
+  if (value.length > 4096) throw new Error("网址太长");
   const text = value.trim();
   const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(text) ? text : `https://${text}`;
   try {
@@ -107,7 +108,7 @@ function parseDialogId(value: unknown): number {
   return value as number;
 }
 
-/** 只确认形状；认不认识这个下载由宿主的下载登记判断（`DOWNLOAD_NOT_FOUND`）。 */
+/** 只确认形状；认不认识这个下载由宿主的下载登记判断（`BrowserDownloads.pathOf`）。 */
 function parseDownloadId(value: unknown): string {
   if (typeof value !== "string" || !value || value.length > 64) throw new Error("下载标识不合法");
   return value;

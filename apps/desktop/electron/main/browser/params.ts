@@ -1,21 +1,34 @@
 import path from "node:path";
 
-import { HostMethodError } from "../host-link/methods";
-import { isSupportedKey, MODIFIERS, type Modifier } from "./page-input";
+import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
+
+import { browserError } from "./errors";
 import { isWebProtocol } from "./web-url";
-import {
-  BROWSER_NAVIGATION_ACTIONS,
-  BROWSER_TAB_ID,
-  type BrowserNavigation,
-  type BrowserTabContext,
-  type BrowserTabLimits,
-} from "../../shared/host-contract";
+import toolArgsSchemas from "./contract/tool-args.schema.json";
+import type { BrowserNavigation, BrowserTabContext, BrowserTabLimits } from "../../shared/host-contract";
+import type { Emulation } from "./tab-emulation";
+import type { ConsoleLevel, LogQuery } from "./tab-log";
 
 /**
- * `browser.*` 方法的入参校验：链路只保证 `params` 是 JSON 值，这里是宿主侧唯一的校验点，
- * `BrowserHost` 直接信任这里产出的值。形状不对报 `INVALID_PARAMS`；地址协议不允许报
- * `NAVIGATION_BLOCKED`（模型可据此换地址，而不是当作调用写错）。
+ * `browser.*` 方法的入站适配：链路只保证 `params` 是 JSON 值，这里是宿主侧唯一的校验点，产出驼峰的请求类型，
+ * `BrowserHost` 直接信任它。出站的线上形状在 `wire.ts`。
+ *
+ * 工具参数的契约只有一份：后端的 Pydantic 参数模型（也是给模型的 schema），按线上实际形状导出成
+ * `contract/tool-args.schema.json`——后端照 `model_dump()` 原样发送，每个字段都在，未填的可选字段为 null（后端守卫
+ * 测试保证导出文件是最新的，见 `tests/test_browser_contract_guard.py`）。这里按它校验形状、枚举与上限，不再手写第二
+ * 份，也不补缺省值；null 只在映射成请求类型时转成「未给」。跨字段规则（url 与 action 二选一等）只在后端，宿主信任
+ * 后端已经校验过。手写的只有宿主自己的键（Task、上限、下载目录）与语义检查（地址协议报 `NAVIGATION_BLOCKED`，
+ * 模型可据此换地址，而不是当作调用写错）。
  */
+
+/** 后端每个请求都带、不属于工具参数的键。 */
+const HOST_KEYS = new Set(["task_id", "limits", "download_dir"]);
+
+type ToolName = keyof typeof toolArgsSchemas;
+const ajv = new Ajv2020({ allErrors: false, strict: false });
+const validators = new Map<ToolName, ValidateFunction>(
+  (Object.keys(toolArgsSchemas) as ToolName[]).map((name) => [name, ajv.compile(toolArgsSchemas[name])]),
+);
 
 /**
  * 每个请求都带后端给出的标签上下文：宿主据此刷新上限（页面开出的标签没有请求可带，用最近一次的），下载目录
@@ -23,11 +36,21 @@ import {
  */
 type TaskRequest = { taskId: number; context: BrowserTabContext };
 /** 指向本 Task 的某个标签（省略即当前标签）。 */
-type TabRequest = TaskRequest & { tab?: string };
-export type NavigateRequest = TabRequest & { newTab: boolean; target: BrowserNavigation };
+export type TabRequest = TaskRequest & { tab?: string };
+export type NavigateRequest = TabRequest & {
+  newTab: boolean;
+  target: BrowserNavigation;
+  /** 只含要改的项；`colorScheme: null` 表示取消模拟、跟随应用外观。 */
+  emulation?: Partial<Emulation>;
+};
 export type SnapshotRequest = TabRequest & { fromLine: number };
 export type ScreenshotRequest = TabRequest & { fullPage: boolean };
 export type TabsRequest = TabRequest & { action: "list" | "select" | "close" };
+export type LogsRequest = TabRequest & { query: LogQuery };
+export type EvaluateRequest = TabRequest & { expression: string };
+
+/** `ControlOrMeta` 在 macOS 上是 Meta、其他平台是 Control（与 Playwright 同名约定），模型不必知道宿主平台。 */
+export type Modifier = "Alt" | "Control" | "Meta" | "Shift" | "ControlOrMeta";
 
 export type PageAction =
   | { type: "click"; ref: string }
@@ -44,115 +67,52 @@ export type PageAction =
 
 export type ActRequest = TabRequest & { actions: PageAction[] };
 
-/** 一次调用最多几个动作：太长的序列中途页面变化的概率大，不如分几次看快照。 */
-const MAX_ACTIONS = 10;
-const REF = /^e\d+$/;
-
 export function parseNavigate(params: unknown): NavigateRequest {
-  const value = object(params);
-  const target: BrowserNavigation = value.url !== undefined
-    ? { url: httpUrl(value.url) }
-    : { action: oneOf(value.action, BROWSER_NAVIGATION_ACTIONS, "action") };
-  const newTab = value.new_tab === undefined ? false : boolean(value.new_tab, "new_tab");
-  if (newTab && !("url" in target)) throw invalid("new_tab needs a url");
-  return { ...parseTab(value), newTab, target };
-}
-
-export function parseScreenshot(params: unknown): ScreenshotRequest {
-  const value = object(params);
-  const fullPage = value.full_page === undefined ? false : boolean(value.full_page, "full_page");
-  return { ...parseTab(value), fullPage };
-}
-
-export function parseTabs(params: unknown): TabsRequest {
-  const value = object(params);
-  const action = oneOf(value.action, ["list", "select", "close"] as const, "action");
-  const request = { ...parseTab(value), action };
-  if (action !== "list" && request.tab === undefined) throw invalid(`${action} needs a tab`);
-  return request;
-}
-
-export function parseAct(params: unknown): ActRequest {
-  const value = object(params);
-  if (!Array.isArray(value.actions) || value.actions.length === 0 || value.actions.length > MAX_ACTIONS) {
-    throw invalid(`actions must be a list of 1 to ${MAX_ACTIONS} actions`);
-  }
-  return { ...parseTab(value), actions: value.actions.map(parseAction) };
-}
-
-function parseAction(item: unknown): PageAction {
-  const action = object(item);
-  switch (action.type) {
-    case "click":
-      return { type: "click", ref: ref(action.ref) };
-    case "type":
-      if (typeof action.text !== "string" || action.text.length > 10_000) throw invalid("type needs text");
-      return {
-        type: "type",
-        ref: ref(action.ref),
-        text: action.text,
-        clear: absent(action.clear) ? false : boolean(action.clear, "clear"),
-        submit: absent(action.submit) ? false : boolean(action.submit, "submit"),
-      };
-    case "hover":
-      return { type: "hover", ref: ref(action.ref) };
-    case "press": {
-      if (typeof action.key !== "string" || !isSupportedKey(action.key)) throw invalid("press needs a supported key");
-      const modifiers = absent(action.modifiers) ? [] : action.modifiers;
-      if (!Array.isArray(modifiers)) throw invalid("modifiers must be a list");
-      return {
-        type: "press",
-        key: action.key,
-        modifiers: modifiers.map((item) => oneOf(item, MODIFIERS, "modifier")),
-        ...(absent(action.ref) ? {} : { ref: ref(action.ref) }),
-      };
-    }
-    case "select":
-      if (!Array.isArray(action.values) || action.values.length === 0 || !action.values.every((item) => typeof item === "string")) {
-        throw invalid("select needs values");
-      }
-      return { type: "select", ref: ref(action.ref), values: action.values as string[] };
-    case "scroll": {
-      if (absent(action.direction) && absent(action.ref)) throw invalid("scroll needs a direction, a ref, or both");
-      return {
-        type: "scroll",
-        ...(absent(action.direction) ? {} : { direction: oneOf(action.direction, ["up", "down"] as const, "direction") }),
-        ...(absent(action.ref) ? {} : { ref: ref(action.ref) }),
-      };
-    }
-    case "wait_for": {
-      const text = optionalText(action.text, "text");
-      const textGone = optionalText(action.text_gone, "text_gone");
-      const seconds = absent(action.seconds) ? undefined : action.seconds;
-      if (seconds !== undefined && (typeof seconds !== "number" || !(seconds > 0))) throw invalid("wait_for seconds must be positive");
-      if (text !== undefined && textGone !== undefined) throw invalid("wait_for takes text or text_gone, not both");
-      if (text === undefined && textGone === undefined && seconds === undefined) throw invalid("wait_for needs text, text_gone or seconds");
-      return { type: "wait_for", text, textGone, seconds: seconds as number | undefined };
-    }
-    case "dialog": {
-      if (!absent(action.text) && (typeof action.text !== "string" || action.text.length > 10_000)) throw invalid("dialog text must be a string");
-      if (!absent(action.id) && !positive(action.id)) throw invalid("dialog id must be a positive integer");
-      return {
-        type: "dialog",
-        accept: boolean(action.accept, "accept"),
-        ...(absent(action.text) ? {} : { text: action.text as string }),
-        ...(absent(action.id) ? {} : { id: action.id as number }),
-      };
-    }
-    default:
-      throw invalid(`unknown action type: ${String(action.type)}`);
-  }
+  const { request, args } = toolRequest("browser_navigate", params);
+  const target: BrowserNavigation = args.url !== null
+    ? { url: httpUrl(args.url) }
+    : { action: args.action as "back" | "forward" | "reload" };
+  const viewport = args.viewport as { width: number; height: number; mobile: boolean } | null;
+  const scheme = args.color_scheme as "light" | "dark" | "auto" | null;
+  const emulation: Partial<Emulation> = {
+    ...viewport,
+    ...(scheme === null ? {} : { colorScheme: scheme === "auto" ? null : scheme }),
+  };
+  return { ...request, newTab: args.new_tab as boolean, target, ...(Object.keys(emulation).length ? { emulation } : {}) };
 }
 
 export function parseSnapshot(params: unknown): SnapshotRequest {
-  const value = object(params);
-  const fromLine = absent(value.from_line) ? 1 : value.from_line;
-  if (!positive(fromLine)) throw invalid("from_line must be a positive integer");
-  return { ...parseTab(value), fromLine };
+  const { request, args } = toolRequest("browser_snapshot", params);
+  return { ...request, fromLine: (args.from_line as number | null) ?? 1 };
 }
 
-function parseTab(value: Record<string, unknown>): TabRequest {
-  return { taskId: taskId(value.task_id), tab: optionalTab(value.tab), context: tabContext(value) };
+export function parseScreenshot(params: unknown): ScreenshotRequest {
+  const { request, args } = toolRequest("browser_screenshot", params);
+  return { ...request, fullPage: args.full_page as boolean };
+}
+
+export function parseTabs(params: unknown): TabsRequest {
+  const { request, args } = toolRequest("browser_tabs", params);
+  return { ...request, action: args.action as TabsRequest["action"] };
+}
+
+export function parseAct(params: unknown): ActRequest {
+  const { request, args } = toolRequest("browser_act", params);
+  return { ...request, actions: (args.actions as WireAction[]).map(toAction) };
+}
+
+export function parseLogs(params: unknown): LogsRequest {
+  const { request, args } = toolRequest("browser_logs", params);
+  const common = { since: given(args.since as number | null), pattern: given(args.pattern as string | null), limit: args.limit as number };
+  const query: LogQuery = args.kind === "console"
+    ? { kind: "console", ...common, level: given(args.level as ConsoleLevel | null) }
+    : { kind: "network", ...common, failedOnly: args.failed_only as boolean };
+  return { ...request, query };
+}
+
+export function parseEvaluate(params: unknown): EvaluateRequest {
+  const { request, args } = toolRequest("browser_evaluate", params);
+  return { ...request, expression: args.expression as string };
 }
 
 export function parseDropTasks(params: unknown): number[] {
@@ -161,19 +121,71 @@ export function parseDropTasks(params: unknown): number[] {
   return value.task_ids.map(taskId);
 }
 
-/** Agent 打开的地址：先要求是合法的绝对地址（INVALID_PARAMS），再按 `isWebProtocol` 判定（NAVIGATION_BLOCKED）。 */
+/** 要打开的地址（长度等形状由调用方的边界校验过）：先要求是合法的绝对地址（INVALID_PARAMS），再按 `isWebProtocol` 判定（NAVIGATION_BLOCKED）。 */
 export function httpUrl(value: unknown): string {
-  if (typeof value !== "string" || value.length > 4096) throw invalid("url must be a string");
   let url: URL;
   try {
-    url = new URL(value);
+    url = new URL(String(value));
   } catch {
-    throw invalid(`not a valid absolute URL: ${value.slice(0, 200)}`);
+    throw invalid(`not a valid absolute URL: ${String(value).slice(0, 200)}`);
   }
   if (!isWebProtocol(url.protocol)) {
-    throw new HostMethodError("NAVIGATION_BLOCKED", `only http and https pages can be opened (got ${url.protocol})`);
+    throw browserError("NAVIGATION_BLOCKED", `only http and https pages can be opened (got ${url.protocol})`);
   }
   return url.href;
+}
+
+/** 拆出宿主自己的键并校验，其余按工具的 schema 校验（每个字段都在，可选字段可能为 null）。 */
+function toolRequest(tool: ToolName, params: unknown): { request: TabRequest; args: Record<string, unknown> } {
+  const value = object(params);
+  const args = Object.fromEntries(Object.entries(value).filter(([key]) => !HOST_KEYS.has(key)));
+  const validate = validators.get(tool)!;
+  if (!validate(args)) throw invalid(ajv.errorsText(validate.errors, { dataVar: "params" }).slice(0, 500));
+  const tab = given(args.tab as string | null);
+  return { request: { taskId: taskId(value.task_id), context: tabContext(value), ...(tab ? { tab } : {}) }, args };
+}
+
+/** 线上的动作：蛇形字段名，每个字段都在、未填的为 null（按 schema 校验过）。 */
+type WireAction = {
+  type: PageAction["type"];
+  ref?: string | null;
+  text?: string | null;
+  clear?: boolean;
+  submit?: boolean;
+  key?: string;
+  modifiers?: Modifier[] | null;
+  values?: string[];
+  direction?: "up" | "down" | null;
+  text_gone?: string | null;
+  seconds?: number | null;
+  accept?: boolean;
+  id?: number | null;
+};
+
+/** 线上动作 → 执行器用的形状：改字段名、null 转成「未给」。 */
+function toAction(action: WireAction): PageAction {
+  switch (action.type) {
+    case "click":
+    case "hover":
+      return { type: action.type, ref: action.ref! };
+    case "type":
+      return { type: "type", ref: action.ref!, text: action.text!, clear: action.clear!, submit: action.submit! };
+    case "press":
+      return { type: "press", key: action.key!, modifiers: action.modifiers ?? [], ...(action.ref ? { ref: action.ref } : {}) };
+    case "select":
+      return { type: "select", ref: action.ref!, values: action.values! };
+    case "scroll":
+      return { type: "scroll", direction: given(action.direction), ref: given(action.ref) };
+    case "wait_for":
+      return { type: "wait_for", text: given(action.text), textGone: given(action.text_gone), seconds: given(action.seconds) };
+    case "dialog":
+      return { type: "dialog", accept: action.accept!, text: given(action.text), id: given(action.id) };
+  }
+}
+
+/** 契约里 null 表示「未给」。 */
+function given<T>(value: T | null | undefined): T | undefined {
+  return value ?? undefined;
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -184,33 +196,6 @@ function object(value: unknown): Record<string, unknown> {
 function taskId(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) <= 0) throw invalid("task_id must be a positive integer");
   return value as number;
-}
-
-function ref(value: unknown): string {
-  if (typeof value !== "string" || !REF.test(value)) throw invalid("ref must look like e12, from the latest snapshot");
-  return value;
-}
-
-function boolean(value: unknown, field: string): boolean {
-  if (typeof value !== "boolean") throw invalid(`${field} must be true or false`);
-  return value;
-}
-
-/** 后端不发未填的可选字段；`null` 也按缺省理解，宿主测试与链路之外的调用方可能带上。 */
-function absent(value: unknown): value is undefined | null {
-  return value === undefined || value === null;
-}
-
-function optionalText(value: unknown, field: string): string | undefined {
-  if (absent(value)) return undefined;
-  if (typeof value !== "string" || !value) throw invalid(`wait_for ${field} must be a non-empty string`);
-  return value;
-}
-
-function optionalTab(value: unknown): string | undefined {
-  if (absent(value)) return undefined;
-  if (typeof value !== "string" || !BROWSER_TAB_ID.test(value)) throw invalid("tab must look like t1");
-  return value;
 }
 
 /** 后端随请求带来的标签上下文：上限与 Task 所在工作区的下载目录（本机绝对路径）。 */
@@ -230,11 +215,6 @@ function positive(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) > 0;
 }
 
-function oneOf<T extends string>(value: unknown, allowed: readonly T[], field: string): T {
-  if (!(allowed as readonly unknown[]).includes(value)) throw invalid(`${field} must be one of ${allowed.join(", ")}`);
-  return value as T;
-}
-
-function invalid(message: string): HostMethodError {
-  return new HostMethodError("INVALID_PARAMS", message);
+function invalid(message: string) {
+  return browserError("INVALID_PARAMS", message);
 }

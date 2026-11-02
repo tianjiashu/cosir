@@ -1,24 +1,27 @@
 import { WebContentsView, type Rectangle, type WebContents, type WindowOpenHandlerResponse } from "electron";
 
 import { logDesktopEvent } from "../desktop-log";
-import { HostMethodError } from "../host-link/methods";
+import type { HostMethodError } from "../host-link/methods";
 import { browserPageWebPreferences } from "./browser-session";
+import { CdpSession } from "./cdp-session";
+import { browserError } from "./errors";
 import { runActions, type ActResult } from "./page-input";
 import type { BrowserDialog, BrowserDialogAnswer, BrowserNavigation, BrowserTabCreator, BrowserTabSummary } from "../../shared/host-contract";
 import { BROWSER_PAGE_DIALOG_CHANNEL, type BrowserPageDialogRequest } from "../../shared/browser-page-bridge";
 import type { PageAction } from "./params";
 import { PageDialogs } from "./page-dialogs";
+import { evaluateExpression, type Evaluation } from "./page-evaluate";
+import { ERR_ABORTED, untilStopped, waitForLoad } from "./page-loading";
 import { RefRegistry } from "./ref-registry";
 import { formatSnapshot, type AXNode, type FormattedSnapshot } from "./snapshot-format";
-import { DETACHED_BOUNDS, TabViewport } from "./tab-viewport";
+import { TabEmulation, type Applied, type Emulation } from "./tab-emulation";
+import { CANCELED_FAILURE, TabLog, type ConsoleLevel } from "./tab-log";
 import { isWebProtocol, urlProtocol } from "./web-url";
-import { waitForInitialization } from "./initialization";
+import { abortable } from "./abortable";
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
-const CDP_TIMEOUT_MS = 10_000;
 /** 加载完成后再等一下：多数页面在 load 之后还会渲染首屏内容。 */
 const SETTLE_MS = 250;
-const ERR_ABORTED = -3;
 /** 动作触发导航后最多等多久加载结束；超时不算失败，快照会标「仍在加载」。 */
 const ACTION_SETTLE_TIMEOUT_MS = 15_000;
 /** 用户最近一次输入后多久内 Agent 的动作被拒（设计稿决定记录：2 秒）。 */
@@ -27,17 +30,18 @@ const USER_ACTIVE_WINDOW_MS = 2_000;
 const AGENT_INPUT_GRACE_MS = 500;
 /** 整页截图的最大高度（CSS 像素）：再长的页面模型也看不清，按需滚动后再截。 */
 const FULL_PAGE_MAX_HEIGHT = 4_000;
-/** 两次快照之间最多攒多少条备注：持续刷权限请求之类的页面不能让它无限增长。 */
-const MAX_NOTES = 50;
+/** 网络请求的响应体留在渲染进程里的上限：日志只记元数据、从不取响应体，给个最小值免得白占内存。 */
+const NETWORK_BUFFER_BYTES = 1024;
+/** 开发期 Electron 往每个页面的 console 注入的安全警告：与网页无关，不进日志。 */
+const ELECTRON_NOISE = /^%cElectron Security Warning/;
 
 export type PageSnapshot = FormattedSnapshot & {
-  url: string;
-  title: string;
-  loading: boolean;
-  notes: string[];
   /** 本标签待答的弹窗；非空时页面停着，`text` 为空（读不到无障碍树）。 */
   dialog: BrowserDialog | null;
 };
+
+/** 执行 JS 的结果：值或脚本错误（见 `page-evaluate.ts`），或脚本弹出的弹窗（此时页面停住，值与错误都为空）。 */
+export type EvaluateOutcome = Evaluation & { dialog: BrowserDialog | null };
 
 export type TabEvents = {
   /** 页面要开新窗口：由 `BrowserHost` 决定拒绝，或收养成同 Task 的新标签（保留 opener）。 */
@@ -48,6 +52,8 @@ export type TabEvents = {
   onGone: () => void;
   /** 本标签弹窗了：整个渲染进程停住，`BrowserHost` 让同进程标签在途的 CDP 立即失败。 */
   onDialogOpened: () => void;
+  /** 本标签的弹窗答完或被取消了：`BrowserHost` 让同进程标签补设弹窗期间被闸住的设备模拟。 */
+  onDialogClosed: () => void;
   /** 页面为什么停着（本标签或同进程别的标签有待答弹窗）；没停时为 null。由 `BrowserHost` 按进程判断。 */
   pausedBy: () => HostMethodError | null;
   /** 用户在面板里点了选文件：弹系统文件选择框，返回选中的本机路径，取消为 null。 */
@@ -68,20 +74,21 @@ export type TabOptions = {
 };
 
 /**
- * 一个标签页：一个 `WebContentsView` 加一个 CDP 会话。本模块是 CDP 在宿主里唯一的使用者，方法集合固定，
- * 不对外透传任意 CDP 命令。
+ * 一个标签页：一个 `WebContentsView`，组合几个各管一件事的部件——CDP 会话（`CdpSession`，命令唯一出口与闸门、
+ * 事件唯一入口）、弹窗（`PageDialogs`）、设备模拟与显示缩放（`TabEmulation`）、页面日志（`TabLog`：备注、console、
+ * 网络，「上次以来」的唯一事实源）、ref 登记（`RefRegistry`）。本类负责生命周期、把页面事件接到这些部件上，以及
+ * 需要多个部件配合的操作（导航、快照、动作、执行 JS、截图）。
  *
  * 两种来源：新建（先加载 `about:blank` 再附加调试器——未加载过任何页面的 webContents 上 CDP 命令会一直挂起），
  * 与收养页面开出的 webContents（等它第一次加载结束、弹窗被答完再附加）；之后两者没有差别。
  *
- * 视口与显示分离（`TabViewport`）：Agent 看到的视口固定，视图挂到面板上时只按比例缩放显示。
+ * 页面停住（JS 弹窗，整个渲染进程的 CDP 都回不来）：`CdpSession` 是唯一闸门，等加载的地方同样据它提前结束；
+ * 「为什么停着」由 `BrowserHost` 按进程判断。
  *
- * 弹窗（`PageDialogs`）：页面停住时整个渲染进程的 CDP 都回不来，所以 `cdp` 是唯一闸门——页面停着（由
- * `BrowserHost` 按进程判断）新发的命令直接失败，在途的在弹窗打开那一刻失败（`interruptCdp`），都以
- * `DIALOG_OPEN` 指明是哪个标签的弹窗；等加载的地方同样在那一刻结束。
- *
- * 只需告知 Agent 的事（拦下的跳转、Agent 触发或后台的选文件、站点权限被拒、强行离开 `beforeunload`、绕过网页
- * preload 的原生弹窗）记成备注，随下一次快照交给模型；备注的统一呈现见 AGENTS.md 待办。
+ * console 用 Electron 的 `console-message`（实测覆盖主框架、iframe、跨进程 iframe、未捕获异常与未处理的拒绝），
+ * 不开 CDP 的 `Runtime.enable`——它是网站识别自动化的常见指纹。网络请求用 CDP `Network` 事件，调试器只附加在
+ * 主框架上，所以跨进程 iframe（跨站嵌入）与 worker 的请求不在日志里。主文档状态码取自 `did-navigate`（不依赖
+ * `Network`，404 照报、重定向报最终的码）。
  *
  * 几条由实测确定的约束（设计稿 §8、§17）：
  * - 视图可以不挂在任何窗口上：CDP 截图、无障碍树与输入照常工作（`capturePage` 不行）；鼠标事件要开焦点模拟。
@@ -98,18 +105,21 @@ export class BrowserTab {
   readonly createdBy: BrowserTabCreator;
   readonly openerId: string | null;
   readonly downloadDir: string;
+  readonly log = new TabLog();
   private readonly adopted: boolean;
   private readonly events: TabEvents;
+  private readonly session: CdpSession;
+  private readonly refs = new RefRegistry();
+  private readonly dialogs = new PageDialogs();
+  private readonly emulation: TabEmulation;
   /** 最近一次真实用户输入的时间（毫秒）；`USER_ACTIVE` 据此判断。 */
   private lastUserInputAt = 0;
   /** 在此之前到达的输入事件来自 Agent 自己的动作，不算用户输入（见构造函数里的说明）。 */
   private agentInputUntil = 0;
-  private readonly refs = new RefRegistry();
-  private readonly dialogs = new PageDialogs();
-  private readonly viewport: TabViewport;
-  private notes: string[] = [];
-  /** 页面停住时中止，让在途的 CDP 命令与加载等待立即结束；每次中止后换新的。 */
-  private gate = new AbortController();
+  /** 当前主文档的 HTTP 状态码（`did-navigate`）；about:blank 等没有时为 null。 */
+  private documentStatus: number | null = null;
+  /** 有一次主框架跨文档导航开始了、还没换上文档（见 `did-fail-load` 的说明）。 */
+  private navigating = false;
 
   constructor(options: TabOptions) {
     const { tabId, taskId, events } = options;
@@ -120,14 +130,19 @@ export class BrowserTab {
     this.downloadDir = options.downloadDir;
     this.events = events;
     this.adopted = options.adopted !== undefined;
-    // 收养的 webContents 已带着创建时的 webPreferences（`overrideBrowserWindowOptions`），这里不再传。
-    this.view = new WebContentsView(options.adopted ? { webContents: options.adopted } : { webPreferences: browserPageWebPreferences() });
-    this.view.setBounds(DETACHED_BOUNDS);
+    // 收养时也要传同一份 webPreferences：实测只给 `overrideBrowserWindowOptions` 时，网页 preload 在收养的页面里
+    // 不生效（弹窗走原生路径被自动取消）。
+    this.view = new WebContentsView({ webPreferences: browserPageWebPreferences(), ...(options.adopted ? { webContents: options.adopted } : {}) });
     this.contents = this.view.webContents;
-    this.viewport = new TabViewport(
-      async (metrics, signal) => { await this.cdp("Emulation.setDeviceMetricsOverride", metrics, signal); },
+    this.session = new CdpSession(this.contents, events.pausedBy, (reason) => {
+      logDesktopEvent("WARNING", "browser", "browser_debugger_detached", { tab_id: tabId, reason });
+    });
+    this.emulation = new TabEmulation(
+      (method, params, sendOptions) => this.session.send(method, params, sendOptions),
       (error) => logDesktopEvent("INFO", "browser", "browser_viewport_sync_failed", { tab_id: tabId, error: errorText(error) }),
+      (applied) => this.metricsApplied(applied),
     );
+    this.view.setBounds(this.emulation.viewBounds);
     const contents = this.contents;
     contents.setBackgroundThrottling(false);
     contents.setWindowOpenHandler(({ url }) => events.onWindowOpen(url));
@@ -136,9 +151,19 @@ export class BrowserTab {
     contents.on("will-prevent-unload", (event) => {
       // 不放行时跳转会被静默取消（Agent 的导航只会超时）；没有可以作答的界面，按「离开」处理并告知。
       event.preventDefault();
-      this.note("the page asked to confirm leaving it (unsaved changes?); it was left anyway");
+      this.log.note("the page asked to confirm leaving it (unsaved changes?); it was left anyway");
     });
-    contents.on("did-navigate", () => this.refs.clear());
+    contents.on("did-start-navigation", (details) => {
+      if (!details.isMainFrame || details.isSameDocument) return;
+      this.navigating = true;
+      this.log.navigationStarted();
+    });
+    // 主框架换了文档：提交成功（`did-navigate`），或导航失败、换成错误页（Electron 对错误页只发 `did-fail-load`）。
+    // 主框架的 `did-fail-load` 也可能来自已提交文档的加载中途失败（响应体断开），那时文档没换：只认还没提交的导航。
+    contents.on("did-navigate", (_event, _url, httpResponseCode) => this.documentChanged(httpResponseCode > 0 ? httpResponseCode : null));
+    contents.on("did-fail-load", (_event, code, _description, _url, isMainFrame) => {
+      if (isMainFrame && code !== ERR_ABORTED && this.navigating) this.documentChanged(null);
+    });
     const changed = () => events.onChange();
     contents.on("did-navigate", changed);
     contents.on("did-navigate-in-page", changed);
@@ -150,6 +175,7 @@ export class BrowserTab {
       this.dismissDialog("the page's process ended");
       changed();
     });
+    contents.on("console-message", (details) => this.consoleMessage(details));
     contents.ipc.on(BROWSER_PAGE_DIALOG_CHANNEL, (event, request: BrowserPageDialogRequest) => this.dialogRequested(event, request));
     // CDP 合成的鼠标与文字输入不触发 before-input-event，但合成键盘事件可能触发（实测：提交表单时回车的
     // keyUp）。所以动作执行期间及之后一小段时间里的输入事件归 Agent，其余才是用户在操作。
@@ -158,6 +184,7 @@ export class BrowserTab {
       this.lastUserInputAt = Date.now();
     });
     contents.once("destroyed", () => events.onGone());
+    this.subscribeCdp();
   }
 
   get dialog(): BrowserDialog | null {
@@ -169,41 +196,67 @@ export class BrowserTab {
     return this.contents.isDestroyed() ? null : this.contents.getOSProcessId();
   }
 
+  /** 页面上已生效的设备模拟（页面结果里报告的就是它）。 */
+  get currentEmulation(): Emulation {
+    return this.emulation.current;
+  }
+
+  get status(): number | null {
+    return this.documentStatus;
+  }
+
   /** 视图先交给 Host 登记，再异步初始化；关闭时的 signal 使所有初始化等待立即结束。 */
   async initialize(signal: AbortSignal): Promise<void> {
     const contents = this.contents;
     if (this.adopted) {
       // Electron 自己开始加载收养的 webContents：等第一次加载结束；页面加载中弹窗时，等它被答完（面板提示条
       // 或 Agent 都能答）再附加调试器——停着的页面上 CDP 命令回不来。迟迟不结束也不无限等。
-      await waitForInitialization(untilStopped(contents, NAVIGATION_TIMEOUT_MS, this.gate.signal), signal);
-      await waitForInitialization(this.dialogs.settled(), signal);
+      await untilStopped(contents, NAVIGATION_TIMEOUT_MS, AbortSignal.any([this.session.pausedSignal, signal]));
+      signal.throwIfAborted();
+      await abortable(this.dialogs.settled(), signal);
     } else {
-      await waitForInitialization(contents.loadURL("about:blank"), signal);
+      await abortable(contents.loadURL("about:blank"), signal);
     }
     signal.throwIfAborted();
-    this.attachDebugger();
-    await this.cdp("Page.enable", {}, signal);
-    await this.cdp("Page.setInterceptFileChooserDialog", { enabled: true }, signal);
+    this.session.attach();
+    await this.session.send("Page.enable", {}, { signal });
+    await this.session.send("Page.setInterceptFileChooserDialog", { enabled: true }, { signal });
+    await this.session.send("Network.enable", { maxTotalBufferSize: NETWORK_BUFFER_BYTES, maxResourceBufferSize: NETWORK_BUFFER_BYTES }, { signal });
     // 没挂过窗口的视图收不到 CDP 合成的鼠标事件（实测：点击不触发、每个事件空等约 1.8 秒），开焦点模拟后正常。
     // Playwright 接管页面时自己会开它，所以桌面 E2E 测不出缺了这一步（见 browser-initialization 单测）。
-    await this.cdp("Emulation.setFocusEmulationEnabled", { enabled: true }, signal);
-    await this.viewport.start(signal);
+    await this.session.send("Emulation.setFocusEmulationEnabled", { enabled: true }, { signal });
+    await this.emulation.start(signal);
+    // 收养的 webContents 在 Electron 接手后，内部网页视图不按外层视图的 bounds 布局（实测：铺到窗口右下角，
+    // 盖出浏览器面板），要等一次真实的尺寸变化才纠正；接手完成于第一次加载结束，所以在这里补一次。
+    if (this.adopted) this.relayout();
   }
 
-  /** 导航并等主框架加载完成；失败带回 Chromium 的 `ERR_*` 说明。待答的弹窗按取消处理（页面停着无法跳转）。 */
-  async navigate(target: BrowserNavigation, signal: AbortSignal): Promise<void> {
-    if (signal.aborted) throw new HostMethodError("CANCELLED", "navigation was cancelled");
+  /**
+   * 导航并等主框架加载完成；失败带回 Chromium 的 `ERR_*` 说明。顺序：待答的弹窗按取消处理（页面停着无法跳转，
+   * 也设不了模拟）→ 设上要求改的模拟（只改给了的项，生效后才加载，页面按新视口布局）→ 加载。
+   */
+  async navigate(target: BrowserNavigation, signal: AbortSignal, emulation?: Partial<Emulation>): Promise<void> {
+    if (signal.aborted) throw browserError("CANCELLED", "navigation was cancelled");
     const contents = this.contents;
     const history = contents.navigationHistory;
     if ("action" in target && target.action === "back" && !history.canGoBack()) {
-      throw new HostMethodError("NAVIGATION_FAILED", "there is no previous page in this tab");
+      throw browserError("NAVIGATION_FAILED", "there is no previous page in this tab");
     }
     if ("action" in target && target.action === "forward" && !history.canGoForward()) {
-      throw new HostMethodError("NAVIGATION_FAILED", "there is no next page in this tab");
+      throw browserError("NAVIGATION_FAILED", "there is no next page in this tab");
     }
     // 校验都过了才产生副作用：不能后退时不该白白取消弹窗。
     this.dismissDialog("the tab navigated");
-    const loaded = this.waitForLoad(signal);
+    // 被同进程别的标签的弹窗停住时跳转等不到页面配合，会等满时限：直接说明原因。
+    const paused = this.events.pausedBy();
+    if (paused) throw paused;
+    if (emulation) await this.emulation.set({ ...this.emulation.current, ...emulation }, signal);
+    const loaded = waitForLoad(contents, {
+      signal,
+      paused: this.session.pausedSignal,
+      timeoutMs: NAVIGATION_TIMEOUT_MS,
+      log: { tab_id: this.tabId, task_id: this.taskId },
+    });
     if ("url" in target) {
       // 结果以加载事件为准：loadURL 自己的拒绝（含重定向造成的 ERR_ABORTED）在这里不重复处理。
       contents.loadURL(target.url).catch(() => undefined);
@@ -215,18 +268,16 @@ export class BrowserTab {
   }
 
   /**
-   * 读整棵无障碍树并从 `fromLine` 起输出；ref 按节点稳定分配（`RefRegistry`），不随快照替换。
+   * 读整棵无障碍树并从 `fromLine` 起输出；ref 按节点稳定分配（`RefRegistry`），不随快照替换。不碰页面日志：
+   * 「上次以来」由拿到页面结果的一方显式取（`log.digest`）。
    * 本标签有待答弹窗时不读树（页面停着，读不到），只报弹窗；被同进程别的标签的弹窗停住时以 `DIALOG_OPEN` 失败。
    */
   async snapshot(fromLine = 1): Promise<PageSnapshot> {
     this.assertAlive();
     const formatted = this.dialogs.current
       ? { text: "", frames: 0 }
-      : formatSnapshot((await this.cdp<{ nodes: AXNode[] }>("Accessibility.getFullAXTree")).nodes, this.refs, { fromLine });
-    const contents = this.contents;
-    const notes = this.notes;
-    this.notes = [];
-    return { ...formatted, url: contents.getURL(), title: contents.getTitle(), loading: contents.isLoading(), notes, dialog: this.dialogs.current };
+      : formatSnapshot((await this.session.send<{ nodes: AXNode[] }>("Accessibility.getFullAXTree")).nodes, this.refs, { fromLine });
+    return { ...formatted, dialog: this.dialogs.current };
   }
 
   /**
@@ -236,21 +287,38 @@ export class BrowserTab {
   async act(actions: readonly PageAction[], signal: AbortSignal): Promise<ActResult> {
     this.assertAlive();
     if (Date.now() - this.lastUserInputAt < USER_ACTIVE_WINDOW_MS) {
-      throw new HostMethodError("USER_ACTIVE", "the user is using this page right now");
+      throw browserError("USER_ACTIVE", "the user is using this page right now");
     }
     this.agentInputUntil = Number.POSITIVE_INFINITY;
     try {
       return await runActions({
-        cdp: (method, params) => this.cdp(method, params),
+        cdp: (method, params) => this.session.send(method, params),
         resolveRef: (ref) => this.resolveRef(ref),
-        settle: () => this.settle(),
-        toInput: (point) => this.viewport.toInput(point),
+        settle: () => this.settle(signal),
+        toInput: (point) => this.emulation.toInput(point),
         paused: () => this.events.pausedBy(),
         dialog: () => this.dialogs.current,
         answerDialog: (id, answer) => this.answerDialog(id, answer, "agent"),
       }, actions, signal);
     } finally {
       this.agentInputUntil = Date.now() + AGENT_INPUT_GRACE_MS;
+    }
+  }
+
+  /**
+   * 执行 JS（见 `page-evaluate.ts`）。页面已经停着（本标签或同进程别的标签在等弹窗作答）时整次以 `DIALOG_OPEN`
+   * 失败；所以执行途中以 `DIALOG_OPEN` 结束、且本标签有弹窗时，弹窗必是这次执行期间弹出的，算脚本弹的。
+   */
+  async evaluate(expression: string, signal: AbortSignal): Promise<EvaluateOutcome> {
+    this.assertAlive();
+    const paused = this.events.pausedBy();
+    if (paused) throw paused;
+    try {
+      return { ...await evaluateExpression((method, params, options) => this.session.send(method, params, options), expression, signal), dialog: null };
+    } catch (error) {
+      const dialog = this.dialogs.current;
+      if (dialog && (error as HostMethodError).code === "DIALOG_OPEN") return { value: null, truncated: false, error: null, dialog };
+      throw error;
     }
   }
 
@@ -262,28 +330,31 @@ export class BrowserTab {
       return;
     }
     logDesktopEvent("INFO", "browser", "browser_dialog_answered", { tab_id: this.tabId, task_id: this.taskId, type: dialog.type, accept: answer.accept, by });
-    if (by === "user") this.note(`the user answered the page's ${dialog.type} dialog #${dialog.id} (${answer.accept ? "accepted" : "dismissed"})`);
+    if (by === "user") this.log.note(`the user answered the page's ${dialog.type} dialog #${dialog.id} (${answer.accept ? "accepted" : "dismissed"})`);
     this.events.onChange();
-    // 弹窗打开期间的设备模拟设置会被闸住：答完后若期望与已生效不一致再补设。
-    this.viewport.resync();
+    this.events.onDialogClosed();
+  }
+
+  /** 期望与已生效的设备模拟不一致时补设（同进程的弹窗答完后由 `BrowserHost` 调用：弹窗期间的设置会被闸住）。 */
+  resyncEmulation(): void {
+    this.emulation.resync();
   }
 
   /** 页面下一次停住（弹窗）时中止的信号：等初始化的调用方据它提前返回（回答弹窗不需要调试器）。 */
   get pausedSignal(): AbortSignal {
-    return this.gate.signal;
+    return this.session.pausedSignal;
   }
 
   /** 页面停住了（本标签或同进程别的标签弹窗）：让在途的 CDP 命令与加载等待立即以 `reason` 结束。 */
   interruptCdp(reason: HostMethodError): void {
-    this.gate.abort(reason);
-    this.gate = new AbortController();
+    this.session.interrupt(reason);
   }
 
   /** ref → CDP `backendNodeId`；从没登记过（含导航前的 ref）报 `REF_STALE`。节点是否还在页面上由 `page-input.ts` 确认。 */
   resolveRef(ref: string): number {
     const backendNodeId = this.refs.resolve(ref);
     if (backendNodeId === undefined) {
-      throw new HostMethodError("REF_STALE", `ref ${ref} is not on the current page; take a new snapshot`);
+      throw browserError("REF_STALE", `ref ${ref} is not on the current page; take a new snapshot`);
     }
     return backendNodeId;
   }
@@ -291,40 +362,55 @@ export class BrowserTab {
   /**
    * 截图，返回 data URL。用 CDP 而不是 `capturePage`：视图摘离窗口时后者不可用（§8）。
    *
-   * 按 CSS 像素出图（`clip.scale = 1 / devicePixelRatio`）：视口 1280×800 就是 1280×800 的图，不随屏幕
-   * 倍率翻倍——模型按分辨率计费，多出来的像素看不出更多东西。`fullPage` 截整页，高度封顶。
-   * `devicePixels` 按屏幕像素出图，只给浏览器面板的冻结帧用。
+   * 按 CSS 像素出图（`clip.scale = 1 / devicePixelRatio`）：视口多大就是多大的图，不随屏幕倍率翻倍——模型按
+   * 分辨率计费，多出来的像素看不出更多东西。`fullPage` 截整页，高度封顶。`devicePixels` 按屏幕像素出图、
+   * `timeoutMs` 缩短每条命令的时限，都只给浏览器面板的冻结帧用。
    */
-  async screenshot(format: "jpeg" | "png", options: { quality?: number; fullPage?: boolean; devicePixels?: boolean } = {}): Promise<string> {
+  async screenshot(format: "jpeg" | "png", options: { quality?: number; fullPage?: boolean; devicePixels?: boolean; timeoutMs?: number } = {}): Promise<string> {
     this.assertAlive();
-    const metrics = await this.cdp<{
+    const timing = { timeoutMs: options.timeoutMs };
+    const metrics = await this.session.send<{
       cssVisualViewport: { pageX: number; pageY: number; clientWidth: number; clientHeight: number };
       cssContentSize: { width: number; height: number };
-    }>("Page.getLayoutMetrics");
-    const { result } = await this.cdp<{ result: { value: number } }>("Runtime.evaluate", { expression: "devicePixelRatio", returnByValue: true });
+    }>("Page.getLayoutMetrics", {}, timing);
+    const { result } = await this.session.send<{ result: { value: number } }>("Runtime.evaluate", { expression: "devicePixelRatio", returnByValue: true }, timing);
     const viewport = metrics.cssVisualViewport;
     const clip = options.fullPage
       ? { x: 0, y: 0, width: viewport.clientWidth, height: Math.min(metrics.cssContentSize.height, FULL_PAGE_MAX_HEIGHT) }
       : { x: viewport.pageX, y: viewport.pageY, width: viewport.clientWidth, height: viewport.clientHeight };
-    const { data } = await this.cdp<{ data: string }>("Page.captureScreenshot", {
+    const { data } = await this.session.send<{ data: string }>("Page.captureScreenshot", {
       format,
       ...(options.quality === undefined ? {} : { quality: options.quality }),
       clip: { ...clip, scale: options.devicePixels ? 1 : 1 / (result.value || 1) },
       captureBeyondViewport: Boolean(options.fullPage),
-    });
+    }, timing);
     return `data:image/${format};base64,${data}`;
   }
 
-  /** 挂到面板上：视图放在 `bounds`（窗口坐标，已按视口等比缩放），设备模拟按同一比例缩放。 */
-  show(bounds: Rectangle): void {
-    this.view.setBounds(bounds);
-    this.viewport.show(bounds.width);
+  /** 主框架换了文档：旧 ref 作废、状态码换成新文档的（错误页为 null）、日志的「当前页面」从这里起算。 */
+  private documentChanged(status: number | null): void {
+    this.navigating = false;
+    this.refs.clear();
+    this.documentStatus = status;
+    this.log.pageStarted();
+  }
+
+  /** 视口与缩放生效了：视图 bounds 跟上（视口变了时长宽比随之变；后台视图要与视口同大，合成输入才落在视图之内）。 */
+  private metricsApplied({ width, height, mobile, scale }: Applied): void {
+    logDesktopEvent("INFO", "browser", "browser_viewport_applied", { tab_id: this.tabId, width, height, mobile, scale });
+    this.view.setBounds(this.emulation.viewBounds);
+  }
+
+  /** 挂到面板上的占位矩形 `box`（窗口坐标）：视图在其中按视口等比缩放（见 `TabEmulation.viewBounds`）。 */
+  show(box: Rectangle): void {
+    this.emulation.show(box);
+    this.view.setBounds(this.emulation.viewBounds);
   }
 
   /** 从面板摘下：恢复与视口同大、不缩放，继续在后台工作。 */
   hide(): void {
-    this.view.setBounds(DETACHED_BOUNDS);
-    this.viewport.hide();
+    this.emulation.hide();
+    this.view.setBounds(this.emulation.viewBounds);
   }
 
   summary(): BrowserTabSummary {
@@ -342,23 +428,61 @@ export class BrowserTab {
     };
   }
 
-  note(text: string): void {
-    this.notes.push(text);
-    if (this.notes.length > MAX_NOTES) this.notes.splice(0, this.notes.length - MAX_NOTES, "(earlier notes were dropped)");
-  }
-
   /** 页面已自己关掉（`destroyed`）时只做清理；待答的弹窗先按取消答复，免得同进程的其他页面跟着停住。 */
   close(): void {
     this.dismissDialog("the tab was closed");
-    const contents = this.contents;
-    if (contents.isDestroyed()) return;
-    if (contents.debugger.isAttached()) contents.debugger.detach();
-    contents.close();
+    if (this.contents.isDestroyed()) return;
+    this.session.detach();
+    this.contents.close();
+  }
+
+  /** 让视图经历一次真实的尺寸变化再回到原 bounds：Electron 只在尺寸变化时重新布局内部网页视图。 */
+  private relayout(): void {
+    const bounds = this.view.getBounds();
+    this.view.setBounds({ ...bounds, height: bounds.height + 1 });
+    this.view.setBounds(bounds);
   }
 
   /** 直接问 webContents：崩溃事件是异步到达的，崩溃后到事件之间发出的 CDP 命令会一直挂到超时。 */
   private assertAlive(): void {
-    if (this.contents.isCrashed()) throw new HostMethodError("PAGE_CRASHED", "the page crashed");
+    if (this.contents.isCrashed()) throw browserError("PAGE_CRASHED", "the page crashed");
+  }
+
+  /** CDP 事件只在这里订阅：选文件框、绕过 preload 的原生弹窗、网络请求的生命周期。 */
+  private subscribeCdp(): void {
+    const session = this.session;
+    session.on("Page.fileChooserOpened", (params: { backendNodeId?: number; mode: string }) => this.fileChooserOpened(params));
+    // 走到 Electron 原生弹窗说明页面绕过了网页 preload（例如框架还没跑 preload），已被 `disableDialogs` 按取消处理。
+    session.on("Page.javascriptDialogOpening", ({ type }: { type: string }) => {
+      this.log.note(`the page showed a ${type} dialog that could not be held for an answer; it was dismissed automatically`);
+      logDesktopEvent("WARNING", "browser", "browser_native_dialog_dismissed", { tab_id: this.tabId, task_id: this.taskId, type });
+    });
+    type Request = { requestId: string; type?: string; timestamp: number; request: { method: string; url: string }; redirectResponse?: { status: number } };
+    session.on("Network.requestWillBeSent", ({ requestId, type, timestamp, request, redirectResponse }: Request) => {
+      // 重定向：同一 requestId 以新地址再发一次，上一跳带着它的状态码结束。
+      if (redirectResponse) this.log.responseReceived(requestId, redirectResponse.status, timestamp, true);
+      this.log.requestStarted(requestId, { method: request.method, url: request.url, resourceType: type ?? "Other", timestamp });
+    });
+    session.on("Network.responseReceived", ({ requestId, timestamp, response }: { requestId: string; timestamp: number; response: { status: number } }) => {
+      this.log.responseReceived(requestId, response.status, timestamp);
+    });
+    session.on("Network.loadingFinished", ({ requestId, timestamp }: { requestId: string; timestamp: number }) => {
+      this.log.requestFinished(requestId, timestamp);
+    });
+    session.on("Network.loadingFailed", ({ requestId, timestamp, errorText, canceled }: { requestId: string; timestamp: number; errorText: string; canceled?: boolean }) => {
+      this.log.requestFailed(requestId, canceled ? CANCELED_FAILURE : errorText, timestamp);
+    });
+  }
+
+  private consoleMessage(details: Electron.Event<{ level: string; message: string; lineNumber: number; sourceId: string; frame: Electron.WebFrameMain | null }>): void {
+    if (ELECTRON_NOISE.test(details.message)) return;
+    const frame = details.frame;
+    this.log.console({
+      level: CONSOLE_LEVELS[details.level] ?? "info",
+      text: details.message,
+      source: details.sourceId ? `${details.sourceId}:${details.lineNumber}` : null,
+      frame: frame && !frame.isDestroyed() && frame !== this.contents.mainFrame ? frame.url : null,
+    });
   }
 
   private dialogRequested(event: Electron.IpcMainEvent, request: BrowserPageDialogRequest): void {
@@ -366,7 +490,7 @@ export class BrowserTab {
     if ("refused" in opening) {
       // 已按取消答复：同一标签另一个框架同时弹窗（不排队），或网页 preload 之外的异常请求。
       logDesktopEvent("WARNING", "browser", "browser_dialog_refused", { tab_id: this.tabId, task_id: this.taskId, reason: opening.refused });
-      if (opening.refused === "busy") this.note(`the page showed another ${request.type} dialog while one was waiting; it was dismissed`);
+      if (opening.refused === "busy") this.log.note(`the page showed another ${request.type} dialog while one was waiting; it was dismissed`);
       return;
     }
     logDesktopEvent("INFO", "browser", "browser_dialog_opened", { tab_id: this.tabId, task_id: this.taskId, type: opening.dialog.type, dialog_id: opening.dialog.id });
@@ -377,39 +501,22 @@ export class BrowserTab {
   private dismissDialog(reason: string): void {
     const dialog = this.dialogs.dismiss();
     if (!dialog) return;
-    this.note(`the page's ${dialog.type} dialog #${dialog.id} was dismissed because ${reason}`);
+    this.log.note(`the page's ${dialog.type} dialog #${dialog.id} was dismissed because ${reason}`);
     this.events.onChange();
+    this.events.onDialogClosed();
   }
 
   /**
    * 动作之后：页面在加载（点了链接、提交了表单）就等它结束，有时限、超时不报错，再留一点渲染时间。
-   * 页面停住（弹窗）时不再等：停着的页面不会加载完，结果里报出弹窗即可。
+   * 页面停住（弹窗）、调用取消或标签关闭（`signal`）时不再等：结果里报出弹窗，或由 `BrowserHost` 报关闭。
    */
-  private async settle(): Promise<void> {
+  private async settle(signal: AbortSignal): Promise<void> {
     const contents = this.contents;
     // 点击触发的导航是异步开始的：先等一下再看是否在加载。
     await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
-    if (this.events.pausedBy()) return;
-    if (contents.isLoading()) await untilStopped(contents, ACTION_SETTLE_TIMEOUT_MS, this.gate.signal);
+    if (this.events.pausedBy() || signal.aborted) return;
+    if (contents.isLoading()) await untilStopped(contents, ACTION_SETTLE_TIMEOUT_MS, AbortSignal.any([signal, this.session.pausedSignal]));
     await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
-  }
-
-  private attachDebugger(): void {
-    const { debugger: cdp } = this.contents;
-    cdp.attach("1.3");
-    cdp.on("message", (_event, method, params) => {
-      if (method === "Page.fileChooserOpened") this.fileChooserOpened(params as { backendNodeId?: number; mode: string });
-      // 走到 Electron 原生弹窗说明页面绕过了网页 preload（例如框架还没跑 preload），已被 `disableDialogs` 按取消处理。
-      else if (method === "Page.javascriptDialogOpening") this.nativeDialog(params as { type: string });
-    });
-    cdp.on("detach", (_event, reason) => {
-      logDesktopEvent("WARNING", "browser", "browser_debugger_detached", { tab_id: this.tabId, reason });
-    });
-  }
-
-  private nativeDialog({ type }: { type: string }): void {
-    this.note(`the page showed a ${type} dialog that could not be held for an answer; it was dismissed automatically`);
-    logDesktopEvent("WARNING", "browser", "browser_native_dialog_dismissed", { tab_id: this.tabId, task_id: this.taskId, type });
   }
 
   /**
@@ -418,13 +525,13 @@ export class BrowserTab {
    * 「不在 Agent 动作期间」不够：Agent 的点击给了页面约 5 秒的用户激活，页面可以在宽限之后才触发选文件框。
    */
   private fileChooserOpened({ backendNodeId, mode }: { backendNodeId?: number; mode: string }): void {
-    if (!this.viewport.isShown || Date.now() < this.agentInputUntil || backendNodeId === undefined) {
-      this.note("the page tried to open a file chooser; file uploads are not supported, so it was blocked");
+    if (!this.emulation.isShown || Date.now() < this.agentInputUntil || backendNodeId === undefined) {
+      this.log.note("the page tried to open a file chooser; file uploads are not supported, so it was blocked");
       logDesktopEvent("INFO", "browser", "browser_file_chooser_blocked", { tab_id: this.tabId, task_id: this.taskId });
       return;
     }
     this.events.chooseFiles(mode === "selectMultiple").then(
-      (files) => (files?.length ? this.cdp("DOM.setFileInputFiles", { files, backendNodeId }) : undefined),
+      (files) => (files?.length ? this.session.send("DOM.setFileInputFiles", { files, backendNodeId }) : undefined),
     ).catch((error: unknown) => {
       logDesktopEvent("WARNING", "browser", "browser_file_chooser_failed", { tab_id: this.tabId, error: errorText(error) });
     });
@@ -434,101 +541,14 @@ export class BrowserTab {
     const protocol = urlProtocol(url);
     if (isWebProtocol(protocol)) return;
     event.preventDefault();
-    this.note(`the page tried to navigate to a ${protocol || "non-web"} address; it was blocked`);
-  }
-
-  /**
-   * 主框架加载完成（含同文档导航）即成功；主框架加载失败、超时或调用被撤销即失败。页面停住（弹窗）也算结束：
-   * 弹窗挡住了 load 事件（实测：等满 30 秒超时），停着的页面由结果里的弹窗说明。
-   */
-  private waitForLoad(signal: AbortSignal): Promise<void> {
-    const contents = this.contents;
-    const paused = this.gate.signal;
-    return new Promise((resolve, reject) => {
-      const finish = (error?: HostMethodError) => {
-        clearTimeout(timer);
-        contents.off("did-finish-load", onLoad);
-        contents.off("did-navigate-in-page", onInPage);
-        contents.off("did-fail-load", onFail);
-        signal.removeEventListener("abort", onAbort);
-        paused.removeEventListener("abort", onLoad);
-        if (error) reject(error);
-        else resolve();
-      };
-      const onLoad = () => finish();
-      const onInPage = (_event: Electron.Event, _url: string, isMainFrame: boolean) => {
-        if (isMainFrame) finish();
-      };
-      const onFail = (_event: Electron.Event, code: number, description: string, _url: string, isMainFrame: boolean) => {
-        if (!isMainFrame || code === ERR_ABORTED) return;
-        logDesktopEvent("INFO", "browser", "browser_navigation_failed", { tab_id: this.tabId, task_id: this.taskId, code, description });
-        finish(new HostMethodError("NAVIGATION_FAILED", `the page failed to load (${description || code})`));
-      };
-      const onAbort = () => {
-        contents.stop();
-        finish(new HostMethodError("CANCELLED", "navigation was cancelled"));
-      };
-      const timer = setTimeout(() => {
-        contents.stop();
-        finish(new HostMethodError("NAVIGATION_FAILED", `the page did not finish loading within ${NAVIGATION_TIMEOUT_MS / 1000} seconds`));
-      }, NAVIGATION_TIMEOUT_MS);
-      contents.on("did-finish-load", onLoad);
-      contents.on("did-navigate-in-page", onInPage);
-      contents.on("did-fail-load", onFail);
-      signal.addEventListener("abort", onAbort, { once: true });
-      paused.addEventListener("abort", onLoad, { once: true });
-    });
-  }
-
-  /**
-   * CDP 命令带时限：渲染进程卡死时命令会一直不返回。页面停着（弹窗）时命令同样等不到回复：新发的直接、
-   * 在途的在页面停住那一刻（`interruptCdp`）失败，错误指明是哪个标签的弹窗。
-   */
-  private cdp<T = unknown>(method: string, params: Record<string, unknown> = {}, signal?: AbortSignal): Promise<T> {
-    signal?.throwIfAborted();
-    const paused = this.events.pausedBy();
-    if (paused) return Promise.reject(paused);
-    const gate = this.gate.signal;
-    // 只在本模块与 page-input.ts 里用固定的方法集合，不向链路透传任意 CDP。
-    const command = this.contents.debugger.sendCommand(method, params) as Promise<T>;
-    return new Promise<T>((resolve, reject) => {
-      const clear = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", onAbort);
-        gate.removeEventListener("abort", onPaused);
-      };
-      const fail = (error: unknown) => { clear(); reject(error); };
-      const onAbort = () => fail(signal!.reason);
-      const onPaused = () => fail(gate.reason);
-      const timer = setTimeout(
-        () => fail(new HostMethodError("PAGE_UNRESPONSIVE", `the page did not respond to ${method}`)),
-        CDP_TIMEOUT_MS,
-      );
-      signal?.addEventListener("abort", onAbort, { once: true });
-      gate.addEventListener("abort", onPaused, { once: true });
-      command.then(
-        (value) => { clear(); resolve(value); },
-        fail,
-      );
-    });
+    this.log.note(`the page tried to navigate to a ${protocol || "non-web"} address; it was blocked`);
   }
 }
+
+/** Electron `console-message` 的级别名 → 日志级别。 */
+const CONSOLE_LEVELS: Record<string, ConsoleLevel> = { debug: "debug", info: "info", warning: "warning", error: "error" };
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 等到页面停止加载、时限到或页面停住（三者先到为准，都不算失败）。 */
-function untilStopped(contents: WebContents, timeoutMs: number, paused: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const done = () => {
-      clearTimeout(timer);
-      contents.off("did-stop-loading", done);
-      paused.removeEventListener("abort", done);
-      resolve();
-    };
-    const timer = setTimeout(done, timeoutMs);
-    contents.on("did-stop-loading", done);
-    paused.addEventListener("abort", done, { once: true });
-  });
-}

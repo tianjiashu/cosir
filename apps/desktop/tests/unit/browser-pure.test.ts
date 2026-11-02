@@ -20,69 +20,84 @@ function codeOf(run: () => unknown): string {
 
 describe("params", () => {
   const base = { task_id: 7, limits: { per_task: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
+  // 后端照 model_dump() 原样发送：参数模型的每个字段都在，未填的为 null（导出的 schema 按这个形状校验）。
+  const navigate = (args: Record<string, unknown>) => ({ ...base, url: null, action: null, tab: null, new_tab: false, viewport: null, color_scheme: null, ...args });
+  const snapshot = (args: Record<string, unknown>) => ({ ...base, tab: null, from_line: null, ...args });
+  const wire = {
+    hover: (ref: string) => ({ type: "hover", ref }),
+    press: (args: Record<string, unknown>) => ({ type: "press", modifiers: null, ref: null, ...args }),
+    scroll: (args: Record<string, unknown>) => ({ type: "scroll", direction: null, ref: null, ...args }),
+    waitFor: (args: Record<string, unknown>) => ({ type: "wait_for", text: null, text_gone: null, seconds: null, ...args }),
+    dialog: (args: Record<string, unknown>) => ({ type: "dialog", text: null, id: null, ...args }),
+  };
+  const act = (...actions: Record<string, unknown>[]) => ({ ...base, tab: null, actions });
 
-  it("accepts a url or a history action", () => {
-    expect(parseNavigate({ ...base, url: "https://example.com/a" }).target).toEqual({ url: "https://example.com/a" });
-    expect(parseNavigate({ ...base, action: "back", tab: "t3" })).toMatchObject({
+  it("accepts a url or a history action, and the emulation to apply first", () => {
+    expect(parseNavigate(navigate({ url: "https://example.com/a" }))).toMatchObject({ target: { url: "https://example.com/a" }, newTab: false });
+    expect(parseNavigate(navigate({ url: "https://example.com/a" }))).not.toHaveProperty("emulation");
+    expect(parseNavigate(navigate({ action: "back", tab: "t3" }))).toMatchObject({
       tab: "t3", target: { action: "back" }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
     });
-    expect(parseSnapshot({ ...base, tab: null })).toEqual({
-      taskId: 7, tab: undefined, fromLine: 1, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+    expect(parseNavigate(navigate({ action: "reload", viewport: { width: 390, height: 844, mobile: true }, color_scheme: "auto" })).emulation)
+      .toEqual({ width: 390, height: 844, mobile: true, colorScheme: null });
+    expect(parseNavigate(navigate({ action: "reload", color_scheme: "dark" })).emulation).toEqual({ colorScheme: "dark" });
+    expect(parseSnapshot(snapshot({}))).toEqual({
+      taskId: 7, fromLine: 1, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
     });
-    expect(parseSnapshot({ ...base, from_line: 40 })).toMatchObject({ fromLine: 40 });
-    // 每个请求都带上下文（宿主据此刷新上限）。
-    expect(codeOf(() => parseSnapshot({ task_id: 7 }))).toBe("INVALID_PARAMS");
+    expect(parseSnapshot(snapshot({ from_line: 40 }))).toMatchObject({ fromLine: 40 });
+    // 每个请求都带上下文（宿主据此刷新上限）；参数模型的字段一个都不能少。
+    expect(codeOf(() => parseSnapshot({ task_id: 7, tab: null, from_line: null }))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseSnapshot({ ...base, tab: null }))).toBe("INVALID_PARAMS");
     expect(parseDropTasks({ task_ids: [1, 2] })).toEqual([1, 2]);
   });
 
   // 目的：Agent 只能打开网页；潜在缺陷：经浏览器读本机文件或执行 javascript: 地址。
   it("blocks non-http schemes and rejects malformed params", () => {
-    expect(codeOf(() => parseNavigate({ ...base, url: "file:///etc/passwd" }))).toBe("NAVIGATION_BLOCKED");
-    expect(codeOf(() => parseNavigate({ ...base, url: "javascript:alert(1)" }))).toBe("NAVIGATION_BLOCKED");
-    expect(codeOf(() => parseNavigate({ ...base, url: "not a url" }))).toBe("INVALID_PARAMS");
-    expect(codeOf(() => parseNavigate({ ...base, action: "home" }))).toBe("INVALID_PARAMS");
-    expect(codeOf(() => parseNavigate({ url: "https://a.b", limits: base.limits }))).toBe("INVALID_PARAMS");
-    expect(codeOf(() => parseNavigate({ ...base, url: "https://a.b", tab: "../t1" }))).toBe("INVALID_PARAMS");
-    expect(codeOf(() => parseNavigate({ ...base, url: "https://a.b", limits: { per_task: 0, total: 1 } }))).toBe("INVALID_PARAMS");
-    expect(codeOf(() => parseNavigate({ ...base, url: "https://a.b", download_dir: "relative/dir" }))).toBe("INVALID_PARAMS");
-    expect(codeOf(() => parseSnapshot({ ...base, from_line: 0 }))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate(navigate({ url: "file:///etc/passwd" })))).toBe("NAVIGATION_BLOCKED");
+    expect(codeOf(() => parseNavigate(navigate({ url: "javascript:alert(1)" })))).toBe("NAVIGATION_BLOCKED");
+    expect(codeOf(() => parseNavigate(navigate({ url: "not a url" })))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate(navigate({ action: "home" })))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", tab: "../t1" })))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", limits: { per_task: 0, total: 1 } })))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", download_dir: "relative/dir" })))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", viewport: { width: 10, height: 844, mobile: false } })))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseSnapshot(snapshot({ from_line: 0 })))).toBe("INVALID_PARAMS");
   });
 
-  it("parses the action set, filling defaults the backend leaves out", () => {
-    const { actions } = parseAct({ ...base, actions: [
-      { type: "hover", ref: "e3" },
-      { type: "press", key: "k", modifiers: ["ControlOrMeta"], ref: "e4" },
-      { type: "press", key: "Enter" },
-      { type: "scroll", direction: "down", ref: "e5" },
-      { type: "scroll", ref: "e5" },
-      { type: "wait_for", text_gone: "Loading" },
-      { type: "dialog", accept: true, text: null },
-      { type: "dialog", accept: true, text: "Ada", id: 4 },
-    ] });
+  it("maps the wire actions, turning null into unset", () => {
+    const { actions } = parseAct(act(
+      wire.hover("e3"),
+      wire.press({ key: "k", modifiers: ["ControlOrMeta"], ref: "e4" }),
+      wire.press({ key: "Enter" }),
+      wire.scroll({ direction: "down", ref: "e5" }),
+      wire.scroll({ ref: "e5" }),
+      wire.waitFor({ text_gone: "Loading" }),
+      wire.dialog({ accept: true }),
+      wire.dialog({ accept: true, text: "Ada", id: 4 }),
+    ));
     expect(actions).toEqual([
       { type: "hover", ref: "e3" },
       { type: "press", key: "k", modifiers: ["ControlOrMeta"], ref: "e4" },
       { type: "press", key: "Enter", modifiers: [] },
       { type: "scroll", direction: "down", ref: "e5" },
-      { type: "scroll", ref: "e5" },
+      { type: "scroll", direction: undefined, ref: "e5" },
       { type: "wait_for", text: undefined, textGone: "Loading", seconds: undefined },
-      { type: "dialog", accept: true },
+      { type: "dialog", accept: true, text: undefined, id: undefined },
       { type: "dialog", accept: true, text: "Ada", id: 4 },
     ]);
   });
 
-  // 目的：宿主是进程边界上唯一的校验点；潜在缺陷：后端 schema 放过的组合在页面上执行出意外动作。
-  it("rejects malformed actions", () => {
-    const act = (action: Record<string, unknown>) => () => parseAct({ ...base, actions: [action] });
-    expect(codeOf(act({ type: "press", key: "F5" }))).toBe("INVALID_PARAMS");
-    expect(codeOf(act({ type: "press", key: "K" }))).toBe("INVALID_PARAMS");
-    expect(codeOf(act({ type: "press", key: "a", modifiers: ["Hyper"] }))).toBe("INVALID_PARAMS");
-    expect(codeOf(act({ type: "scroll" }))).toBe("INVALID_PARAMS");
-    expect(codeOf(act({ type: "dialog" }))).toBe("INVALID_PARAMS");
-    expect(codeOf(act({ type: "dialog", accept: true, text: 3 }))).toBe("INVALID_PARAMS");
-    expect(codeOf(act({ type: "dialog", accept: true, id: 0 }))).toBe("INVALID_PARAMS");
-    expect(codeOf(act({ type: "wait_for", text: "a", text_gone: "b" }))).toBe("INVALID_PARAMS");
-    expect(codeOf(act({ type: "wait_for" }))).toBe("INVALID_PARAMS");
+  // 目的：宿主按导出的契约校验形状、枚举与上限；潜在缺陷：后端放过的取值在页面上执行出意外动作。跨字段规则
+  // （scroll 要方向或 ref、wait_for 的组合）只在后端参数模型里，由后端测试守着，宿主信任后端。
+  it("rejects actions outside the exported contract", () => {
+    const one = (action: Record<string, unknown>) => () => parseAct(act(action));
+    expect(codeOf(one(wire.press({ key: "F5" })))).toBe("INVALID_PARAMS");
+    expect(codeOf(one(wire.press({ key: "K" })))).toBe("INVALID_PARAMS");
+    expect(codeOf(one(wire.press({ key: "a", modifiers: ["Hyper"] })))).toBe("INVALID_PARAMS");
+    expect(codeOf(one({ type: "dialog", text: null, id: null }))).toBe("INVALID_PARAMS");
+    expect(codeOf(one(wire.dialog({ accept: true, text: 3 })))).toBe("INVALID_PARAMS");
+    expect(codeOf(one(wire.dialog({ accept: true, id: 0 })))).toBe("INVALID_PARAMS");
+    expect(codeOf(one({ type: "hover" }))).toBe("INVALID_PARAMS");
   });
 });
 

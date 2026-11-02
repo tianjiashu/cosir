@@ -1,0 +1,292 @@
+{
+  "page": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 404,
+    "emulation": {
+      "width": 390,
+      "height": 844,
+      "mobile": true,
+      "color_scheme": "dark"
+    },
+    "snapshot": "- heading \"Sign in\" [level=1]\n- button \"Go\" [ref=e2]",
+    "frames": 1,
+    "notes": [
+      "the page tried to open a file chooser; file uploads are not supported, so it was blocked"
+    ],
+    "new_logs": {
+      "console_errors": 2,
+      "console_warnings": 1,
+      "failed_requests": 1
+    },
+    "other_tabs": [
+      "t1"
+    ],
+    "dialog": null
+  },
+  "act": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null
+    },
+    "snapshot": "",
+    "frames": 0,
+    "notes": [],
+    "new_logs": {
+      "console_errors": 0,
+      "console_warnings": 0,
+      "failed_requests": 0
+    },
+    "other_tabs": [],
+    "dialog": {
+      "id": 7,
+      "type": "confirm",
+      "message": "Delete it?",
+      "default_text": ""
+    },
+    "completed": 1,
+    "failure": {
+      "index": 1,
+      "code": "DIALOG_OPEN",
+      "message": "the page is paused: it is showing a confirm dialog (#7)"
+    }
+  },
+  "console_logs": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null
+    },
+    "kind": "console",
+    "entries": [
+      {
+        "seq": 12,
+        "level": "error",
+        "text": "Uncaught TypeError: x is undefined",
+        "source": "http://127.0.0.1:5173/src/main.ts:42",
+        "frame": null
+      },
+      {
+        "seq": 15,
+        "level": "warning",
+        "text": "deprecated API",
+        "source": null,
+        "frame": "http://localhost:6006/embed"
+      }
+    ],
+    "next": 16,
+    "more_before": true,
+    "more_after": false,
+    "dropped_before": null
+  },
+  "network_logs": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null
+    },
+    "kind": "network",
+    "entries": [
+      {
+        "seq": 20,
+        "method": "GET",
+        "url": "http://127.0.0.1:5173/api/me",
+        "status": 401,
+        "resource_type": "Fetch",
+        "failure": null,
+        "duration_ms": 31
+      },
+      {
+        "seq": 21,
+        "method": "POST",
+        "url": "http://127.0.0.1:5173/api/login",
+        "status": null,
+        "resource_type": "XHR",
+        "failure": "net::ERR_CONNECTION_REFUSED",
+        "duration_ms": null
+      },
+      {
+        "seq": 22,
+        "method": "GET",
+        "url": "http://127.0.0.1:5173/api/stream",
+        "status": null,
+        "resource_type": "Fetch",
+        "failure": null,
+        "duration_ms": null
+      }
+    ],
+    "next": 23,
+    "more_before": false,
+    "more_after": true,
+    "dropped_before": 18
+  },
+  "evaluate": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null
+    },
+    "value": "{\"user\":null,\"items\":3}",
+    "truncated": false,
+    "error": null,
+    "dialog": null
+  },
+  "evaluate_error": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null
+    },
+    "value": null,
+    "truncated": false,
+    "error": "ReferenceError: foo is not defined",
+    "dialog": null
+  },
+  "page_prompt": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 404,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null
+    },
+    "snapshot": "",
+    "frames": 0,
+    "notes": [],
+    "new_logs": {
+      "console_errors": 0,
+      "console_warnings": 0,
+      "failed_requests": 0
+    },
+    "other_tabs": [],
+    "dialog": {
+      "id": 9,
+      "type": "prompt",
+      "message": "Your name?",
+      "default_text": "Ada"
+    }
+  },
+  "evaluate_undefined": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null
+    },
+    "value": "undefined",
+    "truncated": false,
+    "error": null,
+    "dialog": null
+  },
+  "evaluate_truncated": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null
+    },
+    "value": "[1,2,3",
+    "truncated": true,
+    "error": null,
+    "dialog": null
+  },
+  "evaluate_dialog": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null
+    },
+    "value": null,
+    "truncated": false,
+    "error": null,
+    "dialog": {
+      "id": 4,
+      "type": "confirm",
+      "message": "Proceed?",
+      "default_text": ""
+    }
+  },
+  "screenshot": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null
+    },
+    "image": "data:image/jpeg;base64,/9j/AAAA"
+  },
+  "tabs": [
+    {
+      "tab_id": "t1",
+      "title": "Home",
+      "url": "http://127.0.0.1:5173/",
+      "current": false,
+      "created_by": "user"
+    },
+    {
+      "tab_id": "t3",
+      "title": "Sign in",
+      "url": "http://127.0.0.1:5173/login",
+      "current": true,
+      "created_by": "agent"
+    }
+  ]
+}

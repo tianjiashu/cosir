@@ -28,6 +28,9 @@ describe("toolHeading", () => {
     expect(toolHeading("web_extract", { urls: ["https://example.com/a", "https://example.com/b"] }).target).toBe("https://example.com/a +1");
     expect(toolHeading("apply_patch", { patch: "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\ndiff --git a/x.py b/x.py\n" }).target).toBe("x.py");
     expect(toolHeading("browser_act", { actions: [{ type: "click", ref: "e1" }, { type: "scroll" }] }).target).toBe("click +1");
+    expect(toolHeading("browser_logs", { kind: "network", failed_only: true }).target).toBe("network");
+    expect(toolHeading("browser_evaluate", { expression: `document.title\n// ${"x".repeat(80)}` }).target).toBe("document.title");
+    expect(toolHeading("browser_evaluate", { expression: "a".repeat(70) }).target).toBe(`${"a".repeat(60)}…`);
   });
 
   it("终端输入写「会话 · 输入摘要」，MCP 与 Skill 按动作拼目标", () => {

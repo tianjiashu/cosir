@@ -50,6 +50,11 @@ function withMore(values: unknown): string | null {
   return values.length > 1 ? `${first} +${values.length - 1}` : first;
 }
 
+/** 长文本（脚本表达式）只取开头一段，超出用省略号。 */
+function clipped(value: string | null, max: number): string | null {
+  return value !== null && value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
 function joined(...parts: (string | null)[]): string | null {
   return parts.every((part) => part !== null) ? parts.join("") : null;
 }
@@ -120,6 +125,8 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   browser_act: { verb: "操作网页", icon: "globe", target: browserActTarget },
   browser_screenshot: { verb: "网页截图", icon: "globe", target: (args) => (args.full_page === true ? "full page" : str(args.tab)) },
   browser_tabs: { verb: "管理标签页", icon: "globe", target: (args) => (str(args.tab) ? joined(str(args.action), " ", str(args.tab)) : str(args.action)) },
+  browser_logs: { verb: "读取网页日志", icon: "globe", target: (args) => str(args.kind) },
+  browser_evaluate: { verb: "执行网页脚本", icon: "globe", target: (args) => clipped(firstLine(args.expression), 60) },
   browser_handoff: { verb: "交给你操作网页", icon: "globe", target: (args) => str(args.reason) },
   web_search: { verb: "网页搜索", icon: "globe", target: (args) => str(args.query) },
   web_extract: { verb: "网页正文提取", icon: "globe", target: (args) => withMore(args.urls) },
