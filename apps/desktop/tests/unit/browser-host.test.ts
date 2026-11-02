@@ -19,6 +19,9 @@ class FakeTab {
   fail!: (error: Error) => void;
   pending = new Promise<void>((resolve, reject) => { this.finish = resolve; this.fail = reject; });
   close = vi.fn();
+  readonly view = {};
+  show = vi.fn();
+  hide = vi.fn();
   navigate = vi.fn().mockResolvedValue(undefined);
   snapshot = vi.fn().mockResolvedValue({ outline: { entries: [{ key: ":1", depth: 0, text: "text 'page'", parent: -1, visible: true }], frames: 0 }, dialog: null });
   deliver = vi.fn().mockReturnValue(null);
@@ -114,6 +117,48 @@ describe("BrowserHost 资源生命周期", () => {
     expect(host.state().tabs).toEqual([]);
     expect(tab().close).toHaveBeenCalledTimes(1);
     if (kind === "shutdown") await expect(host.userOpen(1, limits)).rejects.toMatchObject({ code: "UNAVAILABLE" });
+  });
+
+  // 潜在缺陷：用户的收尾操作常与关闭竞争（面板卸载时摘下画面、连点关闭、标签关掉后再点弹窗提示条），按「必须在」查
+  // 标签就报假失败、弹出「关闭标签页失败」；而要在标签上产出结果的入口仍须报标签不在。
+  it("摘下画面、关闭与作答弹窗对已关闭的标签什么也不做，摆上画面仍报标签不在", async () => {
+    const host = new BrowserHost(() => null);
+    const opening = host.userOpen(1, limits);
+    tab().finish();
+    await opening;
+    host.userClose("t1");
+    expect(() => host.userClose("t1")).not.toThrow();
+    expect(() => host.place("t1", null)).not.toThrow();
+    expect(() => host.userAnswerDialog("t1", 3, { accept: true })).not.toThrow();
+    expect(() => host.revealDownload("d9")).not.toThrow();
+    expect(() => host.place("t1", { x: 0, y: 0, width: 100, height: 100 })).toThrow(expect.objectContaining({ code: "TAB_NOT_FOUND" }));
+    expect(tab().close).toHaveBeenCalledTimes(1);
+  });
+
+  // 潜在缺陷：「在不在面板上」另由设备模拟的占位矩形推断，某条只摘视图的路径（如关闭）没清它，后台标签里网页自己
+  // 打开的选文件框就会弹给看不见这个页面的用户。
+  it("只有此刻挂在面板上的标签算挂上，摆上新的、摘下或关闭后都不算", async () => {
+    const window = {
+      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+      webContents: { getZoomFactor: () => 1 },
+    };
+    const host = new BrowserHost(() => window as never);
+    const openings = [host.userOpen(1, limits), host.userOpen(1, limits)];
+    tab(0).finish();
+    tab(1).finish();
+    await Promise.all(openings);
+    const rect = { x: 0, y: 0, width: 400, height: 300 };
+    const attached = () => FakeTab.instances.map((item) => item.events.isAttached());
+
+    host.place("t1", rect);
+    expect(attached()).toEqual([true, false]);
+    host.place("t2", rect);
+    expect(attached()).toEqual([false, true]);
+    host.place("t2", null);
+    expect(attached()).toEqual([false, false]);
+    host.place("t1", rect);
+    host.userClose("t1");
+    expect(attached()).toEqual([false, false]);
   });
 
   it("初始化失败回收视图和名额，后续标签不复用 id", async () => {

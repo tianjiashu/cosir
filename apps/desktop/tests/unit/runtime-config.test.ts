@@ -105,7 +105,8 @@ describe("backend runtime projection", () => {
     expect(changes).toHaveBeenCalledTimes(1);
   });
 
-  it("shares one in-flight restart and surfaces the supervisor failure as a user-facing error", async () => {
+  // 宿主失败转成用户可见错误由 `lib/desktop-host` 一处负责（见 desktop-host 单测），这里只管共享与原样上抛。
+  it("shares one in-flight restart and passes the host failure through", async () => {
     const { runtime, backend } = await loadWithHost(ready(1));
     backend.restart.mockRejectedValueOnce(new Error("本地 Agent 后端正在启动，请等待启动完成"));
 
@@ -113,7 +114,7 @@ describe("backend runtime projection", () => {
     const second = runtime.restartBackendRuntime();
 
     expect(second).toBe(first);
-    await expect(first).rejects.toMatchObject({ name: "UserFacingError", message: "本地 Agent 后端正在启动，请等待启动完成" });
+    await expect(first).rejects.toThrow("本地 Agent 后端正在启动，请等待启动完成");
     expect(backend.restart).toHaveBeenCalledTimes(1);
   });
 

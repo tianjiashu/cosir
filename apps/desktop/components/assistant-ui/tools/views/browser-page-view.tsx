@@ -5,8 +5,10 @@ import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/att
 import { ImageStrip } from "@/components/image/image-strip";
 import { Button } from "@/components/ui/button";
 import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
+import { browserActionVerb } from "@/lib/assistant/tool-catalog";
+import { tabLabel } from "@/lib/browser/tab-label";
 import { useBrowserTab } from "@/lib/browser/host-state-store";
-import { useWorkbenchActions } from "@/lib/workbench/context";
+import { revealBrowserTab } from "@/lib/browser/panel-store";
 import { cn } from "@/lib/utils";
 import { readBrowserPageDisplay, type BrowserActStep, type BrowserPageDisplay } from "../browser-page-display";
 import type { CallView } from "../call-view";
@@ -14,7 +16,7 @@ import type { CallView } from "../call-view";
 /** 地址与标题是调用当时的快照，不是事实源：标签页可能已经导航或关闭（关闭后只标注、不提供打开入口）。 */
 function BrowserPageMeta({ display }: { display: BrowserPageDisplay }) {
   const liveTab = useBrowserTab(display.tabId);
-  const label = display.title || display.url || "新标签页";
+  const label = tabLabel(display.title, display.url);
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5" title={display.url}>
       <span className="truncate">{label}</span>
@@ -23,17 +25,17 @@ function BrowserPageMeta({ display }: { display: BrowserPageDisplay }) {
   );
 }
 
+/** 浏览器是独立面板、不进工作台：有没有工作区都能打开。 */
 function OpenTabAction({ display }: { display: BrowserPageDisplay }) {
-  const actions = useWorkbenchActions();
   const liveTab = useBrowserTab(display.tabId);
-  if (actions === null || liveTab === undefined) return null;
+  if (liveTab === undefined) return null;
   return (
     <Button
       type="button"
       variant="ghost"
       size="xs"
       className="text-muted-foreground hover:text-foreground shrink-0"
-      onClick={() => actions.openBrowser({ taskId: liveTab.taskId, tabId: display.tabId })}
+      onClick={() => revealBrowserTab(liveTab.taskId, display.tabId)}
       aria-label={`在浏览器面板打开：${display.title || display.url}`}
     >
       打开<ArrowUpRightIcon aria-hidden="true" />
@@ -49,12 +51,6 @@ function Screenshot({ assetId }: { assetId: string }) {
   return <div className="bg-surface rounded-lg p-2"><ImageStrip images={images} label="网页截图" /></div>;
 }
 
-/** 动作类型 → 动词（展示外壳归前端，与工具目录同一做法：按封闭的类型查表）。 */
-const STEP_VERBS: Record<string, string> = {
-  click: "点击", hover: "悬停", drag: "拖动", type: "输入", press: "按键", select: "选择",
-  scroll: "滚动", upload: "上传", wait_for: "等待", dialog: "回答弹窗",
-};
-
 /** `browser_act` 的每一步：做完的照常、停下的那步标红带短提示、之后没执行的标灰。目标说明来自网页，只显示。 */
 function ActSteps({ steps }: { steps: BrowserActStep[] }) {
   return (
@@ -62,7 +58,7 @@ function ActSteps({ steps }: { steps: BrowserActStep[] }) {
       {steps.map((step, index) => (
         <li key={index} className={cn("flex min-w-0 gap-1.5", step.status === "failed" && "text-destructive", step.status === "skipped" && "text-muted-foreground")}>
           <span className="text-muted-foreground shrink-0 tabular-nums">{index + 1}.</span>
-          <span className="shrink-0">{STEP_VERBS[step.action] ?? step.action}</span>
+          <span className="shrink-0">{browserActionVerb(step.action)}</span>
           {step.target && <span className="min-w-0 truncate" title={step.target}>{step.target}</span>}
           {step.status === "failed" && step.hint && <span className="shrink-0">· {step.hint}</span>}
           {step.status === "skipped" && <span className="shrink-0">· 未执行</span>}

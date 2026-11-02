@@ -9,9 +9,10 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
 import { useWorkbenchActions } from "@/lib/workbench/context";
 import { useEnsureTaskListed } from "@/components/layout/task-listing-context";
+import { useOpenTask } from "@/components/links/use-open-task";
 import { cn } from "@/lib/utils";
 import type { CallView, CallViewContext } from "../call-view";
-import { readChildAgentResultDisplay, readDelegationDisplay, readForkDisplay } from "../child-agent-display";
+import { readAgentTaskResultDisplay, readDelegationDisplay, readForkDisplay, type AgentTaskResultDisplay } from "../child-agent-display";
 import { ToolStopButton, useStopRequest } from "../tool-stop-button";
 
 /**
@@ -26,11 +27,11 @@ function ChildTaskStatus({ childTaskId }: { childTaskId: number | undefined }) {
 }
 
 /**
- * 行尾动作：打开派生出的 Task；活动中的还可以单独停止它（停止信号只投递，终态经任务状态推送与
- * 父工具 part 的 canonical 投影到达，不乐观改状态）。怎么「打开」由视图给：委派在工作台打开，
- * 分叉是侧栏对话、跳到它的路由。
+ * 行尾动作：打开对方 Task；自己派生的、活动中的还可以单独停止它（停止信号只投递，终态经任务状态
+ * 推送与父工具 part 的 canonical 投影到达，不乐观改状态）。怎么「打开」由视图给：委派在工作台打开，
+ * 分叉是侧栏对话、跳到它的路由。发给上级的卡片不能停止对方（`stoppable` 为假）。
  */
-function ChildTaskActions({ childTaskId, title, context, open, openLabel, subject }: {
+function ChildTaskActions({ childTaskId, title, context, open, openLabel, subject, stoppable = true }: {
   childTaskId: number | undefined;
   title: string;
   context: CallViewContext;
@@ -38,12 +39,13 @@ function ChildTaskActions({ childTaskId, title, context, open, openLabel, subjec
   openLabel: string;
   /** 停止按钮里怎么称呼它（「子 Agent」「分叉对话」）。 */
   subject: string;
+  stoppable?: boolean;
 }) {
   const status = useTaskExecutionStatus(childTaskId);
   const active = status === "pending" || status === "running" || status === "suspended";
   const cancellation = useStopRequest(active);
   if (childTaskId === undefined) return null;
-  const canCancel = active && context.interactive && !context.taskCancelling;
+  const canCancel = stoppable && active && context.interactive && !context.taskCancelling;
   const stop = () => {
     void frontendLog("INFO", "delegation_child_run_cancel_requested", "用户请求停止派生的 Task", { data: { child_task_id: childTaskId } });
     void cancellation.stop(async () => {
@@ -115,12 +117,30 @@ export const delegationView: CallView = {
   },
 };
 
-/** `child-agent-result`（`child_agent_send` / `child_agent_status`）：展开体是子 Agent 返回的结论正文。 */
-export const childAgentResultView: CallView = {
-  accepts: (data) => readChildAgentResultDisplay(data) !== null,
-  meta: (data, context) => <ChildTaskStatus childTaskId={childTaskIdOf(context, readChildAgentResultDisplay(data)!.childTaskId)} />,
+/** 打开对方（按 Task 类型跳路由或进工作台）；只有发给自己派生的 Task 才能从卡片上停止它。 */
+function AgentTaskActions({ display, context }: { display: AgentTaskResultDisplay; context: CallViewContext }) {
+  const openTask = useOpenTask();
+  const title = display.agentName ?? "任务";
+  const up = display.direction === "up";
+  return (
+    <ChildTaskActions
+      childTaskId={display.taskId}
+      title={title}
+      context={context}
+      open={() => void openTask(display.taskId, title)}
+      openLabel={up ? "打开上级任务" : "打开任务"}
+      subject="任务"
+      stoppable={!up}
+    />
+  );
+}
+
+/** `agent-task-result`（`send_message` / `task_status`）：展开体是对方返回的结论正文（状态查询时才有）。 */
+export const agentTaskResultView: CallView = {
+  accepts: (data) => readAgentTaskResultDisplay(data) !== null,
+  meta: (data) => <ChildTaskStatus childTaskId={readAgentTaskResultDisplay(data)!.taskId} />,
   body: (data) => {
-    const result = readChildAgentResultDisplay(data)!;
+    const result = readAgentTaskResultDisplay(data)!;
     if (!result.finalOutput && !result.endReason) return null;
     return (
       <div className="bg-surface space-y-1 rounded-lg px-3 py-2 text-xs">
@@ -129,10 +149,7 @@ export const childAgentResultView: CallView = {
       </div>
     );
   },
-  actions: (data, context) => {
-    const result = readChildAgentResultDisplay(data)!;
-    return <WorkbenchChildActions childTaskId={childTaskIdOf(context, result.childTaskId)} title={rowTitle(context, result.agentName)} context={context} />;
-  },
+  actions: (data, context) => <AgentTaskActions display={readAgentTaskResultDisplay(data)!} context={context} />,
 };
 
 /** `fork-task-result`（`fork_task`）：没有展开体，分叉对话的过程与结论都在它自己的侧栏对话里。 */

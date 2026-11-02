@@ -10,7 +10,7 @@ import type { BrowserDownload, CosirHost } from "@/electron/shared/host-contract
 const host = { browser: {} } as unknown as CosirHost;
 
 function download(id: string, patch: Partial<BrowserDownload> = {}): BrowserDownload {
-  return { id, taskId: 7, tabId: "t1", filename: `${id}.zip`, path: `/ws/downloads/${id}.zip`, state: "completed", receivedBytes: 10, totalBytes: 10, ...patch };
+  return { id, taskId: 7, tabId: "t1", filename: `${id}.zip`, path: `/ws/downloads/${id}.zip`, state: "completed", stalled: false, receivedBytes: 10, totalBytes: 10, ...patch };
 }
 
 describe("BrowserDialogBanner", () => {
@@ -51,5 +51,9 @@ describe("DownloadBar", () => {
 
     expect(renderToStaticMarkup(<DownloadBar host={host} downloads={[download("a")]} />)).toContain("在文件夹中显示 a.zip");
     expect(renderToStaticMarkup(<DownloadBar host={host} downloads={[download("a", { state: "interrupted" })]} />)).toContain("下载失败");
+    // 断线续传不是失败：先报「下载失败」再变回进度条会让用户以为要重下。
+    const stalled = renderToStaticMarkup(<DownloadBar host={host} downloads={[download("a", { state: "progressing", stalled: true })]} />);
+    expect(stalled).toContain("连接中断，正在重试");
+    expect(stalled).not.toContain("下载失败");
   });
 });

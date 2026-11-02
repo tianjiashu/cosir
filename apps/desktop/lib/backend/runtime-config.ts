@@ -181,11 +181,9 @@ export function restartBackendRuntime(): Promise<void> {
   // 只有桌面宿主里才有重启入口（启动门禁的重试与开发期重启按钮都依赖宿主）。
   const host = desktopHost!;
   ensureHostSubscription(host);
+  // 失败（supervisor 给出的中文原因）已由 `lib/desktop-host` 转成用户可见错误。
   const promise = host.backend.restart()
-    .then(applyHostSnapshot, (error: unknown) => {
-      // 宿主应答里的失败消息是 supervisor 给出的中文安全摘要，按用户可见错误抛出。
-      throw error instanceof Error && error.message ? new UserFacingError(error.message) : error;
-    })
+    .then(applyHostSnapshot)
     .finally(() => {
       if (restartInFlight === promise) restartInFlight = null;
     });

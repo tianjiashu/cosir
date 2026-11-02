@@ -1,26 +1,24 @@
-import { taskRunStatusPresentation } from "@/components/task-tree/task-run-status";
-import { readChildAgentResultDisplay } from "../child-agent-display";
+import { readAgentTaskResultDisplay } from "../child-agent-display";
 import type { DetailView } from "./detail-view";
 
 /**
- * `child-agent-result`（`child_agent_send` / `child_agent_status`）。
+ * `agent-task-result`（`send_message` / `task_status`）。
  *
- * 摘要里的状态是子 Task 最新 Run 的状态（含 suspended），用 Run 状态文案而不是工具调用
- * 状态；行尾的工具状态只表示这次查询 / 发送本身。载荷有效性由 `accepts` 在路由时保证。
+ * 对方 Run 的状态不在展示数据里（读任务状态推送）；这里只摆对方名字、方向与查询到的结论。
+ * 载荷有效性由 `accepts` 在路由时保证。
  */
 export const childAgentView: DetailView = {
-  accepts: (data) => readChildAgentResultDisplay(data) !== null,
+  accepts: (data) => readAgentTaskResultDisplay(data) !== null,
   meta: (data) => {
-    const result = readChildAgentResultDisplay(data)!;
-    return `${result.agentName ?? "子 Agent"} · 子 Agent：${taskRunStatusPresentation(result.status, true)?.label}`;
+    const result = readAgentTaskResultDisplay(data)!;
+    const relation = result.operation === "status" ? "状态" : result.direction === "up" ? "发给上级" : "发给下级";
+    return `${result.agentName ?? "任务"} · ${relation}`;
   },
   body: (data) => {
-    const result = readChildAgentResultDisplay(data)!;
+    const result = readAgentTaskResultDisplay(data)!;
     return (
       <div className="space-y-1 text-xs">
-        <p className="text-muted-foreground">
-          {result.agentName ?? "子 Agent"} · task {result.childTaskId} · {taskRunStatusPresentation(result.status, true)?.label}
-        </p>
+        <p className="text-muted-foreground">{result.agentName ?? "任务"} · task {result.taskId}</p>
         {result.endReason && <p className="text-warning">{result.endReason}</p>}
         {result.finalOutput && <p className="whitespace-pre-wrap break-words text-muted-foreground">{result.finalOutput}</p>}
       </div>

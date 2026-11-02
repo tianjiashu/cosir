@@ -16,8 +16,9 @@ import { openUserTab } from "@/lib/browser/open-tab";
 import { displayedTab, useBrowserPanelStore } from "@/lib/browser/panel-store";
 import { useTaskBrowserDownloads, useTaskBrowserTabs } from "@/lib/browser/host-state-store";
 import { desktopHost } from "@/lib/desktop-host";
-import { useHandoffStore } from "@/lib/handoff/store";
-import { useHandBack } from "@/lib/handoff/use-hand-back";
+import { handoffOn, useHandoffStore } from "@/lib/handoff/store";
+import { handBackHandoff } from "@/lib/handoff/use-hand-back";
+import { tabLabel } from "@/lib/browser/tab-label";
 import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
@@ -42,27 +43,27 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
   onToggleMaximized: () => void;
   onClose: () => void;
 }) {
-  const tabs = useTaskBrowserTabs(taskId ?? -1);
-  const downloads = useTaskBrowserDownloads(taskId ?? -1);
+  const tabs = useTaskBrowserTabs(taskId);
+  const downloads = useTaskBrowserDownloads(taskId);
   const selectedId = useBrowserPanelStore((state) => (taskId === null ? undefined : state.selected[taskId]));
   const select = useBrowserPanelStore((state) => state.select);
   const active = displayedTab(tabs, selectedId);
   const host = desktopHost;
   const canOpen = host !== null && taskId !== null;
   const handoffs = useHandoffStore((state) => (taskId === null ? null : state.tasks[taskId]));
-  const handoffOf = (tabId: string) => handoffs?.find((entry) => entry.surface === "browser" && entry.resourceId === tabId) ?? null;
+  const handoffOf = (tabId: string) => handoffOn(handoffs, "browser", tabId);
   const activeHandoff = active ? handoffOf(active.tabId) : null;
-  const { handBack } = useHandBack(taskId ?? -1);
   const agentRunning = useTaskExecutionStatus(taskId) === "running";
 
   const openTab = (url?: string) => {
     if (!canOpen) return;
     openUserTab(taskId, url).catch((error: unknown) => notify.error("无法新开标签页", { error }));
   };
+  // 有标签才有关闭按钮，而标签只来自宿主镜像、按 Task 筛选：走到这里宿主与 Task 必然在。
   const closeTab = (tabId: string) => {
     const handoff = handoffOf(tabId);
-    host?.browser.close(tabId).then(
-      () => { if (handoff) void handBack(handoff.toolCallId); },
+    host!.browser.close(tabId).then(
+      () => { if (handoff) void handBackHandoff(taskId!, handoff.toolCallId); },
       (error: unknown) => notify.error("关闭标签页失败", { error }),
     );
   };
@@ -76,7 +77,7 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
         <>
           <div role="tablist" aria-label="浏览器标签页" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             {tabs.map((tab) => {
-              const title = tab.title || tab.url.replace(/^about:blank$/, "") || "新标签页";
+              const title = tabLabel(tab.title, tab.url);
               const selected = tab.tabId === active?.tabId;
               return (
                 <div key={tab.tabId} className={panelTabClass(selected, "max-w-48 shrink")}>

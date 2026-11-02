@@ -68,6 +68,7 @@ const PAGES: Record<string, string> = {
   "/counter": `<title>Counter</title><h1>Shop</h1>${Array.from({ length: 12 }, (_, i) => `<p>Item ${i + 1}</p>`).join("")}
     <button onclick="document.getElementById('n').textContent = Number(document.getElementById('n').textContent) + 1">Add</button>
     <span id="n">0</span> <a href="/clickable">Elsewhere</a>`,
+  "/wide": `<title>Wide</title><body style="margin:0;width:980px"><button style="position:absolute;left:600px;top:300px;width:200px;height:100px" onclick="document.title = 'hit'">Far button</button></body>`,
   "/far": `<title>Far</title><button style="position: absolute; left: 1100px; top: 700px" onclick="document.title = 'far clicked'">Far</button>`,
   "/escape": `<title>Escape</title><script>setTimeout(() => { location.href = "file:///etc/hosts"; }, 0)</script>`,
   "/ua": `<script>document.title = navigator.userAgent</script>`,
@@ -924,3 +925,24 @@ test("lists a cross-site iframe's contents in the viewport once it is scrolled i
   expect(scrolled).toContain('button "Send"');
   expect(scrolled).not.toContain("Top of the page");
 });
+
+// 目的：元素藏起来后再点，报的是「看不见」而不是别的；潜在缺陷：CDP 对没有布局的节点的报错文案变了，被当成普通失败。
+test("reports a hidden element as not interactable", async () => {
+  const page = valueOf(await link("browser.navigate", 68, { url: `${origin}/act` }));
+  const button = refOf(page.snapshot as string, "button", "Search");
+  valueOf(await link("browser.evaluate", 68, { expression: "document.querySelectorAll('button').forEach((b) => { if (b.textContent.includes('Search')) b.style.display = 'none'; })" }));
+  const clicked = valueOf(await link("browser.act", 68, { actions: [{ type: "click", ref: button }] }));
+  expect(clicked).toMatchObject({ completed: 0, failure: { code: "NOT_INTERACTABLE" } });
+});
+
+// 目的：截图上的坐标在手机模拟下也点得准；潜在缺陷：没写 viewport 声明的网页按 980 宽排版、缩小显示，截图是 980 宽，
+// 越界检查却按模拟的 390 宽判断，照截图给的坐标被拒（实测）。
+test("accepts screenshot coordinates on a page laid out wider than the emulated phone", async () => {
+  valueOf(await link("browser.navigate", 69, { url: `${origin}/wide`, viewport: { width: 390, height: 844, mobile: true } }));
+  const shot = valueOf(await link("browser.screenshot", 69, {}));
+  const size = await app.evaluate(({ nativeImage }, data) => nativeImage.createFromDataURL(data).getSize(), shot.image as string);
+  expect(size.width).toBe(980);
+  const clicked = valueOf(await link("browser.act", 69, { actions: [{ type: "click", x: 700, y: 350 }] }));
+  expect(clicked).toMatchObject({ failure: null, title: "hit" });
+});
+

@@ -886,6 +886,8 @@ const server = createServer(async (req, res) => {
       title,
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-01T00:00:00.000Z",
+      ...(body.taskType ? { task_type: body.taskType } : {}),
+      ...(body.extra ? { extra: body.extra } : {}),
     });
     states.set(taskId, emptyState());
     publishTaskStatus(taskId);

@@ -24,13 +24,12 @@ export type BrowserPageDisplay = {
 
 const STEP_STATUSES = new Set(["done", "failed", "skipped"]);
 
-const TAB_ID = /^t\d+$/;
-
 /** 校验展示载荷；形状不对返回 null，由注册表回落通用卡片。 */
 export function readBrowserPageDisplay(value: unknown): BrowserPageDisplay | null {
   if (typeof value !== "object" || value === null) return null;
   const data = value as Record<string, unknown>;
-  if (data.kind !== "browser-page" || typeof data.tab_id !== "string" || !TAB_ID.test(data.tab_id)) return null;
+  // `tab_id` 只用来查宿主状态镜像（查不到就是已关闭），不拼进地址，确认是字符串即可。
+  if (data.kind !== "browser-page" || typeof data.tab_id !== "string") return null;
   if (typeof data.url !== "string" || typeof data.title !== "string") return null;
   const display: BrowserPageDisplay = { tabId: data.tab_id, url: data.url, title: data.title };
   if (typeof data.screenshot === "string" && ATTACHMENT_ASSET_ID.test(data.screenshot)) display.screenshot = data.screenshot;

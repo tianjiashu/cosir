@@ -8,6 +8,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/state-panel";
 import type { BrowserNavigation, CosirHost } from "@/electron/shared/host-contract";
 import { watchOverlays } from "@/lib/browser/overlay-watch";
+import { displayedAddress } from "@/lib/browser/tab-label";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 
@@ -36,7 +37,7 @@ export function BrowserView({ host, tabId, url, loading, crashed }: {
   const [editing, setEditing] = useState(false);
 
   useEffect(() => {
-    if (!editing) setAddress(url === "about:blank" ? "" : url);
+    if (!editing) setAddress(displayedAddress(url));
   }, [url, editing]);
 
   useEffect(() => {

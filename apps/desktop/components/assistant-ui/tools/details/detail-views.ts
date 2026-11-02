@@ -19,7 +19,7 @@ export const DETAIL_VIEWS: Readonly<Record<string, DetailView>> = {
   "directory-list": directoryListView,
   "web-search-results": webSearchView,
   "web-extract-urls": webExtractView,
-  "child-agent-result": childAgentView,
+  "agent-task-result": childAgentView,
   "image-read": imageReadView,
   "mcp-tool-result": mcpView,
   "skill-content": skillView,

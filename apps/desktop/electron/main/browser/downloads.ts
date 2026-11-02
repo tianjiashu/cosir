@@ -58,22 +58,26 @@ export class BrowserDownloads {
       filename: path.basename(target),
       path: target,
       state: "progressing",
+      stalled: false,
       receivedBytes: 0,
       totalBytes: item.getTotalBytes(),
     };
     this.entries.push({ download, item });
     this.trim(source.taskId);
+    // `updated` 里的 interrupted 是可恢复的中断（Chromium 会续传），不是结局：结局只在 `done` 里写（见 `ended`）。
     item.on("updated", (_event, state) => {
-      const next = state === "interrupted" ? "interrupted" : "progressing";
-      const changed = next !== download.state;
-      download.state = next;
+      const stalled = state === "interrupted";
+      const changed = stalled !== download.stalled;
+      download.stalled = stalled;
       download.receivedBytes = item.getReceivedBytes();
       download.totalBytes = item.getTotalBytes();
       if (changed || Date.now() - this.lastPublishAt >= PROGRESS_PUBLISH_MS) this.publish();
     });
     item.once("done", (_event, state) => {
       download.state = state;
+      download.stalled = false;
       download.receivedBytes = item.getReceivedBytes();
+      download.totalBytes = item.getTotalBytes();
       this.trim(download.taskId);
       this.publish();
       logDesktopEvent("INFO", "browser", "browser_download_done", { task_id: download.taskId, download_id: download.id, state });
@@ -90,10 +94,8 @@ export class BrowserDownloads {
     return this.entries.map(({ download }) => ({ ...download }));
   }
 
-  pathOf(downloadId: string): string {
-    const entry = this.entries.find(({ download }) => download.id === downloadId);
-    if (!entry) throw new Error("这次下载已不在列表里");
-    return entry.download.path;
+  pathOf(downloadId: string): string | undefined {
+    return this.entries.find(({ download }) => download.id === downloadId)?.download.path;
   }
 
   /** Task 删除：取消它未完成的下载并忘掉它的全部记录。 */
@@ -109,8 +111,8 @@ export class BrowserDownloads {
   private remove(matches: (download: BrowserDownload) => boolean): void {
     const removed = this.entries.filter(({ download }) => matches(download));
     if (removed.length === 0) return;
-    for (const { item } of removed) {
-      if (item.getState() === "progressing") item.cancel();
+    for (const { download, item } of removed) {
+      if (!ended(download)) item.cancel();
     }
     this.entries.splice(0, this.entries.length, ...this.entries.filter((entry) => !removed.includes(entry)));
     this.publish();
@@ -118,7 +120,7 @@ export class BrowserDownloads {
 
   /** 每个 Task 只留最近几次已结束的；进行中的不挤掉（挤掉就再也取消不了、也不参与同名避让）。 */
   private trim(taskId: number): void {
-    const finished = this.entries.filter(({ download }) => download.taskId === taskId && download.state !== "progressing");
+    const finished = this.entries.filter(({ download }) => download.taskId === taskId && ended(download));
     for (const entry of finished.slice(0, Math.max(0, finished.length - KEPT_FINISHED_PER_TASK))) {
       this.entries.splice(this.entries.indexOf(entry), 1);
     }
@@ -138,4 +140,12 @@ export class BrowserDownloads {
       if (!taken.has(candidate) && !fs.existsSync(candidate)) return candidate;
     }
   }
+}
+
+/**
+ * 下载是否已结束：只看 `done` 写下的结局。挤出列表（`trim`）、删除时要不要取消（`remove`）都按它判断——正在续传的
+ * 下载不算结束，挤掉就再也取消不了，删 Task 时不取消它，续传完成后会写进已删除 Task 的工作区。
+ */
+function ended(download: BrowserDownload): boolean {
+  return download.state !== "progressing";
 }

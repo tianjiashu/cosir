@@ -1,25 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { readChildAgentResultDisplay } from "@/components/assistant-ui/tools/child-agent-display";
+import { readAgentTaskResultDisplay } from "@/components/assistant-ui/tools/child-agent-display";
 
-describe("child agent display projections", () => {
-  it("reads send/status result payloads without exposing unknown fields", () => {
-    expect(readChildAgentResultDisplay({
-      kind: "child-agent-result",
+describe("agent task display projections", () => {
+  it("reads send/status payloads without exposing unknown fields", () => {
+    expect(readAgentTaskResultDisplay({
+      kind: "agent-task-result",
       operation: "status",
-      child_task_id: 2,
-      status: "completed",
-      agent_id: "reviewer",
+      direction: "down",
+      task_id: 2,
       agent_name: "Review",
       final_output: "done",
       end_reason: null,
-    })).toMatchObject({ operation: "status", childTaskId: 2, status: "completed", finalOutput: "done" });
-    expect(readChildAgentResultDisplay({
-      kind: "child-agent-result",
-      operation: "status",
-      child_task_id: 2,
-      status: "completed",
+    })).toMatchObject({ operation: "status", direction: "down", taskId: 2, finalOutput: "done" });
+    expect(readAgentTaskResultDisplay({
+      kind: "agent-task-result",
+      operation: "send",
+      direction: "up",
+      task_id: 2,
       prompt: "must not render",
     })).not.toHaveProperty("prompt");
   });
 
+  it("rejects payloads without a direction or a task", () => {
+    expect(readAgentTaskResultDisplay({ kind: "agent-task-result", operation: "send", task_id: 2 })).toBeNull();
+    expect(readAgentTaskResultDisplay({ kind: "agent-task-result", operation: "send", direction: "up" })).toBeNull();
+  });
 });

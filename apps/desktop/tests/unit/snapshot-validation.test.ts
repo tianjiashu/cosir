@@ -177,27 +177,35 @@ describe("Transport snapshot validation", () => {
     expect(parseTransportState(snapshot)).toBe(snapshot);
   });
 
-  it("accepts the child agent send/status result contract", () => {
-    const snapshot = withToolPart({
-      type: "tool-call", awaitingUser: false, toolCallId: "status-1", toolName: "child_agent_status", status: "completed", args: {},
-      display_data: {
-        kind: "child-agent-result", operation: "status", child_task_id: 501, status: "completed",
-        agent_id: "reviewer", agent_name: "审查代码", final_output: "已完成审查。", end_reason: null,
-      },
+  it("accepts the send_message / task_status result contract", () => {
+    const part = (display_data: Record<string, unknown>) => withToolPart({
+      type: "tool-call", awaitingUser: false, toolCallId: "status-1", toolName: "task_status", status: "completed", args: {}, display_data,
+    });
+    const snapshot = part({
+      kind: "agent-task-result", operation: "status", direction: "down", task_id: 501,
+      agent_name: "审查代码", final_output: "已完成审查。", end_reason: null,
     });
     expect(parseTransportState(snapshot)).toBe(snapshot);
+    // 对方 Run 的状态读任务状态推送，不在展示数据里。
+    expect(() => parseTransportState(part({
+      kind: "agent-task-result", operation: "send", direction: "up", task_id: 501,
+      agent_name: "主任务", final_output: null, end_reason: null, status: "completed",
+    }))).toThrow("固定字段");
+    expect(() => parseTransportState(part({
+      kind: "agent-task-result", operation: "send", direction: "sideways", task_id: 501,
+      agent_name: null, final_output: null, end_reason: null,
+    }))).toThrow("direction");
   });
 
-  it("accepts a suspended child Run status instead of rejecting the whole snapshot", () => {
-    // 子 Agent 卡片的状态是子 Task 的 Run 状态：子 Agent 等审批 / 等消息时为 suspended。
-    const snapshot = withToolPart({
-      type: "tool-call", awaitingUser: false, toolCallId: "status-1", toolName: "child_agent_status", status: "completed", args: {},
-      display_data: {
-        kind: "child-agent-result", operation: "status", child_task_id: 501, status: "suspended",
-        agent_id: "reviewer", agent_name: "审查代码", final_output: null, end_reason: null,
-      },
+  it("accepts the fork display contract and rejects fields outside it", () => {
+    const fork = (display_data: Record<string, unknown>) => withToolPart({
+      type: "tool-call", awaitingUser: false, toolCallId: "fork-1", toolName: "fork_task", status: "completed", args: {}, display_data,
     });
+    const snapshot = fork({ kind: "fork-task-result", title: "前端部分", child_task_id: 41 });
     expect(parseTransportState(snapshot)).toBe(snapshot);
+    // 分叉的状态与结论都在它自己的对话里，卡片只带标题与 Task id。
+    expect(() => parseTransportState(fork({ kind: "fork-task-result", title: "前端部分", child_task_id: 41, status: "completed" }))).toThrow("固定字段");
+    expect(() => parseTransportState(fork({ kind: "fork-task-result", title: "前端部分" }))).toThrow();
   });
 
   it("rejects child output embedded in a parent delegation display", () => {

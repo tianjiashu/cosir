@@ -1,6 +1,3 @@
-/** 宿主标签 id 为 t 加单调序号，IPC 与工具入参共用该格式。 */
-export const BROWSER_TAB_ID = /^t\d+$/;
-
 /**
  * 渲染进程与 Electron 宿主之间的唯一控制面契约：IPC 通道名与载荷类型。
  *
@@ -108,7 +105,12 @@ export type BrowserDownload = {
   filename: string;
   /** 落盘的本机绝对路径。 */
   path: string;
+  /**
+   * 进行中或结局；结局只在下载结束时给出（`interrupted` 是不可恢复的失败）。进行中网络断开、Chromium 会自动续传，
+   * 那时仍是 `progressing`，`stalled` 为真。
+   */
   state: "progressing" | "completed" | "cancelled" | "interrupted";
+  stalled: boolean;
   receivedBytes: number;
   /** 未知大小时为 0。 */
   totalBytes: number;
@@ -185,10 +187,10 @@ export type CosirHost = {
     /** 订阅状态变化（每次推送完整状态），返回取消订阅函数。 */
     onStateChanged(listener: (state: BrowserState) => void): () => void;
     /**
-     * 在 Task 里新开标签（可直接打开地址），返回标签 id。`context` 由后端按 Task 给出：宿主不存配置，
-     * 超出上限时抛出带原因的错误。
+     * 在 Task 里新开一个空白标签，返回标签 id；要打开地址再对它 `navigate`（开标签与导航各自成败）。`context` 由
+     * 后端按 Task 给出：宿主不存配置，超出上限时抛出带原因的错误。
      */
-    open(taskId: number, context: BrowserTabContext, url?: string): Promise<string>;
+    open(taskId: number, context: BrowserTabContext): Promise<string>;
     /**
      * 把标签的网页画面放到页面的这个矩形上；`null` 收起。同一时刻只有一个标签显示，放上新的会收起旧的。
      * 网页是叠在页面之上的原生画面，不参与 CSS 层叠。

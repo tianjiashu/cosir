@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import type { BrowserTabSummary } from "@/electron/shared/host-contract";
+import { useDockStore } from "@/lib/layout/dock-store";
 import { onBrowserTabsChange } from "./host-state-store";
 
 type TabRef = Pick<BrowserTabSummary, "tabId" | "taskId" | "openerId">;
@@ -33,6 +34,15 @@ export const useBrowserPanelStore = create<BrowserPanelState>()((set) => ({
   select: (taskId, tabId) => set((state) => ({ selected: { ...state.selected, [taskId]: tabId } })),
   followConversation: () => set({ taskId: null }),
 }));
+
+/**
+ * 把某个 Task 的某个标签摆到用户面前：面板切到它，并显示浏览器面板。工具卡片的「打开」、交接弹出、链接与新开标签
+ * 都经这里，不各自拼这两步。
+ */
+export function revealBrowserTab(taskId: number, tabId: string): void {
+  useBrowserPanelStore.getState().focus(taskId, tabId);
+  useDockStore.getState().show("browser");
+}
 
 /** 一个 Task 的面板显示哪个标签：选中的那个，没有选中或选中的已不在时回落到最新的标签。 */
 export function displayedTab<T extends Pick<BrowserTabSummary, "tabId">>(tabs: readonly T[], selectedId: string | undefined): T | undefined {

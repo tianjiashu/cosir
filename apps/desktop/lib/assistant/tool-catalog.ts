@@ -61,7 +61,7 @@ function joined(...parts: (string | null)[]): string | null {
 
 const path = (args: ToolArgs) => str(args.path);
 const sessionId = (args: ToolArgs) => str(args.session_id);
-const childTask = (args: ToolArgs) => (typeof args.child_task_id === "number" ? `#${args.child_task_id}` : null);
+const taskRef = (args: ToolArgs) => (typeof args.task_id === "number" ? `#${args.task_id}` : null);
 
 const PATCH_FILE_HEADER = /^diff --git a\/(\S+) b\//gm;
 
@@ -94,12 +94,24 @@ function skillTarget(args: ToolArgs): string | null {
   return skill && resource ? `${skill}/${resource}` : skill;
 }
 
+/** `browser_act` 动作类型 → 动词：调用行的目标与卡片的每一步共用这一张表。 */
+const BROWSER_ACTION_VERBS: Readonly<Record<string, string>> = {
+  click: "点击", hover: "悬停", drag: "拖动", type: "输入", press: "按键", select: "选择",
+  scroll: "滚动", upload: "上传", wait_for: "等待", dialog: "回答弹窗",
+};
+
+/** 未知的动作类型（后端新增而这里还没跟上）照原样显示。 */
+export function browserActionVerb(type: string): string {
+  return BROWSER_ACTION_VERBS[type] ?? type;
+}
+
 function browserActTarget(args: ToolArgs): string | null {
   if (!Array.isArray(args.actions) || args.actions.length === 0) return null;
   const first = args.actions[0] as ToolArgs | null;
   const type = first && typeof first === "object" ? str(first.type) : null;
   if (type === null) return null;
-  return args.actions.length > 1 ? `${type} +${args.actions.length - 1}` : type;
+  const verb = browserActionVerb(type);
+  return args.actions.length > 1 ? `${verb} +${args.actions.length - 1}` : verb;
 }
 
 export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
@@ -134,8 +146,8 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   skill: { verb: "加载 Skill", icon: "info", target: skillTarget },
   delegate_task: { verb: "委派任务", icon: "users", title: (args) => str(args.agent_name), target: (args) => str(args.child_agent_id) },
   fork_task: { verb: "分叉对话", icon: "git-fork", title: (args) => str(args.title) },
-  child_agent_send: { verb: "发送给子 Agent", icon: "send", target: childTask },
-  child_agent_status: { verb: "读取子 Agent 状态", icon: "info", target: childTask },
+  send_message: { verb: "发送消息", icon: "send", target: taskRef },
+  task_status: { verb: "读取任务状态", icon: "info", target: taskRef },
   wait_messages: { verb: "等待结果", icon: "clock" },
   propose_agent_configuration: { verb: "生成子 Agent 配置草稿", icon: "bot", target: (args) => str(args.agent_id) },
   // 只说「运行」：曾经的 Prepare / 配置口径让模型与用户都把它当成建 Team 的工具，而它只运行已有配置。

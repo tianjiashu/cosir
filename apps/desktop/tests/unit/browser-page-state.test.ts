@@ -117,9 +117,29 @@ describe("BrowserDownloads", () => {
     onChange.mockClear();
     item.emit("updated", {}, "interrupted");
     expect(onChange).toHaveBeenCalledTimes(1);
-    expect(downloads.list()[0].state).toBe("interrupted");
+    expect(downloads.list()[0]).toMatchObject({ state: "progressing", stalled: true });
     item.emit("done", {}, "completed");
+    expect(downloads.list()[0]).toMatchObject({ state: "completed", stalled: false });
     expect(note).toHaveBeenLastCalledWith(1, "t1", expect.stringMatching(/finished: .*read-only \.cosir area/));
+  });
+
+  // 目的：断线续传中的下载仍是进行中；潜在缺陷：可恢复的中断被当成结局——被挤出列表后再也取消不了，删 Task 时
+  // 既不取消又注销，续传完成后文件写进已删除 Task 的工作区。
+  it("keeps a download that is resuming after an interruption under management", () => {
+    const dir = directory();
+    const downloads = new BrowserDownloads({ onChange: vi.fn(), note: vi.fn() });
+    const resuming = fakeItem("big.zip");
+    downloads.accept(resuming, { taskId: 1, tabId: "t1", directory: dir });
+    resuming.state = "interrupted";
+    resuming.emit("updated", {}, "interrupted");
+    for (let index = 0; index < 7; index += 1) {
+      const item = fakeItem(`f${index}.txt`);
+      downloads.accept(item, { taskId: 1, tabId: "t1", directory: dir });
+      item.emit("done", {}, "completed");
+    }
+    expect(downloads.list().map((item) => item.filename)).toContain("big.zip");
+    downloads.dropTasks([1]);
+    expect(resuming.cancelled).toBe(true);
   });
 });
 
@@ -167,9 +187,6 @@ describe("TabEmulation", () => {
     fail = false;
     emulation.resync();
     await vi.waitFor(() => expect(emulation.toInput({ x: 100, y: 10 })).toEqual({ x: 100, y: 10 }));
-    expect(emulation.isShown).toBe(true);
-    emulation.hide();
-    expect(emulation.isShown).toBe(false);
   });
 
   // 目的：Agent 改视口后再导航，页面按新视口布局；潜在缺陷：设置还在途就开始加载，或深浅色与视口互相覆盖。

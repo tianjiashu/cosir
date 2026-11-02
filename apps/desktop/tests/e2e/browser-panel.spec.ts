@@ -13,7 +13,7 @@ function tab(tabId: string, title: string, dialog: BrowserDialog | null, taskId 
 }
 
 function download(id: string, taskId: number, filename: string): BrowserDownload {
-  return { id, taskId, tabId: "t9", filename, path: `/ws/.cosir/downloads/${filename}`, state: "completed", receivedBytes: 10, totalBytes: 10 };
+  return { id, taskId, tabId: "t9", filename, path: `/ws/.cosir/downloads/${filename}`, state: "completed", stalled: false, receivedBytes: 10, totalBytes: 10 };
 }
 
 async function openBrowserPanel(page: Page, state: BrowserState, options: { failAnswer?: boolean } = {}) {

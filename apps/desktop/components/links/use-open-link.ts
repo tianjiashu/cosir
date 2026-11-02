@@ -5,7 +5,6 @@ import { openUserTab } from "@/lib/browser/open-tab";
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { desktopHost } from "@/lib/desktop-host";
 import { resolveLink, type LinkTarget } from "@/lib/links/resolve-link";
-import { useDockStore } from "@/lib/layout/dock-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 
@@ -50,7 +49,6 @@ export function useOpenLink(source: LinkSource, taskId?: number | null): LinkOpe
     const openWeb = async (url: string, local: boolean) => {
       if (local && owner !== null && desktopHost) {
         await openUserTab(owner, url);
-        useDockStore.getState().show("browser");
         return "browser";
       }
       if (!local && !(await requestConfirmation({ title: "打开外部链接？", description: url, confirmLabel: "打开" }))) {

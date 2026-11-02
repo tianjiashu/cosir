@@ -86,8 +86,8 @@ describe("useOpenLink", () => {
     openUserTab.mockResolvedValue("tab-1");
     const opener = captureOpener(3);
     opener.open(opener.resolve("http://localhost:5173")!);
-    await vi.waitFor(() => expect(useDockStore.getState().panel).toBe("browser"));
-    expect(openUserTab).toHaveBeenCalledWith(3, "http://localhost:5173");
+    // 新开的标签由 `openUserTab` 摆到面前（`revealBrowserTab`），链接这一层不再自己显示面板。
+    await vi.waitFor(() => expect(openUserTab).toHaveBeenCalledWith(3, "http://localhost:5173"));
     expect(confirm).not.toHaveBeenCalled();
     expect(windowOpen).not.toHaveBeenCalled();
   });

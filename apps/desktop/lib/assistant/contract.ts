@@ -277,7 +277,7 @@ export type TerminalSessionEntry = {
 
 /** 工具 part 上的后台工作记录（后端 `BackgroundWork`）。 */
 export type TransportBackgroundWork = {
-  kind: "terminal_command" | "child_agent";
+  kind: "terminal_command" | "child_agent" | "agent_reply";
   label: string;
   startedAt: string;
   /** 结论到达、被撤销或被重启中断的时刻；还在等结论时为 null。 */

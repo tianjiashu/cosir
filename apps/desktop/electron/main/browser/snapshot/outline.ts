@@ -13,8 +13,8 @@ import { isFrameNode, isFrameRole, stringValue, type AXNode, type SnapshotDocume
  * - ref 由调用方传入的 `RefRegistry` 分配（按节点稳定，见 `ref-registry.ts`），在这里对整棵树分配：任何视图（分页、
  *   视口内、查找、增量）里出现的 ref 都是同一套，不随视图而变。
  * - 无名的容器角色折叠掉、相邻文字合并成一行：真实页面的树里绝大多数是这类噪声。
- * - 子框架（iframe）的内容不在上一层的树里：读到了的（`read.ts`，有上限）接在 iframe 那一行下面；没读到的只标出
- *   位置，并计入数量。
+ * - 子框架（iframe）的内容不在上一层的树里：读到了的（`read.ts`，有上限）接在 iframe 那一行下面；没读的与读失败的
+ *   只标出位置（两种说法不同），并计入数量。
  * - 每行带稳定的键（会话 + 无障碍节点 id）：增量视图按它比对前后两份大纲。合并的文字行按「所在节点 + 第几段」：
  *   文字节点常被整个替换（`textContent` 赋值、框架重新渲染），按节点认会把「改了字」报成一增一删。
  */
@@ -76,7 +76,7 @@ export function buildOutline(document: SnapshotDocument, refs: RefRegistry, { pa
           render(content, depth + 1, push(keyOf(node), label, depth, parent, inView(node)));
         } else {
           frames += 1;
-          push(keyOf(node), `${label} (contents not shown)`, depth, parent, inView(node));
+          push(keyOf(node), `${label} (contents ${content === null ? "could not be read" : "not shown"})`, depth, parent, inView(node));
         }
         return;
       }

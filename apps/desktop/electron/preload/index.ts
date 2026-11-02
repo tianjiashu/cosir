@@ -42,7 +42,7 @@ const host: CosirHost = {
   },
   browser: {
     state: () => call(HOST_CHANNEL.browserState),
-    open: (taskId, context, url) => call(HOST_CHANNEL.browserOpen, taskId, context, url),
+    open: (taskId, context) => call(HOST_CHANNEL.browserOpen, taskId, context),
     onStateChanged: (listener) => {
       const forward = (_event: Electron.IpcRendererEvent, state: BrowserState) => listener(state);
       ipcRenderer.on(HOST_CHANNEL.browserStateChanged, forward);

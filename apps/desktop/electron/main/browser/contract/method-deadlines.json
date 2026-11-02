@@ -1,0 +1,9 @@
+{
+  "browser.act": 330,
+  "browser.evaluate": 20,
+  "browser.logs": 5,
+  "browser.navigate": 60,
+  "browser.screenshot": 30,
+  "browser.snapshot": 30,
+  "browser.tabs": 5
+}

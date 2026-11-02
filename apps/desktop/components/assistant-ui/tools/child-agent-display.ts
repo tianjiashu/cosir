@@ -9,11 +9,11 @@ export type DelegationDisplay = {
   status?: TransportRunStatus;
 };
 
-export type ChildAgentResultDisplay = {
+/** `agent-task-result`：`send_message`（`down` 发给自己派生的 Task，`up` 发给上级）与 `task_status`。 */
+export type AgentTaskResultDisplay = {
   operation: "send" | "status";
-  childTaskId: number;
-  status: TransportRunStatus;
-  agentId?: string;
+  direction: "down" | "up";
+  taskId: number;
   agentName?: string;
   finalOutput?: string;
   endReason?: string;
@@ -79,24 +79,21 @@ export function readForkDisplay(value: unknown): ForkDisplay | null {
   return { title, childTaskId };
 }
 
-/** Read the allowlisted result projection for child_agent_send/status. */
-export function readChildAgentResultDisplay(value: unknown): ChildAgentResultDisplay | null {
+/** 读 `agent-task-result` 的白名单字段；对方 Run 的状态不在这里，读任务状态推送。 */
+export function readAgentTaskResultDisplay(value: unknown): AgentTaskResultDisplay | null {
   const data = record(value);
-  if (!data || data.kind !== "child-agent-result") return null;
+  if (!data || data.kind !== "agent-task-result") return null;
   if (data.operation !== "send" && data.operation !== "status") return null;
-  const status = childAgentStatus(data.status);
-  if (!status) return null;
-  const childTaskId = positiveId(data.child_task_id);
-  if (childTaskId === undefined) return null;
-  if (data.agent_id !== null && data.agent_id !== undefined && nonEmptyString(data.agent_id) === undefined) return null;
+  if (data.direction !== "down" && data.direction !== "up") return null;
+  const taskId = positiveId(data.task_id);
+  if (taskId === undefined) return null;
   if (data.agent_name !== null && data.agent_name !== undefined && nonEmptyString(data.agent_name) === undefined) return null;
   if (data.final_output !== null && data.final_output !== undefined && typeof data.final_output !== "string") return null;
   if (data.end_reason !== null && data.end_reason !== undefined && typeof data.end_reason !== "string") return null;
   return {
     operation: data.operation,
-    childTaskId,
-    status,
-    agentId: nonEmptyString(data.agent_id),
+    direction: data.direction,
+    taskId,
     agentName: nonEmptyString(data.agent_name),
     finalOutput: typeof data.final_output === "string" ? data.final_output : undefined,
     endReason: typeof data.end_reason === "string" ? data.end_reason : undefined,

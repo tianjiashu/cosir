@@ -1,5 +1,5 @@
 import type { PageAction } from "../params";
-import { box, element, type Box } from "./element";
+import { box, type Box } from "./element";
 import type { PageSession } from "./session";
 import { targetOf } from "./targets";
 
@@ -8,12 +8,13 @@ const POINT_SIZE = 24;
 
 /**
  * 动作执行前给人看它要操作哪里（`TabHighlight`，标签不在面板上时不画、也不量位置）。量位置会把元素滚入视野，动作
- * 本来也要滚。量不到（元素已不在、没有布局）就不画：动作自己会报同样的问题，高亮不替它报错。
+ * 本来也要滚。元素还在不在页面上是动作的事（`element` 确认），这里不再确认一遍：ref 只按登记取节点，量不到（没登记、
+ * 已不在、没有布局）就不画，动作自己会报同样的问题。
  */
 export async function highlightTarget(session: PageSession, action: PageAction): Promise<void> {
   const target = targetOf(action);
   if (!target) return;
-  await session.highlight(() => ("ref" in target ? element(session, target.ref).then((node) => box(session, node)) : Promise.resolve(around(target))));
+  await session.highlight(async () => ("ref" in target ? box(session, session.resolveRef(target.ref)) : around(target)));
 }
 
 function around({ x, y }: { x: number; y: number }): Box {

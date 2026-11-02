@@ -58,8 +58,8 @@ export function onBrowserTabsChange(
   });
 }
 
-/** 某个 Task 的标签页，按创建顺序。 */
-export function useTaskBrowserTabs(taskId: number): readonly BrowserTabSummary[] {
+/** 某个 Task 的标签页，按创建顺序；没有 Task（还没打开对话）时为空。 */
+export function useTaskBrowserTabs(taskId: number | null): readonly BrowserTabSummary[] {
   useEffect(ensureSubscription, []);
   return useBrowserHostStateStore(useShallow((store) => store.state.tabs.filter((tab) => tab.taskId === taskId)));
 }
@@ -70,8 +70,8 @@ export function useBrowserTab(tabId: string): BrowserTabSummary | undefined {
   return useBrowserHostStateStore((store) => store.state.tabs.find((tab) => tab.tabId === tabId));
 }
 
-/** 某个 Task 最近的下载，旧的在前；下载归 Task，触发它的标签关掉后仍在。 */
-export function useTaskBrowserDownloads(taskId: number): readonly BrowserDownload[] {
+/** 某个 Task 最近的下载，旧的在前；下载归 Task，触发它的标签关掉后仍在。没有 Task 时为空。 */
+export function useTaskBrowserDownloads(taskId: number | null): readonly BrowserDownload[] {
   useEffect(ensureSubscription, []);
   return useBrowserHostStateStore(useShallow((store) => store.state.downloads.filter((download) => download.taskId === taskId)));
 }

@@ -1,6 +1,5 @@
 import type { HandoffEntry } from "@/lib/assistant/contract";
-import { useBrowserPanelStore } from "@/lib/browser/panel-store";
-import { useDockStore } from "@/lib/layout/dock-store";
+import { revealBrowserTab } from "@/lib/browser/panel-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 
 /**
@@ -13,8 +12,7 @@ export function revealHandoff(taskId: number, entry: HandoffEntry): void {
       useTerminalWorkbenchStore.getState().reveal(taskId, entry.resourceId);
       return;
     case "browser":
-      useBrowserPanelStore.getState().focus(taskId, entry.resourceId);
-      useDockStore.getState().show("browser");
+      revealBrowserTab(taskId, entry.resourceId);
       return;
   }
 }

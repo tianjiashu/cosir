@@ -39,10 +39,12 @@ export const useHandoffStore = create<HandoffStore>()((set, get) => ({
   }),
 }));
 
+/** 一组交接里落在某个资源上的那条；没有时为 null。 */
+export function handoffOn(entries: readonly HandoffEntry[] | null | undefined, surface: HandoffEntry["surface"], resourceId: string): HandoffEntry | null {
+  return entries?.find((entry) => entry.surface === surface && entry.resourceId === resourceId) ?? null;
+}
+
 /** 某个资源上进行中的交接；没有时为 null。 */
 export function useHandoffOn(taskId: number | null, surface: HandoffEntry["surface"], resourceId: string | null | undefined): HandoffEntry | null {
-  return useHandoffStore((state) => {
-    if (taskId === null || !resourceId) return null;
-    return state.tasks[taskId]?.find((entry) => entry.surface === surface && entry.resourceId === resourceId) ?? null;
-  });
+  return useHandoffStore((state) => (taskId === null || !resourceId ? null : handoffOn(state.tasks[taskId], surface, resourceId)));
 }

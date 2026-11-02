@@ -10,7 +10,8 @@ import { addressToUrl } from "@/electron/main/browser/web-url";
 import { describeTarget } from "@/electron/main/browser/input/targets";
 import { RefRegistry } from "@/electron/main/browser/ref-registry";
 import type { AXNode, SnapshotDocument } from "@/electron/main/browser/snapshot/document";
-import { documentLayout, frameRegion, pointerRoots, rootRegion, visibleNodes, type DomSnapshot } from "@/electron/main/browser/snapshot/layout";
+import { documentLayout, frameRegion, pointerRoots, visibleNodes, type DomSnapshot } from "@/electron/main/browser/snapshot/layout";
+import { deviceRegion, geometryOf, overlayQuad } from "@/electron/main/browser/page-geometry";
 import { buildOutline } from "@/electron/main/browser/snapshot/outline";
 import { changesView, snapshotView } from "@/electron/main/browser/snapshot/views";
 
@@ -50,7 +51,7 @@ describe("params", () => {
       .toEqual({ width: 390, height: 844, mobile: true, colorScheme: null });
     expect(parseNavigate(navigate({ action: "reload", color_scheme: "dark" })).emulation).toEqual({ colorScheme: "dark" });
     expect(parseSnapshot(snapshot({}))).toEqual({
-      taskId: 7, view: { scope: "page", fromLine: 1 }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+      taskId: 7, view: { scope: "page" }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
     });
     expect(parseSnapshot(snapshot({ from_line: 40, scope: "viewport", find: "Buy" }))).toMatchObject({ view: { scope: "viewport", find: "Buy", fromLine: 40 } });
     // 每个请求都带上下文（宿主据此刷新上限）；参数模型的字段一个都不能少。
@@ -214,6 +215,16 @@ describe("formatSnapshot", () => {
     ].join("\n"));
     expect(snapshot.frames).toBe(0);
     expect(refs.resolve("e2")).toEqual({ sessionId: "S1", backendNodeId: 61 });
+
+    // 读失败的子框架与没读的说法不同：模型与排查都分得清「超出上限」与「读不出来」。
+    const failed = doc([
+      node("1", "RootWebArea", { childIds: ["2", "3"] }),
+      node("2", "Iframe", { parentId: "1", name: { value: "Ads" }, backendDOMNodeId: 70 }),
+      node("3", "Iframe", { parentId: "1", name: { value: "Map" }, backendDOMNodeId: 80 }),
+    ], { frames: new Map([[70, null]]) });
+    const partial = formatSnapshot(failed, new RefRegistry());
+    expect(partial.text).toBe('- iframe "Ads" (contents could not be read)\n- iframe "Map" (contents not shown)');
+    expect(partial.frames).toBe(2);
   });
 
   // 目的：长页面上只读需要的部分；潜在缺陷：筛掉了祖先，模型分不清按钮属于哪条记录；或筛选后的 ref 与整页不是一套。
@@ -313,6 +324,24 @@ describe("pointerRoots", () => {
   });
 });
 
+describe("page geometry", () => {
+  // 目的：截图、坐标落点、高亮、快照几何对「视口」与「像素比」的认识一致；潜在缺陷：手机模拟下没写 viewport 声明的
+  // 网页按 980 宽排版，越界检查却按模拟的 390 判断，照截图给的坐标被拒（实测）。
+  it("takes the visible viewport and pixel ratio from one layout reading", () => {
+    // 实测数字：手机模拟 390 宽，网页按 980 宽排版、缩小显示（页面缩放约 0.398，这里取 0.4），Retina 屏。
+    const mobile = geometryOf({
+      layoutViewport: { clientWidth: 1960 },
+      cssLayoutViewport: { clientWidth: 980 },
+      cssVisualViewport: { pageX: 0, pageY: 0, clientWidth: 980, clientHeight: 2120.8, scale: 0.4 },
+      cssContentSize: { width: 980, height: 2121 },
+    });
+    expect(mobile).toMatchObject({ visual: { width: 980, height: 2120.8 }, deviceRatio: 2, pageScale: 0.4 });
+    expect(deviceRegion(mobile)).toEqual({ x: 0, y: 0, width: 1960, height: 4241.6 });
+    // 高亮框按 CSS 像素乘页面缩放、除以像素比（实测：页面缩放约 0.4 时不乘就画到可视区域之外）。
+    expect(overlayQuad({ x: 600, y: 300, width: 200, height: 100 }, mobile)).toEqual([120, 60, 160, 60, 160, 80, 120, 80]);
+  });
+});
+
 describe("viewport geometry", () => {
   // 数字取自实测（Retina，像素比 2）：页面滚到 400，按钮在文档 (100, 700)，同进程 iframe 在 (300, 650)、自己滚了 5，
   // 里面的按钮在它的文档 (10, 20)。元素框与滚动偏移都是设备像素、各自文档的坐标。
@@ -334,13 +363,14 @@ describe("viewport geometry", () => {
   const metrics = {
     layoutViewport: { clientWidth: 2560 },
     cssLayoutViewport: { clientWidth: 1280 },
-    cssVisualViewport: { pageX: 0, pageY: 400, clientWidth: 1280, clientHeight: 800 },
+    cssVisualViewport: { pageX: 0, pageY: 400, clientWidth: 1280, clientHeight: 800, scale: 1 },
+    cssContentSize: { width: 1280, height: 3000 },
   };
 
   // 目的：「只看视口」只列看得见的节点；潜在缺陷：把 CSS 像素当设备像素比（Retina 上差一倍），或忘了减滚动、
   // 忘了子框架坐标相对它自己的文档，列出的是另一块区域。
   it("finds the nodes in view in the main document and inside a scrolled iframe", () => {
-    const region = rootRegion(metrics);
+    const region = deviceRegion(geometryOf(metrics));
     expect(region).toEqual({ x: 0, y: 800, width: 2560, height: 1600 });
     const main = documentLayout(snapshot)!;
     expect([...visibleNodes(main, region)].sort()).toEqual([1, 2, 3]);
@@ -363,8 +393,10 @@ type Call = [string, Record<string, unknown>, string?];
  */
 function fakeSession(
   answers: Record<string, unknown> = {},
-  { scale = 1, dialogOn, initialDialog = null, dragData, fileChooser = null, shown = false }: {
+  { scale = 1, dialogOn, initialDialog = null, dragData, fileChooser = null, shown = false, failOn }: {
     scale?: number;
+    /** 这条命令失败（抛出给定的错误）：模拟 CDP 报节点不在、没有布局，或页面停住、超时。 */
+    failOn?: { method: string; error: Error };
     /** 标签挂在面板上：动作前会画高亮（记进 `highlighted`）。 */
     shown?: boolean;
     fileChooser?: FileChooser | null;
@@ -377,6 +409,7 @@ function fakeSession(
   const highlighted: Box[] = [];
   const answered: [number, BrowserDialogAnswer][] = [];
   let dialog: BrowserDialog | null = initialDialog;
+  // 按代码片段给页面函数的返回值；给的是 Error 时模拟页面里抛出异常（CDP 以 `exceptionDetails` 回报，不报错）。
   const answer = (code: string) => Object.entries(answers).find(([fragment]) => code.includes(fragment))?.[1] ?? "";
   const paused = () => (dialog ? new HostMethodError("DIALOG_OPEN", `the page is paused: it is showing a ${dialog.type} dialog (#${dialog.id})`) : null);
   const listeners = new Map<string, Set<(params: never) => void>>();
@@ -394,10 +427,15 @@ function fakeSession(
         dialog = { id: 7, type: "confirm", message: "delete?", defaultText: "" };
         throw paused();
       }
+      if (failOn?.method === method) throw failOn.error;
       if (method === "DOM.resolveNode") return { object: { objectId: "obj" } } as T;
       if (method === "DOM.getBoxModel") return { model: { border: [0, 0, 10, 0, 10, 20, 0, 20] } } as T;
-      if (method === "Runtime.callFunctionOn") return { result: { value: answer(String(params.functionDeclaration)) } } as T;
-      if (method === "Runtime.evaluate") return { result: { value: answer(String(params.expression)) } } as T;
+      if (method === "Runtime.callFunctionOn" || method === "Runtime.evaluate") {
+        const value = answer(String(params.functionDeclaration ?? params.expression));
+        return (value instanceof Error
+          ? { result: { type: "object" }, exceptionDetails: { text: "Uncaught", exception: { description: `${value.name}: ${value.message}\n    at <anonymous>:1:1` } } }
+          : { result: { value } }) as T;
+      }
       return {} as T;
     },
     // `f` 开头的 ref 在跨进程子框架 S1 里，S1 的视口原点在主视口的 (100, 200)。
@@ -414,7 +452,7 @@ function fakeSession(
     },
     settle: async () => undefined,
     toInput: ({ x, y }) => ({ x: x * scale, y: y * scale }),
-    viewport: () => ({ width: 100, height: 50 }),
+    geometry: async () => ({ visual: { x: 0, y: 0, width: 100, height: 50 }, deviceRatio: 1, pageScale: 1, content: { width: 100, height: 50 } }),
     fileChooser: () => fileChooser,
     // 与 `TabHighlight.show` 一致：不在面板上不量位置；量不到就不画、不抛错。
     highlight: async (locate) => {
@@ -497,6 +535,35 @@ describe("runActions", () => {
     expect(calls.some(([method]) => method === "Input.insertText")).toBe(false);
   });
 
+  // 目的：页面改写了内置对象时页面函数会抛错；潜在缺陷：CDP 对页面异常不报错，只看返回值就把「抛错」当成「空串 =
+  // 成功」——清空失败却按完成上报、字接在旧内容后面，滚动失败却不报到底。
+  it("fails the action when a page function raises, and treats a non-string result as a host bug", async () => {
+    const raising = fakeSession({ "\"value\" in this": new TypeError("value is read-only") });
+    const outcome = await run(raising.session, { type: "type", ref: "e7", text: "hi", clear: true, submit: false, keyByKey: false });
+    expect(outcome).toMatchObject({ completed: 0, failure: { code: "ACTION_FAILED", message: "the page raised an error: TypeError: value is read-only" } });
+    expect(raising.calls.some(([method]) => method === "Input.insertText")).toBe(false);
+
+    const stuck = fakeSession({ scrollBy: new Error("blocked") });
+    expect(await run(stuck.session, { type: "scroll", direction: "down" })).toMatchObject({ failure: { code: "ACTION_FAILED" } });
+
+    const broken = fakeSession({ isConnected: true });
+    expect(await run(broken.session, { type: "hover", target: { ref: "e7" } })).toMatchObject({
+      completed: 0, failure: { index: 0, message: "a page function returned boolean instead of a string" },
+    });
+  });
+
+  // 目的：失败原因报准，模型才拿到对的下一步建议；潜在缺陷：页面停住、超时被一律改写成「元素不可见」，或节点已删除
+  // 在不同命令上报成不同的码。
+  it("maps a missing node to REF_STALE and only a missing layout to NOT_INTERACTABLE", async () => {
+    const code = async (failOn: { method: string; error: Error }) => (await run(fakeSession({}, { failOn }).session, clickOn("e2"))).failure?.code;
+    expect(await code({ method: "DOM.getBoxModel", error: new Error("No node with given id found") })).toBe("REF_STALE");
+    expect(await code({ method: "DOM.scrollIntoViewIfNeeded", error: new Error("Session with given id not found.") })).toBe("REF_STALE");
+    expect(await code({ method: "DOM.scrollIntoViewIfNeeded", error: new Error("Node does not have a layout object") })).toBe("NOT_INTERACTABLE");
+    expect(await code({ method: "DOM.getBoxModel", error: new Error("Could not compute box model.") })).toBe("NOT_INTERACTABLE");
+    expect(await code({ method: "DOM.getBoxModel", error: new HostMethodError("PAGE_UNRESPONSIVE", "the page did not respond") })).toBe("PAGE_UNRESPONSIVE");
+    expect(await code({ method: "DOM.getBoxModel", error: new HostMethodError("DIALOG_OPEN", "paused") })).toBe("DIALOG_OPEN");
+  });
+
   it("hovers by moving the mouse to the element's centre without clicking", async () => {
     const { session, calls } = fakeSession();
     await run(session, { type: "hover", target: { ref: "e2" } });
@@ -534,12 +601,14 @@ describe("runActions", () => {
     expect(typed.calls.find(([method]) => method === "Input.insertText")?.[2]).toBeUndefined();
   });
 
-  // 目的：用户看得见 Agent 要操作哪里；潜在缺陷：没人看时也去量位置（白白滚动页面、多发命令），或高亮量不到位置时
-  // 把动作本身弄失败、吞掉动作该报的错。
+  // 目的：用户看得见 Agent 要操作哪里；潜在缺陷：没人看时也去量位置（白白滚动页面、多发命令），高亮把动作已做的
+  // 确认再做一遍，或高亮量不到位置时把动作本身弄失败、吞掉动作该报的错。
   it("highlights each action's target before it runs, only when the tab is shown", async () => {
     const shown = fakeSession({}, { shown: true });
     await run(shown.session, clickOn("e2"), { type: "click", target: { x: 50, y: 30 }, button: "left", clickCount: 1, modifiers: [] }, { type: "wait_for", seconds: 0.01 });
     expect(shown.highlighted).toEqual([{ x: 0, y: 0, width: 10, height: 20 }, { x: 38, y: 18, width: 24, height: 24 }]);
+    // 元素还在不在页面上只由动作确认一次，高亮不再确认一遍。
+    expect(shown.calls.filter(([method, params]) => method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("isConnected"))).toHaveLength(1);
 
     const hidden = fakeSession();
     await run(hidden.session, clickOn("e2"));
@@ -644,10 +713,10 @@ describe("runActions", () => {
   });
 
   it("waits for text to disappear and reports when it stays", async () => {
-    const gone = fakeSession({ innerText: false });
+    const gone = fakeSession({ innerText: "absent" });
     expect(await run(gone.session, { type: "wait_for", textGone: "Loading", seconds: 1 })).toMatchObject({ failure: null });
 
-    const stays = fakeSession({ innerText: true });
+    const stays = fakeSession({ innerText: "found" });
     const outcome = await run(stays.session, { type: "wait_for", textGone: "Loading", seconds: 0.3 });
     expect(outcome.failure).toMatchObject({ code: "WAIT_TIMEOUT", message: 'the text "Loading" is still on the page after 0.3 seconds' });
   });

@@ -64,7 +64,11 @@ export class TabLog {
   private readonly inFlight = new Map<string, { entry: NetworkEntry; startedAt: number }>();
   /** 当前页面（最近一次主框架跨文档导航）的第一个序号。 */
   private pageStart = 1;
-  /** 进行中的主框架导航开始时的下一个序号：主文档请求在提交（`pageStarted`）之前就已记下，要算进新页面。 */
+  /**
+   * 进行中的主框架导航开始时的下一个序号：主文档请求在提交（`pageStarted`）之前就已记下，要算进新页面。非 null 即
+   * 「有一次主框架跨文档导航开始了、还没落定」——标签据此解释加载事件（`navigating`），这件事只在这里记一份。落定只有
+   * 两种：换上文档（`pageStarted`），或没换就结束（`navigationAbandoned`：转成下载、204、被拦下）。
+   */
   private navigationStart: number | null = null;
   /** 每类缓冲最后被容量挤掉的序号（0 为从没挤掉过，序号从 1 起）：给了 since 的读取据此判断有没有读不到的条目。 */
   private readonly lastDropped = { console: 0, network: 0 };
@@ -124,12 +128,16 @@ export class TabLog {
     this.finish(requestId, timestamp);
   }
 
+  get navigating(): boolean {
+    return this.navigationStart !== null;
+  }
+
   /** 主框架开始一次跨文档导航（还没提交）：之后记下的主文档请求、重定向属于即将到来的新页面。 */
   navigationStarted(): void {
     this.navigationStart = this.seq + 1;
   }
 
-  /** 那次导航没有换上文档就结束了（转成下载、204、被拦下）：页面还是原来的，之后的条目照旧属于它。 */
+  /** 那次导航没有换上文档就结束了（转成下载、204、被拦下）：页面还是原来的，之后的条目照旧属于它。没有在途导航时无事。 */
   navigationAbandoned(): void {
     this.navigationStart = null;
   }
@@ -207,9 +215,9 @@ export class TabLog {
     this.inFlight.delete(requestId);
   }
 
-  private push<T>(buffer: T[], capacity: number, entry: T, onDrop?: (dropped: T) => void): void {
+  private push<T>(buffer: T[], capacity: number, entry: T, onDrop: (dropped: T) => void): void {
     buffer.push(entry);
-    if (buffer.length > capacity) onDrop?.(buffer.shift()!);
+    if (buffer.length > capacity) onDrop(buffer.shift()!);
   }
 }
 

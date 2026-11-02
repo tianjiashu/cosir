@@ -1,4 +1,5 @@
 import { browserError } from "../errors";
+import { evaluate } from "./element";
 import { stopped, type PageSession } from "./session";
 
 const POLL_MS = 250;
@@ -19,11 +20,8 @@ export async function waitFor(
   const wanted = target.text !== undefined;
   while (Date.now() < deadline) {
     if (signal.aborted) throw stopped(signal);
-    const { result } = await session.cdp<{ result: { value?: unknown } }>("Runtime.evaluate", {
-      expression: `Boolean(document.body && document.body.innerText.includes(${JSON.stringify(text)}))`,
-      returnByValue: true,
-    });
-    if (result.value === wanted) return;
+    const found = await evaluate(session, `document.body && document.body.innerText.includes(${JSON.stringify(text)}) ? "found" : "absent"`);
+    if ((found === "found") === wanted) return;
     await sleep(POLL_MS, signal);
   }
   const outcome = wanted ? `did not appear within ${seconds} seconds` : `is still on the page after ${seconds} seconds`;

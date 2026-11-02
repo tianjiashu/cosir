@@ -3,7 +3,7 @@
  *
  * 几何的单位（实测）：元素框与滚动偏移都是**设备像素**、所属文档的坐标——Retina 屏上 CSS 的 100 报成 200，与面板
  * 缩放显示、手机模拟无关；同进程子框架的文档坐标相对它自己的文档，不是主视口。所以这里统一在「设备像素 + 文档
- * 坐标」里算，只在入口把视口换成同一单位（`rootRegion`），不逐个节点来回换算。快照时成批的几何只走这里；动作与
+ * 坐标」里算，只在入口把视口换成同一单位（`page-geometry.ts` 的 `deviceRegion`），不逐个节点来回换算。快照时成批的几何只走这里；动作与
  * 元素截图要的是此刻的位置，另由 `input/element.ts` 的 `box` 现量。
  */
 
@@ -23,20 +23,6 @@ export type Rect = { x: number; y: number; width: number; height: number };
 
 /** 一份文档的布局：滚动位置与每个有布局的节点的框（设备像素、文档坐标）。 */
 export type DocumentLayout = { scroll: { x: number; y: number }; boxes: Map<number, Rect> };
-
-/** `Page.getLayoutMetrics` 里本模块用到的字段。 */
-export type LayoutMetrics = {
-  layoutViewport: { clientWidth: number };
-  cssLayoutViewport: { clientWidth: number };
-  cssVisualViewport: { pageX: number; pageY: number; clientWidth: number; clientHeight: number };
-};
-
-/** 主框架看得见的区域（设备像素、文档坐标）：可视视口（手机模拟缩放后看到的那块）乘上设备像素比。 */
-export function rootRegion(metrics: LayoutMetrics): Rect {
-  const ratio = metrics.layoutViewport.clientWidth / metrics.cssLayoutViewport.clientWidth || 1;
-  const view = metrics.cssVisualViewport;
-  return { x: view.pageX * ratio, y: view.pageY * ratio, width: view.clientWidth * ratio, height: view.clientHeight * ratio };
-}
 
 /** 某个框架的文档布局：省略 `frameId` 即会话自己的主文档（快照的第一份文档）；快照里没有（还没加载）时为 undefined。 */
 export function documentLayout(snapshot: DomSnapshot, frameId?: string): DocumentLayout | undefined {

@@ -74,14 +74,13 @@ function validateForkDisplayData(data: Record<string, unknown>, path: string): v
   requirePositiveInteger(data.child_task_id, `${path}.child_task_id`);
 }
 
-function validateChildAgentResultDisplayData(data: Record<string, unknown>, path: string): void {
+function validateAgentTaskResultDisplayData(data: Record<string, unknown>, path: string): void {
   requireExactKeys(data, [
-    "kind", "operation", "child_task_id", "status", "agent_id", "agent_name", "final_output", "end_reason",
+    "kind", "operation", "direction", "task_id", "agent_name", "final_output", "end_reason",
   ], path);
   if (data.operation !== "send" && data.operation !== "status") throw new TransportSnapshotValidationError(`${path}.operation`, "send 或 status");
-  requirePositiveInteger(data.child_task_id, `${path}.child_task_id`);
-  requireKnownChildStatus(data.status, `${path}.status`);
-  if (data.agent_id !== null && (typeof data.agent_id !== "string" || data.agent_id.trim() === "")) throw new TransportSnapshotValidationError(`${path}.agent_id`, "非空字符串或 null");
+  if (data.direction !== "down" && data.direction !== "up") throw new TransportSnapshotValidationError(`${path}.direction`, "down 或 up");
+  requirePositiveInteger(data.task_id, `${path}.task_id`);
   if (data.agent_name !== null && (typeof data.agent_name !== "string" || data.agent_name.trim() === "")) throw new TransportSnapshotValidationError(`${path}.agent_name`, "非空字符串或 null");
   if (data.final_output !== null && typeof data.final_output !== "string") throw new TransportSnapshotValidationError(`${path}.final_output`, "字符串或 null");
   if (data.end_reason !== null && typeof data.end_reason !== "string") throw new TransportSnapshotValidationError(`${path}.end_reason`, "字符串或 null");
@@ -103,7 +102,7 @@ function validateDisplayData(value: unknown, path: string): void {
   if (data.kind !== undefined && typeof data.kind !== "string") throw new TransportSnapshotValidationError(`${path}.kind`, "字符串");
   if (data.kind === "delegation-result") validateDelegationDisplayData(data, path);
   if (data.kind === "fork-task-result") validateForkDisplayData(data, path);
-  if (data.kind === "child-agent-result") validateChildAgentResultDisplayData(data, path);
+  if (data.kind === "agent-task-result") validateAgentTaskResultDisplayData(data, path);
   if (data.kind === "agent-configuration-draft") validateAgentConfigurationDraftDisplayData(data, path);
 }
 
@@ -282,7 +281,7 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   requireString(session.createdAt, `${path}.createdAt`);
 }
 
-const BACKGROUND_TASK_KINDS = ["terminal_command", "child_agent"] as const;
+const BACKGROUND_TASK_KINDS = ["terminal_command", "child_agent", "agent_reply"] as const;
 const BACKGROUND_TASK_STATUSES = ["running", "settling", "completed", "cancelled"] as const;
 
 function validateBackgroundWork(value: unknown, path: string): void {

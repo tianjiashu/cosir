@@ -1,6 +1,7 @@
 import { HostMethodError } from "../../host-link/methods";
 import type { BrowserDialog, BrowserDialogAnswer } from "../../../shared/host-contract";
 import { browserError } from "../errors";
+import type { PageGeometry } from "../page-geometry";
 import type { PageNode } from "../ref-registry";
 import type { Box } from "./element";
 
@@ -18,8 +19,8 @@ export type PageSession = {
   frameOffset(sessionId: string | undefined): Promise<{ x: number; y: number }>;
   /** 动作可能触发导航：等主框架加载结束（有时限，超时不算失败）。 */
   settle(): Promise<void>;
-  /** 页面上已生效的视口（CSS 像素）：坐标落点的范围。 */
-  viewport(): { width: number; height: number };
+  /** 页面几何（`page-geometry.ts`）：坐标落点按其中的可视视口判断越界。 */
+  geometry(): Promise<PageGeometry>;
   /** CSS 像素 → CDP 输入坐标（视图坐标）：面板缩放显示视口时两者不同。 */
   toInput(point: { x: number; y: number }): { x: number; y: number };
   /** 页面停着的原因（本标签或同进程别的标签有待答弹窗）；没停时为 null。 */

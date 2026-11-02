@@ -5,7 +5,7 @@ import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
 import { browserError } from "./errors";
 import { isWebProtocol } from "./web-url";
 import toolArgsSchemas from "./contract/tool-args.schema.json";
-import type { BrowserNavigation, BrowserTabContext, BrowserTabLimits } from "../../shared/host-contract";
+import type { BrowserNavigation, BrowserTabContext } from "../../shared/host-contract";
 import type { Emulation } from "./tab-emulation";
 import type { SnapshotView } from "./snapshot/views";
 import type { ConsoleLevel, LogQuery } from "./tab-log";
@@ -91,7 +91,7 @@ export function parseNavigate(params: unknown): NavigateRequest {
 
 export function parseSnapshot(params: unknown): SnapshotRequest {
   const { request, args } = toolRequest("browser_snapshot", params);
-  const view: SnapshotView = { scope: args.scope as "page" | "viewport", fromLine: (args.from_line as number | null) ?? 1 };
+  const view: SnapshotView = { scope: args.scope as "page" | "viewport", fromLine: given(args.from_line as number | null) };
   const find = given(args.find as string | null);
   return { ...request, view: find === undefined ? view : { ...view, find } };
 }
@@ -232,17 +232,21 @@ function taskId(value: unknown): number {
   return value as number;
 }
 
-/** 后端随请求带来的标签上下文：上限与 Task 所在工作区的下载目录（本机绝对路径）。 */
-function tabContext(value: Record<string, unknown>): BrowserTabContext {
-  const downloadDir = value.download_dir;
-  if (typeof downloadDir !== "string" || !path.isAbsolute(downloadDir)) throw invalid("download_dir must be an absolute path");
-  return { limits: limits(value.limits), downloadDir };
+/**
+ * 标签上下文的规则：两个上限都是正的安全整数，下载目录是本机绝对路径。宿主收标签上下文的两条进程边界（后端的工具
+ * 请求、渲染进程的「新开标签」IPC）共用这一份规则，各自只取出字段（键名风格不同）、按自己的方式报错；不合规为 null。
+ */
+export function tabContextOf(perTask: unknown, total: unknown, downloadDir: unknown): BrowserTabContext | null {
+  if (!positive(perTask) || !positive(total) || typeof downloadDir !== "string" || !path.isAbsolute(downloadDir)) return null;
+  return { limits: { perTask, total }, downloadDir };
 }
 
-function limits(value: unknown): BrowserTabLimits {
-  const { per_task: perTask, total } = object(value);
-  if (!positive(perTask) || !positive(total)) throw invalid("limits must carry positive per_task and total");
-  return { perTask, total };
+/** 后端随请求带来的标签上下文：上限与 Task 所在工作区的下载目录。 */
+function tabContext(value: Record<string, unknown>): BrowserTabContext {
+  const limits = object(value.limits);
+  const context = tabContextOf(limits.per_task, limits.total, value.download_dir);
+  if (!context) throw invalid("limits must carry positive per_task and total, and download_dir must be an absolute path");
+  return context;
 }
 
 function positive(value: unknown): value is number {

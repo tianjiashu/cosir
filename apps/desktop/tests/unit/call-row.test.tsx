@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
@@ -141,6 +142,53 @@ describe("CallRow kind 视图", () => {
     });
     expect(html).toContain("运行中");
     expect(html).not.toContain("已完成");
+  });
+
+  it("分叉行跳到它的侧栏对话，状态同样读任务状态推送", () => {
+    taskStatuses.set(41, "running");
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <CallRow
+          taskId={7}
+          toolCallId="call-fork"
+          toolName="fork_task"
+          args={{ title: "前端部分", message: "只做前端" }}
+          artifact={artifact({ childTaskId: 41, display_data: { kind: "fork-task-result", title: "前端部分", child_task_id: 41 } })}
+        />
+      </MemoryRouter>,
+    );
+    expect(html).toContain("分叉对话");
+    expect(html).toContain("前端部分");
+    expect(html).toContain("运行中");
+    expect(html).toContain("打开分叉对话：前端部分");
+    expect(html).toContain("停止分叉对话：前端部分");
+  });
+
+  it("发给上级的消息卡片只能打开对方，不能停止它；发给下级的可以停止", () => {
+    taskStatuses.set(7, "running");
+    taskStatuses.set(41, "running");
+    const card = (direction: "up" | "down", taskId: number) => renderToStaticMarkup(
+      <MemoryRouter>
+        <CallRow
+          taskId={9}
+          toolCallId={`call-${direction}`}
+          toolName="send_message"
+          args={{ task_id: taskId, message: "进展" }}
+          artifact={artifact({
+            display_data: {
+              kind: "agent-task-result", operation: "send", direction, task_id: taskId,
+              agent_name: direction === "up" ? "主任务" : "前端部分", final_output: null, end_reason: null,
+            },
+          })}
+        />
+      </MemoryRouter>,
+    );
+    const up = card("up", 7);
+    expect(up).toContain("打开上级任务：主任务");
+    expect(up).not.toContain("停止任务");
+    const down = card("down", 41);
+    expect(down).toContain("打开任务：前端部分");
+    expect(down).toContain("停止任务：前端部分");
   });
 
   it("只读面不渲染停止与转到后台", () => {

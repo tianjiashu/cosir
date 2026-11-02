@@ -92,6 +92,27 @@ describe("TabLog", () => {
     expect(log.read({ kind: "console", limit: 50 }).entries.map((entry) => entry.text)).toEqual(["new page"]);
   });
 
+  // 目的：「导航进行中」只在日志里记一份，标签据它解释加载事件；潜在缺陷：两份各自改写，落定时只清了一份——标签把
+  // 已提交页面的加载中断当成换了错误页，或下一页从旧起点算，把上一页的报错计进新页面。
+  it("tracks a navigation in flight until it commits or is abandoned", () => {
+    const log = new TabLog();
+    expect(log.navigating).toBe(false);
+    log.navigationStarted();
+    expect(log.navigating).toBe(true);
+    log.pageStarted();
+    expect(log.navigating).toBe(false);
+
+    log.console(consoleEntry("error", "page one"));
+    log.navigationStarted();
+    log.navigationAbandoned();
+    expect(log.navigating).toBe(false);
+    log.navigationAbandoned();
+    log.console(consoleEntry("error", "still page one"));
+    log.pageStarted();
+    log.console(consoleEntry("error", "page two"));
+    expect(log.read({ kind: "console", limit: 50 }).entries.map((entry) => entry.text)).toEqual(["page two"]);
+  });
+
   // 目的：重定向与失败都要看得到；潜在缺陷：同一 requestId 的第二跳覆盖了第一跳，302 和最终结果只剩一个。
   it("records each redirect hop and failures with durations", () => {
     const log = new TabLog();

@@ -64,10 +64,11 @@ function DownloadStateIcon({ state }: { state: BrowserDownload["state"] }) {
   }
 }
 
-/** 进行中显示已收 / 总量与百分比（总量未知时只显示已收），终态显示中文结局。 */
+/** 进行中显示已收 / 总量与百分比（总量未知时只显示已收；断线续传中如实说明），终态显示中文结局。 */
 function downloadStatus(download: BrowserDownload): string {
   switch (download.state) {
     case "progressing":
+      if (download.stalled) return "连接中断，正在重试";
       return download.totalBytes > 0
         ? `${formatByteSize(download.receivedBytes)} / ${formatByteSize(download.totalBytes)} · ${Math.floor((download.receivedBytes / download.totalBytes) * 100)}%`
         : formatByteSize(download.receivedBytes);

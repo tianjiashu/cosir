@@ -32,7 +32,7 @@ export function useDockPanels({ workspaceId, filesVisible, conversationTaskId }:
   const workbenchTabs = workbenchSession.tabs;
   const pinnedBrowserTask = useBrowserPanelStore((state) => state.taskId);
   const browserTaskId = pinnedBrowserTask ?? conversationTaskId;
-  const conversationTabs = useTaskBrowserTabs(conversationTaskId ?? -1);
+  const conversationTabs = useTaskBrowserTabs(conversationTaskId);
 
   const available: Record<DockPanel, boolean> = {
     files: filesVisible && workspaceId !== null,

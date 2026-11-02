@@ -8,6 +8,7 @@ import { logDesktopEvent } from "../desktop-log";
 import { appLogDir, runtimeDir, systemDataRoot } from "../paths";
 import { spawnBackend, stopProcessTree } from "./process";
 import { waitForBackend } from "./readiness";
+import { HostUserError } from "../host-user-error";
 import { resolveBackendRuntime } from "./runtime";
 
 const HOST = "127.0.0.1";
@@ -59,7 +60,7 @@ export class BackendSupervisor {
 
   /** 用户显式重启：停掉当前进程、重置崩溃恢复次数后重新启动；未能就绪时抛出带原因的错误。 */
   async restart(): Promise<BackendSnapshot> {
-    if (this.starting) throw new Error("本地 Agent 后端正在启动，请等待启动完成");
+    if (this.starting) throw new HostUserError("本地 Agent 后端正在启动，请等待启动完成");
     this.generation += 1;
     const generation = this.generation;
     this.crashRecoveryAttempts = 0;
@@ -68,7 +69,7 @@ export class BackendSupervisor {
     // 停旧进程也算在这次启动里：守卫在第一个 await 之前占住，等旧进程退出的宽限期内再来的重启会被拒绝。
     await this.launch(generation, this.releaseChild());
     if (this.status.state !== "ready") {
-      throw new Error(this.status.state === "failed" ? this.status.message : "本地 Agent 后端重启失败，请点击重试");
+      throw new HostUserError(this.status.state === "failed" ? this.status.message : "本地 Agent 后端重启失败，请点击重试");
     }
     return this.snapshot();
   }
@@ -152,7 +153,7 @@ export class BackendSupervisor {
       if (this.child === child) this.child = null;
       await stopProcessTree(child);
     }
-    throw new Error(lastError);
+    throw new HostUserError(lastError);
   }
 
   private handleExit(child: ChildProcess, generation: number, code: number | null, signal: NodeJS.Signals | null): void {

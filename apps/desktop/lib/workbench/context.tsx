@@ -1,15 +1,11 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 
-import { useBrowserPanelStore } from "@/lib/browser/panel-store";
-import { useDockStore } from "@/lib/layout/dock-store";
 import { useWorkbenchStore, type AgentDraftInput, type TeamDraftInput } from "./store";
 
 type WorkbenchContextValue = {
   /** 工作台当前显示的工作区；工具卡片据此决定能否打开标签，以及打开到哪个工作区的桶。 */
   workspaceId: number;
   openAgent: (input: { taskId: number; title: string }) => void;
-  /** 在浏览器面板里打开某个 Task 的某个标签（浏览器是独立面板，不进工作台）。 */
-  openBrowser: (input: { taskId: number; tabId: string }) => void;
   openAgentConfigurationDraft: (input: AgentDraftInput) => void;
   openAgentTeamConfigurationDraft: (input: TeamDraftInput) => void;
 };
@@ -27,10 +23,6 @@ export function WorkbenchProvider({ workspaceId, children }: { workspaceId: numb
     return {
       workspaceId,
       openAgent: (input) => store.openAgent(workspaceId, input),
-      openBrowser: ({ taskId, tabId }) => {
-        useBrowserPanelStore.getState().focus(taskId, tabId);
-        useDockStore.getState().show("browser");
-      },
       openAgentConfigurationDraft: (input) => store.openAgentConfigurationDraft(workspaceId, input),
       openAgentTeamConfigurationDraft: (input) => store.openAgentTeamConfigurationDraft(workspaceId, input),
     };

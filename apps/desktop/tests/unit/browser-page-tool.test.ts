@@ -20,7 +20,7 @@ describe("browser-page display", () => {
   // 目的：截图地址只来自合法的附件 id；潜在缺陷：展示数据里的任意字符串被拼进图片地址。
   it("drops malformed screenshot ids and rejects malformed pages", () => {
     expect(readBrowserPageDisplay({ ...PAGE, screenshot: "../../etc" })?.screenshot).toBeUndefined();
-    expect(readBrowserPageDisplay({ ...PAGE, tab_id: "tab-2" })).toBeNull();
+    expect(readBrowserPageDisplay({ ...PAGE, tab_id: 2 })).toBeNull();
     expect(readBrowserPageDisplay({ ...PAGE, url: 3 })).toBeNull();
   });
 

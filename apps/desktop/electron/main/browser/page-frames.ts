@@ -38,7 +38,7 @@ export class PageFrames {
     this.remote.set(sessionId, { frameId: targetInfo.targetId, sessionId, parentSessionId });
     const send = (method: string, params: Record<string, unknown>) => this.session.send(method, params, { sessionId });
     Promise.all([send("Target.setAutoAttach", AUTO_ATTACH), send("Page.enable", {}).then(() => send("Page.setInterceptFileChooserDialog", { enabled: true }))]).catch((error: unknown) => {
-      logDesktopEvent("WARNING", "browser", "browser_frame_attach_failed", { tab_id: this.tabId, error: error instanceof Error ? error.message : String(error) });
+      logDesktopEvent("WARNING", "browser", "browser_frame_attach_failed", { tab_id: this.tabId }, error);
     });
   }
 

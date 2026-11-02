@@ -14,7 +14,7 @@ export type AXNode = {
   backendDOMNodeId?: number;
 };
 
-/** 一份文档读到的内容；`frames` 按 iframe 元素的节点 id 挂上读到的子框架文档。 */
+/** 一份文档读到的内容；`frames` 按 iframe 元素的节点 id 挂上读到的子框架文档（读失败的为 null，没读的不在其中）。 */
 export type SnapshotDocument = {
   /** 所在 CDP 会话（跨进程子框架的子会话；否则为 undefined）：节点 id 只在会话内唯一。 */
   sessionId?: string;
@@ -23,7 +23,7 @@ export type SnapshotDocument = {
   pointer: ReadonlySet<number>;
   /** 与视口里看得见的区域相交的节点（`layout.ts`）：「只看视口」的视图据此筛选。 */
   inView: ReadonlySet<number>;
-  frames: ReadonlyMap<number, SnapshotDocument>;
+  frames: ReadonlyMap<number, SnapshotDocument | null>;
 };
 
 const FRAME_ROLES = new Set(["Iframe", "IframePresentational"]);

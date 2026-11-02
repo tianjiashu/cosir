@@ -72,12 +72,12 @@ export async function drag(session: PageSession, start: PointerTarget, end: Poin
   }
 }
 
-/** 落点（主视口的 CSS 像素，与视口截图的像素一致）：元素取中心（先滚入视野），坐标须在视口之内。 */
+/** 落点（可视视口里的 CSS 像素，与视口截图的像素一致）：元素取中心（先滚入视野），坐标须在可视视口之内。 */
 async function point(session: PageSession, target: PointerTarget): Promise<{ x: number; y: number }> {
   if ("ref" in target) return center(session, await element(session, target.ref));
-  const { width, height } = session.viewport();
+  const { width, height } = (await session.geometry()).visual;
   if (target.x >= width || target.y >= height) {
-    throw browserError("OUT_OF_VIEWPORT", `(${target.x}, ${target.y}) is outside the ${width}×${height} viewport`);
+    throw browserError("OUT_OF_VIEWPORT", `(${target.x}, ${target.y}) is outside the ${Math.round(width)}×${Math.round(height)} viewport`);
   }
   return target;
 }

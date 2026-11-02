@@ -21,6 +21,7 @@ import type { ActRequest, EvaluateRequest, LogsRequest, NavigateRequest, Screens
 import type { Emulation } from "./tab-emulation";
 import type { ConsoleEntry, LogPage, NetworkEntry, PageDigest } from "./tab-log";
 import { abortable } from "./abortable";
+import { budgetSignal, deadlineMs } from "./deadlines";
 import type { Outline } from "./snapshot/outline";
 import { changesView, snapshotView, type SnapshotView } from "./snapshot/views";
 import { isWebProtocol, urlProtocol } from "./web-url";
@@ -52,6 +53,8 @@ export type TaskTab = { tabId: string; title: string; url: string; current: bool
 
 /** 冻结帧每条 CDP 命令的时限：等不到就不要帧、直接收起画面，免得原生画面长时间盖住应用的弹层。 */
 const FREEZE_TIMEOUT_MS = 1_000;
+/** act 给读结果（等标签可用、读快照）留的时间：与 `browser.snapshot` 的时限相同。 */
+const ACT_RESULT_RESERVE_MS = deadlineMs("browser.snapshot");
 
 /** `agentCalls`：此刻在这个标签上执行中的 Agent 操作数（`operate` 计数），面板据此标出「正在执行」。 */
 type TabEntry = { tab: BrowserTab; ready: Promise<void>; controller: AbortController; agentCalls: number };
@@ -120,11 +123,15 @@ export class BrowserHost implements BrowserSessionEvents {
     return this.operate(this.agentEntry(request), signal, async (tab) => this.result(tab, await tab.snapshot(), request.view));
   }
 
-  /** 按序执行动作，无论停在哪一步都返回之后的快照（新快照带新 ref，模型能接着做）。 */
+  /**
+   * 按序执行动作，无论停在哪一步都返回之后的快照（新快照带新 ref，模型能接着做）。动作在方法时限前
+   * `ACT_RESULT_RESERVE_MS` 停下（停在的那一步报 `DEADLINE_EXCEEDED`），留出读快照的时间。
+   */
   async act(request: ActRequest, signal: AbortSignal): Promise<ActOutcome> {
     const entry = this.agentEntry(request);
+    const budget = budgetSignal("browser.act", ACT_RESULT_RESERVE_MS, "the call ran out of time before this action");
     return this.operate(entry, signal, async (tab, scoped) => {
-      const outcome = await tab.act(request.actions, scoped);
+      const outcome = await tab.act(request.actions, AbortSignal.any([scoped, budget]));
       // 在初始化中的标签上答完弹窗后，初始化会接着做完；读快照前等它（或页面又停住）。
       await this.usableTab(entry, scoped);
       return { ...this.result(tab, await tab.snapshot(), { changes: true }), ...outcome };
@@ -221,14 +228,18 @@ export class BrowserHost implements BrowserSessionEvents {
     return () => this.listeners.delete(listener);
   }
 
-  /** 把标签挂到主窗口的给定矩形（视图在其中按视口等比摆放）；`null` 摘下。 */
+  /**
+   * 把标签挂到主窗口的给定矩形（视图在其中按视口等比摆放）；`null` 摘下。只由主窗口里的面板调用，窗口必然在。
+   * 摘下已关闭的标签什么也不做（关闭时已摘下；面板卸载时总会再摘一次）。
+   */
   place(tabId: string, placement: BrowserPlacement | null): void {
-    const { tab } = this.require(tabId);
-    const window = this.window();
-    if (!placement || !window || placement.width < 1 || placement.height < 1) {
-      if (this.attached === tab) this.detach();
+    if (!placement || placement.width < 1 || placement.height < 1) {
+      const entry = this.find(tabId, "place");
+      if (entry && this.attached === entry.tab) this.detach();
       return;
     }
+    const { tab } = this.require(tabId);
+    const window = this.window()!;
     if (this.attached !== tab) {
       this.detach();
       window.contentView.addChildView(tab.view);
@@ -249,12 +260,9 @@ export class BrowserHost implements BrowserSessionEvents {
    * 用户在浏览器面板点「+」：在该 Task 里开一个标签（与 Agent 开的同等，Agent 经 `browser_tabs` 看得到、
    * 也能操作，行为与交互终端一致），设为当前标签。上下文由渲染进程向后端读来随请求带上。
    */
-  async userOpen(taskId: number, context: BrowserTabContext, url?: string): Promise<string> {
+  async userOpen(taskId: number, context: BrowserTabContext): Promise<string> {
     this.track(context);
-    const entry = await this.open(taskId, context, "user", true);
-    // 用户侧没有可取消的请求：等待只跟随标签生命周期（关掉标签即结束）。
-    if (url) await entry.tab.navigate({ url }, entry.controller.signal);
-    return entry.tab.tabId;
+    return (await this.open(taskId, context, "user", true)).tab.tabId;
   }
 
   async userNavigate(tabId: string, target: BrowserNavigation): Promise<void> {
@@ -264,17 +272,19 @@ export class BrowserHost implements BrowserSessionEvents {
   }
 
   userClose(tabId: string): void {
-    this.require(tabId);
-    this.close(tabId);
+    if (this.find(tabId, "close")) this.close(tabId);
   }
 
-  /** 用户在面板里回答弹窗；它已不是当前弹窗（Agent 答过、换成了新的）时什么也不做。 */
+  /** 用户在面板里回答弹窗；它已不是当前弹窗（Agent 答过、换成了新的）或标签已关闭时什么也不做。 */
   userAnswerDialog(tabId: string, dialogId: number, answer: BrowserDialogAnswer): void {
-    this.require(tabId).tab.answerDialog(dialogId, answer, "user");
+    this.find(tabId, "answer_dialog")?.tab.answerDialog(dialogId, answer, "user");
   }
 
+  /** 在文件夹中显示下载；记录已被挤出列表（Task 删除、只留最近几次）时什么也不做。 */
   revealDownload(downloadId: string): void {
-    shell.showItemInFolder(this.downloads.pathOf(downloadId));
+    const target = this.downloads.pathOf(downloadId);
+    if (target) shell.showItemInFolder(target);
+    else logDesktopEvent("INFO", "browser", "browser_user_action_skipped", { action: "reveal_download", download_id: downloadId });
   }
 
   // ---------------------------------------------------------------------------
@@ -290,13 +300,6 @@ export class BrowserHost implements BrowserSessionEvents {
     return this.tabFor(request.taskId, request.tab);
   }
 
-  /**
-   * Agent 对一个标签的一次操作：先等标签可用（`until`），再带着「请求取消或标签关闭」的组合信号执行。标签中途关闭
-   * （页面自己 `window.close()`、用户关掉、Task 删除）时一律以 `TAB_NOT_FOUND` 结束：在途的 CDP 与加载等待被这个
-   * 信号打断；关闭之后才冒出来的错误（对已销毁的目标发命令、读已销毁的 webContents）也换成关闭的原因，不当作
-   * 宿主内部错误；操作碰巧在关闭后才返回（页面销毁时 Chromium 会结束在等的 Promise），结果说的是已经不在的标签，
-   * 同样报关闭。
-   */
   /** 进出一次 Agent 操作：「正在执行」只在 0 与非 0 之间切换时推送，同一标签上并发的调用不重复推送。 */
   private countAgentCall(entry: TabEntry, delta: 1 | -1): void {
     const before = entry.agentCalls;
@@ -304,6 +307,13 @@ export class BrowserHost implements BrowserSessionEvents {
     if ((before === 0) !== (entry.agentCalls === 0)) this.publish();
   }
 
+  /**
+   * Agent 对一个标签的一次操作：先等标签可用（`until`），再带着「请求取消或标签关闭」的组合信号执行。标签中途关闭
+   * （页面自己 `window.close()`、用户关掉、Task 删除）时一律以 `TAB_NOT_FOUND` 结束：在途的 CDP 与加载等待被这个
+   * 信号打断；关闭之后才冒出来的错误（对已销毁的目标发命令、读已销毁的 webContents）也换成关闭的原因，不当作
+   * 宿主内部错误；操作碰巧在关闭后才返回（页面销毁时 Chromium 会结束在等的 Promise），结果说的是已经不在的标签，
+   * 同样报关闭。
+   */
   private async operate<T>(
     entry: TabEntry,
     signal: AbortSignal,
@@ -361,7 +371,6 @@ export class BrowserHost implements BrowserSessionEvents {
       logDesktopEvent("INFO", "browser", "browser_popup_dropped", { task_id: opener.taskId, reason: why });
       return { action: "deny" };
     };
-    if (this.closed) return { action: "deny" };
     if (!isWebProtocol(urlProtocol(url))) return refuse("it was blocked (not an http(s) address)");
     try {
       // 有标签就一定有过带上限的请求（新开标签的两条路都先 `track`）。
@@ -385,7 +394,11 @@ export class BrowserHost implements BrowserSessionEvents {
         // 页面开出的窗口可能在初始化完成前就自己关了（弹窗式登录很快就 `window.close()`）：初始化因此失败时按「自己关掉」收尾。
         entry.ready.then(
           () => logDesktopEvent("INFO", "browser", "browser_popup_opened", { task_id: tab.taskId, tab_id: tab.tabId }),
-          () => (tab.contents.isDestroyed() ? this.gone(tab) : this.close(tab.tabId)),
+          (error: unknown) => {
+            logDesktopEvent("INFO", "browser", "browser_popup_init_failed", { task_id: tab.taskId, tab_id: tab.tabId }, error);
+            if (tab.contents.isDestroyed()) this.gone(tab);
+            else this.close(tab.tabId);
+          },
         );
         opener.log.note(`the page opened ${url.slice(0, 200)} in a new tab ${tab.tabId}`);
         return tab.contents;
@@ -420,6 +433,7 @@ export class BrowserHost implements BrowserSessionEvents {
         onDialogClosed: () => this.resumeProcess(tab),
         pausedBy: () => this.pausedBy(tab),
         chooseFiles: (multiple) => this.chooseFiles(multiple),
+        isAttached: () => this.attached === tab,
       },
     });
     const controller = new AbortController();
@@ -493,10 +507,10 @@ export class BrowserHost implements BrowserSessionEvents {
     else logDesktopEvent("INFO", "browser", "browser_note_dropped", { task_id: taskId, tab_id: tabId });
   }
 
+  /** 只有挂在面板上（主窗口里）的标签会请用户选文件（`BrowserTab.fileChooserOpened`），窗口必然在。 */
   private async chooseFiles(multiple: boolean): Promise<string[] | null> {
-    const window = this.window();
-    const options = { properties: multiple ? ["openFile" as const, "multiSelections" as const] : ["openFile" as const] };
-    const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    const properties = multiple ? ["openFile" as const, "multiSelections" as const] : ["openFile" as const];
+    const result = await dialog.showOpenDialog(this.window()!, { properties });
     return result.canceled ? null : result.filePaths;
   }
 
@@ -521,13 +535,27 @@ export class BrowserHost implements BrowserSessionEvents {
     return entry;
   }
 
+  /** 「必须在」：要在标签上产出结果的入口（摆上画面、冻结帧、导航）。 */
   private require(tabId: string): TabEntry {
     const entry = this.tabs.get(tabId);
     if (!entry) throw browserError("TAB_NOT_FOUND", `tab ${tabId} is not open`);
     return entry;
   }
 
-  /** 等初始化完成；请求取消只停止本次等待，新建调用失败时由 open 回收其拥有的标签。 */
+  /**
+   * 「不在就算了」：用户的收尾操作（摘下画面、关闭、作答弹窗）是让标签或弹窗离开，标签已关闭时目标已经达成——这类
+   * 调用常与关闭竞争（面板卸载、连点关闭），报错只是假失败。查不到时记一条日志、返回 undefined。
+   */
+  private find(tabId: string, action: string): TabEntry | undefined {
+    const entry = this.tabs.get(tabId);
+    if (!entry) logDesktopEvent("INFO", "browser", "browser_user_action_skipped", { action, tab_id: tabId });
+    return entry;
+  }
+
+  /**
+   * 等初始化完成；请求取消只停止本次等待，新建调用失败时由 open 回收其拥有的标签。就绪之后、续执行之前标签被关掉
+   * 也报关闭：`operate` 之外的用户路径（新开、地址栏导航）只靠这一处。
+   */
   private async readyTab(entry: TabEntry, signal: AbortSignal = entry.controller.signal): Promise<BrowserTab> {
     await abortable(entry.ready, signal);
     entry.controller.signal.throwIfAborted();
@@ -548,7 +576,6 @@ export class BrowserHost implements BrowserSessionEvents {
         if (!paused.aborted || signal.aborted) throw error;
       }
     }
-    entry.controller.signal.throwIfAborted();
     return tab;
   }
 

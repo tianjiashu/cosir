@@ -1,7 +1,6 @@
 import { HostMethodError } from "../../host-link/methods";
 import { browserError } from "../errors";
 import type { PageAction } from "../params";
-import { isMissingNode } from "./element";
 import { highlightTarget } from "./highlight";
 import { pressKey, typeText } from "./keyboard";
 import { scroll, select } from "./page-functions";
@@ -104,6 +103,5 @@ function unreachable(action: never): never {
 
 function describe(error: unknown): { code: string; message: string } {
   if (error instanceof HostMethodError) return { code: error.code, message: error.message };
-  if (isMissingNode(error)) return { code: "REF_STALE", message: "the element is no longer on the page; take a new snapshot" };
   return { code: "ACTION_FAILED", message: error instanceof Error ? error.message : String(error) };
 }

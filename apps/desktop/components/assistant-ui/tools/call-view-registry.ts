@@ -3,7 +3,7 @@ import type { CallView } from "./call-view";
 import { DETAIL_VIEWS } from "./details/detail-views";
 import { asRecord } from "./display-utils";
 import { browserPageView } from "./views/browser-page-view";
-import { childAgentResultView, delegationView, forkTaskView } from "./views/child-task-views";
+import { agentTaskResultView, delegationView, forkTaskView } from "./views/child-task-views";
 import { fileChangesView } from "./views/file-changes-view";
 import { terminalResultView } from "./views/terminal-result-view";
 import { terminalSessionView } from "./views/terminal-session-view";
@@ -20,7 +20,7 @@ export const CALL_VIEWS: Readonly<Record<string, CallView>> = {
   "file-changes": fileChangesView,
   "delegation-result": delegationView,
   "fork-task-result": forkTaskView,
-  "child-agent-result": childAgentResultView,
+  "agent-task-result": agentTaskResultView,
   "browser-page": browserPageView,
 };
 

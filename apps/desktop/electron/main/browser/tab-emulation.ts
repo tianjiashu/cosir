@@ -33,7 +33,10 @@ type Send = (method: string, params: Record<string, unknown>, options?: { signal
  */
 export class TabEmulation {
   private emulation: Emulation = DEFAULT_EMULATION;
-  /** 挂在面板上时的占位矩形（窗口坐标）；没挂上为 null。 */
+  /**
+   * 挂在面板上时的占位矩形（窗口坐标），只是摆放与缩放的参数；没挂上为 null。「挂没挂上」的事实归宿主（`TabEvents.isAttached`）：
+   * 关闭标签时宿主只摘视图、不清它（不再对正在断开的调试器发模拟命令）。
+   */
   private box: Rectangle | null = null;
   /** 初始化完成前为 null（此前的摆放与设置只记下期望值）。 */
   private applied: Applied | null = null;
@@ -53,11 +56,6 @@ export class TabEmulation {
   get current(): Emulation {
     const applied = this.applied;
     return applied ? { width: applied.width, height: applied.height, mobile: applied.mobile, colorScheme: applied.colorScheme } : DEFAULT_EMULATION;
-  }
-
-  /** 视图当前挂在面板上（用户能看见、能点到它）。 */
-  get isShown(): boolean {
-    return this.box !== null;
   }
 
   /**
@@ -95,7 +93,7 @@ export class TabEmulation {
     this.emulation = emulation;
     this.stalled = false;
     try {
-      while (this.applied && this.pending()) {
+      while (this.pending()) {
         await abortable(this.sync(), signal);
         if (this.stalled) throw this.failure;
       }

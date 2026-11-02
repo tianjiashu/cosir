@@ -6,7 +6,7 @@ import { browserPageWebPreferences } from "./browser-session";
 import { CdpSession } from "./cdp-session";
 import { browserError } from "./errors";
 import { runActions, type ActResult } from "./input/actions";
-import { box, element, isMissingNode } from "./input/element";
+import { box, element } from "./input/element";
 import type { FileChooser, PageSession } from "./input/session";
 import { describeTarget } from "./input/targets";
 import type { BrowserDialog, BrowserDialogAnswer, BrowserNavigation, BrowserTabCreator, BrowserTabSummary } from "../../shared/host-contract";
@@ -17,6 +17,7 @@ import { PageDialogs } from "./page-dialogs";
 import { evaluateExpression, type Evaluation } from "./page-evaluate";
 import { ERR_ABORTED, untilStopped, waitForLoad } from "./page-loading";
 import { PageFrames } from "./page-frames";
+import { readGeometry } from "./page-geometry";
 import { TabHighlight } from "./tab-highlight";
 import { RefRegistry, type PageNode } from "./ref-registry";
 import { buildOutline, type Outline } from "./snapshot/outline";
@@ -68,6 +69,11 @@ export type TabEvents = {
   pausedBy: () => HostMethodError | null;
   /** 用户在面板里点了选文件：弹系统文件选择框，返回选中的本机路径，取消为 null。 */
   chooseFiles: (multiple: boolean) => Promise<string[] | null>;
+  /**
+   * 本标签此刻挂在浏览器面板上（用户看得见、点得到）。事实归 `BrowserHost` 的摆放（同一时刻只挂一个）；标签据此决定
+   * 画不画高亮、网页自己打开的选文件框弹给用户还是拦下。不从设备模拟的占位矩形推断——那只是摆放参数。
+   */
+  isAttached: () => boolean;
 };
 
 export type TabOptions = {
@@ -85,9 +91,10 @@ export type TabOptions = {
 
 /**
  * 一个标签页：一个 `WebContentsView`，组合几个各管一件事的部件——CDP 会话（`CdpSession`，命令唯一出口与闸门、
- * 事件唯一入口）、弹窗（`PageDialogs`）、设备模拟与显示缩放（`TabEmulation`）、页面日志（`TabLog`：备注、console、
- * 网络，「上次以来」的唯一事实源）、ref 登记（`RefRegistry`）。本类负责生命周期、把页面事件接到这些部件上，以及
- * 需要多个部件配合的操作（导航、快照、动作、执行 JS、截图）。
+ * 事件唯一入口）、跨进程子框架（`PageFrames`：子会话与坐标偏移）、弹窗（`PageDialogs`）、设备模拟与显示缩放
+ * （`TabEmulation`）、页面日志（`TabLog`：备注、console、网络，「上次以来」的唯一事实源）、ref 登记（`RefRegistry`）、
+ * 给人看的高亮框（`TabHighlight`）。本类负责生命周期、把页面事件接到这些部件上，以及需要多个部件配合的操作（导航、
+ * 快照、动作、执行 JS、截图与元素截图）。
  *
  * 两种来源：新建（先加载 `about:blank` 再附加调试器——未加载过任何页面的 webContents 上 CDP 命令会一直挂起），
  * 与收养页面开出的 webContents（等它第一次加载结束、弹窗被答完再附加）；之后两者没有差别。
@@ -96,8 +103,8 @@ export type TabOptions = {
  * 「为什么停着」由 `BrowserHost` 按进程判断。
  *
  * console 用 Electron 的 `console-message`（实测覆盖主框架、iframe、跨进程 iframe、未捕获异常与未处理的拒绝），
- * 不开 CDP 的 `Runtime.enable`——它是网站识别自动化的常见指纹。网络请求用 CDP `Network` 事件，调试器只附加在
- * 主框架上，所以跨进程 iframe（跨站嵌入）与 worker 的请求不在日志里。主文档状态码取自 `did-navigate`（不依赖
+ * 不开 CDP 的 `Runtime.enable`——它是网站识别自动化的常见指纹。网络请求用 CDP `Network` 事件，只在主会话上开
+ * （跨进程子框架的子会话不开），所以跨进程 iframe（跨站嵌入）与 worker 的请求不在日志里。主文档状态码取自 `did-navigate`（不依赖
  * `Network`，404 照报、重定向报最终的码）。
  *
  * 几条由实测确定的约束（设计稿 §8、§17）：
@@ -135,11 +142,6 @@ export class BrowserTab {
   private delivered: Delivered | null = null;
   /** Agent 的动作让页面打开、等 `upload` 回答的选文件框；换文档或页面再开一个时作废 / 换掉。 */
   private fileChooser: FileChooser | null = null;
-  /**
-   * 有一次主框架跨文档导航开始了、还没落定（见 `did-fail-load` 的说明）。落定只有两种：换上文档
-   * （`documentChanged`），或加载状态结束时仍没换（`did-stop-loading`：转成下载、204、被拦下）。
-   */
-  private navigating = false;
 
   constructor(options: TabOptions) {
     const { tabId, taskId, events } = options;
@@ -158,10 +160,10 @@ export class BrowserTab {
       logDesktopEvent("WARNING", "browser", "browser_debugger_detached", { tab_id: tabId, reason });
     });
     this.frames = new PageFrames(this.session, tabId);
-    this.highlighter = new TabHighlight(this.session, tabId, () => this.emulation.isShown);
+    this.highlighter = new TabHighlight(this.session, tabId, events.isAttached);
     this.emulation = new TabEmulation(
       (method, params, sendOptions) => this.session.send(method, params, sendOptions),
-      (error) => logDesktopEvent("INFO", "browser", "browser_viewport_sync_failed", { tab_id: tabId, error: errorText(error) }),
+      (error) => logDesktopEvent("INFO", "browser", "browser_viewport_sync_failed", { tab_id: tabId }, error),
       (applied) => this.metricsApplied(applied),
     );
     this.view.setBounds(this.emulation.viewBounds);
@@ -177,21 +179,17 @@ export class BrowserTab {
     });
     contents.on("did-start-navigation", (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;
-      this.navigating = true;
       this.log.navigationStarted();
     });
     // 主框架换了文档：提交成功（`did-navigate`），或导航失败、换成错误页（Electron 对错误页只发 `did-fail-load`）。
     // 主框架的 `did-fail-load` 也可能来自已提交文档的加载中途失败（响应体断开），那时文档没换：只认还没提交的导航。
     contents.on("did-navigate", (_event, _url, httpResponseCode) => this.documentChanged(httpResponseCode > 0 ? httpResponseCode : null));
     contents.on("did-fail-load", (_event, code, _description, _url, isMainFrame) => {
-      if (isMainFrame && code !== ERR_ABORTED && this.navigating) this.documentChanged(null);
+      if (isMainFrame && code !== ERR_ABORTED && this.log.navigating) this.documentChanged(null);
     });
     // 加载状态结束时导航还没换上文档：浏览器放弃了它，页面还是原来的（不论是谁发起的：Agent、用户或页面自己）。
-    contents.on("did-stop-loading", () => {
-      if (!this.navigating) return;
-      this.navigating = false;
-      this.log.navigationAbandoned();
-    });
+    // 「导航进行中」只在标签日志里记一份（`TabLog.navigating`），开始、落定都经它。
+    contents.on("did-stop-loading", () => this.log.navigationAbandoned());
     const changed = () => events.onChange();
     contents.on("did-navigate", changed);
     contents.on("did-navigate-in-page", changed);
@@ -301,11 +299,6 @@ export class BrowserTab {
   }
 
   /**
-   * 读整棵无障碍树并从 `fromLine` 起输出；ref 按节点稳定分配（`RefRegistry`），不随快照替换。不碰页面日志：
-   * 「上次以来」由拿到页面结果的一方显式取（`log.digest`）。
-   * 本标签有待答弹窗时不读树（页面停着，读不到），只报弹窗；被同进程别的标签的弹窗停住时以 `DIALOG_OPEN` 失败。
-   */
-  /**
    * 这次读到的大纲交给了 Agent：换成新的比对基准，返回上一次交的（换过文档时为 null，跨文档比对没有意义）。
    * 只由组装页面结果的一方调用（`BrowserHost.result`，与日志的「上次以来」同一个消费点）；被弹窗挡住、没读到大纲时
    * 基准不变。
@@ -316,10 +309,18 @@ export class BrowserTab {
     return previous?.document === this.document ? previous.outline : null;
   }
 
+  /**
+   * 读整棵无障碍树（含展开的子框架，见 `snapshot/read.ts`）建成大纲返回；怎么呈现（整页分页、视口内、查找、增量）由
+   * 拿结果的一方选（`snapshot/views.ts`）。ref 按节点稳定分配（`RefRegistry`），不随快照替换。不碰页面日志与比对
+   * 基准：「上次以来」由组装页面结果的一方显式取（`log.digest`、`deliver`）。
+   * 本标签有待答弹窗时不读树（页面停着，读不到），只报弹窗；被同进程别的标签的弹窗停住时以 `DIALOG_OPEN` 失败。
+   */
   async snapshot(): Promise<PageSnapshot> {
     this.assertAlive();
     if (this.dialogs.current) return { outline: null, dialog: this.dialogs.current };
-    const document = await readSnapshot(this.session, this.frames);
+    const document = await readSnapshot(this.session, this.frames, (error) => {
+      logDesktopEvent("INFO", "browser", "browser_frame_read_failed", { tab_id: this.tabId }, error);
+    });
     return { outline: buildOutline(document, this.refs, { pageUrl: this.contents.getURL() }), dialog: this.dialogs.current };
   }
 
@@ -350,7 +351,7 @@ export class BrowserTab {
       frameOffset: (sessionId) => this.frames.offset(sessionId),
       settle: () => this.settle(signal),
       toInput: (point) => this.emulation.toInput(point),
-      viewport: () => this.emulation.current,
+      geometry: () => readGeometry((method, params) => this.session.send(method, params)),
       paused: () => this.events.pausedBy(),
       dialog: () => this.dialogs.current,
       answerDialog: (id, answer) => this.answerDialog(id, answer, "agent"),
@@ -422,19 +423,13 @@ export class BrowserTab {
   async elementScreenshot(ref: string, signal: AbortSignal): Promise<string> {
     this.assertAlive();
     const session = this.pageSession(signal);
-    try {
-      const area = await box(session, await element(session, ref));
-      await this.highlighter.clear();
-      return await captureScreenshot(this.session, "jpeg", { quality: 85, element: area });
-    } catch (error) {
-      if (isMissingNode(error)) throw browserError("REF_STALE", `the element ${ref} is no longer on the page; use a ref from the latest snapshot`);
-      throw error;
-    }
+    const area = await box(session, await element(session, ref));
+    await this.highlighter.clear();
+    return captureScreenshot(this.session, "jpeg", { quality: 85, element: area });
   }
 
   /** 主框架换了文档：旧 ref 作废、状态码换成新文档的（错误页为 null）、日志的「当前页面」从这里起算。 */
   private documentChanged(status: number | null): void {
-    this.navigating = false;
     this.refs.clear();
     this.document += 1;
     this.fileChooser = null;
@@ -584,7 +579,7 @@ export class BrowserTab {
       logDesktopEvent("INFO", "browser", "browser_file_chooser_for_agent", { tab_id: this.tabId, task_id: this.taskId, multiple });
       return;
     }
-    if (!this.emulation.isShown || backendNodeId === undefined) {
+    if (!this.events.isAttached() || backendNodeId === undefined) {
       this.log.note("the page opened a file chooser on its own; it was blocked");
       logDesktopEvent("INFO", "browser", "browser_file_chooser_blocked", { tab_id: this.tabId, task_id: this.taskId });
       return;
@@ -592,7 +587,7 @@ export class BrowserTab {
     this.events.chooseFiles(multiple).then(
       (files) => (files?.length ? this.session.send("DOM.setFileInputFiles", { files, backendNodeId }, { sessionId }) : undefined),
     ).catch((error: unknown) => {
-      logDesktopEvent("WARNING", "browser", "browser_file_chooser_failed", { tab_id: this.tabId, error: errorText(error) });
+      logDesktopEvent("WARNING", "browser", "browser_file_chooser_failed", { tab_id: this.tabId }, error);
     });
   }
 
@@ -606,8 +601,4 @@ export class BrowserTab {
 
 /** Electron `console-message` 的级别名 → 日志级别。 */
 const CONSOLE_LEVELS: Record<string, ConsoleLevel> = { debug: "debug", info: "info", warning: "warning", error: "error" };
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 

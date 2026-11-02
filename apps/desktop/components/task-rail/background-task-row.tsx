@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BotIcon, CheckIcon, ChevronRightIcon, SquareIcon, SquareTerminalIcon, XCircleIcon, type LucideIcon } from "lucide-react";
+import { BotIcon, CheckIcon, ChevronRightIcon, MessageCircleQuestionIcon, SquareIcon, SquareTerminalIcon, XCircleIcon, type LucideIcon } from "lucide-react";
 
 import { CallRow } from "@/components/assistant-ui/tools/call-row";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
   terminal_command: SquareTerminalIcon,
   child_agent: BotIcon,
+  agent_reply: MessageCircleQuestionIcon,
 };
 
 /**

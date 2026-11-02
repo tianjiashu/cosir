@@ -8,7 +8,9 @@ function fakeSession() {
   const calls: [string, Record<string, unknown> | undefined][] = [];
   const session = { send: vi.fn(async (method: string, params?: Record<string, unknown>) => {
     calls.push([method, params]);
-    return method === "Runtime.evaluate" ? { result: { value: 2 } } : {};
+    return method === "Page.getLayoutMetrics"
+      ? { layoutViewport: { clientWidth: 2560 }, cssLayoutViewport: { clientWidth: 1280 }, cssVisualViewport: { pageX: 0, pageY: 0, clientWidth: 1280, clientHeight: 800, scale: 1 }, cssContentSize: { width: 1280, height: 800 } }
+      : {};
   }) };
   return { session: session as unknown as CdpSession, calls };
 }
@@ -22,7 +24,7 @@ describe("TabHighlight", () => {
     const { session, calls } = fakeSession();
     const highlight = new TabHighlight(session, "t1", () => true);
     await highlight.show(async () => ({ x: 300, y: 400, width: 80, height: 20 }));
-    expect(calls.map(([method]) => method)).toEqual(["Runtime.evaluate", "DOM.enable", "Overlay.enable", "Overlay.highlightQuad"]);
+    expect(calls.map(([method]) => method)).toEqual(["Page.getLayoutMetrics", "DOM.enable", "Overlay.enable", "Overlay.highlightQuad"]);
     expect(calls[3][1]?.quad).toEqual([150, 200, 190, 200, 190, 210, 150, 210]);
     await vi.advanceTimersByTimeAsync(600);
     expect(calls.at(-1)?.[0]).toBe("Overlay.hideHighlight");

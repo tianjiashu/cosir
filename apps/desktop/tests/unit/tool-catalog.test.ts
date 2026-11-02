@@ -27,7 +27,7 @@ describe("toolHeading", () => {
     expect(toolHeading("read_image", { paths: ["a.png", "b.png"] }).target).toBe("a.png +1");
     expect(toolHeading("web_extract", { urls: ["https://example.com/a", "https://example.com/b"] }).target).toBe("https://example.com/a +1");
     expect(toolHeading("apply_patch", { patch: "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\ndiff --git a/x.py b/x.py\n" }).target).toBe("x.py");
-    expect(toolHeading("browser_act", { actions: [{ type: "click", ref: "e1" }, { type: "scroll" }] }).target).toBe("click +1");
+    expect(toolHeading("browser_act", { actions: [{ type: "click", ref: "e1" }, { type: "scroll" }] }).target).toBe("点击 +1");
     expect(toolHeading("browser_logs", { kind: "network", failed_only: true }).target).toBe("network");
     expect(toolHeading("browser_evaluate", { expression: `document.title\n// ${"x".repeat(80)}` }).target).toBe("document.title");
     expect(toolHeading("browser_evaluate", { expression: "a".repeat(70) }).target).toBe(`${"a".repeat(60)}…`);
@@ -39,7 +39,7 @@ describe("toolHeading", () => {
     expect(toolHeading("mcp", { action: "call", server_name: "fs", tool_name: "read" })).toEqual({ title: "调用 MCP", target: "fs/read" });
     expect(toolHeading("mcp", { action: "list", server_name: "fs" }).target).toBe("fs");
     expect(toolHeading("skill", { action: "load", skill_name: "pdf", resource_path: "ref.md" }).target).toBe("pdf/ref.md");
-    expect(toolHeading("child_agent_send", { child_task_id: 12 }).target).toBe("#12");
+    expect(toolHeading("send_message", { task_id: 12 }).target).toBe("#12");
   });
 
   it("目录里没有的工具退回工具名，没有图标", () => {

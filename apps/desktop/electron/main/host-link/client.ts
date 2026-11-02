@@ -138,7 +138,12 @@ export class HostLinkClient {
       // 已撤销的调用后端不再等待，应答只会被丢弃。
       if (id !== null && !controller.signal.aborted) reply(socket, { id, result: result ?? null });
     } catch (error) {
-      if (id === null || controller.signal.aborted) return;
+      if (controller.signal.aborted) return;
+      if (id === null) {
+        // 通知没有应答可带回失败，后端只知道发出去了：失败只能在这里留下记录（如 Task 删除后回收标签失败）。
+        logDesktopEvent(error instanceof HostMethodError ? "WARNING" : "ERROR", "host_link", "host_notification_failed", { method, ...meta }, error);
+        return;
+      }
       if (error instanceof HostMethodError) {
         reply(socket, { id, error: { code: error.code, message: error.message } });
         return;

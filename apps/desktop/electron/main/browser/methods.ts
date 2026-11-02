@@ -1,11 +1,12 @@
 import type { HostMethodRegistry } from "../host-link/methods";
 import type { BrowserHost } from "./browser-host";
+import { withinDeadline, type BrowserMethod } from "./deadlines";
 import { parseAct, parseDropTasks, parseEvaluate, parseLogs, parseNavigate, parseScreenshot, parseSnapshot, parseTabs } from "./params";
 import { actWire, evaluateWire, logsWire, pageWire, screenshotWire, tabsWire } from "./wire";
 
 /**
  * 把内置浏览器注册成宿主工具链路的方法：入参经 `params.ts` 校验成请求，交给 `BrowserHost`，结果经 `wire.ts`
- * 转成线上形状。
+ * 转成线上形状；每个请求类方法都有宿主给出的总时限（`deadlines.ts`）。
  *
  * - `browser.navigate`：要求新标签或 Task 没有标签时新开一个；可先改设备模拟；返回导航后的快照。
  * - `browser.snapshot`：读当前（或指定）标签的快照，可从 `from_line` 起分页读。
@@ -17,13 +18,17 @@ import { actWire, evaluateWire, logsWire, pageWire, screenshotWire, tabsWire } f
  * - `browser.dropTasks`：通知，Task 删除提交后回收它的全部标签。
  */
 export function registerBrowserMethods(methods: HostMethodRegistry, browser: BrowserHost): void {
-  methods.register("browser.navigate", async (params, { signal }) => pageWire(await browser.navigate(parseNavigate(params), signal)));
-  methods.register("browser.snapshot", async (params, { signal }) => pageWire(await browser.snapshot(parseSnapshot(params), signal)));
-  methods.register("browser.act", async (params, { signal }) => actWire(await browser.act(parseAct(params), signal)));
-  methods.register("browser.screenshot", async (params, { signal }) => screenshotWire(await browser.screenshot(parseScreenshot(params), signal)));
-  methods.register("browser.tabs", async (params) => tabsWire(browser.manageTabs(parseTabs(params))));
-  methods.register("browser.logs", async (params, { signal }) => logsWire(await browser.logs(parseLogs(params), signal)));
-  methods.register("browser.evaluate", async (params, { signal }) => evaluateWire(await browser.evaluate(parseEvaluate(params), signal)));
+  /** 请求类方法都在时限内执行（见 `deadlines.ts`）；通知不回结果，不设时限。 */
+  const request = (method: BrowserMethod, handle: (params: unknown, signal: AbortSignal) => Promise<unknown>) =>
+    methods.register(method, (params, { signal }) => withinDeadline(method, signal, (scoped) => handle(params, scoped)));
+
+  request("browser.navigate", async (params, signal) => pageWire(await browser.navigate(parseNavigate(params), signal)));
+  request("browser.snapshot", async (params, signal) => pageWire(await browser.snapshot(parseSnapshot(params), signal)));
+  request("browser.act", async (params, signal) => actWire(await browser.act(parseAct(params), signal)));
+  request("browser.screenshot", async (params, signal) => screenshotWire(await browser.screenshot(parseScreenshot(params), signal)));
+  request("browser.tabs", async (params) => tabsWire(browser.manageTabs(parseTabs(params))));
+  request("browser.logs", async (params, signal) => logsWire(await browser.logs(parseLogs(params), signal)));
+  request("browser.evaluate", async (params, signal) => evaluateWire(await browser.evaluate(parseEvaluate(params), signal)));
   methods.register("browser.dropTasks", async (params) => {
     browser.dropTasks(parseDropTasks(params));
   });
