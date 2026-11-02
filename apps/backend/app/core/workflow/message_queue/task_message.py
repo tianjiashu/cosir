@@ -11,9 +11,12 @@ from typing import TYPE_CHECKING, Literal
 
 from app.core.workflow.message_queue.message_bodies import (
     _BODY_OF_KIND,
+    LAUNCH_INPUT_BODIES,
     MODEL_INPUT_BODIES,
+    AgentMessageBody,
     BackgroundResultBody,
     DecisionBody,
+    LaunchInputBody,
     MessageBody,
     NoticeBody,
     RunLaunch,
@@ -36,10 +39,13 @@ Delivery = Literal["immediate", "next_run"]
 """
 
 __all__ = [
+    "LAUNCH_INPUT_BODIES",
     "MODEL_INPUT_BODIES",
+    "AgentMessageBody",
     "BackgroundResultBody",
     "DecisionBody",
     "Delivery",
+    "LaunchInputBody",
     "MessageBody",
     "NoticeBody",
     "RunLaunch",
@@ -57,7 +63,8 @@ __all__ = [
 class TaskMessage:
     """一条队列消息；``id`` 是外部队列行 id，也是排队与已消费阶段共用的消息身份。
 
-    Run 内产生的提示只投进本次执行的 ``RunMailbox``，``id`` 为 ``None``、无需确认，随执行丢弃。
+    ``id`` 只在入队前为 ``None``；投进 ``RunMailbox`` 的都是外部队列行的副本。Run 内产生的提示不是
+    队列消息，见 ``RuntimeContext.notices``。
     ``kind`` 由 body 类型决定（经 :meth:`of` 构造），持久化时单独成列，读回时按它还原 body。
     """
 
