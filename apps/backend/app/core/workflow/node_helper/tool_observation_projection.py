@@ -13,7 +13,7 @@ from app.core.tool.execute.tool_terminal_projection import (
 )
 from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import TaskMessage, ToolImageBody, ToolResultBody
+from app.core.workflow.message_queue.task_message import ToolImageBody, ToolResultBody
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.message_metadata import ToolMessageMetadata
 
@@ -180,25 +180,22 @@ def to_tool_model_message(observation: ToolObservation) -> ChatCompletionToolMes
     }
 
 
-def post_tool_images(batch: ToolBatch) -> None:
-    """把本批成功观察带的图片投进 mailbox，下一次请求模型前由 prepare_input 写进 context。
+def write_tool_images(batch: ToolBatch) -> None:
+    """把本批成功观察带的图片直接写进 context：每个调用一条带图的 user 消息。
 
     必须在整批 tool 消息写完之后调用：assistant 的 tool_calls 与对应 tool 消息之间不能插入 user
-    消息。走 mailbox 而不是在这里直接写 context，复用「Run 内消息只进 mailbox」的同一通道与同一个
-    并入点（prepare_input），图片的写入时机与通知、后台结论一致。
+    消息。图片是调用结果的一部分，所以和 tool 消息一样在 observe 节点就地落库，不经 mailbox：经
+    mailbox 时，同一批里有工具要求挂起（或 Run 被取消、步数用完）就会在 prepare_input 之前随执行
+    丢弃，模型只剩一条「已附图片」的 tool 文本。
     """
     with_images = [o for o in batch.observations if o.status == "success" and o.images]
     if not with_images:
         return
-    mailbox = _runtime_context().mailbox
+    context = _message_context()
     for observation in with_images:
-        mailbox.post(
-            TaskMessage.of(
-                ToolImageBody(
-                    tool_call_id=observation.tool_call_id,
-                    tool_name=observation.tool_name,
-                    image_paths=list(observation.images),
-                )
-            )
-        )
-
+        message, metadata = ToolImageBody(
+            tool_call_id=observation.tool_call_id,
+            tool_name=observation.tool_name,
+            image_paths=list(observation.images),
+        ).render()
+        context.add_message(message, metadata=metadata, project_to_transport=False)
