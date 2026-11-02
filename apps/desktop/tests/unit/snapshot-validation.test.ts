@@ -4,6 +4,7 @@ import { parseHistoryPage, parseTransportState, TransportSnapshotValidationError
 import type { TransportMessagePart } from "@/lib/assistant/contract";
 import {
   activity,
+  agentMessage,
   assistantMessage,
   outcome,
   queuedMessage,
@@ -102,6 +103,17 @@ describe("Transport snapshot validation", () => {
   it("消息必须携带 runId 与 outcome 两个字段", () => {
     const message = { id: "1", role: "user", parts: [] };
     expect(() => parseTransportState({ ...transportState(), messages: [message] })).toThrow("messages[0]");
+  });
+
+  it("source 只允许出现在 user 消息上，字段固定", () => {
+    const agent = transportState({ messages: [agentMessage("1", 1)] });
+    expect(parseTransportState(agent)).toBe(agent);
+    const onAssistant = transportState({
+      messages: [{ ...assistantMessage("assistant-1", 1), source: { taskId: 1, name: "x" } }],
+    });
+    expect(() => parseTransportState(onAssistant)).toThrow("messages[0].source");
+    const extra = transportState({ messages: [{ ...agentMessage("1", 1), source: { taskId: 1, name: "x", kind: "agent" } as never }] });
+    expect(() => parseTransportState(extra)).toThrow("messages[0].source");
   });
 
   it("outcome 只允许出现在助手消息上，且状态必须是终态", () => {

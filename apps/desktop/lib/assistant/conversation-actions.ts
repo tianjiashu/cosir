@@ -1,31 +1,38 @@
-import { isTerminalRunStatus, type TransportState } from "@/lib/assistant/contract";
+import { isTerminalRunStatus, type TransportMessage, type TransportState } from "@/lib/assistant/contract";
 
 export type ComposerAction = "send" | "stop" | "cancelling" | "resume";
 
 /**
- * 返回当前 canonical snapshot 中最后一条已消费用户消息的 id；排队消息不计入。
+ * 返回当前 canonical snapshot 中最后一条已消费的 user 消息（含 Agent 消息）；排队消息不计入。
  *
  * 该判断只基于后端 snapshot，不读取 assistant-ui 的 optimistic message，
  * 因而不会让尚未落库的 pending command 获得编辑入口。
  */
-export function getLatestUserMessageId(state: Pick<TransportState, "messages"> | null | undefined): string | null {
+function latestUserMessage(state: Pick<TransportState, "messages"> | null | undefined): TransportMessage | null {
   if (!state || !Array.isArray(state.messages)) return null;
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
-    if (state.messages[index].role === "user") return state.messages[index].id;
+    if (state.messages[index].role === "user") return state.messages[index];
   }
   return null;
 }
 
+/** 最后一条已消费 user 消息（含 Agent 消息）的 id。 */
+export function getLatestUserMessageId(state: Pick<TransportState, "messages"> | null | undefined): string | null {
+  return latestUserMessage(state)?.id ?? null;
+}
+
 /**
  * 判断指定用户消息是否允许编辑重跑：后端只接受「Task 已停下」时编辑最新一条已消费用户消息，
- * 这里与之对齐以免暴露必然被拒的入口。排队中的消息另由 {@link isQueuedUserMessage} 判断。
+ * 这里与之对齐以免暴露必然被拒的入口。最新一条是 Agent 消息时没有可编辑的（后端同样拒绝：越过它
+ * 改更早的用户消息会把它那一轮一起撤回）。排队中的消息另由 {@link isQueuedUserMessage} 判断。
  */
 export function isEditableLatestUserMessage(
   state: TransportState | null | undefined,
   messageId: string,
 ): boolean {
   if (!state || !isTerminalRunStatus(state.activity?.status)) return false;
-  return getLatestUserMessageId(state) === messageId;
+  const latest = latestUserMessage(state);
+  return latest?.id === messageId && latest.source === null;
 }
 
 /**

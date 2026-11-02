@@ -16,11 +16,13 @@ import { BrowserTab, type EvaluateOutcome, type PageSnapshot } from "./browser-t
 import { browserPageWebPreferences, type BrowserSessionEvents } from "./browser-session";
 import { BrowserDownloads } from "./downloads";
 import { browserError } from "./errors";
-import type { ActResult } from "./page-input";
+import type { ActResult } from "./input/actions";
 import type { ActRequest, EvaluateRequest, LogsRequest, NavigateRequest, ScreenshotRequest, SnapshotRequest, TabRequest, TabsRequest } from "./params";
 import type { Emulation } from "./tab-emulation";
 import type { ConsoleEntry, LogPage, NetworkEntry, PageDigest } from "./tab-log";
 import { abortable } from "./abortable";
+import type { Outline } from "./snapshot/outline";
+import { changesView, snapshotView, type SnapshotView } from "./snapshot/views";
 import { isWebProtocol, urlProtocol } from "./web-url";
 
 /** 页面类结果（页面、动作、日志、执行 JS、截图）共用的页头：标签、地址、加载、主文档状态码与生效的模拟。线上形状见 `wire.ts`。 */
@@ -113,7 +115,7 @@ export class BrowserHost implements BrowserSessionEvents {
   }
 
   async snapshot(request: SnapshotRequest, signal: AbortSignal): Promise<PageResult> {
-    return this.operate(this.agentEntry(request), signal, async (tab) => this.result(tab, await tab.snapshot(request.fromLine)));
+    return this.operate(this.agentEntry(request), signal, async (tab) => this.result(tab, await tab.snapshot(), request.view));
   }
 
   /** 按序执行动作，无论停在哪一步都返回之后的快照（新快照带新 ref，模型能接着做）。 */
@@ -123,14 +125,16 @@ export class BrowserHost implements BrowserSessionEvents {
       const outcome = await tab.act(request.actions, scoped);
       // 在初始化中的标签上答完弹窗后，初始化会接着做完；读快照前等它（或页面又停住）。
       await this.usableTab(entry, scoped);
-      return { ...this.result(tab, await tab.snapshot()), ...outcome };
+      return { ...this.result(tab, await tab.snapshot(), { changes: true }), ...outcome };
     });
   }
 
   async screenshot(request: ScreenshotRequest, signal: AbortSignal): Promise<ScreenshotResult> {
-    return this.operate(this.agentEntry(request), signal, async (tab) => {
+    return this.operate(this.agentEntry(request), signal, async (tab, scoped) => {
       // JPEG：同样的视口，体积比 PNG 小得多，更不容易碰到附件的单图大小上限。
-      const image = await tab.screenshot("jpeg", { quality: 85, fullPage: request.fullPage });
+      const image = request.ref
+        ? await tab.elementScreenshot(request.ref, scoped)
+        : await tab.screenshot("jpeg", { quality: 85, fullPage: request.fullPage });
       return { ...this.head(tab), image };
     });
   }
@@ -567,16 +571,24 @@ export class BrowserHost implements BrowserSessionEvents {
     for (const listener of this.listeners) listener(state);
   }
 
-  /** 页面结果：页头、快照，以及「上次以来」——这里是它唯一的消费点。 */
-  private result(tab: BrowserTab, page: PageSnapshot): PageResult {
+  /**
+   * 页面结果：页头、按请求的视图呈现的快照，以及「上次以来」——这里是它唯一的消费点（日志的 `digest` 与快照的比对
+   * 基准 `deliver` 都在这里推进）。`changes`（act 之后）只给与上次结果相比的增量，比不了或变化太多时给整页。
+   */
+  private result(tab: BrowserTab, page: PageSnapshot, view: SnapshotView & { changes?: boolean } = {}): PageResult {
     return {
       ...this.head(tab),
-      snapshot: page.text,
-      frames: page.frames,
+      snapshot: page.outline ? this.snapshotText(tab, page.outline, view) : "",
+      frames: page.outline?.frames ?? 0,
       ...tab.log.digest(),
       otherTabs: this.tabsOf(tab.taskId).map(({ tab: other }) => other.tabId).filter((tabId) => tabId !== tab.tabId),
       dialog: page.dialog,
     };
+  }
+
+  private snapshotText(tab: BrowserTab, outline: Outline, { changes, ...view }: SnapshotView & { changes?: boolean }): string {
+    const previous = tab.deliver(outline);
+    return (changes && previous && changesView(previous, outline)) || snapshotView(outline, view);
   }
 }
 

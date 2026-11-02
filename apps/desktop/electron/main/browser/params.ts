@@ -7,6 +7,7 @@ import { isWebProtocol } from "./web-url";
 import toolArgsSchemas from "./contract/tool-args.schema.json";
 import type { BrowserNavigation, BrowserTabContext, BrowserTabLimits } from "../../shared/host-contract";
 import type { Emulation } from "./tab-emulation";
+import type { SnapshotView } from "./snapshot/views";
 import type { ConsoleLevel, LogQuery } from "./tab-log";
 
 /**
@@ -43,8 +44,9 @@ export type NavigateRequest = TabRequest & {
   /** 只含要改的项；`colorScheme: null` 表示取消模拟、跟随应用外观。 */
   emulation?: Partial<Emulation>;
 };
-export type SnapshotRequest = TabRequest & { fromLine: number };
-export type ScreenshotRequest = TabRequest & { fullPage: boolean };
+export type SnapshotRequest = TabRequest & { view: SnapshotView };
+/** 截哪里：视口、整页（`fullPage`），或单个元素（`ref`，与 `fullPage` 互斥，后端校验过）。 */
+export type ScreenshotRequest = TabRequest & { fullPage: boolean; ref?: string };
 export type TabsRequest = TabRequest & { action: "list" | "select" | "close" };
 export type LogsRequest = TabRequest & { query: LogQuery };
 export type EvaluateRequest = TabRequest & { expression: string };
@@ -52,16 +54,22 @@ export type EvaluateRequest = TabRequest & { expression: string };
 /** `ControlOrMeta` 在 macOS 上是 Meta、其他平台是 Control（与 Playwright 同名约定），模型不必知道宿主平台。 */
 export type Modifier = "Alt" | "Control" | "Meta" | "Shift" | "ControlOrMeta";
 
+/** 鼠标落点：快照里的元素（取中心），或视口坐标（CSS 像素，与视口截图的像素一致）。 */
+export type PointerTarget = { ref: string } | { x: number; y: number };
+
 export type PageAction =
-  | { type: "click"; ref: string }
-  | { type: "type"; ref: string; text: string; clear: boolean; submit: boolean }
-  | { type: "hover"; ref: string }
+  | { type: "click"; target: PointerTarget; button: "left" | "right"; clickCount: 1 | 2; modifiers: Modifier[] }
+  | { type: "hover"; target: PointerTarget }
+  | { type: "drag"; start: PointerTarget; end: PointerTarget }
+  | { type: "type"; ref: string; text: string; clear: boolean; submit: boolean; keyByKey: boolean }
   | { type: "press"; key: string; modifiers: Modifier[]; ref?: string }
   | { type: "select"; ref: string; values: string[] }
   /** 有方向：滚动整页，或（带 ref）滚动包含该元素的可滚动区域；只有 ref：把元素滚入视野。 */
   | { type: "scroll"; direction?: "up" | "down"; ref?: string }
   /** `text` 与 `textGone` 至多一个；三者至少一个。 */
   | { type: "wait_for"; text?: string; textGone?: string; seconds?: number }
+  /** 路径是后端解析好的本机绝对路径；省略 ref 即回答 Agent 的动作让页面打开的选文件框。 */
+  | { type: "upload"; paths: string[]; ref?: string }
   /** 回答待答的 JS 弹窗：指明 id，或省略而回答本批前面的动作弹出的那个；`text` 只对 prompt 有意义。 */
   | { type: "dialog"; accept: boolean; text?: string; id?: number };
 
@@ -83,12 +91,15 @@ export function parseNavigate(params: unknown): NavigateRequest {
 
 export function parseSnapshot(params: unknown): SnapshotRequest {
   const { request, args } = toolRequest("browser_snapshot", params);
-  return { ...request, fromLine: (args.from_line as number | null) ?? 1 };
+  const view: SnapshotView = { scope: args.scope as "page" | "viewport", fromLine: (args.from_line as number | null) ?? 1 };
+  const find = given(args.find as string | null);
+  return { ...request, view: find === undefined ? view : { ...view, find } };
 }
 
 export function parseScreenshot(params: unknown): ScreenshotRequest {
   const { request, args } = toolRequest("browser_screenshot", params);
-  return { ...request, fullPage: args.full_page as boolean };
+  const ref = given(args.ref as string | null);
+  return { ...request, fullPage: args.full_page as boolean, ...(ref ? { ref } : {}) };
 }
 
 export function parseTabs(params: unknown): TabsRequest {
@@ -145,16 +156,24 @@ function toolRequest(tool: ToolName, params: unknown): { request: TabRequest; ar
   return { request: { taskId: taskId(value.task_id), context: tabContext(value), ...(tab ? { tab } : {}) }, args };
 }
 
+/** 线上的鼠标落点：ref 与坐标恰好给了一种（后端校验过），另一种为 null。 */
+type WirePoint = { ref?: string | null; x?: number | null; y?: number | null };
+
 /** 线上的动作：蛇形字段名，每个字段都在、未填的为 null（按 schema 校验过）。 */
-type WireAction = {
+type WireAction = WirePoint & {
   type: PageAction["type"];
-  ref?: string | null;
+  button?: "left" | "right";
+  click_count?: 1 | 2;
+  start?: WirePoint;
+  end?: WirePoint;
   text?: string | null;
   clear?: boolean;
   submit?: boolean;
+  key_by_key?: boolean;
   key?: string;
   modifiers?: Modifier[] | null;
   values?: string[];
+  paths?: string[];
   direction?: "up" | "down" | null;
   text_gone?: string | null;
   seconds?: number | null;
@@ -166,10 +185,13 @@ type WireAction = {
 function toAction(action: WireAction): PageAction {
   switch (action.type) {
     case "click":
+      return { type: "click", target: pointer(action), button: action.button!, clickCount: action.click_count!, modifiers: action.modifiers ?? [] };
     case "hover":
-      return { type: action.type, ref: action.ref! };
+      return { type: "hover", target: pointer(action) };
+    case "drag":
+      return { type: "drag", start: pointer(action.start!), end: pointer(action.end!) };
     case "type":
-      return { type: "type", ref: action.ref!, text: action.text!, clear: action.clear!, submit: action.submit! };
+      return { type: "type", ref: action.ref!, text: action.text!, clear: action.clear!, submit: action.submit!, keyByKey: action.key_by_key! };
     case "press":
       return { type: "press", key: action.key!, modifiers: action.modifiers ?? [], ...(action.ref ? { ref: action.ref } : {}) };
     case "select":
@@ -180,7 +202,19 @@ function toAction(action: WireAction): PageAction {
       return { type: "wait_for", text: given(action.text), textGone: given(action.text_gone), seconds: given(action.seconds) };
     case "dialog":
       return { type: "dialog", accept: action.accept!, text: given(action.text), id: given(action.id) };
+    case "upload":
+      return { type: "upload", paths: action.paths!.map(absolutePath), ...(action.ref ? { ref: action.ref } : {}) };
   }
+}
+
+function pointer(point: WirePoint): PointerTarget {
+  return point.ref ? { ref: point.ref } : { x: point.x!, y: point.y! };
+}
+
+/** 本机文件路径由后端解析成绝对路径交来；相对路径会按宿主进程的工作目录解析成别的文件。 */
+function absolutePath(value: string): string {
+  if (!path.isAbsolute(value)) throw invalid(`upload paths must be absolute: ${value.slice(0, 200)}`);
+  return value;
 }
 
 /** 契约里 null 表示「未给」。 */

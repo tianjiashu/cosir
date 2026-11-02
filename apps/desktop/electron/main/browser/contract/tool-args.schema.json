@@ -1,24 +1,163 @@
 {
   "browser_act": {
     "$defs": {
-      "ClickAction": {
+      "BrowserPoint": {
         "additionalProperties": false,
         "properties": {
           "ref": {
-            "description": "Element ref such as e12 from a snapshot of the current page.",
-            "pattern": "^e\\d+$",
-            "title": "Ref",
+            "anyOf": [
+              {
+                "pattern": "^e\\d+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Element ref such as e12 from a snapshot of the current page; its center is used. Leave null when using x and y.",
+            "title": "Ref"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Viewport x in CSS pixels, the same as the pixels of a viewport screenshot. Use x and y instead of ref for spots without a ref, e.g. on a canvas or map.",
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Viewport y in CSS pixels; see x.",
+            "title": "Y"
+          }
+        },
+        "required": [
+          "ref",
+          "x",
+          "y"
+        ],
+        "title": "BrowserPoint",
+        "type": "object"
+      },
+      "ClickAction": {
+        "additionalProperties": false,
+        "properties": {
+          "button": {
+            "default": "left",
+            "description": "right opens the page's context menu.",
+            "enum": [
+              "left",
+              "right"
+            ],
+            "title": "Button",
             "type": "string"
+          },
+          "click_count": {
+            "default": 1,
+            "description": "2 for a double click, e.g. to select a word or open an item.",
+            "enum": [
+              1,
+              2
+            ],
+            "title": "Click Count",
+            "type": "integer"
+          },
+          "modifiers": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "Alt",
+                    "Control",
+                    "Meta",
+                    "Shift",
+                    "ControlOrMeta"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Keys held during the click, e.g. Shift to extend a selection or ControlOrMeta to add to it. ControlOrMeta is Cmd on macOS and Ctrl elsewhere.",
+            "title": "Modifiers"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "pattern": "^e\\d+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Element ref such as e12 from a snapshot of the current page; its center is used. Leave null when using x and y.",
+            "title": "Ref"
           },
           "type": {
             "const": "click",
             "title": "Type",
             "type": "string"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Viewport x in CSS pixels, the same as the pixels of a viewport screenshot. Use x and y instead of ref for spots without a ref, e.g. on a canvas or map.",
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Viewport y in CSS pixels; see x.",
+            "title": "Y"
           }
         },
         "required": [
+          "button",
+          "click_count",
+          "modifiers",
           "ref",
-          "type"
+          "type",
+          "x",
+          "y"
         ],
         "title": "ClickAction",
         "type": "object"
@@ -74,24 +213,87 @@
         "title": "DialogAction",
         "type": "object"
       },
-      "HoverAction": {
+      "DragAction": {
         "additionalProperties": false,
         "properties": {
-          "ref": {
-            "description": "Element to move the mouse over, e.g. to open a menu that shows on hover.",
-            "pattern": "^e\\d+$",
-            "title": "Ref",
-            "type": "string"
+          "end": {
+            "$ref": "#/$defs/BrowserPoint",
+            "description": "Where to release it."
+          },
+          "start": {
+            "$ref": "#/$defs/BrowserPoint",
+            "description": "Where to press the mouse button."
           },
           "type": {
-            "const": "hover",
+            "const": "drag",
             "title": "Type",
             "type": "string"
           }
         },
         "required": [
-          "ref",
+          "end",
+          "start",
           "type"
+        ],
+        "title": "DragAction",
+        "type": "object"
+      },
+      "HoverAction": {
+        "additionalProperties": false,
+        "properties": {
+          "ref": {
+            "anyOf": [
+              {
+                "pattern": "^e\\d+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Element to move the mouse over, e.g. to open a menu that shows on hover. Leave null when using x and y.",
+            "title": "Ref"
+          },
+          "type": {
+            "const": "hover",
+            "title": "Type",
+            "type": "string"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Viewport x in CSS pixels, the same as the pixels of a viewport screenshot. Use x and y instead of ref for spots without a ref, e.g. on a canvas or map.",
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Viewport y in CSS pixels; see x.",
+            "title": "Y"
+          }
+        },
+        "required": [
+          "ref",
+          "type",
+          "x",
+          "y"
         ],
         "title": "HoverAction",
         "type": "object"
@@ -271,6 +473,12 @@
             "title": "Clear",
             "type": "boolean"
           },
+          "key_by_key": {
+            "default": false,
+            "description": "Type one key at a time with key events instead of inserting the text at once, for fields that react to each keystroke (autocomplete, masked or code inputs). Slower; text up to 500 characters.",
+            "title": "Key By Key",
+            "type": "boolean"
+          },
           "ref": {
             "description": "Element ref such as e12 from a snapshot of the current page.",
             "pattern": "^e\\d+$",
@@ -297,12 +505,54 @@
         },
         "required": [
           "clear",
+          "key_by_key",
           "ref",
           "submit",
           "text",
           "type"
         ],
         "title": "TypeAction",
+        "type": "object"
+      },
+      "UploadAction": {
+        "additionalProperties": false,
+        "properties": {
+          "paths": {
+            "description": "Files to upload: paths relative to the workspace root, or absolute paths.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Paths",
+            "type": "array"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "pattern": "^e\\d+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The file input (input type=file) to fill. Leave null to answer the file chooser the page opened after your action, e.g. click an Upload button first in the same call.",
+            "title": "Ref"
+          },
+          "type": {
+            "const": "upload",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "paths",
+          "ref",
+          "type"
+        ],
+        "title": "UploadAction",
         "type": "object"
       },
       "WaitForAction": {
@@ -380,6 +630,9 @@
               "$ref": "#/$defs/HoverAction"
             },
             {
+              "$ref": "#/$defs/DragAction"
+            },
+            {
               "$ref": "#/$defs/TypeAction"
             },
             {
@@ -396,6 +649,9 @@
             },
             {
               "$ref": "#/$defs/DialogAction"
+            },
+            {
+              "$ref": "#/$defs/UploadAction"
             }
           ]
         },
@@ -699,10 +955,10 @@
         "title": "Full Page",
         "type": "boolean"
       },
-      "tab": {
+      "ref": {
         "anyOf": [
           {
-            "pattern": "^t\\d+$",
+            "pattern": "^e\\d+$",
             "type": "string"
           },
           {
@@ -710,33 +966,8 @@
           }
         ],
         "default": null,
-        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
-        "title": "Tab"
-      }
-    },
-    "required": [
-      "full_page",
-      "tab"
-    ],
-    "title": "BrowserScreenshotArgs",
-    "type": "object"
-  },
-  "browser_snapshot": {
-    "additionalProperties": false,
-    "properties": {
-      "from_line": {
-        "anyOf": [
-          {
-            "minimum": 1,
-            "type": "integer"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "default": null,
-        "description": "Line to start from when a long snapshot was cut off; the cut-off note gives the number. Pass null to read from the top.",
-        "title": "From Line"
+        "description": "Capture only this element (with a small margin; small ones are enlarged), e.g. an icon, chart or captcha. Null for the viewport or the whole page.",
+        "title": "Ref"
       },
       "tab": {
         "anyOf": [
@@ -754,7 +985,74 @@
       }
     },
     "required": [
+      "full_page",
+      "ref",
+      "tab"
+    ],
+    "title": "BrowserScreenshotArgs",
+    "type": "object"
+  },
+  "browser_snapshot": {
+    "additionalProperties": false,
+    "properties": {
+      "find": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Only lines containing this text (ignoring case), with the containers around them, e.g. a button label or a product name. Null for no filter.",
+        "title": "Find"
+      },
+      "from_line": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Line to start from when a long snapshot was cut off; the cut-off note gives the number. Pass null to read from the top.",
+        "title": "From Line"
+      },
+      "scope": {
+        "default": "page",
+        "description": "viewport to read only what is on screen now (with the containers around it), e.g. after scrolling; page for the whole page.",
+        "enum": [
+          "page",
+          "viewport"
+        ],
+        "title": "Scope",
+        "type": "string"
+      },
+      "tab": {
+        "anyOf": [
+          {
+            "pattern": "^t\\d+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "title": "Tab"
+      }
+    },
+    "required": [
+      "find",
       "from_line",
+      "scope",
       "tab"
     ],
     "title": "BrowserSnapshotArgs",

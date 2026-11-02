@@ -5,15 +5,20 @@ import type { HostMethodError } from "../host-link/methods";
 import { browserPageWebPreferences } from "./browser-session";
 import { CdpSession } from "./cdp-session";
 import { browserError } from "./errors";
-import { runActions, type ActResult } from "./page-input";
+import { runActions, type ActResult } from "./input/actions";
+import { box, element, isMissingNode } from "./input/element";
+import type { FileChooser, PageSession } from "./input/session";
 import type { BrowserDialog, BrowserDialogAnswer, BrowserNavigation, BrowserTabCreator, BrowserTabSummary } from "../../shared/host-contract";
 import { BROWSER_PAGE_DIALOG_CHANNEL, type BrowserPageDialogRequest } from "../../shared/browser-page-bridge";
 import type { PageAction } from "./params";
+import { captureScreenshot, type CaptureOptions } from "./page-capture";
 import { PageDialogs } from "./page-dialogs";
 import { evaluateExpression, type Evaluation } from "./page-evaluate";
 import { ERR_ABORTED, untilStopped, waitForLoad } from "./page-loading";
-import { RefRegistry } from "./ref-registry";
-import { formatSnapshot, type AXNode, type FormattedSnapshot } from "./snapshot-format";
+import { PageFrames } from "./page-frames";
+import { RefRegistry, type PageNode } from "./ref-registry";
+import { buildOutline, type Outline } from "./snapshot/outline";
+import { readSnapshot } from "./snapshot/read";
 import { TabEmulation, type Applied, type Emulation } from "./tab-emulation";
 import { CANCELED_FAILURE, TabLog, type ConsoleLevel } from "./tab-log";
 import { isWebProtocol, urlProtocol } from "./web-url";
@@ -28,17 +33,20 @@ const ACTION_SETTLE_TIMEOUT_MS = 15_000;
 const USER_ACTIVE_WINDOW_MS = 2_000;
 /** 动作结束后多久内到达的输入事件仍算 Agent 的（合成按键的事件可能稍晚才派发）。 */
 const AGENT_INPUT_GRACE_MS = 500;
-/** 整页截图的最大高度（CSS 像素）：再长的页面模型也看不清，按需滚动后再截。 */
-const FULL_PAGE_MAX_HEIGHT = 4_000;
 /** 网络请求的响应体留在渲染进程里的上限：日志只记元数据、从不取响应体，给个最小值免得白占内存。 */
 const NETWORK_BUFFER_BYTES = 1024;
 /** 开发期 Electron 往每个页面的 console 注入的安全警告：与网页无关，不进日志。 */
 const ELECTRON_NOISE = /^%cElectron Security Warning/;
 
-export type PageSnapshot = FormattedSnapshot & {
-  /** 本标签待答的弹窗；非空时页面停着，`text` 为空（读不到无障碍树）。 */
+/** 读到的页面：快照大纲（怎么呈现由拿结果的一方选视图，见 `snapshot/views.ts`），或挡住页面的弹窗。 */
+export type PageSnapshot = {
+  /** 本标签有待答弹窗时为 null：页面停着，读不到无障碍树。 */
+  outline: Outline | null;
   dialog: BrowserDialog | null;
 };
+
+/** 上一次交给 Agent 的大纲，及它属于第几个文档：增量快照的比对基准（见 `BrowserTab.deliver`）。 */
+type Delivered = { document: number; outline: Outline };
 
 /** 执行 JS 的结果：值或脚本错误（见 `page-evaluate.ts`），或脚本弹出的弹窗（此时页面停住，值与错误都为空）。 */
 export type EvaluateOutcome = Evaluation & { dialog: BrowserDialog | null };
@@ -110,6 +118,7 @@ export class BrowserTab {
   private readonly events: TabEvents;
   private readonly session: CdpSession;
   private readonly refs = new RefRegistry();
+  private readonly frames: PageFrames;
   private readonly dialogs = new PageDialogs();
   private readonly emulation: TabEmulation;
   /** 最近一次真实用户输入的时间（毫秒）；`USER_ACTIVE` 据此判断。 */
@@ -118,7 +127,15 @@ export class BrowserTab {
   private agentInputUntil = 0;
   /** 当前主文档的 HTTP 状态码（`did-navigate`）；about:blank 等没有时为 null。 */
   private documentStatus: number | null = null;
-  /** 有一次主框架跨文档导航开始了、还没换上文档（见 `did-fail-load` 的说明）。 */
+  /** 主框架换过几次文档：增量快照只在同一文档里比对。 */
+  private document = 0;
+  private delivered: Delivered | null = null;
+  /** Agent 的动作让页面打开、等 `upload` 回答的选文件框；换文档或页面再开一个时作废 / 换掉。 */
+  private fileChooser: FileChooser | null = null;
+  /**
+   * 有一次主框架跨文档导航开始了、还没落定（见 `did-fail-load` 的说明）。落定只有两种：换上文档
+   * （`documentChanged`），或加载状态结束时仍没换（`did-stop-loading`：转成下载、204、被拦下）。
+   */
   private navigating = false;
 
   constructor(options: TabOptions) {
@@ -137,6 +154,7 @@ export class BrowserTab {
     this.session = new CdpSession(this.contents, events.pausedBy, (reason) => {
       logDesktopEvent("WARNING", "browser", "browser_debugger_detached", { tab_id: tabId, reason });
     });
+    this.frames = new PageFrames(this.session, tabId);
     this.emulation = new TabEmulation(
       (method, params, sendOptions) => this.session.send(method, params, sendOptions),
       (error) => logDesktopEvent("INFO", "browser", "browser_viewport_sync_failed", { tab_id: tabId, error: errorText(error) }),
@@ -163,6 +181,12 @@ export class BrowserTab {
     contents.on("did-navigate", (_event, _url, httpResponseCode) => this.documentChanged(httpResponseCode > 0 ? httpResponseCode : null));
     contents.on("did-fail-load", (_event, code, _description, _url, isMainFrame) => {
       if (isMainFrame && code !== ERR_ABORTED && this.navigating) this.documentChanged(null);
+    });
+    // 加载状态结束时导航还没换上文档：浏览器放弃了它，页面还是原来的（不论是谁发起的：Agent、用户或页面自己）。
+    contents.on("did-stop-loading", () => {
+      if (!this.navigating) return;
+      this.navigating = false;
+      this.log.navigationAbandoned();
     });
     const changed = () => events.onChange();
     contents.on("did-navigate", changed);
@@ -222,6 +246,7 @@ export class BrowserTab {
     await this.session.send("Page.enable", {}, { signal });
     await this.session.send("Page.setInterceptFileChooserDialog", { enabled: true }, { signal });
     await this.session.send("Network.enable", { maxTotalBufferSize: NETWORK_BUFFER_BYTES, maxResourceBufferSize: NETWORK_BUFFER_BYTES }, { signal });
+    await this.frames.start(signal);
     // 没挂过窗口的视图收不到 CDP 合成的鼠标事件（实测：点击不触发、每个事件空等约 1.8 秒），开焦点模拟后正常。
     // Playwright 接管页面时自己会开它，所以桌面 E2E 测不出缺了这一步（见 browser-initialization 单测）。
     await this.session.send("Emulation.setFocusEmulationEnabled", { enabled: true }, { signal });
@@ -232,7 +257,8 @@ export class BrowserTab {
   }
 
   /**
-   * 导航并等主框架加载完成；失败带回 Chromium 的 `ERR_*` 说明。顺序：待答的弹窗按取消处理（页面停着无法跳转，
+   * 导航并等它落定（见 `waitForLoad`）；失败带回 Chromium 的 `ERR_*` 说明，没有打开新页面时留一条备注、按成功返回
+   * 原页面（模型据此知道去哪里找下载，而不是当作失败重试、再下一次）。顺序：待答的弹窗按取消处理（页面停着无法跳转，
    * 也设不了模拟）→ 设上要求改的模拟（只改给了的项，生效后才加载，页面按新视口布局）→ 加载。
    */
   async navigate(target: BrowserNavigation, signal: AbortSignal, emulation?: Partial<Emulation>): Promise<void> {
@@ -263,7 +289,10 @@ export class BrowserTab {
     } else if (target.action === "back") history.goBack();
     else if (target.action === "forward") history.goForward();
     else contents.reload();
-    await loaded;
+    if (!await loaded) {
+      const asked = "url" in target ? `opening ${target.url.slice(0, 200)}` : `going ${target.action === "reload" ? "to reload" : target.action}`;
+      this.log.note(`${asked} did not open a new page (it may have started a download, returned no content or been blocked); the tab stays on ${contents.getURL().slice(0, 200)}`);
+    }
     await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
   }
 
@@ -272,16 +301,26 @@ export class BrowserTab {
    * 「上次以来」由拿到页面结果的一方显式取（`log.digest`）。
    * 本标签有待答弹窗时不读树（页面停着，读不到），只报弹窗；被同进程别的标签的弹窗停住时以 `DIALOG_OPEN` 失败。
    */
-  async snapshot(fromLine = 1): Promise<PageSnapshot> {
+  /**
+   * 这次读到的大纲交给了 Agent：换成新的比对基准，返回上一次交的（换过文档时为 null，跨文档比对没有意义）。
+   * 只由组装页面结果的一方调用（`BrowserHost.result`，与日志的「上次以来」同一个消费点）；被弹窗挡住、没读到大纲时
+   * 基准不变。
+   */
+  deliver(outline: Outline): Outline | null {
+    const previous = this.delivered;
+    this.delivered = { document: this.document, outline };
+    return previous?.document === this.document ? previous.outline : null;
+  }
+
+  async snapshot(): Promise<PageSnapshot> {
     this.assertAlive();
-    const formatted = this.dialogs.current
-      ? { text: "", frames: 0 }
-      : formatSnapshot((await this.session.send<{ nodes: AXNode[] }>("Accessibility.getFullAXTree")).nodes, this.refs, { fromLine });
-    return { ...formatted, dialog: this.dialogs.current };
+    if (this.dialogs.current) return { outline: null, dialog: this.dialogs.current };
+    const document = await readSnapshot(this.session, this.frames);
+    return { outline: buildOutline(document, this.refs, { pageUrl: this.contents.getURL() }), dialog: this.dialogs.current };
   }
 
   /**
-   * 在页面上按序执行动作（见 `page-input.ts`）。用户刚在这个页面上操作过时整批拒绝（`USER_ACTIVE`）：
+   * 在页面上按序执行动作（见 `input/actions.ts`）。用户刚在这个页面上操作过时整批拒绝（`USER_ACTIVE`）：
    * 与终端「用户输入从不被拒、Agent 等用户停手」同一原则。
    */
   async act(actions: readonly PageAction[], signal: AbortSignal): Promise<ActResult> {
@@ -291,18 +330,27 @@ export class BrowserTab {
     }
     this.agentInputUntil = Number.POSITIVE_INFINITY;
     try {
-      return await runActions({
-        cdp: (method, params) => this.session.send(method, params),
-        resolveRef: (ref) => this.resolveRef(ref),
-        settle: () => this.settle(signal),
-        toInput: (point) => this.emulation.toInput(point),
-        paused: () => this.events.pausedBy(),
-        dialog: () => this.dialogs.current,
-        answerDialog: (id, answer) => this.answerDialog(id, answer, "agent"),
-      }, actions, signal);
+      return await runActions(this.pageSession(signal), actions, signal);
     } finally {
       this.agentInputUntil = Date.now() + AGENT_INPUT_GRACE_MS;
     }
+  }
+
+  /** 交给 `input/` 模块的页面能力：动作与元素截图共用，元素的定位与几何只有一套。 */
+  private pageSession(signal: AbortSignal): PageSession {
+    return {
+      cdp: (method, params, options) => this.session.send(method, params, options),
+      on: (method, handler) => this.session.on(method, handler),
+      resolveRef: (ref) => this.resolveRef(ref),
+      frameOffset: (sessionId) => this.frames.offset(sessionId),
+      settle: () => this.settle(signal),
+      toInput: (point) => this.emulation.toInput(point),
+      viewport: () => this.emulation.current,
+      paused: () => this.events.pausedBy(),
+      dialog: () => this.dialogs.current,
+      answerDialog: (id, answer) => this.answerDialog(id, answer, "agent"),
+      fileChooser: () => this.fileChooser,
+    };
   }
 
   /**
@@ -350,47 +398,37 @@ export class BrowserTab {
     this.session.interrupt(reason);
   }
 
-  /** ref → CDP `backendNodeId`；从没登记过（含导航前的 ref）报 `REF_STALE`。节点是否还在页面上由 `page-input.ts` 确认。 */
-  resolveRef(ref: string): number {
-    const backendNodeId = this.refs.resolve(ref);
-    if (backendNodeId === undefined) {
-      throw browserError("REF_STALE", `ref ${ref} is not on the current page; take a new snapshot`);
-    }
-    return backendNodeId;
+  /** ref → 节点；从没登记过（含导航前的 ref）报 `REF_STALE`。节点是否还在页面上由 `input/element.ts` 确认。 */
+  resolveRef(ref: string): PageNode {
+    const node = this.refs.resolve(ref);
+    if (!node) throw browserError("REF_STALE", `ref ${ref} is not on the current page; take a new snapshot`);
+    return node;
   }
 
-  /**
-   * 截图，返回 data URL。用 CDP 而不是 `capturePage`：视图摘离窗口时后者不可用（§8）。
-   *
-   * 按 CSS 像素出图（`clip.scale = 1 / devicePixelRatio`）：视口多大就是多大的图，不随屏幕倍率翻倍——模型按
-   * 分辨率计费，多出来的像素看不出更多东西。`fullPage` 截整页，高度封顶。`devicePixels` 按屏幕像素出图、
-   * `timeoutMs` 缩短每条命令的时限，都只给浏览器面板的冻结帧用。
-   */
-  async screenshot(format: "jpeg" | "png", options: { quality?: number; fullPage?: boolean; devicePixels?: boolean; timeoutMs?: number } = {}): Promise<string> {
+  async screenshot(format: "jpeg" | "png", options: CaptureOptions = {}): Promise<string> {
     this.assertAlive();
-    const timing = { timeoutMs: options.timeoutMs };
-    const metrics = await this.session.send<{
-      cssVisualViewport: { pageX: number; pageY: number; clientWidth: number; clientHeight: number };
-      cssContentSize: { width: number; height: number };
-    }>("Page.getLayoutMetrics", {}, timing);
-    const { result } = await this.session.send<{ result: { value: number } }>("Runtime.evaluate", { expression: "devicePixelRatio", returnByValue: true }, timing);
-    const viewport = metrics.cssVisualViewport;
-    const clip = options.fullPage
-      ? { x: 0, y: 0, width: viewport.clientWidth, height: Math.min(metrics.cssContentSize.height, FULL_PAGE_MAX_HEIGHT) }
-      : { x: viewport.pageX, y: viewport.pageY, width: viewport.clientWidth, height: viewport.clientHeight };
-    const { data } = await this.session.send<{ data: string }>("Page.captureScreenshot", {
-      format,
-      ...(options.quality === undefined ? {} : { quality: options.quality }),
-      clip: { ...clip, scale: options.devicePixels ? 1 : 1 / (result.value || 1) },
-      captureBeyondViewport: Boolean(options.fullPage),
-    }, timing);
-    return `data:image/${format};base64,${data}`;
+    return captureScreenshot(this.session, format, options);
+  }
+
+  /** 只截一个元素（先滚入视野再量，与动作取落点同一套几何）；元素已不在、没有尺寸时报 `REF_STALE` / `NOT_INTERACTABLE`。 */
+  async elementScreenshot(ref: string, signal: AbortSignal): Promise<string> {
+    this.assertAlive();
+    const session = this.pageSession(signal);
+    try {
+      const area = await box(session, await element(session, ref));
+      return await captureScreenshot(this.session, "jpeg", { quality: 85, element: area });
+    } catch (error) {
+      if (isMissingNode(error)) throw browserError("REF_STALE", `the element ${ref} is no longer on the page; use a ref from the latest snapshot`);
+      throw error;
+    }
   }
 
   /** 主框架换了文档：旧 ref 作废、状态码换成新文档的（错误页为 null）、日志的「当前页面」从这里起算。 */
   private documentChanged(status: number | null): void {
     this.navigating = false;
     this.refs.clear();
+    this.document += 1;
+    this.fileChooser = null;
     this.documentStatus = status;
     this.log.pageStarted();
   }
@@ -448,10 +486,12 @@ export class BrowserTab {
     if (this.contents.isCrashed()) throw browserError("PAGE_CRASHED", "the page crashed");
   }
 
-  /** CDP 事件只在这里订阅：选文件框、绕过 preload 的原生弹窗、网络请求的生命周期。 */
+  /** CDP 事件只在这里订阅：选文件框、绕过 preload 的原生弹窗、网络请求的生命周期、跨进程子框架的附加与分离。 */
   private subscribeCdp(): void {
     const session = this.session;
-    session.on("Page.fileChooserOpened", (params: { backendNodeId?: number; mode: string }) => this.fileChooserOpened(params));
+    session.on("Target.attachedToTarget", (params: Parameters<PageFrames["attached"]>[0], sessionId) => this.frames.attached(params, sessionId));
+    session.on("Target.detachedFromTarget", (params: { sessionId: string }) => this.frames.detached(params));
+    session.on("Page.fileChooserOpened", (params: { backendNodeId?: number; mode: string }, sessionId) => this.fileChooserOpened(params, sessionId));
     // 走到 Electron 原生弹窗说明页面绕过了网页 preload（例如框架还没跑 preload），已被 `disableDialogs` 按取消处理。
     session.on("Page.javascriptDialogOpening", ({ type }: { type: string }) => {
       this.log.note(`the page showed a ${type} dialog that could not be held for an answer; it was dismissed automatically`);
@@ -520,18 +560,26 @@ export class BrowserTab {
   }
 
   /**
-   * 选文件框按触发者分流：只有用户能点到的（标签挂在面板上）且不在 Agent 动作期间触发的，才弹系统选择框把
-   * 选中的文件填进去；其余（Agent 触发、后台标签上页面自己触发）拦下并告知（Agent 上传尚未支持）。只看
-   * 「不在 Agent 动作期间」不够：Agent 的点击给了页面约 5 秒的用户激活，页面可以在宽限之后才触发选文件框。
+   * 选文件框按触发者分流：Agent 动作期间（含其后的宽限）打开的，记下等 `upload` 回答（`input/upload.ts`），并给 Agent
+   * 留备注；只有用户能点到的（标签挂在面板上）其余选文件框才弹系统选择框把选中的文件填进去；后台标签上页面自己
+   * 打开的拦下并告知。只看「不在 Agent 动作期间」不够：Agent 的点击给了页面约 5 秒的用户激活，页面可以在宽限之后
+   * 才打开选文件框，这时它挂在面板上就交给用户。
    */
-  private fileChooserOpened({ backendNodeId, mode }: { backendNodeId?: number; mode: string }): void {
-    if (!this.emulation.isShown || Date.now() < this.agentInputUntil || backendNodeId === undefined) {
-      this.log.note("the page tried to open a file chooser; file uploads are not supported, so it was blocked");
+  private fileChooserOpened({ backendNodeId, mode }: { backendNodeId?: number; mode: string }, sessionId: string | undefined): void {
+    const multiple = mode === "selectMultiple";
+    if (backendNodeId !== undefined && Date.now() < this.agentInputUntil) {
+      this.fileChooser = { node: { sessionId, backendNodeId }, multiple };
+      this.log.note(`the page opened a file chooser${multiple ? " for several files" : ""}; answer it with an upload action without a ref`);
+      logDesktopEvent("INFO", "browser", "browser_file_chooser_for_agent", { tab_id: this.tabId, task_id: this.taskId, multiple });
+      return;
+    }
+    if (!this.emulation.isShown || backendNodeId === undefined) {
+      this.log.note("the page opened a file chooser on its own; it was blocked");
       logDesktopEvent("INFO", "browser", "browser_file_chooser_blocked", { tab_id: this.tabId, task_id: this.taskId });
       return;
     }
-    this.events.chooseFiles(mode === "selectMultiple").then(
-      (files) => (files?.length ? this.session.send("DOM.setFileInputFiles", { files, backendNodeId }) : undefined),
+    this.events.chooseFiles(multiple).then(
+      (files) => (files?.length ? this.session.send("DOM.setFileInputFiles", { files, backendNodeId }, { sessionId }) : undefined),
     ).catch((error: unknown) => {
       logDesktopEvent("WARNING", "browser", "browser_file_chooser_failed", { tab_id: this.tabId, error: errorText(error) });
     });

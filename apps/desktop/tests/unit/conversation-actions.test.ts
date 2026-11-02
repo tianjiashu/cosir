@@ -8,7 +8,7 @@ import {
   isQueuedUserMessage,
   canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
-import { activity, assistantMessage, queuedMessage, transportState, userMessage } from "./transport-fixtures";
+import { activity, agentMessage, assistantMessage, queuedMessage, transportState, userMessage } from "./transport-fixtures";
 
 describe("conversation actions", () => {
   it("only exposes the last canonical user message as editable", () => {
@@ -30,6 +30,16 @@ describe("conversation actions", () => {
       expect(isEditableLatestUserMessage({ ...snapshot, activity: activity(2, status) }, "u2")).toBe(false);
     }
     expect(isEditableLatestUserMessage({ ...snapshot, activity: null }, "u2")).toBe(false);
+  });
+
+  it("最新一条是 Agent 消息时没有可编辑的消息：它不可编辑，也不能越过它改更早的用户消息", () => {
+    const snapshot = transportState({
+      messages: [userMessage("u1", 1), assistantMessage("assistant-u1", 1), agentMessage("a2", 2)],
+      activity: activity(2, "completed"),
+    });
+    expect(isEditableLatestUserMessage(snapshot, "a2")).toBe(false);
+    expect(isEditableLatestUserMessage(snapshot, "u1")).toBe(false);
+    expect(editBlockedReason(snapshot, "u1")).not.toBeNull();
   });
 
   it("allows a cancelled or failed activity to resume", () => {

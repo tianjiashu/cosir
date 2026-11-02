@@ -317,7 +317,7 @@ function validateMessages(value: unknown, path: string, ids: Set<string>): void 
   value.forEach((rawMessage, index) => {
     const messagePath = `${path}[${index}]`;
     const message = requireRecord(rawMessage, messagePath);
-    requireExactKeys(message, ["id", "role", "parts", "runId", "outcome"], messagePath);
+    requireExactKeys(message, ["id", "role", "parts", "runId", "outcome", "source"], messagePath);
     validateMessageBody(message, messagePath, ids);
     if (requireNullableNonNegativeInteger(message.runId, `${messagePath}.runId`) === null) {
       throw new TransportSnapshotValidationError(`${messagePath}.runId`, "非负整数");
@@ -325,6 +325,15 @@ function validateMessages(value: unknown, path: string, ids: Set<string>): void 
     if (message.outcome !== null) {
       if (message.role !== "assistant") throw new TransportSnapshotValidationError(`${messagePath}.outcome`, "user 消息上为 null");
       validateOutcome(message.outcome, `${messagePath}.outcome`);
+    }
+    if (message.source !== null) {
+      if (message.role !== "user") throw new TransportSnapshotValidationError(`${messagePath}.source`, "assistant 消息上为 null");
+      const source = requireRecord(message.source, `${messagePath}.source`);
+      requireExactKeys(source, ["taskId", "name"], `${messagePath}.source`);
+      if (requireNullableNonNegativeInteger(source.taskId, `${messagePath}.source.taskId`) === null) {
+        throw new TransportSnapshotValidationError(`${messagePath}.source.taskId`, "非负整数");
+      }
+      requireString(source.name, `${messagePath}.source.name`);
     }
   });
 }

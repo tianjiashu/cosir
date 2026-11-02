@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import type { BrowserDialog, BrowserDialogAnswer } from "@/electron/shared/host-contract";
 import { HostMethodError } from "@/electron/main/host-link/methods";
-import { runActions, type PageSession } from "@/electron/main/browser/page-input";
+import { runActions } from "@/electron/main/browser/input/actions";
+import type { FileChooser, PageSession } from "@/electron/main/browser/input/session";
 import { parseAct, parseDropTasks, parseNavigate, parseSnapshot, type PageAction } from "@/electron/main/browser/params";
 import { RefRegistry } from "@/electron/main/browser/ref-registry";
-import { formatSnapshot, type AXNode } from "@/electron/main/browser/snapshot-format";
+import type { AXNode, SnapshotDocument } from "@/electron/main/browser/snapshot/document";
+import { documentLayout, frameRegion, pointerRoots, rootRegion, visibleNodes, type DomSnapshot } from "@/electron/main/browser/snapshot/layout";
+import { buildOutline } from "@/electron/main/browser/snapshot/outline";
+import { changesView, snapshotView } from "@/electron/main/browser/snapshot/views";
 
 
 function codeOf(run: () => unknown): string {
@@ -22,9 +26,10 @@ describe("params", () => {
   const base = { task_id: 7, limits: { per_task: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
   // 后端照 model_dump() 原样发送：参数模型的每个字段都在，未填的为 null（导出的 schema 按这个形状校验）。
   const navigate = (args: Record<string, unknown>) => ({ ...base, url: null, action: null, tab: null, new_tab: false, viewport: null, color_scheme: null, ...args });
-  const snapshot = (args: Record<string, unknown>) => ({ ...base, tab: null, from_line: null, ...args });
+  const snapshot = (args: Record<string, unknown>) => ({ ...base, tab: null, scope: "page", find: null, from_line: null, ...args });
   const wire = {
-    hover: (ref: string) => ({ type: "hover", ref }),
+    hover: (ref: string) => ({ type: "hover", ref, x: null, y: null }),
+    click: (args: Record<string, unknown>) => ({ type: "click", ref: null, x: null, y: null, button: "left", click_count: 1, modifiers: null, ...args }),
     press: (args: Record<string, unknown>) => ({ type: "press", modifiers: null, ref: null, ...args }),
     scroll: (args: Record<string, unknown>) => ({ type: "scroll", direction: null, ref: null, ...args }),
     waitFor: (args: Record<string, unknown>) => ({ type: "wait_for", text: null, text_gone: null, seconds: null, ...args }),
@@ -42,11 +47,11 @@ describe("params", () => {
       .toEqual({ width: 390, height: 844, mobile: true, colorScheme: null });
     expect(parseNavigate(navigate({ action: "reload", color_scheme: "dark" })).emulation).toEqual({ colorScheme: "dark" });
     expect(parseSnapshot(snapshot({}))).toEqual({
-      taskId: 7, fromLine: 1, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+      taskId: 7, view: { scope: "page", fromLine: 1 }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
     });
-    expect(parseSnapshot(snapshot({ from_line: 40 }))).toMatchObject({ fromLine: 40 });
+    expect(parseSnapshot(snapshot({ from_line: 40, scope: "viewport", find: "Buy" }))).toMatchObject({ view: { scope: "viewport", find: "Buy", fromLine: 40 } });
     // 每个请求都带上下文（宿主据此刷新上限）；参数模型的字段一个都不能少。
-    expect(codeOf(() => parseSnapshot({ task_id: 7, tab: null, from_line: null }))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseSnapshot({ task_id: 7, tab: null, scope: "page", find: null, from_line: null }))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseSnapshot({ ...base, tab: null }))).toBe("INVALID_PARAMS");
     expect(parseDropTasks({ task_ids: [1, 2] })).toEqual([1, 2]);
   });
@@ -67,6 +72,8 @@ describe("params", () => {
   it("maps the wire actions, turning null into unset", () => {
     const { actions } = parseAct(act(
       wire.hover("e3"),
+      wire.click({ x: 12.5, y: 40, button: "right", click_count: 2, modifiers: ["Shift"] }),
+      { type: "drag", start: { ref: "e1", x: null, y: null }, end: { ref: null, x: 3, y: 4 } },
       wire.press({ key: "k", modifiers: ["ControlOrMeta"], ref: "e4" }),
       wire.press({ key: "Enter" }),
       wire.scroll({ direction: "down", ref: "e5" }),
@@ -76,7 +83,9 @@ describe("params", () => {
       wire.dialog({ accept: true, text: "Ada", id: 4 }),
     ));
     expect(actions).toEqual([
-      { type: "hover", ref: "e3" },
+      { type: "hover", target: { ref: "e3" } },
+      { type: "click", target: { x: 12.5, y: 40 }, button: "right", clickCount: 2, modifiers: ["Shift"] },
+      { type: "drag", start: { ref: "e1" }, end: { x: 3, y: 4 } },
       { type: "press", key: "k", modifiers: ["ControlOrMeta"], ref: "e4" },
       { type: "press", key: "Enter", modifiers: [] },
       { type: "scroll", direction: "down", ref: "e5" },
@@ -98,11 +107,25 @@ describe("params", () => {
     expect(codeOf(one(wire.dialog({ accept: true, text: 3 })))).toBe("INVALID_PARAMS");
     expect(codeOf(one(wire.dialog({ accept: true, id: 0 })))).toBe("INVALID_PARAMS");
     expect(codeOf(one({ type: "hover" }))).toBe("INVALID_PARAMS");
+    expect(codeOf(one(wire.click({ x: -1, y: 0 })))).toBe("INVALID_PARAMS");
+    expect(codeOf(one(wire.click({ ref: "e1", button: "middle" })))).toBe("INVALID_PARAMS");
+    expect(codeOf(one({ type: "upload", paths: ["report.pdf"], ref: null }))).toBe("INVALID_PARAMS");
   });
 });
 
 function node(nodeId: string, role: string, extra: Partial<AXNode> = {}): AXNode {
   return { nodeId, role: { value: role }, ...extra };
+}
+
+/** 大纲 + 整页视图：快照文本与没展开的子框架数。 */
+function formatSnapshot(document: SnapshotDocument, refs: RefRegistry, options: { fromLine?: number; budget?: number; pageUrl?: string } = {}) {
+  const outline = buildOutline(document, refs, { pageUrl: options.pageUrl });
+  return { text: snapshotView(outline, options), frames: outline.frames };
+}
+
+/** 一份文档的读取结果（没有 pointer 元素、没有视口内的节点、没有展开的子框架，除非另给）。 */
+function doc(nodes: AXNode[], extra: Partial<SnapshotDocument> = {}): SnapshotDocument {
+  return { nodes, pointer: new Set(), inView: new Set(), frames: new Map(), ...extra };
 }
 
 describe("formatSnapshot", () => {
@@ -120,7 +143,7 @@ describe("formatSnapshot", () => {
 
   it("gives refs only to interactive nodes and folds noise", () => {
     const refs = new RefRegistry();
-    const snapshot = formatSnapshot(tree, refs);
+    const snapshot = formatSnapshot(doc(tree), refs);
     expect(snapshot.text).toBe([
       "- heading \"Welcome\" [level=1]",
       "  - text \"Welcome\"",
@@ -129,21 +152,21 @@ describe("formatSnapshot", () => {
       "- button \"Buy\" [ref=e2] [disabled]",
       "- iframe (contents not shown)",
     ].join("\n"));
-    expect([refs.resolve("e1"), refs.resolve("e2")]).toEqual([61, 91]);
+    expect([refs.resolve("e1"), refs.resolve("e2")]).toEqual([{ backendNodeId: 61 }, { backendNodeId: 91 }]);
     expect(snapshot.frames).toBe(1);
   });
 
   // 目的：ref 按节点稳定；潜在缺陷：页面插入新元素后旧序号悄悄指到另一个元素，模型点错东西。
   it("keeps an element's ref across snapshots and never reuses numbers after navigation", () => {
     const refs = new RefRegistry();
-    formatSnapshot(tree, refs);
+    formatSnapshot(doc(tree), refs);
     const grown = [
       ...tree.slice(0, 1),
       node("2", "generic", { parentId: "1", childIds: ["0", "6", "9"] }),
       node("0", "link", { parentId: "2", name: { value: "New" }, backendDOMNodeId: 5 }),
       ...tree.slice(6, 8),
     ];
-    expect(formatSnapshot(grown, refs).text).toBe([
+    expect(formatSnapshot(doc(grown), refs).text).toBe([
       "- link \"New\" [ref=e3]",
       "- textbox \"Email\" [ref=e1] [required] value=\"a@b.c\"",
       "- button \"Buy\" [ref=e2] [disabled]",
@@ -151,63 +174,242 @@ describe("formatSnapshot", () => {
 
     refs.clear();
     expect(refs.resolve("e1")).toBeUndefined();
-    expect(formatSnapshot(tree, refs).text).toContain("[ref=e4]");
+    expect(formatSnapshot(doc(tree), refs).text).toContain("[ref=e4]");
   });
 
   // 目的：快照自己守预算且能接着读；潜在缺陷：长页面后半段的元素模型看不到也点不到。
   it("cuts at whole lines and tells where to read on", () => {
     const refs = new RefRegistry();
-    const first = formatSnapshot(tree, refs, { budget: 60 }).text;
+    const first = formatSnapshot(doc(tree), refs, { budget: 60 }).text;
     const note = first.split("\n").at(-1)!;
     expect(note).toMatch(/^… \d+ more lines not shown; read on with from_line=\d+$/);
     const next = Number(note.match(/from_line=(\d+)/)![1]);
-    const rest = formatSnapshot(tree, refs, { fromLine: next }).text;
+    const rest = formatSnapshot(doc(tree), refs, { fromLine: next }).text;
     expect(rest.split("\n")[0]).toBe(`… lines 1-${next - 1} not shown (from_line=${next})`);
     expect(rest).toContain("- iframe (contents not shown)");
-    expect(formatSnapshot(tree, refs, { fromLine: 99 }).text).toBe("(the snapshot has only 6 lines)");
+    expect(formatSnapshot(doc(tree), refs, { fromLine: 99 }).text).toBe("(the snapshot has only 6 lines)");
+  });
+
+  // 目的：iframe 里的元素也能看到、能操作；潜在缺陷：跨进程子框架的节点 id 与主框架重号，ref 指到主框架的元素上。
+  it("splices frame contents under their iframe with refs kept apart per session", () => {
+    const refs = new RefRegistry();
+    const frame = doc([
+      node("1", "RootWebArea", { childIds: ["2"] }),
+      node("2", "button", { parentId: "1", name: { value: "Pay" }, backendDOMNodeId: 61 }),
+    ], { sessionId: "S1" });
+    const main = doc([
+      node("1", "RootWebArea", { childIds: ["2", "3", "4"] }),
+      node("2", "textbox", { parentId: "1", name: { value: "Email" }, backendDOMNodeId: 61 }),
+      node("3", "Iframe", { parentId: "1", name: { value: "Checkout" }, backendDOMNodeId: 70 }),
+      node("4", "Iframe", { parentId: "1", backendDOMNodeId: 80, ignored: true }),
+    ], { frames: new Map([[70, frame]]) });
+    const snapshot = formatSnapshot(main, refs);
+    expect(snapshot.text).toBe([
+      "- textbox \"Email\" [ref=e1]",
+      "- iframe \"Checkout\"",
+      "  - button \"Pay\" [ref=e2]",
+    ].join("\n"));
+    expect(snapshot.frames).toBe(0);
+    expect(refs.resolve("e2")).toEqual({ sessionId: "S1", backendNodeId: 61 });
+  });
+
+  // 目的：长页面上只读需要的部分；潜在缺陷：筛掉了祖先，模型分不清按钮属于哪条记录；或筛选后的 ref 与整页不是一套。
+  it("shows only lines in view or matching a query, with their ancestors and the same refs", () => {
+    const refs = new RefRegistry();
+    const page = doc([
+      node("1", "RootWebArea", { childIds: ["2", "5"] }),
+      node("2", "list", { parentId: "1", name: { value: "Orders" }, backendDOMNodeId: 20, childIds: ["3", "4"] }),
+      node("3", "button", { parentId: "2", name: { value: "Delete order 1" }, backendDOMNodeId: 30 }),
+      node("4", "button", { parentId: "2", name: { value: "Delete order 2" }, backendDOMNodeId: 40 }),
+      node("5", "link", { parentId: "1", name: { value: "Footer" }, backendDOMNodeId: 50 }),
+    ], { inView: new Set([20, 30]) });
+    const outline = buildOutline(page, refs);
+    expect(snapshotView(outline, { scope: "viewport" }).split("\n")).toEqual([
+      "(showing the part of the page in the viewport, with their ancestors: 2 of 4 lines)",
+      "- list \"Orders\"",
+      "  - button \"Delete order 1\" [ref=e1]",
+    ]);
+    expect(snapshotView(outline, { find: "order 2" }).split("\n").slice(1)).toEqual([
+      "- list \"Orders\"",
+      "  - button \"Delete order 2\" [ref=e2]",
+    ]);
+    expect(snapshotView(outline, { scope: "viewport", find: "footer" })).toBe("(nothing on the page: the part of the page in the viewport, lines matching \"footer\")");
+  });
+
+  // 目的：act 之后只给变化，省上下文；潜在缺陷：没变的行也回传，或漏掉文字变化、移位与删除，模型以为页面没变。
+  it("lists new, changed, moved and removed lines against the last delivered outline", () => {
+    const entry = (key: string, depth: number, text: string, parent: number) => ({ key, depth, text, parent, visible: true });
+    const before = { frames: 0, entries: [
+      entry("a", 0, 'list "Cart"', -1),
+      entry("b", 1, 'listitem "Apple"', 0),
+      entry("c", 2, 'button "Remove" [ref=e1]', 1),
+      entry("d", 1, 'listitem "Pear"', 0),
+      entry("e", 2, 'button "Remove" [ref=e2]', 3),
+      entry("f", 0, 'text "Total 2"', -1),
+      ...Array.from({ length: 10 }, (_, i) => entry(`z${i}`, 0, `text "footer ${i}"`, -1)),
+    ] };
+    const after = { frames: 0, entries: [
+      entry("a", 0, 'list "Cart"', -1),
+      entry("b", 1, 'listitem "Apple"', 0),
+      entry("c", 2, 'button "Remove" [ref=e1]', 1),
+      entry("f", 0, 'text "Total 1"', -1),
+      entry("g", 0, 'status "Pear removed"', -1),
+      ...Array.from({ length: 10 }, (_, i) => entry(`z${i}`, 0, `text "footer ${i}"`, -1)),
+    ] };
+    expect(changesView(before, after)!.split("\n")).toEqual([
+      expect.stringMatching(/^\(changes since this tab's last browser result: 2 new or changed, 1 removed;/),
+      '- text "Total 1" [changed]',
+      '- status "Pear removed" [new]',
+      "removed:",
+      '- listitem "Pear"',
+    ]);
+    expect(changesView(after, after)).toBe("(nothing on the page changed since this tab's last browser result)");
+    // 变化太多（这里是整页换了一遍）就交给调用方给整页。
+    expect(changesView(before, { frames: 0, entries: [entry("x", 0, "heading", -1)] })).toBeNull();
   });
 
   it("describes an empty page", () => {
-    expect(formatSnapshot([node("1", "RootWebArea")], new RefRegistry()).text).toBe("(the page has no readable content)");
+    expect(formatSnapshot(doc([node("1", "RootWebArea")]), new RefRegistry()).text).toBe("(the page has no readable content)");
+  });
+
+  // 目的：「看起来可点」的无语义元素也有把手；潜在缺陷：`<div onclick>` 被当成容器折叠掉，模型只能读到文字、点不到它。
+  it("gives refs to clickable generic elements and shows link addresses", () => {
+    const refs = new RefRegistry();
+    const page = [
+      node("1", "RootWebArea", { childIds: ["2", "3", "4"] }),
+      node("2", "generic", { parentId: "1", backendDOMNodeId: 20, childIds: ["2a"] }),
+      node("2a", "StaticText", { parentId: "2", name: { value: "Open card" } }),
+      node("3", "link", { parentId: "1", name: { value: "Next" }, backendDOMNodeId: 30, properties: [{ name: "url", value: { value: "https://shop.test/next?q=1#top" } }] }),
+      node("4", "link", { parentId: "1", name: { value: "Docs" }, backendDOMNodeId: 40, properties: [{ name: "url", value: { value: `https://docs.test/${"a".repeat(200)}` } }] }),
+    ];
+    const text = formatSnapshot(doc(page, { pointer: new Set([20, 30]) }), refs, { pageUrl: "https://shop.test/home" }).text;
+    expect(text.split("\n").slice(0, 3)).toEqual([
+      "- generic [ref=e1] [cursor=pointer]",
+      "  - text \"Open card\"",
+      "- link \"Next\" [ref=e2] url=\"/next?q=1#top\"",
+    ]);
+    expect(text).toMatch(/link "Docs" \[ref=e3\] url="https:\/\/docs\.test\/a{90,}…"$/);
+    expect(refs.resolve("e1")).toEqual({ backendNodeId: 20 });
   });
 });
 
+describe("pointerRoots", () => {
+  // 目的：cursor 会继承给子元素；潜在缺陷：一张卡片里每一层都拿到 ref，挤掉快照预算、模型不知道点哪层。
+  it("keeps only the outermost pointer element, looking past nodes without layout", () => {
+    // 节点：0 文档、1 卡片(pointer)、2 卡片里的 span(继承 pointer)、3 display:contents 包裹层(无布局)、
+    // 4 包裹层里的按钮(pointer)、5 另一个普通 div。
+    const snapshot: DomSnapshot = {
+      strings: ["auto", "pointer"],
+      documents: [{
+        frameId: 0,
+        nodes: { parentIndex: [-1, 0, 1, 1, 3, 0], backendNodeId: [100, 101, 102, 103, 104, 105] },
+        layout: { nodeIndex: [0, 1, 2, 4, 5], styles: [[0], [1], [1], [1], [0]], bounds: [[0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 1, 1]] },
+      }],
+    };
+    expect([...pointerRoots(snapshot)]).toEqual([101]);
+  });
+});
+
+describe("viewport geometry", () => {
+  // 数字取自实测（Retina，像素比 2）：页面滚到 400，按钮在文档 (100, 700)，同进程 iframe 在 (300, 650)、自己滚了 5，
+  // 里面的按钮在它的文档 (10, 20)。元素框与滚动偏移都是设备像素、各自文档的坐标。
+  const snapshot: DomSnapshot = {
+    strings: ["main-frame", "child-frame"],
+    documents: [
+      {
+        frameId: 0, scrollOffsetX: 0, scrollOffsetY: 800,
+        nodes: { backendNodeId: [1, 2, 3, 4] },
+        layout: { nodeIndex: [0, 1, 2, 3], styles: [], bounds: [[0, 0, 2560, 6000], [200, 1400, 160, 60], [600, 1300, 600, 300], [200, 3000, 160, 60]] },
+      },
+      {
+        frameId: 1, scrollOffsetX: 0, scrollOffsetY: 10,
+        nodes: { backendNodeId: [10, 11, 12] },
+        layout: { nodeIndex: [0, 1, 2], styles: [], bounds: [[0, 0, 600, 1000], [20, 40, 100, 40], [20, 900, 100, 40]] },
+      },
+    ],
+  };
+  const metrics = {
+    layoutViewport: { clientWidth: 2560 },
+    cssLayoutViewport: { clientWidth: 1280 },
+    cssVisualViewport: { pageX: 0, pageY: 400, clientWidth: 1280, clientHeight: 800 },
+  };
+
+  // 目的：「只看视口」只列看得见的节点；潜在缺陷：把 CSS 像素当设备像素比（Retina 上差一倍），或忘了减滚动、
+  // 忘了子框架坐标相对它自己的文档，列出的是另一块区域。
+  it("finds the nodes in view in the main document and inside a scrolled iframe", () => {
+    const region = rootRegion(metrics);
+    expect(region).toEqual({ x: 0, y: 800, width: 2560, height: 1600 });
+    const main = documentLayout(snapshot)!;
+    expect([...visibleNodes(main, region)].sort()).toEqual([1, 2, 3]);
+    const child = documentLayout(snapshot, "child-frame")!;
+    const childRegion = frameRegion(main, region, 3, child);
+    expect(childRegion).toEqual({ x: 0, y: 10, width: 600, height: 300 });
+    expect([...visibleNodes(child, childRegion)].sort()).toEqual([10, 11]);
+    expect(frameRegion(main, { x: 0, y: 0, width: 2560, height: 1000 }, 3, child)).toBeNull();
+    expect(documentLayout(snapshot, "gone")).toBeUndefined();
+  });
+});
+
+/** 一条发出的 CDP 命令；发到跨进程子框架会话的另带会话 id。 */
+type Call = [string, Record<string, unknown>, string?];
+
 /**
- * 记下每条 CDP 命令；页面函数的返回值由 `answers` 按函数片段决定，默认空串（成功）。
+ * 记下每条发出的 CDP 命令；页面函数的返回值由 `answers` 按函数片段决定，默认空串（成功）。
  * `dialogOn` 选中的那条命令上页面弹窗：宿主让它以 DIALOG_OPEN 失败（页面停在事件处理里，命令回不来）。
+ * `dragData` 给出时页面可拖放：开着拦截时按住移动会发 `Input.dragIntercepted`。
  */
 function fakeSession(
   answers: Record<string, unknown> = {},
-  { scale = 1, dialogOn, initialDialog = null }: {
+  { scale = 1, dialogOn, initialDialog = null, dragData, fileChooser = null }: {
     scale?: number;
+    fileChooser?: FileChooser | null;
+    dragData?: unknown;
     dialogOn?: (method: string, params: Record<string, unknown>) => boolean;
     initialDialog?: BrowserDialog | null;
   } = {},
-): { session: PageSession; calls: [string, Record<string, unknown>][]; answered: [number, BrowserDialogAnswer][] } {
-  const calls: [string, Record<string, unknown>][] = [];
+): { session: PageSession; calls: Call[]; answered: [number, BrowserDialogAnswer][] } {
+  const calls: Call[] = [];
   const answered: [number, BrowserDialogAnswer][] = [];
   let dialog: BrowserDialog | null = initialDialog;
   const answer = (code: string) => Object.entries(answers).find(([fragment]) => code.includes(fragment))?.[1] ?? "";
   const paused = () => (dialog ? new HostMethodError("DIALOG_OPEN", `the page is paused: it is showing a ${dialog.type} dialog (#${dialog.id})`) : null);
+  const listeners = new Map<string, Set<(params: never) => void>>();
+  let intercepting = false;
   const session: PageSession = {
-    cdp: async <T,>(method: string, params: Record<string, unknown> = {}) => {
-      calls.push([method, params]);
+    cdp: async <T,>(method: string, params: Record<string, unknown> = {}, options: { browserSide?: boolean; sessionId?: string } = {}) => {
+      // 与 `CdpSession` 的闸门一致：页面停着时只有浏览器进程作答的命令能回复。
+      if (dialog && !options.browserSide) throw paused();
+      calls.push(options.sessionId ? [method, params, options.sessionId] : [method, params]);
+      if (method === "Input.setInterceptDrags") intercepting = params.enabled as boolean;
+      if (intercepting && dragData && method === "Input.dispatchMouseEvent" && params.buttons === 1) {
+        for (const handler of listeners.get("Input.dragIntercepted") ?? []) handler({ data: dragData } as never);
+      }
       if (dialogOn?.(method, params)) {
         dialog = { id: 7, type: "confirm", message: "delete?", defaultText: "" };
         throw paused();
       }
       if (method === "DOM.resolveNode") return { object: { objectId: "obj" } } as T;
-      if (method === "DOM.getBoxModel") return { model: { content: [0, 0, 10, 0, 10, 20, 0, 20] } } as T;
+      if (method === "DOM.getBoxModel") return { model: { border: [0, 0, 10, 0, 10, 20, 0, 20] } } as T;
       if (method === "Runtime.callFunctionOn") return { result: { value: answer(String(params.functionDeclaration)) } } as T;
       if (method === "Runtime.evaluate") return { result: { value: answer(String(params.expression)) } } as T;
       return {} as T;
     },
+    // `f` 开头的 ref 在跨进程子框架 S1 里，S1 的视口原点在主视口的 (100, 200)。
     resolveRef: (ref) => {
       if (ref === "e404") throw new HostMethodError("REF_STALE", "not registered");
-      return Number(ref.slice(1));
+      return ref.startsWith("f") ? { sessionId: "S1", backendNodeId: Number(ref.slice(1)) } : { backendNodeId: Number(ref.slice(1)) };
+    },
+    frameOffset: async (sessionId) => (sessionId === "S1" ? { x: 100, y: 200 } : { x: 0, y: 0 }),
+    on: (method, handler) => {
+      const set = listeners.get(method) ?? new Set();
+      set.add(handler);
+      listeners.set(method, set);
+      return () => set.delete(handler);
     },
     settle: async () => undefined,
     toInput: ({ x, y }) => ({ x: x * scale, y: y * scale }),
+    viewport: () => ({ width: 100, height: 50 }),
+    fileChooser: () => fileChooser,
     paused,
     dialog: () => dialog,
     answerDialog: (id, reply) => {
@@ -220,13 +422,15 @@ function fakeSession(
 
 const mouse = (type: string) => (method: string, params: Record<string, unknown>) => method === "Input.dispatchMouseEvent" && params.type === type;
 
+const clickOn = (ref: string): PageAction => ({ type: "click", target: { ref }, button: "left", clickCount: 1, modifiers: [] });
+
 const run = (session: PageSession, ...actions: PageAction[]) => runActions(session, actions, new AbortController().signal);
 
 describe("runActions", () => {
   // 目的：面板缩放显示固定视口时，CDP 合成输入的坐标是视图坐标；潜在缺陷：不换算就点到别处（实测缩放 0.5 时落点翻倍）。
   it("converts element centres from CSS pixels to input coordinates", async () => {
     const { session, calls } = fakeSession({}, { scale: 0.5 });
-    await run(session, { type: "click", ref: "e2" });
+    await run(session, clickOn("e2"));
     const mouse = calls.filter(([method]) => method === "Input.dispatchMouseEvent").map(([, params]) => [params.x, params.y]);
     expect(mouse).toEqual([[2.5, 5], [2.5, 5], [2.5, 5]]);
   });
@@ -234,7 +438,7 @@ describe("runActions", () => {
   // 目的：点删除弹出确认、同批确认；潜在缺陷：弹窗让 click 被误判失败，或后续动作挂到 CDP 超时。
   it("treats a dialog opened on an action's effect command as its effect and answers it in the same batch", async () => {
     const { session, answered } = fakeSession({}, { dialogOn: mouse("mouseReleased") });
-    const outcome = await run(session, { type: "click", ref: "e2" }, { type: "dialog", accept: true });
+    const outcome = await run(session, clickOn("e2"), { type: "dialog", accept: true });
     expect(outcome).toEqual({ completed: 2, failure: null });
     expect(answered).toEqual([[7, { accept: true, text: undefined }]]);
   });
@@ -243,7 +447,7 @@ describe("runActions", () => {
   // 同批的 dialog 还会把一个没看见的弹窗答掉。
   it("fails an action when the dialog appears before its effect, and does not count a wait as done", async () => {
     const hovered = fakeSession({}, { dialogOn: mouse("mouseMoved") });
-    const click = await run(hovered.session, { type: "click", ref: "e2" }, { type: "dialog", accept: true });
+    const click = await run(hovered.session, clickOn("e2"), { type: "dialog", accept: true });
     expect(click).toMatchObject({ completed: 0, failure: { index: 0, code: "DIALOG_OPEN" } });
     expect(hovered.answered).toEqual([]);
 
@@ -265,7 +469,7 @@ describe("runActions", () => {
 
   it("stops other actions while the page is paused, and refuses to answer a dialog that is not there", async () => {
     const opened = fakeSession({}, { dialogOn: mouse("mouseReleased") });
-    const blocked = await run(opened.session, { type: "click", ref: "e2" }, { type: "hover", ref: "e2" });
+    const blocked = await run(opened.session, clickOn("e2"), { type: "hover", target: { ref: "e2" } });
     expect(blocked).toMatchObject({ completed: 1, failure: { index: 1, code: "DIALOG_OPEN" } });
 
     const none = await run(fakeSession().session, { type: "dialog", accept: false });
@@ -275,16 +479,78 @@ describe("runActions", () => {
   // 目的：稳定 ref 可能来自更早的快照；潜在缺陷：焦点落在已脱离文档的节点上，字输进别的元素。
   it("refuses refs whose element left the document", async () => {
     const { session, calls } = fakeSession({ isConnected: "detached" });
-    const outcome = await run(session, { type: "type", ref: "e7", text: "hi", clear: false, submit: false });
+    const outcome = await run(session, { type: "type", ref: "e7", text: "hi", clear: false, submit: false, keyByKey: false });
     expect(outcome).toMatchObject({ completed: 0, failure: { index: 0, code: "REF_STALE" } });
     expect(calls.some(([method]) => method === "Input.insertText")).toBe(false);
   });
 
   it("hovers by moving the mouse to the element's centre without clicking", async () => {
     const { session, calls } = fakeSession();
-    await run(session, { type: "hover", ref: "e2" });
+    await run(session, { type: "hover", target: { ref: "e2" } });
     const mouse = calls.filter(([method]) => method === "Input.dispatchMouseEvent").map(([, params]) => params);
     expect(mouse).toEqual([{ type: "mouseMoved", x: 5, y: 10 }]);
+  });
+
+  // 目的：右键、双击、带修饰键与坐标落点和真实输入一致；潜在缺陷：双击只发一次 clickCount 2 时页面收不到第一次
+  // click，或坐标不经缩放换算就点到别处。
+  it("clicks at viewport coordinates with the button, count and modifiers asked for", async () => {
+    const { session, calls } = fakeSession({}, { scale: 0.5 });
+    await run(session, { type: "click", target: { x: 40, y: 20 }, button: "right", clickCount: 2, modifiers: ["Shift"] });
+    const mouse = calls.filter(([method]) => method === "Input.dispatchMouseEvent").map(([, params]) => params);
+    expect(mouse).toEqual([
+      { type: "mouseMoved", x: 20, y: 10, modifiers: 8 },
+      { type: "mousePressed", x: 20, y: 10, button: "right", clickCount: 1, modifiers: 8 },
+      { type: "mouseReleased", x: 20, y: 10, button: "right", clickCount: 1, modifiers: 8 },
+      { type: "mousePressed", x: 20, y: 10, button: "right", clickCount: 2, modifiers: 8 },
+      { type: "mouseReleased", x: 20, y: 10, button: "right", clickCount: 2, modifiers: 8 },
+    ]);
+    expect(calls.some(([method]) => method === "DOM.resolveNode")).toBe(false);
+  });
+
+  // 目的：跨进程 iframe 里的元素能点中、能输入；潜在缺陷：框架内坐标当主视口坐标点到别处，或按节点的命令发到主会话、
+  // 找到的是主框架里同号的另一个节点。
+  it("routes node commands to the element's frame session and offsets its coordinates", async () => {
+    const { session, calls } = fakeSession();
+    await run(session, { type: "click", target: { ref: "f3" }, button: "left", clickCount: 1, modifiers: [] });
+    expect(calls.find(([method]) => method === "Input.dispatchMouseEvent")).toEqual(["Input.dispatchMouseEvent", { type: "mouseMoved", x: 105, y: 210, modifiers: 0 }]);
+    expect(calls.filter(([method]) => method.startsWith("DOM.") || method.startsWith("Runtime.")).every(([, , sessionId]) => sessionId === "S1")).toBe(true);
+
+    const typed = fakeSession();
+    await run(typed.session, { type: "type", ref: "f3", text: "hi", clear: false, submit: false, keyByKey: false });
+    expect(typed.calls.find(([method]) => method === "DOM.focus")?.[2]).toBe("S1");
+    expect(typed.calls.find(([method]) => method === "Input.insertText")?.[2]).toBeUndefined();
+  });
+
+  it("refuses coordinates outside the viewport before touching the page", async () => {
+    const { session, calls } = fakeSession();
+    const outcome = await run(session, { type: "hover", target: { x: 100, y: 10 } });
+    expect(outcome).toMatchObject({ completed: 0, failure: { index: 0, code: "OUT_OF_VIEWPORT" } });
+    expect(calls).toEqual([]);
+  });
+
+  // 目的：滑块与画布要看到按住后的连续移动；潜在缺陷：只发起点与终点，按距离判定拖动开始的页面不响应。
+  it("drags with the left button held through intermediate moves", async () => {
+    const { session, calls } = fakeSession();
+    await run(session, { type: "drag", start: { ref: "e2" }, end: { x: 55, y: 10 } });
+    const mouse = calls.filter(([method]) => method === "Input.dispatchMouseEvent").map(([, params]) => params);
+    expect(mouse[1]).toEqual({ type: "mousePressed", x: 5, y: 10, button: "left", clickCount: 1 });
+    expect(mouse.slice(2, -1).map((event) => [event.type, event.x, event.buttons])).toEqual(
+      [15, 25, 35, 45, 55].map((x) => ["mouseMoved", x, 1]),
+    );
+    expect(mouse.at(-1)).toEqual({ type: "mouseReleased", x: 55, y: 10, button: "left", clickCount: 1 });
+    expect(calls.some(([method]) => method === "Input.dispatchDragEvent")).toBe(false);
+  });
+
+  // 目的：不在窗口里的标签也能完成 HTML5 拖放；潜在缺陷：系统拖动会话起不来，drop 永远不来；面板缩放显示时拖放事件
+  // 按视图坐标发、落到一半处（真实应用验收发现）；拦截在弹窗停住页面后没撤销，用户之后在面板里的拖放被吞掉。
+  it("delivers an intercepted HTML5 drag at the end point in CSS pixels and always turns interception off", async () => {
+    const { session, calls } = fakeSession({}, { scale: 0.5, dragData: { items: [], dragOperationsMask: 1 }, dialogOn: (method, params) => params.type === "drop" });
+    const outcome = await run(session, { type: "drag", start: { x: 0, y: 0 }, end: { x: 30, y: 20 } });
+    expect(outcome).toEqual({ completed: 1, failure: null });
+    const drags = calls.filter(([method]) => method === "Input.dispatchDragEvent").map(([, params]) => [params.type, params.x, params.y]);
+    expect(drags).toEqual([["dragEnter", 30, 20], ["dragOver", 30, 20], ["drop", 30, 20]]);
+    expect(calls.findLast(([method]) => method === "Input.dispatchMouseEvent")?.[1]).toMatchObject({ type: "mouseMoved", x: 15, y: 10 });
+    expect(calls.filter(([method]) => method === "Input.setInterceptDrags").map(([, params]) => params.enabled)).toEqual([true, false]);
   });
 
   it("presses shortcuts with modifier bits and no character, after focusing the ref", async () => {
@@ -301,10 +567,40 @@ describe("runActions", () => {
     expect(typed.calls.find(([method]) => method === "Input.dispatchKeyEvent")![1]).toMatchObject({ key: "A", text: "A", modifiers: 8 });
   });
 
+  // 目的：按键盘事件工作的控件（自动补全、掩码输入）要收到逐个按键；潜在缺陷：一次写入只触发 input，控件不响应；
+  // 中文等键盘上没有的字符被拼成错误的键位。
+  it("types key by key with a key event per character", async () => {
+    const { session, calls } = fakeSession();
+    await run(session, { type: "type", ref: "e7", text: "aB 中\n", clear: false, submit: false, keyByKey: true });
+    const downs = calls.filter(([method, params]) => method === "Input.dispatchKeyEvent" && params.type === "keyDown").map(([, params]) => params);
+    expect(downs.map(({ key, code, text }) => [key, code, text])).toEqual([
+      ["a", "KeyA", "a"], ["B", "KeyB", "B"], [" ", "Space", " "], ["中", undefined, "中"], ["Enter", "Enter", "\r"],
+    ]);
+    expect(calls.some(([method]) => method === "Input.insertText")).toBe(false);
+  });
+
+  // 目的：网站常把文件输入框藏起来、用按钮打开选择框；潜在缺陷：只能填快照里看得见的输入框，或把文件填进别的元素、
+  // 把多个文件塞给只收一个的输入框。
+  it("uploads to a file input by ref or to the file chooser an action opened", async () => {
+    const byRef = fakeSession();
+    expect(await run(byRef.session, { type: "upload", paths: ["/w/a.pdf"], ref: "e4" })).toEqual({ completed: 1, failure: null });
+    expect(byRef.calls.at(-1)).toEqual(["DOM.setFileInputFiles", { files: ["/w/a.pdf"], backendNodeId: 4 }]);
+
+    const notInput = fakeSession({ "not a file input": "not a file input" });
+    expect(await run(notInput.session, { type: "upload", paths: ["/w/a.pdf"], ref: "e4" })).toMatchObject({ failure: { code: "NO_FILE_INPUT" } });
+
+    const chosen = fakeSession({}, { fileChooser: { node: { backendNodeId: 9 }, multiple: false } });
+    expect(await run(chosen.session, { type: "upload", paths: ["/w/a.pdf"] })).toEqual({ completed: 1, failure: null });
+    expect(chosen.calls.at(-1)).toEqual(["DOM.setFileInputFiles", { files: ["/w/a.pdf"], backendNodeId: 9 }]);
+    expect(await run(chosen.session, { type: "upload", paths: ["/w/a.pdf", "/w/b.pdf"] })).toMatchObject({ failure: { message: expect.stringContaining("single file") } });
+
+    expect(await run(fakeSession().session, { type: "upload", paths: ["/w/a.pdf"] })).toMatchObject({ failure: { code: "NO_FILE_INPUT" } });
+  });
+
   // 目的：无限滚动到底要停下；潜在缺陷：批次里的滚动空转，模型以为加载了更多。
   it("scrolls the area around a ref and stops with SCROLL_END when nothing moves", async () => {
     const { session, calls } = fakeSession({ "scrollBy": "this area is already at the bottom" });
-    const outcome = await run(session, { type: "scroll", direction: "down", ref: "e9" }, { type: "click", ref: "e1" });
+    const outcome = await run(session, { type: "scroll", direction: "down", ref: "e9" }, clickOn("e1"));
     expect(outcome).toMatchObject({ completed: 0, failure: { index: 0, code: "SCROLL_END", message: "this area is already at the bottom" } });
     const scrolled = calls.find(([method, params]) => method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("scrollBy"));
     expect(scrolled?.[1].arguments).toEqual([{ value: true }]);

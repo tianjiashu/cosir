@@ -30,7 +30,12 @@ export function toolCallPart(toolCallId: string, toolName: string, overrides: Pa
 }
 
 export function userMessage(id: string, runId: number, text = "hello"): TransportMessage {
-  return { id, role: "user", parts: [textPart(text)], runId, outcome: null };
+  return { id, role: "user", parts: [textPart(text)], runId, source: null, outcome: null };
+}
+
+/** Agent 消息：另一个 Agent 交来、开启一轮的 user 消息，带发送方。 */
+export function agentMessage(id: string, runId: number, text = "请完成子任务", sourceTaskId = 9): TransportMessage {
+  return { id, role: "user", parts: [textPart(text)], runId, outcome: null, source: { taskId: sourceTaskId, name: "主任务" } };
 }
 
 export function assistantMessage(
@@ -39,7 +44,7 @@ export function assistantMessage(
   parts: TransportMessagePart[] = [textPart("answer")],
   outcome: TransportOutcome | null = null,
 ): TransportMessage {
-  return { id, role: "assistant", parts, runId, outcome };
+  return { id, role: "assistant", parts, runId, outcome, source: null };
 }
 
 export function outcome(

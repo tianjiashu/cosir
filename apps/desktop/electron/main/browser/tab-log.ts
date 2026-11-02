@@ -129,6 +129,11 @@ export class TabLog {
     this.navigationStart = this.seq + 1;
   }
 
+  /** 那次导航没有换上文档就结束了（转成下载、204、被拦下）：页面还是原来的，之后的条目照旧属于它。 */
+  navigationAbandoned(): void {
+    this.navigationStart = null;
+  }
+
   /** 主框架跨文档导航提交：从导航开始起的条目属于新页面（省略 `since` 的日志读取只看当前页面）。 */
   pageStarted(): void {
     this.pageStart = this.navigationStart ?? this.seq + 1;

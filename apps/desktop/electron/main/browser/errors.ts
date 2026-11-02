@@ -23,6 +23,8 @@ export type BrowserErrorCode =
   | "NO_DIALOG"
   | "DIALOG_MISMATCH"
   | "REF_STALE"
+  | "OUT_OF_VIEWPORT"
+  | "NO_FILE_INPUT"
   | "NOT_INTERACTABLE"
   | "WAIT_TIMEOUT"
   | "SCROLL_END"

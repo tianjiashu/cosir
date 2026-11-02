@@ -118,6 +118,7 @@ const textMessage = (id, role, text, status, runId) => ({
     : [{ type: "text", text, status: "completed" }],
   runId,
   outcome: null,
+  source: null,
 });
 
 /** 一轮问答：用户消息 id 为 `user-{runId}`，回复 id 按契约为 `assistant-{用户消息 id}`。 */
@@ -189,8 +190,8 @@ function completedFixture(runId, userMessage, assistantParts) {
   return {
     title: "测试对话",
     messages: [
-      { ...userMessage, runId, outcome: null },
-      { id: `assistant-${userMessage.id}`, role: "assistant", parts: assistantParts, runId, outcome: outcomeOf(activity) },
+      { ...userMessage, runId, outcome: null, source: null },
+      { id: `assistant-${userMessage.id}`, role: "assistant", parts: assistantParts, runId, outcome: outcomeOf(activity), source: null },
     ],
     activity,
   };
@@ -279,8 +280,8 @@ function alternatingSequenceState(phase) {
   return {
     title: "测试对话",
     messages: [
-      { id: "user-alternating", role: "user", parts: [{ type: "text", text: "把调度 tick 改成可配置，并补测试", status: "completed" }], runId, outcome: null },
-      { id: "assistant-user-alternating", role: "assistant", parts, runId, outcome: phase === "running" ? null : { ...outcomeOf(activity), durationMs: 192_000 } },
+      { id: "user-alternating", role: "user", parts: [{ type: "text", text: "把调度 tick 改成可配置，并补测试", status: "completed" }], runId, outcome: null, source: null },
+      { id: "assistant-user-alternating", role: "assistant", parts, runId, outcome: phase === "running" ? null : { ...outcomeOf(activity), durationMs: 192_000 }, source: null },
     ],
     activity,
   };

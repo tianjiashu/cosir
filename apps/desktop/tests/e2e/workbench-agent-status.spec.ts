@@ -13,6 +13,7 @@ function snapshot(runId: number | null, status = "completed", text = "阅读内�
       id: `assistant-run-${runId}`, role: "assistant", runId,
       parts: [{ type: "text", text, status: ended ? "completed" : "running" }],
       outcome: ended ? { status, endReason: null, error: null, usage: null, contextWindowTotal: null, durationMs: null } : null,
+      source: null,
     }],
     messageOffset: 0,
     activity: { runId, status, endReason: null, error: null, usage: null, contextWindowTotal: null,

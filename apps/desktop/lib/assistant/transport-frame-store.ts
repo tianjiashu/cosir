@@ -394,6 +394,7 @@ export class TransportFrameStore {
     // 变化时不必重建它们。
     return {
       runId: message.runId,
+      source: message.source,
       outcome: message.outcome,
       isRunEnd,
       activity: isRunEnd && activity !== null && activity.runId === message.runId ? activity : null,
@@ -489,6 +490,7 @@ export class TransportFrameStore {
 
 const QUEUED_CONTEXT: TransportMessageRenderContext = {
   runId: null,
+  source: null,
   outcome: null,
   isRunEnd: false,
   activity: null,
@@ -515,11 +517,16 @@ function outcomeStatusOf(messages: readonly TransportMessage[], runId: number): 
   return "completed";
 }
 
-/** 完整历史中位置不早于 `from` 的用户消息 id，加上排队消息。 */
+/**
+ * 完整历史中位置不早于 `from` 的用户消息 id，加上排队消息。Agent 消息（`source` 非空）不算：
+ * 它不是用户发的，计入会把用户还在等确认的乐观发送错收回。
+ */
 function userMessageIds(state: TransportState, from: number): Set<string> {
   const ids = new Set<string>();
   state.messages.forEach((message, index) => {
-    if (message.role === "user" && state.messageOffset + index >= from) ids.add(message.id);
+    if (message.role === "user" && message.source === null && state.messageOffset + index >= from) {
+      ids.add(message.id);
+    }
   });
   for (const message of state.queued_messages ?? []) ids.add(message.id);
   return ids;

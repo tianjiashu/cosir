@@ -49,7 +49,7 @@ import {
   takePendingEditComposerDraft,
   type EditDraftAttachment,
 } from "@/lib/assistant/edit-composer-draft";
-import type { InputDelivery } from "@/lib/assistant/contract";
+import type { InputDelivery, TransportMessageSource } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
@@ -59,6 +59,7 @@ import { AttachmentWorkspaceContext } from "@/components/assistant-ui/elements/a
 import { VirtualizedThreadMessages } from "@/components/assistant-ui/elements/virtualized-thread-messages";
 import { ConversationAsideSlot } from "@/components/assistant-ui/elements/conversation-aside";
 import { QueuedMessages } from "@/components/assistant-ui/elements/queued-messages";
+import { AgentInboundMessage } from "@/components/assistant-ui/elements/agent-message";
 import { deleteQueuedTaskMessage, sendQueuedTaskMessageNow } from "@/lib/assistant/task-commands";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { UserMessageContent, useHasUserMessageContent } from "@/components/assistant-ui/elements/user-message-content";
@@ -378,8 +379,17 @@ const QUEUED_LABELS: Record<InputDelivery, string> = {
 
 const ThreadMessage: FC = () => {
   const role = useAuiState((state) => state.message.role);
+  const source = useAuiState((state) => messageSource(state.message.metadata.custom));
+  // Agent 消息在这里就分流：它不能进入 UserMessage 的编辑态恢复与排队判定。
+  if (source !== null) return <AgentInboundMessage source={source} />;
   return role === "user" ? <UserMessage /> : <AssistantMessage />;
 };
+
+/** 读 converter 放进 `metadata.custom` 的发送方；只有 Agent 消息非空。 */
+function messageSource(custom: Record<string, unknown> | undefined): TransportMessageSource | null {
+  const source = custom?.source;
+  return source && typeof source === "object" ? (source as TransportMessageSource) : null;
+}
 
 const UserMessage: FC = () => {
   const aui = useAui();

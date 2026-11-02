@@ -13,6 +13,7 @@ import type {
   TransportImagePart,
   TransportMessage,
   TransportMessagePart,
+  TransportMessageSource,
   TransportOutcome,
   TransportReasoningPart,
   TransportTextPart,
@@ -78,6 +79,8 @@ export type UserAddMessageCommand = {
 export type TransportMessageRenderContext = {
   /** 所属 Run；排队与乐观消息尚无 Run，为 null。只供诊断与日志。 */
   runId: number | null;
+  /** Agent 消息的发送方（见 `TransportMessage.source`）；排队、乐观与助手消息为 null。 */
+  source: TransportMessageSource | null;
   outcome: TransportOutcome | null;
   isRunEnd: boolean;
   activity: TransportActivity | null;
@@ -429,7 +432,7 @@ export function toThreadMessageWithRenderContext(
         steps: undefined,
         submittedFeedback: undefined,
         timing: undefined,
-        custom: { runId: context.runId },
+        custom: { runId: context.runId, source: context.source },
       },
     };
     return userMessage;
@@ -531,7 +534,7 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     id: `pending-${getOrCreateTransportCommandId(command)}`,
     role: "user",
     parts: messageParts,
-  }, { runId: null, outcome: null, isRunEnd: false, activity: null });
+  }, { runId: null, source: null, outcome: null, isRunEnd: false, activity: null });
   // The optimistic message follows the same single-source shape as the
   // canonical projection. The content parts already carry all attachments.
   return pending.role === "user" ? { ...pending, attachments: [] } : pending;

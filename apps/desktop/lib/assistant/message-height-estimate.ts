@@ -19,7 +19,11 @@ export function estimateMessageHeight(message: ThreadMessage | undefined): numbe
   // 消息对象按版本不可变，未变的消息不必在每次布局重算时重新扫描正文。
   let height = estimates.get(message);
   if (height === undefined) {
-    height = Math.round(message.role === "user" ? userHeight(message) : assistantHeight(message));
+    height = Math.round(
+      message.role !== "user" ? assistantHeight(message)
+        : isAgentMessage(message) ? agentMessageHeight(message)
+          : userHeight(message),
+    );
     estimates.set(message, height);
   }
   return height;
@@ -57,6 +61,20 @@ function userHeight(message: ThreadMessage): number {
   if (files > 0) blocks.push(Math.ceil(files / FILES_PER_ROW) * (FILE_CHIP_HEIGHT + ATTACHMENT_GAP) - ATTACHMENT_GAP);
   if (text.trim()) blocks.push(USER_BUBBLE_PADDING + textLines(text, USER_LINE_UNITS) * USER_LINE_HEIGHT);
   return ROW_GAP + USER_CHROME + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blocks.length - 1) * ATTACHMENT_GAP;
+}
+
+// Agent 消息（`AgentInboundMessage`）：一行「来自 X」加间距，正文在底色面里按 Markdown 排版；常量按
+// 样式类推算，未单独实测。
+const AGENT_LABEL = 22;
+const AGENT_PANEL_PADDING = 20;
+
+function isAgentMessage(message: ThreadMessage): boolean {
+  return Boolean((message.metadata?.custom as { source?: unknown } | undefined)?.source);
+}
+
+function agentMessageHeight(message: ThreadMessage): number {
+  const text = message.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+  return ROW_GAP + AGENT_LABEL + AGENT_PANEL_PADDING + markdownHeight(text);
 }
 
 // 回答：脚注（操作栏及其前面的区间距）与留白；各区之间的间距。回合按 `projectTurn` 分区计高（规则与渲染

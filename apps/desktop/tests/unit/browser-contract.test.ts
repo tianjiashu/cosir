@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import samples from "@/electron/main/browser/contract/wire-samples.json";
 import schemas from "@/electron/main/browser/contract/tool-args.schema.json";
-import { isSupportedKey, isSupportedModifier } from "@/electron/main/browser/page-input";
+import { isSupportedKey } from "@/electron/main/browser/input/keyboard";
+import { isSupportedModifier } from "@/electron/main/browser/input/modifiers";
 import { parseAct, parseEvaluate, parseLogs, parseNavigate, parseScreenshot, parseSnapshot, parseTabs } from "@/electron/main/browser/params";
 import { actWire, evaluateWire, logsWire, pageWire, screenshotWire, tabsWire } from "@/electron/main/browser/wire";
 import type { ActOutcome, EvaluateResult, LogsResult, PageHead, PageResult } from "@/electron/main/browser/browser-host";
@@ -126,8 +127,8 @@ describe("argument keys the host reads", () => {
   const host = { task_id: 7, limits: { per_task: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
   const cases: [keyof typeof schemas, (params: unknown) => unknown, Record<string, unknown>][] = [
     ["browser_navigate", parseNavigate, { url: "https://example.com/z", action: null, tab: "t9", new_tab: true, viewport: { width: 391, height: 845, mobile: true }, color_scheme: "dark" }],
-    ["browser_snapshot", parseSnapshot, { tab: "t9", from_line: 37 }],
-    ["browser_screenshot", parseScreenshot, { tab: "t9", full_page: true }],
+    ["browser_snapshot", parseSnapshot, { tab: "t9", scope: "viewport", find: "needle", from_line: 37 }],
+    ["browser_screenshot", parseScreenshot, { tab: "t9", full_page: false, ref: "e4" }],
     ["browser_tabs", parseTabs, { tab: "t9", action: "close" }],
     ["browser_logs", parseLogs, { kind: "console", since: 41, level: "warning", failed_only: false, pattern: "needle", limit: 7, tab: "t9" }],
     ["browser_logs", parseLogs, { kind: "network", since: 41, level: null, failed_only: true, pattern: "needle", limit: 7, tab: "t9" }],
@@ -146,25 +147,29 @@ describe("argument keys the host reads", () => {
 
   it("browser_act", () => {
     const actions = {
-      click: { type: "click", ref: "e0" },
-      hover: { type: "hover", ref: "e6" },
-      type: { type: "type", ref: "e1", text: "hello", clear: true, submit: true },
+      click: { type: "click", ref: null, x: 4, y: 8, button: "right", click_count: 2, modifiers: ["Alt"] },
+      hover: { type: "hover", ref: "e6", x: null, y: null },
+      drag: { type: "drag", start: { ref: "e7", x: null, y: null }, end: { ref: null, x: 1, y: 2 } },
+      type: { type: "type", ref: "e1", text: "hello", clear: true, submit: true, key_by_key: true },
       press: { type: "press", key: "Enter", modifiers: ["Shift"], ref: "e2" },
       scroll: { type: "scroll", direction: "up", ref: "e3" },
       wait_for: { type: "wait_for", text: null, text_gone: "Loading", seconds: 3 },
       dialog: { type: "dialog", accept: true, text: "Ada", id: 4 },
       select: { type: "select", ref: "e5", values: ["b"] },
+      upload: { type: "upload", paths: ["/w/a.pdf"], ref: "e8" },
     };
     const parsed = parseAct({ ...host, tab: "t9", actions: Object.values(actions) }).actions;
     expect(parsed).toEqual([
-      { type: "click", ref: "e0" },
-      { type: "hover", ref: "e6" },
-      { type: "type", ref: "e1", text: "hello", clear: true, submit: true },
+      { type: "click", target: { x: 4, y: 8 }, button: "right", clickCount: 2, modifiers: ["Alt"] },
+      { type: "hover", target: { ref: "e6" } },
+      { type: "drag", start: { ref: "e7" }, end: { x: 1, y: 2 } },
+      { type: "type", ref: "e1", text: "hello", clear: true, submit: true, keyByKey: true },
       { type: "press", key: "Enter", modifiers: ["Shift"], ref: "e2" },
       { type: "scroll", direction: "up", ref: "e3" },
       { type: "wait_for", text: undefined, textGone: "Loading", seconds: 3 },
       { type: "dialog", accept: true, text: "Ada", id: 4 },
       { type: "select", ref: "e5", values: ["b"] },
+      { type: "upload", paths: ["/w/a.pdf"], ref: "e8" },
     ]);
     // 动作类型的全集也要对上：后端新增一种动作而宿主没有对应分支时，在这里而不是运行时暴露。
     type ActionDef = { properties: Record<string, unknown> & { type?: { const?: string; enum?: string[] } } };

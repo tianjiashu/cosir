@@ -20,7 +20,8 @@ class FakeTab {
   pending = new Promise<void>((resolve, reject) => { this.finish = resolve; this.fail = reject; });
   close = vi.fn();
   navigate = vi.fn().mockResolvedValue(undefined);
-  snapshot = vi.fn().mockResolvedValue({ text: "page", url: "", title: "", loading: false, frames: 0, notes: [], dialog: null });
+  snapshot = vi.fn().mockResolvedValue({ outline: { entries: [{ key: ":1", depth: 0, text: "text 'page'", parent: -1, visible: true }], frames: 0 }, dialog: null });
+  deliver = vi.fn().mockReturnValue(null);
   readonly contents = { isDestroyed: () => false };
   dialog: { id: number; type: "confirm"; message: string; defaultText: string } | null = null;
   processId = 1;
@@ -59,12 +60,12 @@ describe("BrowserHost 资源生命周期", () => {
     const host = new BrowserHost(() => null);
     const opening = host.userOpen(1, limits);
     expect(host.manageTabs({ taskId: 1, action: "list", context: limits })).toMatchObject([{ tabId: "t1", current: true }]);
-    const snapshot = host.snapshot({ taskId: 1, fromLine: 1, context: limits }, new AbortController().signal);
-    await expect(host.snapshot({ taskId: 2, tab: "t1", fromLine: 1, context: limits }, new AbortController().signal)).rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
+    const snapshot = host.snapshot({ taskId: 1, view: {}, context: limits }, new AbortController().signal);
+    await expect(host.snapshot({ taskId: 2, tab: "t1", view: {}, context: limits }, new AbortController().signal)).rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
     expect(tab().snapshot).not.toHaveBeenCalled();
     tab().finish();
     await expect(opening).resolves.toBe("t1");
-    await expect(snapshot).resolves.toMatchObject({ tabId: "t1", snapshot: "page" });
+    await expect(snapshot).resolves.toMatchObject({ tabId: "t1", snapshot: "- text 'page'" });
   });
 
   it("初始化中的标签计入每 Task 与全局上限", async () => {
@@ -117,7 +118,7 @@ describe("BrowserHost 资源生命周期", () => {
 
     const next = host.userOpen(1, limits);
     const waiter = new AbortController();
-    const waiting = host.snapshot({ taskId: 1, fromLine: 1, context: limits }, waiter.signal);
+    const waiting = host.snapshot({ taskId: 1, view: {}, context: limits }, waiter.signal);
     const cancelled = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
     waiter.abort();
     await cancelled;

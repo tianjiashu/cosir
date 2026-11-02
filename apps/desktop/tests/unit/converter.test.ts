@@ -14,10 +14,10 @@ import { activity, outcome, usage } from "./transport-fixtures";
 
 /** 已到终态那一轮回复末尾的渲染上下文。 */
 const completedRun = (runId: number): TransportMessageRenderContext => ({
-  runId, outcome: outcome("completed"), isRunEnd: true, activity: null,
+  runId, source: null, outcome: outcome("completed"), isRunEnd: true, activity: null,
 });
 const runningRun = (runId: number): TransportMessageRenderContext => ({
-  runId, outcome: null, isRunEnd: true, activity: activity(runId, "running"),
+  runId, source: null, outcome: null, isRunEnd: true, activity: activity(runId, "running"),
 });
 const toThreadMessage = (
   message: Pick<TransportMessage, "id" | "role" | "parts">,
@@ -50,16 +50,25 @@ describe("assistant transport converter", () => {
         { type: "image", image: "cosir-attachment://image-one" },
       ],
     });
-    expect(pending?.metadata.custom).toEqual({ runId: null });
+    expect(pending?.metadata.custom).toEqual({ runId: null, source: null });
     expect(toPendingUserMessage(command)?.id).toBe(pending?.id);
   });
 
   // 目的：结局与当前活动随消息一并投影，使消息渲染只依赖消息自身事实。潜在缺陷：消息组件回查
   // thread external state 时，只读作用域（无 external state 的 runtime）会在渲染期抛错。
+  it("Agent 消息的发送方随 user 消息的 custom 交给渲染层", () => {
+    const message: TransportMessage = {
+      id: "11", role: "user", parts: [{ type: "text", text: "做这个", status: "completed" }], runId: 3, outcome: null,
+      source: { taskId: 4, name: "主任务" },
+    };
+    const converted = toThreadMessage(message, { runId: 3, source: message.source, outcome: null, isRunEnd: false, activity: null });
+    expect(converted.metadata.custom).toEqual({ runId: 3, source: { taskId: 4, name: "主任务" } });
+  });
+
   it("projects the outcome and activity onto assistant message metadata (D5)", () => {
-    const message: TransportMessage = { id: "assistant-1", role: "assistant", parts: [], runId: 7, outcome: null };
+    const message: TransportMessage = { id: "assistant-1", role: "assistant", parts: [], runId: 7, source: null, outcome: null };
     const cancelled = outcome("cancelled", { usage: usage({ total_tokens: 42 }) });
-    const ended = toThreadMessage(message, { runId: 7, outcome: cancelled, isRunEnd: true, activity: null });
+    const ended = toThreadMessage(message, { runId: 7, source: null, outcome: cancelled, isRunEnd: true, activity: null });
     expect(ended.metadata.custom).toEqual({ runId: 7, isRunEnd: true, outcome: cancelled, activity: null });
     expect(ended.status).toEqual({ type: "incomplete", reason: "cancelled" });
 
@@ -280,6 +289,7 @@ describe("assistant transport converter", () => {
       ],
       runId: 1,
       outcome: null,
+      source: null,
     };
     const converted = toThreadMessage(message, runningRun(1));
     expect(converted.content[0]).toMatchObject({ type: "text", text: "partial **markdown", status: { type: "running" } });

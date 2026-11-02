@@ -32,9 +32,9 @@ function answer(index: number): string {
 function longConversation(): TransportState {
   const messages: TransportState["messages"] = [];
   for (let index = 0; index < PAIRS; index += 1) {
-    messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}：${"请帮我看看。".repeat(index % 3 + 1)}` }], runId: index + 1, outcome: null });
+    messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}：${"请帮我看看。".repeat(index % 3 + 1)}` }], runId: index + 1, source: null, outcome: null });
     messages.push({
-      id: `a-${index}`, role: "assistant", runId: index + 1, outcome: OUTCOME,
+      id: `a-${index}`, role: "assistant", runId: index + 1, source: null, outcome: OUTCOME,
       parts: [
         { type: "reasoning", text: "思考".repeat(40), status: "completed" },
         { type: "text", text: answer(index), status: "completed" },

@@ -8,7 +8,7 @@ import {
   type ActivityTransition,
   type TransportFrameEnvelope,
 } from "@/lib/assistant/transport-frame-store";
-import { activity, assistantMessage, outcome, queuedMessage, transportState, userMessage } from "./transport-fixtures";
+import { activity, agentMessage, assistantMessage, outcome, queuedMessage, transportState, userMessage } from "./transport-fixtures";
 
 const streaming = (id: string, text: string): TransportMessage => (
   assistantMessage(id, 1, [{ type: "text", text, status: "running" }])
@@ -285,6 +285,17 @@ describe("TransportFrameStore 乐观命令收敛（D8）", () => {
     expect(store.getSnapshot().pendingCommands.map((item) => item.message.parts[0])).toEqual([{ type: "text", text: "second" }]);
 
     store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [queuedMessage("3", "second")] }]));
+    expect(store.getSnapshot().pendingCommands).toEqual([]);
+  });
+
+  it("Agent 消息到达不认领用户的乐观发送：它不是用户发的", () => {
+    const store = new TransportFrameStore(transportState({ messages: [userMessage("1", 1)], activity: activity(1, "completed") }));
+    store.setPendingCommands([command("mine")]);
+
+    store.applyFrame(mutation([{ kind: "set", path: ["messages", 1], value: agentMessage("2", 2) }]));
+    expect(store.getSnapshot().pendingCommands).toHaveLength(1);
+
+    store.applyFrame(mutation([{ kind: "set", path: ["messages", 2], value: userMessage("3", 2, "mine") }]));
     expect(store.getSnapshot().pendingCommands).toEqual([]);
   });
 

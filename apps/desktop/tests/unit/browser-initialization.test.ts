@@ -13,7 +13,7 @@ vi.mock("@/electron/main/browser/browser-session", () => ({ browserPageWebPrefer
 vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
 import { BrowserHost } from "@/electron/main/browser/browser-host";
 
-const flush = async () => { for (let i = 0; i < 12; i += 1) await Promise.resolve(); };
+const flush = async () => { for (let i = 0; i < 16; i += 1) await Promise.resolve(); };
 const limits = { limits: { perTask: 1, total: 1 }, downloadDir: "/workspace/.cosir/Download" };
 
 beforeEach(() => {
@@ -29,7 +29,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("BrowserTab 初始化与 Host 清理", () => {
-  it.each(["load", "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"])("在 %s 等待中删除 Task，停止后续步骤并释放资源", async (stage) => {
+  it.each(["load", "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Target.setAutoAttach", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"])("在 %s 等待中删除 Task，停止后续步骤并释放资源", async (stage) => {
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });
     if (stage === "load") contents.loadURL.mockReturnValue(pending);
@@ -51,7 +51,7 @@ describe("BrowserTab 初始化与 Host 清理", () => {
     expect(host.state().tabs).toEqual([]);
   });
 
-  it.each(["load", "attach", "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"])("%s 失败由 Host 关闭一次，不遗留计时器或标签", async (stage) => {
+  it.each(["load", "attach", "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Target.setAutoAttach", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"])("%s 失败由 Host 关闭一次，不遗留计时器或标签", async (stage) => {
     const error = new Error(`${stage} failed`);
     if (stage === "load") contents.loadURL.mockRejectedValue(error);
     else if (stage === "attach") contents.debugger.attach.mockImplementation(() => { throw error; });
@@ -71,10 +71,10 @@ describe("BrowserTab 初始化与 Host 清理", () => {
     await host.userOpen(1, limits);
     const methods = contents.debugger.sendCommand.mock.calls.map(([method]) => method);
     expect(methods).toEqual([
-      "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Emulation.setFocusEmulationEnabled",
+      "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Target.setAutoAttach", "Emulation.setFocusEmulationEnabled",
       "Emulation.setDeviceMetricsOverride", "Emulation.setTouchEmulationEnabled", "Emulation.setEmulatedMedia",
     ]);
-    expect(contents.debugger.sendCommand).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", expect.objectContaining({ width: 1280, height: 800, scale: 1, mobile: false }));
+    expect(contents.debugger.sendCommand).toHaveBeenCalledWith("Emulation.setDeviceMetricsOverride", expect.objectContaining({ width: 1280, height: 800, scale: 1, mobile: false }), undefined);
     host.closeAll();
   });
 

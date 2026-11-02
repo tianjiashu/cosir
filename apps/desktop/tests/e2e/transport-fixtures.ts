@@ -17,8 +17,8 @@ export function completedState(
   return {
     title: "测试对话",
     messages: [
-      { id: user.id, role: "user", parts: user.parts, runId, outcome: null },
-      { id: `assistant-${user.id}`, role: "assistant", parts: assistantParts, runId, outcome },
+      { id: user.id, role: "user", parts: user.parts, runId, source: null, outcome: null },
+      { id: `assistant-${user.id}`, role: "assistant", parts: assistantParts, runId, outcome, source: null },
     ],
     messageOffset: 0, activity: { runId, ...activityOutcome, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],

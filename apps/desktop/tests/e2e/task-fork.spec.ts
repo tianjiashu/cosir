@@ -9,9 +9,9 @@ const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups:
 const snapshot = (status: "completed" | "running" | "suspended"): TransportState => {
   const ended = (runStatus: string) => runStatus === "completed";
   const turn = (runId: number, runStatus: string) => [
-    { id: `u-${runId}`, role: "user" as const, runId, outcome: null,
+    { id: `u-${runId}`, role: "user" as const, runId, source: null, outcome: null,
       parts: [{ type: "text" as const, text: `问题 ${runId}`, status: "completed" as const }] },
-    { id: `assistant-u-${runId}`, role: "assistant" as const, runId,
+    { id: `assistant-u-${runId}`, role: "assistant" as const, runId, source: null,
       parts: [{ type: "text" as const, text: `回答 ${runId}`, status: ended(runStatus) ? "completed" as const : "running" as const }],
       outcome: ended(runStatus) ? { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: null } : null },
   ];

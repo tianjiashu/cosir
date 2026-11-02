@@ -182,6 +182,12 @@ export type TransportOutcome = {
   durationMs: number | null;
 };
 
+/** Agent 消息的发送方：`taskId` 用于跳到来源 Task，`name` 是发送时的显示名快照。 */
+export type TransportMessageSource = {
+  taskId: number;
+  name: string;
+};
+
 /** 单条 Transport 消息：Task 级扁平消息列表中的 canonical 消息。 */
 export type TransportMessage = {
   id: string;
@@ -191,6 +197,11 @@ export type TransportMessage = {
   runId: number;
   /** 仅「该 Run 最后一条助手消息」在 Run 终态后非空；user 消息恒为 null。 */
   outcome: TransportOutcome | null;
+  /**
+   * 仅 Agent 消息（另一个 Agent 交来、开启一轮的 user 消息：委派、追加消息、Team 节点输入）非空。
+   * 它不是用户说的话：另行渲染、不可编辑，也不认领用户的乐观发送。
+   */
+  source: TransportMessageSource | null;
 };
 
 /**
