@@ -1,4 +1,4 @@
-"""子 Agent 创建入口的 profile 类型授权测试。"""
+"""child_agent_send 的发起配置来源：委派子 Agent 按 profile 授权重算，Agent 分叉沿用自己的 Run。"""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +9,7 @@ from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.tool.handler import child_agent_send
 from app.core.tool.schemas import ToolExecutionContext
+from app.models.conversation_run_options import ConversationRunOptions
 
 
 @pytest.mark.asyncio
@@ -58,8 +59,90 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
         workspace_id=3,
         workspace_root=tmp_path,
         run_id=12,
+        event_loop=SimpleNamespace(is_closed=lambda: False),  # type: ignore[arg-type]
     )
 
     result = tool.execute(11, "Continue this task.", execution_context=context)
 
     assert result.status == "error"
+    assert "no longer available" in result.content
+
+
+def test_child_agent_send_to_a_fork_reuses_its_own_launch_without_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """分叉不换身份：新 Run 沿用它当前 Run 的发起配置，不按子 Agent profile 解析。"""
+
+    fork_task = SimpleNamespace(
+        id=41,
+        title="前端部分",
+        derived_by=lambda task_id: task_id == 7,
+        task_type="fork",
+        workspace_id=3,
+        current_run_id=11,
+    )
+    parent_task = SimpleNamespace(id=7, title="主对话")
+    monkeypatch.setattr(
+        child_agent_send,
+        "get_task_service",
+        lambda: SimpleNamespace(
+            get_task=lambda task_id: fork_task if task_id == 41 else parent_task
+        ),
+    )
+    monkeypatch.setattr(child_agent_send, "get_workspace_service", lambda: None)
+    monkeypatch.setattr(
+        child_agent_send,
+        "get_conversation_run_ledger",
+        lambda: SimpleNamespace(
+            get_run=lambda _run_id: SimpleNamespace(
+                id=11,
+                status="completed",
+                agent_id="main_agent",
+                model_config_id=3,
+                options=ConversationRunOptions(
+                    reasoning_effort="high", disabled_tool_groups=["浏览器工具"]
+                ),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        configuration, "get_agent_registry", lambda: pytest.fail("resolved a child profile")
+    )
+    prepared: list[dict] = []
+    monkeypatch.setattr(
+        child_agent_send,
+        "prepare_agent_message",
+        lambda text, **kwargs: prepared.append(kwargs) or "agent-message",
+    )
+    enqueued: list[tuple[int, str]] = []
+    monkeypatch.setattr(
+        child_agent_send.task_runtime_spaces,
+        "enqueue",
+        lambda task_id, message: enqueued.append((task_id, message)),
+    )
+
+    def run_child(_context, child_task_id, *, label, enqueue, placeholder):
+        enqueue()
+        return placeholder()
+
+    monkeypatch.setattr(child_agent_send, "run_child", run_child)
+    context = ToolExecutionContext(
+        step_id="step-1",
+        task_id=7,
+        workspace_id=3,
+        workspace_root=tmp_path,
+        run_id=12,
+        event_loop=SimpleNamespace(is_closed=lambda: False),  # type: ignore[arg-type]
+    )
+
+    result = child_agent_send.ChildAgentSendTool().execute(
+        41, "再补个测试", execution_context=context
+    )
+
+    assert result.status == "success"
+    [kwargs] = prepared
+    assert (kwargs["agent_id"], kwargs["model_config_id"]) == ("main_agent", 3)
+    assert kwargs["reasoning_effort"] == "high"
+    assert kwargs["disabled_tool_groups"] == ["浏览器工具"]
+    assert enqueued == [(41, "agent-message")]
