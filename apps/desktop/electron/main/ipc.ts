@@ -4,6 +4,7 @@ import { BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent } 
 import type { BackendSupervisor } from "./backend/supervisor";
 import type { BrowserHost } from "./browser/browser-host";
 import { httpUrl } from "./browser/params";
+import { addressToUrl } from "./browser/web-url";
 import { BROWSER_TAB_ID } from "../shared/host-contract";
 import { appendJsonLine } from "./desktop-log";
 import { appLogDir } from "./paths";
@@ -65,14 +66,12 @@ export function registerHostIpc(supervisor: BackendSupervisor, browser: BrowserH
   handle(HOST_CHANNEL.browserRevealDownload, (_event, downloadId) => browser.revealDownload(parseDownloadId(downloadId)));
 }
 
-/** 地址栏输入：没写协议的按 https 补全；协议只允许 http(s)（与 Agent 走同一条校验）。 */
+/** 地址栏输入：没写协议的补全（`addressToUrl`）；协议只允许 http(s)（与 Agent 走同一条校验）。 */
 function parseNavigationUrl(value: unknown): string {
   if (typeof value !== "string" || !value.trim()) throw new Error("网址不能为空");
   if (value.length > 4096) throw new Error("网址太长");
-  const text = value.trim();
-  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(text) ? text : `https://${text}`;
   try {
-    return httpUrl(withScheme);
+    return httpUrl(addressToUrl(value.trim()));
   } catch {
     throw new Error("只能打开 http 或 https 网址");
   }

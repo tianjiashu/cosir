@@ -12,15 +12,17 @@ export type Workspace = {
 
 type ForkTaskMetadata = {
   source_task_id: number;
-  /** fork 切分点：源 Task 中那一轮回复所在的消息 id。 */
-  source_message_id: string;
+  /** fork 切分点：用户 fork 时是源 Task 中那一轮回复所在的消息 id；Agent fork 为 null。 */
+  source_message_id: string | null;
+  /** Agent 用 `fork_task` 分出来的对话标为 `agent`；用户 fork 没有这个字段。 */
+  created_by?: "agent";
 };
 
 export type WorkspaceTask = {
   task_id: number;
   workspace_id: number;
   title: string;
-  task_type: "user" | "fork" | "delegation" | string;
+  task_type: "user" | "fork" | "delegate_task" | "agent_team_node" | string;
   extra?: {
     fork?: ForkTaskMetadata;
   } | null;

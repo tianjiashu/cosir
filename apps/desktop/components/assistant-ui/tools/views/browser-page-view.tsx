@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
 import { useBrowserTab } from "@/lib/browser/host-state-store";
 import { useWorkbenchActions } from "@/lib/workbench/context";
-import { readBrowserPageDisplay, type BrowserPageDisplay } from "../browser-page-display";
+import { cn } from "@/lib/utils";
+import { readBrowserPageDisplay, type BrowserActStep, type BrowserPageDisplay } from "../browser-page-display";
 import type { CallView } from "../call-view";
 
 /** 地址与标题是调用当时的快照，不是事实源：标签页可能已经导航或关闭（关闭后只标注、不提供打开入口）。 */
@@ -48,16 +49,42 @@ function Screenshot({ assetId }: { assetId: string }) {
   return <div className="bg-surface rounded-lg p-2"><ImageStrip images={images} label="网页截图" /></div>;
 }
 
+/** 动作类型 → 动词（展示外壳归前端，与工具目录同一做法：按封闭的类型查表）。 */
+const STEP_VERBS: Record<string, string> = {
+  click: "点击", hover: "悬停", drag: "拖动", type: "输入", press: "按键", select: "选择",
+  scroll: "滚动", upload: "上传", wait_for: "等待", dialog: "回答弹窗",
+};
+
+/** `browser_act` 的每一步：做完的照常、停下的那步标红带短提示、之后没执行的标灰。目标说明来自网页，只显示。 */
+function ActSteps({ steps }: { steps: BrowserActStep[] }) {
+  return (
+    <ol className="bg-surface flex flex-col gap-0.5 rounded-lg px-3 py-2 text-xs" aria-label="动作步骤">
+      {steps.map((step, index) => (
+        <li key={index} className={cn("flex min-w-0 gap-1.5", step.status === "failed" && "text-destructive", step.status === "skipped" && "text-muted-foreground")}>
+          <span className="text-muted-foreground shrink-0 tabular-nums">{index + 1}.</span>
+          <span className="shrink-0">{STEP_VERBS[step.action] ?? step.action}</span>
+          {step.target && <span className="min-w-0 truncate" title={step.target}>{step.target}</span>}
+          {step.status === "failed" && step.hint && <span className="shrink-0">· {step.hint}</span>}
+          {step.status === "skipped" && <span className="shrink-0">· 未执行</span>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 /**
  * `browser-page`（`browser_navigate` / `browser_snapshot` / `browser_act` / `browser_screenshot` / `browser_handoff`）：
- * 元信息是页面标题（或地址），截图是展开体。交接要用户做的事（`handoff_reason`）由等待卡展示并承载交还。
+ * 元信息是页面标题（或地址），截图或动作步骤是展开体（有一步停下时默认展开）。交接要用户做的事（`handoff_reason`）
+ * 由等待卡展示并承载交还。
  */
 export const browserPageView: CallView = {
   accepts: (data) => readBrowserPageDisplay(data) !== null,
   meta: (data) => <BrowserPageMeta display={readBrowserPageDisplay(data)!} />,
   body: (data) => {
     const display = readBrowserPageDisplay(data)!;
-    return display.screenshot ? <Screenshot assetId={display.screenshot} /> : null;
+    if (display.screenshot) return <Screenshot assetId={display.screenshot} />;
+    return display.steps?.length ? <ActSteps steps={display.steps} /> : null;
   },
+  defaultOpen: (data) => readBrowserPageDisplay(data)!.steps?.some((step) => step.status === "failed") ?? false,
   actions: (data) => <OpenTabAction display={readBrowserPageDisplay(data)!} />,
 };

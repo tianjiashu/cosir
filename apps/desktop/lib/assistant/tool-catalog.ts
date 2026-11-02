@@ -133,6 +133,7 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   mcp: { verb: "调用 MCP", icon: "network", target: mcpTarget },
   skill: { verb: "加载 Skill", icon: "info", target: skillTarget },
   delegate_task: { verb: "委派任务", icon: "users", title: (args) => str(args.agent_name), target: (args) => str(args.child_agent_id) },
+  fork_task: { verb: "分叉对话", icon: "git-fork", title: (args) => str(args.title) },
   child_agent_send: { verb: "发送给子 Agent", icon: "send", target: childTask },
   child_agent_status: { verb: "读取子 Agent 状态", icon: "info", target: childTask },
   wait_messages: { verb: "等待结果", icon: "clock" },

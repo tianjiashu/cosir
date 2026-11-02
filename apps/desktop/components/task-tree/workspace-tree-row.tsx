@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from "react";
-import { ChevronDownIcon, ChevronRightIcon, FolderIcon, GitForkIcon, PinIcon } from "lucide-react";
+import { BotIcon, ChevronDownIcon, ChevronRightIcon, FolderIcon, GitForkIcon, PinIcon } from "lucide-react";
 import type { NodeApi, NodeRendererProps, RowRendererProps } from "react-arborist";
 
 import { formatRelativeTime } from "@/lib/format/relative-time";
@@ -156,8 +156,11 @@ function WorkspaceTaskRow({ node, style, item, actions }: Pick<NodeRendererProps
   const task = item.task;
   const status = useTaskExecutionStatus(task.task_id);
   const nested = node.level > ROOT_TASK_LEVEL;
-  // 嵌套行的 Fork 身份由层级表达；源任务已不在列表中、被提为顶层的 Fork 仍保留图标。
-  const showForkIcon = task.task_type === "fork" && !nested;
+  // 嵌套行的 Fork 身份由层级表达；源任务已不在列表中、被提为顶层的 Fork 仍保留图标。Agent 用
+  // `fork_task` 分出的对话无论在哪一层都标 Bot：它不是用户自己开的分支。
+  const agentFork = task.task_type === "fork" && task.extra?.fork?.created_by === "agent";
+  const showForkIcon = task.task_type === "fork" && !nested && !agentFork;
+  const showMarkerIcon = showForkIcon || agentFork;
   // 覆盖 react-arborist 按层级等距算出的 paddingLeft，只收紧 Fork 层。
   const paddingLeft = ROOT_TASK_INDENT + (node.level - ROOT_TASK_LEVEL) * FORK_INDENT;
   return (
@@ -168,7 +171,8 @@ function WorkspaceTaskRow({ node, style, item, actions }: Pick<NodeRendererProps
       ))}
       <span className="workspace-tree-task-marker" style={{ flexBasis: TASK_MARKER_WIDTH }} data-nested={nested || undefined}>
         {showForkIcon && <GitForkIcon className="size-3.5 text-muted-foreground" aria-label="Fork 任务" />}
-        <TaskRunStatusDot status={status} className={showForkIcon ? "absolute -top-0.5 right-0 size-1.5" : undefined} />
+        {agentFork && <BotIcon className="size-3.5 text-muted-foreground" aria-label="Agent 分出的对话" />}
+        <TaskRunStatusDot status={status} className={showMarkerIcon ? "absolute -top-0.5 right-0 size-1.5" : undefined} />
       </span>
       <span className="flex min-w-0 flex-1 items-center gap-1">
         <span className="workspace-tree-title min-w-0 truncate" title={item.workspaceName ? `${task.full_title}\n工作区：${item.workspaceName}` : task.full_title}>{task.full_title}</span>

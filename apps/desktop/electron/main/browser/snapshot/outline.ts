@@ -87,9 +87,10 @@ export function buildOutline(document: SnapshotDocument, refs: RefRegistry, { pa
         visitChildren(node, depth, parent);
         return;
       }
-      let line = `${role}${name ? ` "${name}"` : ""}`;
+      const label = `${role}${name ? ` "${name}"` : ""}`;
+      let line = label;
       if ((interactive || clickable) && node.backendDOMNodeId !== undefined) {
-        line += ` [ref=${refs.assign({ sessionId: doc.sessionId, backendNodeId: node.backendDOMNodeId })}]`;
+        line += ` [ref=${refs.assign({ sessionId: doc.sessionId, backendNodeId: node.backendDOMNodeId }, label)}]`;
       }
       if (clickable) line += " [cursor=pointer]";
       line += states(node);

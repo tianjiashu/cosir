@@ -45,6 +45,7 @@ import {
   useTerminalWorkbenchStore,
 } from "@/lib/terminal/terminal-workbench-store";
 import { WorkbenchProvider } from "@/lib/workbench/context";
+import { TaskListingContext } from "@/components/layout/task-listing-context";
 import { SIDEBAR_WIDTH, useLayoutPreferences } from "@/lib/layout/preferences";
 import { cn } from "@/lib/utils";
 import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
@@ -235,7 +236,7 @@ export function AppLayout() {
   // 引用跳转与工作台共用同一个工作区来源：文件标签总是打开到当前显示的那个工作台桶里。
   return (
     <ReferenceBridgeProvider workspaceRoot={workbenchWorkspace?.root_path ?? ""} workspaceName={workbenchWorkspace?.name ?? "工作区"} target={filesVisible ? (routeTaskId ? `task:${routeTaskId}` : `new:${catalog.selectedWorkspaceId}`) : null} workspaceId={workbenchWorkspaceId}>
-    <WorkbenchProvider workspaceId={workbenchWorkspaceId}>
+    <WorkbenchProvider workspaceId={workbenchWorkspaceId}><TaskListingContext.Provider value={catalog.ensureTaskListed}>
       {/* 根是下沉的窗口底色，侧栏直接铺在上面；主区与停靠卡片在 bg-background 上，二者靠明度差分隔，不画线。 */}
       <div className="bg-canvas relative flex h-dvh min-h-0 overflow-hidden">
         <BackendStatusBanner />
@@ -428,6 +429,6 @@ export function AppLayout() {
         onNavigate={navigate}
         onRestartBackend={canRestartBackendRuntime() ? () => confirmBackendRestart("command_palette") : undefined}
       />
-    </WorkbenchProvider></ReferenceBridgeProvider>
+    </TaskListingContext.Provider></WorkbenchProvider></ReferenceBridgeProvider>
   );
 }

@@ -14,7 +14,7 @@ vi.mock("@/lib/browser/host-state-store", () => ({
 import { displayedTab, followTabChanges, useBrowserPanelStore } from "@/lib/browser/panel-store";
 
 function tab(tabId: string, taskId = 7, openerId: string | null = null): BrowserTabSummary {
-  return { tabId, taskId, openerId, createdBy: "agent", url: "https://example.com", title: "", loading: false, crashed: false, dialog: null };
+  return { tabId, taskId, openerId, createdBy: "agent", url: "https://example.com", title: "", loading: false, crashed: false, dialog: null, agentBusy: false };
 }
 
 afterEach(() => {

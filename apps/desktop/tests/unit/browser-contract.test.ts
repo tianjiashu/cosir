@@ -53,6 +53,7 @@ describe("wire samples", () => {
       dialog: { id: 7, type: "confirm", message: "Delete it?", defaultText: "" },
       completed: 1,
       failure: { index: 1, code: "DIALOG_OPEN", message: "the page is paused: it is showing a confirm dialog (#7)" },
+      targets: ['button "Delete"', null],
     };
     expect(actWire(outcome)).toEqual(samples.act);
   });

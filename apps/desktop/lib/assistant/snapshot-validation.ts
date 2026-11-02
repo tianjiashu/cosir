@@ -68,6 +68,12 @@ function validateDelegationDisplayData(data: Record<string, unknown>, path: stri
   if (data.status !== undefined) requireKnownChildStatus(data.status, `${path}.status`);
 }
 
+function validateForkDisplayData(data: Record<string, unknown>, path: string): void {
+  requireExactKeys(data, ["kind", "title", "child_task_id"], path);
+  if (typeof data.title !== "string" || data.title.trim() === "") throw new TransportSnapshotValidationError(`${path}.title`, "非空字符串");
+  requirePositiveInteger(data.child_task_id, `${path}.child_task_id`);
+}
+
 function validateChildAgentResultDisplayData(data: Record<string, unknown>, path: string): void {
   requireExactKeys(data, [
     "kind", "operation", "child_task_id", "status", "agent_id", "agent_name", "final_output", "end_reason",
@@ -96,6 +102,7 @@ function validateDisplayData(value: unknown, path: string): void {
   const data = requireRecord(value, path);
   if (data.kind !== undefined && typeof data.kind !== "string") throw new TransportSnapshotValidationError(`${path}.kind`, "字符串");
   if (data.kind === "delegation-result") validateDelegationDisplayData(data, path);
+  if (data.kind === "fork-task-result") validateForkDisplayData(data, path);
   if (data.kind === "child-agent-result") validateChildAgentResultDisplayData(data, path);
   if (data.kind === "agent-configuration-draft") validateAgentConfigurationDraftDisplayData(data, path);
 }

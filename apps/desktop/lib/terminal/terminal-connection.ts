@@ -96,7 +96,7 @@ export class TerminalConnection {
     this.connect();
   }
 
-  /** 用户手动重连（⋮ 菜单）：清掉退避计数，从当前 seq 续传。 */
+  /** 用户手动重连（面板状态栏的「重新连接」）：清掉退避计数，从当前 seq 续传。 */
   reconnect(): void {
     if (this.disposed) return;
     this.stopped = false;

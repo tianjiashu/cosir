@@ -53,7 +53,8 @@ export type TaskTab = { tabId: string; title: string; url: string; current: bool
 /** 冻结帧每条 CDP 命令的时限：等不到就不要帧、直接收起画面，免得原生画面长时间盖住应用的弹层。 */
 const FREEZE_TIMEOUT_MS = 1_000;
 
-type TabEntry = { tab: BrowserTab; ready: Promise<void>; controller: AbortController };
+/** `agentCalls`：此刻在这个标签上执行中的 Agent 操作数（`operate` 计数），面板据此标出「正在执行」。 */
+type TabEntry = { tab: BrowserTab; ready: Promise<void>; controller: AbortController; agentCalls: number };
 
 /**
  * 内置浏览器的唯一所有者：含初始化作业的标签登记、全部 `BrowserTab`、下载登记（`BrowserDownloads`）与
@@ -74,7 +75,8 @@ type TabEntry = { tab: BrowserTab; ready: Promise<void>; controller: AbortContro
  * JS 弹窗停住的是整个渲染进程，「页面为什么停着」按进程判断（`pausedBy`），弹窗打开时同进程标签在途的
  * CDP 一起失败。
  *
- * Agent 的操作经 `operate` 带上「请求取消或标签关闭」的组合信号：标签中途关闭时一律以 `TAB_NOT_FOUND` 结束。
+ * Agent 的操作经 `operate` 带上「请求取消或标签关闭」的组合信号：标签中途关闭时一律以 `TAB_NOT_FOUND` 结束；它也是
+ * 「Agent 正在这个标签上执行」的唯一计数点（标签摘要的 `agentBusy`）。
  *
  * 摆放：同一时刻至多一个视图挂在主窗口上（浏览器面板只渲染激活标签）。挂上新视图时摘下旧的；摘下的视图
  * 恢复视口大小继续在后台工作。挂哪个、挂到哪由这里决定（`place` / `detach` 是唯一入口），渲染进程只上报「我想把
@@ -208,7 +210,10 @@ export class BrowserHost implements BrowserSessionEvents {
   // ---------------------------------------------------------------------------
 
   state(): BrowserState {
-    return { tabs: [...this.tabs.values()].map(({ tab }) => tab.summary()), downloads: this.downloads.list() };
+    return {
+      tabs: [...this.tabs.values()].map(({ tab, agentCalls }) => ({ ...tab.summary(), agentBusy: agentCalls > 0 })),
+      downloads: this.downloads.list(),
+    };
   }
 
   onChange(listener: (state: BrowserState) => void): () => void {
@@ -292,6 +297,13 @@ export class BrowserHost implements BrowserSessionEvents {
    * 宿主内部错误；操作碰巧在关闭后才返回（页面销毁时 Chromium 会结束在等的 Promise），结果说的是已经不在的标签，
    * 同样报关闭。
    */
+  /** 进出一次 Agent 操作：「正在执行」只在 0 与非 0 之间切换时推送，同一标签上并发的调用不重复推送。 */
+  private countAgentCall(entry: TabEntry, delta: 1 | -1): void {
+    const before = entry.agentCalls;
+    entry.agentCalls += delta;
+    if ((before === 0) !== (entry.agentCalls === 0)) this.publish();
+  }
+
   private async operate<T>(
     entry: TabEntry,
     signal: AbortSignal,
@@ -305,12 +317,15 @@ export class BrowserHost implements BrowserSessionEvents {
       if (entry.tab.contents.isDestroyed()) throw browserError("TAB_NOT_FOUND", `tab ${entry.tab.tabId} was closed`);
     };
     let result: T;
+    this.countAgentCall(entry, 1);
     try {
       const tab = until === "ready" ? await this.readyTab(entry, scoped) : await this.usableTab(entry, scoped);
       result = await run(tab, scoped);
     } catch (error) {
       assertOpen();
       throw error;
+    } finally {
+      this.countAgentCall(entry, -1);
     }
     assertOpen();
     return result;
@@ -409,7 +424,7 @@ export class BrowserHost implements BrowserSessionEvents {
     });
     const controller = new AbortController();
     // 初始化延后到本轮同步登记结束（收养时 Electron 要先拿到 webContents 才会开始加载）。
-    const entry: TabEntry = { tab, controller, ready: Promise.resolve().then(() => {
+    const entry: TabEntry = { tab, controller, agentCalls: 0, ready: Promise.resolve().then(() => {
       controller.signal.throwIfAborted();
       return tab.initialize(controller.signal);
     }) };

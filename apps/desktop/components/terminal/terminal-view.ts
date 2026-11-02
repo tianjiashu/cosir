@@ -21,8 +21,8 @@ import { TerminalResizeController } from "./terminal-resize-controller";
 import { xtermPaneFont } from "./xterm-appearance";
 
 /**
- * 视图向 React 报告的连接期状态。输入租约、交接与退出码是会话事实，只读 snapshot
- * `terminal_sessions`，这里不持有第二份。
+ * 视图向 React 报告的连接期状态。交接与退出码是会话事实，只读 snapshot（`handoffs`、
+ * `terminal_sessions`），这里不持有第二份。
  */
 export type TerminalViewRuntime = {
   connection: TerminalConnectionState;

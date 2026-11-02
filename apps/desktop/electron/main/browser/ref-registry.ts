@@ -14,19 +14,27 @@ export type PageNode = { sessionId?: string; backendNodeId: number };
  */
 export class RefRegistry {
   private readonly nodeByRef = new Map<string, PageNode>();
+  /** 元素的说明（角色与名称，最近一次快照里的），给工具卡片列出「点了哪个元素」。 */
+  private readonly labelByRef = new Map<string, string>();
   private readonly refByNode = new Map<string, string>();
   private issued = 0;
 
-  /** 给节点取 ref：已登记的沿用，否则发一个新序号。 */
-  assign(node: PageNode): string {
+  /** 给节点取 ref：已登记的沿用（说明更新为这一次的），否则发一个新序号。 */
+  assign(node: PageNode, label: string): string {
     const key = `${node.sessionId ?? ""}:${node.backendNodeId}`;
-    const known = this.refByNode.get(key);
-    if (known) return known;
-    this.issued += 1;
-    const ref = `e${this.issued}`;
-    this.refByNode.set(key, ref);
-    this.nodeByRef.set(ref, node);
+    let ref = this.refByNode.get(key);
+    if (!ref) {
+      this.issued += 1;
+      ref = `e${this.issued}`;
+      this.refByNode.set(key, ref);
+      this.nodeByRef.set(ref, node);
+    }
+    this.labelByRef.set(ref, label);
     return ref;
+  }
+
+  label(ref: string): string | undefined {
+    return this.labelByRef.get(ref);
   }
 
   /** 没登记过（含导航前的 ref）返回 `undefined`。节点是否仍在页面上由调用方向页面确认。 */
@@ -37,5 +45,6 @@ export class RefRegistry {
   clear(): void {
     this.nodeByRef.clear();
     this.refByNode.clear();
+    this.labelByRef.clear();
   }
 }

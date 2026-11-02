@@ -1,5 +1,14 @@
 import { ATTACHMENT_ASSET_ID } from "@/lib/assistant/attachments/attachment-locator";
 
+/** `browser_act` 的一步：动作类型、目标说明（元素的角色与名称、坐标，来自网页文字）与结局。 */
+export type BrowserActStep = {
+  action: string;
+  target: string | null;
+  status: "done" | "failed" | "skipped";
+  /** 停在这一步的短提示（后端分类映射）。 */
+  hint?: string;
+};
+
 /** `display_data.kind = "browser-page"` 的载荷（后端 `app/tools/display/browser_display.py`）。 */
 export type BrowserPageDisplay = {
   tabId: string;
@@ -9,7 +18,11 @@ export type BrowserPageDisplay = {
   screenshot?: string;
   /** 交接给用户时要用户做的事（`browser_handoff`）。 */
   handoffReason?: string;
+  /** `browser_act` 的每一步。 */
+  steps?: BrowserActStep[];
 };
+
+const STEP_STATUSES = new Set(["done", "failed", "skipped"]);
 
 const TAB_ID = /^t\d+$/;
 
@@ -22,5 +35,23 @@ export function readBrowserPageDisplay(value: unknown): BrowserPageDisplay | nul
   const display: BrowserPageDisplay = { tabId: data.tab_id, url: data.url, title: data.title };
   if (typeof data.screenshot === "string" && ATTACHMENT_ASSET_ID.test(data.screenshot)) display.screenshot = data.screenshot;
   if (typeof data.handoff_reason === "string" && data.handoff_reason.trim()) display.handoffReason = data.handoff_reason;
+  if (Array.isArray(data.steps)) {
+    const steps = data.steps.map(readStep);
+    if (steps.every((step) => step !== null)) display.steps = steps as BrowserActStep[];
+  }
   return display;
 }
+
+function readStep(value: unknown): BrowserActStep | null {
+  if (typeof value !== "object" || value === null) return null;
+  const step = value as Record<string, unknown>;
+  if (typeof step.action !== "string" || !STEP_STATUSES.has(step.status as string)) return null;
+  if (step.target !== null && typeof step.target !== "string") return null;
+  return {
+    action: step.action,
+    target: step.target,
+    status: step.status as BrowserActStep["status"],
+    ...(typeof step.hint === "string" ? { hint: step.hint } : {}),
+  };
+}
+

@@ -214,6 +214,14 @@ export function useWorkspaceCatalog(routeTaskId: number | null, workspaceConfigu
     for (const workspaceId of pendingWorkspaceIds) void refreshWorkspaceTasks(workspaceId);
   }, [refreshWorkspaceTasks, status]);
 
+  // 侧栏里还没有这个 Task 就刷新它所在的工作区目录（Agent fork 在父 Run 运行中建出，见
+  // ``TaskListingContext``）；已在目录里时什么都不做，所以重复调用只会刷新一次。
+  const ensureTaskListed = useCallback((taskId: number) => {
+    if (activeTaskWorkspaceId === null) return;
+    if (workspaces.some((workspace) => workspace.tasks.some((task) => task.task_id === taskId))) return;
+    void refreshWorkspaceTasks(activeTaskWorkspaceId);
+  }, [activeTaskWorkspaceId, refreshWorkspaceTasks, workspaces]);
+
   const handleTaskLoaded = useCallback((task: WorkspaceTask) => {
     if (task.task_id !== routeTaskId) return;
     setRouteTask(task);
@@ -238,6 +246,7 @@ export function useWorkspaceCatalog(routeTaskId: number | null, workspaceConfigu
     error,
     load,
     refreshWorkspaceTasks,
+    ensureTaskListed,
     selectedWorkspaceId,
     selectedWorkspace,
     selectWorkspace,

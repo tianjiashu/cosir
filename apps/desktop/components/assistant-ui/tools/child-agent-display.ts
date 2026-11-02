@@ -67,6 +67,18 @@ export function readDelegationDisplay(value: unknown): DelegationDisplay | null 
   };
 }
 
+export type ForkDisplay = { title: string; childTaskId: number };
+
+/** `fork-task-result`（`fork_task`）：分叉对话的标题与定位。 */
+export function readForkDisplay(value: unknown): ForkDisplay | null {
+  const data = record(value);
+  if (!data || data.kind !== "fork-task-result") return null;
+  const title = nonEmptyString(data.title);
+  const childTaskId = positiveId(data.child_task_id);
+  if (title === undefined || childTaskId === undefined) return null;
+  return { title, childTaskId };
+}
+
 /** Read the allowlisted result projection for child_agent_send/status. */
 export function readChildAgentResultDisplay(value: unknown): ChildAgentResultDisplay | null {
   const data = record(value);

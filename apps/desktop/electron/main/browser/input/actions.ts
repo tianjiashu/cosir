@@ -2,6 +2,7 @@ import { HostMethodError } from "../../host-link/methods";
 import { browserError } from "../errors";
 import type { PageAction } from "../params";
 import { isMissingNode } from "./element";
+import { highlightTarget } from "./highlight";
 import { pressKey, typeText } from "./keyboard";
 import { scroll, select } from "./page-functions";
 import { click, drag, hover } from "./pointer";
@@ -24,21 +25,26 @@ import { waitFor } from "./wait";
  * 动作弹出的那个，所以「点删除 + 确认」能在同一批里完成，又不会把确认答给一个没看见的弹窗。
  */
 
-export type ActResult = {
+/** 一批动作执行到哪一步、停在哪（`runActions` 的结果）。 */
+export type BatchResult = {
   completed: number;
   failure: { index: number; code: string; message: string } | null;
 };
 
+/** 交给 Agent 与工具卡片的结果：另附每个动作的目标说明（`targets.ts` 的 `describeTarget`），与动作一一对应。 */
+export type ActResult = BatchResult & { targets: (string | null)[] };
+
 /** 本批执行中的共享状态：前面的动作弹出的弹窗（`dialog` 动作省略 id 时只能回答它）。 */
 type Batch = { openedDialog: number | null };
 
-export async function runActions(session: PageSession, actions: readonly PageAction[], signal: AbortSignal): Promise<ActResult> {
+export async function runActions(session: PageSession, actions: readonly PageAction[], signal: AbortSignal): Promise<BatchResult> {
   const batch: Batch = { openedDialog: null };
   for (const [index, action] of actions.entries()) {
     if (signal.aborted) return { completed: index, failure: { index, ...describe(stopped(signal)) } };
     const paused = session.paused();
     if (paused && action.type !== "dialog") return { completed: index, failure: { index, code: paused.code, message: paused.message } };
     try {
+      await highlightTarget(session, action);
       await run(session, action, signal, batch);
       await session.settle();
     } catch (error) {

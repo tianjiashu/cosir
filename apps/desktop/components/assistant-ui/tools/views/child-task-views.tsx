@@ -1,4 +1,6 @@
 import { ArrowUpRightIcon } from "lucide-react";
+import { useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { taskRunStatusPresentation } from "@/components/task-tree/task-run-status";
 import { Button } from "@/components/ui/button";
@@ -6,9 +8,10 @@ import { cancelTask } from "@/lib/assistant/task-commands";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
 import { useWorkbenchActions } from "@/lib/workbench/context";
+import { useEnsureTaskListed } from "@/components/layout/task-listing-context";
 import { cn } from "@/lib/utils";
 import type { CallView, CallViewContext } from "../call-view";
-import { readChildAgentResultDisplay, readDelegationDisplay } from "../child-agent-display";
+import { readChildAgentResultDisplay, readDelegationDisplay, readForkDisplay } from "../child-agent-display";
 import { ToolStopButton, useStopRequest } from "../tool-stop-button";
 
 /**
@@ -23,44 +26,73 @@ function ChildTaskStatus({ childTaskId }: { childTaskId: number | undefined }) {
 }
 
 /**
- * 行尾动作：打开子任务工作台；活动中的委派还可以单独停止子 Agent（停止信号只投递，终态经任务状态推送与
- * 父工具 part 的 canonical 投影到达，不乐观改状态）。
+ * 行尾动作：打开派生出的 Task；活动中的还可以单独停止它（停止信号只投递，终态经任务状态推送与
+ * 父工具 part 的 canonical 投影到达，不乐观改状态）。怎么「打开」由视图给：委派在工作台打开，
+ * 分叉是侧栏对话、跳到它的路由。
  */
-function ChildTaskActions({ childTaskId, title, context }: { childTaskId: number | undefined; title: string; context: CallViewContext }) {
-  const actions = useWorkbenchActions();
+function ChildTaskActions({ childTaskId, title, context, open, openLabel, subject }: {
+  childTaskId: number | undefined;
+  title: string;
+  context: CallViewContext;
+  open: (() => void) | null;
+  openLabel: string;
+  /** 停止按钮里怎么称呼它（「子 Agent」「分叉对话」）。 */
+  subject: string;
+}) {
   const status = useTaskExecutionStatus(childTaskId);
   const active = status === "pending" || status === "running" || status === "suspended";
   const cancellation = useStopRequest(active);
   if (childTaskId === undefined) return null;
-  const canOpen = actions !== null;
   const canCancel = active && context.interactive && !context.taskCancelling;
-  const open = () => {
-    void frontendLog("INFO", "workbench_agent_open_requested", "主 Thread 请求打开子 Agent Workbench", { data: { childTaskId } });
-    actions?.openAgent({ taskId: childTaskId, title });
-  };
   const stop = () => {
-    void frontendLog("INFO", "delegation_child_run_cancel_requested", "用户请求停止子 Agent", { data: { child_task_id: childTaskId } });
+    void frontendLog("INFO", "delegation_child_run_cancel_requested", "用户请求停止派生的 Task", { data: { child_task_id: childTaskId } });
     void cancellation.stop(async () => {
       const result = await cancelTask(childTaskId);
       if (result.accepted) {
-        void frontendLog("INFO", "delegation_child_run_cancel_signalled", "子 Agent 停止信号已发出", { data: { child_task_id: childTaskId } });
+        void frontendLog("INFO", "delegation_child_run_cancel_signalled", "派生 Task 停止信号已发出", { data: { child_task_id: childTaskId } });
         return null;
       }
-      void frontendLog("WARNING", "delegation_child_run_cancel_failed", "停止子 Agent 请求失败", { data: { child_task_id: childTaskId, reason: result.reason } });
+      void frontendLog("WARNING", "delegation_child_run_cancel_failed", "停止派生 Task 请求失败", { data: { child_task_id: childTaskId, reason: result.reason } });
       return result.message;
     });
   };
   return (
     <>
       {cancellation.error && <span className="text-warning text-xs" role="alert">{cancellation.error}</span>}
-      {canOpen && (
-        <Button type="button" variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground shrink-0" onClick={open} aria-label={`打开子 Agent 工作台：${title}`}>
+      {open && (
+        <Button type="button" variant="ghost" size="xs" className="text-muted-foreground hover:text-foreground shrink-0" onClick={open} aria-label={`${openLabel}：${title}`}>
           打开<ArrowUpRightIcon aria-hidden="true" />
         </Button>
       )}
-      {canCancel && <ToolStopButton label={`子 Agent：${title}`} pending={cancellation.pending} onClick={stop} />}
+      {canCancel && <ToolStopButton label={`${subject}：${title}`} pending={cancellation.pending} onClick={stop} />}
     </>
   );
+}
+
+/** 在工作台打开子 Agent（委派、追加消息、状态查询的卡片）。 */
+function WorkbenchChildActions({ childTaskId, title, context }: { childTaskId: number | undefined; title: string; context: CallViewContext }) {
+  const actions = useWorkbenchActions();
+  const open = actions && childTaskId !== undefined
+    ? () => {
+      void frontendLog("INFO", "workbench_agent_open_requested", "主 Thread 请求打开子 Agent Workbench", { data: { childTaskId } });
+      actions.openAgent({ taskId: childTaskId, title });
+    }
+    : null;
+  return <ChildTaskActions childTaskId={childTaskId} title={title} context={context} open={open} openLabel="打开子 Agent 工作台" subject="子 Agent" />;
+}
+
+/** 分叉对话的卡片：跳到它的侧栏路由；卡片出现时侧栏里还没有它就补刷一次目录。 */
+function ForkActions({ childTaskId, title, context }: { childTaskId: number; title: string; context: CallViewContext }) {
+  const navigate = useNavigate();
+  const ensureTaskListed = useEnsureTaskListed();
+  useEffect(() => {
+    ensureTaskListed?.(childTaskId);
+  }, [childTaskId, ensureTaskListed]);
+  const open = () => {
+    void frontendLog("INFO", "fork_task_open_requested", "主 Thread 请求打开分叉对话", { data: { childTaskId } });
+    navigate(`/tasks/${childTaskId}`);
+  };
+  return <ChildTaskActions childTaskId={childTaskId} title={title} context={context} open={open} openLabel="打开分叉对话" subject="分叉对话" />;
 }
 
 function childTaskIdOf(context: CallViewContext, fromDisplay: number | undefined): number | undefined {
@@ -79,7 +111,7 @@ export const delegationView: CallView = {
   meta: (data, context) => <ChildTaskStatus childTaskId={childTaskIdOf(context, readDelegationDisplay(data)?.childTaskId)} />,
   actions: (data, context) => {
     const display = readDelegationDisplay(data);
-    return <ChildTaskActions childTaskId={childTaskIdOf(context, display?.childTaskId)} title={rowTitle(context, display?.title)} context={context} />;
+    return <WorkbenchChildActions childTaskId={childTaskIdOf(context, display?.childTaskId)} title={rowTitle(context, display?.title)} context={context} />;
   },
 };
 
@@ -99,6 +131,17 @@ export const childAgentResultView: CallView = {
   },
   actions: (data, context) => {
     const result = readChildAgentResultDisplay(data)!;
-    return <ChildTaskActions childTaskId={childTaskIdOf(context, result.childTaskId)} title={rowTitle(context, result.agentName)} context={context} />;
+    return <WorkbenchChildActions childTaskId={childTaskIdOf(context, result.childTaskId)} title={rowTitle(context, result.agentName)} context={context} />;
   },
 };
+
+/** `fork-task-result`（`fork_task`）：没有展开体，分叉对话的过程与结论都在它自己的侧栏对话里。 */
+export const forkTaskView: CallView = {
+  accepts: (data) => readForkDisplay(data) !== null,
+  meta: (data, context) => <ChildTaskStatus childTaskId={childTaskIdOf(context, readForkDisplay(data)!.childTaskId)} />,
+  actions: (data, context) => {
+    const display = readForkDisplay(data)!;
+    return <ForkActions childTaskId={childTaskIdOf(context, display.childTaskId)!} title={display.title} context={context} />;
+  },
+};
+

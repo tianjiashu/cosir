@@ -36,7 +36,7 @@ export function pageWire(page: PageResult) {
 }
 
 export function actWire(outcome: ActOutcome) {
-  return { ...pageWire(outcome), completed: outcome.completed, failure: outcome.failure };
+  return { ...pageWire(outcome), completed: outcome.completed, failure: outcome.failure, targets: outcome.targets };
 }
 
 export function logsWire(logs: LogsResult) {

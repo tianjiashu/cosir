@@ -3,7 +3,7 @@ import type { ITerminalOptions, ITheme } from "@xterm/xterm";
 /**
  * xterm 的字体与配色。
  *
- * xterm 在 canvas 上绘制，不能消费 CSS 变量，因此从 globals.css 的 `--app-font-mono` 与终端
+ * xterm 的字体与配色只经构造选项以 JS 值传入，不能消费 CSS 变量，因此从 globals.css 的 `--app-font-mono` 与终端
  * token 读取实际值，保证 xterm 与周围容器使用同一套事实源。终端色 token 约定为十六进制 sRGB，
  * xterm 无法解析 oklch。
  *

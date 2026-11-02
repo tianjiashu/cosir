@@ -9,7 +9,7 @@ import { API_ORIGIN as api } from "./e2e-env";
  */
 
 function tab(tabId: string, title: string, dialog: BrowserDialog | null, taskId = 100): BrowserTabSummary {
-  return { tabId, taskId, createdBy: "agent", openerId: null, url: `https://example.com/${tabId}`, title, loading: false, crashed: false, dialog };
+  return { tabId, taskId, createdBy: "agent", openerId: null, url: `https://example.com/${tabId}`, title, loading: false, crashed: false, dialog, agentBusy: false };
 }
 
 function download(id: string, taskId: number, filename: string): BrowserDownload {
@@ -82,3 +82,17 @@ test("下载条只显示面板所在 Task 的下载（触发标签已关闭也�
   await bar.getByRole("button", { name: "在文件夹中显示 report.pdf" }).click();
   await expect.poll(() => fakeBrowserCalls(page)).toEqual([{ method: "revealDownload", args: ["d1"] }]);
 });
+
+// 目的：用户能看出页面变化是 Agent 在做；潜在缺陷：执行中的标签没有标记，或提示条盖过了待答的弹窗。
+test("Agent 正在操作的标签有标记，网页上方显示提示；弹窗优先", async ({ page }) => {
+  await openBrowserPanel(page, {
+    tabs: [{ ...tab("t1", "弹窗页", { id: 3, type: "alert", message: "hi", defaultText: "" }), agentBusy: true }, { ...tab("t2", "商品页", null), agentBusy: true }],
+    downloads: [],
+  });
+  await expect(page.getByRole("status").filter({ hasText: "Agent 正在操作这个页面" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "商品页" }).getByLabel("Agent 正在操作")).toBeVisible();
+  await page.getByRole("tab", { name: "弹窗页" }).click();
+  await expect(page.getByTestId("browser-dialog-banner")).toBeVisible();
+  await expect(page.getByText("Agent 正在操作这个页面")).toHaveCount(0);
+});
+

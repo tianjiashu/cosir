@@ -1,6 +1,7 @@
-import { GlobeIcon, HandIcon, Maximize2Icon, MessageSquareWarningIcon, Minimize2Icon, PlusIcon, XIcon } from "lucide-react";
+import { BotIcon, GlobeIcon, HandIcon, Maximize2Icon, MessageSquareWarningIcon, Minimize2Icon, PlusIcon, XIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
+import { AgentActivityBar } from "@/components/browser/agent-activity-bar";
 import { BrowserView } from "@/components/browser/browser-view";
 import { BrowserDialogBanner } from "@/components/browser/dialog-banner";
 import { DownloadBar } from "@/components/browser/download-bar";
@@ -17,6 +18,7 @@ import { useTaskBrowserDownloads, useTaskBrowserTabs } from "@/lib/browser/host-
 import { desktopHost } from "@/lib/desktop-host";
 import { useHandoffStore } from "@/lib/handoff/store";
 import { useHandBack } from "@/lib/handoff/use-hand-back";
+import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 
@@ -28,7 +30,8 @@ import { cn } from "@/lib/utils";
  * 在这个 Task 里新开标签。关闭标签就是关掉宿主里的标签页（Agent 也就看不到了），与在交互终端里关闭会话一致。
  *
  * 「等你操作」的状态在标签条上各有标记、选中时在网页上方显示提示条（都在原生画面占位区之外）：待答的网页
- * 弹窗优先于交接，因为弹窗不答页面就停着。关闭交接中的标签即交还：宿主无法把「标签关了」告诉后端，用户在
+ * 弹窗优先于交接，因为弹窗不答页面就停着；两者都没有时，Agent 在运行或正在操作这个标签就显示一行提示
+ * （`AgentActivityBar`）。关闭交接中的标签即交还：宿主无法把「标签关了」告诉后端，用户在
  * 这里关掉它是唯一能及时唤醒 Agent 的时机；重放时后端报告标签已不在。这个 Task 最近的下载显示在面板底部：下载归
  * Task 不归标签（弹出页下载后常自己关掉），所以与显示哪个标签、有没有标签都无关。
  */
@@ -50,6 +53,7 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
   const handoffOf = (tabId: string) => handoffs?.find((entry) => entry.surface === "browser" && entry.resourceId === tabId) ?? null;
   const activeHandoff = active ? handoffOf(active.tabId) : null;
   const { handBack } = useHandBack(taskId ?? -1);
+  const agentRunning = useTaskExecutionStatus(taskId) === "running";
 
   const openTab = (url?: string) => {
     if (!canOpen) return;
@@ -86,7 +90,9 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
                   >
                     {tab.dialog
                       ? <MessageSquareWarningIcon className="text-info size-3.5 shrink-0" aria-label="网页弹窗待处理" />
-                      : tab.loading
+                      : tab.agentBusy
+                        ? <BotIcon className="text-info size-3.5 shrink-0 animate-pulse" aria-label="Agent 正在操作" />
+                        : tab.loading
                         ? <Spinner className="size-3.5 shrink-0" />
                         : handoffOf(tab.tabId)
                           ? <HandIcon className="text-info size-3.5 shrink-0" aria-label="交接中" />
@@ -129,6 +135,7 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
             />
           )}
           {activeHandoff && <HandoffBanner taskId={taskId} entry={activeHandoff} />}
+          {!active.dialog && !activeHandoff && (agentRunning || active.agentBusy) && <AgentActivityBar busy={active.agentBusy} />}
           <BrowserView key={active.tabId} host={host} tabId={active.tabId} url={active.url} loading={active.loading} crashed={active.crashed} />
         </>
       ) : (

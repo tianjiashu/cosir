@@ -2,6 +2,7 @@ import { HostMethodError } from "../../host-link/methods";
 import type { BrowserDialog, BrowserDialogAnswer } from "../../../shared/host-contract";
 import { browserError } from "../errors";
 import type { PageNode } from "../ref-registry";
+import type { Box } from "./element";
 
 /** 页面打开、等 Agent 回答的选文件框：要填的文件输入框，以及它能否收多个文件。 */
 export type FileChooser = { node: PageNode; multiple: boolean };
@@ -28,6 +29,8 @@ export type PageSession = {
   answerDialog(id: number, answer: BrowserDialogAnswer): void;
   /** Agent 的动作让页面打开、还没作废的选文件框。 */
   fileChooser(): FileChooser | null;
+  /** 给人看要操作哪里：标签挂在面板上时才调用 `locate` 量位置并画框；从不抛错。 */
+  highlight(locate: () => Promise<Box>): Promise<void>;
 };
 
 /** 动作的生效命令遇到弹窗：动作已生效，弹窗是它触发的。 */

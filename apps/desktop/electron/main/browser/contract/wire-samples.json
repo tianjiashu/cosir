@@ -58,7 +58,11 @@
       "index": 1,
       "code": "DIALOG_OPEN",
       "message": "the page is paused: it is showing a confirm dialog (#7)"
-    }
+    },
+    "targets": [
+      "button \"Delete\"",
+      null
+    ]
   },
   "console_logs": {
     "tab_id": "t3",

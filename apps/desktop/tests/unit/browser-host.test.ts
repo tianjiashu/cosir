@@ -68,6 +68,28 @@ describe("BrowserHost 资源生命周期", () => {
     await expect(snapshot).resolves.toMatchObject({ tabId: "t1", snapshot: "- text 'page'" });
   });
 
+  // 目的：面板能标出「Agent 此刻正在执行」；潜在缺陷：计数在失败或取消时没减回去，标记一直亮着。
+  it("标签在 Agent 操作执行期间标为忙碌，结束（含失败）后恢复并推送", async () => {
+    const host = new BrowserHost(() => null);
+    const states: boolean[] = [];
+    host.onChange((state) => states.push(state.tabs[0]?.agentBusy ?? false));
+    const opening = host.userOpen(1, limits);
+    tab().finish();
+    await opening;
+    let release!: () => void;
+    tab().snapshot.mockReturnValueOnce(new Promise((resolve) => { release = () => resolve({ outline: null, dialog: null }); }));
+    const reading = host.snapshot({ taskId: 1, view: {}, context: limits }, new AbortController().signal);
+    await flush();
+    expect(host.state().tabs[0].agentBusy).toBe(true);
+    release();
+    await reading;
+    expect(host.state().tabs[0].agentBusy).toBe(false);
+    tab().snapshot.mockRejectedValueOnce(new Error("boom"));
+    await expect(host.snapshot({ taskId: 1, view: {}, context: limits }, new AbortController().signal)).rejects.toThrow("boom");
+    expect(host.state().tabs[0].agentBusy).toBe(false);
+    expect(states.slice(-4)).toEqual([true, false, true, false]);
+  });
+
   it("初始化中的标签计入每 Task 与全局上限", async () => {
     const host = new BrowserHost(() => null);
     const openings = [host.userOpen(1, limits), host.userOpen(1, limits), host.userOpen(2, limits)];

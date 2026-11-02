@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import type { BrowserDialog, BrowserDialogAnswer } from "@/electron/shared/host-contract";
 import { HostMethodError } from "@/electron/main/host-link/methods";
 import { runActions } from "@/electron/main/browser/input/actions";
+import type { Box } from "@/electron/main/browser/input/element";
 import type { FileChooser, PageSession } from "@/electron/main/browser/input/session";
 import { parseAct, parseDropTasks, parseNavigate, parseSnapshot, type PageAction } from "@/electron/main/browser/params";
+import { addressToUrl } from "@/electron/main/browser/web-url";
+import { describeTarget } from "@/electron/main/browser/input/targets";
 import { RefRegistry } from "@/electron/main/browser/ref-registry";
 import type { AXNode, SnapshotDocument } from "@/electron/main/browser/snapshot/document";
 import { documentLayout, frameRegion, pointerRoots, rootRegion, visibleNodes, type DomSnapshot } from "@/electron/main/browser/snapshot/layout";
@@ -360,15 +363,18 @@ type Call = [string, Record<string, unknown>, string?];
  */
 function fakeSession(
   answers: Record<string, unknown> = {},
-  { scale = 1, dialogOn, initialDialog = null, dragData, fileChooser = null }: {
+  { scale = 1, dialogOn, initialDialog = null, dragData, fileChooser = null, shown = false }: {
     scale?: number;
+    /** 标签挂在面板上：动作前会画高亮（记进 `highlighted`）。 */
+    shown?: boolean;
     fileChooser?: FileChooser | null;
     dragData?: unknown;
     dialogOn?: (method: string, params: Record<string, unknown>) => boolean;
     initialDialog?: BrowserDialog | null;
   } = {},
-): { session: PageSession; calls: Call[]; answered: [number, BrowserDialogAnswer][] } {
+): { session: PageSession; calls: Call[]; highlighted: Box[]; answered: [number, BrowserDialogAnswer][] } {
   const calls: Call[] = [];
+  const highlighted: Box[] = [];
   const answered: [number, BrowserDialogAnswer][] = [];
   let dialog: BrowserDialog | null = initialDialog;
   const answer = (code: string) => Object.entries(answers).find(([fragment]) => code.includes(fragment))?.[1] ?? "";
@@ -410,6 +416,13 @@ function fakeSession(
     toInput: ({ x, y }) => ({ x: x * scale, y: y * scale }),
     viewport: () => ({ width: 100, height: 50 }),
     fileChooser: () => fileChooser,
+    // 与 `TabHighlight.show` 一致：不在面板上不量位置；量不到就不画、不抛错。
+    highlight: async (locate) => {
+      if (!shown) return;
+      try {
+        highlighted.push(await locate());
+      } catch { /* 动作自己会报同样的问题 */ }
+    },
     paused,
     dialog: () => dialog,
     answerDialog: (id, reply) => {
@@ -417,7 +430,7 @@ function fakeSession(
       answered.push([id, reply]);
     },
   };
-  return { session, calls, answered };
+  return { session, calls, highlighted, answered };
 }
 
 const mouse = (type: string) => (method: string, params: Record<string, unknown>) => method === "Input.dispatchMouseEvent" && params.type === type;
@@ -519,6 +532,22 @@ describe("runActions", () => {
     await run(typed.session, { type: "type", ref: "f3", text: "hi", clear: false, submit: false, keyByKey: false });
     expect(typed.calls.find(([method]) => method === "DOM.focus")?.[2]).toBe("S1");
     expect(typed.calls.find(([method]) => method === "Input.insertText")?.[2]).toBeUndefined();
+  });
+
+  // 目的：用户看得见 Agent 要操作哪里；潜在缺陷：没人看时也去量位置（白白滚动页面、多发命令），或高亮量不到位置时
+  // 把动作本身弄失败、吞掉动作该报的错。
+  it("highlights each action's target before it runs, only when the tab is shown", async () => {
+    const shown = fakeSession({}, { shown: true });
+    await run(shown.session, clickOn("e2"), { type: "click", target: { x: 50, y: 30 }, button: "left", clickCount: 1, modifiers: [] }, { type: "wait_for", seconds: 0.01 });
+    expect(shown.highlighted).toEqual([{ x: 0, y: 0, width: 10, height: 20 }, { x: 38, y: 18, width: 24, height: 24 }]);
+
+    const hidden = fakeSession();
+    await run(hidden.session, clickOn("e2"));
+    expect(hidden.highlighted).toEqual([]);
+    expect(hidden.calls.filter(([method]) => method === "DOM.getBoxModel")).toHaveLength(1);
+
+    const stale = fakeSession({}, { shown: true });
+    expect(await run(stale.session, clickOn("e404"))).toMatchObject({ completed: 0, failure: { code: "REF_STALE" } });
   });
 
   it("refuses coordinates outside the viewport before touching the page", async () => {
@@ -623,3 +652,31 @@ describe("runActions", () => {
     expect(outcome.failure).toMatchObject({ code: "WAIT_TIMEOUT", message: 'the text "Loading" is still on the page after 0.3 seconds' });
   });
 });
+
+describe("describeTarget", () => {
+  // 目的：工具卡片写清每一步点的是哪个元素；潜在缺陷：只写 e12 这种用户看不懂的编号，或坐标、拖动没有说明。
+  it("names elements by their snapshot label, and shows coordinates and drags", () => {
+    const label = (ref: string) => (ref === "e2" ? 'button "Add"' : undefined);
+    expect(describeTarget({ type: "click", target: { ref: "e2" }, button: "left", clickCount: 1, modifiers: [] }, label)).toBe('button "Add"');
+    expect(describeTarget({ type: "type", ref: "e9", text: "x", clear: false, submit: false, keyByKey: false }, label)).toBe("e9");
+    expect(describeTarget({ type: "drag", start: { ref: "e2" }, end: { x: 10.4, y: 20.6 } }, label)).toBe('button "Add" → (10, 21)');
+    expect(describeTarget({ type: "wait_for", seconds: 1 }, label)).toBeNull();
+  });
+});
+
+describe("addressToUrl", () => {
+  // 目的：地址栏里打本机开发服务的地址能打开；潜在缺陷：`localhost:3000` 被当成名为 `localhost:` 的协议拦下，或补成
+  // https 连不上只开 http 的开发服务。
+  it("adds http for local hosts, https elsewhere, and keeps written schemes", () => {
+    expect(addressToUrl("localhost:3000/app")).toBe("http://localhost:3000/app");
+    expect(addressToUrl("127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
+    expect(addressToUrl("[::1]:5173")).toBe("http://[::1]:5173");
+    expect(addressToUrl("example.com/a?b=1")).toBe("https://example.com/a?b=1");
+    expect(addressToUrl("localhost.example.com")).toBe("https://localhost.example.com");
+    expect(addressToUrl("http://example.com")).toBe("http://example.com");
+    // 写了别的协议的照原样交给协议校验去拦。
+    expect(addressToUrl("file:///etc/passwd")).toBe("file:///etc/passwd");
+    expect(addressToUrl("javascript:alert(1)")).toBe("javascript:alert(1)");
+  });
+});
+

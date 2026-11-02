@@ -4,6 +4,7 @@ import { app, BrowserWindow } from "electron";
 
 import { HOST_CHANNEL } from "../shared/host-contract";
 import { applyDockIcon } from "./app-icon";
+import { installAppMenu } from "./app-menu";
 import { handleAppProtocol, registerAppScheme } from "./app-protocol";
 import { BackendSupervisor } from "./backend/supervisor";
 import { BrowserHost } from "./browser/browser-host";
@@ -27,7 +28,7 @@ import {
 } from "./window";
 
 /**
- * Electron 宿主入口：装配单实例、协议、IPC、主窗口、托盘、后端 supervisor、宿主工具链路（含内置浏览器）与退出流程。
+ * Electron 宿主入口：装配单实例、协议、IPC、应用菜单、主窗口、托盘、后端 supervisor、宿主工具链路（含内置浏览器）与退出流程。
  * 宿主只管进程、窗口与文件授权，不承载业务逻辑。
  *
  * 退出流程只有一条：托盘「退出并停止运行」、Cmd+Q、应用菜单与 Dock 退出都会触发 `before-quit`
@@ -79,6 +80,7 @@ function bootstrap(): void {
     registerHostIpc(supervisor, browser);
     followNativeThemeInTitleBar();
     applyDockIcon();
+    installAppMenu();
     // 窗口先出现，后端在后台启动；前端经启动门禁呈现 starting / ready / failed。
     createMainWindow();
     installTray({ show: showMainWindow, quit: () => app.quit() });

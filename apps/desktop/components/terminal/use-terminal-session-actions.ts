@@ -12,7 +12,7 @@ import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-sto
 const NOTICE_MS = 4000;
 
 /**
- * 用户新建 / 关闭终端会话、接管 Agent 输入：HTTP 命令、失败短提示、日志与之后的选中 / 收起。交还交接见
+ * 用户新建 / 关闭终端会话：HTTP 命令、失败短提示、日志与之后的选中 / 收起。交还交接见
  * `lib/handoff/use-hand-back.ts`。
  *
  * 会话列表只读 snapshot：命令成功后不改本地列表，等 snapshot 回推；这里只调整选中与面板开合。

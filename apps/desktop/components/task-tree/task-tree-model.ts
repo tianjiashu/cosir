@@ -81,11 +81,11 @@ export function forkDescendantIds(node: TaskTreeNode): number[] {
  * 这里不另存深度或父子索引。
  */
 export function buildTaskForest(tasks: WorkspaceTask[]): TaskTreeNode[] {
-  const forkTasks = tasks.filter((task) => task.task_type !== "delegation");
-  const taskById = new Map(forkTasks.map((task) => [task.task_id, task]));
+  // 列表只含侧栏对话（后端按 Task 类型规则过滤），这里不再按类型筛。
+  const taskById = new Map(tasks.map((task) => [task.task_id, task]));
   const parentCandidates = new Map<number, number>();
 
-  for (const task of forkTasks) {
+  for (const task of tasks) {
     const sourceTaskId = getForkSourceTaskId(task);
     if (sourceTaskId !== null && sourceTaskId !== task.task_id && taskById.has(sourceTaskId)) {
       parentCandidates.set(task.task_id, sourceTaskId);
@@ -113,7 +113,7 @@ export function buildTaskForest(tasks: WorkspaceTask[]): TaskTreeNode[] {
     children: (childrenByParent.get(task.task_id) ?? []).map(makeNode),
   });
 
-  return forkTasks
+  return tasks
     .filter((task) => !parentById.has(task.task_id))
     .sort(compareByUpdatedAt)
     .map(makeNode);

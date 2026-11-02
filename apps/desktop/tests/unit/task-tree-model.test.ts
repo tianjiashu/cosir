@@ -43,7 +43,6 @@ describe("buildTaskForest", () => {
       fork(2, 99),
       fork(3, 4),
       fork(4, 3),
-      task(5, "Hidden delegation", { task_type: "delegation" }),
     ]);
 
     expect(roots.map((node) => node.task_id).sort()).toEqual([2, 3, 4]);

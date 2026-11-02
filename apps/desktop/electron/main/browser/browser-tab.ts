@@ -8,6 +8,7 @@ import { browserError } from "./errors";
 import { runActions, type ActResult } from "./input/actions";
 import { box, element, isMissingNode } from "./input/element";
 import type { FileChooser, PageSession } from "./input/session";
+import { describeTarget } from "./input/targets";
 import type { BrowserDialog, BrowserDialogAnswer, BrowserNavigation, BrowserTabCreator, BrowserTabSummary } from "../../shared/host-contract";
 import { BROWSER_PAGE_DIALOG_CHANNEL, type BrowserPageDialogRequest } from "../../shared/browser-page-bridge";
 import type { PageAction } from "./params";
@@ -16,6 +17,7 @@ import { PageDialogs } from "./page-dialogs";
 import { evaluateExpression, type Evaluation } from "./page-evaluate";
 import { ERR_ABORTED, untilStopped, waitForLoad } from "./page-loading";
 import { PageFrames } from "./page-frames";
+import { TabHighlight } from "./tab-highlight";
 import { RefRegistry, type PageNode } from "./ref-registry";
 import { buildOutline, type Outline } from "./snapshot/outline";
 import { readSnapshot } from "./snapshot/read";
@@ -119,6 +121,7 @@ export class BrowserTab {
   private readonly session: CdpSession;
   private readonly refs = new RefRegistry();
   private readonly frames: PageFrames;
+  private readonly highlighter: TabHighlight;
   private readonly dialogs = new PageDialogs();
   private readonly emulation: TabEmulation;
   /** 最近一次真实用户输入的时间（毫秒）；`USER_ACTIVE` 据此判断。 */
@@ -155,6 +158,7 @@ export class BrowserTab {
       logDesktopEvent("WARNING", "browser", "browser_debugger_detached", { tab_id: tabId, reason });
     });
     this.frames = new PageFrames(this.session, tabId);
+    this.highlighter = new TabHighlight(this.session, tabId, () => this.emulation.isShown);
     this.emulation = new TabEmulation(
       (method, params, sendOptions) => this.session.send(method, params, sendOptions),
       (error) => logDesktopEvent("INFO", "browser", "browser_viewport_sync_failed", { tab_id: tabId, error: errorText(error) }),
@@ -330,7 +334,8 @@ export class BrowserTab {
     }
     this.agentInputUntil = Number.POSITIVE_INFINITY;
     try {
-      return await runActions(this.pageSession(signal), actions, signal);
+      const result = await runActions(this.pageSession(signal), actions, signal);
+      return { ...result, targets: actions.map((action) => describeTarget(action, (ref) => this.refs.label(ref))) };
     } finally {
       this.agentInputUntil = Date.now() + AGENT_INPUT_GRACE_MS;
     }
@@ -350,6 +355,7 @@ export class BrowserTab {
       dialog: () => this.dialogs.current,
       answerDialog: (id, answer) => this.answerDialog(id, answer, "agent"),
       fileChooser: () => this.fileChooser,
+      highlight: (locate) => this.highlighter.show(locate),
     };
   }
 
@@ -405,8 +411,10 @@ export class BrowserTab {
     return node;
   }
 
+  /** 截图前先收起高亮框：它会进 CDP 截图（实测），Agent 与冻结帧都不该截到它。 */
   async screenshot(format: "jpeg" | "png", options: CaptureOptions = {}): Promise<string> {
     this.assertAlive();
+    await this.highlighter.clear();
     return captureScreenshot(this.session, format, options);
   }
 
@@ -416,6 +424,7 @@ export class BrowserTab {
     const session = this.pageSession(signal);
     try {
       const area = await box(session, await element(session, ref));
+      await this.highlighter.clear();
       return await captureScreenshot(this.session, "jpeg", { quality: 85, element: area });
     } catch (error) {
       if (isMissingNode(error)) throw browserError("REF_STALE", `the element ${ref} is no longer on the page; use a ref from the latest snapshot`);
@@ -451,7 +460,8 @@ export class BrowserTab {
     this.view.setBounds(this.emulation.viewBounds);
   }
 
-  summary(): BrowserTabSummary {
+  /** 标签自己的事实；「Agent 正在执行」由 `BrowserHost` 按进行中的操作补上。 */
+  summary(): Omit<BrowserTabSummary, "agentBusy"> {
     const contents = this.contents;
     return {
       tabId: this.tabId,
@@ -468,6 +478,7 @@ export class BrowserTab {
 
   /** 页面已自己关掉（`destroyed`）时只做清理；待答的弹窗先按取消答复，免得同进程的其他页面跟着停住。 */
   close(): void {
+    this.highlighter.dispose();
     this.dismissDialog("the tab was closed");
     if (this.contents.isDestroyed()) return;
     this.session.detach();
