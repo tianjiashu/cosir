@@ -31,8 +31,11 @@ TOOL_BROWSER_SNAPSHOT: Final[str] = "browser_snapshot"
 TOOL_BROWSER_ACT: Final[str] = "browser_act"
 TOOL_BROWSER_SCREENSHOT: Final[str] = "browser_screenshot"
 TOOL_BROWSER_TABS: Final[str] = "browser_tabs"
+TOOL_BROWSER_LOGS: Final[str] = "browser_logs"
+TOOL_BROWSER_EVALUATE: Final[str] = "browser_evaluate"
 TOOL_BROWSER_HANDOFF: Final[str] = "browser_handoff"
 TOOL_DELEGATE_TASK: Final[str] = "delegate_task"
+TOOL_FORK_TASK: Final[str] = "fork_task"
 TOOL_CHILD_AGENT_SEND: Final[str] = "child_agent_send"
 TOOL_CHILD_AGENT_STATUS: Final[str] = "child_agent_status"
 TOOL_WAIT_MESSAGES: Final[str] = "wait_messages"
@@ -67,8 +70,11 @@ ToolName: TypeAlias = Literal[
     "browser_act",
     "browser_screenshot",
     "browser_tabs",
+    "browser_logs",
+    "browser_evaluate",
     "browser_handoff",
     "delegate_task",
+    "fork_task",
     "child_agent_send",
     "child_agent_status",
     "wait_messages",
@@ -104,8 +110,11 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_BROWSER_ACT,
     TOOL_BROWSER_SCREENSHOT,
     TOOL_BROWSER_TABS,
+    TOOL_BROWSER_LOGS,
+    TOOL_BROWSER_EVALUATE,
     TOOL_BROWSER_HANDOFF,
     TOOL_DELEGATE_TASK,
+    TOOL_FORK_TASK,
     TOOL_CHILD_AGENT_SEND,
     TOOL_CHILD_AGENT_STATUS,
     TOOL_WAIT_MESSAGES,

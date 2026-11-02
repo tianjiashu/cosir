@@ -63,7 +63,7 @@ class ToolObservation:
         images: 工具产出给模型看的图片（工作区附件的相对路径，见
             ``AttachmentService.save_image``）。
             tool 消息只能是文本，图片由 observe 节点在整批 tool 消息之后以一条 ``tool_image`` user
-            消息投进 mailbox、随下一次请求前并入（见 ``post_tool_images``）；不进 ``display_data``。
+            消息直接写进 context（见 ``write_tool_images``）；不进 ``display_data``。
     """
 
     tool_name: str

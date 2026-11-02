@@ -63,6 +63,14 @@ class ToolDefinition:
     # 后台执行能力（见 ``tool_background``）：声明后参数模型必须带 ``background`` 字段，handler 把它
     # 与本声明交给 ``run_background_work``；``None`` 是普通工具。
     background: BackgroundCapability | None = None
+    # 要在用户能操作的界面里才用得了（交互终端、配置草稿）：只给侧栏对话。需要用户作答的工具
+    # （``user_decision`` 非空）天然如此，不必重复声明，见 :attr:`requires_user_surface`。
+    needs_user_surface: bool = False
+
+    @property
+    def requires_user_surface(self) -> bool:
+        """是否只能给用户能操作的 Task（``models.task_kind.TaskKind.user_facing``）。"""
+        return self.needs_user_surface or self.user_decision is not None
 
     def normalized(self) -> "ToolDefinition":
         """注册时固定 strict 参数 schema，模型调用阶段不再转换。
