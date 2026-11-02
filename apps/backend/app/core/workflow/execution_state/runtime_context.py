@@ -15,7 +15,7 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import (
 )
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
-from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
+from app.core.workflow.message_queue.task_message import NoticeBody
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
 from app.service.depends import get_conversation_event_projector
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -49,7 +49,8 @@ class RuntimeContext:
     allows_tools: frozenset[str]
     task_space: TaskRuntimeSpace
     event_sink: EventSink
-    # 本次执行的内部消息队列：调度方投递外部队列消息，节点投递 Run 内通知，prepare_input 取光。
+    # 进入本次执行的唯一通道：调度方投来的外部队列行副本，与执行内通知（工具准入、旧终端失效、
+    # 续写，经 ``mailbox.notify``，不落库）；prepare_input 取光。
     mailbox: RunMailbox
 
     # —— workflow 驱动期补齐 / 可变状态 ——
@@ -62,7 +63,7 @@ class RuntimeContext:
 
     @classmethod
     def for_run(cls, run: ConversationRunRecord) -> RuntimeContext:
-        """为单个 Run 装配运行上下文，算出本轮的工具准入边界，并投递 Run 开始时的一次性通知。
+        """为单个 Run 装配运行上下文，算出本轮的工具准入边界，并备好 Run 开始时的一次性通知。
 
         Task、工作区与 mailbox 取自 Run 所属 Task 的运行时空间（空间按 Task 只物化一次，这里不再
         重复读库）；Agent 配置由 ``AgentRuntimeConfig.for_run`` 合成，事件回调经
@@ -75,15 +76,15 @@ class RuntimeContext:
         否则会改变同一 Task 的请求前缀并破坏缓存复用。
 
         副作用:
-            需要时向本次执行的 mailbox 投递本轮工具准入说明（与 space 上次告知的禁用集合比较，
+            需要时把本轮工具准入说明投进 mailbox（与 space 上次告知的禁用集合比较，
             规则见 :meth:`tool_availability_notice`），由下一次 prepare_input 写入上下文，并更新
             space 的已告知集合。通知一旦消费即成为 canonical 历史的固定行，是后续 Run 请求前缀
             的一部分，不能改为「只注入本次请求、不落库」，否则下一个 Run 的前缀会从这里分叉。
-            投递即视为已告知：通知并入前 Run 就被取消属低概率情形，被禁工具仍由准入拦截兜底。
+            备好即视为已告知：通知并入前 Run 就被取消属低概率情形，被禁工具仍由准入拦截兜底。
 
-            本进程首次驱动该 Task 时，按需再投一条「旧终端已失效」通知（见
-            :meth:`_post_terminals_invalidated`）。两类通知同一口径：对照 space 上的已告知状态、
-            只在需要时投递，Run 开始时要告诉 Agent 的事都在这里。
+            本进程首次驱动该 Task 时，按需再加一条「旧终端已失效」通知（见
+            :meth:`_terminals_invalidated_notice`）。两类通知同一口径：对照 space 上的已告知状态、
+            只在需要时产生，Run 开始时要告诉 Agent 的事都在这里。
         """
 
         from app.core.agents.agent_runtime_config import AgentRuntimeConfig
@@ -93,15 +94,16 @@ class RuntimeContext:
             get_tool_registry().tool_groups_to_tool_names(run.options.disabled_tool_groups)
         )
         allows_tools = frozenset(tool["name"] for tool in task_space.task_tool_schemas) - ban_tools
+        # 执行开始时 mailbox 已重置（``TaskExecution.start``），这里投进的通知随本次执行写入或丢弃。
         content = cls.tool_availability_notice(
             task_space.announced_ban_tools, ban_tools, allows_tools
         )
         if content is not None:
-            task_space.mailbox.post(
-                TaskMessage.of(NoticeBody(content=content, notice_kind="tool_availability"))
-            )
+            task_space.mailbox.notify(NoticeBody(content=content, notice_kind="tool_availability"))
         task_space.announced_ban_tools = ban_tools
-        cls._post_terminals_invalidated(task_space)
+        invalidated = cls._terminals_invalidated_notice(task_space)
+        if invalidated is not None:
+            task_space.mailbox.notify(invalidated)
         return cls(
             run=run,
             task=task_space.current_task,
@@ -114,23 +116,21 @@ class RuntimeContext:
         )
 
     @staticmethod
-    def _post_terminals_invalidated(task_space: TaskRuntimeSpace) -> None:
-        """本进程首次驱动该 Task 且它用过交互终端时，投递「旧终端已失效」通知；判定见
+    def _terminals_invalidated_notice(task_space: TaskRuntimeSpace) -> NoticeBody | None:
+        """本进程首次驱动该 Task 且它用过交互终端时，返回「旧终端已失效」通知；判定见
         ``restart_settlement.first_drive_notice``（同步读一次 context 表，每个 Task 每个进程至多一次）。
 
         失败只记录、不上抛：这里在 ``RunDriver`` 的异常边界内，上抛会让一条可有可无的提醒把 Run
         落定为 failed。
         """
         try:
-            notice = restart_settlement.first_drive_notice(task_space)
+            return restart_settlement.first_drive_notice(task_space)
         except Exception:
             log.exception(
                 "terminals_invalidated_notice_failed",
-                extra={"msg": "旧终端失效通知投递失败", "data": {"task_id": task_space.task_id}},
+                extra={"msg": "旧终端失效通知生成失败", "data": {"task_id": task_space.task_id}},
             )
-            return
-        if notice is not None:
-            task_space.mailbox.post(notice)
+            return None
 
     def is_cancelled(self) -> bool:
         """本 Task 是否收到停止信号；只读进程内注册表，节点在多个检查点调用，不查库。"""
