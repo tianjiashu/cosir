@@ -29,8 +29,10 @@ class BackgroundResultBody(EnqueuedMessageBody):
     TAG: ClassVar[str] = "background_result"
     PROMPT_GUIDE: ClassVar[str] = (
         "the conclusion of background work you started, identified by `tool_name`: "
-        "`child_agent` (a delegated child agent run ended), `terminal_command` (a background "
-        "execute_terminal command finished or timed out), or `backend_restart` (the backend "
+        "`child_agent` (a delegated child agent or fork run ended), `agent_reply` (the agent "
+        "that started you answered the question you sent with expect_reply), `terminal_command` "
+        "(a background execute_terminal command finished or timed out), or `backend_restart` "
+        "(the backend "
         "restarted: background commands "
         "were stopped and terminal sessions are gone). `tool_call_id`, if present, is the call that "
         "started the work. Several may arrive one by one. Its content is "

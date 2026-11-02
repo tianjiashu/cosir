@@ -1,4 +1,4 @@
-"""系统通知消息：配置广播（外部队列行）或 Run 内提示（``RuntimeContext.notices``，不入队）。"""
+"""系统通知消息：外部队列行（配置广播、终端结束等），或执行内提示（``RunMailbox.notify``，不入队）。"""
 
 from collections.abc import Sequence
 from typing import ClassVar
@@ -44,8 +44,9 @@ def notices_to_context(
 ) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
     """把一批通知合成一条带 ``<system_notice>`` 标签的 user 消息。
 
-    用 user 而非 system 角色：对话中途的 system 消息在部分供应商 / 兼容层不被接受。合并而不是
-    逐条写入：减少 context 条数；落库后成为历史固定行，后续请求前缀不分叉。
+    用 user 而非 system 角色：对话中途的 system 消息在部分供应商 / 兼容层不被接受。prepare_input
+    每次请求前把 mailbox 里的全部通知（两种来源）一次取光、经这里合成一条：减少 context 条数；
+    落库后成为历史固定行，后续请求前缀不分叉。
     """
     lines = "".join(f"\n{item.content}" for item in notices)
     tag = NoticeBody.TAG

@@ -1,4 +1,7 @@
-"""Agent 消息：另一个 Agent 交给本 Task 的输入（委派、追加消息、Team 节点输入）。"""
+"""Agent 消息：另一个 Agent 交给本 Task 的输入。
+
+委派、追加消息、Team 节点输入，以及下级中途发来的消息。
+"""
 
 from typing import ClassVar
 
@@ -23,9 +26,12 @@ class AgentMessageBody(EnqueuedMessageBody):
     KIND: ClassVar[TaskMessageKind] = "agent_message"
     TAG: ClassVar[str] = "agent_message"
     PROMPT_GUIDE: ClassVar[str] = (
-        "a message from another agent, named by `from`: the agent that delegated this task "
-        "to you, or the Agent Team you are a node of. Treat its request as your task; your "
-        "final answer goes back to that agent, not to the user."
+        "a message from another agent, named by `from` (`source_task_id` is its task id). From "
+        "the agent that started you, or the Agent Team you are a node of: treat its request as "
+        "your task; your final answer goes back to that agent, not to the user. From a task you "
+        "started (a delegated child or a fork) while it works: news it thought you needed, or a "
+        "question it is waiting on — answer with send_message to that task_id before you wait "
+        "or finish."
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = True
