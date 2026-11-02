@@ -97,14 +97,10 @@ def _definition():
     return AgentTeamRunTool.to_definition(object.__new__(AgentTeamRunTool))
 
 
-def _bare_tool(derivation_depth: int = 0) -> AgentTeamRunTool:
-    """构造不触达存储 / 进程单例的裸实例（由用例逐个注入协作对象）；主 Task 深度默认 0。"""
+def _bare_tool() -> AgentTeamRunTool:
+    """构造不触达存储 / 进程单例的裸实例（由用例逐个注入协作对象）。"""
 
-    tool = object.__new__(AgentTeamRunTool)
-    tool._task_service = SimpleNamespace(
-        get_task=lambda task_id: SimpleNamespace(id=task_id, derivation_depth=derivation_depth)
-    )
-    return tool
+    return object.__new__(AgentTeamRunTool)
 
 
 def _context() -> ToolExecutionContext:
@@ -190,6 +186,14 @@ def _stub_preparation_lookups(monkeypatch: pytest.MonkeyPatch, child: AgentProfi
     monkeypatch.setattr(prep_module, "get_agent_registry", lambda: registry)
     tools = SimpleNamespace(get_tool_definition=lambda _name: None)
     monkeypatch.setattr(prep_module, "get_tool_registry", lambda: tools)
+    # 节点与主 Task 同层：准备时读主 Task 的派生深度，按它过滤节点工具。
+    monkeypatch.setattr(
+        prep_module,
+        "get_task_service",
+        lambda: SimpleNamespace(
+            get_task=lambda task_id: SimpleNamespace(id=task_id, derivation_depth=0)
+        ),
+    )
     monkeypatch.setattr(
         prep_module,
         "get_model_config_service",
@@ -372,28 +376,6 @@ def test_team_id_argument_rejects_blank_and_unknown_fields() -> None:
 # --------------------------------------------------------------------------- #
 # 准备服务：成功路径与边界（暴露准备阶段内部装配缺陷）
 # --------------------------------------------------------------------------- #
-
-
-def test_prepare_branch_refuses_at_the_derivation_depth_limit(monkeypatch) -> None:
-    """建 Team 也是派生：主 Task 已到深度上限时，在建 pending TeamRun 之前就拒绝。"""
-    from app.config.settings import Settings
-
-    monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
-    tool = _bare_tool(derivation_depth=2)
-    tool.team_register = SimpleNamespace(
-        resolve=lambda scope, team_id: pytest.fail("must not resolve a Team past the limit")
-    )
-
-    observation = tool.execute(
-        team_id="any-team",
-        goal="交付报告",
-        node_goals=_node_inputs(develop="实现"),
-        execution_context=_context(),
-    )
-
-    assert observation.status == "error"
-    assert "maximum derivation depth is 2" in observation.content
-    assert observation.display_data == {"status_hint": "派生超限"}
 
 
 def test_prepare_branch_succeeds_for_an_existing_team(monkeypatch) -> None:

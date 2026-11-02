@@ -16,7 +16,7 @@ from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArg
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.tool_definition import ToolDefinition
 
-child_agent_create = import_module("app.core.tool.handler.child_agent_create")
+delegate_task = import_module("app.core.tool.handler.delegate_task")
 
 
 def _model_payload(definition: ToolDefinition) -> dict:
@@ -35,9 +35,9 @@ def _child_agent_id_property(payload: dict) -> dict:
 def base_delegate_definition(monkeypatch) -> ToolDefinition:
     """构造不含进程级候选的 delegate_task 基础定义。"""
 
-    monkeypatch.setattr(child_agent_create, "get_task_service", lambda: object())
-    monkeypatch.setattr(child_agent_create, "get_conversation_run_ledger", lambda: object())
-    definition = child_agent_create.build_delegate_task_definition()
+    monkeypatch.setattr(delegate_task, "get_task_service", lambda: object())
+    monkeypatch.setattr(delegate_task, "get_conversation_run_ledger", lambda: object())
+    definition = delegate_task.build_delegate_task_definition()
     assert definition is not None
     return definition
 
@@ -129,9 +129,9 @@ def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_c
             raise AssertionError("不应为无效 agent_id 创建 child Task")
 
     task_spy = _TaskSpy()
-    monkeypatch.setattr(child_agent_create, "get_task_service", lambda: task_spy)
-    monkeypatch.setattr(child_agent_create, "get_conversation_run_ledger", lambda: object())
-    tool = child_agent_create.DelegateTaskTool()
+    monkeypatch.setattr(delegate_task, "get_task_service", lambda: task_spy)
+    monkeypatch.setattr(delegate_task, "get_conversation_run_ledger", lambda: object())
+    tool = delegate_task.DelegateTaskTool()
     registry = configuration.build_agent_registry()
     monkeypatch.setattr(configuration, "get_agent_registry", lambda: registry)
     context = ToolExecutionContext(
@@ -153,14 +153,13 @@ def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_c
     assert task_spy.created is False
 
 
-@pytest.mark.parametrize(("parent_depth", "refused"), [(1, False), (2, True)])
-def test_delegate_checks_the_parent_depth_and_writes_the_child_depth(
+@pytest.mark.parametrize("parent_depth", [0, 1])
+def test_delegate_writes_the_child_depth(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     parent_depth: int,
-    refused: bool,
 ) -> None:
-    """父 Task 到了深度上限就在建子 Task 之前拒绝；没到就把子 Task 写成父深度 + 1。"""
+    """子 Task 写成父深度 + 1；到上限时不给派生工具由 ``tools_for_task`` 决定（见其测试）。"""
     from types import SimpleNamespace
 
     from app.config.settings import Settings
@@ -176,9 +175,9 @@ def test_delegate_checks_the_parent_depth_and_writes_the_child_depth(
             created.append(kwargs)
             raise RuntimeError("stop after recording the child task")
 
-    monkeypatch.setattr(child_agent_create, "get_task_service", lambda: _Tasks())
+    monkeypatch.setattr(delegate_task, "get_task_service", lambda: _Tasks())
     monkeypatch.setattr(
-        child_agent_create,
+        delegate_task,
         "get_conversation_run_ledger",
         lambda: SimpleNamespace(get_run=lambda _id: SimpleNamespace(model_config_id=1)),
     )
@@ -196,7 +195,7 @@ def test_delegate_checks_the_parent_depth_and_writes_the_child_depth(
         event_loop=SimpleNamespace(is_closed=lambda: False),  # type: ignore[arg-type]
     )
 
-    result = child_agent_create.DelegateTaskTool().execute(
+    result = delegate_task.DelegateTaskTool().execute(
         child_agent_id="general-assistant",
         agent_name="Scope",
         message="Perform this scoped task.",
@@ -204,12 +203,8 @@ def test_delegate_checks_the_parent_depth_and_writes_the_child_depth(
     )
 
     assert result.status == "error"
-    if refused:
-        assert created == []
-        assert result.display_data == {"status_hint": "派生超限"}
-    else:
-        [kwargs] = created
-        assert kwargs["derivation_depth"] == parent_depth + 1
+    [kwargs] = created
+    assert kwargs["derivation_depth"] == parent_depth + 1
 
 
 def test_workspace_config_error_is_not_silently_merged(

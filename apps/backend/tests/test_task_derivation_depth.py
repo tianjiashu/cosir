@@ -1,13 +1,14 @@
-"""派生深度：规则表的增量、Task 记录往返与配置项登记。入口检查见委派与 Team 工具的契约测试。"""
+"""派生深度：规则表的增量、Task 记录往返与配置项登记。
+
+按深度给不给派生工具见 ``test_task_tool_scope``。
+"""
 
 from types import SimpleNamespace
 
 import pytest
 
 from app.config.environment_field_catalog import ENVIRONMENT_FIELDS
-from app.config.settings import Settings
-from app.core.tool.derivation import check_derivation_depth
-from app.models.task_kind import DERIVATIONS, child_depth
+from app.core.tool.derivation import DERIVATIONS, child_depth
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 
@@ -17,22 +18,11 @@ def test_team_nodes_share_the_main_task_depth_and_other_derivations_go_one_deepe
     assert child_depth(parent, "delegate") == 2  # type: ignore[arg-type]
     assert child_depth(parent, "fork") == 2  # type: ignore[arg-type]
     assert child_depth(parent, "team") == 1  # type: ignore[arg-type]
-    assert {kind: rule.creates for kind, rule in DERIVATIONS.items()} == {
-        "delegate": "delegate_task",
-        "fork": "fork",
-        "team": "agent_team_node",
+    assert {kind: (rule.tool, rule.creates) for kind, rule in DERIVATIONS.items()} == {
+        "delegate": ("delegate_task", "delegate_task"),
+        "fork": ("fork_task", "fork"),
+        "team": ("agent_team", "agent_team_node"),
     }
-
-
-def test_depth_check_reads_the_current_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """上限每次现读：调小后已经超过它的 Task 同样不能再派生。"""
-    parent = SimpleNamespace(id=1, derivation_depth=1)
-    monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
-    assert check_derivation_depth("delegate_task", parent) is None  # type: ignore[arg-type]
-    monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 1)
-    refused = check_derivation_depth("delegate_task", parent)  # type: ignore[arg-type]
-    assert refused is not None and refused.status == "error"
-    assert "maximum derivation depth is 1" in refused.content
 
 
 @pytest.mark.usefixtures("isolated_storage")
@@ -55,8 +45,10 @@ def test_depth_limit_is_configurable_with_bounds() -> None:
 
 
 def test_only_tasks_this_agent_derived_answer_to_it() -> None:
-    """``child_agent_send`` / ``status`` 只能寻址自己委派或 Agent fork 出的 Task：不能绕过 Coordinator
-    找节点，也不能寻址用户手动 fork 的对话。"""
+    """``send_message`` / ``status`` 只能寻址自己委派或 Agent fork 出的 Task。
+
+    不能绕过 Coordinator 找节点，也不能寻址用户手动 fork 的对话。
+    """
     from datetime import UTC, datetime
 
     from app.models.task_record import TaskRecord

@@ -66,7 +66,7 @@ def _decision(decision: str = "approve", *, message_id: int | None = 5) -> TaskM
 
 
 def _notice(text: str, message_id: int) -> TaskMessage:
-    """外部队列里的配置广播通知（Run 内通知不进 mailbox）。"""
+    """外部队列里的通知行。"""
     return TaskMessage.of(NoticeBody(content=text, notice_kind="probe"), message_id=message_id)
 
 

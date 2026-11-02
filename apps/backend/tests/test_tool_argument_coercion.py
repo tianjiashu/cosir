@@ -14,9 +14,9 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
-from app.core.tool.handler.child_agent.child_agent_status_args import ChildAgentStatusArgs
 from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
+from app.core.tool.handler.child_agent.send_message_args import SendMessageArgs
+from app.core.tool.handler.child_agent.task_status_args import TaskStatusArgs
 from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
 from app.core.tool.handler.web.web_extract_args import WebExtractArgs
 from app.core.tool.validation.argument_coercion import coerce_tool_arguments
@@ -298,7 +298,7 @@ class TestChildTaskStrictAlignment:
 
     @pytest.mark.parametrize(
         "model",
-        [DelegateTaskArgs, ChildAgentSendArgs, ChildAgentStatusArgs, WaitMessagesArgs],
+        [DelegateTaskArgs, SendMessageArgs, TaskStatusArgs, WaitMessagesArgs],
     )
     def test_child_task_models_keep_strict_config(self, model: type[BaseModel]) -> None:
         """潜在缺陷：漏配 strict 会让该工具退化为宽松校验，与其它工具口径分叉。"""
@@ -309,7 +309,7 @@ class TestChildTaskStrictAlignment:
     def test_string_id_is_coerced_then_strictly_accepted(self) -> None:
         """对齐 strict 后，字符串 id 仍可经入口归一被接受（宽容在入口、严格在契约）。"""
 
-        result = validate_tool_arguments({"child_task_id": "4"}, {}, ChildAgentStatusArgs)
+        result = validate_tool_arguments({"task_id": "4"}, {}, TaskStatusArgs)
         assert result.ok is True
-        assert result.arguments["child_task_id"] == 4
-        assert [item.field for item in result.coercions] == ["child_task_id"]
+        assert result.arguments["task_id"] == 4
+        assert [item.field for item in result.coercions] == ["task_id"]

@@ -1,8 +1,9 @@
 """浏览器工具与宿主之间的跨语言契约守卫。
 
-三份契约各有唯一来源，这里核对另一侧没有漂移：
+四份契约各有唯一来源，这里核对另一侧没有漂移：
 - 请求参数：后端参数模型 → 导出的 ``tool-args.schema.json``（宿主按它校验）；
 - 错误码：宿主 ``errors.ts`` 的 ``BrowserErrorCode`` ↔ 后端建议表；
+- 方法时限：宿主 ``method-deadlines.json`` → 后端镜像 ``HOST_DEADLINES``（据此定等待时限）；
 - 结果形状：宿主维护的 ``wire-samples.json``（宿主单测断言 ``wire.ts`` 的输出与它逐字相同）
   → 后端读取结果的纯函数（渲染正文、截图解码）。主要渲染分支各有一份样例，这些函数读到的字段
   改名或缺失在这里以 ``KeyError`` 暴露。
@@ -22,6 +23,7 @@ import pytest
 from app.tools.display.browser_display import build_browser_page_display_data
 from app.tools.host.errors import CANCELLED, INVALID_PARAMS, UNAVAILABLE, HostCallError
 from app.tools.tool_handler.browser.errors import BROWSER_ERRORS, browser_error_observation
+from app.tools.tool_handler.browser.host_request import HOST_DEADLINES
 from app.tools.tool_handler.browser.rendering import (
     act_summary,
     evaluate_text,
@@ -66,6 +68,12 @@ def test_exported_schema_matches_the_arg_models() -> None:
         "tool-args.schema.json 与参数模型不一致：在 apps/backend 下运行 "
         "uv run python scripts/export_browser_tool_schema.py"
     )
+
+
+def test_host_deadlines_mirror_the_host_contract() -> None:
+    path = _HOST_BROWSER / "contract" / "method-deadlines.json"
+    host = json.loads(path.read_text(encoding="utf-8"))
+    assert host == HOST_DEADLINES, "HOST_DEADLINES 与宿主 method-deadlines.json 不一致：照宿主的改"
 
 
 def test_every_registered_error_code_has_backend_wording() -> None:

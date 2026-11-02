@@ -14,7 +14,7 @@ import pytest
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.tool.background.registry import background_registry
-from app.core.tool.handler import child_agent_send
+from app.core.tool.handler import send_message
 from app.core.tool.handler.child_agent import child_run_job
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_run_options import ConversationRunOptions
@@ -37,7 +37,7 @@ def _send(
     child_status: str,
     fail=False,
 ):
-    """以替身执行一次 child_agent_send，返回 (观察, 组装 Agent 消息的参数, 已调度的等待)。"""
+    """以替身执行一次 send_message，返回 (观察, 组装 Agent 消息的参数, 已调度的等待)。"""
     child_run = SimpleNamespace(
         id=21,
         status=child_status,
@@ -46,7 +46,7 @@ def _send(
         options=ConversationRunOptions(),
     )
     monkeypatch.setattr(
-        child_agent_send,
+        send_message,
         "get_task_service",
         lambda: SimpleNamespace(
             get_task=lambda task_id: SimpleNamespace(
@@ -61,12 +61,12 @@ def _send(
         ),
     )
     monkeypatch.setattr(
-        child_agent_send,
+        send_message,
         "get_workspace_service",
         lambda: SimpleNamespace(get_workspace=lambda _id: SimpleNamespace(root_path=str(tmp_path))),
     )
     monkeypatch.setattr(
-        child_agent_send,
+        send_message,
         "get_conversation_run_ledger",
         lambda: SimpleNamespace(get_run=lambda _id: child_run),
     )
@@ -84,14 +84,14 @@ def _send(
         prepared.append({"text": text, **kwargs})
         return "message"
 
-    monkeypatch.setattr(child_agent_send, "prepare_agent_message", prepare)
+    monkeypatch.setattr(send_message, "prepare_agent_message", prepare)
 
     def enqueue(*_args: Any, **_kwargs: Any) -> int:
         if fail:
             raise RuntimeError("queue unavailable")
         return 1
 
-    monkeypatch.setattr(child_agent_send.task_runtime_spaces, "enqueue", enqueue)
+    monkeypatch.setattr(send_message.task_runtime_spaces, "enqueue", enqueue)
     scheduled: list[Any] = []
 
     def schedule(coroutine: Any, _loop: Any) -> Any:
@@ -109,7 +109,7 @@ def _send(
         event_loop=SimpleNamespace(is_closed=lambda: False),  # type: ignore[arg-type]
         tool_call_id="call-send",
     )
-    observation = child_agent_send.ChildAgentSendTool().execute(
+    observation = send_message.SendMessageTool().execute(
         _CHILD, "Continue.", execution_context=context
     )
     return observation, prepared, scheduled
@@ -160,9 +160,9 @@ def test_failed_delivery_discards_the_registration(monkeypatch, tmp_path) -> Non
 @pytest.mark.usefixtures("isolated_storage")
 def test_child_tools_always_run_in_the_background() -> None:
     """子 Agent 一律后台：参数里没有 background，也不声明可选的后台结果能力。"""
-    from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
+    from app.core.tool.handler.child_agent.send_message_args import SendMessageArgs
     from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
 
     assert "background" not in DelegateTaskArgs.model_fields
-    assert "background" not in ChildAgentSendArgs.model_fields
-    assert child_agent_send.ChildAgentSendTool().to_definition().background is None
+    assert "background" not in SendMessageArgs.model_fields
+    assert send_message.SendMessageTool().to_definition().background is None

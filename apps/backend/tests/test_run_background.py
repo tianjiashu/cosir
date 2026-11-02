@@ -13,7 +13,6 @@ from app.core.tool.background.job import BackgroundConclusion, ManualJob, Thread
 from app.core.tool.background.registry import background_registry
 from app.core.tool.background.run import run_background_work
 from app.core.tool.schemas import BackgroundCapability, ToolDefinition
-from app.core.tool.schemas.tool_background import background_field
 
 
 @pytest.fixture
@@ -101,16 +100,6 @@ def test_user_detach_moves_the_wait_to_background(delivered) -> None:
     assert delivered == [("call-1", {"value": 4})]
 
 
-def test_non_detachable_foreground_cannot_be_moved(delivered) -> None:
-    job = _job()
-    thread, box = _in_thread(lambda: _run(job, detachable=False))
-    _wait_registered()
-    assert background_registry.detach("call-1") == "not_foreground"
-    job.finish(BackgroundConclusion({"value": 6}))
-    thread.join(2)
-    assert box["outcome"].result.result == {"value": 6}
-
-
 def test_run_cancel_cancels_the_job_and_returns_its_cancel_result(delivered) -> None:
     cancelled = threading.Event()
     job = ManualJob(on_cancel=cancelled.set, cancelled_result=BackgroundConclusion({"end_reason": "cancelled"}))
@@ -184,7 +173,7 @@ def test_background_tools_must_declare_the_background_argument() -> None:
 
     class WithBackground(BaseModel):
         x: int
-        background: bool | None = background_field(capability)
+        background: bool | None = capability.args_field()
 
     def definition(model):
         return ToolDefinition(

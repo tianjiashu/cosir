@@ -217,7 +217,7 @@ def test_any_finish_reason_without_tool_calls_completes_run(
         "end_reason": finish_reason,
     }
     assert [item["role"] for item in harness.messages] == ["assistant"]
-    assert harness.runtime_config.notices == []
+    assert harness.runtime_config.mailbox.isEmpty()
 
 
 def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) -> None:
@@ -236,10 +236,11 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     # 展示行保留，但没有进入下一步模型的 canonical context。
     assert harness.messages == []
     assert [include for _, include in harness.saved_responses] == [False]
-    # 续写提示是 Run 内通知，不进 mailbox（那里只装外部队列消息）。
-    [notice] = harness.runtime_config.notices
-    assert notice.notice_kind == "model_continuation"
-    assert harness.runtime_config.mailbox.isEmpty()
+    # 续写提示是执行内通知：投进 mailbox、没有队列行，也不值得为它推进。
+    [notice] = harness.runtime_config.mailbox.take_notices()
+    assert notice.id is None
+    assert notice.body.notice_kind == "model_continuation"
+    assert not harness.runtime_config.mailbox.has_wakeable()
 
 
 def test_empty_content_with_finish_reason_completes_run(monkeypatch: Any) -> None:

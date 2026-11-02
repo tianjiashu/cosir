@@ -11,7 +11,11 @@ from app.core.tool.schemas import ToolCall, ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
-from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
+from app.core.workflow.message_queue.task_message import (
+    BackgroundResultBody,
+    NoticeBody,
+    TaskMessage,
+)
 from app.core.workflow.node_helper import streaming_part_state_machine as streaming
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper import tool_observation_projection as projection
@@ -321,20 +325,29 @@ def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None
     assert patch == {"next_node": ReactRoute.PREPARE_INPUT}
 
 
-def _gate_runtime(monkeypatch, *, cancelled=False, mailbox_ids=(), notices=()):
-    """prepare_input 关口用的最小运行时：记录状态迁移，并入消息与通知不落库。"""
+def _gate_runtime(
+    monkeypatch, *, cancelled=False, result_ids=(), notice_rows=(), local_notices=()
+):
+    """prepare_input 关口用的最小运行时：记录状态迁移，并入消息与通知不落库。
+
+    ``result_ids`` 是可唤醒的外部行（后台结论），``notice_rows`` 是外部队列里的通知行，
+    ``local_notices`` 是执行内通知（没有行）。
+    """
     transitions: list[tuple[int, RunTransition]] = []
     mailbox = RunMailbox()
-    for message_id in mailbox_ids:
-        mailbox.post(
-            TaskMessage.of(NoticeBody(content="n", notice_kind="probe"), message_id=message_id)
-        )
+    for message_id in result_ids:
+        body = BackgroundResultBody(tool_name="child_agent", tool_result="{}", ended_at="t")
+        mailbox.post(TaskMessage.of(body, message_id=message_id))
+    for message_id, text in notice_rows:
+        notice = NoticeBody(content=text, notice_kind="probe")
+        mailbox.post(TaskMessage.of(notice, message_id=message_id))
+    for text in local_notices:
+        mailbox.notify(NoticeBody(content=text, notice_kind="probe"))
     runtime = SimpleNamespace(
         run=SimpleNamespace(id=4, task_id=3),
         task=SimpleNamespace(id=3),
         usage_stats=None,
         mailbox=mailbox,
-        notices=[NoticeBody(content=text, notice_kind="probe") for text in notices],
         is_cancelled=lambda: cancelled,
     )
     monkeypatch.setattr(prepare_input_node, "_runtime_context", lambda: runtime)
@@ -353,7 +366,7 @@ def _gate_runtime(monkeypatch, *, cancelled=False, mailbox_ids=(), notices=()):
     monkeypatch.setattr(
         prepare_input_node,
         "_write_notices",
-        lambda written: drained.append([notice.content for notice in written]),
+        lambda written: drained.append([(notice.id, notice.body.content) for notice in written]),
     )
     return transitions, drained
 
@@ -368,10 +381,13 @@ def _gate_state(*, suspend: bool, step_count: int = 1, step_limit: int = 10) -> 
     )
 
 
-@pytest.mark.parametrize("notices", [(), ("run notice",)])
+@pytest.mark.parametrize(
+    "notices",
+    [{}, {"local_notices": ("run notice",)}, {"notice_rows": ((5, "terminal ended"),)}],
+)
 def test_prepare_input_suspends_without_wakeable_messages(monkeypatch, notices) -> None:
-    """mailbox 为空（只有 Run 内通知也算）时落定 suspended、结束驱动、什么都不写。"""
-    transitions, drained = _gate_runtime(monkeypatch, notices=notices)
+    """没有可唤醒消息时落定 suspended、结束驱动、什么都不写；通知不论来源都不挡挂起。"""
+    transitions, drained = _gate_runtime(monkeypatch, **notices)
 
     patch = asyncio.run(prepare_input_node._prepare_input_node(_gate_state(suspend=True)))
 
@@ -382,14 +398,19 @@ def test_prepare_input_suspends_without_wakeable_messages(monkeypatch, notices) 
 
 def test_prepare_input_skips_suspend_when_external_message_waiting(monkeypatch) -> None:
     """挂起前已有外部可唤醒消息：不挂起，直接并入并进入模型。"""
-    transitions, drained = _gate_runtime(monkeypatch, mailbox_ids=(7,), notices=("run notice",))
+    transitions, drained = _gate_runtime(
+        monkeypatch,
+        result_ids=(7,),
+        notice_rows=((5, "terminal ended"),),
+        local_notices=("run notice",),
+    )
 
     patch = asyncio.run(prepare_input_node._prepare_input_node(_gate_state(suspend=True)))
 
     assert transitions == []
-    # Run 内通知先合成一条写入，再写外部队列消息。
+    # 两种来源的通知一次取光、按投递顺序合成一条先写，再写其余消息。
     [notices, message] = drained
-    assert notices == ["run notice"]
+    assert notices == [(5, "terminal ended"), (None, "run notice")]
     assert message.id == 7
     assert patch["next_node"] is ReactRoute.MODEL
     assert patch["batch"] == ToolBatch()

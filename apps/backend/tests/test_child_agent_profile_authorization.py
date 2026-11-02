@@ -1,4 +1,4 @@
-"""child_agent_send 的发起配置来源：委派子 Agent 按 profile 授权重算，Agent 分叉沿用自己的 Run。"""
+"""send_message 的发起配置来源：委派子 Agent 按 profile 授权重算，Agent 分叉沿用自己的 Run。"""
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,21 +7,23 @@ import pytest
 
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.tool.handler import child_agent_send
+from app.core.tool.handler import send_message
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_run_options import ConversationRunOptions
 
 
 @pytest.mark.asyncio
-async def test_child_agent_send_rejects_main_profile_before_creating_run(
+async def test_send_message_rejects_main_profile_before_creating_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     """历史 child Task 若绑定主 Agent，follow-up 入口不得创建新 Run。"""
 
     class _TaskService:
-        def get_task(self, _task_id: int) -> SimpleNamespace:
+        def get_task(self, task_id: int) -> SimpleNamespace:
             return SimpleNamespace(
+                id=task_id,
+                title="子任务",
                 derived_by=lambda task_id: task_id == 7,
                 task_type="delegate_task",
                 parent_task_id=7,
@@ -41,18 +43,18 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
 
     task_service = _TaskService()
     run_service = _RunService()
-    monkeypatch.setattr(child_agent_send, "get_task_service", lambda: task_service)
-    monkeypatch.setattr(child_agent_send, "get_workspace_service", _WorkspaceService)
-    monkeypatch.setattr(child_agent_send, "get_conversation_run_ledger", lambda: run_service)
+    monkeypatch.setattr(send_message, "get_task_service", lambda: task_service)
+    monkeypatch.setattr(send_message, "get_workspace_service", _WorkspaceService)
+    monkeypatch.setattr(send_message, "get_conversation_run_ledger", lambda: run_service)
     # 非 CHILD profile 在开 Run 之前就被拒绝，调度入口不得被触达。
     monkeypatch.setattr(
-        child_agent_send.task_runtime_spaces, "enqueue", lambda *_a, **_k: pytest.fail("enqueued")
+        send_message.task_runtime_spaces, "enqueue", lambda *_a, **_k: pytest.fail("enqueued")
     )
     base_registry = configuration.build_agent_registry()
     assert base_registry.resolve("system", "main_agent").agent_type is AgentProfileType.MAIN
     monkeypatch.setattr(configuration, "get_agent_registry", lambda: base_registry)
 
-    tool = child_agent_send.ChildAgentSendTool()
+    tool = send_message.SendMessageTool()
     context = ToolExecutionContext(
         step_id="step-1",
         task_id=7,
@@ -68,7 +70,7 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
     assert "no longer available" in result.content
 
 
-def test_child_agent_send_to_a_fork_reuses_its_own_launch_without_profiles(
+def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -84,15 +86,15 @@ def test_child_agent_send_to_a_fork_reuses_its_own_launch_without_profiles(
     )
     parent_task = SimpleNamespace(id=7, title="主对话")
     monkeypatch.setattr(
-        child_agent_send,
+        send_message,
         "get_task_service",
         lambda: SimpleNamespace(
             get_task=lambda task_id: fork_task if task_id == 41 else parent_task
         ),
     )
-    monkeypatch.setattr(child_agent_send, "get_workspace_service", lambda: None)
+    monkeypatch.setattr(send_message, "get_workspace_service", lambda: None)
     monkeypatch.setattr(
-        child_agent_send,
+        send_message,
         "get_conversation_run_ledger",
         lambda: SimpleNamespace(
             get_run=lambda _run_id: SimpleNamespace(
@@ -111,13 +113,13 @@ def test_child_agent_send_to_a_fork_reuses_its_own_launch_without_profiles(
     )
     prepared: list[dict] = []
     monkeypatch.setattr(
-        child_agent_send,
+        send_message,
         "prepare_agent_message",
         lambda text, **kwargs: prepared.append(kwargs) or "agent-message",
     )
     enqueued: list[tuple[int, str]] = []
     monkeypatch.setattr(
-        child_agent_send.task_runtime_spaces,
+        send_message.task_runtime_spaces,
         "enqueue",
         lambda task_id, message: enqueued.append((task_id, message)),
     )
@@ -126,7 +128,7 @@ def test_child_agent_send_to_a_fork_reuses_its_own_launch_without_profiles(
         enqueue()
         return placeholder()
 
-    monkeypatch.setattr(child_agent_send, "run_child", run_child)
+    monkeypatch.setattr(send_message, "run_child", run_child)
     context = ToolExecutionContext(
         step_id="step-1",
         task_id=7,
@@ -136,7 +138,7 @@ def test_child_agent_send_to_a_fork_reuses_its_own_launch_without_profiles(
         event_loop=SimpleNamespace(is_closed=lambda: False),  # type: ignore[arg-type]
     )
 
-    result = child_agent_send.ChildAgentSendTool().execute(
+    result = send_message.SendMessageTool().execute(
         41, "再补个测试", execution_context=context
     )
 

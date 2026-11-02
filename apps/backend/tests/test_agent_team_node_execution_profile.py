@@ -191,6 +191,14 @@ def _stub_preparation_registry(monkeypatch: pytest.MonkeyPatch, child: AgentProf
     # 节点工具按 Task 类型规则过滤：桩出一个不认识任何工具的注册表，Profile 的工具名原样保留。
     tools = SimpleNamespace(get_tool_definition=lambda _name: None)
     monkeypatch.setattr(prep_module, "get_tool_registry", lambda: tools)
+    # 节点与主 Task 同层：准备时读主 Task 的派生深度，按它过滤节点工具。
+    monkeypatch.setattr(
+        prep_module,
+        "get_task_service",
+        lambda: SimpleNamespace(
+            get_task=lambda task_id: SimpleNamespace(id=task_id, derivation_depth=0)
+        ),
+    )
 
 
 def _team_configuration() -> dict[str, object]:

@@ -9,8 +9,8 @@ import app.tools  # noqa: F401
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.core.tool.handler.child_agent.child_agent_display import (
-    build_child_agent_result_display_data,
+from app.core.tool.handler.child_agent.agent_task_display import (
+    build_agent_task_display_data,
 )
 from app.core.tool.handler.child_agent.delegation_display import build_delegation_display_data
 from app.models.conversation_run_record import ConversationRunRecord
@@ -39,19 +39,19 @@ def _run(
 
 
 def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> None:
-    result = build_child_agent_result_display_data(
+    result = build_agent_task_display_data(
         operation="status",
-        child_task_id=2,
-        agent_id="reviewer",
+        direction="down",
+        task_id=2,
         agent_name="Review",
         final_output="summary",
         end_reason=None,
     )
     assert result == {
-        "kind": "child-agent-result",
+        "kind": "agent-task-result",
         "operation": "status",
-        "child_task_id": 2,
-        "agent_id": "reviewer",
+        "direction": "down",
+        "task_id": 2,
         "agent_name": "Review",
         "final_output": "summary",
         "end_reason": None,

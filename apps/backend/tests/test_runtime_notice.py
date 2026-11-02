@@ -1,11 +1,20 @@
-"""Run 内通知的契约：放在本次驱动的 ``RuntimeContext.notices``，不落库、不进 mailbox。"""
+"""执行内通知的契约：装配时投进 mailbox（没有队列行、不落库），不唤醒，随 reset 丢弃。"""
 
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
-from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
+from app.core.workflow.message_queue.task_message import (
+    BackgroundResultBody,
+    NoticeBody,
+    TaskMessage,
+)
+from app.core.workflow.node_helper.common import execution_scope
+from app.core.workflow.nodes import prepare_input_node
+from tests.runtime_context_stub import runtime_stub
 
 
 def _space(mailbox: RunMailbox, announced: frozenset[str] | None = None) -> SimpleNamespace:
@@ -47,7 +56,7 @@ def _stub_for_run_deps(monkeypatch, agent) -> None:
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])
 async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> None:
-    """工具准入的三条分支都产生领域通知，不在装配方构造模型消息，也不进 mailbox。"""
+    """工具准入的三条分支都产生领域通知，投进 mailbox，不在装配方构造模型消息。"""
     from app.core.workflow.execution_state import runtime_context as runtime_context_module
 
     mailbox = RunMailbox()
@@ -63,10 +72,10 @@ async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> 
     assert result.agent is agent
     assert result.mailbox is mailbox
     assert result.allows_tools == {"read_file", "write_file"} - set(banned)
-    [notice] = result.notices
-    assert mailbox.isEmpty()
-    assert isinstance(notice, NoticeBody)
-    assert notice.notice_kind == "tool_availability"
+    [entry] = mailbox.take_notices()
+    assert entry.id is None
+    assert isinstance(entry.body, NoticeBody)
+    assert entry.body.notice_kind == "tool_availability"
     assert space.announced_ban_tools == frozenset(banned)
 
 
@@ -77,9 +86,10 @@ def _for_run_with_space(monkeypatch, space, banned) -> list[NoticeBody]:
     monkeypatch.setattr(
         runtime_context_module.task_runtime_spaces, "get_or_create", lambda _id: space
     )
-    return runtime_context_module.RuntimeContext.for_run(
+    runtime_context_module.RuntimeContext.for_run(
         SimpleNamespace(id=7, task_id=1, options=SimpleNamespace(disabled_tool_groups=banned))
-    ).notices
+    )
+    return [cast(NoticeBody, entry.body) for entry in space.mailbox.take_notices()]
 
 
 def test_tool_availability_skips_unchanged_all_available_and_reports_changes(monkeypatch) -> None:
@@ -96,7 +106,7 @@ def test_tool_availability_skips_unchanged_all_available_and_reports_changes(mon
 
 
 def test_terminals_invalidated_notice_is_posted_and_failure_does_not_block(monkeypatch) -> None:
-    """首次驱动的旧终端失效通知随装配进 ``notices``；判定失败只记录，装配照常完成。"""
+    """首次驱动的旧终端失效通知随装配投进 mailbox；判定失败只记录，装配照常完成。"""
     from app.core.workflow.execution_state import runtime_context as runtime_context_module
 
     terminals = NoticeBody(content="terminals gone", notice_kind="terminals_invalidated")
@@ -105,20 +115,19 @@ def test_terminals_invalidated_notice_is_posted_and_failure_does_not_block(monke
     monkeypatch.setattr(
         runtime_context_module.restart_settlement, "first_drive_notice", lambda _space: terminals
     )
-    result = runtime_context_module.RuntimeContext.for_run(
+    runtime_context_module.RuntimeContext.for_run(
         SimpleNamespace(id=7, task_id=1, options=SimpleNamespace(disabled_tool_groups=[]))
     )
-    assert result.notices == [terminals]
-    assert space.mailbox.isEmpty()
+    assert [entry.body for entry in space.mailbox.take_notices()] == [terminals]
 
     def broken(_space):
         raise RuntimeError("db down")
 
     monkeypatch.setattr(runtime_context_module.restart_settlement, "first_drive_notice", broken)
-    result = runtime_context_module.RuntimeContext.for_run(
+    runtime_context_module.RuntimeContext.for_run(
         SimpleNamespace(id=7, task_id=1, options=SimpleNamespace(disabled_tool_groups=[]))
     )
-    assert result.notices == []
+    assert space.mailbox.isEmpty()
 
 
 def _notice(allowed: frozenset[str], announced: frozenset[str] | None, banned: frozenset[str]):
@@ -168,3 +177,72 @@ def test_mailbox_dedupes_persisted_rows_within_one_execution() -> None:
     mailbox.reset()
     mailbox.post(persisted)
     assert mailbox.pop() == persisted
+
+
+def test_mailbox_takes_notices_from_both_sources_in_delivery_order() -> None:
+    """通知一次取光（外部行与执行内通知都在内），其余消息不动；通知不算可唤醒消息。"""
+    mailbox = RunMailbox()
+    row = TaskMessage.of(NoticeBody(content="terminal ended", notice_kind="test"), message_id=5)
+    result = TaskMessage.of(
+        BackgroundResultBody(tool_name="child_agent", tool_result="{}", ended_at="t"),
+        message_id=6,
+    )
+    mailbox.post(row)
+    mailbox.notify(NoticeBody(content="run notice", notice_kind="test"))
+    assert not mailbox.has_wakeable()
+    mailbox.post(result)
+    assert mailbox.has_wakeable()
+
+    notices = mailbox.take_notices()
+
+    assert [(n.id, cast(NoticeBody, n.body).content) for n in notices] == [
+        (5, "terminal ended"),
+        (None, "run notice"),
+    ]
+    assert mailbox.pop() == result
+    assert mailbox.isEmpty()
+
+
+class _Context:
+    """context 替身：只记录写入。"""
+
+    def __init__(self) -> None:
+        self.added: list[dict] = []
+
+    def add_message(self, message, **kwargs):
+        self.added.append({"message": message, **kwargs})
+
+
+@pytest.mark.usefixtures("isolated_storage")
+async def test_prepare_input_writes_notices_from_both_sources_as_one_message() -> None:
+    """外部通知行与执行内通知合成一条 ``<system_notice>``，行与写入同一事务确认。
+
+    已被别处确认的行跳过。
+    """
+    row = TaskMessage.of(NoticeBody(content="terminal ended", notice_kind="probe"), message_id=4)
+    stale = TaskMessage.of(NoticeBody(content="already acked", notice_kind="probe"), message_id=9)
+    acks: list[list[int]] = []
+
+    def ack(session, ids):
+        acks.append(ids)
+        return {4: row} if 4 in ids else {}
+
+    rc = runtime_stub(message_queue=SimpleNamespace(ack=ack))
+    rc.mailbox.post(row)
+    rc.mailbox.post(stale)
+    rc.mailbox.notify(NoticeBody(content="run notice", notice_kind="probe"))
+    context = _Context()
+
+    with execution_scope(rc, context):
+        await prepare_input_node._prepare_input_node(
+            ReactExecutionState(step_count=1, step_limit=10)
+        )
+
+    assert acks == [[4, 9]]
+    [written] = context.added
+    content = written["message"]["content"]
+    assert content.count("<system_notice") == 1
+    assert "terminal ended" in content and "run notice" in content
+    assert "already acked" not in content
+    assert written["session"] is not None
+    assert rc.mailbox.isEmpty()

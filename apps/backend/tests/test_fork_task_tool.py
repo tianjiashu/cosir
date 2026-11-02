@@ -1,4 +1,4 @@
-"""fork_task 工具：深度检查、沿用父 Run 的发起配置、以 Agent 消息投递、登记后台等待与冲突收口。
+"""fork_task 工具：沿用父 Run 的发起配置、以 Agent 消息投递、登记后台等待与冲突收口。
 
 复制本身（切分点、发起 Run 落为 forked）见 ``test_task_fork.py``；这里只用替身验证工具的编排。
 """
@@ -108,17 +108,6 @@ def test_fork_keeps_the_parents_identity_and_waits_in_the_background(env, tmp_pa
     assert prepared["disabled_tool_groups"] == ["浏览器工具"]
     assert env.enqueued == [(41, "agent-message")]
     assert env.run_child == (41, "前端部分")
-
-
-def test_fork_refuses_at_the_depth_limit_before_copying(env, tmp_path) -> None:
-    env.parent_depth = 2
-    observation = fork_module.ForkTaskTool().execute(
-        title="x", message="y", execution_context=_context(tmp_path)
-    )
-
-    assert observation.status == "error"
-    assert observation.display_data == {"status_hint": "派生超限"}
-    assert env.forked == []
 
 
 def test_fork_conflicts_become_tool_errors(env, tmp_path) -> None:

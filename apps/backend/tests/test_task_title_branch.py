@@ -139,6 +139,7 @@ async def test_prepare_input_launches_on_user_input_and_marks_the_run(monkeypatc
 
 async def test_prepare_input_skips_when_already_requested_or_no_user_input(monkeypatch) -> None:
     monkeypatch.setattr(prepare_input_node, "_write_message", lambda _message: True)
+    monkeypatch.setattr(prepare_input_node, "_write_notices", lambda _notices: None)
     launched: list[Any] = []
     monkeypatch.setattr(task_title, "launch", lambda rc, messages: launched.append(messages))
     context = _Context()
@@ -149,7 +150,7 @@ async def test_prepare_input_skips_when_already_requested_or_no_user_input(monke
     assert "title_requested" not in await _prepare(rc, context, requested)
 
     rc = _titled_rc()
-    rc.mailbox.post(TaskMessage.of(NoticeBody(content="n", notice_kind="probe")))
+    rc.mailbox.notify(NoticeBody(content="n", notice_kind="probe"))
     fresh = ReactExecutionState(step_count=1, step_limit=10)
     assert "title_requested" not in await _prepare(rc, context, fresh)
 

@@ -2,7 +2,7 @@
 
 背景（与当前实现对齐）：
 - ``delegate_task`` 的工具定义**不再**按 workspace 投影候选——既无 ``enum`` 也不列举 ID，
-  子 Agent 目录由系统提示词的工具能力目录层下发（见 ``child_agent_create.to_definition``
+  子 Agent 目录由系统提示词的工具能力目录层下发（见 ``delegate_task.to_definition``
   的 docstring）。因此「定义投影降级」这一旧风险面已不存在，本文件只保留仍成立的部分。
 - 目标合法性由 ``DelegateTaskTool.execute`` 在执行期按 workspace 作用域解析 Registry 裁决，
   ``ToolAccessGate`` 只做「注册表命中 + 权限 + 参数 schema + Hook」，不解析 child agent id。
@@ -17,7 +17,7 @@ import pytest
 
 from app.config import configuration
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
-from app.core.tool.handler import child_agent_create
+from app.core.tool.handler import delegate_task
 from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.tool_call import ToolCall
@@ -51,8 +51,8 @@ def delegate_registry(broken_registry: _PermanentlyBrokenRegistry) -> ToolRegist
     使本探针只聚焦「定义构建 + 准入门禁」这一段，不牵连完整工具装配的存储依赖。
     """
 
-    definition = child_agent_create.DelegateTaskTool.to_definition(
-        object.__new__(child_agent_create.DelegateTaskTool)
+    definition = delegate_task.DelegateTaskTool.to_definition(
+        object.__new__(delegate_task.DelegateTaskTool)
     )
     registry = ToolRegistry()
     registry.register(definition)
