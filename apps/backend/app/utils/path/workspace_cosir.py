@@ -1,7 +1,7 @@
 """Workspace 级 ``.cosir`` 目录路径计算（leaf 层纯路径工具）。
 
-单一职责：给出 workspace 内 ``.cosir`` 目录及其子目录（附件、工具产物、Agent 配置和 Team 运行档案等）
-的路径。只做路径运算，**不创建目录、不读写文件、不依赖业务模型**。
+单一职责：给出 workspace 内 ``.cosir`` 目录及其子目录（附件、浏览器下载、工具产物、Agent 配置和
+Team 运行档案等）的路径。只做路径运算，**不创建目录、不读写文件、不依赖业务模型**。
 
 为什么集中：``.cosir`` 基名与子目录规则此前在 ``workspace_service``、``attachment_service``、
 ``image_utils`` 三处各自拼接，口径容易漂移；本模块是唯一允许拼接 ``.cosir`` 基名的位置。
@@ -17,6 +17,7 @@ from pathlib import Path
 COSIR_DIR_NAME: str = ".cosir"
 COSIR_ATTACHMENT_DIR_NAME: str = "Attachment"
 COSIR_ATTACHMENT_STAGING_DIR_NAME: str = ".uploading"
+COSIR_DOWNLOAD_DIR_NAME: str = "Download"
 COSIR_TOOL_ARTIFACT_DIR_NAME: str = "tool-artifacts"
 COSIR_AGENT_CONFIG_DIR_NAME: str = "agents"
 COSIR_AGENT_TEAM_CONFIG_DIR_NAME: str = "agent-teams"
@@ -57,6 +58,12 @@ def workspace_attachment_staging_dir(workspace_root: str | Path) -> Path:
     return workspace_attachment_dir(workspace_root) / COSIR_ATTACHMENT_STAGING_DIR_NAME
 
 
+def workspace_download_dir(workspace_root: str | Path) -> Path:
+    """返回 workspace 下载目录路径（``<workspace>/.cosir/Download``）：内置浏览器的下载落盘处。"""
+
+    return workspace_cosir_dir(workspace_root) / COSIR_DOWNLOAD_DIR_NAME
+
+
 def workspace_tool_artifact_dir(workspace_root: str | Path) -> Path:
     """返回 workspace 工具输出 artifact 目录路径（``<workspace>/.cosir/tool-artifacts``）。"""
 
@@ -88,6 +95,7 @@ __all__ = [
     "COSIR_ATTACHMENT_DIR_NAME",
     "COSIR_ATTACHMENT_STAGING_DIR_NAME",
     "COSIR_DIR_NAME",
+    "COSIR_DOWNLOAD_DIR_NAME",
     "COSIR_ENV_FILE_NAME",
     "COSIR_INSTRUCTION_FILE_NAME",
     "COSIR_MAIN_AGENT_PROMPT_FILE_NAME",
@@ -98,5 +106,6 @@ __all__ = [
     "workspace_attachment_dir",
     "workspace_attachment_staging_dir",
     "workspace_cosir_dir",
+    "workspace_download_dir",
     "workspace_tool_artifact_dir",
 ]

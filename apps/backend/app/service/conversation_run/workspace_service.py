@@ -11,12 +11,11 @@
 """
 
 import asyncio
-import copy
 from pathlib import Path
 
-from app.config.configuration import get_agent_registry, get_tool_registry
+from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
-from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.tool.task_tool_scope import main_agent_tool_schemas
 from app.models import TaskRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
@@ -270,41 +269,10 @@ class WorkspaceService:
                     workspace_id,
                     title,
                     creation_command_id=creation_command_id,
-                    tool_schemas=self._main_agent_tool_schemas(),
+                    tool_schemas=main_agent_tool_schemas(),
                 )
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc
-
-    def _main_agent_tool_schemas(self) -> list[dict[str, object]]:
-        """从主 Agent profile 固化新 Task 的模型工具 schema。
-
-        主 Agent Task 创建时读取系统作用域中的 ``main_agent`` profile，并从当前
-        工具注册表的定义中筛选 ``allowed_tools``。配置提案工具虽然不是主 Agent
-        的常驻 allowed_tools，但其 schema 必须随 Task 一并固化，供用户显式开启提案 Run；
-        普通 Run 是否实际允许它由运行时的 ``allows_tools`` 决定。
-
-        返回:
-            按工具注册顺序排列、与运行时模型 schema 同源的独立 JSON 字典列表。
-
-        异常:
-            RuntimeError: Agent registry、工具注册表或主 Agent profile 尚未完成应用装配。
-
-        副作用:
-            无；只读取进程级 Agent/Tool 装配结果并深拷贝 schema，不写数据库。调用方随后
-            将返回值作为 Task 创建事务的一部分写入 ``TaskModel.tool_schemas``。
-        """
-
-        profile = get_agent_registry().resolve(
-            AgentProfileRegistry.SYSTEM_WORKSPACE,
-            "main_agent",
-        )
-        if profile is None:
-            raise RuntimeError("main agent profile is unavailable")
-
-        registered_tools = get_tool_registry().get_all_definitions()
-        selected_tools = profile.select_tools(registered_tools)
-
-        return [copy.deepcopy(tool.to_model_tool_definition()) for tool in selected_tools]
 
     async def delete_workspace_tree(self, workspace_id: int) -> None:
         """删除 workspace 的用户用例：先在锁外停下其下全部 Task 的 actor，再删除记录。

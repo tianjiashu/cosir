@@ -36,8 +36,8 @@ TOOL_BROWSER_EVALUATE: Final[str] = "browser_evaluate"
 TOOL_BROWSER_HANDOFF: Final[str] = "browser_handoff"
 TOOL_DELEGATE_TASK: Final[str] = "delegate_task"
 TOOL_FORK_TASK: Final[str] = "fork_task"
-TOOL_CHILD_AGENT_SEND: Final[str] = "child_agent_send"
-TOOL_CHILD_AGENT_STATUS: Final[str] = "child_agent_status"
+TOOL_SEND_MESSAGE: Final[str] = "send_message"
+TOOL_TASK_STATUS: Final[str] = "task_status"
 TOOL_WAIT_MESSAGES: Final[str] = "wait_messages"
 TOOL_PROPOSE_AGENT_CONFIGURATION: Final[str] = "propose_agent_configuration"
 TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION: Final[str] = "propose_agent_team_configuration"
@@ -75,8 +75,8 @@ ToolName: TypeAlias = Literal[
     "browser_handoff",
     "delegate_task",
     "fork_task",
-    "child_agent_send",
-    "child_agent_status",
+    "send_message",
+    "task_status",
     "wait_messages",
     "propose_agent_configuration",
     "propose_agent_team_configuration",
@@ -115,8 +115,8 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_BROWSER_HANDOFF,
     TOOL_DELEGATE_TASK,
     TOOL_FORK_TASK,
-    TOOL_CHILD_AGENT_SEND,
-    TOOL_CHILD_AGENT_STATUS,
+    TOOL_SEND_MESSAGE,
+    TOOL_TASK_STATUS,
     TOOL_WAIT_MESSAGES,
     TOOL_PROPOSE_AGENT_CONFIGURATION,
     TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,

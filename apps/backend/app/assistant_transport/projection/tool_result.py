@@ -10,9 +10,9 @@ from app.assistant_transport.state.conversation_state_part import ConversationBa
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata
 
-# 展示数据里带子 Task 定位的两种 kind：``delegation-result`` 与 ``child-agent-result`` 的 ``send``
-# （``status`` 操作是一次性查询，不是活的子 Task 引用）。
-_CHILD_TASK_KINDS = frozenset({"delegation-result", "child-agent-result"})
+# 展示数据里带派生 Task 定位的 kind：``delegation-result``、``fork-task-result`` 与向下发送的
+# ``agent-task-result``（``status`` 是一次性查询，向上发送的对方是上级，都不是活的子 Task 引用）。
+_CHILD_TASK_KINDS = frozenset({"delegation-result", "fork-task-result", "agent-task-result"})
 
 
 class ToolResultFields(TypedDict):
@@ -47,7 +47,9 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
         fields["background"] = project_background_work(metadata.background)
     display = metadata.display_data
     if display is not None and _refers_to_child_task(display):
-        child_task_id = display.get("child_task_id")
+        child_task_id = display.get(
+            "task_id" if display.get("kind") == "agent-task-result" else "child_task_id"
+        )
         role = display.get("role")
         if (
             isinstance(child_task_id, int)
@@ -64,4 +66,6 @@ def _refers_to_child_task(display: dict[str, object]) -> bool:
     kind = display.get("kind")
     if kind not in _CHILD_TASK_KINDS:
         return False
-    return kind == "delegation-result" or display.get("operation") == "send"
+    if kind in {"delegation-result", "fork-task-result"}:
+        return True
+    return display.get("operation") == "send" and display.get("direction") == "down"

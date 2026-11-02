@@ -1,6 +1,7 @@
 """wait_messages 工具：Agent 主动挂起，等后台工作的结论以消息送达。
 
-可等待的工作只以后台结果登记表 ``background_registry`` 为准（委派子 Agent、``execute_terminal`` 的后台命令）。
+可等待的工作只以后台结果登记表 ``background_registry`` 为准（委派子 Agent、``execute_terminal`` 的
+后台命令、向上级提问后等它的回复）。
 Agent Team 不在等待范围内：``agent_team`` 工具自己阻塞到 Team 落定，结论就是它的工具结果。
 
 取代轮询式等待：调用当步闭合并带 ``suspend``，Run 随即挂起、不占执行者；后台工作每到一个结论、
@@ -31,11 +32,11 @@ class WaitMessagesTool(HandlerBase):
     name: str = TOOL_WAIT_MESSAGES
     description: str = (
         "Pause yourself until a result arrives, instead of polling. Use it while background "
-        "work is pending: delegated child agents, long terminal waits, or a terminal handed "
-        "off to the user. Each time such work finishes or the user sends a message, you resume "
-        "and the result arrives as a <background_result> message. Results arrive one at a "
-        "time; call this tool again if you still need to wait for others. If nothing is "
-        "pending, it fails immediately without pausing."
+        "work is pending: delegated child agents or forks, background terminal commands, or a "
+        "reply you asked for with send_message. Each time such work finishes, a reply arrives, "
+        "another agent messages you, or the user sends a message, you resume; results arrive as "
+        "<background_result> messages, one at a time, so call this tool again if you still need "
+        "to wait for others. If nothing is pending, it fails immediately without pausing."
     )
     args_model: type[WaitMessagesArgs] = WaitMessagesArgs
     timeout_seconds: ClassVar[float] = 10.0

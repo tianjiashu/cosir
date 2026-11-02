@@ -42,7 +42,7 @@ Electron main 进程（桌面宿主）
 - `verb`：动词，如「读取文件」。区头按它计数（命令的标题每条各异，按标题计数会把「执行命令 4」拆成四个 1），也是没有自定义意图时的标题。
 - `icon`：lucide 图标名，取值表在 `components/assistant-ui/tools/tool-icons.tsx`。
 - `target(args)`：目标，路径、模式、会话、地址、子 Agent 等；没有目标的工具不给。多目标只写首个、其余 `+N`（`read_image`、`web_extract`、`apply_patch`、`browser_act`）；多行输入只取首个非空行；组合目标（`"pattern" in path`、`a → b`）各段齐全才拼。
-- `title(args)`：自定义意图，只有 `execute_terminal`（模型写的 `description`）与 `delegate_task`（`agent_name`）需要，取不到时回落到 `verb`。
+- `title(args)`：自定义意图，只有 `execute_terminal`（模型写的 `description`）、`delegate_task`（`agent_name`）与 `fork_task`（`title`）需要，取不到时回落到 `verb`。
 
 为什么归前端：工具名是封闭集合，标签、图标、i18n 都是客户端的事；哪个参数是目标虽然是工具的知识，但投影的输入 `args` 前端本来就有。按工具名**查表**是声明式的，允许；按工具名写**渲染分支**仍然禁止，展开体与元信息只按 `display_data.kind` 选视图。
 
@@ -71,7 +71,7 @@ Electron main 进程（桌面宿主）
 - 只放客户端渲染所需的事实：目标、列表、统计、diff、分页、有限状态信息。
 - 不放 `content`、堆栈、原始异常、完整 prompt、原始 provider 响应或凭据。
 - 不由客户端从 `result`、`args` 或模型正文推导展示结果。
-- 不把 `display_data` 当作后端业务事实源：子 Task 的运行状态不在 `delegation-result` / `child-agent-result` 里镜像，前端按 part 的 `child_task_id` 读应用级任务状态推送（`GET /task-status/stream`）。
+- 不把 `display_data` 当作后端业务事实源：派生 Task 的运行状态不在 `delegation-result` / `fork-task-result` / `agent-task-result` 里镜像，前端按 part 的 `child_task_id` 读应用级任务状态推送（`GET /task-status/stream`）。
 - 字段投影和敏感字段过滤必须先于 Transport；安全 allowlist 不能由大小预算替代。
 - `display_data` 只服务前端展示，不按模型 `content` 预算截断；工具自身业务语义需要截断时，用明确的 `truncated` 标记表达。
 - 外层工具状态使用 Transport 的 `pending`、`running`、`completed`、`failed`、`cancelled`，不在 payload 里建第二套状态机。
@@ -130,9 +130,11 @@ Transport 不把失败态 `content` 写入 `ToolCallStatusChangedEvent.error`；
 | `terminal_*` | `执行失败` | `用户输入中`、`用户命令中`、`缺少集成`、`终端失败`、`已在交接中` |
 | `web_search` | `搜索失败` | — |
 | `web_extract` | `提取失败` | `部分成功`（成功态） |
-| `browser_*` | `执行失败` | `标签不存在`、`标签已满`、`地址被拦截`、`页面加载失败`、`页面崩溃`、`页面无响应`、`用户正在操作`、`已在交接中`、`截图保存失败`、`宿主不可用`、`宿主超时` |
+| `browser_*` | `执行失败` | `标签不存在`、`标签已满`、`地址被拦截`、`页面加载失败`、`页面崩溃`、`页面无响应`、`用户正在操作`、`页面有弹窗`、`已在交接中`、`截图保存失败`、`元素已失效`、`元素不可见`（元素截图）、`路径无效`（上传的文件不可用，整次不执行）、`宿主不可用`、`宿主超时`（`browser_act` 中途某一步失败不是工具失败，结论写在正文，短提示放在 `steps` 里停下的那一步） |
 | `delegate_task` | `委派失败` | — |
+| `fork_task` | `分叉失败` | — |
 | `wait_messages` | `执行失败` | `无可等待` |
+| `agent_team` | `执行失败` | — |
 | 任一声明 `returns_images` 的工具 | — | `模型不支持图片`（准入门禁） |
 
 文件写入后的语法检查不属于 UI：即使检查失败也不生成短提示，按文件写入本身的结果展示。
@@ -164,13 +166,16 @@ Transport 不把失败态 `content` 写入 `ToolCallStatusChangedEvent.error`；
 | `web_extract` | `web-extract-urls` | 网页正文提取 · 首个 `url` +N | `urls`（每项只有 `url`）；部分成功带 `status_hint` |
 | `browser_navigate` | `browser-page` | 打开网页 · `url` 或 `action` | `tab_id`、`url`、`title` |
 | `browser_snapshot` | `browser-page` | 读取网页 · `tab` | 同上 |
-| `browser_act` | `browser-page` | 操作网页 · 首个动作类型 +N | 同上 |
+| `browser_act` | `browser-page` | 操作网页 · 首个动作类型 +N | 同上，另有 `steps`（每一步的 `action`、`target`、`status`：`done` / `failed` / `skipped`，失败带 `hint`） |
 | `browser_screenshot` | `browser-page` | 网页截图 · `full page` 或 `tab` | 同上，另有 `screenshot`（附件 asset id） |
 | `browser_tabs` | 无 | 管理标签页 · `action [tab]` | — |
+| `browser_logs` | `browser-page` | 读取网页日志 · `kind` | 同 `browser_navigate` |
+| `browser_evaluate` | `browser-page` | 执行网页脚本 · 表达式开头一段 | 同 `browser_navigate`；脚本抛错是脚本的结果，按成功返回、正文写明报错 |
 | `browser_handoff` | `browser-page` | 交给你操作网页 · `reason` | 同 `browser-page`，另有 `handoff_reason`；等待占位 `awaitingUser` |
 | `delegate_task` | `delegation-result` | `agent_name` · `child_agent_id` | `title`、`child_agent_id`、`role`、`delegation_id`、`child_task_id`；无状态字段（见 3.7） |
-| `child_agent_send` | `child-agent-result` | 发送给子 Agent · `#child_task_id` | `operation=send`、`child_task_id`、`agent_id`、`agent_name`、`final_output`、`end_reason` |
-| `child_agent_status` | `child-agent-result` | 读取子 Agent 状态 · `#child_task_id` | `operation=status`，其余同上（查询时刻的快照） |
+| `fork_task` | `fork-task-result` | 分叉对话 · `title` | `title`、`child_task_id`；无状态字段（见 3.7） |
+| `send_message` | `agent-task-result` | 发送消息 · `#task_id` | `operation=send`、`direction`（`down` 发给自己派生的 Task / `up` 发给派生自己的一方）、`task_id`、`agent_name`、`final_output`、`end_reason` |
+| `task_status` | `agent-task-result` | 读取任务状态 · `#task_id` | `operation=status`、`direction=down`，其余同上（查询时刻的快照） |
 | `wait_messages` | 无 | 等待结果 · 无 | — |
 | `propose_agent_configuration` | `agent-configuration-draft` | 生成子 Agent 配置草稿 · `agent_id` | `status=draft`、`agent_id`、`role`、`description`、`system_prompt` |
 | `propose_agent_team_configuration` | `agent-team-configuration-draft` | 生成 Agent Team 配置草稿 · `name` | `status=draft`、`team_id`、`name`、配置预览（不含 system prompt 与密钥） |
@@ -212,7 +217,7 @@ Transport 不把失败态 `content` 写入 `ToolCallStatusChangedEvent.error`；
 
 终端展示原始命令、工作目录和完整输出，输出原样（保留 ANSI 与敏感文本）、不设 UI 字符预算、不插截断标记。运行期间后端以有界批次更新 snapshot，批次只用于分帧，不丢弃或改写输出；实时通道随命令而不随调用结束，转到后台后照常推送。是否追加只看 part 自己的状态（前台 `running`，或带 `background` 的 `pending` 占位），不看所属 Run；命令结束、取消或撤销后迟到的块丢弃。终态 `display_data` 替换临时内容（已实时流出的 part 以实时累计输出为准）。
 
-命令转到后台（模型选后台、用户转后台或前台到上限）时卡片是后台占位：状态 `pending`、`background: true`，展示数据只有命令与工作目录。结论分两份：给模型的载荷过输出预算、经 `background_result` 回投；给卡片的完整 `terminal-result` 随同一条消息持久化，并入时与 `completed` 一起写回。撤销时卡片推到 `cancelled`、不写终态展示。「在后台」不写进 `display_data`：所有后台结果的占位都由 part 的 `background: true` 表达（投影自占位行 metadata，结算后保留）。
+命令转到后台（模型选后台或用户转后台）时卡片是后台占位：状态 `pending`、`background: true`，展示数据只有命令与工作目录。结论分两份：给模型的载荷过输出预算、经 `background_result` 回投；给卡片的完整 `terminal-result` 随同一条消息持久化，并入时与 `completed` 一起写回。撤销时卡片推到 `cancelled`、不写终态展示。「在后台」不写进 `display_data`：所有后台结果的占位都由 part 的 `background: true` 表达（投影自占位行 metadata，结算后保留）。
 
 超时属于 `tool_error`：只展示失败与「命令超时」，不展示输出或退出码。
 
@@ -222,7 +227,7 @@ Transport 不把失败态 `content` 写入 `ToolCallStatusChangedEvent.error`；
 
 ### 3.6 内置浏览器
 
-六个 `browser_*` 工具共用 `browser-page`（`browser_tabs` 没有展示数据）：标签、地址与标题，截图带附件 asset id，交接带要用户做的事。快照正文只给模型。卡片据 `tab_id` 在浏览器面板打开实时页面。
+除 `browser_tabs`（没有展示数据）外的 `browser_*` 工具共用 `browser-page`：标签、地址与标题，截图带附件 asset id，交接带要用户做的事，act 带每一步（目标说明来自宿主给的元素角色与名称，只用于显示；结局按宿主报的停在哪一步定）。快照、日志条目与脚本返回值只给模型。卡片据 `tab_id` 在浏览器面板打开实时页面。
 
 ### 3.7 委派与子 Agent
 
@@ -232,7 +237,9 @@ Transport 不把失败态 `content` 写入 `ToolCallStatusChangedEvent.error`；
 { "kind": "delegation-result", "title": "Review the parser", "child_agent_id": "reviewer", "role": "Reviewer", "child_task_id": 34 }
 ```
 
-子 Agent 按 Task 寻址：展示数据只携带 `child_task_id`，不携带 run_id；`delegation-result` 与 `child-agent-result(operation=send)` 的 `child_task_id` 都提升到 part，委派行据此读应用级任务状态推送显示子 Task 的运行状态。展示数据里没有状态字段，后端也不再回写它。`child_agent_send` 与 `child_agent_status` 用同一形状，只以 `operation` 区分；子 Agent 的结论不经工具展示，而是由子 Task 的 actor 以 `background_result` 回投父 Task；`wait_messages` 只让父 Agent 挂起，没有展示数据。
+`fork_task` 的卡片同样只带分叉对话的 `title` 与 `child_task_id`（`{ "kind": "fork-task-result", "title": "拆出前端部分", "child_task_id": 41 }`），状态读应用级任务状态推送；分叉是侧栏对话，「打开」跳到它的路由而不是工作台，卡片出现时侧栏里还没有它就补刷一次目录。
+
+派生 Task 按 Task 寻址：展示数据只携带 Task id，不携带 run_id；`delegation-result` / `fork-task-result` 的 `child_task_id` 与向下发送（`direction=down`）的 `agent-task-result.task_id` 都提升到 part 的 `child_task_id`，行据此读应用级任务状态推送显示对方的运行状态。展示数据里没有状态字段，后端也不再回写它。`send_message` 与 `task_status` 用同一形状，以 `operation` 区分；`direction=up` 的卡片只能打开对方、不能停止它（对方是上级）。打开按对方 Task 的类型：侧栏对话跳路由，委派子 Agent 在工作台打开。派生 Task 的结论与上级的回复都不经工具展示，而是以 `background_result` 回投（`tool_name` 为 `child_agent` / `agent_reply`）；`wait_messages` 只让 Agent 挂起，没有展示数据。
 
 ### 3.8 Agent Team
 

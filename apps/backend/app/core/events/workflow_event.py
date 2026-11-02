@@ -8,6 +8,7 @@ from typing import Annotated
 
 from pydantic import Field
 
+from app.core.events.input_consumed_event import InputConsumedEvent
 from app.core.events.message_event import AssistantPartClosedEvent, AssistantTextDeltaEvent
 from app.core.events.run_event import (
     RunInitializedEvent,
@@ -21,13 +22,12 @@ from app.core.events.tool_call_event import (
     ToolCallStatusChangedEvent,
 )
 from app.core.events.tool_runtime_event import ToolCallRuntimeUpdateEvent
-from app.core.events.user_input_event import UserInputConsumedEvent
 
 # 按「产生顺序」排列：run 建立 → 用户输入 → 状态 → assistant 输出 → 工具，使本清单同时充当一次
 # run 的时间线；Task 级事件附在最后。
 WorkflowEvent = Annotated[
     RunInitializedEvent
-    | UserInputConsumedEvent
+    | InputConsumedEvent
     | RunStatusChangedEvent
     | RunResultUpdatedEvent
     | AssistantTextDeltaEvent

@@ -5,18 +5,19 @@
 """
 
 from app.core.tool.handler.agent_team_run import build_agent_team_run_definition
-from app.core.tool.handler.child_agent_create import build_delegate_task_definition
-from app.core.tool.handler.child_agent_send import (
-    build_child_agent_send_definition,
-)
-from app.core.tool.handler.child_agent_status import (
-    build_child_agent_status_definition,
-)
+from app.core.tool.handler.delegate_task import build_delegate_task_definition
+from app.core.tool.handler.fork_task import build_fork_task_definition
 from app.core.tool.handler.propose_agent_configuration import (
     build_propose_agent_configuration_definition,
 )
 from app.core.tool.handler.propose_agent_team_configuration import (
     build_propose_agent_team_configuration_definition,
+)
+from app.core.tool.handler.send_message import (
+    build_send_message_definition,
+)
+from app.core.tool.handler.task_status import (
+    build_task_status_definition,
 )
 from app.core.tool.handler.wait_messages import build_wait_messages_definition
 from app.core.tool.handler.web_extract import build_web_extract_definition
@@ -66,8 +67,9 @@ def build_tool_registry() -> ToolRegistry:
     for definition in build_browser_definitions():
         registry.register(definition)
     registry.register(build_delegate_task_definition())
-    registry.register(build_child_agent_send_definition())
-    registry.register(build_child_agent_status_definition())
+    registry.register(build_fork_task_definition())
+    registry.register(build_send_message_definition())
+    registry.register(build_task_status_definition())
     registry.register(build_wait_messages_definition())
     registry.register(build_propose_agent_configuration_definition())
     # Team 工具统一注册；是否对当前 Agent 开放由工具选择与 Run 授权决定。

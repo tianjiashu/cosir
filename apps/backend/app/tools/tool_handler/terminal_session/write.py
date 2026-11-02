@@ -79,6 +79,7 @@ class TerminalWriteTool(HandlerBase):
         return ToolDefinition(
             name=self.name,
             group=self.group,
+            needs_user_surface=True,
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,

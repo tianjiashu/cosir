@@ -1,9 +1,12 @@
-"""用户输入展示 parts 的构造与投影。"""
+"""一轮输入（用户输入、Agent 消息）展示 parts 的构造与消费投影。"""
 
 from collections.abc import Sequence
 from typing import cast
 
 from app.assistant_transport.projection.snapshot_navigation import message
+from app.assistant_transport.state.conversation_state_message import (
+    ConversationStateMessageSource,
+)
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import (
     ConversationStateFilePart,
@@ -13,8 +16,8 @@ from app.assistant_transport.state.conversation_state_part import (
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.state.message_identity import reply_id, user_message_id
 from app.config.constant import Constant
-from app.core.events import UserInputConsumedEvent
-from app.models.conversation_input import UserInputPresentation, image_asset_id
+from app.core.events import InputConsumedEvent
+from app.models.conversation_input import MessageSource, UserInputPresentation, image_asset_id
 from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
 from app.utils.message_tokens import find_message_tokens
 
@@ -106,11 +109,26 @@ def build_presentation_parts(presentation: UserInputPresentation) -> list[UserIn
     )
 
 
-def plan_user_input_consumed(
-    event: UserInputConsumedEvent,
+def build_turn_input(
+    presentation: UserInputPresentation, source: MessageSource | None
+) -> tuple[list[UserInputPart], ConversationStateMessageSource | None]:
+    """一轮输入的 parts 与 wire 来源；消费投影与全量重建共用，两处展示一致。
+
+    Agent 消息（``source`` 非空）是纯文本：不按附件 token 解析——Agent 正文里恰好出现形如 token
+    的文字时，解析会因找不到附件而抛错，让整张快照投影失败。
+    """
+    if source is None:
+        return build_presentation_parts(presentation), None
+    text: UserInputPart = {"type": "text", "text": presentation.display_text, "status": "completed"}
+    return [text], {"taskId": source.task_id, "name": source.name}
+
+
+def plan_input_consumed(
+    event: InputConsumedEvent,
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
-    """按事件自带的展示绑定插入 user 消息并补其后的助手占位，同时移出排队投影；按身份去重。
+    """按事件自带的展示绑定插入 user 消息（Agent 消息带来源）并补其后的助手占位，同时移出排队投影；
+    按身份去重。
 
     不从排队投影里取内容：排队投影只镜像队列表，确认删除之后的任何一次刷新都会刷掉这一条。
     快照在消费提交后才懒重建时，消息已从 context 重建出来，按去重跳过。连续消费多条 user 时，
@@ -133,11 +151,12 @@ def plan_user_input_consumed(
     ):
         insert_at -= 1
     queued = state.get("queued_messages", [])
+    parts, source = build_turn_input(event.presentation, event.source)
     return [
         ConversationStateMutation(
             "set",
             ("messages", insert_at),
-            message(message_id, "user", list(build_presentation_parts(event.presentation)), run_id),
+            message(message_id, "user", list(parts), run_id, source),
         ),
         ConversationStateMutation(
             "set",

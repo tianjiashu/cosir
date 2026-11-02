@@ -1,9 +1,9 @@
 """用户输入解析边界：模型能力校验、附件与图片解析、展示 token 转模型正文，产出待入队的
 ``TaskMessage``。
 
-HTTP 发送、子 Agent 委派与追加、Team 节点输入共用，编辑取返回消息的 ``body``；只读 Task、模型
-配置与已发布图片的元数据，不读写普通附件文件、不写库、不入队、不创建 Run。投递方在入队之前调用
-（解析 IO 不占用 Task 闸门），输入不合法在这里同步拒绝，不让坏数据进外部队列。
+HTTP 发送与编辑重跑使用（编辑取返回消息的 ``body``）；Agent 之间的输入走 ``agent_message``。只读
+Task、模型配置与已发布图片的元数据，不读写普通附件文件、不写库、不入队、不创建 Run。投递方在入队
+之前调用（解析 IO 不占用 Task 闸门），输入不合法在这里同步拒绝，不让坏数据进外部队列。
 """
 
 import re
@@ -25,7 +25,8 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
 from app.service.attachment.attachment_service import AttachmentService
-from app.service.depends import get_model_config_service, get_task_crud
+from app.service.conversation_run.run_launch_check import check_launch_config
+from app.service.depends import get_task_crud
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 
 
@@ -60,20 +61,7 @@ class UserInputService:
             KeyError: Task 不存在（接入层映射为 404）。
         """
         task = self._task.get(task_id)
-        # 模型配置缺失不是「寻址不到 Task」：接入层把 KeyError 统一映射为 404 task not found。
-        # 本层明确知道自己查的是什么，就地换成可读的输入拒绝，避免给出错误语义。
-        try:
-            config = get_model_config_service().get_config(model_config_id)
-        except KeyError as exc:
-            raise UserInputRejectedError(
-                "MODEL_CONFIG_UNAVAILABLE",
-                "当前模型配置不存在，请重新选择模型",
-                detail=f"model config {model_config_id} is gone",
-            ) from exc
-        if reasoning_effort is not None and not config.supports_reasoning_effort:
-            raise UserInputRejectedError(
-                "REASONING_EFFORT_UNSUPPORTED", "当前模型不支持所选的推理强度"
-            )
+        config = check_launch_config(model_config_id, reasoning_effort)
         if command.image_asset_ids and not config.supports_image:
             raise UserInputRejectedError(
                 "IMAGE_NOT_SUPPORTED", "当前模型不支持图片输入，请更换模型或移除图片"
@@ -87,8 +75,7 @@ class UserInputService:
         )
         input_text = self._resolve_file_tokens(command.display_text, file_attachments)
         image_paths = self._resolve_image_assets(task.workspace_id, command.image_asset_ids)
-        # wire schema 已保证文本 part 非空，但内部发送方（delegate_task / child_agent_send /
-        # Team 节点）直接构造命令，且「正文只剩图片 token」时替换后同样是空。
+        # wire schema 已保证文本 part 非空，但「正文只剩图片 token」时替换后同样是空。
         if not input_text.strip() and not image_paths:
             raise UserInputRejectedError("EMPTY_INPUT", "请输入消息内容")
         body = UserInputBody(
