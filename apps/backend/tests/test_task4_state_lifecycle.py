@@ -335,6 +335,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     "parts": [{"type": "text", "text": "stale", "status": "completed"}],
                     "runId": 2,
                     "outcome": None,
+                    "source": None,
                 },
                 {
                     "id": "stale-assistant",
@@ -342,6 +343,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     "parts": [{"type": "text", "text": "stale", "status": "running"}],
                     "runId": 2,
                     "outcome": None,
+                    "source": None,
                 },
             ],
             "messageOffset": 0,

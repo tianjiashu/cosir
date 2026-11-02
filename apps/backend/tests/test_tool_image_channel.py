@@ -1,4 +1,4 @@
-"""工具产出图片的通用通道：存图、准入、投递顺序、渲染与请求时解析。
+"""工具产出图片的通用通道：存图、准入、就地写入 context、渲染与请求时解析。
 
 用一个测试替身工具验证，不依赖浏览器：任何工具只要「拿到字节 → ``save_image`` →
 ``tool_success(images=...)``」并声明 ``returns_images``，图片就能进模型。
@@ -22,14 +22,8 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.core.tool.tool_registry import ToolRegistry
-from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import (
-    MODEL_INPUT_BODIES,
-    NoticeBody,
-    TaskMessage,
-    ToolImageBody,
-)
+from app.core.workflow.message_queue.task_message import MODEL_INPUT_BODIES, ToolImageBody
 from app.service.attachment.attachment_service import AttachmentService
 
 
@@ -114,42 +108,30 @@ def test_gate_rejects_image_tools_for_text_only_models() -> None:
     assert _gate_outcome(supports_image=None).admitted
 
 
-# 目的：图片紧跟它所属的那批工具结果；潜在缺陷：图片排在通知或用户输入之后，模型对不上调用。
-def test_tool_images_are_merged_before_notices() -> None:
-    mailbox = RunMailbox()
-    mailbox.post(
-        TaskMessage.of(NoticeBody(content="tools changed", notice_kind="tool_availability"))
-    )
-    mailbox.post(
-        TaskMessage.of(ToolImageBody(tool_call_id="c", tool_name="t", image_paths=["a.png"]))
-    )
-    assert [mailbox.pop().kind, mailbox.pop().kind] == ["tool_image", "system_notice"]
-    image = TaskMessage.of(ToolImageBody(tool_call_id="c", tool_name="t", image_paths=["a.png"]))
-    assert image.project_to_transport is False
-    assert ToolImageBody in MODEL_INPUT_BODIES
-
-
-def test_observe_posts_images_only_for_successful_observations(
+# 目的：图片是调用结果、就地落库；潜在缺陷：经 mailbox 时同批有工具挂起，图片在并入前随执行丢弃。
+def test_observe_writes_images_into_context_only_for_successful_observations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mailbox = RunMailbox()
-    monkeypatch.setattr(projection, "_runtime_context", lambda: SimpleNamespace(mailbox=mailbox))
+    written: list[tuple[dict, object, bool]] = []
+    context = SimpleNamespace(
+        add_message=lambda message, *, metadata, project_to_transport: written.append(
+            (message, metadata, project_to_transport)
+        )
+    )
+    monkeypatch.setattr(projection, "_message_context", lambda: context)
     with_images = tool_success("demo_capture", "see image", images=["one.png", "two.png"])
     with_images.tool_call_id = "call-1"
     failed = tool_error("demo_capture", "boom", "call-2")
     failed.images = ("ignored.png",)
     plain = tool_success("read_file", "text only")
 
-    projection.post_tool_images(ToolBatch(observations=[with_images, failed, plain]))
+    projection.write_tool_images(ToolBatch(observations=[with_images, failed, plain]))
 
-    posted = mailbox.pop()
-    assert isinstance(posted.body, ToolImageBody)
-    assert posted.body.model_dump() == {
-        "tool_call_id": "call-1",
-        "tool_name": "demo_capture",
-        "image_paths": ["one.png", "two.png"],
-    }
-    assert mailbox.isEmpty()
+    [(message, metadata, projected)] = written
+    assert message["role"] == "user"
+    assert metadata.kind == "tool_image" and metadata.tool_call_id == "call-1"
+    assert projected is False
+    assert ToolImageBody in MODEL_INPUT_BODIES
 
 
 def test_tool_batch_keeps_images_through_persistence() -> None:

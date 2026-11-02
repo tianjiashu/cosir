@@ -37,7 +37,7 @@ def _send(
     child_status: str,
     fail=False,
 ):
-    """以替身执行一次 child_agent_send，返回 (观察, 入队消息的 prepare 参数)。"""
+    """以替身执行一次 child_agent_send，返回 (观察, 组装 Agent 消息的参数, 已调度的等待)。"""
     child_run = SimpleNamespace(
         id=21,
         status=child_status,
@@ -49,7 +49,8 @@ def _send(
         child_agent_send,
         "get_task_service",
         lambda: SimpleNamespace(
-            get_task=lambda _id: SimpleNamespace(
+            get_task=lambda task_id: SimpleNamespace(
+                id=task_id,
                 is_child=True,
                 parent_task_id=_PARENT,
                 workspace_id=3,
@@ -78,15 +79,11 @@ def _send(
     )
     prepared: list[dict[str, Any]] = []
 
-    def prepare(*args: Any, **kwargs: Any) -> str:
-        prepared.append(kwargs)
+    def prepare(text: str, **kwargs: Any) -> str:
+        prepared.append({"text": text, **kwargs})
         return "message"
 
-    monkeypatch.setattr(
-        child_agent_send,
-        "get_user_input_service",
-        lambda: SimpleNamespace(prepare=prepare),
-    )
+    monkeypatch.setattr(child_agent_send, "prepare_agent_message", prepare)
 
     def enqueue(*_args: Any, **_kwargs: Any) -> int:
         if fail:
@@ -126,8 +123,10 @@ def test_send_merged_into_a_running_child_is_not_registered(monkeypatch, tmp_pat
     assert observation.background is None
     assert background_registry.pending(_PARENT) == []
     assert scheduled == []
+    # 追加消息是父 Agent 说的话：以 Agent 消息投递，来源是父 Task。
     [kwargs] = prepared
-    assert kwargs["delivery"] == "immediate"
+    assert kwargs["text"] == "Continue."
+    assert kwargs["source"].task_id == _PARENT
 
 
 def test_send_that_starts_a_new_run_is_registered(monkeypatch, tmp_path) -> None:
@@ -143,7 +142,7 @@ def test_send_that_starts_a_new_run_is_registered(monkeypatch, tmp_path) -> None
     assert background_registry.pending(_PARENT) == ["child"]
     assert len(scheduled) == 1
     [kwargs] = prepared
-    assert kwargs["delivery"] == "next_run"
+    assert (kwargs["agent_id"], kwargs["model_config_id"]) == ("child_a", 1)
 
 
 def test_failed_delivery_discards_the_registration(monkeypatch, tmp_path) -> None:

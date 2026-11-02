@@ -321,8 +321,8 @@ def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None
     assert patch == {"next_node": ReactRoute.PREPARE_INPUT}
 
 
-def _gate_runtime(monkeypatch, *, cancelled=False, mailbox_ids=()):
-    """prepare_input 关口用的最小运行时：记录状态迁移，并入消息不落库。"""
+def _gate_runtime(monkeypatch, *, cancelled=False, mailbox_ids=(), notices=()):
+    """prepare_input 关口用的最小运行时：记录状态迁移，并入消息与通知不落库。"""
     transitions: list[tuple[int, RunTransition]] = []
     mailbox = RunMailbox()
     for message_id in mailbox_ids:
@@ -334,6 +334,7 @@ def _gate_runtime(monkeypatch, *, cancelled=False, mailbox_ids=()):
         task=SimpleNamespace(id=3),
         usage_stats=None,
         mailbox=mailbox,
+        notices=[NoticeBody(content=text, notice_kind="probe") for text in notices],
         is_cancelled=lambda: cancelled,
     )
     monkeypatch.setattr(prepare_input_node, "_runtime_context", lambda: runtime)
@@ -345,9 +346,14 @@ def _gate_runtime(monkeypatch, *, cancelled=False, mailbox_ids=()):
             or SimpleNamespace(id=run_id)
         ),
     )
-    drained: list[TaskMessage] = []
+    drained: list[object] = []
     monkeypatch.setattr(
         prepare_input_node, "_write_message", lambda message: drained.append(message) or True
+    )
+    monkeypatch.setattr(
+        prepare_input_node,
+        "_write_notices",
+        lambda written: drained.append([notice.content for notice in written]),
     )
     return transitions, drained
 
@@ -362,10 +368,10 @@ def _gate_state(*, suspend: bool, step_count: int = 1, step_limit: int = 10) -> 
     )
 
 
-@pytest.mark.parametrize("mailbox_ids", [(), (None,)])
-def test_prepare_input_suspends_without_wakeable_messages(monkeypatch, mailbox_ids) -> None:
-    """没有外部消息（或只有 Run 内通知）时落定 suspended、结束驱动、不取 mailbox。"""
-    transitions, drained = _gate_runtime(monkeypatch, mailbox_ids=mailbox_ids)
+@pytest.mark.parametrize("notices", [(), ("run notice",)])
+def test_prepare_input_suspends_without_wakeable_messages(monkeypatch, notices) -> None:
+    """mailbox 为空（只有 Run 内通知也算）时落定 suspended、结束驱动、什么都不写。"""
+    transitions, drained = _gate_runtime(monkeypatch, notices=notices)
 
     patch = asyncio.run(prepare_input_node._prepare_input_node(_gate_state(suspend=True)))
 
@@ -376,12 +382,15 @@ def test_prepare_input_suspends_without_wakeable_messages(monkeypatch, mailbox_i
 
 def test_prepare_input_skips_suspend_when_external_message_waiting(monkeypatch) -> None:
     """挂起前已有外部可唤醒消息：不挂起，直接并入并进入模型。"""
-    transitions, drained = _gate_runtime(monkeypatch, mailbox_ids=(None, 7))
+    transitions, drained = _gate_runtime(monkeypatch, mailbox_ids=(7,), notices=("run notice",))
 
     patch = asyncio.run(prepare_input_node._prepare_input_node(_gate_state(suspend=True)))
 
     assert transitions == []
-    assert [message.id for message in drained] == [None, 7]
+    # Run 内通知先合成一条写入，再写外部队列消息。
+    [notices, message] = drained
+    assert notices == ["run notice"]
+    assert message.id == 7
     assert patch["next_node"] is ReactRoute.MODEL
     assert patch["batch"] == ToolBatch()
 

@@ -1,4 +1,4 @@
-"""统一执行入口 run_background_work 与通用作业：前台 / 后台、转到后台、到上限、Run 取消与撤销。"""
+"""统一执行入口 run_background_work 与通用作业：前台 / 后台、转到后台、Run 取消与撤销。"""
 
 from __future__ import annotations
 
@@ -36,7 +36,6 @@ def _run(job: Any, **overrides: Any):
         "kind": "terminal_command",
         "label": "t",
         "mode": "foreground",
-        "foreground_limit_s": None,
         "is_cancelled": lambda: False,
     }
     return run_background_work(job, **{**options, **overrides})
@@ -100,14 +99,6 @@ def test_user_detach_moves_the_wait_to_background(delivered) -> None:
     assert box["outcome"].placeholder == "detached"
     job.finish(BackgroundConclusion({"value": 4}))
     assert delivered == [("call-1", {"value": 4})]
-
-
-def test_foreground_limit_detaches_automatically(delivered) -> None:
-    job = _job()
-    outcome = _run(job, foreground_limit_s=0.05)
-    assert outcome.placeholder == "limit"
-    job.finish(BackgroundConclusion({"value": 5}))
-    assert delivered == [("call-1", {"value": 5})]
 
 
 def test_non_detachable_foreground_cannot_be_moved(delivered) -> None:
@@ -186,7 +177,7 @@ def test_manual_job_delivers_once() -> None:
 def test_background_tools_must_declare_the_background_argument() -> None:
     from pydantic import BaseModel
 
-    capability = BackgroundCapability(default_background=False, foreground_limit_s=None)
+    capability = BackgroundCapability(default_background=False)
 
     class Plain(BaseModel):
         x: int

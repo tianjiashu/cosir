@@ -149,6 +149,7 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
                     "durationMs": None,
                     "durationMs": None,
                 },
+                "source": None,
             }
         ],
         "messageOffset": 0,
@@ -173,6 +174,7 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
                 "parts": [],
                 "runId": 1,
                 "outcome": {"status": "completed", "endReason": None, "error": None, "usage": None, "contextWindowTotal": None, "durationMs": None},
+                "source": None,
             }
         ],
         "messageOffset": 0,

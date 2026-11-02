@@ -496,6 +496,7 @@ def _running_tool_state(tool_call_id: str = "call-9") -> dict[str, Any]:
                 "role": "assistant",
                 "runId": 4,
                 "outcome": None,
+                "source": None,
                 "parts": [
                     {
                         "type": "tool-call",

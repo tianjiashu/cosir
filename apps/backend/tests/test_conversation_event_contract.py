@@ -22,7 +22,7 @@ from app.core.events import (
     ToolCallCreatedEvent,
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
-    UserInputConsumedEvent,
+    InputConsumedEvent,
     WorkflowEvent,
     WorkflowEventEnvelope,
 )
@@ -47,14 +47,14 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     ),
     (
         {
-            "type": "user_input_consumed",
+            "type": "input_consumed",
             "task_id": 1,
             "run_id": 1,
             # 消息身份（message_queue 行 id）与确认删除那一刻的展示绑定。
             "message_id": 1,
             "presentation": {"display_text": "hello"},
         },
-        UserInputConsumedEvent,
+        InputConsumedEvent,
     ),
     (
         {
@@ -305,7 +305,7 @@ def test_event_is_frozen() -> None:
         无；只做内存内校验。
     """
 
-    event = UserInputConsumedEvent(
+    event = InputConsumedEvent(
         task_id=1, run_id=1, message_id=1, presentation=UserInputPresentation(display_text="hi")
     )
     with pytest.raises(ValidationError):

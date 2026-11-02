@@ -18,10 +18,10 @@ from app.config.constant import Constant
 def _messages(turns: int, answers_per_turn: int = 1) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     for turn in range(turns):
-        messages.append({"id": f"u-{turn}", "role": "user", "parts": [], "runId": turn + 1, "outcome": None})
+        messages.append({"id": f"u-{turn}", "role": "user", "parts": [], "runId": turn + 1, "outcome": None, "source": None})
         for answer in range(answers_per_turn):
             messages.append(
-                {"id": f"a-{turn}-{answer}", "role": "assistant", "parts": [], "runId": turn + 1, "outcome": None}
+                {"id": f"a-{turn}-{answer}", "role": "assistant", "parts": [], "runId": turn + 1, "outcome": None, "source": None}
             )
     return messages
 
@@ -71,6 +71,6 @@ def test_history_page_rejects_positions_from_a_replaced_snapshot() -> None:
 
 
 def test_without_any_user_message_the_window_keeps_its_raw_start() -> None:
-    messages = [{"id": f"a-{index}", "role": "assistant", "parts": [], "runId": 1, "outcome": None} for index in range(8)]
+    messages = [{"id": f"a-{index}", "role": "assistant", "parts": [], "runId": 1, "outcome": None, "source": None} for index in range(8)]
     windowed = window_snapshot(_state(messages))
     assert windowed["messageOffset"] == 3

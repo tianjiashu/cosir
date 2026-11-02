@@ -121,6 +121,7 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         run_state=run_state_stub(),
         message_queue=SimpleNamespace(ack=lambda _session, ids: set(ids)),
         mailbox=RunMailbox(),
+        notices=[],
         task_space=SimpleNamespace(task_tool_schemas=()),
         event_sink=lambda _event: None,
         model=None,

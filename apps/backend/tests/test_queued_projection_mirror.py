@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import pytest
 
-from app.assistant_transport.projection.user_input_projection import plan_user_input_consumed
+from app.assistant_transport.projection.user_input_projection import plan_input_consumed
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
-from app.core.events import UserInputConsumedEvent
+from app.core.events import InputConsumedEvent
 from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
 from app.core.workflow.message_queue.task_message import TaskMessage, UserInputBody
 from app.models.conversation_input import UserInputPresentation
@@ -64,11 +64,11 @@ def test_withdrawn_message_leaves_the_projection_on_refresh(task_id: int) -> Non
 
 def test_consumption_builds_the_message_without_a_queued_entry() -> None:
     state = empty_snapshot()
-    event = UserInputConsumedEvent(
+    event = InputConsumedEvent(
         task_id=1, run_id=1, message_id=7, presentation=UserInputPresentation(display_text="你好")
     )
 
-    mutations = plan_user_input_consumed(event, state)
+    mutations = plan_input_consumed(event, state)
 
     user = mutations[0].value
     assert (user["id"], user["role"], user["runId"]) == ("7", "user", 1)

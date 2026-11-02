@@ -1,4 +1,4 @@
-"""execute_terminal 的前后台执行：前台结论、后台占位、到上限自动转后台、取消杀进程树。
+"""execute_terminal 的前后台执行：前台结论、后台占位、用户转到后台、取消杀进程树。
 
 命令走真实的 ``LocalExecutionBackend``（POSIX ``sleep`` / ``echo``），后台回投替换为记录调用，
 不写 SQLite。
@@ -15,7 +15,7 @@ import pytest
 
 from app.core.tool.background import registry as background_module
 from app.core.tool.background.registry import background_registry
-from app.core.tool.schemas import BackgroundCapability, ToolExecutionContext
+from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal import LocalExecutionBackend
@@ -95,20 +95,27 @@ def test_background_command_returns_a_placeholder_then_delivers(tmp_path, delive
     assert card["command"] == "sleep 0.2; echo done" and "done" in card["output"]
 
 
-def test_foreground_limit_moves_the_command_to_background_and_suspends(
-    tmp_path, delivered, monkeypatch
-) -> None:
-    monkeypatch.setattr(
-        execute_terminal_module,
-        "EXECUTE_TERMINAL_BACKGROUND",
-        BackgroundCapability(default_background=False, foreground_limit_s=0.1),
+def test_detached_foreground_command_keeps_running_without_suspending(tmp_path, delivered) -> None:
+    """前台没有时限：只有用户转走才离开前台，转走后照样回投结论、不挂起 Agent。"""
+    import threading
+
+    box: dict[str, Any] = {}
+    thread = threading.Thread(
+        target=lambda: box.setdefault(
+            "observation",
+            ExecuteTerminalTool().execute(
+                description="test",
+                command="sleep 0.5; echo late",
+                execution_context=_context(tmp_path, "call-detach"),
+            ),
+        )
     )
-    observation = ExecuteTerminalTool().execute(
-        description="test",
-        command="sleep 0.5; echo late",
-        execution_context=_context(tmp_path, "call-limit"),
-    )
-    assert observation.background and observation.suspend
+    thread.start()
+    _wait_for(lambda: background_registry.owns(_TASK_ID, "call-detach"))
+    assert background_registry.detach("call-detach") == "detached"
+    thread.join(2)
+    observation = box["observation"]
+    assert observation.background and not observation.suspend
     assert "<background_result>" in observation.content
     _wait_for(lambda: len(delivered) == 1)
     assert "late" in str(delivered[0][2]["output"])

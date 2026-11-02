@@ -388,6 +388,7 @@ def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: s
             "parts": [],
             "runId": run_id,
             "outcome": None,
+            "source": None,
         }
     )
     projector.process(
@@ -1020,7 +1021,7 @@ def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=9))
     projector.process(RunStatusChangedEvent(task_id=1, run_id=9, status="running"))
     owner.state["messages"].append(
-        {"id": "assistant-9", "role": "assistant", "parts": [], "runId": 9, "outcome": None}
+        {"id": "assistant-9", "role": "assistant", "parts": [], "runId": 9, "outcome": None, "source": None}
     )
     projector.process(
         ToolCallCreatedEvent(
@@ -1188,7 +1189,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
     # 直接向进程内 state service 注入一条 run 骨架，使投影能命中 part。
     state = empty_snapshot()
     state["messages"] = [
-        {"id": "m0", "role": "user", "parts": [], "runId": 5, "outcome": None},
+        {"id": "m0", "role": "user", "parts": [], "runId": 5, "outcome": None, "source": None},
         {
             "id": "m1",
             "role": "assistant",
@@ -1204,6 +1205,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
             ],
             "runId": 5,
             "outcome": None,
+            "source": None,
         },
     ]
     state["activity"] = {

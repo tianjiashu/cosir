@@ -116,11 +116,9 @@ def test_woken_task_does_not_get_a_second_notice_on_first_drive(restart_env) -> 
 
 def test_first_drive_notice_once_per_process(restart_env) -> None:
     space = SimpleNamespace(task_id=3, terminals_invalidation_announced=False)
-    message = restart_settlement.first_drive_notice(space)
-    assert message is not None
-    assert isinstance(message.body, NoticeBody)
-    assert message.body.notice_kind == "terminals_invalidated"
-    assert message.delivery == "immediate"
+    notice = restart_settlement.first_drive_notice(space)
+    assert isinstance(notice, NoticeBody)
+    assert notice.notice_kind == "terminals_invalidated"
     assert restart_settlement.first_drive_notice(space) is None
 
 

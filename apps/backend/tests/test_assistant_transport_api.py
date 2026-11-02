@@ -30,7 +30,7 @@ def _snapshot(
         return {"messages": [], "messageOffset": 0, "activity": None}
     return {
         "messages": [
-            {"id": "1", "role": "user", "parts": [], "runId": run_id, "outcome": None}
+            {"id": "1", "role": "user", "parts": [], "runId": run_id, "outcome": None, "source": None}
         ],
         "messageOffset": 0,
         "activity": {

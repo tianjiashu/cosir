@@ -65,8 +65,9 @@ def _decision(decision: str = "approve", *, message_id: int | None = 5) -> TaskM
     )
 
 
-def _notice(text: str) -> TaskMessage:
-    return TaskMessage.of(NoticeBody(content=text, notice_kind="probe"))
+def _notice(text: str, message_id: int) -> TaskMessage:
+    """外部队列里的配置广播通知（Run 内通知不进 mailbox）。"""
+    return TaskMessage.of(NoticeBody(content=text, notice_kind="probe"), message_id=message_id)
 
 
 class _Context:
@@ -138,13 +139,13 @@ def test_decision_render_names_the_call_and_escapes_feedback() -> None:
 def test_mailbox_pops_notices_first_then_keeps_arrival_order() -> None:
     mailbox = RunMailbox()
     first, second = _decision(message_id=1), _decision(message_id=2)
-    for message in (first, _notice("a"), second, _notice("b")):
+    for message in (first, _notice("a", 11), second, _notice("b", 12)):
         mailbox.post(message)
 
     # 通知先出队；用户输入、结果与决定之间按投递顺序，不重排时间线。
     assert [mailbox.pop().body for _ in range(4)] == [
-        _notice("a").body,
-        _notice("b").body,
+        _notice("a", 11).body,
+        _notice("b", 12).body,
         first.body,
         second.body,
     ]
@@ -153,14 +154,14 @@ def test_mailbox_pops_notices_first_then_keeps_arrival_order() -> None:
 def test_mailbox_take_first_removes_only_the_first_match() -> None:
     mailbox = RunMailbox()
     first, second = _decision(message_id=1), _decision(message_id=2)
-    for message in (_notice("a"), first, second):
+    for message in (_notice("a", 11), first, second):
         mailbox.post(message)
 
     def is_decision(message: TaskMessage) -> bool:
         return message.kind == "user_decision"
 
     assert mailbox.take_first(is_decision) is first
-    assert [mailbox.pop() for _ in range(2)] == [_notice("a"), second]
+    assert [mailbox.pop() for _ in range(2)] == [_notice("a", 11), second]
     assert mailbox.take_first(is_decision) is None
 
 
@@ -257,6 +258,7 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
                 "role": "assistant",
                 "runId": 2,
                 "outcome": None,
+                "source": None,
                 "parts": [
                     {
                         "type": "tool-call",
@@ -309,7 +311,7 @@ async def _prepare(rc, context: _Context) -> dict[str, Any]:
 async def test_approval_is_taken_first_and_routes_to_tools_without_the_model() -> None:
     decision = _decision("approve")
     rc = _prepare_rc({5: decision})
-    rc.mailbox.post(_notice("earlier notice"))
+    rc.mailbox.post(_notice("earlier notice", 4))
     rc.mailbox.post(decision)
     context = _Context()
 
@@ -321,7 +323,7 @@ async def test_approval_is_taken_first_and_routes_to_tools_without_the_model() -
     # 先确认并写下决定，其余消息留到工具执行完再写入。
     [written] = context.added
     assert "<user_decision" in written["message"]["content"]
-    assert rc.mailbox.pop().body == _notice("earlier notice").body
+    assert rc.mailbox.pop().body == _notice("earlier notice", 4).body
 
 
 @pytest.mark.usefixtures("isolated_storage")
@@ -351,7 +353,7 @@ async def test_rejection_of_an_execute_tool_also_routes_to_the_tool() -> None:
     """``execute`` 类工具的驳回同样回到工具：它得落定自己的事实，占位也只有执行结果能收尾。"""
     decision = _decision("reject")
     rc = _prepare_rc({5: decision})
-    rc.mailbox.post(_notice("note"))
+    rc.mailbox.post(_notice("note", 4))
     rc.mailbox.post(decision)
     context = _Context()
 
@@ -361,7 +363,7 @@ async def test_rejection_of_an_execute_tool_also_routes_to_the_tool() -> None:
     assert DecisionBody.model_validate(result["batch"].decision).decision == "reject"
     [written] = context.added
     assert "<user_decision" in written["message"]["content"]
-    assert rc.mailbox.pop().body == _notice("note").body
+    assert rc.mailbox.pop().body == _notice("note", 4).body
 
 
 @pytest.mark.usefixtures("isolated_storage")

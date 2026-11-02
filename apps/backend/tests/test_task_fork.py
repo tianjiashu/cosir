@@ -14,7 +14,7 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 )
 from app.assistant_transport.state.message_identity import leading_reply_id, reply_id, turn_of
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.conversation_input import UserInputPresentation
+from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.models.message_metadata import UserMessageMetadata
 from app.task_runtime.service.task_service import TaskService
@@ -390,3 +390,36 @@ def test_request_cancellation_does_not_release_workspace_before_worker_finishes(
             assert len(store.service.list_tasks_for_workspace(store.workspace.id)) == 2
 
     asyncio.run(scenario())
+
+
+def test_agent_message_opens_a_turn_for_forking(fork_store):
+    """Agent 消息与用户输入一样开启一轮：从它的回复分叉只带到这一轮，不因找不到起点而 404。"""
+    store = fork_store
+    run = store.runs.create(store.task.id, status="completed")
+    sequence = store.context.max_sequence(store.task.id) + 1
+    message_id = run.id * 100 + sequence
+    store.context.append(
+        store.task.id,
+        run.id,
+        {"role": "user", "content": "<agent_message>do it</agent_message>"},
+        sequence,
+        metadata=UserMessageMetadata(
+            kind="agent_message",
+            presentation=UserInputPresentation(display_text="do it"),
+            source=MessageSource(task_id=1, name="parent"),
+        ),
+        message_id=message_id,
+    )
+    store.context.append(
+        store.task.id, run.id, {"role": "assistant", "content": "done"}, sequence + 1
+    )
+    append_turn(store, run, "later")
+
+    target = fork(store, reply_id(message_id))
+
+    contents = [
+        row.message.get("content")
+        for row in store.contexts.get(target.id, include_in_context=False)
+    ]
+    assert contents == ["固定系统指令", "<agent_message>do it</agent_message>", "done"]
+

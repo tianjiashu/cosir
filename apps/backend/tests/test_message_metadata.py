@@ -80,7 +80,7 @@ def _running_state(part: dict) -> dict:
 
     return {
         "messages": [
-            {"id": "assistant-1", "role": "assistant", "parts": [part], "runId": 1, "outcome": None}
+            {"id": "assistant-1", "role": "assistant", "parts": [part], "runId": 1, "outcome": None, "source": None}
         ],
         "activity": {
             "runId": 1,

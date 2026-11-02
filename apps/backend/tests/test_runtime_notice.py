@@ -1,4 +1,4 @@
-"""Run 内通知的投递契约：只进本次执行的 mailbox，不落库、不需要确认。"""
+"""Run 内通知的契约：放在本次驱动的 ``RuntimeContext.notices``，不落库、不进 mailbox。"""
 
 from types import SimpleNamespace
 
@@ -47,7 +47,7 @@ def _stub_for_run_deps(monkeypatch, agent) -> None:
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])
 async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> None:
-    """工具准入的三条分支都向 mailbox 投递领域通知，不在装配方构造模型消息。"""
+    """工具准入的三条分支都产生领域通知，不在装配方构造模型消息，也不进 mailbox。"""
     from app.core.workflow.execution_state import runtime_context as runtime_context_module
 
     mailbox = RunMailbox()
@@ -63,54 +63,52 @@ async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> 
     assert result.agent is agent
     assert result.mailbox is mailbox
     assert result.allows_tools == {"read_file", "write_file"} - set(banned)
-    notice = mailbox.pop()
+    [notice] = result.notices
     assert mailbox.isEmpty()
-    assert isinstance(notice.body, NoticeBody)
-    assert notice.id is None
-    assert notice.body.notice_kind == "tool_availability"
+    assert isinstance(notice, NoticeBody)
+    assert notice.notice_kind == "tool_availability"
     assert space.announced_ban_tools == frozenset(banned)
 
 
-def _for_run_with_space(monkeypatch, space, banned) -> RunMailbox:
+def _for_run_with_space(monkeypatch, space, banned) -> list[NoticeBody]:
     from app.core.workflow.execution_state import runtime_context as runtime_context_module
 
     _stub_for_run_deps(monkeypatch, agent=SimpleNamespace())
     monkeypatch.setattr(
         runtime_context_module.task_runtime_spaces, "get_or_create", lambda _id: space
     )
-    runtime_context_module.RuntimeContext.for_run(
+    return runtime_context_module.RuntimeContext.for_run(
         SimpleNamespace(id=7, task_id=1, options=SimpleNamespace(disabled_tool_groups=banned))
-    )
-    return space.mailbox
+    ).notices
 
 
 def test_tool_availability_skips_unchanged_all_available_and_reports_changes(monkeypatch) -> None:
-    """已告知集合不变且全部可用时不投递；变化时投递增量并更新已告知集合。"""
+    """已告知集合不变且全部可用时不产生通知；变化时给出增量并更新已告知集合。"""
     space = _space(RunMailbox(), announced=frozenset())
-    assert _for_run_with_space(monkeypatch, space, []).isEmpty()
+    assert _for_run_with_space(monkeypatch, space, []) == []
 
-    mailbox = _for_run_with_space(monkeypatch, space, ["write_file"])
-    assert "newly disabled: write_file" in mailbox.pop().body.content
+    [notice] = _for_run_with_space(monkeypatch, space, ["write_file"])
+    assert "newly disabled: write_file" in notice.content
     assert space.announced_ban_tools == frozenset({"write_file"})
 
-    mailbox = _for_run_with_space(monkeypatch, space, ["write_file"])
-    assert "still disabled" in mailbox.pop().body.content
+    [notice] = _for_run_with_space(monkeypatch, space, ["write_file"])
+    assert "still disabled" in notice.content
 
 
 def test_terminals_invalidated_notice_is_posted_and_failure_does_not_block(monkeypatch) -> None:
-    """首次驱动的旧终端失效通知随装配投进 mailbox；判定失败只记录，装配照常完成。"""
+    """首次驱动的旧终端失效通知随装配进 ``notices``；判定失败只记录，装配照常完成。"""
     from app.core.workflow.execution_state import runtime_context as runtime_context_module
 
-    terminals = TaskMessage.of(NoticeBody(content="terminals gone", notice_kind="terminals_invalidated"))
+    terminals = NoticeBody(content="terminals gone", notice_kind="terminals_invalidated")
     space = _space(RunMailbox(), announced=frozenset())
     _for_run_with_space(monkeypatch, space, [])
     monkeypatch.setattr(
         runtime_context_module.restart_settlement, "first_drive_notice", lambda _space: terminals
     )
-    runtime_context_module.RuntimeContext.for_run(
+    result = runtime_context_module.RuntimeContext.for_run(
         SimpleNamespace(id=7, task_id=1, options=SimpleNamespace(disabled_tool_groups=[]))
     )
-    assert space.mailbox.pop() is terminals
+    assert result.notices == [terminals]
     assert space.mailbox.isEmpty()
 
     def broken(_space):
@@ -120,7 +118,7 @@ def test_terminals_invalidated_notice_is_posted_and_failure_does_not_block(monke
     result = runtime_context_module.RuntimeContext.for_run(
         SimpleNamespace(id=7, task_id=1, options=SimpleNamespace(disabled_tool_groups=[]))
     )
-    assert result.mailbox.isEmpty()
+    assert result.notices == []
 
 
 def _notice(allowed: frozenset[str], announced: frozenset[str] | None, banned: frozenset[str]):
@@ -154,18 +152,15 @@ def test_tool_availability_notice_rules() -> None:
     assert _notice(f(), f(), f("a", "b")).endswith("all tools are disabled now.")
 
 
-def test_mailbox_dedupes_persisted_rows_but_keeps_every_run_notice() -> None:
-    """同一外部队列行在一次执行内只收一次；Run 内通知没有行 id，逐条保留。"""
+def test_mailbox_dedupes_persisted_rows_within_one_execution() -> None:
+    """同一外部队列行在一次执行内只收一次（派发方每次按外部队列全量投递）。"""
     mailbox = RunMailbox()
     persisted = TaskMessage.of(NoticeBody(content="broadcast", notice_kind="test"), message_id=5)
-    transient = TaskMessage.of(NoticeBody(content="continue", notice_kind="test"))
 
     mailbox.post(persisted)
     mailbox.post(persisted)
-    mailbox.post(transient)
-    mailbox.post(transient)
 
-    assert [mailbox.pop() for _ in range(3)] == [persisted, transient, transient]
+    assert mailbox.pop() == persisted
     assert mailbox.isEmpty()
     # 取光后同一行再次投递仍被忽略：它已在本次执行中处理过；新执行开始时 reset 才重新接收。
     mailbox.post(persisted)

@@ -10,6 +10,7 @@ import pytest
 from app.core.workflow.message_queue import dispatch_policy
 from app.core.workflow.message_queue.dispatch_policy import Deliver, StartRun, Stay, Wake
 from app.core.workflow.message_queue.task_message import (
+    AgentMessageBody,
     BackgroundResultBody,
     DecisionBody,
     Delivery,
@@ -19,8 +20,7 @@ from app.core.workflow.message_queue.task_message import (
     UserInputBody,
 )
 from app.models import ConversationRunRecord
-from app.models.conversation_input import UserInputPresentation
-from app.models.conversation_run_options import ConversationRunOptions
+from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
 _LAUNCH = RunLaunch(model_config_id=1)
@@ -166,8 +166,21 @@ def test_fresh_run_receives_one_user_input_resumed_run_only_immediate() -> None:
     assert dispatch_policy.initial_messages(pending, fresh_run=False) == [pending[1], pending[3]]
 
 
-def test_ban_tools_compare_as_set() -> None:
-    options = ConversationRunOptions(disabled_tool_groups=["b", "a"])
-    run = _run("running", RunLaunch(model_config_id=1, options=options))
-    launch = RunLaunch(model_config_id=1, options=ConversationRunOptions(disabled_tool_groups=["a", "b"]))
-    assert dispatch_policy.matches_run(launch, run)
+def _agent(message_id: int, launch: RunLaunch = _OTHER) -> TaskMessage:
+    body = AgentMessageBody(
+        text="do it", launch=launch, source=MessageSource(task_id=1, name="parent")
+    )
+    return TaskMessage.of(body, message_id=message_id)
+
+
+def test_agent_message_starts_a_run_with_its_own_launch_without_a_current_run() -> None:
+    """委派刚建的子 Task 没有 Run、无从继承：Agent 消息自带的配置开出第一个 Run。"""
+    pending = [_agent(1)]
+    assert dispatch_policy.next_action("idle", None, pending, pending) == StartRun(_OTHER)
+
+
+def test_agent_message_and_user_input_share_the_one_input_per_run_channel() -> None:
+    """两类输入都携带配置、一个新 Run 只消费一条：先到的 immediate 先跑，其余留给后续 Run。"""
+    pending = [_agent(1), _user(2), _notice(3)]
+    assert dispatch_policy.next_input(pending) is pending[0]
+    assert dispatch_policy.initial_messages(pending, fresh_run=True) == [pending[0], pending[2]]

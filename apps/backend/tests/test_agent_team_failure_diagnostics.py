@@ -38,6 +38,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
                 "role": "assistant",
                 "runId": 3,
                 "outcome": None,
+                "source": None,
                 "parts": [
                     {
                         "type": "tool-call",

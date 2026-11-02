@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.context.context_store import ContextStore
-from app.models.conversation_input import UserInputPresentation
+from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
 from app.service.depends import get_conversation_task_context_service
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
@@ -45,6 +45,24 @@ def test_latest_user_input_skips_other_user_role_messages(task) -> None:
 
     assert latest is not None
     assert (latest.sequence, latest.message_id) == (3, 12)
+
+
+def test_latest_input_from_an_agent_is_not_an_edit_target(task) -> None:
+    """最新一轮由 Agent 消息开启时没有可编辑目标：越过它改更早的用户输入会把它那一轮一起撤回。"""
+    ContextStore().append(
+        task.id,
+        None,
+        {"role": "user", "content": "<agent_message/>"},
+        6,
+        metadata=UserMessageMetadata(
+            kind="agent_message",
+            presentation=UserInputPresentation(display_text="from parent"),
+            source=MessageSource(task_id=1, name="parent"),
+        ),
+        message_id=14,
+    )
+
+    assert get_conversation_task_context_service().latest_user_input(task.id) is None
 
 
 def test_exclude_from_soft_deletes_target_and_later_rows(task) -> None:

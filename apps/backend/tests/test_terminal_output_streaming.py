@@ -469,7 +469,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
         )
     )
     projector.process(_terminal_output_update(0, "before "))
-    # 到前台上限转后台：占位 pending + background，展示数据不带输出，已流出的输出保留。
+    # 用户把前台等待转到后台：占位 pending + background，展示数据不带输出，已流出的输出保留。
     projector.process(
         ToolCallStatusChangedEvent(
             task_id=7,
