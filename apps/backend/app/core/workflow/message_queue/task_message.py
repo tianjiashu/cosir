@@ -63,8 +63,8 @@ __all__ = [
 class TaskMessage:
     """一条队列消息；``id`` 是外部队列行 id，也是排队与已消费阶段共用的消息身份。
 
-    ``id`` 只在入队前为 ``None``；投进 ``RunMailbox`` 的都是外部队列行的副本。Run 内产生的提示不是
-    队列消息，见 ``RuntimeContext.notices``。
+    ``id`` 为 ``None`` 只有两种情形：入队前，以及执行内通知（``RunMailbox.notify``，不落库、不需要
+    确认）。
     ``kind`` 由 body 类型决定（经 :meth:`of` 构造），持久化时单独成列，读回时按它还原 body。
     """
 
