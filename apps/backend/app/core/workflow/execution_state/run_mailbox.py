@@ -12,7 +12,8 @@ from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 
 
 class RunMailbox:
-    """进入 Run 的唯一通道，不是事实源：由 Task 的 actor 持有，每次开始执行时 :meth:`reset`，不跨重启。
+    """进入 Run 的唯一通道，不是事实源：由 Task 的 actor 持有，每次开始执行时 :meth:`reset`，
+    不跨重启。
 
     两种条目，按有没有 ``id`` 区分：
 

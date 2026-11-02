@@ -24,6 +24,7 @@ from app.config.logging.logger import log
 from app.core.events import TaskTitleUpdatedEvent
 from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.node_helper.common import emit
+from app.models.task_kind import USER_FACING_TASK_TYPES
 from app.service import depends as service_depends
 from app.utils.datetime_utils import TASK_TITLE_LIMIT, preview
 from app.utils.message_content import content_to_text
@@ -32,8 +33,6 @@ if TYPE_CHECKING:
     from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
     from app.core.workflow.execution_state.runtime_context import RuntimeContext
 
-# 侧栏可见的对话 Task；子 Agent 与 Team 节点的标题是 Agent / 节点名，不能被改写。
-_TITLED_TASK_TYPES = frozenset({"user", "fork"})
 # 收尾等待期间复查取消信号的间隔：信号没有可等待的通知，停止与编辑重跑不该被支线拖住。
 _SETTLE_POLL_SECONDS = 0.2
 
@@ -44,7 +43,8 @@ def should_launch(rc: RuntimeContext, state: ReactExecutionState) -> bool:
     「起过」记在持久执行状态 ``title_requested`` 上而不是驱动期的 ``rc.title_branch``：挂起后唤醒、
     重启后恢复都是新驱动，只看驱动期字段会让同一个 Run 重复起标题。
     """
-    return not state.title_requested and rc.task.task_type in _TITLED_TASK_TYPES
+    # 只改写侧栏对话的标题：子 Agent 与 Team 节点的标题是 Agent / 节点名。
+    return not state.title_requested and rc.task.task_type in USER_FACING_TASK_TYPES
 
 
 def launch(rc: RuntimeContext, messages: list[ChatCompletionMessageParam]) -> None:
