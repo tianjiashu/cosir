@@ -1,10 +1,11 @@
 """模型请求前的唯一关口：依次判定取消、挂起、步数上限，再把 mailbox 里的消息并入 context。
 
 步与步之间的停止都在这里落定；模型请求中、工具执行中的取消仍由 model 节点与工具运行器就地中断。
-投递归 Task 的调度 actor（外部队列消息）与各节点（Run 内通知），本节点只取 mailbox 并写入：
-持久化消息的确认（删除外部队列行）与 context 写入同一事务提交，消息不会丢也不会并入两次；不读
-外部队列、不按模型截断、不持 Task 闸门。Run 首次并入用户输入后，顺带启动标题支线
-（``branch.task_title``，每个 Run 至多一次），它与主线并行、不影响流转。
+mailbox 是进入 Run 的唯一通道：外部队列行的副本确认（删除外部队列行）与 context 写入同一事务提交，
+消息不会丢也不会并入两次；执行内通知没有队列行，写入即可。全部通知（两种来源）先写、合成
+一条 ``<system_notice>``，其余消息再按优先级逐条写。本节点不读外部队列、不按模型截断、不持
+Task 闸门。Run 首次并入用户输入后，顺带启动标题支线（``branch.task_title``，每个 Run 至多
+一次），它与主线并行、不影响流转。
 
 需要直接执行的用户决定优先级最高、每轮只取一条：工具声明 ``user_decision == "execute"`` 时，
 无论批准还是驳回，都确认并写下决定后绕过模型、直接执行原调用（先确认再执行：执行中途进程退出
@@ -20,15 +21,16 @@ from typing import cast
 from app.config.configuration import get_tool_registry
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.events import ToolCallStatusChangedEvent, UserInputConsumedEvent
+from app.core.events import InputConsumedEvent, ToolCallStatusChangedEvent
 from app.core.workflow.branch import task_title
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.task_message import (
     BackgroundResultBody,
     DecisionBody,
+    NoticeBody,
     TaskMessage,
-    UserInputBody,
+    notices_to_context,
 )
 from app.core.workflow.node_helper.common import (
     RunStopped,
@@ -41,9 +43,10 @@ from app.core.workflow.node_helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflow.node_helper.tool_observation_projection import (
     settle_background_placeholder,
 )
+from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.react_route import ReactRoute
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_metadata import TURN_INPUT_KINDS, ToolMessageMetadata
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
 
@@ -53,10 +56,10 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
 
     挂起请求取自执行状态里上一批的观察（``batch.suspends()``），读完即清空批次。
     取消优先于挂起：工具要求等待时 Run 恰好被停，按取消落定。挂起先于步数上限：Agent 明确在等
-    消息时不按「步数用完」失败，唤醒后回到这里再检查上限。挂起前 mailbox 已有外部可唤醒消息（如
-    子 Agent 结论在工具执行期间送达）就直接继续，省掉「挂起 → 复查 → 唤醒」一圈；之后才到达的消息
-    仍由 actor 的挂起后复查兜住。前三类落定都不取 mailbox：持久化消息留在外部队列给后续执行，Run 内
-    通知随执行丢弃。
+    消息时不按「步数用完」失败，唤醒后回到这里再检查上限。挂起前 mailbox 已有可唤醒消息（如子 Agent
+    结论在工具执行期间送达）就直接继续，省掉「挂起 → 复查 → 唤醒」一圈；之后才到达的消息仍由 actor
+    的挂起后复查兜住。通知不算（``WAKES``，与调度规则同一条）：不值得为它推进。前三类落定都不写入：
+    外部队列行留给后续执行，执行内通知随 mailbox 重置丢弃。
     """
     rc = _runtime_context()
     step_count = state.step_count + 1
@@ -64,7 +67,7 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     if rc.is_cancelled():
         _cancel_before_request(step_id, rc.run.id)
     if state.batch.suspends():
-        if not rc.mailbox.has_external():
+        if not rc.mailbox.has_wakeable():
             _suspend(step_id, rc.run.id)
             return {"batch": ToolBatch(), "next_node": ReactRoute.END}
         log.info(
@@ -83,6 +86,9 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
         routed = await _route_decision(decision, step_id)
         if routed is not None:
             return {**route_state(state.step_count, ReactRoute.TOOLS), "batch": routed}
+    notices = rc.mailbox.take_notices()
+    if notices:
+        await asyncio.to_thread(_write_notices, notices)
     consumed_input = False
     while not rc.mailbox.isEmpty():
         message = rc.mailbox.pop()
@@ -171,33 +177,53 @@ async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | No
     return ToolBatch(calls=[call], decision=body.model_dump(mode="json"))
 
 
-def _write_message(task_message: TaskMessage, *, claim_decision: bool = False) -> bool:
-    """写入一条消息，返回是否实际写入；工作线程执行。
+def _write_notices(notices: list[TaskMessage]) -> None:
+    """把这一批通知合成一条 ``<system_notice>`` 写入；工作线程执行。
 
-    外部队列来的消息（``id`` 非空）在同一事务内先确认删除再写入，写入以确认返回的行内容为准；
-    已被别的执行确认或被用户撤回的消息跳过、返回 ``False``。Run 内通知
-    （``id`` 为 ``None``）只是一条写入，不需要事务。用户输入在提交后发消费事件（带展示绑定），供 Transport 投影出 user 消息。
+    其中的外部队列行与写入同一事务确认，写入以确认返回的行内容为准，已被别的执行确认或被撤回的
+    跳过；执行内通知没有行，原样写入。一条都不剩时不写。
+    """
+    row_ids = [notice.id for notice in notices if notice.id is not None]
+    with main_session_factory().begin() as session:
+        acked = service_depends.get_task_message_queue().ack(session, row_ids) if row_ids else {}
+        bodies = [
+            cast(NoticeBody, (acked[notice.id] if notice.id is not None else notice).body)
+            for notice in notices
+            if notice.id is None or notice.id in acked
+        ]
+        if not bodies:
+            return
+        message, metadata = notices_to_context(bodies)
+        _message_context().add_message(
+            message, metadata=metadata, session=session, project_to_transport=False
+        )
+
+
+def _write_message(task_message: TaskMessage, *, claim_decision: bool = False) -> bool:
+    """确认并写入一条外部队列消息，返回是否实际写入；工作线程执行。
+
+    同一事务内先确认删除再写入，写入以确认返回的行内容为准；已被别的执行确认或被用户撤回的消息
+    跳过、返回 ``False``。开启一轮的输入（用户输入、Agent 消息）在提交后发消费事件（带展示绑定与
+    来源），供 Transport 投影出 user 消息。
     ``claim_decision`` 只用于要执行的决定：同一事务把这次调用仍为 ``pending`` 的等待占位推到
     ``running``（占位已不在上下文时不动）。
     """
     rc = _runtime_context()
     context = _message_context()
-    if task_message.id is None:
-        message, metadata = task_message.body.render()
-        context.add_message(message, metadata=metadata, project_to_transport=False)
-        return True
     with main_session_factory().begin() as session:
-        acked = service_depends.get_task_message_queue().ack(session, [task_message.id])
-        current = acked.get(task_message.id)
+        acked = service_depends.get_task_message_queue().ack(session, [cast(int, task_message.id)])
+        current = acked.get(cast(int, task_message.id))
         if current is None:
             return False
         message, metadata = current.body.render()
+        # 开启一轮的输入以队列行 id 为消息身份：快照里的 user 消息与它的回复都按它寻址。
+        opens_turn = metadata.kind in TURN_INPUT_KINDS
         context.add_message(
             message,
             metadata=metadata,
             session=session,
             project_to_transport=current.project_to_transport,
-            message_id=current.id if current.kind == "user_input" else None,
+            message_id=current.id if opens_turn else None,
         )
         if claim_decision:
             call_id = cast(DecisionBody, current.body).tool_call_id
@@ -206,13 +232,14 @@ def _write_message(task_message: TaskMessage, *, claim_decision: bool = False) -
                 context.update_tool_result_metadata(
                     call_id, ToolMessageMetadata(status="running"), session=session
                 )
-    if current.kind == "user_input":
+    if opens_turn:
         emit(
-            UserInputConsumedEvent(
+            InputConsumedEvent(
                 task_id=rc.task.id,
                 run_id=rc.run.id,
                 message_id=cast(int, current.id),
-                presentation=cast(UserInputBody, current.body).presentation,
+                presentation=cast(UserInputPresentation, metadata.presentation),
+                source=metadata.source,
             )
         )
     return True

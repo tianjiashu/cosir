@@ -19,7 +19,7 @@ from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
+from app.core.workflow.message_queue.task_message import NoticeBody
 from app.core.workflow.node_helper.common import (
     RunStopped,
     _message_context,
@@ -160,12 +160,10 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     if not calls and finish_reason is None:
         parts.cancel()
         _message_context().abandon_model_response()
-        rc.mailbox.post(
-            TaskMessage.of(
-                NoticeBody(
-                    content="Please continue the unfinished task.",
-                    notice_kind="model_continuation",
-                )
+        rc.mailbox.notify(
+            NoticeBody(
+                content="Please continue the unfinished task.",
+                notice_kind="model_continuation",
             )
         )
         return route_state(step_count, ReactRoute.PREPARE_INPUT)

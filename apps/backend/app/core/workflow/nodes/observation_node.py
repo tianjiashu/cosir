@@ -1,4 +1,4 @@
-"""工具观察结算节点：写 canonical tool 消息并投影终态、投递工具产出的图片。
+"""工具观察结算节点：写 canonical tool 消息并投影终态、写入工具产出的图片。
 
 挂起与清空批次归 prepare_input。
 """
@@ -6,9 +6,9 @@
 from app.config.logging.logger import log
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.node_helper.tool_observation_projection import (
-    post_tool_images,
     settle_decision_observation,
     settle_observations,
+    write_tool_images,
 )
 from app.models.enums.react_route import ReactRoute
 
@@ -27,8 +27,8 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
         settle_decision_observation(batch, step_id=step_id)
     else:
         settle_observations(batch, step_id=step_id)
-    # 图片只能放在 user 消息里，且须排在整批 tool 消息之后（见 ``post_tool_images``）。
-    post_tool_images(batch)
+    # 图片只能放在 user 消息里，且须排在整批 tool 消息之后（见 ``write_tool_images``）。
+    write_tool_images(batch)
     log.info(
         "observe_node_completed",
         extra={
