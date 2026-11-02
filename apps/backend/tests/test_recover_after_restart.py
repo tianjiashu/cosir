@@ -26,7 +26,10 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
     )
     monkeypatch.setattr(
         "app.core.tool.handler.agent_team.coordinator.get_agent_team_coordinator",
-        lambda: SimpleNamespace(recover_after_restart=lambda: calls.append(("teams", None)) or 0),
+        lambda: SimpleNamespace(recover_after_restart=lambda: calls.append(("teams", None)) or [7]),
+    )
+    monkeypatch.setattr(
+        service, "cancel_orphaned_team_nodes", lambda ids: calls.append(("nodes", ids)) or []
     )
     monkeypatch.setattr(
         recover_module.service_depends,
@@ -39,15 +42,14 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
         SimpleNamespace(get_or_create=lambda task_id: calls.append(("space", task_id))),
     )
     settlement = recover_module.restart_settlement
+    reattached = frozenset({"call-a"})
     monkeypatch.setattr(
-        settlement,
-        "interrupt_pending_placeholders",
-        lambda: calls.append(("interrupt", None)) or 0,
+        settlement, "reattach_child_waits", lambda: calls.append(("reattach", None)) or reattached
     )
     monkeypatch.setattr(
         settlement,
-        "settle_restarted_child_runs",
-        lambda runs: calls.append(("settle", runs)) or [],
+        "interrupt_pending_placeholders",
+        lambda exclude: calls.append(("interrupt", exclude)) or 0,
     )
     monkeypatch.setattr(
         settlement,
@@ -58,9 +60,36 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
     service.recover_after_restart()
 
     steps = [name for name, _ in calls]
-    assert steps[:2] == ["runs", "teams"]
+    assert steps[:3] == ["runs", "teams", "nodes"]
     assert sorted(arg for name, arg in calls if name == "space") == [3, 5]
-    assert steps[-3:] == ["interrupt", "settle", "wake"]
-    # 子 Run 回投用收敛结果；终端唤醒与拉起 actor 用同一份候选。
-    assert dict(calls)["settle"] is recovered
+    assert steps[-3:] == ["reattach", "interrupt", "wake"]
+    # 作废 TeamRun 的节点先取消；先挂后中断，接管了的占位不被中断；
+    # 终端唤醒与拉起 actor 用同一份候选。
+    assert dict(calls)["nodes"] == [7]
+    assert dict(calls)["interrupt"] is reattached
     assert dict(calls)["wake"] is dispatch
+
+
+def test_only_suspended_runs_of_orphaned_team_nodes_are_cancelled(monkeypatch) -> None:
+    """作废 TeamRun 的节点：挂起的取消（没人再等它），其余状态不动。"""
+    from app.models.enums.conversation_run_status import RunTransition
+
+    runs = {
+        7: SimpleNamespace(id=70, status="suspended"),
+        8: SimpleNamespace(id=80, status="completed"),
+    }
+    transitions: list[tuple[int, RunTransition, str]] = []
+    service = RecoverService.__new__(RecoverService)
+    service._ledger = SimpleNamespace(
+        transition=lambda run_id, transition, *, end_reason: transitions.append(
+            (run_id, transition, end_reason)
+        ) or SimpleNamespace(id=run_id)
+    )
+    monkeypatch.setattr(
+        recover_module.service_depends,
+        "get_task_service",
+        lambda: SimpleNamespace(require_current_run=lambda task_id: runs.get(task_id)),
+    )
+
+    assert service.cancel_orphaned_team_nodes([7, 8, 9]) == [70]
+    assert transitions == [(70, RunTransition.CANCEL, "runtime_restarted")]

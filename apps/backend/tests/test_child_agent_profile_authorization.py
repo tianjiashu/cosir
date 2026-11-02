@@ -21,7 +21,8 @@ async def test_child_agent_send_rejects_main_profile_before_creating_run(
     class _TaskService:
         def get_task(self, _task_id: int) -> SimpleNamespace:
             return SimpleNamespace(
-                is_child=True,
+                derived_by=lambda task_id: task_id == 7,
+                task_type="delegate_task",
                 parent_task_id=7,
                 workspace_id=3,
                 current_run_id=11,

@@ -97,10 +97,14 @@ def _definition():
     return AgentTeamRunTool.to_definition(object.__new__(AgentTeamRunTool))
 
 
-def _bare_tool() -> AgentTeamRunTool:
-    """构造不触达存储 / 进程单例的裸实例（由用例逐个注入协作对象）。"""
+def _bare_tool(derivation_depth: int = 0) -> AgentTeamRunTool:
+    """构造不触达存储 / 进程单例的裸实例（由用例逐个注入协作对象）；主 Task 深度默认 0。"""
 
-    return object.__new__(AgentTeamRunTool)
+    tool = object.__new__(AgentTeamRunTool)
+    tool._task_service = SimpleNamespace(
+        get_task=lambda task_id: SimpleNamespace(id=task_id, derivation_depth=derivation_depth)
+    )
+    return tool
 
 
 def _context() -> ToolExecutionContext:
@@ -179,12 +183,12 @@ def _stub_preparation_lookups(monkeypatch: pytest.MonkeyPatch, child: AgentProfi
     """把准备服务对 Agent 注册表的查找替换为最小桩，保留装配逻辑本体。
 
     节点工具来自 Profile 的 ``allowed_tools``（不经工具系统解析 schema），因此这里桩掉节点
-    Profile 的解析来源，以及按交互终端工具组剥离时查询的工具注册表。
+    Profile 的解析来源，以及按 Task 类型规则过滤时查询的工具注册表。
     """
 
     registry = SimpleNamespace(resolve=lambda scope, agent_id: child)
     monkeypatch.setattr(prep_module, "get_agent_registry", lambda: registry)
-    tools = SimpleNamespace(tool_groups_to_tool_names=lambda _groups: ["terminal_start"])
+    tools = SimpleNamespace(get_tool_definition=lambda _name: None)
     monkeypatch.setattr(prep_module, "get_tool_registry", lambda: tools)
     monkeypatch.setattr(
         prep_module,
@@ -370,6 +374,28 @@ def test_team_id_argument_rejects_blank_and_unknown_fields() -> None:
 # --------------------------------------------------------------------------- #
 
 
+def test_prepare_branch_refuses_at_the_derivation_depth_limit(monkeypatch) -> None:
+    """建 Team 也是派生：主 Task 已到深度上限时，在建 pending TeamRun 之前就拒绝。"""
+    from app.config.settings import Settings
+
+    monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
+    tool = _bare_tool(derivation_depth=2)
+    tool.team_register = SimpleNamespace(
+        resolve=lambda scope, team_id: pytest.fail("must not resolve a Team past the limit")
+    )
+
+    observation = tool.execute(
+        team_id="any-team",
+        goal="交付报告",
+        node_goals=_node_inputs(develop="实现"),
+        execution_context=_context(),
+    )
+
+    assert observation.status == "error"
+    assert "maximum derivation depth is 2" in observation.content
+    assert observation.display_data == {"status_hint": "派生超限"}
+
+
 def test_prepare_branch_succeeds_for_an_existing_team(monkeypatch) -> None:
     """(契约) Team 已存在且输入合法时，准备分支落待确认 TeamRun（pending）并要求挂起。
 
@@ -439,8 +465,9 @@ def test_preparation_service_builds_preview_nodes_and_runtime_snapshots(monkeypa
 
     assert set(result.node_runtime_snapshots) == {"develop", "review"}
     assert [node["node_id"] for node in result.preview_fields["nodes"]] == ["develop", "review"]
-    # 节点工具 = Profile 声明的工具减去禁用清单：这里刻意**不**补足委派 / 父子通信工具——它们属于
-    # 节点 Agent Profile 自身的能力声明，Team 层只做剥离、不代为追加（见 materialize_node_tools）。
+    # 节点工具 = Profile 声明的工具按 Task 类型规则过滤：这里刻意**不**补足委派 / 父子通信工具——
+    # 它们属于节点 Agent Profile 自身的能力声明，Team 层只做过滤、不代为追加
+    # （见 materialize_node_tools）。
     assert result.preview_fields["nodes"][0]["tools"] == ["read_file"]
     assert result.preview_fields["goal"] == "交付报告"
     assert result.preview_fields["team_id"] == "code-quality"

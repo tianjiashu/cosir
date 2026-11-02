@@ -153,6 +153,65 @@ def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_c
     assert task_spy.created is False
 
 
+@pytest.mark.parametrize(("parent_depth", "refused"), [(1, False), (2, True)])
+def test_delegate_checks_the_parent_depth_and_writes_the_child_depth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    parent_depth: int,
+    refused: bool,
+) -> None:
+    """父 Task 到了深度上限就在建子 Task 之前拒绝；没到就把子 Task 写成父深度 + 1。"""
+    from types import SimpleNamespace
+
+    from app.config.settings import Settings
+
+    monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
+    created: list[dict] = []
+
+    class _Tasks:
+        def get_task(self, task_id: int):
+            return SimpleNamespace(id=task_id, title="父任务", derivation_depth=parent_depth)
+
+        def get_or_create_task(self, **kwargs):
+            created.append(kwargs)
+            raise RuntimeError("stop after recording the child task")
+
+    monkeypatch.setattr(child_agent_create, "get_task_service", lambda: _Tasks())
+    monkeypatch.setattr(
+        child_agent_create,
+        "get_conversation_run_ledger",
+        lambda: SimpleNamespace(get_run=lambda _id: SimpleNamespace(model_config_id=1)),
+    )
+    registry = configuration.build_agent_registry()
+    monkeypatch.setattr(configuration, "get_agent_registry", lambda: registry)
+    monkeypatch.setattr(
+        configuration, "get_tool_registry", lambda: SimpleNamespace(get_all_definitions=list)
+    )
+    context = ToolExecutionContext(
+        step_id="step-1",
+        task_id=1,
+        workspace_id=1,
+        workspace_root=tmp_path,
+        run_id=2,
+        event_loop=SimpleNamespace(is_closed=lambda: False),  # type: ignore[arg-type]
+    )
+
+    result = child_agent_create.DelegateTaskTool().execute(
+        child_agent_id="general-assistant",
+        agent_name="Scope",
+        message="Perform this scoped task.",
+        execution_context=context,
+    )
+
+    assert result.status == "error"
+    if refused:
+        assert created == []
+        assert result.display_data == {"status_hint": "派生超限"}
+    else:
+        [kwargs] = created
+        assert kwargs["derivation_depth"] == parent_depth + 1
+
+
 def test_workspace_config_error_is_not_silently_merged(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

@@ -144,6 +144,8 @@ def _node_run_profile(
     task = SimpleNamespace(
         workspace_id=1,
         extra={NODE_PROFILE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json")},
+        # 节点 Task 固化的 schema 就是快照冻结的工具名（Coordinator 建节点时解析）。
+        tool_schemas=[{"name": name} for name in node_runtime.allowed_tools],
     )
     registry = SimpleNamespace(resolve=lambda *_args: registry_profile)
     with (
@@ -186,8 +188,8 @@ def _stub_preparation_registry(monkeypatch: pytest.MonkeyPatch, child: AgentProf
 
     registry = SimpleNamespace(resolve=lambda scope, agent_id: child)
     monkeypatch.setattr(prep_module, "get_agent_registry", lambda: registry)
-    # 节点工具按交互终端工具组剥离：桩出一个只认终端组的工具注册表。
-    tools = SimpleNamespace(tool_groups_to_tool_names=lambda _groups: ["terminal_start"])
+    # 节点工具按 Task 类型规则过滤：桩出一个不认识任何工具的注册表，Profile 的工具名原样保留。
+    tools = SimpleNamespace(get_tool_definition=lambda _name: None)
     monkeypatch.setattr(prep_module, "get_tool_registry", lambda: tools)
 
 
@@ -253,6 +255,22 @@ def _materialized_parent_profile() -> AgentRuntimeConfig:
         model_config_id=1,
     )
     return AgentRuntimeConfig.resolve(definition, _PARENT_MODEL_CONFIG)
+
+
+def test_runtime_tools_are_restricted_to_what_the_task_froze() -> None:
+    """系统提示词的工具目录读 ``allowed_tools``：定义里有、Task 固化的 schema 里没有的工具
+    不出现。"""
+    definition = AgentProfile(
+        agent_id="general-assistant",
+        role="child",
+        system_prompt="child prompt",
+        allowed_tools=["read_file", "agent_team", "delegate_task"],
+        agent_type=AgentProfileType.CHILD,
+    )
+    config = AgentRuntimeConfig.resolve(
+        definition, _PARENT_MODEL_CONFIG, restrict_tools_to={"read_file", "delegate_task"}
+    )
+    assert config.allowed_tools == ("read_file", "delegate_task")
 
 
 # --------------------------------------------------------------------------- #

@@ -1,4 +1,5 @@
-"""重启收尾：挂起在终端上的 Run 被唤醒，其余 Task 首次驱动时得到一次旧终端失效提醒。
+"""重启收尾：委派等待按占位重新挂上；挂起在终端上的 Run 被唤醒；其余 Task 首次驱动时
+得到一次旧终端失效提醒。
 
 只依赖 Run 状态与 context 里的工具调用事实，协作者全用替身。
 """
@@ -11,8 +12,14 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.tool.background import restart_settlement
-from app.core.workflow.message_queue.task_message import NoticeBody
+from app.core.tool.handler.child_agent import child_run_job
+from app.core.workflow.message_queue.task_message import (
+    BackgroundResultBody,
+    NoticeBody,
+    TaskMessage,
+)
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
 from app.service import depends
 
 
@@ -152,65 +159,105 @@ def test_has_tool_call_reads_in_context_assistant_calls(tmp_path: Path) -> None:
     assert not service.has_tool_call(task.id, frozenset({"terminal_close"}))
 
 
+def _placeholder(task_id: int, run_id: int, tool_call_id: str, target: int | None):
+    return ConversationTaskContextRecord(
+        task_id=task_id,
+        run_id=run_id,
+        message={"role": "tool", "tool_call_id": tool_call_id, "content": "submitted"},
+        metadata=ToolMessageMetadata(
+            status="pending",
+            background=BackgroundWork(
+                kind="child_agent",
+                label="child",
+                started_at="2026-11-01T00:00:00+00:00",
+                target_task_id=target,
+            ),
+        ),
+        include_in_context=True,
+        sequence=1,
+    )
+
+
 @pytest.fixture
-def child_env(monkeypatch: pytest.MonkeyPatch):
-    """子 Task 2 委派自父 Task 1，子 Task 5 委派自父 Task 4；Task 8 不是委派子 Task。"""
-    parents = {1: "suspended", 4: "cancelled", 8: "completed"}
-    tasks = {
-        2: SimpleNamespace(task_type="delegate_task", parent_task_id=1),
-        5: SimpleNamespace(task_type="delegate_task", parent_task_id=4),
-        9: SimpleNamespace(task_type="agent_team_node", parent_task_id=8),
+def reattach_env(monkeypatch: pytest.MonkeyPatch):
+    """父 Task 的当前 Run、目标子 Task、父队列与重新挂等待全用替身。"""
+    parents = {1: "suspended", 4: "cancelled", 6: "completed", 7: "failed", 8: "suspended"}
+    existing_tasks = {2, 5}
+    queued = {
+        6: [
+            TaskMessage.of(
+                BackgroundResultBody(
+                    tool_call_id="call-c", tool_name="child_agent", tool_result="{}",
+                    ended_at="2026-11-01T00:01:00+00:00",
+                ),
+                message_id=60,
+            )
+        ]
     }
-    delivered: list[tuple[int, str | None, str, dict[str, object]]] = []
+    placeholders_ = [
+        _placeholder(1, 10, "call-a", 2),  # 父在等、子还在：重新挂上
+        _placeholder(4, 40, "call-b", 5),  # 父被重启打断：不接管
+        _placeholder(6, 60, "call-c", 5),  # 结论已入队：不再挂，但也不中断
+        _placeholder(7, 70, "call-d", None),  # 旧行没记目标：投 unavailable 唤醒父 Agent
+        _placeholder(8, 80, "call-e", 99),  # 目标已删除：同上
+    ]
+
+    def get_task(task_id: int):
+        if task_id not in existing_tasks:
+            raise KeyError(task_id)
+        return SimpleNamespace(id=task_id)
+
     monkeypatch.setattr(
         restart_settlement,
         "service_depends",
         SimpleNamespace(
+            get_conversation_task_context_service=lambda: SimpleNamespace(
+                pending_background_placeholders=lambda kind: placeholders_
+            ),
             get_task_service=lambda: SimpleNamespace(
-                get_task=lambda task_id: tasks[task_id],
+                get_task=get_task,
                 require_current_run=lambda task_id: SimpleNamespace(status=parents[task_id]),
-            )
+            ),
+            get_task_message_queue=lambda: SimpleNamespace(
+                pending_nowait=lambda task_id: queued.get(task_id, [])
+            ),
         ),
     )
+    delivered: list[tuple[int, str | None, dict[str, object]]] = []
+    reattached: list[tuple[int, int | None, str, int | None]] = []
 
     def deliver(task_id, *, tool_call_id, tool_name, result) -> bool:
-        delivered.append((task_id, tool_call_id, tool_name, result))
+        delivered.append((task_id, tool_call_id, result))
         return True
 
+    def reattach(*, task_id, run_id, tool_call_id, work, loop) -> None:
+        reattached.append((task_id, run_id, tool_call_id, work.target_task_id))
+
     monkeypatch.setattr(restart_settlement, "deliver_background_result", deliver)
-    return delivered
+    monkeypatch.setattr(child_run_job, "reattach_child_wait", reattach)
+    return SimpleNamespace(delivered=delivered, reattached=reattached)
 
 
-def _recovered(run_id: int, task_id: int) -> SimpleNamespace:
-    return SimpleNamespace(
-        id=run_id,
-        task_id=task_id,
-        status="cancelled",
-        end_reason="runtime_restarted",
-        final_output=None,
-    )
+async def test_child_waits_are_reattached_from_persisted_placeholders(reattach_env) -> None:
+    """重启后按占位重新挂上委派等待；接管了的（含已入队、已投 unavailable）都不再中断。"""
+    handled = restart_settlement.reattach_child_waits()
+
+    assert handled == {"call-a", "call-c", "call-d", "call-e"}
+    assert reattach_env.reattached == [(1, 10, "call-a", 2)]
+    # 目标缺失时按原调用投结论把父 Agent 唤醒，不让它永远挂着。
+    assert [(task_id, call) for task_id, call, _ in reattach_env.delivered] == [
+        (7, "call-d"), (8, "call-e"),
+    ]
+    assert all(result["end_reason"] == "unavailable" for _, _, result in reattach_env.delivered)
 
 
-def test_restarted_child_run_is_reported_to_its_waiting_parent(child_env) -> None:
-    """父 Agent 的等待随进程丢失：按 ``parent_task_id`` 直接回投，不对应某次调用。"""
-    settled = restart_settlement.settle_restarted_child_runs(
-        [
-            _recovered(20, 2),  # 父挂起在等：回投
-            _recovered(50, 5),  # 父自己也被重启打断：不回投
-            _recovered(90, 9),  # 不是委派子 Task
-        ]
-    )
-    assert settled == [20]
-    [(task_id, tool_call_id, tool_name, result)] = child_env
-    assert (task_id, tool_call_id, tool_name) == (1, None, "child_agent")
-    assert result == {
-        "child_task_id": 2,
-        "status": "cancelled",
-        "end_reason": "runtime_restarted",
-        "final_output": None,
-    }
+def test_interrupt_leaves_reattached_placeholders_alone(monkeypatch) -> None:
+    seen: list[frozenset[str]] = []
 
+    def settle(task_id, tool_call_ids, status, hint, *, exclude):
+        seen.append(exclude)
+        return 3
 
-def test_no_recovered_runs_touches_nothing(child_env, monkeypatch) -> None:
-    monkeypatch.setattr(restart_settlement, "service_depends", None)
-    assert restart_settlement.settle_restarted_child_runs([]) == []
+    monkeypatch.setattr(restart_settlement.placeholders, "settle_placeholders", settle)
+    assert restart_settlement.interrupt_pending_placeholders(exclude=frozenset({"call-a"})) == 3
+    assert seen == [frozenset({"call-a"})]

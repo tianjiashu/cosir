@@ -51,7 +51,8 @@ def _send(
         lambda: SimpleNamespace(
             get_task=lambda task_id: SimpleNamespace(
                 id=task_id,
-                is_child=True,
+                derived_by=lambda task_id: task_id == _PARENT,
+                task_type="delegate_task",
                 parent_task_id=_PARENT,
                 workspace_id=3,
                 current_run_id=21,

@@ -401,3 +401,70 @@ def test_foreground_waits_contract() -> None:
     for invalid in (None, [""], ["a", "a"], [1]):
         with pytest.raises(ValueError):
             validate_foreground_waits(invalid)
+
+
+# ── 重启后重新挂上委派等待 ──────────────────────────────────────────────
+
+
+def test_reattach_keeps_the_persisted_work_and_delivers_to_the_original_call(delivered) -> None:
+    """沿用占位上的工作记录（看板与卡片读同一份），结论按原 ``tool_call_id`` 回投。"""
+    from app.models.message_metadata import BackgroundWork
+
+    registry = BackgroundRegistry()
+    work = BackgroundWork(
+        kind="child_agent", label="child", started_at="2026-11-01T00:00:00+00:00",
+        target_task_id=2,
+    )
+    registry.reattach("call-a", task_id=1, run_id=10, work=work, on_cancel=lambda: None)
+
+    assert registry.live_background(1) == {"call-a": work}
+    assert registry.pending(1) == ["child"]
+    assert registry.complete("call-a", BackgroundConclusion({"status": "completed"})) is True
+    assert delivered == [(1, "call-a", "child_agent")]
+    registry.reattach("call-b", task_id=1, run_id=10, work=work, on_cancel=lambda: None)
+    with pytest.raises(ValueError):
+        registry.reattach("call-b", task_id=1, run_id=10, work=work, on_cancel=lambda: None)
+
+
+async def test_reattached_child_wait_delivers_once_the_child_settles(
+    monkeypatch, delivered
+) -> None:
+    """重新挂上的等待与进程内委派同一套：子 Task 无事可做后读它最新 Run 的结论。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.core.tool.handler.child_agent import child_run_job
+    from app.models.message_metadata import BackgroundWork
+
+    settled = asyncio.Event()
+
+    async def wait_quiescent() -> None:
+        await settled.wait()
+
+    monkeypatch.setattr(
+        "app.task_runtime.task_runtime_space_registry.task_runtime_spaces.get_or_create",
+        lambda _task_id: SimpleNamespace(actor=SimpleNamespace(wait_quiescent=wait_quiescent)),
+    )
+    monkeypatch.setattr(
+        "app.service.depends.get_task_service",
+        lambda: SimpleNamespace(
+            require_current_run=lambda _id: SimpleNamespace(
+                status="cancelled", end_reason="runtime_restarted", final_output=None
+            )
+        ),
+    )
+    work = BackgroundWork(
+        kind="child_agent", label="child", started_at="2026-11-01T00:00:00+00:00",
+        target_task_id=2,
+    )
+    child_run_job.reattach_child_wait(
+        task_id=1, run_id=10, tool_call_id="call-a", work=work, loop=asyncio.get_running_loop()
+    )
+    assert background_registry.pending(1) == ["child"]
+
+    settled.set()
+    for _ in range(50):
+        if delivered:
+            break
+        await asyncio.sleep(0.02)
+    assert delivered == [(1, "call-a", "child_agent")]

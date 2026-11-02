@@ -300,7 +300,7 @@ def _actions(*actions: dict[str, Any]) -> list[dict[str, Any]]:
 def test_new_actions_reach_the_host_as_dumped(
     monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
 ) -> None:
-    link = _install(monkeypatch, {**PAGE, "completed": 6, "failure": None})
+    link = _install(monkeypatch, {**PAGE, "completed": 6, "failure": None, "targets": [None] * 6})
     actions = _actions(
         {"type": "hover", "ref": "e3"},
         {"type": "click", "x": 12.5, "y": 40, "button": "right", "click_count": 2},
@@ -328,7 +328,7 @@ def test_upload_sends_absolute_paths_of_existing_files(
     context = ToolExecutionContext(
         task_id=42, workspace_id=1, workspace_root=tmp_path, step_id="s", run_id=1, tool_call_id="c"
     )
-    link = _install(monkeypatch, {**PAGE, "completed": 1, "failure": None})
+    link = _install(monkeypatch, {**PAGE, "completed": 1, "failure": None, "targets": [None]})
     actions = _actions({"type": "upload", "paths": ["report.pdf", str(outside)], "ref": None})
 
     BrowserActTool().execute(actions, None, execution_context=context)
@@ -352,7 +352,7 @@ def test_upload_sends_absolute_paths_of_existing_files(
 def test_dialog_action_follows_the_action_that_opens_it(
     monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
 ) -> None:
-    link = _install(monkeypatch, {**PAGE, "completed": 3, "failure": None})
+    link = _install(monkeypatch, {**PAGE, "completed": 3, "failure": None, "targets": [None] * 3})
     actions = _actions(
         {"type": "click", "ref": "e4"},
         {"type": "dialog", "accept": True, "text": None, "id": None},
@@ -379,6 +379,7 @@ def test_act_stopped_by_a_dialog_points_to_the_dialog_action(
         "dialog": {"id": 2, "type": "alert", "message": "Saved", "default_text": ""},
         "completed": 1,
         "failure": {"index": 1, "code": "DIALOG_OPEN", "message": "a dialog is open"},
+        "targets": [None, None],
     }
     _install(monkeypatch, outcome)
 
@@ -406,6 +407,7 @@ def test_act_answering_the_wrong_dialog_explains_how_to_pick_it(
         "dialog": {"id": 5, "type": "confirm", "message": "Leave?", "default_text": ""},
         "completed": 0,
         "failure": {"index": 0, "code": "DIALOG_MISMATCH", "message": "dialog 4 is not open"},
+        "targets": [None],
     }
     _install(monkeypatch, outcome)
 
@@ -476,6 +478,7 @@ def test_scroll_end_comes_back_with_advice(
     outcome = {
         **PAGE,
         "completed": 0,
+        "targets": [None],
         "failure": {
             "index": 0,
             "code": "SCROLL_END",
@@ -528,7 +531,7 @@ _HOST_SCHEMA = (
                 ],
                 "tab": None,
             },
-            {**PAGE, "completed": 3, "failure": None},
+            {**PAGE, "completed": 3, "failure": None, "targets": [None] * 3},
         ),
         (BrowserTabsTool(), {"action": "list", "tab": None}, TABS),
         (
@@ -627,6 +630,7 @@ def test_act_reports_where_it_stopped_and_returns_the_fresh_page(
         **PAGE,
         "completed": 1,
         "failure": {"index": 1, "code": "REF_STALE", "message": "the element is gone"},
+        "targets": ['combobox "Colour"', "e9"],
     }
     link = _install(monkeypatch, outcome)
     # 走执行器真实的参数路径：handler 拿到的是校验后 model_dump() 的字典，不是模型实例。
@@ -653,6 +657,11 @@ def test_act_reports_where_it_stopped_and_returns_the_fresh_page(
     assert first_line.startswith("completed 1 of 2 action(s); action 2 failed (REF_STALE)")
     assert "Use refs from the latest snapshot." in first_line
     assert "<page_snapshot>" in observation.content
+    # 卡片列出每一步：结局按宿主报的停在哪一步定，失败那步带短提示，目标说明来自宿主。
+    assert observation.display_data["steps"] == [
+        {"action": "select", "target": 'combobox "Colour"', "status": "done"},
+        {"action": "click", "target": "e9", "status": "failed", "hint": "元素已失效"},
+    ]
 
 
 def test_screenshot_is_stored_as_attachment_and_handed_to_the_model(

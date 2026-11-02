@@ -8,7 +8,7 @@
 3. 装配面：``build_tool_registry()`` 的注册清单不含该名字，且「注册集合 =
    规范集合 - 条件跳过的 Web 工具」这一不变式仍然成立。
 4. 兄弟面（对抗）：仍存在的三个 child 工具（send/status/wait）的 ``args_model`` /
-   ``to_definition()`` 契约，以及 ``CHILD_DISALLOWED_TOOLS`` 不变式未被破坏。
+   ``to_definition()`` 契约。哪类 Task 能拿到它们见 ``test_task_tool_scope.py``。
 
 注明：本文件只做测试与事实固化，不修改任何生产代码。
 """
@@ -25,7 +25,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.config.constant import Constant
 from app.core.tool.handler.child_agent.child_agent_send_args import ChildAgentSendArgs
 from app.core.tool.handler.child_agent.child_agent_status_args import ChildAgentStatusArgs
 from app.core.tool.handler.child_agent_send import (
@@ -90,24 +89,6 @@ _CHILD_TOOL_SPECS = [
         10.0,
     ),
 ]
-
-# 期望被禁用的工具名全集（子 Agent 不得使用）：委派/Team 工具 + 配置提案。交互终端按工具组
-# 整体剥离、不在名字清单里（见 ``strip_child_disallowed_tools``）。
-# 说明：子 Agent 不允许继续委派，也不具备提案 Agent / Team 配置的权限；Team 节点（不同清单，
-# 见 ``Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS``）则保留委派与父子通信工具。
-_EXPECTED_BANNED_TOOLS = frozenset(
-    {
-        "delegate_task",
-        "agent_team",
-        "propose_agent_team_configuration",
-        "propose_agent_configuration",
-        "child_agent_status",
-        "child_agent_send",
-        "wait_messages",
-        # 子 Task 在前端只读，用户无法交还浏览器交接。
-        "browser_handoff",
-    }
-)
 
 # 装配期可能被条件跳过的工具（无可用 Provider 的 Web 工具）。
 _CONDITIONALLY_SKIPPED_TOOLS = frozenset({"web_search", "web_extract"})
@@ -355,7 +336,7 @@ def test_registry_reads_are_thread_safe(storage: None) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 4. 兄弟面（对抗）：三个 child 工具的契约与 CHILD_DISALLOWED_TOOLS
+# 4. 兄弟面（对抗）：三个 child 工具的契约
 # --------------------------------------------------------------------------- #
 
 
@@ -469,34 +450,3 @@ def test_wait_messages_takes_no_arguments() -> None:
     WaitMessagesArgs()
     with pytest.raises(ValidationError):
         WaitMessagesArgs.model_validate({"timeout_seconds": 10})
-
-
-def test_child_banned_tools_invariants() -> None:
-    """目的：``Constant.Tools.CHILD_DISALLOWED_TOOLS`` 非空、无重复、全为 str、是规范名子集
-    且不含已删工具名。
-
-    潜在缺陷类型：删除 close 后禁用清单残留旧名字（禁用已不存在的工具，或命名失效），
-    或误删其它禁用项削弱子 Agent 隔离。
-    """
-
-    banned = Constant.Tools.CHILD_DISALLOWED_TOOLS
-    assert isinstance(banned, tuple)
-    assert banned, "CHILD_DISALLOWED_TOOLS 不得为空"
-    assert len(banned) == len(set(banned)), "存在重复项"
-    assert all(isinstance(name, str) and name for name in banned)
-    assert _REMOVED_TOOL_NAME not in banned
-    assert set(banned) <= set(ALL_TOOL_NAMES), "禁用清单含非规范（幽灵/已删）工具名"
-    assert set(banned) == _EXPECTED_BANNED_TOOLS
-
-
-def test_banned_tools_all_exist_in_live_registry(storage: None) -> None:
-    """目的：禁用清单中每个名字都指向一个真实存在的内置工具（除被条件跳过的 Web 工具）。
-
-    潜在缺陷类型：禁用清单指向已删/不存在的工具，使禁用规则形同虚设。
-    """
-
-    registered = set(build_tool_registry().get_all_tool_names())
-    unbacked = set(Constant.Tools.CHILD_DISALLOWED_TOOLS) - registered
-    assert unbacked <= _CONDITIONALLY_SKIPPED_TOOLS, f"禁用清单指向不存在的工具: {unbacked}"
-
-

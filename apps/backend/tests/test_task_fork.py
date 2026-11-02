@@ -16,7 +16,7 @@ from app.assistant_transport.state.message_identity import leading_reply_id, rep
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.errors.task_fork_errors import TaskForkConflictError
-from app.models.message_metadata import UserMessageMetadata
+from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.task_runtime.service.task_service import TaskService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
@@ -422,4 +422,94 @@ def test_agent_message_opens_a_turn_for_forking(fork_store):
         for row in store.contexts.get(target.id, include_in_context=False)
     ]
     assert contents == ["固定系统指令", "<agent_message>do it</agent_message>", "done"]
+
+
+@pytest.mark.parametrize("task_type", ["delegate_task", "agent_team_node"])
+def test_only_sidebar_conversations_can_be_forked(fork_store, task_type):
+    """子 Agent 与节点的工具面、提示词都按只读 Task 定，fork 成侧栏对话会身份与能力对不上。"""
+    store = fork_store
+    child = store.tasks.create(
+        store.task.workspace_id, "child", task_type=task_type, parent_task_id=store.task.id
+    )
+
+    with pytest.raises(TaskForkConflictError) as raised:
+        asyncio.run(
+            store.service.fork_task(
+                child.id, user_message_id=1, leading_run_id=None, source_message_id="1"
+            )
+        )
+    assert (raised.value.code, raised.value.retryable) == ("FORK_SOURCE_UNSUPPORTED", False)
+
+
+def test_agent_fork_copies_up_to_the_calling_step_and_settles_the_running_run(fork_store):
+    """Agent fork 切在含本次调用的 assistant 行之前；发起它的 Run 还在跑，副本落为 completed / forked。"""
+    store = fork_store
+    earlier = append_run(store, "completed")
+    running = store.runs.create(store.task.id, status="running")
+    append_turn(store, running, "split the work")
+    sequence = store.context.max_sequence(store.task.id) + 1
+    store.context.append(
+        store.task.id,
+        running.id,
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-fork",
+                    "type": "function",
+                    "function": {"name": "fork_task", "arguments": "{}"},
+                }
+            ],
+        },
+        sequence,
+    )
+    # 同一步里这次调用的结果在 fork 之后才写入：不复制。
+    store.context.append(
+        store.task.id,
+        running.id,
+        {"role": "tool", "tool_call_id": "call-fork", "content": "x"},
+        sequence + 1,
+        metadata=ToolMessageMetadata(status="completed"),
+    )
+
+    target = store.service.fork_for_agent(
+        store.task.id,
+        run_id=running.id,
+        tool_call_id="call-fork",
+        title="前端部分",
+        derivation_depth=1,
+    )
+
+    contents = [
+        row.message.get("content") for row in store.contexts.get(target.id, include_in_context=False)
+    ]
+    assert contents == [
+        "固定系统指令",
+        f"user-{earlier.id}",
+        f"user-{earlier.id}-reply",
+        "split the work",
+        "split the work-reply",
+    ]
+    assert (target.title, target.task_type, target.derivation_depth) == ("前端部分", "fork", 1)
+    assert target.parent_task_id is None
+    assert target.extra["fork"] == {
+        "source_task_id": store.task.id,
+        "source_message_id": None,
+        "created_by": "agent",
+        "tool_call_id": "call-fork",
+    }
+    current = store.runs.get(target.current_run_id)
+    assert (current.status, current.end_reason, current.final_output) == ("completed", "forked", None)
+    # 源 Task 不受影响：发起 fork 的 Run 仍在运行。
+    assert store.runs.get(running.id).status == "running"
+
+
+def test_agent_fork_of_an_unknown_call_is_not_found(fork_store):
+    store = fork_store
+    run = append_run(store, "running")
+    with pytest.raises(KeyError):
+        store.service.fork_for_agent(
+            store.task.id, run_id=run.id, tool_call_id="missing", title="x", derivation_depth=1
+        )
 
