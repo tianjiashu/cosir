@@ -5,17 +5,15 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-import app.core.tool.handler.agent_team.coordinator as coordinator_module
+import app.core.tool.multi_agent.agent_team.team_coordinator as coordinator_module
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.core.agents.model_settings import ModelSettings
-from app.core.tool.handler.agent_team.agent_team_display import (
-    build_agent_team_preview_display_data,
-)
-from app.core.tool.handler.agent_team.agent_team_preparation_service import (
+from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
     resolve_node_model,
 )
-from app.core.tool.handler.agent_team.coordinator import AgentTeamCoordinator
-from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
+from app.core.tool.multi_agent.agent_team.team_coordinator import AgentTeamCoordinator
+from app.core.tool.multi_agent.agent_team.team_tool_error import TeamToolError
+from app.core.tool.multi_agent.agent_team_run import AgentTeamRunTool
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 
@@ -44,7 +42,7 @@ def _preview_fields() -> dict[str, object]:
 def test_agent_team_preview_carries_only_card_content() -> None:
     """展示数据只承载卡片内容与 TeamRun 定位；「待确认」由 TeamRun 的 pending 状态表达。"""
 
-    display_data = build_agent_team_preview_display_data(_preview_fields(), team_run_id=17)
+    display_data = AgentTeamRunTool._preview_display_data(_preview_fields(), team_run_id=17)
 
     assert display_data["kind"] == "agent-team-approval"
     assert display_data["team_run_id"] == 17
@@ -87,7 +85,7 @@ def test_cancelling_team_run_only_transitions_status_and_writes_archive(monkeypa
         )),
     )
 
-    result = coordinator.cancel(17)
+    result = coordinator._cancel_if_active(17, AgentTeamRunEndReason.CANCELLED)
 
     assert result is updated
     assert captured["allowed"] == (
@@ -101,17 +99,29 @@ def test_cancelling_team_run_only_transitions_status_and_writes_archive(monkeypa
     assert captured["archived"] == 17
 
 
-def test_cancel_returns_current_row_when_team_run_already_settled() -> None:
-    """条件迁移落空（并发落定或已在终态）时返回当前快照而不是 None，API 才能照常投影。"""
+def test_tool_call_cancel_counts_as_stopped_when_team_run_already_settled(monkeypatch) -> None:
+    """检出工具级取消信号、条件迁移却落空（并发落定）时，照样判定 Team 已停止，不抛异常。"""
 
+    running = SimpleNamespace(
+        id=17,
+        status=AgentTeamRunStatus.RUNNING.value,
+        parent_task_id=5,
+        tool_call_id="call-1",
+    )
     settled = SimpleNamespace(id=17, status=AgentTeamRunStatus.COMPLETED.value)
+    reads = iter((running, settled))
     coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
     coordinator._team_run_crud = SimpleNamespace(
         update_status_if_in=lambda *_args, **_kwargs: None,
-        get_by_id=lambda _run_id: settled,
+        get_by_id=lambda _run_id: next(reads),
+    )
+    monkeypatch.setattr(
+        coordinator_module.tool_call_cancellation_registry,
+        "is_cancelled",
+        lambda task_id, tool_call_id: (task_id, tool_call_id) == (5, "call-1"),
     )
 
-    assert coordinator.cancel(17) is settled
+    assert coordinator._stopped(17) is True
 
 
 def test_parent_task_stop_cancels_pending_and_running_teams_of_that_task() -> None:
@@ -212,7 +222,7 @@ def test_completed_team_does_not_store_node_output_as_end_reason(monkeypatch) ->
 def test_dispatch_failure_after_enqueue_stops_the_node_task(monkeypatch) -> None:
     """输入已投递后调度出错（如等新 Run 超时）：TeamRun 收敛为 failed，并停下节点 Task。"""
 
-    from app.models.agent_team.state.agent_team_run_state import AgentTeamNodeExecution
+    from app.models.agent_team.state.agent_team_run_components import AgentTeamNodeExecution
 
     def run_node(_row, state, *_args):
         state.create_execution_node(
@@ -263,7 +273,7 @@ def test_team_node_model_falls_back_to_parent_model_config_and_keeps_own_prefere
 ) -> None:
     """没有独立模型配置的节点：沿用主 Run 选用的模型配置，节点偏好覆盖、主 Agent 偏好补缺。"""
     from app.core.agents.resolved_model import ResolvedModel
-    from app.core.tool.handler.agent_team import agent_team_preparation_service as preparation
+    from app.core.tool.multi_agent.agent_team import agent_team_preparation_service as preparation
     from app.models.model_config_record import ModelConfigRecord
 
     config = ModelConfigRecord(

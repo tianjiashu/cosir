@@ -25,7 +25,7 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
         service, "recover_orphaned_runs", lambda: calls.append(("runs", None)) or recovered
     )
     monkeypatch.setattr(
-        "app.core.tool.handler.agent_team.coordinator.get_agent_team_coordinator",
+        "app.core.tool.multi_agent.agent_team.team_coordinator.get_agent_team_coordinator",
         lambda: SimpleNamespace(recover_after_restart=lambda: calls.append(("teams", None)) or [7]),
     )
     monkeypatch.setattr(

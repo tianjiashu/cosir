@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from app.config.settings import Settings
-from app.core.tool.handler import fork_task as fork_module
+from app.core.tool.multi_agent import fork_task as fork_module
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.errors.task_fork_errors import TaskForkConflictError
@@ -124,7 +124,7 @@ def test_fork_conflicts_become_tool_errors(env, tmp_path) -> None:
 def test_fork_args_require_a_short_title_and_a_message() -> None:
     from pydantic import ValidationError
 
-    from app.core.tool.handler.child_agent.fork_task_args import TITLE_MAX, ForkTaskArgs
+    from app.core.tool.multi_agent.args.fork_task_args import TITLE_MAX, ForkTaskArgs
 
     ForkTaskArgs(title="前端", message="做前端")
     with pytest.raises(ValidationError):

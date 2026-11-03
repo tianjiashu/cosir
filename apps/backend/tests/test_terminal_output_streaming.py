@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import threading
-from collections.abc import Iterable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -54,35 +53,6 @@ from tests.transport_fixtures import consumed
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-class ChunkStream:
-    """按预设顺序返回字节块的 Popen stdout 替身。"""
-
-    def __init__(self, chunks: Iterable[bytes]) -> None:
-        self._chunks = iter(chunks)
-
-    def read1(self, _size: int) -> bytes:
-        return next(self._chunks, b"")
-
-
-class PausingStream:
-    """首个块后暂停后续读取，允许断言 sink 在 EOF 前收到输出。"""
-
-    def __init__(self) -> None:
-        self.next_read_started = threading.Event()
-        self.release = threading.Event()
-        self._index = 0
-
-    def read1(self, _size: int) -> bytes:
-        self._index += 1
-        if self._index == 1:
-            return b"starting now\n"
-        if self._index == 2:
-            self.next_read_started.set()
-            self.release.wait(timeout=2)
-            return b"finished\n"
-        return b""
-
-
 def _terminal_output_update(
     seq: int,
     text: str,
@@ -100,78 +70,57 @@ def _terminal_output_update(
     )
 
 
-def test_output_collector_emits_before_process_output_eof() -> None:
-    stream = PausingStream()
+def test_output_collector_emits_each_chunk_as_it_arrives() -> None:
     emitted: list[str] = []
-    collector = _OutputCollector(
-        stream, sink=lambda text: emitted.append(text)
-    )
-    reader = threading.Thread(target=collector.run)
-    reader.start()
+    collector = _OutputCollector(sink=emitted.append)
 
-    try:
-        assert stream.next_read_started.wait(timeout=1)
-        assert "".join(emitted) == "starting now\n"
-    finally:
-        stream.release.set()
-        reader.join(timeout=2)
+    collector.feed(b"starting now\n")
+    assert "".join(emitted) == "starting now\n"
+    collector.feed(b"finished\n")
 
-    assert not reader.is_alive()
-    assert collector.get() == "starting now\nfinished\n"
+    assert collector.finish() == "starting now\nfinished\n"
 
 
 def test_output_collector_stream_does_not_apply_character_budget() -> None:
     expected = "x" * 200_001
     emitted: list[str] = []
-    collector = _OutputCollector(
-        ChunkStream([expected.encode("utf-8")]),
-        sink=lambda text: emitted.append(text),
-    )
+    collector = _OutputCollector(sink=emitted.append)
 
-    collector.run()
+    collector.feed(expected.encode("utf-8"))
 
     assert "".join(emitted) == expected
-    assert collector.get() == expected
+    assert collector.finish() == expected
 
 
-def test_sealed_output_collector_freezes_snapshot_and_closes_live_sink() -> None:
-    stream = PausingStream()
+def test_finished_output_collector_freezes_snapshot_and_closes_live_sink() -> None:
+    """连接关闭时还在路上的块不再收集也不再旁路，结果与实时视图停在同一处。"""
+
     emitted: list[str] = []
-    collector = _OutputCollector(
-        stream, sink=lambda text: emitted.append(text)
-    )
-    reader = threading.Thread(target=collector.run)
-    reader.start()
-    assert stream.next_read_started.wait(timeout=1)
+    collector = _OutputCollector(sink=emitted.append)
+    collector.feed(b"starting now\n")
 
-    collector.seal()
-    stream.release.set()
-    reader.join(timeout=2)
+    output = collector.finish()
+    collector.feed(b"finished\n")
 
-    assert not reader.is_alive()
     assert emitted == ["starting now\n"]
-    assert "starting now\n" in collector.get()
-    assert "finished" not in collector.get()
-    assert "truncated" not in collector.get()
+    assert output == collector.finish() == "starting now\n"
+    assert "truncated" not in output
 
 
 def test_output_collector_preserves_ansi_and_sensitive_text_in_stream_and_final_output() -> (
     None
 ):
     emitted: list[str] = []
-    collector = _OutputCollector(
-        ChunkStream(
-            [
-                b"hello \xe4",
-                b"\xbd\xa0\x1b[",
-                b"31m token=",
-                b"super-secret-value \x1b[0m done\n",
-            ]
-        ),
-        sink=lambda text: emitted.append(text),
-    )
+    collector = _OutputCollector(sink=emitted.append)
 
-    collector.run()
+    for chunk in [
+        b"hello \xe4",
+        b"\xbd\xa0\x1b[",
+        b"31m token=",
+        b"super-secret-value \x1b[0m done\n",
+    ]:
+        collector.feed(chunk)
+    output = collector.finish()
 
     streamed = "".join(emitted)
     assert "hello 你" in streamed
@@ -179,7 +128,7 @@ def test_output_collector_preserves_ansi_and_sensitive_text_in_stream_and_final_
     assert "token=" in streamed
     assert "\x1b[31m" in streamed
     assert "\x1b[0m" in streamed
-    assert collector.get() == "hello 你\x1b[31m token=super-secret-value \x1b[0m done\n"
+    assert output == "hello 你\x1b[31m token=super-secret-value \x1b[0m done\n"
 
 
 def test_terminal_display_preserves_raw_command_and_output() -> None:
@@ -204,6 +153,9 @@ def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
     raw_output = "\x1b[32mapi_key=visible-secret\x1b[0m\n"
 
     class Backend:
+        def stop(self) -> None:
+            pass
+
         def execute(self, *_args: Any, **_kwargs: Any) -> ExecutionResult:
             return ExecutionResult(
                 output=raw_output,
@@ -361,7 +313,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
     agent = SimpleNamespace()
     rc = runtime_stub(
         tool_executor=Executor(),
-        allows_tools=frozenset({"execute_terminal"}),
+        admitted_tools=frozenset({"execute_terminal"}),
         tool_definitions={"execute_terminal": SimpleNamespace(parallel_mode="serial", user_decision=None)},
         run=SimpleNamespace(id=9, task_id=7),
         task=SimpleNamespace(id=7),

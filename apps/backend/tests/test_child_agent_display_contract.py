@@ -9,10 +9,8 @@ import app.tools  # noqa: F401
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.core.tool.handler.child_agent.agent_task_display import (
-    build_agent_task_display_data,
-)
-from app.core.tool.handler.child_agent.delegation_display import build_delegation_display_data
+from app.core.tool.multi_agent.delegate_task import DelegateTaskTool
+from app.core.tool.multi_agent.task_status import TaskStatusTool
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
@@ -39,7 +37,7 @@ def _run(
 
 
 def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> None:
-    result = build_agent_task_display_data(
+    result = TaskStatusTool._agent_task_display_data(
         operation="status",
         direction="down",
         task_id=2,
@@ -59,7 +57,7 @@ def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> Non
 
 
 def test_parent_delegation_display_never_carries_child_output() -> None:
-    display = build_delegation_display_data(
+    display = DelegateTaskTool._delegation_display_data(
         title="Review",
         child_agent_id="reviewer",
         child_task_id=2,

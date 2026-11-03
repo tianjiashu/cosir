@@ -56,7 +56,9 @@ def test_generic_child_profile_keeps_code_prompt(monkeypatch) -> None:
         lambda: AgentProfileRegistry(AgentProfileScopeSource()),
     )
     profile = general_child_agent()
-    prompt = SystemPromptBuilder.build(profile, str(Path(__file__).resolve()))
+    prompt = SystemPromptBuilder.build(
+        profile, str(Path(__file__).resolve()), profile.allowed_tools
+    )
 
     assert profile.agent_type is AgentProfileType.CHILD
     assert profile.agent_id == "general-assistant"
@@ -126,7 +128,9 @@ def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools
 
     monkeypatch.setattr("app.config.configuration.get_agent_registry", _fail)
     profile_without_delegation = replace(profile, allowed_tools=["read_file"])
-    prompt_without_tools = SystemPromptBuilder.build(profile_without_delegation, workspace_root)
+    prompt_without_tools = SystemPromptBuilder.build(
+        profile_without_delegation, workspace_root, profile_without_delegation.allowed_tools
+    )
     assert "<agent_layer>" in prompt_without_tools
     assert "主 Agent 执行协议" in prompt_without_tools
     assert "<tool_layer>" not in prompt_without_tools
@@ -144,7 +148,9 @@ def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools
         "app.service.configuration.agent_team_configuration_registry.get_agent_team_registry",
         lambda: SimpleNamespace(team_summary=lambda _workspace_root: ""),
     )
-    prompt_with_delegation = SystemPromptBuilder.build(profile, workspace_root)
+    prompt_with_delegation = SystemPromptBuilder.build(
+        profile, workspace_root, profile.allowed_tools
+    )
 
     assert profile.description is None
     assert not hasattr(profile, "prompt_file_path")

@@ -155,7 +155,7 @@ def _operations_with_executor(
         tool_executor=executor,
         execution_context=execution_context
         or ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=Path("."), run_id=0),
-        allows_tools=frozenset(allowed or ()),
+        admitted_tools=frozenset(allowed or ()),
         tool_definitions={
             name: SimpleNamespace(parallel_mode=mode, user_decision=None)
             for name, mode in (parallel_modes or {}).items()

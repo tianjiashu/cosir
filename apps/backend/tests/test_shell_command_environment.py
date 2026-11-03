@@ -16,6 +16,7 @@ from app.tools.terminal_runtime import worker_client
 from app.tools.terminal_runtime.errors import TerminalWorkerUnavailableError
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
 from app.tools.tool_handler.terminal.local_backend import LocalExecutionBackend
+from tests.terminal_test_support import requires_terminal_worker
 
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="登录 shell 解析只在 POSIX 上进行")
 
@@ -110,6 +111,7 @@ def test_user_command_environment_drops_host_and_env_file_values(
 
 
 @posix_only
+@requires_terminal_worker
 def test_execute_terminal_command_does_not_inherit_host_variables(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

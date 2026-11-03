@@ -20,7 +20,7 @@ from tests.runtime_context_stub import runtime_stub
 def _space(mailbox: RunMailbox, announced: frozenset[str] | None = None) -> SimpleNamespace:
     """Run 所属 Task 的运行时空间替身：``for_run`` 只从它取 Task / 工作区 / mailbox。"""
     return SimpleNamespace(
-        task_tool_schemas=({"name": "read_file"}, {"name": "write_file"}),
+        task_tool_names=("read_file", "write_file"),
         announced_ban_tools=announced,
         task_id=1,
         current_task=SimpleNamespace(id=1),
@@ -71,7 +71,7 @@ async def test_tool_availability_is_a_run_scoped_notice(monkeypatch, banned) -> 
     )
     assert result.agent is agent
     assert result.mailbox is mailbox
-    assert result.allows_tools == {"read_file", "write_file"} - set(banned)
+    assert result.admitted_tools == {"read_file", "write_file"} - set(banned)
     [entry] = mailbox.take_notices()
     assert entry.id is None
     assert isinstance(entry.body, NoticeBody)

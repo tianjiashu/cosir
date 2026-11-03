@@ -1,6 +1,10 @@
 import base64
+import contextlib
 import os
 import shutil
+import signal
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -10,18 +14,7 @@ import pytest
 from app.tools.terminal_runtime.errors import TerminalWorkerSignalFailedError
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
 from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
-
-
-def _worker_path() -> Path:
-    configured = os.environ.get("CODING_AGENT_TERMINAL_WORKER")
-    if configured:
-        return Path(configured)
-    return (
-        Path(__file__).resolve().parents[3]
-        / "target"
-        / "debug"
-        / ("terminal-worker.exe" if os.name == "nt" else "terminal-worker")
-    )
+from tests.terminal_test_support import requires_terminal_worker
 
 
 def _shell_spec() -> ShellSpec:
@@ -63,13 +56,48 @@ def _windows_interactive_shell_spec(name: str) -> ShellSpec:
     return ShellSpec(name, executable, (executable, "-NoLogo", "-NoProfile"))
 
 
-@pytest.fixture(autouse=True)
-def _configure_worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 新签名下 worker 路径经环境变量注入，构造只收 instance_id；路径与 _worker_path 对齐。
-    monkeypatch.setenv("CODING_AGENT_TERMINAL_WORKER", str(_worker_path()))
+def _output_text(events: list[dict[str, object]]) -> str:
+    return b"".join(
+        base64.b64decode(event["data_base64"])
+        for event in events
+        if event.get("type") == "output" and isinstance(event.get("data_base64"), str)
+    ).decode("utf-8", errors="replace")
 
 
-@pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
+def _wait_reported_pids(events: list[dict[str, object]], marker: str) -> list[int]:
+    """等 shell 打印 ``<marker><pid>[:<pid>...]``，返回其中的 pid。"""
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        output = _output_text(events)
+        if marker in output:
+            return [int(pid) for pid in output.split(marker, 1)[1].split()[0].split(":")]
+        time.sleep(0.05)
+    pytest.fail(f"pids were not reported: {events!r}")
+
+
+def _assert_gone(pids: list[int], what: str, timeout: float = 3) -> None:
+    deadline = time.monotonic() + timeout
+    alive = list(pids)
+    while alive and time.monotonic() < deadline:
+        alive = [pid for pid in alive if _is_alive(pid)]
+        time.sleep(0.05)
+    if alive:
+        for pid in alive:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
+        pytest.fail(f"{what} {alive} survived")
+
+
+def _is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+@requires_terminal_worker
 def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
     events: list[dict[str, object]] = []
     exited = threading.Event()
@@ -102,7 +130,7 @@ def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell smoke test is Windows-only")
-@pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
+@requires_terminal_worker
 def test_real_worker_powershell_command_exits(tmp_path: Path) -> None:
     events: list[dict[str, object]] = []
     exited = threading.Event()
@@ -128,14 +156,9 @@ def test_real_worker_powershell_command_exits(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Unix process tree test")
-@pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
+@requires_terminal_worker
 def test_real_worker_close_kills_shell_descendants(tmp_path: Path) -> None:
     events: list[dict[str, object]] = []
-    child_pid: int | None = None
-
-    def on_event(event: dict[str, object]) -> None:
-        events.append(event)
-
     executable = os.environ.get("SHELL") or shutil.which("bash") or "/bin/sh"
     spec = ShellSpec(
         Path(executable).name,
@@ -145,36 +168,114 @@ def test_real_worker_close_kills_shell_descendants(tmp_path: Path) -> None:
     )
     worker = ProcessTerminalWorker("process-tree-integration-test")
     try:
-        worker.start(spec, str(tmp_path), on_event)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and child_pid is None:
-            output = b"".join(
-                base64.b64decode(event["data_base64"])
-                for event in events
-                if event.get("type") == "output" and isinstance(event.get("data_base64"), str)
-            ).decode("utf-8", errors="replace")
-            marker = "CHILD_PID:"
-            if marker in output:
-                child_pid = int(output.split(marker, 1)[1].split()[0])
-                break
-            time.sleep(0.05)
-        assert child_pid is not None, f"child pid was not reported: {events!r}"
+        worker.start(spec, str(tmp_path), events.append)
+        pids = _wait_reported_pids(events, "CHILD_PID:")
     finally:
         worker.close()
 
-    assert child_pid is not None
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        try:
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.05)
-    else:
-        pytest.fail(f"shell descendant {child_pid} survived worker close")
+    _assert_gone(pids, "shell descendant")
 
 
-@pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
+@pytest.mark.skipif(os.name == "nt", reason="Unix session cleanup test")
+@requires_terminal_worker
+def test_real_worker_reaps_jobs_left_by_a_shell_that_exits_by_itself(tmp_path: Path) -> None:
+    """shell 自己退出后已不在进程树上，它留下的忽略 HUP 的进程仍按会话归属被清理。
+
+    没有作业控制的 ``sh -c`` 里，普通 ``&`` 进程与 shell 同在前台进程组，shell 退出时内核的 SIGHUP
+    会顺带结束它们；真正会残留的是 ``nohup`` 与 ``trap '' HUP``。等 0.3 秒再退出，让 nohup 来得及
+    忽略 HUP，否则用例会被这次 SIGHUP 碰巧通过。
+    """
+
+    events: list[dict[str, object]] = []
+    exited = threading.Event()
+
+    def on_event(event: dict[str, object]) -> None:
+        events.append(event)
+        if event.get("type") == "exit":
+            exited.set()
+
+    spec = ShellSpec(
+        "sh",
+        "/bin/sh",
+        (
+            "/bin/sh",
+            "-c",
+            "nohup sleep 60 >/dev/null 2>&1 & a=$!; (trap '' HUP; exec sleep 60) & b=$!; "
+            "sleep 0.3; echo JOB_PIDS:$a:$b",
+        ),
+        integration="off",
+    )
+    worker = ProcessTerminalWorker("shell-exit-integration-test")
+    try:
+        worker.start(spec, str(tmp_path), on_event)
+        pids = _wait_reported_pids(events, "JOB_PIDS:")
+        assert exited.wait(10), f"worker did not report shell exit: {events!r}"
+    finally:
+        worker.close()
+
+    _assert_gone(pids, "job left by the exited shell")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix process group kill test")
+@requires_terminal_worker
+def test_worker_cleans_up_when_the_backend_process_group_is_killed(tmp_path: Path) -> None:
+    """宿主强杀后端时对后端整个进程组发 SIGKILL：worker 自成会话不被波及，读到 stdin EOF 后
+    清理会话。
+
+    会话进程用 nohup 启动：worker 若被一起杀掉，PTY 关闭时内核的 SIGHUP 会结束普通进程，用例就测
+    不出 worker 有没有清理。
+    """
+
+    job_file = tmp_path / "job.pid"
+    script = f"""
+import threading, time
+from app.tools.terminal_runtime.shell_resolver import ShellSpec
+from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
+
+handshake = threading.Event()
+worker_pid = []
+def on_event(event):
+    if event.get("type") == "handshake":
+        worker_pid.append(event["pid"])
+        handshake.set()
+command = "nohup sleep 60 >/dev/null 2>&1 & echo $! > {job_file}; wait"
+spec = ShellSpec("sh", "/bin/sh", ("/bin/sh", "-c", command), integration="off")
+ProcessTerminalWorker("backend-kill-integration-test").start(spec, {str(tmp_path)!r}, on_event)
+handshake.wait(5)
+print(f"WORKER_PID:{{worker_pid[0]}}", flush=True)
+time.sleep(60)
+"""
+    backend = subprocess.Popen(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        assert backend.stdout is not None
+        line = backend.stdout.readline()
+        assert line.startswith("WORKER_PID:"), line
+        worker_pid = int(line.split(":", 1)[1])
+        deadline = time.monotonic() + 5
+        while not (job_file.exists() and job_file.read_text().strip()):
+            assert time.monotonic() < deadline, "job pid was not written"
+            time.sleep(0.05)
+        job_pid = int(job_file.read_text())
+        assert _is_alive(worker_pid) and _is_alive(job_pid)
+
+        os.killpg(backend.pid, signal.SIGKILL)
+        backend.wait(5)
+
+        _assert_gone([job_pid], "session job after the backend was killed", timeout=5)
+        _assert_gone([worker_pid], "worker after the backend was killed", timeout=5)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(backend.pid, signal.SIGKILL)
+
+
+@requires_terminal_worker
 def test_real_worker_signal_failure_is_reported_to_caller(tmp_path: Path) -> None:
     worker = ProcessTerminalWorker("signal-integration-test")
     try:
@@ -186,7 +287,7 @@ def test_real_worker_signal_failure_is_reported_to_caller(tmp_path: Path) -> Non
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ConPTY interrupt test")
-@pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
+@requires_terminal_worker
 @pytest.mark.parametrize("shell_name", ["cmd", "powershell", "pwsh", "custom_cmd"])
 def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
     tmp_path: Path,
@@ -287,14 +388,9 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Unix PTY suspend semantics")
-@pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
+@requires_terminal_worker
 def test_real_worker_close_reaps_a_suspended_job(tmp_path: Path) -> None:
     events: list[dict[str, object]] = []
-    child_pid: int | None = None
-
-    def on_event(event: dict[str, object]) -> None:
-        events.append(event)
-
     executable = os.environ.get("SHELL") or shutil.which("bash") or "/bin/sh"
     spec = ShellSpec(
         Path(executable).name,
@@ -304,37 +400,16 @@ def test_real_worker_close_reaps_a_suspended_job(tmp_path: Path) -> None:
     )
     worker = ProcessTerminalWorker("suspend-close-integration-test")
     try:
-        worker.start(spec, str(tmp_path), on_event)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and child_pid is None:
-            output = b"".join(
-                base64.b64decode(event["data_base64"])
-                for event in events
-                if event.get("type") == "output" and isinstance(event.get("data_base64"), str)
-            ).decode("utf-8", errors="replace")
-            marker = "STOPPED_CHILD_PID:"
-            if marker in output:
-                child_pid = int(output.split(marker, 1)[1].split()[0])
-                break
-            time.sleep(0.05)
-        assert child_pid is not None, f"child pid was not reported: {events!r}"
+        worker.start(spec, str(tmp_path), events.append)
+        pids = _wait_reported_pids(events, "STOPPED_CHILD_PID:")
         worker.signal("suspend")
     finally:
         worker.close()
 
-    assert child_pid is not None
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        try:
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.05)
-    else:
-        pytest.fail(f"suspended job {child_pid} survived worker close")
+    _assert_gone(pids, "suspended job")
 
 
-@pytest.mark.skipif(not _worker_path().is_file(), reason="terminal-worker binary is not built")
+@requires_terminal_worker
 @pytest.mark.asyncio
 async def test_task_shell_state_survives_run_completion_and_cancellation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -342,7 +417,6 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
     """真实 PTY 经工具创建后，下一 Run 发现并继续使用原 shell 环境。"""
     from terminal_test_support import active_session_ids, capture_terminal_effects
 
-    from app.config.constant import Constant
     from app.core.tool.schemas import ToolExecutionContext
     from app.tools.terminal_runtime.session_service import TerminalSessionService
     from app.tools.tool_handler.terminal_session import (
@@ -352,8 +426,6 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
         TerminalWriteTool,
     )
 
-    # worker 路径只有宿主环境变量一个来源，测试沿用同一配置边界。
-    monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(_worker_path()))
     capture_terminal_effects(monkeypatch)
     terminal = TerminalSessionService()
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (

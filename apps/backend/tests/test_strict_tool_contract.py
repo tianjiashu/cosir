@@ -11,8 +11,8 @@ from mcp import types
 from pydantic import ValidationError as ModelValidationError
 
 from app.config.configuration import get_tool_registry
-from app.core.tool.handler.agent_team.args.agent_team_args import AgentTeamArgs
-from app.core.tool.handler.agent_team_run import AgentTeamRunTool
+from app.core.tool.multi_agent.agent_team_run import AgentTeamRunTool
+from app.core.tool.multi_agent.args.agent_team_args import AgentTeamArgs
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace

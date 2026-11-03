@@ -8,8 +8,7 @@
 
 本文件只消费生产代码（``app/**`` 只读），锁定三条行为契约：
 
-1. 节点运行时配置（``agent_team.node_profile.build_node_profile`` 合成节点定义，
-   ``AgentRuntimeConfig.for_run`` 按 Run 合成）必须带**已物化**的
+1. 节点运行时配置（``AgentRuntimeConfig.for_run`` 按注册表身份与节点快照合成）必须带**已物化**的
    模型运行设置（连接与能力字段来自 ``run.model_config_id`` 指向的模型配置），并保留节点快照的
    用户偏好、采用节点快照的 ``structured_output``；
 2. 节点快照不是连接字段的来源：快照里出现的任何连接字段都不得影响最终执行 profile；
@@ -28,17 +27,16 @@ import pytest
 
 from app.core.agents import agent_runtime_config as runtime_config_module
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
-from app.core.agents.agent_runtime_config import AgentRuntimeConfig
+from app.core.agents.agent_runtime_config import NODE_SNAPSHOT_KEY, AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.core.tool.handler.agent_team import agent_team_preparation_service as prep_module
-from app.core.tool.handler.agent_team.agent_team_preparation_service import (
-    AgentTeamPreparationService,
+from app.core.tool.multi_agent.agent_team import agent_team_preparation_service as prep_module
+from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
+    prepare_team_run,
 )
-from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
-from app.core.tool.handler.agent_team.node_profile import NODE_PROFILE_SNAPSHOT_KEY
+from app.core.tool.multi_agent.args.node_goal import AgentTeamNodeGoal
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
+from app.models.agent_team.state.agent_team_run_components import AgentTeamRunRuntime
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.model_config_record import ModelConfigRecord
@@ -105,7 +103,7 @@ def _node_runtime(
         allowed_tools=["read_file", "web_search"],
         structured_output=_node_structured_output().to_document(),
         model_config_id=model_config_id,
-        # 与 ``AgentTeamPreparationService`` 产出的快照同形：只含用户偏好项。
+        # 与 ``prepare_team_run`` 产出的快照同形：只含用户偏好项。
         model_settings={"stream": True, "reasoning_effort": "low"}
         if model_settings is None
         else model_settings,
@@ -143,7 +141,7 @@ def _node_run_profile(
 
     task = SimpleNamespace(
         workspace_id=1,
-        extra={NODE_PROFILE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json")},
+        extra={NODE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json")},
         # 节点 Task 固化的 schema 就是快照冻结的工具名（Coordinator 建节点时解析）。
         tool_schemas=[{"name": name} for name in node_runtime.allowed_tools],
     )
@@ -265,22 +263,6 @@ def _materialized_parent_profile() -> AgentRuntimeConfig:
     return AgentRuntimeConfig.resolve(definition, _PARENT_MODEL_CONFIG)
 
 
-def test_runtime_tools_are_restricted_to_what_the_task_froze() -> None:
-    """系统提示词的工具目录读 ``allowed_tools``：定义里有、Task 固化的 schema 里没有的工具
-    不出现。"""
-    definition = AgentProfile(
-        agent_id="general-assistant",
-        role="child",
-        system_prompt="child prompt",
-        allowed_tools=["read_file", "agent_team", "delegate_task"],
-        agent_type=AgentProfileType.CHILD,
-    )
-    config = AgentRuntimeConfig.resolve(
-        definition, _PARENT_MODEL_CONFIG, restrict_tools_to={"read_file", "delegate_task"}
-    )
-    assert config.allowed_tools == ("read_file", "delegate_task")
-
-
 # --------------------------------------------------------------------------- #
 # 契约 1：节点 Run 的执行 profile 必须带已物化的模型运行设置
 # --------------------------------------------------------------------------- #
@@ -328,9 +310,8 @@ def test_node_run_profile_materializes_model_runtime_settings_from_run() -> None
     assert profile.max_steps == registry_profile.max_steps
     assert profile.role == "develop-role"
     assert registry_profile.role == "general-assistant"
-    # 提示词与工具名来自节点快照，且工具名是可独立修改的副本。
+    # 提示词来自节点快照（工具名由 Coordinator 固化进节点 Task 的 schema，不在运行时配置上）。
     assert profile.system_prompt == "node system prompt from snapshot"
-    assert profile.allowed_tools == ("read_file", "web_search")
     # 本次 Run 的模型配置记在解析出的模型上，不回写定义的（空）选择。
     assert agent.model.model_config_id == config_id
     assert registry_profile.model_config_id is None
@@ -434,7 +415,7 @@ def test_preparation_snapshot_freezes_preferences_without_connection_fields(
     )
     parent = _materialized_parent_profile()
 
-    result = AgentTeamPreparationService().prepare(
+    result = prepare_team_run(
         AgentTeamConfiguration.model_validate(_team_configuration()),
         goal="交付报告",
         node_goals={
@@ -443,8 +424,6 @@ def test_preparation_snapshot_freezes_preferences_without_connection_fields(
         },
         workspace_root="ws",
         parent_task_id=1,
-        parent_run_id=2,
-        workspace_id=3,
         parent_agent=parent,
     )
 

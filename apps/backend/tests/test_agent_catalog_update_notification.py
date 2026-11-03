@@ -19,16 +19,18 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 class _FakeContextManager:
     """供目录通知过滤测试使用的最小 context manager 外壳。"""
 
-    def __init__(self, agent_type: AgentProfileType, allowed_tools: list[str], root: str) -> None:
-        self.agent = SimpleNamespace(agent_type=agent_type, allowed_tools=allowed_tools)
+    def __init__(self, agent_type: AgentProfileType, tool_names: list[str], root: str) -> None:
+        self.agent = SimpleNamespace(agent_type=agent_type)
+        self.tool_names = tuple(tool_names)
         self.workspace = SimpleNamespace(root_path=root)
 
 
 class _FakeRuntimeSpace:
-    """不依赖 SQLite 的 runtime space 外壳，只提供匹配所需的 Task 身份与 live manager。"""
+    """不依赖 SQLite 的 runtime space 外壳，只提供匹配所需的 Task 身份、工具名与 live manager。"""
 
     def __init__(self, task_id: int, manager: _FakeContextManager) -> None:
         self.task_id = task_id
+        self.task_tool_names = manager.tool_names
         self._manager = manager
 
     def live_context_manager(self) -> _FakeContextManager:

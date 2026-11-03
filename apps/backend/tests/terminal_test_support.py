@@ -7,13 +7,33 @@
 from __future__ import annotations
 
 import base64
+import os
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from app.tools.terminal_runtime.inputs import keys_for_platform
 from app.tools.terminal_runtime.session_service import TerminalSessionService
+
+
+def terminal_worker_path() -> Path:
+    """真实 worker 二进制：环境变量优先，否则用本仓 ``cargo build`` 的调试产物。"""
+
+    configured = os.environ.get("CODING_AGENT_TERMINAL_WORKER")
+    if configured:
+        return Path(configured)
+    name = "terminal-worker.exe" if os.name == "nt" else "terminal-worker"
+    return Path(__file__).resolve().parents[3] / "target" / "debug" / name
+
+
+# 真跑命令的用例（execute_terminal 与交互终端）都经 worker 启动进程：没构建时跳过。
+requires_terminal_worker = pytest.mark.skipif(
+    not terminal_worker_path().is_file(), reason="terminal-worker binary is not built"
+)
 
 ALL_KEYS = sorted(set(keys_for_platform("Linux")) | set(keys_for_platform("Windows")))
 

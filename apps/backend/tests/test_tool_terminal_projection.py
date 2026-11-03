@@ -166,7 +166,7 @@ def _runtime(
     rc = runtime_stub(
         tool_executor=executor,
         workspace=SimpleNamespace(id=1, root_path=str(tmp_path)),
-        allows_tools=allows,
+        admitted_tools=allows,
         **overrides,
     )
     batch = ToolBatch()

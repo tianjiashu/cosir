@@ -762,7 +762,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
     monkeypatch.setattr(machine_module, "_message_context", lambda: manager)
     runtime = SimpleNamespace(
         tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
-        allows_tools=frozenset({"read_file"}),
+        admitted_tools=frozenset({"read_file"}),
     )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)

@@ -16,13 +16,13 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
+    InputConsumedEvent,
     RunInitializedEvent,
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
-    InputConsumedEvent,
     WorkflowEvent,
     WorkflowEventEnvelope,
 )

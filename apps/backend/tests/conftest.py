@@ -51,6 +51,7 @@ from app.storage.store_engines import init_storage, initialize_app_schema
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.tools.tool_registration import build_tool_registry
 from app.utils.path import system_cosir as paths
+from tests.terminal_test_support import terminal_worker_path
 
 # 会被 ``configure_logging`` 改写 ``propagate`` / ``level`` 的后端 logger。
 _BACKEND_LOGGERS = ("coding_agent.backend", "uvicorn.error")
@@ -107,6 +108,16 @@ def _restore(snapshot: tuple[dict[str, _LoggerState], int]) -> None:
         logger.propagate = propagate
         logger.disabled = disabled
     logging.disable(root_disable)
+
+
+@pytest.fixture(autouse=True)
+def terminal_worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """命令进程只由 worker 启动：真跑命令的用例都要找得到它，缺省指向本仓构建产物。
+
+    只设路径、不保证存在；依赖它的用例用 ``requires_terminal_worker`` 在没构建时跳过。
+    """
+
+    monkeypatch.setenv("CODING_AGENT_TERMINAL_WORKER", str(terminal_worker_path()))
 
 
 @pytest.fixture(autouse=True)

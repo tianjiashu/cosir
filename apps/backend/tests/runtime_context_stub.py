@@ -1,6 +1,6 @@
 """节点 / 工作流测试用的 ``RuntimeContext`` 替身：字段名与生产类型一致，协作者是最小桩。
 
-用例只覆盖它关心的字段（``runtime_stub(allows_tools=..., run_state=...)``）；其余字段给出不会
+用例只覆盖它关心的字段（``runtime_stub(admitted_tools=..., run_state=...)``）；其余字段给出不会
 触发真实依赖的默认值。取消判定读 ``cancelled`` 标志，用例直接改它即可。
 
 生产节点直接取用进程级单例（Run 状态写入、外部消息队列、工具注册表与执行器），不经
@@ -115,7 +115,7 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
             max_steps=10,
             model=SimpleNamespace(model_config_id=1),
         ),
-        allows_tools=frozenset(),
+        admitted_tools=frozenset(),
         tool_definitions={},
         tool_executor=None,
         run_state=run_state_stub(),

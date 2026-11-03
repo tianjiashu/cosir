@@ -17,8 +17,8 @@ import pytest
 
 from app.config import configuration
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
-from app.core.tool.handler import delegate_task
-from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
+from app.core.tool.multi_agent import delegate_task
+from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.tool_call import ToolCall
 from app.core.tool.tool_registry import ToolRegistry

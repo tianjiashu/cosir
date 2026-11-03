@@ -8,12 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.tool.handler.agent_team import coordinator as coordinator_module
-from app.core.tool.handler.agent_team.coordinator import AgentTeamCoordinator
+from app.core.tool.multi_agent.agent_team import team_coordinator as coordinator_module
+from app.core.tool.multi_agent.agent_team.team_coordinator import AgentTeamCoordinator
 from app.core.workflow.cancel.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
-from app.models.agent_team.state.agent_team_run_state import AgentTeamNodeExecution
+from app.models.agent_team.state.agent_team_run_components import AgentTeamNodeExecution
+from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 
 _TEAM_RUN = 3
@@ -175,12 +176,13 @@ def test_tool_call_cancel_signal_settles_team_run_and_stops_node(
     coordinator = _waiting_coordinator(monkeypatch, node, runs, [None, 101])
     cancelled_ids: list[int] = []
 
-    def cancel(team_run_id: int) -> SimpleNamespace:
+    def cancel_if_active(team_run_id: int, end_reason: AgentTeamRunEndReason) -> SimpleNamespace:
+        assert end_reason is AgentTeamRunEndReason.CANCELLED
         cancelled_ids.append(team_run_id)
         runs.status = AgentTeamRunStatus.CANCELLED.value
         return runs.get_by_id(team_run_id)
 
-    coordinator.cancel = cancel
+    coordinator._cancel_if_active = cancel_if_active
     execution = AgentTeamNodeExecution(node_id="develop", task_id=_NODE_TASK)
     threading.Timer(
         0.3, tool_call_cancellation_registry.mark_cancelled, args=(_PARENT_TASK, _TOOL_CALL)

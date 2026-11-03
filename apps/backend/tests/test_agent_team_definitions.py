@@ -8,25 +8,25 @@ from pydantic import ValidationError
 from sqlalchemy import inspect
 from sqlalchemy.orm import sessionmaker
 
-from app.core.tool.handler.agent_team.agent_team_preparation_service import (
+from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationResult,
 )
-from app.core.tool.handler.agent_team.agent_team_run_approval import AgentTeamRunApproval
-from app.core.tool.handler.agent_team.args.agent_team_approve_input import AgentTeamApproveInput
-from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
-from app.core.tool.handler.agent_team.args.propose_agent_team_configuration_args import (
+from app.core.tool.multi_agent.agent_team.agent_team_run_approval import AgentTeamRunApproval
+from app.core.tool.multi_agent.args.agent_team_approve_input import AgentTeamApproveInput
+from app.core.tool.multi_agent.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.multi_agent.args.propose_agent_team_configuration_args import (
     ProposeAgentTeamConfigurationArgs,
 )
-from app.core.tool.handler.propose_agent_team_configuration import (
+from app.core.tool.multi_agent.propose_agent_team_configuration import (
     ProposeAgentTeamConfigurationTool,
 )
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_transition_definition import TeamTransitionDefinition
-from app.models.agent_team.state.agent_team_run_state import (
+from app.models.agent_team.state.agent_team_run_components import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
-    AgentTeamRunState,
 )
+from app.models.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 from app.service.configuration import agent_team_configuration_source as configuration_scope_source
 from app.service.configuration.agent_team_configuration_registry import (
@@ -135,7 +135,7 @@ def test_proposal_tool_separates_argument_and_configuration_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "app.core.tool.handler.agent_team.agent_team_preparation_service.resolve_node_profile",
+        "app.core.tool.multi_agent.agent_team.agent_team_preparation_service.resolve_node_profile",
         lambda *args, **kwargs: None,
     )
     proposal = _configuration()
@@ -195,7 +195,7 @@ def test_proposal_tool_does_not_construct_persisted_configuration(
     """提案工具只使用 Args 校验，不提前构造持久化配置模型。"""
 
     monkeypatch.setattr(
-        "app.core.tool.handler.agent_team.agent_team_preparation_service.resolve_node_profile",
+        "app.core.tool.multi_agent.agent_team.agent_team_preparation_service.resolve_node_profile",
         lambda *args, **kwargs: None,
     )
     proposal = _configuration()
@@ -609,23 +609,6 @@ def test_team_run_crud_updates_status_only_from_allowed_states(tmp_path: Path) -
         )
         is None
     )
-
-
-def test_team_confirmation_only_checks_parent_ownership() -> None:
-    """确认边界只校验归属：主 Agent 在等审批期间可能被唤醒并完成，pending 的 Team 仍可批准。"""
-
-    service = AgentTeamRunApproval.__new__(AgentTeamRunApproval)
-    for status in ("suspended", "running", "completed"):
-        service._ledger = SimpleNamespace(
-            get_run=lambda _run_id, status=status: SimpleNamespace(task_id=2, status=status)
-        )
-        service._validate_parent_run(2, 1)  # 不抛即通过
-
-    service._ledger = SimpleNamespace(
-        get_run=lambda _run_id: SimpleNamespace(task_id=9, status="suspended")
-    )
-    with pytest.raises(ValueError, match="不属于指定主 Agent Task"):
-        service._validate_parent_run(2, 1)
 
 
 def test_create_pending_confirmation_supersedes_previous_pending(tmp_path: Path) -> None:

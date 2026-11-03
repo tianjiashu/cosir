@@ -7,7 +7,7 @@ import pytest
 
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.tool.handler import send_message
+from app.core.tool.multi_agent import send_message
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_run_options import ConversationRunOptions
 

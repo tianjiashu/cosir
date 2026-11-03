@@ -2,12 +2,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.models.agent_team.state.agent_team_run_state import (
+from app.models.agent_team.state.agent_team_run_components import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
-    AgentTeamRunState,
     AgentTeamTransitionRecord,
 )
+from app.models.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.service.agent_team import agent_team_execution_timeline
 from app.service.agent_team.agent_team_execution_timeline import (
     project_node_visits,

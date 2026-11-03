@@ -394,7 +394,7 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
         run=SimpleNamespace(id=_RUN_A, task_id=_TASK_ID),
         task=SimpleNamespace(id=_TASK_ID),
         tool_executor=executor,
-        allows_tools=frozenset({"probe_tool"}),
+        admitted_tools=frozenset({"probe_tool"}),
     )
     batch = ToolBatch(
         valid_tool_calls={"call-1": ValidToolCall(name="probe_tool", projection="projected")}

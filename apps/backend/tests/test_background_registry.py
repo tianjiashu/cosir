@@ -433,7 +433,7 @@ async def test_reattached_child_wait_delivers_once_the_child_settles(
     import asyncio
     from types import SimpleNamespace
 
-    from app.core.tool.handler.child_agent import child_run_job
+    from app.core.tool.multi_agent.child_agent import child_run_job
     from app.models.message_metadata import BackgroundWork
 
     settled = asyncio.Event()

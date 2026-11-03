@@ -11,8 +11,8 @@ import pytest
 
 from app.core.tool.background.job import BackgroundConclusion, ManualJob
 from app.core.tool.background.registry import background_registry
-from app.core.tool.handler.child_agent.child_run_job import _deliver_conclusion
 from app.core.tool.handler.wait_messages import WaitMessagesTool
+from app.core.tool.multi_agent.child_agent.child_run_job import _deliver_conclusion
 from app.core.workflow.message_queue.task_message import BackgroundResultBody
 
 _PARENT = 1

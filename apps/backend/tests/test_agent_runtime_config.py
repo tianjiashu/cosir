@@ -53,7 +53,6 @@ def test_resolve_flattens_definition_and_model_config() -> None:
         "developer",
         AgentProfileType.CHILD,
     )
-    assert config.allowed_tools == ("read_file", "write_file")
     assert config.max_steps == 7 and config.structured_output is None
     model = config.model
     assert model.model_config_id == 3

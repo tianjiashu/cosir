@@ -183,11 +183,11 @@ def test_build_places_work_layer_between_tool_and_global_layers(
         agent_type=AgentProfileType.MAIN,
         system_prompt="Test main system prompt.",
     )
-    prompt = spb.SystemPromptBuilder.build(profile, str(workspace_root))
+    prompt = spb.SystemPromptBuilder.build(profile, str(workspace_root), profile.allowed_tools)
 
     assert prompt.index("<agent_layer>") < prompt.index("<work_layer>")
     assert prompt.index("<work_layer>") < prompt.index("<global_layer>")
-    assert "<work_layer>" not in spb.SystemPromptBuilder.build(_profile(), str(workspace_root))
+    assert "<work_layer>" not in spb.SystemPromptBuilder.build(_profile(), str(workspace_root), ())
 
 
 def test_message_context_declares_every_input_message_tag():
@@ -205,7 +205,7 @@ def test_build_includes_global_layer_in_order(redirect_system_cosir: Path, tmp_p
     workspace_root = tmp_path / "ws"
     workspace_root.mkdir()
     (workspace_root / "AGENTS.md").write_text("WORKSPACE INSTRUCTION BODY", encoding="utf-8")
-    prompt = spb.SystemPromptBuilder.build(_profile(), str(workspace_root))
+    prompt = spb.SystemPromptBuilder.build(_profile(), str(workspace_root), ())
     assert "<global_layer>" in prompt
     assert "GLOBAL INSTRUCTION BODY" in prompt
     # 顺序：agent_layer → global_layer → workspace_layer

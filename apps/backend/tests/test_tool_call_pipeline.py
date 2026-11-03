@@ -60,7 +60,7 @@ def test_assistant_message_filters_identity_and_registry_only() -> None:
 def test_streaming_preview_only_creates_allowed_registered_tool(monkeypatch) -> None:
     events = []
     runtime = SimpleNamespace(
-        allows_tools={"read_file"},
+        admitted_tools={"read_file"},
         tool_definitions={
             "read_file": SimpleNamespace(name="read_file", display=None),
             "write_file": SimpleNamespace(name="write_file", display=None),

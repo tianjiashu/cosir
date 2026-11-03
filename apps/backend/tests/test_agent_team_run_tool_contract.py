@@ -20,14 +20,18 @@ from pydantic import ValidationError
 from app.config.configuration import get_tool_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
-from app.core.tool.handler.agent_team import agent_team_preparation_service as prep_module
-from app.core.tool.handler.agent_team.agent_team_preparation_service import (
-    AgentTeamPreparationService,
+from app.core.tool.multi_agent.agent_team import agent_team_preparation_service as prep_module
+from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
+    prepare_team_run,
 )
-from app.core.tool.handler.agent_team.args.agent_team_args import AgentTeamArgs
-from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
-from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
-from app.core.tool.handler.agent_team_run import AgentTeamRunTool, build_agent_team_run_definition
+from app.core.tool.multi_agent.agent_team.team_tool_error import TeamToolError
+from app.core.tool.multi_agent.agent_team_run import (
+    AgentTeamRunTool,
+    build_agent_team_run_definition,
+)
+from app.core.tool.multi_agent.args.agent_team_approve_input import AgentTeamApproveInput
+from app.core.tool.multi_agent.args.agent_team_args import AgentTeamArgs
+from app.core.tool.multi_agent.args.node_goal import AgentTeamNodeGoal
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.tool_names import TOOL_AGENT_TEAM
 from app.core.tool.tool_grouping import TOOL_GROUP_AGENT_TEAM
@@ -392,7 +396,6 @@ def test_prepare_branch_succeeds_for_an_existing_team(monkeypatch) -> None:
     tool.team_register = SimpleNamespace(
         resolve=lambda scope, team_id: AgentTeamConfiguration.model_validate(_configuration())
     )
-    tool.agent_team_preparation_service = AgentTeamPreparationService()
 
     captured: dict[str, object] = {}
 
@@ -434,14 +437,12 @@ def test_preparation_service_builds_preview_nodes_and_runtime_snapshots(monkeypa
     child = _child_profile()
     _stub_preparation_lookups(monkeypatch, child)
 
-    result = AgentTeamPreparationService().prepare(
+    result = prepare_team_run(
         AgentTeamConfiguration.model_validate(_configuration()),
         goal="交付报告",
         node_goals=_node_goal_map(develop="实现", review="审查"),
         workspace_root="ws",
         parent_task_id=1,
-        parent_run_id=2,
-        workspace_id=3,
         parent_agent=_runtime(child),
     )
 
@@ -455,29 +456,25 @@ def test_preparation_service_builds_preview_nodes_and_runtime_snapshots(monkeypa
     assert result.preview_fields["team_id"] == "code-quality"
 
 
-def test_preparation_service_rejects_blank_goal(monkeypatch) -> None:
-    """(边界) 纯空白总目标应被拒绝，且标记为可重试（模型修正后能再试）。
+def test_entry_models_reject_blank_goal() -> None:
+    """(边界) 纯空白总目标在两个入口参数模型处就被拒绝：准备阶段只去空白、不再重复校验。
 
     潜在缺陷：空白目标被当成合法目标冻结进节点 system prompt。
     """
 
-    child = _child_profile()
-    _stub_preparation_lookups(monkeypatch, child)
-
-    with pytest.raises(TeamToolError) as captured:
-        AgentTeamPreparationService().prepare(
-            AgentTeamConfiguration.model_validate(_configuration()),
-            goal="   ",
-            node_goals=_node_goal_map(develop="实现", review="审查"),
-            workspace_root="ws",
-            parent_task_id=1,
-            parent_run_id=2,
-            workspace_id=3,
-            parent_agent=_runtime(child),
+    node_goals = [{"node_id": "develop", "goal": "实现", "summary": "实现"}]
+    with pytest.raises(ValidationError, match="goal must not be blank"):
+        AgentTeamArgs.model_validate(
+            {"team_id": "code-quality", "goal": "   ", "node_goals": node_goals}
         )
-
-    assert captured.value.retryable is True
-    assert "blank" in str(captured.value)
+    with pytest.raises(ValidationError, match="goal must not be blank"):
+        AgentTeamApproveInput.model_validate(
+            {
+                "configuration": _configuration(),
+                "goal": "   ",
+                "node_goals": {"develop": {"goal": "实现", "summary": "实现"}},
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -500,14 +497,12 @@ def test_preparation_service_validates_node_goal_coverage(
     _stub_preparation_lookups(monkeypatch, child)
 
     with pytest.raises(TeamToolError) as captured:
-        AgentTeamPreparationService().prepare(
+        prepare_team_run(
             AgentTeamConfiguration.model_validate(_configuration()),
             goal="交付报告",
             node_goals=node_goals,
             workspace_root="ws",
             parent_task_id=1,
-            parent_run_id=2,
-            workspace_id=3,
             parent_agent=_runtime(child),
         )
 
@@ -568,7 +563,7 @@ class _DecisionRuns:
 
 
 def _decide(monkeypatch, runs: _DecisionRuns, decision: str, data=None):
-    from app.core.tool.handler import agent_team_run as tool_module
+    from app.core.tool.multi_agent import agent_team_run as tool_module
     from app.core.workflow.message_queue.task_message import DecisionBody
 
     started: list[int] = []
@@ -581,7 +576,7 @@ def _decide(monkeypatch, runs: _DecisionRuns, decision: str, data=None):
         tool_module, "get_agent_team_coordinator", lambda: SimpleNamespace(start=start)
     )
     monkeypatch.setattr(
-        "app.core.tool.handler.agent_team.agent_team_result.AgentTeamRunArchiveService",
+        "app.core.tool.multi_agent.agent_team.agent_team_result.AgentTeamRunArchiveService",
         lambda: SimpleNamespace(
             existing_archive_path=lambda _id: ".cosir/agent-team-runs/101.json"
         ),

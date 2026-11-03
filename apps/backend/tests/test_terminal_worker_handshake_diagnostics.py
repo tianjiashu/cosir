@@ -213,6 +213,7 @@ def test_rejected_handshake_raises_handshake_error_and_logs_field_comparison(
     stale_handshake = _frame(
         {
             "type": "handshake",
+            "mode": "session",
             "instance_id": "stale-instance",
             "pid": _FAKE_WORKER_PID,
             "pty_kind": "conpty",
@@ -238,6 +239,29 @@ def test_rejected_handshake_raises_handshake_error_and_logs_field_comparison(
     assert data["received_pid"] == _FAKE_WORKER_PID
     assert data["received_rows"] == 24
     assert data["received_columns"] == 80
+
+
+def test_session_client_rejects_an_exec_mode_handshake(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """会话客户端只认会话模式的握手：执行模式的 worker 没有 PTY，不能当终端会话用。"""
+
+    caplog.set_level(logging.WARNING)
+    exec_handshake = _frame(
+        {
+            "type": "handshake",
+            "mode": "exec",
+            "instance_id": "expected-instance",
+            "pid": _FAKE_WORKER_PID,
+        }
+    )
+    _patch_worker_process(monkeypatch, _FakeProcess(exec_handshake))
+
+    with pytest.raises(TerminalWorkerHandshakeError):
+        ProcessTerminalWorker("expected-instance").start(_spec(), ".", lambda event: None)
+
+    assert _handshake_record(caplog).data["received_mode"] == "exec"  # type: ignore[attr-defined]
 
 
 def test_handshake_timeout_stays_retryable_unavailable(
@@ -299,6 +323,7 @@ def _valid_handshake(instance_id: str) -> bytes:
     return _frame(
         {
             "type": "handshake",
+            "mode": "session",
             "instance_id": instance_id,
             "pid": _FAKE_WORKER_PID,
             "pty_kind": "unix_pty",

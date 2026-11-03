@@ -25,20 +25,20 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.core.tool.handler.child_agent.send_message_args import SendMessageArgs
-from app.core.tool.handler.child_agent.task_status_args import TaskStatusArgs
-from app.core.tool.handler.send_message import (
-    SendMessageTool,
-    build_send_message_definition,
-)
-from app.core.tool.handler.task_status import (
-    TaskStatusTool,
-    build_task_status_definition,
-)
 from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
 from app.core.tool.handler.wait_messages import (
     WaitMessagesTool,
     build_wait_messages_definition,
+)
+from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
+from app.core.tool.multi_agent.args.task_status_args import TaskStatusArgs
+from app.core.tool.multi_agent.send_message import (
+    SendMessageTool,
+    build_send_message_definition,
+)
+from app.core.tool.multi_agent.task_status import (
+    TaskStatusTool,
+    build_task_status_definition,
 )
 from app.core.tool.schemas import ALL_TOOL_NAMES, ToolName
 from app.service.configuration import (
@@ -59,8 +59,8 @@ from app.utils.path import system_cosir as paths
 _REMOVED_TOOL_NAME = "child_agent_close"
 
 # 被删除的模块全限定名。
-_REMOVED_HANDLER_MODULE = "app.core.tool.handler.child_agent_close"
-_REMOVED_ARGS_MODULE = "app.core.tool.handler.child_agent.child_agent_close_args"
+_REMOVED_HANDLER_MODULE = "app.core.tool.multi_agent.child_agent_close"
+_REMOVED_ARGS_MODULE = "app.core.tool.multi_agent.args.child_agent_close_args"
 
 # 业务源码根目录（用于磁盘残留扫描）。
 _APP_DIR = Path(__file__).resolve().parents[1] / "app"
@@ -153,12 +153,9 @@ def test_removed_source_files_are_absent_from_disk() -> None:
     潜在缺陷类型：仅从装配清单摘除但源文件仍在，导致幽灵模块/误导入。
     """
 
-    handler_py = (
-        _APP_DIR / "core" / "tool" / "handler" / "child_agent_close.py"
-    )
-    args_py = (
-        _APP_DIR / "core" / "tool" / "handler" / "child_agent" / "child_agent_close_args.py"
-    )
+    tools_dir = _APP_DIR / "core" / "tool" / "multi_agent"
+    handler_py = tools_dir / "child_agent_close.py"
+    args_py = tools_dir / "args" / "child_agent_close_args.py"
     assert not handler_py.exists(), f"残留源文件: {handler_py}"
     assert not args_py.exists(), f"残留源文件: {args_py}"
 
@@ -172,14 +169,14 @@ def test_removed_symbols_absent_from_package_namespaces() -> None:
 
     schemas = importlib.import_module("app.core.tool.schemas")
     tool_models = importlib.import_module("app.tools.tool_models")
-    child_task_models = importlib.import_module("app.core.tool.handler.child_agent")
+    multi_agent_args = importlib.import_module("app.core.tool.multi_agent.args")
     tool_names = importlib.import_module("app.core.tool.schemas.tool_names")
 
     assert not hasattr(tool_names, "TOOL_CHILD_AGENT_CLOSE")
     assert not hasattr(schemas, "TOOL_CHILD_AGENT_CLOSE")
     assert "TOOL_CHILD_AGENT_CLOSE" not in getattr(schemas, "__all__", [])
-    assert not hasattr(child_task_models, "ChildAgentCloseArgs")
-    assert "ChildAgentCloseArgs" not in getattr(child_task_models, "__all__", [])
+    assert not hasattr(multi_agent_args, "ChildAgentCloseArgs")
+    assert "ChildAgentCloseArgs" not in getattr(multi_agent_args, "__all__", [])
     assert not hasattr(tool_models, "ChildAgentCloseArgs")
     assert "ChildAgentCloseArgs" not in getattr(tool_models, "__all__", [])
 

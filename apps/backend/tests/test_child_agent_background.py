@@ -14,8 +14,8 @@ import pytest
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.tool.background.registry import background_registry
-from app.core.tool.handler import send_message
-from app.core.tool.handler.child_agent import child_run_job
+from app.core.tool.multi_agent import send_message
+from app.core.tool.multi_agent.child_agent import child_run_job
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.message_metadata import BackgroundWork
@@ -160,8 +160,8 @@ def test_failed_delivery_discards_the_registration(monkeypatch, tmp_path) -> Non
 @pytest.mark.usefixtures("isolated_storage")
 def test_child_tools_always_run_in_the_background() -> None:
     """子 Agent 一律后台：参数里没有 background，也不声明可选的后台结果能力。"""
-    from app.core.tool.handler.child_agent.send_message_args import SendMessageArgs
-    from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
+    from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
+    from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
 
     assert "background" not in DelegateTaskArgs.model_fields
     assert "background" not in SendMessageArgs.model_fields

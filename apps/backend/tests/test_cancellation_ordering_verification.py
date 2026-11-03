@@ -168,7 +168,7 @@ def _batch_runtime(
         workspace=SimpleNamespace(id=1, root_path=str(workspace_root)),
         event_sink=event_sink or (lambda _event: None),
         tool_executor=executor,
-        allows_tools=frozenset({_STREAMING_TOOL_NAME}),
+        admitted_tools=frozenset({_STREAMING_TOOL_NAME}),
     )
 
 

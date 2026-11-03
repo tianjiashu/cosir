@@ -1,12 +1,13 @@
-"""execute_terminal 的前后台执行：前台结论、后台占位、用户转到后台、取消杀进程树。
+"""execute_terminal 的前后台执行：前台结论、后台占位、用户转到后台、停止命令。
 
-命令走真实的 ``LocalExecutionBackend``（POSIX ``sleep`` / ``echo``），后台回投替换为记录调用，
+命令走真实的 ``LocalExecutionBackend``（经 Terminal Worker 跑 POSIX ``sleep`` / ``echo``），后台回投替换为记录调用，
 不写 SQLite。
 """
 
 from __future__ import annotations
 
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -19,8 +20,12 @@ from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal import LocalExecutionBackend
+from tests.terminal_test_support import requires_terminal_worker
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="uses POSIX sleep/echo")
+pytestmark = [
+    pytest.mark.skipif(os.name != "posix", reason="uses POSIX sleep/echo"),
+    requires_terminal_worker,
+]
 
 _TASK_ID = 31
 
@@ -153,15 +158,12 @@ def test_background_payload_goes_through_the_output_budget(
     assert len(output) <= 200 and "2000" in output
 
 
-def test_local_backend_kills_the_command_when_cancelled(tmp_path) -> None:
+def test_local_backend_kills_the_command_when_stopped(tmp_path) -> None:
     marker = tmp_path / "finished"
+    backend = LocalExecutionBackend()
+    threading.Timer(0.2, backend.stop).start()
     started = time.monotonic()
-    result = LocalExecutionBackend().execute(
-        f"sleep 2; touch {marker}",
-        str(tmp_path),
-        30,
-        is_cancelled=lambda: time.monotonic() - started > 0.2,
-    )
+    result = backend.execute(f"sleep 2; touch {marker}", str(tmp_path), 30)
     assert result.cancelled and not result.timed_out and result.exit_code == -1
     assert time.monotonic() - started < 1.5
     time.sleep(2)

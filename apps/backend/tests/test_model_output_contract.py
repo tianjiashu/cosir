@@ -57,7 +57,7 @@ class _ModelHarness:
             return object()
 
         self.runtime_config = runtime_stub(
-            allows_tools=frozenset({"read_file"}),
+            admitted_tools=frozenset({"read_file"}),
             tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
             run_state=run_state_stub(transition=lambda _run_id, transition, **kw: transition_run(
                 transition, **kw

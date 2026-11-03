@@ -25,7 +25,7 @@ from app.core import task_actor as actor_module
 from app.core import task_execution as execution_module
 from app.core.task_actor import TaskActor
 from app.core.tool.background.job import BackgroundConclusion
-from app.core.tool.handler.agent_team import coordinator as coordinator_module
+from app.core.tool.multi_agent.agent_team import team_coordinator as coordinator_module
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.run_mailbox import RunMailbox

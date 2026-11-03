@@ -12,11 +12,11 @@ import pytest
 
 from app.config.configuration import get_tool_registry
 from app.config.settings import Settings
-from app.core.tool.derivation import DERIVATIONS
-from app.core.tool.handler.agent_team.agent_team_preparation_service import (
+from app.core.tool.multi_agent.derivation import DERIVATIONS
+from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
     materialize_node_tools,
 )
-from app.core.tool.task_tool_scope import fork_tool_schemas, tools_for_task
+from app.core.tool.multi_agent.task_tool_scope import fork_tool_schemas, tools_for_task
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.models.task_kind import TASK_KINDS, USER_FACING_TASK_TYPES
 

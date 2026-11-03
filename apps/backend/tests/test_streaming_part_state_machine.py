@@ -252,7 +252,7 @@ def _tool_call(call_id: str, tool_name: str) -> ParsedFunctionToolCall:
 def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> None:
     """取消先收口 text part，再逐条收敛已投影调用；未投影的调用不参与。
 
-    投影判据是「已注册 ∩ 本轮放行」：``write_file`` 虽已注册但不在 ``allows_tools`` 内，
+    投影判据是「已注册 ∩ 本轮放行」：``write_file`` 虽已注册但不在 ``admitted_tools`` 内，
     没有前端 part，因此既不发创建事件也不在取消时收口。
     """
 
@@ -263,7 +263,7 @@ def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> No
             "read_file": SimpleNamespace(name="read_file", display=None),
             "write_file": SimpleNamespace(name="write_file", display=None),
         },
-        allows_tools=frozenset({"read_file"}),
+        admitted_tools=frozenset({"read_file"}),
     )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
@@ -296,7 +296,7 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
     written: list[Any] = []
     runtime = SimpleNamespace(
         tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
-        allows_tools=frozenset({"read_file"}),
+        admitted_tools=frozenset({"read_file"}),
     )
     monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)

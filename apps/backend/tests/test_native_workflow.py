@@ -32,7 +32,7 @@ def loop(monkeypatch):
         run=run,
         task=SimpleNamespace(id=run.task_id),
         agent=SimpleNamespace(max_steps=10, structured_output=None, model=None),
-        allows_tools=frozenset({"review"}),
+        admitted_tools=frozenset({"review"}),
         run_state=run_state_stub(
             save_execution=lambda _run_id, value: progress.append(value),
             transition=lambda _run_id, transition, **k: calls.append(transition.name.lower()),

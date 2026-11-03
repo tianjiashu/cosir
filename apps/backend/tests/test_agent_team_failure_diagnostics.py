@@ -10,15 +10,15 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tool.handler.agent_team.agent_team_run_archive_service import (
+from app.core.tool.multi_agent.agent_team.agent_team_run_archive_service import (
     AgentTeamRunArchiveService,
 )
-from app.core.tool.handler.agent_team.coordinator import AgentTeamCoordinator
-from app.models.agent_team.state.agent_team_run_state import (
+from app.core.tool.multi_agent.agent_team.team_coordinator import AgentTeamCoordinator
+from app.models.agent_team.state.agent_team_run_components import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
-    AgentTeamRunState,
 )
+from app.models.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 from app.service.agent_team import agent_team_execution_timeline
@@ -302,7 +302,7 @@ def test_invalid_node_output_is_not_an_unhandled_exception() -> None:
 
 def test_failed_team_result_carries_run_locator_and_archive_hint(monkeypatch) -> None:
     """Team 失败时，返回给主 Agent 的工具结果保留 TeamRun 定位、状态与档案读取指引。"""
-    from app.core.tool.handler.agent_team import agent_team_result
+    from app.core.tool.multi_agent.agent_team import agent_team_result
 
     monkeypatch.setattr(
         agent_team_result,

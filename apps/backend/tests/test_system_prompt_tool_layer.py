@@ -1,6 +1,6 @@
 """``SystemPromptBuilder`` 工具能力目录层（Layer T）单元测试。
 
-覆盖该层的三条契约：只在 ``AgentProfile.allowed_tools`` 含委派工具时生成、目录取自进程级 Agent
+覆盖该层的三条契约：只在传入的工具名含委派工具时生成、目录取自进程级 Agent
 目录且按 workspace 作用域隔离、无 CHILD 候选时不生成；另覆盖 `Agent 目录未初始化必须硬失败`、
 `该层不施加预算` 与 `build` 中的层序。不覆盖 delegate_task 工具定义（见
 ``test_delegate_task_model_contract.py``）。
@@ -213,9 +213,8 @@ def test_build_orders_tool_layer_between_agent_and_global(
 
     monkeypatch.setattr(team_registry, "get_agent_team_registry", lambda: EmptyTeamRegistry())
 
-    prompt = spb.SystemPromptBuilder.build(
-        main_agent(system_prompt="主 Agent 协议"), str(workspace)
-    )
+    main = main_agent(system_prompt="主 Agent 协议")
+    prompt = spb.SystemPromptBuilder.build(main, str(workspace), main.allowed_tools)
 
     assert prompt.index("<agent_layer>") < prompt.index("<tool_layer>")
     assert prompt.index("<tool_layer>") < prompt.index("<global_layer>")
@@ -224,17 +223,20 @@ def test_build_orders_tool_layer_between_agent_and_global(
     assert "agent_id: reviewer" in prompt
 
 
-def test_build_omits_tool_layer_without_delegation_in_allowed_tools(
+def test_build_omits_tool_layer_without_delegation_tool(
     monkeypatch, redirect_system_cosir
 ) -> None:
-    """``allowed_tools`` 不含委派工具时 build 不生成工具层，也不读取 Agent 目录。"""
+    """工具名不含委派工具时 build 不生成工具层，也不读取 Agent 目录。"""
 
     def _fail() -> AgentProfileRegistry:
-        raise AssertionError("allowed_tools 不含委派工具时不应读取 Agent 目录")
+        raise AssertionError("工具名不含委派工具时不应读取 Agent 目录")
 
     monkeypatch.setattr(configuration, "get_agent_registry", _fail)
 
     # 该 helper profile 只声明 read_file，不含 delegate_task。
-    prompt = spb.SystemPromptBuilder.build(_child_profile(), str(redirect_system_cosir.parent))
+    child = _child_profile()
+    prompt = spb.SystemPromptBuilder.build(
+        child, str(redirect_system_cosir.parent), child.allowed_tools
+    )
 
     assert "<tool_layer>" not in prompt

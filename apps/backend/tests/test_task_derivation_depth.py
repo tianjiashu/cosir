@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.config.environment_field_catalog import ENVIRONMENT_FIELDS
-from app.core.tool.derivation import DERIVATIONS, child_depth
+from app.core.tool.multi_agent.derivation import DERIVATIONS, child_depth
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 

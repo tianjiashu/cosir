@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.tool.background import restart_settlement
-from app.core.tool.handler.child_agent import child_run_job
+from app.core.tool.multi_agent.child_agent import child_run_job
 from app.core.workflow.message_queue.task_message import (
     BackgroundResultBody,
     NoticeBody,

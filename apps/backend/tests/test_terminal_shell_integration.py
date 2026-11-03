@@ -11,14 +11,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from terminal_test_support import capture_terminal_effects, geometry, session_entries
+from terminal_test_support import (
+    capture_terminal_effects,
+    geometry,
+    session_entries,
+    terminal_worker_path,
+)
 
-from app.config.constant import Constant
 from app.tools.terminal_runtime.inputs import TerminalWait
 from app.tools.terminal_runtime.session_service import TerminalSessionService
 
-_ROOT = Path(__file__).resolve().parents[3]
-_WORKER = _ROOT / "target" / "debug" / ("terminal-worker.exe" if os.name == "nt" else "terminal-worker")
 _UNIX_SHELLS = ["zsh", "/bin/bash", "/opt/homebrew/bin/bash"]
 _WINDOWS_SHELLS = ["powershell", "pwsh"]
 
@@ -32,9 +34,8 @@ def terminal(request: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> A
     shell = request.param
     if not _available(shell):
         pytest.skip(f"{shell} is not installed")
-    if not _WORKER.is_file():
+    if not terminal_worker_path().is_file():
         pytest.skip("terminal-worker must be built")
-    monkeypatch.setenv(Constant.Terminal.WORKER_ENV, str(_WORKER))
     # 用户配置可能很慢或吞掉集成，测试使用干净的 HOME。
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ZDOTDIR", str(tmp_path))
