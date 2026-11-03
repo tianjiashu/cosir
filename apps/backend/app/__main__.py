@@ -27,6 +27,7 @@ from app.config.logging.configuration import install_logging_for_current_process
 from app.config.settings import Settings
 from app.parent_watch import install_parent_watch_from_env
 from app.service.depends import initialize_service_dependencies
+from app.tools.shell.login_environment import apply_login_shell_environment
 from app.utils.path import system_cosir as paths
 
 
@@ -44,13 +45,15 @@ def main() -> None:
         无。
 
     异常:
-        RuntimeError: 当无法解析仓库根目录、日志目录不可写或存储初始化失败时。
-        其余启动期异常：捕获后写入 ``failed`` 启动状态并原样向上抛出。
+        RuntimeError: 未注入 ``CODING_AGENT_DATA_DIR`` 且当前平台不是 macOS / Windows，无法确定
+            数据根时。
+        其余启动期异常（如日志目录不可写的 ``OSError``）：捕获后写入 ``failed`` 启动状态并
+            原样向上抛出。
 
     副作用:
+        非 Windows 上先把用户登录 shell 的环境合并进进程环境（见 ``login_environment``）；
         初始化主 SQLite 存储引擎；向 ``logs/backend-YYYY-MM-DD.log`` 挂载按日期和
-        ``Constant.Logging.MAX_BYTES`` 大小轮转的固定 JSONL 文件日志处理器；同步系统代理
-        环境变量到当前进程（在 ``.env`` 未显式设置代理时启用）；按需启动
+        ``Constant.Logging.MAX_BYTES`` 大小轮转的固定 JSONL 文件日志处理器；按需启动
         uvicorn 进程；按环境决定是否写入系统级 ``.cosir/runtime/backend.bootstate.json``
         启动状态文件，系统级目录由 ``app.utils.path.system_cosir`` 按平台解析。
     """
@@ -61,6 +64,10 @@ def main() -> None:
 
         # 先按固定路径安装最小日志管线，覆盖 Settings.load 和依赖初始化失败窗口。
         install_logging_for_current_process(log_dir=paths.LOG_DIR)
+        # 必须早于 Settings.load 与一切子进程派生，原因见 login_environment 模块说明。
+        if boot_state_file is not None:
+            write_bootstate(boot_state_file, Constant.Boot.BOOTING, step="resolve_shell_env")
+        apply_login_shell_environment()
         Settings.load()
         initialize_service_dependencies()
         install_logging_for_current_process(

@@ -26,7 +26,6 @@ from app.utils.path.system_cosir import (
     system_mcp_servers_file,
     system_skills_config_file,
     system_skills_dir,
-    system_terminal_denylist_file,
 )
 from app.utils.path.validation import is_within_cosir
 from app.utils.path.workspace_cosir import (
@@ -78,7 +77,6 @@ __all__ = [
     "system_mcp_servers_file",
     "system_skills_config_file",
     "system_skills_dir",
-    "system_terminal_denylist_file",
     "workspace_agent_config_dir",
     "workspace_agent_team_config_dir",
     "workspace_attachment_dir",

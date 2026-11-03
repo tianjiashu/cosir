@@ -15,7 +15,7 @@
 
 Agent 创建的会话在它不知情时结束（shell 退出、worker 故障、用户关闭记为 `closed_by_user`），且当时没有条件等待或交接会把 `session_ended` 带回给它，runtime 经副作用执行器投一条 `system_notice`（`notice_kind=terminal_session_ended`，正文含会话摘要与尾部若干行）：不唤醒 Run，随下一次推进并入。Agent 自己关闭、启动失败、Task 删除与后端关闭不通知。
 
-非交互的多行脚本走 `execute_terminal`；人工输入与交互会话输入都不经 denylist。
+非交互的多行脚本走 `execute_terminal`。
 
 ## 逻辑行缓冲（`line_buffer.py`）
 
@@ -58,14 +58,15 @@ Agent 不持锁：一次输入是 worker 输入队列里的一帧，用户按键
 
 每会话一条 WS。订阅绑定事件循环与 `asyncio.Queue`，发布经 `loop.call_soon_threadsafe`；背压按帧数与字节数计量，溢出投递一次 `subscriber_overflow`，WS 转为 `resync_required` 并以 1013 关闭；事件循环已关闭时在订阅边界吞掉并记日志。
 
-- 客户端帧：`attach{after_seq}`（首帧）、`input{data_base64}`（≤ 64 KiB）、`resize{rows 2..500, cols 10..1000}`（交还交接走 HTTP 决定入口，不经 WS）。
+- 客户端帧：`attach{after_seq}`（首帧）、`input{data_base64}`（≤ 64 KiB；客户端把大段输入切成多帧按序发送，一次粘贴总量上限 256 KiB，超过整段拒绝而不截断）、`resize{rows 2..500, cols 10..1000}`（交还交接走 HTTP 决定入口，不经 WS）。
 - 服务端帧（带 `protocol`、`session_id`、`generation`）：`attached{rows, columns, status, first_available_seq, next_seq}`、`output{seq, data_base64}`、`geometry{rows, columns}`、`input_mark{by:"agent"}`、`input_rejected{reason: session_ended|backpressure}`、`exit{}`（只标记流结束）、`resync_required`、`protocol_error{code, message}`（`code` 与 HTTP 错误体同源：领域错误的稳定码，控制帧非法为 `TERMINAL_STREAM_PROTOCOL_ERROR`；客户端按 `code` 分支，`message` 只供排查）。
 - 交接、终态与退出码只经 snapshot `terminal_sessions` 投影，WS 不重复推送（两条通道无顺序保证，双推会合并出过期值）。
-- 连接时按 Task 归属取到会话 runtime，之后输入直接调用它（内存更新 + 非阻塞入队），不经线程池。断开只移除订阅，不关闭会话、不取消 Run。
+- 连接时按 Task 归属取到会话 runtime，之后对它的调用（输入、resize、订阅）一律经 `asyncio.to_thread`：它们要拿会话锁，而工具线程在同一把锁里执行 Agent 给的正则，事件循环不能碰这把锁。断开只移除订阅，不关闭会话、不取消 Run。
+- 终端查询（设备属性、状态与光标位置、模式查询等）只由 worker 应答：有没有面板都要有人答，前端 xterm 在解析器处吞掉这些查询、不应答，否则程序收到两份应答，多余的一份还会被当成用户输入。
 
 ## Worker 协议
 
-4 字节大端长度 + JSON。`write{input: line|text|keys|raw}`、`resize{rows, cols}`、`signal`（与 write / resize 走同一有序输入队列，不越过排队中的输入；等待 `signal_result` 回执，必须锁外发送）；内容校验失败为非致命 `error{input_rejected|resize_rejected}`。能力来自握手：`input_keys`、`key_<name>`、`signal_*`；runtime 投递 keys / signal 前复查（line、raw、resize 不需要能力声明）。
+4 字节大端长度 + JSON。`write{input: line|text|keys|raw}`、`resize{rows, cols}`、`signal`（与 write / resize 走同一有序输入队列，不越过排队中的输入；等待 `signal_result` 回执，必须锁外发送）；内容校验失败为非致命 `error{input_rejected|resize_rejected}`。写入 PTY 只经 worker 的专用写线程（有界队列）：前台程序不读输入时 PTY 只缓冲约 1 KB，控制循环与读线程都不能阻塞在写上；队列满时这一次写入被丢弃并报非致命 `error{input_backpressure}`，后端转成 `input_rejected{reason: backpressure}` 推给面板。能力来自握手：`input_keys`、`key_<name>`、`signal_*`；runtime 投递 keys / signal 前复查（line、raw、resize 不需要能力声明）。
 
 ## 验证入口
 
