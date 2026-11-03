@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
 use crate::geometry::Geometry;
-use crate::process_tree::ProcessTreeGuard;
+use crate::containment::Containment;
 
 /// 写入队列容量（帧）：与后端输入队列同量级，单帧不超过后端的单次输入上限（64 KiB）。
 const WRITE_QUEUE_FRAMES: usize = 64;
@@ -37,7 +37,7 @@ pub struct PtyRuntime {
     // 阻塞、更不会读输入，形成死锁。
     writes: SyncSender<Vec<u8>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
-    process_tree: Mutex<ProcessTreeGuard>,
+    containment: Mutex<Containment>,
 }
 
 pub struct SpawnedPty {
@@ -80,8 +80,8 @@ impl PtyRuntime {
             let _ = child.wait();
             anyhow::bail!("terminal shell pid unavailable");
         }
-        let process_tree = match ProcessTreeGuard::attach(pair.master.as_ref(), child.as_ref()) {
-            Ok(process_tree) => process_tree,
+        let containment = match Containment::for_session(child.as_ref()) {
+            Ok(containment) => containment,
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -95,7 +95,7 @@ impl PtyRuntime {
             master: Arc::new(Mutex::new(pair.master)),
             writes,
             child: Mutex::new(child),
-            process_tree: Mutex::new(process_tree),
+            containment: Mutex::new(containment),
         });
         Ok(SpawnedPty { runtime, reader })
     }
@@ -215,15 +215,11 @@ impl PtyRuntime {
             .child
             .lock()
             .map_err(|_| anyhow::anyhow!("pty child lock poisoned"))?;
-        let mut process_tree = self
-            .process_tree
+        let mut containment = self
+            .containment
             .lock()
-            .map_err(|_| anyhow::anyhow!("process tree lock poisoned"))?;
-        let master = self
-            .master
-            .lock()
-            .map_err(|_| anyhow::anyhow!("pty master lock poisoned"))?;
-        process_tree.terminate(child.as_mut(), master.as_ref())
+            .map_err(|_| anyhow::anyhow!("containment lock poisoned"))?;
+        containment.terminate(child.as_mut())
     }
 }
 
