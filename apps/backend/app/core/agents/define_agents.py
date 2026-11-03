@@ -6,17 +6,18 @@ from app.core.tool.schemas.tool_names import (
     TOOL_AGENT_TEAM,
     TOOL_APPLY_PATCH,
     TOOL_BROWSER_ACT,
+    TOOL_BROWSER_EVALUATE,
     TOOL_BROWSER_HANDOFF,
+    TOOL_BROWSER_LOGS,
     TOOL_BROWSER_NAVIGATE,
     TOOL_BROWSER_SCREENSHOT,
     TOOL_BROWSER_SNAPSHOT,
     TOOL_BROWSER_TABS,
-    TOOL_CHILD_AGENT_SEND,
-    TOOL_CHILD_AGENT_STATUS,
     TOOL_DELEGATE_TASK,
     TOOL_DELETE_FILE,
     TOOL_EXECUTE_TERMINAL,
     TOOL_FIND_FILES,
+    TOOL_FORK_TASK,
     TOOL_LIST_DIRECTORY,
     TOOL_MCP,
     TOOL_MOVE_FILE,
@@ -26,7 +27,9 @@ from app.core.tool.schemas.tool_names import (
     TOOL_READ_IMAGE,
     TOOL_REPLACE,
     TOOL_SEARCH_CONTENT,
+    TOOL_SEND_MESSAGE,
     TOOL_SKILL,
+    TOOL_TASK_STATUS,
     TOOL_TERMINAL_CLOSE,
     TOOL_TERMINAL_HANDOFF,
     TOOL_TERMINAL_LIST,
@@ -50,11 +53,11 @@ from app.core.tool.schemas.tool_names import (
 # 无人审阅的上下文里，且用户工作区已被污染、无法追溯意图，因此「按指令做、不越界」优先于
 # 「看起来更好」。
 #
-# 正文**不得**出现工具可用性（「你没有某工具」「你必须永不委派」之类）：同一 profile 在不同
-# 场景下的工具面并不相同——作为 ``delegate_task`` 子 Agent 委派工具被剥掉，作为 Agent Team
-# 节点则保留——写死任一侧都必然在另一侧变成假话，且工具事实本就由 ``<tool_layer>`` /
-# ``<runtime_context>`` 声明。要约束行为就写成行为要求（「不得改动工作区」「不要绕过缺口」），
-# 不要写成能力断言。
+# 正文**不得**出现工具可用性（「你没有某工具」「你必须永不委派」之类）：同一 profile 在不同场景下的
+# 工具面并不相同——能不能再委派取决于派生深度，委派子 Agent 与 Team 节点拿到的工具还要按
+# Task 类型规则过滤（``models.task_kind``）——写死任一侧都必然在另一侧变成假话，且工具事实
+# 本就由 ``<tool_layer>`` / ``<runtime_context>`` 声明。要约束行为就写成行为要求
+# （「不得改动工作区」「不要绕过缺口」），不要写成能力断言。
 _GENERAL_CHILD_AGENT_SYSTEM_PROMPT = """\
 You handle exactly one focused task delegated by the parent agent.
 
@@ -67,8 +70,9 @@ You handle exactly one focused task delegated by the parent agent.
   conventions of the code you touch.
 - Treat the global and workspace instructions in your context as binding. If they contradict the
   delegated task, say so instead of silently choosing a side.
-- If the task is ambiguous, blocked, or needs a decision only the parent can make, stop and
-  report what is missing instead of guessing.
+- If the task is ambiguous, blocked, or needs a decision only the parent can make, do not guess:
+  ask the agent that gave you the task and wait for its answer when you can reach it, otherwise
+  stop and report what is missing.
 - Verify your own result and say how you verified it. End with a concise report: the result, the
   files or evidence involved, and anything left unfinished.
 """
@@ -91,8 +95,9 @@ You handle exactly one read-only investigation task delegated by the parent agen
   downloading); incidental caches produced by running existing code are acceptable.
 - Work only on the delegated task: do not widen its scope or touch anything it did not ask about.
 - Treat the global and workspace instructions in your context as binding.
-- If the task is ambiguous, blocked, or needs a decision only the parent can make, stop and report
-  what is missing instead of guessing.
+- If the task is ambiguous, blocked, or needs a decision only the parent can make, do not guess:
+  ask the agent that gave you the task and wait for its answer when you can reach it, otherwise
+  stop and report what is missing.
 - Report with evidence: back every claim with the file path and line numbers (or a short quote),
   say plainly what you could not verify, and end with a concise summary of findings.
 """
@@ -146,10 +151,13 @@ def main_agent(*, system_prompt: str = "", max_steps: int = 300) -> AgentProfile
             TOOL_BROWSER_ACT,
             TOOL_BROWSER_SCREENSHOT,
             TOOL_BROWSER_TABS,
+            TOOL_BROWSER_LOGS,
+            TOOL_BROWSER_EVALUATE,
             TOOL_BROWSER_HANDOFF,
             TOOL_DELEGATE_TASK,
-            TOOL_CHILD_AGENT_SEND,
-            TOOL_CHILD_AGENT_STATUS,
+            TOOL_FORK_TASK,
+            TOOL_SEND_MESSAGE,
+            TOOL_TASK_STATUS,
             TOOL_WAIT_MESSAGES,
             TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
             TOOL_PROPOSE_AGENT_CONFIGURATION,
@@ -168,10 +176,10 @@ def general_child_agent() -> AgentProfile:
     """构建由代码维护的通用委派子 Agent（进程启动时注册的默认 CHILD）。
 
     该 profile 由代码维护、不从 JSON 加载（可被同名 JSON 覆盖）。工具面覆盖读写文件、搜索、
-    终端、网页与内置浏览器，并**声明**了委派 / 父子通信工具：是否真正可用由执行方过滤决定——作为
-    ``delegate_task`` 子 Agent 运行时它们被 ``CHILD_DISALLOWED_TOOLS`` 剥掉（子 Agent 不得再
-    委派），作为 Agent Team 节点运行时则保留（节点需要把子工作再拆出去）。可交互终端不在
-    工具面内；内置浏览器开放除交接（``browser_handoff``，需要用户在界面上交还）以外的工具。``description`` 面向主 Agent 说明何时该选它，``system_prompt`` 面向子 Agent
+    终端、网页与内置浏览器，并**声明**了委派 / 父子通信工具：无论作为委派子 Agent 还是 Team 节点，
+    Task 创建时都按类型规则过滤（``models.task_kind``），委派的层数由派生深度上限决定。
+    可交互终端不在工具面内；内置浏览器开放除交接（``browser_handoff``，需要用户在界面上交还）以外的工具。
+    ``description`` 面向主 Agent 说明何时该选它，``system_prompt`` 面向子 Agent
     强调「按指令做、不越界」。
 
     参数:
@@ -220,9 +228,11 @@ def general_child_agent() -> AgentProfile:
             TOOL_BROWSER_ACT,
             TOOL_BROWSER_SCREENSHOT,
             TOOL_BROWSER_TABS,
+            TOOL_BROWSER_LOGS,
+            TOOL_BROWSER_EVALUATE,
             TOOL_DELEGATE_TASK,
-            TOOL_CHILD_AGENT_SEND,
-            TOOL_CHILD_AGENT_STATUS,
+            TOOL_SEND_MESSAGE,
+            TOOL_TASK_STATUS,
             TOOL_WAIT_MESSAGES,
         ],
         agent_type=AgentProfileType.CHILD,
@@ -280,8 +290,8 @@ def only_read_child_agent() -> AgentProfile:
             TOOL_WEB_SEARCH,
             TOOL_WEB_EXTRACT,
             TOOL_DELEGATE_TASK,
-            TOOL_CHILD_AGENT_SEND,
-            TOOL_CHILD_AGENT_STATUS,
+            TOOL_SEND_MESSAGE,
+            TOOL_TASK_STATUS,
             TOOL_WAIT_MESSAGES,
         ],
         agent_type=AgentProfileType.CHILD,

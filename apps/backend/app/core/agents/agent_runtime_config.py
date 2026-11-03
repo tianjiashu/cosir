@@ -32,13 +32,15 @@ class AgentRuntimeConfig:
     只在 Run 装配时经 :meth:`resolve` 构造一次，此后不再回看 ``AgentProfile``、``ModelSettings``
     或模型配置 ID：身份与执行资源取值即定，``model`` 是已解析完整的模型（连接、能力与偏好）。
     运行期消费方（模型构建、系统提示词、步数与输出契约、Agent Team 准备）只读这里的字段。
+
+    不含工具面：Task 能用哪些工具是 Task 创建时固化的事实（``TaskRuntimeSpace.task_tool_names``），
+    定义里的 ``allowed_tools`` 只是固化时的输入，配置之后再改也不影响已有 Task。
     """
 
     agent_id: str
     agent_type: AgentProfileType
     role: str
     system_prompt: str
-    allowed_tools: tuple[str, ...]
     max_steps: int
     structured_output: StructuredOutputSpec | None
     model: ResolvedModel
@@ -80,9 +82,7 @@ class AgentRuntimeConfig:
             raise RuntimeError(f"run {run.id} has no model config")
         model_config = get_model_config_service().get_config(run.model_config_id)
         return cls.resolve(
-            definition,
-            model_config,
-            reasoning_effort=run.options.reasoning_effort,
+            definition, model_config, reasoning_effort=run.options.reasoning_effort
         )
 
     @classmethod
@@ -104,7 +104,6 @@ class AgentRuntimeConfig:
             agent_type=definition.agent_type,
             role=definition.role,
             system_prompt=definition.system_prompt,
-            allowed_tools=tuple(definition.allowed_tools),
             max_steps=definition.max_steps,
             structured_output=definition.structured_output,
             model=resolve_model(
