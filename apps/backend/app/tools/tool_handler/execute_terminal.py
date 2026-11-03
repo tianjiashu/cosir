@@ -4,9 +4,10 @@
 ``ToolObservation`` 组装都在 ``ExecuteTerminalTool`` 内完成；不含 subprocess 细节
 （下沉到 ``app.tools.tool_handler.terminal.local_backend``）。
 
-前后台执行：命令包成 ``ThreadJob`` 交给 ``run_background_work``（默认前台，到上限自动转后台，模型可直接选
-后台，用户可把前台等待转走）。所以本工具是 thread 工具：命令要能在本次调用返回后继续跑，作业必须
-由后端进程持有，不能放进每次调用结束即被杀的工具子进程；超时与取消都由执行后端杀进程树。
+前后台执行：命令包成 ``ThreadJob`` 交给 ``run_background_work``（默认前台、一直等到结束，模型可
+直接选后台，用户可把前台等待转走；没有超时自动转后台，转到后台也从不挂起 Agent）。所以本工具是
+thread 工具：命令要能在本次调用返回后继续跑，作业必须由后端进程持有，不能放进每次调用结束即
+被杀的工具子进程；超时与取消都由执行后端杀进程树。
 
 平台 shell 契约（可下发哪些 shell、命令该用什么语法）的唯一事实源是参数模型
 （``tool_models/execute_terminal_args.py``）：本模块的本机探测直接以该契约为候选清单，经
@@ -42,13 +43,6 @@ from app.tools.display.terminal_display import (
     build_terminal_display_data,
     build_terminal_placeholder_display_data,
 )
-from app.tools.policy.terminal_denylist import (
-    DangerousCommandVerdict,
-    detect_dangerous_command,
-)
-from app.tools.policy.terminal_denylist_configuration import (
-    read_terminal_deny_patterns,
-)
 from app.tools.shell.host_shells import available_shells
 from app.tools.tool_handler.terminal import ExecutionResult, LocalExecutionBackend
 from app.tools.tool_handler.terminal.output_stream import TerminalOutputStream
@@ -60,30 +54,34 @@ from app.tools.tool_models.execute_terminal_args import (
     resolve_execute_terminal_args_model,
 )
 
-# 平台无关的工具描述：只写选用与调用决策需要的执行语义（进程不保留状态、无 stdin、前后台与时长、
-# 命令策略）；平台 shell、命令语法与 workdir 规则由参数模型各字段承载，不在此复述。不点名
-# terminal_* 工具：子 Agent 与 Team 节点只有本工具，交互终端只开放给侧栏主 Agent。
+# 平台无关的工具描述：只写选用与调用决策需要的执行语义（无状态、无 stdin / 终端、前台占步、
+# 不能长驻）。其余各有唯一出处，不在此复述：平台 shell、命令语法、timeout、workdir 与后台回投在
+# 参数模型各字段；「读文件别用 shell」在系统提示词，只在 Agent 同时有文件工具时出现（没有文件
+# 工具的 Agent 只能用本工具读）。不点名 terminal_* 工具：子 Agent 与 Team 节点只有本工具，交互
+# 终端只开放给侧栏主 Agent，由它们的描述指回本工具。
+# stdin 是 DEVNULL、POSIX 上命令在新会话里没有控制终端：读输入的程序立刻读到输入结束，要终端的
+# 程序（密码提示、全屏程序）打不开 /dev/tty，所以写「失败」而不是「挂起」。
 
 
-# 中文译文：在一个全新的 shell 进程里执行一条非交互命令，返回退出码与合并后的 stdout/stderr。
-# 用于构建、测试、git 和运行程序；读文件、搜索、列目录有专用工具，不要用它跑 cat/sed/head/grep/
-# rg/find/ls。两次调用之间不保留任何状态（cd、导出的变量、shell 状态）。没有 stdin：等待输入或
-# 分页器的命令会一直挂到超时。长构建、测试套件等长任务：把 timeout 设到足够覆盖，并用
-# background=true 在此期间继续做别的事。转后台运行的命令（background=true，或超过前台等待上限）
-# 在结束时会把结果作为消息回投，因此不必轮询。不适合永不退出的服务或 watcher：它们不会结束，
-# 所以收不到结果消息，进程树会在 timeout 到点时被杀。部分破坏性命令会被策略拦截。
+# 中文译文：在一个全新的 shell 进程里执行一条非交互命令或脚本，返回退出码与合并后的
+# stdout/stderr。每次调用都从头开始：cd、导出的变量等 shell 状态不会带到下一次，有依赖的步骤
+# 写进同一条命令（&&、管道、多行脚本）。没有 stdin、也没有终端：要输入的程序会读到输入结束、
+# 通常直接失败，要终端的程序（密码提示、全屏程序）跑不起来，所以带上 --yes 之类的非交互参数。
+# 前台调用会一直占着这一步，直到命令退出或超时；长构建、测试套件把 timeout 调大并设
+# background=true，期间继续做别的事。不要在命令里用 & 或 nohup 把进程放到后台，要后台就用
+# background=true。必须一直开着（服务、watcher）或要交互的程序不适合本工具：到 timeout 会被杀掉。
 _DESCRIPTION = (
-    "Run one non-interactive command in a fresh shell process and return its exit code with "
-    "merged stdout/stderr. Use it for builds, tests, git and running programs; reading files, "
-    "searching and listing directories have dedicated tools, so do not use it for "
-    "cat/sed/head/grep/rg/find/ls. Nothing carries over between calls (cd, exported variables, "
-    "shell state). There is no stdin: prompts and pagers hang until the timeout. For long "
-    "builds, test suites, and other long tasks set timeout to cover them and background=true to "
-    "keep working meanwhile. A command running in the background (background=true, or past the "
-    "foreground wait limit) reports its result back as a message when it finishes, so there is "
-    "no need to poll. Not suited to servers or watchers that never exit: they never finish, so "
-    "no result message arrives and the process tree is killed at the timeout. Some destructive "
-    "commands are blocked by policy."
+    "Run a non-interactive command or script in a fresh shell process and return its exit code "
+    "with merged stdout/stderr. Each call starts from scratch: cd, exported variables and other "
+    "shell state do not carry over, so chain dependent steps in one command (&&, pipes, a "
+    "multi-line script). There is no stdin and no terminal: a program that asks for input reads "
+    "end-of-input and usually fails, and one that needs a terminal (password prompts, "
+    "full-screen apps) cannot run, so pass non-interactive flags such as --yes. A foreground "
+    "call holds this step until the command exits or times out; for long builds and test "
+    "suites raise timeout and set background=true to keep working meanwhile. Do not push "
+    "processes into the background with & or nohup inside the command; use background=true. "
+    "Programs that must keep running (servers, watchers) or need interaction do not fit this "
+    "tool: they are killed at the timeout."
 )
 
 # 取消后的模型文案：命令被强杀，结果未知且可能留下部分副作用。
@@ -271,16 +269,15 @@ class ExecuteTerminalTool(HandlerBase):
             workdir: 工作目录；缺省 ``execution_context.workspace_root``；相对路径相对
                 该根解析；绝对路径直接使用。
             background: ``True`` 立即转后台；``None`` 取 ``EXECUTE_TERMINAL_BACKGROUND`` 的默认（前台）。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。命令的全部文件系统
-                副作用由 workdir 边界与 deny-list 共同约束，而非仅靠 cwd 宣称。
+            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。workdir 只是命令的
+                起点：命令自己可以 cd 或用绝对路径，文件系统副作用不受工作区约束（命令级隔离待沙箱接管）。
 
         返回:
-            ``ToolObservation``。灾难级命令/工作目录不存在/后端异常为
+            ``ToolObservation``。工作目录不存在/后端异常为
             ``status="error"``；命令正常执行（含非零退出码）为 ``status="success"``。
             退出码等结构性事实经 ``_render_content`` 并入 ``content`` 的 ``[exit_code=N]`` 标记，供
             模型消费。命令因超时强杀时返回 ``status="error"``，被取消时返回 ``cancelled``。转到后台
-            时返回标 ``background`` 的占位（只有到达前台上限才挂起 Agent），结论稍后以
-            ``background_result`` 回投。
+            时返回标 ``background`` 的占位（不挂起 Agent），结论稍后以 ``background_result`` 回投。
 
         异常:
             不主动向上抛出；均转换为结构化 ``ToolObservation``。
@@ -303,31 +300,6 @@ class ExecuteTerminalTool(HandlerBase):
                 f"could not run the command: shell '{shell}' is not available on this host. "
                 f"Choose one of the available shell values: {', '.join(self._available_shells)}",
             )
-
-        try:
-            verdict = detect_dangerous_command(
-                command,
-                read_terminal_deny_patterns(),
-            )
-        except (OSError, ValueError, TimeoutError) as exc:
-            log.exception(
-                "terminal_denylist_evaluation_failed",
-                extra={
-                    "msg": "终端 deny-list 无法可靠校验命令，已拒绝执行",
-                    "data": {"error_type": type(exc).__name__},
-                },
-            )
-            return tool_error(
-                self.name,
-                "command was not run because the terminal deny-list could not be evaluated. "
-                "Repair the terminal deny-list configuration before retrying.",
-            )
-        if verdict.is_dangerous:
-            log.warning(
-                "terminal_command_blocked",
-                extra={"msg": "灾难级命令被拒绝", "data": {"key": verdict.key}},
-            )
-            return self._blocked_observation(verdict)
 
         execution_root = execution_context.workspace_root
         cwd, err = self._resolve_workdir(workdir, execution_root)
@@ -382,7 +354,6 @@ class ExecuteTerminalTool(HandlerBase):
                 if EXECUTE_TERMINAL_BACKGROUND.resolve_background(background)
                 else "foreground"
             ),
-            foreground_limit_s=EXECUTE_TERMINAL_BACKGROUND.foreground_limit_s,
             is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
         )
         if outcome.placeholder is not None:
@@ -459,29 +430,21 @@ class ExecuteTerminalTool(HandlerBase):
     ) -> ToolObservation:
         """命令转到后台时的占位（``background``）。
 
-        只有到达前台上限时挂起：Agent 要的是这个结果，只是不该占着工具线程；Agent 主动选后台、或
-        用户把等待转走时不挂起，Agent 先做别的、需要时用 wait_messages 等。
+        不挂起：Agent 主动选后台、或用户把等待转走，都是让 Agent 先做别的；需要结果时它自己用
+        wait_messages 等。
         """
         situation = {
             "background": f"the command is running in the background (timeout {timeout_s:g}s); "
             "keep working",
             "detached": "the user moved this command to the background; keep working",
-            "limit": "the command is still running; it moved to the background and you are "
-            "paused now",
         }[reason]
-        follow_up = (
-            " and resume you"
-            if reason == "limit"
-            else " (use wait_messages if you need to pause for it)"
-        )
         observation = tool_success(
             tool_name=self.name,
             content=(
                 f"{situation}. Its result will arrive as a <background_result> message for this "
-                f"tool call{follow_up}."
+                "tool call (use wait_messages if you need to pause for it)."
             ),
             display_data=build_terminal_placeholder_display_data(command=command, workdir=cwd),
-            suspend=reason == "limit",
         )
         observation.background = work
         return observation
@@ -546,29 +509,6 @@ class ExecuteTerminalTool(HandlerBase):
         if not resolved.is_dir():
             return Path(), f"workdir not found: {resolved}"
         return resolved, ""
-
-    def _blocked_observation(self, verdict: DangerousCommandVerdict) -> ToolObservation:
-        """把灾难级命令裁决结果转成面向模型的错误观测。
-
-        参数:
-            verdict: ``detect_dangerous_command`` 的裁决结果，提供命中原因 ``description``。
-
-        返回:
-            ``status="error"`` 的 ``ToolObservation``：命令被策略确定性拒绝，原样重试必然
-            再次失败，故只给出替代动作。
-
-        异常:
-            无。
-
-        副作用:
-            无（纯构造）。
-        """
-        return tool_error(
-            self.name,
-            f"command blocked by the safety policy: {verdict.description}. "
-            "Use a dedicated file tool for filesystem changes or choose a "
-            "non-destructive command.",
-        )
 
     @staticmethod
     def _render_content(output: str, result: ExecutionResult) -> str:

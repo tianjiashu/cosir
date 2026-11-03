@@ -2,10 +2,9 @@
 
 图片规则（格式、方向、尺寸、大小）与存储都不在这里：每张都经 ``AttachmentService.import_image`` 按
 上传规则规范化并发布到工作区 ``.cosir/Attachment``，再经工具图片通道（``tool_success(images=...)`` →
-observe 节点投进 mailbox）以一条 user 消息交给模型——与用户上传、浏览器截图同一条路。
+observe 节点写进 context）以一条 user 消息交给模型——与用户上传、浏览器截图同一条路。
 """
 
-from pathlib import Path
 from typing import ClassVar
 
 from app.config.constant import Constant
@@ -90,7 +89,7 @@ class ReadImageTool(HandlerBase):
         total_bytes = 0
         # 重复的路径只读一次：同一张图进两次请求没有意义。
         for path in dict.fromkeys(paths):
-            resolved, path_error = self._resolve(resolver, path)
+            resolved, path_error = resolver.resolve_for_read(path)
             if resolved is None:
                 failures.append((path, path_error, "路径无效"))
                 continue
@@ -142,20 +141,6 @@ class ReadImageTool(HandlerBase):
             ),
             images=[saved.path for _, saved in read],
         )
-
-    @staticmethod
-    def _resolve(resolver: PathResolver, path: str) -> tuple[Path | None, str]:
-        """与 ``read_file`` 相同的读路径规则：先拦设备路径，解析后再按真实目标拦一次。"""
-        device_error = resolver.blocked_device_reason(path)
-        if device_error:
-            return None, device_error
-        resolved, error = resolver.resolve_without_boundary(path)
-        if resolved is None:
-            return None, error
-        device_error = resolver.blocked_device_reason(path, resolved)
-        if device_error:
-            return None, device_error
-        return resolved, ""
 
     @staticmethod
     def _failure_lines(failures: list[tuple[str, str, str]]) -> str:

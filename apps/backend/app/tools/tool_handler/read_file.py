@@ -49,7 +49,6 @@ class ReadFileTool(HandlerBase):
     timeout_seconds = 10.0
     group = TOOL_GROUP_SEARCH
 
-
     binary_extensions: ClassVar[set[str]] = {
         ".7z",
         ".avi",
@@ -128,10 +127,8 @@ class ReadFileTool(HandlerBase):
                 也接受项目根外的绝对路径（只读不受 workspace 边界限制）。
             offset: 从第几行开始读取，1 表示第一行。
             limit: 最多返回多少行。参数模型会限制最大值，内部也会再次归一化。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由执行链
-                在子进程内无条件注入的关键字参数，handler 契约必须接受此 kwarg 以匹配
-                ``ToolHandlerRunner._execute_handler`` 调用约定；本工具只读且不受 workspace
-                边界限制，故不消费该值。
+            execution_context: 本次执行的运行时边界；只用其中的 workspace 根解析相对路径
+                （读取不受 workspace 边界限制）。
 
         返回:
             ``ToolObservation``。成功时 ``content`` 仅包含模型后续工作所需的
@@ -145,36 +142,11 @@ class ReadFileTool(HandlerBase):
         副作用:
             只读文件系统，不写入任何文件。
         """
-        root = execution_context.workspace_root
-        resolver = PathResolver(root)
-        resolved = None
-        ## 阶段1：对原始字符串做设备名/posix 禁止路径的 fail-fast 拦截
+        resolved, error = PathResolver(execution_context.workspace_root).resolve_for_read(path)
         if resolved is None:
-            device_error = resolver.blocked_device_reason(path)
-            if device_error:
-                return tool_error(
-                    self.name,
-                    device_error,
-                    status_hint="无法读取",
-                )
-
-            # 解析路径、相对路径转绝对路径
-            resolved, error = resolver.resolve_without_boundary(path)
-            if resolved is None:
-                return tool_error(
-                    self.name,
-                    f"could not read the file: {error}. "
-                    "Provide a valid file path inside or under the project root.",
-                    status_hint="路径无效",
-                )
-
-            device_error = resolver.blocked_device_reason(path, resolved)
-            if device_error:
-                return tool_error(
-                    self.name,
-                    device_error,
-                    status_hint="无法读取",
-                )
+            return tool_error(
+                self.name, f"could not read the file: {error}.", status_hint="路径无效"
+            )
 
         result = self._read_text_page(resolved, offset, limit)
         if result.error:
