@@ -1,11 +1,8 @@
 """按需生成子 Agent 配置草稿的临时工具。"""
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from app.core.tool.handler.child_agent.agent_configuration_display import (
-    build_agent_configuration_draft_display_data,
-)
-from app.core.tool.handler.child_agent.propose_agent_configuration_args import (
+from app.core.tool.mult_agent.args.propose_agent_configuration_args import (
     ProposeAgentConfigurationArgs,
 )
 from app.core.tool.results.tool_error import tool_error
@@ -75,12 +72,35 @@ class ProposeAgentConfigurationTool(HandlerBase):
             "description": description.strip(),
             "system_prompt": system_prompt.strip(),
         }
-        display_data = build_agent_configuration_draft_display_data(**payload)
+        display_data = self._configuration_draft_display_data(**payload)
         return tool_success(
             tool_name=self.name,
             content="A child-agent configuration draft is ready for user review in the editor.",
             display_data=display_data,
         )
+
+    @staticmethod
+    def _configuration_draft_display_data(
+        *,
+        agent_id: str,
+        role: str,
+        description: str,
+        system_prompt: str,
+    ) -> dict[str, Any]:
+        """构造只读对话卡片和 Workbench 所需的最小配置草稿。
+
+        返回值只包含 Agent 需要生成的四个字段，不包含保存结果、文件路径、版本或兼容性字段；
+        前端必须把它视为临时工作副本，不能据此推断配置已写入。
+        """
+
+        return {
+            "kind": "agent-configuration-draft",
+            "status": "draft",
+            "agent_id": agent_id,
+            "role": role,
+            "description": description,
+            "system_prompt": system_prompt,
+        }
 
     def to_definition(self) -> ToolDefinition:
         """构建临时配置提案工具的注册定义。"""
@@ -88,6 +108,7 @@ class ProposeAgentConfigurationTool(HandlerBase):
         return ToolDefinition(
             name=self.name,
             group=self.group,
+            needs_user_surface=True,
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,

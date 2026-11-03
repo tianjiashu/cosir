@@ -4,24 +4,21 @@
 child Task 的调度 actor 新开并启动 child Run），返回「已提交」观察（携带 child locator）。
 
 不负责：child workflow 的实际运行与完成观测（结论由调度层以消息回投，父侧用 ``wait_messages``
-挂起等待，或 ``child_agent_status`` 查询）；参数校验与准入门禁（``ToolAccessGate``）；委派展示数据构造
-（``build_delegation_display_data``）。
+挂起等待，或 ``task_status`` 查询）；参数校验与准入门禁（``ToolAccessGate``）；委派展示数据构造
+（``DelegateTaskTool._delegation_display_data``）。
 """
 import copy
 import json
-from typing import ClassVar
+from typing import Any, ClassVar
 
-from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileType,
 )
-from app.core.tool.handler.child_agent.child_run_job import run_child
-from app.core.tool.handler.child_agent.delegate_task_args import DelegateTaskArgs
-from app.core.tool.handler.child_agent.delegation_display import (
-    build_delegation_display_data,
-)
+from app.core.tool.derivation import child_depth
+from app.core.tool.mult_agent.args.delegate_task_args import DelegateTaskArgs
+from app.core.tool.mult_agent.child_agent.child_run_job import run_child
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -31,31 +28,17 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.task_tool_scope import tools_for_task
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT, TOOL_GROUP_TERMINAL_SESSION
+from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.models import ConversationRunCommand
+from app.models.conversation_input import MessageSource
+from app.service.conversation_run.agent_message import prepare_agent_message
 from app.service.depends import (
     get_conversation_run_ledger,
     get_task_service,
-    get_user_input_service,
 )
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-
-
-def strip_child_disallowed_tools(definitions: list[ToolDefinition]) -> list[ToolDefinition]:
-    """剥掉子 Agent 不得使用的工具：委派、建 Team、提案配置，以及整个交互终端工具组。
-
-    剥离发生在子 Task 固化 schema 之前，模型看不到也调用不了。终端按工具组剥离：该组新增工具
-    无需同步禁用清单。
-    """
-
-    return [
-        tool
-        for tool in definitions
-        if tool.name not in Constant.Tools.CHILD_DISALLOWED_TOOLS
-        and tool.group != TOOL_GROUP_TERMINAL_SESSION
-    ]
 
 
 class DelegateTaskTool(HandlerBase):
@@ -63,7 +46,7 @@ class DelegateTaskTool(HandlerBase):
 
     职责：解析 child profile、创建 child Task 并经调度入口启动 Run，全程以
     ``ToolObservation`` 返回结果。不等待 child 执行结束——子 Task 的每次 Run 到终态，由它的 actor 以
-    ``background_result`` 消息回投父 Task，父侧用 ``wait_messages`` 挂起等待或 ``child_agent_status`` 查询。
+    ``background_result`` 消息回投父 Task，父侧用 ``wait_messages`` 挂起等待或 ``task_status`` 查询。
     """
 
     name: str = TOOL_DELEGATE_TASK
@@ -71,9 +54,9 @@ class DelegateTaskTool(HandlerBase):
     # 的工具能力目录层下发），进程级基础定义即为模型可见终稿。
     description: str = (
         "Delegate a focused subtask to a child agent. It runs its own loop with only your "
-        "message as input — it cannot see this conversation and cannot delegate further — so "
-        "the message must be a self-contained task contract, and the child returns only a "
-        "final summary. Delegation always runs in the background: after creating the child, "
+        "message as input — it cannot see this conversation — so the message must be a "
+        "self-contained task contract, and the child returns only a final summary. "
+        "Delegation always runs in the background: after creating the child, "
         "wait for it with wait_messages or continue other non-interfering work. A failed "
         "delegation "
         "is terminal — adjust the contract or ask the user rather than retrying identical "
@@ -183,10 +166,12 @@ class DelegateTaskTool(HandlerBase):
             from app.config.configuration import get_tool_registry
 
             parent_run = self._ledger.get_run(execution_context.run_id)
+            parent_task = self._task_service.get_task(execution_context.task_id)
+            depth = child_depth(parent_task, "delegate")
             child_task_tools = child_agent_profile.select_tools(
                 get_tool_registry().get_all_definitions()
             )
-            child_final_task_tools = strip_child_disallowed_tools(child_task_tools)
+            child_final_task_tools = tools_for_task("delegate_task", child_task_tools, depth=depth)
 
             child_task = self._task_service.get_or_create_task(
                 workspace_id=execution_context.workspace_id,
@@ -196,7 +181,8 @@ class DelegateTaskTool(HandlerBase):
                 tool_schemas=[
                     copy.deepcopy(definition.to_model_tool_definition())
                     for definition in child_final_task_tools
-                ]
+                ],
+                derivation_depth=depth,
             )
 
             reasoning_effort = (child_agent_profile.model_settings.reasoning_effort
@@ -204,23 +190,17 @@ class DelegateTaskTool(HandlerBase):
                                 else None)
             child_agent_model_config_id = child_agent_profile.model_config_id
             model_config_id = child_agent_model_config_id or parent_run.model_config_id
-            display = {
-                "title": agent_name,
-                "child_agent_id": child_agent_id,
-                "child_task_id": child_task.id,
-                "role": child_agent_profile.role,
-            }
-
             def enqueue() -> None:
-                # 子 Task 的 actor 新开 Run；结论由 ``run_child`` 等子 Task 落定后读取。
+                # 子 Task 的 actor 新开 Run；结论由 ``run_child`` 等子 Task 落定后读取。任务说明是
+                # 父 Agent 说的话，以 Agent 消息投递：子 Agent 不会把它读成用户的请求。
                 task_runtime_spaces.enqueue(
                     child_task.id,
-                    get_user_input_service().prepare(
-                        child_task.id,
-                        ConversationRunCommand(display_text=message),
-                        model_config_id,
-                        reasoning_effort,
-                        child_agent_id,
+                    prepare_agent_message(
+                        message,
+                        source=MessageSource(task_id=parent_task.id, name=parent_task.title),
+                        agent_id=child_agent_id,
+                        model_config_id=model_config_id,
+                        reasoning_effort=reasoning_effort,
                     ),
                 )
 
@@ -236,7 +216,12 @@ class DelegateTaskTool(HandlerBase):
                         },
                         separators=(",", ":"),
                     ),
-                    display_data=build_delegation_display_data(**display),
+                    display_data=self._delegation_display_data(
+                        title=agent_name,
+                        child_agent_id=child_agent_id,
+                        child_task_id=child_task.id,
+                        role=child_agent_profile.role,
+                    ),
                 )
 
             return run_child(
@@ -263,6 +248,35 @@ class DelegateTaskTool(HandlerBase):
                 tool_name=self.name,
                 content="An error occurred while delegating the task.",
             )
+    @staticmethod
+    def _delegation_display_data(
+        *,
+        title: str,
+        child_agent_id: str,
+        delegation_id: int | None = None,
+        child_task_id: int | None = None,
+        role: str | None = None,
+    ) -> dict[str, Any]:
+        """构造父级委派展示数据，不携带 prompt 或 child 正文。
+
+        子 Agent 的最终输出属于 child task 的结果，不属于父级委派卡片；子 Task 的运行状态也不在
+        这里：
+        展示数据不是事实源，前端按 ``child_task_id`` 读应用级任务状态推送。
+        """
+
+        data: dict[str, Any] = {
+            "kind": "delegation-result",
+            "title": title,
+            "child_agent_id": child_agent_id,
+        }
+        if role:
+            data["role"] = role
+        if delegation_id is not None:
+            data["delegation_id"] = delegation_id
+        if child_task_id is not None:
+            data["child_task_id"] = child_task_id
+        return data
+
     def to_definition(self) -> ToolDefinition:
         """构建 delegate_task 工具的注册定义。
 

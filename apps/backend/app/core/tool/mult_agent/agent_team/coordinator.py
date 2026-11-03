@@ -9,10 +9,11 @@ from typing import Any
 
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfile
-from app.core.tool.handler.agent_team.agent_team_run_archive_service import (
+from app.core.tool.derivation import child_depth
+from app.core.tool.mult_agent.agent_team.agent_team_run_archive_service import (
     AgentTeamRunArchiveService,
 )
-from app.core.tool.handler.agent_team.node_profile import (
+from app.core.tool.mult_agent.agent_team.node_profile import (
     NODE_PROFILE_SNAPSHOT_KEY,
     build_node_profile,
 )
@@ -27,14 +28,14 @@ from app.models.agent_team.state.agent_team_run_state import (
     AgentTeamRunRuntime,
     AgentTeamRunState,
 )
-from app.models.conversation_run_command import ConversationRunCommand
+from app.models.conversation_input import MessageSource
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.service.conversation_run.agent_message import prepare_agent_message
 from app.service.depends import (
     get_conversation_run_ledger,
     get_task_service,
-    get_user_input_service,
     get_workspace_service,
 )
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
@@ -320,6 +321,7 @@ class AgentTeamCoordinator:
         agent_profile: AgentProfile = self._agent_registry.resolve(workspace_root, agent_id)
 
         if node_execution is None:
+            main_task = self._task_service.get_task(row.parent_task_id)
             task = self._task_service.get_or_create_task(
                 workspace_id=row.workspace_id,
                 title=node.name,
@@ -331,6 +333,7 @@ class AgentTeamCoordinator:
                     NODE_PROFILE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json"),
                 },
                 tool_schemas=tool_schemas,
+                derivation_depth=child_depth(main_task, "team"),
             )
             node_execution = state.create_execution_node(
                 node_id, AgentTeamNodeExecution(node_id=node_id, task_id=task.id)
@@ -340,12 +343,13 @@ class AgentTeamCoordinator:
         # 驱动时由 ``AgentRuntimeConfig.for_run`` 从节点 Task 的快照重新合成，不经调度入口在内存中
         # 传递定义。
         build_node_profile(agent_profile, node_runtime)
-        message = get_user_input_service().prepare(
-            node_execution.task_id,
-            ConversationRunCommand(display_text=input_text),
-            node_runtime.model_config_id,
-            node_runtime.model_settings.get("reasoning_effort"),
-            agent_id,
+        # 节点输入是 Team 交给节点的话，以 Agent 消息投递：来源是发起 Team 的主 Task。
+        message = prepare_agent_message(
+            input_text,
+            source=MessageSource(task_id=row.parent_task_id, name=configuration.name),
+            agent_id=agent_id,
+            model_config_id=node_runtime.model_config_id,
+            reasoning_effort=node_runtime.model_settings.get("reasoning_effort"),
         )
         task_runtime_spaces.enqueue(node_execution.task_id, message)
         node_run_id = self._await_node_run(
@@ -632,14 +636,16 @@ class AgentTeamCoordinator:
                 cancelled += 1
         return cancelled
 
-    def recover_after_restart(self) -> int:
-        """把后端重启遗留的运行中 Team 收敛为 cancelled，不自动重放。
+    def recover_after_restart(self) -> list[int]:
+        """把后端重启遗留的运行中 Team 收敛为 cancelled，不自动重放；返回这些 TeamRun 的节点
+        Task id。
 
         待确认（pending）的 TeamRun 保留：它挂在仍处于等待态的主 Run 上，重启后用户照常批准、
-        驳回或取消；收敛它会让仍可点击的审批卡片必然失败。
+        驳回或取消；收敛它会让仍可点击的审批卡片必然失败。节点 Task 交给 ``RecoverService``：挂起的
+        节点 Run 再也没有 Coordinator 等它，要先取消，免得被重启结论或终端唤醒后独自继续。
         """
 
-        recovered = 0
+        node_task_ids: list[int] = []
         for row in self._team_run_crud.list_active():
             previous_status = row.status
             updated = self._team_run_crud.update_status_if_in(
@@ -651,9 +657,10 @@ class AgentTeamCoordinator:
             )
             if updated is None:
                 continue
-            recovered += 1
+            state = AgentTeamRunState.model_validate(row.state_json)
+            node_task_ids.extend(execution.task_id for execution in state.node_executions.values())
             self._run_archive_service.write_terminal_archive(updated.id)
-        return recovered
+        return node_task_ids
 
 
 _COORDINATOR: AgentTeamCoordinator | None = None

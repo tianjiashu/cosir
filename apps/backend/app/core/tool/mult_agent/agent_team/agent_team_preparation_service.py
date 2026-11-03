@@ -11,19 +11,19 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config.configuration import get_agent_registry, get_tool_registry
-from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettingsError
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.core.tool.handler.agent_team.args.node_goal import AgentTeamNodeGoal
-from app.core.tool.handler.agent_team.team_tool_error import TeamToolError
-from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
+from app.core.tool.derivation import child_depth
+from app.core.tool.mult_agent.agent_team.team_tool_error import TeamToolError
+from app.core.tool.mult_agent.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.task_tool_scope import tools_for_task
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.models.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
-from app.service.depends import get_model_config_service
+from app.service.depends import get_model_config_service, get_task_service
 
 
 @dataclass(frozen=True)
@@ -69,38 +69,31 @@ def resolve_node_profile(
     return node, profile
 
 
-def materialize_node_tools(profile: AgentProfile) -> list[str]:
-    """按节点 Agent Profile 固化本次运行的节点工具名清单。
+def materialize_node_tools(profile: AgentProfile, *, depth: int) -> list[str]:
+    """按节点 Agent Profile 固化本次运行的节点工具名清单；``depth`` 是节点 Task 的派生深度。
 
-    节点工具 = Profile 允许的工具 **减去** :attr:`Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS`
-    （禁止节点递归建 Team、提案配置）**再减去**交互终端工具组 ``TOOL_GROUP_TERMINAL_SESSION``
-    的全部工具（按组从注册表展开，该组新增工具无需同步清单）。本清单只做剥离、**不代为追加**：委派与
-    父子通信工具不在禁用清单内，Profile 声明了它们就照样保留——Team 节点需要把子工作再拆给子
-    Agent 并汇总；而 ``delegate_task`` 产生的子 Agent 会被
-    :attr:`Constant.Tools.CHILD_DISALLOWED_TOOLS` 剥掉这些工具，避免无限套娃。两条清单的差别
-    就只有这一点，不要为「统一清单」而互相移植。
+    节点工具 = Profile 允许的工具按 Team 节点（``agent_team_node``）的类型规则与深度过滤
+    （``tools_for_task``）：节点在前端只读，去掉需要用户界面的工具；只允许委派这一种派生，去掉
+    建 Team 与 fork；节点与主 Task 同层，主 Task 已到深度上限时委派也去掉。只做过滤、
+    **不代为追加**。注册表里没有的名字原样保留：节点 Task 创建时解析 schema 会如实报错，不在这里
+    悄悄丢掉。
 
     返回值是新列表：Profile 是注册表共享单例，**不得**就地修改，否则本次 Team 的工具集会污染
-    同一进程后续所有 Agent。
-
-    参数:
-        profile: 已解析的节点 Agent Profile（由 :func:`resolve_node_profile` 解析）。
-
-    返回:
-        本次运行冻结的节点工具名列表，顺序沿用 Profile 的 ``allowed_tools``。
-
-    异常:
-        无（节点工具可用性由本函数归一化；工具名合法性已由 Profile 加载期校验）。
+    同一进程后续所有 Agent。顺序沿用 Profile 的 ``allowed_tools``。
     """
 
-    terminal_tools = set(
-        get_tool_registry().tool_groups_to_tool_names([TOOL_GROUP_TERMINAL_SESSION])
-    )
-    return [
-        name
+    registry = get_tool_registry()
+    definitions = [
+        definition
         for name in profile.allowed_tools
-        if name not in Constant.Tools.TEAM_NODE_DISALLOWED_TOOLS and name not in terminal_tools
+        if (definition := registry.get_tool_definition(name)) is not None
     ]
+    kept = {
+        definition.name
+        for definition in tools_for_task("agent_team_node", definitions, depth=depth)
+    }
+    registered = {definition.name for definition in definitions}
+    return [name for name in profile.allowed_tools if name in kept or name not in registered]
 
 
 def resolve_node_model(
@@ -309,6 +302,8 @@ class AgentTeamPreparationService:
                 + ", ".join(sorted(missing_node_goals)),
                 retryable=True
             )
+        # 节点与主 Task 同层（``child_depth`` 的 team 增量为 0），工具按这个深度固化。
+        node_depth = child_depth(get_task_service().get_task(parent_task_id), "team")
         node_profiles: dict[str, AgentProfile] = {}
         for node in configuration.nodes:
             _, profile = resolve_node_profile(
@@ -325,7 +320,7 @@ class AgentTeamPreparationService:
         node_runtime_snapshots: dict[str, dict[str, Any]] = {}
         for node in configuration.nodes:
             profile = node_profiles[node.node_id]
-            allowed_tools = materialize_node_tools(profile)
+            allowed_tools = materialize_node_tools(profile, depth=node_depth)
             node_model = resolve_node_model(profile, parent_agent)
             structured_output = build_node_structured_output(configuration, node)
             node_runtime_snapshots[node.node_id] = {

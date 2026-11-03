@@ -1,4 +1,4 @@
-"""委派子 Agent 的后台结果作业：``delegate_task`` 与开新 Run 的 ``child_agent_send`` 共用。
+"""委派子 Agent 的后台结果作业：``delegate_task`` 与开新 Run 的 ``send_message`` 共用。
 
 作业以父调用的 ``tool_call_id`` 登记在 ``background_registry``，回投由 ``run_background_work`` 完成。结论不靠
 子 Run 记下「是哪次调用触发了我」：投递之后在事件循环上等子 Task 无事可做
@@ -10,7 +10,8 @@
 子 Agent 一律后台执行：没有 ``background`` 参数与前台等待，父 Agent 要等结论就调用 ``wait``——委派
 常常一次发出好几个，前台等待会占住工具线程。撤销即取消等待，并以 ``parent`` 原因停止子 Task。
 
-等待只在进程内，重启后不重建：被恢复流程收敛的子 Run 由 ``restart_settlement`` 直接回投父 Task。
+等待只在进程内；重启后由 ``restart_settlement.reattach_child_waits`` 按父 Task 里仍在等的委派占位
+重新挂上（:func:`reattach_child_wait`，目标子 Task 记在占位的 ``BackgroundWork.target_task_id``）。
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from app.core.tool.background.run import run_background_work
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models import ConversationRunRecord
+from app.models.message_metadata import BackgroundWork
 
 
 def child_run_result(child_task_id: int, run: ConversationRunRecord) -> dict[str, object]:
@@ -52,10 +54,62 @@ def run_child(
     等待必须在投递之后开始：投递之前子 Task 往往已无事可做，会立刻读到上一次的结论。``enqueue``
     抛出时收回登记（工作没启动，不调撤销回调）并继续上抛。调用方保证 ``event_loop`` 可用。
     """
+    tool_call_id = execution_context.tool_call_id
+    job, waiting = _child_job(child_task_id)
+    outcome = run_background_work(
+        job,
+        task_id=execution_context.task_id,
+        run_id=execution_context.run_id,
+        tool_call_id=tool_call_id,
+        kind="child_agent",
+        label=label,
+        mode="background",
+        is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
+        target_task_id=child_task_id,
+    )
+    try:
+        enqueue()
+    except Exception:
+        background_registry.discard(tool_call_id)
+        raise
+    _start_waiting(
+        job, waiting, child_task_id, tool_call_id,
+        cast(asyncio.AbstractEventLoop, execution_context.event_loop),
+    )
+    observation = placeholder()
+    observation.background = outcome.work
+    return observation
+
+
+def reattach_child_wait(
+    *,
+    task_id: int,
+    run_id: int | None,
+    tool_call_id: str,
+    work: BackgroundWork,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """后端重启后，为父 Task 里仍在等结论的委派占位重新挂上等待（与 :func:`run_child` 同一套等待）。
+
+    沿用占位上持久化的 ``work``；子 Task 落定后按原 ``tool_call_id`` 回投，卡片照常落到完成。
+    调用方（``restart_settlement``）保证 ``work.target_task_id`` 存在、对应的子 Task 还在。
+    """
+    child_task_id = cast(int, work.target_task_id)
+    job, waiting = _child_job(child_task_id)
+    background_registry.reattach(
+        tool_call_id, task_id=task_id, run_id=run_id, work=work, on_cancel=job.cancel
+    )
+    def deliver(conclusion: BackgroundConclusion) -> None:
+        background_registry.complete(tool_call_id, conclusion)
+
+    job.on_done(deliver)
+    _start_waiting(job, waiting, child_task_id, tool_call_id, loop)
+
+
+def _child_job(child_task_id: int) -> tuple[ManualJob, list[Future[None]]]:
+    """等子 Task 结论的作业：撤销即取消等待，并以 ``parent`` 原因停止子 Task。"""
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-    tool_call_id = execution_context.tool_call_id
-    loop = cast(asyncio.AbstractEventLoop, execution_context.event_loop)
     waiting: list[Future[None]] = []
 
     def cancel() -> None:
@@ -67,30 +121,21 @@ def run_child(
         on_cancel=cancel,
         cancelled_result=BackgroundConclusion({"child_task_id": child_task_id, "status": "cancelled"}),
     )
-    outcome = run_background_work(
-        job,
-        task_id=execution_context.task_id,
-        run_id=execution_context.run_id,
-        tool_call_id=tool_call_id,
-        kind="child_agent",
-        label=label,
-        mode="background",
-        foreground_limit_s=None,
-        is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
-    )
-    try:
-        enqueue()
-    except Exception:
-        background_registry.discard(tool_call_id)
-        raise
+    return job, waiting
+
+
+def _start_waiting(
+    job: ManualJob,
+    waiting: list[Future[None]],
+    child_task_id: int,
+    tool_call_id: str,
+    loop: asyncio.AbstractEventLoop,
+) -> None:
     waiting.append(
         asyncio.run_coroutine_threadsafe(
             _deliver_conclusion(job, child_task_id, tool_call_id), loop
         )
     )
-    observation = placeholder()
-    observation.background = outcome.work
-    return observation
 
 
 async def _deliver_conclusion(job: ManualJob, child_task_id: int, tool_call_id: str) -> None:
