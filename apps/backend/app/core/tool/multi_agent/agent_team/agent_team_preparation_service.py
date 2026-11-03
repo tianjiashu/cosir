@@ -1,8 +1,7 @@
-"""Agent Team 执行准备服务。
+"""Agent Team 执行准备：把已解析的 Team 配置转换成一次运行的准备结果。
 
-本模块把已解析的 Team 配置转换成一次运行准备结果：节点 Profile、工具定义、模型设置、
-供展示层投影的预览输入和预览指纹均在同一次解析中生成。它不保存配置文件，不创建 TeamRun，
-也不推进节点执行；这些职责分别由配置服务和 Team coordinator 负责。
+节点 Profile、工具名、模型设置与供审批卡展示的预览在同一次解析中生成。不保存配置文件、不创建
+TeamRun、不推进节点执行：这些分别归配置服务、审批门（``agent_team_run_approval``）与 Coordinator。
 """
 
 from __future__ import annotations
@@ -16,9 +15,9 @@ from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettingsError
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.core.tool.multi_agent.derivation import child_depth
 from app.core.tool.multi_agent.agent_team.team_tool_error import TeamToolError
 from app.core.tool.multi_agent.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.multi_agent.derivation import child_depth
 from app.core.tool.multi_agent.task_tool_scope import tools_for_task
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_node_definition import TeamNodeDefinition
@@ -30,43 +29,26 @@ from app.service.depends import get_model_config_service, get_task_service
 class AgentTeamPreparationResult:
     """一次 Agent Team 执行准备的不可变输出。
 
-    ``preview_fields`` 是交给展示投影函数的预览输入，包含供用户编辑后回传的静态配置；
-    ``node_runtime_snapshots`` 面向确认后的节点执行。两者来自同一次解析，但最终确认时
-    必须基于用户提交的配置重新生成，
-    不能把展示数据直接当作执行事实。
+    ``preview_fields`` 是审批卡的展示内容，含供用户编辑后回传的静态配置；
+    ``node_runtime_snapshots`` 面向确认后的节点执行。两者来自同一次解析，但确认时必须基于用户
+    提交的配置重新生成，不能把展示数据当作执行事实。
     """
 
     preview_fields: dict[str, Any]
     node_runtime_snapshots: dict[str, dict[str, Any]]
 
 
-def resolve_node_profile(
-        configuration: Any,
-        workspace_root: str,
-        node_id: str,
-) -> tuple[TeamNodeDefinition, Any]:
-    """解析 Team 节点及其 CHILD Agent Profile。
-
-    参数:
-        configuration: 具有 ``nodes`` 集合的 Team 配置或配置候选对象。
-        workspace_root: Profile 解析使用的 workspace 根路径。
-        node_id: 要解析的节点标识。
-
-    返回:
-        配置节点和已注册的 CHILD Agent Profile。
+def resolve_node_profile(workspace_root: str, agent_id: str) -> AgentProfile:
+    """解析 Team 节点引用的 CHILD Agent Profile；配置提案与运行准备共用这一条可用性规则。
 
     异常:
-        KeyError: 节点不存在。
-        TeamToolError: 节点引用的 Agent 不存在或不是 CHILD 类型。
+        TeamToolError: 该 Agent 在工作区里不存在或不是 CHILD 类型。
     """
 
-    node = next((item for item in configuration.nodes if item.node_id == node_id), None)
-    if node is None:
-        raise KeyError(node_id)
-    profile = get_agent_registry().resolve(workspace_root, node.agent_id)
+    profile = get_agent_registry().resolve(workspace_root, agent_id)
     if profile is None or profile.agent_type is not AgentProfileType.CHILD:
-        raise TeamToolError(f"Team 节点引用的 child Agent 不可用: {node.agent_id}")
-    return node, profile
+        raise TeamToolError(f"Team 节点引用的 child Agent 不可用: {agent_id}")
+    return profile
 
 
 def materialize_node_tools(profile: AgentProfile, *, depth: int) -> list[str]:
@@ -235,154 +217,124 @@ def build_node_system_prompt(
     return f"{base_prompt}\n\n{team_context}" if base_prompt else team_context
 
 
-class AgentTeamPreparationService:
-    """把 Team 配置和当前运行时依赖准备成一次不可变执行计划。
+def prepare_team_run(
+        configuration: AgentTeamConfiguration,
+        *,
+        goal: str,
+        node_goals: dict[str, AgentTeamNodeGoal],
+        workspace_root: str,
+        parent_task_id: int,
+        parent_agent: AgentRuntimeConfig,
+) -> AgentTeamPreparationResult:
+    """一次性解析 Team 节点，生成审批卡预览与节点运行快照；只读注册表与 Task，不写任何事实。
 
-    本服务无内部持久化和进程级缓存，可以按请求创建；调用期间会读取 Agent registry 和
-    工具注册表，但只把解析结果写入返回值。执行请求 service 负责把结果写入持久化请求。
+    ``goal`` 与 ``node_goals`` 的非空由两个入口参数模型保证（``AgentTeamArgs`` /
+    ``AgentTeamApproveInput``），这里只去掉首尾空白；子目标是否与配置节点一一对应只有这里
+    知道配置，在这里检查。``parent_agent`` 是节点缺少独立模型配置时回落的主 Agent 运行时配置。
+
+    异常:
+        TeamToolError: 子目标与配置节点不符（可重试），或节点 Agent / 模型配置不可用。
     """
 
-    def prepare(
-            self,
-            configuration: AgentTeamConfiguration,
-            *,
-            goal: str,
-            node_goals: dict[str, AgentTeamNodeGoal],
-            workspace_root: str,
-            parent_task_id: int,
-            parent_run_id: int,
-            workspace_id: int,
-            parent_agent: AgentRuntimeConfig,
-    ) -> AgentTeamPreparationResult:
-        """一次性解析 Team 节点并生成展示预览、运行快照和指纹。
-
-        参数:
-            configuration: 已通过 Team 配置领域校验的配置对象。
-            goal: 本次 Team 执行目标，不能为空白。
-            node_goals: 按 ``node_id`` 提供且完整覆盖所有节点的子目标与展示摘要；只有完整子目标
-                作为对应节点的 user input。
-            workspace_root: 节点 Agent 和工具解析使用的 workspace 根路径。
-            parent_task_id: 主 Agent Task 标识，写入展示预览。
-            parent_run_id: 主 Agent Run 标识，写入展示预览。
-            workspace_id: workspace 标识，写入展示预览。
-            parent_agent: 节点缺少独立连接配置时使用的主 Agent 运行时配置。
-
-        返回:
-        同一次运行时解析产生的预览文档、节点运行快照和指纹。预览文档只供工具结果展示，
-        不由本服务持久化。
-
-        异常:
-            TeamToolError: 总目标、节点子目标或节点运行时依赖无效。
-    """
-
-        goal = goal.strip()
-        if not goal:
-            raise TeamToolError(message="Team goal must not be blank", retryable=True)
-        node_ids = {node.node_id for node in configuration.nodes}
-        node_goals = {
-            key: value.model_copy(
-                update={
-                    "goal": value.goal.strip(),
-                    "summary": value.summary.strip(),
-                }
-            )
-            for key, value in node_goals.items()
-        }
-        unknown_node_goals = set(node_goals) - node_ids
-        if unknown_node_goals:
-            raise TeamToolError(
-                message = "node_goals references unknown nodes: "
-                + ", ".join(sorted(unknown_node_goals)),
-                retryable=True
-            )
-        missing_node_goals = node_ids - set(node_goals)
-        if missing_node_goals:
-            raise TeamToolError(
-                message="node_goals must define every node: "
-                + ", ".join(sorted(missing_node_goals)),
-                retryable=True
-            )
-        # 节点与主 Task 同层（``child_depth`` 的 team 增量为 0），工具按这个深度固化。
-        node_depth = child_depth(get_task_service().get_task(parent_task_id), "team")
-        node_profiles: dict[str, AgentProfile] = {}
-        for node in configuration.nodes:
-            _, profile = resolve_node_profile(
-                configuration,
-                workspace_root,
-                node.node_id,
-            )
-            node_profiles[node.node_id] = profile
-        node_roles = {
-            node_id: profile.role for node_id, profile in node_profiles.items()
-        }
-
-        resolved_nodes: list[dict[str, Any]] = []
-        node_runtime_snapshots: dict[str, dict[str, Any]] = {}
-        for node in configuration.nodes:
-            profile = node_profiles[node.node_id]
-            allowed_tools = materialize_node_tools(profile, depth=node_depth)
-            node_model = resolve_node_model(profile, parent_agent)
-            structured_output = build_node_structured_output(configuration, node)
-            node_runtime_snapshots[node.node_id] = {
-                "agent_id": profile.agent_id,
-                "role": profile.role,
-                "node_goal": node_goals[node.node_id].goal,
-                "node_goal_summary": node_goals[node.node_id].summary,
-                "system_prompt": build_node_system_prompt(
-                    profile,
-                    configuration,
-                    node,
-                    goal,
-                    node_roles,
-                ),
-                "allowed_tools": allowed_tools,
-                "structured_output": structured_output.to_document(),
-                "model_config_id": node_model.model_config_id,
-                # 快照只冻结可持久化的请求偏好：连接与能力字段（尤其 ``api_key``）只在进程内
-                # 存在，不得随快照落库；节点执行时按 ``run.model_config_id`` 重新解析
-                # （``AgentRuntimeConfig.resolve``）。
-                "model_settings": node_model.preferences().to_dict(),
+    goal = goal.strip()
+    node_ids = {node.node_id for node in configuration.nodes}
+    node_goals = {
+        key: value.model_copy(
+            update={
+                "goal": value.goal.strip(),
+                "summary": value.summary.strip(),
             }
-            resolved_nodes.append(
-                {
-                    "node_id": node.node_id,
-                    "name": node.name,
-                    "agent_id": node.agent_id,
-                    "node_type": (
-                        "start" if node.node_id == configuration.start_node_id else "middle"
-                    ),
-                    "role": profile.role,
-                    "model_config_id": node_model.model_config_id,
-                    "model_name": node_model.model_name,
-                    # 与 node_runtime_snapshots 用同一份工具名清单：预览展示的节点工具必须就是
-                    # 确认后冻结执行的那一份，否则用户看到的与真正执行的不一致。
-                    "tools": list(allowed_tools),
-                    "max_steps": profile.max_steps,
-                    "statuses": [status.model_dump(mode="json") for status in node.statuses],
-                }
-            )
-
-        preview_fields = {
-            "team_id": configuration.team_id,
-            "name": configuration.name,
-            "goal": goal,
-            "node_goals": {
-                node_id: node_goal.model_dump(mode="json")
-                for node_id, node_goal in node_goals.items()
-            },
-            "start_node": configuration.start_node_id,
-            "nodes": resolved_nodes,
-            "edges": [
-                transition.model_dump(mode="json") for transition in configuration.transitions
-            ],
-            "parent_task_id": parent_task_id,
-            "parent_run_id": parent_run_id,
-            "workspace_id": workspace_id,
-            # 配置本身不含密钥和 system prompt，前端可以基于它编辑最终提交内容；后端确认
-            # 时仍会重新执行 AgentTeamConfiguration 和运行时资源校验。
-            "configuration": configuration.model_dump(mode="json"),
-        }
-        return AgentTeamPreparationResult(
-            preview_fields=preview_fields,
-            node_runtime_snapshots=node_runtime_snapshots,
         )
+        for key, value in node_goals.items()
+    }
+    unknown_node_goals = set(node_goals) - node_ids
+    if unknown_node_goals:
+        raise TeamToolError(
+            message="node_goals references unknown nodes: "
+            + ", ".join(sorted(unknown_node_goals)),
+            retryable=True
+        )
+    missing_node_goals = node_ids - set(node_goals)
+    if missing_node_goals:
+        raise TeamToolError(
+            message="node_goals must define every node: "
+            + ", ".join(sorted(missing_node_goals)),
+            retryable=True
+        )
+    # 节点与主 Task 同层（``child_depth`` 的 team 增量为 0），工具按这个深度固化。
+    node_depth = child_depth(get_task_service().get_task(parent_task_id), "team")
+    node_profiles = {
+        node.node_id: resolve_node_profile(workspace_root, node.agent_id)
+        for node in configuration.nodes
+    }
+    node_roles = {
+        node_id: profile.role for node_id, profile in node_profiles.items()
+    }
+
+    resolved_nodes: list[dict[str, Any]] = []
+    node_runtime_snapshots: dict[str, dict[str, Any]] = {}
+    for node in configuration.nodes:
+        profile = node_profiles[node.node_id]
+        allowed_tools = materialize_node_tools(profile, depth=node_depth)
+        node_model = resolve_node_model(profile, parent_agent)
+        structured_output = build_node_structured_output(configuration, node)
+        node_runtime_snapshots[node.node_id] = {
+            "agent_id": profile.agent_id,
+            "role": profile.role,
+            "node_goal": node_goals[node.node_id].goal,
+            "node_goal_summary": node_goals[node.node_id].summary,
+            "system_prompt": build_node_system_prompt(
+                profile,
+                configuration,
+                node,
+                goal,
+                node_roles,
+            ),
+            "allowed_tools": allowed_tools,
+            "structured_output": structured_output.to_document(),
+            "model_config_id": node_model.model_config_id,
+            # 快照只冻结可持久化的请求偏好：连接与能力字段（尤其 ``api_key``）只在进程内
+            # 存在，不得随快照落库；节点执行时按 ``run.model_config_id`` 重新解析
+            # （``AgentRuntimeConfig.resolve``）。
+            "model_settings": node_model.preferences().to_dict(),
+        }
+        resolved_nodes.append(
+            {
+                "node_id": node.node_id,
+                "name": node.name,
+                "agent_id": node.agent_id,
+                "node_type": (
+                    "start" if node.node_id == configuration.start_node_id else "middle"
+                ),
+                "role": profile.role,
+                "model_config_id": node_model.model_config_id,
+                "model_name": node_model.model_name,
+                # 与 node_runtime_snapshots 用同一份工具名清单：预览展示的节点工具必须就是
+                # 确认后冻结执行的那一份，否则用户看到的与真正执行的不一致。
+                "tools": list(allowed_tools),
+                "max_steps": profile.max_steps,
+                "statuses": [status.model_dump(mode="json") for status in node.statuses],
+            }
+        )
+
+    preview_fields = {
+        "team_id": configuration.team_id,
+        "name": configuration.name,
+        "goal": goal,
+        "node_goals": {
+            node_id: node_goal.model_dump(mode="json")
+            for node_id, node_goal in node_goals.items()
+        },
+        "start_node": configuration.start_node_id,
+        "nodes": resolved_nodes,
+        "edges": [
+            transition.model_dump(mode="json") for transition in configuration.transitions
+        ],
+        # 配置本身不含密钥和 system prompt，前端可以基于它编辑最终提交内容；后端确认
+        # 时仍会重新执行 AgentTeamConfiguration 和运行时资源校验。
+        "configuration": configuration.model_dump(mode="json"),
+    }
+    return AgentTeamPreparationResult(
+        preview_fields=preview_fields,
+        node_runtime_snapshots=node_runtime_snapshots,
+    )

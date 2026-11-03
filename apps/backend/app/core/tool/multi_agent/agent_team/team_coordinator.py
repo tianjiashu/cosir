@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+from collections.abc import Callable
 from typing import Any
 
 from app.config.logging.logger import log
@@ -35,12 +36,58 @@ from app.service.depends import (
 )
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
-from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 # 等节点落定期间检查 TeamRun 状态的间隔；与工具执行层的取消轮询同量级。
 _NODE_POLL_SECONDS = 0.2
 _ACTIVE_STATUSES = (AgentTeamRunStatus.RUNNING.value, AgentTeamRunStatus.PENDING.value)
+
+_FINAL_ROUND_REMINDER = (
+    "Team budget reminder: This is the Agent Team's final node execution ({remaining}/{total} "
+    "remaining, including the current node). Complete the highest-value work this node can "
+    "contribute. If the overall goal is met and this node has an allowed route that ends the "
+    "Team, choose that route. Otherwise, use the allowed route that best advances the goal, make "
+    "the final handoff, and clearly state any unfinished work. No execution budget will remain "
+    "after this run."
+)
+# 按顺序匹配：阈值在小额度下可能重合（都取到 1 轮之类），先命中的生效。
+_BUDGET_REMINDERS = (
+    (
+        0.1,
+        "Team budget reminder: The shared node-execution budget for the entire Agent Team is at "
+        "or below 10% ({remaining}/{total} remaining, including the current node). Focus on the "
+        "highest-priority outcome for the overall goal. Avoid expanding scope or repeating "
+        "cycles; if handing off, state the conclusions and remaining work clearly.",
+    ),
+    (
+        0.3,
+        "Team budget reminder: The shared node-execution budget for the entire Agent Team is at "
+        "or below 30% ({remaining}/{total} remaining, including the current node). Narrow the "
+        "scope and prioritize work essential to the overall goal. Avoid repeated exploration; for "
+        "handoffs, clearly state conclusions, next steps, and blockers.",
+    ),
+    (
+        0.5,
+        "Team budget reminder: At most half of the shared node-execution budget for the entire "
+        "Agent Team remains ({remaining}/{total}, including the current node). Prioritize the "
+        "critical path toward the overall goal, avoid redundant work and unnecessary cycles, and "
+        "preserve conclusions needed by downstream nodes when handing off.",
+    ),
+)
+
+
+def _budget_reminder(remaining_rounds: int, max_rounds: int) -> str | None:
+    """按 Team 共享的剩余节点执行预算（含当前这次）给出收敛提醒，未到阈值时为 None。
+
+    提醒只在剩余预算恰好到达 50%、30%、10% 阈值时发一次；离散额度取第一个不高于阈值的整数轮数。
+    最后一次执行机会单独说明，避免把小额度下的最后一轮误报为约一成。
+    """
+    if remaining_rounds == 1:
+        return _FINAL_ROUND_REMINDER.format(remaining=remaining_rounds, total=max_rounds)
+    for ratio, template in _BUDGET_REMINDERS:
+        if remaining_rounds == max(1, int(max_rounds * ratio)):
+            return template.format(remaining=remaining_rounds, total=max_rounds)
+    return None
 
 
 class AgentTeamCoordinator:
@@ -60,7 +107,6 @@ class AgentTeamCoordinator:
         self._task_service = get_task_service()
         self._tool_registry = get_tool_registry()
         self._ledger = get_conversation_run_ledger()
-        self._session_factory = main_session_factory()
         self._run_archive_service = AgentTeamRunArchiveService()
 
     def start(
@@ -301,8 +347,6 @@ class AgentTeamCoordinator:
         node_id = state.current_node_id
         node: TeamNodeDefinition = configuration.node(node_id)
         node_runtime: AgentTeamRunRuntime = state.node_runtime.get(node_id)
-        agent_id = node.agent_id
-        tool_schemas = self._resolve_node_tool_schemas(node_runtime.allowed_tools)
         node_execution: AgentTeamNodeExecution | None = state.node_execution_for_node(node_id)
         input_text = self._build_node_input(
             node_goal=node_runtime.node_goal,
@@ -323,7 +367,7 @@ class AgentTeamCoordinator:
                     "agent_team_node_id": node_id,
                     NODE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json"),
                 },
-                tool_schemas=tool_schemas,
+                tool_schemas=self._resolve_node_tool_schemas(node_runtime.allowed_tools),
                 derivation_depth=child_depth(main_task, "team"),
             )
             node_execution = state.create_execution_node(
@@ -334,7 +378,7 @@ class AgentTeamCoordinator:
         message = prepare_agent_message(
             input_text,
             source=MessageSource(task_id=row.parent_task_id, name=configuration.name),
-            agent_id=agent_id,
+            agent_id=node.agent_id,
             model_config_id=node_runtime.model_config_id,
             reasoning_effort=node_runtime.model_settings.get("reasoning_effort"),
         )
@@ -359,11 +403,11 @@ class AgentTeamCoordinator:
         ``failed``。
         新 Run 一出现即记入快照并落库，只为执行时间线定位。
 
-        本协调器是节点的唯一停止者：TeamRun 的取消入口（:meth:`cancel` 等）只迁移状态，不碰节点；
-        这里每 ``_NODE_POLL_SECONDS`` 检查一次 TeamRun，不再运行就停下节点 Task。TeamRun 处于
-        running 时 :meth:`start` 必然在执行，所以这条路径不会缺席；单一负责方也就没有「取消入口
-        找不到刚启动的节点」的竞态窗口。取消只在看到新 Run 之后发：Run 开出来之前节点 actor 没有
-        可停止的对象，发了即落空。
+        本协调器是节点的唯一停止者：TeamRun 的取消入口（:meth:`cancel_for_parent_task` 等）只迁移
+        状态，不碰节点；这里每 ``_NODE_POLL_SECONDS`` 检查一次 TeamRun，不再运行就停下节点
+        Task。TeamRun 处于 running 时 :meth:`start` 必然在执行，所以这条路径不会缺席；单一负责方
+        也就没有「取消入口找不到刚启动的节点」的竞态窗口。取消只在看到新 Run 之后发：Run 开出来
+        之前节点 actor 没有可停止的对象，发了即落空。
 
         为什么轮询停止状态而不订阅：本线程是 ``agent_team`` 工具占用的默认线程池线程，整个 Team
         期间都被占住（见 ``agent_team_run`` 的类说明）；改为订阅进程内停止信号也释放不了它，只省下
@@ -392,8 +436,7 @@ class AgentTeamCoordinator:
                     )
                 return node_run_id
             if node_run_id is not None and not cancel_sent and self._stopped(team_run_id):
-                node_actor = task_runtime_spaces.get_or_create(node_execution.task_id).actor
-                node_actor.request_cancel("parent")
+                actor.request_cancel("parent")
                 cancel_sent = True
 
     def _stopped(self, team_run_id: int) -> bool:
@@ -408,7 +451,10 @@ class AgentTeamCoordinator:
         if row.status == AgentTeamRunStatus.RUNNING.value and (
                 tool_call_cancellation_registry.is_cancelled(row.parent_task_id, row.tool_call_id)
         ):
-            row = self.cancel(team_run_id)
+            # 条件迁移落空说明已被其他路径落定，同样算停止，读当前状态记日志。
+            row = self._cancel_if_active(
+                team_run_id, AgentTeamRunEndReason.CANCELLED
+            ) or self._team_run_crud.get_by_id(team_run_id)
         status = row.status
         if status == AgentTeamRunStatus.RUNNING.value:
             return False
@@ -424,28 +470,19 @@ class AgentTeamCoordinator:
     def _resolve_node_tool_schemas(self, allowed_tools: list[str]) -> list[dict[str, object]]:
         """按节点快照声明的 ``allowed_tools`` 名字，从当前工具注册表解析冻结 schema。
 
-        节点运行快照只持久化工具名（``allowed_tools``），工具 schema 在节点启动时按名字
-        从进程级工具注册表实时解析并固化进 Task。这样快照不必携带易漂移的 schema 契约，
-        也保证节点工具集合与确认时一致（工具名冻结于快照）。
-
-        参数:
-            allowed_tools: 节点允许使用的工具名列表。
-
-        返回:
-            与运行期模型 schema 同源的 JSON 字典列表，可直接传给
-            ``TaskService.get_or_create_task`` 的 ``tool_schemas``。
+        节点运行快照只持久化工具名，schema 只在首次执行该节点、创建节点 Task 时解析并固化进
+        Task：快照不必携带易漂移的 schema 契约，再次访问节点沿用 Task 已固化的那份。
 
         异常:
-            ValueError: 某个工具名在当前注册表中不存在（可能已在确认后从 workspace 移除）。
+            ValueError: 某个工具名不在注册表中（准备阶段对注册表里没有的名字原样保留，在这里如实
+                报错，见 ``materialize_node_tools``）。
         """
-        registered = {tool.name: tool for tool in self._tool_registry.get_all_definitions()}
         schemas: list[dict[str, object]] = []
         for name in allowed_tools:
-            tool = registered.get(name)
+            tool = self._tool_registry.get_tool_definition(name)
             if tool is None:
                 raise ValueError(
-                    f"Team 节点声明的工具 '{name}' 不在当前工具注册表中，"
-                    f"无法解析其 schema（可能已在确认后从 workspace 移除）"
+                    f"Team 节点声明的工具 '{name}' 不在工具注册表中，无法解析其 schema"
                 )
             schemas.append(copy.deepcopy(tool.to_model_tool_definition()))
         return schemas
@@ -457,70 +494,15 @@ class AgentTeamCoordinator:
             max_rounds: int,
             node_input: str | None = None,
     ) -> str:
-        """组装节点输入，并按剩余执行预算递进提醒节点收敛工作。
+        """组装节点输入：子目标（确认边界保证非空）、上一节点交接，与按剩余预算的收敛提醒。"""
 
-        剩余轮次是整个 Team 共享的节点执行预算，并包含当前即将启动的节点执行。
-        提示只在剩余预算首次到达 50%、30%、10% 阈值时发送一次；离散额度取第一个不高于
-        阈值的整数轮数。最后一次执行机会单独说明，避免把小额度下的最后一轮误报为约一成。
-        """
-
-        sections = []
-        if node_goal:
-            sections.append(f"Current node subgoal:\n{node_goal}")
+        sections = [f"Current node subgoal:\n{node_goal}"]
         if node_input:
             sections.append("Previous node output:\n" + node_input)
-        ten_percent_round = max(1, int(max_rounds * 0.1))
-        thirty_percent_round = max(1, int(max_rounds * 0.3))
-        half_round = max(1, int(max_rounds * 0.5))
-        if remaining_rounds == 1:
-            sections.append(
-                f"Team budget reminder: This is the Agent Team's final node execution ({remaining_rounds}/{max_rounds} remaining, "
-                "including the current node). Complete the highest-value work this node can contribute. If the overall goal "
-                "is met and this node has an allowed route that ends the Team, choose that route. Otherwise, use the allowed "
-                "route that best advances the goal, make the final handoff, and clearly state any unfinished work. No execution "
-                "budget will remain after this run."
-            )
-        elif remaining_rounds == ten_percent_round:
-            sections.append(
-                f"Team budget reminder: The shared node-execution budget for the entire Agent Team is at or below 10% "
-                f"({remaining_rounds}/{max_rounds} remaining, including the current node). Focus on the highest-priority "
-                "outcome for the overall goal. Avoid expanding scope or repeating cycles; if handing off, state the conclusions "
-                "and remaining work clearly."
-            )
-        elif remaining_rounds == thirty_percent_round:
-            sections.append(
-                f"Team budget reminder: The shared node-execution budget for the entire Agent Team is at or below 30% "
-                f"({remaining_rounds}/{max_rounds} remaining, including the current node). Narrow the scope and prioritize "
-                "work essential to the overall goal. Avoid repeated exploration; for handoffs, clearly state conclusions, "
-                "next steps, and blockers."
-            )
-        elif remaining_rounds == half_round:
-            sections.append(
-                f"Team budget reminder: At most half of the shared node-execution budget for the entire Agent Team remains "
-                f"({remaining_rounds}/{max_rounds}, including the current node). Prioritize the critical path toward the "
-                "overall goal, avoid redundant work and unnecessary cycles, and preserve conclusions needed by downstream "
-                "nodes when handing off."
-            )
-        return "\n\n".join(sections) or "Advance the Team's overall goal according to the current node's responsibilities."
-
-    def cancel(
-            self,
-            team_run_id: int,
-            end_reason: AgentTeamRunEndReason = AgentTeamRunEndReason.CANCELLED,
-    ) -> AgentTeamRunModel:
-        """把待确认或运行中的 TeamRun 落定 cancelled；已在终态时原样返回当前快照。
-
-        只迁移状态：运行中的节点由 :meth:`start` 的等待循环检出后停下。
-
-        ``end_reason`` 区分用户取消这次工具调用与随主 Run 停止（``PARENT_CANCELLED``），写进 TeamRun
-        与运行档案供诊断。
-
-        异常:
-            KeyError: TeamRun 不存在。
-        """
-
-        cancelled = self._cancel_if_active(team_run_id, end_reason)
-        return cancelled if cancelled is not None else self._team_run_crud.get_by_id(team_run_id)
+        reminder = _budget_reminder(remaining_rounds, max_rounds)
+        if reminder is not None:
+            sections.append(reminder)
+        return "\n\n".join(sections)
 
     def _cancel_if_active(
             self,
@@ -576,20 +558,14 @@ class AgentTeamCoordinator:
 
         if not task_ids:
             return 0
-        cancelled = 0
-        for row in (
-                *self._team_run_crud.list_pending_confirmations(),
-                *self._team_run_crud.list_active(),
-        ):
-            node_task_ids = {
-                task_id
-                for task_id, _ in AgentTeamRunState.model_validate(row.state_json).node_references()
-            }
-            if row.parent_task_id not in task_ids and not node_task_ids & task_ids:
-                continue
-            if self._cancel_if_active(row.id, AgentTeamRunEndReason.CANCELLED) is not None:
-                cancelled += 1
-        return cancelled
+
+        def involved(row: AgentTeamRunModel) -> bool:
+            if row.parent_task_id in task_ids:
+                return True
+            state = AgentTeamRunState.model_validate(row.state_json)
+            return any(task_id in task_ids for task_id, _ in state.node_references())
+
+        return self._cancel_where(involved, AgentTeamRunEndReason.CANCELLED)
 
     def cancel_for_parent_task(self, parent_task_id: int) -> int:
         """取消主 Agent Task 的全部活动 Team：待确认方案与运行中的 Team。
@@ -612,14 +588,24 @@ class AgentTeamCoordinator:
             取消入口记录诊断日志，但不回滚主 Run 已发出的取消信号。
         """
 
+        return self._cancel_where(
+            lambda row: row.parent_task_id == parent_task_id,
+            AgentTeamRunEndReason.PARENT_CANCELLED,
+        )
+
+    def _cancel_where(
+            self,
+            matches: Callable[[AgentTeamRunModel], bool],
+            end_reason: AgentTeamRunEndReason,
+    ) -> int:
+        """取消命中 ``matches`` 的待确认与运行中 TeamRun，返回实际收敛为 cancelled 的数量。"""
+
         cancelled = 0
         for row in (
                 *self._team_run_crud.list_pending_confirmations(),
                 *self._team_run_crud.list_active(),
         ):
-            if row.parent_task_id != parent_task_id:
-                continue
-            if self._cancel_if_active(row.id, AgentTeamRunEndReason.PARENT_CANCELLED) is not None:
+            if matches(row) and self._cancel_if_active(row.id, end_reason) is not None:
                 cancelled += 1
         return cancelled
 
@@ -634,19 +620,10 @@ class AgentTeamCoordinator:
 
         node_task_ids: list[int] = []
         for row in self._team_run_crud.list_active():
-            previous_status = row.status
-            updated = self._team_run_crud.update_status_if_in(
-                row.id,
-                AgentTeamRunStatus.CANCELLED.value,
-                (previous_status,),
-                end_reason=AgentTeamRunEndReason.RUNTIME_RESTARTED.value,
-                ended=True,
-            )
-            if updated is None:
+            if self._cancel_if_active(row.id, AgentTeamRunEndReason.RUNTIME_RESTARTED) is None:
                 continue
             state = AgentTeamRunState.model_validate(row.state_json)
             node_task_ids.extend(execution.task_id for execution in state.node_executions.values())
-            self._run_archive_service.write_terminal_archive(updated.id)
         return node_task_ids
 
 

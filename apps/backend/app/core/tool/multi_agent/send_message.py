@@ -21,9 +21,9 @@ from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileConfigError, AgentProfileType
 from app.core.tool.background.job import BackgroundConclusion
 from app.core.tool.background.registry import background_registry
-from app.core.tool.mult_agent.args.send_message_args import SendMessageArgs
-from app.core.tool.mult_agent.child_agent.child_run_job import run_child
-from app.core.tool.mult_agent.task_status import MessageDirection, TaskStatusTool
+from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
+from app.core.tool.multi_agent.child_agent.child_run_job import run_child
+from app.core.tool.multi_agent.task_status import MessageDirection, TaskStatusTool
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (

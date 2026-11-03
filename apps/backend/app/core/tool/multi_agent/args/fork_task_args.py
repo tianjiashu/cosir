@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.core.tool.mult_agent.args.delegate_task_args import MESSAGE_MAX
+from app.core.tool.multi_agent.args.delegate_task_args import MESSAGE_MAX
 
 TITLE_MAX = 20
 

@@ -26,14 +26,6 @@ _TERMINAL_STATUSES = {
     AgentTeamRunStatus.FAILED.value,
     AgentTeamRunStatus.CANCELLED.value,
 }
-_NODE_FAILURE_REASONS = {
-    AgentTeamRunEndReason.NODE_RUN_FAILED.value,
-    AgentTeamRunEndReason.NODE_RUN_CANCELLED.value,
-    AgentTeamRunEndReason.NODE_OUTPUT_INVALID.value,
-    AgentTeamRunEndReason.TRANSITION_NOT_FOUND.value,
-    AgentTeamRunEndReason.NEXT_NODE_START_FAILED.value,
-    AgentTeamRunEndReason.IMPLICIT_COMPLETION_MISSING.value,
-}
 
 
 class AgentTeamRunArchiveService:
@@ -64,10 +56,7 @@ class AgentTeamRunArchiveService:
             row = self._team_run_crud.get_by_id(team_run_id)
             if row.status not in _TERMINAL_STATUSES or row.started_at is None:
                 return None
-            workspace_root = Path(
-                self._workspace_service.get_workspace(row.workspace_id).root_path
-            ).resolve()
-            target = workspace_agent_team_run_dir(workspace_root) / f"{row.id}.json"
+            workspace_root, target = self._archive_location(row)
             document = self._build_document(row)
             content = json.dumps(
                 document,
@@ -106,18 +95,23 @@ class AgentTeamRunArchiveService:
             return None
 
     def existing_archive_path(self, team_run_id: int) -> str | None:
-        """返回已生成档案的 workspace 相对路径；未启动或写入失败时返回 None。"""
+        """返回已生成档案的 workspace 相对路径；没写出档案（未启动、未到终态或写入失败）时为 None。
 
-        row = self._team_run_crud.get_by_id(team_run_id)
-        if row.started_at is None or row.status not in _TERMINAL_STATUSES:
-            return None
-        workspace_root = Path(
-            self._workspace_service.get_workspace(row.workspace_id).root_path
-        ).resolve()
-        target = workspace_agent_team_run_dir(workspace_root) / f"{row.id}.json"
+        只看文件在不在：未启动或未到终态时 :meth:`write_terminal_archive` 不会写出档案。
+        """
+
+        workspace_root, target = self._archive_location(self._team_run_crud.get_by_id(team_run_id))
         if not target.is_file():
             return None
         return target.relative_to(workspace_root).as_posix()
+
+    def _archive_location(self, row: AgentTeamRunModel) -> tuple[Path, Path]:
+        """TeamRun 所在工作区的根目录（已解析）与它的档案路径。"""
+
+        workspace_root = Path(
+            self._workspace_service.get_workspace(row.workspace_id).root_path
+        ).resolve()
+        return workspace_root, workspace_agent_team_run_dir(workspace_root) / f"{row.id}.json"
 
     def _build_document(self, row: AgentTeamRunModel) -> dict[str, Any]:
         """从 TeamRun、节点 Run 与冻结配置构造不含开发者标识的 JSON 投影。"""
@@ -151,12 +145,7 @@ class AgentTeamRunArchiveService:
         visits.sort(key=lambda item: (item[0].created_at, item[0].id))
 
         history: list[dict[str, Any]] = []
-        failure_node_id = (
-            state.current_node_id
-            if row.status == AgentTeamRunStatus.FAILED.value
-            and row.end_reason in _NODE_FAILURE_REASONS
-            else None
-        )
+        failure_node_id = state.failed_node_id(row.status, row.end_reason)
         for run, node_id, visit_index in visits:
             node_status, output = self._parse_node_output(run.final_output)
             transitions = transitions_by_node[node_id]
@@ -246,7 +235,6 @@ class AgentTeamRunArchiveService:
         if reason in {
             AgentTeamRunEndReason.NODE_RUN_FAILED.value,
             AgentTeamRunEndReason.NEXT_NODE_START_FAILED.value,
-            AgentTeamRunEndReason.IMPLICIT_COMPLETION_MISSING.value,
         } and failure_node_id is not None:
             execution = state.node_executions.get(failure_node_id)
             if execution is not None and execution.conversation_run_ids:
@@ -259,10 +247,8 @@ class AgentTeamRunArchiveService:
             AgentTeamRunEndReason.NODE_RUN_CANCELLED.value: "该节点的执行被取消，Team 因此未能完成。",
             AgentTeamRunEndReason.NODE_OUTPUT_INVALID.value: "该节点没有按要求返回有效的 decision 和 output。",
             AgentTeamRunEndReason.TRANSITION_NOT_FOUND.value: "该节点返回的 decision 没有对应的后续节点。",
-            AgentTeamRunEndReason.IMPLICIT_COMPLETION_MISSING.value: "节点未明确结束 Team，也没有可继续的后续路径。",
             AgentTeamRunEndReason.MAX_RUNS_EXCEEDED.value: "已达到 Team 最大节点执行次数，目标尚未完成。",
             AgentTeamRunEndReason.RUNTIME_RESTARTED.value: "后端重启中断了 Team 执行。",
-            AgentTeamRunEndReason.RUNTIME_UNAVAILABLE.value: "Team 执行环境不可用。",
             AgentTeamRunEndReason.TEAM_START_FAILED.value: "Team 启动阶段失败，尚未能正常执行节点。",
         }
         if reason == AgentTeamRunEndReason.NEXT_NODE_START_FAILED.value:

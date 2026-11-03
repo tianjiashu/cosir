@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any, ClassVar, Literal
 
 from app.config.logging.logger import log
-from app.core.tool.mult_agent.agent_team.team_tool_error import TeamToolError
-from app.core.tool.mult_agent.args.propose_agent_team_configuration_args import (
+from app.core.tool.multi_agent.agent_team.team_tool_error import TeamToolError
+from app.core.tool.multi_agent.args.propose_agent_team_configuration_args import (
     ProposeAgentTeamConfigurationArgs,
 )
 from app.core.tool.results.tool_error import tool_error
@@ -44,7 +44,7 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
         """校验配置候选并返回前端可审阅的展示数据。"""
 
         try:
-            from app.core.tool.mult_agent.agent_team.agent_team_preparation_service import (
+            from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
                 resolve_node_profile,
             )
 
@@ -52,11 +52,7 @@ class ProposeAgentTeamConfigurationTool(HandlerBase):
             # 保存时，保存 API 会用用户实际选择的 scope 重新校验领域配置。
             proposal: ProposeAgentTeamConfigurationArgs = self.args_model.model_validate(kwargs)
             for node in proposal.nodes:
-                resolve_node_profile(
-                    proposal,
-                    str(execution_context.workspace_root),
-                    node.node_id,
-                )
+                resolve_node_profile(str(execution_context.workspace_root), node.agent_id)
             return tool_success(
                 tool_name=self.name,
                 content="Agent Team configuration draft is ready for user review.",

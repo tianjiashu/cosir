@@ -2,7 +2,7 @@
 
 from typing import Any, ClassVar
 
-from app.core.tool.mult_agent.args.propose_agent_configuration_args import (
+from app.core.tool.multi_agent.args.propose_agent_configuration_args import (
     ProposeAgentConfigurationArgs,
 )
 from app.core.tool.results.tool_error import tool_error

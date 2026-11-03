@@ -16,9 +16,9 @@ from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileType,
 )
-from app.core.tool.derivation import child_depth
-from app.core.tool.mult_agent.args.delegate_task_args import DelegateTaskArgs
-from app.core.tool.mult_agent.child_agent.child_run_job import run_child
+from app.core.tool.multi_agent.derivation import child_depth
+from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
+from app.core.tool.multi_agent.child_agent.child_run_job import run_child
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -28,7 +28,7 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.task_tool_scope import tools_for_task
+from app.core.tool.multi_agent.task_tool_scope import tools_for_task
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry

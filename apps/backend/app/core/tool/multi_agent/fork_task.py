@@ -14,9 +14,9 @@ import json
 from typing import Any, ClassVar, cast
 
 from app.config.logging.logger import log
-from app.core.tool.derivation import child_depth
-from app.core.tool.mult_agent.args.fork_task_args import ForkTaskArgs
-from app.core.tool.mult_agent.child_agent.child_run_job import run_child
+from app.core.tool.multi_agent.derivation import child_depth
+from app.core.tool.multi_agent.args.fork_task_args import ForkTaskArgs
+from app.core.tool.multi_agent.child_agent.child_run_job import run_child
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success

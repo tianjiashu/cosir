@@ -3,7 +3,7 @@
 import json
 from typing import Any, ClassVar, Literal
 
-from app.core.tool.mult_agent.args.task_status_args import TaskStatusArgs
+from app.core.tool.multi_agent.args.task_status_args import TaskStatusArgs
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (

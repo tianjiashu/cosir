@@ -10,16 +10,16 @@ from typing import Any, cast
 
 from app.config.logging.logger import log
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
-from app.core.tool.mult_agent.agent_team.agent_team_preparation_service import (
-    AgentTeamPreparationService,
+from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
+    prepare_team_run,
 )
-from app.core.tool.mult_agent.agent_team.agent_team_result import team_result_payload
-from app.core.tool.mult_agent.agent_team.agent_team_run_approval import AgentTeamRunApproval
-from app.core.tool.mult_agent.agent_team.coordinator import get_agent_team_coordinator
-from app.core.tool.mult_agent.agent_team.team_tool_error import TeamToolError
-from app.core.tool.mult_agent.args.agent_team_approve_input import AgentTeamApproveInput
-from app.core.tool.mult_agent.args.agent_team_args import AgentTeamArgs
-from app.core.tool.mult_agent.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.multi_agent.agent_team.agent_team_result import team_result_payload
+from app.core.tool.multi_agent.agent_team.agent_team_run_approval import AgentTeamRunApproval
+from app.core.tool.multi_agent.agent_team.team_coordinator import get_agent_team_coordinator
+from app.core.tool.multi_agent.agent_team.team_tool_error import TeamToolError
+from app.core.tool.multi_agent.args.agent_team_approve_input import AgentTeamApproveInput
+from app.core.tool.multi_agent.args.agent_team_args import AgentTeamArgs
+from app.core.tool.multi_agent.args.node_goal import AgentTeamNodeGoal
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
@@ -85,7 +85,6 @@ class AgentTeamRunTool(HandlerBase):
 
     def __init__(self):
         self.agent_team_run_approval = AgentTeamRunApproval()
-        self.agent_team_preparation_service = AgentTeamPreparationService()
         self.team_register = get_agent_team_registry()
 
     def execute(
@@ -120,33 +119,13 @@ class AgentTeamRunTool(HandlerBase):
     def _preview_display_data(
         preview_fields: Mapping[str, Any], *, team_run_id: int
     ) -> dict[str, Any]:
-        """从准备结果中投影供用户确认的 Team 预览数据。
-
-        ``preview_fields`` 是 preparation service 生成的预览输入，不直接作为 Transport payload；
-        本方法集中决定可进入 UI 的字段（目标、节点、边、配置与待确认运行标识）。
+        """审批卡展示数据：准备阶段的预览内容加上 ``kind`` 与待确认 TeamRun 定位。
 
         「这张卡需要用户确认」不是展示事实：前端按 ``team_run_id`` 读取 TeamRun 状态，``pending``
-        即待确认。本方法只负责卡片本身。
+        即待确认。
         """
 
-        fields = (
-            "team_id",
-            "name",
-            "goal",
-            "node_goals",
-            "start_node",
-            "nodes",
-            "edges",
-            "parent_task_id",
-            "parent_run_id",
-            "workspace_id",
-            "configuration",
-        )
-        return {
-            "kind": "agent-team-approval",
-            **{key: preview_fields[key] for key in fields},
-            "team_run_id": team_run_id,
-        }
+        return {"kind": "agent-team-approval", **preview_fields, "team_run_id": team_run_id}
 
     def _prepare_pending_run(
             self,
@@ -185,14 +164,12 @@ class AgentTeamRunTool(HandlerBase):
                     f"The Team configuration does not exist: {team_id}; "
                     "please confirm whether this Team has been created",
                 )
-            preparation = self.agent_team_preparation_service.prepare(
+            preparation = prepare_team_run(
                 configuration,
                 goal=goal,
                 node_goals=node_goals,
                 workspace_root=str(execution_context.workspace_root),
                 parent_task_id=execution_context.task_id,
-                parent_run_id=execution_context.run_id,
-                workspace_id=execution_context.workspace_id,
                 parent_agent=parent_agent,
             )
             pending_run = self.agent_team_run_approval.create_pending_confirmation(
