@@ -2,10 +2,20 @@ import type { Rectangle } from "electron";
 
 import { abortable } from "./abortable";
 
-/** Agent 要求的设备模拟：视口尺寸（CSS 像素）、是否按手机布局、深浅色（null 为跟随应用外观）。 */
-export type Emulation = { width: number; height: number; mobile: boolean; colorScheme: "light" | "dark" | null };
+/** 视口：跟随面板（`follow`，默认），或 Agent 固定的尺寸（CSS 像素，可按手机布局）。 */
+export type ViewportRequest = "follow" | { width: number; height: number; mobile: boolean };
 
-export const DEFAULT_EMULATION: Emulation = { width: 1280, height: 800, mobile: false, colorScheme: null };
+/** Agent 的一次设置：只改给出的部分。深浅色 null 为跟随应用外观。 */
+export type EmulationRequest = { viewport?: ViewportRequest; colorScheme?: "light" | "dark" | null };
+
+/** 页面上生效的模拟（页面结果里报告它）；`follows` 为真时视口跟随面板。 */
+export type Emulation = { width: number; height: number; mobile: boolean; colorScheme: "light" | "dark" | null; follows: boolean };
+
+/** 跟随面板但还没挂上过面板时的视口（Agent 在后台先开的标签）。 */
+export const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
+
+/** 面板尺寸停止变化多久后视口才跟上：拖动面板边缘时不随每一帧重新排版。 */
+export const FOLLOW_SETTLE_MS = 200;
 
 /**
  * 页面上已生效的设置，按负责它的 CDP 命令分段：视口与缩放（`setDeviceMetricsOverride`）、触摸支持
@@ -18,9 +28,13 @@ export type Applied = { width: number; height: number; mobile: boolean; scale: n
 type Send = (method: string, params: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<unknown>;
 
 /**
- * 一个标签的设备模拟与显示缩放，经 CDP 设置。视口由 Agent 决定，与视图摆在哪、多大无关；视图挂到面板上时只按
- * 比例缩放显示（`scale`）。深浅色实测压过应用的原生外观设置、导航后保持；mobile 一并开触摸支持
- * （`ontouchstart`、`maxTouchPoints`，不少站点据此切换交互），合成的鼠标事件不受影响。
+ * 一个标签的设备模拟与显示缩放，经 CDP 设置。视口有两种来源（`ViewportRequest`）：
+ * - **跟随面板**（默认）：挂在面板上时视口就是占位矩形的大小、缩放 1，网页按真实大小铺满面板——用户在面板里看、
+ *   接手操作（交接）时看得清点得准。稳定性靠两条：面板尺寸停止变化 `FOLLOW_SETTLE_MS` 后才跟上（拖动边缘时不逐帧
+ *   重新排版，期间按旧视口等比显示）；从面板摘下时保持摘下前的大小（面板关掉、切到别的标签，Agent 手上的页面不变）。
+ * - **Agent 固定**：如检查手机布局。视口与视图摆在哪、多大无关，挂到面板上时只按比例缩放显示（`scale`）。
+ * 深浅色实测压过应用的原生外观设置、导航后保持；mobile 一并开触摸支持（`ontouchstart`、`maxTouchPoints`，不少站点
+ * 据此切换交互），合成的鼠标事件不受影响。
  *
  * 等比摆放只在这里算：占位矩形 × 期望视口 → 要设的缩放，占位矩形 × 已生效视口 → 视图 bounds（`viewBounds`）。
  * 两者用同一个占位矩形，改视口时第一轮就设对缩放，不会先按旧摆放算一次、摆放跟上后再补一轮。
@@ -32,7 +46,11 @@ type Send = (method: string, params: Record<string, unknown>, options?: { signal
  * 答复（`resync`）再追。
  */
 export class TabEmulation {
-  private emulation: Emulation = DEFAULT_EMULATION;
+  private viewport: ViewportRequest = "follow";
+  private colorScheme: "light" | "dark" | null = null;
+  /** 跟随面板时的视口：面板尺寸停稳后才更新，摘下时保持（见类说明）。 */
+  private followed = DEFAULT_VIEWPORT;
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * 挂在面板上时的占位矩形（窗口坐标），只是摆放与缩放的参数；没挂上为 null。「挂没挂上」的事实归宿主（`TabEvents.isAttached`）：
    * 关闭标签时宿主只摘视图、不清它（不再对正在断开的调试器发模拟命令）。
@@ -52,10 +70,12 @@ export class TabEmulation {
     private readonly onMetricsApplied: (applied: Applied) => void,
   ) {}
 
-  /** 页面上当前生效的模拟（页面结果里报告的就是它）；初始化完成前是默认值。 */
+  /** 页面上当前生效的模拟（页面结果里报告的就是它）；初始化完成前是期望值。 */
   get current(): Emulation {
+    const follows = this.viewport === "follow";
     const applied = this.applied;
-    return applied ? { width: applied.width, height: applied.height, mobile: applied.mobile, colorScheme: applied.colorScheme } : DEFAULT_EMULATION;
+    if (!applied) return { ...this.size(this.viewport), colorScheme: this.colorScheme, follows };
+    return { width: applied.width, height: applied.height, mobile: applied.mobile, colorScheme: applied.colorScheme, follows };
   }
 
   /**
@@ -84,13 +104,19 @@ export class TabEmulation {
   }
 
   /**
-   * Agent 改模拟：等到页面上生效再返回（之后的加载按新视口布局）。没设上或调用被取消时，期望值对齐到页面上实际
-   * 生效的那份（可能部分命令已生效）、抛出原因——期望里不留失败的要求，免得之后哪次摆放或弹窗答复把它悄悄补设、
-   * 或把已生效的部分悄悄撤回。取消只结束本次等待：追赶是摆放与设置共用的一轮，不随某个调用方取消而停下（CDP
-   * 命令自带时限）；取消时还在途的命令事后生效，追赶会按对齐后的期望把它撤回（被取消的要求不生效）。
+   * Agent 改模拟：等到页面上生效再返回（之后的加载按新视口布局）。改回跟随面板时立即按当前占位矩形，不等停稳。
+   * 没设上或调用被取消时，期望值对齐到页面上实际生效的那份（可能部分命令已生效）、抛出原因——期望里不留失败的
+   * 要求，免得之后哪次摆放或弹窗答复把它悄悄补设、或把已生效的部分悄悄撤回。取消只结束本次等待：追赶是摆放与设置
+   * 共用的一轮，不随某个调用方取消而停下（CDP 命令自带时限）；取消时还在途的命令事后生效，追赶会按对齐后的期望把
+   * 它撤回（被取消的要求不生效）。
    */
-  async set(emulation: Emulation, signal: AbortSignal): Promise<void> {
-    this.emulation = emulation;
+  async set(request: EmulationRequest, signal: AbortSignal): Promise<void> {
+    const previous = this.viewport;
+    if (request.viewport !== undefined) {
+      this.viewport = request.viewport;
+      if (request.viewport === "follow" && this.box) this.settle(this.box);
+    }
+    if (request.colorScheme !== undefined) this.colorScheme = request.colorScheme;
     this.stalled = false;
     try {
       while (this.pending()) {
@@ -98,20 +124,34 @@ export class TabEmulation {
         if (this.stalled) throw this.failure;
       }
     } catch (error) {
-      this.emulation = this.current;
+      this.alignToApplied(previous);
       throw error;
     }
   }
 
-  /** 视图挂到面板上的占位矩形 `box`（窗口坐标）。 */
+  /** 视图挂到面板上的占位矩形 `box`（窗口坐标）。跟随面板时视口等尺寸停稳再跟上（初始化前直接取它）。 */
   show(box: Rectangle): void {
     this.box = box;
+    if (this.viewport === "follow") {
+      this.clearSettle();
+      if (!this.applied) this.followed = { width: box.width, height: box.height };
+      else if (box.width !== this.followed.width || box.height !== this.followed.height) {
+        this.settleTimer = setTimeout(() => this.settle(box), FOLLOW_SETTLE_MS);
+      }
+    }
     this.resync();
   }
 
+  /** 从面板摘下：视口保持现在的大小（还没停稳的面板尺寸不再跟上）。 */
   hide(): void {
     this.box = null;
+    this.clearSettle();
     this.resync();
+  }
+
+  /** 标签关闭：不再跟上面板尺寸（停稳计时器不能在会话断开后再发命令）。 */
+  dispose(): void {
+    this.clearSettle();
   }
 
   /** 期望与已生效不一致时补设（弹窗答复后调用：弹窗打开期间的设置会被闸住）。 */
@@ -127,8 +167,41 @@ export class TabEmulation {
   }
 
   private desired(): Applied {
-    const { width, height, mobile, colorScheme } = this.emulation;
-    return { width, height, mobile, colorScheme, touch: mobile, scale: this.box ? fitScale(this.box, this.emulation) : 1 };
+    const size = this.size(this.viewport);
+    return { ...size, colorScheme: this.colorScheme, touch: size.mobile, scale: this.box ? fitScale(this.box, size) : 1 };
+  }
+
+  private size(viewport: ViewportRequest): { width: number; height: number; mobile: boolean } {
+    return viewport === "follow" ? { ...this.followed, mobile: false } : viewport;
+  }
+
+  /** 面板尺寸停稳：跟随面板的视口跟上它。 */
+  private settle(box: Rectangle): void {
+    this.clearSettle();
+    this.followed = { width: box.width, height: box.height };
+    this.resync();
+  }
+
+  private clearSettle(): void {
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    this.settleTimer = null;
+  }
+
+  /**
+   * 设置失败后让期望与页面上已生效的一致：视口取新要求、旧要求里与已生效尺寸相符的那个，都不符（部分生效）就固定在
+   * 已生效的尺寸；深浅色取已生效的。这样不会留下待补设的要求，也不会撤回已生效的部分。
+   */
+  private alignToApplied(previous: ViewportRequest): void {
+    const applied = this.applied;
+    if (!applied) return;
+    const matches = (viewport: ViewportRequest) => {
+      const size = this.size(viewport);
+      return size.width === applied.width && size.height === applied.height && size.mobile === applied.mobile;
+    };
+    if (!matches(this.viewport)) {
+      this.viewport = matches(previous) ? previous : { width: applied.width, height: applied.height, mobile: applied.mobile };
+    }
+    this.colorScheme = applied.colorScheme;
   }
 
   private pending(): boolean {

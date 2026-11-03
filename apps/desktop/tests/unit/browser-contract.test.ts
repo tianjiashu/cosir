@@ -16,12 +16,12 @@ import type { ActOutcome, EvaluateResult, LogsResult, PageHead, PageResult } fro
 const head = (status: number | null, emulation: PageHead["emulation"]): PageHead => ({
   tabId: "t3", url: "http://127.0.0.1:5173/login", title: "Sign in", loading: false, status, emulation,
 });
-const defaultEmulation = { width: 1280, height: 800, mobile: false, colorScheme: null };
+const defaultEmulation = { width: 1280, height: 800, mobile: false, colorScheme: null, follows: true };
 
 describe("wire samples", () => {
   it("page results", () => {
     const page: PageResult = {
-      ...head(404, { width: 390, height: 844, mobile: true, colorScheme: "dark" }),
+      ...head(404, { width: 390, height: 844, mobile: true, colorScheme: "dark", follows: false }),
       snapshot: "- heading \"Sign in\" [level=1]\n- button \"Go\" [ref=e2]",
       frames: 1,
       notes: ["the page tried to open a file chooser; file uploads are not supported, so it was blocked"],

@@ -14,7 +14,7 @@ use crate::lifecycle::LifecycleArbiter;
 use crate::protocol::{
     encode_input, read_control_frame, ControlFrame, KeyName, WorkerEvent, MAX_OUTPUT_CHUNK_BYTES,
 };
-use crate::pty::{PtyRuntime, TerminalControlResult};
+use crate::pty::{PtyRuntime, TerminalControlResult, WriteRejected};
 use crate::shell_integration::{ShellLaunch, ShellParser};
 use crate::terminal_screen::TerminalScreen;
 
@@ -107,13 +107,23 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
                             continue;
                         }
                     };
-                    if runtime.write(&data).is_err() {
-                        let _ = output.send(&WorkerEvent::Error {
-                            code: "PTY_WRITE_FAILED",
-                            message: None,
-                        });
-                        terminate_and_exit(&runtime, &output, &mut lifecycle, None);
-                        return Ok(());
+                    match runtime.write(&data) {
+                        Ok(()) => {}
+                        // 前台程序迟迟不读输入、写入队列已满：只拒绝这一次，控制循环照常响应。
+                        Err(WriteRejected::Full) => {
+                            let _ = output.send(&WorkerEvent::Error {
+                                code: "input_backpressure",
+                                message: None,
+                            });
+                        }
+                        Err(WriteRejected::Closed) => {
+                            let _ = output.send(&WorkerEvent::Error {
+                                code: "PTY_WRITE_FAILED",
+                                message: None,
+                            });
+                            terminate_and_exit(&runtime, &output, &mut lifecycle, None);
+                            return Ok(());
+                        }
                     }
                 }
                 ControlFrame::Resize { rows, cols } => {

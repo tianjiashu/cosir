@@ -9,7 +9,8 @@
       "width": 390,
       "height": 844,
       "mobile": true,
-      "color_scheme": "dark"
+      "color_scheme": "dark",
+      "follows_panel": false
     },
     "snapshot": "- heading \"Sign in\" [level=1]\n- button \"Go\" [ref=e2]",
     "frames": 1,
@@ -36,7 +37,8 @@
       "width": 1280,
       "height": 800,
       "mobile": false,
-      "color_scheme": null
+      "color_scheme": null,
+      "follows_panel": true
     },
     "snapshot": "",
     "frames": 0,
@@ -74,7 +76,8 @@
       "width": 1280,
       "height": 800,
       "mobile": false,
-      "color_scheme": null
+      "color_scheme": null,
+      "follows_panel": true
     },
     "kind": "console",
     "entries": [
@@ -108,7 +111,8 @@
       "width": 1280,
       "height": 800,
       "mobile": false,
-      "color_scheme": null
+      "color_scheme": null,
+      "follows_panel": true
     },
     "kind": "network",
     "entries": [
@@ -155,7 +159,8 @@
       "width": 1280,
       "height": 800,
       "mobile": false,
-      "color_scheme": null
+      "color_scheme": null,
+      "follows_panel": true
     },
     "value": "{\"user\":null,\"items\":3}",
     "truncated": false,
@@ -172,7 +177,8 @@
       "width": 1280,
       "height": 800,
       "mobile": false,
-      "color_scheme": null
+      "color_scheme": null,
+      "follows_panel": true
     },
     "value": null,
     "truncated": false,
@@ -189,7 +195,8 @@
       "width": 1280,
       "height": 800,
       "mobile": false,
-      "color_scheme": null
+      "color_scheme": null,
+      "follows_panel": true
     },
     "snapshot": "",
     "frames": 0,
@@ -217,7 +224,8 @@
       "width": 1280,
       "height": 800,
       "mobile": false,
-      "color_scheme": null
+      "color_scheme": null,
+      "follows_panel": true
     },
     "value": "undefined",
     "truncated": false,
@@ -234,7 +242,8 @@
       "width": 1280,
       "height": 800,
       "mobile": false,
-      "color_scheme": null
+      "color_scheme": null,
+      "follows_panel": true
     },
     "value": "[1,2,3",
     "truncated": true,
@@ -251,7 +260,8 @@
       "width": 1280,
       "height": 800,
       "mobile": false,
-      "color_scheme": null
+      "color_scheme": null,
+      "follows_panel": true
     },
     "value": null,
     "truncated": false,
@@ -273,7 +283,8 @@
       "width": 1280,
       "height": 800,
       "mobile": false,
-      "color_scheme": null
+      "color_scheme": null,
+      "follows_panel": true
     },
     "image": "data:image/jpeg;base64,/9j/AAAA"
   },

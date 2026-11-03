@@ -358,7 +358,8 @@ test("places one tab at a time on the window and freezes a frame", async () => {
   expect(placement.withFirst).toBe(placement.base + 1);
   expect(placement.withSecond).toBe(placement.base + 1);
   expect(placement.firstAttached).toBe(false);
-  // 300×200 的占位区域里按 1280×800 等比缩放、水平居中、顶部对齐：300×187.5，下方留白。
+  // 面板尺寸停稳前（这里同一拍就摘下了）按原视口 1280×800 等比缩放、水平居中、顶部对齐：300×187.5；
+  // 摘下时还没停稳，视口保持原大小。
   expect(placement.placed).toEqual({ x: 10, y: 20, width: 300, height: 188 });
   expect(placement.after).toBe(placement.base);
   expect(placement.detached).toEqual({ x: 0, y: 0, width: 1280, height: 800 });
@@ -551,9 +552,36 @@ test("saves downloads into the tab's download directory and reports them", async
   expect(notes).toContain(`finished: ${target}`);
 });
 
-// 目的：面板缩放显示时 Agent 的视口与点击不变；潜在缺陷：视口随面板变窄触发移动版布局，或合成点击按视图坐标落到别处。
-test("keeps the agent's viewport fixed and clicks accurately while the tab is shown scaled", async () => {
-  const page = pageOf(await call("navigate", { taskId: 32, target: { url: `${origin}/far` }, context: context(roomy) }));
+// 目的：默认视口跟随面板、按真实大小显示，点击与截图都按它；潜在缺陷：固定视口被缩到看不清，或视口跟上后合成点击
+// 仍按旧缩放换算、落到别处。
+test("follows the panel size at full scale once it settles and clicks accurately", async () => {
+  const page = pageOf(await call("navigate", { taskId: 33, target: { url: `${origin}/far` }, context: context(roomy) }));
+  const tabId = page.tabId;
+  await app.evaluate((_electron, tabId) => {
+    (globalThis as unknown as { browserHarness: { host: { place(tabId: string, rect: unknown): void } } }).browserHarness.host.place(tabId, { x: 0, y: 0, width: 640, height: 400 });
+  }, tabId);
+  await expect.poll(() => app.evaluate((_electron, tabId) => {
+    type Harness = { host: { tabs: Map<string, { tab: { view: Electron.WebContentsView } }> } };
+    return (globalThis as unknown as { browserHarness: Harness }).browserHarness.host.tabs.get(tabId)!.tab.view.webContents.executeJavaScript("innerWidth");
+  }, tabId)).toBe(640);
+  const snapshot = pageOf(await call("snapshot", { taskId: 33 }));
+  const clicked = pageOf(await call("act", { taskId: 33, actions: [clickOn(refOf(snapshot.snapshot, "button", "Far"))] }));
+  expect(clicked.title).toBe("far clicked");
+  const shot = await call("screenshot", { taskId: 33, fullPage: false });
+  const size = await app.evaluate(({ nativeImage }, image) => nativeImage.createFromDataURL(image).getSize(), (shot as unknown as { value: { image: string } }).value.image);
+  expect(size).toEqual({ width: 640, height: 400 });
+  await app.evaluate((_electron, tabId) => {
+    (globalThis as unknown as { browserHarness: { host: { place(tabId: string, rect: unknown): void } } }).browserHarness.host.place(tabId, null);
+  }, tabId);
+});
+
+// 目的：Agent 固定视口后，面板缩放显示时视口与点击不变；潜在缺陷：固定的视口随面板变窄切到移动版布局，或合成点击
+// 按视图坐标落到别处。
+test("keeps a pinned viewport and clicks accurately while the tab is shown scaled", async () => {
+  const page = pageOf(await call("navigate", {
+    taskId: 32, target: { url: `${origin}/far` }, context: context(roomy),
+    emulation: { viewport: { width: 1280, height: 800, mobile: false } },
+  }));
   const width = await app.evaluate(async (_electron, tabId) => {
     type Harness = { host: { place(tabId: string, rect: unknown): void; tabs: Map<string, { tab: { view: Electron.WebContentsView } }> } };
     const { host } = (globalThis as unknown as { browserHarness: Harness }).browserHarness;
@@ -768,9 +796,10 @@ test("emulates a viewport and colour scheme before loading, and keeps them acros
   await app.evaluate((_electron, tabId) => {
     (globalThis as unknown as { browserHarness: { host: { place(tabId: string, rect: unknown): void } } }).browserHarness.host.place(tabId, { x: 0, y: 0, width: 800, height: 800 });
   }, opened.tab_id as string);
-  expect(await placed()).toEqual({ x: 0, y: 0, width: 800, height: 500 });
+  // 默认跟随面板：停稳后铺满占位区域。
+  await expect.poll(placed).toEqual({ x: 0, y: 0, width: 800, height: 800 });
   const page = valueOf(await link("browser.navigate", 53, { url: `${origin}/responsive`, viewport: { width: 390, height: 844, mobile: true }, color_scheme: "dark" }));
-  expect(page.emulation).toEqual({ width: 390, height: 844, mobile: true, color_scheme: "dark" });
+  expect(page.emulation).toEqual({ width: 390, height: 844, mobile: true, color_scheme: "dark", follows_panel: false });
   // 390×844 放进 800×800：高度顶满，宽 370，水平居中。
   await expect.poll(placed).toEqual({ x: 215, y: 0, width: 370, height: 800 });
   const probe = "[innerWidth, matchMedia('(prefers-color-scheme: dark)').matches, navigator.maxTouchPoints > 0]";
@@ -784,7 +813,7 @@ test("emulates a viewport and colour scheme before loading, and keeps them acros
     (globalThis as unknown as { browserHarness: { host: { place(tabId: string, rect: unknown): void } } }).browserHarness.host.place(tabId, null);
   }, opened.tab_id as string);
   const reset = valueOf(await link("browser.navigate", 53, { action: "reload", viewport: { width: 1280, height: 800 }, color_scheme: "auto" }));
-  expect(reset.emulation).toEqual({ width: 1280, height: 800, mobile: false, color_scheme: null });
+  expect(reset.emulation).toEqual({ width: 1280, height: 800, mobile: false, color_scheme: null, follows_panel: false });
   // 不在面板上时，视图随生效的视口改尺寸（合成输入要落在视图之内）。
   expect(await placed()).toEqual({ x: 0, y: 0, width: 1280, height: 800 });
   expect(valueOf(await link("browser.evaluate", 53, { expression: "[innerWidth, navigator.maxTouchPoints > 0]" })).value).toBe("[1280,false]");

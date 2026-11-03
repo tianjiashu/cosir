@@ -9,7 +9,7 @@ import { PanelDock } from "@/components/ui/panel-dock";
 import { PANEL_HEADER_CLASS } from "@/components/ui/panel-tokens";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
 import { useOpenLink } from "@/components/links/use-open-link";
-import { useHandoffOn } from "@/lib/handoff/store";
+import { handoffOn, useHandoffStore } from "@/lib/handoff/store";
 import { queryKeys } from "@/lib/query/query-keys";
 import { listTerminalShells } from "@/lib/terminal/terminal-api";
 import { terminalNoticeClass, terminalPaneStatus } from "@/lib/terminal/terminal-pane-status";
@@ -23,7 +23,7 @@ import { TERMINAL_PANEL_HEIGHT } from "@/lib/layout/preferences";
 import { selectTerminalTask, useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { cn } from "@/lib/utils";
 
-import { TerminalEndedMenu } from "./terminal-menus";
+import { TerminalContextMenu, TerminalEndedMenu } from "./terminal-menus";
 import { FindBar } from "@/components/ui/find-bar";
 import { TerminalSessionPane } from "./terminal-session-pane";
 import { TerminalTabBar } from "./terminal-tab-bar";
@@ -51,6 +51,8 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   // 搜索只属于打开它时可见的那个会话；切走、收起面板即关闭（见下方渲染期收敛）。
   const [searchSessionId, setSearchSessionId] = useState<string | null>(null);
   const [searchResult, setSearchResult] = useState<{ index: number; count: number } | null>(null);
+  // 每次「打开查找」递增：查找条已开着时再按 Ctrl/Cmd+F（或右键「查找」）也把焦点拉回输入框。
+  const [searchFocusKey, setSearchFocusKey] = useState(0);
   const viewsRef = useRef(new Map<string, TerminalView>());
   const sectionRef = useRef<HTMLElement | null>(null);
   const { panelHeight, maxPanelHeight, expanded, toggleExpanded, resizePanel } = useTerminalPanelHeight();
@@ -83,7 +85,8 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   const ended = useMemo(() => endedTerminalSessions(sessions ?? []), [sessions]);
   const activeSession = sessions?.find((session) => session.sessionId === activeSessionId) ?? null;
   const activeRuntime = activeSessionId ? runtimes[activeSessionId] : undefined;
-  const activeHandoff = useHandoffOn(taskId, "terminal", activeSessionId);
+  const handoffs = useHandoffStore((store) => store.tasks[taskId]);
+  const activeHandoff = activeSessionId ? handoffOn(handoffs, "terminal", activeSessionId) : null;
 
   const shellsQuery = useQuery({
     queryKey: queryKeys.terminalShells(),
@@ -113,9 +116,14 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
     if (sessionId === useTerminalWorkbenchStore.getState().tasks[taskId]?.activeSessionId) setSearchResult(result);
   }, [taskId]);
   const openSearch = useCallback(() => {
-    setSearchSessionId(useTerminalWorkbenchStore.getState().tasks[taskId]?.activeSessionId ?? null);
-    setSearchResult(null);
-  }, [taskId]);
+    const sessionId = useTerminalWorkbenchStore.getState().tasks[taskId]?.activeSessionId ?? null;
+    // 已为同一会话打开时只重新聚焦：清掉结果而保留输入框里的词，摘要会误显示「无结果」。
+    if (sessionId !== searchSessionId) {
+      setSearchSessionId(sessionId);
+      setSearchResult(null);
+    }
+    setSearchFocusKey((key) => key + 1);
+  }, [searchSessionId, taskId]);
   const closeSearch = useCallback(() => {
     setSearchSessionId(null);
     setSearchResult(null);
@@ -160,6 +168,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
             <TerminalTabBar
               tabs={tabs}
               activeSessionId={activeSessionId}
+              handedOff={(sessionId) => handoffOn(handoffs, "terminal", sessionId) !== null}
               shells={shellsQuery.data?.shells ?? null}
               shellsLoading={shellsQuery.isLoading}
               createDisabled={creating || sessions === null}
@@ -213,21 +222,30 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
             </div>
           )}
           <div className="relative min-h-0 flex-1">
-            {mounted.map((sessionId) => (
-              <TerminalSessionPane
-                key={sessionId}
-                taskId={taskId}
-                sessionId={sessionId}
-                visible={open && sessionId === activeSessionId}
-                focusToken={focusToken}
-                workspaceRoot={bridge?.workspaceRoot || undefined}
-                onRuntime={handleRuntime}
-                onSearchResults={handleSearchResults}
-                onOpenSearch={openSearch}
-                onOpenLink={links.open}
-                registerView={registerView}
-              />
-            ))}
+            <TerminalContextMenu
+              getView={() => (activeSessionId ? viewsRef.current.get(activeSessionId) : undefined)}
+              disabled={activeView === undefined}
+              connected={activeRuntime?.connection === "connected"}
+              onOpenSearch={openSearch}
+            >
+              <div className="absolute inset-0" data-testid="terminal-panes">
+                {mounted.map((sessionId) => (
+                  <TerminalSessionPane
+                    key={sessionId}
+                    taskId={taskId}
+                    sessionId={sessionId}
+                    visible={open && sessionId === activeSessionId}
+                    focusToken={focusToken}
+                    workspaceRoot={bridge?.workspaceRoot || undefined}
+                    onRuntime={handleRuntime}
+                    onSearchResults={handleSearchResults}
+                    onOpenSearch={openSearch}
+                    onOpenLink={links.open}
+                    registerView={registerView}
+                  />
+                ))}
+              </div>
+            </TerminalContextMenu>
             {showPlaceholder && (
               <div className="text-muted-foreground flex h-full items-center justify-center text-xs">
                 {creating || sessions === null ? "正在新建终端…" : "没有运行中的终端，点击「+」新建"}
@@ -238,6 +256,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
                 label="在终端中搜索"
                 className="absolute top-2 right-4 z-10"
                 result={searchResult}
+                focusKey={searchFocusKey}
                 onSearch={(term, direction) => activeView.search(term, direction)}
                 onClose={closeSearch}
               />

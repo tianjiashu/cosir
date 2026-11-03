@@ -928,11 +928,16 @@
             "$ref": "#/$defs/BrowserViewport"
           },
           {
+            "const": "auto",
+            "type": "string"
+          },
+          {
             "type": "null"
           }
         ],
         "default": null,
-        "description": "Change the tab's viewport before loading, e.g. 390x844 mobile to check a phone layout. It stays until changed again; null keeps the current one."
+        "description": "Fix the tab's viewport before loading, e.g. 390x844 mobile to check a phone layout; it stays until changed again. auto goes back to the default: the viewport follows the size of the user's browser panel. null keeps the current one.",
+        "title": "Viewport"
       }
     },
     "required": [

@@ -1,6 +1,4 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 import readline from "node:readline";
 
 import { appendHostLogLine, logDesktopEvent } from "../desktop-log";
@@ -35,7 +33,6 @@ export function spawnBackend({ runtime, port, bootstateFile, dataDir, consoleLog
     stdio: ["pipe", "pipe", "pipe"],
     env: {
       ...process.env,
-      ...(runtime.mode === "python-module" ? interpreterEnvironment(runtime.launcher) : {}),
       CODING_AGENT_PORT: String(port),
       CODING_AGENT_RELOAD: "false",
       CODING_AGENT_BOOT_STATE_FILE: bootstateFile,
@@ -48,21 +45,6 @@ export function spawnBackend({ runtime, port, bootstateFile, dataDir, consoleLog
   forwardConsole(child.stdout, consoleLogFile, "stdout");
   forwardConsole(child.stderr, consoleLogFile, "stderr");
   return child;
-}
-
-/**
- * 复现 `uv run` 曾注入的虚拟环境语义：把解释器所在的 `bin`（Windows 为 `Scripts`）前置到 `PATH`，
- * 解释器确实在虚拟环境里（上级目录有 `pyvenv.cfg`）时再设 `VIRTUAL_ENV`。宿主直接拉起解释器后必须
- * 自己补上，否则 Agent 在终端里执行裸 `python` / `pytest` 会悄悄落到系统解释器。
- */
-export function interpreterEnvironment(launcher: string): Record<string, string> {
-  const binDir = path.dirname(launcher);
-  const environment: Record<string, string> = {
-    PATH: [binDir, process.env.PATH].filter(Boolean).join(path.delimiter),
-  };
-  const venvRoot = path.dirname(binDir);
-  if (fs.existsSync(path.join(venvRoot, "pyvenv.cfg"))) environment.VIRTUAL_ENV = venvRoot;
-  return environment;
 }
 
 function forwardConsole(stream: NodeJS.ReadableStream | null, logFile: string, name: "stdout" | "stderr"): void {

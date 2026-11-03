@@ -1,12 +1,16 @@
 import { ChevronDownIcon, HistoryIcon } from "lucide-react";
-import { DropdownMenu } from "radix-ui";
+import { ContextMenu, DropdownMenu } from "radix-ui";
+import { useRef, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/button";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
 import type { TerminalSessionEntry } from "@/lib/assistant/contract";
+import { isMac } from "@/lib/platform";
 import type { TerminalShell } from "@/lib/terminal/terminal-api";
 import { terminalStatusPresentation } from "@/lib/terminal/terminal-sessions";
 import { cn } from "@/lib/utils";
+
+import type { TerminalView } from "./terminal-view";
 
 const TERMINAL_MENU_CONTENT_CLASS = cn(MENU_CONTENT_CLASS, "min-w-48 max-w-[calc(100vw-1rem)] text-popover-foreground");
 const TERMINAL_MENU_ITEM_CLASS = cn(
@@ -93,5 +97,85 @@ export function TerminalEndedMenu({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+  );
+}
+
+const SHORTCUTS = isMac
+  ? { copy: "⌘C", paste: "⌘V", find: "⌘F" }
+  : { copy: "Ctrl+C", paste: "Ctrl+V", find: "Ctrl+F" };
+
+/**
+ * 终端窗格的右键菜单：复制、粘贴、查找——低频操作的唯一落点，不在页头加按钮。两个平台行为一致：
+ * 不采用 Windows Terminal 的「右键即粘贴」，终端里的命令常来自模型，误粘贴即执行的代价更高。
+ *
+ * 操作对象是打开菜单时的活动会话（`getView`）。选区在打开时读：macOS 上 xterm 先在右键处选中一个词再
+ * 弹菜单（与 VS Code 一致）。菜单关闭后焦点交回终端；选「查找」时等菜单关闭后才打开查找条——菜单开着时
+ * 它的焦点陷阱会把查找条抢到的焦点拉回菜单。前台程序开了鼠标上报（htop、tmux、`mouse=a` 的 vim）时右键
+ * 归程序，不弹菜单（在右键那一刻读，模式随程序进出而变）。不做键盘唤起：Shift+F10 与菜单键在终端里属于 shell。
+ */
+export function TerminalContextMenu({
+  getView,
+  disabled,
+  connected,
+  onOpenSearch,
+  children,
+}: {
+  getView: () => TerminalView | undefined;
+  /** 没有可见会话（只有占位提示）时不接管右键。 */
+  disabled: boolean;
+  connected: boolean;
+  onOpenSearch: () => void;
+  children: ReactNode;
+}) {
+  const [hasSelection, setHasSelection] = useState(false);
+  const searchAfterClose = useRef(false);
+  return (
+    <ContextMenu.Root onOpenChange={(open) => {
+      if (open) setHasSelection(getView()?.hasSelection() ?? false);
+    }}
+    >
+      <ContextMenu.Trigger
+        asChild
+        disabled={disabled}
+        // 先于菜单的处理执行：取消默认行为即不打开菜单。
+        onContextMenu={(event) => {
+          if (getView()?.mouseReporting()) event.preventDefault();
+        }}
+      >
+        {children}
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content
+          className={TERMINAL_MENU_CONTENT_CLASS}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (searchAfterClose.current) {
+              searchAfterClose.current = false;
+              onOpenSearch();
+            } else {
+              getView()?.focus();
+            }
+          }}
+        >
+          <ContextMenu.Item className={TERMINAL_MENU_ITEM_CLASS} disabled={!hasSelection} onSelect={() => void getView()?.copySelection()}>
+            <span className="flex-1">复制</span>
+            <span className="text-muted-foreground text-2xs">{SHORTCUTS.copy}</span>
+          </ContextMenu.Item>
+          <ContextMenu.Item className={TERMINAL_MENU_ITEM_CLASS} disabled={!connected} onSelect={() => void getView()?.pasteFromClipboard()}>
+            <span className="flex-1">粘贴</span>
+            <span className="text-muted-foreground text-2xs">{SHORTCUTS.paste}</span>
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            className={TERMINAL_MENU_ITEM_CLASS}
+            onSelect={() => {
+              searchAfterClose.current = true;
+            }}
+          >
+            <span className="flex-1">查找</span>
+            <span className="text-muted-foreground text-2xs">{SHORTCUTS.find}</span>
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }

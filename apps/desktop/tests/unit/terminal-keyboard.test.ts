@@ -55,14 +55,45 @@ describe("终端按键归属（VS Code 规则）", () => {
   it("输入法组合期间一律交给 xterm", () => {
     expect(resolveTerminalKeyAction(key("c", { ctrlKey: true, isComposing: true }), windows(true))).toBe("terminal");
   });
+
+  // 目的：macOS 上按词移动、行首行尾、删到行首可用；潜在缺陷：xterm 6 对这些键发 zsh / bash 不认的序列或什么都不发。
+  it("macOS：Option / Cmd 行编辑键翻译成 shell 的 emacs 键位", () => {
+    expect(resolveTerminalKeyAction(key("ArrowLeft", { altKey: true }), mac(false))).toEqual({ send: "\x1bb" });
+    expect(resolveTerminalKeyAction(key("ArrowRight", { altKey: true }), mac(false))).toEqual({ send: "\x1bf" });
+    expect(resolveTerminalKeyAction(key("ArrowLeft", { metaKey: true }), mac(false))).toEqual({ send: "\x01" });
+    expect(resolveTerminalKeyAction(key("ArrowRight", { metaKey: true }), mac(false))).toEqual({ send: "\x05" });
+    expect(resolveTerminalKeyAction(key("Backspace", { metaKey: true }), mac(false))).toEqual({ send: "\x15" });
+  });
+
+  it("macOS：带 Shift / Ctrl 的组合与其他键不翻译，交给 xterm 原样编码", () => {
+    expect(resolveTerminalKeyAction(key("ArrowLeft", { altKey: true, shiftKey: true }), mac(false))).toBe("terminal");
+    expect(resolveTerminalKeyAction(key("ArrowLeft", { metaKey: true, ctrlKey: true }), mac(false))).toBe("terminal");
+    expect(resolveTerminalKeyAction(key("ArrowUp", { altKey: true }), mac(false))).toBe("terminal");
+    expect(resolveTerminalKeyAction(key("Backspace", { altKey: true }), mac(false))).toBe("terminal");
+  });
+
+  // 目的：Windows 的行编辑交给 ConPTY + PSReadLine / cmd 自己的键表；潜在缺陷：另造映射与 PSReadLine 冲突。
+  it("Windows：行编辑键不翻译", () => {
+    expect(resolveTerminalKeyAction(key("ArrowLeft", { ctrlKey: true }), windows(false))).toBe("terminal");
+    expect(resolveTerminalKeyAction(key("ArrowLeft", { altKey: true }), windows(false))).toBe("terminal");
+    expect(resolveTerminalKeyAction(key("Backspace", { ctrlKey: true }), windows(false))).toBe("terminal");
+  });
 });
 
-describe("大段粘贴确认", () => {
-  it("超过 1000 字符或 10 行才需要确认", () => {
-    expect(pasteNeedsConfirmation("ls -la")).toBe(false);
-    expect(pasteNeedsConfirmation("x".repeat(1000))).toBe(false);
-    expect(pasteNeedsConfirmation("x".repeat(1001))).toBe(true);
-    expect(pasteNeedsConfirmation(Array.from({ length: 10 }, (_, i) => `l${i}`).join("\n"))).toBe(false);
-    expect(pasteNeedsConfirmation(Array.from({ length: 11 }, (_, i) => `l${i}`).join("\r\n"))).toBe(true);
+describe("粘贴确认（对齐 VS Code enableMultiLinePasteWarning: auto）", () => {
+  const plain = { bracketedPasteMode: false };
+  const bracketed = { bracketedPasteMode: true };
+
+  // 目的：只在内容会被逐行执行时打扰；潜在缺陷：zsh 默认开启 bracketed paste 时仍弹确认，或 bash 3.2 / cmd 下多行直接执行。
+  it("含换行且没开 bracketed paste 才需要确认，末尾换行也算", () => {
+    expect(pasteNeedsConfirmation("ls -la", plain)).toBe(false);
+    expect(pasteNeedsConfirmation("x".repeat(5000), plain)).toBe(false);
+    expect(pasteNeedsConfirmation("ls -la\n", plain)).toBe(true);
+    expect(pasteNeedsConfirmation("a\r\nb", plain)).toBe(true);
+    expect(pasteNeedsConfirmation("a\rb", plain)).toBe(true);
+  });
+
+  it("开了 bracketed paste 时多行只进编辑缓冲，不确认", () => {
+    expect(pasteNeedsConfirmation("a\nb\nc", bracketed)).toBe(false);
   });
 });

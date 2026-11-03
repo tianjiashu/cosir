@@ -163,6 +163,31 @@ test("搜索只跟随可见会话：切换标签或收起面板即关闭", async
   await expect(search).toHaveCount(0);
 });
 
+test("右键菜单给出复制、粘贴、查找；已打开的查找条再按 Ctrl/Cmd+F 会重新聚焦", async ({ page }) => {
+  await page.goto("/tasks/42");
+  await page.getByRole("button", { name: /^终端，/ }).click();
+  await expect(screen(page, "term-1")).toContainText("term-1 $");
+
+  // 右键在空白处：macOS 上 xterm 会先选中右键处的词，空白处没有词可选。
+  const pane = page.locator('[data-terminal-session="term-1"]');
+  const box = await pane.boundingBox();
+  await page.mouse.click(box!.x + box!.width - 20, box!.y + box!.height - 20, { button: "right" });
+  const menu = page.getByRole("menu");
+  await expect(menu.getByRole("menuitem")).toHaveText([/^复制/, /^粘贴/, /^查找/]);
+  await expect(menu.getByRole("menuitem", { name: /^复制/ })).toHaveAttribute("data-disabled", "");
+  await expect(menu.getByRole("menuitem", { name: /^粘贴/ })).not.toHaveAttribute("data-disabled", "");
+
+  await menu.getByRole("menuitem", { name: /^查找/ }).click();
+  const input = panel(page).getByRole("search").getByRole("textbox", { name: "在终端中搜索" });
+  await expect(input).toBeFocused();
+
+  // 焦点回到终端后查找条仍开着，再按一次快捷键要把焦点拉回输入框。
+  await pane.locator(".xterm-screen").click();
+  await expect(input).not.toBeFocused();
+  await page.keyboard.press("ControlOrMeta+f");
+  await expect(input).toBeFocused();
+});
+
 test("面板收起时异常退出在页头标红，打开面板即视为看过", async ({ page, request }) => {
   await page.goto("/tasks/42");
   const entry = page.getByRole("button", { name: /^终端，/ });

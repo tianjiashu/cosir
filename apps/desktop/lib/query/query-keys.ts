@@ -20,7 +20,6 @@ export const queryKeys = {
   instruction: (kind: "global" | "main-agent-prompt" | "workspace", workspaceId?: number) =>
     ["cosir", "instruction", kind, workspaceId ?? null] as const,
   environment: () => ["cosir", "environment"] as const,
-  terminalDenylist: () => ["cosir", "terminal-denylist"] as const,
   terminalShells: () => ["cosir", "terminal-shells"] as const,
   workspaceFileIgnore: (workspaceId: number) => ["cosir", "workspace-file-ignore", workspaceId] as const,
   mcpServers: () => ["cosir", "mcp-servers"] as const,

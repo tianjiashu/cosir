@@ -27,7 +27,7 @@ type TerminalServerFrame =
   | { type: "geometry"; rows: number; columns: number }
   | { type: "input_mark"; by: "agent" }
   | { type: "input_rejected"; reason: "session_ended" | "backpressure" }
-  /** 只标记流结束；终态、退出码与交接一样由 snapshot `terminal_sessions` 投影。 */
+  /** 只标记流结束；终态与退出码由 snapshot `terminal_sessions` 投影（交接在顶层 `handoffs`）。 */
   | { type: "exit" }
   | { type: "resync_required"; first_available_seq?: number; next_seq?: number }
   /** `code` 与 HTTP 错误体同源的稳定码，按它分支；`message` 只用于日志。 */
@@ -47,13 +47,19 @@ export type TerminalConnectionOptions = {
   taskId: number;
   sessionId: string;
   onOutput: (data: Uint8Array) => void;
-  /** 服务端缓冲接不上（resync）：调用方清屏，随后从缓冲起点重放。 */
-  onReset: () => void;
+  /**
+   * 缓冲接不上（服务端要求、seq 断档或视图写入积压）：调用方清屏，清屏真正生效后调用 `resume`，连接才从
+   * 缓冲起点重新 attach。不立即 attach：视图写队列里可能还有大量没解析的旧输出，重放排在它们后面只会让
+   * 积压更多（xterm 没有丢弃写队列的 API）。
+   */
+  onReset: (resume: () => void) => void;
   onFrame: (frame: TerminalControlFrame) => void;
   onState: (state: TerminalConnectionState) => void;
 };
 
 const MAX_RECONNECT_ATTEMPTS = 8;
+/** 与后端 `Constant.Terminal.MAX_RAW_INPUT_BYTES` 一致：一帧 input 解码后的字节上限。 */
+export const MAX_INPUT_FRAME_BYTES = 64 * 1024;
 
 export function encodeBase64(bytes: Uint8Array): string {
   let binary = "";
@@ -107,6 +113,14 @@ export class TerminalConnection {
     this.connect();
   }
 
+  /**
+   * 视图请求清屏重放（写入积压时）：与服务端发 `resync_required` 走同一条路——清屏后从后端缓冲起点重放。
+   * 只在视图收到输出时调用，此时连接一定在。
+   */
+  resync(data: Record<string, unknown>): void {
+    if (this.socket !== null) this.resyncFrom(this.socket, data);
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -114,9 +128,18 @@ export class TerminalConnection {
     this.detachSocket(1000, "terminal view disposed");
   }
 
-  /** 发送人工输入字节；未连接时返回 false，由视图提示「输入已停用」而不是静默吞键。 */
+  /**
+   * 发送人工输入字节；未连接时返回 false，由视图提示「输入已停用」而不是静默吞键。
+   *
+   * 后端单帧上限是协议契约，超出按协议错误断开，所以大段输入在这里切成多帧按序发出；Worker 原样拼接
+   * 字节，切在多字节字符中间也无妨。总量上限由视图在粘贴入口把关。
+   */
   sendInput(data: Uint8Array): boolean {
-    return this.send({ type: "input", data_base64: encodeBase64(data) });
+    for (let offset = 0; offset < data.length; offset += MAX_INPUT_FRAME_BYTES) {
+      const chunk = data.subarray(offset, offset + MAX_INPUT_FRAME_BYTES);
+      if (!this.send({ type: "input", data_base64: encodeBase64(chunk) })) return false;
+    }
+    return true;
   }
 
   sendResize(rows: number, cols: number): boolean {
@@ -171,14 +194,14 @@ export class TerminalConnection {
       case "output":
         if (frame.seq <= this.lastSeq) return;
         if (this.lastSeq !== 0 && frame.seq !== this.lastSeq + 1) {
-          this.resync(socket, { gapFrom: this.lastSeq, gapTo: frame.seq });
+          this.resyncFrom(socket, { gapFrom: this.lastSeq, gapTo: frame.seq });
           return;
         }
         this.lastSeq = frame.seq;
         this.options.onOutput(decodeBase64(frame.data_base64));
         return;
       case "resync_required":
-        this.resync(socket, { firstAvailableSeq: frame.first_available_seq ?? null });
+        this.resyncFrom(socket, { firstAvailableSeq: frame.first_available_seq ?? null });
         return;
       case "exit":
         this.stopped = true;
@@ -216,13 +239,16 @@ export class TerminalConnection {
     this.options.onFrame(frame);
   }
 
-  private resync(socket: WebSocket, data: Record<string, unknown>): void {
+  private resyncFrom(socket: WebSocket, data: Record<string, unknown>): void {
     if (socket !== this.socket) return;
     this.lastSeq = 0;
-    this.options.onReset();
     this.log("WARNING", "terminal_ws_resync", "终端输出缓冲接不上，清屏重新同步", data);
     this.detachSocket(1000, "terminal resync");
-    this.connect();
+    this.setState("reconnecting");
+    // 等期间用户若已手动重连，就不再连第二次。
+    this.options.onReset(() => {
+      if (!this.disposed && this.socket === null) this.connect();
+    });
   }
 
   private detachSocket(code: number, reason: string): void {

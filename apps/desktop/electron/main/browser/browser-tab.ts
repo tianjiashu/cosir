@@ -22,7 +22,7 @@ import { TabHighlight } from "./tab-highlight";
 import { RefRegistry, type PageNode } from "./ref-registry";
 import { buildOutline, type Outline } from "./snapshot/outline";
 import { readSnapshot } from "./snapshot/read";
-import { TabEmulation, type Applied, type Emulation } from "./tab-emulation";
+import { TabEmulation, type Applied, type Emulation, type EmulationRequest } from "./tab-emulation";
 import { CANCELED_FAILURE, TabLog, type ConsoleLevel } from "./tab-log";
 import { isWebProtocol, urlProtocol } from "./web-url";
 import { abortable } from "./abortable";
@@ -263,7 +263,7 @@ export class BrowserTab {
    * 原页面（模型据此知道去哪里找下载，而不是当作失败重试、再下一次）。顺序：待答的弹窗按取消处理（页面停着无法跳转，
    * 也设不了模拟）→ 设上要求改的模拟（只改给了的项，生效后才加载，页面按新视口布局）→ 加载。
    */
-  async navigate(target: BrowserNavigation, signal: AbortSignal, emulation?: Partial<Emulation>): Promise<void> {
+  async navigate(target: BrowserNavigation, signal: AbortSignal, emulation?: EmulationRequest): Promise<void> {
     if (signal.aborted) throw browserError("CANCELLED", "navigation was cancelled");
     const contents = this.contents;
     const history = contents.navigationHistory;
@@ -278,7 +278,7 @@ export class BrowserTab {
     // 被同进程别的标签的弹窗停住时跳转等不到页面配合，会等满时限：直接说明原因。
     const paused = this.events.pausedBy();
     if (paused) throw paused;
-    if (emulation) await this.emulation.set({ ...this.emulation.current, ...emulation }, signal);
+    if (emulation) await this.emulation.set(emulation, signal);
     const loaded = waitForLoad(contents, {
       signal,
       paused: this.session.pausedSignal,
@@ -443,7 +443,7 @@ export class BrowserTab {
     this.view.setBounds(this.emulation.viewBounds);
   }
 
-  /** 挂到面板上的占位矩形 `box`（窗口坐标）：视图在其中按视口等比缩放（见 `TabEmulation.viewBounds`）。 */
+  /** 挂到面板上的占位矩形 `box`（窗口坐标）：跟随面板时视口随之、固定时按视口等比缩放（见 `TabEmulation`）。 */
   show(box: Rectangle): void {
     this.emulation.show(box);
     this.view.setBounds(this.emulation.viewBounds);
@@ -474,6 +474,7 @@ export class BrowserTab {
   /** 页面已自己关掉（`destroyed`）时只做清理；待答的弹窗先按取消答复，免得同进程的其他页面跟着停住。 */
   close(): void {
     this.highlighter.dispose();
+    this.emulation.dispose();
     this.dismissDialog("the tab was closed");
     if (this.contents.isDestroyed()) return;
     this.session.detach();

@@ -1,3 +1,4 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -20,6 +21,7 @@ import { toToolCallPart } from "@/lib/assistant/converter";
 import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
 import { backgroundToolCall } from "@/lib/assistant/task-commands";
 import { countRunning, useBackgroundTasksStore } from "@/lib/background-tasks/store";
+import { createQueryClient } from "@/lib/query/query-client";
 
 import { transportState } from "./transport-fixtures";
 
@@ -196,7 +198,10 @@ describe("后台任务卡", () => {
   it("展开即对话里的同一张卡片：运行中默认展开，停止只在外壳上", () => {
     board.entries.set(1, [entry("a", { label: "terminal_command:make watch" })]);
     board.parts.set("a", terminalPart("a"));
-    const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
+    // 终端命令的展开体经 `useOpenLink` 接上链接打开，需要 Query 上下文。
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={createQueryClient()}><BackgroundTasksBody taskId={1} /></QueryClientProvider>,
+    );
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain('data-tool-call-id="a"');
     expect(html).toContain("后台运行中");

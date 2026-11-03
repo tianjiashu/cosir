@@ -6,6 +6,7 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import {
   decodeBase64,
   encodeBase64,
+  MAX_INPUT_FRAME_BYTES,
   TerminalConnection,
   type TerminalConnectionOptions,
   type TerminalConnectionState,
@@ -70,7 +71,10 @@ function setup() {
     taskId: 42,
     sessionId: "t1",
     onOutput: (data) => written.push(new TextDecoder().decode(data)),
-    onReset: () => resets.push("resync"),
+    onReset: (resume) => {
+      resets.push("resync");
+      resume();
+    },
     onFrame: (frame) => frames.push(frame),
     onState: (state) => states.push(state),
   };
@@ -111,6 +115,20 @@ describe("TerminalConnection（terminal-v2）", () => {
     expect(vi.mocked(frontendLog).mock.calls.map((call) => call[1])).toContain("terminal_ws_connected");
   });
 
+  // 目的：大段输入不越过后端单帧上限；潜在缺陷：整段一帧被判协议错误、通道断开。
+  it("超过单帧上限的输入按序切成多帧", () => {
+    const { connection, sockets } = setup();
+    sockets[0].open();
+    sockets[0].receive(ATTACHED);
+    const data = Uint8Array.from({ length: MAX_INPUT_FRAME_BYTES * 2 + 3 }, (_, index) => index % 251);
+
+    expect(connection.sendInput(data)).toBe(true);
+
+    const frames = sockets[0].sent.slice(1).map((frame) => decodeBase64(frame.data_base64 as string));
+    expect(frames.map((frame) => frame.length)).toEqual([MAX_INPUT_FRAME_BYTES, MAX_INPUT_FRAME_BYTES, 3]);
+    expect(Uint8Array.from(frames.flatMap((frame) => [...frame]))).toEqual(data);
+  });
+
   it("断线后按 seq 续传，不清屏", () => {
     const { sockets, written, states, resets } = setup();
     sockets[0].open();
@@ -149,6 +167,50 @@ describe("TerminalConnection（terminal-v2）", () => {
     expect(sockets).toHaveLength(3);
     expect(written).toEqual(["a", "x"]);
     expect(vi.mocked(frontendLog).mock.calls.map((call) => call[1])).toContain("terminal_ws_resync");
+  });
+
+  // 目的：视图写入积压时与服务端 resync 走同一条路；潜在缺陷：积压的输出被 xterm 抛错静默丢弃且不再同步。
+  it("视图请求 resync 时清屏并从缓冲起点重新 attach", () => {
+    const { connection, sockets, resets } = setup();
+    sockets[0].open();
+    sockets[0].receive(ATTACHED);
+    sockets[0].receive(output(1, "a"));
+    connection.resync({ pendingBytes: 1 });
+    expect(resets).toEqual(["resync"]);
+    expect(sockets[0].closed).toBe(true);
+    sockets[1].open();
+    expect(sockets[1].sent[0]).toEqual({ type: "attach", after_seq: null });
+  });
+
+  // 目的：清屏生效前不 attach；潜在缺陷：重放排在大量未解析的旧输出后面，积压越同步越多。
+  it("视图清屏生效（resume）之前不重新 attach；期间已手动重连则不再连第二次", () => {
+    const pending: Array<() => void> = [];
+    const states: TerminalConnectionState[] = [];
+    const connection = new TerminalConnection({
+      taskId: 42,
+      sessionId: "t1",
+      onOutput: () => undefined,
+      onReset: (resume) => pending.push(resume),
+      onFrame: () => undefined,
+      onState: (state) => states.push(state),
+    });
+    connection.start();
+    const sockets = FakeSocket.created;
+    sockets[0].open();
+    sockets[0].receive(ATTACHED);
+    sockets[0].receive({ type: "resync_required", first_available_seq: 9 });
+    expect(sockets).toHaveLength(1);
+    expect(states.at(-1)).toBe("reconnecting");
+
+    pending[0]();
+    expect(sockets).toHaveLength(2);
+    sockets[1].open();
+    sockets[1].receive(ATTACHED);
+    sockets[1].receive({ type: "resync_required", first_available_seq: 9 });
+    connection.reconnect();
+    expect(sockets).toHaveLength(3);
+    pending[1]();
+    expect(sockets).toHaveLength(3);
   });
 
   it("把输入标记与拒绝帧交给视图；exit 只结束流、不交给视图，之后停止重连", () => {

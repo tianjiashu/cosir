@@ -2,21 +2,22 @@ import "@xterm/xterm/css/xterm.css";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import { Terminal, type IDisposable, type ILink, type ITheme } from "@xterm/xterm";
+import { Terminal, type IDisposable, type ITheme } from "@xterm/xterm";
 
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { isMac } from "@/lib/platform";
+import { isMac, isWindows } from "@/lib/platform";
 import {
   TerminalConnection,
   type TerminalConnectionState,
   type TerminalControlFrame,
 } from "@/lib/terminal/terminal-connection";
-import { resolveLink, type LinkTarget } from "@/lib/links/resolve-link";
-import { pasteNeedsConfirmation, resolveTerminalKeyAction } from "@/lib/terminal/terminal-keyboard";
+import type { LinkTarget } from "@/lib/links/resolve-link";
+import { PASTE_MAX_BYTES, pasteNeedsConfirmation, resolveTerminalKeyAction } from "@/lib/terminal/terminal-keyboard";
 import type { TerminalNotice, TerminalNoticeTone } from "@/lib/terminal/terminal-pane-status";
 
+import { registerTerminalLinks } from "./terminal-links";
+import { suppressTerminalQueryReplies } from "./terminal-query-replies";
 import { TerminalResizeController } from "./terminal-resize-controller";
 import { xtermPaneFont } from "./xterm-appearance";
 
@@ -35,8 +36,8 @@ export type TerminalViewOptions = {
   sessionId: string;
   theme: ITheme;
   /**
-   * 读取当前工作区根目录：终端里以它开头的绝对路径（可带 `:行[:列]`）可点击，在文件面板打开。每次
-   * 识别链接时读取，视图因此只按会话身份创建一次，根目录到达或变化不重建 xterm 与连接。
+   * 读取当前工作区根目录：终端里落在工作区内的绝对路径（可带 `:行[:列]`，规则见 `terminal-links`）可点击，
+   * 在文件面板打开。每次识别链接时读取，视图因此只按会话身份创建一次，根目录到达或变化不重建 xterm 与连接。
    */
   getWorkspaceRoot: () => string | undefined;
   onRuntime: (runtime: TerminalViewRuntime) => void;
@@ -47,6 +48,12 @@ export type TerminalViewOptions = {
 };
 
 const RESIZE_SEND_DELAY_MS = 120;
+/**
+ * 已交给 xterm 但尚未解析完的输出字节上限。服务端按订阅者限流，但本机 WS 收包不会反压，xterm 的写缓冲
+ * 实际无界、超过约 50 MB 时 `write` 直接抛错丢数据；超过这里的上限就改走 resync（清屏后从后端缓冲重放），
+ * 与服务端落后时同一语义。不按水位暂停 PTY：worker 必须持续读 PTY 供 Agent 的屏幕模型使用。
+ */
+const WRITE_BACKLOG_LIMIT_BYTES = 4 * 1024 * 1024;
 const NOTICE_MS = 2500;
 const SEARCH_DECORATIONS: ISearchOptions["decorations"] = {
   matchBackground: "#facc15",
@@ -54,10 +61,6 @@ const SEARCH_DECORATIONS: ISearchOptions["decorations"] = {
   activeMatchBackground: "#f97316",
   activeMatchColorOverviewRuler: "#f97316",
 };
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 /**
  * 单个交互终端会话的 xterm 实例与 WS 通道（每会话一份）。
@@ -67,7 +70,8 @@ function escapeRegExp(value: string): string {
  * 会话只在被查看时存在（何时创建 / 释放由 `terminal-workbench` 决定）。
  *
  * 键盘：按键归属由 `resolveTerminalKeyAction` 判定（复制 / 粘贴 / 搜索 / 交给应用快捷键 / 送入
- * 终端）；IME 组合期间一律交给 xterm。粘贴（Ctrl+Shift+V 读剪贴板、原生 paste 事件）统一经大段确认。
+ * 终端 / 改发行编辑序列）；IME 组合期间一律交给 xterm。粘贴（右键菜单、Ctrl+Shift+V、原生 paste 事件）
+ * 统一经 `guardedPaste`：总量上限、断线提示、会逐行执行时确认。
  * 输入在未连接或会话结束时禁用（disableStdin），提示由 React 层按 `connection` 常驻显示。
  */
 export class TerminalView {
@@ -86,6 +90,10 @@ export class TerminalView {
   private disposed = false;
   /** 有搜索词在生效：清除时才动高亮与选区，窗格隐藏时不误清用户自己的选区。 */
   private searching = false;
+  /** 已交给 xterm、尚未解析完的输出字节（见 `WRITE_BACKLOG_LIMIT_BYTES`）。 */
+  private pendingWriteBytes = 0;
+  /** 因写入积压请求的 resync 尚未清屏：期间不再重复请求。 */
+  private backlogResync = false;
 
   constructor(private readonly container: HTMLElement, private readonly options: TerminalViewOptions) {
     this.terminal = new Terminal({
@@ -96,35 +104,36 @@ export class TerminalView {
       disableStdin: true,
       scrollback: 10_000,
       macOptionIsMeta: false,
+      // ConPTY 自己重绘屏幕：面板变高时 xterm 不再从滚动区拉回旧行，免得同一段输出出现两次。
+      ...(isWindows ? { windowsPty: { backend: "conpty" as const } } : {}),
     });
     this.terminal.loadAddon(this.fitAddon);
     this.terminal.loadAddon(this.searchAddon);
     // 默认按 Unicode 6 算字宽，emoji 与部分 CJK 符号会被当成单宽导致光标错位（VS Code 同样启用 11）。
     this.terminal.loadAddon(new Unicode11Addon());
     this.terminal.unicode.activeVersion = "11";
-    this.terminal.loadAddon(new WebLinksAddon((event, uri) => {
-      event.preventDefault();
-      const target = resolveLink(uri, { workspaceRoot: null });
-      if (target) this.options.onOpenLink(target);
-    }));
     this.terminal.open(container);
     this.terminal.attachCustomKeyEventHandler((event) => this.handleKey(event));
     this.disposables.push(
+      ...suppressTerminalQueryReplies(this.terminal),
       this.terminal.onData((data) => this.sendInput(this.encoder.encode(data))),
       // 部分鼠标上报以 latin-1 字节串出现在 onBinary。
       this.terminal.onBinary((data) => this.sendInput(Uint8Array.from(data, (char) => char.charCodeAt(0) & 0xff))),
       this.searchAddon.onDidChangeResults(({ resultIndex, resultCount }) => (
         this.options.onSearchResults({ index: resultIndex, count: resultCount })
       )),
+      ...registerTerminalLinks(this.terminal, {
+        getWorkspaceRoot: () => this.options.getWorkspaceRoot(),
+        onOpenLink: (target) => this.options.onOpenLink(target),
+      }),
     );
-    this.registerWorkspacePathLinks();
     container.addEventListener("paste", this.handlePasteEvent, true);
     this.resizeController = new TerminalResizeController(container, () => this.fit());
     this.connection = new TerminalConnection({
       taskId: options.taskId,
       sessionId: options.sessionId,
-      onOutput: (data) => this.terminal.write(data),
-      onReset: () => this.reset(),
+      onOutput: (data) => this.writeOutput(data),
+      onReset: (resume) => this.reset(resume),
       onFrame: (frame) => this.handleFrame(frame),
       onState: (state) => this.handleConnectionState(state),
     });
@@ -147,6 +156,41 @@ export class TerminalView {
 
   reconnect(): void {
     this.connection.reconnect();
+  }
+
+  hasSelection(): boolean {
+    return this.terminal.hasSelection();
+  }
+
+  /** 前台程序开了鼠标上报（htop、tmux、`mouse=a` 的 vim）：右键属于它，不弹应用菜单。 */
+  mouseReporting(): boolean {
+    return this.terminal.modes.mouseTrackingMode !== "none";
+  }
+
+  /** 复制选区（快捷键与右键菜单共用）；成功后清掉选区，失败在面板提示。 */
+  async copySelection(): Promise<void> {
+    const text = this.terminal.getSelection();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      this.terminal.clearSelection();
+    } catch (error) {
+      this.log("WARNING", "terminal_copy_failed", "终端复制失败", {}, error);
+      this.flash("复制失败", "destructive");
+    }
+  }
+
+  /** 读剪贴板粘贴（Ctrl+Shift+V 与右键菜单共用），经 `guardedPaste`。 */
+  async pasteFromClipboard(): Promise<void> {
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch (error) {
+      this.log("WARNING", "terminal_paste_failed", "读取剪贴板失败", {}, error);
+      this.flash("无法读取剪贴板", "destructive");
+      return;
+    }
+    await this.guardedPaste(text);
   }
 
   search(term: string, direction: "next" | "previous"): void {
@@ -229,9 +273,30 @@ export class TerminalView {
     }
   }
 
-  private reset(): void {
-    this.terminal.reset();
+  /**
+   * resync 时清屏。xterm 的 `reset()` 不清写缓冲，直接调用会让还没解析的旧字节画在清屏后的画面上；所以
+   * 排进写队列，在已排队的输出之后执行，执行完才 `resume` 让连接重新 attach——重放不会排在旧积压后面，
+   * 写队列因此最多是「积压上限 + 一份重放」。
+   */
+  private reset(resume: () => void): void {
+    this.terminal.write("", () => {
+      this.terminal.reset();
+      this.backlogResync = false;
+      resume();
+    });
     this.flash("输出缓冲已接不上，已清屏重新同步（更早的输出可能缺失）", "muted");
+  }
+
+  private writeOutput(data: Uint8Array): void {
+    const size = data.length;
+    this.pendingWriteBytes += size;
+    this.terminal.write(data, () => {
+      this.pendingWriteBytes -= size;
+    });
+    if (this.backlogResync || this.pendingWriteBytes <= WRITE_BACKLOG_LIMIT_BYTES) return;
+    this.backlogResync = true;
+    this.log("WARNING", "terminal_write_backlog", "终端输出积压过多，清屏重新同步", { pendingBytes: this.pendingWriteBytes });
+    this.connection.resync({ pendingBytes: this.pendingWriteBytes });
   }
 
   private sendInput(data: Uint8Array): void {
@@ -239,10 +304,13 @@ export class TerminalView {
     if (!this.connection.sendInput(data)) this.flash("连接已断开，输入未送达", "warning");
   }
 
+  /** 排进写队列再标（与清屏同一写法）：要标在它之前的输出解析完后的光标行上，否则会标到旧行。 */
   private markAgentInput(): void {
-    const marker = this.terminal.registerMarker(0);
-    const decoration = this.terminal.registerDecoration({ marker, x: 0, width: 1 });
-    decoration?.onRender((element) => element.classList.add("terminal-agent-input-mark"));
+    this.terminal.write("", () => {
+      const marker = this.terminal.registerMarker(0);
+      const decoration = this.terminal.registerDecoration({ marker, x: 0, width: 1 });
+      decoration?.onRender((element) => element.classList.add("terminal-agent-input-mark"));
+    });
   }
 
   private fit(): boolean {
@@ -275,6 +343,12 @@ export class TerminalView {
     const action = resolveTerminalKeyAction(event, { isMac, hasSelection: this.terminal.hasSelection() });
     // keyup / keypress 跟随 keydown 的归属：被拦截的组合键不应再以 keypress 漏进终端。
     if (event.type !== "keydown") return action === "terminal";
+    if (typeof action === "object") {
+      event.preventDefault();
+      // 走 xterm 的输入路径（与普通按键同经 onData）：会话结束时同样被 disableStdin 拦下，翻看回滚区时回到底部。
+      this.terminal.input(action.send, true);
+      return false;
+    }
     switch (action) {
       case "terminal":
         return true;
@@ -297,84 +371,52 @@ export class TerminalView {
     }
   }
 
-  private async copySelection(): Promise<void> {
-    const text = this.terminal.getSelection();
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      this.terminal.clearSelection();
-    } catch (error) {
-      this.log("WARNING", "terminal_copy_failed", "终端复制失败", {}, error);
-      this.flash("复制失败", "destructive");
-    }
-  }
-
-  private async pasteFromClipboard(): Promise<void> {
-    try {
-      await this.guardedPaste(await navigator.clipboard.readText());
-    } catch (error) {
-      this.log("WARNING", "terminal_paste_failed", "读取剪贴板失败", {}, error);
-      this.flash("无法读取剪贴板", "destructive");
-    }
-  }
-
   private readonly handlePasteEvent = (event: ClipboardEvent) => {
     const text = event.clipboardData?.getData("text/plain") ?? "";
-    if (!pasteNeedsConfirmation(text)) return;
-    // 大段粘贴先确认：拦下原生事件，确认后再经 xterm.paste 送入（保留 bracketed paste 语义）。
+    if (!text) return;
+    if (
+      this.runtime.connection === "connected"
+      && this.encoder.encode(text).length <= PASTE_MAX_BYTES
+      && !pasteNeedsConfirmation(text, { bracketedPasteMode: this.terminal.modes.bracketedPasteMode })
+    ) {
+      return;
+    }
+    // 超限、需要确认或连接不可用：拦下原生事件统一处理，确认后经 xterm.paste 送入（保留 bracketed paste 语义）。
     event.preventDefault();
     event.stopImmediatePropagation();
     void this.guardedPaste(text);
   };
 
+  /**
+   * 所有粘贴路径的唯一入口：总量上限、断线提示（xterm 在 disableStdin 时会静默丢掉粘贴）、会逐行执行时
+   * 确认。确认框打开期间连接可能断开，确认后再查一次。
+   */
   private async guardedPaste(text: string): Promise<void> {
     if (!text) return;
-    if (pasteNeedsConfirmation(text)) {
-      const lines = text.split(/\r\n|\r|\n/).length;
+    if (!this.pasteDeliverable()) return;
+    const bytes = this.encoder.encode(text).length;
+    if (bytes > PASTE_MAX_BYTES) {
+      this.log("INFO", "terminal_paste_too_large", "粘贴内容超过终端上限，未发送", { bytes });
+      this.flash(`粘贴内容过大（上限 ${PASTE_MAX_BYTES / 1024} KB），未发送`, "warning");
+      return;
+    }
+    if (pasteNeedsConfirmation(text, { bracketedPasteMode: this.terminal.modes.bracketedPasteMode })) {
+      const lines = text.split(/\r\n|\r|\n/).filter((line) => line.length > 0).length;
       const confirmed = await requestConfirmation({
-        title: "粘贴大段内容？",
-        description: `将向终端粘贴 ${text.length} 个字符（${lines} 行），多行内容会被逐行执行。`,
+        title: "粘贴并执行？",
+        description: `当前程序会把粘贴的内容当作命令立即执行${lines > 0 ? `（共 ${lines} 行）` : ""}。`,
         confirmLabel: "粘贴",
       });
-      if (!confirmed || this.disposed) return;
+      if (!confirmed || this.disposed || !this.pasteDeliverable()) return;
     }
     this.terminal.paste(text);
     this.terminal.focus();
   }
 
-  /**
-   * 识别以工作区根开头的绝对路径。相对路径不识别：它相对的是 shell 当前目录，终端不知道，按工作区根
-   * 解析会打开错的文件。
-   */
-  private registerWorkspacePathLinks(): void {
-    let cached: { root: string; pattern: RegExp } | null = null;
-    this.disposables.push(this.terminal.registerLinkProvider({
-      provideLinks: (lineNumber, callback) => {
-        const rawRoot = this.options.getWorkspaceRoot();
-        if (!rawRoot) {
-          callback(undefined);
-          return;
-        }
-        const root = rawRoot.replace(/[\\/]+$/, "");
-        if (cached?.root !== root) {
-          cached = { root, pattern: new RegExp(`${escapeRegExp(root)}[\\\\/][^\\s'"\`:;,()<>\\[\\]]+(?::\\d+(?::\\d+)?)?`, "g") };
-        }
-        const { pattern } = cached;
-        const line = this.terminal.buffer.active.getLine(lineNumber - 1)?.translateToString(true) ?? "";
-        const links: ILink[] = [];
-        for (const match of line.matchAll(pattern)) {
-          const target = resolveLink(match[0], { workspaceRoot: root });
-          if (target?.kind !== "workspace") continue;
-          const start = match.index ?? 0;
-          links.push({
-            text: match[0],
-            range: { start: { x: start + 1, y: lineNumber }, end: { x: start + match[0].length, y: lineNumber } },
-            activate: () => this.options.onOpenLink(target),
-          });
-        }
-        callback(links.length > 0 ? links : undefined);
-      },
-    }));
+  private pasteDeliverable(): boolean {
+    if (this.runtime.connection === "connected") return true;
+    this.flash("连接已断开，粘贴未送达", "warning");
+    return false;
   }
 
   private log(level: "INFO" | "WARNING", event: string, msg: string, data: Record<string, unknown> = {}, error?: unknown): void {

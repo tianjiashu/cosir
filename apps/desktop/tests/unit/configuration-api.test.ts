@@ -137,25 +137,4 @@ describe("configuration API", () => {
       { method: "PUT" },
     );
   });
-
-  it("reads and replaces the terminal deny-list pattern array", async () => {
-    requestJson.mockResolvedValueOnce({ patterns: ["\\brm\\b"] });
-    const {
-      getTerminalDenylistConfiguration,
-      updateTerminalDenylistConfiguration,
-    } = await import("@/lib/api/configuration");
-
-    await getTerminalDenylistConfiguration();
-    expect(requestJson).toHaveBeenCalledWith("/configuration/terminal-denylist", undefined);
-
-    await updateTerminalDenylistConfiguration(["\\bmkfs\\b"]);
-    expect(requestJson).toHaveBeenCalledWith(
-      "/configuration/terminal-denylist",
-      expect.objectContaining({ method: "PUT" }),
-    );
-    expect(jsonRequestInit).toHaveBeenCalledWith(
-      { patterns: ["\\bmkfs\\b"] },
-      { method: "PUT" },
-    );
-  });
 });

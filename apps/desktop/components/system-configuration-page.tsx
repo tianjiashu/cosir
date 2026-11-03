@@ -9,7 +9,6 @@ import { SYSTEM_SETTINGS_TABS, type SystemSettingsTabId } from "@/components/set
 import { EnvironmentConfigurationForm } from "@/components/environment-configuration-form";
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
 import { AgentTeamConfigurationPanel } from "@/components/agent-team/configuration-panel";
-import { TerminalDenylistConfigurationPanel } from "@/components/terminal-denylist-configuration-panel";
 import { MCPConfigurationPanel } from "@/components/configuration/mcp-configuration-panel";
 import { SkillConfigurationPanel } from "@/components/configuration/skill-configuration-panel";
 import { ModelConfigManager } from "@/components/model/model-config-manager";
@@ -205,7 +204,6 @@ export function SystemConfigurationPage({ tab }: { tab: SystemSettingsTabId }) {
       {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} requireContent description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent 提示词" />}
       {tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="在这里写入系统级工作约束…" saveLabel="保存全局 AGENTS.md" />}
       {tab === "environment" && <EnvironmentPanel />}
-      {tab === "terminal-denylist" && <TerminalDenylistConfigurationPanel />}
       {tab === "mcp" && <MCPConfigurationPanel />}
       {tab === "skills" && <SkillConfigurationPanel />}
     </SettingsPageLayout>

@@ -62,13 +62,6 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
       effective_on: "next_run",
     },
   }));
-  let terminalPatterns = ["\\brm\\b"];
-  await page.route(`${API_ORIGIN}/configuration/terminal-denylist`, (route) => {
-    if (route.request().method() === "PUT") {
-      terminalPatterns = (route.request().postDataJSON() as { patterns: string[] }).patterns;
-    }
-    return route.fulfill({ json: { patterns: terminalPatterns } });
-  });
   await page.route(`${API_ORIGIN}/configuration/environment`, (route) => route.fulfill({
     json: {
       groups: [{
@@ -181,12 +174,4 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await page.getByRole("button", { name: /保存变量/ }).click();
   await expect(page.getByText("环境变量已保存", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "保存变量" })).toBeDisabled();
-
-  await settingsNav.getByRole("link", { name: "终端命令规则" }).click();
-  const denylistEditor = page.getByRole("textbox", { name: "终端 deny-list 正则列表" });
-  await expect(denylistEditor).toHaveValue("\\brm\\b");
-  await denylistEditor.fill("\\bmkfs\\b");
-  await page.getByRole("button", { name: "保存规则" }).click();
-  await expect(page.getByText("配置已保存，下一次 execute_terminal 调用立即生效。", { exact: true })).toBeVisible();
-  expect(terminalPatterns).toEqual(["\\bmkfs\\b"]);
 });

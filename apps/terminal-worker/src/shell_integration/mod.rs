@@ -72,14 +72,22 @@ impl ShellLaunch {
                 path.join("integration.zsh"),
                 include_str!("../../resources/shell_integration/zsh/integration.zsh"),
             )?;
-            for name in [".zprofile", ".zlogin"] {
-                std::fs::write(path.join(name), format!("ZDOTDIR=\"$__cosir_user_dir\"\n[[ -f \"$ZDOTDIR/{name}\" ]] && source \"$ZDOTDIR/{name}\"\n{}\n", if name == ".zprofile" { "__cosir_user_dir=\"$ZDOTDIR\"; ZDOTDIR=\"$__cosir_boot_dir\"" } else { ":" }))?;
-            }
+            // login shell 才读 .zprofile；不包 .zlogin：.zshrc 之后 ZDOTDIR 已指回用户目录，zsh 直接读
+            // 用户的 .zlogin。
+            std::fs::write(
+                path.join(".zprofile"),
+                include_str!("../../resources/shell_integration/zsh/.zprofile"),
+            )?;
             let user_dir = std::env::var("ZDOTDIR").or_else(|_| std::env::var("HOME"))?;
             launch.env.push(("COSIR_USER_ZDOTDIR".into(), user_dir));
             launch
                 .env
                 .push(("ZDOTDIR".into(), path.to_string_lossy().into_owned()));
+            // 与 bash 同一平台惯例：macOS 终端以 login shell 启动（Terminal.app、VS Code 默认），
+            // 其余平台是交互非 login shell。
+            if cfg!(target_os = "macos") {
+                launch.argv.push("-l".into());
+            }
             launch.argv.push("-i".into());
         } else if kind == "bash" {
             let path = directory.path();
@@ -195,6 +203,23 @@ mod tests {
         assert!(unset < rc.find(".bashrc").unwrap());
         let source = rc.find(". \"$__cosir_boot_dir/integration.bash\"").unwrap();
         assert!(source < rc.find("builtin trap").unwrap());
+    }
+
+    #[test]
+    fn zsh_bootstrap_is_login_on_macos_and_wraps_zprofile() {
+        let launch = ShellLaunch::prepare(vec!["/bin/zsh".into()], "zsh", "auto");
+        assert!(launch.unavailable.is_none());
+        let expected: Vec<String> = if cfg!(target_os = "macos") {
+            vec!["/bin/zsh".into(), "-l".into(), "-i".into()]
+        } else {
+            vec!["/bin/zsh".into(), "-i".into()]
+        };
+        assert_eq!(launch.argv, expected);
+        let directory = launch._directory.as_ref().unwrap().path();
+        for name in [".zshenv", ".zprofile", ".zshrc", "integration.zsh"] {
+            assert!(directory.join(name).is_file(), "{name}");
+        }
+        assert!(!directory.join(".zlogin").exists());
     }
 
     #[test]

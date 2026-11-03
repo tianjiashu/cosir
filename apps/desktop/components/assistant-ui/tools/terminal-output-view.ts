@@ -1,11 +1,11 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { Terminal } from "@xterm/xterm";
+import { Terminal, type IDisposable, type ITheme } from "@xterm/xterm";
 
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { registerTerminalLinks, type TerminalLinkOptions } from "@/components/terminal/terminal-links";
 import { TerminalResizeController } from "@/components/terminal/terminal-resize-controller";
 import { xtermCardTheme, xtermPaneFont } from "@/components/terminal/xterm-appearance";
-import type { ITheme } from "@xterm/xterm";
 
 import { reconcileTerminalOutput } from "./terminal-output-reconciler";
 import { TerminalWriteScheduler } from "./terminal-write-scheduler";
@@ -16,6 +16,16 @@ export type TerminalSnapshot = {
 
 /** 卡片视口最多显示的行数；更多输出进入 xterm 回滚区，在视口内滚动查看。 */
 const MAX_VISIBLE_ROWS = 16;
+/** 回滚区行数；缓冲到达「视口行数 + 它」即开始丢最早的行。 */
+const SCROLLBACK_ROWS = 5000;
+
+export type TerminalOutputViewOptions = {
+  resolvedTheme: "light" | "dark";
+  /** 输出里的网址与工作区路径可点（规则与底部终端同一处，见 `terminal-links`）。 */
+  links?: TerminalLinkOptions;
+  /** 缓冲到达容量（开始丢最早的输出）时通知 true，清屏重放后行数回落时通知 false；只在变化时通知。 */
+  onTruncatedChange?: (truncated: boolean) => void;
+};
 
 /**
  * `execute_terminal` 卡片的一次性输出视口：持有一个只读 xterm 实例及与之对应的输出游标。
@@ -26,6 +36,10 @@ const MAX_VISIBLE_ROWS = 16;
  * 高度跟随内容：列数按容器宽度计算，行数取「已输出行数」并以 `MAX_VISIBLE_ROWS` 封顶，容器高度
  * 自适应 xterm。不能反过来让固定高度的容器决定行数——外层留白、cwd 行一变，xterm 自认可见的末行就会
  * 被裁到容器外且无法滚到（曾经的 bug）；两行输出也不该占一整块空白。
+ *
+ * 丢行判断看缓冲是否已到容量（`layout` 里每次写入后算）：到了就开始丢最早的行，只有「恰好写满还没丢」那一刻
+ * 会早报一行。不用第 0 行上的 marker 被销毁当信号——清屏序列（`clear`、`cls`）也会销毁它。展示数据里的
+ * 输出是完整的，丢的只是这个视口的回滚区。
  */
 export class TerminalOutputView {
   private readonly terminal: Terminal;
@@ -34,9 +48,11 @@ export class TerminalOutputView {
   private readonly resizeController: TerminalResizeController;
   private desiredSnapshot: TerminalSnapshot = { output: "" };
   private renderedSnapshot: TerminalSnapshot = { output: "" };
+  private readonly disposables: IDisposable[] = [];
+  private truncated = false;
   private disposed = false;
 
-  constructor(container: HTMLElement, resolvedTheme: "light" | "dark") {
+  constructor(container: HTMLElement, private readonly options: TerminalOutputViewOptions) {
     this.fitAddon = new FitAddon();
     this.terminal = new Terminal({
       // unicode 版本切换属于 proposed API。
@@ -50,9 +66,9 @@ export class TerminalOutputView {
       // 只读视口从不聚焦，空白的光标行不应画出光标块。
       cursorInactiveStyle: "none",
       disableStdin: true,
-      scrollback: 5000,
+      scrollback: SCROLLBACK_ROWS,
       ...xtermPaneFont(),
-      theme: xtermCardTheme(resolvedTheme),
+      theme: xtermCardTheme(options.resolvedTheme),
     });
 
     this.terminal.loadAddon(this.fitAddon);
@@ -60,6 +76,7 @@ export class TerminalOutputView {
     this.terminal.loadAddon(new Unicode11Addon());
     this.terminal.unicode.activeVersion = "11";
     this.terminal.open(container);
+    if (options.links) this.disposables.push(...registerTerminalLinks(this.terminal, options.links));
     this.writeScheduler = new TerminalWriteScheduler((done) => {
       this.flushSnapshot(done);
     }, (error) => {
@@ -91,10 +108,22 @@ export class TerminalOutputView {
     this.writeScheduler.request();
   }
 
+  /**
+   * 已渲染输出的纯文本（复制用）：借 xterm 自己的选区拼接，折行接回一行、Windows 上用 `\r\n` 换行，
+   * 没有 ANSI 与 `\r` 进度帧；回滚区丢掉的最早部分不在其中（与丢行提示一致）。
+   */
+  copyText(): string {
+    this.terminal.selectAll();
+    const text = this.terminal.getSelection();
+    this.terminal.clearSelection();
+    return text.replace(/\s+$/, "");
+  }
+
   /** 释放 xterm、插件、观察器与延迟的布局任务。 */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (const disposable of this.disposables) disposable.dispose();
     this.resizeController.dispose();
     this.writeScheduler.dispose();
     this.fitAddon.dispose();
@@ -130,6 +159,12 @@ export class TerminalOutputView {
     });
   }
 
+  private setTruncated(truncated: boolean): void {
+    if (this.truncated === truncated) return;
+    this.truncated = truncated;
+    this.options.onTruncatedChange?.(truncated);
+  }
+
   private finishFlush(done: () => void): void {
     done();
     if (!this.disposed) this.layout();
@@ -147,6 +182,7 @@ export class TerminalOutputView {
     const contentRows = buffer.baseY + buffer.cursorY + 1;
     const rows = Math.min(MAX_VISIBLE_ROWS, Math.max(1, contentRows));
     if (proposed.cols !== this.terminal.cols || rows !== this.terminal.rows) this.terminal.resize(proposed.cols, rows);
+    this.setTruncated(this.terminal.buffer.normal.length >= this.terminal.rows + SCROLLBACK_ROWS);
     return true;
   }
 }

@@ -1,3 +1,4 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,7 @@ vi.mock("@/lib/task-status/task-status-store", async (importOriginal) => ({
 
 import { CallRow } from "@/components/assistant-ui/tools/call-row";
 import { useDisclosureStore } from "@/lib/assistant/disclosure-store";
+import { createQueryClient } from "@/lib/query/query-client";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 
 function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
@@ -29,8 +31,11 @@ function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
 type RenderProps = { interactive?: boolean; taskCancelling?: boolean; toolName?: string; args?: Record<string, unknown> };
 
 function render(overrides: Partial<ToolArtifact> = {}, { toolName = "read_file", args = {}, ...props }: RenderProps = {}): string {
+  // 终端命令的展开体经 `useOpenLink` 接上链接打开，需要 Query 上下文（应用里由根组件提供）。
   return renderToStaticMarkup(
-    <CallRow taskId={7} toolCallId="call-1" toolName={toolName} args={args} artifact={artifact(overrides)} {...props} />,
+    <QueryClientProvider client={createQueryClient()}>
+      <CallRow taskId={7} toolCallId="call-1" toolName={toolName} args={args} artifact={artifact(overrides)} {...props} />
+    </QueryClientProvider>,
   );
 }
 

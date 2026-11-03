@@ -6,7 +6,7 @@ import { browserError } from "./errors";
 import { isWebProtocol } from "./web-url";
 import toolArgsSchemas from "./contract/tool-args.schema.json";
 import type { BrowserNavigation, BrowserTabContext } from "../../shared/host-contract";
-import type { Emulation } from "./tab-emulation";
+import type { EmulationRequest } from "./tab-emulation";
 import type { SnapshotView } from "./snapshot/views";
 import type { ConsoleLevel, LogQuery } from "./tab-log";
 
@@ -41,8 +41,8 @@ export type TabRequest = TaskRequest & { tab?: string };
 export type NavigateRequest = TabRequest & {
   newTab: boolean;
   target: BrowserNavigation;
-  /** 只含要改的项；`colorScheme: null` 表示取消模拟、跟随应用外观。 */
-  emulation?: Partial<Emulation>;
+  /** 只含要改的项；`viewport: "follow"` 回到跟随面板，`colorScheme: null` 跟随应用外观。 */
+  emulation?: EmulationRequest;
 };
 export type SnapshotRequest = TabRequest & { view: SnapshotView };
 /** 截哪里：视口、整页（`fullPage`），或单个元素（`ref`，与 `fullPage` 互斥，后端校验过）。 */
@@ -80,10 +80,10 @@ export function parseNavigate(params: unknown): NavigateRequest {
   const target: BrowserNavigation = args.url !== null
     ? { url: httpUrl(args.url) }
     : { action: args.action as "back" | "forward" | "reload" };
-  const viewport = args.viewport as { width: number; height: number; mobile: boolean } | null;
+  const viewport = args.viewport as { width: number; height: number; mobile: boolean } | "auto" | null;
   const scheme = args.color_scheme as "light" | "dark" | "auto" | null;
-  const emulation: Partial<Emulation> = {
-    ...viewport,
+  const emulation: EmulationRequest = {
+    ...(viewport === null ? {} : { viewport: viewport === "auto" ? "follow" : viewport }),
     ...(scheme === null ? {} : { colorScheme: scheme === "auto" ? null : scheme }),
   };
   return { ...request, newTab: args.new_tab as boolean, target, ...(Object.keys(emulation).length ? { emulation } : {}) };

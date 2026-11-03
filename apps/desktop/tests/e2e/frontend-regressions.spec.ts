@@ -240,6 +240,13 @@ test("交替序列：运行中过程区展开、区头显示当前动作，命�
   await expect(running).toContainText("bun test tests/task.test.ts");
   await expect(running.locator('[data-terminal-viewport="true"]')).toBeVisible();
   await expect(running.locator('[data-call-status="running"]')).toHaveCount(1);
+  // 复制只在悬停展开体时出现，不常驻。
+  const copyCommand = running.getByRole("button", { name: "复制命令" });
+  await expect(copyCommand).toHaveCSS("opacity", "0");
+  await running.locator('[data-terminal-viewport="true"]').hover();
+  await expect(copyCommand).toHaveCSS("opacity", "1");
+  await expect(running.getByRole("button", { name: "复制输出" })).toHaveCSS("opacity", "1");
+  await page.mouse.move(0, 0);
   await expect(assistant.locator('[data-slot="changes-card"]')).toContainText("本轮改动 2 个文件");
   await assistant.screenshot({ path: `${SHOTS}/impl-running.png`, animations: "disabled" });
 });

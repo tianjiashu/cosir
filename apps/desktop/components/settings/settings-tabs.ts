@@ -6,7 +6,6 @@ import {
   FilterIcon,
   KeyRoundIcon,
   NetworkIcon,
-  ShieldCheckIcon,
   SlidersHorizontalIcon,
   SparklesIcon,
   SunMoonIcon,
@@ -28,7 +27,6 @@ export const SYSTEM_SETTINGS_TABS = [
   { id: "main-agent", label: "主 Agent 提示词", icon: BotIcon },
   { id: "instructions", label: "全局 AGENTS.md", icon: FileTextIcon },
   { id: "environment", label: "环境变量", icon: KeyRoundIcon },
-  { id: "terminal-denylist", label: "终端命令规则", icon: ShieldCheckIcon },
   { id: "mcp", label: "MCP 服务", icon: NetworkIcon },
   { id: "skills", label: "Skills", icon: SparklesIcon },
 ] as const satisfies readonly SettingsTab<string>[];

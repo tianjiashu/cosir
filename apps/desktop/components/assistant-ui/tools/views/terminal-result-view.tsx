@@ -1,7 +1,11 @@
+import { useRef, useState } from "react";
+
+import { useOpenLink } from "@/components/links/use-open-link";
+import { CopyIconButton } from "@/components/ui/copy-icon-button";
 import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
 import type { CallView, CallViewContext } from "../call-view";
-import { TerminalViewport } from "../terminal-viewport";
+import { TerminalViewport, type TerminalViewportHandle } from "../terminal-viewport";
 import { ToolStopButton, useStopRequest } from "../tool-stop-button";
 
 function text(value: unknown): string | undefined {
@@ -20,17 +24,55 @@ function commandLive({ artifact }: CallViewContext): boolean {
   return artifact.backendStatus === "running" || (artifact.background && artifact.backendStatus === "pending");
 }
 
+/** 悬停或键盘聚焦到展开体时才出现的小按钮：复制是低频操作，不常驻。 */
+const HOVER_ACTION_CLASS = "size-5 shrink-0 opacity-0 transition-opacity group-hover/terminal-body:opacity-100 group-focus-within/terminal-body:opacity-100";
+
+/**
+ * 展开体：命令行（悬停可复制命令与输出）、丢行提示、输出视窗、工作目录。复制与链接都是只读操作，后台
+ * 看板里（`interactive=false`）照常提供。
+ */
 function TerminalResultBody({ data, context }: { data: Record<string, unknown>; context: CallViewContext }) {
-  const { artifact } = context;
+  const { artifact, taskId, toolCallId } = context;
   const command = text(data.command) ?? text(context.args.command);
   const output = text(data.output) ?? "";
   const workdir = text(data.workdir);
   const live = commandLive(context);
+  const links = useOpenLink("tool", taskId);
+  const viewportRef = useRef<TerminalViewportHandle | null>(null);
+  const [truncated, setTruncated] = useState(false);
   return (
-    <div className="bg-surface rounded-lg px-3 py-2 font-mono text-xs leading-relaxed">
-      {command && <p className="text-muted-foreground truncate" title={command}>$ {command}</p>}
+    <div className="group/terminal-body bg-surface rounded-lg px-3 py-2 font-mono text-xs leading-relaxed">
+      {command && (
+        <div className="flex min-w-0 items-center gap-1">
+          <p className="text-muted-foreground min-w-0 flex-1 truncate" title={command}>$ {command}</p>
+          <CopyIconButton
+            label="复制命令"
+            className={HOVER_ACTION_CLASS}
+            getText={() => command}
+            logEvent="terminal_command_copy_failed"
+            logData={{ taskId, toolCallId }}
+          />
+          {output && (
+            <CopyIconButton
+              label="复制输出"
+              className={HOVER_ACTION_CLASS}
+              getText={() => viewportRef.current?.copyText() ?? ""}
+              logEvent="terminal_output_copy_failed"
+              logData={{ taskId, toolCallId }}
+            />
+          )}
+        </div>
+      )}
+      {output && truncated && <p className="text-muted-foreground text-2xs">较早的输出未显示</p>}
       {output
-        ? <TerminalViewport output={output} />
+        ? (
+          <TerminalViewport
+            ref={viewportRef}
+            output={output}
+            links={{ getWorkspaceRoot: () => links.workspaceRoot, onOpenLink: (target) => links.open(target) }}
+            onTruncatedChange={setTruncated}
+          />
+        )
         : (
           <p className="text-muted-foreground" data-terminal-background={artifact.background ? (live ? "running" : "ended") : undefined}>
             {artifact.background

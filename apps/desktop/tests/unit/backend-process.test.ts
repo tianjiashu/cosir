@@ -4,31 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { interpreterEnvironment, stopProcessTree } from "@/electron/main/backend/process";
+import { stopProcessTree } from "@/electron/main/backend/process";
 import { readBootstateFailure } from "@/electron/main/backend/readiness";
 
 function tempDirectory(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "cosir-backend-process-"));
 }
-
-describe("backend process environment", () => {
-  // 目的：宿主直接拉起解释器时补回 uv run 的虚拟环境语义；潜在缺陷：Agent 终端里的裸 python 落到系统解释器。
-  it("prepends the interpreter directory and marks a real virtualenv", () => {
-    const venv = tempDirectory();
-    fs.writeFileSync(path.join(venv, "pyvenv.cfg"), "home = /usr/bin\n");
-    const launcher = path.join(venv, "bin", "python");
-
-    const environment = interpreterEnvironment(launcher);
-
-    expect(environment.PATH.split(path.delimiter)[0]).toBe(path.join(venv, "bin"));
-    expect(environment.VIRTUAL_ENV).toBe(venv);
-  });
-
-  it("does not invent VIRTUAL_ENV for a standalone interpreter", () => {
-    const launcher = path.join(tempDirectory(), "bin", "python3");
-    expect(interpreterEnvironment(launcher).VIRTUAL_ENV).toBeUndefined();
-  });
-});
 
 describe("bootstate failure", () => {
   it("reads the backend's structured failure", () => {

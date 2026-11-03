@@ -8,14 +8,14 @@ import type { ActOutcome, EvaluateResult, LogsResult, PageHead, PageResult, Scre
  */
 
 function pageHeadWire(head: PageHead) {
-  const { width, height, mobile, colorScheme } = head.emulation;
+  const { width, height, mobile, colorScheme, follows } = head.emulation;
   return {
     tab_id: head.tabId,
     url: head.url,
     title: head.title,
     loading: head.loading,
     status: head.status,
-    emulation: { width, height, mobile, color_scheme: colorScheme },
+    emulation: { width, height, mobile, color_scheme: colorScheme, follows_panel: follows },
   };
 }
 

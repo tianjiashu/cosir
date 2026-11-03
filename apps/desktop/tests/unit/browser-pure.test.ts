@@ -48,7 +48,9 @@ describe("params", () => {
       tab: "t3", target: { action: "back" }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
     });
     expect(parseNavigate(navigate({ action: "reload", viewport: { width: 390, height: 844, mobile: true }, color_scheme: "auto" })).emulation)
-      .toEqual({ width: 390, height: 844, mobile: true, colorScheme: null });
+      .toEqual({ viewport: { width: 390, height: 844, mobile: true }, colorScheme: null });
+    // viewport 的 auto 回到跟随面板。
+    expect(parseNavigate(navigate({ action: "reload", viewport: "auto" })).emulation).toEqual({ viewport: "follow" });
     expect(parseNavigate(navigate({ action: "reload", color_scheme: "dark" })).emulation).toEqual({ colorScheme: "dark" });
     expect(parseSnapshot(snapshot({}))).toEqual({
       taskId: 7, view: { scope: "page" }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },

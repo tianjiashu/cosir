@@ -104,6 +104,19 @@ export function inlineCodeLink(text: string, workspaceRoot: string | null): Work
 }
 
 /**
+ * 工作区根目录出现在纯文本里的匹配式（正则源码，调用方带 `i` 标志使用）：与 `toWorkspacePath` 同一比较口径
+ * ——大小写不敏感、`/` 与 `\` 等价、末尾分隔符不计。终端这类纯文本界面据此找出工作区路径的起点（根目录可能
+ * 含空格，通用的「绝对路径形态」认不全）；找到的路径是否属于工作区仍交给 `resolveLink` 判定。
+ */
+export function workspaceRootPattern(workspaceRoot: string): string {
+  return workspaceRoot
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]/)
+    .map((segment) => segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join(String.raw`[\\/]`);
+}
+
+/**
  * 把模型或工具给出的路径换算成文件面板使用的工作区相对路径（POSIX 分隔符、无前导 `./`）。
  *
  * 工具展示数据里的路径是模型调用时传入的原值，可能是相对路径，也可能是工作区内的
@@ -115,7 +128,7 @@ export function toWorkspacePath(workspaceRoot: string, rawPath: string): string 
   const root = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
   let relative: string;
   if (isAbsolute(path)) {
-    // Windows 盘符大小写不敏感，其余部分按原样比较。
+    // 前缀整条按小写比较：Windows 与 macOS 默认文件系统都不区分大小写，盘符与目录名的大小写写法因工具而异。
     const sameRoot = root !== "" && (path === root || path.toLowerCase().startsWith(`${root.toLowerCase()}/`));
     if (!sameRoot) return null;
     relative = path.slice(root.length + 1);
@@ -153,7 +166,10 @@ function lineRange(start: string, end?: string): LineRange {
   return { start: first, end: Math.max(first, last) };
 }
 
-/** Markdown 链接的地址经过百分号编码（空格、中文）；行内代码与终端文本不编码，解码失败按原文用。 */
+/**
+ * Markdown 链接的地址经过百分号编码（空格、中文）。行内代码与终端文本本身不编码，但同样经过这里：
+ * 能解码就解码（文件名里字面的 `%41` 因此会被改写，极少见），解码失败按原文用。
+ */
 function decodePath(path: string): string {
   try {
     return decodeURIComponent(path);

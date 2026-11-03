@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -7,10 +8,34 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use crate::geometry::Geometry;
 use crate::process_tree::ProcessTreeGuard;
 
+/// 写入队列容量（帧）：与后端输入队列同量级，单帧不超过后端的单次输入上限（64 KiB）。
+const WRITE_QUEUE_FRAMES: usize = 64;
+
+/// 写入没有交给写线程。`Full` 是背压，只拒绝这一次；`Closed` 是写线程已因 PTY 写失败退出。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteRejected {
+    Full,
+    Closed,
+}
+
+impl std::fmt::Display for WriteRejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Full => "pty write queue is full",
+            Self::Closed => "pty writer stopped",
+        })
+    }
+}
+
+impl std::error::Error for WriteRejected {}
+
 pub struct PtyRuntime {
     // master 随 shell 存活：resize、前台进程组查询与 ConPTY 都依赖它。
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    // 写入只经专用写线程：前台程序不读输入时 PTY 只缓冲约 1 KB，同步写会卡住调用方——控制循环
+    // 卡住则心跳、信号、关闭都处理不了；读线程卡住（回写查询应答）则输出不再被读走，程序写输出也
+    // 阻塞、更不会读输入，形成死锁。
+    writes: SyncSender<Vec<u8>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     process_tree: Mutex<ProcessTreeGuard>,
 }
@@ -65,24 +90,22 @@ impl PtyRuntime {
         };
         drop(pair.slave);
         let reader = pair.master.try_clone_reader()?;
-        let writer = pair.master.take_writer()?;
+        let writes = spawn_writer(pair.master.take_writer()?)?;
         let runtime = Arc::new(Self {
             master: Arc::new(Mutex::new(pair.master)),
-            writer: Mutex::new(writer),
+            writes,
             child: Mutex::new(child),
             process_tree: Mutex::new(process_tree),
         });
         Ok(SpawnedPty { runtime, reader })
     }
 
-    pub fn write(&self, data: &[u8]) -> anyhow::Result<()> {
-        let mut writer = self
-            .writer
-            .lock()
-            .map_err(|_| anyhow::anyhow!("pty writer lock poisoned"))?;
-        writer.write_all(data)?;
-        writer.flush()?;
-        Ok(())
+    /// 按序交给写线程，不阻塞调用方；字节真正写进 PTY 的时机取决于前台程序何时读输入。
+    pub fn write(&self, data: &[u8]) -> Result<(), WriteRejected> {
+        self.writes.try_send(data.to_vec()).map_err(|error| match error {
+            TrySendError::Full(_) => WriteRejected::Full,
+            TrySendError::Disconnected(_) => WriteRejected::Closed,
+        })
     }
 
     /// 只调整 PTY；屏幕内核由调用方在同一把屏幕锁内同步调整，二者不能分开发生。
@@ -210,5 +233,50 @@ fn pty_size(geometry: Geometry) -> PtySize {
         cols: geometry.cols,
         pixel_width: 0,
         pixel_height: 0,
+    }
+}
+
+/// 启动写线程：按序阻塞写入 PTY；写失败即退出，之后的 `write` 得到 `Closed`。
+fn spawn_writer(mut writer: Box<dyn Write + Send>) -> anyhow::Result<SyncSender<Vec<u8>>> {
+    let (writes, queued) = sync_channel::<Vec<u8>>(WRITE_QUEUE_FRAMES);
+    std::thread::Builder::new()
+        .name("pty-writer".into())
+        .spawn(move || {
+            for data in queued {
+                if writer.write_all(&data).and_then(|()| writer.flush()).is_err() {
+                    return;
+                }
+            }
+        })?;
+    Ok(writes)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    // 目的：前台程序不读输入时写入不阻塞调用方；潜在缺陷：控制循环卡在 PTY 写上，心跳、信号、关闭全部停摆。
+    #[test]
+    fn write_never_blocks_when_the_foreground_program_does_not_read() {
+        let spawned = PtyRuntime::spawn(
+            vec!["/bin/sleep".into(), "5".into()],
+            "/".into(),
+            &[],
+            Geometry::new(24, 80).unwrap(),
+        )
+        .unwrap();
+        let chunk = vec![b'x'; 64 * 1024];
+        let started = Instant::now();
+        let mut rejected = None;
+        for _ in 0..WRITE_QUEUE_FRAMES + 4 {
+            if let Err(error) = spawned.runtime.write(&chunk) {
+                rejected = Some(error);
+                break;
+            }
+        }
+        assert_eq!(rejected, Some(WriteRejected::Full));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        spawned.runtime.terminate().unwrap();
     }
 }
