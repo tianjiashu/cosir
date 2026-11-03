@@ -120,7 +120,7 @@ def test_act_sample_renders_the_failure_and_the_dialog(samples: dict[str, Any]) 
     assert lines[0].startswith("completed 1 of 3 action(s); action 2 failed (DIALOG_OPEN)")
     assert lines[1] == "tab t3 · Sign in · http://127.0.0.1:5173/login · HTTP 200"
     # 视口总是写（默认值也写），没有新日志时不写计数行。
-    assert lines[2] == "viewport 1280×800"
+    assert lines[2] == "viewport 1280×800 (follows the browser panel)"
     assert "new on this page" not in content
     assert "showing dialog 7 (confirm)" in content
     assert "<dialog_message>\nmessage: Delete it?\n</dialog_message>" in content
@@ -185,7 +185,7 @@ def test_screenshot_and_tabs_samples_render(samples: dict[str, Any]) -> None:
     shot = screenshot_text(samples["screenshot"])
     assert shot.splitlines()[:2] == [
         "tab t3 · Sign in · http://127.0.0.1:5173/login · HTTP 200",
-        "viewport 1280×800",
+        "viewport 1280×800 (follows the browser panel)",
     ]
     assert build_browser_page_display_data(samples["screenshot"])["tab_id"] == "t3"
     assert screenshot_bytes(samples["screenshot"]).startswith(b"\xff\xd8")

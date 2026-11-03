@@ -34,7 +34,6 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
         return True
 
     monkeypatch.setattr(background_module, "deliver_background_result", deliver)
-    monkeypatch.setattr(execute_terminal_module, "read_terminal_deny_patterns", lambda: ())
     yield calls
     background_registry.drop_task(_TASK_ID)
 

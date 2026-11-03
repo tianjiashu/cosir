@@ -214,3 +214,25 @@ async def test_websocket_backpressure_turns_into_resync(monkeypatch, tmp_path: P
     await asyncio.wait_for(task, 2)
     assert "resync_required" in ws.types()
     assert ws.closed_with is not None and ws.closed_with[0] == 1013
+
+
+@pytest.mark.asyncio
+async def test_worker_write_backpressure_reaches_the_panel(monkeypatch, tmp_path: Path):
+    """目的：前台程序不读输入、worker 写入队列满时面板能看到；潜在缺陷：只写日志，用户以为粘贴已送达。"""
+    from app.api.terminal_stream_api import terminal_session_stream
+
+    service, workers = make_service(monkeypatch)
+    session_id = start(service, tmp_path)
+    ws = FakeWebSocket()
+    ws.push({"type": "attach", "after_seq": None})
+    task = asyncio.create_task(terminal_session_stream(ws, 1, session_id, service))
+    await _settle(lambda: "attached" in ws.types())
+
+    workers[0].emit({"type": "error", "code": "input_backpressure"})
+
+    await _settle(lambda: "input_rejected" in ws.types())
+    rejected = next(frame for frame in ws.sent if frame["type"] == "input_rejected")
+    assert rejected["reason"] == "backpressure"
+    assert service.require(session_id, 1).snapshot().status == "running"
+    ws.disconnect()
+    await asyncio.wait_for(task, 2)

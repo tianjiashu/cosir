@@ -61,7 +61,9 @@ PAGE: dict[str, Any] = {
     "title": "Example",
     "loading": False,
     "status": 200,
-    "emulation": {"width": 1280, "height": 800, "mobile": False, "color_scheme": None},
+    "emulation": {
+        "width": 1280, "height": 800, "mobile": False, "color_scheme": None, "follows_panel": True,
+    },
     "snapshot": '- heading "Example"\n- link "More" [ref=e1]',
     "frames": 0,
     "notes": [],
@@ -929,3 +931,14 @@ def test_evaluate_escapes_a_value_that_closes_its_fence(
 
     assert observation.status == "success"
     assert observation.content.count("</script_result>") == 1
+
+
+def test_navigate_viewport_accepts_auto_to_follow_the_panel_again() -> None:
+    """viewport 三种取值：固定尺寸、auto（回到跟随面板）、null（不改）；其余字符串被拒。"""
+    from app.tools.tool_models.browser_args.navigate import BrowserNavigateArgs
+
+    url = "https://example.com/"
+    assert BrowserNavigateArgs(url=url, viewport="auto").viewport == "auto"
+    assert BrowserNavigateArgs(url=url).viewport is None
+    with pytest.raises(ValidationError):
+        BrowserNavigateArgs(url=url, viewport="panel")  # type: ignore[arg-type]

@@ -212,9 +212,6 @@ def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
             )
 
     monkeypatch.setattr(execute_terminal_module, "LocalExecutionBackend", Backend)
-    monkeypatch.setattr(
-        execute_terminal_module, "read_terminal_deny_patterns", lambda: ()
-    )
     observation = ExecuteTerminalTool().execute(
         description="test", command="echo output",
         execution_context=ToolExecutionContext(
