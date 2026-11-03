@@ -8,26 +8,22 @@ import json
 from typing import Any
 
 from app.config.logging.logger import log
-from app.core.agents.agent_profile import AgentProfile
-from app.core.tool.derivation import child_depth
-from app.core.tool.mult_agent.agent_team.agent_team_run_archive_service import (
+from app.core.agents.agent_runtime_config import NODE_SNAPSHOT_KEY
+from app.core.tool.multi_agent.agent_team.agent_team_run_archive_service import (
     AgentTeamRunArchiveService,
 )
-from app.core.tool.mult_agent.agent_team.node_profile import (
-    NODE_PROFILE_SNAPSHOT_KEY,
-    build_node_profile,
-)
+from app.core.tool.multi_agent.derivation import child_depth
 from app.core.workflow.cancel.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
 from app.models import ConversationRunRecord
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_node_definition import TeamNodeDefinition
-from app.models.agent_team.state.agent_team_run_state import (
+from app.models.agent_team.state.agent_team_run_components import (
     AgentTeamNodeExecution,
     AgentTeamRunRuntime,
-    AgentTeamRunState,
 )
+from app.models.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.models.conversation_input import MessageSource
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
@@ -36,7 +32,6 @@ from app.service.conversation_run.agent_message import prepare_agent_message
 from app.service.depends import (
     get_conversation_run_ledger,
     get_task_service,
-    get_workspace_service,
 )
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
@@ -59,15 +54,13 @@ class AgentTeamCoordinator:
 
     def __init__(self) -> None:
 
-        from app.config.configuration import get_agent_registry, get_tool_registry
+        from app.config.configuration import get_tool_registry
 
         self._team_run_crud = AgentTeamRunCrud()
         self._task_service = get_task_service()
         self._tool_registry = get_tool_registry()
         self._ledger = get_conversation_run_ledger()
         self._session_factory = main_session_factory()
-        self._workspace_service = get_workspace_service()
-        self._agent_registry = get_agent_registry()
         self._run_archive_service = AgentTeamRunArchiveService()
 
     def start(
@@ -280,25 +273,25 @@ class AgentTeamCoordinator:
         """复用或创建节点 Task，跑完本次节点 Run，返回它落定的 Run 记录。
 
         ``row`` / ``state`` / ``configuration`` 由 :meth:`start` 提供并信任，这里不重新校验 Team
-        身份与生命周期状态。流程：按节点快照派生 Task、校验节点 profile、经
-        ``task_runtime_spaces.enqueue`` 投递节点输入（静止的节点 Task 随即开 Run），等新 Run 出现
-        即把它记入快照并落库，再按 Task 等它静止（返回时最新 Run 已是终态）。
+        身份与生命周期状态。流程：按节点快照派生 Task、经 ``task_runtime_spaces.enqueue`` 投递节点
+        输入（静止的节点 Task 随即开 Run），等新 Run 出现即把它记入快照并落库，再按 Task 等它静止
+        （返回时最新 Run 已是终态）。
 
         同一 TeamRun 中的节点按 ``node_id`` 绑定独立 Task；再次访问该节点时读取原 Task，
         由 Task 级 context 保留它自己的历史。
 
         前置契约（缺失即异常上浮，由 :meth:`start` 的兜底分支收敛）：``state.node_runtime``
-        必然为该 ``node_id`` 备好快照，注册表也必然解析得出该节点的 child profile——两者都在
-        确认阶段校验过；这里不重复校验，也不为「取不到」写死降级分支。
+        必然为该 ``node_id`` 备好快照（确认阶段生成）；这里不重复校验，也不为「取不到」写死降级
+        分支。节点 profile 与快照的合成在驱动节点 Run 时由 ``AgentRuntimeConfig.for_run`` 完成，
+        失败落在 ``RunDriver`` 的异常边界，节点 Run 落定 failed、Team 按节点失败收尾。
 
         参数:
             remaining_rounds: 含本次在内的共享剩余执行预算，用于给节点追加收敛提醒。
             node_input: 上一节点的交接输出；入口节点为 ``None``。
 
         异常:
-            pydantic.ValidationError: 快照中的结构化输出契约非法（投递输入之前抛出）。
             RuntimeError: 节点输入已投递，但节点 Run 没能建立（原因由调度 actor 记录）。
-            其余异常（工具 schema 解析失败、注册表未命中等）直接上浮。节点 Run 执行期的失败（含模型
+            其余异常（如工具 schema 解析失败）直接上浮。节点 Run 执行期的失败（含模型
             配置已删除）由运行时落定为该 Run 的 ``failed``，不在这里抛出。
 
         副作用:
@@ -317,8 +310,6 @@ class AgentTeamCoordinator:
             max_rounds=configuration.max_runs,
             node_input=node_input,
         )
-        workspace_root = self._workspace_service.get_workspace(row.workspace_id).root_path
-        agent_profile: AgentProfile = self._agent_registry.resolve(workspace_root, agent_id)
 
         if node_execution is None:
             main_task = self._task_service.get_task(row.parent_task_id)
@@ -330,7 +321,7 @@ class AgentTeamCoordinator:
                 extra={
                     "agent_team_run_id": row.id,
                     "agent_team_node_id": node_id,
-                    NODE_PROFILE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json"),
+                    NODE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json"),
                 },
                 tool_schemas=tool_schemas,
                 derivation_depth=child_depth(main_task, "team"),
@@ -339,10 +330,6 @@ class AgentTeamCoordinator:
                 node_id, AgentTeamNodeExecution(node_id=node_id, task_id=task.id)
             )
 
-        # 节点快照在投递输入之前先合成一次：契约非法时直接上浮，不留下无执行者的节点 Run。真正
-        # 驱动时由 ``AgentRuntimeConfig.for_run`` 从节点 Task 的快照重新合成，不经调度入口在内存中
-        # 传递定义。
-        build_node_profile(agent_profile, node_runtime)
         # 节点输入是 Team 交给节点的话，以 Agent 消息投递：来源是发起 Team 的主 Task。
         message = prepare_agent_message(
             input_text,

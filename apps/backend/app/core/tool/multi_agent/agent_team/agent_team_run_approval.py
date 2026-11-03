@@ -14,12 +14,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.config.logging.logger import log
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
-from app.core.tool.mult_agent.agent_team.agent_team_preparation_service import (
+from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
     AgentTeamPreparationResult,
     AgentTeamPreparationService,
 )
-from app.core.tool.mult_agent.agent_team.team_tool_error import TeamToolError
-from app.core.tool.mult_agent.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.multi_agent.agent_team.team_tool_error import TeamToolError
+from app.core.tool.multi_agent.args.node_goal import AgentTeamNodeGoal
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason

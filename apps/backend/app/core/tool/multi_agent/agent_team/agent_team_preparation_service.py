@@ -16,10 +16,10 @@ from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettingsError
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.core.tool.derivation import child_depth
-from app.core.tool.mult_agent.agent_team.team_tool_error import TeamToolError
-from app.core.tool.mult_agent.args.node_goal import AgentTeamNodeGoal
-from app.core.tool.task_tool_scope import tools_for_task
+from app.core.tool.multi_agent.derivation import child_depth
+from app.core.tool.multi_agent.agent_team.team_tool_error import TeamToolError
+from app.core.tool.multi_agent.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.multi_agent.task_tool_scope import tools_for_task
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.models.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.tool.mult_agent.agent_team.agent_team_run_archive_service import (
+from app.core.tool.multi_agent.agent_team.agent_team_run_archive_service import (
     AgentTeamRunArchiveService,
 )
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
