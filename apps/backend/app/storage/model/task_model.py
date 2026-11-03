@@ -28,6 +28,11 @@ class TaskModel(StorageBase):
     parent_task_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("tasks.id"), nullable=True
     )
+    # 派生深度：用户新建与用户 fork 为 0，派生方按 ``core.tool.derivation.child_depth`` 写入；
+    # 创建后不变。
+    derivation_depth: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0"), default=0
+    )
     current_run_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("conversation_runs.id", ondelete="SET NULL"),

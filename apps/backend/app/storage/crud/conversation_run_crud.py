@@ -274,21 +274,28 @@ class ConversationRunCrud:
         session: Session,
         source: ConversationRunRecord,
         target_task_id: int,
+        *,
+        settle_as_forked: bool = False,
     ) -> ConversationRunRecord:
-        """在调用方事务中复制历史 Run；新 Run 的执行进度从初始状态开始。"""
+        """在调用方事务中复制历史 Run；新 Run 的执行进度从初始状态开始。
+
+        ``settle_as_forked`` 用于 Agent fork：源 Run 就是发起 fork 的那个、还在运行，克隆出的副本
+        必须是终态（新 Task 要以终态的当前 Run 交接新 Run），落为 ``completed / forked``、不带最终
+        输出——这一轮在源 Task 里还没结束，副本只代表「分叉之前的那一段」。
+        """
 
         model = ConversationRunModel(
             task_id=target_task_id,
             agent_id=source.agent_id,
             model_config_id=source.model_config_id,
             context_window_total=source.context_window_total,
-            end_reason=source.end_reason,
-            final_output=source.final_output,
+            end_reason="forked" if settle_as_forked else source.end_reason,
+            final_output=None if settle_as_forked else source.final_output,
             options=source.options.model_dump(mode="json"),
             execution_data=ReactExecutionState().model_dump(mode="json"),
             usage_json=_serialize_typed_json(source.usage),
             error_json=_serialize_typed_json(source.error),
-            status=source.status,
+            status=ConversationRunStatus.COMPLETED.value if settle_as_forked else source.status,
             created_at=to_text(source.created_at),
             updated_at=to_text(source.updated_at),
         )

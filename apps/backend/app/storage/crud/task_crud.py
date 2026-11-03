@@ -17,6 +17,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.models import TaskRecord
+from app.models.task_kind import USER_FACING_TASK_TYPES
 from app.storage.model.task_model import TaskModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import to_text, utc_now
@@ -61,6 +62,7 @@ class TaskCrud:
             session: Session | None = None,
             extra: dict[str, Any] | None = None,
             tool_schemas: list[dict[str, Any]] | None = None,
+            derivation_depth: int = 0,
     ) -> TaskRecord:
         """新建一条 task 记录并落库。
 
@@ -80,6 +82,8 @@ class TaskCrud:
                 为 None 时由本方法自开事务并自动提交。
             extra: Task 扩展 JSON（如 fork 来源、Team 节点快照）。
             tool_schemas: 创建时固化的模型工具 schema。
+            derivation_depth: 派生深度；由派生方按 ``core.tool.derivation.child_depth`` 算出，用户新建
+                与用户 fork 为 0。
 
         返回:
             落库成功的 ``TaskRecord``（含自增分配的 id 与填充的创建 / 更新时间）。
@@ -102,6 +106,7 @@ class TaskCrud:
                     creation_command_id,
                     extra,
                     tool_schemas,
+                    derivation_depth,
                 )
         return self._build_and_flush(
             session,
@@ -112,6 +117,7 @@ class TaskCrud:
             creation_command_id,
             extra,
             tool_schemas,
+            derivation_depth,
         )
 
     def _build_and_flush(
@@ -124,6 +130,7 @@ class TaskCrud:
             creation_command_id: str | None,
             extra: dict[str, Any] | None,
             tool_schemas: list[dict[str, Any]] | None = None,
+            derivation_depth: int = 0,
     ) -> TaskRecord:
         """在给定会话中构造并 flush 一条 task 记录。
 
@@ -153,6 +160,7 @@ class TaskCrud:
             extra=extra,
             tool_schemas=tool_schemas or [],
             current_run_id=None,
+            derivation_depth=derivation_depth,
         )
         session.add(model)
         session.flush()
@@ -345,12 +353,13 @@ class TaskCrud:
                 raise KeyError(task_id)
 
     def list_by_workspace(self, workspace_id: int) -> list[TaskRecord]:
-        """侧栏的 user / fork 任务，按更新时间倒序；委派子任务与 Team 节点不在侧栏。"""
+        """侧栏对话（``USER_FACING_TASK_TYPES``），按更新时间倒序；委派子任务与 Team 节点不在
+        侧栏。"""
         stmt = (
             select(TaskModel)
             .where(
                 TaskModel.workspace_id == workspace_id,
-                TaskModel.task_type.in_(("user", "fork")),
+                TaskModel.task_type.in_(USER_FACING_TASK_TYPES),
             )
             .order_by(TaskModel.updated_at.desc(), TaskModel.id.desc())
         )
