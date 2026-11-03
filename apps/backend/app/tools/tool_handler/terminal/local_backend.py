@@ -20,6 +20,7 @@ import threading
 import time
 from collections.abc import Callable
 
+from app.tools.shell.command_environment import user_command_environment
 from app.tools.shell.host_shells import find_shell
 from app.tools.tool_handler.terminal.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal.output_collector import _OutputCollector
@@ -78,6 +79,7 @@ class LocalExecutionBackend:
                 command_argv,
                 shell=use_shell,
                 cwd=str(cwd),
+                env=user_command_environment(),
                 # 不继承后端的 stdin：那是宿主的存活管道，永远不会 EOF，读 stdin 的命令会一直挂到超时。
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,

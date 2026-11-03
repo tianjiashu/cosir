@@ -10,6 +10,8 @@
     破坏性工具，越界即拒绝）。
   - ``resolve_without_boundary``：解析但不强制 containment（只读工具，允许
     访问项目根外）。
+  - ``resolve_for_read``：读取单个文件（``read_file`` / ``read_image`` / 浏览器上传）的
+    完整规则：不强制 containment，解析前后各拦一次设备路径。
 - ``blocked_device_reason`` 返回空串表示允许。
 - ``resolve_within_workspace`` 同时拒绝落在 workspace ``.cosir`` 保留子树内的路径
   （``.cosir`` 是只读保留区）；仅当调用方显式传 ``allow_reserved=True`` 时放行，
@@ -220,6 +222,22 @@ class PathResolver:
             resolved = target.resolve()
         except (OSError, RuntimeError, ValueError) as exc:
             return None, f"cannot resolve path: {path} ({exc})"
+        return resolved, ""
+
+    def resolve_for_read(self, path: str) -> tuple[Path | None, str]:
+        """读取一个文件的路径规则：先按原始字符串拦设备路径（不碰文件系统），解析后再按真实
+        目标（跟随符号链接）拦一次。读取文件内容的工具都走这里，规则只此一份。
+        """
+
+        device_error = self.blocked_device_reason(path)
+        if device_error:
+            return None, device_error
+        resolved, error = self.resolve_without_boundary(path)
+        if resolved is None:
+            return None, error
+        device_error = self.blocked_device_reason(path, resolved)
+        if device_error:
+            return None, device_error
         return resolved, ""
 
     def blocked_device_reason(self, path: str, resolved: Path | None = None) -> str:

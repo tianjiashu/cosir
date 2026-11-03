@@ -39,24 +39,24 @@ class TerminalStartTool(HandlerBase):
     """
 
     name = TOOL_TERMINAL_START
-    # 中文译文：新建一个交互 shell 会话：一个持续存活的本地 shell，带 PTY，用户在终端面板里
-    # 看到同一个终端并可以输入。与 execute_terminal 不同，cwd、环境变量与运行中的程序在多次
-    # terminal_write / terminal_read 之间保持；用它运行 dev server、REPL、watch 任务和交互程序。
-    # 返回 session_id（后续调用用它寻址）、shell、cwd 与集成状态。label 是显示在标签页和
-    # terminal_list 里的用途简述；cwd 是起始目录（工作区内、必须存在）；integration=auto 在 shell
-    # 支持时启用 shell 集成（命令边界、退出码、cwd 跟踪，terminal_write 的 command_returned 等待
-    # 依赖它），off 则关闭。先 terminal_list 看能否复用已有会话；会话归 Task，跨 Run 保留。
+    # 描述只写选用边界与会话的生命周期；label / cwd / integration 的含义只在参数字段里写一次。
+    # 选用规则与 execute_terminal 互为两面：命令会自己结束、只要结果就用它，所以这里点名它；
+    # 反过来 execute_terminal 的描述不点名本工具（子 Agent 没有交互终端）。
+    # 中文译文：新建一个交互 shell 会话：带真实终端（PTY）的本地 shell，用户在终端面板里看得到、
+    # 也能输入。适用于必须一直开着的（dev server、watcher、tail -f）、要来回交互的（REPL、TUI、
+    # 会提问的程序），或需要用户看到、参与的事；命令会自己结束、只要它的结果时用 execute_terminal。
+    # cwd、环境变量与运行中的程序在多次 terminal_write / terminal_read 之间保持；会话归 Task，之后的
+    # Run 也能复用，所以先用 terminal_list 看看。返回后续调用用的 session_id，以及 shell、cwd 与
+    # 集成状态。
     description = (
-        "Start a new interactive shell session: a live local shell with a PTY that the user "
-        "sees in the terminal panel and can type into. Unlike execute_terminal, the cwd, "
-        "environment and running program persist across terminal_write / terminal_read calls; "
-        "use it for dev servers, REPLs, watch tasks and interactive programs. Returns the "
-        "session_id to address later calls, the shell, cwd and integration status. label is a "
-        "short purpose shown on the tab and in terminal_list; cwd is the start directory "
-        "(inside the workspace, must exist); integration=auto enables shell integration where "
-        "the shell supports it (command boundaries, exit codes, cwd tracking, needed for "
-        "terminal_write's command_returned wait), off disables it. Check terminal_list first to "
-        "reuse an existing session; sessions belong to the task and survive across runs."
+        "Start an interactive shell session: a local shell with a real terminal (PTY) that the "
+        "user sees in the terminal panel and can type into. Use it for what must keep running "
+        "(dev servers, watchers, tail -f), needs back-and-forth input (REPLs, TUIs, programs "
+        "that ask questions), or the user should watch or join; for a command that finishes on "
+        "its own and whose result is all you need, use execute_terminal. The cwd, environment "
+        "and running program persist across terminal_write / terminal_read calls, and the "
+        "session belongs to the task, so later runs can reuse it: check terminal_list first. "
+        "Returns the session_id for later calls, plus the shell, cwd and integration status."
     )
 
     args_model = TerminalStartArgs
@@ -106,6 +106,7 @@ class TerminalStartTool(HandlerBase):
         return ToolDefinition(
             name=self.name,
             group=self.group,
+            needs_user_surface=True,
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
