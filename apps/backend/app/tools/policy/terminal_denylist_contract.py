@@ -1,4 +1,0 @@
-"""终端 deny-list 配置的共享输入限制。"""
-
-MAX_TERMINAL_DENY_PATTERNS = 256
-MAX_TERMINAL_DENY_PATTERN_LENGTH = 512
