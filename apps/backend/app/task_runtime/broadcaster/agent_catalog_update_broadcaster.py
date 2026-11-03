@@ -42,7 +42,7 @@ def _should_notify_space(space: TaskRuntimeSpace, change: AgentCatalogChange) ->
         return False
     if manager.agent.agent_type is AgentProfileType.HIDDEN:
         return False
-    if TOOL_DELEGATE_TASK not in manager.agent.allowed_tools:
+    if TOOL_DELEGATE_TASK not in space.task_tool_names:
         return False
     if change.scope is None:
         return True

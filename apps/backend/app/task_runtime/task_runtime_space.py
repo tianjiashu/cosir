@@ -128,6 +128,16 @@ class TaskRuntimeSpace:
             raise ValueError("Task 工具 schema 必须为 strict 契约，请新建 Task")
         return tuple(copy.deepcopy(schemas))
 
+    @property
+    def task_tool_names(self) -> tuple[str, ...]:
+        """Task 工具面的唯一出口：固化 schema 里的工具名，顺序沿用 schema。
+
+        系统提示词的工具目录与工作方式层、目录更新广播都按它判断「这个 Task 能用什么」；Agent
+        配置之后再改不影响它。本轮准入（再减去 Run 禁用的工具组）见
+        ``RuntimeContext.admitted_tools``。
+        """
+        return tuple(schema["name"] for schema in self.task_tool_schemas)
+
     def __post_init__(self) -> None:
         """初始化统一执行闸门与 context manager 槽位锁。"""
 
@@ -364,6 +374,7 @@ class TaskRuntimeSpace:
                 manager = RuntimeMessageContextManager(
                     current_task_id=self.current_task.id,
                     agent=self.agent,
+                    tool_names=self.task_tool_names,
                     workspace=self.current_workspace,
                     context_store=ContextStore(),
                 )
