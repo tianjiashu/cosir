@@ -1,7 +1,7 @@
 """Agent Team 运行的读取服务：供 HTTP API 与审批决定入队边界读取 TeamRun 及其前端读模型。
 
 审批门上的状态迁移（创建待确认、确认、驳回）只由 ``agent_team`` 工具发起，归
-``app.core.tool.handler.agent_team.agent_team_run_approval``；节点调度归 Coordinator。本服务只读。
+``app.core.tool.mult_agent.agent_team.agent_team_run_approval``；节点调度归 Coordinator。本服务只读。
 """
 
 from __future__ import annotations

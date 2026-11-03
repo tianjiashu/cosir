@@ -48,7 +48,7 @@ class RecoverService:
         """
 
         # coordinator 消费已装配的工具系统，且与 service 层互相引用，惰性导入。
-        from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
+        from app.core.tool.mult_agent.agent_team.team_coordinator import get_agent_team_coordinator
 
         recovered_runs = self.recover_orphaned_runs()
         orphan_node_task_ids = get_agent_team_coordinator().recover_after_restart()
