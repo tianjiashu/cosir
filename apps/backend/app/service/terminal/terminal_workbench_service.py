@@ -11,14 +11,12 @@
 from __future__ import annotations
 
 from app.config.logging.logger import log
+from app.models.task_kind import USER_FACING_TASK_TYPES
 from app.service.depends import (
     get_task_service,
     get_terminal_session_service,
     get_workspace_service,
 )
-
-# 只有侧栏对话 Task 有终端工作台；子 Agent 与 Team 节点 Task 不开放终端（与工具剥离一致）。
-_WORKBENCH_TASK_TYPES = frozenset({"user", "fork"})
 
 
 class TerminalWorkbenchTaskTypeError(Exception):
@@ -40,7 +38,8 @@ class TerminalWorkbenchService:
             TerminalSessionError: 终端服务拒绝（shell 不可用、容量、状态、worker 不可用）。
         """
         task = get_task_service().get_task(task_id)
-        if task.task_type not in _WORKBENCH_TASK_TYPES:
+        # 只有侧栏对话有终端工作台，与终端工具只给侧栏对话同一条规则（``models.task_kind``）。
+        if task.task_type not in USER_FACING_TASK_TYPES:
             raise TerminalWorkbenchTaskTypeError(
                 f"task type {task.task_type} does not support terminal workbench"
             )
