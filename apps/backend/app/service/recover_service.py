@@ -35,11 +35,14 @@ class RecoverService:
 
         顺序即契约：
 
-        1. 收敛遗留 Run 与 TeamRun：之后查出的待调度 Task 不含已收敛的 Run，子 Run 回投也依赖
-           本步返回的收敛结果。
+        1. 收敛遗留 Run 与 TeamRun，再取消作废 TeamRun 下挂起的节点 Run（没有 Coordinator 再等它，
+           不能被之后的结论或终端唤醒后独自继续）：之后查出的待调度 Task 与委派等待的判定都以
+           收敛后的 Run 状态为准。
         2. 为外部队列有待处理消息或当前 Run 挂起的 Task 物化 space（随之拉起 actor），让重启前
            已到达的消息照常处理、挂起的 Run 照常等唤醒。
-        3. 把残留的后台占位推到「已中断」，再按 ``parent_task_id`` 回投被收敛的委派子 Run 结论。
+        3. 按持久化的委派占位重新挂上父 Agent 的等待
+           （``restart_settlement.reattach_child_waits``），再把其余残留的后台占位推到「已中断」——
+           先挂后中断，接管了的占位不被中断。
         4. 唤醒挂在终端上的 Run，候选与第 2 步拉起 actor 的是同一份；其余 Task 在本进程首次驱动
            时另得失效提醒（``restart_settlement.first_drive_notice``）。
         """
@@ -48,12 +51,13 @@ class RecoverService:
         from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
 
         recovered_runs = self.recover_orphaned_runs()
-        recovered_team_runs = get_agent_team_coordinator().recover_after_restart()
+        orphan_node_task_ids = get_agent_team_coordinator().recover_after_restart()
+        cancelled_node_run_ids = self.cancel_orphaned_team_nodes(orphan_node_task_ids)
         dispatch_task_ids = service_depends.get_task_service().list_task_ids_to_dispatch()
         for task_id in dispatch_task_ids:
             task_runtime_spaces.get_or_create(task_id)
-        interrupted = restart_settlement.interrupt_pending_placeholders()
-        settled_child_run_ids = restart_settlement.settle_restarted_child_runs(recovered_runs)
+        reattached = restart_settlement.reattach_child_waits()
+        interrupted = restart_settlement.interrupt_pending_placeholders(exclude=reattached)
         woken_task_ids = restart_settlement.wake_suspended_terminal_runs(dispatch_task_ids)
         log.info(
             "backend_restart_recovered",
@@ -61,14 +65,38 @@ class RecoverService:
                 "msg": "后端启动期重启恢复完成",
                 "data": {
                     "cancelled_run_ids": [run.id for run in recovered_runs],
-                    "cancelled_team_run_count": recovered_team_runs,
+                    "cancelled_team_node_run_ids": cancelled_node_run_ids,
                     "dispatch_task_ids": sorted(dispatch_task_ids),
+                    "reattached_tool_call_ids": sorted(reattached),
                     "interrupted_placeholder_count": interrupted,
-                    "settled_child_run_ids": settled_child_run_ids,
                     "woken_terminal_task_ids": woken_task_ids,
                 },
             },
         )
+
+    def cancel_orphaned_team_nodes(
+        self, node_task_ids: list[int], end_reason: str = "runtime_restarted"
+    ) -> list[int]:
+        """取消作废 TeamRun 下挂起的节点 Run，返回被取消的 Run id。
+
+        只对「等待方不可能再出现」的节点这样做：一般的挂起 Run 照常保留、等可唤醒消息。单个失败
+        记录后继续。
+        """
+        tasks = service_depends.get_task_service()
+        cancelled: list[int] = []
+        for task_id in node_task_ids:
+            try:
+                run = tasks.require_current_run(task_id)
+                if run is None or run.status != ConversationRunStatus.SUSPENDED.value:
+                    continue
+                if self._ledger.transition(run.id, RunTransition.CANCEL, end_reason=end_reason):
+                    cancelled.append(run.id)
+            except Exception:
+                log.exception(
+                    "orphan_team_node_cancel_failed",
+                    extra={"msg": "取消作废 TeamRun 的挂起节点失败", "data": {"task_id": task_id}},
+                )
+        return cancelled
 
     def recover_orphaned_runs(
         self, end_reason: str = "runtime_restarted"
