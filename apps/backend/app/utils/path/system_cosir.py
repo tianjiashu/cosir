@@ -10,7 +10,6 @@
 ``<DATA_DIR>/.cosir/logs/``
 ``<DATA_DIR>/.cosir/storage/app.sqlite3``
 ``<DATA_DIR>/.cosir/runtime/``
-``<DATA_DIR>/.cosir/config/terminal_denylist.json``
 ``<DATA_DIR>/.cosir/config/mcp_servers.json``
 ``<DATA_DIR>/.cosir/config/skills.json``
 ``<DATA_DIR>/.cosir/skills/``
@@ -42,7 +41,6 @@ _STORAGE_DIR_NAME: Final[str] = "storage"
 _LOG_DIR_NAME: Final[str] = "logs"
 _RUNTIME_DIR_NAME: Final[str] = "runtime"
 _CONFIG_DIR_NAME: Final[str] = "config"
-_TERMINAL_DENYLIST_FILE_NAME: Final[str] = "terminal_denylist.json"
 _MCP_SERVERS_FILE_NAME: Final[str] = "mcp_servers.json"
 _SKILLS_CONFIG_FILE_NAME: Final[str] = "skills.json"
 _SKILLS_DIR_NAME: Final[str] = "skills"
@@ -170,12 +168,6 @@ def system_env_file() -> Path:
     """返回系统级基础环境配置文件路径（``<system_cosir_dir>/.env``）。"""
 
     return system_cosir_dir() / COSIR_ENV_FILE_NAME
-
-
-def system_terminal_denylist_file() -> Path:
-    """返回系统级终端 deny-list 配置文件路径。"""
-
-    return system_cosir_dir() / _CONFIG_DIR_NAME / _TERMINAL_DENYLIST_FILE_NAME
 
 
 def system_mcp_servers_file() -> Path:
