@@ -1,7 +1,7 @@
 """Agent Team 运行的读取服务：供 HTTP API 与审批决定入队边界读取 TeamRun 及其前端读模型。
 
 审批门上的状态迁移（创建待确认、确认、驳回）只由 ``agent_team`` 工具发起，归
-``app.core.tool.mult_agent.agent_team.agent_team_run_approval``；节点调度归 Coordinator。本服务只读。
+``app.core.tool.multi_agent.agent_team.agent_team_run_approval``；节点调度归 Coordinator。本服务只读。
 """
 
 from __future__ import annotations
@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 from app.models.agent_team.state.agent_team_run_state import AgentTeamRunState
-from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.agent_team.agent_team_execution_timeline import (
     project_node_visits,
@@ -69,20 +68,7 @@ class AgentTeamRunService:
             child_tasks_by_parent=child_tasks_by_parent,
             workspace=workspace_root,
         )
-        node_failure_reasons = {
-            AgentTeamRunEndReason.NODE_RUN_FAILED.value,
-            AgentTeamRunEndReason.NODE_RUN_CANCELLED.value,
-            AgentTeamRunEndReason.NODE_OUTPUT_INVALID.value,
-            AgentTeamRunEndReason.TRANSITION_NOT_FOUND.value,
-            AgentTeamRunEndReason.NEXT_NODE_START_FAILED.value,
-            AgentTeamRunEndReason.IMPLICIT_COMPLETION_MISSING.value,
-        }
-        failure_node_id = (
-            state.current_node_id
-            if row.status == AgentTeamRunStatus.FAILED.value
-            and row.end_reason in node_failure_reasons
-            else None
-        )
+        failure_node_id = state.failed_node_id(row.status, row.end_reason)
         node_views: list[dict[str, Any]] = []
         for node in configuration["nodes"]:
             node_id = node["node_id"]

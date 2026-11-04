@@ -28,7 +28,7 @@ if TYPE_CHECKING:
         ConversationTaskContextService,
     )
     from app.service.conversation_run.tool_decision_service import ToolDecisionService
-    from app.service.conversation_run.user_input_service import UserInputService
+    from app.assistant_transport.service.user_input_service import UserInputService
     from app.service.conversation_run.workspace_service import WorkspaceService
     from app.service.model_config import ModelConfigService
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
@@ -357,7 +357,7 @@ def get_task_message_queue() -> TaskMessageQueue:
 def get_user_input_service() -> UserInputService:
     """返回进程级用户输入解析服务单例（无进程内状态）。"""
 
-    from app.service.conversation_run.user_input_service import UserInputService
+    from app.assistant_transport.service.user_input_service import UserInputService
 
     return UserInputService()
 

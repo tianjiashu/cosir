@@ -23,7 +23,12 @@ from app.core.context.tool_call_closure import (
 )
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.message_metadata import MessageMetadata, ToolMessageMetadata, UserMessageMetadata
+from app.models.message_metadata import (
+    TURN_INPUT_KINDS,
+    MessageMetadata,
+    ToolMessageMetadata,
+    UserMessageMetadata,
+)
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -148,20 +153,26 @@ class ConversationTaskContextService:
             raise RuntimeError(f"task {source_task_id} has no persisted system prompt")
         return cloned_count
 
+    def run_awaits_background(self, task_id: int, run_id: int) -> bool:
+        """正常完成前检查本 Run 是否还有后台调用尚欠结论。"""
+        return self._crud.run_awaits_background(task_id, run_id)
+
     def settle_placeholders(
             self,
             task_id: int | None,
             tool_call_ids: frozenset[str] | None,
             status: ToolCallEventStatus,
             error: str | None,
+            *,
+            exclude: frozenset[str] = frozenset(),
     ) -> list[ConversationTaskContextRecord]:
         """把还在等结果的占位行（``pending`` 的后台占位、``running`` 的 HITL 占位）推到终态，返回
         实际改写的行（新 metadata）。
 
         Run 之外的结算（撤销、重启）走这里；Run 内的结论并入由 workflow 经 context manager 结算。
-        ``task_id`` 为 ``None`` 表示全部 Task，``tool_call_ids`` 为 ``None`` 表示不按调用过滤。只改
-        metadata、不改正文与可见性：占位仍是这次调用在模型协议上的结果。已到终态的行不动，迟到
-        的结算因此幂等。
+        ``task_id`` 为 ``None`` 表示全部 Task，``tool_call_ids`` 为 ``None`` 表示不按调用过滤，
+        ``exclude`` 里的调用不动（结论已在队列里，占位归那条结论结算）。只改 metadata、不改正文与
+        可见性：占位仍是这次调用在模型协议上的结果。已到终态的行不动，迟到的结算因此幂等。
         """
 
         settled: list[ConversationTaskContextRecord] = []
@@ -169,6 +180,8 @@ class ConversationTaskContextService:
         for record in self._crud.list_unsettled_placeholders(task_id):
             tool_call_id = record.message.get("tool_call_id")
             if tool_call_ids is not None and tool_call_id not in tool_call_ids:
+                continue
+            if tool_call_id in exclude:
                 continue
             previous = cast(ToolMessageMetadata, record.metadata)
             metadata = previous.model_copy(
@@ -186,15 +199,16 @@ class ConversationTaskContextService:
     def latest_user_input(
             self, task_id: int, session: Session | None = None
     ) -> ConversationTaskContextRecord | None:
-        """最新一条已并入、仍投影的用户输入；编辑重跑只允许改它，没有时返回 ``None``。
+        """最新一轮的输入是用户输入时返回它（编辑重跑只允许改它），否则返回 ``None``。
 
-        按 metadata 的 ``kind`` 判断是不是用户输入，不解析正文：通知、决定、后台结果
-        同样是 user 角色。已被编辑移出（不进上下文）的行不算。
+        按 metadata 的 ``kind`` 判断，不解析正文：通知、决定、后台结果同样是 user 角色。最新一轮
+        由 Agent 消息开启时也返回 ``None``：越过它去改更早的用户输入，会把 Agent 那一轮一起撤回，
+        前端同样只让最新一条用户消息可编辑。已被编辑移出（不进上下文）的行不算。
         """
         for record in reversed(self._crud.get(task_id, include_in_context=True, session=session)):
             metadata = record.metadata
-            if isinstance(metadata, UserMessageMetadata) and metadata.kind == "user_input":
-                return record
+            if isinstance(metadata, UserMessageMetadata) and metadata.kind in TURN_INPUT_KINDS:
+                return record if metadata.kind == "user_input" else None
         return None
 
     def awaiting_decision_tool(
@@ -227,27 +241,6 @@ class ConversationTaskContextService:
                 if call["id"] == tool_call_id:
                     return call["function"]["name"]
         return None
-
-    def has_tool_call(
-            self,
-            task_id: int,
-            tool_names: frozenset[str],
-            *,
-            run_id: int | None = None,
-    ) -> bool:
-        """仍进模型上下文的 assistant 消息里是否调用过 ``tool_names`` 之一；``run_id`` 限定归属 Run。
-
-        只看进上下文的行：模型看不到的调用（被编辑重跑移出）不需要再告知它的后果。
-        """
-        for record in self._crud.get(task_id, include_in_context=True):
-            if record.message["role"] != "assistant":
-                continue
-            if run_id is not None and record.run_id != run_id:
-                continue
-            for call in record.message.get("tool_calls") or ():
-                if call["type"] == "function" and call["function"]["name"] in tool_names:
-                    return True
-        return False
 
     def exclude_from(self, task_id: int, sequence: int, session: Session) -> frozenset[str]:
         """编辑重跑：撤回 ``sequence`` 起的这一轮，移出模型上下文与前端投影；返回被撤回的调用 id。

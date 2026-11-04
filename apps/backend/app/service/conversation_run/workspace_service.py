@@ -15,7 +15,7 @@ from pathlib import Path
 
 from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
-from app.core.tool.task_tool_scope import main_agent_tool_schemas
+from app.core.tool.multi_agent.task_tool_scope import main_agent_tool_schemas
 from app.models import TaskRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
@@ -328,7 +328,9 @@ class WorkspaceService:
 
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
-                from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
+                from app.core.tool.multi_agent.agent_team.team_coordinator import (
+                    get_agent_team_coordinator,
+                )
 
                 get_agent_team_coordinator().cancel_for_task_ids(
                     set(self._task_crud.list_ids_by_workspace(workspace_id))
