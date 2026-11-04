@@ -427,7 +427,7 @@ async def test_approval_of_a_call_missing_from_context_goes_to_the_model() -> No
 # ---------------------------------------------------------------------------
 
 
-def test_decision_result_is_appended_and_placeholder_only_gets_display_update() -> None:
+def test_decision_result_is_appended_and_placeholder_only_gets_display_update(isolated_storage) -> None:
     events: list[Any] = []
     rc = runtime_stub(event_sink=events.append)
     context = _Context()

@@ -493,7 +493,7 @@ def test_definition_runs_in_thread_with_background_capability() -> None:
 
     definition = ExecuteTerminalTool().to_definition()
     assert definition.execution_mode == "thread"
-    assert definition.background is not None and definition.background.default_background is False
+    assert "background" in definition.normalized().parameters_schema["required"]
 
 
 def test_narrowed_schema_survives_normalization(monkeypatch: pytest.MonkeyPatch) -> None:

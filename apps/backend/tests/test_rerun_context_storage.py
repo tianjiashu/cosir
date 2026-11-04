@@ -98,7 +98,7 @@ def test_exclude_from_keeps_late_results_of_earlier_calls(isolated_storage, tmp_
 
     def _placeholder() -> ToolMessageMetadata:
         return ToolMessageMetadata(status="pending", background=BackgroundWork(
-            kind="terminal_command", label="test", started_at="2026-01-01T00:00:00+00:00",
+            run_id=1, kind="terminal_command", label="test", started_at="2026-01-01T00:00:00+00:00",
         ))
 
     def result_of(call_id: str) -> UserMessageMetadata:

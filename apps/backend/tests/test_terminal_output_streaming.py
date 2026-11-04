@@ -426,7 +426,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
             tool_call_id="call-1",
             status="pending",
             background=BackgroundWork(
-                kind="terminal_command", label="make", started_at=_RUN_CREATED_AT.isoformat(),
+                run_id=1, kind="terminal_command", label="make", started_at=_RUN_CREATED_AT.isoformat(),
             ),
             display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
         )

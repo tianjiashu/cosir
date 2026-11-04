@@ -84,6 +84,11 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     owner_thread = threading.get_ident()
     calls: list[str] = []
 
+    class _Teams:
+        async def aclose(self) -> None:
+            calls.append("drain_teams")
+
+    monkeypatch.setattr(lifespan_module, "get_agent_team_coordinator", _Teams)
     class _RecoverService:
         def recover_after_restart(self) -> None:
             pass
@@ -117,4 +122,4 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     async with lifespan_module._lifespan_impl(SimpleNamespace()):
         pass
 
-    assert calls[-1:] == ["close_dependencies"]
+    assert calls == ["drain_teams", "close_dependencies"]

@@ -2,8 +2,6 @@
 
 import pytest
 
-from app.core.tool.multi_agent import send_message
-
 
 @pytest.mark.usefixtures("isolated_storage")
 def test_delegation_and_send_do_not_expose_a_background_switch() -> None:
@@ -13,4 +11,6 @@ def test_delegation_and_send_do_not_expose_a_background_switch() -> None:
 
     assert "background" not in DelegateTaskArgs.model_fields
     assert "background" not in SendMessageArgs.model_fields
-    assert send_message.SendMessageTool().to_definition().background is None
+    from app.core.tool.multi_agent.args.fork_task_args import ForkTaskArgs
+
+    assert "background" not in ForkTaskArgs.model_fields

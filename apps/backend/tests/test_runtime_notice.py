@@ -42,10 +42,6 @@ def _stub_for_run_deps(monkeypatch, agent) -> None:
         "get_conversation_event_projector",
         lambda: SimpleNamespace(process=print),
     )
-    # 默认不需要告知旧终端失效；该通知的投递另有用例覆盖。
-    monkeypatch.setattr(
-        runtime_context_module.restart_settlement, "first_drive_notice", lambda _space: None
-    )
     # 测试里每个「组」只含同名工具，断言仍按工具名写。
     monkeypatch.setattr(
         runtime_context_module,
@@ -103,31 +99,6 @@ def test_tool_availability_skips_unchanged_all_available_and_reports_changes(mon
 
     [notice] = _for_run_with_space(monkeypatch, space, ["write_file"])
     assert "still disabled" in notice.content
-
-
-def test_terminals_invalidated_notice_is_posted_and_failure_does_not_block(monkeypatch) -> None:
-    """首次驱动的旧终端失效通知随装配投进 mailbox；判定失败只记录，装配照常完成。"""
-    from app.core.workflow.execution_state import runtime_context as runtime_context_module
-
-    terminals = NoticeBody(content="terminals gone", notice_kind="terminals_invalidated")
-    space = _space(RunMailbox(), announced=frozenset())
-    _for_run_with_space(monkeypatch, space, [])
-    monkeypatch.setattr(
-        runtime_context_module.restart_settlement, "first_drive_notice", lambda _space: terminals
-    )
-    runtime_context_module.RuntimeContext.for_run(
-        SimpleNamespace(id=7, task_id=1, options=SimpleNamespace(disabled_tool_groups=[]))
-    )
-    assert [entry.body for entry in space.mailbox.take_notices()] == [terminals]
-
-    def broken(_space):
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr(runtime_context_module.restart_settlement, "first_drive_notice", broken)
-    runtime_context_module.RuntimeContext.for_run(
-        SimpleNamespace(id=7, task_id=1, options=SimpleNamespace(disabled_tool_groups=[]))
-    )
-    assert space.mailbox.isEmpty()
 
 
 def _notice(allowed: frozenset[str], announced: frozenset[str] | None, banned: frozenset[str]):

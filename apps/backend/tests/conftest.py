@@ -343,11 +343,9 @@ def _bind(crud_type: type[object], factory: sessionmaker) -> object:
 
 @pytest.fixture
 def canonical_store(tmp_path: Path, monkeypatch):
-    """真实 SQLite 的 canonical store：三个测试文件共用同一套 CRUD / state / context 装配。
+    """用同一个临时 SQLite 库装配 CRUD、消息队列和快照服务。
 
-    文件级共享的原因：``test_task5_acceptance``、``test_task3_canonical_write_paths`` 与
-    ``test_task_fork`` 都要在「真实文件库 + 真实 CRUD」上验证 canonical 写入路径，各自复制一份
-    会漂移。夹具只装配事实与可观测服务，不预置任何 Run / context 行。
+    夹具创建工作区与 Task，不预置 Run 或上下文记录。
     """
 
     engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
@@ -368,12 +366,7 @@ def canonical_store(tmp_path: Path, monkeypatch):
     workspace = workspaces.create("acceptance", str(tmp_path))
     task = tasks.create(workspace.id, "canonical conversation_run")
     ConversationTaskStateService.clear_process_state()
-    # ConversationTaskStateService 现在从 depends 取 CRUD 单例；这里把三个 getter 指向本夹具的临时库
-    # CRUD，使 state 服务与 store 中的 CRUD 读写同一份临时数据（保留测试隔离，不污染全局库）。
-    monkeypatch.setattr(
-        "app.service.conversation_run.user_input_service.get_task_crud",
-        lambda: tasks,
-    )
+    # 快照服务通过 depends 取这三个 CRUD，必须读到用例写入的同一份数据。
     monkeypatch.setattr("app.service.depends.get_task_crud", lambda: tasks)
     monkeypatch.setattr("app.service.depends.get_conversation_run_crud", lambda: runs)
     monkeypatch.setattr("app.service.depends.get_conversation_task_context_crud", lambda: contexts)

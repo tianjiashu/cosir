@@ -1,26 +1,25 @@
 """后台结果登记表、结论投递与 ``wait_messages`` 判定。
 
 终端服务本身不参与：条目由执行单元登记（这里直接调用 ``background_registry``）。重启收尾见
-``test_restart_settlement.py``。
+``test_recover_after_restart.py`` 与 ``test_background_placeholders.py``。
 """
 
 from __future__ import annotations
 
-import threading
-
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from app.core.tool.background import backgraound_registry as background_module
-from app.core.tool.background.job import BackgroundConclusion
 from app.core.tool.background.backgraound_registry import (
     BackgroundRegistry,
     background_registry,
     deliver_background_result,
 )
+from app.core.tool.background.background_job import BackgroundConclusion
 from app.core.tool.handler.wait_messages import WaitMessagesTool
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
@@ -66,7 +65,7 @@ def _register(
         run_id=1,
         kind="terminal_command",
         label=label,
-        on_cancel=on_cancel or (lambda: None),
+        on_cancel=lambda _reason: on_cancel() if on_cancel else None,
     )
     return tool_call_id
 
@@ -217,7 +216,7 @@ def test_complete_while_stopping_leaves_entry_for_drop(delivered) -> None:
         [dropped] = registry.drop_task(6)
     finally:
         cancellation_registry.consume(6)
-    assert dropped.tool_call_id == "call-a"
+    assert dropped == "call-a"
     assert cancelled == ["a"]
     assert registry.live_background(6) == {}
     assert delivered == []
@@ -282,7 +281,7 @@ def _register_foreground(registry: BackgroundRegistry, tool_call_id: str, calls:
         kind="terminal_command",
         label="terminal_command:t",
         mode="foreground",
-        on_cancel=lambda: calls.append("cancel"),
+        on_cancel=lambda _reason: calls.append("cancel"),
         detached=detached,
     )
     return detached
@@ -319,7 +318,7 @@ def test_cancelled_foreground_entries_leave_no_history(delivered) -> None:
     registry = BackgroundRegistry()
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
-    assert registry.cancel("call-f") is not None
+    assert registry.withdraw("call-f")
     assert calls == ["cancel"] and registry.live_background(1) == {}
 
 
@@ -342,7 +341,7 @@ def test_detach_only_applies_to_live_foreground_entries(delivered) -> None:
     assert registry.detach("call-missing") == "not_found"
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
-    registry.cancel("call-f")
+    registry.withdraw("call-f")
     assert registry.settle_foreground("call-f") == "gone"
 
 
@@ -350,10 +349,10 @@ def test_user_cancel_reports_the_mode_and_removes_live_work(delivered) -> None:
     registry = BackgroundRegistry()
     called: list[str] = []
     _register(registry, "call-b", 1, "b", lambda: called.append("b"))
-    dropped = registry.cancel("call-b")
-    assert dropped is not None and (dropped.mode, dropped.task_id) == ("background", 1)
+    dropped = registry.withdraw("call-b")
+    assert dropped
     assert called == ["b"]
-    assert registry.cancel("call-b") is None
+    assert not registry.withdraw("call-b")
     assert registry.live_background(1) == {}
 
 
@@ -372,10 +371,7 @@ def test_drop_task_reports_dropped_entries(delivered) -> None:
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
     dropped = registry.drop_task(1)
-    assert sorted((entry.tool_call_id, entry.mode) for entry in dropped) == [
-        ("call-b", "background"),
-        ("call-f", "foreground"),
-    ]
+    assert dropped == ["call-b"]
 
 
 def test_listener_is_notified_off_the_caller_thread(delivered) -> None:
@@ -407,68 +403,40 @@ def test_foreground_waits_contract() -> None:
             validate_foreground_waits(invalid)
 
 
-# ── 重启后重新挂上委派等待 ──────────────────────────────────────────────
-
-
-def test_reattach_keeps_the_persisted_work_and_delivers_to_the_original_call(delivered) -> None:
-    """沿用占位上的工作记录（看板与卡片读同一份），结论按原 ``tool_call_id`` 回投。"""
-    from app.models.message_metadata import BackgroundWork
+def test_single_stop_before_registration_is_taken_over_until_the_receipt_commits():
+    from app.core.workflow.cancel.tool_call_cancellation_registry import (
+        tool_call_cancellation_registry,
+    )
 
     registry = BackgroundRegistry()
-    work = BackgroundWork(
-        kind="child_agent", label="child", started_at="2026-11-01T00:00:00+00:00",
-        target_task_id=2,
-    )
-    registry.reattach("call-a", task_id=1, run_id=10, work=work, on_cancel=lambda: None)
+    signals = []
+    try:
+        assert registry.request_user_cancel(3, "early", driving=True)
+        registry.register(
+            "early", task_id=3, run_id=5, kind="agent_team", label="review",
+            on_cancel=signals.append, after_commit=lambda: signals.append("start"),
+            reports_user_stop=True,
+        )
+        assert signals == ["user"]
+        assert not registry.request_user_cancel(3, "early", driving=True)
+        registry.commit_start("early")
+        registry.commit_start("early")
+        assert signals == ["user", "start"]
+    finally:
+        tool_call_cancellation_registry.clear(3, "early")
+        registry.close()
 
-    assert registry.live_background(1) == {"call-a": work}
-    assert registry.pending(1, 10) == ["child"]
-    assert registry.complete("call-a", BackgroundConclusion({"status": "completed"})) is True
-    assert delivered == [(1, "call-a", "child_agent")]
-    registry.reattach("call-b", task_id=1, run_id=10, work=work, on_cancel=lambda: None)
-    with pytest.raises(ValueError):
-        registry.reattach("call-b", task_id=1, run_id=10, work=work, on_cancel=lambda: None)
 
-
-async def test_reattached_child_wait_delivers_once_the_child_settles(
-    monkeypatch, delivered
-) -> None:
-    """重新挂上的等待与进程内委派同一套：子 Task 无事可做后读它最新 Run 的结论。"""
-    import asyncio
-    from types import SimpleNamespace
-
-    from app.core.tool.multi_agent.child_agent import child_run_job
-    from app.models.message_metadata import BackgroundWork
-
-    settled = asyncio.Event()
-
-    async def wait_quiescent() -> None:
-        await settled.wait()
-
-    monkeypatch.setattr(
-        "app.task_runtime.task_runtime_space_registry.task_runtime_spaces.get_or_create",
-        lambda _task_id: SimpleNamespace(actor=SimpleNamespace(wait_quiescent=wait_quiescent)),
-    )
-    monkeypatch.setattr(
-        "app.service.depends.get_task_service",
-        lambda: SimpleNamespace(
-            require_current_run=lambda _id: SimpleNamespace(
-                status="cancelled", end_reason="runtime_restarted", final_output=None
-            )
-        ),
-    )
-    work = BackgroundWork(
-        kind="child_agent", label="child", started_at="2026-11-01T00:00:00+00:00",
-        target_task_id=2,
-    )
-    child_run_job.reattach_child_wait(
-        task_id=1, run_id=10, tool_call_id="call-a", work=work, loop=asyncio.get_running_loop()
-    )
-    assert background_registry.pending(1, 10) == ["child"]
-
-    settled.set()
-    for _ in range(50):
-        if delivered:
-            break
-        await asyncio.sleep(0.02)
-    assert delivered == [(1, "call-a", "child_agent")]
+def test_failed_run_withdraws_only_its_uncommitted_work():
+    registry = BackgroundRegistry()
+    signals = []
+    for call_id, run_id in [("staged", 5), ("started", 5), ("other-run", 6)]:
+        registry.register(
+            call_id, task_id=3, run_id=run_id, kind="agent_team", label="review",
+            on_cancel=signals.append, after_commit=lambda: None,
+        )
+    registry.commit_start("started")
+    assert registry.withdraw_uncommitted(3, 5) == ["staged"]
+    assert signals == ["withdraw"]
+    assert set(registry.live_background(3)) == {"started", "other-run"}
+    registry.close()

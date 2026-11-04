@@ -15,7 +15,7 @@ from app.assistant_transport.state.conversation_state_background_task import (
     validate_background_tasks,
 )
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tool.background import placeholders
+from app.core.tool.background.cancel_placeholders import cancel_placeholders
 from app.core.tool.background.backgraound_registry import background_registry
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
@@ -26,7 +26,7 @@ _START = "2026-01-01T00:00:00+00:00"
 
 def _work(label: str, *, started_at: str = _START, ended_at: str | None = None) -> BackgroundWork:
     return BackgroundWork(
-        kind="terminal_command", label=label, started_at=started_at, ended_at=ended_at
+        run_id=1, kind="terminal_command", label=label, started_at=started_at, ended_at=ended_at
     )
 
 
@@ -148,7 +148,7 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
         run_id=run.id,
         kind="terminal_command",
         label="build",
-        on_cancel=lambda: None,
+        on_cancel=lambda _reason: None,
     )
     service.refresh_background_results(task.id)
     assert [entry["status"] for entry in service.get_state(task.id)["background_tasks"]] == [
@@ -179,7 +179,7 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
         == service.rebuild_state(task.id)["background_tasks"]
     )
 
-    background_registry.cancel("call-bg")
+    background_registry.withdraw("call-bg")
     service.refresh_background_results(task.id)
     assert service.get_state(task.id)["background_tasks"][0]["status"] == "settling"
     monkeypatch.setattr(
@@ -187,7 +187,9 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
         "process",
         service.apply_planned,
     )
-    assert placeholders.settle_placeholders(task.id, ["call-bg"], "cancelled", "cancelled") == 1
+    assert cancel_placeholders(
+        task.id, ["call-bg"], "cancelled"
+    ) == frozenset({task.id})
     hot = service.get_state(task.id)["background_tasks"]
     assert hot[0]["status"] == "cancelled" and hot[0]["endedAt"] is not None
     assert hot == service.rebuild_state(task.id)["background_tasks"]

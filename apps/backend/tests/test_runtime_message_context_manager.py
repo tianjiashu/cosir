@@ -102,7 +102,7 @@ def test_background_completion_updates_work_and_preserves_existing_card():
     store = _ContextStore(max_sequence=2)
     manager = _manager(store)
     work = BackgroundWork(
-        kind="child_agent", label="research", started_at="2026-01-01T00:00:00+00:00",
+        run_id=1, kind="child_agent", label="research", started_at="2026-01-01T00:00:00+00:00",
     )
     card = {"kind": "child-agent", "child_task_id": 11}
     manager._entries = [ContextEntry(

@@ -528,7 +528,7 @@ def test_deleting_an_idle_task_revokes_its_background_work(storage, tmp_path) ->
         run_id=None,
         kind="terminal_command",
         label="sleep",
-        on_cancel=lambda: cancelled.append("call-bg"),
+        on_cancel=lambda _reason: cancelled.append("call-bg"),
     )
 
     get_task_service().delete_task(task)

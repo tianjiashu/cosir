@@ -16,7 +16,7 @@ from app.core import task_actor as actor_module
 from app.core import task_cancellation
 from app.core import task_execution as execution_module
 from app.core.task_actor import SessionConflictError, TaskActor
-from app.core.tool.background.job import BackgroundConclusion
+from app.core.tool.background.background_job import BackgroundConclusion
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.message_queue.task_message import (
     BackgroundResultBody,
@@ -167,9 +167,9 @@ def harness(monkeypatch):
     # 撤销时的占位结算写库；记下调用，不触达存储（占位结算见 test_background_placeholders）。
     settled: list[tuple[int, list[str]]] = []
     monkeypatch.setattr(
-        task_cancellation.placeholders,
-        "settle_placeholders",
-        lambda task_id, ids, _status, _hint: settled.append((task_id, list(ids))) or len(ids),
+        task_cancellation,
+        "cancel_placeholders",
+        lambda task_id, ids, _hint: settled.append((task_id, list(ids))) or frozenset({task_id}),
     )
     space = SimpleNamespace(
         task_id=_TASK_ID,
@@ -588,7 +588,7 @@ async def test_cancelling_suspended_run_drops_background_entries(harness) -> Non
         run_id=run.id,
         kind="terminal_command",
         label="terminal:t1",
-        on_cancel=lambda: cancelled.append("t1"),
+        on_cancel=lambda _reason: cancelled.append("t1"),
     )
     background_registry.register(
         "call-x",
@@ -596,7 +596,7 @@ async def test_cancelling_suspended_run_drops_background_entries(harness) -> Non
         run_id=None,
         kind="terminal_command",
         label="x",
-        on_cancel=lambda: None,
+        on_cancel=lambda _reason: None,
     )
     try:
         await harness.actor.cancel("parent")
@@ -623,7 +623,7 @@ async def test_running_run_cancel_drops_watches_when_execution_settles(harness) 
     dropped: list[int] = []
     signalled_at_drop: list[bool] = []
 
-    def on_cancel() -> None:
+    def on_cancel(_reason) -> None:
         # 撤销必须先于取走取消信号：取走之后到达的结论不再被丢弃，会开出新 Run。
         signalled_at_drop.append(execution_module.cancellation_registry.is_cancelled(_TASK_ID))
         dropped.append(run.id)
@@ -658,7 +658,7 @@ async def test_completed_run_keeps_background_entries(harness) -> None:
         run_id=run.id,
         kind="terminal_command",
         label="terminal:t3",
-        on_cancel=lambda: None,
+        on_cancel=lambda _reason: None,
     )
     await _finish(run.id, "suspended")
     assert background_registry.pending(_TASK_ID, run.id) == ["terminal:t3"]

@@ -99,37 +99,12 @@ def test_cancelling_team_run_only_transitions_status_and_writes_archive(monkeypa
     assert captured["archived"] == 17
 
 
-def test_tool_call_cancel_counts_as_stopped_when_team_run_already_settled(monkeypatch) -> None:
-    """检出工具级取消信号、条件迁移却落空（并发落定）时，照样判定 Team 已停止，不抛异常。"""
-
-    running = SimpleNamespace(
-        id=17,
-        status=AgentTeamRunStatus.RUNNING.value,
-        parent_task_id=5,
-        tool_call_id="call-1",
-    )
-    settled = SimpleNamespace(id=17, status=AgentTeamRunStatus.COMPLETED.value)
-    reads = iter((running, settled))
-    coordinator = AgentTeamCoordinator.__new__(AgentTeamCoordinator)
-    coordinator._team_run_crud = SimpleNamespace(
-        update_status_if_in=lambda *_args, **_kwargs: None,
-        get_by_id=lambda _run_id: next(reads),
-    )
-    monkeypatch.setattr(
-        coordinator_module.tool_call_cancellation_registry,
-        "is_cancelled",
-        lambda task_id, tool_call_id: (task_id, tool_call_id) == (5, "call-1"),
-    )
-
-    assert coordinator._stopped(17) is True
-
-
-def test_parent_task_stop_cancels_pending_and_running_teams_of_that_task() -> None:
+async def test_parent_task_stop_cancels_pending_and_running_teams_of_that_task() -> None:
     """主 Task 停止按 Task 寻址：待确认方案与在新 Run 里执行的 Team 都取消，别的 Task 不受影响。"""
 
-    pending = SimpleNamespace(id=1, parent_task_id=5, parent_run_id=10)
+    pending = SimpleNamespace(id=1, tool_call_id="c1", parent_task_id=5, parent_run_id=10)
     # 方案在 Run 10 提出、批准后由 Run 11 执行：按执行中的 Run 匹配会漏掉它。
-    running = SimpleNamespace(id=2, parent_task_id=5, parent_run_id=10)
+    running = SimpleNamespace(id=2, tool_call_id="c2", parent_task_id=5, parent_run_id=10)
     other = SimpleNamespace(id=3, parent_task_id=6, parent_run_id=12)
     transitions: list[tuple[int, str]] = []
 
@@ -148,7 +123,8 @@ def test_parent_task_stop_cancels_pending_and_running_teams_of_that_task() -> No
     coordinator._team_run_crud = _Crud()
     coordinator._run_archive_service = SimpleNamespace(write_terminal_archive=lambda _run_id: None)
 
-    assert coordinator.cancel_for_parent_task(5) == 2
+    coordinator._active = {}
+    await coordinator.cancel_for_parent_task(5)
     assert transitions == [
         (1, AgentTeamRunEndReason.PARENT_CANCELLED.value),
         (2, AgentTeamRunEndReason.PARENT_CANCELLED.value),
@@ -184,13 +160,11 @@ def _driven_coordinator(monkeypatch, run_node) -> tuple[AgentTeamCoordinator, di
             model_validate=lambda _value: SimpleNamespace(start_node_id="develop", max_runs=3)
         ),
     )
-    monkeypatch.setattr(
-        coordinator_module.task_runtime_spaces,
-        "get_or_create",
-        lambda task_id: SimpleNamespace(actor=SimpleNamespace(
-            request_cancel=lambda reason: captured["cancelled"].append((task_id, reason))
-        )),
-    )
+    async def cancel(reason):
+        captured["cancelled"].append((41, reason))
+
+    monkeypatch.setattr(coordinator_module.task_runtime_spaces, "get_or_create",
+                        lambda _id: SimpleNamespace(actor=SimpleNamespace(cancel=cancel)))
     return coordinator, captured
 
 
@@ -201,10 +175,10 @@ _TEAM_RUN = SimpleNamespace(
 )
 
 
-def test_completed_team_does_not_store_node_output_as_end_reason(monkeypatch) -> None:
+async def test_completed_team_does_not_store_node_output_as_end_reason(monkeypatch) -> None:
     """``end_reason`` 只承载原因码：Team 完成时不得把节点交接输出写进去。"""
 
-    def run_node(_row, _state, *_args):
+    async def run_node(_row, _state, *_args):
         return SimpleNamespace(
             id=5,
             status="completed",
@@ -212,26 +186,26 @@ def test_completed_team_does_not_store_node_output_as_end_reason(monkeypatch) ->
         )
 
     coordinator, captured = _driven_coordinator(monkeypatch, run_node)
-    coordinator.start(_TEAM_RUN, event_loop=None)
+    await coordinator._drive(_TEAM_RUN, coordinator_module._TeamExecution(1))
 
     target, kwargs = captured["updates"][-1]
     assert target == AgentTeamRunStatus.COMPLETED.value
     assert kwargs.get("end_reason") is None
 
 
-def test_dispatch_failure_after_enqueue_stops_the_node_task(monkeypatch) -> None:
+async def test_dispatch_failure_after_enqueue_stops_the_node_task(monkeypatch) -> None:
     """输入已投递后调度出错（如等新 Run 超时）：TeamRun 收敛为 failed，并停下节点 Task。"""
 
     from app.models.agent_team.state.agent_team_run_components import AgentTeamNodeExecution
 
-    def run_node(_row, state, *_args):
+    async def run_node(_row, state, *_args):
         state.create_execution_node(
             "develop", AgentTeamNodeExecution(node_id="develop", task_id=41)
         )
         raise RuntimeError("节点输入没有启动新 Run")
 
     coordinator, captured = _driven_coordinator(monkeypatch, run_node)
-    coordinator.start(_TEAM_RUN, event_loop=None)
+    await coordinator._drive(_TEAM_RUN, coordinator_module._TeamExecution(1))
 
     target, kwargs = captured["updates"][-1]
     assert target == AgentTeamRunStatus.FAILED.value

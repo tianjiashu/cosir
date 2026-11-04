@@ -12,8 +12,8 @@ from app.assistant_transport.projection.tool_call_event_projection import plan_t
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_snapshot import _validate_part
 from app.core.events import ToolCallsSettledEvent
-from app.core.tool.background import placeholders
-from app.core.tool.background.job import BackgroundConclusion
+from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cancel_placeholders
+from app.core.tool.background.background_job import BackgroundConclusion
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
@@ -25,7 +25,7 @@ from app.service import depends
 from app.service.conversation_run.conversation_task_context_service import _uninherited
 
 _WORK = BackgroundWork(
-    kind="terminal_command", label="make", started_at="2026-01-01T00:00:00+00:00"
+    run_id=1, kind="terminal_command", label="make", started_at="2026-01-01T00:00:00+00:00"
 )
 _ENDED_AT = "2026-01-01T00:01:00+00:00"
 _FINISHED_WORK = _WORK.model_copy(update={"ended_at": _ENDED_AT})
@@ -66,11 +66,11 @@ def _metadata(stored, call_id: str) -> ToolMessageMetadata:
 def test_only_pending_background_rows_are_settled(stored) -> None:
     assert [r.message["tool_call_id"] for r in stored.crud.list_unsettled_placeholders()] == ["call-bg"]
 
-    count = placeholders.settle_placeholders(
-        stored.task_id, None, "cancelled", placeholders.INTERRUPTED_HINT
+    settled_tasks = cancel_placeholders(
+        stored.task_id, None, INTERRUPTED_HINT
     )
 
-    assert count == 1
+    assert settled_tasks == frozenset({stored.task_id})
     settled = _metadata(stored, "call-bg")
     assert (settled.status, settled.error) == ("cancelled", "已中断")
     assert settled.background.started_at == _WORK.started_at
@@ -80,12 +80,13 @@ def test_only_pending_background_rows_are_settled(stored) -> None:
     assert _metadata(stored, "call-done").status == "completed"
     assert _metadata(stored, "call-done").background == _FINISHED_WORK
     # 迟到的再次结算幂等。
-    assert placeholders.settle_placeholders(stored.task_id, None, "cancelled", None) == 0
+    assert cancel_placeholders(stored.task_id, None, None) == frozenset()
 
 
 def test_settlement_filters_by_call(stored) -> None:
-    assert placeholders.settle_placeholders(stored.task_id, ["call-other"], "cancelled", None) == 0
-    assert placeholders.settle_placeholders(stored.task_id, [], "cancelled", None) == 0
+    other = cancel_placeholders(stored.task_id, ["call-other"], None)
+    empty = cancel_placeholders(stored.task_id, [], None)
+    assert other == empty == frozenset()
     assert _metadata(stored, "call-bg").status == "pending"
 
 
@@ -273,7 +274,7 @@ def test_result_arriving_while_stopping_settles_placeholder_as_cancelled(stored)
         run_id=None,
         kind="terminal_command",
         label="terminal:sleep",
-        on_cancel=lambda: None,
+        on_cancel=lambda _reason: None,
     )
     cancellation_registry.request_cancel(stored.task_id, "user")
     try:
@@ -289,12 +290,14 @@ def test_result_arriving_while_stopping_settles_placeholder_as_cancelled(stored)
 
 def test_restart_interrupts_hitl_calls_whose_decision_was_executing(stored) -> None:
     """决定已接收、执行被重启打断的 HITL 占位（running）随重启收尾推到「已中断」；仍在等决定的不动。"""
-    from app.core.tool.background.restart_settlement import interrupt_pending_placeholders
+    from app.service.recover_service import RecoverService
 
     run_id = stored.crud.get(stored.task_id)[0].run_id
     stored.crud.create(_tool_row(stored.task_id, run_id, 4, "call-claimed", status="running"))
 
-    interrupt_pending_placeholders()
+    assert RecoverService().interrupt_placeholders([stored.task_id]) == frozenset(
+        {stored.task_id}
+    )
 
     claimed = _metadata(stored, "call-claimed")
     assert (claimed.status, claimed.error) == ("cancelled", "已中断")

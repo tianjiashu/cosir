@@ -133,8 +133,8 @@ def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delive
         background=True,
         execution_context=_context(tmp_path, "call-cancel"),
     )
-    dropped = background_registry.cancel("call-cancel")
-    assert dropped is not None and dropped.mode == "background"
+    dropped = background_registry.withdraw("call-cancel")
+    assert dropped
     time.sleep(2.5)
     # 进程树被杀：命令没有跑完；撤销后的结论被登记表丢弃，不回投。
     assert not marker.exists()

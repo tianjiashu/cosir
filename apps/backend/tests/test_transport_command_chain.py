@@ -24,8 +24,10 @@ from app.assistant_transport.service.transport_assistant_service import Transpor
 from app.core import task_actor as actor_module
 from app.core import task_execution as execution_module
 from app.core.task_actor import TaskActor
-from app.core.tool.background.job import BackgroundConclusion
-from app.core.tool.multi_agent.agent_team import team_coordinator as coordinator_module
+from app.core.tool.background.background_job import BackgroundConclusion
+from app.core.tool.background import cancel_placeholders as placeholder_module
+from app.core.tool.background.cancel_placeholders import USER_CANCELLED_HINT
+from app.core import task_cancellation as cancellation_module
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
@@ -215,10 +217,14 @@ async def chain(monkeypatch):
         )),
     )
     cancelled_teams: list[int] = []
+
+    async def cancel_teams(task_id):
+        cancelled_teams.append(task_id)
+
     monkeypatch.setattr(
-        coordinator_module,
+        cancellation_module.service_depends,
         "get_agent_team_coordinator",
-        lambda: SimpleNamespace(cancel_for_parent_task=cancelled_teams.append),
+        lambda: SimpleNamespace(cancel_for_parent_task=cancel_teams),
     )
     service = TransportAssistantService.__new__(TransportAssistantService)
     service._tasks = ledger
@@ -370,7 +376,7 @@ def _register_background_work(tool_call_id: str, mode: str, calls: list[str]) ->
         kind="terminal_command",
         label="terminal_command:t",
         mode=mode,  # type: ignore[arg-type]
-        on_cancel=lambda: calls.append("cancel"),
+        on_cancel=lambda _reason: calls.append("cancel"),
         detached=detached if mode == "foreground" else None,
     )
     return detached
@@ -380,11 +386,11 @@ async def test_cancel_background_work_without_active_owner_only_settles_placehol
     chain, monkeypatch
 ) -> None:
     """后台工作不要求 Run 在执行：撤销登记、占位推到 cancelled，不唤醒或新开 Run。"""
-    settled: list[tuple[int, list[str], str]] = []
+    settled: list[tuple[int, list[str], str | None]] = []
     monkeypatch.setattr(
-        service_module.placeholders,
-        "settle_placeholders",
-        lambda task_id, ids, status, _hint: settled.append((task_id, list(ids), status)) or 1,
+        placeholder_module,
+        "cancel_placeholders",
+        lambda task_id, ids, hint: settled.append((task_id, list(ids), hint)) or 1,
     )
     calls: list[str] = []
     _register_background_work("call-bg", "background", calls)
@@ -392,15 +398,15 @@ async def test_cancel_background_work_without_active_owner_only_settles_placehol
     assert chain.service.cancel_tool_call(_TASK_ID, "call-bg") is True
 
     assert calls == ["cancel"]
-    assert settled == [(_TASK_ID, ["call-bg"], "cancelled")]
+    assert settled == [(_TASK_ID, ["call-bg"], USER_CANCELLED_HINT)]
     assert not chain.queue.pending_nowait(_TASK_ID)
     assert chain.service.cancel_tool_call(_TASK_ID, "call-bg") is False
 
 
 async def test_cancel_background_work_foreground_only_wakes_the_waiter(chain, monkeypatch) -> None:
     monkeypatch.setattr(
-        service_module.placeholders,
-        "settle_placeholders",
+        placeholder_module,
+        "cancel_placeholders",
         lambda *_a: pytest.fail("foreground entries have no placeholder"),
     )
     calls: list[str] = []
@@ -585,7 +591,7 @@ def _fail_settling(monkeypatch) -> None:
     def _raise(*_args) -> int:
         raise RuntimeError("database is locked")
 
-    monkeypatch.setattr(service_module.placeholders, "settle_placeholders", _raise)
+    monkeypatch.setattr(cancellation_module, "cancel_placeholders", _raise)
 
 
 async def test_placeholder_settle_failure_does_not_block_running_cancel(chain, monkeypatch) -> None:
@@ -802,7 +808,7 @@ async def test_rerun_revokes_background_work_of_withdrawn_calls(rerun) -> None:
     assert background_registry.complete("call-withdrawn", BackgroundConclusion({"ok": True})) is False
     # 更早一轮的后台工作不属于被撤回的这一轮，照常进行。
     assert earlier == [] and background_registry.owns(_TASK_ID, "call-earlier")
-    background_registry.cancel("call-earlier")
+    background_registry.withdraw("call-earlier")
 
 
 async def test_rerun_ends_handoffs_started_in_the_withdrawn_turn(rerun) -> None:

@@ -9,10 +9,9 @@ from typing import Any
 import pytest
 
 from app.core.tool.background import backgraound_registry as background_module
-from app.core.tool.background.job import BackgroundConclusion, ManualJob, ThreadJob
 from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
 from app.core.tool.background.run import run_background_work
-from app.core.tool.schemas import BackgroundCapability, ToolDefinition
 
 
 @pytest.fixture
@@ -40,8 +39,11 @@ def _run(job: Any, **overrides: Any):
     return run_background_work(job, **{**options, **overrides})
 
 
-def _job() -> ManualJob:
-    return ManualJob(on_cancel=lambda: None, cancelled_result=BackgroundConclusion({"end_reason": "cancelled"}))
+def _job() -> BackgroundJob:
+    return BackgroundJob(
+        on_cancel=lambda: None,
+        cancelled_result=BackgroundConclusion({"end_reason": "cancelled"}),
+    )
 
 
 def _in_thread(target):
@@ -118,7 +120,7 @@ def test_cancel_after_detach_before_waiter_returns_keeps_a_background_placeholde
     try:
         assert entered.wait(2)
         assert background_registry.detach("call-1") == "detached"
-        background_registry.cancel("call-1")
+        background_registry.withdraw("call-1")
     finally:
         release.set()
         thread.join(2)
@@ -131,7 +133,7 @@ def test_raised_thread_work_finishes_foreground_and_background(delivered):
         raise OSError("worker offline")
 
     def job():
-        return ThreadJob(broken, wake=lambda: None, name="broken-worker")
+        return BackgroundJob.start_in_thread(broken, wake=lambda: None, name="broken-worker")
 
     result = _run(job())
     assert result.result.result == {"end_reason": "failed", "error": "worker offline"}
@@ -145,7 +147,10 @@ def test_raised_thread_work_finishes_foreground_and_background(delivered):
 
 def test_run_cancel_cancels_the_job_and_returns_its_cancel_result(delivered) -> None:
     cancelled = threading.Event()
-    job = ManualJob(on_cancel=cancelled.set, cancelled_result=BackgroundConclusion({"end_reason": "cancelled"}))
+    job = BackgroundJob(
+        on_cancel=cancelled.set,
+        cancelled_result=BackgroundConclusion({"end_reason": "cancelled"}),
+    )
     stop = threading.Event()
     thread, box = _in_thread(lambda: _run(job, is_cancelled=stop.is_set))
     _wait_registered()
@@ -160,7 +165,7 @@ def test_user_cancel_of_a_foreground_entry_returns_the_cancel_result(delivered) 
     job = _job()
     thread, box = _in_thread(lambda: _run(job))
     _wait_registered()
-    background_registry.cancel("call-1")
+    background_registry.withdraw("call-1")
     thread.join(2)
     assert box["outcome"].result.result == {"end_reason": "cancelled"}
 
@@ -172,7 +177,7 @@ def test_cancelled_background_job_delivers_nothing(delivered) -> None:
     assert delivered == []
 
 
-def test_thread_job_runs_work_off_thread_and_wakes_on_cancel() -> None:
+def test_start_in_thread_runs_work_off_thread_and_wakes_on_cancel() -> None:
     gate = threading.Condition()
     results: list[dict[str, object]] = []
 
@@ -186,7 +191,7 @@ def test_thread_job_runs_work_off_thread_and_wakes_on_cancel() -> None:
         with gate:
             gate.notify_all()
 
-    job = ThreadJob(work, wake=wake, name="job-test")
+    job = BackgroundJob.start_in_thread(work, wake=wake, name="job-test")
     job.on_done(lambda conclusion: results.append(conclusion.result))
     job.cancel()
     deadline = time.monotonic() + 2
@@ -196,7 +201,7 @@ def test_thread_job_runs_work_off_thread_and_wakes_on_cancel() -> None:
     assert results[0]["thread"] == "job-test"
 
 
-def test_manual_job_delivers_once() -> None:
+def test_job_delivers_once() -> None:
     seen: list[dict[str, object]] = []
     job = _job()
     job.on_done(lambda conclusion: seen.append(conclusion.result))
@@ -204,27 +209,3 @@ def test_manual_job_delivers_once() -> None:
     assert job.finish(BackgroundConclusion({"a": 2})) is False
     job.cancel()
     assert seen == [{"a": 1}]
-
-
-def test_background_tools_must_declare_the_background_argument() -> None:
-    from pydantic import BaseModel
-
-    capability = BackgroundCapability(default_background=False)
-
-    class Plain(BaseModel):
-        x: int
-
-    class WithBackground(BaseModel):
-        x: int
-        background: bool | None = capability.args_field()
-
-    def definition(model):
-        return ToolDefinition(
-            name="probe", group="g", description="d", handler=lambda **_: None,
-            args_model=model, background=capability,
-        )
-
-    with pytest.raises(ValueError):
-        definition(Plain).normalized()
-    schema = definition(WithBackground).normalized().parameters_schema
-    assert "background" in schema["properties"] and "background" in schema["required"]

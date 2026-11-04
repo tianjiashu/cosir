@@ -75,13 +75,18 @@ def _configuration(**overrides: object) -> dict[str, object]:
                 "node_id": "develop",
                 "name": "开发",
                 "agent_id": "general-assistant",
-                "statuses": [{"name": "done", "color": "#16A34A"}, {"name": "blocked", "color": "#DC2626"}],
+                "statuses": [
+                    {"name": "done", "color": "#16A34A"}, {"name": "blocked", "color": "#DC2626"},
+                ],
             },
             {
                 "node_id": "review",
                 "name": "审查",
                 "agent_id": "general-assistant",
-                "statuses": [{"name": "passed", "color": "#16A34A"}, {"name": "needs_changes", "color": "#F59E0B"}],
+                "statuses": [
+                    {"name": "passed", "color": "#16A34A"},
+                    {"name": "needs_changes", "color": "#F59E0B"},
+                ],
             },
         ],
         "transitions": [
@@ -531,17 +536,14 @@ def test_agent_team_declares_execute_user_decision() -> None:
 
 
 class _DecisionRuns:
-    """TeamRun service 替身：按工具调用找回 TeamRun，记录确认与驳回，并给出 Team 落定结论。"""
+    """按工具调用找回 TeamRun，并记录审批门接受的最终输入。"""
 
     def __init__(
-            self, *, reject_end_reason: str = "user_rejected", confirm_error=None
+            self, *, reject_end_reason: str = "user_rejected", status: str = "pending",
     ) -> None:
-        self.row = SimpleNamespace(id=101, parent_run_id=2, status="pending")
+        self.row = SimpleNamespace(id=101, parent_run_id=2, status=status)
         self.reject_end_reason = reject_end_reason
-        self.confirm_error = confirm_error
-        # Coordinator.start 替身返回的落定快照。
-        self.final = SimpleNamespace(id=101, status="completed", end_reason=None)
-        self.confirmed: list[dict] = []
+        self.confirmed: list[AgentTeamApproveInput] = []
 
     def get_for_tool_call(self, task_id, tool_call_id):
         assert (task_id, tool_call_id) == (1, "call-team")
@@ -550,12 +552,12 @@ class _DecisionRuns:
     def get(self, _team_run_id):
         return self.row
 
-    def confirm(self, team_run_id, configuration, **kwargs):
-        if self.confirm_error is not None:
-            self.row.status = "cancelled"
-            raise self.confirm_error
-        self.confirmed.append({"id": team_run_id, "configuration": configuration, **kwargs})
-        return SimpleNamespace(id=team_run_id, status="running")
+    def confirm(self, row, inputs):
+        assert row is self.row
+        if row.status != "pending":
+            return None
+        self.confirmed.append(inputs)
+        return SimpleNamespace(id=row.id, status="running")
 
     def reject_pending_confirmation(self, _team_run_id):
         status = "cancelled"
@@ -568,26 +570,14 @@ def _decide(monkeypatch, runs: _DecisionRuns, decision: str, data=None):
 
     started: list[int] = []
 
-    def start(row, _loop):
+    def start(row, run_id, _loop):
+        from app.models.message_metadata import BackgroundWork
         started.append(row.id)
-        return runs.final
+        return BackgroundWork(kind="agent_team", label="Quality", run_id=run_id, started_at="now")
 
     monkeypatch.setattr(
-        tool_module, "get_agent_team_coordinator", lambda: SimpleNamespace(start=start)
+        tool_module, "get_agent_team_coordinator", lambda: SimpleNamespace(prepare_background=start)
     )
-    monkeypatch.setattr(
-        "app.core.tool.multi_agent.agent_team.agent_team_result.AgentTeamRunArchiveService",
-        lambda: SimpleNamespace(
-            existing_archive_path=lambda _id: ".cosir/agent-team-runs/101.json"
-        ),
-    )
-    monkeypatch.setattr(
-        tool_module,
-        "get_conversation_run_ledger",
-        lambda: SimpleNamespace(get_run=lambda run_id: SimpleNamespace(id=run_id)),
-    )
-    parent_agent = object()
-    monkeypatch.setattr(AgentRuntimeConfig, "for_run", classmethod(lambda _cls, _run: parent_agent))
     tool = _bare_tool()
     tool.agent_team_run_approval = runs
     body = DecisionBody(
@@ -604,7 +594,7 @@ def _decide(monkeypatch, runs: _DecisionRuns, decision: str, data=None):
         node_goals=_node_inputs(develop="实现"),
         execution_context=context,
     )
-    return observation, started, parent_agent
+    return observation, started
 
 
 _APPROVED_PLAN = {
@@ -614,29 +604,25 @@ _APPROVED_PLAN = {
 }
 
 
-def test_approval_confirms_with_the_proposing_run_config_and_blocks_until_settled(
+def test_approval_confirms_final_inputs_and_returns_background_receipt(
     monkeypatch,
 ) -> None:
     runs = _DecisionRuns()
 
-    observation, started, parent_agent = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
+    observation, started = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
 
     assert observation.status == "success"
-    # 阻塞运行：工具结果就是 Team 的落定结论，不再是「running」占位。
-    payload = json.loads(observation.content)
-    assert (payload["status"], payload["trace_file"]) == (
-        "completed", ".cosir/agent-team-runs/101.json"
-    )
+    assert observation.background.kind == "agent_team"
+    assert observation.suspend is False
+    assert "<background_result>" in observation.content
     [confirmed] = runs.confirmed
-    assert (confirmed["id"], confirmed["goal"]) == (101, "最终目标")
-    # 节点回落配置取自提出方案的主 Run，而不是执行决定时的当前 Run。
-    assert confirmed["parent_agent"] is parent_agent
+    assert confirmed.model_dump() == _APPROVED_PLAN
     assert started == [101]
     assert observation.team_run_id == 101
 
 
 def test_rejection_settles_the_team_run_without_starting(monkeypatch) -> None:
-    observation, started, _ = _decide(monkeypatch, _DecisionRuns(), "reject")
+    observation, started = _decide(monkeypatch, _DecisionRuns(), "reject")
 
     assert observation.status == "success"
     payload = json.loads(observation.content)
@@ -647,7 +633,7 @@ def test_rejection_settles_the_team_run_without_starting(monkeypatch) -> None:
 def test_rejection_after_the_plan_was_resolved_elsewhere_reports_it(monkeypatch) -> None:
     runs = _DecisionRuns(reject_end_reason="parent_cancelled")
 
-    observation, started, _ = _decide(monkeypatch, runs, "reject")
+    observation, started = _decide(monkeypatch, runs, "reject")
 
     assert observation.status == "error"
     assert "already resolved" in observation.content
@@ -655,49 +641,10 @@ def test_rejection_after_the_plan_was_resolved_elsewhere_reports_it(monkeypatch)
 
 
 def test_approval_after_the_plan_was_resolved_elsewhere_starts_nothing(monkeypatch) -> None:
-    runs = _DecisionRuns(confirm_error=ValueError("该 Agent Team 方案已处理，不能再确认"))
+    runs = _DecisionRuns(status="cancelled")
 
-    observation, started, _ = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
+    observation, started = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
 
     assert observation.status == "error"
     assert "already resolved" in observation.content
     assert started == []
-
-
-def test_failed_team_reports_its_settled_status(monkeypatch) -> None:
-    """Coordinator 把调度异常收敛成 failed 后返回落定快照：工具原样把结论交给模型。"""
-    runs = _DecisionRuns()
-    runs.final = SimpleNamespace(id=101, status="failed", end_reason="node_run_failed")
-
-    observation, started, _ = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
-
-    assert started == [101]
-    assert observation.status == "success"
-    payload = json.loads(observation.content)
-    assert (payload["status"], payload["end_reason"]) == ("failed", "node_run_failed")
-
-
-def test_user_stopped_team_reports_cancelled_with_run_history(monkeypatch) -> None:
-    """用户单独停止这次调用（Coordinator 以 CANCELLED 落定）：按取消返回，并保留档案指引。"""
-    runs = _DecisionRuns()
-    runs.final = SimpleNamespace(id=101, status="cancelled", end_reason="cancelled")
-
-    observation, started, _ = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
-
-    assert started == [101]
-    assert observation.status == "cancelled"
-    assert observation.tool_call_id == "call-team"
-    assert observation.team_run_id == 101
-    assert "the user stopped this Agent Team run" in observation.content
-    assert ".cosir/agent-team-runs/101.json" in observation.content
-
-
-def test_team_stopped_with_its_parent_task_is_not_reported_as_user_stop(monkeypatch) -> None:
-    """主 Task 停止（PARENT_CANCELLED）只是随之落定，不按「用户单独停止」措辞返回。"""
-    runs = _DecisionRuns()
-    runs.final = SimpleNamespace(id=101, status="cancelled", end_reason="parent_cancelled")
-
-    observation, _, _ = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
-
-    assert observation.status == "success"
-    assert json.loads(observation.content)["end_reason"] == "parent_cancelled"

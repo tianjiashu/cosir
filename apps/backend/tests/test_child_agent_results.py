@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background.job import BackgroundConclusion, ManualJob
+from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.handler.wait_messages import WaitMessagesTool
 from app.core.tool.multi_agent.child_agent.child_run_job import _deliver_conclusion
@@ -47,7 +47,7 @@ def _register_child(tool_call_id: str = "call-delegate") -> None:
         run_id=1,
         kind="child_agent",
         label=f"child_task:{_CHILD}",
-        on_cancel=lambda: None,
+        on_cancel=lambda _reason: None,
     )
 
 
@@ -111,8 +111,11 @@ def _child(monkeypatch: pytest.MonkeyPatch, run: Any) -> _ChildActor:
     return actor
 
 
-def _job() -> tuple[ManualJob, list[dict[str, object]]]:
-    job = ManualJob(on_cancel=lambda: None, cancelled_result=BackgroundConclusion({"status": "cancelled"}))
+def _job() -> tuple[BackgroundJob, list[dict[str, object]]]:
+    job = BackgroundJob(
+        on_cancel=lambda: None,
+        cancelled_result=BackgroundConclusion({"status": "cancelled"}),
+    )
     seen: list[dict[str, object]] = []
     job.on_done(lambda conclusion: seen.append(conclusion.result))
     return job, seen
