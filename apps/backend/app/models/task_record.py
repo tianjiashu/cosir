@@ -9,7 +9,7 @@ Task 容器自身状态。
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from app.storage.model.task_model import TaskModel
 from app.utils.datetime_utils import from_text, to_text
@@ -30,25 +30,27 @@ class TaskRecord:
     parent_task_id: int | None = None
     current_run_id: int | None = None
     creation_command_id: str | None = None
+    # 派生深度（见 ``models.task_kind``）；创建后不变，所以缓存在运行时空间里的记录也可信。
+    derivation_depth: int = 0
 
-    @property
-    def is_child(self) -> bool:
-        """判断该任务是否为委派子任务。
+    def deriver_id(self) -> int | None:
+        """派生出本 Task 的那个 Task（委派或 Agent fork 的发起方）；不是 Agent 派生的为 ``None``。
 
-        参数:
-            无。
-
-        返回:
-            ``True`` 表示存在父 task（即该任务为 ``delegate_task`` 子任务）。
-
-        异常:
-            无。
-
-        副作用:
-            无。
+        ``send_message`` / ``task_status`` 的寻址只认这条父子关系。不能只看 ``parent_task_id``：
+        Team 节点同样挂在主 Task 下，主 Agent 不该绕过 Coordinator 给自己的节点发消息或读它的结论，
+        节点也不该越过 Coordinator 给主 Agent 发消息。Agent fork 不挂所有权子树，发起方记在
+        ``extra.fork``；用户手动 fork 的不算。
         """
+        if self.task_type == "delegate_task":
+            return self.parent_task_id
+        fork = (self.extra or {}).get("fork") or {}
+        if self.task_type == "fork" and fork.get("created_by") == "agent":
+            return cast(int, fork.get("source_task_id"))
+        return None
 
-        return self.parent_task_id is not None
+    def derived_by(self, task_id: int) -> bool:
+        """本 Task 是否由 ``task_id`` 的 Agent 派生。"""
+        return self.deriver_id() == task_id
 
     def to_dict(self) -> dict[str, object]:
         """将任务状态转换为可序列化为 JSON 的字典。
@@ -107,6 +109,7 @@ class TaskRecord:
             parent_task_id=row.parent_task_id,
             current_run_id=row.current_run_id,
             creation_command_id=row.creation_command_id,
+            derivation_depth=row.derivation_depth,
         )
 
     def to_model(self) -> TaskModel:
@@ -121,6 +124,7 @@ class TaskRecord:
             "parent_task_id": self.parent_task_id,
             "current_run_id": self.current_run_id,
             "creation_command_id": self.creation_command_id,
+            "derivation_depth": self.derivation_depth,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }

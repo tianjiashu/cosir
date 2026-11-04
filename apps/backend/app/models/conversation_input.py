@@ -16,6 +16,18 @@ def image_asset_id(path: str) -> str:
     return Path(path).name.split(".", 1)[0]
 
 
+class MessageSource(BaseModel):
+    """Agent 消息的发送方：去哪儿看它（``task_id``）与叫它什么（``name``，发送时的显示名快照）。
+
+    委派与追加消息的来源是父 Task，Team 节点输入的来源是主 Task；名字是快照，来源改名或被删不
+    回写已发出的消息。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    task_id: int
+    name: str
+
+
 class UserInputPresentation(BaseModel):
     """随 user 消息持久化的展示绑定；不重复保存 SDK 消息正文或 Run 执行配置。
 

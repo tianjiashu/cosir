@@ -13,12 +13,10 @@ class AgentTeamRunEndReason(str, Enum):
     SUPERSEDED_BY_NEW_PREVIEW = "superseded_by_new_preview"
     TEAM_START_FAILED = "team_start_failed"
     TRANSITION_NOT_FOUND = "transition_not_found"
-    RUNTIME_UNAVAILABLE = "runtime_unavailable"
     NEXT_NODE_START_FAILED = "next_node_start_failed"
     NODE_RUN_FAILED = "node_run_failed"
     NODE_RUN_CANCELLED = "node_run_cancelled"
     NODE_OUTPUT_INVALID = "node_output_invalid"
-    IMPLICIT_COMPLETION_MISSING = "implicit_completion_missing"
     CANCELLED = "cancelled"
     # 主 Agent Run 被取消而随之停下（含待确认方案）：结论无人需要，不回投后台结果。
     PARENT_CANCELLED = "parent_cancelled"

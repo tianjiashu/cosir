@@ -4,52 +4,27 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.models.agent_team.configuration.agent_team_configuration import (
+    AgentTeamConfiguration,
+)
+from app.models.agent_team.state.agent_team_run_components import (
+    AgentTeamNodeExecution,
+    AgentTeamRunRuntime,
+    AgentTeamTransitionRecord,
+)
+from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
+from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 
-
-class AgentTeamNodeExecution(BaseModel):
-    """绑定节点的稳定 Task，并按执行顺序记录该节点创建的 ConversationRun。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    node_id: StrictStr
-    task_id: StrictInt
-    conversation_run_ids: list[int] = Field(default_factory=list)
-    status: StrictStr | None = None
-
-
-class AgentTeamTransitionRecord(BaseModel):
-    """记录一次节点结果驱动的转移决策。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    from_node_id: StrictStr
-    status: StrictStr
-    target_node_id: StrictStr | None = None
-
-
-class AgentTeamRunRuntime(BaseModel):
-    """保存单个节点执行所需配置及其展示快照。
-
-    该模型把原先松散存放在 ``node_snapshots`` 内层字典里的节点运行资源固化为显式字段，
-    其中完整 ``node_goal`` 是节点输入，``node_goal_summary`` 只用于执行态展示。运行时资源
-    只供后端恢复执行，API 投影时必须过滤。除 ``agent_id`` 和摘要外字段允许缺省，便于局部
-    快照构造；``extra="forbid"`` 仍拦截未声明字段的漂移。
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    agent_id: StrictStr
-    role: StrictStr = ""
-    node_goal: StrictStr = ""
-    node_goal_summary: StrictStr = Field(min_length=1, max_length=10)
-    system_prompt: StrictStr = ""
-    allowed_tools: list[str] = Field(default_factory=list)
-    structured_output: dict[str, Any] = Field(default_factory=dict)
-    model_config_id: StrictInt | None = None
-    model_settings: dict[str, Any] = Field(default_factory=dict)
+# 归因到某个节点的失败原因：Coordinator 落定这些失败时游标停在出事的节点上。
+_NODE_FAILURE_REASONS = frozenset({
+    AgentTeamRunEndReason.NODE_RUN_FAILED.value,
+    AgentTeamRunEndReason.NODE_RUN_CANCELLED.value,
+    AgentTeamRunEndReason.NODE_OUTPUT_INVALID.value,
+    AgentTeamRunEndReason.TRANSITION_NOT_FOUND.value,
+    AgentTeamRunEndReason.NEXT_NODE_START_FAILED.value,
+})
 
 
 class AgentTeamRunState(BaseModel):
@@ -73,8 +48,11 @@ class AgentTeamRunState(BaseModel):
     node_transitions: dict[str, dict[str, str]] = Field(default_factory=dict)
 
     @classmethod
-    def initial(cls, node_runtime_snapshots: dict[str, dict[str, Any]],
-                configuration: AgentTeamConfiguration) -> AgentTeamRunState:
+    def initial(
+        cls,
+        node_runtime_snapshots: dict[str, dict[str, Any]],
+        configuration: AgentTeamConfiguration,
+    ) -> AgentTeamRunState:
         """创建尚未启动节点的初始状态。
 
         参数:
@@ -117,10 +95,10 @@ class AgentTeamRunState(BaseModel):
         return execution
 
     def add_transition(
-            self,
-            from_node_id: str,
-            status: str,
-            target_node_id: str | None,
+        self,
+        from_node_id: str,
+        status: str,
+        target_node_id: str | None,
     ) -> None:
         """追加一次节点转移记录。"""
 
@@ -132,14 +110,15 @@ class AgentTeamRunState(BaseModel):
             )
         )
 
-    def node_references(self) -> list[tuple[int, int]]:
-        """返回所有节点 Task/Run 引用，供取消和诊断使用。"""
+    def failed_node_id(self, team_status: str, end_reason: str | None) -> str | None:
+        """Team 因某个节点失败而落定时返回该节点；其余失败（超轮数、启动失败等）与非失败为 None。
 
-        return [
-            (execution.task_id, run_id)
-            for execution in self.node_executions.values()
-            for run_id in execution.conversation_run_ids
-        ]
+        运行档案与前端读模型共用这一条归因规则。
+        """
+
+        if team_status == AgentTeamRunStatus.FAILED.value and end_reason in _NODE_FAILURE_REASONS:
+            return self.current_node_id
+        return None
 
     def to_json(self) -> dict[str, Any]:
         """转换为可直接写入 SQLAlchemy JSON 列的字典。"""

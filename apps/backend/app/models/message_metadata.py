@@ -5,7 +5,7 @@ from typing import Literal
 from openai.types import CompletionUsage
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from app.models.conversation_input import UserInputPresentation
+from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.enums.tool_call_status import ToolCallEventStatus
 
 
@@ -17,9 +17,9 @@ class EmptyMessageMetadata(BaseModel):
 
 MessageKind = Literal[
     "user_input",
+    "agent_message",
     "notice",
     "decision",
-    "agent_result",
     "background_result",
     "tool_result",
     "tool_image",
@@ -31,13 +31,18 @@ CALL_RESULT_KINDS: frozenset[MessageKind] = frozenset(
 )
 """回答某次工具调用的消息种类：可带 ``tool_call_id``，归属那次调用而不是它所在的那一轮。"""
 
+TURN_INPUT_KINDS: frozenset[MessageKind] = frozenset({"user_input", "agent_message"})
+"""开启一轮的输入：投影成对话里的一条 user 消息，后面跟着它的回复。fork 切分、冷重建与消费投影
+都按它认「一轮的起点」；只有其中的 ``user_input`` 可编辑重跑、会触发标题支线。"""
+
 
 class UserMessageMetadata(BaseModel):
-    """落库的 user 消息都来自 Task 消息队列：``kind`` 记录来源，用户输入另带展示绑定。
+    """落库的 user 消息都来自 Task 消息队列：``kind`` 记录来源，一轮的输入另带展示绑定。
 
     所有队列消息进模型时都是 user 角色，区分来源只能靠 ``kind``，不解析正文标签：编辑资格、
     排队与消费投影都据此判断。模型正文经附件解析后有损（附件名、类型、图片位置与编辑器 token
-    顺序都不在其中），snapshot 重建、编辑复用附件与 fork 都只能从 ``presentation`` 取。内部注入
+    顺序都不在其中），snapshot 重建、编辑复用附件与 fork 都只能从 ``presentation`` 取。Agent 消息
+    （``agent_message``）的 ``presentation`` 只有纯文本正文，另带发送方 ``source``。内部注入
     的 user 指令（如结构化输出）只拼进请求副本、不落库。
 
     ``tool_call_id`` 记录调用结果类消息（见 :data:`CALL_RESULT_KINDS`）回答的是哪次调用：决定与
@@ -48,12 +53,15 @@ class UserMessageMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: MessageKind
     presentation: UserInputPresentation | None = None
+    source: MessageSource | None = None
     tool_call_id: str | None = None
 
     @model_validator(mode="after")
-    def _presentation_only_for_user_input(self) -> "UserMessageMetadata":
-        if (self.kind == "user_input") != (self.presentation is not None):
-            raise ValueError("presentation is required for user_input and forbidden otherwise")
+    def _presentation_only_for_turn_inputs(self) -> "UserMessageMetadata":
+        if (self.kind in TURN_INPUT_KINDS) != (self.presentation is not None):
+            raise ValueError("presentation is required for turn inputs and forbidden otherwise")
+        if (self.kind == "agent_message") != (self.source is not None):
+            raise ValueError("source is required for agent_message and forbidden otherwise")
         if self.tool_call_id is not None and self.kind not in CALL_RESULT_KINDS:
             raise ValueError("tool_call_id is only allowed for call result messages")
         return self
@@ -69,7 +77,7 @@ class AssistantMessageMetadata(BaseModel):
     usage: CompletionUsage | None = None
 
 
-BackgroundKind = Literal["terminal_command", "child_agent"]
+BackgroundKind = Literal["terminal_command", "child_agent", "agent_team"]
 
 
 class BackgroundWork(BaseModel):
@@ -84,6 +92,8 @@ class BackgroundWork(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: BackgroundKind
+    # 实际启动工作的 Run；批准 Team 的 Run 可能与原工具行所属 Run 不同。
+    run_id: int | None
     # 启动时的原始命令意图 / 子 Task 名快照；UI 动词、图标与本地化仍归前端。
     label: str
     # 登记后台结果的时刻（转到后台的调用是它开始前台等待的时刻）。
@@ -104,6 +114,11 @@ class ToolMessageMetadata(BaseModel):
     # 后台结果的后台占位（见 ``ToolObservation.background``）：存在即后台占位，卡片状态与看板条目
     # 的持久化事实源。
     background: BackgroundWork | None = None
+
+    @property
+    def awaiting_decision(self) -> bool:
+        """决定入口与展示投影共用的等待条件。"""
+        return self.status == "pending" and self.background is None
 
 
 MessageMetadata = (
