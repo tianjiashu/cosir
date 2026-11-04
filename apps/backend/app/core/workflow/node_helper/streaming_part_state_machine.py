@@ -300,7 +300,7 @@ class StreamingPartStateMachine:
         """为已通过身份和注册表过滤的调用创建卡片；本轮禁用则留给工具层拒绝。"""
 
         runtime = _runtime_context()
-        if tool_name not in runtime.allows_tools:
+        if tool_name not in runtime.admitted_tools:
             return False
         # 只为本轮放行的工具创建卡片；被拦调用仍保留在模型协议中，由执行层返回错误观察。
         # 注册表是进程级可变事实（MCP 工具可热更新）：调用方过滤后仍可能被注销，此时不建卡片。

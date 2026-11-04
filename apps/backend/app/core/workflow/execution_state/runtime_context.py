@@ -46,7 +46,7 @@ class RuntimeContext:
     # 本次 Run 的 Agent 运行时配置：Agent 定义与模型选择的最终解析，模型字段已完整。
     agent: AgentRuntimeConfig
     # 本轮准入的工具名；只在模型返回调用后拦截，模型绑定仍用 Task 固化的完整 schema。
-    allows_tools: frozenset[str]
+    admitted_tools: frozenset[str]
     task_space: TaskRuntimeSpace
     event_sink: EventSink
     # 进入本次执行的唯一通道：调度方投来的外部队列行副本，与执行内通知（工具准入、旧终端失效、
@@ -70,7 +70,7 @@ class RuntimeContext:
         ``app.service.depends`` 取 projector——调用方只需要 Run 这一条事实，而 core 仍不直接
         依赖 Assistant Transport。
 
-        ``allows_tools`` 以 Task 固化的工具名为基准、减去本 Run 冻结的工具组按注册表展开的工具名
+        ``admitted_tools`` 以 Task 固化的工具名为基准、减去本 Run 冻结的工具组按注册表展开的工具名
         （组名是用户意图的事实，展开在这里现算，前端不换算），只供工具执行层在
         模型返回调用后做准入拦截。模型绑定始终使用 Task 固化的完整 schema，不得按本轮准入过滤，
         否则会改变同一 Task 的请求前缀并破坏缓存复用。
@@ -93,10 +93,10 @@ class RuntimeContext:
         ban_tools = frozenset(
             get_tool_registry().tool_groups_to_tool_names(run.options.disabled_tool_groups)
         )
-        allows_tools = frozenset(tool["name"] for tool in task_space.task_tool_schemas) - ban_tools
+        admitted_tools = frozenset(task_space.task_tool_names) - ban_tools
         # 执行开始时 mailbox 已重置（``TaskExecution.start``），这里投进的通知随本次执行写入或丢弃。
         content = cls.tool_availability_notice(
-            task_space.announced_ban_tools, ban_tools, allows_tools
+            task_space.announced_ban_tools, ban_tools, admitted_tools
         )
         if content is not None:
             task_space.mailbox.notify(NoticeBody(content=content, notice_kind="tool_availability"))
@@ -104,12 +104,13 @@ class RuntimeContext:
         invalidated = cls._terminals_invalidated_notice(task_space)
         if invalidated is not None:
             task_space.mailbox.notify(invalidated)
+
         return cls(
             run=run,
             task=task_space.current_task,
             workspace=task_space.current_workspace,
             agent=AgentRuntimeConfig.for_run(run),
-            allows_tools=allows_tools,
+            admitted_tools=admitted_tools,
             task_space=task_space,
             event_sink=get_conversation_event_projector().process,
             mailbox=task_space.mailbox,
@@ -145,7 +146,7 @@ class RuntimeContext:
         """返回本轮应投递的工具准入通知文本；``None`` 表示无需通知。
 
         ``announced`` 是上次已告知模型的禁用集合，``banned`` / ``allowed`` 是本 Run 冻结工具组展开后
-        的禁用与可用工具名（``allows_tools``）。与上次比较、只在必要时生成：通知消费后是 canonical
+        的禁用与可用工具名（``admitted_tools``）。与上次比较、只在必要时生成：通知消费后是 canonical
         历史的固定行，每个 Run 都重复全量说明会让 context 持续膨胀。工具名一律排序，避免同一集合
         跨进程产生不同文本（前缀缓存）。
 

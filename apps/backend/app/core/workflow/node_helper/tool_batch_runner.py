@@ -199,7 +199,7 @@ def _execute_call(
         observation = get_tool_executor().execute(
             call,
             execution_context=execution_context,
-            allowed_tool_names=rc.allows_tools,
+            allowed_tool_names=rc.admitted_tools,
         )
     except Exception as exc:
         observation = _internal_error(execution_context, call, exc)
