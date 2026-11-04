@@ -1,10 +1,8 @@
-"""send_message 的方向与回复：向上投递、提问后等回复、上级的发送交付给在等的提问、无关 Task 被拒。
-
-向下的并入 / 新开 Run 见 ``test_child_agent_background``；这里用替身覆盖派生关系两端的编排。
-"""
+"""普通消息对父、子、同级 Task 均只投递一次；不代替委派回传。"""
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background.registry import background_registry
+from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.multi_agent import send_message
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_run_options import ConversationRunOptions
@@ -51,23 +49,19 @@ def _clean_entries():
 @pytest.fixture
 def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     state = SimpleNamespace(prepared=[], enqueued=[], delivered=[])
-    monkeypatch.setattr(
-        send_message, "get_task_service", lambda: SimpleNamespace(get_task=_TASKS.__getitem__)
-    )
+    def current(task_id):
+        if _TASKS[task_id].current_run_id is None:
+            return None
+        return SimpleNamespace(agent_id="main_agent", model_config_id=3,
+                               options=ConversationRunOptions(reasoning_effort="high"))
+    monkeypatch.setattr(send_message, "get_task_service", lambda: SimpleNamespace(
+        get_task=_TASKS.__getitem__, require_current_run=current,
+    ))
+    monkeypatch.setattr(send_message.task_runtime_spaces, "get_or_create",
+                        lambda _: SimpleNamespace(operation=nullcontext))
     monkeypatch.setattr(send_message, "get_workspace_service", lambda: None)
-    monkeypatch.setattr(
-        send_message,
-        "get_conversation_run_ledger",
-        lambda: SimpleNamespace(
-            get_run=lambda run_id: SimpleNamespace(
-                id=run_id,
-                status="completed",
-                agent_id="main_agent",
-                model_config_id=3,
-                options=ConversationRunOptions(reasoning_effort="high"),
-            )
-        ),
-    )
+    monkeypatch.setattr(send_message.SendMessageTool, "_child_profile_launch",
+                        lambda self, target, run, ctx: send_message.RunLaunch.from_run(run))
 
     def prepare(text: str, **kwargs: Any) -> str:
         state.prepared.append({"text": text, **kwargs})
@@ -111,48 +105,50 @@ def test_child_tells_its_parent_without_waiting(env, tmp_path) -> None:
     assert observation.status == "success"
     assert '"status":"delivered"' in observation.content
     assert observation.background is None
-    assert observation.display_data["direction"] == "up"
+    assert observation.display_data["task_id"] == _PARENT
     assert env.enqueued == [(_PARENT, "agent-message:根因找到了")]
     [prepared] = env.prepared
     assert prepared["source"].task_id == _CHILD
     assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", 3)
-    assert background_registry.pending(_CHILD) == []
+    assert not background_registry.live_background(_CHILD)
 
 
-def test_child_question_waits_and_the_parents_next_message_is_the_reply(env, tmp_path) -> None:
-    """提问登记一条等回复；上级随后的发送交付给它（以 background_result 回到下级），不另投消息。"""
-    asked = _send(_CHILD, _PARENT, "用方案 A 还是 B？", tmp_path, expect_reply=True)
-
-    assert '"status":"awaiting_reply"' in asked.content
-    assert asked.background is not None and asked.background.kind == "agent_reply"
-    assert background_registry.pending(_CHILD) == [_TASKS[_PARENT].title]
-    assert env.enqueued == [(_PARENT, "agent-message:用方案 A 还是 B？")]
-
-    replied = _send(_PARENT, _CHILD, "用 A", tmp_path)
-
-    assert '"status":"replied"' in replied.content
-    assert replied.display_data["direction"] == "down"
-    # 回复没有作为 Agent 消息再投一次，而是交付给提问那次调用。
-    assert env.enqueued == [(_PARENT, "agent-message:用方案 A 还是 B？")]
-    [(task_id, body)] = env.delivered
-    assert task_id == _CHILD
-    assert body.tool_name == "agent_reply"
-    assert body.tool_call_id == f"call-{_CHILD}-用方案 A 还是 B？"
-    assert "用 A" in body.tool_result
-    assert background_registry.pending(_CHILD) == []
+def test_question_and_explicit_reply_are_two_ordinary_messages(env, tmp_path) -> None:
+    for sender, target, message in [(_CHILD, _PARENT, "A or B?"), (_PARENT, _CHILD, "A")]:
+        sent = _send(sender, target, message, tmp_path)
+        assert sent.background is None and '"status":"delivered"' in sent.content
+        assert not background_registry.live_background(sender)
+    assert env.enqueued == [(_PARENT, "agent-message:A or B?"), (_CHILD, "agent-message:A")]
+    assert not env.delivered
 
 
-def test_tasks_outside_the_derivation_relation_are_refused(env, tmp_path, monkeypatch) -> None:
-    """只认派生关系两端：Team 节点与主 Task、无关 Task 之间不能互发。"""
-    node = _task(21, task_type="agent_team_node", parent_task_id=_PARENT)
-    stranger = _task(22)
-    monkeypatch.setitem(_TASKS, 21, node)
-    monkeypatch.setitem(_TASKS, 22, stranger)
+def test_peers_can_send_but_team_self_and_other_workspace_are_refused(env, tmp_path, monkeypatch) -> None:
+    for task in (_task(21, task_type="agent_team_node", parent_task_id=_PARENT),
+                 _task(22), _task(23, workspace_id=2)):
+        monkeypatch.setitem(_TASKS, task.id, task)
+    assert _send(22, _CHILD, "news", tmp_path).status == "success"
+    for sender, target in ((21, _PARENT), (_PARENT, 21), (_PARENT, _PARENT), (_PARENT, 23)):
+        assert _send(sender, target, "hi", tmp_path).status == "error"
+    assert env.enqueued == [(_CHILD, "agent-message:news")]
 
-    for sender, target in ((21, _PARENT), (_PARENT, 21), (22, _PARENT)):
-        observation = _send(sender, target, "hi", tmp_path)
-        assert observation.status == "error"
-    assert env.enqueued == []
+
+def test_target_without_first_run_inherits_its_queued_launch(env, tmp_path, monkeypatch):
+    from app.core.workflow.message_queue.task_message import AgentMessageBody, RunLaunch, TaskMessage
+    from app.models.conversation_input import MessageSource
+
+    target = _task(30, current_run_id=None)
+    monkeypatch.setitem(_TASKS, target.id, target)
+    pending = []
+    monkeypatch.setattr(send_message, "get_task_message_queue",
+                        lambda: SimpleNamespace(pending_nowait=lambda _: pending))
+    assert _send(_PARENT, target.id, "hi", tmp_path).status == "error"
+    assert not env.enqueued
+    pending.append(TaskMessage.of(AgentMessageBody(
+        text="first", launch=RunLaunch(model_config_id=7),
+        source=MessageSource(task_id=_PARENT, name="parent"),
+    )))
+    assert _send(_PARENT, target.id, "hi", tmp_path).status == "success"
+    assert env.prepared[0]["model_config_id"] == 7
 
 
 @pytest.mark.parametrize(

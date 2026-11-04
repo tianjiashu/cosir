@@ -189,9 +189,9 @@ def test_mailbox_takes_notices_from_both_sources_in_delivery_order() -> None:
     )
     mailbox.post(row)
     mailbox.notify(NoticeBody(content="run notice", notice_kind="test"))
-    assert not mailbox.has_wakeable()
+    assert not mailbox.has_wakeable(1)
     mailbox.post(result)
-    assert mailbox.has_wakeable()
+    assert mailbox.has_wakeable(1)
 
     notices = mailbox.take_notices()
 

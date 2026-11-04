@@ -95,6 +95,8 @@ class _ModelHarness:
 def _patch_model_runtime(monkeypatch: Any, harness: _ModelHarness) -> None:
     """把流式投影依赖绑定到测试桩。"""
 
+    monkeypatch.setattr(model_module.service_depends, "get_conversation_task_context_service",
+                        lambda: SimpleNamespace(run_awaits_background=lambda *_: False))
     monkeypatch.setattr(streaming_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(streaming_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "emit", harness.events.append)
@@ -240,7 +242,7 @@ def test_missing_finish_reason_does_not_complete_model_output(monkeypatch: Any) 
     [notice] = harness.runtime_config.mailbox.take_notices()
     assert notice.id is None
     assert notice.body.notice_kind == "model_continuation"
-    assert not harness.runtime_config.mailbox.has_wakeable()
+    assert not harness.runtime_config.mailbox.has_wakeable(1)
 
 
 def test_empty_content_with_finish_reason_completes_run(monkeypatch: Any) -> None:

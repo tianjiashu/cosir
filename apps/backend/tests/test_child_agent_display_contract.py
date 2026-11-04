@@ -38,8 +38,6 @@ def _run(
 
 def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> None:
     result = TaskStatusTool._agent_task_display_data(
-        operation="status",
-        direction="down",
         task_id=2,
         agent_name="Review",
         final_output="summary",
@@ -48,7 +46,6 @@ def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> Non
     assert result == {
         "kind": "agent-task-result",
         "operation": "status",
-        "direction": "down",
         "task_id": 2,
         "agent_name": "Review",
         "final_output": "summary",

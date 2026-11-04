@@ -15,6 +15,7 @@ from app.core.workflow.conversation_run_ledger import (
 )
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.message_queue.task_message import UserInputBody
+from app.models import model_config_record as model_config_record_module
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
@@ -24,11 +25,10 @@ from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.task_record import TaskRecord
-from app.service.conversation_run import run_launch_check as run_launch_check_module
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
-from app.service.conversation_run.user_input_service import UserInputService
+from app.assistant_transport.service.user_input_service import UserInputService
 from app.service.recover_service import RecoverService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
@@ -160,7 +160,7 @@ def test_presentation_is_a_plain_binding() -> None:
 def _input_service(monkeypatch, *, supports_reasoning_effort: bool = False) -> UserInputService:
     """不触达存储的 ``UserInputService``：Task 归属 workspace 7，模型不支持图片。"""
     monkeypatch.setattr(
-        run_launch_check_module,
+        model_config_record_module,
         "get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _id: SimpleNamespace(
@@ -318,7 +318,7 @@ def test_prepare_rejects_image_token_without_uploaded_asset(monkeypatch) -> None
 def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch) -> None:
     """模型配置缺失不是「寻址不到 Task」，不能以 KeyError 冒到 404 映射。"""
     monkeypatch.setattr(
-        run_launch_check_module,
+        model_config_record_module,
         "get_model_config_service",
         lambda: SimpleNamespace(get_config=lambda _id: (_ for _ in ()).throw(KeyError(_id))),
     )

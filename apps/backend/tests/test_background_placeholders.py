@@ -17,6 +17,7 @@ from app.core.tool.background.job import BackgroundConclusion
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.message_queue.task_message import BackgroundResultBody
 from app.core.workflow.node_helper import tool_observation_projection as projection_module
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
@@ -196,17 +197,16 @@ class _Context:
     def tool_result_metadata(self, _call_id: str) -> ToolMessageMetadata | None:
         return self.metadata
 
-    def update_tool_result_metadata(self, _call_id: str, metadata: ToolMessageMetadata):
+    def update_tool_result_metadata(self, _call_id: str, metadata: ToolMessageMetadata, *, session):
         self.updates.append(metadata)
         return metadata
 
 
-@pytest.mark.parametrize("status", ["pending", "cancelled"])
-def test_consumed_result_completes_the_placeholder(monkeypatch, status: str) -> None:
-    """结论并入即推到 completed；重启改成 cancelled 的占位在结论到达后同样推到 completed。"""
+def test_consumed_result_completes_the_placeholder(monkeypatch) -> None:
+    """消费结论在认领事务中结算占位；返回提交后待发布的事件。"""
     context = _Context(
         ToolMessageMetadata(
-            status=status, background=_WORK if status == "pending" else _FINISHED_WORK,
+            status="pending", background=_WORK,
         )
     )
     emitted: list[Any] = []
@@ -219,15 +219,15 @@ def test_consumed_result_completes_the_placeholder(monkeypatch, status: str) -> 
     monkeypatch.setattr(projection_module, "emit", emitted.append)
 
     card = {"kind": "terminal-result", "command": "make", "output": "ok", "exit_code": 0}
-    projection_module.settle_background_placeholder(
-        "call-bg", display_data=card, ended_at=_ENDED_AT, step_id="step-2"
-    )
+    body = BackgroundResultBody(tool_call_id="call-bg", tool_name="terminal_command", tool_result="{}",
+                                placeholder_display_data=card, ended_at=_ENDED_AT)
+    event = projection_module.settle_background_placeholder("call-bg", body, step_id="step-2", session=object())
 
     # 作业给卡片的终态展示随结算写入（写入即持久化），投影按实际写入的展示数据发出。
     [update] = context.updates
     assert (update.status, update.display_data) == ("completed", card)
     assert update.background == _FINISHED_WORK
-    [event] = emitted
+    assert not emitted
     assert (event.tool_call_id, event.status, event.display_data) == ("call-bg", "completed", card)
     assert event.background == _FINISHED_WORK
 
@@ -238,6 +238,7 @@ def test_consumed_result_completes_the_placeholder(monkeypatch, status: str) -> 
         None,
         ToolMessageMetadata(status="pending"),
         ToolMessageMetadata(status="completed", background=_FINISHED_WORK),
+        ToolMessageMetadata(status="cancelled", background=_FINISHED_WORK),
     ],
 )
 def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:
@@ -250,9 +251,8 @@ def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:
     )
     monkeypatch.setattr(projection_module, "emit", lambda _event: pytest.fail("emitted"))
 
-    projection_module.settle_background_placeholder(
-        "call-x", display_data=None, ended_at=_ENDED_AT, step_id="step-2"
-    )
+    body = BackgroundResultBody(tool_name="terminal_command", tool_result="{}", ended_at=_ENDED_AT)
+    assert projection_module.settle_background_placeholder("call-x", body, step_id="step-2", session=object()) is None
 
     assert context.updates == []
 
@@ -262,7 +262,7 @@ def test_result_arriving_while_stopping_settles_placeholder_as_cancelled(stored)
     import asyncio
 
     from app.core.task_cancellation import TaskCancellation
-    from app.core.tool.background.registry import background_registry
+    from app.core.tool.background.backgraound_registry import background_registry
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )

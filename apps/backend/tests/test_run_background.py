@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background import registry as background_module
+from app.core.tool.background import backgraound_registry as background_module
 from app.core.tool.background.job import BackgroundConclusion, ManualJob, ThreadJob
-from app.core.tool.background.registry import background_registry
+from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.background.run import run_background_work
 from app.core.tool.schemas import BackgroundCapability, ToolDefinition
 
@@ -98,6 +98,49 @@ def test_user_detach_moves_the_wait_to_background(delivered) -> None:
     assert box["outcome"].placeholder == "detached"
     job.finish(BackgroundConclusion({"value": 4}))
     assert delivered == [("call-1", {"value": 4})]
+
+
+def test_cancel_after_detach_before_waiter_returns_keeps_a_background_placeholder(monkeypatch, delivered):
+    from app.core.tool.background import run
+
+    job = _job()
+    entered = threading.Event()
+    release = threading.Event()
+    original = run._Route.wait
+
+    def wait(route, timeout):
+        entered.set()
+        assert release.wait(2)
+        return original(route, timeout)
+
+    monkeypatch.setattr(run._Route, "wait", wait)
+    thread, box = _in_thread(lambda: _run(job))
+    try:
+        assert entered.wait(2)
+        assert background_registry.detach("call-1") == "detached"
+        background_registry.cancel("call-1")
+    finally:
+        release.set()
+        thread.join(2)
+    assert box["outcome"].placeholder == "detached"
+    assert delivered == []  # 用户取消回执由取消入口投递，而非已撤销的作业。
+
+
+def test_raised_thread_work_finishes_foreground_and_background(delivered):
+    def broken(_):
+        raise OSError("worker offline")
+
+    def job():
+        return ThreadJob(broken, wake=lambda: None, name="broken-worker")
+
+    result = _run(job())
+    assert result.result.result == {"end_reason": "failed", "error": "worker offline"}
+    broken_job = job()
+    done = threading.Event()
+    broken_job.on_done(lambda _: done.set())
+    assert done.wait(2)
+    assert _run(broken_job, mode="background").placeholder == "background"
+    assert delivered == [("call-1", {"end_reason": "failed", "error": "worker offline"})]
 
 
 def test_run_cancel_cancels_the_job_and_returns_its_cancel_result(delivered) -> None:

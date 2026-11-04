@@ -577,7 +577,7 @@ async def test_stop_only_touches_materialized_spaces_and_aclose_aborts_all(regis
 
 async def test_cancelling_suspended_run_drops_background_entries(harness) -> None:
     """Run 取消即撤销本 Task 的后台等待：撤销回调被调用，之后的完成返回 False、不再投递。"""
-    from app.core.tool.background.registry import background_registry
+    from app.core.tool.background.backgraound_registry import background_registry
 
     run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
     run.status = "suspended"
@@ -604,17 +604,17 @@ async def test_cancelling_suspended_run_drops_background_entries(harness) -> Non
         assert cancelled == ["t1"]
         # 被撤销的后台条目随即把占位行推到 cancelled。
         assert harness.settled == [(_TASK_ID, ["call-t1"])]
-        assert background_registry.pending(_TASK_ID) == []
+        assert background_registry.pending(_TASK_ID, run.id) == []
         assert background_registry.complete("call-t1", BackgroundConclusion({})) is False
         # 其他 Task 的等待不受影响。
-        assert background_registry.pending(_TASK_ID + 1) == ["x"]
+        assert set(background_registry.live_background(_TASK_ID + 1)) == {"call-x"}
     finally:
         background_registry.drop_task(_TASK_ID + 1)
         assert background_registry.complete("call-x", BackgroundConclusion({})) is False
 
 
 async def test_running_run_cancel_drops_watches_when_execution_settles(harness) -> None:
-    from app.core.tool.background.registry import background_registry
+    from app.core.tool.background.backgraound_registry import background_registry
 
     harness.actor.start()
     harness.queue.put(_user())
@@ -640,13 +640,13 @@ async def test_running_run_cancel_drops_watches_when_execution_settles(harness) 
     await _finish(run.id, "cancelled")
     assert dropped == [run.id]
     assert signalled_at_drop == [True]
-    assert background_registry.pending(_TASK_ID) == []
+    assert background_registry.pending(_TASK_ID, run.id) == []
     await harness.actor.abort()
 
 
 async def test_completed_run_keeps_background_entries(harness) -> None:
     """完成或挂起不撤销：后台等待的结论稍后照常投递、开新 Run 或唤醒。"""
-    from app.core.tool.background.registry import background_registry
+    from app.core.tool.background.backgraound_registry import background_registry
 
     harness.actor.start()
     harness.queue.put(_user())
@@ -661,6 +661,6 @@ async def test_completed_run_keeps_background_entries(harness) -> None:
         on_cancel=lambda: None,
     )
     await _finish(run.id, "suspended")
-    assert background_registry.pending(_TASK_ID) == ["terminal:t3"]
+    assert background_registry.pending(_TASK_ID, run.id) == ["terminal:t3"]
     background_registry.drop_task(_TASK_ID)
     await harness.actor.abort()

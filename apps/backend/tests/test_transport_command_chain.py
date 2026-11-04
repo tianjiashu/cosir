@@ -359,9 +359,10 @@ async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) ->
     await _finish(chain.ledger.current.id, "completed")
 
 
-def _register_background_work(tool_call_id: str, mode: str, calls: list[str]) -> None:
-    from app.core.tool.background.registry import background_registry
+def _register_background_work(tool_call_id: str, mode: str, calls: list[str]) -> threading.Event:
+    from app.core.tool.background.backgraound_registry import background_registry
 
+    detached = threading.Event()
     background_registry.register(
         tool_call_id,
         task_id=_TASK_ID,
@@ -370,14 +371,15 @@ def _register_background_work(tool_call_id: str, mode: str, calls: list[str]) ->
         label="terminal_command:t",
         mode=mode,  # type: ignore[arg-type]
         on_cancel=lambda: calls.append("cancel"),
-        on_detach=(lambda: calls.append("detach")) if mode == "foreground" else None,
+        detached=detached if mode == "foreground" else None,
     )
+    return detached
 
 
-async def test_cancel_background_work_background_settles_placeholder_and_leaves_notice(
+async def test_cancel_background_work_without_active_owner_only_settles_placeholder(
     chain, monkeypatch
 ) -> None:
-    """后台工作不要求 Run 在执行：撤销登记、占位推到 cancelled，并留一条不唤醒的通知。"""
+    """后台工作不要求 Run 在执行：撤销登记、占位推到 cancelled，不唤醒或新开 Run。"""
     settled: list[tuple[int, list[str], str]] = []
     monkeypatch.setattr(
         service_module.placeholders,
@@ -391,8 +393,7 @@ async def test_cancel_background_work_background_settles_placeholder_and_leaves_
 
     assert calls == ["cancel"]
     assert settled == [(_TASK_ID, ["call-bg"], "cancelled")]
-    [notice] = chain.queue.pending_nowait(_TASK_ID)
-    assert notice.kind == "system_notice" and "call-bg" in notice.body.content
+    assert not chain.queue.pending_nowait(_TASK_ID)
     assert chain.service.cancel_tool_call(_TASK_ID, "call-bg") is False
 
 
@@ -415,9 +416,9 @@ async def test_background_command_detaches_only_foreground_entries(chain) -> Non
     from app.core.task_actor import SessionConflictError
 
     calls: list[str] = []
-    _register_background_work("call-fg", "foreground", calls)
+    detached = _register_background_work("call-fg", "foreground", calls)
     chain.service.background_tool_call(_TASK_ID, "call-fg")
-    assert calls == ["detach"]
+    assert detached.is_set()
     for call_id in ("call-fg", "call-missing"):
         with pytest.raises(SessionConflictError) as raised:
             chain.service.background_tool_call(_TASK_ID, call_id)
@@ -784,7 +785,7 @@ async def test_rerun_soft_deletes_target_and_later_rows_then_starts_a_run(rerun)
 
 async def test_rerun_revokes_background_work_of_withdrawn_calls(rerun) -> None:
     """被撤回的这一轮还在跑的后台工作要撤销：否则结论到达后以孤儿消息开出新 Run。"""
-    from app.core.tool.background.registry import background_registry
+    from app.core.tool.background.backgraound_registry import background_registry
 
     _finished_run(rerun)
     withdrawn: list[str] = []

@@ -26,8 +26,8 @@ from terminal_test_support import (
 )
 
 from app.config.constant import Constant
-from app.core.tool.background import registry as background_module
-from app.core.tool.background.registry import background_registry
+from app.core.tool.background import backgraound_registry as background_module
+from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.handoff.handoff_registry import HandoffConflictError, handoff_registry
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
@@ -544,7 +544,7 @@ def test_handoff_is_registered_and_ended_by_the_decision_replay(
     assert shown.input_type == "handoff" and shown.input_summary == "Enter sudo password"
     lease = handoff_registry.on_resource("terminal", session_id)
     assert lease is not None and lease.tool_call_id == "call-handoff" and lease.task_id == 1
-    assert background_registry.pending(1) == []
+    assert not background_registry.live_background(1)
     with pytest.raises(HandoffConflictError):
         _begin(service, session_id, tool_call_id="call-other")
 
@@ -611,7 +611,7 @@ def test_read_command_returned_on_idle_shell_returns_at_once(monkeypatch, tmp_pa
         service, session_id, wait=TerminalWait(until="command_returned", timeout_ms=30_000)
     )
     assert result.wait_result == {"until": "command_returned", "end_reason": "idle"}
-    assert background_registry.pending(1) == []
+    assert not background_registry.live_background(1)
 
 
 def test_match_after_line_input_skips_the_echo_line(monkeypatch, tmp_path: Path) -> None:

@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.assistant_transport.projection.user_input_projection import build_user_input_parts
+from app.models import model_config_record as model_config_record_module
 from app.models.conversation_run_command import ConversationRunCommand
-from app.service.conversation_run import run_launch_check as run_launch_check_module
-from app.service.conversation_run.user_input_service import UserInputService
+from app.assistant_transport.service.user_input_service import UserInputService
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 
 
@@ -16,7 +16,7 @@ from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 def prepare(monkeypatch):
     """经生产入口 ``UserInputService.prepare`` 解析纯文本命令，返回模型正文与展示绑定。"""
     monkeypatch.setattr(
-        run_launch_check_module,
+        model_config_record_module,
         "get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _id: SimpleNamespace(

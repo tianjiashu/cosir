@@ -107,6 +107,18 @@ def test_any_new_message_starts_a_run_after_any_terminal_status(status, make) ->
     assert isinstance(action, StartRun)
 
 
+def test_single_call_cancellation_only_wakes_its_owner():
+    receipt = TaskMessage.of(BackgroundResultBody(
+        tool_call_id="bg", tool_name="terminal_command", tool_result="cancelled", ended_at="t",
+        wake_run_id=10, placeholder_status="cancelled",
+    ), message_id=1)
+    assert _next(_run("suspended"), False, [receipt], [receipt]) == Wake()
+    assert _next(_run("cancelled"), False, [receipt], [receipt]) == Stay()
+    other = _run("suspended")
+    other.id = 11
+    assert _next(other, False, [receipt], [receipt]) == Stay()
+
+
 def test_new_run_takes_the_launch_of_the_input_it_consumes() -> None:
     """排队消息一轮一条：新 Run 用最早那条排队输入自己的配置。"""
     pending = [_user(1, _OTHER, "next_run"), _user(2, _LAUNCH, "next_run")]

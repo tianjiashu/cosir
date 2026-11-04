@@ -1,5 +1,6 @@
 """send_message 的发起配置来源：委派子 Agent 按 profile 授权重算，Agent 分叉沿用自己的 Run。"""
 
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,12 @@ from app.core.agents.agent_profile import AgentProfileType
 from app.core.tool.multi_agent import send_message
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_run_options import ConversationRunOptions
+
+
+@pytest.fixture(autouse=True)
+def target_space(monkeypatch):
+    monkeypatch.setattr(send_message.task_runtime_spaces, "get_or_create",
+                        lambda _: SimpleNamespace(operation=nullcontext))
 
 
 @pytest.mark.asyncio
@@ -36,7 +43,7 @@ async def test_send_message_rejects_main_profile_before_creating_run(
             return SimpleNamespace(id=3, root_path=str(tmp_path))
 
     class _RunService:
-        def get_run(self, _run_id: int) -> SimpleNamespace:
+        def require_current_run(self, _task_id: int) -> SimpleNamespace:
             return SimpleNamespace(
                 id=11, status="completed", agent_id="main_agent", model_config_id=1
             )
@@ -45,7 +52,7 @@ async def test_send_message_rejects_main_profile_before_creating_run(
     run_service = _RunService()
     monkeypatch.setattr(send_message, "get_task_service", lambda: task_service)
     monkeypatch.setattr(send_message, "get_workspace_service", _WorkspaceService)
-    monkeypatch.setattr(send_message, "get_conversation_run_ledger", lambda: run_service)
+    task_service.require_current_run = run_service.require_current_run
     # 非 CHILD profile 在开 Run 之前就被拒绝，调度入口不得被触达。
     monkeypatch.setattr(
         send_message.task_runtime_spaces, "enqueue", lambda *_a, **_k: pytest.fail("enqueued")
@@ -84,30 +91,18 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
         workspace_id=3,
         current_run_id=11,
     )
-    parent_task = SimpleNamespace(id=7, title="主对话")
+    parent_task = SimpleNamespace(id=7, title="主对话", task_type="user", workspace_id=3)
     monkeypatch.setattr(
         send_message,
         "get_task_service",
         lambda: SimpleNamespace(
-            get_task=lambda task_id: fork_task if task_id == 41 else parent_task
+            get_task=lambda task_id: fork_task if task_id == 41 else parent_task,
+            require_current_run=lambda _: run,
         ),
     )
     monkeypatch.setattr(send_message, "get_workspace_service", lambda: None)
-    monkeypatch.setattr(
-        send_message,
-        "get_conversation_run_ledger",
-        lambda: SimpleNamespace(
-            get_run=lambda _run_id: SimpleNamespace(
-                id=11,
-                status="completed",
-                agent_id="main_agent",
-                model_config_id=3,
-                options=ConversationRunOptions(
-                    reasoning_effort="high", disabled_tool_groups=["浏览器工具"]
-                ),
-            )
-        ),
-    )
+    run = SimpleNamespace(id=11, status="completed", agent_id="main_agent", model_config_id=3,
+                          options=ConversationRunOptions(reasoning_effort="high", disabled_tool_groups=["浏览器工具"]))
     monkeypatch.setattr(
         configuration, "get_agent_registry", lambda: pytest.fail("resolved a child profile")
     )
@@ -124,11 +119,6 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
         lambda task_id, message: enqueued.append((task_id, message)),
     )
 
-    def run_child(_context, child_task_id, *, label, enqueue, placeholder):
-        enqueue()
-        return placeholder()
-
-    monkeypatch.setattr(send_message, "run_child", run_child)
     context = ToolExecutionContext(
         step_id="step-1",
         task_id=7,

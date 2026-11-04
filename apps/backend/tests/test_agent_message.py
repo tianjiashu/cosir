@@ -22,8 +22,9 @@ from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import UserMessageMetadata
+from app.models.model_config_record import ModelConfigRecord
 from app.models.task_record import TaskRecord
-from app.service.conversation_run import agent_message as agent_message_module
+from app.core.tool.multi_agent import agent_message as agent_message_module
 
 _SOURCE = MessageSource(task_id=4, name='主任务 "A"')
 # 形如附件 token 的文字：用户输入会去找附件，Agent 消息只当文字。
@@ -60,7 +61,7 @@ def test_source_belongs_only_to_agent_messages() -> None:
 
 
 def test_prepare_carries_launch_and_rejects_empty_text(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(agent_message_module, "check_launch_config", lambda *_a: None)
+    monkeypatch.setattr(ModelConfigRecord, "check_launch_config", lambda *_a: None)
 
     message = agent_message_module.prepare_agent_message(
         "继续", source=_SOURCE, agent_id="child_a", model_config_id=3, reasoning_effort="high"

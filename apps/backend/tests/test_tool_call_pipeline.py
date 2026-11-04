@@ -322,7 +322,7 @@ def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None
 
     assert settled == [(batch, "step-1")]
     assert batch.observations == [_observation(suspend=suspend)]
-    assert patch == {"next_node": ReactRoute.PREPARE_INPUT}
+    assert patch == {"next_node": ReactRoute.PREPARE_INPUT, "wait_for_input": suspend}
 
 
 def _gate_runtime(
@@ -361,7 +361,7 @@ def _gate_runtime(
     )
     drained: list[object] = []
     monkeypatch.setattr(
-        prepare_input_node, "_write_message", lambda message: drained.append(message) or True
+        prepare_input_node, "_write_message", lambda message, **_: drained.append(message) or True
     )
     monkeypatch.setattr(
         prepare_input_node,
@@ -377,7 +377,7 @@ def _gate_state(*, suspend: bool, step_count: int = 1, step_limit: int = 10) -> 
         step_count=step_count,
         step_limit=step_limit,
         next_node=ReactRoute.PREPARE_INPUT,
-        batch=ToolBatch(observations=[_observation(suspend=suspend)]),
+        wait_for_input=suspend,
     )
 
 
@@ -392,7 +392,7 @@ def test_prepare_input_suspends_without_wakeable_messages(monkeypatch, notices) 
     patch = asyncio.run(prepare_input_node._prepare_input_node(_gate_state(suspend=True)))
 
     assert transitions == [(4, RunTransition.SUSPEND)]
-    assert patch == {"batch": ToolBatch(), "next_node": ReactRoute.END}
+    assert patch == {"batch": ToolBatch(), "next_node": ReactRoute.END, "wait_for_input": False}
     assert drained == []
 
 
@@ -438,7 +438,7 @@ def test_prepare_input_suspend_wins_over_step_limit(monkeypatch) -> None:
     )
 
     assert transitions == [(4, RunTransition.SUSPEND)]
-    assert patch == {"batch": ToolBatch(), "next_node": ReactRoute.END}
+    assert patch == {"batch": ToolBatch(), "next_node": ReactRoute.END, "wait_for_input": False}
 
 
 def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:

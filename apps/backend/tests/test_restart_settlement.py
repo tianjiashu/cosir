@@ -81,6 +81,7 @@ def restart_env(monkeypatch: pytest.MonkeyPatch):
         SimpleNamespace(
             get_task_service=lambda: tasks,
             get_conversation_task_context_service=lambda: _Contexts(calls),
+            get_task_message_queue=lambda: SimpleNamespace(pending_nowait=lambda _: []),
         ),
     )
     monkeypatch.setattr(
@@ -212,11 +213,11 @@ def reattach_env(monkeypatch: pytest.MonkeyPatch):
         "service_depends",
         SimpleNamespace(
             get_conversation_task_context_service=lambda: SimpleNamespace(
-                pending_background_placeholders=lambda kind: placeholders_
+                pending_background_placeholders=lambda: placeholders_
             ),
             get_task_service=lambda: SimpleNamespace(
                 get_task=get_task,
-                require_current_run=lambda task_id: SimpleNamespace(status=parents[task_id]),
+                require_current_run=lambda task_id: SimpleNamespace(id=10*task_id, status=parents[task_id]),
             ),
             get_task_message_queue=lambda: SimpleNamespace(
                 pending_nowait=lambda task_id: queued.get(task_id, [])
@@ -226,7 +227,7 @@ def reattach_env(monkeypatch: pytest.MonkeyPatch):
     delivered: list[tuple[int, str | None, dict[str, object]]] = []
     reattached: list[tuple[int, int | None, str, int | None]] = []
 
-    def deliver(task_id, *, tool_call_id, tool_name, result) -> bool:
+    def deliver(task_id, *, tool_call_id, tool_name, result, wake_run_id) -> bool:
         delivered.append((task_id, tool_call_id, result))
         return True
 
@@ -240,13 +241,13 @@ def reattach_env(monkeypatch: pytest.MonkeyPatch):
 
 async def test_child_waits_are_reattached_from_persisted_placeholders(reattach_env) -> None:
     """重启后按占位重新挂上委派等待；接管了的（含已入队、已投 unavailable）都不再中断。"""
-    handled = restart_settlement.reattach_child_waits()
+    handled = restart_settlement.restore_background_waits()
 
-    assert handled == {"call-a", "call-c", "call-d", "call-e"}
+    assert handled == {"call-a", "call-c", "call-e"}
     assert reattach_env.reattached == [(1, 10, "call-a", 2)]
     # 目标缺失时按原调用投结论把父 Agent 唤醒，不让它永远挂着。
     assert [(task_id, call) for task_id, call, _ in reattach_env.delivered] == [
-        (7, "call-d"), (8, "call-e"),
+        (8, "call-e"),
     ]
     assert all(result["end_reason"] == "unavailable" for _, _, result in reattach_env.delivered)
 

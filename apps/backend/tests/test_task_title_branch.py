@@ -124,7 +124,7 @@ async def _prepare(rc, context, state: ReactExecutionState) -> dict[str, Any]:
 
 
 async def test_prepare_input_launches_on_user_input_and_marks_the_run(monkeypatch) -> None:
-    monkeypatch.setattr(prepare_input_node, "_write_message", lambda _message: True)
+    monkeypatch.setattr(prepare_input_node, "_write_message", lambda _message, *, step_id: True)
     launched: list[Any] = []
     monkeypatch.setattr(task_title, "launch", lambda rc, messages: launched.append(messages))
     rc = _titled_rc()
@@ -138,7 +138,7 @@ async def test_prepare_input_launches_on_user_input_and_marks_the_run(monkeypatc
 
 
 async def test_prepare_input_skips_when_already_requested_or_no_user_input(monkeypatch) -> None:
-    monkeypatch.setattr(prepare_input_node, "_write_message", lambda _message: True)
+    monkeypatch.setattr(prepare_input_node, "_write_message", lambda _message, *, step_id: True)
     monkeypatch.setattr(prepare_input_node, "_write_notices", lambda _notices: None)
     launched: list[Any] = []
     monkeypatch.setattr(task_title, "launch", lambda rc, messages: launched.append(messages))

@@ -44,7 +44,7 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
     settlement = recover_module.restart_settlement
     reattached = frozenset({"call-a"})
     monkeypatch.setattr(
-        settlement, "reattach_child_waits", lambda: calls.append(("reattach", None)) or reattached
+        settlement, "restore_background_waits", lambda: calls.append(("reattach", None)) or reattached
     )
     monkeypatch.setattr(
         settlement,

@@ -213,7 +213,7 @@ def _creation_service(store, monkeypatch, projector):
         ),
     )
     monkeypatch.setattr(
-        "app.service.conversation_run.run_launch_check.get_model_config_service",
+        "app.models.model_config_record.get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _id: SimpleNamespace(
                 supports_reasoning_effort=False,

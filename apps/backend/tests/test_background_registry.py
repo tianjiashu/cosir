@@ -6,15 +6,17 @@
 
 from __future__ import annotations
 
+import threading
+
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from app.core.tool.background import registry as background_module
+from app.core.tool.background import backgraound_registry as background_module
 from app.core.tool.background.job import BackgroundConclusion
-from app.core.tool.background.registry import (
+from app.core.tool.background.backgraound_registry import (
     BackgroundRegistry,
     background_registry,
     deliver_background_result,
@@ -61,7 +63,7 @@ def _register(
     registry.register(
         tool_call_id,
         task_id=task_id,
-        run_id=None,
+        run_id=1,
         kind="terminal_command",
         label=label,
         on_cancel=on_cancel or (lambda: None),
@@ -72,10 +74,10 @@ def _register(
 def test_complete_is_pop_once_and_carries_the_call(delivered) -> None:
     registry = BackgroundRegistry()
     _register(registry, "call-a", 1, "terminal:a")
-    assert registry.pending(1) == ["terminal:a"]
+    assert registry.pending(1, 1) == ["terminal:a"]
     assert registry.complete("call-a", BackgroundConclusion({})) is True
     assert registry.complete("call-a", BackgroundConclusion({})) is False
-    assert registry.pending(1) == []
+    assert registry.pending(1, 1) == []
     assert delivered == [(1, "call-a", "terminal_command")]
 
 
@@ -84,7 +86,7 @@ def test_duplicate_registration_is_rejected(delivered) -> None:
     _register(registry, "call-a", 1, "a")
     with pytest.raises(ValueError):
         _register(registry, "call-a", 1, "b")
-    assert registry.pending(1) == ["a"]
+    assert registry.pending(1, 1) == ["a"]
 
 
 def test_close_cancels_everything_and_blocks_later_delivery(delivered) -> None:
@@ -96,7 +98,7 @@ def test_close_cancels_everything_and_blocks_later_delivery(delivered) -> None:
     assert sorted(cancelled) == ["a", "b"]
     assert registry.complete(first, BackgroundConclusion({})) is False
     late = _register(registry, "call-late", 1, "late")
-    assert registry.pending(1) == []
+    assert registry.pending(1, 1) == []
     assert registry.complete(late, BackgroundConclusion({})) is False
     assert delivered == []
     registry.open()
@@ -163,7 +165,7 @@ def test_discard_removes_without_calling_cancel(delivered) -> None:
     _register(registry, "call-a", 1, "a", lambda: called.append("a"))
     registry.discard("call-a")
     registry.discard("call-missing")
-    assert registry.pending(1) == []
+    assert registry.pending(1, 1) == []
     assert called == []
     assert registry.complete("call-a", BackgroundConclusion({})) is False
 
@@ -211,7 +213,7 @@ def test_complete_while_stopping_leaves_entry_for_drop(delivered) -> None:
     cancellation_registry.request_cancel(6, "user")
     try:
         assert registry.complete("call-a", BackgroundConclusion({})) is False
-        assert registry.pending(6) == ["a"]
+        assert registry.pending(6, 1) == ["a"]
         [dropped] = registry.drop_task(6)
     finally:
         cancellation_registry.consume(6)
@@ -271,7 +273,8 @@ def test_wait_messages_description_mentions_terminal_work() -> None:
 # ── 前台 / 后台、取消与看板 ─────────────────────────────────────────────
 
 
-def _register_foreground(registry: BackgroundRegistry, tool_call_id: str, calls: list[str]) -> None:
+def _register_foreground(registry: BackgroundRegistry, tool_call_id: str, calls: list[str]) -> threading.Event:
+    detached = threading.Event()
     registry.register(
         tool_call_id,
         task_id=1,
@@ -280,8 +283,9 @@ def _register_foreground(registry: BackgroundRegistry, tool_call_id: str, calls:
         label="terminal_command:t",
         mode="foreground",
         on_cancel=lambda: calls.append("cancel"),
-        on_detach=lambda: calls.append("detach"),
+        detached=detached,
     )
+    return detached
 
 
 def test_foreground_settles_when_not_detached(delivered) -> None:
@@ -289,7 +293,7 @@ def test_foreground_settles_when_not_detached(delivered) -> None:
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
     assert registry.settle_foreground("call-f") == "settled"
-    assert registry.pending(1) == []
+    assert registry.pending(1, 1) == []
     assert delivered == [] and calls == []
     # 前台等待只是一次普通工具调用：不进看板，结束后也不留记录。
     assert registry.live_background(1) == {} and registry.foreground_calls(1) == []
@@ -322,9 +326,9 @@ def test_cancelled_foreground_entries_leave_no_history(delivered) -> None:
 def test_detach_wins_over_a_later_foreground_settle(delivered) -> None:
     registry = BackgroundRegistry()
     calls: list[str] = []
-    _register_foreground(registry, "call-f", calls)
+    detached = _register_foreground(registry, "call-f", calls)
     assert registry.detach("call-f") == "detached"
-    assert calls == ["detach"]
+    assert detached.is_set()
     # 等待线程随后结束：转后台已先到，结论必须改走后台回投。
     assert registry.settle_foreground("call-f") == "detached"
     assert registry.complete("call-f", BackgroundConclusion({})) is True
@@ -418,7 +422,7 @@ def test_reattach_keeps_the_persisted_work_and_delivers_to_the_original_call(del
     registry.reattach("call-a", task_id=1, run_id=10, work=work, on_cancel=lambda: None)
 
     assert registry.live_background(1) == {"call-a": work}
-    assert registry.pending(1) == ["child"]
+    assert registry.pending(1, 10) == ["child"]
     assert registry.complete("call-a", BackgroundConclusion({"status": "completed"})) is True
     assert delivered == [(1, "call-a", "child_agent")]
     registry.reattach("call-b", task_id=1, run_id=10, work=work, on_cancel=lambda: None)
@@ -460,7 +464,7 @@ async def test_reattached_child_wait_delivers_once_the_child_settles(
     child_run_job.reattach_child_wait(
         task_id=1, run_id=10, tool_call_id="call-a", work=work, loop=asyncio.get_running_loop()
     )
-    assert background_registry.pending(1) == ["child"]
+    assert background_registry.pending(1, 10) == ["child"]
 
     settled.set()
     for _ in range(50):

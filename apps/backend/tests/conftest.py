@@ -167,7 +167,7 @@ def reset_runtime_singletons() -> Iterator[None]:
 def reopen_background_registry() -> Iterator[None]:
     """lifespan 关闭会关闭进程级后台结果登记表（此后不再投递）；同进程后续用例需重新开放。"""
 
-    from app.core.tool.background.registry import background_registry
+    from app.core.tool.background.backgraound_registry import background_registry
 
     # 先关再开：清掉上一个用例残留的活条目（同一 task_id 会被反复使用）。
     background_registry.close()

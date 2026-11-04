@@ -14,8 +14,8 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background import registry as background_module
-from app.core.tool.background.registry import background_registry
+from app.core.tool.background import backgraound_registry as background_module
+from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
