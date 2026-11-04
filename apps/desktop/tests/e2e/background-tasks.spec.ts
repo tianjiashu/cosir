@@ -26,8 +26,8 @@ test.beforeEach(async ({ request }) => {
     1,
     { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] },
     [
-      { type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "terminal_read", args: {}, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
-      { type: "tool-call", awaitingUser: false, toolCallId: "call-fg", toolName: "terminal_read", args: {}, status: "running" },
+      { type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "execute_terminal", args: {}, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
+      { type: "tool-call", awaitingUser: false, toolCallId: "call-fg", toolName: "execute_terminal", args: {}, status: "running" },
     ],
   ));
   await request.post(`${origin}/__test__/seed-background-tasks`, {
@@ -70,4 +70,46 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   const fgRow = page.locator('[data-background-task="call-fg"]');
   await expect(fgRow.getByRole("button", { name: "停止" })).toBeVisible();
   await expect(page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ })).toBeVisible();
+});
+
+test("Team 批准后原卡显示进度并进入后台看板", async ({ page, request }) => {
+  const callId = "review-call";
+  const preview = {
+    kind: "agent-team-approval", team_run_id: 17, team_id: "review", name: "代码审查",
+    goal: "审查改动", start_node: "review", configuration: { team_id: "review" },
+    node_goals: { review: { goal: "检查改动", summary: "审查" } }, edges: [],
+    nodes: [{ node_id: "review", name: "审查", role: "Reviewer", statuses: [{ name: "done", color: "#16A34A" }], max_steps: 5 }],
+  };
+  const work = { kind: "agent_team" as const, label: preview.name, startedAt: new Date().toISOString(), endedAt: null };
+  let approved = false;
+  async function publish() {
+    await request.post(`${origin}/__test__/seed-background-tasks`, {
+      data: { taskId: TASK_ID, entries: approved ? [entry(callId, work)] : [], foregroundWaits: [] },
+    });
+    await seedState(request, TASK_ID, completedState(1,
+      { id: "user-1", parts: [{ type: "text", text: "审查改动" }] },
+      [{ type: "tool-call", toolName: "agent_team", toolCallId: callId, args: { team_id: "review", goal: preview.goal }, status: "pending",
+        awaitingUser: !approved, display_data: preview, team_run_id: 17, ...(approved ? { background: work } : {}) }],
+    ));
+  }
+  await page.route("**/agent-team/runs/17", route => route.fulfill({ json: {
+    id: 17, team_id: "review", goal: "审查改动", status: approved ? "running" : "pending",
+    nodes: [], current_node_id: null, end_reason: null,
+  } }));
+  await page.route(`**/tool-calls/${callId}/decision`, async route => {
+    expect(route.request().postDataJSON().decision).toBe("approve");
+    approved = true;
+    await route.fulfill({ json: {} });
+    await publish();
+  });
+  await publish();
+  await page.goto(`/tasks/${TASK_ID}`);
+  await page.getByRole("button", { name: "确认执行" }).click();
+  await expect(page.getByRole("button", { name: "确认执行" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
+  await page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ }).click();
+  const row = page.locator(`[data-background-task="${callId}"]`);
+  await expect(row).toContainText("代码审查");
+  await expect(row.getByRole("button", { name: "停止" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "转到后台" })).toHaveCount(0);
 });

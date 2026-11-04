@@ -1,9 +1,11 @@
 mod containment;
+mod exec;
 mod geometry;
 mod io;
 mod lifecycle;
 mod protocol;
 mod pty;
+mod session;
 mod shell_integration;
 mod terminal_screen;
 mod worker;

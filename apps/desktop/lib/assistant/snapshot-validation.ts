@@ -76,12 +76,12 @@ function validateForkDisplayData(data: Record<string, unknown>, path: string): v
 
 function validateAgentTaskResultDisplayData(data: Record<string, unknown>, path: string): void {
   requireExactKeys(data, [
-    "kind", "operation", "direction", "task_id", "agent_name", "final_output", "end_reason",
+    "kind", "operation", "task_id", "agent_name", ...(data.operation === "status" ? ["final_output", "end_reason"] : []),
   ], path);
   if (data.operation !== "send" && data.operation !== "status") throw new TransportSnapshotValidationError(`${path}.operation`, "send 或 status");
-  if (data.direction !== "down" && data.direction !== "up") throw new TransportSnapshotValidationError(`${path}.direction`, "down 或 up");
   requirePositiveInteger(data.task_id, `${path}.task_id`);
   if (data.agent_name !== null && (typeof data.agent_name !== "string" || data.agent_name.trim() === "")) throw new TransportSnapshotValidationError(`${path}.agent_name`, "非空字符串或 null");
+  if (data.operation === "send") return;
   if (data.final_output !== null && typeof data.final_output !== "string") throw new TransportSnapshotValidationError(`${path}.final_output`, "字符串或 null");
   if (data.end_reason !== null && typeof data.end_reason !== "string") throw new TransportSnapshotValidationError(`${path}.end_reason`, "字符串或 null");
 }
@@ -281,7 +281,7 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   requireString(session.createdAt, `${path}.createdAt`);
 }
 
-const BACKGROUND_TASK_KINDS = ["terminal_command", "child_agent", "agent_reply"] as const;
+const BACKGROUND_TASK_KINDS = ["terminal_command", "child_agent", "agent_team"] as const;
 const BACKGROUND_TASK_STATUSES = ["running", "settling", "completed", "cancelled"] as const;
 
 function validateBackgroundWork(value: unknown, path: string): void {

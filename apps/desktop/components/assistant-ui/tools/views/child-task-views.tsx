@@ -29,7 +29,7 @@ function ChildTaskStatus({ childTaskId }: { childTaskId: number | undefined }) {
 /**
  * 行尾动作：打开对方 Task；自己派生的、活动中的还可以单独停止它（停止信号只投递，终态经任务状态
  * 推送与父工具 part 的 canonical 投影到达，不乐观改状态）。怎么「打开」由视图给：委派在工作台打开，
- * 分叉是侧栏对话、跳到它的路由。发给上级的卡片不能停止对方（`stoppable` 为假）。
+ * 分叉是侧栏对话、跳到它的路由。发送消息的卡片不能停止对方（`stoppable` 为假）。
  */
 function ChildTaskActions({ childTaskId, title, context, open, openLabel, subject, stoppable = true }: {
   childTaskId: number | undefined;
@@ -117,20 +117,19 @@ export const delegationView: CallView = {
   },
 };
 
-/** 打开对方（按 Task 类型跳路由或进工作台）；只有发给自己派生的 Task 才能从卡片上停止它。 */
+/** 打开对方（按 Task 类型跳路由或进工作台）；只有状态查询可以停止所管理的子任务。 */
 function AgentTaskActions({ display, context }: { display: AgentTaskResultDisplay; context: CallViewContext }) {
   const openTask = useOpenTask();
   const title = display.agentName ?? "任务";
-  const up = display.direction === "up";
   return (
     <ChildTaskActions
       childTaskId={display.taskId}
       title={title}
       context={context}
       open={() => void openTask(display.taskId, title)}
-      openLabel={up ? "打开上级任务" : "打开任务"}
+      openLabel="打开任务"
       subject="任务"
-      stoppable={!up}
+      stoppable={display.operation === "status"}
     />
   );
 }
@@ -138,7 +137,10 @@ function AgentTaskActions({ display, context }: { display: AgentTaskResultDispla
 /** `agent-task-result`（`send_message` / `task_status`）：展开体是对方返回的结论正文（状态查询时才有）。 */
 export const agentTaskResultView: CallView = {
   accepts: (data) => readAgentTaskResultDisplay(data) !== null,
-  meta: (data) => <ChildTaskStatus childTaskId={readAgentTaskResultDisplay(data)!.taskId} />,
+  meta: (data) => {
+    const result = readAgentTaskResultDisplay(data)!;
+    return result.operation === "send" ? result.agentName : <ChildTaskStatus childTaskId={result.taskId} />;
+  },
   body: (data) => {
     const result = readAgentTaskResultDisplay(data)!;
     if (!result.finalOutput && !result.endReason) return null;

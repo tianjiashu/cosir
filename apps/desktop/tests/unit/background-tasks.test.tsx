@@ -111,7 +111,7 @@ describe("snapshot background_tasks 与工具 part background", () => {
   });
 
   it("converter 用后端短提示说明后台占位的取消原因", () => {
-    const interrupted = toToolCallPart({ type: "tool-call", toolCallId: "c2", toolName: "terminal_read", args: {}, status: "cancelled", error: "已中断", background: { ...WORK, endedAt: "2026-10-28T08:05:00+00:00" }, awaitingUser: false });
+    const interrupted = toToolCallPart({ type: "tool-call", toolCallId: "c2", toolName: "execute_terminal", args: {}, status: "cancelled", error: "已中断", background: { ...WORK, endedAt: "2026-10-28T08:05:00+00:00" }, awaitingUser: false });
     expect(readToolArtifact((interrupted as { artifact?: unknown }).artifact).error).toBe("已中断");
   });
 });

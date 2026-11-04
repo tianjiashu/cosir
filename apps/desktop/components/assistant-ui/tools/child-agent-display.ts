@@ -9,10 +9,9 @@ export type DelegationDisplay = {
   status?: TransportRunStatus;
 };
 
-/** `agent-task-result`：`send_message`（`down` 发给自己派生的 Task，`up` 发给上级）与 `task_status`。 */
+/** `agent-task-result`：`send_message`与 `task_status`。 */
 export type AgentTaskResultDisplay = {
   operation: "send" | "status";
-  direction: "down" | "up";
   taskId: number;
   agentName?: string;
   finalOutput?: string;
@@ -84,7 +83,6 @@ export function readAgentTaskResultDisplay(value: unknown): AgentTaskResultDispl
   const data = record(value);
   if (!data || data.kind !== "agent-task-result") return null;
   if (data.operation !== "send" && data.operation !== "status") return null;
-  if (data.direction !== "down" && data.direction !== "up") return null;
   const taskId = positiveId(data.task_id);
   if (taskId === undefined) return null;
   if (data.agent_name !== null && data.agent_name !== undefined && nonEmptyString(data.agent_name) === undefined) return null;
@@ -92,7 +90,6 @@ export function readAgentTaskResultDisplay(value: unknown): AgentTaskResultDispl
   if (data.end_reason !== null && data.end_reason !== undefined && typeof data.end_reason !== "string") return null;
   return {
     operation: data.operation,
-    direction: data.direction,
     taskId,
     agentName: nonEmptyString(data.agent_name),
     finalOutput: typeof data.final_output === "string" ? data.final_output : undefined,

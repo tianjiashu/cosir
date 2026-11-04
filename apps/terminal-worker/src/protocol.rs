@@ -13,14 +13,24 @@ pub const MAX_RAW_INPUT_BYTES: usize = 64 * 1024;
 /// 单次 keys 输入的按键个数上限。
 pub const MAX_KEYS_PER_INPUT: usize = 32;
 
+/// 首帧决定 worker 的模式，之后不能再换：`start_session` 起交互会话（PTY、屏幕模型、shell 集成，
+/// 会话结束才退出），`start_exec` 跑一条一次性命令（管道、无 stdin，命令结束即退出）。
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlFrame {
-    Start {
+    StartSession {
         shell: Vec<String>,
         shell_kind: String,
         cwd: String,
         integration: String,
+    },
+    /// `raw_args`：参数按原文拼进 Windows 命令行、不做 MSVCRT 引号转义（cmd 不认 `\"`，命令原文
+    /// 必须原样交给 `/c`）；其他平台没有命令行这一层，传 true 是协议错误。
+    StartExec {
+        program: String,
+        args: Vec<String>,
+        raw_args: bool,
+        cwd: String,
     },
     Write {
         input: TerminalInput,
@@ -213,16 +223,25 @@ pub fn encode_input(input: TerminalInput, app_cursor: bool) -> anyhow::Result<Ve
     }
 }
 
+/// 会话模式握手额外带的 PTY 事实；执行模式没有 PTY，不带这些字段。
+#[derive(Debug, Serialize)]
+pub struct PtyHandshake {
+    pub pty_kind: &'static str,
+    pub rows: u16,
+    pub columns: u16,
+    pub capabilities: Vec<&'static str>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkerEvent {
     Handshake {
         instance_id: String,
         pid: u32,
-        pty_kind: &'static str,
-        rows: u16,
-        columns: u16,
-        capabilities: Vec<&'static str>,
+        /// `session` / `exec`，与首帧一致；客户端按它校验其余字段。
+        mode: &'static str,
+        #[serde(flatten, skip_serializing_if = "Option::is_none")]
+        pty: Option<PtyHandshake>,
     },
     Screen {
         screen: crate::terminal_screen::ScreenSnapshot,
@@ -246,8 +265,12 @@ pub enum WorkerEvent {
         status: &'static str,
         reason: Option<&'static str>,
     },
+    /// `signal` 只在执行模式、且命令被信号结束时出现（POSIX）；会话模式的退出码沿用 PTY 层的
+    /// 映射（被信号结束记为 1）。
     Exit {
         exit_code: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signal: Option<i32>,
     },
 }
 
@@ -283,12 +306,20 @@ pub fn encode_event(event: &WorkerEvent) -> anyhow::Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_event, read_control_frame, ControlFrame, WorkerEvent, MAX_FRAME_BYTES};
+    use super::{
+        encode_event, read_control_frame, ControlFrame, PtyHandshake, WorkerEvent, MAX_FRAME_BYTES,
+    };
     use std::io::Cursor;
 
+    fn frame(payload: &[u8]) -> Vec<u8> {
+        let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
+        frame.extend_from_slice(payload);
+        frame
+    }
+
     #[test]
-    fn reads_length_prefixed_start_frame() {
-        let payload = br#"{"type":"start","shell":["bash"],"shell_kind":"bash","cwd":"/tmp","integration":"off"}"#;
+    fn reads_length_prefixed_start_session_frame() {
+        let payload = br#"{"type":"start_session","shell":["bash"],"shell_kind":"bash","cwd":"/tmp","integration":"off"}"#;
         let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
         frame.extend_from_slice(payload);
 
@@ -296,7 +327,7 @@ mod tests {
             .expect("valid frame")
             .expect("one frame");
         match parsed {
-            ControlFrame::Start {
+            ControlFrame::StartSession {
                 shell,
                 shell_kind,
                 cwd,
@@ -306,8 +337,64 @@ mod tests {
                 assert_eq!(shell_kind, "bash");
                 assert_eq!(cwd, "/tmp");
             }
-            _ => panic!("expected start frame"),
+            _ => panic!("expected start_session frame"),
         }
+    }
+
+    #[test]
+    fn reads_start_exec_frame_and_rejects_the_old_start_name() {
+        let parsed = read_control_frame(&mut Cursor::new(frame(
+            br#"{"type":"start_exec","program":"/bin/sh","args":["-c","echo hi"],"raw_args":false,"cwd":"/tmp"}"#,
+        )))
+        .expect("valid frame")
+        .expect("one frame");
+        match parsed {
+            ControlFrame::StartExec {
+                program,
+                args,
+                raw_args,
+                cwd,
+            } => {
+                assert_eq!(program, "/bin/sh");
+                assert_eq!(args, vec!["-c", "echo hi"]);
+                assert!(!raw_args);
+                assert_eq!(cwd, "/tmp");
+            }
+            _ => panic!("expected start_exec frame"),
+        }
+        let old = frame(br#"{"type":"start","shell":["bash"],"shell_kind":"bash","cwd":"/tmp","integration":"off"}"#);
+        assert!(read_control_frame(&mut Cursor::new(old)).is_err());
+    }
+
+    #[test]
+    fn handshake_carries_pty_fields_only_in_session_mode() {
+        let session = encode_event(&WorkerEvent::Handshake {
+            instance_id: "i".into(),
+            pid: 7,
+            mode: "session",
+            pty: Some(PtyHandshake {
+                pty_kind: "unix_pty",
+                rows: 24,
+                columns: 80,
+                capabilities: vec!["input_keys"],
+            }),
+        })
+        .expect("event");
+        assert_eq!(
+            &session[4..],
+            br#"{"type":"handshake","instance_id":"i","pid":7,"mode":"session","pty_kind":"unix_pty","rows":24,"columns":80,"capabilities":["input_keys"]}"#
+        );
+        let exec = encode_event(&WorkerEvent::Handshake {
+            instance_id: "i".into(),
+            pid: 7,
+            mode: "exec",
+            pty: None,
+        })
+        .expect("event");
+        assert_eq!(
+            &exec[4..],
+            br#"{"type":"handshake","instance_id":"i","pid":7,"mode":"exec"}"#
+        );
     }
 
     #[test]
@@ -319,10 +406,20 @@ mod tests {
 
     #[test]
     fn encodes_exit_event_with_big_endian_length_prefix() {
-        let frame = encode_event(&WorkerEvent::Exit { exit_code: Some(0) }).expect("event");
+        let frame = encode_event(&WorkerEvent::Exit {
+            exit_code: Some(0),
+            signal: None,
+        })
+        .expect("event");
         let size = u32::from_be_bytes(frame[..4].try_into().expect("length prefix")) as usize;
         assert_eq!(size, frame.len() - 4);
         assert_eq!(&frame[4..], br#"{"type":"exit","exit_code":0}"#);
+        let signaled = encode_event(&WorkerEvent::Exit {
+            exit_code: None,
+            signal: Some(15),
+        })
+        .expect("event");
+        assert_eq!(&signaled[4..], br#"{"type":"exit","exit_code":null,"signal":15}"#);
     }
 
     #[test]

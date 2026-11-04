@@ -5,17 +5,20 @@ const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Owns the worker's terminal lifecycle decisions and the single Exit event.
 ///
 /// Reader, child-watcher and control threads only report observations to the
-/// worker loop. This arbiter keeps the real child exit code ahead of PTY EOF
+/// worker loop. This arbiter keeps the real child exit status ahead of output EOF
 /// races and prevents multiple terminal paths from publishing Exit twice.
-pub struct LifecycleArbiter {
+/// `S` is what each mode knows about the exit: the PTY exit code in session
+/// mode, code plus signal in exec mode. Output EOF is the PTY's in session mode
+/// and the merged stdout/stderr pipe's in exec mode.
+pub struct LifecycleArbiter<S> {
     closing: bool,
-    child_exit: Option<u32>,
+    child_exit: Option<S>,
     pty_eof: bool,
     drain_deadline: Option<Instant>,
     exit_published: bool,
 }
 
-impl LifecycleArbiter {
+impl<S: Copy> LifecycleArbiter<S> {
     pub fn running() -> Self {
         Self {
             closing: false,
@@ -26,15 +29,15 @@ impl LifecycleArbiter {
         }
     }
 
-    pub fn observe_child_exit(&mut self, code: u32) {
+    pub fn observe_child_exit(&mut self, status: S) {
         if self.child_exit.is_none() {
-            self.child_exit = Some(code);
+            self.child_exit = Some(status);
         }
         self.drain_deadline
             .get_or_insert_with(|| Instant::now() + OUTPUT_DRAIN_TIMEOUT);
     }
 
-    pub fn observe_pty_eof(&mut self) {
+    pub fn observe_output_eof(&mut self) {
         self.pty_eof = true;
     }
 
@@ -46,7 +49,7 @@ impl LifecycleArbiter {
                     .is_some_and(|deadline| Instant::now() >= deadline))
     }
 
-    pub fn exit_code(&self) -> Option<u32> {
+    pub fn exit_status(&self) -> Option<S> {
         self.child_exit
     }
 

@@ -210,6 +210,7 @@ impl PtyRuntime {
         Ok(child.try_wait()?.map(|status| status.exit_code()))
     }
 
+    /// 结束会话里的全部进程并回收 shell。会话关闭与 shell 自己退出都走这里。
     pub fn terminate(&self) -> anyhow::Result<()> {
         let mut child = self
             .child
@@ -219,7 +220,12 @@ impl PtyRuntime {
             .containment
             .lock()
             .map_err(|_| anyhow::anyhow!("containment lock poisoned"))?;
-        containment.terminate(child.as_mut())
+        let cleanup = containment.terminate();
+        // 归属清理通常已结束 shell；枚举不到进程的平台或作业结束失败时由这里兜底，shell 已退出时
+        // 的报错无意义，所以忽略。
+        let _ = child.kill();
+        child.wait()?;
+        cleanup
     }
 }
 

@@ -13,7 +13,7 @@ test.beforeEach(async ({ page, request }) => {
   await request.post(`${origin}/__test__/reset`);
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "会话侧栏" } });
   await seedState(request, TASK_ID, completedState(1, { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] }, [
-    { type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "terminal_read", args: {}, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
+    { type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "execute_terminal", args: { command: "make watch" }, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
   ]));
   await request.post(`${origin}/__test__/seed-background-tasks`, {
     data: {

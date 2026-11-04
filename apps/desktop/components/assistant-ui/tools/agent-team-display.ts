@@ -23,9 +23,6 @@ export type AgentTeamPreviewDisplay = {
   goal: string;
   nodeGoals: Record<string, AgentTeamNodeGoal>;
   startNode: string;
-  parentTaskId: number;
-  parentRunId: number;
-  workspaceId: number;
   nodes: AgentTeamNodePreview[];
   edges: Record<string, unknown>[];
   configuration: Record<string, unknown>;
@@ -88,11 +85,8 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
   const name = text(data.name);
   const goal = text(data.goal);
   const startNode = text(data.start_node);
-  const parentTaskId = positiveInteger(data.parent_task_id);
-  const parentRunId = positiveInteger(data.parent_run_id);
-  const workspaceId = positiveInteger(data.workspace_id);
   const configuration = asRecord(data.configuration);
-  if (teamRunId === undefined || !teamId || !name || !goal || !startNode || parentTaskId === undefined || parentRunId === undefined || workspaceId === undefined || Object.keys(configuration).length === 0) return null;
+  if (teamRunId === undefined || !teamId || !name || !goal || !startNode || Object.keys(configuration).length === 0) return null;
   const edges = recordList(data.edges);
   if (data.node_goals === null || typeof data.node_goals !== "object" || Array.isArray(data.node_goals)) return null;
   const nodeGoals: Record<string, AgentTeamNodeGoal> = {};
@@ -129,9 +123,6 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
     goal,
     nodeGoals,
     startNode,
-    parentTaskId,
-    parentRunId,
-    workspaceId,
     nodes,
     edges,
     configuration,

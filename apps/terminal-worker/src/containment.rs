@@ -1,21 +1,25 @@
-//! 用户命令进程的归属与清理：worker 结束一个会话时，按这里的规则找出它启动过的全部进程并结束它们。
+//! 用户命令进程的归属与清理：worker 结束一条命令或一个会话时，按这里的规则找出它启动过的全部
+//! 进程并结束它们。两种模式各一条归属规则，清理顺序只有一份。
 //!
-//! 会话模式的归属是「与 shell 同一个会话（session id）」。PTY 启动时 shell 经 `setsid` 成为会话
-//! 首进程，它启动的一切——作业控制分出的后台组、`nohup`——都留在这个会话里。不用另外两种看似
-//! 可行的判断：
-//! - 从 shell 往下找子孙：shell 先退出时后台进程已被收养，一个都找不到。
-//! - 控制终端是本 PTY：会话首进程退出时内核把控制终端从会话上摘掉（macOS `ps` 显示 `??`、Linux
-//!   `tty_nr` 归零），shell 自己退出后残留同样找不到；会话号则一直保留到最后一个成员退出。
+//! - 执行模式：命令自己的**进程组**。命令以新进程组启动，非交互 shell 没有作业控制，`&`、`nohup`
+//!   起的进程都留在组里。组还有成员时组号不会被复用；组空了也就无需清理，而组长 pid 被别的进程
+//!   复用时启动时间对不上，见 `live_members`。
+//! - 会话模式：与 shell **同一个会话**。PTY 启动时 shell 经 `setsid` 成为会话首进程，作业控制分出
+//!   的后台组、`nohup` 都留在会话里。不用另外两种看似可行的判断：
+//!   - 从 shell 往下找子孙：shell 先退出时后台进程已被收养，一个都找不到。
+//!   - 控制终端是本 PTY：会话首进程退出时内核把控制终端从会话上摘掉（macOS `ps` 显示 `??`、
+//!     Linux `tty_nr` 归零），shell 自己退出后残留同样找不到；会话号则一直保留到最后一个成员退出。
 //!
-//! 主动 `setsid` 脱离会话的进程（守护化）不在范围内，留给沙箱。Windows 用 Job Object
-//! （`KILL_ON_JOB_CLOSE`），挂入后的子孙都在作业里，结束作业即可。
+//! 主动 `setsid` 脱离会话的进程（守护化）不在范围内，留给沙箱。Windows 两种模式都用 Job Object
+//! （`KILL_ON_JOB_CLOSE`），挂入后的子孙都在作业里，结束作业即可；挂入发生在启动之后，其间的
+//! 短竞态接受。
+//!
+//! 本模块只结束成员、不回收首进程：回收（`wait`）与退出状态归各自的运行时。
 
 #[cfg(unix)]
 use std::io;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
-
-use portable_pty::Child;
 
 /// 宽限期：HUP 之后反复发 TERM，到点仍在的发 KILL；全部退出即提前结束，不白等。
 #[cfg(unix)]
@@ -24,8 +28,16 @@ const GRACE: Duration = Duration::from_secs(1);
 const POLL: Duration = Duration::from_millis(20);
 
 #[cfg(unix)]
+#[derive(Clone, Copy, Debug)]
+enum Membership {
+    Session,
+    ProcessGroup,
+}
+
+#[cfg(unix)]
 pub struct Containment {
     leader: ProcessIdentity,
+    membership: Membership,
 }
 
 #[cfg(windows)]
@@ -37,27 +49,24 @@ pub struct Containment {
 pub struct Containment;
 
 impl Containment {
-    /// 以刚启动的 shell 为会话首进程建立归属。shell 必须已是会话首进程（portable-pty 在启动前
+    /// 会话模式：以刚启动的 shell 为会话首进程。shell 必须已是会话首进程（portable-pty 在启动前
     /// `setsid`），否则会话号指向的是 worker 自己的会话，清理会波及无关进程，所以直接拒绝。
-    pub fn for_session(child: &dyn Child) -> anyhow::Result<Self> {
+    pub fn for_session(child: &dyn portable_pty::Child) -> anyhow::Result<Self> {
         #[cfg(unix)]
         {
-            let pid: libc::pid_t = child
+            let pid = child
                 .process_id()
-                .and_then(|pid| pid.try_into().ok())
                 .ok_or_else(|| anyhow::anyhow!("terminal shell pid unavailable"))?;
-            let leader = read_process_identity(pid)?
-                .ok_or_else(|| anyhow::anyhow!("terminal shell process identity unavailable"))?;
-            if leader.session != leader.pid {
-                anyhow::bail!("terminal shell is not a session leader")
-            }
-            Ok(Self { leader })
+            Self::from_leader(pid, Membership::Session)
         }
 
         #[cfg(windows)]
         {
+            let handle = child
+                .as_raw_handle()
+                .ok_or_else(|| anyhow::anyhow!("terminal shell handle unavailable"))?;
             Ok(Self {
-                job: Some(WindowsJob::assign(child)?),
+                job: Some(WindowsJob::assign(handle)?),
             })
         }
 
@@ -68,9 +77,48 @@ impl Containment {
         }
     }
 
-    /// 结束会话里的全部进程并回收 shell。会话关闭与 shell 自己退出都走这里；shell 已退出时照样
-    /// 清得到它留下的后台进程。
-    pub fn terminate(&mut self, child: &mut dyn Child) -> anyhow::Result<()> {
+    /// 执行模式：以刚启动的命令为进程组组长（启动时 `process_group(0)`）。
+    pub fn for_process_group(child: &std::process::Child) -> anyhow::Result<Self> {
+        #[cfg(unix)]
+        {
+            Self::from_leader(child.id(), Membership::ProcessGroup)
+        }
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            Ok(Self {
+                job: Some(WindowsJob::assign(child.as_raw_handle())?),
+            })
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = child;
+            Ok(Self)
+        }
+    }
+
+    #[cfg(unix)]
+    fn from_leader(pid: u32, membership: Membership) -> anyhow::Result<Self> {
+        let pid: libc::pid_t = pid
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("leader pid out of range"))?;
+        let leader = read_process_identity(pid)?
+            .ok_or_else(|| anyhow::anyhow!("leader process identity unavailable"))?;
+        let leads = match membership {
+            Membership::Session => leader.session == pid,
+            Membership::ProcessGroup => leader.group == pid,
+        };
+        if !leads {
+            anyhow::bail!("process {pid} does not lead its {membership:?}")
+        }
+        Ok(Self { leader, membership })
+    }
+
+    /// 结束全部成员（首进程还活着时也包括它），不回收首进程。命令或会话的每条结束路径都走这里：
+    /// 正常结束时清理它留下的进程，取消、超时与关闭时连首进程一起结束。
+    pub fn terminate(&mut self) -> anyhow::Result<()> {
         #[cfg(unix)]
         {
             let mut failures = 0;
@@ -79,8 +127,6 @@ impl Containment {
             // shell 立即退出。
             let mut signal = libc::SIGHUP;
             loop {
-                // 先回收已退出的 shell：未回收的僵尸仍带着会话号，会被当成还活着。
-                let _ = child.try_wait();
                 let Some(members) = self.live_members() else {
                     break;
                 };
@@ -95,43 +141,28 @@ impl Containment {
                 signal = libc::SIGTERM;
                 std::thread::sleep(POLL);
             }
-            if let Err(error) = child.kill() {
-                if !process_gone(&error) {
-                    failures += 1;
-                }
-            }
-            child.wait().map(|_| ()).map_err(anyhow::Error::from)?;
             if failures > 0 {
-                anyhow::bail!("failed to signal {failures} terminal session processes")
+                anyhow::bail!("failed to signal {failures} contained processes")
             }
             Ok(())
         }
 
         #[cfg(windows)]
         {
-            let terminate_result = self
-                .job
-                .take()
-                .map(|mut job| job.terminate())
-                .unwrap_or_else(|| child.kill());
-            let wait_result = child.wait().map(|_| ()).map_err(Into::into);
-            if let Err(error) = terminate_result {
-                let _ = child.kill();
-                return wait_result.and_then(|_| Err(error.into()));
+            match self.job.take() {
+                Some(mut job) => job.terminate().map_err(Into::into),
+                None => Ok(()),
             }
-            wait_result
         }
 
         #[cfg(not(any(unix, windows)))]
         {
-            let _ = child.kill();
-            let _ = child.wait();
             Ok(())
         }
     }
 
-    /// 会话里仍活着的进程（不含僵尸）。会话号只在最后一个成员退出后才可能被复用：若 shell 的 pid
-    /// 已换成另一个进程，说明会话早已结束、号码可能属于别的会话，返回 `None` 不再清理。
+    /// 仍活着的成员（不含僵尸）。组号、会话号只在最后一个成员退出后才可能被复用：若首进程的 pid
+    /// 已换成另一个进程，说明归属早已结束、号码可能属于别人，返回 `None` 不再清理。
     #[cfg(unix)]
     fn live_members(&self) -> Option<Vec<ProcessIdentity>> {
         if let Ok(Some(current)) = read_process_identity(self.leader.pid) {
@@ -143,9 +174,17 @@ impl Containment {
             all_pids()
                 .into_iter()
                 .filter_map(|pid| read_process_identity(pid).ok().flatten())
-                .filter(|identity| identity.session == self.leader.session && !identity.zombie)
+                .filter(|identity| !identity.zombie && self.contains(identity))
                 .collect(),
         )
+    }
+
+    #[cfg(unix)]
+    fn contains(&self, identity: &ProcessIdentity) -> bool {
+        match self.membership {
+            Membership::Session => identity.session == self.leader.session,
+            Membership::ProcessGroup => identity.group == self.leader.group,
+        }
     }
 }
 
@@ -153,6 +192,7 @@ impl Containment {
 #[derive(Clone, Copy, Debug)]
 struct ProcessIdentity {
     pid: libc::pid_t,
+    group: libc::pid_t,
     session: libc::pid_t,
     start_time: u64,
     zombie: bool,
@@ -167,14 +207,6 @@ fn signal_all(members: &[ProcessIdentity], signal: libc::c_int) -> usize {
             !sent && io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
         })
         .count()
-}
-
-#[cfg(unix)]
-fn process_gone(error: &io::Error) -> bool {
-    matches!(
-        error.raw_os_error(),
-        Some(code) if code == libc::ESRCH || code == libc::ECHILD
-    )
 }
 
 #[cfg(target_os = "macos")]
@@ -222,6 +254,7 @@ fn read_process_identity(pid: libc::pid_t) -> io::Result<Option<ProcessIdentity>
     }
     Ok(Some(ProcessIdentity {
         pid,
+        group: info.pbi_pgid as libc::pid_t,
         session,
         start_time: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
         zombie: info.pbi_status == libc::SZOMB,
@@ -255,13 +288,14 @@ fn read_process_identity(pid: libc::pid_t) -> io::Result<Option<ProcessIdentity>
     }
     Ok(Some(ProcessIdentity {
         pid,
+        group: fields[2].parse().map_err(|_| invalid())?,
         session: fields[3].parse().map_err(|_| invalid())?,
         start_time: fields[19].parse().map_err(|_| invalid())?,
         zombie: fields[0] == "Z",
     }))
 }
 
-// 其他 Unix 没有枚举进程的接口：只结束 shell 本身（`terminate` 末尾的 `child.kill`）。
+// 其他 Unix 没有枚举进程的接口：清理不到成员，首进程由各运行时回收前的 `kill` 结束。
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn all_pids() -> Vec<libc::pid_t> {
     Vec::new()
@@ -269,12 +303,14 @@ fn all_pids() -> Vec<libc::pid_t> {
 
 #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 fn read_process_identity(pid: libc::pid_t) -> io::Result<Option<ProcessIdentity>> {
+    let group = unsafe { libc::getpgid(pid) };
     let session = unsafe { libc::getsid(pid) };
-    if session <= 0 {
+    if group <= 0 || session <= 0 {
         return Ok(None);
     }
     Ok(Some(ProcessIdentity {
         pid,
+        group,
         session,
         start_time: 0,
         zombie: false,
@@ -292,7 +328,7 @@ unsafe impl Sync for WindowsJob {}
 
 #[cfg(windows)]
 impl WindowsJob {
-    fn assign(child: &dyn Child) -> anyhow::Result<Self> {
+    fn assign(process: windows_sys::Win32::Foundation::HANDLE) -> anyhow::Result<Self> {
         use std::ptr::null;
         use windows_sys::Win32::System::JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
@@ -320,13 +356,9 @@ impl WindowsJob {
                 std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             )
         } != 0;
-        let assigned = configured
-            && child
-                .as_raw_handle()
-                .map(|child_handle| unsafe { AssignProcessToJobObject(job.0, child_handle) != 0 })
-                .unwrap_or(false);
+        let assigned = configured && unsafe { AssignProcessToJobObject(job.0, process) != 0 };
         if !assigned {
-            anyhow::bail!("failed to assign terminal shell to job object")
+            anyhow::bail!("failed to assign process to terminal worker job object")
         }
         Ok(job)
     }
@@ -411,7 +443,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         assert!(pids.iter().all(|pid| alive(*pid)), "jobs must outlive the shell");
 
-        containment.terminate(child.as_mut()).expect("terminate");
+        containment.terminate().expect("terminate");
 
         for pid in pids {
             assert!(wait_until_gone(pid), "session member {pid} survived");
