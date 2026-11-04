@@ -7,7 +7,6 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
-from app.core.tool.schemas.tool_background import BACKGROUND_FIELD, BackgroundCapability
 
 
 @dataclass(frozen=True)
@@ -60,9 +59,6 @@ class ToolDefinition:
     # 校验前端输入，不合法同步拒绝；``None`` 表示决定不带载荷。只对 ``user_decision`` 非 None 的工具
     # 有意义。
     decision_model: type[BaseModel] | None = None
-    # 后台执行能力（见 ``tool_background``）：声明后参数模型必须带 ``background`` 字段，handler 把它
-    # 与本声明交给 ``run_background_work``；``None`` 是普通工具。
-    background: BackgroundCapability | None = None
     # 要在用户能操作的界面里才用得了（交互终端、配置草稿）：只给侧栏对话。需要用户作答的工具
     # （``user_decision`` 非空）天然如此，不必重复声明，见 :attr:`requires_user_surface`。
     needs_user_surface: bool = False
@@ -75,13 +71,8 @@ class ToolDefinition:
     def normalized(self) -> "ToolDefinition":
         """注册时固定 strict 参数 schema，模型调用阶段不再转换。
 
-        显式 schema 由平台投影从 strict_parameters_schema 生成；其余由统一出口生成。声明了后台结果
-        能力却没在参数模型里带 ``background`` 字段是装配缺陷，注册时就抛 ``ValueError``。
+        显式 schema 来自平台投影；其余由统一出口生成。
         """
-        if self.background is not None and BACKGROUND_FIELD not in self.args_model.model_fields:
-            raise ValueError(
-                f"{self.name}: background-capable tools must declare a background argument"
-            )
         if self.parameters_schema:
             return self
         # ``replace`` 而不是逐字段重建：逐字段写法曾漏掉 ``user_decision``，注册后的 HITL 工具

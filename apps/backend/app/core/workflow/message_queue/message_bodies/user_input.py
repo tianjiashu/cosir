@@ -61,19 +61,16 @@ class UserInputBody(EnqueuedMessageBody):
 
     @property
     def text(self) -> str:
-        """标签正文：用户输入、图片清单，末端附一句「按 ``<output_layer>`` 输出」的提醒。
+        """起始标签的 ``hint`` 提醒模型遵循系统提示词的 ``output_layer``。
 
-        提醒每轮都写进 canonical 历史（约 6 token）：长对话里模型会按自己的习惯漂移格式（尤其
-        回复语言与文件链接），靠系统提示词之外的最近一句把它拉回来。代价是历史随轮次线性增长，
-        且这句位于 ``<user_input>`` 内、会被读成用户引言——规则本体在 ``<output_layer>``，
-        这里只指路，不重复内容。
+        标签正文保留用户原文，有图片时在原文之后逐行列出路径。
         """
 
         img_paths = "".join(f"\n- {path}" for path in self.presentation.image_paths)
         if img_paths:
             img_paths = "\nimage_paths:" + img_paths
         return (
-            f'<{self.TAG} time="{render_time()}" hint:"Output please follow <output_layer> rules ">'
+            f'<{self.TAG} time="{render_time()}" hint="Follow the output_layer rules.">'
             f"{self.input_text}{img_paths}"
             f"</{self.TAG}>"
         )
