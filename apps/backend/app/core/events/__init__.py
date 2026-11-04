@@ -10,6 +10,7 @@
 """
 
 from app.core.events.event_sink import EventSink
+from app.core.events.input_consumed_event import InputConsumedEvent
 from app.core.events.message_event import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
@@ -30,7 +31,6 @@ from app.core.events.tool_runtime_event import (
     TerminalOutputDeltaData,
     ToolCallRuntimeUpdateEvent,
 )
-from app.core.events.input_consumed_event import InputConsumedEvent
 from app.core.events.workflow_event import WorkflowEvent
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 
