@@ -6,7 +6,7 @@ import asyncio
 
 from app.config.logging.logger import log
 from app.core.tool.background import placeholders
-from app.core.tool.background.registry import background_registry
+from app.core.tool.background.backgraound_registry import background_registry
 from app.core.workflow.cancel.conversation_run_cancellation_registry import CancelReason
 from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.models import ConversationRunRecord
@@ -36,7 +36,7 @@ class TaskCancellation:
         会互等。Coordinator 检出 TeamRun 已取消就停下节点并返回，工具随之结束，Run 才能走到检查点。
         按 Task 寻址的理由见 ``cancel_for_parent_task``。
         """
-        from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
+        from app.core.tool.multi_agent.agent_team.team_coordinator import get_agent_team_coordinator
 
         try:
             await asyncio.to_thread(get_agent_team_coordinator().cancel_for_parent_task, self.task_id)
