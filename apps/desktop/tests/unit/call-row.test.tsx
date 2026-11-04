@@ -169,31 +169,20 @@ describe("CallRow kind 视图", () => {
     expect(html).toContain("停止分叉对话：前端部分");
   });
 
-  it("发给上级的消息卡片只能打开对方，不能停止它；发给下级的可以停止", () => {
-    taskStatuses.set(7, "running");
+  it("消息卡片可以打开收件方，但不授予停止对方的能力", () => {
     taskStatuses.set(41, "running");
-    const card = (direction: "up" | "down", taskId: number) => renderToStaticMarkup(
+    const html = renderToStaticMarkup(
       <MemoryRouter>
-        <CallRow
-          taskId={9}
-          toolCallId={`call-${direction}`}
-          toolName="send_message"
-          args={{ task_id: taskId, message: "进展" }}
-          artifact={artifact({
-            display_data: {
-              kind: "agent-task-result", operation: "send", direction, task_id: taskId,
-              agent_name: direction === "up" ? "主任务" : "前端部分", final_output: null, end_reason: null,
-            },
-          })}
+        <CallRow taskId={9} toolCallId="call-send" toolName="send_message"
+          args={{ task_id: 41, message: "进展" }}
+          artifact={artifact({ display_data: {
+            kind: "agent-task-result", operation: "send", task_id: 41, agent_name: "前端部分",
+          } })}
         />
       </MemoryRouter>,
     );
-    const up = card("up", 7);
-    expect(up).toContain("打开上级任务：主任务");
-    expect(up).not.toContain("停止任务");
-    const down = card("down", 41);
-    expect(down).toContain("打开任务：前端部分");
-    expect(down).toContain("停止任务：前端部分");
+    expect(html).toContain("打开任务：前端部分");
+    expect(html).not.toContain("停止任务");
   });
 
   it("只读面不渲染停止与转到后台", () => {

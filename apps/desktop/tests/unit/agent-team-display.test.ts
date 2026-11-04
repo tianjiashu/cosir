@@ -15,9 +15,6 @@ function previewDisplayData(overrides: Record<string, unknown> = {}): Record<str
     goal: "交付报告",
     node_goals: { develop: { goal: "实现", summary: "实现" } },
     start_node: "develop",
-    parent_task_id: 2,
-    parent_run_id: 3,
-    workspace_id: 1,
     configuration: { team_id: "code-quality" },
     nodes: [
       {

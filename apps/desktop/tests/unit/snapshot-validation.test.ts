@@ -182,19 +182,21 @@ describe("Transport snapshot validation", () => {
       type: "tool-call", awaitingUser: false, toolCallId: "status-1", toolName: "task_status", status: "completed", args: {}, display_data,
     });
     const snapshot = part({
-      kind: "agent-task-result", operation: "status", direction: "down", task_id: 501,
+      kind: "agent-task-result", operation: "status", task_id: 501,
       agent_name: "审查代码", final_output: "已完成审查。", end_reason: null,
     });
     expect(parseTransportState(snapshot)).toBe(snapshot);
+    const sent = part({ kind: "agent-task-result", operation: "send", task_id: 501, agent_name: "收件方" });
+    expect(parseTransportState(sent)).toBe(sent);
     // 对方 Run 的状态读任务状态推送，不在展示数据里。
     expect(() => parseTransportState(part({
-      kind: "agent-task-result", operation: "send", direction: "up", task_id: 501,
-      agent_name: "主任务", final_output: null, end_reason: null, status: "completed",
+      kind: "agent-task-result", operation: "send", task_id: 501,
+      agent_name: "主任务", status: "completed",
     }))).toThrow("固定字段");
     expect(() => parseTransportState(part({
       kind: "agent-task-result", operation: "send", direction: "sideways", task_id: 501,
-      agent_name: null, final_output: null, end_reason: null,
-    }))).toThrow("direction");
+      agent_name: null,
+    }))).toThrow("固定字段");
   });
 
   it("accepts the fork display contract and rejects fields outside it", () => {

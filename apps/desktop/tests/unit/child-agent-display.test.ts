@@ -6,23 +6,21 @@ describe("agent task display projections", () => {
     expect(readAgentTaskResultDisplay({
       kind: "agent-task-result",
       operation: "status",
-      direction: "down",
       task_id: 2,
       agent_name: "Review",
       final_output: "done",
       end_reason: null,
-    })).toMatchObject({ operation: "status", direction: "down", taskId: 2, finalOutput: "done" });
+    })).toMatchObject({ operation: "status", taskId: 2, finalOutput: "done" });
     expect(readAgentTaskResultDisplay({
       kind: "agent-task-result",
       operation: "send",
-      direction: "up",
       task_id: 2,
       prompt: "must not render",
     })).not.toHaveProperty("prompt");
   });
 
-  it("rejects payloads without a direction or a task", () => {
-    expect(readAgentTaskResultDisplay({ kind: "agent-task-result", operation: "send", task_id: 2 })).toBeNull();
-    expect(readAgentTaskResultDisplay({ kind: "agent-task-result", operation: "send", direction: "up" })).toBeNull();
+  it("requires a task id for sending", () => {
+    expect(readAgentTaskResultDisplay({ kind: "agent-task-result", operation: "send", task_id: 2 })).toMatchObject({ taskId: 2 });
+    expect(readAgentTaskResultDisplay({ kind: "agent-task-result", operation: "send" })).toBeNull();
   });
 });
