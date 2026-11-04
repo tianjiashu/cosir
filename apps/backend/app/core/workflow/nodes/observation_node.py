@@ -16,8 +16,8 @@ from app.models.enums.react_route import ReactRoute
 async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
     """结算本批观察后流转到 prepare_input。
 
-    工具结果先持久化再发终态；未创建卡片的调用只闭合模型协议。批次原样留在执行状态里：
-    prepare_input 据它判定是否挂起，并在请求模型前清空，下一模型步不会再结算上一批观察。
+    工具结果先持久化再发终态；未创建卡片的调用只闭合模型协议。挂起意图交给 prepare_input；
+    下一次模型请求前清空批次，已结算的观察不再重放。
     """
     batch = state.batch
     step_id = f"step-{state.step_count}"  # 工具是 model 步的延续，复用同一步 step_id
@@ -40,4 +40,4 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
             },
         },
     )
-    return {"next_node": ReactRoute.PREPARE_INPUT}
+    return {"next_node": ReactRoute.PREPARE_INPUT, "wait_for_input": batch.suspends()}

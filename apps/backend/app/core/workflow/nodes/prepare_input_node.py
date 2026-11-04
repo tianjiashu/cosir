@@ -54,7 +54,7 @@ from app.storage.store_engines import main_session_factory
 async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     """按「取消 → 挂起 → 步数上限 → 并入消息」的顺序判定，通过后流转到 model 节点。
 
-    挂起请求取自执行状态里上一批的观察（``batch.suspends()``），读完即清空批次。
+    挂起请求来自工具观察或被后台占位挡住的模型完成，读完即清空。
     取消优先于挂起：工具要求等待时 Run 恰好被停，按取消落定。挂起先于步数上限：Agent 明确在等
     消息时不按「步数用完」失败，唤醒后回到这里再检查上限。挂起前 mailbox 已有可唤醒消息（如子 Agent
     结论在工具执行期间送达）就直接继续，省掉「挂起 → 复查 → 唤醒」一圈；之后才到达的消息仍由 actor
@@ -66,10 +66,10 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     step_id = f"step-{step_count}"
     if rc.is_cancelled():
         _cancel_before_request(step_id, rc.run.id)
-    if state.batch.suspends():
-        if not rc.mailbox.has_wakeable():
+    if state.wait_for_input:
+        if not rc.mailbox.has_wakeable(rc.run.id):
             _suspend(step_id, rc.run.id)
-            return {"batch": ToolBatch(), "next_node": ReactRoute.END}
+            return {"batch": ToolBatch(), "wait_for_input": False, "next_node": ReactRoute.END}
         log.info(
             "prepare_input_suspend_skipped",
             extra={
@@ -85,31 +85,23 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     if decision is not None:
         routed = await _route_decision(decision, step_id)
         if routed is not None:
-            return {**route_state(state.step_count, ReactRoute.TOOLS), "batch": routed}
+            return {**route_state(state.step_count, ReactRoute.TOOLS), "batch": routed, "wait_for_input": False}
     notices = rc.mailbox.take_notices()
     if notices:
         await asyncio.to_thread(_write_notices, notices)
     consumed_input = False
     while not rc.mailbox.isEmpty():
         message = rc.mailbox.pop()
-        if not await asyncio.to_thread(_write_message, message):
+        if not await asyncio.to_thread(_write_message, message, step_id=step_id):
             continue
         if message.kind == "user_input":
             consumed_input = True
-        elif isinstance(message.body, BackgroundResultBody) and message.body.tool_call_id:
-            await asyncio.to_thread(
-                settle_background_placeholder,
-                message.body.tool_call_id,
-                display_data=message.body.placeholder_display_data,
-                ended_at=message.body.ended_at,
-                step_id=step_id,
-            )
     # 用户说了新话才值得重新起标题；副本在主线开始流式改写 working copy 前取好。
-    patch: dict[str, object] = {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch()}
+    patch: dict[str, object] = {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch(), "wait_for_input": False}
     if consumed_input and task_title.should_launch(rc, state):
         task_title.launch(rc, await asyncio.to_thread(_message_context().load_message))
         patch["title_requested"] = True
-    # 本节点是批次的唯一清空点：挂起判定已读完，下一模型步不能再看到上一批观察。
+    # 下一模型步不再看上一批观察或复用本次挂起请求。
     return patch
 
 
@@ -132,7 +124,7 @@ async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | No
     """
     rc = _runtime_context()
     body = cast(DecisionBody, decision.body)
-    if not await asyncio.to_thread(_write_message, decision, claim_decision=True):
+    if not await asyncio.to_thread(_write_message, decision, step_id=step_id, claim_decision=True):
         return None
     claimed = _message_context().tool_result_metadata(body.tool_call_id)
     if claimed is not None and claimed.status == "running" and not claimed.hidden:
@@ -199,17 +191,19 @@ def _write_notices(notices: list[TaskMessage]) -> None:
         )
 
 
-def _write_message(task_message: TaskMessage, *, claim_decision: bool = False) -> bool:
+def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: bool = False) -> bool:
     """确认并写入一条外部队列消息，返回是否实际写入；工作线程执行。
 
     同一事务内先确认删除再写入，写入以确认返回的行内容为准；已被别的执行确认或被用户撤回的消息
     跳过、返回 ``False``。开启一轮的输入（用户输入、Agent 消息）在提交后发消费事件（带展示绑定与
     来源），供 Transport 投影出 user 消息。
+    后台结论的认领、并入与原占位落定共用此事务；卡片事件只在提交后发布。
     ``claim_decision`` 只用于要执行的决定：同一事务把这次调用仍为 ``pending`` 的等待占位推到
     ``running``（占位已不在上下文时不动）。
     """
     rc = _runtime_context()
     context = _message_context()
+    background_event = None
     with main_session_factory().begin() as session:
         acked = service_depends.get_task_message_queue().ack(session, [cast(int, task_message.id)])
         current = acked.get(cast(int, task_message.id))
@@ -232,6 +226,17 @@ def _write_message(task_message: TaskMessage, *, claim_decision: bool = False) -
                 context.update_tool_result_metadata(
                     call_id, ToolMessageMetadata(status="running"), session=session
                 )
+        elif isinstance(current.body, BackgroundResultBody) and current.body.tool_call_id is not None:
+            background_event = settle_background_placeholder(
+                current.body.tool_call_id, current.body, step_id=step_id, session=session
+            )
+    if background_event is not None:
+        log.info("background_placeholder_settled", extra={
+            "msg": "后台结论已并入，占位已结算",
+            "data": {"run_id": rc.run.id, "tool_call_id": background_event.tool_call_id,
+                     "status": background_event.status},
+        })
+        emit(background_event)
     if opens_turn:
         emit(
             InputConsumedEvent(
@@ -265,7 +270,7 @@ def _cancel_before_request(step_id: str, run_id: int) -> None:
 
 
 def _suspend(step_id: str, run_id: int) -> None:
-    """工具要求等待且没有现成的可唤醒消息：迁移为 ``suspended``，由 actor 收尾并复查唤醒。"""
+    """有挂起请求且没有现成的可唤醒消息：迁移为 ``suspended``，由 actor 收尾并复查唤醒。"""
     rc = _runtime_context()
     suspended = service_depends.get_conversation_run_ledger().transition(
         run_id, RunTransition.SUSPEND, usage_stats=rc.usage_stats
@@ -273,7 +278,7 @@ def _suspend(step_id: str, run_id: int) -> None:
     log.info(
         "prepare_input_suspended",
         extra={
-            "msg": f"工具要求挂起，Run 等待消息唤醒，step_id={step_id}",
+            "msg": f"Run 挂起，等待消息唤醒，step_id={step_id}",
             "data": {"step_id": step_id, "run_id": run_id, "applied": suspended is not None},
         },
     )
