@@ -66,7 +66,11 @@ Agent 不持锁：一次输入是 worker 输入队列里的一帧，用户按键
 
 ## Worker 协议
 
-4 字节大端长度 + JSON。`write{input: line|text|keys|raw}`、`resize{rows, cols}`、`signal`（与 write / resize 走同一有序输入队列，不越过排队中的输入；等待 `signal_result` 回执，必须锁外发送）；内容校验失败为非致命 `error{input_rejected|resize_rejected}`。写入 PTY 只经 worker 的专用写线程（有界队列）：前台程序不读输入时 PTY 只缓冲约 1 KB，控制循环与读线程都不能阻塞在写上；队列满时这一次写入被丢弃并报非致命 `error{input_backpressure}`，后端转成 `input_rejected{reason: backpressure}` 推给面板。能力来自握手：`input_keys`、`key_<name>`、`signal_*`；runtime 投递 keys / signal 前复查（line、raw、resize 不需要能力声明）。
+用户命令进程只由 Terminal Worker 启动与清理：本文的交互会话，以及 `execute_terminal` 的一次性命令（`tool_handler/terminal/local_backend.py`）。4 字节大端长度 + JSON。首帧定模式、之后不换：`start_session{shell, shell_kind, cwd, integration}` 或 `start_exec{program, args, raw_args, cwd}`（管道、无 stdin、无 PTY；先握手再启动，启动失败报 `error{EXEC_START_FAILED}`）。握手带 `mode`，只有会话模式带 `pty_kind`、尺寸与能力，客户端按模式校验。`exit{exit_code, signal?}` 是最后一个事件，`signal` 只在执行模式被信号结束时出现。`shutdown` 要求结束；后端关闭 stdin、15 秒收不到心跳都等同 `shutdown`。worker 由后端以独立会话拉起（POSIX），宿主强杀后端整组时不被波及，读到 stdin EOF 后自行清理再退出。
+
+进程清理只在 worker 一处（`containment.rs`）：会话模式的归属是与 shell 同一个会话（shell 先退出时控制终端已被内核摘掉，会话号仍在，所以照样找得到它留下的进程），执行模式是命令的进程组，Windows 两种都挂 Job Object。顺序 HUP → TERM → 宽限 1 秒 → KILL，没有残留立即返回。会话模式在会话结束（关闭、shell 自己退出、后端断开）时清理，会话里一条命令结束不清理；执行模式在命令结束、超时或取消时清理。主动 `setsid` 脱离会话的进程不在范围内。
+
+会话模式的输入：`write{input: line|text|keys|raw}`、`resize{rows, cols}`、`signal`（与 write / resize 走同一有序输入队列，不越过排队中的输入；等待 `signal_result` 回执，必须锁外发送）；内容校验失败为非致命 `error{input_rejected|resize_rejected}`。写入 PTY 只经 worker 的专用写线程（有界队列）：前台程序不读输入时 PTY 只缓冲约 1 KB，控制循环与读线程都不能阻塞在写上；队列满时这一次写入被丢弃并报非致命 `error{input_backpressure}`，后端转成 `input_rejected{reason: backpressure}` 推给面板。能力来自握手：`input_keys`、`key_<name>`、`signal_*`；runtime 投递 keys / signal 前复查（line、raw、resize 不需要能力声明）。
 
 ## 验证入口
 
@@ -74,4 +78,6 @@ Agent 不持锁：一次输入是 worker 输入队列里的一帧，用户按键
 - `test_terminal_session_service.py`：条件等待（事件唤醒、取消、超时）、输入仲裁、交接、snapshot 投影、容量。
 - `test_terminal_stream.py`：asyncio 桥接、背压、WS v2 帧。
 - `test_terminal_session_tools.py`：工具面、按平台 schema、展示数据、错误短提示。
-- `test_terminal_shell_integration.py` / `test_terminal_worker_integration.py`：真实 worker（zsh、/bin/bash 3.2、Homebrew bash 5.x；Windows 上 PowerShell / pwsh）。
+- `test_terminal_shell_integration.py` / `test_terminal_worker_integration.py`：真实 worker（zsh、/bin/bash 3.2、Homebrew bash 5.x；Windows 上 PowerShell / pwsh），含 shell 自己退出与后端被强杀后的清理。
+- `test_local_backend_process_cleanup.py`：执行模式的残留清理、超时温和终止、信号退出码、后端被强杀。
+- Rust：`containment` / `exec` 单测与 `apps/terminal-worker/tests/exec_mode.rs`（经 stdio 帧驱动真实二进制）。

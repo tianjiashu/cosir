@@ -374,7 +374,19 @@ class TerminalSessionRuntime:
             )
         elif kind == "error":
             code = event.get("code")
-            if code in _NONFATAL_WORKER_ERRORS:
+            if code == "input_backpressure":
+                # 写入已被接受、事后才在 worker 处因前台程序不读输入而排不进 PTY：用户与 Agent 的输入
+                # 都可能是这一次，只能在面板上提示「部分输入未送达」，Agent 从下一次观察里看到效果。
+                log.warning(
+                    "terminal_session_input_backpressure",
+                    extra={
+                        "msg": "前台程序未读取输入，worker 写入队列已满，本次输入被丢弃",
+                        "data": {"session_id": self.session_id},
+                    },
+                )
+                with self._condition:
+                    self._stream.publish("input_rejected", reason="backpressure")
+            elif code in _NONFATAL_WORKER_ERRORS:
                 log.warning(
                     "terminal_session_worker_nonfatal_error",
                     extra={

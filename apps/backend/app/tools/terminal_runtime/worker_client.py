@@ -1,8 +1,9 @@
 """Terminal Worker sidecar protocol client。
 
-本模块只负责 backend 与独立 Terminal Worker 之间的本机进程边界。PTY/ConPTY
-实现位于 Rust sidecar；backend 不直接调用平台 PTY API。Windows Worker 以无可见
-控制台窗口的方式启动，shell 的交互语义仍由 Worker 内的 ConPTY 提供。
+本模块只负责 backend 与独立 Terminal Worker 之间的本机进程边界。用户命令进程只由 worker
+启动与清理：会话模式跑交互终端（PTY/ConPTY 在 Rust 侧），执行模式跑 ``execute_terminal``
+的一次性命令；backend 不直接调用平台 PTY API，也不自己派生命令进程。Windows Worker 以无
+可见控制台窗口的方式启动。
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import subprocess
 import sys
 import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,7 @@ from typing import IO, cast
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
+from app.tools.shell.command_environment import user_command_environment
 from app.tools.terminal_runtime.errors import (
     TerminalWorkerBackpressureError,
     TerminalWorkerHandshakeError,
@@ -98,6 +100,8 @@ class ProcessTerminalWorker:
         self.geometry: dict[str, int] = {}
         self._signal_lock = threading.Lock()
         self._pending_signals: dict[str, _PendingSignal] = {}
+        # 由首帧决定：``session``（PTY 交互会话）或 ``exec``（一次性命令），握手按它校验。
+        self._mode = "session"
 
     @property
     def pid(self) -> int | None:
@@ -117,17 +121,81 @@ class ProcessTerminalWorker:
         cwd: str,
         on_event: WorkerEventCallback,
     ) -> None:
-        """无可见控制台窗口地启动 worker，发送 shell spec 并等待 handshake。
+        """以会话模式启动 worker（PTY 交互会话）并等待握手。
 
-        本对象一次性使用：每个会话构造一个 worker、只启动一次，``close`` 后不再重启（停止信号、
-        握手状态都不复位）。``cwd`` 由调用方保证已通过路径安全解析；``on_event`` 接收
-        ``output`` / ``screen`` / ``shell`` / ``error`` / ``exit`` 事件。
+        ``cwd`` 由调用方保证已通过路径安全解析；``on_event`` 接收 ``output`` / ``screen`` /
+        ``shell`` / ``error`` / ``exit`` 事件。异常与副作用见 :meth:`_launch`。
+        """
+
+        self._launch(
+            {
+                "type": "start_session",
+                "shell": list(spec.argv),
+                "shell_kind": spec.kind,
+                "cwd": cwd,
+                "integration": spec.integration,
+            },
+            "session",
+            cwd,
+            on_event,
+        )
+
+    def start_exec(
+        self,
+        program: str,
+        args: Sequence[str],
+        *,
+        raw_args: bool,
+        cwd: str,
+        on_event: WorkerEventCallback,
+    ) -> None:
+        """以执行模式启动 worker（一条一次性命令：管道、无 stdin）并等待握手。
+
+        ``on_event`` 接收 ``output`` / ``error`` / ``exit`` 事件；命令启动失败是 ``error``
+        ``EXEC_START_FAILED``（握手之后才启动命令，所以不会表现为 worker 起不来），``exit`` 是
+        最后一个事件。``raw_args`` 只在 Windows 上有意义：参数按原文拼进命令行。
+        """
+
+        self._launch(
+            {
+                "type": "start_exec",
+                "program": program,
+                "args": list(args),
+                "raw_args": raw_args,
+                "cwd": cwd,
+            },
+            "exec",
+            cwd,
+            on_event,
+        )
+
+    def shutdown(self) -> None:
+        """请求 worker 结束：执行模式结束整组命令进程，会话模式关闭会话。
+
+        不等待、不断开连接：结束后照常经 ``exit`` 事件报回，读线程继续交付到那一刻。worker 已
+        不在时什么也不做。
+        """
+
+        with suppress(TerminalWorkerUnavailableError):
+            self._send({"type": "shutdown"})
+
+    def _launch(
+        self,
+        start_frame: Mapping[str, object],
+        mode: str,
+        cwd: str,
+        on_event: WorkerEventCallback,
+    ) -> None:
+        """无可见控制台窗口地启动 worker，发送首帧并等待 handshake。
+
+        本对象一次性使用：每个会话或每条命令构造一个 worker、只启动一次，``close`` 后不再重启
+        （停止信号、握手状态都不复位）。
 
         异常:
             TerminalWorkerUnavailableError: 可执行文件无法拉起、握手超时或握手前断开（可能是
                 worker 启动慢、瞬时崩溃等条件，可重试）。
-            TerminalWorkerHandshakeError: 收到握手但实例 / PID / PTY 类型 / 尺寸不符，属确定性
-                失败，重试同一 worker 二进制不会有不同结果。
+            TerminalWorkerHandshakeError: 收到握手但实例 / PID / 模式 / PTY 类型 / 尺寸不符，属
+                确定性失败，重试同一 worker 二进制不会有不同结果。
 
         副作用:
             启动 worker 子进程与 reader / stderr / writer / heartbeat 线程；失败路径写 WARNING
@@ -135,6 +203,7 @@ class ProcessTerminalWorker:
             已启动的进程。
         """
 
+        self._mode = mode
         try:
             if sys.platform == "win32":
                 creationflags = subprocess.CREATE_NO_WINDOW
@@ -146,8 +215,14 @@ class ProcessTerminalWorker:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=str(Path(cwd).anchor or cwd),
+                # worker 把自己的环境原样交给 shell，所以在这里就去掉本应用变量。
+                env=user_command_environment(),
                 bufsize=0,
                 creationflags=creationflags,
+                # 自成会话（POSIX）：宿主强杀后端时对后端整个进程组发 SIGKILL，worker 若同组会一起
+                # 被杀、来不及清理会话进程；独立出来后它读到 stdin EOF 自行清理再退出。Windows 由
+                # 会话的 Job Object（KILL_ON_JOB_CLOSE）兜底。
+                start_new_session=sys.platform != "win32",
             )
         except OSError as exc:
             log.warning(
@@ -179,15 +254,7 @@ class ProcessTerminalWorker:
             name="terminal-worker-stderr",
             daemon=True,
         ).start()
-        self._send(
-            {
-                "type": "start",
-                "shell": list(spec.argv),
-                "shell_kind": spec.kind,
-                "cwd": cwd,
-                "integration": spec.integration,
-            }
-        )
+        self._send(start_frame)
         # 超时、握手前断开与「收到但不合法」要分开：前两者可能是 worker 启动慢或瞬时崩溃
         # （可重试），后者是确定性协议不兼容（重试同一二进制必然失败），各自留下可定位的日志。
         handshake_expired = not self._handshake_event.wait(timeout=HANDSHAKE_TIMEOUT_SECONDS)
@@ -304,8 +371,7 @@ class ProcessTerminalWorker:
                     break
             self._input_queue_bytes = 0
         if process.poll() is None:
-            with suppress(TerminalWorkerUnavailableError):
-                self._send({"type": "shutdown"})
+            self.shutdown()
             try:
                 process.wait(timeout=3)
             except subprocess.TimeoutExpired:
@@ -398,7 +464,7 @@ class ProcessTerminalWorker:
                         self._capabilities = frozenset(
                             value for value in raw_capabilities if isinstance(value, str)
                         )
-                    if self._handshake_valid:
+                    if self._handshake_valid and self._mode == "session":
                         self.geometry = {"rows": event["rows"], "columns": event["columns"]}
                     self._handshake_event.set()
                 if event.get("type") == "signal_result":
@@ -445,13 +511,19 @@ class ProcessTerminalWorker:
                 on_event({"type": "error", "code": "WORKER_DISCONNECTED"})
 
     def _validate_handshake(self, event: Mapping[str, object], process_pid: int) -> bool:
-        """校验进程外握手的身份、PTY 类型与正整数逻辑尺寸。"""
+        """校验进程外握手的身份与模式；会话模式另校验 PTY 类型与正整数逻辑尺寸。"""
 
-        rows, columns = event.get("rows"), event.get("columns")
-        return (
+        if not (
             event.get("instance_id") == self.instance_id
             and event.get("pid") == process_pid
-            and event.get("pty_kind") in {"conpty", "unix_pty"}
+            and event.get("mode") == self._mode
+        ):
+            return False
+        if self._mode == "exec":
+            return True
+        rows, columns = event.get("rows"), event.get("columns")
+        return (
+            event.get("pty_kind") in {"conpty", "unix_pty"}
             and type(rows) is int
             and rows > 0
             and type(columns) is int
@@ -468,6 +540,7 @@ class ProcessTerminalWorker:
             "received_instance_id": received.get("instance_id"),
             "expected_pid": process.pid if process is not None else None,
             "received_pid": received.get("pid"),
+            "received_mode": received.get("mode"),
             "received_pty_kind": received.get("pty_kind"),
             "received_rows": received.get("rows"),
             "received_columns": received.get("columns"),
