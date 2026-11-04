@@ -23,7 +23,7 @@ class BackgroundCapability:
     前台等待一律可由用户转到后台：作业照常运行，结论改为回投，对作业没有区别。
 
     没有前台时限：前台就一直等到结论（超时、取消由作业自己收尾），不会自动转后台、也不会因此
-    挂起 Agent——挂起只来自显式等待（``wait_messages``、HITL），重启收尾依赖这一点。
+    挂起 Agent。进入后台后，未结占位会阻止本 Run 正常完成。
     """
 
     default_background: bool

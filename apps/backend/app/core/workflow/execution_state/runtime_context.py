@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
 from app.core.events import EventSink
-from app.core.tool.background import restart_settlement
 from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     cancellation_registry,
 )
@@ -82,9 +81,8 @@ class RuntimeContext:
             的一部分，不能改为「只注入本次请求、不落库」，否则下一个 Run 的前缀会从这里分叉。
             备好即视为已告知：通知并入前 Run 就被取消属低概率情形，被禁工具仍由准入拦截兜底。
 
-            本进程首次驱动该 Task 时，按需再加一条「旧终端已失效」通知（见
-            :meth:`_terminals_invalidated_notice`）。两类通知同一口径：对照 space 上的已告知状态、
-            只在需要时产生，Run 开始时要告诉 Agent 的事都在这里。
+            重启中断的通知不走这里：它由 ``RecoverService`` 在启动时投进外部队列，随下一次驱动
+            并入（见 ``RecoverService.notify_interrupted``）。
         """
 
         from app.core.agents.agent_runtime_config import AgentRuntimeConfig
@@ -101,9 +99,6 @@ class RuntimeContext:
         if content is not None:
             task_space.mailbox.notify(NoticeBody(content=content, notice_kind="tool_availability"))
         task_space.announced_ban_tools = ban_tools
-        invalidated = cls._terminals_invalidated_notice(task_space)
-        if invalidated is not None:
-            task_space.mailbox.notify(invalidated)
 
         return cls(
             run=run,
@@ -115,23 +110,6 @@ class RuntimeContext:
             event_sink=get_conversation_event_projector().process,
             mailbox=task_space.mailbox,
         )
-
-    @staticmethod
-    def _terminals_invalidated_notice(task_space: TaskRuntimeSpace) -> NoticeBody | None:
-        """本进程首次驱动该 Task 且它用过交互终端时，返回「旧终端已失效」通知；判定见
-        ``restart_settlement.first_drive_notice``（同步读一次 context 表，每个 Task 每个进程至多一次）。
-
-        失败只记录、不上抛：这里在 ``RunDriver`` 的异常边界内，上抛会让一条可有可无的提醒把 Run
-        落定为 failed。
-        """
-        try:
-            return restart_settlement.first_drive_notice(task_space)
-        except Exception:
-            log.exception(
-                "terminals_invalidated_notice_failed",
-                extra={"msg": "旧终端失效通知生成失败", "data": {"task_id": task_space.task_id}},
-            )
-            return None
 
     def is_cancelled(self) -> bool:
         """本 Task 是否收到停止信号；只读进程内注册表，节点在多个检查点调用，不查库。"""

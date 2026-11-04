@@ -1,9 +1,9 @@
-"""后台结果的统一执行入口：登记、前台等待、转到后台、到上限自动转后台与回投。
+"""后台结果的统一执行入口：登记、前台等待、转到后台与回投。
 
 工具只交出一个作业（``BackgroundJob``），这里决定结论去哪：
 
-- **前台**：工具线程等作业结论，期间复查 Run 取消；拿到结论就作为本次工具调用的结果返回。转到
-  后台（用户在看板 / 卡片上，或到达 ``foreground_limit_s``）与正常结束的先后，由登记表的
+- **前台**：工具线程等作业结论，期间复查 Run 取消；拿到结论就作为本次工具调用的结果返回。前台
+  没有时限、不会自动转后台：只有用户（看板 / 卡片上）能把它转走，转走与正常结束的先后由登记表的
   ``settle_foreground`` 在锁内裁决。
 - **后台 / 转到后台**：立即返回占位原因；作业的结论之后经 ``background_registry.complete`` 回投为
   ``background_result``，不另开等待线程。
@@ -16,13 +16,11 @@
 from __future__ import annotations
 
 import threading
-import time
 from collections.abc import Callable
 from typing import cast
 
-from app.config.logging.logger import log
-from app.core.tool.background.job import BackgroundConclusion, BackgroundJob, BackgroundOutcome
-from app.core.tool.background.registry import BackgroundMode, background_registry
+from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob, BackgroundOutcome
+from app.core.tool.background.backgraound_registry import BackgroundMode, background_registry
 from app.models.message_metadata import BackgroundKind
 
 # 前台等待复查 Run 取消的时间片；作业结论与转后台信号都会立即唤醒，不靠轮询。
@@ -38,9 +36,7 @@ def run_background_work(
     kind: BackgroundKind,
     label: str,
     mode: BackgroundMode,
-    foreground_limit_s: float | None,
     is_cancelled: Callable[[], bool],
-    detachable: bool = True,
 ) -> BackgroundOutcome:
     """以本次调用（``tool_call_id``）登记作业并按 ``mode`` 取走结论；返回结论或占位原因。
 
@@ -49,8 +45,8 @@ def run_background_work(
     条目与 ``wait_messages`` 提示里这项工作的名字，由工具从模型给的事实里取（命令的 ``description``、
     子 Agent 的名字），不含前端才有的动词文案。
 
-    ``detachable`` 为 False 时前台等待不登记为可转后台（仍可按调用取消）。同步阻塞：前台时
-    阻塞到结论、转后台或 Run 取消，调用方是工具线程。
+    前台等待一律登记为可转后台。同步阻塞：前台时阻塞到结论、转后台或 Run 取消，调用方是
+    工具线程。
     """
 
     route = _Route()
@@ -63,7 +59,7 @@ def run_background_work(
         label=label,
         mode=mode,
         on_cancel=job.cancel,
-        on_detach=detached.set if detachable and mode == "foreground" else None,
+        detached=detached if mode == "foreground" else None,
     )
     if mode == "background":
         route.to_background(tool_call_id)
@@ -71,32 +67,18 @@ def run_background_work(
         return BackgroundOutcome(work=work, placeholder="background")
 
     job.on_done(route.deliver(tool_call_id))
-    deadline = None if foreground_limit_s is None else time.monotonic() + foreground_limit_s
     while True:
         if route.wait(_CANCEL_CHECK_SECONDS) or is_cancelled():
             break
         if detached.is_set():
             route.to_background(tool_call_id)
             return BackgroundOutcome(work=work, placeholder="detached")
-        if deadline is not None and time.monotonic() >= deadline:
-            # 到上限按「转到后台」处理：同一条登记表路径，与用户转后台的竞态由登记表裁决。
-            if background_registry.detach(tool_call_id) == "detached":
-                route.to_background(tool_call_id)
-                log.info(
-                    "background_result_foreground_limit_reached",
-                    extra={
-                        "msg": "前台等待到达上限，自动转到后台",
-                        "data": {"task_id": task_id, "tool_call_id": tool_call_id},
-                    },
-                )
-                return BackgroundOutcome(work=work, placeholder="limit")
-            deadline = None
     if not route.has_result():
         # Run 被取消：撤销作业并等它以取消结论收尾，前台照常返回结果。
         job.cancel()
         route.wait(None)
     outcome = background_registry.settle_foreground(tool_call_id)
-    if outcome == "detached":
+    if outcome == "detached" or (outcome == "gone" and detached.is_set()):
         # 转后台恰好先于结论被裁决：结论已在手，按后台回投。
         background_registry.complete(tool_call_id, route.result())
         return BackgroundOutcome(work=work, placeholder="detached")

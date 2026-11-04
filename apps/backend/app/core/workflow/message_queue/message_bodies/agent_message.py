@@ -26,12 +26,9 @@ class AgentMessageBody(EnqueuedMessageBody):
     KIND: ClassVar[TaskMessageKind] = "agent_message"
     TAG: ClassVar[str] = "agent_message"
     PROMPT_GUIDE: ClassVar[str] = (
-        "a message from another agent, named by `from` (`source_task_id` is its task id). From "
-        "the agent that started you, or the Agent Team you are a node of: treat its request as "
-        "your task; your final answer goes back to that agent, not to the user. From a task you "
-        "started (a delegated child or a fork) while it works: news it thought you needed, or a "
-        "question it is waiting on — answer with send_message to that task_id before you wait "
-        "or finish."
+        "a message from another agent, named by from and source_task_id. For a delegated or "
+        "forked assignment, the original caller receives the task's conclusion. For ordinary "
+        "messages, send a reply explicitly with send_message to source_task_id if needed."
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = True

@@ -32,7 +32,7 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import canc
 from app.core.workflow.message_queue.task_message import RunLaunch
 from app.models.conversation_input import MessageSource
 from app.models.errors.task_fork_errors import TaskForkConflictError
-from app.service.conversation_run.agent_message import prepare_agent_message
+from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.service.depends import get_conversation_run_ledger, get_task_service
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 

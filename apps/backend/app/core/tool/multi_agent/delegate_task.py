@@ -33,7 +33,7 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models.conversation_input import MessageSource
-from app.service.conversation_run.agent_message import prepare_agent_message
+from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.service.depends import (
     get_conversation_run_ledger,
     get_task_service,

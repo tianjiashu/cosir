@@ -91,10 +91,10 @@ class RunMailbox:
         with self._lock:
             return not self._heap
 
-    def has_wakeable(self) -> bool:
+    def has_wakeable(self, run_id: int) -> bool:
         """是否有值得为它推进的消息（``WAKES``）；挂起前据此决定直接继续还是挂起。"""
         with self._lock:
-            return any(type(entry[2].body).WAKES for entry in self._heap)
+            return any(entry[2].wakes(run_id) for entry in self._heap)
 
     def _push(self, message: TaskMessage) -> None:
         heapq.heappush(self._heap, (type(message.body).PRIORITY, next(self._order), message))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from app.config.logging.logger import log
-from app.core.tool.background import placeholders
+from app.core.tool.background import cancel_placeholders
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.workflow.cancel.conversation_run_cancellation_registry import CancelReason
 from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
@@ -64,10 +64,9 @@ class TaskCancellation:
             return
         try:
             await asyncio.to_thread(
-                placeholders.settle_placeholders,
+                placeholders.cancel_placeholders,
                 self.task_id,
                 background,
-                "cancelled",
                 placeholders.RUN_STOPPED_HINT,
             )
         except Exception:

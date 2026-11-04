@@ -8,7 +8,7 @@
 都在 core；而具体的工作在 ``app.tools`` 一侧实现。依赖方向只允许 ``app.tools → core``，所以由
 执行单元显式 ``register`` 并传入撤销回调（依赖倒置），core 不 import 工具层。
 
-事实边界：进程内协调状态，不持久化、不跨重启、重启后不重建；重启收尾见 ``restart_settlement``。
+事实边界：进程内协调状态，不持久化、不跨重启、重启后不重建；重启收尾见 ``RecoverService``。
 
 两种监听（``mode``）：后台条目的结论以消息回投；前台条目的工具线程还在等，结论作为工具结果返回，
 可被 ``detach`` 改为后台（转到后台）。只有后台条目在对话里有占位行（卡片状态见设计文档「卡片
@@ -46,7 +46,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from app.config.logging.logger import log
-from app.core.tool.background.job import BackgroundConclusion
+from app.core.tool.background.background_job import BackgroundConclusion
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.message_queue.task_message import BackgroundResultBody, TaskMessage
 from app.models.message_metadata import BackgroundKind, BackgroundWork
@@ -64,7 +64,7 @@ class _Entry:
     work: BackgroundWork
     mode: BackgroundMode
     on_cancel: Callable[[], None]
-    on_detach: Callable[[], None] | None
+    detached: threading.Event | None
 
 
 @dataclass(frozen=True)
@@ -74,6 +74,8 @@ class DroppedEntry:
     tool_call_id: str
     task_id: int
     mode: BackgroundMode
+    run_id: int | None
+    kind: BackgroundKind
 
 
 class BackgroundRegistry:
@@ -110,31 +112,43 @@ class BackgroundRegistry:
         label: str,
         on_cancel: Callable[[], None],
         mode: BackgroundMode = "background",
-        on_detach: Callable[[], None] | None = None,
+        detached: threading.Event | None = None,
     ) -> BackgroundWork:
         """登记一条后台结果，返回同一份工作描述（工具原样写进后台占位）；``on_cancel``
         在撤销时调用（锁外、只调一次）。
 
-        前台条目须给 ``on_detach``：转到后台时调用，唤醒还在等的工具线程。``tool_call_id`` 由调用方
+        前台条目须给 ``detached``：转到后台时在锁内置位，即使登记随即被撤销，前台线程仍能读到。``tool_call_id`` 由调用方
         保证本进程内唯一（模型给出的单次调用身份）；重复登记是调用方缺陷，抛 ``ValueError``。后端
         关闭后的登记不入表：它的 ``complete`` 自然不投递，执行单元随会话结束收尾。
         """
 
+        work = BackgroundWork(kind=kind, label=label, started_at=_now())
+        return self._add(tool_call_id, task_id, run_id, work, mode, on_cancel, detached)
+
+    def _add(
+        self,
+        tool_call_id: str,
+        task_id: int,
+        run_id: int | None,
+        work: BackgroundWork,
+        mode: BackgroundMode,
+        on_cancel: Callable[[], None],
+        detached: threading.Event | None,
+    ) -> BackgroundWork:
         data = {
             "task_id": task_id,
             "run_id": run_id,
             "tool_call_id": tool_call_id,
-            "kind": kind,
+            "kind": work.kind,
             "mode": mode,
         }
-        work = BackgroundWork(kind=kind, label=label, started_at=_now())
         with self._lock:
             if tool_call_id in self._entries:
                 raise ValueError(f"background result already registered: {tool_call_id}")
             closed = self._closed
             if not closed:
                 self._entries[tool_call_id] = _Entry(
-                    task_id, run_id, work, mode, on_cancel, on_detach
+                    task_id, run_id, work, mode, on_cancel, detached
                 )
                 pending = sum(entry.task_id == task_id for entry in self._entries.values())
         if closed:
@@ -145,7 +159,10 @@ class BackgroundRegistry:
             return work
         log.info(
             "background_result_registered",
-            extra={"msg": "登记后台结果", "data": {**data, "label": label, "pending": pending}},
+            extra={
+                "msg": "登记后台结果",
+                "data": {**data, "label": work.label, "pending": pending},
+            },
         )
         self._notify(task_id)
         return work
@@ -210,16 +227,16 @@ class BackgroundRegistry:
         return "settled"
 
     def detach(self, tool_call_id: str) -> DetachOutcome:
-        """把前台条目改为后台并调用 ``on_detach`` 唤醒等待线程（锁外）。"""
+        """把前台条目改为后台并同时置位等待线程持有的信号。"""
 
         with self._lock:
             entry = self._entries.get(tool_call_id)
             if entry is None:
                 return "not_found"
-            if entry.mode != "foreground" or entry.on_detach is None:
+            if entry.mode != "foreground" or entry.detached is None:
                 return "not_foreground"
             entry.mode = "background"
-            on_detach = entry.on_detach
+            entry.detached.set()
         log.info(
             "background_result_detached",
             extra={
@@ -227,7 +244,6 @@ class BackgroundRegistry:
                 "data": {"task_id": entry.task_id, "tool_call_id": tool_call_id},
             },
         )
-        on_detach()
         self._notify(entry.task_id)
         return "detached"
 
@@ -243,7 +259,7 @@ class BackgroundRegistry:
                 return None
         self._cancel_all([(tool_call_id, entry)], reason)
         self._notify(entry.task_id)
-        return DroppedEntry(tool_call_id, entry.task_id, entry.mode)
+        return DroppedEntry(tool_call_id, entry.task_id, entry.mode, entry.run_id, entry.work.kind)
 
     def discard(self, tool_call_id: str) -> None:
         """移除一条登记且不调撤销回调：登记方在工作真正启动前失败（如投递入队失败）时收回。"""
@@ -260,12 +276,13 @@ class BackgroundRegistry:
             )
             self._notify(entry.task_id)
 
-    def pending(self, task_id: int) -> list[str]:
-        """返回 Task 下未完成条目的标签，供 ``wait_messages`` 判定与提示。"""
+    def pending(self, task_id: int, run_id: int) -> list[str]:
+        """返回本 Run 仍在后台执行的工作标签，供 ``wait_messages`` 判定与提示。"""
 
         with self._lock:
             return [
-                entry.work.label for entry in self._entries.values() if entry.task_id == task_id
+                entry.work.label for entry in self._entries.values()
+                if entry.task_id == task_id and entry.run_id == run_id and entry.mode == "background"
             ]
 
     def owns(self, task_id: int, tool_call_id: str) -> bool:
@@ -298,7 +315,7 @@ class BackgroundRegistry:
                 for tool_call_id, entry in self._entries.items()
                 if entry.task_id == task_id
                 and entry.mode == "foreground"
-                and entry.on_detach is not None
+                and entry.detached is not None
             ]
 
     def drop_task(self, task_id: int) -> list[DroppedEntry]:
@@ -319,7 +336,7 @@ class BackgroundRegistry:
         if dropped:
             self._notify(task_id)
         return [
-            DroppedEntry(tool_call_id, entry.task_id, entry.mode) for tool_call_id, entry in dropped
+            DroppedEntry(tool_call_id, entry.task_id, entry.mode, entry.run_id, entry.work.kind) for tool_call_id, entry in dropped
         ]
 
     def close(self) -> None:
@@ -382,12 +399,13 @@ def deliver_background_result(
     tool_name: str,
     result: dict[str, object],
     placeholder_display_data: dict[str, object] | None = None,
+    cancel_hint: str | None = None,
+    wake_run_id: int | None = None,
 ) -> bool:
     """把后台工作的结论作为 ``background_result`` 投递给 Task，返回是否已入队。
 
     会同步写 SQLite，调用方不得在终端 PTY 读线程等热路径上直接调用。登记过的条目必须经
-    ``BackgroundRegistry.complete`` 投递（受关闭门控）；直接调用只用于不对应登记的启动期重启结论
-    （``restart_settlement``）。
+    ``BackgroundRegistry.complete`` 投递（受关闭门控）；单项取消和重启收尾在登记已撤销或失效后也经此投递。
     停止期间的结论由 ``BackgroundRegistry.complete`` 在锁内拦下，这里不再复查取消信号。
     Task 已删除时入队抛 ``KeyError``，在此记录并返回 False。
     ``placeholder_display_data`` 是作业给占位卡片的终态展示（见 ``BackgroundConclusion``），随消息持久化、
@@ -402,6 +420,8 @@ def deliver_background_result(
         tool_name=tool_name,
         tool_result=json.dumps(result, ensure_ascii=False),
         placeholder_display_data=placeholder_display_data,
+        placeholder_status="cancelled" if cancel_hint else "completed",
+        placeholder_error=cancel_hint, wake_run_id=wake_run_id,
         ended_at=_now(),
     )
     try:

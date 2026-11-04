@@ -26,6 +26,7 @@ from app.core.workflow.message_queue.message_bodies.tool_result import ToolResul
 from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch, UserInputBody
 
 __all__ = [
+    "ADVANCING_KINDS",
     "LAUNCH_INPUT_BODIES",
     "MODEL_INPUT_BODIES",
     "AgentMessageBody",
@@ -70,3 +71,9 @@ _BODY_OF_KIND: dict[str, type[MessageBody]] = {
     body.KIND: body
     for body in (UserInputBody, AgentMessageBody, NoticeBody, DecisionBody, BackgroundResultBody)
 }
+
+# 能推进 Run 的 kind（``WAKES``）：外部队列里只有这些算「有待处理消息」。启动调度据此判断是否
+# 要拉起 Task 的 actor——通知只随下一次推进并入，为它常驻一个 actor 没有意义。
+ADVANCING_KINDS: frozenset[TaskMessageKind] = frozenset(
+    body.KIND for body in _BODY_OF_KIND.values() if body.WAKES
+)

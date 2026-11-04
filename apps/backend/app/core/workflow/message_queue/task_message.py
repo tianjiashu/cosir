@@ -74,6 +74,12 @@ class TaskMessage:
     delivery: Delivery = "immediate"
     project_to_transport: bool = True
 
+    def wakes(self, run_id: int | None) -> bool:
+        """可否唤醒指定 Run；None 表示可否凭此消息新建 Run。"""
+        if isinstance(self.body, BackgroundResultBody) and self.body.wake_run_id is not None:
+            return self.body.wake_run_id == run_id
+        return type(self.body).WAKES
+
     @classmethod
     def of(
         cls,

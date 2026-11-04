@@ -174,8 +174,8 @@ Transport 不把失败态 `content` 写入 `ToolCallStatusChangedEvent.error`；
 | `browser_handoff` | `browser-page` | 交给你操作网页 · `reason` | 同 `browser-page`，另有 `handoff_reason`；等待占位 `awaitingUser` |
 | `delegate_task` | `delegation-result` | `agent_name` · `child_agent_id` | `title`、`child_agent_id`、`role`、`delegation_id`、`child_task_id`；无状态字段（见 3.7） |
 | `fork_task` | `fork-task-result` | 分叉对话 · `title` | `title`、`child_task_id`；无状态字段（见 3.7） |
-| `send_message` | `agent-task-result` | 发送消息 · `#task_id` | `operation=send`、`direction`（`down` 发给自己派生的 Task / `up` 发给派生自己的一方）、`task_id`、`agent_name`、`final_output`、`end_reason` |
-| `task_status` | `agent-task-result` | 读取任务状态 · `#task_id` | `operation=status`、`direction=down`，其余同上（查询时刻的快照） |
+| `send_message` | `agent-task-result` | 发送消息 · `#task_id` | `operation=send`、收件方 `task_id`、`agent_name`；可打开，不提供停止操作 |
+| `task_status` | `agent-task-result` | 读取任务状态 · `#task_id` | `operation=status`、`task_id`、`agent_name`、`final_output`、`end_reason`（查询时刻的快照） |
 | `wait_messages` | 无 | 等待结果 · 无 | — |
 | `propose_agent_configuration` | `agent-configuration-draft` | 生成子 Agent 配置草稿 · `agent_id` | `status=draft`、`agent_id`、`role`、`description`、`system_prompt` |
 | `propose_agent_team_configuration` | `agent-team-configuration-draft` | 生成 Agent Team 配置草稿 · `name` | `status=draft`、`team_id`、`name`、配置预览（不含 system prompt 与密钥） |
@@ -239,7 +239,7 @@ Transport 不把失败态 `content` 写入 `ToolCallStatusChangedEvent.error`；
 
 `fork_task` 的卡片同样只带分叉对话的 `title` 与 `child_task_id`（`{ "kind": "fork-task-result", "title": "拆出前端部分", "child_task_id": 41 }`），状态读应用级任务状态推送；分叉是侧栏对话，「打开」跳到它的路由而不是工作台，卡片出现时侧栏里还没有它就补刷一次目录。
 
-派生 Task 按 Task 寻址：展示数据只携带 Task id，不携带 run_id；`delegation-result` / `fork-task-result` 的 `child_task_id` 与向下发送（`direction=down`）的 `agent-task-result.task_id` 都提升到 part 的 `child_task_id`，行据此读应用级任务状态推送显示对方的运行状态。展示数据里没有状态字段，后端也不再回写它。`send_message` 与 `task_status` 用同一形状，以 `operation` 区分；`direction=up` 的卡片只能打开对方、不能停止它（对方是上级）。打开按对方 Task 的类型：侧栏对话跳路由，委派子 Agent 在工作台打开。派生 Task 的结论与上级的回复都不经工具展示，而是以 `background_result` 回投（`tool_name` 为 `child_agent` / `agent_reply`）；`wait_messages` 只让 Agent 挂起，没有展示数据。
+派生 Task 按 Task 寻址：只有 `delegation-result` / `fork-task-result` 的 `child_task_id` 提升到 part。委派与分叉的结论以 `background_result` 回投原始调用；`send_message` 仅把消息投到收件方，回复也是普通 Agent 消息。发送卡片只显示收件方并提供打开动作；状态查询仍只对派生 Task 开放。
 
 ### 3.8 Agent Team
 

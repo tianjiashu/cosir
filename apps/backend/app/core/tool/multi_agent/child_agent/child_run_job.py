@@ -1,4 +1,4 @@
-"""委派子 Agent 的后台结果作业：``delegate_task`` 与开新 Run 的 ``send_message`` 共用。
+"""委派与分叉的后台结果作业：``delegate_task`` 和 ``fork_task`` 共用。
 
 作业以父调用的 ``tool_call_id`` 登记在 ``background_registry``，回投由 ``run_background_work`` 完成。结论不靠
 子 Run 记下「是哪次调用触发了我」：投递之后在事件循环上等子 Task 无事可做
@@ -7,11 +7,11 @@
 最新 Run，结论覆盖了全部输入。所以子 Task 与 actor 都不知道委派的存在；用户在子 Task 里直接发送时
 没有人在等，结论不回投。
 
-子 Agent 一律后台执行：没有 ``background`` 参数与前台等待，父 Agent 要等结论就调用 ``wait``——委派
+子 Agent 一律后台执行：没有 ``background`` 参数与前台等待，父 Agent 可以显式等待，也会在模型准备结束时等待未结占位——委派
 常常一次发出好几个，前台等待会占住工具线程。撤销即取消等待，并以 ``parent`` 原因停止子 Task。
 
-等待只在进程内；重启后由 ``restart_settlement.reattach_child_waits`` 按父 Task 里仍在等的委派占位
-重新挂上（:func:`reattach_child_wait`，目标子 Task 记在占位的 ``BackgroundWork.target_task_id``）。
+等待只在进程内，不跨重启恢复：重启只把占位推到「已中断」，父 Run 不唤醒、不收结论，等它下次被驱动
+时由首驱通知说明。子 Task 本身照常推进，只是结论不再回投。
 """
 
 from __future__ import annotations
@@ -22,17 +22,16 @@ from concurrent.futures import Future
 from typing import cast
 
 from app.config.logging.logger import log
-from app.core.tool.background.job import BackgroundConclusion, ManualJob
-from app.core.tool.background.registry import background_registry
+from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
+from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.background.run import run_background_work
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models import ConversationRunRecord
-from app.models.message_metadata import BackgroundWork
 
 
 def child_run_result(child_task_id: int, run: ConversationRunRecord) -> dict[str, object]:
-    """子 Run 回投父 Agent 的结论正文；重启收尾（``restart_settlement``）用同一形状。"""
+    """子 Run 回投父 Agent 的结论正文。"""
     return {
         "child_task_id": child_task_id,
         "status": run.status,
@@ -65,7 +64,6 @@ def run_child(
         label=label,
         mode="background",
         is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
-        target_task_id=child_task_id,
     )
     try:
         enqueue()
@@ -81,32 +79,7 @@ def run_child(
     return observation
 
 
-def reattach_child_wait(
-    *,
-    task_id: int,
-    run_id: int | None,
-    tool_call_id: str,
-    work: BackgroundWork,
-    loop: asyncio.AbstractEventLoop,
-) -> None:
-    """后端重启后，为父 Task 里仍在等结论的委派占位重新挂上等待（与 :func:`run_child` 同一套等待）。
-
-    沿用占位上持久化的 ``work``；子 Task 落定后按原 ``tool_call_id`` 回投，卡片照常落到完成。
-    调用方（``restart_settlement``）保证 ``work.target_task_id`` 存在、对应的子 Task 还在。
-    """
-    child_task_id = cast(int, work.target_task_id)
-    job, waiting = _child_job(child_task_id)
-    background_registry.reattach(
-        tool_call_id, task_id=task_id, run_id=run_id, work=work, on_cancel=job.cancel
-    )
-    def deliver(conclusion: BackgroundConclusion) -> None:
-        background_registry.complete(tool_call_id, conclusion)
-
-    job.on_done(deliver)
-    _start_waiting(job, waiting, child_task_id, tool_call_id, loop)
-
-
-def _child_job(child_task_id: int) -> tuple[ManualJob, list[Future[None]]]:
+def _child_job(child_task_id: int) -> tuple[BackgroundJob, list[Future[None]]]:
     """等子 Task 结论的作业：撤销即取消等待，并以 ``parent`` 原因停止子 Task。"""
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -117,7 +90,7 @@ def _child_job(child_task_id: int) -> tuple[ManualJob, list[Future[None]]]:
             future.cancel()
         task_runtime_spaces.get_or_create(child_task_id).actor.request_cancel("parent")
 
-    job = ManualJob(
+    job = BackgroundJob(
         on_cancel=cancel,
         cancelled_result=BackgroundConclusion({"child_task_id": child_task_id, "status": "cancelled"}),
     )
@@ -125,7 +98,7 @@ def _child_job(child_task_id: int) -> tuple[ManualJob, list[Future[None]]]:
 
 
 def _start_waiting(
-    job: ManualJob,
+    job: BackgroundJob,
     waiting: list[Future[None]],
     child_task_id: int,
     tool_call_id: str,
@@ -138,7 +111,7 @@ def _start_waiting(
     )
 
 
-async def _deliver_conclusion(job: ManualJob, child_task_id: int, tool_call_id: str) -> None:
+async def _deliver_conclusion(job: BackgroundJob, child_task_id: int, tool_call_id: str) -> None:
     """等子 Task 无事可做，读最新 Run 的结论交给作业；交付会写 SQLite，放进工作线程。
 
     被撤销时协程随之取消，作业已以取消结论收尾。等待失败（子 Task 被删除、读库失败）记录后以失败

@@ -1,6 +1,6 @@
 """后台工作的结论消息：委派子 Agent、后台命令的结束，以及重启告知。"""
 
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from openai.types.chat import ChatCompletionUserMessageParam
 
@@ -12,14 +12,10 @@ from app.models.message_metadata import UserMessageMetadata
 class BackgroundResultBody(EnqueuedMessageBody):
     """后台工作的结论：委派子 Agent 一次 Run 的终态（``child_agent``）、后台命令的结束，或重启告知。
 
-    唤醒挂起的 Agent，Run 已结束时开新 Run。子 Task 每次 Run 到终态投递一条（多次追加消息就
-    有多条，逐条到达）；因父 Agent 停止（或被编辑重跑）而取消的子 Run 不投递——结论已无人需要。
-    后台命令（``terminal_command``，``execute_terminal`` 转到后台）在命令结束或超时时投递；Run 取消时
-    被撤销、不投递（见 ``background_registry``）。终端交接走 HITL 决定，不经这里。
-    后端重启时挂起在终端上的 Run 收到一条 ``backend_restart``（见 ``restart_settlement``）。
-    ``tool_name`` 标明是哪类后台工作，``tool_result`` 是给模型读的 JSON。``tool_call_id`` 是触发它的
-    那次调用；终端重启结论与用户在子 Task 里直接发起的子 Run 不对应某次调用，为 ``None``，渲染时
-    省略该属性。
+    每个委派、fork 或后台命令对发起调用回投一次结论。单项取消和重启中断只唤醒所属 Run；
+    整个 Run 停止或编辑撤回则放弃工作，不逐项投递。交互终端会话的重启通知没有调用 ID。
+    ``tool_name`` 标明来源，``tool_result`` 是模型读到的结论。占位终态表示结论已交付或
+    调用被取消；工作本身成功、失败或超时记在结论里。
     ``placeholder_display_data`` 只供结论并入时写回这次调用的后台占位卡片（终端命令的完整输出等），
     不渲染给模型；没有卡片终态的工作（子 Agent、重启告知）为 ``None``。
     不投影：委派卡片跟随子 Task 最新 Run，终端状态走 snapshot ``terminal_sessions``。
@@ -29,8 +25,7 @@ class BackgroundResultBody(EnqueuedMessageBody):
     TAG: ClassVar[str] = "background_result"
     PROMPT_GUIDE: ClassVar[str] = (
         "the conclusion of background work you started, identified by `tool_name`: "
-        "`child_agent` (a delegated child agent or fork run ended), `agent_reply` (the agent "
-        "that started you answered the question you sent with expect_reply), `terminal_command` "
+        "`child_agent` (a delegated child agent or fork finished), `terminal_command` "
         "(a background execute_terminal command finished or timed out), or `backend_restart` "
         "(the backend "
         "restarted: background commands "
@@ -44,6 +39,10 @@ class BackgroundResultBody(EnqueuedMessageBody):
     tool_call_id: str | None = None
     tool_name: str
     tool_result: str
+    # 单项取消或重启中断只为所属 Run 唤醒，不单独开启另一个 Run。
+    wake_run_id: int | None = None
+    placeholder_status: Literal["completed", "cancelled"] = "completed"
+    placeholder_error: str | None = None
     placeholder_display_data: dict[str, object] | None = None
     # 结论产生并回投的时刻，随队列持久化；消费可能晚得多，不能届时重取墙钟。
     ended_at: str

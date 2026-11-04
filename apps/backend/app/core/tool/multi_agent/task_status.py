@@ -1,7 +1,7 @@
 """task_status 工具：读取自己派生的 Task（委派子 Agent、Agent fork）当前 Run 的状态与最终输出。"""
 
 import json
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 from app.core.tool.multi_agent.args.task_status_args import TaskStatusArgs
 from app.core.tool.results.tool_error import tool_error
@@ -15,11 +15,6 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.service.depends import get_conversation_run_ledger, get_task_service
-
-AgentTaskOperation = Literal["send", "status"]
-# ``down``：发给自己派生的 Task；``up``：发给派生自己的那一方。
-MessageDirection = Literal["down", "up"]
-
 
 class TaskStatusTool(HandlerBase):
     """只做「task → current_run_id → run」这一条读取，不推断生命周期、不写任何事实。
@@ -44,25 +39,20 @@ class TaskStatusTool(HandlerBase):
     @staticmethod
     def _agent_task_display_data(
         *,
-        operation: AgentTaskOperation,
-        direction: MessageDirection,
         task_id: int,
         agent_name: str | None,
         final_output: str | None,
         end_reason: str | None,
     ) -> dict[str, Any]:
-        """构造 ``send_message`` / ``task_status`` 的 UI-only 结果。
+        """构造状态查询的 UI-only 结果。
 
         只保留对方 Task 的定位（按 Task 寻址，不含 run_id）、名字与已持久化的最终摘要；不携带 prompt、
-        异常堆栈或模型原始响应，也不镜像对方 Run 的状态（前端读应用级任务状态推送）。``direction``
-        决定卡片能做什么：只有自己派生的 Task 可以从卡片上停止。进入 Transport snapshot，不进模型
-        上下文。
+        异常堆栈或模型原始响应，也不镜像对方 Run 的状态（前端读应用级任务状态推送）。
         """
 
         return {
             "kind": "agent-task-result",
-            "operation": operation,
-            "direction": direction,
+            "operation": "status",
             "task_id": task_id,
             "agent_name": agent_name,
             "final_output": final_output,
@@ -107,8 +97,6 @@ class TaskStatusTool(HandlerBase):
                 separators=(",", ":"),
             ),
             display_data=self._agent_task_display_data(
-                operation="status",
-                direction="down",
                 task_id=task_id,
                 agent_name=task.title,
                 final_output=run.final_output,

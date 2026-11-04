@@ -20,6 +20,7 @@ class ReactExecutionState(BaseModel):
         step_limit: 本次驱动的步数上限（驱动起点的步骤号 + Agent 的 ``max_steps``）。
         next_node: 当前驱动内的下一个节点。
         batch: 当前模型请求的工具批次，节点间交接；prepare_input 判定挂起后清空。
+        wait_for_input: 本次驱动要求在无可唤醒输入时挂起；唤醒不延续。
         title_requested: 本 Run 是否已启动过标题支线；跨驱动保留，唤醒、恢复不再重复触发。
     """
 
@@ -29,6 +30,7 @@ class ReactExecutionState(BaseModel):
     step_limit: int = Field(default=0, ge=0)
     next_node: ReactRoute = ReactRoute.PREPARE_INPUT
     batch: ToolBatch = Field(default_factory=ToolBatch)
+    wait_for_input: bool = False
     title_requested: bool = False
 
     def for_new_drive(self, max_steps: int) -> "ReactExecutionState":
@@ -44,5 +46,6 @@ class ReactExecutionState(BaseModel):
                 "step_limit": self.step_count + max_steps,
                 "next_node": ReactRoute.PREPARE_INPUT,
                 "batch": ToolBatch(),
+                "wait_for_input": False,
             }
         )

@@ -331,7 +331,7 @@ class TaskActor:
         continues = current is None or current.status == ConversationRunStatus.COMPLETED.value
         pending = await asyncio.to_thread(self._queue.pending_nowait, self.task_id)
         return not any(
-            type(message.body).WAKES and (continues or cast(int, message.id) > self._handled)
+            message.wakes(None) and (continues or cast(int, message.id) > self._handled)
             for message in pending
         )
 

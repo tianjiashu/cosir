@@ -29,7 +29,7 @@ from app.models.conversation_input import MessageSource
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
-from app.service.conversation_run.agent_message import prepare_agent_message
+from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.service.depends import (
     get_conversation_run_ledger,
     get_task_service,

@@ -25,24 +25,28 @@ RUN_STOPPED_HINT = "已停止"
 INTERRUPTED_HINT = "已中断"
 
 
-def settle_placeholders(
+def cancel_placeholders(
     task_id: int | None,
     tool_call_ids: Iterable[str] | None,
-    status: ToolCallEventStatus,
     hint: str | None,
-) -> int:
-    """把这些调用还在等结果的占位（``pending`` 的后台占位、``running`` 的 HITL 占位）推到
-    ``status``，返回改写的行数。
+    *,
+    exclude: frozenset[str] = frozenset(),
+) -> frozenset[int]:
+    """把还在等结果的占位（``pending`` 的后台占位、``running`` 的 HITL 占位）结束为
+    ``cancelled``，返回**被改写的占位所属的 Task**。``hint`` 只说明被谁结束（停止 / 取消 / 重启）。
 
-    ``task_id`` 为 ``None`` 时跨全部 Task（重启）；``tool_call_ids`` 为 ``None`` 时不按调用过滤。
+    ``task_id`` 为 ``None`` 时跨全部 Task（重启）；``tool_call_ids`` 为 ``None`` 时不按调用过滤；
+    ``exclude`` 里的调用不动（结论已在队列里，占位归那条结论结算）。
+    返回 Task 集合而不是行数：重启收尾据此给这些 Task 投重启通知，行数对调用方没有用。
     同步写库，调用方放在工作线程。
     """
 
     ids = None if tool_call_ids is None else frozenset(tool_call_ids)
     if ids is not None and not ids:
-        return 0
+        return frozenset()
+    status: ToolCallEventStatus = "cancelled"
     settled = service_depends.get_conversation_task_context_service().settle_placeholders(
-        task_id, ids, status, hint
+        task_id, ids, status, hint, exclude=exclude
     )
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -80,4 +84,4 @@ def settle_placeholders(
                 "data": {"task_id": task_id, "status": status, "count": len(settled)},
             },
         )
-    return len(settled)
+    return frozenset(record.task_id for record in settled)
