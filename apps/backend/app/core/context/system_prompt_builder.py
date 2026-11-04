@@ -8,11 +8,11 @@
 2. ``<agent_layer>`` Agent 系统预设层：所有 profile 都使用装配阶段载入的
    ``AgentRuntimeConfig.system_prompt`` 正文。该层是系统预设，与用户无关；本层只负责施加预算，
    不访问提示词文件或做变量替换。
-T. ``<tool_layer>`` 工具能力目录层：按 ``AgentRuntimeConfig.allowed_tools`` 投影当前 Agent 可用的
+T. ``<tool_layer>`` 工具能力目录层：按 Task 固化的工具名投影当前 Agent 可用的
    子 Agent、Team、MCP 服务和 Skill 目录；只读取对应能力需要的本机配置，不连接 MCP 服务。
    该层只消费调用方传入的工具名集合，不自行推导工具可用性。
 W. ``<work_layer>`` 工作方式层：工具选择（专用文件工具优先于 shell 里的 cat/grep/find）、独立读取
-   并行发出、过程叙述与收尾方式。固定文案、按 ``allowed_tools`` 条件拼接，只引用当前 Agent 真有的
+   并行发出、过程叙述与收尾方式。固定文案、按同一组工具名条件拼接，只引用当前 Agent 真有的
    工具；既没有文件工具也没有 ``execute_terminal`` 的 Agent 不生成该层。
 3. ``<global_layer>`` 系统级全局指令层：来源唯一、路径固定为 ``<system_cosir_dir>/AGENTS.md``
    （由 ``app.utils.path.system_cosir.system_instruction_file`` 计算），作为跨所有 workspace 生效的
@@ -91,20 +91,23 @@ class SystemPromptBuilder:
     def build(
         agent: AgentRuntimeConfig,
         workspace_root: str,
+        tool_names: Collection[str],
     ) -> str:
         """构建完整系统提示词文本。
 
         参数:
-            agent: 当前执行主体的 Agent 档案；其 ``allowed_tools`` 决定工具能力目录层
-                是否生成（含委派工具才生成）。
+            agent: 当前执行主体的 Agent 运行时配置；只取身份与系统预设。
             workspace_root: 当前工作区根目录。
+            tool_names: Task 固化的工具名（``TaskRuntimeSpace.task_tool_names``）；决定工具能力
+                目录层与工作方式层，不读 Agent 定义里的 ``allowed_tools``——那是固化前的配置，
+                之后可能已被用户改过。
 
         返回:
             由层块拼接出的系统提示词（空层块不参与拼接）；Layer T 根据可用工具投影对应目录，
             Layer W 按可用工具条件拼接工作方式。
 
         异常:
-            RuntimeError: ``allowed_tools`` 含委派工具、但进程级 Agent 目录尚未初始化时，由
+            RuntimeError: ``tool_names`` 含委派工具、但进程级 Agent 目录尚未初始化时，由
                 ``configuration.get_agent_registry`` 抛出（装配错误，不静默降级）。
 
         副作用:
@@ -113,10 +116,8 @@ class SystemPromptBuilder:
         """
         layer1 = SystemPromptBuilder._build_message_context(workspace_root)
         layer2 = SystemPromptBuilder._build_agent_layer(agent)
-        tool_layer = SystemPromptBuilder._build_tool_layer(
-            workspace_root, agent.allowed_tools
-        )
-        work_layer = SystemPromptBuilder._build_work_layer(agent.allowed_tools)
+        tool_layer = SystemPromptBuilder._build_tool_layer(workspace_root, tool_names)
+        work_layer = SystemPromptBuilder._build_work_layer(tool_names)
         global_layer = SystemPromptBuilder._build_global_layer()
         layer3 = SystemPromptBuilder._build_workspace_layer(workspace_root)
         output_layer = SystemPromptBuilder._build_output_layer()
@@ -131,7 +132,7 @@ class SystemPromptBuilder:
         文案为英文（读者是模型，与工具描述、子 Agent 选择指南保持同一语言）。本层只承载
         当前实现确认的运行期事实：路径边界的说法对应 ``PathResolver`` 的两条解析路径——只读工具
         走 ``resolve_without_boundary``（可读工作区外），写类工具走 ``resolve_within_workspace``
-        （限制在工作区内且拒绝 ``.cosir/``）；这里不点名工具，因为本层不按 ``allowed_tools`` 裁剪。
+        （限制在工作区内且拒绝 ``.cosir/``）；这里不点名工具，因为本层不按工具名裁剪。
 
         参数:
             workspace_root: 当前工作区根目录。
@@ -170,7 +171,7 @@ class SystemPromptBuilder:
 
         标签名与读法由各消息类型声明（``TAG`` / ``PROMPT_GUIDE``，见
         ``core/workflow/message_queue/task_message.py``），这里只写通用前言并遍历
-        ``MODEL_INPUT_BODIES``，改消息格式不必回来同步。静态列出全部类型而不按 ``allowed_tools``
+        ``MODEL_INPUT_BODIES``，改消息格式不必回来同步。静态列出全部类型而不按工具名
         裁剪：裁剪要反查哪些工具会产生决定或后台结果，让提示词与工具定义耦合，省下的篇幅不值得。
         """
 
@@ -228,7 +229,7 @@ class SystemPromptBuilder:
 
         参数:
             workspace_root: 当前工作区根目录，用作目录的作用域键。
-            available_tool_names: 该 Agent 声明的可用工具名集合。
+            available_tool_names: Task 固化的工具名集合。
 
         返回:
             包裹在 ``<tool_layer>`` 标签内的可用能力目录；当前 Agent 没有目录能力时返回 ``""``。
@@ -347,7 +348,7 @@ class SystemPromptBuilder:
         方式不由这里定义。
 
         参数:
-            available_tool_names: 该 Agent 声明的可用工具名集合。
+            available_tool_names: Task 固化的工具名集合。
 
         返回:
             包裹在 ``<work_layer>`` 标签内的工作方式文本；不生成时返回 ``""``。

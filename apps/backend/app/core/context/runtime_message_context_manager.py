@@ -57,8 +57,11 @@ class RuntimeMessageContextManager:
     """
 
     current_task_id: int
-    # 只用其身份与执行资源（角色、提示词、工具名）构建 Task 首个系统提示词，及供配置广播过滤。
+    # 只用其身份与执行资源（角色、提示词）构建 Task 首个系统提示词，及供配置广播过滤。
     agent: AgentRuntimeConfig
+    # Task 固化的工具名（``TaskRuntimeSpace.task_tool_names``），决定首个系统提示词的
+    # 工具目录层与工作方式层。
+    tool_names: tuple[str, ...]
     # 行级持久化边界：追加、原地替换、序号与 Task 固定系统提示词都经它读写。
     context_store: ContextStore
     # 工作区记录：系统提示词取 ``root_path``，模型请求的附件解析取 ``id``。必填——缺工作区
@@ -84,7 +87,7 @@ class RuntimeMessageContextManager:
         self._system_entry = store.get_system_prompt(self.current_task_id)
         if self._system_entry is None:
             system_prompt_text = SystemPromptBuilder.build(
-                self.agent, self.workspace.root_path
+                self.agent, self.workspace.root_path, self.tool_names
             )
             self._system_entry = store.create_system_prompt(
                 self.current_task_id,
