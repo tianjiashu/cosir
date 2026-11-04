@@ -49,7 +49,8 @@ _ACTIVITY_KEYS = {
     "contextWindowTotal",
     "launch",
 }
-_MESSAGE_KEYS = {"id", "role", "parts", "runId", "outcome"}
+_MESSAGE_KEYS = {"id", "role", "parts", "runId", "outcome", "source"}
+_SOURCE_KEYS = {"taskId", "name"}
 _OUTCOME_KEYS = {"status", "endReason", "error", "usage", "contextWindowTotal", "durationMs"}
 _QUEUED_MESSAGE_KEYS = {"id", "role", "parts", "delivery"}
 _DELIVERIES = {"immediate", "next_run"}
@@ -212,6 +213,15 @@ def _validate_message(message: object, seen_ids: set[str]) -> None:
         if body["role"] != "assistant":
             raise ValueError("only assistant messages carry an outcome")
         _validate_outcome(body["outcome"])
+    if body["source"] is not None:
+        if body["role"] != "user":
+            raise ValueError("only user messages carry a source")
+        source = body["source"]
+        if not isinstance(source, dict) or set(source) != _SOURCE_KEYS:
+            raise ValueError("snapshot message source is invalid")
+        _validate_non_negative_int(source["taskId"], "message source taskId")
+        if not isinstance(source["name"], str):
+            raise ValueError("snapshot message source name must be a string")
 
 
 def _validate_launch(launch: object) -> None:

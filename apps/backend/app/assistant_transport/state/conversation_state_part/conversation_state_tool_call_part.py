@@ -45,7 +45,7 @@ class ConversationStateToolCallPart(TypedDict):
     background: NotRequired[ConversationBackgroundWork]
     isError: NotRequired[bool]
     approvalRequestId: NotRequired[None]
-    # 子 Task 定位：``delegation-result`` 与 ``child-agent-result(operation=send)`` 都提升到 part，
+    # 子 Task 定位：只有委派与分叉把子 Task 提升到 part，
     # 委派行据此读应用级任务状态推送，不在展示数据里镜像子 Run 状态。
     child_task_id: NotRequired[int]
     agent_role: NotRequired[str]

@@ -40,7 +40,7 @@ from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.logging.logger import log
 from app.core.events import RunStatusChangedEvent, ToolCallStatusChangedEvent, WorkflowEvent
-from app.core.tool.background.registry import background_registry
+from app.core.tool.background.backgraound_registry import background_registry
 from app.core.workflow.message_queue.task_message import UserInputBody
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -262,7 +262,7 @@ class ConversationTaskStateService:
 
     @staticmethod
     def _foreground_waits(task_id: int) -> list[str]:
-        from app.core.tool.background.registry import background_registry
+        from app.core.tool.background.backgraound_registry import background_registry
 
         return background_registry.foreground_calls(task_id)
 

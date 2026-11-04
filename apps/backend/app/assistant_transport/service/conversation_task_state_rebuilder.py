@@ -15,7 +15,7 @@ from openai.types.chat import (
 
 from app.assistant_transport.projection.snapshot_navigation import message
 from app.assistant_transport.projection.tool_result import project_tool_result
-from app.assistant_transport.projection.user_input_projection import build_presentation_parts
+from app.assistant_transport.projection.user_input_projection import build_turn_input
 from app.assistant_transport.state.conversation_state_activity import (
     ConversationStateActivity,
     run_launch_snapshot,
@@ -42,7 +42,11 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.models.message_metadata import (
+    TURN_INPUT_KINDS,
+    ToolMessageMetadata,
+    UserMessageMetadata,
+)
 from app.models.task_record import TaskRecord
 from app.utils.datetime_utils import to_text
 from app.utils.message_content import content_to_text
@@ -262,9 +266,14 @@ class ConversationTaskStateRebuilder:
             row_message = row.message
             if row_message["role"] == "user":
                 user_metadata = cast(UserMessageMetadata, row.metadata)
-                # 目前只有用户输入有气泡形态；其它 kind 有可投影形态时在这里加渲染。
-                if user_metadata.kind != "user_input":
+                # 只有开启一轮的输入（用户输入、Agent 消息）有消息形态；其它 kind 有可投影形态时
+                # 在这里加渲染。
+                if user_metadata.kind not in TURN_INPUT_KINDS:
                     continue
+                # 只按展示绑定投影，不读 SDK 正文（附件解析后的模型正文不适合展示）。
+                parts, source = build_turn_input(
+                    cast(UserInputPresentation, user_metadata.presentation), user_metadata.source
+                )
                 has_user_message = True
                 if assistant["parts"]:
                     run_messages.append(assistant)
@@ -272,11 +281,9 @@ class ConversationTaskStateRebuilder:
                     message(
                         user_message_id(cast(int, row.message_id)),
                         "user",
-                        # 用户消息只按展示绑定投影，不读 SDK 正文（附件解析后的模型正文不适合展示）。
-                        list(build_presentation_parts(
-                            cast(UserInputPresentation, user_metadata.presentation)
-                        )),
+                        list(parts),
                         run_id,
+                        source,
                     )
                 )
                 assistant = message(

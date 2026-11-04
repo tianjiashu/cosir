@@ -27,11 +27,20 @@ class ConversationStateOutcome(TypedDict):
     durationMs: int | None
 
 
+class ConversationStateMessageSource(TypedDict):
+    """Agent 消息的发送方：前端据 ``taskId`` 跳到来源 Task，``name`` 是发送时的显示名快照。"""
+
+    taskId: int
+    name: str
+
+
 class ConversationStateMessage(TypedDict):
     """一条 user / assistant 消息。
 
     ``runId`` 是消息的 Run 归属，只供事件路由、诊断与 fork 定位；对话界面不按它分组。
     ``outcome`` 只有「该 Run 最后一条助手消息」在 Run 终态后非空，user 消息恒为 ``None``。
+    ``source`` 只有 Agent 消息（另一个 Agent 发来、开启一轮的 user 消息）非空：它不是用户说的话，
+    前端另行渲染、不可编辑；用户消息与助手消息恒为 ``None``。
     ``parts`` 保留各自的流式与工具执行生命周期。
     """
 
@@ -40,6 +49,7 @@ class ConversationStateMessage(TypedDict):
     parts: list[ConversationStatePart]
     runId: int
     outcome: ConversationStateOutcome | None
+    source: ConversationStateMessageSource | None
 
 
 class ConversationQueuedMessage(TypedDict):

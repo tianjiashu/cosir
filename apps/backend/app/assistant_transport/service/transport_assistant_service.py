@@ -31,15 +31,15 @@ from app.assistant_transport.state.snapshot_window import HistoryPage, window_sn
 from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
 from app.core.tool.background import placeholders
-from app.core.tool.background.registry import background_registry
+from app.core.tool.background.backgraound_registry import background_registry, deliver_background_result
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.message_queue.task_message import (
     Delivery,
-    NoticeBody,
     TaskMessage,
     UserInputBody,
 )
+from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES
 from app.models.message_metadata import UserMessageMetadata
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
@@ -237,8 +237,7 @@ class TransportAssistantService:
         """取消一次工具调用；没有可取消的对象（或已标记过）时返回 ``False``。
 
         这次调用登记了后台结果时撤销登记，不要求 Run 在执行（后台工作本来就在 Run 之外）：前台条目
-        由撤销回调唤醒工具线程、以取消结果收尾；后台条目把占位行推到 ``cancelled``，并给模型留一条
-        不唤醒的通知——用户主动取消即接管，Agent 下次推进时一并读到。没有登记时只中止当前执行中
+        由撤销回调唤醒工具线程、以取消结果收尾；后台条目向其活动 Run 回投取消结论，所属 Run 已结束时只结算占位。没有登记时只中止当前执行中
         的工具调用：看执行者而不是 Run 状态，挂起的 Run 没有执行者，标记了也没人取。
 
         异常:
@@ -257,18 +256,17 @@ class TransportAssistantService:
             # 与完成或 Run 停止撤销竞争失败：条目已结束，没有可取消的对象。
             return False
         if dropped.mode == "background":
-            placeholders.settle_placeholders(
-                task_id, [tool_call_id], "cancelled", placeholders.USER_CANCELLED_HINT
-            )
-            task_runtime_spaces.enqueue(
-                task_id,
-                TaskMessage.of(
-                    NoticeBody(
-                        content=_BACKGROUND_CANCELLED_NOTICE.format(tool_call_id=tool_call_id),
-                        notice_kind="background_result_cancelled",
-                    )
-                ),
-            )
+            current = self._tasks.require_current_run(task_id)
+            if current is not None and current.id == dropped.run_id and current.status in ACTIVE_RUN_STATUSES:
+                deliver_background_result(
+                    task_id, tool_call_id=tool_call_id, tool_name=dropped.kind,
+                    result={"end_reason": "cancelled", "message": "The user cancelled this background call."},
+                    cancel_hint=placeholders.USER_CANCELLED_HINT, wake_run_id=current.id,
+                )
+            else:
+                placeholders.settle_placeholders(
+                    task_id, [tool_call_id], "cancelled", placeholders.USER_CANCELLED_HINT
+                )
         return True
 
     def background_tool_call(self, task_id: int, tool_call_id: str) -> None:
@@ -344,9 +342,3 @@ class TransportAssistantService:
         """
         self._tasks.get_task(task_id)
         return self._states.get_history_page(task_id, end)
-
-
-_BACKGROUND_CANCELLED_NOTICE = (
-    "The user cancelled the background work started by tool call {tool_call_id}; its result "
-    "will not arrive. Do not wait for it or start it again unless the user asks."
-)

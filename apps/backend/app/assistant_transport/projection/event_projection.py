@@ -21,12 +21,13 @@ from app.assistant_transport.projection.tool_call_event_projection import (
 from app.assistant_transport.projection.tool_runtime_event_projection import (
     plan_tool_call_runtime_update,
 )
-from app.assistant_transport.projection.user_input_projection import plan_user_input_consumed
+from app.assistant_transport.projection.user_input_projection import plan_input_consumed
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
+    InputConsumedEvent,
     RunInitializedEvent,
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
@@ -35,7 +36,6 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
-    UserInputConsumedEvent,
     WorkflowEvent,
 )
 
@@ -43,7 +43,7 @@ _Planner = Callable[[Any, ConversationStateSnapshot], Sequence[ConversationState
 
 _PLANNERS: dict[type, _Planner] = {
     RunInitializedEvent: plan_run_initialized,
-    UserInputConsumedEvent: plan_user_input_consumed,
+    InputConsumedEvent: plan_input_consumed,
     RunStatusChangedEvent: plan_run_status_changed,
     RunResultUpdatedEvent: plan_run_result_updated,
     AssistantTextDeltaEvent: plan_assistant_text_delta,

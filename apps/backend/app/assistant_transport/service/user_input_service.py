@@ -24,8 +24,8 @@ from app.models import (
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
+from app.models.model_config_record import ModelConfigRecord
 from app.service.attachment.attachment_service import AttachmentService
-from app.service.conversation_run.run_launch_check import check_launch_config
 from app.service.depends import get_task_crud
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 
@@ -61,7 +61,7 @@ class UserInputService:
             KeyError: Task 不存在（接入层映射为 404）。
         """
         task = self._task.get(task_id)
-        config = check_launch_config(model_config_id, reasoning_effort)
+        config = ModelConfigRecord.check_launch_config(model_config_id, reasoning_effort)
         if command.image_asset_ids and not config.supports_image:
             raise UserInputRejectedError(
                 "IMAGE_NOT_SUPPORTED", "当前模型不支持图片输入，请更换模型或移除图片"

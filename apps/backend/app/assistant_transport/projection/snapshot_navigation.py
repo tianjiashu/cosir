@@ -3,7 +3,10 @@
 from collections.abc import Iterator
 from typing import Literal
 
-from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
+from app.assistant_transport.state.conversation_state_message import (
+    ConversationStateMessage,
+    ConversationStateMessageSource,
+)
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
     SnapshotPath,
@@ -19,10 +22,18 @@ def message(
     role: Literal["user", "assistant"],
     parts: list[ConversationStatePart],
     run_id: int,
+    source: ConversationStateMessageSource | None = None,
 ) -> ConversationStateMessage:
-    """构造消息骨架；结局只在 Run 终态时由 Run 事件投影写入。"""
+    """构造消息骨架；结局只在 Run 终态时由 Run 事件投影写入，来源只给 Agent 消息。"""
 
-    return {"id": message_id, "role": role, "parts": parts, "runId": run_id, "outcome": None}
+    return {
+        "id": message_id,
+        "role": role,
+        "parts": parts,
+        "runId": run_id,
+        "outcome": None,
+        "source": source,
+    }
 
 
 def is_current_run(state: ConversationStateSnapshot, run_id: int | None) -> bool:
