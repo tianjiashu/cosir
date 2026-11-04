@@ -57,6 +57,10 @@ class Settings:
     # 主 Agent 的单轮执行预算：保存环境配置后会重载主 Agent profile，下一轮新 Run 使用新值。
     MAIN_AGENT_MAX_STEPS: ClassVar[int] = 300
 
+    # Agent 派生（委派、fork、建 Team）的最大深度：深度达到它的 Task 创建时不给派生工具
+    # （``core.tool.task_tool_scope``）。只影响之后新建的 Task，已建出的 Task 工具面不变。
+    AGENT_MAX_DERIVATION_DEPTH: ClassVar[int] = 2
+
     # 内置浏览器的标签上限：每个 Task 与全进程。宿主不存配置，后端每次请求新建标签时随参数带过去，
     # 所以保存配置后下一次工具调用即生效；调小不关闭已有标签。
     BROWSER_MAX_TABS_PER_TASK: ClassVar[int] = 5
@@ -149,7 +153,8 @@ class Settings:
             无。
 
         异常:
-            ValueError: ``MAIN_AGENT_MAX_STEPS`` 或浏览器标签上限不是正整数时抛出。
+            ValueError: ``MAIN_AGENT_MAX_STEPS``、``AGENT_MAX_DERIVATION_DEPTH`` 或浏览器标签上限
+                不是正整数时抛出。
 
         副作用:
             加载系统 ``.cosir/.env`` 到进程环境；覆盖本类全部静态属性；经 ``paths.reset``
@@ -162,5 +167,6 @@ class Settings:
         # 环境变量名与类字段名同名（见模块 docstring）：读取的键即字段本身，无前缀映射。
         cls.DEFAULT_LANGUAGE = os.environ.get("DEFAULT_LANGUAGE", "zh").strip().lower()
         cls.MAIN_AGENT_MAX_STEPS = cls._env_positive_int("MAIN_AGENT_MAX_STEPS", 300)
+        cls.AGENT_MAX_DERIVATION_DEPTH = cls._env_positive_int("AGENT_MAX_DERIVATION_DEPTH", 2)
         cls.BROWSER_MAX_TABS_PER_TASK = cls._env_positive_int("BROWSER_MAX_TABS_PER_TASK", 5)
         cls.BROWSER_MAX_TABS = cls._env_positive_int("BROWSER_MAX_TABS", 20)

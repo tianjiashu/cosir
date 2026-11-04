@@ -43,6 +43,18 @@ ENVIRONMENT_FIELDS: dict[str, EnvironmentField] = {
         placeholder="请输入正整数",
         minimum=1,
     ),
+    "AGENT_MAX_DERIVATION_DEPTH": EnvironmentField(
+        "AGENT_MAX_DERIVATION_DEPTH",
+        "integer",
+        "input",
+        "general",
+        "Agent 最大派生深度",
+        False,
+        2,
+        placeholder="请输入 1-5 的整数",
+        minimum=1,
+        maximum=5,
+    ),
     "FIRECRAWL_API_KEY": EnvironmentField(
         "FIRECRAWL_API_KEY",
         "string",
