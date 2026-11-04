@@ -190,7 +190,7 @@ def _require_tool_names(document: Mapping[str, Any], source: Path) -> list[str]:
 @dataclass
 class AgentProfile:
     """
-    Agent 定义（能力事实源）：来自内置定义、JSON 配置或 Team 节点的冻结快照，由注册表共享，
+    Agent 定义（能力事实源）：来自内置定义或 JSON 配置，由注册表共享，
     运行期不修改。一次 Run 实际执行所用的是 ``AgentRuntimeConfig``（本定义与本 Run 模型选择的
     最终解析），二者不要混用。
     description 应该是"选择指南"，system_prompt 应该是"执行协议"，而本次

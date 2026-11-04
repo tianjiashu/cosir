@@ -12,17 +12,19 @@ from dataclasses import dataclass
 from app.config.configuration import get_agent_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
+from app.core.agents.model_settings import ModelSettings
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.core.tool.handler.agent_team.node_profile import (
-    NODE_PROFILE_SNAPSHOT_KEY,
-    build_node_profile,
-)
 from app.models import ConversationRunRecord
-from app.models.agent_team.state.agent_team_run_state import AgentTeamRunRuntime
+from app.models.agent_team.state.agent_team_run_components import AgentTeamRunRuntime
 from app.models.conversation_run_options import ReasoningEffort
 from app.models.model_config_record import ModelConfigRecord
 from app.service.depends import get_model_config_service, get_task_service, get_workspace_service
+
+# Team 节点 Task 的 ``extra`` 里存放确认时冻结的节点快照（``AgentTeamRunRuntime``）的键：协调器创建
+# 节点 Task 时写入，:meth:`AgentRuntimeConfig.for_run` 每次驱动节点 Run 时读回，交接与重启后的
+# 恢复都只依赖这份持久化事实，不在内存中传递节点定义。
+NODE_SNAPSHOT_KEY = "agent_team_profile_snapshot"
 
 
 @dataclass(frozen=True)
@@ -47,18 +49,21 @@ class AgentRuntimeConfig:
 
     @classmethod
     def for_run(cls, run: ConversationRunRecord) -> AgentRuntimeConfig:
-        """合成本次 Run 独占的配置；注册表单例与 Team 冻结定义都不被修改。
+        """合成本次 Run 独占的配置；注册表单例不被修改。
 
         Task 与工作区由 Run 反查：调用方手里只需要 Run 这一条事实（驱动、委派、Team 审批走同一条
         路径，不必各自先读一遍 Task / workspace）。定义只由持久化事实推导：按 Run 的 Agent 身份从
-        注册表解析（主 Agent 用系统作用域，其余用 Run 所属工作区）；Team 节点 Task 再叠加其
-        ``extra`` 里冻结的节点快照。连接与能力字段只由本 Run 的 ``model_config_id`` 物化——
-        ``api_key`` 不落盘。
+        注册表解析（主 Agent 用系统作用域，其余用 Run 所属工作区）。Team 节点 Task 的字段刻意
+        分路：身份与步数（``agent_id`` / ``agent_type`` / ``max_steps``）取注册表，执行资源（角色、
+        提示词、输出契约、模型偏好）取 ``extra`` 里确认时冻结的节点快照，保证节点行为与用户确认时
+        预览的一致。连接与能力字段只由本 Run 的 ``model_config_id`` 物化——``api_key`` 不落盘，
+        快照里残留的连接字段经 ``ModelSettings.from_dict`` 忽略。
 
         异常:
             RuntimeError: 注册表解析不到该 Agent，或 Run 未记录模型配置。
             KeyError: Run 指向的 Task / 工作区已不存在，或 ``model_config_id`` 指向的配置已不存在。
             ModelSettingsError: 模型配置不完整。
+            pydantic.ValidationError: 节点快照或其输出契约不合法。
         """
 
         task = get_task_service().get_task(run.task_id)
@@ -72,17 +77,29 @@ class AgentRuntimeConfig:
         definition = get_agent_registry().resolve(workspace_scope, agent_id)
         if definition is None:
             raise RuntimeError(f"agent profile unavailable for run {run.id}")
-        node_snapshot = (task.extra or {}).get(NODE_PROFILE_SNAPSHOT_KEY)
-        if node_snapshot is not None:
-            definition = build_node_profile(
-                definition, AgentTeamRunRuntime.model_validate(node_snapshot)
-            )
         # Run 行来自持久化边界：建 Run 的唯一路径总会写入模型配置，缺失只可能是脏数据。
         if run.model_config_id is None:
             raise RuntimeError(f"run {run.id} has no model config")
         model_config = get_model_config_service().get_config(run.model_config_id)
-        return cls.resolve(
-            definition, model_config, reasoning_effort=run.options.reasoning_effort
+        node_snapshot = (task.extra or {}).get(NODE_SNAPSHOT_KEY)
+        if node_snapshot is None:
+            return cls.resolve(
+                definition, model_config, reasoning_effort=run.options.reasoning_effort
+            )
+        # 快照由准备阶段整份写入（角色与输出契约必有），不为缺省值设回落。
+        node = AgentTeamRunRuntime.model_validate(node_snapshot)
+        return cls(
+            agent_id=definition.agent_id,
+            agent_type=definition.agent_type,
+            max_steps=definition.max_steps,
+            role=node.role,
+            system_prompt=node.system_prompt,
+            structured_output=StructuredOutputSpec.model_validate(node.structured_output),
+            model=resolve_model(
+                model_config,
+                ModelSettings.from_dict(node.model_settings),
+                reasoning_effort=run.options.reasoning_effort,
+            ),
         )
 
     @classmethod
@@ -93,7 +110,7 @@ class AgentRuntimeConfig:
         *,
         reasoning_effort: ReasoningEffort | None = None,
     ) -> AgentRuntimeConfig:
-        """由 Agent 定义（注册表单例或 Team 节点冻结定义，不被修改）与本 Run 的模型选择解析。
+        """由 Agent 定义（注册表单例，不被修改）与本 Run 的模型选择解析。
 
         异常:
             ModelSettingsError: 模型配置不完整（见 :func:`resolve_model`）。
