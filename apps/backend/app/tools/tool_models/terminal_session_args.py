@@ -1,10 +1,10 @@
 """交互终端工具的输入契约（6 个工具：start / write / read / handoff / list / close）。
 
-参数模型不写类 docstring：它会作为顶层 description 进入模型可见 schema，说明改写成注释。
+模型可见说明只来自字段描述：schema 生成边界会剥离模型级 description，类 docstring 只服务
+源码阅读，不能当作投递渠道。
 """
 
 import re
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -44,12 +44,6 @@ class TerminalStartArgs(BaseModel):
         default=None,
         description="Start directory inside the workspace; relative paths resolve from the "
         "workspace root (the default). It must exist.",
-    )
-    integration: Literal["auto", "off"] = Field(
-        default="auto",
-        description="auto enables shell integration (command boundaries, exit codes, cwd "
-        "tracking; wait until=command_returned needs it) where the shell supports it; off "
-        "disables it.",
     )
 
 
@@ -140,7 +134,10 @@ class TerminalHandoffArgs(BaseModel):
     reason: str = Field(
         min_length=1,
         max_length=200,
-        description="One sentence telling the user what to do, e.g. 'Enter the sudo password'.",
+        description=(
+            "One sentence telling the user what to do, e.g. 'Enter the sudo password'. It is "
+            "shown to the user, so write it in the user's language."
+        ),
     )
 
 

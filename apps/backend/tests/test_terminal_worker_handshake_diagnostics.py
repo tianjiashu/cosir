@@ -200,7 +200,7 @@ def test_service_error_observation_marks_rejected_handshake_as_not_retryable() -
     assert observation.status == "error"
     assert observation.display_data["status_hint"] == "终端失败"
     assert "TERMINAL_WORKER_HANDSHAKE_REJECTED" in observation.content
-    assert "Fix the session or arguments before retrying." in observation.content
+    assert "the worker configuration needs fixing before retrying" in observation.content
 
 
 def test_rejected_handshake_raises_handshake_error_and_logs_field_comparison(

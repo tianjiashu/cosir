@@ -20,8 +20,8 @@ from app.tools.terminal_runtime.errors import (
 )
 from app.tools.terminal_runtime.render import TerminalObservationResult
 
-# 受控短提示（约 5 字）：只按错误类型映射，不透传异常正文。
-_STATUS_HINTS: dict[type[TerminalSessionError], str] = {
+# 受控短提示（约 5 字）：只按错误类型映射，不透传异常正文；子类按最近的已登记祖先命中。
+_STATUS_HINTS: dict[type, str] = {
     TerminalUserTypingError: "用户输入中",
     TerminalUserCommandRunningError: "用户命令中",
     TerminalIntegrationRequiredError: "缺少集成",
@@ -39,18 +39,22 @@ def cancelled(context: ToolExecutionContext) -> bool:
 
 
 def service_error_observation(tool_name: str, exc: TerminalSessionError) -> ToolObservation:
-    """把终端领域错误转换为模型可消费的错误观察，并按 retryable 给出重试建议。"""
+    """把终端领域错误转换为模型可消费的观察：事实来自 message，下一步动作来自错误类型的 advice。"""
 
-    return tool_error(
-        tool_name,
-        f"terminal operation failed ({exc.code}): {exc}. "
-        + (
-            "Retry after the transient condition clears."
-            if exc.retryable
-            else "Fix the session or arguments before retrying."
-        ),
-        status_hint=_STATUS_HINTS.get(type(exc), "终端失败"),
-    )
+    content = f"terminal operation failed ({exc.code}): {exc}"
+    if exc.advice:
+        content = f"{content} {exc.advice}"
+    return tool_error(tool_name, content, status_hint=_status_hint(exc))
+
+
+def _status_hint(exc: TerminalSessionError) -> str:
+    """按最近的已登记祖先取 UI 短提示；未登记的错误回落为通用提示。"""
+
+    for basis in type(exc).__mro__:
+        hint = _STATUS_HINTS.get(basis)
+        if hint is not None:
+            return hint
+    return "终端失败"
 
 
 def observation_result(tool_name: str, result: TerminalObservationResult) -> ToolObservation:

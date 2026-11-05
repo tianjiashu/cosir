@@ -543,8 +543,7 @@ class TerminalSessionRuntime:
         if spec.until == "command_returned" and self._observation.integration_status != "ready":
             raise TerminalIntegrationRequiredError(
                 "wait until=command_returned needs shell integration, which is "
-                f"{self._observation.integration_status} for this session; "
-                "use until=output_quiet or until=match instead"
+                f"{self._observation.integration_status} for this session"
             )
 
     # ------------------------------------------------------------------ Agent 读取
@@ -742,8 +741,7 @@ class TerminalSessionRuntime:
             )
             raise TerminalUserCommandRunningError(
                 f"the user started `{command.command}` in this session and it is still running; "
-                "your input would go into the user's program. Use another session "
-                "(terminal_start) or ask the user"
+                "your input would go into the user's program"
             )
         deadline = time.monotonic() + Constant.Terminal.AGENT_TYPING_WAIT_SECONDS
         waited = False

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 from concurrent.futures import Future
 from types import SimpleNamespace
 
@@ -34,6 +35,76 @@ def _assert_strict_schema(schema):
     elif isinstance(schema, list):
         for value in schema:
             _assert_strict_schema(value)
+
+
+_CJK = re.compile(r"[\u4e00-\u9fff]")
+
+
+def _iter_property_groups(schema) -> list[dict[str, dict]]:
+    """递归收集每个 ``properties`` 层级。
+
+    按层级返回而非摊平：同一 union 的不同分支里同名字段共享语义，描述本就应当一致，
+    只有同一层级内两个不同字段共用一段描述才是复制粘贴。
+    """
+
+    groups: list[dict[str, dict]] = []
+    if isinstance(schema, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            groups.append(properties)
+        for value in schema.values():
+            groups.extend(_iter_property_groups(value))
+    elif isinstance(schema, list):
+        for value in schema:
+            groups.extend(_iter_property_groups(value))
+    return groups
+
+
+def _is_discriminator(field_schema: dict) -> bool:
+    """字段取值是否由自身表达（``const`` 或单值 ``enum``）。"""
+
+    if "const" in field_schema:
+        return True
+    values = field_schema.get("enum")
+    return isinstance(values, list) and len(values) == 1
+
+
+@pytest.mark.usefixtures("backend_env")
+def test_registered_tool_prompts_are_english_and_documented():
+    """全部工具的模型可见文案：英文、非空、每个字段都有说明且互不重复。
+
+    模型看不到实现，只看到这些文本；缺一条就少一个决策依据，多一份重复就多一处漂移。
+    """
+
+    problems: list[str] = []
+    for tool in get_tool_registry().get_all_definitions():
+        function = tool.to_model_tool_definition()
+        description = function["description"]
+        if not description or description != description.strip():
+            problems.append(f"{tool.name}: 工具描述为空或含首尾空白")
+        if _CJK.search(description):
+            problems.append(f"{tool.name}: 工具描述含非英文文本")
+        if _CJK.search(json.dumps(function["parameters"], ensure_ascii=False)):
+            problems.append(f"{tool.name}: 参数 schema 含非英文文本")
+
+        for group in _iter_property_groups(function["parameters"]):
+            descriptions = []
+            for field_name, field_schema in group.items():
+                # 判别字段（union 的 type）：取值由 const / 单值 enum 自身表达，不另写描述。
+                if _is_discriminator(field_schema):
+                    continue
+                text = field_schema.get("description")
+                if not isinstance(text, str) or not text.strip():
+                    problems.append(f"{tool.name}.{field_name}: 字段缺少描述")
+                    continue
+                if _CJK.search(text):
+                    problems.append(f"{tool.name}.{field_name}: 字段描述含非英文文本")
+                descriptions.append(text)
+            duplicated = {text for text in descriptions if descriptions.count(text) > 1}
+            if duplicated:
+                problems.append(f"{tool.name}: 同层字段描述重复 {sorted(duplicated)}")
+
+    assert not problems, "\n".join(problems)
 
 
 @pytest.mark.usefixtures("backend_env")

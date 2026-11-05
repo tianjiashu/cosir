@@ -259,8 +259,11 @@ def test_normalized_derives_schema_when_no_parameters_schema() -> None:
 
     assert normalized is not definition
     assert normalized.parameters_schema != {}
+    derived = _ProbeArgs.model_json_schema()
+    # 模型级 description 来自类 docstring，由 schema 生成边界剥离（见 model_tool_schema）。
+    derived.pop("description")
     assert normalized.parameters_schema == {
-        **_ProbeArgs.model_json_schema(),
+        **derived,
         "additionalProperties": False,
         "required": ["message"],
     }
@@ -326,8 +329,11 @@ def test_register_stores_normalized_definition_and_bumps_generation() -> None:
 
     stored = registry.get_tool_definition("probe_tool")
     assert stored is not None
+    derived = _ProbeArgs.model_json_schema()
+    # 模型级 description 来自类 docstring，由 schema 生成边界剥离（见 model_tool_schema）。
+    derived.pop("description")
     assert stored.parameters_schema == {
-        **_ProbeArgs.model_json_schema(),
+        **derived,
         "additionalProperties": False,
         "required": ["message"],
     }

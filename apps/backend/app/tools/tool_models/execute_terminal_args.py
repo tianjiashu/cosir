@@ -62,8 +62,8 @@ _TIMEOUT_DESCRIPTION = (
 
 
 class WindowsExecuteTerminalArgs(BaseModel):
-    # 不写类 docstring：它会作为顶层 description 进入模型可见 schema。与 MacExecuteTerminalArgs
-    # 是两份互不继承的完整契约，平台差异（shell 取值、命令与路径语法）只落在下列字段描述里。
+    # 与 MacExecuteTerminalArgs 是两份互不继承的完整契约，平台差异（shell 取值、命令与路径语法）
+    # 只落在下列字段描述里——模型可见说明只有这一个来源，模型级 description 会被剥离。
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
@@ -95,7 +95,7 @@ class WindowsExecuteTerminalArgs(BaseModel):
 
 
 class MacExecuteTerminalArgs(BaseModel):
-    # 不写类 docstring（同上）；字段描述按 POSIX 语义给出，Linux 等 POSIX 宿主共用。
+    # 字段描述按 POSIX 语义给出，Linux 等 POSIX 宿主共用（平台差异只落在这里，同上）。
 
     model_config = ConfigDict(strict=True, extra="forbid")
 

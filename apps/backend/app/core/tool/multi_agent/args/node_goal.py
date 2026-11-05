@@ -3,11 +3,10 @@
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 
-# 模型可见提示：pydantic 会把类 docstring 渲染成 schema 的 ``description``，所以这里只留一句
-# 英文契约；内部语义改用注释承载——摘要只服务于运行方案审阅与执行态展示，不参与节点提示词或
-# 路由决策，只有 ``goal`` 会作为该节点的 user input。
+# 模型可见说明只在字段描述里（模型级 description 会被剥离）。摘要只服务于运行方案审阅与执行态
+# 展示，不参与节点提示词或路由决策，只有 ``goal`` 会作为该节点的 user input。
 class AgentTeamNodeGoal(BaseModel):
-    """Subgoal of one Team node: the goal it executes, plus a short display label."""
+    """一个 Team 节点执行的目标与展示摘要。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

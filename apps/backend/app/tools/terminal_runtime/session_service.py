@@ -80,8 +80,7 @@ class TerminalSessionService:
                 >= Constant.Terminal.MAX_AGENT_SESSIONS_PER_TASK
             ):
                 raise TerminalSessionCapacityError(
-                    "this task already has the maximum number of agent terminals; "
-                    "reuse one from terminal_list or close one first"
+                    "this task already has the maximum number of agent terminals"
                 )
             runtime = TerminalSessionRuntime(
                 task_id=task_id,
@@ -178,7 +177,7 @@ class TerminalSessionService:
         """
         runtime = self._lookup(session_id)
         if runtime is None:
-            raise TerminalSessionNotFoundError(session_id)
+            raise TerminalSessionNotFoundError(f"session {session_id} no longer exists")
         if runtime.task_id != task_id:
             raise TerminalSessionOwnershipError("terminal session does not belong to task")
         return runtime

@@ -6,6 +6,7 @@ import json
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -21,6 +22,7 @@ from app.core.workflow.message_queue.task_message import DecisionBody
 from app.service import depends
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
+    TerminalSessionNotFoundError,
     TerminalSessionStateError,
     TerminalUserCommandRunningError,
     TerminalUserTypingError,
@@ -35,7 +37,7 @@ from app.tools.tool_handler.terminal_session import (
     build_terminal_definitions,
 )
 from app.tools.tool_handler.terminal_session.common import service_error_observation
-from app.tools.tool_models import TerminalReadArgs, TerminalWriteArgs
+from app.tools.tool_models import TerminalReadArgs, TerminalStartArgs, TerminalWriteArgs
 
 
 def test_exactly_six_terminal_tools_are_built() -> None:
@@ -114,14 +116,44 @@ def test_read_arguments_bound_limits() -> None:
 def test_error_observations_use_controlled_status_hints() -> None:
     typing = service_error_observation("terminal_write", TerminalUserTypingError("typing"))
     assert typing.display_data["status_hint"] == "用户输入中"
-    assert "Retry after" in (typing.content or "")
+    assert "Wait a few seconds" in (typing.content or "")
     busy = service_error_observation("terminal_write", TerminalUserCommandRunningError("busy"))
     assert busy.display_data["status_hint"] == "用户命令中"
-    assert "Fix the session" in (busy.content or "")
+    assert "Use another session" in (busy.content or "")
     need = service_error_observation("terminal_write", TerminalIntegrationRequiredError("x"))
     assert need.display_data["status_hint"] == "缺少集成"
+    assert "until=output_quiet" in (need.content or "")
+    gone = service_error_observation(
+        "terminal_write", TerminalSessionNotFoundError("session s no longer exists")
+    )
+    assert "terminal_list" in (gone.content or "")
     other = service_error_observation("terminal_write", TerminalSessionStateError("x"))
     assert other.display_data["status_hint"] == "终端失败"
+    # 多因的 StateError 不追加类型级建议：message 已是完整事实。
+    assert (other.content or "").endswith(": x")
+
+
+def test_start_shell_description_lists_installed_shells_and_paths(monkeypatch) -> None:
+    """候选值在字段描述里同源生成（模型不必先调 terminal_list），并保留自定义可执行文件路径；
+    Agent 拿不到它无法决策的 integration 开关。"""
+
+    from app.tools.tool_handler.terminal_session import start as start_module
+
+    monkeypatch.setattr(
+        start_module.ShellResolver, "resolve", lambda *_a, **_k: SimpleNamespace(kind="zsh")
+    )
+    monkeypatch.setattr(
+        start_module.ShellResolver,
+        "available",
+        lambda **_k: [{"kind": "zsh"}, {"kind": "fish"}],
+    )
+
+    schema = start_module._parameters_schema(TerminalStartArgs)
+    description = schema["properties"]["shell"]["description"]
+    assert "auto" in description and "zsh" in description
+    assert "Installed here: zsh, fish." in description
+    assert "path to a shell executable" in description
+    assert "integration" not in schema["properties"]
 
 
 def test_shell_resolver_lists_installed_shells_with_integration(monkeypatch) -> None:

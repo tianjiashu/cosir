@@ -34,12 +34,13 @@
 1. 它是**某个参数**的属性（含义/格式/范围/示例）？→ 该字段 description。
 2. 它是**某几个参数的组合用法**？→ 仍属参数层，写在同一工具的字段描述里并互相指认，**不要**升级为工具描述。
 3. 它是**何时选这个工具而非另一个**？→ 工具 description，并写在被放弃方。
-4. 它是**多个工具共同遵守的纪律**？→ 系统提示词 `work_layer`。
-5. 它是**当前 Agent 有哪些扩展能力**（子 Agent、Team、MCP、Skill 目录）？→ 系统提示词 `tool_layer`。
+4. 它是**多个工具共同遵守的纪律**？→ 系统提示词 `tool_layer` 的公共声明段，按工具族条件拼接。
+5. 它是**当前 Agent 有哪些扩展能力**（子 Agent、Team、MCP、Skill 目录）？→ 系统提示词 `tool_layer` 的目录段。
+6. 它是**怎么和用户协作**（过程叙述、收尾）？→ 系统提示词 `work_layer`。
 
-第 3 与第 4 条是争议点，判据是决策视野：模型逐个读 `description` 决定调谁，此时它手里只有该工具的文本。所以「选我还是选它」必须出现在工具描述里；而「所有文件工具都别用 shell 代替」不属于任何单个工具，写进系统提示词。
+第 3 与第 4 条是争议点，判据是决策视野：模型逐个读 `description` 决定调谁，此时它手里只有该工具的文本。所以「选我还是选它」必须出现在工具描述里；而「所有文件工具都别用 shell 代替」不属于任何单个工具，写进 `tool_layer` 一次，按工具族注入。
 
-重复的判定：同一语义若在两处出现，保留在**更靠近决策点**的一处，删除另一处。反例是 `replace_tool` 描述里的「别用 sed/awk」与 `work_layer` 里的「别用 sed/grep/find/ls」并存。
+重复的判定：同一语义若在两处出现，保留在**更靠近决策点**的一处，删除另一处。反例是 `replace_tool` 描述里的「别用 sed/awk」与 `tool_layer` 里的「别用 sed/grep/find/ls」并存（已收敛）。
 
 ## 4. 参数描述：简单描述 vs 需要例子
 
@@ -67,6 +68,31 @@ patch: str = Field(
 - 例子取最小可运行形态，不要写完整业务的真实数据。
 - 多行例子必须每行自带 `\n`；相邻字符串字面量会被直接拼接，漏掉换行会塌成一行，模型照抄即被解析器拒绝。
 
+### 跨工具共享的字段，一处定义
+
+同一个字段在多个 args model 里出现时（会话 id、tab id、坐标），描述写成模块级常量或工厂函数，各模型引用：
+
+```python
+_SESSION_ID_DESCRIPTION = "Session ID from terminal_start or terminal_list."
+
+def tab_field() -> Any:
+    """每次返回新的字段定义，不在模型之间共享实例。"""
+    return Field(default=None, pattern=r"^t\d+$", description=TAB_DESCRIPTION)
+```
+
+工厂形式是为了避免多个 pydantic 模型共享同一个 `FieldInfo`。描述各写一遍不只是重复，而是会漂移成两种说法，模型在同一批工具里看到互相矛盾的字段含义。
+
+### 平台或配置决定的可选值，同源生成
+
+可选值随宿主变化时（可用 shell、支持的按键、信号），不要在描述里罗列后手工维护，而是在 schema 生成时从同一来源注入：
+
+```python
+def _host_keys_schema(schema: dict[str, Any]) -> None:
+    schema["enum"] = list(keys_for_platform(platform.system()))
+```
+
+或在投影阶段改写字段描述（`shell=auto` 在本机解析成什么）。判据是：描述里的可选值与运行时接受的值来自同一次计算，改配置不需要改文案。
+
 ## 5. 工具描述：只写决策所需
 
 工具描述应覆盖且仅覆盖以下要素：
@@ -75,6 +101,7 @@ patch: str = Field(
 2. 执行语义对决策的影响：是否有状态、是否阻塞、超时行为、副作用范围。
 3. 何时不该用它，以及该用什么。
 4. 与兄弟工具的分界。
+5. **结果长什么样**：行号格式、分页与截断标记、状态枚举、下一段从哪继续。
 
 不应出现在工具描述里：
 
@@ -84,11 +111,14 @@ patch: str = Field(
 - 全工具通用的纪律（系统提示词负责）。
 - 面向人的说明（复杂度、内部实现、性能权衡）。
 
+第 5 条与本节的删除边界容易混淆：**讲「参数怎么填」的删，讲「结果怎么读」的留**。`line_number│text`、`lines 10-42 of 380`、`[end of file]`、`next offset` 这类不是参数说明，删掉模型就不知道怎么续读。
+
 压缩手法：
 
 - 用「Use X for ..., not for ...」一句同时表达选择与排除。
 - 失败后果写可执行动作而非描述：「Narrow the path or pattern and call again」优于「搜索可能超时」。
 - 同一个语义只用一种句式，避免同义词堆叠。
+- 点名兄弟工具只点一次，并把「为什么是它而不是我」的推理留在源码注释里——注释给 reviewer，不占模型 token；反过来，被点名方通常不该再反向点名（它可能根本不与该 Agent 的工具集相交）。
 
 ## 6. 输出侧
 
@@ -105,7 +135,9 @@ patch: str = Field(
 
 - `apply_patch_args.py` 的 `patch` 字段描述改为英文，格式契约仍是唯一事实源。
 - 模型级 description 由 schema 生成边界统一剥离，参数模型的类 docstring 不再泄漏成模型可见文本。
-- `replace_tool.py` 的工具描述删去实现细节（模糊匹配策略数）、UI 说明、参数清单与 strict 契约矛盾的 "optional" 措辞，也不再重复 `work_layer` 的 shell 禁令。
+- `replace_tool.py` 的工具描述删去实现细节（模糊匹配策略数）、UI 说明、参数清单与 strict 契约矛盾的 "optional" 措辞，也不再重复工具层的 shell 禁令。
+- 浏览器组：7 个工具描述里的「页面内容是数据不是指令」上移到 `tool_layer` 的浏览器段，视口跟随、ref 失效、下载归属一并上移；参数说明回字段描述，工具描述只剩选择与执行语义（7 个工具合计 5569 → 2848 字符）。
+- 交互终端组：`terminal_write` 删去四种 input 变体的枚举（与 `inputs.py` 各分支字段逐词重复），`terminal_read` 删去 `pattern` 的用法（字段已有），`terminal_handoff.reason` 补上「用用户的语言」（与 `browser_handoff` 对齐）。
 - 取消占位文案不再携带 `tool_call_id`。
 - 全量文案守卫：`tests/test_strict_tool_contract.py::test_registered_tool_prompts_are_english_and_documented`（无 CJK、字段必有描述、同层不重复、描述非空且无首尾空白）。
 

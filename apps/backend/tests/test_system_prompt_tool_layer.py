@@ -64,15 +64,18 @@ def redirect_system_cosir(tmp_path: Path):
     paths.reset()
 
 
-def test_tool_layer_skipped_without_delegation_tool(monkeypatch) -> None:
-    """工具集不含委派工具时不生成该层，且完全不访问 Agent 目录。"""
+def test_tool_layer_without_delegation_tool_skips_the_agent_catalog(monkeypatch) -> None:
+    """工具集不含委派工具时只出公共声明，且完全不访问 Agent 目录。"""
 
     def _fail() -> AgentProfileRegistry:
         raise AssertionError("工具集不含委派工具时不应读取 Agent 目录")
 
     monkeypatch.setattr(configuration, "get_agent_registry", _fail)
 
-    assert spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, ("read_file",)) == ""
+    layer = spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, ("read_file",))
+
+    assert "read_file to read" in layer
+    assert "agent_id" not in layer
     assert spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, ()) == ""
 
 
@@ -91,8 +94,8 @@ def test_tool_layer_projects_child_catalog_without_main_profile(monkeypatch) -> 
     assert "main_agent" not in layer
 
 
-def test_tool_layer_skipped_without_child_candidates(monkeypatch) -> None:
-    """目录里只有 MAIN profile 时不生成该层（不留误导性空标题）。"""
+def test_tool_layer_omits_catalog_without_child_candidates(monkeypatch) -> None:
+    """目录里只有 MAIN profile 时不投影目录（不留误导性空标题），公共声明照常。"""
 
     monkeypatch.setattr(
         configuration,
@@ -100,7 +103,10 @@ def test_tool_layer_skipped_without_child_candidates(monkeypatch) -> None:
         lambda: _registry_with(main_agent()),
     )
 
-    assert spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS) == ""
+    layer = spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS)
+
+    assert "read_file to read" in layer
+    assert "agent_id" not in layer
 
 
 def test_tool_layer_scopes_catalog_to_workspace(monkeypatch, tmp_path: Path) -> None:
@@ -223,10 +229,10 @@ def test_build_orders_tool_layer_between_agent_and_global(
     assert "agent_id: reviewer" in prompt
 
 
-def test_build_omits_tool_layer_without_delegation_tool(
+def test_build_omits_agent_catalog_without_delegation_tool(
     monkeypatch, redirect_system_cosir
 ) -> None:
-    """工具名不含委派工具时 build 不生成工具层，也不读取 Agent 目录。"""
+    """工具名不含委派工具时 build 不读取 Agent 目录、不投影目录，公共声明照常。"""
 
     def _fail() -> AgentProfileRegistry:
         raise AssertionError("工具名不含委派工具时不应读取 Agent 目录")
@@ -239,4 +245,5 @@ def test_build_omits_tool_layer_without_delegation_tool(
         child, str(redirect_system_cosir.parent), child.allowed_tools
     )
 
-    assert "<tool_layer>" not in prompt
+    assert "agent_id:" not in prompt
+    assert "read_file to read" in prompt

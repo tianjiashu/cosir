@@ -140,9 +140,9 @@ WaitUntil = Literal["command_returned", "output_quiet", "match", "elapsed"]
 
 
 # 结束条件 + 总超时。等待只在前台、占着工具线程进行，所以总超时有上限；更长的工作交给
-# execute_terminal 的后台执行。类 docstring 会进入模型 schema，因此写成模型可读的英文说明。
+# execute_terminal 的后台执行。模型可见说明只在字段描述里，类 docstring 只服务源码阅读。
 class TerminalWait(BaseModel):
-    """When to return: one end condition plus an overall timeout."""
+    """结束条件与总超时的组合；跨字段约束在 ``validate_condition``。"""
 
     model_config = ConfigDict(strict=True, extra="forbid")
     until: WaitUntil = Field(

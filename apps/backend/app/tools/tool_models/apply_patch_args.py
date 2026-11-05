@@ -20,13 +20,14 @@ class ApplyPatchArgs(BaseModel):
 
     patch: str = Field(
         description=(
-            "只传入原始 Git 统一 diff 文本：不要夹杂说明文字，也不要用 '*** Begin Patch' / "
-            "'*** End Patch' 包裹。每个文件段需要 'diff --git' 头、一对匹配的 '---' / '+++' "
-            "路径，以及至少一个内容差异块；所有头部必须使用同一个归一化的工作区相对路径。"
-            "差异块正文行以 ' '（上下文）、'-'（删除）或 '+'（新增）开头；差异块行数按正文"
-            "重算。每个文件段必须修改一个已有的 UTF-8 文本文件。创建、删除、移动、复制、"
-            "仅改模式、二进制以及合并 diff 均不支持，这些操作请改用 write_file、delete_file "
-            "或 move_file。\n"
+            "Raw Git unified diff text only: no prose, no '*** Begin Patch' / '*** End Patch' "
+            "wrapper. Each file section needs a 'diff --git' header, a matching '---' / '+++' "
+            "pair, and at least one content hunk; every header must use the same normalized "
+            "workspace-relative path. Body lines start with ' ' (context), '-' (removed) or "
+            "'+' (added); hunk line counts are recomputed from the body. Every section must "
+            "modify an existing UTF-8 text file: creation, deletion, moves, copies, mode-only "
+            "changes, binaries and merge diffs are rejected, so use write_file, delete_file or "
+            "move_file for those.\n"
         ),
         # 每行必须自带 "\n"：相邻字符串字面量会被直接拼接，漏掉换行时样例会塌成一行，
         # 模型照抄即被解析器拒绝。

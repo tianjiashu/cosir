@@ -26,16 +26,14 @@ class TerminalReadTool(HandlerBase):
     # 中文译文：像读文本文件一样读会话输出：逻辑行（已合并软换行）以「行号│文本」给出，行号
     # 是绝对编号、永不复用。「live from」之后的行属于当前屏幕，仍可能被重绘；之前的行已定稿。
     # 全屏程序（vim、less、top）运行期间，不带 start_line 的读取改为以「s<行>│文本」返回
-    # 整屏；行号仍指向 shell 输出。长输出里用 pattern 找目标行（报错、URL），需要等条件成立
-    # 时用 wait 阻塞，不要轮询。
+    # 整屏；行号仍指向 shell 输出。需要等条件成立时用 wait 阻塞，不要轮询。
     description = (
         "Read session output like a text file: logical lines (soft wraps merged) as "
         "'line_number│text', with absolute line numbers that are never reused. Lines from "
         "'live from' onward are the current screen and may still be redrawn; earlier lines are "
         "final. While a full-screen app (vim, less, top) is open, a read without start_line "
         "returns its screen as 's<row>│text' rows instead; line numbers still address the shell "
-        "output. Use pattern to find lines (errors, URLs) in long output, and wait to block for "
-        "a condition instead of polling."
+        "output. Use wait to block for a condition instead of polling."
     )
     args_model = TerminalReadArgs
     timeout_seconds: ClassVar[float] = 40.0

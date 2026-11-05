@@ -50,8 +50,8 @@ def test_file_tool_descriptions_and_arguments_express_separate_responsibilities(
     assert "delete_file" in APPLY_PATCH_DESCRIPTION
     assert "move_file" in APPLY_PATCH_DESCRIPTION
     # 参数描述只讲「这个值要填什么格式」。
-    assert "统一 diff" in patch_description
-    assert "'diff --git' 头" in patch_description
+    assert "unified diff" in patch_description
+    assert "'diff --git' header" in patch_description
     assert "Directories are not supported" in DELETE_FILE_DESCRIPTION
     assert "Directories" in delete_description
     assert "directories" in move_source_description.lower()
@@ -71,7 +71,7 @@ def test_apply_patch_contract_documents_the_exact_accepted_diff_format() -> None
     assert "diff --git a/" in sample
     assert "@@ -" in sample
     assert "*** Begin Patch" in patch_description
-    assert "差异块行数按正文重算" in patch_description
+    assert "recomputed from the body" in patch_description
     # 工具描述不得回抄任何格式细节（回抄即两处事实源）。
     assert "diff --git" not in APPLY_PATCH_DESCRIPTION
     assert "@@" not in APPLY_PATCH_DESCRIPTION
@@ -85,7 +85,7 @@ def test_patch_count_rule_is_stated_only_in_the_parameter_description() -> None:
     patch_description = ApplyPatchArgs.model_fields["patch"].description or ""
 
     # 计数契约已改为「按正文重算」（解析器修复不符的计数并回报备注），规则本身仍只在参数描述。
-    assert "差异块行数按正文重算" in patch_description
+    assert "recomputed from the body" in patch_description
     # 结构性断言：工具描述不得出现计数或 hunk 语法语义，同义改写也拦得住。
     for leaked in (
         "must match",
@@ -94,8 +94,6 @@ def test_patch_count_rule_is_stated_only_in_the_parameter_description() -> None:
         "context plus",
         "source count",
         "omitted only when",
-        "行数",
-        "重算",
     ):
         assert leaked not in APPLY_PATCH_DESCRIPTION, leaked
 

@@ -44,12 +44,10 @@ from app.tools.tool_models.replace_args import ReplaceArgs
 from app.utils.atomic_write import atomic_write_text
 
 REPLACE_DESCRIPTION = (
-    "Targeted find-and-replace edits in files. Use this instead of sed/awk in terminal. "
-    "Uses fuzzy matching (9 strategies) so minor whitespace/indentation "
-    "differences won't break it. "
-    "Reports the file change in the tool UI. Auto-runs syntax checks after editing.\n\n"
-    "REPLACE MODE: find a unique string and replace it. "
-    "REQUIRED PARAMETERS: path, old_string, new_string (replace_all is optional)."
+    "Replace an exact or near-exact string inside an existing file; fuzzy matching tolerates "
+    "minor whitespace and indentation differences. The edit is applied only when old_string "
+    "matches exactly one place, otherwise the call fails and asks for more context or "
+    "replace_all=true. Syntax problems in the result are reported as warnings, not failures."
 )
 
 

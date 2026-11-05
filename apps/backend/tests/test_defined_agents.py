@@ -133,7 +133,9 @@ def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools
     )
     assert "<agent_layer>" in prompt_without_tools
     assert "主 Agent 执行协议" in prompt_without_tools
-    assert "<tool_layer>" not in prompt_without_tools
+    # 没有委派工具时不投影子 Agent 目录；文件工具的公共声明照常注入。
+    assert "agent_id:" not in prompt_without_tools
+    assert "read_file to read" in prompt_without_tools
     assert "general-assistant" not in prompt_without_tools
 
     registry = AgentProfileRegistry(AgentProfileScopeSource())

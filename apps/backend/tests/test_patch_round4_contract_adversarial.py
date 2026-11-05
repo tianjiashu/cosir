@@ -78,12 +78,12 @@ def test_every_required_constraint_survives_the_deduplication() -> None:
     both = APPLY_PATCH_DESCRIPTION + "\n" + PARAM_DESCRIPTION
     required = {
         "prefix rule: context/removed/added start chars": (
-            "差异块正文行以 ' '（上下文）、'-'（删除）或 '+'（新增）开头"
+            "Body lines start with ' ' (context), '-' (removed) or '+' (added)"
         ),
-        "count rule: recomputed from the body": "差异块行数按正文重算",
-        "structure rule: at least one content hunk": "至少一个内容差异块",
+        "count rule: recomputed from the body": "recomputed from the body",
+        "structure rule: at least one content hunk": "at least one content hunk",
         "'*** Begin Patch' prohibition": "*** Begin Patch",
-        "path identity (a/ and b/ same file)": "同一个归一化的工作区相对路径",
+        "path identity (a/ and b/ same file)": "the same normalized workspace-relative path",
         "unsupported: cannot create": "cannot create",
         "unsupported: cannot delete": "delete",
         "unsupported: cannot move": "move",
@@ -106,12 +106,11 @@ def test_every_required_constraint_survives_the_deduplication() -> None:
 # 不存在的内容。缺陷类型：指针悬空（指向的描述里没有该内容）。
 def test_tool_description_pointer_points_at_the_parameter_description() -> None:
     assert "its description defines the accepted format" in APPLY_PATCH_DESCRIPTION
-    for promised in ("'diff --git' 头", "至少一个内容差异块", "差异块行数按正文重算"):
+    for promised in ("'diff --git' header", "at least one content hunk", "recomputed from the body"):
         assert promised in PARAM_DESCRIPTION, f"指针承诺的格式内容缺失: {promised!r}"
     assert PARAM_EXAMPLES, "指针承诺的最小样例缺失"
     # 指针方向唯一：参数描述不得反向指向工具描述（互指即两份事实源）。
     assert "tool description" not in PARAM_DESCRIPTION
-    assert "工具描述" not in PARAM_DESCRIPTION
 
 
 # 目的：两段不得互相矛盾——计数与格式规则只由参数描述承载，工具描述不得复述；能力边界与替代
@@ -123,9 +122,8 @@ def test_the_two_texts_do_not_contradict_each_other() -> None:
     assert "counts" not in APPLY_PATCH_DESCRIPTION
     assert "@@" not in APPLY_PATCH_DESCRIPTION
     # 参数描述明确说「只传入原始 diff」，不得出现可选措辞来争夺语义。
-    assert "只传入原始 Git 统一 diff 文本" in PARAM_DESCRIPTION
+    assert "Raw Git unified diff text only" in PARAM_DESCRIPTION
     assert "optional" not in PARAM_DESCRIPTION.lower()
-    assert "可选" not in PARAM_DESCRIPTION
     for tool in ("write_file", "delete_file", "move_file"):
         assert tool in APPLY_PATCH_DESCRIPTION, f"工具描述缺少替代工具 {tool}"
 
@@ -175,8 +173,8 @@ def test_the_sample_exists_once_in_the_parameter_description() -> None:
 # 目的：参数描述不得比工具描述更宽松地承诺「接受面」，例如不得出现工具描述没有的
 # 「多个文件 / 新建文件」措辞。缺陷类型：参数描述放宽了支持面。
 def test_parameter_description_does_not_widen_the_supported_surface() -> None:
-    assert "均不支持" in PARAM_DESCRIPTION
-    for widened in ("可以创建", "可新建", "任意路径"):
+    assert "are rejected" in PARAM_DESCRIPTION
+    for widened in ("can create", "may create", "any path"):
         assert widened not in PARAM_DESCRIPTION, widened
 
 

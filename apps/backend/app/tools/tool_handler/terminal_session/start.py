@@ -39,7 +39,7 @@ class TerminalStartTool(HandlerBase):
     """
 
     name = TOOL_TERMINAL_START
-    # 描述只写选用边界与会话的生命周期；label / cwd / integration 的含义只在参数字段里写一次。
+    # 描述只写选用边界与会话的生命周期；label / cwd 的含义只在参数字段里写一次。
     # 选用规则与 execute_terminal 互为两面：命令会自己结束、只要结果就用它，所以这里点名它；
     # 反过来 execute_terminal 的描述不点名本工具（子 Agent 没有交互终端）。
     # 中文译文：新建一个交互 shell 会话：带真实终端（PTY）的本地 shell，用户在终端面板里看得到、
@@ -68,7 +68,6 @@ class TerminalStartTool(HandlerBase):
         shell: str = "auto",
         cwd: str | None = None,
         label: str | None = None,
-        integration: str = "auto",
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
@@ -82,15 +81,13 @@ class TerminalStartTool(HandlerBase):
                 task_id=execution_context.task_id,
                 workspace_root=str(execution_context.workspace_root),
                 shell=shell,
-                integration=integration,
                 cwd=cwd,
                 label=label,
                 created_by="agent",
                 run_id=execution_context.run_id,
             )
-            if integration == "auto":
-                # Agent 需要立刻知道能否用 command_returned；用户新建不等，集成就绪后经快照通知。
-                runtime.wait_for_integration()
+            # Agent 需要立刻知道能否用 command_returned；用户新建不等，集成就绪后经快照通知。
+            runtime.wait_for_integration()
             session = runtime.snapshot()
             return tool_success(
                 tool_name=self.name,
@@ -117,17 +114,16 @@ class TerminalStartTool(HandlerBase):
         )
 
 
-# 以下只生产模型可见文本（英文，属于模型契约）：按当前宿主补全 shell=auto 的解析结果。其他可选
-# shell 及其集成支持以 terminal_list 的返回为唯一事实源，这里不复述。执行路径仍是能力检查的权威
-# 来源，这里只改善引导，因此 shell 解析失败时安全回退。
+# 以下只生产模型可见文本（英文，属于模型契约）：按当前宿主补全 shell 的候选清单与 auto 的解析
+# 结果。两者与执行路径同源（``ShellResolver``），因此探测失败时安全回退为只讲 auto，不列出清单。
 
 
 def _parameters_schema(args_model: type[TerminalStartArgs]) -> Mapping[str, Any]:
-    """在 SDK 生成的 strict schema 上补宿主说明：shell=auto 在本机的解析结果。"""
+    """在 SDK 生成的 strict schema 上补宿主说明：shell=auto 的解析结果与本机已安装清单。"""
 
     schema = strict_parameters_schema(args_model)
     schema["properties"]["shell"]["description"] = _shell_parameter_description(
-        platform.system(), _resolve_auto_shell_kind()
+        platform.system(), _resolve_auto_shell_kind(), _installed_shell_kinds()
     )
     return schema
 
@@ -141,14 +137,23 @@ def _resolve_auto_shell_kind() -> str:
         return ""
 
 
-def _shell_parameter_description(system: str, resolved_kind: str) -> str:
+def _installed_shell_kinds() -> list[str]:
+    """本机已安装、可按名字请求的 shell；探测失败时返回空列表，描述因此省略清单。"""
+
+    return [str(shell["kind"]) for shell in ShellResolver.available()]
+
+
+def _shell_parameter_description(
+    system: str, resolved_kind: str, installed: list[str]
+) -> str:
     if system == "Windows":
         auto = f"resolves to {resolved_kind} here" if resolved_kind else "uses the host default"
     else:
         fallback = "zsh" if system == "Darwin" else "bash"
         here = f" (here: {resolved_kind})" if resolved_kind else ""
         auto = f"uses $SHELL, else {fallback}{here}"
-    return (
-        f"'auto' {auto}. terminal_list shows the other installed shells and which support "
-        "shell integration."
-    )
+    parts = [f"'auto' {auto}."]
+    if installed:
+        parts.append(f"Installed here: {', '.join(installed)}.")
+    parts.append("Pass one of these names, or a path to a shell executable.")
+    return " ".join(parts)

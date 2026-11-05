@@ -149,7 +149,7 @@ def build_placeholder_tool_message(call_id: str, tool_name: str) -> ChatCompleti
     """
     return ChatCompletionToolMessageParam(
         role="tool",
-        content=f"The tool call '{tool_name}' (id={call_id}) did not produce a result because "
+        content=f"The tool call '{tool_name}' did not produce a result because "
         f"the run was cancelled or interrupted; no tool output is available.",
         tool_call_id=call_id,
     )
