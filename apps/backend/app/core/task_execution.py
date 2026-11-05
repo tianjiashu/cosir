@@ -132,8 +132,9 @@ class TaskExecution:
         try:
             await RunDriver().drive(run)
             if cancellation_registry.is_cancelled(self.task_id):
-                # 取走信号前先撤销后台结果：信号在时迟到结论被 ``deliver_background_result`` 丢弃，
-                # 取走之后、撤销之前却会入队并开出新 Run。撤销期间执行仍登记着，新到的取消照常打信号。
+                # 取走信号前先撤销后台结果：信号在时迟到结论被 ``deliver_background_result``
+                # 丢弃，取走之后、撤销之前却会入队并开出新 Run。撤销期间执行仍登记着，
+                # 新到的取消照常打信号。
                 await self._cancellation.cancel_background_task()
         except asyncio.CancelledError:
             # 进程关闭：``abort`` 自己补取信号并注销，不调度后续 Run。
