@@ -116,10 +116,16 @@ class TaskActor:
     # ── 生命周期 ──────────────────────────────────────────────────────────
 
     def start(self) -> None:
-        """在当前事件循环上拉起监听 loop；重复调用无效果。"""
+        """在当前事件循环上拉起监听 loop；重复调用无效果。
+
+        loop 停下（正常停止或异常退出）后不自动重建：``stopped`` 置位后由调用方决定怎么办，
+        不在故障根因仍在时反复拉起同一个 loop。
+        """
         if self._loop_task is None:
             self._event_loop = asyncio.get_running_loop()
             self._loop_task = self._event_loop.create_task(self._loop())
+            # 兜底：漏出 ``_loop`` 的异常在这里留下日志，不留无人取回失败的 task。
+            self._loop_task.add_done_callback(self._on_loop_done)
 
     async def stop(self) -> None:
         """Task 即将删除：停止当前执行并等它落定，再停下 loop。不调度后续 Run。"""
@@ -139,30 +145,70 @@ class TaskActor:
             self._loop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._loop_task
+        self._halt_loop()
+
+    def _halt_loop(self) -> None:
+        """loop 不再推进：置位 ``stopped`` 并唤醒等待方。
+
+        正常停止与异常退出共用这一个终态——对外没有区别，区别只体现在日志事件上。停止不可逆，
+        不自动重建 loop。
+        """
         self.stopped.set()
         self._publish_state()
+
+    def _on_loop_done(self, done: asyncio.Task[None]) -> None:
+        """loop 结束的兜底：异常退出在这里落一条日志并进入停止态，不留静默死掉的调度器。"""
+        if done.cancelled():
+            return
+        error = done.exception()
+        if error is None:
+            return
+        log.error(
+            "task_actor_loop_crashed",
+            extra={
+                "msg": "Task 调度器异常退出，已停止推进",
+                "data": {"task_id": self.task_id},
+            },
+            exc_info=error,
+        )
+        self._halt_loop()
 
     # ── 监听与推进 ────────────────────────────────────────────────────────
 
     async def _loop(self) -> None:
-        """常驻监听：按水位等新消息，醒来后推进一次；单轮失败只记录，不杀死 loop。
+        """常驻监听：按水位等新消息，醒来后推进一次；单轮推进失败只记录，不杀死 loop。
 
         ``pending`` 是该 Task 全部未确认的消息（含已判定过、尚未被 ``prepare_input`` 消费的），回答
         「现在队列里有什么」；``fresh`` 是其中 id 大于水位的那部分，回答「这次是什么把我叫醒的」——
         只有它们触发推进，残留消息随下一次推进一并投递。已发起停止时先等本次执行（含收尾）落定
         再判定，避免往即将作废的 mailbox 投递。
+
+        读队列本身失败（库不可用、行反序列化失败、停止中等待执行失败）时不重试：记录后进入
+        :meth:`_halt_loop` 的停止态，让「调度器不可用」成为一个明确、可观察的事实，而不是把失败
+        伪装成还在等待。
         """
         while True:
-            pending = await self._queue.pending(self.task_id, self._watermark)
-            fresh = [message for message in pending if cast(int, message.id) > self._watermark]
-            self._watermark = max(cast(int, message.id) for message in pending)
-            if self._execution.stopping:
-                # 停止中：等执行与收尾结束再判定；loop 被取消时不连带取消执行。
-                await self._execution.wait_released()
+            try:
+                pending = await self._queue.pending(self.task_id, self._watermark)
+                fresh = [message for message in pending if cast(int, message.id) > self._watermark]
+                self._watermark = max(cast(int, message.id) for message in pending)
+                if self._execution.stopping:
+                    # 停止中：等执行与收尾结束再判定；loop 被取消时不连带取消执行。
+                    await self._execution.wait_released()
+            except Exception:
+                log.exception(
+                    "task_actor_loop_failed",
+                    extra={
+                        "msg": "Task 调度器读队列失败，已停止推进",
+                        "data": {"task_id": self.task_id},
+                    },
+                )
+                self._halt_loop()
+                return
             try:
                 await self._advance(pending, fresh)
             except Exception:
-                # 单轮失败只记录，不杀死 loop：消息仍在外部队列，下一次推进重读事实源。
+                # 单轮失败只记录，不杀死 loop：队列行仍在，下一次被新消息唤醒时随之一并重读。
                 log.exception(
                     "task_actor_advance_failed",
                     extra={"msg": "Task 调度推进失败", "data": {"task_id": self.task_id}},
@@ -315,6 +361,9 @@ class TaskActor:
         个新 Run、Run 完成后接续剩余消息，最终结论都在最新 Run 上。只看阶段是否 ``idle`` 不够：
         投递之后、新 Run 开出来之前，以及 Run 完成后正要接续剩余消息时，Task 都是静止的。
 
+        调度器已停止（正常停止或异常退出）时立即返回 ``False``：队列里留下的可推进消息不会再被
+        处理，等下去不会有结果，由调用方按失败处理。
+
         异常:
             KeyError: Task 不存在（含等待期间被删除）。
         """
@@ -323,7 +372,11 @@ class TaskActor:
     async def _quiescent(self) -> bool:
         """静止，且 actor 不会再主动推进：没有尚未推进完的可推进消息；最新 Run 完成（或尚无 Run）
         时队列里也没有可推进的消息——执行结束后会接续它们；取消、失败不自动接续，留着的消息等新
-        消息到来再一起推进。系统通知不推进，不影响判定。"""
+        消息到来再一起推进。系统通知不推进，不影响判定。
+
+        调度器已停止时不报告静止：那些消息再也推不动，报静止会让等待方读走上一次 Run 的结论。"""
+        if self.stopped.is_set():
+            return False
         current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
         if self._phase(current) != "idle":
             return False
@@ -345,6 +398,9 @@ class TaskActor:
             changed = self.state_changed
             if await ready():
                 return True
+            if self.stopped.is_set():
+                # 调度器不再推进，等待不会再有结果：交给调用方按失败处理，不无限挂起。
+                return False
             if deadline is None:
                 await changed.wait()
                 continue

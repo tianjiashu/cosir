@@ -111,14 +111,17 @@ def _start_waiting(
 async def _deliver_conclusion(job: BackgroundJob, child_task_id: int, tool_call_id: str) -> None:
     """等子 Task 无事可做，读最新 Run 的结论交给作业；交付会写 SQLite，放进工作线程。
 
-    被撤销时协程随之取消，作业已以取消结论收尾。等待失败（子 Task 被删除、读库失败）记录后以失败
-    结论收尾，父 Agent 不会一直等下去。
+    被撤销时协程随之取消，作业已以取消结论收尾。等待失败（子 Task 被删除、调度器已停止、读库失败）
+    记录后以失败结论收尾，父 Agent 不会一直等下去。
     """
     from app.service.depends import get_task_service
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
     try:
-        await task_runtime_spaces.get_or_create(child_task_id).actor.wait_quiescent()
+        actor = task_runtime_spaces.get_or_create(child_task_id).actor
+        if not await actor.wait_quiescent():
+            # 子 Task 的调度器已停止：它不会再推进，读到的只会是上一次的 Run，不能当成本次结论。
+            raise RuntimeError(f"task {child_task_id} 的调度器已停止，无法等待子 Agent 结论")
         run = await asyncio.to_thread(get_task_service().require_current_run, child_task_id)
         result = child_run_result(child_task_id, cast(ConversationRunRecord, run))
     except Exception:

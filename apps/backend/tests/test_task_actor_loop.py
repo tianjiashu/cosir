@@ -490,6 +490,43 @@ async def test_wait_quiescent_ignores_a_lone_system_notice(harness) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 调度器失败：读队列失败不重试，落成明确、可观察的停止态
+# ---------------------------------------------------------------------------
+
+
+async def test_queue_read_failure_halts_the_loop_instead_of_killing_it_silently(harness) -> None:
+    """读队列失败（坏行/库不可用）记录后进入停止态并唤醒等待方；之后不再调度任何 Run。"""
+    actor = harness.actor
+    healthy_pending = harness.queue.pending
+    changed = actor.state_changed
+
+    async def broken(_task_id: int, _after_id: int = 0) -> list[TaskMessage]:
+        raise ValueError("bad row")
+
+    harness.queue.pending = broken
+    actor.start()
+    await _settle()
+
+    assert actor.stopped.is_set()
+    assert changed.is_set()
+    # 停止态不自动恢复：队列恢复可用、再来一条消息，也不会开出 Run。
+    harness.queue.pending = healthy_pending
+    harness.queue.put(_user())
+    await _settle()
+    assert harness.ledger.created == []
+
+
+async def test_wait_quiescent_returns_false_after_the_loop_stopped(harness) -> None:
+    """调度器停下后队列里留着的可推进消息永远不会被处理：等待方立即得到 False，不永久挂起。"""
+    harness.actor.start()
+    await _settle()
+    await harness.actor.stop()
+
+    harness.queue.put(_user())
+    assert await asyncio.wait_for(harness.actor.wait_quiescent(), 1) is False
+
+
+# ---------------------------------------------------------------------------
 # 注册表：space 物化即拉起 actor，入队前确保 space 存在
 # ---------------------------------------------------------------------------
 
