@@ -12,11 +12,10 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_BROWSER
 from app.tools.host.errors import HostCallError
-from app.tools.host.host_call import call_host
-from app.tools.tool_handler.browser.common import browser_error_observation, host_params
+from app.tools.tool_handler.browser.errors import browser_error_observation
+from app.tools.tool_handler.browser.host_request import call_browser, tool_timeout
+from app.tools.tool_handler.browser.rendering import tabs_text
 from app.tools.tool_models import BrowserTabsArgs
-
-_HOST_TIMEOUT_SECONDS = 10.0
 
 
 class BrowserTabsTool(HandlerBase):
@@ -34,29 +33,22 @@ class BrowserTabsTool(HandlerBase):
         "holds only a few tabs, so reuse or close them instead of opening more."
     )
     args_model = BrowserTabsArgs
-    timeout_seconds: ClassVar[float] = _HOST_TIMEOUT_SECONDS + 5
+    timeout_seconds: ClassVar[float] = tool_timeout("browser.tabs")
     group = TOOL_GROUP_BROWSER
 
     def execute(
         self, action: str, tab: str | None, *, execution_context: ToolExecutionContext
     ) -> ToolObservation:
         try:
-            tabs = call_host(
+            tabs = call_browser(
                 "browser.tabs",
-                host_params(execution_context, action=action, tab=tab),
-                execution_context=execution_context,
-                timeout_seconds=_HOST_TIMEOUT_SECONDS,
+                execution_context,
+                action=action,
+                tab=tab,
             )
         except HostCallError as error:
             return browser_error_observation(self.name, error)
-        # 标出用户开的标签（与 terminal_list 标出会话创建者一致）：用户可能正在用它。
-        lines = [
-            f"{item['tab_id']}{' (current)' if item['current'] else ''}"
-            f"{' (opened by the user)' if item['created_by'] == 'user' else ''} · "
-            f"{item['title'] or '(untitled)'} · {item['url']}"
-            for item in tabs
-        ]
-        return tool_success(self.name, "\n".join(lines) or "this task has no open tabs")
+        return tool_success(self.name, tabs_text(tabs))
 
     def to_definition(self) -> ToolDefinition:
         return ToolDefinition(
