@@ -757,23 +757,8 @@ def test_ensure_system_cosir_dir_degrades_when_name_is_file(tmp_path: Path) -> N
 # --- I. `.coding-agent` 退场复核 -----------------------------------------------
 
 
-# 系统提示词已不再渲染工作区目录树（随之删除 ``_IGNORED_DIRS``），跳过集只剩搜索工具的默认集合。
-def test_coding_agent_removed_from_ignored_dirs() -> None:
-    """ignore_rules 默认跳过集合不得再含 `.coding-agent`。"""
-
-    from app.tools.tool_handler.search.ignore_rules import DEFAULT_IGNORED_DIR_NAMES
-
-    assert ".coding-agent" not in DEFAULT_IGNORED_DIR_NAMES
-
-
-def test_cosir_not_in_ignored_dirs_by_design() -> None:
-    """按设计，`.cosir` 允许被遍历/读取，故不得出现在跳过集里。"""
-
-    from app.tools.tool_handler.search.ignore_rules import DEFAULT_IGNORED_DIR_NAMES
-
-    assert ".cosir" not in DEFAULT_IGNORED_DIR_NAMES
-
-
+# 系统提示词已不再渲染工作区目录树（随之删除 ``_IGNORED_DIRS``）；搜索链路没有内置跳过集合，
+# 跳过范围只由 workspace 的 ``.fileignore`` + ``.gitignore`` 决定。
 def test_no_coding_agent_literal_in_backend_app() -> None:
     """后端 app/ 源码中不得再出现 `.coding-agent` 字面量（彻底退场复核）。"""
 

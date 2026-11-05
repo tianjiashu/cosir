@@ -1,4 +1,4 @@
-"""workspace 级 ``.fileignore`` 的来源、默认初始化与合并忽略规则。
+"""workspace 级 ``.fileignore`` 的来源、初始化与合并忽略规则。
 
 单一职责：把 ``.fileignore``（标准 gitignore 语义，位于 ``<workspace>/.cosir/``）解析为匹配器，并在
 文件缺失时按空内容初始化该文件；与 workspace 根 ``.gitignore`` 合并为单一忽略来源
@@ -7,10 +7,12 @@
 ``.fileignore`` 采用与 ``.gitignore`` 一致的标准 gitignore（gitwildmatch）语法，二者合并后任一命中即
 跳过；不再支持旧版自定义目录名/相对路径/``re:`` 正则格式。
 
-文件存在但没有任何有效规则时，语义为「不忽略任何目录」——尊重用户的显式配置。
+忽略策略只由这两个文件决定，没有内置的默认跳过目录：文件缺失、为空或读取失败时语义都是
+「不额外忽略任何路径」——尊重用户的显式配置，也让「搜索跳过了什么」只有一个事实源
+（用户要跳过 ``node_modules`` 就写进 ``.fileignore`` 或 ``.gitignore``）。
 
 副作用：:func:`load_fileignore_rules` 在规则文件缺失时会创建 ``<workspace>/.cosir`` 与
-``.fileignore`` 并写入空内容；文件过大、行数超限或读写失败时按可用的最大信息降级并写
+``.fileignore`` 并写入空内容；文件过大、行数超限或读写失败时降级为不额外忽略并写
 WARNING 日志，绝不阻断搜索链路。
 """
 
@@ -32,40 +34,11 @@ from app.utils.path.workspace_cosir import workspace_cosir_dir
 IGNORE_FILE_NAME: str = ".fileignore"
 """workspace 级忽略规则文件名（位于 ``<workspace>/.cosir/`` 下）。"""
 
-DEFAULT_IGNORED_DIR_NAMES: tuple[str, ...] = (
-    ".git",
-    "node_modules",
-    "__pycache__",
-    "dist",
-    "build",
-    ".venv",
-    "venv",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".pytest_cache",
-    "target",
-    "out",
-    ".idea",
-    ".vscode",
-    ".tox",
-    ".eggs",
-    "site-packages",
-)
-"""内置默认忽略目录名（17 项）；仅在无 workspace 或规则文件读写失败时使用。"""
-
 FILEIGNORE_MAX_FILE_BYTES: int = 256 * 1024
 """规则文件读取上限（字符数）：超出部分不读入，避免异常大文件撑大内存。"""
 
 FILEIGNORE_MAX_RULES: int = 2000
 """规则行数上限：超出的行被忽略并记 WARNING，避免规则集合被异常文件撑大。"""
-
-_HEADER_LINES: tuple[str, ...] = (
-    "# 目录忽略规则（workspace 级，标准 gitignore 语法，UTF-8 每行一条）："
-    "命中的目录连同其整棵子树一并跳过。",
-    "# - 以 # 起始的行为注释，空行忽略；语法与 .gitignore 一致（支持 "
-    "*.log、build/、**/x、!keep 否定等）。",
-    "# - 本文件与 workspace 根的 .gitignore 合并生效：任一命中即跳过。",
-)
 
 
 @dataclass(frozen=True)
@@ -104,50 +77,8 @@ def ignore_file_path(workspace_root: str | Path) -> Path:
     return workspace_cosir_dir(workspace_root) / IGNORE_FILE_NAME
 
 
-def default_ignore_rules() -> GitignoreMatcher:
-    """返回内置默认规则（标准 gitignore 语义，相对路径基准为 None 兜底）。
-
-    供未持有 workspace 上下文的调用方使用；持有 workspace 的调用方应改用
-    :func:`load_search_ignore_rules` 读取该 workspace 的 ``.fileignore`` + ``.gitignore``。
-
-    参数:
-        无。
-
-    返回:
-        以 ``DEFAULT_IGNORED_DIR_NAMES`` 构造、``workspace_root=None`` 的 gitwildmatch 匹配器。
-
-    异常:
-        无。
-
-    副作用:
-        无（纯常量构造，不访问文件系统）。
-    """
-
-    spec = build_gitwildmatch_spec(list(DEFAULT_IGNORED_DIR_NAMES))
-    return GitignoreMatcher(workspace_root=None, spec=spec)
-
-
-def render_default_content() -> str:
-    """渲染首次创建 ``.fileignore`` 时写入的默认文本。
-
-    参数:
-        无。
-
-    返回:
-        空字符串，表示 workspace 默认不额外忽略任何路径。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    return ""
-
-
-def _empty_matcher(workspace_root: Path) -> GitignoreMatcher:
-    """返回无任何有效规则的匹配器（对应「显式空文件 = 不忽略任何目录」语义）。"""
+def _empty_matcher(workspace_root: Path | None) -> GitignoreMatcher:
+    """返回无任何有效规则的匹配器（「不额外忽略任何路径」语义）。"""
 
     return GitignoreMatcher(workspace_root=workspace_root, spec=build_gitwildmatch_spec([]))
 
@@ -159,14 +90,14 @@ def load_fileignore_rules(workspace_root: str | Path) -> GitignoreMatcher:
     返回的规则对象）。采用标准 gitignore（gitwildmatch）语法，相对 workspace 根匹配。
 
     参数:
-        workspace_root: 工作区根目录；为空或纯空白时视为无 workspace，直接返回默认规则，
+        workspace_root: 工作区根目录；为空或纯空白时视为无 workspace，返回空匹配器，
             不会退化成「在进程当前目录创建规则文件」。
 
     返回:
-        解析后的 gitwildmatch 匹配器。文件缺失且创建成功时，文件为空，返回空匹配器。
+        解析后的 gitwildmatch 匹配器。文件缺失且创建成功时文件为空，返回空匹配器（不额外忽略）。
 
     异常:
-        无：路径非法、读写失败或编码错误一律降级为默认规则并写 WARNING 日志。
+        无：路径非法、读写失败或编码错误一律降级为不额外忽略并写 WARNING 日志。
 
     副作用:
         仅当规则文件不存在时创建 ``<workspace>/.cosir`` 目录与 ``.fileignore`` 文件；文件过大
@@ -177,14 +108,14 @@ def load_fileignore_rules(workspace_root: str | Path) -> GitignoreMatcher:
     if not root_text:
         log.warning(
             "file_ignore_workspace_missing",
-            extra={"msg": "workspace 根为空，本次使用内置默认忽略规则", "data": {}},
+            extra={"msg": "workspace 根为空，本次不额外忽略任何路径", "data": {}},
         )
-        return default_ignore_rules()
+        return _empty_matcher(None)
     root = Path(root_text)
     path = ignore_file_path(root)
     text = _read_ignore_text(path)
     if text is None:
-        return default_ignore_rules()
+        return _empty_matcher(root)
     text = _limit_rules(text, path)
     lines = valid_rule_lines(text)
     if not lines:
@@ -196,11 +127,11 @@ def load_fileignore_rules(workspace_root: str | Path) -> GitignoreMatcher:
         log.warning(
             "file_ignore_parse_failed",
             extra={
-                "msg": ".fileignore 解析失败，本次降级为内置默认忽略规则",
+                "msg": ".fileignore 解析失败，本次不额外忽略任何路径",
                 "data": {"path": str(path), "error": str(exc), "error_type": type(exc).__name__},
             },
         )
-        return default_ignore_rules()
+        return _empty_matcher(root)
     return GitignoreMatcher(workspace_root=root, spec=spec)
 
 
@@ -288,7 +219,7 @@ def _read_ignore_text(path: Path) -> str | None:
         _log_read_failure(path, exc)
         return None
 
-    content = render_default_content()
+    content = ""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         # "x" 模式保证「仅创建」：并发方已创建时不覆盖用户可能已改写的规则。
@@ -304,7 +235,7 @@ def _read_ignore_text(path: Path) -> str | None:
         log.warning(
             "file_ignore_create_failed",
             extra={
-                "msg": ".fileignore 创建失败，本次使用内置默认忽略规则",
+                "msg": ".fileignore 创建失败，本次不额外忽略任何路径",
                 "data": {
                     "path": str(path),
                     "error": str(exc),
@@ -357,7 +288,7 @@ def _log_read_failure(path: Path, exc: Exception) -> None:
     log.warning(
         "file_ignore_read_failed",
         extra={
-            "msg": ".fileignore 读取失败，已降级为内置默认忽略规则",
+            "msg": ".fileignore 读取失败，本次不额外忽略任何路径",
             "data": {"path": str(path), "error": str(exc), "error_type": type(exc).__name__},
         },
         exc_info=True,

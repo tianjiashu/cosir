@@ -22,10 +22,8 @@ from app.tools.tool_handler.search.gitignore_rules import (
     load_gitignore_rules,
 )
 from app.tools.tool_handler.search.ignore_rules import (
-    DEFAULT_IGNORED_DIR_NAMES,
     IGNORE_FILE_NAME,
     CompositeIgnoreMatcher,
-    default_ignore_rules,
     ignore_file_path,
     load_fileignore_rules,
     load_search_ignore_rules,
@@ -74,14 +72,6 @@ def test_ignore_file_is_created_empty_on_first_use(tmp_path: Path) -> None:
     assert created.read_text(encoding="utf-8") == ""
     assert rules.match_dir(tmp_path / "node_modules") is False
     assert rules.match_dir(tmp_path / "src") is False
-
-
-def test_default_rules_keep_the_expected_baseline_directories() -> None:
-    """默认集合必须保留各生态的基线忽略项（防止默认值被误删导致遍历退化）。"""
-
-    assert {".git", "node_modules", "__pycache__", ".venv", "site-packages"} <= set(
-        DEFAULT_IGNORED_DIR_NAMES
-    )
 
 
 def test_existing_ignore_file_is_parsed_as_gitignore(tmp_path: Path) -> None:
@@ -134,26 +124,15 @@ def test_loader_truncates_rules_beyond_limit_and_logs(tmp_path: Path, caplog) ->
     assert "file_ignore_rules_truncated" in _log_events(caplog)
 
 
-def test_blank_workspace_root_falls_back_to_default_rules(caplog) -> None:
-    """workspace 根为空时直接返回默认规则，不在进程当前目录创建规则文件。"""
+def test_blank_workspace_root_ignores_nothing(caplog) -> None:
+    """workspace 根为空时不额外忽略任何路径，也不在进程当前目录创建规则文件。"""
 
     caplog.set_level(logging.WARNING)
 
     rules = load_fileignore_rules("   ")
 
-    assert rules == default_ignore_rules()
+    assert rules.match_dir(Path("/any/where/node_modules")) is False
     assert "file_ignore_workspace_missing" in _log_events(caplog)
-
-
-def test_default_rules_ignore_builtin_directories() -> None:
-    """内置默认规则按 gitignore 语义跳过基线目录，且不含 ``.cosir`` 与 ``.coding-agent``。"""
-
-    rules = default_ignore_rules()
-
-    assert rules.match_dir(Path("/any/where/node_modules")) is True
-    assert rules.match_dir(Path("/any/where/src")) is False
-    assert ".cosir" not in DEFAULT_IGNORED_DIR_NAMES
-    assert ".coding-agent" not in DEFAULT_IGNORED_DIR_NAMES
 
 
 def test_walker_skips_configured_directory_subtree(tmp_path: Path) -> None:
@@ -176,15 +155,6 @@ def test_walker_skips_relative_path_rules(tmp_path: Path) -> None:
     assert list(iter_files(tmp_path, rules=rules)) == [kept]
 
 
-def test_walker_falls_back_to_default_rules_without_injection(tmp_path: Path) -> None:
-    """未注入规则时使用内置默认规则（``node_modules`` 等被跳过）。"""
-
-    kept = _touch(tmp_path / "src" / "main.py")
-    _touch(tmp_path / "node_modules" / "pkg" / "index.js")
-
-    assert list(iter_files(tmp_path)) == [kept]
-
-
 def test_search_scope_applies_workspace_fileignore(tmp_path: Path) -> None:
     """``SearchScope.iter_files`` 读取 workspace 的 ``.fileignore`` 决定跳过哪些目录。"""
 
@@ -201,10 +171,8 @@ def test_search_scope_applies_workspace_fileignore(tmp_path: Path) -> None:
     assert ignore_file_path(tmp_path) in produced
 
 
-def test_read_failure_degrades_to_default_rules_and_logs(
-    tmp_path: Path, monkeypatch, caplog
-) -> None:
-    """规则文件读取失败时降级为默认规则并写 WARNING 日志，不阻断调用方。"""
+def test_read_failure_ignores_nothing_and_logs(tmp_path: Path, monkeypatch, caplog) -> None:
+    """规则文件读取失败时降级为不额外忽略并写 WARNING 日志，不阻断调用方。"""
 
     caplog.set_level(logging.WARNING)
     original_open = Path.open
@@ -219,14 +187,12 @@ def test_read_failure_degrades_to_default_rules_and_logs(
 
     rules = load_fileignore_rules(tmp_path)
 
-    assert rules.match_dir(tmp_path / "node_modules") is True
+    assert rules.match_dir(tmp_path / "node_modules") is False
     assert "file_ignore_read_failed" in _log_events(caplog)
 
 
-def test_create_failure_degrades_to_default_rules_and_logs(
-    tmp_path: Path, monkeypatch, caplog
-) -> None:
-    """规则文件创建失败时降级为默认规则并写 WARNING 日志，不阻断搜索。"""
+def test_create_failure_ignores_nothing_and_logs(tmp_path: Path, monkeypatch, caplog) -> None:
+    """规则文件创建失败时降级为不额外忽略并写 WARNING 日志，不阻断搜索。"""
 
     caplog.set_level(logging.WARNING)
     original_open = Path.open
@@ -241,7 +207,7 @@ def test_create_failure_degrades_to_default_rules_and_logs(
 
     rules = load_fileignore_rules(tmp_path)
 
-    assert rules.match_dir(tmp_path / "node_modules") is True
+    assert rules.match_dir(tmp_path / "node_modules") is False
     assert not ignore_file_path(tmp_path).exists()
     assert "file_ignore_create_failed" in _log_events(caplog)
 

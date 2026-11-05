@@ -76,7 +76,7 @@ class SearchScope:
 
         异常:
             SearchCancelled / SearchTimedOut: 即使没有候选文件也检查中断，并向 handler 传播。
-            规则文件读取失败由 ``load_search_ignore_rules`` 内部降级为默认规则。
+            规则文件读取失败由 ``load_search_ignore_rules`` 内部降级为不额外忽略。
 
         副作用:
             ``load_search_ignore_rules`` 可能创建缺失的 ``<workspace>/.cosir/.fileignore``；

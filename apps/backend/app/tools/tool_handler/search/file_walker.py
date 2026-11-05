@@ -6,8 +6,7 @@
 设计边界：
 - 只做遍历与过滤，不做匹配、排序、分页与输出格式化。
 - 忽略规则由调用方注入（:class:`GitignoreMatcher` 或组合器）：本模块不读配置文件、不知道
-  workspace 位置，未注入时回退 :func:`ignore_rules.default_ignore_rules`；持有 workspace 的调用方
-  应传 ``load_search_ignore_rules(workspace_root)``。
+  workspace 位置，也不提供默认跳过集合；调用方传 ``load_search_ignore_rules(workspace_root)``。
 - 不依赖外部命令，跨平台零重型依赖。
 """
 
@@ -18,7 +17,6 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from app.tools.tool_handler.search.ignore_matcher import IgnoreMatcher
-from app.tools.tool_handler.search.ignore_rules import default_ignore_rules
 from app.tools.tool_handler.security.windows_reparse_point import (
     is_windows_directory_reparse_point,
 )
@@ -28,7 +26,7 @@ def iter_files(
     base: Path,
     file_glob: str | None = None,
     *,
-    rules: IgnoreMatcher | None = None,
+    rules: IgnoreMatcher,
     check_interrupt: Callable[[], None] | None = None,
 ) -> Iterator[Path]:
     """递归遍历目录下的文件，按忽略匹配器跳过目录/文件并按 glob 过滤文件名。
@@ -36,9 +34,9 @@ def iter_files(
     参数:
         base: 遍历根目录。
         file_glob: 可选的文件名 glob 模式（如 ``*.py``）；为 None 表示不过滤。
-        rules: 忽略匹配器；为 None 时使用内置默认规则（不含 workspace 的 ``.fileignore`` 与
-            ``.gitignore`` 配置）。持有 workspace 上下文的调用方应传入
-            ``load_search_ignore_rules(workspace_root)``。
+        rules: 忽略匹配器，由调用方按 workspace 的 ``.fileignore`` + ``.gitignore`` 注入
+            （``load_search_ignore_rules(workspace_root)``）。本模块不提供默认跳过集合：
+            遍历范围只能由用户显式规则决定。
         check_interrupt: 搜索调用方注入的中断检查，异常原样传播；状态采样等非搜索调用可不传。
             在进入目录及处理每个目录项前调用，避免全部被过滤时无法响应中断。
 
@@ -52,8 +50,7 @@ def iter_files(
         无（只读目录结构）。
     """
 
-    active_rules = rules if rules is not None else default_ignore_rules()
-    yield from _walk(base, file_glob, active_rules, check_interrupt)
+    yield from _walk(base, file_glob, rules, check_interrupt)
 
 
 def _walk(
