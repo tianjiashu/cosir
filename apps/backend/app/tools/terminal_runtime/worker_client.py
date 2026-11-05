@@ -21,7 +21,7 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, cast
+from typing import IO, Any, cast
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -242,48 +242,48 @@ class ProcessTerminalWorker:
 
         self._process = process
         # stdout / stderr 固定为 PIPE，必然存在。
-        threading.Thread(
-            target=self._read_events,
-            args=(process, cast(IO[bytes], process.stdout), on_event),
-            name=f"terminal-worker-reader-{self.instance_id[:8]}",
-            daemon=True,
-        ).start()
-        threading.Thread(
-            target=self._drain_stderr,
-            args=(process, cast(IO[bytes], process.stderr)),
-            name="terminal-worker-stderr",
-            daemon=True,
-        ).start()
+        self._spawn(
+            self._read_events,
+            f"terminal-worker-reader-{self.instance_id[:8]}",
+            process,
+            cast(IO[bytes], process.stdout),
+            on_event,
+        )
+        self._spawn(
+            self._drain_stderr,
+            "terminal-worker-stderr",
+            process,
+            cast(IO[bytes], process.stderr),
+        )
         self._send(start_frame)
         # 超时、握手前断开与「收到但不合法」要分开：前两者可能是 worker 启动慢或瞬时崩溃
         # （可重试），后者是确定性协议不兼容（重试同一二进制必然失败），各自留下可定位的日志。
-        handshake_expired = not self._handshake_event.wait(timeout=HANDSHAKE_TIMEOUT_SECONDS)
-        if handshake_expired or not self._handshake_valid:
-            if handshake_expired:
-                reason = "timeout"
-            elif self._handshake_payload is None:
-                reason = "disconnected"
-            else:
-                reason = "rejected"
-            self._log_handshake_failure(reason)
+        failure: str | None
+        if not self._handshake_event.wait(timeout=HANDSHAKE_TIMEOUT_SECONDS):
+            failure = "timeout"
+        elif self._handshake_valid:
+            failure = None
+        elif self._handshake_payload is None:
+            failure = "disconnected"
+        else:
+            failure = "rejected"
+        if failure is not None:
+            self._log_handshake_failure(failure)
             self.close()
-            if reason == "timeout":
+            if failure == "timeout":
                 raise TerminalWorkerUnavailableError(
                     f"terminal worker handshake timed out after {HANDSHAKE_TIMEOUT_SECONDS:g}s"
                 )
-            if reason == "disconnected":
+            if failure == "disconnected":
                 raise TerminalWorkerUnavailableError("terminal worker exited before handshake")
             raise TerminalWorkerHandshakeError(self._describe_handshake_mismatch())
-        threading.Thread(
-            target=self._write_events,
-            name=f"terminal-worker-writer-{self.instance_id[:8]}",
-            daemon=True,
-        ).start()
-        threading.Thread(
-            target=self._heartbeat_loop,
-            name=f"terminal-worker-heartbeat-{self.instance_id[:8]}",
-            daemon=True,
-        ).start()
+        self._spawn(self._write_events, f"terminal-worker-writer-{self.instance_id[:8]}")
+        self._spawn(self._heartbeat_loop, f"terminal-worker-heartbeat-{self.instance_id[:8]}")
+
+    def _spawn(self, target: Callable[..., None], name: str, *args: Any) -> None:
+        """启动一个随 worker 生命周期的守护线程；``name`` 是完整线程名（排查时按它定位）。"""
+
+        threading.Thread(target=target, args=args, name=name, daemon=True).start()
 
     def write(self, input: Mapping[str, object]) -> None:
         """将已校验的单次输入（line / text / keys / raw）入队；worker 负责编码并一次写入 PTY。"""
@@ -330,27 +330,24 @@ class ProcessTerminalWorker:
             self._pending_signals[request_id] = pending
         try:
             self._enqueue({"type": "signal", "request_id": request_id, "signal": signal_name})
-        except Exception:
+            if not pending.event.wait(timeout=SIGNAL_ACK_TIMEOUT_SECONDS):
+                raise TerminalWorkerUnavailableError(
+                    "terminal worker signal acknowledgement timed out"
+                )
+            # 事件已 set 意味着 result 已写入：读线程的回执，或 close 收敛的 ``unavailable``。
+            status = pending.result.get("status")
+            if status == "applied":
+                return
+            if status == "unsupported":
+                raise TerminalWorkerSignalUnsupportedError(
+                    str(pending.result.get("reason", "unsupported"))
+                )
+            if status == "failed":
+                raise TerminalWorkerSignalFailedError("terminal worker failed to deliver signal")
+            raise TerminalWorkerUnavailableError("terminal worker signal result is missing")
+        finally:
             with self._signal_lock:
                 self._pending_signals.pop(request_id, None)
-            raise
-        if not pending.event.wait(timeout=SIGNAL_ACK_TIMEOUT_SECONDS):
-            with self._signal_lock:
-                self._pending_signals.pop(request_id, None)
-            raise TerminalWorkerUnavailableError("terminal worker signal acknowledgement timed out")
-        with self._signal_lock:
-            self._pending_signals.pop(request_id, None)
-        # 事件已 set 意味着 result 已写入：读线程的回执，或 close 收敛的 ``unavailable``。
-        status = pending.result.get("status")
-        if status == "applied":
-            return
-        if status == "unsupported":
-            raise TerminalWorkerSignalUnsupportedError(
-                str(pending.result.get("reason", "unsupported"))
-            )
-        if status == "failed":
-            raise TerminalWorkerSignalFailedError("terminal worker failed to deliver signal")
-        raise TerminalWorkerUnavailableError("terminal worker signal result is missing")
 
     def close(self) -> None:
         """请求 worker 关闭 shell，超时后终止 worker 进程。"""

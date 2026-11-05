@@ -480,10 +480,7 @@ class TerminalSessionRuntime:
                     raise TerminalSessionError(
                         "terminal operation_id was reused with different input"
                     )
-                return self._build_result(
-                    self._default_tail_start(),
-                    self._observation.buffer.last_line,
-                    "tail",
+                return self._tail_result(
                     note="duplicate operation_id: input was already accepted and was not resent",
                     input_type=kind,
                     input_summary=summary,
@@ -692,13 +689,7 @@ class TerminalSessionRuntime:
                     memo=buffer.last_line,
                 )
             )
-            return self._build_result(
-                self._default_tail_start(),
-                buffer.last_line,
-                "tail",
-                input_type="handoff",
-                input_summary=reason,
-            )
+            return self._tail_result(input_type="handoff", input_summary=reason)
 
     def end_handoff(self, handoff: HandoffLease | None) -> TerminalObservationResult:
         """交接的决定到达后重放 ``terminal_handoff``：报告交接以来的输出。
@@ -709,10 +700,7 @@ class TerminalSessionRuntime:
         with self._condition:
             buffer = self._observation.buffer
             if self._status not in _ACTIVE:
-                return self._build_result(
-                    self._default_tail_start(),
-                    buffer.last_line,
-                    "tail",
+                return self._tail_result(
                     note="the session ended before the user handed it back",
                     input_type="handoff",
                 )
@@ -823,6 +811,23 @@ class TerminalSessionRuntime:
         下限由 ``_build_result`` 收拢。
         """
         return self._observation.buffer.last_line - Constant.Terminal.READ_DEFAULT_TAIL + 1
+
+    def _tail_result(
+        self,
+        *,
+        note: str | None = None,
+        input_type: str | None = None,
+        input_summary: str | None = None,
+    ) -> TerminalObservationResult:
+        """持锁调用：默认尾部窗口的结果（用户输入标注随交付清空）。"""
+        return self._build_result(
+            self._default_tail_start(),
+            self._observation.buffer.last_line,
+            "tail",
+            note=note,
+            input_type=input_type,
+            input_summary=input_summary,
+        )
 
     def _build_result(
         self,

@@ -4,24 +4,24 @@
 （``app/tools → core/tool`` 方向合法，core 不得反向导入）。
 """
 
-from app.core.tool.handler.agent_team_run import build_agent_team_run_definition
-from app.core.tool.handler.delegate_task import build_delegate_task_definition
-from app.core.tool.handler.fork_task import build_fork_task_definition
-from app.core.tool.handler.propose_agent_configuration import (
-    build_propose_agent_configuration_definition,
-)
-from app.core.tool.handler.propose_agent_team_configuration import (
-    build_propose_agent_team_configuration_definition,
-)
-from app.core.tool.handler.send_message import (
-    build_send_message_definition,
-)
-from app.core.tool.handler.task_status import (
-    build_task_status_definition,
-)
 from app.core.tool.handler.wait_messages import build_wait_messages_definition
 from app.core.tool.handler.web_extract import build_web_extract_definition
 from app.core.tool.handler.web_search import build_web_search_definition
+from app.core.tool.multi_agent.agent_team_run import build_agent_team_run_definition
+from app.core.tool.multi_agent.delegate_task import build_delegate_task_definition
+from app.core.tool.multi_agent.fork_task import build_fork_task_definition
+from app.core.tool.multi_agent.propose_agent_configuration import (
+    build_propose_agent_configuration_definition,
+)
+from app.core.tool.multi_agent.propose_agent_team_configuration import (
+    build_propose_agent_team_configuration_definition,
+)
+from app.core.tool.multi_agent.send_message import (
+    build_send_message_definition,
+)
+from app.core.tool.multi_agent.task_status import (
+    build_task_status_definition,
+)
 from app.core.tool.tool_registry import ToolRegistry
 from app.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
 from app.tools.tool_handler.browser import build_browser_definitions
