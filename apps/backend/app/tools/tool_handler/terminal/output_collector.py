@@ -1,14 +1,13 @@
-"""终端子进程输出的解码与完整收集。
+"""终端命令输出的解码与完整收集。
 
-本模块只负责消费终端执行后端提供的输出流，保留完整的已读取文本，并可选旁路发送原样
-运行期文本片段。子进程的启动、超时与进程树清理由执行后端负责。
+本模块只负责把执行后端交来的输出字节块解码成文本，保留完整的已收到文本，并可选旁路发送原样
+运行期文本片段。命令的启动、超时与进程清理由执行后端（经 Terminal Worker）负责。
 """
 
 import codecs
 import locale
 from collections.abc import Callable
 from threading import RLock
-from typing import Any
 
 
 class _IncrementalOutputDecoder:
@@ -76,57 +75,45 @@ class _IncrementalOutputDecoder:
 
 
 class _OutputCollector:
-    """单读取线程 drain 合并流，保留完整已读取输出并旁路回传原始增量。
+    """按到达顺序收下合并流的字节块，保留完整已收文本并旁路回传原始增量。
 
     终端 UI 需要把控制字符交给终端模拟器解释，因此这里不做 head/tail 截断、预算裁剪或
     插入截断标记；模型上下文的长度控制由 ``ToolOutputBudget`` 在 handler 返回后负责。
     ``sink`` 的契约是不抛异常（实时通道自行吸收投递故障），这里不包裹。
     """
 
-    def __init__(
-        self,
-        stream: Any,
-        sink: Callable[[str], None] | None = None,
-    ) -> None:
-        """``stream`` 为子进程合并输出流（``Popen.stdout``）；构造时不读流、不起线程。"""
-        self._stream = stream
+    def __init__(self, sink: Callable[[str], None] | None = None) -> None:
         self._chunks: list[str] = []
         self._sink = sink
         self._sealed = False
         self._state_lock = RLock()
         self._decoder = _IncrementalOutputDecoder()
 
-    def seal(self) -> None:
-        """读取线程 join 超时后冻结已读取快照。
+    def feed(self, raw_chunk: bytes) -> None:
+        """收下一块输出（worker 读线程里调用）；封存后丢弃。"""
+        with self._state_lock:
+            if not self._sealed:
+                self._accept(self._decoder.decode(raw_chunk))
 
-        遗留子进程仍可能持有管道、读取线程还会醒来；封存后不再收集也不再旁路，保证返回给
-        调用方的结果与实时视图都停在同一处，且不追加任何伪造的截断标记。
+    def finish(self) -> str:
+        """冲出解码器尾部、封存并返回完整输出。
+
+        封存之后迟到的块（连接关闭时还在路上的帧）不再收集也不再旁路，返回给调用方的结果与
+        实时视图停在同一处，且不追加任何伪造的截断标记。
         """
         with self._state_lock:
-            self._sealed = True
+            if not self._sealed:
+                self._accept(self._decoder.decode(b"", final=True))
+                self._sealed = True
+            return "".join(self._chunks)
 
     def _accept(self, text: str) -> None:
-        """把解码文本加入完整缓存并旁路发送；封存后丢弃。"""
+        """把解码文本加入完整缓存并旁路发送；调用方持锁。"""
         if not text:
             return
-        with self._state_lock:
-            if self._sealed:
-                return
-            self._chunks.append(text)
-            if self._sink is not None:
-                self._sink(text)
-
-    def run(self) -> None:
-        """以固定大小字节块读取至流关闭；底层读取异常不处理，由读取线程终止。"""
-        read_chunk = getattr(self._stream, "read1", None) or self._stream.read
-        while raw_chunk := read_chunk(4096):
-            self._accept(self._decoder.decode(raw_chunk))
-        self._accept(self._decoder.decode(b"", final=True))
-
-    def get(self) -> str:
-        """返回已读取（封存时为封存那一刻）的完整输出。"""
-        with self._state_lock:
-            return "".join(self._chunks)
+        self._chunks.append(text)
+        if self._sink is not None:
+            self._sink(text)
 
 
 __all__ = ["_OutputCollector"]

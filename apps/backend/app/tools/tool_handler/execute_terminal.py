@@ -1,13 +1,13 @@
 """execute_terminal 工具实现。
 
-本模块只承载 execute_terminal 这一个工具。危险命令裁决、后端选择、命令执行与
-``ToolObservation`` 组装都在 ``ExecuteTerminalTool`` 内完成；不含 subprocess 细节
-（下沉到 ``app.tools.tool_handler.terminal.local_backend``）。
+本模块只承载 execute_terminal 这一个工具：参数复核、工作目录解析、前后台编排与
+``ToolObservation`` 组装。命令怎样启动、怎样结束与清理在执行后端
+（``app.tools.tool_handler.terminal.local_backend``，经 Terminal Worker 的执行模式）。
 
-前后台执行：命令包成 ``ThreadJob`` 交给 ``run_background_work``（默认前台、一直等到结束，模型可
+前后台执行由本工具编排：命令包成线程作业（默认前台、一直等到结束，模型可
 直接选后台，用户可把前台等待转走；没有超时自动转后台，转到后台也从不挂起 Agent）。所以本工具是
 thread 工具：命令要能在本次调用返回后继续跑，作业必须由后端进程持有，不能放进每次调用结束即
-被杀的工具子进程；超时与取消都由执行后端杀进程树。
+被杀的工具子进程；超时由执行后端落实，撤销（取消调用、Run 停止）经作业的唤醒回调立即停下命令。
 
 平台 shell 契约（可下发哪些 shell、命令该用什么语法）的唯一事实源是参数模型
 （``tool_models/execute_terminal_args.py``）：本模块的本机探测直接以该契约为候选清单，经
@@ -16,14 +16,17 @@ shell 清单。
 """
 
 import platform
+import threading
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tool.background.job import BackgroundConclusion, PlaceholderReason, ThreadJob
-from app.core.tool.background.run import run_background_work
+from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
+from app.core.tool.background.run import start_background_job
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
@@ -48,7 +51,6 @@ from app.tools.tool_handler.terminal import ExecutionResult, LocalExecutionBacke
 from app.tools.tool_handler.terminal.output_stream import TerminalOutputStream
 from app.tools.tool_models.execute_terminal_args import (
     DEFAULT_COMMAND_TIMEOUT_S,
-    EXECUTE_TERMINAL_BACKGROUND,
     MAX_COMMAND_TIMEOUT_S,
     ExecuteTerminalShell,
     resolve_execute_terminal_args_model,
@@ -68,8 +70,9 @@ from app.tools.tool_models.execute_terminal_args import (
 # 写进同一条命令（&&、管道、多行脚本）。没有 stdin、也没有终端：要输入的程序会读到输入结束、
 # 通常直接失败，要终端的程序（密码提示、全屏程序）跑不起来，所以带上 --yes 之类的非交互参数。
 # 前台调用会一直占着这一步，直到命令退出或超时；长构建、测试套件把 timeout 调大并设
-# background=true，期间继续做别的事。不要在命令里用 & 或 nohup 把进程放到后台，要后台就用
-# background=true。必须一直开着（服务、watcher）或要交互的程序不适合本工具：到 timeout 会被杀掉。
+# background=true，期间继续做别的事。命令用 & 或 nohup 留下的进程会在它结束时被结束，所以要后台
+# 就用 background=true。必须一直开着（服务、watcher）或要交互的程序不适合本工具：到 timeout 会被
+# 结束。
 _DESCRIPTION = (
     "Run a non-interactive command or script in a fresh shell process and return its exit code "
     "with merged stdout/stderr. Each call starts from scratch: cd, exported variables and other "
@@ -78,18 +81,22 @@ _DESCRIPTION = (
     "end-of-input and usually fails, and one that needs a terminal (password prompts, "
     "full-screen apps) cannot run, so pass non-interactive flags such as --yes. A foreground "
     "call holds this step until the command exits or times out; for long builds and test "
-    "suites raise timeout and set background=true to keep working meanwhile. Do not push "
-    "processes into the background with & or nohup inside the command; use background=true. "
-    "Programs that must keep running (servers, watchers) or need interaction do not fit this "
-    "tool: they are killed at the timeout."
+    "suites raise timeout and set background=true to keep working meanwhile. Processes the "
+    "command leaves behind (& or nohup) are stopped when it exits, so use background=true "
+    "instead. Programs that must keep running (servers, watchers) or need interaction do not "
+    "fit this tool: they are stopped at the timeout."
 )
 
 # 取消后的模型文案：命令被强杀，结果未知且可能留下部分副作用。
 _CANCELLED_REASON = (
-    "the command was stopped before it finished (the user or the run cancelled it) and its "
-    "process tree was killed. Partial side effects are possible; do not re-run it "
+    "the command was stopped before it finished (the user or the run cancelled it), together "
+    "with every process it started. Partial side effects are possible; do not re-run it "
     "automatically."
 )
+
+# 前台等待定期检查 Run 取消与转后台信号；命令结论到达时立即唤醒。
+_CANCEL_CHECK_SECONDS = 0.25
+_PlaceholderReason = Literal["background", "detached"]
 
 
 class ExecuteTerminalTool(HandlerBase):
@@ -268,9 +275,10 @@ class ExecuteTerminalTool(HandlerBase):
                 ``MAX_COMMAND_TIMEOUT_S``。
             workdir: 工作目录；缺省 ``execution_context.workspace_root``；相对路径相对
                 该根解析；绝对路径直接使用。
-            background: ``True`` 立即转后台；``None`` 取 ``EXECUTE_TERMINAL_BACKGROUND`` 的默认（前台）。
+            background: ``True`` 立即转后台；``None`` 与 False 均在前台等待。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。workdir 只是命令的
-                起点：命令自己可以 cd 或用绝对路径，文件系统副作用不受工作区约束（命令级隔离待沙箱接管）。
+                起点：命令自己可以 cd 或用绝对路径，文件系统副作用不受工作区约束
+                （命令级隔离待沙箱接管）。
 
         返回:
             ``ToolObservation``。工作目录不存在/后端异常为
@@ -283,7 +291,7 @@ class ExecuteTerminalTool(HandlerBase):
             不主动向上抛出；均转换为结构化 ``ToolObservation``。
 
         副作用:
-            经后端派生子进程执行命令；前台期间输出经实时通道推给前端，转到后台后不再推送；以本次
+            经 Terminal Worker 执行命令；输出持续经实时通道推给前端（含转后台后的占位卡片）；以本次
             ``tool_call_id`` 在 ``background_registry`` 登记作业。
         """
         log.info(
@@ -307,21 +315,37 @@ class ExecuteTerminalTool(HandlerBase):
             return self._workdir_error_observation(err)
 
         effective_timeout = min(timeout or DEFAULT_COMMAND_TIMEOUT_S, MAX_COMMAND_TIMEOUT_S)
+        return self._execute_command(
+            command, cwd, shell=shell, timeout_s=effective_timeout, description=description,
+            background=bool(background), execution_context=execution_context,
+        )
+
+    def _execute_command(
+        self, command: str, cwd: Path, *, shell: ExecuteTerminalShell, timeout_s: float,
+        description: str, background: bool, execution_context: ToolExecutionContext,
+    ) -> ToolObservation:
+        """启动命令并返回前台结果或后台占位；等待与结果路由均按调用创建，不存入工具实例。
+
+        仅前台工具线程等待命令，Run 取消时通知后端停止并等结果收尾；用户转后台与命令完成
+        由登记表裁决先后，路由保证交接期间到达的结论仍能回投。超时与进程清理由执行后端负责。
+        """
         tool_call_id = execution_context.tool_call_id
         channel = TerminalOutputStream.open(execution_context)
         # 作业线程跑完命令后在这里留下完整结果：前台拿到结论时按它渲染观察（模型正文另过预算）。
         finished: list[ExecutionResult] = []
 
-        def work(cancelled: Callable[[], bool]) -> BackgroundConclusion:
+        backend = LocalExecutionBackend()
+
+        def work(_cancelled: Callable[[], bool]) -> BackgroundConclusion:
+            # 撤销不靠轮询这个标记：作业的唤醒回调直接停下命令（``backend.stop``）。
             # 实时通道随命令而不是随工具调用结束：转到后台后命令还在跑，输出照常推给占位卡片。
             try:
-                result = LocalExecutionBackend().execute(
+                result = backend.execute(
                     command,
                     str(cwd),
-                    effective_timeout,
+                    timeout_s,
                     shell=shell,
                     output_sink=channel.emit if channel is not None else None,
-                    is_cancelled=cancelled,
                 )
             finally:
                 if channel is not None:
@@ -341,25 +365,55 @@ class ExecuteTerminalTool(HandlerBase):
             finished.append(result)
             return self._background_conclusion(command, cwd, result, execution_context)
 
-        outcome = run_background_work(
-            # 撤销只置位标记，执行后端按时间片复查取消，不需要额外唤醒。
-            ThreadJob(work, wake=lambda: None, name=f"execute-terminal-{tool_call_id[-8:]}"),
+        job = BackgroundJob.start_in_thread(
+            work, wake=backend.stop, name=f"execute-terminal-{tool_call_id[-8:]}"
+        )
+        if background:
+            registered = start_background_job(
+                job, task_id=execution_context.task_id, run_id=execution_context.run_id,
+                tool_call_id=tool_call_id, kind="terminal_command", label=description,
+            )
+            return self._placeholder_observation(
+                command, cwd, timeout_s, "background", registered
+            )
+
+        detached = threading.Event()
+        registered = background_registry.register(
+            tool_call_id,
             task_id=execution_context.task_id,
             run_id=execution_context.run_id,
-            tool_call_id=tool_call_id,
             kind="terminal_command",
             label=description,
-            mode=(
-                "background"
-                if EXECUTE_TERMINAL_BACKGROUND.resolve_background(background)
-                else "foreground"
-            ),
-            is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
+            mode="foreground",
+            on_cancel=lambda _reason: job.cancel(),
+            detached=detached,
         )
-        if outcome.placeholder is not None:
+        wait = _ForegroundWait(tool_call_id)
+        job.on_done(wait.on_result)
+        while True:
+            conclusion = wait.wait_result(_CANCEL_CHECK_SECONDS)
+            if conclusion is not None:
+                break
+            if cancellation_registry.is_cancelled(execution_context.task_id):
+                # Run 取消：撤销作业并等它带取消结论收尾，前台照常返回结果。
+                job.cancel()
+                conclusion = wait.wait_result(None)
+                break
+            if detached.is_set():
+                wait.detach()
+                return self._placeholder_observation(
+                    command, cwd, timeout_s, "detached", registered
+                )
+        assert conclusion is not None  # 取消路径必由作业的取消结论收尾
+        outcome = background_registry.settle_foreground(tool_call_id)
+        if outcome == "detached" or (outcome == "gone" and detached.is_set()):
+            # 转后台先于前台结算：即使随后被撤销，工具仍须返回后台占位。
+            background_registry.complete(tool_call_id, conclusion)
             return self._placeholder_observation(
-                command, cwd, effective_timeout, outcome.placeholder, outcome.work
+                command, cwd, timeout_s, "detached", registered
             )
+        if conclusion.result.get("end_reason") == "failed":
+            return tool_error(self.name, f"Command execution failed: {conclusion.result['error']}")
         return self._result_observation(command, cwd, finished[0])
 
     def _result_observation(
@@ -402,7 +456,8 @@ class ExecuteTerminalTool(HandlerBase):
         的终态展示是完整输出（展示契约不截断），并入时写回卡片。
 
         作业线程里调用：前台拿到结论时不使用它（见 ``finished``），只在转后台后经
-        ``background_registry.complete`` 回投。撤销的命令没有卡片终态（占位随撤销推到 ``cancelled``）。
+        ``background_registry.complete`` 回投。撤销的命令没有卡片终态，
+        占位随撤销推到 ``cancelled``。
         """
         end_reason = (
             "cancelled" if result.cancelled else "timed_out" if result.timed_out else "exited"
@@ -425,7 +480,7 @@ class ExecuteTerminalTool(HandlerBase):
         )
 
     def _placeholder_observation(
-        self, command: str, cwd: Path, timeout_s: float, reason: PlaceholderReason,
+        self, command: str, cwd: Path, timeout_s: float, reason: _PlaceholderReason,
         work: BackgroundWork,
     ) -> ToolObservation:
         """命令转到后台时的占位（``background``）。
@@ -474,7 +529,6 @@ class ExecuteTerminalTool(HandlerBase):
             timeout_seconds=self.timeout_seconds,
             resource_keys=("shell",),
             execution_mode="thread",  # 作业须由后端进程持有才能转到后台，见模块 docstring
-            background=EXECUTE_TERMINAL_BACKGROUND,
         )
         return replace(definition, parameters_schema=self._build_parameters_schema())
 
@@ -557,6 +611,46 @@ class ExecuteTerminalTool(HandlerBase):
         )
 
 
+class _ForegroundWait:
+    """终端前台等待：作业结论的中转，交给工具线程或按转后台回投。
+
+    前台等待只有本工具使用（后台命令经 ``start_background_job`` 直接回投，不经过这里）。
+    中转必须活到工具调用结束：登记条目可能在结论到达前就被撤销（转后台、Run 停止），那时工具
+    线程仍要拿到结论才能返回结果。转后台与结论到达在同一把锁里裁决，避免已到的结论无人投递。
+    """
+
+    def __init__(self, tool_call_id: str) -> None:
+        self._tool_call_id = tool_call_id
+        self._lock = threading.Lock()
+        self._arrived = threading.Event()
+        self._background = False
+        self._conclusion: BackgroundConclusion | None = None
+
+    def on_result(self, conclusion: BackgroundConclusion) -> None:
+        """作业线程交付结论：存下来；已经判给后台时直接回投。"""
+        with self._lock:
+            self._conclusion = conclusion
+            background = self._background
+            self._arrived.set()
+        if background:
+            background_registry.complete(self._tool_call_id, conclusion)
+
+    def detach(self) -> None:
+        """切到后台；结论已先到时由这里补投，否则留给 :meth:`on_result`。"""
+        with self._lock:
+            self._background = True
+            pending = self._conclusion if self._arrived.is_set() else None
+        if pending is not None:
+            background_registry.complete(self._tool_call_id, pending)
+
+    def wait_result(self, timeout: float | None) -> BackgroundConclusion | None:
+        """等结论：拿到返回它，超时返回 ``None``（``timeout=None`` 时一直等）。"""
+        if not self._arrived.wait(timeout):
+            return None
+        with self._lock:
+            return self._conclusion
+
+
 def build_execute_terminal_definition() -> ToolDefinition:
     """构造 execute_terminal 工具定义。
 
@@ -568,7 +662,8 @@ def build_execute_terminal_definition() -> ToolDefinition:
         ``to_definition_if_avaliable`` 只在 ``avaliable()`` 为假时返回 None，而本工具未覆写
         ``avaliable()``（基类恒为 True）。保留 ``ToolDefinition`` 而非 ``ToolDefinition | None``
         标注与仓内其余 ``build_*_definition`` 一致：``ToolRegistry.register`` 的形参类型是
-        ``ToolDefinition``，标成可为 None 会在 ``tool_registration`` 的注册调用点引入 mypy 类型错误。
+        ``ToolDefinition``，标成可为 None 会在 ``tool_registration`` 的注册调用点
+        引入 mypy 类型错误。
 
     异常:
         无。
