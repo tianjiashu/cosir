@@ -60,6 +60,7 @@ from app.service.configuration.main_agent_prompt_configuration_service import (
 )
 from app.service.depends import (
     close_service_dependencies,
+    get_agent_team_coordinator,
     get_conversation_task_state_service,
     get_recover_service,
     initialize_service_dependencies,
@@ -229,6 +230,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             # closed、唤醒等待线程与交接，它们不得在关闭期间写 task_messages。再停下全部 actor
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
             await asyncio.to_thread(background_registry.close)
+            await get_agent_team_coordinator().aclose()
             background_registry.set_listener(None)
             handoff_registry.set_listener(None)
             handoff_registry.close()

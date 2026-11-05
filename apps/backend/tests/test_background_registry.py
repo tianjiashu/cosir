@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -105,39 +106,62 @@ def test_close_cancels_everything_and_blocks_later_delivery(delivered) -> None:
     assert registry.complete(reopened, BackgroundConclusion({})) is True
 
 
-def test_close_waits_for_in_flight_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
-    """关闭返回后不得再有写库：在途投递要先落定。"""
-    import threading
-
+@pytest.mark.parametrize("user_cancel", [False, True], ids=["complete", "single_cancel"])
+@pytest.mark.parametrize("delivery_fails", [False, True], ids=["written", "write_failed"])
+def test_close_waits_for_in_flight_delivery(
+    monkeypatch: pytest.MonkeyPatch, user_cancel: bool, delivery_fails: bool,
+) -> None:
+    """正常完成与单停都要等回执写完；写入失败也必须释放关闭等待。"""
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    closing_started = threading.Event()
 
-    def slow_deliver(
-        task_id: int,
-        *,
-        tool_call_id: str | None,
-        tool_name: str,
-        result: dict[str, object],
-        placeholder_display_data: dict[str, object] | None = None,
-    ) -> bool:
+    def slow_deliver(*_args: object, **_kwargs: object) -> bool:
         entered.set()
         assert release.wait(5)
         finished.set()
+        if delivery_fails:
+            raise RuntimeError("receipt write failed")
         return True
 
-    monkeypatch.setattr(background_module, "deliver_background_result", slow_deliver)
+    monkeypatch.setattr(
+        background_module,
+        "report_cancelled_result" if user_cancel else "deliver_background_result",
+        slow_deliver,
+    )
     registry = BackgroundRegistry()
-    _register(registry, "call-a", 1, "a")
-    deliverer = threading.Thread(target=lambda: registry.complete("call-a", BackgroundConclusion({})))
-    deliverer.start()
-    assert entered.wait(2)
-    closer = threading.Thread(target=registry.close)
-    closer.start()
-    closer.join(0.2)
-    assert closer.is_alive()
-    release.set()
-    closer.join(2)
-    assert not closer.is_alive() and finished.is_set()
-    deliverer.join(2)
+    cancelled: list[str] = []
+    _register(registry, "call-a", 1, "a", lambda: cancelled.append("a"))
+
+    def deliver() -> bool:
+        if user_cancel:
+            return registry.request_user_cancel(1, "call-a", driving=False)
+        return registry.complete("call-a", BackgroundConclusion({}))
+
+    def close() -> bool:
+        closing_started.set()
+        registry.close()
+        return finished.is_set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        deliverer = executor.submit(deliver)
+        try:
+            assert entered.wait(2)
+            assert not registry.owns(1, "call-a")
+            assert not registry.complete("call-a", BackgroundConclusion({}))
+            assert not registry.request_user_cancel(1, "call-a", driving=False)
+            closer = executor.submit(close)
+            assert closing_started.wait(2)
+            with pytest.raises(TimeoutError):
+                closer.result(timeout=0.2)
+        finally:
+            release.set()
+        assert closer.result(timeout=2)
+        if delivery_fails:
+            with pytest.raises(RuntimeError, match="receipt write failed"):
+                deliverer.result(timeout=2)
+        else:
+            assert deliverer.result(timeout=2)
+    assert cancelled == (["a"] if user_cancel else [])
 
 
 def test_drop_task_runs_every_callback_even_when_one_fails(delivered) -> None:
@@ -191,7 +215,8 @@ def enqueued(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, Any]]:
 def test_deliver_enqueues_background_result(enqueued: list[tuple[int, Any]], monkeypatch) -> None:
     monkeypatch.setattr(background_module, "_now", lambda: "2026-01-01T00:01:00+00:00")
     assert deliver_background_result(
-        5, tool_call_id="call-5", tool_name="terminal_command", result={"end_reason": "condition_met"}
+        5, tool_call_id="call-5", tool_name="terminal_command",
+        result={"end_reason": "condition_met"},
     )
     [(task_id, message)] = enqueued
     assert task_id == 5
@@ -272,7 +297,9 @@ def test_wait_messages_description_mentions_terminal_work() -> None:
 # ── 前台 / 后台、取消与看板 ─────────────────────────────────────────────
 
 
-def _register_foreground(registry: BackgroundRegistry, tool_call_id: str, calls: list[str]) -> threading.Event:
+def _register_foreground(
+    registry: BackgroundRegistry, tool_call_id: str, calls: list[str],
+) -> threading.Event:
     detached = threading.Event()
     registry.register(
         tool_call_id,

@@ -1,6 +1,6 @@
 # Agent Team 工具化流水线方案
 
-> 状态：**部分已被取代**。执行与等待模型（§1 第 6、7 条，§7.3，§7.4，阶段验收里「主 Agent await 不阻塞 event loop」等条目）已改为「`agent_team` 工具在工具线程里阻塞运行 Team、落定后把结论作为工具结果返回」：主 Run 不挂起等 Team、没有游离于 Run 之外的后台 Team 执行，取舍见 `apps/backend/app/core/tool/handler/agent_team_run.py` 的类说明与 `agent_team/coordinator.py` 的 `_await_node_run`。本文其余章节写于 LangGraph 时期，与现状不一致处以 `AGENTS.md` 与源码为准。
+> 执行与等待以 §7.4 和当前源码为准。历史设计中的 LangGraph、旧接口和旧恢复规则仅供追溯。
 >
 > 核心定位：Agent Team 不是独立聊天入口，而是主 Agent 可以调用的一组工具。主 Agent
 > 负责提交共同目标和各节点的预设指令；Agent Team 负责生成可审阅方案、等待用户确认、按确认后的
@@ -529,15 +529,13 @@ review.needs_changes → develop
 8. 协调器把 TeamResult 作为受限 SystemMessage 注入主 Agent 的待消费队列，恢复同一主 Run 继续生成最终回复
 ~~~
 
-### 7.4 “主 Agent 阻塞”的准确含义
+### 7.4 批准后的后台执行
 
-> 已被取代（原方案：工具返回后主 Run 挂起，Coordinator 在独立异步任务里等 Team 终态再 resume 主 Run，且不得在线程里轮询）。
+用户决定由后端重放原调用。批准时重新解析最终配置，所需 Agent 或模型配置已失效的方案落为 `failed`，原调用收到失败原因。启动成功后，启动回执与原工具行的后台占位同事务提交，Coordinator 才开始串行驱动节点。
 
-现行语义：用户批准后，`agent_team` 工具按决定再次执行，在自己的工具线程里调用 Coordinator 阻塞运行 Team，落定后把结论作为本次工具结果返回，主 Agent 不需要 `wait_messages`。Coordinator 逐个投递节点输入，并以 `_NODE_POLL_SECONDS` 为间隔分段 `wait_idle` 等节点落定；backend event loop 不被阻塞，代价是 Team 期间占用一个默认线程池线程。thread 工具执行中途不检查取消信号，所以主 Task 停止时由其 actor 在发起停止那一刻取消本 Run 的 TeamRun，Coordinator 检出后停下当前节点并返回。
+节点绑定与它的调度输入同事务提交。Coordinator 在结束本次节点调度时按消息 ID 撤回尚未消费的输入；已经并入节点对话的内容保留。进程中断时，现有重启流程负责清理运行中 Team 遗留的节点调度输入。
 
-重新评估条件：多个 Team 并发使默认线程池吃紧，或需要在进程关闭时可靠中断 Team。届时改为 Team 在事件循环上后台执行、主 Run 挂起并经 `background_result` 唤醒（复用 `delegate_task` 的回投链路）。
-
-HTTP/SSE 断开只表示订阅中断，不取消 Team；只有显式取消或主 Run 的取消语义才会取消 Team。
+主 Agent 可继续工作或调用 `wait_messages`。负责等待的 Run 是实际批准的 Run，原卡保留在提出方案的位置。最终状态与运行档案随一条 `background_result` 并入。单独停止 Team 会收好当前节点与档案；停止父 Task 会撤销后台结论。后端关闭时等协调任务退出，再关闭 actor 与存储。
 
 ## 8. 模型、工具和 profile 解析
 

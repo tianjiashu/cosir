@@ -15,9 +15,10 @@ class TaskResponse(BaseModel):
         task_id: 任务标识。
         workspace_id: 所属工作区标识。
         title: 任务标题。
-        task_type: 任务类型，``"user"`` 为用户创建，``"fork"`` 为历史分支，
-            ``"delegate_task"`` 为委派子任务。
-        parent_task_id: 父任务标识，仅委派子任务有值。
+        task_type: 任务类型，取值见 ``models.task_kind.TASK_KINDS``：``"user"`` 为用户创建，
+            ``"fork"`` 为历史分支（用户或 Agent fork），``"delegate_task"`` 为委派子任务，
+            ``"agent_team_node"`` 为 Team 节点。
+        parent_task_id: 父任务标识，委派子任务与 Team 节点有值。
         created_at: 创建时间文本。
         updated_at: 更新时间文本。
 

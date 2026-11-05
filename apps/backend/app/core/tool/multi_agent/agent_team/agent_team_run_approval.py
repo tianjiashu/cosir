@@ -1,14 +1,10 @@
 """Agent Team 审批门：TeamRun 在确认门槛上的持久化状态迁移。
 
-``agent_team`` 工具是唯一调用方：首次调用创建 ``pending`` TeamRun，按用户决定执行时确认
-（``pending → running``，写入最终执行计划）或驳回。这里只编排数据库迁移，不启动 Team——确认后由工具
-在自己的线程里交给 Coordinator 阻塞运行；也不维护进程内待确认缓存。前端读模型归
-``app.service.agent_team.agent_team_run_service``。
+``agent_team`` 首次调用创建待批 TeamRun。批准时重新解析配置，成功后交给 Coordinator，
+配置失效则结束为 failed。前端读模型归 ``app.service.agent_team.agent_team_run_service``。
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 from app.config.logging.logger import log
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
@@ -16,12 +12,13 @@ from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import 
     AgentTeamPreparationResult,
     prepare_team_run,
 )
-from app.core.tool.multi_agent.args.node_goal import AgentTeamNodeGoal
+from app.core.tool.multi_agent.agent_team.team_tool_error import TeamToolError
+from app.core.tool.multi_agent.args.agent_team_approve_input import AgentTeamApproveInput
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.state.agent_team_run_state import AgentTeamRunState
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
-from app.service.depends import get_workspace_service
+from app.service.depends import get_conversation_run_ledger, get_workspace_service
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.model.agent_team_run_model import AgentTeamRunModel
 from app.storage.store_engines import main_session_factory
@@ -138,60 +135,43 @@ class AgentTeamRunApproval:
         return current
 
     def confirm(
-        self,
-        team_run_id: int,
-        configuration_document: dict[str, Any],
-        *,
-        goal: str,
-        node_goals: dict[str, AgentTeamNodeGoal],
-        parent_agent: AgentRuntimeConfig,
-    ) -> AgentTeamRunModel:
-        """使用用户最终配置确认 TeamRun：``pending`` 原子迁移为 ``running`` 并写入最终执行计划。
+        self, row: AgentTeamRunModel, inputs: AgentTeamApproveInput,
+    ) -> AgentTeamRunModel | None:
+        """按已认领的批准决定重新解析最终配置，从提出方案的 Run 取节点回落配置。
 
-        不启动 Coordinator：确认由 ``agent_team`` 工具在按用户决定执行时完成，随后由它阻塞运行
-        Team。
-
-        后端不信任预览展示数据，而是在确认边界按用户提交的最终配置重新校验并解析节点运行快照，
-        与最终配置在同一事务里随 ``pending → running`` 原子迁移写入，所以 TeamRun 始终是唯一执行
-        事实源。并发确认只有一个能迁移成功，落空的一方得到 ``ValueError``，不会重复启动。
-
-        参数:
-            parent_agent: 创建方案的主 Run 的 Agent 运行时配置，节点缺少独立模型配置时以它回落；
-                必须是已物化模型设置的副本（注册表共享单例没有模型连接字段）。
-
-        异常:
-            ValueError: 配置无效、``team_id`` 与待确认 Team 不一致，或 TeamRun 已不在待确认态
-                （已被确认、驳回或随主 Agent 取消）。
-            TeamToolError: 最终配置的节点 Agent 或模型配置不可用。
-            KeyError: TeamRun 不存在。
+        确认成功时随 pending → running 写入执行计划。配置失效则落定 failed，抛 TeamToolError
+        将原因交给原工具调用。两种迁移都只接受 pending；已由其他路径处理时返回 None。
         """
-
-        existing = self.get(team_run_id)
-        configuration = AgentTeamConfiguration.model_validate(configuration_document)
-        if existing.team_id != configuration.team_id:
-            raise ValueError("确认配置的 team_id 与待确认 Team 不一致")
-        final_goal = goal.strip()
-        # 节点快照基于用户最终配置重新准备，初始预览产生的候选快照不作为确认依据。
-        preparation = prepare_team_run(
-            configuration,
-            goal=final_goal,
-            node_goals=node_goals,
-            workspace_root=get_workspace_service().get_workspace(existing.workspace_id).root_path,
-            parent_task_id=existing.parent_task_id,
-            parent_agent=parent_agent,
-        )
-
-        with begin_immediate(self._session_factory) as session:
-            updated = self._team_run_crud.update_status_if_in(
-                existing.id,
-                AgentTeamRunStatus.RUNNING.value,
-                (AgentTeamRunStatus.PENDING.value,),
-                state=AgentTeamRunState.initial(preparation.node_runtime_snapshots, configuration),
-                started=True,
-                configuration_snapshot_json=configuration.model_dump(mode="json"),
-                goal_input=final_goal,
-                session=session,
+        final_goal = inputs.goal.strip()
+        try:
+            configuration = AgentTeamConfiguration.model_validate(inputs.configuration)
+            if row.team_id != configuration.team_id:
+                raise ValueError("确认配置的 team_id 与待确认 Team 不一致")
+            preparation = prepare_team_run(
+                configuration,
+                goal=final_goal,
+                node_goals=inputs.node_goals,
+                workspace_root=get_workspace_service().get_workspace(row.workspace_id).root_path,
+                parent_task_id=row.parent_task_id,
+                parent_agent=AgentRuntimeConfig.for_run(get_conversation_run_ledger().get_run(row.parent_run_id)),
             )
-        if updated is None:
-            raise ValueError("该 Agent Team 方案已处理，不能再确认")
-        return updated
+            state = AgentTeamRunState.initial(preparation.node_runtime_snapshots, configuration)
+        except (TeamToolError, ValueError, KeyError, RuntimeError) as exc:
+            failed = self._team_run_crud.update_status_if_in(
+                row.id, AgentTeamRunStatus.FAILED.value, (AgentTeamRunStatus.PENDING.value,),
+                end_reason=AgentTeamRunEndReason.TEAM_START_FAILED.value, ended=True,
+            )
+            if failed is None:
+                return None
+            log.warning("agent_team_confirm_rejected", extra={
+                "msg": "已批准的 Team 配置无法启动，方案已结束",
+                "data": {"team_run_id": row.id, "reason": str(exc)},
+            })
+            raise TeamToolError(str(exc)) from exc
+
+        return self._team_run_crud.update_status_if_in(
+            row.id, AgentTeamRunStatus.RUNNING.value, (AgentTeamRunStatus.PENDING.value,),
+            state=state, started=True,
+            configuration_snapshot_json=configuration.model_dump(mode="json"),
+            goal_input=final_goal,
+        )

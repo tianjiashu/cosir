@@ -1,8 +1,8 @@
-"""后台工作的作业抽象：工具把耗时工作包装成作业，编排交给 ``run_background_work``。
+"""耗时工作的结论交付与撤销：终端线程作业和子 Agent 等待共用。
 
 作业由执行单元持有（终端会话、子 Task 的 actor 等），只承诺两件事：结论到达时回调恰好一次，以及
-可以被撤销。登记、前台 / 后台、转到后台、回投与占位都不归作业管——那是 ``run_background_work``
-的职责。
+可以被撤销。结果登记与回投归 ``BackgroundRegistry``，前后台选择与观察组装归各工具；
+终端独有的前台等待和转后台由 ``ExecuteTerminalTool`` 编排。
 
 两种包装方式共用一个类，差别只在「取消时结论由谁产生」（见 :class:`BackgroundJob`）。
 """
@@ -12,10 +12,9 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import cast
 
 from app.config.logging.logger import log
-from app.models.message_metadata import BackgroundWork
 
 
 @dataclass(frozen=True)
@@ -30,26 +29,10 @@ class BackgroundConclusion:
 
     result: dict[str, object]
     display_data: dict[str, object] | None = None
+    cancel_hint: str | None = None
 
 
 JobCallback = Callable[[BackgroundConclusion], None]
-
-# 占位原因：``background`` 一开始就在后台执行；``detached`` 用户把前台等待转走。两者都是显式选择，
-# 都不挂起 Agent：没有超时自动转后台，前台就一直等到结论、超时或取消。
-PlaceholderReason = Literal["background", "detached"]
-
-
-@dataclass(frozen=True)
-class BackgroundOutcome:
-    """``run_background_work`` 的结果：要么前台拿到的结论，要么一个后台占位的原因。
-
-    ``run_background_work`` 不渲染工具观察：结论与占位的渲染（文本、展示数据、是否挂起）属于工具。工具渲染
-    占位时把 ``work`` 原样交给 ``background``；描述与登记时间只在登记入口确定一次。
-    """
-
-    work: BackgroundWork
-    result: BackgroundConclusion | None = None
-    placeholder: PlaceholderReason | None = None
 
 
 class _OnceCallbacks:
@@ -98,9 +81,9 @@ class BackgroundJob:
         on_cancel: Callable[[], None],
         cancelled_result: BackgroundConclusion | None = None,
     ) -> None:
-        """``on_cancel`` 在撤销时调用（置位撤销标记之后、锁外、每次 ``cancel`` 都调一次），负责让工作
-        停下来（停命令、取消等待协程）。``cancelled_result`` 为 ``None`` 表示框架不代结：取消后等执行
-        单元自己 :meth:`finish`；给了就以它立刻收尾，保证等待方总能拿到结论。
+        """``on_cancel`` 在撤销标记置位后、锁外调用，每次 ``cancel`` 都调，负责停命令或取消等待。
+        ``cancelled_result`` 为 ``None`` 表示取消后等执行单元自己 :meth:`finish`；
+        给了就以它立刻收尾，保证等待方总能拿到结论。
         """
         self._callbacks = _OnceCallbacks()
         self._cancelled = threading.Event()
@@ -117,8 +100,8 @@ class BackgroundJob:
     ) -> BackgroundJob:
         """把阻塞函数 ``work(is_cancelled)`` 放到自己的线程里执行（``execute_terminal`` 的命令）。
 
-        ``work`` 须据 ``is_cancelled`` 尽快以取消结论返回；撤销置位标记并调用 ``wake`` 唤醒它。线程名
-        用于排查。
+        撤销置位标记并调用 ``wake`` 唤醒工作，工作须尽快以取消结论返回；
+        可轮询 ``is_cancelled`` 或由唤醒回调直接停止执行后端。线程名用于排查。
         """
         job = cls(on_cancel=wake)
         threading.Thread(target=job._run, args=(work,), name=name, daemon=True).start()

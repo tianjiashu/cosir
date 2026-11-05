@@ -189,7 +189,7 @@ preload 只暴露下面这些方法，不暴露 `ipcRenderer` 本身：
 `runtime.ts` 和 `process.ts` 的规则不变：
 
 - uv 只负责解析解释器和同步环境，后端始终是宿主的**直接子进程**；
-- 环境变量（`CODING_AGENT_*`、`VIRTUAL_ENV`、`PATH`、`UV_CACHE_DIR`）的注入规则不变；
+- 环境变量（`CODING_AGENT_*`、`UV_CACHE_DIR`）的注入规则不变；`VIRTUAL_ENV` 与 venv `PATH` 前缀已于 2026-11-02 删除（见 `terminal-gap-assessment.md` §7.1）；
 - 后端的 stdout 和 stderr 写入 `backend-console` 日志。
 
 **宿主存活契约（替代 Job Object）**：

@@ -102,9 +102,6 @@ class TaskRuntimeSpace:
     # fork、后端重启），此时 context 里可能残留其他来源的准入说明，必须重发完整说明。只由
     # ``RuntimeContext.for_run`` 读写，同一 Task 的 Run 由 actor 串行发起，无需加锁。
     announced_ban_tools: frozenset[str] | None = field(default=None, init=False)
-    # 本进程是否已就「旧终端已失效」告知过该 Task（重启唤醒或首次驱动提醒，见
-    # ``core/tool/background/restart_settlement``）；space 与进程同寿，所以「本进程首次」即首次置位。
-    terminals_invalidation_announced: bool = field(default=False, init=False)
 
     @property
     def task_tool_schemas(self) -> tuple[FunctionDefinition, ...]:

@@ -11,7 +11,7 @@ part 进入快照工作副本（后端工作副本保存完整历史，见 ``sna
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Literal
+from typing import Literal, get_args
 
 from typing_extensions import TypedDict
 
@@ -37,7 +37,7 @@ class ConversationBackgroundTask(TypedDict):
 
 BACKGROUND_TASK_KEYS = frozenset(ConversationBackgroundTask.__annotations__)
 BACKGROUND_WORK_KEYS = frozenset(ConversationBackgroundWork.__annotations__)
-_KINDS = frozenset({"terminal_command", "child_agent"})
+_KINDS = frozenset(get_args(BackgroundKind))
 _STATUSES = frozenset({"running", "settling", "completed", "cancelled"})
 _ACTIVE = frozenset({"running", "settling"})
 

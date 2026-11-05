@@ -140,6 +140,7 @@ class TaskActor:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._loop_task
         self.stopped.set()
+        self._publish_state()
 
     # ── 监听与推进 ────────────────────────────────────────────────────────
 
@@ -256,16 +257,14 @@ class TaskActor:
     async def _cancel_suspended(self, reason: CancelReason) -> bool:
         """挂起的 Run 没有执行者：撤销后台结果后直接迁移为 cancelled 并传播；调用方持 Task 闸门。
 
-        返回 ``False`` 表示当前阶段不是挂起，本次取消无事可做。挂起的 Run 没有运行中的 Team
-        （``agent_team`` 在工具线程里阻塞到 Team 落定，Run 期间不会挂起），但常带着待确认方案：
-        与运行中停止一样取消，停止即放弃本 Task 的全部 Team 工作。
+        停止挂起 Run 时先撤销投递权，随后停止其全部待批准与已启动的 Team。
         """
         current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
         if self._phase(current) != "suspended":
             return False
-        await self._cancellation.cancel_teams()
         # 先撤销后台结果再迁移：迁移之后才到的结论会被 loop 当作新消息开出新 Run。
         await self._cancellation.cancel_background_task()
+        await self._cancellation.cancel_teams()
         cancelled = await asyncio.to_thread(
             self._ledger.transition, current.id, RunTransition.CANCEL
         )

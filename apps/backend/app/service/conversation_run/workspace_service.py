@@ -294,6 +294,7 @@ class WorkspaceService:
                 if task_ids <= stopped:
                     break
                 await task_runtime_spaces.stop(task_ids - stopped)
+                await service_depends.get_agent_team_coordinator().drain_for_deletion(task_ids)
                 stopped |= task_ids
             await asyncio.to_thread(self.delete_workspace, workspace_id)
         except Exception:
@@ -328,11 +329,7 @@ class WorkspaceService:
 
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
-                from app.core.tool.multi_agent.agent_team.team_coordinator import (
-                    get_agent_team_coordinator,
-                )
-
-                get_agent_team_coordinator().cancel_for_task_ids(
+                service_depends.get_agent_team_coordinator().cancel_for_task_ids(
                     set(self._task_crud.list_ids_by_workspace(workspace_id))
                 )
                 log.info(

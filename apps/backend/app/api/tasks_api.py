@@ -108,7 +108,7 @@ async def fork_task(
     except TaskForkConflictError as exc:
         raise HTTPException(
             status_code=409,
-            detail={"code": exc.code, "message": exc.message, "retryable": True},
+            detail={"code": exc.code, "message": exc.message, "retryable": exc.retryable},
         ) from exc
     return TaskResponse.from_record(target)
 

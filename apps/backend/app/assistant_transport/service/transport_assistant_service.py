@@ -30,16 +30,13 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.assistant_transport.state.snapshot_window import HistoryPage, window_snapshot
 from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
-from app.core.tool.background import placeholders
-from app.core.tool.background.backgraound_registry import background_registry, deliver_background_result
+from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.handoff.handoff_registry import handoff_registry
-from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.message_queue.task_message import (
     Delivery,
     TaskMessage,
     UserInputBody,
 )
-from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES
 from app.models.message_metadata import UserMessageMetadata
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
@@ -202,7 +199,7 @@ class TransportAssistantService:
             withdrawn = self._context.exclude_from(task_id, target.sequence, session)
             for tool_call_id in withdrawn:
                 if background_registry.owns(task_id, tool_call_id):
-                    background_registry.cancel(tool_call_id, reason="编辑重跑撤回所在一轮，撤销后台结果")
+                    background_registry.withdraw(tool_call_id)
             # 这一轮发起的交接随之结束：否则资源一直显示交接中，也无法再次交接。
             handoff_registry.drop(task_id, withdrawn)
             task_runtime_spaces.enqueue(task_id, message, session=session)
@@ -244,30 +241,9 @@ class TransportAssistantService:
             KeyError: Task 不存在。
         """
         self._tasks.get_task(task_id)
-        if background_registry.owns(task_id, tool_call_id):
-            return self._cancel_background_work(task_id, tool_call_id)
-        if task_runtime_spaces.get_or_create(task_id).actor.driving:
-            return tool_call_cancellation_registry.mark_cancelled(task_id, tool_call_id)
-        return False
-
-    def _cancel_background_work(self, task_id: int, tool_call_id: str) -> bool:
-        dropped = background_registry.cancel(tool_call_id)
-        if dropped is None:
-            # 与完成或 Run 停止撤销竞争失败：条目已结束，没有可取消的对象。
-            return False
-        if dropped.mode == "background":
-            current = self._tasks.require_current_run(task_id)
-            if current is not None and current.id == dropped.run_id and current.status in ACTIVE_RUN_STATUSES:
-                deliver_background_result(
-                    task_id, tool_call_id=tool_call_id, tool_name=dropped.kind,
-                    result={"end_reason": "cancelled", "message": "The user cancelled this background call."},
-                    cancel_hint=placeholders.USER_CANCELLED_HINT, wake_run_id=current.id,
-                )
-            else:
-                placeholders.settle_placeholders(
-                    task_id, [tool_call_id], "cancelled", placeholders.USER_CANCELLED_HINT
-                )
-        return True
+        return background_registry.request_user_cancel(
+            task_id, tool_call_id, driving=task_runtime_spaces.get_or_create(task_id).actor.driving
+        )
 
     def background_tool_call(self, task_id: int, tool_call_id: str) -> None:
         """把一次前台等待中的工具调用转到后台；结论以后作为 ``background_result`` 回投。

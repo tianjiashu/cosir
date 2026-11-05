@@ -82,17 +82,19 @@ class ToolExecutor:
             return self._budget.apply(gate_outcome.denial, execution_context)
         tool = gate_outcome.tool
 
-        emit(
-            ToolCallStatusChangedEvent(
-                task_id=execution_context.task_id,
-                run_id=execution_context.run_id,
-                step_id=execution_context.step_id,
-                tool_call_id=execution_context.tool_call_id,
-                status="running",
-                # 已过准入：展示的就是交给 handler 的最终参数（含 PreToolUse Hook 改写）。
-                args=gate_outcome.arguments,
+        # 决定重放的 running 已由认领事务发布，带着原卡的预览。重复发布会清掉预览。
+        if execution_context.user_decision is None:
+            emit(
+                ToolCallStatusChangedEvent(
+                    task_id=execution_context.task_id,
+                    run_id=execution_context.run_id,
+                    step_id=execution_context.step_id,
+                    tool_call_id=execution_context.tool_call_id,
+                    status="running",
+                    # 已过准入：展示的就是交给 handler 的最终参数（含 PreToolUse Hook 改写）。
+                    args=gate_outcome.arguments,
+                )
             )
-        )
         observation = self._runner.execute(tool, gate_outcome.arguments, execution_context)
 
         HookInterceptor.safe_fire(

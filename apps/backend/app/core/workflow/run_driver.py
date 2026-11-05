@@ -20,6 +20,8 @@ from app.core.llm_provider.model_failure import (
     classify_model_failure,
     extract_model_response_message,
 )
+from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.cancel_placeholders import cancel_placeholders
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
@@ -85,7 +87,11 @@ class RunDriver:
                 )
 
         except Exception as exc:
+            # 即使失败本身落库出错，未提交的工作也不能继续等待启动。
+            withdrawn = background_registry.withdraw_uncommitted(run.task_id, run.id)
             self._settle_failure(run, exc)
+            if withdrawn:
+                await asyncio.to_thread(cancel_placeholders, run.task_id, withdrawn, "启动失败")
         finally:
             # 兜底回收「点名了已结束的工具调用」这类不会再被消费的工具级信号。
             tool_call_cancellation_registry.clear_task(run.task_id)

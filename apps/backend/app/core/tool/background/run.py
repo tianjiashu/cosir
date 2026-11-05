@@ -1,125 +1,26 @@
-"""后台结果的统一执行入口：登记、前台等待、转到后台与回投。
+"""纯后台作业的登记与回投接线，终端后台命令和子 Agent 共用。
 
-工具只交出一个作业（``BackgroundJob``），这里决定结论去哪：
-
-- **前台**：工具线程等作业结论，期间复查 Run 取消；拿到结论就作为本次工具调用的结果返回。前台
-  没有时限、不会自动转后台：只有用户（看板 / 卡片上）能把它转走，转走与正常结束的先后由登记表的
-  ``settle_foreground`` 在锁内裁决。
-- **后台 / 转到后台**：立即返回占位原因；作业的结论之后经 ``background_registry.complete`` 回投为
-  ``background_result``，不另开等待线程。
-
-结论路由（前台交还工具线程，还是后台回投）在本模块的一把锁里切换：作业可能在转后台的同一刻完成，
-锁保证结论只走一条路。撤销（Run 停止、用户取消）经登记表调用 ``job.cancel``，作业随后以取消结论
-回调；前台据此返回取消结果，后台的回投因条目已出队而被丢弃。
+这里只登记已创建的作业并订阅结论，不启动执行者；前台等待与转后台归终端工具。
 """
 
 from __future__ import annotations
 
-import threading
-from collections.abc import Callable
-from typing import cast
-
-from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob, BackgroundOutcome
-from app.core.tool.background.backgraound_registry import BackgroundMode, background_registry
-from app.models.message_metadata import BackgroundKind
-
-# 前台等待复查 Run 取消的时间片；作业结论与转后台信号都会立即唤醒，不靠轮询。
-_CANCEL_CHECK_SECONDS = 0.25
+from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
+from app.models.message_metadata import BackgroundKind, BackgroundWork
 
 
-def run_background_work(
-    job: BackgroundJob,
-    *,
-    task_id: int,
-    run_id: int | None,
-    tool_call_id: str,
-    kind: BackgroundKind,
-    label: str,
-    mode: BackgroundMode,
-    is_cancelled: Callable[[], bool],
-) -> BackgroundOutcome:
-    """以本次调用（``tool_call_id``）登记作业并按 ``mode`` 取走结论；返回结论或占位原因。
-
-    ``mode`` 是这项工作从哪种方式开始：``background`` 立即返回占位、结论稍后回投；``foreground``
-    由工具线程等着取走。渲染（观察文本、是否挂起、``background`` 标记）交给工具。``label`` 是看板
-    条目与 ``wait_messages`` 提示里这项工作的名字，由工具从模型给的事实里取（命令的 ``description``、
-    子 Agent 的名字），不含前端才有的动词文案。
-
-    前台等待一律登记为可转后台。同步阻塞：前台时阻塞到结论、转后台或 Run 取消，调用方是
-    工具线程。
-    """
-
-    route = _Route()
-    detached = threading.Event()
+def start_background_job(
+    job: BackgroundJob, *, task_id: int, run_id: int | None, tool_call_id: str,
+    kind: BackgroundKind, label: str,
+) -> BackgroundWork:
+    """登记纯后台作业，立即返回占位所需记录；结论由登记表交付。"""
     work = background_registry.register(
-        tool_call_id,
-        task_id=task_id,
-        run_id=run_id,
-        kind=kind,
-        label=label,
-        mode=mode,
-        on_cancel=job.cancel,
-        detached=detached if mode == "foreground" else None,
+        tool_call_id, task_id=task_id, run_id=run_id, kind=kind, label=label,
+        on_cancel=lambda _reason: job.cancel(),
     )
-    if mode == "background":
-        route.to_background(tool_call_id)
-        job.on_done(route.deliver(tool_call_id))
-        return BackgroundOutcome(work=work, placeholder="background")
+    def deliver(result: BackgroundConclusion) -> None:
+        background_registry.complete(tool_call_id, result)
 
-    job.on_done(route.deliver(tool_call_id))
-    while True:
-        if route.wait(_CANCEL_CHECK_SECONDS) or is_cancelled():
-            break
-        if detached.is_set():
-            route.to_background(tool_call_id)
-            return BackgroundOutcome(work=work, placeholder="detached")
-    if not route.has_result():
-        # Run 被取消：撤销作业并等它以取消结论收尾，前台照常返回结果。
-        job.cancel()
-        route.wait(None)
-    outcome = background_registry.settle_foreground(tool_call_id)
-    if outcome == "detached" or (outcome == "gone" and detached.is_set()):
-        # 转后台恰好先于结论被裁决：结论已在手，按后台回投。
-        background_registry.complete(tool_call_id, route.result())
-        return BackgroundOutcome(work=work, placeholder="detached")
-    return BackgroundOutcome(work=work, result=route.result())
-
-
-class _Route:
-    """作业结论的去向：前台交还等待中的工具线程，或后台回投；切换与结论到达在同一把锁内。"""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._arrived = threading.Event()
-        self._background = False
-        self._result: BackgroundConclusion | None = None
-
-    def deliver(self, tool_call_id: str) -> Callable[[BackgroundConclusion], None]:
-        def callback(result: BackgroundConclusion) -> None:
-            with self._lock:
-                self._result = result
-                background = self._background
-                self._arrived.set()
-            if background:
-                background_registry.complete(tool_call_id, result)
-
-        return callback
-
-    def to_background(self, tool_call_id: str) -> None:
-        """切到后台；结论已先到时由这里补投递（否则它会停在前台、无人取走）。"""
-        with self._lock:
-            self._background = True
-            pending = self._result if self._arrived.is_set() else None
-        if pending is not None:
-            background_registry.complete(tool_call_id, pending)
-
-    def wait(self, timeout: float | None) -> bool:
-        return self._arrived.wait(timeout)
-
-    def has_result(self) -> bool:
-        return self._arrived.is_set()
-
-    def result(self) -> BackgroundConclusion:
-        """调用方保证已等到结论（``wait`` 返回 True 之后）。"""
-        with self._lock:
-            return cast(BackgroundConclusion, self._result)
+    job.on_done(deliver)
+    return work

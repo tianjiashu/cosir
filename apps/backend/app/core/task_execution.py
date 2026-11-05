@@ -9,8 +9,7 @@
 信号会让下一个 Run 一启动就被取消）。没有执行者时取消该做什么（挂起 Run 的迁移）不归这里，由 actor
 在 Task 闸门内处理。
 
-打信号与取消这次执行的 Agent Team 合在 :meth:`cancel` 一步：``agent_team`` 工具在线程里阻塞到 Team
-落定、中途不检查信号，Team 必须在发起停止那一刻取消，不能等 Run 落定。
+打信号时一起取消本 Task 的待批准与运行中 Team，收尾时撤销尚未投递的后台结论。
 """
 
 from __future__ import annotations

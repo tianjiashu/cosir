@@ -18,7 +18,8 @@ from typing import cast
 from sqlalchemy.orm.session import Session
 
 from app.config.logging.logger import log
-from app.core.tool.task_tool_scope import fork_tool_schemas
+from app.core.tool.multi_agent.task_tool_scope import fork_tool_schemas
+from app.core.workflow.message_queue.message_bodies import ADVANCING_KINDS
 from app.models import ConversationRunRecord, TaskRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
@@ -166,16 +167,19 @@ class TaskService:
         return self._collect_task_tree_ids(task_id)
 
     def list_task_ids_to_dispatch(self) -> set[int]:
-        """启动时需要拉起 actor 的 Task：外部队列有待处理消息，或当前 Run 挂起等唤醒。
+        """启动时需要拉起 actor 的 Task：外部队列有能推进的消息，或当前 Run 挂起等唤醒。
 
         进程重启后 actor 不会自动恢复：这些 Task 若没人访问，已到达的消息不会被处理、挂起的 Run
-        也等不到唤醒。遗留 running Run 已由恢复流程收敛为 cancelled，不在此列。
+        也等不到唤醒。遗留 running Run 已由恢复流程收敛为 cancelled，不在此列；只有通知的 Task
+        也不在此列——通知不推进 Run，随它下次被驱动时并入（见 ``ADVANCING_KINDS``）。
         """
         from app.models.enums.conversation_run_status import ConversationRunStatus
         from app.storage.crud.task_message_crud import TaskMessageCrud
 
         with self._session_factory() as session:
-            pending = TaskMessageCrud().list_task_ids_with_pending(session)
+            pending = TaskMessageCrud().list_task_ids_with_pending(
+                session, kinds=ADVANCING_KINDS
+            )
             suspended = self._task.list_ids_with_current_run_status(
                 ConversationRunStatus.SUSPENDED.value, session=session
             )
@@ -542,6 +546,7 @@ class TaskService:
                 if task_ids <= stopped:
                     break
                 await self._task_register.stop(task_ids - stopped)
+                await service_depends.get_agent_team_coordinator().drain_for_deletion(task_ids)
                 stopped |= task_ids
             return await asyncio.to_thread(self.delete_task, task_id, fork_ids)
         except Exception:
@@ -662,12 +667,10 @@ class TaskService:
     def _delete_task_locked(self, task_id: int, fork_ids: frozenset[int]) -> TaskDeletionResult:
         """在已持有 workspace 闸门时删除任务树（及给定的 fork 后代），不触发附件清理。"""
 
-        from app.core.tool.handler.agent_team.coordinator import get_agent_team_coordinator
-
         tree_ids: set[int] = set()
         for root_id in (task_id, *fork_ids):
             tree_ids |= self._collect_task_tree_ids(root_id)
-        get_agent_team_coordinator().cancel_for_task_ids(tree_ids)
+        service_depends.get_agent_team_coordinator().cancel_for_task_ids(tree_ids)
         return self._delete_task_after_operations(task_id, fork_ids)
 
     def _delete_task_after_operations(
@@ -769,7 +772,7 @@ class TaskService:
         撤销，空闲（Run 已完成、后台命令还在跑）或挂起（等后台结论）的 Task 没有执行者。撤销会
         终止后台命令；占位行已随删除消失，不结算。
         """
-        from app.core.tool.background.registry import background_registry
+        from app.core.tool.background.backgraound_registry import background_registry
         from app.core.tool.handoff.handoff_registry import handoff_registry
 
         service_depends.get_terminal_session_service().delete_task_sessions(result.task_ids)

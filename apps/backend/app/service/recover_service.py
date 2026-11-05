@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 from app.config.logging.logger import log
 from app.core.context.tool_call_closure import ContextProtocolError
-from app.core.tool.background import cancel_placeholders
+from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cancel_placeholders
 from app.core.workflow.message_queue.message_bodies import NoticeBody
 from app.core.workflow.message_queue.task_message import BackgroundResultBody, TaskMessage
 from app.models import (
@@ -55,10 +55,8 @@ class RecoverService:
         """
 
         # coordinator 消费已装配的工具系统，且与 service 层互相引用，惰性导入。
-        from app.core.tool.multi_agent.agent_team.team_coordinator import get_agent_team_coordinator
-
         recovered_runs = self.recover_orphaned_runs()
-        orphan_node_task_ids = get_agent_team_coordinator().recover_after_restart()
+        orphan_node_task_ids = service_depends.get_agent_team_coordinator().recover_after_restart()
         cancelled_node_run_ids = self.cancel_orphaned_team_nodes(orphan_node_task_ids)
         dispatch_task_ids = service_depends.get_task_service().list_task_ids_to_dispatch()
         for task_id in dispatch_task_ids:
@@ -96,9 +94,7 @@ class RecoverService:
             for message in queue.pending_nowait(task_id)
             if isinstance(body := message.body, BackgroundResultBody) and body.tool_call_id is not None
         )
-        return placeholders.cancel_placeholders(
-            None, None, placeholders.INTERRUPTED_HINT, exclude=queued
-        )
+        return cancel_placeholders(None, None, INTERRUPTED_HINT, exclude=queued)
 
     def notify_interrupted(self, task_ids: Iterable[int]) -> None:
         """给被中断的 Task 各投一条重启通知，等它们下次驱动时并入。

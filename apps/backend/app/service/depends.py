@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.transport_assistant_service import (
         TransportAssistantService,
     )
+    from app.core.tool.multi_agent.agent_team.team_coordinator import AgentTeamCoordinator
     from app.core.workflow.conversation_run_ledger import ConversationRunLedger
     from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
     from app.service.conversation_run.conversation_task_context_service import (
@@ -81,6 +82,14 @@ def close_service_dependencies() -> None:
     reset_service_dependencies()
     workspace_operations.close()
     close_storage()
+
+
+@lru_cache(maxsize=1)
+def get_agent_team_coordinator() -> AgentTeamCoordinator:
+    """持有本次后端生命周期的 Team 执行任务，关闭执行后随存储依赖一起释放。"""
+    from app.core.tool.multi_agent.agent_team.team_coordinator import AgentTeamCoordinator
+
+    return AgentTeamCoordinator()
 
 
 @lru_cache(maxsize=1)
@@ -409,6 +418,7 @@ def reset_service_dependencies() -> None:
     get_workspace_files_service.cache_clear()
     _shutdown_cached_runtime_before_reset()
     ConversationTaskStateService.clear_process_state()
+    get_agent_team_coordinator.cache_clear()
     get_workspace_service.cache_clear()
     get_conversation_run_ledger.cache_clear()
     get_recover_service.cache_clear()

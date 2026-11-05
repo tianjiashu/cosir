@@ -3,8 +3,11 @@
 一个 xterm 实例对应一条连接：首帧 ``attach`` 后服务端先重放输出、再推送实时输出与尺寸 / 输入标记 /
 退出帧；客户端可发送 ``input`` / ``resize``（交还交接走 HTTP 决定入口）。
 连接建立时按 Task 归属取到会话 runtime，之后输入直接调用它（只做内存更新与非阻塞入队），输出由订阅的
-``asyncio.Queue`` 推送，
-全程没有线程池轮询。断开连接只移除订阅，不关闭会话、不取消 Run。
+``asyncio.Queue`` 推送。断开连接只移除订阅，不关闭会话、不取消 Run。
+
+对 runtime 的调用一律经 ``asyncio.to_thread``：它们要拿会话的线程锁，而工具线程会在同一把锁里执行
+Agent 给的正则（条件等待、搜索）。在事件循环里直接拿锁，一次卡住的正则就会拖住整个后端；同一连接内
+逐个 ``await``，输入顺序不变。
 """
 
 import asyncio
@@ -58,9 +61,11 @@ async def terminal_session_stream(
             await _send_protocol_error(websocket, session_id, exc.code, _public_error(exc))
             return
         try:
-            attachment = runtime.subscribe(after_seq, asyncio.get_running_loop())
+            attachment = await asyncio.to_thread(
+                runtime.subscribe, after_seq, asyncio.get_running_loop()
+            )
         except TerminalSessionResyncRequiredError as exc:
-            await websocket.send_json(runtime.resync_event(exc.after_seq))
+            await websocket.send_json(await asyncio.to_thread(runtime.resync_event, exc.after_seq))
             await websocket.close(code=1013, reason="terminal output resync required")
             return
         except TerminalSessionError as exc:
@@ -97,7 +102,8 @@ async def terminal_session_stream(
         await _send_protocol_error(websocket, session_id, _PROTOCOL_ERROR_CODE, str(exc))
     finally:
         if runtime is not None and subscription is not None:
-            runtime.unsubscribe(subscription)
+            # 收尾也不在事件循环里拿锁；shield 保证连接被取消时订阅照样移除。
+            await asyncio.shield(asyncio.to_thread(runtime.unsubscribe, subscription))
             subscription.close()
             log.info("terminal_stream_detached", extra={"msg": "终端交互通道断开", "data": log_data})
 
@@ -121,7 +127,7 @@ async def _serve(
         while True:
             event = await subscription.get()
             if event["type"] == OVERFLOW_EVENT_TYPE:
-                await send(runtime.resync_event(None))
+                await send(await asyncio.to_thread(runtime.resync_event, None))
                 await websocket.close(code=1013, reason="terminal stream backpressure")
                 return
             await send(event)
@@ -159,7 +165,7 @@ async def _handle_client_frame(
             _require_keys(frame, {"data_base64"})
             data = _decode_input(frame["data_base64"])
             try:
-                result = runtime.user_input(data)
+                result = await asyncio.to_thread(runtime.user_input, data)
             except TerminalWorkerBackpressureError:
                 await send({**identity, "type": "input_rejected", "reason": "backpressure"})
                 return
@@ -168,7 +174,7 @@ async def _handle_client_frame(
         elif kind == "resize":
             _require_keys(frame, {"rows", "cols"})
             rows, cols = _bounded_int(frame["rows"], 2, 500), _bounded_int(frame["cols"], 10, 1000)
-            runtime.resize(rows, cols)
+            await asyncio.to_thread(runtime.resize, rows, cols)
         else:
             raise ValueError(f"unsupported terminal control frame: {kind!r}")
     except TerminalWorkerBackpressureError:

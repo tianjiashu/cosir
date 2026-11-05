@@ -5,6 +5,7 @@ from typing import Literal, NotRequired
 from typing_extensions import TypedDict
 
 from app.models.enums.tool_call_status import ToolCallEventStatus
+from app.models.message_metadata import BackgroundKind
 
 # 与事件侧共用同一事实来源，避免两处字面量漂移。
 ToolCallStatus = ToolCallEventStatus
@@ -14,7 +15,7 @@ class ConversationBackgroundWork(TypedDict):
     """后台占位上的工作记录（``BackgroundWork`` 的 wire 形状）。卡片只看它在不在；看板从工作副本里
     的这些记录投影，所以它们随 part 进入快照，看板不另外查库。"""
 
-    kind: Literal["terminal_command", "child_agent"]
+    kind: BackgroundKind
     label: str
     startedAt: str
     endedAt: str | None

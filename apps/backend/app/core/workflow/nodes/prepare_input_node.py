@@ -222,7 +222,7 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
         if claim_decision:
             call_id = cast(DecisionBody, current.body).tool_call_id
             placeholder = context.tool_result_metadata(call_id)
-            if placeholder is not None and placeholder.status == "pending":
+            if placeholder is not None and placeholder.awaiting_decision:
                 context.update_tool_result_metadata(
                     call_id, ToolMessageMetadata(status="running"), session=session
                 )

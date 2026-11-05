@@ -244,7 +244,7 @@ vision_input 在请求副本里把 cosir-attachment:// 解析成 data URL（与�
 
 | 场景 | `capturePage` | CDP 截图 | CDP 点击 / 输入 | 视口 |
 | --- | --- | --- | --- | --- |
-| 视图摘离窗口 | 不可用（`Current display surface not available`） | 可用 | 可用 | 1280×800，`visibilityState=visible` |
+| 视图摘离窗口 | 不可用（`Current display surface not available`） | 可用 | 输入可用；鼠标须开 `Emulation.setFocusEmulationEnabled`（阶段 1 查明，见 §17） | 1280×800，`visibilityState=visible` |
 | 挂在窗口上但 `setVisible(false)` | 不可用 | 可用 | 可用 | 1280×800 |
 | 挂在窗口上、移到屏幕外 | 空图 | 超时 | 点击无效 | 0×0（不可用） |
 | 挂在主页面下层 | 可用 | 可用 | 可用 | 1280×800；窗口隐藏到托盘后仍可用 |
@@ -290,6 +290,9 @@ vision_input 在请求副本里把 cosir-attachment:// 解析成 data URL（与�
 - 2026-10-31 实测后改定：截图与冻结帧用 CDP `Page.captureScreenshot`（摘离窗口的视图 `capturePage` 不可用）；不可见标签摘离窗口而不是移到屏幕外。
 - 2026-10-31 文件与浏览器改为独立的右侧停靠面板，与工作台三选一显示；浏览器面板的 `+` 让用户在当前 Task 里新开标签（行为类似可交互终端），修订上面「v1 不做用户独立浏览」：仍无独立浏览，用户开的标签同样归 Task。
 - 2026-10-31 P3-2 拆成 P3-2a（引擎 + `browser_navigate` / `browser_snapshot` 最薄工具，端到端可用）与 P3-2b（工作台显示）。
+- 2026-11-01 阶段 1：JS 弹窗改为等用户或 Agent 作答（网页 preload 接管，修订「JS 弹窗自动关掉」）；下载落到 Task 工作区 `.cosir/Download`（修订「下载一律拒绝」）；页面开出的窗口收养为标签并保留 opener；Agent 视口固定 1280×800、面板等比缩放；标签上下文统一由后端按 Task 解析。备注统一呈现另行设计（AGENTS.md 待办）。
+- 2026-11-02 阶段 2 前置重构与调试能力（P0–P1）：工具参数契约以后端参数模型为唯一来源，导出 schema 由宿主校验（ajv），修订「宿主 `params.ts` 与后端两边同步修改」；新增 `browser_evaluate`，修订 v1「不开放任意 JS 执行工具」（审批与域名限制记入安全待办）；视口与深浅色改由 Agent 设定，修订「Agent 视口固定 1280×800」；console 不开 `Runtime.enable`，用 Electron `console-message`。
+- 2026-11-02 视口改为两种来源，修订「Agent 视口固定 1280×800、面板等比缩放」：固定视口在窄面板里被缩到约 0.35，用户看不清、交接时没法操作。默认跟随面板占位区域（1:1），面板尺寸停稳 200ms 后才跟上、从面板摘下时保持原大小（保住当初固定视口要的稳定性）；Agent 用 `viewport` 固定尺寸时沿用等比缩放，`viewport: "auto"` 回到跟随；页面结果标出视口是否跟随面板。
 
 ## 11. P3-1 实施清单：通用宿主工具链路
 
@@ -547,4 +550,87 @@ vision_input 在请求副本里把 cosir-attachment:// 解析成 data URL（与�
 - 渲染进程：`lib/layout/dock-store.ts`（停靠区三选一与浏览器铺满）、`components/layout/use-dock-panels.ts`（可显示条件、宽度、快捷键，取代 `use-workbench-panel.ts`）、`components/layout/dock-frame.tsx`（文件与浏览器面板共用外框）、`components/files/files-panel.tsx`、`components/browser/browser-panel.tsx` + `browser-view.tsx`、`lib/browser/panel-store.ts`、`lib/browser/open-tab.ts`。工作台删去 `files` / `browser` kind 与 `panelOpen`；会话侧栏的浏览器卡片删除。
 - 测试：单测 622 条通过；浏览器 E2E 改为面向独立面板（文件面板标签「文件」、收起按钮「收起文件」、宽度 `setDockWidth`），测试宿主替身补上 `browser` 能力（空标签）；剩余失败与 HEAD 基线一致。桌面 E2E 17 条通过。真实应用里验证：地球按钮打开面板、空状态输入网址新开标签并渲染页面、角标计数、铺满与还原、文件面板。
 - 已知：对话区被压到最小宽度（400px）时，输入框工具栏的「暂无可用模型 / 模型设置」文字会竖排换行，属于输入框工具栏自身的收窄问题，与面板无关，未在本次处理。
+
+## 17. 阶段 1 实施记录：页面事件归标签、视口与显示分离（2026-11-01）
+
+**根因与改法**（四个缺陷归三处结构）：
+- 页面发起的事没有统一归属、用户被排除在外：弹窗只能自动取消，下载在分区级取消且不知道来自哪个标签。改为分区事件按来源网页交给所属标签（`BrowserHost` 实现 `BrowserSessionEvents`）；待答弹窗是标签上的唯一事实（`page-dialogs.ts`），投影进标签摘要（面板提示条）与页面结果（Agent 的 `dialog` 动作）；下载由 `tab-downloads.ts` 落盘并进摘要（面板下载条）。
+- 标签假定页面总是自己新建：改为两种来源（新建 / 收养 `createWindow` 交来的 webContents），并补上「页面自己关掉」这条注销路径。
+- 视口与显示是同一个值：视口归标签（CDP 设备模拟），`place` 只算等比缩放后的矩形；CDP 合成输入的坐标在 `toInput` 一处乘缩放比例。
+
+**实测结论**（Electron 44.7.2）：
+- 关掉 `disableDialogs` 用原生弹窗：标签摘离窗口时主进程被卡约 450ms、confirm 被自动当成确定；Electron 无拦截钩子。改用 preload 在主世界接管、同步 IPC 等宿主作答（iframe 同样接得住）。
+- 弹窗等待期间页面线程停着：读无障碍树、执行脚本、截图都挂住，加载中的弹窗也挡住 load 事件。所以弹窗打开即让在途 CDP 以 `DIALOG_OPEN` 失败、让导航与动作后的等待结束。
+- 设备模拟缩放下，用户真实点击由 Chromium 换算；CDP 合成鼠标事件按视图坐标（缩放 0.5 时点 1050 落到 2100）。
+- **既有缺陷**：从没挂过窗口的视图收不到 CDP 合成鼠标事件（点击不触发、每事件空等约 1.8 秒），开焦点模拟后正常。桌面 E2E 里 Playwright 接管页面时自己开了焦点模拟，所以一直没测出来；改由 `browser-initialization` 单测守住初始化顺序。
+- webContents 销毁后再读 `WebContentsView.webContents` 会抛错：`BrowserTab` 构造时持有自己的 webContents 引用。
+
+**验收**：桌面 E2E 19 条（新增弹窗作答与同批确认、opener 往返与自关闭、下载落盘、缩放下点击），测试入口窗口改为隐藏、不进 Dock；前端单测 719 条；后端浏览器相关 61 条（全量另有 2 条 `test_task_message_render` 失败，HEAD 上即失败，与本次无关）。用户在面板里选文件需点系统对话框，未自动化覆盖。
+
+### 17.1 复核后的结构修正（2026-11-02）
+
+阶段 1 落地后按第零铁律复核（主 Agent 深读 + 两个只读子 Agent 独立复核），四处隐含假设没查到底，按根因改：
+- **「一个标签一个弹窗、只挡住自己」不成立**：同步 IPC 停住的是整个渲染进程。「页面为什么停着」改由 `BrowserHost.pausedBy` 按进程判断，弹窗打开时同进程标签在途 CDP 一起失败、错误指明去哪个标签作答；弹窗带单调 id，用户与 Agent 都按 id 作答（过时的作答不落到新弹窗）；收养的标签加载中弹窗时初始化等作答而不是失败。
+- **「`DIALOG_OPEN` = 动作已生效」不成立**：各动作声明生效命令（`page-input.ts` 的 `effect`），只有在它上面遇到弹窗才算动作触发；`wait_for` 等不算。
+- **下载归属层级错**：登记从标签上移到 Host（`downloads.ts`，按 Task），标签关闭不取消下载，同名避让跨全部登记，落盘失败在边界收住；推送改为 `BrowserState`（标签 + 下载）。
+- **缩放有两个值**：抽出 `tab-viewport.ts`，合成输入按已生效的缩放换算，期望与生效不一致时补设。
+- 修正中实测推翻的一条复核意见：收养页面时传给 `WebContentsView` 的 `webPreferences` 并非无效参数——只给 `overrideBrowserWindowOptions` 时网页 preload 在弹出页不生效（弹窗走原生路径被自动取消）。另查出同类生命周期缺口：弹出页下载很快完成后自己关闭，下载备注随标签消失；改为页面自己关掉时把未读备注转给来源标签。
+- 其余：每个请求都刷新上限（`latestLimits` 注释与事实一致）；用户选文件须标签挂在面板上；导航先校验再取消弹窗；渲染进程退出清掉待答弹窗；宿主错误只陈述事实、建议只在后端建议表。
+- 刻意不做：备注与页头的网站文字进边界标签、渲染进程转交下载目录（归安全与备注两条待办）；冻结帧摆放规则两处各写（低风险，已注明对应关系）。
+
+### 17.2 真实应用验收（2026-11-02）
+
+用 Playwright `_electron` 驱动构建产物（真实后端、临时数据根），走面板交互并逐张看截图：新开标签、confirm / prompt 提示条作答、下载落盘与下载条、弹出页跟随与自关回到来源、铺满后视口不变，9 项检查全部通过。看截图又查出两处检查项发现不了的缺陷，已修：
+- **缩放同步卡死**（`tab-viewport.ts`）：`syncing ??= (async () => …)()` 在期望等于已生效时同步跑完，`finally` 先清标记、`??=` 再把已完成的任务赋回去，此后同步全被跳过；提示条、下载条让占位区域移动（宽度不变）就会触发，表现为铺满后网页不放大。改为布尔标记、进循环前置上、最后一次比较的同一拍清掉，补了回归单测。
+- **收养视图内部不按 bounds 布局**：弹出页的网页铺到窗口右下角、盖出面板（bounds 本身正确）。实测与 `content-bounds-updated` 无关，接手完成后发生一次真实尺寸变化即纠正，改为收养的标签初始化完成时重新布局一次（`BrowserTab.relayout`）。
+- 显示上改为水平居中、顶部对齐（原上下居中会在网页上方留一条空白），宿主摆放与冻结帧 `object-top` 同步改。
+- 缩放每次设置成功记 `browser_viewport_applied`（含比例）：这次靠它的时序定位到卡死。
+
+## 18. 阶段 2 前置重构与调试能力（P0–P1，2026-11-02）
+
+**结构调整（先重构再新增）**：
+- CDP 会话层 `cdp-session.ts`：命令唯一出口（闸门、按次时限）与事件唯一入口（按方法名订阅），取代 `BrowserTab` 里写死的事件分支；加载等待移到 `page-loading.ts`。`BrowserTab` 只负责组合与生命周期。
+- 标签日志 `tab-log.ts`：页面事件（备注）、console、网络共用单调序号、分类计容量；读取不消费，页面结果是「上次以来」唯一的消费点（`BrowserHost.result` 调 `digest`）。修复：交接首次调用为拿标签 id 读快照（`browser.snapshot` 返回页面结果，会消费），吞掉了交接前的备注——现在交接改用 `browser.tabs`；`BrowserTab.snapshot` 本身不碰日志，只有组装页面结果的地方消费。
+- 设备模拟 `tab-emulation.ts`（由 `tab-viewport.ts` 泛化）：视口、mobile（含触摸支持）、深浅色与显示缩放一份期望 / 已生效状态，已生效状态按命令分段更新；等比摆放只在这里算（占位矩形 × 期望视口 → 缩放，占位矩形 × 已生效视口 → 视图 bounds），改视口时一条命令设对缩放，Host 不再保留占位矩形重新摆放；设置失败时期望值对齐到已生效的那份（不留待补设的要求，也不撤回已生效的部分）。全局 `VIEWPORT` 常量删除。
+- Agent 操作统一经 `BrowserHost.operate`：带「请求取消或标签关闭」的组合信号，标签中途关闭一律报 `TAB_NOT_FOUND`（原先只有 act 兜住，其余退化成宿主内部错误或等满时限）；用户侧导航跟随标签生命周期；等加载在标签已销毁时不再 `stop()`（原先会在监听器里抛出未捕获异常）。等导航落定只认一个结束信号——加载状态结束（`did-stop-loading`，与动作后的等待同一个判断），期间换没换文档、有没有真正失败只用来分类结局：原先只认「完成 / 失败」，转成下载、204、跳转被拦下的导航两种事件都不发（实测只有加载开始与结束，5ms 内），要空等 30 秒报失败；现在按成功返回原页面并留备注，没换文档的导航在标签一侧同一时刻收尾（`navigating` 与日志的导航起点）。实测被重定向、加载中脚本跳转顶掉时加载状态不会中途结束。同进程的弹窗答完或取消时，同进程标签都补设被闸住的设备模拟；设备模拟的追赶不随某个调用方取消而停下。
+- 契约单一来源：后端参数模型按线上实际形状（`model_dump()` 原样发送、每个字段都在、未填为 null）导出 `contract/tool-args.schema.json`，宿主 `params.ts` 按它校验，两端都不再去 null、补缺省值（只手写宿主自己的键与地址协议）；出站形状只在 `wire.ts`；错误码登记在 `errors.ts`（联合类型），后端一张建议表对应。跨语言由 `contract/wire-samples.json`（每个渲染分支一份样例：宿主断言输出、后端渲染）与后端守卫测试守着。
+- 后端 `common.py` 拆为 `host_request.py`（请求组装）、`rendering.py`（页头与各种正文；快照、弹窗、日志条目、脚本值与报错进边界标签，页头标题与备注仍在标签外，见 AGENTS.md 待办）、`errors.py`（错误建议表）。
+
+**新增能力**：页面类结果（含截图）带主文档 HTTP 状态码（`did-navigate`）、生效的视口与模拟（总是写）、「上次页面结果以来」的新日志计数（只算当前页面、与不带 since 的日志读取同一范围；失败请求按落定时刻计，被取消的不算）；`browser_logs`（console / 网络，序号游标；三种「没给全」由宿主一处判定：当前页更早的超出 limit、后面还有、已被容量挤掉；主文档请求从导航开始就算进新页面；跨进程 iframe 与 worker 的请求不在内）；`browser_evaluate`（`page-evaluate.ts`：拿对象句柄后在页面里 `JSON.stringify`，转不成 JSON 的报成脚本错误、DOM 节点给描述；等待 Promise 有时限，超时时主线程仍被占着才 `Runtime.terminateExecution` 打断（先以一条最简单的求值探测；只在等 Promise 时不发，否则会误杀页面接下来执行的脚本；实测死循环被打断后标签可继续用），超时、脚本抛错与执行中页面跳走都按成功返回并写明；调用前已有弹窗即整次失败，执行途中新弹的才算脚本弹的）；`browser_navigate` 的 `viewport` / `color_scheme`（加载前生效、保持到再次修改）。
+
+**实测**（Electron 44.7.2）：`console-message` 不开 `Runtime.enable` 即覆盖主框架、iframe、跨进程 iframe、未捕获异常与未处理拒绝（开发期 Electron 安全警告需过滤）；`did-navigate` 带状态码（404 照报，重定向报最终码）；`setEmulatedMedia` 压过应用的原生外观、导航后保持；手机布局下没有 viewport meta 的页面按 980px 排版（与真实手机一致）；经 debugger 传回的对象键按字母序。
+
+**验收**：桌面 E2E 29 条（新增经方法注册表与线上形状的状态码、日志、执行 JS、模拟四条，含改视口后的重新摆放）；子 Agent 复核（宿主、后端与契约各一路）五轮，第五轮通过，前四轮发现的问题均按根因修复；刻意不做：`new_logs` 不带 `since` 游标（失败数按落定时刻计、与按开始序号翻页的日志游标不是同一把尺，给了反而误导），`ActResult.failure.code` 仍为 `string`（`HostMethodError.code` 是链路通用类型）。已知未处理（旧有、低频）：收养的弹出页初始化期间同进程来源页弹窗，初始化命令失败、弹出页被关掉；Agent 对「加载中弹窗、等作答」的收养标签导航，要等初始化完成而初始化在等作答，调用挂到时限。act 做完后读快照时被同进程别的标签的弹窗停住，整次以 `DIALOG_OPEN` 失败、已生效的步数没有带回（页面结果只能表达本标签的弹窗，要表达需改结果形状）。`escape_tag` 区分大小写（存量共用实现，归安全待办）。执行 JS 超时打断前的探测分不清占着主线程的是不是这段脚本（低概率误打断同进程的长任务）。
+
+## 19. 阶段 3 实施记录：Agent 能操作的范围（2026-11-02）
+
+**结构调整（先重构再新增）**：`page-input.ts` 按输入方式拆成 `input/`（`actions.ts` 只做调度、批次与弹窗归因，穷尽分派；`pointer` / `keyboard` / `modifiers` / `page-functions` / `upload` / `wait` / `element` 各管一类）。CDP 会话支持跨进程子框架的子会话（命令带 `sessionId`、事件带来源会话、`on` 可退订）与「浏览器进程作答」的命令（`browserSide`，不过弹窗闸门）。ref 登记按「会话 + 节点 id」（跨进程子框架的节点 id 与主框架重号）。读路径规则收成 `PathResolver.resolve_for_read`（`read_file` / `read_image` / 上传共用，删掉两处重复与 `read_file` 的死分支）。
+
+**新增能力**：快照给「看起来可点」的无语义元素 ref（`DOMSnapshot` 的 cursor，只认最外层 pointer，标 `[cursor=pointer]`），链接带地址；click 可右键、双击、带修饰键，click / hover 可用视口坐标（与视口截图像素一致，越界报 `OUT_OF_VIEWPORT`），新增 drag；type 可逐键输入（`key_by_key`，≤500 字）；新增 upload（ref 指向文件输入框，或省略而回答 Agent 动作打开的选文件框；后端按读规则解析成绝对路径并确认存在，宿主只收绝对路径；新码 `NO_FILE_INPUT`）；快照沿 iframe 逐层展开（`snapshot-read.ts`，至多 10 个、3 层；同进程按 frameId 读，跨进程经自动附加的子会话读），元素操作发到节点所在会话、坐标加上逐层 iframe 的偏移（`page-frames.ts`），跨进程子框架的选文件框同样拦下交给 upload。
+
+**实测**（Electron 44.7.2）：不在面板上的标签视图不在任何窗口里，HTML5 拖放的系统会话起不来、drop 永远不来——拖动期间开 `Input.setInterceptDrags`，拦下后在终点投递 dragenter / dragover / drop（挂在面板上也走同一条路），拦截收尾必撤；拖放事件的坐标是页面 CSS 像素、不是鼠标事件用的视图坐标（面板缩放显示时按视图坐标发会落到一半处，真实应用验收发现，隐藏窗口的 E2E 不缩放所以测不出，已补缩放下的回归）；iframe 元素经 `DOM.describeNode` 得到的 frameId 即跨进程子框架的 targetId；主会话事件的 sessionId 是空串；不存在的上传路径被 CDP 静默换成空文件。
+
+**验收**：真实应用 + 本机假模型按剧本走完整链路（模型 → 后端工具 → 宿主工具链路 → 内置浏览器，标签挂在面板上），17 项全部通过。
+
+**已知未处理**：`wait_for` 只看主框架文字；网络日志不含跨进程子框架的请求（子会话不开 Network）；同一次拖动里按下或 drop 时弹窗，鼠标按键状态留在页面里（与点击相同）。
+
+## 20. 阶段 4 实施记录：上下文效率（2026-11-02）
+
+**结构调整（先重构再新增）**：快照拆成三层，放进 `browser/snapshot/`：`read.ts`（CDP：无障碍树、`DOMSnapshot` 的光标与元素框，沿 iframe 逐层读）→ `outline.ts`（纯函数：带稳定键、层级、ref、是否在视口的条目；ref 对整棵树分配，任何视图里都是同一套）→ `views.ts`（整页分页、视口内、关键词查找、增量）。原 `snapshot-format.ts` / `snapshot-read.ts` 删除；`BrowserTab.snapshot` 只返回大纲，视图由 `BrowserHost.result` 按请求选。截图搬到 `page-capture.ts`；`input/element.ts` 抽出 `box()`，动作落点与元素截图共用；`BrowserTab.pageSession` 供动作与元素截图共用。
+
+**新增能力**：act 之后只回传与这个标签上次结果相比的增量（按条目键比对：新增、文字变化、换了父条目、消失的只列最外层；换文档、变化超四成、超预算时给整页；基准在 `BrowserHost.result` 推进，与日志 `digest` 同一个消费点）；`browser_snapshot` 的 `scope=viewport` 与 `find`（筛选行加祖先，开头说明看的是哪部分、占整页多少行）；`browser_screenshot` 的 `ref`（元素截图：加边距、较短边放大到 160 像素至多 4 倍、可超出视口）。标注截图移出本阶段，记入 AGENTS.md 待办。
+
+**实测**：`DOMSnapshot` 的元素框与滚动偏移是设备像素、所属文档坐标（Retina 上翻倍），与面板缩放、手机模拟无关，同进程子框架相对它自己的文档——几何只在 `layout.ts` 换算一处，子框架可见区域由它的 iframe 元素在上一层的可见部分推出；无障碍节点 id 即 DOM 节点 id、多次读取不变；文字节点常被整个替换（`textContent`、框架重新渲染），所以文字行按「所在节点 + 第几段」认，否则改字会报成一增一删。
+
+**已知未处理**：可滚动容器里被裁掉的内容仍按视口内列出；增量的基准是宿主「上次交出去的」，编辑重跑撤掉那一轮后与模型看到的可能不一致（开头已提示改用 `browser_snapshot` 取整页）；一次全量 E2E 出现过不可复现的失败（同一轮后续用例未执行，疑为测试进程异常），后续三轮全量与单例重复 8 次均通过。
+
+## 21. 阶段 5 实施记录：与 Agent 的交互（2026-11-02）
+
+**范围**（用户确认）：用户侧的浏览器功能（关键词搜索、缩放、右键菜单、页内查找、开发者工具、快捷键、站点数据、剪贴板）不做——本机有自己的浏览器，内置浏览器的价值在于和 Agent 协作；面板不放停止按钮，停 Agent 用对话里已有的停止或取消。
+
+**做了什么**：面板在 Task 运行时于网页上方提示「Agent 正在运行，可能会操作这个页面」，正在执行时改为「正在操作」（`AgentActivityBar`；运行与否只读任务状态推送，正在执行读宿主标签事实 `agentBusy`——`BrowserHost.operate` 一处计数，0 与非 0 切换时推送）；标签条上正在执行的标签有动态标记；优先级：网页弹窗 > 交接 > 这条提示。动作执行前在目标上画框（`TabHighlight`，CDP Overlay，约 0.6 秒收起，只在标签挂在面板上时量位置并画；`input/highlight.ts` 在调度处统一调用，量不到就不画、不替动作报错）。工具卡片列出 act 的每一步：宿主分配 ref 时记下元素的角色与名称，act 结果带每步目标说明（`input/targets.ts`），后端按宿主报的停在哪一步投影 `steps`（失败那步带短提示，原来只会让 act 停下的错误码补上了短提示），前端按动作类型查动词、有失败时默认展开。
+
+**顺带修的已有缺陷**：沿用 Electron 默认菜单时，焦点在网页里按 Cmd+R 刷新的是整个应用、Cmd + / - 缩放的是有焦点的网页（会改掉 Agent 看到的布局）——改为显式应用菜单（`app-menu.ts`），「视图」菜单只在开发时保留，编辑菜单保留；地址栏把 `localhost:3000` 当成名为 `localhost:` 的协议拦下、本机地址补成 https——补全规则收进 `web-url.ts` 的 `addressToUrl`，本机地址补 http。
+
+**实测**（真实应用）：Overlay 框用户看得见，收起后消失；但它会进 `Page.captureScreenshot`——所以 `BrowserTab.screenshot` 截图前一律先收起。框的坐标是 CSS 像素除以 `devicePixelRatio`，与面板显示缩放无关（三组数据一致；按 CSS 像素画在 Retina 上落到两倍处，照合成输入那样乘显示缩放则落到 1.12 倍处）——第一版按 `toInput` 换算画偏了，是真实应用验收逐帧截窗口才发现的；隐藏窗口里不合成画面，E2E 测不出来。面板在运行中多出一行提示条，网页区域随之下移、重新摆放。
 

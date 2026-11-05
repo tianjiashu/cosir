@@ -41,10 +41,19 @@ class TaskMessageCrud:
         )
         return [TaskMessage.of_model(row) for row in session.scalars(statement)]
 
-    def list_task_ids_with_pending(self, session: Session) -> list[int]:
-        """返回外部队列里有待处理消息的 task id。"""
+    def list_task_ids_with_pending(
+            self, session: Session, *, kinds: frozenset[str] | None = None
+    ) -> list[int]:
+        """返回外部队列里有待处理消息的 task id；``kinds`` 限定哪些消息算待处理。
 
-        return list(session.scalars(select(TaskMessageModel.task_id).distinct()).all())
+        能推进 Run 的 kind 由 ``message_bodies.ADVANCING_KINDS`` 提供：通知这类不推进的消息
+        仍会在队列里等下次并入，但不该让启动调度为它拉起 actor。
+        """
+
+        statement = select(TaskMessageModel.task_id).distinct()
+        if kinds is not None:
+            statement = statement.where(TaskMessageModel.kind.in_(kinds))
+        return list(session.scalars(statement).all())
 
     def delete_one_returning(
             self, session: Session, task_id: int, message_id: int

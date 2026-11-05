@@ -162,7 +162,7 @@ Worker，注入其绝对路径，并在启动 Electron 前确认产物存在。
 
 开发启动时，入口先启动 Vite 前端，再启动 Electron；宿主在未打包时先用 `uv` 按 `apps/backend/uv.lock` 同步后端依赖、解析出解释器，再**直接托管该解释器**（`python -m app`）——`uv` 只参与环境解析，不作为被监督的进程。首次启动后，在界面中打开**模型设置**，配置 Provider 和模型，再选择一个本地文件夹创建工作区。
 
-开发后端使用 workspace 构建出的 `target/debug/terminal-worker`。`npm run build:bundle` 会生成真实的后端与 release 版 Terminal Worker 资源；安装包打包尚未接入。
+开发后端使用 workspace 构建出的 `target/debug/terminal-worker`。终端命令（`execute_terminal` 与交互终端）都由它启动，所以绕过桌面宿主直接跑后端时，要先 `cargo build -p cosir-terminal-worker`，并把 `CODING_AGENT_TERMINAL_WORKER` 设为它的绝对路径，否则终端工具不可用。`npm run build:bundle` 会生成真实的后端与 release 版 Terminal Worker 资源；安装包打包尚未接入。
 
 前端、Electron 宿主、Terminal Worker 以及发布资源 staging 统一使用仓库根目录的 `target/`；构建入口会覆盖外部 `CARGO_TARGET_DIR`，避免产物落入不同构建目录。
 
@@ -179,9 +179,10 @@ npm run test:e2e
 npm run test:e2e:desktop   # 驱动真实 Electron 宿主与后端（数据写入临时目录）
 ```
 
-后端测试从仓库根目录运行：
+后端测试从仓库根目录运行；真跑终端命令的用例依赖已构建的 Terminal Worker（缺省找 `target/debug/terminal-worker`，没构建时跳过）：
 
 ```bash
+cargo build -p cosir-terminal-worker
 uv sync --project apps/backend --group dev
 uv run --project apps/backend pytest
 ```
@@ -203,7 +204,7 @@ Playwright E2E 使用 Vite 和测试服务，不覆盖真实宿主 IPC、动态�
 apps/
 ├── desktop/         Electron 桌面宿主与 React 前端
 ├── backend/         FastAPI、Agent Runtime、工具和 SQLite 存储
-└── terminal-worker/ 本机 PTY 终端 Worker
+└── terminal-worker/ 本机终端 Worker（交互会话与一次性命令的进程启动与清理）
 
 coding-agent-docs/   Agent 与编码工具的调研笔记
 docs/                架构设计、实现计划与项目文档

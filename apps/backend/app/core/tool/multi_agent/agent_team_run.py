@@ -1,5 +1,5 @@
 """Agent Team 执行工具（HITL ``execute``）：首次调用准备待确认方案并等待用户决定，按决定再次执行时
-确认并阻塞运行 Team 直到落定，或落定驳回。"""
+批准后登记后台执行，或落定驳回。"""
 
 from __future__ import annotations
 
@@ -13,15 +13,12 @@ from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
     prepare_team_run,
 )
-from app.core.tool.multi_agent.agent_team.agent_team_result import team_result_payload
 from app.core.tool.multi_agent.agent_team.agent_team_run_approval import AgentTeamRunApproval
-from app.core.tool.multi_agent.agent_team.team_coordinator import get_agent_team_coordinator
 from app.core.tool.multi_agent.agent_team.team_tool_error import TeamToolError
 from app.core.tool.multi_agent.args.agent_team_approve_input import AgentTeamApproveInput
 from app.core.tool.multi_agent.args.agent_team_args import AgentTeamArgs
 from app.core.tool.multi_agent.args.node_goal import AgentTeamNodeGoal
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
-from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
@@ -34,9 +31,8 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_AGENT_TEAM
 from app.core.workflow.message_queue.task_message import DecisionBody
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
-from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
-from app.service.depends import get_conversation_run_ledger
+from app.service.depends import get_agent_team_coordinator
 
 
 class AgentTeamRunTool(HandlerBase):
@@ -44,16 +40,8 @@ class AgentTeamRunTool(HandlerBase):
 
     - 首次调用（无决定）：准备方案、持久化为 pending TeamRun（记下本次 ``tool_call_id``），返回等待
       占位并挂起。
-    - 按决定执行（``prepare_input`` 绕过模型重放原调用）：批准即确认（``pending → running``）并在本
-      工具线程里阻塞运行 Team，落定后把结论作为工具结果返回；驳回即落定 ``user_rejected``。结果由
-      通用 HITL 结算追加为 ``<tool_result>``，卡片随之收尾。
-
-    Team 的生命周期因此包在这一次工具调用里：主 Agent 不需要 ``wait_messages``，也没有游离于 Run
-    之外的后台执行，单独停止 Team 就是取消这次工具调用（通用 ``/tool-calls/{id}/cancel``），没有
-    TeamRun 专属的取消入口。代价是 thread 工具执行中途不检查取消信号，两种停止都由 Coordinator
-    在等待循环里检出：主 Task 停止时由 ``TaskActor`` 在打信号的同时取消该 Task 的 TeamRun；取消
-    本调用时 Coordinator 现读工具级信号并落定 TeamRun。之后停下节点并返回，工具照常返回 cancelled
-    结论，主 Run 才能走到检查点落定或继续。
+    - 按决定执行：批准后登记后台作业，observe 提交启动回执与原占位后放行 Coordinator。
+      主 Agent 可以继续工作，最终结论经原调用回投；驳回立即结束。
 
     审批门由后端强制：模型重复调用只会产生新的待确认方案，推进 TeamRun 只能经用户决定。
     """
@@ -73,14 +61,13 @@ class AgentTeamRunTool(HandlerBase):
         "node's goal must be workable on its own. The ending node's output is the Team's final "
         "result. This tool submits a plan for the user to review and edit, then pauses you until "
         "the user decides; the decision arrives as a <user_decision> message. If approved, this "
-        "call blocks until the whole Team finishes, which can take a long time; its <tool_result> "
-        "reports the final status and the path of the saved run history, which you read in pages "
+        "call starts the Team in the background. Continue independent work or use wait_messages. "
+        "Its <background_result> reports the final status and the path of the saved run history, "
+        "which you read in pages "
         "when you need the details. It cannot create or edit Team configurations; if the Team "
         "does not exist, ask the user to create it first."
     )
     args_model = AgentTeamArgs
-    # thread 工具不强制超时（只是元数据）：批准后本调用阻塞到 Team 落定，耗时由 Team 的
-    # max_runs 与节点自身预算约束，取消经 TeamRun 状态传入（见类说明）。
     group = TOOL_GROUP_AGENT_TEAM
 
     def __init__(self):
@@ -254,30 +241,16 @@ class AgentTeamRunTool(HandlerBase):
             return observation
         inputs = AgentTeamApproveInput.model_validate(decision.data)
         try:
-            confirmed = self.agent_team_run_approval.confirm(
-                row.id,
-                inputs.configuration,
-                goal=inputs.goal,
-                node_goals=inputs.node_goals,
-                parent_agent=AgentRuntimeConfig.for_run(
-                    get_conversation_run_ledger().get_run(row.parent_run_id)
-                ),
-            )
-        except ValueError as exc:
-            current = self.agent_team_run_approval.get(row.id)
-            if current.status != AgentTeamRunStatus.PENDING.value:
-                return self._already_resolved(row.id, current.status)
-            log.warning(
-                "agent_team_confirm_rejected",
-                extra={
-                    "msg": "用户批准的 Team 方案未通过确认校验",
-                    "data": {"team_run_id": row.id, "reason": str(exc)},
-                },
-            )
+            confirmed = self.agent_team_run_approval.confirm(row, inputs)
+        except TeamToolError as exc:
             return tool_error(
                 self.name,
-                f"The approved plan could not be started: {exc}",
+                f"The approved plan could not be started: {exc}. "
+                "Check the Team configuration before proposing it again.",
+                status_hint="方案配置无效",
             )
+        if confirmed is None:
+            return self._already_resolved(row.id, self.agent_team_run_approval.get(row.id).status)
         log.info(
             "agent_team_run_started",
             extra={
@@ -285,27 +258,17 @@ class AgentTeamRunTool(HandlerBase):
                 "data": {"team_run_id": row.id, "task_id": execution_context.task_id},
             },
         )
-        final = get_agent_team_coordinator().start(
-            confirmed, cast(asyncio.AbstractEventLoop, execution_context.event_loop)
+        work = get_agent_team_coordinator().prepare_background(
+            confirmed, execution_context.run_id,
+            cast(asyncio.AbstractEventLoop, execution_context.event_loop),
         )
-        payload = json.dumps(team_result_payload(final), ensure_ascii=False)
-        if (
-                final.status == AgentTeamRunStatus.CANCELLED.value
-                and final.end_reason == AgentTeamRunEndReason.CANCELLED.value
-        ):
-            # 用户单独停止了这次调用（Coordinator 读到工具级取消信号后以 CANCELLED 落定）：主 Run
-            # 照常继续，按取消而不是成功返回，卡片投影为 cancelled，模型也不会把它当失败重提方案。
-            # 主 Task 停止（PARENT_CANCELLED）不走这里：整个 Run 都在停，结果无人读取。
-            observation = tool_cancelled(
-                self.name,
-                execution_context.tool_call_id,
-                "the user stopped this Agent Team run. Outputs of nodes that finished are in the "
-                "run history below. Do not submit the plan again on your own; ask the user how "
-                f"to proceed. {payload}",
-            )
-        else:
-            observation = tool_success(self.name, payload)
+        observation = tool_success(
+            self.name,
+            f"Team run {row.id} was approved and will run in the background. Its conclusion "
+            "will arrive as a <background_result> for this call.",
+        )
         observation.team_run_id = row.id
+        observation.background = work
         return observation
 
     def _already_resolved(self, team_run_id: int, status: str) -> ToolObservation:

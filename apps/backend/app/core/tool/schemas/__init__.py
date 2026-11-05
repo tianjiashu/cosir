@@ -1,6 +1,5 @@
 """Shared tool value objects."""
 
-from app.core.tool.schemas.tool_background import BackgroundCapability
 from app.core.tool.schemas.tool_call import ToolCall
 from app.core.tool.schemas.tool_definition import ToolDefinition
 from app.core.tool.schemas.tool_execution_context import ToolExecutionContext
@@ -86,7 +85,6 @@ __all__ = [
     "TOOL_WEB_EXTRACT",
     "TOOL_WEB_SEARCH",
     "TOOL_WRITE_FILE",
-    "BackgroundCapability",
     "ToolCall",
     "ToolDefinition",
     "ToolExecutionContext",

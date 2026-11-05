@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
+from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
 )
@@ -21,6 +22,7 @@ from app.core.workflow.message_queue.task_message import (
 )
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.message_metadata import ToolMessageMetadata
+from app.storage.store_engines import main_session_factory
 
 
 def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
@@ -75,13 +77,12 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
     占位在模型协议上已是这次调用的结果（见 ``tool_awaiting_decision``），决定可能在占位之后的若干
     模型步、甚至之后的 Run 才到，此时原调用早已不是最后一批，不能再写 tool 消息；改写历史行又会
     让后续请求前缀分叉。所以模型从末尾追加的 ``<tool_result>`` 读到结果，卡片从占位行的 metadata
-    读到终态。按决定执行的结果是终态：即便 handler 返回的观察带等待或后台标记，也不得让卡片回到
-    ``pending``，所以这里显式清掉这两个标记。
+    读到状态。批准后启动后台作业时，回执与后台占位同事务提交，之后才放行执行。
     """
     runtime = _runtime_context()
     context = _message_context()
     [executed] = batch.observations
-    observation = dataclasses.replace(executed, awaiting_decision=False, background=None)
+    observation = dataclasses.replace(executed, awaiting_decision=False)
     call_id = observation.tool_call_id
     message, metadata = ToolResultBody(
         tool_call_id=call_id,
@@ -89,7 +90,6 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
         status=observation.status,
         content=str(to_tool_model_message(observation)["content"]),
     ).render()
-    context.add_message(message, metadata=metadata, project_to_transport=False)
     event = terminal_event(
         observation,
         task_id=runtime.run.task_id,
@@ -97,15 +97,18 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
         step_id=step_id,
         tool_call_id=call_id,
     )
-    written = context.update_tool_result_metadata(
-        call_id,
-        ToolMessageMetadata(
-            status=event.status,
-            display_data=event.display_data,
-            error=event.error,
-            team_run_id=event.team_run_id,
-        ),
-    )
+    with main_session_factory().begin() as session:
+        context.add_message(message, metadata=metadata, project_to_transport=False, session=session)
+        written = context.update_tool_result_metadata(
+            call_id,
+            ToolMessageMetadata(
+                status=event.status, display_data=event.display_data, error=event.error,
+                team_run_id=event.team_run_id, background=observation.background,
+            ),
+            session=session,
+        )
+    if observation.background is not None:
+        background_registry.commit_start(call_id)
     log.info(
         "tool_decision_result_persisted",
         extra={

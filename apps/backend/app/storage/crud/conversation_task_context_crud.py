@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
@@ -52,6 +53,25 @@ class ConversationTaskContextCrud:
                 rows = session.scalars(stmt).all()
         return [ConversationTaskContextRecord._from_model(row) for row in rows]
 
+    @staticmethod
+    def _pending_background() -> ColumnElement[bool]:
+        metadata = ConversationTaskContextModel.metadata_json
+        return and_(
+            func.json_type(metadata, "$.background") == "object",
+            func.json_extract(metadata, "$.status") == "pending",
+        )
+
+    def run_awaits_background(self, task_id: int, run_id: int) -> bool:
+        """本 Run 仍在上下文中、尚未并入结论的后台调用是否存在。"""
+        row = ConversationTaskContextModel
+        pending = select(row.sequence).where(
+            row.task_id == task_id, row.include_in_context.is_(True),
+            func.json_extract(row.metadata_json, "$.background.run_id") == run_id,
+            self._pending_background(),
+        )
+        with self._session_factory.begin() as session:
+            return bool(session.scalar(select(pending.exists())))
+
     def list_unsettled_placeholders(
             self, task_id: int | None = None, session: Session | None = None
     ) -> list[ConversationTaskContextRecord]:
@@ -66,10 +86,7 @@ class ConversationTaskContextCrud:
         status = func.json_extract(metadata_json, "$.status")
         stmt = select(ConversationTaskContextModel).where(
             or_(
-                and_(
-                    func.json_type(metadata_json, "$.background") == "object",
-                    status == "pending",
-                ),
+                self._pending_background(),
                 status == "running",
             )
         )

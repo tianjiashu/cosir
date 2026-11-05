@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from app.config.logging.logger import log
-from app.core.tool.background import cancel_placeholders
+from app.core.tool.background.cancel_placeholders import RUN_STOPPED_HINT, cancel_placeholders
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.workflow.cancel.conversation_run_cancellation_registry import CancelReason
 from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
@@ -32,14 +32,10 @@ class TaskCancellation:
     async def cancel_teams(self) -> None:
         """取消本 Task 的全部活动 TeamRun（待确认与运行中）；失败只记录。
 
-        ``agent_team`` 工具在线程里阻塞运行 Team，执行中途不检查取消信号：等 Run 落定再取消 Team
-        会互等。Coordinator 检出 TeamRun 已取消就停下节点并返回，工具随之结束，Run 才能走到检查点。
-        按 Task 寻址的理由见 ``cancel_for_parent_task``。
+        按 Task 停止待审批方案与后台 Team，跨 Run 批准也属于同一 Task。
         """
-        from app.core.tool.multi_agent.agent_team.team_coordinator import get_agent_team_coordinator
-
         try:
-            await asyncio.to_thread(get_agent_team_coordinator().cancel_for_parent_task, self.task_id)
+            await service_depends.get_agent_team_coordinator().cancel_for_parent_task(self.task_id)
         except Exception:
             log.exception(
                 "task_team_cancel_failed",
@@ -58,16 +54,15 @@ class TaskCancellation:
         Task 就永久卡在停止中。撤销登记是必须完成的那一步，它本身不失败；占位只是卡片展示状态，
         结算写库失败可以接受——记录后照常收尾，残留的 ``pending`` 占位由重启收尾推到「已中断」。
         """
-        dropped = await asyncio.to_thread(background_registry.drop_task, self.task_id)
-        background = [entry.tool_call_id for entry in dropped if entry.mode == "background"]
+        background = await asyncio.to_thread(background_registry.drop_task, self.task_id)
         if not background:
             return
         try:
             await asyncio.to_thread(
-                placeholders.cancel_placeholders,
+                cancel_placeholders,
                 self.task_id,
                 background,
-                placeholders.RUN_STOPPED_HINT,
+                RUN_STOPPED_HINT,
             )
         except Exception:
             log.exception(

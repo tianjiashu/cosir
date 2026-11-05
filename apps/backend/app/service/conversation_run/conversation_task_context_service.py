@@ -232,7 +232,7 @@ class ConversationTaskContextService:
             ),
             None,
         )
-        if result is None or cast(ToolMessageMetadata, result.metadata).status != "pending":
+        if result is None or not cast(ToolMessageMetadata, result.metadata).awaiting_decision:
             return None
         for record in reversed(records):
             if record.message["role"] != "assistant":

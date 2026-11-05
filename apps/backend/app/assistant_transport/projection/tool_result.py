@@ -32,7 +32,7 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
         status=metadata.status,
         error=metadata.error if metadata.status in {"failed", "cancelled"} else None,
         isError=metadata.status == "failed",
-        awaitingUser=metadata.status == "pending" and metadata.background is None,
+        awaitingUser=metadata.awaiting_decision,
         display_data=deepcopy(metadata.display_data),
     )
     if metadata.team_run_id is not None:

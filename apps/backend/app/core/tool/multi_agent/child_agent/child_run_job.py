@@ -1,6 +1,6 @@
 """委派与分叉的后台结果作业：``delegate_task`` 和 ``fork_task`` 共用。
 
-作业以父调用的 ``tool_call_id`` 登记在 ``background_registry``，回投由 ``run_background_work`` 完成。结论不靠
+作业以父调用的 ``tool_call_id`` 登记在 ``background_registry``，回投由 ``start_background_job`` 完成。结论不靠
 子 Run 记下「是哪次调用触发了我」：投递之后在事件循环上等子 Task 无事可做
 （``TaskActor.wait_quiescent``），再读它最新 Run 的 run model——子 Agent 的结论一定写在那里。父 Agent
 连发几条输入时，它们并入同一个 Run 或接续出新 Run，几次调用的等待在同一次落定时醒来、读到同一个
@@ -24,9 +24,8 @@ from typing import cast
 from app.config.logging.logger import log
 from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
 from app.core.tool.background.backgraound_registry import background_registry
-from app.core.tool.background.run import run_background_work
+from app.core.tool.background.run import start_background_job
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models import ConversationRunRecord
 
 
@@ -55,15 +54,13 @@ def run_child(
     """
     tool_call_id = execution_context.tool_call_id
     job, waiting = _child_job(child_task_id)
-    outcome = run_background_work(
+    work = start_background_job(
         job,
         task_id=execution_context.task_id,
         run_id=execution_context.run_id,
         tool_call_id=tool_call_id,
         kind="child_agent",
         label=label,
-        mode="background",
-        is_cancelled=lambda: cancellation_registry.is_cancelled(execution_context.task_id),
     )
     try:
         enqueue()
@@ -75,7 +72,7 @@ def run_child(
         cast(asyncio.AbstractEventLoop, execution_context.event_loop),
     )
     observation = placeholder()
-    observation.background = outcome.work
+    observation.background = work
     return observation
 
 

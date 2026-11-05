@@ -56,6 +56,7 @@ def cancel_placeholders(
         space = task_runtime_spaces.get(record.task_id)
         if space is None or not space.has_snapshot():
             continue
+        metadata = cast(ToolMessageMetadata, record.metadata)
         try:
             projector.process(
                 ToolCallStatusChangedEvent(
@@ -64,7 +65,9 @@ def cancel_placeholders(
                     tool_call_id=tool_call_id,
                     status=status,
                     error=hint,
-                    background=cast(ToolMessageMetadata, record.metadata).background,
+                    display_data=metadata.display_data,
+                    team_run_id=metadata.team_run_id,
+                    background=metadata.background,
                 )
             )
         except (KeyError, ValueError):

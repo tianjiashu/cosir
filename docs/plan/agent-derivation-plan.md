@@ -1,6 +1,6 @@
 # 阶段 3 开发计划：派生规则表、派生深度与重启收尾
 
-状态：已完成（第 1 步派生深度、第 2 步重启收尾、第 3 步规则表）。后续修订：派生规则表移到 `core/tool/derivation.py`、按工具名枚举；深度不再在派生入口检查，改为创建 Task 时按深度固化工具（`core/tool/task_tool_scope.py`），下文 `check_derivation_depth` 相关描述已不适用。需求与已定规则见 [agent-fork-task-design.md §3.1 / §3.3](agent-fork-task-design.md)。路径相对 `apps/backend/app/`，前端相对 `apps/desktop/`。
+状态：已完成（第 1 步派生深度、第 2 步重启收尾、第 3 步规则表）。后续修订：派生规则表移到 `core/tool/derivation.py`、按工具名枚举；深度不再在派生入口检查，改为创建 Task 时按深度固化工具（`core/tool/task_tool_scope.py`），下文 `check_derivation_depth` 相关描述已不适用。重启收尾后来改为一律中断：委派等待不跨重启恢复，重启只把占位推到「已中断」并给被中断的 Task 投一条重启通知（都在 `RecoverService`），下文 §3.3 的重新挂等待与 `background_registry.reattach` 已移除。需求与已定规则见 [agent-fork-task-design.md §3.1 / §3.3](agent-fork-task-design.md)。路径相对 `apps/backend/app/`，前端相对 `apps/desktop/`。
 
 ## 1. 目标
 
