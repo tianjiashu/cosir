@@ -377,20 +377,38 @@ class ConversationTaskStateService:
         state: ConversationStateSnapshot,
         mutations: tuple[ConversationStateMutation, ...] | None = None,
     ) -> TransportFrame:
-        """发布一个其 canonical 数据库事务已经提交的状态。"""
+        """发布一个其 canonical 数据库事务已经提交的状态。
 
-        validate_snapshot(state)
-        copied_state = copy.deepcopy(state)
-        change = TransportFrame(
-            task_id=task_id,
-            kind="full",
-            state=copied_state,
-            mutations=mutations or (),
-        )
+        ``validate`` 与深拷贝也在锁内：锁外拷贝与取锁之间到达的投影会被这份更旧的状态覆盖。
+        """
+
         with self._lock:
             self._ensure_not_deleted(task_id)
+            validate_snapshot(state)
+            change = TransportFrame(
+                task_id=task_id,
+                kind="full",
+                state=copy.deepcopy(state),
+                mutations=mutations or (),
+            )
             self._publish(change)
         return change
+
+    def republish_from_canonical(self, task_id: int) -> TransportFrame:
+        """丢弃进程内副本、按 canonical 重建并发布整份快照。
+
+        重建与发布必须在同一临界区：分两次取锁时，中间到达的投影会被这份更旧的 full 帧覆盖，
+        客户端随即丢掉那条已经发出去的增量。
+
+        异常:
+            KeyError: Task 在本进程内已被删除或不存在。
+            ValueError: 重建结果不满足快照契约。
+            sqlalchemy.exc.SQLAlchemyError: canonical 数据源读取失败。
+        """
+
+        with self._lock:
+            # RLock：``rebuild_state`` 与 ``publish_state`` 各自的可重入取锁落在同一临界区。
+            return self.publish_state(task_id, self.rebuild_state(task_id))
 
     def subscribe_with_snapshot(
         self, task_id: int

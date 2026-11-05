@@ -205,8 +205,8 @@ class TransportAssistantService:
             task_runtime_spaces.enqueue(task_id, message, session=session)
 
     def _republish(self, task_id: int) -> None:
-        """移出的行要从前端消失：从 canonical 记录重建并发布快照。"""
-        self._states.publish_state(task_id, self._states.rebuild_state(task_id))
+        """移出的行要从前端消失：从 canonical 记录重建并发布（同一临界区，不与投影交错）。"""
+        self._states.republish_from_canonical(task_id)
 
     async def resume(self, task_id: int) -> None:
         """最新 Run 为 cancelled / failed 时从 prepare_input 续跑。

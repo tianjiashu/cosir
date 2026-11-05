@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 
 import pytest
 
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
+from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 
@@ -39,6 +41,25 @@ async def test_subscriber_coalesces_adjacent_text_and_prioritizes_control_frame(
     # attach again instead of applying frames produced before the boundary.
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(subscriber.get(), 0.01)
+
+
+@pytest.mark.asyncio
+async def test_subscriber_keeps_mutations_that_arrive_after_a_full_frame() -> None:
+    """full 帧之后到达的 mutation 是相对新边界产生的，丢掉就再也补不回来。"""
+    subscriber = Subscriber(asyncio.get_running_loop(), mutation_limit=4)
+    full = TransportFrame(
+        task_id=1,
+        kind="full",
+        mutations=(),
+        state=cast(ConversationStateSnapshot, {"messages": []}),
+    )
+    subscriber.offer(full)
+    subscriber.offer(mutation_frame("after"))
+
+    assert (await subscriber.get()) is full
+    tail = await asyncio.wait_for(subscriber.get(), 0.01)
+    assert tail.kind == "mutation"
+    assert tail.mutations[0].value == "after"
 
 
 @pytest.mark.asyncio

@@ -45,13 +45,16 @@ class Subscriber:
         if self._closed:
             return
         if frame.kind != "mutation":
-            # full/control 帧是一个新的投递边界。排队的 mutation 产生于它之前，不能在 full
-            # 状态之后被重放。
+            # 新的投递边界。排队的 mutation 产生于它之前，已被新边界覆盖，不能重放。
+            # ``full`` 之后连接继续：边界之后到达的 mutation 相对新状态产生，照常入队、由
+            # ``get`` 在 full 之后按序投递（丢掉就再也补不回来，增量通道没有全量回放）。
+            # ``resync_required`` 是连接级终态：客户端要重新 attach 才能继续，那时的整份状态
+            # 已包含这些变更，继续丢弃。
             self._mutation_queue.clear()
             self._control_frame = frame
             self._wake.set()
             return
-        if self._control_frame is not None:
+        if self._control_frame is not None and self._control_frame.kind != "full":
             return
         if self._mutation_queue and _can_coalesce(self._mutation_queue[-1], frame):
             previous = self._mutation_queue.pop()

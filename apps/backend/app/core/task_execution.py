@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 
+from app.config.logging.logger import log
 from app.core.task_cancellation import TaskCancellation
 from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     CancelReason,
@@ -76,6 +77,8 @@ class TaskExecution:
             self._mailbox.post(message)
         self._run = run
         self._task = asyncio.get_running_loop().create_task(self._drive(run))
+        # 兜底：释放边界之外的异常在这里留下日志，不留无人取回失败的 task。
+        self._task.add_done_callback(self._on_drive_done)
 
     async def cancel(self, reason: CancelReason) -> bool:
         """有执行者时打取消信号，并立即取消本 Task 的全部活动 Team；返回是否打了信号。
@@ -120,14 +123,46 @@ class TaskExecution:
         """驱动一个 Run 并释放执行，再交给 ``on_released``；失败由 ``RunDriver`` 落定。
 
         注销执行与取走信号之间没有 await（与 :meth:`_signal` 互斥），这是信号的唯一清理点。
+        驱动异常退出（``RunDriver`` 落定自身失败、装配期读库失败）同样走这条释放路径：否则
+        取消信号会残留到下一次执行，而剩余消息也不会被接续。进程关闭的取消由 :meth:`abort`
+        负责收尾，不在这里跑释放回调。
         """
         # 每次驱动现构造：``RunDriver`` 一次构造对应一次驱动；也不能放进构造函数——space 在快照读取
         # 等许多路径上物化，构造执行登记不应牵出 Run / Task service 与存储的装配。
-        await RunDriver().drive(run)
-        if cancellation_registry.is_cancelled(self.task_id):
-            # 取走信号前先撤销后台结果：信号在时迟到结论被 ``deliver_background_result`` 丢弃，
-            # 取走之后、撤销之前却会入队并开出新 Run。撤销期间执行仍登记着，新到的取消照常打信号。
-            await self._cancellation.cancel_background_task()
+        try:
+            await RunDriver().drive(run)
+            if cancellation_registry.is_cancelled(self.task_id):
+                # 取走信号前先撤销后台结果：信号在时迟到结论被 ``deliver_background_result`` 丢弃，
+                # 取走之后、撤销之前却会入队并开出新 Run。撤销期间执行仍登记着，新到的取消照常打信号。
+                await self._cancellation.cancel_background_task()
+        except asyncio.CancelledError:
+            # 进程关闭：``abort`` 自己补取信号并注销，不调度后续 Run。
+            raise
+        except Exception:
+            # 后台 task 无人 await：这条日志是异常唯一的落点。释放边界照常走完。
+            log.exception(
+                "task_drive_failed",
+                extra={
+                    "msg": "Run 驱动异常退出，执行将由释放边界收尾",
+                    "data": {"task_id": self.task_id, "run_id": run.id},
+                },
+            )
         self._task = self._run = None
         reason = cancellation_registry.consume(self.task_id)
         await self._on_released(run, reason)
+
+    def _on_drive_done(self, done: asyncio.Task[None]) -> None:
+        """执行结束的兜底：异常退出在这里落一条日志，不留无人取回失败的 task。"""
+        if done.cancelled():
+            return
+        error = done.exception()
+        if error is None:
+            return
+        log.error(
+            "task_drive_crashed",
+            extra={
+                "msg": "Run 释放后收尾异常退出",
+                "data": {"task_id": self.task_id},
+            },
+            exc_info=error,
+        )

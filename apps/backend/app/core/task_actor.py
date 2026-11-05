@@ -209,10 +209,14 @@ class TaskActor:
                 await self._advance(pending, fresh)
             except Exception:
                 # 单轮失败只记录，不杀死 loop：队列行仍在，下一次被新消息唤醒时随之一并重读。
+                # 水位已经前移（否则待处理行会让 ``pending`` 立刻返回、loop 空转），但「已推进完」
+                # 不能跟着前移：那会让静止判定把这条消息当成已处理，等待方读走上一条 Run 的结论。
                 log.exception(
                     "task_actor_advance_failed",
                     extra={"msg": "Task 调度推进失败", "data": {"task_id": self.task_id}},
                 )
+                self._publish_state()
+                continue
             self._handled = self._watermark
             self._publish_state()
 

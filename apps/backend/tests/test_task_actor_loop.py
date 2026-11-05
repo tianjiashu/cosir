@@ -66,10 +66,13 @@ class _Ledger:
         self.runs: dict[int, SimpleNamespace] = {}
         self.current: SimpleNamespace | None = None
         self.created: list[SimpleNamespace] = []
+        self.fail_create = False
 
     def create_run(
         self, task_id: int, launch: RunLaunch
     ) -> SimpleNamespace:
+        if self.fail_create:
+            raise RuntimeError("storage unavailable")
         run = SimpleNamespace(
             id=len(self.runs) + 1,
             task_id=task_id,
@@ -107,6 +110,7 @@ class _Driver:
     drives: ClassVar[list[tuple[int, list[int | None]]]] = []
     finish: ClassVar[dict[int, asyncio.Event]] = {}
     settle: ClassVar[dict[int, str]] = {}
+    fail: ClassVar[set[int]] = set()
     ledger: _Ledger
     queue: _Queue
     # 本次执行的 mailbox 归 space 持有（``RunDriver`` 不再接收它），由 fixture 注入。
@@ -116,6 +120,8 @@ class _Driver:
         self._mailbox = _Driver.mailbox
 
     async def drive(self, run) -> None:
+        if run.id in _Driver.fail:
+            raise RuntimeError("run settlement failed")
         drained = []
         while not self._mailbox.isEmpty():
             drained.append(self._mailbox.pop().id)
@@ -147,7 +153,7 @@ def _result() -> BackgroundResultBody:
 @pytest.fixture
 def harness(monkeypatch):
     queue, ledger = _Queue(), _Ledger()
-    _Driver.drives, _Driver.finish, _Driver.settle = [], {}, {}
+    _Driver.drives, _Driver.finish, _Driver.settle, _Driver.fail = [], {}, {}, set()
     _Driver.ledger, _Driver.queue = ledger, queue
     monkeypatch.setattr(execution_module, "RunDriver", _Driver)
     refreshed: list[list[int | None]] = []
@@ -524,6 +530,41 @@ async def test_wait_quiescent_returns_false_after_the_loop_stopped(harness) -> N
 
     harness.queue.put(_user())
     assert await asyncio.wait_for(harness.actor.wait_quiescent(), 1) is False
+
+
+async def test_advance_failure_does_not_report_quiescent(harness) -> None:
+    """推进失败不算「已处理」：否则等待方会把上一条 Run 的结论当成这次的。"""
+    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run.status = "cancelled"
+    harness.ledger.created.clear()
+    harness.ledger.fail_create = True
+    harness.actor.start()
+
+    harness.queue.put(_user())
+    await _settle()
+
+    # 消息还留在队列里、Run 也没开出来：Task 仍有事要做，不能报告静止。
+    assert await harness.actor.wait_quiescent(0) is False
+    await harness.actor.abort()
+
+
+async def test_drive_failure_still_releases_the_execution_and_takes_the_signal(harness) -> None:
+    """驱动抛异常也要走释放边界：执行注销、取消信号取走，不残留到下一次执行。"""
+    harness.actor.start()
+    harness.queue.put(_user())
+    await _settle()
+    [run] = harness.ledger.created
+    assert harness.actor.driving
+
+    execution_module.cancellation_registry.request_cancel(_TASK_ID, "user")
+    _Driver.fail.add(run.id)
+    _Driver.finish.setdefault(run.id, asyncio.Event()).set()
+    await _settle()
+
+    assert not harness.actor.driving
+    # 信号残留会让同一 Task 的下一次执行一启动就被取消。
+    assert execution_module.cancellation_registry.is_cancelled(_TASK_ID) is False
+    await harness.actor.abort()
 
 
 # ---------------------------------------------------------------------------

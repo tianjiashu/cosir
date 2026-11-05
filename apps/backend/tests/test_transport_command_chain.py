@@ -748,8 +748,7 @@ def rerun(chain, monkeypatch):
     chain.service._context = context
     chain.service._inputs = SimpleNamespace(prepare=recording_prepare)
     chain.service._states = SimpleNamespace(
-        rebuild_state=lambda task_id: task_id,
-        publish_state=lambda _id, state: republished.append(state),
+        republish_from_canonical=lambda task_id: republished.append(task_id),
     )
     monkeypatch.setattr(
         service_module,
