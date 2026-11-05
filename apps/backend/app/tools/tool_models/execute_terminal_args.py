@@ -25,7 +25,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.tool.schemas.tool_background import BackgroundCapability, background_field
 from app.tools.shell.host_shells import PosixShell, WindowsShell
 from app.utils.host_platform import is_windows
 
@@ -41,11 +40,9 @@ ExecuteTerminalShell = WindowsExecuteTerminalShell | MacExecuteTerminalShell
 DEFAULT_COMMAND_TIMEOUT_S = 300.0
 MAX_COMMAND_TIMEOUT_S = 3600.0
 
-# 前后台执行：默认前台，前台等到上限仍未结束就自动转后台（结论以 background_result 回投并挂起
-# Agent）；模型可用 ``background`` 一开始就放到后台，用户可把前台等待转走。参数模型（``background``
-# 字段描述）与 handler 都读它，所以放在契约模块。
-EXECUTE_TERMINAL_BACKGROUND = BackgroundCapability(
-    default_background=False, foreground_limit_s=60.0
+_BACKGROUND_DESCRIPTION = (
+    "true returns immediately and delivers the result later as a <background_result> message. "
+    "false or null waits here until the command ends. Use wait_messages to wait for background work."
 )
 
 # 只用于展示（调用行标题、看板标签）、不可信：执行、安全策略与日志只认 ``command``，需要用户批准
@@ -56,10 +53,11 @@ _DESCRIPTION_DESCRIPTION = (
     "restate the command."
 )
 
+# 只写语义与取值范围；「长任务调大并转后台」是选用决策，在工具描述里说一次。
 _TIMEOUT_DESCRIPTION = (
-    "Seconds before the command's process tree is killed and the call fails. Defaults to "
-    f"{DEFAULT_COMMAND_TIMEOUT_S:g}, capped at {MAX_COMMAND_TIMEOUT_S:g}. Set it to cover long "
-    "builds or test suites."
+    "Seconds before the command and every process it started are stopped and the call fails. "
+    "Defaults to "
+    f"{DEFAULT_COMMAND_TIMEOUT_S:g}, capped at {MAX_COMMAND_TIMEOUT_S:g}."
 )
 
 
@@ -93,7 +91,7 @@ class WindowsExecuteTerminalArgs(BaseModel):
             "relative to the workspace root (the default). It must already exist."
         ),
     )
-    background: bool | None = background_field(EXECUTE_TERMINAL_BACKGROUND)
+    background: bool | None = Field(default=None, description=_BACKGROUND_DESCRIPTION)
 
 
 class MacExecuteTerminalArgs(BaseModel):
@@ -105,10 +103,10 @@ class MacExecuteTerminalArgs(BaseModel):
     shell: MacExecuteTerminalShell = Field(
         default="auto",
         description=(
-            "Shell that interprets command. 'auto' uses /bin/sh, not the interactive login zsh, "
-            "so rc files, aliases, and their PATH additions (nvm, pyenv) do not apply. 'bash', "
-            "'zsh', 'fish', or 'pwsh' enable that shell's own syntax (bash [[ ]], zsh arrays, "
-            "fish builtins)."
+            "Shell that interprets command. 'auto' uses /bin/sh, not the interactive login zsh: "
+            "the user's login PATH (Homebrew, nvm, pyenv) applies, but rc aliases and shell "
+            "functions do not. 'bash', 'zsh', 'fish', or 'pwsh' enable that shell's own syntax "
+            "(bash [[ ]], zsh arrays, fish builtins)."
         ),
     )
     command: str = Field(
@@ -127,7 +125,7 @@ class MacExecuteTerminalArgs(BaseModel):
             "or relative to the workspace root (the default). It must already exist."
         ),
     )
-    background: bool | None = background_field(EXECUTE_TERMINAL_BACKGROUND)
+    background: bool | None = Field(default=None, description=_BACKGROUND_DESCRIPTION)
 
 
 def resolve_execute_terminal_args_model(

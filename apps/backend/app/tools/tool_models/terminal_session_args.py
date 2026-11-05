@@ -48,7 +48,8 @@ class TerminalStartArgs(BaseModel):
     integration: Literal["auto", "off"] = Field(
         default="auto",
         description="auto enables shell integration (command boundaries, exit codes, cwd "
-        "tracking) where the shell supports it; off disables it.",
+        "tracking; wait until=command_returned needs it) where the shell supports it; off "
+        "disables it.",
     )
 
 
