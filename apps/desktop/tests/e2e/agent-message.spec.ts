@@ -22,7 +22,7 @@ const snapshot: TransportState = {
     },
   ],
   messageOffset: 0,
-  activity: { runId: 1, status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
+  activity: {modelActivity: null,  runId: 1, status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
   terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
 };
 

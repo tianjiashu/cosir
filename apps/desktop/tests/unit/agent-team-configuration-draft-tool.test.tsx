@@ -5,11 +5,12 @@ import { AgentTeamConfigurationTool } from "@/components/assistant-ui/tools/agen
 import { WorkbenchProvider } from "@/lib/workbench/context";
 
 describe("AgentTeamConfigurationTool", () => {
-  it("将未保存的 Team 草稿交给 Workbench 编辑，而不是直接落盘", () => {
+  it.each([true, false])("将未保存的 Team 草稿交给 Workbench 编辑，而不是直接落盘 (interactive=%s)", (interactive) => {
     const markup = renderToStaticMarkup(
       <WorkbenchProvider workspaceId={3}>
         <AgentTeamConfigurationTool
-          artifact={{
+          interactive={interactive}
+          artifact={{presentation: "activity",
             backendStatus: "completed",
             awaitingUser: false,
             background: false,
@@ -42,7 +43,8 @@ describe("AgentTeamConfigurationTool", () => {
       </WorkbenchProvider>,
     );
 
-    expect(markup).toContain("编辑配置");
+    if (interactive) expect(markup).toContain("编辑配置");
+    else expect(markup).not.toContain("编辑配置");
     expect(markup).toContain("未保存草稿");
     expect(markup).not.toContain("保存配置");
   });

@@ -86,7 +86,7 @@ const DEFAULT_LAUNCH = { modelConfigId: 2, reasoningEffort: null, disabledToolGr
 
 const emptyState = () => ({ title: "新对话", messages: [], activity: null });
 
-const activityOf = (runId, status, overrides = {}) => ({
+const activityOf = (runId, status, overrides = {}) => ({modelActivity: null,
   runId,
   status,
   endReason: status === "completed" ? "stop" : status === "cancelled" ? "user_cancelled" : null,
@@ -112,7 +112,6 @@ const textMessage = (id, role, text, status, runId) => ({
   role,
   parts: role === "assistant"
     ? [
-        { type: "reasoning", text: status === "completed" ? "推理完成" : "正在推理", status: status === "completed" ? "completed" : "running" },
         { type: "text", text, status: status === "completed" ? "completed" : "running" },
       ]
     : [{ type: "text", text, status: "completed" }],
@@ -150,7 +149,7 @@ function settle(state, status, overrides = {}) {
 
 function toolLifecycleParts(runId, status, toolStatus) {
   return [
-    {
+    {presentation: "activity",
       type: "tool-call", awaitingUser: false,
       toolCallId: `tool-lifecycle-${runId}`,
       toolName: "search_content",
@@ -203,8 +202,7 @@ function toolTraceState() {
     role: "user",
     parts: [{ type: "text", text: "检查项目", status: "completed" }],
   }, [
-    { type: "reasoning", text: "先分析项目结构", status: "completed" },
-    {
+    {presentation: "activity",
       type: "tool-call", awaitingUser: false,
       toolCallId: "trace-read-file",
       toolName: "read_file",
@@ -214,7 +212,7 @@ function toolTraceState() {
       display_data: null,
       isError: false,
     },
-    {
+    {presentation: "activity",
       type: "tool-call", awaitingUser: false,
       toolCallId: "trace-search-files",
       toolName: "search_content",
@@ -235,12 +233,11 @@ function toolTraceState() {
 function alternatingSequenceState(phase) {
   const runId = 79;
   // 图标、动词与标题由前端工具目录按工具名 + 参数算出，夹具只给真实形状的参数。
-  const call = (toolCallId, toolName, args, status, extra = {}) => ({
+  const call = (toolCallId, toolName, args, status, extra = {}) => ({presentation: ["agent_team", "delegate_task", "fork_task"].includes(toolName) ? "standalone" : toolName === "wait_messages" ? "quiet" : "activity",
     type: "tool-call", awaitingUser: false, toolCallId, toolName, args, status, error: null,
     display_data: null, isError: false, ...extra,
   });
   const parts = [
-    { type: "reasoning", text: "先找调度循环在哪里。搜 setInterval 和 tick 相关命名。", status: "completed" },
     { type: "text", text: "先找调度循环在哪里。", status: "completed" },
     call("alt-search", "search_content", { pattern: "setInterval|tick", path: "src/" }, "completed", {
       display_data: {
@@ -293,7 +290,7 @@ function webSearchState() {
     role: "user",
     parts: [{ type: "text", text: "搜索 assistant-ui", status: "completed" }],
   }, [
-    {
+    {presentation: "activity",
       type: "tool-call", awaitingUser: false,
       toolCallId: "trace-web-search",
       toolName: "web_search",
@@ -331,7 +328,7 @@ function delegationState() {
     role: "user",
     parts: [{ type: "text", text: "请委派一个审查任务", status: "completed" }],
   }, [
-    {
+    {presentation: "standalone",
       type: "tool-call", awaitingUser: false,
       toolCallId: "delegate-ref-500",
       toolName: "delegate_task",
@@ -342,7 +339,7 @@ function delegationState() {
       agent_role: "Reviewer",
       isError: false,
     },
-    {
+    {presentation: "standalone",
       type: "tool-call", awaitingUser: false,
       toolCallId: "delegate-ref-501",
       toolName: "delegate_task",
@@ -445,7 +442,7 @@ function wait(milliseconds) {
  * 模拟一次 Run 执行：先落定运行中状态，再按块推 append-text 增量，最后收敛到终态。
  * 执行期间收到取消就把活动收敛为 cancelled；`drop` 时同时断开订阅，模拟连接中途掉线。
  */
-async function execute(taskId, { initialState, chunks, finalState, prefixReasoning = true }) {
+async function execute(taskId, { initialState, chunks, finalState }) {
   const generation = testGeneration;
   const runId = initialState.activity.runId;
   const executor = { runId, cancelled: false, drop: false };
@@ -472,10 +469,6 @@ async function execute(taskId, { initialState, chunks, finalState, prefixReasoni
     const state = structuredClone(states.get(taskId));
     const parts = state.messages[assistantIndex].parts;
     const mutations = [];
-    if (prefixReasoning && parts[0]?.type === "reasoning") {
-      parts[0].text += "先分析一下。";
-      mutations.push({ kind: "append-text", path: ["messages", assistantIndex, "parts", 0, "text"], value: "先分析一下。" });
-    }
     const textIndex = parts.findIndex((part) => part.type === "text");
     parts[textIndex].text += chunk;
     mutations.push({ kind: "append-text", path: ["messages", assistantIndex, "parts", textIndex, "text"], value: chunk });

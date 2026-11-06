@@ -5,11 +5,12 @@ import { AgentConfigurationDraftTool } from "@/components/assistant-ui/tools/age
 import { WorkbenchProvider } from "@/lib/workbench/context";
 
 describe("AgentConfigurationDraftTool", () => {
-  it("可编辑配置草稿时只显示编辑入口，不显示放弃按钮", () => {
+  it.each([true, false])("可编辑配置草稿时只显示编辑入口，不显示放弃按钮 (interactive=%s)", (interactive) => {
     const markup = renderToStaticMarkup(
       <WorkbenchProvider workspaceId={1}>
         <AgentConfigurationDraftTool
-          artifact={{
+          interactive={interactive}
+          artifact={{presentation: "activity",
             backendStatus: "completed",
             awaitingUser: false,
             background: false,
@@ -30,7 +31,8 @@ describe("AgentConfigurationDraftTool", () => {
       </WorkbenchProvider>,
     );
 
-    expect(markup).toContain("编辑配置");
+    if (interactive) expect(markup).toContain("编辑配置");
+    else expect(markup).not.toContain("编辑配置");
     expect(markup).not.toContain("放弃");
   });
 });

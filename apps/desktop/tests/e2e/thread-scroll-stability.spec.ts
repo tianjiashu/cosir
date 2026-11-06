@@ -42,7 +42,7 @@ function longConversation(): TransportState {
     } as TransportState["messages"][number]);
   }
   return {
-    title: "长对话", messages, messageOffset: 0, activity: { runId: PAIRS, ...ACTIVITY_OUTCOME, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
+    title: "长对话", messages, messageOffset: 0, activity: { modelActivity: null, runId: PAIRS, ...ACTIVITY_OUTCOME, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 }

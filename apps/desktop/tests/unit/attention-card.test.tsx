@@ -13,7 +13,7 @@ import { AttentionCard, attentionDescription } from "@/components/assistant-ui/t
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 
 function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
-  return {
+  return {presentation: "activity",
     backendStatus: "pending",
     awaitingUser: true,
     background: false,

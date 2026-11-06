@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import type { BackgroundTaskEntry } from "@/lib/assistant/contract";
 
 import { completedState, seedState } from "./transport-fixtures";
-import { API_ORIGIN as origin } from "./e2e-env";
+import { API_ORIGIN as origin, OUTPUT_DIR } from "./e2e-env";
 
 const TASK_ID = 61;
 
@@ -26,8 +26,8 @@ test.beforeEach(async ({ request }) => {
     1,
     { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] },
     [
-      { type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "execute_terminal", args: {}, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
-      { type: "tool-call", awaitingUser: false, toolCallId: "call-fg", toolName: "execute_terminal", args: {}, status: "running" },
+      {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "execute_terminal", args: {}, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
+      {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-fg", toolName: "execute_terminal", args: {}, status: "running" },
     ],
   ));
   await request.post(`${origin}/__test__/seed-background-tasks`, {
@@ -51,17 +51,17 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   const card = page.getByRole("region", { name: "后台任务" });
   await expect(card).toContainText("cd /work && make");
   await expect(card).not.toContainText("npm test");
-  await expect(card).toContainText("1 已完成");
+  await expect(card).toContainText("1 已结束");
   // 运行中的条目默认展开，展开就是对话里的同一张工具卡片（只读，停止只在外壳上）。
   const bgRow = card.locator('[data-background-task="call-bg"]');
   await expect(bgRow.locator('[data-tool-call-id="call-bg"]')).toBeVisible();
   await expect(bgRow.getByRole("button", { name: "停止" })).toHaveCount(1);
 
   // 后台占位行不另起状态行；取消走看板。回合已结束，过程区默认收起，先展开。
-  await page.getByRole("button", { name: /已处理/ }).click();
+  // 没有末段回复时保留过程；未完成调用始终可操作。
   await expect(page.locator('[data-foreground-wait="call-bg"]')).toHaveCount(0);
   await page.locator('[data-background-task="call-bg"]').getByRole("button", { name: "停止" }).click();
-  await expect(card).toContainText("2 已完成");
+  await expect(card).toContainText("2 已结束");
 
   // 前台等待：只在工具卡片上「转到后台」；转走后才出现在看板，卡片不再提供转后台。
   const fgActions = page.locator('[data-foreground-wait="call-fg"]');
@@ -88,7 +88,7 @@ test("Team 批准后原卡显示进度并进入后台看板", async ({ page, req
     });
     await seedState(request, TASK_ID, completedState(1,
       { id: "user-1", parts: [{ type: "text", text: "审查改动" }] },
-      [{ type: "tool-call", toolName: "agent_team", toolCallId: callId, args: { team_id: "review", goal: preview.goal }, status: "pending",
+      [{presentation: "standalone",  type: "tool-call", toolName: "agent_team", toolCallId: callId, args: { team_id: "review", goal: preview.goal }, status: "pending",
         awaitingUser: !approved, display_data: preview, team_run_id: 17, ...(approved ? { background: work } : {}) }],
     ));
   }
@@ -104,8 +104,18 @@ test("Team 批准后原卡显示进度并进入后台看板", async ({ page, req
   });
   await publish();
   await page.goto(`/tasks/${TASK_ID}`);
+  await expect(page.getByRole("button", { name: "确认执行" })).toBeVisible();
+  await page.screenshot({ path: `${OUTPUT_DIR}/team-approval.png` });
   await page.getByRole("button", { name: "确认执行" }).click();
   await expect(page.getByRole("button", { name: "确认执行" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Agent Team 执行进度" })).toContainText("执行中");
+  await page.screenshot({ path: `${OUTPUT_DIR}/team-running.png` });
+  const trigger = page.locator(`[data-tool-call-id="${callId}"] [data-slot="call-row"]`);
+  await trigger.click();
+  await expect(page.getByRole("region", { name: "Agent Team 执行进度" })).toBeHidden();
+  await trigger.focus();
+  await page.keyboard.press("Enter");
   await expect(page.getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
   await page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ }).click();
   const row = page.locator(`[data-background-task="${callId}"]`);

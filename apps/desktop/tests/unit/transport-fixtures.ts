@@ -26,7 +26,7 @@ function textPart(text: string): TransportMessagePart {
 
 /** 工具调用 part 构造器：默认 running、不等用户，调用方覆盖需要的部分。 */
 export function toolCallPart(toolCallId: string, toolName: string, overrides: Partial<TransportToolCallPart> = {}): TransportToolCallPart {
-  return { type: "tool-call", toolCallId, toolName, status: "running", args: {}, awaitingUser: false, ...overrides };
+  return {presentation: "activity",  type: "tool-call", toolCallId, toolName, status: "running", args: {}, awaitingUser: false, ...overrides };
 }
 
 export function userMessage(id: string, runId: number, text = "hello"): TransportMessage {
@@ -59,7 +59,7 @@ export function activity(
   status: TransportRunStatus,
   overrides: Partial<TransportActivity> = {},
 ): TransportActivity {
-  return {
+  return {modelActivity: null,
     runId,
     status,
     endReason: null,

@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import { elapsedSince, formatDuration } from "@/lib/assistant/run-duration";
 
 describe("formatDuration", () => {
-  it("秒、分秒、时分三档；不足 1 秒与负值按 0 秒", () => {
-    expect(formatDuration(0)).toBe("0 秒");
-    expect(formatDuration(999)).toBe("0 秒");
-    expect(formatDuration(-5000)).toBe("0 秒");
-    expect(formatDuration(48_000)).toBe("48 秒");
-    expect(formatDuration(192_000)).toBe("3 分 12 秒");
-    expect(formatDuration(3_720_000)).toBe("1 小时 02 分");
+  it("秒、分秒、时分三档；不足 1 秒与负值按 0秒", () => {
+    expect(formatDuration(0)).toBe("0秒");
+    expect(formatDuration(999)).toBe("0秒");
+    expect(formatDuration(-5000)).toBe("0秒");
+    expect(formatDuration(48_000)).toBe("48秒");
+    expect(formatDuration(192_000)).toBe("3分钟12秒");
+    expect(formatDuration(3_720_000)).toBe("1小时02分");
   });
 });
 

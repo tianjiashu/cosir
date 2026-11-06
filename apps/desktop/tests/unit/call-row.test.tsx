@@ -17,7 +17,7 @@ import { createQueryClient } from "@/lib/query/query-client";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 
 function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
-  return {
+  return {presentation: "activity",
     backendStatus: "completed",
     awaitingUser: false,
     background: false,
@@ -52,10 +52,10 @@ describe("CallRow 标题与目标", () => {
     expect(read).toContain("lucide-eye");
   });
 
-  it("命令的标题是模型写的 description，目标是命令首行", () => {
+  it("命令的标题只显示 description，不重复命令", () => {
     const html = render({}, { toolName: "execute_terminal", args: { description: "运行后端单元测试", command: "uv run pytest -q\necho done" } });
     expect(html).toContain("运行后端单元测试");
-    expect(html).toContain("uv run pytest -q");
+    expect(html).not.toContain("uv run pytest -q");
     expect(html).not.toContain("echo done");
     expect(html).toContain("lucide-terminal");
   });
@@ -67,43 +67,46 @@ describe("CallRow 标题与目标", () => {
   });
 
   it("排队且还没有参数时标题闪烁，参数到达后不再闪烁", () => {
-    expect(render({ backendStatus: "pending" })).toContain("shimmer");
-    expect(render({ backendStatus: "pending" }, { args: { path: "a.ts" } })).not.toContain("shimmer");
+    expect(render({presentation: "activity",  backendStatus: "pending" })).toContain("shimmer");
+    expect(render({presentation: "activity",  backendStatus: "pending" }, { args: { path: "a.ts" } })).not.toContain("shimmer");
   });
 });
 
 describe("CallRow 状态位", () => {
   it("运行中显示旋转、失败显示告警、取消显示叉；成功不画对勾", () => {
-    expect(render({ backendStatus: "running" })).toContain("animate-spin");
-    expect(render({ backendStatus: "failed", error: "路径无效" })).toContain("lucide-circle-alert");
-    expect(render({ backendStatus: "cancelled", error: "已取消" })).toContain("lucide-circle-x");
+    expect(render({presentation: "activity",  backendStatus: "running" })).toContain("animate-spin");
+    expect(render({presentation: "activity",  backendStatus: "failed", error: "路径无效" })).toContain("lucide-circle-alert");
+    expect(render({presentation: "activity",  backendStatus: "cancelled", error: "已取消" })).toContain("lucide-circle-x");
     const done = render();
     expect(done).not.toContain("lucide-check");
     expect(done).not.toContain("animate-spin");
   });
 
-  it("失败把后端短提示放在元信息、标题变红且不可展开；取消用删除线", () => {
-    const failed = render({ backendStatus: "failed", error: "路径无效", display_data: { kind: "read-file-meta", path: "a.ts" } });
+  it("失败把后端短提示放在元信息、标题变红且不可展开；取消保持中性、不抹去操作记录", () => {
+    const failed = render({presentation: "activity",  backendStatus: "failed", error: "路径无效", display_data: { kind: "read-file-meta", path: "a.ts" } });
     expect(failed).toContain("路径无效");
     expect(failed).toContain("text-destructive");
     expect(failed).not.toContain("aria-expanded");
-    expect(render({ backendStatus: "cancelled", error: "已取消" })).toContain("line-through");
+    expect(render({presentation: "activity",  backendStatus: "cancelled", error: "已取消" })).not.toContain("line-through");
   });
 
   it("结束后标题转灰，运行中保持前景色", () => {
     expect(render()).toMatch(/data-slot="call-title"[^>]*text-muted-foreground/);
-    expect(render({ backendStatus: "running" })).toMatch(/data-slot="call-title"[^>]*text-foreground/);
+    expect(render({presentation: "activity",  backendStatus: "running" })).toMatch(/data-slot="call-title"[^>]*text-foreground/);
   });
 });
 
 describe("CallRow 附加态", () => {
   it("等待用户在元信息里标「等你操作」", () => {
-    expect(render({ backendStatus: "pending", awaitingUser: true })).toContain("等你操作");
+    const html = render({presentation: "activity",  backendStatus: "pending", awaitingUser: true });
+    expect(html).toContain("等你操作");
+    expect(html).not.toContain("animate-spin");
+    expect(html).toContain("等待你的操作");
   });
 
   it("后台占位未结束时标「后台运行中」，结束后不再标", () => {
-    expect(render({ backendStatus: "pending", background: true })).toContain("后台运行中");
-    expect(render({ backendStatus: "completed", background: true })).not.toContain("后台运行中");
+    expect(render({presentation: "activity",  backendStatus: "pending", background: true })).toContain("后台运行中");
+    expect(render({presentation: "activity",  backendStatus: "completed", background: true })).not.toContain("后台运行中");
   });
 });
 
@@ -114,6 +117,15 @@ describe("CallRow kind 视图", () => {
     });
     expect(html).toMatch(/<button[^>]*aria-expanded="false"[^>]*data-slot="call-row"/);
     expect(html).toContain("tick · 3 个命中");
+  });
+
+  it.each(["failed", "cancelled"] as const)("%s 保留实际终端输出的展开入口", (backendStatus) => {
+    const html = render({presentation: "activity",  backendStatus, error: "已停止", display_data: {
+      kind: "terminal-result", command: "make", output: "partial", exit_code: -1,
+    } }, { toolName: "execute_terminal" });
+    expect(html).toContain('data-terminal-viewport="true"');
+    expect(html).toContain("已停止");
+    expect(html).not.toContain("非零退出 -1");
   });
 
   it("未知 kind 不崩溃、没有元信息也不可展开", () => {
@@ -127,12 +139,12 @@ describe("CallRow kind 视图", () => {
     const html = render({
       display_data: { kind: "terminal-result", command: "bun run typecheck", output: "error TS2304", exit_code: 2, workdir: "/w" },
     }, { toolName: "execute_terminal", args: { description: "运行类型检查", command: "bun run typecheck" } });
-    expect(html).toContain("exit 2");
+    expect(html).toContain("非零退出 2");
     expect(html).toContain('data-terminal-viewport="true"');
   });
 
   it("命令运行中默认展开、结束即收起（没有用户覆盖时）", () => {
-    const running = render({ backendStatus: "running", display_data: { kind: "terminal-result", command: "make", output: "building" } });
+    const running = render({presentation: "activity",  backendStatus: "running", display_data: { kind: "terminal-result", command: "make", output: "building" } });
     expect(running).toContain('data-terminal-viewport="true"');
     const done = render({ display_data: { kind: "terminal-result", command: "make", output: "built", exit_code: 0 } });
     expect(done).not.toContain('data-terminal-viewport="true"');
@@ -186,7 +198,7 @@ describe("CallRow kind 视图", () => {
   });
 
   it("只读面不渲染停止与转到后台", () => {
-    const html = render({ backendStatus: "running", display_data: { kind: "terminal-result", command: "make", output: "" } }, { interactive: false });
+    const html = render({presentation: "activity",  backendStatus: "running", display_data: { kind: "terminal-result", command: "make", output: "" } }, { interactive: false });
     expect(html).not.toContain("停止终端命令");
     expect(html).not.toContain("转到后台");
   });

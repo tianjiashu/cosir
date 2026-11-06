@@ -34,7 +34,7 @@ const PREVIEW: Record<string, unknown> = {
   ],
 };
 
-const ARTIFACT: ToolArtifact = {
+const ARTIFACT: ToolArtifact = {presentation: "activity",
   backendStatus: "completed",
   awaitingUser: false,
   background: false,

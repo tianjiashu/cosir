@@ -18,7 +18,7 @@ const snapshot = (status: "completed" | "running" | "suspended"): TransportState
   return {
     title: "测试对话",
     messages: [...turn(1, "completed"), ...turn(2, status)],
-    messageOffset: 0, activity: { runId: 2, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
+    messageOffset: 0, activity: {modelActivity: null,  runId: 2, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 };

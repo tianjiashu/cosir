@@ -24,7 +24,7 @@ function longConversation(pairs = PAIRS): SeedState {
     messages.push({ id: `a-${index}`, role: "assistant", runId: index + 1, outcome: OUTCOME, source: null, parts } as TransportState["messages"][number]);
   }
   // `durationMs` 只属于结局；activity 是固定字段的白名单，多一个键整份快照就无效。
-  const activity = { runId: pairs, status: OUTCOME.status, endReason: OUTCOME.endReason, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" };
+  const activity = {modelActivity: null,  runId: pairs, status: OUTCOME.status, endReason: OUTCOME.endReason, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" };
   return { title: "长对话", messages, activity };
 }
 

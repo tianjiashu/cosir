@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { toolResultSignal } from "@/lib/assistant/tool-result-signals";
 import { readImageReadDisplay } from "@/components/assistant-ui/tools/image-read-display";
 import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
 import { imageReadView } from "@/components/assistant-ui/tools/details/image-read-view";
@@ -29,7 +30,7 @@ describe("image-read display", () => {
   });
 
   it("routes read_image by display kind, falling back on bad payloads", () => {
-    const artifact = (display_data: Record<string, unknown>): ToolArtifact => ({
+    const artifact = (display_data: Record<string, unknown>): ToolArtifact => ({presentation: "activity",
       backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null, errorCode: null,
     });
     expect(resolveCallView(artifact(DISPLAY))?.view).toBe(imageReadView);
@@ -38,7 +39,8 @@ describe("image-read display", () => {
 
   it("summarizes image count and partial failures", () => {
     const context = {} as CallViewContext;
-    expect(imageReadView.meta!(DISPLAY, context)).toBe("1 张，1 张未读取");
+    expect(toolResultSignal(DISPLAY)).not.toBeNull();
+    expect(imageReadView.meta!(DISPLAY, context)).toBe("1 张");
     expect(imageReadView.meta!({ ...DISPLAY, failures: [] }, context)).toBe("1 张");
   });
 });

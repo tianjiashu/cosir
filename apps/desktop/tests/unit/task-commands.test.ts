@@ -1,3 +1,4 @@
+import { beginCommand, finishCommand, useCommandRequests, forgetCommands } from "@/lib/assistant/command-request-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
@@ -12,8 +13,10 @@ import {
   sendQueuedTaskMessageNow,
   sendTaskMessage,
   submitToolDecision,
+  synchronizeCommand,
   type TaskMessageRequest,
 } from "@/lib/assistant/task-commands";
+import { assistantMessage, toolCallPart, transportState } from "./transport-fixtures";
 import { HttpError } from "@/lib/http/errors";
 
 const REQUEST: TaskMessageRequest = {
@@ -33,10 +36,32 @@ function lastCall(): [string, RequestInit] {
 }
 
 // http client 按 runtime config 解析后端地址，它读 window；单测跑在 Node 环境，给一个空 window。
-beforeEach(() => vi.stubGlobal("window", {}));
+beforeEach(() => { forgetCommands([7, 12]); vi.stubGlobal("window", {}); });
 afterEach(() => vi.unstubAllGlobals());
 
 describe("task commands", () => {
+  it("uncertain decisions synchronize old history without repeating the decision", async () => {
+    const pending = beginCommand(7, "call:old", "decision")!;
+    finishCommand(7, "call:old", pending, "unknown", "未能确认");
+    const recent = transportState({ messageOffset: 1, messages: [assistantMessage("recent", 2)] });
+    const old = assistantMessage("old-message", 1, [toolCallPart("old", "agent_team", { status: "pending", awaitingUser: true })]);
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(recent)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ messages: [old], messageOffset: 0 })));
+    vi.stubGlobal("fetch", fetchMock);
+    await synchronizeCommand(7, "call:old");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.every(([, init]) => !init.method || init.method === "GET")).toBe(true);
+    expect(useCommandRequests.getState().tasks[7]?.["call:old"]).toBeUndefined();
+  });
+  it("deduplicates parallel submissions across different component instances", async () => {
+    let release!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { release = resolve; })));
+    const first = submitToolDecision(7, "same", { decision: "approve" });
+    await submitToolDecision(7, "same", { decision: "approve" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    release(new Response("{}"));
+    await first;
+  });
   it("发送消息只按 Task 寻址，不携带投递方式与 runId（并入时机由后端决定）", async () => {
     vi.stubGlobal("fetch", accepted());
 
@@ -164,6 +189,6 @@ describe("idempotent task commands", () => {
     await expect(backgroundToolCall(12, "call-1")).resolves.toEqual({ kind: "not_detachable" });
 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(backendError(404, "任务不存在")));
-    await expect(backgroundToolCall(12, "call-1")).resolves.toEqual({ kind: "failed", message: "任务不存在" });
+    await expect(backgroundToolCall(12, "call-1")).resolves.toEqual({ kind: "failed", message: "任务不存在", reason: "rejected" });
   });
 });

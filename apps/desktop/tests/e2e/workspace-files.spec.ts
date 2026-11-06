@@ -584,7 +584,7 @@ test("文件菜单开关不锁定主对话，长消息滚动位置和节点保�
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
   const state = await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json() as TransportState;
   state.messages[1].parts = Array.from({ length: 45 }, (_, i) => [
-    { type: "reasoning" as const, text: `分析第 ${i} 次输出`, status: "completed" as const },
+    { type: "text" as const, text: `分析第 ${i} 次输出`, status: "completed" as const },
     { type: "text" as const, text: `第 ${i} 次读取终端输出。继续观察命令的执行过程，检查输出和状态是否符合预期。`, status: "completed" as const },
   ]).flat();
   await seedState(request, 42, state);
@@ -594,6 +594,8 @@ test("文件菜单开关不锁定主对话，长消息滚动位置和节点保�
   const viewport = page.locator(".aui-thread-root > div");
   const row = page.locator('main [data-index="1"]');
   await expect(row).toContainText("第 44 次读取终端输出");
+  // 过程默认折叠；展开后才是本用例要验证的长消息滚动画布。
+  await row.getByRole("button", { name: "查看过程，展开过程", exact: true }).click();
   await viewport.evaluate((element) => { element.scrollTop = 1200; });
   await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBe(1200);
   const originalRow = await row.elementHandle();
@@ -679,8 +681,8 @@ test("链接指向不存在的文件：不留坏标签，提到的文件名改�
   const message = page.locator('main [data-index="1"]');
   const surface = page.getByTestId("workspace-files-surface");
 
-  // 只提到文件名：根目录下没有就按文件名查找，不开标签。
-  await message.getByRole("button", { name: "task.ts" }).click();
+  // 裸文件名只提供显式查找入口，不探测根目录。
+  await message.getByRole("button", { name: "查找文件 task.ts" }).click();
   await expect(surface.getByRole("textbox", { name: "搜索工作区文件名" })).toHaveValue("task.ts");
   await expect(surface.getByRole("tab", { name: "task.ts" })).toHaveCount(0);
 

@@ -26,7 +26,7 @@ function activeState(queued: TransportState["queued_messages"] = []): TransportS
       { id: "assistant-u-1", role: "assistant", runId: 1, source: null, outcome: null,
         parts: [{ type: "text", text: "正在处理", status: "running" }] },
     ],
-    messageOffset: 0, activity: {
+    messageOffset: 0, activity: {modelActivity: null,
       runId: 1, status: "suspended", endReason: null, error: null, usage: null,
       contextWindowTotal: null, launch: RUN_LAUNCH, startedAt: "2026-10-27T00:00:00.000Z",
     },

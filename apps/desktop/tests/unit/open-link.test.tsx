@@ -73,10 +73,12 @@ describe("useOpenLink", () => {
     expect(useDockStore.getState().panel).toBe("files");
   });
 
-  it("does not open a tab for a missing file: a mention searches, an address notifies", async () => {
+  it("filename searches never probe root files; missing addresses notify", async () => {
     const opener = captureOpener(3);
-    opener.open({ kind: "workspace", path: "task.ts", directory: false, mention: true });
+    opener.open({ kind: "filename-search", query: "task.ts", lines: { start: 42, end: 42 } });
     await vi.waitFor(() => expect(useFilesStore.getState().sessions[7]?.searchRequest?.query).toBe("task.ts"));
+    expect(getFileInfo).not.toHaveBeenCalled();
+    expect(useFilesStore.getState().sessions[7].searchRequest?.navigation?.lines).toEqual({ start: 42, end: 42 });
     opener.open(opener.resolve("src/gone.ts")!);
     await vi.waitFor(() => expect(notifyInfo).toHaveBeenCalledWith("工作区里没有 src/gone.ts", expect.anything()));
     expect(useFilesStore.getState().sessions[7].tabs).toEqual([]);
@@ -137,4 +139,49 @@ describe("markdown links", () => {
     expect(renderMarkdown("see `src/app.ts:42`")).toContain('title="在文件面板打开 src/app.ts"');
     expect(renderMarkdown("run `npm test`")).not.toContain("<button");
   });
+});
+
+it("renders search affordances separately and preserves all reference protocols", () => {
+  const html = renderMarkdown("`API.md` `./guide.md` [file](cosir-file:src/a.ts) [dir](cosir-dir:src) [snippet](cosir-snippet:src/a.ts#L2-L3) [excerpt](cosir-excerpt:src/a.ts)", { documentDir: "docs" });
+  expect(html).toContain('aria-label="查找文件 API.md"');
+  expect(html).not.toContain('title="在文件面板打开 API.md"');
+  expect(html).toContain('title="在文件面板打开 docs/guide.md"');
+  expect(html.match(/href="cosir-/g)).toHaveLength(4);
+});
+
+it("discards late opens after a newer click or closing the dock", async () => {
+  let finish!: () => void;
+  getFileInfo.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ path: "slow.ts", kind: "text" }); }));
+  const opener = captureOpener(3);
+  opener.open(opener.resolve("slow.ts")!);
+  opener.open(opener.resolve("src/a.ts")!);
+  await vi.waitFor(() => expect(useFilesStore.getState().sessions[7]?.active).toBe("src/a.ts"));
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(useFilesStore.getState().sessions[7].active).toBe("src/a.ts");
+  getFileInfo.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ path: "slow.ts", kind: "text" }); }));
+  opener.open(opener.resolve("slow-again.ts")!);
+  useDockStore.getState().close();
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(useDockStore.getState().panel).toBeNull();
+  expect(useFilesStore.getState().sessions[7].active).toBe("src/a.ts");
+});
+
+it("keeps code-styled explicit link labels free of nested search buttons", () => {
+  const html = renderMarkdown("[`API.md`](docs/brand/API.md)");
+  expect(html).toContain('href="docs/brand/API.md"');
+  expect(html).not.toContain("<button");
+});
+
+it("selecting the already active file cancels an older pending link", async () => {
+  useFilesStore.getState().open(7, "src/a.ts");
+  let finish!: () => void;
+  getFileInfo.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ path: "slow.ts", kind: "text" }); }));
+  const opener = captureOpener(3);
+  opener.open(opener.resolve("slow.ts")!);
+  useFilesStore.getState().open(7, "src/a.ts", true);
+  finish();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(useFilesStore.getState().sessions[7].active).toBe("src/a.ts");
 });

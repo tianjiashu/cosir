@@ -22,6 +22,7 @@ const fixtures = () => [
   record(2, {
     role: "assistant",
     content: "",
+    reasoning_content: "仅在观测中展示的推理原文",
     tool_calls: [
       { id: "call-1", name: "read_file", args: { path: "src/main.py" } },
     ],
@@ -265,3 +266,15 @@ for (const theme of ["light", "dark"] as const) {
     expect(errors).toEqual([]);
   });
 }
+
+
+test("推理原文在独立观测页可查看与复制", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await mock(page);
+  await page.goto("/context-observer?run_id=21");
+  await page.getByRole("option", { name: "#2 Assistant", exact: true }).click();
+  await detail(page).getByRole("button", { name: "思考内容", exact: true }).click();
+  await expect(detail(page).locator(".cm-content")).toContainText("仅在观测中展示的推理原文");
+  await detail(page).getByRole("button", { name: "复制思考内容", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("仅在观测中展示的推理原文");
+});

@@ -4,13 +4,15 @@ type MockTerminalInstance = {
   options: Record<string, unknown>;
   cols: number;
   rows: number;
-  buffer: { active: { baseY: number; cursorY: number; cursorX: number }; normal: { length: number } };
+  buffer: { active: { baseY: number; cursorY: number; cursorX: number; length?: number; viewportY?: number; getLine?: ReturnType<typeof vi.fn> }; normal: { length: number } };
   resize: ReturnType<typeof vi.fn>;
   open: ReturnType<typeof vi.fn>;
   loadAddon: ReturnType<typeof vi.fn>;
   write: ReturnType<typeof vi.fn>;
   reset: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
+  scrollToBottom: ReturnType<typeof vi.fn>;
+  scrollToLine: ReturnType<typeof vi.fn>;
   selectAll: ReturnType<typeof vi.fn>;
   getSelection: ReturnType<typeof vi.fn>;
   clearSelection: ReturnType<typeof vi.fn>;
@@ -26,7 +28,7 @@ vi.mock("@xterm/xterm", () => ({
     options: Record<string, unknown>;
     cols = 80;
     rows = 24;
-    buffer = { active: { baseY: 0, cursorY: 0, cursorX: 0 }, normal: { length: 0 } };
+    buffer = { active: { baseY: 0, cursorY: 0, cursorX: 0, length: 1, getLine: vi.fn(() => undefined) }, normal: { length: 0 } };
     unicode = { activeVersion: "6" };
     resize = vi.fn((cols: number, rows: number) => {
       this.cols = cols;
@@ -37,6 +39,10 @@ vi.mock("@xterm/xterm", () => ({
     write = vi.fn((_text: string, done?: () => void) => done?.());
     reset = vi.fn();
     dispose = vi.fn();
+    scrollToBottom = vi.fn();
+    scrollToLine = vi.fn();
+    attachCustomWheelEventHandler = vi.fn();
+    onScroll = vi.fn(() => ({ dispose: vi.fn() }));
     selectAll = vi.fn();
     getSelection = vi.fn(() => "");
     clearSelection = vi.fn();
@@ -82,11 +88,11 @@ describe("TerminalOutputView", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("replays the cumulative snapshot into every new xterm instance", () => {
-    const first = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+    const first = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     first.applySnapshot({ output: "first\n" });
     first.dispose();
 
-    const second = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+    const second = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     second.applySnapshot({ output: "first\n" });
 
     expect(mocks.terminals).toHaveLength(2);
@@ -95,14 +101,14 @@ describe("TerminalOutputView", () => {
   });
 
   it("converts LF-only pipe output into terminal newlines", () => {
-    const session = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     void session;
 
     expect(mocks.terminals[0].options.convertEol).toBe(true);
   });
 
   it("reuses the reconciler for append and reset operations", () => {
-    const session = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     session.applySnapshot({ output: "progress 1" });
     session.applySnapshot({ output: "progress 1\rprogress 2" });
     session.applySnapshot({ output: "final screen" });
@@ -116,7 +122,7 @@ describe("TerminalOutputView", () => {
 
   it("coalesces snapshots while xterm is still parsing a write", () => {
     let releaseWrite: (() => void) | undefined;
-    const session = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     const xterm = mocks.terminals[0];
     xterm.write.mockImplementationOnce((_text: string, done?: () => void) => {
       releaseWrite = done;
@@ -135,7 +141,7 @@ describe("TerminalOutputView", () => {
 
   it("keeps control sequences intact while coalescing cumulative snapshots", () => {
     let releaseWrite: (() => void) | undefined;
-    const session = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     const terminal = mocks.terminals[0];
     terminal.write.mockImplementationOnce((_text: string, done?: () => void) => {
       releaseWrite = done;
@@ -149,7 +155,7 @@ describe("TerminalOutputView", () => {
   });
 
   it("recovers after a synchronous xterm write failure", () => {
-    const session = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     const terminal = mocks.terminals[0];
     terminal.write.mockImplementationOnce(() => {
       throw new Error("write failed");
@@ -163,7 +169,7 @@ describe("TerminalOutputView", () => {
 
   it("does not schedule layout work after disposal", () => {
     let releaseWrite: (() => void) | undefined;
-    const session = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     const terminal = mocks.terminals[0];
     terminal.write.mockImplementationOnce((_text: string, done?: () => void) => {
       releaseWrite = done;
@@ -177,24 +183,24 @@ describe("TerminalOutputView", () => {
   });
 
   it("sizes rows to the written content and caps them at the visible maximum", () => {
-    const session = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     const terminal = mocks.terminals[0];
     mocks.fitAddons[0].proposeDimensions.mockReturnValue({ cols: 100, rows: 3 });
 
     // 两行输出、以换行结尾：光标停在第 3 行行首，光标行也要计入，否则首行会被挤出视口。
-    terminal.buffer.active = { baseY: 0, cursorY: 2, cursorX: 0 };
+    terminal.buffer.active = { baseY: 0, cursorY: 2, cursorX: 0, length: 3 };
     session.applySnapshot({ output: "a\nb\n" });
     expect(terminal.resize).toHaveBeenLastCalledWith(100, 3);
 
-    terminal.buffer.active = { baseY: 40, cursorY: 1, cursorX: 3 };
+    terminal.buffer.active = { baseY: 40, cursorY: 1, cursorX: 3, length: 42 };
     session.applySnapshot({ output: "a\nb\nmore" });
-    expect(terminal.resize).toHaveBeenLastCalledWith(100, 16);
+    expect(terminal.resize).toHaveBeenLastCalledWith(100, 8);
   });
 
   // 目的：只在回滚区开始丢最早的输出时提示；潜在缺陷：清屏序列被误当成丢行，或清屏重放后提示不复位。
   it("reports truncation when the buffer reaches capacity, and clears it after a smaller replay", () => {
     const changes: boolean[] = [];
-    const session = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light", onTruncatedChange: (value) => changes.push(value) });
+    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light", onTruncatedChange: (value) => changes.push(value) });
     const terminal = mocks.terminals[0];
     mocks.fitAddons[0].proposeDimensions.mockReturnValue({ cols: 100, rows: 3 });
 
@@ -202,30 +208,64 @@ describe("TerminalOutputView", () => {
     session.applySnapshot({ output: "short" });
     expect(changes).toEqual([]);
 
-    terminal.buffer.active = { baseY: 6000, cursorY: 15, cursorX: 0 };
+    terminal.buffer.active = { baseY: 6000, cursorY: 15, cursorX: 0, length: 6016 };
     terminal.buffer.normal.length = 16 + 5000;
     session.applySnapshot({ output: "short + a lot more" });
     expect(changes).toEqual([true]);
 
-    terminal.buffer.active = { baseY: 0, cursorY: 1, cursorX: 0 };
+    terminal.buffer.active = { baseY: 0, cursorY: 1, cursorX: 0, length: 2 };
     terminal.buffer.normal.length = 2;
     session.applySnapshot({ output: "new screen" });
     expect(terminal.reset).toHaveBeenCalledOnce();
     expect(changes).toEqual([true, false]);
   });
 
-  // 目的：复制得到渲染后的纯文本（xterm 自己的选区拼接）；潜在缺陷：留下选区或末尾空行。
-  it("copies the rendered text via xterm selection and leaves no selection behind", () => {
-    const session = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+  it("copies public buffer lines without changing the user selection", () => {
+    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     const terminal = mocks.terminals[0];
-    terminal.getSelection.mockReturnValue("a\nb\n\n   ");
-    expect(session.copyText()).toBe("a\nb");
-    expect(terminal.selectAll).toHaveBeenCalledOnce();
-    expect(terminal.clearSelection).toHaveBeenCalledOnce();
+    const lines = [
+      { isWrapped: false, translateToString: vi.fn(() => "long ") },
+      { isWrapped: true, translateToString: vi.fn(() => "中文") },
+      { isWrapped: false, translateToString: vi.fn(() => "tail") },
+    ];
+    terminal.buffer.active = { baseY: 0, cursorY: 0, cursorX: 4, length: 3, getLine: vi.fn((i) => lines[i]) };
+    expect(session.copyText()).toBe("long 中文\ntail");
+    expect(terminal.selectAll).not.toHaveBeenCalled();
+    expect(terminal.clearSelection).not.toHaveBeenCalled();
+    expect(lines[0].translateToString).toHaveBeenCalledWith(false);
+  });
+
+  it("restores the reader before releasing a queued write", () => {
+    const view = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light", mode: "reader" });
+    const terminal = mocks.terminals[0];
+    terminal.buffer.active.viewportY = 0;
+    view.applySnapshot({ output: "start" });
+    terminal.buffer.active.baseY = 10;
+    terminal.buffer.active.viewportY = 0;
+    terminal.scrollToLine.mockImplementation((line) => { terminal.buffer.active.viewportY = line; });
+    let release: (() => void) | undefined;
+    terminal.write.mockImplementationOnce((_text, done) => { release = done; });
+    view.applySnapshot({ output: "start one" });
+    view.applySnapshot({ output: "start one two" });
+    terminal.buffer.active.viewportY = 10; // xterm parse briefly exposes its new scroll position.
+    release?.();
+    expect(terminal.scrollToLine).toHaveBeenLastCalledWith(0);
+    expect(terminal.scrollToBottom).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a write callback after the viewport was disposed", () => {
+    const view = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
+    const terminal = mocks.terminals[0];
+    let release: (() => void) | undefined;
+    terminal.write.mockImplementationOnce((_text, done) => { release = done; });
+    view.applySnapshot({ output: "pending" });
+    view.dispose();
+    release?.();
+    expect(terminal.scrollToBottom).not.toHaveBeenCalled();
   });
 
   it("disposes xterm resources", () => {
-    const session = new TerminalOutputView({} as HTMLElement, { resolvedTheme: "light" });
+    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     session.dispose();
 
     expect(mocks.fitAddons[0].dispose).toHaveBeenCalledOnce();

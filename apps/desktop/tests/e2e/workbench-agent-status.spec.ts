@@ -16,7 +16,7 @@ function snapshot(runId: number | null, status = "completed", text = "阅读内�
       source: null,
     }],
     messageOffset: 0,
-    activity: { runId, status, endReason: null, error: null, usage: null, contextWindowTotal: null,
+    activity: {modelActivity: null,  runId, status, endReason: null, error: null, usage: null, contextWindowTotal: null,
       launch: { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: [] }, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };

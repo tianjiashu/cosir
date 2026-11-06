@@ -40,7 +40,7 @@ function entry(toolCallId: string, overrides: Partial<BackgroundTaskEntry> = {})
 }
 
 function terminalPart(toolCallId: string, overrides: Partial<TransportToolCallPart> = {}): TransportToolCallPart {
-  return {
+  return {presentation: "activity",
     type: "tool-call",
     toolCallId,
     toolName: "execute_terminal",
@@ -111,7 +111,7 @@ describe("snapshot background_tasks 与工具 part background", () => {
   });
 
   it("converter 用后端短提示说明后台占位的取消原因", () => {
-    const interrupted = toToolCallPart({ type: "tool-call", toolCallId: "c2", toolName: "execute_terminal", args: {}, status: "cancelled", error: "已中断", background: { ...WORK, endedAt: "2026-10-28T08:05:00+00:00" }, awaitingUser: false });
+    const interrupted = toToolCallPart({presentation: "activity",  type: "tool-call", toolCallId: "c2", toolName: "execute_terminal", args: {}, status: "cancelled", error: "已中断", background: { ...WORK, endedAt: "2026-10-28T08:05:00+00:00" }, awaitingUser: false });
     expect(readToolArtifact((interrupted as { artifact?: unknown }).artifact).error).toBe("已中断");
   });
 });
@@ -125,7 +125,7 @@ describe("ForegroundWaitAction", () => {
 });
 
 describe("后台任务卡", () => {
-  it("卡片始终存在：没有条目时摘要为「无」、正文为空状态；运行中在前、已结束收成「N 已完成」", () => {
+  it("卡片始终存在：没有条目时摘要为「无」、正文为空状态；运行中在前、已结束收成「N 已结束」", () => {
     expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("无");
     expect(renderToStaticMarkup(<BackgroundTasksBody taskId={1} />)).toContain("没有后台任务");
     board.entries.set(1, [
@@ -135,19 +135,19 @@ describe("后台任务卡", () => {
     expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("1 个运行中");
     const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
     expect(html).toContain("cd /work &amp;&amp; make");
-    expect(html).toContain("1 已完成");
+    expect(html).toContain("1 已结束");
     expect(html).not.toContain("terminal_command:done");
     board.entries.set(1, [entry("done", { status: "completed", endedAt: "2026-10-28T08:00:42+00:00" })]);
-    expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("1 已完成");
+    expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("1 已结束");
   });
 
-  // 目的：工作结束、占位还没落定时条目留在进行中；潜在缺陷：被算进「已完成」或继续计时、露出停止按钮。
+  // 目的：工作结束、占位还没落定时条目留在进行中；潜在缺陷：被算进「已结束」或继续计时、露出停止按钮。
   it("收尾中的条目留在进行中：不计时、不能停止，摘要报「收尾中」", () => {
     board.entries.set(1, [entry("a", { status: "settling" })]);
     expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("收尾中");
     const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
     expect(html).toContain("收尾中");
-    expect(html).not.toContain("已完成");
+    expect(html).not.toContain("已结束");
     expect(html).not.toContain("停止");
     expect(html).not.toMatch(/\d+s</);
   });

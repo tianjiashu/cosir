@@ -151,26 +151,26 @@ describe("Transport snapshot validation", () => {
   });
 
   it("rejects invalid tool lifecycle state with a diagnostic path", () => {
-    const snapshot = withToolPart({ type: "tool-call", awaitingUser: false, toolCallId: "t1", toolName: "read_file", status: "future", args: {} });
+    const snapshot = withToolPart({presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "t1", toolName: "read_file", status: "future", args: {} });
     expect(() => parseTransportState(snapshot)).toThrow("messages[0].parts[0].status");
   });
 
   it("accepts a positive child Run locator and rejects invalid locators", () => {
-    const part = { type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "running", args: {}, child_task_id: 501 };
+    const part = {presentation: "standalone",  type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "running", args: {}, child_task_id: 501 };
     const snapshot = withToolPart(part);
     expect(parseTransportState(snapshot)).toBe(snapshot);
     expect(() => parseTransportState(withToolPart({ ...part, child_task_id: 0 }))).toThrow("child_task_id");
   });
 
   it("接受后端 execute_terminal 流式输出的去重序号 terminal_output_seq", () => {
-    const part = { type: "tool-call", awaitingUser: false, toolCallId: "exec-1", toolName: "execute_terminal", status: "running", args: {}, terminal_output_seq: 3 };
+    const part = {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "exec-1", toolName: "execute_terminal", status: "running", args: {}, terminal_output_seq: 3 };
     const snapshot = withToolPart(part);
     expect(parseTransportState(snapshot)).toBe(snapshot);
     expect(() => parseTransportState(withToolPart({ ...part, terminal_output_seq: -1 }))).toThrow("terminal_output_seq");
   });
 
   it("accepts the minimal child session display contract", () => {
-    const snapshot = withToolPart({
+    const snapshot = withToolPart({presentation: "standalone",
       type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "completed", args: {},
       display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501, status: "completed" },
     });
@@ -178,7 +178,7 @@ describe("Transport snapshot validation", () => {
   });
 
   it("accepts the send_message / task_status result contract", () => {
-    const part = (display_data: Record<string, unknown>) => withToolPart({
+    const part = (display_data: Record<string, unknown>) => withToolPart({presentation: "activity",
       type: "tool-call", awaitingUser: false, toolCallId: "status-1", toolName: "task_status", status: "completed", args: {}, display_data,
     });
     const snapshot = part({
@@ -200,7 +200,7 @@ describe("Transport snapshot validation", () => {
   });
 
   it("accepts the fork display contract and rejects fields outside it", () => {
-    const fork = (display_data: Record<string, unknown>) => withToolPart({
+    const fork = (display_data: Record<string, unknown>) => withToolPart({presentation: "standalone",
       type: "tool-call", awaitingUser: false, toolCallId: "fork-1", toolName: "fork_task", status: "completed", args: {}, display_data,
     });
     const snapshot = fork({ kind: "fork-task-result", title: "前端部分", child_task_id: 41 });
@@ -211,7 +211,7 @@ describe("Transport snapshot validation", () => {
   });
 
   it("rejects child output embedded in a parent delegation display", () => {
-    const snapshot = withToolPart({
+    const snapshot = withToolPart({presentation: "standalone",
       type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "completed", args: {},
       display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501, status: "completed", final_output: "不应进入父级委派卡片" },
     });
@@ -238,19 +238,19 @@ describe("Transport snapshot validation", () => {
 
   // 目的：等待用户是后端每次显式写的事实，缺省会让「排队待执行」与「等你操作」再次混在 pending 里。
   it("工具调用的 awaitingUser 必须是布尔值，缺省或非布尔都拒绝", () => {
-    const base = { type: "tool-call", toolCallId: "h1", toolName: "browser_handoff", status: "pending", args: {} };
+    const base = {presentation: "activity",  type: "tool-call", toolCallId: "h1", toolName: "browser_handoff", status: "pending", args: {} };
     expect(() => parseTransportState(withToolPart(base))).toThrow("messages[0].parts[0].awaitingUser");
     expect(() => parseTransportState(withToolPart({ ...base, awaitingUser: "true" }))).toThrow("awaitingUser");
     const awaiting = withToolPart({ ...base, awaitingUser: true });
     expect(parseTransportState(awaiting)).toBe(awaiting);
   });
 
-  // 目的：展示外壳已归前端工具目录，后端不再下发；再出现即视为前后端漂移。
-  it("tool-call part 不再接受 presentation / heading", () => {
-    const base = { type: "tool-call", awaitingUser: false, toolCallId: "r1", toolName: "read_file", status: "running", args: { path: "a.ts" } };
+  // 类别来自后端；文案、图标与标题仍由前端表达，不接受后端注入外壳。
+  it("tool-call part 接受呈现枚举，拒绝外壳对象与 heading", () => {
+    const base = {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "r1", toolName: "read_file", status: "running", args: { path: "a.ts" } };
     const ok = withToolPart(base);
     expect(parseTransportState(ok)).toBe(ok);
-    expect(() => parseTransportState(withToolPart({ ...base, presentation: { verb: "读取文件", icon: "eye" } }))).toThrow("已知字段");
+    expect(() => parseTransportState(withToolPart({ ...base, presentation: { verb: "读取文件", icon: "eye" } }))).toThrow("工具呈现类别");
     expect(() => parseTransportState(withToolPart({ ...base, heading: { title: "读取文件", target: "a.ts" } }))).toThrow("已知字段");
   });
 
@@ -284,5 +284,17 @@ describe("history window", () => {
     expect(parseHistoryPage(page, new Set(["u1"])).messages).toHaveLength(2);
     expect(() => parseHistoryPage(page, new Set(["a0"]))).toThrow(TransportSnapshotValidationError);
     expect(() => parseHistoryPage({ ...page, extra: 1 }, new Set())).toThrow(TransportSnapshotValidationError);
+  });
+});
+
+
+describe("model activity boundary", () => {
+  it("only running carries a valid phase and the phase never carries raw reasoning", () => {
+    const modelActivity = { stepId: "step-2", phase: "reasoning" as const };
+    const snapshot = transportState({ activity: activity(1, "running", { modelActivity }) });
+    expect(parseTransportState(snapshot)).toBe(snapshot);
+    expect(() => parseTransportState(transportState({ activity: activity(1, "cancelled", { modelActivity }) }))).toThrow();
+    expect(() => parseTransportState(transportState({ activity: activity(1, "running", { modelActivity: { ...modelActivity, text: "private" } as never }) }))).toThrow();
+    expect(() => parseTransportState(transportState({ messages: [assistantMessage("a", 1, [{ type: "reasoning", text: "private" } as never])] }))).toThrow();
   });
 });

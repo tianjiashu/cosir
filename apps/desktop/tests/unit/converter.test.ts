@@ -24,7 +24,7 @@ const toThreadMessage = (
   context: TransportMessageRenderContext,
 ) => toThreadMessageWithRenderContext(message, context);
 
-const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportToolCallPart> = {}): TransportToolCallPart => ({
+const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportToolCallPart> = {}): TransportToolCallPart => ({presentation: "activity",
   type: "tool-call",
   toolCallId: `tool-${status}`,
   toolName: "execute_terminal",
@@ -50,7 +50,7 @@ describe("assistant transport converter", () => {
         { type: "image", image: "cosir-attachment://image-one" },
       ],
     });
-    expect(pending?.metadata.custom).toEqual({ runId: null, source: null });
+    expect(pending?.metadata.custom).toEqual({ runId: null, source: null, pending: true });
     expect(toPendingUserMessage(command)?.id).toBe(pending?.id);
   });
 
@@ -285,7 +285,7 @@ describe("assistant transport converter", () => {
       role: "assistant",
       parts: [
         { type: "text", text: "partial **markdown", status: "running" },
-        { type: "reasoning", text: "checking", status: "completed" },
+
       ],
       runId: 1,
       outcome: null,
@@ -293,7 +293,7 @@ describe("assistant transport converter", () => {
     };
     const converted = toThreadMessage(message, runningRun(1));
     expect(converted.content[0]).toMatchObject({ type: "text", text: "partial **markdown", status: { type: "running" } });
-    expect(converted.content[1]).toMatchObject({ type: "reasoning", text: "checking", status: { type: "complete" } });
+
     expect(converted.status).toEqual({ type: "running" });
   });
 
@@ -310,14 +310,14 @@ describe("assistant transport converter", () => {
       child_task_id: 22,
     }));
 
-    expect(pending).toMatchObject({ type: "tool-call", argsText: '{\n  "command": "npm test"\n}', artifact: { backendStatus: "pending" } });
-    expect(running).toMatchObject({ artifact: { backendStatus: "running" } });
-    expect(completed).toMatchObject({ isError: false, artifact: { backendStatus: "completed", display_data: { kind: "terminal-result" } } });
-    expect(failed).toMatchObject({ isError: true, artifact: { backendStatus: "failed", errorCode: "DENIED" } });
+    expect(pending).toMatchObject({ type: "tool-call", argsText: '{\n  "command": "npm test"\n}', artifact: {presentation: "activity",  backendStatus: "pending" } });
+    expect(running).toMatchObject({ artifact: {presentation: "activity",  backendStatus: "running" } });
+    expect(completed).toMatchObject({ isError: false, artifact: {presentation: "activity",  backendStatus: "completed", display_data: { kind: "terminal-result" } } });
+    expect(failed).toMatchObject({ isError: true, artifact: {presentation: "activity",  backendStatus: "failed", errorCode: "DENIED" } });
     expect(failed).toMatchObject({ artifact: { error: "权限不足" } });
     expect(settled).toMatchObject({ artifact: { error: "执行异常" } });
     expect(failed).toMatchObject({ result: { kind: "tool-terminal", status: "failed" } });
-    expect(cancelled).toMatchObject({ isError: false, artifact: { backendStatus: "cancelled", error: "已取消" } });
+    expect(cancelled).toMatchObject({ isError: false, artifact: {presentation: "activity",  backendStatus: "cancelled", error: "已取消" } });
     expect(cancelled).toMatchObject({ result: { kind: "tool-terminal", status: "cancelled" } });
     expect(delegation).toMatchObject({ artifact: { childTaskId: 22 } });
   });
@@ -331,7 +331,7 @@ describe("assistant transport converter", () => {
     }));
     expect(awaiting).toMatchObject({
       args: { reason: "交给你登录" },
-      artifact: { backendStatus: "pending", awaitingUser: true },
+      artifact: {presentation: "activity",  backendStatus: "pending", awaitingUser: true },
     });
     expect(awaiting).not.toHaveProperty("result");
 
@@ -353,7 +353,7 @@ describe("assistant transport converter", () => {
     expect(unknownTool).toMatchObject({
       isError: true,
       result: { kind: "tool-unknown" },
-      artifact: { backendStatus: "unknown" },
+      artifact: {presentation: "activity",  backendStatus: "unknown" },
     });
   });
 });

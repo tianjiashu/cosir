@@ -1,3 +1,5 @@
+import type { TransportState } from "../../lib/assistant/contract";
+import { seedState } from "./transport-fixtures";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
@@ -634,4 +636,85 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   await request.patch(api, {
     data: { paths: ["src/main.py"], ignored: false },
   });
+});
+
+
+test("真实后端：文件地址与文件名查找分离，候选定位和字面路径", async ({ page, request }, testInfo) => {
+  await request.post(`${API_ORIGIN}/__test__/reset`);
+  await request.post(`${REAL_BACKEND}/__test__/files/link-fixture`);
+  await routeFilesToRealBackend(page);
+  await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
+  const state = await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json() as TransportState;
+  state.messages[1].parts = [{ type: "text", status: "completed", text:
+    "确定地址 [API.md](docs/brand/API.md)，根文件 [root](API.md)。未知位置 `API.md:2`。文档 [guide](docs/brand/guide.md)。缺失 [gone](docs/brand/gone.md#L2)。[slow](slow.md) [slow-again](slow-again.md)。" }];
+  await seedState(request, 42, state);
+  await page.goto("/tasks/42");
+  const message = page.locator('main [data-index="1"]');
+  const surface = page.getByTestId("workspace-files-surface");
+  await message.getByRole("link", { name: "API.md", exact: true }).click();
+  await expect(surface).toContainText("BRAND_API");
+  await expect(surface.getByText("选择文件以打开", { exact: true })).toHaveCount(0);
+  await message.locator('[data-slot="workspace-file-mention"]').hover();
+  await message.getByRole("button", { name: "查找文件 API.md", exact: true }).click();
+  await expect(surface).toContainText("选择文件以打开");
+  await expect(surface.getByRole("button", { name: "API.md docs/brand/API.md", exact: true })).toBeVisible();
+  await expect(surface.getByRole("button", { name: "API.md node_modules/example/API.md", exact: true })).toBeVisible();
+  await expect(surface).not.toContainText("ROOT_API");
+  await page.screenshot({ path: testInfo.outputPath("file-lookup-light.png") });
+  const searchInput = surface.getByRole("textbox", { name: "搜索工作区文件名" });
+  await searchInput.fill("guide.md");
+  await expect(surface.getByText("选择文件以打开", { exact: true })).toHaveCount(0);
+  await searchInput.press("Enter");
+  await expect(surface.getByRole("button", { name: "guide.md docs/brand/guide.md", exact: true })).toBeVisible();
+  await message.getByRole("button", { name: "查找文件 API.md", exact: true }).click();
+
+  await surface.getByRole("button", { name: "API.md docs/brand/API.md", exact: true }).click();
+  const editor = surface.getByRole("textbox", { name: "只读文件 API.md" });
+  await expect(editor).toBeVisible();
+  await expect(surface.getByRole("button", { name: "添加选区到对话", exact: true })).toBeVisible();
+  await editor.focus();
+  await page.keyboard.press("ControlOrMeta+l");
+  await expect(page.getByRole("textbox", { name: "消息输入" })).toContainText("L2–2");
+  await message.getByRole("link", { name: "root", exact: true }).click();
+  await expect(surface).toContainText("ROOT_API");
+  await message.getByRole("link", { name: "guide", exact: true }).click();
+  await surface.getByRole("button", { name: "./API.md", exact: true }).click();
+  await expect(surface).toContainText("BRAND_API");
+  await message.getByRole("link", { name: "guide", exact: true }).click();
+  await surface.getByRole("link", { name: "special", exact: true }).click();
+  await expect(surface).toContainText("LITERAL_PATH");
+  await message.getByRole("link", { name: "gone", exact: true }).click();
+  await expect(page.getByText("工作区里没有 docs/brand/gone.md", { exact: true })).toBeVisible();
+  await expect(surface.getByRole("tab", { name: "gone.md", exact: true })).toHaveCount(0);
+  await page.emulateMedia({ colorScheme: "dark" });
+  await message.locator('[data-slot="workspace-file-mention"]').hover();
+  await page.screenshot({ path: testInfo.outputPath("file-links-dark.png"), animations: "disabled" });
+  // 慢文件 info 使用真实后端响应，只延迟网络放行，验证用户后续操作的优先级。
+  let release!: () => void;
+  await page.route("**/files/info?*", async (route) => {
+    const file = new URL(route.request().url()).searchParams.get("path");
+    if (file === "slow.md" || file === "slow-again.md") {
+      await new Promise<void>((resolve) => { release = resolve; });
+    }
+    await route.fallback();
+  });
+  const slowRequest = page.waitForRequest((r) => r.url().includes("/files/info?") && new URL(r.url()).searchParams.get("path") === "slow.md");
+  await message.getByRole("link", { name: "slow", exact: true }).click();
+  await slowRequest;
+  await expect.poll(() => typeof release).toBe("function");
+  await surface.getByRole("tab", { selected: true }).click();
+  const slowResponse = page.waitForResponse((r) => r.url().includes("/files/info?") && new URL(r.url()).searchParams.get("path") === "slow.md");
+  release();
+  await slowResponse;
+  await expect(surface).toContainText("LITERAL_PATH");
+  await expect(surface.getByRole("tab", { name: "slow.md", exact: true })).toHaveCount(0);
+  const nextRequest = page.waitForRequest((r) => r.url().includes("/files/info?") && new URL(r.url()).searchParams.get("path") === "slow-again.md");
+  await message.getByRole("link", { name: "slow-again", exact: true }).click();
+  await nextRequest;
+  await surface.getByRole("button", { name: "收起文件", exact: true }).click();
+  const nextResponse = page.waitForResponse((r) => r.url().includes("/files/info?") && new URL(r.url()).searchParams.get("path") === "slow-again.md");
+  release();
+  await nextResponse;
+  await expect(surface).toHaveCount(0);
+
 });

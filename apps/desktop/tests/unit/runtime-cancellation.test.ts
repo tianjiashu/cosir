@@ -1,59 +1,71 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
-
-import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
-import { useRuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
-import type { TransportState } from "@/lib/assistant/contract";
-import { activity, transportState } from "./transport-fixtures";
-
-function setup(state: TransportState) {
-  const context = {
-    latestStateRef: { current: state },
-    cancelRequestedRef: { current: false },
-    setIssue: vi.fn(),
-  } as unknown as RuntimeSessionContext;
-  let cancellation!: ReturnType<typeof useRuntimeCancellation>;
-  function Probe() {
-    cancellation = useRuntimeCancellation(context);
-    return null;
-  }
-  renderToStaticMarkup(createElement(Probe));
-  return { context, cancellation };
-}
-
-describe("Task 级停止标记（D7）", () => {
-  it("请求停止后标记保持到活动结束，不比对 runId", () => {
-    const { context, cancellation } = setup(transportState({ activity: activity(1, "running") }));
-    cancellation.onRequested();
-    expect(context.cancelRequestedRef.current).toBe(true);
-
-    cancellation.onResult(true);
-    expect(context.cancelRequestedRef.current).toBe(true);
-
-    // 新一轮已开始（runId 变化）也不影响：只看 Task 是否仍有活动。
-    cancellation.onStateCommitted(transportState({ activity: activity(2, "running") }));
-    expect(context.cancelRequestedRef.current).toBe(true);
-    cancellation.onSettled();
-    expect(context.cancelRequestedRef.current).toBe(false);
+import { beforeEach, describe, expect, it } from "vitest";
+import { beginCommand, finishCommand, forgetCommands, reconcileCommands, useCommandRequests, callTarget, reconcileTaskStatuses, markTaskRequestsUnsynced, commandPending } from "@/lib/assistant/command-request-store";
+import { activity, assistantMessage, toolCallPart, transportState } from "./transport-fixtures";
+const current = () => useCommandRequests.getState().tasks[1];
+beforeEach(() => forgetCommands([1]));
+describe("cross-surface request lifetime", () => {
+  it("keeps a signalled stop until canonical settlement and deduplicates across mounts", () => {
+    reconcileCommands(1, transportState({ activity: activity(7, "running") }));
+    const request = beginCommand(1, "task", "stop")!;
+    finishCommand(1, "task", request, "accepted");
+    expect(current()?.task?.phase).toBe("syncing");
+    expect(beginCommand(1, "task", "stop")).toBeNull();
+    reconcileCommands(1, transportState({ activity: activity(7, "cancelled") }));
+    expect(current()?.task).toBeUndefined();
   });
-
-  it("停止被拒或信号到达时活动已结束，立即清除标记", () => {
-    const rejected = setup(transportState({ activity: activity(1, "running") }));
-    rejected.cancellation.onRequested();
-    rejected.cancellation.onResult(false);
-    expect(rejected.context.cancelRequestedRef.current).toBe(false);
-
-    const finished = setup(transportState({ activity: activity(1, "completed") }));
-    finished.cancellation.onRequested();
-    finished.cancellation.onResult(true);
-    expect(finished.context.cancelRequestedRef.current).toBe(false);
+  it("a newer Run and a late HTTP response cannot revive the old stopping label", () => {
+    reconcileCommands(1, transportState({ activity: activity(7, "running") }));
+    const request = beginCommand(1, "task", "stop")!;
+    reconcileCommands(1, transportState({ activity: activity(8, "running") }));
+    finishCommand(1, "task", request, "accepted");
+    expect(current()?.task).toBeUndefined();
   });
-
-  it("提交的 state 已没有活动时清除标记", () => {
-    const { context, cancellation } = setup(transportState({ activity: activity(1, "suspended") }));
-    cancellation.onRequested();
-    cancellation.onStateCommitted(transportState({ activity: activity(1, "cancelled") }));
-    expect(context.cancelRequestedRef.current).toBe(false);
+  it("keeps unknown network outcomes distinct from explicit rejection", () => {
+    const target = callTarget("c");
+    const request = beginCommand(1, target, "decision")!;
+    finishCommand(1, target, request, "unknown", "状态待同步");
+    expect(current()?.[target]?.error).toBe("状态待同步");
+    expect(beginCommand(1, target, "stop")).toBeNull();
+    finishCommand(1, target, request, "rejected");
+    expect(beginCommand(1, target, "decision")).not.toBeNull();
+  });
+  it("unknown idempotent outcomes permit explicit retry and ignore the old HTTP result", () => {
+    const first = beginCommand(1, "task", "stop")!;
+    finishCommand(1, "task", first, "unknown", "未能确认");
+    expect(commandPending(current()?.task)).toBe(false);
+    const retry = beginCommand(1, "task", "stop")!;
+    finishCommand(1, "task", first, "accepted");
+    expect(current()?.task?.token).toBe(retry.token);
+  });
+  it("global Task terminal facts settle child stops even after their card unmounts", () => {
+    const request = beginCommand(1, "task", "stop")!;
+    reconcileTaskStatuses({ 1: "completed" });
+    reconcileTaskStatuses({ 1: "running" });
+    finishCommand(1, "task", request, "accepted");
+    expect(current()?.task).toBeUndefined();
+  });
+  it("a lost Task status stream stops claiming that a possibly newer Run is stopping", () => {
+    const request = beginCommand(1, "task", "stop")!;
+    markTaskRequestsUnsynced();
+    finishCommand(1, "task", request, "accepted");
+    expect(current()?.task?.error).toContain("待确认");
+    expect(commandPending(current()?.task)).toBe(false);
+  });
+  it("unloaded history is not settlement; a real decision result is", () => {
+    const target = callTarget("c");
+    beginCommand(1, target, "decision");
+    reconcileCommands(1, transportState({ messageOffset: 100 }));
+    expect(current()?.[target]).toBeDefined();
+    reconcileCommands(1, transportState({ messages: [assistantMessage("m", 2, [toolCallPart("c", "agent_team", { status: "completed", awaitingUser: false })])] }));
+    expect(current()?.[target]).toBeUndefined();
+  });
+  it("a detach remains pending until canonical background or completion arrives", () => {
+    const target = callTarget("c");
+    const request = beginCommand(1, target, "background")!;
+    finishCommand(1, target, request, "accepted");
+    reconcileCommands(1, transportState({ foreground_waits: ["c"] }));
+    expect(current()?.[target]).toBeDefined();
+    reconcileCommands(1, transportState({ messages: [assistantMessage("m", 2, [toolCallPart("c", "execute_terminal", { status: "completed" })])] }));
+    expect(current()?.[target]).toBeUndefined();
   });
 });

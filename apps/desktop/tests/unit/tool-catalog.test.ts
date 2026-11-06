@@ -14,7 +14,7 @@ describe("toolHeading", () => {
 
   it("命令与委派用模型给的意图作标题，其余用动词", () => {
     expect(toolHeading("execute_terminal", { description: "Run backend unit tests", command: "pytest -q\necho" }))
-      .toEqual({ title: "Run backend unit tests", target: "pytest -q" });
+      .toEqual({ title: "Run backend unit tests", target: null });
     expect(toolHeading("delegate_task", { agent_name: "Review", child_agent_id: "reviewer" }))
       .toEqual({ title: "Review", target: "reviewer" });
     expect(toolHeading("read_file", { path: "app/main.py" })).toEqual({ title: "读取文件", target: "app/main.py" });

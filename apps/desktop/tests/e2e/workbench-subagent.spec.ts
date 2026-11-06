@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { frontendLogs, openedSubscriptionCount } from "./frontend-logs";
 import { API_ORIGIN } from "./e2e-env";
+import { completedState, seedState } from "./transport-fixtures";
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
@@ -13,6 +14,29 @@ const WORKBENCH_SUBSCRIPTION = "workbench_agent_subscription_opened";
 const reviewerSubscriptions = (page: Page) => openedSubscriptionCount(page, { event: WORKBENCH_SUBSCRIPTION, taskId: 501 });
 const testerSubscriptions = (page: Page) => openedSubscriptionCount(page, { event: WORKBENCH_SUBSCRIPTION, taskId: 502 });
 
+test("只读子 Agent 的两类配置草稿可阅读但不能打开编辑器", async ({ page, request }) => {
+  const configuration = {
+    team_id: "review-team", name: "只读 Team 草稿", description: "检查配置", scope: "workspace",
+    start_node_id: "review", max_runs: 3,
+    nodes: [{ node_id: "review", name: "Review", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] }],
+    transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
+  };
+  await seedState(request, 501, completedState(3, { id: "draft-input", parts: [{ type: "text", text: "准备配置" }] }, [
+    {presentation: "activity",  type: "tool-call", toolCallId: "agent-draft", toolName: "propose_agent_configuration", args: {}, status: "completed", awaitingUser: false,
+      display_data: { kind: "agent-configuration-draft", status: "draft", agent_id: "只读 Agent 草稿", role: "审查", description: "检查配置", system_prompt: "Review." } },
+    {presentation: "activity",  type: "tool-call", toolCallId: "team-draft", toolName: "propose_agent_team_configuration", args: {}, status: "completed", awaitingUser: false,
+      display_data: { kind: "agent-team-configuration-draft", ...configuration, configuration } },
+    { type: "text", text: "配置草稿已准备。" },
+  ]));
+  await page.goto("/tasks/42");
+  await expect(page.locator('[data-tool-call-id="delegate-ref-500"]')).toBeVisible();
+  await page.getByRole("button", { name: "打开子 Agent 工作台：审查代码" }).click();
+  const reader = page.getByRole("complementary", { name: "工作台" });
+  await expect(reader.locator('[data-slot="agent-configuration-draft-card"]')).toContainText("只读 Agent 草稿");
+  await expect(reader.locator('[data-slot="agent-team-configuration-draft-card"]')).toContainText("只读 Team 草稿");
+  await expect(reader.getByRole("button", { name: "编辑配置" })).toHaveCount(0);
+});
+
 test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", async ({ page }) => {
   await page.addInitScript(() => window.localStorage.clear());
   const businessWrites: string[] = [];
@@ -22,8 +46,8 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
 
   await page.goto("/tasks/42");
   await expect(page.getByText("子 Agent 已开始工作。", { exact: true })).toBeVisible();
-  // 回合已结束，两次委派收在过程区里；展开后每次委派一行：标题是子任务名、目标是子 Agent 名、行尾「打开」。
-  await page.getByRole("button", { name: /已处理/ }).click();
+  // 委派独立展示，结束后仍可直接打开子任务，不必经过普通工具活动组。
+  await expect(page.locator('[data-tool-call-id="delegate-ref-500"]')).toBeVisible();
   const row = page.locator('[data-tool-call-id="delegate-ref-500"]');
   await expect(row).toContainText("审查代码");
   await expect(row).toContainText("delegate_reviewer");
@@ -56,7 +80,7 @@ test("两个并行子 Agent 分别订阅，切换回标签页重新订阅并保�
 
   await page.goto("/tasks/42");
   await expect(page.getByText("子 Agent 已开始工作。", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: /已处理/ }).click();
+  await expect(page.locator('[data-tool-call-id="delegate-ref-500"]')).toBeVisible();
   const reviewer = page.getByRole("button", { name: "打开子 Agent 工作台：审查代码" });
   const tester = page.getByRole("button", { name: "打开子 Agent 工作台：检查测试" });
   await reviewer.click();

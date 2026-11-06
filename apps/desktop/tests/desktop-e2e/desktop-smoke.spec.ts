@@ -105,3 +105,40 @@ test("quitting stops the backend process tree", async () => {
     }
   }, { timeout: 10_000 }).toBe("stopped");
 });
+
+test("opens and reloads a conversation through the real snapshot HTTP route", async () => {
+  const { app, page, home } = await launchDesktop();
+  try {
+    await expect(page.getByRole("navigation", { name: "工作区任务列表" })).toBeVisible({ timeout: 120_000 });
+    const base = await backendBaseUrl(page);
+    const workspacePath = path.join(home, "workspace");
+    fs.mkdirSync(workspacePath);
+    const workspaceResponse = await fetch(`${base}/workspaces`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "HTTP 回归", root_path: workspacePath }),
+    });
+    expect(workspaceResponse.status).toBe(200);
+    const workspace = await workspaceResponse.json() as { workspace_id: number };
+    const taskResponse = await fetch(`${base}/workspaces/${workspace.workspace_id}/tasks`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "快照序列化回归", creationCommandId: "snapshot-regression" }),
+    });
+    expect(taskResponse.status).toBe(200);
+    const task = await taskResponse.json() as { task_id: number };
+    const response = await fetch(`${base}/tasks/${task.task_id}/assistant/state`);
+    expect(response.status).toBe(200);
+    expect((await response.json() as { messages: unknown[] }).messages).toEqual([]);
+    expect((await fetch(`${base}/tasks/${task.task_id}/assistant/messages?end=0`)).status).toBe(200);
+    await page.reload();
+    await page.getByText("HTTP 回归", { exact: true }).click();
+    await page.getByText("快照序列化回归", { exact: true }).click();
+    await expect(page.getByRole("textbox")).toBeVisible();
+    await expect(page.getByText(/后端内部错误/)).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("textbox")).toBeVisible();
+    await expect(page.getByText(/后端内部错误/)).toHaveCount(0);
+    await page.screenshot({ path: test.info().outputPath("real-snapshot-conversation.png") });
+  } finally {
+    await app.close();
+  }
+});

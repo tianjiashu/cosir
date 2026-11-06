@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { inlineCodeLink, resolveLink, toWorkspacePath } from "@/lib/links/resolve-link";
+import { inlineCodeLink, resolvePathText, resolveLink, toWorkspacePath } from "@/lib/links/resolve-link";
 
 const repo = { workspaceRoot: "/repo" };
 
@@ -85,22 +85,30 @@ describe("resolveLink", () => {
 
 describe("inlineCodeLink", () => {
   it("recognizes file paths with optional line suffixes", () => {
-    expect(inlineCodeLink("src/app.ts:42", "/repo")).toMatchObject({ path: "src/app.ts", lines: { start: 42, end: 42 } });
-    expect(inlineCodeLink("src/app.ts:42:7", "/repo")).toMatchObject({ path: "src/app.ts" });
-    expect(inlineCodeLink("README.md", "/repo")).toMatchObject({ path: "README.md" });
-    expect(inlineCodeLink("/repo/apps/main.py", "/repo")).toMatchObject({ path: "apps/main.py" });
+    expect(inlineCodeLink("src/app.ts:42", { workspaceRoot: "/repo" })).toMatchObject({ path: "src/app.ts", lines: { start: 42, end: 42 } });
+    expect(inlineCodeLink("src/app.ts:42:7", { workspaceRoot: "/repo" })).toMatchObject({ path: "src/app.ts" });
+    expect(inlineCodeLink("README.md", { workspaceRoot: "/repo" })).toMatchObject({ kind: "filename-search", query: "README.md" });
+    expect(inlineCodeLink("/repo/apps/main.py", { workspaceRoot: "/repo" })).toMatchObject({ path: "apps/main.py" });
   });
 
-  it("marks bare file names as mentions, not addresses", () => {
-    // 行文里提到的 `task.ts` 不知道在哪个目录：根目录只是第一个候选，打开入口找不到时改为按文件名查找。
-    expect(inlineCodeLink("task.ts", "/repo")).toMatchObject({ path: "task.ts", mention: true });
-    expect(inlineCodeLink("src/task.ts", "/repo")?.mention).toBeUndefined();
+  it("keeps filename search separate from file addresses", () => {
+    // 不知道目录，不构造根目录候选。
+    expect(inlineCodeLink("task.ts", { workspaceRoot: "/repo" })).toMatchObject({ kind: "filename-search", query: "task.ts" });
+    expect(inlineCodeLink("src/task.ts", { workspaceRoot: "/repo" })).toMatchObject({ kind: "workspace", path: "src/task.ts" });
   });
 
   it("ignores code that only looks path-like", () => {
     for (const text of ["obj.method", "text/plain", "/api/tasks", "https://example.com/a.ts", "npm run dev", ".gitignore"]) {
-      expect(inlineCodeLink(text, "/repo")).toBeNull();
+      expect(inlineCodeLink(text, { workspaceRoot: "/repo" })).toBeNull();
     }
-    expect(inlineCodeLink("src/app.ts", null)).toBeNull();
+    expect(inlineCodeLink("src/app.ts", { workspaceRoot: null })).toBeNull();
   });
+});
+
+it("distinguishes raw paths from URL addresses and carries document context", () => {
+  const base = { workspaceRoot: "/repo", documentDir: "docs" };
+  expect(resolvePathText("./a%41#.md:3", base)).toMatchObject({ path: "docs/a%41#.md", lines: { start: 3, end: 3 } });
+  expect(resolveLink("./a%2541%23.md#L3", base)).toEqual(resolvePathText("./a%41#.md:3", base));
+  expect(inlineCodeLink("./子目录/说明.md", base)).toMatchObject({ path: "docs/子目录/说明.md" });
+  expect(inlineCodeLink("API.md:42", base)).toEqual({ kind: "filename-search", query: "API.md", lines: { start: 42, end: 42 } });
 });

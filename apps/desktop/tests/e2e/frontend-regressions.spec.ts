@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
-import { API_ORIGIN } from "./e2e-env";
+import { API_ORIGIN, OUTPUT_DIR } from "./e2e-env";
 
 const emptyState = (): TransportState => ({ title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [] });
 
@@ -49,14 +49,18 @@ test("回合结束后思考与多次调用收进过程区，展开后按顺序�
   await page.goto("/tasks/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
-  const head = assistant.getByRole("button", { name: /已处理/ });
+  const head = assistant.locator('[data-slot="process-head"]');
   await expect(head).toBeVisible();
-  await expect(head).toContainText("读取文件 1 · 搜索内容 1");
-  await expect(assistant.getByText("先分析项目结构", { exact: true })).toHaveCount(0);
+  await expect(assistant.locator('[data-slot="turn-status"]')).not.toContainText(/读取文件|搜索内容|次/);
+  await expect(assistant.getByText("先分析项目结构", { exact: true })).toBeHidden();
   await expect(assistant.getByText("读取文件", { exact: true })).toHaveCount(0);
 
   await head.click();
-  await expect(assistant.locator('[data-slot="reasoning-item"]')).toContainText("先分析项目结构");
+  const reasoning = assistant.locator('[data-slot="reasoning-item"]');
+  await expect(reasoning.getByRole("button")).toHaveText("思考过程");
+  await reasoning.getByRole("button").click();
+  await expect(reasoning).toContainText("先分析项目结构");
+  await assistant.locator('[data-slot="activity-head"]').click();
   await expect(assistant.getByText("读取文件", { exact: true })).toBeVisible();
   await expect(assistant.getByText("搜索内容", { exact: true })).toBeVisible();
   await expect(assistant.getByText(/未知工具/)).toHaveCount(0);
@@ -69,8 +73,10 @@ test("网页搜索结果只显示标题并保留标题链接", async ({ page, re
   await page.goto("/tasks/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
-  // 单次调用直接平铺为一行，展开体默认收起。
-  await assistant.getByRole("button", { name: /网页搜索/ }).click();
+  // 调用先收进活动摘要，再按需展开具体结果。
+  await assistant.locator('[data-slot="process-head"]').click();
+  await assistant.locator('[data-slot="activity-head"]').click();
+  await assistant.locator('button[data-slot="call-row"]').click();
   const resultLink = assistant.getByRole("link", { name: "Assistant UI 官方文档" });
   await expect(resultLink).toBeVisible();
   await expect(resultLink).toHaveAttribute("href", "https://assistant-ui.com/docs");
@@ -112,8 +118,8 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
 
   const assistant = page.locator('[data-role="assistant"]').last();
   const reasoning = assistant.locator('[data-slot="reasoning-item"]');
-  // 流式时思考行写「思考中 · 最新一行」，全文默认收起。
-  await expect(reasoning).toContainText("思考中 · 正在推理");
+  // 流式只显示稳定思考标题，推理全文默认收起。
+  await expect(reasoning).toContainText("正在思考");
   await expect(assistant.locator('[data-slot="collapsible-content"]')).toHaveCount(0);
 
   await expect(assistant.getByText("streaming response", { exact: true })).toBeVisible({ timeout: 5_000 });
@@ -122,9 +128,10 @@ test("Reasoning 在真实流式完成后自动收起且仍可手动展开", asyn
     const telemetry = await response.json() as { completedStreamCount: number };
     return telemetry.completedStreamCount;
   }).toBeGreaterThan(0);
-  await expect(reasoning).toContainText("思考 · 推理完成");
+  await expect(reasoning).toContainText("思考过程");
   await expect(assistant.getByText("推理完成", { exact: true })).toHaveCount(0);
 
+  await assistant.locator('[data-slot="process-head"]').click();
   await reasoning.getByRole("button").click();
   await expect(assistant.getByText("推理完成", { exact: true })).toBeVisible();
 });
@@ -137,9 +144,13 @@ test("工具运行中保持单行，完成拿到展示数据后才可展开且�
 
   const assistant = page.locator('[data-role="assistant"]').last();
   await expect(assistant.getByText("搜索内容", { exact: true })).toBeVisible();
+  await assistant.locator('[data-slot="activity-head"]').click();
   // 无 display_data 的执行期不展开空详情，也不渲染「未找到匹配」之类的伪结果。
   await expect(assistant.getByText("未找到匹配", { exact: true })).toHaveCount(0);
-  const toolRow = assistant.getByRole("button", { name: /搜索内容/ });
+  // Duration exists during execution too; fork availability confirms the canonical terminal outcome.
+  await expect(assistant.getByRole("button", { name: "从此处 Fork 新任务", exact: true })).toBeEnabled();
+  await assistant.locator('[data-slot="process-head"]').click();
+  const toolRow = assistant.locator('button[data-slot="call-row"]');
   await expect(toolRow).toBeVisible({ timeout: 3_000 });
   // 命中行拆成可点开的「路径:行号」与高亮正文两部分。
   const match = assistant.getByText("lifecycle.test.ts:1", { exact: true });
@@ -156,10 +167,11 @@ test("失败的工具在流结束后显示失败而不是执行中", async ({ pa
 
   const assistant = page.locator('[data-role="assistant"]').last();
   await expect(assistant.getByText("搜索内容", { exact: true })).toBeVisible();
+  await assistant.locator('[data-slot="activity-head"]').click();
   await expect(assistant.getByText("执行失败", { exact: true })).toBeVisible({ timeout: 3_000 });
   await expect(assistant.locator('[data-call-status="failed"]')).toHaveCount(1);
   await expect(assistant.locator('[data-call-status="running"]')).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "停止" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "停止", exact: true })).toHaveCount(0);
 });
 
 test("取消的工具在流结束后显示已取消而不是执行中", async ({ page, request }) => {
@@ -170,13 +182,14 @@ test("取消的工具在流结束后显示已取消而不是执行中", async ({
 
   const assistant = page.locator('[data-role="assistant"]').last();
   await expect(assistant.getByText("搜索内容", { exact: true })).toBeVisible();
+  await assistant.locator('[data-slot="activity-head"]').click();
   await expect(assistant.getByText("已取消", { exact: true }).first()).toBeVisible({ timeout: 3_000 });
   await expect(assistant.locator('[data-call-status="cancelled"]')).toHaveCount(1);
   await expect(assistant.locator('[data-call-status="running"]')).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "停止" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "停止", exact: true })).toHaveCount(0);
 });
 
-const SHOTS = "../../docs/plan/assets/conversation-rendering";
+const SHOTS = OUTPUT_DIR;
 /** 对照截图用高视口：吸底的输入框不盖住回合。 */
 const SHOT_VIEWPORT = { width: 960, height: 1400 };
 
@@ -186,19 +199,18 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await page.goto("/tasks/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
-  const head = assistant.getByRole("button", { name: /已处理/ });
-  await expect(head).toContainText("已处理 3 分 12 秒");
-  await expect(head).toContainText("搜索内容 1 · 执行命令 1 · 应用补丁 1 · 交给用户输入 1");
-  await expect(head).toContainText("1 个失败");
-  // 过程收起：叙述与调用行都不在 DOM 里。
-  await expect(assistant.getByText("先找调度循环在哪里。", { exact: true })).toHaveCount(0);
+  const head = assistant.locator('[data-slot="process-head"]');
+  await expect(assistant.locator('[data-slot="turn-status"]')).toContainText("用时 3分钟12秒");
+  await expect(head).toHaveAccessibleName("用时 3分钟12秒 · 有异常记录，展开过程");
+  await expect(assistant.locator('[data-slot="turn-status"]')).not.toContainText(/搜索内容|执行命令|应用补丁|次/);
+  // 过程正文在原位置隐藏；尚未展开的调用详情不挂载。
+  await expect(assistant.getByText("先找调度循环在哪里。", { exact: true })).toBeHidden();
   await expect(assistant.locator('[data-tool-call-id="alt-search"]')).toHaveCount(0);
   // 结论、改动卡与等待卡常显。
   await expect(assistant.getByText(/已把调度间隔改为读配置项/)).toBeVisible();
   const changes = assistant.locator('[data-slot="changes-card"]');
-  await expect(changes).toContainText("本轮改动 2 个文件");
-  await expect(changes).toContainText("+30");
-  await expect(changes).toContainText("−6");
+  await expect(changes).toContainText("涉及 2 个路径");
+  await expect(changes).toContainText("1 次调用");
   const attention = assistant.locator('[data-slot="attention-card"]');
   await expect(attention).toContainText("交给用户输入");
   await expect(attention).toContainText("输入完成后点「交还」");
@@ -206,6 +218,7 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await assistant.screenshot({ path: `${SHOTS}/impl-settled.png`, animations: "disabled" });
 
   await head.click();
+  for (const group of await assistant.locator('[data-slot="activity-head"]').all()) await group.click();
   const rows = assistant.locator("[data-tool-call-id]").filter({ has: page.locator('[data-slot="call-row"]') });
   await expect(rows).toHaveCount(4);
   await expect(rows.nth(0)).toContainText("搜索内容");
@@ -219,7 +232,7 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await expect(rows.nth(3)).toContainText("term-alt");
   await expect(rows.nth(3)).toContainText("等你操作");
   await expect(assistant.getByText("先找调度循环在哪里。", { exact: true })).toBeVisible();
-  await expect(assistant.locator('[data-slot="reasoning-item"]')).toContainText("思考 · 先找调度循环在哪里。");
+  await expect(assistant.locator('[data-slot="reasoning-item"]')).toContainText("思考过程");
   await assistant.screenshot({ path: `${SHOTS}/impl-expanded.png`, animations: "disabled" });
 
   // 改动卡点开文件展开 diff。
@@ -234,20 +247,20 @@ test("交替序列：运行中过程区展开、区头显示当前动作，命�
 
   const assistant = page.locator('[data-role="assistant"]').last();
   const head = assistant.locator('[data-slot="process-head"]');
-  await expect(head).toContainText("运行单元测试");
-  await expect(head).toContainText("搜索内容 1 · 执行命令 2 · 应用补丁 1");
+  await expect(assistant.locator('[data-slot="turn-status"]')).toContainText("运行单元测试");
+  await expect(head).toHaveAttribute("aria-expanded", "true");
   const running = assistant.locator('[data-tool-call-id="alt-test"]');
   await expect(running).toContainText("bun test tests/task.test.ts");
   await expect(running.locator('[data-terminal-viewport="true"]')).toBeVisible();
   await expect(running.locator('[data-call-status="running"]')).toHaveCount(1);
-  // 复制只在悬停展开体时出现，不常驻。
+  // 明确的复制按钮常驻，触屏与键盘同样可用。
   const copyCommand = running.getByRole("button", { name: "复制命令" });
-  await expect(copyCommand).toHaveCSS("opacity", "0");
+  await expect(copyCommand).toBeVisible();
   await running.locator('[data-terminal-viewport="true"]').hover();
   await expect(copyCommand).toHaveCSS("opacity", "1");
   await expect(running.getByRole("button", { name: "复制输出" })).toHaveCSS("opacity", "1");
   await page.mouse.move(0, 0);
-  await expect(assistant.locator('[data-slot="changes-card"]')).toContainText("本轮改动 2 个文件");
+  await expect(assistant.locator('[data-slot="changes-card"]')).toContainText("涉及 2 个路径");
   await assistant.screenshot({ path: `${SHOTS}/impl-running.png`, animations: "disabled" });
 });
 
@@ -259,10 +272,11 @@ test("交替序列：深色主题下回合正常渲染", async ({ page, request 
 
   await expect(page.locator("html")).toHaveClass(/dark/);
   const assistant = page.locator('[data-role="assistant"]').last();
-  await expect(assistant.getByRole("button", { name: /已处理/ })).toBeVisible();
+  await expect(assistant.locator('[data-slot="process-head"]')).toBeVisible();
   await expect(assistant.locator('[data-slot="changes-card"]')).toBeVisible();
   await expect(assistant.locator('[data-slot="attention-card"]')).toBeVisible();
-  await assistant.getByRole("button", { name: /已处理/ }).click();
+  await assistant.locator('[data-slot="process-head"]').click();
+  await assistant.locator('[data-slot="activity-head"]').first().click();
   await expect(assistant.locator('[data-tool-call-id="alt-search"]')).toBeVisible();
   await assistant.screenshot({ path: `${SHOTS}/impl-dark.png`, animations: "disabled" });
 });
