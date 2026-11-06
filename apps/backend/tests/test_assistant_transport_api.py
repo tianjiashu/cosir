@@ -33,7 +33,7 @@ def _snapshot(
             {"id": "1", "role": "user", "parts": [], "runId": run_id, "outcome": None, "source": None}
         ],
         "messageOffset": 0,
-        "activity": {
+        "activity": {"modelActivity": None,
             "runId": run_id,
             "status": status,
             "endReason": end_reason,

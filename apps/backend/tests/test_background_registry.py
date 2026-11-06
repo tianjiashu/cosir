@@ -398,7 +398,7 @@ def test_drop_task_reports_dropped_entries(delivered) -> None:
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
     dropped = registry.drop_task(1)
-    assert dropped == ["call-b"]
+    assert dropped == {"call-b": None}
 
 
 def test_listener_is_notified_off_the_caller_thread(delivered) -> None:

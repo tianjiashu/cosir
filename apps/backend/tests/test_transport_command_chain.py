@@ -390,7 +390,7 @@ async def test_cancel_background_work_without_active_owner_only_settles_placehol
     monkeypatch.setattr(
         placeholder_module,
         "cancel_placeholders",
-        lambda task_id, ids, hint: settled.append((task_id, list(ids), hint)) or 1,
+        lambda task_id, ids, hint, **kwargs: settled.append((task_id, list(ids), hint)) or 1,
     )
     calls: list[str] = []
     _register_background_work("call-bg", "background", calls)

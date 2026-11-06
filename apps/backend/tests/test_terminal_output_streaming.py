@@ -322,9 +322,12 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
         event_sink=sink,
     )
 
-    observations = await run_tool_batch(
-        rc, [ToolCall(tool_name="execute_terminal", arguments='{}', call_id="call-1")], "step-1", ToolBatch()
-    )
+    from app.core.workflow.node_helper.common import execution_scope
+
+    with execution_scope(rc, SimpleNamespace()):
+        observations = await run_tool_batch(
+            rc, [ToolCall(tool_name="execute_terminal", arguments='{}', call_id="call-1")], "step-1"
+        )
 
     assert len(observations) == 1
     [context] = received
@@ -472,7 +475,7 @@ def test_runtime_update_skips_a_pending_part_that_is_not_a_background_placeholde
     assert part.get("display_data") in (None, {}) or "output" not in part["display_data"]
 
 
-def test_final_terminal_status_preserves_complete_streamed_display_output() -> None:
+def test_final_terminal_status_uses_authoritative_output_including_unstreamed_tail() -> None:
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
@@ -509,7 +512,7 @@ def test_final_terminal_status_preserves_complete_streamed_display_output() -> N
             status="completed",
             display_data={
                 "kind": "terminal-result",
-                "output": "bounded final observation",
+                "output": streamed_output + "final unstreamed tail",
                 "exit_code": 0,
             },
         )
@@ -518,7 +521,7 @@ def test_final_terminal_status_preserves_complete_streamed_display_output() -> N
     part = state["messages"][1]["parts"][0]
     assert part["display_data"] == {
         "kind": "terminal-result",
-        "output": streamed_output,
+        "output": streamed_output + "final unstreamed tail",
         "exit_code": 0,
     }
 
@@ -592,7 +595,7 @@ def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, Conversat
                 content="bounded",
                 display_data={
                     "kind": "terminal-result",
-                    "output": "bounded final observation",
+                    "output": "authoritative final output",
                     "exit_code": 0,
                 },
             ),
@@ -645,4 +648,6 @@ def test_terminal_replay_is_idempotent_for_streamed_part(
     assert part["status"] == expected_status
     assert part.get("error") == expected_error
     assert part["display_data"]["kind"] == "terminal-result"
-    assert part["display_data"]["output"] == streamed_output
+    assert part["display_data"]["output"] == (
+        observation.display_data["output"] if expected_status == "completed" else streamed_output
+    )

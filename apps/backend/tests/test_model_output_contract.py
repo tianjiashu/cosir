@@ -9,7 +9,7 @@ import pytest
 from openai.lib.streaming.chat import ChunkEvent
 from openai.types.chat import ChatCompletion
 
-import app.core.workflow.node_helper.streaming_part_state_machine as streaming_module
+import app.core.workflow.node_helper.model_stream_state_machine as streaming_module
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.nodes import model_node as model_module
@@ -97,7 +97,6 @@ def _patch_model_runtime(monkeypatch: Any, harness: _ModelHarness) -> None:
 
     monkeypatch.setattr(model_module.service_depends, "get_conversation_task_context_service",
                         lambda: SimpleNamespace(run_awaits_background=lambda *_: False))
-    monkeypatch.setattr(streaming_module, "_runtime_context", lambda: harness.runtime_config)
     monkeypatch.setattr(streaming_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "emit", harness.events.append)
 
@@ -332,3 +331,31 @@ def test_tool_calls_take_priority_over_finish_reason(monkeypatch, finish_reason)
     assert harness.messages[-1]["tool_calls"][0]["id"] == "call"
     assert [included for _, included in harness.saved_responses] == [False, True]
     assert harness.runtime_config.mailbox.isEmpty()
+
+
+def test_model_phase_tracks_output_channels_and_clears_after_failure(monkeypatch):
+    from app.core.events import ModelActivityEvent
+
+    harness = _ModelHarness(sdk_completion("答复", reasoning_content="推理"), [
+        {"reasoning_content": "推"}, {"reasoning_content": "理"}, {"content": "答复"},
+    ])
+    harness.runtime_config.thinking_channel = "reasoning_content"
+    _patch_model_runtime(monkeypatch, harness)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    asyncio.run(model_module._model_node(_state()))
+    phases = [event.phase for event in harness.events if isinstance(event, ModelActivityEvent)]
+    assert phases == ["waiting", "reasoning", "responding", None]
+    from app.core.events import AssistantTextDeltaEvent
+    assert all(e.part == "text" for e in harness.events if isinstance(e, AssistantTextDeltaEvent))
+    assert harness.saved_responses[-1][0].choices[0].message.reasoning_content == "推理"
+
+    async def fail(_messages):
+        raise RuntimeError("stream failed")
+        yield  # make this an async generator
+
+    harness.events.clear()
+    harness.runtime_config.model.stream = fail
+    with pytest.raises(RuntimeError, match="stream failed"):
+        asyncio.run(model_module._model_node(_state()))
+    assert [event.phase for event in harness.events] == ["waiting", None]

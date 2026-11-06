@@ -82,7 +82,7 @@ def _running_state(part: dict) -> dict:
         "messages": [
             {"id": "assistant-1", "role": "assistant", "parts": [part], "runId": 1, "outcome": None, "source": None}
         ],
-        "activity": {
+        "activity": {"modelActivity": None,
             "runId": 1,
             "status": "running",
             "endReason": None,
@@ -170,9 +170,9 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
         assert "mutated" not in cold["display_data"]
 
 
-def test_final_tool_metadata_keeps_accumulated_terminal_preview():
-    """终态摘要可被截断，实时终端预览仍保留累计全文。"""
-    part = {
+def test_final_tool_metadata_uses_authoritative_terminal_output():
+    """终态 display_data 是完整执行事实；明确携带 output 时替换实时预览。"""
+    part = {"presentation": "activity",
         "type": "tool-call",
         "toolCallId": "call-1",
         "status": "running",
@@ -190,5 +190,5 @@ def test_final_tool_metadata_keeps_accumulated_terminal_preview():
     for mutation in plan_event(event, state):
         part[mutation.path[-1]] = mutation.value
     assert part["status"] == "completed"
-    assert part["display_data"]["output"] == "full output"
+    assert part["display_data"]["output"] == "truncated"
     assert event.display_data["output"] == "truncated"

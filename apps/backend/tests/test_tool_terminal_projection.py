@@ -53,7 +53,7 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.tool_registry import ToolRegistry
-from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
 from app.tools.tool_handler.read_file import ReadFileTool
@@ -170,10 +170,6 @@ def _runtime(
         **overrides,
     )
     batch = ToolBatch()
-    for call_id, name in (projected or {}).items():
-        batch.valid_tool_calls[call_id] = ValidToolCall(name=name, projection="projected")
-    for call_id in banned:
-        batch.valid_tool_calls[call_id] = ValidToolCall(name="read_file", projection="banned")
     return rc, batch
 
 
@@ -526,7 +522,7 @@ def test_success_emits_running_then_completed(
         rc,
         ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"),
         "step-1",
-        batch,
+
         _NO_LOOP,
     )
 
@@ -570,7 +566,7 @@ def test_running_is_emitted_only_after_admission(
     )
 
     tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-probe"), "s", batch, _NO_LOOP
+        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-probe"), "s",  _NO_LOOP
     )
 
     assert seen_during_handler == [["running"]]
@@ -591,7 +587,7 @@ def test_unknown_tool_emits_failed_without_running(
         rc,
         ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-unknown"),
         "s",
-        batch,
+
         _NO_LOOP,
     )
 
@@ -618,7 +614,7 @@ def test_profile_denied_tool_emits_failed_without_running(
         rc,
         ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-denied"),
         "s",
-        batch,
+
         _NO_LOOP,
     )
 
@@ -641,7 +637,7 @@ def test_invalid_arguments_emit_failed_without_running(
         rc,
         ToolCall(tool_name="read_file", arguments='{"nonexistent": 1}', call_id="call-bad"),
         "s",
-        batch,
+
         _NO_LOOP,
     )
 
@@ -650,14 +646,10 @@ def test_invalid_arguments_emit_failed_without_running(
 
 
 @pytest.mark.parametrize("arguments", ['{"path": "sample.txt"}', '{"nonexistent": 1}'])
-def test_invisible_call_emits_nothing(
+def test_denied_calls_emit_failure_without_running(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, arguments: str
 ) -> None:
-    """本步未建卡片的调用（未注册工具名，或本轮 banned）：都不发任何生命周期事件。
-
-    未建卡片 ⇔ 未注册或不在本轮准入名单，二者都在准入门禁被拒，执行器因此不会发 running；
-    批次入口只为已建卡片的调用发终态。
-    """
+    """执行门禁拒绝未知或本轮禁用工具：不发 running、不执行 handler，但保留失败事件。"""
 
     recorder = _install_recorder(monkeypatch)
     rc, batch = _runtime(
@@ -672,11 +664,11 @@ def test_invisible_call_emits_nothing(
             rc,
             ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id),
             "s",
-            batch,
+
             _NO_LOOP,
         )
 
-    assert recorder.events == []
+    assert [(e.tool_call_id, e.status) for e in recorder.events] == [("call-unregistered", "failed"), ("call-banned", "failed")]
 
 
 def test_execute_call_specializes_context_per_call(
@@ -706,7 +698,7 @@ def test_execute_call_specializes_context_per_call(
     )
 
     tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-a"), "s", batch, _NO_LOOP
+        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-a"), "s",  _NO_LOOP
     )
 
     assert received == ["call-a"]
@@ -746,7 +738,7 @@ def test_malformed_display_data_still_emits_failed_terminal(
         rc,
         ToolCall(tool_name="bad_display", arguments="{}", call_id="call-bad-display"),
         "s",
-        batch,
+
         _NO_LOOP,
     )
 
@@ -776,7 +768,7 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
             rc,
             ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"),
             "s",
-            batch,
+
             _NO_LOOP,
         )
 
@@ -824,7 +816,7 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
             rc,
             ToolCall(tool_name="read_file", arguments="{}", call_id="call-boom"),
             "s",
-            batch,
+
             _NO_LOOP,
         )
 
@@ -857,7 +849,7 @@ def test_executor_exception_after_start_closes_running_card(
         rc,
         ToolCall(tool_name="read_file", arguments="{}", call_id="call-late"),
         "s",
-        batch,
+
         _NO_LOOP,
     )
 
@@ -867,13 +859,10 @@ def test_executor_exception_after_start_closes_running_card(
     assert recorder.statuses("call-late") == ["running", "failed"]
 
 
-def test_executor_exception_on_invisible_call_emits_nothing(
+def test_executor_exception_emits_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """未建卡片的调用执行链异常：仍收口为 error 观察，但不发任何事件。
-
-    未建卡片的调用过不了准入门禁，执行器不会为它发 running，替身因此在准入前即抛出。
-    """
+    """执行器异常必须发布失败事实，不依赖前端是否已有卡片。"""
 
     recorder = _install_recorder(monkeypatch)
     rc, batch = _runtime(tmp_path, _RaisingExecutor(RuntimeError("x")))
@@ -882,12 +871,12 @@ def test_executor_exception_on_invisible_call_emits_nothing(
         rc,
         ToolCall(tool_name="read_file", arguments="{}", call_id="call-hidden"),
         "s",
-        batch,
+
         _NO_LOOP,
     )
 
     assert observation.status == "error"
-    assert recorder.events == []
+    assert [(e.tool_call_id, e.status) for e in recorder.events] == [("call-hidden", "failed")]
 
 
 # ---------------------------------------------------------------------------
@@ -962,7 +951,7 @@ def test_projection_happens_in_parent_for_process_isolated_tool(
         rc,
         ToolCall(tool_name="process_probe", arguments="{}", call_id="call-proc"),
         "s",
-        batch,
+
         _NO_LOOP,
     )
 
@@ -1000,7 +989,7 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
         rc,
         ToolCall(tool_name="suspend_probe", arguments="{}", call_id="call-suspend"),
         "s",
-        batch,
+
         _NO_LOOP,
     )
 
@@ -1009,12 +998,8 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
     assert recorder.statuses("call-suspend") == ["running", "completed"]
 
 
-def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
-    """判据 G：终态事件的 display_data.output 不得清空已流出的实时 output（真实 plan）。
-
-    构造带 ``terminal_output_seq`` 与已累积 output 的 part，再走真实 ``plan``；终态事件应保留
-    完整的流式 output，而不是用被预算截断的最终观察覆盖它。
-    """
+def test_completed_terminal_event_uses_authoritative_output() -> None:
+    """终态完整输出属于执行结果，替换实时预览；与终端输出改造契约一致。"""
 
     owner = _MemorySnapshotOwner(empty_snapshot())
     projector = ConversationEventProjector(owner)
@@ -1054,7 +1039,7 @@ def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
     assert streamed_part["terminal_output_seq"] == last_seq
     assert last_seq >= 2, "本用例需覆盖多 chunk 场景"
 
-    # 终态事件携带被预算截断的 output，投影必须保留已流出的完整 output。
+    # 最终完整 output 是权威事实，模型上下文预算不应参与这里的展示载荷。
     projector.process(
         ToolCallStatusChangedEvent(
             task_id=1,
@@ -1063,8 +1048,8 @@ def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
             status="completed",
             display_data={
                 "kind": "terminal-result",
-                "output": "bounded final observation",
-                "truncated": True,
+                "output": "authoritative final output",
+                "truncated": False,
                 "exit_code": 0,
             },
         )
@@ -1072,7 +1057,7 @@ def test_completed_terminal_event_does_not_clear_streamed_output() -> None:
 
     part = _part(owner, 9, "call-t")
     assert part["status"] == "completed"
-    assert part["display_data"]["output"] == streamed, "终态事件清空了已流出的终端输出"
+    assert part["display_data"]["output"] == "authoritative final output"
     assert part["terminal_output_seq"] == last_seq, "终态投影不得改写终端输出序号"
     # 终态事件自带的 exit_code 仍应保留（展示事实合并）。
     assert part["display_data"]["exit_code"] == 0
@@ -1107,7 +1092,7 @@ def test_parallel_batch_projects_each_call_independently(
             rc,
             ToolCall(tool_name="read_file", arguments=json.dumps({"path": name}), call_id=call_id),
             "s",
-            batch,
+
             _NO_LOOP,
         )
 
@@ -1143,14 +1128,14 @@ def test_mixed_batch_distinct_statuses_do_not_cross_talk(
         rc,
         ToolCall(tool_name="read_file", arguments='{"path": "good.txt"}', call_id="call-good"),
         "s",
-        batch,
+
         _NO_LOOP,
     )
     tool_batch_runner._execute_call(
         rc,
         ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-bad"),
         "s",
-        batch,
+
         _NO_LOOP,
     )
 
@@ -1194,7 +1179,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
             "id": "m1",
             "role": "assistant",
             "parts": [
-                {
+                {"presentation": "activity",
                     "type": "tool-call",
                     "toolCallId": "call-r",
                     "toolName": "read_file",
@@ -1208,7 +1193,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
             "source": None,
         },
     ]
-    state["activity"] = {
+    state["activity"] = {"modelActivity": None,
         "runId": 5,
         "status": "running",
         "endReason": None,

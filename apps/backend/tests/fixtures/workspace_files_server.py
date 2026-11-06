@@ -90,6 +90,27 @@ def watch_status():
     return {"subscriptions": len(watcher._subscribers), "watches": len(watcher._watches)}
 
 
+@app.post("/__test__/files/link-fixture")
+def link_fixture():
+    root = app.state.fixture_root
+    for relative, marker in [
+        ("API.md", "ROOT_API"),
+        ("slow.md", "SLOW_FILE"),
+        ("slow-again.md", "SLOW_AGAIN"),
+        ("docs/brand/API.md", "BRAND_API"),
+        ("node_modules/example/API.md", "DEPENDENCY_API"),
+        ("docs/brand/a%41#中文.md", "LITERAL_PATH"),
+    ]:
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"# {marker}\nline two\nline three\n", encoding="utf-8")
+    (root / "docs/brand/guide.md").write_text(
+        "# Guide\n\n`./API.md` [special](a%2541%23%E4%B8%AD%E6%96%87.md)\n",
+        encoding="utf-8",
+    )
+    return {"ready": True}
+
+
 @app.get("/__test__/files/health")
 def health():
     return {"status": "ready", "workspace_id": app.state.fixture_workspace_id}

@@ -50,7 +50,7 @@ def _task() -> TaskRecord:
 
 
 def _activity(run_id: int, status: str) -> dict[str, object]:
-    return {
+    return {"modelActivity": None,
         "runId": run_id,
         "status": status,
         "endReason": None,
@@ -75,7 +75,7 @@ def _run(run_id: int, status: str) -> ConversationRunRecord:
 
 
 @pytest.fixture(autouse=True)
-def _reset_task_runtime_spaces(monkeypatch) -> None:
+def _reset_task_runtime_spaces(monkeypatch, backend_env) -> None:
     """隔离任务服务依赖与进程缓存，保留真实 TaskRuntimeSpace 的懒加载行为。"""
 
     monkeypatch.setattr(
@@ -522,3 +522,26 @@ async def test_running_snapshot_is_kept_until_the_run_stops_unwatched() -> None:
         RunStatusChangedEvent(task_id=7, run_id=2, status=ConversationRunStatus.COMPLETED)
     )
     assert not space.has_snapshot()
+
+
+def test_rebuild_preserves_only_current_live_model_activity():
+    from app.core.events import ModelActivityEvent
+
+    task = _task()
+    run = _run(2, "running")
+    service = _make_state_service(
+        SimpleNamespace(get=lambda _: task),
+        SimpleNamespace(list_by_task=lambda _: [run]),
+        SimpleNamespace(get=lambda *args, **kwargs: []),
+    )
+    service.apply_planned(ModelActivityEvent(
+        task_id=7, run_id=2, step_id="step-1", phase="reasoning",
+    ))
+    assert service.rebuild_state(7)["activity"]["modelActivity"] == {
+        "stepId": "step-1", "phase": "reasoning",
+    }
+    run.status = "cancelled"
+    assert service.rebuild_state(7)["activity"]["modelActivity"] is None
+    run.status = "running"
+    ConversationTaskStateService.clear_process_state()
+    assert service.get_state(7)["activity"]["modelActivity"] is None

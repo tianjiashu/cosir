@@ -46,7 +46,7 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
 )
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
-from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
 from app.models.conversation_input import UserInputPresentation
 from tests.runtime_context_stub import runtime_stub
@@ -176,10 +176,7 @@ def _projected_batch(*call_ids: str) -> ToolBatch:
     """给定调用均视为本步已创建工具卡片的批次。"""
 
     return ToolBatch(
-        valid_tool_calls={
-            call_id: ValidToolCall(name=_STREAMING_TOOL_NAME, projection="projected")
-            for call_id in call_ids
-        }
+
     )
 
 
@@ -322,7 +319,7 @@ def _project_cancelled_via_real_path(
         _batch_runtime(_CancelledExecutor()),
         ToolCall(tool_name="execute_terminal", arguments="{}", call_id=call_id),
         "step-1",
-        _projected_batch(call_id),
+
         None,
     )
     assert len(captured) == 1

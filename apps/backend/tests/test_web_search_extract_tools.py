@@ -221,6 +221,7 @@ def test_web_extract_ui_data_uses_generic_entries_without_document_content() -> 
 
     assert observation.display_data == {
         "kind": "web-extract-urls",
+        "partial": False,
         "urls": [{"url": "https://example.com/docs"}],
     }
     assert "private document body" in observation.content
@@ -761,6 +762,8 @@ def test_extract_partial_success_marks_partial_and_failed_count() -> None:
     payload = json.loads(obs.content)
     assert "success" not in payload
     assert payload["partial"] is True
+    assert obs.display_data["partial"] is True
+    assert "status_hint" not in obs.display_data
     assert payload["failed_count"] == 1
 
     results = payload["results"]

@@ -38,7 +38,7 @@ from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
-from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
 from tests.runtime_context_stub import runtime_stub
 
@@ -397,14 +397,14 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
         admitted_tools=frozenset({"probe_tool"}),
     )
     batch = ToolBatch(
-        valid_tool_calls={"call-1": ValidToolCall(name="probe_tool", projection="projected")}
+
     )
 
     observation = tool_batch_runner._execute_call(
         rc,
         ToolCall(tool_name="probe_tool", arguments="{}", call_id="call-1"),
         "step-1",
-        batch,
+
         _NO_LOOP,
     )
 
@@ -498,7 +498,7 @@ def _running_tool_state(tool_call_id: str = "call-9") -> dict[str, Any]:
                 "outcome": None,
                 "source": None,
                 "parts": [
-                    {
+                    {"presentation": "activity",
                         "type": "tool-call",
                         "toolCallId": tool_call_id,
                         "toolName": "execute_terminal",
@@ -509,7 +509,7 @@ def _running_tool_state(tool_call_id: str = "call-9") -> dict[str, Any]:
                 ],
             }
         ],
-        "activity": {
+        "activity": {"modelActivity": None,
             "runId": 4,
             "status": "running",
             "endReason": None,

@@ -22,7 +22,7 @@ _SNAPSHOT = {"messages": [], "activity": None, "error": None}
 
 
 def _activity(run_id: int, status: str) -> dict:
-    return {
+    return {"modelActivity": None,
         "runId": run_id,
         "status": status,
         "endReason": None,

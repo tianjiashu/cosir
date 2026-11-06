@@ -168,3 +168,51 @@ def test_local_backend_kills_the_command_when_stopped(tmp_path) -> None:
     assert time.monotonic() - started < 1.5
     time.sleep(2)
     assert not marker.exists()
+
+
+def test_parent_stop_retains_real_output_without_delivery(tmp_path, delivered) -> None:
+    """停止先结束进程，最终输出写回原卡；不把取消结论回投模型。"""
+    from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+        cancellation_registry,
+    )
+    marker = tmp_path / "ready"
+    ExecuteTerminalTool().execute(
+        description="partial output", command=f"printf '已收集\\n'; touch '{marker}'; sleep 10",
+        background=True, execution_context=_context(tmp_path, "call-parent-stop"),
+    )
+    _wait_for(marker.exists)
+    cancellation_registry.request_cancel(_TASK_ID, "user")
+    try:
+        displays = background_registry.drop_task(_TASK_ID)
+    finally:
+        cancellation_registry.consume(_TASK_ID)
+    assert "已收集" in displays["call-parent-stop"]["output"]
+    assert delivered == []
+
+
+def test_timeout_retains_real_output(tmp_path) -> None:
+    result = ExecuteTerminalTool().execute(
+        description="timeout", command="printf 'before-timeout\\n'; sleep 10", timeout=0.2,
+        execution_context=_context(tmp_path, "call-timeout-output"),
+    )
+    assert result.status == "error"
+    assert result.display_data["timed_out"] is True
+    assert "before-timeout" in result.display_data["output"]
+
+
+def test_foreground_cancel_retains_real_output(tmp_path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    marker = tmp_path / "ready"
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        result = executor.submit(
+            ExecuteTerminalTool().execute,
+            description="cancel", command=f"printf 'before-cancel\\n'; touch '{marker}'; sleep 10",
+            execution_context=_context(tmp_path, "call-cancel-output"),
+        )
+        _wait_for(marker.exists)
+        assert background_registry.request_user_cancel(
+            _TASK_ID, "call-cancel-output", driving=False
+        )
+        observation = result.result(timeout=5)
+    assert observation.status == "cancelled"
+    assert "before-cancel" in observation.display_data["output"]

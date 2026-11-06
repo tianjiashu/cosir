@@ -81,7 +81,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
             "task_id": 1,
             "run_id": 1,
             "step_id": "step-2",
-            "part": "reasoning",
+            "part": "text",
             "delta": "先看目录结构",
         },
         AssistantTextDeltaEvent,

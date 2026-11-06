@@ -31,7 +31,7 @@ def _work(label: str, *, started_at: str = _START, ended_at: str | None = None) 
 
 
 def _part(call_id: str, status: str, work: BackgroundWork | None = None) -> dict[str, object]:
-    part: dict[str, object] = {
+    part: dict[str, object] = {"presentation": "activity",
         "type": "tool-call",
         "toolCallId": call_id,
         "toolName": "execute_terminal",

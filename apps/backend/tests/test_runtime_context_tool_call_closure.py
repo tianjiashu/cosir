@@ -740,10 +740,10 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
     """流式取消产生的展示占位不是执行结果，不得提升为模型上下文的孤儿 tool。"""
     from openai.types.chat import ParsedFunctionToolCall
 
-    import app.core.workflow.node_helper.streaming_part_state_machine as machine_module
+    import app.core.workflow.node_helper.model_stream_state_machine as machine_module
     from app.core.events import ToolCallStatusChangedEvent
     from app.core.workflow.execution_state.tool_batch import ToolBatch
-    from app.core.workflow.node_helper import StreamingPartStateMachine
+    from app.core.workflow.node_helper import ModelStreamStateMachine
     from tests.sdk_fixtures import sdk_completion
 
     run = env.seed_run("running")
@@ -764,14 +764,13 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
         tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
         admitted_tools=frozenset({"read_file"}),
     )
-    monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
     monkeypatch.setattr(machine_module, "emit", events.append)
-    machine = StreamingPartStateMachine(
+    machine = ModelStreamStateMachine(
         task_id=env.task.id,
         run_id=run.id,
         step_id="step-1",
-        batch=ToolBatch(),
+
     )
     machine.tool_call(
         [

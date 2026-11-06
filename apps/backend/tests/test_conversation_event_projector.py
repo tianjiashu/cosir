@@ -363,19 +363,12 @@ def test_assistant_text_and_reasoning_parts(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
-    event_projector.process(
-        AssistantTextDeltaEvent(task_id=1, run_id=1, part="reasoning", delta="先思考")
-    )
-    event_projector.process(
-        AssistantTextDeltaEvent(task_id=1, run_id=1, part="reasoning", delta="一下")
-    )
-    event_projector.process(AssistantPartClosedEvent(task_id=1, run_id=1, part="reasoning"))
+    from app.core.events import ModelActivityEvent
+    event_projector.process(ModelActivityEvent(task_id=1, run_id=1, step_id="step-1", phase="reasoning"))
     event_projector.process(AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="答案"))
     parts = _messages(snapshots.states[1], 1)[1]["parts"]
-    assert [part["type"] for part in parts] == ["reasoning", "text"]
-    assert parts[0]["text"] == "先思考一下"
-    assert parts[0]["status"] == "completed"
-    assert parts[1]["text"] == "答案"
+    assert [part["type"] for part in parts] == ["text"]
+    assert parts[0]["text"] == "答案"
 
 
 def test_duplicate_text_delta_is_not_appended_twice(

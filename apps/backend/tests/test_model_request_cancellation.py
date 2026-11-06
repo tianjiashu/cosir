@@ -15,7 +15,7 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import (
 )
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.node_helper import streaming_part_state_machine as streaming_module
+from app.core.workflow.node_helper import model_stream_state_machine as streaming_module
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import model_node, structured_output_node
 from app.models.enums.conversation_run_status import RunTransition
@@ -160,7 +160,6 @@ def bind_node(monkeypatch, model):
     for module in (model_node, structured_output_node):
         monkeypatch.setattr(module, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(model_node, "_message_context", lambda: context)
-    monkeypatch.setattr(streaming_module, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(streaming_module, "_message_context", lambda: context)
     monkeypatch.setattr(structured_output_node, "_message_context", lambda: context)
     monkeypatch.setattr(streaming_module, "emit", lambda event: None)
@@ -233,10 +232,12 @@ async def test_cancel_settles_after_stream_close_and_part_flush(monkeypatch, can
     monkeypatch.setattr(Constant.Workflow, "DEFAULT_TEXT_FLUSH_MAX_INTERVAL_SECONDS", 3600)
 
     def project(event):
+        if event.type == "model_activity":
+            return
         assert body.closed.is_set()
         order.append(type(event).__name__)
 
-    original_cancel_tools = streaming_module.StreamingPartStateMachine.cancel
+    original_cancel_tools = streaming_module.ModelStreamStateMachine.cancel
 
     def cancel_tools(self):
         assert order == []
@@ -254,7 +255,7 @@ async def test_cancel_settles_after_stream_close_and_part_flush(monkeypatch, can
         return original_transition_run(run_id, transition, **kwargs)
 
     monkeypatch.setattr(streaming_module, "emit", project)
-    monkeypatch.setattr(streaming_module.StreamingPartStateMachine, "cancel", cancel_tools)
+    monkeypatch.setattr(streaming_module.ModelStreamStateMachine, "cancel", cancel_tools)
     bound.runtime.run_state.transition = cancel_run
     driver = asyncio.create_task(model_node._model_node(bound.state))
     try:

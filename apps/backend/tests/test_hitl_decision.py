@@ -179,6 +179,14 @@ class _Executor:
         return tool_success(call.tool_name, "done", tool_call_id=call.call_id)
 
 
+@pytest.fixture(autouse=True)
+def batch_events(monkeypatch):
+    """批次直接调用测试独立收集事件，生产仍由执行作用域装配 sink。"""
+    events = []
+    monkeypatch.setattr(tool_batch_runner, "emit", events.append)
+    return events
+
+
 def _batch_rc(executor: _Executor):
     return runtime_stub(
         tool_definitions={
@@ -197,7 +205,7 @@ async def test_mixed_hitl_batch_is_rejected_without_executing_anything() -> None
         ToolCall(tool_name="plain_tool", arguments="{}", call_id="c2"),
     ]
 
-    observations = await tool_batch_runner.run_tool_batch(rc, calls, "step-1", ToolBatch())
+    observations = await tool_batch_runner.run_tool_batch(rc, calls, "step-1")
 
     assert executor.contexts == []
     assert [o.status for o in observations] == ["error", "error"]
@@ -213,7 +221,7 @@ async def test_two_hitl_calls_in_one_batch_are_rejected() -> None:
     ]
 
     observations = await tool_batch_runner.run_tool_batch(
-        _batch_rc(executor), calls, "step-1", ToolBatch()
+        _batch_rc(executor), calls, "step-1"
     )
 
     assert executor.contexts == []
@@ -228,7 +236,7 @@ async def test_single_hitl_call_runs_and_receives_the_decision() -> None:
         _batch_rc(executor),
         [ToolCall(tool_name="hitl_tool", arguments="{}", call_id="c1")],
         "step-1",
-        ToolBatch(),
+
         decision,
     )
 
@@ -260,7 +268,7 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
                 "outcome": None,
                 "source": None,
                 "parts": [
-                    {
+                    {"presentation": "activity",
                         "type": "tool-call",
                         "toolCallId": "c1",
                         "toolName": "hitl_tool",
@@ -473,7 +481,7 @@ def test_context_finds_call_and_updates_only_tool_result_metadata() -> None:
     manager._entries = [
         ContextEntry({"role": "assistant", "content": None, "tool_calls": [_CALL]}, 1, 3),
         ContextEntry(
-            placeholder, 1, 4, metadata=ToolMessageMetadata(status="pending", hidden=True)
+            placeholder, 1, 4, metadata=ToolMessageMetadata(status="pending")
         ),
         ContextEntry({"role": "user", "content": "later"}, 2, 5),
     ]
@@ -486,7 +494,7 @@ def test_context_finds_call_and_updates_only_tool_result_metadata() -> None:
     )
     [record] = replaced
     assert (record.sequence, record.run_id, record.message) == (4, 1, placeholder)
-    assert (written.status, written.hidden) == ("completed", True)
+    assert written.status == "completed"
     with pytest.raises(KeyError):
         manager.update_tool_result_metadata("missing", ToolMessageMetadata(status="completed"))
 

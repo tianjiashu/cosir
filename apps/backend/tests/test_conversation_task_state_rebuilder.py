@@ -389,3 +389,61 @@ def test_blank_file_path_is_rejected() -> None:
                 "input_text": "请查看 notes.md",
             }
         )
+
+
+def test_reasoning_stays_in_context_observation_but_not_cold_conversation() -> None:
+    from app.api.schemas.response.ContextMessageResponse import ContextMessageResponse
+
+    timestamp = _timestamp()
+    run = ConversationRunRecord(id=1, task_id=7, status="completed", created_at=timestamp, updated_at=timestamp)
+    row = ConversationTaskContextRecord(
+        task_id=7, run_id=1, sequence=1, include_in_context=True,
+        message={"role": "assistant", "content": "结论", "reasoning_content": "推理原文"},
+        created_at=timestamp.isoformat(), updated_at=timestamp.isoformat(),
+    )
+    state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
+    validate_snapshot(state)
+    assert state["messages"][0]["parts"] == [
+        {"type": "text", "text": "结论", "status": "completed"}
+    ]
+    assert "推理原文" not in json.dumps(state, ensure_ascii=False)
+    assert ContextMessageResponse.from_record(row).reasoning_content == "推理原文"
+    assert row.message["reasoning_content"] == "推理原文"
+
+
+@pytest.mark.usefixtures("backend_env")
+@pytest.mark.parametrize("name, expected", [
+    ("wait_messages", "quiet"), ("delegate_task", "standalone"),
+    ("fork_task", "standalone"), ("agent_team", "standalone"),
+    ("read_file", "activity"), ("removed_tool", "activity"),
+])
+def test_live_and_rebuilt_calls_share_definition_presentation(name, expected):
+    from app.assistant_transport.projection.tool_call_event_projection import plan_tool_call_created
+    from app.assistant_transport.projection.tool_presentation import presentation_catalog
+    from app.config.configuration import get_tool_registry
+    from app.core.events import ToolCallCreatedEvent
+
+    registry = get_tool_registry()
+    catalog = presentation_catalog(registry)
+    task = _task()
+    task.current_run_id = 1
+    run = ConversationRunRecord(id=1, task_id=7, status="running", created_at=_timestamp(), updated_at=_timestamp())
+    state = ConversationTaskStateRebuilder.rebuild(task, [run], [], catalog)
+    mutations = plan_tool_call_created(
+        ToolCallCreatedEvent(task_id=7, run_id=1, tool_call_id="call", tool_name=name),
+        state, catalog,
+    )
+    assert mutations[0].value["parts"][0]["presentation"] == expected
+    row = ConversationTaskContextRecord(
+        task_id=7, run_id=1, sequence=1, include_in_context=True,
+        message={"role": "assistant", "content": "", "tool_calls": [{
+            "id": "call", "type": "function",
+            "function": {"name": name, "arguments": "{}"},
+        }]},
+    )
+    rebuilt = ConversationTaskStateRebuilder.rebuild(task, [run], [row], catalog)
+    validate_snapshot(rebuilt)
+    assert rebuilt["messages"][0]["parts"][0]["presentation"] == expected
+    if name != "removed_tool":
+        schema = registry.get_tool_definition(name).to_model_tool_definition()
+        assert set(schema) == {"name", "description", "strict", "parameters"}

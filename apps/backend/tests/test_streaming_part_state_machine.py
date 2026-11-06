@@ -1,4 +1,4 @@
-"""StreamingPartStateMachine 的增量合并与 part 顺序契约测试。"""
+"""ModelStreamStateMachine 的增量合并与 part 顺序契约测试。"""
 
 from types import SimpleNamespace
 from typing import Any
@@ -9,14 +9,14 @@ from openai.types.chat import ParsedFunctionToolCall
 from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
+    ModelActivityEvent,
     ToolCallCreatedEvent,
     ToolCallStatusChangedEvent,
 )
-from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import (
-    StreamingPartStateMachine,
+    ModelStreamStateMachine,
 )
-from app.core.workflow.node_helper import streaming_part_state_machine as machine_module
+from app.core.workflow.node_helper import model_stream_state_machine as machine_module
 from tests.runtime_context_stub import install_runtime_singletons
 
 
@@ -50,12 +50,9 @@ class _Harness:
         self.clock = clock or _Clock()
         self.events: list[Any] = []
         # 生产由 model 节点每次请求新建批次并交给状态机；这里每个 harness 一个批次。
-        self.batch = ToolBatch()
         # 事件出口在构造期绑定（生产为 ``emit``），测试用替身提供收集器。
         with patch.object(machine_module, "emit", self.events.append):
-            self.machine = StreamingPartStateMachine(
-                task_id=1, run_id=2, step_id="step-1", batch=self.batch
-            )
+            self.machine = ModelStreamStateMachine(task_id=1, run_id=2, step_id="step-1")
         # 合并阈值与时钟是构造期固化的实现细节（生产取 Constant + time.monotonic），测试按用例
         # 白盒注入，才能在字符阈值与时间阈值两个维度上可控。
         self.machine._min_chars = min_chars
@@ -130,7 +127,7 @@ def test_channel_switch_flushes_and_closes_before_new_channel() -> None:
     harness = _Harness(min_chars=1_000, max_interval=1_000.0)
 
     harness.machine.text("hi")
-    harness.machine.reasoning("ho")
+    harness.machine.receive(text=None, reasoning=True, tool_delta=False, tool_calls=[])
 
     assert harness.event_kinds() == ["delta:text", "closed:text"]
     assert harness.transcript("text") == "hi"
@@ -141,10 +138,8 @@ def test_channel_switch_flushes_and_closes_before_new_channel() -> None:
     assert harness.event_kinds() == [
         "delta:text",
         "closed:text",
-        "delta:reasoning",
-        "closed:reasoning",
     ]
-    assert harness.transcript("reasoning") == "ho"
+    assert harness.transcript("reasoning") == ""
 
 
 def test_tool_call_flushes_pending_before_closing() -> None:
@@ -153,7 +148,7 @@ def test_tool_call_flushes_pending_before_closing() -> None:
     harness = _Harness(min_chars=1_000, max_interval=1_000.0)
 
     harness.machine.text("tail")
-    harness.machine.tool_call([])
+    harness.machine.receive(text=None, reasoning=False, tool_delta=True, tool_calls=[])
 
     assert harness.event_kinds() == ["delta:text", "closed:text"]
     assert harness.transcript("text") == "tail"
@@ -216,17 +211,19 @@ def test_part_lifecycle_is_well_formed_across_interleaving() -> None:
 
     harness = _Harness(min_chars=3, max_interval=0.02)
 
-    harness.machine.reasoning("ab")
+    harness.machine.receive(text=None, reasoning=True, tool_delta=False, tool_calls=[])
     harness.machine.text("cd")
     harness.clock.advance(0.02)
-    harness.machine.reasoning("ef")
+    harness.machine.receive(text=None, reasoning=True, tool_delta=False, tool_calls=[])
     harness.machine.text("gh")
-    harness.machine.tool_call([])
+    harness.machine.receive(text=None, reasoning=False, tool_delta=True, tool_calls=[])
     harness.machine.text("ij")
     harness.machine.finish()
 
     running: set[str] = set()
     for event in harness.events:
+        if isinstance(event, ModelActivityEvent):
+            continue
         if isinstance(event, AssistantTextDeltaEvent):
             running.add(event.part)
             continue
@@ -236,7 +233,7 @@ def test_part_lifecycle_is_well_formed_across_interleaving() -> None:
 
     assert running == set()
     assert harness.transcript("text") == "cdghij"
-    assert harness.transcript("reasoning") == "abef"
+    assert harness.transcript("reasoning") == ""
 
 
 def _tool_call(call_id: str, tool_name: str) -> ParsedFunctionToolCall:
@@ -249,12 +246,8 @@ def _tool_call(call_id: str, tool_name: str) -> ParsedFunctionToolCall:
     )
 
 
-def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> None:
-    """取消先收口 text part，再逐条收敛已投影调用；未投影的调用不参与。
-
-    投影判据是「已注册 ∩ 本轮放行」：``write_file`` 虽已注册但不在 ``admitted_tools`` 内，
-    没有前端 part，因此既不发创建事件也不在取消时收口。
-    """
+def test_cancel_settles_all_registered_previews(monkeypatch) -> None:
+    """取消收口正文及所有已登记注册调用；本轮禁用调用也保留取消事实，未知身份不投影。"""
 
     harness = _Harness(min_chars=1_000, max_interval=1_000.0)
     written: list[Any] = []
@@ -265,7 +258,6 @@ def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> No
         },
         admitted_tools=frozenset({"read_file"}),
     )
-    monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
     monkeypatch.setattr(
         machine_module,
@@ -277,17 +269,17 @@ def test_cancel_closes_part_then_settles_only_projected_calls(monkeypatch) -> No
     harness.machine.tool_call(
         [_tool_call("c1", "read_file"), _tool_call("c2", "write_file"), _tool_call("c3", "unknown")]
     )
-    assert {
-        call_id: call.projection for call_id, call in harness.batch.valid_tool_calls.items()
-    } == {"c1": "projected", "c2": "banned"}
     harness.machine.cancel()
 
     assert harness.event_kinds() == ["delta:text", "closed:text"]
     created = [event for event in harness.events if isinstance(event, ToolCallCreatedEvent)]
-    assert [event.tool_call_id for event in created] == ["c1"]
+    assert [event.tool_call_id for event in created] == ["c1", "c2"]
     cancelled = [event for event in harness.events if isinstance(event, ToolCallStatusChangedEvent)]
-    assert [(event.tool_call_id, event.status) for event in cancelled] == [("c1", "cancelled")]
-    assert [message["tool_call_id"] for message in written] == ["c1"]
+    assert [(event.tool_call_id, event.status) for event in cancelled] == [
+        ("c1", "cancelled"),
+        ("c2", "cancelled"),
+    ]
+    assert [message["tool_call_id"] for message in written] == ["c1", "c2"]
 
 
 def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monkeypatch) -> None:
@@ -298,7 +290,6 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
         tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
         admitted_tools=frozenset({"read_file"}),
     )
-    monkeypatch.setattr(machine_module, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
     monkeypatch.setattr(
         machine_module,
@@ -317,11 +308,58 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
     # 请求边界：model_node 每次请求新建批次，同一 id 属于新请求，必须重新投影。
     second_events: list[Any] = []
     with patch.object(machine_module, "emit", second_events.append):
-        second = StreamingPartStateMachine(
-            task_id=1, run_id=2, step_id="step-2", batch=ToolBatch()
-        )
+        second = ModelStreamStateMachine(task_id=1, run_id=2, step_id="step-2")
     second.tool_call([_tool_call("c1", "read_file")])
 
     assert [
         event.tool_call_id for event in second_events if isinstance(event, ToolCallCreatedEvent)
     ] == ["c1"]
+
+
+def test_phases_follow_delta_not_accumulated_calls(monkeypatch):
+    runtime = SimpleNamespace(tool_definitions={"read_file": SimpleNamespace(name="read_file")})
+    install_runtime_singletons(runtime)
+    harness = _Harness(min_chars=1000)
+    machine = harness.machine
+    calls = [_tool_call("c1", "read_file")]
+    machine.start()
+    machine.receive(text=None, reasoning=True, tool_delta=False, tool_calls=[])
+    machine.receive(text=None, reasoning=True, tool_delta=False, tool_calls=[])
+    machine.receive(text=None, reasoning=False, tool_delta=True, tool_calls=calls)
+    machine.receive(text="答案", reasoning=False, tool_delta=False, tool_calls=calls)
+    machine.receive(text="继续", reasoning=False, tool_delta=False, tool_calls=calls)
+    machine.tool_call(calls)  # 最终累计快照不能回退成 tool_call 阶段，也不能截断正文。
+    assert harness.closed_parts == []
+    machine.finish()
+    machine.finish()
+    assert [e.phase for e in harness.events if isinstance(e, ModelActivityEvent)] == [
+        "waiting",
+        "reasoning",
+        "tool_call",
+        "responding",
+        None,
+    ]
+    assert harness.transcript("text") == "答案继续"
+    assert harness.closed_parts == ["text"]
+    assert sum(isinstance(e, ToolCallCreatedEvent) for e in harness.events) == 1
+
+
+def test_mixed_chunk_retains_text_and_only_signals_reasoning():
+    harness = _Harness()
+    harness.machine.start()
+    harness.machine.receive(text="正文", reasoning=True, tool_delta=True, tool_calls=[])
+    harness.machine.finish()
+    assert [e.phase for e in harness.events if isinstance(e, ModelActivityEvent)] == [
+        "waiting",
+        "tool_call",
+        None,
+    ]
+    assert harness.transcript("text") == "正文"
+    assert {e.part for e in harness.deltas} == {"text"}
+
+
+def test_wait_without_output_is_cleared_on_finish():
+    harness = _Harness()
+    harness.machine.start()
+    harness.machine.finish()
+    assert [e.phase for e in harness.events] == ["waiting", None]

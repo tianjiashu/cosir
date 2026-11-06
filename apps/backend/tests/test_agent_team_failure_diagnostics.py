@@ -40,7 +40,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
                 "outcome": None,
                 "source": None,
                 "parts": [
-                    {
+                    {"presentation": "activity",
                         "type": "tool-call",
                         "toolCallId": "call-1",
                         "toolName": "agent_team",
@@ -51,7 +51,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
             }
         ],
         "messageOffset": 0,
-        "activity": {
+        "activity": {"modelActivity": None,
             "runId": 3,
             "status": "running",
             "endReason": None,

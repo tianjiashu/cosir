@@ -151,7 +151,7 @@ def _record_state() -> ConversationStateSnapshot:
     """构造一个只含单个 running Run 的合法 snapshot。"""
 
     state = empty_snapshot()
-    state["activity"] = ConversationStateActivity(
+    state["activity"] = ConversationStateActivity(modelActivity=None,
         runId=1,
         status="running",
         endReason=None,

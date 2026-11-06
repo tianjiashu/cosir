@@ -105,7 +105,7 @@ def _running_state() -> ConversationStateSnapshot:
     """构造只含一个 running Run 的合法 snapshot（含新的 ``error`` 键）。"""
 
     state = empty_snapshot()
-    state["activity"] = ConversationStateActivity(
+    state["activity"] = ConversationStateActivity(modelActivity=None,
         runId=1,
         status="running",
         endReason=None,

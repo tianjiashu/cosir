@@ -10,13 +10,13 @@ from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.schemas import ToolCall, ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
-from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.task_message import (
     BackgroundResultBody,
     NoticeBody,
     TaskMessage,
 )
-from app.core.workflow.node_helper import streaming_part_state_machine as streaming
+from app.core.workflow.node_helper import model_stream_state_machine as streaming
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper import tool_observation_projection as projection
 from app.core.workflow.node_helper.common import RunStopped
@@ -57,7 +57,7 @@ def test_assistant_message_filters_identity_and_registry_only() -> None:
     assert projected["tool_calls"][1]["function"]["arguments"] == '{"path":'
 
 
-def test_streaming_preview_only_creates_allowed_registered_tool(monkeypatch) -> None:
+def test_streaming_preview_includes_denied_registered_tool(monkeypatch) -> None:
     events = []
     runtime = SimpleNamespace(
         admitted_tools={"read_file"},
@@ -66,22 +66,27 @@ def test_streaming_preview_only_creates_allowed_registered_tool(monkeypatch) -> 
             "write_file": SimpleNamespace(name="write_file", display=None),
         },
     )
-    monkeypatch.setattr(streaming, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
     monkeypatch.setattr(streaming, "emit", events.append)
-    parts = streaming.StreamingPartStateMachine(
-        task_id=1, run_id=2, step_id="step-1", batch=ToolBatch()
-    )
+    parts = streaming.ModelStreamStateMachine(task_id=1, run_id=2, step_id="step-1")
 
-    assert parts.create_tool_call("visible", "read_file") is True
-    assert parts.create_tool_call("hidden", "write_file") is False
-    assert [event.tool_call_id for event in events] == ["visible"]
+    from openai.types.chat import ParsedFunctionToolCall
+
+    parts.tool_call(
+        [
+            ParsedFunctionToolCall(
+                id=call_id, type="function", function={"name": name, "arguments": ""}
+            )
+            for call_id, name in [("visible", "read_file"), ("denied", "write_file")]
+        ]
+    )
+    assert [event.tool_call_id for event in events] == ["visible", "denied"]
 
 
 def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -> None:
     received = []
 
-    async def run_calls(_rc, calls, _step_id, _batch, _decision=None):
+    async def run_calls(_rc, calls, _step_id, _decision=None):
         received.extend(calls)
         return [
             ToolObservation(
@@ -96,7 +101,6 @@ def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -
     )
     batch = ToolBatch(
         calls=[_raw(arguments='{"path":"a.py"}')],
-        valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")},
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
@@ -107,17 +111,17 @@ def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -
     assert received[0].arguments == '{"path":"a.py"}'
     assert patch["batch"].observations[0].tool_call_id == "call-1"
     assert patch["batch"].suspends() is False
-    # 观察只写进返回的批次副本，调用与投影记账原样保留给 observe 结算。
-    assert patch["batch"].valid_tool_calls == batch.valid_tool_calls
+    # 观察只写进批次副本，调用原样交给 observe 结算。
+    assert patch["batch"].calls == batch.calls
     assert batch.observations == []
     assert patch["next_node"] is ReactRoute.OBSERVE
 
 
 def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
-    """tools 节点不按投影状态过滤：未建卡片（banned）的已注册调用同样交给执行器，由门禁拒绝。"""
+    """tools 节点把注册调用交给执行器，由门禁拒绝本轮禁用工具。"""
     received = []
 
-    async def run_calls(_rc, calls, _step_id, _batch, _decision=None):
+    async def run_calls(_rc, calls, _step_id, _decision=None):
         received.extend(calls)
         return []
 
@@ -132,10 +136,6 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
     )
     batch = ToolBatch(
         calls=[_raw("visible"), banned],
-        valid_tool_calls={
-            "visible": ValidToolCall(name="read_file", projection="projected"),
-            "banned": ValidToolCall(name="write_file", projection="banned"),
-        },
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
@@ -181,16 +181,6 @@ def _batch_runtime(executor):
     )
 
 
-def _batch(calls: list[dict], projections: dict[str, str]) -> ToolBatch:
-    return ToolBatch(
-        calls=calls,
-        valid_tool_calls={
-            call_id: ValidToolCall(name="read_file", projection=projection)
-            for call_id, projection in projections.items()
-        },
-    )
-
-
 def _tool_calls(raw_calls: list[dict]) -> list[ToolCall]:
     return [
         ToolCall(
@@ -203,8 +193,7 @@ def _tool_calls(raw_calls: list[dict]) -> list[ToolCall]:
 
 
 def test_run_tool_batch_orders_executor_running_before_batch_terminal(monkeypatch) -> None:
-    """running 由执行器在 handler 前发出，终态由批次入口在执行后发出，二者落在同一时间线；
-    终态只投影本步已建卡片的调用。"""
+    """每个调用先由执行器发 running，再由批次发布终态；不以 UI 记账过滤结果。"""
     order: list[str] = []
     events = []
 
@@ -220,22 +209,21 @@ def test_run_tool_batch_orders_executor_running_before_batch_terminal(monkeypatc
     ]
     executor = _StartingExecutor(order)
     runtime = _batch_runtime(executor)
-    batch = _batch(raw_calls, {"visible": "projected", "banned": "banned"})
 
     observations = asyncio.run(
-        tool_batch_runner.run_tool_batch(runtime, _tool_calls(raw_calls), "step-1", batch)
+        tool_batch_runner.run_tool_batch(runtime, _tool_calls(raw_calls), "step-1")
     )
 
     assert [call.call_id for call in executor.calls] == ["visible", "banned"]
     assert [observation.tool_call_id for observation in observations] == ["visible", "banned"]
-    # 替身执行器对两个调用都发 running（真实执行器会在准入门禁拒绝 banned）；批次入口只为
-    # 已建卡片的 visible 发终态。
+    # 替身对两个调用都发 running；真实门禁会直接拒绝 banned。批次均发布结果。
     assert order == [
         "running:visible",
         "handler:visible",
         "completed:visible",
         "running:banned",
         "handler:banned",
+        "completed:banned",
     ]
     assert events[0].step_id == "step-1"
 
@@ -258,10 +246,9 @@ def test_run_tool_batch_projects_only_terminal_when_executor_never_starts(monkey
 
     raw_calls = [_raw("denied"), _raw("broken")]
     runtime = _batch_runtime(_Executor())
-    batch = _batch(raw_calls, {"denied": "projected", "broken": "projected"})
 
     observations = asyncio.run(
-        tool_batch_runner.run_tool_batch(runtime, _tool_calls(raw_calls), "step-1", batch)
+        tool_batch_runner.run_tool_batch(runtime, _tool_calls(raw_calls), "step-1")
     )
 
     assert [(event.tool_call_id, event.status) for event in events] == [
@@ -304,6 +291,7 @@ def _observation(call_id: str = "call-1", *, suspend: bool = False) -> ToolObser
         tool_name="review", status="success", tool_call_id=call_id, suspend=suspend
     )
 
+
 @pytest.mark.parametrize("suspend", [False, True])
 def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None:
     """observe 只结算本批观察，不迁移 Run、不改批次；挂起请求留在批次里由 prepare_input 判定。"""
@@ -325,9 +313,7 @@ def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None
     assert patch == {"next_node": ReactRoute.PREPARE_INPUT, "wait_for_input": suspend}
 
 
-def _gate_runtime(
-    monkeypatch, *, cancelled=False, result_ids=(), notice_rows=(), local_notices=()
-):
+def _gate_runtime(monkeypatch, *, cancelled=False, result_ids=(), notice_rows=(), local_notices=()):
     """prepare_input 关口用的最小运行时：记录状态迁移，并入消息与通知不落库。
 
     ``result_ids`` 是可唤醒的外部行（后台结论），``notice_rows`` 是外部队列里的通知行，
@@ -445,7 +431,7 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
     """tools 节点不解析参数：残缺 JSON 原样交给执行器，由准入门禁形成错误观察。"""
     called = []
 
-    async def run_calls(_rc, calls, _step_id, _batch, _decision=None):
+    async def run_calls(_rc, calls, _step_id, _decision=None):
         called.extend(calls)
         return []
 
@@ -456,7 +442,6 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
     )
     batch = ToolBatch(
         calls=[_raw(arguments='{"path":')],
-        valid_tool_calls={"call-1": ValidToolCall(name="read_file", projection="projected")},
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
@@ -480,7 +465,7 @@ def test_internal_artifact_does_not_enter_tool_batch_snapshot() -> None:
     assert "internal" not in ToolBatch(observations=[stripped]).model_dump_json()
 
 
-def test_observation_persists_before_event_and_hides_unprojected_calls(monkeypatch) -> None:
+def test_observation_persists_all_results_before_events(monkeypatch) -> None:
     order = []
     runtime = SimpleNamespace(run=SimpleNamespace(id=4, task_id=3))
     written_metadata = []
@@ -505,12 +490,8 @@ def test_observation_persists_before_event_and_hides_unprojected_calls(monkeypat
 
     batch = ToolBatch(
         observations=[summary("visible"), summary("hidden")],
-        valid_tool_calls={
-            "visible": ValidToolCall(name="read_file", projection="projected"),
-            "hidden": ValidToolCall(name="read_file", projection="banned"),
-        },
     )
     projection.settle_observations(batch, step_id="step-1")
 
-    assert order == ["persist", "visible", "persist"]
-    assert [item.hidden for item in written_metadata] == [False, True]
+    assert order == ["persist", "visible", "persist", "hidden"]
+    assert [item.status for item in written_metadata] == ["completed", "completed"]

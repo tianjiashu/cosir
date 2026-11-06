@@ -12,11 +12,11 @@ from app.assistant_transport.projection.tool_call_event_projection import plan_t
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_snapshot import _validate_part
 from app.core.events import ToolCallsSettledEvent
-from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cancel_placeholders
 from app.core.tool.background.background_job import BackgroundConclusion
+from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cancel_placeholders
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolObservation
-from app.core.workflow.execution_state.tool_batch import ToolBatch, ValidToolCall
+from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.task_message import BackgroundResultBody
 from app.core.workflow.node_helper import tool_observation_projection as projection_module
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -135,9 +135,7 @@ def test_observe_persists_background_placeholder_as_pending(monkeypatch) -> None
                 background=_WORK,
             )
         ],
-        valid_tool_calls={
-            "call-bg": ValidToolCall(name="execute_terminal", projection="projected")
-        },
+
     )
 
     projection_module.settle_observations(batch, step_id="step-1")
@@ -158,7 +156,7 @@ def test_background_placeholder_projects_a_valid_part_field() -> None:
         "startedAt": _WORK.started_at,
         "endedAt": None,
     }
-    _validate_part({"type": "tool-call", "toolCallId": "c", "toolName": "t", "args": {}, **fields})
+    _validate_part({"presentation": "activity", "type": "tool-call", "toolCallId": "c", "toolName": "t", "args": {}, **fields})
 
 def test_run_settlement_skips_background_parts() -> None:
     state = {
@@ -168,7 +166,7 @@ def test_run_settlement_skips_background_parts() -> None:
                 "role": "assistant",
                 "runId": 3,
                 "parts": [
-                    {
+                    {"presentation": "activity",
                         "type": "tool-call",
                         "toolCallId": "a",
                         "status": "pending",
@@ -179,7 +177,7 @@ def test_run_settlement_skips_background_parts() -> None:
                             "endedAt": None,
                         },
                     },
-                    {"type": "tool-call", "toolCallId": "b", "status": "running"},
+                    {"presentation": "activity", "type": "tool-call", "toolCallId": "b", "status": "running"},
                 ],
             }
         ]
@@ -302,3 +300,52 @@ def test_restart_interrupts_hitl_calls_whose_decision_was_executing(stored) -> N
     claimed = _metadata(stored, "call-claimed")
     assert (claimed.status, claimed.error) == ("cancelled", "已中断")
     assert _metadata(stored, "call-hitl").status == "pending"
+
+
+def test_cancelled_placeholder_persists_final_display_for_cold_rebuild(stored):
+    display = {"kind": "terminal-result", "command": "run", "output": "full tail", "exit_code": -1}
+    cancel_placeholders(stored.task_id, ["call-bg"], "已停止", displays={"call-bg": display})
+    metadata = _metadata(stored, "call-bg")
+    assert metadata.status == "cancelled"
+    assert metadata.display_data == display
+    assert project_tool_result(metadata)["display_data"] == display
+
+
+def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path):
+    import asyncio
+    import time
+
+    from app.core.task_cancellation import TaskCancellation
+    from app.core.tool.background.backgraound_registry import background_registry
+    from app.core.tool.schemas import ToolExecutionContext
+    from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+        cancellation_registry,
+    )
+    from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
+    from tests.terminal_test_support import terminal_worker_path
+    if not terminal_worker_path().is_file():
+        pytest.skip("terminal worker not built")
+    marker = tmp_path / "started"
+    ExecuteTerminalTool().execute(
+        description="stop integration",
+        command=f"printf '完整取消输出\\n'; touch '{marker}'; sleep 10",
+        background=True, execution_context=ToolExecutionContext(
+            task_id=stored.task_id, run_id=None, workspace_id=1, workspace_root=tmp_path,
+            step_id="test", tool_call_id="call-bg",
+        ),
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not marker.exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        cancellation_registry.request_cancel(stored.task_id, "user")
+        asyncio.run(TaskCancellation(stored.task_id).cancel_background_task())
+    finally:
+        background_registry.drop_task(stored.task_id)
+        cancellation_registry.consume(stored.task_id)
+    # 从 SQLite 重新读取，走实时和冷重建共用的投影器，而不是断言进程内缓存。
+    fields = project_tool_result(_metadata(stored, "call-bg"))
+    assert fields["status"] == "cancelled"
+    assert "完整取消输出" in fields["display_data"]["output"]
+    assert depends.get_task_message_queue().pending_nowait(stored.task_id) == []

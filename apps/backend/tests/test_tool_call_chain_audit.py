@@ -266,15 +266,10 @@ def _tool_row(
     )
 
 
-def test_t4_cold_rebuild_skips_the_hidden_disabled_call(
+def test_t4_cold_rebuild_retains_disabled_call_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4-a：冷重建跳过「本轮被禁用 / 隐藏闭合」的调用（与实时链路一致，无 part）。
-
-    被测行为：一条 AIMessage（1 个正常调用 + 1 个隐藏闭合调用）+ 两条 ToolMessage，其中隐藏
-    调用的结果行带 ``metadata.hidden=True``（由 ``settle`` 写入）。
-    修复后实际观测：只返回 ``normal-1`` 一个 part；隐藏调用被整条跳过。
-    """
+    """冷重建同时保留正常调用和被禁用调用的失败记录，与实时结果一致。"""
 
     rows = [
         _ai_row(
@@ -306,7 +301,6 @@ def test_t4_cold_rebuild_skips_the_hidden_disabled_call(
                 "status": "failed",
                 "display_data": {"status_hint": "禁用"},
                 "error": "本轮禁用",
-                "hidden": True,
             },
             sequence=3,
         ),
@@ -314,20 +308,14 @@ def test_t4_cold_rebuild_skips_the_hidden_disabled_call(
 
     parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
 
-    assert set(parts) == {"normal-1"}, f"实际 part={sorted(parts)}"
+    assert set(parts) == {"normal-1", "hidden-1"}, f"实际 part={sorted(parts)}"
     assert parts["normal-1"]["status"] == "completed"
 
 
-def test_t4_cold_rebuild_hidden_call_without_result_stays_cancelled(
+def test_t4_cold_rebuild_unfinished_call_stays_cancelled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4-b：**已知边界**——隐藏调用没有配套 ToolMessage 时，冷重建仍会建 part（cancelled）。
-
-    ``hidden`` 标记只由 ``settle`` 随 ToolMessage 行写入；进程在 ``settle`` 之前终止（例如工具
-    执行期崩溃、或被取消）时该行不存在，冷重建无从得知调用是隐藏的，只能按默认规则建一个
-    ``cancelled`` part。此时 part 上**没有** ``isError`` / ``error`` 键
-    （只在 ToolMessage 分支写入）。
-    """
+    """未产生结果的调用按既有重启契约重建为 cancelled，不伪造失败原因。"""
 
     rows = [
         _ai_row(
@@ -361,14 +349,10 @@ def test_t4_cold_rebuild_hidden_call_without_result_stays_cancelled(
     assert "error" not in parts["hidden-1"]
 
 
-def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
+def test_t4_rebuild_snapshot_materializes_all_tool_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4-d：整张快照 ``rebuild`` 后只出现可见调用（``normal-1``）的 part。
-
-    实际观测：``runs[0].messages[-1].parts`` 里的 ``tool-call`` part 只有 ``normal-1``，
-    隐藏的 ``hidden-1`` 不出现，整张快照通过 ``validate_snapshot``。
-    """
+    """完整快照保留正常与拒绝调用，且通过 snapshot 边界校验。"""
 
     run = SimpleNamespace(
         id=1,
@@ -417,7 +401,6 @@ def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
                 "status": "failed",
                 "display_data": {"status_hint": "禁用"},
                 "error": "本轮禁用",
-                "hidden": True,
             },
             sequence=3,
         ),
@@ -427,7 +410,7 @@ def test_t4_rebuild_snapshot_materializes_only_the_visible_tool_part(
     parts = snapshot["messages"][-1]["parts"]
 
     tool_part_ids = [part["toolCallId"] for part in parts if part["type"] == "tool-call"]
-    assert tool_part_ids == ["normal-1"], f"快照 part={tool_part_ids}"
+    assert tool_part_ids == ["normal-1", "hidden-1"], f"快照 part={tool_part_ids}"
     validate_snapshot(snapshot)
 
 

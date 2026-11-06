@@ -218,7 +218,8 @@ def test_foreground_cancel_stops_command_and_waits_for_result(
 
 def test_parent_stop_drops_background_result(tmp_path, command, delivered):
     _execute(tmp_path, background=True)
-    assert background_registry.drop_task(1) == ["call-1"]
+    dropped = background_registry.drop_task(1)
+    assert dropped["call-1"]["output"] == "call-1"
     command.join()
     assert command.stopped.is_set() and delivered == []
 
