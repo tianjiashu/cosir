@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
 import type { TransportMessagePart, TransportToolCallPart } from "@/lib/assistant/contract";
-import { aggregateChanges, describeProcessProblems, projectTurn } from "@/lib/assistant/turn-layout";
-import { outcome, toolCallPart } from "./transport-fixtures";
+import { aggregateChanges, describeProcessProblems, projectTurn, visibleTurnBlock } from "@/lib/assistant/turn-layout";
+import { agentMessagePart, outcome, toolCallPart } from "./transport-fixtures";
 const text = (value: string, finalReply = false): TransportMessagePart => ({ type: "text", text: value, finalReply });
 const call = (id: string, overrides: Partial<TransportToolCallPart> = {}) => toolCallPart(id, "read_file", { status: "completed", ...overrides });
 
 describe("stable conversation projection", () => {
+  it("途中来信切开工具组、随过程折叠，只有来信和最终回复时标题仍能展开", () => {
+    const parts = [call("a"), agentMessagePart("5"), call("b"), text("结论", true)];
+    const layout = projectTurn(parts, "settled", outcome("completed"));
+    expect(layout.blocks.map((block) => block.kind)).toEqual(["activity", "agent", "activity", "narration"]);
+    const letter = layout.blocks[1];
+    expect(visibleTurnBlock(letter, false)).toBe(false);
+    expect(visibleTurnBlock(letter, true)).toBe(true);
+    expect(projectTurn([agentMessagePart("5"), text("结论", true)], "settled", outcome("completed")).process.items).toHaveLength(1);
+    expect(projectTurn([agentMessagePart("5")], "running").intro).toBeNull();
+  });
+
   it("only the active pre-output reply has compact chrome; whitespace and reasoning stay distinct from tools", () => {
     expect(projectTurn([], "running").intro).toBe("waiting");
     expect(projectTurn([text(" \n")], "running").blocks).toEqual([]);

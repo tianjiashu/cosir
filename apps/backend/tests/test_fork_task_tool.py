@@ -106,7 +106,11 @@ def test_fork_keeps_the_parents_identity_and_waits_in_the_background(env, tmp_pa
     assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", 3)
     assert prepared["reasoning_effort"] == "high"
     assert prepared["disabled_tool_groups"] == ["浏览器工具"]
-    assert env.enqueued == [(41, "agent-message")]
+    # 交接通知排在任务说明之前：写清身份与任务归属，模型读到任务时已经知道自己是谁。
+    [(handover_task, handover), assignment] = env.enqueued
+    assert assignment == (41, "agent-message")
+    assert handover_task == 41 and handover.body.notice_kind == "fork_handover"
+    assert "task 41" in handover.body.content and "task 7" in handover.body.content
     assert env.run_child == (41, "前端部分")
 
 

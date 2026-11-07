@@ -16,7 +16,7 @@ from app.core.tool.multi_agent.derivation import DERIVATIONS
 from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
     materialize_node_tools,
 )
-from app.core.tool.multi_agent.task_tool_scope import fork_tool_schemas, tools_for_task
+from app.core.tool.multi_agent.task_tool_scope import banned_derivation_tools, tools_for_task
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.models.task_kind import TASK_KINDS, USER_FACING_TASK_TYPES, TaskType
 
@@ -57,7 +57,8 @@ def test_rule_table_is_closed_over_its_own_references() -> None:
 
 def test_sidebar_conversations_get_every_tool() -> None:
     everything = set(get_tool_registry().get_all_tool_names())
-    assert _names("user") == _names("user_fork") == _names("agent_fork") == everything
+    assert _names("user") == _names("user_fork") == everything
+    assert _names("agent_fork") == everything - {"fork_task"}
 
 
 @pytest.mark.parametrize("task_type", ["agent_task", "team_node_task"])
@@ -98,30 +99,12 @@ def test_tasks_at_the_depth_limit_get_no_derivation_tools(monkeypatch, task_type
     assert {"wait_messages", "read_file"} <= at_limit
 
 
-def _schemas(*names: str) -> list[dict[str, object]]:
-    return [{"name": name} for name in names]
-
-
-def test_fork_keeps_the_source_schemas_and_drops_derivation_at_the_limit(monkeypatch) -> None:
-    """分叉沿用源的 schema（顺序不变，请求前缀与源一致）；新深度到上限时去掉派生工具。"""
+def test_agent_fork_cannot_fork_but_keeps_the_other_derivations(monkeypatch) -> None:
+    """分叉的派生限制走准入：Agent fork 少 ``fork_task``，到上限全禁，用户手动分叉不受限。"""
     monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
-    source = _schemas("read_file", "delegate_task", "fork_task", "agent_team", "wait_messages")
-    assert fork_tool_schemas(source, source_depth=0, depth=1) == source
-    assert fork_tool_schemas(source, source_depth=1, depth=2) == _schemas(
-        "read_file", "wait_messages"
-    )
-
-
-def test_user_fork_of_a_limited_fork_gets_the_derivation_tools_back(monkeypatch) -> None:
-    """用户手动分叉深度归 0：源因深度没有的派生工具按主 Agent 规则补到末尾；不比源浅时不补。"""
-    monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
-    source = _schemas("read_file", "wait_messages")
-
-    restored = fork_tool_schemas(source, source_depth=2, depth=0)
-
-    assert restored[:2] == source
-    assert {schema["name"] for schema in restored[2:]} == _DERIVATION_TOOLS
-    assert fork_tool_schemas(source, source_depth=0, depth=0) == source
+    assert banned_derivation_tools(TaskType.AGENT_FORK, 1) == {"fork_task"}
+    assert banned_derivation_tools(TaskType.AGENT_FORK, 2) == _DERIVATION_TOOLS
+    assert banned_derivation_tools(TaskType.USER_FORK, 0) == frozenset()
 
 
 def test_team_nodes_share_the_main_task_depth_and_lose_delegation_at_the_limit(monkeypatch) -> None:

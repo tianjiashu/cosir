@@ -852,7 +852,8 @@ def test_every_activity_construction_includes_all_keys() -> None:
     """静态检查：仓库内所有构造当前活动（activity）的位置都必须带齐全部键（含 ``error``）。
 
     覆盖后端 ``app/`` 与 e2e mock ``apps/desktop/tests/e2e/test-server.mjs``（后端
-    ``_ACTIVITY_KEYS`` 与前端快照校验都是严格白名单，任一构造点漏键都会让快照校验显式失败）。
+    ``ConversationStateActivity`` 的字段声明与前端快照校验都是严格白名单，任一构造点漏键都会让快照
+    校验显式失败）。
     本用例把该失败前移到静态断言。
     """
 

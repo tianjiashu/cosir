@@ -8,7 +8,7 @@ import {
   isQueuedUserMessage,
   canResumeStoppedRun,
 } from "@/lib/assistant/conversation-actions";
-import { activity, agentMessage, assistantMessage, queuedMessage, transportState, userMessage } from "./transport-fixtures";
+import { activity, agentMessage, agentMessagePart, assistantMessage, queuedMessage, transportState, userMessage } from "./transport-fixtures";
 
 describe("conversation actions", () => {
   it("only exposes the last canonical user message as editable", () => {
@@ -40,6 +40,21 @@ describe("conversation actions", () => {
     expect(isEditableLatestUserMessage(snapshot, "a2")).toBe(false);
     expect(isEditableLatestUserMessage(snapshot, "u1")).toBe(false);
     expect(editBlockedReason(snapshot, "u1")).not.toBeNull();
+  });
+
+  it("途中来信之后用户消息不可编辑：后端把它算作最新输入", () => {
+    const snapshot = transportState({
+      messages: [userMessage("u1", 1), assistantMessage("assistant-u1", 1, [agentMessagePart("a2")])],
+      activity: activity(1, "completed"),
+    });
+    expect(isEditableLatestUserMessage(snapshot, "u1")).toBe(false);
+    expect(editBlockedReason(snapshot, "u1")).toBe("已有更新的消息，这一条无法再编辑并重跑。");
+    const inherited = transportState({
+      messages: [userMessage("u1", 1), assistantMessage("assistant-context", 1, [agentMessagePart("a2")])],
+      activity: activity(1, "completed"),
+    });
+    inherited.messages[1] = { ...inherited.messages[1], runId: null };
+    expect(isEditableLatestUserMessage(inherited, "u1")).toBe(true);
   });
 
   it("allows a cancelled or failed activity to resume", () => {

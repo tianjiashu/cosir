@@ -4,7 +4,7 @@ import { parseHistoryPage, parseTransportState, TransportSnapshotValidationError
 import type { TransportMessagePart } from "@/lib/assistant/contract";
 import {
   activity,
-  agentMessage,
+  agentMessage, agentMessagePart,
   assistantMessage,
   outcome,
   queuedMessage,
@@ -114,6 +114,14 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(onAssistant)).toThrow("messages[0].source");
     const extra = transportState({ messages: [{ ...agentMessage("1", 1), source: { taskId: 1, name: "x", kind: "agent" } as never }] });
     expect(() => parseTransportState(extra)).toThrow("messages[0].source");
+  });
+
+  it("途中来信 part 字段固定，来源校验与 user 消息同一份", () => {
+    const valid = transportState({ messages: [assistantMessage("assistant-1", 1, [agentMessagePart("5")])] });
+    expect(parseTransportState(valid)).toBe(valid);
+    const noSource = { ...agentMessagePart("5"), source: { taskId: 1 } } as never;
+    expect(() => parseTransportState(transportState({ messages: [assistantMessage("assistant-1", 1, [noSource])] })))
+      .toThrow("messages[0].parts[0].source");
   });
 
   it("outcome 只允许出现在助手消息上，且状态必须是终态", () => {

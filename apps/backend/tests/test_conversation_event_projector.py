@@ -1143,5 +1143,5 @@ def test_snapshot_rejects_removed_approval_placeholder(projector) -> None:
     part = state["messages"][-1]["parts"][-1]
     assert "approvalRequestId" not in part
     part["approvalRequestId"] = None
-    with pytest.raises(ValueError, match="unknown fields"):
+    with pytest.raises(ValueError, match="approvalRequestId"):
         validate_snapshot(state)

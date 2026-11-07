@@ -6,6 +6,7 @@ from contextlib import contextmanager
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import update
 
 from app.api.schemas import ForkTaskRequest
 from app.api.tasks_api import fork_task
@@ -14,6 +15,7 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
+from app.config.settings import Settings
 from app.core.context.tool_call_closure import ContextProtocolError, plan_tool_call_closures
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.fork_reply import ForkReply
@@ -22,6 +24,7 @@ from app.models.message_metadata import (
     ToolMessageMetadata,
     UserMessageMetadata,
 )
+from app.storage.model.task_model import TaskModel
 from app.task_runtime.service.task_service import TaskService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
@@ -36,9 +39,6 @@ def fork_store(request, monkeypatch):
     service._turn = store.runs
     service._context = store.context_service
     service._session_factory = store.factory
-    monkeypatch.setattr(
-        "app.core.tool.multi_agent.task_tool_scope.main_agent_tool_schemas", lambda **kw: []
-    )
     store.service = service
     store.context.create_system_prompt(store.task.id, {"role": "system", "content": "固定系统指令"})
 
@@ -169,7 +169,7 @@ def conversation(state):
 
 
 def history_with_every_kind_of_turn(s):
-    """普通回合、没有输入的唤醒回合、Run 中途并入输入开启的回合。"""
+    """普通回合、没有输入的唤醒回合、Run 中途并入输入开启的回合、途中收到 Agent 消息的回合。"""
     append_run(s, "completed")
     append_run(s, "completed")
     woken = s.runs.create(s.task.id, status="completed")
@@ -179,6 +179,9 @@ def history_with_every_kind_of_turn(s):
     run = append_run(s, "completed")
     input_message(s, run, "merged input")
     append(s, run, {"role": "assistant", "content": "reply to merged input"})
+    letter = append_run(s, "completed")
+    input_message(s, letter, "letter on the way", "agent_message")
+    append(s, letter, {"role": "assistant", "content": "reply after letter"})
 
 
 def test_every_reply_forks_to_exactly_the_conversation_up_to_it(fork_store):
@@ -248,6 +251,49 @@ def test_agent_in_a_run_without_input_keeps_the_previous_reply(fork_store):
         f"input-{previous.id}",
         f"reply-{previous.id}",
     ]
+
+
+def test_agent_fork_excludes_the_whole_turn_a_letter_arrived_in(fork_store):
+    """途中来信不开回合：切点仍在用户这一轮的消息之前，和手动分叉同一条规则。"""
+    s = fork_store
+    earlier = append_run(s, "completed")
+    run = append_run(s, "running")
+    input_message(s, run, "letter on the way", "agent_message")
+    call(s, run)
+    child = agent_fork(s, run)
+    assert [r.message.get("content") for r in s.contexts.get(child.id)] == [
+        "固定系统指令",
+        f"input-{earlier.id}",
+        f"reply-{earlier.id}",
+    ]
+
+
+@pytest.mark.parametrize("depth", [1, 2])
+def test_agent_fork_keeps_the_source_tools_at_any_depth(fork_store, monkeypatch, depth):
+    """工具列表是请求前缀的一部分：到深度上限也不改，派生限制交给运行期准入。"""
+    s = fork_store
+    tools = [{"name": "read_file"}, {"name": "fork_task"}, {"name": "delegate_task"}]
+    with s.factory() as session:
+        session.execute(update(TaskModel).where(TaskModel.id == s.task.id).values(tool_schemas=tools))
+        session.commit()
+    monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
+    run = append_run(s, "running")
+    call(s, run)
+    child = s.service.fork_for_agent(
+        s.task.id, run_id=run.id, tool_call_id="fork-call", title="Child", derivation_depth=depth
+    )
+    assert child.tool_schemas == tools
+
+
+def test_manual_fork_cuts_after_the_whole_reply_a_letter_arrived_in(fork_store):
+    s = fork_store
+    run = append_run(s, "completed")
+    input_message(s, run, "letter on the way", "agent_message")
+    append(s, run, {"role": "assistant", "content": "reply after letter"})
+    later = append_run(s, "completed")
+    child = fork(s, run.input_id)
+    contents = [r.message.get("content") for r in s.contexts.get(child.id)]
+    assert contents[-1] == "reply after letter" and f"input-{later.id}" not in contents
 
 
 def test_agent_on_the_first_turn_forks_to_system_only(fork_store):

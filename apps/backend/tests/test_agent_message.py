@@ -97,6 +97,53 @@ def test_consumed_agent_message_projects_plain_text_with_its_source() -> None:
     assert user["parts"] == [{"type": "text", "text": _ATTACHMENT_LOOKALIKE, "status": "completed"}]
 
 
+def _reply_state(parts: list) -> dict:
+    return {
+        "messages": [
+            {"id": "5", "role": "user", "parts": [], "runId": 2, "outcome": None, "source": None},
+            {
+                "id": "assistant-5",
+                "role": "assistant",
+                "parts": parts,
+                "runId": 2,
+                "outcome": None,
+                "source": None,
+            },
+        ],
+        "queued_messages": [],
+    }
+
+
+def _consumed(message_id: int = 11) -> InputConsumedEvent:
+    return InputConsumedEvent(
+        task_id=7,
+        run_id=2,
+        message_id=message_id,
+        presentation=UserInputPresentation(display_text=_ATTACHMENT_LOOKALIKE),
+        source=_SOURCE,
+    )
+
+
+def test_agent_message_arriving_mid_run_joins_the_current_reply() -> None:
+    state = _reply_state([{"type": "text", "text": "进展", "status": "completed"}])
+
+    [mutation] = plan_input_consumed(_consumed(), state)  # type: ignore[arg-type]
+
+    assert mutation.path == ("messages", 1, "parts", 1)
+    assert mutation.value == {
+        "type": "agent-message",
+        "id": "11",
+        "text": _ATTACHMENT_LOOKALIKE,
+        "source": {"taskId": 4, "name": '主任务 "A"'},
+    }
+
+
+def test_consuming_a_mid_run_agent_message_twice_changes_nothing() -> None:
+    part = {"type": "agent-message", "id": "11", "text": "x", "source": {"taskId": 4, "name": "A"}}
+
+    assert plan_input_consumed(_consumed(), _reply_state([part])) == []  # type: ignore[arg-type]
+
+
 def test_rebuild_projects_agent_messages_as_turns_with_source() -> None:
     timestamp = datetime(2026, 9, 12, tzinfo=UTC)
     task = TaskRecord(

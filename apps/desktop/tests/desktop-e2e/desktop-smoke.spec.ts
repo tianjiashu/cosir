@@ -277,8 +277,9 @@ test("I10 real Electron: unified intent travels through real tools, background w
     await expect(terminal).toContainText("等待验收释放并输出检查结果");
     await expect(terminal).toContainText("后台运行中");
     await expect(terminal).not.toContainText("准备执行");
-    await expect(terminal.getByRole("button", { name: "停止终端命令" })).toBeVisible();
-    await terminal.locator('[data-slot="call-row"]').click();
+    // 后台命令在时间线只留一行，停止在看板上。
+    const stopOnBoard = page.locator('[data-background-task="native-terminal"]').getByRole("button", { name: "停止", exact: true });
+    await expect(stopOnBoard).toBeVisible();
     for (const theme of ["light", "dark"]) {
       await page.evaluate(value => { document.documentElement.classList.toggle("dark", value === "dark"); }, theme);
       await page.screenshot({ path: test.info().outputPath(`intent-native-${theme}.png`), animations: "disabled" });
@@ -286,7 +287,7 @@ test("I10 real Electron: unified intent travels through real tools, background w
     fs.writeFileSync(releasePath, "release");
     await expect.poll(async () => (await state()).background_tasks.find(job => job.toolCallId === "native-terminal")?.status).toBe("settling");
     await expect(terminal).toContainText("后台结果收尾中");
-    await expect(terminal.getByRole("button", { name: "停止终端命令" })).toHaveCount(0);
+    await expect(stopOnBoard).toHaveCount(0);
     delta(2, { content: "真实工具验收完成。" }); delta(2, {}, "stop"); end(2);
     // A queued background result may start a follow-up model request; finish it through the same real loop.
     await expect.poll(async () => {
@@ -317,7 +318,7 @@ test("I10 real Electron: unified intent travels through real tools, background w
 // Genuine Electron + Python + SQLite + SDK requests; only the model's output is deterministic.
 test("fork context: reply boundary, presentation, restart and source deletion", async () => {
   const { createServer } = await import("node:http");
-  type RequestBody = { model: string; reasoning_effort?: string; messages: Array<{ role: string; content?: unknown; tool_calls?: unknown[] }>; stream: boolean };
+  type RequestBody = { model: string; reasoning_effort?: string; tools?: unknown[]; messages: Array<{ role: string; content?: unknown; tool_calls?: unknown[] }>; stream: boolean };
   const requests: RequestBody[] = [];
   const model = createServer(async (req, res) => {
     let raw = ""; for await (const chunk of req) raw += chunk;
@@ -371,6 +372,12 @@ test("fork context: reply boundary, presentation, restart and source deletion", 
     expect(JSON.stringify(childRequest.messages)).toContain("KEEP_REPLY_A");
     expect(JSON.stringify(childRequest.messages)).not.toContain("PARENT_ONLY_B");
     expect(JSON.stringify(childRequest.messages)).not.toContain("native-fork");
+    // 工具列表与来源相同才接得上缓存；交接通知紧贴任务说明，并告知 fork_task 不可用。
+    expect(childRequest.tools).toEqual(requests.find(body => JSON.stringify(body.messages).includes("PARENT_ONLY_B"))!.tools);
+    const [handover, assignment] = childRequest.messages.slice(-2).map(m => JSON.stringify(m.content));
+    expect(handover).toContain(`You are task ${child.task_id}, a fork of task ${task_id}`);
+    expect(handover).toMatch(/disabled for this round[^.]*fork_task/);
+    expect(assignment).toContain("CHILD_SCOPE_C");
     const childState = await state(child.task_id);
     expect(childState.fork?.taskType).toBe("agent_fork");
     expect(JSON.stringify(childState.messages)).not.toContain("KEEP_CONTEXT_A");

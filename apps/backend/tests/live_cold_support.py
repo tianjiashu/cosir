@@ -26,8 +26,13 @@ from app.core.tool.schemas import ToolDefinition
 from app.core.tool.schemas.tool_execution_context import ToolExecutionContext
 from app.core.workflow import workflow
 from app.core.workflow.branch import task_title
-from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
-from app.models.conversation_input import UserInputPresentation
+from app.core.workflow.message_queue.task_message import (
+    AgentMessageBody,
+    RunLaunch,
+    TaskMessage,
+    UserInputBody,
+)
+from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.task_record import TaskRecord
@@ -197,6 +202,14 @@ class LiveColdEnv:
             input_text=text, launch=launch, presentation=UserInputPresentation(display_text=text)
         )
         spaces.enqueue(task_id or self.task.id, TaskMessage.of(body, **kwargs))
+
+    def send_agent(self, text: str) -> None:
+        body = AgentMessageBody(
+            text=text,
+            launch=RunLaunch(model_config_id=self.model_config.id),
+            source=MessageSource(task_id=4, name="上级"),
+        )
+        spaces.enqueue(self.task.id, TaskMessage.of(body))
 
     async def parked(self, task_id: int | None = None) -> ConversationRunRecord:
         """等到当前 Run 离开运行态且没有执行者。"""

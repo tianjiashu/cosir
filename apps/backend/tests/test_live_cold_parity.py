@@ -10,9 +10,12 @@ import pytest
 
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
+from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.models.conversation_run_options import ConversationRunOptions
 from app.service.conversation_run.tool_decision_service import ToolDecisionService
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
 from tests.live_cold_support import LiveColdEnv, tool_call, tool_parts
+from tests.sdk_fixtures import sdk_events
 
 _READ = {"intent": "看文件", "path": "a.txt"}
 _DISABLE_SEARCH = ConversationRunOptions(disabled_tool_groups=[TOOL_GROUP_SEARCH])
@@ -158,6 +161,56 @@ async def test_a_failure_before_the_response_is_committed_settles_its_calls(
         await env.until("failed")
         [part] = tool_parts(env.live())
         assert part["status"] == "cancelled"
+        env.assert_parity()
+    finally:
+        await env.close()
+
+
+async def test_an_agent_message_on_the_way_stays_in_the_reply(backend_env, tmp_path, monkeypatch):
+    """途中来信是当前回复的一段：不开新回合，刷新后位置也不变。"""
+    (tmp_path / "a.txt").write_text("x")
+
+    async def first_response():
+        env.send_agent("上级追加")
+        await asyncio.sleep(0.05)  # 让 actor 把它投进 mailbox，下一次模型请求前才会并入
+        tool = tool_call("c1", "read_file", _READ)
+        deltas = [{"content": "进展"}, {"tool_calls": [tool]}]
+        for frame in sdk_events(deltas, finish_reason="tool_calls"):
+            yield frame
+
+    env = LiveColdEnv(tmp_path, monkeypatch, [first_response, ([{"content": "结论"}], "stop")])
+    try:
+        env.send()
+        await env.until("completed")
+        user, reply = env.live()["messages"]
+        assert user["source"] is None
+        assert [part["type"] for part in reply["parts"]] == [
+            "text",
+            "tool-call",
+            "agent-message",
+            "text",
+        ]
+        env.assert_parity()
+    finally:
+        await env.close()
+
+
+async def test_a_queued_notice_reaches_the_model_right_before_the_input_that_starts_the_run(
+    backend_env, tmp_path, monkeypatch
+):
+    """分叉交接靠这条顺序：通知不开 Run，随任务说明开出的 Run 写在它前面，界面看不到。"""
+    env = LiveColdEnv(tmp_path, monkeypatch, [([{"content": "结论"}], "stop")])
+    try:
+        notice = NoticeBody(content="交接通知", notice_kind="fork_handover")
+        spaces.enqueue(env.task.id, TaskMessage.of(notice))
+        await asyncio.sleep(0.05)  # 通知单独到达时 actor 不开 Run
+        assert env.model.requests == []
+        env.send_agent("任务说明")
+        await env.until("completed")
+        handover, assignment = env.model.requests[0][-2:]
+        assert "交接通知" in handover["content"] and "<system_notice" in handover["content"]
+        assert "任务说明" in assignment["content"]
+        assert "交接通知" not in str(env.live()["messages"])
         env.assert_parity()
     finally:
         await env.close()

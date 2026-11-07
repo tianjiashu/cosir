@@ -10,7 +10,7 @@ import {
 } from "@/lib/assistant/converter";
 import { registerInlineFileMetadata, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 import type { TransportMessage, TransportToolCallPart } from "@/lib/assistant/contract";
-import { activity, outcome, usage } from "./transport-fixtures";
+import { activity, agentMessagePart, outcome, usage } from "./transport-fixtures";
 import { readToolArtifact } from "@/lib/assistant/tool-artifact";
 
 /** 已到终态那一轮回复末尾的渲染上下文。 */
@@ -74,6 +74,15 @@ describe("assistant transport converter", () => {
 
   // 目的：结局与当前活动随消息一并投影，使消息渲染只依赖消息自身事实。潜在缺陷：消息组件回查
   // thread external state 时，只读作用域（无 external state 的 runtime）会在渲染期抛错。
+  it("途中来信在 content 里占位，回合才能按 canonical 下标读后面的 part", () => {
+    const parts = [agentMessagePart("5"), { type: "text" as const, text: "结论", status: "completed" as const }];
+    const message = toThreadMessageWithRenderContext(
+      { id: "assistant-1", role: "assistant", parts },
+      { runId: 1, source: null, outcome: null, isRunEnd: true, activity: null },
+    );
+    expect(message.content.map((part) => part.type)).toEqual(["data", "text"]);
+  });
+
   it("Agent 消息的发送方随 user 消息的 custom 交给渲染层", () => {
     const message: TransportMessage = {
       id: "11", role: "user", parts: [{ type: "text", text: "做这个", status: "completed" }], runId: 3, outcome: null,

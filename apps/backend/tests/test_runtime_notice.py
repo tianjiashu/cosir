@@ -14,6 +14,7 @@ from app.core.workflow.message_queue.task_message import (
 )
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import prepare_input_node
+from app.models.task_kind import TaskType
 from tests.runtime_context_stub import runtime_stub
 
 
@@ -23,7 +24,7 @@ def _space(mailbox: RunMailbox, announced: frozenset[str] | None = None) -> Simp
         task_tool_names=("read_file", "write_file"),
         announced_ban_tools=announced,
         task_id=1,
-        current_task=SimpleNamespace(id=1),
+        current_task=SimpleNamespace(id=1, task_type=TaskType.USER, derivation_depth=0),
         current_workspace=SimpleNamespace(id=13, root_path="/workspace"),
         mailbox=mailbox,
     )
@@ -86,6 +87,29 @@ def _for_run_with_space(monkeypatch, space, banned) -> list[NoticeBody]:
         SimpleNamespace(id=7, task_id=1, options=SimpleNamespace(disabled_tool_groups=banned))
     )
     return [cast(NoticeBody, entry.body) for entry in space.mailbox.take_notices()]
+
+
+def test_agent_fork_is_told_and_refused_fork_task_without_changing_its_schema(monkeypatch) -> None:
+    """分叉的工具列表与来源相同，``fork_task`` 只在准入层被拒，并由工具准入通知提前告知。"""
+    space = _space(RunMailbox())
+    space.task_tool_names = ("read_file", "fork_task", "delegate_task")
+    space.current_task = SimpleNamespace(id=1, task_type=TaskType.AGENT_FORK, derivation_depth=1)
+
+    [notice] = _for_run_with_space(monkeypatch, space, [])
+
+    assert space.announced_ban_tools == frozenset({"fork_task"})
+    assert "disabled for this round" in notice.content and "fork_task" in notice.content
+
+
+def test_derivation_rules_do_not_announce_tools_the_task_never_had(monkeypatch) -> None:
+    """委派子 Task 的 schema 本来就没有 ``fork_task``，不能通知成「被禁用」。"""
+    space = _space(RunMailbox())
+    space.current_task = SimpleNamespace(id=1, task_type=TaskType.AGENT_TASK, derivation_depth=1)
+
+    [notice] = _for_run_with_space(monkeypatch, space, [])
+
+    assert space.announced_ban_tools == frozenset()
+    assert "all tools are available" in notice.content
 
 
 def test_tool_availability_skips_unchanged_all_available_and_reports_changes(monkeypatch) -> None:

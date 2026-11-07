@@ -33,6 +33,35 @@ test.beforeEach(async ({ request }) => {
   await seedState(request, 42, snapshot);
 });
 
+test("途中来信不切开回复：只有一个标题和脚注，展开过程才看得到", async ({ page, request }) => {
+  await seedState(request, 42, {
+    ...snapshot,
+    messages: [
+      { id: "10", role: "user", runId: 1, outcome: null, source: null, parts: [{ type: "text", text: "检查登录", status: "completed" }] },
+      {
+        id: "assistant-10", role: "assistant", runId: 1, source: null,
+        parts: [
+          { type: "text", text: "先看入口", status: "completed" },
+          { type: "agent-message", id: "11", text: "顺便看注册", source: { taskId: 9, name: "主任务" } },
+          { type: "text", text: "都检查完了", status: "completed", finalReply: true },
+        ],
+        outcome: snapshot.messages[1].outcome,
+      },
+    ],
+  });
+  await page.goto("/tasks/42");
+  await expect(page.locator('[data-slot="turn"]')).toHaveCount(1);
+  const letter = page.locator('[data-slot="agent-message-toggle"]');
+  await expect(letter).toBeHidden();
+  await expect(page.getByText("都检查完了")).toBeVisible();
+
+  await page.locator('[data-slot="process-head"]').click();
+  await expect(letter).toContainText("顺便看注册");
+  await letter.click();
+  await expect(page.locator('[data-slot="agent-message-body"]')).toContainText("顺便看注册");
+  await expect(page.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
+});
+
 test("Agent 消息默认一行预览、不可编辑，展开后可跳到来源 Task", async ({ page }) => {
   await page.goto("/tasks/42");
   const sender = page.locator('[data-slot="agent-message-toggle"]');

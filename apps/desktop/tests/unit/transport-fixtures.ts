@@ -39,6 +39,11 @@ export function agentMessage(id: string, runId: number, text = "请完成子任�
   return { id, role: "user", parts: [textPart(text)], runId, outcome: null, source: { taskId: sourceTaskId, name: "主任务" } };
 }
 
+/** 回合途中到达的 Agent 消息。 */
+export function agentMessagePart(id: string, text = "追加要求"): TransportMessagePart {
+  return { type: "agent-message", id, text, source: { taskId: 9, name: "主任务" } };
+}
+
 export function assistantMessage(
   id: string,
   runId: number,
