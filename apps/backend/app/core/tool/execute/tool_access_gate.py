@@ -20,6 +20,7 @@ from typing import Any
 from app.config.logging.logger import log
 from app.core.hook import HookContext, HookDecision, HookEvent, HookInterceptor, HookResult
 from app.core.llm_provider.message_codec import decode_tool_arguments
+from app.core.tool.call_intent import split_call_arguments
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.schemas import (
     ToolCall,
@@ -50,6 +51,7 @@ class ToolGateOutcome:
     tool: ToolDefinition | None = None
     arguments: dict[str, object] = field(default_factory=dict)
     denial: ToolObservation | None = None
+    intent: str = ""
 
     @property
     def admitted(self) -> bool:
@@ -161,13 +163,13 @@ class ToolAccessGate:
             )
 
         try:
-            arguments = decode_tool_arguments(call.arguments)
-        except ValueError:
+            intent, arguments = split_call_arguments(decode_tool_arguments(call.arguments))
+        except ValueError as exc:
             return ToolGateOutcome(
                 denial=tool_error(
                     tool.name,
                     "Invalid tool arguments. "
-                    "Tool arguments must be a valid JSON object; correct them before retrying.",
+                    f"{exc}. Supply intent and correct the arguments before retrying.",
                     tool_call_id=call.call_id,
                 )
             )
@@ -216,7 +218,7 @@ class ToolAccessGate:
         )
         if isinstance(arguments, ToolObservation):
             return ToolGateOutcome(denial=arguments)
-        return ToolGateOutcome(tool=tool, arguments=arguments)
+        return ToolGateOutcome(tool=tool, arguments=arguments, intent=intent)
 
     @staticmethod
     def _apply_pre_tool_use_hook(
@@ -266,5 +268,8 @@ class ToolAccessGate:
                 tool_call_id=tool_call_id,
             )
         if decision.modified_arguments is not None:
+            if "intent" in decision.modified_arguments:
+                return tool_error(tool.name, "PreToolUse Hook must not modify reserved intent",
+                                  tool_call_id=tool_call_id)
             return decision.modified_arguments
         return validation.arguments

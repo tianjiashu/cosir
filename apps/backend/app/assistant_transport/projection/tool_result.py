@@ -10,6 +10,7 @@ from app.assistant_transport.state.conversation_state_part import ConversationBa
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata
 
+
 class ToolResultFields(TypedDict):
     status: ToolCallEventStatus
     error: str | None

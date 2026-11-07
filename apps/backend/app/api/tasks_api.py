@@ -18,7 +18,6 @@ from app.api.schemas import (
     TaskResponse,
 )
 from app.app import app
-from app.assistant_transport.state.message_identity import turn_of
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
     ProvisionalTaskCleanupConflictError,
@@ -87,22 +86,10 @@ async def fork_task(
     payload: ForkTaskRequest,
     task_service: TaskService = Depends(get_task_service),
 ) -> TaskResponse:
-    """从源 Task 的某条消息处创建一个新的 fork Task：复制到这条消息所在那一轮回复为止。"""
+    """从源 Task 的某条回复往后分叉：新 Task 继承到这条回复为止的上下文。"""
 
     try:
-        turn = turn_of(payload.message_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "FORK_MESSAGE_ID_INVALID", "message": str(exc), "retryable": False},
-        ) from exc
-    try:
-        target = await task_service.fork_task(
-            task_id,
-            user_message_id=turn.user_message_id,
-            leading_run_id=turn.leading_run_id,
-            source_message_id=payload.message_id,
-        )
+        target = await task_service.fork_task(task_id, reply=payload.reply)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task or message not found") from exc
     except TaskForkConflictError as exc:
@@ -168,6 +155,3 @@ async def delete_task(
     return DeleteTaskResponse(
         task_id=task_id, deleted=True, deleted_task_ids=sorted(deleted_task_ids)
     )
-
-
-

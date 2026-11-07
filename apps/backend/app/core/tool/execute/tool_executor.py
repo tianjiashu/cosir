@@ -17,6 +17,7 @@
 """
 
 from collections.abc import Collection
+from dataclasses import replace
 
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.hook import HookContext, HookEvent, HookInterceptor
@@ -63,7 +64,7 @@ class ToolExecutor:
         参数:
             call: 模型请求的工具调用。
             execution_context: 本次调用的完整运行时边界，由调用方按 ``call`` 构造（含
-                ``tool_call_id``）；本方法直接信任，不再特化。
+                ``tool_call_id``）；本方法直接信任身份，并在准入后附加原始调用意图。
             allowed_tool_names: 本轮准入的工具名；不在其中的已注册工具被拒绝。
 
         返回:
@@ -81,6 +82,7 @@ class ToolExecutor:
         if gate_outcome.denial is not None:
             return self._budget.apply(gate_outcome.denial, execution_context)
         tool = gate_outcome.tool
+        execution_context = replace(execution_context, call_intent=gate_outcome.intent)
 
         # 决定重放的 running 已由认领事务发布，带着原卡的预览。重复发布会清掉预览。
         if execution_context.user_decision is None:
@@ -91,8 +93,6 @@ class ToolExecutor:
                     step_id=execution_context.step_id,
                     tool_call_id=execution_context.tool_call_id,
                     status="running",
-                    # 已过准入：展示的就是交给 handler 的最终参数（含 PreToolUse Hook 改写）。
-                    args=gate_outcome.arguments,
                 )
             )
         observation = self._runner.execute(tool, gate_outcome.arguments, execution_context)

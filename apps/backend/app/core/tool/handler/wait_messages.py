@@ -65,6 +65,7 @@ class WaitMessagesTool(HandlerBase):
 
     def to_definition(self) -> ToolDefinition:
         return ToolDefinition(
+            conversation_presentation="quiet",
             name=self.name,
             group=self.group,
             description=self.description,

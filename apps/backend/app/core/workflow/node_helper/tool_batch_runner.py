@@ -1,8 +1,8 @@
 """执行一批模型请求的工具调用：串行调用逐个执行，声明为可并行的调用并发执行。
 
 每个调用自己投影生命周期：通过准入、即将交给 handler 时发 ``running``，结束（含执行链异常）
-时立即发终态，所以排队中的串行调用不会先显示为运行中，并行组里先跑完的调用先变色。只投影
-本步创建过工具卡片的调用（``was_projected``）。
+时立即发终态，所以排队中的串行调用不会先显示为运行中，并行组里先跑完的调用先变色。
+被执行门禁拒绝同样发布失败事实，呈现由消费方决定。
 
 两条路径都不在事件循环线程上同步等待：同步阻塞的 thread 模式 handler（大仓库搜索、长时间
 ``delegate_task``）若占住事件循环，HTTP、SSE 与「停止」请求都会无响应。并行组使用本批专属的
@@ -29,18 +29,16 @@ from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
-from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.task_message import DecisionBody
 from app.core.workflow.node_helper.common import emit
 from app.models.enums.error_kind import ErrorKind
 
 
 async def run_tool_batch(
-        rc: RuntimeContext,
-        calls: list[ToolCall],
-        step_id: str,
-        batch: ToolBatch,
-        decision: DecisionBody | None = None,
+    rc: RuntimeContext,
+    calls: list[ToolCall],
+    step_id: str,
+    decision: DecisionBody | None = None,
 ) -> list[ToolObservation]:
     """执行一批工具调用，返回与每个调用一一对应的观察，顺序与 ``calls`` 相同。
 
@@ -54,27 +52,26 @@ async def run_tool_batch(
     循环，而启动子 Run、投递实时输出都要回到该循环；它随调用传给 ``_execute_call``。
     """
     if len(calls) > 1 and any(_requires_user_decision(call) for call in calls):
-        return _reject_mixed_decision_batch(rc, calls, step_id, batch)
+        return _reject_mixed_decision_batch(rc, calls, step_id)
     loop = asyncio.get_running_loop()
     serial = [(index, call) for index, call in enumerate(calls) if not _is_parallel(call)]
     parallel = [(index, call) for index, call in enumerate(calls) if _is_parallel(call)]
     observations: dict[int, ToolObservation] = {}
     for index, call in serial:
         observations[index] = await asyncio.to_thread(
-            _execute_call, rc, call, step_id, batch, loop, decision
+            _execute_call, rc, call, step_id, loop, decision
         )
     if parallel:
-        results = await _run_parallel(rc, [call for _, call in parallel], step_id, batch, loop)
+        results = await _run_parallel(rc, [call for _, call in parallel], step_id, loop)
         observations.update(zip((index for index, _ in parallel), results, strict=True))
     return [observations[index] for index in range(len(calls))]
 
 
 async def _run_parallel(
-        rc: RuntimeContext,
-        calls: list[ToolCall],
-        step_id: str,
-        batch: ToolBatch,
-        loop: asyncio.AbstractEventLoop,
+    rc: RuntimeContext,
+    calls: list[ToolCall],
+    step_id: str,
+    loop: asyncio.AbstractEventLoop,
 ) -> list[ToolObservation]:
     pool = ThreadPoolExecutor(
         max_workers=min(len(calls), Constant.Tools.MAX_PARALLEL_CALLS),
@@ -92,7 +89,6 @@ async def _run_parallel(
                             rc,
                             call,
                             step_id,
-                            batch,
                             loop,
                         ),
                     )
@@ -116,7 +112,7 @@ def _requires_user_decision(call: ToolCall) -> bool:
 
 
 def _reject_mixed_decision_batch(
-        rc: RuntimeContext, calls: list[ToolCall], step_id: str, batch: ToolBatch
+    rc: RuntimeContext, calls: list[ToolCall], step_id: str
 ) -> list[ToolObservation]:
     """HITL 工具与其他调用（或多个 HITL 调用）同批：每个调用都返回同一条错误观察，一律不执行。"""
     hitl_names = sorted({call.tool_name for call in calls if _requires_user_decision(call)})
@@ -145,26 +141,25 @@ def _reject_mixed_decision_batch(
             ),
             tool_call_id=call.call_id,
         )
-        if batch.was_projected(call.call_id):
-            emit(
-                terminal_event(
-                    observation,
-                    task_id=rc.task.id,
-                    run_id=rc.run.id,
-                    step_id=step_id,
-                    tool_call_id=call.call_id,
-                )
+        emit(
+            terminal_event(
+                observation,
+                task_id=rc.task.id,
+                run_id=rc.run.id,
+                step_id=step_id,
+                tool_call_id=call.call_id,
             )
+        )
         observations.append(observation)
     return observations
 
 
 def _execution_context(
-        rc: RuntimeContext,
-        call: ToolCall,
-        step_id: str,
-        loop: asyncio.AbstractEventLoop,
-        decision: DecisionBody | None = None,
+    rc: RuntimeContext,
+    call: ToolCall,
+    step_id: str,
+    loop: asyncio.AbstractEventLoop,
+    decision: DecisionBody | None = None,
 ) -> ToolExecutionContext:
     """单次调用的完整执行边界：Run / step 事实取自 ``rc``，调用身份只取自 ``call``。
 
@@ -185,12 +180,11 @@ def _execution_context(
 
 
 def _execute_call(
-        rc: RuntimeContext,
-        call: ToolCall,
-        step_id: str,
-        batch: ToolBatch,
-        loop: asyncio.AbstractEventLoop,
-        decision: DecisionBody | None = None,
+    rc: RuntimeContext,
+    call: ToolCall,
+    step_id: str,
+    loop: asyncio.AbstractEventLoop,
+    decision: DecisionBody | None = None,
 ) -> ToolObservation:
     """执行单个调用并投影其生命周期；未知工具名也交给执行器，由准入门禁产出稳定观察。"""
     execution_context = _execution_context(rc, call, step_id, loop, decision)
@@ -203,21 +197,20 @@ def _execute_call(
         )
     except Exception as exc:
         observation = _internal_error(execution_context, call, exc)
-    if batch.was_projected(call.call_id):
-        emit(
-            terminal_event(
-                observation,
-                task_id=execution_context.task_id,
-                run_id=execution_context.run_id,
-                step_id=execution_context.step_id,
-                tool_call_id=call.call_id,
-            )
+    emit(
+        terminal_event(
+            observation,
+            task_id=execution_context.task_id,
+            run_id=execution_context.run_id,
+            step_id=execution_context.step_id,
+            tool_call_id=call.call_id,
         )
+    )
     return observation
 
 
 def _internal_error(
-        execution_context: ToolExecutionContext, call: ToolCall, exc: Exception
+    execution_context: ToolExecutionContext, call: ToolCall, exc: Exception
 ) -> ToolObservation:
     """执行链自身异常（非 handler 异常，后者已由 runner 归一化）收口为该调用的 error 观察。"""
     log.error(

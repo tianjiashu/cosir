@@ -24,7 +24,7 @@ def plan_tool_call_runtime_update(
     命令在 Run 挂起、结束甚至开了新 Run 之后仍在输出，Run 状态与命令是否还活着无关。
     """
 
-    base = find_tool(state, event.tool_call_id, event.run_id)
+    base = find_tool(state, event.tool_call_id)
     if base is None:
         log.warning(
             "tool_runtime_update_part_missing",

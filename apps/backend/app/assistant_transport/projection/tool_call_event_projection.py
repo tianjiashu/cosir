@@ -1,21 +1,26 @@
 """工具调用生命周期事件到 snapshot mutation 的投影。"""
 
 import copy
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from app.assistant_transport.projection.snapshot_navigation import (
     active_run_id,
     ensure_assistant,
     find_tool,
-    iter_parts,
 )
+from app.assistant_transport.projection.tool_presentation import tool_presentation
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import ConversationStateToolCallPart
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
-from app.core.events import ToolCallCreatedEvent, ToolCallsSettledEvent, ToolCallStatusChangedEvent
+from app.core.events import (
+    ToolCallCreatedEvent,
+    ToolCallIntentEvent,
+    ToolCallStatusChangedEvent,
+)
+from app.core.tool.presentation import ToolPresentation
 from app.models.message_metadata import ToolMessageMetadata
 
 # 工具状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）丢弃并留痕。
@@ -24,7 +29,8 @@ from app.models.message_metadata import ToolMessageMetadata
 # 若在此丢弃该迁移，数据库已是真实终态而 snapshot 会永久停在 ``cancelled``
 # （与 Run 状态白名单的 ``cancelled -> running`` 例外同源）。``completed`` / ``failed``
 # 仍不可逆，避免迟到事件把已结束的调用拉回 active。``running -> pending`` 是 HITL 工具首次调用
-# 返回等待占位（``ToolObservation.awaiting_decision``）：用户决定后执行完成，才经 ``pending`` 推到终态。
+# 返回等待占位（``ToolObservation.awaiting_decision``）：
+# 用户决定后执行完成，才经 ``pending`` 推到终态。
 _ALLOWED_TOOL_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
     "pending": frozenset({"pending", "running", "completed", "failed", "cancelled"}),
     "running": frozenset({"running", "pending", "completed", "failed", "cancelled"}),
@@ -38,6 +44,7 @@ _TERMINAL_TOOL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 def plan_tool_call_created(
     event: ToolCallCreatedEvent,
     state: ConversationStateSnapshot,
+    presentations: Mapping[str, ToolPresentation] | None = None,
 ) -> Sequence[ConversationStateMutation]:
     """在当前活动 Run 的助手消息尾部建立 ``pending`` 的 tool-call part。
 
@@ -54,12 +61,12 @@ def plan_tool_call_created(
         "type": "tool-call",
         "toolCallId": event.tool_call_id,
         "toolName": event.tool_name,
+        "presentation": tool_presentation(event.tool_name, presentations or {}),
         "status": "pending",
         "error": None,
         # 刚创建的 ``pending`` 是「准备执行」不是「等你操作」；后者由结果投影按占位行判定。
         "awaitingUser": False,
         "isError": False,
-        "approvalRequestId": None,
     }
     message_index, created = ensure_assistant(state, run_id, new_part)
     if message_index is None:
@@ -69,6 +76,24 @@ def plan_tool_call_created(
         ConversationStateMutation(
             "set", ("messages", message_index, "parts", len(parts)), new_part
         )
+    ]
+
+
+def plan_tool_call_intent(
+    event: ToolCallIntentEvent,
+    state: ConversationStateSnapshot,
+) -> Sequence[ConversationStateMutation]:
+    """意图与参数来自模型输出本身，拒绝、取消、HITL 都不依赖 running 事件，且与冷重建同源。"""
+    base = find_tool(state, event.tool_call_id)
+    if base is None:
+        log.warning("tool_call_part_missing_for_intent", extra={
+            "msg": "工具调用 part 缺失，跳过意图投影",
+            "data": {"run_id": event.run_id, "tool_call_id": event.tool_call_id},
+        })
+        return []
+    return [
+        ConversationStateMutation("set", (*base, "intent"), event.intent),
+        ConversationStateMutation("set", (*base, "args"), copy.deepcopy(event.args)),
     ]
 
 
@@ -142,57 +167,15 @@ def plan_tool_call_status_changed(
         and isinstance(current_display, dict)
         and current_display.get("kind") == "terminal-result"
     ):
-        # 已实时流出终端输出的 part：实时预览独立累计完整输出，是展示上的权威来源。
-        streamed_output = current_display.get("output")
-        if display is not None and display.get("kind") == "terminal-result":
-            # 成功终态的模型正文可能被预算截断，输出沿用实时累计值。
-            if isinstance(streamed_output, str):
-                display["output"] = streamed_output
-        elif display is None or "kind" not in display:
-            # 取消 / 失败观察按契约不带成功态 ``kind``（空 dict 或只有 status_hint），整体覆盖会
-            # 清空已流出的输出：保留实时展示，只叠加终态自带的短提示。带明确 ``kind`` 的展示是
-            # 权威结果，照常替换，不与旧形状拼接。
-            fields["display_data"] = {**copy.deepcopy(current_display), **(display or {})}
-    mutations = [
-        ConversationStateMutation("set", (*base, key), value) for key, value in fields.items()
-    ]
-    if event.args is not None:
-        mutations.append(
-            ConversationStateMutation("set", (*base, "args"), copy.deepcopy(event.args))
-        )
-    return mutations
-
-
-def plan_tool_calls_settled(
-    event: ToolCallsSettledEvent,
-    state: ConversationStateSnapshot,
-) -> Sequence[ConversationStateMutation]:
-    """把该 Run 下仍 ``pending`` / ``running`` 的 tool-call part 收束为终态，只迁移状态与错误。
-
-    后台占位（``background``）不收束：它的工作在 Run 之外继续，状态只由结论并入或撤销结算（Run 被
-    取消时撤销会把它推到 ``cancelled``）。
-    """
-
-    mutations: list[ConversationStateMutation] = []
-    for base, part in iter_parts(state, event.run_id):
+        # 最终 ExecutionResult 的展示数据是权威值；实时通道可能尚未送达尾部。
+        # 只有缺少结构化终态（例如执行器异常）时才保留已经收到的预览。
         if (
-            not isinstance(part, dict)
-            or part.get("type") != "tool-call"
-            or part.get("status") not in {"pending", "running"}
-            or "background" in part
+            display is not None
+            and display.get("kind") == "terminal-result"
+            and "output" not in display
         ):
-            continue
-        mutations.extend(
-            [
-                ConversationStateMutation("set", (*base, "status"), event.status),
-                ConversationStateMutation(
-                    "set",
-                    (*base, "error"),
-                    "已取消" if event.status == "cancelled" else "执行异常",
-                ),
-                ConversationStateMutation("set", (*base, "isError"), event.status == "failed"),
-                # 收束后不再 ``pending``，「等你操作」随之结束（与 project_tool_result 同口径）。
-                ConversationStateMutation("set", (*base, "awaitingUser"), False),
-            ]
-        )
-    return mutations
+            if "output" in current_display:
+                display["output"] = current_display["output"]
+        elif display is None or "kind" not in display:
+            fields["display_data"] = {**copy.deepcopy(current_display), **(display or {})}
+    return [ConversationStateMutation("set", (*base, key), value) for key, value in fields.items()]

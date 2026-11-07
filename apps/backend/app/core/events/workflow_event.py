@@ -10,6 +10,7 @@ from pydantic import Field
 
 from app.core.events.input_consumed_event import InputConsumedEvent
 from app.core.events.message_event import AssistantPartClosedEvent, AssistantTextDeltaEvent
+from app.core.events.model_activity_event import ModelActivityEvent
 from app.core.events.run_event import (
     RunInitializedEvent,
     RunResultUpdatedEvent,
@@ -18,7 +19,7 @@ from app.core.events.run_event import (
 from app.core.events.task_event import TaskTitleUpdatedEvent
 from app.core.events.tool_call_event import (
     ToolCallCreatedEvent,
-    ToolCallsSettledEvent,
+    ToolCallIntentEvent,
     ToolCallStatusChangedEvent,
 )
 from app.core.events.tool_runtime_event import ToolCallRuntimeUpdateEvent
@@ -26,15 +27,16 @@ from app.core.events.tool_runtime_event import ToolCallRuntimeUpdateEvent
 # 按「产生顺序」排列：run 建立 → 用户输入 → 状态 → assistant 输出 → 工具，使本清单同时充当一次
 # run 的时间线；Task 级事件附在最后。
 WorkflowEvent = Annotated[
-    RunInitializedEvent
+    ModelActivityEvent
+    | RunInitializedEvent
     | InputConsumedEvent
     | RunStatusChangedEvent
     | RunResultUpdatedEvent
     | AssistantTextDeltaEvent
     | AssistantPartClosedEvent
     | ToolCallCreatedEvent
+    | ToolCallIntentEvent
     | ToolCallStatusChangedEvent
-    | ToolCallsSettledEvent
     | ToolCallRuntimeUpdateEvent
     | TaskTitleUpdatedEvent,
     Field(discriminator="type"),

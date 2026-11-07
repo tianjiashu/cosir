@@ -16,8 +16,8 @@ from app.models.message_metadata import BackgroundWork
 class ToolCallCreatedEvent(WorkflowEventEnvelope):
     """模型已请求一次工具调用。
 
-    事实语义：模型产出了一个工具调用身份。参数可能仍在模型流中累积，由后续
-    ``ToolCallStatusChangedEvent.args`` 写入。本事件在进入审批或执行**之前**发出，使消费方能在
+    事实语义：模型产出了一个工具调用身份。参数可能仍在模型流中累积，由流收口时的
+    ``ToolCallIntentEvent`` 写入。本事件在进入审批或执行**之前**发出，使消费方能在
     工具真正跑起来之前就看到「模型打算做什么」。
 
     Attributes:
@@ -31,6 +31,18 @@ class ToolCallCreatedEvent(WorkflowEventEnvelope):
     type: Literal["tool_call_created"] = "tool_call_created"
     tool_call_id: str = Field(min_length=1)
     tool_name: str = Field(min_length=1)
+
+
+class ToolCallIntentEvent(WorkflowEventEnvelope):
+    """模型流收口后的调用意图与参数；不代表准入或执行，不改变调用状态。
+
+    只来自模型输出，与冷重建同源：被拒绝的调用不会有 running，Hook 改写的业务参数也不是调用事实。
+    """
+
+    type: Literal["tool_call_intent"] = "tool_call_intent"
+    tool_call_id: str = Field(min_length=1)
+    intent: str | None
+    args: dict[str, object]
 
 
 class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
@@ -48,8 +60,6 @@ class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
     Attributes:
         tool_call_id: 目标工具调用标识。
         status: 迁移后的状态。
-        args: 已完成解析的工具入参；通常随 ``running`` 一起发送，为 ``None`` 时保留已有参数。
-            前端的调用行标题（意图 · 目标）就从它和工具名算出。
         error: 面向展示的短错误提示；仅失败时非空，不能承载完整诊断。
         display_data: 面向 UI 的结构化展示结果；不进入模型上下文。
         team_run_id: 可选的 TeamRun 定位信息；不承载运行状态或错误正文。
@@ -61,31 +71,8 @@ class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
     type: Literal["tool_call_status_changed"] = "tool_call_status_changed"
     tool_call_id: str = Field(min_length=1)
     status: ToolCallEventStatus
-    args: dict[str, object] | None = None
     error: str | None = None
     display_data: dict[str, object] | None = None
     team_run_id: int | None = Field(default=None, gt=0)
     # 后台工作记录：占位写入与结算（并入、撤销、重启中断）时带上最新值；``None`` 时 part 上已有的保留。
     background: BackgroundWork | None = None
-
-
-class ToolCallsSettledEvent(WorkflowEventEnvelope):
-    """该 Run 遗留的全部未决工具调用已被批量收束。
-
-    事实语义：run 已进入终态（失败 / 取消 / 进程重启），其中仍处于 ``pending`` / ``running``
-    的工具调用不可能再收到单条状态迁移。本事件是**补偿性事实**，正常路径仍由
-    ``ToolCallStatusChangedEvent`` 逐条驱动；批量收束没有单一的 ``tool_call_id``，因此独立成类型。
-
-    Attributes:
-        status: 收束后的目标状态，仅可为 ``failed`` 或 ``cancelled``。
-        reason: 内部收束原因（如 ``"runtime_failed"`` / ``"executor_cancelled"`` /
-            ``"backend_restarted"``），不直接展示给用户。
-
-    异常:
-        pydantic.ValidationError: ``status`` 不是收束终态、``reason`` 为空，或出现未声明
-            字段时抛出。
-    """
-
-    type: Literal["tool_calls_settled"] = "tool_calls_settled"
-    status: Literal["failed", "cancelled"]
-    reason: str = Field(min_length=1)

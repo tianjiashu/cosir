@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from app.core.tool.call_intent import model_parameters_with_intent
+from app.core.tool.presentation import ToolPresentation
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 
 
@@ -36,8 +38,8 @@ class ToolDefinition:
     parameters_schema: Mapping[str, Any] = field(default_factory=dict)
     timeout_seconds: float = 10.0
     resource_keys: Sequence[str] = field(default_factory=tuple)
-    # 工具叫什么、用什么图标、调用行标题怎么从参数拼，都是前端的事（``lib/assistant/tool-catalog.ts``
-    # 按工具名查表）；后端只下发工具名与参数，不声明任何展示外壳。
+    # 呈现类别是工具语义；文案、图标与展开状态归前端，不进入模型 schema。
+    conversation_presentation: ToolPresentation = "activity"
     # 隔离执行模式（仅 executor 读取，不进模型可见结构）："thread"=当前线程直跑
     # handler，无子进程/Queue/pickle/日志桥、无硬超时强杀；"process"=子进程隔离 +
     # 硬超时强杀（terminate→kill→进程组/Job Object 树杀）+ 跨进程日志桥。
@@ -77,7 +79,7 @@ class ToolDefinition:
             return self
         # ``replace`` 而不是逐字段重建：逐字段写法曾漏掉 ``user_decision``，注册后的 HITL 工具
         # 因此不再被 prepare_input 识别为需要执行的决定。
-        return replace(self, parameters_schema=self.to_model_tool_definition()["parameters"])
+        return replace(self, parameters_schema=strict_parameters_schema(self.args_model))
 
     def to_model_tool_definition(self) -> dict[str, Any]:
         """导出可固化到 Task 的 strict function 定义。
@@ -98,5 +100,7 @@ class ToolDefinition:
             "name": self.name,
             "description": self.description,
             "strict": True,
-            "parameters": self.parameters_schema or strict_parameters_schema(self.args_model),
+            "parameters": model_parameters_with_intent(
+                self.parameters_schema or strict_parameters_schema(self.args_model)
+            ),
         }

@@ -39,6 +39,7 @@ from app.core.workflow.message_queue.task_message import (
 )
 from app.models.message_metadata import UserMessageMetadata
 from app.service import depends as service_depends
+from app.service.conversation_run.task_launch import initial_task_launch
 from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -69,13 +70,22 @@ class TransportAssistantService:
         Task 不能因为用户在它的页面里发一条消息就退回 ``main_agent``。尚无 Run 时用 ``main_agent``。
         """
         current = await asyncio.to_thread(self._tasks.require_current_run, task_id)
+        initial = (
+            initial_task_launch(await asyncio.to_thread(self._tasks.get_task, task_id))
+            if current is None
+            else None
+        )
         message = await asyncio.to_thread(
             self._inputs.prepare,
             task_id,
             request.to_run_command(),
             request.modelConfigId,
             request.reasoningEffort,
-            current.agent_id if current is not None and current.agent_id else "main_agent",
+            current.agent_id
+            if current is not None and current.agent_id
+            else initial.agent_id
+            if initial
+            else "main_agent",
         )
         space = await asyncio.to_thread(task_runtime_spaces.get_or_create, task_id)
         async with space.async_operation():
@@ -135,9 +145,7 @@ class TransportAssistantService:
         """在调用方事务内撤回一条排队中的用户输入；不是用户输入时抛错，事务回滚、行保留。"""
         queued = self._queue.withdraw(session, task_id, message_id)
         if queued is None or not isinstance(queued.body, UserInputBody):
-            raise SessionConflictError(
-                "MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False
-            )
+            raise SessionConflictError("MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False)
         return queued
 
     async def rerun(self, task_id: int, message_id: int, request: RerunMessageRequest) -> None:
@@ -178,7 +186,9 @@ class TransportAssistantService:
         space = await asyncio.to_thread(task_runtime_spaces.get_or_create, task_id)
         async with space.async_operation():
             if await space.actor.phase() != "idle":
-                raise SessionConflictError("RUN_NOT_STOPPED", "当前运行尚未停止，请停止后再编辑重跑")
+                raise SessionConflictError(
+                    "RUN_NOT_STOPPED", "当前运行尚未停止，请停止后再编辑重跑"
+                )
             await asyncio.to_thread(self._replace_latest_input, task_id, message_id, message)
         await asyncio.to_thread(self._republish, task_id)
 
@@ -198,8 +208,7 @@ class TransportAssistantService:
                 )
             withdrawn = self._context.exclude_from(task_id, target.sequence, session)
             for tool_call_id in withdrawn:
-                if background_registry.owns(task_id, tool_call_id):
-                    background_registry.withdraw(tool_call_id)
+                background_registry.withdraw(task_id, tool_call_id)
             # 这一轮发起的交接随之结束：否则资源一直显示交接中，也无法再次交接。
             handoff_registry.drop(task_id, withdrawn)
             task_runtime_spaces.enqueue(task_id, message, session=session)
@@ -253,11 +262,8 @@ class TransportAssistantService:
             SessionConflictError: ``TOOL_CALL_NOT_DETACHABLE``（没有这次调用的前台等待）。
         """
         self._tasks.get_task(task_id)
-        # 先按 Task 寻址，避免转走别的 Task 的调用；结论与转后台的先后由登记表在锁内裁决。
-        if (
-                not background_registry.owns(task_id, tool_call_id)
-                or background_registry.detach(tool_call_id) != "detached"
-        ):
+        # 结论与转后台的先后由登记表在锁内裁决。
+        if background_registry.detach(task_id, tool_call_id) != "detached":
             raise SessionConflictError(
                 "TOOL_CALL_NOT_DETACHABLE", "这次工具调用已结束或不能转到后台", retryable=False
             )

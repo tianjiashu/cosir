@@ -12,7 +12,6 @@ from typing import Any, cast
 from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
-from app.core.agents.agent_runtime_config import NODE_SNAPSHOT_KEY
 from app.core.tool.background.backgraound_registry import DropReason, background_registry
 from app.core.tool.background.background_job import BackgroundConclusion
 from app.core.tool.background.cancel_placeholders import USER_CANCELLED_HINT
@@ -36,6 +35,8 @@ from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.message_metadata import BackgroundWork
+from app.models.task_extra import TaskExtra, TaskNodeConfig
+from app.models.task_kind import TaskType
 from app.service.depends import (
     get_conversation_run_ledger,
     get_task_message_queue,
@@ -131,7 +132,7 @@ class AgentTeamCoordinator:
         self._ledger = get_conversation_run_ledger()
         self._run_archive_service = AgentTeamRunArchiveService()
 
-        self._active: dict[str, tuple[_TeamExecution, asyncio.Task[None]]] = {}
+        self._active: dict[tuple[int, str], tuple[_TeamExecution, asyncio.Task[None]]] = {}
         self._closing = False
 
     async def _stage(self, row: AgentTeamRunModel, run_id: int) -> BackgroundWork:
@@ -158,7 +159,7 @@ class AgentTeamCoordinator:
             after_commit=execution.ready.set, reports_user_stop=True,
         )
         task = loop.create_task(self._execute(row, execution), name=f"agent-team-{row.id}")
-        self._active[row.tool_call_id] = execution, task
+        self._active[row.parent_task_id, row.tool_call_id] = execution, task
         return work
 
     def prepare_background(
@@ -199,9 +200,11 @@ class AgentTeamCoordinator:
                 "team_run_id": row.id, "status": "failed", "error": str(exc),
             })
         try:
-            await asyncio.to_thread(background_registry.complete, row.tool_call_id, conclusion)
+            await asyncio.to_thread(
+                background_registry.complete, row.parent_task_id, row.tool_call_id, conclusion
+            )
         finally:
-            self._active.pop(row.tool_call_id, None)
+            self._active.pop((row.parent_task_id, row.tool_call_id), None)
 
     async def _drive(
         self, team_run: AgentTeamRunModel, execution: _TeamExecution,
@@ -454,13 +457,14 @@ class AgentTeamCoordinator:
             task = self._task_service.get_or_create_task(
                 workspace_id=row.workspace_id,
                 title=node.name,
-                task_type="agent_team_node",
+                task_type=TaskType.TEAM_NODE_TASK,
                 parent_task_id=row.parent_task_id,
-                extra={
-                    "agent_team_run_id": row.id,
-                    "agent_team_node_id": node_id,
-                    NODE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json"),
-                },
+                extra=TaskExtra(team_node=TaskNodeConfig(
+                    role=node_runtime.role,
+                    system_prompt=node_runtime.system_prompt,
+                    structured_output=node_runtime.structured_output,
+                    model_settings=node_runtime.model_settings,
+                )),
                 tool_schemas=self._resolve_node_tool_schemas(node_runtime.allowed_tools),
                 derivation_depth=child_depth(main_task, "team"),
             )
@@ -531,9 +535,9 @@ class AgentTeamCoordinator:
     async def drain_for_deletion(self, task_ids: set[int]) -> None:
         """删除闸门外停止受影响的协调任务并等到收尾，之后才能删除节点和档案。"""
         waiting = []
-        for call_id, (execution, task) in self._active.items():
+        for (owner, call_id), (execution, task) in self._active.items():
             if execution.parent_task_id in task_ids:
-                background_registry.withdraw(call_id, reason="parent")
+                background_registry.withdraw(owner, call_id, reason="parent")
                 execution.request_stop(AgentTeamRunEndReason.PARENT_CANCELLED, withdrawn=True)
                 waiting.append(task)
             elif execution.node_task_id in task_ids:
@@ -660,7 +664,7 @@ class AgentTeamCoordinator:
         即使确认与停止同时发生也不会再开始节点。
         """
         tracked = set()
-        for call_id, (execution, _) in self._active.items():
+        for (_, call_id), (execution, _) in self._active.items():
             if execution.parent_task_id == parent_task_id:
                 tracked.add(call_id)
                 execution.request_stop(AgentTeamRunEndReason.PARENT_CANCELLED, withdrawn=True)

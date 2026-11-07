@@ -50,7 +50,7 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
     # running 与终态由 run_tool_batch 按调用投影：只有真正开始运行的调用才显示为运行中。
     # 用户批准后的 HITL 执行带着决定，交给 handler 区分「登记待决」与「按决定执行」。
     decision = DecisionBody.model_validate(batch.decision) if batch.decision else None
-    observations = await run_tool_batch(rc, tool_calls, step_id, batch, decision)
+    observations = await run_tool_batch(rc, tool_calls, step_id,  decision)
     settled = [_without_artifact(observation) for observation in observations]
     log.info(
         "tools_node_completed",

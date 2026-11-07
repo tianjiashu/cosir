@@ -32,8 +32,7 @@ def build_web_extract_display_data(
 
     data: dict[str, Any] = {
         "kind": "web-extract-urls",
+        "partial": partial,
         "urls": [{"url": url} for url in urls if isinstance(url, str) and url],
     }
-    if partial:
-        data["status_hint"] = "部分成功"
     return data

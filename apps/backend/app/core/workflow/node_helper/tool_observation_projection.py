@@ -26,7 +26,7 @@ from app.storage.store_engines import main_session_factory
 
 
 def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
-    """按观察顺序写 canonical tool 消息并投影终态；可见性取本步创建事件的记账。
+    """按观察顺序写 canonical tool 消息并投影终态；所有调用结果都保留，不以呈现方式过滤事实。
 
     这里的终态是持久化之后的权威终态。每个调用（含执行链内部异常收口的观察）已在 ``run_tool_batch``
     里发过一次实时终态，两次都经 :func:`terminal_event` 由同一份观察构造，值必然相同，消费方按自
@@ -43,7 +43,6 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
             tool_call_id=call_id,
         )
         status = event.status
-        visible = batch.was_projected(call_id)
         canonical_write = _message_context().add_message(
             to_tool_model_message(observation),
             metadata=ToolMessageMetadata(
@@ -51,7 +50,6 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
                 display_data=event.display_data,
                 error=event.error,
                 team_run_id=event.team_run_id,
-                hidden=not visible,
                 background=observation.background,
             ),
         )
@@ -67,8 +65,7 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
                 },
             },
         )
-        if visible:
-            emit(event)
+        emit(event)
 
 
 def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
@@ -108,7 +105,7 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
             session=session,
         )
     if observation.background is not None:
-        background_registry.commit_start(call_id)
+        background_registry.commit_start(runtime.run.task_id, call_id)
     log.info(
         "tool_decision_result_persisted",
         extra={
@@ -120,13 +117,12 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
             },
         },
     )
-    if not written.hidden:
-        # 卡片按实际写入的 metadata 渲染：结果没带展示数据时沿用了占位的。
-        emit(
-            event.model_copy(
-                update={"display_data": written.display_data, "team_run_id": written.team_run_id}
-            )
+    # 卡片按实际写入的 metadata 渲染：结果没带展示数据时沿用了占位的。
+    emit(
+        event.model_copy(
+            update={"display_data": written.display_data, "team_run_id": written.team_run_id}
         )
+    )
 
 
 def settle_background_placeholder(
@@ -148,8 +144,6 @@ def settle_background_placeholder(
         ),
         session=session,
     )
-    if written.hidden:
-        return None
     return ToolCallStatusChangedEvent(
         task_id=runtime.run.task_id,
         run_id=runtime.run.id,

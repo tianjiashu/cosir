@@ -106,11 +106,8 @@ def plan_tool_call_closures(entries: Sequence[ContextEntry]) -> tuple[ToolCallCl
                 key = (entry.run_id, call_id)
                 if not call_id:
                     raise ContextProtocolError("invalid_tool_call_id", entry, call_id)
-                previous = owners.get(key)
-                if previous is not None:
-                    old_batch, old_slot = previous
-                    if batches[old_batch][1][old_slot].tool_index is None:
-                        raise ContextProtocolError("ambiguous_tool_call_id", entry, call_id)
+                if key in owners:
+                    raise ContextProtocolError("ambiguous_tool_call_id", entry, call_id)
                 owners[key] = (batch_index, len(slots))
                 slots.append(ToolCallSlot(call_id, call["function"]["name"], None))
         elif message["role"] == "tool":
