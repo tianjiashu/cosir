@@ -1,3 +1,4 @@
+import { installFakeDesktopHost } from "./fake-desktop-host";
 import { expect, test, type APIRequestContext, type Page, type Request } from "@playwright/test";
 
 import type { TransportState } from "../../lib/assistant/contract";
@@ -125,4 +126,74 @@ test("编辑排队消息：撤回这一条，正文放回输入框并排在已�
   // 编辑器按段落渲染，textContent 不含段间换行。
   await expect(input).toHaveText(/排队中的消息\s*还没发的草稿/);
   await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveCount(0);
+});
+
+test("迟到的发送失败并入当前草稿，不覆盖请求期间的新输入", async ({ page, request }) => {
+  await openActiveTask(page, request, activeState());
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/tasks/42/messages", async route => {
+    await gate;
+    await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: { error: { code: "TEST_REJECTED", message: "测试拒绝" } } }) });
+  });
+  const input = page.getByLabel("消息输入");
+  await input.fill("请求失败的内容");
+  const sent = page.waitForRequest(isCommand(/^\/tasks\/42\/messages$/, "POST"));
+  await page.getByRole("button", { name: "加入队列", exact: true }).click();
+  await sent;
+  await input.fill("用户新写的内容");
+  release();
+  await expect(page.getByRole("dialog")).toContainText("发送失败");
+  await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
+  await expect(input).toHaveText(/请求失败的内容\s*用户新写的内容/);
+});
+
+test("撤回完成前切换 Task，内容保存在原 Task 草稿中", async ({ page, request }) => {
+  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: 43, title: "另一个Task" } });
+  await openActiveTask(page, request, activeState([{ id: "q-late", role: "user", delivery: "next_run", parts: [{ type: "text", text: "迟到撤回内容" }] }]));
+  const input = page.getByLabel("消息输入");
+  await input.fill("原Task草稿");
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route("**/tasks/42/queued-messages/q-late", async route => {
+    await gate;
+    await route.continue();
+  });
+  const sent = page.waitForRequest(isCommand(/^\/tasks\/42\/queued-messages\/q-late$/, "DELETE"));
+  await page.getByRole("region", { name: "排队消息" }).getByRole("button", { name: "编辑", exact: true }).click();
+  await sent;
+  await page.getByRole("treeitem").filter({ hasText: "另一个Task" }).click();
+  await expect(page).toHaveURL(/\/tasks\/43$/);
+  await input.fill("另一个Task草稿");
+  const response = page.waitForResponse(res => res.url().endsWith("/queued-messages/q-late") && res.request().method() === "DELETE");
+  release();
+  await response;
+  await expect(input).toHaveText("另一个Task草稿");
+  await page.getByRole("treeitem").filter({ hasText: "运行中的任务" }).click();
+  await expect(page).toHaveURL(/\/tasks\/42$/);
+  await expect(input).toHaveText(/迟到撤回内容\s*原Task草稿/);
+});
+
+
+test("后端暂停时提交恢复草稿并提示，不发送业务请求", async ({ page, request }) => {
+  await installFakeDesktopHost(page);
+  await page.addInitScript(() => {
+    const listeners = new Set<Parameters<NonNullable<typeof window.cosirHost>["backend"]["onChange"]>[0]>();
+    window.cosirHost!.backend.onChange = listener => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+    Object.assign(window, { pauseTestBackend: () => {
+      for (const listener of listeners) listener({ generation: 2, status: { state: "stopped" }, backendBaseUrl: null });
+    } });
+  });
+  await openActiveTask(page, request, activeState());
+  const input = page.getByLabel("消息输入");
+  await input.fill("后端暂停仍需保留的草稿");
+  let sent = 0;
+  page.on("request", req => { if (isCommand(/^\/tasks\/42\/messages$/, "POST")(req)) sent++; });
+  await page.evaluate(() => (window as unknown as { pauseTestBackend(): void }).pauseTestBackend());
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await input.press("Enter");
+  await expect(page.getByRole("dialog")).toContainText("本机后端暂不可用");
+  await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
+  await expect(input).toHaveText("后端暂停仍需保留的草稿");
+  expect(sent).toBe(0);
 });

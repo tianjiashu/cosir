@@ -5,10 +5,11 @@ import type { UserAddMessageCommand } from "@/lib/assistant/converter";
 import {
   parseTransportFrame,
   TransportFrameStore,
+  convertFrameStoreItem,
   type ActivityTransition,
   type TransportFrameEnvelope,
 } from "@/lib/assistant/transport-frame-store";
-import { activity, agentMessage, assistantMessage, outcome, queuedMessage, transportState, userMessage } from "./transport-fixtures";
+import { activity, agentMessage, assistantMessage, outcome, toolCallPart, queuedMessage, transportState, userMessage } from "./transport-fixtures";
 
 const streaming = (id: string, text: string): TransportMessage => (
   assistantMessage(id, 1, [{ type: "text", text, status: "running" }])
@@ -56,6 +57,61 @@ const recordTransitions = (store: TransportFrameStore) => {
 
 describe("TransportFrameStore", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  it("publishes one canonical layout shared by conversion and preserves tool projections on text append", () => {
+    const store = new TransportFrameStore(running([assistantMessage("a", 1, [toolCallPart("c", "read_file"), { type: "text", text: "正文" }])]));
+    const before = store.getSnapshot().items[0];
+    if (before.kind !== "canonical") throw new Error("Expected canonical message");
+    expect(convertFrameStoreItem(before).metadata?.custom?.turnLayout).toBe(before.turnLayout);
+    store.applyFrame(mutation([{ kind: "append-text", path: ["messages", 0, "parts", 1, "text"], value: "继续" }]));
+    store.flushScheduledPublication();
+    const next = store.getSnapshot().items[0];
+    if (next.kind !== "canonical") throw new Error("Expected canonical message");
+    expect(next.turnLayout).not.toBe(before.turnLayout);
+    expect(next.turnLayout?.blocks[0]).toBe(before.turnLayout?.blocks[0]);
+    expect(convertFrameStoreItem(next).metadata?.custom?.turnLayout).toBe(next.turnLayout);
+  });
+
+  it("正文更新保留排队和乐观消息的包装身份，队列内容/投递方式变化仍刷新", () => {
+    const store = new TransportFrameStore({ ...running([streaming("active", "正文")]), queued_messages: [queuedMessage("q1")] });
+    const pending = command("尚未确认");
+    store.setPendingCommands([pending]);
+    const before = store.getSnapshot();
+    store.applyFrame(mutation([{ kind: "append-text", path: ["messages", 0, "parts", 0, "text"], value: "继续" }]));
+    store.flushScheduledPublication();
+    expect(store.getSnapshot().items[1]).toBe(before.items[1]);
+    expect(store.getSnapshot().items[2]).toBe(before.items[2]);
+
+    store.applyFrame(mutation([
+      { kind: "set", path: ["queued_messages", 0, "parts", 0, "text"], value: "修改后的排队内容" },
+      { kind: "set", path: ["queued_messages", 0, "delivery"], value: "immediate" },
+    ]));
+    const changed = store.getSnapshot();
+    expect(changed.items[1]).not.toBe(before.items[1]);
+    expect(convertFrameStoreItem(changed.items[1])).toMatchObject({ content: [{ type: "text", text: "修改后的排队内容" }] });
+    expect(changed.state.queued_messages?.[0].delivery).toBe("immediate");
+    expect(changed.items[2]).toBe(before.items[2]);
+
+    store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [] }]));
+    expect(store.getSnapshot().items).toEqual([changed.items[0], before.items[2]]);
+    store.clearPendingCommand(pending);
+    expect(store.getSnapshot().items).toEqual([changed.items[0]]);
+  });
+
+  it("重排队列复用各条身份，新确认消息替换乐观包装，完整快照更新不读旧缓存", () => {
+    const q1 = queuedMessage("q1"), q2 = queuedMessage("q2");
+    const store = new TransportFrameStore({ ...running([streaming("active", "正文")]), queued_messages: [q1, q2] });
+    const before = store.getSnapshot().items;
+    store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [q2, q1] }]));
+    expect(store.getSnapshot().items).toEqual([before[0], before[2], before[1]]);
+    expect(store.getSnapshot().items[1]).toBe(before[2]);
+    store.setPendingCommands([command("新消息")]);
+    store.applyFrame(mutation([{ kind: "set", path: ["queued_messages", 2], value: queuedMessage("q3", "新消息") }]));
+    expect(store.getSnapshot().pendingCommands).toHaveLength(0);
+    expect(store.getSnapshot().items).toHaveLength(4);
+    store.applyFrame(full({ ...running([streaming("active", "重连正文")]), queued_messages: [queuedMessage("q1", "重连内容")] }));
+    expect(convertFrameStoreItem(store.getSnapshot().items[1])).toMatchObject({ id: "q1", content: [{ text: "重连内容" }] });
+  });
 
   it("rejects malformed wire frames before projection", () => {
     expect(() => parseTransportFrame({ kind: "mutation", mutations: [] })).toThrow("task_id");

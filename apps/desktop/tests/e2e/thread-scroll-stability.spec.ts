@@ -36,8 +36,7 @@ function longConversation(): TransportState {
     messages.push({
       id: `a-${index}`, role: "assistant", runId: index + 1, source: null, outcome: OUTCOME,
       parts: [
-        { type: "reasoning", text: "思考".repeat(40), status: "completed" },
-        { type: "text", text: answer(index), status: "completed" },
+        { type: "text", text: answer(index), finalReply: true },
       ],
     } as TransportState["messages"][number]);
   }
@@ -75,6 +74,46 @@ async function scrollUpThroughHistory(page: Page): Promise<Pass> {
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${origin}/__test__/reset`);
+});
+
+test("运行中上翻历史保留不连续尾行之间的高度，正文增长不拖动历史视口", async ({ page, request }) => {
+  const state = longConversation();
+  // 保持一屏历史窗口以内，隔离分页与不连续渲染区间的行为。
+  state.messages = state.messages.slice(0, 80);
+  state.activity = { ...state.activity!, runId: 40, status: "running", endReason: null, startedAt: new Date().toISOString() };
+  const last = state.messages.at(-1)!;
+  last.outcome = null;
+  last.parts = [{ type: "text", text: "正在生成的末尾回复", status: "running" }];
+  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "运行中长对话" } });
+  await request.post(`${origin}/__test__/seed-state`, { data: { taskId: TASK_ID, state, hold: true } });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/tasks/${TASK_ID}`);
+  const viewport = page.locator(".aui-thread-root .overflow-y-auto").first();
+  await expect(page.getByText("正在生成的末尾回复", { exact: true })).toBeVisible();
+  await viewport.evaluate(el => { el.scrollTop = 4000; });
+  await expect.poll(() => page.locator('.aui-thread-root [data-index]').evaluateAll(rows => {
+    const indexes = rows.map(row => Number(row.getAttribute("data-index")));
+    return indexes.some((index, position) => position > 0 && index - indexes[position - 1] > 1);
+  })).toBe(true);
+  const geometry = await page.locator('.aui-thread-root [data-index]').evaluateAll(rows => {
+    const index = rows.findIndex((row, position) => position > 0 && Number(row.getAttribute("data-index")) - Number(rows[position - 1].getAttribute("data-index")) > 1);
+    const previous = rows[index - 1], next = rows[index];
+    return { missingRows: Number(next.getAttribute("data-index")) - Number(previous.getAttribute("data-index")) - 1,
+      gap: next.getBoundingClientRect().top - previous.getBoundingClientRect().bottom };
+  });
+  expect(geometry.gap).toBeGreaterThan(geometry.missingRows * 60);
+  const before = await viewport.evaluate(el => el.scrollTop);
+  await request.post(`${origin}/__test__/append-text`, { data: { taskId: TASK_ID, messageIndex: 79, partIndex: 0, text: "\n\n流式增长".repeat(30) } });
+  await expect(page.locator('[data-index="79"]')).toContainText("流式增长");
+  await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(before, 0);
+  // 同一交互仍能明确回到底部，且当前两条消息始终挂载。
+  await expect(page.locator('[data-index="78"]')).toHaveCount(1);
+  await page.getByRole("button", { name: "回到底部", exact: true }).click();
+  await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(3);
+  const bottomBefore = await viewport.evaluate(el => el.scrollTop);
+  await request.post(`${origin}/__test__/append-text`, { data: { taskId: TASK_ID, messageIndex: 79, partIndex: 0, text: "\n\n回到底部后的增长".repeat(30) } });
+  await expect(page.locator('[data-index="79"]')).toContainText("回到底部后的增长");
+  await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(bottomBefore, 0);
 });
 
 test("长对话向上滚动时虚拟列表少修正 scrollTop，切走再回来沿用实测行高", async ({ page, request }) => {

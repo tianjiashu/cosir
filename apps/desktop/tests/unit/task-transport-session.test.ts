@@ -51,7 +51,7 @@ describe("TaskTransportSession 长订阅（D4）", () => {
     const stream = controllableStream();
     fetchImpl.mockResolvedValueOnce(stream.response);
 
-    void session.open();
+    void session.start();
     await flush();
     stream.push(fullFrame(transportState({ activity: activity(1, "running") })));
     await flush();
@@ -76,13 +76,13 @@ describe("TaskTransportSession 长订阅（D4）", () => {
     const { fetchImpl, session } = setup({ onDisconnect });
     const eof = controllableStream();
     fetchImpl.mockResolvedValueOnce(eof.response);
-    await Promise.all([session.open(), (async () => { await flush(); eof.end(); })()]);
+    await Promise.all([session.start(), (async () => { await flush(); eof.end(); })()]);
     expect(onDisconnect).toHaveBeenLastCalledWith({ error: null, resync: false });
     expect(session.isOpen).toBe(false);
 
     const backpressure = controllableStream();
     fetchImpl.mockResolvedValueOnce(backpressure.response);
-    await Promise.all([session.open(), (async () => {
+    await Promise.all([session.start(), (async () => {
       await flush();
       backpressure.push({ task_id: 7, kind: "resync_required", mutations: [], resync_reason: "subscriber_backpressure" });
       backpressure.end();
@@ -94,13 +94,13 @@ describe("TaskTransportSession 长订阅（D4）", () => {
     const onDisconnect = vi.fn();
     const { fetchImpl, session } = setup({ onDisconnect });
     fetchImpl.mockResolvedValueOnce(new Response(JSON.stringify({ detail: { error: { code: "TASK_NOT_FOUND", message: "任务不存在" } } }), { status: 404 }));
-    await session.open();
+    await session.start();
     expect(onDisconnect).toHaveBeenCalledTimes(1);
     expect(onDisconnect.mock.calls[0][0].error).toBeInstanceOf(Error);
 
     const stream = controllableStream();
     fetchImpl.mockResolvedValueOnce(stream.response);
-    const opened = session.open();
+    const opened = session.start();
     await flush();
     session.close();
     // 测试替身的 fetch 不接 AbortSignal：手动结束响应体，模拟真实 fetch 在 abort 后终止读取。
@@ -114,13 +114,14 @@ describe("TaskTransportSession 长订阅（D4）", () => {
     const { fetchImpl, session } = setup({ submitMessage });
     const stream = controllableStream();
     fetchImpl.mockResolvedValueOnce(stream.response);
-    void session.open();
+    void session.start();
     await flush();
 
     await session.submit(command("a"));
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
-    session.close();
+    stream.end();
+    await flush();
     fetchImpl.mockResolvedValueOnce(controllableStream().response);
     await session.submit(command("b"));
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -132,7 +133,7 @@ describe("TaskTransportSession 乐观命令（D8）", () => {
     const { store, fetchImpl, session } = setup({ submitMessage: async () => undefined });
     const stream = controllableStream();
     fetchImpl.mockResolvedValueOnce(stream.response);
-    void session.open();
+    void session.start();
     await flush();
 
     await session.submit(command("hello"));
@@ -146,10 +147,110 @@ describe("TaskTransportSession 乐观命令（D8）", () => {
   it("HTTP 拒绝时收回乐观消息并交给提交错误回调", async () => {
     const onSubmitError = vi.fn();
     const rejection = new Error("bad request");
-    const { store, session } = setup({ submitMessage: async () => { throw rejection; }, onSubmitError });
+    const { store, session, fetchImpl } = setup({ submitMessage: async () => { throw rejection; }, onSubmitError });
+    fetchImpl.mockResolvedValueOnce(controllableStream().response);
+    void session.start();
     const pending = command("x");
     await session.submit(pending);
     expect(store.getSnapshot().pendingCommands).toHaveLength(0);
     expect(onSubmitError).toHaveBeenCalledWith(rejection, [pending]);
   });
+});
+
+
+describe("TaskTransportSession owner lifetime", () => {
+  for (const failed of [false, true]) it(`ignores late ${failed ? "failure" : "success"} after close, including a new generation`, async () => {
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    const onSubmitError = vi.fn();
+    const { session, fetchImpl } = setup({ submitMessage: () => pending, onSubmitError });
+    const stream = controllableStream();
+    fetchImpl.mockResolvedValueOnce(stream.response);
+    void session.start();
+    await flush();
+    const submitted = session.submit(command("old"));
+    session.close();
+    stream.end();
+    await session.open(); // stale retry/refetch must not reactivate the session
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const currentStream = controllableStream();
+    fetchImpl.mockResolvedValueOnce(currentStream.response);
+    void session.start();
+    await flush();
+    currentStream.end(); // new generation is alive but disconnected
+    await flush();
+    if (failed) reject(new Error("late")); else resolve();
+    await submitted;
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(onSubmitError).not.toHaveBeenCalled();
+    session.close();
+  });
+
+  it("does not submit a business command after release", async () => {
+    const submitMessage = vi.fn();
+    const { session } = setup({ submitMessage });
+    session.close();
+    await expect(session.submit(command("closed"))).rejects.toThrow("释放");
+    expect(submitMessage).not.toHaveBeenCalled();
+  });
+});
+
+it("a reconnect only restores canonical observation after its own full, never from a late history page", async () => {
+  const initial = transportState({ activity: activity(7, "completed"), messageOffset: 1, messages: [userMessage("recent", 7)] });
+  const invalidated = vi.fn();
+  const { session, store, fetchImpl } = setup({ onCanonicalStateInvalidated: invalidated }, initial);
+  const first = controllableStream();
+  fetchImpl.mockResolvedValueOnce(first.response);
+  void session.start();
+  await flush();
+  expect(session.isOpen).toBe(true);
+  expect(session.hasCanonicalState).toBe(false);
+  first.push(fullFrame(initial));
+  await flush();
+  expect(session.hasCanonicalState).toBe(true);
+  // EOF 立即失效，随后的旧历史页不能恢复这一资格。
+  invalidated.mockClear();
+  const history = store.beginHistoryFetch()!;
+  first.end(); await flush();
+  expect(invalidated).toHaveBeenCalledOnce();
+  expect(session.hasCanonicalState).toBe(false);
+  const second = controllableStream();
+  fetchImpl.mockResolvedValueOnce(second.response);
+  void session.open(); await flush();
+  expect(store.completeHistoryFetch(history, { messageOffset: 0, messages: [userMessage("old", 1)] })).toBe(true);
+  expect(session.hasCanonicalState).toBe(false);
+  const eligibility: boolean[] = [];
+  const off = store.subscribe(() => eligibility.push(session.hasCanonicalState));
+  second.push(fullFrame(transportState({ activity: activity(8, "running") })));
+  await flush();
+  expect(eligibility).toEqual([true]);
+  second.push({ task_id: 7, kind: "resync_required", mutations: [] });
+  await flush();
+  expect(eligibility).toEqual([true, false]);
+  session.close(); second.end(); off();
+  expect(session.hasCanonicalState).toBe(false);
+});
+
+it("actively replacing a connection invalidates facts before the new HTTP response", async () => {
+  const invalidated = vi.fn();
+  const { session, fetchImpl } = setup({ onCanonicalStateInvalidated: invalidated });
+  const first = controllableStream();
+  fetchImpl.mockResolvedValueOnce(first.response);
+  void session.start(); await flush();
+  first.push(fullFrame(transportState())); await flush();
+  expect(session.hasCanonicalState).toBe(true);
+  let respond!: (response: Response) => void;
+  fetchImpl.mockImplementationOnce(() => new Promise(resolve => { respond = resolve; }));
+  invalidated.mockClear();
+  void session.open();
+  expect(invalidated).toHaveBeenCalledOnce();
+  expect(session.hasCanonicalState).toBe(false);
+  first.end(); await flush();
+  expect(invalidated).toHaveBeenCalledOnce();
+  const second = controllableStream();
+  respond(second.response); await flush();
+  second.push(fullFrame(transportState())); await flush();
+  expect(session.hasCanonicalState).toBe(true);
+  session.close(); second.end();
 });

@@ -74,7 +74,7 @@ function createComposerStub(initial: readonly FakeAttachment[] = [], failOnAdd =
   const removedIds: string[] = [];
   let text = "";
   const composer: EditDraftComposerTarget = {
-    getState: () => ({ attachments }),
+    getState: () => ({ text, attachments }),
     addAttachment: async (attachment) => {
       if (failOnAdd) throw new Error("adapter failed");
       addedIds.push(attachment.id ?? "unknown");
@@ -147,6 +147,7 @@ describe("edit draft composer write", () => {
     const stub = createComposerStub([liftCopy, stale]);
 
     const result = await applyEditDraftToComposer({
+        mode: "replace",
       composer: stub.composer,
       text: "[[cosir-file:keep]]文字",
       attachments: [draftFile("keep")],
@@ -170,6 +171,7 @@ describe("edit draft composer write", () => {
     const stub = createComposerStub();
 
     const result = await applyEditDraftToComposer({
+        mode: "replace",
       composer: stub.composer,
       text: "[[cosir-file:a]][[cosir-file:b]]",
       attachments: [draftFile("a"), draftImage("b")],
@@ -185,6 +187,7 @@ describe("edit draft composer write", () => {
     const stub = createComposerStub();
 
     const result = await applyEditDraftToComposer({
+        mode: "replace",
       composer: stub.composer,
       text: "[[cosir-file:a]]",
       attachments: [draftFile("a")],
@@ -200,6 +203,7 @@ describe("edit draft composer write", () => {
     const stub = createComposerStub([], true);
 
     const result = await applyEditDraftToComposer({
+        mode: "replace",
       composer: stub.composer,
       text: "[[cosir-file:a]]正文 `[[cosir-file:example]]`",
       attachments: [draftFile("a"), draftImage("fail")],
@@ -214,7 +218,8 @@ describe("edit draft composer write", () => {
   it("历史展示元数据不会覆盖撤销所需的真实本机路径", async () => {
     const id = registerLocalFile({ name: "native.md", path: "/workspace/native.md", contentType: "text/plain" });
     const stub = createComposerStub();
-    await applyEditDraftToComposer({ composer: stub.composer, text: `[[cosir-file:${id}]]`, attachments: [draftFile(id)], isStillCurrent: () => true });
+    await applyEditDraftToComposer({
+        mode: "replace", composer: stub.composer, text: `[[cosir-file:${id}]]`, attachments: [draftFile(id)], isStillCurrent: () => true });
     expect(getLocalAttachmentById(id)?.path).toBe("/workspace/native.md");
     expect(stub.attachments()).toEqual([]);
   });
@@ -222,5 +227,45 @@ describe("edit draft composer write", () => {
   it("drops attachments that have no stable identity", () => {
     expect(editableDraftAttachments([{ name: "无 id", type: "file", contentType: "text/plain", content: [] }])).toEqual([]);
     expect(editableDraftAttachments([draftFile("a")]).map((attachment) => attachment.id)).toEqual(["a"]);
+  });
+});
+
+describe("draft recovery commit boundary", () => {
+  it("prepends recovered content while preserving the current draft and attachments", async () => {
+    const stub = createComposerStub([draftImage("current")]);
+    stub.composer.setText("new input");
+    await applyEditDraftToComposer({ composer: stub.composer, mode: "prepend", text: "failed message", attachments: [draftImage("old")], isStillCurrent: () => true });
+    expect(stub.text()).toBe("failed message\n\nnew input");
+    expect(stub.attachments().map(a => a.id)).toEqual(["current", "old"]);
+    expect(stub.removedIds).toEqual([]);
+  });
+
+  for (const mode of ["replace", "prepend"] as const) it(`${mode}: attachment completion never rewrites later user input or removes new images`, async () => {
+    const stub = createComposerStub();
+    let finish!: () => void;
+    const gate = new Promise<void>(resolve => { finish = resolve; });
+    const add = stub.composer.addAttachment;
+    stub.composer.addAttachment = async attachment => {
+      await add(attachment); // complete attachments mutate synchronously, as AUI does
+      await gate;
+    };
+    const applying = applyEditDraftToComposer({ composer: stub.composer, mode, text: "restored", attachments: [draftImage("old")], isStillCurrent: () => true });
+    expect(stub.text()).toBe("restored");
+    stub.composer.setText("restored and newly typed");
+    await add(draftImage("new"));
+    finish();
+    await applying;
+    expect(stub.text()).toBe("restored and newly typed");
+    expect(stub.attachments().map(a => a.id)).toEqual(["old", "new"]);
+  });
+
+  it("does not reuse a released edit generation", () => {
+    const id = crypto.randomUUID();
+    const previous = beginEditComposerOperation(id);
+    endEditComposerOperation(id, previous);
+    const next = beginEditComposerOperation(id);
+    expect(next).not.toBe(previous);
+    expect(isCurrentEditComposerOperation(id, previous)).toBe(false);
+    endEditComposerOperation(id, next);
   });
 });

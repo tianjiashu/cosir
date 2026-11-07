@@ -192,3 +192,35 @@ describe("idempotent task commands", () => {
     await expect(backgroundToolCall(12, "call-1")).resolves.toEqual({ kind: "failed", message: "任务不存在", reason: "rejected" });
   });
 });
+
+it("late manual synchronization cannot settle a newer Run's stop or change future request ownership", async () => {
+  const { reconcileCommands } = await import("@/lib/assistant/command-request-store");
+  const { activity, indexedState } = await import("./transport-fixtures");
+  const waiting = beginCommand(7, "call:old", "decision")!;
+  finishCommand(7, "call:old", waiting, "unknown", "待确认");
+  let respond!: (response: Response) => void;
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { respond = resolve; })));
+  const syncing = synchronizeCommand(7, "call:old");
+  const newer = indexedState(transportState({ activity: activity(8, "running") }));
+  reconcileCommands(7, newer, newer.toolCalls);
+  const stop = beginCommand(7, "task", "stop")!;
+  respond(new Response(JSON.stringify(transportState({ activity: activity(7, "completed") }))));
+  await syncing;
+  expect(useCommandRequests.getState().tasks[7]?.task?.token).toBe(stop.token);
+  expect(useCommandRequests.getState().tasks[7]?.["call:old"]).toBeUndefined();
+  expect(beginCommand(7, "call:new", "stop")?.runId).toBe(8);
+});
+
+it("manual sync cannot clear a replacement request for the same target", async () => {
+  const { settleCommand } = await import("@/lib/assistant/command-request-store");
+  const first = beginCommand(7, "call:c", "decision")!;
+  finishCommand(7, "call:c", first, "unknown", "待确认");
+  let respond!: (response: Response) => void;
+  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { respond = resolve; })));
+  const syncing = synchronizeCommand(7, "call:c");
+  settleCommand(7, "call:c");
+  const second = beginCommand(7, "call:c", "decision")!;
+  respond(new Response(JSON.stringify(transportState())));
+  await syncing;
+  expect(useCommandRequests.getState().tasks[7]?.["call:c"]?.token).toBe(second.token);
+});

@@ -58,12 +58,13 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   await expect(bgRow.getByRole("button", { name: "停止" })).toHaveCount(1);
 
   // 后台占位行不另起状态行；取消走看板。回合已结束，过程区默认收起，先展开。
-  // 没有末段回复时保留过程；未完成调用始终可操作。
+  // 没有末段回复时保留过程；普通调用在工具组展开后可操作。
   await expect(page.locator('[data-foreground-wait="call-bg"]')).toHaveCount(0);
   await page.locator('[data-background-task="call-bg"]').getByRole("button", { name: "停止" }).click();
   await expect(card).toContainText("2 已结束");
 
   // 前台等待：只在工具卡片上「转到后台」；转走后才出现在看板，卡片不再提供转后台。
+  await page.locator('[data-slot="activity-head"]').click();
   const fgActions = page.locator('[data-foreground-wait="call-fg"]');
   await fgActions.getByRole("button", { name: "转到后台" }).click();
   await expect(fgActions).toHaveCount(0);
@@ -72,7 +73,7 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   await expect(page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ })).toBeVisible();
 });
 
-test("Team 批准后原卡显示进度并进入后台看板", async ({ page, request }) => {
+test("Team 批准后时间线显示摘要，查看入口进入后台详情", async ({ page, request }) => {
   const callId = "review-call";
   const preview = {
     kind: "agent-team-approval", team_run_id: 17, team_id: "review", name: "代码审查",
@@ -108,18 +109,20 @@ test("Team 批准后原卡显示进度并进入后台看板", async ({ page, req
   await page.screenshot({ path: `${OUTPUT_DIR}/team-approval.png` });
   await page.getByRole("button", { name: "确认执行" }).click();
   await expect(page.getByRole("button", { name: "确认执行" })).toHaveCount(0);
-  await expect(page.getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Agent Team 执行进度" })).toContainText("执行中");
-  await page.screenshot({ path: `${OUTPUT_DIR}/team-running.png` });
-  const trigger = page.locator(`[data-tool-call-id="${callId}"] [data-slot="call-row"]`);
-  await trigger.click();
-  await expect(page.getByRole("region", { name: "Agent Team 执行进度" })).toBeHidden();
-  await trigger.focus();
-  await page.keyboard.press("Enter");
-  await expect(page.getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
-  await page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ }).click();
+  const timeline = page.locator(`[data-slot="turn"] [data-tool-call-id="${callId}"]`);
+  await expect(timeline).toContainText("执行中");
+  await expect(timeline.getByRole("region", { name: "Agent Team 执行进度" })).toHaveCount(0);
+  await timeline.getByRole("button", { name: "查看", exact: true }).click();
   const row = page.locator(`[data-background-task="${callId}"]`);
   await expect(row).toContainText("代码审查");
+  const progress = row.getByRole("region", { name: "Agent Team 执行进度" });
+  await expect(progress).toBeVisible();
+  const trigger = row.locator('[data-slot="call-row"]');
+  await trigger.click();
+  await expect(progress).toBeHidden();
+  await trigger.focus(); await page.keyboard.press("Enter");
+  await expect(progress).toBeVisible();
+  await page.screenshot({ path: `${OUTPUT_DIR}/team-running.png` });
   await expect(row.getByRole("button", { name: "停止" })).toBeVisible();
   await expect(page.getByRole("button", { name: "转到后台" })).toHaveCount(0);
 });

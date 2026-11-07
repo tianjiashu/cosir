@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { readBrowserPageDisplay } from "@/components/assistant-ui/tools/browser-page-display";
 import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
 import { browserPageView } from "@/components/assistant-ui/tools/views/browser-page-view";
+import type { CallViewContext } from "@/components/assistant-ui/tools/call-view";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 
 const PAGE = { kind: "browser-page", tab_id: "t2", url: "https://example.com/", title: "Example" };
@@ -34,16 +35,16 @@ describe("browser-page display", () => {
     expect(readBrowserPageDisplay({ ...PAGE, steps })?.steps).toEqual(steps);
     expect(readBrowserPageDisplay({ ...PAGE, steps: [{ action: "click", target: 3, status: "done" }] })?.steps).toBeUndefined();
     const context = { taskId: 1, toolCallId: "c", artifact: {} as ToolArtifact, args: {}, interactive: true, taskCancelling: false };
-    expect(browserPageView.defaultOpen!({ ...PAGE, steps }, context)).toBe(true);
-    expect(browserPageView.defaultOpen!({ ...PAGE, steps: steps.slice(0, 1) }, context)).toBe(false);
+    expect(browserPageView({ ...PAGE, steps }, context)?.detail?.defaultOpen).toBe(true);
+    expect(browserPageView({ ...PAGE, steps: steps.slice(0, 1) }, context)?.detail?.defaultOpen).toBe(false);
   });
 
   it("routes browser tools by display kind, falling back on bad payloads", () => {
     const artifact = (display_data: Record<string, unknown>): ToolArtifact => ({presentation: "activity",
       backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null, errorCode: null,
     });
-    expect(resolveCallView(artifact(PAGE))?.view).toBe(browserPageView);
-    expect(resolveCallView(artifact({ ...PAGE, handoff_reason: "sign in" }))?.view).toBe(browserPageView);
-    expect(resolveCallView(artifact({ kind: "browser-page" }))).toBeNull();
+    expect(resolveCallView(artifact(PAGE), {} as CallViewContext)).toMatchObject({ meta: expect.anything() });
+    expect(resolveCallView(artifact({ ...PAGE, handoff_reason: "sign in" }), {} as CallViewContext)).toMatchObject({ meta: expect.anything() });
+    expect(resolveCallView(artifact({ kind: "browser-page" }), {} as CallViewContext)).toBeNull();
   });
 });

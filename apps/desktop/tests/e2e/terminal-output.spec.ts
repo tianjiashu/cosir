@@ -34,7 +34,7 @@ const command = "cd /Users/example/workspace && printf 'long command'\n" + "prin
 function state(display: TransportToolDisplayData, status: "running" | "completed" | "failed" | "cancelled" = "running", renderedCommand = command) {
   return transportState({
     messages: [userMessage("u", 1, "查看真实命令输出"), assistantMessage("a", 1, [toolCallPart("cmd", "execute_terminal", {
-      status, args: { description: "统计代码规模", command: renderedCommand }, display_data: { ...display, command: renderedCommand },
+      status, intent: "统计代码规模", args: { command: renderedCommand }, display_data: { ...display, command: renderedCommand },
       error: status === "failed" ? "命令超时" : status === "cancelled" ? "已取消" : null,
     })], status === "running" ? null : outcome("completed"))],
     activity: activity(1, status === "running" ? "suspended" : "completed", { startedAt: new Date().toISOString() }),
@@ -96,7 +96,7 @@ test("reader keeps scroll position through streaming, completion, close and reop
   const live = state(samples.ansi.display);
   live.activity = activity(1, "running", { startedAt: new Date().toISOString() });
   await seedState(request, 42, live);
-  const call = page.locator('[data-tool-call-id="cmd"]');
+  const call = await openCall(page);
   await call.getByRole("button", { name: "查看输出" }).click();
   const dialog = page.getByRole("dialog");
   const scroll = dialog.locator(".xterm-rows");
@@ -114,6 +114,10 @@ test("reader keeps scroll position through streaming, completion, close and reop
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("已结束", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
+  // 用户显式打开的工具组跨终态保留，Reader 关闭后回到原打开按钮。
+  const group = page.locator('[data-slot="activity-head"]');
+  await expect(group).toHaveAttribute("aria-expanded", "true");
+  await expect(call.getByRole("button", { name: "查看输出" })).toBeFocused();
   await call.getByRole("button", { name: "查看输出" }).click();
   await expect(scroll).toContainText("中文输出");
   await dialog.getByRole("button", { name: "有新输出 · 回到最新" }).click();

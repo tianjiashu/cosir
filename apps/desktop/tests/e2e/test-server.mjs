@@ -246,8 +246,8 @@ function alternatingSequenceState(phase) {
       },
     }),
     { type: "text", text: "tick 是写死的常量，配置模块已有校验工具，可以直接加字段。", status: "completed" },
-    call("alt-typecheck", "execute_terminal", { description: "运行类型检查", command: "bun run typecheck" }, "failed", {
-      error: "命令执行失败", isError: true, display_data: { status_hint: "命令执行失败" },
+    call("alt-typecheck", "execute_terminal", { command: "bun run typecheck" }, "failed", {
+      intent: "运行类型检查", error: "命令执行失败", isError: true, display_data: { status_hint: "命令执行失败" },
     }),
     call("alt-patch", "apply_patch", { patch: "diff --git a/src/config.ts b/src/config.ts\n" }, "completed", {
       display_data: {
@@ -261,8 +261,8 @@ function alternatingSequenceState(phase) {
     }),
   ];
   if (phase === "running") {
-    parts.push(call("alt-test", "execute_terminal", { description: "运行单元测试", command: "bun test tests/task.test.ts" }, "running", {
-      display_data: { kind: "terminal-result", command: "bun test tests/task.test.ts", workdir: "/work", output: "bun test v1.1\n\ntests/task.test.ts:\n✓ tick reads config\n" },
+    parts.push(call("alt-test", "execute_terminal", { command: "bun test tests/task.test.ts" }, "running", {
+      intent: "运行单元测试", display_data: { kind: "terminal-result", command: "bun test tests/task.test.ts", workdir: "/work", output: "bun test v1.1\n\ntests/task.test.ts:\n✓ tick reads config\n" },
     }));
   } else {
     parts.push(
@@ -891,7 +891,19 @@ const server = createServer(async (req, res) => {
     // 直接落定某个 Task 的 canonical state：state 读取与 attach 首帧共用这一份事实。
     const body = await readJson(req);
     executors.delete(Number(body.taskId));
+    if (body.hold) executors.set(Number(body.taskId), { runId: body.state.activity?.runId, cancelled: false, drop: false });
     commit(Number(body.taskId), body.state);
+    jsonResponse(res, 200, { ok: true });
+    return;
+  }
+  if (req.method === "POST" && url.pathname === "/__test__/append-text") {
+    // 精确驱动一帧正文增量：用于验证更新隔离与流式滚动，不用 full 帧替代 mutation。
+    const { taskId, messageIndex, partIndex, text } = await readJson(req);
+    const state = states.get(Number(taskId));
+    state.messages[messageIndex].parts[partIndex].text += text;
+    publish(Number(taskId), { task_id: Number(taskId), kind: "mutation", mutations: [
+      { kind: "append-text", path: ["messages", messageIndex, "parts", partIndex, "text"], value: text },
+    ] });
     jsonResponse(res, 200, { ok: true });
     return;
   }

@@ -23,7 +23,7 @@ import { backgroundToolCall } from "@/lib/assistant/task-commands";
 import { countRunning, useBackgroundTasksStore } from "@/lib/background-tasks/store";
 import { createQueryClient } from "@/lib/query/query-client";
 
-import { transportState } from "./transport-fixtures";
+import { transportState, indexedState } from "./transport-fixtures";
 
 const WORK = { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } satisfies TransportBackgroundWork;
 
@@ -161,7 +161,7 @@ describe("后台任务卡", () => {
 
   it("离开 Task 置空、删除 Task 丢弃桶", () => {
     const store = useBackgroundTasksStore.getState();
-    store.sync(1, { ...withParts(terminalPart("a")), background_tasks: [entry("a")], foreground_waits: ["c1"] });
+    store.sync(1, indexedState({ ...withParts(terminalPart("a")), background_tasks: [entry("a")], foreground_waits: ["c1"] }));
     store.sync(1, null);
     expect(useBackgroundTasksStore.getState().tasks[1]).toBeNull();
     expect(useBackgroundTasksStore.getState().foregroundWaits[1]).toBeNull();
@@ -176,22 +176,22 @@ describe("后台任务卡", () => {
     const store = useBackgroundTasksStore.getState();
     const part = terminalPart("a");
     const first = { ...withParts(part, terminalPart("other")), background_tasks: [entry("a")] };
-    store.sync(1, first);
+    store.sync(1, indexedState(first));
     const parts = useBackgroundTasksStore.getState().parts[1];
     expect(parts).toEqual({ a: part });
     expect(parts?.a).toBe(part);
 
     // 无关帧（新消息数组、同一 part 引用）不换表，订阅方不重渲染。
-    store.sync(1, { ...first, messages: [...first.messages] });
+    store.sync(1, indexedState({ ...first, messages: [...first.messages] }));
     expect(useBackgroundTasksStore.getState().parts[1]).toBe(parts);
 
     // part 变了（如输出追加）就换成新的 part。
     const updated = { ...part, status: "completed" };
-    store.sync(1, { ...withParts(updated), background_tasks: [entry("a")] });
+    store.sync(1, indexedState({ ...withParts(updated), background_tasks: [entry("a")] }));
     expect(useBackgroundTasksStore.getState().parts[1]?.a).toBe(updated);
 
     // 那一轮已不在对话里：条目还在，part 缺失。
-    store.sync(1, { ...withParts(), background_tasks: [entry("a")] });
+    store.sync(1, indexedState({ ...withParts(), background_tasks: [entry("a")] }));
     expect(useBackgroundTasksStore.getState().parts[1]).toEqual({});
   });
 

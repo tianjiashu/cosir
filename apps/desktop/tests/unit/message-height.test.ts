@@ -1,27 +1,60 @@
-import { outcome } from "./transport-fixtures";
+import { outcome, assistantMessage, toolCallPart, activity } from "./transport-fixtures";
 import { useDisclosureStore } from "@/lib/assistant/disclosure-store";
 import type { ThreadMessage } from "@assistant-ui/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { toThreadMessageWithRenderContext } from "@/lib/assistant/converter";
+import type { TransportMessagePart, TransportOutcome } from "@/lib/assistant/contract";
+import * as turnLayout from "@/lib/assistant/turn-layout";
 
 import { forgetMessageHeights, rememberMessageHeight, rememberedMessageHeight } from "@/lib/assistant/message-height-cache";
 import { estimateMessageHeight } from "@/lib/assistant/message-height-estimate";
 
-const assistant = (...content: object[]) => ({ id: "a", role: "assistant", content }) as unknown as ThreadMessage;
+const projected = (parts: TransportMessagePart[], end: TransportOutcome | null = null, live = false) => toThreadMessageWithRenderContext(assistantMessage("a", 1, parts, end), { runId: 1, source: null, outcome: end, isRunEnd: true, activity: live ? activity(1, "running") : null }) as ThreadMessage;
+const assistant = (...parts: TransportMessagePart[]) => projected(parts);
 const code = (lines: number) => ["```ts", ...Array.from({ length: lines }, (_, line) => `const v${line} = ${line};`), "```"].join("\n");
 const user = (...content: object[]) => ({ id: "u", role: "user", content }) as unknown as ThreadMessage;
-const text = (value: string) => ({ type: "text", text: value });
+const text = (value: string, finalReply = true) => ({ type: "text" as const, text: value, finalReply });
 const file = { type: "file", filename: "a.md", mimeType: "text/markdown", data: "" };
 const image = { type: "image", image: "x" };
-const call = (id: string, backendStatus = "completed", artifact: Record<string, unknown> = {}) => ({presentation: "activity",
-  type: "tool-call", toolCallId: id, toolName: "read_file", args: {}, artifact: {presentation: "activity",  backendStatus, awaitingUser: false, ...artifact },
-});
-const running = (...content: object[]) => ({ id: "a", role: "assistant", content, status: { type: "running" } }) as unknown as ThreadMessage;
+const call = (id: string, status: "completed" | "pending" | "running" = "completed", extra = {}) => toolCallPart(id, "read_file", { status, ...extra });
+const running = (...parts: TransportMessagePart[]) => projected(parts, null, true);
 const table = (rows: number) => ["| 名称 | 说明 |", "| --- | --- |", ...Array.from({ length: rows }, (_, row) => `| 项${row} | 描述${row} |`)].join("\n");
 
 describe("estimateMessageHeight", () => {
-  it("completed replies without duration/process reserve no heading, while real zero duration does", () => {
-    const withDuration = (durationMs: number | null) => ({ ...assistant(text("回复")), metadata: { custom: { outcome: outcome("completed", { durationMs }) } } }) as unknown as ThreadMessage;
-    expect(estimateMessageHeight(withDuration(0)) - estimateMessageHeight(withDuration(null))).toBe(37 + 16);
+  it("传 Task 时也复用内容投影，开合、跨 Task 和新消息版本仍改变估高", () => {
+    const project = vi.spyOn(turnLayout, "projectTurn");
+    try {
+      const parts = [text("进展。".repeat(150), false), call("c1"), call("c2"), text("最终回复")];
+      const msg = projected(parts, outcome("completed"));
+      const folded = estimateMessageHeight(msg, 801);
+      expect(estimateMessageHeight(msg, 801)).toBe(folded);
+      useDisclosureStore.getState().set(801, "process:a", true);
+      const open = estimateMessageHeight(msg, 801);
+      expect(open).toBeGreaterThan(folded);
+      useDisclosureStore.getState().set(801, "activity:a:interval:1", true);
+      expect(estimateMessageHeight(msg, 801)).toBeGreaterThan(open);
+      expect(estimateMessageHeight(msg, 802)).toBe(folded);
+      useDisclosureStore.getState().reset(801, "process:a");
+      expect(estimateMessageHeight(msg, 801)).toBe(folded);
+      expect(project).toHaveBeenCalledTimes(1);
+      const changed = projected([...parts, text("新增正文。".repeat(200))], outcome("completed"));
+      expect(estimateMessageHeight(changed, 801)).toBeGreaterThan(folded);
+      expect(project).toHaveBeenCalledTimes(2);
+    } finally {
+      project.mockRestore();
+      useDisclosureStore.getState().clearTask(801);
+      useDisclosureStore.getState().clearTask(802);
+    }
+  });
+
+  it("completed replies never reserve a duration-only heading; process and failures still reserve it", () => {
+    const withDuration = (durationMs: number | null) => projected([text("回复")], outcome("completed", { durationMs }));
+    const plainHeight = estimateMessageHeight(withDuration(null));
+    for (const duration of [0, 129000]) expect(estimateMessageHeight(withDuration(duration))).toBe(plainHeight);
+    const done = outcome("completed", { durationMs: 129000 });
+    expect(estimateMessageHeight(projected([call("quiet", "completed", { presentation: "quiet" }), text("回复")], done))).toBe(plainHeight);
+    expect(estimateMessageHeight(projected([call("read"), text("回复")], done)) - plainHeight).toBe(37 + 16);
+    expect(estimateMessageHeight(projected([text("回复")], outcome("failed"))) - plainHeight).toBe(37 + 16);
   });
 
   it("用户消息：气泡按折行增高，附件区按行排在气泡上方", () => {
@@ -51,19 +84,19 @@ describe("estimateMessageHeight", () => {
   });
 
   it("completed process folding uses the same outcome rule as rendering", () => {
-    const content = [text("很长的进展。".repeat(100)), call("c1"), text("回复")];
-    const complete = { ...assistant(...content), metadata: { custom: { outcome: outcome("completed") } } } as unknown as ThreadMessage;
-    const stopped = { ...complete, metadata: { custom: { outcome: outcome("cancelled") } } } as unknown as ThreadMessage;
+    const content = [text("很长的进展。".repeat(100), false), call("c1"), text("回复")];
+    const complete = projected(content, outcome("completed"));
+    const stopped = projected(content, outcome("cancelled"));
     expect(estimateMessageHeight(stopped)).toBeGreaterThan(estimateMessageHeight(complete) + 200);
     useDisclosureStore.getState().set(8, "process:a", true);
     expect(estimateMessageHeight(complete, 8)).toBeGreaterThan(estimateMessageHeight(complete));
     useDisclosureStore.getState().clearTask(8);
   });
 
-  it("compresses successful calls but budgets active controls and all progress prose", () => {
+  it("compresses completed and active calls while budgeting all progress prose", () => {
     const calls = Array.from({ length: 20 }, (_, i) => call(`c${i}`));
     expect(estimateMessageHeight(running(...calls))).toBe(estimateMessageHeight(running(call("c"))));
-    expect(estimateMessageHeight(running(...calls, call("live", "running")))).toBeGreaterThan(estimateMessageHeight(running(...calls)));
+    expect(estimateMessageHeight(running(...calls, call("live", "running")))).toBe(estimateMessageHeight(running(...calls)));
     expect(estimateMessageHeight(running(text("进展".repeat(100)), ...calls))).toBeGreaterThan(estimateMessageHeight(running(...calls)) + 100);
   });
 

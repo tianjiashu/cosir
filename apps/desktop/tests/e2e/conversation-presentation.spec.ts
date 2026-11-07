@@ -3,7 +3,7 @@ import { API_ORIGIN, OUTPUT_DIR } from "./e2e-env";
 import { seedState } from "./transport-fixtures";
 import { activity, agentMessage, assistantMessage, outcome, toolCallPart, transportState, userMessage } from "../unit/transport-fixtures";
 import type { TransportMessagePart } from "../../lib/assistant/contract";
-const text = (value: string): TransportMessagePart => ({ type: "text", text: value });
+const text = (value: string, finalReply = false): TransportMessagePart => ({ type: "text", text: value, finalReply });
 const state = (parts: TransportMessagePart[], status: "running" | "suspended" | "completed" | "cancelled" = "running") => transportState({
   messages: [userMessage("u", 1, "检查项目"), assistantMessage("a", 1, parts, status === "completed" || status === "cancelled" ? outcome(status, { durationMs: 8000 }) : null)],
   activity: activity(1, status, { endReason: status === "completed" ? "stop" : status === "cancelled" ? "user_cancelled" : null }),
@@ -65,7 +65,7 @@ test("Agent messages are compact, explicitly expandable and never human edit tar
 });
 
 test("completed reply folds prose in place while preserving result warning in the summary", async ({ page, request }) => {
-  await seedState(request, 42, state([text("正在运行测试。"), toolCallPart("cmd", "execute_terminal", { status: "completed", display_data: { kind: "terminal-result", command: "test", output: "assertion", exit_code: 1 } }), text("测试有一个断言需要修复。")], "completed"));
+  await seedState(request, 42, state([text("正在运行测试。"), toolCallPart("cmd", "execute_terminal", { status: "completed", display_data: { kind: "terminal-result", command: "test", output: "assertion", exit_code: 1 } }), text("测试有一个断言需要修复。", true)], "completed"));
   await page.goto("/tasks/42");
   await expect(page.getByText("正在运行测试。", { exact: true })).toBeHidden();
   await expect(page.getByText("测试有一个断言需要修复。", { exact: true })).toBeVisible();

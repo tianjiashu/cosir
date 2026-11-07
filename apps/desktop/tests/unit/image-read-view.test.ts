@@ -33,14 +33,14 @@ describe("image-read display", () => {
     const artifact = (display_data: Record<string, unknown>): ToolArtifact => ({presentation: "activity",
       backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null, errorCode: null,
     });
-    expect(resolveCallView(artifact(DISPLAY))?.view).toBe(imageReadView);
-    expect(resolveCallView(artifact({ kind: "image-read" }))).toBeNull();
+    expect(resolveCallView(artifact(DISPLAY), {} as CallViewContext)?.meta).toBe("1 张");
+    expect(resolveCallView(artifact({ kind: "image-read" }), {} as CallViewContext)).toBeNull();
   });
 
   it("summarizes image count and partial failures", () => {
     const context = {} as CallViewContext;
     expect(toolResultSignal(DISPLAY)).not.toBeNull();
-    expect(imageReadView.meta!(DISPLAY, context)).toBe("1 张");
-    expect(imageReadView.meta!({ ...DISPLAY, failures: [] }, context)).toBe("1 张");
+    expect(imageReadView(DISPLAY, context)?.meta).toBe("1 张");
+    expect(imageReadView({ ...DISPLAY, failures: [] }, context)?.meta).toBe("1 张");
   });
 });

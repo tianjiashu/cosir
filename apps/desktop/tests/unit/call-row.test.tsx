@@ -52,8 +52,8 @@ describe("CallRow 标题与目标", () => {
     expect(read).toContain("lucide-eye");
   });
 
-  it("命令的标题只显示 description，不重复命令", () => {
-    const html = render({}, { toolName: "execute_terminal", args: { description: "运行后端单元测试", command: "uv run pytest -q\necho done" } });
+  it("命令的标题使用统一 intent，不重复命令", () => {
+    const html = render({ intent: "运行后端单元测试" }, { toolName: "execute_terminal", args: { command: "uv run pytest -q\necho done" } });
     expect(html).toContain("运行后端单元测试");
     expect(html).not.toContain("uv run pytest -q");
     expect(html).not.toContain("echo done");
@@ -66,15 +66,15 @@ describe("CallRow 标题与目标", () => {
     expect(html).toContain("lucide-wrench");
   });
 
-  it("排队且还没有参数时标题闪烁，参数到达后不再闪烁", () => {
+  it("排队状态扫光，参数到达不隐藏状态", () => {
     expect(render({presentation: "activity",  backendStatus: "pending" })).toContain("shimmer");
-    expect(render({presentation: "activity",  backendStatus: "pending" }, { args: { path: "a.ts" } })).not.toContain("shimmer");
+    expect(render({presentation: "activity",  backendStatus: "pending" }, { args: { path: "a.ts" } })).toContain("shimmer");
   });
 });
 
 describe("CallRow 状态位", () => {
-  it("运行中显示旋转、失败显示告警、取消显示叉；成功不画对勾", () => {
-    expect(render({presentation: "activity",  backendStatus: "running" })).toContain("animate-spin");
+  it("运行中状态文字扫光、失败显示告警、取消显示叉；成功不画对勾", () => {
+    expect(render({presentation: "activity",  backendStatus: "running" })).toContain("shimmer");
     expect(render({presentation: "activity",  backendStatus: "failed", error: "路径无效" })).toContain("lucide-circle-alert");
     expect(render({presentation: "activity",  backendStatus: "cancelled", error: "已取消" })).toContain("lucide-circle-x");
     const done = render();
@@ -123,7 +123,7 @@ describe("CallRow kind 视图", () => {
     const html = render({presentation: "activity",  backendStatus, error: "已停止", display_data: {
       kind: "terminal-result", command: "make", output: "partial", exit_code: -1,
     } }, { toolName: "execute_terminal" });
-    expect(html).toContain('data-terminal-viewport="true"');
+    expect(html).not.toContain('data-terminal-viewport="true"');
     expect(html).toContain("已停止");
     expect(html).not.toContain("非零退出 -1");
   });
@@ -135,17 +135,17 @@ describe("CallRow kind 视图", () => {
     expect(html).not.toContain("payload");
   });
 
-  it("命令退出码非 0 时元信息给 exit N 并默认展开输出", () => {
+  it("命令退出码非 0 时元信息给 exit N 并保留折叠输出入口", () => {
     const html = render({
       display_data: { kind: "terminal-result", command: "bun run typecheck", output: "error TS2304", exit_code: 2, workdir: "/w" },
     }, { toolName: "execute_terminal", args: { description: "运行类型检查", command: "bun run typecheck" } });
     expect(html).toContain("非零退出 2");
-    expect(html).toContain('data-terminal-viewport="true"');
+    expect(html).not.toContain('data-terminal-viewport="true"');
   });
 
-  it("命令运行中默认展开、结束即收起（没有用户覆盖时）", () => {
+  it("命令运行中与结束后都默认折叠（没有用户覆盖时）", () => {
     const running = render({presentation: "activity",  backendStatus: "running", display_data: { kind: "terminal-result", command: "make", output: "building" } });
-    expect(running).toContain('data-terminal-viewport="true"');
+    expect(running).not.toContain('data-terminal-viewport="true"');
     const done = render({ display_data: { kind: "terminal-result", command: "make", output: "built", exit_code: 0 } });
     expect(done).not.toContain('data-terminal-viewport="true"');
     expect(done).not.toContain("exit 0");

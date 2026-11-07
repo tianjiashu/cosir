@@ -115,7 +115,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
   await expect(page.locator('[data-role="user"]').getByText("你好", { exact: true })).toBeVisible();
   await expect(page.getByText("streaming response", { exact: true }).first()).toBeVisible();
-  await expect(page.locator('[data-slot="reasoning-item"]').first()).toBeVisible();
+  await expect(page.locator('[data-slot="prose-part"]').first()).toContainText("streaming response");
   await expect(page.getByRole("button", { name: "发送", exact: true })).toBeVisible();
 
   const messageInput = page.getByLabel("消息输入");
@@ -467,6 +467,9 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
   await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveText("edit-failure");
   await expect(topComposer).toHaveText("keep draft");
+  await page.getByRole("textbox", { name: "编辑消息" }).fill("继续编辑恢复的内容");
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveText("继续编辑恢复的内容");
 });
 
 test("attach 被拒后进入有限重连，订阅恢复后继续接收输出", async ({ page, request }) => {

@@ -11,6 +11,7 @@ import {
 import { registerInlineFileMetadata, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 import type { TransportMessage, TransportToolCallPart } from "@/lib/assistant/contract";
 import { activity, outcome, usage } from "./transport-fixtures";
+import { readToolArtifact } from "@/lib/assistant/tool-artifact";
 
 /** 已到终态那一轮回复末尾的渲染上下文。 */
 const completedRun = (runId: number): TransportMessageRenderContext => ({
@@ -35,6 +36,23 @@ const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportT
 });
 
 describe("assistant transport converter", () => {
+  it("正文追加复用未变工具的 part/artifact；工具状态或展示数据改变时创建新版本", () => {
+    const source = { ...tool("running"), intent: "核对工具结果" };
+    const context = runningRun(1);
+    const before = toThreadMessage({ id: "a", role: "assistant", parts: [source, { type: "text", text: "开始" }] }, context);
+    const after = toThreadMessage({ id: "a", role: "assistant", parts: [source, { type: "text", text: "开始继续" }] }, context);
+    expect(after.content[0]).toBe(before.content[0]);
+    const first = before.content[0];
+    if (first.type !== "tool-call") throw new Error("expected tool call");
+    expect(readToolArtifact(first.artifact)).toBe(readToolArtifact(first.artifact));
+    const settled = toToolCallPart({ ...source, status: "completed", display_data: { kind: "terminal-result", output: "done" } });
+    expect(settled).not.toBe(first);
+    if (settled.type !== "tool-call") throw new Error("expected tool call");
+    expect(readToolArtifact(settled.artifact)).toMatchObject({ backendStatus: "completed", display_data: { output: "done" } });
+    expect(readToolArtifact(first.artifact).backendStatus).toBe("running");
+    expect(readToolArtifact(first.artifact).intent).toBe("核对工具结果");
+    expect(readToolArtifact(settled.artifact).intent).toBe("核对工具结果");
+  });
   it("乐观用户消息复用渲染上下文，保持身份与附件顺序且不伪造 Run 事实", () => {
     const command = { type: "add-message", message: { role: "user", parts: [
       { type: "text", text: "查看文件和图片" },
@@ -69,7 +87,7 @@ describe("assistant transport converter", () => {
     const message: TransportMessage = { id: "assistant-1", role: "assistant", parts: [], runId: 7, source: null, outcome: null };
     const cancelled = outcome("cancelled", { usage: usage({ total_tokens: 42 }) });
     const ended = toThreadMessage(message, { runId: 7, source: null, outcome: cancelled, isRunEnd: true, activity: null });
-    expect(ended.metadata.custom).toEqual({ runId: 7, isRunEnd: true, outcome: cancelled, activity: null });
+    expect(ended.metadata.custom).toMatchObject({ runId: 7, isRunEnd: true, outcome: cancelled, activity: null });
     expect(ended.status).toEqual({ type: "incomplete", reason: "cancelled" });
 
     const live = toThreadMessage(message, runningRun(7));

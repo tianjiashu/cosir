@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { TransportMessagePart, TransportToolCallPart } from "@/lib/assistant/contract";
 import { aggregateChanges, projectTurn } from "@/lib/assistant/turn-layout";
 import { outcome, toolCallPart } from "./transport-fixtures";
-const text = (value: string): TransportMessagePart => ({ type: "text", text: value });
+const text = (value: string, finalReply = false): TransportMessagePart => ({ type: "text", text: value, finalReply });
 const call = (id: string, overrides: Partial<TransportToolCallPart> = {}) => toolCallPart(id, "read_file", { status: "completed", ...overrides });
 
 describe("stable conversation projection", () => {
@@ -24,12 +24,12 @@ describe("stable conversation projection", () => {
     expect(after.defaultProcessOpen).toBe(true);
   });
   it("only an explicit completed outcome folds the earlier prose; empty tail never hides all text", () => {
-    const parts = [text("进展"), call("one"), text("回复")];
-    expect(projectTurn(parts, "settled").replyStart).toBe(0);
+    const parts = [text("进展"), call("one"), text("回复", true)];
+    expect(projectTurn(parts, "settled").hasFinalReply).toBe(false);
     expect(projectTurn(parts, "settled", outcome("cancelled")).defaultProcessOpen).toBe(true);
     expect(projectTurn(parts, "settled", outcome("failed")).answer).toHaveLength(2);
     const complete = projectTurn(parts, "settled", outcome("completed"));
-    expect(complete.replyStart).toBe(2);
+    expect(complete.hasFinalReply).toBe(true);
     expect(complete.defaultProcessOpen).toBe(false);
     expect(complete.answer.map((item) => item.part.text)).toEqual(["回复"]);
     expect(projectTurn([text("进展"), call("one")], "settled", outcome("completed")).defaultProcessOpen).toBe(true);
@@ -38,8 +38,8 @@ describe("stable conversation projection", () => {
     const wait = call("wait", { toolName: "wait_messages", presentation: "quiet" });
     const before = projectTurn([wait, call("read")], "suspended");
     const after = projectTurn([{ ...wait, status: "failed" }, call("read")], "suspended");
-    expect(before.blocks[0]).toMatchObject({ key: "wait", calls: [{ part: { toolCallId: "read" } }] });
-    expect(after.blocks[0]).toMatchObject({ key: "wait" });
+    expect(before.blocks[0]).toMatchObject({ key: "interval:0", calls: [{ part: { toolCallId: "read" } }] });
+    expect(after.blocks[0]).toMatchObject({ key: "interval:0" });
     expect(after.process.verbCounts).toEqual([{ label: "读取文件", count: 1 }]);
     expect(after.process.failedCount).toBe(1);
     expect(projectTurn([wait], "suspended").process.items).toEqual([]);
@@ -50,7 +50,6 @@ describe("stable conversation projection", () => {
     const layout = projectTurn(parts, "suspended");
     expect(layout.blocks.map((item) => item.kind)).toEqual(["activity", "narration", "activity"]);
     expect(layout.attention).toEqual([{ index: 2, part: pending }]);
-    expect(layout.process.currentAction).toBeNull();
   });
   it("completed result warnings are counted per call, not per failed item", () => {
     const layout = projectTurn([
@@ -73,14 +72,28 @@ describe("stable conversation projection", () => {
     const change = (id: string, status: string, insertions: number) => call(id, { display_data: { kind: "file-changes", changes: [{ path: "a", status, insertions }] } });
     const card = aggregateChanges([{ index: 0, part: change("delete", "deleted", 0) }, { index: 1, part: change("new", "added", 12) }]);
     expect(card.totals).toEqual({ files: 1, calls: 2 });
-    expect(card.files[0].operations.map((op) => [op.toolCallId, op.status, op.additions])).toEqual([["delete", "deleted", 0], ["new", "added", 12]]);
+    expect(card.files[0].operations.map((op) => [op.toolCallId, op.change.status, op.change.insertions])).toEqual([["delete", "deleted", 0], ["new", "added", 12]]);
   });
   it("keeps artifacts and required decisions available independently of process folding", () => {
     const team = call("team", { awaitingUser: true, status: "pending", display_data: { kind: "agent-team-approval" } });
     const draft = call("draft", { display_data: { kind: "agent-configuration-draft" } });
-    const layout = projectTurn([team, draft, text("回复")], "settled", outcome("completed"));
+    const layout = projectTurn([team, draft, text("回复", true)], "settled", outcome("completed"));
     expect(layout.defaultProcessOpen).toBe(false);
     expect(layout.attention).toHaveLength(1);
     expect(layout.artifacts.map((item) => item.kind)).toEqual(["agent-configuration-draft"]);
   });
+});
+
+it("reuses unchanged tool groups and file aggregation across prose versions, but refreshes changed calls", () => {
+  const change = toolCallPart("write", "write_file", { status: "completed", display_data: { kind: "file-changes", changes: [{ path: "a.ts", status: "modified", insertions: 2 }] } });
+  const first = projectTurn([change, { type: "text", text: "a" }], "running");
+  const streamed = projectTurn([change, { type: "text", text: "ab" }], "running", null, first);
+  expect(streamed.blocks[0]).toBe(first.blocks[0]);
+  expect(streamed.artifacts[0]).toBe(first.artifacts[0]);
+  expect(streamed.process.verbCounts).toBe(first.process.verbCounts);
+  const failed = projectTurn([{ ...change, status: "failed" }, { type: "text", text: "ab" }], "settled", null, streamed);
+  expect(failed.blocks[0]).not.toBe(first.blocks[0]);
+  expect(failed.process.failedCount).toBe(1);
+  const updated = projectTurn([{ ...change, display_data: { kind: "file-changes", changes: [{ path: "b.ts", status: "added" }] } }], "settled", null, failed);
+  expect(updated.artifacts[0]).toMatchObject({ files: [{ path: "b.ts" }] });
 });

@@ -1,6 +1,8 @@
+import type { TransportState } from "@/lib/assistant/contract";
 import { beforeEach, describe, expect, it } from "vitest";
-import { beginCommand, finishCommand, forgetCommands, reconcileCommands, useCommandRequests, callTarget, reconcileTaskStatuses, markTaskRequestsUnsynced, commandPending } from "@/lib/assistant/command-request-store";
-import { activity, assistantMessage, toolCallPart, transportState } from "./transport-fixtures";
+import { beginCommand, finishCommand, forgetCommands, reconcileCommands as reconcile, useCommandRequests, callTarget, reconcileTaskStatuses, markTaskRequestsUnsynced, commandPending } from "@/lib/assistant/command-request-store";
+import { activity, assistantMessage, toolCallPart, transportState, indexedState } from "./transport-fixtures";
+const reconcileCommands = (taskId: number, state: TransportState) => reconcile(taskId, state, indexedState(state).toolCalls);
 const current = () => useCommandRequests.getState().tasks[1];
 beforeEach(() => forgetCommands([1]));
 describe("cross-surface request lifetime", () => {
@@ -68,4 +70,43 @@ describe("cross-surface request lifetime", () => {
     reconcileCommands(1, transportState({ messages: [assistantMessage("m", 2, [toolCallPart("c", "execute_terminal", { status: "completed" })])] }));
     expect(current()?.[target]).toBeUndefined();
   });
+});
+
+it("HTTP completion uses already observed facts when no further SSE frame will arrive", () => {
+  reconcileCommands(1, transportState({ activity: activity(7, "completed") }));
+  const request = beginCommand(1, "task", "stop")!;
+  finishCommand(1, "task", request, "accepted");
+  expect(current()?.task).toBeUndefined();
+});
+
+it("a tool HTTP result cannot revive an SSE-settled decision", () => {
+  const request = beginCommand(1, "call:c", "decision")!;
+  reconcileCommands(1, transportState({ messages: [assistantMessage("m", 1, [toolCallPart("c", "agent_team", { awaitingUser: false })])] }));
+  finishCommand(1, "call:c", request, "unknown", "迟到网络错误");
+  expect(current()?.["call:c"]).toBeUndefined();
+});
+
+it("leaving a Task expires old completion facts without discarding an in-flight request", async () => {
+  const { releaseCommandObservation } = await import("@/lib/assistant/command-request-store");
+  const old = transportState({ activity: activity(7, "completed") });
+  reconcileCommands(1, old);
+  const outstanding = beginCommand(1, "call:unknown", "stop")!;
+  releaseCommandObservation(1, old);
+  expect(current()?.["call:unknown"]?.token).toBe(outstanding.token);
+  reconcileTaskStatuses({ 1: "running" });
+  const stop = beginCommand(1, "task", "stop")!;
+  expect(stop.runId).toBeNull();
+  finishCommand(1, "task", stop, "accepted");
+  expect(current()?.task?.phase).toBe("syncing");
+  reconcileTaskStatuses({ 1: "completed" });
+  expect(current()?.task).toBeUndefined();
+});
+
+it("an old observer cleanup cannot expire a newer canonical observation", async () => {
+  const { releaseCommandObservation } = await import("@/lib/assistant/command-request-store");
+  const old = transportState({ activity: activity(7, "running") });
+  reconcileCommands(1, old);
+  reconcileCommands(1, transportState({ activity: activity(8, "running") }));
+  releaseCommandObservation(1, old);
+  expect(beginCommand(1, "task", "stop")?.runId).toBe(8);
 });

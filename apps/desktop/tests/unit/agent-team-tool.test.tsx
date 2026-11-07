@@ -1,8 +1,9 @@
+import { teamView } from "@/components/assistant-ui/tools/views/team-view";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { AgentTeamApproval, AgentTeamTool } from "@/components/assistant-ui/tools/agent-team-tool";
+import { AgentTeamApproval } from "@/components/assistant-ui/tools/agent-team-tool";
 import type { AgentTeamRun } from "@/lib/api/agent-teams";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 import { createQueryClient } from "@/lib/query/query-client";
@@ -65,7 +66,7 @@ function renderAgentTeamTool(teamRun: Partial<AgentTeamRun> | null, surface: "ap
     <QueryClientProvider client={client}>
       {surface === "approval"
         ? <AgentTeamApproval artifact={ARTIFACT} taskId={3} toolCallId="call-1" />
-        : <AgentTeamTool artifact={ARTIFACT} taskId={3} toolCallId="call-1" />}
+        : teamView(PREVIEW, { artifact: ARTIFACT, taskId: 3, toolCallId: "call-1", args: {}, interactive: true, taskCancelling: false })?.status}
     </QueryClientProvider>,
   );
 }
@@ -96,13 +97,13 @@ describe("AgentTeamTool 按 TeamRun 状态渲染", () => {
     expect(html).not.toContain("Agent Team 执行进度");
   });
 
-  it("批准后（运行中或已结束）交给执行卡渲染", () => {
+  it("批准后（运行中或已结束）时间线只有实体状态", () => {
     for (const status of ["running", "completed", "cancelled"] as const) {
       const html = renderAgentTeamTool({ status, end_reason: status === "cancelled" ? "cancelled" : null });
 
       expect(html).not.toContain("等待确认");
       expect(html).not.toContain("已驳回");
-      expect(html).toContain("Agent Team 执行进度");
+      expect(html).not.toContain("Agent Team 执行进度");
     }
   });
 

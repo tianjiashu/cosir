@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { describe, expect, it } from "vitest";
-import { AssistantRuntimeProvider, useAuiState } from "@assistant-ui/react";
+import { describe, expect, it, vi } from "vitest";
+import { AssistantRuntimeProvider, useAuiState, type AssistantRuntime } from "@assistant-ui/react";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import {
@@ -80,5 +80,28 @@ describe("toAddMessageCommand", () => {
     expect(toAddMessageCommand(message).message.parts).toEqual([
       { type: "image", image: locator },
     ]);
+  });
+});
+
+
+describe("paused backend command admission", () => {
+  it("returns the cleared composer draft through the current recovery callback without dispatch", async () => {
+    let runtime!: AssistantRuntime;
+    const submitMessage = vi.fn();
+    const onError = vi.fn((_error, commands) => {
+      const text = commands[0].message.parts.find((part: { type: string }) => part.type === "text").text;
+      runtime.thread.composer.setText(text);
+    });
+    function PausedHarness() {
+      runtime = useTaskAssistantTransportRuntime(501, { initialState: INITIAL_STATE, traceId: "paused", connectionKey: null, submitMessage, onError }).runtime;
+      return null;
+    }
+    renderToStaticMarkup(createElement(PausedHarness));
+    runtime.thread.composer.setText("keep the unsent draft");
+    runtime.thread.composer.send();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(submitMessage).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: "本机后端暂不可用，请稍后重试" }), [expect.objectContaining({ message: { role: "user", parts: [{ type: "text", text: "keep the unsent draft" }] } })]);
+    expect(runtime.thread.composer.getState().text).toBe("keep the unsent draft");
   });
 });

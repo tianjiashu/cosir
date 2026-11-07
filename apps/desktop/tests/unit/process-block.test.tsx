@@ -12,7 +12,7 @@ const call = (id: string, status = "completed") => toolCallPart(id, "read_file",
 function render(status = "completed") {
   const group = projectTurn([call("a"), call("b", status)], "running").blocks[0];
   if (group.kind !== "activity") throw new Error("Expected activity interval");
-  return renderToStaticMarkup(<ProcessBlock taskId={1} messageId="m" group={group} renderCall={(item) => <span data-call={item.part.toolCallId} />} />);
+  return renderToStaticMarkup(<ProcessBlock taskId={1} messageId="m" group={group} renderCall={(item, visible) => <span data-call={item.part.toolCallId} data-visible={visible} />} />);
 }
 beforeEach(() => overrides.clear());
 describe("activity group", () => {
@@ -20,15 +20,15 @@ describe("activity group", () => {
     const html = render();
     expect(html).toContain("读取文件 2 次");
     expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain('data-call="a"');
+    expect(html).toContain('data-call="a" data-visible="false"');
   });
-  it("keeps active controls mounted even when history is folded", () => {
-    expect(render("running")).toContain('data-call="b"');
-    expect(render("running")).not.toContain('data-call="a"');
+  it("folds running calls as well as completed calls", () => {
+    expect(render("running")).toContain('data-call="b" data-visible="false"');
+    expect(render("running")).toContain('data-call="a" data-visible="false"');
   });
   it("restores user disclosure and retains error/cancel summaries", () => {
-    overrides.set("activity:m:a", true);
-    expect(render()).toContain('data-call="a"');
+    overrides.set("activity:m:interval:0", true);
+    expect(render()).toContain('data-call="a" data-visible="true"');
     expect(render("failed")).toContain("1 个失败");
     expect(render("cancelled")).toContain("1 个取消");
   });

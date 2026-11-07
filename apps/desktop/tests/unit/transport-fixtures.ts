@@ -1,3 +1,4 @@
+import { ToolCallIndex } from "@/lib/assistant/tool-call-index";
 import type {
   TerminalSessionEntry,
   TransportActivity,
@@ -103,4 +104,11 @@ export function terminalSession(sessionId: string, overrides: Partial<TerminalSe
     createdAt: "2026-10-27T00:00:00.000Z",
     ...overrides,
   };
+}
+
+/** 与 frame store 相同的完整快照派生入口，供独立镜像/命令单测使用。 */
+export function indexedState(state: TransportState) {
+  const index = new ToolCallIndex();
+  index.replace(state.messages);
+  return { ...state, toolCalls: index.snapshot };
 }

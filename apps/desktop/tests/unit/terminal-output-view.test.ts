@@ -272,3 +272,51 @@ describe("TerminalOutputView", () => {
     expect(mocks.terminals[0].dispose).toHaveBeenCalledOnce();
   });
 });
+
+// 隐藏仅暂停展示工作，不清空实例、已解析游标或选择；重开一次对齐最新累计快照。
+describe("hidden terminal output", () => {
+  beforeEach(() => {
+    mocks.terminals.length = 0;
+    mocks.fitAddons.length = 0;
+    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+    vi.stubGlobal("window", { requestAnimationFrame: () => 1, cancelAnimationFrame: () => undefined });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("defers writes and themes while hidden, then catches up in the same instance", () => {
+    const view = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
+    view.applySnapshot({ output: "first" });
+    const terminal = mocks.terminals[0];
+    view.setVisible(false);
+    terminal.write.mockClear();
+    view.applySnapshot({ output: "first\nsecond" });
+    view.applySnapshot({ output: "first\nsecond\nthird" });
+    const theme = { foreground: "#fff" };
+    view.setTheme(theme);
+    expect(terminal.options.theme).not.toBe(theme);
+    expect(terminal.write).not.toHaveBeenCalled();
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    view.setVisible(true);
+    expect(mocks.terminals).toHaveLength(1);
+    expect(terminal.options.theme).toBe(theme);
+    expect(terminal.write).toHaveBeenCalledExactlyOnceWith("\nsecond\nthird", expect.any(Function));
+    expect(terminal.reset).not.toHaveBeenCalled();
+    view.dispose();
+  });
+
+  it("lets the issued write finish without draining newer hidden output", () => {
+    const view = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
+    const terminal = mocks.terminals[0];
+    let finish!: () => void;
+    terminal.write.mockImplementationOnce((_text, callback) => { finish = callback; });
+    view.applySnapshot({ output: "first" });
+    view.setVisible(false);
+    view.applySnapshot({ output: "replacement" });
+    finish();
+    expect(terminal.write).toHaveBeenCalledTimes(1);
+    view.setVisible(true);
+    expect(terminal.reset).toHaveBeenCalledOnce();
+    expect(terminal.write).toHaveBeenLastCalledWith("replacement", expect.any(Function));
+    view.dispose();
+  });
+});
