@@ -70,6 +70,7 @@ class _Entry:
     reports_user_stop: bool
     stop_requested: bool
     detached: threading.Event | None
+    collect_cancelled: Callable[[], BackgroundConclusion] | None
 
 
 class BackgroundRegistry:
@@ -78,7 +79,8 @@ class BackgroundRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._settled = threading.Condition(self._lock)
-        self._entries: dict[str, _Entry] = {}
+        # 调用 id 只在 Task 内唯一（见 ``RuntimeMessageContextManager``），两个 Task 可以同号。
+        self._entries: dict[tuple[int, str], _Entry] = {}
         self._closed = False
         self._delivering = 0
         self._listener: Callable[[int], None] | None = None
@@ -109,11 +111,14 @@ class BackgroundRegistry:
         reports_user_stop: bool = False,
         mode: BackgroundMode = "background",
         detached: threading.Event | None = None,
+        collect_cancelled: Callable[[], BackgroundConclusion] | None = None,
     ) -> BackgroundWork:
         """登记作业的结果去向，返回持久化用的工作记录。
 
         ``after_commit`` 接收批准回执已提交的通知；``reports_user_stop`` 表示单项停止的结果
         由作业收尾后交付。撤回、父停止与关闭总是先移走条目，再通知作业。
+        ``collect_cancelled`` 由能保证停止收尾的执行器提供：父停止在锁外取唯一结论，
+        用于原占位展示结算，不投递消息；收尾时限只归执行器。
         前台等待传入 ``detached``，转后台与结算在同一把锁内裁决。
         重复调用 ID 是装配缺陷，抛 ValueError。关闭后的登记立即通知作业退出。
         """
@@ -126,14 +131,14 @@ class BackgroundRegistry:
             "mode": mode,
         }
         with self._lock:
-            if tool_call_id in self._entries:
+            if (task_id, tool_call_id) in self._entries:
                 raise ValueError(f"background result already registered: {tool_call_id}")
             closed = self._closed
             if not closed:
-                self._entries[tool_call_id] = _Entry(
+                self._entries[task_id, tool_call_id] = _Entry(
                     task_id=task_id, work=work, mode=mode, on_cancel=on_cancel,
                     after_commit=after_commit, reports_user_stop=reports_user_stop,
-                    stop_requested=False, detached=detached,
+                    stop_requested=False, detached=detached, collect_cancelled=collect_cancelled,
                 )
                 pending = sum(entry.task_id == task_id for entry in self._entries.values())
         if closed:
@@ -157,10 +162,10 @@ class BackgroundRegistry:
             self.request_user_cancel(task_id, tool_call_id, driving=False)
         return work
 
-    def commit_start(self, tool_call_id: str) -> None:
+    def commit_start(self, task_id: int, tool_call_id: str) -> None:
         """审批启动回执已提交，放行作业。撤销先到时它已由取消回调收尾。"""
         with self._lock:
-            entry = self._entries.get(tool_call_id)
+            entry = self._entries.get((task_id, tool_call_id))
             if entry is None:
                 return
             start, entry.after_commit = entry.after_commit, None
@@ -175,8 +180,8 @@ class BackgroundRegistry:
         from app.core.tool.background.cancel_placeholders import USER_CANCELLED_HINT
 
         with self._lock:
-            entry = self._entries.get(tool_call_id)
-            if entry is None or entry.task_id != task_id:
+            entry = self._entries.get((task_id, tool_call_id))
+            if entry is None:
                 return driving and tool_call_cancellation_registry.mark_cancelled(
                     task_id, tool_call_id,
                 )
@@ -185,9 +190,9 @@ class BackgroundRegistry:
             entry.stop_requested = True
             if not entry.reports_user_stop:
                 if entry.mode == "background":
-                    self._take_for_delivery_locked(tool_call_id)
+                    self._take_for_delivery_locked(task_id, tool_call_id)
                 else:
-                    del self._entries[tool_call_id]
+                    del self._entries[task_id, tool_call_id]
         if entry.reports_user_stop:
             entry.on_cancel("user")
             log.info("background_result_stop_requested", extra={
@@ -216,18 +221,18 @@ class BackgroundRegistry:
         """执行异常退出时撤回未提交启动回执的作业；已放行的工作继续正常回投。"""
         with self._lock:
             dropped = [
-                (key, item) for key, item in self._entries.items()
-                if item.task_id == task_id and item.work.run_id == run_id
+                (call_id, item) for (owner, call_id), item in self._entries.items()
+                if owner == task_id and item.work.run_id == run_id
                 and item.after_commit is not None
             ]
-            for key, _ in dropped:
-                del self._entries[key]
+            for call_id, _ in dropped:
+                del self._entries[task_id, call_id]
         self._cancel_all(dropped, "withdraw")
         if dropped:
             self._notify(task_id)
-        return [key for key, _ in dropped]
+        return [call_id for call_id, _ in dropped]
 
-    def complete(self, tool_call_id: str, conclusion: BackgroundConclusion) -> bool:
+    def complete(self, task_id: int, tool_call_id: str, conclusion: BackgroundConclusion) -> bool:
         """结束一条登记并把结论投递给它的 Task；已撤销、已完成、已关闭或 Task 正在停止时不投递，
         返回 False。
 
@@ -240,24 +245,24 @@ class BackgroundRegistry:
         """
 
         with self._lock:
-            entry = self._entries.get(tool_call_id)
+            entry = self._entries.get((task_id, tool_call_id))
             if entry is None or self._closed:
                 return False
-            if cancellation_registry.is_cancelled(entry.task_id):
+            if cancellation_registry.is_cancelled(task_id):
                 log.info(
                     "background_result_left_for_drop",
                     extra={
                         "msg": "Task 正在停止，结论不投递，条目留给撤销",
-                        "data": {"task_id": entry.task_id, "tool_call_id": tool_call_id},
+                        "data": {"task_id": task_id, "tool_call_id": tool_call_id},
                     },
                 )
                 return False
-            self._take_for_delivery_locked(tool_call_id)
+            self._take_for_delivery_locked(task_id, tool_call_id)
         return self._deliver(tool_call_id, entry, conclusion)
 
-    def _take_for_delivery_locked(self, tool_call_id: str) -> None:
+    def _take_for_delivery_locked(self, task_id: int, tool_call_id: str) -> None:
         """调用方持锁且已确认条目可结束：出队与在途计数一起提交，关闭必须等待其收尾。"""
-        del self._entries[tool_call_id]
+        del self._entries[task_id, tool_call_id]
         self._delivering += 1
 
     def _deliver(
@@ -271,7 +276,7 @@ class BackgroundRegistry:
             if conclusion.cancel_hint is not None:
                 return report_cancelled_result(
                     entry.task_id, tool_call_id, entry.work.kind, entry.work.run_id,
-                    conclusion.result, conclusion.cancel_hint,
+                    conclusion.result, conclusion.cancel_hint, conclusion.display_data,
                 )
             return deliver_background_result(
                 entry.task_id,
@@ -286,7 +291,7 @@ class BackgroundRegistry:
                 self._settled.notify_all()
             self._notify(entry.task_id)
 
-    def settle_foreground(self, tool_call_id: str) -> ForegroundOutcome:
+    def settle_foreground(self, task_id: int, tool_call_id: str) -> ForegroundOutcome:
         """前台等待正常结束：仍是前台则出队（结论作为工具结果返回，不投递），返回 ``settled``。
 
         与 :meth:`detach` 在同一把锁内裁决：``detached`` 表示转后台先到，调用方须改用
@@ -295,20 +300,20 @@ class BackgroundRegistry:
         """
 
         with self._lock:
-            entry = self._entries.get(tool_call_id)
+            entry = self._entries.get((task_id, tool_call_id))
             if entry is None:
                 return "gone"
             if entry.mode == "background":
                 return "detached"
-            del self._entries[tool_call_id]
-        self._notify(entry.task_id)
+            del self._entries[task_id, tool_call_id]
+        self._notify(task_id)
         return "settled"
 
-    def detach(self, tool_call_id: str) -> DetachOutcome:
+    def detach(self, task_id: int, tool_call_id: str) -> DetachOutcome:
         """把前台条目改为后台并同时置位等待线程持有的信号。"""
 
         with self._lock:
-            entry = self._entries.get(tool_call_id)
+            entry = self._entries.get((task_id, tool_call_id))
             if entry is None:
                 return "not_found"
             if entry.mode != "foreground" or entry.detached is None:
@@ -319,37 +324,39 @@ class BackgroundRegistry:
             "background_result_detached",
             extra={
                 "msg": "前台等待转到后台",
-                "data": {"task_id": entry.task_id, "tool_call_id": tool_call_id},
+                "data": {"task_id": task_id, "tool_call_id": tool_call_id},
             },
         )
-        self._notify(entry.task_id)
+        self._notify(task_id)
         return "detached"
 
-    def withdraw(self, tool_call_id: str, *, reason: DropReason = "withdraw") -> bool:
+    def withdraw(
+        self, task_id: int, tool_call_id: str, *, reason: DropReason = "withdraw"
+    ) -> bool:
         """放弃一个作业及其结论；出队后才通知执行者。返回是否实际撤销。"""
 
         with self._lock:
-            entry = self._entries.pop(tool_call_id, None)
+            entry = self._entries.pop((task_id, tool_call_id), None)
             if entry is None:
                 return False
         self._cancel_all([(tool_call_id, entry)], reason)
-        self._notify(entry.task_id)
+        self._notify(task_id)
         return True
 
-    def discard(self, tool_call_id: str) -> None:
+    def discard(self, task_id: int, tool_call_id: str) -> None:
         """移除一条登记且不调撤销回调：登记方在工作真正启动前失败（如投递入队失败）时收回。"""
 
         with self._lock:
-            entry = self._entries.pop(tool_call_id, None)
+            entry = self._entries.pop((task_id, tool_call_id), None)
         if entry is not None:
             log.info(
                 "background_result_discarded",
                 extra={
                     "msg": "工作未启动，收回后台结果登记",
-                    "data": {"task_id": entry.task_id, "tool_call_id": tool_call_id},
+                    "data": {"task_id": task_id, "tool_call_id": tool_call_id},
                 },
             )
-            self._notify(entry.task_id)
+            self._notify(task_id)
 
     def pending(self, task_id: int, run_id: int) -> list[str]:
         """返回本 Run 仍在后台执行的工作标签，供 ``wait_messages`` 判定与提示。"""
@@ -361,13 +368,6 @@ class BackgroundRegistry:
                 and entry.mode == "background"
             ]
 
-    def owns(self, task_id: int, tool_call_id: str) -> bool:
-        """这次调用是否有属于该 Task 的活条目（前台或后台；接口层判定寻址是否属于该 Task）。"""
-
-        with self._lock:
-            entry = self._entries.get(tool_call_id)
-            return entry is not None and entry.task_id == task_id
-
     def live_background(self, task_id: int) -> dict[str, BackgroundWork]:
         """Task 下还在跑的后台工作：``tool_call_id`` → 工作记录，按登记先后；前台条目不在其中。
 
@@ -378,8 +378,8 @@ class BackgroundRegistry:
         with self._lock:
             return {
                 tool_call_id: entry.work
-                for tool_call_id, entry in self._entries.items()
-                if entry.task_id == task_id and entry.mode == "background"
+                for (owner, tool_call_id), entry in self._entries.items()
+                if owner == task_id and entry.mode == "background"
             }
 
     def foreground_calls(self, task_id: int) -> list[str]:
@@ -388,30 +388,44 @@ class BackgroundRegistry:
         with self._lock:
             return [
                 tool_call_id
-                for tool_call_id, entry in self._entries.items()
-                if entry.task_id == task_id
+                for (owner, tool_call_id), entry in self._entries.items()
+                if owner == task_id
                 and entry.mode == "foreground"
                 and entry.detached is not None
             ]
 
-    def drop_task(self, task_id: int) -> list[str]:
+    def drop_task(self, task_id: int) -> dict[str, dict[str, object] | None]:
         """撤销 Task 的全部条目（Run 停止、Task 删除提交后调用）；回调异常记录后继续，不阻断收尾。
 
-        返回需要结算后台占位的调用 ID（删除时占位行已不在）。
+        返回需要结算后台占位的调用及最终展示（删除时占位行已不在）。
+        所有作业先取消，再在锁外收集支持取消输出的作业结论；不向 Agent 投递消息。
         """
 
         with self._lock:
             dropped = [
                 (tool_call_id, entry)
-                for tool_call_id, entry in self._entries.items()
-                if entry.task_id == task_id
+                for (owner, tool_call_id), entry in self._entries.items()
+                if owner == task_id
             ]
             for tool_call_id, _ in dropped:
-                del self._entries[tool_call_id]
+                del self._entries[task_id, tool_call_id]
         self._cancel_all(dropped, "parent")
         if dropped:
             self._notify(task_id)
-        return [call_id for call_id, entry in dropped if entry.mode == "background"]
+        displays: dict[str, dict[str, object] | None] = {}
+        for call_id, entry in dropped:
+            if entry.mode != "background":
+                continue
+            displays[call_id] = None
+            if entry.collect_cancelled is not None:
+                try:
+                    displays[call_id] = entry.collect_cancelled().display_data
+                except Exception:
+                    log.exception("background_cancel_output_failed", extra={
+                        "msg": "取消输出收集失败，保留已有预览并结算取消状态",
+                        "data": {"task_id": task_id, "tool_call_id": call_id},
+                    })
+        return displays
 
     def close(self) -> None:
         """后端关闭：此后不再投递任何结论，撤销全部条目并等在途投递写完。
@@ -421,7 +435,7 @@ class BackgroundRegistry:
 
         with self._lock:
             self._closed = True
-            dropped = list(self._entries.items())
+            dropped = [(call_id, entry) for (_, call_id), entry in self._entries.items()]
             self._entries.clear()
             while self._delivering:
                 self._settled.wait()
@@ -471,6 +485,7 @@ def _now() -> str:
 def report_cancelled_result(
     task_id: int, tool_call_id: str, kind: BackgroundKind, run_id: int | None,
     result: dict[str, object], hint: str,
+    display_data: dict[str, object] | None = None,
 ) -> bool:
     """单项停止只唤醒工作所属的活动 Run；已经结束时直接落定历史卡。"""
     from app.core.tool.background.cancel_placeholders import cancel_placeholders
@@ -480,9 +495,9 @@ def report_cancelled_result(
     if current is not None and current.id == run_id and current.status in ACTIVE_RUN_STATUSES:
         return deliver_background_result(
             task_id, tool_call_id=tool_call_id, tool_name=kind, result=result,
-            cancel_hint=hint, wake_run_id=run_id,
+            cancel_hint=hint, wake_run_id=run_id, placeholder_display_data=display_data,
         )
-    cancel_placeholders(task_id, [tool_call_id], hint)
+    cancel_placeholders(task_id, [tool_call_id], hint, displays={tool_call_id: display_data})
     return False
 
 

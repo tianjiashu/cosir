@@ -9,13 +9,13 @@ from app.core.workflow.node_helper.common import (
     execution_scope,
     route_state,
 )
-from app.core.workflow.node_helper.streaming_part_state_machine import (
-    StreamingPartStateMachine,
+from app.core.workflow.node_helper.model_stream_state_machine import (
+    ModelStreamStateMachine,
 )
 
 __all__ = [
     "RunStopped",
-    "StreamingPartStateMachine",
+    "ModelStreamStateMachine",
     "emit",
     "execution_scope",
     "route_state",

@@ -23,6 +23,7 @@ class ContextMessageResponse(BaseModel):
     updated_at: str
     role: str
     content: Any
+    reasoning_content: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
     usage_metadata: dict[str, Any] | None = None
     tool_call_id: str | None = None
@@ -45,6 +46,7 @@ class ContextMessageResponse(BaseModel):
             "role": message["role"],
         }
         if message["role"] == "assistant":
+            values["reasoning_content"] = message.get("reasoning_content")
             values["tool_calls"] = [
                 {
                     "id": call["id"],

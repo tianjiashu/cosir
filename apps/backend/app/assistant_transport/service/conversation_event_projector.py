@@ -24,7 +24,6 @@ _KNOWN_EVENT_TYPES = {
     "assistant_part_closed",
     "tool_call_created",
     "tool_call_status_changed",
-    "tool_calls_settled",
     "tool_call_runtime_update",
     "task_title_updated",
 }

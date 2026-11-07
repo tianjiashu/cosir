@@ -120,6 +120,21 @@ class BackgroundJob:
         """
         self._callbacks.on_done(callback)
 
+    def wait_result(self) -> BackgroundConclusion:
+        """取消收尾时等待执行单元的唯一结论；时限由执行器负责，不重复设置更短时限。
+
+        只交给能保证取消收尾的执行器使用；不触发消息投递，不在事件循环线程调用。"""
+        ready = threading.Event()
+        results: list[BackgroundConclusion] = []
+
+        def receive(result: BackgroundConclusion) -> None:
+            results.append(result)
+            ready.set()
+
+        self.on_done(receive)
+        ready.wait()
+        return results[0]
+
     def is_cancelled(self) -> bool:
         """是否已被撤销；只有 :meth:`start_in_thread` 的阻塞工作需要轮询它。"""
         return self._cancelled.is_set()

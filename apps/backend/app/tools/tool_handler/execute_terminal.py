@@ -251,7 +251,6 @@ class ExecuteTerminalTool(HandlerBase):
 
     def execute(
         self,
-        description: str,
         command: str,
         shell: ExecuteTerminalShell = "auto",
         timeout: float | None = None,
@@ -263,9 +262,6 @@ class ExecuteTerminalTool(HandlerBase):
         """在本机 shell 执行一条命令（前台或后台）并返回归一化观测。
 
         参数:
-            description: 模型给的一句意图，只用于展示：前端拿它作调用行标题，这里只拿它作后台
-                看板条目与 ``wait_messages`` 提示里的标签。执行、安全策略、日志与终态展示只认
-                ``command``。
             command: 待执行命令。
             shell: shell 选择；``auto`` 保持宿主默认 shell，也可显式选择本机可用的
                 cmd、PowerShell 或 POSIX shell。该值已由当前平台的参数模型
@@ -316,13 +312,13 @@ class ExecuteTerminalTool(HandlerBase):
 
         effective_timeout = min(timeout or DEFAULT_COMMAND_TIMEOUT_S, MAX_COMMAND_TIMEOUT_S)
         return self._execute_command(
-            command, cwd, shell=shell, timeout_s=effective_timeout, description=description,
+            command, cwd, shell=shell, timeout_s=effective_timeout,
             background=bool(background), execution_context=execution_context,
         )
 
     def _execute_command(
         self, command: str, cwd: Path, *, shell: ExecuteTerminalShell, timeout_s: float,
-        description: str, background: bool, execution_context: ToolExecutionContext,
+        background: bool, execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """启动命令并返回前台结果或后台占位；等待与结果路由均按调用创建，不存入工具实例。
 
@@ -371,7 +367,8 @@ class ExecuteTerminalTool(HandlerBase):
         if background:
             registered = start_background_job(
                 job, task_id=execution_context.task_id, run_id=execution_context.run_id,
-                tool_call_id=tool_call_id, kind="terminal_command", label=description,
+                tool_call_id=tool_call_id, kind="terminal_command", label=execution_context.call_intent,
+                collect_cancelled=job.wait_result, reports_user_stop=True,
             )
             return self._placeholder_observation(
                 command, cwd, timeout_s, "background", registered
@@ -383,12 +380,13 @@ class ExecuteTerminalTool(HandlerBase):
             task_id=execution_context.task_id,
             run_id=execution_context.run_id,
             kind="terminal_command",
-            label=description,
+            label=execution_context.call_intent,
             mode="foreground",
             on_cancel=lambda _reason: job.cancel(),
             detached=detached,
+            collect_cancelled=job.wait_result, reports_user_stop=True,
         )
-        wait = _ForegroundWait(tool_call_id)
+        wait = _ForegroundWait(execution_context.task_id, tool_call_id)
         job.on_done(wait.on_result)
         while True:
             conclusion = wait.wait_result(_CANCEL_CHECK_SECONDS)
@@ -405,10 +403,10 @@ class ExecuteTerminalTool(HandlerBase):
                     command, cwd, timeout_s, "detached", registered
                 )
         assert conclusion is not None  # 取消路径必由作业的取消结论收尾
-        outcome = background_registry.settle_foreground(tool_call_id)
+        outcome = background_registry.settle_foreground(execution_context.task_id, tool_call_id)
         if outcome == "detached" or (outcome == "gone" and detached.is_set()):
             # 转后台先于前台结算：即使随后被撤销，工具仍须返回后台占位。
-            background_registry.complete(tool_call_id, conclusion)
+            background_registry.complete(execution_context.task_id, tool_call_id, conclusion)
             return self._placeholder_observation(
                 command, cwd, timeout_s, "detached", registered
             )
@@ -420,30 +418,25 @@ class ExecuteTerminalTool(HandlerBase):
         self, command: str, cwd: Path, result: ExecutionResult
     ) -> ToolObservation:
         """前台拿到结论时的观察：取消、超时、正常结束（含非零退出码）三种。"""
-        if result.cancelled:
-            return tool_cancelled(self.name, reason=_CANCELLED_REASON)
+        display = build_terminal_display_data(
+            command=command, workdir=cwd, output=result.output,
+            exit_code=result.exit_code, timed_out=result.timed_out,
+        )
         content = self._render_content(result.output, result)
-        # 超时强杀意味着命令未正常结束，模型无法从退出码判断成败，按瞬态故障
-        # 返回 error 并建议加大超时或拆分命令，避免把超时命令的部分输出误判为成功结果。
-        if result.timed_out:
-            return tool_error(
+        if result.cancelled:
+            observation = tool_cancelled(self.name, reason=_CANCELLED_REASON)
+        elif result.timed_out:
+            observation = tool_error(
                 self.name,
-                f"{content}. "
-                f"Use a larger timeout (up to {MAX_COMMAND_TIMEOUT_S:g}s) or split "
-                "the command into smaller steps.",
+                f"{content}. Use a larger timeout (up to {MAX_COMMAND_TIMEOUT_S:g}s) "
+                "or split the command into smaller steps.",
                 status_hint="命令超时",
             )
-        return tool_success(
-            tool_name=self.name,
-            content=content,
-            display_data=build_terminal_display_data(
-                command=command,
-                workdir=cwd,
-                output=result.output,
-                exit_code=result.exit_code,
-                timed_out=result.timed_out,
-            ),
-        )
+        else:
+            observation = tool_success(self.name, content)
+        # 状态说明执行结局，展示数据保留执行器实际收集的输出；不从模型正文还原。
+        observation.display_data = {**display, **(observation.display_data or {})}
+        return observation
 
     def _background_conclusion(
         self,
@@ -456,8 +449,8 @@ class ExecuteTerminalTool(HandlerBase):
         的终态展示是完整输出（展示契约不截断），并入时写回卡片。
 
         作业线程里调用：前台拿到结论时不使用它（见 ``finished``），只在转后台后经
-        ``background_registry.complete`` 回投。撤销的命令没有卡片终态，
-        占位随撤销推到 ``cancelled``。
+        ``background_registry.complete`` 回投。撤销的命令仍携带已收集输出，
+        父 Task 停止时只结算原占位，不回投模型消息。
         """
         end_reason = (
             "cancelled" if result.cancelled else "timed_out" if result.timed_out else "exited"
@@ -468,9 +461,8 @@ class ExecuteTerminalTool(HandlerBase):
         )
         return BackgroundConclusion(
             {"end_reason": end_reason, "exit_code": result.exit_code, "output": budgeted.content},
-            display_data=None
-            if result.cancelled
-            else build_terminal_display_data(
+            cancel_hint="已取消" if result.cancelled else None,
+            display_data=build_terminal_display_data(
                 command=command,
                 workdir=cwd,
                 output=result.output,
@@ -619,7 +611,8 @@ class _ForegroundWait:
     线程仍要拿到结论才能返回结果。转后台与结论到达在同一把锁里裁决，避免已到的结论无人投递。
     """
 
-    def __init__(self, tool_call_id: str) -> None:
+    def __init__(self, task_id: int, tool_call_id: str) -> None:
+        self._task_id = task_id
         self._tool_call_id = tool_call_id
         self._lock = threading.Lock()
         self._arrived = threading.Event()
@@ -633,7 +626,7 @@ class _ForegroundWait:
             background = self._background
             self._arrived.set()
         if background:
-            background_registry.complete(self._tool_call_id, conclusion)
+            background_registry.complete(self._task_id, self._tool_call_id, conclusion)
 
     def detach(self) -> None:
         """切到后台；结论已先到时由这里补投，否则留给 :meth:`on_result`。"""
@@ -641,7 +634,7 @@ class _ForegroundWait:
             self._background = True
             pending = self._conclusion if self._arrived.is_set() else None
         if pending is not None:
-            background_registry.complete(self._tool_call_id, pending)
+            background_registry.complete(self._task_id, self._tool_call_id, pending)
 
     def wait_result(self, timeout: float | None) -> BackgroundConclusion | None:
         """等结论：拿到返回它，超时返回 ``None``（``timeout=None`` 时一直等）。"""

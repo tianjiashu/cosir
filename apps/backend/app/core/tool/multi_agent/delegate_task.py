@@ -16,9 +16,11 @@ from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileType,
 )
-from app.core.tool.multi_agent.derivation import child_depth
+from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
 from app.core.tool.multi_agent.child_agent.child_run_job import run_child
+from app.core.tool.multi_agent.derivation import child_depth
+from app.core.tool.multi_agent.task_tool_scope import tools_for_task
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -28,12 +30,11 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.multi_agent.task_tool_scope import tools_for_task
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models.conversation_input import MessageSource
-from app.core.tool.multi_agent.agent_message import prepare_agent_message
+from app.models.task_kind import TaskType
 from app.service.depends import (
     get_conversation_run_ledger,
     get_task_service,
@@ -171,12 +172,12 @@ class DelegateTaskTool(HandlerBase):
             child_task_tools = child_agent_profile.select_tools(
                 get_tool_registry().get_all_definitions()
             )
-            child_final_task_tools = tools_for_task("delegate_task", child_task_tools, depth=depth)
+            child_final_task_tools = tools_for_task(TaskType.AGENT_TASK, child_task_tools, depth=depth)
 
             child_task = self._task_service.get_or_create_task(
                 workspace_id=execution_context.workspace_id,
                 title=agent_name,
-                task_type="delegate_task",
+                task_type=TaskType.AGENT_TASK,
                 parent_task_id=execution_context.task_id,
                 tool_schemas=[
                     copy.deepcopy(definition.to_model_tool_definition())
@@ -300,6 +301,7 @@ class DelegateTaskTool(HandlerBase):
         """
 
         return ToolDefinition(
+            conversation_presentation="standalone",
             name=self.name,
             group=self.group,
             description=self.description,

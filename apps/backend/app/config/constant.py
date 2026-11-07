@@ -75,7 +75,8 @@ class Constant:
         # write 默认等待：输出静默 500ms，总超时 3s。
         WAIT_DEFAULT_QUIET_MS: int = 500
         WAIT_DEFAULT_TIMEOUT_MS: int = 3000
-        # 条件等待只在前台进行、占着工具线程，总超时上限因此要短；长工作交给 execute_terminal 后台执行。
+        # 条件等待只在前台进行、占着工具线程，总超时上限因此要短；
+        # 长工作交给 execute_terminal 后台执行。
         WAIT_MAX_TIMEOUT_MS: int = 30_000
         # 事件驱动等待的复查时间片：只用于复查 Run 取消信号，条件判定由 worker 事件唤醒。
         WAIT_CANCEL_CHECK_SECONDS: float = 0.25
@@ -129,8 +130,6 @@ class Constant:
         RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED: str = "graph_already_finished"
         # 后端重启导致本轮对话中断。
         RUN_FAILURE_CODE_BACKEND_RESTARTED: str = "backend_restarted"
-        # 客户端连接断开导致本轮对话中断。
-        RUN_FAILURE_CODE_CLIENT_DISCONNECTED: str = "client_disconnected"
         # 该 Run 正在等待用户决定，却被不带决定的续跑拉去跑模型（会静默丢掉待决请求）。
         # 未知 code 的统一兜底用户文案。
         DEFAULT_MESSAGE: str = "对话运行失败，请重试或查看日志"

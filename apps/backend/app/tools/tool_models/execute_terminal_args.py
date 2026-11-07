@@ -45,14 +45,6 @@ _BACKGROUND_DESCRIPTION = (
     "false or null waits here until the command ends. Use wait_messages to wait for background work."
 )
 
-# 只用于展示（调用行标题、看板标签）、不可信：执行、安全策略与日志只认 ``command``，需要用户批准
-# 命令的界面展示原命令。放在首个字段：模型先写意图再写命令。
-_DESCRIPTION_DESCRIPTION = (
-    "One short sentence (about 5-10 words) in the user's language saying what this command does "
-    'and why, e.g. "Run backend unit tests". Shown to the user in place of the command; do not '
-    "restate the command."
-)
-
 # 只写语义与取值范围；「长任务调大并转后台」是选用决策，在工具描述里说一次。
 _TIMEOUT_DESCRIPTION = (
     "Seconds before the command and every process it started are stopped and the call fails. "
@@ -67,7 +59,6 @@ class WindowsExecuteTerminalArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    description: str = Field(min_length=1, description=_DESCRIPTION_DESCRIPTION)
     shell: WindowsExecuteTerminalShell = Field(
         default="auto",
         description=(
@@ -99,7 +90,6 @@ class MacExecuteTerminalArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    description: str = Field(min_length=1, description=_DESCRIPTION_DESCRIPTION)
     shell: MacExecuteTerminalShell = Field(
         default="auto",
         description=(

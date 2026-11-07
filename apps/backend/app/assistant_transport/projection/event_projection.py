@@ -1,12 +1,13 @@
 """按事件类型分派到对应 planner 的唯一投影入口。"""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from app.assistant_transport.projection.message_event_projection import (
     plan_assistant_part_closed,
     plan_assistant_text_delta,
 )
+from app.assistant_transport.projection.model_activity_projection import plan_model_activity
 from app.assistant_transport.projection.run_event_projection import (
     plan_run_initialized,
     plan_run_result_updated,
@@ -15,8 +16,8 @@ from app.assistant_transport.projection.run_event_projection import (
 from app.assistant_transport.projection.task_event_projection import plan_task_title_updated
 from app.assistant_transport.projection.tool_call_event_projection import (
     plan_tool_call_created,
+    plan_tool_call_intent,
     plan_tool_call_status_changed,
-    plan_tool_calls_settled,
 )
 from app.assistant_transport.projection.tool_runtime_event_projection import (
     plan_tool_call_runtime_update,
@@ -28,20 +29,23 @@ from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
     InputConsumedEvent,
+    ModelActivityEvent,
     RunInitializedEvent,
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
     TaskTitleUpdatedEvent,
     ToolCallCreatedEvent,
+    ToolCallIntentEvent,
     ToolCallRuntimeUpdateEvent,
-    ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
     WorkflowEvent,
 )
+from app.core.tool.presentation import ToolPresentation
 
 _Planner = Callable[[Any, ConversationStateSnapshot], Sequence[ConversationStateMutation]]
 
 _PLANNERS: dict[type, _Planner] = {
+    ModelActivityEvent: plan_model_activity,
     RunInitializedEvent: plan_run_initialized,
     InputConsumedEvent: plan_input_consumed,
     RunStatusChangedEvent: plan_run_status_changed,
@@ -49,8 +53,8 @@ _PLANNERS: dict[type, _Planner] = {
     AssistantTextDeltaEvent: plan_assistant_text_delta,
     AssistantPartClosedEvent: plan_assistant_part_closed,
     ToolCallCreatedEvent: plan_tool_call_created,
+    ToolCallIntentEvent: plan_tool_call_intent,
     ToolCallStatusChangedEvent: plan_tool_call_status_changed,
-    ToolCallsSettledEvent: plan_tool_calls_settled,
     ToolCallRuntimeUpdateEvent: plan_tool_call_runtime_update,
     TaskTitleUpdatedEvent: plan_task_title_updated,
 }
@@ -59,6 +63,7 @@ _PLANNERS: dict[type, _Planner] = {
 def plan_event(
     event: WorkflowEvent,
     state: ConversationStateSnapshot,
+    presentations: Mapping[str, ToolPresentation] | None = None,
 ) -> Sequence[ConversationStateMutation]:
     """把一条已校验的事件投影为 snapshot mutations；不修改 ``state``。
 
@@ -66,4 +71,6 @@ def plan_event(
     暴露，不静默跳过。
     """
 
+    if isinstance(event, ToolCallCreatedEvent):
+        return plan_tool_call_created(event, state, presentations)
     return _PLANNERS[type(event)](event, state)

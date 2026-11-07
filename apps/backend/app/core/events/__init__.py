@@ -14,8 +14,8 @@ from app.core.events.input_consumed_event import InputConsumedEvent
 from app.core.events.message_event import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
-    AssistantTextPartKind,
 )
+from app.core.events.model_activity_event import ModelActivityEvent
 from app.core.events.run_event import (
     RunInitializedEvent,
     RunResultUpdatedEvent,
@@ -24,7 +24,7 @@ from app.core.events.run_event import (
 from app.core.events.task_event import TaskTitleUpdatedEvent
 from app.core.events.tool_call_event import (
     ToolCallCreatedEvent,
-    ToolCallsSettledEvent,
+    ToolCallIntentEvent,
     ToolCallStatusChangedEvent,
 )
 from app.core.events.tool_runtime_event import (
@@ -37,18 +37,18 @@ from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 __all__ = [
     "AssistantPartClosedEvent",
     "AssistantTextDeltaEvent",
-    "AssistantTextPartKind",
     "EventSink",
+    "InputConsumedEvent",
+    "ModelActivityEvent",
     "RunInitializedEvent",
     "RunResultUpdatedEvent",
     "RunStatusChangedEvent",
     "TaskTitleUpdatedEvent",
     "TerminalOutputDeltaData",
     "ToolCallCreatedEvent",
+    "ToolCallIntentEvent",
     "ToolCallRuntimeUpdateEvent",
     "ToolCallStatusChangedEvent",
-    "ToolCallsSettledEvent",
-    "InputConsumedEvent",
     "WorkflowEvent",
     "WorkflowEventEnvelope",
 ]

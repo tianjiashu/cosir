@@ -16,15 +16,9 @@ from app.core.agents.model_settings import ModelSettings
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.models import ConversationRunRecord
-from app.models.agent_team.state.agent_team_run_components import AgentTeamRunRuntime
 from app.models.conversation_run_options import ReasoningEffort
 from app.models.model_config_record import ModelConfigRecord
 from app.service.depends import get_model_config_service, get_task_service, get_workspace_service
-
-# Team 节点 Task 的 ``extra`` 里存放确认时冻结的节点快照（``AgentTeamRunRuntime``）的键：协调器创建
-# 节点 Task 时写入，:meth:`AgentRuntimeConfig.for_run` 每次驱动节点 Run 时读回，交接与重启后的
-# 恢复都只依赖这份持久化事实，不在内存中传递节点定义。
-NODE_SNAPSHOT_KEY = "agent_team_profile_snapshot"
 
 
 @dataclass(frozen=True)
@@ -81,13 +75,12 @@ class AgentRuntimeConfig:
         if run.model_config_id is None:
             raise RuntimeError(f"run {run.id} has no model config")
         model_config = get_model_config_service().get_config(run.model_config_id)
-        node_snapshot = (task.extra or {}).get(NODE_SNAPSHOT_KEY)
-        if node_snapshot is None:
+        node = task.extra.team_node
+        if node is None:
             return cls.resolve(
                 definition, model_config, reasoning_effort=run.options.reasoning_effort
             )
-        # 快照由准备阶段整份写入（角色与输出契约必有），不为缺省值设回落。
-        node = AgentTeamRunRuntime.model_validate(node_snapshot)
+        # Task 只保存节点执行配置；身份和模型由本 Run 决定。
         return cls(
             agent_id=definition.agent_id,
             agent_type=definition.agent_type,

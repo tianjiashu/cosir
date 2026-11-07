@@ -13,7 +13,7 @@ from app.core.tool.schemas import (
     TOOL_DELEGATE_TASK,
     TOOL_FORK_TASK,
 )
-from app.models.task_kind import DerivationKind
+from app.models.task_kind import DerivationKind, TaskType
 from app.models.task_record import TaskRecord
 
 
@@ -22,15 +22,15 @@ class Derivation:
     """一种派生方式：发起它的工具、建出的 Task 类型，与新 Task 深度相对发起方的增量。"""
 
     tool: str
-    creates: str
+    creates: TaskType
     depth_step: int
 
 
 DERIVATIONS: dict[DerivationKind, Derivation] = {
-    "delegate": Derivation(tool=TOOL_DELEGATE_TASK, creates="delegate_task", depth_step=1),
-    "fork": Derivation(tool=TOOL_FORK_TASK, creates="fork", depth_step=1),
+    "delegate": Derivation(tool=TOOL_DELEGATE_TASK, creates=TaskType.AGENT_TASK, depth_step=1),
+    "fork": Derivation(tool=TOOL_FORK_TASK, creates=TaskType.AGENT_FORK, depth_step=1),
     # Team 是多个主 Agent 按固定流程协同，不是嵌套：节点与主 Task 同层，节点再委派出去才加深。
-    "team": Derivation(tool=TOOL_AGENT_TEAM, creates="agent_team_node", depth_step=0),
+    "team": Derivation(tool=TOOL_AGENT_TEAM, creates=TaskType.TEAM_NODE_TASK, depth_step=0),
 }
 
 

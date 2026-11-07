@@ -282,6 +282,7 @@ class AgentTeamRunTool(HandlerBase):
         """构造 Team 执行工具定义。"""
 
         return ToolDefinition(
+            conversation_presentation="standalone",
             name=self.name,
             group=self.group,
             description=self.description,

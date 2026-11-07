@@ -4,6 +4,10 @@
 part 联合类型 ConversationStatePart 以及工具调用状态枚举 ToolCallStatus。
 """
 
+from .conversation_state_agent_message_part import (
+    ConversationStateAgentMessagePart,
+    ConversationStateMessageSource,
+)
 from .conversation_state_file_part import ConversationStateFilePart
 from .conversation_state_image_part import ConversationStateImagePart
 from .conversation_state_text_part import ConversationStateTextPart
@@ -18,12 +22,15 @@ ConversationStatePart = (
     | ConversationStateImagePart
     | ConversationStateFilePart
     | ConversationStateToolCallPart
+    | ConversationStateAgentMessagePart
 )
 
 __all__ = [
     "ConversationBackgroundWork",
+    "ConversationStateAgentMessagePart",
     "ConversationStateFilePart",
     "ConversationStateImagePart",
+    "ConversationStateMessageSource",
     "ConversationStatePart",
     "ConversationStateTextPart",
     "ConversationStateToolCallPart",

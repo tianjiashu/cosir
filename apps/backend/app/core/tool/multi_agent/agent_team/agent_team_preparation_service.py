@@ -22,6 +22,7 @@ from app.core.tool.multi_agent.task_tool_scope import tools_for_task
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.agent_team.configuration.team_node_definition import TeamNodeDefinition
 from app.models.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
+from app.models.task_kind import TaskType
 from app.service.depends import get_model_config_service, get_task_service
 
 
@@ -72,7 +73,7 @@ def materialize_node_tools(profile: AgentProfile, *, depth: int) -> list[str]:
     ]
     kept = {
         definition.name
-        for definition in tools_for_task("agent_team_node", definitions, depth=depth)
+        for definition in tools_for_task(TaskType.TEAM_NODE_TASK, definitions, depth=depth)
     }
     registered = {definition.name for definition in definitions}
     return [name for name in profile.allowed_tools if name in kept or name not in registered]

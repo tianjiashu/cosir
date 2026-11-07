@@ -65,7 +65,7 @@ def run_child(
     try:
         enqueue()
     except Exception:
-        background_registry.discard(tool_call_id)
+        background_registry.discard(execution_context.task_id, tool_call_id)
         raise
     _start_waiting(
         job, waiting, child_task_id, tool_call_id,
