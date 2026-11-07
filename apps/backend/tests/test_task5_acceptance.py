@@ -20,7 +20,9 @@ from app.assistant_transport.service.conversation_task_state_service import (
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
+from app.config import configuration
 from app.core.events import AssistantTextDeltaEvent
+from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
@@ -33,6 +35,14 @@ from app.service.recover_service import RecoverService
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.store_engines import APP_MODELS, initialize_app_schema
+
+
+# 本组测试使用独立 canonical_store；只需呈现目录，不再创建第二套存储环境。
+@pytest.fixture(autouse=True)
+def presentation_registry(monkeypatch):
+    """历史工具缺少当前定义时使用规范的默认呈现策略。"""
+    monkeypatch.setattr(configuration, "_TOOL_REGISTRY", ToolRegistry())
+
 
 _USAGE = {
     "input_tokens": 10,
@@ -84,8 +94,7 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
 
 
 def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = None) -> None:
-    """写入 canonical 用户、assistant 和工具消息，工具元数据使用 Transport 终态口径。
-    """
+    """写入 canonical 用户、assistant 和工具消息，工具元数据使用 Transport 终态口径。"""
 
     _append(store, run.id, {"role": "user", "content": f"user-{run.id}"})
     _append(
@@ -281,7 +290,8 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
     # 终态落库先于投影：投影失败向上传播，但已提交的 Run 事实与用量必须完好。
     with pytest.raises(RuntimeError, match="SSE failed after commit"):
         service.transition(
-            run.id, RunTransition.COMPLETE,
+            run.id,
+            RunTransition.COMPLETE,
             final_output="durable final summary",
             usage_stats=stats,
         )
@@ -320,6 +330,7 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
     projector = ConversationEventProjector(state_service=store.state)
     projector.process(
         AssistantTextDeltaEvent(
+            source_sequence=1,
             event_id="live-delta",
             task_id=store.task.id,
             run_id=run.id,
@@ -352,8 +363,7 @@ def test_real_sqlite_fork_preserves_canonical_identity(
             {source_run.id: target_run.id},
             session,
             max_sequence=max(
-                row.sequence
-                for row in store.contexts.get(store.task.id, include_in_context=False)
+                row.sequence for row in store.contexts.get(store.task.id, include_in_context=False)
             ),
         )
     assert target.current_run_id is None

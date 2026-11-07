@@ -45,6 +45,7 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
 
 def _context(tmp_path: Path, tool_call_id: str) -> ToolExecutionContext:
     return ToolExecutionContext(
+        call_intent="test",
         step_id="step-1",
         task_id=_TASK_ID,
         workspace_id=1,
@@ -63,7 +64,7 @@ def _wait_for(predicate, timeout: float = 5.0) -> None:
 
 def test_foreground_command_returns_its_result_without_registering(tmp_path, delivered) -> None:
     observation = ExecuteTerminalTool().execute(
-        description="test", command="echo hello", execution_context=_context(tmp_path, "call-fg")
+        command="echo hello", execution_context=_context(tmp_path, "call-fg")
     )
     assert observation.status == "success" and not observation.background
     assert observation.content.startswith("[exit_code=0]") and "hello" in observation.content
@@ -73,7 +74,7 @@ def test_foreground_command_returns_its_result_without_registering(tmp_path, del
 
 def test_background_command_returns_a_placeholder_then_delivers(tmp_path, delivered) -> None:
     observation = ExecuteTerminalTool().execute(
-        description="test", command="sleep 0.2; echo done",
+        command="sleep 0.2; echo done",
         background=True,
         execution_context=_context(tmp_path, "call-bg"),
     )
@@ -108,7 +109,6 @@ def test_detached_foreground_command_keeps_running_without_suspending(tmp_path, 
         target=lambda: box.setdefault(
             "observation",
             ExecuteTerminalTool().execute(
-                description="test",
                 command="sleep 0.5; echo late",
                 execution_context=_context(tmp_path, "call-detach"),
             ),
@@ -128,7 +128,6 @@ def test_detached_foreground_command_keeps_running_without_suspending(tmp_path, 
 def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delivered) -> None:
     marker = tmp_path / "finished"
     ExecuteTerminalTool().execute(
-        description="test",
         command=f"sleep 2; touch {marker}",
         background=True,
         execution_context=_context(tmp_path, "call-cancel"),
@@ -148,7 +147,6 @@ def test_background_payload_goes_through_the_output_budget(
 
     monkeypatch.setattr(execute_terminal_module, "ToolOutputBudget", lambda: ToolOutputBudget(200))
     ExecuteTerminalTool().execute(
-        description="test",
         command="seq 1 2000",
         background=True,
         execution_context=_context(tmp_path, "call-big"),
@@ -177,7 +175,7 @@ def test_parent_stop_retains_real_output_without_delivery(tmp_path, delivered) -
     )
     marker = tmp_path / "ready"
     ExecuteTerminalTool().execute(
-        description="partial output", command=f"printf '已收集\\n'; touch '{marker}'; sleep 10",
+        command=f"printf '已收集\\n'; touch '{marker}'; sleep 10",
         background=True, execution_context=_context(tmp_path, "call-parent-stop"),
     )
     _wait_for(marker.exists)
@@ -192,7 +190,7 @@ def test_parent_stop_retains_real_output_without_delivery(tmp_path, delivered) -
 
 def test_timeout_retains_real_output(tmp_path) -> None:
     result = ExecuteTerminalTool().execute(
-        description="timeout", command="printf 'before-timeout\\n'; sleep 10", timeout=0.2,
+        command="printf 'before-timeout\\n'; sleep 10", timeout=0.2,
         execution_context=_context(tmp_path, "call-timeout-output"),
     )
     assert result.status == "error"
@@ -206,7 +204,7 @@ def test_foreground_cancel_retains_real_output(tmp_path) -> None:
     with ThreadPoolExecutor(max_workers=1) as executor:
         result = executor.submit(
             ExecuteTerminalTool().execute,
-            description="cancel", command=f"printf 'before-cancel\\n'; touch '{marker}'; sleep 10",
+            command=f"printf 'before-cancel\\n'; touch '{marker}'; sleep 10",
             execution_context=_context(tmp_path, "call-cancel-output"),
         )
         _wait_for(marker.exists)

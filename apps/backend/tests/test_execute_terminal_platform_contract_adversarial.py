@@ -185,7 +185,7 @@ def test_valid_arguments_without_shell_pass_and_match_execute_signature(
 
     definition = ExecuteTerminalTool().to_definition()
     result = validate_tool_arguments(
-        {"description": "test", "command": "echo hi"},
+        {"command": "echo hi"},
         definition.parameters_schema,
         definition.args_model,
     )
@@ -202,7 +202,7 @@ def test_windows_rejects_posix_shell_through_validation_gate() -> None:
     """Windows 上 shell='zsh' 必须被门禁拒收（否则下发必然失败的调用）。"""
 
     result = validate_tool_arguments(
-        {"description": "test", "command": "echo hi", "shell": "zsh"},
+        {"command": "echo hi", "shell": "zsh"},
         {},
         WindowsExecuteTerminalArgs,
     )
@@ -214,7 +214,7 @@ def test_macos_rejects_windows_shell_through_validation_gate() -> None:
     """macOS 上 shell='cmd' 必须被门禁拒收。"""
 
     result = validate_tool_arguments(
-        {"description": "test", "command": "echo hi", "shell": "cmd"},
+        {"command": "echo hi", "shell": "cmd"},
         {},
         MacExecuteTerminalArgs,
     )
@@ -227,7 +227,7 @@ def test_validation_rejects_unknown_field(model: type[BaseModel]) -> None:
     """extra='forbid'：未知字段必须被拒，否则拼写错误的参数会被静默丢弃。"""
 
     result = validate_tool_arguments(
-        {"description": "test", "command": "echo hi", "shelll": "auto"},
+        {"command": "echo hi", "shelll": "auto"},
         {},
         model,
     )
@@ -240,7 +240,7 @@ def test_validation_rejects_zero_and_negative_timeout(model: type[BaseModel]) ->
     """timeout 必须严格 > 0；0 或负数意味着立即强杀，不能放行。"""
 
     for bad in (0, -1):
-        result = validate_tool_arguments({"description": "test", "command": "echo hi", "timeout": bad}, {}, model)
+        result = validate_tool_arguments({"command": "echo hi", "timeout": bad}, {}, model)
         assert result.ok is False, f"timeout={bad} 未被拒收"
         assert "timeout" in result.error
 
@@ -251,7 +251,7 @@ def test_validation_rejects_empty_command_and_non_object_payload(
 ) -> None:
     """command 的 min_length=1 与非对象入参都必须被拒，不得静默放行空命令。"""
 
-    empty = validate_tool_arguments({"description": "test", "command": ""}, {}, model)
+    empty = validate_tool_arguments({"command": ""}, {}, model)
     assert empty.ok is False
     assert "command" in empty.error
 
@@ -265,7 +265,7 @@ def test_validation_is_strict_about_shell_subtype(model: type[BaseModel]) -> Non
 
     for bad in (None, True, 0):
         result = validate_tool_arguments(
-            {"description": "test", "command": "echo hi", "shell": bad}, {}, model
+            {"command": "echo hi", "shell": bad}, {}, model
         )
         assert result.ok is False, f"shell={bad!r} 被错误放行"
 
@@ -274,7 +274,7 @@ def test_validation_reports_all_issues_at_once() -> None:
     """错误信息应聚合多字段问题，便于模型一次修正（门禁契约）。"""
 
     result = validate_tool_arguments(
-        {"description": "test", "shell": "zsh", "timeout": 0},
+        {"shell": "zsh", "timeout": 0},
         {},
         WindowsExecuteTerminalArgs,
     )
@@ -362,7 +362,6 @@ def test_all_field_descriptions_are_nonempty_english_and_stop_with_period(
 
     properties = model.model_json_schema()["properties"]
     assert set(properties) == {
-        "description",
         "shell",
         "command",
         "timeout",
@@ -608,9 +607,8 @@ def test_resolver_result_is_usable_as_args_model_directly() -> None:
     """平台入口返回的类必须可直接作为 args_model 使用（含 model_dump 归一化）。"""
 
     resolved = resolve_execute_terminal_args_model("Windows")
-    inst = resolved.model_validate({"description": "test", "command": "dir"})
+    inst = resolved.model_validate({"command": "dir"})
     assert inst.model_dump() == {
-        "description": "test",
         "shell": "auto",
         "command": "dir",
         "timeout": None,
@@ -635,7 +633,7 @@ def test_platform_models_reject_every_foreign_shell_literal(
     """逐项确认每个平台类都拒收对端 Literal（不能只有一个词被拦住）。"""
 
     result = validate_tool_arguments(
-        {"description": "test", "command": "echo hi", "shell": forbidden_value},
+        {"command": "echo hi", "shell": forbidden_value},
         {},
         model,
     )
@@ -686,7 +684,7 @@ def test_accepted_shells_match_declared_literals(model: type[BaseModel]) -> None
     )
     for value in literals:
         result = validate_tool_arguments(
-            {"description": "test", "command": "echo hi", "shell": value}, {}, model
+            {"command": "echo hi", "shell": value}, {}, model
         )
         detail = f"{model.__name__} 拒绝了自身声明的 shell={value!r}: {result.error}"
         assert result.ok is True, detail
@@ -697,7 +695,7 @@ def test_extra_forbid_covers_all_known_fields_not_only_shell() -> None:
 
     for typo in ("commandd", "timeoutt", "workdirr"):
         result = validate_tool_arguments(
-            {"description": "test", "command": "x", typo: "y"},
+            {"command": "x", typo: "y"},
             {},
             WindowsExecuteTerminalArgs,
         )
@@ -790,7 +788,7 @@ def test_execute_reports_unavailable_shell_before_any_execution(
     )
 
     obs = tool.execute(  # noqa: S604 - 显式 shell 取值，harness 不启动真实 shell
-        description="test", command="echo hi", shell="powershell", execution_context=context
+        command="echo hi", shell="powershell", execution_context=context
     )
     assert obs.status == "error"
     assert "not available on this host" in obs.content

@@ -59,9 +59,9 @@ class _ModelHarness:
         self.runtime_config = runtime_stub(
             admitted_tools=frozenset({"read_file"}),
             tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
-            run_state=run_state_stub(transition=lambda _run_id, transition, **kw: transition_run(
-                transition, **kw
-            )),
+            run_state=run_state_stub(
+                transition=lambda _run_id, transition, **kw: transition_run(transition, **kw)
+            ),
             model=SimpleNamespace(stream=self._astream),
             usage_stats=SimpleNamespace(
                 add_usage_metadata=lambda _metadata: None,
@@ -80,6 +80,8 @@ class _ModelHarness:
                     assistant_message(snapshot.choices[0].message, registered_tool_names)
                 )
 
+            return SimpleNamespace(sequence=1)
+
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
             add_message=add_message,
@@ -95,8 +97,11 @@ class _ModelHarness:
 def _patch_model_runtime(monkeypatch: Any, harness: _ModelHarness) -> None:
     """把流式投影依赖绑定到测试桩。"""
 
-    monkeypatch.setattr(model_module.service_depends, "get_conversation_task_context_service",
-                        lambda: SimpleNamespace(run_awaits_background=lambda *_: False))
+    monkeypatch.setattr(
+        model_module.service_depends,
+        "get_conversation_task_context_service",
+        lambda: SimpleNamespace(run_awaits_background=lambda *_: False),
+    )
     monkeypatch.setattr(streaming_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "emit", harness.events.append)
 
@@ -192,7 +197,11 @@ def test_finish_reason_completes_final_response(monkeypatch: Any) -> None:
     # 最终回答在产出节点就地落定 completed，不再由 loop 二次落库。
     assert harness.completed is True
     assert harness.failed is False
-    assert harness.completion_fields == {"final_output": "已完成回答。", "end_reason": "stop"}
+    assert harness.completion_fields == {
+        "response_sequence": 1,
+        "final_output": "已完成回答。",
+        "end_reason": "stop",
+    }
     assert [item["role"] for item in harness.messages] == ["assistant"]
 
 
@@ -214,6 +223,7 @@ def test_any_finish_reason_without_tool_calls_completes_run(
     assert harness.completed is True
     assert harness.failed is False
     assert harness.completion_fields == {
+        "response_sequence": 1,
         "final_output": "回答到一半",
         "end_reason": finish_reason,
     }
@@ -257,7 +267,11 @@ def test_empty_content_with_finish_reason_completes_run(monkeypatch: Any) -> Non
     assert result["next_node"] is ReactRoute.END
     assert harness.completed is True
     assert harness.failed is False
-    assert harness.completion_fields == {"final_output": "", "end_reason": "stop"}
+    assert harness.completion_fields == {
+        "response_sequence": 1,
+        "final_output": "",
+        "end_reason": "stop",
+    }
 
 
 def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
@@ -273,7 +287,6 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
 
     assert result["next_node"] is ReactRoute.END
     assert harness.completed is True
-
 
 
 @pytest.mark.parametrize("arguments", ['{"path":', "[1]", "null", '{"n":NaN}'])
@@ -336,9 +349,14 @@ def test_tool_calls_take_priority_over_finish_reason(monkeypatch, finish_reason)
 def test_model_phase_tracks_output_channels_and_clears_after_failure(monkeypatch):
     from app.core.events import ModelActivityEvent
 
-    harness = _ModelHarness(sdk_completion("答复", reasoning_content="推理"), [
-        {"reasoning_content": "推"}, {"reasoning_content": "理"}, {"content": "答复"},
-    ])
+    harness = _ModelHarness(
+        sdk_completion("答复", reasoning_content="推理"),
+        [
+            {"reasoning_content": "推"},
+            {"reasoning_content": "理"},
+            {"content": "答复"},
+        ],
+    )
     harness.runtime_config.thinking_channel = "reasoning_content"
     _patch_model_runtime(monkeypatch, harness)
     monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
@@ -347,6 +365,7 @@ def test_model_phase_tracks_output_channels_and_clears_after_failure(monkeypatch
     phases = [event.phase for event in harness.events if isinstance(event, ModelActivityEvent)]
     assert phases == ["waiting", "reasoning", "responding", None]
     from app.core.events import AssistantTextDeltaEvent
+
     assert all(e.part == "text" for e in harness.events if isinstance(e, AssistantTextDeltaEvent))
     assert harness.saved_responses[-1][0].choices[0].message.reasoning_content == "推理"
 
@@ -359,3 +378,56 @@ def test_model_phase_tracks_output_channels_and_clears_after_failure(monkeypatch
     with pytest.raises(RuntimeError, match="stream failed"):
         asyncio.run(model_module._model_node(_state()))
     assert [event.phase for event in harness.events] == ["waiting", None]
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [('{"intent":"核对配置","path":"a"}', "核对配置"), ('{"intent":"核对配置",', None)],
+)
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_intent_survives_model_stream_failure_or_cancellation(
+    monkeypatch, raw, expected, cancelled
+):
+    """真实 model_node finally 在中断时发布原参数意图，不把草稿变成有效执行输入。"""
+    from app.core.events import ToolCallIntentEvent
+    from app.core.workflow.node_helper.common import RunStopped
+
+    response = sdk_completion(
+        tool_calls=[
+            {"id": "call", "type": "function", "function": {"name": "read_file", "arguments": raw}}
+        ],
+        finish_reason=None,
+    )
+    harness = _ModelHarness(response)
+    _patch_model_runtime(monkeypatch, harness)
+    monkeypatch.setattr(model_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
+    monkeypatch.setattr(
+        model_module.service_depends,
+        "get_conversation_run_ledger",
+        lambda: SimpleNamespace(transition=lambda *a, **kw: None),
+    )
+
+    async def interrupted(_messages, **kwargs):
+        yield sdk_event(
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": raw},
+                    }
+                ]
+            },
+            response,
+        )
+        raise RunStopped() if cancelled else RuntimeError("stream interrupted")
+
+    harness.runtime_config.model.stream = interrupted
+    with pytest.raises(RunStopped if cancelled else RuntimeError):
+        asyncio.run(model_module._model_node(_state()))
+    intents = [event for event in harness.events if isinstance(event, ToolCallIntentEvent)]
+    assert len(intents) == 1 and intents[0].intent == expected
+    assert harness.saved_responses[-1][0].choices[0].message.tool_calls[0].function.arguments == raw
+    assert not harness.saved_responses[-1][1]

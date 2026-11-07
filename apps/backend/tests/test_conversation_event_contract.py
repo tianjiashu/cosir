@@ -21,6 +21,7 @@ from app.core.events import (
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
+    ToolCallIntentEvent,
     ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
     WorkflowEvent,
@@ -78,6 +79,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     (
         {
             "type": "assistant_text_delta",
+            "source_sequence": 1,
             "task_id": 1,
             "run_id": 1,
             "step_id": "step-2",
@@ -87,7 +89,13 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
         AssistantTextDeltaEvent,
     ),
     (
-        {"type": "assistant_part_closed", "task_id": 1, "run_id": 1, "part": "text"},
+        {
+            "type": "assistant_part_closed",
+            "source_sequence": 1,
+            "task_id": 1,
+            "run_id": 1,
+            "part": "text",
+        },
         AssistantPartClosedEvent,
     ),
     (
@@ -99,6 +107,11 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
             "tool_name": "read_file",
         },
         ToolCallCreatedEvent,
+    ),
+    (
+        {"type": "tool_call_intent", "task_id": 1, "run_id": 1,
+         "tool_call_id": "1:step-2:0", "intent": "核对配置"},
+        ToolCallIntentEvent,
     ),
     (
         {
@@ -205,9 +218,17 @@ def test_envelope_defaults_and_optional_fields() -> None:
             "message_id": "message-1",
             "parts": [],
         },
-        {"type": "assistant_text_delta", "task_id": 1, "run_id": 1, "part": "text", "delta": ""},
         {
             "type": "assistant_text_delta",
+            "source_sequence": 1,
+            "task_id": 1,
+            "run_id": 1,
+            "part": "text",
+            "delta": "",
+        },
+        {
+            "type": "assistant_text_delta",
+            "source_sequence": 1,
             "task_id": 1,
             "run_id": 1,
             "part": "unknown",

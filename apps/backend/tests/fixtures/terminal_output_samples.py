@@ -24,8 +24,9 @@ def collect() -> dict[str, object]:
             ("timeout", "printf 'before timeout\\n'; sleep 5", 0.2),
         ]:
             result = ExecuteTerminalTool().execute(
-                description="真实输出验证", command=command, timeout=timeout,
+                command=command, timeout=timeout,
                 execution_context=ToolExecutionContext(
+        call_intent="test",
                     task_id=9042, run_id=1, workspace_id=1, workspace_root=Path(directory),
                     step_id="fixture", tool_call_id=f"fixture-{name}",
                 ),

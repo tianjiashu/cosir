@@ -1,6 +1,5 @@
 """Current model activity is distinct from conversation content and Run lifecycle."""
 
-from app.assistant_transport.projection.message_event_projection import plan_assistant_text_delta
 from app.assistant_transport.projection.model_activity_projection import plan_model_activity
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
 from app.core.events import AssistantTextDeltaEvent, ModelActivityEvent
@@ -32,5 +31,8 @@ def test_terminal_run_ignores_activity_and_reasoning_never_becomes_content():
     )
     import pytest
     from pydantic import ValidationError
+
     with pytest.raises(ValidationError):
-        AssistantTextDeltaEvent(task_id=1, run_id=1, part="reasoning", delta="private reasoning")
+        AssistantTextDeltaEvent(
+            source_sequence=1, task_id=1, run_id=1, part="reasoning", delta="private reasoning"
+        )

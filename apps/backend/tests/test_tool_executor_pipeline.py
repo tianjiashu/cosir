@@ -148,7 +148,7 @@ def test_unknown_tool_returns_denial_observation(tmp_path: Path) -> None:
     executor = _make_executor(tmp_path)
     observation = _execute(
         executor,
-        ToolCall(tool_name="no_such_tool", arguments='{}', call_id="call-1"),
+        ToolCall(tool_name="no_such_tool", arguments='{"intent": "验证工具行为"}', call_id="call-1"),
         _make_context(tmp_path),
     )
 
@@ -168,7 +168,7 @@ def test_profile_denied_tool(tmp_path: Path) -> None:
     executor = _make_executor(tmp_path)
     observation = _execute(
         executor,
-        ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-2"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-2"),
         _make_context(tmp_path),
         allowed_tool_names={"other_tool"},
     )
@@ -185,7 +185,7 @@ def test_invalid_arguments_rejected(tmp_path: Path) -> None:
     executor = _make_executor(tmp_path)
     observation = _execute(
         executor,
-        ToolCall(tool_name="read_file", arguments='{"nonexistent_field": 1}', call_id="call-3"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "nonexistent_field": 1}', call_id="call-3"),
         _make_context(tmp_path),
     )
 
@@ -215,7 +215,7 @@ def test_execute_success_returns_budgeted_observation(tmp_path: Path) -> None:
     executor = _make_executor(tmp_path)
     observation = _execute(
         executor,
-        ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-4"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-4"),
         _make_context(tmp_path),
     )
 
@@ -234,7 +234,7 @@ def test_file_write_executes_without_change_tracking_service(tmp_path: Path) -> 
         executor,
         ToolCall(
             tool_name="write_file",
-            arguments='{"path": "created.txt", "content": "untracked"}',
+            arguments='{"intent": "验证工具行为", "path": "created.txt", "content": "untracked"}',
             call_id="call-write-without-service",
         ),
         _make_context(tmp_path),
@@ -267,7 +267,7 @@ def test_denial_observation_passes_through_budget(
     executor = _make_executor(tmp_path)
     _execute(
         executor,
-        ToolCall(tool_name="no_such_tool", arguments='{}', call_id="call-6"),
+        ToolCall(tool_name="no_such_tool", arguments='{"intent": "验证工具行为"}', call_id="call-6"),
         _make_context(tmp_path),
     )
 
@@ -295,7 +295,7 @@ def test_gate_modified_arguments_flow_to_handler(tmp_path: Path) -> None:
         executor = _make_executor(tmp_path)
         observation = _execute(
         executor,
-            ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-7"),
+            ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-7"),
             _make_context(tmp_path),
         )
     finally:
@@ -313,7 +313,7 @@ def test_gate_evaluate_unknown_tool(tmp_path: Path) -> None:
     registry = ToolRegistry([ReadFileTool().to_definition()])
     gate = ToolAccessGate(registry)
     outcome = gate.evaluate(
-        ToolCall(tool_name="ghost", arguments='{}', call_id="call-8"),
+        ToolCall(tool_name="ghost", arguments='{"intent": "验证工具行为"}', call_id="call-8"),
         _make_context(tmp_path),
     )
 
@@ -365,7 +365,7 @@ def test_running_emitted_once_before_handler(
     executor = _make_executor(tmp_path)
     observation = _execute(
         executor,
-        ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-start"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-start"),
         _make_context(tmp_path),
     )
 
@@ -381,7 +381,7 @@ def test_running_event_carries_call_identity_and_display_arguments(
     executor = _make_executor(tmp_path)
     _execute(
         executor,
-        ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-args"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-args"),
         _make_context(tmp_path),
     )
 
@@ -396,10 +396,10 @@ def test_running_event_carries_call_identity_and_display_arguments(
 @pytest.mark.parametrize(
     ("call", "allowed"),
     [
-        (ToolCall(tool_name="no_such_tool", arguments="{}", call_id="c"), None),
-        (ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="c"), set()),
+        (ToolCall(tool_name="no_such_tool", arguments='{"intent": "验证工具行为"}', call_id="c"), None),
+        (ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="c"), set()),
         (ToolCall(tool_name="read_file", arguments='{"path":', call_id="c"), None),
-        (ToolCall(tool_name="read_file", arguments='{"nonexistent_field": 1}', call_id="c"), None),
+        (ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "nonexistent_field": 1}', call_id="c"), None),
     ],
     ids=["unknown_tool", "disallowed", "malformed_json", "invalid_schema"],
 )

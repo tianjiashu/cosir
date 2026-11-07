@@ -327,7 +327,6 @@ def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path)
         pytest.skip("terminal worker not built")
     marker = tmp_path / "started"
     ExecuteTerminalTool().execute(
-        description="stop integration",
         command=f"printf '完整取消输出\\n'; touch '{marker}'; sleep 10",
         background=True, execution_context=ToolExecutionContext(
             task_id=stored.task_id, run_id=None, workspace_id=1, workspace_root=tmp_path,

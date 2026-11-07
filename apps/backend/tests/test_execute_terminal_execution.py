@@ -83,8 +83,9 @@ def delivered(monkeypatch):
 
 def _execute(tmp_path: Path, *, background=False, call_id="call-1", tool=None):
     return (tool or ExecuteTerminalTool()).execute(
-        description="test command", command=call_id, background=background,
+        command=call_id, background=background,
         execution_context=ToolExecutionContext(
+        call_intent="test command",
             task_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
             step_id="step-1", tool_call_id=call_id,
         ),

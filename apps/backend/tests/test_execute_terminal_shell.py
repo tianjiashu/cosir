@@ -23,21 +23,21 @@ from tests.terminal_test_support import requires_terminal_worker
 def test_windows_args_default_to_auto_and_reject_posix_shells() -> None:
     """Windows 参数模型默认 auto，并在校验层拒收 POSIX 专属 shell。"""
 
-    args = WindowsExecuteTerminalArgs(description="test", command="echo hello")
+    args = WindowsExecuteTerminalArgs(command="echo hello")
 
     assert args.shell == "auto"
     with pytest.raises(ValidationError):
-        WindowsExecuteTerminalArgs(description="test", command="echo hello", shell="zsh")  # noqa: S604
+        WindowsExecuteTerminalArgs(command="echo hello", shell="zsh")  # noqa: S604
 
 
 def test_macos_args_default_to_auto_and_reject_windows_shells() -> None:
     """macOS 参数模型默认 auto，并在校验层拒收 Windows 专属 shell。"""
 
-    args = MacExecuteTerminalArgs(description="test", command="echo hello")
+    args = MacExecuteTerminalArgs(command="echo hello")
 
     assert args.shell == "auto"
     with pytest.raises(ValidationError):
-        MacExecuteTerminalArgs(description="test", command="echo hello", shell="cmd")  # noqa: S604
+        MacExecuteTerminalArgs(command="echo hello", shell="cmd")  # noqa: S604
 
 
 def test_platform_resolver_selects_args_model_by_system_name() -> None:

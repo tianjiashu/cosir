@@ -122,7 +122,7 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
     gate = ToolAccessGate(registry)
     outcome = gate.evaluate(
         ToolCall(
-            tool_name="read_file", arguments='{"nonexistent_field": 1}', call_id="call-disabled"
+            tool_name="read_file", arguments='{"intent": "验证工具行为", "nonexistent_field": 1}', call_id="call-disabled"
         ),
         execution_context=_execution_context(tmp_path),
         allowed_tool_names={"other_tool"},  # read_file 已注册但本轮被禁用
@@ -147,7 +147,7 @@ def test_t2_disabled_with_valid_args_yields_disabled_denial(tmp_path: Any) -> No
     registry = ToolRegistry([ReadFileTool().to_definition()])
     gate = ToolAccessGate(registry)
     outcome = gate.evaluate(
-        ToolCall(tool_name="read_file", arguments='{"path": "a.txt"}', call_id="call-disabled-2"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "a.txt"}', call_id="call-disabled-2"),
         execution_context=_execution_context(tmp_path),
         allowed_tool_names={"other_tool"},
     )
@@ -168,7 +168,7 @@ def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
     registry = ToolRegistry([ReadFileTool().to_definition()])
     gate = ToolAccessGate(registry)
     outcome = gate.evaluate(
-        ToolCall(tool_name="ghost_tool", arguments='{}', call_id="call-ghost"),
+        ToolCall(tool_name="ghost_tool", arguments='{"intent": "验证工具行为"}', call_id="call-ghost"),
         execution_context=_execution_context(tmp_path),
         allowed_tool_names=set(),  # 连空白名单都要先让位给「注册表未命中」
     )
@@ -202,7 +202,7 @@ def test_t2_pre_tool_use_hook_deny_and_argument_rewrite(
 
     monkeypatch.setattr(gate_module, "HookInterceptor", _DenyHook)
     denied = gate.evaluate(
-        ToolCall(tool_name="read_file", arguments='{"path": "a.txt"}', call_id="call-hook"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "a.txt"}', call_id="call-hook"),
         execution_context=_execution_context(tmp_path),
         allowed_tool_names={"read_file"},
     )
@@ -219,7 +219,7 @@ def test_t2_pre_tool_use_hook_deny_and_argument_rewrite(
 
     monkeypatch.setattr(gate_module, "HookInterceptor", _RewriteHook)
     rewritten = gate.evaluate(
-        ToolCall(tool_name="read_file", arguments='{"path": "a.txt"}', call_id="call-hook-2"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "a.txt"}', call_id="call-hook-2"),
         execution_context=_execution_context(tmp_path),
         allowed_tool_names={"read_file"},
     )

@@ -147,7 +147,6 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
                     "usage": None,
                     "contextWindowTotal": None,
                     "durationMs": None,
-                    "durationMs": None,
                 },
                 "source": None,
             }
@@ -173,7 +172,14 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
                 "role": "user",
                 "parts": [],
                 "runId": 1,
-                "outcome": {"status": "completed", "endReason": None, "error": None, "usage": None, "contextWindowTotal": None, "durationMs": None},
+                "outcome": {
+                    "status": "completed",
+                    "endReason": None,
+                    "error": None,
+                    "usage": None,
+                    "contextWindowTotal": None,
+                    "durationMs": None,
+                },
                 "source": None,
             }
         ],
@@ -214,7 +220,13 @@ def test_rebuild_keeps_interrupted_output_stopped_even_when_run_is_active() -> N
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
 
     assert state["messages"][0]["parts"] == [
-        {"type": "text", "text": "输出到一半", "status": "completed"}
+        {
+            "type": "text",
+            "text": "输出到一半",
+            "status": "completed",
+            "sourceSequence": 1,
+            "finalReply": False,
+        }
     ]
     validate_snapshot(state)
 
@@ -244,7 +256,13 @@ def test_rebuild_keeps_interrupted_output_when_run_is_cancelled() -> None:
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
 
     assert state["messages"][0]["parts"] == [
-        {"type": "text", "text": "输出到一半", "status": "completed"}
+        {
+            "type": "text",
+            "text": "输出到一半",
+            "status": "completed",
+            "sourceSequence": 1,
+            "finalReply": False,
+        }
     ]
 
 
@@ -395,16 +413,28 @@ def test_reasoning_stays_in_context_observation_but_not_cold_conversation() -> N
     from app.api.schemas.response.ContextMessageResponse import ContextMessageResponse
 
     timestamp = _timestamp()
-    run = ConversationRunRecord(id=1, task_id=7, status="completed", created_at=timestamp, updated_at=timestamp)
+    run = ConversationRunRecord(
+        id=1, task_id=7, status="completed", created_at=timestamp, updated_at=timestamp
+    )
     row = ConversationTaskContextRecord(
-        task_id=7, run_id=1, sequence=1, include_in_context=True,
+        task_id=7,
+        run_id=1,
+        sequence=1,
+        include_in_context=True,
         message={"role": "assistant", "content": "结论", "reasoning_content": "推理原文"},
-        created_at=timestamp.isoformat(), updated_at=timestamp.isoformat(),
+        created_at=timestamp.isoformat(),
+        updated_at=timestamp.isoformat(),
     )
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
     validate_snapshot(state)
     assert state["messages"][0]["parts"] == [
-        {"type": "text", "text": "结论", "status": "completed"}
+        {
+            "type": "text",
+            "text": "结论",
+            "status": "completed",
+            "sourceSequence": 1,
+            "finalReply": False,
+        }
     ]
     assert "推理原文" not in json.dumps(state, ensure_ascii=False)
     assert ContextMessageResponse.from_record(row).reasoning_content == "推理原文"
@@ -412,11 +442,17 @@ def test_reasoning_stays_in_context_observation_but_not_cold_conversation() -> N
 
 
 @pytest.mark.usefixtures("backend_env")
-@pytest.mark.parametrize("name, expected", [
-    ("wait_messages", "quiet"), ("delegate_task", "standalone"),
-    ("fork_task", "standalone"), ("agent_team", "standalone"),
-    ("read_file", "activity"), ("removed_tool", "activity"),
-])
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("wait_messages", "quiet"),
+        ("delegate_task", "standalone"),
+        ("fork_task", "standalone"),
+        ("agent_team", "standalone"),
+        ("read_file", "activity"),
+        ("removed_tool", "activity"),
+    ],
+)
 def test_live_and_rebuilt_calls_share_definition_presentation(name, expected):
     from app.assistant_transport.projection.tool_call_event_projection import plan_tool_call_created
     from app.assistant_transport.projection.tool_presentation import presentation_catalog
@@ -427,19 +463,32 @@ def test_live_and_rebuilt_calls_share_definition_presentation(name, expected):
     catalog = presentation_catalog(registry)
     task = _task()
     task.current_run_id = 1
-    run = ConversationRunRecord(id=1, task_id=7, status="running", created_at=_timestamp(), updated_at=_timestamp())
+    run = ConversationRunRecord(
+        id=1, task_id=7, status="running", created_at=_timestamp(), updated_at=_timestamp()
+    )
     state = ConversationTaskStateRebuilder.rebuild(task, [run], [], catalog)
     mutations = plan_tool_call_created(
         ToolCallCreatedEvent(task_id=7, run_id=1, tool_call_id="call", tool_name=name),
-        state, catalog,
+        state,
+        catalog,
     )
     assert mutations[0].value["parts"][0]["presentation"] == expected
     row = ConversationTaskContextRecord(
-        task_id=7, run_id=1, sequence=1, include_in_context=True,
-        message={"role": "assistant", "content": "", "tool_calls": [{
-            "id": "call", "type": "function",
-            "function": {"name": name, "arguments": "{}"},
-        }]},
+        task_id=7,
+        run_id=1,
+        sequence=1,
+        include_in_context=True,
+        message={
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call",
+                    "type": "function",
+                    "function": {"name": name, "arguments": "{}"},
+                }
+            ],
+        },
     )
     rebuilt = ConversationTaskStateRebuilder.rebuild(task, [run], [row], catalog)
     validate_snapshot(rebuilt)

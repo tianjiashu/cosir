@@ -141,7 +141,7 @@ def _parallel_call(index: int) -> ToolCall:
     副作用:
         无。
     """
-    return ToolCall(tool_name=_PARALLEL_TOOL, arguments='{}', call_id=f"call-{index}")
+    return ToolCall(tool_name=_PARALLEL_TOOL, arguments='{"intent": "验证工具行为"}', call_id=f"call-{index}")
 
 
 def test_parallel_batch_does_not_block_event_loop() -> None:

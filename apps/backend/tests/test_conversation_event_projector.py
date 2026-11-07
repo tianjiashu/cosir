@@ -54,7 +54,6 @@ class InMemorySnapshotService:
         state = self.states.setdefault(task_id, empty_snapshot())
         return copy.deepcopy(state)
 
-
     def apply_planned(self, event: object) -> TransportFrame:
         """按生产口径投影一条事件：由事件自带 ``plan`` 产出 mutation 后落回进程内状态。"""
 
@@ -364,8 +363,13 @@ def test_assistant_text_and_reasoning_parts(
     event_projector, snapshots = projector
     _start(event_projector)
     from app.core.events import ModelActivityEvent
-    event_projector.process(ModelActivityEvent(task_id=1, run_id=1, step_id="step-1", phase="reasoning"))
-    event_projector.process(AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="答案"))
+
+    event_projector.process(
+        ModelActivityEvent(task_id=1, run_id=1, step_id="step-1", phase="reasoning")
+    )
+    event_projector.process(
+        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="答案")
+    )
     parts = _messages(snapshots.states[1], 1)[1]["parts"]
     assert [part["type"] for part in parts] == ["text"]
     assert parts[0]["text"] == "答案"
@@ -376,7 +380,9 @@ def test_duplicate_text_delta_is_not_appended_twice(
 ) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
-    event = AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="一次")
+    event = AssistantTextDeltaEvent(
+        source_sequence=1, task_id=1, run_id=1, part="text", delta="一次"
+    )
     first = event_projector.process(event)
     second = event_projector.process(event)
     assert first is not None and first.mutations
@@ -748,7 +754,9 @@ def test_model_chunk_event_becomes_assistant_transport_update() -> None:
     snapshots = InMemorySnapshotService()
     event_projector = ConversationEventProjector(snapshots)
     _start(event_projector)
-    event = AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="你好")
+    event = AssistantTextDeltaEvent(
+        source_sequence=1, task_id=1, run_id=1, part="text", delta="你好"
+    )
     change = event_projector.process(event)
     assert change is not None and change.mutations
 
@@ -790,7 +798,7 @@ def test_dedup_window_is_bounded_by_configured_limit(
     _start(event_projector)
     for _ in range(10):
         event_projector.process(
-            AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="x")
+            AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="x")
         )
     assert event_projector._dedup_window.size == 4
 
@@ -805,7 +813,9 @@ def test_dedup_window_is_not_keyed_by_task(monkeypatch: pytest.MonkeyPatch) -> N
         )
         _append_user_input(event_projector, task_id=task_id, run_id=task_id)
         event_projector.process(
-            AssistantTextDeltaEvent(task_id=task_id, run_id=task_id, part="text", delta="x")
+            AssistantTextDeltaEvent(
+                source_sequence=1, task_id=task_id, run_id=task_id, part="text", delta="x"
+            )
         )
     assert event_projector._dedup_window.size == 3
     assert len(snapshots.states) == 5
@@ -818,7 +828,9 @@ def test_duplicate_delta_event_is_dropped(
 
     event_projector, snapshots = projector
     _start(event_projector)
-    event = AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="abc")
+    event = AssistantTextDeltaEvent(
+        source_sequence=1, task_id=1, run_id=1, part="text", delta="abc"
+    )
     assert event_projector.process(event) is not None
     assert event_projector.process(event) is None
     parts = _messages(snapshots.states[1], 1)[1]["parts"]
@@ -831,7 +843,7 @@ def test_evicted_delta_is_no_longer_deduplicated(monkeypatch: pytest.MonkeyPatch
     event_projector, snapshots = _projector_with_window(2, monkeypatch)
     _start(event_projector)
     events = [
-        AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta=delta)
+        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta=delta)
         for delta in ("a", "b", "c")
     ]
     for event in events:
@@ -851,7 +863,7 @@ def test_duplicate_delta_drop_is_logged(
 
     event_projector, _ = projector
     _start(event_projector)
-    event = AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="a")
+    event = AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="a")
     event_projector.process(event)
     with caplog.at_level(logging.DEBUG):
         event_projector.process(event)
@@ -868,10 +880,10 @@ def test_window_eviction_is_logged(
     _start(event_projector)
     with caplog.at_level(logging.WARNING):
         event_projector.process(
-            AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="a")
+            AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="a")
         )
         event_projector.process(
-            AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="b")
+            AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="b")
         )
     assert "conversation_event_dedup_window_evicted" in caplog.text
 
@@ -883,7 +895,9 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
 
     event_projector, snapshots = projector
     _start(event_projector)
-    event_projector.process(AssistantTextDeltaEvent(task_id=1, run_id=1, part="text", delta="你好"))
+    event_projector.process(
+        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="你好")
+    )
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
@@ -902,7 +916,7 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
-        lambda: AssistantPartClosedEvent(task_id=1, run_id=1, part="text"),
+        lambda: AssistantPartClosedEvent(source_sequence=1, task_id=1, run_id=1, part="text"),
     )
 
 
@@ -1109,8 +1123,12 @@ def test_first_output_of_run_without_user_input_creates_leading_reply(
     _finish(event_projector, 1, ConversationRunStatus.COMPLETED)
     event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
 
-    event_projector.process(AssistantTextDeltaEvent(task_id=1, run_id=2, part="text", delta="结"))
-    event_projector.process(AssistantTextDeltaEvent(task_id=1, run_id=2, part="text", delta="论"))
+    event_projector.process(
+        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=2, part="text", delta="结")
+    )
+    event_projector.process(
+        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=2, part="text", delta="论")
+    )
     event_projector.process(
         ToolCallCreatedEvent(task_id=1, run_id=2, tool_call_id="call-9", tool_name="read_file")
     )

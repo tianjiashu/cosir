@@ -94,7 +94,7 @@ def _gate_outcome(supports_image: bool | None):
         task_id=1, workspace_id=1, workspace_root=Path("."), step_id="s", run_id=1, agent=agent
     )
     gate = ToolAccessGate(ToolRegistry([definition]))
-    return gate.evaluate(ToolCall("demo_capture", "{}", "call-1"), context)
+    return gate.evaluate(ToolCall("demo_capture", '{"intent":"检查图像"}', "call-1"), context)
 
 
 # 目的：判定只在准入一处；潜在缺陷：不看图的模型拿到截图请求失败，或每个出图工具各写一遍判断。

@@ -520,7 +520,7 @@ def test_success_emits_running_then_completed(
 
     observation = tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-ok"),
         "step-1",
 
         _NO_LOOP,
@@ -566,7 +566,7 @@ def test_running_is_emitted_only_after_admission(
     )
 
     tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-probe"), "s",  _NO_LOOP
+        rc, ToolCall(tool_name="probe", arguments='{"intent": "验证工具行为"}', call_id="call-probe"), "s",  _NO_LOOP
     )
 
     assert seen_during_handler == [["running"]]
@@ -585,7 +585,7 @@ def test_unknown_tool_emits_failed_without_running(
 
     observation = tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-unknown"),
+        ToolCall(tool_name="no_such_tool", arguments='{"intent": "验证工具行为"}', call_id="call-unknown"),
         "s",
 
         _NO_LOOP,
@@ -612,7 +612,7 @@ def test_profile_denied_tool_emits_failed_without_running(
 
     observation = tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-denied"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-denied"),
         "s",
 
         _NO_LOOP,
@@ -635,7 +635,7 @@ def test_invalid_arguments_emit_failed_without_running(
 
     observation = tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="read_file", arguments='{"nonexistent": 1}', call_id="call-bad"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "nonexistent": 1}', call_id="call-bad"),
         "s",
 
         _NO_LOOP,
@@ -698,7 +698,7 @@ def test_execute_call_specializes_context_per_call(
     )
 
     tool_batch_runner._execute_call(
-        rc, ToolCall(tool_name="probe", arguments="{}", call_id="call-a"), "s",  _NO_LOOP
+        rc, ToolCall(tool_name="probe", arguments='{"intent": "验证工具行为"}', call_id="call-a"), "s",  _NO_LOOP
     )
 
     assert received == ["call-a"]
@@ -736,7 +736,7 @@ def test_malformed_display_data_still_emits_failed_terminal(
 
     observation = tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="bad_display", arguments="{}", call_id="call-bad-display"),
+        ToolCall(tool_name="bad_display", arguments='{"intent": "验证工具行为"}', call_id="call-bad-display"),
         "s",
 
         _NO_LOOP,
@@ -766,7 +766,7 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
     with execution_scope(rc, SimpleNamespace()):  # type: ignore[arg-type]
         observation = tool_batch_runner._execute_call(
             rc,
-            ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"),
+            ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-ok"),
             "s",
 
             _NO_LOOP,
@@ -814,7 +814,7 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
     with caplog.at_level("ERROR"):
         observation = tool_batch_runner._execute_call(
             rc,
-            ToolCall(tool_name="read_file", arguments="{}", call_id="call-boom"),
+            ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为"}', call_id="call-boom"),
             "s",
 
             _NO_LOOP,
@@ -847,7 +847,7 @@ def test_executor_exception_after_start_closes_running_card(
 
     observation = tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="read_file", arguments="{}", call_id="call-late"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为"}', call_id="call-late"),
         "s",
 
         _NO_LOOP,
@@ -869,7 +869,7 @@ def test_executor_exception_emits_failure(
 
     observation = tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="read_file", arguments="{}", call_id="call-hidden"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为"}', call_id="call-hidden"),
         "s",
 
         _NO_LOOP,
@@ -949,7 +949,7 @@ def test_projection_happens_in_parent_for_process_isolated_tool(
 
     observation = tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="process_probe", arguments="{}", call_id="call-proc"),
+        ToolCall(tool_name="process_probe", arguments='{"intent": "验证工具行为"}', call_id="call-proc"),
         "s",
 
         _NO_LOOP,
@@ -987,7 +987,7 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
 
     observation = tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="suspend_probe", arguments="{}", call_id="call-suspend"),
+        ToolCall(tool_name="suspend_probe", arguments='{"intent": "验证工具行为"}', call_id="call-suspend"),
         "s",
 
         _NO_LOOP,
@@ -1090,7 +1090,7 @@ def test_parallel_batch_projects_each_call_independently(
         barrier.wait()
         results[call_id] = tool_batch_runner._execute_call(
             rc,
-            ToolCall(tool_name="read_file", arguments=json.dumps({"path": name}), call_id=call_id),
+            ToolCall(tool_name="read_file", arguments=json.dumps({"intent": "读取测试文件", "path": name}), call_id=call_id),
             "s",
 
             _NO_LOOP,
@@ -1126,14 +1126,14 @@ def test_mixed_batch_distinct_statuses_do_not_cross_talk(
 
     tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="read_file", arguments='{"path": "good.txt"}', call_id="call-good"),
+        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "good.txt"}', call_id="call-good"),
         "s",
 
         _NO_LOOP,
     )
     tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-bad"),
+        ToolCall(tool_name="no_such_tool", arguments='{"intent": "验证工具行为"}', call_id="call-bad"),
         "s",
 
         _NO_LOOP,

@@ -165,8 +165,9 @@ def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
 
     monkeypatch.setattr(execute_terminal_module, "LocalExecutionBackend", Backend)
     observation = ExecuteTerminalTool().execute(
-        description="test", command="echo output",
+        command="echo output",
         execution_context=ToolExecutionContext(
+        call_intent="test",
             step_id="step-1",
             task_id=7,
             workspace_id=1,
@@ -247,6 +248,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
 
     channel = TerminalOutputStream.open(
         ToolExecutionContext(
+        call_intent="test",
             step_id="step-1",
             task_id=7,
             workspace_id=1,
@@ -351,6 +353,7 @@ async def test_terminal_output_channel_is_built_from_worker_thread(tmp_path: Pat
 
     loop = asyncio.get_running_loop()
     context = ToolExecutionContext(
+        call_intent="test",
         step_id="step-1",
         task_id=7,
         workspace_id=2,

@@ -402,7 +402,7 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
 
     observation = tool_batch_runner._execute_call(
         rc,
-        ToolCall(tool_name="probe_tool", arguments="{}", call_id="call-1"),
+        ToolCall(tool_name="probe_tool", arguments='{"intent": "验证工具行为"}', call_id="call-1"),
         "step-1",
 
         _NO_LOOP,
