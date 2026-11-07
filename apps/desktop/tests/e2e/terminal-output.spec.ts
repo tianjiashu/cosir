@@ -73,8 +73,7 @@ for (const theme of ["light", "dark"]) test(`${theme}: real output, command once
   const preview = call.locator('[data-terminal-mode="preview"]');
   expect((await preview.boundingBox())!.height).toBeLessThan(201);
   await expect(preview.locator(".xterm")).toHaveCount(0);
-  await expect(preview).toContainText("中文输出");
-  expect(await preview.evaluate((element) => [...element.querySelectorAll("span")].some((span) => span.style.color))).toBe(true);
+  await expect(preview).toContainText("120");
   await call.getByRole("button", { name: "查看输出" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -121,6 +120,17 @@ test("reader keeps scroll position through streaming, completion, close and reop
   await dialog.getByRole("button", { name: "有新输出 · 回到最新" }).click();
   await expect(scroll).toContainText("new-tail");
   await expect(dialog.getByRole("button", { name: "有新输出 · 回到最新" })).toHaveCount(0);
+});
+
+// 目的：预览是摘要但颜色不能丢；潜在缺陷：xterm 格子排版把混排行尾的字符裁掉。
+test("preview keeps ANSI colors and does not clip mixed Chinese and ASCII lines", async ({ page, request }) => {
+  const line = "审核台问 AI + 工具（合并 #1123 #1124 #1125 #1139 #1140）".repeat(3);
+  await seedState(request, 42, state({ ...samples.ansi.display, output: `\u001b[31m失败 1 项\u001b[0m\n${line}\n` }));
+  await page.goto("/tasks/42");
+  const preview = (await openCall(page)).locator('[data-terminal-mode="preview"]');
+  expect(await preview.getByText("失败 1 项", { exact: true }).evaluate((element) => (element as HTMLElement).style.color)).not.toBe("");
+  await expect(preview).toContainText(line);
+  expect(await preview.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
 
 test("retained buffer copy is explicit, raw download includes all real output, copy failures are visible", async ({ page, request }) => {

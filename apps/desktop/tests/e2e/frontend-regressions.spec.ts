@@ -217,12 +217,12 @@ test("交替序列：运行中过程区展开、区头显示当前动作，命�
   const running = assistant.locator('[data-tool-call-id="alt-test"]');
   await running.locator('[data-slot="call-row"]').click();
   await expect(running).toContainText("bun test tests/task.test.ts");
-  await expect(running.locator('[data-terminal-viewport="true"]')).toBeVisible();
+  await expect(running.locator('[data-terminal-mode="preview"]')).toBeVisible();
   await expect(running).toHaveAttribute("data-tool-status", "running");
-  // 明确的复制按钮常驻，触屏与键盘同样可用。
+  // 复制按钮悬停才出现，触屏与键盘同样可用（见 `REVEAL_ON_HOVER_CLASS`）。
   const copyCommand = running.getByRole("button", { name: "复制命令" });
   await expect(copyCommand).toBeVisible();
-  await running.locator('[data-terminal-viewport="true"]').hover();
+  await running.locator('[data-terminal-mode="preview"]').hover();
   await expect(copyCommand).toHaveCSS("opacity", "1");
   await expect(running.getByRole("button", { name: "复制输出" })).toHaveCSS("opacity", "1");
   await page.mouse.move(0, 0);

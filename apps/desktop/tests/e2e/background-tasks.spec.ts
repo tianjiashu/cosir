@@ -51,9 +51,9 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   await expect(card).toContainText("cd /work && make");
   await expect(card).not.toContainText("npm test");
   await expect(card).toContainText("1 已结束");
-  // 运行中的条目默认展开，展开就是对话里的同一张工具卡片（只读，停止只在外壳上）。
+  // 停止只在外壳上；这条调用还没有展示数据，没有详情可展开。
   const bgRow = card.locator('[data-background-task="call-bg"]');
-  await expect(bgRow.locator('[data-tool-call-id="call-bg"]')).toBeVisible();
+  await expect(bgRow.locator("button[aria-expanded]")).toHaveCount(0);
   await expect(bgRow.getByRole("button", { name: "停止" })).toHaveCount(1);
 
   // 后台占位行不另起状态行；取消走看板。回合已结束，过程区默认收起，先展开。
@@ -116,7 +116,7 @@ test("Team 批准后时间线显示摘要，查看入口进入后台详情", asy
   await expect(row).toContainText("代码审查");
   const progress = row.getByRole("region", { name: "Agent Team 执行进度" });
   await expect(progress).toBeVisible();
-  const trigger = row.locator('[data-slot="call-row"]');
+  const trigger = row.locator("button[aria-expanded]");
   await trigger.click();
   await expect(progress).toBeHidden();
   await trigger.focus(); await page.keyboard.press("Enter");
