@@ -44,6 +44,22 @@ for (const colorScheme of ["light", "dark"] as const) test(`A1–A3 ${colorSchem
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
+test("A2 auto-collapse keeps the paragraph being read in place", async ({ page, request }) => {
+  const process = Array.from({ length: 6 }, (_, i) => [text(`第 ${i} 步进展`), call(`read-${i}`)]).flat();
+  const answer = Array.from({ length: 30 }, (_, i) => `第${i}段：${"用于确认阅读位置的回复正文。".repeat(8)}`).join("\n\n");
+  await seedState(request, 42, state([...process, text(answer)]));
+  await page.goto("/tasks/42");
+  const paragraph = page.getByText("第14段").first();
+  await expect(paragraph).toBeVisible();
+  await page.evaluate(() => { const el = [...document.querySelectorAll("p")].find(p => p.textContent?.startsWith("第14段"))!; let viewport = el.parentElement!; while (getComputedStyle(viewport).overflowY !== "auto") viewport = viewport.parentElement!; viewport.scrollTop += el.getBoundingClientRect().top - 300; });
+  await expect.poll(async () => Math.round((await paragraph.boundingBox())!.y)).toBe(300);
+  await seedState(request, 42, state([...process, text(answer, true)], outcome("completed", { durationMs: 8000 })));
+  await expect(page.locator('[data-slot="process-head"]')).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByText("第 0 步进展", { exact: true })).toBeHidden();
+  await page.waitForTimeout(300);
+  expect(Math.abs((await paragraph.boundingBox())!.y - 300)).toBeLessThan(2);
+});
+
 for (const [status, reason] of [["completed", "stop"], ["completed", "length"], ["cancelled", "runtime_restarted"], ["cancelled", "user_cancelled"], ["failed", "error"]] as const) test(`A4 ${status}/${reason}: no final remains open`, async ({ page, request }) => {
   await seedState(request, 42, state([text("已产生的进展"), call("fork", true)], outcome(status, { endReason: reason })));
   await page.goto("/tasks/42");
@@ -120,13 +136,43 @@ for (const [status, endReason, label] of [["completed", null, "已完成"], ["fa
   await expect(row.locator('[data-thinking-active="true"]')).toHaveCount(0);
 });
 
-test("A10 keyboard focus inside process defers automatic folding until focus leaves", async ({ page, request }) => {
+test("A10 automatic folding hands focus from the hidden process to its heading", async ({ page, request }) => {
   const parts = [call("read"), text("答复")];
   await seedState(request, 42, state(parts)); await page.goto("/tasks/42");
   await page.locator('[data-slot="activity-head"]').focus();
   await seedState(request, 42, state([parts[0], text("答复", true)], outcome("completed")));
-  await expect(page.locator('[data-slot="process-head"]')).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator('[data-slot="activity-head"]')).toBeFocused();
-  await page.getByRole("textbox", { name: "消息输入" }).focus();
+  const head = page.locator('[data-slot="process-head"]');
+  await expect(head).toHaveAttribute("aria-expanded", "false");
+  await expect(head).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-slot="activity-head"]')).toBeVisible();
+});
+
+test("A10 a block losing its always-visible reason hands focus to the heading", async ({ page, request }) => {
+  const waiting = toolCallPart("hand", "terminal_handoff", { status: "pending", awaitingUser: true, args: { session_id: "s" } });
+  const final = text("结论", true);
+  await seedState(request, 42, state([waiting, final], outcome("completed", { durationMs: 8000 })));
+  await page.goto("/tasks/42");
+  const head = page.locator('[data-slot="process-head"]');
+  await expect(head).toHaveAttribute("aria-expanded", "false");
+  await page.locator('[data-slot="activity-head"]').focus();
+  await seedState(request, 42, state([{ ...waiting, status: "completed", awaitingUser: false }, final], outcome("completed", { durationMs: 8000 })));
+  await expect(head).toBeFocused();
+});
+
+test("A10 a focused control unmounting with its tool never blocks automatic folding", async ({ page, request }) => {
+  const display = { kind: "terminal-result", command: "sleep 1", workdir: "/w", output: "", exit_code: null, timed_out: false };
+  const run = (status: "running" | "completed") => toolCallPart("term", "execute_terminal", { status, args: { command: "sleep 1" }, display_data: status === "completed" ? { ...display, exit_code: 0 } : display });
+  const wait = { toolCallId: "term", kind: "terminal_command", label: "sleep", status: "running", startedAt: "2026-01-01T00:00:00Z", endedAt: null };
+  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: [], foregroundWaits: [wait] } });
+  await seedState(request, 42, state([text("进展"), run("running")]));
+  await page.goto("/tasks/42");
+  await page.locator('[data-slot="activity-head"]').click();
+  const button = page.getByRole("button", { name: "转到后台" });
+  await button.focus();
+  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: [], foregroundWaits: [] } });
+  await seedState(request, 42, state([text("进展"), run("completed")]));
+  await expect(button).toHaveCount(0);
+  await seedState(request, 42, state([text("进展"), run("completed"), text("最终结论", true)], outcome("completed", { durationMs: 8000 })));
   await expect(page.locator('[data-slot="process-head"]')).toHaveAttribute("aria-expanded", "false");
 });

@@ -222,7 +222,7 @@ function toolTraceState() {
       display_data: null,
       isError: false,
     },
-    { type: "text", text: "检查完成", status: "completed" },
+    { type: "text", text: "检查完成", status: "completed", finalReply: true },
   ]);
 }
 
@@ -270,7 +270,7 @@ function alternatingSequenceState(phase) {
         awaitingUser: true,
         display_data: { kind: "terminal-session", session_id: "term-alt", status: "running", input_summary: "输入完成后点「交还」，Agent 会继续安装" },
       }),
-      { type: "text", text: "已把调度间隔改为读配置项 `scheduler.tickMs`，默认值仍是 250。\n\n新增 3 个单测，`bun test` 全部通过。", status: "completed" },
+      { type: "text", text: "已把调度间隔改为读配置项 `scheduler.tickMs`，默认值仍是 250。\n\n新增 3 个单测，`bun test` 全部通过。", status: "completed", finalReply: true },
     );
   }
   const activity = activityOf(runId, phase === "running" ? "running" : "completed", { endReason: phase === "running" ? null : "stop" });

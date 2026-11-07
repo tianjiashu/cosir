@@ -594,8 +594,7 @@ test("文件菜单开关不锁定主对话，长消息滚动位置和节点保�
   const viewport = page.locator(".aui-thread-root > div");
   const row = page.locator('main [data-index="1"]');
   await expect(row).toContainText("第 44 次读取终端输出");
-  // 过程默认折叠；展开后才是本用例要验证的长消息滚动画布。
-  await row.getByRole("button", { name: "查看过程，展开过程", exact: true }).click();
+  // 没有最终回复时过程保持展开，这就是本用例要验证的长消息滚动画布。
   await viewport.evaluate((element) => { element.scrollTop = 1200; });
   await expect.poll(() => viewport.evaluate((element) => element.scrollTop)).toBe(1200);
   const originalRow = await row.elementHandle();

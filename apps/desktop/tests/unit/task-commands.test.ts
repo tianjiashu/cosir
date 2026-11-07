@@ -1,4 +1,4 @@
-import { beginCommand, finishCommand, useCommandRequests, forgetCommands } from "@/lib/assistant/command-request-store";
+import { forgetCommands } from "@/lib/assistant/command-request-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
@@ -13,10 +13,8 @@ import {
   sendQueuedTaskMessageNow,
   sendTaskMessage,
   submitToolDecision,
-  synchronizeCommand,
   type TaskMessageRequest,
 } from "@/lib/assistant/task-commands";
-import { assistantMessage, toolCallPart, transportState } from "./transport-fixtures";
 import { HttpError } from "@/lib/http/errors";
 
 const REQUEST: TaskMessageRequest = {
@@ -40,19 +38,6 @@ beforeEach(() => { forgetCommands([7, 12]); vi.stubGlobal("window", {}); });
 afterEach(() => vi.unstubAllGlobals());
 
 describe("task commands", () => {
-  it("uncertain decisions synchronize old history without repeating the decision", async () => {
-    const pending = beginCommand(7, "call:old", "decision")!;
-    finishCommand(7, "call:old", pending, "unknown", "未能确认");
-    const recent = transportState({ messageOffset: 1, messages: [assistantMessage("recent", 2)] });
-    const old = assistantMessage("old-message", 1, [toolCallPart("old", "agent_team", { status: "pending", awaitingUser: true })]);
-    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(recent)))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ messages: [old], messageOffset: 0 })));
-    vi.stubGlobal("fetch", fetchMock);
-    await synchronizeCommand(7, "call:old");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(fetchMock.mock.calls.every(([, init]) => !init.method || init.method === "GET")).toBe(true);
-    expect(useCommandRequests.getState().tasks[7]?.["call:old"]).toBeUndefined();
-  });
   it("deduplicates parallel submissions across different component instances", async () => {
     let release!: (response: Response) => void;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { release = resolve; })));
@@ -155,10 +140,10 @@ describe("idempotent task commands", () => {
     await expect(cancelTask(7)).resolves.toMatchObject({ accepted: false, reason: "network" });
   });
 
-  it("取消工具调用按 tool_call_id 寻址，409 视为已发过信号", async () => {
+  it("取消工具调用按 tool_call_id 寻址，409 表示已无事可做，不算失败", async () => {
     const fetchMock = accepted();
     vi.stubGlobal("fetch", fetchMock);
-    await expect(cancelToolCall(12, "call/1")).resolves.toEqual({ kind: "signalled" });
+    await expect(cancelToolCall(12, "call/1")).resolves.toBeNull();
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/tasks\/12\/tool-calls\/call%2F1\/cancel$/),
       expect.objectContaining({
@@ -169,58 +154,30 @@ describe("idempotent task commands", () => {
     );
 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 409 })));
-    await expect(cancelToolCall(12, "call-1")).resolves.toEqual({ kind: "already_signalled" });
+    await expect(cancelToolCall(12, "call-1")).resolves.toBeNull();
   });
 
   it("取消工具调用失败时不声称已取消", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
-    await expect(cancelToolCall(12, "call-1")).resolves.toMatchObject({
-      kind: "failed",
-      reason: "rejected",
-      message: "本机后端处理失败，请查看后端日志",
-    });
+    await expect(cancelToolCall(12, "call-1")).resolves.toBe("本机后端处理失败，请查看后端日志");
 
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
-    await expect(cancelToolCall(12, "call-1")).resolves.toMatchObject({ kind: "failed", reason: "network" });
+    await expect(cancelToolCall(12, "call-1")).resolves.toBe("无法连接本机后端，请确认后端正在运行");
+  });
+
+  it("转后台在途时停止照常发出，互不占用", async () => {
+    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+    void backgroundToolCall(12, "c");
+    void cancelToolCall(12, "c");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   });
 
   it("转到后台：409 表示不可转，失败带可读原因", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 409 })));
-    await expect(backgroundToolCall(12, "call-1")).resolves.toEqual({ kind: "not_detachable" });
+    await expect(backgroundToolCall(12, "call-1")).resolves.toBeNull();
 
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(backendError(404, "任务不存在")));
-    await expect(backgroundToolCall(12, "call-1")).resolves.toEqual({ kind: "failed", message: "任务不存在", reason: "rejected" });
+    await expect(backgroundToolCall(12, "call-1")).resolves.toBe("任务不存在");
   });
-});
-
-it("late manual synchronization cannot settle a newer Run's stop or change future request ownership", async () => {
-  const { reconcileCommands } = await import("@/lib/assistant/command-request-store");
-  const { activity, indexedState } = await import("./transport-fixtures");
-  const waiting = beginCommand(7, "call:old", "decision")!;
-  finishCommand(7, "call:old", waiting, "unknown", "待确认");
-  let respond!: (response: Response) => void;
-  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { respond = resolve; })));
-  const syncing = synchronizeCommand(7, "call:old");
-  const newer = indexedState(transportState({ activity: activity(8, "running") }));
-  reconcileCommands(7, newer, newer.toolCalls);
-  const stop = beginCommand(7, "task", "stop")!;
-  respond(new Response(JSON.stringify(transportState({ activity: activity(7, "completed") }))));
-  await syncing;
-  expect(useCommandRequests.getState().tasks[7]?.task?.token).toBe(stop.token);
-  expect(useCommandRequests.getState().tasks[7]?.["call:old"]).toBeUndefined();
-  expect(beginCommand(7, "call:new", "stop")?.runId).toBe(8);
-});
-
-it("manual sync cannot clear a replacement request for the same target", async () => {
-  const { settleCommand } = await import("@/lib/assistant/command-request-store");
-  const first = beginCommand(7, "call:c", "decision")!;
-  finishCommand(7, "call:c", first, "unknown", "待确认");
-  let respond!: (response: Response) => void;
-  vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { respond = resolve; })));
-  const syncing = synchronizeCommand(7, "call:c");
-  settleCommand(7, "call:c");
-  const second = beginCommand(7, "call:c", "decision")!;
-  respond(new Response(JSON.stringify(transportState())));
-  await syncing;
-  expect(useCommandRequests.getState().tasks[7]?.["call:c"]?.token).toBe(second.token);
 });

@@ -81,7 +81,8 @@ const test = base.extend<{ agent: Fixture }>({
       });
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
       res.write(frame(id, fixture.states.get(id)!));
-      if (fixture.dropStreams) { endedByServer = true; res.end(); }
+      // 稍后才结束：StrictMode 的首次挂载要先被客户端中止，才能被上面的 close 回调排除。
+      if (fixture.dropStreams) setTimeout(() => { endedByServer = true; res.end(); }, 20);
     });
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as { port: number };

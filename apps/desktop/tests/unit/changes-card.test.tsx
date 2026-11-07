@@ -11,8 +11,8 @@ describe("file operation history", () => {
       display_data: { kind: "file-changes", changes: [null, { path: "a.ts", status: "moved", new_path: "b.ts" }] },
     }) }]);
     const html = renderToStaticMarkup(<ChangesCard card={card} taskId={1} messageId="m" />);
-    expect(html).toContain("已移动");
-    expect(html).toContain("b.ts");
+    expect(html).toContain("移动");
+    expect(html).toContain("a.ts");
     expect(html).not.toContain("Diff 数据不可用");
   });
 

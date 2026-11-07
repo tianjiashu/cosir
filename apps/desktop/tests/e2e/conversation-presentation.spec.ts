@@ -30,7 +30,6 @@ test("live snapshot updates preserve the original prose DOM and selection; stopp
   expect(await page.evaluate(() => getSelection()?.toString())).toContain("先检查取消处理");
   await seedState(request, 42, state([prose, toolCallPart("read", "read_file", { status: "cancelled" }), text("已经找到处理入口。")], "cancelled"));
   await expect(page.locator('[data-slot="turn-status"]')).toContainText("已停止");
-  await expect(page.locator('[data-slot="turn-status"]')).not.toContainText("有异常记录");
   await expect(page.locator('[data-slot="activity-head"]')).toContainText("1 个取消");
   await expect(slot).toBeVisible();
   await expect(page.getByRole("button", { name: "复制已生成内容", exact: true })).toBeVisible();
@@ -64,17 +63,17 @@ test("Agent messages are compact, explicitly expandable and never human edit tar
   await page.screenshot({ path: `${OUTPUT_DIR}/conversation-agent.png`, animations: "disabled" });
 });
 
-test("completed reply folds prose in place while preserving result warning in the summary", async ({ page, request }) => {
+test("completed reply folds prose in place and keeps the result signal on its call row", async ({ page, request }) => {
   await seedState(request, 42, state([text("正在运行测试。"), toolCallPart("cmd", "execute_terminal", { status: "completed", display_data: { kind: "terminal-result", command: "test", output: "assertion", exit_code: 1 } }), text("测试有一个断言需要修复。", true)], "completed"));
   await page.goto("/tasks/42");
   await expect(page.getByText("正在运行测试。", { exact: true })).toBeHidden();
   await expect(page.getByText("测试有一个断言需要修复。", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "用时 8秒 · 有异常记录，展开过程" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "用时 8秒，展开过程" })).toBeVisible();
   await expect(page.locator('[data-slot="turn-status"]')).not.toContainText(/执行命令|次/);
   await page.locator('[data-slot="process-head"]').click();
   await expect(page.getByText("正在运行测试。", { exact: true })).toBeVisible();
   await page.locator('[data-slot="activity-head"]').click();
-  await expect(page.locator('[data-tool-call-id="cmd"]')).toContainText("非零退出 1");
+  await expect(page.locator('[data-tool-call-id="cmd"]')).toContainText("exit 1");
   await page.screenshot({ path: `${OUTPUT_DIR}/conversation-result.png`, animations: "disabled" });
 });
 

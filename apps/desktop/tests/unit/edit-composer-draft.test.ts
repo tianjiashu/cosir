@@ -1,64 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { getLocalAttachmentById, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 
 import {
   applyEditDraftToComposer,
-  beginEditComposerOperation,
-  consumePendingEditComposerStart,
-  currentEditComposerOperation,
-  discardPendingEditComposerDraft,
   editableDraftAttachments,
-  endEditComposerOperation,
-  hasPendingEditComposerStart,
-  isCurrentEditComposerOperation,
-  isEditComposerOperationActive,
-  queuePendingEditComposerStart,
-  setPendingEditComposerDraft,
-  subscribeEditComposerOperations,
-  takePendingEditComposerDraft,
   type EditDraftComposerTarget,
 } from "@/lib/assistant/edit-composer-draft";
-
-describe("edit composer coordination", () => {
-  it("consumes a pending recovery override only once", () => {
-    const messageId = `override-${crypto.randomUUID()}`;
-    const draft = { text: "恢复", attachments: [], intent: "queued" as const };
-    setPendingEditComposerDraft(messageId, draft);
-
-    expect(takePendingEditComposerDraft(messageId)).toEqual(draft);
-    expect(takePendingEditComposerDraft(messageId)).toBeUndefined();
-    discardPendingEditComposerDraft(messageId);
-  });
-
-  it("queues the message-scoped edit action as a one-shot request", () => {
-    const messageId = `edit-start-${crypto.randomUUID()}`;
-    queuePendingEditComposerStart(messageId);
-
-    expect(hasPendingEditComposerStart(messageId)).toBe(true);
-    expect(consumePendingEditComposerStart(messageId)).toBe(true);
-    expect(consumePendingEditComposerStart(messageId)).toBe(false);
-    expect(hasPendingEditComposerStart(messageId)).toBe(false);
-  });
-
-  it("keeps a newer recovery generation active when an older one finishes", () => {
-    const messageId = `generation-${crypto.randomUUID()}`;
-    const listener = vi.fn();
-    const unsubscribe = subscribeEditComposerOperations(listener);
-    const first = beginEditComposerOperation(messageId);
-    const second = beginEditComposerOperation(messageId);
-
-    expect(currentEditComposerOperation(messageId)).toBe(second);
-    expect(isCurrentEditComposerOperation(messageId, first)).toBe(false);
-    expect(isEditComposerOperationActive(messageId)).toBe(true);
-
-    endEditComposerOperation(messageId, first);
-    expect(isEditComposerOperationActive(messageId)).toBe(true);
-    endEditComposerOperation(messageId, second);
-    expect(isEditComposerOperationActive(messageId)).toBe(false);
-    expect(listener).toHaveBeenCalled();
-    unsubscribe();
-  });
-});
 
 type FakeAttachment = {
   id: string;
@@ -257,15 +204,5 @@ describe("draft recovery commit boundary", () => {
     await applying;
     expect(stub.text()).toBe("restored and newly typed");
     expect(stub.attachments().map(a => a.id)).toEqual(["old", "new"]);
-  });
-
-  it("does not reuse a released edit generation", () => {
-    const id = crypto.randomUUID();
-    const previous = beginEditComposerOperation(id);
-    endEditComposerOperation(id, previous);
-    const next = beginEditComposerOperation(id);
-    expect(next).not.toBe(previous);
-    expect(isCurrentEditComposerOperation(id, previous)).toBe(false);
-    endEditComposerOperation(id, next);
   });
 });

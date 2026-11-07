@@ -130,7 +130,7 @@ test("收起入口保留编辑；切到其他工作区的任务不确认、不�
   await expect(page).toHaveURL(/\/tasks\/100$/);
   await expect(page.getByRole("tab", { name: /未保存Team/ })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "描述", exact: true })).toHaveValue("新的草稿内容");
-  expect(await state(page)).toEqual({ tabs: { 7: ["agent-team-config-draft:team", "agent-config-draft:draft"] }, panel: "workbench" });
+  expect(await state(page)).toEqual({ tabs: { 7: ["agent-team-config-draft:100:team", "agent-config-draft:100:draft"] }, panel: "workbench" });
 });
 
 test("同工作区任务和配置页保活草稿，真正关闭仍确认", async ({ page }) => {
@@ -172,7 +172,7 @@ test("新对话页选择其他工作区和命令面板跳转都不确认，各�
   await page.getByRole("button", { name: /工作台，1 个标签，点击打开/ }).click();
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toBeVisible();
   // 停靠区是全局的一个选择：工作区 7 的工作台有标签，回到它时仍是刚才选中的文件面板，切到工作台后草稿原样还在。
-  expect(await state(page)).toEqual({ tabs: { 7: ["agent-config-draft:draft"] }, panel: "workbench" });
+  expect(await state(page)).toEqual({ tabs: { 7: ["agent-config-draft:100:draft"] }, panel: "workbench" });
 });
 
 test("切换工作台快捷键收起与展开当前工作区的工作台", async ({ page }) => {

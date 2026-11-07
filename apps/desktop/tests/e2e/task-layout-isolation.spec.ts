@@ -59,9 +59,9 @@ test("窗口宽高与面板开关不重新执行会话和线程，也不重连�
   await page.setViewportSize({ width: 1500, height: 900 });
   await settleLayout(page);
   expect(await counts()).toEqual({ session: 0, thread: 0 });
-  await page.getByRole("button", { name: /^会话侧栏/ }).click();
   await expect(page.getByRole("complementary", { name: "会话侧栏" })).toHaveAttribute("data-task-rail", "docked");
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  await page.getByRole("button", { name: /^会话侧栏/ }).click();
   await expect(page.getByRole("complementary", { name: "会话侧栏" })).toHaveAttribute("data-task-rail", "floating");
   await page.getByRole("button", { name: "收起文件", exact: true }).click();
   await settleLayout(page);
@@ -117,8 +117,7 @@ test("跨工作区切换后，状态通知刷新当前目录，Fork 使用当前
     forkCreated = true;
     return route.fulfill({ json: forked });
   });
-  await page.locator('[data-role="user"]').last().hover();
-  await page.getByRole("button", { name: "从此消息之前分叉", exact: true }).click();
+  await page.getByRole("button", { name: "从这里分叉", exact: true }).last().click();
   await expect(page).toHaveURL(/\/tasks\/44$/);
-  expect(calls).toEqual([{ url: `${origin}/tasks/43/fork`, body: { beforeMessageId: "43" } }]);
+  expect(calls).toEqual([{ url: `${origin}/tasks/43/fork`, body: { replyMessageId: "assistant-43" } }]);
 });

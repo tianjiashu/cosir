@@ -195,7 +195,7 @@ describe("后台任务卡", () => {
     expect(useBackgroundTasksStore.getState().parts[1]).toEqual({});
   });
 
-  it("展开即对话里的同一张卡片：运行中默认展开，停止只在外壳上", () => {
+  it("展开直接是调用详情，不再套一条调用行：运行中默认展开，停止只在外壳上", () => {
     board.entries.set(1, [entry("a", { label: "terminal_command:make watch" })]);
     board.parts.set("a", terminalPart("a"));
     // 终端命令的展开体经 `useOpenLink` 接上链接打开，需要 Query 上下文。
@@ -203,8 +203,8 @@ describe("后台任务卡", () => {
       <QueryClientProvider client={createQueryClient()}><BackgroundTasksBody taskId={1} /></QueryClientProvider>,
     );
     expect(html).toContain('aria-expanded="true"');
-    expect(html).toContain('data-tool-call-id="a"');
-    expect(html).toContain("后台运行中");
+    expect(html).not.toContain('data-tool-call-id="a"');
+    expect(html).toContain("等待输出");
     expect(html).not.toContain("停止终端命令");
     expect(html).not.toContain("转到后台");
   });
@@ -225,14 +225,14 @@ describe("backgroundToolCall", () => {
   it("POST 到按 Task 寻址的转后台接口，409 视为不可转", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(backgroundToolCall(3, "call/1")).resolves.toEqual({ kind: "detached" });
+    await expect(backgroundToolCall(3, "call/1")).resolves.toBeNull();
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/tasks\/3\/tool-calls\/call%2F1\/background$/),
       expect.objectContaining({ method: "POST" }),
     );
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 409 })));
-    await expect(backgroundToolCall(3, "c")).resolves.toEqual({ kind: "not_detachable" });
+    await expect(backgroundToolCall(3, "c")).resolves.toBeNull();
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
-    await expect(backgroundToolCall(3, "c")).resolves.toMatchObject({ kind: "failed" });
+    await expect(backgroundToolCall(3, "c")).resolves.toEqual(expect.any(String));
   });
 });

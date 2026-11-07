@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TransportMessagePart, TransportToolCallPart } from "@/lib/assistant/contract";
-import { aggregateChanges, projectTurn } from "@/lib/assistant/turn-layout";
+import { aggregateChanges, describeProcessProblems, projectTurn } from "@/lib/assistant/turn-layout";
 import { outcome, toolCallPart } from "./transport-fixtures";
 const text = (value: string, finalReply = false): TransportMessagePart => ({ type: "text", text: value, finalReply });
 const call = (id: string, overrides: Partial<TransportToolCallPart> = {}) => toolCallPart(id, "read_file", { status: "completed", ...overrides });
@@ -59,14 +59,13 @@ describe("stable conversation projection", () => {
       call("web", { display_data: { kind: "web-extract-urls", partial: true } }),
       call("mcp", { display_data: { kind: "mcp-tool-result", action: "list", servers: [{ error: "offline" }] } }),
     ], "settled");
-    expect(layout.process.warningCount).toBe(5);
     expect(layout.process.failedCount).toBe(0);
+    expect(describeProcessProblems(layout.process)).toBeNull();
     expect(layout.process.verbCounts).toEqual([{ label: "读取文件", count: 5 }]);
   });
   it("unknown tools remain visible and do not acquire invented result semantics", () => {
     const layout = projectTurn([call("future", { toolName: "future_tool", status: "completed", display_data: { kind: "future-result" } })], "settled");
     expect(layout.process.verbCounts).toEqual([{ label: "future_tool", count: 1 }]);
-    expect(layout.process.warningCount).toBe(0);
   });
   it("keeps every file operation in order, including deletion then recreation", () => {
     const change = (id: string, status: string, insertions: number) => call(id, { display_data: { kind: "file-changes", changes: [{ path: "a", status, insertions }] } });

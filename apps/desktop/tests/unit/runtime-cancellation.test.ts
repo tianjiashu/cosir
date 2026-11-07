@@ -1,112 +1,108 @@
-import type { TransportState } from "@/lib/assistant/contract";
 import { beforeEach, describe, expect, it } from "vitest";
-import { beginCommand, finishCommand, forgetCommands, reconcileCommands as reconcile, useCommandRequests, callTarget, reconcileTaskStatuses, markTaskRequestsUnsynced, commandPending } from "@/lib/assistant/command-request-store";
-import { activity, assistantMessage, toolCallPart, transportState, indexedState } from "./transport-fixtures";
-const reconcileCommands = (taskId: number, state: TransportState) => reconcile(taskId, state, indexedState(state).toolCalls);
+import { backgroundTarget, beginCommand, commandPending, decisionTarget, finishCommand, forgetCommands, markTaskRequestsUnsynced, reconcileCommands, reconcileTaskStatuses, releaseCommandObservation, stopTarget, useCommandRequests } from "@/lib/assistant/command-request-store";
+import { activity } from "./transport-fixtures";
+
 const current = () => useCommandRequests.getState().tasks[1];
 beforeEach(() => forgetCommands([1]));
-describe("cross-surface request lifetime", () => {
-  it("keeps a signalled stop until canonical settlement and deduplicates across mounts", () => {
-    reconcileCommands(1, transportState({ activity: activity(7, "running") }));
-    const request = beginCommand(1, "task", "stop")!;
+
+describe("跨界面的请求生命周期", () => {
+  it("已发信号的停止保持到 canonical 落定，并跨挂载去重", () => {
+    reconcileCommands(1, activity(7, "running"));
+    const request = beginCommand(1, "task")!;
     finishCommand(1, "task", request, "accepted");
     expect(current()?.task?.phase).toBe("syncing");
-    expect(beginCommand(1, "task", "stop")).toBeNull();
-    reconcileCommands(1, transportState({ activity: activity(7, "cancelled") }));
+    expect(beginCommand(1, "task")).toBeNull();
+    reconcileCommands(1, activity(7, "cancelled"));
     expect(current()?.task).toBeUndefined();
   });
-  it("a newer Run and a late HTTP response cannot revive the old stopping label", () => {
-    reconcileCommands(1, transportState({ activity: activity(7, "running") }));
-    const request = beginCommand(1, "task", "stop")!;
-    reconcileCommands(1, transportState({ activity: activity(8, "running") }));
+
+  it("新 Run 与迟到的 HTTP 响应不能复活旧的「停止中」", () => {
+    reconcileCommands(1, activity(7, "running"));
+    const request = beginCommand(1, "task")!;
+    reconcileCommands(1, activity(8, "running"));
     finishCommand(1, "task", request, "accepted");
     expect(current()?.task).toBeUndefined();
   });
-  it("keeps unknown network outcomes distinct from explicit rejection", () => {
-    const target = callTarget("c");
-    const request = beginCommand(1, target, "decision")!;
-    finishCommand(1, target, request, "unknown", "状态待同步");
-    expect(current()?.[target]?.error).toBe("状态待同步");
-    expect(beginCommand(1, target, "stop")).toBeNull();
-    finishCommand(1, target, request, "rejected");
-    expect(beginCommand(1, target, "decision")).not.toBeNull();
-  });
-  it("unknown idempotent outcomes permit explicit retry and ignore the old HTTP result", () => {
-    const first = beginCommand(1, "task", "stop")!;
+
+  it("结果未知可以重试，旧请求的 HTTP 结果被忽略", () => {
+    const first = beginCommand(1, "task")!;
     finishCommand(1, "task", first, "unknown", "未能确认");
     expect(commandPending(current()?.task)).toBe(false);
-    const retry = beginCommand(1, "task", "stop")!;
+    const retry = beginCommand(1, "task")!;
     finishCommand(1, "task", first, "accepted");
     expect(current()?.task?.token).toBe(retry.token);
   });
-  it("global Task terminal facts settle child stops even after their card unmounts", () => {
-    const request = beginCommand(1, "task", "stop")!;
+
+  it("结果未知的决定同样可以重试：后端判重，重复提交只会 409", () => {
+    const target = decisionTarget("c");
+    const first = beginCommand(1, target)!;
+    finishCommand(1, target, first, "unknown", "未能确认");
+    expect(commandPending(current()?.[target])).toBe(false);
+    expect(beginCommand(1, target)).not.toBeNull();
+  });
+
+  it("全局 Task 终态能收尾卡片已卸载的子 Task 停止", () => {
+    const request = beginCommand(1, "task")!;
     reconcileTaskStatuses({ 1: "completed" });
     reconcileTaskStatuses({ 1: "running" });
     finishCommand(1, "task", request, "accepted");
     expect(current()?.task).toBeUndefined();
   });
-  it("a lost Task status stream stops claiming that a possibly newer Run is stopping", () => {
-    const request = beginCommand(1, "task", "stop")!;
+
+  it("状态流丢失后不再声称可能已是新 Run 的 Task 正在停止", () => {
+    const request = beginCommand(1, "task")!;
     markTaskRequestsUnsynced();
     finishCommand(1, "task", request, "accepted");
     expect(current()?.task?.error).toContain("待确认");
     expect(commandPending(current()?.task)).toBe(false);
   });
-  it("unloaded history is not settlement; a real decision result is", () => {
-    const target = callTarget("c");
-    beginCommand(1, target, "decision");
-    reconcileCommands(1, transportState({ messageOffset: 100 }));
-    expect(current()?.[target]).toBeDefined();
-    reconcileCommands(1, transportState({ messages: [assistantMessage("m", 2, [toolCallPart("c", "agent_team", { status: "completed", awaitingUser: false })])] }));
+
+  it("HTTP 完成时用已观察到的事实收尾，不再等下一帧", () => {
+    reconcileCommands(1, activity(7, "completed"));
+    const request = beginCommand(1, "task")!;
+    finishCommand(1, "task", request, "accepted");
+    expect(current()?.task).toBeUndefined();
+  });
+
+  it("离开 Task 后旧事实失效，别处发起的停止不被它提前收尾", () => {
+    reconcileCommands(1, activity(7, "completed"));
+    releaseCommandObservation(1);
+    const stop = beginCommand(1, "task")!;
+    expect(stop.runId).toBeNull();
+    finishCommand(1, "task", stop, "accepted");
+    expect(current()?.task?.phase).toBe("syncing");
+    reconcileTaskStatuses({ 1: "completed" });
+    expect(current()?.task).toBeUndefined();
+  });
+});
+
+describe("同一调用的不同操作互不占用", () => {
+  it("转后台在途时停止仍能发起，反之亦然", () => {
+    expect(beginCommand(1, backgroundTarget("c"))).not.toBeNull();
+    expect(beginCommand(1, stopTarget("c"))).not.toBeNull();
+    expect(beginCommand(1, decisionTarget("c"))).not.toBeNull();
+  });
+
+  it("一种操作的状态不影响另一种的显示", () => {
+    const stop = beginCommand(1, stopTarget("c"))!;
+    finishCommand(1, stopTarget("c"), stop, "unknown", "停止未能确认");
+    expect(current()?.[stopTarget("c")]?.error).toBe("停止未能确认");
+    expect(current()?.[backgroundTarget("c")]).toBeUndefined();
+  });
+
+  it("被拒绝的调用级命令立即释放，可以再次发起", () => {
+    const target = backgroundTarget("c");
+    const request = beginCommand(1, target)!;
+    finishCommand(1, target, request, "rejected");
     expect(current()?.[target]).toBeUndefined();
   });
-  it("a detach remains pending until canonical background or completion arrives", () => {
-    const target = callTarget("c");
-    const request = beginCommand(1, target, "background")!;
-    finishCommand(1, target, request, "accepted");
-    reconcileCommands(1, transportState({ foreground_waits: ["c"] }));
-    expect(current()?.[target]).toBeDefined();
-    reconcileCommands(1, transportState({ messages: [assistantMessage("m", 2, [toolCallPart("c", "execute_terminal", { status: "completed" })])] }));
-    expect(current()?.[target]).toBeUndefined();
+
+  it("迟到的响应不能覆盖同一操作的新请求", () => {
+    const target = stopTarget("c");
+    const first = beginCommand(1, target)!;
+    finishCommand(1, target, first, "unknown", "未能确认");
+    const retry = beginCommand(1, target)!;
+    finishCommand(1, target, first, "rejected");
+    expect(current()?.[target]?.token).toBe(retry.token);
   });
-});
-
-it("HTTP completion uses already observed facts when no further SSE frame will arrive", () => {
-  reconcileCommands(1, transportState({ activity: activity(7, "completed") }));
-  const request = beginCommand(1, "task", "stop")!;
-  finishCommand(1, "task", request, "accepted");
-  expect(current()?.task).toBeUndefined();
-});
-
-it("a tool HTTP result cannot revive an SSE-settled decision", () => {
-  const request = beginCommand(1, "call:c", "decision")!;
-  reconcileCommands(1, transportState({ messages: [assistantMessage("m", 1, [toolCallPart("c", "agent_team", { awaitingUser: false })])] }));
-  finishCommand(1, "call:c", request, "unknown", "迟到网络错误");
-  expect(current()?.["call:c"]).toBeUndefined();
-});
-
-it("leaving a Task expires old completion facts without discarding an in-flight request", async () => {
-  const { releaseCommandObservation } = await import("@/lib/assistant/command-request-store");
-  const old = transportState({ activity: activity(7, "completed") });
-  reconcileCommands(1, old);
-  const outstanding = beginCommand(1, "call:unknown", "stop")!;
-  releaseCommandObservation(1, old);
-  expect(current()?.["call:unknown"]?.token).toBe(outstanding.token);
-  reconcileTaskStatuses({ 1: "running" });
-  const stop = beginCommand(1, "task", "stop")!;
-  expect(stop.runId).toBeNull();
-  finishCommand(1, "task", stop, "accepted");
-  expect(current()?.task?.phase).toBe("syncing");
-  reconcileTaskStatuses({ 1: "completed" });
-  expect(current()?.task).toBeUndefined();
-});
-
-it("an old observer cleanup cannot expire a newer canonical observation", async () => {
-  const { releaseCommandObservation } = await import("@/lib/assistant/command-request-store");
-  const old = transportState({ activity: activity(7, "running") });
-  reconcileCommands(1, old);
-  reconcileCommands(1, transportState({ activity: activity(8, "running") }));
-  releaseCommandObservation(1, old);
-  expect(beginCommand(1, "task", "stop")?.runId).toBe(8);
 });

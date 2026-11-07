@@ -1,36 +1,9 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
-const desktopRoot = path.resolve(__dirname, "..", "..");
-const repositoryRoot = path.resolve(desktopRoot, "..", "..");
-const backendPython = path.join(repositoryRoot, "apps", "backend", process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python");
-
-/**
- * 启动真实宿主。数据根指向临时目录（`CODING_AGENT_DATA_DIR`）：SQLite、日志与运行期文件全部隔离，不碰开发者的真实数据。
- * 已有后端虚拟环境时直接用它的解释器，省去在全新 uv 缓存里重新同步依赖。
- */
-async function launchDesktop(): Promise<{ app: ElectronApplication; page: Page; home: string }> {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cosir-desktop-e2e-"));
-  const app = await electron.launch({
-    args: [desktopRoot],
-    env: {
-      ...process.env,
-      CODING_AGENT_DATA_DIR: home,
-      ...(fs.existsSync(backendPython) ? { COSIR_BACKEND_PYTHON: backendPython } : {}),
-    } as Record<string, string>,
-  });
-  const page = await app.firstWindow();
-  return { app, page, home };
-}
-
-async function backendBaseUrl(page: Page): Promise<string> {
-  const snapshot = await page.evaluate(() => window.cosirHost!.backend.snapshot());
-  expect(snapshot.status).toEqual({ state: "ready" });
-  return snapshot.backendBaseUrl!;
-}
+import { backendBaseUrl, backendPython, launchDesktop, repositoryRoot } from "./desktop-app";
 
 test("starts the host, reaches the workspace shell and isolates its data under the given home", async () => {
   const { app, page, home } = await launchDesktop();
@@ -131,7 +104,6 @@ test("opens and reloads a conversation through the real snapshot HTTP route", as
     expect((await response.json() as { messages: unknown[] }).messages).toEqual([]);
     expect((await fetch(`${base}/tasks/${task.task_id}/assistant/messages?end=0`)).status).toBe(200);
     await page.reload();
-    await page.getByText("HTTP 回归", { exact: true }).click();
     await page.getByText("快照序列化回归", { exact: true }).click();
     await expect(page.getByRole("textbox")).toBeVisible();
     await expect(page.getByText(/后端内部错误/)).toHaveCount(0);
@@ -343,7 +315,7 @@ test("I10 real Electron: unified intent travels through real tools, background w
 });
 
 // Genuine Electron + Python + SQLite + SDK requests; only the model's output is deterministic.
-test("fork context: input boundary, presentation, restart and source deletion", async () => {
+test("fork context: reply boundary, presentation, restart and source deletion", async () => {
   const { createServer } = await import("node:http");
   type RequestBody = { model: string; reasoning_effort?: string; messages: Array<{ role: string; content?: unknown; tool_calls?: unknown[] }>; stream: boolean };
   const requests: RequestBody[] = [];
@@ -363,7 +335,7 @@ test("fork context: input boundary, presentation, restart and source deletion", 
     const parentTrigger = inputs.some(text => text.includes("PARENT_ONLY_B"));
     const hasFork = body.messages.some(m => JSON.stringify(m.tool_calls ?? []).includes("native-fork"));
     if (parentTrigger && !isChild && !hasFork) {
-      emit({ tool_calls: [{ index: 0, id: "native-fork", type: "function", function: { name: "fork_task", arguments: JSON.stringify({ intent: "验证输入之前的分叉", title: "分叉验收子任务", message: "CHILD_SCOPE_C：只核对继承的背景，回复 CHILD_DONE_D。" }) } }] });
+      emit({ tool_calls: [{ index: 0, id: "native-fork", type: "function", function: { name: "fork_task", arguments: JSON.stringify({ intent: "验证从上一条回复分叉", title: "分叉验收子任务", message: "CHILD_SCOPE_C：只核对继承的背景，回复 CHILD_DONE_D。" }) } }] });
       emit({}, "tool_calls");
     } else { emit({ content: isChild ? "CHILD_DONE_D" : parentTrigger ? "PARENT_DONE" : "KEEP_REPLY_A" }); emit({}, "stop"); }
     res.end("data: [DONE]\n\n");
@@ -412,25 +384,25 @@ test("fork context: input boundary, presentation, restart and source deletion", 
       await page.evaluate(value => document.documentElement.classList.toggle("dark", value === "dark"), theme);
       await page.screenshot({ path: test.info().outputPath(`fork-agent-${theme}.png`), animations: "disabled" });
     }
-    // Real Agent-input action: manually fork before the new assignment, restoring original history.
-    await page.locator('[data-slot="agent-message-toggle"]').first().click();
-    await page.getByRole("button", { name: "从此消息之前分叉", exact: true }).click();
+    // Real click on the latest reply: the branch keeps it, and hidden inherited history comes back.
+    await page.getByRole("button", { name: "从这里分叉", exact: true }).last().click();
     await expect.poll(async () => (await list()).filter(t => ["user_fork", "agent_fork"].includes(t.task_type)).length).toBe(2);
     const manual = (await list()).find(t => ["user_fork", "agent_fork"].includes(t.task_type) && t.task_id !== child.task_id)!;
     await expect(page.getByText("KEEP_CONTEXT_A", { exact: true })).toBeVisible();
     await expect(page.getByText("KEEP_REPLY_A", { exact: true })).toBeVisible();
     expect((await state(manual.task_id)).activity).toBeNull();
-    expect(JSON.stringify((await state(manual.task_id)).messages)).not.toContain("CHILD_SCOPE_C");
+    expect(JSON.stringify((await state(manual.task_id)).messages)).toContain("CHILD_SCOPE_C");
+    await expect(page.getByText("CHILD_DONE_D", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
     await page.screenshot({ path: test.info().outputPath("fork-manual.png"), animations: "disabled" });
-    // Also verify a human-input anchor, and first-input -> empty branch.
+    // An earlier reply stops at that reply; the latest one keeps the whole conversation.
     const sourceState = await state(task_id);
-    const anchor = sourceState.messages.find(m => m.role === "user" && JSON.stringify(m.parts).includes("PARENT_ONLY_B"))!;
-    const human = await post(`/tasks/${task_id}/fork`, { beforeMessageId: anchor.id });
-    expect(JSON.stringify((await state(human.task_id)).messages)).toContain("KEEP_CONTEXT_A");
+    const earlierReply = sourceState.messages.find(m => m.role === "assistant" && JSON.stringify(m.parts).includes("KEEP_REPLY_A"))!;
+    const human = await post(`/tasks/${task_id}/fork`, { replyMessageId: earlierReply.id });
+    expect(JSON.stringify((await state(human.task_id)).messages)).toContain("KEEP_REPLY_A");
     expect(JSON.stringify((await state(human.task_id)).messages)).not.toContain("PARENT_ONLY_B");
-    const empty = await post(`/tasks/${task_id}/fork`, { beforeMessageId: sourceState.messages[0].id });
-    expect((await state(empty.task_id)).messages).toEqual([]);
+    const latest = await post(`/tasks/${task_id}/fork`, { replyMessageId: sourceState.messages.at(-1)!.id });
+    expect(JSON.stringify((await state(latest.task_id)).messages)).toContain("PARENT_DONE");
     // Restart with generation verification before switching the dynamic HTTP address.
     const generation = await page.evaluate(async () => (await window.cosirHost!.backend.snapshot()).generation);
     await page.evaluate(() => window.cosirHost!.backend.restart());
@@ -458,19 +430,19 @@ test("fork context: input boundary, presentation, restart and source deletion", 
     const removedModel = await fetch(`${base}/model-configs/${config.config_id}`, { method: "DELETE" });
     expect(removedModel.ok, await removedModel.text()).toBe(true);
     const requestCount = requests.length;
-    const rejected = await fetch(`${base}/tasks/${empty.task_id}/messages`, {
+    const rejected = await fetch(`${base}/tasks/${human.task_id}/messages`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: { role: "user", parts: [{ type: "text", text: "REJECT_DELETED_MODEL" }] }, modelConfigId: config.config_id }),
     });
     expect(rejected.status).toBe(400);
     expect(await rejected.text()).toContain("MODEL_CONFIG_UNAVAILABLE");
-    expect((await state(empty.task_id)).activity).toBeNull();
-    expect((await state(empty.task_id)).queued_messages ?? []).toEqual([]);
+    expect((await state(human.task_id)).activity).toBeNull();
+    expect((await state(human.task_id)).queued_messages ?? []).toEqual([]);
     expect(requestCount).toBe(requests.length);
-    await post(`/tasks/${empty.task_id}/messages`, {
+    await post(`/tasks/${human.task_id}/messages`, {
       message: { role: "user", parts: [{ type: "text", text: "REPLACEMENT_MODEL_RUN" }] }, modelConfigId: replacement.config_id,
     });
-    await expect.poll(async () => (await state(empty.task_id)).activity?.status).toBe("completed");
+    await expect.poll(async () => (await state(human.task_id)).activity?.status).toBe("completed");
     expect(requests.find(r => r.messages.some(m => JSON.stringify(m.content).includes("REPLACEMENT_MODEL_RUN")))?.model).toBe("decoy-test");
     await test.info().attach("actual-model-requests", { body: JSON.stringify(requests, null, 2), contentType: "application/json" });
     await test.info().attach("isolated-data-root", { body: home, contentType: "text/plain" });

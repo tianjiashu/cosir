@@ -71,6 +71,8 @@ test("代码块按钮悬停才出现", async ({ page }) => {
 });
 
 test("Mermaid 按原始宽度显示，缩放控件悬停才出现", async ({ page }) => {
+  // 窄窗口下对话列让给侧栏后放不下原始宽度，图表收进列内是预期行为。
+  await page.setViewportSize({ width: 1600, height: 900 });
   const block = page.locator('.aui-md [data-streamdown="mermaid-block"]').last();
   const svg = block.locator('[aria-label="Mermaid chart"] > svg');
   const zoom = block.getByRole("button", { name: "Zoom in" }).locator("..");

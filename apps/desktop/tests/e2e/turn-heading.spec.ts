@@ -60,7 +60,6 @@ test("quiet successful tools do not create a heading, but quiet failures remain 
   await expect(page.locator('[data-slot="turn-status"]')).toHaveCount(0);
   await seedState(request, 42, done([{ ...quiet, status: "failed", error: "等待失败" }, text(reply, true)]));
   const button = page.locator('[data-slot="process-head"]');
-  await expect(button).toContainText("有异常记录");
   await button.click();
   await expect(page.locator('[data-slot="activity-head"]')).toContainText("1 个失败");
 });
@@ -113,7 +112,7 @@ test("zero duration remains explicit and tool failures stay visible", async ({ p
   await seedState(request, 42, done([toolCallPart("read", "read_file", { status: "failed", error: "读取失败" }), text(reply, true)], 0));
   await page.goto("/tasks/42");
   const button = page.locator('[data-slot="process-head"]');
-  await expect(button).toHaveText("用时 0秒· 有异常记录");
+  await expect(button).toHaveText("用时 0秒");
   await button.click();
   await expect(page.locator('[data-slot="activity-head"]')).toContainText("1 个失败");
 });

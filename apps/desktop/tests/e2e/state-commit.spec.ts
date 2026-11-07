@@ -26,16 +26,5 @@ test("canonical commits occur once before settled observers, independent of call
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   });
   expect(await events()).toEqual(expected);
-  // EOF 释放结算事实：另一个界面此后发出的停止不能被旧 completed 快照提前清掉。
-  const afterDisconnect = await page.evaluate(async () => {
-    const path = "/lib/assistant/command-request-store.ts";
-    const { beginCommand, finishCommand, useCommandRequests, forgetCommands } = await import(/* @vite-ignore */ path);
-    const request = beginCommand(907, "task", "stop");
-    finishCommand(907, "task", request, "accepted");
-    const result = { runId: request.runId, pending: !!useCommandRequests.getState().tasks[907]?.task };
-    forgetCommands([907]);
-    return result;
-  });
-  expect(afterDisconnect).toEqual({ runId: null, pending: true });
   await page.evaluate(() => (window as unknown as { commitProbe: { unmount: () => void } }).commitProbe.unmount());
 });

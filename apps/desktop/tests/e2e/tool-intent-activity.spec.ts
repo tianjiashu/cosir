@@ -53,7 +53,7 @@ for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorSchem
   await page.screenshot({ path: test.info().outputPath(`intent-${colorScheme}-narrow.png`), animations: "disabled" });
 });
 
-test("I5/I7/I8 background settling disables stop and updates a reader retained across folding", async ({ page, request }) => {
+test("I5/I7/I8 background settling disables stop and updates the rail reader", async ({ page, request }) => {
   const job = { toolCallId: "cmd", kind: "terminal_command" as const, label: "检查导出", status: "running" as const, startedAt: "2026-01-01", endedAt: null };
   const command = toolCallPart("cmd", "execute_terminal", { status: "pending", intent: "检查导出", args: { command: "knip" }, background: { kind: "terminal_command", label: "检查导出", startedAt: "2026-01-01", endedAt: null }, display_data: { kind: "terminal-result", command: "knip", output: "first\n" } });
   const state = model([command], "reasoning"); state.background_tasks = [job];
@@ -61,22 +61,16 @@ test("I5/I7/I8 background settling disables stop and updates a reader retained a
   const head = page.locator('[data-slot="activity-head"]'); await head.click();
   const row = page.locator('[data-slot="turn"] [data-tool-call-id="cmd"]');
   await expect(row).toContainText("后台运行中"); await expect(row).not.toContainText("准备执行");
-  await row.locator('[data-slot="call-row"]').click();
-  await row.getByRole("button", { name: "查看输出" }).click();
+  const board = page.locator('[data-background-task="cmd"]');
+  const readerButton = board.getByRole("button", { name: "查看输出" });
+  await readerButton.click();
   const dialog = page.getByRole("dialog"); await expect(dialog).toBeVisible();
-  // Exercise hidden parent while portal stays open, without requiring pointer access behind the modal.
-  await page.evaluate(async () => {
-    const source = "/lib/assistant/disclosure-store.ts";
-    const { useDisclosureStore } = await import(/* @vite-ignore */ source);
-    useDisclosureStore.getState().set(42, "activity:a:interval:0", false);
-  });
   const settling = { ...state, background_tasks: [{ ...job, status: "settling" as const }], messages: [state.messages[0], assistantMessage("a", 1, [{ ...command, display_data: { ...command.display_data, output: "first\nlast\n" } }])] };
   await seed(request, settling);
   await expect(dialog).toContainText("后台结果收尾中");
   await expect(dialog).toContainText("last");
   await page.keyboard.press("Escape"); await expect(dialog).toBeHidden();
-  await expect(head).toBeFocused();
-  await head.click();
+  await expect(readerButton).toBeFocused();
   await expect(row.getByRole("button", { name: "停止终端命令" })).toHaveCount(0);
   await expect(row).toContainText("后台结果收尾中");
   const done = { ...settling, activity: activity(1, "completed"), background_tasks: [{ ...job, status: "completed" as const }], messages: [state.messages[0], assistantMessage("a", 1, [{ ...command, status: "completed" }, { type: "text" as const, text: "验收完成", finalReply: true }], outcome("completed"))] };

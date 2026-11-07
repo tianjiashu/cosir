@@ -20,10 +20,9 @@ test("一次调用中的同路径操作在汇总与过程详情中都逐条保�
   const card = page.locator('[data-slot="changes-card"]');
   await expect(card).toContainText("2 次操作");
   await card.getByRole("button").click();
-  await expect(card.getByText("已移动：", { exact: true })).toHaveCount(2);
+  await expect(card.getByText("移动 → b.ts", { exact: true })).toHaveCount(2);
   await page.locator('[data-slot="activity-head"]').click();
   const call = page.locator('[data-tool-call-id="changes"]');
-  await call.locator('[data-slot="call-row"]').click();
-  await expect(call.getByText("已移动：", { exact: true })).toHaveCount(2);
+  await expect(call.locator('[data-slot="call-row"]')).not.toHaveAttribute("aria-expanded");
   expect(keyErrors).toEqual([]);
 });

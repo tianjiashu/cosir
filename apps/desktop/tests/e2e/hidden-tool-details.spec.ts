@@ -66,7 +66,7 @@ for (const source of ["call", "artifact"] as const) test(`${source}: Diff keeps 
   await expect(owner.getByRole("button", { name: "收起", exact: true })).toBeVisible();
 });
 
-test("terminal preview pauses while hidden, keeps its instance, and catches up on show", async ({ page, request }) => {
+test("terminal preview freezes while hidden and catches up on show", async ({ page, request }) => {
   const part = toolCallPart("cmd", "execute_terminal", { status: "running", args: { command: "echo" }, display_data: { kind: "terminal-result", output: "first\n" } });
   await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId: 42, state: state([part]) } });
   await page.goto("/tasks/42");
@@ -75,7 +75,6 @@ test("terminal preview pauses while hidden, keeps its instance, and catches up o
   const row = page.locator('[data-tool-call-id="cmd"]');
   const preview = row.locator('[data-terminal-mode="preview"]');
   await expect(preview).toContainText("first");
-  await preview.locator(".xterm").evaluate(el => Object.assign(window, { savedTerminal: el }));
   await row.locator('[data-slot="call-row"]').click();
   await expect(preview).toBeHidden();
   const next = { ...part, display_data: { ...part.display_data!, output: "first\nlatest\n" } };
@@ -84,7 +83,6 @@ test("terminal preview pauses while hidden, keeps its instance, and catches up o
   await expect(preview).not.toContainText("latest");
   await row.locator('[data-slot="call-row"]').click();
   await expect(preview).toContainText("latest");
-  expect(await preview.locator(".xterm").evaluate(el => el === (window as unknown as { savedTerminal: Element }).savedTerminal)).toBe(true);
 });
 
 test("reader survives automatic process folding, receives output and returns focus to the process heading", async ({ page, request }) => {
@@ -103,28 +101,4 @@ test("reader survives automatic process folding, receives output and returns foc
   await expect(page.locator('[data-terminal-mode="preview"]')).toBeHidden();
   await page.keyboard.press("Escape");
   await expect(page.locator('[data-slot="process-head"]')).toBeFocused();
-});
-
-test("a focused active call stays usable through completion without persisting group disclosure", async ({ page, request }) => {
-  const part = toolCallPart("cmd", "execute_terminal", { status: "running", args: { command: "echo" }, display_data: { kind: "terminal-result", output: "first\n" } });
-  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId: 42, state: state([part]) } });
-  await page.goto("/tasks/42");
-  await page.locator('[data-slot="activity-head"]').click();
-  await page.locator('[data-tool-call-id="cmd"] [data-slot="call-row"]').click();
-  const row = page.locator('[data-tool-call-id="cmd"]');
-  const button = row.getByRole("button", { name: "复制输出", exact: true });
-  await button.focus();
-  await page.evaluate(async () => {
-    const source = "/lib/assistant/disclosure-store.ts";
-    const { useDisclosureStore } = await import(/* @vite-ignore */ source);
-    useDisclosureStore.getState().set(42, "activity:a:interval:0", false);
-  });
-  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId: 42, state: state([{ ...part, status: "completed" }]) } });
-  await expect(row).toHaveAttribute("data-tool-status", "completed");
-  await expect(button).toBeFocused();
-  await expect(button).toBeVisible();
-  const group = page.locator('[data-slot="activity-head"]');
-  await expect(group).toHaveAttribute("aria-expanded", "false");
-  await group.focus();
-  await expect(row).toBeHidden();
 });

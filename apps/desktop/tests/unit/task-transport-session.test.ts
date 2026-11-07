@@ -159,12 +159,10 @@ describe("TaskTransportSession 乐观命令（D8）", () => {
 
 
 describe("TaskTransportSession owner lifetime", () => {
-  for (const failed of [false, true]) it(`ignores late ${failed ? "failure" : "success"} after close, including a new generation`, async () => {
+  it("late success after close never reactivates the subscription", async () => {
     let resolve!: () => void;
-    let reject!: (error: Error) => void;
-    const pending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
-    const onSubmitError = vi.fn();
-    const { session, fetchImpl } = setup({ submitMessage: () => pending, onSubmitError });
+    const pending = new Promise<void>((yes) => { resolve = yes; });
+    const { session, fetchImpl } = setup({ submitMessage: () => pending });
     const stream = controllableStream();
     fetchImpl.mockResolvedValueOnce(stream.response);
     void session.start();
@@ -173,84 +171,38 @@ describe("TaskTransportSession owner lifetime", () => {
     session.close();
     stream.end();
     await session.open(); // stale retry/refetch must not reactivate the session
+    resolve();
+    await submitted;
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const currentStream = controllableStream();
-    fetchImpl.mockResolvedValueOnce(currentStream.response);
+  });
+
+  for (const scenario of ["closed", "restarted"]) it(`late failure still reaches onSubmitError after the session ${scenario}`, async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<void>((_yes, no) => { reject = no; });
+    const onSubmitError = vi.fn();
+    const { session, fetchImpl, store } = setup({ submitMessage: () => pending, onSubmitError });
+    fetchImpl.mockResolvedValue(controllableStream().response);
     void session.start();
     await flush();
-    currentStream.end(); // new generation is alive but disconnected
-    await flush();
-    if (failed) reject(new Error("late")); else resolve();
+    const late = command("late");
+    const submitted = session.submit(late);
+    session.close();
+    if (scenario === "restarted") { void session.start(); await flush(); }
+    const rejection = new Error("late");
+    reject(rejection);
     await submitted;
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(onSubmitError).not.toHaveBeenCalled();
+    expect(onSubmitError).toHaveBeenCalledWith(rejection, [late]);
+    expect(store.getSnapshot().pendingCommands).toHaveLength(0);
     session.close();
   });
 
-  it("does not submit a business command after release", async () => {
-    const submitMessage = vi.fn();
-    const { session } = setup({ submitMessage });
+  it("a send finishing its upload after release is still delivered", async () => {
+    const submitMessage = vi.fn().mockResolvedValue(undefined);
+    const { session, fetchImpl } = setup({ submitMessage });
     session.close();
-    await expect(session.submit(command("closed"))).rejects.toThrow("释放");
-    expect(submitMessage).not.toHaveBeenCalled();
+    const sent = command("after upload");
+    await session.submit(sent);
+    expect(submitMessage).toHaveBeenCalledWith(sent);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
-});
-
-it("a reconnect only restores canonical observation after its own full, never from a late history page", async () => {
-  const initial = transportState({ activity: activity(7, "completed"), messageOffset: 1, messages: [userMessage("recent", 7)] });
-  const invalidated = vi.fn();
-  const { session, store, fetchImpl } = setup({ onCanonicalStateInvalidated: invalidated }, initial);
-  const first = controllableStream();
-  fetchImpl.mockResolvedValueOnce(first.response);
-  void session.start();
-  await flush();
-  expect(session.isOpen).toBe(true);
-  expect(session.hasCanonicalState).toBe(false);
-  first.push(fullFrame(initial));
-  await flush();
-  expect(session.hasCanonicalState).toBe(true);
-  // EOF 立即失效，随后的旧历史页不能恢复这一资格。
-  invalidated.mockClear();
-  const history = store.beginHistoryFetch()!;
-  first.end(); await flush();
-  expect(invalidated).toHaveBeenCalledOnce();
-  expect(session.hasCanonicalState).toBe(false);
-  const second = controllableStream();
-  fetchImpl.mockResolvedValueOnce(second.response);
-  void session.open(); await flush();
-  expect(store.completeHistoryFetch(history, { messageOffset: 0, messages: [userMessage("old", 1)] })).toBe(true);
-  expect(session.hasCanonicalState).toBe(false);
-  const eligibility: boolean[] = [];
-  const off = store.subscribe(() => eligibility.push(session.hasCanonicalState));
-  second.push(fullFrame(transportState({ activity: activity(8, "running") })));
-  await flush();
-  expect(eligibility).toEqual([true]);
-  second.push({ task_id: 7, kind: "resync_required", mutations: [] });
-  await flush();
-  expect(eligibility).toEqual([true, false]);
-  session.close(); second.end(); off();
-  expect(session.hasCanonicalState).toBe(false);
-});
-
-it("actively replacing a connection invalidates facts before the new HTTP response", async () => {
-  const invalidated = vi.fn();
-  const { session, fetchImpl } = setup({ onCanonicalStateInvalidated: invalidated });
-  const first = controllableStream();
-  fetchImpl.mockResolvedValueOnce(first.response);
-  void session.start(); await flush();
-  first.push(fullFrame(transportState())); await flush();
-  expect(session.hasCanonicalState).toBe(true);
-  let respond!: (response: Response) => void;
-  fetchImpl.mockImplementationOnce(() => new Promise(resolve => { respond = resolve; }));
-  invalidated.mockClear();
-  void session.open();
-  expect(invalidated).toHaveBeenCalledOnce();
-  expect(session.hasCanonicalState).toBe(false);
-  first.end(); await flush();
-  expect(invalidated).toHaveBeenCalledOnce();
-  const second = controllableStream();
-  respond(second.response); await flush();
-  second.push(fullFrame(transportState())); await flush();
-  expect(session.hasCanonicalState).toBe(true);
-  session.close(); second.end();
 });

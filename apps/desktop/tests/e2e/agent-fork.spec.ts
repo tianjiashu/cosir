@@ -62,7 +62,7 @@ test("手动分叉的历史可读、截图可查看，但不操作来源任务",
   await page.route(`${origin}/workspaces/7/attachments/${assetId}/content`, route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8n8AAAAASUVORK5CYII=", "base64") }));
   await seedState(request, 9, {
     ...parentState, activity: null,
-    fork: { sourceTaskId: 991, sourceTitle: "已删除的来源", beforeMessageId: "3", taskType: "user_fork", initialLaunch: LAUNCH },
+    fork: { sourceTaskId: 991, sourceTitle: "已删除的来源", taskType: "user_fork", initialLaunch: LAUNCH },
     messages: [
       { ...parentState.messages[0], runId: null },
       { ...parentState.messages[1], runId: null,

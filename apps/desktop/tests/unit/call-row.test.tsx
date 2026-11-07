@@ -116,7 +116,7 @@ describe("CallRow kind 视图", () => {
       display_data: { kind: "content-search-results", pattern: "tick", match_count: 3, matches: [{ path: "a.ts", line: 1, content: "tick" }] },
     });
     expect(html).toMatch(/<button[^>]*aria-expanded="false"[^>]*data-slot="call-row"/);
-    expect(html).toContain("tick · 3 个命中");
+    expect(html).toContain("3 个命中");
   });
 
   it.each(["failed", "cancelled"] as const)("%s 保留实际终端输出的展开入口", (backendStatus) => {
@@ -125,7 +125,7 @@ describe("CallRow kind 视图", () => {
     } }, { toolName: "execute_terminal" });
     expect(html).not.toContain('data-terminal-viewport="true"');
     expect(html).toContain("已停止");
-    expect(html).not.toContain("非零退出 -1");
+    expect(html).toContain("exit -1");
   });
 
   it("未知 kind 不崩溃、没有元信息也不可展开", () => {
@@ -139,7 +139,7 @@ describe("CallRow kind 视图", () => {
     const html = render({
       display_data: { kind: "terminal-result", command: "bun run typecheck", output: "error TS2304", exit_code: 2, workdir: "/w" },
     }, { toolName: "execute_terminal", args: { description: "运行类型检查", command: "bun run typecheck" } });
-    expect(html).toContain("非零退出 2");
+    expect(html).toContain("exit 2");
     expect(html).not.toContain('data-terminal-viewport="true"');
   });
 

@@ -19,7 +19,9 @@ void app.whenReady().then(() => {
   // 摆放用例需要一个主窗口；内容无关紧要。
   const window = new BrowserWindow({ width: 1000, height: 700, show: false });
   void window.loadURL("about:blank");
-  const host = new BrowserHost(() => window);
+  // 与生产同一契约：窗口销毁后取到 null（`getMainWindow`），退出前先收掉全部标签（`app.ts` 的 will-quit）。
+  const host = new BrowserHost(() => (window.isDestroyed() ? null : window));
+  app.on("will-quit", () => host.closeAll());
   configureBrowserSession(host);
   const methods = new HostMethodRegistry();
   registerBrowserMethods(methods, host);

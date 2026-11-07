@@ -10,6 +10,8 @@ describe("current activity facts", () => {
     const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning" } });
     expect(currentActivity(model)).toEqual({ label: "正在思考", animated: true });
     expect(currentActivity(model, [], [job])?.label).toBe("正在思考 · 后台 1 项");
+    for (const phase of ["waiting", "tool_call"] as const) expect(currentActivity(activity(1, "running", { modelActivity: { stepId: "s", phase } }))?.label).toBe("正在思考");
+    expect(currentActivity(activity(1, "running", { modelActivity: { stepId: "s", phase: "responding" } }))).toBeNull();
     expect(currentActivity(activity(1, "cancelled"))).toBeNull();
   });
   it("uses original call intent with stable parallel count and explicit user waits", () => {

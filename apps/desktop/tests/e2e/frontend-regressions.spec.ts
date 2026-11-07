@@ -44,7 +44,7 @@ test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输�
   await expect(page.locator('[data-role="user"]').getByText("这条消息不能进入对话", { exact: true })).toHaveCount(0);
 });
 
-test("回合结束后思考与多次调用收进过程区，展开后按顺序出现", async ({ page, request }) => {
+test("回合结束后多次调用收进过程区，展开后按顺序出现", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
   await page.goto("/tasks/42");
 
@@ -52,14 +52,9 @@ test("回合结束后思考与多次调用收进过程区，展开后按顺序�
   const head = assistant.locator('[data-slot="process-head"]');
   await expect(head).toBeVisible();
   await expect(assistant.locator('[data-slot="turn-status"]')).not.toContainText(/读取文件|搜索内容|次/);
-  await expect(assistant.getByText("先分析项目结构", { exact: true })).toBeHidden();
   await expect(assistant.getByText("读取文件", { exact: true })).toHaveCount(0);
 
   await head.click();
-  const reasoning = assistant.locator('[data-slot="reasoning-item"]');
-  await expect(reasoning.getByRole("button")).toHaveText("思考过程");
-  await reasoning.getByRole("button").click();
-  await expect(reasoning).toContainText("先分析项目结构");
   await assistant.locator('[data-slot="activity-head"]').click();
   await expect(assistant.getByText("读取文件", { exact: true })).toBeVisible();
   await expect(assistant.getByText("搜索内容", { exact: true })).toBeVisible();
@@ -73,8 +68,7 @@ test("网页搜索结果只显示标题并保留标题链接", async ({ page, re
   await page.goto("/tasks/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
-  // 调用先收进活动摘要，再按需展开具体结果。
-  await assistant.locator('[data-slot="process-head"]').click();
+  // 没有最终回复时过程保持展开；调用收在活动摘要里，按需展开具体结果。
   await assistant.locator('[data-slot="activity-head"]').click();
   await assistant.locator('button[data-slot="call-row"]').click();
   const resultLink = assistant.getByRole("link", { name: "Assistant UI 官方文档" });
@@ -108,34 +102,6 @@ test("Mermaid 时序图全屏后仍保留可见 SVG", async ({ page, request }) 
   })).toBe(true);
 });
 
-test("Reasoning 在真实流式完成后自动收起且仍可手动展开", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "Reasoning 状态回归" } });
-  await page.goto("/tasks/42");
-  await expect(page.getByLabel("消息输入")).toBeVisible();
-
-  await page.getByLabel("消息输入").fill("验证 reasoning 生命周期");
-  await page.getByRole("button", { name: "发送", exact: true }).click();
-
-  const assistant = page.locator('[data-role="assistant"]').last();
-  const reasoning = assistant.locator('[data-slot="reasoning-item"]');
-  // 流式只显示稳定思考标题，推理全文默认收起。
-  await expect(reasoning).toContainText("正在思考");
-  await expect(assistant.locator('[data-slot="collapsible-content"]')).toHaveCount(0);
-
-  await expect(assistant.getByText("streaming response", { exact: true })).toBeVisible({ timeout: 5_000 });
-  await expect.poll(async () => {
-    const response = await request.get(`${API_ORIGIN}/__test__/telemetry`);
-    const telemetry = await response.json() as { completedStreamCount: number };
-    return telemetry.completedStreamCount;
-  }).toBeGreaterThan(0);
-  await expect(reasoning).toContainText("思考过程");
-  await expect(assistant.getByText("推理完成", { exact: true })).toHaveCount(0);
-
-  await assistant.locator('[data-slot="process-head"]').click();
-  await reasoning.getByRole("button").click();
-  await expect(assistant.getByText("推理完成", { exact: true })).toBeVisible();
-});
-
 test("工具运行中保持单行，完成拿到展示数据后才可展开且默认收起", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "工具生命周期回归" } });
   await page.goto("/tasks/42");
@@ -149,7 +115,6 @@ test("工具运行中保持单行，完成拿到展示数据后才可展开且�
   await expect(assistant.getByText("未找到匹配", { exact: true })).toHaveCount(0);
   // Fork belongs to inputs now; use canonical activity to wait for the terminal outcome.
   await expect.poll(async () => (await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json()).activity.status).toBe("completed");
-  await assistant.locator('[data-slot="process-head"]').click();
   const toolRow = assistant.locator('button[data-slot="call-row"]');
   await expect(toolRow).toBeVisible({ timeout: 3_000 });
   // 命中行拆成可点开的「路径:行号」与高亮正文两部分。
@@ -201,7 +166,7 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   const assistant = page.locator('[data-role="assistant"]').last();
   const head = assistant.locator('[data-slot="process-head"]');
   await expect(assistant.locator('[data-slot="turn-status"]')).toContainText("用时 3分钟12秒");
-  await expect(head).toHaveAccessibleName("用时 3分钟12秒 · 有异常记录，展开过程");
+  await expect(head).toHaveAccessibleName("用时 3分钟12秒，展开过程");
   await expect(assistant.locator('[data-slot="turn-status"]')).not.toContainText(/搜索内容|执行命令|应用补丁|次/);
   // 过程正文在原位置隐藏；尚未展开的调用详情不挂载。
   await expect(assistant.getByText("先找调度循环在哪里。", { exact: true })).toBeHidden();
@@ -232,7 +197,6 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await expect(rows.nth(3)).toContainText("term-alt");
   await expect(rows.nth(3)).toContainText("等你操作");
   await expect(assistant.getByText("先找调度循环在哪里。", { exact: true })).toBeVisible();
-  await expect(assistant.locator('[data-slot="reasoning-item"]')).toContainText("思考过程");
   await assistant.screenshot({ path: `${SHOTS}/impl-expanded.png`, animations: "disabled" });
 
   // 改动卡点开文件展开 diff。
@@ -247,12 +211,14 @@ test("交替序列：运行中过程区展开、区头显示当前动作，命�
 
   const assistant = page.locator('[data-role="assistant"]').last();
   const head = assistant.locator('[data-slot="process-head"]');
-  await expect(assistant.locator('[data-slot="turn-status"]')).toContainText("运行单元测试");
+  await expect(assistant.locator('[data-slot="current-activity"]')).toContainText("运行单元测试");
   await expect(head).toHaveAttribute("aria-expanded", "true");
+  await assistant.locator('[data-slot="activity-head"]').last().click();
   const running = assistant.locator('[data-tool-call-id="alt-test"]');
+  await running.locator('[data-slot="call-row"]').click();
   await expect(running).toContainText("bun test tests/task.test.ts");
   await expect(running.locator('[data-terminal-viewport="true"]')).toBeVisible();
-  await expect(running.locator('[data-call-status="running"]')).toHaveCount(1);
+  await expect(running).toHaveAttribute("data-tool-status", "running");
   // 明确的复制按钮常驻，触屏与键盘同样可用。
   const copyCommand = running.getByRole("button", { name: "复制命令" });
   await expect(copyCommand).toBeVisible();

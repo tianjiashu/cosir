@@ -20,14 +20,14 @@ test("model status survives tools without exposing reasoning or a disclosure", a
   await expect(page.locator('[data-slot="current-activity"]')).toHaveText("等待继续");
   await seedState(request, 42, state("waiting"));
   const status = page.locator('[data-slot="current-activity"]');
-  await expect(status).toHaveText("正在等待模型响应");
+  await expect(status).toHaveText("正在思考");
   await seedState(request, 42, state("reasoning"));
   await expect(status).toHaveText("正在思考");
   await page.screenshot({ path: `${OUTPUT_DIR}/model-thinking.png` });
   await expect(status.getByRole("button")).toHaveCount(0);
   const parts = [toolCallPart("read", "read_file", { status: "completed" })];
   await seedState(request, 42, state("waiting", parts));
-  await expect(status).toHaveText("正在等待模型响应");
+  await expect(status).toHaveText("正在思考");
   await seedState(request, 42, state("reasoning", parts));
   await expect(status).toHaveText("正在思考");
   await expect(page.locator('[data-slot="reasoning-body"]')).toHaveCount(0);
@@ -54,10 +54,12 @@ test("dark quiet waiting and reduced motion preserve status without a tool card"
       toolCallPart("bg", "execute_terminal", { status: "pending", background: { kind: "terminal_command", label: "验证", startedAt: new Date().toISOString(), endedAt: null } }),
     ])], activity: activity(1, "suspended"),
   }));
+  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: [{ toolCallId: "bg", kind: "terminal_command", label: "验证", status: "running", startedAt: new Date().toISOString(), endedAt: null }] } });
   await page.goto("/tasks/42");
   const status = page.locator('[data-slot="current-activity"]');
-  await expect(status).toHaveText("正在等待后台结果");
+  await expect(status).toHaveText("后台执行：验证");
   await expect(page.locator('[data-tool-call-id="wait"]')).toHaveCount(0);
+  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: [] } });
   await seedState(request, 42, state("reasoning"));
   await expect(status).toHaveText("正在思考");
   expect(await status.locator("span").evaluate(el => getComputedStyle(el).animationName)).toBe("none");

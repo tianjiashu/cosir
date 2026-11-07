@@ -41,24 +41,41 @@ test.beforeEach(async ({ request }) => {
 });
 
 for (const status of ["running", "suspended"] as const) {
-  test(`${status} 时仍可在任意已并入输入之前分叉`, async ({ page, request }) => {
+  test(`${status} 时已结束的回复可以分叉，进行中的回复没有入口`, async ({ page, request }) => {
     const calls: unknown[] = [];
     await page.route(`${origin}/tasks/42/fork`, async (route) => {
       calls.push(route.request().postDataJSON());
       await route.fulfill({ status: 409, json: { detail: { code: "WORKSPACE_BUSY", message: "busy", retryable: true } } });
     });
     await seedView(page, request, status);
-    const buttons = page.getByRole("button", { name: "从此消息之前分叉", exact: true });
-    await expect(buttons).toHaveCount(2);
-    await expect(buttons.first()).toBeEnabled();
-    await expect(buttons.last()).toBeEnabled();
-    await page.locator('[data-role="user"]').first().hover();
-    await buttons.first().click();
-    // 输入锚点不依赖 Run 终态。
-    await expect.poll(() => calls).toEqual([{ beforeMessageId: "1" }]);
+    const buttons = page.getByRole("button", { name: "从这里分叉", exact: true });
+    await expect(buttons).toHaveCount(1);
+    await buttons.click();
+    await expect.poll(() => calls).toEqual([{ replyMessageId: "assistant-1" }]);
     await expect(page.getByText("工作区正在处理其他操作，请稍后重试。", { exact: true })).toBeVisible();
   });
 }
+
+test("最新一条回复结束后可以分叉，用户消息上没有入口", async ({ page, request }) => {
+  const calls: unknown[] = [];
+  await page.route(`${origin}/tasks/42/fork`, async (route) => {
+    calls.push(route.request().postDataJSON());
+    await route.fulfill({ json: target });
+  });
+  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: 44, title: target.title } });
+  await seedView(page, request);
+  await expect(page.locator('[data-role="user"]').getByRole("button", { name: "从这里分叉" })).toHaveCount(0);
+  await page.getByRole("button", { name: "从这里分叉", exact: true }).last().click();
+  await expect.poll(() => calls).toEqual([{ replyMessageId: "assistant-2" }]);
+  await expect(page).toHaveURL(/\/tasks\/44$/);
+});
+
+test("回复已不能分叉时，后端的拒绝如实告诉用户", async ({ page, request }) => {
+  await page.route(`${origin}/tasks/42/fork`, (route) => route.fulfill({ status: 409, json: { detail: { code: "FORK_REPLY_ACTIVE", message: "running", retryable: true } } }));
+  await seedView(page, request);
+  await page.getByRole("button", { name: "从这里分叉", exact: true }).last().click();
+  await expect(page.getByText("这条回复还没结束，暂时不能分叉。", { exact: true })).toBeVisible();
+});
 
 test("fork 成功后导航不等待目录刷新", async ({ page, request }) => {
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: 44, title: target.title } });
@@ -66,8 +83,7 @@ test("fork 成功后导航不等待目录刷新", async ({ page, request }) => {
   await seedView(page, request);
   // 后续目录刷新失败不能把创建成功变成失败或再次创建。
   await page.route(`${origin}/workspaces`, (route) => route.fulfill({ status: 503, body: "unavailable" }));
-  await page.locator('[data-role="user"]').first().hover();
-  await page.getByRole("button", { name: "从此消息之前分叉", exact: true }).first().click();
+  await page.getByRole("button", { name: "从这里分叉", exact: true }).first().click();
   await expect(page).toHaveURL(/\/tasks\/44$/);
   await expect(page.getByText("Fork 失败", { exact: true })).toHaveCount(0);
 });
@@ -82,8 +98,7 @@ test("切换任务后 fork 的迟到响应不抢回页面", async ({ page, reque
     await route.fulfill({ json: target });
   });
   await seedView(page, request);
-  await page.locator('[data-role="user"]').first().hover();
-  await page.getByRole("button", { name: "从此消息之前分叉", exact: true }).first().click();
+  await page.getByRole("button", { name: "从这里分叉", exact: true }).first().click();
   await expect.poll(() => submitted).toBe(true);
   await page.getByRole("treeitem").filter({ hasText: "另一个任务" }).click();
   await expect(page).toHaveURL(/\/tasks\/43$/);

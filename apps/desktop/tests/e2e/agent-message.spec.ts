@@ -33,16 +33,17 @@ test.beforeEach(async ({ request }) => {
   await seedState(request, 42, snapshot);
 });
 
-test("Agent 消息标出发送方、不可编辑，点发送方跳到来源 Task", async ({ page }) => {
+test("Agent 消息默认一行预览、不可编辑，展开后可跳到来源 Task", async ({ page }) => {
   await page.goto("/tasks/42");
-  await expect(page.getByText("请检查登录流程", { exact: true })).toBeVisible();
-  const sender = page.getByRole("button", { name: "来自 主任务" });
-  await expect(sender).toBeVisible();
+  const sender = page.locator('[data-slot="agent-message-toggle"]');
+  await expect(sender).toContainText("来自 主任务");
+  await expect(sender).toContainText("请检查登录流程");
   // 不画成用户气泡：没有「编辑并重跑」入口（它是最新一条 user 消息，用户消息在此时可编辑）。
   await expect(page.locator('[data-role="agent-message"]')).toHaveCount(1);
   await expect(page.locator('[data-role="user"]')).toHaveCount(0);
   await expect(page.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
 
   await sender.click();
+  await page.getByRole("button", { name: "打开来源任务" }).click();
   await expect(page).toHaveURL(/\/tasks\/9$/);
 });

@@ -41,14 +41,14 @@ describe("single turn heading", () => {
     }
     const done = outcome("completed", { durationMs: 8000 });
     const child = { ...call, status: "cancelled" as const };
-    expect(projectTurnHeading(projectTurn([child, text], "settled", done), done, 8000)).toMatchObject({ label: "用时 8秒", notice: null, failed: false });
+    expect(projectTurnHeading(projectTurn([child, text], "settled", done), done, 8000)).toMatchObject({ label: "用时 8秒", failed: false });
     const interrupted = outcome("cancelled", { endReason: "runtime_restarted" });
     expect(projectTurnHeading(projectTurn([], "settled", interrupted), interrupted, null)?.label).toBe("运行已中断 · 后端已重启 · 用时 0秒");
   });
-  it("keeps tool warnings discoverable without changing the completed outcome", () => {
+  it("reports only the Run outcome: tool failures stay in the process", () => {
     const done = outcome("completed", { durationMs: 8000 });
     const failedCall = { ...call, status: "failed" as const };
-    expect(projectTurnHeading(projectTurn([failedCall, text], "settled", done), done, null)).toMatchObject({ notice: "有异常记录", failed: false });
+    expect(projectTurnHeading(projectTurn([failedCall, text], "settled", done), done, null)).toEqual({ label: "用时 8秒", expandable: true, failed: false });
   });
   it("does not create headings for intro states or invent an outcome for historical process", () => {
     expect(projectTurnHeading(projectTurn([], "running"), null, 8000)).toBeNull();

@@ -182,21 +182,6 @@ describe("TerminalOutputView", () => {
     expect(terminal.dispose).toHaveBeenCalledOnce();
   });
 
-  it("sizes rows to the written content and caps them at the visible maximum", () => {
-    const session = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
-    const terminal = mocks.terminals[0];
-    mocks.fitAddons[0].proposeDimensions.mockReturnValue({ cols: 100, rows: 3 });
-
-    // 两行输出、以换行结尾：光标停在第 3 行行首，光标行也要计入，否则首行会被挤出视口。
-    terminal.buffer.active = { baseY: 0, cursorY: 2, cursorX: 0, length: 3 };
-    session.applySnapshot({ output: "a\nb\n" });
-    expect(terminal.resize).toHaveBeenLastCalledWith(100, 3);
-
-    terminal.buffer.active = { baseY: 40, cursorY: 1, cursorX: 3, length: 42 };
-    session.applySnapshot({ output: "a\nb\nmore" });
-    expect(terminal.resize).toHaveBeenLastCalledWith(100, 8);
-  });
-
   // 目的：只在回滚区开始丢最早的输出时提示；潜在缺陷：清屏序列被误当成丢行，或清屏重放后提示不复位。
   it("reports truncation when the buffer reaches capacity, and clears it after a smaller replay", () => {
     const changes: boolean[] = [];
@@ -236,7 +221,7 @@ describe("TerminalOutputView", () => {
   });
 
   it("restores the reader before releasing a queued write", () => {
-    const view = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light", mode: "reader" });
+    const view = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
     const terminal = mocks.terminals[0];
     terminal.buffer.active.viewportY = 0;
     view.applySnapshot({ output: "start" });
@@ -270,53 +255,5 @@ describe("TerminalOutputView", () => {
 
     expect(mocks.fitAddons[0].dispose).toHaveBeenCalledOnce();
     expect(mocks.terminals[0].dispose).toHaveBeenCalledOnce();
-  });
-});
-
-// 隐藏仅暂停展示工作，不清空实例、已解析游标或选择；重开一次对齐最新累计快照。
-describe("hidden terminal output", () => {
-  beforeEach(() => {
-    mocks.terminals.length = 0;
-    mocks.fitAddons.length = 0;
-    vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
-    vi.stubGlobal("window", { requestAnimationFrame: () => 1, cancelAnimationFrame: () => undefined });
-  });
-  afterEach(() => vi.unstubAllGlobals());
-
-  it("defers writes and themes while hidden, then catches up in the same instance", () => {
-    const view = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
-    view.applySnapshot({ output: "first" });
-    const terminal = mocks.terminals[0];
-    view.setVisible(false);
-    terminal.write.mockClear();
-    view.applySnapshot({ output: "first\nsecond" });
-    view.applySnapshot({ output: "first\nsecond\nthird" });
-    const theme = { foreground: "#fff" };
-    view.setTheme(theme);
-    expect(terminal.options.theme).not.toBe(theme);
-    expect(terminal.write).not.toHaveBeenCalled();
-    expect(terminal.dispose).not.toHaveBeenCalled();
-    view.setVisible(true);
-    expect(mocks.terminals).toHaveLength(1);
-    expect(terminal.options.theme).toBe(theme);
-    expect(terminal.write).toHaveBeenCalledExactlyOnceWith("\nsecond\nthird", expect.any(Function));
-    expect(terminal.reset).not.toHaveBeenCalled();
-    view.dispose();
-  });
-
-  it("lets the issued write finish without draining newer hidden output", () => {
-    const view = new TerminalOutputView({ addEventListener: vi.fn(), removeEventListener: vi.fn() } as unknown as HTMLElement, { resolvedTheme: "light" });
-    const terminal = mocks.terminals[0];
-    let finish!: () => void;
-    terminal.write.mockImplementationOnce((_text, callback) => { finish = callback; });
-    view.applySnapshot({ output: "first" });
-    view.setVisible(false);
-    view.applySnapshot({ output: "replacement" });
-    finish();
-    expect(terminal.write).toHaveBeenCalledTimes(1);
-    view.setVisible(true);
-    expect(terminal.reset).toHaveBeenCalledOnce();
-    expect(terminal.write).toHaveBeenLastCalledWith("replacement", expect.any(Function));
-    view.dispose();
   });
 });

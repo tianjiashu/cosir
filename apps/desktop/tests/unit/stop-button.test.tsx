@@ -20,37 +20,20 @@ vi.mock("@/lib/assistant/task-commands", () => ({
 describe("StopButton", () => {
   it("sends backend cancellation without aborting the Assistant Transport subscription", async () => {
     const { StopButton } = await import("@/components/assistant/stop-button");
-    const assistantCancel = vi.fn();
-    const onCancelRequested = vi.fn();
-    const onCancelResult = vi.fn();
     const event = {} as React.MouseEvent<HTMLButtonElement>;
 
     renderToStaticMarkup(
-      <StopButton
-        taskId={42}
-        onClick={assistantCancel}
-        onCancelRequested={onCancelRequested}
-        onCancelResult={onCancelResult}
-      />,
+      <StopButton taskId={42} />,
     );
     const onClick = captured.props?.onClick;
     expect(onClick).toEqual(expect.any(Function));
 
     (onClick as (event: React.MouseEvent<HTMLButtonElement>) => void)(event);
     await vi.waitFor(() => expect(captured.cancelRun).toHaveBeenCalledWith(42));
-
-    expect(assistantCancel).not.toHaveBeenCalled();
-    expect(onCancelRequested).toHaveBeenCalledWith();
-    expect(onCancelResult).toHaveBeenCalledWith(true);
-    expect(onCancelRequested.mock.invocationCallOrder[0]).toBeLessThan(captured.cancelRun.mock.invocationCallOrder.at(-1)!);
-    expect(captured.cancelRun.mock.invocationCallOrder.at(-1)!).toBeLessThan(onCancelResult.mock.invocationCallOrder[0]);
   });
 
   it("does not invoke assistant-ui Cancel when backend cancellation is rejected", async () => {
     const { StopButton } = await import("@/components/assistant/stop-button");
-    const assistantCancel = vi.fn();
-    const onCancelRequested = vi.fn();
-    const onCancelResult = vi.fn();
     captured.cancelRun.mockResolvedValueOnce({
       accepted: false,
       reason: "rejected",
@@ -58,32 +41,21 @@ describe("StopButton", () => {
     });
 
     renderToStaticMarkup(
-      <StopButton
-        taskId={42}
-        onClick={assistantCancel}
-        onCancelRequested={onCancelRequested}
-        onCancelResult={onCancelResult}
-      />,
+      <StopButton taskId={42} />,
     );
     const onClick = captured.props?.onClick;
     (onClick as (event: React.MouseEvent<HTMLButtonElement>) => void)({} as React.MouseEvent<HTMLButtonElement>);
     await vi.waitFor(() => expect(captured.cancelRun).toHaveBeenCalledWith(42));
-
-    expect(assistantCancel).not.toHaveBeenCalled();
-    expect(onCancelRequested).toHaveBeenCalledWith();
-    expect(onCancelResult).toHaveBeenCalledWith(false);
   });
 
   it("forwards composition props and ref to the styled button", async () => {
     const { StopButton } = await import("@/components/assistant/stop-button");
-    const assistantCancel = vi.fn();
     const ref = { current: null };
 
     renderToStaticMarkup(
       <StopButton
         taskId={42}
         ref={ref}
-        onClick={assistantCancel}
         data-testid="stop-button"
         aria-label="custom-stop"
         disabled

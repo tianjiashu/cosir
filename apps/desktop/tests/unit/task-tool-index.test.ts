@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TransportFrameStore } from "@/lib/assistant/transport-frame-store";
-import { beginCommand, forgetCommands, reconcileCommands, useCommandRequests } from "@/lib/assistant/command-request-store";
+import { beginCommand, forgetCommands, reconcileCommands, stopTarget, useCommandRequests } from "@/lib/assistant/command-request-store";
 import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
 import { activity, assistantMessage, toolCallPart, transportState } from "./transport-fixtures";
 
@@ -17,11 +17,11 @@ describe("shared loaded-window tool index", () => {
     const store = new TransportFrameStore(transportState({ messages: [...messages, assistantMessage("live", 2, [{ type: "text", text: "a" }])], background_tasks: [entry], activity: activity(2, "running") }));
     const commit = () => {
       const snapshot = store.getSnapshot();
-      reconcileCommands(6, snapshot.state, snapshot.toolCalls);
+      reconcileCommands(6, snapshot.state.activity);
       useBackgroundTasksStore.getState().sync(6, { ...snapshot.state, toolCalls: snapshot.toolCalls });
     };
     commit();
-    for (let i = 0; i < 20; i++) beginCommand(6, `call:c${i}`, "stop");
+    for (let i = 0; i < 20; i++) beginCommand(6, stopTarget(`c${i}`));
     const before = store.getSnapshot().toolCalls;
     const table = useBackgroundTasksStore.getState().parts[6];
     const listener = vi.fn();

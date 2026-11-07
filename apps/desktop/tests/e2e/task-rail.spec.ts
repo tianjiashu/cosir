@@ -28,16 +28,19 @@ test.beforeEach(async ({ page, request }) => {
   await expect(page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ })).toBeVisible();
 });
 
-test("宽窗口固定为一列；打开右侧面板后浮起、不挤对话，关掉面板恢复固定", async ({ page }, testInfo) => {
-  await railButton(page).click();
+test("宽窗口默认固定为一列；打开右侧面板后收起，点开才浮起，关掉面板恢复固定", async ({ page }, testInfo) => {
   await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
-  await expect(card(page)).toContainText("1 个运行中");
+  await expect(card(page)).not.toContainText("1 个运行中");
   await expect(card(page)).toContainText("cd /work && make");
   await expect(card(page).getByRole("button", { name: "后台任务", exact: true })).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: testInfo.outputPath("rail-docked.png") });
 
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   await expect(page.getByRole("complementary", { name: "文件" })).toBeVisible();
+  // 浮层会盖住对话，宽屏的常驻偏好不带过来。
+  await expect(rail(page)).toHaveCount(0);
+  await expect(railButton(page)).toHaveAttribute("aria-pressed", "false");
+  await railButton(page).click();
   await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
   await expect(card(page).getByText("cd /work && make", { exact: true })).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: testInfo.outputPath("rail-floating.png") });
@@ -48,7 +51,6 @@ test("宽窗口固定为一列；打开右侧面板后浮起、不挤对话，�
 
 // 目的：侧栏是对话画布上的附注；潜在缺陷：侧栏另占一整列时，滚动条竖在对话与侧栏之间、底部终端被它挤窄。
 test("固定的侧栏在对话视口里：靠视口最右侧，底部终端延伸到侧栏下方", async ({ page }, testInfo) => {
-  await railButton(page).click();
   await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
   const thread = page.locator(".aui-thread-root");
   await expect(thread.getByRole("complementary", { name: "会话侧栏" })).toBeVisible();
@@ -82,7 +84,6 @@ test("浮层非模态：点对话区不关闭，焦点在侧栏内按 Esc 关闭
 });
 
 test("开关与折叠是全局偏好，刷新后保留；折叠时摘要仍在", async ({ page }) => {
-  await railButton(page).click();
   await card(page).getByRole("button", { name: "后台任务", exact: true }).click();
   await expect(card(page)).not.toContainText("cd /work && make");
   await expect(card(page)).toContainText("1 个运行中");
@@ -99,8 +100,8 @@ test("两栏打开时切换会话：卡片完整可见，仍能随文件栏切�
   const nextTaskId = TASK_ID + 1;
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: nextTaskId, title: "另一个会话" } });
   await page.reload();
-  await railButton(page).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  await railButton(page).click();
   await page.getByText("另一个会话", { exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/tasks/${nextTaskId}$`));
   await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
@@ -113,13 +114,13 @@ test("两栏打开时切换会话：卡片完整可见，仍能随文件栏切�
 });
 
 test("刷新后展开的侧栏响应视口宽高，文件面板铺满再还原不丢失订阅", async ({ page }) => {
-  await railButton(page).click();
   await page.reload();
   const label = card(page).getByText("cd /work && make", { exact: true });
   await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
   await expect(label).toBeInViewport({ ratio: 1 });
 
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  await railButton(page).click();
   await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
   await expect(label).toBeInViewport({ ratio: 1 });
   await page.getByRole("button", { name: "铺满文件面板" }).click();
@@ -140,8 +141,8 @@ test("渲染错误恢复重建视口后侧栏恢复，尺寸更新不重绘整�
   const nextTaskId = TASK_ID + 1;
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: nextTaskId, title: "恢复会话" } });
   await page.reload();
-  await railButton(page).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  await railButton(page).click();
   // 只在测试浏览器中包装 memo 的渲染函数，触发真实 runtime 错误边界；不添加生产故障开关。
   await page.evaluate(async () => {
     const modulePath = "/components/assistant-ui/elements/thread.aui.tsx";
@@ -192,8 +193,27 @@ test("只能按手柄拖动，键盘可拿起与取消；浮层里拖动中的 E
   await expect(rail(page)).toBeVisible();
 });
 
+// 目的：次要入口平时不占视线；潜在缺陷：只对鼠标生效，键盘用户看不到箭头。
+test("折叠箭头平时隐藏，悬停或键盘聚焦时显示，且不推动文字", async ({ page }) => {
+  await page.mouse.move(0, 0);
+  const trigger = card(page).getByRole("button", { name: "后台任务", exact: true });
+  const arrow = trigger.locator("svg");
+  const opacity = () => arrow.evaluate((element) => getComputedStyle(element).opacity);
+  await expect.poll(opacity).toBe("0");
+  const width = (await trigger.boundingBox())!.width;
+  await trigger.hover();
+  await expect.poll(opacity).toBe("1");
+  expect((await trigger.boundingBox())!.width).toBe(width);
+  await page.mouse.move(0, 0);
+  await expect.poll(opacity).toBe("0");
+  await trigger.focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(trigger).toBeFocused();
+  await expect.poll(opacity).toBe("1");
+});
+
 test("配置页隐藏侧栏与按钮，回到对话后恢复", async ({ page }) => {
-  await railButton(page).click();
   await expect(rail(page)).toBeVisible();
   await page.getByRole("button", { name: "系统配置", exact: true }).click();
   await expect(page).toHaveURL(/\/settings/);
@@ -206,10 +226,11 @@ test("配置页隐藏侧栏与按钮，回到对话后恢复", async ({ page }) 
 test("快捷键切换会话侧栏", async ({ page }) => {
   const modifier = await page.evaluate(() => /mac/i.test(navigator.userAgent) ? "Meta" : "Control");
   await page.locator("body").click({ position: { x: 600, y: 400 } });
-  await page.keyboard.press(`${modifier}+Alt+KeyR`);
   await expect(rail(page)).toBeVisible();
   await page.keyboard.press(`${modifier}+Alt+KeyR`);
   await expect(rail(page)).toHaveCount(0);
+  await page.keyboard.press(`${modifier}+Alt+KeyR`);
+  await expect(rail(page)).toBeVisible();
 });
 
 test("右侧面板把对话区压窄时，输入框底栏按自身宽度让位，中文状态不竖排", async ({ page }, testInfo) => {

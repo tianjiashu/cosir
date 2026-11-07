@@ -46,7 +46,6 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   await page.goto(`/tasks/${TASK_ID}`);
   const entryButton = page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ });
   await expect(entryButton).toBeVisible();
-  await entryButton.click();
 
   const card = page.getByRole("region", { name: "后台任务" });
   await expect(card).toContainText("cd /work && make");

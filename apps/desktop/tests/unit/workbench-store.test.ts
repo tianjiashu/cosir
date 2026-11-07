@@ -23,9 +23,9 @@ const teamDraft = {
 
 const session = (workspaceId: number) => useWorkbenchStore.getState().sessions[workspaceId];
 const agentDraftTab = (workspaceId: number, toolCallId: string) => session(workspaceId).tabs
-  .find((tab) => tab.id === `agent-config-draft:${toolCallId}`) as WorkbenchAgentConfigurationDraftTab;
+  .find((tab) => tab.id === `agent-config-draft:20:${toolCallId}`) as WorkbenchAgentConfigurationDraftTab;
 const teamDraftTab = (workspaceId: number, toolCallId: string) => session(workspaceId).tabs
-  .find((tab) => tab.id === `agent-team-config-draft:${toolCallId}`) as WorkbenchAgentTeamConfigurationDraftTab;
+  .find((tab) => tab.id === `agent-team-config-draft:20:${toolCallId}`) as WorkbenchAgentTeamConfigurationDraftTab;
 
 describe("workbench store", () => {
   beforeEach(() => useWorkbenchStore.setState({ sessions: {} }));
@@ -38,7 +38,7 @@ describe("workbench store", () => {
     agentDraftTab(7, "call-1").session.setField("description", "改过的描述");
     store.openAgent(8, { taskId: 30, title: "另一个工作区" });
 
-    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-task:21", "agent-config-draft:call-1"]);
+    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-task:21", "agent-config-draft:20:call-1"]);
     expect(session(7).tabs[0].title).toBe("审查（更新）");
     expect(agentDraftTab(7, "call-1").session.store.getState().form.description).toBe("改过的描述");
     expect(session(8).tabs.map((tab) => tab.id)).toEqual(["agent-task:30"]);
@@ -66,25 +66,32 @@ describe("workbench store", () => {
     store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
 
     expect(agentDraftTab(7, "call-1").session).toBe(opened);
-    expect(session(7).activeTabId).toBe("agent-config-draft:call-1");
+    expect(session(7).activeTabId).toBe("agent-config-draft:20:call-1");
   });
 
   it("关闭已保存过的草稿记下已保存标记，重新打开时从原始草稿新建会话并清除标记", async () => {
     const store = useWorkbenchStore.getState();
     store.openAgentTeamConfigurationDraft(7, { taskId: 20, toolCallId: "team-1", draft: teamDraft });
     await teamDraftTab(7, "team-1").session.save(async () => teamDraft);
-    store.closeTab(7, "agent-team-config-draft:team-1");
-    expect(session(7).savedDraftIds).toEqual(["team-1"]);
+    store.closeTab(7, "agent-team-config-draft:20:team-1");
+    expect(session(7).savedDraftIds).toEqual(["20:team-1"]);
 
     store.openAgentTeamConfigurationDraft(7, { taskId: 20, toolCallId: "team-1", draft: teamDraft });
     expect(session(7).savedDraftIds).toEqual([]);
     expect(teamDraftTab(7, "team-1").session.store.getState().dirty).toBe(true);
   });
 
+  it("两个 Task 的同号调用各开各的草稿标签", () => {
+    const store = useWorkbenchStore.getState();
+    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call_0", draft: agentDraft });
+    store.openAgentConfigurationDraft(7, { taskId: 21, toolCallId: "call_0", draft: agentDraft });
+    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-config-draft:20:call_0", "agent-config-draft:21:call_0"]);
+  });
+
   it("未保存过的草稿关闭后不记已保存标记", () => {
     const store = useWorkbenchStore.getState();
     store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
-    store.closeTab(7, "agent-config-draft:call-1");
+    store.closeTab(7, "agent-config-draft:20:call-1");
     expect(session(7).savedDraftIds).toEqual([]);
   });
 

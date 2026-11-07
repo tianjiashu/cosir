@@ -76,6 +76,19 @@ test.beforeEach(async ({ request }) => {
   await request.post(`${origin}/__test__/reset`);
 });
 
+// 目的：未测量的行穿过时总高度一直在变；潜在缺陷：平滑滚动反复重发，已结束的长对话几秒都到不了底。
+test("已结束的长对话从顶部回到底部一步到位", async ({ page, request }) => {
+  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "长对话" } });
+  await request.post(`${origin}/__test__/seed-state`, { data: { taskId: TASK_ID, state: longConversation() } });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/tasks/${TASK_ID}`);
+  const viewport = page.locator(".aui-thread-root .overflow-y-auto").first();
+  await expect(page.getByRole("button", { name: "回到底部", exact: true })).toBeDisabled();
+  await viewport.evaluate(el => { el.scrollTop = 2000; });
+  await page.getByRole("button", { name: "回到底部", exact: true }).click();
+  await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 1000 }).toBeLessThan(3);
+});
+
 test("运行中上翻历史保留不连续尾行之间的高度，正文增长不拖动历史视口", async ({ page, request }) => {
   const state = longConversation();
   // 保持一屏历史窗口以内，隔离分页与不连续渲染区间的行为。
