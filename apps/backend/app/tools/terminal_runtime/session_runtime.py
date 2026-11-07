@@ -335,6 +335,7 @@ class TerminalSessionRuntime:
         if handoff is not None and announce:
             self._schedule(
                 lambda: handoff_registry.settle(
+                    handoff.task_id,
                     handoff.tool_call_id,
                     "the terminal session ended before the user handed it back",
                 )

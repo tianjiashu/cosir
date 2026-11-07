@@ -11,13 +11,14 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.models import TaskRecord
-from app.models.task_kind import USER_FACING_TASK_TYPES
+from app.models.task_extra import TaskExtra, TaskFork
+from app.models.task_kind import FORK_TASK_TYPES, USER_FACING_TASK_TYPES, TaskType
 from app.storage.model.task_model import TaskModel
 from app.storage.store_engines import main_session_factory
 from app.utils.datetime_utils import to_text, utc_now
@@ -56,11 +57,11 @@ class TaskCrud:
             self,
             workspace_id: int,
             title: str,
-            task_type: str = "user",
+            task_type: TaskType = TaskType.USER,
             parent_task_id: int | None = None,
             creation_command_id: str | None = None,
             session: Session | None = None,
-            extra: dict[str, Any] | None = None,
+            extra: TaskExtra | None = None,
             tool_schemas: list[dict[str, Any]] | None = None,
             derivation_depth: int = 0,
     ) -> TaskRecord:
@@ -74,8 +75,7 @@ class TaskCrud:
         参数:
             workspace_id: 所属工作区标识（整数 id）。
             title: 任务标题。
-            task_type: 任务类型，如 ``"user"``、``"fork"``、``"delegate_task"``、
-                ``"agent_team_node"``，缺省为 ``"user"``。
+            task_type: TaskType 枚举，缺省为 ``TaskType.USER``。
             parent_task_id: 父任务标识（整数 id），子 Task 必填，用户任务为 None。
             creation_command_id: 前端创建命令标识，用于首条命令未被接受时回收 provisional Task。
             session: 可选的外部 SQLAlchemy 会话。传入时在本方法内复用该事务（调用方负责提交）；
@@ -125,10 +125,10 @@ class TaskCrud:
             session: Session,
             workspace_id: int,
             title: str,
-            task_type: str,
+            task_type: TaskType,
             parent_task_id: int | None,
             creation_command_id: str | None,
-            extra: dict[str, Any] | None,
+            extra: TaskExtra | None,
             tool_schemas: list[dict[str, Any]] | None = None,
             derivation_depth: int = 0,
     ) -> TaskRecord:
@@ -157,7 +157,7 @@ class TaskCrud:
             task_type=task_type,
             parent_task_id=parent_task_id,
             creation_command_id=creation_command_id,
-            extra=extra,
+            extra=(extra or TaskExtra()).model_dump(mode="json"),
             tool_schemas=tool_schemas or [],
             current_run_id=None,
             derivation_depth=derivation_depth,
@@ -187,15 +187,14 @@ class TaskCrud:
         with self._session_factory() as session:
             rows = session.execute(
                 select(TaskModel.id, TaskModel.extra).where(
-                    TaskModel.workspace_id == workspace_id, TaskModel.task_type == "fork"
+                    TaskModel.workspace_id == workspace_id, TaskModel.task_type.in_(FORK_TASK_TYPES)
                 )
             ).all()
         sources: dict[int, int] = {}
-        for row_id, extra in rows:
-            fork = (extra or {}).get("fork")
-            source = fork.get("source_task_id") if isinstance(fork, dict) else None
-            if isinstance(source, int):
-                sources[row_id] = source
+        for row_id, raw_extra in rows:
+            fork = cast(TaskFork, TaskExtra.model_validate(raw_extra).fork)
+            if fork.tree_parent_task_id is not None:
+                sources[row_id] = fork.tree_parent_task_id
         return sources
 
     def reparent_forks(
@@ -207,7 +206,7 @@ class TaskCrud:
     ) -> int:
         """在外部事务中把来源在 ``source_ids`` 里的 fork 改挂到 ``new_source_id``，返回改动行数。
 
-        fork 的来源记在 ``extra.fork.source_task_id``（不是 ``parent_task_id``，后者只承载所有权）。
+        fork 的来源记在 ``extra.fork.tree_parent_task_id``（不是 ``parent_task_id``，后者只承载所有权）。
         ``new_source_id`` 为 ``None`` 时去掉来源，侧栏把它当作根。``source_ids`` 自身不改：它们随后
         被删除。刻意不刷新 ``updated_at``：侧栏按它排序，重挂不是对话活动。
         """
@@ -215,28 +214,30 @@ class TaskCrud:
         rows = session.execute(
             select(TaskModel.id, TaskModel.extra).where(
                 TaskModel.workspace_id == workspace_id,
-                TaskModel.task_type == "fork",
+                TaskModel.task_type.in_(FORK_TASK_TYPES),
                 TaskModel.id.not_in(source_ids),
             )
         ).all()
         moved = 0
-        for row_id, extra in rows:
-            fork = (extra or {}).get("fork")
-            if not isinstance(fork, dict) or fork.get("source_task_id") not in source_ids:
+        for row_id, raw_extra in rows:
+            extra = TaskExtra.model_validate(raw_extra)
+            fork = cast(TaskFork, extra.fork)
+            if fork.tree_parent_task_id not in source_ids:
                 continue
-            fork = {key: value for key, value in fork.items() if key != "source_task_id"}
-            if new_source_id is not None:
-                fork["source_task_id"] = new_source_id
+            updated = extra.model_copy(update={
+                "fork": fork.model_copy(update={"tree_parent_task_id": new_source_id})
+            })
             session.execute(
                 update(TaskModel)
                 .where(TaskModel.id == row_id)
-                .values(extra={**extra, "fork": fork}, updated_at=TaskModel.updated_at)
+                .values(extra=updated.model_dump(mode="json"),
+                        updated_at=TaskModel.updated_at)
             )
             moved += 1
         return moved
 
     def list_by_parent_task(self, parent_task_id: int) -> list[TaskRecord]:
-        """返回某父任务直接委派的子 Agent Task（``task_type='delegate_task'``），供展示使用。
+        """返回某父任务直接委派的子 Agent Task（``task_type='agent_task'``），供展示使用。
 
         只看一层且排除 Agent Team 节点 Task；需要整棵任务树（如删除）时用
         ``list_child_ids``，不要复用本方法，否则会漏掉其他类型的子 Task。
@@ -245,7 +246,7 @@ class TaskCrud:
             select(TaskModel)
             .where(
                 TaskModel.parent_task_id == parent_task_id,
-                TaskModel.task_type == "delegate_task",
+                TaskModel.task_type == TaskType.AGENT_TASK,
             )
             .order_by(TaskModel.created_at.asc(), TaskModel.id.asc())
         )
@@ -273,7 +274,7 @@ class TaskCrud:
                 select(TaskModel)
                 .where(
                     TaskModel.parent_task_id.in_(parent_task_ids),
-                    TaskModel.task_type == "delegate_task",
+                    TaskModel.task_type == TaskType.AGENT_TASK,
                 )
                 .order_by(TaskModel.created_at.asc(), TaskModel.id.asc())
             ).all()

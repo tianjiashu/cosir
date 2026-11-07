@@ -12,25 +12,32 @@
 
 import asyncio
 from contextlib import ExitStack
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import cast
 
 from sqlalchemy.orm.session import Session
 
 from app.config.logging.logger import log
-from app.core.tool.multi_agent.task_tool_scope import fork_tool_schemas
 from app.core.workflow.message_queue.message_bodies import ADVANCING_KINDS
 from app.models import ConversationRunRecord, TaskRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
+from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
     ProvisionalTaskCleanupConflictError,
 )
 from app.models.errors.task_fork_errors import TaskForkConflictError
-from app.models.message_metadata import TURN_INPUT_KINDS, UserMessageMetadata
-from app.models.task_kind import USER_FACING_TASK_TYPES
+from app.models.fork_reply import ForkReply
+from app.models.task_extra import TaskExtra, TaskFork, TaskForkLaunch
+from app.models.task_kind import FORK_TASK_TYPES, USER_FACING_TASK_TYPES, TaskType
 from app.service import depends as service_depends
+from app.service.conversation_run.fork_history import (
+    launch_of_run,
+    locate_reply,
+    next_turn_sequence,
+    turn_start_of_call,
+)
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -42,15 +49,6 @@ class TaskDeletionResult:
     """一次已提交任务级联删除需要执行的进程内清理信息。"""
 
     task_ids: frozenset[int]
-
-
-@dataclass(frozen=True)
-class _ForkPoint:
-    """fork 切分点：以某条用户消息开头的一轮，或某个 Run 开头、没有用户输入的回复。"""
-
-    user_message_id: int | None
-    leading_run_id: int | None
-    source_message_id: str
 
 
 class TaskService:
@@ -87,10 +85,10 @@ class TaskService:
         title: str,
         task_id: int | None = None,
         creation_command_id: str | None = None,
-        task_type: str = "user",
+        task_type: TaskType = TaskType.USER,
         parent_task_id: int | None = None,
         session: Session | None = None,
-        extra: dict[str, object] | None = None,
+        extra: TaskExtra | None = None,
         tool_schemas: list[dict[str, object]] | None = None,
         derivation_depth: int = 0,
     ) -> TaskRecord:
@@ -177,9 +175,7 @@ class TaskService:
         from app.storage.crud.task_message_crud import TaskMessageCrud
 
         with self._session_factory() as session:
-            pending = TaskMessageCrud().list_task_ids_with_pending(
-                session, kinds=ADVANCING_KINDS
-            )
+            pending = TaskMessageCrud().list_task_ids_with_pending(session, kinds=ADVANCING_KINDS)
             suspended = self._task.list_ids_with_current_run_status(
                 ConversationRunStatus.SUSPENDED.value, session=session
             )
@@ -236,21 +232,15 @@ class TaskService:
         self,
         source_task_id: int,
         *,
-        user_message_id: int | None,
-        leading_run_id: int | None,
-        source_message_id: str,
+        reply: ForkReply,
     ) -> TaskRecord:
-        """在源 Task 的某一轮回复处创建一个独立的 fork Task（规则见 :meth:`_copy_fork_history`）。
-
-        「一轮」以 ``user_message_id`` 那条用户消息开头，或是 ``leading_run_id`` 那个 Run 开头、
-        没有用户输入的回复；二者恰给一个。``source_message_id`` 只记进 fork 来源供追溯。
-        """
+        """从一条回复往后分叉：新 Task 继承到这条回复为止的上下文。"""
 
         supervisor = asyncio.create_task(
             asyncio.to_thread(
                 self._fork_task_in_workspace,
                 source_task_id,
-                _ForkPoint(user_message_id, leading_run_id, source_message_id),
+                reply,
             )
         )
         try:
@@ -280,79 +270,44 @@ class TaskService:
                 },
             )
 
-    def _fork_task_in_workspace(self, source_task_id: int, point: _ForkPoint) -> TaskRecord:
-        """在指定的一轮回复处创建一个独立的 fork Task。
-
-        workspace 闸门协调结构性删除；源 Task 不加锁，也不访问运行时 context。
-        状态校验与全部历史复制在同一个 BEGIN IMMEDIATE 事务内完成。Run 的
-        新主键通过 ``ConversationRunCrud.clone_for_task`` 生成，再用映射表改写 context；
-        不触发普通 Run 创建事件；执行进度不随历史分叉复制。
-
-        参数:
-            source_task_id: 被 fork 的源 Task 标识。
-            point: 切分点（一轮回复），复制到这一轮的最后一条 context 为止。
-
-        返回:
-            已提交的目标 fork Task。
-
-        异常:
-            KeyError: 源 Task 不存在，或切分点不对应源 Task 中可见的一轮回复。
-            TaskForkConflictError: 源 Task 不是侧栏对话、复制前缀存在非终态 Run，或 workspace 操作
-                忙碌。
-        副作用:
-            新增目标 Task、历史 cloned Runs 与 context entries；源 Task 不变。
-        """
-
+    def _fork_task_in_workspace(self, source_task_id: int, reply: ForkReply) -> TaskRecord:
         source = self._task.get(source_task_id)
         try:
             with workspace_operations.operation(source.workspace_id, timeout=10):
-                return self._copy_fork_history(source_task_id, point)
+                return self._copy_fork_history(source_task_id, reply)
         except TimeoutError as exc:
             raise TaskForkConflictError(
                 "WORKSPACE_BUSY", "workspace has an active structural operation"
             ) from exc
 
-    def _copy_fork_history(self, source_task_id: int, point: _ForkPoint) -> TaskRecord:
-        """持有 workspace 闸门时复制数据库历史；后续 Run 的状态不影响选定前缀。
+    def _copy_fork_history(self, source_task_id: int, reply: ForkReply) -> TaskRecord:
+        """切点在写事务内算：点击到提交之间并入的新输入不会切错位置。
 
-        复制范围：切分点所在那一轮的最后一条 context 及之前的全部可见 context，以及拥有这些
-        context 的 Run；切分点所在 Run 只带到这一轮为止（同一 Run 里更晚的轮次不复制）。前缀里的
-        Run 都须已到终态。BEGIN IMMEDIATE 在读取之前取得写锁，确保检查与复制之间不会插入 resume、
-        编辑或删除提交。提交后只记录汇总日志，不做数据库回读或运行时预加载。
+        异常:
+            KeyError: 回复不存在，映射 404。
+            TaskForkConflictError: 这条回复还在进行（``FORK_REPLY_ACTIVE``）。
         """
-
         with begin_immediate(self._session_factory) as session:
             source = self._task.ensure_task(session, source_task_id)
             _require_forkable(source)
-            runs = self._turn.list_by_task_in_session(session, source_task_id)
             rows = self._context.history(source_task_id, session)
-            boundary_run_id, cut_sequence = _resolve_fork_cut(rows, point)
-            target, run_id_map, cloned_context_count = self._clone_prefix(
+            runs = self._turn.list_by_task_in_session(session, source.id)
+            start = locate_reply(rows, reply)
+            before_sequence = next_turn_sequence(rows, start)
+            if before_sequence is None:
+                if any(r.status in ACTIVE_RUN_STATUSES for r in runs):
+                    raise TaskForkConflictError("FORK_REPLY_ACTIVE", "this reply is still running")
+                before_sequence = rows[-1].sequence + 1
+            target = self._copy_prefix(
                 session,
                 source,
-                runs,
-                boundary_run_id=boundary_run_id,
-                cut_sequence=cut_sequence,
+                rows,
+                before_sequence,
+                launch=launch_of_run(source, start.run_id, runs),
                 title=self._task.next_fork_title(source.workspace_id, source.title, session),
-                fork_extra={"source_message_id": point.source_message_id},
-                derivation_depth=0,
+                task_type=TaskType.USER_FORK,
+                depth=0,
             )
-        log.info(
-            "task_forked",
-            extra={
-                "msg": "task fork committed",
-                "data": {
-                    "source_task_id": source_task_id,
-                    "boundary_run_id": boundary_run_id,
-                    "source_message_id": point.source_message_id,
-                    "target_task_id": target.id,
-                    "cloned_run_count": len(run_id_map),
-                    "cloned_context_count": cloned_context_count,
-                },
-            },
-        )
-        # target 已经在事务内 flush，且提交后的只读查询不是 Fork 成功条件；
-        # 直接返回事务内记录，避免“已提交但最后 get 失败”伪装成 Fork 失败。
         return target
 
     def fork_for_agent(
@@ -364,141 +319,83 @@ class TaskService:
         title: str,
         derivation_depth: int,
     ) -> TaskRecord:
-        """Agent 在 ``run_id`` 里发起 ``fork_task``：把源 Task 复制到这次调用之前，建出侧栏 fork。
-
-        工具线程调用。切在含本次调用的 assistant 消息之前：同一批的其他调用还没闭合，带进去会违反
-        工具协议；分叉要做的事由随后投递的 Agent 消息交代。发起 fork 的 Run 还在运行，副本落为
-        ``completed / forked``（见 ``ConversationRunCrud.clone_for_task``）。与用户 fork
-        共用复制内核与 workspace 闸门；源 Task 不加 Task 闸门，运行中的 Run 继续写的行都在
-        切分点之后。
-
-        异常:
-            KeyError: 源 Task 不存在，或上下文里找不到这次调用。
-            TaskForkConflictError: 源 Task 不是侧栏对话，或 workspace 操作忙碌。
-        """
-
+        """切在调用所在回合的开头：继承到上一条回复，当前回合交给新的任务说明。"""
         source = self._task.get(source_task_id)
         try:
-            with workspace_operations.operation(source.workspace_id, timeout=10):
-                with begin_immediate(self._session_factory) as session:
-                    source = self._task.ensure_task(session, source_task_id)
-                    _require_forkable(source)
-                    runs = self._turn.list_by_task_in_session(session, source_task_id)
-                    rows = self._context.history(source_task_id, session)
-                    boundary_run_id, cut_sequence = _resolve_tool_call_cut(rows, tool_call_id)
-                    target, run_id_map, cloned_context_count = self._clone_prefix(
-                        session,
-                        source,
-                        runs,
-                        boundary_run_id=boundary_run_id,
-                        cut_sequence=cut_sequence,
-                        title=title,
-                        fork_extra={
-                            "source_message_id": None,
-                            "created_by": "agent",
-                            "tool_call_id": tool_call_id,
-                        },
-                        derivation_depth=derivation_depth,
-                        active_run_id=run_id,
-                    )
+            with (
+                workspace_operations.operation(source.workspace_id, timeout=10),
+                begin_immediate(self._session_factory) as session,
+            ):
+                source = self._task.ensure_task(session, source_task_id)
+                _require_forkable(source)
+                rows = self._context.history(source_task_id, session)
+                runs = self._turn.list_by_task_in_session(session, source.id)
+                target = self._copy_prefix(
+                    session,
+                    source,
+                    rows,
+                    turn_start_of_call(rows, run_id, tool_call_id),
+                    launch=launch_of_run(source, run_id, runs),
+                    title=title,
+                    task_type=TaskType.AGENT_FORK,
+                    depth=derivation_depth,
+                )
         except TimeoutError as exc:
             raise TaskForkConflictError(
                 "WORKSPACE_BUSY", "workspace has an active structural operation"
             ) from exc
+        return target
+
+    def _copy_prefix(
+        self,
+        session: Session,
+        source: TaskRecord,
+        rows: list[ConversationTaskContextRecord],
+        before_sequence: int,
+        *,
+        launch: TaskForkLaunch,
+        title: str,
+        task_type: TaskType,
+        depth: int,
+    ) -> TaskRecord:
+        target = self._task.create(
+            workspace_id=source.workspace_id,
+            title=title,
+            task_type=task_type,
+            extra=TaskExtra(fork=TaskFork(
+                source_task_id=source.id,
+                source_title=source.title,
+                tree_parent_task_id=source.id,
+                initial_launch=launch,
+            )),
+            # 工具列表是请求前缀的一部分，改了就接不上源的缓存；派生限制由运行期准入执行。
+            tool_schemas=deepcopy(source.tool_schemas),
+            session=session,
+            derivation_depth=depth,
+        )
+        count = self._context.copy_fork_prefix(
+            session, source, target, rows, before_sequence
+        )
         log.info(
-            "task_forked_by_agent",
+            "task_fork_copied",
             extra={
-                "msg": "Agent fork committed",
+                "msg": "copied context before the turn boundary",
                 "data": {
-                    "source_task_id": source_task_id,
-                    "source_run_id": run_id,
-                    "tool_call_id": tool_call_id,
+                    "source_task_id": source.id,
                     "target_task_id": target.id,
-                    "derivation_depth": derivation_depth,
-                    "cloned_run_count": len(run_id_map),
-                    "cloned_context_count": cloned_context_count,
+                    "before_sequence": before_sequence,
+                    "task_type": task_type,
+                    "context_count": count,
                 },
             },
         )
         return target
 
-    def _clone_prefix(
-        self,
-        session: Session,
-        source: TaskRecord,
-        runs: list[ConversationRunRecord],
-        *,
-        boundary_run_id: int,
-        cut_sequence: int,
-        title: str,
-        fork_extra: dict[str, object],
-        derivation_depth: int,
-        active_run_id: int | None = None,
-    ) -> tuple[TaskRecord, dict[int, int], int]:
-        """用户 fork 与 Agent fork 共用的复制内核：在调用方事务内建出 fork Task 并复制前缀。
-
-        复制到 ``boundary_run_id`` 为止的 Run 与序号不晚于 ``cut_sequence`` 的 context；前缀里的 Run
-        都须已到终态，``active_run_id``（发起 Agent fork 的那个 Run）例外，副本落为
-        ``completed / forked``。Task 当前 Run 指向克隆出的切分点 Run：snapshot 的 activity
-        由它投影，没有指针时前端拿不到终态，编辑重跑等「静止后才开放」的入口不会出现；新 Run
-        也要从它继承发起配置。不触发普通 Run 创建事件，执行进度不随历史分叉复制。返回 fork Task、
-        Run id 映射与复制的 context 条数。
-        """
-
-        boundary_index = next(
-            (index for index, run in enumerate(runs) if run.id == boundary_run_id),
-            None,
-        )
-        if boundary_index is None:
-            raise KeyError(boundary_run_id)
-        source_prefix = runs[: boundary_index + 1]
-        if any(
-            run.status not in TERMINAL_RUN_STATUSES and run.id != active_run_id
-            for run in source_prefix
-        ):
-            raise TaskForkConflictError(
-                "RUN_NOT_READY",
-                "all runs in the selected history prefix must be terminal before forking",
-            )
-        target = self._task.create(
-            workspace_id=source.workspace_id,
-            title=title,
-            task_type="fork",
-            extra={"fork": {"source_task_id": source.id, **fork_extra}},
-            tool_schemas=fork_tool_schemas(
-                source.tool_schemas,
-                source_depth=source.derivation_depth,
-                depth=derivation_depth,
-            ),
-            session=session,
-            derivation_depth=derivation_depth,
-        )
-        run_id_map: dict[int, int] = {}
-        for source_run in source_prefix:
-            cloned = self._turn.clone_for_task(
-                session,
-                source_run,
-                target.id,
-                settle_as_forked=source_run.id == active_run_id,
-            )
-            run_id_map[source_run.id] = cloned.id
-        cloned_context_count = self._context.clone_for_fork(
-            source.id,
-            target.id,
-            run_id_map,
-            session,
-            max_sequence=cut_sequence,
-        )
-        target = self._task.set_current_run_id(
-            target.id, run_id_map[boundary_run_id], session=session
-        )
-        return target, run_id_map, cloned_context_count
-
     def list_tasks_for_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """列出某工作区下的用户任务（排除委派子任务）。
 
-        委派子任务（``task_type='delegate_task'``）不进侧边栏对话列表，故本方法仅返回
-        ``task_type='user'`` 或 ``'fork'`` 的任务，按更新时间倒序。
+        委派子任务（``task_type='agent_task'``）不进侧边栏对话列表，故本方法仅返回
+        ``user``、``user_fork`` 或 ``agent_fork`` 的任务，按更新时间倒序。
 
         参数:
             workspace_id: 工作区标识。
@@ -556,7 +453,7 @@ class TaskService:
     def collect_fork_descendant_ids(self, task_id: int) -> frozenset[int]:
         """返回从 ``task_id`` fork 出的全部后代（fork 的 fork 也算），不含自身。
 
-        fork 来源记在 ``extra.fork.source_task_id``（不是 ``parent_task_id``），所以按工作区读出全部
+        fork 树关系记在 ``extra.fork.tree_parent_task_id``（不是 ``parent_task_id``），所以按工作区读出全部
         fork 的来源再从根向下展开。来源关系异常成环时，已访问的不重复展开。
 
         异常:
@@ -819,10 +716,10 @@ class TaskService:
 
 def _fork_source(task: TaskRecord, deleted: frozenset[int]) -> int | None:
     """被删根的 fork 来源（来源也在删除集里时视为无）：它的 fork 改挂到这里。"""
-    if task.task_type != "fork":
+    if task.task_type not in FORK_TASK_TYPES:
         return None
-    source = (task.extra or {}).get("fork", {}).get("source_task_id")
-    return source if isinstance(source, int) and source not in deleted else None
+    source = cast(TaskFork, task.extra.fork).tree_parent_task_id
+    return source if source not in deleted else None
 
 
 def _require_forkable(source: TaskRecord) -> None:
@@ -834,96 +731,3 @@ def _require_forkable(source: TaskRecord) -> None:
             "only sidebar conversations can be forked",
             retryable=False,
         )
-
-
-def _resolve_tool_call_cut(
-    rows: list[ConversationTaskContextRecord], tool_call_id: str
-) -> tuple[int, int]:
-    """Agent fork 的切分点：``(最后一条复制行所在 Run, 它的序号)``。
-
-    切在含本次调用的 assistant 行之前。
-
-    异常:
-        KeyError: 上下文里找不到这次调用，或它之前没有可复制的会话行。
-    """
-    call_row = next(
-        (
-            row
-            for row in rows
-            if row.message.get("role") == "assistant"
-            and any(
-                call.get("id") == tool_call_id
-                for call in cast(list[dict[str, object]], row.message.get("tool_calls") or [])
-            )
-        ),
-        None,
-    )
-    if call_row is None:
-        raise KeyError(tool_call_id)
-    before = [
-        row
-        for row in rows
-        if row.run_id is not None and row.retained and row.sequence < call_row.sequence
-    ]
-    if not before:
-        raise KeyError(tool_call_id)
-    last = max(before, key=lambda row: row.sequence)
-    return cast(int, last.run_id), last.sequence
-
-
-def _resolve_fork_cut(
-    rows: list[ConversationTaskContextRecord], point: _ForkPoint
-) -> tuple[int, int]:
-    """把切分点换算成 ``(所在 Run, 这一轮最后一条 context 的序号)``；只看前端可见的行。
-
-    一轮从它的输入消息（或 Run 开头）起，到同一 Run 的下一条开启一轮的输入（用户输入或 Agent 消息）
-    之前为止。
-
-    异常:
-        KeyError: 切分点在源 Task 的可见历史里找不到。
-    """
-
-    visible = sorted(
-        (row for row in rows if row.run_id is not None and row.project_to_transport),
-        key=lambda row: row.sequence,
-    )
-
-    def starts_turn(row: ConversationTaskContextRecord) -> bool:
-        # 用户输入与 Agent 消息都开启一轮（与快照里「user 消息 + 它的回复」一致）。
-        return (
-            row.message["role"] == "user"
-            and isinstance(row.metadata, UserMessageMetadata)
-            and row.metadata.kind in TURN_INPUT_KINDS
-        )
-
-    if point.user_message_id is not None:
-        start = next(
-            (
-                row
-                for row in visible
-                if starts_turn(row) and row.message_id == point.user_message_id
-            ),
-            None,
-        )
-        if start is None:
-            raise KeyError(point.source_message_id)
-        run_id = cast(int, start.run_id)
-        turn: list[ConversationTaskContextRecord] = []
-        for row in visible:
-            if row.run_id != run_id or row.sequence < start.sequence:
-                continue
-            if turn and starts_turn(row):
-                break
-            turn.append(row)
-    else:
-        run_id = cast(int, point.leading_run_id)
-        turn = []
-        for row in visible:
-            if row.run_id != run_id:
-                continue
-            if starts_turn(row):
-                break
-            turn.append(row)
-        if not turn:
-            raise KeyError(point.source_message_id)
-    return run_id, turn[-1].sequence

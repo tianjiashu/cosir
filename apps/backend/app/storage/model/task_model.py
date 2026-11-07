@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy import JSON, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.models.task_kind import TaskType
 from app.storage.model.base import StorageBase
 
 
@@ -23,7 +24,7 @@ class TaskModel(StorageBase):
     )
 
     task_type: Mapped[str] = mapped_column(
-        Text, nullable=False, server_default=text("'user'"), default="user"
+        Text, nullable=False, server_default=text("'user'"), default=TaskType.USER
     )
     parent_task_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("tasks.id"), nullable=True
