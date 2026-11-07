@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
 from app.models.message_metadata import BackgroundKind, BackgroundWork
@@ -13,14 +15,17 @@ from app.models.message_metadata import BackgroundKind, BackgroundWork
 def start_background_job(
     job: BackgroundJob, *, task_id: int, run_id: int | None, tool_call_id: str,
     kind: BackgroundKind, label: str,
+    collect_cancelled: Callable[[], BackgroundConclusion] | None = None,
+    reports_user_stop: bool = False,
 ) -> BackgroundWork:
     """登记纯后台作业，立即返回占位所需记录；结论由登记表交付。"""
     work = background_registry.register(
         tool_call_id, task_id=task_id, run_id=run_id, kind=kind, label=label,
         on_cancel=lambda _reason: job.cancel(),
+        collect_cancelled=collect_cancelled, reports_user_stop=reports_user_stop,
     )
     def deliver(result: BackgroundConclusion) -> None:
-        background_registry.complete(tool_call_id, result)
+        background_registry.complete(task_id, tool_call_id, result)
 
     job.on_done(deliver)
     return work
