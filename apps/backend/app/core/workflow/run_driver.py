@@ -14,14 +14,14 @@ import asyncio
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.context.tool_call_closure import ContextProtocolError
-from app.core.events import ToolCallsSettledEvent
+from app.core.events import ToolCallStatusChangedEvent
 from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.llm_provider.model_failure import (
     classify_model_failure,
     extract_model_response_message,
 )
 from app.core.tool.background.backgraound_registry import background_registry
-from app.core.tool.background.cancel_placeholders import cancel_placeholders
+from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cancel_placeholders
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
@@ -31,6 +31,7 @@ from app.models.enums.conversation_run_status import RunTransition
 from app.service.depends import (
     get_conversation_event_projector,
     get_conversation_run_ledger,
+    get_conversation_task_context_service,
     get_task_service,
 )
 
@@ -89,9 +90,10 @@ class RunDriver:
         except Exception as exc:
             # 即使失败本身落库出错，未提交的工作也不能继续等待启动。
             withdrawn = background_registry.withdraw_uncommitted(run.task_id, run.id)
-            self._settle_failure(run, exc)
             if withdrawn:
                 await asyncio.to_thread(cancel_placeholders, run.task_id, withdrawn, "启动失败")
+            if self._settle_failure(run, exc):
+                await asyncio.to_thread(self._close_tool_calls, run)
         finally:
             # 兜底回收「点名了已结束的工具调用」这类不会再被消费的工具级信号。
             tool_call_cancellation_registry.clear_task(run.task_id)
@@ -102,8 +104,8 @@ class RunDriver:
         current = await asyncio.to_thread(self._ledger.get_run, run.id)
         return current.status in _STOP_HOOK_STATUSES
 
-    def _settle_failure(self, run: ConversationRunRecord, exc: Exception) -> None:
-        """把异常归类成失败 code 并落定 failed，再收束本 Run 仍未闭合的工具调用。
+    def _settle_failure(self, run: ConversationRunRecord, exc: Exception) -> bool:
+        """把异常归类成失败 code 并落定 failed，返回本次是否真的落定了。
 
         落定自身失败（如数据库不可用）时先记录再上浮：后台 task 无人 await，只有这条结构化日志能
         留下「Run 仍停在 running」的 run 级事实，遗留的 running 由下次启动收敛。
@@ -145,16 +147,41 @@ class RunDriver:
             },
             exc_info=exc,
         )
-        if failed is None:
-            return
-        # 失败打断了工具执行时，pending / running 的工具调用不会再收到单条迁移。
-        get_conversation_event_projector().process(
-            ToolCallsSettledEvent(
-                task_id=failed.task_id,
-                run_id=run.id,
-                status="cancelled",
-                reason="runtime_failed",
+        return failed is not None
+
+    def _close_tool_calls(self, run: ConversationRunRecord) -> None:
+        """失败打断了工具执行：把没有结果的调用写成事实，再投影。
+
+        不能只改投影：等用户决定的占位已经是调用的结果，决定在 Run 失败后仍可作出，它在库里
+        还在等，卡片就必须还在等。只有真正断掉的才结束：没有结果行的调用，以及决定已认领、
+        执行被打断的 HITL 占位（Task 同时只有一个执行者，所以 ``running`` 的占位都属于这次）。
+        配对依据损坏时不补结果行，保留事实，这些调用的快照要到下次重建才收敛；已认领的决定不靠
+        配对，照常结束。同步写库，调用方放在工作线程。
+        """
+        context = get_conversation_task_context_service()
+        repaired: list[str] = []
+        try:
+            repaired = context.close_unclosed_tool_calls_for_run(run.task_id, run.id)
+        except ContextProtocolError as error:
+            log.error(
+                "run_failure_context_protocol_invalid",
+                extra={
+                    "msg": "上下文配对依据不完整，未闭合调用留待重建收敛",
+                    "data": {"task_id": run.task_id, "run_id": run.id, **error.log_data()},
+                },
             )
+        projector = get_conversation_event_projector()
+        for tool_call_id in repaired:
+            projector.process(
+                ToolCallStatusChangedEvent(
+                    task_id=run.task_id,
+                    run_id=run.id,
+                    tool_call_id=tool_call_id,
+                    status="cancelled",
+                )
+            )
+        cancel_placeholders(
+            run.task_id, context.claimed_decisions(run.task_id), INTERRUPTED_HINT
         )
 
 

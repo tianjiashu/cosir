@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
 from app.core.events import EventSink
+from app.core.tool.multi_agent.task_tool_scope import banned_derivation_tools
 from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     cancellation_registry,
 )
@@ -70,7 +71,8 @@ class RuntimeContext:
         依赖 Assistant Transport。
 
         ``admitted_tools`` 以 Task 固化的工具名为基准、减去本 Run 冻结的工具组按注册表展开的工具名
-        （组名是用户意图的事实，展开在这里现算，前端不换算），只供工具执行层在
+        （组名是用户意图的事实，展开在这里现算，前端不换算）和这类 Task 用不了的派生工具（分叉
+        沿用源的 schema，限制只能在这里生效），只供工具执行层在
         模型返回调用后做准入拦截。模型绑定始终使用 Task 固化的完整 schema，不得按本轮准入过滤，
         否则会改变同一 Task 的请求前缀并破坏缓存复用。
 
@@ -88,10 +90,12 @@ class RuntimeContext:
         from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 
         task_space = task_runtime_spaces.get_or_create(run.task_id)
+        task = task_space.current_task
+        task_tools = frozenset(task_space.task_tool_names)
         ban_tools = frozenset(
             get_tool_registry().tool_groups_to_tool_names(run.options.disabled_tool_groups)
-        )
-        admitted_tools = frozenset(task_space.task_tool_names) - ban_tools
+        ) | (banned_derivation_tools(task.task_type, task.derivation_depth) & task_tools)
+        admitted_tools = task_tools - ban_tools
         # 执行开始时 mailbox 已重置（``TaskExecution.start``），这里投进的通知随本次执行写入或丢弃。
         content = cls.tool_availability_notice(
             task_space.announced_ban_tools, ban_tools, admitted_tools
@@ -102,7 +106,7 @@ class RuntimeContext:
 
         return cls(
             run=run,
-            task=task_space.current_task,
+            task=task,
             workspace=task_space.current_workspace,
             agent=AgentRuntimeConfig.for_run(run),
             admitted_tools=admitted_tools,

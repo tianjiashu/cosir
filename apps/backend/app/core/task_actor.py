@@ -384,6 +384,9 @@ class TaskActor:
         current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
         if self._phase(current) != "idle":
             return False
+        # 唤醒先写 running 再登记执行者，这里不持闸门，可能落在这个空档：还有人要跑，不算静止。
+        if current is not None and current.status == ConversationRunStatus.RUNNING:
+            return False
         continues = current is None or current.status == ConversationRunStatus.COMPLETED.value
         pending = await asyncio.to_thread(self._queue.pending_nowait, self.task_id)
         return not any(

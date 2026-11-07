@@ -26,8 +26,8 @@ from app.core.workflow.node_helper.common import (
     _runtime_context,
     route_state,
 )
-from app.core.workflow.node_helper.streaming_part_state_machine import (
-    StreamingPartStateMachine,
+from app.core.workflow.node_helper.model_stream_state_machine import (
+    ModelStreamStateMachine,
 )
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.react_route import ReactRoute
@@ -71,12 +71,9 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             },
         },
     )
-    # part 生命周期收口：把交错的 text/reasoning 流转换为顺序括号化的 part 事件流。
-    # 每次模型请求新建批次，取消只收敛本次已投影的调用。
+    # 请求阶段与输出事件由同一状态机管理；工具批次仅承担后续执行交接。
     batch = ToolBatch()
-    parts = StreamingPartStateMachine(
-        task_id=task_id, run_id=run_id, step_id=step_id, batch=batch
-    )
+    parts = ModelStreamStateMachine(task_id=task_id, run_id=run_id, step_id=step_id)
 
     # SDK 快照负责聚合；context 只保存请求正文副本和独立响应元数据。
     aggregated_message: ParsedChatCompletionSnapshot | None = None
@@ -85,12 +82,13 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         # 加载上下文期间到达的取消：不开模型请求，走下方同一个取消落定分支。
         if rc.is_cancelled():
             raise RunStopped()
+        parts.start()
         async with aclosing(model.stream(messages)) as chunks:
             async for event in chunks:
                 if rc.is_cancelled():
                     raise RunStopped()
                 aggregated_message = event.snapshot
-                _message_context().save_model_response(
+                response = _message_context().save_model_response(
                     aggregated_message,
                     include_in_context=False,
                     registered_tool_names=registered_tool_names,
@@ -106,14 +104,13 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
                 raw_tool_calls: list[ParsedFunctionToolCall] = (
                     aggregated_message.choices[0].message.tool_calls or []
                 )
-                # 保留通道原始分片，换行和空白也是模型输出的一部分。
-                if delta and delta.content:
-                    parts.text(delta.content)
-                if reasoning:
-                    parts.reasoning(reasoning)
-                if raw_tool_calls:
-                    # 一个 chunk 可能并行携带多个 tool call，逐条处理已有的 name/id 身份。
-                    parts.tool_call(raw_tool_calls)
+                parts.receive(
+                    source_sequence=response.sequence,
+                    text=delta.content if delta else None,
+                    reasoning=bool(reasoning),
+                    tool_delta=bool(delta and delta.tool_calls),
+                    tool_calls=raw_tool_calls,
+                )
             # 最后一帧之后仍可能收到取消信号，进入完成判定前再检查一次。
             if rc.is_cancelled():
                 raise RunStopped()
@@ -143,6 +140,10 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             end_reason=Constant.Run.RUN_END_REASON_RUNTIME_CANCELLED,
             usage_stats=rc.usage_stats,
         )
+        raise
+    except Exception:
+        # 流中失败：已预览的调用不会再有结果，和取消一样写成事实；Run 的失败由 RunDriver 落定。
+        parts.cancel()
         raise
     finally:
         parts.finish()
@@ -183,17 +184,22 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     )
 
     if not calls and await asyncio.to_thread(
-        service_depends.get_conversation_task_context_service().run_awaits_background, task_id, run_id
+        service_depends.get_conversation_task_context_service().run_awaits_background,
+        task_id,
+        run_id,
     ):
         # 这次输出仍是中间过程。释放流式草稿的身份，但不把它送进下次模型上下文。
         _message_context().abandon_model_response()
         log.info(
             "model_completion_waiting_for_background",
-            extra={"msg": "本 Run 尚有后台结论未并入", "data": {"run_id": run_id, "step_id": step_id}},
+            extra={
+                "msg": "本 Run 尚有后台结论未并入",
+                "data": {"run_id": run_id, "step_id": step_id},
+            },
         )
         return {**route_state(step_count, ReactRoute.PREPARE_INPUT), "wait_for_input": True}
 
-    _message_context().save_model_response(
+    response = _message_context().save_model_response(
         aggregated_message,
         include_in_context=True,
         registered_tool_names=registered_tool_names,
@@ -225,6 +231,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         RunTransition.COMPLETE,
         usage_stats=rc.usage_stats,
         final_output=final_answer,
+        response_sequence=response.sequence,
         end_reason=finish_reason,
     )
     return route_state(

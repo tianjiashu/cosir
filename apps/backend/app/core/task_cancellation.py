@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 
 from app.config.logging.logger import log
-from app.core.tool.background.cancel_placeholders import RUN_STOPPED_HINT, cancel_placeholders
 from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.cancel_placeholders import RUN_STOPPED_HINT, cancel_placeholders
 from app.core.workflow.cancel.conversation_run_cancellation_registry import CancelReason
 from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.models import ConversationRunRecord
@@ -63,6 +63,7 @@ class TaskCancellation:
                 self.task_id,
                 background,
                 RUN_STOPPED_HINT,
+                displays=background,
             )
         except Exception:
             log.exception(

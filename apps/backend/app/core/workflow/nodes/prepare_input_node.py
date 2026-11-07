@@ -127,7 +127,7 @@ async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | No
     if not await asyncio.to_thread(_write_message, decision, step_id=step_id, claim_decision=True):
         return None
     claimed = _message_context().tool_result_metadata(body.tool_call_id)
-    if claimed is not None and claimed.status == "running" and not claimed.hidden:
+    if claimed is not None and claimed.status == "running":
         emit(
             ToolCallStatusChangedEvent(
                 task_id=rc.run.task_id,
@@ -210,14 +210,14 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
         if current is None:
             return False
         message, metadata = current.body.render()
-        # 开启一轮的输入以队列行 id 为消息身份：快照里的 user 消息与它的回复都按它寻址。
-        opens_turn = metadata.kind in TURN_INPUT_KINDS
+        # 一轮的输入以队列行 id 为消息身份：快照里的消息、回复与途中来信都按它寻址。
+        is_turn_input = metadata.kind in TURN_INPUT_KINDS
         context.add_message(
             message,
             metadata=metadata,
             session=session,
             project_to_transport=current.project_to_transport,
-            message_id=current.id if opens_turn else None,
+            message_id=current.id if is_turn_input else None,
         )
         if claim_decision:
             call_id = cast(DecisionBody, current.body).tool_call_id
@@ -237,7 +237,7 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
                      "status": background_event.status},
         })
         emit(background_event)
-    if opens_turn:
+    if is_turn_input:
         emit(
             InputConsumedEvent(
                 task_id=rc.task.id,
