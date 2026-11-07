@@ -49,6 +49,7 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import init_storage, initialize_app_schema
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.core.tool.tool_registry import ToolRegistry
 from app.tools.tool_registration import build_tool_registry
 from app.utils.path import system_cosir as paths
 from tests.terminal_test_support import terminal_worker_path
@@ -161,6 +162,18 @@ def reset_runtime_singletons() -> Iterator[None]:
         yield
     finally:
         SINGLETONS.undo()
+
+
+@pytest.fixture
+def monkeypatch(reset_runtime_singletons: None) -> Iterator[pytest.MonkeyPatch]:
+    """固定撤销顺序：先撤用例自己的补丁，再撤 ``SINGLETONS``。
+
+    同一属性上两层补丁若反序撤销，外层保存的是替身，真实单例就回不来了，后续用例会读到
+    已失效的替身（表现为只在全量顺序下失败）。
+    """
+
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
 
 
 @pytest.fixture(autouse=True)
@@ -339,6 +352,15 @@ def _bind(crud_type: type[object], factory: sessionmaker) -> object:
     crud = crud_type.__new__(crud_type)
     crud._session_factory = factory  # type: ignore[attr-defined]
     return crud
+
+
+@pytest.fixture
+def empty_tool_registry() -> Iterator[None]:
+    """快照重建要从注册表读工具呈现；不关心工具行为的用例用空注册表，结束后复原进程单例。"""
+    previous = configuration._TOOL_REGISTRY, configuration._TOOL_EXECUTOR
+    configuration.set_tool_registry(ToolRegistry())
+    yield
+    configuration._TOOL_REGISTRY, configuration._TOOL_EXECUTOR = previous
 
 
 @pytest.fixture

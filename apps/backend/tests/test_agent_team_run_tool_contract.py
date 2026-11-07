@@ -263,7 +263,7 @@ def test_model_facing_projection_carries_the_new_contract() -> None:
     assert projection["description"] == definition.description
 
     parameters = projection["parameters"]
-    assert set(parameters["required"]) == {"team_id", "goal", "node_goals"}
+    assert set(parameters["required"]) == {"intent", "team_id", "goal", "node_goals"}
     team_id_description = parameters["properties"]["team_id"]["description"]
     assert team_id_description
     assert "available agent teams catalog" in team_id_description.lower()

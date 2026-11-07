@@ -805,7 +805,7 @@ def test_handoff_resolves_the_tab_from_the_tab_list(
         assert observation.display_data["tab_id"] == expected
         [lease] = handoff_registry.leases(42)
         assert lease.resource_id == expected
-        handoff_registry.end("call-9")
+        handoff_registry.end(7, "call-9")
 
 
 def test_navigate_sends_emulation_before_loading(

@@ -160,6 +160,10 @@ npm run electron:dev
 `scripts/start-desktop.cmd`）。统一开发入口会构建 workspace 中的 Terminal
 Worker，注入其绝对路径，并在启动 Electron 前确认产物存在。
 
+macOS 开发入口会在 `target/electron-dev/` 下生成独立的 `Cosir.app`，让 Dock 显示
+`Cosir`，不修改 `node_modules` 中的 Electron。应用包按 Electron 版本、架构与准备脚本内容缓存；
+后续启动直接复用，前端热更新及宿主代码变更后的自动重启照常工作。删除该目录可重新生成。
+
 开发启动时，入口先启动 Vite 前端，再启动 Electron；宿主在未打包时先用 `uv` 按 `apps/backend/uv.lock` 同步后端依赖、解析出解释器，再**直接托管该解释器**（`python -m app`）——`uv` 只参与环境解析，不作为被监督的进程。首次启动后，在界面中打开**模型设置**，配置 Provider 和模型，再选择一个本地文件夹创建工作区。
 
 开发后端使用 workspace 构建出的 `target/debug/terminal-worker`。终端命令（`execute_terminal` 与交互终端）都由它启动，所以绕过桌面宿主直接跑后端时，要先 `cargo build -p cosir-terminal-worker`，并把 `CODING_AGENT_TERMINAL_WORKER` 设为它的绝对路径，否则终端工具不可用。`npm run build:bundle` 会生成真实的后端与 release 版 Terminal Worker 资源；安装包打包尚未接入。

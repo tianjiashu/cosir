@@ -230,7 +230,7 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
         store.contexts.get(store.task.id, include_in_context=False)
     )
-    assert {call_id: part["status"] for (_, call_id), part in tool_parts.items()} == {
+    assert {call_id: part["status"] for call_id, part in tool_parts.items()} == {
         "call-success": "completed",
         "call-failed": "failed",
         "call-cancelled": "cancelled",
@@ -402,6 +402,6 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     repaired_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
         store.contexts.get(store.task.id, include_in_context=False)
     )
-    assert {call_id: part["status"] for (_, call_id), part in repaired_parts.items()} == {
+    assert {call_id: part["status"] for call_id, part in repaired_parts.items()} == {
         "call-interrupted": "cancelled"
     }

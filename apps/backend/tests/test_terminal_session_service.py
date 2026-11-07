@@ -549,7 +549,7 @@ def test_handoff_is_registered_and_ended_by_the_decision_replay(
         _begin(service, session_id, tool_call_id="call-other")
 
     workers[0].screen(["$ sudo make install", "Password:", "installed"], cursor=(2, 9))
-    returned = service.require(session_id, 1).end_handoff(handoff_registry.end("call-handoff"))
+    returned = service.require(session_id, 1).end_handoff(handoff_registry.end(1, "call-handoff"))
     assert "handed the terminal back" in returned.text and "installed" in returned.text
     assert handoff_registry.on_resource("terminal", session_id) is None
     assert decisions == []
@@ -578,7 +578,7 @@ def test_session_end_settles_the_handoff_on_the_users_behalf(monkeypatch, tmp_pa
     wait_until(lambda: len(decisions) == 1)
     assert decisions == [(1, "call-handoff", "reject", "runtime")]
     assert handoff_registry.leases(1) == []
-    returned = service.require(session_id, 1).end_handoff(handoff_registry.end("call-handoff"))
+    returned = service.require(session_id, 1).end_handoff(handoff_registry.end(1, "call-handoff"))
     assert "ended before the user handed it back" in returned.text
 
 

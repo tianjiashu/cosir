@@ -26,6 +26,9 @@ class _RecordingContextStore:
         self.appended: list[dict[str, Any]] = []
         self.current_max_sequence = 0
 
+    def tool_call_ids(self, task_id: int) -> set[str]:
+        return set()
+
     def append(self, *args: Any, **kwargs: Any) -> None:
         self.appended.append({"args": args, "kwargs": kwargs})
         self.current_max_sequence = args[3]
@@ -40,6 +43,8 @@ class _RecordingContextStore:
 
 def _runtime_manager(context_store: _RecordingContextStore) -> RuntimeMessageContextManager:
     manager = object.__new__(RuntimeMessageContextManager)
+    manager._used_call_ids = set()
+    manager._response_call_ids = {}
     manager.current_task_id = 7
     manager.agent_profile = SimpleNamespace()
     manager.workspace = SimpleNamespace(id=7, root_path="")

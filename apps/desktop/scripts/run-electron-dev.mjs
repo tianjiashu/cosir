@@ -6,14 +6,13 @@ import * as esbuild from "esbuild";
 
 import { copyElectronResources, electronBuildOptions } from "./build-electron.mjs";
 import { buildDevelopmentTerminalWorker } from "./cargo-target.mjs";
+import { developmentElectronExecutable } from "./development-electron.mjs";
 import { desktopRoot } from "./project-paths.mjs";
 
 const RENDERER_HOST = "127.0.0.1";
 const RENDERER_PORT = 3000;
 const rendererUrl = `http://${RENDERER_HOST}:${RENDERER_PORT}`;
 const require = createRequire(import.meta.url);
-// electron 包在 Node 里导出的就是本机 Electron 可执行文件路径。
-const electronExecutable = require("electron");
 // 直接用 node 跑 vite 的命令行入口：经 npm / npm.cmd 转一层时，Windows 上不带 shell 无法启动 .cmd，
 // 结束时也只杀得掉 npm、杀不到 vite 本身。vite 的 exports 不暴露 bin，从包入口（dist/node）回推。
 const viteCli = path.resolve(path.dirname(require.resolve("vite")), "..", "..", "bin", "vite.js");
@@ -30,7 +29,9 @@ let restarting = false;
 let shuttingDown = false;
 
 let terminalWorker;
+let electronExecutable;
 try {
+  electronExecutable = developmentElectronExecutable();
   terminalWorker = buildDevelopmentTerminalWorker();
 } catch (error) {
   console.error(`[cosir] ${error.message}`);

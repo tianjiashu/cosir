@@ -75,7 +75,7 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
 
                     def cmd(label):
                         return "execute_terminal", {
-                            "description": label,
+                            "intent": label,
                             "command": label,
                             "background": True,
                         }
@@ -84,12 +84,13 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
                         "delegate": (
                             "delegate_task",
                             {
+                                "intent": "review",
                                 "child_agent_id": "general-assistant",
                                 "agent_name": "review",
                                 "message": "child-report",
                             },
                         ),
-                        "fork": ("fork_task", {"title": "review", "message": "child-report"}),
+                        "fork": ("fork_task", {"intent": "fork", "title": "review", "message": "child-report"}),
                     }.get("delegate" if last == "delegate_restart" else last, cmd("B"))
                     calls = [
                         {
@@ -159,7 +160,7 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
 
                 await actor.abort()
                 assert background_registry.complete(
-                    "bg-B", BackgroundConclusion({"output": "already queued"})
+                    task.id, "bg-B", BackgroundConclusion({"output": "already queued"})
                 )
 
             await asyncio.to_thread(background_registry.close)

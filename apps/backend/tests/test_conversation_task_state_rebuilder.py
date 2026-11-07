@@ -319,7 +319,7 @@ def test_rebuild_restores_child_task_locator_and_workspace_role_from_display_dat
 
     tool_part = ConversationTaskStateRebuilder.build_pair_tool_part(
         [row, result_row],
-    )[(1, "delegate-1")]
+    )["delegate-1"]
 
     assert tool_part["child_task_id"] == 22
     assert tool_part["agent_role"] == "workspace-reviewer"

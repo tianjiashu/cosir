@@ -80,10 +80,11 @@ async def _run_branch(rc: SimpleNamespace) -> None:
     ("task_type", "requested", "expected"),
     [
         ("user", False, True),
-        ("fork", False, True),
+        ("user_fork", False, True),
+        ("agent_fork", False, True),
         ("user", True, False),
-        ("delegate_task", False, False),
-        ("agent_team_node", False, False),
+        ("agent_task", False, False),
+        ("team_node_task", False, False),
     ],
 )
 def test_should_launch_once_per_run_and_only_for_sidebar_tasks(

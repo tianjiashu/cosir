@@ -40,7 +40,6 @@ def apply(state, event):
         ("completed", "stop", "最终结论", True),
         ("completed", "length", "被截断", False),
         ("completed", "stop", "  ", False),
-        ("completed", "forked", "复制的历史", False),
         ("cancelled", "user_cancelled", "部分内容", False),
         ("cancelled", "runtime_restarted", "中断内容", False),
         ("failed", "max_steps", "诊断信息", False),
@@ -75,7 +74,7 @@ def test_live_and_rebuild_agree(status, reason, content, expected):
             include_in_context=True,
             message={"role": "assistant", "content": text},
             metadata=AssistantMessageMetadata(
-                finish_reason="stop" if reason == "forked" else reason
+                finish_reason=reason
             ),
         )
         for sequence, text in [(1, "中途进展"), (2, content)]

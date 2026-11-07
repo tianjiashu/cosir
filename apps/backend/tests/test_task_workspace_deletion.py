@@ -536,7 +536,7 @@ def test_deleting_an_idle_task_revokes_its_background_work(storage, tmp_path) ->
     get_task_service().delete_task(task)
 
     assert cancelled == ["call-bg"]
-    assert background_registry.drop_task(task) == []
+    assert background_registry.drop_task(task) == {}
 
 
 @pytest.mark.parametrize("delete_workspace", [False, True])

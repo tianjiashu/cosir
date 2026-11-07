@@ -21,6 +21,8 @@ from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
 from app.service import depends
 
+pytestmark = pytest.mark.usefixtures("empty_tool_registry")
+
 _START = "2026-01-01T00:00:00+00:00"
 
 
@@ -179,7 +181,7 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
         == service.rebuild_state(task.id)["background_tasks"]
     )
 
-    background_registry.withdraw("call-bg")
+    background_registry.withdraw(task.id, "call-bg")
     service.refresh_background_results(task.id)
     assert service.get_state(task.id)["background_tasks"][0]["status"] == "settling"
     monkeypatch.setattr(

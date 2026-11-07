@@ -144,6 +144,14 @@ def _make_runtime(
         "get_conversation_event_projector",
         lambda: SimpleNamespace(process=lambda _event: None),
     )
+    monkeypatch.setattr(
+        run_driver,
+        "get_conversation_task_context_service",
+        lambda: SimpleNamespace(
+            close_unclosed_tool_calls_for_run=lambda *_args: [],
+            claimed_decisions=lambda _task_id: [],
+        ),
+    )
     return SimpleNamespace(run_agent=_drive_run)
 
 

@@ -285,7 +285,6 @@ def _seed_running_execute_terminal(projector: ConversationEventProjector, call_i
             run_id=_RUN_ID,
             tool_call_id=call_id,
             status="running",
-            args={"command": "x"},
         )
     )
 

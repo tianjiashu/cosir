@@ -49,16 +49,16 @@ def test_one_handoff_per_resource_and_end_returns_the_lease_once() -> None:
     registry.begin(_lease("c3", resource="t2"))
     assert [lease.tool_call_id for lease in registry.leases(1)] == ["c1", "c3"]
 
-    assert registry.end("c1") == _lease()
-    assert registry.end("c1") is None
+    assert registry.end(1, "c1") == _lease()
+    assert registry.end(1, "c1") is None
     assert registry.on_resource("browser", "t1") is None
 
 
 def test_settle_rejects_on_the_users_behalf_once(decisions) -> None:
     registry = HandoffRegistry()
     registry.begin(_lease())
-    registry.settle("c1", "the tab was closed")
-    registry.settle("c1", "the tab was closed")
+    registry.settle(1, "c1", "the tab was closed")
+    registry.settle(1, "c1", "the tab was closed")
     assert decisions == [(1, "c1", "reject", "the tab was closed")]
     assert registry.leases(1) == []
 
@@ -87,7 +87,7 @@ def test_changes_notify_the_listener_off_the_callers_thread() -> None:
 
     registry.set_listener(listener)
     registry.begin(_lease())
-    registry.end("c1")
+    registry.end(1, "c1")
     assert done.wait(2)
     assert [task_id for task_id, _ in seen] == [1, 1]
     assert all(name.startswith("handoff-notify") for _, name in seen)

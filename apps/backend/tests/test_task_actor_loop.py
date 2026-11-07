@@ -175,7 +175,7 @@ def harness(monkeypatch):
     monkeypatch.setattr(
         task_cancellation,
         "cancel_placeholders",
-        lambda task_id, ids, _hint: settled.append((task_id, list(ids))) or frozenset({task_id}),
+        lambda task_id, ids, _hint, **_kw: settled.append((task_id, list(ids))) or frozenset({task_id}),
     )
     space = SimpleNamespace(
         task_id=_TASK_ID,
@@ -444,6 +444,20 @@ async def test_wait_quiescent_is_false_while_a_new_input_waits_for_its_run(harne
     await harness.actor.abort()
 
 
+async def test_wait_quiescent_is_false_in_the_gap_between_wake_and_registering_the_executor(harness) -> None:
+    """唤醒先把 Run 写成 running 再登记执行者，闸门外读到这个空档时不能当作静止。"""
+    harness.actor.start()
+    harness.queue.put(_user("first"))
+    await _settle()
+    [run] = harness.ledger.created
+    await _finish(run.id, "completed")
+    run.status = "running"
+    assert not harness.actor.driving
+    assert await harness.actor.wait_quiescent(0) is False
+    run.status = "completed"
+    await harness.actor.abort()
+
+
 async def test_wait_quiescent_waits_for_the_continuation_after_completion(harness) -> None:
     """Run 完成后接续剩余消息：落定的是接续出的 Run，结论覆盖了运行中排到下一轮的输入。"""
     harness.actor.start()
@@ -683,12 +697,12 @@ async def test_cancelling_suspended_run_drops_background_entries(harness) -> Non
         # 被撤销的后台条目随即把占位行推到 cancelled。
         assert harness.settled == [(_TASK_ID, ["call-t1"])]
         assert background_registry.pending(_TASK_ID, run.id) == []
-        assert background_registry.complete("call-t1", BackgroundConclusion({})) is False
+        assert background_registry.complete(_TASK_ID, "call-t1", BackgroundConclusion({})) is False
         # 其他 Task 的等待不受影响。
         assert set(background_registry.live_background(_TASK_ID + 1)) == {"call-x"}
     finally:
         background_registry.drop_task(_TASK_ID + 1)
-        assert background_registry.complete("call-x", BackgroundConclusion({})) is False
+        assert background_registry.complete(_TASK_ID, "call-x", BackgroundConclusion({})) is False
 
 
 async def test_running_run_cancel_drops_watches_when_execution_settles(harness) -> None:

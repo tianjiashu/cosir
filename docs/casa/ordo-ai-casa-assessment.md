@@ -1,415 +1,289 @@
-# Ordo AI · CASA 评估项整理（中文）
-
-- 来源：TAC Security CASA 平台「Vulnerability Report」页（`casa.tacsecurity.com/scan-list/view-burp`，共 3 页）
-- 账号主体：STAR SPEEDY GROWTH HK LIMITED；扫描标题：Ordo AI；PO 号：PO_22565_1788502346
-- 上报时间（Reported On）：2026-10-26 01:18:43（+05:30）
-- 抓取时间：2026-11-02
-- Assessment ID：CASA-22565-11268
-- 说明：「要求」为页面 Title 列（CASA 控制项原文）的中文翻译；「审核意见」为 Tester Comment 列的中文转述；「需补充 / 整改」是审核意见里明确点出的补救方向（原文没给方向的会标「整理者建议」）。每项的「View Details」弹窗只有扫描标题、标题、PO 号、状态、创建人（均为 Not set）与上报时间，没有额外的要求说明。页面上部分标题原文是「短句 + 完整句」重复拼接（3.3.1、2.3.2、3.1.5、3.1.6、5.1.2），翻译时按完整句处理。
-
-### 测试方环境与工具配置（页面「Assessment Environment & Tool Configuration」）
-
-| 项目 | 内容 |
-| --- | --- |
-| 测试机 | 实体笔记本，Windows 11，未使用虚拟机 / 云主机 |
-| 工具 | Burp Suite Professional 2026.8 |
-| 浏览器 | Chrome 151.0.7922.173/.174；Firefox 154.0 |
-| 扫描配置 | `ADA Burp Audit Scan Configuration.json`，来源 App Defense Alliance ASA-WG（GitHub `appdefensealliance/ASA-WG`，commit `c7c3447`，SHA256 `cfa0a35352a785def7ec04a40c4658af3b848ead8aa4416bd3c0736eefe0b87c`） |
-| 执行 | 做了 Burp 扫描与手工测试，扫描结果经过复核 |
-
-很多未通过项要求的「经认证、按 ADA 配置的 DAST 扫描」，指的就是用这份 ADA Burp 配置做的扫描。
-
-### 应用申请的 Google 权限范围（平台「Application Details」）
-
-- GCP 项目编号 405864608231；应用类型 Web；保证等级 AL1（原 Tier 2）。
-- Google 来信要求在 **2026-11-18** 前完成 ADA CASA AL1 评估（平台记录的 Google Submission Deadline 同为此日期）。
-- 下表依据提交的 GCP 控制台「数据访问」截图（2026-09-04 上传；之后若在控制台增删过范围，以控制台为准）：
-
-| 级别 | 范围 | 用途 | 审核要求 |
-| --- | --- | --- | --- |
-| 非敏感 | `userinfo.email`、`userinfo.profile` | Google 登录 | 基础应用信息验证 |
-| 敏感 | `gmail.send` | 在 Inbox 标签页的邮件线程里写回复并发送 | 敏感范围验证，无需 CASA |
-| **受限** | **`gmail.readonly`** | 连接 Gmail 后在 Inbox 标签页展示邮件线程（发件人、收件人、主题、时间、完整正文等） | 受限范围验证 + CASA，每 12 个月复审 |
-
-- **触发 CASA 的只有 `gmail.readonly`。**
-- 评估说明写的是「Google 登录是唯一的登录方式」，但多项审核意见提到飞书 / Lark 登录与回调。如果飞书登录确实上线，下次提交时应说明清楚。
-
-## 一、总览
-
-共 **48 项**：**通过 15 项**，**未通过 33 项**，不适用 0 项。
-
-| 分组（按编号首位，组名为整理时归纳） | 项数 | 通过 | 未通过 |
-| --- | ---: | ---: | ---: |
-| 1 认证（Authentication） | 8 | 4 | 4 |
-| 2 会话管理（Session Management） | 9 | 4 | 5 |
-| 3 访问控制 / OAuth / 管理员 MFA | 9 | 6 | 3 |
-| 4 通信与加密（TLS / Cryptography） | 4 | 0 | 4 |
-| 5 输入校验、注入防护与文件上传 | 11 | 1 | 10 |
-| 6 依赖、配置与数据保护 | 7 | 0 | 7 |
-| **合计** | **48** | **15** | **33** |
-
-### 全部条目速查
-
-| 编号 | 要求（简述） | 结果 |
-| --- | --- | --- |
-| 1.1.1 | 认证能抵御暴力破解 | ❌ 未通过 |
-| 1.1.2 | 系统生成的初始密码 / 激活码安全随机且短期过期 | ✅ 通过 |
-| 1.1.3 | 密码以抗离线攻击的形式存储 | ✅ 通过 |
-| 1.2.1 | 公开暴露的接口上不存在默认凭据 | ❌ 未通过 |
-| 1.3.1 | 带外验证码在合理时间内过期 | ✅ 通过 |
-| 1.3.2 | 带外验证码只能使用一次 | ✅ 通过 |
-| 1.3.3 | 带外验证码安全随机 | ❌ 未通过 |
-| 1.3.4 | 带外验证码能抵御暴力破解 | ❌ 未通过 |
-| 2.1.1 | URL 参数中不泄露密码或会话令牌 | ❌ 未通过 |
-| 2.2.1 | 用户可登出，登出 / 过期使全部有状态令牌失效 | ❌ 未通过 |
-| 2.2.2 | 改密 / 重置密码后可终止其他所有会话 | ❌ 未通过 |
-| 2.2.3 | 不可撤销的无状态令牌 24 小时内过期 | ❌ 未通过 |
-| 2.3.1 | 会话 Cookie 设置 Secure | ✅ 通过 |
-| 2.3.2 | 会话 Cookie 设置 HttpOnly | ✅ 通过 |
-| 2.3.3 | 使用会话令牌而非静态 API 密钥 | ✅ 通过 |
-| 2.3.4 | 无状态令牌有签名等防篡改措施 | ✅ 通过 |
-| 2.4.1 | 敏感操作前要求完整有效会话或再次验证 | ❌ 未通过 |
-| 3.1.1 | 在可信服务层执行最小权限访问控制 | ✅ 通过 |
-| 3.1.2 | 访问控制所用的属性与策略不可被终端用户篡改 | ✅ 通过 |
-| 3.1.3 | 访问控制在异常时安全失败 | ❌ 未通过 |
-| 3.1.4 | 敏感资源防 IDOR | ✅ 通过 |
-| 3.1.5 | 强 anti-CSRF 机制 | ✅ 通过 |
-| 3.1.6 | 禁用目录浏览 | ✅ 通过 |
-| 3.2.1 | 只用安全的 OAuth 2.0 流程 | ✅ 通过 |
-| 3.2.2 | OAuth 中安全校验 redirect_uri 与 state | ❌ 未通过 |
-| 3.3.1 | 管理接口使用多因素认证 | ❌ 未通过 |
-| 4.1.1 | 强制 TLS，默认 TLS 1.2+ 与安全套件 | ❌ 未通过 |
-| 4.1.2 | 使用可信 TLS 证书 | ❌ 未通过 |
-| 4.1.3 | 无影响机密数据的弱加密 | ❌ 未通过 |
-| 4.1.4 | 加密模块安全失败、防 Padding Oracle | ❌ 未通过 |
-| 5.1.1 | 防 HTTP 参数污染 | ❌ 未通过 |
-| 5.1.2 | 重定向限于白名单或给出警告 | ✅ 通过 |
-| 5.1.3 | 避免 eval 等动态代码执行 | ❌ 未通过 |
-| 5.1.4 | 防模板注入 | ❌ 未通过 |
-| 5.1.5 | 防 SSRF | ❌ 未通过 |
-| 5.1.6 | 防 XPath / XML 注入 | ❌ 未通过 |
-| 5.1.7 | 上下文相关输出转义，防 XSS | ❌ 未通过 |
-| 5.1.8 | 防数据库注入 | ❌ 未通过 |
-| 5.1.9 | 防操作系统命令注入 | ❌ 未通过 |
-| 5.1.10 | 防本地 / 远程文件包含 | ❌ 未通过 |
-| 5.2.1 | 防恶意文件上传 | ❌ 未通过 |
-| 6.1.1 | 不使用含已知可利用漏洞的组件 | ❌ 未通过 |
-| 6.2.1 | 生产环境关闭调试模式 | ❌ 未通过 |
-| 6.3.1 | 不以 Origin 头做认证 / 访问控制决策 | ❌ 未通过 |
-| 6.4.1 | 不受子域名接管影响 | ❌ 未通过 |
-| 6.5.1 | 日志不记录凭据与支付信息，令牌只存哈希 | ❌ 未通过 |
-| 6.6.1 | 登出时安全清除浏览器存储 | ❌ 未通过 |
-| 6.7.1 | 安全存储访问令牌、API 密钥等服务端机密 | ❌ 未通过 |
-
-### 未通过项的共性原因（整理归纳）
-
-1. **证据只来自非生产测试环境**，未证明与生产环境一致：33 个未通过项里约一半（17 项）点到了这一点，多数通过项也把它列为遗留限制。
-2. **缺少「经认证、按 ADA 配置的 DAST 扫描报告」**：5.1.x 中未通过的各项以及 2.1.1、6.2.1 等都要求提供这份报告；已提交的有限扫描不满足要求（2.1.1、5.1.1、5.1.7 提到是 OWASP ZAP，5.1.7 只测了 4 个只读端点，5.1.8 记为仅 44 个请求、排除了需登录与写操作的路由）。
-3. **只抽查了一条路径，没有全量清单**：SSRF、命令注入、文件包含、模板注入、文件上传、OAuth 回调等都是「单个组件证明了，其余路径未覆盖」。
-4. **已被证实的真实缺陷**（不只是证据不足）：
-   - 4.1.1：前端与 API 同时启用 TLS 1.0/1.1 且没有记录降级缓解措施，API 因 ROBOT 漏洞评级 F；
-   - 1.2.1 / 6.2.1：测试环境有一个公开可访问的测试登录功能，无需访问密钥即可签发演示会话；
-   - 4.1.3：使用 RSA PKCS#1 v1.5 + MD5；
-   - 2.1.1：飞书注册的临时认证材料放在登录 URL 查询参数里；
-   - 2.2.1 / 2.2.3：登出后旧令牌仍可用，令牌有效期 30 天（要求 ≤ 24 小时）；
-   - 3.2.2：另一个飞书回调不校验 state，Gmail 的 state 生成是确定性的；
-   - 3.3.1：测试环境的演示管理员登录不需要第二因素；
-   - 5.2.1：通用上传与图片上传接受空文件或内容与类型不符的文件；
-   - 6.1.1：前端依赖有 3 个严重、47 个高危漏洞，Go 依赖也有大量安全公告，均没有逐条的整改或对受影响代码路径的说明；
-   - 6.6.1：登出后已打开的另一个标签页仍保留会话数据。
+这是 64k 行的后端。我会并行派出多个只读调查方向，同时自己深读核心链路。
+现在我自己核验关键论断，先看调度器与消息队列。
+审查完成。我按「内核链路 → 传输 → 工具 → 生命周期」读了全部 6 万行，并对每条结论做了代码复核。下面是**已核实**的逻辑缺陷，按严重度排列。
 
 ---
 
-## 二、逐项明细
+## P0：会让 Task 永久卡死或状态错乱
 
-### 1 认证（8 项：通过 4，未通过 4）
+### 1. `TaskActor._loop` 的阻塞读在异常保护之外，且整个 loop 无人监督
 
-#### 1.1.1 认证能抵御暴力破解 —— ❌ 未通过
-- **要求**：认证机制能抵御暴力破解攻击。
-- **审核意见**：证据表明登录由外部身份提供方 Google 与飞书 / Lark 处理，代码片段也符合授权码交换而非应用自管密码。但没有确认这两家提供方都在当前的 ADA 认可服务清单上；仅测试用的登录端点和 HTTP 200 响应也不能证明能抵御暴力破解。
-- **需补充 / 整改**：确认所用身份提供方属于 ADA 认可服务。
+```155:171:apps/backend/app/core/task_actor.py
+        while True:
+            pending = await self._queue.pending(self.task_id, self._watermark)   # 在 try 之外
+            fresh = [message for message in pending if cast(int, message.id) > self._watermark]
+            self._watermark = max(cast(int, message.id) for message in pending)
+            ...
+            try:
+                await self._advance(pending, fresh)
+            except Exception:
+                log.exception("task_actor_advance_failed", ...)   # 只保住 _advance
+```
 
-#### 1.1.2 系统生成的初始密码 / 激活码安全随机且短期过期 —— ✅ 通过
-- **要求**：系统生成的初始密码或激活码必须安全随机生成，并在短时间后过期。
-- **审核意见**：所审查的 Google、飞书 / Lark 流程使用外部签发的授权码，未发现应用自己生成初始密码或激活码；应用只维护短期的登录与注册 state，因此自有初始凭据的要求不适用于该路径。
-- **遗留限制**：证据只覆盖非生产测试环境与已审查的流程；生产一致性与完整的提供方流程测试可消除该范围限制。
+`pending()` 内部要 `TaskMessage.of_model`（`task_message.py:104-106`，未知 `kind` 直接抛），DB 抖动同样抛。异常冲出 `_loop` 后：
 
-#### 1.1.3 密码以抗离线攻击的形式存储 —— ✅ 通过
-- **要求**：密码必须以能抵御离线攻击的形式存储。
-- **审核意见**：Google、飞书 / Lark 为外部身份提供方，审查过的登录处理代码交换的是授权码，而不是校验应用自己存储的密码，因此不要求应用自身的哈希算法与加盐。
-- **遗留限制**：仅限非生产测试环境，未证明生产一致性，也未审计提供方内部的密码存储。
+- `create_task(self._loop())`（`task_actor.py:118-122`）没有 done_callback，异常被 asyncio 静默吞掉（只在 GC 时打 "Task exception was never retrieved"）；
+- `start()` 里 `if self._loop_task is None` 永不重建，该 Task 从此不再调度任何 Run，**只有重启进程能恢复**；
+- 更严重的是 `child_run_job.py:121` 用 `wait_quiescent()`（**无超时**）等子 Agent，`_wait_for` 在 `deadline is None` 时 `await changed.wait()` 无限等（`task_actor.py:348-350`）。loop 死了就没人置位 `state_changed` → **父 Agent 的工具调用永久挂起**，用户只能手动停止。
 
-#### 1.2.1 公开暴露的接口上不存在默认凭据 —— ❌ 未通过
-- **要求**：公开暴露的接口上不得存在默认凭据。
-- **审核意见**：证据只限非生产测试环境，并明确说明未检查生产环境以及管理、支撑类接口。它记录了一个可公开访问的测试登录功能，无需访问密钥即可签发演示会话，但没有证明所有公开接口上的默认账号密码都已删除或禁用。
-- **需补充 / 整改**：在生产范围内确认，覆盖终端用户、管理后台、CMS、框架与支撑服务等全部接口。
+置信度：高。这条同时解释了「日志里只看到一条 advance_failed，之后这个 Task 再也不动了」这类现象。
 
-#### 1.3.1 带外验证码在合理时间内过期 —— ✅ 通过
-- **要求**：带外验证码（out-of-band verifier）必须在合理时间内过期。
-- **审核意见**：证据指出 Google、飞书 / Lark 为外部认证提供方，并区分了应用自管的 state 与提供方签发的 code。但它没有证明这些提供方是 ADA 认可的，没有识别所有适用的验证码类型（如重置密码、MFA 验证码），也没有记录各自的过期时长。
-- **需补充 / 整改**：提供方文档或配置，说明验证码类型与有界的过期时间；若走外部服务路径，还需 ADA 认可的证明。
-- ⚠️ 注意：该项状态为「通过」，但审核意见的措辞是在描述缺口，二者不一致，建议向审核方确认或主动补齐上述材料。
+### 2. `_advance` 失败后水位与 `_handled` 一起前移：失败的消息不会被重试
 
-#### 1.3.2 带外验证码只能使用一次 —— ✅ 通过
-- **要求**：带外验证码只能使用一次。
-- **审核意见**：应用自管的飞书登录 state 与再认证票据用 Redis `GETDEL` 原子取用，缺失或重复使用的值会被拒绝，证明验证码用过即失效、第二次尝试会被拒。
-- **遗留限制**：提供方签发的一次性 code 与生产一致性未测试，但本次走的是「应用自有机制」路径，不依赖提供方。
+```156:171:apps/backend/app/core/task_actor.py
+            self._watermark = max(cast(int, message.id) for message in pending)   # 先移水位
+            ...
+            except Exception:
+                # 单轮失败只记录，不杀死 loop：消息仍在外部队列，下一次推进重读事实源。
+                log.exception("task_actor_advance_failed", ...)
+            self._handled = self._watermark      # 失败也标记为已推进
+```
 
-#### 1.3.3 带外验证码安全随机 —— ❌ 未通过
-- **要求**：带外验证码必须安全随机生成。
-- **审核意见**：证据显示应用自管的飞书登录 state 使用 Go 的密码学随机数生成器，但没有证明这个值就是带外验证码；并明确说明未审计 Google 与飞书签发的一次性 code 如何生成，随机数读取失败时的行为也未解决。
-- **需补充 / 整改**：指明真正的验证码是哪一个，并确认它由 ADA 认可服务生成，或展示自有实现的生成方式。
+`pending()` 只在存在 `id > after_id` 的行时才返回（`task_message_queue.py:84`）。水位已前移、`_advance` 又失败，**没有任何「下一次推进」**——那条消息要等到用户再发一条新消息才会被一起重读。注释承诺的「下一次推进重读事实源」不成立，日志主动误导排查。
 
-#### 1.3.4 带外验证码能抵御暴力破解 —— ❌ 未通过
-- **要求**：带外验证码必须能抵御暴力破解。
-- **审核意见**：证据同时列出了两个外部身份提供方和一个内部生成的再认证票据，但没说清本项针对哪个验证码。源码显示票据是带过期与单次使用的随机 UUID 式值，但格式与熵没有充分说明，也没有展示校验次数的限流。
-- **需补充 / 整改**：明确声明适用的验证码、给出熵的计算，并提供限流阈值，或证明其熵高于豁免阈值。
+附带后果：`_quiescent` 用 `message.id > self._handled` 判断（`task_actor.py:332-335`），失败已把 `_handled` 推过去；若上一条 Run 是 `cancelled`/`failed`（`continues` 为 False），`wait_quiescent` 会**在还有未推进的唤醒消息时返回 True**，委派方会把上一轮的旧 Run 当成本次结论读走。
 
-### 2 会话管理（9 项：通过 4，未通过 5）
+置信度：高（不重试）/ 中（谎报静止，取决于上一条 Run 的终态）。
 
-#### 2.1.1 URL 参数中不泄露密码或会话令牌 —— ❌ 未通过
-- **要求**：应用不得在 URL 参数中泄露密码或会话令牌；若提供 API，应防止（或给开发者选项防止）API 密钥、会话令牌等敏感信息出现在 URL 查询串中。
-- **审核意见**：提交的源码片段显示，飞书注册的临时认证材料被直接加到登录 URL 的查询参数里，与要求相反。有限的 ZAP 结果不是经认证、按 ADA 配置的 DAST 报告，也没有覆盖相关的跳转。
-- **需补充 / 整改**：修复该流程，然后提供完整的认可 DAST 扫描，或提供源码证据证明敏感值已改放到请求头、Cookie 或请求体。
+### 3. `TaskExecution._drive` 缺 `try/finally`：取消信号残留会毒化下一次 Run
 
-#### 2.2.1 用户可登出，登出 / 过期使全部有状态令牌失效 —— ❌ 未通过
-- **要求**：用户必须能登出；登出或会话过期必须使所有有状态的会话令牌（包括 refresh token）失效。
-- **审核意见**：证据展示了用户可调用的登出端点，认证 Cookie 也被清除了。但登出后把之前签发的令牌放进 Authorization 头重放仍然成功；源码只让 Cookie 过期，没有在服务端吊销令牌。
-- **需补充 / 整改**：实现并演示登出与会话过期时的服务端失效（含 refresh token），并确认生产一致性。
+```119:133:apps/backend/app/core/task_execution.py
+    async def _drive(self, run: ConversationRunRecord) -> None:
+        await RunDriver().drive(run)                     # 可能抛：settle 自身失败会 re-raise
+        if cancellation_registry.is_cancelled(self.task_id):
+            await self._cancellation.cancel_background_task()
+        self._task = self._run = None
+        reason = cancellation_registry.consume(self.task_id)   # 唯一的信号清理点
+        await self._on_released(run, reason)
+```
 
-#### 2.2.2 改密 / 重置密码后可终止其他所有会话 —— ❌ 未通过
-- **要求**：成功修改密码（含通过重置 / 找回修改）后，应用应提供选项（或默认）终止其他所有活动会话（含有状态的 refresh token），并在整个应用、联合登录（如有）及所有依赖方中生效。
-- **审核意见**：证据来自非生产的联合登录测试环境，没有演示「成功改密后终止其他会话」。它报告了复制出的无状态令牌在登出后仍可用，且未测试提供方的密码重置或修改，应用内行为与重置 / 找回行为都未解决。
-- **需补充 / 整改**：运行时测试，展示改密与重置流程会让跨设备及已连接依赖方的会话全部失效。
+`RunDriver._settle_failure` 在落库自身失败时**重新抛出**（`run_driver.py:121-134`，注释也承认「Run 仍停在 running」）；构造 `RunDriver()` 也可能抛。此时：
 
-#### 2.2.3 不可撤销的无状态令牌 24 小时内过期 —— ❌ 未通过
-- **要求**：不可撤销的无状态认证令牌必须在签发后 24 小时内过期。
-- **审核意见**：证据确认存在一个 JWT 式无状态令牌，登出后仍可用，说明服务端不吊销它；实测有效期为 2,592,000 秒（30 天），超过 24 小时上限。证据来自非生产环境，需确认生产一致性，但实测结果本身不满足要求。
-- **需补充 / 整改**：原文只说需确认生产一致性，没有给整改方向。整理者建议：把令牌有效期缩短到 24 小时以内，或改为可在服务端吊销。
+- `_task` / `_run` 不清空、`consume` 不执行 → **取消信号留在 registry 里，下一次 Run 一启动就在第一个检查点被取消**——正是模块 docstring `task_execution.py:6-9` 明确要避免的情形；
+- `_on_released` 不执行 → 剩余排队消息不接续、状态不发布；
+- 后台 task 异常无人消费（`task_execution.py:78` 没有 done_callback）。
 
-#### 2.3.1 会话 Cookie 设置 Secure —— ✅ 通过
-- **要求**：基于 Cookie 的会话令牌必须设置 `Secure` 属性。
-- **审核意见**：t1 登录响应设置的 `access_token` 会话 Cookie 为 Secure=true，对应的 Cookie 构造源码也设置了 Secure；在轻量级保证等级下走代码审查替代路径即满足。
-- **遗留限制**：未证明生产一致性及每个 Cookie / 部署都如此，需生产侧确认。
+置信度：高。
 
-#### 2.3.2 会话 Cookie 设置 HttpOnly —— ✅ 通过
-- **要求**：基于 Cookie 的会话令牌必须设置 `HttpOnly` 属性。
-- **审核意见**：源码片段与实测的会话元数据都显示 `access_token` Cookie 开启了 HttpOnly。证据限于非生产测试环境，但该替代证据路径不要求生产验证；Cookie 配置已直接证明，无需额外 DAST。
+### 4. `Subscriber.offer` 在 control 帧挂起期间**丢弃比 full 帧更新的 mutation**
 
-#### 2.3.3 使用会话令牌而非静态 API 密钥 —— ✅ 通过
-- **要求**：应用应使用会话令牌，而不是静态 API 密钥（遗留实现除外）。
-- **审核意见**：抽查的用户登录会构造并签名带动态签发 / 过期时间的 JWT，而非返回静态 API Key。
-- **遗留限制**：服务间 API Key 明确不在本次检查范围，也没有提供遗留理由或更全面的静态密钥使用判定；需审查这些接口，或说明静态密钥仅用于有明确理由的遗留集成。
+```45:55:apps/backend/app/assistant_transport/stream/subscriber.py
+        if frame.kind != "mutation":
+            # full/control 帧是一个新的投递边界。排队的 mutation 产生于它之前，不能在 full
+            # 状态之后被重放。
+            self._mutation_queue.clear()
+            self._control_frame = frame
+            self._wake.set()
+            return
+        if self._control_frame is not None:
+            return                                    # ← 更新的 mutation 被吞
+```
 
-#### 2.3.4 无状态令牌有签名等防篡改措施 —— ✅ 通过
-- **要求**：无状态会话令牌必须使用数字签名、加密等措施，防范篡改、封装（enveloping）、重放、空加密（null cipher）和密钥替换攻击。
-- **审核意见**：源码显示服务端用 HMAC-SHA256 密钥解析 JWT，并明确限定 HS256 算法；测试表明无效签名与未签名令牌都被拒绝。登出后的重放防护虽有缺陷，但源码审查替代路径已证明所需的签名与算法防护，因此判为通过。
-- **遗留限制**：证据来自非生产环境；需要做与生产等价的审查，并修复重放处理。
+注释的理由只对「已在队列里、产生于 full 之前的 mutation」成立。full 帧从被 `call_soon_threadsafe` 投递到被消费之间还有一段时间，这段时间到达的 mutation **产生于 full 之后**，却被无条件丢弃且无日志、无 `resync_required`。客户端此后永久缺这一条变更，直到下一次 full 或重连。
 
-#### 2.4.1 敏感操作前要求完整有效会话或再次验证 —— ❌ 未通过
-- **要求**：在允许任何敏感交易或账户修改之前，应用必须确保存在完整有效的登录会话，或要求重新认证 / 二次验证。
-- **审核意见**：证据把「关联外部账号变更」与「连接器账号修改」认定为敏感操作，并记录了有效会话检查和短期单次使用的再认证票据。但没有证明该检查紧挨在敏感操作之前执行；支付、关联 / 解绑、身份提供方再认证、其他交易及生产环境的覆盖也未验证。
-- **需补充 / 整改**：运行时测试或调用点证据，展示每个敏感操作在没有当前会话或有效二次验证时都会被拒绝。
+置信度：高（代码路径确定）。
 
-### 3 访问控制 / OAuth / 管理员 MFA（9 项：通过 6，未通过 3）
+### 5. `rerun` 的重建发布绕过了「Run 在跑不卸载」这条自己写下的规则
 
-#### 3.1.1 在可信服务层执行最小权限访问控制 —— ✅ 通过
-- **要求**：应用必须在可信的服务层执行最小权限的访问控制规则。
-- **审核意见**：证据记录了基于角色的权限，以及请求到达处理函数前在后端认证与租户中间件里做的授权检查；测试表明未认证、跨租户、权限不足的请求都被服务端拒绝，而不是只靠前端界面限制。
-- **遗留限制**：在非生产环境测试，未覆盖每个角色与资源；对轻量级评估来说代表性证据已足够，生产确认与更广的覆盖可消除限制。
+```178:209:apps/backend/app/assistant_transport/service/transport_assistant_service.py
+        space = await asyncio.to_thread(task_runtime_spaces.get_or_create, task_id)
+        async with space.async_operation():
+            ...
+            await asyncio.to_thread(self._replace_latest_input, task_id, message_id, message)
+        await asyncio.to_thread(self._republish, task_id)      # 出闸门、且晚于入队才重建
+```
 
-#### 3.1.2 访问控制所用的属性与策略不可被终端用户篡改 —— ✅ 通过
-- **要求**：访问控制使用的所有用户与数据属性及策略信息，除非明确授权，否则不能被终端用户篡改。
-- **审核意见**：服务端授权流程会校验签名的认证数据、检查用户状态与租户成员关系，并在做访问决策前填充授权上下文；被篡改的租户、用户、角色、归属与路径值都被拒绝，数据库检查确认提交的标识没有改变已持久化的归属或范围。
-- **遗留限制**：只在非生产环境抽样测试，不是所有授权属性与策略的完整清单。
+`_replace_latest_input` 内部 `enqueue` 提交就会唤醒 actor 开新 Run；随后 `_republish → rebuild_state` **无条件** `unload_snapshot()`（`conversation_task_state_service.py:304-308`）并从库重建。而 `_unload_if_unwatched` 的注释明确写着：
 
-#### 3.1.3 访问控制在异常时安全失败 —— ❌ 未通过
-- **要求**：访问控制必须安全失败（fail securely），包括发生异常时。
-- **审核意见**：证据表明许多未授权、未认证和无效请求（含跨租户与附件访问尝试）都被拒绝。但明确没有测试数据库 / 缓存故障以及授权路径中的强制异常，因此不能证明这类错误是「失败即拒绝」而不是绕过授权。
-- **需补充 / 整改**：做一次受控的异常或依赖故障测试，证明此时访问被拒绝。
+```351:354:apps/backend/app/assistant_transport/service/conversation_task_state_service.py
+        工作副本只是投影缓存：没人看、也没有流式输出在往里写时留着它只占内存……
+        Run 还在运行时不卸载：流式正文没落库，重建会丢掉正在输出的内容。
+```
 
-#### 3.1.4 敏感资源防 IDOR —— ✅ 通过
-- **要求**：敏感资源必须防范针对记录增删改查的不安全直接对象引用（IDOR）攻击，例如创建或修改他人的记录、查看所有人的记录、删除全部记录。
-- **审核意见**：证据识别了活动（campaign）、租户、合同、草稿、聊天会话与附件等端点中用户可控的标识；非生产环境的运行时测试表明跨租户、未授权、未认证、版本不匹配、替换用户或租户标识的请求都被拒，授权操作则成功；源码还显示附件路径有租户与用户归属检查。
-- **遗留限制**：未测试生产一致性及支付、签署、PDF 流式输出、部分跨用户聊天组合等资源，需要补充验证以扩大覆盖。
+`_republish` 走的是另一条路径，绕过了这个判断。窗口内已流式输出但未落库的正文会从 working copy 消失，新 Run 的增量也可能被随后的 full 帧覆盖。
 
-#### 3.1.5 强 anti-CSRF 机制 —— ✅ 通过
-- **要求**：应用或框架必须对已认证功能执行强 anti-CSRF 机制，并对未认证功能提供有效的防自动化或 anti-CSRF 保护。
-- **审核意见**：已认证状态下的跨站登出尝试被以 HTTP 403 拒绝，合法登出成功；并提供了服务端 Origin / CSRF 防护与 SameSite=Lax Cookie 的源码证据。轻量级保证等级下走代码审查替代路径即满足。
-- **遗留限制**：未认证功能的防自动化行为与全部豁免端点未完全测试，证据针对非生产测试环境。
-
-#### 3.1.6 禁用目录浏览 —— ✅ 通过
-- **要求**：除非有意为之，否则必须禁用目录浏览。
-- **审核意见**：走书面观察路径：抽查的前端静态资源目录返回 HTTP 403 而非目录列表，其他抽查路径返回正常页面或 404，证明在 Ordo AI 非生产测试环境中目录浏览已禁用。
-- **遗留限制**：未证明生产一致性；如果评估范围是生产环境，需要提供生产侧证据。
-
-#### 3.2.1 只用安全的 OAuth 2.0 流程 —— ✅ 通过
-- **要求**：应用只能实现安全且推荐的 OAuth 2.0 流程，如授权码流程（Authorization Code Flow）或带 PKCE 的授权码流程，避免已弃用的隐式流程（Implicit Flow）和资源所有者密码凭据流程（ROPC）。
-- **审核意见**：证据明确指出 Google、飞书 / Lark 与 Gmail 账号关联路径都使用 OAuth 2.0，由后端执行授权码交换（`grant_type` 为 `authorization_code`），审查路径中没有隐式令牌响应或密码授权。
-- **遗留限制**：限于非生产测试环境，生产一致性需另行确认。
-
-#### 3.2.2 OAuth 中安全校验 redirect_uri 与 state —— ❌ 未通过
-- **要求**：在 OAuth 2.0 授权过程中安全校验 `redirect_uri` 与 `state` 参数，防止开放重定向与 CSRF。
-- **审核意见**：证据显示一个飞书回调会拒绝缺失或无效的 state，重定向目标也经过白名单校验。但没有证明白名单是对已注册 redirect URI 的精确匹配；并且确认了另一个飞书处理函数在没有 state 的情况下接受授权码，Gmail 的 state 生成是确定性的。
-- **需补充 / 整改**：完整审查每个 OAuth 回调，证明 redirect 精确匹配，且 state 随机、绑定会话、一次性使用并被校验。
-
-#### 3.3.1 管理接口使用多因素认证 —— ❌ 未通过
-- **要求**：应用的管理接口必须使用适当的多因素认证，防止未授权使用。
-- **审核意见**：证据识别出带租户管理功能、可从互联网访问的 Ordo AI 应用端点（而非云厂商控制台）。它还说明测试环境的演示管理员登录不需要第二因素，也没有证明每个管理账号与管理接口都强制 MFA。
-- **需补充 / 整改**：提供完整的管理入口清单，以及对每条管理访问路径强制 MFA 的端到端登录演示。
-
-### 4 通信与加密（4 项：通过 0，未通过 4）
-
-#### 4.1.1 强制 TLS，默认 TLS 1.2+ 与安全套件 —— ❌ 未通过
-- **要求**：应用必须对所有连接强制使用 TLS，默认 TLS 1.2 及以上。若必须支持旧客户端，可支持 TLS 1.0 / 1.1，但需实施缓解措施，尽量降低降级攻击与已知 TLS 漏洞的风险。无论使用哪个 TLS 版本，都必须默认使用安全的密码套件，并拒绝有已知漏洞的套件。
-- **审核意见**：提交的 Qualys 结果带日期，识别了 Ordo AI 的前端与 API 主机，但显示 TLS 1.0、1.1 与 TLS 1.2 同时启用，且没有记录降级缓解措施；API 因扫描器报告的 ROBOT 强预言机（strong oracle）漏洞被评为 F，证据无法证明安全的 TLS 基线。
-- **需补充 / 整改**：修复后重新扫描得到干净结果，并确认生产环境以及内部 / 出站连接也被覆盖。
-
-#### 4.1.2 使用可信 TLS 证书 —— ❌ 未通过
-- **要求**：进出服务器的连接都必须使用可信 TLS 证书。若使用内部签发或自签名证书，服务器只能信任特定的内部 CA 与特定的自签名证书，其余一律拒绝。
-- **审核意见**：基于 Qualys 的证书结果识别出签发方 WoTrus RSA DV SSL CA 2，并显示非生产测试环境前端与 API 端点的证书信任检查通过。但证据明确说明出站与内部连接的 CA 限制未验证。
-- **需补充 / 整改**：提供说明或配置证据，列出明确信任的内部 CA / 证书，并证明拒绝其他所有证书。
-
-#### 4.1.3 无影响机密数据的弱加密 —— ❌ 未通过
-- **要求**：不得存在对机密数据的机密性或完整性造成实质影响的弱加密。
-- **审核意见**：证据列出了多个加密机制，源码片段显示使用 AES-GCM 以及「RSA PKCS#1 v1.5 + MD5」。RSA/MD5 是已知的弱组合，且密钥长度、生成、轮换和过期均未验证；证据也只覆盖非生产测试环境。
-- **需补充 / 整改**：完整的应用加密清单、每个密钥的生命周期细节，以及对基于 MD5 的集成的整改或书面理由。
-
-#### 4.1.4 加密模块安全失败、防 Padding Oracle —— ❌ 未通过
-- **要求**：所有加密模块都必须安全失败，错误处理方式不能让 Padding Oracle 攻击成为可能。
-- **审核意见**：源码片段描述了支付 AES-GCM 解密与飞书 / Lark CBC 解密的失败处理，包括一条共享的「填充 / 长度无效」路径。但证据明确说明对外响应、时序与日志都未做动态测试，因此不能证明所有失败原因都返回相同的通用响应、也不能证明不暴露敏感异常信息。API TLS 端点上未解决的 ROBOT 漏洞也说明抗预言机能力未被证明。
-- **需补充 / 整改**：做运行时测试，比较不同失败情形下的响应与日志。
-
-### 5 输入校验、注入防护与文件上传（11 项：通过 1，未通过 10）
-
-#### 5.1.1 防 HTTP 参数污染 —— ❌ 未通过
-- **要求**：防范 HTTP 参数污染（HPP）。
-- **审核意见**：证据记录了一次非生产环境的有限 OWASP ZAP 检查，但没有提供覆盖目标应用、经认证并按 ADA 配置的 DAST 报告，也没有证明指定的漏洞类型不存在。唯一一次重复参数请求被接受了，提交方也明确说明「安全解析」与「全应用范围的抵御能力」仍未验证。
-- **需补充 / 整改**：经认证、按 ADA 配置的扫描报告及其发现列表，或证明重复参数被确定且安全处理的代码 / 配置证据。
-
-#### 5.1.2 重定向限于白名单或给出警告 —— ✅ 通过
-- **要求**：URL 重定向与转发只限白名单内的 URL，或在跳转到不可信内容时显示警告。
-- **审核意见**：源码片段证明重定向目标会被校验：允许安全的相对路径，绝对地址限于 HTTPS 的 Ordo 子域名，不安全输入被拒绝；说明称该校验器用于飞书授权与回调流程。
-- **遗留限制**：测试限于非生产环境，未覆盖所有重定向出口，但代码审查已足以证明白名单机制。
-
-#### 5.1.3 避免 eval 等动态代码执行 —— ❌ 未通过
-- **要求**：避免使用 `eval()` 或其他动态代码执行特性；确无替代方案时，任何用户输入在执行前都要经过清洗并在沙箱中执行。
-- **审核意见**：提交记录明确说明有限的 HTTP 扫描没有测试动态代码执行或任务隔离，也不对 eval、exec 等机制做任何声明；既没有带结果的经认证 ADA 配置 DAST 报告，也没有证明安全处理用户可控输入的源码或文档。
-- **需补充 / 整改**：经认证、已配置的 DAST 报告，或覆盖所有执行点与输入防护的代码 / 架构审查。
-
-#### 5.1.4 防模板注入 —— ❌ 未通过
-- **要求**：确保模板中包含的用户输入都经过清洗或沙箱处理，以防范模板注入攻击。
-- **审核意见**：抽查的合同预览生成器对若干插值的名称与地址做了 Go HTML 转义。但证据明确没有覆盖所有模板渲染器或未转义的 HTML 插入路径，也没有做模板注入测试或经认证的 DAST 扫描。
-- **需补充 / 整改**：完整审查其余渲染路径，或提供经认证、按 ADA 配置、无已确认模板注入发现的 DAST 报告。
-
-#### 5.1.5 防 SSRF —— ❌ 未通过
-- **要求**：防止服务端请求伪造（SSRF）。
-- **审核意见**：源码片段证明某个达人资料（creator-profile）抓取器会在连接前解析主机名并拒绝不允许的 IP。但证据明确只覆盖这一个组件，图片、缩略图、AI Agent、DNS 重绑定、重定向链和生产环境的覆盖均未验证。
-- **需补充 / 整改**：完整审查所有服务端抓取 URL 的路径，或提供覆盖目标应用、经认证并按 ADA 配置的 DAST 报告。
-
-#### 5.1.6 防 XPath / XML 注入 —— ❌ 未通过
-- **要求**：防范 XPath 或 XML 注入攻击。
-- **审核意见**：本次走源码审查路径，但片段只显示使用了 Go 的 `encoding/xml` 解码器，没有证明禁用了外部实体解析，也没有证明 XPath 输入不会被不安全拼接；提交方明确说明解析器配置、实体处理与 XPath 行为仍需验证。
-- **需补充 / 整改**：针对性的经认证 DAST 报告，或同时覆盖两种防护的完整代码 / 配置证据。
-
-#### 5.1.7 上下文相关输出转义，防 XSS —— ❌ 未通过
-- **要求**：通过上下文相关的输出转义或清洗，防范反射型、存储型和基于 DOM 的 XSS。
-- **审核意见**：证据显示在非生产环境对 4 个只读端点做了有限的 OWASP ZAP 反射型 XSS 检查，没有告警。但它不是经认证、按 ADA 配置的 DAST 扫描，没有覆盖存储型与 DOM 型 XSS，也没有展示上下文相关转义的源码或配置证据。
-- **需补充 / 整改**：完整的经认证 ADA 配置扫描报告，或覆盖相关输出上下文的代表性代码 / 配置审查。
-
-#### 5.1.8 防数据库注入 —— ❌ 未通过
-- **要求**：防范数据库注入攻击。
-- **审核意见**：证据展示了一条使用占位符与绑定参数的更新语句，但不能证明全应用的数据库查询都不拼接用户输入。扫描只覆盖非生产环境的 44 个请求，排除了需认证与写操作的路由，也没有提供要求的经认证 ADA 配置 DAST 覆盖。
-- **需补充 / 整改**：更广泛的源码审查，或覆盖评估范围内应用的经认证 ADA 配置 DAST 报告。
-
-#### 5.1.9 防操作系统命令注入 —— ❌ 未通过
-- **要求**：防范操作系统命令注入。
-- **审核意见**：源码片段证明所审查的发票转换路径使用固定的可执行文件和分离的参数，而不是 shell 拼接。但证据明确只覆盖这条抽查路径，承认其他启动进程的路径与 AI Agent 执行路径没有清点或测试；扫描还排除了命令注入规则。
-- **需补充 / 整改**：覆盖所有命令执行路径的完整源码审查，或无相关发现的经认证 ADA 配置 DAST 报告。
-
-#### 5.1.10 防本地 / 远程文件包含 —— ❌ 未通过
-- **要求**：防范本地文件包含（LFI）或远程文件包含（RFI）攻击。
-- **审核意见**：证据展示了聊天附件 key 的部分校验与授权检查，包括拒绝路径穿越式的 key、能正常访问自己拥有的附件。但没有证明所有用户派生的文件路径都经过规范化并对照白名单校验，并明确说明其他读文件组件以及 LFI/RFI 防护未验证。
-- **需补充 / 整改**：更广泛的代码审查，或覆盖目标应用的经认证 ADA 配置 DAST 报告。
-
-#### 5.2.1 防恶意文件上传 —— ❌ 未通过
-- **要求**：通过限制上传为预期的文件类型、并阻止直接执行上传内容，防范恶意文件上传。
-- **审核意见**：证据列出了若干上传路由，聊天附件做了有效的内容检查，但没有完整的上传入口清单。通用上传与图片上传路由接受了空文件或内容与类型不符的文件，说明文件类型校验不一致；也没有证据证明上传内容不能被直接执行。
-- **需补充 / 整改**：完整的端点清单、每条路由一致的校验证据，以及阻止执行的证明（如存放在 Web 根目录之外，或使用安全的响应头提供下载）。
-
-### 6 依赖、配置与数据保护（7 项：通过 0，未通过 7）
-
-#### 6.1.1 不使用含已知可利用漏洞的组件 —— ❌ 未通过
-- **要求**：应用只使用没有已知可利用漏洞的软件组件。
-- **审核意见**：证据使用了 govulncheck 和一次前端依赖审计，但只覆盖已部署的后端二进制和前端 lockfile，没有证明覆盖了应用全部依赖清单和其他已部署镜像。报告了前端 3 个严重、47 个高危漏洞，以及大量 Go 安全公告，却没有逐条的整改或开发者对受影响代码路径的说明。
-- **需补充 / 整改**：按依赖清单范围的完整扫描与漏洞分诊、整改或书面例外，并确认覆盖所有应用组件。
-
-#### 6.2.1 生产环境关闭调试模式 —— ❌ 未通过
-- **要求**：在生产环境中禁用调试模式。
-- **审核意见**：证据记录的是非生产测试环境的 HTTP 检查，不是经认证、按 ADA 配置的 DAST 扫描，也不是生产配置；并明确说明未证明与生产一致，且测试环境暴露了一个可用的测试登录功能。
-- **需补充 / 整改**：生产范围的 DAST 报告，或证明调试模式、详细错误信息与开发者控制台已关闭的生产配置 / 运行时证据。
-
-#### 6.3.1 不以 Origin 头做认证 / 访问控制决策 —— ❌ 未通过
-- **要求**：不得使用 Origin 请求头做认证或访问控制决策。
-- **审核意见**：抽查的当前会话端点会拒绝未认证请求，无论 Origin 取什么值都接受有效会话，无效签名的令牌被拒绝。但源码片段只展示了基于 Origin 的 CORS 响应处理，而且提交方明确只在非生产环境测试了一个端点，不声称覆盖全部端点。
-- **需补充 / 整改**：更广泛的源码 / 配置审查，或覆盖目标应用的经认证 ADA 配置 DAST 报告。
-
-#### 6.4.1 不受子域名接管影响 —— ❌ 未通过
-- **要求**：应用不得存在子域名接管风险。
-- **审核意见**：证据列出了两个测试环境主机名及其直接解析到的 IPv4 地址，但没有完整的子域名清单、权威 DNS 配置，也没有证明解析到的基础设施归组织所有、不存在悬空或可被抢注的第三方资源。
-- **需补充 / 整改**：完整的 DNS 清单（含生产范围），并验证每条记录的归属或资源仍在使用。
-
-#### 6.5.1 日志不记录凭据与支付信息，令牌只存哈希 —— ❌ 未通过
-- **要求**：应用不得在日志中记录凭据或支付信息；会话令牌只能以不可逆的哈希形式存入日志。
-- **审核意见**：证据展示了一次真实的非生产登录，留存的日志行只含标识符，没有明文密码、API Key 或会话令牌；有限范围的扫描也没有发现无法解释的敏感值。但没有说明全应用范围的脱敏或排除机制，也没有提供支付交易的日志样本。
-- **需补充 / 整改**：提供日志配置或相关中间件，以及有代表性的支付流程日志样本；或者证明应用不处理支付。
-
-#### 6.6.1 登出时安全清除浏览器存储 —— ❌ 未通过
-- **要求**：登出时必须安全地清除浏览器存储。
-- **审核意见**：证据清点了 localStorage 与 sessionStorage 内容，测试时 IndexedDB 与 Cache Storage 为空。登出清空了当前标签页的存储，但已打开的第二个标签页在刷新前仍保留会话数据和应用会话标识，跨标签页清理未被证明。
-- **需补充 / 整改**：实现跨标签页的登出通知与清理并重新测试；有数据时的存储以及 HTTP 磁盘缓存内容也尚未测试。
-
-#### 6.7.1 安全存储访问令牌、API 密钥等服务端机密 —— ❌ 未通过
-- **要求**：应用必须安全地存储访问令牌、API 密钥及其他服务端机密。
-- **审核意见**：证据显示令牌值被写进数据库字段，飞书 / Lark 令牌存于数据库或缓存，但没有指出任何受密码学保护的机密存储机制；也没有提供书面的最小权限访问策略，或机密读取被记录、监控的证据。
-- **需补充 / 整改**：机密清单、存储与密钥管理细节、访问策略，以及有代表性的审计日志或监控证据。
+置信度：中高（机制确定；实际可见度取决于时序）。
 
 ---
 
-## 三、后续接入与审核策略
+## P1：功能性错误
 
-依据 Google 公开文档整理（2026-11-02），不是审核方的正式答复。
+### 6. `.fileignore` 被自动创建为空 → 内置默认忽略目录**永不生效**（已决策：删除默认集合，不算缺陷）
 
-### 新应用接入 Google API 还要审核吗
+```130:146:apps/backend/app/tools/tool_handler/search/ignore_rules.py
+def render_default_content() -> str:
+    ...
+    return ""            # workspace 默认不额外忽略任何路径
+```
 
-要看申请的权限范围和所在的 Cloud 项目：
+```186:192:apps/backend/app/tools/tool_handler/search/ignore_rules.py
+    text = _read_ignore_text(path)      # 文件缺失 → 按上面的空串创建
+    ...
+    if not lines:
+        # 缺失文件会被创建为空文件；空文件和显式空文件都表示 workspace 不额外忽略路径。
+        return _empty_matcher(root)
+```
 
-- 只做登录（`openid` / `email` / `profile`）：只需基础的应用信息验证。
-- 敏感范围（如 `gmail.send`、日历）：需要敏感范围验证，不需要 CASA。
-- 受限范围（如 `gmail.readonly` / `modify` / `compose`、Drive 全盘读写），且数据会存储在或经过自己的服务器：受限范围验证 + CASA，每 12 个月复审；以后新增受限范围也可能要补评估。
+`load_search_ignore_rules` 只组合 `.fileignore` + `.gitignore`（`:227-231`），**没有叠加** `default_ignore_rules()`；`default_ignore_rules` 只在 `rules is None` 时才有机会（`file_walker.py:55`），而 `SearchScope.iter_files` 永远显式传入组合规则（`scope.py:91-96`）。
 
-审核以 Cloud 项目为单位：新项目要从头走一遍；在已审核的项目里改应用名、域名或权限范围等，同样会触发重新审核。
+后果：在没有 `.gitignore` 的 workspace（或 `.gitignore` 不含 `node_modules` 的仓），每次 `search_content` / `find_files` 都会递归遍历 `.git/objects`、`node_modules`、`dist`——`DEFAULT_IGNORED_DIR_NAMES` 成为死代码，5 秒软超时后返回 `SearchTimedOut`，模型一页结果都拿不到。
 
-### 把 Google API 抽成公共 provider 微服务，能否免审
+**决策（已实现）**：忽略策略只由 workspace 的 `.fileignore` + `.gitignore` 决定，内置默认集合删除。理由：`.fileignore` 首次创建即为空、显式空文件也表达「不忽略」，默认集合在任何路径上都到不了；保留它只会让「搜索跳过了什么」有两个事实源，用户也无法通过改配置看到它。空文件、缺失、读取失败、解析失败一律等于「不额外忽略任何路径」，并保留 WARNING 日志。`iter_files` 的 `rules` 参数改为必填，避免调用方漏注入时静默遍历全盘。
 
-- **同一产品的多个端或服务（如 Ordo AI 的网页端、桌面端、后端各服务）：可以共用一个项目，只审一次。** Google 本来就建议共用登录、隐私政策和品牌的应用放在同一项目。
-- **不同品牌的新产品借用已审核的授权：不能，也不建议。**
-  - 用户在授权页上授权的是 Ordo AI，数据只能用于 Ordo AI。
-  - Google 用户数据政策（Limited Use）原则上禁止把数据转给其他应用，数据用途必须在隐私政策里写明。
-  - CASA 评估的是存储或传输受限数据的系统。新产品接触到 Gmail 数据就会进入评估范围，范围只会变大。
-  - 共用项目一旦被吊销授权，所有依赖它的产品会同时失效。
+### 7. 模型调用未注册的工具时，调用被静默丢弃，Run 仍以「正常完成」收尾
 
-### 真正能减轻审核负担的做法（按效果从大到小）
+```51:56:apps/backend/app/core/llm_provider/message_codec.py
+    for call in message.tool_calls or []:
+        call_id = call.id or ""
+        function = getattr(call, "function", None)
+        tool_name = getattr(function, "name", None) or ""
+        if not call_id.strip() or tool_name not in registered_tool_names:
+            continue
+```
 
-1. **降低权限级别**：只需发信就用 `gmail.send`，不用 readonly / modify；Drive 用 `drive.file` 加文件选择器（Picker），不申请全盘权限。降到敏感级别就不需要 CASA。对 Ordo AI 来说，CASA 只由 Inbox 的读信功能（`gmail.readonly`）触发。
-2. **受限数据不经过自己的服务器**：Google 文档的说法是，存储或传输受限数据到服务器才需要安全评估。数据只在用户本机处理时可能免做 CASA，受限范围验证仍要过。把握中等，需要和审核方确认。
-3. **只让 provider 碰原始数据**：业务系统只拿处理后的结果，评估范围就收缩到 provider 一个服务。Limited Use 同样约束派生数据。
-4. **把公共 provider 当安全组件复用**：每个产品保留自己的项目和授权页，但 OAuth 流程、`state` 与 `redirect_uri` 校验、令牌加密存储与吊销、日志脱敏都用同一套经过评估的代码。审核次数不变，但证据可复用，一处修好处处通过。本次未通过的 3.2.2、6.7.1、6.5.1、2.2.1 / 2.2.3 都落在这一层。
+```155:169:apps/backend/app/core/workflow/nodes/model_node.py
+    calls = [...]                       # 被过滤后为空
+    if not calls and finish_reason is None:      # finish_reason 是 "tool_calls"，跳过
+        ...
+    # 落到最终回复分支
+```
 
-**待确认**：「同一项目内多个 OAuth 客户端能否共用一份 CASA 评估」，公开文档没有写明，需要问 TAC Security 或 Google 的验证团队。
+工具名未注册（MCP 热注销、工具组变更、模型幻觉）时，`calls` 为空但 `finish_reason == "tool_calls"`，于是跳过「无完成原因 → 续写」，进入 `model_node.py:208-233` 的最终回复分支，以 `COMPLETE` 落定、`final_output` 通常为空串。模型永远收不到 unknown tool 的观察，用户看到一条空回复，失败被彻底抹平。`ToolAccessGate` 里的 `unknown tool` 拒绝文案在这条路径上不可达。
 
-参考：
-- [Restricted scope verification（Google）](https://developers.google.com/identity/protocols/oauth2/production-readiness/restricted-scope-verification)
-- [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy)
-- [Gmail API scopes（Google）](https://developers.google.com/workspace/gmail/api/auth/scopes)
-- [Get smart about preparing your app for OAuth verification（Google 开发者博客）](https://developers.googleblog.com/en/get-smart-about-preparing-your-app-for-oauth-verification/)
+置信度：高。
+
+### 8. 并行执行路径丢失 HITL `decision`：用户批准被静默吞掉
+
+```62:68:apps/backend/app/core/workflow/node_helper/tool_batch_runner.py
+    for index, call in serial:
+        observations[index] = await asyncio.to_thread(
+            _execute_call, rc, call, step_id, batch, loop, decision      # 串行带 decision
+        )
+    if parallel:
+        results = await _run_parallel(rc, [call for _, call in parallel], step_id, batch, loop)
+```
+
+`_run_parallel → _execute_call` 不传 `decision`（默认 `None`），于是 HITL 工具会走「首次调用」分支，重新登记待决并再写一条 waiting 占位——用户决定既没生效也没报错。`_reject_mixed_decision_batch` 只拦「HITL + 其他调用同批」，单个 `parallel_mode == "parallel"` 的 HITL 工具会直接命中这条路径。当前 `agent_team_run` 是 serial（延迟暴露），任何新增并行 HITL 工具即触发。
+
+置信度：高（代码事实）。
+
+### 9. 关闭阶段无逐步隔离：任一步抛异常，后面全部不执行，bootstate 停在 `ready`
+
+```223:242:apps/backend/app/lifespan.py
+    finally:
+        try:
+            HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
+            await asyncio.to_thread(background_registry.close)
+            await get_agent_team_coordinator().aclose()
+            ...
+            await task_runtime_spaces.aclose()
+            await asyncio.to_thread(close_service_dependencies)
+            _mark_boot_stopped()          # 只有全部成功才写
+```
+
+`AgentTeamCoordinator.aclose()` 的 `gather` 没有 `return_exceptions`（`team_coordinator.py:545-550`），一条 Team 收尾时 `background_registry.complete` 抛 DB 错误就会掀翻整个 finally：actor 不停、终端不关、MCP stdio 子进程与 SQLite 引擎不关（`close_service_dependencies` 是唯一关闭点），且 `_mark_boot_stopped()` 跳过 → supervisor 轮询到 `ready` 会误判后端仍健康。
+
+置信度：高。
+
+### 10. `POST /tasks/{id}/tool-calls/{cid}/cancel` 不映射 `KeyError`，Task 不存在时返回 500
+
+```293:296:apps/backend/app/assistant_transport/assistant_api.py
+    if not await asyncio.to_thread(service.cancel_tool_call, task_id, tool_call_id):
+        raise HTTPException(
+            status_code=409, detail="task has no running execution or call is already cancelled"
+        )
+```
+
+该端点没有走 `_accept`（`:50-105`，统一把 `KeyError → 404`），而 service 第一句就是 `self._tasks.get_task(task_id)` 并**明确声明抛 `KeyError`**（`transport_assistant_service.py:240-243`）。同文件其他命令全是 404 契约，这一处不一致。
+
+置信度：高。
+
+### 11. `list_directory` 的路径归一化是自赋值（注释承诺的行为不存在）
+
+```117:120:apps/backend/app/tools/tool_handler/list_directory.py
+        # 模型常把根目录误解为空字符串；这里安全归一化为 "."，既兼容 LLM 输入，
+        # 又不影响安全校验（PathResolver 随后仍会解析 "."）。
+        if path == "":
+            path = ""
+```
+
+`PathResolver.resolve_without_boundary("")` 返回 `"path must be a non-empty string"`，模型按注释语义传空串拿不到工作区根目录清单。
+
+置信度：高。
+
+### 12. 搜索链路没有总大小/总匹配上限，单行内的正则回溯不可中断
+
+```42:58:apps/backend/app/tools/tool_handler/search/content_engine.py
+    for file_path in scope.iter_files(file_glob):
+        scope.check_cancel_and_timeout()
+        try:
+            lines = _read_lines(file_path,scope)        # 整个文件读成 list[str]
+        ...
+        for index, line in enumerate(lines, start=1):
+            scope.check_cancel_and_timeout()
+            if regex.search(line):                      # 单行内不可中断
+```
+
+- `MAX_SEARCH_LINE_BYTES` 只限单行（1MB），**不限文件总大小**，也不限 `rows` 总量（`limit` 只在最后切片 `:76`）；
+- `search_content` 声明 `execution_mode="thread"`，而 thread 路径**没有硬超时强杀**（`tool_handler_runner.py:251-261` 明确写「`timeout_seconds` 在此仅作元数据」）；全仓 0 处使用 `"process"` 模式，`_force_kill` / windows job object 是死路径。
+
+后果：`pattern="(a+)+$"` 撞上一行压缩过的 minified JS，需要重启进程才能恢复；终端的 `_OutputCollector._chunks` 同样无上限（`output_collector.py:110-116`）。
+
+置信度：高（机制）/ 中（触发频率）。
+
+### 13. `_enqueue_node` 的「节点绑定与调度输入同事务」不成立，Team 已停止时留下孤儿节点 Task
+
+```452:485:apps/backend/app/core/tool/multi_agent/agent_team/team_coordinator.py
+        if node_execution is None:
+            task = self._task_service.get_or_create_task(...)      # 自己开事务并提交
+            node_execution = state.create_execution_node(...)
+        ...
+        with main_session_factory().begin() as session:
+            if not self._persist_running(row.id, state, session=session):
+                return None                                        # Task 已落库，state 未落库
+```
+
+`_persist_running` 落空（Team 已被取消/失败/重启收敛）时，节点 Task 已经在库里的，但不在 `state.node_executions` 中——重启恢复拿不到它的 id、不会被取消，也没有 Run，UI 出现一个永不结束的空任务。
+
+置信度：中高。
+
+---
+
+## P2：正确性与可观测性瑕疵
+
+| 位置 | 缺陷 | 证据 |
+|---|---|---|
+| `conversation_run_crud.py:79-86` | `save_execution` 无条件 UPDATE、不检查 `rowcount`，Run 行已删时整轮 ReAct 进度静默写丢（同文件 `:465`、`task_crud.py:326` 都检查了） | 对照即可 |
+| `conversation_task_state_service.py:382-393` | `publish_state` 的 `validate + deepcopy` 在锁外，取锁后直接替换 working copy → 窗口内的投影被旧帧覆盖 | 中高 |
+| `model_node.py:140-172` / `run_driver.py:113-120` | 取消/失败路径不累加本次调用的用量，`transition(CANCEL)` 用的是**上一步**的 `rc.usage_stats`；FAIL 根本不传 | 高 |
+| `team_coordinator.py:216, 291-296` | `state.current_node_id` 在驱动起点就赋值，`TEAM_START_FAILED` 基本不可达，首个节点启动失败也被标成 `next_node_start_failed` | 高 |
+| `patch_apply.py:56-69` + `patch_parser.py:434-441` | 纯插入 hunk 在文件末尾无条件补 `\n`（`removesuffix` 是死代码）；CRLF 补丁的 hunk 行保留 `\r`，exact 匹配永不命中、必然降级到模糊策略 | 高 |
+| `ignore_rules.py` / `file_walker.py` | 搜索根在工作区外时 `relative_to` 失败 → `match_*` 恒 False，**全部忽略规则静默失效** | 高 |
+| `mcp_configuration_service.py:106-121` | 测试回写是 read→write 无锁（窗口只有几行，不是 20 秒），并发保存仍可能被旧 `servers` 覆盖；同仓 `ConfigurationFileStore.locked()` 未被使用 | 低中 |
+| `runtime_message_context_manager.py:114, 232-243` | 序号是进程内计数器、只在 `begin_run` 对齐一次；第二个写入者（HITL 结算/后台结论）并发追加会撞 `(task_id, sequence)` 唯一约束，整条消息写不进 | 待验证（当前"单一驱动者"假设兜着） |
+
+---
+
+## 复核过、确认**没有**问题（避免重复排查）
+
+- `RunTransition` 迁移表：终态不是任何迁移的来源状态，`update_status_if_in` 把状态白名单放进 SQL `WHERE` + `rowcount` 判断，是真正的原子条件迁移。
+- `TaskMessageQueue.pending` 的唤醒时序（先登记 waiter → `clear()` → 读库 → `wait()`），不丢唤醒；`ack` 用「条件删除返回行内容」而不是 mailbox 副本，不会重复并入。
+- `RunMailbox` 的堆操作与 `_seen` 去重；`prepare_input` 的「取消 → 挂起 → 步数上限」顺序与 `pending_nowait` 兜底复查。
+- `StreamingPartStateMachine` 的 part 顺序与收口：`_close()` 是唯一出口，`finish()` 在 `finally`，不丢片。
+- `max_steps` 边界（`step_count > step_limit` 严格大于），无 off-by-one，且有可见结论。
+- `ToolDecisionService.submit` 用 `BEGIN IMMEDIATE` + 双闸门，重复提交返回 `DECISION_ALREADY_SUBMITTED`，不会重复入队。
+- 路径越界防护（`PathResolver` 的 `relative_to` + 分量比较）、`atomic_write` 的 fsync/replace、补丁解析的拒绝面、多命中歧义直接报错。
+- 存储层的 WAL / `foreign_keys=ON` / `pool_reset_on_return="rollback"`、`sqlite_autoincrement`（有测试守护）、分页游标无 off-by-one。
+- `parent_watch`、`bootstate`、MCP 池的空闲回收（跳过 `in_flight`）与指纹比对。
+
+---
+
+## 建议的修复路线（按第零铁律排）
+
+1. **先修 1/2/3 这一组**——它们同一个根因：`_loop` 与 `_drive` 都是「没人管的裸 task」。结构化做法是给两者各加一层显式收尾（`_drive` 用 `try/finally` 把注销+`consume`+`_on_released` 收进 finally；`_loop` 把阻塞读也纳入 `try`，并对 loop task 挂 done_callback 记录 + 不自动重启但在 `start()` 放宽为「done 则重建」）。同时把 `child_run_job` 的 `wait_quiescent()` 从「无限等」改成带上限。
+2. **水位只在推进成功后前移**：`_advance` 返回成功才更新 `_watermark`/`_handled`，失败时保留并在下一轮 `pending` 重读（否则日志承诺与实际不符）。
+3. **传输层把「full 之后的新 mutation」和「full 之前的旧 mutation」区分开**：`offer` 在 `_control_frame` 非空时只 `clear` 队列里已有的旧帧，新帧照常入队。
+4. **搜索忽略规则删除内置默认集合**（已实现）：删除 `default_ignore_rules()` 与 `DEFAULT_IGNORED_DIR_NAMES`，空/缺失/读写失败一律等于不额外忽略；策略只由 `.fileignore` + `.gitignore` 决定。
+5. **`rerun` 的 rebuild+publish 挪回闸门内、入队之前**，或让 `rebuild_state` 复用 `_unload_if_unwatched` 的「Run 在跑不卸载」判断。
+
+需要我直接动手改哪一组，告诉我即可；我建议从 1、2 开始（都是 `task_actor.py` / `task_execution.py` 的局部改动，可单独验证）。

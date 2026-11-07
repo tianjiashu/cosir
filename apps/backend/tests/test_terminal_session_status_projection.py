@@ -24,7 +24,7 @@ from app.service import depends
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.tools.terminal_runtime.session_runtime import SessionSnapshot
 
-pytestmark = pytest.mark.usefixtures("isolated_storage")
+pytestmark = pytest.mark.usefixtures("isolated_storage", "empty_tool_registry")
 
 
 def _entry(session_id: str = "term_1", **overrides: Any) -> dict[str, Any]:

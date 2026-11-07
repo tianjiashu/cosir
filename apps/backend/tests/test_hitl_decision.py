@@ -473,6 +473,8 @@ def test_context_finds_call_and_updates_only_tool_result_metadata() -> None:
 
     replaced: list[Any] = []
     manager = RuntimeMessageContextManager.__new__(RuntimeMessageContextManager)
+    manager._used_call_ids = set()
+    manager._response_call_ids = {}
     manager.current_task_id = 1
     manager.context_store = SimpleNamespace(
         replace_message=lambda record, **_kw: replaced.append(record)
@@ -505,6 +507,10 @@ def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
     from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 
     manager = RuntimeMessageContextManager.__new__(RuntimeMessageContextManager)
+
+    manager._used_call_ids = set()
+
+    manager._response_call_ids = {}
     manager.current_task_id = 1
     manager.context_store = SimpleNamespace(replace_message=lambda _record, **_kw: None)
     manager._entries = [

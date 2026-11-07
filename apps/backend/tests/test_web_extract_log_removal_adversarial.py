@@ -347,6 +347,7 @@ def test_full_success_path_behavior_and_display_unchanged() -> None:
     assert "failed_count" not in payload
     assert obs.display_data == {
         "kind": "web-extract-urls",
+        "partial": False,
         "urls": [{"url": urls[0]}, {"url": urls[1]}],
     }
 

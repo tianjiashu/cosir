@@ -371,7 +371,9 @@ def test_t4_rebuild_snapshot_materializes_all_tool_results(
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
-    task = SimpleNamespace(id=7, title="task", current_run_id=1, context_window_total=None)
+    task = SimpleNamespace(
+        id=7, title="task", current_run_id=1, context_window_total=None, extra=TaskExtra()
+    )
     rows = [
         _ai_row(
             [

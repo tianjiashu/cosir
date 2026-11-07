@@ -115,7 +115,7 @@
       },
       "delete": {
         "summary": "Delete Task",
-        "description": "删除单个任务及其级联的轮次与运行时事件。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service（负责级联清理）。\n\n返回:\n    删除结果 ``DeleteTaskResponse``。\n\n异常:\n    HTTPException: 当任务不存在时抛出。\n\n副作用:\n    级联删除该任务下的轮次、运行时事件与任务自身。",
+        "description": "删除单个任务及其级联的轮次与运行时事件。\n\n参数:\n    task_id: 来自路由的任务标识。\n    task_service: 通过依赖注入的任务 service（负责级联清理）。\n    creation_command_id: 前端在首条命令未被接受时回收 provisional Task 的创建标记；\n        提供时走受控清理，任务树此时尚无 Run，故不经停止执行。\n    with_forks: 为真时连同全部 fork 后代一起删除；默认只删这一个，它的 fork 改挂到上一级。\n\n返回:\n    删除结果 ``DeleteTaskResponse``。\n\n异常:\n    HTTPException: 任务不存在时 404；删除闸门忙时 409（可重试）；创建标记不匹配或\n        任务已被接受时 409（不可重试）。\n\n副作用:\n    普通删除经 ``TaskService.delete_task_tree``：先停止所有权子树的活动执行并等待释放，再级联\n    删除；它的 fork 默认不删除、改挂到上一级，``withForks`` 时一并删除。",
         "operationId": "delete_task_tasks__task_id__delete",
         "parameters": [
           {
@@ -141,6 +141,16 @@
                 }
               ],
               "title": "Creationcommandid"
+            }
+          },
+          {
+            "name": "withForks",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Withforks"
             }
           }
         ],
@@ -171,7 +181,7 @@
     "/tasks/{task_id}/fork": {
       "post": {
         "summary": "Fork Task",
-        "description": "从源 Task 指定历史 Run 创建一个新的 fork Task。",
+        "description": "从源 Task 的某条消息处创建一个新的 fork Task：复制这条输入消息之前的上下文，不含该消息。",
         "operationId": "fork_task_tasks__task_id__fork_post",
         "parameters": [
           {
@@ -218,10 +228,27 @@
         }
       }
     },
+    "/task-status/stream": {
+      "get": {
+        "summary": "Task Status Stream",
+        "description": "订阅全部 Task 的执行状态；断开连接只退订，不影响任何 Run。",
+        "operationId": "task_status_stream_task_status_stream_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "summary": "Get Health",
-        "description": "后端存活探针（liveness check）。\n\n当前为占位实现：仅确认进程已启动并响应，不探测子系统就绪态。\n``runtime`` 依赖已注入但本占位实现暂未使用，保留以便后续升级为真实探针。\n\n真实探针（TODO，尚未实现）：聚合 storage 连通性与模型配置中心\n（默认 Agent 的默认模型是否可解析 + Key 是否就位），产出不含 secret 明文的健康摘要。\n届时将改为注入\n``HealthProbeService`` 并移除无用的 ``runtime`` 参数。\n\n参数:\n    runtime: 通过依赖注入的运行时单例；当前占位实现未使用。\n\n返回:\n    表示进程存活的 ``HealthResponse``（不含任何 secret 或子系统详情）。\n\n异常:\n    无。\n\n副作用:\n    无。",
+        "description": "后端存活探针（liveness check）。\n\n当前为占位实现：仅确认进程已启动并响应，不探测子系统就绪态。真实探针（TODO）将聚合\nstorage 连通性与模型配置中心，产出不含 secret 明文的健康摘要。\n\n返回:\n    表示进程存活的 ``HealthResponse``（不含任何 secret 或子系统详情）。\n\n异常:\n    无。\n\n副作用:\n    无。",
         "operationId": "get_health_health_get",
         "responses": {
           "200": {
@@ -300,7 +327,7 @@
     "/workspaces/{workspace_id}": {
       "delete": {
         "summary": "Delete Workspace",
-        "description": "删除工作区及其下游任务、轮次与运行记录。\n\n参数:\n    workspace_id: 来自路由的工作区标识。\n    workspace_service: 通过依赖注入的工作区 service。\n\n返回:\n    删除结果 ``DeleteWorkspaceResponse``。\n\n异常:\n    HTTPException: 当工作区不存在时抛出。\n\n副作用:\n    级联删除工作区下的任务、轮次、事件、步骤与 durable run。",
+        "description": "删除工作区及其下游任务、轮次与运行记录。\n\n参数:\n    workspace_id: 来自路由的工作区标识。\n    workspace_service: 通过依赖注入的工作区 service。\n\n返回:\n    删除结果 ``DeleteWorkspaceResponse``。\n\n异常:\n    HTTPException: 当工作区不存在时抛出。\n\n副作用:\n    经 ``WorkspaceService.delete_workspace_tree``：先停止工作区内的活动执行并等待释放，再级联\n    删除工作区下的任务、轮次、事件、步骤与 durable run。",
         "operationId": "delete_workspace_workspaces__workspace_id__delete",
         "parameters": [
           {
@@ -1502,62 +1529,6 @@
         }
       }
     },
-    "/configuration/terminal-denylist": {
-      "get": {
-        "summary": "Get Terminal Denylist Configuration",
-        "description": "读取 deny-list；缺失时由 service 初始化默认配置文件。",
-        "operationId": "get_terminal_denylist_configuration_configuration_terminal_denylist_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TerminalDenylistResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "summary": "Update Terminal Denylist Configuration",
-        "description": "校验并保存新的 pattern 列表。",
-        "operationId": "update_terminal_denylist_configuration_configuration_terminal_denylist_put",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TerminalDenylistUpdateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TerminalDenylistResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/configuration/mcp-servers": {
       "get": {
         "summary": "Get Mcp Servers Configuration",
@@ -2212,6 +2183,185 @@
         }
       }
     },
+    "/terminal/shells": {
+      "get": {
+        "summary": "List Terminal Shells",
+        "description": "列出当前宿主可用的 shell 与集成支持。",
+        "operationId": "list_terminal_shells_terminal_shells_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalShellsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/terminal/sessions/active-count": {
+      "get": {
+        "summary": "Count Active Terminal Sessions",
+        "description": "全进程活跃会话数（不区分 Task）；桌面宿主退出前据此提醒。",
+        "operationId": "count_active_terminal_sessions_terminal_sessions_active_count_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalActiveCountResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/terminal/sessions": {
+      "post": {
+        "summary": "Create Terminal Session",
+        "description": "用户为侧栏对话 Task 新建终端会话；会话摘要随 snapshot 推送。",
+        "operationId": "create_terminal_session_tasks__task_id__terminal_sessions_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTerminalSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateTerminalSessionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/terminal/sessions/{session_id}": {
+      "delete": {
+        "summary": "Close Terminal Session",
+        "description": "关闭本 Task 的一个终端会话；会话不存在或不属于该 Task 时 404。",
+        "operationId": "close_terminal_session_tasks__task_id__terminal_sessions__session_id__delete",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Close Terminal Session Tasks  Task Id  Terminal Sessions  Session Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/browser-context": {
+      "get": {
+        "summary": "Get Browser Context",
+        "description": "返回该 Task 的标签上限与下载目录；Task 不存在时 404。",
+        "operationId": "get_browser_context_tasks__task_id__browser_context_get",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserContextResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/workspaces/{workspace_id}/attachments": {
       "post": {
         "summary": "Upload Attachment",
@@ -2386,6 +2536,45 @@
                   "additionalProperties": true,
                   "type": "object",
                   "title": "Response Save Agent Team Configuration Configuration Agent Teams Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/agent-teams/graph-issues": {
+      "post": {
+        "summary": "Check Agent Team Graph",
+        "description": "检查编辑中 Team 草稿的图结构，返回全部问题；不保存、不区分作用域。\n\n与保存校验共用 ``collect_team_graph_issues``，编辑器据此实时标注问题。纯计算、\n无 IO，草稿规模上限为 10 个节点，故不做缓存或限流。",
+        "operationId": "check_agent_team_graph_configuration_agent_teams_graph_issues_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentTeamGraphIssuesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentTeamGraphIssuesResponse"
                 }
               }
             }
@@ -2752,90 +2941,11 @@
         }
       }
     },
-    "/agent-team/runs/{run_id}/cancel": {
+    "/tasks/{task_id}/messages": {
       "post": {
-        "summary": "Cancel Agent Team Run",
-        "description": "取消 TeamRun 及其当前节点。",
-        "operationId": "cancel_agent_team_run_agent_team_runs__run_id__cancel_post",
-        "parameters": [
-          {
-            "name": "run_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Run Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentTeamRunResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/assistant": {
-      "post": {
-        "summary": "Assistant Transport",
-        "description": "提交用户消息、编辑或业务续跑，返回 JSON 接收回执。\n后台执行独立于请求；输出由 attach SSE 订阅，普通入队不会替换订阅。",
-        "operationId": "assistant_transport_assistant_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AssistantTransportRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CommandAccepted"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/tasks/{task_id}/assistant/attach": {
-      "post": {
-        "summary": "Assistant Transport Attach",
-        "description": "重新订阅已有 Run，不触发业务 resume。",
-        "operationId": "assistant_transport_attach_tasks__task_id__assistant_attach_post",
+        "summary": "Send Message",
+        "description": "发送消息：有活动 Run（含挂起）时排队，当前 Run 结束后一轮一条依次处理；空闲时立即处理。",
+        "operationId": "send_message_tasks__task_id__messages_post",
         "parameters": [
           {
             "name": "task_id",
@@ -2852,7 +2962,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AssistantAttachRequest"
+                "$ref": "#/components/schemas/SendMessageRequest"
               }
             }
           }
@@ -2879,10 +2989,294 @@
         }
       }
     },
+    "/tasks/{task_id}/queued-messages/{message_id}/send-now": {
+      "post": {
+        "summary": "Send Queued Message Now",
+        "description": "把排队中的用户消息改为立即处理：运行中并入当前 Run，挂起时唤醒，空闲时开新 Run（已并入时\n409 ``MESSAGE_CONSUMED``）。",
+        "operationId": "send_queued_message_now_tasks__task_id__queued_messages__message_id__send_now_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/queued-messages/{message_id}": {
+      "delete": {
+        "summary": "Delete Queued Message",
+        "description": "删除排队中的用户消息（已并入时 409 ``MESSAGE_CONSUMED``）。",
+        "operationId": "delete_queued_message_tasks__task_id__queued_messages__message_id__delete",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/messages/{message_id}/rerun": {
+      "post": {
+        "summary": "Rerun Message",
+        "description": "编辑最新一条已并入的用户消息并重跑：只在 Task 静止时接受（不替用户停止，否则 409\n``RUN_NOT_STOPPED``），撤回它所在的一轮，编辑后的消息进入新建的 Run。",
+        "operationId": "rerun_message_tasks__task_id__messages__message_id__rerun_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerunMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/resume": {
+      "post": {
+        "summary": "Resume Task",
+        "description": "恢复 Task：最新 Run 为 cancelled / failed 时从 prepare_input 续跑；不可恢复时 409\n``RUN_NOT_RESUMABLE``。",
+        "operationId": "resume_task_tasks__task_id__resume_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/tool-calls/{tool_call_id}/decision": {
+      "post": {
+        "summary": "Submit Decision",
+        "description": "对一次等待用户决定的工具调用作出决定：同步校验后入队，由 Task 的 actor 唤醒或开新 Run。\n\n409 ``DECISION_NOT_AWAITED``（调用不在等待决定）/ ``DECISION_ALREADY_SUBMITTED``（已有未处理\n的决定），400 ``DECISION_DATA_INVALID``（载荷不符合工具声明的形状）。",
+        "operationId": "submit_decision_tasks__task_id__tool_calls__tool_call_id__decision_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "tool_call_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Call Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/assistant/attach": {
+      "post": {
+        "summary": "Assistant Transport Attach",
+        "description": "订阅 Task 的 snapshot（长订阅），不触发业务 resume。",
+        "operationId": "assistant_transport_attach_tasks__task_id__assistant_attach_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tasks/{task_id}/assistant/state": {
       "get": {
         "summary": "Assistant Transport State",
-        "description": "返回某任务的首屏历史 state（服务端权威对话视图）。\n\n参数:\n    task_id: URL 中的任务标识。\n    task_service: 用于校验任务存在性的领域 service（不直接触碰 storage）。\n    state_service: Task Transport state 的读取边界。\n\n返回:\n    与 Assistant Transport state 形状一致的中性 wire state 字典；任务无 Run 时\n    ``runs`` 为空数组。\n\n异常:\n    HTTPException: 任务不存在时返回 404（复用 ``task_service.get_task`` 的\n    ``KeyError`` 约定，与 ``assistant_transport`` 创建路径一致）。\n\n副作用:\n    不修改 Run、Context 或执行器；state service 在冷读时从 canonical Task、Run 与\n    Context 记录重建 state，并校正进程内 working copy 的生命周期事实。",
+        "description": "返回某任务的首屏历史 state（服务端权威对话视图）；任务不存在时 404。\n\n冷读时 state service 从 canonical Task、Run 与 Context 记录重建；不修改 Run、Context 或执行器。",
         "operationId": "assistant_transport_state_tasks__task_id__assistant_state_get",
         "parameters": [
           {
@@ -2919,19 +3313,69 @@
         }
       }
     },
-    "/runs/{run_id}/cancel": {
-      "post": {
-        "summary": "Cancel Run",
-        "description": "显式取消一个 Conversation Run。\n\n表现层只做输入校验、调用业务层与异常映射，不编排取消时序——「向进程内取消信号源\n标记该 run」已收口到 ``ConversationRunExecutor.cancel`` 单一入口。HTTP 断连不会\n调用本端点；重复取消只返回既有信号状态，不重复标记，也不改变任何持久化事实。\n\n本端点只表示**取消信号已被接受**，不表示 run 已经终结：run 的终态转移\n（active → cancelled）由 workflow 经 run_service 落定，前端需继续以 canonical\nsnapshot 为准判断该 run 是否已收束。\n\n参数:\n    run_id: Conversation Run 标识。\n    run_executor: 进程内取消信号标记的唯一入口。\n\n返回:\n    包含 ``run_id`` 与 ``cancelled`` 的 JSON 对象。\n\n异常:\n    HTTPException: run 不存在时返回 404；该 run 此前已标记过取消（信号已存在）时\n    返回 409；标记内部失败时返回 500。\n\n副作用:\n    向进程内取消信号源写入该 run；不落库 run 状态、不取消后台执行 task。",
-        "operationId": "cancel_run_runs__run_id__cancel_post",
+    "/tasks/{task_id}/assistant/messages": {
+      "get": {
+        "summary": "Assistant History Page",
+        "description": "完整历史中位置 ``end`` 之前的一页，前端往上翻时取；``end`` 失效（快照已被替换）时 409。",
+        "operationId": "assistant_history_page_tasks__task_id__assistant_messages_get",
         "parameters": [
           {
-            "name": "run_id",
+            "name": "task_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "Run Id"
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "title": "End"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/cancel": {
+      "post": {
+        "summary": "Cancel Task",
+        "description": "停止 Task 当前的执行或挂起的 Run，投递即 202；是否停下以 snapshot 的 ``activity`` 为准。\n\n按 task 而不是 run 取消：同一 Task 内 Run 串行，命中的永远是当前执行，不依赖前端可能滞后的\nrun_id。运行中的 Run 在入口同步打取消信号，终态由 workflow 在检查点落定；挂起（``suspended``）\n的 Run 没有执行者，由 Task 调度 actor 直接迁移为 ``cancelled``；没有可停止的对象时什么也不做。\n重复请求幂等。HTTP 断连不会调用本端点。",
+        "operationId": "cancel_task_tasks__task_id__cancel_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
             }
           }
         ],
@@ -2957,19 +3401,66 @@
         }
       }
     },
-    "/runs/{run_id}/tool-calls/{tool_call_id}/cancel": {
+    "/tasks/{task_id}/tool-calls/{tool_call_id}/background": {
       "post": {
-        "summary": "Cancel Tool Call",
-        "description": "显式取消一个正在执行的工具调用（工具级取消）。\n\n表现层只做输入校验、调用业务层与异常映射，不编排取消时序——「向进程内工具级取消\n信号源标记该工具调用」已收口到 ``ConversationRunExecutor.cancel_tool_call`` 单一入口。\n\n与 ``POST /runs/{run_id}/cancel`` 的差别是取消范围：run 级取消要求整个 Conversation\nRun 停止执行，run 终态由 workflow 落定；本端点只中止**一次**工具调用，run 与 Agent\n在其后继续执行。因此本端点只表示**取消信号已被接受**，不表示工具调用已经结束：被\n点名的工具在执行层检出信号后返回取消观察，其终态与模型侧 ``ToolMessage`` 由 workflow\n落定，前端需继续以 canonical snapshot 为准。HTTP 断连不会调用本端点。\n\n响应码的语义边界：信号随该工具调用执行结束被释放，run 收尾时按 run_id 兜底清理，\n因此 409 只表示「此刻信号已存在」，200 也不保证该调用尚未结束——**调用方不得把\n200/409 当作幂等去重或执行进度依据**，只能以 404（run 不存在）作为确定性失败。\n\n参数:\n    run_id: 目标工具调用所属的 Conversation Run 标识。\n    tool_call_id: 目标工具调用标识（模型工具调用 id）。\n    run_executor: 进程内取消信号标记的唯一入口。\n\n返回:\n    包含 ``run_id``、``tool_call_id`` 与 ``cancelled`` 的 JSON 对象。\n\n异常:\n    HTTPException: run 不存在时返回 404；该工具调用此前已标记过取消（信号已存在）时\n    返回 409；标记内部失败时返回 500。\n\n副作用:\n    向进程内工具级取消信号源写入 ``(run_id, tool_call_id)``；不落库 run 或工具调用\n    状态、不取消后台执行 task。工具执行层在本次调用结束时释放该信号，run 收尾时按\n    run_id 兜底清理。",
-        "operationId": "cancel_tool_call_runs__run_id__tool_calls__tool_call_id__cancel_post",
+        "summary": "Background Tool Call",
+        "description": "把一次前台等待中的工具调用转到后台：工具立即以「已转后台」占位闭合，结论稍后回投。\n\n409 ``TOOL_CALL_NOT_DETACHABLE``：这次调用没有前台等待（已结束、本来就在后台或不支持）。\n结论与转后台同时到达时由登记表裁决，结论先到则本请求 409、工具照常返回结果。",
+        "operationId": "background_tool_call_tasks__task_id__tool_calls__tool_call_id__background_post",
         "parameters": [
           {
-            "name": "run_id",
+            "name": "task_id",
             "in": "path",
             "required": true,
             "schema": {
               "type": "integer",
-              "title": "Run Id"
+              "title": "Task Id"
+            }
+          },
+          {
+            "name": "tool_call_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Tool Call Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tasks/{task_id}/tool-calls/{tool_call_id}/cancel": {
+      "post": {
+        "summary": "Cancel Tool Call",
+        "description": "取消一次工具调用，Run 与 Agent 继续执行。\n\n登记了后台结果的调用（前台等待或后台工作）撤销登记，不要求 Run 在执行；其余只给 Task 当前\n执行中的调用打工具级取消信号。本端点只表示取消已被接受；工具调用终态以 canonical snapshot\n为准。\n\n异常:\n    HTTPException: 没有可取消的对象（Task 当前没有执行、调用已结束或已标记过取消）时 409。",
+        "operationId": "cancel_tool_call_tasks__task_id__tool_calls__tool_call_id__cancel_post",
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Task Id"
             }
           },
           {
@@ -3007,54 +3498,6 @@
   },
   "components": {
     "schemas": {
-      "AddMessageCommand": {
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "add-message",
-            "title": "Type"
-          },
-          "commandId": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Commandid"
-          },
-          "message": {
-            "$ref": "#/components/schemas/AssistantUserMessage"
-          },
-          "parentId": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parentid"
-          },
-          "sourceId": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sourceid"
-          }
-        },
-        "type": "object",
-        "required": [
-          "type",
-          "commandId",
-          "message"
-        ],
-        "title": "AddMessageCommand",
-        "description": "校验首版支持的 ``add-message`` 命令。"
-      },
       "AgentConfigurationRequest": {
         "properties": {
           "agent_id": {
@@ -3273,6 +3716,167 @@
         ],
         "title": "AgentTeamAgentResponse"
       },
+      "AgentTeamGraphIssueResponse": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/TeamGraphIssueCode"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "node_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Node Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "transition_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transition Index"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "node_id",
+          "status",
+          "transition_index"
+        ],
+        "title": "AgentTeamGraphIssueResponse",
+        "description": "一条图结构问题；定位字段供前端标到节点、状态出口或连线上。"
+      },
+      "AgentTeamGraphIssuesRequest": {
+        "properties": {
+          "start_node_id": {
+            "type": "string",
+            "title": "Start Node Id"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTeamGraphNodeDraft"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "transitions": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTeamGraphTransitionDraft"
+            },
+            "type": "array",
+            "title": "Transitions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start_node_id",
+          "nodes",
+          "transitions"
+        ],
+        "title": "AgentTeamGraphIssuesRequest",
+        "description": "编辑中的 Team 草稿。\n\n字段只做类型约束、不做格式校验：草稿允许空 ID、未填完的转移，格式问题留到保存时\n由 ``AgentTeamConfiguration`` 报告；这里只回答图结构有哪些问题。"
+      },
+      "AgentTeamGraphIssuesResponse": {
+        "properties": {
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTeamGraphIssueResponse"
+            },
+            "type": "array",
+            "title": "Issues"
+          }
+        },
+        "type": "object",
+        "required": [
+          "issues"
+        ],
+        "title": "AgentTeamGraphIssuesResponse",
+        "description": "图结构问题列表；为空表示结构完整。"
+      },
+      "AgentTeamGraphNodeDraft": {
+        "properties": {
+          "node_id": {
+            "type": "string",
+            "title": "Node Id"
+          },
+          "statuses": {
+            "items": {
+              "$ref": "#/components/schemas/AgentTeamGraphStatusDraft"
+            },
+            "type": "array",
+            "title": "Statuses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "node_id",
+          "statuses"
+        ],
+        "title": "AgentTeamGraphNodeDraft",
+        "description": "草稿中的节点；只取参与图校验的字段，名称、Agent 等字段忽略。"
+      },
+      "AgentTeamGraphStatusDraft": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "AgentTeamGraphStatusDraft",
+        "description": "草稿中的业务状态；颜色等展示字段忽略。"
+      },
+      "AgentTeamGraphTransitionDraft": {
+        "properties": {
+          "from_node_id": {
+            "type": "string",
+            "title": "From Node Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "target_node_id": {
+            "type": "string",
+            "title": "Target Node Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "from_node_id",
+          "status",
+          "target_node_id"
+        ],
+        "title": "AgentTeamGraphTransitionDraft",
+        "description": "草稿中的状态转移。"
+      },
       "AgentTeamNodeResponse-Input": {
         "properties": {
           "node_id": {
@@ -3424,6 +4028,17 @@
             "type": "string",
             "title": "Status"
           },
+          "end_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Reason"
+          },
           "nodes": {
             "items": {
               "$ref": "#/components/schemas/AgentTeamNodeResponse-Output"
@@ -3455,44 +4070,6 @@
         ],
         "title": "AgentTeamRunResponse",
         "description": "供执行卡渲染的 TeamRun 投影，不包含可恢复执行用的内部 state。"
-      },
-      "AssistantAttachRequest": {
-        "properties": {
-          "commands": {
-            "items": {},
-            "type": "array",
-            "title": "Commands"
-          },
-          "taskId": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Taskid"
-          },
-          "threadId": {
-            "type": "string",
-            "pattern": "^conversation_run-[1-9][0-9]*$",
-            "title": "Threadid"
-          },
-          "runId": {
-            "type": "integer",
-            "minimum": 1.0,
-            "title": "Runid"
-          }
-        },
-        "type": "object",
-        "required": [
-          "threadId",
-          "runId"
-        ],
-        "title": "AssistantAttachRequest",
-        "description": "只订阅已有 Conversation Run 的 transport 请求。\n\nattach 请求不携带业务命令（由 ``assistant_transport_attach`` 端点校验拒绝），仅用于\n重新订阅一个已存在、可能仍在运行的 Run 的 SSE 流。为兼容 assistant-ui resume 请求的\n通用 transport envelope，``commands`` 字段允许为空并被显式忽略。其 ``threadId`` 使用\n``conversation_run-{task_id}`` 标识当前 Task 的 Conversation Run 线程；具体 Task 归属\n由 attach 路由结合路径和 Run 校验。"
       },
       "AssistantFileAttachment": {
         "properties": {
@@ -3536,7 +4113,7 @@
           "contentType"
         ],
         "title": "AssistantFileAttachment",
-        "description": "一次用户消息中的普通文件引用。\n\n``path`` 在首次发送新文件时必需；编辑重发或 snapshot 恢复后的请求可以只带\n``id``，由后端从当前 Run 的 ``extra`` 解析已有引用。该对象只描述本机路径，\n不上传或保存文件二进制。"
+        "description": "一次用户消息中的普通文件引用。\n\n``path`` 在首次发送新文件时必需；编辑重发或 snapshot 恢复后的请求可以只带 ``id``，\n由输入解析从目标消息的展示绑定恢复路径（页面重载后前端已丢失本地附件登记）。该对象只\n描述本机路径，不上传或保存文件二进制。"
       },
       "AssistantImagePart": {
         "properties": {
@@ -3579,166 +4156,6 @@
         ],
         "title": "AssistantTextPart",
         "description": "校验 Assistant UI 用户消息中的文本 part。"
-      },
-      "AssistantTransportRequest": {
-        "properties": {
-          "commands": {
-            "items": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/AddMessageCommand"
-                },
-                {
-                  "$ref": "#/components/schemas/BanToolsCommand"
-                },
-                {
-                  "$ref": "#/components/schemas/UserInputDecisionCommand"
-                }
-              ]
-            },
-            "type": "array",
-            "maxItems": 32,
-            "minItems": 0,
-            "title": "Commands"
-          },
-          "threadId": {
-            "type": "string",
-            "pattern": "^task-[1-9][0-9]*$",
-            "title": "Threadid"
-          },
-          "taskId": {
-            "type": "integer",
-            "minimum": 1.0,
-            "title": "Taskid"
-          },
-          "workspaceId": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Workspaceid"
-          },
-          "modelConfigId": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Modelconfigid"
-          },
-          "reasoningEffort": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "low",
-                  "high",
-                  "max"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reasoningeffort"
-          },
-          "runId": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Runid"
-          },
-          "parentId": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parentid"
-          },
-          "state": {
-            "anyOf": [
-              {},
-              {
-                "type": "null"
-              }
-            ],
-            "title": "State"
-          },
-          "system": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "System"
-          },
-          "tools": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tools"
-          },
-          "callSettings": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Callsettings"
-          },
-          "config": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Config"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "commands",
-          "threadId",
-          "taskId"
-        ],
-        "title": "AssistantTransportRequest",
-        "description": "校验 Assistant Transport 请求。\n\n当前受支持的命令共同构成一次 Run 请求；对话历史由 canonical facts 重建。"
       },
       "AssistantUserMessage": {
         "properties": {
@@ -3799,57 +4216,6 @@
         "title": "AssistantUserMessage",
         "description": "校验 Assistant UI 的用户消息。"
       },
-      "BanToolsCommand": {
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "custom",
-            "title": "Type"
-          },
-          "commandId": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Commandid"
-          },
-          "name": {
-            "type": "string",
-            "const": "ban-tools",
-            "title": "Name"
-          },
-          "payload": {
-            "$ref": "#/components/schemas/BanToolsPayload"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "type",
-          "commandId",
-          "name",
-          "payload"
-        ],
-        "title": "BanToolsCommand",
-        "description": "为单个新 Run 传递用户禁用的工具名集合。"
-      },
-      "BanToolsPayload": {
-        "properties": {
-          "ban_tools": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Ban Tools"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "ban_tools"
-        ],
-        "title": "BanToolsPayload",
-        "description": "校验本次 Run 由用户禁用的工具名集合。"
-      },
       "Body_upload_attachment_workspaces__workspace_id__attachments_post": {
         "properties": {
           "file": {
@@ -3863,6 +4229,41 @@
           "file"
         ],
         "title": "Body_upload_attachment_workspaces__workspace_id__attachments_post"
+      },
+      "BrowserContextResponse": {
+        "properties": {
+          "limits": {
+            "$ref": "#/components/schemas/BrowserTabLimitsResponse"
+          },
+          "download_dir": {
+            "type": "string",
+            "title": "Download Dir"
+          }
+        },
+        "type": "object",
+        "required": [
+          "limits",
+          "download_dir"
+        ],
+        "title": "BrowserContextResponse"
+      },
+      "BrowserTabLimitsResponse": {
+        "properties": {
+          "per_task": {
+            "type": "integer",
+            "title": "Per Task"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "per_task",
+          "total"
+        ],
+        "title": "BrowserTabLimitsResponse"
       },
       "BrowserVisibilityResponse": {
         "properties": {
@@ -3884,29 +4285,6 @@
           "revision"
         ],
         "title": "BrowserVisibilityResponse"
-      },
-      "CommandAccepted": {
-        "properties": {
-          "runId": {
-            "type": "integer",
-            "title": "Runid"
-          },
-          "state": {
-            "$ref": "#/components/schemas/ConversationStateSnapshot"
-          },
-          "queued": {
-            "type": "boolean",
-            "title": "Queued"
-          }
-        },
-        "type": "object",
-        "required": [
-          "runId",
-          "state",
-          "queued"
-        ],
-        "title": "CommandAccepted",
-        "description": "queued 表示本次提交未启动执行者；state 是提交时的读取快照。"
       },
       "ContextMessageResponse": {
         "properties": {
@@ -3958,6 +4336,17 @@
           },
           "content": {
             "title": "Content"
+          },
+          "reasoning_content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Content"
           },
           "tool_calls": {
             "anyOf": [
@@ -4024,8 +4413,245 @@
         "title": "ContextMessageResponse",
         "description": "一条按消息角色投影的上下文持久化记录。"
       },
-      "ConversationRunSnapshot": {
+      "ConversationBackgroundTask": {
         "properties": {
+          "toolCallId": {
+            "type": "string",
+            "title": "Toolcallid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "terminal_command",
+              "child_agent",
+              "agent_team"
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "running",
+              "settling",
+              "completed",
+              "cancelled"
+            ],
+            "title": "Status"
+          },
+          "startedAt": {
+            "type": "string",
+            "title": "Startedat"
+          },
+          "endedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "toolCallId",
+          "kind",
+          "label",
+          "status",
+          "startedAt",
+          "endedAt"
+        ],
+        "title": "ConversationBackgroundTask",
+        "description": "一条后台工作；进行中（运行、收尾）的在前，按开始先后；之后是最近结束的若干条。"
+      },
+      "ConversationBackgroundWork": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "terminal_command",
+              "child_agent",
+              "agent_team"
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "startedAt": {
+            "type": "string",
+            "title": "Startedat"
+          },
+          "endedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endedat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "label",
+          "startedAt",
+          "endedAt"
+        ],
+        "title": "ConversationBackgroundWork",
+        "description": "后台占位上的工作记录（``BackgroundWork`` 的 wire 形状）。卡片只看它在不在；看板从工作副本里\n的这些记录投影，所以它们随 part 进入快照，看板不另外查库。"
+      },
+      "ConversationHandoff": {
+        "properties": {
+          "toolCallId": {
+            "type": "string",
+            "title": "Toolcallid"
+          },
+          "toolName": {
+            "type": "string",
+            "title": "Toolname"
+          },
+          "surface": {
+            "type": "string",
+            "enum": [
+              "terminal",
+              "browser"
+            ],
+            "title": "Surface"
+          },
+          "resourceId": {
+            "type": "string",
+            "title": "Resourceid"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "toolCallId",
+          "toolName",
+          "surface",
+          "resourceId",
+          "reason"
+        ],
+        "title": "ConversationHandoff",
+        "description": "一次进行中的交接，按登记先后排列。"
+      },
+      "ConversationQueuedMessage": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "role": {
+            "type": "string",
+            "const": "user",
+            "title": "Role"
+          },
+          "parts": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ConversationStateTextPart"
+                },
+                {
+                  "$ref": "#/components/schemas/ConversationStateImagePart"
+                },
+                {
+                  "$ref": "#/components/schemas/ConversationStateFilePart"
+                },
+                {
+                  "$ref": "#/components/schemas/ConversationStateToolCallPart"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Parts"
+          },
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "next_run"
+            ],
+            "title": "Delivery"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "parts",
+          "delivery"
+        ],
+        "title": "ConversationQueuedMessage",
+        "description": "尚未被模型边界消费、需投影的排队消息；还没有 Run 归属。\n\n``delivery`` 只供前端区分「下个模型边界并入」与「交给下一个 Run」，事实仍在外部队列。"
+      },
+      "ConversationRunLaunch": {
+        "properties": {
+          "modelConfigId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modelconfigid"
+          },
+          "reasoningEffort": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoningeffort"
+          },
+          "disabledToolGroups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Disabledtoolgroups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "modelConfigId",
+          "reasoningEffort",
+          "disabledToolGroups"
+        ],
+        "title": "ConversationRunLaunch",
+        "description": "Run 冻结的发起配置；前端据此锁定运行期配置控件（运行期配置锁定）。\n\n``modelConfigId`` 在模型配置被删除后为 ``None``。"
+      },
+      "ConversationStateActivity": {
+        "properties": {
+          "modelActivity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ModelActivity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "runId": {
             "type": "integer",
             "title": "Runid"
@@ -4033,6 +4659,10 @@
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "startedAt": {
+            "type": "string",
+            "title": "Startedat"
           },
           "endReason": {
             "anyOf": [
@@ -4045,23 +4675,15 @@
             ],
             "title": "Endreason"
           },
-          "contextWindowTotal": {
+          "error": {
             "anyOf": [
               {
-                "type": "integer"
+                "$ref": "#/components/schemas/ConversationStateError"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Contextwindowtotal"
-          },
-          "messages": {
-            "items": {
-              "$ref": "#/components/schemas/ConversationStateMessage"
-            },
-            "type": "array",
-            "title": "Messages"
+            ]
           },
           "usage": {
             "anyOf": [
@@ -4073,29 +4695,35 @@
               }
             ]
           },
-          "error": {
+          "contextWindowTotal": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ConversationStateError"
+                "type": "integer"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Contextwindowtotal"
+          },
+          "launch": {
+            "$ref": "#/components/schemas/ConversationRunLaunch"
           }
         },
         "type": "object",
         "required": [
+          "modelActivity",
           "runId",
           "status",
+          "startedAt",
           "endReason",
-          "contextWindowTotal",
-          "messages",
+          "error",
           "usage",
-          "error"
+          "contextWindowTotal",
+          "launch"
         ],
-        "title": "ConversationRunSnapshot",
-        "description": "一个 Run 的完整 UI 投影。\n\n``runId`` 是内部消息、tool part 和 Run usage 的共同归属键；Run 的状态、终态原因、错误、\n消息及累计模型 usage 必须在同一对象内保持一致。\n\n``error`` 只在 Run 进入失败/取消终态时携带 ``code`` + UI 展示 ``message``；模型 HTTP 失败\n时 ``message`` 可直接来自响应体。运行中、已结束成功或未发生错误时为 ``None``。它只服务\nUI 渲染与重连恢复，不是 Run 生命周期状态机的第二来源。"
+        "title": "ConversationStateActivity",
+        "description": "Task 当前活动：最新 Run 的摘要，对话界面判断运行中、停止、恢复、配置锁定与用量都只读它。\n\n是最新 Run 的投影而不是第二套状态机：事实源仍是 ``ConversationRunModel.status``。\n``runId`` 只供事件路由（旧 Run 的迟到事件不能覆盖它）与诊断，前端不按它比对。\n``error`` 只在 Run 进入失败 / 取消终态时携带 ``code`` + UI ``message``。``startedAt`` 是 Run\n记录的创建时间（ISO 8601），前端据此做运行中的本地计时；终态耗时在 ``outcome.durationMs``。"
       },
       "ConversationStateError": {
         "properties": {
@@ -4114,7 +4742,7 @@
           "message"
         ],
         "title": "ConversationStateError",
-        "description": "面向 UI 的 Run 错误结构。\n\n``code`` 是内部稳定类别；``message`` 可以是模型 HTTP 响应体直接提供的消息。Transport\n只承载这两个字段，不透传完整响应体。``retryable`` 是工具观察的字段，不属于此契约。"
+        "description": "面向 UI 的 Run 错误结构。\n\n``code`` 是内部稳定类别；``message`` 可以是模型 HTTP 响应体直接提供的消息。Transport\n只承载这两个字段，不透传完整响应体。"
       },
       "ConversationStateFilePart": {
         "properties": {
@@ -4145,6 +4773,42 @@
         ],
         "title": "ConversationStateFilePart",
         "description": "只包含稳定本机 locator 与展示元数据的普通文件 part。"
+      },
+      "ConversationStateFork": {
+        "properties": {
+          "sourceTaskId": {
+            "type": "integer",
+            "title": "Sourcetaskid"
+          },
+          "sourceTitle": {
+            "type": "string",
+            "title": "Sourcetitle"
+          },
+          "beforeMessageId": {
+            "type": "string",
+            "title": "Beforemessageid"
+          },
+          "taskType": {
+            "type": "string",
+            "enum": [
+              "user_fork",
+              "agent_fork"
+            ],
+            "title": "Tasktype"
+          },
+          "initialLaunch": {
+            "$ref": "#/components/schemas/ConversationRunLaunch"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sourceTaskId",
+          "sourceTitle",
+          "beforeMessageId",
+          "taskType",
+          "initialLaunch"
+        ],
+        "title": "ConversationStateFork"
       },
       "ConversationStateImagePart": {
         "properties": {
@@ -4199,34 +4863,8 @@
             },
             "type": "array",
             "title": "Parts"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "role",
-          "parts"
-        ],
-        "title": "ConversationStateMessage",
-        "description": "一条 Run 内的 user/assistant 消息。\n\n消息不重复保存 Run 标识或 Run 终态。消息归属由外层\n``ConversationRunSnapshot.runId`` 确定，消息生命周期由外层 Run 状态派生；只有\n``parts`` 保留各自的流式与工具执行生命周期。"
-      },
-      "ConversationStateSnapshot": {
-        "properties": {
-          "queued_messages": {
-            "items": {
-              "$ref": "#/components/schemas/ConversationStateMessage"
-            },
-            "type": "array",
-            "title": "Queued Messages"
           },
-          "runs": {
-            "items": {
-              "$ref": "#/components/schemas/ConversationRunSnapshot"
-            },
-            "type": "array",
-            "title": "Runs"
-          },
-          "current_run_id": {
+          "runId": {
             "anyOf": [
               {
                 "type": "integer"
@@ -4235,12 +4873,76 @@
                 "type": "null"
               }
             ],
-            "title": "Current Run Id"
+            "title": "Runid"
           },
-          "approvals": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Approvals"
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStateOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStateMessageSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "parts",
+          "runId",
+          "outcome",
+          "source"
+        ],
+        "title": "ConversationStateMessage",
+        "description": "一条 user / assistant 消息。\n\n``runId`` 是消息的 Run 归属，只供事件路由、诊断与 fork 定位；对话界面不按它分组。\n``outcome`` 只有「该 Run 最后一条助手消息」在 Run 终态后非空，user 消息恒为 ``None``。\n``source`` 只有 Agent 消息（另一个 Agent 发来、开启一轮的 user 消息）非空：它不是用户说的话，\n前端另行渲染、不可编辑；用户消息与助手消息恒为 ``None``。\n``parts`` 保留各自的流式与工具执行生命周期。"
+      },
+      "ConversationStateMessageSource": {
+        "properties": {
+          "taskId": {
+            "type": "integer",
+            "title": "Taskid"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "taskId",
+          "name"
+        ],
+        "title": "ConversationStateMessageSource",
+        "description": "Agent 消息的发送方：前端据 ``taskId`` 跳到来源 Task，``name`` 是发送时的显示名快照。"
+      },
+      "ConversationStateOutcome": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "endReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endreason"
           },
           "error": {
             "anyOf": [
@@ -4251,31 +4953,143 @@
                 "type": "null"
               }
             ]
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStateUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contextWindowTotal": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contextwindowtotal"
+          },
+          "durationMs": {
+            "type": "integer",
+            "title": "Durationms"
           }
         },
         "type": "object",
         "required": [
-          "runs",
-          "current_run_id",
-          "approvals",
-          "error"
+          "status",
+          "endReason",
+          "error",
+          "usage",
+          "contextWindowTotal",
+          "durationMs"
+        ],
+        "title": "ConversationStateOutcome",
+        "description": "一轮回复的结局：Run 进入终态时写到该 Run 最后一条助手消息上。\n\n让对话界面不必按 Run 分组也能显示历史回复的「已取消 / 失败 / 用量」；Run 被恢复时清空。\n``contextWindowTotal`` 是该 Run 冻结的窗口上限，与 ``usage`` 同属一个 Run：上下文占用的\n「已用 / 上限」必须同源，两轮之间换了模型也不会拿新窗口配旧用量。``durationMs`` 是 Run 创建到\n终态的毫秒数，只从 Run 记录的时间戳推导（投影器不读墙钟），终态耗时必填。"
+      },
+      "ConversationStateSnapshot": {
+        "properties": {
+          "fork": {
+            "$ref": "#/components/schemas/ConversationStateFork"
+          },
+          "queued_messages": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationQueuedMessage"
+            },
+            "type": "array",
+            "title": "Queued Messages"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationStateMessage"
+            },
+            "type": "array",
+            "title": "Messages"
+          },
+          "messageOffset": {
+            "type": "integer",
+            "title": "Messageoffset"
+          },
+          "activity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStateActivity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_sessions": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationTerminalSession"
+            },
+            "type": "array",
+            "title": "Terminal Sessions"
+          },
+          "background_tasks": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationBackgroundTask"
+            },
+            "type": "array",
+            "title": "Background Tasks"
+          },
+          "foreground_waits": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Foreground Waits"
+          },
+          "handoffs": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationHandoff"
+            },
+            "type": "array",
+            "title": "Handoffs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "messages",
+          "messageOffset",
+          "activity",
+          "terminal_sessions",
+          "background_tasks",
+          "foreground_waits",
+          "handoffs"
         ],
         "title": "ConversationStateSnapshot",
-        "description": "一个 Task 的完整 Transport state。\n\nRun 的消息、生命周期、usage 与窗口上限均位于 ``runs`` 中；上下文占用从 Run 事实派生。"
+        "description": "一个 Task 的完整 Transport state。\n\n对话界面只看 Task：``title`` 投影自 ``tasks.title``（事实源在 Task 表，snapshot 只是让打开中的\n页面实时收到标题变化），``messages`` 按 context 序号扁平排列，``activity`` 是最新 Run 的摘要。\nRun 分组不进 wire，历史回复的结局由消息上的 ``outcome`` 承载。命令被拒不进 snapshot，由命令的\nHTTP 响应同步返回。``terminal_sessions`` 是本 Task 终端会话的进程内事实（不持久化），\n投影规则见 ``ConversationTaskStateService.refresh_terminal_sessions``。\n``background_tasks`` 的历史来自持久化占位，活状态来自后台结果登记表；\n``foreground_waits``（可转到后台的前台等待）是进程内事实，\n二者见 ``refresh_background_results``。\n``handoffs``（进行中的交接）也是进程内事实，见 ``refresh_handoffs``。\n\n``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；\n后端工作副本始终是完整历史（恒为 0），\n只有发给前端的完整快照按窗口裁剪（见 ``snapshot_window``）。增量路径里的消息下标始终是完整历史\n里的位置；位置只在完整快照处才会变（投影只在末尾追加或原位替换消息），前端据此换算。"
       },
       "ConversationStateTextPart": {
         "properties": {
           "type": {
             "type": "string",
-            "enum": [
-              "text",
-              "reasoning"
-            ],
+            "const": "text",
             "title": "Type"
           },
           "text": {
             "type": "string",
             "title": "Text"
+          },
+          "sourceSequence": {
+            "type": "integer",
+            "title": "Sourcesequence"
+          },
+          "finalReply": {
+            "type": "boolean",
+            "title": "Finalreply"
           },
           "status": {
             "type": "string",
@@ -4309,6 +5123,15 @@
             "type": "string",
             "title": "Toolname"
           },
+          "presentation": {
+            "type": "string",
+            "enum": [
+              "activity",
+              "standalone",
+              "quiet"
+            ],
+            "title": "Presentation"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -4325,6 +5148,17 @@
             "type": "object",
             "title": "Args"
           },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
           "error": {
             "anyOf": [
               {
@@ -4336,10 +5170,9 @@
             ],
             "title": "Error"
           },
-          "presentation": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Presentation"
+          "awaitingUser": {
+            "type": "boolean",
+            "title": "Awaitinguser"
           },
           "display_data": {
             "anyOf": [
@@ -4357,21 +5190,16 @@
             "type": "integer",
             "title": "Team Run Id"
           },
+          "background": {
+            "$ref": "#/components/schemas/ConversationBackgroundWork"
+          },
           "isError": {
             "type": "boolean",
             "title": "Iserror"
           },
-          "approvalRequestId": {
-            "type": "null",
-            "title": "Approvalrequestid"
-          },
           "child_task_id": {
             "type": "integer",
             "title": "Child Task Id"
-          },
-          "child_run_id": {
-            "type": "integer",
-            "title": "Child Run Id"
           },
           "agent_role": {
             "type": "string",
@@ -4387,6 +5215,7 @@
           "type",
           "toolCallId",
           "toolName",
+          "presentation",
           "status"
         ],
         "title": "ConversationStateToolCallPart",
@@ -4473,6 +5302,96 @@
         "title": "ConversationStateUsage",
         "description": "一次 run 当前累计的模型 token 用量；cache miss 缺少 provider 明细时为 null。"
       },
+      "ConversationTerminalSession": {
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "title": "Sessionid"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "shellKind": {
+            "type": "string",
+            "title": "Shellkind"
+          },
+          "createdBy": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "user"
+            ],
+            "title": "Createdby"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "starting",
+              "running",
+              "exited",
+              "closed",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "endReason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endreason"
+          },
+          "exitCode": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exitcode"
+          },
+          "integration": {
+            "type": "string",
+            "enum": [
+              "starting",
+              "ready",
+              "unavailable",
+              "off"
+            ],
+            "title": "Integration"
+          },
+          "commandRunning": {
+            "type": "boolean",
+            "title": "Commandrunning"
+          },
+          "createdAt": {
+            "type": "string",
+            "title": "Createdat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessionId",
+          "label",
+          "shellKind",
+          "createdBy",
+          "status",
+          "endReason",
+          "exitCode",
+          "integration",
+          "commandRunning",
+          "createdAt"
+        ],
+        "title": "ConversationTerminalSession",
+        "description": "一个终端会话的摘要；活跃会话在前、按创建时间排序，已结束会话只保留最近若干个。"
+      },
       "CreateTaskRequest": {
         "properties": {
           "text": {
@@ -4496,6 +5415,35 @@
         "title": "CreateTaskRequest",
         "description": "校验任务创建请求体（仅建 task 容器，不含首轮次）。\n\n任务创建与首轮次创建已解耦：本请求只携带建 task 容器所需的最小字段\n（``text`` 派生标题）。工作区归属由 URL 路径提供。agent / 模型 / 附件等\n首条用户输入与模型运行偏好由 Assistant Transport 请求承载，任务创建只负责任务事实。\n\n参数:\n    text: 可选的纯文本任务输入；纯附件新对话允许为空。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    无。空文本由 workspace API 转换为默认任务标题。\n\n副作用:\n    无。"
       },
+      "CreateTerminalSessionRequest": {
+        "properties": {
+          "shell": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Shell",
+            "default": "auto"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CreateTerminalSessionRequest",
+        "description": "用户在终端工作台新建会话的请求体。\n\n``shell`` 取 ``GET /terminal/shells`` 的 ``kind`` 或 ``auto``。\n\nshell 是否可用由终端服务解析时判定（不可用映射 400），这里只约束形状。"
+      },
+      "CreateTerminalSessionResponse": {
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "title": "Sessionid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessionId"
+        ],
+        "title": "CreateTerminalSessionResponse",
+        "description": "新建会话的身份；会话摘要随 snapshot ``terminal_sessions`` 推送。"
+      },
       "CreateWorkspaceRequest": {
         "properties": {
           "name": {
@@ -4515,6 +5463,48 @@
         "title": "CreateWorkspaceRequest",
         "description": "校验工作区创建请求体。\n\n参数:\n    name: 非空的工作区名称。\n    root_path: 非空的工作区本地路径。\n\n返回:\n    Pydantic 请求模型。\n\n异常:\n    ValueError: 当名称或路径为空白时抛出。\n\n副作用:\n    无。"
       },
+      "DecisionRequest": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject"
+            ],
+            "title": "Decision"
+          },
+          "feedback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "title": "DecisionRequest",
+        "description": "对一次等待用户决定的工具调用（HITL）作出决定；调用由路径里的 ``tool_call_id`` 寻址。\n\n``data`` 是批准时附带的工具自定义载荷，形状由工具的 ``ToolDefinition.decision_model`` 声明，\n在决定入口校验；驳回只带 ``feedback``。"
+      },
       "DeleteTaskResponse": {
         "properties": {
           "task_id": {
@@ -4524,15 +5514,23 @@
           "deleted": {
             "type": "boolean",
             "title": "Deleted"
+          },
+          "deleted_task_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Deleted Task Ids"
           }
         },
         "type": "object",
         "required": [
           "task_id",
-          "deleted"
+          "deleted",
+          "deleted_task_ids"
         ],
         "title": "DeleteTaskResponse",
-        "description": "校验并序列化任务删除结果响应。\n\n参数:\n    task_id: 被删除的任务标识。\n    deleted: 是否删除成功。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "任务删除结果。\n\n``deleted_task_ids`` 是实际删除的全部 Task（含委派子 Agent、Team 节点与一并删除的 fork），\n前端据此丢弃按 taskId 分桶的界面状态、判断当前页是否已被删。"
       },
       "DeleteWorkspaceResponse": {
         "properties": {
@@ -5016,17 +6014,17 @@
       },
       "ForkTaskRequest": {
         "properties": {
-          "runId": {
-            "type": "integer",
-            "title": "Runid"
+          "beforeMessageId": {
+            "type": "string",
+            "title": "Beforemessageid"
           }
         },
         "type": "object",
         "required": [
-          "runId"
+          "beforeMessageId"
         ],
         "title": "ForkTaskRequest",
-        "description": "校验历史 Run fork 请求。"
+        "description": "校验按消息切分的 fork 请求：``beforeMessageId`` 是对话界面里的 wire 消息 id。"
       },
       "GlobalInstructionResponse": {
         "properties": {
@@ -5104,6 +6102,28 @@
         ],
         "title": "HealthResponse",
         "description": "后端存活探针响应。\n\n当前为最小占位实现：仅携带 ``status`` 字段标识进程存活，不探测子系统就绪态。\n真实探针（聚合 storage / 模型配置中心）为后续 TODO，\n届时将扩展字段并产出不含 secret 明文的健康摘要。\n\n参数:\n    status: 健康状态标识，占位实现固定为 ``\"health\"``。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+      },
+      "HistoryPage": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationStateMessage"
+            },
+            "type": "array",
+            "title": "Messages"
+          },
+          "messageOffset": {
+            "type": "integer",
+            "title": "Messageoffset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "messages",
+          "messageOffset"
+        ],
+        "title": "HistoryPage",
+        "description": "``messages`` 是完整历史里 ``[messageOffset, end)`` 的一段。"
       },
       "MCPServerConfigRequest": {
         "properties": {
@@ -5426,6 +6446,31 @@
         ],
         "title": "MainAgentPromptUpdateRequest",
         "description": "校验主 Agent prompt 更新请求的字段形状。"
+      },
+      "ModelActivity": {
+        "properties": {
+          "stepId": {
+            "type": "string",
+            "title": "Stepid"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "waiting",
+              "reasoning",
+              "responding",
+              "tool_call"
+            ],
+            "title": "Phase"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stepId",
+          "phase"
+        ],
+        "title": "ModelActivity",
+        "description": "当前模型步的瞬时输出阶段；不持久化、不参与调度。"
       },
       "ModelConfigCreateRequest": {
         "properties": {
@@ -5765,6 +6810,49 @@
         "title": "ModelConfigUpdateRequest",
         "description": "只覆盖显式传入的模型连接配置字段。"
       },
+      "RerunMessageRequest": {
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/AssistantUserMessage"
+          },
+          "modelConfigId": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Modelconfigid"
+          },
+          "reasoningEffort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "high",
+                  "max"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoningeffort"
+          },
+          "disabledToolGroups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Disabledtoolgroups"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message",
+          "modelConfigId"
+        ],
+        "title": "RerunMessageRequest",
+        "description": "编辑最新一条已并入的用户消息并重跑：按本次请求的配置开新 Run。"
+      },
       "SaveAgentTeamConfigurationRequest": {
         "properties": {
           "scope": {
@@ -5815,6 +6903,49 @@
           "query"
         ],
         "title": "SearchRequest"
+      },
+      "SendMessageRequest": {
+        "properties": {
+          "message": {
+            "$ref": "#/components/schemas/AssistantUserMessage"
+          },
+          "modelConfigId": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Modelconfigid"
+          },
+          "reasoningEffort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "high",
+                  "max"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoningeffort"
+          },
+          "disabledToolGroups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Disabledtoolgroups"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "message",
+          "modelConfigId"
+        ],
+        "title": "SendMessageRequest",
+        "description": "发送消息；并入时机不由请求决定：后端按 Task 是否有活动 Run 定排队还是立即处理。"
       },
       "SkillDeleteResponse": {
         "properties": {
@@ -5946,42 +7077,10 @@
             "title": "Title"
           },
           "extra": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Extra"
-          },
-          "current_run_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current Run Id"
-          },
-          "execution_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Execution Status"
+            "$ref": "#/components/schemas/TaskResponseExtra"
           },
           "task_type": {
-            "type": "string",
-            "title": "Task Type",
+            "$ref": "#/components/schemas/TaskType",
             "default": "user"
           },
           "parent_task_id": {
@@ -5994,28 +7093,6 @@
               }
             ],
             "title": "Parent Task Id"
-          },
-          "parent_run_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Run Id"
-          },
-          "delegation_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Delegation Id"
           },
           "created_at": {
             "type": "string",
@@ -6035,45 +7112,108 @@
           "updated_at"
         ],
         "title": "TaskResponse",
-        "description": "校验并序列化任务状态响应（与 ``TaskRecord.to_dict()`` 对齐）。\n\n任务不再绑定 agent：本响应不含 agent_id，agent 维度由 turn 维度承载。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    current_run_id: Task 当前指向的 Run；无 Run 时为 None。\n    execution_status: 当前 Run 的读取投影，不持久化；无 Run 时为 None。\n    task_type: 任务类型，``\"user\"`` 为用户创建，``\"fork\"`` 为历史分支，\n        ``\"delegate_task\"`` 为委派子任务。\n    parent_task_id: 父任务标识，仅委派子任务有值。\n    parent_run_id: 父轮次标识，仅委派子任务有值。\n    delegation_id: 所属委派标识，仅委派子任务有值。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化任务状态响应。\n\nTask 不绑定 Agent：本响应不含 agent_id，Agent 身份固化在各 Run 上。不下发 ``current_run_id``\n（后端的当前 Run 指针，对话界面的 Run 身份只在 snapshot 里供诊断），也不下发执行状态：\n界面的 Task 状态只来自 ``GET /task-status/stream``，不在这里留第二个读取口。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    task_type: 任务类型，取值见 ``models.task_kind.TASK_KINDS``：``\"user\"`` 为用户创建，\n        ``\"user_fork\"`` / ``\"agent_fork\"`` 区分分叉发起方，``\"agent_task\"`` 为委派子任务，\n        ``\"team_node_task\"`` 为 Team 节点。\n    parent_task_id: 父任务标识，委派子任务与 Team 节点有值。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
-      "TerminalDenylistResponse": {
+      "TaskResponseExtra": {
         "properties": {
-          "patterns": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Patterns"
+          "fork": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskResponseFork"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
-        "additionalProperties": false,
         "type": "object",
-        "required": [
-          "patterns"
-        ],
-        "title": "TerminalDenylistResponse",
-        "description": "向配置界面返回当前正则字符串列表。"
+        "title": "TaskResponseExtra",
+        "description": "Task 附属数据的 UI 投影，不下发 Team 节点的执行配置。"
       },
-      "TerminalDenylistUpdateRequest": {
+      "TaskResponseFork": {
         "properties": {
-          "patterns": {
-            "items": {
-              "type": "string",
-              "maxLength": 512
-            },
-            "type": "array",
-            "maxItems": 256,
-            "title": "Patterns"
+          "tree_parent_task_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tree Parent Task Id"
           }
         },
-        "additionalProperties": false,
         "type": "object",
         "required": [
-          "patterns"
+          "tree_parent_task_id"
         ],
-        "title": "TerminalDenylistUpdateRequest",
-        "description": "只接受有限长度的正则字符串列表。"
+        "title": "TaskResponseFork",
+        "description": "侧栏只读取树关系；来源和初始配置由对话 snapshot 提供。"
+      },
+      "TaskType": {
+        "type": "string",
+        "enum": [
+          "user",
+          "user_fork",
+          "agent_fork",
+          "agent_task",
+          "team_node_task"
+        ],
+        "title": "TaskType",
+        "description": "任务类型的唯一值定义；数据库与 API 使用枚举的字符串值。"
+      },
+      "TeamGraphIssueCode": {
+        "type": "string",
+        "enum": [
+          "no_nodes",
+          "duplicate_node_id",
+          "invalid_start",
+          "reserved_end_id",
+          "end_as_source",
+          "unknown_source",
+          "undeclared_status",
+          "ambiguous_transition",
+          "unknown_target",
+          "status_without_transition",
+          "unreachable_node",
+          "dead_end_node"
+        ],
+        "title": "TeamGraphIssueCode",
+        "description": "图结构问题的稳定代码；面向用户的文案由 API 层按代码生成，不解析英文描述。"
+      },
+      "TerminalActiveCountResponse": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count"
+        ],
+        "title": "TerminalActiveCountResponse",
+        "description": "全进程活跃终端会话数，供桌面宿主退出前提醒。"
+      },
+      "TerminalShellsResponse": {
+        "properties": {
+          "shells": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Shells"
+          }
+        },
+        "type": "object",
+        "required": [
+          "shells"
+        ],
+        "title": "TerminalShellsResponse",
+        "description": "当前宿主可用 shell；条目形状由终端服务产出（``kind``、``label``、``isDefault``、\n``integrationSupported``）。"
       },
       "TextResponse": {
         "properties": {
@@ -6155,90 +7295,6 @@
           "version"
         ],
         "title": "TextSearchRequest"
-      },
-      "UserDecisionKind": {
-        "type": "string",
-        "enum": [
-          "approve",
-          "reject",
-          "abort",
-          "force_reject"
-        ],
-        "title": "UserDecisionKind",
-        "description": "用户可作出的决定种类（框架级闭集）。\n\n路由目标由工作流的固定映射决定，提问工具不能改写：\n\n- ``APPROVE``：批准该调用。``tools`` 节点以「已确认」上下文重新执行该调用。\n- ``REJECT``：驳回该调用。不执行，用户意见内联进该调用的观察交给模型重新提案。\n- ``ABORT``：放弃该调用。不执行，观察按取消收口，模型按「被用户取消」继续。\n- ``FORCE_REJECT``：强行驳回**当前唯一**的待决请求，不核对 ``request_id``，也不要求请求\n  声明过该种类。它由系统合成（取消一个停在 ``wait_user`` 断点上的 Run），不是用户在卡片上\n  做的选择：消费方在 ``wait_user`` 内把它归一为对该请求的普通 ``REJECT``，因此校验、观察\n  改写与领域收尾与真实驳回同构。客户端不得提交它。"
-      },
-      "UserInputDecisionCommand": {
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "custom",
-            "title": "Type"
-          },
-          "commandId": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Commandid"
-          },
-          "name": {
-            "type": "string",
-            "const": "user-input-decision",
-            "title": "Name"
-          },
-          "payload": {
-            "$ref": "#/components/schemas/UserInputDecisionPayload"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "type",
-          "commandId",
-          "name",
-          "payload"
-        ],
-        "title": "UserInputDecisionCommand",
-        "description": "把用户决定绑定到某个等待中的 Run 并触发续跑。"
-      },
-      "UserInputDecisionItem": {
-        "properties": {
-          "request_id": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Request Id"
-          },
-          "decision": {
-            "$ref": "#/components/schemas/UserDecisionKind"
-          },
-          "data": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Data"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "request_id",
-          "decision"
-        ],
-        "title": "UserInputDecisionItem",
-        "description": "单条用户决定（wire 形状）。\n\n``decision`` 直接复用领域枚举，避免 wire 值与领域值各维护一份导致漂移；``data`` 是用户\n编辑后的结构化输入，形状由提问工具定义（后端在此不做业务校验）。"
-      },
-      "UserInputDecisionPayload": {
-        "properties": {
-          "decision": {
-            "$ref": "#/components/schemas/UserInputDecisionItem"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "decision"
-        ],
-        "title": "UserInputDecisionPayload",
-        "description": "一次续跑携带的单个用户决定。"
       },
       "ValidationError": {
         "properties": {

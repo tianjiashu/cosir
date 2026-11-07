@@ -8,10 +8,8 @@ from typing import Any
 
 import pytest
 
-from app.assistant_transport.projection.tool_call_event_projection import plan_tool_calls_settled
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_snapshot import _validate_part
-from app.core.events import ToolCallsSettledEvent
 from app.core.tool.background.background_job import BackgroundConclusion
 from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cancel_placeholders
 from app.core.tool.execute.tool_terminal_projection import terminal_event
@@ -143,35 +141,6 @@ def test_background_placeholder_projects_a_valid_part_field() -> None:
     }
     _validate_part({"presentation": "activity", "type": "tool-call", "toolCallId": "c", "toolName": "t", "args": {}, **fields})
 
-def test_run_settlement_skips_background_parts() -> None:
-    state = {
-        "messages": [
-            {
-                "id": "m1",
-                "role": "assistant",
-                "runId": 3,
-                "parts": [
-                    {"presentation": "activity",
-                        "type": "tool-call",
-                        "toolCallId": "a",
-                        "status": "pending",
-                        "background": {
-                            "kind": "terminal_command",
-                            "label": "build",
-                            "startedAt": "2026-01-01T00:00:00+00:00",
-                            "endedAt": None,
-                        },
-                    },
-                    {"presentation": "activity", "type": "tool-call", "toolCallId": "b", "status": "running"},
-                ],
-            }
-        ]
-    }
-    event = ToolCallsSettledEvent(task_id=1, run_id=3, status="cancelled", reason="run_cancelled")
-    mutations = plan_tool_calls_settled(event, state)  # type: ignore[arg-type]
-    touched = {mutation.path[:-1] for mutation in mutations}
-    assert touched == {("messages", 0, "parts", 1)}
-
 
 class _Context:
     def __init__(self, metadata: ToolMessageMetadata | None) -> None:
@@ -261,7 +230,9 @@ def test_result_arriving_while_stopping_settles_placeholder_as_cancelled(stored)
     )
     cancellation_registry.request_cancel(stored.task_id, "user")
     try:
-        assert background_registry.complete("call-bg", BackgroundConclusion({"exit_code": 0})) is False
+        assert background_registry.complete(
+            stored.task_id, "call-bg", BackgroundConclusion({"exit_code": 0})
+        ) is False
         asyncio.run(TaskCancellation(stored.task_id).cancel_background_task())
     finally:
         cancellation_registry.consume(stored.task_id)

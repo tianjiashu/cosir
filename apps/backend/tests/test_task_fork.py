@@ -1,11 +1,12 @@
-"""Real SQLite tests for input-prefix forks, frozen ownership and transaction boundaries."""
+"""Real SQLite tests for turn-boundary forks, frozen ownership and transaction boundaries."""
 
 import asyncio
 import threading
 from contextlib import contextmanager
-from dataclasses import replace
+
 import pytest
 from fastapi import HTTPException
+
 from app.api.schemas import ForkTaskRequest
 from app.api.tasks_api import fork_task
 from app.assistant_transport.request import TransportRequestError
@@ -13,9 +14,14 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
-from app.core.context.tool_call_closure import plan_tool_call_closures, ContextProtocolError
+from app.core.context.tool_call_closure import ContextProtocolError, plan_tool_call_closures
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.models.fork_reply import ForkReply
+from app.models.message_metadata import (
+    BackgroundWork,
+    ToolMessageMetadata,
+    UserMessageMetadata,
+)
 from app.task_runtime.service.task_service import TaskService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
@@ -74,17 +80,18 @@ def append_run(store, status):
     return run
 
 
-def fork_call(store, message_id):
-    return store.service.fork_task(store.task.id, before_message_id=int(message_id))
+def fork_call(store, input_id):
+    return store.service.fork_task(store.task.id, reply=ForkReply(input_message_id=int(input_id)))
 
 
-def fork(store, message_id):
-    return asyncio.run(fork_call(store, message_id))
+def fork(store, input_id):
+    """从这条输入的回复往后分叉。"""
+    return asyncio.run(fork_call(store, input_id))
 
 
-def fork_api(store, message_id):
+def fork_api(store, reply_id):
     return asyncio.run(
-        fork_task(store.task.id, ForkTaskRequest(beforeMessageId=message_id), store.service)
+        fork_task(store.task.id, ForkTaskRequest(replyMessageId=reply_id), store.service)
     )
 
 
@@ -123,11 +130,11 @@ def agent_fork(store, run, call_id="fork-call"):
 
 
 @pytest.mark.parametrize("status", ["running", "suspended", "completed", "failed", "cancelled"])
-def test_manual_strict_input_prefix_without_executable_runs(fork_store, status):
+def test_manual_fork_keeps_the_reply_without_executable_runs(fork_store, status):
     s = fork_store
     earlier = append_run(s, "completed")
-    current = append_run(s, status)
-    child = fork(s, current.input_id)
+    append_run(s, status)
+    child = fork(s, earlier.input_id)
     assert child.current_run_id is None and s.runs.list_by_task(child.id) == []
     assert [r.message.get("content") for r in s.contexts.get(child.id)] == [
         "固定系统指令",
@@ -137,30 +144,86 @@ def test_manual_strict_input_prefix_without_executable_runs(fork_store, status):
     state = snapshot(s, child)
     assert state["activity"] is None and len(state["messages"]) == 2
     assert all(m["runId"] is None for m in state["messages"])
-    assert state["fork"]["beforeMessageId"] == current.input_id
 
 
-@pytest.mark.parametrize("kind", ["user_input", "agent_message"])
-def test_first_input_can_fork_to_system_only(fork_store, kind):
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_latest_reply_is_inherited_once_its_run_settled(fork_store, status):
     s = fork_store
-    run = s.runs.create(s.task.id, status="running")
-    mid = input_message(s, run, "Do work", kind)
-    child = fork(s, mid)
-    assert len(s.contexts.get(child.id)) == 1
-    assert snapshot(s, child)["messages"] == []
+    run = append_run(s, status)
+    child = fork(s, run.input_id)
+    assert [r.message.get("content") for r in s.contexts.get(child.id)][-1] == f"reply-{run.id}"
 
 
-@pytest.mark.parametrize("new_run", [False, True])
-def test_agent_excludes_triggering_input_even_in_result_only_run(fork_store, new_run):
+@pytest.mark.parametrize("status", ["running", "suspended"])
+def test_a_reply_still_in_progress_cannot_fork(fork_store, status):
+    s = fork_store
+    run = append_run(s, status)
+    with pytest.raises(HTTPException) as caught:
+        fork_api(s, f"assistant-{run.input_id}")
+    assert caught.value.status_code == 409
+    assert caught.value.detail["code"] == "FORK_REPLY_ACTIVE"
+
+
+def conversation(state):
+    return [p.get("text") or p.get("toolCallId") for m in state["messages"] for p in m["parts"]]
+
+
+def history_with_every_kind_of_turn(s):
+    """普通回合、没有输入的唤醒回合、Run 中途并入输入开启的回合。"""
+    append_run(s, "completed")
+    append_run(s, "completed")
+    woken = s.runs.create(s.task.id, status="completed")
+    append(s, woken, {"role": "user", "content": "<background_result>"},
+           metadata=UserMessageMetadata(kind="background_result"), project=False)
+    append(s, woken, {"role": "assistant", "content": "woken reply"})
+    run = append_run(s, "completed")
+    input_message(s, run, "merged input")
+    append(s, run, {"role": "assistant", "content": "reply to merged input"})
+
+
+def test_every_reply_forks_to_exactly_the_conversation_up_to_it(fork_store):
+    """回合切分与快照分组是两份代码，这条契约让它们不能走偏。"""
+    s = fork_store
+    history_with_every_kind_of_turn(s)
+    state = snapshot(s, s.task)
+    assert any(m["id"].startswith("assistant-run-") for m in state["messages"])
+    forks = []
+    for index, message in enumerate(state["messages"]):
+        if message["role"] != "assistant":
+            continue
+        response = fork_api(s, message["id"])
+        child = s.service.get_task(response.task_id)
+        assert conversation(snapshot(s, child)) == conversation(
+            {"messages": state["messages"][: index + 1]}
+        ), message["id"]
+        forks.append(child)
+    # 继承行都没有 Run：唤醒回复并进上一条回复，再分叉要跟着分支里看到的回合走。
+    s.task = forks[-1]
+    branch = snapshot(s, s.task)
+    assert not any(m["id"].startswith("assistant-run-") for m in branch["messages"])
+    for index, message in enumerate(branch["messages"]):
+        if message["role"] == "assistant":
+            refork = s.service.get_task(fork_api(s, message["id"]).task_id)
+            assert conversation(snapshot(s, refork)) == conversation(
+                {"messages": branch["messages"][: index + 1]}
+            ), message["id"]
+
+
+def test_fork_starts_from_the_launch_of_the_replys_run(fork_store):
+    s = fork_store
+    first = s.runs.create(s.task.id, status="completed", agent_id="reply-agent")
+    first.input_id = input_message(s, first, "first")
+    append_run(s, "completed")
+    child = fork(s, first.input_id)
+    assert child.extra.fork.initial_launch.agent_id == "reply-agent"
+
+
+def test_agent_forks_from_the_previous_reply_excluding_the_current_turn(fork_store):
     s = fork_store
     earlier = append_run(s, "completed")
     run = append_run(s, "running")
-    anchor = run.input_id
-    if new_run:
-        run = s.runs.create(s.task.id, status="running")
     call(s, run)
     child = agent_fork(s, run)
-    assert child.extra.fork.before_message_id == anchor
     assert [r.message.get("content") for r in s.contexts.get(child.id)] == [
         "固定系统指令",
         f"input-{earlier.id}",
@@ -169,6 +232,40 @@ def test_agent_excludes_triggering_input_even_in_result_only_run(fork_store, new
     assert snapshot(s, child)["messages"] == []
     assert all(not r.project_to_transport for r in s.contexts.get(child.id))
     assert s.runs.list_by_task(child.id) == []
+
+
+def test_agent_in_a_run_without_input_keeps_the_previous_reply(fork_store):
+    """没有输入的回合从 Run 开头算起：上一条回复已经结束，不能跟着更早的输入一起丢掉。"""
+    s = fork_store
+    previous = append_run(s, "completed")
+    run = s.runs.create(s.task.id, status="running")
+    append(s, run, {"role": "user", "content": "<background_result>"},
+           metadata=UserMessageMetadata(kind="background_result"), project=False)
+    append(s, run, {"role": "assistant", "content": "current turn"})
+    call(s, run)
+    child = agent_fork(s, run)
+    assert [r.message.get("content") for r in s.contexts.get(child.id)][-2:] == [
+        f"input-{previous.id}",
+        f"reply-{previous.id}",
+    ]
+
+
+def test_agent_on_the_first_turn_forks_to_system_only(fork_store):
+    s = fork_store
+    run = append_run(s, "running")
+    call(s, run)
+    child = agent_fork(s, run)
+    assert [r.message.get("content") for r in s.contexts.get(child.id)] == ["固定系统指令"]
+
+
+def test_agent_in_a_branch_inherits_the_branch_history(fork_store):
+    s = fork_store
+    earlier = append_run(s, "completed")
+    s.task = fork(s, earlier.input_id)
+    run = s.runs.create(s.task.id, status="running")
+    call(s, run)
+    child = agent_fork(s, run)
+    assert f"reply-{earlier.id}" in [r.message.get("content") for r in s.contexts.get(child.id)]
 
 
 def test_manual_fork_of_agent_restores_hidden_history_and_keeps_internal_flags(fork_store):
@@ -180,13 +277,16 @@ def test_manual_fork_of_agent_restores_hidden_history_and_keeps_internal_flags(f
     call(s, run)
     child = agent_fork(s, run)
     s.task = child
-    local = s.runs.create(child.id, status="running")
+    local = s.runs.create(child.id, status="completed")
     assignment = input_message(s, local, "child assignment", "agent_message")
+    append(s, local, {"role": "assistant", "content": "child reply"})
     manual = fork(s, assignment)
     state = snapshot(s, manual)
     assert [m["parts"][0]["text"] for m in state["messages"]] == [
         f"input-{earlier.id}",
         f"reply-{earlier.id}",
+        "child assignment",
+        "child reply",
     ]
     assert any(
         r.message.get("content") == "internal fact" and not r.project_to_transport
@@ -196,30 +296,18 @@ def test_manual_fork_of_agent_restores_hidden_history_and_keeps_internal_flags(f
     assert manual.current_run_id is None
 
 
-def test_agent_does_not_fall_back_to_inherited_input(fork_store):
-    s = fork_store
-    append_run(s, "completed")
-    current = append_run(s, "running")
-    child = fork(s, current.input_id)
-    s.task = child
-    run = s.runs.create(child.id, status="running")
-    call(s, run)
-    with pytest.raises(KeyError, match="no local input"):
-        agent_fork(s, run)
-
-
 def test_prefix_repairs_missing_tool_result_without_later_output(fork_store):
     s = fork_store
     run = append_run(s, "running")
     call(s, run, "earlier-call")
-    anchor = input_message(s, run, "excluded")
+    input_message(s, run, "excluded")
     append(
         s,
         run,
         {"role": "tool", "tool_call_id": "earlier-call", "content": "SECRET LATER RESULT"},
         metadata=ToolMessageMetadata(status="completed"),
     )
-    child = fork(s, anchor)
+    child = fork(s, run.input_id)
     entries = s.context.entries_in_context(child.id)
     assert all(not plan.missing_slots for plan in plan_tool_call_closures(entries))
     body = str([entry.message for entry in entries])
@@ -238,11 +326,13 @@ def test_pending_history_is_inert_and_source_deletion_does_not_remove_it(fork_st
         {"role": "tool", "tool_call_id": "pending", "content": "Awaiting user"},
         metadata=ToolMessageMetadata(status="pending"),
     )
-    mid = input_message(s, run, "later")
-    child = fork(s, mid)
+    input_message(s, run, "later")
+    child = fork(s, run.input_id)
     assert s.context_service.awaiting_decision_tool(child.id, "pending") is None
     assert s.contexts.list_unsettled_placeholders(child.id) == []
-    assert snapshot(s, child)["messages"][-1]["parts"][-1]["awaitingUser"] is False
+    part = snapshot(s, child)["messages"][-1]["parts"][-1]
+    assert part["status"] == "cancelled" and part["awaitingUser"] is False
+    assert "not inherited" in str(s.contexts.get(child.id)[-1].message)
     with s.factory.begin() as session:
         s.contexts.delete_by_task_ids([s.task.id], session)
         s.runs.delete_by_ids([run.id], session)
@@ -251,12 +341,53 @@ def test_pending_history_is_inert_and_source_deletion_does_not_remove_it(fork_st
     snapshot(s, child)
 
 
+def background_placeholder(s, run, call_id, status):
+    call(s, run, call_id)
+    work = BackgroundWork(
+        kind="child_agent", run_id=run.id, label="work", started_at="2026-01-01T00:00:00Z"
+    )
+    append(
+        s,
+        run,
+        {"role": "tool", "tool_call_id": call_id, "content": '{"status":"submitted"}'},
+        metadata=ToolMessageMetadata(status=status, background=work),
+    )
+
+
+def test_call_answered_after_the_cut_is_not_inherited_as_submitted(fork_store):
+    """结论写在切点后面时，占位正文只剩「已提交」，模型会以为工作还在进行。"""
+    s = fork_store
+    run = append_run(s, "running")
+    background_placeholder(s, run, "bg", "completed")
+    input_message(s, run, "next turn")
+    append(s, run, {"role": "user", "content": "<background_result>real conclusion"},
+           metadata=UserMessageMetadata(kind="background_result", tool_call_id="bg"), project=False)
+    child = fork(s, run.input_id)
+    body = str([r.message for r in s.contexts.get(child.id)])
+    assert "submitted" not in body and "real conclusion" not in body
+    assert "not inherited" in body
+    part = snapshot(s, child)["messages"][-1]["parts"][-1]
+    assert part["status"] == "cancelled" and "background" not in part
+
+
+def test_call_answered_before_the_cut_keeps_its_placeholder_and_conclusion(fork_store):
+    s = fork_store
+    run = append_run(s, "running")
+    background_placeholder(s, run, "bg", "completed")
+    append(s, run, {"role": "user", "content": "<background_result>real conclusion"},
+           metadata=UserMessageMetadata(kind="background_result", tool_call_id="bg"), project=False)
+    input_message(s, run, "next turn")
+    child = fork(s, run.input_id)
+    body = str([r.message for r in s.contexts.get(child.id)])
+    assert "submitted" in body and "real conclusion" in body
+
+
 def test_truncated_run_has_no_later_outcome(fork_store):
     s = fork_store
     run = append_run(s, "failed")
-    mid = input_message(s, run, "later failure")
+    input_message(s, run, "later failure")
     append(s, run, {"role": "assistant", "content": "later answer"})
-    child = fork(s, mid)
+    child = fork(s, run.input_id)
     assert all(m["outcome"] is None for m in snapshot(s, child)["messages"])
 
 
@@ -269,29 +400,40 @@ def test_orphan_protocol_aborts_whole_copy(fork_store):
         {"role": "tool", "tool_call_id": "orphan", "content": "bad"},
         metadata=ToolMessageMetadata(status="completed"),
     )
-    mid = input_message(s, run, "cut")
+    input_message(s, run, "cut")
     with pytest.raises(ContextProtocolError):
-        fork(s, mid)
+        fork(s, run.input_id)
     assert len(s.service.list_tasks_for_workspace(s.workspace.id)) == 1
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"messageId": "123"},
-        {"beforeMessageId": "assistant-123"},
-        {"beforeMessageId": "0"},
+        {"beforeMessageId": "123"},
+        {"replyMessageId": "123"},
+        {"replyMessageId": "assistant-0"},
+        {"replyMessageId": "assistant-run-x"},
+        {"replyMessageId": "assistant-context"},
         {"runId": 1},
     ],
 )
-def test_api_accepts_only_explicit_input_anchor(payload):
+def test_api_accepts_only_a_reply_id(payload):
     with pytest.raises(TransportRequestError):
         ForkTaskRequest.model_validate(payload)
 
 
-def test_unknown_input_returns_404(fork_store):
+@pytest.mark.parametrize(
+    ("wire_id", "reply"),
+    [("assistant-12", ForkReply(input_message_id=12)), ("assistant-run-3", ForkReply(run_id=3))],
+)
+def test_api_decodes_both_kinds_of_reply(wire_id, reply):
+    assert ForkTaskRequest(replyMessageId=wire_id).reply == reply
+
+
+@pytest.mark.parametrize("wire_id", ["assistant-999", "assistant-run-999"])
+def test_unknown_reply_returns_404(fork_store, wire_id):
     with pytest.raises(HTTPException) as caught:
-        fork_api(fork_store, "999")
+        fork_api(fork_store, wire_id)
     assert caught.value.status_code == 404
 
 
@@ -308,7 +450,7 @@ def test_workspace_busy_is_mapped_to_retryable_409(fork_store, monkeypatch):
 
     monkeypatch.setattr(workspace_operations, "operation", busy)
     with pytest.raises(HTTPException) as caught:
-        fork_api(store, run.input_id)
+        fork_api(store, f"assistant-{run.input_id}")
     assert caught.value.status_code == 409
     assert caught.value.detail["code"] == "WORKSPACE_BUSY"
     assert caught.value.detail["retryable"] is True
@@ -322,7 +464,7 @@ def test_success_response_does_not_read_database_after_commit(fork_store, monkey
         raise AssertionError("post-commit read")
 
     monkeypatch.setattr(store.service, "get_task", forbidden)
-    response = fork_api(store, run.input_id)
+    response = fork_api(store, f"assistant-{run.input_id}")
     assert response.task_id != store.task.id
     assert "fork_available" not in response.model_dump()
 
@@ -371,41 +513,6 @@ def test_request_cancellation_does_not_release_workspace_before_worker_finishes(
     asyncio.run(scenario())
 
 
-def test_edit_does_not_keep_local_result_because_inherited_call_reuses_id(fork_store):
-    s = fork_store
-    old = append_run(s, "completed")
-    call(s, old, "reused")
-    append(
-        s,
-        old,
-        {"role": "tool", "tool_call_id": "reused", "content": "old result"},
-        metadata=ToolMessageMetadata(status="completed"),
-    )
-    next_run = append_run(s, "completed")
-    child = fork(s, next_run.input_id)
-    s.task = child
-    local = s.runs.create(child.id, status="completed")
-    input_message(s, local, "edit this")
-    anchor = s.context_service.latest_user_input(child.id)
-    call(s, local, "reused")
-    append(
-        s,
-        local,
-        {"role": "tool", "tool_call_id": "reused", "content": "local result"},
-        metadata=ToolMessageMetadata(status="completed"),
-    )
-    append(
-        s,
-        local,
-        {"role": "user", "content": "local late result"},
-        metadata=UserMessageMetadata(kind="background_result", tool_call_id="reused"),
-        project=False,
-    )
-    with s.factory.begin() as session:
-        assert s.context_service.exclude_from(child.id, anchor.sequence, session) == {"reused"}
-    assert all("local" not in str(r.message) for r in s.contexts.get(child.id))
-
-
 def test_runtime_controls_ignore_inherited_tool_and_scopes_pair_reused_ids(fork_store):
     from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 
@@ -416,11 +523,12 @@ def test_runtime_controls_ignore_inherited_tool_and_scopes_pair_reused_ids(fork_
         s,
         old,
         {"role": "tool", "tool_call_id": "reused", "content": "old result"},
-        metadata=ToolMessageMetadata(status="pending"),
+        metadata=ToolMessageMetadata(status="completed"),
     )
-    boundary = append_run(s, "completed")
-    child = fork(s, boundary.input_id)
+    child = fork(s, old.input_id)
     manager = RuntimeMessageContextManager.__new__(RuntimeMessageContextManager)
+    manager._used_call_ids = set()
+    manager._response_call_ids = {}
     manager._entries = s.context.entries_in_context(child.id)
     assert manager.find_tool_call("reused") is None
     assert manager.tool_result_metadata("reused") is None
@@ -462,20 +570,3 @@ def test_interrupted_output_survives_hidden_fork_and_manual_refork(fork_store):
     assert "PARTIAL_OUTPUT" not in str([r.message for r in s.contexts.get(manual.id)])
 
 
-def test_flattened_history_pairs_repeated_call_ids_by_occurrence(fork_store):
-    s = fork_store
-    for result in ["FIRST_RESULT", "SECOND_RESULT"]:
-        run = append_run(s, "completed")
-        call(s, run, "reused")
-        append(s, run, {"role": "tool", "tool_call_id": "reused", "content": result},
-               metadata=ToolMessageMetadata(status="completed", display_data={"text": result}))
-    current = append_run(s, "completed")
-    manual = fork(s, current.input_id)
-    entries = s.context.entries_in_context(manual.id)
-    plans = plan_tool_call_closures(entries)
-    assert [entries[p.slots[0].tool_index].message["content"] for p in plans] == [
-        "FIRST_RESULT", "SECOND_RESULT"]
-    parts = [p for m in snapshot(s, manual)["messages"] for p in m["parts"] if p["type"] == "tool-call"]
-    assert len({p["toolCallId"] for p in parts}) == 2
-    assert [p["display_data"]["text"] for p in parts] == ["FIRST_RESULT", "SECOND_RESULT"]
-    assert [p.slots[0].call_id for p in plans] == ["reused", "reused"]

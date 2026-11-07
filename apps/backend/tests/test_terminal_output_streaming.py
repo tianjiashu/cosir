@@ -392,7 +392,6 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
             run_id=9,
             tool_call_id="call-1",
             status="running",
-            args={"command": "echo live"},
         )
     )
 
@@ -420,7 +419,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7, run_id=9, tool_call_id="call-1", status="running", args={"command": "make"}
+            task_id=7, run_id=9, tool_call_id="call-1", status="running"
         )
     )
     projector.process(_terminal_output_update(0, "before "))
@@ -498,7 +497,6 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
             run_id=9,
             tool_call_id="call-1",
             status="running",
-            args={"command": "emit a lot"},
         )
     )
 
@@ -579,7 +577,6 @@ def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, Conversat
     projector.process(
         ToolCallStatusChangedEvent(
             task_id=7, run_id=9, tool_call_id="call-1", status="running",
-            args={"command": "emit a lot"},
         )
     )
     streamed_output = "streamed line\n" * 600

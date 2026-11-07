@@ -30,7 +30,6 @@ from app.core.events import (
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
-    ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
 )
 from app.core.tool.execute.tool_terminal_projection import terminal_event
@@ -390,50 +389,6 @@ def test_duplicate_text_delta_is_not_appended_twice(
     assert _messages(snapshots.states[1], 1)[1]["parts"][0]["text"] == "一次"
 
 
-def test_tool_lifecycle_and_settlement(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event_projector.process(
-        ToolCallCreatedEvent(
-            task_id=1,
-            run_id=1,
-            tool_call_id="call-1",
-            tool_name="read_file",
-        )
-    )
-    event_projector.process(
-        ToolCallStatusChangedEvent(
-            task_id=1,
-            run_id=1,
-            tool_call_id="call-1",
-            status="running",
-            args={"path": "a.py"},
-        )
-    )
-    event_projector.process(
-        ToolCallStatusChangedEvent(
-            task_id=1,
-            run_id=1,
-            tool_call_id="call-1",
-            status="completed",
-            display_data={"kind": "read-file-meta", "path": "a.py", "total_lines": 10},
-        )
-    )
-    event_projector.process(
-        ToolCallCreatedEvent(task_id=1, run_id=1, tool_call_id="call-2", tool_name="write_file")
-    )
-    event_projector.process(
-        ToolCallsSettledEvent(task_id=1, run_id=1, status="failed", reason="runtime_failed")
-    )
-    parts = _messages(snapshots.states[1], 1)[1]["parts"]
-    assert parts[0]["status"] == "completed"
-    assert parts[0]["display_data"] == {"kind": "read-file-meta", "path": "a.py", "total_lines": 10}
-    assert parts[1]["status"] == "failed"
-    assert parts[1]["error"] == "执行异常"
-
-
 def test_cancelled_run_resume_status_is_projected(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
@@ -509,14 +464,12 @@ def test_tool_part_is_created_after_run_resume(
             run_id=1,
             tool_call_id="call-9",
             status="running",
-            args={"path": "a.py"},
         )
     )
 
     parts = _messages(snapshots.states[1], 1)[1]["parts"]
     assert [part["toolCallId"] for part in parts] == ["call-9"]
     assert parts[0]["status"] == "running"
-    assert parts[0]["args"] == {"path": "a.py"}
 
 
 def test_tool_status_change_without_part_is_skipped(
@@ -944,7 +897,7 @@ def test_idempotent_tool_events_reapply_without_changing_snapshot(
         event_projector,
         snapshots,
         lambda: ToolCallStatusChangedEvent(
-            task_id=1, run_id=1, tool_call_id="t1", status="running", args={"path": "a.txt"}
+            task_id=1, run_id=1, tool_call_id="t1", status="running"
         ),
     )
     # 终态由实时与结算两条路径各投一次（同经 ``terminal_event`` 构造），重放必须不改快照。
@@ -962,13 +915,6 @@ def test_idempotent_tool_events_reapply_without_changing_snapshot(
             run_id=1,
             step_id="step-1",
             tool_call_id="t1",
-        ),
-    )
-    _assert_reapply_changes_nothing(
-        event_projector,
-        snapshots,
-        lambda: ToolCallsSettledEvent(
-            task_id=1, run_id=1, status="cancelled", reason="runtime_failed"
         ),
     )
 

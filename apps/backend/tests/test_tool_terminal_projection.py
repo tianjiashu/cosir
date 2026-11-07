@@ -398,7 +398,6 @@ def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: s
             run_id=run_id,
             tool_call_id=call_id,
             status="running",
-            args={"path": "a"},
         )
     )
 
@@ -530,7 +529,6 @@ def test_success_emits_running_then_completed(
     assert recorder.statuses("call-ok") == ["running", "completed"]
     running, terminal = recorder.events
     # running 展示准入后的最终参数（含 schema 默认值）。
-    assert running.args is not None and running.args["path"] == "sample.txt"
     assert (running.task_id, running.run_id, running.step_id) == (1, 2, "step-1")
     assert terminal.error is None
     assert terminal.step_id == "step-1"
@@ -1015,7 +1013,7 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=1, run_id=9, tool_call_id="call-t", status="running", args={"command": "x"}
+            task_id=1, run_id=9, tool_call_id="call-t", status="running"
         )
     )
     streamed = "full live output\n" * 600  # 多 chunk，确保 seq 递增而非恒为 0

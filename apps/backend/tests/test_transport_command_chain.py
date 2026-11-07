@@ -42,6 +42,7 @@ from app.core.workflow.message_queue.task_message import (
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import RunTransition
 from app.task_runtime import task_runtime_space_registry as registry_module
+from tests.live_cold_support import registered
 
 _TASK_ID = 41
 _CHILD_TASK_ID = 42
@@ -804,11 +805,11 @@ async def test_rerun_revokes_background_work_of_withdrawn_calls(rerun) -> None:
     await _settle()
 
     assert withdrawn == ["cancel"]
-    assert not background_registry.owns(_TASK_ID, "call-withdrawn")
-    assert background_registry.complete("call-withdrawn", BackgroundConclusion({"ok": True})) is False
+    assert not registered(background_registry, _TASK_ID, "call-withdrawn")
+    assert background_registry.complete(_TASK_ID, "call-withdrawn", BackgroundConclusion({"ok": True})) is False
     # 更早一轮的后台工作不属于被撤回的这一轮，照常进行。
-    assert earlier == [] and background_registry.owns(_TASK_ID, "call-earlier")
-    background_registry.withdraw("call-earlier")
+    assert earlier == [] and registered(background_registry, _TASK_ID, "call-earlier")
+    background_registry.withdraw(_TASK_ID, "call-earlier")
 
 
 async def test_rerun_ends_handoffs_started_in_the_withdrawn_turn(rerun) -> None:

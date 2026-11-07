@@ -213,7 +213,6 @@ Snapshot 不增加新的持久化表。以下映射是唯一重建口径：
 | tool-call `presentation` | AI Context row 的 `transport_metadata_json` | 工具调用创建时冻结，重建时禁止查当前 ToolRegistry |
 | tool-call `status`/`error`/`errorCode`/`isError` | Tool Context row 的 `message_json`/`tool_result` | 有 ToolMessage 取持久化结果；无结果时结合 Run 终态收束为 failed/cancelled |
 | tool-call `display_data` | Tool Context row 的 `transport_metadata_json.tool_result` | 只保存预算裁剪后的 UI 数据；不保存 `artifact_data` |
-| `approvalRequestId` | 当前无持久化事实 | 审批未实现，固定为 `null` |
 | `current_run_id` | `TaskModel.current_run_id` | 直接读取，不按“最新 Run”猜测 |
 | `context_usage_used` | `TaskModel.context_usage_used` | 直接读取 |
 | `context_window_total` | `TaskModel.context_window_total` | 新增并持久化，不能冷读时重新调用 CapabilityService |

@@ -29,7 +29,7 @@ from app.models.task_record import TaskRecord
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
-pytestmark = pytest.mark.usefixtures("isolated_storage")
+pytestmark = pytest.mark.usefixtures("isolated_storage", "empty_tool_registry")
 
 _TASK_ID = 7
 

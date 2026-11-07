@@ -25,6 +25,5 @@ def emit_running(call: ToolCall, execution_context: ToolExecutionContext) -> Non
             tool_call_id=execution_context.tool_call_id,
             status="running",
             # 真实执行器发的是准入后的参数；替身不过门禁，按合法 JSON 直接解码。
-            args={key: value for key, value in json.loads(call.arguments).items() if key != "intent"},
         )
     )

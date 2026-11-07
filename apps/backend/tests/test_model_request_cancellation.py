@@ -137,6 +137,7 @@ def bind_node(monkeypatch, model):
     def save(snapshot, **kwargs):
         snapshots.append(snapshot)
         memberships.append(kwargs["include_in_context"])
+        return SimpleNamespace(sequence=len(snapshots))
 
     context = SimpleNamespace(
         load_message=lambda: [],
@@ -240,7 +241,8 @@ async def test_cancel_settles_after_stream_close_and_part_flush(monkeypatch, can
     original_cancel_tools = streaming_module.ModelStreamStateMachine.cancel
 
     def cancel_tools(self):
-        assert order == []
+        # 取消在流收口内落定；异常上抛时流已收口，正文先刷出。
+        assert order == ([] if boundary != "timeout" else ["AssistantTextDeltaEvent", "AssistantPartClosedEvent"])
         result = original_cancel_tools(self)
         assert order == ["AssistantTextDeltaEvent", "AssistantPartClosedEvent"]
         order.append("cancel_tools")
@@ -273,7 +275,7 @@ async def test_cancel_settles_after_stream_close_and_part_flush(monkeypatch, can
         with pytest.raises(httpx.ReadTimeout if boundary == "timeout" else RunStopped):
             await asyncio.wait_for(driver, 1)
         assert order == ["AssistantTextDeltaEvent", "AssistantPartClosedEvent"] + (
-            [] if boundary == "timeout" else ["cancel_tools", "cancel_run"]
+            ["cancel_tools"] if boundary == "timeout" else ["cancel_tools", "cancel_run"]
         )
         assert len(bound.cancellations) == (0 if boundary == "timeout" else 1)
         assert bound.snapshots

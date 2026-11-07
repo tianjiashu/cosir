@@ -17,6 +17,7 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import canc
 from app.tools.tool_handler import execute_terminal as terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal import ExecutionResult
+from tests.live_cold_support import registered
 
 
 class _Command:
@@ -94,7 +95,7 @@ def _execute(tmp_path: Path, *, background=False, call_id="call-1", tool=None):
 
 def _wait_registered(call_id="call-1") -> None:
     deadline = time.monotonic() + 2
-    while not background_registry.owns(1, call_id):
+    while not registered(background_registry, 1, call_id):
         assert time.monotonic() < deadline, "not registered"
         time.sleep(0.01)
 
@@ -107,7 +108,7 @@ def test_foreground_returns_result_without_delivery(tmp_path, command, pool, del
     observation = result.result(timeout=2)
     assert observation.status == "success" and observation.background is None
     assert observation.content == "[exit_code=0]\ncall-1"
-    assert delivered == [] and not background_registry.owns(1, "call-1")
+    assert delivered == [] and not registered(background_registry, 1, "call-1")
 
 
 def test_background_returns_placeholder_and_delivers_later(tmp_path, command, delivered):
@@ -148,7 +149,7 @@ def test_result_before_registration_is_not_lost(
 def test_detach_keeps_running_and_delivers_once(tmp_path, command, pool, delivered):
     result = pool.submit(_execute, tmp_path)
     _wait_registered()
-    assert background_registry.detach("call-1") == "detached"
+    assert background_registry.detach(1, "call-1") == "detached"
     observation = result.result(timeout=2)
     assert observation.background is not None and not observation.suspend
     assert "the user moved" in observation.content
@@ -174,9 +175,9 @@ def test_detach_before_waiter_returns_keeps_placeholder(
     result = pool.submit(_execute, tmp_path)
     try:
         assert entered.wait(2)
-        assert background_registry.detach("call-1") == "detached"
+        assert background_registry.detach(1, "call-1") == "detached"
         if withdraw:
-            background_registry.withdraw("call-1")
+            background_registry.withdraw(1, "call-1")
         else:
             command.release.set()
         command.join()
@@ -231,7 +232,7 @@ def test_same_tool_instance_keeps_overlapping_calls_independent(
     tool = ExecuteTerminalTool()
     first = pool.submit(_execute, tmp_path, tool=tool)
     _wait_registered()
-    assert background_registry.detach("call-1") == "detached"
+    assert background_registry.detach(1, "call-1") == "detached"
     assert first.result(timeout=2).background is not None
     second = _Command()
     monkeypatch.setattr(terminal_module, "LocalExecutionBackend", lambda: second)
@@ -240,7 +241,7 @@ def test_same_tool_instance_keeps_overlapping_calls_independent(
         _wait_registered("call-2")
         command.release.set()
         command.join()
-        assert not result.done() and background_registry.owns(1, "call-2")
+        assert not result.done() and registered(background_registry, 1, "call-2")
         assert len(delivered) == 1 and delivered[0][0] == "call-1"
         second.release.set()
         observation = result.result(timeout=2)

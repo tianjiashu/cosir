@@ -373,10 +373,10 @@ def test_running_emitted_once_before_handler(
     assert order == ["emit:running", "handler"]
 
 
-def test_running_event_carries_call_identity_and_display_arguments(
+def test_running_event_carries_call_identity(
     tmp_path: Path, emitted: list[Any]
 ) -> None:
-    """running 由执行器发出：带调用身份、step 与准入后的最终参数，运行期即可渲染参数。"""
+    """running 由执行器发出，带调用身份与 step；展示用参数归模型流收口的意图事件。"""
 
     executor = _make_executor(tmp_path)
     _execute(
@@ -388,9 +388,6 @@ def test_running_event_carries_call_identity_and_display_arguments(
     [running] = [event for event in emitted if event.status == "running"]
     assert running.tool_call_id == "call-args"
     assert running.step_id == _make_context(tmp_path).step_id
-    # 已过准入：展示的是校验后的最终参数（含 schema 默认值），不是原始参数串。
-    assert running.args is not None and running.args["path"] == "sample.txt"
-    assert set(running.args) > {"path"}
 
 
 @pytest.mark.parametrize(

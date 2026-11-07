@@ -208,6 +208,7 @@ def test_stream_close_intent_matches_cold_projection_even_without_execution(
                 ],
             },
             metadata=None,
+            sequence=1,
         )
     ]
     parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)

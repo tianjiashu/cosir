@@ -35,6 +35,9 @@ class _ContextStore:
     def entries_in_context(self, task_id: int) -> list[ContextEntry]:
         return list(self.loaded)
 
+    def tool_call_ids(self, task_id: int) -> set[str]:
+        return set()
+
     def max_sequence(self, task_id: int) -> int:
         return self.current_max_sequence
 
@@ -68,6 +71,8 @@ def _manager(
     context_store: _ContextStore, *, next_sequence: int = 0
 ) -> RuntimeMessageContextManager:
     manager = object.__new__(RuntimeMessageContextManager)
+    manager._used_call_ids = set()
+    manager._response_call_ids = {}
     manager.current_task_id = 7
     manager.agent_profile = SimpleNamespace()
     manager.workspace = SimpleNamespace(id=7, root_path="")
@@ -291,66 +296,3 @@ def test_add_message_replaces_paired_tool_result_row_in_place() -> None:
     assert manager._message_sequence == 7, "覆盖不得推进序号游标"
 
 
-def test_add_message_appends_when_same_run_reuses_call_id_in_a_later_step() -> None:
-    """同一 Run 内跨 model 步复用同一 ``tool_call_id`` 时也必须追加。
-
-    配对只认最后一条携带 ``tool_calls`` 的 ``AIMessage`` 之后的结果行，因此上一 model 步的结果行
-    不会被本步的调用命中——这正是「按 id 全表匹配」会踩坏的第二种形态。
-    """
-
-    context_store = _ContextStore(max_sequence=4)
-    manager = _manager(context_store, next_sequence=5)
-    manager.current_run_id = 2
-    manager.add_message(_ai_message("call-1"))
-    manager.add_message(
-        {"role": "tool", "content": "step1 result", "tool_call_id": "call-1"},
-        metadata=ToolMessageMetadata(status="completed"),
-    )
-    manager.add_message(_ai_message("call-1"))
-
-    outcome = manager.add_message(
-        {"role": "tool", "content": "step2 result", "tool_call_id": "call-1"},
-        metadata=ToolMessageMetadata(status="completed"),
-    )
-
-    assert outcome == "appended"
-    assert [
-        item[2]
-        for item in context_store.appended
-        if isinstance(item[2], ConversationTaskContextRecord)
-    ] == [], "上一 model 步的结果行不得被覆盖"
-    assert [entry.message.get("content") for entry in manager._entries][-2:] == ["", "step2 result"]
-
-
-def test_add_message_does_not_overwrite_another_run_row_with_same_tool_call_id() -> None:
-    """同一 ``tool_call_id`` 可跨 Run 复用：不得覆盖别的 Run 已有的结果行。
-
-    判据沿用 ``plan_tool_call_closures`` 的配对规则（只认目标 ``AIMessage`` 之后、同 Run 的既有
-    结果行），因此「当前 Run 的调用没有结果、别的 Run 用了同一个 id」时必须走追加。
-    """
-
-    context_store = _ContextStore(max_sequence=4)
-    manager = _manager(context_store, next_sequence=5)
-    manager.current_run_id = 1
-    manager.add_message(_ai_message("call-1"))
-    manager.add_message(
-        {"role": "tool", "content": "run1 result", "tool_call_id": "call-1"},
-        metadata=ToolMessageMetadata(status="completed"),
-    )
-
-    # 切到 run 2，模型复用同一 id，并写它的真实结果。
-    manager.current_run_id = 2
-    manager.add_message(_ai_message("call-1"))
-
-    outcome = manager.add_message(
-        {"role": "tool", "content": "run2 result", "tool_call_id": "call-1"},
-        metadata=ToolMessageMetadata(status="completed"),
-    )
-
-    assert outcome == "appended"
-    assert [entry.message.get("content") for entry in manager._entries][2:] == ["", "run2 result"]
-    assert [
-        item[2]
-        for item in context_store.appended
-        if isinstance(item[2], ConversationTaskContextRecord)
-    ] == [], "不得原地替换（那会覆盖 run 1 的结果行）"

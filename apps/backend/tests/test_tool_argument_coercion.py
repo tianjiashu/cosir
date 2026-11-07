@@ -52,7 +52,6 @@ class TestWhitelistCoercion:
 
         adapted, facts = _coerce(
             {
-                "description": "test",
                 "command": "pwd && uname -a",
                 "shell": "auto",
                 "timeout": "30",
@@ -105,7 +104,6 @@ class TestWhitelistCoercion:
         """合规的原生参数不产生任何归一事实（避免把正常调用记成模型缺陷）。"""
 
         arguments = {
-            "description": "test",
             "command": "pwd",
             "shell": "auto",
             "timeout": 30,
@@ -138,7 +136,7 @@ class TestWhitelistRefusals:
         """``Literal`` 字段（shell/signal）不做任何归一。潜在缺陷：宽松会把非法枚举放行。"""
 
         adapted, facts = _coerce(
-            {"description": "test", "command": "pwd", "shell": "zsh3"}, MacExecuteTerminalArgs
+            {"command": "pwd", "shell": "zsh3"}, MacExecuteTerminalArgs
         )
         assert adapted["shell"] == "zsh3"  # type: ignore[index]
         assert facts == {}
@@ -147,7 +145,7 @@ class TestWhitelistRefusals:
         """未知字段不归一也不丢弃，交给 strict 的 ``extra="forbid"`` 报错。"""
 
         adapted, facts = _coerce(
-            {"description": "test", "command": "pwd", "shelll": "auto"}, MacExecuteTerminalArgs
+            {"command": "pwd", "shelll": "auto"}, MacExecuteTerminalArgs
         )
         assert adapted["shelll"] == "auto"  # type: ignore[index]
         assert facts == {}
@@ -161,7 +159,6 @@ class TestValidationIntegration:
 
         result = validate_tool_arguments(
             {
-                "description": "test",
                 "command": "pwd && uname -a",
                 "shell": "auto",
                 "timeout": "30",
@@ -188,7 +185,6 @@ class TestValidationIntegration:
 
         result = validate_tool_arguments(
             {
-                "description": "test",
                 "command": "pwd && uname -a",
                 "shell": "auto",
                 "timeout": 30,
@@ -206,7 +202,7 @@ class TestValidationIntegration:
         """``gt=0`` 仍优先生效：``"0"`` 归一成 0 后同样被拒（归一不绕过业务约束）。"""
 
         result = validate_tool_arguments(
-            {"description": "test", "command": "pwd", "timeout": bad},
+            {"command": "pwd", "timeout": bad},
             {},
             MacExecuteTerminalArgs,
         )
@@ -217,7 +213,7 @@ class TestValidationIntegration:
         """枚举与未知字段仍按 strict 拒绝（未被归一削弱）。"""
 
         bad_shell = validate_tool_arguments(
-            {"description": "test", "command": "pwd", "shell": None},
+            {"command": "pwd", "shell": None},
             {},
             MacExecuteTerminalArgs,
         )
@@ -225,7 +221,7 @@ class TestValidationIntegration:
         assert "shell" in bad_shell.error
 
         unknown = validate_tool_arguments(
-            {"description": "test", "command": "pwd", "shelll": "auto"},
+            {"command": "pwd", "shelll": "auto"},
             {},
             MacExecuteTerminalArgs,
         )
@@ -285,7 +281,7 @@ class TestWhitelistBoundaries:
         """两个平台契约模型的宽容行为必须对称（避免只在 macOS 上被验证）。"""
 
         result = validate_tool_arguments(
-            {"description": "test", "command": "pwd", "shell": "auto", "timeout": "30"},
+            {"command": "pwd", "shell": "auto", "timeout": "30"},
             {},
             WindowsExecuteTerminalArgs,
         )

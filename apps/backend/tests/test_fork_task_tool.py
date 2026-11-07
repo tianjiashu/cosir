@@ -131,3 +131,12 @@ def test_fork_args_require_a_short_title_and_a_message() -> None:
         ForkTaskArgs(title="x" * (TITLE_MAX + 1), message="y")
     with pytest.raises(ValidationError):
         ForkTaskArgs(title=" ", message="y")
+
+
+def test_assignment_description_matches_the_inherited_boundary():
+    from app.core.tool.multi_agent.args.fork_task_args import ForkTaskArgs
+
+    """分叉看不到当前回合：参数描述不能再告诉模型「分叉已有完整对话，只说新东西」。"""
+    description = ForkTaskArgs.model_fields["message"].description or ""
+    assert "complete assignment" in description
+    assert "not the current turn" in description

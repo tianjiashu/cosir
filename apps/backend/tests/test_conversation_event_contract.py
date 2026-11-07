@@ -22,7 +22,6 @@ from app.core.events import (
     RunStatusChangedEvent,
     ToolCallCreatedEvent,
     ToolCallIntentEvent,
-    ToolCallsSettledEvent,
     ToolCallStatusChangedEvent,
     WorkflowEvent,
     WorkflowEventEnvelope,
@@ -111,7 +110,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     ),
     (
         {"type": "tool_call_intent", "task_id": 1, "run_id": 1,
-         "tool_call_id": "1:step-2:0", "intent": "核对配置"},
+         "tool_call_id": "1:step-2:0", "intent": "核对配置", "args": {}},
         ToolCallIntentEvent,
     ),
     (
@@ -121,20 +120,9 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
             "run_id": 1,
             "tool_call_id": "1:step-2:0",
             "status": "failed",
-            "args": {"path": "app/app.py"},
             "error": "path outside workspace",
         },
         ToolCallStatusChangedEvent,
-    ),
-    (
-        {
-            "type": "tool_calls_settled",
-            "task_id": 1,
-            "run_id": 1,
-            "status": "cancelled",
-            "reason": "user_cancelled",
-        },
-        ToolCallsSettledEvent,
     ),
 ]
 
@@ -242,13 +230,6 @@ def test_envelope_defaults_and_optional_fields() -> None:
             "tool_call_id": "",
             "tool_name": "x",
         },
-        {
-            "type": "tool_calls_settled",
-            "task_id": 1,
-            "run_id": 1,
-            "status": "completed",
-            "reason": "r",
-        },
         {"type": "run_status_changed",
             "changed_at": "2026-01-01T00:00:01Z", "task_id": 1, "run_id": 1, "status": "half_done"},
         {
@@ -284,7 +265,6 @@ def test_envelope_defaults_and_optional_fields() -> None:
         "empty_delta",
         "unknown_part",
         "empty_tool_call_id",
-        "settled_to_non_terminal",
         "unknown_run_status",
         "non_positive_task_id",
         "unknown_field",

@@ -20,6 +20,7 @@ from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal import LocalExecutionBackend
+from tests.live_cold_support import registered
 from tests.terminal_test_support import requires_terminal_worker
 
 pytestmark = [
@@ -68,7 +69,7 @@ def test_foreground_command_returns_its_result_without_registering(tmp_path, del
     )
     assert observation.status == "success" and not observation.background
     assert observation.content.startswith("[exit_code=0]") and "hello" in observation.content
-    assert not background_registry.owns(_TASK_ID, "call-fg")
+    assert not registered(background_registry, _TASK_ID, "call-fg")
     assert delivered == []
 
 
@@ -115,8 +116,8 @@ def test_detached_foreground_command_keeps_running_without_suspending(tmp_path, 
         )
     )
     thread.start()
-    _wait_for(lambda: background_registry.owns(_TASK_ID, "call-detach"))
-    assert background_registry.detach("call-detach") == "detached"
+    _wait_for(lambda: registered(background_registry, _TASK_ID, "call-detach"))
+    assert background_registry.detach(_TASK_ID, "call-detach") == "detached"
     thread.join(2)
     observation = box["observation"]
     assert observation.background and not observation.suspend
@@ -132,7 +133,7 @@ def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delive
         background=True,
         execution_context=_context(tmp_path, "call-cancel"),
     )
-    dropped = background_registry.withdraw("call-cancel")
+    dropped = background_registry.withdraw(_TASK_ID, "call-cancel")
     assert dropped
     time.sleep(2.5)
     # 进程树被杀：命令没有跑完；撤销后的结论被登记表丢弃，不回投。

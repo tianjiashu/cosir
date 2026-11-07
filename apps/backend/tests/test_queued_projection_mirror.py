@@ -20,7 +20,7 @@ from app.models.conversation_input import UserInputPresentation
 from app.service import depends
 from app.storage.store_engines import main_session_factory
 
-pytestmark = pytest.mark.usefixtures("isolated_storage")
+pytestmark = pytest.mark.usefixtures("isolated_storage", "empty_tool_registry")
 
 
 def _user(text: str) -> TaskMessage:

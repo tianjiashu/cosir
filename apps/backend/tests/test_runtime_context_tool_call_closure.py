@@ -159,6 +159,10 @@ def _manager(
     """按运行时装配口径构造 manager（跳过需要真实 graph 环境才能跑通的 ``__post_init__``）。"""
 
     manager = object.__new__(RuntimeMessageContextManager)
+
+    manager._used_call_ids = set()
+
+    manager._response_call_ids = {}
     manager.current_task_id = task_id
     manager.agent_profile = cast(AgentProfile, SimpleNamespace())
     manager.workspace = SimpleNamespace(id=7, root_path="")
@@ -336,7 +340,7 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
     rebuilt = ConversationTaskStateRebuilder.rebuild(env.task, [previous_run, current_run], rows)
     validate_snapshot(rebuilt)
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
-    assert tool_parts[(1, "call-1")]["status"] == "cancelled"
+    assert tool_parts["call-1"]["status"] == "cancelled"
 
 
 def test_same_run_placeholder_metadata_backs_snapshot_rebuild(env: SimpleNamespace) -> None:
@@ -369,8 +373,8 @@ def test_same_run_placeholder_metadata_backs_snapshot_rebuild(env: SimpleNamespa
 
     # 该 metadata 的直接消费者：重建入口取 status 不再崩，且产出合法 wire 终态。
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
-    assert tool_parts[(1, "call-1")]["status"] == "cancelled"
-    assert tool_parts[(1, "call-1")]["status"] in _TOOL_STATUS_VALUES
+    assert tool_parts["call-1"]["status"] == "cancelled"
+    assert tool_parts["call-1"]["status"] in _TOOL_STATUS_VALUES
 
     rebuilt = ConversationTaskStateRebuilder.rebuild(env.task, [run], rows)
     validate_snapshot(rebuilt)
@@ -663,7 +667,7 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     rebuilt = ConversationTaskStateRebuilder.rebuild(env.task, [run], rows)
     validate_snapshot(rebuilt)
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
-    assert {call_id: part["status"] for (_, call_id), part in tool_parts.items()} == {
+    assert {call_id: part["status"] for call_id, part in tool_parts.items()} == {
         "call-1": "completed",
         "call-2": "cancelled",
     }

@@ -181,11 +181,10 @@ def _tool_part(state: ConversationStateSnapshot) -> dict[str, Any]:
 # ============================================================================
 
 
-def test_p2_terminal_result_keeps_streamed_output() -> None:
-    """P2-a：``kind == "terminal-result"`` 且新载荷同为 terminal-result 时，输出**被保留**。
+def test_p2_terminal_result_prefers_final_output() -> None:
+    """P2-a：终态载荷自带 ``output`` 时以它为权威（实时通道可能没送到尾部），不沿用实时预览。
 
-    被测行为：``ToolCallStatusChangedEvent.plan`` 的 ``has_streamed_terminal_output`` 补偿分支。
-    缺陷判定：符合预期（补偿分支生效）。
+    被测行为：``plan_tool_call_status_changed`` 只在终态缺 ``output`` 时才保留预览。
     """
 
     state, projector = _seed_tool_part()
@@ -202,7 +201,7 @@ def test_p2_terminal_result_keeps_streamed_output() -> None:
     )
 
     part = _tool_part(state)
-    assert part["display_data"]["output"] == "streamed", f"实际={part['display_data']}"
+    assert part["display_data"]["output"] == "", f"实际={part['display_data']}"
     assert part["display_data"]["exit_code"] == 0
 
 
@@ -303,6 +302,10 @@ def _memory_manager(
     """构造绕过真实持久化的 ``RuntimeMessageContextManager``（与既有测试同口径）。"""
 
     manager = object.__new__(RuntimeMessageContextManager)
+
+    manager._used_call_ids = set()
+
+    manager._response_call_ids = {}
     manager.current_task_id = _TASK_ID
     manager.agent_profile = SimpleNamespace()
     manager.workspace = SimpleNamespace(id=7, root_path="")

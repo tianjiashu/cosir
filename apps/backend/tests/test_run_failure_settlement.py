@@ -223,6 +223,14 @@ def _make_runtime(
         "get_conversation_event_projector",
         lambda: SimpleNamespace(process=lambda _event: None),
     )
+    monkeypatch.setattr(
+        run_driver,
+        "get_conversation_task_context_service",
+        lambda: SimpleNamespace(
+            close_unclosed_tool_calls_for_run=lambda *_args: [],
+            claimed_decisions=lambda _task_id: [],
+        ),
+    )
     return SimpleNamespace(run_agent=_drive_run)
 
 
@@ -439,3 +447,30 @@ async def test_context_protocol_failure_has_local_code_and_preserves_diagnostic_
     )
     assert state.calls[0]["error_message"] is None
     assert "private tool output" not in str(state.calls)
+
+
+def test_a_broken_context_still_ends_claimed_decisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """配对依据损坏时不补结果行，但已认领的决定不靠配对，仍要结束，否则只能等重启。"""
+    from app.core.context.context_entry import ContextEntry
+    from app.core.context.tool_call_closure import ContextProtocolError
+
+    def broken(*_args: object) -> list[str]:
+        entry = ContextEntry({"role": "tool", "tool_call_id": "c", "content": ""}, 1, 1)
+        raise ContextProtocolError("orphan_tool_result", entry, "c")
+
+    cancelled: list[list[str]] = []
+    monkeypatch.setattr(
+        run_driver,
+        "get_conversation_task_context_service",
+        lambda: SimpleNamespace(
+            close_unclosed_tool_calls_for_run=broken, claimed_decisions=lambda _task_id: ["h1"]
+        ),
+    )
+    monkeypatch.setattr(run_driver, "get_conversation_event_projector", lambda: None)
+    monkeypatch.setattr(
+        run_driver, "cancel_placeholders", lambda _task, ids, _hint: cancelled.append(list(ids))
+    )
+
+    run_driver.RunDriver._close_tool_calls(object(), SimpleNamespace(id=1, task_id=7))
+
+    assert cancelled == [["h1"]]

@@ -10,7 +10,6 @@ def fork_extra(source_task_id: int, *, model_config_id: int | None = None) -> Ta
             source_task_id=source_task_id,
             source_title="Source",
             tree_parent_task_id=source_task_id,
-            before_message_id="1",
             initial_launch=TaskForkLaunch(
                 agent_id="main_agent",
                 model_config_id=model_config_id,

@@ -1,0 +1,181 @@
+"""实时投影与冷重建必须得到同一份快照：刷新页面不能改变用户看到的事实。
+
+已知不覆盖：同一响应里正文与工具交错时，实时按到达顺序切段，冷重建合并成一段（交错顺序只是
+瞬时流序，不是持久事实）。
+"""
+
+import asyncio
+
+import pytest
+
+from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
+from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
+from app.models.conversation_run_options import ConversationRunOptions
+from app.service.conversation_run.tool_decision_service import ToolDecisionService
+from tests.live_cold_support import LiveColdEnv, tool_call, tool_parts
+
+_READ = {"intent": "看文件", "path": "a.txt"}
+_DISABLE_SEARCH = ConversationRunOptions(disabled_tool_groups=[TOOL_GROUP_SEARCH])
+
+_SCENARIOS = {
+    "plain": ([([{"content": "hello "}, {"content": "world"}], "stop")], None),
+    "length": ([([{"content": "cut"}], "length")], None),
+    "empty": ([([{"content": ""}], "stop")], None),
+    "tool_then_final": (
+        [
+            ([{"content": "进展"}, {"tool_calls": [tool_call("c1", "read_file", _READ)]}], "tool_calls"),
+            ([{"content": "结论"}], "stop"),
+        ],
+        None,
+    ),
+    "invalid_json_args": (
+        [
+            ([{"tool_calls": [tool_call("c1", "read_file", '{"intent":"x","path":')]}], "tool_calls"),
+            ([{"content": "结论"}], "stop"),
+        ],
+        None,
+    ),
+    "missing_intent": (
+        [
+            ([{"tool_calls": [tool_call("c1", "read_file", {"path": "a.txt"})]}], "tool_calls"),
+            ([{"content": "结论"}], "stop"),
+        ],
+        None,
+    ),
+    "bad_business_args": (
+        [
+            ([{"tool_calls": [tool_call("c1", "read_file", {"intent": "看", "nope": 1})]}], "tool_calls"),
+            ([{"content": "结论"}], "stop"),
+        ],
+        None,
+    ),
+    "disabled_tool": (
+        [
+            ([{"tool_calls": [tool_call("c1", "read_file", _READ)]}], "tool_calls"),
+            ([{"content": "结论"}], "stop"),
+        ],
+        _DISABLE_SEARCH,
+    ),
+    "continuation": ([([{"content": "半截"}], None), ([{"content": "完整"}], "stop")], None),
+    "stream_failure": (
+        [
+            (
+                [{"content": "半截"}, {"tool_calls": [tool_call("c1", "read_file", _READ)]}],
+                None,
+                RuntimeError("boom"),
+            )
+        ],
+        None,
+    ),
+    "model_error": ([RuntimeError("boom")], None),
+}
+
+
+@pytest.mark.parametrize("name", list(_SCENARIOS))
+async def test_run_outcomes_agree(backend_env, tmp_path, monkeypatch, name):
+    steps, options = _SCENARIOS[name]
+    (tmp_path / "a.txt").write_text("x")
+    env = LiveColdEnv(tmp_path, monkeypatch, steps)
+    try:
+        env.send(options=options)
+        await env.parked()
+        env.assert_parity()
+    finally:
+        await env.close()
+
+
+async def test_a_pending_decision_survives_a_failed_run(backend_env, tmp_path, monkeypatch):
+    """决定在 Run 失败后仍可作出：卡片必须还在等，不能只在实时快照里变成已取消。"""
+    env = LiveColdEnv(
+        tmp_path,
+        monkeypatch,
+        [
+            ([{"tool_calls": [tool_call("h1", "probe_hitl", {"intent": "批准"})]}], "tool_calls"),
+            RuntimeError("model down"),
+            ([{"content": "结论"}], "stop"),
+        ],
+    )
+    try:
+        env.send()
+        assert (await env.parked()).status == "suspended"
+        env.send("唤醒", delivery="immediate")
+        await env.until("failed")
+        [part] = tool_parts(env.live())
+        assert (part["status"], part["awaitingUser"]) == ("pending", True)
+        env.assert_parity()
+
+        await asyncio.to_thread(ToolDecisionService().submit, env.task.id, "h1", "approve")
+        await env.until("completed")
+        [part] = tool_parts(env.live())
+        assert (part["status"], part["awaitingUser"]) == ("completed", False)
+        env.assert_parity()
+    finally:
+        await env.close()
+
+
+async def test_a_failure_during_a_tool_batch_settles_its_calls(backend_env, tmp_path, monkeypatch):
+    """工具批次被异常打断：没有结果的调用落占位并投影，不靠刷新才看到结局。"""
+    from app.core.workflow.nodes import tools_node
+
+    async def explode(*_args, **_kwargs):
+        raise RuntimeError("batch failed")
+
+    monkeypatch.setattr(tools_node, "run_tool_batch", explode)
+    (tmp_path / "a.txt").write_text("x")
+    env = LiveColdEnv(
+        tmp_path,
+        monkeypatch,
+        [([{"tool_calls": [tool_call("c1", "read_file", _READ)]}], "tool_calls")],
+    )
+    try:
+        env.send()
+        await env.until("failed")
+        [part] = tool_parts(env.live())
+        assert part["status"] == "cancelled"
+        env.assert_parity()
+    finally:
+        await env.close()
+
+
+async def test_a_failure_before_the_response_is_committed_settles_its_calls(
+    backend_env, tmp_path, monkeypatch
+):
+    """流已结束、响应还是草稿时失败：调用不在上下文里，Run 的失败收尾看不到，要在节点里写成事实。"""
+    from app.core.workflow.nodes import model_node
+
+    def explode(_usage):
+        raise RuntimeError("usage broken")
+
+    monkeypatch.setattr(model_node, "usage_from_response", explode)
+    (tmp_path / "a.txt").write_text("x")
+    env = LiveColdEnv(
+        tmp_path,
+        monkeypatch,
+        [([{"tool_calls": [tool_call("c1", "read_file", _READ)]}], "tool_calls")],
+    )
+    try:
+        env.send()
+        await env.until("failed")
+        [part] = tool_parts(env.live())
+        assert part["status"] == "cancelled"
+        env.assert_parity()
+    finally:
+        await env.close()
+
+
+async def test_a_cancelled_run_keeps_its_pending_decision(backend_env, tmp_path, monkeypatch):
+    env = LiveColdEnv(
+        tmp_path,
+        monkeypatch,
+        [([{"tool_calls": [tool_call("h1", "probe_hitl", {"intent": "批准"})]}], "tool_calls")],
+    )
+    try:
+        env.send()
+        await env.parked()
+        await TransportAssistantService().cancel(env.task.id)
+        await env.until("cancelled")
+        [part] = tool_parts(env.live())
+        assert part["awaitingUser"] is True
+        env.assert_parity()
+    finally:
+        await env.close()
