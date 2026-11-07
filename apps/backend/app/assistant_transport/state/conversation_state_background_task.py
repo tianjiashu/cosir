@@ -17,6 +17,13 @@ from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_part import ConversationBackgroundWork
+from app.assistant_transport.state.wire_shape import (
+    as_shape,
+    require_list,
+    require_non_empty_str,
+    require_one_of,
+    require_str,
+)
 from app.models.message_metadata import BackgroundKind, BackgroundWork
 
 # ``settling``：工作已不在登记表里，但占位行还没落定——结论已到、等下一个模型步并入，或撤销已出队、
@@ -35,10 +42,9 @@ class ConversationBackgroundTask(TypedDict):
     endedAt: str | None
 
 
-BACKGROUND_TASK_KEYS = frozenset(ConversationBackgroundTask.__annotations__)
-BACKGROUND_WORK_KEYS = frozenset(ConversationBackgroundWork.__annotations__)
 _KINDS = frozenset(get_args(BackgroundKind))
-_STATUSES = frozenset({"running", "settling", "completed", "cancelled"})
+_STATUSES = frozenset(get_args(BackgroundTaskStatus))
+# 仍在进行的状态：这些条目的 ``endedAt`` 恒为空，并排在看板最前。
 _ACTIVE = frozenset({"running", "settling"})
 
 # 展示策略：全部进行中的工作 + 最近结束的这么多条；持久化的历史不删。
@@ -48,12 +54,12 @@ MAX_ENDED_PER_TASK = 20
 def project_background_work(work: BackgroundWork) -> ConversationBackgroundWork:
     """后台工作记录的 wire 形状（camelCase）；工具 part 与看板活条目共用。"""
 
-    return {
-        "kind": work.kind,
-        "label": work.label,
-        "startedAt": work.started_at,
-        "endedAt": work.ended_at,
-    }
+    return ConversationBackgroundWork(
+        kind=work.kind,
+        label=work.label,
+        startedAt=work.started_at,
+        endedAt=work.ended_at,
+    )
 
 
 def project_background_tasks(
@@ -68,6 +74,8 @@ def project_background_tasks(
 
     entries: list[ConversationBackgroundTask] = []
     for message in messages:
+        if message["runId"] is None:
+            continue
         for part in message["parts"]:
             if part["type"] != "tool-call":
                 continue
@@ -79,8 +87,10 @@ def project_background_tasks(
             elif "background" in part:
                 work = part["background"]
                 status = (
-                    "settling" if part["status"] == "pending"
-                    else "completed" if part["status"] == "completed"
+                    "settling"
+                    if part["status"] == "pending"
+                    else "completed"
+                    if part["status"] == "completed"
                     else "cancelled"
                 )
             else:
@@ -109,19 +119,15 @@ def validate_background_work(value: object) -> None:
         ValueError: 不满足契约。
     """
 
-    if not isinstance(value, dict) or set(value) != BACKGROUND_WORK_KEYS:
-        raise ValueError("snapshot tool background record is invalid")
-    if value["kind"] not in _KINDS:
-        raise ValueError("snapshot tool background kind is invalid")
-    for key in ("label", "startedAt"):
-        if not isinstance(value[key], str):
-            raise ValueError(f"snapshot tool background {key} must be a string")
-    if value["endedAt"] is not None and not isinstance(value["endedAt"], str):
-        raise ValueError("snapshot tool background endedAt must be a string or null")
+    work = as_shape(value, ConversationBackgroundWork, "snapshot tool background record")
+    require_one_of(work["kind"], _KINDS, "snapshot tool background kind")
+    require_str(work["label"], "snapshot tool background label")
+    require_str(work["startedAt"], "snapshot tool background startedAt")
+    require_str(work["endedAt"], "snapshot tool background endedAt", nullable=True)
 
 
 def validate_background_tasks(value: object) -> None:
-    """精确校验 ``background_tasks``：键集合与取值枚举。
+    """精确校验 ``background_tasks``：字段集合与取值词表。
 
     同一调用可能先作为进行中条目、后作为结束条目出现在不同时刻的列表里，但同一份列表里不会重复
     （一次调用只有一个 part），这里仍校验唯一，防止投影拼接出错。
@@ -130,27 +136,18 @@ def validate_background_tasks(value: object) -> None:
         ValueError: 任一条目不满足契约。
     """
 
-    if not isinstance(value, list):
-        raise ValueError("snapshot background_tasks must be an array")
     seen: set[str] = set()
-    for entry in value:
-        if not isinstance(entry, dict) or set(entry) != BACKGROUND_TASK_KEYS:
-            raise ValueError("snapshot background result entry is invalid")
-        tool_call_id = entry["toolCallId"]
-        if not isinstance(tool_call_id, str) or not tool_call_id:
-            raise ValueError("background result toolCallId must be a non-empty string")
+    for entry in require_list(value, "snapshot background_tasks"):
+        task = as_shape(entry, ConversationBackgroundTask, "snapshot background result entry")
+        tool_call_id = require_non_empty_str(task["toolCallId"], "background result toolCallId")
         if tool_call_id in seen:
             raise ValueError("snapshot contains duplicate background result toolCallId")
         seen.add(tool_call_id)
-        for key in ("label", "startedAt"):
-            if not isinstance(entry[key], str):
-                raise ValueError(f"background result {key} must be a string")
-        if entry["endedAt"] is not None and not isinstance(entry["endedAt"], str):
-            raise ValueError("background result endedAt must be a string or null")
-        if entry["kind"] not in _KINDS:
-            raise ValueError("background result kind is invalid")
-        if entry["status"] not in _STATUSES:
-            raise ValueError("background result status is invalid")
+        require_str(task["label"], "background result label")
+        require_str(task["startedAt"], "background result startedAt")
+        require_str(task["endedAt"], "background result endedAt", nullable=True)
+        require_one_of(task["kind"], _KINDS, "background result kind")
+        require_one_of(task["status"], _STATUSES, "background result status")
 
 
 def validate_foreground_waits(value: object) -> None:
@@ -160,9 +157,8 @@ def validate_foreground_waits(value: object) -> None:
         ValueError: 不满足契约。
     """
 
-    if not isinstance(value, list):
-        raise ValueError("snapshot foreground_waits must be an array")
-    if any(not isinstance(item, str) or not item for item in value):
+    waits = require_list(value, "snapshot foreground_waits")
+    if any(not isinstance(item, str) or not item.strip() for item in waits):
         raise ValueError("foreground_waits entries must be non-empty strings")
-    if len(set(value)) != len(value):
+    if len(set(waits)) != len(waits):
         raise ValueError("snapshot contains duplicate foreground_waits toolCallId")

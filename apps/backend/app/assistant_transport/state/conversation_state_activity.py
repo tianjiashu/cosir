@@ -4,7 +4,15 @@ from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
+from app.core.events.model_activity_event import ModelActivityPhase
 from app.models.conversation_run_options import ConversationRunOptions
+
+
+class ModelActivity(TypedDict):
+    """当前模型步的瞬时输出阶段；不持久化、不参与调度。"""
+
+    stepId: str
+    phase: ModelActivityPhase
 
 
 class ConversationRunLaunch(TypedDict):
@@ -37,6 +45,7 @@ class ConversationStateActivity(TypedDict):
     记录的创建时间（ISO 8601），前端据此做运行中的本地计时；终态耗时在 ``outcome.durationMs``。
     """
 
+    modelActivity: ModelActivity | None
     runId: int
     status: str
     startedAt: str

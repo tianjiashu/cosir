@@ -4,6 +4,8 @@ from typing import Literal, NotRequired
 
 from typing_extensions import TypedDict
 
+TextPartStatus = Literal["running", "completed"]
+
 
 class ConversationStateTextPart(TypedDict):
     """可增量追加的文本 part。
@@ -11,6 +13,8 @@ class ConversationStateTextPart(TypedDict):
     表达一条消息中可流式追加的纯文本片段，status 标记当前增量阶段。
     """
 
-    type: Literal["text", "reasoning"]
+    type: Literal["text"]
     text: str
-    status: NotRequired[Literal["running", "completed"]]
+    sourceSequence: NotRequired[int]
+    finalReply: NotRequired[bool]
+    status: NotRequired[TextPartStatus]

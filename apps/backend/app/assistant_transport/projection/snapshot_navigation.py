@@ -3,15 +3,15 @@
 from collections.abc import Iterator
 from typing import Literal
 
-from app.assistant_transport.state.conversation_state_message import (
-    ConversationStateMessage,
-    ConversationStateMessageSource,
-)
+from app.assistant_transport.state.conversation_state_message import ConversationStateMessage
 from app.assistant_transport.state.conversation_state_mutation import (
     ConversationStateMutation,
     SnapshotPath,
 )
-from app.assistant_transport.state.conversation_state_part import ConversationStatePart
+from app.assistant_transport.state.conversation_state_part import (
+    ConversationStateMessageSource,
+    ConversationStatePart,
+)
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.state.message_identity import leading_reply_id
 from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
@@ -21,7 +21,7 @@ def message(
     message_id: str,
     role: Literal["user", "assistant"],
     parts: list[ConversationStatePart],
-    run_id: int,
+    run_id: int | None,
     source: ConversationStateMessageSource | None = None,
 ) -> ConversationStateMessage:
     """构造消息骨架；结局只在 Run 终态时由 Run 事件投影写入，来源只给 Agent 消息。"""
@@ -90,13 +90,11 @@ def ensure_assistant(
 
 
 def iter_parts(
-    state: ConversationStateSnapshot, run_id: int | None = None
+    state: ConversationStateSnapshot,
 ) -> Iterator[tuple[SnapshotPath, ConversationStatePart]]:
-    """遍历全部（或某 Run 的）消息 part，产出 ``(part 路径, part)``。"""
+    """遍历全部消息 part，产出 ``(part 路径, part)``。"""
 
     for message_index, current in enumerate(state["messages"]):
-        if run_id is not None and current["runId"] != run_id:
-            continue
         for part_index, part in enumerate(current["parts"]):
             yield ("messages", message_index, "parts", part_index), part
 
@@ -104,11 +102,10 @@ def iter_parts(
 def find_tool(
     state: ConversationStateSnapshot,
     tool_call_id: str,
-    run_id: int | None = None,
 ) -> SnapshotPath | None:
     """按 Task 内唯一 toolCallId 返回 tool-call part 的路径；不存在时返回 ``None``。"""
 
-    for path, part in iter_parts(state, run_id):
+    for path, part in iter_parts(state):
         if (
             isinstance(part, dict)
             and part.get("type") == "tool-call"

@@ -5,9 +5,14 @@ from typing import Literal
 from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_state_error import ConversationStateError
-from app.assistant_transport.state.conversation_state_part import ConversationStatePart
+from app.assistant_transport.state.conversation_state_part import (
+    ConversationStateMessageSource,
+    ConversationStatePart,
+)
 from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
 from app.core.workflow.message_queue.task_message import Delivery
+
+MessageRole = Literal["user", "assistant"]
 
 
 class ConversationStateOutcome(TypedDict):
@@ -16,7 +21,7 @@ class ConversationStateOutcome(TypedDict):
     让对话界面不必按 Run 分组也能显示历史回复的「已取消 / 失败 / 用量」；Run 被恢复时清空。
     ``contextWindowTotal`` 是该 Run 冻结的窗口上限，与 ``usage`` 同属一个 Run：上下文占用的
     「已用 / 上限」必须同源，两轮之间换了模型也不会拿新窗口配旧用量。``durationMs`` 是 Run 创建到
-    终态的毫秒数，只从 Run 记录的时间戳推导（投影器不读墙钟）；事件没带终态时间时为 ``None``。
+    终态的毫秒数，只从 Run 记录的时间戳推导（投影器不读墙钟），终态耗时必填。
     """
 
     status: str
@@ -24,14 +29,7 @@ class ConversationStateOutcome(TypedDict):
     error: ConversationStateError | None
     usage: ConversationStateUsage | None
     contextWindowTotal: int | None
-    durationMs: int | None
-
-
-class ConversationStateMessageSource(TypedDict):
-    """Agent 消息的发送方：前端据 ``taskId`` 跳到来源 Task，``name`` 是发送时的显示名快照。"""
-
-    taskId: int
-    name: str
+    durationMs: int
 
 
 class ConversationStateMessage(TypedDict):
@@ -39,15 +37,15 @@ class ConversationStateMessage(TypedDict):
 
     ``runId`` 是消息的 Run 归属，只供事件路由、诊断与 fork 定位；对话界面不按它分组。
     ``outcome`` 只有「该 Run 最后一条助手消息」在 Run 终态后非空，user 消息恒为 ``None``。
-    ``source`` 只有 Agent 消息（另一个 Agent 发来、开启一轮的 user 消息）非空：它不是用户说的话，
+    ``source`` 只有开启回合的 Agent 消息（Run 第一条输入）非空：它不是用户说的话，
     前端另行渲染、不可编辑；用户消息与助手消息恒为 ``None``。
     ``parts`` 保留各自的流式与工具执行生命周期。
     """
 
     id: str
-    role: Literal["user", "assistant"]
+    role: MessageRole
     parts: list[ConversationStatePart]
-    runId: int
+    runId: int | None
     outcome: ConversationStateOutcome | None
     source: ConversationStateMessageSource | None
 

@@ -1,16 +1,25 @@
-"""Conversation Transport Task snapshot 的中性 JSON 契约（Task 视角）。"""
+"""Conversation Transport Task snapshot 的中性 JSON 契约（Task 视角）。
 
-from typing import NotRequired, cast
+校验（:func:`validate_snapshot`）的字段集合取自各 TypedDict 声明，不另写键集合常量：契约改动只需
+改声明，校验跟着走。
+"""
+
+from typing import Literal, NotRequired, get_args
 
 from typing_extensions import TypedDict
 
-from app.assistant_transport.state.conversation_state_activity import ConversationStateActivity
+from app.assistant_transport.state.conversation_state_activity import (
+    ConversationRunLaunch,
+    ConversationStateActivity,
+    ModelActivity,
+)
 from app.assistant_transport.state.conversation_state_background_task import (
     ConversationBackgroundTask,
     validate_background_tasks,
     validate_background_work,
     validate_foreground_waits,
 )
+from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_handoff import (
     ConversationHandoff,
     validate_handoffs,
@@ -18,73 +27,63 @@ from app.assistant_transport.state.conversation_state_handoff import (
 from app.assistant_transport.state.conversation_state_message import (
     ConversationQueuedMessage,
     ConversationStateMessage,
+    ConversationStateOutcome,
+    MessageRole,
+)
+from app.assistant_transport.state.conversation_state_part import (
+    ConversationStateAgentMessagePart,
+    ConversationStateFilePart,
+    ConversationStateImagePart,
+    ConversationStateMessageSource,
+    ConversationStateTextPart,
+    ConversationStateToolCallPart,
+    TextPartStatus,
+    ToolCallStatus,
 )
 from app.assistant_transport.state.conversation_state_terminal_session import (
     ConversationTerminalSession,
     validate_terminal_sessions,
 )
+from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
+from app.assistant_transport.state.wire_shape import (
+    as_shape,
+    require_bool,
+    require_int,
+    require_list,
+    require_locator,
+    require_mapping,
+    require_non_empty_str,
+    require_one_of,
+    require_str,
+    require_str_list,
+)
 from app.config.constant import Constant
+from app.core.events.model_activity_event import ModelActivityPhase
+from app.core.tool.presentation import ToolPresentation
+from app.core.workflow.message_queue.task_message import Delivery
 from app.models.enums.conversation_run_status import (
     TERMINAL_RUN_STATUSES,
     ConversationRunStatus,
 )
 
-_SNAPSHOT_KEYS = {
-    "title",
-    "messages",
-    "messageOffset",
-    "activity",
-    "terminal_sessions",
-    "background_tasks",
-    "foreground_waits",
-    "handoffs",
-}
-_ACTIVITY_KEYS = {
-    "runId",
-    "status",
-    "startedAt",
-    "endReason",
-    "error",
-    "usage",
-    "contextWindowTotal",
-    "launch",
-}
-_MESSAGE_KEYS = {"id", "role", "parts", "runId", "outcome", "source"}
-_SOURCE_KEYS = {"taskId", "name"}
-_OUTCOME_KEYS = {"status", "endReason", "error", "usage", "contextWindowTotal", "durationMs"}
-_QUEUED_MESSAGE_KEYS = {"id", "role", "parts", "delivery"}
-_DELIVERIES = {"immediate", "next_run"}
-_RUN_STATUSES = {status.value for status in ConversationRunStatus}
-_LAUNCH_KEYS = {"modelConfigId", "reasoningEffort", "disabledToolGroups"}
-_TEXT_PART_KEYS = {"type", "text", "status"}
-_IMAGE_PART_KEYS = {"type", "image"}
-_FILE_PART_KEYS = {"type", "file", "name", "contentType"}
-_TOOL_PART_KEYS = {
-    "type",
-    "toolCallId",
-    "toolName",
-    "status",
-    "args",
-    "error",
-    "errorCode",
-    "awaitingUser",
-    "display_data",
-    "team_run_id",
-    "background",
-    "isError",
-    "approvalRequestId",
-    "child_task_id",
-    "agent_role",
-    "terminal_output_seq",
-}
-_USAGE_KEYS = {
-    "input_tokens",
-    "output_tokens",
-    "total_tokens",
-    "cache_hit_tokens",
-    "cache_miss_tokens",
-    "reasoning_tokens",
-}
+_RUN_STATUSES = frozenset({status.value for status in ConversationRunStatus})
+_TERMINAL_RUN_STATUS_VALUES = frozenset({status.value for status in TERMINAL_RUN_STATUSES})
+_MESSAGE_ROLES = frozenset(get_args(MessageRole))
+_DELIVERIES = frozenset(get_args(Delivery))
+_MODEL_ACTIVITY_PHASES = frozenset(get_args(ModelActivityPhase))
+_TOOL_PRESENTATIONS = frozenset(get_args(ToolPresentation))
+_TOOL_STATUSES = frozenset(get_args(ToolCallStatus))
+_TEXT_PART_STATUSES = frozenset(get_args(TextPartStatus))
+
+ForkKind = Literal["user_fork", "agent_fork"]
+_FORK_KINDS = frozenset(get_args(ForkKind))
+
+
+class ConversationStateFork(TypedDict):
+    sourceTaskId: int
+    sourceTitle: str
+    taskType: ForkKind
+    initialLaunch: ConversationRunLaunch
 
 
 class ConversationStateSnapshot(TypedDict):
@@ -96,7 +95,8 @@ class ConversationStateSnapshot(TypedDict):
     HTTP 响应同步返回。``terminal_sessions`` 是本 Task 终端会话的进程内事实（不持久化），
     投影规则见 ``ConversationTaskStateService.refresh_terminal_sessions``。
     ``background_tasks`` 的历史来自持久化占位，活状态来自后台结果登记表；
-    ``foreground_waits``（可转到后台的前台等待）是进程内事实，二者见 ``refresh_background_results``。
+    ``foreground_waits``（可转到后台的前台等待）是进程内事实，
+    二者见 ``refresh_background_results``。
     ``handoffs``（进行中的交接）也是进程内事实，见 ``refresh_handoffs``。
 
     ``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；
@@ -105,6 +105,7 @@ class ConversationStateSnapshot(TypedDict):
     里的位置；位置只在完整快照处才会变（投影只在末尾追加或原位替换消息），前端据此换算。
     """
 
+    fork: NotRequired[ConversationStateFork]
     queued_messages: NotRequired[list[ConversationQueuedMessage]]
     title: str
     messages: list[ConversationStateMessage]
@@ -119,68 +120,61 @@ class ConversationStateSnapshot(TypedDict):
 def empty_snapshot(title: str = "新对话") -> ConversationStateSnapshot:
     """返回新 Task 的空 snapshot 基线。"""
 
-    return {
-        "title": title,
-        "messages": [],
-        "messageOffset": 0,
-        "activity": None,
-        "terminal_sessions": [],
-        "background_tasks": [],
-        "foreground_waits": [],
-        "handoffs": [],
-    }
+    return ConversationStateSnapshot(
+        title=title,
+        messages=[],
+        messageOffset=0,
+        activity=None,
+        terminal_sessions=[],
+        background_tasks=[],
+        foreground_waits=[],
+        handoffs=[],
+    )
 
 
 def validate_snapshot(state: ConversationStateSnapshot) -> None:
     """严格校验 Task snapshot 的结构与数值边界。"""
 
-    if not isinstance(state, dict) or set(state) - {"queued_messages"} != _SNAPSHOT_KEYS:
-        raise ValueError(
-            "snapshot must contain title, messages, messageOffset, activity, terminal_sessions, "
-            "background_tasks, foreground_waits and handoffs"
-        )
-    _validate_non_negative_int(state["messageOffset"], "messageOffset")
-    if not isinstance(state["title"], str) or not state["title"].strip():
-        raise ValueError("snapshot title must be a non-empty string")
-    if not isinstance(state["messages"], list):
-        raise ValueError("snapshot messages must be an array")
-    queued = state.get("queued_messages", [])
-    if not isinstance(queued, list):
-        raise ValueError("queued_messages must be an array")
-    seen_ids: set[str] = set()
-    for queued_message in queued:
-        _validate_message_body(queued_message, seen_ids, _QUEUED_MESSAGE_KEYS)
-        if queued_message["delivery"] not in _DELIVERIES:
-            raise ValueError("queued message delivery is invalid")
-        if queued_message["role"] != "user":
-            raise ValueError("queued_messages must contain user messages")
-    for message in state["messages"]:
-        _validate_message(message, seen_ids)
-    if state["activity"] is not None:
-        _validate_activity(state["activity"])
-    validate_terminal_sessions(state["terminal_sessions"])
-    validate_background_tasks(state["background_tasks"])
-    validate_foreground_waits(state["foreground_waits"])
-    validate_handoffs(state["handoffs"])
+    snapshot = as_shape(state, ConversationStateSnapshot, "snapshot")
+    if "fork" in snapshot:
+        _validate_fork(snapshot["fork"])
+    require_int(snapshot["messageOffset"], "snapshot messageOffset", minimum=0)
+    require_non_empty_str(snapshot["title"], "snapshot title")
+    seen_message_ids: set[str] = set()
+    for queued_message in snapshot.get("queued_messages", []):
+        _validate_queued_message(queued_message, seen_message_ids)
+    for message in require_list(snapshot["messages"], "snapshot messages"):
+        _validate_message(message, seen_message_ids)
+    if snapshot["activity"] is not None:
+        _validate_activity(snapshot["activity"])
+    validate_terminal_sessions(snapshot["terminal_sessions"])
+    validate_background_tasks(snapshot["background_tasks"])
+    validate_foreground_waits(snapshot["foreground_waits"])
+    validate_handoffs(snapshot["handoffs"])
 
 
-def _validate_non_negative_int(value: object, label: str) -> None:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"snapshot {label} must be a non-negative integer")
+def _validate_fork(value: object) -> None:
+    fork = as_shape(value, ConversationStateFork, "snapshot fork")
+    require_int(fork["sourceTaskId"], "snapshot fork sourceTaskId", minimum=0)
+    require_str(fork["sourceTitle"], "snapshot fork sourceTitle")
+    require_one_of(fork["taskType"], _FORK_KINDS, "snapshot fork taskType")
+    _validate_launch(fork["initialLaunch"])
 
 
-def _validate_activity(activity: object) -> None:
-    if not isinstance(activity, dict) or set(activity) != _ACTIVITY_KEYS:
-        raise ValueError("snapshot activity is invalid")
-    _validate_non_negative_int(activity["runId"], "activity runId")
-    if activity["status"] not in _RUN_STATUSES:
-        raise ValueError("snapshot activity status is invalid")
-    if not isinstance(activity["startedAt"], str) or not activity["startedAt"]:
-        raise ValueError("snapshot activity startedAt must be a non-empty string")
-    if activity["endReason"] is not None and not isinstance(activity["endReason"], str):
-        raise ValueError("snapshot activity endReason must be a string or null")
-    if activity["contextWindowTotal"] is not None:
-        _validate_non_negative_int(activity["contextWindowTotal"], "contextWindowTotal")
+def _validate_activity(value: object) -> None:
+    activity = as_shape(value, ConversationStateActivity, "snapshot activity")
+    require_int(activity["runId"], "snapshot activity runId", minimum=0)
+    require_one_of(activity["status"], _RUN_STATUSES, "snapshot activity status")
+    require_non_empty_str(activity["startedAt"], "snapshot activity startedAt")
+    require_str(activity["endReason"], "snapshot activity endReason", nullable=True)
+    require_int(
+        activity["contextWindowTotal"],
+        "snapshot activity contextWindowTotal",
+        minimum=0,
+        nullable=True,
+    )
+    if activity["modelActivity"] is not None:
+        _validate_model_activity(activity["modelActivity"], activity["status"])
     _validate_launch(activity["launch"])
     if activity["usage"] is not None:
         _validate_usage(activity["usage"])
@@ -188,180 +182,177 @@ def _validate_activity(activity: object) -> None:
         _validate_error(activity["error"])
 
 
-def _validate_outcome(outcome: object) -> None:
-    if not isinstance(outcome, dict) or set(outcome) != _OUTCOME_KEYS:
-        raise ValueError("snapshot message outcome is invalid")
-    if outcome["status"] not in TERMINAL_RUN_STATUSES:
+def _validate_model_activity(value: object, run_status: str) -> None:
+    """模型步的瞬时阶段只在 Run 仍在运行时才有意义。"""
+
+    activity = as_shape(value, ModelActivity, "snapshot model activity")
+    require_non_empty_str(activity["stepId"], "snapshot model activity stepId")
+    require_one_of(activity["phase"], _MODEL_ACTIVITY_PHASES, "snapshot model activity phase")
+    if run_status != ConversationRunStatus.RUNNING.value:
+        raise ValueError("snapshot model activity requires a running run")
+
+
+def _validate_outcome(value: object) -> None:
+    outcome = as_shape(value, ConversationStateOutcome, "snapshot message outcome")
+    if outcome["status"] not in _TERMINAL_RUN_STATUS_VALUES:
         raise ValueError("snapshot message outcome status must be terminal")
-    if outcome["endReason"] is not None and not isinstance(outcome["endReason"], str):
-        raise ValueError("snapshot outcome endReason must be a string or null")
+    require_str(outcome["endReason"], "snapshot outcome endReason", nullable=True)
     if outcome["usage"] is not None:
         _validate_usage(outcome["usage"])
-    if outcome["contextWindowTotal"] is not None:
-        _validate_non_negative_int(outcome["contextWindowTotal"], "outcome contextWindowTotal")
-    if outcome["durationMs"] is not None:
-        _validate_non_negative_int(outcome["durationMs"], "outcome durationMs")
+    require_int(
+        outcome["contextWindowTotal"],
+        "snapshot outcome contextWindowTotal",
+        minimum=0,
+        nullable=True,
+    )
+    require_int(outcome["durationMs"], "snapshot outcome durationMs", minimum=0)
     if outcome["error"] is not None:
         _validate_error(outcome["error"])
 
 
-def _validate_message(message: object, seen_ids: set[str]) -> None:
-    _validate_message_body(message, seen_ids, _MESSAGE_KEYS)
-    body = cast(dict[str, object], message)
-    _validate_non_negative_int(body["runId"], "message runId")
-    if body["outcome"] is not None:
-        if body["role"] != "assistant":
+def _validate_queued_message(value: object, seen_message_ids: set[str]) -> None:
+    message = as_shape(value, ConversationQueuedMessage, "snapshot queued message")
+    _validate_message_fields(message["id"], message["role"], message["parts"], seen_message_ids)
+    if message["role"] != "user":
+        raise ValueError("queued_messages must contain user messages")
+    require_one_of(message["delivery"], _DELIVERIES, "queued message delivery")
+
+
+def _validate_message(value: object, seen_message_ids: set[str]) -> None:
+    message = as_shape(value, ConversationStateMessage, "snapshot message")
+    _validate_message_fields(message["id"], message["role"], message["parts"], seen_message_ids)
+    require_int(message["runId"], "snapshot message runId", minimum=0, nullable=True)
+    if message["outcome"] is not None:
+        if message["role"] != "assistant":
             raise ValueError("only assistant messages carry an outcome")
-        _validate_outcome(body["outcome"])
-    if body["source"] is not None:
-        if body["role"] != "user":
+        _validate_outcome(message["outcome"])
+    if message["source"] is not None:
+        if message["role"] != "user":
             raise ValueError("only user messages carry a source")
-        source = body["source"]
-        if not isinstance(source, dict) or set(source) != _SOURCE_KEYS:
-            raise ValueError("snapshot message source is invalid")
-        _validate_non_negative_int(source["taskId"], "message source taskId")
-        if not isinstance(source["name"], str):
-            raise ValueError("snapshot message source name must be a string")
+        _validate_source(message["source"])
 
 
-def _validate_launch(launch: object) -> None:
-    if not isinstance(launch, dict) or set(launch) != _LAUNCH_KEYS:
-        raise ValueError("snapshot launch is invalid")
-    model_config_id = launch["modelConfigId"]
-    if model_config_id is not None and (
-        not isinstance(model_config_id, int) or isinstance(model_config_id, bool)
-    ):
-        raise ValueError("snapshot launch modelConfigId must be an integer or null")
-    if launch["reasoningEffort"] is not None and not isinstance(launch["reasoningEffort"], str):
-        raise ValueError("snapshot launch reasoningEffort must be a string or null")
-    if not isinstance(launch["disabledToolGroups"], list) or not all(
-        isinstance(name, str) for name in launch["disabledToolGroups"]
-    ):
-        raise ValueError("snapshot launch disabledToolGroups must be an array of strings")
+def _validate_message_fields(
+    message_id: object, role: object, parts: object, seen_message_ids: set[str]
+) -> None:
+    """消息与排队消息共用的身份、角色与 parts 校验。"""
 
-
-def _validate_message_body(message: object, seen_message_ids: set[str], keys: set[str]) -> None:
-    if not isinstance(message, dict) or set(message) != keys:
-        raise ValueError("snapshot contains an invalid message")
-    message_id = message["id"]
-    if not isinstance(message_id, str) or message_id == "":
-        raise ValueError("snapshot message id must be a non-empty string")
-    if message_id in seen_message_ids:
+    checked_id = require_non_empty_str(message_id, "snapshot message id")
+    if checked_id in seen_message_ids:
         raise ValueError("snapshot contains duplicate message id")
-    seen_message_ids.add(message_id)
-    if message["role"] not in {"user", "assistant"}:
-        raise ValueError("snapshot message role is invalid")
-    if not isinstance(message["parts"], list):
-        raise ValueError("snapshot message parts must be an array")
-    for part in message["parts"]:
+    seen_message_ids.add(checked_id)
+    require_one_of(role, _MESSAGE_ROLES, "snapshot message role")
+    for part in require_list(parts, "snapshot message parts"):
         _validate_part(part)
 
 
-def _validate_usage(usage: object) -> None:
-    if not isinstance(usage, dict) or set(usage) != _USAGE_KEYS:
-        raise ValueError("snapshot usage is malformed")
-    for value in usage.values():
-        if value is None:
-            continue
-        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-            raise ValueError("snapshot usage is malformed")
+def _validate_source(value: object) -> None:
+    source = as_shape(value, ConversationStateMessageSource, "snapshot message source")
+    require_int(source["taskId"], "snapshot message source taskId", minimum=0)
+    require_str(source["name"], "snapshot message source name")
 
 
-def _validate_error(error: object) -> None:
+def _validate_launch(value: object) -> None:
+    launch = as_shape(value, ConversationRunLaunch, "snapshot launch")
+    require_int(launch["modelConfigId"], "snapshot launch modelConfigId", nullable=True)
+    require_str(launch["reasoningEffort"], "snapshot launch reasoningEffort", nullable=True)
+    require_str_list(launch["disabledToolGroups"], "snapshot launch disabledToolGroups")
+
+
+def _validate_usage(value: object) -> None:
+    usage = as_shape(value, ConversationStateUsage, "snapshot usage")
+    for field, amount in usage.items():
+        require_int(amount, f"snapshot usage {field}", minimum=0, nullable=True)
+
+
+def _validate_error(value: object) -> None:
     # 错误契约只允许 code + message。
     # 两者都必须是**非空白**字符串：空白文案会让前端渲染出没有内容的错误气泡。
-    if (
-        not isinstance(error, dict)
-        or set(error) != {"code", "message"}
-        or not isinstance(error["code"], str)
-        or not error["code"].strip()
-        or not isinstance(error["message"], str)
-        or not error["message"].strip()
-    ):
-        raise ValueError("snapshot error is malformed")
+    error = as_shape(value, ConversationStateError, "snapshot error")
+    require_non_empty_str(error["code"], "snapshot error code")
+    require_non_empty_str(error["message"], "snapshot error message")
 
 
 def _validate_part(part: object) -> None:
     if not isinstance(part, dict):
         raise ValueError("snapshot message part must be an object")
     part_type = part.get("type")
-    if part_type in {"text", "reasoning"}:
-        if set(part) - _TEXT_PART_KEYS:
-            raise ValueError("snapshot text part contains unknown fields")
-        if not isinstance(part.get("text"), str):
-            raise ValueError("snapshot text part text must be a string")
-        if part.get("status") not in {None, "running", "completed"}:
-            raise ValueError("snapshot text part status is invalid")
-        return
-    if part_type == "image":
-        if set(part) != _IMAGE_PART_KEYS:
-            raise ValueError("snapshot image part contains unknown fields")
-        image = part.get("image")
-        if not isinstance(image, str) or not Constant.Transport.IMAGE_LOCATOR.fullmatch(image):
-            raise ValueError("snapshot image part locator is invalid")
-        return
-    if part_type == "file":
-        if set(part) != _FILE_PART_KEYS:
-            raise ValueError("snapshot file part contains unknown fields")
-        if not isinstance(part.get("file"), str) or not Constant.Transport.FILE_LOCATOR.fullmatch(
-            part["file"]
-        ):
-            raise ValueError("snapshot file part locator is invalid")
-        if not isinstance(part.get("name"), str) or not part["name"]:
-            raise ValueError("snapshot file part name is invalid")
-        if not isinstance(part.get("contentType"), str) or not part["contentType"]:
-            raise ValueError("snapshot file part contentType is invalid")
-        return
-    if part_type == "tool-call":
-        if set(part) - _TOOL_PART_KEYS:
-            raise ValueError("snapshot tool part contains unknown fields")
-        if not isinstance(part.get("toolCallId"), str) or not isinstance(part.get("toolName"), str):
-            raise ValueError("snapshot tool identity is malformed")
-        if part.get("status") not in {
-            "pending",
-            "running",
-            "completed",
-            "failed",
-            "cancelled",
-        }:
-            raise ValueError("snapshot contains an invalid tool status")
-        if part.get("approvalRequestId") is not None:
-            raise ValueError("approval requests are not implemented")
-        if part.get("error") is not None and not isinstance(part.get("error"), str):
-            raise ValueError("snapshot tool error must be a string or null")
-        if part.get("errorCode") is not None and not isinstance(part.get("errorCode"), str):
-            raise ValueError("snapshot tool errorCode must be a string or null")
-        if part.get("isError") is not None and not isinstance(part.get("isError"), bool):
-            raise ValueError("snapshot tool isError must be a boolean")
-        if part.get("args") is not None and not isinstance(part.get("args"), dict):
-            raise ValueError("snapshot tool args must be an object")
-        if "awaitingUser" in part and not isinstance(part["awaitingUser"], bool):
-            raise ValueError("snapshot tool awaitingUser must be a boolean")
-        if part.get("display_data") is not None and not isinstance(part.get("display_data"), dict):
-            raise ValueError("snapshot tool display_data must be an object or null")
-        if part.get("team_run_id") is not None and (
-            not isinstance(part["team_run_id"], int)
-            or isinstance(part["team_run_id"], bool)
-            or part["team_run_id"] < 1
-        ):
-            raise ValueError("snapshot team_run_id must be a positive integer")
-        if "background" in part:
-            validate_background_work(part["background"])
-        if part.get("child_task_id") is not None and (
-            not isinstance(part.get("child_task_id"), int)
-            or isinstance(part.get("child_task_id"), bool)
-            or part["child_task_id"] < 1
-        ):
-            raise ValueError("snapshot child_task_id must be a positive integer")
-        if part.get("agent_role") is not None and (
-            not isinstance(part.get("agent_role"), str) or not part["agent_role"].strip()
-        ):
-            raise ValueError("snapshot agent_role must be a non-empty string")
-        if part.get("terminal_output_seq") is not None and (
-            not isinstance(part.get("terminal_output_seq"), int)
-            or isinstance(part.get("terminal_output_seq"), bool)
-            or part["terminal_output_seq"] < 0
-        ):
-            raise ValueError("snapshot terminal_output_seq must be a non-negative integer")
-        return
-    raise ValueError("snapshot contains an unknown message part")
+    if part_type == "text":
+        _validate_text_part(part)
+    elif part_type == "image":
+        _validate_image_part(part)
+    elif part_type == "file":
+        _validate_file_part(part)
+    elif part_type == "agent-message":
+        _validate_agent_message_part(part)
+    elif part_type == "tool-call":
+        _validate_tool_call_part(part)
+    else:
+        raise ValueError("snapshot contains an unknown message part")
+
+
+def _validate_text_part(part: object) -> None:
+    text_part = as_shape(part, ConversationStateTextPart, "snapshot text part")
+    require_str(text_part["text"], "snapshot text part text")
+    if "status" in text_part:
+        require_one_of(text_part["status"], _TEXT_PART_STATUSES, "snapshot text part status")
+    if "finalReply" in text_part:
+        require_bool(text_part["finalReply"], "snapshot text part finalReply")
+    if "sourceSequence" in text_part:
+        require_int(text_part["sourceSequence"], "snapshot text part sourceSequence", minimum=0)
+
+
+def _validate_image_part(part: object) -> None:
+    image_part = as_shape(part, ConversationStateImagePart, "snapshot image part")
+    require_locator(
+        image_part["image"], Constant.Transport.IMAGE_LOCATOR, "snapshot image part locator"
+    )
+
+
+def _validate_file_part(part: object) -> None:
+    file_part = as_shape(part, ConversationStateFilePart, "snapshot file part")
+    require_locator(
+        file_part["file"], Constant.Transport.FILE_LOCATOR, "snapshot file part locator"
+    )
+    require_non_empty_str(file_part["name"], "snapshot file part name")
+    require_non_empty_str(file_part["contentType"], "snapshot file part contentType")
+
+
+def _validate_agent_message_part(part: object) -> None:
+    agent_part = as_shape(part, ConversationStateAgentMessagePart, "snapshot agent message part")
+    require_non_empty_str(agent_part["id"], "snapshot agent message part id")
+    require_str(agent_part["text"], "snapshot agent message part text")
+    _validate_source(agent_part["source"])
+
+
+def _validate_tool_call_part(part: object) -> None:
+    tool_part = as_shape(part, ConversationStateToolCallPart, "snapshot tool part")
+    require_one_of(tool_part["presentation"], _TOOL_PRESENTATIONS, "snapshot tool presentation")
+    require_str(tool_part["toolCallId"], "snapshot tool toolCallId")
+    require_str(tool_part["toolName"], "snapshot tool toolName")
+    require_one_of(tool_part["status"], _TOOL_STATUSES, "snapshot tool status")
+    # 其余字段都是 NotRequired：只有出现时才校验。
+    if "error" in tool_part:
+        require_str(tool_part["error"], "snapshot tool error", nullable=True)
+    if "intent" in tool_part:
+        require_str(tool_part["intent"], "snapshot tool intent", nullable=True)
+    if "args" in tool_part:
+        require_mapping(tool_part["args"], "snapshot tool args", nullable=True)
+    if "display_data" in tool_part:
+        require_mapping(tool_part["display_data"], "snapshot tool display_data", nullable=True)
+    if "isError" in tool_part:
+        require_bool(tool_part["isError"], "snapshot tool isError")
+    if "awaitingUser" in tool_part:
+        require_bool(tool_part["awaitingUser"], "snapshot tool awaitingUser")
+    if "team_run_id" in tool_part:
+        require_int(tool_part["team_run_id"], "snapshot tool team_run_id", minimum=1)
+    if "child_task_id" in tool_part:
+        require_int(tool_part["child_task_id"], "snapshot tool child_task_id", minimum=1)
+    if "agent_role" in tool_part:
+        require_non_empty_str(tool_part["agent_role"], "snapshot tool agent_role")
+    if "terminal_output_seq" in tool_part:
+        require_int(
+            tool_part["terminal_output_seq"], "snapshot tool terminal_output_seq", minimum=0
+        )
+    if "background" in tool_part:
+        validate_background_work(tool_part["background"])

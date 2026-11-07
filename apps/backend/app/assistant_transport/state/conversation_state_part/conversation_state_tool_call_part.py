@@ -1,9 +1,12 @@
 """工具调用及其生命周期的 UI part 契约。"""
 
+# 不用 ``from __future__ import annotations``：运行期校验（``wire_shape.as_shape``）从 TypedDict 的
+# ``__required_keys__`` 读必填字段，字符串化的注解会让 ``NotRequired`` 字段被当成必填。
 from typing import Literal, NotRequired
 
 from typing_extensions import TypedDict
 
+from app.core.tool.presentation import ToolPresentation
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import BackgroundKind
 
@@ -32,10 +35,13 @@ class ConversationStateToolCallPart(TypedDict):
     type: Literal["tool-call"]
     toolCallId: str
     toolName: str
+    presentation: ToolPresentation
     status: ToolCallStatus
     args: NotRequired[dict[str, object]]
+    intent: NotRequired[str | None]
     error: NotRequired[str | None]
-    # 图标、动词与调用行标题都由前端按 ``toolName`` + ``args`` 查工具目录表得出，part 不带展示外壳。
+    # 图标、动词与调用行标题都由前端按 ``intent`` / ``toolName`` / ``args`` 查工具目录表得出，
+    # part 不带展示外壳。
     # 「等你操作」：占位行 ``pending`` 且不是后台占位（HITL 等决定、交接等交还）。只在
     # ``project_tool_result`` 一处计算，每次结果投影都显式写，决定到达、重放后清回 ``False``。
     awaitingUser: NotRequired[bool]
@@ -45,7 +51,6 @@ class ConversationStateToolCallPart(TypedDict):
     # 后台占位的工作记录：存在即后台占位，``pending`` 即「后台执行中」；投影自占位行 metadata。
     background: NotRequired[ConversationBackgroundWork]
     isError: NotRequired[bool]
-    approvalRequestId: NotRequired[None]
     # 子 Task 定位：只有委派与分叉把子 Task 提升到 part，
     # 委派行据此读应用级任务状态推送，不在展示数据里镜像子 Run 状态。
     child_task_id: NotRequired[int]

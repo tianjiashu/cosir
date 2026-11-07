@@ -10,6 +10,7 @@ from threading import RLock
 from typing import Any, ClassVar, cast
 
 from app.assistant_transport.projection.event_projection import plan_event
+from app.assistant_transport.projection.tool_presentation import presentation_catalog
 from app.assistant_transport.projection.user_input_projection import build_presentation_parts
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
@@ -38,8 +39,14 @@ from app.assistant_transport.state.message_identity import user_message_id
 from app.assistant_transport.state.snapshot_window import HistoryPage, history_page
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
+from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
-from app.core.events import RunStatusChangedEvent, ToolCallStatusChangedEvent, WorkflowEvent
+from app.core.events import (
+    RunStatusChangedEvent,
+    ToolCallCreatedEvent,
+    ToolCallStatusChangedEvent,
+    WorkflowEvent,
+)
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.workflow.message_queue.task_message import UserInputBody
 from app.models.enums.conversation_run_status import ConversationRunStatus
@@ -146,7 +153,9 @@ class ConversationTaskStateService:
                     return
                 mutation = ConversationStateMutation("set", ("queued_messages",), queued)
                 _apply_mutation(state, mutation)
-                self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,)))
+                self._publish(
+                    TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,))
+                )
         except Exception as exc:
             log.exception(
                 "queued_projection_refresh_failed",
@@ -295,7 +304,8 @@ class ConversationTaskStateService:
 
         副作用:
             先卸载该 task 的进程内快照副本，再读 canonical 三张表重建一份（终端会话列表取自
-            进程内服务）；本方法不通知 subscriber（调用方需自行 ``publish_state`` 让客户端收敛）。
+            进程内服务）；同一 Run 仍在执行时保留瞬时模型活动，重启不恢复。
+            本方法不通知 subscriber（调用方需自行 ``publish_state`` 让客户端收敛）。
 
         并发:
             全程持 ``_lock``，与投影、订阅注册与删除清理互斥。
@@ -304,7 +314,18 @@ class ConversationTaskStateService:
         with self._lock:
             self._ensure_not_deleted(task_id)
             space = task_runtime_spaces.get_or_create(task_id)
+            previous = (
+                space.get_working_snapshot(lambda: self._rebuild(task_id))["activity"]
+                if space.has_snapshot() else None
+            )
             space.unload_snapshot()
+            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            current = state["activity"]
+            if (
+                previous and current and previous["runId"] == current["runId"]
+                and current["status"] == "running"
+            ):
+                current["modelActivity"] = previous["modelActivity"]
             return self.get_state(task_id)
 
     def apply_planned(self, event: WorkflowEvent) -> TransportFrame:
@@ -318,7 +339,11 @@ class ConversationTaskStateService:
             self._ensure_not_deleted(task_id)
             space = task_runtime_spaces.get_or_create(task_id)
             state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            mutations = list(plan_event(event, state))
+            presentations = (
+                presentation_catalog(get_tool_registry())
+                if isinstance(event, ToolCallCreatedEvent) else None
+            )
+            mutations = list(plan_event(event, state, presentations))
             for mutation in mutations:
                 _apply_mutation(state, mutation)
             # 看板由工具 part 派生：只有带后台记录的事件会改变它（占位写入、并入、撤销、重启中断），
@@ -511,6 +536,7 @@ class ConversationTaskStateService:
                 task,
                 runs,
                 context_rows,
+                presentation_catalog(get_tool_registry()),
             )
             state["queued_messages"] = self._queued_messages(task_id)
             state["terminal_sessions"] = self._terminal_sessions(task_id)

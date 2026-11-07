@@ -2,19 +2,33 @@
 
 事实源是进程内的 ``TerminalSessionService``（``task_runtimes`` 各会话的 ``snapshot()``，由
 :func:`to_terminal_session` 映射成本契约的 camelCase 条目）：会话不持久化、不跨后端
-重启，所以列表不从 canonical 记录重建，只在 snapshot 物化与会话变化通知时整表读取。终端画面与输入标记
-的实时细节走每会话 WebSocket，这里只给工作台标签栏与生命周期所需的摘要；会话是否在交接中见
+重启，所以列表不从 canonical 记录重建，只在 snapshot 物化与会话变化通知时整表读取。终端画面与输入
+标记的实时细节走每会话 WebSocket，这里只给工作台标签栏与生命周期所需的摘要；会话是否在交接中见
 snapshot 顶层 ``handoffs``。
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, cast, get_args
 
 from typing_extensions import TypedDict
 
+from app.assistant_transport.state.wire_shape import (
+    as_shape,
+    require_bool,
+    require_int,
+    require_list,
+    require_non_empty_str,
+    require_one_of,
+    require_str,
+)
+
 if TYPE_CHECKING:
     from app.tools.terminal_runtime.session_runtime import SessionSnapshot
+
+TerminalSessionCreatedBy = Literal["agent", "user"]
+TerminalSessionStatus = Literal["starting", "running", "exited", "closed", "failed"]
+TerminalSessionIntegration = Literal["starting", "ready", "unavailable", "off"]
 
 
 class ConversationTerminalSession(TypedDict):
@@ -23,75 +37,61 @@ class ConversationTerminalSession(TypedDict):
     sessionId: str
     label: str
     shellKind: str
-    createdBy: Literal["agent", "user"]
-    status: Literal["starting", "running", "exited", "closed", "failed"]
+    createdBy: TerminalSessionCreatedBy
+    status: TerminalSessionStatus
     endReason: str | None
     exitCode: int | None
-    integration: Literal["starting", "ready", "unavailable", "off"]
+    integration: TerminalSessionIntegration
     # 集成跟踪到有命令正在执行（started 之后、returned 之前）；无集成时恒为 False，不代表空闲。
     commandRunning: bool
     createdAt: str
 
 
+_CREATED_BY = frozenset(get_args(TerminalSessionCreatedBy))
+_STATUSES = frozenset(get_args(TerminalSessionStatus))
+_INTEGRATIONS = frozenset(get_args(TerminalSessionIntegration))
+
+
 def to_terminal_session(session: SessionSnapshot) -> ConversationTerminalSession:
-    """把终端运行时的会话快照映射成 Transport 条目；取值枚举由 :func:`validate_terminal_sessions` 守。"""
+    """把终端运行时的会话快照映射成 Transport 条目。
 
-    return {
-        "sessionId": session.session_id,
-        "label": session.label or "",
-        "shellKind": session.shell_kind,
-        "createdBy": session.created_by,
-        "status": cast(Literal["starting", "running", "exited", "closed", "failed"], session.status),
-        "endReason": session.end_reason,
-        "exitCode": session.exit_code,
-        "integration": cast(
-            Literal["starting", "ready", "unavailable", "off"], session.integration
-        ),
-        "commandRunning": session.command_running,
-        "createdAt": session.created_at.isoformat(),
-    }
+    取值词表由 ``validate_terminal_sessions`` 守。
+    """
 
-
-TERMINAL_SESSION_KEYS = frozenset(ConversationTerminalSession.__annotations__)
-_CREATED_BY = frozenset({"agent", "user"})
-_STATUSES = frozenset({"starting", "running", "exited", "closed", "failed"})
-_INTEGRATIONS = frozenset({"starting", "ready", "unavailable", "off"})
+    return ConversationTerminalSession(
+        sessionId=session.session_id,
+        label=session.label or "",
+        shellKind=session.shell_kind,
+        createdBy=session.created_by,
+        status=cast(TerminalSessionStatus, session.status),
+        endReason=session.end_reason,
+        exitCode=session.exit_code,
+        integration=cast(TerminalSessionIntegration, session.integration),
+        commandRunning=session.command_running,
+        createdAt=session.created_at.isoformat(),
+    )
 
 
 def validate_terminal_sessions(value: object) -> None:
-    """精确校验 ``terminal_sessions``：键集合、取值枚举与会话身份唯一。
+    """精确校验 ``terminal_sessions``：字段集合、取值词表与会话身份唯一。
 
     异常:
         ValueError: 任一条目不满足契约（字段缺失或多余、取值越界、``sessionId`` 重复）。
     """
 
-    if not isinstance(value, list):
-        raise ValueError("snapshot terminal_sessions must be an array")
     seen: set[str] = set()
-    for entry in value:
-        if not isinstance(entry, dict) or set(entry) != TERMINAL_SESSION_KEYS:
-            raise ValueError("snapshot terminal session entry is invalid")
-        session_id = entry["sessionId"]
-        if not isinstance(session_id, str) or not session_id:
-            raise ValueError("terminal session sessionId must be a non-empty string")
+    for entry in require_list(value, "snapshot terminal_sessions"):
+        session = as_shape(entry, ConversationTerminalSession, "snapshot terminal session entry")
+        session_id = require_non_empty_str(session["sessionId"], "terminal session sessionId")
         if session_id in seen:
             raise ValueError("snapshot contains duplicate terminal sessionId")
         seen.add(session_id)
-        for key in ("label", "shellKind", "createdAt"):
-            if not isinstance(entry[key], str):
-                raise ValueError(f"terminal session {key} must be a string")
-        if entry["createdBy"] not in _CREATED_BY:
-            raise ValueError("terminal session createdBy is invalid")
-        if entry["status"] not in _STATUSES:
-            raise ValueError("terminal session status is invalid")
-        if entry["integration"] not in _INTEGRATIONS:
-            raise ValueError("terminal session integration is invalid")
-        if not isinstance(entry["commandRunning"], bool):
-            raise ValueError("terminal session commandRunning must be a boolean")
-        if entry["endReason"] is not None and not isinstance(entry["endReason"], str):
-            raise ValueError("terminal session endReason must be a string or null")
-        exit_code = entry["exitCode"]
-        if exit_code is not None and (
-            not isinstance(exit_code, int) or isinstance(exit_code, bool)
-        ):
-            raise ValueError("terminal session exitCode must be an integer or null")
+        require_str(session["label"], "terminal session label")
+        require_str(session["shellKind"], "terminal session shellKind")
+        require_str(session["createdAt"], "terminal session createdAt")
+        require_one_of(session["createdBy"], _CREATED_BY, "terminal session createdBy")
+        require_one_of(session["status"], _STATUSES, "terminal session status")
+        require_one_of(session["integration"], _INTEGRATIONS, "terminal session integration")
+        require_bool(session["commandRunning"], "terminal session commandRunning")
+        require_str(session["endReason"], "terminal session endReason", nullable=True)
+        require_int(session["exitCode"], "terminal session exitCode", nullable=True)

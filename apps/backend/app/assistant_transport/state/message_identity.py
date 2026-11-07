@@ -1,4 +1,4 @@
-"""Transport 消息 id 的编码规则：投影、冷重建与 fork 定位共用这一处。
+"""Transport 消息 id 的编码规则：投影、冷重建共用这一处。
 
 - 用户消息：message_queue 行 id 的字符串（排队与已并入阶段 id 不变）；
 - 用户消息之后的助手回复：``assistant-{用户消息 id}``；
@@ -6,7 +6,7 @@
   ``assistant-run-{runId}``。Run 号与消息行 id 是两个独立的整数序列，前缀不同才不会撞 id。
 """
 
-from dataclasses import dataclass
+from app.models.fork_reply import ForkReply
 
 _REPLY_PREFIX = "assistant-"
 _LEADING_PREFIX = "assistant-run-"
@@ -24,32 +24,14 @@ def leading_reply_id(run_id: int) -> str:
     return f"{_LEADING_PREFIX}{run_id}"
 
 
-@dataclass(frozen=True)
-class TurnRef:
-    """一条 wire 消息所在的「一轮」：以某条用户消息开头，或是某个 Run 开头没有用户输入的回复。
+def parse_reply_id(value: str) -> ForkReply | None:
+    """把回复的 wire id 解码成领域身份；不是回复 id 时返回 ``None``，由请求边界拒绝。"""
 
-    恰有一个字段非空。
-    """
-
-    user_message_id: int | None = None
-    leading_run_id: int | None = None
-
-
-def turn_of(wire_message_id: str) -> TurnRef:
-    """把 wire 消息 id 解析为它所在的一轮；用户消息与它的回复属于同一轮。
-
-    异常:
-        ValueError: id 不符合上述编码规则。
-    """
-
-    if wire_message_id.startswith(_LEADING_PREFIX):
-        return TurnRef(leading_run_id=_positive_int(wire_message_id[len(_LEADING_PREFIX) :]))
-    if wire_message_id.startswith(_REPLY_PREFIX):
-        return TurnRef(user_message_id=_positive_int(wire_message_id[len(_REPLY_PREFIX) :]))
-    return TurnRef(user_message_id=_positive_int(wire_message_id))
-
-
-def _positive_int(text: str) -> int:
-    if not text.isdigit() or int(text) <= 0:
-        raise ValueError(f"invalid message id: {text!r}")
-    return int(text)
+    leading = value.startswith(_LEADING_PREFIX)
+    prefix = _LEADING_PREFIX if leading else _REPLY_PREFIX
+    number = value.removeprefix(prefix)
+    if not value.startswith(prefix) or not number.isascii() or not number.isdigit():
+        return None
+    if int(number) <= 0:
+        return None
+    return ForkReply(run_id=int(number)) if leading else ForkReply(input_message_id=int(number))

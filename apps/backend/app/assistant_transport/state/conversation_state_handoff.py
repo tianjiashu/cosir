@@ -6,11 +6,18 @@
 决定。工具卡片上的交还入口不读这里（卡片状态的事实源是等待占位行），重启后登记表为空，卡片入口仍在。
 """
 
-from typing import Literal
+from typing import get_args
 
 from typing_extensions import TypedDict
 
-from app.core.tool.handoff.handoff_registry import HandoffLease
+from app.assistant_transport.state.wire_shape import (
+    as_shape,
+    require_list,
+    require_non_empty_str,
+    require_one_of,
+    require_str,
+)
+from app.core.tool.handoff.handoff_registry import HandoffLease, HandoffSurface
 
 
 class ConversationHandoff(TypedDict):
@@ -18,47 +25,44 @@ class ConversationHandoff(TypedDict):
 
     toolCallId: str
     toolName: str
-    surface: Literal["terminal", "browser"]
+    surface: HandoffSurface
     resourceId: str
     reason: str
 
 
-HANDOFF_KEYS = frozenset(ConversationHandoff.__annotations__)
-_SURFACES = frozenset({"terminal", "browser"})
+_SURFACES = frozenset(get_args(HandoffSurface))
 
 
 def project_handoff(lease: HandoffLease) -> ConversationHandoff:
-    return {
-        "toolCallId": lease.tool_call_id,
-        "toolName": lease.tool_name,
-        "surface": lease.surface,
-        "resourceId": lease.resource_id,
-        "reason": lease.reason,
-    }
+    return ConversationHandoff(
+        toolCallId=lease.tool_call_id,
+        toolName=lease.tool_name,
+        surface=lease.surface,
+        resourceId=lease.resource_id,
+        reason=lease.reason,
+    )
 
 
 def validate_handoffs(value: object) -> None:
-    """精确校验 ``handoffs``：键集合、取值枚举，调用与资源各自唯一（同一资源同一时刻至多一次交接）。
+    """精确校验 ``handoffs``：字段集合与取值词表，调用与资源各自唯一。
+
+    同一资源同一时刻至多一次交接。
 
     异常:
         ValueError: 任一条目不满足契约。
     """
 
-    if not isinstance(value, list):
-        raise ValueError("snapshot handoffs must be an array")
     calls: set[str] = set()
     resources: set[tuple[str, str]] = set()
-    for entry in value:
-        if not isinstance(entry, dict) or set(entry) != HANDOFF_KEYS:
-            raise ValueError("snapshot handoff entry is invalid")
-        if any(not isinstance(entry[key], str) for key in HANDOFF_KEYS):
-            raise ValueError("handoff fields must be strings")
-        if not entry["toolCallId"] or not entry["resourceId"]:
-            raise ValueError("handoff toolCallId and resourceId must be non-empty")
-        if entry["surface"] not in _SURFACES:
-            raise ValueError("handoff surface is invalid")
-        resource = (entry["surface"], entry["resourceId"])
-        if entry["toolCallId"] in calls or resource in resources:
+    for entry in require_list(value, "snapshot handoffs"):
+        handoff = as_shape(entry, ConversationHandoff, "snapshot handoff entry")
+        tool_call_id = require_non_empty_str(handoff["toolCallId"], "handoff toolCallId")
+        resource_id = require_non_empty_str(handoff["resourceId"], "handoff resourceId")
+        require_str(handoff["toolName"], "handoff toolName")
+        require_str(handoff["reason"], "handoff reason")
+        require_one_of(handoff["surface"], _SURFACES, "handoff surface")
+        resource = (handoff["surface"], resource_id)
+        if tool_call_id in calls or resource in resources:
             raise ValueError("snapshot contains duplicate handoffs")
-        calls.add(entry["toolCallId"])
+        calls.add(tool_call_id)
         resources.add(resource)

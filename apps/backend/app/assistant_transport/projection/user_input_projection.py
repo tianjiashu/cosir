@@ -3,14 +3,17 @@
 from collections.abc import Sequence
 from typing import cast
 
-from app.assistant_transport.projection.snapshot_navigation import message
-from app.assistant_transport.state.conversation_state_message import (
-    ConversationStateMessageSource,
+from app.assistant_transport.projection.snapshot_navigation import (
+    iter_parts,
+    last_assistant_index,
+    message,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import (
+    ConversationStateAgentMessagePart,
     ConversationStateFilePart,
     ConversationStateImagePart,
+    ConversationStateMessageSource,
     ConversationStateTextPart,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
@@ -123,6 +126,18 @@ def build_turn_input(
     return [text], {"taskId": source.task_id, "name": source.name}
 
 
+def build_agent_message_part(
+    message_id: int, presentation: UserInputPresentation, source: MessageSource
+) -> ConversationStateAgentMessagePart:
+    """途中到达的 Agent 消息；消费投影与全量重建共用。纯文本的理由同 ``build_turn_input``。"""
+    return {
+        "type": "agent-message",
+        "id": user_message_id(message_id),
+        "text": presentation.display_text,
+        "source": {"taskId": source.task_id, "name": source.name},
+    }
+
+
 def plan_input_consumed(
     event: InputConsumedEvent,
     state: ConversationStateSnapshot,
@@ -133,14 +148,29 @@ def plan_input_consumed(
     不从排队投影里取内容：排队投影只镜像队列表，确认删除之后的任何一次刷新都会刷掉这一条。
     快照在消费提交后才懒重建时，消息已从 context 重建出来，按去重跳过。连续消费多条 user 时，
     同一 Run 尚无输出的助手占位被这条 user 消息原位替换。
+
+    Agent 消息只有作为 Run 第一条输入才开回合；Run 已有回复时它是这条回复的一段（全量重建的
+    ``_run_messages`` 同一规则，由实时与冷重建的差分测试守着）。Agent 消息不进排队投影。
     """
 
     message_id = user_message_id(event.message_id)
     # 消费只发生在某个 Run 的 prepare_input 节点内，事件总带 Run 身份。
     run_id = cast(int, event.run_id)
     messages = state["messages"]
-    if any(m["id"] == message_id for m in messages):
+    if any(m["id"] == message_id for m in messages) or any(
+        part["type"] == "agent-message" and part["id"] == message_id
+        for _, part in iter_parts(state)
+    ):
         return []
+    reply_index = last_assistant_index(state, run_id)
+    if event.source is not None and reply_index is not None:
+        return [
+            ConversationStateMutation(
+                "set",
+                ("messages", reply_index, "parts", len(messages[reply_index]["parts"])),
+                build_agent_message_part(event.message_id, event.presentation, event.source),
+            )
+        ]
     insert_at = len(messages)
     last = messages[-1] if messages else None
     if (

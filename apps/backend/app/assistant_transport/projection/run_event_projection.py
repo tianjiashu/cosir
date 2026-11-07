@@ -8,6 +8,7 @@
 from collections.abc import Sequence
 from typing import cast
 
+from app.assistant_transport.projection.final_reply import is_final_reply
 from app.assistant_transport.projection.snapshot_navigation import (
     is_current_run,
     last_assistant_index,
@@ -59,8 +60,7 @@ def _merged_usage(
             current[key]
             if current is not None
             and (
-                incoming[key] is None
-                or (current[key] is not None and incoming[key] < current[key])
+                incoming[key] is None or (current[key] is not None and incoming[key] < current[key])
             )
             else incoming[key]
         )
@@ -73,11 +73,9 @@ def _outcome_path(message_index: int) -> SnapshotPath:
     return ("messages", message_index, "outcome")
 
 
-def _duration_ms(started_at: str, event: RunStatusChangedEvent) -> int | None:
-    """Run 创建到终态的毫秒数：两端都来自 Run 记录的时间戳，事件没带终态时间时为 ``None``。"""
+def _duration_ms(started_at: str, event: RunStatusChangedEvent) -> int:
+    """Run 创建到终态的毫秒数：两端都来自 Run 记录的必填时间戳。"""
 
-    if event.changed_at is None:
-        return None
     elapsed = event.changed_at - from_text(started_at)
     return max(0, int(elapsed.total_seconds() * 1000))
 
@@ -118,6 +116,7 @@ def plan_run_initialized(
             "set",
             ("activity",),
             ConversationStateActivity(
+                modelActivity=None,
                 runId=event.run_id,
                 status=ConversationRunStatus.RUNNING.value,
                 startedAt=to_text(event.created_at),
@@ -159,6 +158,26 @@ def plan_run_status_changed(
     ]
     if usage is not None:
         mutations.append(ConversationStateMutation("set", ("activity", "usage"), usage))
+    if target != "running":
+        mutations.append(ConversationStateMutation("set", ("activity", "modelActivity"), None))
+    # 只标记完成事件指向的响应；同一响应的流式文本可以分成多段。
+    for mi, message in enumerate(state["messages"]):
+        if message["runId"] != event.run_id:
+            continue
+        for pi, part in enumerate(message["parts"]):
+            if part["type"] != "text":
+                continue
+            final = (
+                event.response_sequence is not None
+                and part.get("sourceSequence") == event.response_sequence
+                and is_final_reply(target, event.end_reason, part["text"])
+            )
+            if bool(part.get("finalReply")) != final:
+                mutations.append(
+                    ConversationStateMutation(
+                        "set", ("messages", mi, "parts", pi, "finalReply"), final
+                    )
+                )
     message_index = last_assistant_index(state, event.run_id)
     if message_index is None:
         return mutations
@@ -180,7 +199,7 @@ def plan_run_status_changed(
         for part_index, part in enumerate(state["messages"][message_index]["parts"]):
             if (
                 isinstance(part, dict)
-                and part.get("type") in {"text", "reasoning"}
+                and part.get("type") == "text"
                 and part.get("status") == "running"
             ):
                 mutations.append(

@@ -1,4 +1,4 @@
-"""assistant text / reasoning part 事件到 snapshot mutation 的投影。"""
+"""assistant text part 事件到 snapshot mutation 的投影。"""
 
 from collections.abc import Sequence
 from typing import cast
@@ -27,7 +27,12 @@ def plan_assistant_text_delta(
     run_id = active_run_id(state, event.run_id)
     if run_id is None:
         return []
-    new_part = {"type": event.part, "text": event.delta, "status": "running"}
+    new_part = {
+        "type": event.part,
+        "text": event.delta,
+        "status": "running",
+        "sourceSequence": event.source_sequence,
+    }
     message_index, created = ensure_assistant(state, run_id, cast(ConversationStatePart, new_part))
     if message_index is None:
         return created
@@ -38,6 +43,7 @@ def plan_assistant_text_delta(
             isinstance(part, dict)
             and part.get("type") == event.part
             and part.get("status") == "running"
+            and part.get("sourceSequence") == event.source_sequence
         ):
             return [
                 ConversationStateMutation(
@@ -47,9 +53,7 @@ def plan_assistant_text_delta(
                 )
             ]
     return [
-        ConversationStateMutation(
-            "set", ("messages", message_index, "parts", len(parts)), new_part
-        )
+        ConversationStateMutation("set", ("messages", message_index, "parts", len(parts)), new_part)
     ]
 
 
@@ -71,6 +75,7 @@ def plan_assistant_part_closed(
             isinstance(part, dict)
             and part.get("type") == event.part
             and part.get("status") == "running"
+            and part.get("sourceSequence") == event.source_sequence
         ):
             return [
                 ConversationStateMutation(
