@@ -1,7 +1,20 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from app.models.task_kind import TaskType
 from app.models.task_record import TaskRecord
 from app.utils.datetime_utils import to_text
+
+
+class TaskResponseFork(BaseModel):
+    """侧栏只读取树关系；来源和初始配置由对话 snapshot 提供。"""
+
+    tree_parent_task_id: int | None
+
+
+class TaskResponseExtra(BaseModel):
+    """Task 附属数据的 UI 投影，不下发 Team 节点的执行配置。"""
+
+    fork: TaskResponseFork | None = None
 
 
 class TaskResponse(BaseModel):
@@ -16,8 +29,8 @@ class TaskResponse(BaseModel):
         workspace_id: 所属工作区标识。
         title: 任务标题。
         task_type: 任务类型，取值见 ``models.task_kind.TASK_KINDS``：``"user"`` 为用户创建，
-            ``"fork"`` 为历史分支（用户或 Agent fork），``"delegate_task"`` 为委派子任务，
-            ``"agent_team_node"`` 为 Team 节点。
+            ``"user_fork"`` / ``"agent_fork"`` 区分分叉发起方，``"agent_task"`` 为委派子任务，
+            ``"team_node_task"`` 为 Team 节点。
         parent_task_id: 父任务标识，委派子任务与 Team 节点有值。
         created_at: 创建时间文本。
         updated_at: 更新时间文本。
@@ -35,8 +48,8 @@ class TaskResponse(BaseModel):
     task_id: int
     workspace_id: int
     title: str
-    extra: dict[str, object] | None = None
-    task_type: str = "user"
+    extra: TaskResponseExtra = Field(default_factory=TaskResponseExtra)
+    task_type: TaskType = TaskType.USER
     parent_task_id: int | None = None
     created_at: str
     updated_at: str
@@ -68,7 +81,10 @@ class TaskResponse(BaseModel):
             task_id=record.id,
             workspace_id=record.workspace_id,
             title=record.title,
-            extra=record.extra,
+            extra=TaskResponseExtra(fork=(
+                TaskResponseFork(tree_parent_task_id=record.extra.fork.tree_parent_task_id)
+                if record.extra.fork is not None else None
+            )),
             task_type=record.task_type,
             parent_task_id=record.parent_task_id,
             created_at=to_text(record.created_at),

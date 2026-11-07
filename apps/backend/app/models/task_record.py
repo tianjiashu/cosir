@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, cast
 
+from app.models.task_extra import TaskExtra, TaskFork
+from app.models.task_kind import TaskType
 from app.storage.model.task_model import TaskModel
 from app.utils.datetime_utils import from_text, to_text
 
@@ -24,9 +26,9 @@ class TaskRecord:
     title: str
     created_at: datetime
     updated_at: datetime
-    extra: dict[str, Any] | None = None
+    extra: TaskExtra = field(default_factory=TaskExtra)
     tool_schemas: list[dict[str, Any]] = field(default_factory=list)
-    task_type: str = "user"
+    task_type: TaskType = TaskType.USER
     parent_task_id: int | None = None
     current_run_id: int | None = None
     creation_command_id: str | None = None
@@ -41,11 +43,10 @@ class TaskRecord:
         节点也不该越过 Coordinator 给主 Agent 发消息。Agent fork 不挂所有权子树，发起方记在
         ``extra.fork``；用户手动 fork 的不算。
         """
-        if self.task_type == "delegate_task":
+        if self.task_type == TaskType.AGENT_TASK:
             return self.parent_task_id
-        fork = (self.extra or {}).get("fork") or {}
-        if self.task_type == "fork" and fork.get("created_by") == "agent":
-            return cast(int, fork.get("source_task_id"))
+        if self.task_type == TaskType.AGENT_FORK:
+            return cast(TaskFork, self.extra.fork).source_task_id
         return None
 
     def derived_by(self, task_id: int) -> bool:
@@ -73,7 +74,7 @@ class TaskRecord:
             "id": self.id,
             "workspace_id": self.workspace_id,
             "title": self.title,
-            "extra": self.extra,
+            "extra": self.extra.model_dump(mode="json"),
             "task_type": self.task_type,
             "parent_task_id": self.parent_task_id,
             "current_run_id": self.current_run_id,
@@ -97,15 +98,18 @@ class TaskRecord:
         副作用:
             无。
         """
+        task_type = TaskType(row.task_type)
+        extra = TaskExtra.model_validate(row.extra or {})
+        extra.validate_task_type(task_type)
         return cls(
             id=row.id,
             workspace_id=row.workspace_id,
             title=row.title,
-            extra=row.extra,
+            extra=extra,
             tool_schemas=row.tool_schemas or [],
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
-            task_type=row.task_type,
+            task_type=task_type,
             parent_task_id=row.parent_task_id,
             current_run_id=row.current_run_id,
             creation_command_id=row.creation_command_id,
@@ -118,7 +122,7 @@ class TaskRecord:
         model_kwargs: dict[str, object] = {
             "workspace_id": self.workspace_id,
             "title": self.title,
-            "extra": self.extra,
+            "extra": self.extra.model_dump(mode="json"),
             "tool_schemas": self.tool_schemas or [],
             "task_type": self.task_type,
             "parent_task_id": self.parent_task_id,
