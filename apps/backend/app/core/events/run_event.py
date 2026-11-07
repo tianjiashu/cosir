@@ -58,8 +58,7 @@ class RunStatusChangedEvent(WorkflowEventEnvelope):
         error: Run 终态的错误契约（稳定 ``code`` + UI 展示 ``message``）；模型 HTTP 失败时
             ``message`` 可直接来自响应体；非终态迁移与 ``completed`` 为 ``None``。
         changed_at: 迁移落库的时间，由领域侧从更新后的记录（``updated_at``）填入；终态时与
-            ``activity.startedAt`` 相减得到结局的 ``durationMs``。投影器不读墙钟：缺省时结局耗时
-            为 ``None``。
+            ``activity.startedAt`` 相减得到结局的 ``durationMs``。时间必填，投影器不读墙钟。
 
     异常:
         pydantic.ValidationError: ``status`` 不在枚举内，或出现未声明字段时抛出。
@@ -70,7 +69,9 @@ class RunStatusChangedEvent(WorkflowEventEnvelope):
     end_reason: str | None = None
     usage_stats: ConversationRunUsageStats | None = None
     error: ConversationRunError | None = None
-    changed_at: datetime | None = None
+    changed_at: datetime
+    # 已提交的最终模型响应身份，仅用于事件投影，不另存 Run 字段。
+    response_sequence: int | None = None
 
 
 class RunResultUpdatedEvent(WorkflowEventEnvelope):

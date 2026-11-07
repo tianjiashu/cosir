@@ -602,7 +602,13 @@ class SystemPromptBuilder:
                 "- Links: write workspace files as Markdown links with workspace-relative paths, "
                 "and put line numbers in the fragment, e.g. `[app.ts:42](src/app.ts#L42)` or "
                 "`[app.ts](src/app.ts#L42-L60)`; end directory paths with `/`. The user can click "
-                "them to open the file at that line. Web URLs are clickable as usual."
+                "them to open the file at that line. A short label must retain the complete "
+                "workspace-relative destination, e.g. `[API.md](docs/brand/API.md)`. "
+                "Do not guess a path from a bare filename: locate it first when a link is needed. "
+                "Use ordinary Markdown file links in replies, including when referring to a "
+                "user-provided snippet; they open the current file, not the saved snippet. "
+                "URL-encode special characters in destinations (such as spaces, % and #). "
+                "Web URLs are clickable as usual."
             ),
             (
                 f"- User language: {language}. Reply in that language in a friendly tone; do "

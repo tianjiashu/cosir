@@ -13,6 +13,7 @@ from openai.lib.streaming.chat import ParsedChatCompletionSnapshot
 from openai.types.chat import (
     ChatCompletionMessageFunctionToolCallParam,
     ChatCompletionMessageParam,
+    ParsedFunctionToolCall,
 )
 from sqlalchemy.orm import Session
 
@@ -76,6 +77,9 @@ class RuntimeMessageContextManager:
     # 当前模型调用正在流式写入的响应行身份（``include_in_context`` 仍为 False）。
     # 只用于「同一次调用持续替换同一行」；提交或开始下一次调用即清空。
     _draft_response: ContextEntry | None = field(default=None, init=False)
+    # Task 内已用的调用 id，与本次响应按 SDK 位置冻结的规范 id（生命周期同 ``_draft_response``）。
+    _used_call_ids: set[str] = field(default_factory=set, init=False)
+    _response_call_ids: dict[int, str] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         """恢复 Task 固定系统提示词；其余消息由 :meth:`begin_run` 加载。
@@ -107,6 +111,8 @@ class RuntimeMessageContextManager:
         self.current_run_id = run.id
         # 草稿行属于上一个 Run 的调用栈，绑定新 Run 时不得沿用到本次调用。
         self._draft_response = None
+        self._response_call_ids = {}
+        self._used_call_ids = self.context_store.tool_call_ids(self.current_task_id)
         entries = self.context_store.entries_in_context(self.current_task_id)
         self._entries = [
             entry for entry in entries if entry.sequence != TASK_SYSTEM_PROMPT_SEQUENCE
@@ -243,14 +249,16 @@ class RuntimeMessageContextManager:
         self._track(entry, in_context=include_in_context)
         return entry
 
-    def find_tool_call(self, tool_call_id: str) -> ChatCompletionMessageFunctionToolCallParam | None:
+    def find_tool_call(
+        self, tool_call_id: str
+    ) -> ChatCompletionMessageFunctionToolCallParam | None:
         """在纳入上下文的 assistant 消息里按身份找回一次工具调用（含名称与原始参数）。
 
         跨 Run 查找：HITL 调用可能在早先的 Run 里发起，决定在之后的 Run 才到。找不到（如已被
         编辑重跑移出上下文）时返回 ``None``，由调用方决定如何告知模型。
         """
         for entry in reversed(self._entries):
-            if entry.message["role"] != "assistant":
+            if entry.run_id is None or entry.message["role"] != "assistant":
                 continue
             for call in entry.message.get("tool_calls") or ():
                 if call["id"] == tool_call_id and call["type"] == "function":
@@ -260,7 +268,11 @@ class RuntimeMessageContextManager:
     def tool_result_metadata(self, tool_call_id: str) -> ToolMessageMetadata | None:
         """按调用身份取工具结果行的展示 metadata（跨 Run）；没有结果行时返回 ``None``。"""
         for entry in reversed(self._entries):
-            if entry.message["role"] == "tool" and entry.message["tool_call_id"] == tool_call_id:
+            if (
+                entry.run_id is not None
+                and entry.message["role"] == "tool"
+                and entry.message["tool_call_id"] == tool_call_id
+            ):
                 metadata = entry.metadata
                 return metadata if isinstance(metadata, ToolMessageMetadata) else None
         return None
@@ -271,7 +283,7 @@ class RuntimeMessageContextManager:
         """只替换一条工具结果行的展示 metadata，模型可见正文不变；返回实际写入的 metadata。
 
         HITL 执行结果另行追加为消息，等待占位仍是模型协议上的结果；这里只把占位的卡片状态推到
-        终态，历史前缀因此不变。卡片是否可见（``hidden``）沿用原行，不随结果改变；结果没有带
+        终态，历史前缀因此不变。结果没有带
         展示数据时沿用占位的（HITL 卡片由占位的展示数据决定，如 Agent Team 的方案预览）。传入
         ``session`` 时加入调用方事务（接收决定时与确认同一事务把占位推到 ``running``）。
 
@@ -282,7 +294,9 @@ class RuntimeMessageContextManager:
             (
                 item
                 for item in reversed(self._entries)
-                if item.message["role"] == "tool" and item.message["tool_call_id"] == tool_call_id
+                if item.run_id is not None
+                and item.message["role"] == "tool"
+                and item.message["tool_call_id"] == tool_call_id
             ),
             None,
         )
@@ -296,7 +310,6 @@ class RuntimeMessageContextManager:
                 error=metadata.error,
                 display_data=metadata.display_data or previous.display_data,
                 team_run_id=metadata.team_run_id or previous.team_run_id,
-                hidden=previous.hidden,
                 background=metadata.background or previous.background,
             )
         self.context_store.replace_message(
@@ -331,6 +344,7 @@ class RuntimeMessageContextManager:
         因此不会出现「下一次调用沿用中断行身份」的情况。
         """
         choice = snapshot.choices[0]
+        self._freeze_tool_call_ids(choice.message.tool_calls or [])
         message = assistant_message(choice.message, registered_tool_names)
         metadata = AssistantMessageMetadata(
             completion_id=snapshot.id,
@@ -347,7 +361,9 @@ class RuntimeMessageContextManager:
                 metadata,
             )
             # ``_append_message`` 已按准入决定写 working copy；只有未提交时需留身份供下一帧替换。
-            if not include_in_context:
+            if include_in_context:
+                self._response_call_ids = {}
+            else:
                 self._draft_response = entry
             return entry
         self.context_store.replace_message(
@@ -367,11 +383,39 @@ class RuntimeMessageContextManager:
             # 提交进模型上下文即本次调用结束：清空草稿身份，下一次调用新起一行。
             self._track(draft, in_context=True)
             self._draft_response = None
+            self._response_call_ids = {}
         return draft
+
+    def _freeze_tool_call_ids(self, calls: list[ParsedFunctionToolCall]) -> None:
+        """就地把快照里的调用 id 改成 Task 内唯一的规范 id，全部下游都从这里读到同一份身份。
+
+        决定、取消、占位结算、看板和前端开合都按 id 寻址，而厂商可能跨响应甚至在同一响应里重复
+        id。只在冲突时改写：表现正常的厂商字节不变（Kimi K2 等依赖自己的 id 形状，且会模仿历史
+        里的 id）。改写发生在首次回传模型之前，之后历史不再变化，不破坏前缀缓存。后缀只用
+        ``_`` 与数字：部分网关的 id 只接受 ``[A-Za-z0-9_-]``，改写出非法 id 后每次请求都会被拒。
+
+        身份按 SDK 位置冻结：id 首次出现后不再跟随后续分片，顺带挡住每片重发 id 的厂商（SDK
+        会把它拼成 ``call_0call_0``）。
+        """
+        for position, call in enumerate(calls):
+            # SDK 草稿用 model_construct 构造，字段可能尚未齐全；这是第三方输入边界。
+            raw = getattr(call, "id", None)
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            canonical = self._response_call_ids.get(position)
+            if canonical is None:
+                canonical, suffix = raw, 1
+                while canonical in self._used_call_ids:
+                    suffix += 1
+                    canonical = f"{raw}_{suffix}"
+                self._used_call_ids.add(canonical)
+                self._response_call_ids[position] = canonical
+            call.id = canonical
 
     def abandon_model_response(self) -> None:
         """结束未准入的响应草稿；保留数据库展示行，下一次模型请求使用新消息身份。"""
         self._draft_response = None
+        self._response_call_ids = {}
 
     def _log_protocol_error(self, error: ContextProtocolError) -> None:
         """记录可定位的上下文完整性错误，不泄露工具正文到 UI 错误通道。"""

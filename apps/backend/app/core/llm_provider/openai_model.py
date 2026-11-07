@@ -67,7 +67,7 @@ class OpenAIChatModel:
         """流式推理使用构建期工具，产出 SDK chunk 事件与聚合快照。
 
         SDK 内部快照可变；产出前复制，使调用方可以跨迭代保留快照。不启用 SDK 自动
-        结构化解析，不改写 provider 的调用身份；完整工具调用由业务准入处理。
+        结构化解析；调用身份的规范化归 context 的持久化入口，完整工具调用由业务准入处理。
         """
         state = ChatCompletionStreamState()
         stream = await self.client.chat.completions.create(
