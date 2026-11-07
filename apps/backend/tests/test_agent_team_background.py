@@ -45,7 +45,7 @@ class ReviewModel:
         elif not self.proposed:
             self.proposed = True
             args = {
-                "team_id": "review", "goal": "review",
+                "intent": "启动审查团队", "team_id": "review", "goal": "review",
                 "node_goals": [{"node_id": node_id, **GOAL} for node_id in ("a", "b")],
             }
             frames = sdk_events([{"tool_calls": [{

@@ -10,6 +10,7 @@ from app.core.context.context_store import ContextStore
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
 from app.service.depends import get_conversation_task_context_service
+from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
@@ -26,6 +27,7 @@ def _user(text: str) -> UserMessageMetadata:
 def task(isolated_storage, tmp_path):
     workspace = WorkspaceCrud().create("rerun", str(tmp_path))
     task = TaskCrud().create(workspace.id, "rerun", tool_schemas=[])
+    run = ConversationRunCrud().create(task.id, status="completed")
     store = ContextStore()
     rows = [
         ({"role": "user", "content": "first"}, _user("first"), 11),
@@ -36,8 +38,8 @@ def task(isolated_storage, tmp_path):
         ({"role": "user", "content": "<system_notice/>"}, UserMessageMetadata(kind="notice"), 13),
     ]
     for sequence, (message, metadata, message_id) in enumerate(rows, start=1):
-        store.append(task.id, None, message, sequence, metadata=metadata, message_id=message_id)
-    return SimpleNamespace(id=task.id)
+        store.append(task.id, run.id, message, sequence, metadata=metadata, message_id=message_id)
+    return SimpleNamespace(id=task.id, run_id=run.id)
 
 
 def test_latest_user_input_skips_other_user_role_messages(task) -> None:
@@ -51,7 +53,7 @@ def test_latest_input_from_an_agent_is_not_an_edit_target(task) -> None:
     """最新一轮由 Agent 消息开启时没有可编辑目标：越过它改更早的用户输入会把它那一轮一起撤回。"""
     ContextStore().append(
         task.id,
-        None,
+        task.run_id,
         {"role": "user", "content": "<agent_message/>"},
         6,
         metadata=UserMessageMetadata(
@@ -85,6 +87,7 @@ def test_exclude_from_keeps_late_results_of_earlier_calls(isolated_storage, tmp_
     """撤回一轮只撤回它自己：更早调用在这一轮才并入的结果保留，返回这一轮发起的调用。"""
     workspace = WorkspaceCrud().create("rerun", str(tmp_path))
     task = TaskCrud().create(workspace.id, "rerun", tool_schemas=[])
+    run = ConversationRunCrud().create(task.id, status="completed")
     store = ContextStore()
 
     def call(call_id: str) -> dict[str, object]:
@@ -116,7 +119,7 @@ def test_exclude_from_keeps_late_results_of_earlier_calls(isolated_storage, tmp_
         ({"role": "user", "content": "late done"}, result_of("call-late"), None),
     ]
     for sequence, (message, metadata, message_id) in enumerate(rows, start=1):
-        store.append(task.id, None, message, sequence, metadata=metadata, message_id=message_id)
+        store.append(task.id, run.id, message, sequence, metadata=metadata, message_id=message_id)
 
     with main_session_factory().begin() as session:
         withdrawn = get_conversation_task_context_service().exclude_from(task.id, 4, session)

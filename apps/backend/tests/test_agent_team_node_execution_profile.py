@@ -25,9 +25,10 @@ from unittest.mock import patch
 
 import pytest
 
+from app.models.task_extra import TaskExtra, TaskNodeConfig
 from app.core.agents import agent_runtime_config as runtime_config_module
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
-from app.core.agents.agent_runtime_config import NODE_SNAPSHOT_KEY, AgentRuntimeConfig
+from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.tool.multi_agent.agent_team import agent_team_preparation_service as prep_module
@@ -141,7 +142,7 @@ def _node_run_profile(
 
     task = SimpleNamespace(
         workspace_id=1,
-        extra={NODE_SNAPSHOT_KEY: node_runtime.model_dump(mode="json")},
+        extra=TaskExtra(team_node=TaskNodeConfig(role=node_runtime.role, system_prompt=node_runtime.system_prompt, structured_output=node_runtime.structured_output, model_settings=node_runtime.model_settings)),
         # 节点 Task 固化的 schema 就是快照冻结的工具名（Coordinator 建节点时解析）。
         tool_schemas=[{"name": name} for name in node_runtime.allowed_tools],
     )

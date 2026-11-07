@@ -443,6 +443,7 @@ def test_cancelled_run_resume_status_is_projected(
     _start(event_projector)
     event_projector.process(
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=1,
             run_id=1,
             status=ConversationRunStatus.CANCELLED,
@@ -452,7 +453,7 @@ def test_cancelled_run_resume_status_is_projected(
     assert _run(snapshots.states[1], 1)["status"] == "cancelled"
 
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
     )
 
     resumed = _run(snapshots.states[1], 1)
@@ -470,10 +471,10 @@ def test_completed_run_rejects_reviving_status_event() -> None:
     event_projector = ConversationEventProjector(snapshots)
     _start(event_projector)
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
     )
 
     assert _run(snapshots.states[1], 1)["status"] == "completed"
@@ -488,6 +489,7 @@ def test_tool_part_is_created_after_run_resume(
     _start(event_projector)
     event_projector.process(
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=1,
             run_id=1,
             status=ConversationRunStatus.CANCELLED,
@@ -495,7 +497,7 @@ def test_tool_part_is_created_after_run_resume(
         )
     )
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
     )
 
     event_projector.process(
@@ -550,10 +552,11 @@ def test_run_status_usage_is_projected(
     event_projector, snapshots = projector
     _start(event_projector, context_window_total=100)
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
     )
     event_projector.process(
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=1,
             run_id=1,
             status=ConversationRunStatus.COMPLETED,
@@ -575,10 +578,11 @@ def test_terminal_usage_is_projected(
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
     )
     event_projector.process(
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=1,
             run_id=1,
             status=ConversationRunStatus.COMPLETED,
@@ -596,10 +600,11 @@ def test_new_run_clears_previous_run_usage(
     event_projector, snapshots = projector
     _start(event_projector, context_window_total=100)
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
     )
     event_projector.process(
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=1,
             run_id=1,
             status=ConversationRunStatus.COMPLETED,
@@ -623,14 +628,14 @@ def test_late_previous_run_events_cannot_overwrite_current_run(
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
     )
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
     event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.FAILED)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.FAILED)
     )
     state = snapshots.states[1]
     assert _run(state, 2)["status"] == "running"
@@ -646,10 +651,10 @@ def test_structured_result_updates_completed_run_without_status_transition(
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
     )
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
     event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
     change = event_projector.process(
@@ -673,10 +678,11 @@ def test_historical_run_status_event_updates_its_own_run(
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
     )
     event_projector.process(
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=1,
             run_id=1,
             status=ConversationRunStatus.COMPLETED,
@@ -685,6 +691,7 @@ def test_historical_run_status_event_updates_its_own_run(
     event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
     change = event_projector.process(
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=1,
             run_id=1,
             status=ConversationRunStatus.COMPLETED,
@@ -708,6 +715,7 @@ def test_unknown_run_event_raises_and_is_not_projected(
     event_projector, snapshots = projector
     change = event_projector.process(
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=1,
             run_id=404,
             status=ConversationRunStatus.COMPLETED,
@@ -724,17 +732,17 @@ def test_late_run_initialization_cannot_rewind_terminal_newer_run(
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
     )
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
     event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=2, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=2, status=ConversationRunStatus.RUNNING)
     )
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=2, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=2, status=ConversationRunStatus.COMPLETED)
     )
     event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=1))
     assert _run(snapshots.states[1], 2)["status"] == "completed"
@@ -911,7 +919,7 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
-        lambda: RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.RUNNING),
+        lambda: RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING),
     )
     _assert_reapply_changes_nothing(
         event_projector,
@@ -982,7 +990,7 @@ def _finish(
         else ConversationRunUsageStats(input_tokens=1, output_tokens=1, total_tokens=total_tokens)
     )
     projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=run_id, status=status, usage_stats=usage)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=run_id, status=status, usage_stats=usage)
     )
 
 
@@ -1069,7 +1077,7 @@ def test_late_events_of_previous_run_only_update_its_outcome(
     activity_before = copy.deepcopy(snapshots.states[1]["activity"])
 
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
     event_projector.process(
         RunResultUpdatedEvent(
@@ -1098,6 +1106,7 @@ def test_run_events_never_write_top_level_error(
     failure = {"code": "model_network_error", "message": "无法连接模型服务"}
     change = event_projector.process(
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=1, run_id=1, status=ConversationRunStatus.FAILED, error=failure
         )
     )
@@ -1156,7 +1165,37 @@ def test_run_events_publish_the_task_execution_status(
     _init_run(event_projector)
     _append_user_input(event_projector)
     event_projector.process(
-        RunStatusChangedEvent(task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
 
     assert published == [1, 1]
+
+
+def test_terminal_duration_is_derived_from_required_committed_time(projector) -> None:
+    """真实时间进入结局；损坏快照的空耗时必须在边界暴露。"""
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event_projector.process(RunStatusChangedEvent(
+        task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED,
+        changed_at=datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+    ))
+    state = snapshots.get_state(1)
+    assert state["messages"][-1]["outcome"]["durationMs"] == 2000
+    state["messages"][-1]["outcome"]["durationMs"] = None
+    with pytest.raises(ValueError, match="durationMs"):
+        validate_snapshot(state)
+
+
+def test_snapshot_rejects_removed_approval_placeholder(projector) -> None:
+    """废弃字段即使值为 null，也不再进入当前协议。"""
+    event_projector, snapshots = projector
+    _start(event_projector)
+    event_projector.process(ToolCallCreatedEvent(
+        task_id=1, run_id=1, tool_call_id="obsolete", tool_name="read_file",
+    ))
+    state = snapshots.get_state(1)
+    part = state["messages"][-1]["parts"][-1]
+    assert "approvalRequestId" not in part
+    part["approvalRequestId"] = None
+    with pytest.raises(ValueError, match="unknown fields"):
+        validate_snapshot(state)

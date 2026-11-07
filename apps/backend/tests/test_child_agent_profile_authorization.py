@@ -32,7 +32,7 @@ async def test_send_message_rejects_main_profile_before_creating_run(
                 id=task_id,
                 title="子任务",
                 derived_by=lambda task_id: task_id == 7,
-                task_type="delegate_task",
+                task_type="agent_task",
                 parent_task_id=7,
                 workspace_id=3,
                 current_run_id=11,
@@ -87,7 +87,7 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
         id=41,
         title="前端部分",
         derived_by=lambda task_id: task_id == 7,
-        task_type="fork",
+        task_type="agent_fork",
         workspace_id=3,
         current_run_id=11,
     )

@@ -146,7 +146,7 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
                     "error": None,
                     "usage": None,
                     "contextWindowTotal": None,
-                    "durationMs": None,
+                    "durationMs": 0,
                 },
                 "source": None,
             }
@@ -178,7 +178,7 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
                     "error": None,
                     "usage": None,
                     "contextWindowTotal": None,
-                    "durationMs": None,
+                    "durationMs": 0,
                 },
                 "source": None,
             }
@@ -319,7 +319,7 @@ def test_rebuild_restores_child_task_locator_and_workspace_role_from_display_dat
 
     tool_part = ConversationTaskStateRebuilder.build_pair_tool_part(
         [row, result_row],
-    )["delegate-1"]
+    )[(1, "delegate-1")]
 
     assert tool_part["child_task_id"] == 22
     assert tool_part["agent_role"] == "workspace-reviewer"

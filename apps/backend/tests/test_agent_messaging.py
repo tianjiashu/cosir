@@ -10,6 +10,8 @@ from typing import Any
 
 import pytest
 
+from tests.task_extra_fixtures import fork_extra
+from app.models.task_extra import TaskExtra
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.multi_agent import send_message
 from app.core.tool.schemas import ToolExecutionContext
@@ -35,7 +37,7 @@ def _task(task_id: int, **fields: Any) -> TaskRecord:
 
 _TASKS = {
     _PARENT: _task(_PARENT),
-    _CHILD: _task(_CHILD, task_type="delegate_task", parent_task_id=_PARENT),
+    _CHILD: _task(_CHILD, task_type="agent_task", parent_task_id=_PARENT),
 }
 
 
@@ -123,7 +125,7 @@ def test_question_and_explicit_reply_are_two_ordinary_messages(env, tmp_path) ->
 
 
 def test_peers_can_send_but_team_self_and_other_workspace_are_refused(env, tmp_path, monkeypatch) -> None:
-    for task in (_task(21, task_type="agent_team_node", parent_task_id=_PARENT),
+    for task in (_task(21, task_type="team_node_task", parent_task_id=_PARENT),
                  _task(22), _task(23, workspace_id=2)):
         monkeypatch.setitem(_TASKS, task.id, task)
     assert _send(22, _CHILD, "news", tmp_path).status == "success"
@@ -154,12 +156,50 @@ def test_target_without_first_run_inherits_its_queued_launch(env, tmp_path, monk
 @pytest.mark.parametrize(
     ("fields", "deriver"),
     [
-        ({"task_type": "delegate_task", "parent_task_id": 7}, 7),
-        ({"task_type": "fork", "extra": {"fork": {"source_task_id": 7, "created_by": "agent"}}}, 7),
-        ({"task_type": "fork", "extra": {"fork": {"source_task_id": 7}}}, None),
-        ({"task_type": "agent_team_node", "parent_task_id": 7}, None),
+        ({"task_type": "agent_task", "parent_task_id": 7}, 7),
+        ({"task_type": "agent_fork", "extra": fork_extra(7)}, 7),
+        ({"task_type": "user_fork", "extra": fork_extra(7)}, None),
+        ({"task_type": "team_node_task", "parent_task_id": 7}, None),
         ({"task_type": "user"}, None),
     ],
 )
 def test_deriver_is_only_the_agent_that_delegated_or_forked(fields, deriver) -> None:
     assert _task(30, **fields).deriver_id() == deriver
+
+
+def test_new_manual_fork_uses_frozen_launch_without_source_task(env, tmp_path, monkeypatch):
+    target = _task(51, task_type="user_fork", current_run_id=None,
+                   extra=fork_extra(987654, model_config_id=8))
+    monkeypatch.setitem(_TASKS, 51, target)
+    monkeypatch.setattr(send_message, "get_task_message_queue",
+                        lambda: SimpleNamespace(pending_nowait=lambda _: []))
+    assert _send(_PARENT, 51, "continue the branch", tmp_path).status == "success"
+    assert env.prepared[-1]["model_config_id"] == 8
+    assert env.prepared[-1]["reasoning_effort"] == "low"
+
+
+def test_deleted_fork_model_is_rejected_before_enqueue(env, isolated_storage, tmp_path, monkeypatch):
+    """Real model deletion + send_message preparation: a frozen ID never bypasses admission."""
+    from app.core.tool.multi_agent.agent_message import prepare_agent_message
+    from app.storage.crud.model_config_crud import ModelConfigCrud
+    from app.storage.crud.task_crud import TaskCrud
+    from app.storage.crud.workspace_crud import WorkspaceCrud
+    from app.models.task_kind import TaskType
+
+    configs = ModelConfigCrud()
+    model = configs.create(config_name="fork", base_url="http://localhost", api_key="test",
+                           model_name="test", context_window_k=8, supports_reasoning_effort=True)
+    workspace = WorkspaceCrud().create("review", str(tmp_path))
+    target = TaskCrud().create(workspace.id, "branch", task_type=TaskType.USER_FORK,
+                               extra=fork_extra(_PARENT, model_config_id=model.id))
+    monkeypatch.setitem(_TASKS, target.id, target)
+    monkeypatch.setattr(send_message, "get_task_message_queue",
+                        lambda: SimpleNamespace(pending_nowait=lambda _: []))
+    # Keep the real preparation and its single model-validation boundary.
+    monkeypatch.setattr(send_message, "prepare_agent_message", prepare_agent_message)
+    configs.delete(model.id)
+    result = _send(_PARENT, target.id, "continue", tmp_path)
+    assert result.status == "error"
+    assert "重新选择模型" in result.content
+    assert not env.enqueued and not env.delivered
+    assert TaskCrud().get(target.id).extra.fork.initial_launch.model_config_id == model.id

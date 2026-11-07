@@ -22,7 +22,6 @@ from app.core.workflow.node_helper import tool_observation_projection as project
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
 from app.service import depends
-from app.service.conversation_run.conversation_task_context_service import _uninherited
 
 _WORK = BackgroundWork(
     run_id=1, kind="terminal_command", label="make", started_at="2026-01-01T00:00:00+00:00"
@@ -88,20 +87,6 @@ def test_settlement_filters_by_call(stored) -> None:
     empty = cancel_placeholders(stored.task_id, [], None)
     assert other == empty == frozenset()
     assert _metadata(stored, "call-bg").status == "pending"
-
-
-def test_fork_marks_waiting_background_placeholders_uninherited() -> None:
-    waiting = ToolMessageMetadata(status="pending", background=_WORK)
-    copied = _uninherited(waiting)
-    assert (copied.status, copied.error) == ("cancelled", "未继承")
-    assert waiting.status == "pending"  # 源 Task 的行不受影响
-    assert waiting.background.ended_at is None
-    assert copied.background.started_at == _WORK.started_at
-    assert copied.background.ended_at is not None
-    finished = ToolMessageMetadata(status="completed", background=_FINISHED_WORK)
-    assert _uninherited(finished).background == _FINISHED_WORK
-    hitl = ToolMessageMetadata(status="pending")
-    assert _uninherited(hitl).status == "pending"
 
 
 def test_terminal_event_keeps_background_placeholders_pending() -> None:

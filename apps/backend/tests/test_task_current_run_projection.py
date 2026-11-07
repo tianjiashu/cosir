@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.orm import sessionmaker
 
+from tests.task_extra_fixtures import fork_extra
+from app.models.task_extra import TaskExtra
 from app.api.tasks_api import get_task
 from app.api.workspaces_api import list_workspace_tasks
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
@@ -39,7 +41,7 @@ def store(tmp_path):
 
 @pytest.mark.parametrize("status", ["running", "suspended", "completed", "failed", "cancelled"])
 def test_status_follows_the_current_pointer_not_the_latest_run(store, status):
-    task = store.tasks.create(store.workspace.id, "子任务", task_type="delegate_task")
+    task = store.tasks.create(store.workspace.id, "子任务", task_type="agent_task")
     current = store.runs.create(task.id, status=status)
     store.runs.create(task.id, status="completed")
     store.tasks.set_current_run_id(task.id, current.id)
@@ -64,12 +66,13 @@ def test_status_is_read_fresh(store):
 
 
 def test_task_responses_carry_no_execution_state(store):
-    for kind in ("user", "fork", "delegate_task"):
-        task = store.tasks.create(store.workspace.id, kind, task_type=kind)
+    for kind in ("user", "user_fork", "agent_fork", "agent_task"):
+        task = store.tasks.create(store.workspace.id, kind, task_type=kind,
+                                  extra=fork_extra(987) if kind.endswith("_fork") else TaskExtra())
         run = store.runs.create(task.id, status="suspended")
         store.tasks.set_current_run_id(task.id, run.id)
     records = asyncio.run(list_workspace_tasks(store.workspace.id, store.service))
-    assert {record.task_type for record in records} == {"user", "fork"}
+    assert {record.task_type for record in records} == {"user", "user_fork", "agent_fork"}
     # 当前 Run 指针是后端内部事实；执行状态只经状态推送下发。二者都不进 Task 响应。
     for response in [*records, asyncio.run(get_task(task.id, store.service))]:
         dumped = response.model_dump()

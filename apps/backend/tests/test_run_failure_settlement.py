@@ -19,6 +19,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from collections.abc import Awaitable
 from types import SimpleNamespace
 from typing import cast
@@ -308,6 +310,7 @@ def test_status_changed_event_projects_controlled_error() -> None:
 
     state = _running_state()
     event = RunStatusChangedEvent(
+        changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
         task_id=7,
         run_id=1,
         status=ConversationRunStatus.FAILED,
@@ -334,7 +337,7 @@ def test_non_terminal_transition_clears_previous_error() -> None:
         "code": _QUOTA_CODE,
         "message": run_failure_message(_QUOTA_CODE),
     }
-    event = RunStatusChangedEvent(task_id=7, run_id=1, status=ConversationRunStatus.RUNNING)
+    event = RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=1, status=ConversationRunStatus.RUNNING)
 
     assert _error_mutation_values(state, event) == [None]
 

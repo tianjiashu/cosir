@@ -58,6 +58,7 @@ def test_live_and_rebuild_agree(status, reason, content, expected):
     apply(
         state,
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=7,
             run_id=1,
             status=ConversationRunStatus(status),
@@ -115,6 +116,7 @@ def test_all_text_parts_from_final_response_marked_and_structured_result_does_no
     apply(
         state,
         RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=7,
             run_id=1,
             status=ConversationRunStatus.COMPLETED,

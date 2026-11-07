@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from app.models.task_extra import TaskExtra
 from app.assistant_transport.service import transport_assistant_service as service_module
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core import task_actor as actor_module
@@ -119,7 +120,7 @@ class _Ledger:
         return []
 
     def get_task(self, task_id: int) -> SimpleNamespace:
-        return SimpleNamespace(id=task_id)
+        return SimpleNamespace(id=task_id, extra=TaskExtra())
 
 
 class _Driver:

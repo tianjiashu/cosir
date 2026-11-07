@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
+from tests.task_extra_fixtures import fork_extra, node_extra
 from app.api.tasks_api import delete_task as delete_task_endpoint
 from app.api.workspaces_api import delete_workspace as delete_workspace_endpoint
 from app.models.conversation_input import UserInputPresentation
@@ -78,20 +79,21 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
     child = get_task_crud().create(
         workspace.id,
         "child",
-        task_type="delegate_task",
+        task_type="agent_task",
         parent_task_id=root.id,
     )
     # Team 节点与委派子 Task 同样挂在 parent_task_id 下；嵌套一层验证后序删除。
     team_node = get_task_crud().create(
         workspace.id,
         "team node",
-        task_type="agent_team_node",
+        task_type="team_node_task",
+        extra=node_extra(),
         parent_task_id=root.id,
     )
     nested = get_task_crud().create(
         workspace.id,
         "nested",
-        task_type="delegate_task",
+        task_type="agent_task",
         parent_task_id=team_node.id,
     )
     get_conversation_run_crud().create(team_node.id, status="completed")
@@ -165,7 +167,7 @@ def test_task_delete_rolls_back_all_rows_when_tree_delete_fails(
     child = get_task_crud().create(
         workspace.id,
         "child",
-        task_type="delegate_task",
+        task_type="agent_task",
         parent_task_id=root.id,
     )
     get_conversation_run_crud().create(root.id, status="completed")
@@ -219,7 +221,7 @@ def test_task_delete_recollects_children_inside_write_transaction(
         child = service.get_or_create_task(
             workspace.id,
             "created-between-tree-read-and-transaction",
-            task_type="delegate_task",
+            task_type="agent_task",
             parent_task_id=root.id,
         )
         created.append(child.id)
@@ -476,13 +478,13 @@ def _fork(workspace_id: int, source_id: int) -> int:
     return get_task_crud().create(
         workspace_id,
         f"fork of {source_id}",
-        task_type="fork",
-        extra={"fork": {"source_task_id": source_id, "source_message_id": "m"}},
+        task_type="user_fork",
+        extra=fork_extra(source_id),
     ).id
 
 
 def _fork_source(task_id: int) -> object:
-    return (get_task_crud().get(task_id).extra or {})["fork"].get("source_task_id")
+    return get_task_crud().get(task_id).extra.fork.tree_parent_task_id
 
 
 def test_deleting_a_fork_reparents_its_forks_to_its_source(storage, tmp_path) -> None:
@@ -504,7 +506,7 @@ def test_deleting_a_root_keeps_its_forks_as_roots(storage, tmp_path) -> None:
     workspace = get_workspace_crud().create("roots", str(tmp_path))
     a = get_task_crud().create(workspace.id, "a").id
     child = get_task_crud().create(
-        workspace.id, "child", task_type="delegate_task", parent_task_id=a
+        workspace.id, "child", task_type="agent_task", parent_task_id=a
     ).id
     b = _fork(workspace.id, a)
 
@@ -619,7 +621,7 @@ def test_deleting_with_forks_removes_fork_trees_and_their_children(storage, tmp_
     b = _fork(workspace.id, a)
     c = _fork(workspace.id, b)
     child = get_task_crud().create(
-        workspace.id, "child", task_type="delegate_task", parent_task_id=b
+        workspace.id, "child", task_type="agent_task", parent_task_id=b
     ).id
     other = get_task_crud().create(workspace.id, "other").id
     kept = _fork(workspace.id, other)
@@ -643,7 +645,7 @@ async def test_delete_task_tree_with_forks_stops_every_fork_tree_first(
     a = get_task_crud().create(workspace.id, "a").id
     b = _fork(workspace.id, a)
     child = get_task_crud().create(
-        workspace.id, "child", task_type="delegate_task", parent_task_id=b
+        workspace.id, "child", task_type="agent_task", parent_task_id=b
     ).id
 
     deleted = await get_task_service().delete_task_tree(a, with_forks=True)

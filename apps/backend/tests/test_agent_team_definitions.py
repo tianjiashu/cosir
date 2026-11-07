@@ -841,7 +841,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(
         node_task = TaskModel(
             workspace_id=workspace.id,
             title="开发节点",
-            task_type="agent_team_node",
+            task_type="team_node_task",
             parent_task_id=parent_task.id,
             tool_schemas=[],
         )
@@ -860,7 +860,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(
         child_task = TaskModel(
             workspace_id=workspace.id,
             title="搜索资料",
-            task_type="delegate_task",
+            task_type="agent_task",
             parent_task_id=node_task.id,
             tool_schemas=[],
         )

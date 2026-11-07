@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
+from app.models.task_extra import TaskExtra
 from app.api.tasks_api import get_task
 from app.app import app
 from app.assistant_transport.assistant_api import assistant_history_page, assistant_transport_state
@@ -95,7 +96,7 @@ async def test_task_endpoint_returns_task_response_without_task_level_fork_gate(
         id=7,
         workspace_id=3,
         title="conversation_run",
-        extra=None,
+        extra=TaskExtra(),
         current_run_id=None,
         context_window_total=None,
         task_type="user",

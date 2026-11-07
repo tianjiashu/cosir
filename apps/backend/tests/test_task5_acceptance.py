@@ -230,7 +230,7 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
         store.contexts.get(store.task.id, include_in_context=False)
     )
-    assert {call_id: part["status"] for call_id, part in tool_parts.items()} == {
+    assert {call_id: part["status"] for (_, call_id), part in tool_parts.items()} == {
         "call-success": "completed",
         "call-failed": "failed",
         "call-cancelled": "cancelled",
@@ -356,18 +356,11 @@ def test_real_sqlite_fork_preserves_canonical_identity(
     )
     target = store.tasks.create(store.workspace.id, "fork")
     with store.factory.begin() as session:
-        target_run = store.runs.clone_for_task(session, source_run, target.id)
-        store.context_service.clone_for_fork(
-            store.task.id,
-            target.id,
-            {source_run.id: target_run.id},
-            session,
-            max_sequence=max(
-                row.sequence for row in store.contexts.get(store.task.id, include_in_context=False)
-            ),
-        )
+        rows = store.context_service.history(store.task.id, session)
+        store.context_service.copy_fork_prefix(session, store.task, target, rows,
+            max(row.sequence for row in rows) + 1)
     assert target.current_run_id is None
-    assert target_run.execution_data == ReactExecutionState()
+    assert store.runs.list_by_task(target.id) == []
     source_rows = store.contexts.get(store.task.id, include_in_context=False)
     target_rows = store.contexts.get(target.id, include_in_context=False)
     assert [row.id for row in target_rows] != [row.id for row in source_rows]
@@ -409,6 +402,6 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     repaired_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
         store.contexts.get(store.task.id, include_in_context=False)
     )
-    assert {call_id: part["status"] for call_id, part in repaired_parts.items()} == {
+    assert {call_id: part["status"] for (_, call_id), part in repaired_parts.items()} == {
         "call-interrupted": "cancelled"
     }

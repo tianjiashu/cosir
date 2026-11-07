@@ -228,19 +228,10 @@ def test_web_extract_ui_data_uses_generic_entries_without_document_content() -> 
     assert "private metadata" not in str(observation.display_data)
 
 
-def test_search_result_items_v1_structure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """v1 结构 {success:true, data:[...]} 也能解析（潜在缺陷：legacy 兼容）。"""
-
-    payload = {
-        "success": True,
-        "data": [
-            {"title": "A", "url": "https://a.com"},
-            {"title": "B", "url": "https://b.com"},
-        ],
-    }
-    items = _search_result_items(payload)
-
-    assert [item["url"] for item in items] == ["https://a.com", "https://b.com"]
+def test_search_result_items_rejects_v1_structure() -> None:
+    """旧版数组响应是协议缺陷，不转换成 v2 结果或伪装成空结果。"""
+    with pytest.raises(FirecrawlRequestError, match="data.web"):
+        _search_result_items({"success": True, "data": [{"url": "https://a.com"}]})
 
 
 def test_search_result_items_drops_entries_without_url() -> None:
@@ -261,12 +252,12 @@ def test_search_result_items_drops_entries_without_url() -> None:
     assert [item["url"] for item in items] == ["https://a.com", "https://c.com"]
 
 
-def test_search_result_items_non_dict_payload_returns_empty() -> None:
-    """payload 非 dict 时返回空列表而非抛异常（潜在缺陷：类型边界）。"""
-
-    assert _search_result_items(None) == []
-    assert _search_result_items("garbage") == []
-    assert _search_result_items({"success": True, "data": "not-a-list"}) == []
+@pytest.mark.parametrize("payload", [None, "garbage", {"data": "not-a-list"}, {"data": {}}])
+def test_search_result_items_rejects_malformed_payload(payload: object) -> None:
+    """只把合法空数组当作无结果；协议错误必须暴露。"""
+    with pytest.raises(FirecrawlRequestError, match="data.web"):
+        _search_result_items(payload)
+    assert _search_result_items({"data": {"web": []}}) == []
 
 
 def test_firecrawl_search_clamps_limit_to_max(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -284,21 +275,11 @@ def test_firecrawl_search_clamps_limit_to_max(monkeypatch: pytest.MonkeyPatch) -
     assert all(isinstance(r, WebSearchItem) for r in results)
 
 
-def test_firecrawl_search_parses_v1_via_post(monkeypatch: pytest.MonkeyPatch) -> None:
-    """通过假 _post 验证 v1 结构在 search() 路径下也能解析（潜在缺陷：端到端解析）。"""
-
-    payload = {
-        "success": True,
-        "data": [{"title": "X", "url": "https://x.com", "markdown": "desc"}],
-    }
-    client = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
-
-    results = client.search("q", limit=5)
-
-    assert len(results) == 1
-    assert results[0].url == "https://x.com"
-    assert results[0].description == "desc"
-    assert results[0].position == 1
+def test_firecrawl_search_rejects_v1_via_post() -> None:
+    """公开搜索入口不再容忍旧版响应。"""
+    client = _FakeFirecrawl(post_impl=lambda endpoint, body: {"data": [{"url": "https://x.com"}]})
+    with pytest.raises(FirecrawlRequestError, match="data.web"):
+        client.search("q", limit=5)
 
 
 # ---------------------------------------------------------------------------

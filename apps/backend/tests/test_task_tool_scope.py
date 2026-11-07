@@ -18,7 +18,7 @@ from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import 
 )
 from app.core.tool.multi_agent.task_tool_scope import fork_tool_schemas, tools_for_task
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
-from app.models.task_kind import TASK_KINDS, USER_FACING_TASK_TYPES
+from app.models.task_kind import TASK_KINDS, USER_FACING_TASK_TYPES, TaskType
 
 pytestmark = pytest.mark.usefixtures("backend_env")
 
@@ -47,7 +47,7 @@ def test_rule_table_is_closed_over_its_own_references() -> None:
     派生工具都在注册表里：工具改名时这里失败，而不是过滤悄悄失效。
     """
     assert {rule.creates for rule in DERIVATIONS.values()} <= set(TASK_KINDS)
-    assert {"user", "fork"} == USER_FACING_TASK_TYPES
+    assert {"user", "user_fork", "agent_fork"} == USER_FACING_TASK_TYPES
     definitions = get_tool_registry().get_all_definitions()
     assert {rule.tool for rule in DERIVATIONS.values()} <= {tool.name for tool in definitions}
     assert all(
@@ -57,10 +57,10 @@ def test_rule_table_is_closed_over_its_own_references() -> None:
 
 def test_sidebar_conversations_get_every_tool() -> None:
     everything = set(get_tool_registry().get_all_tool_names())
-    assert _names("user") == _names("fork") == everything
+    assert _names("user") == _names("user_fork") == _names("agent_fork") == everything
 
 
-@pytest.mark.parametrize("task_type", ["delegate_task", "agent_team_node"])
+@pytest.mark.parametrize("task_type", ["agent_task", "team_node_task"])
 def test_read_only_tasks_can_delegate_but_not_use_user_surfaces(task_type: str) -> None:
     """委派子 Agent 与 Team 节点只读：去掉需要用户界面的工具与建 Team，委派与等待照常保留。"""
     names = _names(task_type)
@@ -88,7 +88,7 @@ def test_team_node_tools_filter_by_rule_and_keep_unregistered_names() -> None:
 _DERIVATION_TOOLS = {"delegate_task", "fork_task", "agent_team"}
 
 
-@pytest.mark.parametrize("task_type", ["user", "fork", "delegate_task", "agent_team_node"])
+@pytest.mark.parametrize("task_type", ["user", "user_fork", "agent_fork", "agent_task", "team_node_task"])
 def test_tasks_at_the_depth_limit_get_no_derivation_tools(monkeypatch, task_type: str) -> None:
     """深度到上限的 Task 创建时就拿不到派生工具；没到时按类型规则给，等待与通信工具照常保留。"""
     monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
@@ -130,3 +130,13 @@ def test_team_nodes_share_the_main_task_depth_and_lose_delegation_at_the_limit(m
     profile = SimpleNamespace(allowed_tools=["read_file", "delegate_task"])
     assert materialize_node_tools(profile, depth=1) == ["read_file", "delegate_task"]  # type: ignore[arg-type]
     assert materialize_node_tools(profile, depth=2) == ["read_file"]  # type: ignore[arg-type]
+
+
+def test_task_type_enum_covers_rules_and_response_schema():
+    from app.api.schemas.response.TaskResponse import TaskResponse
+    assert set(TASK_KINDS) == set(TaskType)
+    assert all(isinstance(rule.creates, TaskType) for rule in DERIVATIONS.values())
+    schema = TaskResponse.model_json_schema()
+    assert set(schema["$defs"]["TaskType"]["enum"]) == {kind.value for kind in TaskType}
+    with pytest.raises(ValueError):
+        TaskType("fork")

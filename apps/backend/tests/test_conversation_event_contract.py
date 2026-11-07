@@ -60,6 +60,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     (
         {
             "type": "run_status_changed",
+            "changed_at": "2026-01-01T00:00:01Z",
             "task_id": 1,
             "run_id": 1,
             "status": "completed",
@@ -248,7 +249,8 @@ def test_envelope_defaults_and_optional_fields() -> None:
             "status": "completed",
             "reason": "r",
         },
-        {"type": "run_status_changed", "task_id": 1, "run_id": 1, "status": "half_done"},
+        {"type": "run_status_changed",
+            "changed_at": "2026-01-01T00:00:01Z", "task_id": 1, "run_id": 1, "status": "half_done"},
         {
             "type": "run_initialized",
             "task_id": 0,
@@ -351,13 +353,14 @@ def test_run_status_uses_domain_enumeration() -> None:
     """
 
     event = RunStatusChangedEvent(
+        changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
         task_id=1, run_id=1, status=ConversationRunStatus.CANCELLED, end_reason="user_cancelled"
     )
     assert event.status is ConversationRunStatus.CANCELLED
     assert event.model_dump(mode="json")["status"] == "cancelled"
     # 稳定落库字符串必须能直接回灌为枚举，保证日志回放与测试无需构造枚举实例。
     parsed = RunStatusChangedEvent.model_validate(
-        {"task_id": 1, "run_id": 1, "status": "cancelled"}
+        {"task_id": 1, "run_id": 1, "status": "cancelled", "changed_at": "2026-01-01T00:00:01Z"}
     )
     assert parsed.status is ConversationRunStatus.CANCELLED
 
@@ -438,3 +441,9 @@ def test_type_annotation_shape_is_literal() -> None:
     assert get_args(annotation) == ("run_initialized",)
     assert isinstance(event.type, str)
     assert isinstance(get_args(Literal["run_initialized"])[0], str)
+
+
+def test_run_status_event_requires_committed_timestamp() -> None:
+    """事件缺少持久化时间直接失败，不能让终态耗时退化为空值。"""
+    with pytest.raises(ValidationError):
+        RunStatusChangedEvent.model_validate({"task_id": 1, "run_id": 1, "status": "completed"})

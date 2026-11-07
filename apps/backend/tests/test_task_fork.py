@@ -1,32 +1,24 @@
-"""Fork 的事务、历史边界与运行时隔离契约。"""
+"""Real SQLite tests for input-prefix forks, frozen ownership and transaction boundaries."""
 
 import asyncio
 import threading
 from contextlib import contextmanager
-
+from dataclasses import replace
 import pytest
 from fastapi import HTTPException
-
 from app.api.schemas import ForkTaskRequest
 from app.api.tasks_api import fork_task
+from app.assistant_transport.request import TransportRequestError
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
-from app.assistant_transport.state.message_identity import leading_reply_id, reply_id, turn_of
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
+from app.core.context.tool_call_closure import plan_tool_call_closures, ContextProtocolError
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.errors.task_fork_errors import TaskForkConflictError
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.task_runtime.service.task_service import TaskService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
-
-
-def _user_meta(text: str) -> UserMessageMetadata:
-    """落库的用户消息都带来源 ``kind``；用户输入还带展示绑定（snapshot 重建与 fork 只从这里取）。"""
-    return UserMessageMetadata(
-        kind="user_input", presentation=UserInputPresentation(display_text=text)
-    )
 
 
 @pytest.fixture
@@ -38,6 +30,9 @@ def fork_store(request, monkeypatch):
     service._turn = store.runs
     service._context = store.context_service
     service._session_factory = store.factory
+    monkeypatch.setattr(
+        "app.core.tool.multi_agent.task_tool_scope.main_agent_tool_schemas", lambda **kw: []
+    )
     store.service = service
     store.context.create_system_prompt(store.task.id, {"role": "system", "content": "固定系统指令"})
 
@@ -48,272 +43,256 @@ def fork_store(request, monkeypatch):
     yield store
 
 
-def append_turn(store, run, text: str) -> str:
-    """在 Run 里追加一轮（用户输入 + 回复），返回这一轮回复的 wire 消息 id。
-
-    用户消息身份取 ``run.id * 100 + 序号``：测试内唯一即可，与 Run 号是两个独立序列。
-    """
-    sequence = store.context.max_sequence(store.task.id) + 1
-    message_id = run.id * 100 + sequence
-    store.context.append(
+def append(store, run, message, *, metadata=None, message_id=None, include=True, project=True):
+    return store.context.append(
         store.task.id,
         run.id,
-        {"role": "user", "content": text},
-        sequence,
-        metadata=_user_meta(text),
+        message,
+        store.context.max_sequence(store.task.id) + 1,
+        include,
+        metadata,
         message_id=message_id,
+        project_to_transport=project,
     )
-    store.context.append(
-        store.task.id, run.id, {"role": "assistant", "content": f"{text}-reply"}, sequence + 1
+
+
+def input_message(store, run, text, kind="user_input"):
+    mid = store.context.max_sequence(store.task.id) + 100
+    meta = UserMessageMetadata(
+        kind=kind,
+        presentation=UserInputPresentation(display_text=text),
+        source=MessageSource(task_id=999, name="Parent") if kind == "agent_message" else None,
     )
-    return reply_id(message_id)
+    append(store, run, {"role": "user", "content": text}, metadata=meta, message_id=mid)
+    return str(mid)
 
 
 def append_run(store, status):
-    """追加一个只有一轮的 Run；``run.reply`` 是这一轮回复的 wire 消息 id（fork 入口所在）。"""
     run = store.runs.create(store.task.id, status=status)
-    run.reply = append_turn(store, run, f"user-{run.id}")
+    run.input_id = input_message(store, run, f"input-{run.id}")
+    append(store, run, {"role": "assistant", "content": f"reply-{run.id}"})
     return run
 
 
-def fork_call(store, message_id: str):
-    """按 API 的换算方式调用 service：wire 消息 id → 所在的一轮。"""
-    turn = turn_of(message_id)
-    return store.service.fork_task(
-        store.task.id,
-        user_message_id=turn.user_message_id,
-        leading_run_id=turn.leading_run_id,
-        source_message_id=message_id,
-    )
+def fork_call(store, message_id):
+    return store.service.fork_task(store.task.id, before_message_id=int(message_id))
 
 
-def fork(store, message_id: str):
+def fork(store, message_id):
     return asyncio.run(fork_call(store, message_id))
 
 
-def fork_api(store, message_id: str):
+def fork_api(store, message_id):
     return asyncio.run(
-        fork_task(store.task.id, ForkTaskRequest(messageId=message_id), store.service)
+        fork_task(store.task.id, ForkTaskRequest(beforeMessageId=message_id), store.service)
     )
 
 
-@pytest.mark.parametrize("terminal", ["completed", "failed", "cancelled"])
-@pytest.mark.parametrize("later_status", ["running", "suspended"])
-def test_fork_terminal_history_while_later_run_is_active(fork_store, terminal, later_status):
-    store = fork_store
-    first = append_run(store, "completed")
-    boundary = append_run(store, terminal)
-    later = append_run(store, later_status)
-    source_rows = store.contexts.get(store.task.id, include_in_context=False)
-    target = fork(store, boundary.reply)
-    cloned_runs = store.runs.list_by_task(target.id)
-    assert [run.status for run in cloned_runs] == ["completed", terminal]
-    assert target.task_type == "fork"
-    # 当前 Run 指向克隆出的切分点 Run：activity 由它投影，终态才开放编辑重跑。
-    assert target.current_run_id == cloned_runs[-1].id
-    assert store.tasks.get(target.id).current_run_id == cloned_runs[-1].id
-    assert target.tool_schemas == store.task.tool_schemas
-    assert target.extra == {
-        "fork": {"source_task_id": store.task.id, "source_message_id": boundary.reply}
-    }
-    assert {run.id for run in cloned_runs}.isdisjoint({first.id, boundary.id, later.id})
-    assert all(run.execution_data == ReactExecutionState() for run in cloned_runs)
-    target_rows = store.contexts.get(target.id, include_in_context=False)
-    assert [row.message for row in target_rows] == [
-        row.message for row in source_rows if row.run_id in {None, first.id, boundary.id}
-    ]
-    assert [row.sequence for row in target_rows] == list(range(5))
-    assert {row.run_id for row in target_rows} == {None, *(run.id for run in cloned_runs)}
-    assert store.contexts.get(store.task.id, include_in_context=False) == source_rows
-    assert store.runs.get(later.id).status == later_status
-    assert task_runtime_spaces.existing_spaces() == ()
-
-
-@pytest.mark.parametrize("terminal", ["completed", "failed", "cancelled"])
-def test_fork_snapshot_activity_is_boundary_run(fork_store, terminal):
-    """fork 后 snapshot 的 activity 是切分点 Run 的终态：前端据此开放编辑重跑。"""
-    store = fork_store
-    append_run(store, "completed")
-    boundary = append_run(store, terminal)
-    target = fork(store, boundary.reply)
-    runs = store.runs.list_by_task(target.id)
+def snapshot(store, target):
     state = ConversationTaskStateRebuilder.rebuild(
-        store.tasks.get(target.id), runs, store.contexts.get(target.id, include_in_context=False)
+        target,
+        store.runs.list_by_task(target.id),
+        store.contexts.get(target.id, include_in_context=False),
     )
-    assert state["activity"] is not None
-    assert state["activity"]["runId"] == runs[-1].id
-    assert state["activity"]["status"] == terminal
+    validate_snapshot(state)
+    return state
 
 
-def test_fork_skips_only_edited_out_rows(fork_store):
-    """编辑移出的行不进新 Task；只投影不进上下文（中断输出）与只进上下文不投影（后台结论）的行
-    都按原标志复制。"""
-    store = fork_store
-    run = append_run(store, "completed")
-    # 后台结论先并入、再接模型回复：不投影的行在本轮可见行之间，切分点按可见行定位也带得上它。
-    unprojected_sequence = store.context.max_sequence(store.task.id) + 1
-    store.context.append(
-        store.task.id,
-        run.id,
-        {"role": "user", "content": "background conclusion"},
-        unprojected_sequence,
-        metadata=_user_meta("background conclusion"),
-        project_to_transport=False,
+def call(store, run, call_id="fork-call"):
+    append(
+        store,
+        run,
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "fork_task", "arguments": "{}"},
+                }
+            ],
+        },
     )
-    interrupted_sequence = unprojected_sequence + 1
-    store.context.append(
-        store.task.id,
-        run.id,
-        {"role": "assistant", "content": "interrupted"},
-        interrupted_sequence,
-        include_in_context=False,
+
+
+def agent_fork(store, run, call_id="fork-call"):
+    return store.service.fork_for_agent(
+        store.task.id, run_id=run.id, tool_call_id=call_id, title="Child", derivation_depth=1
     )
-    replaced_sequence = interrupted_sequence + 1
-    store.context.append(
-        store.task.id,
-        run.id,
-        {"role": "user", "content": "replaced"},
-        replaced_sequence,
-        metadata=_user_meta("replaced"),
-    )
-    with store.factory.begin() as session:
-        store.context._crud.exclude_from_sequence(store.task.id, replaced_sequence, session)
-
-    target = fork(store, run.reply)
-
-    cloned = store.contexts.get(target.id, include_in_context=False)
-    contents = [row.message.get("content") for row in cloned]
-    assert "replaced" not in contents
-    interrupted = next(row for row in cloned if row.message.get("content") == "interrupted")
-    assert (interrupted.include_in_context, interrupted.project_to_transport) == (False, True)
-    unprojected = next(
-        row for row in cloned if row.message.get("content") == "background conclusion"
-    )
-    assert (unprojected.include_in_context, unprojected.project_to_transport) == (True, False)
 
 
-@pytest.mark.parametrize("status", ["running", "suspended"])
-@pytest.mark.parametrize("boundary_is_active", [True, False])
-def test_reject_active_run_anywhere_in_selected_prefix(fork_store, status, boundary_is_active):
-    store = fork_store
-    active = append_run(store, status)
-    boundary = active if boundary_is_active else append_run(store, "completed")
-    with pytest.raises(TaskForkConflictError) as caught:
-        fork(store, boundary.reply)
-    assert caught.value.code == "RUN_NOT_READY"
-    assert len(store.service.list_tasks_for_workspace(store.workspace.id)) == 1
-
-
-def test_unknown_or_foreign_message_returns_404_without_creating_task(fork_store):
-    store = fork_store
-    own = append_run(store, "completed")
-    other = store.tasks.create(store.workspace.id, "other")
-    foreign = store.runs.create(other.id, status="completed")
-    for message_id in (leading_reply_id(foreign.id), reply_id(99_999), "99999"):
-        with pytest.raises(HTTPException) as caught:
-            fork_api(store, message_id)
-        assert caught.value.status_code == 404
-    assert own.reply
-    assert len(store.service.list_tasks_for_workspace(store.workspace.id)) == 2
-
-
-@pytest.mark.parametrize("message_id", ["assistant-x", "user-1", "0", "assistant-run-"])
-def test_malformed_message_id_is_rejected_with_422(fork_store, message_id):
-    store = fork_store
-    append_run(store, "completed")
-    with pytest.raises(HTTPException) as caught:
-        fork_api(store, message_id)
-    assert caught.value.status_code == 422
-    assert caught.value.detail["code"] == "FORK_MESSAGE_ID_INVALID"
-    assert len(store.service.list_tasks_for_workspace(store.workspace.id)) == 1
-
-
-def test_fork_request_requires_message_id_and_rejects_run_id():
-    """E1：请求只认 ``messageId``；旧的 ``runId`` 形状不再被接受。"""
-    from app.assistant_transport.request import TransportRequestError
-
-    assert ForkTaskRequest.model_validate({"messageId": "assistant-3"}).message_id == "assistant-3"
-    for payload in ({"runId": 3}, {"messageId": ""}, {}):
-        with pytest.raises(TransportRequestError) as caught:
-            ForkTaskRequest.model_validate(payload)
-        assert caught.value.code == "FORK_MESSAGE_ID_REQUIRED"
-
-
-def test_fork_inside_a_run_copies_only_turns_up_to_the_message(fork_store):
-    """E2：切分点所在 Run 只带到这一轮为止；同一 Run 里更晚的轮次不复制。"""
-    store = fork_store
-    first = append_run(store, "completed")
-    boundary = store.runs.create(store.task.id, status="completed")
-    cut = append_turn(store, boundary, "second")
-    append_turn(store, boundary, "third")
-
-    target = fork(store, cut)
-
-    contents = [
-        row.message.get("content")
-        for row in store.contexts.get(target.id, include_in_context=False)
-    ]
-    assert contents == [
+@pytest.mark.parametrize("status", ["running", "suspended", "completed", "failed", "cancelled"])
+def test_manual_strict_input_prefix_without_executable_runs(fork_store, status):
+    s = fork_store
+    earlier = append_run(s, "completed")
+    current = append_run(s, status)
+    child = fork(s, current.input_id)
+    assert child.current_run_id is None and s.runs.list_by_task(child.id) == []
+    assert [r.message.get("content") for r in s.contexts.get(child.id)] == [
         "固定系统指令",
-        f"user-{first.id}",
-        f"user-{first.id}-reply",
-        "second",
-        "second-reply",
+        f"input-{earlier.id}",
+        f"reply-{earlier.id}",
     ]
-    assert len(store.runs.list_by_task(target.id)) == 2
+    state = snapshot(s, child)
+    assert state["activity"] is None and len(state["messages"]) == 2
+    assert all(m["runId"] is None for m in state["messages"])
+    assert state["fork"]["beforeMessageId"] == current.input_id
 
 
-def test_user_message_and_its_reply_fork_the_same_turn(fork_store):
-    """用户消息与它的回复同属一轮：从哪一条分叉，复制范围都相同。"""
-    store = fork_store
-    run = store.runs.create(store.task.id, status="completed")
-    reply = append_turn(store, run, "only")
-    append_turn(store, run, "later")
-    user = reply.removeprefix("assistant-")
-
-    by_reply = fork(store, reply)
-    by_user = fork(store, user)
-
-    def contents(task_id):
-        return [
-            r.message.get("content") for r in store.contexts.get(task_id, include_in_context=False)
-        ]
-
-    assert contents(by_reply.id) == contents(by_user.id) == ["固定系统指令", "only", "only-reply"]
+@pytest.mark.parametrize("kind", ["user_input", "agent_message"])
+def test_first_input_can_fork_to_system_only(fork_store, kind):
+    s = fork_store
+    run = s.runs.create(s.task.id, status="running")
+    mid = input_message(s, run, "Do work", kind)
+    child = fork(s, mid)
+    assert len(s.contexts.get(child.id)) == 1
+    assert snapshot(s, child)["messages"] == []
 
 
-def test_fork_from_leading_reply_of_run_without_user_input(fork_store):
-    """没有用户输入的 Run（结果唤醒新开）以 ``assistant-run-{runId}`` 定位，只带开头那段回复。"""
-    store = fork_store
-    first = append_run(store, "completed")
-    woken = store.runs.create(store.task.id, status="completed")
-    sequence = store.context.max_sequence(store.task.id) + 1
-    store.context.append(
-        store.task.id, woken.id, {"role": "assistant", "content": "woken-reply"}, sequence
+@pytest.mark.parametrize("new_run", [False, True])
+def test_agent_excludes_triggering_input_even_in_result_only_run(fork_store, new_run):
+    s = fork_store
+    earlier = append_run(s, "completed")
+    run = append_run(s, "running")
+    anchor = run.input_id
+    if new_run:
+        run = s.runs.create(s.task.id, status="running")
+    call(s, run)
+    child = agent_fork(s, run)
+    assert child.extra.fork.before_message_id == anchor
+    assert [r.message.get("content") for r in s.contexts.get(child.id)] == [
+        "固定系统指令",
+        f"input-{earlier.id}",
+        f"reply-{earlier.id}",
+    ]
+    assert snapshot(s, child)["messages"] == []
+    assert all(not r.project_to_transport for r in s.contexts.get(child.id))
+    assert s.runs.list_by_task(child.id) == []
+
+
+def test_manual_fork_of_agent_restores_hidden_history_and_keeps_internal_flags(fork_store):
+    s = fork_store
+    earlier = append_run(s, "completed")
+    append(s, earlier, {"role": "user", "content": "internal fact"},
+           metadata=UserMessageMetadata(kind="notice"), project=False)
+    run = append_run(s, "running")
+    call(s, run)
+    child = agent_fork(s, run)
+    s.task = child
+    local = s.runs.create(child.id, status="running")
+    assignment = input_message(s, local, "child assignment", "agent_message")
+    manual = fork(s, assignment)
+    state = snapshot(s, manual)
+    assert [m["parts"][0]["text"] for m in state["messages"]] == [
+        f"input-{earlier.id}",
+        f"reply-{earlier.id}",
+    ]
+    assert any(
+        r.message.get("content") == "internal fact" and not r.project_to_transport
+        for r in s.contexts.get(manual.id)
     )
-    append_turn(store, woken, "after")
-
-    target = fork(store, leading_reply_id(woken.id))
-
-    contents = [
-        row.message.get("content")
-        for row in store.contexts.get(target.id, include_in_context=False)
-    ]
-    assert contents == ["固定系统指令", f"user-{first.id}", f"user-{first.id}-reply", "woken-reply"]
+    assert s.context_service.latest_user_input(manual.id) is None
+    assert manual.current_run_id is None
 
 
-def test_copy_failure_rolls_back_target_and_runs(fork_store, monkeypatch):
-    store = fork_store
-    run = append_run(store, "completed")
+def test_agent_does_not_fall_back_to_inherited_input(fork_store):
+    s = fork_store
+    append_run(s, "completed")
+    current = append_run(s, "running")
+    child = fork(s, current.input_id)
+    s.task = child
+    run = s.runs.create(child.id, status="running")
+    call(s, run)
+    with pytest.raises(KeyError, match="no local input"):
+        agent_fork(s, run)
 
-    def fail_copy(*args, **kwargs):
-        raise RuntimeError("copy failed")
 
-    monkeypatch.setattr(store.context_service, "clone_for_fork", fail_copy)
-    with pytest.raises(RuntimeError, match="copy failed"):
-        fork(store, run.reply)
-    assert len(store.service.list_tasks_for_workspace(store.workspace.id)) == 1
-    assert len(store.runs.list_by_task(store.task.id)) == 1
+def test_prefix_repairs_missing_tool_result_without_later_output(fork_store):
+    s = fork_store
+    run = append_run(s, "running")
+    call(s, run, "earlier-call")
+    anchor = input_message(s, run, "excluded")
+    append(
+        s,
+        run,
+        {"role": "tool", "tool_call_id": "earlier-call", "content": "SECRET LATER RESULT"},
+        metadata=ToolMessageMetadata(status="completed"),
+    )
+    child = fork(s, anchor)
+    entries = s.context.entries_in_context(child.id)
+    assert all(not plan.missing_slots for plan in plan_tool_call_closures(entries))
+    body = str([entry.message for entry in entries])
+    assert "SECRET LATER RESULT" not in body
+    assert "not inherited" in body
+    assert snapshot(s, child)["messages"][-1]["outcome"] is None
+
+
+def test_pending_history_is_inert_and_source_deletion_does_not_remove_it(fork_store):
+    s = fork_store
+    run = append_run(s, "running")
+    call(s, run, "pending")
+    append(
+        s,
+        run,
+        {"role": "tool", "tool_call_id": "pending", "content": "Awaiting user"},
+        metadata=ToolMessageMetadata(status="pending"),
+    )
+    mid = input_message(s, run, "later")
+    child = fork(s, mid)
+    assert s.context_service.awaiting_decision_tool(child.id, "pending") is None
+    assert s.contexts.list_unsettled_placeholders(child.id) == []
+    assert snapshot(s, child)["messages"][-1]["parts"][-1]["awaitingUser"] is False
+    with s.factory.begin() as session:
+        s.contexts.delete_by_task_ids([s.task.id], session)
+        s.runs.delete_by_ids([run.id], session)
+        s.tasks.delete_by_ids([s.task.id], session)
+    assert len(s.contexts.get(child.id)) == 5
+    snapshot(s, child)
+
+
+def test_truncated_run_has_no_later_outcome(fork_store):
+    s = fork_store
+    run = append_run(s, "failed")
+    mid = input_message(s, run, "later failure")
+    append(s, run, {"role": "assistant", "content": "later answer"})
+    child = fork(s, mid)
+    assert all(m["outcome"] is None for m in snapshot(s, child)["messages"])
+
+
+def test_orphan_protocol_aborts_whole_copy(fork_store):
+    s = fork_store
+    run = append_run(s, "completed")
+    append(
+        s,
+        run,
+        {"role": "tool", "tool_call_id": "orphan", "content": "bad"},
+        metadata=ToolMessageMetadata(status="completed"),
+    )
+    mid = input_message(s, run, "cut")
+    with pytest.raises(ContextProtocolError):
+        fork(s, mid)
+    assert len(s.service.list_tasks_for_workspace(s.workspace.id)) == 1
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"messageId": "123"},
+        {"beforeMessageId": "assistant-123"},
+        {"beforeMessageId": "0"},
+        {"runId": 1},
+    ],
+)
+def test_api_accepts_only_explicit_input_anchor(payload):
+    with pytest.raises(TransportRequestError):
+        ForkTaskRequest.model_validate(payload)
+
+
+def test_unknown_input_returns_404(fork_store):
+    with pytest.raises(HTTPException) as caught:
+        fork_api(fork_store, "999")
+    assert caught.value.status_code == 404
 
 
 def test_workspace_busy_is_mapped_to_retryable_409(fork_store, monkeypatch):
@@ -329,7 +308,7 @@ def test_workspace_busy_is_mapped_to_retryable_409(fork_store, monkeypatch):
 
     monkeypatch.setattr(workspace_operations, "operation", busy)
     with pytest.raises(HTTPException) as caught:
-        fork_api(store, run.reply)
+        fork_api(store, run.input_id)
     assert caught.value.status_code == 409
     assert caught.value.detail["code"] == "WORKSPACE_BUSY"
     assert caught.value.detail["retryable"] is True
@@ -343,7 +322,7 @@ def test_success_response_does_not_read_database_after_commit(fork_store, monkey
         raise AssertionError("post-commit read")
 
     monkeypatch.setattr(store.service, "get_task", forbidden)
-    response = fork_api(store, run.reply)
+    response = fork_api(store, run.input_id)
     assert response.task_id != store.task.id
     assert "fork_available" not in response.model_dump()
 
@@ -354,7 +333,7 @@ def test_request_cancellation_does_not_release_workspace_before_worker_finishes(
     store = fork_store
     run = append_run(store, "completed")
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
-    original_copy = store.context_service.clone_for_fork
+    original_copy = store.service._copy_prefix
     original_worker = store.service._fork_task_in_workspace
 
     def slow_copy(*args, **kwargs):
@@ -368,11 +347,11 @@ def test_request_cancellation_does_not_release_workspace_before_worker_finishes(
         finally:
             finished.set()
 
-    monkeypatch.setattr(store.context_service, "clone_for_fork", slow_copy)
+    monkeypatch.setattr(store.service, "_copy_prefix", slow_copy)
     monkeypatch.setattr(store.service, "_fork_task_in_workspace", worker)
 
     async def scenario():
-        request = asyncio.create_task(fork_call(store, run.reply))
+        request = asyncio.create_task(fork_call(store, run.input_id))
         try:
             assert await asyncio.to_thread(entered.wait, 3)
             request.cancel()
@@ -392,124 +371,111 @@ def test_request_cancellation_does_not_release_workspace_before_worker_finishes(
     asyncio.run(scenario())
 
 
-def test_agent_message_opens_a_turn_for_forking(fork_store):
-    """Agent 消息与用户输入一样开启一轮：从它的回复分叉只带到这一轮，不因找不到起点而 404。"""
-    store = fork_store
-    run = store.runs.create(store.task.id, status="completed")
-    sequence = store.context.max_sequence(store.task.id) + 1
-    message_id = run.id * 100 + sequence
-    store.context.append(
-        store.task.id,
-        run.id,
-        {"role": "user", "content": "<agent_message>do it</agent_message>"},
-        sequence,
-        metadata=UserMessageMetadata(
-            kind="agent_message",
-            presentation=UserInputPresentation(display_text="do it"),
-            source=MessageSource(task_id=1, name="parent"),
-        ),
-        message_id=message_id,
-    )
-    store.context.append(
-        store.task.id, run.id, {"role": "assistant", "content": "done"}, sequence + 1
-    )
-    append_turn(store, run, "later")
-
-    target = fork(store, reply_id(message_id))
-
-    contents = [
-        row.message.get("content")
-        for row in store.contexts.get(target.id, include_in_context=False)
-    ]
-    assert contents == ["固定系统指令", "<agent_message>do it</agent_message>", "done"]
-
-
-@pytest.mark.parametrize("task_type", ["delegate_task", "agent_team_node"])
-def test_only_sidebar_conversations_can_be_forked(fork_store, task_type):
-    """子 Agent 与节点的工具面、提示词都按只读 Task 定，fork 成侧栏对话会身份与能力对不上。"""
-    store = fork_store
-    child = store.tasks.create(
-        store.task.workspace_id, "child", task_type=task_type, parent_task_id=store.task.id
-    )
-
-    with pytest.raises(TaskForkConflictError) as raised:
-        asyncio.run(
-            store.service.fork_task(
-                child.id, user_message_id=1, leading_run_id=None, source_message_id="1"
-            )
-        )
-    assert (raised.value.code, raised.value.retryable) == ("FORK_SOURCE_UNSUPPORTED", False)
-
-
-def test_agent_fork_copies_up_to_the_calling_step_and_settles_the_running_run(fork_store):
-    """Agent fork 切在含本次调用的 assistant 行之前；发起它的 Run 还在跑，副本落为 completed / forked。"""
-    store = fork_store
-    earlier = append_run(store, "completed")
-    running = store.runs.create(store.task.id, status="running")
-    append_turn(store, running, "split the work")
-    sequence = store.context.max_sequence(store.task.id) + 1
-    store.context.append(
-        store.task.id,
-        running.id,
-        {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "id": "call-fork",
-                    "type": "function",
-                    "function": {"name": "fork_task", "arguments": "{}"},
-                }
-            ],
-        },
-        sequence,
-    )
-    # 同一步里这次调用的结果在 fork 之后才写入：不复制。
-    store.context.append(
-        store.task.id,
-        running.id,
-        {"role": "tool", "tool_call_id": "call-fork", "content": "x"},
-        sequence + 1,
+def test_edit_does_not_keep_local_result_because_inherited_call_reuses_id(fork_store):
+    s = fork_store
+    old = append_run(s, "completed")
+    call(s, old, "reused")
+    append(
+        s,
+        old,
+        {"role": "tool", "tool_call_id": "reused", "content": "old result"},
         metadata=ToolMessageMetadata(status="completed"),
     )
-
-    target = store.service.fork_for_agent(
-        store.task.id,
-        run_id=running.id,
-        tool_call_id="call-fork",
-        title="前端部分",
-        derivation_depth=1,
+    next_run = append_run(s, "completed")
+    child = fork(s, next_run.input_id)
+    s.task = child
+    local = s.runs.create(child.id, status="completed")
+    input_message(s, local, "edit this")
+    anchor = s.context_service.latest_user_input(child.id)
+    call(s, local, "reused")
+    append(
+        s,
+        local,
+        {"role": "tool", "tool_call_id": "reused", "content": "local result"},
+        metadata=ToolMessageMetadata(status="completed"),
     )
-
-    contents = [
-        row.message.get("content") for row in store.contexts.get(target.id, include_in_context=False)
-    ]
-    assert contents == [
-        "固定系统指令",
-        f"user-{earlier.id}",
-        f"user-{earlier.id}-reply",
-        "split the work",
-        "split the work-reply",
-    ]
-    assert (target.title, target.task_type, target.derivation_depth) == ("前端部分", "fork", 1)
-    assert target.parent_task_id is None
-    assert target.extra["fork"] == {
-        "source_task_id": store.task.id,
-        "source_message_id": None,
-        "created_by": "agent",
-        "tool_call_id": "call-fork",
-    }
-    current = store.runs.get(target.current_run_id)
-    assert (current.status, current.end_reason, current.final_output) == ("completed", "forked", None)
-    # 源 Task 不受影响：发起 fork 的 Run 仍在运行。
-    assert store.runs.get(running.id).status == "running"
+    append(
+        s,
+        local,
+        {"role": "user", "content": "local late result"},
+        metadata=UserMessageMetadata(kind="background_result", tool_call_id="reused"),
+        project=False,
+    )
+    with s.factory.begin() as session:
+        assert s.context_service.exclude_from(child.id, anchor.sequence, session) == {"reused"}
+    assert all("local" not in str(r.message) for r in s.contexts.get(child.id))
 
 
-def test_agent_fork_of_an_unknown_call_is_not_found(fork_store):
-    store = fork_store
-    run = append_run(store, "running")
+def test_runtime_controls_ignore_inherited_tool_and_scopes_pair_reused_ids(fork_store):
+    from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
+
+    s = fork_store
+    old = append_run(s, "completed")
+    call(s, old, "reused")
+    append(
+        s,
+        old,
+        {"role": "tool", "tool_call_id": "reused", "content": "old result"},
+        metadata=ToolMessageMetadata(status="pending"),
+    )
+    boundary = append_run(s, "completed")
+    child = fork(s, boundary.input_id)
+    manager = RuntimeMessageContextManager.__new__(RuntimeMessageContextManager)
+    manager._entries = s.context.entries_in_context(child.id)
+    assert manager.find_tool_call("reused") is None
+    assert manager.tool_result_metadata("reused") is None
     with pytest.raises(KeyError):
-        store.service.fork_for_agent(
-            store.task.id, run_id=run.id, tool_call_id="missing", title="x", derivation_depth=1
-        )
+        manager.update_tool_result_metadata("reused", ToolMessageMetadata(status="completed"))
+    s.task = child
+    local = s.runs.create(child.id, status="completed")
+    input_message(s, local, "local task")
+    call(s, local, "reused")
+    append(
+        s,
+        local,
+        {"role": "tool", "tool_call_id": "reused", "content": "local result"},
+        metadata=ToolMessageMetadata(status="completed"),
+    )
+    entries = s.context.entries_in_context(child.id)
+    plans = plan_tool_call_closures(entries)
+    assert len(plans) == 2
+    assert all(not p.missing_slots for p in plans)
+    assert entries[plans[0].slots[0].tool_index].message["content"] == "old result"
+    assert entries[plans[1].slots[0].tool_index].message["content"] == "local result"
 
+
+def test_interrupted_output_survives_hidden_fork_and_manual_refork(fork_store):
+    s = fork_store
+    earlier = append_run(s, "cancelled")
+    append(s, earlier, {"role": "assistant", "content": "PARTIAL_OUTPUT"}, include=False)
+    current = append_run(s, "running")
+    call(s, current)
+    child = agent_fork(s, current)
+    copied = s.contexts.get(child.id, include_in_context=False)
+    partial = next(r for r in copied if r.message.get("content") == "PARTIAL_OUTPUT")
+    assert partial.retained and not partial.include_in_context and not partial.project_to_transport
+    s.task = child
+    local = s.runs.create(child.id, status="completed")
+    anchor = input_message(s, local, "new assignment", "agent_message")
+    manual = fork(s, anchor)
+    assert "PARTIAL_OUTPUT" in str(snapshot(s, manual)["messages"])
+    assert "PARTIAL_OUTPUT" not in str([r.message for r in s.contexts.get(manual.id)])
+
+
+def test_flattened_history_pairs_repeated_call_ids_by_occurrence(fork_store):
+    s = fork_store
+    for result in ["FIRST_RESULT", "SECOND_RESULT"]:
+        run = append_run(s, "completed")
+        call(s, run, "reused")
+        append(s, run, {"role": "tool", "tool_call_id": "reused", "content": result},
+               metadata=ToolMessageMetadata(status="completed", display_data={"text": result}))
+    current = append_run(s, "completed")
+    manual = fork(s, current.input_id)
+    entries = s.context.entries_in_context(manual.id)
+    plans = plan_tool_call_closures(entries)
+    assert [entries[p.slots[0].tool_index].message["content"] for p in plans] == [
+        "FIRST_RESULT", "SECOND_RESULT"]
+    parts = [p for m in snapshot(s, manual)["messages"] for p in m["parts"] if p["type"] == "tool-call"]
+    assert len({p["toolCallId"] for p in parts}) == 2
+    assert [p["display_data"]["text"] for p in parts] == ["FIRST_RESULT", "SECOND_RESULT"]
+    assert [p.slots[0].call_id for p in plans] == ["reused", "reused"]

@@ -519,7 +519,7 @@ async def test_running_snapshot_is_kept_until_the_run_stops_unwatched() -> None:
 
     sources.run = _run(2, "completed")
     service.apply_planned(
-        RunStatusChangedEvent(task_id=7, run_id=2, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=2, status=ConversationRunStatus.COMPLETED)
     )
     assert not space.has_snapshot()
 

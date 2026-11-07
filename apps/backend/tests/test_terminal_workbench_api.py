@@ -12,6 +12,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.task_extra_fixtures import fork_extra
+from app.models.task_extra import TaskExtra
 from app.api import terminal_sessions_api
 from app.app import app
 from app.service import depends
@@ -75,12 +77,13 @@ def workspace(tmp_path) -> Any:
 
 def _task(workspace: Any, task_type: str = "user") -> int:
     tasks = depends.get_task_crud()
-    if task_type == "delegate_task":
+    if task_type == "agent_task":
         parent = tasks.create(workspace.id, "parent")
         return tasks.create(
             workspace.id, "child", task_type=task_type, parent_task_id=parent.id
         ).id
-    return tasks.create(workspace.id, "task", task_type=task_type).id
+    return tasks.create(workspace.id, "task", task_type=task_type,
+                        extra=fork_extra(987) if task_type.endswith("_fork") else TaskExtra()).id
 
 
 def test_list_shells_and_active_count(client: TestClient, terminals: _FakeTerminals) -> None:
@@ -88,7 +91,7 @@ def test_list_shells_and_active_count(client: TestClient, terminals: _FakeTermin
     assert client.get("/terminal/sessions/active-count").json() == {"count": 3}
 
 
-@pytest.mark.parametrize("task_type", ["user", "fork"])
+@pytest.mark.parametrize("task_type", ["user", "user_fork", "agent_fork"])
 def test_user_creates_session_for_sidebar_task(
     client: TestClient, terminals: _FakeTerminals, workspace: Any, task_type: str
 ) -> None:
@@ -118,7 +121,7 @@ def test_create_defaults_shell_to_auto(
 def test_create_rejects_child_task(
     client: TestClient, terminals: _FakeTerminals, workspace: Any
 ) -> None:
-    task_id = _task(workspace, "delegate_task")
+    task_id = _task(workspace, "agent_task")
     response = client.post(f"/tasks/{task_id}/terminal/sessions", json={"shell": "auto"})
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "TERMINAL_TASK_UNSUPPORTED"

@@ -377,7 +377,7 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
-    projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
+    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(
             task_id=7,
@@ -414,7 +414,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
-    projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
+    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(task_id=7, run_id=9, tool_call_id="call-1", tool_name="execute_terminal")
     )
@@ -437,7 +437,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
             display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
         )
     )
-    projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="suspended"))
+    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="suspended"))
     projector.process(_terminal_output_update(1, "after"))
 
     part = state["messages"][1]["parts"][0]
@@ -468,7 +468,7 @@ def test_runtime_update_skips_a_pending_part_that_is_not_a_background_placeholde
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
-    projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
+    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(task_id=7, run_id=9, tool_call_id="call-1", tool_name="execute_terminal")
     )
@@ -483,7 +483,7 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
-    projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
+    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(
             task_id=7,
@@ -570,7 +570,7 @@ def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, Conversat
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
-    projector.process(RunStatusChangedEvent(task_id=7, run_id=9, status="running"))
+    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(
             task_id=7, run_id=9, tool_call_id="call-1", tool_name="execute_terminal"

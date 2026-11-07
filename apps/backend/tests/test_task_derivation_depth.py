@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.task_extra_fixtures import fork_extra
+from app.models.task_extra import TaskExtra
 from app.config.environment_field_catalog import ENVIRONMENT_FIELDS
 from app.core.tool.multi_agent.derivation import DERIVATIONS, child_depth
 from app.storage.crud.task_crud import TaskCrud
@@ -19,9 +21,9 @@ def test_team_nodes_share_the_main_task_depth_and_other_derivations_go_one_deepe
     assert child_depth(parent, "fork") == 2  # type: ignore[arg-type]
     assert child_depth(parent, "team") == 1  # type: ignore[arg-type]
     assert {kind: (rule.tool, rule.creates) for kind, rule in DERIVATIONS.items()} == {
-        "delegate": ("delegate_task", "delegate_task"),
-        "fork": ("fork_task", "fork"),
-        "team": ("agent_team", "agent_team_node"),
+        "delegate": ("delegate_task", "agent_task"),
+        "fork": ("fork_task", "agent_fork"),
+        "team": ("agent_team", "team_node_task"),
     }
 
 
@@ -31,7 +33,7 @@ def test_depth_round_trips_and_defaults_to_zero(tmp_path) -> None:
     crud = TaskCrud()
     root = crud.create(workspace.id, "root")
     child = crud.create(
-        workspace.id, "child", task_type="delegate_task", parent_task_id=root.id,
+        workspace.id, "child", task_type="agent_task", parent_task_id=root.id,
         derivation_depth=2,
     )
 
@@ -55,16 +57,16 @@ def test_only_tasks_this_agent_derived_answer_to_it() -> None:
 
     now = datetime.now(UTC)
 
-    def task(task_type: str, *, parent: int | None = None, fork: dict | None = None) -> TaskRecord:
+    def task(task_type: str, *, parent: int | None = None, fork: TaskExtra | None = None) -> TaskRecord:
         return TaskRecord(
             id=9, workspace_id=1, title="t", created_at=now, updated_at=now,
-            task_type=task_type, parent_task_id=parent, extra={"fork": fork} if fork else None,
+            task_type=task_type, parent_task_id=parent, extra=fork or TaskExtra(),
         )
 
-    child = task("delegate_task", parent=1)
-    agent_fork = task("fork", fork={"source_task_id": 1, "created_by": "agent"})
-    user_fork = task("fork", fork={"source_task_id": 1, "source_message_id": "3"})
-    node = task("agent_team_node", parent=1)
+    child = task("agent_task", parent=1)
+    agent_fork = task("agent_fork", fork=fork_extra(1))
+    user_fork = task("user_fork", fork=fork_extra(1))
+    node = task("team_node_task", parent=1)
     assert child.derived_by(1) and not child.derived_by(2)
     assert agent_fork.derived_by(1) and not agent_fork.derived_by(2)
     assert not user_fork.derived_by(1)

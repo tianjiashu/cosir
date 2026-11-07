@@ -376,7 +376,7 @@ def test_projection_module_does_not_reach_global_projector() -> None:
 def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: str) -> None:
     projector = ConversationEventProjector(owner)
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=task_id, run_id=run_id))
-    projector.process(RunStatusChangedEvent(task_id=task_id, run_id=run_id, status="running"))
+    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=task_id, run_id=run_id, status="running"))
     owner.state["messages"].append(
         {
             "id": f"assistant-{run_id}",
@@ -1004,7 +1004,7 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
     owner = _MemorySnapshotOwner(empty_snapshot())
     projector = ConversationEventProjector(owner)
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=9))
-    projector.process(RunStatusChangedEvent(task_id=1, run_id=9, status="running"))
+    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=9, status="running"))
     owner.state["messages"].append(
         {"id": "assistant-9", "role": "assistant", "parts": [], "runId": 9, "outcome": None, "source": None}
     )

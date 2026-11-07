@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 import app.core.tool.execute.tool_access_gate as gate_module
+from app.models.task_extra import TaskExtra
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
 )
@@ -366,7 +367,7 @@ def test_t4_rebuild_snapshot_materializes_all_tool_results(
         model_config_id=None,
         options=ConversationRunOptions(),
         image_paths=None,
-        extra=None,
+        extra=TaskExtra(),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )

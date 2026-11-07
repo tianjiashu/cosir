@@ -88,6 +88,7 @@ def test_run_status_transition_drop_is_logged() -> None:
         assert (
             plan_event(
                 RunStatusChangedEvent(
+                    changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
                     task_id=_TASK_ID, run_id=11, status=ConversationRunStatus.RUNNING
                 ),
                 settled,

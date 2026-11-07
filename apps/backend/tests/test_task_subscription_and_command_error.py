@@ -175,7 +175,7 @@ async def test_one_connection_survives_run_completion_new_run_cancel_and_suspend
     await collector.wait_frames(1)
 
     def _status(run_id: int, status: ConversationRunStatus) -> None:
-        service.apply_planned(RunStatusChangedEvent(task_id=_TASK_ID, run_id=run_id, status=status))
+        service.apply_planned(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=_TASK_ID, run_id=run_id, status=status))
 
     service.apply_planned(
         RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=1)
@@ -229,10 +229,10 @@ async def test_idle_boundary_follows_each_burst_exactly_once() -> None:
         RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=1)
     )
     service.apply_planned(
-        RunStatusChangedEvent(task_id=_TASK_ID, run_id=1, status=ConversationRunStatus.RUNNING)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=_TASK_ID, run_id=1, status=ConversationRunStatus.RUNNING)
     )
     service.apply_planned(
-        RunStatusChangedEvent(task_id=_TASK_ID, run_id=1, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=_TASK_ID, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
     await _settle()
 

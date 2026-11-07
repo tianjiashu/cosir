@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.models.task_extra import TaskExtra
 from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
 from app.core.workflow.conversation_run_ledger import (
@@ -331,103 +332,6 @@ def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch) -> No
     assert caught.value.code == "MODEL_CONFIG_UNAVAILABLE"
 
 
-def test_run_crud_clone_preserves_options_and_resets_progress() -> None:
-    usage = {
-        "input_tokens": 10,
-        "output_tokens": 4,
-        "total_tokens": 14,
-        "cache_hit_tokens": 2,
-        "cache_miss_tokens": 8,
-        "reasoning_tokens": 1,
-    }
-    source = ConversationRunRecord(
-        id=11,
-        task_id=7,
-        status="failed",
-        created_at=_timestamp(),
-        updated_at=_timestamp(),
-        options=ConversationRunOptions(reasoning_effort="high"),
-        usage=usage,
-        error={"code": "provider_error", "message": "provider unavailable"},
-    )
-    engine = create_engine("sqlite://")
-    StorageBase.metadata.create_all(engine)
-    try:
-        with Session(engine) as session:
-            cloned = ConversationRunCrud.clone_for_task(session, source, target_task_id=8)
-
-        assert cloned.task_id == 8
-        assert cloned.usage == usage
-        assert cloned.error == {
-            "code": "provider_error",
-            "message": "provider unavailable",
-        }
-        assert cloned.execution_data == ReactExecutionState()
-        assert cloned.options == source.options
-    finally:
-        engine.dispose()
-
-
-def test_context_clone_copies_transport_fields_to_real_row() -> None:
-    metadata = {"status": "completed", "display_data": {"kind": "read-file-meta", "path": "a.py"}}
-    engine = create_engine("sqlite://")
-    StorageBase.metadata.create_all(engine)
-    try:
-        crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
-        store = ContextStore.__new__(ContextStore)
-        store._crud = crud
-        service = ConversationTaskContextService.__new__(ConversationTaskContextService)
-        service._crud = crud
-        service._store = store
-        with Session(engine) as session:
-            session.add(
-                ConversationTaskContextRecord(
-                    task_id=7,
-                    run_id=None,
-                    message={"role": "system", "content": "fixed system prompt"},
-                    include_in_context=True,
-                    sequence=0,
-                )._to_model()
-            )
-            session.add(
-                ConversationTaskContextModel(
-                    message_id="test-message",
-                    id=41,
-                    task_id=7,
-                    run_id=11,
-                    message_json=json.dumps(
-                        {"role": "tool", "tool_call_id": "call-1", "content": "source"}
-                    ),
-                    include_in_context=True,
-                    sequence=3,
-                    metadata_json=json.dumps(metadata),
-                )
-            )
-            session.flush()
-
-            service.clone_for_fork(7, 8, {11: 22}, session, max_sequence=3)
-            cloned_row = session.scalar(
-                select(ConversationTaskContextModel).where(
-                    ConversationTaskContextModel.task_id == 8,
-                    ConversationTaskContextModel.sequence == 1,
-                )
-            )
-
-            assert cloned_row is not None
-            assert cloned_row.run_id == 22
-            assert cloned_row.message_id == "test-message"
-            assert json.loads(cloned_row.message_json) == {
-                "role": "tool",
-                "tool_call_id": "call-1",
-                "content": "source",
-            }
-            assert json.loads(cloned_row.metadata_json) == ToolMessageMetadata.model_validate(
-                metadata
-            ).model_dump(mode="json")
-    finally:
-        engine.dispose()
-
-
 def test_context_crud_raises_on_sequence_collision() -> None:
     """序号冲突（调用方分配序号出错）必须原样抛出，不得在持久化层被吞掉。
 
@@ -596,7 +500,7 @@ def test_task_crud_new_task_has_no_current_run() -> None:
                 task_type="user",
                 parent_task_id=None,
                 creation_command_id=None,
-                extra=None,
+                extra=TaskExtra(),
             )
 
         assert record.current_run_id is None
