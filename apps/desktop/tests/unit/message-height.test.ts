@@ -48,8 +48,8 @@ describe("estimateMessageHeight", () => {
   });
 
   it("completed replies never reserve a duration-only heading; process and failures still reserve it", () => {
-    const withDuration = (durationMs: number | null) => projected([text("回复")], outcome("completed", { durationMs }));
-    const plainHeight = estimateMessageHeight(withDuration(null));
+    const withDuration = (durationMs: number) => projected([text("回复")], outcome("completed", { durationMs }));
+    const plainHeight = estimateMessageHeight(withDuration(0));
     for (const duration of [0, 129000]) expect(estimateMessageHeight(withDuration(duration))).toBe(plainHeight);
     const done = outcome("completed", { durationMs: 129000 });
     expect(estimateMessageHeight(projected([call("quiet", "completed", { presentation: "quiet" }), text("回复")], done))).toBe(plainHeight);

@@ -33,11 +33,13 @@ test("宽窗口固定为一列；打开右侧面板后浮起、不挤对话，�
   await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
   await expect(card(page)).toContainText("1 个运行中");
   await expect(card(page)).toContainText("cd /work && make");
+  await expect(card(page).getByRole("button", { name: "后台任务", exact: true })).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: testInfo.outputPath("rail-docked.png") });
 
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   await expect(page.getByRole("complementary", { name: "文件" })).toBeVisible();
   await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  await expect(card(page).getByText("cd /work && make", { exact: true })).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: testInfo.outputPath("rail-floating.png") });
 
   await page.getByRole("button", { name: "收起文件", exact: true }).click();
@@ -86,8 +88,93 @@ test("开关与折叠是全局偏好，刷新后保留；折叠时摘要仍在",
   await expect(card(page)).toContainText("1 个运行中");
   await page.reload();
   await expect(rail(page)).toBeVisible();
+  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  await expect(card(page).getByRole("button", { name: "后台任务", exact: true })).toBeInViewport({ ratio: 1 });
   await expect(card(page)).toContainText("1 个运行中");
   await expect(card(page)).not.toContainText("cd /work && make");
+});
+
+// 侧栏开关跨 Task 保留，视口却随 Task 重建：新视口必须重新建立尺寸订阅。
+test("两栏打开时切换会话：卡片完整可见，仍能随文件栏切换摆放", async ({ page, request }) => {
+  const nextTaskId = TASK_ID + 1;
+  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: nextTaskId, title: "另一个会话" } });
+  await page.reload();
+  await railButton(page).click();
+  await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  await page.getByText("另一个会话", { exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/tasks/${nextTaskId}$`));
+  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  await expect(card(page).getByRole("button", { name: "后台任务", exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(card(page).getByText("没有后台任务", { exact: true })).toBeInViewport({ ratio: 1 });
+
+  await page.getByRole("button", { name: "收起文件", exact: true }).click();
+  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  await expect(card(page).getByText("没有后台任务", { exact: true })).toBeInViewport({ ratio: 1 });
+});
+
+test("刷新后展开的侧栏响应视口宽高，文件面板铺满再还原不丢失订阅", async ({ page }) => {
+  await railButton(page).click();
+  await page.reload();
+  const label = card(page).getByText("cd /work && make", { exact: true });
+  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  await expect(label).toBeInViewport({ ratio: 1 });
+
+  await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  await expect(label).toBeInViewport({ ratio: 1 });
+  await page.getByRole("button", { name: "铺满文件面板" }).click();
+  await expect(rail(page)).toBeHidden();
+  await page.getByRole("button", { name: "还原文件面板" }).click();
+  await expect(label).toBeInViewport({ ratio: 1 });
+  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+
+  const previousMaxHeight = await rail(page).evaluate((element) => parseFloat(getComputedStyle(element).maxHeight));
+  await page.setViewportSize({ width: 1600, height: 700 });
+  await expect.poll(() => rail(page).evaluate((element) => parseFloat(getComputedStyle(element).maxHeight))).toBeLessThan(previousMaxHeight);
+  await expect(label).toBeInViewport({ ratio: 1 });
+  await page.getByRole("button", { name: "收起文件", exact: true }).click();
+  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+});
+
+test("渲染错误恢复重建视口后侧栏恢复，尺寸更新不重绘整个线程", async ({ page, request }) => {
+  const nextTaskId = TASK_ID + 1;
+  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: nextTaskId, title: "恢复会话" } });
+  await page.reload();
+  await railButton(page).click();
+  await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  // 只在测试浏览器中包装 memo 的渲染函数，触发真实 runtime 错误边界；不添加生产故障开关。
+  await page.evaluate(async () => {
+    const modulePath = "/components/assistant-ui/elements/thread.aui.tsx";
+    const { Thread } = await import(/* @vite-ignore */ modulePath);
+    const render = Thread.type;
+    const probe = { fail: true, renders: 0 };
+    Object.assign(window, { railThreadProbe: probe });
+    Thread.type = (...args: unknown[]) => {
+      probe.renders++;
+      if (probe.fail) throw new Error("task rail viewport recovery probe");
+      return render(...args);
+    };
+  });
+  await page.getByText("恢复会话", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "对话界面渲染失败" })).toBeVisible();
+  await page.evaluate(() => { (window as unknown as { railThreadProbe: { fail: boolean } }).railThreadProbe.fail = false; });
+  await Promise.all([
+    page.waitForResponse(`${origin}/tasks/${nextTaskId}/assistant/state`),
+    page.getByRole("button", { name: "重试", exact: true }).click(),
+  ]);
+  await expect(card(page).getByText("没有后台任务", { exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  // 等恢复提交落定再计数；只改变线程局部高度，隔离 AppLayout 自身的窗口尺寸订阅。
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => {
+    (window as unknown as { railThreadProbe: { renders: number } }).railThreadProbe.renders = 0;
+    resolve();
+  }))));
+  const previousMaxHeight = await rail(page).evaluate((element) => parseFloat(getComputedStyle(element).maxHeight));
+  await page.locator(".aui-thread-root").evaluate((element) => {
+    (element as HTMLElement).style.height = `${element.clientHeight - 200}px`;
+  });
+  await expect.poll(() => rail(page).evaluate((element) => parseFloat(getComputedStyle(element).maxHeight))).toBeLessThan(previousMaxHeight);
+  expect(await page.evaluate(() => (window as unknown as { railThreadProbe: { renders: number } }).railThreadProbe.renders)).toBe(0);
 });
 
 test("只能按手柄拖动，键盘可拿起与取消；浮层里拖动中的 Esc 只取消拖动、不关闭侧栏", async ({ page }) => {

@@ -4,17 +4,21 @@ import { TASK_RAIL_WIDTH, taskRailPlacement } from "@/lib/task-rail/placement";
 import { normalizeTaskRailPreferences, TASK_RAIL_CARD_IDS } from "@/lib/task-rail/store";
 
 describe("会话侧栏偏好", () => {
+  it("完整的当前偏好保持用户设置", () => {
+    const preferences = { open: true, order: [...TASK_RAIL_CARD_IDS], collapsed: { "background-tasks": true } };
+    expect(normalizeTaskRailPreferences(preferences)).toEqual(preferences);
+  });
   it("缺失或非法时用默认值：收起、按登记顺序、全部展开", () => {
     expect(normalizeTaskRailPreferences(undefined)).toEqual({ open: false, order: [...TASK_RAIL_CARD_IDS], collapsed: {} });
     expect(normalizeTaskRailPreferences({ open: "yes", order: "x", collapsed: null })).toEqual({ open: false, order: [...TASK_RAIL_CARD_IDS], collapsed: {} });
   });
 
-  it("丢掉已不存在的卡片与重复项，新卡片补到末尾，折叠只保留合法项", () => {
+  it("旧形状整体丢弃，不迁移或保留部分偏好", () => {
     expect(normalizeTaskRailPreferences({
       open: true,
       order: ["removed-card", "background-tasks", "background-tasks"],
       collapsed: { "background-tasks": true, "removed-card": true, other: "yes" },
-    })).toEqual({ open: true, order: ["background-tasks"], collapsed: { "background-tasks": true } });
+    })).toEqual({ open: false, order: [...TASK_RAIL_CARD_IDS], collapsed: {} });
     expect(normalizeTaskRailPreferences({ order: [] }).order).toEqual([...TASK_RAIL_CARD_IDS]);
   });
 });

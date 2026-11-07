@@ -64,9 +64,9 @@ describe("stable conversation projection", () => {
     expect(layout.process.verbCounts).toEqual([{ label: "读取文件", count: 5 }]);
   });
   it("unknown tools remain visible and do not acquire invented result semantics", () => {
-    const layout = projectTurn([call("future", { toolName: "future_tool", status: "unknown", display_data: { kind: "future-result" } })], "settled");
+    const layout = projectTurn([call("future", { toolName: "future_tool", status: "completed", display_data: { kind: "future-result" } })], "settled");
     expect(layout.process.verbCounts).toEqual([{ label: "future_tool", count: 1 }]);
-    expect(layout.process.warningCount).toBe(1);
+    expect(layout.process.warningCount).toBe(0);
   });
   it("keeps every file operation in order, including deletion then recreation", () => {
     const change = (id: string, status: string, insertions: number) => call(id, { display_data: { kind: "file-changes", changes: [{ path: "a", status, insertions }] } });

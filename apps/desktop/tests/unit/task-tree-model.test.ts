@@ -18,8 +18,8 @@ function task(taskId: number, title: string, options: Partial<WorkspaceTask> = {
 
 function fork(taskId: number, sourceTaskId: number, title = `Fork ${taskId}`): WorkspaceTask {
   return task(taskId, title, {
-    task_type: "fork",
-    extra: { fork: { source_task_id: sourceTaskId, source_message_id: `assistant-${taskId + 100}` } },
+    task_type: "user_fork",
+    extra: { fork: { tree_parent_task_id: sourceTaskId } },
   });
 }
 

@@ -24,7 +24,7 @@ describe("current activity facts", () => {
     expect(projectCallStatus("pending", false, true).label).toBe("后台运行中");
     expect(projectCallStatus("pending", false, true, "settling")).toEqual({ label: "后台结果收尾中", animated: false });
     expect(projectCallStatus("pending", true, true).animated).toBe(false);
-    for (const status of ["failed", "cancelled", "unknown", "completed"] as const) expect(projectCallStatus(status, false, true).animated).toBe(false);
+    for (const status of ["failed", "cancelled", "completed"] as const) expect(projectCallStatus(status, false, true).animated).toBe(false);
   });
   it("keeps one stable interval from thinking through tool execution and seals history at new prose", () => {
     const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning" } });

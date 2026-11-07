@@ -18,7 +18,7 @@ const snapshot: TransportState = {
     {
       id: "assistant-11", role: "assistant", runId: 1, source: null,
       parts: [{ type: "text", text: "检查完毕", status: "completed" }],
-      outcome: { status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: null },
+      outcome: { status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 },
     },
   ],
   messageOffset: 0,

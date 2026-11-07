@@ -198,7 +198,7 @@ test("H7 real Electron: pure completed replies omit headings in both themes and 
       execFileSync(backendPython, [path.join(repositoryRoot, "apps/backend/tests/fixtures/seed_timeline.py"), String(task_id), "stop", mode], { cwd: path.join(repositoryRoot, "apps/backend"), env: { ...process.env, CODING_AGENT_DATA_DIR: home } });
       const snapshotResponse = await fetch(`${base}/tasks/${task_id}/assistant/state`);
       expect(snapshotResponse.status).toBe(200);
-      const snapshot = await snapshotResponse.json() as { messages: Array<{ outcome: { durationMs: number | null } | null; parts: Array<{ finalReply?: boolean; text?: string }> }> };
+      const snapshot = await snapshotResponse.json() as { messages: Array<{ outcome: { durationMs: number } | null; parts: Array<{ finalReply?: boolean; text?: string }> }> };
       expect(snapshot.messages.flatMap(m => m.parts).filter(p => p.finalReply).map(p => p.text)).toEqual(["真实后端结论"]);
       expect(typeof snapshot.messages.at(-1)!.outcome!.durationMs).toBe("number");
       await page.reload();
@@ -340,4 +340,139 @@ test("I10 real Electron: unified intent travels through real tools, background w
     await app.close();
     model.closeAllConnections(); await new Promise<void>(resolve => model.close(() => resolve()));
   }
+});
+
+// Genuine Electron + Python + SQLite + SDK requests; only the model's output is deterministic.
+test("fork context: input boundary, presentation, restart and source deletion", async () => {
+  const { createServer } = await import("node:http");
+  type RequestBody = { model: string; reasoning_effort?: string; messages: Array<{ role: string; content?: unknown; tool_calls?: unknown[] }>; stream: boolean };
+  const requests: RequestBody[] = [];
+  const model = createServer(async (req, res) => {
+    let raw = ""; for await (const chunk of req) raw += chunk;
+    if (!req.url?.endsWith("/chat/completions")) { res.writeHead(404).end(); return; }
+    const body = JSON.parse(raw) as RequestBody;
+    if (!body.stream) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ id: "title", object: "chat.completion", created: 1, model: "fork-test", choices: [{ index: 0, message: { role: "assistant", content: '{"title":"分叉验收源"}' }, finish_reason: "stop" }] })); return;
+    }
+    requests.push(body);
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    const emit = (delta: object, finish_reason: string | null = null) => res.write(`data: ${JSON.stringify({ id: "fork-test", object: "chat.completion.chunk", created: 1, model: "fork-test", choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+    const inputs = body.messages.filter(m => m.role === "user").map(m => JSON.stringify(m.content));
+    const isChild = inputs.some(text => text.includes("CHILD_SCOPE_C"));
+    const parentTrigger = inputs.some(text => text.includes("PARENT_ONLY_B"));
+    const hasFork = body.messages.some(m => JSON.stringify(m.tool_calls ?? []).includes("native-fork"));
+    if (parentTrigger && !isChild && !hasFork) {
+      emit({ tool_calls: [{ index: 0, id: "native-fork", type: "function", function: { name: "fork_task", arguments: JSON.stringify({ intent: "验证输入之前的分叉", title: "分叉验收子任务", message: "CHILD_SCOPE_C：只核对继承的背景，回复 CHILD_DONE_D。" }) } }] });
+      emit({}, "tool_calls");
+    } else { emit({ content: isChild ? "CHILD_DONE_D" : parentTrigger ? "PARENT_DONE" : "KEEP_REPLY_A" }); emit({}, "stop"); }
+    res.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>(resolve => model.listen(0, "127.0.0.1", resolve));
+  const address = model.address() as { port: number };
+  const { app, page, home } = await launchDesktop();
+  try {
+    await expect(page.getByRole("navigation", { name: "工作区任务列表" })).toBeVisible({ timeout: 120_000 });
+    let base = await backendBaseUrl(page);
+    const post = async (route: string, body: object) => {
+      const response = await fetch(`${base}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      expect(response.status, await response.clone().text()).toBe(200); return response.json();
+    };
+    const state = async (id: number) => (await (await fetch(`${base}/tasks/${id}/assistant/state`)).json()) as import("../../lib/assistant/contract").TransportState;
+    const replacement = await post("/model-configs", { config_name: "目录默认模型", base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "local-test-only", model_name: "decoy-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true });
+    const config = await post("/model-configs", { config_name: "本机分叉验收", base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "local-test-only", model_name: "fork-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true });
+    const root = path.join(home, "fork-workspace"); fs.mkdirSync(root);
+    const { workspace_id } = await post("/workspaces", { name: "分叉真机验收", root_path: root });
+    const { task_id } = await post(`/workspaces/${workspace_id}/tasks`, { text: "分叉验收源", creationCommandId: "native-fork-source" });
+    const send = (id: number, text: string) => post(`/tasks/${id}/messages`, { message: { role: "user", parts: [{ type: "text", text }] }, modelConfigId: config.config_id, reasoningEffort: "low" });
+    await send(task_id, "KEEP_CONTEXT_A");
+    await expect.poll(async () => (await state(task_id)).activity?.status).toBe("completed");
+    await send(task_id, "PARENT_ONLY_B：测试一下 fork task tool");
+    const list = async () => (await (await fetch(`${base}/workspaces/${workspace_id}/tasks`)).json()) as Array<{task_id: number; task_type: string; title: string}>;
+    await expect.poll(async () => (await list()).filter(t => ["user_fork", "agent_fork"].includes(t.task_type)).length).toBe(1);
+    const child = (await list()).find(t => ["user_fork", "agent_fork"].includes(t.task_type))!;
+    await expect.poll(async () => (await state(child.task_id)).activity?.status).toBe("completed");
+    await expect.poll(async () => (await state(task_id)).activity?.status).toBe("completed");
+    const childRequest = requests.find(body => body.messages.some(m => m.role === "user" && JSON.stringify(m.content).includes("CHILD_SCOPE_C")))!;
+    expect(childRequest).toBeTruthy();
+    expect(JSON.stringify(childRequest.messages)).toContain("KEEP_CONTEXT_A");
+    expect(JSON.stringify(childRequest.messages)).toContain("KEEP_REPLY_A");
+    expect(JSON.stringify(childRequest.messages)).not.toContain("PARENT_ONLY_B");
+    expect(JSON.stringify(childRequest.messages)).not.toContain("native-fork");
+    const childState = await state(child.task_id);
+    expect(childState.fork?.taskType).toBe("agent_fork");
+    expect(JSON.stringify(childState.messages)).not.toContain("KEEP_CONTEXT_A");
+    expect(childState.messages[0].source).not.toBeNull();
+    await page.reload();
+    await page.getByRole("treeitem").filter({ hasText: "分叉验收子任务" }).last().click();
+    await expect(page.locator('[data-slot="fork-origin"]')).toContainText("历史仅供上下文使用");
+    await expect(page.getByText("CHILD_DONE_D", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-role="user"]')).toHaveCount(0);
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => document.documentElement.classList.toggle("dark", value === "dark"), theme);
+      await page.screenshot({ path: test.info().outputPath(`fork-agent-${theme}.png`), animations: "disabled" });
+    }
+    // Real Agent-input action: manually fork before the new assignment, restoring original history.
+    await page.locator('[data-slot="agent-message-toggle"]').first().click();
+    await page.getByRole("button", { name: "从此消息之前分叉", exact: true }).click();
+    await expect.poll(async () => (await list()).filter(t => ["user_fork", "agent_fork"].includes(t.task_type)).length).toBe(2);
+    const manual = (await list()).find(t => ["user_fork", "agent_fork"].includes(t.task_type) && t.task_id !== child.task_id)!;
+    await expect(page.getByText("KEEP_CONTEXT_A", { exact: true })).toBeVisible();
+    await expect(page.getByText("KEEP_REPLY_A", { exact: true })).toBeVisible();
+    expect((await state(manual.task_id)).activity).toBeNull();
+    expect(JSON.stringify((await state(manual.task_id)).messages)).not.toContain("CHILD_SCOPE_C");
+    await expect(page.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
+    await page.screenshot({ path: test.info().outputPath("fork-manual.png"), animations: "disabled" });
+    // Also verify a human-input anchor, and first-input -> empty branch.
+    const sourceState = await state(task_id);
+    const anchor = sourceState.messages.find(m => m.role === "user" && JSON.stringify(m.parts).includes("PARENT_ONLY_B"))!;
+    const human = await post(`/tasks/${task_id}/fork`, { beforeMessageId: anchor.id });
+    expect(JSON.stringify((await state(human.task_id)).messages)).toContain("KEEP_CONTEXT_A");
+    expect(JSON.stringify((await state(human.task_id)).messages)).not.toContain("PARENT_ONLY_B");
+    const empty = await post(`/tasks/${task_id}/fork`, { beforeMessageId: sourceState.messages[0].id });
+    expect((await state(empty.task_id)).messages).toEqual([]);
+    // Restart with generation verification before switching the dynamic HTTP address.
+    const generation = await page.evaluate(async () => (await window.cosirHost!.backend.snapshot()).generation);
+    await page.evaluate(() => window.cosirHost!.backend.restart());
+    await expect.poll(async () => { const s = await page.evaluate(() => window.cosirHost!.backend.snapshot()); return s.generation > generation && s.status.state === "ready"; }, { timeout: 60_000 }).toBe(true);
+    base = await backendBaseUrl(page);
+    await page.reload();
+    expect((await state(manual.task_id)).activity).toBeNull();
+    expect(JSON.stringify((await state(child.task_id)).messages)).not.toContain("KEEP_CONTEXT_A");
+    const deleted = await fetch(`${base}/tasks/${task_id}`, { method: "DELETE" });
+    expect(deleted.ok, await deleted.text()).toBe(true);
+    const before = requests.length;
+    // Send through the real composer, proving its initial model/effort comes from the fork,
+    // even when a different model is first in the catalogue.
+    await page.getByRole("textbox", { name: "消息输入", exact: true }).fill("AFTER_SOURCE_DELETE");
+    await page.getByRole("textbox", { name: "消息输入", exact: true }).press("Enter");
+    await expect.poll(() => requests.length).toBeGreaterThan(before);
+    const after = requests.find(r => r.messages.some(m => m.role === "user" && JSON.stringify(m.content).includes("AFTER_SOURCE_DELETE")))!;
+    expect(after.model).toBe("fork-test");
+    expect(after.reasoning_effort).toBe("low");
+    expect(JSON.stringify(after.messages)).toContain("KEEP_CONTEXT_A");
+    expect(JSON.stringify(after.messages)).not.toContain("PARENT_ONLY_B");
+    await expect.poll(async () => (await state(manual.task_id)).activity?.status).toBe("completed");
+    // A frozen seed is provenance. The existing admission boundary rejects a deleted model,
+    // while the human can choose a replacement for a branch that still has no local Run.
+    const removedModel = await fetch(`${base}/model-configs/${config.config_id}`, { method: "DELETE" });
+    expect(removedModel.ok, await removedModel.text()).toBe(true);
+    const requestCount = requests.length;
+    const rejected = await fetch(`${base}/tasks/${empty.task_id}/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: { role: "user", parts: [{ type: "text", text: "REJECT_DELETED_MODEL" }] }, modelConfigId: config.config_id }),
+    });
+    expect(rejected.status).toBe(400);
+    expect(await rejected.text()).toContain("MODEL_CONFIG_UNAVAILABLE");
+    expect((await state(empty.task_id)).activity).toBeNull();
+    expect((await state(empty.task_id)).queued_messages ?? []).toEqual([]);
+    expect(requestCount).toBe(requests.length);
+    await post(`/tasks/${empty.task_id}/messages`, {
+      message: { role: "user", parts: [{ type: "text", text: "REPLACEMENT_MODEL_RUN" }] }, modelConfigId: replacement.config_id,
+    });
+    await expect.poll(async () => (await state(empty.task_id)).activity?.status).toBe("completed");
+    expect(requests.find(r => r.messages.some(m => JSON.stringify(m.content).includes("REPLACEMENT_MODEL_RUN")))?.model).toBe("decoy-test");
+    await test.info().attach("actual-model-requests", { body: JSON.stringify(requests, null, 2), contentType: "application/json" });
+    await test.info().attach("isolated-data-root", { body: home, contentType: "text/plain" });
+  } finally { await app.close(); model.closeAllConnections(); await new Promise<void>(resolve => model.close(() => resolve())); }
 });

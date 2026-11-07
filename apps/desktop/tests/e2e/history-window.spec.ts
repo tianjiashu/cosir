@@ -11,7 +11,7 @@ import { API_ORIGIN as origin } from "./e2e-env";
  */
 const TASK_ID = 4501;
 const PAIRS = 160;
-const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: null };
+const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 };
 const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
 
 type SeedState = Omit<TransportState, "messageOffset" | "terminal_sessions" | "background_tasks" | "foreground_waits" | "handoffs">;

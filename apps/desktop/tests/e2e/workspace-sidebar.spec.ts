@@ -19,7 +19,7 @@ async function seedSidebar(page: Page, request: APIRequestContext, theme: string
   const tasks = [
     { task_id: 100, workspace_id: 7, title: longTitle, task_type: "user", created_at: updatedAt, updated_at: updatedAt },
     { task_id: 101, workspace_id: 7, title: "核对运行状态", task_type: "user", created_at: updatedAt, updated_at: "2026-01-01T00:00:00Z" },
-    { task_id: 102, workspace_id: 7, title: "分支任务", task_type: "fork", extra: { fork: { source_task_id: 100 } }, created_at: updatedAt, updated_at: updatedAt },
+    { task_id: 102, workspace_id: 7, title: "分支任务", task_type: "user_fork", extra: { fork: { tree_parent_task_id: 100 } }, created_at: updatedAt, updated_at: updatedAt },
   ];
   await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: tasks }));
   // 状态点只读状态推送：一帧整表即可（流结束后客户端重连，再拿到同一张表）。

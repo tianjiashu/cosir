@@ -6,7 +6,7 @@ import type { TransportMessagePart } from "../../lib/assistant/contract";
 
 const text = (value: string, finalReply = false): TransportMessagePart => ({ type: "text", text: value, status: "completed", finalReply });
 const reply = "子 Agent 已按你的取消停下。";
-const done = (parts: TransportMessagePart[], durationMs: number | null = 129000) => transportState({
+const done = (parts: TransportMessagePart[], durationMs: number = 129000) => transportState({
   messages: [userMessage("u", 1, "试一下委派子 Agent"), assistantMessage("a", 1, parts, outcome("completed", { durationMs }))],
   activity: activity(1, "completed"),
 });
@@ -40,7 +40,7 @@ for (const theme of ["light", "dark"]) test(`${theme}: duration is the only left
 });
 
 test("completed prose has no heading, divider or occupied space for any duration", async ({ page, request }) => {
-  for (const duration of [129000, 0, null]) {
+  for (const duration of [129000, 0]) {
     await seedState(request, 42, done([text(reply, true)], duration));
     if (duration === 129000) await page.goto("/tasks/42");
     await expect(page.locator('[data-slot="turn-status"]')).toHaveCount(0);
@@ -73,7 +73,7 @@ test("terminal problems remain visible without tools", async ({ page, request })
   ] as const) {
     const state = transportState({ messages: [userMessage("u", 1), assistantMessage("a", 1, [text("未完成回复")], outcome(status, { endReason }))], activity: activity(1, status) });
     await seedState(request, 42, state);
-    await expect(page.locator('[data-slot="turn-status"]')).toHaveText(label);
+    await expect(page.locator('[data-slot="turn-status"]')).toHaveText(`${label} · 用时 0秒`);
     await expect(page.getByText("未完成回复", { exact: true })).toBeVisible();
   }
 });
@@ -109,12 +109,11 @@ test("streaming prose preserves manual scrolling and settles at the bottom witho
   expect(Math.abs((await prose.boundingBox())!.y - top)).toBeLessThan(1);
 });
 
-test("unknown duration has a process fallback and failures remain visible beside it", async ({ page, request }) => {
-  await seedState(request, 42, done([toolCallPart("read", "read_file", { status: "failed", error: "读取失败" }), text(reply, true)], null));
+test("zero duration remains explicit and tool failures stay visible", async ({ page, request }) => {
+  await seedState(request, 42, done([toolCallPart("read", "read_file", { status: "failed", error: "读取失败" }), text(reply, true)], 0));
   await page.goto("/tasks/42");
   const button = page.locator('[data-slot="process-head"]');
-  await expect(button).toHaveText("查看过程· 有异常记录");
-  await expect(button).not.toContainText("0秒");
+  await expect(button).toHaveText("用时 0秒· 有异常记录");
   await button.click();
   await expect(page.locator('[data-slot="activity-head"]')).toContainText("1 个失败");
 });

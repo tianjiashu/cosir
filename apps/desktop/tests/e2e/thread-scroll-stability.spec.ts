@@ -18,7 +18,7 @@ const OTHER_TASK_ID = 4202;
 const PAIRS = 60;
 const ACTIVITY_OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
 // `durationMs` 只属于结局；activity 是固定字段的白名单。
-const OUTCOME = { ...ACTIVITY_OUTCOME, durationMs: null };
+const OUTCOME = { ...ACTIVITY_OUTCOME, durationMs: 0 };
 const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
 
 function answer(index: number): string {

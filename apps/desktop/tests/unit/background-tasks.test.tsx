@@ -186,7 +186,7 @@ describe("后台任务卡", () => {
     expect(useBackgroundTasksStore.getState().parts[1]).toBe(parts);
 
     // part 变了（如输出追加）就换成新的 part。
-    const updated = { ...part, status: "completed" };
+    const updated = { ...part, status: "completed" as const };
     store.sync(1, indexedState({ ...withParts(updated), background_tasks: [entry("a")] }));
     expect(useBackgroundTasksStore.getState().parts[1]?.a).toBe(updated);
 

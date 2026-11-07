@@ -8,6 +8,7 @@ import {
   messagePreview,
   parseId,
   relatedMessages,
+  roleLabel,
 } from "../../components/context-observer/message-model";
 const row = (
   sequence: number,
@@ -25,6 +26,11 @@ const row = (
   ...patch,
 });
 describe("上下文观测读取投影", () => {
+  it("旧角色不再作为 user 的别名", () => {
+    const rows = [row(1, { role: "user" }), row(2, { role: "human" })];
+    expect(roleLabel("human")).toBe("human");
+    expect(filterMessages(indexMessages(rows), { ...INITIAL_FILTERS, role: "user" }).map(item => item.sequence)).toEqual([1]);
+  });
   it("工具关联限定 Run，缺少结果不推断状态", () => {
     const call = row(2, { tool_calls: [{ id: "same", name: "read_file" }] });
     const result = row(3, { role: "tool", tool_call_id: "same" });
@@ -37,10 +43,20 @@ describe("上下文观测读取投影", () => {
     expect(relatedMessages(result, [call, result, unrelated])).toEqual([call]);
     expect(relatedMessages(result, [result])).toEqual([]);
   });
+  it("继承上下文中同号工具调用按出现位置关联", () => {
+    const first = row(1, { run_id: null, tool_calls: [{ id: "same", name: "read_file" }] });
+    const firstResult = row(2, { run_id: null, role: "tool", tool_call_id: "same" });
+    const second = row(3, { run_id: null, tool_calls: [{ id: "same", name: "read_file" }] });
+    const secondResult = row(4, { run_id: null, role: "tool", tool_call_id: "same" });
+    const rows = [secondResult, first, second, firstResult];
+    expect(relatedMessages(first, rows)).toEqual([firstResult]);
+    expect(relatedMessages(second, rows)).toEqual([secondResult]);
+    expect(relatedMessages(secondResult, rows)).toEqual([second]);
+  });
   it("搜索联合角色与纳入筛选，相同时间按序号稳定排序", () => {
     const rows = [
       row(3, { role: "user", content: "needle" }),
-      row(2, { role: "human", include_in_context: false, content: "needle" }),
+      row(2, { role: "user", include_in_context: false, content: "needle" }),
       row(1, { role: "user", content: "needle" }),
     ];
     expect(
@@ -85,6 +101,8 @@ describe("上下文观测读取投影", () => {
         row(2, { run_id: 22, usage_metadata: usage(10) }),
         row(3),
         row(4, { usage_metadata: usage(80) }),
+        row(5, { run_id: null, usage_metadata: usage(90) }),
+        row(6, { run_id: null, usage_metadata: usage(10) }),
       ]),
     ]).toEqual([[4, -10]]);
   });

@@ -13,7 +13,7 @@ export function completedState(
 ): TransportState {
   // `durationMs` 只属于结局；activity 是固定字段的白名单，多一个键整份快照就无效。
   const activityOutcome = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
-  const outcome = { ...activityOutcome, durationMs: null };
+  const outcome = { ...activityOutcome, durationMs: 0 };
   return {
     title: "测试对话",
     messages: [

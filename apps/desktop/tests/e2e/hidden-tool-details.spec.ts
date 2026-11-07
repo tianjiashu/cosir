@@ -96,7 +96,7 @@ test("reader survives automatic process folding, receives output and returns foc
   await page.getByRole("button", { name: "查看输出" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.locator(".xterm-rows")).toContainText("first");
-  const next = { ...part, status: "completed", display_data: { ...part.display_data!, output: "first\nlast-output\n" } };
+  const next = { ...part, status: "completed" as const, display_data: { ...part.display_data!, output: "first\nlast-output\n" } };
   await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId: 42, state: state([next, { type: "text", text: "最终回复", finalReply: true }]) } });
   await expect(dialog.locator(".xterm-rows")).toContainText("last-output");
   await expect(page.locator('[data-slot="process-head"]')).toHaveAttribute("aria-expanded", "false");

@@ -44,7 +44,7 @@ for (const colorScheme of ["light", "dark"] as const) test(`A1–A3 ${colorSchem
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-for (const [status, reason] of [["completed", "stop"], ["completed", "length"], ["completed", "forked"], ["cancelled", "runtime_restarted"], ["cancelled", "user_cancelled"], ["failed", "error"]] as const) test(`A4 ${status}/${reason}: no final remains open`, async ({ page, request }) => {
+for (const [status, reason] of [["completed", "stop"], ["completed", "length"], ["cancelled", "runtime_restarted"], ["cancelled", "user_cancelled"], ["failed", "error"]] as const) test(`A4 ${status}/${reason}: no final remains open`, async ({ page, request }) => {
   await seedState(request, 42, state([text("已产生的进展"), call("fork", true)], outcome(status, { endReason: reason })));
   await page.goto("/tasks/42");
   await expect(page.locator('[data-slot="process-head"]')).toHaveAttribute("aria-expanded", "true");

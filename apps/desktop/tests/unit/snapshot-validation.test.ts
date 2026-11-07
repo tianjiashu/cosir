@@ -254,9 +254,12 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(withToolPart({ ...base, heading: { title: "读取文件", target: "a.ts" } }))).toThrow("已知字段");
   });
 
-  it("结局带 durationMs（非负整数或 null），活动带 ISO 的 startedAt", () => {
+  it("结局带 durationMs（必填非负整数），活动带 ISO 的 startedAt", () => {
     const timed = transportState({ messages: [assistantMessage("a1", 1, [], outcome("completed", { durationMs: 192_000 }))] });
     expect(parseTransportState(timed)).toBe(timed);
+    expect(() => parseTransportState(transportState({
+      messages: [assistantMessage("a1", 1, [], outcome("completed", { durationMs: null as never }))],
+    }))).toThrow("outcome.durationMs");
     expect(() => parseTransportState(transportState({
       messages: [assistantMessage("a1", 1, [], outcome("completed", { durationMs: -1 }))],
     }))).toThrow("outcome.durationMs");

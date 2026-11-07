@@ -147,8 +147,8 @@ test("工具运行中保持单行，完成拿到展示数据后才可展开且�
   await assistant.locator('[data-slot="activity-head"]').click();
   // 无 display_data 的执行期不展开空详情，也不渲染「未找到匹配」之类的伪结果。
   await expect(assistant.getByText("未找到匹配", { exact: true })).toHaveCount(0);
-  // Duration exists during execution too; fork availability confirms the canonical terminal outcome.
-  await expect(assistant.getByRole("button", { name: "从此处 Fork 新任务", exact: true })).toBeEnabled();
+  // Fork belongs to inputs now; use canonical activity to wait for the terminal outcome.
+  await expect.poll(async () => (await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json()).activity.status).toBe("completed");
   await assistant.locator('[data-slot="process-head"]').click();
   const toolRow = assistant.locator('button[data-slot="call-row"]');
   await expect(toolRow).toBeVisible({ timeout: 3_000 });

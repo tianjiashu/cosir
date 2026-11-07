@@ -1,3 +1,4 @@
+import type { TransportToolCallPart } from "@/lib/assistant/contract";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const overrides = vi.hoisted(() => new Map<string, boolean>());
@@ -8,8 +9,8 @@ vi.mock("@/lib/assistant/disclosure-store", async (original) => ({
 import { ProcessBlock } from "@/components/assistant-ui/turn/process-block";
 import { projectTurn } from "@/lib/assistant/turn-layout";
 import { toolCallPart } from "./transport-fixtures";
-const call = (id: string, status = "completed") => toolCallPart(id, "read_file", { status });
-function render(status = "completed") {
+const call = (id: string, status: TransportToolCallPart["status"] = "completed") => toolCallPart(id, "read_file", { status });
+function render(status: TransportToolCallPart["status"] = "completed") {
   const group = projectTurn([call("a"), call("b", status)], "running").blocks[0];
   if (group.kind !== "activity") throw new Error("Expected activity interval");
   return renderToStaticMarkup(<ProcessBlock taskId={1} messageId="m" group={group} renderCall={(item, visible) => <span data-call={item.part.toolCallId} data-visible={visible} />} />);

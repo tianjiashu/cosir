@@ -52,7 +52,7 @@ export function outcome(
   status: TransportTerminalRunStatus,
   overrides: Partial<TransportOutcome> = {},
 ): TransportOutcome {
-  return { status, endReason: status === "completed" ? "stop" : null, error: null, usage: null, contextWindowTotal: null, durationMs: null, ...overrides };
+  return { status, endReason: status === "completed" ? "stop" : null, error: null, usage: null, contextWindowTotal: null, durationMs: 0, ...overrides };
 }
 
 export function activity(

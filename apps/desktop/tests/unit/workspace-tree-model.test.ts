@@ -8,8 +8,8 @@ function task(taskId: number, workspaceId: number, sourceTaskId?: number): Works
     task_id: taskId,
     workspace_id: workspaceId,
     title: `Task ${taskId}`,
-    task_type: sourceTaskId ? "fork" : "user",
-    extra: sourceTaskId ? { fork: { source_task_id: sourceTaskId, source_message_id: "m" } } : null,
+    task_type: sourceTaskId ? "user_fork" : "user",
+    extra: sourceTaskId ? { fork: { tree_parent_task_id: sourceTaskId } } : null,
     created_at: `2026-01-0${taskId}T00:00:00.000Z`,
     updated_at: `2026-01-0${taskId}T00:00:00.000Z`,
   };

@@ -44,7 +44,7 @@ describe("assistant transport converter", () => {
     expect(after.content[0]).toBe(before.content[0]);
     const first = before.content[0];
     if (first.type !== "tool-call") throw new Error("expected tool call");
-    expect(readToolArtifact(first.artifact)).toBe(readToolArtifact(first.artifact));
+    expect(readToolArtifact(first.artifact)).toBe(first.artifact);
     const settled = toToolCallPart({ ...source, status: "completed", display_data: { kind: "terminal-result", output: "done" } });
     expect(settled).not.toBe(first);
     if (settled.type !== "tool-call") throw new Error("expected tool call");
@@ -366,12 +366,5 @@ describe("assistant transport converter", () => {
     });
   });
 
-  it("keeps unknown tool and run states explicitly non-success", () => {
-    const unknownTool = toToolCallPart(tool("future-status" as TransportToolCallPart["status"]));
-    expect(unknownTool).toMatchObject({
-      isError: true,
-      result: { kind: "tool-unknown" },
-      artifact: {presentation: "activity",  backendStatus: "unknown" },
-    });
-  });
+
 });

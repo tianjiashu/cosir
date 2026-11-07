@@ -25,6 +25,64 @@ const mutation = (mutations: TransportFrameEnvelope["mutations"]): TransportFram
 });
 const full = (state: TransportState): TransportFrameEnvelope => ({ task_id: 1, kind: "full", mutations: [], state });
 
+describe("增量与完整快照遵守同一当前契约", () => {
+  const validTool = () => toolCallPart("c", "read_file");
+  const stateWithTool = () => transportState({ messages: [assistantMessage("a", 1, [validTool()])] });
+
+  it.each(["future-status", undefined])("完整快照拒绝非法工具状态 %s", (status) => {
+    const state = stateWithTool();
+    Object.assign(state.messages[0].parts[0], { status });
+    expect(() => parseTransportFrame(full(state))).toThrow("status");
+  });
+
+  it.each(["status", "part", "parts", "message"])("%s 增量中的未知状态报错且整帧不提交", (level) => {
+    const initial = stateWithTool();
+    const store = new TransportFrameStore(initial);
+    const listener = vi.fn();
+    store.subscribe(listener);
+    const invalid = { ...validTool(), status: "future-status" };
+    const change = level === "status" ? { path: ["messages", 0, "parts", 0, "status"], value: "future-status" }
+      : level === "part" ? { path: ["messages", 0, "parts", 0], value: invalid }
+        : level === "parts" ? { path: ["messages", 0, "parts"], value: [invalid] }
+          : { path: ["messages", 0], value: { ...initial.messages[0], parts: [invalid] } };
+    expect(() => store.applyFrame(mutation([
+      { kind: "set", path: ["messages", 0, "parts", 0, "intent"], value: "不得提交" },
+      { kind: "set", ...change },
+    ]))).toThrow("status");
+    expect(store.getSnapshot().state).toBe(initial);
+    expect(listener).not.toHaveBeenCalled();
+    store.applyFrame(mutation([{ kind: "set", path: ["messages", 0, "parts", 0, "status"], value: "completed" }]));
+    expect(store.getSnapshot().state.messages[0].parts[0]).toEqual({ ...validTool(), status: "completed" });
+  });
+
+  it("拒绝废弃审批字段和空终态耗时", () => {
+    const store = new TransportFrameStore(stateWithTool());
+    expect(() => store.applyFrame(mutation([{ kind: "set", path: ["messages", 0, "parts", 0, "approvalRequestId"], value: null }]))).toThrow("已知字段");
+    expect(() => store.applyFrame(mutation([{ kind: "set", path: ["messages", 0, "outcome"], value: { ...outcome("completed"), durationMs: null } }]))).toThrow("durationMs");
+  });
+
+  it("历史页回放错误增量时保留原窗口", () => {
+    const initial = transportState({ messageOffset: 1, messages: [assistantMessage("later", 1)] });
+    const store = new TransportFrameStore(initial);
+    const fetch = store.beginHistoryFetch()!;
+    store.applyFrame(mutation([{ kind: "set", path: ["messages", 0, "parts", 0, "status"], value: "future-status" }]));
+    expect(() => store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [assistantMessage("earlier", 1, [validTool()])] })).toThrow("status");
+    expect(store.getSnapshot().state).toBe(initial);
+  });
+
+  it("混合帧被拒后，不把其中的历史增量留在翻页缓冲中", () => {
+    const store = new TransportFrameStore(transportState({ messageOffset: 1, messages: [assistantMessage("later", 1, [validTool()])] }));
+    const fetch = store.beginHistoryFetch()!;
+    expect(() => store.applyFrame(mutation([
+      { kind: "set", path: ["messages", 0, "parts", 0, "intent"], value: "被拒帧的内容" },
+      { kind: "set", path: ["messages", 1, "parts", 0, "status"], value: "future-status" },
+    ]))).toThrow("status");
+    const earlier = assistantMessage("earlier", 1, [toolCallPart("earlier-call", "read_file")]);
+    expect(store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [earlier] })).toBe(true);
+    expect(store.getSnapshot().state.messages[0]).toBe(earlier);
+  });
+});
+
 const command = (text: string): UserAddMessageCommand => ({
   type: "add-message",
   message: { role: "user", parts: [{ type: "text", text }] },

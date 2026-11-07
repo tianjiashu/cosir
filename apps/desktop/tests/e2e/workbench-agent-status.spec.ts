@@ -12,7 +12,7 @@ function snapshot(runId: number | null, status = "completed", text = "阅读内�
     messages: [{
       id: `assistant-run-${runId}`, role: "assistant", runId,
       parts: [{ type: "text", text, status: ended ? "completed" : "running" }],
-      outcome: ended ? { status, endReason: null, error: null, usage: null, contextWindowTotal: null, durationMs: null } : null,
+      outcome: ended ? { status, endReason: null, error: null, usage: null, contextWindowTotal: null, durationMs: 0 } : null,
       source: null,
     }],
     messageOffset: 0,
@@ -87,7 +87,7 @@ const test = base.extend<{ agent: Fixture }>({
     const address = server.address() as { port: number };
     await page.addInitScript(() => { localStorage.clear(); localStorage.setItem("cosir:last-workspace-id", "7"); });
     await page.route(`${origin}/workspaces`, route => route.fulfill({ json: [{ workspace_id: 7, name: "验收工作区", root_path: "/workspace", created_at: "", updated_at: "" }] }));
-    const task = (id: number) => ({ task_id: id, workspace_id: 7, title: `任务${id}`, task_type: id === 100 ? "user" : "delegate_task",
+    const task = (id: number) => ({ task_id: id, workspace_id: 7, title: `任务${id}`, task_type: id === 100 ? "user" : "agent_task",
       created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
     await page.route(`${origin}/workspaces/7/tasks`, route => route.fulfill({ json: [task(100)] }));
     await page.route(`${origin}/tasks/*`, route => {

@@ -104,7 +104,7 @@ const outcomeOf = (activity) => ({
   error: activity.error,
   usage: activity.usage,
   contextWindowTotal: activity.contextWindowTotal,
-  durationMs: null,
+  durationMs: 0,
 });
 
 const textMessage = (id, role, text, status, runId) => ({
@@ -1045,7 +1045,7 @@ const server = createServer(async (req, res) => {
     states.set(TASK_ID, delegationState());
     publishTaskStatus(TASK_ID);
     for (const id of [501, 502]) tasks.set(id, {
-      task_id: id, workspace_id: WORKSPACE_ID, title: `子任务${id}`, task_type: "delegate_task",
+      task_id: id, workspace_id: WORKSPACE_ID, title: `子任务${id}`, task_type: "agent_task",
       created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z",
     });
     states.set(501, childDelegationState());

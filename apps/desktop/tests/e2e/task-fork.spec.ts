@@ -9,11 +9,11 @@ const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups:
 const snapshot = (status: "completed" | "running" | "suspended"): TransportState => {
   const ended = (runStatus: string) => runStatus === "completed";
   const turn = (runId: number, runStatus: string) => [
-    { id: `u-${runId}`, role: "user" as const, runId, source: null, outcome: null,
+    { id: `${runId}`, role: "user" as const, runId, source: null, outcome: null,
       parts: [{ type: "text" as const, text: `问题 ${runId}`, status: "completed" as const }] },
-    { id: `assistant-u-${runId}`, role: "assistant" as const, runId, source: null,
+    { id: `assistant-${runId}`, role: "assistant" as const, runId, source: null,
       parts: [{ type: "text" as const, text: `回答 ${runId}`, status: ended(runStatus) ? "completed" as const : "running" as const }],
-      outcome: ended(runStatus) ? { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: null } : null },
+      outcome: ended(runStatus) ? { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 } : null },
   ];
   return {
     title: "测试对话",
@@ -30,7 +30,7 @@ async function seedView(page: Page, request: APIRequestContext, status: "complet
 }
 
 const target = {
-  task_id: 44, workspace_id: 7, title: "历史分支", task_type: "fork",
+  task_id: 44, workspace_id: 7, title: "历史分支", task_type: "user_fork",
   created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
 };
 
@@ -41,20 +41,21 @@ test.beforeEach(async ({ request }) => {
 });
 
 for (const status of ["running", "suspended"] as const) {
-  test(`后续 ${status} 活动不阻止 fork 已结束的那一轮`, async ({ page, request }) => {
+  test(`${status} 时仍可在任意已并入输入之前分叉`, async ({ page, request }) => {
     const calls: unknown[] = [];
     await page.route(`${origin}/tasks/42/fork`, async (route) => {
       calls.push(route.request().postDataJSON());
       await route.fulfill({ status: 409, json: { detail: { code: "WORKSPACE_BUSY", message: "busy", retryable: true } } });
     });
     await seedView(page, request, status);
-    const buttons = page.getByRole("button", { name: "从此处 Fork 新任务", exact: true });
+    const buttons = page.getByRole("button", { name: "从此消息之前分叉", exact: true });
     await expect(buttons).toHaveCount(2);
     await expect(buttons.first()).toBeEnabled();
-    await expect(buttons.last()).toBeDisabled();
+    await expect(buttons.last()).toBeEnabled();
+    await page.locator('[data-role="user"]').first().hover();
     await buttons.first().click();
-    // fork 按消息切分：入口挂在带结局的回复上，请求体只带消息 id。
-    await expect.poll(() => calls).toEqual([{ messageId: "assistant-u-1" }]);
+    // 输入锚点不依赖 Run 终态。
+    await expect.poll(() => calls).toEqual([{ beforeMessageId: "1" }]);
     await expect(page.getByText("工作区正在处理其他操作，请稍后重试。", { exact: true })).toBeVisible();
   });
 }
@@ -65,7 +66,8 @@ test("fork 成功后导航不等待目录刷新", async ({ page, request }) => {
   await seedView(page, request);
   // 后续目录刷新失败不能把创建成功变成失败或再次创建。
   await page.route(`${origin}/workspaces`, (route) => route.fulfill({ status: 503, body: "unavailable" }));
-  await page.getByRole("button", { name: "从此处 Fork 新任务", exact: true }).first().click();
+  await page.locator('[data-role="user"]').first().hover();
+  await page.getByRole("button", { name: "从此消息之前分叉", exact: true }).first().click();
   await expect(page).toHaveURL(/\/tasks\/44$/);
   await expect(page.getByText("Fork 失败", { exact: true })).toHaveCount(0);
 });
@@ -80,7 +82,8 @@ test("切换任务后 fork 的迟到响应不抢回页面", async ({ page, reque
     await route.fulfill({ json: target });
   });
   await seedView(page, request);
-  await page.getByRole("button", { name: "从此处 Fork 新任务", exact: true }).first().click();
+  await page.locator('[data-role="user"]').first().hover();
+  await page.getByRole("button", { name: "从此消息之前分叉", exact: true }).first().click();
   await expect.poll(() => submitted).toBe(true);
   await page.getByRole("treeitem").filter({ hasText: "另一个任务" }).click();
   await expect(page).toHaveURL(/\/tasks\/43$/);
