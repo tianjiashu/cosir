@@ -10,7 +10,7 @@ export function iconPath(name: string): string {
 }
 
 /**
- * 目前没有安装包，应用以 Electron 可执行文件运行，Dock 默认显示 Electron 图标，所以由宿主在启动时换掉。
+ * 开发运行时的应用包仍携带 Electron 图标，由宿主在启动时换成 Cosir 图标。
  * `dock.png` 已按 Apple 图标网格留白，与其他应用等大。
  */
 export function applyDockIcon(): void {

@@ -3,6 +3,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "tw-shimmer";
+@import "streamdown/styles.css";
 @import "react-diff-view/style/index.css";
 @import "./markdown.css";
 
@@ -32,6 +33,9 @@
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
   /* 回合里过程区的字号（设计 §5.9：调用行、区头 13px）：介于 xs 与 sm 之间，正文仍用 sm。 */
+  --text-chat: 0.9375rem;
+  --text-chat--line-height: 1.75rem;
+
   --text-2sm: 0.8125rem;
   --text-2sm--line-height: 1.25rem;
   --color-ring: var(--ring);
@@ -511,9 +515,25 @@ body > :not(#root) > * {
 
   .animate-pulse,
   .animate-ping,
-  .animate-bounce {
+  .animate-bounce,
+  [data-sd-animate],
+  [data-sd-animate-marker]::marker {
     animation: none;
   }
+}
+
+/*
+ * 文件 diff 的配色：react-diff-view 自带的是浅色十六进制，文字却跟随主题，深色下增删行不可读。
+ * 用半透明的语义色叠在底面上，两种主题共用一套。
+ */
+.aui-diff-view {
+  --diff-font-family: var(--app-font-mono);
+  --diff-gutter-insert-background-color: color-mix(in oklab, var(--success) 22%, transparent);
+  --diff-gutter-delete-background-color: color-mix(in oklab, var(--destructive) 22%, transparent);
+  --diff-code-insert-background-color: color-mix(in oklab, var(--success) 12%, transparent);
+  --diff-code-delete-background-color: color-mix(in oklab, var(--destructive) 12%, transparent);
+  --diff-code-insert-edit-background-color: color-mix(in oklab, var(--success) 30%, transparent);
+  --diff-code-delete-edit-background-color: color-mix(in oklab, var(--destructive) 30%, transparent);
 }
 
 /* 终端工作台里 Agent 输入行的来源标记：xterm 装饰元素占首个单元格，画左侧色条。 */
@@ -529,4 +549,9 @@ body > :not(#root) > * {
  */
 [data-terminal-viewport] .xterm .xterm-viewport {
   background-color: transparent;
+}
+
+/* 命令卡仅预览尾部：滚轮留给对话；完整输出在独立阅读器滚动。 */
+[data-terminal-mode="preview"] .xterm-scrollable-element > .scrollbar {
+  display: none;
 }

@@ -143,6 +143,8 @@ export function FileTabBar({
                     value={tab.path}
                     aria-label={fileTabLabel(tab.path, paths)}
                     className="flex min-w-0 items-center gap-1.5 self-stretch focus-visible:outline-2 focus-visible:outline-ring"
+                    // Tabs 不会为重复选择当前值触发 onValueChange，但点击仍是新的导航意图。
+                    onClick={() => useFilesStore.getState().beginNavigation()}
                     onDoubleClick={() => open(workspaceId, tab.path, true)}
                   />} >
                     <WorkspaceFileIcon name={tab.path.split("/").at(-1)!} />

@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent, type RefObject } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import {
   closestCenter,
   DndContext,
@@ -12,7 +12,7 @@ import {
 import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 
-import { useElementSize } from "@/hooks/use-element-size";
+import type { ElementSize } from "@/hooks/use-element-size";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TASK_RAIL_WIDTH, taskRailPlacement } from "@/lib/task-rail/placement";
 import { useTaskRailStore, type RailCardId } from "@/lib/task-rail/store";
@@ -39,14 +39,17 @@ const FLOATING_MAX_HEIGHT_RATIO = 0.6;
  * （见 `conversation-aside.tsx`），所以滚动条在视口最外侧，底部终端也不必给它让宽度。
  *
  * 摆放按对话视口宽度决定（`taskRailPlacement`）：`docked` 占网格右列，`floating` 与内容列叠在同一格
- * 右上角、不占宽度。两种摆放是同一个节点只换网格位置，切换时卡片不重挂，展开状态与计时都保留。
+ * 右上角、不占宽度。固定时默认显示；浮层会盖住对话，只在用户点开（或定位条目）时出现，从不自动弹出，
+ * 所以这个组件在对话页常驻，靠它量出的摆放决定显示哪一种，也把摆放告诉页头开关。
  * 浮层是非模态的：点对话区不会关闭它（侧栏里是要盯着看的进度）；焦点在侧栏内时按 Esc 关闭，
  * 拖动中按 Esc 是 dnd-kit 的取消拖动，不关闭侧栏；关闭后焦点交还页头按钮由调用方负责（见 `useTaskRail`）。
  * 高度按视口封顶，卡片多了在侧栏内部滚动。卡片顺序与折叠是全局偏好（`useTaskRailStore`）。
  */
-export function TaskRail({ taskId, viewportRef, onClose }: { taskId: number; viewportRef: RefObject<HTMLDivElement | null>; onClose: () => void }) {
-  const [, viewport] = useElementSize(viewportRef);
+export function TaskRail({ taskId, viewport, onClose }: { taskId: number; viewport: ElementSize; onClose: () => void }) {
   const placement = taskRailPlacement(viewport.width);
+  const floating = placement === "floating";
+  const visible = useTaskRailStore((state) => (floating ? state.floatOpen : state.open));
+  const setFloating = useTaskRailStore((state) => state.setFloating);
   const order = useTaskRailStore((state) => state.order);
   const setOrder = useTaskRailStore((state) => state.setOrder);
   const [dragging, setDragging] = useState(false);
@@ -54,6 +57,8 @@ export function TaskRail({ taskId, viewportRef, onClose }: { taskId: number; vie
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
+
+  useEffect(() => setFloating(floating), [floating, setFloating]);
 
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     setDragging(false);
@@ -63,25 +68,26 @@ export function TaskRail({ taskId, viewportRef, onClose }: { taskId: number; vie
     void frontendLog("INFO", "task_rail_card_reordered", "会话侧栏卡片顺序已调整", { data: { taskId, order: next } });
   };
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Escape" || placement !== "floating" || dragging) return;
+    if (event.key !== "Escape" || !floating || dragging) return;
     event.stopPropagation();
     onClose();
   };
 
+  if (!visible) return null;
   return (
     <aside
       aria-label="会话侧栏"
       data-task-rail={placement}
       style={{
         width: TASK_RAIL_WIDTH,
-        maxHeight: placement === "docked" ? viewport.height : viewport.height * FLOATING_MAX_HEIGHT_RATIO,
+        maxHeight: floating ? viewport.height * FLOATING_MAX_HEIGHT_RATIO : viewport.height,
       }}
       onKeyDown={onKeyDown}
       className={cn(
         "row-start-1 z-20 flex min-h-0 flex-col gap-2 self-start overflow-y-auto",
-        placement === "docked"
-          ? "sticky top-0 col-start-2 py-2 pr-2"
-          : "dock-panel bg-background sticky top-2 col-start-1 mt-2 mr-2 justify-self-end p-2",
+        floating
+          ? "dock-panel bg-background sticky top-2 col-start-1 mt-2 mr-2 justify-self-end p-2"
+          : "sticky top-0 col-start-2 py-2 pr-2",
       )}
     >
       <DndContext

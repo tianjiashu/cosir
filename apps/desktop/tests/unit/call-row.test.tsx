@@ -28,7 +28,7 @@ function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
   };
 }
 
-type RenderProps = { interactive?: boolean; taskCancelling?: boolean; toolName?: string; args?: Record<string, unknown> };
+type RenderProps = { interactive?: boolean; inherited?: boolean; taskCancelling?: boolean; toolName?: string; args?: Record<string, unknown> };
 
 function render(overrides: Partial<ToolArtifact> = {}, { toolName = "read_file", args = {}, ...props }: RenderProps = {}): string {
   // 终端命令的展开体经 `useOpenLink` 接上链接打开，需要 Query 上下文（应用里由根组件提供）。
@@ -66,20 +66,24 @@ describe("CallRow 标题与目标", () => {
     expect(html).toContain("lucide-wrench");
   });
 
-  it("排队状态扫光，参数到达不隐藏状态", () => {
-    expect(render({presentation: "activity",  backendStatus: "pending" })).toContain("shimmer");
-    expect(render({presentation: "activity",  backendStatus: "pending" }, { args: { path: "a.ts" } })).toContain("shimmer");
+  it("排队时标题扫光，参数到达前后形态不变", () => {
+    expect(render({presentation: "activity",  backendStatus: "pending" })).toMatch(/data-slot="call-title"[^>]*shimmer/);
+    expect(render({presentation: "activity",  backendStatus: "pending" }, { args: { path: "a.ts" } })).toMatch(/data-slot="call-title"[^>]*shimmer/);
   });
 });
 
 describe("CallRow 状态位", () => {
-  it("运行中状态文字扫光、失败显示告警、取消显示叉；成功不画对勾", () => {
-    expect(render({presentation: "activity",  backendStatus: "running" })).toContain("shimmer");
+  it("运行中标题扫光、状态文字只留给读屏，失败显示告警、取消显示叉；成功不画对勾", () => {
+    const running = render({presentation: "activity",  backendStatus: "running" });
+    expect(running).toMatch(/data-slot="call-title"[^>]*shimmer/);
+    expect(running).toContain('<span class="sr-only">执行中</span>');
     expect(render({presentation: "activity",  backendStatus: "failed", error: "路径无效" })).toContain("lucide-circle-alert");
     expect(render({presentation: "activity",  backendStatus: "cancelled", error: "已取消" })).toContain("lucide-circle-x");
     const done = render();
     expect(done).not.toContain("lucide-check");
     expect(done).not.toContain("animate-spin");
+    expect(done).not.toContain("shimmer");
+    expect(done).not.toContain("已完成");
   });
 
   it("失败把后端短提示放在元信息、标题变红且不可展开；取消保持中性、不抹去操作记录", () => {
@@ -90,9 +94,10 @@ describe("CallRow 状态位", () => {
     expect(render({presentation: "activity",  backendStatus: "cancelled", error: "已取消" })).not.toContain("line-through");
   });
 
-  it("结束后标题转灰，运行中保持前景色", () => {
-    expect(render()).toMatch(/data-slot="call-title"[^>]*text-muted-foreground/);
-    expect(render({presentation: "activity",  backendStatus: "running" })).toMatch(/data-slot="call-title"[^>]*text-foreground/);
+  it("继承时未结束的调用不扫光：它已经没有执行者", () => {
+    const html = render({presentation: "activity",  backendStatus: "running" }, { inherited: true });
+    expect(html).not.toContain("shimmer");
+    expect(html).toContain("继承时未结束");
   });
 });
 
@@ -104,9 +109,11 @@ describe("CallRow 附加态", () => {
     expect(html).toContain("等待你的操作");
   });
 
-  it("后台占位未结束时标「后台运行中」，结束后不再标", () => {
-    expect(render({presentation: "activity",  backendStatus: "pending", background: true })).toContain("后台运行中");
-    expect(render({presentation: "activity",  backendStatus: "completed", background: true })).not.toContain("后台运行中");
+  it("后台占位未结束时标题扫光，结束后停止", () => {
+    expect(render({presentation: "activity",  backendStatus: "pending", background: true })).toMatch(/data-slot="call-title"[^>]*shimmer/);
+    const done = render({presentation: "activity",  backendStatus: "completed", background: true });
+    expect(done).not.toContain("shimmer");
+    expect(done).not.toContain("后台运行中");
   });
 });
 
@@ -151,34 +158,65 @@ describe("CallRow kind 视图", () => {
     expect(done).not.toContain("exit 0");
   });
 
-  it("委派行的状态读任务状态推送，不读展示数据", () => {
-    taskStatuses.set(501, "running");
+  const fork = (overrides: Partial<ToolArtifact> = {}, props: { interactive?: boolean } = {}) => renderToStaticMarkup(
+    <MemoryRouter>
+      <CallRow
+        taskId={7}
+        toolCallId="call-fork"
+        toolName="fork_task"
+        args={{ title: "前端部分", message: "只做前端" }}
+        artifact={artifact({ childTaskId: 41, display_data: { kind: "fork-task-result", title: "前端部分", child_task_id: 41 }, ...overrides })}
+        {...props}
+      />
+    </MemoryRouter>,
+  );
+
+  it.each(["running", "pending", "completed", null])("子任务 %s 时委派行不说状态，且不读展示数据", (status) => {
+    taskStatuses.set(501, status);
     const html = render({
       childTaskId: 501,
       display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501, status: "completed" },
     });
-    expect(html).toContain("运行中");
+    expect(html).not.toContain("运行中");
     expect(html).not.toContain("已完成");
   });
 
-  it("分叉行跳到它的侧栏对话，状态同样读任务状态推送", () => {
+  it.each([["failed", "运行失败"], ["cancelled", "已停止"], ["suspended", "等待中"]])("子任务 %s 时委派行报异常", (status, label) => {
+    taskStatuses.set(501, status);
+    const html = render({ childTaskId: 501, display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501 } });
+    expect(html).toContain(label);
+  });
+
+  it("工具自身取消时不再叠子任务状态", () => {
+    taskStatuses.set(41, "cancelled");
+    const html = fork({ backendStatus: "cancelled", error: "已取消" });
+    expect(html).toContain("已取消");
+    expect(html).not.toContain("已停止");
+  });
+
+  it("后台分叉在时间线只留一行：点行定位看板，没有打开、停止与展开", () => {
     taskStatuses.set(41, "running");
-    const html = renderToStaticMarkup(
-      <MemoryRouter>
-        <CallRow
-          taskId={7}
-          toolCallId="call-fork"
-          toolName="fork_task"
-          args={{ title: "前端部分", message: "只做前端" }}
-          artifact={artifact({ childTaskId: 41, display_data: { kind: "fork-task-result", title: "前端部分", child_task_id: 41 } })}
-        />
-      </MemoryRouter>,
-    );
-    expect(html).toContain("分叉对话");
-    expect(html).toContain("前端部分");
-    expect(html).toContain("运行中");
+    const html = fork({ backendStatus: "pending", background: true });
+    expect(html).toContain("在后台任务中查看：");
+    expect(html).toMatch(/<button[^>]*data-slot="call-row"/);
+    expect(html).not.toContain("aria-expanded");
+    expect(html).not.toContain("打开分叉对话");
+    expect(html).not.toContain("停止分叉对话");
+  });
+
+  it("只读阅读器里当前 Task 没有看板：分叉仍可打开与展开，打开悬停才显示", () => {
+    const html = fork({ background: true }, { interactive: false });
     expect(html).toContain("打开分叉对话：前端部分");
-    expect(html).toContain("停止分叉对话：前端部分");
+    expect(html.match(/<button[^>]*打开分叉对话[^>]*>/)?.[0]).toContain("opacity-0");
+    expect(html).toContain("aria-expanded");
+    expect(html).not.toContain("在后台任务中查看");
+  });
+
+  it("后台命令同样只留一行，输出与停止都在看板", () => {
+    const html = render({ backendStatus: "pending", background: true, display_data: { kind: "terminal-result", command: "make", output: "x" } }, { toolName: "execute_terminal" });
+    expect(html).toContain("在后台任务中查看：");
+    expect(html).not.toContain("停止终端命令");
+    expect(html).not.toContain("aria-expanded");
   });
 
   it("消息卡片可以打开收件方，但不授予停止对方的能力", () => {
@@ -195,6 +233,19 @@ describe("CallRow kind 视图", () => {
     );
     expect(html).toContain("打开任务：前端部分");
     expect(html).not.toContain("停止任务");
+  });
+
+  it("状态查询行保留停止：子任务被消息唤醒后这里是单独停止它的入口", () => {
+    taskStatuses.set(41, "running");
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <CallRow taskId={9} toolCallId="call-status" toolName="task_status"
+          args={{ task_id: 41 }}
+          artifact={artifact({ display_data: { kind: "agent-task-result", operation: "status", task_id: 41, agent_name: "前端部分" } })}
+        />
+      </MemoryRouter>,
+    );
+    expect(html).toContain("停止任务：前端部分");
   });
 
   it("只读面不渲染停止与转到后台", () => {

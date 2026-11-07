@@ -9,6 +9,8 @@ import type { TransportToolDisplayData, TransportToolStatus } from "@/lib/assist
  */
 export type ToolArtifact = {
   backendStatus: TransportToolStatus;
+  intent?: string | null;
+  presentation: "activity" | "standalone" | "quiet";
   /** 是否在等用户决定；投影自 part `awaitingUser`，不从 `pending` 推断。 */
   awaitingUser: boolean;
   display_data: TransportToolDisplayData | null;
@@ -21,40 +23,10 @@ export type ToolArtifact = {
   background: boolean;
 };
 
-const EMPTY_ARTIFACT: ToolArtifact = {
-  backendStatus: "unknown",
-  awaitingUser: false,
-  display_data: null,
-  error: null,
-  errorCode: null,
-  background: false,
-};
-
-function positiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
 /**
- * 从 assistant-ui part 的 `artifact` 读回 `ToolArtifact`。`artifact` 在 assistant-ui 侧是 `unknown`，
- * 这里是前端自己写、自己读的唯一一处形状收口；未知状态值一律归为 `unknown`，不得被当成 pending 或 completed。
+ * 恢复 SDK 擦除的项目自有类型。artifact 唯一由 converter 创建，SDK 原样传递；
+ * 不在读取端复制、补字段或重判状态，保留原对象身份以支持工具行的 memo。
  */
 export function readToolArtifact(value: unknown): ToolArtifact {
-  if (typeof value !== "object" || value === null) return EMPTY_ARTIFACT;
-  const candidate = value as Partial<ToolArtifact>;
-  const status = candidate.backendStatus;
-  const backendStatus: TransportToolStatus = status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "cancelled"
-    ? status
-    : "unknown";
-  return {
-    backendStatus,
-    awaitingUser: candidate.awaitingUser === true,
-    display_data: candidate.display_data ?? null,
-    team_run_id: positiveInteger(candidate.team_run_id),
-    // converter 已按后端 part.error 收口失败 / 取消提示，这里只透传。
-    error: typeof candidate.error === "string" ? candidate.error : null,
-    errorCode: typeof candidate.errorCode === "string" ? candidate.errorCode : null,
-    childTaskId: positiveInteger(candidate.childTaskId),
-    agent_role: typeof candidate.agent_role === "string" && candidate.agent_role.trim() ? candidate.agent_role : undefined,
-    background: candidate.background === true,
-  };
+  return value as ToolArtifact;
 }

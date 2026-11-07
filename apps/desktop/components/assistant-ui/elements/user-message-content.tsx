@@ -24,7 +24,7 @@ export function UserMessageContent() {
   if (segments.every((segment) => segment.type === "text")) {
     return (
       <MessagePrimitive.Parts>{({ part }) => (
-        part.type === "text" ? <MarkdownText status={part.status} /> : null
+        part.type === "text" ? <MarkdownText /> : null
       )}</MessagePrimitive.Parts>
     );
   }

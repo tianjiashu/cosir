@@ -39,7 +39,7 @@ test("后台命令在时间线只留一行，详情与停止只在看板", async
   await expect(page.getByRole("dialog")).toHaveCount(1);
 });
 
-test("Team 结束后时间线的「查看」定位到折叠在已结束里的后台详情", async ({ page, request }) => {
+test("Team 结束后点时间线的行定位到折叠在已结束里的后台详情", async ({ page, request }) => {
   const preview = {
     kind: "agent-team-approval", team_run_id: 17, team_id: "review", name: "代码审查",
     goal: "审查改动", start_node: "review", configuration: { team_id: "review" },
@@ -55,6 +55,6 @@ test("Team 结束后时间线的「查看」定位到折叠在已结束里的后
   }]));
   await request.post(`${origin}/__test__/seed-background-tasks`, { data: { taskId: TASK, entries: [{ toolCallId: "team", kind: "agent_team", label: "代码审查", status: "completed", startedAt: started, endedAt: ended }], foregroundWaits: [] } });
   await page.goto(`/tasks/${TASK}`);
-  await page.locator('[data-slot="turn"] [data-tool-call-id="team"]').getByRole("button", { name: "查看", exact: true }).click();
+  await page.locator('[data-slot="turn"] [data-tool-call-id="team"] [data-slot="call-row"]').click();
   await expect(page.locator('[data-background-task="team"]').getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
 });

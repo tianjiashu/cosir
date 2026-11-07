@@ -1,3 +1,4 @@
+import { useOpenWorkspacePath } from "@/components/workspace-references/use-open-workspace-path";
 import { useElementSize } from "@/hooks/use-element-size";
 import { useBrowserVisibility } from "@/lib/workspace-files/visibility";
 import { FileBrowserMenu, IgnoredItemsDialog } from "./ignored-items-dialog";
@@ -62,9 +63,9 @@ export function WorkspaceFilesSurface({
   const revision = visibility.data?.revision ?? "loading";
   const session = useFilesStore((s) => fileSession(s.sessions, workspaceId));
   const patch = useFilesStore((s) => s.patch);
-  const open = useFilesStore((s) => s.open);
+  const opener = useOpenWorkspacePath();
   const client = useQueryClient();
-  // 文件名搜索的文字与已提交的请求都在工作区会话里：链接点到不存在的文件时，打开入口会替用户发起搜索。
+  // 文件名搜索的文字与已提交的请求都在工作区会话里：用户可从文件名提及显式发起查找。
   const query = session.searchText;
   const searchRequest = session.searchRequest;
   const searchFilename = useFilesStore((s) => s.searchFilename);
@@ -227,7 +228,11 @@ export function WorkspaceFilesSurface({
                     key={`${searchRequest.id}:${revision}`}
                     workspaceId={workspaceId}
                     query={searchRequest.query}
-                    open={(path) => open(workspaceId, path)}
+                    navigation={searchRequest.navigation !== undefined}
+                    open={(path) => {
+                      patch(workspaceId, { searchRequest: { ...searchRequest, navigation: undefined } });
+                      void opener?.openFile(path, { lines: searchRequest.navigation?.lines, pinned: false });
+                    }}
                     clear={clearFilenameSearch}
                     onManageIgnored={() => setManageIgnored(true)}
                   />

@@ -1,16 +1,16 @@
 import { useEffect, useState } from "react";
 
 /**
- * 回合耗时的文案：「48 秒」「3 分 12 秒」「1 小时 02 分」。不足 1 秒按 0 秒计；负值（时钟回拨）按 0。
+ * 回合耗时的文案：「48秒」「3分钟12秒」「1小时02分」。不足 1 秒按 0 秒计；负值（时钟回拨）按 0。
  */
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours} 小时 ${String(minutes).padStart(2, "0")} 分`;
-  if (minutes > 0) return `${minutes} 分 ${seconds} 秒`;
-  return `${seconds} 秒`;
+  if (hours > 0) return `${hours}小时${String(minutes).padStart(2, "0")}分`;
+  if (minutes > 0) return `${minutes}分钟${seconds}秒`;
+  return `${seconds}秒`;
 }
 
 /** 自 `startedAt`（ISO 时间）到 `now` 过去的毫秒数；解析失败为 null，时钟回拨按 0。 */

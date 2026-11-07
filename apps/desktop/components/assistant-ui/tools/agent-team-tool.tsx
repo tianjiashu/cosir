@@ -1,8 +1,11 @@
+import { useTeamApprovalDraft } from "@/lib/assistant/team-approval-draft";
+import { commandPending, decisionTarget, useCommandRequest } from "@/lib/assistant/command-request-store";
 import { useEffect, useState } from "react";
-import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon, UsersIcon } from "lucide-react";
+import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon } from "lucide-react";
 
 import { submitToolDecision, type ToolDecision } from "@/lib/assistant/task-commands";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
+import { HttpError } from "@/lib/http/errors";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
 import { Badge } from "@/components/ui/badge";
@@ -11,8 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { statusColorStyle } from "@/lib/agent-team-status";
-import { SURFACE_CARD_CLASS } from "@/components/assistant-ui/turn/turn-tokens";
-import { AgentTeamExecutionCard, useAgentTeamRunPolling } from "./agent-team-execution-card";
+import { useAgentTeamRunPolling } from "./agent-team-execution-card";
 import type { ArtifactCardProps } from "./artifact-card";
 import { readAgentTeamPreviewDisplay, type AgentTeamPreviewDisplay } from "./agent-team-display";
 
@@ -72,51 +74,24 @@ function AwaitingReviewStatus({ label = AWAITING_REVIEW_LABEL, className }: { la
 }
 
 /**
- * 产物区的 Team 卡：按 TeamRun 状态渲染，不依附工具调用生命周期。用户驳回（`cancelled` + `user_rejected`）
- * 显示驳回结果；其余交给执行卡。待确认（`pending`）阶段这张卡不出现——审批表单在等待卡里（`AgentTeamApproval`），
- * 由回合投影按 `awaitingUser` 决定放哪一边。
- */
-export function AgentTeamTool(props: ArtifactCardProps) {
-  const { artifact } = props;
-  const preview = readAgentTeamPreviewDisplay(artifact.display_data);
-  const runQuery = useAgentTeamRunPolling(preview?.teamRunId);
-  const teamRun = runQuery.data ?? null;
-  if (!preview) return null;
-  if (teamRun && teamRun.status === "cancelled" && teamRun.end_reason === "user_rejected") {
-    return (
-      <div className={cn(SURFACE_CARD_CLASS, "space-y-2 p-3")} aria-label="已驳回的 Agent Team 方案">
-        <div className="flex items-center gap-2">
-          <UsersIcon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
-          <span className="font-medium text-sm">{preview.name}</span>
-          <span className="text-xs text-muted-foreground">已驳回</span>
-        </div>
-        <p className="text-muted-foreground text-xs">主 Agent 会根据审阅意见重新生成方案。</p>
-      </div>
-    );
-  }
-  return (
-    <AgentTeamExecutionCard
-      {...props}
-      displayOverride={{ teamRunId: preview.teamRunId, teamId: preview.teamId, goal: teamRun?.goal ?? preview.goal }}
-    />
-  );
-}
-
-/**
- * 等待卡里的审批表单：TeamRun `pending` 时可编辑、可提交；决定提交后后端确定性执行——批准后在后台运行 Team，落定时按原调用交付结论；驳回即落定。
- * 表单没有自己的外壳（等待卡已是带边框的容器）。
+ * 独立调用卡里的审批表单：TeamRun `pending` 时可编辑、可提交；决定提交后后端确定性执行——批准后在后台运行 Team，落定时按原调用交付结论；驳回即落定。
+ * 表单没有自己的外壳（调用卡已是带边框的容器）。
  */
 export function AgentTeamApproval({ artifact, taskId, toolCallId, interactive = true }: ArtifactCardProps) {
   const preview = readAgentTeamPreviewDisplay(artifact.display_data);
   const runQuery = useAgentTeamRunPolling(preview?.teamRunId);
   const teamRun = runQuery.data ?? null;
-  const [state, setState] = useState<"idle" | "confirming" | "rejecting" | "failed">("idle");
+  const [state, setState] = useState<"idle" | "failed">("idle");
+  const request = useCommandRequest(taskId, decisionTarget(toolCallId));
+  const submitting = commandPending(request);
   const [message, setMessage] = useState("");
-  const [goal, setGoal] = useState(preview?.goal ?? "");
-  const [nodeGoals, setNodeGoals] = useState<AgentTeamPreviewDisplay["nodeGoals"]>(preview?.nodeGoals ?? {});
-  const [feedback, setFeedback] = useState("");
+  const { draft, update, clear } = useTeamApprovalDraft(taskId, toolCallId, preview);
+  const { goal, nodeGoals, feedback } = draft;
+  const setGoal = (value: string) => update({ goal: value });
+  const setFeedback = (value: string) => update({ feedback: value });
+  const setNodeGoals = (value: (previous: typeof nodeGoals) => typeof nodeGoals) => update({ nodeGoals: value(nodeGoals) });
   const isPending = teamRun?.status === "pending";
-  const formDisabled = !interactive || !isPending || state === "confirming" || state === "rejecting";
+  const formDisabled = !interactive || !isPending || submitting;
   const reviewStatusLabel = isPending
     ? AWAITING_REVIEW_LABEL
     : runQuery.isError
@@ -126,16 +101,17 @@ export function AgentTeamApproval({ artifact, taskId, toolCallId, interactive = 
 
   useEffect(() => {
     if (!preview || teamRunStatus === null) return;
+    if (teamRunStatus !== "pending") clear();
     void frontendLog("INFO", "agent_team_card_status_observed", "Team 方案卡已读到 TeamRun 状态", {
       data: { taskId, toolCallId, teamRunId: preview.teamRunId, status: teamRunStatus },
     });
-  }, [preview?.teamRunId, taskId, teamRunStatus, toolCallId]);
+  }, [preview?.teamRunId, taskId, teamRunStatus, toolCallId, clear]);
 
   if (!preview) return null;
 
   /** 提交决定；后端重放 `agent_team` 调用执行它（批准即登记后台 Team），失败只影响本卡片的提示状态。 */
-  const submitDecision = async (decision: ToolDecision, phase: "confirming" | "rejecting") => {
-    setState(phase);
+  const submitDecision = async (decision: ToolDecision) => {
+    setState("idle");
     setMessage("");
     const traceId = newTraceId();
     try {
@@ -144,6 +120,11 @@ export function AgentTeamApproval({ artifact, taskId, toolCallId, interactive = 
       // 主 Agent 被决定消息唤醒后的输出经 Task 长订阅到达，这里只刷新 TeamRun 状态。
       void runQuery.refetch();
     } catch (error) {
+      // 结果未知后重试才会到这里：第一次其实已提交，以 TeamRun 状态为准。
+      if (error instanceof HttpError && error.status === 409) {
+        void runQuery.refetch();
+        return;
+      }
       void frontendLog("ERROR", "agent_team_decision_submit_failed", "提交 Team 审批决定失败", {
         traceId,
         data: { taskId, toolCallId, teamRunId: preview.teamRunId, decision: decision.decision },
@@ -165,7 +146,6 @@ export function AgentTeamApproval({ artifact, taskId, toolCallId, interactive = 
         decision: "approve",
         data: { configuration: preview.configuration, goal, node_goals: nodeGoals },
       },
-      "confirming",
     );
   };
   const reject = async () => {
@@ -181,7 +161,7 @@ export function AgentTeamApproval({ artifact, taskId, toolCallId, interactive = 
       setMessage("请填写驳回意见，主 Agent 才能据此重新生成方案");
       return;
     }
-    await submitDecision({ decision: "reject", feedback: trimmedFeedback }, "rejecting");
+    await submitDecision({ decision: "reject", feedback: trimmedFeedback });
   };
   return (
     <div className="space-y-3" data-slot="agent-team-approval">
@@ -287,10 +267,10 @@ export function AgentTeamApproval({ artifact, taskId, toolCallId, interactive = 
           </label>
           <div className="flex justify-end gap-2">
             <Button type="button" size="sm" variant="outline" disabled={formDisabled} onClick={() => void reject()}>
-              {state === "rejecting" ? "正在驳回…" : "驳回并重新生成"}
+              {submitting ? (request?.phase === "sending" ? "正在提交…" : "等待状态同步…") : "驳回并重新生成"}
             </Button>
             <Button type="button" size="sm" disabled={formDisabled} onClick={() => void confirm()}>
-              {state === "confirming" ? "确认中…" : "确认执行"}
+              {submitting ? (request?.phase === "sending" ? "正在提交…" : "等待状态同步…") : "确认执行"}
             </Button>
         </div>
       </div>

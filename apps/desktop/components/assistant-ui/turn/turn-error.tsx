@@ -1,10 +1,7 @@
 import { CircleAlertIcon } from "lucide-react";
 import { ErrorPrimitive, MessagePrimitive } from "@assistant-ui/react";
 
-/**
- * 结局卡：回合以失败或取消结束时写在最后。只用 `destructive` 7% 的着色底面，不加框（设计 §5.8：边框只留给
- * 等待用户卡）。文案来自 assistant-ui 的消息状态（converter 已按结局收口）。
- */
+/** 真正运行失败的错误详情。取消由 Turn 的中性结局呈现，不进入 assistant-ui 的 error 分支。 */
 export function TurnError() {
   return (
     <MessagePrimitive.Error>

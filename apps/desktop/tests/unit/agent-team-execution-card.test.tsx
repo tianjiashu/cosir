@@ -19,7 +19,6 @@ function renderCard(run: AgentTeamRun, props: Partial<Parameters<typeof AgentTea
     <AgentTeamExecutionContent
       display={{ teamRunId: 17, teamId: "quality", goal: "" }}
       run={run}
-      backendStatus="running"
       pollError={null}
       onRetryPoll={() => undefined}
       onOpenAgent={() => undefined}

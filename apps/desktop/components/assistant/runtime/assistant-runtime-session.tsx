@@ -1,3 +1,4 @@
+import type { ToolCalls } from "@/lib/assistant/tool-call-index";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -10,7 +11,6 @@ import { useSubscriptionRecovery } from "@/components/assistant/runtime/use-runt
 import { useBackendTransitions } from "@/components/assistant/runtime/use-backend-transitions";
 import type {
   AssistantRuntimeProps,
-  ComposerRestore,
   RuntimeSessionContext,
 } from "@/components/assistant/runtime/runtime-types";
 import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
@@ -63,7 +63,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   // 默认沿用最近一次 Run 冻结的工具组（后端事实，换设备 / 清存储都一致）；用户改动后到发送前
   // 只是组件状态，不另存本地。发送时直接传组名，不依赖下面的工具组目录是否已加载。
   const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>(
-    () => initialState.activity?.launch.disabledToolGroups ?? [],
+    () => (initialState.activity?.launch ?? initialState.fork?.initialLaunch)?.disabledToolGroups ?? [],
   );
   // 后端不可用时不发请求；后端恢复 / 重启后的重新拉取由全局 query 同步统一失效。
   const toolGroupsQuery = useQuery({
@@ -79,14 +79,9 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const sessionInitialState = initialStateRef.current;
   const latestStateRef = useRef(sessionInitialState);
   const attachTransportRef = useRef<(() => Promise<void>) | null>(null);
-  const cancelRequestedRef = useRef(false);
-  const composerRestoreRef = useRef<ComposerRestore | null>(null);
   const onTaskStateChangedRef = useRef(onTaskStateChanged);
   onTaskStateChangedRef.current = onTaskStateChanged;
 
-  const registerComposerRestore = useCallback((restore: ComposerRestore) => {
-    composerRestoreRef.current = restore;
-  }, []);
   const notifyTaskStateChanged = useCallback(() => {
     onTaskStateChangedRef.current?.();
   }, []);
@@ -103,8 +98,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     onTaskStateChanged: notifyTaskStateChanged,
     latestStateRef,
     attachTransportRef,
-    cancelRequestedRef,
-    composerRestoreRef,
   }), [
     notifyTaskStateChanged,
     performanceProbe,
@@ -126,7 +119,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   }), [context]);
   const recovery = useSubscriptionRecovery(recoveryDeps);
   const businessResume = useBusinessResume(context);
-  const cancellation = useRuntimeCancellation(context);
+  const cancelling = useRuntimeCancellation(context);
   // 后端变化的唯一处理点：不可用时停掉重连计时器；恢复后 runtime 按新实例自行重开订阅（首帧即
   // 完整状态），这里只清零预算并提示。
   useBackendTransitions(backendRuntime, {
@@ -143,24 +136,21 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     return () => registerResync(null);
   }, [recovery.resync, registerResync]);
 
-  const commitTransportState = useCallback((state: typeof sessionInitialState) => {
+  const commitTransportState = useCallback((state: typeof sessionInitialState, toolCalls: ToolCalls) => {
     const previousTitle = latestStateRef.current.title;
     latestStateRef.current = state;
-    cancellation.onStateCommitted(state);
     // 终端会话列表是 snapshot 投影；镜像给页头按钮与终端工作台（它们在 Assistant runtime 之外）。
     useTerminalWorkbenchStore.getState().syncSessions(taskId, state.terminal_sessions);
-    useBackgroundTasksStore.getState().sync(taskId, state);
+    useBackgroundTasksStore.getState().sync(taskId, { ...state, toolCalls });
     useHandoffStore.getState().sync(taskId, state.handoffs);
     // 标题事实在后端 tasks.title；snapshot 只负责通知打开中的页面，侧栏目录按既有刷新路径重读。
     if (state.title !== previousTitle) notifyTaskStateChanged();
-  }, [cancellation.onStateCommitted, notifyTaskStateChanged, sessionInitialState, taskId]);
+  }, [notifyTaskStateChanged, taskId]);
   return (
     <AssistantRuntimeTransportHost
       context={context}
       recovery={recovery}
-      cancellation={cancellation}
       commitTransportState={commitTransportState}
-      registerComposerRestore={registerComposerRestore}
       toolGroups={toolGroups}
       selectedToolGroups={selectedToolGroups}
       onSelectedToolGroupsChange={setSelectedToolGroups}
@@ -169,9 +159,7 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
       forkingMessageId={forkingMessageId}
       onForkMessage={onForkMessage}
       onResumeBusiness={businessResume.resumeBusinessRun}
-      onCancelRequested={cancellation.onRequested}
-      onCancelResult={cancellation.onResult}
-      cancelling={cancellation.cancelling}
+      cancelling={cancelling}
       performanceProbe={performanceProbe}
     />
   );

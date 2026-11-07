@@ -1,4 +1,5 @@
-import { useMemo, type ComponentProps } from "react";
+import { SearchIcon } from "lucide-react";
+import { createContext, useContext, useMemo, type ComponentProps } from "react";
 import type { ExtraProps } from "streamdown";
 
 import { inlineCodeLink, resolveLink } from "@/lib/links/resolve-link";
@@ -6,8 +7,10 @@ import { cn } from "@/lib/utils";
 import { useOpenLink, type LinkSource } from "./use-open-link";
 
 /** 与 Streamdown 默认链接、行内代码相同的排版；颜色与下划线在 app/markdown.css 统一定义。 */
+const InsideMarkdownLink = createContext(false);
+
 const LINK_CLASS = "wrap-anywhere font-medium";
-const INLINE_CODE_CLASS = "rounded bg-muted px-1.5 py-0.5 font-mono text-sm";
+const INLINE_CODE_CLASS = "rounded bg-[var(--inline-code-background,var(--muted))] px-1.5 py-0.5 font-mono text-sm";
 
 /**
  * Markdown 渲染面的链接组件（`a` 与行内代码），所有 Streamdown 实例共用。
@@ -43,19 +46,34 @@ export function useMarkdownLinkComponents(
             opener.open(target, event.currentTarget);
           }}
         >
-          {children}
+          <InsideMarkdownLink.Provider value>{children}</InsideMarkdownLink.Provider>
         </a>
       );
     }
     function InlineCode({ className, children, node, ...props }: ComponentProps<"code"> & ExtraProps) {
       void node;
-      const target = typeof children === "string" && !webOnly ? inlineCodeLink(children, opener.workspaceRoot) : null;
+      const insideLink = useContext(InsideMarkdownLink);
+      const target = typeof children === "string" && !webOnly && !insideLink ? inlineCodeLink(children, { workspaceRoot: opener.workspaceRoot, documentDir }) : null;
       const code = (
         <code className={cn(INLINE_CODE_CLASS, className)} data-streamdown="inline-code" {...props}>
           {children}
         </code>
       );
       if (!target) return code;
+      if (target.kind === "filename-search") return (
+        <span className="group/file-mention inline-flex items-baseline" data-slot="workspace-file-mention">
+          {code}
+          <button
+            type="button"
+            title={`查找文件 ${target.query}`}
+            aria-label={`查找文件 ${target.query}`}
+            onClick={() => opener.open(target)}
+            className="ml-0.5 inline-flex self-center rounded text-muted-foreground opacity-0 group-hover/file-mention:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring [@media(hover:none)]:opacity-100"
+          >
+            <SearchIcon className="size-3.5" aria-hidden="true" />
+          </button>
+        </span>
+      );
       return (
         <button
           type="button"

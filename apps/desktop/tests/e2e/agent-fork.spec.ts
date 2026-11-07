@@ -21,12 +21,14 @@ const parentState: TransportState = {
         type: "tool-call", awaitingUser: false, toolCallId: "call-fork", toolName: "fork_task", status: "completed",
         args: { title: "前端部分", message: "只做前端" }, child_task_id: 41,
         display_data: { kind: "fork-task-result", title: "前端部分", child_task_id: 41 },
+        background: { kind: "child_agent", label: "前端部分", startedAt: "2026-10-27T00:00:00.000Z", endedAt: "2026-10-27T00:00:10.000Z" },
       }],
     },
   ],
   messageOffset: 0,
   activity: {modelActivity: null,  runId: 1, status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
-  terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
+  terminal_sessions: [], foreground_waits: [], handoffs: [],
+  background_tasks: [{ toolCallId: "call-fork", kind: "child_agent", label: "前端部分", status: "completed", startedAt: "2026-10-27T00:00:00.000Z", endedAt: "2026-10-27T00:00:10.000Z" }],
 };
 
 test.beforeEach(async ({ request }) => {
@@ -34,7 +36,7 @@ test.beforeEach(async ({ request }) => {
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: 9, title: "主任务" } });
 });
 
-test("Agent 分出的对话：卡片出现时侧栏补上它，「打开」跳到它的对话", async ({ page, request }) => {
+test("Agent 分出的对话：行出现时侧栏补上它，点行定位后台卡片，「打开」跳到它的对话", async ({ page, request }) => {
   await page.goto("/tasks/9");
   const sidebar = page.getByRole("navigation");
   await expect(sidebar.getByText("主任务")).toBeVisible();
@@ -51,6 +53,9 @@ test("Agent 分出的对话：卡片出现时侧栏补上它，「打开」跳�
   await expect(sidebar.getByText("前端部分")).toBeVisible();
   await expect(sidebar.getByLabel("Agent 分出的对话")).toBeVisible();
 
+  const row = page.locator('[data-tool-call-id="call-fork"]');
+  await expect(row.getByRole("button", { name: "打开分叉对话：前端部分" })).toHaveCount(0);
+  await row.locator('[data-slot="call-row"]').click();
   await page.getByRole("button", { name: "打开分叉对话：前端部分" }).click();
   await expect(page).toHaveURL(/\/tasks\/41$/);
 });

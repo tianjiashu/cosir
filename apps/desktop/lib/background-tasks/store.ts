@@ -1,8 +1,9 @@
+import type { ToolCalls } from "@/lib/assistant/tool-call-index";
 import { create } from "zustand";
 
 import type { BackgroundTaskEntry, TransportState, TransportToolCallPart } from "@/lib/assistant/contract";
 
-type BackgroundResults = Pick<TransportState, "background_tasks" | "foreground_waits" | "messages">;
+type BackgroundResults = Pick<TransportState, "background_tasks" | "foreground_waits"> & { toolCalls: ToolCalls };
 type ToolParts = Readonly<Record<string, TransportToolCallPart>>;
 
 /**
@@ -31,7 +32,7 @@ export const useBackgroundTasksStore = create<BackgroundTasksStore>()((set) => (
   sync: (taskId, results) => set((state) => {
     const entries = results?.background_tasks ?? null;
     const waits = results?.foreground_waits ?? null;
-    const parts = results === null ? null : collectParts(results.messages, results.background_tasks, state.parts[taskId] ?? null);
+    const parts = results === null ? null : collectParts(results.toolCalls, results.background_tasks, state.parts[taskId] ?? null);
     if (state.tasks[taskId] === entries && state.foregroundWaits[taskId] === waits && state.parts[taskId] === parts) return state;
     if (results === null && !(taskId in state.tasks)) return state;
     return {
@@ -75,23 +76,17 @@ export function useBackgroundTaskPart(taskId: number, toolCallId: string): Trans
   return useBackgroundTasksStore((state) => state.parts[taskId]?.[toolCallId] ?? null);
 }
 
-/**
- * 按条目 id 从消息里取工具 part。每次提交 state 都会调用（流式输出时很频繁），所以只在有条目时扫描，
- * 且各 part 与上次同一引用时沿用上次的表：snapshot mutation 按路径结构共享，未变的 part 引用不变，
- * 订阅方因此不会在无关帧上重渲染。
- */
+/** 仅按看板条目查共享索引；未变 part 沿用上一张表，正文帧不通知看板订阅者。 */
 function collectParts(
-  messages: readonly TransportState["messages"][number][],
+  toolCalls: ToolCalls,
   entries: readonly BackgroundTaskEntry[],
   previous: ToolParts | null,
 ): ToolParts | null {
   if (entries.length === 0) return previous === null || Object.keys(previous).length === 0 ? previous : {};
-  const wanted = new Set(entries.map((entry) => entry.toolCallId));
   const found: Record<string, TransportToolCallPart> = {};
-  for (const message of messages) {
-    for (const part of message.parts) {
-      if (part.type === "tool-call" && wanted.has(part.toolCallId)) found[part.toolCallId] = part;
-    }
+  for (const entry of entries) {
+    const part = toolCalls.get(entry.toolCallId);
+    if (part) found[entry.toolCallId] = part;
   }
   const keys = Object.keys(found);
   if (previous !== null && keys.length === Object.keys(previous).length && keys.every((key) => previous[key] === found[key])) {

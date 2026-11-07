@@ -32,10 +32,9 @@ export type FileSession = {
   /** 目录栏文件名搜索框里的文字；改动即撤销已提交的搜索，按 Enter 才提交。 */
   searchText: string;
   /**
-   * 已提交的文件名搜索；`id` 让同一个词再搜一次也重新开始。放在会话里而不是面板组件里：链接点到工作区里
-   * 不存在的文件时，打开入口要替用户发起「查找同名文件」（`searchFilename`）。
+   * 已提交的文件名搜索；`id` 让同一个词再搜一次也重新开始。放在会话里而不是面板组件里：用户显式选择查找时，打开入口可发起「查找同名文件」（`searchFilename`）。
    */
-  searchRequest: { query: string; id: number } | null;
+  searchRequest: { query: string; id: number; navigation?: { lines?: LineRange } } | null;
 };
 const fresh = (): FileSession => ({
   reference: null,
@@ -52,6 +51,9 @@ const fresh = (): FileSession => ({
 });
 const emptySession = fresh();
 export const useFilesStore = create<{
+  /** 用户导航的单调序号，包括重新选择同一文件；异步打开只提交最新意图。 */
+  navigationId: number;
+  beginNavigation: () => number;
   sessions: Record<number, FileSession>;
   patch: (id: number, patch: Partial<FileSession>) => void;
   open: (id: number, path: string, pinned?: boolean) => void;
@@ -60,11 +62,18 @@ export const useFilesStore = create<{
   preference: (id: number, path: string, patch: ReadingPreference) => void;
   position: (id: number, path: string, patch: Partial<ReadingPosition>) => void;
   /** 提交一次文件名搜索并亮出目录栏（窄面板时从阅读切到浏览）。 */
-  searchFilename: (id: number, query: string) => void;
-}>((set) => ({
+  searchFilename: (id: number, query: string, navigation?: { lines?: LineRange }) => void;
+}>((set, get) => ({
+  navigationId: 0,
+  beginNavigation: () => {
+    const navigationId = get().navigationId + 1;
+    set({ navigationId });
+    return navigationId;
+  },
   sessions: {},
   patch: (id, patch) =>
     set((state) => ({
+      navigationId: "searchRequest" in patch ? state.navigationId + 1 : state.navigationId,
       sessions: {
         ...state.sessions,
         [id]: { ...(state.sessions[id] ?? fresh()), ...patch },
@@ -85,6 +94,7 @@ export const useFilesStore = create<{
         ),
       );
       return {
+        navigationId: state.navigationId + 1,
         sessions: {
           ...state.sessions,
           [id]: { ...session, tabs, active: path, positions, browsing: false, reference: null },
@@ -99,6 +109,7 @@ export const useFilesStore = create<{
       const positions = { ...session.positions };
       delete positions[path];
       return {
+        navigationId: state.navigationId + 1,
         sessions: {
           ...state.sessions,
           [id]: {
@@ -136,16 +147,17 @@ export const useFilesStore = create<{
         },
       };
     }),
-  searchFilename: (id, query) =>
+  searchFilename: (id, query, navigation) =>
     set((state) => {
       const session = state.sessions[id] ?? fresh();
       return {
+        navigationId: state.navigationId + 1,
         sessions: {
           ...state.sessions,
           [id]: {
             ...session,
             searchText: query,
-            searchRequest: { query, id: (session.searchRequest?.id ?? 0) + 1 },
+            searchRequest: { query, id: (session.searchRequest?.id ?? 0) + 1, navigation },
             treeVisible: true,
             browsing: true,
           },

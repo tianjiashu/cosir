@@ -112,6 +112,12 @@ export function AppLayout() {
   // 快捷键先于导航函数注册，经 ref 调用最新的实现。
   const startNewConversationRef = useRef<(workspaceId?: number) => void>(() => undefined);
   const actions = useWorkspaceActions(catalog, focusedTaskId);
+  // 会话事件只随业务依赖变化：布局更新不能以新回调身份穿透 runtime 的渲染隔离。
+  // Fork 直接使用 actions 已稳定的动作；目录通知只绑定当前任务的工作区。
+  const { activeTaskWorkspaceId, refreshWorkspaceTasks } = catalog;
+  const handleTaskStateChanged = useCallback(() => {
+    if (activeTaskWorkspaceId !== null) void refreshWorkspaceTasks(activeTaskWorkspaceId);
+  }, [activeTaskWorkspaceId, refreshWorkspaceTasks]);
 
   // ---- 侧栏：宽屏停靠（可收起并记住），窄屏抽屉 ----
   const narrow = useMediaQuery(NARROW_VIEWPORT_QUERY);
@@ -157,20 +163,20 @@ export function AppLayout() {
 
   // ---- 会话侧栏：开关、摆放、页头角标与快捷键见 useTaskRail ----
   const rail = useTaskRail(conversationTaskId);
-  // 只在对话页、侧栏打开时给对话视口一个附注；崩溃兜底占网格右列，与固定时的位置一致。
+  // 对话页始终给视口一个附注：显隐要看视口量出的摆放，由 TaskRail 自己决定；崩溃兜底占网格右列，与固定时的位置一致。
   const conversationAside = useMemo<ConversationAside | null>(
-    () => conversationTaskId === null || !rail.open ? null : (viewportRef) => (
+    () => conversationTaskId === null ? null : (viewport) => (
       <IsolatedRegion
         region="task-rail"
         label="会话侧栏"
         resetKey={`task-rail:${conversationTaskId}`}
         fallbackClassName="dock-panel bg-background col-start-2 row-start-1 m-2 w-(--task-rail-width) self-start p-3"
-        escape={{ label: "收起会话侧栏", onClick: rail.close }}
+        escape={{ label: "收起会话侧栏", onClick: (reset) => { rail.close(); reset(); } }}
       >
-        <TaskRail taskId={conversationTaskId} viewportRef={viewportRef} onClose={rail.close} />
+        <TaskRail taskId={conversationTaskId} viewport={viewport} onClose={rail.close} />
       </IsolatedRegion>
     ),
-    [conversationTaskId, rail.open, rail.close],
+    [conversationTaskId, rail.close],
   );
 
   // ---- 命令面板（⌘K）：搜索任务、开始新对话、跳转配置 ----
@@ -333,10 +339,10 @@ export function AppLayout() {
                 {conversationTaskId !== null && (
                   <TooltipIconButton
                     ref={rail.buttonRef}
-                    tooltip={withShortcut([rail.open ? "收起会话侧栏" : "打开会话侧栏", rail.runningCount > 0 && `${rail.runningCount} 个后台任务运行中`].filter(Boolean).join(" · "), "toggleTaskRail")}
+                    tooltip={withShortcut([rail.visible ? "收起会话侧栏" : "打开会话侧栏", rail.runningCount > 0 && `${rail.runningCount} 个后台任务运行中`].filter(Boolean).join(" · "), "toggleTaskRail")}
                     aria-label={`会话侧栏，${rail.runningCount} 个后台任务运行中`}
-                    aria-pressed={rail.open}
-                    className={cn("relative size-7", rail.open && "bg-muted text-foreground")}
+                    aria-pressed={rail.visible}
+                    className={cn("relative size-7", rail.visible && "bg-muted text-foreground")}
                     onClick={rail.toggle}
                   >
                     <LayoutListIcon />
@@ -372,11 +378,9 @@ export function AppLayout() {
                   initialTask={catalog.activeTask}
                   workspaceRoot={catalog.activeWorkspace?.root_path}
                   forkingMessageId={actions.forkingMessageId}
-                  onForkMessage={(messageId) => void actions.forkMessage(messageId)}
+                  onForkMessage={actions.forkMessage}
                   onTaskLoaded={catalog.handleTaskLoaded}
-                  onTaskStateChanged={() => {
-                    if (catalog.activeTaskWorkspaceId !== null) void catalog.refreshWorkspaceTasks(catalog.activeTaskWorkspaceId);
-                  }}
+                  onTaskStateChanged={handleTaskStateChanged}
                 /></ReferenceTargetScope.Provider>
                 </ConversationAsideContext.Provider>
               </div>

@@ -1,3 +1,4 @@
+import { projectTurn, turnPhaseOf, type TurnLayout } from "./turn-layout";
 import { isActiveRunStatus } from "@/lib/assistant/contract";
 import type { MessageStatus } from "@assistant-ui/core";
 import type { CompleteAttachment, CreateAttachment, RunConfig } from "@assistant-ui/core";
@@ -9,16 +10,15 @@ import type {
 import type { ReadonlyJSONObject } from "assistant-stream/utils";
 
 import type {
+  BackgroundTaskEntry,
   TransportActivity,
   TransportImagePart,
   TransportMessage,
   TransportMessagePart,
   TransportMessageSource,
   TransportOutcome,
-  TransportReasoningPart,
   TransportTextPart,
   TransportToolCallPart,
-  TransportToolStatus,
 } from "@/lib/assistant/contract";
 import { getLocalAttachmentById } from "@/lib/assistant/attachments/local-attachment-registry";
 import {
@@ -73,7 +73,7 @@ export type UserAddMessageCommand = {
  * 渲染一条消息所需的上下文；由 frame store 按扁平消息列表与 `activity` 计算，不回查 Run。
  *
  * - `outcome`：该回复的结局（只在 Run 最后一条助手消息上、Run 终态后非空）。
- * - `isRunEnd`：该 Run 最后一条助手消息；回复末尾的用量、fork、诊断入口挂在这里。
+ * - `isRunEnd`：该 Run 最后一条助手消息；回复末尾的用量、诊断入口挂在这里。
  * - `activity`：消息是当前活动那一轮的回复末尾时为该活动（据此显示运行中与实时用量），否则 null。
  */
 export type TransportMessageRenderContext = {
@@ -84,6 +84,7 @@ export type TransportMessageRenderContext = {
   outcome: TransportOutcome | null;
   isRunEnd: boolean;
   activity: TransportActivity | null;
+  backgroundTasks?: readonly BackgroundTaskEntry[];
 };
 
 const optimisticCommandIds = new WeakMap<object, string>();
@@ -119,7 +120,7 @@ function toPartStatus(status: string | undefined) {
 }
 
 function toTextPart(part: TransportTextPart, role: TransportMessage["role"]): ThreadMessage["content"][number] {
-  return { type: "text", text: part.text, status: role === "user" && part.status === undefined ? { type: "complete" } : toPartStatus(part.status) };
+  return { type: "text", text: part.text, providerMetadata: { cosir: { finalReply: part.finalReply === true } }, status: role === "user" && part.status === undefined ? { type: "complete" } : toPartStatus(part.status) };
 }
 
 function toImageAttachment(part: TransportImagePart, index: number): CompleteAttachment {
@@ -270,22 +271,6 @@ export function toEditableUserMessageDraft(message: ThreadUserMessage): Editable
   };
 }
 
-function toReasoningPart(part: TransportReasoningPart): ThreadMessage["content"][number] {
-  return {
-    type: "reasoning",
-    text: part.text,
-    status: toPartStatus(part.status),
-    ...(part.unstable_summary !== undefined ? { unstable_summary: part.unstable_summary } : {}),
-  };
-}
-
-function normalizeToolStatus(status: string | undefined): TransportToolStatus {
-  if (status === "pending" || status === "running" || status === "completed" || status === "failed" || status === "cancelled") {
-    return status;
-  }
-  return "unknown";
-}
-
 /**
  * 把后端 tool-call part 映射为 assistant-ui part。
  *
@@ -293,9 +278,23 @@ function normalizeToolStatus(status: string | undefined): TransportToolStatus {
  * 被发送回后端，也不会成为对话事实。assistant-ui 的标准字段只承载 args/argsText/isError。
  */
 export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["content"][number] {
-  const backendStatus = normalizeToolStatus(part.status);
+  let converted = toolCallParts.get(part);
+  if (!converted) {
+    converted = convertToolCallPart(part);
+    toolCallParts.set(part, converted);
+  }
+  return converted;
+}
+
+// Transport mutation 保留未变 part 的身份。正文更新不能重建同一消息中已存在的工具 part/artifact。
+const toolCallParts = new WeakMap<TransportToolCallPart, ThreadMessage["content"][number]>();
+
+function convertToolCallPart(part: TransportToolCallPart): ThreadMessage["content"][number] {
+  const backendStatus = part.status;
   const artifact: ToolArtifact = {
     backendStatus,
+    intent: part.intent ?? null,
+    presentation: part.presentation,
     awaitingUser: part.awaitingUser,
     display_data: part.display_data ?? null,
     team_run_id: part.team_run_id,
@@ -342,14 +341,6 @@ export function toToolCallPart(part: TransportToolCallPart): ThreadMessage["cont
     };
   }
 
-  if (backendStatus === "unknown") {
-    return {
-      ...base,
-      result: { kind: "tool-unknown", message: "工具状态未知，等待后端确认" },
-      isError: true,
-    };
-  }
-
   return {
     ...base,
     ...(backendStatus === "completed" ? { isError: part.isError ?? false } : {}),
@@ -369,9 +360,6 @@ export function toAssistantMessageStatus(context: TransportMessageRenderContext)
       case "cancelled":
         return { type: "incomplete", reason: "cancelled" };
       case "failed":
-        if (outcome.endReason === "client_disconnected" || outcome.endReason === "cancelled") {
-          return { type: "incomplete", reason: "cancelled" };
-        }
         return {
           type: "incomplete",
           reason: "error",
@@ -389,14 +377,13 @@ export function toAssistantMessageStatus(context: TransportMessageRenderContext)
 export function toThreadMessageWithRenderContext(
   message: Pick<TransportMessage, "id" | "role" | "parts">,
   context: TransportMessageRenderContext,
+  turnLayout: TurnLayout | null = message.role === "assistant" ? projectTurn(message.parts, turnPhaseOf(context.activity), context.outcome, null, context.activity, context.backgroundTasks) : null,
 ): ThreadMessage {
   const content = message.parts
     .map((part) => {
       switch (part.type) {
         case "text":
           return toTextPart(part, message.role);
-        case "reasoning":
-          return toReasoningPart(part);
         case "tool-call":
           return toToolCallPart(part);
         case "image":
@@ -409,6 +396,9 @@ export function toThreadMessageWithRenderContext(
             mimeType: part.contentType,
             sourceType: "id",
           };
+        case "agent-message":
+          // 只占下标：回合按 canonical part 下标读内容，来信行直接读 `TurnLayout`。
+          return { type: "data", name: part.type, data: null };
         default:
           return null;
       }
@@ -450,6 +440,7 @@ export function toThreadMessageWithRenderContext(
       unstable_data: [],
       steps: [],
       custom: {
+        turnLayout,
         runId: context.runId,
         isRunEnd: context.isRunEnd,
         outcome: context.outcome,
@@ -537,7 +528,8 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
   }, { runId: null, source: null, outcome: null, isRunEnd: false, activity: null });
   // The optimistic message follows the same single-source shape as the
   // canonical projection. The content parts already carry all attachments.
-  return pending.role === "user" ? { ...pending, attachments: [] } : pending;
+  pending.metadata.custom.pending = true;
+  return pending;
 }
 
 export function extractUserAddMessageAttachments(command: unknown): CreateAttachment[] {

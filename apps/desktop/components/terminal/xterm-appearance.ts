@@ -39,10 +39,45 @@ const LIGHT_ANSI: ITheme = {
   brightWhite: "#a5a5a5",
 };
 
+/** 深色主题用 VS Code Dark 的色板；红色取亮一档，报错在深底上才看得清。 */
+const DARK_ANSI: ITheme = {
+  black: "#000000",
+  red: "#f14c4c",
+  green: "#0dbc79",
+  yellow: "#e5e510",
+  blue: "#2472c8",
+  magenta: "#bc3fbc",
+  cyan: "#11a8cd",
+  white: "#e5e5e5",
+  brightBlack: "#666666",
+  brightRed: "#f14c4c",
+  brightGreen: "#23d18b",
+  brightYellow: "#f5f543",
+  brightBlue: "#3b8eea",
+  brightMagenta: "#d670d6",
+  brightCyan: "#29b8db",
+  brightWhite: "#e5e5e5",
+};
+
+const ANSI_NAMES = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white", "brightBlack", "brightRed", "brightGreen", "brightYellow", "brightBlue", "brightMagenta", "brightCyan", "brightWhite"] as const;
+
+/** ANSI 色号或 `#rrggbb` 转成 CSS 颜色：前 16 色跟主题，其余是 256 色的固定色立方与灰阶。 */
+export function ansiColor(color: number | string, theme: ITheme): string | undefined {
+  if (typeof color === "string") return color;
+  if (color < 16) return theme[ANSI_NAMES[color]];
+  if (color >= 232) {
+    const gray = 8 + (color - 232) * 10;
+    return `rgb(${gray} ${gray} ${gray})`;
+  }
+  const level = (value: number) => (value === 0 ? 0 : 55 + value * 40);
+  const index = color - 16;
+  return `rgb(${level(Math.floor(index / 36))} ${level(Math.floor(index / 6) % 6)} ${level(index % 6)})`;
+}
+
 export function xtermPaneTheme(resolvedTheme: "light" | "dark"): ITheme {
   const read = readTokens();
   return {
-    ...(resolvedTheme === "light" ? LIGHT_ANSI : {}),
+    ...(resolvedTheme === "light" ? LIGHT_ANSI : DARK_ANSI),
     background: read("--terminal-pane-background"),
     foreground: read("--terminal-pane-foreground"),
     cursor: read("--terminal-pane-cursor"),

@@ -6,93 +6,11 @@ import {
   type InlineAttachmentIdentity,
 } from "@/lib/assistant/attachments/local-file-token";
 
-export type EditComposerDraftOverride = {
+/** 交回输入框的内容：失败恢复与撤回用，都是可重新加入的完整附件。 */
+export type RecoveredDraft = {
   text: string;
   attachments: readonly CreateAttachment[];
 };
-
-// The edit composer is created by assistant-ui immediately after beginEdit.
-// Keep a one-shot override outside React so failure recovery can hand the
-// exact transport draft to the newly mounted edit view without racing its
-// canonical-message hydration effect. The message ID is used instead of a
-// runtime object because assistant-ui may expose different accessor wrappers
-// for the same composer.
-const pendingOverrides = new Map<string, EditComposerDraftOverride>();
-const activeGenerations = new Map<string, number>();
-const pendingEditStarts = new Set<string>();
-const activeListeners = new Set<() => void>();
-
-function notifyActiveListeners(): void {
-  for (const listener of activeListeners) listener();
-}
-
-export function setPendingEditComposerDraft(
-  messageId: string,
-  draft: EditComposerDraftOverride,
-): void {
-  pendingOverrides.set(messageId, draft);
-}
-
-export function takePendingEditComposerDraft(
-  messageId: string,
-): EditComposerDraftOverride | undefined {
-  const draft = pendingOverrides.get(messageId);
-  if (draft) pendingOverrides.delete(messageId);
-  return draft;
-}
-
-export function discardPendingEditComposerDraft(messageId: string): void {
-  pendingOverrides.delete(messageId);
-  pendingEditStarts.delete(messageId);
-  notifyActiveListeners();
-}
-
-/** 请求消息行在自身 AUI 上下文中开始编辑，避免从 Thread 上下文创建另一份 composer。 */
-export function queuePendingEditComposerStart(messageId: string): void {
-  pendingEditStarts.add(messageId);
-  notifyActiveListeners();
-}
-
-export function hasPendingEditComposerStart(messageId: string): boolean {
-  return pendingEditStarts.has(messageId);
-}
-
-export function consumePendingEditComposerStart(messageId: string): boolean {
-  const consumed = pendingEditStarts.delete(messageId);
-  if (consumed) notifyActiveListeners();
-  return consumed;
-}
-
-export function beginEditComposerOperation(messageId: string): number {
-  const generation = (activeGenerations.get(messageId) ?? 0) + 1;
-  activeGenerations.set(messageId, generation);
-  notifyActiveListeners();
-  return generation;
-}
-
-export function isCurrentEditComposerOperation(messageId: string, generation: number): boolean {
-  return activeGenerations.get(messageId) === generation;
-}
-
-export function currentEditComposerOperation(messageId: string): number | undefined {
-  return activeGenerations.get(messageId);
-}
-
-export function endEditComposerOperation(messageId: string, generation: number): void {
-  if (isCurrentEditComposerOperation(messageId, generation)) {
-    activeGenerations.delete(messageId);
-    notifyActiveListeners();
-  }
-}
-
-export function isEditComposerOperationActive(messageId: string): boolean {
-  return activeGenerations.has(messageId);
-}
-
-export function subscribeEditComposerOperations(listener: () => void): () => void {
-  activeListeners.add(listener);
-  return () => activeListeners.delete(listener);
-}
 
 /** 草稿附件必须带稳定身份，否则无法与 composer 里已有附件去重。 */
 export type EditDraftAttachment = CreateAttachment & InlineAttachmentIdentity;
@@ -100,11 +18,11 @@ export type EditDraftAttachment = CreateAttachment & InlineAttachmentIdentity;
 /**
  * 草稿写入所需的最小 composer 契约。
  *
- * 只声明「读取附件、加入附件、按索引移除附件、设置文本」四项能力，因此 thread composer
+ * 只声明「读取草稿、加入完整附件、按索引移除附件、设置文本」四项能力，因此 thread composer
  * 与 message edit composer 都能满足；单元测试可用同形假对象覆盖，无需 React 运行时。
  */
 export type EditDraftComposerTarget = {
-  getState(): { attachments: readonly InlineAttachmentIdentity[] };
+  getState(): { text: string; attachments: readonly InlineAttachmentIdentity[] };
   addAttachment(attachment: CreateAttachment): Promise<void>;
   setText(text: string): void;
   attachment(options: { index: number }): { remove(): Promise<void> | void };
@@ -118,7 +36,7 @@ export type ApplyEditDraftResult = {
   addedCount: number;
   /** 清理掉的「草稿之外」附件数。 */
   removedCount: number;
-  /** 为 true 表示写入途中草稿已被新代际取代，文本未被改写。 */
+  /** 为 true 表示输入框已不在，本次没有写入。 */
   superseded: boolean;
   /** 写入异常；非 null 时保留正文，由调用方报告图片恢复失败。 */
   error: unknown;
@@ -150,73 +68,61 @@ export function editableDraftAttachments(
 }
 
 /**
- * 普通文件只登记元数据，当前引用集合由文本 token 决定；AUI 仅恢复图片附件。
- * 先登记文件、补齐图片，再写文本并移除 AUI 自动从历史消息提取的多余附件。
- * 这是可中断的收敛过程，不是事务；失效操作不再写草稿，失败保留正文并返回错误。
+ * 完整草稿只在第一个 await 前提交，异步收尾绝不再写正文或按新附件列表删除。
+ * replace 用于初始化（只清理起始快照的旧附件）；prepend 用于失败/撤回恢复（保留当前输入和附件）。
+ * AUI 对 CreateAttachment 同步加入完整附件，File 上传另由库管理；这里不接收 File。
  */
 export async function applyEditDraftToComposer(options: {
   composer: EditDraftComposerTarget;
   text: string;
   attachments: readonly EditDraftAttachment[];
+  mode: "replace" | "prepend";
   isStillCurrent: () => boolean;
 }): Promise<ApplyEditDraftResult> {
-  const { composer, text, isStillCurrent } = options;
-  const attachments = options.attachments.filter((attachment) => attachment.type === "image");
-  const expectedCount = attachments.length;
-  let addedCount = 0;
-  let removedCount = 0;
-
-  try {
-    if (!isStillCurrent()) return { expectedCount, addedCount, removedCount, superseded: true, error: null };
-    for (const attachment of options.attachments) {
-      if (attachment.type !== "file") continue;
-      registerInlineFileMetadata({
-        id: inlineAttachmentTokenId(attachment),
-        name: attachment.name,
-        contentType: attachment.contentType ?? "application/octet-stream",
-      });
-    }
-    const existingKeys = new Set(composer.getState().attachments.map(inlineAttachmentTokenId));
-    for (const attachment of attachments) {
-      if (!isStillCurrent()) {
-        return { expectedCount, addedCount, removedCount, superseded: true, error: null };
-      }
-      const key = inlineAttachmentTokenId(attachment);
-      if (existingKeys.has(key)) continue;
-      await composer.addAttachment(attachment);
-      existingKeys.add(key);
-      addedCount += 1;
-    }
-
-    if (!isStillCurrent()) {
-      return { expectedCount, addedCount, removedCount, superseded: true, error: null };
-    }
-    composer.setText(text);
-
-    // 清理两类多余附件：草稿之外的附件（例如 assistant-ui 默认 edit core 在挂载时按
-    // message.content lift 出来的副本），以及同一草稿身份的多余副本（只保留第一个）。
-    // 放在最后且失败无害：即使中断也只是多留附件，不会缺附件。
-    const draftKeys = new Set(attachments.map(inlineAttachmentTokenId));
-    const keptKeys = new Set<string>();
-    const staleIndexes = composer.getState().attachments
-      .map((attachment, index) => ({ key: inlineAttachmentTokenId(attachment), index }))
-      .filter((entry) => {
-        if (!draftKeys.has(entry.key)) return true;
-        if (keptKeys.has(entry.key)) return true;
-        keptKeys.add(entry.key);
-        return false;
-      })
-      .map((entry) => entry.index)
-      .reverse();
-    for (const index of staleIndexes) {
-      if (!isStillCurrent()) break;
-      await composer.attachment({ index }).remove();
-      removedCount += 1;
-    }
-
-    return { expectedCount, addedCount, removedCount, superseded: false, error: null };
-  } catch (error) {
-    if (isStillCurrent()) composer.setText(text);
-    return { expectedCount, addedCount, removedCount, superseded: false, error };
+  const { composer, text, isStillCurrent, mode } = options;
+  const images = options.attachments.filter((attachment) => attachment.type === "image");
+  const result: ApplyEditDraftResult = { expectedCount: images.length, addedCount: 0, removedCount: 0, superseded: false, error: null };
+  if (!isStillCurrent()) return { ...result, superseded: true };
+  const pending: Promise<void>[] = [];
+  // 单项失败仍提交其它内容；统一收集结果，避免恢复失败后第二次覆盖用户已经继续写的正文。
+  const perform = (action: () => Promise<void> | void, completed?: () => void) => {
+    try { pending.push(Promise.resolve(action()).then(() => { completed?.(); })); }
+    catch (error) { result.error ??= error; }
+  };
+  const current = composer.getState();
+  for (const attachment of options.attachments) {
+    if (attachment.type === "file") registerInlineFileMetadata({
+      id: inlineAttachmentTokenId(attachment), name: attachment.name,
+      contentType: attachment.contentType ?? "application/octet-stream",
+    });
   }
+  perform(() => composer.setText(mode === "prepend" ? mergeDraftText(text, current.text) : text));
+  const existing = new Set(current.attachments.map(inlineAttachmentTokenId));
+  if (mode === "replace") {
+    const wanted = new Set(images.map(inlineAttachmentTokenId));
+    const kept = new Set<string>();
+    const stale = current.attachments.map((attachment, index) => ({ key: inlineAttachmentTokenId(attachment), index }))
+      .filter(({ key }) => {
+        if (!wanted.has(key) || kept.has(key)) return true;
+        kept.add(key);
+        return false;
+      });
+    // 降序按起始列表移除；所有 remove 都在同一同步阶段发起，后续新增附件不在删除范围。
+    for (const { index } of stale.reverse()) perform(() => composer.attachment({ index }).remove(), () => result.removedCount++);
+  }
+  for (const attachment of images) {
+    const key = inlineAttachmentTokenId(attachment);
+    if (existing.has(key)) continue;
+    existing.add(key);
+    perform(() => composer.addAttachment(attachment), () => result.addedCount++);
+  }
+  for (const settled of await Promise.allSettled(pending)) {
+    if (settled.status === "rejected") result.error ??= settled.reason;
+  }
+  return result;
+}
+
+/** 恢复的消息在前，用户已经写下的草稿在后；空文本不增加分隔行。 */
+export function mergeDraftText(recovered: string, current: string): string {
+  return recovered && current.trim() ? `${recovered}\n\n${current}` : recovered || current;
 }

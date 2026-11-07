@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { commandPending, decisionTarget, useCommandRequest } from "@/lib/assistant/command-request-store";
+import { useCallback } from "react";
 
 import { submitToolDecision } from "@/lib/assistant/task-commands";
 import { HttpError } from "@/lib/http/errors";
@@ -23,15 +24,8 @@ export async function handBackHandoff(taskId: number, toolCallId: string): Promi
 }
 
 /** 带「正在交还」状态的 `handBackHandoff`：按钮据此禁用。 */
-export function useHandBack(taskId: number) {
-  const [returning, setReturning] = useState(false);
-  const handBack = useCallback(async (toolCallId: string): Promise<void> => {
-    setReturning(true);
-    try {
-      await handBackHandoff(taskId, toolCallId);
-    } finally {
-      setReturning(false);
-    }
-  }, [taskId]);
-  return { handBack, returning };
+export function useHandBack(taskId: number, toolCallId: string) {
+  const request = useCommandRequest(taskId, decisionTarget(toolCallId));
+  const handBack = useCallback((id: string) => handBackHandoff(taskId, id), [taskId]);
+  return { handBack, returning: commandPending(request) };
 }

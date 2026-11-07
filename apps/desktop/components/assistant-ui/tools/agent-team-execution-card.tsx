@@ -4,6 +4,7 @@ import { UsersIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { getAgentTeamRun, type AgentTeamRun } from "@/lib/api/agent-teams";
+import { stopTarget } from "@/lib/assistant/command-request-store";
 import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { HttpError } from "@/lib/http/errors";
@@ -12,10 +13,8 @@ import { queryKeys } from "@/lib/query/query-keys";
 import { useWorkbenchActions } from "@/lib/workbench/context";
 import { SURFACE_CARD_CLASS } from "@/components/assistant-ui/turn/turn-tokens";
 import { cn } from "@/lib/utils";
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 import { readAgentTeamRunDisplay } from "./agent-team-display";
 import type { ArtifactCardProps } from "./artifact-card";
-import { CallStatus } from "./call-status";
 import type { AgentTeamRunDisplay } from "./agent-team-display";
 import { AgentTeamExecutionPipeline } from "./agent-team-execution-pipeline";
 import { ToolStopButton, useStopRequest } from "./tool-stop-button";
@@ -36,9 +35,10 @@ const RUN_STATUS_LABELS: Record<string, string> = {
 const CANCELLED_REASON_LABELS: Record<string, string> = {
   cancelled: "已停止",
   parent_cancelled: "随对话停止",
+  user_rejected: "已驳回",
 };
 
-function runStatusLabel(run: AgentTeamRun): string {
+export function runStatusLabel(run: AgentTeamRun): string {
   if (run.status === "cancelled" && run.end_reason) {
     const label = CANCELLED_REASON_LABELS[run.end_reason];
     if (label) return label;
@@ -114,18 +114,15 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
   const run = runQuery.data ?? null;
   const canStop = canStopTeamRun(run, interactive, taskCancelling);
   // 「停止中」保持到轮询看到 TeamRun 离开 running：HTTP 只确认取消信号已发出，不乐观改状态。
-  const cancellation = useStopRequest(run?.status === "running");
+  const cancellation = useStopRequest(taskId, stopTarget(toolCallId));
 
   const requestStop = () => {
     if (!canStop) return;
     void frontendLog("INFO", "agent_team_cancel_requested", "用户请求单独停止 Agent Team", {
       data: { taskId, toolCallId, teamRunId: display?.teamRunId },
     });
-    void cancellation.stop(async () => {
-      // 单独停止 Team 就是取消这次 agent_team 调用；Coordinator 读到工具级信号后落定 TeamRun。
-      const result = await cancelToolCall(taskId, toolCallId);
-      return result.kind === "failed" ? result.message : null;
-    });
+    // 单独停止 Team 就是取消这次 agent_team 调用；Coordinator 读到工具级信号后落定 TeamRun。
+    void cancellation.stop(() => cancelToolCall(taskId, toolCallId));
   };
 
   if (!display) return null;
@@ -133,7 +130,6 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
     <AgentTeamExecutionContent
       display={display}
       run={run}
-      backendStatus={artifact.backendStatus}
       pollError={runQuery.isError ? userErrorMessage(runQuery.error, "请稍后重试") : null}
       onRetryPoll={() => void runQuery.refetch()}
       onOpenAgent={(childTaskId, title) => actions?.openAgent({ taskId: childTaskId, title })}
@@ -148,7 +144,6 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
 type AgentTeamExecutionContentProps = {
   display: AgentTeamRunDisplay;
   run: AgentTeamRun | null;
-  backendStatus: ToolArtifact["backendStatus"];
   /** 轮询已放弃时的可读原因；为 null 表示仍在轮询或已正常结束。 */
   pollError: string | null;
   onRetryPoll: () => void;
@@ -163,7 +158,7 @@ type AgentTeamExecutionContentProps = {
 
 /** 只渲染 TeamRun 查询投影；轮询与卡片状态不参与节点事实判断。 */
 export function AgentTeamExecutionContent({
-  display, run, backendStatus, pollError, onRetryPoll, onOpenAgent,
+  display, run, pollError, onRetryPoll, onOpenAgent,
   canStop = false, stopping = false, stopError = null, onStop,
 }: AgentTeamExecutionContentProps) {
   const currentStatus = run
@@ -177,7 +172,6 @@ export function AgentTeamExecutionContent({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm font-medium">{run?.team_id || display.teamId || "Agent Team"}</span>
-            {!run && <CallStatus status={backendStatus} />}
             <span className="text-xs text-muted-foreground">{currentStatus}</span>
           </div>
           {(run?.goal || display.goal) && (

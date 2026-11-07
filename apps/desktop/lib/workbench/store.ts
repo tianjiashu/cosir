@@ -14,7 +14,7 @@ import type { WorkbenchDraftTab, WorkbenchTab } from "./types";
 type WorkbenchSession = {
   tabs: WorkbenchTab[];
   activeTabId: string | null;
-  /** 关闭时已保存过的草稿（按 toolCallId）：只服务工具卡片在标签关闭后的「已保存」显示。 */
+  /** 关闭时已保存过的草稿（`draftKey`）：只服务工具卡片在标签关闭后的「已保存」显示。 */
   savedDraftIds: readonly string[];
 };
 
@@ -65,7 +65,7 @@ function openTab(
   }
   const tab = create();
   // 新会话是工具产出的原始草稿，此前关闭时记下的「已保存」不再适用。
-  const savedDraftIds = isDraftTab(tab) ? session.savedDraftIds.filter((toolCallId) => toolCallId !== tab.toolCallId) : session.savedDraftIds;
+  const savedDraftIds = isDraftTab(tab) ? session.savedDraftIds.filter((key) => key !== draftKey(tab.taskId, tab.toolCallId)) : session.savedDraftIds;
   return { tabs: [...session.tabs, tab], activeTabId: id, savedDraftIds };
 }
 
@@ -86,9 +86,13 @@ function withoutTabs(session: WorkbenchSession, removed: (tab: WorkbenchTab) => 
  */
 function rememberSavedDraft(session: WorkbenchSession, closed: WorkbenchTab): WorkbenchSession {
   if (!isDraftTab(closed) || closed.session.store.getState().baseline === null) return session;
-  if (session.savedDraftIds.includes(closed.toolCallId)) return session;
-  return { ...session, savedDraftIds: [...session.savedDraftIds, closed.toolCallId] };
+  const key = draftKey(closed.taskId, closed.toolCallId);
+  if (session.savedDraftIds.includes(key)) return session;
+  return { ...session, savedDraftIds: [...session.savedDraftIds, key] };
 }
+
+/** 工作台按工作区存放而调用 id 只在 Task 内唯一，草稿身份要带上 Task。 */
+export const draftKey = (taskId: number, toolCallId: string) => `${taskId}:${toolCallId}`;
 
 export const useWorkbenchStore = create<WorkbenchState>((set) => {
   const update = (workspaceId: number, change: (session: WorkbenchSession) => WorkbenchSession) => set((state) => ({
@@ -109,9 +113,9 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
     )),
     openAgentConfigurationDraft: (workspaceId, { taskId, toolCallId, draft }) => reveal(workspaceId, (session) => openTab(
       session,
-      `agent-config-draft:${toolCallId}`,
+      `agent-config-draft:${draftKey(taskId, toolCallId)}`,
       () => ({
-        id: `agent-config-draft:${toolCallId}`,
+        id: `agent-config-draft:${draftKey(taskId, toolCallId)}`,
         kind: "agent-configuration-draft",
         taskId,
         toolCallId,
@@ -121,9 +125,9 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
     )),
     openAgentTeamConfigurationDraft: (workspaceId, { taskId, toolCallId, draft }) => reveal(workspaceId, (session) => openTab(
       session,
-      `agent-team-config-draft:${toolCallId}`,
+      `agent-team-config-draft:${draftKey(taskId, toolCallId)}`,
       () => ({
-        id: `agent-team-config-draft:${toolCallId}`,
+        id: `agent-team-config-draft:${draftKey(taskId, toolCallId)}`,
         kind: "agent-team-configuration-draft",
         taskId,
         toolCallId,

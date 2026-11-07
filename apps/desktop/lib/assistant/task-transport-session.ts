@@ -29,6 +29,7 @@ type StreamHandle = { controller: AbortController };
 /**
  * 单个 Task 的 Transport 会话核心：一条 Task 长订阅 + 命令提交，不依赖 React。
  *
+ * 订阅由 start 启用、close 释放/暂停；open 只重连仍启用的会话。
  * 订阅跟随 Task：没有 Run 时也保持连接，Run 结束不断开，只在 `close`、被新的 `open` 替换、
  * 或意外结束（交给宿主重连）时停止。旧连接用被替换的 AbortController 与句柄身份隔离，不引入
  * 协议版本字段。命令只投递：结果一律经订阅到达，提交成功后订阅若断着（重连间隙）就立即补上。
@@ -36,6 +37,7 @@ type StreamHandle = { controller: AbortController };
  */
 export class TaskTransportSession {
   private active: StreamHandle | null = null;
+  private enabled = false;
 
   /** 请求路径相对后端：基地址在每次请求时取当前后端实例，后端换端口后重开即生效。 */
   public constructor(
@@ -75,14 +77,26 @@ export class TaskTransportSession {
     return this.active !== null;
   }
 
+  /** 只有会话所有者可以启用连接；重连回调不能复活已释放/暂停的会话。 */
+  public start = (): Promise<void> => {
+    this.enabled = true;
+    return this.open();
+  };
+
   public close(): void {
+    this.enabled = false;
+    this.disconnect();
+  }
+
+  private disconnect(): void {
     this.active?.controller.abort();
     this.active = null;
   }
 
   /** 打开（或替换）Task 长订阅：先收到 full 帧，之后持续接收增量；不携带请求体、不触发业务执行。 */
   public open = async (): Promise<void> => {
-    this.close();
+    if (!this.enabled) return;
+    this.disconnect();
     const handle: StreamHandle = { controller: new AbortController() };
     this.active = handle;
     try {
@@ -107,6 +121,10 @@ export class TaskTransportSession {
     }
   };
 
+  /**
+   * 发送不依赖订阅：会话已关闭（切走 Task、后端换代）时，迟到的上传后发送照常投递，失败也照常回调，
+   * 否则用户的消息会无声丢失。这里门控的只有订阅本身，``open`` 自带启用判断。
+   */
   public async submit(command: UserAddMessageCommand): Promise<void> {
     const submit = this.callbacks().submitMessage;
     if (!submit) throw new Error("只读 Transport runtime 不接受消息提交");

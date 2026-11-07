@@ -25,7 +25,7 @@ export async function requestHistoryPage(
   taskId: number,
   end: number,
   loadedIds: ReadonlySet<string>,
-  init: Pick<HttpRequestInit, "signal" | "traceId"> = {},
+  init: Pick<HttpRequestInit, "signal" | "traceId" | "timeoutMs"> = {},
 ): Promise<TransportHistoryPage> {
   const value = await requestJson<unknown>(`/tasks/${taskId}/assistant/messages?end=${end}`, init);
   return parseHistoryPage(value, loadedIds);

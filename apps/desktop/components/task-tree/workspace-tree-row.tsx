@@ -158,8 +158,8 @@ function WorkspaceTaskRow({ node, style, item, actions }: Pick<NodeRendererProps
   const nested = node.level > ROOT_TASK_LEVEL;
   // 嵌套行的 Fork 身份由层级表达；源任务已不在列表中、被提为顶层的 Fork 仍保留图标。Agent 用
   // `fork_task` 分出的对话无论在哪一层都标 Bot：它不是用户自己开的分支。
-  const agentFork = task.task_type === "fork" && task.extra?.fork?.created_by === "agent";
-  const showForkIcon = task.task_type === "fork" && !nested && !agentFork;
+  const agentFork = task.task_type === "agent_fork";
+  const showForkIcon = task.task_type === "user_fork" && !nested;
   const showMarkerIcon = showForkIcon || agentFork;
   // 覆盖 react-arborist 按层级等距算出的 paddingLeft，只收紧 Fork 层。
   const paddingLeft = ROOT_TASK_INDENT + (node.level - ROOT_TASK_LEVEL) * FORK_INDENT;

@@ -14,11 +14,10 @@ import { useComposerFiles } from "@/components/composer/use-composer-files";
 import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
 import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
 import { ComposerSurface } from "@/components/composer/composer-surface";
-import { useCreateWorkspaceFromFolder, WorkspacePicker } from "@/components/new-conversation/workspace-picker";
+import { WorkspacePicker } from "@/components/new-conversation/workspace-picker";
 import { NewConversationBackdrop } from "@/components/new-conversation/backdrop";
 import { NewConversationKeyHints } from "@/components/new-conversation/key-hints";
-import { FirstRunChecklist } from "@/components/onboarding/first-run-checklist";
-import { modelSetupState, shouldShowFirstRunChecklist, startBlockedReason } from "@/components/onboarding/start-readiness";
+import { modelUnavailable, startBlockedReason } from "@/components/new-conversation/start-readiness";
 import { Button } from "@/components/ui/button";
 import { createWorkspaceTask, deleteTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
@@ -93,7 +92,6 @@ type NewConversationProps = {
    * 工作区目录是否仍在首次加载：加载完成前 workspaces 为空并不代表用户没有工作区，
    * 据此避免首帧闪出「添加工作区」引导。
    */
-  workspacesLoading: boolean;
   selectedWorkspaceId: number | null;
   onWorkspaceChange: (workspaceId: number) => void;
   onWorkspaceCreated: () => Promise<void>;
@@ -111,7 +109,6 @@ const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
 
 export function NewConversation({
   workspaces,
-  workspacesLoading,
   selectedWorkspaceId,
   onWorkspaceChange,
   onWorkspaceCreated,
@@ -150,13 +147,11 @@ export function NewConversation({
     count: () => useNewTaskDrafts.getState().drafts[currentDraftId.current]?.attachments.length ?? 0,
   };
   const hasDraft = Boolean(text.trim() || attachments.length > 0);
-  const modelState = modelSetupState(useModelCatalog());
-  const workspaceCreation = useCreateWorkspaceFromFolder({ onWorkspaceCreated, onWorkspaceChange });
+  const modelMissing = modelUnavailable(useModelCatalog());
   const hasWorkspaces = workspaces.length > 0;
-  const showChecklist = shouldShowFirstRunChecklist({ workspacesLoading, hasWorkspaces, modelState });
   const canStart = Boolean(selectedWorkspaceId) && modelReady && hasDraft && !submitting;
   const blockedReasonId = useId();
-  const blockedReason = startBlockedReason({ hasWorkspaces, selectedWorkspaceId, modelState, modelReady });
+  const blockedReason = startBlockedReason({ hasWorkspaces, selectedWorkspaceId, modelMissing, modelReady });
 
   useEffect(() => {
     mountedRef.current = true;
@@ -246,7 +241,7 @@ export function NewConversation({
   return (
     // 背景包在滚动容器外，内容滚动时点阵不跟着走。
     <NewConversationBackdrop>
-    {/* 上下留白 2:3，把视觉中心放在略高于正中处；内容超高（首次引导展开）时整页滚动。 */}
+    {/* 上下留白 2:3，把视觉中心放在略高于正中处；内容超高时整页滚动。 */}
     <div className="mx-auto grid h-full w-full max-w-conversation grid-rows-[2fr_auto_3fr] overflow-y-auto px-6">
       <ComposerInsertionProvider key={draftId}>
       <form ref={formRef} onSubmit={submit} className="row-start-2 w-full">
@@ -256,20 +251,11 @@ export function NewConversation({
             workspaces={workspaces}
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={onWorkspaceChange}
-            onWorkspaceCreated={async () => onWorkspaceCreated()}
+            onWorkspaceCreated={onWorkspaceCreated}
           />
           <span aria-hidden="true" className="text-brand font-mono">❯</span>
           <span className="shrink-0">想做什么？</span>
         </h1>
-        {showChecklist && (
-          <FirstRunChecklist
-            hasWorkspace={hasWorkspaces}
-            modelState={modelState}
-            onAddWorkspace={() => void workspaceCreation.create()}
-            addingWorkspace={workspaceCreation.creating}
-            addWorkspaceError={workspaceCreation.error}
-          />
-        )}
         <ComposerSurface>
           <ComposerFeedbackProvider>
           <NewConversationImages

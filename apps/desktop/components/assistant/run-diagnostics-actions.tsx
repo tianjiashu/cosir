@@ -62,7 +62,9 @@ export function RunDiagnosticsActions(props: RunDiagnosticsActionsProps): ReactE
   const navigate = useNavigate();
   const location = useLocation();
 
-  if (!shouldOfferRunDiagnostics(props) || runId == null || status === null) return null;
+  if (runId === null) return <TooltipIconButton size="sm" tooltip="查看继承上下文" aria-label="查看继承上下文"
+    onClick={() => navigate(`/context-observer?task_id=${taskId}`, { state: { returnTo: `${location.pathname}${location.search}` } })}><ScanSearchIcon /></TooltipIconButton>;
+  if (!shouldOfferRunDiagnostics(props) || status === null) return null;
 
   const copyDiagnostics = () => {
     void copyText(formatRunDiagnostics({ taskId, runId, status, endReason, errorCode }), {

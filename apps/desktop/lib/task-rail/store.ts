@@ -12,7 +12,16 @@ type TaskRailPreferences = {
 };
 
 type TaskRailState = TaskRailPreferences & {
-  setOpen: (open: boolean) => void;
+  /** 对话视口放不下固定侧栏；`TaskRail` 按视口写入，页头开关据此判断在开关哪一种。 */
+  floating: boolean;
+  /** 窄屏浮层是否打开，不落盘：浮层盖在对话上，每次都由用户点开，宽屏的常驻偏好不带过来。 */
+  floatOpen: boolean;
+  revealCall: { taskId: number; callId: string } | null;
+  revealBackground: (taskId: number, callId: string) => void;
+  /** 条目已定位；一次性意图不留在 store 里，否则条目重新挂载时会再展开一次。 */
+  consumeReveal: () => void;
+  setFloating: (floating: boolean) => void;
+  setVisible: (visible: boolean) => void;
   setCollapsed: (id: RailCardId, collapsed: boolean) => void;
   setOrder: (order: RailCardId[]) => void;
 };
@@ -21,20 +30,17 @@ function isCardId(value: unknown): value is RailCardId {
   return TASK_RAIL_CARD_IDS.includes(value as RailCardId);
 }
 
-/**
- * 把读到的偏好收敛成合法值：丢掉已不存在的卡片、去重，再把新增的卡片补到末尾，
- * 以后加卡片不会打乱老用户排好的顺序。持久化数据来自 localStorage（可能被手改或来自旧版本），
- * 这是它唯一的入口校验。
- */
+/** 只接受当前完整偏好；结构不符时整体恢复默认值，不迁移卡片顺序或保留旧字段。 */
 export function normalizeTaskRailPreferences(raw: unknown): TaskRailPreferences {
-  const value = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
-  const stored = Array.isArray(value.order) ? [...new Set(value.order.filter(isCardId))] : [];
-  const collapsedRaw = typeof value.collapsed === "object" && value.collapsed !== null ? value.collapsed as Record<string, unknown> : {};
-  return {
-    open: value.open === true,
-    order: [...stored, ...TASK_RAIL_CARD_IDS.filter((id) => !stored.includes(id))],
-    collapsed: Object.fromEntries(Object.entries(collapsedRaw).filter(([id, folded]) => isCardId(id) && typeof folded === "boolean")),
-  };
+  const defaults: TaskRailPreferences = { open: true, order: [...TASK_RAIL_CARD_IDS], collapsed: {} };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return defaults;
+  const value = raw as Record<string, unknown>;
+  if (Object.keys(value).length !== 3 || typeof value.open !== "boolean"
+    || !Array.isArray(value.order) || value.order.length !== TASK_RAIL_CARD_IDS.length
+    || !value.order.every(isCardId) || new Set(value.order).size !== value.order.length
+    || typeof value.collapsed !== "object" || value.collapsed === null || Array.isArray(value.collapsed)
+    || !Object.entries(value.collapsed).every(([id, folded]) => isCardId(id) && typeof folded === "boolean")) return defaults;
+  return { open: value.open, order: value.order, collapsed: value.collapsed };
 }
 
 /**
@@ -45,7 +51,13 @@ export function normalizeTaskRailPreferences(raw: unknown): TaskRailPreferences 
 export const useTaskRailStore = create<TaskRailState>()(persist(
   (set) => ({
     ...normalizeTaskRailPreferences(undefined),
-    setOpen: (open) => set({ open }),
+    floating: false,
+    floatOpen: false,
+    revealCall: null,
+    revealBackground: (taskId, callId) => set((state) => ({ open: true, floatOpen: true, collapsed: { ...state.collapsed, "background-tasks": false }, revealCall: { taskId, callId } })),
+    consumeReveal: () => set({ revealCall: null }),
+    setFloating: (floating) => set({ floating }),
+    setVisible: (visible) => set((state) => (state.floating ? { floatOpen: visible } : { open: visible })),
     setCollapsed: (id, collapsed) => set((state) => ({ collapsed: { ...state.collapsed, [id]: collapsed } })),
     setOrder: (order) => set({ order }),
   }),
@@ -55,3 +67,5 @@ export const useTaskRailStore = create<TaskRailState>()(persist(
     merge: (persisted, current) => ({ ...current, ...normalizeTaskRailPreferences(persisted) }),
   },
 ));
+
+export const selectTaskRailVisible = ({ floating, floatOpen, open }: TaskRailState): boolean => (floating ? floatOpen : open);

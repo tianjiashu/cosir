@@ -1,3 +1,4 @@
+import { readText } from "./display-utils";
 import type { TransportRunStatus } from "@/lib/assistant/contract";
 
 
@@ -33,10 +34,6 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 function positiveId(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
@@ -53,14 +50,14 @@ export function readDelegationDisplay(value: unknown): DelegationDisplay | null 
   if (!data || data.kind !== "delegation-result") return null;
   const statusValue = data.status === undefined ? undefined : childAgentStatus(data.status);
   if (data.status !== undefined && statusValue === undefined) return null;
-  if (data.title !== undefined && nonEmptyString(data.title) === undefined) return null;
-  if (data.role !== undefined && nonEmptyString(data.role) === undefined) return null;
-  if (data.child_agent_id !== undefined && nonEmptyString(data.child_agent_id) === undefined) return null;
+  if (data.title !== undefined && readText(data.title) === undefined) return null;
+  if (data.role !== undefined && readText(data.role) === undefined) return null;
+  if (data.child_agent_id !== undefined && readText(data.child_agent_id) === undefined) return null;
   if (data.child_task_id !== undefined && positiveId(data.child_task_id) === undefined) return null;
   return {
-    title: nonEmptyString(data.title),
-    role: nonEmptyString(data.role),
-    childAgentId: nonEmptyString(data.child_agent_id),
+    title: readText(data.title),
+    role: readText(data.role),
+    childAgentId: readText(data.child_agent_id),
     childTaskId: positiveId(data.child_task_id),
     status: statusValue,
   };
@@ -72,7 +69,7 @@ export type ForkDisplay = { title: string; childTaskId: number };
 export function readForkDisplay(value: unknown): ForkDisplay | null {
   const data = record(value);
   if (!data || data.kind !== "fork-task-result") return null;
-  const title = nonEmptyString(data.title);
+  const title = readText(data.title);
   const childTaskId = positiveId(data.child_task_id);
   if (title === undefined || childTaskId === undefined) return null;
   return { title, childTaskId };
@@ -85,13 +82,13 @@ export function readAgentTaskResultDisplay(value: unknown): AgentTaskResultDispl
   if (data.operation !== "send" && data.operation !== "status") return null;
   const taskId = positiveId(data.task_id);
   if (taskId === undefined) return null;
-  if (data.agent_name !== null && data.agent_name !== undefined && nonEmptyString(data.agent_name) === undefined) return null;
+  if (data.agent_name !== null && data.agent_name !== undefined && readText(data.agent_name) === undefined) return null;
   if (data.final_output !== null && data.final_output !== undefined && typeof data.final_output !== "string") return null;
   if (data.end_reason !== null && data.end_reason !== undefined && typeof data.end_reason !== "string") return null;
   return {
     operation: data.operation,
     taskId,
-    agentName: nonEmptyString(data.agent_name),
+    agentName: readText(data.agent_name),
     finalOutput: typeof data.final_output === "string" ? data.final_output : undefined,
     endReason: typeof data.end_reason === "string" ? data.end_reason : undefined,
   };

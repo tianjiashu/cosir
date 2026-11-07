@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useRef } from "react";
 
 import { HttpError } from "@/lib/http/errors";
 import { resumeTask } from "@/lib/assistant/task-commands";
@@ -19,16 +19,9 @@ export type BusinessResumeController = {
  */
 export function useBusinessResume(context: RuntimeSessionContext): BusinessResumeController {
   const inFlightRef = useRef<Promise<void> | null>(null);
-  const disposedRef = useRef(false);
-
-  useEffect(() => {
-    disposedRef.current = false;
-    return () => { disposedRef.current = true; };
-  }, []);
 
   const resumeBusinessRun = useCallback(() => {
     if (inFlightRef.current) return inFlightRef.current;
-    if (disposedRef.current) return Promise.resolve();
     if (!context.backendRef.current.available) {
       return Promise.reject(new UserFacingError("本机后端当前不可用，无法继续运行"));
     }

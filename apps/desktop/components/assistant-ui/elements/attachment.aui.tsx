@@ -16,7 +16,7 @@ import { ImageTile } from "@/components/image/image-tile";
 import { AttachmentPicker } from "@/components/composer/attachment-picker";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
 import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
-import { useTaskComposerDraft } from "@/components/composer/use-task-composer-draft";
+import { useTaskComposerDraft } from "@/components/composer/use-composer-draft";
 import { ComposerEditor } from "@/components/composer/composer-editor";
 
 
@@ -103,24 +103,29 @@ function useComposerImageSink(): ComposerImageSink {
  * 因为它们额外按 `thread.isRunning && !capabilities.queue` 禁用——那是「运行中只能靠客户端队列插话」
  * 的模型，而这里运行中发送与编辑排队消息由后端队列承接，能否提交由本应用判定。
  */
-function useComposerSubmit(blocked: boolean): { canSubmit: boolean; submit: () => void } {
+function useComposerSubmit(blocked: boolean, beforeSubmit?: () => void): { canSubmit: boolean; submit: () => void } {
   const aui = useAui();
   const canSend = useAuiState((state) => state.composer.canSend);
   return {
     canSubmit: canSend && !blocked,
     // assistant-ui 的 send 不返回 Promise，无法在此 await：附件失败由附件适配器
     // （image-attachment-adapter）记录并提示，assistant-ui 自行恢复草稿与发送状态。
-    submit: () => void aui.composer.send(),
+    submit: () => {
+      beforeSubmit?.();
+      void aui.composer.send();
+    },
   };
 }
 
 /** 发送按钮：与同一输入框的回车提交共用 {@link useComposerSubmit}。 */
 export const ComposerSendButton: FC<PropsWithChildren<{
   blocked?: boolean;
+  /** 提交生效之前执行：AUI 的 append 先退出编辑、后调 runtime，提交后再做就晚了。 */
+  beforeSubmit?: () => void;
   "aria-label": string;
   title?: string;
-}>> = ({ blocked = false, "aria-label": ariaLabel, title, children }) => {
-  const { canSubmit, submit } = useComposerSubmit(blocked);
+}>> = ({ blocked = false, beforeSubmit, "aria-label": ariaLabel, title, children }) => {
+  const { canSubmit, submit } = useComposerSubmit(blocked, beforeSubmit);
   return (
     <Button
       type="button"
@@ -144,6 +149,8 @@ type InlineComposerInputProps = {
   persistTaskDraft?: boolean;
   /** 禁止提交但保留编辑（可选中、复制）；与 {@link ComposerSendButton} 的 `blocked` 传同一个值，回车才不会绕过它。 */
   submitDisabled?: boolean;
+  /** 见 {@link ComposerSendButton}。 */
+  beforeSubmit?: () => void;
   "aria-label"?: string;
 };
 
@@ -154,12 +161,13 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
   hydrating = false,
   persistTaskDraft = false,
   submitDisabled = false,
+  beforeSubmit,
   "aria-label": ariaLabel,
 }) => {
   const composer = unstable_useComposerInput();
   const restoringDraft = useTaskComposerDraft(persistTaskDraft);
   const addFiles = useComposerFiles(useComposerImageSink());
-  const { canSubmit, submit } = useComposerSubmit(submitDisabled);
+  const { canSubmit, submit } = useComposerSubmit(submitDisabled, beforeSubmit);
 
   return (
     <ComposerEditor

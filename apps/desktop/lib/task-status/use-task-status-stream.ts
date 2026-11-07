@@ -1,3 +1,4 @@
+import { markTaskRequestsUnsynced, reconcileTaskStatuses } from "@/lib/assistant/command-request-store";
 import { useEffect } from "react";
 
 import { readNdjson } from "@/lib/http/ndjson";
@@ -24,6 +25,7 @@ export function useTaskStatusStream(): void {
     const store = useTaskStatusStore.getState();
     if (!backend.available) {
       store.setConnected(false);
+      markTaskRequestsUnsynced();
       return;
     }
     const controller = new AbortController();
@@ -31,6 +33,7 @@ export function useTaskStatusStream(): void {
     let attempts = 0;
     const onFrame = (frame: StatusFrame) => {
       attempts = 0;
+      if (frame.type !== "heartbeat") reconcileTaskStatuses(frame.statuses);
       if (frame.type === "full") store.replaceAll(frame.statuses);
       else if (frame.type === "changed") store.merge(frame.statuses);
     };
@@ -46,6 +49,7 @@ export function useTaskStatusStream(): void {
       } catch (error) {
         if (controller.signal.aborted) return;
         store.setConnected(false);
+        markTaskRequestsUnsynced();
         void frontendLog("WARNING", "task_status_stream_disconnected", "任务状态推送中断，稍后重连", {
           data: { attempts, generation: backend.generation },
           error,

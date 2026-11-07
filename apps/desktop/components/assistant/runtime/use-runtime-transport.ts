@@ -1,24 +1,21 @@
+import type { ToolCalls } from "@/lib/assistant/tool-call-index";
 import { useCallback, useEffect, useMemo } from "react";
 
-import {
-  extractUserAddMessageAttachments,
-  extractUserAddMessageText,
-  getUserAddMessageSourceId,
-  type UserAddMessageCommand,
-} from "@/lib/assistant/converter";
+import { getUserAddMessageSourceId, type UserAddMessageCommand } from "@/lib/assistant/converter";
+import { recoverRejectedCommands } from "@/lib/assistant/composer-drafts";
 import {
   rerunTaskMessage,
   sendTaskMessage,
   type TaskMessageRequest,
 } from "@/lib/assistant/task-commands";
 import { showErrorDialog } from "@/lib/confirm/confirm-store";
+import { notify } from "@/lib/notify";
 import { activeRunLaunch } from "@/lib/assistant/run-launch";
 import { readStoredSelection } from "@/lib/model/selection-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { TransportRunStatus, TransportState } from "@/lib/assistant/contract";
 import { transportMessageCount } from "@/lib/assistant/transport-state-operations";
 import type { RuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
-import type { RuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 import {
   useTaskAssistantTransportRuntime,
@@ -38,41 +35,13 @@ type PreparedTaskCommand =
 type RuntimeTransport = Omit<ReturnType<typeof useTaskAssistantTransportRuntime>, "open">;
 
 /**
- * 被拒命令的草稿恢复：编辑命令回到编辑态，新消息回到输入框。HTTP 拒绝与 actor 拒绝（顶层
- * `error`）共用这一份规则。
- */
-function restoreRejectedDraft(context: RuntimeSessionContext, commands: readonly unknown[]): void {
-  const failedCommands = [...commands].reverse();
-  const failedEditCommand = failedCommands.find((command) => getUserAddMessageSourceId(command) !== null);
-  const failedCommand = failedEditCommand ?? failedCommands.find((command) => (
-    extractUserAddMessageText(command).trim().length > 0
-      || extractUserAddMessageAttachments(command).length > 0
-  ));
-  if (!failedCommand) return;
-  const failedText = extractUserAddMessageText(failedCommand);
-  const failedAttachments = extractUserAddMessageAttachments(failedCommand);
-  if (!failedText.trim() && failedAttachments.length === 0) return;
-  if (failedEditCommand) {
-    const sourceId = getUserAddMessageSourceId(failedEditCommand);
-    const restored = sourceId !== null
-      && context.composerRestoreRef.current?.restoreEditMessage(sourceId, failedText, failedAttachments) === true;
-    if (!restored) {
-      context.setIssue({ message: "编辑失败，原消息仍保留，请重新点击编辑重试。", canResync: true });
-    }
-    return;
-  }
-  context.composerRestoreRef.current?.restoreNewMessage(failedText, failedAttachments);
-}
-
-/**
  * 创建 Assistant Transport runtime，并集中承载只属于 Transport 的策略：命令组装、命令被拒的
  * 草稿恢复、一轮结束的通知与订阅断开后的重连。
  */
 export function useRuntimeTransport(
   context: RuntimeSessionContext,
   recovery: RuntimeRecovery,
-  cancellation: Pick<RuntimeCancellation, "onSettled">,
-  onStateCommit: (state: TransportState) => void,
+  onStateCommit: (state: TransportState, toolCalls: ToolCalls) => void,
   selectedToolGroups: readonly string[],
 ): RuntimeTransport {
   const attachmentAdapter = useMemo(
@@ -83,8 +52,12 @@ export function useRuntimeTransport(
   const backend = useBackendRuntime();
   const connectionKey = backend.available ? String(backend.generation) : null;
 
-  /** 命令提交被拒或未能发出（HTTP 非 2xx、网络失败、附件失效）：弹窗提示并恢复草稿。 */
-  const handleSubmitError = useCallback((error: Error, commands: readonly UserAddMessageCommand[]) => {
+  /**
+   * 命令提交被拒或未能发出（HTTP 非 2xx、网络失败、附件失效）：内容回到用户手里并说明原因。
+   * 用户还在这里时用弹窗打断；已切走时不抢占别的页面，用 toast 说明内容回到了哪个 Task。
+   * 网络失败时后端可能已收下，文案要提醒先看对话再重发，避免重复。
+   */
+  const handleSubmitError = useCallback(async (error: Error, commands: readonly UserAddMessageCommand[]) => {
     void frontendLog("ERROR", "assistant_task_command_rejected", "Task 命令提交被拒", {
       traceId: context.traceId,
       data: {
@@ -95,15 +68,14 @@ export function useRuntimeTransport(
       },
       error,
     });
-    restoreRejectedDraft(context, commands);
-    // 命令被拒要打断用户：草稿已恢复，用弹窗说明原因；连接类问题才进对话区顶部的状态条。
-    void showErrorDialog({
-      title: "发送失败",
-      message: userErrorMessage(error, "网络异常，请检查本机后端是否正在运行"),
-    });
+    const fallback = "网络异常，消息可能已送达，请先查看对话再决定是否重发";
+    if (await recoverRejectedCommands(context.taskId, commands) === "away") {
+      notify.error(`发送失败，内容已放回「${context.latestStateRef.current.title}」的输入框`, { error, fallback });
+      return;
+    }
+    void showErrorDialog({ title: "发送失败", message: userErrorMessage(error, fallback) });
   }, [context]);
 
-  /** actor 拒绝命令：顶层 `error` 已在对话区显示，这里只恢复草稿并记日志。 */
   const handleActivitySettled = useCallback((status: TransportRunStatus) => {
     void frontendLog("INFO", "assistant_activity_settled", "Task 当前活动已结束", {
       traceId: context.traceId,
@@ -111,13 +83,11 @@ export function useRuntimeTransport(
         taskId: context.taskId,
         runId: context.latestStateRef.current.activity?.runId ?? null,
         status,
-        cancelRequested: context.cancelRequestedRef.current,
         messageCount: transportMessageCount(context.latestStateRef.current),
       },
     });
-    cancellation.onSettled();
     context.onTaskStateChanged?.();
-  }, [cancellation, context]);
+  }, [context]);
 
   const handleDisconnect = useCallback(({ error, resync }: TransportDisconnect) => {
     void frontendLog(error ? "WARNING" : "INFO", "assistant_transport_subscription_closed", "Task 长订阅意外结束", {
@@ -145,8 +115,8 @@ export function useRuntimeTransport(
       const runLaunch = sourceId === null ? activeRunLaunch(state) : null;
       const selection = readStoredSelection({ kind: "task", id: context.taskId });
       const launch = runLaunch ?? {
-        modelConfigId: selection?.modelConfigId ?? null,
-        reasoningEffort: selection?.reasoningEffort ?? null,
+        modelConfigId: selection?.modelConfigId ?? state.fork?.initialLaunch.modelConfigId ?? null,
+        reasoningEffort: selection ? selection.reasoningEffort ?? null : state.fork?.initialLaunch.reasoningEffort ?? null,
         disabledToolGroups: [...selectedToolGroups],
       };
       // prepareUserCommand 已剔除 composer-only 的 file part，并为普通文件补齐带路径的描述符。
@@ -200,20 +170,6 @@ export function useRuntimeTransport(
     onActivitySettled: handleActivitySettled,
     onDisconnect: handleDisconnect,
     onError: handleSubmitError,
-    onCancel: ({ error, commands }) => {
-      void frontendLog("WARNING", "assistant_transport_cancel_requested", "Assistant Transport 停止请求已处理", {
-        traceId: context.traceId,
-        data: {
-          taskId: context.taskId,
-          commandCount: commands.length,
-          activityStatus: context.latestStateRef.current.activity?.status ?? null,
-        },
-        error,
-      });
-      if (error) {
-        context.setIssue({ message: userErrorMessage(error, "停止请求失败，请重试"), canResync: true });
-      }
-    },
     onStateCommit,
     performanceProbe: context.performanceProbe,
   });

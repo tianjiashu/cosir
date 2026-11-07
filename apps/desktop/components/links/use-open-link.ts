@@ -66,15 +66,20 @@ export function useOpenLink(source: LinkSource, taskId?: number | null): LinkOpe
           markdownRoot?.querySelector(`#${CSS.escape(target.id)}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
           return;
         }
+        if (target.kind === "filename-search") {
+          files!.searchFilename(target.query, target.lines);
+          log(target, { query: target.query, outcome: "searched" });
+          return;
+        }
         if (target.kind === "workspace") {
           // 解析时已要求有工作区，这里的 files 恒存在。
-          const data = { path: target.path, lines: target.lines !== undefined, mention: target.mention === true };
+          const data = { path: target.path, lines: target.lines !== undefined };
           if (target.directory) {
             files!.openDirectory(target.path);
             log(target, { ...data, outcome: "opened" });
             return;
           }
-          files!.openFile(target.path, { lines: target.lines, ifMissing: target.mention ? "search" : "notify" }).then(
+          files!.openFile(target.path, { lines: target.lines }).then(
             (outcome) => log(target, { ...data, outcome }),
             (error: unknown) => notify.error("无法打开文件", { error }),
           );

@@ -7,7 +7,7 @@ import { notify } from "@/lib/notify";
 import { useWorkbenchActions } from "@/lib/workbench/context";
 
 /** 侧栏里的对话 Task；其余（委派子 Agent、Team 节点）只能在工作台里读。 */
-const SIDEBAR_TASK_TYPES = new Set(["user", "fork"]);
+const SIDEBAR_TASK_TYPES = new Set(["user", "user_fork", "agent_fork"]);
 
 /**
  * 打开另一个 Task：侧栏对话按路由跳转，子 Agent 与 Team 节点在工作台打开。Agent 消息的发送方、

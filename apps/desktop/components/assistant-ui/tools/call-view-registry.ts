@@ -1,6 +1,11 @@
+import { teamView } from "./views/team-view";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
-import type { CallView } from "./call-view";
-import { DETAIL_VIEWS } from "./details/detail-views";
+import { detailsLiveInRail, type CallView, type CallPresentation, type CallViewContext } from "./call-view";
+import { mcpView, skillView } from "./details/extension-views";
+import { imageReadView } from "./details/image-read-view";
+import { readFileView } from "./details/read-file-view";
+import { webExtractView, webSearchView } from "./details/web-views";
+import { contentSearchView, directoryListView, fileListView } from "./details/workspace-list-views";
 import { asRecord } from "./display-utils";
 import { browserPageView } from "./views/browser-page-view";
 import { agentTaskResultView, delegationView, forkTaskView } from "./views/child-task-views";
@@ -10,11 +15,20 @@ import { terminalSessionView } from "./views/terminal-session-view";
 
 /**
  * `display_data.kind` → 调用行视图。这是前端唯一的工具展示路由：只按 kind，不按工具名、不按静态展示声明。
- * 新增一种工具展示只需在这里登记一个 kind；产物类 kind（草稿、Team 审批）不在这里——它们在产物区 /
- * 等待区各自成卡，过程里的那一行只有标题与状态。
+ * 新增一种工具展示只需在这里登记一个 kind；独立 Team 视图区分时间线审批/摘要与后台详情。
+ * 配置草稿仍在产物区成卡。
  */
 export const CALL_VIEWS: Readonly<Record<string, CallView>> = {
-  ...DETAIL_VIEWS,
+  "read-file-meta": readFileView,
+  "file-list": fileListView,
+  "content-search-results": contentSearchView,
+  "directory-list": directoryListView,
+  "web-search-results": webSearchView,
+  "web-extract-urls": webExtractView,
+  "image-read": imageReadView,
+  "mcp-tool-result": mcpView,
+  "skill-content": skillView,
+  "agent-team-approval": teamView,
   "terminal-result": terminalResultView,
   "terminal-session": terminalSessionView,
   "file-changes": fileChangesView,
@@ -24,17 +38,10 @@ export const CALL_VIEWS: Readonly<Record<string, CallView>> = {
   "browser-page": browserPageView,
 };
 
-export type ResolvedCallView = { view: CallView; data: Record<string, unknown> };
-
-/**
- * 按展示数据的 kind 取视图；没有 kind（排队、运行中、只有静态声明）、未知 kind 或专用载荷校验不通过时
- * 返回 null，调用行退化为只有标题与状态——不会猜测工具名，也不会让不受信任的载荷绕过校验。
- */
-export function resolveCallView(artifact: ToolArtifact): ResolvedCallView | null {
+/** 按 kind 解析一次；未知 kind 或无效载荷退化纯行，不猜工具名。归侧栏的调用在这里收成一行，新视图无需自己判断。 */
+export function resolveCallView(artifact: ToolArtifact, context: CallViewContext): CallPresentation | null {
   const data = asRecord(artifact.display_data);
-  if (typeof data.kind !== "string") return null;
-  const view = CALL_VIEWS[data.kind];
-  if (view === undefined) return null;
-  if (view.accepts !== undefined && !view.accepts(data)) return null;
-  return { view, data };
+  if (typeof data.kind !== "string" || !Object.hasOwn(CALL_VIEWS, data.kind)) return null;
+  const view = CALL_VIEWS[data.kind]?.(data, context) ?? null;
+  return view && detailsLiveInRail(context) ? { ...view, detail: undefined, actions: undefined, overlay: undefined } : view;
 }

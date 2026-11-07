@@ -35,7 +35,6 @@ function NewConversationRoute() {
   return (
     <NewConversation
       workspaces={catalog.workspaces}
-      workspacesLoading={catalog.status === "loading"}
       selectedWorkspaceId={catalog.selectedWorkspaceId}
       onWorkspaceChange={catalog.selectWorkspace}
       onWorkspaceCreated={catalog.load}

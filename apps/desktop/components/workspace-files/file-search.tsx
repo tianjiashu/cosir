@@ -21,12 +21,14 @@ import { cn } from "@/lib/utils";
 export function FileSearch({
   workspaceId,
   query,
+  navigation,
   open,
   clear,
   onManageIgnored,
 }: {
   workspaceId: number;
   query: string;
+  navigation: boolean;
   open: (path: string) => void;
   clear: () => void;
   onManageIgnored: () => void;
@@ -69,6 +71,7 @@ export function FileSearch({
   });
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {navigation && <p className="px-2 pt-2 text-xs text-muted-foreground">选择文件以打开</p>}
       <div className="flex flex-wrap items-center gap-2 p-2 text-xs">
         {selected.length > 0 && (
           <AddReferenceButton

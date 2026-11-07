@@ -5,34 +5,13 @@ import type { FileData } from "react-diff-view";
 import { WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
 import { cn } from "@/lib/utils";
 import type { CallView } from "../call-view";
+import { readFileChanges, type FileChange } from "@/lib/assistant/file-changes";
 import { asRecord } from "../display-utils";
 
-/** `display_data.kind = "file-changes"` 里的一项（后端 `app/tools/display/file_display.py`）。 */
-export type FileChange = {
-  path: string;
-  new_path: string | null;
-  status: string | undefined;
-  patch: string | null;
-  insertions: number;
-  deletions: number;
-};
-
 type ParsedFileDiff =
-  | { kind: "ready"; file: FileData }
-  | { kind: "empty" }
-  | { kind: "unavailable"; reason: "invalid" | "missing" };
-
-export function readChanges(value: unknown): FileChange[] {
-  if (!Array.isArray(value)) return [];
-  return value.map(asRecord).filter((change) => typeof change.path === "string").map((change) => ({
-    path: String(change.path),
-    new_path: typeof change.new_path === "string" ? change.new_path : null,
-    status: typeof change.status === "string" ? change.status : undefined,
-    patch: typeof change.patch === "string" ? change.patch : null,
-    insertions: typeof change.insertions === "number" ? change.insertions : 0,
-    deletions: typeof change.deletions === "number" ? change.deletions : 0,
-  }));
-}
+  | { kind: "ready"; file: FileData; }
+  | { kind: "empty"; }
+  | { kind: "unavailable"; reason: "invalid" | "missing"; };
 
 export function parseFileDiff(change: FileChange): ParsedFileDiff {
   if (!change.patch) return { kind: "unavailable", reason: "missing" };
@@ -56,28 +35,14 @@ export function parseFileDiff(change: FileChange): ParsedFileDiff {
   }
 }
 
-/** 一个文件的 diff 正文；调用行展开体与「本轮改动」卡点开文件时共用。移动与删除只有一句说明，不解析被删内容。 */
-export function FileDiff({ change }: { change: FileChange }) {
+/** 删除与移动没有文本差异可看：被删内容不进入工具展示，行上的目标已说清移动去向。 */
+export function hasTextDiff(change: FileChange): boolean {
+  return change.status !== "deleted" && change.status !== "moved";
+}
+
+/** 一个文件的 diff 正文；调用行展开体与「本轮改动」卡点开文件时共用。 */
+export function FileDiff({ change }: { change: FileChange; }) {
   const parsed = useMemo(() => parseFileDiff(change), [change]);
-  if (change.status === "moved") {
-    return (
-      <p className="text-muted-foreground px-3 py-2 text-xs">
-        <span className="font-medium">已移动：</span>
-        <span className="break-all">{change.path}</span>
-        <span className="mx-1" aria-hidden="true">→</span>
-        <span className="break-all">{change.new_path ?? "目标路径不可用"}</span>
-      </p>
-    );
-  }
-  // 删除只展示目标与状态，被删内容不进入工具展示；即使载荷带有删除 diff 也不渲染，保证口径一致。
-  if (change.status === "deleted") {
-    return (
-      <p className="text-muted-foreground px-3 py-2 text-xs">
-        <span className="font-medium">已删除：</span>
-        <span className="break-all">{change.path}</span>
-      </p>
-    );
-  }
   if (parsed.kind === "empty") return <p className="text-muted-foreground px-3 py-2 text-xs">没有文本差异</p>;
   if (parsed.kind === "unavailable") {
     return <p className="text-muted-foreground px-3 py-2 text-xs">{parsed.reason === "missing" ? "Diff 数据不可用" : "Diff 解析失败"}</p>;
@@ -92,7 +57,7 @@ const COLLAPSED_DIFF_LINE_LIMIT = 24;
  * 上下统一视图：对话列宽约 700px，左右分栏每侧只剩一半，长行几乎都要横向滚动。
  * 长 diff 默认限高，避免一次写入把整条回复撑得很长。
  */
-function ParsedDiff({ file }: { file: FileData }) {
+function ParsedDiff({ file }: { file: FileData; }) {
   const lineCount = useMemo(() => file.hunks.reduce((sum, hunk) => sum + hunk.changes.length, 0), [file]);
   const collapsible = lineCount > COLLAPSED_DIFF_LINE_LIMIT;
   const [expanded, setExpanded] = useState(false);
@@ -124,7 +89,7 @@ export function fileChangeTag(status: string | undefined): string | null {
 }
 
 /** 行内 `+a −b`；只有删除时不显示计数（被删内容不进展示）。 */
-export function DiffStat({ insertions, deletions, className }: { insertions: number; deletions: number; className?: string }) {
+export function DiffStat({ insertions, deletions, className }: { insertions: number; deletions: number; className?: string; }) {
   if (insertions <= 0 && deletions <= 0) return null;
   return (
     <span className={cn("shrink-0 font-mono text-xs tabular-nums", className)}>
@@ -135,22 +100,16 @@ export function DiffStat({ insertions, deletions, className }: { insertions: num
   );
 }
 
-function FileChangeSection({ change }: { change: FileChange }) {
+function FileChangeSection({ change, single }: { change: FileChange; single: boolean; }) {
   const tag = fileChangeTag(change.status);
   return (
     <section>
-      <header className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs">
+      <header className="flex items-center justify-between gap-2 py-1.5 text-xs">
         <span className="flex min-w-0 items-center gap-2">
-          {change.status === "moved" ? (
-            <span className="truncate font-mono" title={`${change.path} → ${change.new_path ?? ""}`}>
-              {change.path}<span className="text-muted-foreground mx-1" aria-hidden="true">→</span>{change.new_path ?? "目标路径不可用"}
-            </span>
-          ) : (
-            <WorkspacePathLink path={change.path} className="font-mono" />
-          )}
+          <WorkspacePathLink path={change.path} className="font-mono" />
           {tag && <span className="text-muted-foreground shrink-0 text-2xs">{tag}</span>}
         </span>
-        {change.status !== "deleted" && <DiffStat insertions={change.insertions} deletions={change.deletions} />}
+        {!single && <DiffStat insertions={change.insertions} deletions={change.deletions} />}
       </header>
       <FileDiff change={change} />
     </section>
@@ -161,27 +120,26 @@ function FileChangeSection({ change }: { change: FileChange }) {
  * `file-changes`（`write_file` / `patch_write` / `apply_patch` / `delete_file` / `move_file`）：元信息是 `+a −b`
  * 或文件数，展开体逐文件给 diff。回合结束后同一批改动还会按文件聚合进「本轮改动」卡，这里是过程视角。
  */
-export const fileChangesView: CallView = {
-  meta: (data) => {
-    const changes = readChanges(data.changes);
-    const stats = asRecord(data.diff_stats);
-    const insertions = typeof stats.total_insertions === "number" ? stats.total_insertions : changes.reduce((sum, item) => sum + item.insertions, 0);
-    const deletions = typeof stats.total_deletions === "number" ? stats.total_deletions : changes.reduce((sum, item) => sum + item.deletions, 0);
-    // 全是删除 / 移动时没有增删可数（历史载荷可能仍带计数），改用文件数与动作标签。
-    const onlyOperations = changes.length > 0 && changes.every((change) => change.status === "deleted" || change.status === "moved");
-    if (onlyOperations || (insertions <= 0 && deletions <= 0)) {
-      const count = typeof stats.total_files === "number" ? stats.total_files : changes.length;
-      return count > 1 ? `${count} 个文件` : fileChangeTag(changes[0]?.status) ?? null;
-    }
-    return <DiffStat insertions={insertions} deletions={deletions} />;
-  },
-  body: (data) => {
-    const changes = readChanges(data.changes);
-    if (changes.length === 0) return null;
-    return (
-      <div className="space-y-1 py-1">
-        {changes.map((change) => <FileChangeSection key={`${change.path}:${change.new_path ?? ""}`} change={change} />)}
-      </div>
-    );
-  },
+export const fileChangesView: CallView = (data) => {
+  const changes = readFileChanges(data.changes);
+  const textual = changes.filter(hasTextDiff);
+  const stats = asRecord(data.diff_stats);
+  const insertions = typeof stats.total_insertions === "number" ? stats.total_insertions : changes.reduce((sum, item) => sum + item.insertions, 0);
+  const deletions = typeof stats.total_deletions === "number" ? stats.total_deletions : changes.reduce((sum, item) => sum + item.deletions, 0);
+  // 全是删除 / 移动时没有增删可数，改用文件数与动作标签。
+  const onlyOperations = changes.length > 0 && changes.every((change) => change.status === "deleted" || change.status === "moved");
+  const count = typeof stats.total_files === "number" ? stats.total_files : changes.length;
+  const meta = onlyOperations || (insertions <= 0 && deletions <= 0)
+    ? count > 1 ? `${count} 个文件` : fileChangeTag(changes[0]?.status) ?? null
+    : <DiffStat insertions={insertions} deletions={deletions} />;
+  return {
+    meta,
+    detail: textual.length > 0 ? {
+      render: () => (
+        <div className="space-y-1 py-1">
+          {textual.map((change) => <FileChangeSection key={change.index} change={change} single={textual.length === 1} />)}
+        </div>
+      ),
+    } : undefined,
+  };
 };

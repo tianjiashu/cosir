@@ -9,15 +9,13 @@
  * 本文件为纯类型契约，不依赖 React，归位于 `lib/assistant/`，便于无 React 依赖的模块复用。
  */
 
-type KnownTransportToolStatus =
+/** 后端工具生命周期五态；非法输入由 Transport 边界拒绝。 */
+export type TransportToolStatus =
   | "pending"
   | "running"
   | "completed"
   | "failed"
   | "cancelled";
-
-/** 后端五态之外的值只用于安全显示，不得被解释为 pending 或 completed。 */
-export type TransportToolStatus = KnownTransportToolStatus | "unknown";
 
 /** 工具的通用展示数据；具体字段由 `kind` 决定，前端按 kind 选视图。 */
 type GenericTransportToolData = {
@@ -36,26 +34,10 @@ export type TransportToolDisplayData = GenericTransportToolData;
 export type TransportTextPart = {
   type: "text";
   text: string;
+  sourceSequence?: number;
+  finalReply?: boolean;
   /** 运行中为 "running"，结束为 "completed"。未知值保留给 converter 处理。 */
   status?: string;
-};
-
-/**
- * 推理 part：Transport 协议中的模型思考过程片段。
- *
- * 后端经 conversation event projector 把推理文本写入 snapshot，再由 snapshot
- * 投影为 `{ type: "reasoning", status, text }`，与
- * assistant-ui 的 `ReasoningMessagePart` 字段同构（`unstable_summary` 可选，后端
- * 当前不产，故前端契约亦标可选）。
- */
-export type TransportReasoningPart = {
-  type: "reasoning";
-  /** 模型推理文本。 */
-  text: string;
-  /** 推理通道运行中为 "running"，结束为 "completed"。未知值保留给 converter 处理。 */
-  status?: string;
-  /** 推理摘要（后端当前不产，保留以对齐 assistant-ui 契约）。 */
-  unstable_summary?: string;
 };
 
 /**
@@ -71,15 +53,18 @@ export type TransportToolCallPart = {
   type: "tool-call";
   toolCallId: string;
   toolName: string;
+  presentation: "activity" | "standalone" | "quiet";
   /**
    * 解析后的参数对象。参数不流式：排队（pending）时为空对象，进入 running 后才一次给全。
    * 后端不下发图标、动词或标题，前端按 `toolName` + `args` 查 `tool-catalog.ts`。
    */
-  args: Record<string, unknown>;
+  args?: Record<string, unknown> | null;
+  /** 原始模型声明的目的，不用于判断执行状态。 */
+  intent?: string | null;
   /** 工具执行错误文本；成功时为空。 */
   error?: string | null;
-  /** 后端工具调用生命周期状态；未知 wire 值由 converter 显式标为 unknown。 */
-  status?: string;
+  /** 后端工具调用生命周期状态，已由传输入口校验。 */
+  status: TransportToolStatus;
   /** 后端在失败时提供的稳定错误标识（可选）。 */
   errorCode?: string;
   /**
@@ -121,13 +106,20 @@ type TransportFilePart = {
   name: string;
   contentType: string;
 };
+/** 回合途中到达的 Agent 消息：当前回复过程里的一段，不开新回合。开启回合的 Agent 消息见 `TransportMessage.source`。 */
+export type TransportAgentMessagePart = {
+  type: "agent-message";
+  id: string;
+  text: string;
+  source: TransportMessageSource;
+};
 /** 单条 Transport 消息的内容 part。 */
 export type TransportMessagePart =
   | TransportTextPart
-  | TransportReasoningPart
   | TransportToolCallPart
   | TransportImagePart
-  | TransportFilePart;
+  | TransportFilePart
+  | TransportAgentMessagePart;
 
 /** 一次 Run 当前累计的模型 token 用量；字段缺少 provider 明细时为 null。 */
 export type TransportUsage = {
@@ -178,8 +170,8 @@ export type TransportOutcome = {
   usage: TransportUsage | null;
   /** 该 Run 冻结的窗口上限，与 `usage` 同属一个 Run：上下文占用的「已用 / 上限」只能成对取。 */
   contextWindowTotal: number | null;
-  /** Run 从创建到终态的耗时（毫秒）；旧数据缺时间戳时为 null。运行中的耗时由前端按 `activity.startedAt` 本地计时。 */
-  durationMs: number | null;
+  /** Run 从创建到终态的耗时（毫秒）；终态必有耗时。运行中的耗时由前端按 `activity.startedAt` 本地计时。 */
+  durationMs: number;
 };
 
 /** Agent 消息的发送方：`taskId` 用于跳到来源 Task，`name` 是发送时的显示名快照。 */
@@ -194,7 +186,7 @@ export type TransportMessage = {
   role: "user" | "assistant";
   parts: TransportMessagePart[];
   /** 所属 Run，只供诊断、日志与 fork 定位；对话界面不据此判断运行状态。 */
-  runId: number;
+  runId: number | null;
   /** 仅「该 Run 最后一条助手消息」在 Run 终态后非空；user 消息恒为 null。 */
   outcome: TransportOutcome | null;
   /**
@@ -209,6 +201,7 @@ export type TransportMessage = {
  * `runId` 只供诊断与日志，对话界面按 `status` 判断「运行中 / 已停下」。
  */
 export type TransportActivity = {
+  modelActivity: { stepId: string; phase: "waiting" | "reasoning" | "responding" | "tool_call" } | null;
   runId: number;
   status: TransportRunStatus;
   endReason: string | null;
@@ -325,6 +318,7 @@ export type TransportHistoryPage = {
 };
 
 export type TransportState = {
+  fork?: { sourceTaskId: number; sourceTitle: string; taskType: "user_fork" | "agent_fork"; initialLaunch: TransportRunLaunch };
   /** Task 标题，投影自后端 `tasks.title`；变化时由宿主刷新侧栏目录。 */
   title: string;
   /** 扁平消息列表，按 context 序号排列；只含已加载的一段（最近窗口加上往上翻已取到的页）。 */

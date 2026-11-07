@@ -1,3 +1,7 @@
+import { forgetTaskComposerDrafts } from "@/lib/assistant/composer-drafts";
+import { forgetTeamApprovalDrafts } from "@/lib/assistant/team-approval-draft";
+import { forgetCommands } from "@/lib/assistant/command-request-store";
+import { useDisclosureStore } from "@/lib/assistant/disclosure-store";
 import { useFilesStore } from "@/lib/workspace-files/store";
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
@@ -68,7 +72,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
       if (cause instanceof HttpError && cause.status === 409) {
         const message = cause.code === "WORKSPACE_BUSY"
           ? "工作区正在处理其他操作，请稍后重试。"
-          : "所选历史范围内仍有未结束的轮次，暂时不能 Fork。";
+          : "这条回复还没结束，暂时不能分叉。";
         notify.error("Fork 失败", { error: new UserFacingError(message) });
       } else {
         notify.error("Fork 失败", {
@@ -143,6 +147,12 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     useBackgroundTasksStore.getState().forget(deletedTaskIds);
     useHandoffStore.getState().forget(deletedTaskIds);
     forgetMessageHeights(deletedTaskIds);
+    forgetCommands(deletedTaskIds);
+    for (const taskId of deletedTaskIds) {
+      useDisclosureStore.getState().clearTask(taskId);
+      forgetTeamApprovalDrafts(taskId);
+      forgetTaskComposerDrafts(taskId);
+    }
     if (target.kind === "workspace") {
       useWorkbenchStore.getState().forgetWorkspace(target.id);
       useFilesStore.getState().forget(target.id);

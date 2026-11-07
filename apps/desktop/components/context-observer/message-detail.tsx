@@ -14,7 +14,7 @@ import {
   valueText,
 } from "./message-model";
 
-type DetailTab = "content" | "tools" | "usage" | "json";
+type DetailTab = "reasoning" | "content" | "tools" | "usage" | "json";
 const formatTokens = (value: unknown) =>
   typeof value === "number"
     ? new Intl.NumberFormat("zh-CN").format(value)
@@ -42,6 +42,7 @@ export function MessageDetail({
     Boolean(message.tool_calls?.length);
   const tabs: { value: DetailTab; label: string }[] = [
     { value: "content", label: "内容" },
+    ...(message.reasoning_content ? [{ value: "reasoning" as const, label: "思考内容" }] : []),
     ...(hasTools ? [{ value: "tools" as const, label: "工具调用" }] : []),
     ...(message.role === "assistant"
       ? [{ value: "usage" as const, label: "用量" }]
@@ -58,7 +59,7 @@ export function MessageDetail({
   );
   const text = useMemo(
     () =>
-      tab === "json"
+      tab === "reasoning" ? message.reasoning_content ?? "" : tab === "json"
         ? JSON.stringify(message, null, 2)
         : tab === "content"
           ? valueText(message.content)
@@ -77,11 +78,11 @@ export function MessageDetail({
               ),
     [message, tab],
   );
-  const plainText = tab === "content" && typeof message.content === "string";
+  const plainText = tab === "reasoning" || (tab === "content" && typeof message.content === "string");
   const usage = message.usage_metadata;
   const cache = cacheUsage(message);
   const copy = () => copyText(text, {
-    success: tab === "content" ? "已复制内容" : "已复制 JSON",
+    success: tab === "reasoning" ? "已复制思考内容" : tab === "content" ? "已复制内容" : "已复制 JSON",
     logEvent: "context_message_copy_failed",
     logData: { taskId: message.task_id, sequence: message.sequence, tab },
   });
@@ -145,7 +146,7 @@ export function MessageDetail({
             </Button>
             <Button size="sm" variant="ghost" onClick={() => void copy()}>
               <CopyIcon />
-              {tab === "content" ? "复制内容" : "复制 JSON"}
+              {tab === "reasoning" ? "复制思考内容" : tab === "content" ? "复制内容" : "复制 JSON"}
             </Button>
           </div>
         </div>

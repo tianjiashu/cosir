@@ -31,7 +31,6 @@ export function roleLabel(role: string): string {
         system: "System",
         assistant: "Assistant",
         user: "User",
-        human: "User",
         tool: "Tool",
       } as Record<string, string>
     )[role] ?? role
@@ -104,9 +103,7 @@ export function filterMessages(
     .filter(
       ({ message, searchText }) =>
         (filters.role === "all" ||
-          (filters.role === "user"
-            ? ["human", "user"].includes(message.role)
-            : message.role === filters.role)) &&
+          message.role === filters.role) &&
         (filters.inclusion === "all" ||
           message.include_in_context === (filters.inclusion === "included")) &&
         (!search || searchText.includes(search)),
@@ -174,10 +171,10 @@ export function cacheUsage(
 
 /** 变化仅对同一 Run 内可计算的相邻 Assistant 记录比较，不推断模型故障。 */
 export function cacheChanges(messages: ContextMessage[]): Map<number, number> {
-  const previous = new Map<number | null, number>();
+  const previous = new Map<number, number>();
   const result = new Map<number, number>();
   for (const message of [...messages].sort((a, b) => a.sequence - b.sequence)) {
-    if (message.role !== "assistant") continue;
+    if (message.role !== "assistant" || message.run_id === null) continue;
     const usage = cacheUsage(message);
     if (!usage) continue;
     const before = previous.get(message.run_id);
@@ -188,30 +185,29 @@ export function cacheChanges(messages: ContextMessage[]): Map<number, number> {
   return result;
 }
 
-/** 关联键包含 Run；仅导航到当前读取范围已有的记录，不制造工具执行状态。 */
+/** 工具结果关联到同一上下文范围内最近的同号调用，支持继承历史中重复出现的 ID。 */
 export function relatedMessages(
   message: ContextMessage,
   messages: ContextMessage[],
 ): ContextMessage[] {
-  if (message.role === "tool")
-    return messages.filter(
-      (candidate) =>
-        candidate.role === "assistant" &&
-        candidate.run_id === message.run_id &&
-        candidate.tool_calls?.some((call) => call.id === message.tool_call_id),
-    );
-  const ids = new Set(
-    (message.tool_calls ?? []).flatMap((call) =>
-      typeof call.id === "string" ? [call.id] : [],
-    ),
-  );
-  return messages.filter(
-    (candidate) =>
-      candidate.role === "tool" &&
-      candidate.run_id === message.run_id &&
-      candidate.tool_call_id &&
-      ids.has(candidate.tool_call_id),
-  );
+  const ownerOf = (tool: ContextMessage): ContextMessage | undefined => {
+    let owner: ContextMessage | undefined;
+    for (const candidate of messages) {
+      if (candidate.role === "assistant"
+        && candidate.run_id === tool.run_id
+        && candidate.sequence < tool.sequence
+        && candidate.tool_calls?.some(call => call.id === tool.tool_call_id)
+        && (!owner || candidate.sequence > owner.sequence)) owner = candidate;
+    }
+    return owner;
+  };
+  if (message.role === "tool") {
+    const owner = ownerOf(message);
+    return owner ? [owner] : [];
+  }
+  if (message.role !== "assistant") return [];
+  return messages.filter(candidate => candidate.role === "tool"
+    && ownerOf(candidate)?.sequence === message.sequence);
 }
 
 export function toolStatus(status: string | null | undefined): string {

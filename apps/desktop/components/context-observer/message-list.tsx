@@ -322,12 +322,12 @@ export function MessageList({
                     )}
                   </time>
                   <span>
-                    {message.run_id === null
+                    {message.run_id === null && message.sequence > 0 ? "继承上下文" : message.run_id === null
                       ? "任务系统提示词"
                       : `Run #${message.run_id}`}
                   </span>
                   {cache && (
-                    <span title="相较同一 Run 内上一条可计算记录；变化不代表故障">
+                    <span title="相较同一上下文范围内上一条可计算记录；变化不代表故障">
                       缓存 {cache.rate}%
                       {change !== undefined && change !== 0
                         ? ` · ${change > 0 ? "+" : ""}${change} 个百分点`

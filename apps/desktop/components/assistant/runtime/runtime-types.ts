@@ -1,5 +1,4 @@
 import type { MutableRefObject } from "react";
-import type { CreateAttachment } from "@assistant-ui/core";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
@@ -11,19 +10,10 @@ export type AssistantRuntimeProps = {
   workspaceId: number;
   workspaceRoot?: string;
   initialState: TransportState;
-  /** 正在 fork 的消息 id：fork 按消息切分，入口挂在带结局的回复上。 */
+  /** 正在分叉的回复 id。 */
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
   onTaskStateChanged?: () => void;
-};
-
-export type ComposerRestore = {
-  restoreNewMessage: (text: string, attachments?: readonly CreateAttachment[]) => void;
-  restoreEditMessage: (
-    sourceId: string,
-    text: string,
-    attachments?: readonly CreateAttachment[],
-  ) => boolean;
 };
 
 export type RuntimeSessionContext = {
@@ -43,7 +33,4 @@ export type RuntimeSessionContext = {
   latestStateRef: MutableRefObject<TransportState>;
   /** 打开（或替换）Task 长订阅；runtime 挂载前为 null。 */
   attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;
-  /** 用户已请求停止、当前活动尚未结束：Task 级标记，不比对 runId。 */
-  cancelRequestedRef: MutableRefObject<boolean>;
-  composerRestoreRef: MutableRefObject<ComposerRestore | null>;
 };

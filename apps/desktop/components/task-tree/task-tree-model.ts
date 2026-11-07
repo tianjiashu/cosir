@@ -14,8 +14,8 @@ export type TaskTreeNode = WorkspaceTask & {
  * not part of the workspace sidebar and must not accidentally enter this tree.
  */
 function getForkSourceTaskId(task: WorkspaceTask): number | null {
-  if (task.task_type !== "fork") return null;
-  const sourceTaskId = task.extra?.fork?.source_task_id;
+  if (task.task_type !== "user_fork" && task.task_type !== "agent_fork") return null;
+  const sourceTaskId = task.extra?.fork?.tree_parent_task_id;
   return typeof sourceTaskId === "number" && Number.isInteger(sourceTaskId) ? sourceTaskId : null;
 }
 

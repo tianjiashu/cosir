@@ -1,3 +1,5 @@
+import type { ToolCalls } from "./tool-call-index";
+import { UserFacingError } from "@/lib/errors/user-facing-error";
 import {
   useExternalStoreRuntime,
   type AppendMessage,
@@ -14,7 +16,7 @@ import {
   type FrameStoreItem,
 } from "@/lib/assistant/transport-frame-store";
 import type { UserAddMessageCommand } from "@/lib/assistant/converter";
-import { cancelTask } from "@/lib/assistant/task-commands";
+import { reconcileCommands, releaseCommandObservation } from "./command-request-store";
 import { TaskTransportSession, type TransportDisconnect } from "@/lib/assistant/task-transport-session";
 import type { TraceId } from "@/lib/trace";
 
@@ -42,14 +44,13 @@ export type TaskAssistantTransportOptions = {
   onDisconnect?: (disconnect: TransportDisconnect) => void;
   /** 命令提交被拒或未能发出（HTTP 非 2xx、网络失败、附件失效）；乐观消息已先行收回。 */
   onError?: (error: Error, commands: readonly UserAddMessageCommand[]) => Promise<void> | void;
-  onCancel?: (params: { error?: Error; commands: readonly unknown[] }) => void;
   /**
    * 订阅身份：为 null 时不订阅（本机后端不可用）；非 null 时挂载即打开 Task 长订阅，值变化（后端
    * 换了实例）即重开。卸载或变为 null 时关闭。意外断开后的重连不归这里，由宿主经返回的 `open` 发起。
    */
   connectionKey: string | null;
   readonly?: boolean;
-  onStateCommit?: (state: TransportState) => void;
+  onStateCommit?: (state: TransportState, toolCalls: ToolCalls) => void;
   performanceProbe?: AssistantPerformanceProbe | null;
 };
 
@@ -81,6 +82,24 @@ function useTaskAssistantTransportAdapter(
     };
   }), [store, taskId]);
 
+  // 在 canonical publication 同步派生；乐观命令通知不重复对账，活动回调看到本次状态。
+  useEffect(() => {
+    let committed: TransportState | undefined;
+    const commit = () => {
+      const current = store.getSnapshot();
+      if (committed === current.state) return;
+      committed = current.state;
+      reconcileCommands(taskId, current.state.activity);
+      optionsRef.current.onStateCommit?.(current.state, current.toolCalls);
+    };
+    const unsubscribe = store.subscribe(commit);
+    commit();
+    return () => {
+      unsubscribe();
+      releaseCommandObservation(taskId);
+    };
+  }, [store, taskId]);
+
   useEffect(() => store.subscribeActivity((transition) => {
     const probe = optionsRef.current.performanceProbe;
     if (transition.kind === "started") {
@@ -98,31 +117,23 @@ function useTaskAssistantTransportAdapter(
   const { connectionKey } = options;
   useEffect(() => {
     if (connectionKey === null) return;
-    void session.open();
+    void session.start();
     return () => session.close();
   }, [connectionKey, session]);
   // 宿主重连打开的连接同样随 session 释放（connectionKey 为 null 期间也可能有）。
   useEffect(() => () => session.close(), [session]);
 
-  useEffect(() => {
-    options.onStateCommit?.(view.state);
-  }, [options.onStateCommit, view.state]);
-
   // 编辑与新消息共用提交路径：`sourceId` 随命令进入宿主，由宿主选择编辑端点。
   const onNew = useCallback((message: AppendMessage) => {
-    return session.submit(toAddMessageCommand(message));
-  }, [session]);
-  const onCancel = useCallback(async () => {
-    const commands = store.getSnapshot().pendingCommands;
-    const result = await cancelTask(taskId);
-    if (result.accepted) {
-      optionsRef.current.onCancel?.({ commands });
-      return;
+    const command = toAddMessageCommand(message);
+    const current = optionsRef.current;
+    // 后端暂停时 UI 仍存活，AUI 已清空提交草稿；在当前 UI 入口恢复并提示。
+    // 这不是关闭会话的迟到回调，也不发送 HTTP。编辑和附件上传后提交共用此入口。
+    if (current.connectionKey === null) {
+      return current.onError?.(new UserFacingError("本机后端暂不可用，请稍后重试"), [command]);
     }
-    const error = new Error(result.message);
-    optionsRef.current.onCancel?.({ error, commands });
-    throw error;
-  }, [store, taskId]);
+    return session.submit(command);
+  }, [session]);
   // 重新拉取即重开长订阅：attach 首帧就是完整 canonical state。
   const onRefetchThread = useCallback(() => session.open(), [session]);
 
@@ -133,7 +144,7 @@ function useTaskAssistantTransportAdapter(
       isDisabled: options.readonly,
       isSendDisabled: options.readonly,
       state: view.state as unknown as ReadonlyJSONValue,
-      ...(options.readonly ? {} : { onNew, onEdit: onNew, onCancel }),
+      ...(options.readonly ? {} : { onNew, onEdit: onNew }),
       onRefetchThread,
       onLoadExternalState: (state: unknown) => {
         if (isTransportStateLike(state)) store.importState(state);
@@ -144,7 +155,7 @@ function useTaskAssistantTransportAdapter(
     // 库类型把 onNew 建模为 writable runtime 的必填项；readonly runtime 有意在运行时省略，
     // 使 Assistant UI 不暴露写入处理器。
     return base as unknown as ExternalStoreAdapter<FrameStoreItem>;
-  }, [onCancel, onNew, onRefetchThread, options.adapters, options.readonly, store, view]);
+  }, [onNew, onRefetchThread, options.adapters, options.readonly, store, view]);
 
   return { adapter, open: session.open, loadEarlierHistory: session.loadEarlierHistory };
 }

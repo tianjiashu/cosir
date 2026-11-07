@@ -72,7 +72,7 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   await expect(page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ })).toBeVisible();
 });
 
-test("Team 批准后时间线显示摘要，查看入口进入后台详情", async ({ page, request }) => {
+test("Team 批准后时间线只留一行，点行进入后台详情", async ({ page, request }) => {
   const callId = "review-call";
   const preview = {
     kind: "agent-team-approval", team_run_id: 17, team_id: "review", name: "代码审查",
@@ -109,9 +109,9 @@ test("Team 批准后时间线显示摘要，查看入口进入后台详情", asy
   await page.getByRole("button", { name: "确认执行" }).click();
   await expect(page.getByRole("button", { name: "确认执行" })).toHaveCount(0);
   const timeline = page.locator(`[data-slot="turn"] [data-tool-call-id="${callId}"]`);
-  await expect(timeline).toContainText("执行中");
+  await expect(timeline.locator('[data-slot="call-title"]')).toHaveAttribute("data-thinking-active", "true");
   await expect(timeline.getByRole("region", { name: "Agent Team 执行进度" })).toHaveCount(0);
-  await timeline.getByRole("button", { name: "查看", exact: true }).click();
+  await timeline.locator('[data-slot="call-row"]').click();
   const row = page.locator(`[data-background-task="${callId}"]`);
   await expect(row).toContainText("代码审查");
   const progress = row.getByRole("region", { name: "Agent Team 执行进度" });

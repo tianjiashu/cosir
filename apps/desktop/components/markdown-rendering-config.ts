@@ -39,7 +39,7 @@ export const markdownRehypePlugins = [
     sanitize,
     {
       ...sanitizeSchema,
-      protocols: { ...sanitizeSchema.protocols, href: [...sanitizeSchema.protocols.href, "cosir-file", "cosir-dir"] },
+      protocols: { ...sanitizeSchema.protocols, href: [...sanitizeSchema.protocols.href, "cosir-file", "cosir-dir", "cosir-snippet", "cosir-excerpt"] },
     },
   ],
 ] as NonNullable<StreamdownProps["rehypePlugins"]>;

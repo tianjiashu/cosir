@@ -1,7 +1,7 @@
 /**
  * 工具目录：每个工具在界面上叫什么（动词）、用什么图标、调用行标题怎么从参数拼。
  *
- * 这是工具展示外壳的唯一事实源。后端只下发 `toolName` 与 `args`，不声明任何展示文案：工具名是封闭集合，
+ * 这是工具展示文案的唯一事实源。后端下发呈现类别、`toolName`、`args` 与原始模型 `intent`：工具名是封闭集合，
  * 标签、图标与 i18n 都属于客户端；后端注册表守卫（`test_tool_registry_display_guard.py`）按工具名核对
  * 本表，新增工具漏了条目就会失败。条目以两个空格缩进的 `tool_name: {` 开头，守卫按这个形状提取。
  *
@@ -9,10 +9,10 @@
  * 选视图（`call-view-registry.ts`）。
  *
  * 参数不可信：`args` 是模型给的原样参数，排队（pending）时为空对象，所以每个取值都要容忍缺字段，取不到就
- * 没有目标、标题回落到动词。只用于展示的参数（如命令的 `description`）也只在这里用于展示。
+ * 没有目标、标题回落到动词。调用标题优先使用统一 `intent`，它不参与状态或结果判断。
  */
 
-/** 调用行标题：意图 + 目标，如 `读取文件` + `src/a.ts`；命令则是模型写的 `description` + 命令首行。 */
+/** 调用行标题：意图 + 目标，如 `读取文件` + `src/a.ts`；调用标题优先展示模型写的 `intent`，命令原文归展开体。 */
 export type ToolHeading = {
   title: string;
   target: string | null;
@@ -27,7 +27,7 @@ type ToolCatalogEntry = {
   icon: string;
   /** 目标（路径、模式、会话、子 Agent……）；没有目标或参数还没到时为 null。 */
   target?: (args: ToolArgs) => string | null;
-  /** 自定义意图；只有命令（模型写的 `description`）与委派（子 Agent 名）需要，取不到时回落到动词。 */
+  /** 意图尚未到达时的实体名称回退（子 Agent 名等）；否则回落到动词。 */
   title?: (args: ToolArgs) => string | null;
 };
 
@@ -125,7 +125,7 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   apply_patch: { verb: "应用补丁", icon: "git-compare", target: patchTargets },
   delete_file: { verb: "删除文件", icon: "file-x", target: path },
   move_file: { verb: "移动文件", icon: "file-symlink", target: (args) => joined(str(args.source_path), " → ", str(args.destination_path)) },
-  execute_terminal: { verb: "执行命令", icon: "terminal", title: (args) => str(args.description), target: (args) => firstLine(args.command) },
+  execute_terminal: { verb: "执行命令", icon: "terminal" },
   terminal_list: { verb: "列出终端", icon: "terminal" },
   terminal_start: { verb: "启动终端", icon: "terminal", target: (args) => str(args.label) ?? str(args.shell) },
   terminal_read: { verb: "读取终端", icon: "terminal", target: sessionId },
@@ -165,11 +165,12 @@ export function toolIconName(toolName: string): string | undefined {
 }
 
 /** 调用行标题：自定义意图取不到时用动词；目标取不到时为 null。 */
-export function toolHeading(toolName: string, args: ToolArgs): ToolHeading {
+export function toolHeading(toolName: string, args: ToolArgs | null | undefined, intent?: string | null): ToolHeading {
   const entry = TOOL_CATALOG[toolName];
-  if (entry === undefined) return { title: toolName, target: null };
+  const parameters = args ?? {};
+  if (entry === undefined) return { title: intent ?? toolName, target: null };
   return {
-    title: entry.title?.(args) ?? entry.verb,
-    target: entry.target?.(args) ?? null,
+    title: intent ?? entry.title?.(parameters) ?? entry.verb,
+    target: entry.target?.(parameters) ?? null,
   };
 }

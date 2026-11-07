@@ -3,7 +3,7 @@ import { isTerminalRunStatus, type TransportMessage, type TransportState } from 
 export type ComposerAction = "send" | "stop" | "cancelling" | "resume";
 
 /**
- * 返回当前 canonical snapshot 中最后一条已消费的 user 消息（含 Agent 消息）；排队消息不计入。
+ * 返回当前 canonical snapshot 中最后一条已消费的输入所在消息：user 消息（含 Agent 消息），或带途中来信的回复；排队消息不计入。
  *
  * 该判断只基于后端 snapshot，不读取 assistant-ui 的 optimistic message，
  * 因而不会让尚未落库的 pending command 获得编辑入口。
@@ -11,7 +11,8 @@ export type ComposerAction = "send" | "stop" | "cancelling" | "resume";
 function latestUserMessage(state: Pick<TransportState, "messages"> | null | undefined): TransportMessage | null {
   if (!state || !Array.isArray(state.messages)) return null;
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
-    if (state.messages[index].role === "user") return state.messages[index];
+    const message = state.messages[index];
+    if (message.runId !== null && (message.role === "user" || message.parts.some((part) => part.type === "agent-message"))) return message;
   }
   return null;
 }

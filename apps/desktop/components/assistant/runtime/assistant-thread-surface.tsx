@@ -2,12 +2,10 @@ import { memo } from "react";
 
 import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import {
-  ComposerRestoreBridge,
   RuntimeRenderDiagnostics,
 } from "@/components/assistant/runtime/assistant-runtime-bridges";
 import type {
   AssistantRuntimeProps,
-  ComposerRestore,
 } from "@/components/assistant/runtime/runtime-types";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
@@ -20,15 +18,12 @@ type AssistantThreadSurfaceProps = Pick<
   | "forkingMessageId"
   | "onForkMessage"
 > & {
-  registerComposerRestore: (restore: ComposerRestore) => void;
   toolGroups: ToolGroupCatalog[];
   selectedToolGroups: string[];
   onSelectedToolGroupsChange: (groups: string[]) => void;
   toolGroupsLoading: boolean;
   toolGroupsError: string | null;
   onResumeBusiness: () => Promise<void>;
-  onCancelRequested: () => void;
-  onCancelResult: (accepted: boolean) => void;
   cancelling: boolean;
   performanceProbe: AssistantPerformanceProbe | null;
 };
@@ -46,21 +41,17 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
   workspaceRoot,
   forkingMessageId,
   onForkMessage,
-  registerComposerRestore,
   toolGroups,
   selectedToolGroups,
   onSelectedToolGroupsChange,
   toolGroupsLoading,
   toolGroupsError,
   onResumeBusiness,
-  onCancelRequested,
-  onCancelResult,
   cancelling,
   performanceProbe,
 }: AssistantThreadSurfaceProps) {
   return (
     <>
-      <ComposerRestoreBridge register={registerComposerRestore} />
       <RuntimeRenderDiagnostics taskId={taskId} />
       <div className="flex h-full min-h-0 flex-col">
         <Thread
@@ -75,8 +66,6 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
           forkingMessageId={forkingMessageId}
           onForkMessage={onForkMessage}
           onResumeBusiness={onResumeBusiness}
-          onCancelRequested={onCancelRequested}
-          onCancelResult={onCancelResult}
           cancelling={cancelling}
           performanceProbe={performanceProbe}
         />

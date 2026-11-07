@@ -39,7 +39,6 @@ describe("Agent Team 失败流水线", () => {
       <AgentTeamExecutionContent
         display={{ teamRunId: 17, teamId: "quality", goal: "" }}
         run={run}
-        backendStatus="failed"
         pollError={null}
         onRetryPoll={() => undefined}
         onOpenAgent={() => undefined}
@@ -55,7 +54,6 @@ describe("Agent Team 失败流水线", () => {
       <AgentTeamExecutionContent
         display={{ teamRunId: 17, teamId: "quality", goal: "" }}
         run={null}
-        backendStatus="running"
         pollError="请求的内容不存在或已被删除"
         onRetryPoll={() => undefined}
         onOpenAgent={() => undefined}

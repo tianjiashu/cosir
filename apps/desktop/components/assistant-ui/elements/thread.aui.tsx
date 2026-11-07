@@ -1,4 +1,6 @@
-import { ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, PlayIcon, Trash2Icon, XIcon, ZapIcon } from "lucide-react";
+import { editDraftKey, forgetComposerDraft, readComposerDraft, recoverComposerDraft, subscribeComposerDrafts, taskDraftKey } from "@/lib/assistant/composer-drafts";
+import { useComposerDraft } from "@/components/composer/use-composer-draft";
+import { GitForkIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, PlayIcon, Trash2Icon, XIcon, ZapIcon } from "lucide-react";
 import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FC } from "react";
 import {
   AuiIf,
@@ -11,7 +13,6 @@ import {
   useAuiState,
   type AssistantState,
 } from "@assistant-ui/react";
-import type { CreateAttachment } from "@assistant-ui/core";
 
 import { StopButton } from "@/components/assistant/stop-button";
 import { TaskContextUsage } from "@/components/assistant/usage-display";
@@ -20,6 +21,7 @@ import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/compose
 import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
+import { CurrentActivity } from "@/components/assistant-ui/turn/current-activity";
 import { Turn } from "@/components/assistant-ui/turn/turn";
 import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -32,24 +34,8 @@ import {
 } from "@/lib/assistant/conversation-actions";
 import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
 import { EDIT_SESSION_RUN_CONFIG, isContinuedEditSession, toEditableUserMessageDraft } from "@/lib/assistant/converter";
-import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
 import { editableDocumentAttachments } from "@/lib/assistant/editable-user-document";
-import {
-  applyEditDraftToComposer,
-  beginEditComposerOperation,
-  consumePendingEditComposerStart,
-  currentEditComposerOperation,
-  discardPendingEditComposerDraft,
-  editableDraftAttachments,
-  endEditComposerOperation,
-  hasPendingEditComposerStart,
-  isCurrentEditComposerOperation,
-  isEditComposerOperationActive,
-  subscribeEditComposerOperations,
-  takePendingEditComposerDraft,
-  type EditDraftAttachment,
-} from "@/lib/assistant/edit-composer-draft";
-import type { InputDelivery, TransportMessageSource } from "@/lib/assistant/contract";
+import { isActiveRunStatus, type InputDelivery, type TransportActivity, type TransportMessageSource } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
@@ -89,20 +75,18 @@ export type ThreadProps = {
   toolGroupsLoading?: boolean;
   toolGroupsError?: string | null;
   workspaceRoot?: string;
-  /** 正在 fork 的消息 id；fork 按消息切分。 */
+  /** 正在分叉的回复 id。 */
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
   /** 可写对话必传（由 AssistantThreadSurface 提供）；只读对话不渲染 Composer，不需要。 */
   onResumeBusiness?: () => Promise<void>;
-  onCancelRequested?: () => void;
-  onCancelResult?: (accepted: boolean) => void;
   /** 用户已请求停止 Task 的当前活动、尚未收敛（Task 级，不按 runId）。 */
   cancelling?: boolean;
   performanceProbe?: AssistantPerformanceProbe | null;
 };
 
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
-type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "onCancelRequested" | "onCancelResult" | "workspaceRoot" | "cancelling" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "taskId">;
+type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "workspaceRoot" | "cancelling" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "taskId">;
 const ThreadContext = createContext<ThreadContextValue | null>(null);
 
 /** 线程内部组件只在 Thread 下渲染；缺 Provider 是装配错误，直接暴露。 */
@@ -114,12 +98,11 @@ function useThreadContext(): ThreadContextValue {
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId = null, onForkMessage, onResumeBusiness, onCancelRequested, onCancelResult, cancelling = false, performanceProbe = null }) {
+export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId = null, onForkMessage, onResumeBusiness, cancelling = false, performanceProbe = null }) {
   const isEmpty = useAuiState(isNewChatView);
-  const viewportRef = useRef<HTMLDivElement>(null);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, onCancelRequested, onCancelResult, cancelling, readonly }}>
+    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, cancelling, readonly }}>
       <AttachmentWorkspaceContext.Provider value={workspaceId}>
       <LinkTaskContext.Provider value={taskId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -128,19 +111,22 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
           钉回底部。这里显式关闭 autoScroll，因为该模式默认值为 false；中途追踪底部会
           换取稳定视口。屏幕外消息只由虚拟列表跳过（见 VirtualizedThreadMessages）。
           视口不能加 CSS scroll-smooth：虚拟列表重新测量行高时会程序化修正 scrollTop，
-          平滑滚动会把这些修正变成可见的漂移；只有用户点击「回到底部」才使用平滑滚动。
+          平滑滚动会把这些修正变成可见的漂移。
         */}
-        <ThreadPrimitive.Viewport ref={viewportRef} turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto">
+        <ForkOrigin />
+        <ThreadPrimitive.Viewport turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto">
             <div aria-hidden="true" className="scroll-fade-top" />
             {/* 内容列与对话附注同处一个网格，附注在滚动容器里、滚动条在最外侧（见 ConversationAsideSlot）。 */}
             <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto]">
               <div className={cn("col-start-1 row-start-1 mx-auto flex min-w-0 w-full max-w-conversation flex-col px-4 pt-6", isEmpty && "justify-center")}>
+                <div className="mb-14">
                 <VirtualizedThreadMessages
                   taskId={taskId}
-                  scrollElementRef={viewportRef}
                   components={messageComponents}
                   performanceProbe={performanceProbe}
                 />
+                <CurrentActivity cancelling={cancelling ?? false} />
+                </div>
                 {!readonly && (
                   <ThreadPrimitive.ViewportFooter className="bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6">
                     <div aria-hidden="true" className="scroll-fade-bottom" />
@@ -150,7 +136,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
                   </ThreadPrimitive.ViewportFooter>
                 )}
               </div>
-              <ConversationAsideSlot viewportRef={viewportRef} />
+              <ConversationAsideSlot />
             </div>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
@@ -165,10 +151,11 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
  * 刻意保持克制：不加运行中提示点，流式状态已由 composer 的停止按钮表达。
  * 轮廓用低透明度 ring 而非实色边框：浅色下靠柔和阴影浮起，深色下阴影不可见，靠 ring 保留轮廓。
  * 必须显式覆盖 TooltipIconButton 默认的 size-6 p-1，否则内边距会挤掉图标空间。
+ * 不用平滑滚动：它要逐行穿过未测量的行，总高度一路在变，库每次变化都重发滚动、动画从头开始，长对话几秒
+ * 都到不了底；运行中库又因顶部锚点取消重发，停在旧目标。即时跳过中间，只测量底部几行，一步到位。
  */
 const ScrollToBottomButton: FC = () => (
   <ThreadPrimitive.ScrollToBottom
-    behavior="smooth"
     render={
       <TooltipIconButton
         tooltip="回到底部"
@@ -274,7 +261,7 @@ const ComposerAction: FC = () => {
   const isDraftEmpty = useAuiState((state) =>
     state.composer.text.trim().length === 0 && state.composer.attachments.length === 0,
   );
-  const { cancelling = false, onResumeBusiness, onCancelRequested, onCancelResult, taskId } = useThreadContext();
+  const { cancelling = false, onResumeBusiness, taskId } = useThreadContext();
   const canResume = useAuiState((state) => canResumeStoppedRun(readRuntimeTransportState(state.thread.state)));
   const isCancelling = cancelling;
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
@@ -315,7 +302,7 @@ const ComposerAction: FC = () => {
   }, [resuming, taskId]);
 
   if (action === "stop") {
-    return <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} onCancelRequested={onCancelRequested} onCancelResult={onCancelResult} />} />;
+    return <StopButton taskId={taskId} />;
   }
 
   if (action === "cancelling") {
@@ -360,7 +347,7 @@ const ComposerAction: FC = () => {
 
   return (
     <div className="flex items-center gap-2">
-      {isRunning && <ComposerPrimitive.Cancel render={<StopButton taskId={taskId} onCancelRequested={onCancelRequested} onCancelResult={onCancelResult} />} />}
+      {isRunning && <StopButton taskId={taskId} />}
       <ComposerSendButton
         aria-label={isRunning ? "加入队列" : "发送"}
         title={isRunning ? "加入队列：当前运行结束后依次处理，可在队列里改为立即发送" : undefined}
@@ -378,10 +365,11 @@ const QUEUED_LABELS: Record<InputDelivery, string> = {
 };
 
 const ThreadMessage: FC = () => {
+  const { taskId } = useThreadContext();
   const role = useAuiState((state) => state.message.role);
   const source = useAuiState((state) => messageSource(state.message.metadata.custom));
   // Agent 消息在这里就分流：它不能进入 UserMessage 的编辑态恢复与排队判定。
-  if (source !== null) return <AgentInboundMessage source={source} />;
+  if (source !== null) return <AgentInboundMessage source={source} taskId={taskId} />;
   return role === "user" ? <UserMessage /> : <AssistantMessage />;
 };
 
@@ -395,26 +383,27 @@ const UserMessage: FC = () => {
   const aui = useAui();
   const messageId = useAuiState((state) => state.message.id);
   const isEditing = useAuiState((state) => state.composer.isEditing);
-  const pendingEditStart = useSyncExternalStore(
-    subscribeEditComposerOperations,
-    () => hasPendingEditComposerStart(messageId),
-    () => false,
-  );
-  const readonly = useThreadContext().readonly === true;
+  const { taskId, readonly: readonlyThread } = useThreadContext();
+  const readonly = readonlyThread === true;
+  const draftKey = editDraftKey(taskId, messageId);
+  const hasEditDraft = useSyncExternalStore(subscribeComposerDrafts, () => readComposerDraft(draftKey) !== undefined, () => false);
+  // 有编辑草稿就是编辑中：切回 Task 或重跑被拒时，新的 runtime 里要重新进入编辑态。
+  const enteringEdit = useRef(false);
   useEffect(() => {
-    if (!pendingEditStart || isEditing || !consumePendingEditComposerStart(messageId)) return;
+    if (isEditing) enteringEdit.current = false;
+    // effect 可能在进入编辑生效前重复执行（StrictMode），再次 beginEdit 会抛错，不能靠 composer 状态判断。
+    if (!hasEditDraft || isEditing || readonly || enteringEdit.current) return;
+    enteringEdit.current = true;
     try {
       aui.composer.beginEdit();
     } catch (error) {
-      discardPendingEditComposerDraft(messageId);
-      const generation = currentEditComposerOperation(messageId);
-      if (generation !== undefined) endEditComposerOperation(messageId, generation);
+      forgetComposerDraft(draftKey);
       void frontendLog("WARNING", "assistant_edit_composer_restore_rejected", "消息行未能重新进入编辑态", {
         data: { messageId },
         error,
       });
     }
-  }, [aui, isEditing, messageId, pendingEditStart]);
+  }, [aui, draftKey, hasEditDraft, isEditing, messageId, readonly]);
   const queued = useAuiState((state) => isQueuedUserMessage(readRuntimeTransportState(state.thread.state), messageId));
   if (isEditing && !readonly) return <UserEditMessage />;
   // 排队消息只在输入框上方的队列区渲染（见 QueuedMessages），消息流里已滤掉。
@@ -423,6 +412,7 @@ const UserMessage: FC = () => {
 
 const UserMessageView: FC = () => {
   const messageId = useAuiState((state) => state.message.id);
+  const pending = useAuiState((state) => state.message.metadata.custom?.pending === true);
   const hasContent = useHasUserMessageContent();
   // 渲染失败时的纯文本兜底：只拼正文，胶囊所在位置留空。
   const userText = useAuiState((state) => state.message.parts.map((part) => part.type === "text" ? part.text : "").join(""));
@@ -449,7 +439,7 @@ const UserMessageView: FC = () => {
       <div className="flex max-w-[85%] flex-col items-end gap-2">
         <UserMessageImages />
         {hasContent && (
-          <div className="bg-primary/10 text-foreground rounded-2xl px-4 py-2.5 text-sm leading-relaxed wrap-break-word">
+          <div className="bg-foreground text-background rounded-[22px] px-4 py-3 text-chat leading-relaxed wrap-break-word">
             {/* 正文与行内胶囊是一个整体渲染单元（见 UserMessageContent），按消息隔离而不是按 part。 */}
             <RenderIsolationBoundary
               scope="message"
@@ -470,7 +460,7 @@ const UserMessageView: FC = () => {
         )}
       </div>
       <div className="mt-1 h-6 shrink-0">
-        <ActionBarPrimitive.Root
+        {pending ? <span role="status" className="text-muted-foreground text-xs leading-6">正在发送</span> : <ActionBarPrimitive.Root
           className="flex h-6 gap-1 opacity-0 transition-opacity pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
         >
           {canEdit && (
@@ -482,21 +472,13 @@ const UserMessageView: FC = () => {
             <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
             <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
           </ActionBarPrimitive.Copy>
-        </ActionBarPrimitive.Root>
+        </ActionBarPrimitive.Root>}
       </div>
     </MessagePrimitive.Root>
   );
 };
 
 /** 写入 effect 需要的一次性草稿快照；与 message 对象解耦，避免写入被 transport 更新打断。 */
-type EditDraftSnapshot = {
-  text: string;
-  attachments: readonly EditDraftAttachment[];
-  source: "recovery_override" | "canonical_message";
-  messageAttachmentCount: number;
-  messageContentTypes: readonly string[];
-};
-
 type QueuedCommand = "send_now" | "edit" | "delete";
 
 const QUEUED_COMMAND_FAILURE: Record<QueuedCommand, string> = {
@@ -514,7 +496,6 @@ const QUEUED_COMMAND_FAILURE: Record<QueuedCommand, string> = {
  * 把它移出队列区。
  */
 const QueuedMessageView: FC = () => {
-  const aui = useAui();
   const message = useAuiState((state) => state.message);
   const messageId = message.id;
   const hasContent = useHasUserMessageContent();
@@ -528,20 +509,11 @@ const QueuedMessageView: FC = () => {
     const draft = message.role === "user" ? toEditableUserMessageDraft(message) : null;
     await deleteQueuedTaskMessage(taskId, messageId);
     if (!draft) return;
-    const composer = aui.thread.composer();
-    const current = composer.getState();
-    // 输入框里已有的附件（含上传中的）一并列入草稿：写入器会清掉草稿之外的附件，已在输入框里的
-    // 只按身份去重、不会重新加入，因此这里只需要它们的身份，不要求已完成。
-    const result = await applyEditDraftToComposer({
-      composer,
-      text: current.text.trim() ? `${draft.text}\n\n${current.text}` : draft.text,
-      attachments: editableDraftAttachments([
-        ...editableDocumentAttachments(draft.document),
-        ...(current.attachments as readonly CreateAttachment[]),
-      ]),
-      isStillCurrent: () => true,
+    const result = await recoverComposerDraft(taskDraftKey(taskId), {
+      text: draft.text,
+      attachments: editableDocumentAttachments(draft.document),
     });
-    if (result.error) {
+    if (result?.error) {
       void frontendLog("ERROR", "queued_message_composer_restore_failed", "排队消息放回输入框时附件恢复失败", {
         data: { taskId, messageId, addedCount: result.addedCount, expectedCount: result.expectedCount },
         error: result.error,
@@ -625,184 +597,31 @@ const UserEditMessage: FC = () => {
   const message = useAuiState((state) => state.message);
   const { taskId, workspaceRoot } = useThreadContext();
   const transportState = useAuiState((state) => readRuntimeTransportState(state.thread.state));
-  const [restoreOverride] = useState(() => takePendingEditComposerDraft(message.id));
-  // 编辑会话可能在消息行重新挂载后继续（见 EDIT_SESSION_RUN_CONFIG）：继续时不再用原消息覆盖草稿。
+  // 编辑会话可能在消息行重新挂载后继续（见 EDIT_SESSION_RUN_CONFIG）：composer 还在，不用恢复。
   const composerRunConfig = useAuiState((state) => state.composer.runConfig);
-  const [continued] = useState(() => !restoreOverride && isContinuedEditSession(composerRunConfig));
+  const [continued] = useState(() => isContinuedEditSession(composerRunConfig));
   // 编辑期间前提失效（已不是可重跑的最新一条、Run 又跑起来了）时给出原因并禁止提交。
   const blockedReason = editBlockedReason(transportState, message.id);
   useLayoutEffect(() => {
     aui.composer.setRunConfig(EDIT_SESSION_RUN_CONFIG);
   }, [aui.composer]);
-  const canonicalEditDraft = useMemo(
-    () => message.role === "user" ? toEditableUserMessageDraft(message) : null,
-    [message],
-  );
-  const editDraft = restoreOverride ?? canonicalEditDraft;
-  const editText = editDraft?.text ?? "";
-  const editAttachments = canonicalEditDraft && !restoreOverride
-    ? editableDocumentAttachments(canonicalEditDraft.document)
-    : editDraft?.attachments ?? [];
-  const hydratedMessageId = useRef<string | null>(continued ? message.id : null);
-  // 草稿快照：写入内容与 message 对象解耦——写入 effect 只依赖消息身份，后续任何一次
-  // transport 更新引起的重渲染都不会再打断正在进行的草稿写入。
-  const draftRef = useRef<EditDraftSnapshot | null>(null);
-  // 图片写入进度，仅供日志复盘；普通文件只登记元数据，不计入 AUI 附件数。
-  const hydrationProgressRef = useRef<{ expected: number; added: number; aborted: string | null }>({
-    expected: 0,
-    added: 0,
-    aborted: null,
+  const draftKey = editDraftKey(taskId, message.id);
+  // AUI 把文件和图片都提成附件且丢了在正文里的位置，首次进入也要用还原后的内容替换。
+  const [seed] = useState(() => {
+    if (message.role !== "user") return null;
+    const draft = toEditableUserMessageDraft(message);
+    return { text: draft.text, attachments: editableDocumentAttachments(draft.document) };
   });
-  const [isHydrating, setIsHydrating] = useState(!continued);
-  const isRecoveryActive = useSyncExternalStore(
-    subscribeEditComposerOperations,
-    () => isEditComposerOperationActive(message.id),
-    () => false,
-  );
+  const restoring = useComposerDraft(draftKey, { seed, continued });
+  // 草稿先于退出编辑结束，否则消息行会以为这次编辑被打断，立刻重新进入。提交失败时由恢复写回。
+  const endEdit = () => forgetComposerDraft(draftKey);
   // 回车与保存按钮共用这一个开关：任何「此刻不能提交」的条件只在这里加一次。
-  const sendBlocked = isHydrating || isRecoveryActive || blockedReason !== null;
-
-  // 先于写入 effect 执行：每次提交同步一次草稿快照（无稳定身份的附件在此被剔除）。
-  useLayoutEffect(() => {
-    draftRef.current = editDraft
-      ? {
-          text: editText,
-          attachments: editableDraftAttachments(editAttachments),
-          source: restoreOverride ? "recovery_override" : "canonical_message",
-          messageAttachmentCount: message.attachments?.length ?? 0,
-          messageContentTypes: message.content.map((part) => part.type),
-        }
-      : null;
-  });
-
-  useLayoutEffect(() => {
-    const draft = draftRef.current;
-    if (!draft || hydratedMessageId.current === message.id) return;
-    hydratedMessageId.current = message.id;
-    const generation = currentEditComposerOperation(message.id) ?? beginEditComposerOperation(message.id);
-    const composer = aui.composer;
-    const expectedAttachments = draft.attachments.length;
-    const textTokenIds = localFileTokenIds(draft.text);
-    hydrationProgressRef.current = { expected: draft.attachments.filter((attachment) => attachment.type === "image").length, added: 0, aborted: null };
-    void frontendLog("INFO", "edit_composer_hydration_started", "编辑草稿开始写入输入框", {
-      data: {
-        messageId: message.id,
-        source: draft.source,
-        textLength: draft.text.length,
-        textTokenIds,
-        attachmentIds: draft.attachments.map((attachment) => attachment.id),
-        attachmentCount: expectedAttachments,
-      },
-    });
-    // 有 token 却投影不出附件对象时，输入框只能渲染占位态。先把这种组合显式记录下来，
-    // 后续排查不必再从界面现象反推。
-    if (expectedAttachments === 0 && textTokenIds.length > 0) {
-      void frontendLog("WARNING", "edit_composer_draft_without_attachments", "编辑草稿含附件 token 但未投影出附件对象", {
-        data: {
-          messageId: message.id,
-          textTokenIds,
-          source: draft.source,
-          messageAttachmentCount: draft.messageAttachmentCount,
-          messageContentTypes: draft.messageContentTypes,
-        },
-      });
-    }
-
-    // 共用恢复器登记普通文件元数据、恢复图片并清理 AUI 提取的普通文件副本。
-    void (async () => {
-      if (draft.source === "recovery_override") {
-        // 编辑 composer 初次挂载时会先从 canonical message 初始化；等该同步提交后再覆盖失败请求草稿。
-        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-      }
-      const result = await applyEditDraftToComposer({
-        composer,
-        text: draft.text,
-        attachments: draft.attachments,
-        isStillCurrent: () => isCurrentEditComposerOperation(message.id, generation),
-      });
-      hydrationProgressRef.current.added = result.addedCount;
-      if (result.superseded) {
-        hydrationProgressRef.current.aborted = "superseded_generation";
-        void frontendLog("WARNING", "edit_composer_hydration_aborted", "编辑草稿写入被更新的编辑代际取代，文本未改写", {
-          data: {
-            messageId: message.id,
-            reason: "superseded_generation",
-            addedCount: result.addedCount,
-            expectedCount: result.expectedCount,
-          },
-        });
-      } else if (result.error) {
-        hydrationProgressRef.current.aborted = "write_failed";
-        void frontendLog("ERROR", "assistant_edit_draft_restore_failed", "编辑消息附件恢复失败", {
-          data: {
-            messageId: message.id,
-            addedCount: result.addedCount,
-            expectedCount: result.expectedCount,
-          },
-          error: result.error,
-        });
-      } else {
-        void frontendLog("INFO", "edit_composer_hydration_completed", "编辑草稿已写入输入框", {
-          data: {
-            messageId: message.id,
-            addedCount: result.addedCount,
-            removedCount: result.removedCount,
-            expectedCount: result.expectedCount,
-          },
-        });
-      }
-      endEditComposerOperation(message.id, generation);
-      if (draft.source === "recovery_override" && !result.error && !result.superseded) {
-        // 释放恢复锁会触发 AUI 同步提交；最后一帧再写入，避免该提交把草稿重置为原消息文本。
-        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-        composer.setText(draft.text);
-      }
-      setIsHydrating(false);
-    })();
-
-    // 清理只做观测：草稿写入不再「卸载即取消」，因此重渲染不会中断它。
-    return () => {
-      void frontendLog("DEBUG", "edit_composer_hydration_cleanup", "编辑草稿 effect 清理（依赖变化或卸载）", {
-        data: {
-          messageId: message.id,
-          addedCount: hydrationProgressRef.current.added,
-          expectedCount: hydrationProgressRef.current.expected,
-          aborted: hydrationProgressRef.current.aborted,
-        },
-      });
-    };
-  }, [aui.composer, message.id]);
-
-  // 编辑框没有单独的埋点层，这里记录「取消编辑 / 重跑」点击与当时的草稿写入进度；
-  // 纯观测，不干预按钮行为。
-  useEffect(() => () => {
-    void frontendLog("DEBUG", "edit_composer_unmounted", "编辑输入框已卸载", {
-      data: {
-        messageId: message.id,
-        addedAttachmentCount: hydrationProgressRef.current.added,
-        expectedAttachmentCount: hydrationProgressRef.current.expected,
-        aborted: hydrationProgressRef.current.aborted,
-      },
-    });
-  }, [message.id]);
+  const sendBlocked = restoring || blockedReason !== null;
 
   return (
     <MessagePrimitive.Root
       data-role="user"
       className="min-w-0 px-2"
-      onClickCapture={(event) => {
-        const label = (event.target as HTMLElement).closest<HTMLElement>("[aria-label]")?.getAttribute("aria-label");
-        if (label !== "取消编辑" && label !== "重跑") return;
-        void frontendLog("INFO", "edit_composer_action_clicked", "编辑框操作按钮被点击", {
-          data: {
-            action: label,
-            isHydrating,
-            addedAttachmentCount: hydrationProgressRef.current.added,
-            expectedAttachmentCount: hydrationProgressRef.current.expected,
-            aborted: hydrationProgressRef.current.aborted,
-          },
-        });
-      }}
     >
       <ComposerInsertionProvider>
         <ComposerFeedbackProvider>
@@ -812,14 +631,15 @@ const UserEditMessage: FC = () => {
               <InlineComposerInput
                 className={COMPOSER_EDITOR_CLASS_NAME}
                 autoFocus
-                hydrating={isHydrating || isRecoveryActive}
+                hydrating={restoring}
                 submitDisabled={sendBlocked}
+                beforeSubmit={endEdit}
                 aria-label="编辑消息"
               />
             </div>
             <div className="flex flex-wrap items-center justify-between gap-2 px-1">
               <div className="flex min-w-0 flex-1 items-center gap-1">
-                <ThreadComposerPromptToolbar disabled={isHydrating || isRecoveryActive} />
+                <ThreadComposerPromptToolbar disabled={restoring} />
                 <div className="min-w-0 flex-1">
                   {blockedReason !== null ? (
                     <span className="text-xs text-warning">{blockedReason}</span>
@@ -831,11 +651,11 @@ const UserEditMessage: FC = () => {
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
-                <ComposerAttachmentButton workspaceRoot={workspaceRoot} disabled={isHydrating || isRecoveryActive} />
-                <ComposerPrimitive.Cancel render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
+                <ComposerAttachmentButton workspaceRoot={workspaceRoot} disabled={restoring} />
+                <ComposerPrimitive.Cancel onClick={endEdit} render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
                   <XIcon />
                 </ComposerPrimitive.Cancel>
-                <ComposerSendButton blocked={sendBlocked} aria-label="重跑">
+                <ComposerSendButton blocked={sendBlocked} beforeSubmit={endEdit} aria-label="重跑">
                   <ArrowUpIcon className="size-4" />
                 </ComposerSendButton>
               </div>
@@ -854,12 +674,33 @@ const UserEditMessage: FC = () => {
  * 只依赖消息自身事实；不回查 `thread.state`，只读作用域也能正常渲染。
  */
 const AssistantMessage: FC = () => {
-  const { forkingMessageId = null, onForkMessage, cancelling = false, taskId, readonly = false } = useThreadContext();
+  const { cancelling = false, taskId, readonly = false } = useThreadContext();
   return (
     <MessagePrimitive.Root data-role="assistant" className="relative -mb-6 px-2 pb-6">
       <div className="text-foreground wrap-break-word">
-        <Turn taskId={taskId} readonly={readonly} cancelling={cancelling} forkingMessageId={forkingMessageId} onForkMessage={onForkMessage} />
+        <Turn taskId={taskId} readonly={readonly} cancelling={cancelling} footerAction={<ForkReplyAction />} />
       </div>
     </MessagePrimitive.Root>
   );
 };
+
+/** 来源是 Task 元数据，不占消息位置、不进入模型输入。 */
+function ForkOrigin() {
+  const fork = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.fork);
+  if (!fork) return null;
+  return <div data-slot="fork-origin" className="text-muted-foreground mx-auto w-full max-w-conversation px-6 py-2 text-xs">
+    继承自「{fork.sourceTitle}」· {fork.taskType === "agent_fork" ? "截至上一条回复 · 历史仅供上下文使用" : "截至所选回复"}
+  </div>;
+}
+
+/** 从这条回复往后分叉；还在进行的那条回复没有入口，后端同样会拒绝。 */
+function ForkReplyAction() {
+  const { readonly, onForkMessage, forkingMessageId } = useThreadContext();
+  const id = useAuiState((state) => state.message.id);
+  const inProgress = useAuiState((state) => isActiveRunStatus((state.message.metadata.custom?.activity as TransportActivity | null | undefined)?.status));
+  if (readonly || !onForkMessage || inProgress) return null;
+  return <TooltipIconButton tooltip="从这里分叉：开一个新对话，当前对话保持不变" aria-label="从这里分叉" size="sm"
+    disabled={forkingMessageId != null} onClick={() => onForkMessage(id)}>
+    {forkingMessageId === id ? <Loader2Icon className="animate-spin" /> : <GitForkIcon />}
+  </TooltipIconButton>;
+}

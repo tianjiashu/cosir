@@ -1,3 +1,5 @@
+import { ToolCallIndex, type ToolCalls } from "./tool-call-index";
+import { projectTurn, turnPhaseOf, type TurnLayout } from "./turn-layout";
 import type { ThreadMessage } from "@assistant-ui/react";
 
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
@@ -16,7 +18,7 @@ import {
   type TransportMessageRenderContext,
   type UserAddMessageCommand,
 } from "@/lib/assistant/converter";
-import { parseTransportState } from "@/lib/assistant/snapshot-validation";
+import { parseTransportState, validateTransportUpdate } from "@/lib/assistant/snapshot-validation";
 
 type TransportFrameBase = {
   task_id: number;
@@ -39,7 +41,7 @@ type TransportMutation = TransportFrameEnvelope["mutations"][number];
 export type HistoryFetch = { generation: number; end: number };
 
 export type FrameStoreItem =
-  | { kind: "canonical"; message: TransportMessage | TransportQueuedMessage; context: TransportMessageRenderContext }
+  | { kind: "canonical"; message: TransportMessage | TransportQueuedMessage; context: TransportMessageRenderContext; turnLayout: TurnLayout | null }
   | { kind: "pending"; command: UserAddMessageCommand };
 
 /**
@@ -52,6 +54,7 @@ export type ActivityTransition = {
 };
 
 type StoreSnapshot = {
+  toolCalls: ToolCalls;
   state: TransportState;
   items: readonly FrameStoreItem[];
   isRunning: boolean;
@@ -141,10 +144,13 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
  * 免得页内容恰好在请求期间更新而丢失。位置只在完整快照处才会变：完整快照替换窗口、作废在途翻页。
  */
 export class TransportFrameStore {
+  private readonly toolIndex = new ToolCallIndex();
   private state: TransportState;
   private items: FrameStoreItem[] = [];
   private canonicalItems: FrameStoreItem[] = [];
   private pendingCommands: readonly UserAddMessageCommand[] = [];
+  private readonly queuedItems = new WeakMap<TransportQueuedMessage, FrameStoreItem>();
+  private readonly pendingItems = new WeakMap<UserAddMessageCommand, FrameStoreItem>();
   private resyncRequired = false;
   private snapshot: StoreSnapshot;
   private readonly listeners = new Set<Listener>();
@@ -195,26 +201,32 @@ export class TransportFrameStore {
       return;
     }
 
+    const buffered: TransportMutation[] = [];
     const mutations = frame.mutations.flatMap((mutation) => {
       const local = this.localize(mutation);
-      if (local === null && this.historyFetch) this.historyFetch.buffered.push(mutation);
+      if (local === null && this.historyFetch) buffered.push(mutation);
       return local === null ? [] : [local];
     });
     if (mutations.length === 0) {
+      this.historyFetch?.buffered.push(...buffered);
       this.recordFrame(frame, startedAt);
       return;
     }
     const previous = this.state;
+    let next = previous;
     const contentOnlyIndexes = new Set<number>();
     let structural = false;
     for (const mutation of mutations) {
-      if (isMessageContentMutation(mutation, this.state)) {
+      if (isMessageContentMutation(mutation, next)) {
         contentOnlyIndexes.add(mutation.path[1] as number);
       } else {
         structural = true;
       }
-      this.state = applyMutation(this.state, mutation);
+      next = applyMutation(next, mutation);
     }
+    validateTransportUpdate(previous, next, mutations.map((mutation) => mutation.path));
+    this.historyFetch?.buffered.push(...buffered);
+    this.state = next;
     if (structural) {
       this.rebuildAllItems();
       this.reconcilePending(previous);
@@ -247,12 +259,14 @@ export class TransportFrameStore {
     if (!current || current.generation !== fetch.generation || current.generation !== this.historyGeneration) return false;
     this.historyFetch = null;
     if (page.messageOffset + page.messages.length !== this.state.messageOffset) return false;
-    this.cancelScheduledCommit();
-    this.state = { ...this.state, messages: [...page.messages, ...this.state.messages], messageOffset: page.messageOffset };
+    let next = { ...this.state, messages: [...page.messages, ...this.state.messages], messageOffset: page.messageOffset };
     for (const mutation of current.buffered) {
-      const local = this.localize(mutation);
-      if (local !== null) this.state = applyMutation(this.state, local);
+      const local = this.localize(mutation, page.messageOffset);
+      if (local !== null) next = applyMutation(next, local);
     }
+    parseTransportState(next);
+    this.cancelScheduledCommit();
+    this.state = next;
     this.rebuildAllItems();
     this.publishNow();
     return true;
@@ -310,10 +324,10 @@ export class TransportFrameStore {
   }
 
   /** 把完整历史里的消息位置换成本地位置；指向尚未加载的更早消息时返回 null。 */
-  private localize(mutation: TransportMutation): TransportMutation | null {
+  private localize(mutation: TransportMutation, messageOffset = this.state.messageOffset): TransportMutation | null {
     const [head, index, ...rest] = mutation.path;
     if (head !== "messages" || typeof index !== "number") return mutation;
-    const local = index - this.state.messageOffset;
+    const local = index - messageOffset;
     return local < 0 ? null : { ...mutation, path: ["messages", local, ...rest] };
   }
 
@@ -359,6 +373,7 @@ export class TransportFrameStore {
   }
 
   private rebuildAllItems(): void {
+    this.toolIndex.replace(this.state.messages);
     const previousById = new Map(
       this.canonicalItems
         .filter((item): item is Extract<FrameStoreItem, { kind: "canonical" }> => item.kind === "canonical")
@@ -369,7 +384,7 @@ export class TransportFrameStore {
       const context = this.contextFor(message, runEndIds);
       const previous = previousById.get(message.id);
       if (previous && previous.message === message && sameContext(previous.context, context)) return previous;
-      return { kind: "canonical", message, context };
+      return canonicalItem(message, context, previous?.turnLayout);
     });
     this.composeItems();
   }
@@ -382,7 +397,8 @@ export class TransportFrameStore {
       const current = this.canonicalItems[index];
       const message = this.state.messages[index];
       if (!current || current.kind !== "canonical" || !message) continue;
-      this.canonicalItems[index] = { kind: "canonical", message, context: current.context };
+      this.toolIndex.update(message);
+      this.canonicalItems[index] = canonicalItem(message, current.context, current.turnLayout);
     }
     this.composeItems();
   }
@@ -397,26 +413,37 @@ export class TransportFrameStore {
       source: message.source,
       outcome: message.outcome,
       isRunEnd,
-      activity: isRunEnd && activity !== null && activity.runId === message.runId ? activity : null,
+      activity: isRunEnd && message === this.state.messages.at(-1) && activity !== null && activity.runId === message.runId ? activity : null,
+      backgroundTasks: isRunEnd && message === this.state.messages.at(-1) ? this.state.background_tasks : undefined,
     };
   }
 
   private composeItems(): void {
-    const pending: FrameStoreItem[] = this.pendingCommands.map((command) => ({
-      kind: "pending",
-      command,
-    }));
-    const queued: FrameStoreItem[] = (this.state.queued_messages ?? []).map((message) => ({
-      kind: "canonical",
-      message,
-      context: QUEUED_CONTEXT,
-    }));
+    // assistant-ui 按包装对象缓存转换结果；正文帧不应使未变的排队/乐观消息重新转换。
+    // WeakMap 随原始不可变对象回收，撤回、确认和替换无需额外维护缓存生命周期。
+    const pending = this.pendingCommands.map((command) => {
+      let item = this.pendingItems.get(command);
+      if (!item) {
+        item = { kind: "pending", command };
+        this.pendingItems.set(command, item);
+      }
+      return item;
+    });
+    const queued = (this.state.queued_messages ?? []).map((message) => {
+      let item = this.queuedItems.get(message);
+      if (!item) {
+        item = canonicalItem(message, QUEUED_CONTEXT);
+        this.queuedItems.set(message, item);
+      }
+      return item;
+    });
     this.items = [...this.canonicalItems, ...queued, ...pending];
   }
 
   private makeSnapshot(): StoreSnapshot {
     return {
       state: this.state,
+      toolCalls: this.toolIndex.snapshot,
       items: this.items,
       isRunning: this.pendingCommands.length > 0 || isActiveRunStatus(this.state.activity?.status),
       pendingCommands: this.pendingCommands,
@@ -532,11 +559,11 @@ function userMessageIds(state: TransportState, from: number): Set<string> {
   return ids;
 }
 
-/** 每个 Run 最后一条助手消息的 id：回复末尾（用量、fork、诊断）只挂在这些消息上。 */
+/** 每个 Run 最后一条助手消息的 id：回复末尾（用量、诊断）只挂在这些消息上。 */
 function lastAssistantIdsByRun(messages: readonly TransportMessage[]): Set<string> {
-  const lastByRun = new Map<number, string>();
+  const lastByRun = new Map<string, string>();
   for (const message of messages) {
-    if (message.role === "assistant") lastByRun.set(message.runId, message.id);
+    if (message.role === "assistant") lastByRun.set(`run-${message.runId}`, message.id);
   }
   return new Set(lastByRun.values());
 }
@@ -545,7 +572,8 @@ function sameContext(left: TransportMessageRenderContext, right: TransportMessag
   return left.runId === right.runId
     && left.outcome === right.outcome
     && left.isRunEnd === right.isRunEnd
-    && left.activity === right.activity;
+    && left.activity === right.activity
+    && left.backgroundTasks === right.backgroundTasks;
 }
 
 function scheduleAnimationFrameCommit(callback: (frameTimestamp?: number) => void): ScheduledCommit {
@@ -557,9 +585,15 @@ function scheduleAnimationFrameCommit(callback: (frameTimestamp?: number) => voi
   return { cancel: () => clearTimeout(handle) };
 }
 
+/** canonical → 展示的唯一装配点；只携带当前布局，不保留历史版本链。 */
+function canonicalItem(message: TransportMessage | TransportQueuedMessage, context: TransportMessageRenderContext, previous?: TurnLayout | null): Extract<FrameStoreItem, { kind: "canonical" }> {
+  return { kind: "canonical", message, context,
+    turnLayout: message.role === "assistant" ? projectTurn(message.parts, turnPhaseOf(context.activity), context.outcome, previous, context.activity, context.backgroundTasks) : null };
+}
+
 export function convertFrameStoreItem(item: FrameStoreItem): ThreadMessage {
   if (item.kind === "canonical") {
-    return toThreadMessageWithRenderContext(item.message, item.context);
+    return toThreadMessageWithRenderContext(item.message, item.context, item.turnLayout);
   }
   const message = toPendingUserMessage(item.command);
   if (!message) throw new Error("pending add-message command has no renderable parts");
@@ -587,10 +621,12 @@ function updateAtPath(
 ): unknown {
   const [key, ...rest] = path;
   if (Array.isArray(root)) {
+    if (typeof key !== "number" || key < 0 || key > root.length) {
+      throw new Error("array mutation requires an existing index or append position");
+    }
     const next = [...root];
     if (rest.length === 0) {
       if (kind === "append-text") throw new Error("cannot append text to an array");
-      if (typeof key !== "number") throw new Error("array mutation requires numeric index");
       if (key === next.length) next.push(value);
       else next[key] = value;
       return next;

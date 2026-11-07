@@ -1,4 +1,3 @@
-import { AgentTeamApproval } from "@/components/assistant-ui/tools/agent-team-tool";
 import { readBrowserPageDisplay } from "@/components/assistant-ui/tools/browser-page-display";
 import { asRecord } from "@/components/assistant-ui/tools/display-utils";
 import { ToolIcon } from "@/components/assistant-ui/tools/tool-icons";
@@ -18,7 +17,6 @@ export type AttentionCardProps = {
   args: Record<string, unknown>;
   artifact: ToolArtifact;
   interactive?: boolean;
-  taskCancelling?: boolean;
 };
 
 /** 等待卡的说明：交接要用户做的事（浏览器 `handoff_reason`、终端 `input_summary`），其余工具用后端短提示。 */
@@ -39,14 +37,14 @@ const HANDOFF_KINDS = new Set(["browser-page", "terminal-session"]);
  * （设计 §5.8：需要人动作、可能停留很久，深浅主题都要第一眼看到）。
  *
  * 交接：「打开面板」按 snapshot `handoffs` 里的登记把资源摆到用户面前；「交还」按工具调用寻址，后端重启后
- * 登记表为空、面板里没有提示条，这里仍是交还的唯一入口。Team 审批：表单整个放进卡里。其余等待决定的工具
- * 只有标题与说明（决定由各自的界面给出）。
+ * 登记表为空、面板里没有提示条，这里仍是交还的唯一入口。Team 审批是独立调用行，不走这里。其余等待决定的
+ * 工具只有标题与说明（决定由各自的界面给出）。
  */
-export function AttentionCard({ taskId, toolCallId, toolName, args, artifact, interactive = true, taskCancelling = false }: AttentionCardProps) {
+export function AttentionCard({ taskId, toolCallId, toolName, args, artifact, interactive = true }: AttentionCardProps) {
   const handoff = useHandoffStore((state) => state.tasks[taskId]?.find((entry) => entry.toolCallId === toolCallId) ?? null);
-  const { handBack, returning } = useHandBack(taskId);
+  const { handBack, returning } = useHandBack(taskId, toolCallId);
   const kind = typeof artifact.display_data?.kind === "string" ? artifact.display_data.kind : null;
-  const { title } = toolHeading(toolName, args);
+  const { title } = toolHeading(toolName, args, artifact.intent);
   const description = attentionDescription(artifact);
   const canHandBack = interactive && (handoff !== null || (kind !== null && HANDOFF_KINDS.has(kind)));
 
@@ -64,11 +62,6 @@ export function AttentionCard({ taskId, toolCallId, toolName, args, artifact, in
       <div className="min-w-0 flex-1">
         <p className="font-semibold">{title}</p>
         {description && <p className="text-muted-foreground mt-0.5 break-words">{description}</p>}
-        {kind === "agent-team-approval" && (
-          <div className="mt-2">
-            <AgentTeamApproval taskId={taskId} toolCallId={toolCallId} artifact={artifact} interactive={interactive} taskCancelling={taskCancelling} />
-          </div>
-        )}
       </div>
       {(handoff !== null || canHandBack) && (
         <div className="flex shrink-0 items-center gap-1.5">

@@ -1,11 +1,11 @@
+import type { ToolCalls } from "@/lib/assistant/tool-call-index";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { memo } from "react";
 
 import { AssistantThreadSurface } from "@/components/assistant/runtime/assistant-thread-surface";
 import { useRuntimeTransport } from "@/components/assistant/runtime/use-runtime-transport";
 import type { RuntimeRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
-import type { RuntimeCancellation } from "@/components/assistant/runtime/use-runtime-cancellation";
-import type { RuntimeSessionContext, ComposerRestore } from "@/components/assistant/runtime/runtime-types";
+import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportState } from "@/lib/assistant/contract";
 import type { ToolGroupCatalog } from "@/lib/api/tools";
@@ -14,9 +14,7 @@ import { TransportHistoryContext } from "@/lib/assistant/transport-history-conte
 type AssistantRuntimeTransportHostProps = {
   context: RuntimeSessionContext;
   recovery: RuntimeRecovery;
-  cancellation: RuntimeCancellation;
-  commitTransportState: (state: TransportState) => void;
-  registerComposerRestore: (restore: ComposerRestore) => void;
+  commitTransportState: (state: TransportState, toolCalls: ToolCalls) => void;
   toolGroups: ToolGroupCatalog[];
   selectedToolGroups: string[];
   onSelectedToolGroupsChange: (groups: string[]) => void;
@@ -25,8 +23,6 @@ type AssistantRuntimeTransportHostProps = {
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
   onResumeBusiness: () => Promise<void>;
-  onCancelRequested: () => void;
-  onCancelResult: (accepted: boolean) => void;
   cancelling: boolean;
   performanceProbe: AssistantPerformanceProbe | null;
 };
@@ -40,9 +36,7 @@ type AssistantRuntimeTransportHostProps = {
 export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTransportHost({
   context,
   recovery,
-  cancellation,
   commitTransportState,
-  registerComposerRestore,
   toolGroups,
   selectedToolGroups,
   onSelectedToolGroupsChange,
@@ -51,15 +45,12 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
   forkingMessageId,
   onForkMessage,
   onResumeBusiness,
-  onCancelRequested,
-  onCancelResult,
   cancelling,
   performanceProbe,
 }: AssistantRuntimeTransportHostProps) {
   const { runtime, loadEarlierHistory } = useRuntimeTransport(
     context,
     recovery,
-    cancellation,
     commitTransportState,
     selectedToolGroups,
   );
@@ -73,15 +64,12 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
         workspaceRoot={context.workspaceRoot}
         forkingMessageId={forkingMessageId}
         onForkMessage={onForkMessage}
-        registerComposerRestore={registerComposerRestore}
         toolGroups={toolGroups}
         selectedToolGroups={selectedToolGroups}
         onSelectedToolGroupsChange={onSelectedToolGroupsChange}
         toolGroupsLoading={toolGroupsLoading}
         toolGroupsError={toolGroupsError}
         onResumeBusiness={onResumeBusiness}
-        onCancelRequested={onCancelRequested}
-        onCancelResult={onCancelResult}
         cancelling={cancelling}
         performanceProbe={performanceProbe}
       />

@@ -16,6 +16,7 @@ import { jsonRequestInit, requestOk, type HttpRequestInit } from "@/lib/http/cli
 import { HttpError } from "@/lib/http/errors";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { backgroundTarget, beginCommand, decisionTarget, finishCommand, stopTarget, type CommandTarget } from "@/lib/assistant/command-request-store";
 import { newTraceId } from "@/lib/trace";
 
 /** 停止、取消与转后台都幂等（重复投递后端回 409 或照常受理），超时后可以放心重试。 */
@@ -110,7 +111,20 @@ export function submitToolDecision(
   decision: ToolDecision,
   init?: CommandInit,
 ): Promise<void> {
-  return postTaskCommand(`/tasks/${taskId}/tool-calls/${encodeURIComponent(toolCallId)}/decision`, decision, init);
+  return submitDecisionRequest(taskId, toolCallId, decision, init);
+}
+
+async function submitDecisionRequest(taskId: number, toolCallId: string, decision: ToolDecision, init?: CommandInit): Promise<void> {
+  const target = decisionTarget(toolCallId);
+  const request = beginCommand(taskId, target);
+  if (!request) return;
+  try {
+    await postTaskCommand(`/tasks/${taskId}/tool-calls/${encodeURIComponent(toolCallId)}/decision`, decision, init);
+    finishCommand(taskId, target, request, "accepted");
+  } catch (error) {
+    finishCommand(taskId, target, request, error instanceof HttpError ? "rejected" : "unknown", commandFailureMessage(error, "提交决定"));
+    throw error;
+  }
 }
 
 /**
@@ -138,10 +152,14 @@ export type CancelTaskResult =
  * 停成什么状态一律以 Task 长订阅里的 `activity` 为准，这里不判断「有没有可停止的对象」。
  */
 export async function cancelTask(taskId: number): Promise<CancelTaskResult> {
+  const request = beginCommand(taskId, "task");
+  if (!request) return { accepted: true };
   try {
     await requestOk(`/tasks/${taskId}/cancel`, { method: "POST", timeoutMs: IDEMPOTENT_COMMAND_TIMEOUT_MS });
+    finishCommand(taskId, "task", request, "accepted");
     return { accepted: true };
   } catch (error) {
+    finishCommand(taskId, "task", request, error instanceof HttpError ? "rejected" : "unknown", commandFailureMessage(error, "停止请求"));
     return {
       accepted: false,
       reason: error instanceof HttpError ? "rejected" : "network",
@@ -150,77 +168,38 @@ export async function cancelTask(taskId: number): Promise<CancelTaskResult> {
   }
 }
 
-export type CancelToolCallResult =
-  | { kind: "signalled" }
-  | { kind: "already_signalled" }
-  | { kind: "failed"; reason: "rejected" | "network"; message: string };
-
 /**
- * 取消一次工具调用：登记了后台结果的调用（前台等待或后台工作）不要求 Run 在执行，其余只命中 Task
- * 当前执行中的调用。调用成功不代表工具已经结束。后端 409 表示已没有可取消的对象（已标记过、调用已
- * 结束或 Task 没有执行），对界面都意味着无需再次请求，统一视为 already_signalled。
+ * 工具调用级命令（停止、转后台）的请求骨架：成功返回 null，失败返回可展示的原因。
+ *
+ * 409 表示已没有可操作的对象（调用已结束、已转走），对界面都意味着无需再做，算不上失败。调用成功
+ * 不代表工具已经结束，结局经 snapshot 到达。
  */
-export async function cancelToolCall(taskId: number, toolCallId: string): Promise<CancelToolCallResult> {
+async function postCallCommand(taskId: number, toolCallId: string, target: CommandTarget, path: "cancel" | "background", action: string): Promise<string | null> {
+  const request = beginCommand(taskId, target);
+  if (!request) return null;
   const traceId = newTraceId();
-  void frontendLog("INFO", "assistant_tool_call_cancel_requested", "用户请求取消工具调用", {
-    traceId,
-    data: { taskId, toolCallId },
-  });
-  let result: CancelToolCallResult;
+  void frontendLog("INFO", "assistant_tool_call_command_requested", "用户对工具调用发起命令", { traceId, data: { taskId, toolCallId, action: path } });
+  let failure: string | null = null;
   try {
-    await requestOk(`/tasks/${taskId}/tool-calls/${encodeURIComponent(toolCallId)}/cancel`, {
-      method: "POST",
-      traceId,
-      timeoutMs: IDEMPOTENT_COMMAND_TIMEOUT_MS,
-    });
-    result = { kind: "signalled" };
+    await requestOk(`/tasks/${taskId}/tool-calls/${encodeURIComponent(toolCallId)}/${path}`, { method: "POST", traceId, timeoutMs: IDEMPOTENT_COMMAND_TIMEOUT_MS });
+    finishCommand(taskId, target, request, "accepted");
   } catch (error) {
-    result = isConflict(error)
-      ? { kind: "already_signalled" }
-      : {
-        kind: "failed",
-        reason: error instanceof HttpError ? "rejected" : "network",
-        message: commandFailureMessage(error, "停止请求"),
-      };
+    if (isConflict(error)) finishCommand(taskId, target, request, "rejected");
+    else {
+      failure = commandFailureMessage(error, action);
+      finishCommand(taskId, target, request, error instanceof HttpError ? "rejected" : "unknown", failure);
+    }
   }
-  void frontendLog(result.kind === "failed" ? "WARNING" : "INFO", "assistant_tool_call_cancel_result", "工具调用取消请求已返回", {
-    traceId,
-    data: { taskId, toolCallId, result: result.kind, reason: result.kind === "failed" ? result.reason : null },
-  });
-  return result;
+  void frontendLog(failure ? "WARNING" : "INFO", "assistant_tool_call_command_result", "工具调用命令已返回", { traceId, data: { taskId, toolCallId, action: path, failed: failure !== null } });
+  return failure;
 }
 
-export type BackgroundToolCallResult =
-  | { kind: "detached" }
-  | { kind: "not_detachable" }
-  | { kind: "failed"; message: string };
+/** 取消一次工具调用：登记了后台结果的调用不要求 Run 在执行，其余只命中 Task 当前执行中的调用。 */
+export function cancelToolCall(taskId: number, toolCallId: string): Promise<string | null> {
+  return postCallCommand(taskId, toolCallId, stopTarget(toolCallId), "cancel", "停止请求");
+}
 
-/**
- * 把一次前台等待中的工具调用转到后台：工具立即以「已转后台」占位闭合，结论稍后回投。409
- * `TOOL_CALL_NOT_DETACHABLE` 表示调用已结束或本来就在后台（结论与转后台同时到达时结论先到）。
- */
-export async function backgroundToolCall(taskId: number, toolCallId: string): Promise<BackgroundToolCallResult> {
-  const traceId = newTraceId();
-  void frontendLog("INFO", "assistant_tool_call_background_requested", "用户请求把工具调用转到后台", {
-    traceId,
-    data: { taskId, toolCallId },
-  });
-  let result: BackgroundToolCallResult;
-  try {
-    await requestOk(`/tasks/${taskId}/tool-calls/${encodeURIComponent(toolCallId)}/background`, {
-      method: "POST",
-      traceId,
-      timeoutMs: IDEMPOTENT_COMMAND_TIMEOUT_MS,
-    });
-    result = { kind: "detached" };
-  } catch (error) {
-    result = isConflict(error)
-      ? { kind: "not_detachable" }
-      : { kind: "failed", message: commandFailureMessage(error, "转到后台") };
-  }
-  void frontendLog(result.kind === "failed" ? "WARNING" : "INFO", "assistant_tool_call_background_result", "转到后台请求已返回", {
-    traceId,
-    data: { taskId, toolCallId, result: result.kind },
-  });
-  return result;
+/** 把一次前台等待转到后台：工具立即以「已转后台」占位闭合，结论稍后回投。 */
+export function backgroundToolCall(taskId: number, toolCallId: string): Promise<string | null> {
+  return postCallCommand(taskId, toolCallId, backgroundTarget(toolCallId), "background", "转到后台");
 }

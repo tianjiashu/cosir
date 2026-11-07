@@ -1,7 +1,7 @@
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import type { IBuffer, IBufferCell, IDisposable, ILink, Terminal } from "@xterm/xterm";
 
-import { resolveLink, workspaceRootPattern, type LinkTarget } from "@/lib/links/resolve-link";
+import { resolveLink, resolvePathText, workspaceRootPattern, type LinkTarget } from "@/lib/links/resolve-link";
 
 export type TerminalLinkOptions = {
   /** 每次识别时现读：视图只按身份创建一次，根目录到达或变化不重建 xterm。 */
@@ -77,14 +77,6 @@ function trimTrailing(value: string): string {
 }
 
 /**
- * 终端文本不是 URL 编码的，交给 `resolveLink`（它按链接地址解析）前转义 `%` 与 `#`：否则文件名里的 `#`
- * （如 `F#`）会被当成片段截断，字面的 `%41` 会被解码改写。
- */
-function asHref(path: string): string {
-  return path.replace(/%/g, "%25").replace(/#/g, "%23");
-}
-
-/**
  * 第 `lineNumber` 行（1 起算）所在逻辑行里属于工作区的路径链接。
  *
  * 逻辑行把软折行（`isWrapped`）拼回一整行再匹配，长路径折行后照样可点；下标按单元格换算，行内有中文、
@@ -99,7 +91,7 @@ export function workspacePathLinks(
   const { text, cells } = logicalLine(buffer, lineNumber - 1);
   const links: ILink[] = [];
   for (const candidate of findWorkspacePathCandidates(text, workspaceRoot)) {
-    const target = resolveLink(asHref(candidate.text), { workspaceRoot });
+    const target = resolvePathText(candidate.text, { workspaceRoot });
     if (target?.kind !== "workspace") continue;
     const first = cells[candidate.start];
     const last = cells[candidate.start + candidate.text.length - 1];

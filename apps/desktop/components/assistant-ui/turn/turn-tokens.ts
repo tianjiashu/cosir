@@ -10,6 +10,3 @@ export const DISCLOSURE_CONTENT_CLASS = [
 
 /** 产物卡（本轮改动、草稿、Team 卡）共用的底色面：`--surface`、圆角、不画边框与阴影（设计 §5.8）。 */
 export const SURFACE_CARD_CLASS = "bg-surface rounded-(--radius)";
-
-/** 过程区体的左缩进：与区头文字（chevron 14px + 间距 8px）对齐，不画竖线。 */
-export const PROCESS_BODY_INDENT_CLASS = "pl-[22px]";

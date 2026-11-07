@@ -3,13 +3,10 @@ import { parseReferenceUrl } from "@/lib/workspace-references/codec";
 /** 行范围，1 起算、闭区间。 */
 export type LineRange = { start: number; end: number };
 
-/**
- * 工作区内的文件或目录；`path` 是工作区相对路径（POSIX 分隔符、无前导 `./`）。
- *
- * `mention` 表示这不是地址而是「提到了一个文件名」（行内代码里不带目录的 `task.ts`）：它在哪个目录并不知道，
- * 按根目录换算出的 `path` 只是第一个候选，根目录下没有时打开入口改为按文件名查找，而不是报不存在。
- */
-export type WorkspaceLink = { kind: "workspace"; path: string; directory: boolean; lines?: LineRange; mention?: true };
+/** 确定的工作区地址；path 是工作区相对路径，不代表文件存在。 */
+export type WorkspaceLink = { kind: "workspace"; path: string; directory: boolean; lines?: LineRange };
+/** 只有文件名的提及：用户选择候选，不能以根目录或搜索排序推断身份。 */
+export type FilenameSearch = { kind: "filename-search"; query: string; lines?: LineRange };
 
 /** 网页或邮件地址；`local` 表示本机开发服务（localhost / 回环地址）。 */
 export type WebLink = { kind: "web"; url: string; local: boolean };
@@ -17,7 +14,7 @@ export type WebLink = { kind: "web"; url: string; local: boolean };
 /** 同一篇 Markdown 里的位置（脚注引用与返回、标题锚点）；`id` 是已解码的目标元素 id。 */
 export type AnchorLink = { kind: "anchor"; id: string };
 
-export type LinkTarget = WorkspaceLink | WebLink | AnchorLink;
+export type LinkTarget = WorkspaceLink | WebLink | AnchorLink | FilenameSearch;
 
 /**
  * 解析基准。`workspaceRoot` 为 null 时（配置页等没有工作区的界面）只认网页链接；`documentDir` 只在
@@ -70,7 +67,18 @@ export function resolveLink(href: string, base: LinkBase): LinkTarget | null {
   }
   if (SCHEME.test(location) && !WINDOWS_DRIVE.test(location)) return null;
 
-  const decoded = decodePath(location);
+  return workspaceTarget(decodePath(location), base, lines);
+}
+
+/** 原始路径按字面处理，仅识别 :行[:列] 后缀，不进行 URL 解码。 */
+export function resolvePathText(text: string, base: LinkBase): WorkspaceLink | null {
+  if (base.workspaceRoot === null) return null;
+  const raw = text.trim();
+  const suffix = LINE_SUFFIX.exec(raw);
+  return workspaceTarget(suffix ? raw.slice(0, suffix.index) : raw, base, suffix ? lineRange(suffix[1]) : undefined);
+}
+
+function workspaceTarget(decoded: string, base: LinkBase, lines?: LineRange): WorkspaceLink | null {
   const directory = /[\\/]$/.test(decoded);
   const path = workspacePathOf(base, decoded);
   if (path === null) return null;
@@ -87,20 +95,17 @@ const BARE_FILE_EXTENSIONS = new Set([
   "vue", "xml", "yaml", "yml",
 ]);
 
-/**
- * 对话正文行内代码里的文件路径（如 `src/app.ts:42`）。行内代码本来不是链接，所以先按形状判断，
- * 只认像文件的文本，再交给 `resolveLink` 换算；网址、命令、成员访问等保持原样。不带目录的裸文件名
- * 标为 `mention`：模型在行文里提到文件名时并不给出位置，不能当成根目录下的地址。
- */
-export function inlineCodeLink(text: string, workspaceRoot: string | null): WorkspaceLink | null {
+/** 行内代码是字面文本。裸文件名只提供查找操作，带目录路径沿用来源基准。 */
+export function inlineCodeLink(text: string, base: LinkBase): WorkspaceLink | FilenameSearch | null {
+  if (base.workspaceRoot === null) return null;
   const candidate = text.trim().replace(/:\d+(?::\d+)?$/, "");
-  if (!candidate || candidate.includes("://") || !/^[\w.@~\-/\\:]+$/.test(candidate)) return null;
+  if (!candidate || candidate.includes("://") || !/^[\p{L}\p{N}_.@~%#\-/\\:]+$/u.test(candidate)) return null;
   const name = candidate.split(/[/\\]/).at(-1) ?? "";
   const extension = /^[^.].*\.([A-Za-z0-9]{1,10})$/.exec(name)?.[1]?.toLowerCase();
   if (!extension || (name === candidate && !BARE_FILE_EXTENSIONS.has(extension))) return null;
-  const target = resolveLink(text, { workspaceRoot });
-  if (target?.kind !== "workspace") return null;
-  return name === candidate ? { ...target, mention: true } : target;
+  const target = resolvePathText(text, base);
+  if (!target) return null;
+  return name === candidate ? { kind: "filename-search", query: name, lines: target.lines } : target;
 }
 
 /**
@@ -166,10 +171,7 @@ function lineRange(start: string, end?: string): LineRange {
   return { start: first, end: Math.max(first, last) };
 }
 
-/**
- * Markdown 链接的地址经过百分号编码（空格、中文）。行内代码与终端文本本身不编码，但同样经过这里：
- * 能解码就解码（文件名里字面的 `%41` 因此会被改写，极少见），解码失败按原文用。
- */
+/** 仅 URL 地址调用；原始路径不得经过百分号解码。 */
 function decodePath(path: string): string {
   try {
     return decodeURIComponent(path);

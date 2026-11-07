@@ -1,3 +1,6 @@
+/** Wire values of backend TaskType; unknown task kinds are not a supported contract. */
+export type TaskType = "user" | "user_fork" | "agent_fork" | "agent_task" | "team_node_task";
+
 import { postJson, requestJson } from "@/lib/http/client";
 
 type ReadRequestOptions = Pick<RequestInit, "signal">;
@@ -11,20 +14,16 @@ export type Workspace = {
 };
 
 type ForkTaskMetadata = {
-  source_task_id: number;
-  /** fork 切分点：用户 fork 时是源 Task 中那一轮回复所在的消息 id；Agent fork 为 null。 */
-  source_message_id: string | null;
-  /** Agent 用 `fork_task` 分出来的对话标为 `agent`；用户 fork 没有这个字段。 */
-  created_by?: "agent";
+  tree_parent_task_id: number | null;
 };
 
 export type WorkspaceTask = {
   task_id: number;
   workspace_id: number;
   title: string;
-  task_type: "user" | "fork" | "delegate_task" | "agent_team_node" | string;
+  task_type: TaskType;
   extra?: {
-    fork?: ForkTaskMetadata;
+    fork?: ForkTaskMetadata | null;
   } | null;
   created_at: string;
   updated_at: string;
@@ -59,8 +58,5 @@ export const deleteTask = (taskId: number, options: DeleteTaskOptions = {}) => {
     { method: "DELETE" },
   );
 };
-/**
- * fork 到某条消息所在那一轮回复为止。`messageId` 可以是用户消息 id、`assistant-{用户消息id}` 或
- * `assistant-run-{runId}`，后端按消息切分。
- */
-export const forkTask = (taskId: number, messageId: string) => postJson<WorkspaceTask>(`/tasks/${taskId}/fork`, { messageId });
+/** 从这条回复往后分叉：新 Task 继承到它为止的对话。 */
+export const forkTask = (taskId: number, replyMessageId: string) => postJson<WorkspaceTask>(`/tasks/${taskId}/fork`, { replyMessageId });

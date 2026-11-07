@@ -9,6 +9,7 @@ export type ContextMessage = {
   created_at: string;
   updated_at: string;
   role: string;
+  reasoning_content?: string | null;
   content: unknown;
   tool_calls?: Array<Record<string, unknown>> | null;
   usage_metadata?: Record<string, unknown> | null;

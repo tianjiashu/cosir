@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { SparklesIcon } from "lucide-react";
-import { useAui } from "@assistant-ui/react";
+import { useAui, useAuiState } from "@assistant-ui/react";
 
 import {
   ModelSelectorContent as OfficialModelSelectorContent,
@@ -16,6 +16,7 @@ import {
 import { ModelAvailability } from "@/components/model/model-availability";
 import { ModelConfigPanel } from "@/components/assistant-ui/model-config-panel";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
+import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
 import { RUN_LAUNCH_LOCKED_HINT } from "@/lib/assistant/run-launch";
 import { useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
 import {
@@ -29,6 +30,7 @@ import {
 
 type ModelSelectorProps = {
   scope?: ModelSelectionScope;
+  initial?: TransportRunLaunch;
   onReadyChange?: (ready: boolean) => void;
   runtimeModelContext?: boolean;
   /**
@@ -155,7 +157,7 @@ function SelectorView({
   );
 }
 
-function useScopedSelection(scope: ModelSelectionScope | undefined) {
+function useScopedSelection(scope: ModelSelectionScope | undefined, initial?: TransportRunLaunch) {
   const catalogState = useModelCatalog();
   const key = scopeKey(scope);
   const subscribe = useCallback(
@@ -166,7 +168,9 @@ function useScopedSelection(scope: ModelSelectionScope | undefined) {
     () => (scope ? readStoredSelection(scope) : null),
     [key],
   );
-  const storedSelection = useSyncExternalStore(subscribe, getSnapshot, () => null);
+  const savedSelection = useSyncExternalStore(subscribe, getSnapshot, () => null);
+  const initialSelection = useMemo(() => initial ? lockedSelection(initial) : null, [initial]);
+  const storedSelection = savedSelection ?? initialSelection;
   const [selectionState, setSelectionState] = useState<SelectionState>({
     scopeKey: "",
     selection: null,
@@ -210,7 +214,7 @@ function lockedSelection(launch: TransportRunLaunch): ModelSelection | null {
 
 /** 偏好选择或锁定配置，二者择一；锁定时 `locked` 为 true，界面只读。 */
 function useEffectiveSelection(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
-  const scoped = useScopedSelection(props.scope);
+  const scoped = useScopedSelection(props.scope, props.initial);
   const locked = props.locked ?? null;
   const selection = locked === null ? scoped.selection : lockedSelection(locked);
   const selectedModel = scoped.catalog?.models.find(
@@ -251,7 +255,8 @@ function StandaloneModelSelector(props: Omit<ModelSelectorProps, "runtimeModelCo
 
 function RuntimeModelSelector(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
   const aui = useAui();
-  const state = useEffectiveSelection(props);
+  const forkLaunch = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.fork?.initialLaunch);
+  const state = useEffectiveSelection({ ...props, initial: forkLaunch });
   const { selection, selectedModel } = state;
 
   useEffect(() => {

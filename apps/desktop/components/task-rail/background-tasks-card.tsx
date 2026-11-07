@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { ChevronRightIcon } from "lucide-react";
 
+import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { countRunning, useBackgroundTasks } from "@/lib/background-tasks/store";
+import { useTaskRailStore } from "@/lib/task-rail/store";
 
 import { BackgroundTaskRow } from "./background-task-row";
 
@@ -16,11 +17,11 @@ export function BackgroundTasksSummary({ taskId }: { taskId: number }) {
   const running = countRunning(entries);
   if (running > 0) return <>{running} 个运行中</>;
   if (entries.some((entry) => entry.status === "settling")) return <>收尾中</>;
-  return <>{entries.length > 0 ? `${entries.length} 已完成` : "无"}</>;
+  return <>{entries.length > 0 ? `${entries.length} 已结束` : "无"}</>;
 }
 
 /**
- * 进行中（运行、收尾）的条目逐行列出，已结束的收成一行「N 已完成」，点开展开；有运行中的条目时每秒刷新
+ * 进行中（运行、收尾）的条目逐行列出，已结束的收成一行「N 已结束」，点开展开；有运行中的条目时每秒刷新
  * 耗时，否则不起计时器（收尾中的条目不计时）。
  */
 export function BackgroundTasksBody({ taskId }: { taskId: number }) {
@@ -29,6 +30,9 @@ export function BackgroundTasksBody({ taskId }: { taskId: number }) {
   const active = entries.filter((entry) => entry.status === "running" || entry.status === "settling");
   const ended = entries.filter((entry) => entry.status === "completed" || entry.status === "cancelled");
   const now = useNow(countRunning(entries) > 0);
+  // 定位目标在折叠的「已结束」里时先展开列表，行挂载后才接得住定位。
+  const revealEnded = useTaskRailStore((state) => state.revealCall?.taskId === taskId && ended.some((entry) => entry.toolCallId === state.revealCall?.callId));
+  useEffect(() => { if (revealEnded) setShowEnded(true); }, [revealEnded]);
   if (entries.length === 0) return <p className="text-muted-foreground px-1 py-1 text-xs">没有后台任务</p>;
 
   return (
@@ -42,12 +46,12 @@ export function BackgroundTasksBody({ taskId }: { taskId: number }) {
         <div className="mt-1">
           <button
             type="button"
-            className="text-muted-foreground hover:text-foreground flex items-center gap-1.5 rounded-sm px-1 py-1 text-xs outline-none"
+            className="group/disclosure text-muted-foreground hover:text-foreground flex items-center gap-1.5 rounded-sm px-1 py-1 text-xs outline-none"
             aria-expanded={showEnded}
             onClick={() => setShowEnded((value) => !value)}
           >
-            <ChevronRightIcon className={showEnded ? "size-3.5 rotate-90 transition-transform" : "size-3.5 transition-transform"} aria-hidden="true" />
-            {ended.length} 已完成
+            {ended.length} 已结束
+            <DisclosureChevron open={showEnded} reveal />
           </button>
           {showEnded && (
             <ul className="flex flex-col gap-0.5">

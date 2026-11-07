@@ -1,4 +1,4 @@
-import { asRecord } from "./display-utils";
+import { asRecord, readText as text } from "./display-utils";
 import type { AgentTeamConfiguration, AgentTeamStatusConfiguration } from "@/lib/api/agent-teams";
 
 
@@ -47,10 +47,6 @@ export type AgentTeamConfigurationDraftDisplay = {
 
 function positiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
-function text(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function statusList(value: unknown): AgentTeamStatusConfiguration[] | undefined {

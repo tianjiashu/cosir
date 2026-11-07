@@ -6,7 +6,7 @@ import { BackgroundTasksBody, BackgroundTasksSummary } from "./background-tasks-
 
 type RailCardDefinition = {
   title: string;
-  /** 折叠时标题行右侧的一句摘要，展开时也保留。 */
+  /** 折叠时标题行右侧的一句摘要。 */
   Summary: ComponentType<{ taskId: number }>;
   Body: ComponentType<{ taskId: number }>;
 };
