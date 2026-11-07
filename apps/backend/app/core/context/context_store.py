@@ -7,7 +7,13 @@
 
 from __future__ import annotations
 
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionSystemMessageParam
+from typing import cast
+
+from openai.types.chat import (
+    ChatCompletionMessageFunctionToolCallParam,
+    ChatCompletionMessageParam,
+    ChatCompletionSystemMessageParam,
+)
 from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
@@ -108,6 +114,18 @@ class ContextStore:
             )
             for record in records
         ]
+
+    def tool_call_ids(self, task_id: int) -> set[str]:
+        """Task 里出现过的全部调用 id，含已移出上下文的行：登记表与观测页还可能引用它们。"""
+
+        return {
+            call["id"]
+            for record in self._crud.get(task_id, include_in_context=False)
+            for call in cast(
+                list[ChatCompletionMessageFunctionToolCallParam],
+                record.message.get("tool_calls") or [],
+            )
+        }
 
     def max_sequence(self, task_id: int, session: Session | None = None) -> int:
         """返回 Task 当前最大 sequence；无记录时为 0。"""

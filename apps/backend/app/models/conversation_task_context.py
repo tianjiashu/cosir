@@ -44,13 +44,15 @@ class ConversationTaskContextRecord:
 
     @property
     def retained(self) -> bool:
-        """行仍属于会话：模型或前端至少一方在用。
+        """本地已移出行不复制；无 Run 的继承副本不可编辑，隐藏也不等于移出。
 
-        两个标志都为假的行只由编辑重跑的移出（``exclude_from_sequence``）产生，只留给观测页查看；
-        只进上下文不投影（后台结论、用户决定、通知）或只投影不进上下文（中断输出、取消占位）的行
-        都仍是会话的一部分。
+        Agent fork 会隐藏 include=False 的中断输出，因而两标志都可能为 False；这些
+        无本地 Run 的副本仍保留供手动再分叉展示。固定系统提示词的序号为 0。
         """
-        return self.include_in_context or self.project_to_transport
+        return (
+            self.include_in_context or self.project_to_transport
+            or (self.run_id is None and self.sequence > 0)
+        )
 
     @classmethod
     def _from_model(cls, model: ConversationTaskContextModel) -> ConversationTaskContextRecord:

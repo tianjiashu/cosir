@@ -63,7 +63,7 @@ class HandoffRegistry:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._leases: dict[str, HandoffLease] = {}
+        self._leases: dict[tuple[int, str], HandoffLease] = {}
         self._listener: Callable[[int], None] | None = None
         self._notifier = ThreadPoolExecutor(max_workers=1, thread_name_prefix="handoff-notify")
 
@@ -84,22 +84,22 @@ class HandoffRegistry:
             existing = self._on(lease.surface, lease.resource_id)
             if existing is not None:
                 raise HandoffConflictError(existing)
-            self._leases[lease.tool_call_id] = lease
+            self._leases[lease.task_id, lease.tool_call_id] = lease
         self._log("handoff_started", "Agent 把资源交给用户", lease)
         self._notify(lease.task_id)
 
-    def end(self, tool_call_id: str) -> HandoffLease | None:
+    def end(self, task_id: int, tool_call_id: str) -> HandoffLease | None:
         """交还：取出这次调用的登记。
 
         已被撤回、代为落定或重启丢失时返回 ``None``，重放照常收尾。
         """
 
-        lease = self._pop(tool_call_id)
+        lease = self._pop(task_id, tool_call_id)
         if lease is not None:
             self._log("handoff_returned", "用户交还资源", lease)
         return lease
 
-    def settle(self, tool_call_id: str, feedback: str) -> None:
+    def settle(self, task_id: int, tool_call_id: str, feedback: str) -> None:
         """资源在交接中结束：取出登记并代用户驳回那次调用，唤醒等它的 Agent（会写 SQLite）。
 
         用户可能恰好已经交还：决定已提交或已不在等待时只记录，不重复。资源一侧在锁外调用。
@@ -108,13 +108,13 @@ class HandoffRegistry:
         from app.core.task_actor import SessionConflictError
         from app.service import depends
 
-        lease = self._pop(tool_call_id)
+        lease = self._pop(task_id, tool_call_id)
         if lease is None:
             return
         self._log("handoff_settled", "资源在交接中结束，代用户落定", lease)
         try:
             depends.get_tool_decision_service().submit(
-                lease.task_id, tool_call_id, "reject", feedback=feedback, source="runtime"
+                task_id, tool_call_id, "reject", feedback=feedback, source="runtime"
             )
         except SessionConflictError as exc:
             log.info(
@@ -134,9 +134,9 @@ class HandoffRegistry:
 
         with self._lock:
             dropped = [
-                self._leases.pop(call_id)
+                self._leases.pop((task_id, call_id))
                 for call_id in tool_call_ids
-                if call_id in self._leases and self._leases[call_id].task_id == task_id
+                if (task_id, call_id) in self._leases
             ]
         for lease in dropped:
             self._log("handoff_dropped", "交接所在的一轮被撤回", lease)
@@ -147,8 +147,8 @@ class HandoffRegistry:
         """Task 删除提交后丢弃它的全部登记；不通知（Task 已没有快照可投影）。"""
 
         with self._lock:
-            for call_id in [k for k, v in self._leases.items() if v.task_id == task_id]:
-                del self._leases[call_id]
+            for key in [key for key in self._leases if key[0] == task_id]:
+                del self._leases[key]
 
     def close(self) -> None:
         """后端关闭时清空：登记表本来就不跨重启。
@@ -179,9 +179,9 @@ class HandoffRegistry:
             None,
         )
 
-    def _pop(self, tool_call_id: str) -> HandoffLease | None:
+    def _pop(self, task_id: int, tool_call_id: str) -> HandoffLease | None:
         with self._lock:
-            lease = self._leases.pop(tool_call_id, None)
+            lease = self._leases.pop((task_id, tool_call_id), None)
         if lease is not None:
             self._notify(lease.task_id)
         return lease

@@ -99,15 +99,16 @@ class ConversationRunLedger:
         return self._run.get(run_id)
 
     def transition(
-            self,
-            run_id: int,
-            transition: RunTransition,
-            *,
-            end_reason: str | None = None,
-            final_output: str | None = None,
-            usage_stats: ConversationRunUsageStats | None = None,
-            error_message: str | None = None,
-            session: Session | None = None,
+        self,
+        run_id: int,
+        transition: RunTransition,
+        *,
+        end_reason: str | None = None,
+        final_output: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
+        error_message: str | None = None,
+        response_sequence: int | None = None,
+        session: Session | None = None,
     ) -> ConversationRunRecord | None:
         """按迁移表执行一次条件迁移；当前状态不在来源集合内时返回 ``None``，不写库、不发事件。
 
@@ -154,6 +155,7 @@ class ConversationRunLedger:
                 usage_stats=usage_stats,
                 error=error,
                 changed_at=record.updated_at,
+                response_sequence=response_sequence,
             )
         )
         return record
@@ -164,12 +166,12 @@ class ConversationRunLedger:
         self._run.save_execution(run_id, data)
 
     def update_completed_result(
-            self,
-            run_id: int,
-            *,
-            final_output: str | None = None,
-            end_reason: str | None = None,
-            usage_stats: ConversationRunUsageStats | None = None,
+        self,
+        run_id: int,
+        *,
+        final_output: str | None = None,
+        end_reason: str | None = None,
+        usage_stats: ConversationRunUsageStats | None = None,
     ) -> ConversationRunRecord | None:
         """结构化支线只改写已完成 Run 的结果与用量，不重新发布生命周期事件。"""
 
@@ -191,7 +193,7 @@ class ConversationRunLedger:
         return record
 
     def _persisted_usage(
-            self, usage_stats: ConversationRunUsageStats | None
+        self, usage_stats: ConversationRunUsageStats | None
     ) -> ConversationRunUsage | None:
         """运行时 token 累加器 → Run 行六键用量；``None`` 表示不写用量列。"""
 

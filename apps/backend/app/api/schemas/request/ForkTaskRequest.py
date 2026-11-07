@@ -1,14 +1,18 @@
+from typing import cast
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.assistant_transport.request import TransportRequestError
+from app.assistant_transport.state.message_identity import parse_reply_id
+from app.models.fork_reply import ForkReply
 
 
 class ForkTaskRequest(BaseModel):
-    """校验按消息切分的 fork 请求：``messageId`` 是对话界面里的 wire 消息 id。"""
+    """校验手动分叉请求：``replyMessageId`` 是对话界面里一条回复的 wire 消息 id。"""
 
     model_config = ConfigDict(populate_by_name=True)
 
-    message_id: str = Field(alias="messageId")
+    reply_message_id: str = Field(alias="replyMessageId")
 
     @model_validator(mode="before")
     @classmethod
@@ -17,13 +21,19 @@ class ForkTaskRequest(BaseModel):
 
         if (
             not isinstance(value, dict)
-            or not isinstance(value.get("messageId"), str)
-            or not value["messageId"].strip()
+            or set(value) != {"replyMessageId"}
+            or not isinstance(value["replyMessageId"], str)
+            or parse_reply_id(value["replyMessageId"]) is None
         ):
             raise TransportRequestError(
                 status_code=422,
-                code="FORK_MESSAGE_ID_REQUIRED",
-                message="fork 请求必须提供 messageId",
+                code="FORK_REPLY_ID_REQUIRED",
+                message="fork 请求必须提供 replyMessageId",
                 retryable=False,
             )
         return value
+
+    @property
+    def reply(self) -> ForkReply:
+        """校验入口已保证可解码。"""
+        return cast(ForkReply, parse_reply_id(self.reply_message_id))

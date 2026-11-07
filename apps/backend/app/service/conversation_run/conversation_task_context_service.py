@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import copy
 import dataclasses
 from datetime import UTC, datetime
 from typing import cast
@@ -14,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_store import (
-    TASK_SYSTEM_PROMPT_SEQUENCE,
     ContextStore,
 )
 from app.core.context.tool_call_closure import (
@@ -25,10 +23,11 @@ from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import (
     TURN_INPUT_KINDS,
-    MessageMetadata,
     ToolMessageMetadata,
     UserMessageMetadata,
 )
+from app.models.task_record import TaskRecord
+from app.service.conversation_run.fork_history import copy_prefix
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -57,10 +56,10 @@ class ConversationTaskContextService:
         self._store = ContextStore()
 
     def list_observable_messages(
-            self,
-            *,
-            task_id: int | None = None,
-            run_id: int | None = None,
+        self,
+        *,
+        task_id: int | None = None,
+        run_id: int | None = None,
     ) -> list[ConversationTaskContextRecord]:
         """读取观测页消息；Task 或 Run 至少提供一个，并保留全部存储标记状态。"""
 
@@ -81,90 +80,40 @@ class ConversationTaskContextService:
 
         return self._crud.get(task_id, include_in_context=False, session=session)
 
-    def clone_for_fork(
-            self,
-            source_task_id: int,
-            target_task_id: int,
-            run_id_map: dict[int, int],
-            session: Session,
-            *,
-            max_sequence: int,
+    def copy_fork_prefix(
+        self,
+        session: Session,
+        source: TaskRecord,
+        target: TaskRecord,
+        rows: list[ConversationTaskContextRecord],
+        before_sequence: int,
     ) -> int:
-        """在外部事务中复制 Task 固定提示词和指定 Run 前缀里序号不晚于 ``max_sequence`` 的 entries。
-
-        system prompt 保留 sequence 0；Run context 从 1 开始重新分配。提示词不在目标 Task
-        重建，避免 fork 后改变源 Task 的系统指令。只复制仍属于会话的行（见
-        :attr:`ConversationTaskContextRecord.retained`），编辑移出的历史留在源 Task 供观测，不带进新
-        Task。``max_sequence`` 是切分点所在那一轮的
-        最后一条：边界 Run 里更晚的轮次不复制。
-        """
-
-        source_entries = self._crud.get(
-            source_task_id,
-            include_in_context=False,
-            session=session,
+        """把切点之前的保留上下文复制成目标 Task 独立、不可执行的历史。"""
+        return copy_prefix(
+            self._crud, self._store, session, source, target, rows, before_sequence
         )
-        next_sequence = 1
-        cloned_count = 0
-        system_prompt_found = False
-        for source_entry in source_entries:
-            if source_entry.sequence == TASK_SYSTEM_PROMPT_SEQUENCE:
-                self._store.to_system_prompt_entry(source_task_id, source_entry)
-                self._crud.create(
-                    ConversationTaskContextRecord(
-                        task_id=target_task_id,
-                        run_id=None,
-                        message=copy.deepcopy(source_entry.message),
-                        message_id=source_entry.message_id,
-                        metadata=copy.deepcopy(source_entry.metadata),
-                        include_in_context=True,
-                        sequence=TASK_SYSTEM_PROMPT_SEQUENCE,
-                        project_to_transport=source_entry.project_to_transport,
-                    ),
-                    session=session,
-                )
-                cloned_count += 1
-                system_prompt_found = True
-                continue
-            # 编辑移出的行只留给源 Task 的观测页，不复制；其余行按原标志复制，fork 后的模型上下文
-            # （含不投影的后台结论、用户决定、通知）与前端历史都与源 Task 一致。
-            if (
-                    source_entry.run_id not in run_id_map
-                    or not source_entry.retained
-                    or source_entry.sequence > max_sequence
-            ):
-                continue
-            self._crud.create(
-                ConversationTaskContextRecord(
-                    task_id=target_task_id,
-                    run_id=run_id_map[source_entry.run_id],
-                    message=copy.deepcopy(source_entry.message),
-                    message_id=source_entry.message_id,
-                    metadata=_uninherited(source_entry.metadata),
-                    include_in_context=source_entry.include_in_context,
-                    sequence=next_sequence,
-                    project_to_transport=source_entry.project_to_transport,
-                ),
-                session=session,
-            )
-            cloned_count += 1
-            next_sequence += 1
-        if not system_prompt_found:
-            raise RuntimeError(f"task {source_task_id} has no persisted system prompt")
-        return cloned_count
 
     def run_awaits_background(self, task_id: int, run_id: int) -> bool:
         """正常完成前检查本 Run 是否还有后台调用尚欠结论。"""
         return self._crud.run_awaits_background(task_id, run_id)
 
+    def claimed_decisions(self, task_id: int) -> list[str]:
+        """决定已认领、还在执行的 HITL 调用（占位 ``running``）；后台占位是 ``pending``，不在其中。"""
+        return [
+            str(record.message["tool_call_id"])
+            for record in self._crud.list_unsettled_placeholders(task_id)
+            if cast(ToolMessageMetadata, record.metadata).status == "running"
+        ]
+
     def settle_placeholders(
-            self,
-            task_id: int | None,
-            tool_call_ids: frozenset[str] | None,
-            status: ToolCallEventStatus,
-            error: str | None,
-            *,
-            exclude: frozenset[str] = frozenset(),
+        self,
+        task_id: int | None,
+        tool_call_ids: frozenset[str] | None,
+        status: ToolCallEventStatus,
+        error: str | None,
+        *,
+        exclude: frozenset[tuple[int, str]] = frozenset(),
+        displays: dict[str, dict[str, object] | None] | None = None,
     ) -> list[ConversationTaskContextRecord]:
         """把还在等结果的占位行（``pending`` 的后台占位、``running`` 的 HITL 占位）推到终态，返回
         实际改写的行（新 metadata）。
@@ -173,6 +122,7 @@ class ConversationTaskContextService:
         ``task_id`` 为 ``None`` 表示全部 Task，``tool_call_ids`` 为 ``None`` 表示不按调用过滤，
         ``exclude`` 里的调用不动（结论已在队列里，占位归那条结论结算）。只改 metadata、不改正文与
         可见性：占位仍是这次调用在模型协议上的结果。已到终态的行不动，迟到的结算因此幂等。
+        ``displays`` 的非空项是执行器取消后的最终部分结果；缺失时保留此前展示。
         """
 
         settled: list[ConversationTaskContextRecord] = []
@@ -181,14 +131,19 @@ class ConversationTaskContextService:
             tool_call_id = record.message.get("tool_call_id")
             if tool_call_ids is not None and tool_call_id not in tool_call_ids:
                 continue
-            if tool_call_id in exclude:
+            if (record.task_id, tool_call_id) in exclude:
                 continue
             previous = cast(ToolMessageMetadata, record.metadata)
             metadata = previous.model_copy(
                 update={
-                    "status": status, "error": error,
+                    "status": status,
+                    "error": error,
+                    "display_data": (
+                        (displays or {}).get(str(tool_call_id)) or previous.display_data
+                    ),
                     "background": previous.background.model_copy(update={"ended_at": ended_at})
-                    if previous.background is not None else None,
+                    if previous.background is not None
+                    else None,
                 }
             )
             updated = dataclasses.replace(record, metadata=metadata)
@@ -197,22 +152,24 @@ class ConversationTaskContextService:
         return settled
 
     def latest_user_input(
-            self, task_id: int, session: Session | None = None
+        self, task_id: int, session: Session | None = None
     ) -> ConversationTaskContextRecord | None:
-        """最新一轮的输入是用户输入时返回它（编辑重跑只允许改它），否则返回 ``None``。
+        """最新一条输入是用户输入时返回它（编辑重跑只允许改它），否则返回 ``None``。
 
-        按 metadata 的 ``kind`` 判断，不解析正文：通知、决定、后台结果同样是 user 角色。最新一轮
-        由 Agent 消息开启时也返回 ``None``：越过它去改更早的用户输入，会把 Agent 那一轮一起撤回，
+        按 metadata 的 ``kind`` 判断，不解析正文：通知、决定、后台结果同样是 user 角色。最新一条
+        输入是 Agent 消息（含途中到达的）时也返回 ``None``：越过它改更早的输入会把它一起撤回，
         前端同样只让最新一条用户消息可编辑。已被编辑移出（不进上下文）的行不算。
         """
         for record in reversed(self._crud.get(task_id, include_in_context=True, session=session)):
+            if record.run_id is None:
+                continue
             metadata = record.metadata
             if isinstance(metadata, UserMessageMetadata) and metadata.kind in TURN_INPUT_KINDS:
                 return record if metadata.kind == "user_input" else None
         return None
 
     def awaiting_decision_tool(
-            self, task_id: int, tool_call_id: str, *, session: Session | None = None
+        self, task_id: int, tool_call_id: str, *, session: Session | None = None
     ) -> str | None:
         """这次调用仍在等用户决定时返回其工具名，否则返回 ``None``。
 
@@ -222,7 +179,11 @@ class ConversationTaskContextService:
         的行——被编辑重跑移出的调用已无法重放。工具名取自发起这次调用的 assistant 消息，不依赖
         工具自己的业务事实（如 TeamRun）。
         """
-        records = self._crud.get(task_id, include_in_context=True, session=session)
+        records = [
+            r
+            for r in self._crud.get(task_id, include_in_context=True, session=session)
+            if r.run_id is not None
+        ]
         result = next(
             (
                 record
@@ -235,7 +196,7 @@ class ConversationTaskContextService:
         if result is None or not cast(ToolMessageMetadata, result.metadata).awaiting_decision:
             return None
         for record in reversed(records):
-            if record.message["role"] != "assistant":
+            if record.run_id is None or record.message["role"] != "assistant":
                 continue
             for call in record.message.get("tool_calls") or ():
                 if call["id"] == tool_call_id:
@@ -259,7 +220,7 @@ class ConversationTaskContextService:
         earlier_calls: set[str] = set()
         withdrawn_calls: set[str] = set()
         for record in records:
-            if record.message["role"] != "assistant":
+            if record.run_id is None or record.message["role"] != "assistant":
                 continue
             calls = withdrawn_calls if record.sequence >= sequence else earlier_calls
             calls.update(call["id"] for call in record.message.get("tool_calls") or ())
@@ -274,7 +235,7 @@ class ConversationTaskContextService:
         return frozenset(withdrawn_calls)
 
     def close_unclosed_tool_calls_for_run(
-            self, task_id: int, run_id: int, session: Session | None = None
+        self, task_id: int, run_id: int, session: Session | None = None
     ) -> list[str]:
         """按完整配对计划为指定 Run 的缺失结果补中断占位，不重放工具。
 
@@ -283,7 +244,11 @@ class ConversationTaskContextService:
         结果只重排模型输入，不改持久序号；返回本次补建的调用 ID。
         """
 
-        records = self._crud.get(task_id, include_in_context=True, session=session)
+        records = [
+            r
+            for r in self._crud.get(task_id, include_in_context=True, session=session)
+            if r.run_id is not None
+        ]
         entries = [
             ContextEntry(
                 run_id=record.run_id,
@@ -311,18 +276,3 @@ class ConversationTaskContextService:
             repaired.append(slot.call_id)
             next_sequence += 1
         return repaired
-
-
-def _uninherited(metadata: MessageMetadata) -> MessageMetadata:
-    """fork 复制时，仍在等结论的后台占位改为 ``cancelled``：后台工作只属于源 Task，新 Task 收不到
-    它的结论，卡片以短提示「未继承」说明，不另设状态。"""
-
-    copied = copy.deepcopy(metadata)
-    if isinstance(copied, ToolMessageMetadata) and copied.background and copied.status == "pending":
-        return copied.model_copy(update={
-            "status": "cancelled", "error": "未继承",
-            "background": copied.background.model_copy(
-                update={"ended_at": datetime.now(UTC).isoformat()}
-            ),
-        })
-    return copied

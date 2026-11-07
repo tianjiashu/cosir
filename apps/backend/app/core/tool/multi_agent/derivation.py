@@ -2,8 +2,7 @@
 
 派生方式是封闭的小集合（委派、fork、建 Team），每种恰好对应一个工具，所以在这里按工具名枚举，
 不让工具在定义上再声明一遍。哪类 Task 允许哪种派生是 Task 一侧的规则（``models.task_kind``）；
-深度上限不在派生时拦，而是创建 Task 时由 ``task_tool_scope`` 一并决定：已到上限的 Task 拿不到
-派生工具，模型看不见就不会调。
+深度上限不在派生入口拦，统一由 ``task_tool_scope`` 决定：新建 Task 固化时去掉，分叉在准入时拒绝。
 """
 
 from dataclasses import dataclass

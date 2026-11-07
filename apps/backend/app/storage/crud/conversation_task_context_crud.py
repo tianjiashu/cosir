@@ -12,7 +12,7 @@ from app.storage.store_engines import main_session_factory
 
 
 class ConversationTaskContextCrud:
-    """只负责 ``conversation_task_contexts`` 表的行级读写。
+    """负责 context 消息行的存储读写。
 
     所有行↔对象映射统一经 :meth:`ConversationTaskContextRecord._from_model` /
     :meth:`ConversationTaskContextRecord._to_model`，不存在第二套序列化。
@@ -24,10 +24,10 @@ class ConversationTaskContextCrud:
         self._session_factory = main_session_factory()
 
     def get(
-            self,
-            task_id: int,
-            include_in_context: bool = True,
-            session: Session | None = None,
+        self,
+        task_id: int,
+        include_in_context: bool = True,
+        session: Session | None = None,
     ) -> list[ConversationTaskContextRecord]:
         """读取指定 task 的上下文消息行，按 ``sequence`` 升序返回。
 
@@ -65,7 +65,9 @@ class ConversationTaskContextCrud:
         """本 Run 仍在上下文中、尚未并入结论的后台调用是否存在。"""
         row = ConversationTaskContextModel
         pending = select(row.sequence).where(
-            row.task_id == task_id, row.include_in_context.is_(True),
+            row.task_id == task_id,
+            row.include_in_context.is_(True),
+            row.run_id.is_not(None),
             func.json_extract(row.metadata_json, "$.background.run_id") == run_id,
             self._pending_background(),
         )
@@ -73,7 +75,7 @@ class ConversationTaskContextCrud:
             return bool(session.scalar(select(pending.exists())))
 
     def list_unsettled_placeholders(
-            self, task_id: int | None = None, session: Session | None = None
+        self, task_id: int | None = None, session: Session | None = None
     ) -> list[ConversationTaskContextRecord]:
         """还在等结果的占位行：仍为 ``pending`` 的后台占位（metadata ``background`` 是工作记录），
         以及已接收决定、执行中（``running``）的 HITL 等待占位。
@@ -85,10 +87,11 @@ class ConversationTaskContextCrud:
         metadata_json = ConversationTaskContextModel.metadata_json
         status = func.json_extract(metadata_json, "$.status")
         stmt = select(ConversationTaskContextModel).where(
+            ConversationTaskContextModel.run_id.is_not(None),
             or_(
                 self._pending_background(),
                 status == "running",
-            )
+            ),
         )
         if task_id is not None:
             stmt = stmt.where(ConversationTaskContextModel.task_id == task_id)
@@ -103,14 +106,14 @@ class ConversationTaskContextCrud:
         return [ConversationTaskContextRecord._from_model(row) for row in rows]
 
     def get_for_observation(
-            self,
-            task_id: int,
-            run_id: int | None = None,
+        self,
+        task_id: int,
+        run_id: int | None = None,
     ) -> list[ConversationTaskContextRecord]:
         """读取观测页所需的全量消息，不按上下文或流式标记过滤。
 
-        指定 Run 时同时返回 Task 固定 system prompt（sequence 0），使 Run 视图保留
-        任务级提示词；其它 Run 的消息不混入结果。时间戳由完整持久化记录映射保留。
+        指定 Run 时同时返回无本地 Run 的固定系统提示词和继承上下文；其它本地 Run
+        的消息不混入结果。时间戳由完整持久化记录映射保留。
         """
 
         statement = select(ConversationTaskContextModel).where(
@@ -120,10 +123,7 @@ class ConversationTaskContextCrud:
             statement = statement.where(
                 or_(
                     ConversationTaskContextModel.run_id == run_id,
-                    and_(
-                        ConversationTaskContextModel.run_id.is_(None),
-                        ConversationTaskContextModel.sequence == 0,
-                    ),
+                    ConversationTaskContextModel.run_id.is_(None),
                 )
             )
         statement = statement.order_by(ConversationTaskContextModel.sequence.asc())
@@ -132,10 +132,10 @@ class ConversationTaskContextCrud:
         return [ConversationTaskContextRecord._from_model(row) for row in rows]
 
     def get_by_task_sequence(
-            self,
-            task_id: int,
-            sequence: int,
-            session: Session | None = None,
+        self,
+        task_id: int,
+        sequence: int,
+        session: Session | None = None,
     ) -> ConversationTaskContextRecord | None:
         """按 Task 与全局序号读取唯一 context 行。
 
@@ -189,9 +189,9 @@ class ConversationTaskContextCrud:
         return int(current or 0)
 
     def create(
-            self,
-            record: ConversationTaskContextRecord,
-            session: Session | None = None,
+        self,
+        record: ConversationTaskContextRecord,
+        session: Session | None = None,
     ) -> None:
         """写入一条上下文消息行。
 
@@ -221,11 +221,11 @@ class ConversationTaskContextCrud:
         session.flush()
 
     def replace_message(
-            self,
-            task_id: int,
-            sequence: int,
-            record: ConversationTaskContextRecord,
-            session: Session | None = None,
+        self,
+        task_id: int,
+        sequence: int,
+        record: ConversationTaskContextRecord,
+        session: Session | None = None,
     ) -> None:
         """原子替换同一条 context 行的内容：消息正文、归属、模型与展示标记及完整角色 metadata。
 
@@ -272,12 +272,12 @@ class ConversationTaskContextCrud:
         session.flush()
 
     def exclude_from_sequence(
-            self,
-            task_id: int,
-            sequence: int,
-            session: Session,
-            *,
-            keep_ids: frozenset[int] = frozenset(),
+        self,
+        task_id: int,
+        sequence: int,
+        session: Session,
+        *,
+        keep_ids: frozenset[int] = frozenset(),
     ) -> None:
         """把 ``sequence`` 及其后的行（``keep_ids`` 除外）移出模型上下文与前端投影；行本身保留，
         供观测页查看。

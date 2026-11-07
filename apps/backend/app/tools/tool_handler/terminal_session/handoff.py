@@ -82,7 +82,7 @@ class TerminalHandoffTool(HandlerBase):
             return with_terminal_errors(self.name, begin)
 
         # 先取回登记：会话已不在时登记也要结束，资源一侧不会再提示交接中。
-        handoff = handoff_registry.end(tool_call_id)
+        handoff = handoff_registry.end(task_id, tool_call_id)
 
         def end() -> ToolObservation:
             try:

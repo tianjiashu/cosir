@@ -20,8 +20,8 @@ class ForkTaskArgs(BaseModel):
     )
     message: str = Field(
         description=(
-            "The part of the work this fork should do. The fork already has this whole "
-            "conversation up to now, so say only what is new: its scope, what to leave to you, "
+            "The complete assignment for this fork. It sees the conversation up to your previous "
+            "reply, not the current turn, so state the goal, constraints, necessary new facts, what to leave to you "
             f"and what to report back. REQUIRED, at most {MESSAGE_MAX} characters."
         ),
     )

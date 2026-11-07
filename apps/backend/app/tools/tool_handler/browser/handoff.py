@@ -111,7 +111,7 @@ class BrowserHandoffTool(HandlerBase):
     def _hand_back(
         self, tab: str | None, execution_context: ToolExecutionContext
     ) -> ToolObservation:
-        handoff = handoff_registry.end(execution_context.tool_call_id)
+        handoff = handoff_registry.end(execution_context.task_id, execution_context.tool_call_id)
         # 交接时解析出的标签为准：``tab`` 为空时「当前标签」可能已经变了。
         target = handoff.resource_id if handoff is not None else tab
         try:

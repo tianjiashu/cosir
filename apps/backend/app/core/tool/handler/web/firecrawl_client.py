@@ -2,8 +2,7 @@
 
 只负责请求 Firecrawl 并把响应归一化为结果值对象；URL 安全校验、结果投影与输出预算归工具。
 
-Firecrawl 官方当前 API 版本为 v2（v1 为 legacy）：搜索响应在 v2 下是 ``data.web``（数组嵌在
-对象中），v1 下是 ``data`` 直接为数组，解析同时兼容。
+搜索只接受项目配置的 v2 协议：网页结果位于 ``data.web``；旧版或错误响应直接报协议错误。
 """
 
 import os
@@ -54,7 +53,7 @@ class FirecrawlUnavailableError(RuntimeError):
 
 
 class FirecrawlRequestError(RuntimeError):
-    """配置正确但远端返回业务失败（HTTP 200 + success:false 等）；属瞬态故障，可以重试。"""
+    """远端返回业务失败或响应不符合 v2 协议；不把协议错误解释为空结果。"""
 
 
 class FirecrawlClient:
@@ -85,7 +84,7 @@ class FirecrawlClient:
 
         异常:
             FirecrawlUnavailableError: 缺少 Firecrawl 配置时抛出。
-            FirecrawlRequestError: 远端返回 success:false 等业务失败时抛出。
+            FirecrawlRequestError: 远端返回业务失败或搜索响应不符合 v2 协议时抛出。
             httpx.HTTPError: Firecrawl API 请求失败时抛出。
 
         副作用:
@@ -131,7 +130,8 @@ class FirecrawlClient:
                 交由调用方给出不可重试的配置指引）。
 
         副作用:
-            并发发起至多 ``Constant.Web.FIRECRAWL_MAX_CONCURRENT_SCRAPES`` 个 Firecrawl Scrape API 请求。
+            并发发起至多 ``Constant.Web.FIRECRAWL_MAX_CONCURRENT_SCRAPES`` 个
+            Firecrawl Scrape API 请求。
         """
 
         if not urls:
@@ -356,24 +356,19 @@ def _search_result_items(payload: object) -> list[dict[str, Any]]:
         payload: Firecrawl Search API 返回的 JSON 对象。
 
     返回:
-        v2 结构（``data.web`` 为数组）与 v1 结构（``data`` 直接为数组）下均已归一
-        化的结果字典列表；结构不符或无 ``url`` 的项被丢弃，缺失时返回空列表。
+        v2 ``data.web`` 中具有 ``url`` 的结果字典；有效的空数组表示无搜索结果。
 
     异常:
-        无。
+        FirecrawlRequestError: 缺少 v2 ``data.web`` 数组，包括旧版响应。
 
     副作用:
         无（纯解析）。
     """
 
-    if not isinstance(payload, dict):
-        return []
-    data = payload.get("data")
-    if isinstance(data, dict):
-        data = data.get("web")
-    if not isinstance(data, list):
-        return []
-    return [item for item in data if isinstance(item, dict) and item.get("url")]
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict) or not isinstance(data.get("web"), list):
+        raise FirecrawlRequestError("Firecrawl v2 search response requires a data.web array.")
+    return [item for item in data["web"] if isinstance(item, dict) and item.get("url")]
 
 
 def _clean_metadata(metadata: object) -> dict[str, object]:
