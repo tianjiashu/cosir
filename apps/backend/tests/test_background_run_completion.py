@@ -51,9 +51,9 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
             self.command = command
             if not self.stopped.is_set():
                 assert gates[command].wait(10), "command was never released"
-            return ExecutionResult(
-                output=command, exit_code=0, timed_out=False, cancelled=self.stopped.is_set()
-            )
+            if self.stopped.is_set():
+                return ExecutionResult(end="cancelled", output=command)
+            return ExecutionResult(end="exited", output=command, exit_code=0)
 
         def stop(self):
             self.stopped.set()

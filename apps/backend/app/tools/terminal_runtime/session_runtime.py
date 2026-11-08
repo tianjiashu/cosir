@@ -16,7 +16,9 @@ service 在锁外调用 ``dispose_worker`` 清理 worker。因此 worker 读线�
 - 需要 worker 回执的 signal 必须在锁外发送：回执由同一读线程接收，持锁发送会与读线程互等；
 - worker 握手（最多数秒）不在会话锁内进行：启动期间快照投影、订阅与 WS 输入都要拿会话锁，
   其中 snapshot 刷新持有全局投影锁、WS 在事件循环里调用，长持会话锁会拖住所有 Task 与事件循环。
-  握手与 worker 关闭由独立的启动互斥 ``_start_lock`` 串行化，``starting`` 期间输入被拒。
+  握手与 worker 关闭由独立的启动互斥 ``_start_lock`` 串行化。``starting`` 期间用户按键与尺寸照常
+  进入 worker 的有序输入队列，握手后按序发出（与真实终端的预输入一致）；Agent 输入要用握手声明的
+  能力，只在 ``running`` 后接受。
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionStateError,
     TerminalUserCommandRunningError,
     TerminalUserTypingError,
+    TerminalWorkerUnavailableError,
 )
 from app.tools.terminal_runtime.inputs import (
     DEFAULT_WRITE_WAIT,
@@ -79,18 +82,12 @@ EffectScheduler = Callable[[Callable[[], None]], None]
 UserInputResult = Literal["accepted", "session_ended"]
 
 _ACTIVE = frozenset({"starting", "running"})
-_NONFATAL_WORKER_ERRORS = frozenset(
-    {"START_ALREADY_COMPLETE", "PTY_QUERY_RESPONSE_FAILED", "input_rejected", "resize_rejected"}
-)
-_FATAL_WORKER_ERROR_REASONS = {
-    "HEARTBEAT_TIMEOUT": "worker_heartbeat_timeout",
-    "PTY_WRITE_FAILED": "worker_pty_write_failed",
-    "PTY_OUTPUT_READ_FAILED": "worker_pty_output_read_failed",
-    "BACKEND_OUTPUT_FAILED": "worker_backend_output_failed",
-    "PTY_CLEANUP_FAILED": "worker_pty_cleanup_failed",
-    "PTY_WAIT_FAILED": "worker_pty_wait_failed",
-    # 后端读线程补发：worker 未发 exit 就断开（崩溃、协议违约或事件处理出错）。
-    "WORKER_DISCONNECTED": "worker_disconnected",
+# worker ``exit.reason`` → 会话失败原因；``exited`` 是 shell 自己结束，单独处理。会话的终态只来自
+# ``exit`` 与读线程补发的 ``disconnected``，``error`` 帧从不代表终态（见 Worker 协议）。
+_WORKER_EXIT_FAILURES = {
+    "stopped": "worker_stopped",
+    "heartbeat_timeout": "worker_heartbeat_timeout",
+    "failed": "worker_failed",
 }
 
 
@@ -173,7 +170,6 @@ class TerminalSessionRuntime:
         self._condition = threading.Condition(threading.RLock())
         # 只串行化「worker 握手」与「worker 关闭」，从不在会话锁内获取，避免与读线程互等。
         self._start_lock = threading.Lock()
-        self._pending_geometry: tuple[int, int] | None = None
         self._disposal_finished = threading.Event()
         self._stream = TerminalStreamBuffer(
             self.session_id, Constant.Terminal.MAX_RING_BUFFER_BYTES
@@ -217,7 +213,6 @@ class TerminalSessionRuntime:
                     # 握手期间已到的 screen 事件比握手尺寸新，不覆盖。
                     buffer.initialize(worker.geometry["rows"], worker.geometry["columns"])
                 self._status = "running"
-                geometry, self._pending_geometry = self._pending_geometry, None
             log.info(
                 "terminal_worker_started",
                 extra={
@@ -233,18 +228,6 @@ class TerminalSessionRuntime:
                     },
                 },
             )
-        if geometry is not None:
-            # 启动期间收到的 resize 在 running 后补发；补发失败不影响启动结果，只记录。
-            try:
-                worker.resize(*geometry)
-            except TerminalSessionError as exc:
-                log.warning(
-                    "terminal_pending_resize_failed",
-                    extra={
-                        "msg": "启动期间记下的终端尺寸补发失败",
-                        "data": {"session_id": self.session_id, "code": exc.code},
-                    },
-                )
         self.notify_changed()
 
     def dispose_worker(self) -> None:
@@ -369,10 +352,26 @@ class TerminalSessionRuntime:
         elif kind == "shell":
             self._shell_event(event["event"])
         elif kind == "exit":
-            code = event.get("exit_code")
-            return self.finish(
-                "exited", "shell_exited", code if isinstance(code, int) else None, announce=True
+            reason = event["reason"]
+            if reason == "exited":
+                code = event.get("exit_code")
+                return self.finish(
+                    "exited", "shell_exited", code if isinstance(code, int) else None, announce=True
+                )
+            log.warning(
+                "terminal_session_worker_ended",
+                extra={
+                    "msg": "Terminal Worker 结束了会话",
+                    "data": {
+                        "session_id": self.session_id,
+                        "reason": reason,
+                        "message": event.get("message"),
+                    },
+                },
             )
+            return self.finish("failed", _WORKER_EXIT_FAILURES[reason], announce=True)
+        elif kind == "disconnected":
+            return self.finish("failed", "worker_disconnected", announce=True)
         elif kind == "error":
             code = event.get("code")
             if code == "input_backpressure":
@@ -387,21 +386,18 @@ class TerminalSessionRuntime:
                 )
                 with self._condition:
                     self._stream.publish("input_rejected", reason="backpressure")
-            elif code in _NONFATAL_WORKER_ERRORS:
+            else:
                 log.warning(
-                    "terminal_session_worker_nonfatal_error",
+                    "terminal_session_worker_error",
                     extra={
                         "msg": "Terminal Worker 报告非致命错误",
-                        "data": {"session_id": self.session_id, "code": code},
+                        "data": {
+                            "session_id": self.session_id,
+                            "code": code,
+                            "message": event.get("message"),
+                        },
                     },
                 )
-            else:
-                reason = (
-                    _FATAL_WORKER_ERROR_REASONS.get(code, "worker_failed")
-                    if isinstance(code, str)
-                    else "worker_failed"
-                )
-                return self.finish("failed", reason, announce=True)
         return False
 
     def _shell_event(self, event: dict[str, Any]) -> None:
@@ -464,7 +460,7 @@ class TerminalSessionRuntime:
         见 :meth:`begin_handoff`；输入仲裁见 :meth:`_admit_agent_input`。
 
         worker 不可用（含信号回执超时）只作为本次调用的错误抛出，不结束会话：会话终态只来自 worker
-        事件流（``exit`` / 致命 ``error`` / 读线程断开）与显式关闭，在命令路径上判死会误伤回执慢的
+        事件流（``exit`` / 读线程补发的 ``disconnected``）与显式关闭，在命令路径上判死会误伤回执慢的
         正常会话。
         """
         kind = input["type"]
@@ -730,23 +726,29 @@ class TerminalSessionRuntime:
         用户的程序。用户最近在打字时最多等 ``AGENT_TYPING_WAIT_SECONDS`` 让其停手，防止 Agent 的输入
         拼进用户的半行；这里只看按键时间，不需要用户侧的释放动作。没有 shell 集成的会话看不到命令
         边界，只有打字判定。
+
+        两项判定在等待的每一轮都重新做：用户刚回车启动的命令，其 ``command_started`` 往往在 Agent
+        开始等待之后才到（集成事件会唤醒等待者），只在进门时查一次会让 Agent 的输入在用户停手后
+        落进那个程序。
         """
-        command = self._observation.active_command
-        if command is not None and command.started_by == "user":
-            log.info(
-                "terminal_agent_input_rejected_user_command",
-                extra={
-                    "msg": "前台是用户启动的命令，拒绝 Agent 输入",
-                    "data": {"session_id": self.session_id, "command_number": command.number},
-                },
-            )
-            raise TerminalUserCommandRunningError(
-                f"the user started `{command.command}` in this session and it is still running; "
-                "your input would go into the user's program"
-            )
         deadline = time.monotonic() + Constant.Terminal.AGENT_TYPING_WAIT_SECONDS
         waited = False
-        while self._user_typing():
+        while True:
+            command = self._observation.active_command
+            if command is not None and command.started_by == "user":
+                log.info(
+                    "terminal_agent_input_rejected_user_command",
+                    extra={
+                        "msg": "前台是用户启动的命令，拒绝 Agent 输入",
+                        "data": {"session_id": self.session_id, "command_number": command.number},
+                    },
+                )
+                raise TerminalUserCommandRunningError(
+                    f"the user started `{command.command}` in this session and it is still "
+                    "running; your input would go into the user's program"
+                )
+            if not self._user_typing():
+                break
             waited = True
             if self._status not in _ACTIVE:
                 raise TerminalSessionStateError(f"terminal session is {self._status}")
@@ -779,27 +781,31 @@ class TerminalSessionRuntime:
     def user_input(self, data: bytes) -> UserInputResult:
         """用户原始按键：可在事件循环里直接调用，只做内存更新与非阻塞入队；从不因 Agent 被拒。
 
-        先入队、成功后才记录按键时间、来源与输入标注：背压（``TerminalWorkerBackpressureError``）或
-        worker 不可用时按键没有送达，状态必须保持原样。入队非阻塞、不与读线程交互，可在锁内进行。
-        ``starting`` 时 worker 尚未握手，抛 ``TerminalSessionStateError``。
+        先入队、成功后才记录按键时间、来源与输入标注：背压（``TerminalWorkerBackpressureError``，
+        抛给调用方提示）或 worker 已不在时按键没有送达，状态必须保持原样。入队非阻塞、不与读线程
+        交互，可在锁内进行。``starting`` 时照常入队，握手后按序发出。worker 已退出、读线程尚未补发
+        ``disconnected`` 的瞬间按会话已结束回报，不让按键无声消失。
         """
         with self._condition:
             if self._status not in _ACTIVE:
                 return "session_ended"
-            worker = self._mutable_worker()
-            worker.write({"type": "raw", "data_base64": base64.b64encode(data).decode("ascii")})
+            try:
+                self._worker.write(
+                    {"type": "raw", "data_base64": base64.b64encode(data).decode("ascii")}
+                )
+            except TerminalWorkerUnavailableError:
+                return "session_ended"
             self._user_marks.record(self._observation.buffer)
             self._user_last_input = time.monotonic()
             self._last_input_by = "user"
         return "accepted"
 
     def resize(self, rows: int, columns: int) -> None:
-        """``starting`` 时只记下最新尺寸，握手完成后由 :meth:`start` 补发。"""
+        """与用户按键同一条有序队列；``starting`` 时照常入队，握手后按序发出。"""
         with self._condition:
-            if self._status == "starting":
-                self._pending_geometry = (rows, columns)
-                return
-            worker = self._mutable_worker()
+            if self._status not in _ACTIVE:
+                raise TerminalSessionStateError(f"terminal session is {self._status}")
+            worker = self._worker
         worker.resize(rows, columns)
 
     # ------------------------------------------------------------------ 结果渲染

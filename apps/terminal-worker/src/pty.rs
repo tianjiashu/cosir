@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
-use crate::geometry::Geometry;
 use crate::containment::Containment;
+use crate::exit_watch::ChildExit;
+use crate::geometry::Geometry;
 
 /// 写入队列容量（帧）：与后端输入队列同量级，单帧不超过后端的单次输入上限（64 KiB）。
 const WRITE_QUEUE_FRAMES: usize = 64;
@@ -36,6 +37,9 @@ pub struct PtyRuntime {
     // 卡住则心跳、信号、关闭都处理不了；读线程卡住（回写查询应答）则输出不再被读走，程序写输出也
     // 阻塞、更不会读输入，形成死锁。
     writes: SyncSender<Vec<u8>>,
+    // shell 的 PID：POSIX 上退出只经它观察、不回收（`exit_status`），回收只在 `terminate` 里清理之后。
+    #[cfg(unix)]
+    pid: u32,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     containment: Mutex<Containment>,
 }
@@ -75,11 +79,11 @@ impl PtyRuntime {
             command.env(key, value);
         }
         let mut child = pair.slave.spawn_command(command)?;
-        if child.process_id().is_none() {
+        let Some(_pid) = child.process_id() else {
             let _ = child.kill();
             let _ = child.wait();
             anyhow::bail!("terminal shell pid unavailable");
-        }
+        };
         let containment = match Containment::for_session(child.as_ref()) {
             Ok(containment) => containment,
             Err(error) => {
@@ -94,6 +98,8 @@ impl PtyRuntime {
         let runtime = Arc::new(Self {
             master: Arc::new(Mutex::new(pair.master)),
             writes,
+            #[cfg(unix)]
+            pid: _pid,
             child: Mutex::new(child),
             containment: Mutex::new(containment),
         });
@@ -102,10 +108,12 @@ impl PtyRuntime {
 
     /// 按序交给写线程，不阻塞调用方；字节真正写进 PTY 的时机取决于前台程序何时读输入。
     pub fn write(&self, data: &[u8]) -> Result<(), WriteRejected> {
-        self.writes.try_send(data.to_vec()).map_err(|error| match error {
-            TrySendError::Full(_) => WriteRejected::Full,
-            TrySendError::Disconnected(_) => WriteRejected::Closed,
-        })
+        self.writes
+            .try_send(data.to_vec())
+            .map_err(|error| match error {
+                TrySendError::Full(_) => WriteRejected::Full,
+                TrySendError::Disconnected(_) => WriteRejected::Closed,
+            })
     }
 
     /// 只调整 PTY；屏幕内核由调用方在同一把屏幕锁内同步调整，二者不能分开发生。
@@ -202,15 +210,28 @@ impl PtyRuntime {
             .ok_or_else(|| anyhow::anyhow!("pty master file descriptor unavailable"))
     }
 
-    pub fn try_wait(&self) -> anyhow::Result<Option<u32>> {
-        let mut child = self
-            .child
-            .lock()
-            .map_err(|_| anyhow::anyhow!("pty child lock poisoned"))?;
-        Ok(child.try_wait()?.map(|status| status.exit_code()))
+    /// shell 已退出时返回退出状态。POSIX 上只观察、不回收：回收之后 shell 的 PID（即会话号）可能
+    /// 被复用，会话清理就会认错进程（见 `containment`）。Windows 以句柄观察，PTY 层不区分信号。
+    pub fn exit_status(&self) -> anyhow::Result<Option<ChildExit>> {
+        #[cfg(unix)]
+        {
+            Ok(crate::exit_watch::poll_exit(self.pid)?)
+        }
+        #[cfg(not(unix))]
+        {
+            let mut child = self
+                .child
+                .lock()
+                .map_err(|_| anyhow::anyhow!("pty child lock poisoned"))?;
+            Ok(child.try_wait()?.map(|status| ChildExit {
+                code: Some(status.exit_code()),
+                signal: None,
+            }))
+        }
     }
 
-    /// 结束会话里的全部进程并回收 shell。会话关闭与 shell 自己退出都走这里。
+    /// 结束会话里的全部进程并回收 shell。会话关闭与 shell 自己退出都走这里；清理在回收之前，
+    /// 所以 POSIX 上 shell 此时至多是僵尸，`kill` 打到的仍是它自己。
     pub fn terminate(&self) -> anyhow::Result<()> {
         let mut child = self
             .child
@@ -245,7 +266,11 @@ fn spawn_writer(mut writer: Box<dyn Write + Send>) -> anyhow::Result<SyncSender<
         .name("pty-writer".into())
         .spawn(move || {
             for data in queued {
-                if writer.write_all(&data).and_then(|()| writer.flush()).is_err() {
+                if writer
+                    .write_all(&data)
+                    .and_then(|()| writer.flush())
+                    .is_err()
+                {
                     return;
                 }
             }

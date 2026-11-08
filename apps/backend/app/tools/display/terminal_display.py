@@ -15,23 +15,29 @@ def build_terminal_display_data(
     command: str,
     workdir: Path,
     output: str,
-    exit_code: int,
-    timed_out: bool,
+    end: str,
+    exit_code: int | None,
+    signal: int | None,
 ) -> dict[str, Any]:
     """构造完整的终端展示数据。
 
-    命令和输出均按调用方提供的原文展示；输出保留 ANSI 控制序列。
-    本函数不执行命令、不截断输出，也不负责工具状态判断。
+    命令和输出均按调用方提供的原文展示；输出保留 ANSI 控制序列。``end`` 是执行结局
+    （``CommandEnd``），``exit_code`` / ``signal`` 只在命令自己结束时出现。本函数不执行命令、不截断
+    输出，也不负责工具状态判断。
     """
 
-    return {
+    data: dict[str, Any] = {
         "kind": "terminal-result",
         "command": command,
         "workdir": str(workdir),
         "output": output,
-        "exit_code": exit_code,
-        "timed_out": timed_out,
+        "end": end,
     }
+    if exit_code is not None:
+        data["exit_code"] = exit_code
+    if signal is not None:
+        data["signal"] = signal
+    return data
 
 
 def build_terminal_placeholder_display_data(*, command: str, workdir: Path) -> dict[str, Any]:

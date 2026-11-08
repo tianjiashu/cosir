@@ -192,24 +192,25 @@ def test_session_end_during_agent_wait_is_not_announced_twice(monkeypatch, tmp_p
 
 
 def test_worker_disconnect_fails_session_but_not_after_exit(monkeypatch, tmp_path) -> None:
-    """读线程补发的断开错误把活会话收敛为 failed；shell 已退出后到达的断开不改写终态。"""
+    """读线程补发的 ``disconnected`` 把活会话收敛为 failed；shell 已退出后到达的断开不改写终态。"""
     service, workers = make_service(monkeypatch)
     start(service, tmp_path)
-    workers[0].emit({"type": "error", "code": "WORKER_DISCONNECTED"})
+    workers[0].emit({"type": "disconnected"})
     wait_until(lambda: workers[0].closed)
     [entry] = session_entries(service, 1)
     assert (entry["status"], entry["endReason"]) == ("failed", "worker_disconnected")
 
     exited = start(service, tmp_path)
     workers[1].exit(0)
-    workers[1].emit({"type": "error", "code": "WORKER_DISCONNECTED"})
+    workers[1].emit({"type": "disconnected"})
     wait_until(lambda: workers[1].closed)
     entry = next(e for e in session_entries(service, 1) if e["sessionId"] == exited)
     assert (entry["status"], entry["exitCode"]) == ("exited", 0)
 
 
 def test_worker_unavailable_on_commands_does_not_end_session(monkeypatch, tmp_path) -> None:
-    """信号回执超时、按键时 worker 不可用只报错给调用方，会话不被判为 failed。"""
+    """信号回执超时只报错给调用方；按键时 worker 已不在按会话已结束回报（不无声丢键）。两者都不由
+    命令路径判会话失败，终态只来自 worker 事件流。"""
     service, workers = make_service(monkeypatch)
     session_id = start(service, tmp_path)
 
@@ -224,8 +225,7 @@ def test_worker_unavailable_on_commands_does_not_end_session(monkeypatch, tmp_pa
     with pytest.raises(TerminalWorkerUnavailableError):
         write(service, session_id, {"type": "signal", "signal": "interrupt"}, fast)
     workers[0].write = unavailable  # type: ignore[method-assign]
-    with pytest.raises(TerminalWorkerUnavailableError):
-        service.require(session_id, 1).user_input(b"a")
+    assert service.require(session_id, 1).user_input(b"a") == "session_ended"
     assert read(service, session_id).status == "running"
     assert not workers[0].closed
 
@@ -490,6 +490,27 @@ def test_agent_rejected_at_once_while_users_command_runs(monkeypatch, tmp_path: 
     workers[0].shell("shell_prompt", cwd="/w")
     write(service, session_id, {"type": "line", "text": "ls"}, _NO_WAIT)
     assert workers[0].writes[-1] == {"type": "line", "text": "ls"}
+
+
+def test_agent_waiting_for_the_user_is_rejected_once_their_command_starts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """用户回车后、命令开始事件到达前 Agent 进入打字等待；等待期间命令开始，必须立即拒绝，不能在
+    用户停手后把输入打进用户的程序。"""
+    monkeypatch.setattr(Constant.Terminal, "USER_TYPING_IDLE_SECONDS", 30.0)
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
+    session_id = start(service, tmp_path)
+    service.require(session_id, 1).user_input(b"vim notes\r")
+    thread, box = run_in_thread(
+        lambda: write(service, session_id, {"type": "line", "text": "ls"}, _NO_WAIT)
+    )
+    time.sleep(0.1)
+    begin = time.monotonic()
+    workers[0].shell("command_started", command="vim notes")
+    thread.join(2)
+    assert time.monotonic() - begin < 1
+    assert isinstance(box.get("error"), TerminalUserCommandRunningError)
+    assert workers[0].writes == [{"type": "raw", "data_base64": "dmltIG5vdGVzDQ=="}]
 
 
 def test_agent_may_type_into_its_own_running_command(monkeypatch, tmp_path: Path) -> None:
@@ -758,17 +779,16 @@ def test_handshake_does_not_block_projection_or_input(monkeypatch, tmp_path, slo
     began = time.monotonic()
     [entry] = session_entries(service, 1)
     assert entry["status"] == "starting"
-    with pytest.raises(TerminalSessionStateError):
-        service.require(session_id, 1).user_input(b"x")
+    # 启动期间的按键与尺寸照常交给 worker 的有序队列（握手后才发出，见 worker 客户端用例）。
+    assert service.require(session_id, 1).user_input(b"x") == "accepted"
     service.require(session_id, 1).resize(30, 100)
     assert time.monotonic() - began < 1
-    assert workers[0].writes == [] and workers[0].resizes == []
+    assert workers[0].resizes == [(30, 100)]
+    assert [w["type"] for w in workers[0].writes] == ["raw"]
     slow_start.release.set()
     thread.join(2)
     assert box["result"] == session_id
     assert session_entries(service, 1)[0]["status"] == "running"
-    # 启动期间记下的尺寸在握手完成后补发。
-    assert workers[0].resizes == [(30, 100)]
 
 
 def test_close_during_handshake_disposes_after_start_returns(

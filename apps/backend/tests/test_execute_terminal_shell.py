@@ -185,5 +185,5 @@ def test_local_backend_does_not_inherit_backend_stdin(tmp_path: Path) -> None:
         for fd in (saved_stdin, read_end, write_end):
             os.close(fd)
 
-    assert result.timed_out is False
+    assert result.end == "exited"
     assert result.exit_code == 0

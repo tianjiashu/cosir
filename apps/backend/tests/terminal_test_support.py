@@ -123,7 +123,7 @@ class FakeWorker:
         self.emit({"type": "shell", "event": {"kind": kind, **fields}})
 
     def exit(self, code: int = 0) -> None:
-        self.emit({"type": "exit", "exit_code": code})
+        self.emit({"type": "exit", "reason": "exited", "exit_code": code})
 
 
 class ReadyWorker(FakeWorker):

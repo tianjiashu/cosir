@@ -74,7 +74,7 @@
 | content-search-results | pattern、path、matches[{path,line,content,is_match}]、page、total_rows、match_count、scanned_files、skipped_files |
 | file-list | files[{path}]、pattern、path、page、match_count |
 | directory-list | path、entries、page、total_entries |
-| terminal-result | command、workdir、output、exit_code、timed_out；后台占位只有 command/workdir，不能把缺失 exit_code 当作零 |
+| terminal-result | command、workdir、output、end（exited/signaled/timed_out/cancelled/start_failed/worker_failed），exit_code 只在 exited、signal 只在 signaled 时出现；后台占位只有 command/workdir，不能把缺失 exit_code 当作零 |
 | terminal-session | list: session_count；start/close: session_id/status/exit_code（start 可含 initial_cwd/shell_kind/label）；read/write/handoff: session_id/status/lines/screen/wait_result，可含 input_summary |
 | web-search-results | query、results[{title,url}]，不含网页正文 |
 | web-extract-urls | partial（必有 boolean）、urls[{url}]；URL 可能包含失败页面，URL 数不是成功页数；全部失败走错误观察，不出现此 kind |

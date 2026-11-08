@@ -28,6 +28,14 @@ function exitCode(data: Record<string, unknown>): number | undefined {
   return typeof data.exit_code === "number" ? data.exit_code : undefined;
 }
 
+/** 命令自己结束时的结局文案；结局事实是后端的 `end`，前端不从退出码或工具状态反推。 */
+function endedLabel(data: Record<string, unknown>): string {
+  if (data.end === "timed_out") return "命令超时";
+  if (data.end === "signaled") return `被信号 ${String(data.signal)} 结束`;
+  const code = exitCode(data);
+  return code ? `非零退出 ${code}` : "已结束";
+}
+
 /**
  * 「命令还活着」：转到后台后占位是 `pending`，但输出仍在追加，展开体要跟着它而不是工具状态。
  * `background` 是所有后台结果共用的事实（part 级），不读 `display_data`。
@@ -108,7 +116,7 @@ function TerminalReaderOverlay({ data, context }: { data: Record<string, unknown
   return <><span ref={anchor} hidden /><TerminalOutputReader finalFocus={finalFocus} taskId={taskId} toolCallId={toolCallId} output={rawOutput(data)}
     links={{ getWorkspaceRoot: () => links.workspaceRoot, onOpenLink: links.open }} open={open} onOpenChange={setOpen}
     command={text(data.command) ?? text(context.args.command)}
-    statusLabel={context.inherited && (artifact.backendStatus === "pending" || artifact.backendStatus === "running") ? "继承时未结束" : commandLive(context) ? "运行中" : context.workStatus === "settling" ? "后台结果收尾中" : artifact.backendStatus === "cancelled" ? "已取消" : data.timed_out === true ? "命令超时" : artifact.backendStatus === "failed" ? "执行失败" : exitCode(data) ? `非零退出 ${exitCode(data)}` : "已结束"} /></>;
+    statusLabel={context.inherited && (artifact.backendStatus === "pending" || artifact.backendStatus === "running") ? "继承时未结束" : commandLive(context) ? "运行中" : context.workStatus === "settling" ? "后台结果收尾中" : artifact.backendStatus === "cancelled" ? "已取消" : data.end === "timed_out" ? "命令超时" : artifact.backendStatus === "failed" ? "执行失败" : endedLabel(data)} /></>;
 }
 
 /**
@@ -124,11 +132,12 @@ function TerminalStopAction({ taskId, toolCallId }: CallViewContext) {
 /**
  * `terminal-result`（`execute_terminal`）：标题是模型写的意图（`heading.title`），命令只在详情显示，这里只负责
  * 结果——元信息只在退出码非 0 时给中性的 `exit N`：探测命令的非零退出是常态，不当警告；`exit 0` 与成功同义不显示。
+ * 被信号结束给 `signal N`；超时、取消、没能启动、结局未知没有退出码，由工具状态与错误短提示表达。
  * 后台命令的输出、阅读器与停止都在看板，时间线由 `resolveCallView` 收成一行。
  */
 export const terminalResultView: CallView = (data, context) => {
   const code = exitCode(data);
-  const meta = code ? `exit ${code}` : undefined;
+  const meta = data.end === "signaled" ? `signal ${String(data.signal)}` : code ? `exit ${code}` : undefined;
   const canCancel = context.interactive && !context.taskCancelling && commandLive(context);
   return {
     meta,

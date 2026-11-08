@@ -82,8 +82,12 @@ fn output(events: &[Value]) -> String {
         .iter()
         .filter(|event| event["type"] == "output")
         .map(|event| {
-            String::from_utf8(BASE64.decode(event["data_base64"].as_str().unwrap()).unwrap())
-                .unwrap()
+            String::from_utf8(
+                BASE64
+                    .decode(event["data_base64"].as_str().unwrap())
+                    .unwrap(),
+            )
+            .unwrap()
         })
         .collect()
 }
@@ -96,7 +100,10 @@ fn runs_a_command_and_reports_handshake_output_and_exit() {
     assert_eq!(events[0]["mode"], "exec");
     assert!(events[0].get("pty_kind").is_none());
     assert_eq!(output(&events), "hello\n");
-    assert_eq!(events.last().unwrap(), &json!({"type": "exit", "exit_code": 4}));
+    assert_eq!(
+        events.last().unwrap(),
+        &json!({"type": "exit", "reason": "exited", "exit_code": 4})
+    );
 }
 
 #[test]
@@ -110,7 +117,7 @@ fn shutdown_stops_the_running_command() {
     // sleep 收到 HUP 即退出，不用等满宽限期。
     assert_eq!(
         events.last().unwrap(),
-        &json!({"type": "exit", "exit_code": null, "signal": libc::SIGHUP})
+        &json!({"type": "exit", "reason": "stopped", "signal": libc::SIGHUP})
     );
     assert!(started.elapsed() < Duration::from_secs(5));
 }
@@ -123,6 +130,23 @@ fn closing_stdin_stops_the_command_like_a_killed_backend() {
     drop(worker.stdin.take());
     let events = worker.events();
     assert_eq!(events.last().unwrap()["type"], "exit");
+    assert_eq!(events.last().unwrap()["reason"], "stopped");
+}
+
+/// 命令先自己结束、停止请求后到：结局仍是命令自己的退出，停止不改写它。留下一个忽略 HUP / TERM 的
+/// 进程，让 worker 在清理宽限期里还活着，停止请求才能在命令退出之后、`exit` 之前到达。
+#[test]
+fn a_stop_that_arrives_after_the_command_exited_keeps_the_exit() {
+    let mut worker = Worker::start(exec("(trap '' HUP TERM; exec sleep 5) & echo done"));
+    assert_eq!(worker.next_event()["type"], "handshake");
+    assert_eq!(output(&[worker.next_event()]), "done\n");
+    std::thread::sleep(Duration::from_millis(100));
+    worker.send(json!({"type": "shutdown"}));
+    let events = worker.events();
+    assert_eq!(
+        events.last().unwrap(),
+        &json!({"type": "exit", "reason": "exited", "exit_code": 0})
+    );
 }
 
 #[test]
@@ -139,7 +163,10 @@ fn input_frames_are_rejected_without_stopping_the_command() {
         && event["request_id"] == "r1"
         && event["status"] == "unsupported"));
     assert_eq!(output(&events), "done\n");
-    assert_eq!(events.last().unwrap(), &json!({"type": "exit", "exit_code": 0}));
+    assert_eq!(
+        events.last().unwrap(),
+        &json!({"type": "exit", "reason": "exited", "exit_code": 0})
+    );
 }
 
 #[test]
@@ -149,7 +176,8 @@ fn a_command_that_cannot_start_is_reported_after_the_handshake() {
     }));
     let events = worker.events();
     assert_eq!(events[0]["mode"], "exec");
-    assert_eq!(events[1]["type"], "error");
-    assert_eq!(events[1]["code"], "EXEC_START_FAILED");
+    assert_eq!(events[1]["type"], "exit");
+    assert_eq!(events[1]["reason"], "start_failed");
+    assert!(events[1]["message"].as_str().is_some_and(|m| !m.is_empty()));
     assert_eq!(events.len(), 2);
 }

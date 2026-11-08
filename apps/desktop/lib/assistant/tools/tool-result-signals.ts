@@ -5,7 +5,7 @@ export function toolResultSignal(data: TransportToolDisplayData | null | undefin
   if (!data) return null;
   switch (data.kind) {
     case "terminal-result":
-      return data.timed_out === true ? "超时" : null;
+      return data.end === "timed_out" ? "超时" : null;
     case "image-read":
       return Array.isArray(data.failures) && data.failures.length > 0 ? "部分图片读取失败" : null;
     case "browser-page":

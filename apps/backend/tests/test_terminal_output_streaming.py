@@ -138,8 +138,9 @@ def test_terminal_display_preserves_raw_command_and_output() -> None:
         command="token=command-secret",
         workdir=Path("/workspace"),
         output=raw_output,
+        end="exited",
         exit_code=0,
-        timed_out=False,
+        signal=None,
     )
 
     assert display_data["output"] == raw_output
@@ -157,11 +158,7 @@ def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
             pass
 
         def execute(self, *_args: Any, **_kwargs: Any) -> ExecutionResult:
-            return ExecutionResult(
-                output=raw_output,
-                exit_code=0,
-                timed_out=False,
-            )
+            return ExecutionResult(end="exited", output=raw_output, exit_code=0)
 
     monkeypatch.setattr(execute_terminal_module, "LocalExecutionBackend", Backend)
     observation = ExecuteTerminalTool().execute(
@@ -451,7 +448,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
             status="completed",
             display_data={
                 "kind": "terminal-result", "command": "make", "workdir": "/w",
-                "output": "before after", "exit_code": 0, "timed_out": False,
+                "output": "before after", "end": "exited", "exit_code": 0,
             },
         )
     )

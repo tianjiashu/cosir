@@ -8,6 +8,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -69,35 +70,55 @@ def test_timeout_stops_the_command_gently_first(tmp_path: Path) -> None:
         0.5,
     )
 
-    assert result.timed_out and not result.cancelled and result.exit_code == -1
+    assert result.end == "timed_out" and result.exit_code is None
     assert "ready" in result.output
     assert marker.read_text().strip() == "got-hup"
 
 
-def test_a_command_killed_by_a_signal_reports_a_negative_exit_code(tmp_path: Path) -> None:
+def test_a_command_killed_by_a_signal_reports_the_signal(tmp_path: Path) -> None:
     result = LocalExecutionBackend().execute("kill -TERM $$", str(tmp_path), 10)
 
-    assert result.exit_code == -signal.SIGTERM
-    assert not result.timed_out and not result.cancelled
+    assert result.end == "signaled"
+    assert result.signal == signal.SIGTERM and result.exit_code is None
 
 
-def test_stop_before_the_command_starts_still_cancels_it(tmp_path: Path) -> None:
+def test_a_command_killed_by_sighup_is_not_mistaken_for_a_stop(tmp_path: Path) -> None:
+    """SIGHUP 的旧编码是 -1，与「被停止」的占位值相撞；现在结局与信号各自独立。"""
+    result = LocalExecutionBackend().execute("kill -HUP $$", str(tmp_path), 10)
+
+    assert result.end == "signaled" and result.signal == signal.SIGHUP
+
+
+def test_stop_before_the_command_starts_never_starts_it(tmp_path: Path) -> None:
     marker = tmp_path / "ran"
     backend = LocalExecutionBackend()
     backend.stop()
 
-    result = backend.execute(f"sleep 1; touch {marker}", str(tmp_path), 30)
+    result = backend.execute(f"touch {marker}", str(tmp_path), 30)
 
-    assert result.cancelled and result.exit_code == -1
-    time.sleep(1.2)
+    assert result.end == "cancelled"
+    time.sleep(0.3)
     assert not marker.exists()
+
+
+def test_a_stop_after_the_command_exited_keeps_its_exit(tmp_path: Path) -> None:
+    """命令已自己结束、worker 还在清理它留下的进程时才到的停止，不把结局改写成取消。"""
+    backend = LocalExecutionBackend()
+    threading.Timer(0.3, backend.stop).start()
+
+    result = backend.execute(
+        "(trap '' HUP TERM; exec sleep 5) & echo done", str(tmp_path), 30
+    )
+
+    assert result.end == "exited" and result.exit_code == 0
+    assert "done" in result.output
 
 
 def test_a_missing_working_directory_is_a_start_failure(tmp_path: Path) -> None:
     result = LocalExecutionBackend().execute("echo hi", str(tmp_path / "missing"), 10)
 
-    assert result.exit_code == -1
-    assert result.output.startswith("failed to start command:")
+    assert result.end == "start_failed"
+    assert result.failure and result.exit_code is None
 
 
 def test_command_is_cleaned_up_when_the_backend_process_group_is_killed(tmp_path: Path) -> None:

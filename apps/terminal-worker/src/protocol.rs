@@ -232,6 +232,22 @@ pub struct PtyHandshake {
     pub capabilities: Vec<&'static str>,
 }
 
+/// worker 为什么结束：`exit` 帧唯一的结局事实，后端只按它判定终态，不从错误帧或自己的标志推断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitReason {
+    /// 命令或 shell 自己结束（带退出码或信号）。
+    Exited,
+    /// 后端要求停止（`shutdown` 帧或关闭 stdin），且先于命令自己结束生效。
+    Stopped,
+    /// 超过时限收不到心跳，worker 自行停止。
+    HeartbeatTimeout,
+    /// 执行模式：命令没能启动（`message` 写明原因），什么也没执行。
+    StartFailed,
+    /// worker 自身故障（控制帧非法、PTY 读写或等待失败），`message` 只供日志排查。
+    Failed,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WorkerEvent {
@@ -253,8 +269,9 @@ pub enum WorkerEvent {
     Shell {
         event: serde_json::Value,
     },
-    /// `input_rejected` / `resize_rejected` 为非致命拒绝，worker 继续运行；
-    /// 其余大写错误码伴随终止。`message` 只供日志排查，不承载契约语义。
+    /// 非致命拒绝或诊断，从不代表终态（终态只有 `exit`）：`input_rejected`、`input_backpressure`、
+    /// `resize_rejected`、`already_started`、`query_response_failed`、`cleanup_failed`。
+    /// `message` 只供日志排查，不承载契约语义。
     Error {
         code: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -265,12 +282,17 @@ pub enum WorkerEvent {
         status: &'static str,
         reason: Option<&'static str>,
     },
-    /// `signal` 只在执行模式、且命令被信号结束时出现（POSIX）；会话模式的退出码沿用 PTY 层的
-    /// 映射（被信号结束记为 1）。
+    /// 握手之后的最后一个事件，每条结束路径恰好一次（只有 stdout 已断开时发不出）。退出码与信号
+    /// 只在命令或 shell 确实结束时出现（`stopped` 也会带上被停下时的状态）；Windows 会话模式只有
+    /// 退出码。
     Exit {
+        reason: ExitReason,
+        #[serde(skip_serializing_if = "Option::is_none")]
         exit_code: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         signal: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
 }
 
@@ -307,7 +329,8 @@ pub fn encode_event(event: &WorkerEvent) -> anyhow::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_event, read_control_frame, ControlFrame, PtyHandshake, WorkerEvent, MAX_FRAME_BYTES,
+        encode_event, read_control_frame, ControlFrame, ExitReason, PtyHandshake, WorkerEvent,
+        MAX_FRAME_BYTES,
     };
     use std::io::Cursor;
 
@@ -407,19 +430,40 @@ mod tests {
     #[test]
     fn encodes_exit_event_with_big_endian_length_prefix() {
         let frame = encode_event(&WorkerEvent::Exit {
+            reason: ExitReason::Exited,
             exit_code: Some(0),
             signal: None,
+            message: None,
         })
         .expect("event");
         let size = u32::from_be_bytes(frame[..4].try_into().expect("length prefix")) as usize;
         assert_eq!(size, frame.len() - 4);
-        assert_eq!(&frame[4..], br#"{"type":"exit","exit_code":0}"#);
-        let signaled = encode_event(&WorkerEvent::Exit {
+        assert_eq!(
+            &frame[4..],
+            br#"{"type":"exit","reason":"exited","exit_code":0}"#
+        );
+        let stopped = encode_event(&WorkerEvent::Exit {
+            reason: ExitReason::Stopped,
             exit_code: None,
             signal: Some(15),
+            message: None,
         })
         .expect("event");
-        assert_eq!(&signaled[4..], br#"{"type":"exit","exit_code":null,"signal":15}"#);
+        assert_eq!(
+            &stopped[4..],
+            br#"{"type":"exit","reason":"stopped","signal":15}"#
+        );
+        let failed = encode_event(&WorkerEvent::Exit {
+            reason: ExitReason::StartFailed,
+            exit_code: None,
+            signal: None,
+            message: Some("no such file".into()),
+        })
+        .expect("event");
+        assert_eq!(
+            &failed[4..],
+            br#"{"type":"exit","reason":"start_failed","message":"no such file"}"#
+        );
     }
 
     #[test]
@@ -486,7 +530,13 @@ mod input_tests {
     fn text_sends_printable_characters_without_enter() {
         let input: TerminalInput = serde_json::from_str(r#"{"type":"text","text":":wq"}"#).unwrap();
         assert_eq!(encode_input(input, false).unwrap(), b":wq");
-        assert!(encode_input(TerminalInput::Text { text: String::new() }, false).is_err());
+        assert!(encode_input(
+            TerminalInput::Text {
+                text: String::new()
+            },
+            false
+        )
+        .is_err());
         for text in ["q\r", "\u{1b}", "\t"] {
             assert!(encode_input(TerminalInput::Text { text: text.into() }, false).is_err());
         }
@@ -641,13 +691,10 @@ mod input_tests {
             br#"{"type":"error","code":"input_rejected","message":"bad"}"#
         );
         let frame = encode_event(&WorkerEvent::Error {
-            code: "PTY_WRITE_FAILED",
+            code: "cleanup_failed",
             message: None,
         })
         .unwrap();
-        assert_eq!(
-            &frame[4..],
-            br#"{"type":"error","code":"PTY_WRITE_FAILED"}"#
-        );
+        assert_eq!(&frame[4..], br#"{"type":"error","code":"cleanup_failed"}"#);
     }
 }

@@ -163,8 +163,8 @@ test("A10 a block losing its always-visible reason hands focus to the heading", 
 });
 
 test("A10 a focused control unmounting with its tool never blocks automatic folding", async ({ page, request }) => {
-  const display = { kind: "terminal-result", command: "sleep 1", workdir: "/w", output: "", exit_code: null, timed_out: false };
-  const run = (status: "running" | "completed") => toolCallPart("term", "execute_terminal", { status, args: { command: "sleep 1" }, display_data: status === "completed" ? { ...display, exit_code: 0 } : display });
+  const display = { kind: "terminal-result", command: "sleep 1", workdir: "/w", output: "" };
+  const run = (status: "running" | "completed") => toolCallPart("term", "execute_terminal", { status, args: { command: "sleep 1" }, display_data: status === "completed" ? { ...display, end: "exited", exit_code: 0 } : display });
   const wait = { toolCallId: "term", kind: "terminal_command", label: "sleep", status: "running", startedAt: "2026-01-01T00:00:00Z", endedAt: null };
   await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: [], foregroundWaits: [wait] } });
   await seedState(request, 42, state([text("进展"), run("running")]));

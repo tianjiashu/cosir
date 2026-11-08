@@ -1,5 +1,6 @@
 mod containment;
 mod exec;
+mod exit_watch;
 mod geometry;
 mod io;
 mod lifecycle;

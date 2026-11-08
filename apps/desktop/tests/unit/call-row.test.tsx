@@ -128,11 +128,12 @@ describe("CallRow kind 视图", () => {
 
   it.each(["failed", "cancelled"] as const)("%s 保留实际终端输出的展开入口", (backendStatus) => {
     const html = render({presentation: "activity",  backendStatus, error: "已停止", display_data: {
-      kind: "terminal-result", command: "make", output: "partial", exit_code: -1,
+      kind: "terminal-result", command: "make", output: "partial", end: backendStatus === "failed" ? "timed_out" : "cancelled",
     } }, { toolName: "execute_terminal" });
     expect(html).not.toContain('data-terminal-viewport="true"');
     expect(html).toContain("已停止");
-    expect(html).toContain("exit -1");
+    // 被停下的命令没有退出码：不再显示旧的 -1 占位。
+    expect(html).not.toContain("exit -1");
   });
 
   it("未知 kind 不崩溃、没有元信息也不可展开", () => {
@@ -150,10 +151,16 @@ describe("CallRow kind 视图", () => {
     expect(html).not.toContain('data-terminal-viewport="true"');
   });
 
+  it("被信号结束的命令显示信号而不是退出码", () => {
+    const html = render({ display_data: { kind: "terminal-result", command: "./server", output: "", end: "signaled", signal: 9 } }, { toolName: "execute_terminal" });
+    expect(html).toContain("signal 9");
+    expect(html).not.toContain("exit ");
+  });
+
   it("命令运行中与结束后都默认折叠（没有用户覆盖时）", () => {
     const running = render({presentation: "activity",  backendStatus: "running", display_data: { kind: "terminal-result", command: "make", output: "building" } });
     expect(running).not.toContain('data-terminal-viewport="true"');
-    const done = render({ display_data: { kind: "terminal-result", command: "make", output: "built", exit_code: 0 } });
+    const done = render({ display_data: { kind: "terminal-result", command: "make", output: "built", end: "exited", exit_code: 0 } });
     expect(done).not.toContain('data-terminal-viewport="true"');
     expect(done).not.toContain("exit 0");
   });

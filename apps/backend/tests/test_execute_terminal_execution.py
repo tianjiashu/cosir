@@ -34,8 +34,9 @@ class _Command:
         assert self.release.wait(5)
         if self.error is not None:
             raise self.error
-        cancelled = self.stopped.is_set()
-        return ExecutionResult(command, -1 if cancelled else 0, False, cancelled)
+        if self.stopped.is_set():
+            return ExecutionResult(end="cancelled", output=command)
+        return ExecutionResult(end="exited", output=command, exit_code=0)
 
     def stop(self) -> None:
         self.stopped.set()

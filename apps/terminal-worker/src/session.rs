@@ -8,11 +8,13 @@ use std::time::{Duration, Instant};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 
+use crate::exit_watch::ChildExit;
 use crate::geometry::Geometry;
 use crate::io::SharedFrameWriter;
 use crate::lifecycle::LifecycleArbiter;
 use crate::protocol::{
-    encode_input, ControlFrame, KeyName, PtyHandshake, WorkerEvent, MAX_OUTPUT_CHUNK_BYTES,
+    encode_input, ControlFrame, ExitReason, KeyName, PtyHandshake, WorkerEvent,
+    MAX_OUTPUT_CHUNK_BYTES,
 };
 use crate::pty::{PtyRuntime, TerminalControlResult, WriteRejected};
 use crate::shell_integration::{ShellLaunch, ShellParser};
@@ -29,7 +31,7 @@ enum InternalEvent {
     PtyOutputEof,
     PtyOutputReadFailed,
     BackendOutputFailed,
-    ChildExited(u32),
+    ChildExited(ChildExit),
     ChildWaitFailed,
 }
 
@@ -91,11 +93,12 @@ pub fn run(
     let mut lifecycle = LifecycleArbiter::running();
     loop {
         if last_heartbeat.elapsed() >= HEARTBEAT_TIMEOUT {
-            let _ = output.send(&WorkerEvent::Error {
-                code: "HEARTBEAT_TIMEOUT",
-                message: None,
-            });
-            terminate_and_exit(&runtime, &output, &mut lifecycle, None);
+            end_session(
+                &runtime,
+                &output,
+                &mut lifecycle,
+                Some((ExitReason::HeartbeatTimeout, None)),
+            );
             return Ok(());
         }
 
@@ -123,11 +126,12 @@ pub fn run(
                             });
                         }
                         Err(WriteRejected::Closed) => {
-                            let _ = output.send(&WorkerEvent::Error {
-                                code: "PTY_WRITE_FAILED",
-                                message: None,
-                            });
-                            terminate_and_exit(&runtime, &output, &mut lifecycle, None);
+                            end_session(
+                                &runtime,
+                                &output,
+                                &mut lifecycle,
+                                Some((ExitReason::Failed, Some("pty write failed"))),
+                            );
                             return Ok(());
                         }
                     }
@@ -178,22 +182,37 @@ pub fn run(
                 },
                 ControlFrame::Heartbeat => last_heartbeat = Instant::now(),
                 ControlFrame::Shutdown => {
-                    terminate_and_exit(&runtime, &output, &mut lifecycle, None);
+                    end_session(
+                        &runtime,
+                        &output,
+                        &mut lifecycle,
+                        Some((ExitReason::Stopped, None)),
+                    );
                     return Ok(());
                 }
                 ControlFrame::StartSession { .. } | ControlFrame::StartExec { .. } => {
                     let _ = output.send(&WorkerEvent::Error {
-                        code: "START_ALREADY_COMPLETE",
+                        code: "already_started",
                         message: None,
                     });
                 }
             },
             Ok(InternalEvent::BackendEof) => {
-                terminate_and_exit(&runtime, &output, &mut lifecycle, None);
+                end_session(
+                    &runtime,
+                    &output,
+                    &mut lifecycle,
+                    Some((ExitReason::Stopped, None)),
+                );
                 return Ok(());
             }
             Ok(InternalEvent::ControlFailed) => {
-                terminate_and_exit(&runtime, &output, &mut lifecycle, None);
+                end_session(
+                    &runtime,
+                    &output,
+                    &mut lifecycle,
+                    Some((ExitReason::Failed, Some("invalid control frame"))),
+                );
                 return Ok(());
             }
             Ok(InternalEvent::BackendOutputFailed) => {
@@ -204,34 +223,40 @@ pub fn run(
                 lifecycle.observe_output_eof();
             }
             Ok(InternalEvent::PtyOutputReadFailed) => {
-                let _ = output.send(&WorkerEvent::Error {
-                    code: "PTY_OUTPUT_READ_FAILED",
-                    message: None,
-                });
-                terminate_and_exit(&runtime, &output, &mut lifecycle, None);
+                end_session(
+                    &runtime,
+                    &output,
+                    &mut lifecycle,
+                    Some((ExitReason::Failed, Some("pty output read failed"))),
+                );
                 return Ok(());
             }
-            Ok(InternalEvent::ChildExited(code)) => {
-                lifecycle.observe_child_exit(code);
+            Ok(InternalEvent::ChildExited(status)) => {
+                lifecycle.observe_child_exit(status);
             }
             Ok(InternalEvent::ChildWaitFailed) => {
-                let _ = output.send(&WorkerEvent::Error {
-                    code: "PTY_WAIT_FAILED",
-                    message: None,
-                });
-                terminate_and_exit(&runtime, &output, &mut lifecycle, None);
+                end_session(
+                    &runtime,
+                    &output,
+                    &mut lifecycle,
+                    Some((ExitReason::Failed, Some("waiting for the shell failed"))),
+                );
                 return Ok(());
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
-                terminate_and_exit(&runtime, &output, &mut lifecycle, None);
+                end_session(
+                    &runtime,
+                    &output,
+                    &mut lifecycle,
+                    Some((ExitReason::Failed, Some("internal event channel closed"))),
+                );
                 return Ok(());
             }
         }
 
         if lifecycle.exit_ready() {
-            let code = lifecycle.exit_status();
-            terminate_and_exit(&runtime, &output, &mut lifecycle, code);
+            end_session(&runtime, &output, &mut lifecycle, None);
             return Ok(());
         }
     }
@@ -246,7 +271,10 @@ fn spawn_pty_reader(
     mut shell_parser: ShellParser,
 ) {
     thread::spawn(move || {
-        let mut query_failed = false;
+        // 查询应答（光标位置、设备属性等）与输入共用写入队列；队列满时只丢这一次应答，之后照常
+        // 应答——永久停答会让依赖查询的程序（prompt_toolkit、crossterm 类 TUI）一直等下去。告警只发
+        // 一次，避免背压期间刷屏。
+        let mut query_failure_reported = false;
         let mut buffer = vec![0_u8; MAX_OUTPUT_CHUNK_BYTES];
         loop {
             match reader.read(&mut buffer) {
@@ -264,10 +292,10 @@ fn spawn_pty_reader(
                     for (index, byte) in buffer[..size].iter().enumerate() {
                         screen.advance(*byte);
                         for reply in screen.take_replies() {
-                            if !query_failed && runtime.write(reply.as_bytes()).is_err() {
-                                query_failed = true;
+                            if runtime.write(reply.as_bytes()).is_err() && !query_failure_reported {
+                                query_failure_reported = true;
                                 let _ = output.send(&WorkerEvent::Error {
-                                    code: "PTY_QUERY_RESPONSE_FAILED",
+                                    code: "query_response_failed",
                                     message: None,
                                 });
                             }
@@ -355,31 +383,35 @@ fn publish_screen(screen: &mut TerminalScreen, output: &SharedFrameWriter) -> an
     Ok(())
 }
 
-fn terminate_and_exit(
+/// 会话的唯一收尾：`stop` 为这次停止的原因（shell 已先退出时仲裁器不改写结局），清理整个会话、
+/// 回收 shell，再发唯一的 `exit`。清理失败只是诊断，不改变结局。每个调用点随后都结束主循环。
+fn end_session(
     runtime: &PtyRuntime,
     output: &SharedFrameWriter,
-    lifecycle: &mut LifecycleArbiter<u32>,
-    exit_code: Option<u32>,
+    lifecycle: &mut LifecycleArbiter,
+    stop: Option<(ExitReason, Option<&str>)>,
 ) {
-    if !lifecycle.begin_closing() {
-        return;
+    if let Some((reason, message)) = stop {
+        lifecycle.request_stop(reason, message.map(str::to_owned));
     }
     if runtime.terminate().is_err() {
         let _ = output.send(&WorkerEvent::Error {
-            code: "PTY_CLEANUP_FAILED",
+            code: "cleanup_failed",
             message: None,
         });
     }
-    if lifecycle.publish_exit() {
+    if let Some((reason, status, message)) = lifecycle.publish_exit() {
         let _ = output.send(&WorkerEvent::Exit {
-            exit_code,
-            signal: None,
+            reason,
+            exit_code: status.and_then(|status| status.code),
+            signal: status.and_then(|status| status.signal),
+            message,
         });
     }
 }
 
 fn pty_read_is_terminal_eof(runtime: &PtyRuntime, error: &std::io::Error) -> bool {
-    if runtime.try_wait().ok().flatten().is_some() {
+    if runtime.exit_status().ok().flatten().is_some() {
         return true;
     }
     #[cfg(unix)]
@@ -402,9 +434,9 @@ fn pty_read_is_terminal_eof(runtime: &PtyRuntime, error: &std::io::Error) -> boo
 
 fn spawn_child_watcher(runtime: Arc<PtyRuntime>, sender: Sender<InternalEvent>) {
     thread::spawn(move || loop {
-        match runtime.try_wait() {
-            Ok(Some(code)) => {
-                let _ = sender.send(InternalEvent::ChildExited(code));
+        match runtime.exit_status() {
+            Ok(Some(status)) => {
+                let _ = sender.send(InternalEvent::ChildExited(status));
                 return;
             }
             Ok(None) => thread::sleep(Duration::from_millis(50)),
@@ -457,12 +489,7 @@ mod tests {
     #[test]
     fn handshake_advertises_input_keys_and_platform_keys() {
         let capabilities = capabilities();
-        for required in [
-            "input_keys",
-            "key_up",
-            "key_enter",
-            "key_ctrl_c",
-        ] {
+        for required in ["input_keys", "key_up", "key_enter", "key_ctrl_c"] {
             assert!(capabilities.contains(&required), "{required}");
         }
         assert_eq!(capabilities.contains(&"key_ctrl_d"), !cfg!(windows));

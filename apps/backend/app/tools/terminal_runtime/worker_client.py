@@ -54,7 +54,9 @@ class ProcessTerminalWorker:
     """基于长度前缀 JSON 控制帧的 Terminal Worker client。
 
     Worker 进程必须先返回 ``handshake``，之后发送 ``output``、``screen``、``shell``、``error``、
-    ``exit`` 事件。二进制 PTY 数据使用 base64 字段；shell/PTY 资源由 worker 管理。
+    ``exit`` 事件。二进制 PTY 数据使用 base64 字段；shell/PTY 资源由 worker 管理。``exit`` 是唯一的
+    终态事件（``reason`` 说明结局），``error`` 从不代表终态；worker 没发 ``exit`` 就断开时，本对象
+    补发 ``disconnected``。
 
     事件回调在本对象的读线程内同步执行：回调方不得在其中做阻塞 IO（会话收尾、外部通知由
     service 移到其他线程）。
@@ -151,9 +153,9 @@ class ProcessTerminalWorker:
     ) -> None:
         """以执行模式启动 worker（一条一次性命令：管道、无 stdin）并等待握手。
 
-        ``on_event`` 接收 ``output`` / ``error`` / ``exit`` 事件；命令启动失败是 ``error``
-        ``EXEC_START_FAILED``（握手之后才启动命令，所以不会表现为 worker 起不来），``exit`` 是
-        最后一个事件。``raw_args`` 只在 Windows 上有意义：参数按原文拼进命令行。
+        ``on_event`` 接收 ``output`` / ``error`` / ``exit`` / ``disconnected`` 事件；命令启动失败是
+        ``exit{reason: start_failed}``（握手之后才启动命令，所以不会表现为 worker 起不来），``exit``
+        是最后一个事件。``raw_args`` 只在 Windows 上有意义：参数按原文拼进命令行。
         """
 
         self._launch(
@@ -302,12 +304,14 @@ class ProcessTerminalWorker:
         """非阻塞入队；队列满抛背压错误，调用方（含事件循环里的 WS）不会被阻塞。
 
         write / resize / signal 都经这条队列由写线程按序发出，保证相对顺序；heartbeat 与
-        shutdown 是控制面帧，直接写。
+        shutdown 是控制面帧，直接写。写线程在握手成功后才启动，所以启动与握手期间入队的帧（会话
+        启动时用户的预输入与尺寸）在握手后按序发出；握手失败时 ``close`` 丢弃它们。只有关闭之后或
+        worker 已退出才拒绝。
         """
 
         process = self._process
-        if process is None or process.poll() is not None or not self._handshake_valid:
-            raise TerminalWorkerUnavailableError("terminal worker is not ready")
+        if self._stop_event.is_set() or (process is not None and process.poll() is not None):
+            raise TerminalWorkerUnavailableError("terminal worker is not running")
         payload = self._encode_frame(message)
         with self._input_queue_lock:
             queued_bytes = self._input_queue_bytes + len(payload)
@@ -431,10 +435,10 @@ class ProcessTerminalWorker:
     ) -> None:
         """后台读取 worker 事件并转发给 session service。
 
-        shell 的结束只以 worker 自己发出的 ``exit`` 为准（worker 的每条退出路径都恰好发一次）。
-        读线程在未被 ``close`` 时结束，说明 worker 异常断开、协议违约或事件回调出错，一律补发
-        致命错误 ``WORKER_DISCONNECTED``，由会话收敛为 ``failed``；不能伪装成 ``exit``，否则崩溃会被
-        记成 shell 正常退出。worker 已发 exit 后 EOF 也会补发，会话终态已定、迁移幂等，不改写结果。
+        结局只以 worker 自己发出的 ``exit`` 为准（worker 的每条退出路径都恰好发一次）。读线程在未被
+        ``close`` 时结束，说明 worker 异常断开、协议违约或事件回调出错，一律补发 ``disconnected``，
+        由消费方收敛为失败；不能伪装成 ``exit``，否则崩溃会被记成正常结束。worker 已发 exit 后 EOF
+        也会补发，消费方的终态已定、迁移幂等，不改写结果。
         握手前断开不补发：由 ``start`` 抛错、service 记为启动失败，只此一处。
         """
 
@@ -505,7 +509,7 @@ class ProcessTerminalWorker:
         finally:
             self._handshake_event.set()
             if not self._stop_event.is_set() and self._handshake_valid:
-                on_event({"type": "error", "code": "WORKER_DISCONNECTED"})
+                on_event({"type": "disconnected"})
 
     def _validate_handshake(self, event: Mapping[str, object], process_pid: int) -> bool:
         """校验进程外握手的身份与模式；会话模式另校验 PTY 类型与正整数逻辑尺寸。"""

@@ -3,7 +3,8 @@
 本模块只负责「这条命令用什么程序、什么参数启动」与「worker 报回的事件怎样归一成结果」，不做
 危险命令判定、不做权限校验、不组装 ``ToolObservation``（由 ``ExecuteTerminalTool`` 负责）。命令
 进程由 worker 启动与清理：stdin 置空、stdout / stderr 合并、以新进程组（Windows 为 Job）启动；
-命令结束时它留下的进程一并被结束，超时与取消先 HUP、TERM，宽限 1 秒再 KILL。后端被强杀时
+命令结束时它留下的进程一并被结束（自行 ``setsid`` 脱离进程组的守护进程除外，留给沙箱），超时与
+取消先 HUP、TERM，宽限 1 秒再 KILL。后端被强杀时
 worker 读到 stdin EOF 自行清理，命令不会成为孤儿。
 
 ``shell="auto"`` 与 Windows 的 ``shell="cmd"`` 把命令原文交给 ``<COMSPEC> /c``（POSIX 为
@@ -17,6 +18,7 @@ import threading
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Literal, cast
 
 from app.config.logging.logger import log
 from app.tools.shell.host_shells import find_shell
@@ -30,7 +32,9 @@ from app.utils.host_platform import is_windows
 # 到点仍无回音由 ``close`` 结束 worker 进程。
 _SHUTDOWN_WAIT_SECONDS = 10.0
 
-_WORKER_LOST = "[terminal worker stopped unexpectedly; the command's outcome is unknown]"
+_WORKER_LOST = "the terminal worker stopped unexpectedly"
+
+StopCause = Literal["timed_out", "cancelled"]
 
 
 @dataclass(frozen=True)
@@ -43,31 +47,37 @@ class _Launch:
 
 
 class _Outcome:
-    """worker 事件里与结局有关的部分；读线程写入，``ended`` set 之后执行线程读取。"""
+    """worker 报回的结局：读线程写入 ``exit``（或因断开留空），``ended`` set 之后执行线程读取。"""
 
     def __init__(self) -> None:
         self.ended = threading.Event()
         self.exit: Mapping[str, object] | None = None
-        self.start_failure: str | None = None
-        self.worker_lost = False
 
 
 class LocalExecutionBackend:
     """宿主机 shell 执行后端：一个实例只跑一条命令。
 
-    ``stop`` 可在任意线程调用（作业撤销的唤醒回调）：命令还没启动时记下，启动后立即结束；
-    已在运行时让 worker 结束整组进程。被停止的命令以 ``cancelled`` 结果返回。
+    ``stop`` 可在任意线程调用（作业撤销的唤醒回调）：命令还没启动时记下、不再启动；已在运行时让
+    worker 结束整组进程。结局由 worker 的 ``exit.reason`` 决定（停止请求与命令退出谁先到由 worker
+    裁决）；本对象只记得「自己为什么要求停止」（超时或取消，先到者为准），在结局是 ``stopped`` 时
+    据此给出 ``timed_out`` / ``cancelled``。
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._stopped = False
+        self._stop_cause: StopCause | None = None
         self._worker: ProcessTerminalWorker | None = None
 
     def stop(self) -> None:
         """要求停止这条命令；不等待，结果仍由 ``execute`` 返回。"""
+        self._request_stop("cancelled")
+
+    def _request_stop(self, cause: StopCause) -> None:
+        """记下停止原因（只有第一次生效），worker 已启动时立即要求它停止。"""
         with self._lock:
-            self._stopped = True
+            if self._stop_cause is not None:
+                return
+            self._stop_cause = cause
             worker = self._worker
         if worker is not None:
             worker.shutdown()
@@ -93,9 +103,8 @@ class LocalExecutionBackend:
                 shell 的二次解析。
 
         返回:
-            ``ExecutionResult``。超时或停止返回 ``exit_code=-1`` 与对应标记，并保留已收到的部分
-            输出；被信号结束的命令退出码为负的信号值；启动失败（shell 不可用、找不到程序、worker
-            起不来）为 ``exit_code=-1`` 且输出写明原因。
+            ``ExecutionResult``，结局见 ``CommandEnd``。启动前已被要求停止时不启动命令，直接返回
+            ``cancelled``；超时或停止保留已收到的部分输出。
 
         异常:
             不向上抛出。
@@ -104,6 +113,9 @@ class LocalExecutionBackend:
             launch = _resolve_command(command, shell)
         except ValueError as exc:
             return _start_failed(str(exc))
+        with self._lock:
+            if self._stop_cause is not None:
+                return ExecutionResult(end="cancelled", output="")
         collector = _OutputCollector(sink=output_sink)
         outcome = _Outcome()
         try:
@@ -119,36 +131,70 @@ class LocalExecutionBackend:
             return _start_failed(str(exc))
         with self._lock:
             self._worker = worker
-            stopped = self._stopped
-        if stopped:
+            stopping = self._stop_cause is not None
+        if stopping:
+            # 握手期间到的停止：命令可能已经启动，交给 worker 停下并如实报回谁先结束。
             worker.shutdown()
 
-        timed_out = False
         try:
             if not outcome.ended.wait(timeout):
-                timed_out = True
-                worker.shutdown()
+                self._request_stop("timed_out")
                 outcome.ended.wait(_SHUTDOWN_WAIT_SECONDS)
         finally:
             worker.close()
         output = collector.finish()
         with self._lock:
-            cancelled = self._stopped and not timed_out
-        if outcome.start_failure is not None:
-            return _start_failed(outcome.start_failure)
-        if timed_out or cancelled:
-            return ExecutionResult(output, -1, timed_out=timed_out, cancelled=cancelled)
-        if outcome.exit is None:
+            cause = self._stop_cause
+        return _result(outcome.exit, output, cause, command)
+
+
+def _result(
+    exit: Mapping[str, object] | None,
+    output: str,
+    cause: StopCause | None,
+    command: str,
+) -> ExecutionResult:
+    """把 worker 的 ``exit`` 与本端的停止原因归一成结果；``exit`` 为空表示 worker 没报结局。"""
+    if exit is None:
+        if cause is not None:
+            # 已要求停止但 worker 到点没报回（已被 ``close`` 结束）：停止原因仍是事实，清理未确认。
             log.warning(
-                "terminal_exec_worker_lost",
+                "terminal_exec_stop_unconfirmed",
                 extra={
-                    "msg": "Terminal Worker 在命令结束前断开，结果未知",
-                    "data": {"worker_lost": outcome.worker_lost, "command_preview": command[:200]},
+                    "msg": "要求停止后 Terminal Worker 未报回结局",
+                    "data": {"cause": cause, "command_preview": command[:200]},
                 },
             )
-            lost = f"{output}\n{_WORKER_LOST}" if output else _WORKER_LOST
-            return ExecutionResult(lost, -1, timed_out=False)
-        return ExecutionResult(output, _exit_code(outcome.exit), timed_out=False)
+            return ExecutionResult(end=cause, output=output)
+        log.warning(
+            "terminal_exec_worker_lost",
+            extra={
+                "msg": "Terminal Worker 在命令结束前断开，结果未知",
+                "data": {"command_preview": command[:200]},
+            },
+        )
+        return ExecutionResult(end="worker_failed", output=output, failure=_WORKER_LOST)
+    reason = exit["reason"]
+    if reason == "exited":
+        signal = exit.get("signal")
+        if isinstance(signal, int):
+            return ExecutionResult(end="signaled", output=output, signal=signal)
+        return ExecutionResult(end="exited", output=output, exit_code=cast(int, exit["exit_code"]))
+    if reason == "start_failed":
+        return _start_failed(str(exit["message"]), output)
+    if reason == "stopped" and cause is not None:
+        return ExecutionResult(end=cause, output=output)
+    # 心跳超时、worker 自身故障，或没有请求却被停止：命令可能已执行，结局未知。
+    message = exit.get("message")
+    log.warning(
+        "terminal_exec_worker_failed",
+        extra={
+            "msg": "Terminal Worker 未能正常结束命令",
+            "data": {"reason": reason, "message": message, "command_preview": command[:200]},
+        },
+    )
+    detail = f"{_WORKER_LOST} ({reason}{f': {message}' if message else ''})"
+    return ExecutionResult(end="worker_failed", output=output, failure=detail)
 
 
 def _observe(event: Mapping[str, object], collector: _OutputCollector, outcome: _Outcome) -> None:
@@ -159,35 +205,18 @@ def _observe(event: Mapping[str, object], collector: _OutputCollector, outcome: 
     elif kind == "exit":
         outcome.exit = event
         outcome.ended.set()
+    elif kind == "disconnected":
+        outcome.ended.set()
     elif kind == "error":
-        code = event.get("code")
-        if code == "EXEC_START_FAILED":
-            outcome.start_failure = str(event.get("message") or "the command could not start")
-            outcome.ended.set()
-        elif code == "WORKER_DISCONNECTED":
-            outcome.worker_lost = True
-            outcome.ended.set()
-        else:
-            # 清理失败、心跳超时等：命令照常会报回退出，这里只留排查线索。
-            log.warning(
-                "terminal_exec_worker_error",
-                extra={"msg": "Terminal Worker 执行模式报错", "data": {"code": code}},
-            )
+        # 非致命诊断（清理失败等），结局照常由 ``exit`` 报回；这里只留排查线索。
+        log.warning(
+            "terminal_exec_worker_error",
+            extra={"msg": "Terminal Worker 执行模式报错", "data": {"code": event.get("code")}},
+        )
 
 
-def _exit_code(event: Mapping[str, object]) -> int:
-    """与 ``subprocess`` 的 ``returncode`` 同一语义：被信号结束为负的信号值。"""
-    signal = event.get("signal")
-    if isinstance(signal, int):
-        return -signal
-    code = event.get("exit_code")
-    return code if isinstance(code, int) else -1
-
-
-def _start_failed(reason: str) -> ExecutionResult:
-    return ExecutionResult(
-        output=f"failed to start command: {reason}", exit_code=-1, timed_out=False
-    )
+def _start_failed(reason: str, output: str = "") -> ExecutionResult:
+    return ExecutionResult(end="start_failed", output=output, failure=reason)
 
 
 def _resolve_command(command: str, shell: str) -> _Launch:

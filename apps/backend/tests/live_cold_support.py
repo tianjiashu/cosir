@@ -137,12 +137,9 @@ class GatedCommands:
                 started.append(command)
                 if not self.stopped.is_set():
                     assert gates[command].wait(10), "command was never released"
-                return ExecutionResult(
-                    output=f"out:{command}",
-                    exit_code=0,
-                    timed_out=False,
-                    cancelled=self.stopped.is_set(),
-                )
+                if self.stopped.is_set():
+                    return ExecutionResult(end="cancelled", output=f"out:{command}")
+                return ExecutionResult(end="exited", output=f"out:{command}", exit_code=0)
 
             def stop(self) -> None:
                 self.stopped.set()

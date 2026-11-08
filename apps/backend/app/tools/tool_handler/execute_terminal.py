@@ -70,9 +70,9 @@ from app.tools.tool_models.execute_terminal_args import (
 # 写进同一条命令（&&、管道、多行脚本）。没有 stdin、也没有终端：要输入的程序会读到输入结束、
 # 通常直接失败，要终端的程序（密码提示、全屏程序）跑不起来，所以带上 --yes 之类的非交互参数。
 # 前台调用会一直占着这一步，直到命令退出或超时；长构建、测试套件把 timeout 调大并设
-# background=true，期间继续做别的事。命令用 & 或 nohup 留下的进程会在它结束时被结束，所以要后台
-# 就用 background=true。必须一直开着（服务、watcher）或要交互的程序不适合本工具：到 timeout 会被
-# 结束。
+# background=true，期间继续做别的事。命令用 & 或 nohup 留下的进程会在它结束时被结束（自行脱离会话
+# 的守护进程除外），所以要后台就用 background=true。必须一直开着（服务、watcher）或要交互的程序不
+# 适合本工具：到 timeout 会被结束。
 _DESCRIPTION = (
     "Run a non-interactive command or script in a fresh shell process and return its exit code "
     "with merged stdout/stderr. Each call starts from scratch: cd, exported variables and other "
@@ -82,9 +82,10 @@ _DESCRIPTION = (
     "full-screen apps) cannot run, so pass non-interactive flags such as --yes. A foreground "
     "call holds this step until the command exits or times out; for long builds and test "
     "suites raise timeout and set background=true to keep working meanwhile. Processes the "
-    "command leaves behind (& or nohup) are stopped when it exits, so use background=true "
-    "instead. Programs that must keep running (servers, watchers) or need interaction do not "
-    "fit this tool: they are stopped at the timeout."
+    "command leaves behind (& or nohup) are stopped when it exits (daemons that detach into "
+    "their own session are not), so use background=true instead. Programs that must keep "
+    "running (servers, watchers) or need interaction do not fit this tool: they are stopped at "
+    "the timeout."
 )
 
 # 取消后的模型文案：命令被强杀，结果未知且可能留下部分副作用。
@@ -92,6 +93,11 @@ _CANCELLED_REASON = (
     "the command was stopped before it finished (the user or the run cancelled it), together "
     "with every process it started. Partial side effects are possible; do not re-run it "
     "automatically."
+)
+
+# 结局未知时给模型的提醒：worker 失联前命令可能已经执行。
+_UNKNOWN_OUTCOME_HINT = (
+    "The command may have run (fully or partly); check its effects before running it again."
 )
 
 # 前台等待定期检查 Run 取消与转后台信号；命令结论到达时立即唤醒。
@@ -277,11 +283,11 @@ class ExecuteTerminalTool(HandlerBase):
                 （命令级隔离待沙箱接管）。
 
         返回:
-            ``ToolObservation``。工作目录不存在/后端异常为
-            ``status="error"``；命令正常执行（含非零退出码）为 ``status="success"``。
-            退出码等结构性事实经 ``_render_content`` 并入 ``content`` 的 ``[exit_code=N]`` 标记，供
-            模型消费。命令因超时强杀时返回 ``status="error"``，被取消时返回 ``cancelled``。转到后台
-            时返回标 ``background`` 的占位（不挂起 Agent），结论稍后以 ``background_result`` 回投。
+            ``ToolObservation``，状态按结局（``CommandEnd``）一处映射，见 ``_result_observation``：
+            命令自己结束（含非零退出、被信号结束）为 ``success``，超时、启动失败、worker 失联与工作
+            目录不合法为 ``error``，被取消为 ``cancelled``。结局标记经 ``_render_content`` 并入
+            ``content`` 供模型消费。转到后台时返回标 ``background`` 的占位（不挂起 Agent），结论稍后
+            以 ``background_result`` 回投。
 
         异常:
             不主动向上抛出；均转换为结构化 ``ToolObservation``。
@@ -352,9 +358,10 @@ class ExecuteTerminalTool(HandlerBase):
                     "msg": "终端命令执行完成",
                     "data": {
                         "tool_call_id": tool_call_id,
+                        "end": result.end,
                         "exit_code": result.exit_code,
-                        "timed_out": result.timed_out,
-                        "cancelled": result.cancelled,
+                        "signal": result.signal,
+                        "failure": result.failure,
                     },
                 },
             )
@@ -417,25 +424,30 @@ class ExecuteTerminalTool(HandlerBase):
     def _result_observation(
         self, command: str, cwd: Path, result: ExecutionResult
     ) -> ToolObservation:
-        """前台拿到结论时的观察：取消、超时、正常结束（含非零退出码）三种。"""
-        display = build_terminal_display_data(
-            command=command, workdir=cwd, output=result.output,
-            exit_code=result.exit_code, timed_out=result.timed_out,
-        )
-        content = self._render_content(result.output, result)
-        if result.cancelled:
+        """前台拿到结论时的观察：观察状态只按结局映射，这是结局到状态的唯一一处。"""
+        content = self._render_content(result)
+        if result.end == "cancelled":
             observation = tool_cancelled(self.name, reason=_CANCELLED_REASON)
-        elif result.timed_out:
+        elif result.end == "timed_out":
             observation = tool_error(
                 self.name,
-                f"{content}. Use a larger timeout (up to {MAX_COMMAND_TIMEOUT_S:g}s) "
+                f"{content}\nUse a larger timeout (up to {MAX_COMMAND_TIMEOUT_S:g}s) "
                 "or split the command into smaller steps.",
                 status_hint="命令超时",
+            )
+        elif result.end == "start_failed":
+            observation = tool_error(self.name, content, status_hint="启动失败")
+        elif result.end == "worker_failed":
+            observation = tool_error(
+                self.name, f"{content}\n{_UNKNOWN_OUTCOME_HINT}", status_hint="结果未知"
             )
         else:
             observation = tool_success(self.name, content)
         # 状态说明执行结局，展示数据保留执行器实际收集的输出；不从模型正文还原。
-        observation.display_data = {**display, **(observation.display_data or {})}
+        observation.display_data = {
+            **self._display_data(command, cwd, result),
+            **(observation.display_data or {}),
+        }
         return observation
 
     def _background_conclusion(
@@ -452,23 +464,30 @@ class ExecuteTerminalTool(HandlerBase):
         ``background_registry.complete`` 回投。撤销的命令仍携带已收集输出，
         父 Task 停止时只结算原占位，不回投模型消息。
         """
-        end_reason = (
-            "cancelled" if result.cancelled else "timed_out" if result.timed_out else "exited"
-        )
         budgeted = ToolOutputBudget().apply(
-            tool_success(self.name, self._render_content(result.output, result)),
+            tool_success(self.name, self._render_content(result)),
             execution_context,
         )
+        payload: dict[str, object] = {"end_reason": result.end, "output": budgeted.content}
+        if result.exit_code is not None:
+            payload["exit_code"] = result.exit_code
+        if result.signal is not None:
+            payload["signal"] = result.signal
         return BackgroundConclusion(
-            {"end_reason": end_reason, "exit_code": result.exit_code, "output": budgeted.content},
-            cancel_hint="已取消" if result.cancelled else None,
-            display_data=build_terminal_display_data(
-                command=command,
-                workdir=cwd,
-                output=result.output,
-                exit_code=result.exit_code,
-                timed_out=result.timed_out,
-            ),
+            payload,
+            cancel_hint="已取消" if result.end == "cancelled" else None,
+            display_data=self._display_data(command, cwd, result),
+        )
+
+    @staticmethod
+    def _display_data(command: str, cwd: Path, result: ExecutionResult) -> dict[str, object]:
+        return build_terminal_display_data(
+            command=command,
+            workdir=cwd,
+            output=result.output,
+            end=result.end,
+            exit_code=result.exit_code,
+            signal=result.signal,
         )
 
     def _placeholder_observation(
@@ -557,28 +576,29 @@ class ExecuteTerminalTool(HandlerBase):
         return resolved, ""
 
     @staticmethod
-    def _render_content(output: str, result: ExecutionResult) -> str:
-        """把命令输出与机器可读的执行元数据拼成模型可见文本。
+    def _render_content(result: ExecutionResult) -> str:
+        """把结局标记、失败原因与命令输出拼成模型可见文本。
 
-        参数:
-            output: 命令输出的原始解码文本，保留 ANSI 控制序列和敏感文本。
-            result: 后端归一化的执行结果（含退出码 / 超时）。
-
-        返回:
-            ``[exit_code=N]`` 标记与输出以换行拼接的文本；命令无输出时只有标记本身。
-            ``content`` 是模型唯一可消费文本通道（``data`` 会在序列化前被清除，仅供前端），
-            因此退出码这类结构性事实必须并入 ``content``，否则模型无法区分「命令成功但无输
-            出」与「命令失败但无 stderr」。超时与取消**不**并入 ``content``：前台由观察状态表达，
-            后台由回投载荷的 ``end_reason`` 表达，本方法只负责退出码与输出。
-
-        异常:
-            无。
-
-        副作用:
-            无（纯字符串拼接）。
+        ``content`` 是模型唯一可消费文本通道（``data`` 会在序列化前被清除，仅供前端），所以结局
+        必须并入 ``content``，否则模型无法区分「命令成功但无输出」与「命令失败但无 stderr」。标记与
+        结局一一对应：``[exit_code=N]``、``[signal=N]``（命令被信号结束）、``[timed_out]``、
+        ``[cancelled]``、``[start_failed]``、``[outcome_unknown]``；没启动或结局未知时紧跟一行原因。
+        前台的观察状态与后台载荷的 ``end_reason`` 也表达结局，三者同源于 ``result.end``。
         """
-        marker = f"[exit_code={result.exit_code}]"
-        return f"{marker}\n{output}" if output else marker
+        marker = {
+            "exited": f"[exit_code={result.exit_code}]",
+            "signaled": f"[signal={result.signal}]",
+            "timed_out": "[timed_out]",
+            "cancelled": "[cancelled]",
+            "start_failed": "[start_failed]",
+            "worker_failed": "[outcome_unknown]",
+        }[result.end]
+        lines = [marker]
+        if result.failure:
+            lines.append(result.failure)
+        if result.output:
+            lines.append(result.output)
+        return "\n".join(lines)
 
     def _workdir_error_observation(self, err: str) -> ToolObservation:
         """把 workdir 解析错误转成面向模型的错误观测。

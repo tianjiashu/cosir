@@ -2,7 +2,8 @@
 
 覆盖：握手身份不匹配（确定性）判为不可重试、握手超时与握手前断开仍可重试、各类失败的 WARNING 事件
 与字段对照、经 ``service_error_observation`` 投影给模型时重试建议文本的变化，以及握手后读线程
-意外结束（断开、事件处理出错）补发致命错误而非伪装成 shell 退出。
+意外结束（断开、事件处理出错）补发 ``disconnected`` 而非伪装成 shell 退出，以及握手前入队的输入
+在握手后按序发出。
 """
 
 from __future__ import annotations
@@ -357,7 +358,7 @@ def test_disconnect_before_handshake_is_retryable_and_emits_nothing(
 def _start_and_collect(
     monkeypatch: pytest.MonkeyPatch, frames: bytes, on_event=None
 ) -> tuple[ProcessTerminalWorker, list[dict[str, object]], threading.Event]:
-    """以「合法握手 + ``frames`` + EOF」启动 worker，收集事件直到收到补发的致命错误。"""
+    """以「合法握手 + ``frames`` + EOF」启动 worker，收集事件直到收到补发的 ``disconnected``。"""
 
     _patch_worker_process(monkeypatch, _FakeProcess(_valid_handshake("live") + frames))
     events: list[dict[str, object]] = []
@@ -367,7 +368,7 @@ def _start_and_collect(
         if event.get("type") == "handshake":
             return
         events.append(dict(event))
-        if event.get("code") == "WORKER_DISCONNECTED":
+        if event.get("type") == "disconnected":
             disconnected.set()
         elif on_event is not None:
             on_event(event)
@@ -378,12 +379,12 @@ def _start_and_collect(
 
 
 def test_reader_end_after_handshake_reports_fatal_error_not_exit(monkeypatch) -> None:
-    """worker 未发 exit 就断开：补发 WORKER_DISCONNECTED，不能伪装成 shell 正常退出。"""
+    """worker 未发 exit 就断开：补发 ``disconnected``，不能伪装成 shell 正常退出。"""
 
     worker, events, disconnected = _start_and_collect(monkeypatch, b"")
     assert disconnected.wait(2)
     worker.close()
-    assert events == [{"type": "error", "code": "WORKER_DISCONNECTED"}]
+    assert events == [{"type": "disconnected"}]
 
 
 def test_truncated_frame_header_reports_fatal_error(monkeypatch) -> None:
@@ -392,11 +393,11 @@ def test_truncated_frame_header_reports_fatal_error(monkeypatch) -> None:
     worker, events, disconnected = _start_and_collect(monkeypatch, b"\x00\x00")
     assert disconnected.wait(2)
     worker.close()
-    assert events == [{"type": "error", "code": "WORKER_DISCONNECTED"}]
+    assert events == [{"type": "disconnected"}]
 
 
 def test_event_handler_failure_is_logged_and_converges(monkeypatch, caplog) -> None:
-    """事件回调出错：落 ERROR 日志并补发致命错误，后续帧不再分发。"""
+    """事件回调出错：落 ERROR 日志并补发 ``disconnected``，后续帧不再分发。"""
 
     caplog.set_level(logging.ERROR)
 
@@ -407,7 +408,34 @@ def test_event_handler_failure_is_logged_and_converges(monkeypatch, caplog) -> N
     worker, events, disconnected = _start_and_collect(monkeypatch, frames, explode)
     assert disconnected.wait(2)
     worker.close()
-    assert [event["type"] for event in events] == ["output", "error"]
+    assert [event["type"] for event in events] == ["output", "disconnected"]
     assert any(
         record.getMessage() == "terminal_worker_event_handler_failed" for record in caplog.records
     )
+
+
+def test_input_queued_before_the_handshake_is_sent_in_order_after_it(monkeypatch) -> None:
+    """会话启动期间的用户按键与尺寸不被拒：先进有序队列，握手成功后由写线程按序发出。"""
+
+    process = _FakeProcess(_valid_handshake("early"))
+    _patch_worker_process(monkeypatch, process)
+    worker = ProcessTerminalWorker("early")
+    worker.write({"type": "raw", "data_base64": "bHM="})
+    worker.resize(30, 100)
+    worker.start(_spec(), ".", lambda event: None)
+    deadline = threading.Event()
+    sent: list[dict[str, object]] = []
+    for _ in range(50):
+        data = process.stdin.getvalue()
+        sent = []
+        while len(data) >= 4:
+            size = struct.unpack(">I", data[:4])[0]
+            sent.append(json.loads(data[4 : 4 + size]))
+            data = data[4 + size :]
+        if len(sent) >= 3:
+            break
+        deadline.wait(0.05)
+    worker.close()
+    assert [frame["type"] for frame in sent[:3]] == ["start_session", "write", "resize"]
+    assert sent[1]["input"] == {"type": "raw", "data_base64": "bHM="}
+    assert (sent[2]["rows"], sent[2]["cols"]) == (30, 100)

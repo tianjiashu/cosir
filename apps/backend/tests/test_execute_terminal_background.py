@@ -163,7 +163,7 @@ def test_local_backend_kills_the_command_when_stopped(tmp_path) -> None:
     threading.Timer(0.2, backend.stop).start()
     started = time.monotonic()
     result = backend.execute(f"sleep 2; touch {marker}", str(tmp_path), 30)
-    assert result.cancelled and not result.timed_out and result.exit_code == -1
+    assert result.end == "cancelled" and result.exit_code is None
     assert time.monotonic() - started < 1.5
     time.sleep(2)
     assert not marker.exists()
@@ -195,7 +195,7 @@ def test_timeout_retains_real_output(tmp_path) -> None:
         execution_context=_context(tmp_path, "call-timeout-output"),
     )
     assert result.status == "error"
-    assert result.display_data["timed_out"] is True
+    assert result.display_data["end"] == "timed_out" and "exit_code" not in result.display_data
     assert "before-timeout" in result.display_data["output"]
 
 
