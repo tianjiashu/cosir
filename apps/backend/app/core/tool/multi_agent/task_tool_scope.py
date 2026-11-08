@@ -7,7 +7,9 @@
 新建 Task 没有可复用的请求前缀，用不了的工具在固化时去掉，免得模型调了才被拒。分叉要沿用源的
 schema 才能命中源的缓存（工具列表是请求前缀的一部分），所以派生限制由运行期准入执行：
 ``RuntimeContext.for_run`` 按 :func:`banned_derivation_tools` 拒绝，并经工具准入通知提前告知模型。
-Task 类型与深度创建后不变；上限每次现读，改上限对分叉即时生效，对已固化的 Task 不生效。
+
+Task 类型与深度创建后不变；``AGENT_MAX_DERIVATION_DEPTH`` 每次现读，所以改上限对分叉的下一次 Run
+即时生效，对 schema 已固化的 Task（委派子 Task、Team 节点）无效——那些工具的声明在创建时就去掉了。
 """
 
 import copy

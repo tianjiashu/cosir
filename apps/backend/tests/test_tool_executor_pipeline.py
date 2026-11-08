@@ -162,7 +162,7 @@ def test_profile_denied_tool(tmp_path: Path) -> None:
     """Agent profile 不允许的工具应被权限门禁拒绝，且不可重试。
 
     门禁刻意不复述策略来源（哪条 profile / 谁关掉的），也不把可用工具集回灌给模型——模型
-    本就持有工具声明，回灌只会放大提示面——故 ``content`` 只回传「本轮禁用、停止调用」。
+    本就持有工具声明，回灌只会放大提示面——故 ``content`` 只回传「不可用、停止调用」。
     """
 
     executor = _make_executor(tmp_path)
@@ -175,7 +175,7 @@ def test_profile_denied_tool(tmp_path: Path) -> None:
 
     assert observation.status == "error"
     assert observation.content.startswith("tool is not allowed: read_file")
-    assert "disabled for the current run" in observation.content
+    assert "This tool is not available" in observation.content
     assert "other_tool" not in observation.content
 
 

@@ -98,10 +98,11 @@ class TaskRuntimeSpace:
     # Task 级投递通道：每次开始执行时由 actor 清空，运行中 loop 往里投递，prepare_input 取光。
     # 归 space 持有，``RuntimeContext.for_run`` 才能只凭 Run 装配出本次执行的上下文。
     mailbox: RunMailbox = field(default_factory=RunMailbox, init=False)
-    # 最近一次工具准入通知告诉模型的禁用集合，供下一个 Run 只发增量；``None`` 表示未知（新 Task、
-    # fork、后端重启），此时 context 里可能残留其他来源的准入说明，必须重发完整说明。只由
-    # ``RuntimeContext.for_run`` 读写，同一 Task 的 Run 由 actor 串行发起，无需加锁。
-    announced_ban_tools: frozenset[str] | None = field(default=None, init=False)
+    # 「上一次已经告诉模型哪些工具被禁」的进程内备忘（Task 级与 Run 级两个来源的并集），供下一个
+    # Run 只发增量。来源不缓存：通知文本按本轮来源分组生成，集合相同即视为不必再说明。``None`` 表示
+    # 未知（新 Task、fork、后端重启），此时 context 里可能残留其他来源的准入说明，必须重发完整说明。
+    # 只由 ``RuntimeContext.for_run`` 读写，同一 Task 的 Run 由 actor 串行发起，无需加锁。
+    announced_ban_tools: frozenset[str] | None = field(init=False, default=None)
 
     @property
     def task_tool_schemas(self) -> tuple[FunctionDefinition, ...]:

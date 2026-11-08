@@ -98,7 +98,11 @@ def test_agent_fork_is_told_and_refused_fork_task_without_changing_its_schema(mo
     [notice] = _for_run_with_space(monkeypatch, space, [])
 
     assert space.announced_ban_tools == frozenset({"fork_task"})
-    assert "disabled for this round" in notice.content and "fork_task" in notice.content
+    # 禁用来源是 Task 类型规则：说清「这个 Task 不能用」，而不是「本轮不能用」。
+    assert "for this task: fork_task" in notice.content
+    assert "round" not in notice.content
+    # 可用工具不列举：它们已在 schema 与系统提示词的工具目录里，列出来只会被读成也被禁用。
+    assert "read_file" not in notice.content and "delegate_task" not in notice.content
 
 
 def test_derivation_rules_do_not_announce_tools_the_task_never_had(monkeypatch) -> None:
@@ -125,35 +129,78 @@ def test_tool_availability_skips_unchanged_all_available_and_reports_changes(mon
     assert "still disabled" in notice.content
 
 
-def _notice(allowed: frozenset[str], announced: frozenset[str] | None, banned: frozenset[str]):
+def test_locked_derivation_is_announced_per_task_and_never_re_enabled(monkeypatch) -> None:
+    """Task 级禁用（派生封顶）配置不变时每轮都成立：第二次只说 still disabled，不报 re-enabled。"""
+    space = _space(RunMailbox())
+    space.task_tool_names = ("read_file", "fork_task")
+    space.current_task = SimpleNamespace(id=1, task_type=TaskType.AGENT_FORK, derivation_depth=1)
+
+    [first] = _for_run_with_space(monkeypatch, space, [])
+    assert "disabled (for this task: fork_task)" in first.content
+
+    [second] = _for_run_with_space(monkeypatch, space, [])
+    assert "still disabled (for this task: fork_task)" in second.content
+    assert "re-enabled" not in second.content
+
+
+def test_tool_groups_only_report_tools_the_task_has(monkeypatch) -> None:
+    """用户关掉的组里若有该 Task 从未拥有的工具，通知不提它（模型手里没有的工具不算被禁）。"""
+    space = _space(RunMailbox())
+    space.task_tool_names = ("read_file", "list_directory")
+
+    [notice] = _for_run_with_space(monkeypatch, space, ["read_file", "write_file"])
+
+    assert "for this run: read_file" in notice.content
+    assert "write_file" not in notice.content
+    assert space.announced_ban_tools == frozenset({"read_file"})
+
+
+def _notice(
+    announced: frozenset[str] | None,
+    task_banned: frozenset[str],
+    run_banned: frozenset[str],
+    *,
+    all_banned: bool = False,
+) -> str | None:
     """按本 Run 的准入边界取通知文本；规则是纯函数，无需装配上下文。"""
     from app.core.workflow.execution_state.runtime_context import RuntimeContext
 
-    return RuntimeContext.tool_availability_notice(announced, banned, allowed)
+    return RuntimeContext.tool_availability_notice(
+        announced, task_banned, run_banned, all_banned=all_banned
+    )
 
 
 def test_tool_availability_notice_rules() -> None:
     def f(*names: str) -> frozenset[str]:
         return frozenset(names)
 
-    # 未知：总是完整说明，包括全部可用。
-    assert "all tools are available" in _notice(f("a", "b"), None, f())
-    assert "disabled for this round" in _notice(f("a"), None, f("b"))
-    # 未变化。
-    assert _notice(f("a", "b"), f(), f()) is None
-    assert _notice(f("c"), f("b", "a"), f("a", "b")) == (
-        "Tool availability notice: still disabled for this round, "
-        "calls to them will be rejected: a, b."
+    # 未知：完整说明，且按来源分组（Task 级 / Run 级不混成一句）。
+    assert _notice(None, f(), f()) == "Tool availability notice: all tools are available."
+    assert _notice(None, f("fork_task"), f()) == (
+        "Tool availability notice: disabled (for this task: fork_task)."
     )
-    # 变化：增量 + 当前状态。
-    assert _notice(f("a", "c"), f("a"), f("b")) == (
+    assert _notice(None, f("fork_task"), f("write_file")) == (
+        "Tool availability notice: disabled "
+        "(for this task: fork_task; for this run: write_file)."
+    )
+    # 全部工具都被禁时只给结论，不逐个列名。
+    assert _notice(None, f("fork_task"), f("write_file"), all_banned=True) == (
+        "Tool availability notice: all tools are disabled."
+    )
+    # 未变化：全部可用时不通知；仍有禁用时按来源重复提醒。
+    assert _notice(f(), f(), f()) is None
+    assert _notice(f("a", "b"), f("a"), f("b")) == (
+        "Tool availability notice: still disabled (for this task: a; for this run: b)."
+    )
+    # 变化：增量（不带来源）+ 当前状态（按来源）。
+    assert _notice(f("a"), f("b"), f()) == (
         "Tool availability notice: changed since last round "
-        "(newly disabled: b; re-enabled: a); currently disabled, calls to them will be rejected: b."
+        "(newly disabled: b; re-enabled: a); currently disabled (for this task: b)."
     )
-    assert _notice(f("a", "b"), f("a"), f()).endswith(
-        "(re-enabled: a); all tools are available now."
+    assert _notice(f("a"), f(), f()).endswith("(re-enabled: a); all tools are available now.")
+    assert _notice(f(), f("a"), f("b"), all_banned=True).endswith(
+        "(newly disabled: a, b); all tools are disabled now."
     )
-    assert _notice(f(), f(), f("a", "b")).endswith("all tools are disabled now.")
 
 
 def test_mailbox_dedupes_persisted_rows_within_one_execution() -> None:

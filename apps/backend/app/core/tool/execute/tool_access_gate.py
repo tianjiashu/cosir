@@ -141,11 +141,12 @@ class ToolAccessGate:
             return ToolGateOutcome(
                 denial=tool_error(
                     tool.name,
-                    # 禁用是 Run 级策略性拒绝：只回传「本轮禁用、停止调用」这一个信号，不复述
-                    # 策略来源（哪条 profile / 谁关掉的），也不把可用工具集回灌给模型——模型本就
-                    # 持有工具声明，回灌只会放大提示面。
+                    # 准入拒绝只给「停止调用」这一个信号：禁用来源（Task 类型规则、派生深度、用户
+                    # 关掉的工具组）与持续范围（本 Task / 本轮）由工具准入通知向模型说明，门禁不
+                    # 复述来源，也不承诺「本轮之后就能用」；可用工具集也不回灌——模型本就持有工具
+                    # 声明，回灌只会放大提示面。
                     f"tool is not allowed: {tool.name}. "
-                    "This tool is disabled for the current run. Do not call it again.",
+                    "This tool is not available. Do not call it again.",
                     tool_call_id=call.call_id,
                 )
             )
