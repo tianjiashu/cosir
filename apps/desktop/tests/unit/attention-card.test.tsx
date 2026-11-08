@@ -9,7 +9,7 @@ vi.mock("@/lib/handoff/handoff-store", async (importOriginal) => ({
   useHandoffStore: (selector: (state: { tasks: Record<number, unknown[]> }) => unknown) => selector({ tasks: { 7: [...handoffs.values()] } }),
 }));
 
-import { AttentionCard, attentionDescription } from "@/components/assistant-ui/turn/attention-card";
+import { AttentionCard, attentionDescription } from "@/components/conversation/turn/attention-card";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 
 function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {

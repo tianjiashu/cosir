@@ -1,6 +1,6 @@
 # 路径语义审计：apps/desktop
 
-> 状态：批 1–3 已执行（未提交，待验证后由用户提交）；批 4（D1、D2）与批 5（D3）待决定。下文清单保留审计时的原始路径，对照时以第 6 节批次表为准。
+> 状态：批 1–3 已提交；批 4（D1、D2）已执行未提交；批 5（D3）待决定。批 4 实际落点：`task-rail` → `conversation-aside`（含 `lib/`、标识符 `TaskRail*` → `ConversationAside*`、`RailCard*` → `AsideCard*`、`data-task-rail` 等属性与日志事件名；界面文案「会话侧栏」未改）；`assistant-ui/elements` → `conversation/thread`，`assistant-ui/{tools,turn}` → `conversation/{tools,turn}`，`assistant` → `conversation-runtime`。`conversation-runtime/` 内 `assistant-*` 文件名与 `runtime/` 子目录保留，是遗留的命名不一致，未纳入本批。下文清单保留审计时的原始路径，对照时以第 6 节批次表为准。
 > 执行偏差：A2 中的 `electron/main/browser/input/session.ts` 在审计后已被他人提交删除（`PageSession` 并入 `operation.ts`），该项取消；其余项均按清单执行。`tests/unit` 中随被测模块同步改名的有 `transport-message-converter`、`composer-action-policy`、`http-error`、`markdown-editor-keymap`、`terminal-output-viewport` 五个测试文件。
 > 审计过程本身未改任何源码、配置或 AGENTS.md。
 > 范围：用户限定为 `apps/desktop`。含 `components/`（298 个文件）、`lib/`（146）、`electron/`（73）、`hooks/`（4）、`app/`（2）、`src/`（3），共 526 个源文件；`tests/`、`scripts/` 只用来统计引用，不单独审。后端与 `apps/terminal-worker` 不在本次范围。

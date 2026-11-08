@@ -19,7 +19,7 @@ vi.mock("@/lib/assistant/task-commands", () => ({
 
 describe("StopButton", () => {
   it("sends backend cancellation without aborting the Assistant Transport subscription", async () => {
-    const { StopButton } = await import("@/components/assistant/stop-button");
+    const { StopButton } = await import("@/components/conversation-runtime/stop-button");
     const event = {} as React.MouseEvent<HTMLButtonElement>;
 
     renderToStaticMarkup(
@@ -33,7 +33,7 @@ describe("StopButton", () => {
   });
 
   it("does not invoke assistant-ui Cancel when backend cancellation is rejected", async () => {
-    const { StopButton } = await import("@/components/assistant/stop-button");
+    const { StopButton } = await import("@/components/conversation-runtime/stop-button");
     captured.cancelRun.mockResolvedValueOnce({
       accepted: false,
       reason: "rejected",
@@ -49,7 +49,7 @@ describe("StopButton", () => {
   });
 
   it("forwards composition props and ref to the styled button", async () => {
-    const { StopButton } = await import("@/components/assistant/stop-button");
+    const { StopButton } = await import("@/components/conversation-runtime/stop-button");
     const ref = { current: null };
 
     renderToStaticMarkup(
@@ -69,7 +69,7 @@ describe("StopButton", () => {
   });
 
   it("keeps the button disabled while the workflow settles cancellation", async () => {
-    const { StopButton } = await import("@/components/assistant/stop-button");
+    const { StopButton } = await import("@/components/conversation-runtime/stop-button");
 
     renderToStaticMarkup(
       <StopButton taskId={42} isCancelling />,

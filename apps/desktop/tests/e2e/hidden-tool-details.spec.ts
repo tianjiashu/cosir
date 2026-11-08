@@ -15,7 +15,7 @@ test("large details build only on first open, freeze hidden input, and catch up 
   await page.goto("/tasks/42");
   await page.locator('[data-slot="activity-head"]').click();
   await page.evaluate(async () => {
-    const path = "/components/assistant-ui/tools/call-view-registry.ts";
+    const path = "/components/conversation/tools/call-view-registry.ts";
     const { CALL_VIEWS } = await import(/* @vite-ignore */ path);
     const original = CALL_VIEWS["directory-list"];
     const counter = { builds: 0 };

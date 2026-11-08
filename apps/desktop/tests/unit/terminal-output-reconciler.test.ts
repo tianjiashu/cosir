@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { reconcileTerminalOutput } from "@/components/assistant-ui/tools/terminal-output/reconciler";
+import { reconcileTerminalOutput } from "@/components/conversation/tools/terminal-output/reconciler";
 
 describe("reconcileTerminalOutput", () => {
   it("appends only the new suffix of a streaming snapshot", () => {

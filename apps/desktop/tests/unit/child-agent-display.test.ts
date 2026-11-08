@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readAgentTaskResultDisplay } from "@/components/assistant-ui/tools/child-agent-display";
+import { readAgentTaskResultDisplay } from "@/components/conversation/tools/child-agent-display";
 
 describe("agent task display projections", () => {
   it("reads send/status payloads without exposing unknown fields", () => {

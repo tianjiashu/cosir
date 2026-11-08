@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { toolResultSignal } from "@/lib/assistant/tool-result-signals";
-import { readImageReadDisplay } from "@/components/assistant-ui/tools/image-read-display";
-import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
-import { imageReadView } from "@/components/assistant-ui/tools/call-views/image-read-view";
-import type { CallViewContext } from "@/components/assistant-ui/tools/call-view";
+import { readImageReadDisplay } from "@/components/conversation/tools/image-read-display";
+import { resolveCallView } from "@/components/conversation/tools/call-view-registry";
+import { imageReadView } from "@/components/conversation/tools/call-views/image-read-view";
+import type { CallViewContext } from "@/components/conversation/tools/call-view";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 
 const SHA = "b".repeat(64);

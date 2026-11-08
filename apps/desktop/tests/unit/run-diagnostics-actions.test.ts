@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatRunDiagnostics,
   shouldOfferRunDiagnostics,
-} from "@/components/assistant/run-diagnostics-actions";
+} from "@/components/conversation-runtime/run-diagnostics-actions";
 
 describe("run diagnostics actions", () => {
   it("formats task and run identifiers as grep-friendly lines", () => {

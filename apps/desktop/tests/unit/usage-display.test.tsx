@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getCacheHitRate } from "@/components/assistant/usage-display";
+import { getCacheHitRate } from "@/components/conversation-runtime/usage-display";
 
 describe("getCacheHitRate", () => {
   it("calculates the cache hit rate from hit and miss tokens", () => {

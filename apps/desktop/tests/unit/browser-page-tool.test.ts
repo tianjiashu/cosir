@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { readBrowserPageDisplay } from "@/components/assistant-ui/tools/browser-page-display";
-import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
-import { browserPageView } from "@/components/assistant-ui/tools/call-views/browser-page-view";
-import type { CallViewContext } from "@/components/assistant-ui/tools/call-view";
+import { readBrowserPageDisplay } from "@/components/conversation/tools/browser-page-display";
+import { resolveCallView } from "@/components/conversation/tools/call-view-registry";
+import { browserPageView } from "@/components/conversation/tools/call-views/browser-page-view";
+import type { CallViewContext } from "@/components/conversation/tools/call-view";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 
 const PAGE = { kind: "browser-page", tab_id: "t2", url: "https://example.com/", title: "Example" };

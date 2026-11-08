@@ -17,7 +17,7 @@ test("耗时只刷新标题；正文增量不重绘未变工具，工具终态�
   await expect(row).toBeVisible();
   // 只在测试浏览器里包装现有视图函数计数，不向生产代码加入测试/性能接口。
   await page.evaluate(async () => {
-    const modulePath = "/components/assistant-ui/tools/call-view-registry.ts";
+    const modulePath = "/components/conversation/tools/call-view-registry.ts";
     const { CALL_VIEWS } = await import(/* @vite-ignore */ modulePath);
     const original = CALL_VIEWS["read-file-meta"];
     const counter = { renders: 0 };

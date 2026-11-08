@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { ToolIcon } from "@/components/assistant-ui/tools/tool-icons";
+import { ToolIcon } from "@/components/conversation/tools/tool-icons";
 
 describe("ToolIcon", () => {
   it("renders the declared Diff icon", () => {

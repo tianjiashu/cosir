@@ -75,7 +75,7 @@ vi.mock("@/components/terminal/xterm-appearance", () => ({
   xtermCardTheme: () => ({}),
 }));
 
-import { TerminalOutputView } from "@/components/assistant-ui/tools/terminal-output/output-viewport";
+import { TerminalOutputView } from "@/components/conversation/tools/terminal-output/output-viewport";
 
 describe("TerminalOutputView", () => {
   beforeEach(() => {

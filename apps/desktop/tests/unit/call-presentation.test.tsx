@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
-import type { CallViewContext } from "@/components/assistant-ui/tools/call-view";
+import { resolveCallView } from "@/components/conversation/tools/call-view-registry";
+import type { CallViewContext } from "@/components/conversation/tools/call-view";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 
 const resolve = (display_data: Record<string, unknown>) => {

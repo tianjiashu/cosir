@@ -6,14 +6,14 @@ const captured = vi.hoisted(() => ({
   thread: null as Record<string, unknown> | null,
 }));
 
-vi.mock("@/components/assistant-ui/elements/thread.aui", () => ({
+vi.mock("@/components/conversation/thread/thread.aui", () => ({
   Thread: (props: Record<string, unknown>) => {
     captured.thread = props;
     return null;
   },
 }));
 
-import { ReadonlyThread } from "@/components/assistant-ui/elements/readonly-thread.aui";
+import { ReadonlyThread } from "@/components/conversation/thread/readonly-thread.aui";
 
 describe("ReadonlyThread", () => {
   beforeEach(() => {
@@ -42,7 +42,7 @@ describe("ReadonlyThread", () => {
   // Transport state 的 selector 在渲染期抛错（整屏渲染失败）。
   it("不再引入会遮蔽 external state 的只读 core", () => {
     const source = readFileSync(
-      new URL("../../components/assistant-ui/elements/readonly-thread.aui.tsx", import.meta.url),
+      new URL("../../components/conversation/thread/readonly-thread.aui.tsx", import.meta.url),
       "utf8",
     );
 

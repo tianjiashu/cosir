@@ -1,8 +1,8 @@
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ReadonlyThread } from "@/components/assistant-ui/elements/readonly-thread.aui";
-import { useSubscriptionRecovery } from "@/components/assistant/runtime/use-runtime-recovery";
-import { TransportStatus, type TransportIssue } from "@/components/assistant/transport-status";
+import { ReadonlyThread } from "@/components/conversation/thread/readonly-thread.aui";
+import { useSubscriptionRecovery } from "@/components/conversation-runtime/runtime/use-runtime-recovery";
+import { TransportStatus, type TransportIssue } from "@/components/conversation-runtime/transport-status";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";

@@ -3,8 +3,8 @@ import { useEffect, useRef } from "react";
 import { BotIcon, CircleMinusIcon, SquareIcon, SquareTerminalIcon, UsersIcon, XCircleIcon, type LucideIcon } from "lucide-react";
 
 import { useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
-import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
-import { DeferredDetail } from "@/components/assistant-ui/tools/deferred-detail";
+import { resolveCallView } from "@/components/conversation/tools/call-view-registry";
+import { DeferredDetail } from "@/components/conversation/tools/deferred-detail";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";

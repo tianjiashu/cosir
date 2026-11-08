@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   AgentTeamExecutionContent,
   canStopTeamRun,
-} from "@/components/assistant-ui/tools/agent-team/agent-team-execution-card";
+} from "@/components/conversation/tools/agent-team/agent-team-execution-card";
 import type { AgentTeamRun } from "@/lib/api/agent-teams";
 
 function teamRun(status: AgentTeamRun["status"], endReason: string | null = null): AgentTeamRun {

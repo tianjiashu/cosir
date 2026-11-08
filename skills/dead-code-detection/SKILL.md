@@ -36,7 +36,7 @@ For confirmed implicit references, use a narrow tool-supported configuration or 
 
 ## Current baseline
 
-The reviewed Knip baseline currently has no unused files, dependencies, dev dependencies, exports, or exported types. Confirmed unused frontend code and the unused `@codemirror/search` and `diff` dependencies were removed. The deprecated `components/assistant-ui/tools/unknown-tool.tsx` wrapper was also removed.
+The reviewed Knip baseline currently has no unused files, dependencies, dev dependencies, exports, or exported types. Confirmed unused frontend code and the unused `@codemirror/search` and `diff` dependencies were removed. The deprecated `components/conversation/tools/unknown-tool.tsx` wrapper was also removed.
 
 Knip still reports unlisted direct imports (`@assistant-ui/core`, `assistant-stream/utils`, `streamdown`, `react-markdown`, `@eslint/js`, and `mdast`) and one duplicate export pair: `referenceIdentity` aliases `encodeReference` and is used by the composer as a key. These are dependency declaration and naming findings, not dead-code candidates. Configuration hints about redundant entry patterns are informational.
 

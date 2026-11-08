@@ -11,7 +11,7 @@ import {
 import { FolderIcon, GlobeIcon, LayoutListIcon, PanelRightIcon, SquareTerminalIcon } from "lucide-react";
 import { useHotkeys } from "react-hotkeys-hook";
 
-import { ConversationAsideContext, type ConversationAside } from "@/components/assistant-ui/elements/conversation-aside";
+import { ConversationAsideContext, type ConversationAside } from "@/components/conversation/thread/conversation-aside";
 import { ConversationAsidePanel } from "@/components/conversation-aside/conversation-aside-panel";
 import { useConversationAside } from "@/components/conversation-aside/use-conversation-aside";
 import { CONVERSATION_ASIDE_WIDTH } from "@/lib/conversation-aside/placement";

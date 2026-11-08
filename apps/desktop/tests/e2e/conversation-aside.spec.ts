@@ -145,7 +145,7 @@ test("渲染错误恢复重建视口后侧栏恢复，尺寸更新不重绘整�
   await railButton(page).click();
   // 只在测试浏览器中包装 memo 的渲染函数，触发真实 runtime 错误边界；不添加生产故障开关。
   await page.evaluate(async () => {
-    const modulePath = "/components/assistant-ui/elements/thread.aui.tsx";
+    const modulePath = "/components/conversation/thread/thread.aui.tsx";
     const { Thread } = await import(/* @vite-ignore */ modulePath);
     const render = Thread.type;
     const probe = { fail: true, renders: 0 };

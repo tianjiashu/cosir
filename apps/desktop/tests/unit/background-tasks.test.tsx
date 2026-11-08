@@ -17,7 +17,7 @@ vi.mock("@/lib/assistant/disclosure-store", async (importOriginal) => ({
   useDisclosure: (_taskId: number, key: string, defaultOpen: boolean) => [board.open.has(key) || defaultOpen, () => undefined],
 }));
 
-import { ForegroundWaitAction } from "@/components/assistant-ui/tools/foreground-wait-action";
+import { ForegroundWaitAction } from "@/components/conversation/tools/foreground-wait-action";
 import { readToolArtifact } from "@/lib/assistant/tool-artifact";
 import { BackgroundTasksBody, BackgroundTasksSummary } from "@/components/conversation-aside/background-tasks-card";
 import { formatElapsed } from "@/components/conversation-aside/background-task-row";

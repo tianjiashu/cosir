@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SubscriptionRecovery } from "@/components/assistant/runtime/subscription-recovery";
+import { SubscriptionRecovery } from "@/components/conversation-runtime/runtime/subscription-recovery";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn(async () => undefined) }));
 

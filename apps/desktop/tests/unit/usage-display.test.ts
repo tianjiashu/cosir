@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatTokenCount,
   getContextUsagePresentation,
-} from "@/components/assistant/usage-display";
+} from "@/components/conversation-runtime/usage-display";
 
 describe("usage display", () => {
   it("formats token counts compactly without turning invalid values into numbers", () => {

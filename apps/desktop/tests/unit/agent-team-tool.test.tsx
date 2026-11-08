@@ -1,9 +1,9 @@
-import { teamView } from "@/components/assistant-ui/tools/call-views/team-view";
+import { teamView } from "@/components/conversation/tools/call-views/team-view";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { AgentTeamApproval } from "@/components/assistant-ui/tools/agent-team/agent-team-tool";
+import { AgentTeamApproval } from "@/components/conversation/tools/agent-team/agent-team-tool";
 import type { AgentTeamRun } from "@/lib/api/agent-teams";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 import { createQueryClient } from "@/lib/query/query-client";

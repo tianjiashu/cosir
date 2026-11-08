@@ -27,8 +27,8 @@ test("窗口宽高与面板开关不重新执行会话和线程，也不重连�
   await expect(page.getByRole("treeitem").filter({ hasText: "布局隔离" })).toBeVisible();
   // 首次挂载任务前包装已有 memo 组件，只在测试浏览器中计数，不给生产代码增加探针接口。
   await page.evaluate(async () => {
-    const sessionPath = "/components/assistant/runtime/assistant-runtime-session.tsx";
-    const threadPath = "/components/assistant-ui/elements/thread.aui.tsx";
+    const sessionPath = "/components/conversation-runtime/runtime/assistant-runtime-session.tsx";
+    const threadPath = "/components/conversation/thread/thread.aui.tsx";
     const { AssistantRuntimeSession } = await import(/* @vite-ignore */ sessionPath);
     const { Thread } = await import(/* @vite-ignore */ threadPath);
     const counts = { session: 0, thread: 0 };

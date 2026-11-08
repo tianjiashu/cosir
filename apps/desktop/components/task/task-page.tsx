@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { Assistant } from "@/components/assistant/assistant";
+import { Assistant } from "@/components/conversation-runtime/assistant";
 import { getTask, type WorkspaceTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalWorkbench } from "@/components/terminal/terminal-workbench";
@@ -11,7 +11,7 @@ import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { TaskWorkspaceLayout } from "@/components/task/task-workspace-layout";
 import { ErrorState } from "@/components/ui/state-panel";
-import { ThreadSkeleton } from "@/components/assistant/thread-skeleton";
+import { ThreadSkeleton } from "@/components/conversation-runtime/thread-skeleton";
 
 type TaskSessionProps = {
   taskId: number;

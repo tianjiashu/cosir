@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { AgentTeamExecutionPipeline } from "@/components/assistant-ui/tools/agent-team/agent-team-execution-pipeline";
-import { AgentTeamExecutionContent } from "@/components/assistant-ui/tools/agent-team/agent-team-execution-card";
+import { AgentTeamExecutionPipeline } from "@/components/conversation/tools/agent-team/agent-team-execution-pipeline";
+import { AgentTeamExecutionContent } from "@/components/conversation/tools/agent-team/agent-team-execution-card";
 import type { AgentTeamRun } from "@/lib/api/agent-teams";
 
 describe("Agent Team 失败流水线", () => {

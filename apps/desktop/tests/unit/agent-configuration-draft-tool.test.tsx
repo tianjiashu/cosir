@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { AgentConfigurationDraftTool } from "@/components/assistant-ui/tools/configuration-draft/agent-configuration-draft-tool";
+import { AgentConfigurationDraftTool } from "@/components/conversation/tools/configuration-draft/agent-configuration-draft-tool";
 import { WorkbenchProvider } from "@/lib/workbench/workbench-context";
 
 describe("AgentConfigurationDraftTool", () => {

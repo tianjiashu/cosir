@@ -11,7 +11,7 @@ vi.mock("@/lib/task-status/task-status-store", async (importOriginal) => ({
   useTaskExecutionStatus: (taskId: number | null | undefined) => (taskId == null ? null : taskStatuses.get(taskId) ?? null),
 }));
 
-import { CallRow } from "@/components/assistant-ui/tools/call-row";
+import { CallRow } from "@/components/conversation/tools/call-row";
 import { useDisclosureStore } from "@/lib/assistant/disclosure-store";
 import { createQueryClient } from "@/lib/query/query-client";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
