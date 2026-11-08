@@ -15,29 +15,19 @@
 }
 
 /*
- * 可点击的文字一律用链接色（--link），与正文区分：Markdown 链接（工作区文件、网页、页内锚点）与
- * 行内代码里可打开的路径。颜色只在这里定义，链接组件（components/links/markdown-links.tsx）不带
- * 颜色类；下划线平时半透明、悬停加深。可点的行内代码用虚线下划线，与普通行内代码区分。
+ * 链接是回复里可打开的对象：颜色只在这里定义，链接组件（components/links/markdown-links.tsx）不带颜色类，
+ * 下划线只在悬停时出现。行内代码是字面内容，可打开的路径平时保持代码样式，悬停才提示能点；只改下划线、
+ * 不改颜色，所以在用户气泡的反色背景上也无需特例。
  */
 .aui-md [data-streamdown="link"] {
   color: var(--link);
-  text-decoration-line: underline;
-  text-decoration-color: color-mix(in oklab, var(--link) 40%, transparent);
   text-underline-offset: 3px;
 }
 
-.aui-md [data-streamdown="link"]:hover {
-  text-decoration-color: currentColor;
-}
-
-.aui-md [data-slot="workspace-code-link"] > code {
-  color: var(--link);
-  text-decoration: underline dashed color-mix(in oklab, var(--link) 50%, transparent);
-  text-underline-offset: 3px;
-}
-
+.aui-md [data-streamdown="link"]:hover,
 .aui-md [data-slot="workspace-code-link"]:hover > code {
-  text-decoration-color: currentColor;
+  text-decoration-line: underline;
+  text-underline-offset: 3px;
 }
 
 /* 任务列表只留勾选框，不再叠一个圆点（GitHub 同款）。 */
@@ -284,8 +274,4 @@
 /* 用户气泡反转正文颜色；行内代码的底色也必须随局部前景色变化。 */
 .aui-thread-root [data-role="user"] .bg-foreground .aui-md {
   --inline-code-background: color-mix(in oklab, currentColor 15%, transparent);
-}
-.aui-thread-root [data-role="user"] .bg-foreground .aui-md [data-slot="workspace-code-link"] > code {
-  color: inherit;
-  text-decoration: underline;
 }

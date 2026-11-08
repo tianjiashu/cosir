@@ -1,3 +1,4 @@
+import { OPERATION_DRAIN_MS } from "./operation";
 import { dialog, shell, type BrowserWindow, type DownloadItem, type Rectangle, type WebContents, type WindowOpenHandlerResponse } from "electron";
 
 import { logDesktopEvent } from "../desktop-log";
@@ -21,7 +22,7 @@ import type { ActRequest, EvaluateRequest, LogsRequest, NavigateRequest, Screens
 import type { Emulation } from "./tab-emulation";
 import type { ConsoleEntry, LogPage, NetworkEntry, PageDigest } from "./tab-log";
 import { abortable } from "./abortable";
-import { budgetSignal, deadlineMs } from "./deadlines";
+import { budgetSignal, deadlineMs, withinDeadline } from "./deadlines";
 import type { Outline } from "./snapshot/outline";
 import { changesView, snapshotView, type SnapshotView } from "./snapshot/views";
 import { isWebProtocol, urlProtocol } from "./web-url";
@@ -40,7 +41,7 @@ export type PageResult = PageHead & PageDigest & {
 };
 
 /** 一次动作序列的结果：执行到哪一步、停在哪（若有），以及之后的页面。 */
-export type ActOutcome = PageResult & ActResult;
+export type ActOutcome = PageHead & { execution: ActResult; observation: PageResult | null; observationError: { code: string; message: string } | null };
 
 export type LogsResult = PageHead & ({ kind: "console" } & LogPage<ConsoleEntry> | { kind: "network" } & LogPage<NetworkEntry>);
 
@@ -49,12 +50,12 @@ export type EvaluateResult = PageHead & EvaluateOutcome;
 export type ScreenshotResult = PageHead & { image: string };
 
 /** 本 Task 的一个标签（`browser_tabs` 的列表项）。 */
-export type TaskTab = { tabId: string; title: string; url: string; current: boolean; createdBy: BrowserTabCreator };
+export type TaskTab = { tabId: string; title: string; url: string; current: boolean; createdBy: BrowserTabCreator; operation: "running" | "stopping" | "unknown" | null };
 
 /** 冻结帧每条 CDP 命令的时限：等不到就不要帧、直接收起画面，免得原生画面长时间盖住应用的弹层。 */
 const FREEZE_TIMEOUT_MS = 1_000;
 /** act 给读结果（等标签可用、读快照）留的时间：与 `browser.snapshot` 的时限相同。 */
-const ACT_RESULT_RESERVE_MS = deadlineMs("browser.snapshot");
+const ACT_RESULT_RESERVE_MS = deadlineMs("browser.snapshot") + OPERATION_DRAIN_MS + 1_000;
 
 /** `agentCalls`：此刻在这个标签上执行中的 Agent 操作数（`operate` 计数），面板据此标出「正在执行」。 */
 type TabEntry = { tab: BrowserTab; ready: Promise<void>; controller: AbortController; agentCalls: number };
@@ -113,36 +114,58 @@ export class BrowserHost implements BrowserSessionEvents {
     const entry = request.newTab || (!request.tab && !this.current.has(request.taskId))
       ? await this.open(request.taskId, request.context, "agent", true, signal)
       : this.select(request.taskId, request.tab);
+    this.assertAgentMayModify(request, entry.tab);
     return this.operate(entry, signal, async (tab, scoped) => {
-      await tab.navigate(request.target, scoped, request.emulation);
-      return this.result(tab, await tab.snapshot());
-    }, "ready");
+      await tab.modify(scoped, (operation) => tab.navigate(request.target, operation, request.emulation));
+      const head = this.head(tab);
+      try { return this.result(tab, await tab.snapshot(), scoped); }
+      catch (error) {
+        scoped.throwIfAborted();
+        return { ...head, snapshot: "", frames: 0, notes: [`navigation finished; page observation unavailable: ${describeError(error).message}`], newLogs: { consoleErrors: 0, consoleWarnings: 0, failedRequests: 0 }, otherTabs: [], dialog: null };
+      }
+    }, "ready", true);
   }
 
   async snapshot(request: SnapshotRequest, signal: AbortSignal): Promise<PageResult> {
-    return this.operate(this.agentEntry(request), signal, async (tab) => this.result(tab, await tab.snapshot(), request.view));
+    return this.operate(this.agentEntry(request), signal, async (tab, scoped) => this.result(tab, await tab.snapshot(), scoped, request.view));
   }
 
   /**
-   * 按序执行动作，无论停在哪一步都返回之后的快照（新快照带新 ref，模型能接着做）。动作在方法时限前
+   * 按序执行动作并保留执行回执；事后观察独立限时，失败不改写执行事实。动作在方法时限前
    * `ACT_RESULT_RESERVE_MS` 停下（停在的那一步报 `DEADLINE_EXCEEDED`），留出读快照的时间。
    */
   async act(request: ActRequest, signal: AbortSignal): Promise<ActOutcome> {
     const entry = this.agentEntry(request);
+    this.assertAgentMayModify(request, entry.tab);
+    const head = this.head(entry.tab);
     const budget = budgetSignal("browser.act", ACT_RESULT_RESERVE_MS, "the call ran out of time before this action");
     return this.operate(entry, signal, async (tab, scoped) => {
-      const outcome = await tab.act(request.actions, AbortSignal.any([scoped, budget]));
-      // 在初始化中的标签上答完弹窗后，初始化会接着做完；读快照前等它（或页面又停住）。
-      await this.usableTab(entry, scoped);
-      return { ...this.result(tab, await tab.snapshot(), { changes: true }), ...outcome };
-    });
+      const action = request.actions[0];
+      const control = request.actions.length === 1 && action.type === "dialog" && action.id !== undefined;
+      const execution = control
+        ? await tab.actDialog(action as Extract<typeof action, { type: "dialog" }>, scoped)
+        : await tab.act(request.actions, AbortSignal.any([scoped, budget]));
+      try {
+        const page = await withinDeadline("browser.snapshot", scoped, async (observing) => {
+          await this.usableTab(entry, observing);
+          return abortable(tab.snapshot(), observing);
+        });
+        const observation = this.result(tab, page, scoped, { changes: true });
+        return { ...this.head(tab), execution, observation, observationError: null };
+      } catch (error) {
+        logDesktopEvent("INFO", "browser", "browser_observation_failed", { tab_id: tab.tabId, task_id: tab.taskId }, error);
+        return { ...head, execution, observation: null, observationError: describeError(error) };
+      }
+    }, "usable", true);
   }
 
   async screenshot(request: ScreenshotRequest, signal: AbortSignal): Promise<ScreenshotResult> {
-    return this.operate(this.agentEntry(request), signal, async (tab, scoped) => {
+    const entry = this.agentEntry(request);
+    if (request.ref) this.assertAgentMayModify(request, entry.tab);
+    return this.operate(entry, signal, async (tab, scoped) => {
       // JPEG：同样的视口，体积比 PNG 小得多，更不容易碰到附件的单图大小上限。
       const image = request.ref
-        ? await tab.elementScreenshot(request.ref, scoped)
+        ? await tab.modify(scoped, (operation) => tab.elementScreenshot(request.ref!, operation))
         : await tab.screenshot("jpeg", { quality: 85, fullPage: request.fullPage });
       return { ...this.head(tab), image };
     });
@@ -159,8 +182,10 @@ export class BrowserHost implements BrowserSessionEvents {
   }
 
   async evaluate(request: EvaluateRequest, signal: AbortSignal): Promise<EvaluateResult> {
-    return this.operate(this.agentEntry(request), signal, async (tab, scoped) => {
-      const outcome = await tab.evaluate(request.expression, scoped);
+    const entry = this.agentEntry(request);
+    this.assertAgentMayModify(request, entry.tab);
+    return this.operate(entry, signal, async (tab, scoped) => {
+      const outcome = await tab.modify(scoped, (operation) => tab.evaluate(request.expression, operation));
       return { ...this.head(tab), ...outcome };
     });
   }
@@ -169,11 +194,15 @@ export class BrowserHost implements BrowserSessionEvents {
   manageTabs(request: TabsRequest): TaskTab[] {
     this.track(request.context);
     if (request.action === "select") this.select(request.taskId, request.tab!);
-    else if (request.action === "close") this.close(this.tabFor(request.taskId, request.tab).tab.tabId);
+    else if (request.action === "close") {
+      const { tab } = this.tabFor(request.taskId, request.tab);
+      this.assertAgentMayModify(request, tab);
+      this.close(tab.tabId);
+    }
     const current = this.current.get(request.taskId);
     return this.tabsOf(request.taskId).map(({ tab }) => {
       const { url, title, createdBy } = tab.summary();
-      return { tabId: tab.tabId, title, url, current: tab.tabId === current, createdBy };
+      return { tabId: tab.tabId, title, url, current: tab.tabId === current, createdBy, operation: tab.initialized ? tab.operation?.state ?? null : "running" };
     });
   }
 
@@ -218,7 +247,7 @@ export class BrowserHost implements BrowserSessionEvents {
 
   state(): BrowserState {
     return {
-      tabs: [...this.tabs.values()].map(({ tab, agentCalls }) => ({ ...tab.summary(), agentBusy: agentCalls > 0 })),
+      tabs: [...this.tabs.values()].map(({ tab, agentCalls }) => ({ ...tab.summary(), agentBusy: tab.operation?.state !== "unknown" && (agentCalls > 0 || tab.operation !== null), operation: tab.operation?.state ?? null })),
       downloads: this.downloads.list(),
     };
   }
@@ -268,7 +297,8 @@ export class BrowserHost implements BrowserSessionEvents {
   async userNavigate(tabId: string, target: BrowserNavigation): Promise<void> {
     const entry = this.require(tabId);
     const tab = await this.readyTab(entry);
-    await tab.navigate(target, entry.controller.signal);
+    if (tab.operation) { tab.operation.stop(); await tab.operation.finish(); }
+    await tab.modify(entry.controller.signal, (operation) => tab.navigate(target, operation));
   }
 
   userClose(tabId: string): void {
@@ -314,11 +344,16 @@ export class BrowserHost implements BrowserSessionEvents {
    * 宿主内部错误；操作碰巧在关闭后才返回（页面销毁时 Chromium 会结束在等的 Promise），结果说的是已经不在的标签，
    * 同样报关闭。
    */
+  private assertAgentMayModify(request: TabRequest, tab: BrowserTab): void {
+    if (request.handoffTabs?.includes(tab.tabId)) throw browserError("HANDED_OFF", "this tab is handed to the user; wait for them to hand it back");
+  }
+
   private async operate<T>(
     entry: TabEntry,
     signal: AbortSignal,
     run: (tab: BrowserTab, signal: AbortSignal) => Promise<T>,
     until: "usable" | "ready" = "usable",
+    preserveReceipt = false,
   ): Promise<T> {
     const scoped = AbortSignal.any([signal, entry.controller.signal]);
     const assertOpen = () => {
@@ -337,7 +372,7 @@ export class BrowserHost implements BrowserSessionEvents {
     } finally {
       this.countAgentCall(entry, -1);
     }
-    assertOpen();
+    if (!preserveReceipt) assertOpen();
     return result;
   }
 
@@ -617,7 +652,9 @@ export class BrowserHost implements BrowserSessionEvents {
    * 页面结果：页头、按请求的视图呈现的快照，以及「上次以来」——这里是它唯一的消费点（日志的 `digest` 与快照的比对
    * 基准 `deliver` 都在这里推进）。`changes`（act 之后）只给与上次结果相比的增量，比不了或变化太多时给整页。
    */
-  private result(tab: BrowserTab, page: PageSnapshot, view: SnapshotView & { changes?: boolean } = {}): PageResult {
+  private result(tab: BrowserTab, page: PageSnapshot, signal: AbortSignal, view: SnapshotView & { changes?: boolean } = {}): PageResult {
+    signal.throwIfAborted();
+    if (page.document !== tab.documentGeneration) throw browserError("REF_STALE", "the page changed while reading it; read a fresh snapshot");
     return {
       ...this.head(tab),
       snapshot: page.outline ? this.snapshotText(tab, page.outline, view) : "",
@@ -646,4 +683,8 @@ function toWindowBounds(placement: BrowserPlacement, zoom: number): Rectangle {
     width: Math.round(placement.width * zoom),
     height: Math.round(placement.height * zoom),
   };
+}
+
+function describeError(error: unknown): { code: string; message: string } {
+  return { code: (error as HostMethodError).code ?? "ACTION_FAILED", message: error instanceof Error ? error.message : String(error) };
 }

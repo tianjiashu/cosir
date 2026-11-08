@@ -75,6 +75,15 @@ class BrowserHandoffTool(HandlerBase):
             advice, hint = BROWSER_ERRORS["TAB_NOT_FOUND"]
             missing = f"tab {tab} is not one of this task's tabs" if tab else "this task has no tab"
             return tool_error(self.name, f"{missing}. {advice}", status_hint=hint)
+        if page["operation"] is not None:
+            code = "OPERATION_UNKNOWN" if page["operation"] == "unknown" else "TAB_BUSY"
+            return browser_error_observation(
+                self.name,
+                HostCallError(
+                    code,
+                    "the previous page operation has not settled; it cannot be handed over yet",
+                ),
+            )
         try:
             handoff_registry.begin(
                 HandoffLease(

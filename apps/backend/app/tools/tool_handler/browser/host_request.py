@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any, Final
 
+from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.service.browser.tab_context import BrowserTabContext
 from app.tools.host.host_call import call_host
@@ -57,6 +58,11 @@ def call_browser(
         "task_id": execution_context.task_id,
         **asdict(BrowserTabContext.from_workspace(execution_context.workspace_root)),
         **params,
+        "handoff_tabs": [
+            lease.resource_id
+            for lease in handoff_registry.leases(execution_context.task_id)
+            if lease.surface == "browser"
+        ],
     }
     return call_host(
         method, request, execution_context=execution_context, timeout_seconds=host_timeout(method)

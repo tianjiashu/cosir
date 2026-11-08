@@ -56,17 +56,18 @@ test("途中来信不切开回复：只有一个标题和脚注，展开过程�
   await expect(page.getByText("都检查完了")).toBeVisible();
 
   await page.locator('[data-slot="process-head"]').click();
-  await expect(letter).toContainText("顺便看注册");
+  await expect(letter).toContainText("来自 主任务");
+  await expect(letter).not.toContainText("顺便看注册");
   await letter.click();
   await expect(page.locator('[data-slot="agent-message-body"]')).toContainText("顺便看注册");
   await expect(page.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
 });
 
-test("Agent 消息默认一行预览、不可编辑，展开后可跳到来源 Task", async ({ page }) => {
+test("Agent 消息默认只显示来源、不可编辑，展开后可跳到来源 Task", async ({ page }) => {
   await page.goto("/tasks/42");
   const sender = page.locator('[data-slot="agent-message-toggle"]');
   await expect(sender).toContainText("来自 主任务");
-  await expect(sender).toContainText("请检查登录流程");
+  await expect(sender).not.toContainText("请检查登录流程");
   // 不画成用户气泡：没有「编辑并重跑」入口（它是最新一条 user 消息，用户消息在此时可编辑）。
   await expect(page.locator('[data-role="agent-message"]')).toHaveCount(1);
   await expect(page.locator('[data-role="user"]')).toHaveCount(0);

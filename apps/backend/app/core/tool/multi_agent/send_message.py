@@ -5,6 +5,7 @@ from typing import ClassVar, cast
 
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileConfigError, AgentProfileType
+from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -22,7 +23,8 @@ from app.models import ConversationRunRecord, TaskRecord
 from app.models.conversation_input import MessageSource
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.errors.input_errors import UserInputRejectedError
-from app.core.tool.multi_agent.agent_message import prepare_agent_message
+from app.models.task_kind import TaskType
+from app.service.conversation_run.task_launch import initial_task_launch
 from app.service.depends import (
     get_task_message_queue,
     get_task_service,
@@ -61,7 +63,7 @@ class SendMessageTool(HandlerBase):
             target = self._task_service.get_task(task_id)
             if target.id == sender.id or target.workspace_id != sender.workspace_id:
                 return tool_error(self.name, "Choose another task in this workspace.")
-            if "agent_team_node" in (target.task_type, sender.task_type) and not (
+            if TaskType.TEAM_NODE_TASK in (target.task_type, sender.task_type) and not (
                 target.derived_by(sender.id) or sender.derived_by(target.id)
             ):
                 return tool_error(self.name, "Team nodes are managed by their coordinator.")
@@ -104,8 +106,11 @@ class SendMessageTool(HandlerBase):
             first = next_input(get_task_message_queue().pending_nowait(target.id))
             if first is not None:
                 return cast(LaunchInputBody, first.body).launch
+            initial = initial_task_launch(target)
+            if initial is not None:
+                return initial
             return tool_error(self.name, "The target task has no launch configuration yet.")
-        if target.task_type == "delegate_task":
+        if target.task_type == TaskType.AGENT_TASK:
             return self._child_profile_launch(target, current, execution_context)
         launch = RunLaunch.from_run(current)
         if launch is None:

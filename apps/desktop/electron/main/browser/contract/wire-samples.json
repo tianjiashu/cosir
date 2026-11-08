@@ -40,31 +40,62 @@
       "color_scheme": null,
       "follows_panel": true
     },
-    "snapshot": "",
-    "frames": 0,
-    "notes": [],
-    "new_logs": {
-      "console_errors": 0,
-      "console_warnings": 0,
-      "failed_requests": 0
+    "execution": {
+      "steps": [
+        {
+          "target": "button \"Delete\"",
+          "status": "done",
+          "error": null
+        },
+        {
+          "target": null,
+          "status": "failed",
+          "error": {
+            "code": "DIALOG_OPEN",
+            "message": "the page is paused: it is showing a confirm dialog (#7)"
+          }
+        },
+        {
+          "target": null,
+          "status": "skipped",
+          "error": null
+        }
+      ],
+      "interruption": {
+        "code": "DIALOG_OPEN",
+        "message": "the page is paused: it is showing a confirm dialog (#7)"
+      }
     },
-    "other_tabs": [],
-    "dialog": {
-      "id": 7,
-      "type": "confirm",
-      "message": "Delete it?",
-      "default_text": ""
+    "observation": {
+      "tab_id": "t3",
+      "url": "http://127.0.0.1:5173/login",
+      "title": "Sign in",
+      "loading": false,
+      "status": 200,
+      "emulation": {
+        "width": 1280,
+        "height": 800,
+        "mobile": false,
+        "color_scheme": null,
+        "follows_panel": true
+      },
+      "snapshot": "",
+      "frames": 0,
+      "notes": [],
+      "new_logs": {
+        "console_errors": 0,
+        "console_warnings": 0,
+        "failed_requests": 0
+      },
+      "other_tabs": [],
+      "dialog": {
+        "id": 7,
+        "type": "confirm",
+        "message": "Delete it?",
+        "default_text": ""
+      }
     },
-    "completed": 1,
-    "failure": {
-      "index": 1,
-      "code": "DIALOG_OPEN",
-      "message": "the page is paused: it is showing a confirm dialog (#7)"
-    },
-    "targets": [
-      "button \"Delete\"",
-      null
-    ]
+    "observation_error": null
   },
   "console_logs": {
     "tab_id": "t3",
@@ -294,14 +325,16 @@
       "title": "Home",
       "url": "http://127.0.0.1:5173/",
       "current": false,
-      "created_by": "user"
+      "created_by": "user",
+      "operation": null
     },
     {
       "tab_id": "t3",
       "title": "Sign in",
       "url": "http://127.0.0.1:5173/login",
       "current": true,
-      "created_by": "agent"
+      "created_by": "agent",
+      "operation": null
     }
   ]
 }

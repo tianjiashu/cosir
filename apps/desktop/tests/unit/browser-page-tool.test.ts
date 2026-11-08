@@ -31,11 +31,13 @@ describe("browser-page display", () => {
       { action: "click", target: 'button "Add"', status: "done" },
       { action: "type", target: "e9", status: "failed", hint: "元素已失效" },
       { action: "press", target: null, status: "skipped" },
+      { action: "click", target: "submit", status: "unknown", hint: "结果未知" },
     ];
     expect(readBrowserPageDisplay({ ...PAGE, steps })?.steps).toEqual(steps);
     expect(readBrowserPageDisplay({ ...PAGE, steps: [{ action: "click", target: 3, status: "done" }] })?.steps).toBeUndefined();
     const context = { taskId: 1, toolCallId: "c", artifact: {} as ToolArtifact, args: {}, interactive: true, taskCancelling: false };
     expect(browserPageView({ ...PAGE, steps }, context)?.detail?.defaultOpen).toBe(true);
+    expect(browserPageView({ ...PAGE, steps: steps.slice(3) }, context)?.detail?.defaultOpen).toBe(true);
     expect(browserPageView({ ...PAGE, steps: steps.slice(0, 1) }, context)?.detail?.defaultOpen).toBe(false);
   });
 
@@ -43,8 +45,8 @@ describe("browser-page display", () => {
     const artifact = (display_data: Record<string, unknown>): ToolArtifact => ({presentation: "activity",
       backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null, errorCode: null,
     });
-    expect(resolveCallView(artifact(PAGE), {} as CallViewContext)).toMatchObject({ meta: expect.anything() });
-    expect(resolveCallView(artifact({ ...PAGE, handoff_reason: "sign in" }), {} as CallViewContext)).toMatchObject({ meta: expect.anything() });
-    expect(resolveCallView(artifact({ kind: "browser-page" }), {} as CallViewContext)).toBeNull();
+    expect(resolveCallView({ artifact: artifact(PAGE) } as CallViewContext)).toMatchObject({ meta: expect.anything() });
+    expect(resolveCallView({ artifact: artifact({ ...PAGE, handoff_reason: "sign in" }) } as CallViewContext)).toMatchObject({ meta: expect.anything() });
+    expect(resolveCallView({ artifact: artifact({ kind: "browser-page" }) } as CallViewContext)).toBeNull();
   });
 });

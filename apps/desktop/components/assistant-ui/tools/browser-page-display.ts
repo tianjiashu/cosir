@@ -4,7 +4,7 @@ import { ATTACHMENT_ASSET_ID } from "@/lib/assistant/attachments/attachment-loca
 export type BrowserActStep = {
   action: string;
   target: string | null;
-  status: "done" | "failed" | "skipped";
+  status: "done" | "failed" | "skipped" | "unknown";
   /** 停在这一步的短提示（后端分类映射）。 */
   hint?: string;
 };
@@ -22,7 +22,7 @@ export type BrowserPageDisplay = {
   steps?: BrowserActStep[];
 };
 
-const STEP_STATUSES = new Set(["done", "failed", "skipped"]);
+const STEP_STATUSES = new Set(["done", "failed", "skipped", "unknown"]);
 
 /** 校验展示载荷；形状不对返回 null，由注册表回落通用卡片。 */
 export function readBrowserPageDisplay(value: unknown): BrowserPageDisplay | null {

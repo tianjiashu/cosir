@@ -1,11 +1,14 @@
 """fork_task 工具：把当前对话复制成一条侧栏可见的分叉对话，交给它一份子任务，结论回投给自己。
 
-与 ``delegate_task`` 的分工：委派换一个子 Agent 身份、只带任务说明；fork 不换身份，带着这段对话的
-全部上下文去做。两者共用派生的其余部分：派生深度（``core.tool.derivation.child_depth``；到上限的
-Task 创建时就拿不到派生工具）、以 Agent 消息投递任务说明、以父调用的 ``tool_call_id`` 登记后台等待
-（``child_run_job.run_child``），父 Agent 用 ``wait_messages`` 等结论。
+与 ``delegate_task`` 的分工：委派换一个子 Agent 身份、只带任务说明；fork 不换身份，带着到上一条回复为止的
+上下文去做。两者共用派生的其余部分：派生深度（``core.tool.derivation.child_depth``）、以 Agent 消息
+投递任务说明、以父调用的 ``tool_call_id`` 登记后台等待（``child_run_job.run_child``），父 Agent 用
+``wait_messages`` 等结论。
 
-分叉是侧栏对话（``task_type="fork"``，来源记在 ``extra.fork``、``created_by == "agent"``），不挂在
+继承的历史是第一人称的，分叉自己分不清哪些事归它：曾把来源没做完的请求接过去，并自认是父会话。
+所以任务说明前先投一条交接通知，写清身份与任务归属；通知不进请求前缀，不影响缓存。
+
+分叉是侧栏对话（``task_type="agent_fork"``，来源记在 ``extra.fork``），不挂在
 所有权子树上：删除父对话时按用户 fork 的规则改挂，而不是一起删掉。父 Task 停止时，登记表撤销条目，
 撤销回调以 ``parent`` 原因停下它还在等的分叉；结论已回投、不再被等的分叉不受影响，用户可以接着聊。
 """
@@ -14,9 +17,10 @@ import json
 from typing import Any, ClassVar, cast
 
 from app.config.logging.logger import log
-from app.core.tool.multi_agent.derivation import child_depth
+from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.fork_task_args import ForkTaskArgs
 from app.core.tool.multi_agent.child_agent.child_run_job import run_child
+from app.core.tool.multi_agent.derivation import child_depth
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -29,12 +33,19 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.core.workflow.message_queue.task_message import RunLaunch
+from app.core.workflow.message_queue.task_message import NoticeBody, RunLaunch, TaskMessage
 from app.models.conversation_input import MessageSource
 from app.models.errors.task_fork_errors import TaskForkConflictError
-from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.service.depends import get_conversation_run_ledger, get_task_service
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+
+_HANDOVER_NOTICE = (
+    "You are task {fork_id}, a fork of task {source_id}. The conversation above was copied from "
+    "that task as background: requests in it belong to that task, even where they read as your "
+    "own work, so do not pick them up. Your only job is the assignment in the next message. Your "
+    "final reply goes to task {source_id} automatically, so do not send it with send_message. If "
+    "the user later talks to you here, follow the user."
+)
 
 
 class ForkTaskTool(HandlerBase):
@@ -43,9 +54,9 @@ class ForkTaskTool(HandlerBase):
     name: str = TOOL_FORK_TASK
     description: str = (
         "Fork this conversation into a new sidebar conversation and hand it one part of the "
-        "work. The fork keeps your identity, tools and this whole conversation up to now, so "
-        "the message only needs to say what is new for it: its scope, what to leave to you, and "
-        "what to report back. Use it to split a task into parts that each need this context; "
+        "work. It inherits your identity, tools and the conversation up to your previous reply. "
+        "The current turn, including the input that started it and all work done in it, is "
+        "excluded. Supply a complete new assignment with goal, constraints, necessary new facts and expected deliverable. Use it to split a task into parts that each need this context; "
         "use delegate_task instead when a specialised child agent should do a self-contained "
         "task. The fork does not see anything said here after it starts, and the user can open "
         "and talk to it. It always runs in the background: wait for its conclusion with "
@@ -94,17 +105,20 @@ class ForkTaskTool(HandlerBase):
             )
 
             def enqueue() -> None:
-                task_runtime_spaces.enqueue(
-                    fork.id,
-                    prepare_agent_message(
-                        message,
-                        source=MessageSource(task_id=parent_task.id, name=parent_task.title),
-                        agent_id=launch.agent_id,
-                        model_config_id=launch.model_config_id,
-                        reasoning_effort=launch.options.reasoning_effort,
-                        disabled_tool_groups=launch.options.disabled_tool_groups,
-                    ),
+                assignment = prepare_agent_message(
+                    message,
+                    source=MessageSource(task_id=parent_task.id, name=parent_task.title),
+                    agent_id=launch.agent_id,
+                    model_config_id=launch.model_config_id,
+                    reasoning_effort=launch.options.reasoning_effort,
+                    disabled_tool_groups=launch.options.disabled_tool_groups,
                 )
+                # 通知先入队：不唤醒、不开 Run，随任务说明开出的第一个 Run 写在它前面。
+                handover = _HANDOVER_NOTICE.format(fork_id=fork.id, source_id=parent_task.id)
+                task_runtime_spaces.enqueue(
+                    fork.id, TaskMessage.of(NoticeBody(content=handover, notice_kind="fork_handover"))
+                )
+                task_runtime_spaces.enqueue(fork.id, assignment)
 
             def placeholder() -> ToolObservation:
                 return tool_success(
@@ -160,6 +174,7 @@ class ForkTaskTool(HandlerBase):
     def to_definition(self) -> ToolDefinition:
         """工具级 ``parallel``：同一回复里的多个分叉并发建出（复制由 workspace 闸门串行化）。"""
         return ToolDefinition(
+            conversation_presentation="standalone",
             name=self.name,
             group=self.group,
             description=self.description,

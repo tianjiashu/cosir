@@ -15,7 +15,7 @@
 | 外部观察者 | 无外部团队或第三方消费者。可观察面是：用户界面行为、结构化日志（`frontendLog` 落盘到 `.cosir/logs/`，属于受保护的可观测性）、跨进程契约的对端 | AGENTS.md「日志打印与排查」 |
 | 质量要求 | 可排查日志为铁律；进程生命周期（后端启停、退出清理、崩溃恢复有限且串行）为关键失败安全路径；渲染进程开启 contextIsolation 与 sandbox；不为低概率事件叠多层防御 | AGENTS.md |
 | 规模与协作 | 前端约 400 个生产 TS/TSX 文件；提交历史中 2 位作者（以 tianjiashu 为主），按单人主导开发看待，合并与抽象的协作成本低 | git log；代码统计 |
-| 项目规范 | 根 `AGENTS.md`（第零铁律、五条铁律、禁止 `getattr` 式能力探测、抽象按需引入、不层层防御校验、日志规范、docstring 约定）；`rules/Agent代码开发规范.md`；前端 ESLint 自定义规则（禁止原始色板、任意字号、直接用 `error.message` 作界面文案） | 文件 |
+| 项目规范 | 根 `AGENTS.md`（第零铁律、三条铁律、禁止 `getattr` 式能力探测、抽象按需引入、不层层防御校验、日志规范、docstring 约定）；`rules/Agent代码开发规范.md`；前端 ESLint 自定义规则（禁止原始色板、任意字号、直接用 `error.message` 作界面文案） | 文件 |
 
 ## 工具链（`apps/desktop`）
 

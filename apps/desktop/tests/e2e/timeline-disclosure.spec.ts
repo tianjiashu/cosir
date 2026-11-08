@@ -119,19 +119,21 @@ test("A6/A7 pending draft survives disclosure and task switch; approved timeline
   await seedState(request, 42, state([{ ...teamPart(), awaitingUser: false, background: { kind: "agent_team", label: "代码检查", startedAt, endedAt: null } }]));
   await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: [{ toolCallId: "team", kind: "agent_team", label: "代码检查", status: "running", startedAt, endedAt: null }] } });
   await expect(form).toBeHidden();
-  await expect(row).toContainText("执行中");
+  await expect(row.locator('[data-slot="call-title"]')).toHaveAttribute("data-thinking-active", "true");
   await expect(row.getByRole("region", { name: "Agent Team 执行进度" })).toHaveCount(0);
-  await row.getByRole("button", { name: "查看", exact: true }).click();
+  await row.locator('[data-slot="call-row"]').click();
   await expect(page.locator('[data-background-task="team"]').getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("team-background.png") });
 });
 
-for (const [status, endReason, label] of [["completed", null, "已完成"], ["failed", "error", "执行失败"], ["cancelled", "user_rejected", "已驳回"]] as const) test(`A7 Team ${status}/${endReason}: entity outcome is static and never an approval form`, async ({ page, request }) => {
+for (const [status, endReason, label] of [["completed", null, null], ["failed", "error", "执行失败"], ["cancelled", "user_rejected", "已驳回"]] as const) test(`A7 Team ${status}/${endReason}: entity outcome is static and never an approval form`, async ({ page, request }) => {
   await page.route("**/agent-team/runs/17", route => route.fulfill({ json: { id: 17, team_id: "review", goal: "检查", status, end_reason: endReason, nodes: [], current_node_id: null } }));
   await seedState(request, 42, state([{ ...teamPart(), status: "completed", awaitingUser: false }], outcome("completed")));
   await page.goto("/tasks/42");
   const row = page.locator('[data-slot="turn"] [data-tool-call-id="team"]');
-  await expect(row).toContainText(label);
+  await expect(row.locator('[data-slot="call-title"]')).toBeVisible();
+  if (label) await expect(row).toContainText(label);
+  else await expect(row).not.toContainText("已完成");
   await expect(page.locator('[data-slot="agent-team-approval"]')).toHaveCount(0);
   await expect(row.locator('[data-thinking-active="true"]')).toHaveCount(0);
 });

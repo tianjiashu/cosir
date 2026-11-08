@@ -7,7 +7,7 @@ import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 const resolve = (display_data: Record<string, unknown>) => {
   const artifact: ToolArtifact = { presentation: "activity", backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null, errorCode: null };
   const context: CallViewContext = { artifact, taskId: 1, toolCallId: "c", args: {}, interactive: true, taskCancelling: false };
-  return resolveCallView(artifact, context);
+  return resolveCallView(context);
 };
 
 it.each(["unknown", "constructor", "toString", "__proto__"])("unknown kind %s never dispatches inherited properties", kind => {

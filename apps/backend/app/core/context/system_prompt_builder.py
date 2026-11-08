@@ -22,7 +22,7 @@ W. ``<work_layer>`` 工作方式层：过程叙述与收尾方式——让用户
 4. ``<workspace_layer>`` Workspace 项目层：只认 ``AGENTS.md``，按目录层级择优（顶层优先）
    选出**唯一**一个项目指令文件，受预算闸门约束，避免上下文爆炸。文件定位规则由
    ``app.utils.workspace_instruction`` 统一提供。
-5. ``<output_layer>`` 输出契约层：模型怎么写最终回答（Markdown 能力、文件链接格式、回复语言与
+5. ``<output_layer>`` 输出契约层：模型怎么写最终回答（Markdown 能力、链接格式、回复语言与
    emoji）。固定文案、不读文件，因此不施加预算；排在最后，让「怎么输出」紧邻每轮请求的末尾。
 
 空层块（``""``）不参与拼接，避免相邻层之间出现多余空行。
@@ -581,7 +581,7 @@ class SystemPromptBuilder:
     # --- Layer 5: 输出契约层（怎么写回答，固定文案） ---
     @staticmethod
     def _build_output_layer() -> str:
-        """构建输出契约层：Markdown 能力、文件链接格式、回复语言与 emoji。
+        """构建输出契约层：Markdown 能力、链接格式、回复语言与 emoji。
 
         固定文案、不读文件，因此不施加预算。放在系统提示词最后：格式要求离每轮请求最近，模型更
         不容易按自己的习惯漂移；用户输入里也会带一句指向本层的提醒（见 ``UserInputBody.text``）。
@@ -599,16 +599,17 @@ class SystemPromptBuilder:
                 "code are supported; use them when helpful."
             ),
             (
-                "- Links: write workspace files as Markdown links with workspace-relative paths, "
-                "and put line numbers in the fragment, e.g. `[app.ts:42](src/app.ts#L42)` or "
-                "`[app.ts](src/app.ts#L42-L60)`; end directory paths with `/`. The user can click "
-                "them to open the file at that line. A short label must retain the complete "
-                "workspace-relative destination, e.g. `[API.md](docs/brand/API.md)`. "
-                "Do not guess a path from a bare filename: locate it first when a link is needed. "
-                "Use ordinary Markdown file links in replies, including when referring to a "
-                "user-provided snippet; they open the current file, not the saved snippet. "
-                "URL-encode special characters in destinations (such as spaces, % and #). "
-                "Web URLs are clickable as usual."
+                "- Links: link what the reader may want to open, such as deliverables, changed "
+                "locations, and sources. Link each target once, where it first matters; later "
+                "mentions stay plain text. Use backticks only for literal code, commands, and "
+                "values, never around links.\n"
+                "  - Files: keep labels short, but use the full workspace-relative path as the "
+                "destination, e.g. `[app.ts:42](src/app.ts#L42)`, `[app.ts](src/app.ts#L42-L60)`, "
+                "`[API.md](docs/brand/API.md)`. End directories with `/`. URL-encode spaces, % "
+                "and #. Locate a bare filename before linking; never guess. File links open the "
+                "current file, including for user-provided snippets.\n"
+                "  - Web: label pages by name, not raw URL, e.g. "
+                "`[owner/repo#123](https://github.com/owner/repo/pull/123)`."
             ),
             (
                 f"- User language: {language}. Reply in that language in a friendly tone; do "

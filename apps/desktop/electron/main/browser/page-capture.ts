@@ -23,16 +23,16 @@ export type CaptureOptions = { quality?: number; fullPage?: boolean; element?: B
  * 像素一致（几何见 `page-geometry.ts`）。`fullPage` 截整页，高度封顶。`devicePixels` 按屏幕像素出图、`timeoutMs`
  * 缩短每条命令的时限，都只给浏览器面板的冻结帧用。
  */
-export async function captureScreenshot(session: CdpSession, format: "jpeg" | "png", options: CaptureOptions = {}): Promise<string> {
+export async function captureScreenshot(send: CdpSession["send"], format: "jpeg" | "png", options: CaptureOptions = {}): Promise<string> {
   const timing = { timeoutMs: options.timeoutMs };
-  const { visual, content, deviceRatio } = await readGeometry((method, params) => session.send(method, params, timing));
+  const { visual, content, deviceRatio } = await readGeometry((method, params) => send(method, params, timing));
   const clip = options.element
     ? elementClip(options.element, visual)
     : options.fullPage
       ? { x: 0, y: 0, width: visual.width, height: Math.min(content.height, FULL_PAGE_MAX_HEIGHT) }
       : visual;
   const zoom = options.element ? Math.min(ELEMENT_MAX_ZOOM, Math.max(1, ELEMENT_MIN_SIDE / Math.min(clip.width, clip.height))) : 1;
-  const { data } = await session.send<{ data: string }>("Page.captureScreenshot", {
+  const { data } = await send<{ data: string }>("Page.captureScreenshot", {
     format,
     ...(options.quality === undefined ? {} : { quality: options.quality }),
     clip: { ...clip, scale: zoom * (options.devicePixels ? 1 : 1 / deviceRatio) },

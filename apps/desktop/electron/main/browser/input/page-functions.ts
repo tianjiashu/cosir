@@ -1,6 +1,6 @@
 import { browserError } from "../errors";
-import { callOn, element, evaluate, onNode } from "./element";
-import { effect, type PageSession } from "./session";
+import { actionable, callOn, element, evaluate, onNode } from "./element";
+import type { BrowserOperation } from "../operation";
 
 /**
  * 在页面里执行的固定函数（滚动、清空字段、选择下拉项）与用它们实现的动作。函数体是本模块里写死的字符串，
@@ -49,20 +49,22 @@ const SELECT_OPTIONS = `function (values) {
  * 内容），不带 ref 滚动整页；滚不动报 `SCROLL_END`，让无限滚动的批次停下而不是空转。只有 ref 时把元素滚入
  * 视野（截图前定位用；点击与输入会自己滚）。不用 CDP 滚轮：视图不挂在窗口上时它永远不返回（实测）。
  */
-export async function scroll(session: PageSession, direction: "up" | "down" | undefined, ref: string | undefined): Promise<void> {
+export async function scroll(session: BrowserOperation, direction: "up" | "down" | undefined, ref: string | undefined): Promise<void> {
   if (direction === undefined) {
     await onNode(session, await element(session, ref!), "DOM.scrollIntoViewIfNeeded");
     return;
   }
   const down = direction === "down";
   const problem = ref
-    ? await effect(callOn(session, await element(session, ref), SCROLL_AREA, [down]))
-    : await effect(evaluate(session, `(${SCROLL_AREA}).call(document.documentElement, ${down})`));
+    ? await session.effect(async () => callOn(session, await element(session, ref), SCROLL_AREA, [down]))
+    : await session.effect(() => evaluate(session, `(${SCROLL_AREA}).call(document.documentElement, ${down})`));
   if (problem) throw browserError("SCROLL_END", problem);
 }
 
 /** 原生下拉列表按值或可见文字选择；自定义下拉要先点开再点选项（工具描述里说明）。 */
-export async function select(session: PageSession, ref: string, values: readonly string[]): Promise<void> {
-  const problem = await effect(callOn(session, await element(session, ref), SELECT_OPTIONS, [values]));
+export async function select(session: BrowserOperation, ref: string, values: readonly string[]): Promise<void> {
+  const node = await element(session, ref);
+  await actionable(session, node, false, false);
+  const problem = await session.effect(() => callOn(session, node, SELECT_OPTIONS, [values]));
   if (problem) throw browserError("ACTION_FAILED", problem);
 }

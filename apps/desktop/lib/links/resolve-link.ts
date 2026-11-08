@@ -8,8 +8,11 @@ export type WorkspaceLink = { kind: "workspace"; path: string; directory: boolea
 /** 只有文件名的提及：用户选择候选，不能以根目录或搜索排序推断身份。 */
 export type FilenameSearch = { kind: "filename-search"; query: string; lines?: LineRange };
 
-/** 网页或邮件地址；`local` 表示本机开发服务（localhost / 回环地址）。 */
-export type WebLink = { kind: "web"; url: string; local: boolean };
+/**
+ * 网页或邮件地址。`local` 表示本机开发服务（localhost / 回环地址）；`publicHost` 是公网主机名，
+ * 只有它才可以对外取站点图标，本机、内网与邮件地址为 null。
+ */
+export type WebLink = { kind: "web"; url: string; local: boolean; publicHost: string | null };
 
 /** 同一篇 Markdown 里的位置（脚注引用与返回、标题锚点）；`id` 是已解码的目标元素 id。 */
 export type AnchorLink = { kind: "anchor"; id: string };
@@ -189,7 +192,22 @@ function webLink(url: string): WebLink | null {
   } catch {
     return null;
   }
+  if (parsed.protocol === "mailto:") return { kind: "web", url, local: false, publicHost: null };
   const host = parsed.hostname.toLowerCase();
-  const local = parsed.protocol !== "mailto:" && (LOCAL_HOSTS.has(host) || host.endsWith(".localhost"));
-  return { kind: "web", url, local };
+  const local = LOCAL_HOSTS.has(host) || host.endsWith(".localhost");
+  return { kind: "web", url, local, publicHost: local || isPrivateHost(host) ? null : host };
+}
+
+/** 内网主机：IP 字面量按保留网段判断；域名里只有不带点的单名与 `.local` 能确定不在公网。 */
+function isPrivateHost(host: string): boolean {
+  if (host.startsWith("[")) return /^\[(?:f[cd]|fe[89ab])/.test(host);
+  const octets = host.split(".").map(Number);
+  if (octets.length === 4 && octets.every((part) => Number.isInteger(part))) {
+    const [first, second] = octets;
+    return first === 0 || first === 10 || first === 127 || (first === 169 && second === 254)
+      || (first === 172 && second >= 16 && second <= 31)
+      || (first === 192 && second === 168)
+      || (first === 100 && second >= 64 && second <= 127);
+  }
+  return !host.includes(".") || host.endsWith(".local");
 }

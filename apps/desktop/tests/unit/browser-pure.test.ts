@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { BrowserDialog, BrowserDialogAnswer } from "@/electron/shared/host-contract";
 import { HostMethodError } from "@/electron/main/host-link/methods";
 import { runActions } from "@/electron/main/browser/input/actions";
 import type { Box } from "@/electron/main/browser/input/element";
-import type { FileChooser, PageSession } from "@/electron/main/browser/input/session";
+import { BrowserOperation, type FileChooser } from "@/electron/main/browser/operation";
+import type { BrowserTab } from "@/electron/main/browser/browser-tab";
+import type { SendOptions } from "@/electron/main/browser/cdp-session";
+vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
 import { parseAct, parseDropTasks, parseNavigate, parseSnapshot, type PageAction } from "@/electron/main/browser/params";
 import { addressToUrl } from "@/electron/main/browser/web-url";
 import { describeTarget } from "@/electron/main/browser/input/targets";
@@ -53,7 +56,7 @@ describe("params", () => {
     expect(parseNavigate(navigate({ action: "reload", viewport: "auto" })).emulation).toEqual({ viewport: "follow" });
     expect(parseNavigate(navigate({ action: "reload", color_scheme: "dark" })).emulation).toEqual({ colorScheme: "dark" });
     expect(parseSnapshot(snapshot({}))).toEqual({
-      taskId: 7, view: { scope: "page" }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+      taskId: 7, handoffTabs: [], view: { scope: "page" }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
     });
     expect(parseSnapshot(snapshot({ from_line: 40, scope: "viewport", find: "Buy" }))).toMatchObject({ view: { scope: "viewport", find: "Buy", fromLine: 40 } });
     // 每个请求都带上下文（宿主据此刷新上限）；参数模型的字段一个都不能少。
@@ -406,7 +409,7 @@ function fakeSession(
     dialogOn?: (method: string, params: Record<string, unknown>) => boolean;
     initialDialog?: BrowserDialog | null;
   } = {},
-): { session: PageSession; calls: Call[]; highlighted: Box[]; answered: [number, BrowserDialogAnswer][] } {
+): { session: BrowserOperation; calls: Call[]; highlighted: Box[]; answered: [number, BrowserDialogAnswer][] } {
   const calls: Call[] = [];
   const highlighted: Box[] = [];
   const answered: [number, BrowserDialogAnswer][] = [];
@@ -416,7 +419,7 @@ function fakeSession(
   const paused = () => (dialog ? new HostMethodError("DIALOG_OPEN", `the page is paused: it is showing a ${dialog.type} dialog (#${dialog.id})`) : null);
   const listeners = new Map<string, Set<(params: never) => void>>();
   let intercepting = false;
-  const session: PageSession = {
+  const capabilities: Pick<BrowserOperation, "cdp" | "resolveRef" | "frameOffset" | "on" | "settle" | "toInput" | "geometry" | "fileChooser" | "highlight" | "paused" | "dialog" | "answerDialog"> = {
     cdp: async <T,>(method: string, params: Record<string, unknown> = {}, options: { browserSide?: boolean; sessionId?: string } = {}) => {
       // 与 `CdpSession` 的闸门一致：页面停着时只有浏览器进程作答的命令能回复。
       if (dialog && !options.browserSide) throw paused();
@@ -470,6 +473,20 @@ function fakeSession(
       answered.push([id, reply]);
     },
   };
+  const tab = {
+    taskId: 1, tabId: "t1", documentGeneration: 0,
+    contents: { isDestroyed: () => false }, noteAgentInput() {}, operationChanged() {}, operationSettled() {},
+    refLabel: () => undefined,
+    session: { send: <T,>(method: string, params: Record<string, unknown>, options: SendOptions) => {
+      options.signal?.throwIfAborted();
+      options.onDispatch?.();
+      const raw = capabilities.cdp<T>(method, params, options);
+      options.onCommand?.(raw);
+      return raw;
+    } },
+  } as unknown as BrowserTab;
+  const session = new BrowserOperation(tab, new AbortController().signal);
+  Object.assign(session, { ...capabilities, cdp: session.cdp });
   return { session, calls, highlighted, answered };
 }
 
@@ -477,7 +494,7 @@ const mouse = (type: string) => (method: string, params: Record<string, unknown>
 
 const clickOn = (ref: string): PageAction => ({ type: "click", target: { ref }, button: "left", clickCount: 1, modifiers: [] });
 
-const run = (session: PageSession, ...actions: PageAction[]) => runActions(session, actions, new AbortController().signal);
+const run = (session: BrowserOperation, ...actions: PageAction[]) => runActions(session, actions, new AbortController().signal);
 
 describe("runActions", () => {
   // 目的：面板缩放显示固定视口时，CDP 合成输入的坐标是视图坐标；潜在缺陷：不换算就点到别处（实测缩放 0.5 时落点翻倍）。
@@ -492,7 +509,7 @@ describe("runActions", () => {
   it("treats a dialog opened on an action's effect command as its effect and answers it in the same batch", async () => {
     const { session, answered } = fakeSession({}, { dialogOn: mouse("mouseReleased") });
     const outcome = await run(session, clickOn("e2"), { type: "dialog", accept: true });
-    expect(outcome).toEqual({ completed: 2, failure: null });
+    expect(outcome).toMatchObject({ steps: [{ status: "unknown" }, { status: "done" }], interruption: { code: "DIALOG_OPEN" } });
     expect(answered).toEqual([[7, { accept: true, text: undefined }]]);
   });
 
@@ -501,39 +518,39 @@ describe("runActions", () => {
   it("fails an action when the dialog appears before its effect, and does not count a wait as done", async () => {
     const hovered = fakeSession({}, { dialogOn: mouse("mouseMoved") });
     const click = await run(hovered.session, clickOn("e2"), { type: "dialog", accept: true });
-    expect(click).toMatchObject({ completed: 0, failure: { index: 0, code: "DIALOG_OPEN" } });
+    expect(click).toMatchObject({ interruption: { code: "DIALOG_OPEN" } });
     expect(hovered.answered).toEqual([]);
 
     const waiting = fakeSession({}, { dialogOn: (method) => method === "Runtime.evaluate" });
     const wait = await run(waiting.session, { type: "wait_for", text: "Done", seconds: 1 });
-    expect(wait).toMatchObject({ completed: 0, failure: { index: 0, code: "DIALOG_OPEN" } });
+    expect(wait).toMatchObject({ interruption: { code: "DIALOG_OPEN" } });
   });
 
   // 目的：作答必须对准看见的那个弹窗；潜在缺陷：调用开始时已有的弹窗被一个不带编号的作答答掉，或答给了换上来的新弹窗。
   it("answers a dialog that was already open only by its id", async () => {
     const initialDialog = { id: 3, type: "alert" as const, message: "hi", defaultText: "" };
     const unnamed = fakeSession({}, { initialDialog });
-    expect(await run(unnamed.session, { type: "dialog", accept: true })).toMatchObject({ completed: 0, failure: { code: "DIALOG_MISMATCH" } });
-    expect(await run(unnamed.session, { type: "dialog", accept: true, id: 4 })).toMatchObject({ completed: 0, failure: { code: "DIALOG_MISMATCH" } });
+    expect(await run(unnamed.session, { type: "dialog", accept: true })).toMatchObject({ interruption: { code: "DIALOG_MISMATCH" } });
+    expect(await run(unnamed.session, { type: "dialog", accept: true, id: 4 })).toMatchObject({ interruption: { code: "DIALOG_MISMATCH" } });
     expect(unnamed.answered).toEqual([]);
-    expect(await run(unnamed.session, { type: "dialog", accept: true, id: 3 })).toEqual({ completed: 1, failure: null });
+    expect(await run(unnamed.session, { type: "dialog", accept: true, id: 3 })).toMatchObject({ steps: Array(1).fill({ status: "done" }), interruption: null });
     expect(unnamed.answered).toEqual([[3, { accept: true, text: undefined }]]);
   });
 
   it("stops other actions while the page is paused, and refuses to answer a dialog that is not there", async () => {
     const opened = fakeSession({}, { dialogOn: mouse("mouseReleased") });
     const blocked = await run(opened.session, clickOn("e2"), { type: "hover", target: { ref: "e2" } });
-    expect(blocked).toMatchObject({ completed: 1, failure: { index: 1, code: "DIALOG_OPEN" } });
+    expect(blocked).toMatchObject({ interruption: { code: "DIALOG_OPEN" } });
 
     const none = await run(fakeSession().session, { type: "dialog", accept: false });
-    expect(none).toMatchObject({ completed: 0, failure: { index: 0, code: "NO_DIALOG" } });
+    expect(none).toMatchObject({ interruption: { code: "NO_DIALOG" } });
   });
 
   // 目的：稳定 ref 可能来自更早的快照；潜在缺陷：焦点落在已脱离文档的节点上，字输进别的元素。
   it("refuses refs whose element left the document", async () => {
     const { session, calls } = fakeSession({ isConnected: "detached" });
     const outcome = await run(session, { type: "type", ref: "e7", text: "hi", clear: false, submit: false, keyByKey: false });
-    expect(outcome).toMatchObject({ completed: 0, failure: { index: 0, code: "REF_STALE" } });
+    expect(outcome).toMatchObject({ interruption: { code: "REF_STALE" } });
     expect(calls.some(([method]) => method === "Input.insertText")).toBe(false);
   });
 
@@ -542,22 +559,22 @@ describe("runActions", () => {
   it("fails the action when a page function raises, and treats a non-string result as a host bug", async () => {
     const raising = fakeSession({ "\"value\" in this": new TypeError("value is read-only") });
     const outcome = await run(raising.session, { type: "type", ref: "e7", text: "hi", clear: true, submit: false, keyByKey: false });
-    expect(outcome).toMatchObject({ completed: 0, failure: { code: "ACTION_FAILED", message: "the page raised an error: TypeError: value is read-only" } });
+    expect(outcome).toMatchObject({ interruption: { code: "ACTION_FAILED", message: "the page raised an error: TypeError: value is read-only" } });
     expect(raising.calls.some(([method]) => method === "Input.insertText")).toBe(false);
 
     const stuck = fakeSession({ scrollBy: new Error("blocked") });
-    expect(await run(stuck.session, { type: "scroll", direction: "down" })).toMatchObject({ failure: { code: "ACTION_FAILED" } });
+    expect(await run(stuck.session, { type: "scroll", direction: "down" })).toMatchObject({ interruption: { code: "ACTION_FAILED" } });
 
     const broken = fakeSession({ isConnected: true });
     expect(await run(broken.session, { type: "hover", target: { ref: "e7" } })).toMatchObject({
-      completed: 0, failure: { index: 0, message: "a page function returned boolean instead of a string" },
+      interruption: { message: "a page function returned boolean instead of a string" },
     });
   });
 
   // 目的：失败原因报准，模型才拿到对的下一步建议；潜在缺陷：页面停住、超时被一律改写成「元素不可见」，或节点已删除
   // 在不同命令上报成不同的码。
   it("maps a missing node to REF_STALE and only a missing layout to NOT_INTERACTABLE", async () => {
-    const code = async (failOn: { method: string; error: Error }) => (await run(fakeSession({}, { failOn }).session, clickOn("e2"))).failure?.code;
+    const code = async (failOn: { method: string; error: Error }) => (await run(fakeSession({}, { failOn }).session, clickOn("e2"))).interruption?.code;
     expect(await code({ method: "DOM.getBoxModel", error: new Error("No node with given id found") })).toBe("REF_STALE");
     expect(await code({ method: "DOM.scrollIntoViewIfNeeded", error: new Error("Session with given id not found.") })).toBe("REF_STALE");
     expect(await code({ method: "DOM.scrollIntoViewIfNeeded", error: new Error("Node does not have a layout object") })).toBe("NOT_INTERACTABLE");
@@ -610,21 +627,21 @@ describe("runActions", () => {
     await run(shown.session, clickOn("e2"), { type: "click", target: { x: 50, y: 30 }, button: "left", clickCount: 1, modifiers: [] }, { type: "wait_for", seconds: 0.01 });
     expect(shown.highlighted).toEqual([{ x: 0, y: 0, width: 10, height: 20 }, { x: 38, y: 18, width: 24, height: 24 }]);
     // 元素还在不在页面上只由动作确认一次，高亮不再确认一遍。
-    expect(shown.calls.filter(([method, params]) => method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("isConnected"))).toHaveLength(1);
+    expect(shown.calls.filter(([method, params]) => method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("isConnected"))).toHaveLength(2);
 
     const hidden = fakeSession();
     await run(hidden.session, clickOn("e2"));
     expect(hidden.highlighted).toEqual([]);
-    expect(hidden.calls.filter(([method]) => method === "DOM.getBoxModel")).toHaveLength(1);
+    expect(hidden.calls.filter(([method]) => method === "DOM.getBoxModel")).toHaveLength(2);
 
     const stale = fakeSession({}, { shown: true });
-    expect(await run(stale.session, clickOn("e404"))).toMatchObject({ completed: 0, failure: { code: "REF_STALE" } });
+    expect(await run(stale.session, clickOn("e404"))).toMatchObject({ interruption: { code: "REF_STALE" } });
   });
 
   it("refuses coordinates outside the viewport before touching the page", async () => {
     const { session, calls } = fakeSession();
     const outcome = await run(session, { type: "hover", target: { x: 100, y: 10 } });
-    expect(outcome).toMatchObject({ completed: 0, failure: { index: 0, code: "OUT_OF_VIEWPORT" } });
+    expect(outcome).toMatchObject({ interruption: { code: "OUT_OF_VIEWPORT" } });
     expect(calls).toEqual([]);
   });
 
@@ -646,7 +663,7 @@ describe("runActions", () => {
   it("delivers an intercepted HTML5 drag at the end point in CSS pixels and always turns interception off", async () => {
     const { session, calls } = fakeSession({}, { scale: 0.5, dragData: { items: [], dragOperationsMask: 1 }, dialogOn: (method, params) => params.type === "drop" });
     const outcome = await run(session, { type: "drag", start: { x: 0, y: 0 }, end: { x: 30, y: 20 } });
-    expect(outcome).toEqual({ completed: 1, failure: null });
+    expect(outcome).toMatchObject({ steps: [{ status: "unknown" }], interruption: { code: "DIALOG_OPEN" } });
     const drags = calls.filter(([method]) => method === "Input.dispatchDragEvent").map(([, params]) => [params.type, params.x, params.y]);
     expect(drags).toEqual([["dragEnter", 30, 20], ["dragOver", 30, 20], ["drop", 30, 20]]);
     expect(calls.findLast(([method]) => method === "Input.dispatchMouseEvent")?.[1]).toMatchObject({ type: "mouseMoved", x: 15, y: 10 });
@@ -683,30 +700,30 @@ describe("runActions", () => {
   // 把多个文件塞给只收一个的输入框。
   it("uploads to a file input by ref or to the file chooser an action opened", async () => {
     const byRef = fakeSession();
-    expect(await run(byRef.session, { type: "upload", paths: ["/w/a.pdf"], ref: "e4" })).toEqual({ completed: 1, failure: null });
+    expect(await run(byRef.session, { type: "upload", paths: ["/w/a.pdf"], ref: "e4" })).toMatchObject({ steps: Array(1).fill({ status: "done" }), interruption: null });
     expect(byRef.calls.at(-1)).toEqual(["DOM.setFileInputFiles", { files: ["/w/a.pdf"], backendNodeId: 4 }]);
 
     const notInput = fakeSession({ "not a file input": "not a file input" });
-    expect(await run(notInput.session, { type: "upload", paths: ["/w/a.pdf"], ref: "e4" })).toMatchObject({ failure: { code: "NO_FILE_INPUT" } });
+    expect(await run(notInput.session, { type: "upload", paths: ["/w/a.pdf"], ref: "e4" })).toMatchObject({ interruption: { code: "NO_FILE_INPUT" } });
 
     const chosen = fakeSession({}, { fileChooser: { node: { backendNodeId: 9 }, multiple: false } });
-    expect(await run(chosen.session, { type: "upload", paths: ["/w/a.pdf"] })).toEqual({ completed: 1, failure: null });
+    expect(await run(chosen.session, { type: "upload", paths: ["/w/a.pdf"] })).toMatchObject({ steps: Array(1).fill({ status: "done" }), interruption: null });
     expect(chosen.calls.at(-1)).toEqual(["DOM.setFileInputFiles", { files: ["/w/a.pdf"], backendNodeId: 9 }]);
-    expect(await run(chosen.session, { type: "upload", paths: ["/w/a.pdf", "/w/b.pdf"] })).toMatchObject({ failure: { message: expect.stringContaining("single file") } });
+    expect(await run(chosen.session, { type: "upload", paths: ["/w/a.pdf", "/w/b.pdf"] })).toMatchObject({ interruption: { message: expect.stringContaining("single file") } });
 
-    expect(await run(fakeSession().session, { type: "upload", paths: ["/w/a.pdf"] })).toMatchObject({ failure: { code: "NO_FILE_INPUT" } });
+    expect(await run(fakeSession().session, { type: "upload", paths: ["/w/a.pdf"] })).toMatchObject({ interruption: { code: "NO_FILE_INPUT" } });
   });
 
   // 目的：无限滚动到底要停下；潜在缺陷：批次里的滚动空转，模型以为加载了更多。
   it("scrolls the area around a ref and stops with SCROLL_END when nothing moves", async () => {
     const { session, calls } = fakeSession({ "scrollBy": "this area is already at the bottom" });
     const outcome = await run(session, { type: "scroll", direction: "down", ref: "e9" }, clickOn("e1"));
-    expect(outcome).toMatchObject({ completed: 0, failure: { index: 0, code: "SCROLL_END", message: "this area is already at the bottom" } });
+    expect(outcome).toMatchObject({ interruption: { code: "SCROLL_END", message: "this area is already at the bottom" } });
     const scrolled = calls.find(([method, params]) => method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("scrollBy"));
     expect(scrolled?.[1].arguments).toEqual([{ value: true }]);
 
     const page = fakeSession();
-    expect(await run(page.session, { type: "scroll", direction: "up" })).toMatchObject({ completed: 1, failure: null });
+    expect(await run(page.session, { type: "scroll", direction: "up" })).toMatchObject({ interruption: null });
     expect(String(page.calls.find(([method]) => method === "Runtime.evaluate")![1].expression)).toContain(".call(document.documentElement, false)");
 
     const into = fakeSession();
@@ -716,11 +733,11 @@ describe("runActions", () => {
 
   it("waits for text to disappear and reports when it stays", async () => {
     const gone = fakeSession({ innerText: "absent" });
-    expect(await run(gone.session, { type: "wait_for", textGone: "Loading", seconds: 1 })).toMatchObject({ failure: null });
+    expect(await run(gone.session, { type: "wait_for", textGone: "Loading", seconds: 1 })).toMatchObject({ interruption: null });
 
     const stays = fakeSession({ innerText: "found" });
     const outcome = await run(stays.session, { type: "wait_for", textGone: "Loading", seconds: 0.3 });
-    expect(outcome.failure).toMatchObject({ code: "WAIT_TIMEOUT", message: 'the text "Loading" is still on the page after 0.3 seconds' });
+    expect(outcome.interruption).toMatchObject({ code: "WAIT_TIMEOUT", message: 'the text "Loading" is still on the page after 0.3 seconds' });
   });
 });
 

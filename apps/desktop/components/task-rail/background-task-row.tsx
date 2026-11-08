@@ -1,5 +1,5 @@
 import { commandPending, stopTarget, useCommandRequest } from "@/lib/assistant/command-request-store";
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { BotIcon, CircleMinusIcon, SquareIcon, SquareTerminalIcon, UsersIcon, XCircleIcon, type LucideIcon } from "lucide-react";
 
 import { useTaskRailStore } from "@/lib/task-rail/store";
@@ -11,6 +11,7 @@ import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import type { BackgroundTaskEntry, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/converter";
+import { callKey, useDisclosure } from "@/lib/assistant/disclosure-store";
 import { readToolArtifact } from "@/lib/assistant/tool-artifact";
 import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
@@ -30,7 +31,8 @@ const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
  * `useBackgroundTaskPart`），由 kind 视图注册表按 `display_data.kind` 决定长什么样，这里不按种类分支。
  * 不再套一条调用行：标题已在外壳上。视图以只读方式解析，同一调用只留外壳上这一个停止入口
  * （`cancelToolCall`，对所有种类语义一致）。
- * 对应 part 已不在对话里（如编辑重跑移出那一轮）时只剩外壳。运行中的条目默认展开。收尾中（工作已结束、
+ * 对应 part 已不在对话里（如编辑重跑移出那一轮）时只剩外壳。条目默认收起，开合与调用行共用 `call:` 键：
+ * 时间线的后台行没有展开体，这个键只归看板，运行中转到已结束的列表重挂载也不丢。收尾中（工作已结束、
  * 对话里的占位还没落定）不计时、不能停止，只标「收尾中」，等 snapshot 回推完成或取消。
  * 操作只发命令，结果等 snapshot 回推。
  */
@@ -39,7 +41,7 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
   const busy = commandPending(request);
   const part = useBackgroundTaskPart(taskId, entry.toolCallId);
   const running = entry.status === "running";
-  const [expanded, setExpanded] = useState(running);
+  const [expanded, setExpanded] = useDisclosure(taskId, callKey(entry.toolCallId), false);
   const Icon = KIND_ICONS[entry.kind];
   const elapsed = entry.status === "settling"
     ? null
@@ -48,7 +50,6 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (requested?.taskId === taskId && requested.callId === entry.toolCallId) {
-      setExpanded(true);
       ref.current?.scrollIntoView({ block: "nearest" });
       useTaskRailStore.getState().consumeReveal();
     }
@@ -71,7 +72,7 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
             className="flex min-w-0 flex-1 items-center gap-1 text-left outline-none"
             title={entry.label}
             aria-expanded={open}
-            onClick={() => setExpanded((value) => !value)}
+            onClick={() => setExpanded(!expanded)}
           >
             <span className="truncate">{entry.label}</span>
             <DisclosureChevron open={open} reveal className="text-muted-foreground" />
@@ -118,7 +119,7 @@ function backgroundCallView(taskId: number, part: TransportToolCallPart, workSta
   const converted = toToolCallPart(part);
   if (converted.type !== "tool-call") return null;
   const artifact = readToolArtifact(converted.artifact);
-  return resolveCallView(artifact, { taskId, toolCallId: part.toolCallId, artifact, args: part.args ?? {}, interactive: false, taskCancelling: false, surface: "details", workStatus });
+  return resolveCallView({ taskId, toolCallId: part.toolCallId, artifact, args: part.args ?? {}, interactive: false, taskCancelling: false, surface: "details", workStatus });
 }
 
 /** 耗时：不足一分钟显示秒，之后显示「分 秒」「时 分」。 */

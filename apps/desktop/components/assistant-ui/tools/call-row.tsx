@@ -65,7 +65,7 @@ function CallRowContent({ taskId, toolCallId, toolName, args, artifact, interact
   const failed = status === "failed";
   const cancelled = status === "cancelled";
   const context: CallViewContext = { taskId, toolCallId, artifact, args, interactive, inherited, taskCancelling, workStatus };
-  const resolved = resolveCallView(artifact, context);
+  const resolved = resolveCallView(context);
   const detail = resolved?.detail;
   const expandable = detail !== undefined;
   const defaultOpen = detail?.defaultOpen ?? false;

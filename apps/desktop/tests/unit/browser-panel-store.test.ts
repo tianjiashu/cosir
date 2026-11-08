@@ -15,7 +15,7 @@ import { displayedTab, followTabChanges, revealBrowserTab, useBrowserPanelStore 
 import { useDockStore } from "@/lib/layout/dock-store";
 
 function tab(tabId: string, taskId = 7, openerId: string | null = null): BrowserTabSummary {
-  return { tabId, taskId, openerId, createdBy: "agent", url: "https://example.com", title: "", loading: false, crashed: false, dialog: null, agentBusy: false };
+  return { tabId, taskId, openerId, createdBy: "agent", url: "https://example.com", title: "", loading: false, crashed: false, dialog: null, agentBusy: false, operation: null };
 }
 
 afterEach(() => {

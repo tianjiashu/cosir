@@ -17,7 +17,7 @@ const STREAM_REVEAL = { animation: "fadeIn", duration: 160, sep: "char", stagger
  */
 export function MarkdownText() {
   const mermaidOptions = useMermaidOptions();
-  const components = useMarkdownLinkComponents("message");
+  const components = useMarkdownLinkComponents("message", { icons: true });
   return (
     <StreamdownTextPrimitive
       mode="streaming"

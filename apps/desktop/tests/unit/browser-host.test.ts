@@ -7,6 +7,7 @@ vi.mock("@/electron/main/browser/browser-tab", () => ({
   get BrowserTab() { return FakeTab; },
 }));
 vi.mock("@/electron/main/browser/browser-session", () => ({ browserPageWebPreferences: () => ({}) }));
+import { deadlineMs, withinDeadline } from "@/electron/main/browser/deadlines";
 import { BrowserHost } from "@/electron/main/browser/browser-host";
 import fs from "node:fs";
 import os from "node:os";
@@ -19,11 +20,16 @@ class FakeTab {
   fail!: (error: Error) => void;
   pending = new Promise<void>((resolve, reject) => { this.finish = resolve; this.fail = reject; });
   close = vi.fn();
+  operation = null;
+  initialized = true;
+  documentGeneration = 0;
+  modify = vi.fn(async (signal: AbortSignal, run: (operation: { signal: AbortSignal }) => Promise<unknown>) => run({ signal }));
   readonly view = {};
   show = vi.fn();
   hide = vi.fn();
   navigate = vi.fn().mockResolvedValue(undefined);
-  snapshot = vi.fn().mockResolvedValue({ outline: { entries: [{ key: ":1", depth: 0, text: "text 'page'", parent: -1, visible: true }], frames: 0 }, dialog: null });
+  act = vi.fn();
+  snapshot = vi.fn().mockResolvedValue({ document: 0, outline: { entries: [{ key: ":1", depth: 0, text: "text 'page'", parent: -1, visible: true }], frames: 0 }, dialog: null });
   deliver = vi.fn().mockReturnValue(null);
   readonly contents = { isDestroyed: () => false };
   dialog: { id: number; type: "confirm"; message: string; defaultText: string } | null = null;
@@ -58,6 +64,30 @@ const tab = (index = 0) => FakeTab.instances[index];
 const flush = async () => { for (let i = 0; i < 12; i += 1) await Promise.resolve(); };
 beforeEach(() => { FakeTab.instances = []; });
 
+describe("BrowserHost execution receipt budget", () => {
+  it("returns execution before the total deadline even when draining and observation use their full budgets", async () => {
+    vi.useFakeTimers();
+    const host = new BrowserHost(() => null);
+    try {
+      const opening = host.userOpen(1, limits);
+      tab().finish(); await opening;
+      const execution = { steps: [{ status: "unknown", target: null }], interruption: { code: "DEADLINE_EXCEEDED", message: "budget" } };
+      tab().act.mockImplementation(async (_actions, signal: AbortSignal) => {
+        await new Promise<void>(resolve => signal.addEventListener("abort", () => setTimeout(resolve, 1000), { once: true }));
+        return execution;
+      });
+      const snapshot = await tab().snapshot();
+      let resolveSnapshot!: (value: typeof snapshot) => void;
+      tab().snapshot.mockImplementation(() => new Promise(resolve => { resolveSnapshot = resolve; }));
+      const result = withinDeadline("browser.act", new AbortController().signal, signal => host.act({ taskId: 1, context: limits, actions: [{ type: "wait_for", seconds: 1 }] }, signal));
+      await vi.advanceTimersByTimeAsync(deadlineMs("browser.act") - 500);
+      await expect(result).resolves.toMatchObject({ execution, observation: null, observationError: { code: "DEADLINE_EXCEEDED" } });
+      resolveSnapshot(snapshot); await flush();
+      expect(tab().deliver).not.toHaveBeenCalled(); expect(tab().log.digest).not.toHaveBeenCalled();
+    } finally { host.closeAll(); vi.useRealTimers(); }
+  });
+});
+
 describe("BrowserHost 资源生命周期", () => {
   it("初始化中即可列出标签；快照等待初始化，且不跨 Task 访问", async () => {
     const host = new BrowserHost(() => null);
@@ -80,7 +110,7 @@ describe("BrowserHost 资源生命周期", () => {
     tab().finish();
     await opening;
     let release!: () => void;
-    tab().snapshot.mockReturnValueOnce(new Promise((resolve) => { release = () => resolve({ outline: null, dialog: null }); }));
+    tab().snapshot.mockReturnValueOnce(new Promise((resolve) => { release = () => resolve({ document: 0, outline: null, dialog: null }); }));
     const reading = host.snapshot({ taskId: 1, view: {}, context: limits }, new AbortController().signal);
     await flush();
     expect(host.state().tabs[0].agentBusy).toBe(true);

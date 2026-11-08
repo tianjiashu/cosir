@@ -4,12 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 // 服务端渲染读 store 的初始状态；组件只经 useBackgroundTasks / useForegroundWaits 读，这里换成可控的表。
-const board = vi.hoisted(() => ({ entries: new Map<number, unknown[]>(), waits: new Map<number, string[]>(), parts: new Map<string, unknown>() }));
+const board = vi.hoisted(() => ({ entries: new Map<number, unknown[]>(), waits: new Map<number, string[]>(), parts: new Map<string, unknown>(), open: new Set<string>() }));
 vi.mock("@/lib/background-tasks/store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/background-tasks/store")>(),
   useBackgroundTasks: (taskId: number | null) => (taskId === null ? [] : board.entries.get(taskId) ?? []),
   useForegroundWaits: (taskId: number | null) => (taskId === null ? [] : board.waits.get(taskId) ?? []),
   useBackgroundTaskPart: (_taskId: number, toolCallId: string) => board.parts.get(toolCallId) ?? null,
+}));
+
+vi.mock("@/lib/assistant/disclosure-store", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/assistant/disclosure-store")>(),
+  useDisclosure: (_taskId: number, key: string, defaultOpen: boolean) => [board.open.has(key) || defaultOpen, () => undefined],
 }));
 
 import { ForegroundWaitAction } from "@/components/assistant-ui/tools/foreground-wait-action";
@@ -20,7 +25,9 @@ import type { BackgroundTaskEntry, TransportBackgroundWork, TransportToolCallPar
 import { toToolCallPart } from "@/lib/assistant/converter";
 import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
 import { backgroundToolCall } from "@/lib/assistant/task-commands";
+import { callKey, resolveDisclosure, useDisclosureStore } from "@/lib/assistant/disclosure-store";
 import { countRunning, useBackgroundTasksStore } from "@/lib/background-tasks/store";
+import { useTaskRailStore } from "@/lib/task-rail/store";
 import { createQueryClient } from "@/lib/query/query-client";
 
 import { transportState, indexedState } from "./transport-fixtures";
@@ -59,9 +66,11 @@ function withParts(...parts: TransportToolCallPart[]) {
 
 beforeEach(() => {
   useBackgroundTasksStore.setState({ tasks: {}, foregroundWaits: {}, parts: {} });
+  useDisclosureStore.setState({ tasks: {} });
   board.entries.clear();
   board.waits.clear();
   board.parts.clear();
+  board.open.clear();
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -195,9 +204,29 @@ describe("后台任务卡", () => {
     expect(useBackgroundTasksStore.getState().parts[1]).toEqual({});
   });
 
-  it("展开直接是调用详情，不再套一条调用行：运行中默认展开，停止只在外壳上", () => {
+  it("运行中的条目也默认收起：只有外壳，没有详情", () => {
     board.entries.set(1, [entry("a", { label: "terminal_command:make watch" })]);
     board.parts.set("a", terminalPart("a"));
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={createQueryClient()}><BackgroundTasksBody taskId={1} /></QueryClientProvider>,
+    );
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("等待输出");
+  });
+
+  it("定位到看板时展开这一条，并打开侧栏与卡片", () => {
+    useTaskRailStore.setState({ open: false, collapsed: { "background-tasks": true } });
+    useTaskRailStore.getState().revealBackground(1, "a");
+    const state = useTaskRailStore.getState();
+    expect(state.open).toBe(true);
+    expect(state.collapsed["background-tasks"]).toBe(false);
+    expect(resolveDisclosure(1, callKey("a"), false)).toBe(true);
+  });
+
+  it("展开直接是调用详情，不再套一条调用行，停止只在外壳上", () => {
+    board.entries.set(1, [entry("a", { label: "terminal_command:make watch" })]);
+    board.parts.set("a", terminalPart("a"));
+    board.open.add(callKey("a"));
     // 终端命令的展开体经 `useOpenLink` 接上链接打开，需要 Query 上下文。
     const html = renderToStaticMarkup(
       <QueryClientProvider client={createQueryClient()}><BackgroundTasksBody taskId={1} /></QueryClientProvider>,

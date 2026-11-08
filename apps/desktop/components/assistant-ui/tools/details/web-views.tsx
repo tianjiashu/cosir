@@ -1,10 +1,11 @@
+import { resolveLink } from "@/lib/links/resolve-link";
 import type { CallView } from "../call-view";
-import { readArray, readRecords, safeExternalUrl } from "../display-utils";
+import { readArray, readRecords } from "../display-utils";
 import { ExternalLinkRow, listDetail } from "./detail-view";
 
 function siteOf(value: string): string {
-  const safeUrl = safeExternalUrl(value);
-  return safeUrl ? new URL(safeUrl).hostname : value;
+  const target = resolveLink(value, { workspaceRoot: null });
+  return (target?.kind === "web" && target.publicHost) || value;
 }
 
 const withUrl = (value: unknown) => readRecords(value).filter((item) => typeof item.url === "string" && item.url);

@@ -1,6 +1,16 @@
 # 内置浏览器环境与执行契约改造方案
 
-日期：2026-11-08。状态：方案待确认，未实施业务代码变更。
+日期：2026-11-08。状态：改造完成，真实测试通过，gpt-6-sol 代码与最终测试证据复核通过；验收方案在代码变更前确定，变更保持未提交。
+
+## 实施验收门槛
+
+1. 原生 Electron（不经 Playwright 接管目标页）：父页、popup 首次请求与首段脚本 UA 一致；应用 Session 禁用缓存而网站 Session 缓存有效；持久网站存储保留。补验 iframe、worker、重定向，开发 Vite 依赖重建与重载。
+2. 执行生命周期：首个字符按下后取消，不再派发后续字符或 submit；旧 CDP 未真正落定时新修改被拒；按键、点击、拖动中断与弹窗控制能收尾，未知状态可见且可关闭标签恢复。
+3. 执行回执：真实页面动作生效后注入观察失败，以及页面自关闭，已知步骤仍保留；后续步骤不得误报完成；取消后的迟到观察不消费增量基准。
+4. 交接：首次宿主查询同时确认实际目标已收敛，busy/unknown 不登记；交接期间新消息唤醒后，act/navigate/evaluate/close/元素截图仍受约束，普通观察可用。宿主不复制交接登记，不新增后端仲裁器。
+5. 元素与 UI：遮挡、disabled、readonly、移动目标、跨框架与缩放；保留 select、IME/contenteditable、弹窗、上传、下载；步骤卡片明确区分完成、失败、未开始和未知。
+6. 检查入口：desktop 定向 Vitest、真实 Electron harness/desktop-e2e、backend browser/host-link/handoff 契约测试、TypeScript、lint 与 build。每阶段记录实际命令及结果；不把未运行测试列为通过。
+7. 完成后由 gpt-6-sol 子 Agent 只读独立复核；发现问题继续修改并重跑相关测试，复核通过后才交付。
 
 目标是在现有 Electron 内嵌体验中，减少客户端环境差异、错误操作、取消失效和不准确回执造成的额外网站风控风险。保留 `WebContentsView`、宿主 CDP、持久登录分区、Task 标签归属和现有用户交接。采用局部结构重构：默认值回到真正覆盖所有网页的来源，操作生命周期由一个执行者负责，执行事实与页面观察分别表达，交接约束复用既有登记表。
 
@@ -212,3 +222,42 @@ BrowserHost 在执行完成后即持有独立回执。后续标签关闭、快�
 - [Electron Session](https://www.electronjs.org/docs/latest/api/session#sessionfrompartitionpartition-options)：Session 缓存策略在首次创建时确定。
 - [Playwright actionability](https://playwright.dev/docs/actionability)：操作前验证可见、稳定、接收事件、可用或可编辑等条件。
 - [Playwright connectOverCDP](https://playwright.dev/docs/api/class-browsertype#browser-type-connect-over-cdp)：接管既有浏览器有独立契约与默认设置，不能当成无副作用的输入函数替换。
+
+## 实施结果与验收记录（2026-11-08）
+
+终态仍为内嵌 `WebContentsView` + 宿主 CDP，没有引入第二套浏览器、代理/Profile 平台、输入队列或自动重放。
+
+实际加减法：
+
+- 新增具体 `browser/operation.ts`，由标签持有一次修改的生命周期；输入模块直接依赖它。原始 CDP 完成、输入来源登记、按下/释放与有界收尾在对应边界各归一处。
+- 删除 `input/session.ts` 的散装能力袋；删除 act 的 completed/failure/targets 旧契约与消费分支，统一为逐步执行回执和独立 observation。未知结果明确呈现，不再从后置快照失败推断“动作没执行”。
+- 删除 Session UA 覆盖与进程级禁缓存开关；默认 UA 在应用启动期设置，开发应用缓存只归 `persist:cosir-ui-dev`，网站持久分区不迁移、不清除。
+- 复用后端 handoff registry，把现有交接资源随请求送到宿主，在实际目标处阻断修改；没有另建锁表或第二个交接事实源。
+- 复用已有 emulation 串行轮：真实 CDP 完成更新 applied，输入开始前收敛已排队的面板尺寸。新增验证入口为原生 Electron 脚本及操作生命周期测试；没有新增运行时依赖、接口/工厂层或设置面板。
+- 文档同步稳定架构边界与工具步骤状态；旧 P3 文档保留历史记录并标明被替代的行为。
+
+独立复核使用 **gpt-6-sol**，只读检查代码；发现问题后修正并再次复核。复核推动修复的实际问题包括：导航/元素截图遗漏原始命令跟踪、释放命令的来源登记、弹窗阻断后的清理恢复、迟到设备模拟导致旧缩放、并发 drain 重复释放、无关 pending 导致漏释放、总时限吞掉回执，以及已排队尺寸同步与拖放交错。最终代码及 `prepareInput` 增量均获复核通过。
+
+验收命令（除注明外在 `apps/desktop` 执行）：
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| 浏览器单测 | `npx vitest run tests/unit/browser-*.test.ts` | 147 通过；包括原始命令迟到、单次释放、取消、跨文档、设备模拟串行、时限回执和迟到观察不消费增量 |
+| 后端契约/交接/链路（仓库根目录） | `apps/backend/.venv/bin/python -m pytest -q apps/backend/tests/test_browser_tools.py apps/backend/tests/test_browser_contract_guard.py apps/backend/tests/test_handoff_registry.py apps/backend/tests/test_host_link.py` | 95 通过 |
+| 浏览器面板 | `npx playwright test tests/e2e/browser-panel.spec.ts` | 5 通过；包含未知状态提示及关闭入口 |
+| 真 Electron 引擎 | `npx playwright test -c playwright.desktop.config.ts tests/desktop-e2e/browser-engine.spec.ts` | 40 通过（最终全量）；含视口同步后的真实拖放与缩放 |
+| 原生 Electron（仓库根目录） | `node apps/desktop/scripts/test-browser-native.mjs` | 11 组通过（最终增量重验） |
+| 类型与构建 | `npm run build` | 通过；含前端/Electron TypeScript 检查与打包 |
+| 静态检查 | 浏览器生产代码、相关前端与测试的 ESLint；后端浏览器模块及测试的 Ruff check / format check；`git diff --check` | 全部通过 |
+
+原生验收不使用 Playwright 或浏览器调试端口接管目标页。它覆盖首次请求与首段脚本 UA（普通页、popup、target blank、重定向、iframe、worker）、站点缓存与 Cookie 保留、真实 Vite 依赖重建、已生效动作后的观察失败、首字符取消、拖动取消、JS 弹窗恢复、交接约束、遮挡/disabled/readonly/移动目标、中文 contenteditable 与页面自关闭。Vite 用临时真实依赖包，重建前卸载旧 client、保留同一 Session，避免自动 reload 与测试显式导航竞争；最终断言新依赖值，未以重试绕过旧缓存问题。
+
+验收边界与保留问题：
+
+- 实机为 macOS；未运行 Windows 验收。中文插入与逐键输入有覆盖，物理输入法 composition 和所有第三方编辑器不作全面兼容承诺。
+- 用户在一批动作执行途中再次拖动面板，仍可能改变布局。已解决输入开始前排队的尺寸变化；本次不新增用户布局锁或人机输入仲裁器。需要用户操作时沿用显式交接。
+- 元素检查是有限的连接、状态、稳定与本地命中检查，保留现有跨框架定位；不承诺完整 Locator 引擎的所有变换/嵌套遮挡情形。
+- 页面改动、账号、网络与站点策略仍可触发风控；本次证明客户端行为更一致、取消与回执可信，不声明某网站通过率。未访问真实账号、未操作生产业务表单。
+- 构建存在 CSS `::highlight` 优化器识别与大 bundle 警告，属于既有构建边界，本次不夹带构建拆包改造。工作区其他未提交修改保留；本次不提交 Git。
+
+最终原生证据：`/var/folders/3v/z2v0z9f57wd4v2qgtg82s3rh0000gn/T/cosir-browser-native-MCLXmh/result.json`。最终引擎测试输出：`/private/tmp/cosir-browser-engine-accepted.log`。此前失败运行未计入通过结果：首轮 36/40，后续全量又暴露排队视口同步与拖动交错，修复后以最终 40/40 全量结果验收。

@@ -7,17 +7,15 @@ import { CdpSession } from "./cdp-session";
 import { browserError } from "./errors";
 import { runActions, type ActResult } from "./input/actions";
 import { box, element } from "./input/element";
-import type { FileChooser, PageSession } from "./input/session";
-import { describeTarget } from "./input/targets";
+import { BrowserOperation, type FileChooser } from "./operation";
 import type { BrowserDialog, BrowserDialogAnswer, BrowserNavigation, BrowserTabCreator, BrowserTabSummary } from "../../shared/host-contract";
 import { BROWSER_PAGE_DIALOG_CHANNEL, type BrowserPageDialogRequest } from "../../shared/browser-page-bridge";
 import type { PageAction } from "./params";
 import { captureScreenshot, type CaptureOptions } from "./page-capture";
 import { PageDialogs } from "./page-dialogs";
 import { evaluateExpression, type Evaluation } from "./page-evaluate";
-import { ERR_ABORTED, untilStopped, waitForLoad } from "./page-loading";
+import { ERR_ABORTED, navigationCompletion, untilStopped, waitForLoad } from "./page-loading";
 import { PageFrames } from "./page-frames";
-import { readGeometry } from "./page-geometry";
 import { TabHighlight } from "./tab-highlight";
 import { RefRegistry, type PageNode } from "./ref-registry";
 import { buildOutline, type Outline } from "./snapshot/outline";
@@ -45,6 +43,7 @@ const ELECTRON_NOISE = /^%cElectron Security Warning/;
 export type PageSnapshot = {
   /** 本标签有待答弹窗时为 null：页面停着，读不到无障碍树。 */
   outline: Outline | null;
+  document: number;
   dialog: BrowserDialog | null;
 };
 
@@ -125,23 +124,26 @@ export class BrowserTab {
   readonly log = new TabLog();
   private readonly adopted: boolean;
   private readonly events: TabEvents;
-  private readonly session: CdpSession;
+  readonly session: CdpSession;
   private readonly refs = new RefRegistry();
-  private readonly frames: PageFrames;
-  private readonly highlighter: TabHighlight;
+  readonly frames: PageFrames;
+  readonly highlighter: TabHighlight;
   private readonly dialogs = new PageDialogs();
-  private readonly emulation: TabEmulation;
+  readonly emulation: TabEmulation;
   /** 最近一次真实用户输入的时间（毫秒）；`USER_ACTIVE` 据此判断。 */
   private lastUserInputAt = 0;
   /** 在此之前到达的输入事件来自 Agent 自己的动作，不算用户输入（见构造函数里的说明）。 */
-  private agentInputUntil = 0;
+  private agentKeyUntil = 0;
+  private agentChooserUntil = 0;
+  initialized = false;
+  operation: BrowserOperation | null = null;
   /** 当前主文档的 HTTP 状态码（`did-navigate`）；about:blank 等没有时为 null。 */
   private documentStatus: number | null = null;
   /** 主框架换过几次文档：增量快照只在同一文档里比对。 */
   private document = 0;
   private delivered: Delivered | null = null;
   /** Agent 的动作让页面打开、等 `upload` 回答的选文件框；换文档或页面再开一个时作废 / 换掉。 */
-  private fileChooser: FileChooser | null = null;
+  fileChooser: FileChooser | null = null;
 
   constructor(options: TabOptions) {
     const { tabId, taskId, events } = options;
@@ -158,7 +160,7 @@ export class BrowserTab {
     this.contents = this.view.webContents;
     this.session = new CdpSession(this.contents, events.pausedBy, (reason) => {
       logDesktopEvent("WARNING", "browser", "browser_debugger_detached", { tab_id: tabId, reason });
-    });
+    }, (command) => this.operation?.track(command));
     this.frames = new PageFrames(this.session, tabId);
     this.highlighter = new TabHighlight(this.session, tabId, events.isAttached);
     this.emulation = new TabEmulation(
@@ -204,9 +206,9 @@ export class BrowserTab {
     contents.on("console-message", (details) => this.consoleMessage(details));
     contents.ipc.on(BROWSER_PAGE_DIALOG_CHANNEL, (event, request: BrowserPageDialogRequest) => this.dialogRequested(event, request));
     // CDP 合成的鼠标与文字输入不触发 before-input-event，但合成键盘事件可能触发（实测：提交表单时回车的
-    // keyUp）。所以动作执行期间及之后一小段时间里的输入事件归 Agent，其余才是用户在操作。
+    // keyUp）。仅在合成键盘派发后的短时间窗抑制误判；它只是近期键盘输入启发式，可靠接手依靠显式 handoff。
     contents.on("before-input-event", () => {
-      if (Date.now() < this.agentInputUntil) return;
+      if (Date.now() < this.agentKeyUntil) return;
       this.lastUserInputAt = Date.now();
     });
     contents.once("destroyed", () => events.onGone());
@@ -256,6 +258,7 @@ export class BrowserTab {
     // 收养的 webContents 在 Electron 接手后，内部网页视图不按外层视图的 bounds 布局（实测：铺到窗口右下角，
     // 盖出浏览器面板），要等一次真实的尺寸变化才纠正；接手完成于第一次加载结束，所以在这里补一次。
     if (this.adopted) this.relayout();
+    this.initialized = true;
   }
 
   /**
@@ -263,7 +266,8 @@ export class BrowserTab {
    * 原页面（模型据此知道去哪里找下载，而不是当作失败重试、再下一次）。顺序：待答的弹窗按取消处理（页面停着无法跳转，
    * 也设不了模拟）→ 设上要求改的模拟（只改给了的项，生效后才加载，页面按新视口布局）→ 加载。
    */
-  async navigate(target: BrowserNavigation, signal: AbortSignal, emulation?: EmulationRequest): Promise<void> {
+  async navigate(target: BrowserNavigation, operation: BrowserOperation, emulation?: EmulationRequest): Promise<void> {
+    const signal = operation.signal;
     if (signal.aborted) throw browserError("CANCELLED", "navigation was cancelled");
     const contents = this.contents;
     const history = contents.navigationHistory;
@@ -278,16 +282,21 @@ export class BrowserTab {
     // 被同进程别的标签的弹窗停住时跳转等不到页面配合，会等满时限：直接说明原因。
     const paused = this.events.pausedBy();
     if (paused) throw paused;
-    if (emulation) await this.emulation.set(emulation, signal);
+    if (emulation) {
+      try { await this.emulation.set(emulation, signal); }
+      finally { operation.track(this.emulation.settled()); }
+    }
+    signal.throwIfAborted();
     const loaded = waitForLoad(contents, {
       signal,
       paused: this.session.pausedSignal,
       timeoutMs: NAVIGATION_TIMEOUT_MS,
       log: { tab_id: this.tabId, task_id: this.taskId },
     });
+    operation.track(navigationCompletion(contents));
     if ("url" in target) {
       // 结果以加载事件为准：loadURL 自己的拒绝（含重定向造成的 ERR_ABORTED）在这里不重复处理。
-      contents.loadURL(target.url).catch(() => undefined);
+      operation.track(contents.loadURL(target.url));
     } else if (target.action === "back") history.goBack();
     else if (target.action === "forward") history.goForward();
     else contents.reload();
@@ -317,59 +326,72 @@ export class BrowserTab {
    */
   async snapshot(): Promise<PageSnapshot> {
     this.assertAlive();
-    if (this.dialogs.current) return { outline: null, dialog: this.dialogs.current };
+    if (this.dialogs.current) return { outline: null, document: this.document, dialog: this.dialogs.current };
+    const generation = this.document;
     const document = await readSnapshot(this.session, this.frames, (error) => {
       logDesktopEvent("INFO", "browser", "browser_frame_read_failed", { tab_id: this.tabId }, error);
     });
-    return { outline: buildOutline(document, this.refs, { pageUrl: this.contents.getURL() }), dialog: this.dialogs.current };
+    return { document: generation, outline: buildOutline(document, this.refs, { pageUrl: this.contents.getURL() }), dialog: this.dialogs.current };
   }
 
-  /**
-   * 在页面上按序执行动作（见 `input/actions.ts`）。用户刚在这个页面上操作过时整批拒绝（`USER_ACTIVE`）：
-   * 与终端「用户输入从不被拒、Agent 等用户停手」同一原则。
-   */
+  /** 修改槽位由标签持有；未知输入不允许新操作覆盖。 */
+  async modify<T>(signal: AbortSignal, run: (operation: BrowserOperation) => Promise<T>): Promise<T> {
+    if (this.contents.isDestroyed()) throw browserError("TAB_NOT_FOUND", "the tab was closed");
+    const paused = this.paused();
+    if (this.operation && paused) throw paused;
+    if (this.operation) throw browserError(this.operation.state === "unknown" ? "OPERATION_UNKNOWN" : "TAB_BUSY", "the previous operation has not settled");
+    signal.throwIfAborted();
+    const operation = new BrowserOperation(this, signal);
+    this.operation = operation;
+    this.events.onChange();
+    try { return await run(operation); }
+    finally { await operation.finish(); }
+  }
+
+  operationChanged(): void { this.events.onChange(); }
+  operationSettled(operation: BrowserOperation): void {
+    if (this.operation !== operation) return;
+    this.operation = null;
+    this.events.onChange();
+  }
+  get documentGeneration(): number { return this.document; }
+  paused(): HostMethodError | null { return this.events.pausedBy(); }
+  refLabel(ref: string): string | undefined { return this.refs.label(ref); }
+  noteAgentInput(method: string): void {
+    this.agentChooserUntil = Date.now() + AGENT_INPUT_GRACE_MS;
+    if (method === "Input.dispatchKeyEvent") this.agentKeyUntil = Date.now() + AGENT_INPUT_GRACE_MS;
+  }
+
+  /** USER_ACTIVE 仅为近期键盘活动提示；明确交接由请求准入负责。 */
   async act(actions: readonly PageAction[], signal: AbortSignal): Promise<ActResult> {
     this.assertAlive();
-    if (Date.now() - this.lastUserInputAt < USER_ACTIVE_WINDOW_MS) {
-      throw browserError("USER_ACTIVE", "the user is using this page right now");
-    }
-    this.agentInputUntil = Number.POSITIVE_INFINITY;
-    try {
-      const result = await runActions(this.pageSession(signal), actions, signal);
-      return { ...result, targets: actions.map((action) => describeTarget(action, (ref) => this.refs.label(ref))) };
-    } finally {
-      this.agentInputUntil = Date.now() + AGENT_INPUT_GRACE_MS;
-    }
+    if (Date.now() - this.lastUserInputAt < USER_ACTIVE_WINDOW_MS) throw browserError("USER_ACTIVE", "the user recently used this page");
+    return this.modify(signal, async (operation) => {
+      const ready = this.emulation.prepareInput(operation.signal);
+      operation.track(this.emulation.settled());
+      await ready;
+      return runActions(operation, actions, operation.signal);
+    });
   }
 
-  /** 交给 `input/` 模块的页面能力：动作与元素截图共用，元素的定位与几何只有一套。 */
-  private pageSession(signal: AbortSignal): PageSession {
-    return {
-      cdp: (method, params, options) => this.session.send(method, params, options),
-      on: (method, handler) => this.session.on(method, handler),
-      resolveRef: (ref) => this.resolveRef(ref),
-      frameOffset: (sessionId) => this.frames.offset(sessionId),
-      settle: () => this.settle(signal),
-      toInput: (point) => this.emulation.toInput(point),
-      geometry: () => readGeometry((method, params) => this.session.send(method, params)),
-      paused: () => this.events.pausedBy(),
-      dialog: () => this.dialogs.current,
-      answerDialog: (id, answer) => this.answerDialog(id, answer, "agent"),
-      fileChooser: () => this.fileChooser,
-      highlight: (locate) => this.highlighter.show(locate),
-    };
+  /** 弹窗答复不占修改槽位，否则被弹窗停住的输入无法收尾。 */
+  async actDialog(action: Extract<PageAction, { type: "dialog" }>, signal: AbortSignal): Promise<ActResult> {
+    const operation = new BrowserOperation(this, signal);
+    try { return await runActions(operation, [action], signal); }
+    finally { await operation.finish(); }
   }
 
   /**
    * 执行 JS（见 `page-evaluate.ts`）。页面已经停着（本标签或同进程别的标签在等弹窗作答）时整次以 `DIALOG_OPEN`
    * 失败；所以执行途中以 `DIALOG_OPEN` 结束、且本标签有弹窗时，弹窗必是这次执行期间弹出的，算脚本弹的。
    */
-  async evaluate(expression: string, signal: AbortSignal): Promise<EvaluateOutcome> {
+  async evaluate(expression: string, operation: BrowserOperation): Promise<EvaluateOutcome> {
+    const signal = operation.signal;
     this.assertAlive();
     const paused = this.events.pausedBy();
     if (paused) throw paused;
     try {
-      return { ...await evaluateExpression((method, params, options) => this.session.send(method, params, options), expression, signal), dialog: null };
+      return { ...await operation.effect(() => evaluateExpression(operation.cdp, expression, signal)), dialog: null };
     } catch (error) {
       const dialog = this.dialogs.current;
       if (dialog && (error as HostMethodError).code === "DIALOG_OPEN") return { value: null, truncated: false, error: null, dialog };
@@ -393,6 +415,7 @@ export class BrowserTab {
   /** 期望与已生效的设备模拟不一致时补设（同进程的弹窗答完后由 `BrowserHost` 调用：弹窗期间的设置会被闸住）。 */
   resyncEmulation(): void {
     this.emulation.resync();
+    this.operation?.resumeCleanup();
   }
 
   /** 页面下一次停住（弹窗）时中止的信号：等初始化的调用方据它提前返回（回答弹窗不需要调试器）。 */
@@ -416,16 +439,16 @@ export class BrowserTab {
   async screenshot(format: "jpeg" | "png", options: CaptureOptions = {}): Promise<string> {
     this.assertAlive();
     await this.highlighter.clear();
-    return captureScreenshot(this.session, format, options);
+    return captureScreenshot(this.session.send.bind(this.session), format, options);
   }
 
   /** 只截一个元素（先滚入视野再量，与动作取落点同一套几何）；元素已不在、没有尺寸时报 `REF_STALE` / `NOT_INTERACTABLE`。 */
-  async elementScreenshot(ref: string, signal: AbortSignal): Promise<string> {
+  async elementScreenshot(ref: string, operation: BrowserOperation): Promise<string> {
     this.assertAlive();
-    const session = this.pageSession(signal);
+    const session = operation;
     const area = await box(session, await element(session, ref));
     await this.highlighter.clear();
-    return captureScreenshot(this.session, "jpeg", { quality: 85, element: area });
+    return captureScreenshot(operation.cdp, "jpeg", { quality: 85, element: area });
   }
 
   /** 主框架换了文档：旧 ref 作废、状态码换成新文档的（错误页为 null）、日志的「当前页面」从这里起算。 */
@@ -459,6 +482,7 @@ export class BrowserTab {
   summary(): Omit<BrowserTabSummary, "agentBusy"> {
     const contents = this.contents;
     return {
+      operation: this.operation?.state ?? null,
       tabId: this.tabId,
       taskId: this.taskId,
       createdBy: this.createdBy,
@@ -473,6 +497,7 @@ export class BrowserTab {
 
   /** 页面已自己关掉（`destroyed`）时只做清理；待答的弹窗先按取消答复，免得同进程的其他页面跟着停住。 */
   close(): void {
+    this.operation?.stop();
     this.highlighter.dispose();
     this.emulation.dispose();
     this.dismissDialog("the tab was closed");
@@ -557,7 +582,7 @@ export class BrowserTab {
    * 动作之后：页面在加载（点了链接、提交了表单）就等它结束，有时限、超时不报错，再留一点渲染时间。
    * 页面停住（弹窗）、调用取消或标签关闭（`signal`）时不再等：结果里报出弹窗，或由 `BrowserHost` 报关闭。
    */
-  private async settle(signal: AbortSignal): Promise<void> {
+  async settle(signal: AbortSignal): Promise<void> {
     const contents = this.contents;
     // 点击触发的导航是异步开始的：先等一下再看是否在加载。
     await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
@@ -574,7 +599,7 @@ export class BrowserTab {
    */
   private fileChooserOpened({ backendNodeId, mode }: { backendNodeId?: number; mode: string }, sessionId: string | undefined): void {
     const multiple = mode === "selectMultiple";
-    if (backendNodeId !== undefined && Date.now() < this.agentInputUntil) {
+    if (backendNodeId !== undefined && Date.now() < this.agentChooserUntil) {
       this.fileChooser = { node: { sessionId, backendNodeId }, multiple };
       this.log.note(`the page opened a file chooser${multiple ? " for several files" : ""}; answer it with an upload action without a ref`);
       logDesktopEvent("INFO", "browser", "browser_file_chooser_for_agent", { tab_id: this.tabId, task_id: this.taskId, multiple });

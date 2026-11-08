@@ -58,19 +58,19 @@ export class PageFrames {
    * 会话里的视口坐标 → 主视口坐标的偏移：逐层加上 iframe 元素内容框的左上角（主会话为 0）。先由内向外把每层 iframe
    * 元素滚入视野、再统一量：滚动会传到外层框架，边滚边量的话，先量的外层位置会被后面的滚动作废。
    */
-  async offset(sessionId: string | undefined): Promise<{ x: number; y: number }> {
+  async offset(sessionId: string | undefined, send: CdpSession["send"]): Promise<{ x: number; y: number }> {
     const owners: { sessionId: string | undefined; backendNodeId: number }[] = [];
     for (let at = sessionId; at !== undefined;) {
       const frame = this.remote.get(at);
       if (!frame) throw browserError("REF_STALE", "the frame holding the element is gone; take a new snapshot");
-      const { backendNodeId } = await this.session.send<{ backendNodeId: number }>("DOM.getFrameOwner", { frameId: frame.frameId }, { sessionId: frame.parentSessionId });
+      const { backendNodeId } = await send<{ backendNodeId: number }>("DOM.getFrameOwner", { frameId: frame.frameId }, { sessionId: frame.parentSessionId });
       owners.push({ sessionId: frame.parentSessionId, backendNodeId });
       at = frame.parentSessionId;
     }
-    for (const owner of owners) await this.session.send("DOM.scrollIntoViewIfNeeded", { backendNodeId: owner.backendNodeId }, { sessionId: owner.sessionId });
+    for (const owner of owners) await send("DOM.scrollIntoViewIfNeeded", { backendNodeId: owner.backendNodeId }, { sessionId: owner.sessionId });
     const offset = { x: 0, y: 0 };
     for (const owner of owners) {
-      const { model } = await this.session.send<{ model: { content: number[] } }>("DOM.getBoxModel", { backendNodeId: owner.backendNodeId }, { sessionId: owner.sessionId });
+      const { model } = await send<{ model: { content: number[] } }>("DOM.getBoxModel", { backendNodeId: owner.backendNodeId }, { sessionId: owner.sessionId });
       offset.x += model.content[0];
       offset.y += model.content[1];
     }

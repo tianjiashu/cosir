@@ -18,6 +18,20 @@ from app.tools.host.host_call import host_error_observation
 # 建议写成两种场合都成立的说法。短提示在整次失败时显示在卡片上，browser_act 停在某一步时
 # 显示在卡片的那一步上（``failure_hint``）。
 BROWSER_ERRORS: dict[str, tuple[str, str]] = {
+    "TAB_BUSY": (
+        "The previous operation is still settling; observe the page before trying another action.",
+        "操作尚未结束",
+    ),
+    "OPERATION_UNKNOWN": (
+        "Input state is unknown. Do not repeat the action. Close this tab "
+        "and open a new one if needed.",
+        "输入状态未知",
+    ),
+    "HANDED_OFF": (
+        "This tab belongs to the user until they hand it back. Read-only observation "
+        "is still available.",
+        "等待用户交还",
+    ),
     "TAB_NOT_FOUND": (
         "Pass one of this task's tab ids (see browser_tabs), or open a page with browser_navigate.",
         "标签不存在",

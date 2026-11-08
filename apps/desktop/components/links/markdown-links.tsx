@@ -4,12 +4,13 @@ import type { ExtraProps } from "streamdown";
 
 import { inlineCodeLink, resolveLink } from "@/lib/links/resolve-link";
 import { cn } from "@/lib/utils";
+import { LinkTargetIcon } from "./link-target-icon";
 import { useOpenLink, type LinkSource } from "./use-open-link";
 
-/** 与 Streamdown 默认链接、行内代码相同的排版；颜色与下划线在 app/markdown.css 统一定义。 */
 const InsideMarkdownLink = createContext(false);
 
-const LINK_CLASS = "wrap-anywhere font-medium";
+/** 字重继承所在文字；颜色与下划线在 app/markdown.css 统一定义。 */
+const LINK_CLASS = "wrap-anywhere";
 const INLINE_CODE_CLASS = "rounded bg-[var(--inline-code-background,var(--muted))] px-1.5 py-0.5 font-mono text-sm";
 
 /**
@@ -21,10 +22,13 @@ const INLINE_CODE_CLASS = "rounded bg-[var(--inline-code-background,var(--muted)
  *
  * `documentDir` 只在工作区文档里给出，相对链接按文档目录解析；`webOnly` 用于与工作区无关的文本
  * （Agent 提示词、Skill 说明），其中的相对链接不指向当前工作区，只认网页。
+ *
+ * `icons` 只在对话里开启：取站点图标要联网，打开一篇文档不应该为其中所有链接发请求。行内代码是字面内容，
+ * 不带图标。
  */
 export function useMarkdownLinkComponents(
   source: LinkSource,
-  { documentDir, webOnly = false }: { documentDir?: string; webOnly?: boolean } = {},
+  { documentDir, webOnly = false, icons = false }: { documentDir?: string; webOnly?: boolean; icons?: boolean } = {},
 ) {
   const opener = useOpenLink(source);
   return useMemo(() => {
@@ -46,6 +50,7 @@ export function useMarkdownLinkComponents(
             opener.open(target, event.currentTarget);
           }}
         >
+          {icons && <LinkTargetIcon target={target} className="mr-[0.25em]" />}
           <InsideMarkdownLink.Provider value>{children}</InsideMarkdownLink.Provider>
         </a>
       );
@@ -87,5 +92,5 @@ export function useMarkdownLinkComponents(
       );
     }
     return { a: MarkdownLink, inlineCode: InlineCode };
-  }, [opener, documentDir, webOnly]);
+  }, [opener, documentDir, webOnly, icons]);
 }

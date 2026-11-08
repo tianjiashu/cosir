@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import { useAttachmentWorkspaceId } from "@/components/assistant-ui/elements/attachment-context";
 import { ImageStrip } from "@/components/image/image-strip";
+import { WebPageIcon } from "@/components/links/link-target-icon";
 import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
 import { browserActionVerb } from "@/lib/assistant/tool-catalog";
 import { tabLabel } from "@/lib/browser/tab-label";
@@ -19,6 +20,7 @@ function BrowserPageMeta({ display }: { display: BrowserPageDisplay; }) {
   const label = tabLabel(display.title, display.url);
   return (
     <span className="inline-flex min-w-0 items-center gap-1.5" title={display.url}>
+      <WebPageIcon url={display.url} className="size-3.5" />
       <span className="truncate">{label}</span>
       {liveTab === undefined && <span className="shrink-0">· 标签页已关闭</span>}
     </span>
@@ -50,6 +52,7 @@ function ActSteps({ steps }: { steps: BrowserActStep[]; }) {
           <span className="shrink-0">{browserActionVerb(step.action)}</span>
           {step.target && <span className="min-w-0 truncate" title={step.target}>{step.target}</span>}
           {step.status === "failed" && step.hint && <span className="shrink-0">· {step.hint}</span>}
+          {step.status === "unknown" && <span className="shrink-0 text-warning">· 结果不确定，请先检查页面</span>}
           {step.status === "skipped" && <span className="shrink-0">· 未执行</span>}
         </li>
       ))}
@@ -69,7 +72,7 @@ export const browserPageView: CallView = (data, context) => {
     meta: context.inherited ? tabLabel(display.title, display.url) : <BrowserPageMeta display={display} />,
     actions: context.inherited ? null : <OpenTabAction display={display} />,
     detail: display.screenshot || display.steps?.length ? {
-      defaultOpen: display.steps?.some(step => step.status === "failed") ?? false,
+      defaultOpen: display.steps?.some(step => step.status === "failed" || step.status === "unknown") ?? false,
       render: () => display.screenshot ? <Screenshot assetId={display.screenshot} /> : <ActSteps steps={display.steps!} />,
     } : undefined,
   };

@@ -45,15 +45,16 @@ describe("wire samples", () => {
   it("act outcomes with a dialog", () => {
     const outcome: ActOutcome = {
       ...head(200, defaultEmulation),
-      snapshot: "",
-      frames: 0,
-      notes: [],
-      newLogs: { consoleErrors: 0, consoleWarnings: 0, failedRequests: 0 },
-      otherTabs: [],
-      dialog: { id: 7, type: "confirm", message: "Delete it?", defaultText: "" },
-      completed: 1,
-      failure: { index: 1, code: "DIALOG_OPEN", message: "the page is paused: it is showing a confirm dialog (#7)" },
-      targets: ['button "Delete"', null],
+      execution: {
+        steps: [
+          { target: 'button "Delete"', status: "done", error: null },
+          { target: null, status: "failed", error: { code: "DIALOG_OPEN", message: "the page is paused: it is showing a confirm dialog (#7)" } },
+          { target: null, status: "skipped", error: null },
+        ],
+        interruption: { code: "DIALOG_OPEN", message: "the page is paused: it is showing a confirm dialog (#7)" },
+      },
+      observation: { ...head(200, defaultEmulation), snapshot: "", frames: 0, notes: [], newLogs: { consoleErrors: 0, consoleWarnings: 0, failedRequests: 0 }, otherTabs: [], dialog: { id: 7, type: "confirm", message: "Delete it?", defaultText: "" } },
+      observationError: null,
     };
     expect(actWire(outcome)).toEqual(samples.act);
   });
@@ -103,8 +104,8 @@ describe("wire samples", () => {
   it("screenshots and tab lists", () => {
     expect(screenshotWire({ ...head(200, defaultEmulation), image: "data:image/jpeg;base64,/9j/AAAA" })).toEqual(samples.screenshot);
     expect(tabsWire([
-      { tabId: "t1", title: "Home", url: "http://127.0.0.1:5173/", current: false, createdBy: "user" },
-      { tabId: "t3", title: "Sign in", url: "http://127.0.0.1:5173/login", current: true, createdBy: "agent" },
+      { tabId: "t1", title: "Home", url: "http://127.0.0.1:5173/", current: false, createdBy: "user", operation: null },
+      { tabId: "t3", title: "Sign in", url: "http://127.0.0.1:5173/login", current: true, createdBy: "agent", operation: null },
     ])).toEqual(samples.tabs);
   });
 });

@@ -9,6 +9,10 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 type EventHandler = (params: unknown, sessionId: string | undefined) => void;
 export type SendOptions = {
   signal?: AbortSignal;
+  /** 通知操作所有者：这是未经取消/超时包装的真实命令完成。 */
+  onCommand?: (command: Promise<unknown>) => void;
+  /** 通过取消与暂停闸门后、原生派发前登记输入来源。 */
+  onDispatch?: () => void;
   timeoutMs?: number;
   browserSide?: boolean;
   /** 跨进程子框架的子会话（`page-frames.ts`）；省略即页面的主会话。 */
@@ -38,6 +42,7 @@ export class CdpSession {
     private readonly contents: WebContents,
     private readonly pausedBy: () => HostMethodError | null,
     private readonly onDetach: (reason: string) => void,
+    private readonly onCommand: (command: Promise<unknown>) => void = () => undefined,
   ) {}
 
   attach(): void {
@@ -79,7 +84,10 @@ export class CdpSession {
     const paused = browserSide ? null : this.pausedBy();
     if (paused) return Promise.reject(paused);
     const gate = browserSide ? new AbortController().signal : this.gate.signal;
+    options.onDispatch?.();
     const command = this.contents.debugger.sendCommand(method, params, sessionId) as Promise<T>;
+    this.onCommand(command);
+    options.onCommand?.(command);
     return new Promise<T>((resolve, reject) => {
       const clear = () => {
         clearTimeout(timer);

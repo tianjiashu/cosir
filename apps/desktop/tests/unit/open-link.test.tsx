@@ -19,6 +19,7 @@ vi.mock("@/lib/api/workspace-files", async (importOriginal) => ({
 const notifyInfo = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify: { info: notifyInfo, error: vi.fn(), success: vi.fn() } }));
 
+import { ExternalLinkRow } from "@/components/assistant-ui/tools/details/detail-view";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
 import { LinkTaskContext, useOpenLink, type LinkOpener } from "@/components/links/use-open-link";
 import { markdownRehypePlugins } from "@/components/markdown-rendering-config";
@@ -184,4 +185,44 @@ it("selecting the already active file cancels an older pending link", async () =
   finish();
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(useFilesStore.getState().sessions[7].active).toBe("src/a.ts");
+});
+
+describe("link icons", () => {
+  function renderLinks(icons: boolean, text: string) {
+    function Doc() {
+      const components = useMarkdownLinkComponents("message", { icons });
+      return <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={components}>{text}</Streamdown>;
+    }
+    return renderToStaticMarkup(inWorkspace(<Doc />));
+  }
+
+  it("shows object icons only when the surface asks, so reading a document sends no requests", () => {
+    const text = "[pr](https://github.com/a/b/pull/1) [file](src/a.ts)";
+    expect(renderLinks(true, text).match(/<svg/g)).toHaveLength(2);
+    expect(renderLinks(false, text)).not.toContain("<svg");
+  });
+
+  it("keeps inline code literal, without an object icon", () => {
+    const html = renderLinks(true, "`src/a.ts`");
+    expect(html).toContain("workspace-code-link");
+    expect(html).not.toContain("<svg");
+  });
+
+  it("gives anchors no icon, because they do not point at an object", () => {
+    expect(renderLinks(true, "[note](#fn-1)")).not.toContain("<svg");
+  });
+});
+
+describe("ExternalLinkRow", () => {
+  it("does not hand the link straight to the browser", () => {
+    const html = renderToStaticMarkup(inWorkspace(<ExternalLinkRow rawUrl="https://example.com/a" title="Example" />));
+    expect(html).toContain('href="https://example.com/a"');
+    expect(html).not.toContain("target=");
+  });
+
+  it("leaves addresses that are not web pages as text", () => {
+    const html = renderToStaticMarkup(inWorkspace(<ExternalLinkRow rawUrl="javascript:alert(1)" title="bad" />));
+    expect(html).not.toContain("<a");
+    expect(html).toContain("bad");
+  });
 });

@@ -8,7 +8,7 @@ import { installAppMenu } from "./app-menu";
 import { handleAppProtocol, registerAppScheme } from "./app-protocol";
 import { BackendSupervisor } from "./backend/supervisor";
 import { BrowserHost } from "./browser/browser-host";
-import { configureBrowserSession } from "./browser/browser-session";
+import { configureBrowserSession, configureBrowserUserAgent } from "./browser/browser-session";
 import { registerBrowserMethods } from "./browser/methods";
 import { logDesktopEvent } from "./desktop-log";
 import { confirmExit } from "./exit-confirmation";
@@ -19,7 +19,6 @@ import { isolateUserDataInExplicitDataRoot } from "./paths";
 import { installTray } from "./tray";
 import {
   createMainWindow,
-  disableHttpCacheForDevServer,
   followNativeThemeInTitleBar,
   getMainWindow,
   markQuitting,
@@ -47,7 +46,7 @@ if (!app.requestSingleInstanceLock()) {
 
 function bootstrap(): void {
   registerAppScheme();
-  disableHttpCacheForDevServer();
+  configureBrowserUserAgent();
   // 宿主工具链路的认证 token：同一个值注入后端、由链路客户端在首帧出示。
   const hostToken = randomBytes(32).toString("hex");
   const supervisor = new BackendSupervisor(hostToken);

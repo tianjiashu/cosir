@@ -130,6 +130,8 @@ export type BrowserTabSummary = {
   dialog: BrowserDialog | null;
   /** 此刻有 Agent 的浏览器操作在这个标签上执行（导航、读取、动作、截图……）；两次调用之间为 false。 */
   agentBusy: boolean;
+  /** 修改操作真实状态；unknown 时需关闭标签恢复。 */
+  operation: "running" | "stopping" | "unknown" | null;
 };
 
 /** 内置浏览器的完整状态（宿主事实），推送与读取都是这一份。 */

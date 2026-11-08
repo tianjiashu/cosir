@@ -23,7 +23,7 @@ import type { ConsoleLevel, LogQuery } from "./tab-log";
  */
 
 /** 后端每个请求都带、不属于工具参数的键。 */
-const HOST_KEYS = new Set(["task_id", "limits", "download_dir"]);
+const HOST_KEYS = new Set(["task_id", "limits", "download_dir", "handoff_tabs"]);
 
 type ToolName = keyof typeof toolArgsSchemas;
 const ajv = new Ajv2020({ allErrors: false, strict: false });
@@ -35,7 +35,7 @@ const validators = new Map<ToolName, ValidateFunction>(
  * 每个请求都带后端给出的标签上下文：宿主据此刷新上限（页面开出的标签没有请求可带，用最近一次的），下载目录
  * 只在这次请求新建标签时用。
  */
-type TaskRequest = { taskId: number; context: BrowserTabContext };
+type TaskRequest = { taskId: number; context: BrowserTabContext; handoffTabs?: string[] };
 /** 指向本 Task 的某个标签（省略即当前标签）。 */
 export type TabRequest = TaskRequest & { tab?: string };
 export type NavigateRequest = TabRequest & {
@@ -153,7 +153,9 @@ function toolRequest(tool: ToolName, params: unknown): { request: TabRequest; ar
   const validate = validators.get(tool)!;
   if (!validate(args)) throw invalid(ajv.errorsText(validate.errors, { dataVar: "params" }).slice(0, 500));
   const tab = given(args.tab as string | null);
-  return { request: { taskId: taskId(value.task_id), context: tabContext(value), ...(tab ? { tab } : {}) }, args };
+  const handed = value.handoff_tabs ?? [];
+  if (!Array.isArray(handed) || handed.some((id) => typeof id !== "string")) throw invalid("handoff_tabs must be an array of tab ids");
+  return { request: { taskId: taskId(value.task_id), context: tabContext(value), handoffTabs: handed, ...(tab ? { tab } : {}) }, args };
 }
 
 /** 线上的鼠标落点：ref 与坐标恰好给了一种（后端校验过），另一种为 null。 */

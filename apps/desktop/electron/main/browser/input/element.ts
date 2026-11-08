@@ -1,6 +1,6 @@
 import { browserError } from "../errors";
 import type { PageNode } from "../ref-registry";
-import type { PageSession } from "./session";
+import type { BrowserOperation } from "../operation";
 
 /**
  * 元素由快照里的 ref 指定：ref 按节点稳定、可能来自更早的快照，所以每次动作前都向页面确认节点还在文档里
@@ -18,14 +18,14 @@ const IS_CONNECTED = `function () { return this.isConnected ? "" : "detached"; }
 const STALE_ELEMENT = "the element is no longer on the page; use a ref from the latest snapshot";
 
 /** ref → 节点，并确认它还在文档里。 */
-export async function element(session: PageSession, ref: string): Promise<PageNode> {
+export async function element(session: BrowserOperation, ref: string): Promise<PageNode> {
   const node = session.resolveRef(ref);
   if (await callOn(session, node, IS_CONNECTED)) throw browserError("REF_STALE", STALE_ELEMENT);
   return node;
 }
 
 /** 对节点发一条按节点的命令（发到节点所在的会话）。 */
-export async function onNode<T = unknown>(session: PageSession, node: PageNode, method: string, params: Record<string, unknown> = {}): Promise<T> {
+export async function onNode<T = unknown>(session: BrowserOperation, node: PageNode, method: string, params: Record<string, unknown> = {}): Promise<T> {
   return elementCommand(session.cdp<T>(method, { ...params, backendNodeId: node.backendNodeId }, { sessionId: node.sessionId }));
 }
 
@@ -49,7 +49,7 @@ export type Box = { x: number; y: number; width: number; height: number };
  * 的坐标是框架内的，加上框架的偏移（`frameOffset` 顺带把外层的 iframe 滚入视野，不影响框架内坐标）。动作的落点与
  * 元素截图都从这里取，量的是此刻的位置；快照时成批的几何另走 `DOMSnapshot`（见 `snapshot/layout.ts`）。
  */
-export async function box(session: PageSession, node: PageNode): Promise<Box> {
+export async function box(session: BrowserOperation, node: PageNode): Promise<Box> {
   await onNode(session, node, "DOM.scrollIntoViewIfNeeded");
   const offset = await session.frameOffset(node.sessionId);
   const quad = (await onNode<{ model: { border: number[] } }>(session, node, "DOM.getBoxModel")).model.border;
@@ -64,24 +64,25 @@ export async function box(session: PageSession, node: PageNode): Promise<Box> {
 }
 
 /** 元素中心：动作的落点。 */
-export async function center(session: PageSession, node: PageNode): Promise<{ x: number; y: number }> {
+export async function center(session: BrowserOperation, node: PageNode): Promise<{ x: number; y: number }> {
   const { x, y, width, height } = await box(session, node);
   return { x: x + width / 2, y: y + height / 2 };
 }
 
 /** 在元素上执行一段固定的页面函数（不对外开放任意脚本），返回它给出的字符串；检查类函数约定空串表示成功、否则是问题说明。 */
-export async function callOn(session: PageSession, node: PageNode, fn: string, args: unknown[] = []): Promise<string> {
+export async function callOn(session: BrowserOperation, node: PageNode, fn: string, args: unknown[] = []): Promise<string> {
   const { object } = await onNode<{ object: { objectId: string } }>(session, node, "DOM.resolveNode");
   return pageString(await elementCommand(session.cdp<PageCall>("Runtime.callFunctionOn", {
     objectId: object.objectId,
     functionDeclaration: fn,
     arguments: args.map((value) => ({ value })),
     returnByValue: true,
+    awaitPromise: true,
   }, { sessionId: node.sessionId })));
 }
 
 /** 在页面（主框架）上执行一段固定的表达式；约定同 `callOn`。 */
-export async function evaluate(session: PageSession, expression: string): Promise<string> {
+export async function evaluate(session: BrowserOperation, expression: string): Promise<string> {
   return pageString(await session.cdp<PageCall>("Runtime.evaluate", { expression, returnByValue: true }));
 }
 
@@ -104,3 +105,33 @@ function pageString({ result, exceptionDetails }: PageCall): string {
 const MISSING_NODE = /No node (found|with given id)|Session with given id not found/i;
 /** CDP 对没有布局的节点的报错：滚入视野是「没有布局对象」（实测），取盒模型是「算不出盒模型」。 */
 const NO_LAYOUT = /does not have a layout object|Could not compute box model/i;
+
+/** 检查只在输入前执行一次；失败让模型重新观察，不通过重放输入试探页面。 */
+export async function actionable(session: BrowserOperation, node: PageNode, editable = false, pointer = true): Promise<{ x: number; y: number }> {
+  await box(session, node);
+  const problem = await callOn(session, node, ACTIONABLE, [editable, pointer]);
+  if (problem) throw browserError("NOT_INTERACTABLE", problem);
+  const area = await box(session, node);
+  return { x: area.x + area.width / 2, y: area.y + area.height / 2 };
+}
+
+const ACTIONABLE = `async function (editable, pointer) {
+  if (!this.isConnected) return "the element is detached";
+  if (this.matches(":disabled") || this.closest('[aria-disabled="true"], [inert]')) return "the element is disabled";
+  if (editable && (this.readOnly || !(this.isContentEditable || this.tagName === "TEXTAREA" || (this.tagName === "INPUT" && !["button","submit","checkbox","radio","file","hidden"].includes(this.type))))) return "the element is not editable";
+  let problem = "the element is moving";
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const before = this.getBoundingClientRect();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    const after = this.getBoundingClientRect();
+    if (!this.isConnected) return "the element is detached";
+    if (["x","y","width","height"].some(k => Math.abs(before[k] - after[k]) > 0.5)) { problem = "the element is moving"; continue; }
+    if (getComputedStyle(this).visibility !== "visible") return "the element is hidden";
+    if (pointer) {
+      const hit = this.getRootNode().elementFromPoint(after.x + after.width / 2, after.y + after.height / 2);
+      if (!hit || !(hit === this || this.contains(hit))) { problem = "the element is covered at its input point"; continue; }
+    }
+    return "";
+  }
+  return problem;
+}`;

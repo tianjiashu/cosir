@@ -62,6 +62,7 @@ test("I5/I7/I8 background settling disables stop and updates the rail reader", a
   const row = page.locator('[data-slot="turn"] [data-tool-call-id="cmd"]');
   await expect(row).toContainText("后台运行中"); await expect(row).not.toContainText("准备执行");
   const board = page.locator('[data-background-task="cmd"]');
+  await board.locator("button[aria-expanded]").click();
   const readerButton = board.getByRole("button", { name: "查看输出" });
   await readerButton.click();
   const dialog = page.getByRole("dialog"); await expect(dialog).toBeVisible();

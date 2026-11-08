@@ -36,7 +36,7 @@ export function pageWire(page: PageResult) {
 }
 
 export function actWire(outcome: ActOutcome) {
-  return { ...pageWire(outcome), completed: outcome.completed, failure: outcome.failure, targets: outcome.targets };
+  return { ...pageHeadWire(outcome), execution: outcome.execution, observation: outcome.observation ? pageWire(outcome.observation) : null, observation_error: outcome.observationError };
 }
 
 export function logsWire(logs: LogsResult) {
@@ -65,7 +65,7 @@ export function screenshotWire(shot: ScreenshotResult) {
 }
 
 export function tabsWire(tabs: TaskTab[]) {
-  return tabs.map((tab) => ({ tab_id: tab.tabId, title: tab.title, url: tab.url, current: tab.current, created_by: tab.createdBy }));
+  return tabs.map((tab) => ({ tab_id: tab.tabId, title: tab.title, url: tab.url, current: tab.current, created_by: tab.createdBy, operation: tab.operation }));
 }
 
 function dialogWire(dialog: BrowserDialog | null) {

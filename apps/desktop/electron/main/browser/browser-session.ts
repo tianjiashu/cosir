@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { session, type DownloadItem, type WebContents, type WebPreferences } from "electron";
+import { app, session, type DownloadItem, type WebContents, type WebPreferences } from "electron";
 
 import { logDesktopEvent } from "../desktop-log";
 
@@ -46,7 +46,6 @@ export type BrowserSessionEvents = {
  */
 export function configureBrowserSession(events: BrowserSessionEvents): void {
   const browserSession = session.fromPartition(BROWSER_PARTITION);
-  browserSession.setUserAgent(browserSession.getUserAgent().replace(/ Electron\/\S+/, ""));
   browserSession.setPermissionRequestHandler((webContents, permission, callback) => {
     logDesktopEvent("INFO", "browser", "browser_permission_denied", { permission });
     events.permissionDenied(webContents, permission);
@@ -54,4 +53,9 @@ export function configureBrowserSession(events: BrowserSessionEvents): void {
   });
   browserSession.setPermissionCheckHandler(() => false);
   browserSession.on("will-download", (_event, item, webContents) => events.download(webContents, item));
+}
+
+/** 在任何 WebContents 创建前设置唯一默认 UA；popup 的首个请求也从这里取。 */
+export function configureBrowserUserAgent(): void {
+  app.userAgentFallback = app.userAgentFallback.replace(/ Electron\/\S+/, "");
 }

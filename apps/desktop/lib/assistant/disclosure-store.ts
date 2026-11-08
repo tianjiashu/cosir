@@ -8,7 +8,7 @@ import { create } from "zustand";
  * 由组件按规则给默认值（过程区有最终回复且正常完成时收起；普通工具组和时间线终端详情默认收起），所以阶段变化不会被旧覆盖卡住——
  * 覆盖只在用户点过之后才存在。
  *
- * 键：`process:{messageId}`（过程区）、`call:{toolCallId}`（调用行）、
+ * 键：`process:{messageId}`（过程区）、`call:{toolCallId}`（调用行与后台看板条目：同一次调用的详情）、
  * `activity:{messageId}:{intervalKey}`（工具区间）。Task 删除时 `clearTask` 整桶丢掉。
  */
 export type DisclosureKey = `terminal-reader:${string}` | `terminal-command:${string}` | `process:${string}` | `call:${string}` | `activity:${string}:${string}` | `agent:${string}` | `file:${string}:${string}`;

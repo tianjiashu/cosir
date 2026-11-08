@@ -33,10 +33,28 @@ test("后台命令在时间线只留一行，详情与停止只在看板", async
   await openBoardAndGroup(page);
   const timeline = page.locator('[data-slot="turn"] [data-tool-call-id="bg"]');
   await expect(timeline.locator('[data-terminal-mode="preview"]')).toHaveCount(0);
-  await expect(timeline.getByRole("button")).toHaveCount(0);
+  await expect(timeline.getByRole("button")).toHaveCount(1);
+  await expect(timeline.getByRole("button", { name: /^在后台任务中查看：/ })).toHaveCount(1);
   await expect(page.locator('[data-background-task="bg"]').getByRole("button", { name: "停止" })).toHaveCount(1);
+  await expect(page.locator('[data-background-task="bg"]').getByRole("button", { name: "查看输出" })).toHaveCount(0);
+  await page.locator('[data-background-task="bg"]').locator("button[aria-expanded]").click();
   await page.locator('[data-background-task="bg"]').getByRole("button", { name: "查看输出" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(1);
+});
+
+test("看板条目默认收起，手动展开后跨越运行结束仍保持展开", async ({ page, request }) => {
+  await seedCommand(request);
+  await page.goto(`/tasks/${TASK}`);
+  const board = page.locator('[data-background-task="bg"]');
+  const toggle = board.locator("button[aria-expanded]");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.click();
+  await expect(board.getByRole("button", { name: "查看输出" })).toBeVisible();
+
+  await request.post(`${origin}/__test__/seed-background-tasks`, { data: { taskId: TASK, entries: [{ ...running, status: "completed", endedAt: new Date().toISOString() }], foregroundWaits: [] } });
+  await page.getByRole("button", { name: "1 已结束" }).click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(board.getByRole("button", { name: "查看输出" })).toBeVisible();
 });
 
 test("Team 结束后点时间线的行定位到折叠在已结束里的后台详情", async ({ page, request }) => {

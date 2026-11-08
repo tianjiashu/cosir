@@ -101,9 +101,12 @@ def test_output_layer_advertises_rendering_and_link_rules():
         "`sequenceDiagram`), CJK-friendly formatting, and syntax-highlighted fenced "
         "code are supported; use them when helpful."
     ) in out
-    assert "put line numbers in the fragment, e.g. `[app.ts:42](src/app.ts#L42)`" in out
+    assert "Link each target once, where it first matters" in out
+    assert "Use backticks only for literal code, commands, and values" in out
+    assert "`[app.ts:42](src/app.ts#L42)`" in out
     assert "`[API.md](docs/brand/API.md)`" in out
-    assert "Do not guess a path from a bare filename" in out
+    assert "Locate a bare filename before linking; never guess." in out
+    assert "`[owner/repo#123](https://github.com/owner/repo/pull/123)`" in out
     assert "- User language: " in out
 
 

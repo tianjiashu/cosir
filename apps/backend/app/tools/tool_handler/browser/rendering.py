@@ -125,13 +125,59 @@ def page_text(page: dict[str, Any], *, lead: str | None = None) -> str:
 def act_summary(outcome: dict[str, Any], total: int) -> str:
     """``browser_act`` 的结论句：全部完成，或停在第几步、为什么、下一步怎么办。"""
 
-    failure = outcome["failure"]
-    if failure is None:
-        return f"completed all {total} action(s)."
-    return (
-        f"completed {outcome['completed']} of {total} action(s); action {failure['index'] + 1} "
-        f"failed ({failure['code']}): {failure['message']}. "
-        f"{failure_advice(failure['code'])}"
+    execution = outcome["execution"]
+    steps = execution["steps"]
+    completed = sum(step["status"] == "done" for step in steps)
+    lines = [
+        f"completed {completed} of {total} action(s). "
+        "Input completion does not confirm the website's business result."
+    ]
+    for index, step in enumerate(steps):
+        if step["status"] in ("failed", "unknown"):
+            error = step["error"]
+            lines.append(
+                f"action {index + 1}: {step['status']} ({error['code']}: {error['message']})."
+            )
+    if execution["interruption"] is not None:
+        error = execution["interruption"]
+        lines.append(
+            f"stopped: {error['code']}: {error['message']}. {failure_advice(error['code'])}"
+        )
+    if any(step["status"] == "unknown" for step in steps):
+        lines.append(
+            "Some input may already have taken effect. Observe the page before continuing; "
+            "do not replay unknown actions."
+        )
+    return "\n".join(lines)
+
+
+def act_observation(
+    tool_name: str, outcome: dict[str, Any], actions: list[dict[str, Any]]
+) -> ToolObservation:
+    """执行回执独立于观察；页面已关闭或读不到时仍把已知事实交给模型和 UI。"""
+    from app.tools.display.browser_display import build_act_steps
+    from app.tools.tool_handler.browser.errors import failure_hint
+
+    lead = act_summary(outcome, len(actions))
+    page = outcome["observation"]
+    if page is not None:
+        content = page_text(page, lead=lead)
+    else:
+        error = outcome["observation_error"]
+        content = "\n".join(
+            [
+                lead,
+                *header_lines(outcome),
+                f"page observation unavailable ({error['code']}: {error['message']}); "
+                "read a fresh snapshot before continuing.",
+            ]
+        )
+    return tool_success(
+        tool_name=tool_name,
+        content=content,
+        display_data=build_browser_page_display_data(
+            page or outcome, steps=build_act_steps(actions, outcome, failure_hint)
+        ),
     )
 
 

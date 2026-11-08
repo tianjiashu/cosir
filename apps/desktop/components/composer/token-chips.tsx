@@ -1,6 +1,7 @@
-import { FileTextIcon, HammerIcon } from "lucide-react";
+import { HammerIcon } from "lucide-react";
 
 import { InlineToken } from "@/components/ui/inline-token";
+import { WorkspaceFileIcon } from "@/components/workspace-files/file-icon";
 
 type ChipRemove = { label: string; disabled?: boolean; onClick: () => void };
 
@@ -21,7 +22,7 @@ export function FileChip({ name, description, state = "ready", remove }: {
 }) {
   return (
     <InlineToken
-      icon={<FileTextIcon />}
+      icon={<WorkspaceFileIcon name={name} />}
       name={name}
       description={description}
       preserveExtension={state === "ready"}

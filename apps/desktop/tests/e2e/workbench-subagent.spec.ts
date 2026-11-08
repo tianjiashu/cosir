@@ -46,7 +46,7 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
 
   await page.goto("/tasks/42");
   await expect(page.getByText("子 Agent 已开始工作。", { exact: true })).toBeVisible();
-  // 委派独立展示，结束后仍可直接打开子任务，不必经过普通工具活动组。
+  // 这里的委派没有后台记录，行上保留悬停才显示的「打开」；有后台记录时入口在后台卡片。
   await expect(page.locator('[data-tool-call-id="delegate-ref-500"]')).toBeVisible();
   const row = page.locator('[data-tool-call-id="delegate-ref-500"]');
   await expect(row).toContainText("审查代码");

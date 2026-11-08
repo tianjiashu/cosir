@@ -144,7 +144,12 @@ describe("BrowserDownloads", () => {
 });
 
 describe("TabEmulation", () => {
-  type Send = (method: string, params: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<unknown>;
+  type Send = (method: string, params: Record<string, unknown>, options?: import("@/electron/main/browser/cdp-session").SendOptions) => Promise<unknown>;
+  const observed = (send: Send): Send => (method, params, options) => {
+    const raw = send(method, params, options);
+    options?.onCommand?.(raw);
+    return raw;
+  };
   const metricsCalls = (send: ReturnType<typeof vi.fn<Send>>) => send.mock.calls.filter(([method]) => method === "Emulation.setDeviceMetricsOverride");
   const metricsWidths = (send: ReturnType<typeof vi.fn<Send>>) => metricsCalls(send).map(([, params]) => params.width);
   const live = () => new AbortController().signal;
@@ -157,7 +162,7 @@ describe("TabEmulation", () => {
   // 面板约 450pt 宽时缩放 0.35）。
   it("follows the panel at full size and keeps that size when taken off the panel", async () => {
     const send = vi.fn<Send>(async () => undefined);
-    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    const emulation = new TabEmulation(observed(send), vi.fn(), vi.fn());
     emulation.show(box(640, 400));
     await emulation.start(live());
     expect(metricsCalls(send).at(-1)).toEqual(["Emulation.setDeviceMetricsOverride", expect.objectContaining({ width: 640, height: 400, scale: 1 }), expect.anything()]);
@@ -180,7 +185,7 @@ describe("TabEmulation", () => {
   // 目的：拖动面板边缘时不逐帧重新排版；潜在缺陷：每一帧都改视口，页面反复重排、Agent 的快照与坐标不断失效。
   it("follows a new panel size only after it settles, showing the old viewport scaled meanwhile", async () => {
     const send = vi.fn<Send>(async () => undefined);
-    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    const emulation = new TabEmulation(observed(send), vi.fn(), vi.fn());
     emulation.show(box(640, 400));
     await emulation.start(live());
     send.mockClear();
@@ -196,11 +201,24 @@ describe("TabEmulation", () => {
     expect(emulation.toInput({ x: 100, y: 10 })).toEqual({ x: 100, y: 10 });
   });
 
+  it("settles an already queued panel resize before starting input", async () => {
+    const send = vi.fn<Send>(async () => undefined);
+    const emulation = new TabEmulation(observed(send), vi.fn(), vi.fn());
+    await emulation.start(live());
+    emulation.show(box(640, 400));
+    await emulation.prepareInput(live());
+    expect(emulation.current).toMatchObject({ width: 640, height: 400, follows: true });
+    expect(emulation.toInput({ x: 100, y: 20 })).toEqual({ x: 100, y: 20 });
+    const count = metricsCalls(send).length;
+    await settled();
+    expect(metricsCalls(send)).toHaveLength(count);
+  });
+
   // 目的：Agent 固定视口后与面板无关，只等比缩放显示；auto 立即回到跟随面板。潜在缺陷：固定的视口随面板变窄
   // 切到手机布局，或改回跟随后要等下一次拖动面板才生效。
   it("keeps a pinned viewport whatever the panel does, and follows again at once when asked", async () => {
     const send = vi.fn<Send>(async () => undefined);
-    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    const emulation = new TabEmulation(observed(send), vi.fn(), vi.fn());
     emulation.show(box(640, 400));
     await emulation.start(live());
     await emulation.set({ viewport: pinned }, live());
@@ -220,7 +238,7 @@ describe("TabEmulation", () => {
   it("converts input with the applied scale and catches up after a failure", async () => {
     let fail = false;
     const send = vi.fn<Send>(async () => { if (fail) throw new Error("paused"); });
-    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    const emulation = new TabEmulation(observed(send), vi.fn(), vi.fn());
     emulation.show(box(640, 400));
     expect(send).not.toHaveBeenCalled();
     await emulation.start(live());
@@ -246,7 +264,7 @@ describe("TabEmulation", () => {
   it("waits for an agent's change to take effect, sends only what changed, and moves the view with it", async () => {
     const send = vi.fn<Send>(async () => undefined);
     const metricsApplied = vi.fn();
-    const emulation = new TabEmulation(send, vi.fn(), metricsApplied);
+    const emulation = new TabEmulation(observed(send), vi.fn(), metricsApplied);
     await emulation.start(live());
     send.mockClear();
     await emulation.set({ colorScheme: "dark" }, live());
@@ -271,7 +289,7 @@ describe("TabEmulation", () => {
   // 目的：挂在面板上时改视口，一条命令就设对缩放；潜在缺陷：缩放按旧摆放宽度除以新视口算，先错一帧再补一轮。
   it("sets the right scale in one command when the viewport changes while shown", async () => {
     const send = vi.fn<Send>(async () => undefined);
-    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    const emulation = new TabEmulation(observed(send), vi.fn(), vi.fn());
     emulation.show(box(600, 700));
     await emulation.start(live());
     send.mockClear();
@@ -284,7 +302,7 @@ describe("TabEmulation", () => {
   // 目的：失败的要求不残留；潜在缺陷：结果报着没生效的视口，或等哪次弹窗答完被悄悄补设。
   it("reports a failed agent change, keeps reporting what is in effect, and drops the request", async () => {
     const send = vi.fn<Send>(async () => undefined);
-    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    const emulation = new TabEmulation(observed(send), vi.fn(), vi.fn());
     await emulation.start(live());
     const before = emulation.current;
     expect(before).toEqual({ ...DEFAULT_VIEWPORT, mobile: false, colorScheme: null, follows: true });
@@ -305,7 +323,7 @@ describe("TabEmulation", () => {
   it("lets a cancelled agent change go without stalling the shared catch-up", async () => {
     let release!: () => void;
     const send = vi.fn<Send>(async () => undefined);
-    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    const emulation = new TabEmulation(observed(send), vi.fn(), vi.fn());
     await emulation.start(live());
     await emulation.set({ viewport: pinned }, live());
     send.mockImplementationOnce(() => new Promise<undefined>((resolve) => { release = () => resolve(undefined); }));
@@ -324,7 +342,7 @@ describe("TabEmulation", () => {
   // 或之后一次无关的摆放 / 弹窗答复把已生效的部分悄悄撤回。
   it("keeps the commands that took effect when a later one fails, without reverting them later", async () => {
     const send = vi.fn<Send>(async () => undefined);
-    const emulation = new TabEmulation(send, vi.fn(), vi.fn());
+    const emulation = new TabEmulation(observed(send), vi.fn(), vi.fn());
     emulation.show(box(640, 400));
     await emulation.start(live());
     send.mockImplementation(async (method) => { if (method === "Emulation.setEmulatedMedia") throw new Error("paused"); });

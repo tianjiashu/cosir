@@ -12,11 +12,10 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_BROWSER
-from app.tools.display.browser_display import build_act_steps
 from app.tools.host.errors import HostCallError
-from app.tools.tool_handler.browser.errors import browser_error_observation, failure_hint
+from app.tools.tool_handler.browser.errors import browser_error_observation
 from app.tools.tool_handler.browser.host_request import call_browser, tool_timeout
-from app.tools.tool_handler.browser.rendering import act_summary, page_observation
+from app.tools.tool_handler.browser.rendering import act_observation
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models import BrowserActArgs
 
@@ -42,8 +41,10 @@ class BrowserActTool(HandlerBase):
         "fields say what it does. Put an action that navigates last: refs from before the "
         "navigation stop working. Stops at the first failure and returns how far it got plus what "
         "changed on the page since this tab's last browser result (the whole page after navigating "
-        "or when much changed); unchanged elements keep their refs. Refused while the user is "
-        "using the page."
+        "or when much changed); unchanged elements keep their refs. Unknown actions may have taken "
+        "effect: inspect before continuing, never replay them blindly. "
+        "Refused during explicit handoff; "
+        "recent keyboard activity is only a best-effort user activity hint."
     )
     args_model = BrowserActArgs
     timeout_seconds: ClassVar[float] = tool_timeout("browser.act")
@@ -69,12 +70,7 @@ class BrowserActTool(HandlerBase):
             )
         except HostCallError as error:
             return browser_error_observation(self.name, error)
-        return page_observation(
-            self.name,
-            outcome,
-            lead=act_summary(outcome, len(actions)),
-            steps=build_act_steps(actions, outcome, failure_hint),
-        )
+        return act_observation(self.name, outcome, actions)
 
     def to_definition(self) -> ToolDefinition:
         return ToolDefinition(

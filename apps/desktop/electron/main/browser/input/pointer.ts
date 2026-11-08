@@ -1,8 +1,8 @@
 import { browserError } from "../errors";
 import type { Modifier, PointerTarget } from "../params";
-import { center, element } from "./element";
+import { actionable, element } from "./element";
 import { modifierBits } from "./modifiers";
-import { effect, type PageSession } from "./session";
+import type { BrowserOperation } from "../operation";
 
 /**
  * 鼠标：只经 CDP 合成事件。落点按页面的 CSS 像素算，鼠标事件发出前经 `toInput` 换成视图坐标（面板缩放显示时两者
@@ -13,7 +13,7 @@ import { effect, type PageSession } from "./session";
 const DRAG_STEPS = 5;
 
 export async function click(
-  session: PageSession,
+  session: BrowserOperation,
   target: PointerTarget,
   options: { button: "left" | "right"; clickCount: 1 | 2; modifiers: readonly Modifier[] },
 ): Promise<void> {
@@ -23,15 +23,14 @@ export async function click(
   // 双击是两次完整的按下与松开、第二次的 clickCount 为 2，与真实输入一致：页面的 click 与 dblclick 都照常触发。
   for (let clickCount = 1; clickCount <= options.clickCount; clickCount++) {
     const event = { x, y, button: options.button, clickCount, modifiers };
-    await effect(session.cdp("Input.dispatchMouseEvent", { type: "mousePressed", ...event }));
-    await effect(session.cdp("Input.dispatchMouseEvent", { type: "mouseReleased", ...event }));
+    await session.inputUnit("Input.dispatchMouseEvent", { type: "mousePressed", ...event }, { type: "mouseReleased", ...event });
   }
 }
 
 /** 悬停状态留到下一次鼠标移动；之后的 click 会移走指针，靠延迟收起的菜单一般能容忍。 */
-export async function hover(session: PageSession, target: PointerTarget): Promise<void> {
+export async function hover(session: BrowserOperation, target: PointerTarget): Promise<void> {
   const { x, y } = session.toInput(await point(session, target));
-  await effect(session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }));
+  await session.effect(() => session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }));
 }
 
 /**
@@ -44,7 +43,7 @@ export async function hover(session: PageSession, target: PointerTarget): Promis
  * 拖动不会开始拖放，照常由鼠标事件完成。拦截只在本次拖动期间开着（开着时用户自己的拖放也会被拦下），收尾时
  * 不论成败都撤销；撤销由浏览器进程作答，页面被 drop 弹出的弹窗停住时也能完成。
  */
-export async function drag(session: PageSession, start: PointerTarget, end: PointerTarget): Promise<void> {
+export async function drag(session: BrowserOperation, start: PointerTarget, end: PointerTarget): Promise<void> {
   const startPoint = await point(session, start);
   const endPoint = await point(session, end);
   const from = session.toInput(startPoint);
@@ -54,27 +53,29 @@ export async function drag(session: PageSession, start: PointerTarget, end: Poin
   await session.cdp("Input.setInterceptDrags", { enabled: true }, { browserSide: true });
   try {
     await session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...from });
-    await effect(session.cdp("Input.dispatchMouseEvent", { type: "mousePressed", ...from, button: "left", clickCount: 1 }));
+    await session.inputUnit("Input.dispatchMouseEvent",
+      { type: "mousePressed", ...from, button: "left", clickCount: 1 },
+      { type: "mouseReleased", ...to, button: "left", clickCount: 1 }, async () => {
     for (let step = 1; step <= DRAG_STEPS; step++) {
       const x = from.x + ((to.x - from.x) * step) / DRAG_STEPS;
       const y = from.y + ((to.y - from.y) * step) / DRAG_STEPS;
-      await effect(session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1 }));
+      await session.effect(() => session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1 }));
     }
     if (dragData) {
       for (const type of ["dragEnter", "dragOver", "drop"]) {
-        await effect(session.cdp("Input.dispatchDragEvent", { type, ...endPoint, data: dragData }));
+        await session.effect(() => session.cdp("Input.dispatchDragEvent", { type, ...endPoint, data: dragData }));
       }
     }
-    await effect(session.cdp("Input.dispatchMouseEvent", { type: "mouseReleased", ...to, button: "left", clickCount: 1 }));
+    });
   } finally {
     unsubscribe();
-    await session.cdp("Input.setInterceptDrags", { enabled: false }, { browserSide: true });
+    await session.cleanup("Input.setInterceptDrags", { enabled: false });
   }
 }
 
 /** 落点（可视视口里的 CSS 像素，与视口截图的像素一致）：元素取中心（先滚入视野），坐标须在可视视口之内。 */
-async function point(session: PageSession, target: PointerTarget): Promise<{ x: number; y: number }> {
-  if ("ref" in target) return center(session, await element(session, target.ref));
+async function point(session: BrowserOperation, target: PointerTarget): Promise<{ x: number; y: number }> {
+  if ("ref" in target) return actionable(session, await element(session, target.ref));
   const { width, height } = (await session.geometry()).visual;
   if (target.x >= width || target.y >= height) {
     throw browserError("OUT_OF_VIEWPORT", `(${target.x}, ${target.y}) is outside the ${Math.round(width)}×${Math.round(height)} viewport`);

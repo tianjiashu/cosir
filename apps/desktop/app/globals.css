@@ -49,7 +49,6 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
-  --color-link: var(--link);
   --color-brand: var(--brand);
   --color-brand-foreground: var(--brand-foreground);
   --color-surface: var(--surface);
@@ -125,8 +124,8 @@
   --warning-foreground: oklch(0.985 0 0);
   --info: oklch(0.5 0.134 242.749);
   --info-foreground: oklch(0.985 0 0);
-  /* 可点击文字（Markdown 链接、可打开的路径）；不用中性的 --primary，否则与正文同色。 */
-  --link: oklch(0.55 0.19 255);
+  /* Markdown 链接文字；不用中性的 --primary，否则与正文同色。 */
+  --link: oklch(0.45 0.13 255);
   /* 品牌荧光绿（应用图标 #b6ff3b）；浅色背景上压暗一档才看得清。 */
   --brand: oklch(0.707 0.181 129.18);
   --brand-foreground: oklch(0.205 0 0);
@@ -178,7 +177,7 @@
   --warning-foreground: oklch(0.279 0.077 45.635);
   --info: oklch(0.746 0.16 232.661);
   --info-foreground: oklch(0.293 0.066 243.157);
-  --link: oklch(0.7 0.16 252);
+  --link: oklch(0.76 0.1 250);
   --brand: oklch(0.919 0.224 128.65);
   --brand-foreground: oklch(0.205 0 0);
   --border: oklch(1 0 0 / 10%);

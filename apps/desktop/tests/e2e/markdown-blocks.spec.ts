@@ -90,9 +90,9 @@ test("Mermaid 按原始宽度显示，缩放控件悬停才出现", async ({ pag
   await expect.poll(() => style(zoom, "opacity")).toBe("1");
 });
 
-// 目的：能点的东西一眼可辨；潜在缺陷：链接沿用中性主色与正文同色、可打开的路径与普通代码无异、脚注点不动。
+// 目的：链接与正文可辨，行内代码保持字面样式、悬停才提示可打开；潜在缺陷：链接与正文同色、路径抢正文注意力、脚注点不动。
 for (const scheme of ["light", "dark"] as const) {
-  test(`${scheme}：链接与可点路径用链接色，脚注可来回跳转，任务列表与按键样式`, async ({ page, request }) => {
+  test(`${scheme}：链接用链接色，可点路径悬停才提示，脚注可来回跳转，任务列表与按键样式`, async ({ page, request }) => {
     await page.emulateMedia({ colorScheme: scheme });
     const text = [
       "正文，[文件](README.md#L3)、[网页](https://example.com) 与 `src/app.ts:42`、`plain()`。",
@@ -113,8 +113,10 @@ for (const scheme of ["light", "dark"] as const) {
 
     const pathCode = answer.locator('[data-slot="workspace-code-link"] code');
     const plainCode = answer.locator("code", { hasText: "plain()" });
-    expect(await color(pathCode)).not.toBe(await color(plainCode));
-    await expect(pathCode).toHaveCSS("text-decoration-style", "dashed");
+    expect(await color(pathCode)).toBe(await color(plainCode));
+    await expect(pathCode).toHaveCSS("text-decoration-line", "none");
+    await pathCode.hover();
+    await expect(pathCode).toHaveCSS("text-decoration-line", "underline");
 
     await expect(answer.locator('li:has(> input[type="checkbox"])')).toHaveCSS("list-style-type", "none");
     await expect(answer.locator("kbd")).toHaveCSS("border-bottom-width", "2px");

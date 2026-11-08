@@ -89,7 +89,7 @@ class RecoverService:
 
         queue = service_depends.get_task_message_queue()
         queued = frozenset(
-            body.tool_call_id
+            (task_id, body.tool_call_id)
             for task_id in task_ids
             for message in queue.pending_nowait(task_id)
             if isinstance(body := message.body, BackgroundResultBody) and body.tool_call_id is not None

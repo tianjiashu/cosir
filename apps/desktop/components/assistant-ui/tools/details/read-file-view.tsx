@@ -35,7 +35,7 @@ export const readFileView: CallView = (data) => {
   const parts = [lineRangeLabel(data), formatFileSize(data.file_size)].filter((part) => part !== null);
   if (data.truncated === true) parts.push(typeof data.status_hint === "string" ? data.status_hint : "文件过大，已截断");
   return {
-    target: typeof data.path === "string" ? <WorkspacePathLink path={data.path} line={readStartLine(data)} /> : undefined,
+    target: typeof data.path === "string" ? <WorkspacePathLink path={data.path} line={readStartLine(data)} plain /> : undefined,
     meta: parts.join(" · "),
   };
 };

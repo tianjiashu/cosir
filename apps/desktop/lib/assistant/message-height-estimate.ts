@@ -67,7 +67,7 @@ function userHeight(message: ThreadMessage): number {
   return height;
 }
 
-// Agent 消息（`AgentInboundMessage`）：一行来源与原文预览，展开后正文按 Markdown 排版；常量按
+// Agent 消息（`AgentInboundMessage`）：一行来源，展开后正文按 Markdown 排版；常量按
 // 样式类推算，未单独实测。
 const AGENT_LABEL = 22;
 const AGENT_PANEL_PADDING = 20;

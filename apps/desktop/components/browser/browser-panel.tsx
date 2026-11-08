@@ -5,6 +5,7 @@ import { AgentActivityBar } from "@/components/browser/agent-activity-bar";
 import { BrowserView } from "@/components/browser/browser-view";
 import { BrowserDialogBanner } from "@/components/browser/dialog-banner";
 import { DownloadBar } from "@/components/browser/download-bar";
+import { WebPageIcon } from "@/components/links/link-target-icon";
 import { HandoffBanner } from "@/components/handoff/handoff-banner";
 import { DockFrame, type DockSizing } from "@/components/layout/dock-frame";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -97,7 +98,7 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
                         ? <Spinner className="size-3.5 shrink-0" />
                         : handoffOf(tab.tabId)
                           ? <HandIcon className="text-info size-3.5 shrink-0" aria-label="交接中" />
-                          : <GlobeIcon className="size-3.5 shrink-0" aria-hidden="true" />}
+                          : <WebPageIcon url={tab.url} className="size-3.5" />}
                     <span className="truncate">{title}</span>
                   </button>
                   <TooltipIconButton tooltip="关闭标签页" side="bottom" className="size-6 shrink-0 opacity-60 hover:opacity-100" aria-label={`关闭 ${title}`} onClick={() => closeTab(tab.tabId)}>
@@ -136,7 +137,8 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
             />
           )}
           {activeHandoff && <HandoffBanner taskId={taskId} entry={activeHandoff} />}
-          {!active.dialog && !activeHandoff && (agentRunning || active.agentBusy) && <AgentActivityBar busy={active.agentBusy} />}
+          {active.operation === "unknown" && <p role="status" className="px-3 py-2 text-sm text-warning">页面操作尚未确认结束，暂不能继续自动操作。请先检查页面，必要时关闭重开；不要重复提交。</p>}
+          {!active.dialog && !activeHandoff && active.operation !== "unknown" && (agentRunning || active.agentBusy) && <AgentActivityBar busy={active.agentBusy} />}
           <BrowserView key={active.tabId} host={host} tabId={active.tabId} url={active.url} loading={active.loading} crashed={active.crashed} />
         </>
       ) : (

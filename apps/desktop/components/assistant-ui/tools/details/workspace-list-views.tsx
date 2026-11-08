@@ -1,4 +1,4 @@
-import { FileIcon, FolderIcon, LinkIcon } from "lucide-react";
+import { LinkIcon } from "lucide-react";
 import { WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
 import { cn } from "@/lib/utils";
 import type { CallView } from "../call-view";
@@ -48,13 +48,12 @@ export const directoryListView: CallView = (data) => {
     meta: `${typeof data.total_entries === "number" ? data.total_entries : readArray(data.entries).length} 个条目`,
     detail: listDetail(data, () => readRecords(data.entries), data.total_entries === 0 ? "目录为空" : "当前页没有条目", (item, index) => {
       const type = item.type;
-      const Icon = type === "dir" ? FolderIcon : type === "link" ? LinkIcon : FileIcon;
       const label = String(item.name ?? item.path ?? "未知条目");
       // 符号链接不跟随打开：目标可能在工作区外，类型也未知。
       const openable = typeof item.path === "string" && (type === "file" || type === "dir");
       return (
         <li key={`${String(item.path ?? item.name ?? index)}-${index}`} className={DETAIL_ROW_CLASS}>
-          <Icon className="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
+          {type === "link" && <LinkIcon className="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />}
           {openable
             ? <WorkspacePathLink path={item.path as string} directory={type === "dir"}>{label}</WorkspacePathLink>
             : <span className="truncate">{label}</span>}

@@ -150,7 +150,12 @@ const clickOn = (ref: string | undefined) => ({ type: "click", target: { ref }, 
 /** 断言调用成功并取出页面结果。 */
 function pageOf(outcome: Outcome): Page {
   if (!outcome.ok) throw new Error(`expected success, got ${outcome.code}: ${outcome.message}`);
-  return outcome.value;
+  const value = outcome.value as Page & { observation?: Page | null; execution?: ActPage["execution"] };
+  if ("observation" in value) {
+    expect(value.observation).not.toBeNull();
+    return { ...value, ...value.observation } as ActPage;
+  }
+  return value;
 }
 
 /** 在 main 进程里调用 `BrowserHost` 的方法，把 `HostMethodError` 转成可序列化的结果。 */
@@ -222,6 +227,13 @@ function valueOf(outcome: LinkOutcome): Record<string, unknown> {
   return outcome.value;
 }
 
+/** 测页面内容的用例显式取 observation，同时保留 execution 供断言；未知/关闭由原生测试验收。 */
+function observedValueOf(outcome: LinkOutcome): Record<string, unknown> {
+  const value = valueOf(outcome);
+  expect(value.observation).not.toBeNull();
+  return { ...value, ...value.observation as Record<string, unknown> };
+}
+
 const navigate = (taskId: number, target: Record<string, unknown>, tab?: string) => call("navigate", { taskId, tab, target, context: context(LIMITS) });
 
 test("opens a tab on first navigation and returns a snapshot with refs", async () => {
@@ -253,13 +265,11 @@ test("pauses on JavaScript dialogs until the agent or the user answers", async (
   const shown = opened.dialog ?? pageOf(await call("snapshot", { taskId: 1 })).dialog;
   expect(shown).toMatchObject({ type: "confirm", message: "Continue?", defaultText: "" });
   expect(await call("screenshot", { taskId: 1, fullPage: false })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
-  const blocked = pageOf(await call("act", { taskId: 1, actions: [{ type: "press", key: "Tab" }] })) as ActPage;
-  expect(blocked).toMatchObject({ completed: 0, failure: { code: "DIALOG_OPEN" } });
+  expect(await call("act", { taskId: 1, actions: [{ type: "press", key: "Tab" }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
   // 调用开始时已有的弹窗必须按编号作答。
-  const unnamed = pageOf(await call("act", { taskId: 1, actions: [{ type: "dialog", accept: true }] })) as ActPage;
-  expect(unnamed).toMatchObject({ completed: 0, failure: { code: "DIALOG_MISMATCH" } });
+  expect(await call("act", { taskId: 1, actions: [{ type: "dialog", accept: true }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
   const answered = pageOf(await call("act", { taskId: 1, actions: [{ type: "dialog", accept: true, id: shown!.id }] })) as ActPage;
-  expect(answered).toMatchObject({ completed: 1, failure: null, dialog: null, title: "answered:true" });
+  expect(answered).toMatchObject({ execution: { steps: Array(1).fill({ status: "done" }), interruption: null }, dialog: null, title: "answered:true" });
 
   await navigate(1, { url: `${origin}/prompt` });
   await expect.poll(async () => pageOf(await call("snapshot", { taskId: 1 })).dialog?.type).toBe("prompt");
@@ -279,7 +289,7 @@ test("answers a dialog opened by an action in the same batch", async () => {
   const page = pageOf(await navigate(1, { url: `${origin}/delete` }));
   const button = refOf(page.snapshot, "button", "Delete");
   const outcome = pageOf(await call("act", { taskId: 1, actions: [clickOn(button), { type: "dialog", accept: false }] })) as ActPage;
-  expect(outcome).toMatchObject({ completed: 2, failure: null, title: "deleted:false" });
+  expect(outcome).toMatchObject({ execution: { steps: [{ status: "unknown" }, { status: "done" }], interruption: { code: "DIALOG_OPEN" } }, title: "deleted:false" });
 });
 
 // 目的：页面不能把标签带离网页；潜在缺陷：经脚本跳转读本机文件。
@@ -378,7 +388,7 @@ function refOf(snapshot: string, role: string, name: string): string {
   return match[1];
 }
 
-type ActPage = Page & { completed: number; failure: { index: number; code: string; message: string } | null };
+type ActPage = Page & { execution: { steps: { status: string }[]; interruption: { code: string; message: string } | null } };
 
 test("acts on the page through refs: select, wait, type and submit", async () => {
   const page = pageOf(await call("navigate", { taskId: 20, target: { url: `${origin}/act` }, context: context(roomy) }));
@@ -391,16 +401,16 @@ test("acts on the page through refs: select, wait, type and submit", async () =>
     clickOn(load),
     { type: "wait_for", text: "loaded later", seconds: 5 },
   ] })) as ActPage;
-  expect(first).toMatchObject({ completed: 3, failure: null, title: "color:b" });
+  expect(first).toMatchObject({ execution: { steps: Array(3).fill({ status: "done" }), interruption: null }, title: "color:b" });
   expect(first.snapshot).toContain("loaded later");
 
   const submitted = pageOf(await call("act", { taskId: 20, actions: [{ type: "type", ref: query, text: "cosir", clear: true, submit: true, keyByKey: false }] })) as ActPage;
-  expect(submitted).toMatchObject({ completed: 1, failure: null, title: "Done" });
+  expect(submitted).toMatchObject({ execution: { steps: Array(1).fill({ status: "done" }), interruption: null }, title: "Done" });
   expect(submitted.url).toBe(`${origin}/done?q=cosir`);
 
   // 目的：导航后旧 ref 一律失效；潜在缺陷：旧序号恰好指到新页面的另一个元素，点错东西。
   const stale = pageOf(await call("act", { taskId: 20, actions: [clickOn(load)] })) as ActPage;
-  expect(stale).toMatchObject({ completed: 0, failure: { index: 0, code: "REF_STALE" }, title: "Done" });
+  expect(stale).toMatchObject({ execution: { interruption: { code: "REF_STALE" } }, title: "Done" });
 });
 
 // 目的：长页面后半段的元素也能读到并操作，ref 跨快照不变；潜在缺陷：截断之后的内容对 Agent 永远不可见。
@@ -427,12 +437,12 @@ test("pages long snapshots with stable refs, then hovers, presses shortcuts and 
     { type: "scroll", direction: "down" },
     { type: "scroll", ref: last },
   ] })) as ActPage;
-  expect(acted).toMatchObject({ completed: 6, failure: null, title: "shortcut" });
+  expect(acted).toMatchObject({ execution: { steps: Array(6).fill({ status: "done" }), interruption: null }, title: "shortcut" });
   expect(acted.snapshot).toContain("Hidden item");
 
   // 目的：滚到底要报出来；潜在缺陷：无限滚动的批次空转，模型以为加载了更多。
   const end = pageOf(await call("act", { taskId: 24, actions: [{ type: "scroll", direction: "down", ref: inside }] })) as ActPage;
-  expect(end).toMatchObject({ completed: 0, failure: { code: "SCROLL_END", message: "this area is already at the bottom" } });
+  expect(end).toMatchObject({ execution: { interruption: { code: "SCROLL_END", message: "this area is already at the bottom" } } });
 });
 
 // 目的：Agent 能把本机文件交给网页——经它的点击打开的选文件框，或直接交给文件输入框；潜在缺陷：选文件框被拦下后
@@ -444,7 +454,7 @@ test("uploads through the file chooser an action opened, and opens target=_blank
   const upload = refOf(page.snapshot, "button", "Upload");
   const popup = refOf(page.snapshot, "link", "Popup");
   const after = pageOf(await call("act", { taskId: 21, actions: [clickOn(upload), { type: "upload", paths: [file] }, clickOn(popup)] })) as ActPage;
-  expect(after).toMatchObject({ completed: 3, failure: null });
+  expect(after).toMatchObject({ execution: { steps: Array(3).fill({ status: "done" }), interruption: null } });
   const chosen = "(() => { const [f] = document.querySelector('input[type=file]').files; return f.name + ':' + f.size; })()";
   expect(valueOf(await link("browser.evaluate", 21, { expression: chosen })).value).toBe('"report.txt:5"');
   await expect.poll(async () => {
@@ -456,8 +466,8 @@ test("uploads through the file chooser an action opened, and opens target=_blank
   expect(notes).toMatch(/opened .*\/second in a new tab t\d+/);
 
   // 直接交给文件输入框（经线上形状）；宿主只收后端解析好的绝对路径。
-  const direct = valueOf(await link("browser.act", 21, { tab: after.tabId, actions: [{ type: "upload", paths: [file], ref: upload }] }));
-  expect(direct).toMatchObject({ completed: 1, failure: null });
+  const direct = observedValueOf(await link("browser.act", 21, { tab: after.tabId, actions: [{ type: "upload", paths: [file], ref: upload }] }));
+  expect(direct).toMatchObject({ execution: { steps: Array(1).fill({ status: "done" }), interruption: null } });
   expect(await link("browser.act", 21, { tab: after.tabId, actions: [{ type: "upload", paths: ["report.txt"], ref: upload }] })).toMatchObject({ ok: false, code: "INVALID_PARAMS" });
 });
 
@@ -566,7 +576,7 @@ test("follows the panel size at full scale once it settles and clicks accurately
   }, tabId)).toBe(640);
   const snapshot = pageOf(await call("snapshot", { taskId: 33 }));
   const clicked = pageOf(await call("act", { taskId: 33, actions: [clickOn(refOf(snapshot.snapshot, "button", "Far"))] }));
-  expect(clicked.title).toBe("far clicked");
+  expect(clicked.title, JSON.stringify(clicked)).toBe("far clicked");
   const shot = await call("screenshot", { taskId: 33, fullPage: false });
   const size = await app.evaluate(({ nativeImage }, image) => nativeImage.createFromDataURL(image).getSize(), (shot as unknown as { value: { image: string } }).value.image);
   expect(size).toEqual({ width: 640, height: 400 });
@@ -591,7 +601,7 @@ test("keeps a pinned viewport and clicks accurately while the tab is shown scale
   }, page.tabId);
   expect(width).toBe(1280);
   const clicked = pageOf(await call("act", { taskId: 32, actions: [clickOn(refOf(page.snapshot, "button", "Far"))] }));
-  expect(clicked.title).toBe("far clicked");
+  expect(clicked.title, JSON.stringify(clicked)).toBe("far clicked");
   const shot = await call("screenshot", { taskId: 32, fullPage: false });
   const size = await app.evaluate(({ nativeImage }, image) => nativeImage.createFromDataURL(image).getSize(), (shot as unknown as { value: { image: string } }).value.image);
   expect(size).toEqual({ width: 1280, height: 800 });
@@ -615,7 +625,7 @@ test("keeps a window that alerts while loading until its dialog is answered", as
   const paused = pageOf(await call("snapshot", { taskId: 40, tab: popup }));
   expect(paused.dialog).toMatchObject({ type: "alert", message: "Sign-in failed" });
   const answered = pageOf(await call("act", { taskId: 40, tab: popup, actions: [{ type: "dialog", accept: true, id: paused.dialog!.id }] })) as ActPage;
-  expect(answered).toMatchObject({ completed: 1, failure: null, dialog: null, title: "after alert" });
+  expect(answered).toMatchObject({ execution: { steps: Array(1).fill({ status: "done" }), interruption: null }, dialog: null, title: "after alert" });
 });
 
 // 目的：过时的作答不落到新弹窗上；潜在缺陷：用户点的是上一个弹窗的「确定」，却确认了紧接着弹出的那个。
@@ -761,15 +771,17 @@ test("evaluates expressions, reports script errors and dialogs the script opens"
   expect(paused).toMatchObject({ value: null, error: null, dialog: { type: "confirm", message: "Proceed?" } });
   // 弹窗开着时再执行脚本：脚本根本没跑，整次失败，不能把这个弹窗算到新脚本头上。
   expect(await link("browser.evaluate", 52, { expression: "1" })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
-  const answered = valueOf(await link("browser.act", 52, { actions: [{ type: "dialog", accept: true, id: (paused.dialog as { id: number }).id }] }));
-  expect(answered).toMatchObject({ completed: 1, failure: null, dialog: null });
+  const answered = observedValueOf(await link("browser.act", 52, { actions: [{ type: "dialog", accept: true, id: (paused.dialog as { id: number }).id }] }));
+  expect(answered).toMatchObject({ execution: { steps: Array(1).fill({ status: "done" }), interruption: null }, dialog: null });
   await expect.poll(async () => valueOf(await link("browser.evaluate", 52, { expression: "document.title" })).value).toBe("\"answered:true\"");
   // 只在等一个不落定的 Promise 时主线程空闲：超时后不能发打断（会误杀页面接下来执行的脚本），页面照常运转。
   await link("browser.evaluate", 52, { expression: "window.ticks = 0; setInterval(() => window.ticks++, 20); 0" });
   const waited = valueOf(await link("browser.evaluate", 52, { expression: "new Promise(() => {})" }));
   expect(String(waited.error)).toContain("waiting on a Promise");
-  const before = Number(valueOf(await link("browser.evaluate", 52, { expression: "window.ticks" })).value);
-  await expect.poll(async () => Number(valueOf(await link("browser.evaluate", 52, { expression: "window.ticks" })).value)).toBeGreaterThan(before);
+  expect(await link("browser.evaluate", 52, { expression: "window.ticks" })).toMatchObject({ ok: false, code: "OPERATION_UNKNOWN" });
+  // 未落定的脚本不再复用该标签执行新脚本；用户仍能关闭它并恢复。
+  valueOf(await link("browser.tabs", 52, { action: "close" }));
+  await link("browser.navigate", 52, { url: `${origin}/form` });
   // 转 JSON 卡住（getter 永不返回）同样被打断，标签还能接着用。
   const getter = valueOf(await link("browser.evaluate", 52, { expression: "({ get x() { while (true) {} } })" }));
   expect(String(getter.error)).toContain("was stopped");
@@ -836,11 +848,11 @@ test("gives refs to elements that only look clickable, once per card, and shows 
 // contextmenu、双击只触发 click、合成的拖动不触发 HTML5 drop。
 test("clicks, double clicks and drags at viewport coordinates", async () => {
   valueOf(await link("browser.navigate", 61, { url: `${origin}/pointer` }));
-  const act = async (action: Record<string, unknown>) => valueOf(await link("browser.act", 61, { actions: [action] }));
-  expect(await act({ type: "click", x: 120, y: 60, button: "right" })).toMatchObject({ failure: null, title: "menu 120,60" });
-  expect(await act({ type: "click", x: 10, y: 10, click_count: 2, modifiers: ["Shift"] })).toMatchObject({ failure: null, title: "double true" });
-  expect(await act({ type: "drag", start: { x: 50, y: 320 }, end: { x: 350, y: 320 } })).toMatchObject({ failure: null, title: "dropped a" });
-  expect(await act({ type: "hover", x: 5000, y: 10 })).toMatchObject({ completed: 0, failure: { code: "OUT_OF_VIEWPORT" } });
+  const act = async (action: Record<string, unknown>) => observedValueOf(await link("browser.act", 61, { actions: [action] }));
+  expect(await act({ type: "click", x: 120, y: 60, button: "right" })).toMatchObject({ execution: { interruption: null }, title: "menu 120,60" });
+  expect(await act({ type: "click", x: 10, y: 10, click_count: 2, modifiers: ["Shift"] })).toMatchObject({ execution: { interruption: null }, title: "double true" });
+  expect(await act({ type: "drag", start: { x: 50, y: 320 }, end: { x: 350, y: 320 } })).toMatchObject({ execution: { interruption: null }, title: "dropped a" });
+  expect(await act({ type: "hover", x: 5000, y: 10 })).toMatchObject({ execution: { interruption: { code: "OUT_OF_VIEWPORT" } } });
 
   // 挂在面板上、缩放显示时也要落在终点（真实应用验收发现：拖放事件按视图坐标发会落到一半处）。
   valueOf(await link("browser.navigate", 61, { action: "reload" }));
@@ -848,7 +860,7 @@ test("clicks, double clicks and drags at viewport coordinates", async () => {
     const { host } = (globalThis as unknown as { browserHarness: { host: { place(tab: string, box: object): void } } }).browserHarness;
     host.place(tab, { x: 0, y: 0, width: 640, height: 400 });
   }, (await act({ type: "hover", x: 1, y: 1 })).tab_id as string);
-  expect(await act({ type: "drag", start: { x: 50, y: 320 }, end: { x: 350, y: 320 } })).toMatchObject({ failure: null, title: "dropped a" });
+  expect(await act({ type: "drag", start: { x: 50, y: 320 }, end: { x: 350, y: 320 } })).toMatchObject({ execution: { interruption: null }, title: "dropped a" });
 });
 
 // 目的：按键盘事件工作的控件（自动补全、验证码格子）收得到每个按键；潜在缺陷：一次写入只触发 input，keyup 一个都没有；
@@ -856,8 +868,8 @@ test("clicks, double clicks and drags at viewport coordinates", async () => {
 test("types key by key so the page sees a key event per character", async () => {
   const page = valueOf(await link("browser.navigate", 62, { url: `${origin}/keys` }));
   const field = refOf(page.snapshot as string, "textbox", "Code");
-  const typed = valueOf(await link("browser.act", 62, { actions: [{ type: "type", ref: field, text: "a1中", key_by_key: true }] }));
-  expect(typed).toMatchObject({ failure: null, title: "3 a1中" });
+  const typed = observedValueOf(await link("browser.act", 62, { actions: [{ type: "type", ref: field, text: "a1中", key_by_key: true }] }));
+  expect(typed).toMatchObject({ execution: { interruption: null }, title: "3 a1中" });
 });
 
 // 目的：iframe 里的元素也能看到、能操作（同源与跨站的跨进程 iframe）；潜在缺陷：只读主框架的树，嵌入的表单看不见；
@@ -868,18 +880,18 @@ test("reads and acts inside same-origin and cross-site iframes", async () => {
   expect(snapshot).toMatch(/- iframe "Same"\n\s+- button "In same" \[ref=e\d+\]/);
   expect(snapshot).toMatch(/- iframe "Cross"\n\s+- textbox "Note" \[ref=e\d+\]/);
   expect(page.frames).toBe(0);
-  const act = async (actions: Record<string, unknown>[]) => valueOf(await link("browser.act", 63, { actions }));
-  expect(await act([{ type: "click", ref: refOf(snapshot, "button", "In same") }])).toMatchObject({ failure: null, title: "same clicked" });
+  const act = async (actions: Record<string, unknown>[]) => observedValueOf(await link("browser.act", 63, { actions }));
+  expect(await act([{ type: "click", ref: refOf(snapshot, "button", "In same") }])).toMatchObject({ execution: { interruption: null }, title: "same clicked" });
   const sent = await act([
     { type: "type", ref: refOf(snapshot, "textbox", "Note"), text: "hi from frame" },
     { type: "click", ref: refOf(snapshot, "button", "Send") },
   ]);
-  expect(sent).toMatchObject({ failure: null, title: "got hi from frame" });
+  expect(sent).toMatchObject({ execution: { interruption: null }, title: "got hi from frame" });
   // 跨进程框架里的选文件框同样交给 upload，不弹系统选择框。
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cosir-upload-")), "frame.txt");
   fs.writeFileSync(file, "x");
   const attached = await act([{ type: "click", ref: refOf(snapshot, "button", "Attach") }, { type: "upload", paths: [file] }]);
-  expect(attached).toMatchObject({ failure: null, title: "got file frame.txt" });
+  expect(attached).toMatchObject({ execution: { interruption: null }, title: "got file frame.txt" });
 });
 
 // 目的：长页面上只读屏幕上的部分或按关键词找；潜在缺陷：几何按 CSS 像素算（Retina 上差一倍）、忘了减滚动，列出的是
@@ -912,13 +924,13 @@ test("reads only the viewport or the lines matching a query", async () => {
 test("returns only what changed after an action, and the whole page after it navigates", async () => {
   const page = valueOf(await link("browser.navigate", 65, { url: `${origin}/counter` }));
   const add = refOf(page.snapshot as string, "button", "Add");
-  const changed = valueOf(await link("browser.act", 65, { actions: [{ type: "click", ref: add }] })).snapshot as string;
+  const changed = observedValueOf(await link("browser.act", 65, { actions: [{ type: "click", ref: add }] })).snapshot as string;
   expect(changed).toMatch(/^\(changes since this tab's last browser result: 1 new or changed, 0 removed;/);
   expect(changed).toContain('text "1" [changed]');
   expect(changed).not.toContain("Item 1");
-  const still = valueOf(await link("browser.act", 65, { actions: [{ type: "hover", ref: add }] })).snapshot as string;
+  const still = observedValueOf(await link("browser.act", 65, { actions: [{ type: "hover", ref: add }] })).snapshot as string;
   expect(still).toBe("(nothing on the page changed since this tab's last browser result)");
-  const moved = valueOf(await link("browser.act", 65, { actions: [{ type: "click", ref: refOf(page.snapshot as string, "link", "Elsewhere") }] }));
+  const moved = observedValueOf(await link("browser.act", 65, { actions: [{ type: "click", ref: refOf(page.snapshot as string, "link", "Elsewhere") }] }));
   expect(moved).toMatchObject({ title: "Clickable" });
   expect(moved.snapshot as string).not.toContain("changes since");
   expect(moved.snapshot as string).toContain("[cursor=pointer]");
@@ -960,8 +972,8 @@ test("reports a hidden element as not interactable", async () => {
   const page = valueOf(await link("browser.navigate", 68, { url: `${origin}/act` }));
   const button = refOf(page.snapshot as string, "button", "Search");
   valueOf(await link("browser.evaluate", 68, { expression: "document.querySelectorAll('button').forEach((b) => { if (b.textContent.includes('Search')) b.style.display = 'none'; })" }));
-  const clicked = valueOf(await link("browser.act", 68, { actions: [{ type: "click", ref: button }] }));
-  expect(clicked).toMatchObject({ completed: 0, failure: { code: "NOT_INTERACTABLE" } });
+  const clicked = observedValueOf(await link("browser.act", 68, { actions: [{ type: "click", ref: button }] }));
+  expect(clicked).toMatchObject({ execution: { interruption: { code: "NOT_INTERACTABLE" } } });
 });
 
 // 目的：截图上的坐标在手机模拟下也点得准；潜在缺陷：没写 viewport 声明的网页按 980 宽排版、缩小显示，截图是 980 宽，
@@ -971,7 +983,7 @@ test("accepts screenshot coordinates on a page laid out wider than the emulated 
   const shot = valueOf(await link("browser.screenshot", 69, {}));
   const size = await app.evaluate(({ nativeImage }, data) => nativeImage.createFromDataURL(data).getSize(), shot.image as string);
   expect(size.width).toBe(980);
-  const clicked = valueOf(await link("browser.act", 69, { actions: [{ type: "click", x: 700, y: 350 }] }));
-  expect(clicked).toMatchObject({ failure: null, title: "hit" });
+  const clicked = observedValueOf(await link("browser.act", 69, { actions: [{ type: "click", x: 700, y: 350 }] }));
+  expect(clicked).toMatchObject({ execution: { interruption: null }, title: "hit" });
 });
 

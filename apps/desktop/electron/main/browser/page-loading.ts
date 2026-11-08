@@ -92,3 +92,19 @@ export function untilStopped(contents: WebContents, timeoutMs: number, until: Ab
     else until.addEventListener("abort", done, { once: true });
   });
 }
+
+/** 导航真正停止的旁路观察；不随请求取消/弹窗提前结束，用于修改操作交出槽位。 */
+export function navigationCompletion(contents: WebContents): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      contents.off("did-stop-loading", done);
+      contents.off("destroyed", done);
+      contents.off("did-navigate-in-page", samePage);
+      resolve();
+    };
+    const samePage = (_event: Electron.Event, _url: string, isMainFrame: boolean) => { if (isMainFrame && !contents.isLoading()) done(); };
+    contents.once("did-stop-loading", done);
+    contents.once("destroyed", done);
+    contents.on("did-navigate-in-page", samePage);
+  });
+}

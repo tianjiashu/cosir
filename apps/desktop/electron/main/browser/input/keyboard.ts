@@ -1,9 +1,9 @@
 import type { Modifier } from "../params";
 import type { PageNode } from "../ref-registry";
-import { callOn, element, onNode } from "./element";
+import { actionable, callOn, element, onNode } from "./element";
 import { modifierBits } from "./modifiers";
 import { CLEAR_FIELD } from "./page-functions";
-import { effect, type PageSession } from "./session";
+import type { BrowserOperation } from "../operation";
 
 /** CDP 键盘事件需要的字段；`text` 只给会产生字符的键（回车提交表单靠它）。单个字母与数字由 `keySpec` 现算。 */
 const KEYS: Record<string, { code: string; keyCode: number; text?: string }> = {
@@ -35,25 +35,30 @@ export function isSupportedKey(key: string): boolean {
  * 掩码输入、验证码格子）。换行按回车键处理。
  */
 export async function typeText(
-  session: PageSession,
+  session: BrowserOperation,
   ref: string,
   text: string,
   options: { clear: boolean; submit: boolean; keyByKey: boolean },
 ): Promise<void> {
   const node = await element(session, ref);
+  await actionable(session, node, true);
   await focus(session, node);
-  if (options.clear) await callOn(session, node, CLEAR_FIELD);
+  if (options.clear) await session.effect(() => callOn(session, node, CLEAR_FIELD));
   if (options.keyByKey) {
     for (const char of text) await stroke(session, charSpec(char));
   } else {
-    await effect(session.cdp("Input.insertText", { text }));
+    await session.effect(() => session.cdp("Input.insertText", { text }));
   }
   if (options.submit) await stroke(session, keySpec("Enter", false));
 }
 
 /** 按一个键（可带修饰键）；给了 ref 时先聚焦它，否则按在当前焦点上。 */
-export async function pressKey(session: PageSession, key: string, modifiers: readonly Modifier[], ref: string | undefined): Promise<void> {
-  if (ref) await focus(session, await element(session, ref));
+export async function pressKey(session: BrowserOperation, key: string, modifiers: readonly Modifier[], ref: string | undefined): Promise<void> {
+  if (ref) {
+    const node = await element(session, ref);
+    await actionable(session, node, false, false);
+    await focus(session, node);
+  }
   const spec = keySpec(key, modifiers.includes("Shift"));
   // 按住 Alt / Control / Meta 时是快捷键，不产生字符；只按 Shift 时照常产生（大写）字符。
   const shortcut = modifiers.some((modifier) => modifier !== "Shift");
@@ -61,7 +66,7 @@ export async function pressKey(session: PageSession, key: string, modifiers: rea
 }
 
 /** 聚焦发到节点所在的会话；之后的按键与输入发主会话，落在有焦点的框架里（跨进程子框架也一样，实测）。 */
-async function focus(session: PageSession, node: PageNode): Promise<void> {
+async function focus(session: BrowserOperation, node: PageNode): Promise<void> {
   await onNode(session, node, "DOM.scrollIntoViewIfNeeded");
   await onNode(session, node, "DOM.focus");
 }
@@ -69,15 +74,16 @@ async function focus(session: PageSession, node: PageNode): Promise<void> {
 type KeySpec = { key: string; code?: string; keyCode?: number; text?: string };
 
 /** 一次按键：keyDown（带字符时产生输入）与 keyUp。 */
-async function stroke(session: PageSession, spec: KeySpec, modifiers = 0): Promise<void> {
+async function stroke(session: BrowserOperation, spec: KeySpec, modifiers = 0): Promise<void> {
   const base = {
     key: spec.key,
     modifiers,
     ...(spec.code ? { code: spec.code } : {}),
     ...(spec.keyCode ? { windowsVirtualKeyCode: spec.keyCode, nativeVirtualKeyCode: spec.keyCode } : {}),
   };
-  await effect(session.cdp("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(spec.text ? { text: spec.text } : {}) }));
-  await effect(session.cdp("Input.dispatchKeyEvent", { type: "keyUp", ...base }));
+  await session.inputUnit("Input.dispatchKeyEvent",
+    { type: "keyDown", ...base, ...(spec.text ? { text: spec.text } : {}) },
+    { type: "keyUp", ...base });
 }
 
 /** 逐键输入里的一个字符：键盘上有的键（字母、数字、空格、换行）带键位，其余（标点、中文等）只带字符。 */

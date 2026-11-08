@@ -9,7 +9,7 @@ import { API_ORIGIN as api } from "./e2e-env";
  */
 
 function tab(tabId: string, title: string, dialog: BrowserDialog | null, taskId = 100): BrowserTabSummary {
-  return { tabId, taskId, createdBy: "agent", openerId: null, url: `https://example.com/${tabId}`, title, loading: false, crashed: false, dialog, agentBusy: false };
+  return { tabId, taskId, createdBy: "agent", openerId: null, url: `https://example.com/${tabId}`, title, loading: false, crashed: false, dialog, agentBusy: false, operation: null };
 }
 
 function download(id: string, taskId: number, filename: string): BrowserDownload {
@@ -96,3 +96,10 @@ test("Agent 正在操作的标签有标记，网页上方显示提示；弹窗�
   await expect(page.getByText("Agent 正在操作这个页面")).toHaveCount(0);
 });
 
+
+test("未知输入状态提示检查页面并保留关闭入口，不显示正在操作", async ({ page }) => {
+  await openBrowserPanel(page, { tabs: [{ ...tab("t1", "待检查页", null), operation: "unknown" }], downloads: [] });
+  await expect(page.getByRole("status").filter({ hasText: "页面操作尚未确认结束" })).toBeVisible();
+  await expect(page.getByText("Agent 正在操作这个页面")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "关闭 待检查页" })).toBeEnabled();
+});

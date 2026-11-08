@@ -62,7 +62,11 @@ PAGE: dict[str, Any] = {
     "loading": False,
     "status": 200,
     "emulation": {
-        "width": 1280, "height": 800, "mobile": False, "color_scheme": None, "follows_panel": True,
+        "width": 1280,
+        "height": 800,
+        "mobile": False,
+        "color_scheme": None,
+        "follows_panel": True,
     },
     "snapshot": '- heading "Example"\n- link "More" [ref=e1]',
     "frames": 0,
@@ -79,6 +83,7 @@ TABS: list[dict[str, Any]] = [
         "url": "https://example.com/",
         "current": True,
         "created_by": "agent",
+        "operation": None,
     },
     {
         "tab_id": "t2",
@@ -86,6 +91,7 @@ TABS: list[dict[str, Any]] = [
         "url": "https://other/",
         "current": False,
         "created_by": "user",
+        "operation": None,
     },
 ]
 
@@ -151,6 +157,7 @@ def test_navigate_sends_task_and_tab_context(
         "task_id": 42,
         "limits": {"per_task": 3, "total": 9},
         "download_dir": str(Path(".").resolve() / ".cosir" / "Download"),
+        "handoff_tabs": [],
         "url": "https://example.com/",
         "action": None,
         "tab": None,
@@ -302,7 +309,25 @@ def _actions(*actions: dict[str, Any]) -> list[dict[str, Any]]:
 def test_new_actions_reach_the_host_as_dumped(
     monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
 ) -> None:
-    link = _install(monkeypatch, {**PAGE, "completed": 6, "failure": None, "targets": [None] * 6})
+    link = _install(
+        monkeypatch,
+        {
+            **HEAD,
+            "execution": {
+                "steps": [
+                    {"target": None, "status": "done", "error": None},
+                    {"target": None, "status": "done", "error": None},
+                    {"target": None, "status": "done", "error": None},
+                    {"target": None, "status": "done", "error": None},
+                    {"target": None, "status": "done", "error": None},
+                    {"target": None, "status": "done", "error": None},
+                ],
+                "interruption": None,
+            },
+            "observation": {**PAGE},
+            "observation_error": None,
+        },
+    )
     actions = _actions(
         {"type": "hover", "ref": "e3"},
         {"type": "click", "x": 12.5, "y": 40, "button": "right", "click_count": 2},
@@ -330,7 +355,18 @@ def test_upload_sends_absolute_paths_of_existing_files(
     context = ToolExecutionContext(
         task_id=42, workspace_id=1, workspace_root=tmp_path, step_id="s", run_id=1, tool_call_id="c"
     )
-    link = _install(monkeypatch, {**PAGE, "completed": 1, "failure": None, "targets": [None]})
+    link = _install(
+        monkeypatch,
+        {
+            **HEAD,
+            "execution": {
+                "steps": [{"target": None, "status": "done", "error": None}],
+                "interruption": None,
+            },
+            "observation": {**PAGE},
+            "observation_error": None,
+        },
+    )
     actions = _actions({"type": "upload", "paths": ["report.pdf", str(outside)], "ref": None})
 
     BrowserActTool().execute(actions, None, execution_context=context)
@@ -354,7 +390,22 @@ def test_upload_sends_absolute_paths_of_existing_files(
 def test_dialog_action_follows_the_action_that_opens_it(
     monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
 ) -> None:
-    link = _install(monkeypatch, {**PAGE, "completed": 3, "failure": None, "targets": [None] * 3})
+    link = _install(
+        monkeypatch,
+        {
+            **HEAD,
+            "execution": {
+                "steps": [
+                    {"target": None, "status": "done", "error": None},
+                    {"target": None, "status": "done", "error": None},
+                    {"target": None, "status": "done", "error": None},
+                ],
+                "interruption": None,
+            },
+            "observation": {**PAGE},
+            "observation_error": None,
+        },
+    )
     actions = _actions(
         {"type": "click", "ref": "e4"},
         {"type": "dialog", "accept": True, "text": None, "id": None},
@@ -376,12 +427,24 @@ def test_act_stopped_by_a_dialog_points_to_the_dialog_action(
     monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
 ) -> None:
     outcome = {
-        **PAGE,
-        "snapshot": "",
-        "dialog": {"id": 2, "type": "alert", "message": "Saved", "default_text": ""},
-        "completed": 1,
-        "failure": {"index": 1, "code": "DIALOG_OPEN", "message": "a dialog is open"},
-        "targets": [None, None],
+        **HEAD,
+        "execution": {
+            "steps": [
+                {"target": None, "status": "done", "error": None},
+                {
+                    "target": None,
+                    "status": "failed",
+                    "error": {"code": "DIALOG_OPEN", "message": "a dialog is open"},
+                },
+            ],
+            "interruption": {"code": "DIALOG_OPEN", "message": "a dialog is open"},
+        },
+        "observation": {
+            **PAGE,
+            "snapshot": "",
+            "dialog": {"id": 2, "type": "alert", "message": "Saved", "default_text": ""},
+        },
+        "observation_error": None,
     }
     _install(monkeypatch, outcome)
 
@@ -395,7 +458,8 @@ def test_act_stopped_by_a_dialog_points_to_the_dialog_action(
         .content
     )
 
-    assert "failed (DIALOG_OPEN): a dialog is open. Answer it first" in content
+    assert "failed (DIALOG_OPEN: a dialog is open)" in content
+    assert "Answer it first" in content
     assert "showing dialog 2 (alert)" in content
     assert "<page_snapshot>" not in content
 
@@ -404,12 +468,23 @@ def test_act_answering_the_wrong_dialog_explains_how_to_pick_it(
     monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
 ) -> None:
     outcome = {
-        **PAGE,
-        "snapshot": "",
-        "dialog": {"id": 5, "type": "confirm", "message": "Leave?", "default_text": ""},
-        "completed": 0,
-        "failure": {"index": 0, "code": "DIALOG_MISMATCH", "message": "dialog 4 is not open"},
-        "targets": [None],
+        **HEAD,
+        "execution": {
+            "steps": [
+                {
+                    "target": None,
+                    "status": "failed",
+                    "error": {"code": "DIALOG_MISMATCH", "message": "dialog 4 is not open"},
+                }
+            ],
+            "interruption": {"code": "DIALOG_MISMATCH", "message": "dialog 4 is not open"},
+        },
+        "observation": {
+            **PAGE,
+            "snapshot": "",
+            "dialog": {"id": 5, "type": "confirm", "message": "Leave?", "default_text": ""},
+        },
+        "observation_error": None,
     }
     _install(monkeypatch, outcome)
 
@@ -423,10 +498,8 @@ def test_act_answering_the_wrong_dialog_explains_how_to_pick_it(
         .content
     )
 
-    first_line = content.splitlines()[0]
-    assert "failed (DIALOG_MISMATCH): dialog 4 is not open. Answer the dialog that is open now" in (
-        first_line
-    )
+    first_line = content
+    assert "failed (DIALOG_MISMATCH: dialog 4 is not open)" in (first_line)
     assert "browser_act dialog action with id 5" in content
 
 
@@ -478,14 +551,19 @@ def test_scroll_end_comes_back_with_advice(
     monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
 ) -> None:
     outcome = {
-        **PAGE,
-        "completed": 0,
-        "targets": [None],
-        "failure": {
-            "index": 0,
-            "code": "SCROLL_END",
-            "message": "the page is already at the bottom",
+        **HEAD,
+        "execution": {
+            "steps": [
+                {
+                    "target": None,
+                    "status": "failed",
+                    "error": {"code": "SCROLL_END", "message": "the page is already at the bottom"},
+                }
+            ],
+            "interruption": {"code": "SCROLL_END", "message": "the page is already at the bottom"},
         },
+        "observation": {**PAGE},
+        "observation_error": None,
     }
     _install(monkeypatch, outcome)
 
@@ -496,9 +574,7 @@ def test_scroll_end_comes_back_with_advice(
     )
 
     assert observation.status == "success"
-    assert "failed (SCROLL_END): the page is already at the bottom. Nothing further" in (
-        observation.content
-    )
+    assert "failed (SCROLL_END: the page is already at the bottom)" in (observation.content)
 
 
 _HOST_SCHEMA = (
@@ -533,7 +609,19 @@ _HOST_SCHEMA = (
                 ],
                 "tab": None,
             },
-            {**PAGE, "completed": 3, "failure": None, "targets": [None] * 3},
+            {
+                **HEAD,
+                "execution": {
+                    "steps": [
+                        {"target": None, "status": "done", "error": None},
+                        {"target": None, "status": "done", "error": None},
+                        {"target": None, "status": "done", "error": None},
+                    ],
+                    "interruption": None,
+                },
+                "observation": {**PAGE},
+                "observation_error": None,
+            },
         ),
         (BrowserTabsTool(), {"action": "list", "tab": None}, TABS),
         (
@@ -587,7 +675,11 @@ def test_every_tool_sends_exactly_the_exported_wire_shape(
 def _assert_wire_shape(tool_name: str, call: tuple[str, dict[str, Any], Any]) -> None:
     method, params, _ = call
     schema = json.loads(_HOST_SCHEMA.read_text(encoding="utf-8"))[tool_name]
-    sent = {k: v for k, v in params.items() if k not in ("task_id", "limits", "download_dir")}
+    sent = {
+        k: v
+        for k, v in params.items()
+        if k not in ("task_id", "limits", "download_dir", "handoff_tabs")
+    }
     errors = [error.message for error in Draft202012Validator(schema).iter_errors(sent)]
     assert method == f"browser.{tool_name.removeprefix('browser_')}"
     assert not errors, errors
@@ -629,10 +721,20 @@ def test_act_reports_where_it_stopped_and_returns_the_fresh_page(
     monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
 ) -> None:
     outcome = {
-        **PAGE,
-        "completed": 1,
-        "failure": {"index": 1, "code": "REF_STALE", "message": "the element is gone"},
-        "targets": ['combobox "Colour"', "e9"],
+        **HEAD,
+        "execution": {
+            "steps": [
+                {"target": 'combobox "Colour"', "status": "done", "error": None},
+                {
+                    "target": "e9",
+                    "status": "failed",
+                    "error": {"code": "REF_STALE", "message": "the element is gone"},
+                },
+            ],
+            "interruption": {"code": "REF_STALE", "message": "the element is gone"},
+        },
+        "observation": {**PAGE},
+        "observation_error": None,
     }
     link = _install(monkeypatch, outcome)
     # 走执行器真实的参数路径：handler 拿到的是校验后 model_dump() 的字典，不是模型实例。
@@ -656,8 +758,8 @@ def test_act_reports_where_it_stopped_and_returns_the_fresh_page(
     # 校验后 model_dump() 的字典原样发给宿主（每个字段都在）。
     assert params["actions"] == actions
     first_line = observation.content.splitlines()[0]
-    assert first_line.startswith("completed 1 of 2 action(s); action 2 failed (REF_STALE)")
-    assert "Use refs from the latest snapshot." in first_line
+    assert first_line.startswith("completed 1 of 2 action(s).")
+    assert "Use refs from the latest snapshot." in observation.content
     assert "<page_snapshot>" in observation.content
     # 卡片列出每一步：结局按宿主报的停在哪一步定，失败那步带短提示，目标说明来自宿主。
     assert observation.display_data["steps"] == [
@@ -711,6 +813,7 @@ def test_tabs_lists_with_the_current_tab_marked(
                 "url": "https://a/",
                 "current": False,
                 "created_by": "user",
+                "operation": None,
             },
             {
                 "tab_id": "t3",
@@ -718,6 +821,7 @@ def test_tabs_lists_with_the_current_tab_marked(
                 "url": "https://b/",
                 "current": True,
                 "created_by": "agent",
+                "operation": None,
             },
         ],
     )
@@ -872,7 +976,9 @@ def test_logs_sends_every_field_and_renders_entries(
     method, params, _ = link.calls[0]
     assert method == "browser.logs"
     assert {
-        key: params[key] for key in params if key not in ("task_id", "limits", "download_dir")
+        key: params[key]
+        for key in params
+        if key not in ("task_id", "limits", "download_dir", "handoff_tabs")
     } == {
         "kind": "console",
         "since": None,
@@ -942,3 +1048,49 @@ def test_navigate_viewport_accepts_auto_to_follow_the_panel_again() -> None:
     assert BrowserNavigateArgs(url=url).viewport is None
     with pytest.raises(ValidationError):
         BrowserNavigateArgs(url=url, viewport="panel")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("operation", ["running", "stopping", "unknown"])
+def test_handoff_requires_host_operation_to_have_settled(monkeypatch, context, operation):
+    _install(monkeypatch, [{**TABS[0], "operation": operation}])
+    result = BrowserHandoffTool().execute("please sign in", None, execution_context=context)
+    assert result.status == "error"
+    assert handoff_registry.on_resource("browser", "t1") is None
+
+
+def test_handoff_constraint_is_attached_to_subsequent_requests(monkeypatch, context):
+    link = _install(monkeypatch, TABS)
+    result = BrowserHandoffTool().execute("please sign in", None, execution_context=context)
+    assert result.awaiting_decision
+    link.outcome = PAGE
+    BrowserSnapshotTool().execute(
+        tab="t1", scope="page", find=None, from_line=None, execution_context=context
+    )
+    assert link.calls[-1][1]["handoff_tabs"] == ["t1"]
+
+
+def test_act_unknown_receipt_survives_missing_observation(monkeypatch, context):
+    _install(
+        monkeypatch,
+        {
+            **HEAD,
+            "execution": {
+                "steps": [
+                    {
+                        "target": "submit",
+                        "status": "unknown",
+                        "error": {"code": "CANCELLED", "message": "stopped"},
+                    }
+                ],
+                "interruption": {"code": "CANCELLED", "message": "stopped"},
+            },
+            "observation": None,
+            "observation_error": {"code": "TAB_NOT_FOUND", "message": "closed"},
+        },
+    )
+    result = BrowserActTool().execute(
+        _actions({"type": "press", "key": "Enter"}), None, execution_context=context
+    )
+    assert "do not replay unknown actions" in result.content
+    assert "page observation unavailable" in result.content
+    assert result.display_data["steps"][0]["status"] == "unknown"

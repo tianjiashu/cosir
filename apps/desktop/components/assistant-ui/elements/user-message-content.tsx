@@ -19,7 +19,7 @@ export function UserMessageContent() {
   // 本组件只挂在用户消息下，parts 恒为用户消息的内容形状。
   const parts = useAuiState((state) => state.message.parts) as ThreadUserMessage["content"];
   const segments = useMemo(() => userMessageSegments(parts), [parts]);
-  const components = useMarkdownLinkComponents("message");
+  const components = useMarkdownLinkComponents("message", { icons: true });
 
   if (segments.every((segment) => segment.type === "text")) {
     return (

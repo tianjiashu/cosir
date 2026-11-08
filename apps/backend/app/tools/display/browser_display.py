@@ -47,14 +47,15 @@ def build_act_steps(
     只用于显示，截到一行。
     """
 
-    failure = outcome["failure"]
     steps: list[dict[str, Any]] = []
-    for index, (action, target) in enumerate(zip(actions, outcome["targets"], strict=True)):
-        step: dict[str, Any] = {"action": action["type"], "target": _clip(target)}
-        if failure is not None and index == failure["index"]:
-            step |= {"status": "failed", "hint": hint(failure["code"])}
-        else:
-            step["status"] = "done" if index < outcome["completed"] else "skipped"
+    for action, result in zip(actions, outcome["execution"]["steps"], strict=True):
+        step: dict[str, Any] = {
+            "action": action["type"],
+            "target": _clip(result["target"]),
+            "status": result["status"],
+        }
+        if result["error"] is not None:
+            step["hint"] = hint(result["error"]["code"])
         steps.append(step)
     return steps
 

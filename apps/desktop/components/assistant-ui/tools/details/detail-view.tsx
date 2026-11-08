@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
-import { LinkIcon } from "lucide-react";
-import type { CallPresentation } from "../call-view";
-import { safeExternalUrl } from "../display-utils";
+import { WebPageIcon } from "@/components/links/link-target-icon";
+import { useOpenLink } from "@/components/links/use-open-link";
+import { resolveLink } from "@/lib/links/resolve-link";
 import { cn } from "@/lib/utils";
+import type { CallPresentation } from "../call-view";
 
 /** 展开体列表行的几何（搜索命中、目录条目、外链行）；语义样式由各视图自己加。 */
 export const DETAIL_ROW_CLASS = "flex min-h-7 items-center gap-2 py-1 text-xs";
@@ -41,16 +42,27 @@ export function listDetail(
 }
 
 /**
- * 外链行：只有通过 `safeExternalUrl` 的地址才成为可点击链接，其余原样作为文本展示，
- * 不信任工具结果里的协议与主机。
+ * 外链行：工具结果不可信，只有解析成网页地址的才可点击，并和其他链接一样经 `useOpenLink` 确认后打开；
+ * 其余原样作为文本展示。
  */
 export function ExternalLinkRow({ rawUrl, title }: { rawUrl: string; title: string }) {
-  const url = safeExternalUrl(rawUrl);
+  const links = useOpenLink("tool");
+  const target = resolveLink(rawUrl, { workspaceRoot: null });
   return (
     <li className={DETAIL_ROW_CLASS}>
-      <LinkIcon className="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
-      {url
-        ? <a href={url} target="_blank" rel="noreferrer" className="truncate hover:text-foreground" title={url}>{title}</a>
+      <WebPageIcon url={rawUrl} className="size-3.5" />
+      {target?.kind === "web"
+        ? (
+          <a
+            href={target.url}
+            className="truncate hover:text-foreground"
+            title={target.url}
+            onClick={(event) => {
+              event.preventDefault();
+              links.open(target);
+            }}
+          >{title}</a>
+        )
         : <span className="truncate" title={rawUrl}>{title}</span>}
     </li>
   );

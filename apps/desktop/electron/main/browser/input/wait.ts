@@ -1,12 +1,12 @@
 import { browserError } from "../errors";
 import { evaluate } from "./element";
-import { stopped, type PageSession } from "./session";
+import type { BrowserOperation } from "../operation";
 
 const POLL_MS = 250;
 
 /** 等文字出现（`text`）或消失（`textGone`），都没有就是单纯暂停。按 `innerText` 判断，隐藏的元素不算在页面上。 */
 export async function waitFor(
-  session: PageSession,
+  session: BrowserOperation,
   target: { text?: string; textGone?: string },
   seconds: number,
   signal: AbortSignal,
@@ -19,7 +19,7 @@ export async function waitFor(
   }
   const wanted = target.text !== undefined;
   while (Date.now() < deadline) {
-    if (signal.aborted) throw stopped(signal);
+    if (signal.aborted) throw signal.reason;
     const found = await evaluate(session, `document.body && document.body.innerText.includes(${JSON.stringify(text)}) ? "found" : "absent"`);
     if ((found === "found") === wanted) return;
     await sleep(POLL_MS, signal);
@@ -33,7 +33,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
-      reject(stopped(signal));
+      reject(signal.reason);
     };
     const timer = setTimeout(() => {
       signal.removeEventListener("abort", onAbort);

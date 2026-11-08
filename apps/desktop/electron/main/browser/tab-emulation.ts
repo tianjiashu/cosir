@@ -1,6 +1,7 @@
 import type { Rectangle } from "electron";
 
 import { abortable } from "./abortable";
+import type { SendOptions } from "./cdp-session";
 
 /** 视口：跟随面板（`follow`，默认），或 Agent 固定的尺寸（CSS 像素，可按手机布局）。 */
 export type ViewportRequest = "follow" | { width: number; height: number; mobile: boolean };
@@ -25,7 +26,7 @@ export const FOLLOW_SETTLE_MS = 200;
  */
 export type Applied = { width: number; height: number; mobile: boolean; scale: number; touch: boolean; colorScheme: "light" | "dark" | null };
 
-type Send = (method: string, params: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<unknown>;
+type Send = (method: string, params: Record<string, unknown>, options?: SendOptions) => Promise<unknown>;
 
 /**
  * 一个标签的设备模拟与显示缩放，经 CDP 设置。视口有两种来源（`ViewportRequest`）：
@@ -98,7 +99,7 @@ export class TabEmulation {
 
   /** 初始化时把三条命令都设一次（随初始化一起可取消）。 */
   async start(signal: AbortSignal): Promise<void> {
-    await this.apply(this.desired(), true, signal);
+    await abortable(this.apply(this.desired(), true, signal), signal);
     // 等待期间又摆放或设置过（期望值变了）：追上去。
     void this.sync();
   }
@@ -127,6 +128,18 @@ export class TabEmulation {
       this.alignToApplied(previous);
       throw error;
     }
+  }
+
+  /** 等已有同步轮真正退出；取消调用者的等待不代表这轮命令已经结束。 */
+  async settled(): Promise<void> {
+    while (this.running) await this.running;
+  }
+
+  /** 输入开始前落定已排队的面板尺寸，避免 200ms 防抖在一次点击/拖动中途改变坐标比例。 */
+  async prepareInput(signal: AbortSignal): Promise<void> {
+    if (this.settleTimer && this.box) this.settle(this.box);
+    await abortable(this.settled(), signal);
+    if (this.stalled) throw this.failure;
   }
 
   /** 视图挂到面板上的占位矩形 `box`（窗口坐标）。跟随面板时视口等尺寸停稳再跟上（初始化前直接取它）。 */
@@ -246,21 +259,31 @@ export class TabEmulation {
       this.applied = { ...(this.applied ?? target), ...part };
     };
     if (changed("width", "height", "mobile", "scale")) {
-      await this.send("Emulation.setDeviceMetricsOverride", {
+      await this.sendApplied("Emulation.setDeviceMetricsOverride", {
         width: target.width, height: target.height, deviceScaleFactor: 0, mobile: target.mobile, scale: target.scale,
-      }, { signal });
-      record({ width: target.width, height: target.height, mobile: target.mobile, scale: target.scale });
-      this.onMetricsApplied(this.applied!);
+      }, signal, () => {
+        record({ width: target.width, height: target.height, mobile: target.mobile, scale: target.scale });
+        this.onMetricsApplied(this.applied!);
+      });
     }
     if (changed("touch")) {
-      await this.send("Emulation.setTouchEmulationEnabled", { enabled: target.touch }, { signal });
-      record({ touch: target.touch });
+      await this.sendApplied("Emulation.setTouchEmulationEnabled", { enabled: target.touch }, signal, () => record({ touch: target.touch }));
     }
     if (changed("colorScheme")) {
-      await this.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: target.colorScheme ?? "" }] }, { signal });
-      record({ colorScheme: target.colorScheme });
+      await this.sendApplied("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: target.colorScheme ?? "" }] }, signal, () => record({ colorScheme: target.colorScheme }));
     }
   }
+  /** 已生效事实跟随原始命令，即使调用者已因超时/取消结束等待，迟到成功也不能留下旧缩放。 */
+  private sendApplied(method: string, params: Record<string, unknown>, signal: AbortSignal | undefined, record: () => void): Promise<unknown> {
+    let completion: Promise<unknown> | undefined;
+    const waiting = this.send(method, params, { signal, onCommand: (raw) => { completion = raw.then(record); } });
+    // 这一轮属于标签，不属于请求等待器；包装超时不能打开串行闸门。set/start 各自处理调用者的取消。
+    // 未派发（如弹窗闸门拒绝）时只有 waiting；派发后只认原始完成，下一轮才不会与迟到命令交叉。
+    if (!completion) return waiting;
+    void waiting.catch(() => undefined);
+    return completion;
+  }
+
 }
 
 /** 视口放进占位矩形的等比缩放（视图坐标 / CSS 像素）。 */

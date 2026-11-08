@@ -1,5 +1,5 @@
 import path from "node:path";
-import { app, BrowserWindow, nativeTheme, session, shell } from "electron";
+import { BrowserWindow, nativeTheme, session, shell } from "electron";
 
 import { iconPath } from "./app-icon";
 import { APP_ORIGIN } from "./app-protocol";
@@ -40,6 +40,7 @@ export function createMainWindow(): BrowserWindow {
     // macOS 窗口没有自己的图标（用 Dock 图标，见 app-icon.ts）；其余平台的任务栏与 Alt+Tab 取这里。
     ...(process.platform !== "darwin" ? { icon: iconPath("icon.png") } : {}),
     webPreferences: {
+      session: rendererSession(),
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       sandbox: true,
@@ -62,19 +63,9 @@ export function createMainWindow(): BrowserWindow {
   return window;
 }
 
-/**
- * 开发期（`COSIR_RENDERER_URL` 指向 Vite）关闭 Chromium 的 HTTP 缓存；须在 app ready 之前调用。
- *
- * 为什么必须做：Vite 给预打包依赖（`node_modules/.vite/deps/*?v=<hash>`）发一年的 `immutable` 缓存，
- * 依赖重新打包后若 `?v=` 没变、文件名却变了，持久会话会跨重启一直用旧模块，Cmd+R 也不会重新请求；
- * 页面里首次懒加载的模块（如 Mermaid）按旧文件名请求得到 504，渲染失败且无法自行恢复。
- * 不用 `webRequest` 改写响应头：改写只影响页面看到的头，写进磁盘缓存的仍是原来的 `immutable`。
- * 开关是进程级的，开发期内置浏览器也不缓存；打包产物（`app://`）不受影响。
- */
-export function disableHttpCacheForDevServer(): void {
-  if (devServerUrl === undefined) return;
-  app.commandLine.appendSwitch("disable-http-cache");
-  logDesktopEvent("INFO", "main_window", "dev_http_cache_disabled", { origin: rendererOrigin });
+/** 开发界面的缓存策略只作用于自身 Session，不影响网站缓存或登录。 */
+export function rendererSession(): Electron.Session {
+  return devServerUrl === undefined ? session.defaultSession : session.fromPartition("persist:cosir-ui-dev", { cache: false });
 }
 
 /** 托盘、Dock 重开与单实例唤醒共用：恢复并聚焦主窗口，窗口已不存在时重新创建。 */
@@ -97,10 +88,10 @@ export function markQuitting(): void {
 
 /** 渲染进程默认会话的权限：只放行页面确实用到的几项。 */
 export function restrictSessionPermissions(): void {
-  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+  rendererSession().setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(ALLOWED_PERMISSIONS.has(permission));
   });
-  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => ALLOWED_PERMISSIONS.has(permission));
+  rendererSession().setPermissionCheckHandler((_webContents, permission) => ALLOWED_PERMISSIONS.has(permission));
 }
 
 /** Windows 窗口按钮的颜色跟随原生外观（`nativeTheme.themeSource` 由页面的外观偏好设置）。 */

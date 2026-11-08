@@ -1,5 +1,4 @@
 import { teamView } from "./views/team-view";
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 import { detailsLiveInRail, type CallView, type CallPresentation, type CallViewContext } from "./call-view";
 import { mcpView, skillView } from "./details/extension-views";
 import { imageReadView } from "./details/image-read-view";
@@ -39,8 +38,8 @@ export const CALL_VIEWS: Readonly<Record<string, CallView>> = {
 };
 
 /** 按 kind 解析一次；未知 kind 或无效载荷退化纯行，不猜工具名。归侧栏的调用在这里收成一行，新视图无需自己判断。 */
-export function resolveCallView(artifact: ToolArtifact, context: CallViewContext): CallPresentation | null {
-  const data = asRecord(artifact.display_data);
+export function resolveCallView(context: CallViewContext): CallPresentation | null {
+  const data = asRecord(context.artifact.display_data);
   if (typeof data.kind !== "string" || !Object.hasOwn(CALL_VIEWS, data.kind)) return null;
   const view = CALL_VIEWS[data.kind]?.(data, context) ?? null;
   return view && detailsLiveInRail(context) ? { ...view, detail: undefined, actions: undefined, overlay: undefined } : view;

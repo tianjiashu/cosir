@@ -27,8 +27,7 @@ const parentState: TransportState = {
   ],
   messageOffset: 0,
   activity: {modelActivity: null,  runId: 1, status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
-  terminal_sessions: [], foreground_waits: [], handoffs: [],
-  background_tasks: [{ toolCallId: "call-fork", kind: "child_agent", label: "前端部分", status: "completed", startedAt: "2026-10-27T00:00:00.000Z", endedAt: "2026-10-27T00:00:10.000Z" }],
+  terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
 };
 
 test.beforeEach(async ({ request }) => {
@@ -38,7 +37,7 @@ test.beforeEach(async ({ request }) => {
 
 test("Agent 分出的对话：行出现时侧栏补上它，点行定位后台卡片，「打开」跳到它的对话", async ({ page, request }) => {
   await page.goto("/tasks/9");
-  const sidebar = page.getByRole("navigation");
+  const sidebar = page.getByRole("navigation", { name: "工作区任务列表" });
   await expect(sidebar.getByText("主任务")).toBeVisible();
 
   // 分叉在主对话运行中建出：页面已加载、侧栏目录里还没有它。
@@ -49,6 +48,7 @@ test("Agent 分出的对话：行出现时侧栏补上它，点行定位后台�
     },
   });
   await seedState(request, 9, parentState);
+  await request.post(`${origin}/__test__/seed-background-tasks`, { data: { taskId: 9, entries: [{ toolCallId: "call-fork", kind: "child_agent", label: "前端部分", status: "completed", startedAt: "2026-10-27T00:00:00.000Z", endedAt: "2026-10-27T00:00:10.000Z" }], foregroundWaits: [] } });
 
   await expect(sidebar.getByText("前端部分")).toBeVisible();
   await expect(sidebar.getByLabel("Agent 分出的对话")).toBeVisible();

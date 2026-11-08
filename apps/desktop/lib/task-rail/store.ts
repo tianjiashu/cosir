@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+import { callKey, useDisclosureStore } from "@/lib/assistant/disclosure-store";
+
 /** 会话侧栏的卡片 id；新增卡片时在这里登记，并在卡片注册表（`components/task-rail/cards.tsx`）补齐实现。 */
 export const TASK_RAIL_CARD_IDS = ["background-tasks"] as const;
 export type RailCardId = (typeof TASK_RAIL_CARD_IDS)[number];
@@ -16,7 +18,9 @@ type TaskRailState = TaskRailPreferences & {
   floating: boolean;
   /** 窄屏浮层是否打开，不落盘：浮层盖在对话上，每次都由用户点开，宽屏的常驻偏好不带过来。 */
   floatOpen: boolean;
+  /** 待滚动到的看板条目；展开已在 `revealBackground` 里写入。 */
   revealCall: { taskId: number; callId: string } | null;
+  /** 用户从时间线定位到看板：打开侧栏与卡片并展开这一条。 */
   revealBackground: (taskId: number, callId: string) => void;
   /** 条目已定位；一次性意图不留在 store 里，否则条目重新挂载时会再展开一次。 */
   consumeReveal: () => void;
@@ -54,7 +58,10 @@ export const useTaskRailStore = create<TaskRailState>()(persist(
     floating: false,
     floatOpen: false,
     revealCall: null,
-    revealBackground: (taskId, callId) => set((state) => ({ open: true, floatOpen: true, collapsed: { ...state.collapsed, "background-tasks": false }, revealCall: { taskId, callId } })),
+    revealBackground: (taskId, callId) => {
+      useDisclosureStore.getState().set(taskId, callKey(callId), true);
+      set((state) => ({ open: true, floatOpen: true, collapsed: { ...state.collapsed, "background-tasks": false }, revealCall: { taskId, callId } }));
+    },
     consumeReveal: () => set({ revealCall: null }),
     setFloating: (floating) => set({ floating }),
     setVisible: (visible) => set((state) => (state.floating ? { floatOpen: visible } : { open: visible })),

@@ -26,21 +26,26 @@ Electron 桌面应用
 
 ## 交互约定
 
-用户对需求的描述常停留在表象，或直接给出自己设想的做法；agent 掌握项目全貌与业界成熟方案，应据此理解并还原真实需求，不只照字面实现，也不只反问用户：
+本项目由用户和 agent 共同创造、共同维护，双方都是一等身份。agent 不是执行指令的工具，要站在产品经理的视角，对项目的长期结果负责：有自己的判断，不同意就说，并给出依据。下面是默认行为，用户不需要提醒。
 
-- **先还原需求，再给方案**：区分用户看到的现象、想达成的目标与提出的做法——做法只是手段，有更合适的路线时说明理由；描述不清时，结合代码事实给出自己最合理的理解并标明假设，只就会改变方案的分歧点提问。
-- **讲清原理**：用户只看到表象时，用对方能理解的方式说明背后的机制——问题为何出现、方案为何这样设计、成熟方案通常怎么做与取舍，让用户能判断方案是否对路。
-- **主动补边界与遗漏点**：如实现「工具调用」时，应想到错误重试、超时、取消、失败安全等用户未提及但必要的维度；实现「侧边栏」时，应想到当下成熟实现方案（虚拟列表、受控组件等）并给出推荐。
-- **理解与建议都要有依据**：每条理解与补充都关联到读过的代码、项目事实（架构边界、既有能力、第零铁律取舍）或业界成熟方案，说明「为什么该考虑、推荐怎么做」；不凭印象下判断，不确定处说明置信度。
-- **优先复用与对齐**：补全时先查项目已有能力和已采用的方案，避免重复造轮子或引入与现有架构冲突的做法。
-- **方案呈现而非替用户拍板**：理解与补全作为方案的一部分交用户确认；用户坚持原想法时说明风险，之后尊重决定，不强行叠入。
+**何时适用**：用户报告现象、提想法、问「怎么看」「怎么改」时，先讨论、不改代码。用户说开工，或指令已经明确时直接做。
 
+**先想清楚三件事，再谈代码**：
+- 用户：真正想要什么，最不想看到什么，怎样算做成了。
+- 产品：这东西本质是什么，和相近能力怎么分工，代价换来什么，哪些不做。
+- 产品里的 Agent：涉及模型行为时，它此刻看到什么，知道自己是谁吗，该做什么，做完怎么交差。
+
+**方案默认按第零铁律**：查到全貌、有证据、做加减法、复用现有链路，用户不用再说。
+
+**回答的大致结构**（按问题取舍，不是固定格式）：结论和推荐 → 用用户能懂的话讲清原理 → 方案与代价 → 哪些不做 → 需要用户决定的一件事。
+
+说错了直接更正。意见不同时讲清风险，方向由用户定。
 
 ## 开发约定
 
 ### 第零铁律（最高优先级）
 
-**目标**：一切改动以「支撑项目长期稳定迭代的简洁高效架构」为最终目标。「最小改动」「零新增依赖」「不动既有代码」等偏好只是手段；与长期可维护性、可读性、可演进性冲突时，以本条为准。
+**目标**：一切改动以结构合理、清晰、简洁、高效为最终目标，支撑项目长期稳定迭代。开发工作量不是取舍依据：不因改动大、文件多、要改名而选较差的结构，「最小改动」「零新增依赖」「不动既有代码」都只是手段。需要权衡的只有运行时成本、数据与行为风险，以及能否分阶段验证。
 
 **适用时机**：新增功能、修复缺陷、重构都先按本条定路线再动手。任务类型按入口定；调查中类型变了（修复的根因在契约或结构 → 按重构执行，新增发现现有结构容不下 → 先重构再新增）写进调查结论；实施中途发现原路线或类型不成立，停下重新定。
 
@@ -60,24 +65,22 @@ Electron 桌面应用
 
 **判断方法**：
 
-- **比较两条路线。** 「结构化改造」调整职责、边界或数据流，让问题不再可能出现、需求自然落位；「补丁式修复」在现有结构上局部修正。补丁仅在问题确属局部、现有结构本身合理、且不引入新特例或隐式耦合时可取；否则走结构化改造。既不默认求改动最小而持续叠补丁，也不无脑上大重构。
-- **查全貌不等于改全貌。** 调查范围按全貌定，改动范围按目标定：同一根因的出现点在根因处一并解决；与本次目标无关或代价不相称的记入问题清单、向用户说明，不在本次处理。执行途中新发现的问题按同一规则归入。
-- **以迭代成本为准绳，不以改动量为准绳。** 自问：改完后下一次同类需求是否更容易做、更难做错；读者是否更快找到真实逻辑。改动行数和依赖数量不是判据，不怕改动大。
-- **加法与减法并重。** 引入新路径时同步删除被取代的旧路径、死代码、只剩单实现的抽象与过时注释（绿地项目不保留兼容分支），不让新旧两套并存。
-- **复用优先于自造。** 先查项目已有能力，再看成熟方案（编辑器、图表、虚拟化、Markdown/Diff、日期、表单校验等通用复杂能力尤其如此）；依赖既非目的也非禁区，以是否适配项目、是否降低长期维护成本取舍。
+- **比较两条路线。** 「结构化改造」调整职责、边界或数据流，让问题不再可能出现、需求自然落位；「补丁式修复」在现有结构上局部修正。补丁仅在问题确属局部、现有结构本身合理、且不引入新特例或隐式耦合时可取；否则走结构化改造。
+- **查全貌不等于改全貌。** 调查范围按全貌定，改动范围按目标定：同一根因的出现点在根因处一并解决；与本次目标无关的记入问题清单、向用户说明，不在本次处理。执行途中新发现的问题按同一规则归入。
+- **以结构为准绳，不以改动量为准绳。** 自问：改完后下一次同类需求是否更容易做、更难做错；读者是否更快找到真实逻辑。
+- **加法与减法并重。** 引入新路径时同步删除被取代的旧路径、死代码、只剩单实现的抽象与过时注释，不让新旧两套并存。
+- **复用优先于自造。** 先查项目已有能力，再看成熟方案（编辑器、图表、虚拟化等通用复杂能力尤其如此）；依赖既非目的也非禁区，以是否适配项目、是否降低长期维护成本取舍。
 - **有取舍，不求面面俱到。** 聚焦主路径与真实风险，低概率情形在一处边界兜住即可（见「不层层防御校验」）。
 
-**交付要求**：动手前（或改路线时）交用户确认：调查结论与问题清单（发现缺陷或设计缺口时必附；每条写明现象、证据 `文件:行`、根因层级或归属与置信度、待验证假设，同类出现点逐条列出并标明本次处理还是记下及理由）、选定路线及理由、影响范围（涉及模块、契约 / 数据 / 行为变化、需同步的测试与文档），以及刻意不做的部分；实施中保持目标聚焦，不顺手夹带无关改动。
+**交付要求**：动手前（或改路线时）交用户确认：调查结论与问题清单（发现缺陷或设计缺口时必附；每条写明现象、证据 `文件:行`、根因层级或归属与置信度、待验证假设，同类出现点逐条列出并标明本次处理还是记下及理由）、选定路线及理由、影响范围（涉及模块、契约 / 数据 / 行为变化、需同步的测试与文档）、改动账本（新增；删除；可选的精简；文件、目录与命名调整，没有就写「无」），以及刻意不做的部分；实施中保持目标聚焦，不顺手夹带无关改动。
 
-### 五条铁律
+### 三条铁律
 
 1. **单一职责**：一个文件按职责只承担一类主要工作，不以行数作为唯一拆分标准。
-2. **不重复造轮子**：能复用项目已有能力、类、函数或成熟方案时，不自行实现等价基础设施。
-3. **改动聚焦**：只修改与目标相关的代码；结构性重构明显有利于长期迭代时，可以扩大改动面。
-4. **目录结构清晰**：可以持续拆分文件和目录，使能力模块与职责边界仅从目录结构即可初步辨认。
-5. **可排查日志**：关键流程必须保留结构化、可落盘日志，不得只依赖临时终端输出。
+2. **路径即语义**：只看完整路径就能知道文件做什么、属于哪层，也能猜到新功能该放哪。目录表达能力域，文件名表达这一件事；同一概念全仓同一个词；不用 `utils`、`common`、`helper`、`manager` 这类没有信息的名字（语言或框架约定除外）。职责变了就改名和搬家。
+3. **可排查日志**：关键流程必须保留结构化、可落盘日志，不得只依赖临时终端输出。
 
-正确性、可排查性、不重复造轮子、单一职责、目录结构、可读性、改动聚焦和性能同等重要。发生张力时，以第零铁律为最终判据，不使用固定的机械取舍链。
+正确性、可排查性、单一职责、路径语义、可读性和性能同等重要。发生张力时，以第零铁律为最终判据，不使用固定的机械取舍链。
 
 ### 禁止的写法
 
@@ -133,6 +136,7 @@ Electron 桌面应用
 - MCP 服务连接归进程级 `MCPConnectionPool`（`app/tools/mcp/`）所有：在独立事件循环线程上每个服务一条长连接（stdio 服务即常驻子进程，stderr 落 `.cosir/logs/mcp/`），首次调用时建立、连接指纹变化或断线后重建、空闲回收，后端退出时经 `close_service_dependencies` 关闭；失败的调用不在池内重放。配置文件是唯一事实源，池不接收变更通知；配置界面的连接测试仍走一次性短连接，不进池。
 - 交互终端归 Task 所有，允许同一 Task 的后续 Run 复用。Run 完成、失败、取消或历史 Run 删除不关闭终端；Agent 显式关闭、shell 自然退出、Task 删除提交后或后端退出时清理。活会话由 `TerminalSessionService` 管理，不进入 Run 执行进度，不跨后端重启恢复。会话列表与实时状态投影进 snapshot 顶层 `terminal_sessions`；人和 Agent 都可新建会话与输入，用户输入从不被拒，Agent 输入在用户打字时等其停手、前台是用户启动的命令时立即被拒，前端经每会话一条可写 `terminal-v2` WebSocket 交互；终端工具按 Task 类型规则只给侧栏对话（`models/task_kind.py`）。
 - 内置浏览器的标签页归宿主所有（`electron/main/browser/BrowserHost`，每个标签一个 `WebContentsView` 加一个 CDP 会话），每个标签绑定一个 Task、只有该 Task 的 Agent 能操作；不持久化，后端重启不影响，宿主退出即全部消失，Task 删除提交后由后端经宿主工具链路通知回收。初始化中的标签同样由宿主持有、计入上限并可关闭；Task 删除或宿主退出时一并取消初始化，迟到完成不得恢复标签。全部 Task 共用一个持久分区 `persist:cosir-browser`（与应用自身会话隔离、只允许 http(s)、站点权限一律拒绝）。JS 弹窗停住页面直到用户或 Agent 按弹窗 id 作答；下载归 Task（不随标签关闭），落到其工作区 `.cosir/Download`；页面开出的窗口收养为同 Task 的标签。页面事件（给 Agent 的备注）、console 与网络请求归标签日志（`tab-log.ts`）；「上次以来」（日志与 act 后增量快照的比对基准）只在页面结果处消费；视口与深浅色由宿主经 CDP 设备模拟设定（`tab-emulation.ts`）：视口默认跟随面板占位区域（1:1 铺满，面板尺寸停稳后才跟上、摘下时保持原大小），Agent 用 `viewport` 固定尺寸时与面板无关、面板只按比例缩放显示，`auto` 回到跟随。标签上下文（上限与下载目录）由后端按 Task 解析（`service/browser/tab_context`），每个工具请求都带，用户新开标签经 `GET /tasks/{id}/browser-context` 取。
+- 浏览器修改操作由标签持有，调用取消或等待超时不代表 Chromium 已完成；真实命令与输入收尾收敛前不接受下一次 Agent 修改。执行回执与事后页面观察分别结算，未知结果不自动重放。显式交接事实只归后端 handoff registry，宿主按请求携带的交接约束检查实际目标；交接前必须确认标签无未收敛操作。用户关闭标签与按 id 回答弹窗仍可用于收尾。
 - 后端崩溃恢复必须有限且串行，不得无限重启。恢复耗尽后由用户显式重启；生命周期 generation 用于防止旧进程或旧线程覆盖当前状态。
 - 后端重启时，遗留 running Run（含 child Run）收敛为 `cancelled`，显式恢复从 prepare_input node 重新进入模型循环；`suspended` Run 没有执行者也没有未闭合调用，原样保留，等可唤醒消息继续同一个 Run。workflow 只有 prepare_input 一个入口，调用方不传恢复模式。inbox 保留，不得隐式重放旧 Agent 执行。进程内 registry、subscriber、后台 Team 任务和运行任务不跨重启恢复（遗留 running TeamRun 由 Coordinator 收敛为 cancelled、其下挂起的节点 Run 随之取消，pending TeamRun 保留可决定；委派等待不跨重启恢复）。重启收敛运行中 Team 时撤回其尚未消费的节点调度输入，其余 inbox 消息照常保留。重启不为任何 Run 生成结论、也不唤醒它们：残留占位在收敛时推到「已中断」，被中断过的 Task 各得一条重启通知（不 `WAKES`，随它们下次驱动并入）。重启恢复（收敛、拉起待调度 Task、后台结果收尾）只由 `RecoverService.recover_after_restart` 按序编排，lifespan 接好运行时后调用这一个入口。
 
@@ -188,9 +192,9 @@ Electron 桌面应用
 - 后端 snapshot 是对话、Run、usage 和 tool parts 的权威读取来源。Assistant UI runtime state 只用于当前渲染和传输控制，不得原样写回后端作为事实。
 - `AppLayout`（react-router 布局路由，路由表见 `src/router.tsx`）是 workspace/task 导航的稳定容器；`TaskPage`、初始 snapshot 和 Assistant runtime 按 `taskId` 建立，并由布局直接渲染：切到配置或上下文观测时最近的任务页保活，只有进入其他任务或新对话才替换。普通 workspace 数据刷新不应无故卸载正在执行的 Assistant runtime。
 - 会话侧栏（`components/task-rail/`）属于对话区：只在对话页显示当前 Task 的状态摘要卡片（后台任务等，卡片注册表按 id 装配）。它是对话画布上的附注、不是窗格：AppLayout 经 `ConversationAsideContext`（`components/assistant-ui/elements/conversation-aside.tsx`）交给对话视口，与内容列同处滚动容器里的网格、粘在顶部，所以滚动条在视口最外侧、底部终端铺满任务页；按对话视口宽度摆放，足够时默认显示在网格右列，不够时只在用户点开后叠在内容列右上角；卡片顺序、折叠与宽屏开关是全局 localStorage 偏好。后台工作在时间线只留一行，详情集中在侧栏。右侧停靠区同一时刻只显示一个面板（选择与是否铺满对话区在 `lib/layout/dock-store.ts`，只是界面状态、不持久化，宽度按面板记在布局偏好），三者各自独立、不共用标签条：文件面板（入口 `components/files/`、界面在 `components/workspace-files/`，当前工作区的文件浏览器，可铺满对话区；浏览状态与「渲染 / 源码」阅读偏好按工作区在 `lib/workspace-files/`）、浏览器面板（`components/browser/`，默认跟随当前对话 Task 的标签，可铺满对话区；面板显示哪个 Task 在 `lib/browser/panel-store.ts`）、工作台（界面在 `components/workbench/`，状态在 `lib/workbench/`，按工作区存放子 Agent 与配置草稿标签）。会话侧栏与停靠面板不互相承载。
-- 链接按「识别 → 解析 → 打开」分层：各界面（对话正文、文件面板 Markdown、配置预览、终端、工具卡片）只识别链接，解析规则只在 `lib/links/resolve-link.ts`（工作区路径、`#L42` 行号、网页、页内锚点），打开只经 `components/links/use-open-link.ts`（页内锚点在所在的那篇 Markdown 里滚动；工作区路径进文件面板并定位行；本机地址在所属 Task 的内置浏览器打开；其余网页确认后交宿主用系统浏览器）。Markdown 只用 sanitize 清洗、不用 rehype-harden（它会改写相对地址）；可点击文字的颜色只用主题 `--link`，样式只在 `app/markdown.css`；链接写法的模型侧约定在系统提示词里。
+- 链接按「识别 → 解析 → 打开」分层：各界面（对话正文、文件面板 Markdown、配置预览、终端、工具卡片）只识别链接，解析规则只在 `lib/links/resolve-link.ts`（工作区路径、`#L42` 行号、网页、页内锚点），阅读内容的对象图标只经 `components/links/link-target-icon.tsx`（单色、跟随文字，只在对话里显示；站点取内置品牌图标或原色 `/favicon.ico`，由渲染进程加载、Chromium 缓存，失败回落通用图标；彩色文件图标留给文件浏览与胶囊），打开只经 `components/links/use-open-link.ts`（页内锚点在所在的那篇 Markdown 里滚动；工作区路径进文件面板并定位行；本机地址在所属 Task 的内置浏览器打开；其余网页确认后交宿主用系统浏览器）。Markdown 只用 sanitize 清洗、不用 rehype-harden（它会改写相对地址）；链接文字只用主题 `--link`，样式只在 `app/markdown.css`；行内代码是字面内容，可打开的路径悬停才提示；什么值得链接、怎么写在系统提示词里。
 - transport resume/attach 只重新订阅 Task；business resume 才继续后端执行。前端实现和命名必须保持两种语义可辨认。
-- 业务命令统一经 `lib/assistant/task-commands.ts` 按 Task / 消息寻址；后端处理完这一轮才返回，命令被拒以 HTTP 409 同步抛出（发送类命令收回乐观消息、恢复草稿；恢复经 `recoverRejectedCommands` 只依赖 taskId，不随页面或订阅失效；主输入框与消息编辑框共用 `composer-drafts`，编辑框有草稿即编辑中），全部输出由 Task 长订阅推送。「一轮输出结束」按 `activity` 从活动态（`running` / `suspended`）落到终态判定（`onActivitySettled`），不按 Run 身份比对；fork 入口挂在回复脚注上，请求按 `replyMessageId` 定位，进行中的回复后端以 409 `FORK_REPLY_ACTIVE` 拒绝。运行中发送一律由后端排队，前端不选投递方式；排队消息不进消息流，在输入框上方的队列区（`components/assistant-ui/elements/queued-messages.tsx`）按 id 渲染为线程消息，提供立即发送、编辑（撤回后放回输入框）与删除；活动 Run 期间模型与工具控件只读，发送使用当前 Run 冻结的 `launch`（`lib/assistant/run-launch.ts`）；排队消息的 `delivery` 由后端 snapshot 投影，前端不自行推断。Agent 消息只有作为 Run 第一条输入才开回合，这时是带 `source` 的 user 消息，thread 在按 role 分支处分流到 `AgentInboundMessage`；途中到达时是当前回复的 `agent-message` part，随过程折叠（继承行没有 Run，一律开回合）。两者共用 `AgentMessageRow`（`components/assistant-ui/elements/agent-message.tsx`，标出发送方、点击按来源 Task 类型跳侧栏或在工作台打开），不可编辑，也不认领用户的乐观发送。
+- 业务命令统一经 `lib/assistant/task-commands.ts` 按 Task / 消息寻址；后端处理完这一轮才返回，命令被拒以 HTTP 409 同步抛出（发送类命令收回乐观消息、恢复草稿；恢复经 `recoverRejectedCommands` 只依赖 taskId，不随页面或订阅失效；主输入框与消息编辑框共用 `composer-drafts`，编辑框有草稿即编辑中），全部输出由 Task 长订阅推送。「一轮输出结束」按 `activity` 从活动态（`running` / `suspended`）落到终态判定（`onActivitySettled`），不按 Run 身份比对；fork 入口挂在回复脚注上，请求按 `replyMessageId` 定位，进行中的回复后端以 409 `FORK_REPLY_ACTIVE` 拒绝。运行中发送一律由后端排队，前端不选投递方式；排队消息不进消息流，在输入框上方的队列区（`components/assistant-ui/elements/queued-messages.tsx`）按 id 渲染为线程消息，提供立即发送、编辑（撤回后放回输入框）与删除；活动 Run 期间模型与工具控件只读，发送使用当前 Run 冻结的 `launch`（`lib/assistant/run-launch.ts`）；排队消息的 `delivery` 由后端 snapshot 投影，前端不自行推断。Agent 消息只有作为 Run 第一条输入才开回合，这时是带 `source` 的 user 消息，thread 在按 role 分支处分流到 `AgentInboundMessage`；途中到达时是当前回复的 `agent-message` part，随过程折叠（继承行没有 Run，一律开回合）。两者共用 `AgentMessageRow`（`components/assistant-ui/elements/agent-message.tsx`，行上只标发送方，默认收起；展开看原文，「打开来源任务」按来源 Task 类型跳侧栏或在工作台打开），不可编辑，也不认领用户的乐观发送。
 - 前端测试分层：Vitest 验证模块行为（含 main 进程的 supervisor 规则）；Playwright E2E 用 Vite + 内存测试服务；桌面 E2E（`playwright.desktop.config.ts`）用 Playwright 驱动真实 Electron 宿主与后端，只覆盖进程与窗口行为；都不覆盖后端崩溃恢复，不得视为完整集成测试。
 
 - 最终回复语义由 Transport 从已提交的模型响应与 Run 结局派生；实时与冷重建同源，前端不得按末尾文字或 `final_output` 猜测。对话过程折叠与工具组折叠是两层阅读状态：独立工具属于过程，不属于普通工具组；只有正常完成且有最终回复才默认收起，用户显式选择优先。Team 审批留在时间线，执行详情复用后台看板。
@@ -204,9 +208,9 @@ Electron 桌面应用
 - 状态唯一来源：`ToolObservation.status` 表达工具执行结果，取值 `success`/`error`/`cancelled`；Transport 侧工具 part 生命周期为 `pending`/`running`/`completed`/`failed`/`cancelled`，其中 `completed`/`failed`/`cancelled` 由 observation 经 `success→completed`、`error→failed`、`cancelled→cancelled` 投影，`pending`/`running` 为执行前/执行中状态；「等你操作」（HITL 等决定、交接等交还）是 part 的显式字段 `awaitingUser`（占位行 `pending` 且不是后台占位，`project_tool_result` 一处计算），前端不从 `pending` 推断。前端不得建立第二套状态机，也不得从 `args`/`result` 反推展示结果。
 - 模型运行状态与推理正文分离：模型流状态机统一发布瞬时活动与正文事件，不发布推理原文，Transport 投影到 `activity.modelActivity`；它不参与调度、不持久化，调用退出或 Run 离开运行态清除。Thread 负责当前状态，不能依赖助手消息是否存在；对话 wire 不包含推理原文，模型上下文保留原文，独立上下文观测 API 提供读取。
 - 前端回合结构：消息按原始 part 顺序投影，正文槽位身份稳定，工具活动、待决定事项与结果分别表达不同职责；布局与可见性只归 `lib/assistant/turn-layout.ts`，渲染与估高共用其结果。挂起原因与最终答复分段不是现有 wire 事实，不由 UI 猜测。工具呈现类别归 ToolDefinition、文案与图标归 tool-catalog，结构化结果信号只留在调用行，工具组摘要只汇总失败与取消；文件结果记录逐次操作，不推断工作区净变更。开合归 Task 分桶的 disclosure store；跨表面的命令暂态归 command-request-store（一种操作一个槽位，只有 Task 停止需要对账，调用级按钮的可见性由 canonical 决定），不受详情/会话组件卸载影响。具体布局与状态矩阵见 `docs/plan/conversation-presentation-refactor-plan.md`。
-- 前端调用行：`components/assistant-ui/tools/call-row.tsx` 是工具调用的唯一渲染入口（一行：图标 · 标题 · 目标 · 元信息 · 状态，前三项来自工具目录；成功不画对勾；同一调用从排队到终态形态不变），`call-view-registry.ts` 只按 `display_data.kind` 选视图（`CallView`：`meta` / `body` / `defaultOpen` / `actions`），无 kind 或未知 kind 退化为只有标题与状态的纯行，不导致消息流崩溃。禁止按工具名编写专用渲染分支，禁止从 `args` / `result` 反推状态。
+- 前端调用行：`components/assistant-ui/tools/call-row.tsx` 是工具调用的唯一渲染入口（一行：图标 · 标题 · 目标 · 元信息 · 状态，前三项来自工具目录；行只说「在做什么」和「出了问题」：运行中标题扫光，成功不说话，工具失败、取消、等你操作与实体异常进元信息；「打开」悬停才显示（`call-open-button.tsx`）；同一调用从排队到终态形态不变），`call-view-registry.ts` 只按 `display_data.kind` 选视图（`CallView`：`meta` / `status` / `detail` / `actions`；归侧栏的后台调用由 `resolveCallView` 一处裁掉详情与操作，整行点击定位到看板），无 kind 或未知 kind 退化为只有标题与状态的纯行，不导致消息流崩溃。禁止按工具名编写专用渲染分支，禁止从 `args` / `result` 反推状态。
 - 错误三通道隔离：工具 UI 短提示走受控 `display_data.status_hint`（约 5 字，来自后端分类映射）；Run 错误 `error.message` 可直接使用模型 HTTP 响应体的 `message` 字段供用户排查，但不得透传完整响应体。生命周期走 Transport status。前端不展示堆栈、原始异常、原始 prompt、凭据或大段模型正文；执行失败/取消可以携带执行器实际收集的结构化部分结果（如终端输出），状态与结果分离；不得伪造成功数据或透传原始异常。
-- 当前已注册工具 `kind`（视图见契约）：`read_file`→`read-file-meta`、`read_image`→`image-read`（一次多张，逐张校验，部分失败不整批失败；展开后缩略图并排）、`search_content`→`content-search-results`、`find_files`→`file-list`、`list_directory`→`directory-list`、`write_file`/`patch_write`/`apply_patch`/`delete_file`/`move_file`→`file-changes`，`execute_terminal`→`terminal-result`、`terminal_*`→`terminal-session`、`web_search`→`web-search-results`、`web_extract`→`web-extract-urls`、`delegate_task`→`delegation-result`、`fork_task`→`fork-task-result`（「打开」跳到侧栏对话，卡片出现时侧栏还没有它就经 `TaskListingContext` 补刷一次目录）、`send_message` / `task_status`→`agent-task-result`（消息只展示收件方和打开操作；查询仍只针对派生 Task），`wait_messages` 无展示 `kind`（正常调用默认隐藏，异常仍可见）、`propose_agent_configuration`→`agent-configuration-draft`、`browser_navigate` / `browser_snapshot` / `browser_act` / `browser_screenshot` / `browser_handoff` / `browser_logs` / `browser_evaluate`→`browser-page`（截图带附件 asset id，交接带要用户做的事，act 带每一步的目标与结局；工具图片与用户消息图片共用 `components/image/` 的缩略图 `ImageTile` 与图片组 `ImageStrip`，尺寸只在 `lib/image/tile-size.ts`；`browser_tabs` 无展示 `kind`，走通用卡片）。Agent Team 的 `agent_team`→`agent-team-approval`（批准后的执行卡片按 part 的 `team_run_id` 读取 TeamRun，不另发展示 `kind`）与 `propose_agent_team_configuration`→`agent-team-configuration-draft` 已注册，是否开放由 Agent 工具选择与 Run 授权决定。
+- 当前已注册工具 `kind`（视图见契约）：`read_file`→`read-file-meta`、`read_image`→`image-read`（一次多张，逐张校验，部分失败不整批失败；展开后缩略图并排）、`search_content`→`content-search-results`、`find_files`→`file-list`、`list_directory`→`directory-list`、`write_file`/`patch_write`/`apply_patch`/`delete_file`/`move_file`→`file-changes`，`execute_terminal`→`terminal-result`、`terminal_*`→`terminal-session`、`web_search`→`web-search-results`、`web_extract`→`web-extract-urls`、`delegate_task`→`delegation-result`、`fork_task`→`fork-task-result`（看板上的「打开」跳到侧栏对话，行出现时侧栏还没有它就经 `TaskListingContext` 补刷一次目录）、`send_message` / `task_status`→`agent-task-result`（消息只展示收件方和打开操作；查询仍只针对派生 Task），`wait_messages` 无展示 `kind`（正常调用默认隐藏，异常仍可见）、`propose_agent_configuration`→`agent-configuration-draft`、`browser_navigate` / `browser_snapshot` / `browser_act` / `browser_screenshot` / `browser_handoff` / `browser_logs` / `browser_evaluate`→`browser-page`（截图带附件 asset id，交接带要用户做的事，act 带每一步的目标与结局；工具图片与用户消息图片共用 `components/image/` 的缩略图 `ImageTile` 与图片组 `ImageStrip`，尺寸只在 `lib/image/tile-size.ts`；`browser_tabs` 无展示 `kind`，走通用卡片）。Agent Team 的 `agent_team`→`agent-team-approval`（批准后的执行卡片按 part 的 `team_run_id` 读取 TeamRun，不另发展示 `kind`）与 `propose_agent_team_configuration`→`agent-team-configuration-draft` 已注册，是否开放由 Agent 工具选择与 Run 授权决定。
 - 工具产出图片：图片按与用户上传相同的规则存进工作区附件目录（与上传共用发布内核 `AttachmentService._publish`：内存里的图片走 `save_image`，本机图片文件走 `import_image`；图片规则只此一份，工具不自行校验格式或尺寸），观察经 `tool_success(images=...)` 携带相对路径；声明 `ToolDefinition.returns_images` 的工具在本次 Run 的模型不支持图片时由准入门禁统一拒绝，各工具不另做判断；请求时由 `vision_input` 解析，与用户上传图片同一条路。
 - 文件变更职责：`apply_patch` 只修改已有文件内容；新建、删除和移动分别由 `write_file`、`delete_file`、`move_file` 负责。
 - 展示数据不是后端事实源：`display_data` 只服务 UI 渲染与重连恢复；`artifact_data` 只承载内部工具产物，不得进入 Assistant Transport；`ToolObservation.content` 不被当作通用 UI 展示数据来源。
@@ -266,6 +270,7 @@ Electron 桌面应用
 - [ ] **终端**：`execute_terminal` 与交互终端的命令直接在本机执行（原 deny-list 已删），可以 `cd` 或用绝对路径影响工作区以外，删除、不可逆 git 操作、下载后执行都不拦截；MCP stdio 服务同属本机进程，也不受限。草案是系统级沙箱（srt 或 Codex 沙箱，承载方式未定），接入点是 worker 的启动入口。
 - [ ] **受保护路径**：`resolve_for_read` 不拦系统 `.cosir`，`read_file` 与浏览器 `upload` 都能读出 `.env`；终端禁读与读文件工具须共用一份受保护路径事实，否则任一通道都能绕开。
 - [ ] **浏览器**：现有防线只有快照边界标签、工具描述提醒与模型自主交接（`browser_handoff`）；`browser_evaluate` 可在页面执行任意脚本，`upload` 可把工作区外的本机文件交给网页，打开任意网址即可外传数据。用户新开标签时下载目录经渲染进程转交，宿主只校验是绝对路径。
+- [ ] **站点图标**：对话里的公网链接一显示就请求该主机的 `/favicon.ico`（`lib/links/site-icon.ts`），站点能看到本机 IP，模型写出的子域名可夹带数据。
 - [ ] **本机 API**：后端 CORS 放行任意端口的本机来源且 API 无认证（`app/app.py`）；沙箱一旦放行 localhost，就等于放行后端 API。
 
 Agent 派生（委派、fork、建 Team）目前只按派生深度限制层数，以下上限暂不做：

@@ -1,7 +1,7 @@
 import { app, BrowserWindow } from "electron";
 
 import { BrowserHost } from "../../../electron/main/browser/browser-host";
-import { configureBrowserSession } from "../../../electron/main/browser/browser-session";
+import { configureBrowserSession, configureBrowserUserAgent } from "../../../electron/main/browser/browser-session";
 import { registerBrowserMethods } from "../../../electron/main/browser/methods";
 import { HostMethodRegistry } from "../../../electron/main/host-link/methods";
 
@@ -10,6 +10,7 @@ import { HostMethodRegistry } from "../../../electron/main/host-link/methods";
  * 方法注册表（`invoke`：按导出的 schema 校验蛇形参数、按 `wire.ts` 出线上形状）调用，不经后端与 WebSocket。
  * 由 `global-setup.mjs` 打包，生产代码不含任何测试钩子。
  */
+configureBrowserUserAgent();
 app.on("window-all-closed", () => undefined);
 
 void app.whenReady().then(() => {
