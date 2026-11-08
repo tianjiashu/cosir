@@ -3,12 +3,12 @@ import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-s
 import { currentActivity, STOPPING_FEEDBACK } from "@/lib/assistant/turn/current-activity";
 import { ActivityStatus } from "./thinking-label";
 
-/** 助手消息出现前的临时槽位；出现后归 TurnLayout，同一时刻只有一个所有者。 */
+/** 当前回复出现前的临时槽位；出现后归 TurnLayout，同一时刻只有一个所有者。当前回复即当前活动最后一个可见回合（`activity.turn`）的回复。 */
 export function CurrentActivity({ cancelling }: { cancelling: boolean }) {
   const state = useAuiState(s => {
     const state = readRuntimeTransportState(s.thread.state);
     const last = state?.messages.at(-1);
-    if (!state || (last?.role === "assistant" && last.runId === state.activity?.runId)) return null;
+    if (!state || (last?.role === "assistant" && last.turn === state.activity?.turn)) return null;
     return state;
   });
   const result = state && currentActivity(state.activity, [], state.background_tasks);

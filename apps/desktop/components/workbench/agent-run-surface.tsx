@@ -16,7 +16,7 @@ import { TransportHistoryContext } from "@/lib/assistant/transport/transport-his
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 /**
- * 只读查看子 Task：runtime 挂载即打开一条 Task 长订阅，卸载时关闭；不按 runId 去重或重订。
+ * 只读查看子 Task：runtime 挂载即打开一条 Task 长订阅，卸载时关闭；不按 Run 身份去重或重订。
  * 订阅意外结束交给与主对话共用的 `SubscriptionRecovery`：只重开订阅（首帧即完整状态），
  * 已显示的内容与 runtime 都保留；重连耗尽后由用户「重新同步」。
  */

@@ -7,7 +7,7 @@ import { parseId } from "./message-model";
 
 export function QueryBar({
   task,
-  run,
+  turn,
   busy,
   hasQuery,
   onQuery,
@@ -15,7 +15,7 @@ export function QueryBar({
   onBack,
 }: {
   task: string;
-  run: string;
+  turn: string;
   busy: boolean;
   hasQuery: boolean;
   onQuery: (query: ContextMessageQuery) => void;
@@ -23,24 +23,24 @@ export function QueryBar({
   onBack?: () => void;
 }) {
   const [taskInput, setTaskInput] = useState(task);
-  const [runInput, setRunInput] = useState(run);
+  const [turnInput, setTurnInput] = useState(turn);
   const [error, setError] = useState<string | null>(null);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const taskValue = taskInput.trim();
-    const runValue = runInput.trim();
+    const turnValue = turnInput.trim();
     const taskId = parseId(taskValue);
-    const runId = parseId(runValue);
-    if ((taskValue && !taskId) || (runValue && !runId)) {
-      setError("Task ID 和 Run ID 必须是正整数。");
+    const turnNumber = parseId(turnValue);
+    if ((taskValue && !taskId) || (turnValue && !turnNumber)) {
+      setError("Task ID 和回合必须是正整数。");
       return;
     }
-    if (!taskId && !runId) {
-      setError("请输入 Task ID 或 Run ID。");
+    if (!taskId) {
+      setError("请输入 Task ID。");
       return;
     }
     setError(null);
-    onQuery({ taskId, runId });
+    onQuery({ taskId, turn: turnNumber });
   };
   return (
     <form
@@ -73,17 +73,17 @@ export function QueryBar({
           value={taskInput}
           onChange={(event) => setTaskInput(event.target.value)}
         />
-        <label htmlFor="context-run-id" className="ml-1 text-xs font-medium">
-          Run
+        <label htmlFor="context-turn" className="ml-1 text-xs font-medium">
+          回合
         </label>
         <Input
-          id="context-run-id"
-          aria-label="Run ID"
+          id="context-turn"
+          aria-label="回合"
           className="w-32 font-mono text-xs"
           inputMode="numeric"
-          placeholder="轮次 ID，可选"
-          value={runInput}
-          onChange={(event) => setRunInput(event.target.value)}
+          placeholder="回合号，可选"
+          value={turnInput}
+          onChange={(event) => setTurnInput(event.target.value)}
         />
         <Button type="submit" size="sm">
           <SearchIcon />

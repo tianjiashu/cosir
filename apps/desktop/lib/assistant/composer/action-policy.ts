@@ -6,28 +6,24 @@ export type ComposerAction = "send" | "stop" | "cancelling" | "resume";
  * 返回当前 canonical snapshot 中最后一条已消费的输入所在消息：user 消息（含 Agent 消息），或带途中来信的回复；排队消息不计入。
  *
  * 该判断只基于后端 snapshot，不读取 assistant-ui 的 optimistic message，
- * 因而不会让尚未落库的 pending command 获得编辑入口。
+ * 因而不会让尚未落库的 pending command 获得撤回入口。
  */
 function latestUserMessage(state: Pick<TransportState, "messages"> | null | undefined): TransportMessage | null {
   if (!state || !Array.isArray(state.messages)) return null;
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
     const message = state.messages[index];
-    if (message.runId !== null && (message.role === "user" || message.parts.some((part) => part.type === "agent-message"))) return message;
+    if (!message.inherited && (message.role === "user" || message.parts.some((part) => part.type === "agent-message"))) return message;
   }
   return null;
 }
 
-/** 最后一条已消费 user 消息（含 Agent 消息）的 id。 */
-export function getLatestUserMessageId(state: Pick<TransportState, "messages"> | null | undefined): string | null {
-  return latestUserMessage(state)?.id ?? null;
-}
-
 /**
- * 判断指定用户消息是否允许编辑重跑：后端只接受「Task 已停下」时编辑最新一条已消费用户消息，
- * 这里与之对齐以免暴露必然被拒的入口。最新一条是 Agent 消息时没有可编辑的（后端同样拒绝：越过它
- * 改更早的用户消息会把它那一轮一起撤回）。排队中的消息另由 {@link isQueuedUserMessage} 判断。
+ * 判断指定用户消息是否允许撤回（编辑即撤回后放回输入框）：后端只接受「Task 已停下」时撤回最新一条
+ * 已消费用户消息开启的回合，这里与之对齐以免暴露必然被拒的入口。最新一条是 Agent 消息时没有可撤回
+ * 的（后端同样拒绝：越过它撤回更早的用户消息会把另一个 Agent 交来的消息一起撤回，对方不会重发）。
+ * 渲染与点击之间的竞态由后端 409 裁决。排队中的消息另由 {@link isQueuedUserMessage} 判断。
  */
-export function isEditableLatestUserMessage(
+export function isWithdrawableLatestUserMessage(
   state: TransportState | null | undefined,
   messageId: string,
 ): boolean {
@@ -36,37 +32,12 @@ export function isEditableLatestUserMessage(
   return latest?.id === messageId && latest.source === null;
 }
 
-/**
- * 编辑开始后它的前提是否已失效；返回给用户看的原因，仍有效时为 `null`。
- *
- * 与编辑入口用同一套判定：它仍是可编辑重跑的最新一条（见 {@link isEditableLatestUserMessage}）。
- * 编辑框据此同时禁用回车与重跑按钮；渲染与点击之间的竞态仍由后端 409 裁决。
- */
-export function editBlockedReason(
-  state: TransportState | null | undefined,
-  messageId: string,
-): string | null {
-  if (getLatestUserMessageId(state) !== messageId) return "已有更新的消息，这一条无法再编辑并重跑。";
-  if (!isEditableLatestUserMessage(state, messageId)) return "当前正在运行，停止后才能编辑并重跑。";
-  return null;
-}
-
 /** 消息是否仍在排队（尚未并入）；排队消息只在输入框上方的队列区渲染。 */
 export function isQueuedUserMessage(
   state: TransportState | null | undefined,
   messageId: string,
 ): boolean {
   return Boolean(state?.queued_messages?.some((message) => message.id === messageId));
-}
-
-/**
- * 当前活动已取消或失败时允许显式续跑（同一个 Run 从模型边界继续）。
- *
- * endReason 是后端保留的展示/审计事实，不参与 resume 资格判断。
- */
-export function canResumeStoppedRun(state: TransportState | null | undefined): boolean {
-  if (!state?.activity || !["cancelled", "failed"].includes(state.activity.status)) return false;
-  return state.messages.some((message) => message.role === "user") || Boolean(state.queued_messages?.length);
 }
 
 export function deriveComposerAction(input: {

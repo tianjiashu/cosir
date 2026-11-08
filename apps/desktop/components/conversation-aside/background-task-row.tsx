@@ -31,7 +31,7 @@ const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
  * `useBackgroundTaskPart`），由 kind 视图注册表按 `display_data.kind` 决定长什么样，这里不按种类分支。
  * 不再套一条调用行：标题已在外壳上。视图以只读方式解析，同一调用只留外壳上这一个停止入口
  * （`cancelToolCall`，对所有种类语义一致）。
- * 对应 part 已不在对话里（如编辑重跑移出那一轮）时只剩外壳。条目默认收起，开合与调用行共用 `call:` 键：
+ * 对应 part 已不在对话里（如那一回合被撤回）时只剩外壳。条目默认收起，开合与调用行共用 `call:` 键：
  * 时间线的后台行没有展开体，这个键只归看板，运行中转到已结束的列表重挂载也不丢。收尾中（工作已结束、
  * 对话里的占位还没落定）不计时、不能停止，只标「收尾中」，等 snapshot 回推完成或取消。
  * 操作只发命令，结果等 snapshot 回推。

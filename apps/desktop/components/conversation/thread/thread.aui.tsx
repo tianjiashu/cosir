@@ -1,7 +1,6 @@
-import { editDraftKey, forgetComposerDraft, readComposerDraft, recoverComposerDraft, subscribeComposerDrafts, taskDraftKey } from "@/lib/assistant/composer/composer-drafts";
-import { useComposerDraft } from "@/components/composer/use-composer-draft";
-import { GitForkIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, PlayIcon, Trash2Icon, XIcon, ZapIcon } from "lucide-react";
-import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FC } from "react";
+import { moveMessageToComposer } from "@/lib/assistant/composer/move-to-composer";
+import { GitForkIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, PlayIcon, Trash2Icon, Undo2Icon, ZapIcon } from "lucide-react";
+import { useContext, createContext, memo, Profiler, useEffect, useMemo, useRef, useState, type FC } from "react";
 import {
   AuiIf,
   ActionBarPrimitive,
@@ -9,7 +8,6 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   unstable_useComposerInput,
-  useAui,
   useAuiState,
   type AssistantState,
 } from "@assistant-ui/react";
@@ -27,14 +25,10 @@ import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import {
   deriveComposerAction,
-  editBlockedReason,
-  isEditableLatestUserMessage,
+  isWithdrawableLatestUserMessage,
   isQueuedUserMessage,
-  canResumeStoppedRun,
 } from "@/lib/assistant/composer/action-policy";
 import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-state-operations";
-import { EDIT_SESSION_RUN_CONFIG, isContinuedEditSession, toEditableUserMessageDraft } from "@/lib/assistant/transport-message-converter";
-import { editableDocumentAttachments } from "@/lib/assistant/composer/editable-user-document";
 import { isActiveRunStatus, type InputDelivery, type TransportActivity, type TransportMessageSource } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
@@ -46,7 +40,7 @@ import { VirtualizedThreadMessages } from "@/components/conversation/thread/virt
 import { ConversationAsideSlot } from "@/components/conversation/thread/conversation-aside";
 import { QueuedMessages } from "@/components/conversation/thread/queued-messages";
 import { AgentInboundMessage } from "@/components/conversation/thread/agent-message";
-import { deleteQueuedTaskMessage, sendQueuedTaskMessageNow } from "@/lib/assistant/task-commands";
+import { deleteQueuedTaskMessage, sendQueuedTaskMessageNow, withdrawTaskMessage } from "@/lib/assistant/task-commands";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { UserMessageContent, useHasUserMessageContent } from "@/components/conversation/thread/user-message-content";
 import { UserMessageImages } from "@/components/conversation/thread/user-message-images";
@@ -81,7 +75,7 @@ export type ThreadProps = {
   onForkMessage?: (messageId: string) => void;
   /** 可写对话必传（由 AssistantThreadSurface 提供）；只读对话不渲染 Composer，不需要。 */
   onResumeBusiness?: () => Promise<void>;
-  /** 用户已请求停止 Task 的当前活动、尚未收敛（Task 级，不按 runId）。 */
+  /** 用户已请求停止 Task 的当前活动、尚未收敛（Task 级，前端看不到 Run）。 */
   cancelling?: boolean;
   performanceProbe?: AssistantPerformanceProbe | null;
 };
@@ -263,7 +257,8 @@ const ComposerAction: FC = () => {
     state.composer.text.trim().length === 0 && state.composer.attachments.length === 0,
   );
   const { cancelling = false, onResumeBusiness, taskId } = useThreadContext();
-  const canResume = useAuiState((state) => canResumeStoppedRun(readRuntimeTransportState(state.thread.state)));
+  // 能否恢复是后端事实（cancelled / failed 且最后一个回合没被撤回），前端不推断。
+  const canResume = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.activity?.resumable === true);
   const isCancelling = cancelling;
   const action = deriveComposerAction({ isRunning, isDraftEmpty, canResume, isCancelling });
   const [resuming, setResuming] = useState(false);
@@ -381,34 +376,45 @@ function messageSource(custom: Record<string, unknown> | undefined): TransportMe
 }
 
 const UserMessage: FC = () => {
-  const aui = useAui();
   const messageId = useAuiState((state) => state.message.id);
-  const isEditing = useAuiState((state) => state.composer.isEditing);
-  const { taskId, readonly: readonlyThread } = useThreadContext();
-  const readonly = readonlyThread === true;
-  const draftKey = editDraftKey(taskId, messageId);
-  const hasEditDraft = useSyncExternalStore(subscribeComposerDrafts, () => readComposerDraft(draftKey) !== undefined, () => false);
-  // 有编辑草稿就是编辑中：切回 Task 或重跑被拒时，新的 runtime 里要重新进入编辑态。
-  const enteringEdit = useRef(false);
-  useEffect(() => {
-    if (isEditing) enteringEdit.current = false;
-    // effect 可能在进入编辑生效前重复执行（StrictMode），再次 beginEdit 会抛错，不能靠 composer 状态判断。
-    if (!hasEditDraft || isEditing || readonly || enteringEdit.current) return;
-    enteringEdit.current = true;
-    try {
-      aui.composer.beginEdit();
-    } catch (error) {
-      forgetComposerDraft(draftKey);
-      void frontendLog("WARNING", "assistant_edit_composer_restore_rejected", "消息行未能重新进入编辑态", {
-        data: { messageId },
-        error,
-      });
-    }
-  }, [aui, draftKey, hasEditDraft, isEditing, messageId, readonly]);
   const queued = useAuiState((state) => isQueuedUserMessage(readRuntimeTransportState(state.thread.state), messageId));
-  if (isEditing && !readonly) return <UserEditMessage />;
   // 排队消息只在输入框上方的队列区渲染（见 QueuedMessages），消息流里已滤掉。
   return queued ? <QueuedMessageView /> : <UserMessageView />;
+};
+
+/**
+ * 气泡上的「撤回」：撤回这条消息开启的回合，把正文与附件放回输入框（编辑即撤回后改完再发）。只对
+ * Task 已停下时的最新一条可用，撤回不通知模型、不撤销已经做过的事。
+ */
+const WithdrawMessageButton: FC = () => {
+  const message = useAuiState((state) => state.message);
+  const canonical = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.messages
+    .find((item) => item.id === state.message.id));
+  const { taskId } = useThreadContext();
+  const [busy, setBusy] = useState(false);
+  const withdraw = async () => {
+    if (busy || message.role !== "user" || !canonical) return;
+    setBusy(true);
+    try {
+      await moveMessageToComposer({
+        taskId,
+        message,
+        canonical,
+        remove: () => withdrawTaskMessage(taskId, message.id),
+      });
+      void frontendLog("INFO", "message_withdrawn", "消息已撤回并放回输入框", { data: { taskId, messageId: message.id } });
+    } catch (error) {
+      notify.error("撤回失败", { error, fallback: "这条消息可能已不是最新一条，请以对话内容为准" });
+      void frontendLog("WARNING", "message_withdraw_failed", "撤回消息失败", { data: { taskId, messageId: message.id }, error });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <TooltipIconButton tooltip="撤回（放回输入框）" aria-label="撤回" size="sm" disabled={busy} onClick={() => void withdraw()}>
+      {busy ? <Loader2Icon className="animate-spin" /> : <Undo2Icon />}
+    </TooltipIconButton>
+  );
 };
 
 const UserMessageView: FC = () => {
@@ -419,14 +425,14 @@ const UserMessageView: FC = () => {
   const userText = useAuiState((state) => state.message.parts.map((part) => part.type === "text" ? part.text : "").join(""));
   const { readonly: readonlyThread, taskId } = useThreadContext();
   const readonly = readonlyThread === true;
-  const canEdit = useAuiState((state) => {
+  const canWithdraw = useAuiState((state) => {
     if (readonly) return false;
     const transportState = readRuntimeTransportState(state.thread.state);
-    if (!isEditableLatestUserMessage(transportState, messageId)) return false;
+    if (!isWithdrawableLatestUserMessage(transportState, messageId)) return false;
 
     // Transport runtime 可能在 canonical snapshot 到达前乐观渲染新的用户命令；
-    // 此期间不能因为旧 snapshot 仍在，就把上一条用户消息重新标记为可编辑。排队消息不算：
-    // 它们排在已并入的消息之后，但不妨碍编辑重跑最新一条已并入的消息。
+    // 此期间不能因为旧 snapshot 仍在，就把上一条用户消息重新标记为可撤回。排队消息不算：
+    // 它们排在已并入的消息之后，但不妨碍撤回最新一条已并入的消息。
     const latestRenderedUserMessageId = [...state.thread.messages]
       .reverse()
       .find((message) => message.role === "user" && !isQueuedUserMessage(transportState, message.id))?.id;
@@ -465,11 +471,7 @@ const UserMessageView: FC = () => {
         {pending ? <span role="status" className="text-muted-foreground text-xs leading-6">正在发送</span> : <ActionBarPrimitive.Root
           className="flex h-6 gap-1 opacity-0 transition-opacity pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
         >
-          {canEdit && (
-            <ActionBarPrimitive.Edit render={<TooltipIconButton tooltip="编辑并重跑" aria-label="编辑并重跑" size="sm" />}>
-              <PencilIcon />
-            </ActionBarPrimitive.Edit>
-          )}
+          {canWithdraw && <WithdrawMessageButton />}
           <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" aria-label="复制" size="sm" />}>
             <AuiIf condition={(state) => state.message.isCopied}><CheckIcon /></AuiIf>
             <AuiIf condition={(state) => !state.message.isCopied}><CopyIcon /></AuiIf>
@@ -492,8 +494,8 @@ const QUEUED_COMMAND_FAILURE: Record<QueuedCommand, string> = {
 /**
  * 队列区里的一条排队消息：立即发送、编辑、删除。
  *
- * 编辑 = 撤回这一条 + 把正文与附件放回输入框（排在输入框已有内容之前），改完照常发送、重新排队；撤回
- * 失败（已被并入）时不动输入框。命令只投递，结果以 snapshot 的 `queued_messages` 为准：立即发送后
+ * 编辑 = 删除这一条 + 把正文与附件放回输入框（排在输入框已有内容之前，见 `moveMessageToComposer`），
+ * 改完照常发送、重新排队；删除失败（已被并入）时不动输入框。命令只投递，结果以 snapshot 的 `queued_messages` 为准：立即发送后
  * 条目以新身份重新入队或直接被并入，撤回后条目消失。消息恰好已被并入时后端 409，消费投影随即
  * 把它移出队列区。
  */
@@ -506,21 +508,16 @@ const QueuedMessageView: FC = () => {
   const { taskId } = useThreadContext();
   const [busy, setBusy] = useState<QueuedCommand | null>(null);
 
+  const canonical = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages
+    ?.find((item) => item.id === messageId));
   const moveToComposer = async () => {
-    // 撤回前取草稿：撤回成功后条目随快照消失，消息作用域也跟着卸载。
-    const draft = message.role === "user" ? toEditableUserMessageDraft(message) : null;
-    await deleteQueuedTaskMessage(taskId, messageId);
-    if (!draft) return;
-    const result = await recoverComposerDraft(taskDraftKey(taskId), {
-      text: draft.text,
-      attachments: editableDocumentAttachments(draft.document),
+    if (message.role !== "user" || !canonical) return;
+    await moveMessageToComposer({
+      taskId,
+      message,
+      canonical,
+      remove: () => deleteQueuedTaskMessage(taskId, messageId),
     });
-    if (result?.error) {
-      void frontendLog("ERROR", "queued_message_composer_restore_failed", "排队消息放回输入框时附件恢复失败", {
-        data: { taskId, messageId, addedCount: result.addedCount, expectedCount: result.expectedCount },
-        error: result.error,
-      });
-    }
   };
 
   const run = async (command: QueuedCommand) => {
@@ -594,85 +591,9 @@ const QueuedMessageView: FC = () => {
   );
 };
 
-const UserEditMessage: FC = () => {
-  const aui = useAui();
-  const message = useAuiState((state) => state.message);
-  const { taskId, workspaceRoot } = useThreadContext();
-  const transportState = useAuiState((state) => readRuntimeTransportState(state.thread.state));
-  // 编辑会话可能在消息行重新挂载后继续（见 EDIT_SESSION_RUN_CONFIG）：composer 还在，不用恢复。
-  const composerRunConfig = useAuiState((state) => state.composer.runConfig);
-  const [continued] = useState(() => isContinuedEditSession(composerRunConfig));
-  // 编辑期间前提失效（已不是可重跑的最新一条、Run 又跑起来了）时给出原因并禁止提交。
-  const blockedReason = editBlockedReason(transportState, message.id);
-  useLayoutEffect(() => {
-    aui.composer.setRunConfig(EDIT_SESSION_RUN_CONFIG);
-  }, [aui.composer]);
-  const draftKey = editDraftKey(taskId, message.id);
-  // AUI 把文件和图片都提成附件且丢了在正文里的位置，首次进入也要用还原后的内容替换。
-  const [seed] = useState(() => {
-    if (message.role !== "user") return null;
-    const draft = toEditableUserMessageDraft(message);
-    return { text: draft.text, attachments: editableDocumentAttachments(draft.document) };
-  });
-  const restoring = useComposerDraft(draftKey, { seed, continued });
-  // 草稿先于退出编辑结束，否则消息行会以为这次编辑被打断，立刻重新进入。提交失败时由恢复写回。
-  const endEdit = () => forgetComposerDraft(draftKey);
-  // 回车与保存按钮共用这一个开关：任何「此刻不能提交」的条件只在这里加一次。
-  const sendBlocked = restoring || blockedReason !== null;
-
-  return (
-    <MessagePrimitive.Root
-      data-role="user"
-      className="min-w-0 px-2"
-    >
-      <ComposerInsertionProvider>
-        <ComposerFeedbackProvider>
-          <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
-            <div className="min-h-0 min-w-0 w-full">
-              <ComposerAttachments />
-              <InlineComposerInput
-                className={COMPOSER_EDITOR_CLASS_NAME}
-                autoFocus
-                hydrating={restoring}
-                submitDisabled={sendBlocked}
-                beforeSubmit={endEdit}
-                aria-label="编辑消息"
-              />
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-              <div className="flex min-w-0 flex-1 items-center gap-1">
-                <ThreadComposerPromptToolbar disabled={restoring} />
-                <div className="min-w-0 flex-1">
-                  {blockedReason !== null ? (
-                    <span className="text-xs text-warning">{blockedReason}</span>
-                  ) : (
-                    <ComposerControls
-                      scope={{ kind: "task", id: taskId }}
-                    />
-                  )}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <ComposerAttachmentButton workspaceRoot={workspaceRoot} disabled={restoring} />
-                <ComposerPrimitive.Cancel onClick={endEdit} render={<TooltipIconButton tooltip="取消编辑" aria-label="取消编辑" />}>
-                  <XIcon />
-                </ComposerPrimitive.Cancel>
-                <ComposerSendButton blocked={sendBlocked} beforeSubmit={endEdit} aria-label="重跑">
-                  <ArrowUpIcon className="size-4" />
-                </ComposerSendButton>
-              </div>
-            </div>
-            <ComposerFeedback />
-          </ComposerPrimitive.Root>
-        </ComposerFeedbackProvider>
-      </ComposerInsertionProvider>
-    </MessagePrimitive.Root>
-  );
-};
-
 /**
  * 助手消息 = 一个回合（`Turn`）：分区、开合与脚注都在回合组件里，这里只接上线程级上下文。
- * 渲染上下文（`isRunEnd` / `outcome` / `activity`）随消息一并投影（见 frame store 的 contextFor），消息渲染
+ * 渲染上下文（`turn` / `inherited` / `outcome` / `activity`）随消息一并投影（见 frame store 的 contextFor），消息渲染
  * 只依赖消息自身事实；不回查 `thread.state`，只读作用域也能正常渲染。
  */
 const AssistantMessage: FC = () => {

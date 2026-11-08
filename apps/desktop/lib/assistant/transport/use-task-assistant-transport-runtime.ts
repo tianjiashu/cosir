@@ -28,9 +28,8 @@ export type TaskAssistantTransportOptions = {
   /** 长订阅的链路 id；基地址由 http client 按当前后端实例解析，后端换实例经 `connectionKey` 重开。 */
   traceId: TraceId;
   /**
-   * 提交一条用户消息（`sourceId` 存在即编辑）。宿主负责请求体组装与端点选择；后端处理完这一轮
-   * 才返回，被拒时抛错（乐观消息随即收回），输出经长订阅到达；乐观消息保留到 snapshot 里出现
-   * 对应消息才清除。只读 runtime 不提供。
+   * 提交一条用户消息。宿主负责请求体组装；后端处理完这次命令才返回，被拒时抛错（乐观消息随即
+   * 收回），输出经长订阅到达；乐观消息保留到 snapshot 里出现对应消息才清除。只读 runtime 不提供。
    */
   submitMessage?: (command: UserAddMessageCommand) => Promise<void>;
   /** 长订阅建立（attach 2xx）。 */
@@ -107,7 +106,7 @@ function useTaskAssistantTransportAdapter(
       return;
     }
     probe?.finishStream({
-      activityRunId: store.getSnapshot().state.activity?.runId ?? null,
+      activityTurn: store.getSnapshot().state.activity?.turn ?? null,
       activityStatus: transition.status,
     });
     optionsRef.current.onActivitySettled?.(transition.status);
@@ -123,12 +122,12 @@ function useTaskAssistantTransportAdapter(
   // 宿主重连打开的连接同样随 session 释放（connectionKey 为 null 期间也可能有）。
   useEffect(() => () => session.close(), [session]);
 
-  // 编辑与新消息共用提交路径：`sourceId` 随命令进入宿主，由宿主选择编辑端点。
+  // 气泡里没有编辑框：编辑是撤回后放回主输入框再发送，提交只有新消息这一条路。
   const onNew = useCallback((message: AppendMessage) => {
     const command = toAddMessageCommand(message);
     const current = optionsRef.current;
     // 后端暂停时 UI 仍存活，AUI 已清空提交草稿；在当前 UI 入口恢复并提示。
-    // 这不是关闭会话的迟到回调，也不发送 HTTP。编辑和附件上传后提交共用此入口。
+    // 这不是关闭会话的迟到回调，也不发送 HTTP。附件上传后提交也走此入口。
     if (current.connectionKey === null) {
       return current.onError?.(new UserFacingError("本机后端暂不可用，请稍后重试"), [command]);
     }
@@ -144,7 +143,7 @@ function useTaskAssistantTransportAdapter(
       isDisabled: options.readonly,
       isSendDisabled: options.readonly,
       state: view.state as unknown as ReadonlyJSONValue,
-      ...(options.readonly ? {} : { onNew, onEdit: onNew }),
+      ...(options.readonly ? {} : { onNew }),
       onRefetchThread,
       onLoadExternalState: (state: unknown) => {
         if (isTransportStateLike(state)) store.importState(state);
@@ -214,7 +213,6 @@ export function toAddMessageCommand(message: AppendMessage): UserAddMessageComma
 
   return {
     type: "add-message",
-    sourceId: message.sourceId,
     message: { role: "user", parts },
   };
 }

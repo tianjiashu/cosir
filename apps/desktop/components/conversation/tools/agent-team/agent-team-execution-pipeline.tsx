@@ -140,7 +140,7 @@ function HistoricalVisits({
       </summary>
       <div className="mt-1.5 space-y-2">
         {visits.map((visit) => (
-          <div key={visit.conversation_run_id ?? visit.visit_number} className="space-y-1 border-l border-border/70 pl-2">
+          <div key={visit.visit_number} className="space-y-1 border-l border-border/70 pl-2">
             <p className="text-2xs text-muted-foreground">
               第 {visit.visit_number} 次 · {statusLabel(visit.status)}
             </p>

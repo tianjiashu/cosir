@@ -187,7 +187,7 @@ function validatePart(value: unknown, path: string): void {
     return;
   }
   if (type === "file") {
-    requireExactKeys(part, ["type", "file", "name", "contentType"], path);
+    requireExactKeys(part, ["type", "file", "name", "contentType", "path"], path);
     const file = requireString(part.file, `${path}.file`);
     if (!/^cosir-local-file:[A-Za-z0-9._-]{1,128}$/.test(file)) {
       throw new TransportSnapshotValidationError(`${path}.file`, "合法的本地附件 locator");
@@ -197,6 +197,9 @@ function validatePart(value: unknown, path: string): void {
     }
     if (!requireString(part.contentType, `${path}.contentType`)) {
       throw new TransportSnapshotValidationError(`${path}.contentType`, "非空字符串");
+    }
+    if (!requireString(part.path, `${path}.path`)) {
+      throw new TransportSnapshotValidationError(`${path}.path`, "非空字符串");
     }
     return;
   }
@@ -252,16 +255,15 @@ function validateOutcome(value: unknown, path: string): void {
 
 function validateActivity(value: unknown, path: string): void {
   const activity = requireRecord(value, path);
-  requireExactKeys(activity, ["runId", "status", "endReason", "error", "usage", "contextWindowTotal", "launch", "startedAt", "modelActivity"], path);
+  requireExactKeys(activity, ["status", "turn", "resumable", "endReason", "error", "usage", "contextWindowTotal", "launch", "startedAt", "modelActivity"], path);
   if (activity.modelActivity !== null) {
     const model = requireRecord(activity.modelActivity, `${path}.modelActivity`);
     requireExactKeys(model, ["stepId", "phase"], path);
     requireString(model.stepId, path);
     if (activity.status !== "running" || !["waiting", "reasoning", "responding", "tool_call"].includes(model.phase as string)) throw new TransportSnapshotValidationError(path, "模型活动阶段");
   }
-  if (requireNullableNonNegativeInteger(activity.runId, `${path}.runId`) === null) {
-    throw new TransportSnapshotValidationError(`${path}.runId`, "非负整数");
-  }
+  requireNullableNonNegativeInteger(activity.turn, `${path}.turn`);
+  if (typeof activity.resumable !== "boolean") throw new TransportSnapshotValidationError(`${path}.resumable`, "布尔值");
   if (!(RUN_STATUSES as readonly unknown[]).includes(activity.status)) throw new TransportSnapshotValidationError(`${path}.status`, "受支持的运行状态");
   if (activity.endReason !== null && typeof activity.endReason !== "string") throw new TransportSnapshotValidationError(`${path}.endReason`, "字符串或 null");
   if (activity.error !== null) validateError(activity.error, `${path}.error`);
@@ -340,9 +342,12 @@ function validateMessages(value: unknown, path: string, ids: Set<string>): void 
 
 function validateMessage(rawMessage: unknown, messagePath: string, ids: Set<string>): void {
   const message = requireRecord(rawMessage, messagePath);
-  requireExactKeys(message, ["id", "role", "parts", "runId", "outcome", "source"], messagePath);
+  requireExactKeys(message, ["id", "role", "parts", "turn", "inherited", "outcome", "source"], messagePath);
   validateMessageBody(message, messagePath, ids);
-  requireNullableNonNegativeInteger(message.runId, `${messagePath}.runId`);
+  if (requireNullableNonNegativeInteger(message.turn, `${messagePath}.turn`) === null) {
+    throw new TransportSnapshotValidationError(`${messagePath}.turn`, "非负整数");
+  }
+  if (typeof message.inherited !== "boolean") throw new TransportSnapshotValidationError(`${messagePath}.inherited`, "布尔值");
   if (message.outcome !== null) {
     if (message.role !== "assistant") throw new TransportSnapshotValidationError(`${messagePath}.outcome`, "user 消息上为 null");
     validateOutcome(message.outcome, `${messagePath}.outcome`);

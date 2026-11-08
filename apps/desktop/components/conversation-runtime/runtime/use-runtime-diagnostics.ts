@@ -22,7 +22,7 @@ export function useRuntimeDiagnostics(context: RuntimeSessionContext): void {
         taskId: context.taskId,
         workspaceId: context.workspaceId ?? null,
         initialMessageCount: transportMessageCount(context.initialState),
-        initialActivityRunId: context.initialState.activity?.runId ?? null,
+        initialActivityTurn: context.initialState.activity?.turn ?? null,
         initialActivityStatus: context.initialState.activity?.status ?? null,
       },
     });
@@ -39,7 +39,7 @@ export function useRuntimeDiagnostics(context: RuntimeSessionContext): void {
           data: {
             taskId: context.taskId,
             workspaceId: context.workspaceId ?? null,
-            lastActivityRunId: context.latestStateRef.current.activity?.runId ?? null,
+            lastActivityTurn: context.latestStateRef.current.activity?.turn ?? null,
             lastActivityStatus: context.latestStateRef.current.activity?.status ?? null,
           },
         });

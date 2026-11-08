@@ -1,13 +1,10 @@
 import type { ToolCalls } from "@/lib/assistant/tools/tool-call-index";
 import { useCallback, useEffect, useMemo } from "react";
 
-import { getUserAddMessageSourceId, type UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
+import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { recoverRejectedCommands } from "@/lib/assistant/composer/composer-drafts";
-import {
-  rerunTaskMessage,
-  sendTaskMessage,
-  type TaskMessageRequest,
-} from "@/lib/assistant/task-commands";
+import { markTaskRequestsUnsynced } from "@/lib/assistant/command-request-store";
+import { sendTaskMessage, type TaskMessageRequest } from "@/lib/assistant/task-commands";
 import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { notify } from "@/lib/notify";
 import { activeRunLaunch } from "@/lib/assistant/run-launch";
@@ -26,11 +23,6 @@ import { prepareUserCommand } from "@/lib/assistant/composer/prepare-user-comman
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
-
-/** 一次 composer 提交解析出的 Task 命令：发送新消息，或编辑重跑（带 `sourceId`）。 */
-type PreparedTaskCommand =
-  | { kind: "send"; request: TaskMessageRequest }
-  | { kind: "rerun"; messageId: string; request: TaskMessageRequest };
 
 type RuntimeTransport = Omit<ReturnType<typeof useTaskAssistantTransportRuntime>, "open">;
 
@@ -81,7 +73,7 @@ export function useRuntimeTransport(
       traceId: context.traceId,
       data: {
         taskId: context.taskId,
-        runId: context.latestStateRef.current.activity?.runId ?? null,
+        activityTurn: context.latestStateRef.current.activity?.turn ?? null,
         status,
         messageCount: transportMessageCount(context.latestStateRef.current),
       },
@@ -99,6 +91,8 @@ export function useRuntimeTransport(
       },
       error: error ?? undefined,
     });
+    // 断开期间可能错过「停下、又开出新运行」：重连拿到的完整快照分不出来，停止结果改为待确认。
+    markTaskRequestsUnsynced(context.taskId);
     recovery.reconnect(resync ? "resync_required" : "disconnected");
   }, [context, recovery]);
 
@@ -108,11 +102,9 @@ export function useRuntimeTransport(
     adapters: attachmentAdapter == null ? undefined : { attachments: attachmentAdapter },
     traceId: context.traceId,
     submitMessage: async (command) => {
-      const sourceId = getUserAddMessageSourceId(command);
       const state = context.latestStateRef.current;
-      // 运行期配置锁定：活动期间发送用它冻结的配置（composer 也只显示这份）；重跑不受锁定——
-      // 它会开新 Run，按用户当前选择。
-      const runLaunch = sourceId === null ? activeRunLaunch(state) : null;
+      // 运行期配置锁定：活动期间发送用它冻结的配置（composer 也只显示这份）。
+      const runLaunch = activeRunLaunch(state);
       const selection = readStoredSelection({ kind: "task", id: context.taskId });
       const launch = runLaunch ?? {
         modelConfigId: selection?.modelConfigId ?? state.fork?.initialLaunch.modelConfigId ?? null,
@@ -131,25 +123,16 @@ export function useRuntimeTransport(
         reasoningEffort: launch.reasoningEffort,
         disabledToolGroups: launch.disabledToolGroups,
       };
-      const taskCommand: PreparedTaskCommand = sourceId === null
-        ? { kind: "send", request }
-        : { kind: "rerun", messageId: sourceId, request };
       void frontendLog("INFO", "assistant_task_command_prepared", "Task 命令已准备发送", {
         traceId: context.traceId,
         data: {
           taskId: context.taskId,
-          operation: taskCommand.kind,
           launchLocked: runLaunch !== null,
           partCount: message.parts.length,
           attachmentCount: message.attachments?.length ?? 0,
         },
       });
-      const init = { traceId: context.traceId };
-      if (taskCommand.kind === "send") {
-        await sendTaskMessage(context.taskId, taskCommand.request, init);
-      } else {
-        await rerunTaskMessage(context.taskId, taskCommand.messageId, taskCommand.request, init);
-      }
+      await sendTaskMessage(context.taskId, request, { traceId: context.traceId });
       context.setIssue(null);
     },
     onResponse: (response) => {

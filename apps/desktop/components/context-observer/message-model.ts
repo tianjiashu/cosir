@@ -169,45 +169,32 @@ export function cacheUsage(
   return { rate: Math.round((hit / input) * 1000) / 10, hit, input };
 }
 
-/** 变化仅对同一 Run 内可计算的相邻 Assistant 记录比较，不推断模型故障。 */
+/** 变化只对本地（非继承）相邻、可计算的 Assistant 记录比较，不推断模型故障。 */
 export function cacheChanges(messages: ContextMessage[]): Map<number, number> {
-  const previous = new Map<number, number>();
+  let previous: number | undefined;
   const result = new Map<number, number>();
   for (const message of [...messages].sort((a, b) => a.sequence - b.sequence)) {
-    if (message.role !== "assistant" || message.run_id === null) continue;
+    if (message.role !== "assistant" || message.inherited) continue;
     const usage = cacheUsage(message);
     if (!usage) continue;
-    const before = previous.get(message.run_id);
-    if (before !== undefined)
-      result.set(message.sequence, Math.round((usage.rate - before) * 10) / 10);
-    previous.set(message.run_id, usage.rate);
+    if (previous !== undefined)
+      result.set(message.sequence, Math.round((usage.rate - previous) * 10) / 10);
+    previous = usage.rate;
   }
   return result;
 }
 
-/** 工具结果关联到同一上下文范围内最近的同号调用，支持继承历史中重复出现的 ID。 */
+/** 工具结果与发起它的调用互相关联：`tool_call_id` 在 Task 内唯一（含继承来的记录），后台结果可能在后续回合才并入。 */
 export function relatedMessages(
   message: ContextMessage,
   messages: ContextMessage[],
 ): ContextMessage[] {
-  const ownerOf = (tool: ContextMessage): ContextMessage | undefined => {
-    let owner: ContextMessage | undefined;
-    for (const candidate of messages) {
-      if (candidate.role === "assistant"
-        && candidate.run_id === tool.run_id
-        && candidate.sequence < tool.sequence
-        && candidate.tool_calls?.some(call => call.id === tool.tool_call_id)
-        && (!owner || candidate.sequence > owner.sequence)) owner = candidate;
-    }
-    return owner;
-  };
-  if (message.role === "tool") {
-    const owner = ownerOf(message);
-    return owner ? [owner] : [];
-  }
+  if (message.role === "tool")
+    return messages.filter(candidate => candidate.role === "assistant"
+      && candidate.tool_calls?.some(call => call.id === message.tool_call_id));
   if (message.role !== "assistant") return [];
-  return messages.filter(candidate => candidate.role === "tool"
-    && ownerOf(candidate)?.sequence === message.sequence);
+  const ids = new Set((message.tool_calls ?? []).map(call => call.id));
+  return messages.filter(candidate => candidate.role === "tool" && ids.has(candidate.tool_call_id ?? ""));
 }
 
 export function toolStatus(status: string | null | undefined): string {

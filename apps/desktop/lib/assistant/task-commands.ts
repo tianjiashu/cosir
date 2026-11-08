@@ -1,10 +1,11 @@
 /**
  * Task 级业务命令客户端：发送、排队消息的立即发送 / 删除（编辑排队消息即删除后放回输入框，不是独立命令）、
- * 编辑重跑、恢复、用户决定、停止 Task，以及按 `tool_call_id` 寻址的取消工具调用与转到后台。
+ * 撤回（编辑即撤回后放回输入框，不是独立命令）、恢复、用户决定、停止 Task，以及按 `tool_call_id` 寻址的
+ * 取消工具调用与转到后台。
  *
- * 命令只对 Task（或消息）寻址，不携带 runId：Run 身份与调度规则（立即并入、排队、新开 Run、
- * 唤醒挂起的 Run）全部由后端 Task 调度 actor 决定。后端处理完这一轮才返回：200 表示已受理
- * （发送类为消息已持久化入队，开新 Run、并入或唤醒由 actor 随后推进），响应体为空对象；状态冲突（不可恢复、重跑目标已过期等）为
+ * 命令只对 Task（或消息）寻址，不携带 Run 身份：调度规则（立即并入、排队、新开 Run、
+ * 唤醒挂起的 Run）全部由后端 Task 调度 actor 决定。后端处理完这次命令才返回：200 表示已受理
+ * （发送类为消息已持久化入队，开新 Run、并入或唤醒由 actor 随后推进），响应体为空对象；状态冲突（不可恢复、撤回目标已过期等）为
  * 409。Run 输出与状态经 Task 长订阅的 snapshot 到达，本模块不读取 SSE。
  *
  * 异常：发送类命令非 2xx 抛 HttpError（经 requestOk 解析结构化原因并记日志）；网络层失败原样上抛，
@@ -29,7 +30,7 @@ type TaskUserMessage = {
   attachments?: Array<{ id: string; name: string; contentType: string; path: string }>;
 };
 
-/** 发送 / 编辑重跑共用的消息请求体（带发起配置），与后端 `SendMessageRequest` / `RerunMessageRequest` 对齐。 */
+/** 发送消息的请求体（带发起配置），与后端 `SendMessageRequest` 对齐。 */
 export type TaskMessageRequest = {
   message: TaskUserMessage;
   modelConfigId: number;
@@ -82,21 +83,19 @@ export function sendQueuedTaskMessageNow(taskId: number, messageId: string, init
 }
 
 /**
- * 删除排队消息（编辑排队消息也走它：先撤回，再把内容放回输入框）。已不在队列中（已被并入或已删除）
+ * 删除排队消息（编辑排队消息也走它：先删除，再把内容放回输入框）。已不在队列中（已被并入或已删除）
  * 时 409 `MESSAGE_CONSUMED`。
  */
 export function deleteQueuedTaskMessage(taskId: number, messageId: string, init?: CommandInit): Promise<void> {
   return postTaskCommand(queuedMessagePath(taskId, messageId), undefined, init, "DELETE");
 }
 
-/** 编辑最新一条已并入的用户消息并重跑：只在 Task 静止时受理（运行中 409 `RUN_NOT_STOPPED`），按本次配置开新 Run。 */
-export function rerunTaskMessage(
-  taskId: number,
-  messageId: string,
-  request: TaskMessageRequest,
-  init?: CommandInit,
-): Promise<void> {
-  return postTaskCommand(`/tasks/${taskId}/messages/${encodeURIComponent(messageId)}/rerun`, request, init);
+/**
+ * 撤回最新一条已并入的用户消息开启的回合：只在 Task 静止时受理（运行中 409 `RUN_NOT_STOPPED`，已不是
+ * 最新一条 409 `WITHDRAW_TARGET_STALE`），不开新 Run。编辑 = 撤回后把内容放回输入框再照常发送。
+ */
+export function withdrawTaskMessage(taskId: number, messageId: string, init?: CommandInit): Promise<void> {
+  return postTaskCommand(`/tasks/${taskId}/messages/${encodeURIComponent(messageId)}/withdraw`, undefined, init);
 }
 
 /** 最新 Run 已取消或失败时续跑同一个 Run。 */

@@ -1,7 +1,7 @@
 import { projectTurn, turnPhaseOf, type TurnLayout } from "./turn/turn-layout";
 import { isActiveRunStatus } from "@/lib/assistant/contract";
 import type { MessageStatus } from "@assistant-ui/core";
-import type { CompleteAttachment, CreateAttachment, RunConfig } from "@assistant-ui/core";
+import type { CompleteAttachment, CreateAttachment } from "@assistant-ui/core";
 import type {
   ThreadAssistantMessage,
   ThreadMessage,
@@ -35,29 +35,15 @@ import {
   type EditableUserDocument,
 } from "@/lib/assistant/composer/editable-user-document";
 
-const EDIT_SESSION_KEY = "cosirEditSession";
-
-/**
- * 写进编辑 composer 的 runConfig，标记「这个编辑会话已写入过草稿」。消息行重新挂载（虚拟列表滚动）
- * 时 assistant-ui 的编辑 composer（正文、runConfig）不变，据此继续而不是再用原消息覆盖用户已改的草稿；
- * 全新的编辑 composer 从线程 composer 复制 runConfig，不带这个标记。
- */
-export const EDIT_SESSION_RUN_CONFIG: RunConfig = { custom: { [EDIT_SESSION_KEY]: true } };
-
-export function isContinuedEditSession(runConfig: RunConfig | undefined): boolean {
-  return runConfig?.custom?.[EDIT_SESSION_KEY] === true;
-}
-
 export type UserAddMessageCommand = {
   type: "add-message";
-  sourceId?: string | null;
   message: {
     role: "user";
     attachments?: ReadonlyArray<{
       id: string;
       name: string;
       contentType: string;
-      path?: string | null;
+      path: string;
     }>;
     parts: ReadonlyArray<
       | { type: "text"; text: string }
@@ -70,19 +56,20 @@ export type UserAddMessageCommand = {
 };
 
 /**
- * 渲染一条消息所需的上下文；由 frame store 按扁平消息列表与 `activity` 计算，不回查 Run。
+ * 渲染一条消息所需的上下文；由 frame store 按扁平消息列表与 `activity` 计算，前端看不到 Run。
  *
- * - `outcome`：该回复的结局（只在 Run 最后一条助手消息上、Run 终态后非空）。
- * - `isRunEnd`：该 Run 最后一条助手消息；回复末尾的用量、诊断入口挂在这里。
- * - `activity`：消息是当前活动那一轮的回复末尾时为该活动（据此显示运行中与实时用量），否则 null。
+ * - `outcome`：Run 的结局（只在它最后一个可见回合的回复上、Run 终态后非空）；用量与诊断挂在这里。
+ * - `activity`：消息是当前回复（`activity.turn` 那一回合的回复）时为该活动（据此显示运行中与实时用量），
+ *   否则 null。
  */
 export type TransportMessageRenderContext = {
-  /** 所属 Run；排队与乐观消息尚无 Run，为 null。只供诊断与日志。 */
-  runId: number | null;
+  /** 所在回合；排队与乐观消息还没有回合，为 null。诊断与上下文观测按它进入。 */
+  turn: number | null;
+  /** 来自分叉继承的历史：不可交互。 */
+  inherited: boolean;
   /** Agent 消息的发送方（见 `TransportMessage.source`）；排队、乐观与助手消息为 null。 */
   source: TransportMessageSource | null;
   outcome: TransportOutcome | null;
-  isRunEnd: boolean;
   activity: TransportActivity | null;
   backgroundTasks?: readonly BackgroundTaskEntry[];
 };
@@ -187,17 +174,18 @@ function attachmentForUserPart(
 }
 
 /**
- * Project a canonical user message into the text-plus-attachments shape used
- * by the edit composer.
+ * Project a canonical user message into the text-plus-attachments shape the
+ * composer accepts when a message is put back into it (withdraw, or editing a
+ * queued message).
  *
  * Canonical user content keeps files and images as ordered message parts so
- * the sent bubble can render them inline. assistant-ui's edit runtime lifts
+ * the sent bubble can render them inline. assistant-ui's composer lifts
  * those non-text parts into attachments, but it cannot retain their position
  * in the text and also combines them with `message.attachments`. This helper
  * creates one stable attachment per canonical non-text part and inserts each
  * ordinary file token at its original text position. Images are projected to
  * the separate preview surface. The caller owns
- * replacing the edit composer state with this result; this function performs
+ * writing this result into the composer; this function performs
  * no runtime or persistence side effects.
  */
 export function toEditableUserMessageDraft(message: ThreadUserMessage): EditableUserMessageDraft {
@@ -369,7 +357,7 @@ export function toAssistantMessageStatus(context: TransportMessageRenderContext)
         };
     }
   }
-  if (context.isRunEnd && isActiveRunStatus(context.activity?.status)) return { type: "running" };
+  if (isActiveRunStatus(context.activity?.status)) return { type: "running" };
   return { type: "complete", reason: "stop" };
 }
 
@@ -422,7 +410,7 @@ export function toThreadMessageWithRenderContext(
         steps: undefined,
         submittedFeedback: undefined,
         timing: undefined,
-        custom: { runId: context.runId, source: context.source },
+        custom: { source: context.source },
       },
     };
     return userMessage;
@@ -441,8 +429,8 @@ export function toThreadMessageWithRenderContext(
       steps: [],
       custom: {
         turnLayout,
-        runId: context.runId,
-        isRunEnd: context.isRunEnd,
+        turn: context.turn,
+        inherited: context.inherited,
         outcome: context.outcome,
         activity: context.activity,
       },
@@ -459,13 +447,6 @@ export function extractUserAddMessageText(command: unknown): string {
     .join("\n");
 }
 
-export function getUserAddMessageSourceId(command: unknown): string | null {
-  if (!isUserAddMessageCommand(command)) return null;
-  return typeof command.sourceId === "string" && command.sourceId.length > 0
-    ? command.sourceId
-    : null;
-}
-
 /**
  * 乐观消息按后端 canonical 形状投影（见后端 `build_user_input_parts`）：正文里的普通文件 token
  * 在原位换成 file part（同一文件只占首次出现的位置），Skill token 物化成发送后的标记；
@@ -474,11 +455,13 @@ export function getUserAddMessageSourceId(command: unknown): string | null {
  */
 export function toPendingUserMessage(command: unknown): ThreadMessage | null {
   if (!isUserAddMessageCommand(command)) return null;
+  // 乐观消息只供渲染、不会再发送：路径取自本机附件登记，登记已失效时留空（命令随后被拒）。
   const toFilePart = (part: Extract<UserAddMessageCommand["message"]["parts"][number], { type: "file" }>): TransportMessagePart => ({
     type: "file",
     file: part.data,
     name: part.filename ?? "附件",
     contentType: part.mimeType,
+    path: getLocalAttachmentById(localFileIdFromLocator(part.data) ?? "")?.path ?? "",
   });
   const filesById = new Map(command.message.parts.flatMap((part) => {
     if (part.type !== "file") return [];
@@ -511,6 +494,7 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
           file: localFileLocator(piece.token),
           name: local?.name ?? "附件",
           contentType: local?.contentType ?? "application/octet-stream",
+          path: local?.path ?? "",
         });
       }
     } else if (part.type === "image") {
@@ -525,7 +509,7 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     id: `pending-${getOrCreateTransportCommandId(command)}`,
     role: "user",
     parts: messageParts,
-  }, { runId: null, source: null, outcome: null, isRunEnd: false, activity: null });
+  }, { turn: null, inherited: false, source: null, outcome: null, activity: null });
   // The optimistic message follows the same single-source shape as the
   // canonical projection. The content parts already carry all attachments.
   pending.metadata.custom.pending = true;

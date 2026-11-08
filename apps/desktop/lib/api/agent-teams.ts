@@ -50,7 +50,6 @@ export type AgentTeamRun = {
     status: string;
     visits: Array<{
       visit_number: number;
-      conversation_run_id: number | null;
       status: string;
       agents: Array<{
         task_id: number | null;
@@ -124,6 +123,6 @@ export function getAgentTeamConfigurations(workspaceId: number | null, options?:
   return requestJson<AgentTeamConfiguration[]>(teamConfigurationPath(workspaceId), options);
 }
 
-export function getAgentTeamRun(runId: number, options?: RequestOptions): Promise<AgentTeamRun> {
-  return requestJson<AgentTeamRun>(`/agent-team/runs/${encodeURIComponent(runId)}`, options);
+export function getAgentTeamRun(teamRunId: number, options?: RequestOptions): Promise<AgentTeamRun> {
+  return requestJson<AgentTeamRun>(`/agent-team/runs/${encodeURIComponent(teamRunId)}`, options);
 }

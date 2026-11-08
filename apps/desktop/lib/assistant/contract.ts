@@ -1,8 +1,9 @@
 /**
  * 后端 Assistant Transport 协议约定的 state 结构（传输契约类型）。
  *
- * 契约是 Task 视角：对话是一条扁平消息列表，Run 只作为消息上的 `runId`（诊断、日志、fork 定位）
- * 与 `activity`（最新 Run 摘要）出现，对话界面不按 runId 比对。后端先推 full 帧再按路径增量
+ * 契约是 Task 视角：对话是按回合扁平排列的消息列表（每个回合：开启它的输入 + 一条回复），Run 只在
+ * 后端承载状态，wire 上没有 Run 身份——前端只读 `activity`（最新 Run 的状态）、回复上的 `outcome`
+ * 与各处的显式事实（`inherited`、`activity.turn`、`activity.resumable`）。后端先推 full 帧再按路径增量
  * 推送 mutation（`messages` / `activity` / `queued_messages` / `error`）。字段与后端
  * `apps/backend/app/assistant_transport/state/` 严格对齐，改动需前后端同步。
  *
@@ -99,12 +100,18 @@ export type TransportImagePart = {
   image: string;
 };
 
-/** 用户普通文件 part：只携带稳定 locator 与展示元数据。 */
+/**
+ * 用户普通文件 part：稳定 locator、展示元数据与本机路径。
+ *
+ * `path` 让放回输入框的附件（撤回、编辑排队消息）能原样再发送；前端只把它作为附件描述交回后端，
+ * 不读文件。
+ */
 type TransportFilePart = {
   type: "file";
   file: string;
   name: string;
   contentType: string;
+  path: string;
 };
 /** 回合途中到达的 Agent 消息：当前回复过程里的一段，不开新回合。开启回合的 Agent 消息见 `TransportMessage.source`。 */
 export type TransportAgentMessagePart = {
@@ -185,9 +192,11 @@ export type TransportMessage = {
   id: string;
   role: "user" | "assistant";
   parts: TransportMessagePart[];
-  /** 所属 Run，只供诊断、日志与 fork 定位；对话界面不据此判断运行状态。 */
-  runId: number | null;
-  /** 仅「该 Run 最后一条助手消息」在 Run 终态后非空；user 消息恒为 null。 */
+  /** 所在回合号：诊断与上下文观测按它进入；回复 id 也由它编码（前端不解析 id）。 */
+  turn: number;
+  /** 来自分叉继承的历史：不可交互、不可撤回。 */
+  inherited: boolean;
+  /** Run 的结局，只挂在它最后一个可见回合的回复上（Run 终态后非空）；user 消息恒为 null。 */
   outcome: TransportOutcome | null;
   /**
    * 仅 Agent 消息（另一个 Agent 交来、开启一轮的 user 消息：委派、追加消息、Team 节点输入）非空。
@@ -197,13 +206,16 @@ export type TransportMessage = {
 };
 
 /**
- * 当前活动：Task 最新 Run 的摘要投影（事实源仍是后端 `ConversationRunModel.status`）。
- * `runId` 只供诊断与日志，对话界面按 `status` 判断「运行中 / 已停下」。
+ * 当前活动：Task 最新 Run 的状态投影（事实源仍是后端 `ConversationRunModel.status`）。对话界面按
+ * `status` 判断「运行中 / 已停下」，按 `turn` 认出当前回复，按 `resumable` 决定能否恢复，都不推断。
  */
 export type TransportActivity = {
   modelActivity: { stepId: string; phase: "waiting" | "reasoning" | "responding" | "tool_call" } | null;
-  runId: number;
   status: TransportRunStatus;
+  /** 这个 Run 最后一个可见回合（还没有可见回合时为 null）：它的回复就是当前回复。 */
+  turn: number | null;
+  /** 后端判定能否恢复（cancelled / failed 且最后一个回合没被撤回）。 */
+  resumable: boolean;
   endReason: string | null;
   error: TransportError | null;
   usage: TransportUsage | null;

@@ -1,5 +1,4 @@
 import type { CreateAttachment } from "@assistant-ui/core";
-import { registerInlineFileMetadata } from "@/lib/assistant/attachments/local-attachment-registry";
 
 import {
   inlineAttachmentTokenId,
@@ -18,8 +17,8 @@ export type EditDraftAttachment = CreateAttachment & InlineAttachmentIdentity;
 /**
  * 草稿写入所需的最小 composer 契约。
  *
- * 只声明「读取草稿、加入完整附件、按索引移除附件、设置文本」四项能力，因此 thread composer
- * 与 message edit composer 都能满足；单元测试可用同形假对象覆盖，无需 React 运行时。
+ * 只声明「读取草稿、加入完整附件、按索引移除附件、设置文本」四项能力，thread composer 满足它；
+ * 单元测试可用同形假对象覆盖，无需 React 运行时。
  */
 export type EditDraftComposerTarget = {
   getState(): { text: string; attachments: readonly InlineAttachmentIdentity[] };
@@ -90,12 +89,6 @@ export async function applyEditDraftToComposer(options: {
     catch (error) { result.error ??= error; }
   };
   const current = composer.getState();
-  for (const attachment of options.attachments) {
-    if (attachment.type === "file") registerInlineFileMetadata({
-      id: inlineAttachmentTokenId(attachment), name: attachment.name,
-      contentType: attachment.contentType ?? "application/octet-stream",
-    });
-  }
   perform(() => composer.setText(mode === "prepend" ? mergeDraftText(text, current.text) : text));
   const existing = new Set(current.attachments.map(inlineAttachmentTokenId));
   if (mode === "replace") {

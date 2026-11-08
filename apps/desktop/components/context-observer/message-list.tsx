@@ -322,9 +322,9 @@ export function MessageList({
                     )}
                   </time>
                   <span>
-                    {message.run_id === null && message.sequence > 0 ? "继承上下文" : message.run_id === null
+                    {message.sequence === 0
                       ? "任务系统提示词"
-                      : `Run #${message.run_id}`}
+                      : `${message.inherited ? "继承 · " : ""}回合 ${message.turn}`}
                   </span>
                   {cache && (
                     <span title="相较同一上下文范围内上一条可计算记录；变化不代表故障">

@@ -6,6 +6,7 @@ import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-perfor
 import {
   isActiveRunStatus,
   isTerminalRunStatus,
+  type TransportActivity,
   type TransportHistoryPage,
   type TransportMessage,
   type TransportQueuedMessage,
@@ -335,7 +336,7 @@ export class TransportFrameStore {
    * 乐观命令的收敛：snapshot 里新出现了用户消息（排队或已并入）就按出现顺序去掉同样数量的最早
    * 乐观命令。命令被拒由提交方按 HTTP 结果经 `clearPendingCommand` 收回，不经这里。
    *
-   * 只数完整历史里不早于此前窗口起点的消息：新窗口可能比旧窗口起得更早（编辑重跑移出消息后整体
+   * 只数完整历史里不早于此前窗口起点的消息：新窗口可能比旧窗口起得更早（撤回移出消息后整体
    * 前移），那些更早的用户消息只是之前没加载，不是刚出现的。
    */
   private reconcilePending(previous: TransportState): void {
@@ -348,9 +349,9 @@ export class TransportFrameStore {
   }
 
   /**
-   * 比较前后两份 state 的当前活动。同一份 full 帧里旧 Run 已结束、新 Run 已开始（重连期间错过
-   * 了中间帧）时两端都是活动态，按 `runId` 变化补一次 `settled` 再发 `started`，旧 Run 的结局取
-   * 它最后一条助手消息的 `outcome`。
+   * 比较前后两份 state 的当前活动：从非活动态进入活动态发 `started`，从活动态落到终态发 `settled`。
+   * 前端看不到 Run：重连时一份 full 帧里旧 Run 已结束、新 Run 已开始，在这里只是一段没有中断的活动，
+   * 不补发 `settled`（下游只用它记日志与刷新 Task 列表，Task 状态另由 task-status 推送收敛）。
    */
   private emitActivityTransition(previous: TransportState): void {
     const before = previous.activity;
@@ -358,10 +359,7 @@ export class TransportFrameStore {
     const transitions: ActivityTransition[] = [];
     const wasActive = before !== null && isActiveRunStatus(before.status);
     const isActive = after !== null && isActiveRunStatus(after.status);
-    if (wasActive && isActive && before.runId !== after.runId) {
-      transitions.push({ kind: "settled", status: outcomeStatusOf(this.state.messages, before.runId) });
-      transitions.push({ kind: "started", status: after.status });
-    } else if (isActive && !wasActive) {
+    if (isActive && !wasActive) {
       transitions.push({ kind: "started", status: after.status });
     } else if (wasActive && after !== null && isTerminalRunStatus(after.status)) {
       transitions.push({ kind: "settled", status: after.status });
@@ -379,9 +377,8 @@ export class TransportFrameStore {
         .filter((item): item is Extract<FrameStoreItem, { kind: "canonical" }> => item.kind === "canonical")
         .map((item) => [item.message.id, item]),
     );
-    const runEndIds = lastAssistantIdsByRun(this.state.messages);
     this.canonicalItems = this.state.messages.map((message) => {
-      const context = this.contextFor(message, runEndIds);
+      const context = this.contextFor(message);
       const previous = previousById.get(message.id);
       if (previous && previous.message === message && sameContext(previous.context, context)) return previous;
       return canonicalItem(message, context, previous?.turnLayout);
@@ -403,18 +400,18 @@ export class TransportFrameStore {
     this.composeItems();
   }
 
-  private contextFor(message: TransportMessage, runEndIds: ReadonlySet<string>): TransportMessageRenderContext {
+  private contextFor(message: TransportMessage): TransportMessageRenderContext {
     const activity = this.state.activity;
-    const isRunEnd = runEndIds.has(message.id);
-    // 只有当前活动那一轮的回复末尾消费活动（运行中状态、实时用量）；其余消息不挂，活动元数据
-    // 变化时不必重建它们。
+    const isLastReply = message.role === "assistant" && message === this.state.messages.at(-1);
+    // 只有当前回复（`activity.turn` 那一回合的回复）消费活动（运行中状态、实时用量）；其余消息不挂，
+    // 活动元数据变化时不必重建它们。
     return {
-      runId: message.runId,
+      turn: message.turn,
+      inherited: message.inherited,
       source: message.source,
       outcome: message.outcome,
-      isRunEnd,
-      activity: isRunEnd && message === this.state.messages.at(-1) && activity !== null && activity.runId === message.runId ? activity : null,
-      backgroundTasks: isRunEnd && message === this.state.messages.at(-1) ? this.state.background_tasks : undefined,
+      activity: isCurrentReply(message, activity) ? activity : null,
+      backgroundTasks: isLastReply ? this.state.background_tasks : undefined,
     };
   }
 
@@ -503,25 +500,28 @@ export class TransportFrameStore {
     this.scheduledFrameTimestamp = null;
   }
 
-  /** 流式内容只合并到下一动画帧提交给「当前活动的最后一条消息」，其它消息的变化立即提交。 */
+  /** 流式内容只合并到下一动画帧提交给「运行中的当前回复」，其它消息的变化立即提交。 */
   private isActiveRowIndex(index: number): boolean {
     const activity = this.state.activity;
     const message = this.state.messages[index];
-    return index === this.state.messages.length - 1
-      && message !== undefined
-      && activity !== null
-      && message.runId === activity.runId
-      && isActiveRunStatus(activity.status);
+    return message !== undefined
+      && isCurrentReply(message, activity)
+      && isActiveRunStatus(activity?.status);
   }
 }
 
 const QUEUED_CONTEXT: TransportMessageRenderContext = {
-  runId: null,
+  turn: null,
+  inherited: false,
   source: null,
   outcome: null,
-  isRunEnd: false,
   activity: null,
 };
+
+/** 当前回复：当前活动最后一个可见回合（`activity.turn`）的回复。 */
+function isCurrentReply(message: TransportMessage, activity: TransportActivity | null): boolean {
+  return message.role === "assistant" && activity !== null && activity.turn === message.turn;
+}
 
 /** 判断 mutation 是否只改写某条已存在消息的内部内容（不增删消息、不改结局）。路径已是本地位置。 */
 function isMessageContentMutation(
@@ -533,15 +533,6 @@ function isMessageContentMutation(
     && mutation.path[1] < state.messages.length
     && mutation.path.length > 2
     && mutation.path[2] === "parts";
-}
-
-/** 某个 Run 的结局状态：取它最后一条带 `outcome` 的消息；投影尚未写入时按已完成处理。 */
-function outcomeStatusOf(messages: readonly TransportMessage[], runId: number): TransportRunStatus {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.runId === runId && message.outcome !== null) return message.outcome.status;
-  }
-  return "completed";
 }
 
 /**
@@ -559,19 +550,10 @@ function userMessageIds(state: TransportState, from: number): Set<string> {
   return ids;
 }
 
-/** 每个 Run 最后一条助手消息的 id：回复末尾（用量、诊断）只挂在这些消息上。 */
-function lastAssistantIdsByRun(messages: readonly TransportMessage[]): Set<string> {
-  const lastByRun = new Map<string, string>();
-  for (const message of messages) {
-    if (message.role === "assistant") lastByRun.set(`run-${message.runId}`, message.id);
-  }
-  return new Set(lastByRun.values());
-}
-
 function sameContext(left: TransportMessageRenderContext, right: TransportMessageRenderContext): boolean {
-  return left.runId === right.runId
+  return left.turn === right.turn
+    && left.inherited === right.inherited
     && left.outcome === right.outcome
-    && left.isRunEnd === right.isRunEnd
     && left.activity === right.activity
     && left.backgroundTasks === right.backgroundTasks;
 }

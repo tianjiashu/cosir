@@ -5,6 +5,5 @@ import { useCommandRequest } from "@/lib/assistant/command-request-store";
 export function useRuntimeCancellation(context: RuntimeSessionContext): boolean {
   const request = useCommandRequest(context.taskId, "task");
   const activity = context.latestStateRef.current.activity;
-  return request !== undefined && !request.error && (activity?.status === "running" || activity?.status === "suspended")
-    && (request.runId === null || request.runId === activity.runId);
+  return request !== undefined && !request.error && (activity?.status === "running" || activity?.status === "suspended");
 }

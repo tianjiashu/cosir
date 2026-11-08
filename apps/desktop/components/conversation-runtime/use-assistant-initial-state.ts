@@ -54,7 +54,7 @@ export function useAssistantInitialState(
             taskId,
             messageCount: state.messages.length,
             queuedCount: state.queued_messages?.length ?? 0,
-            activityRunId: state.activity?.runId ?? null,
+            activityTurn: state.activity?.turn ?? null,
             activityStatus: state.activity?.status ?? null,
           },
         });

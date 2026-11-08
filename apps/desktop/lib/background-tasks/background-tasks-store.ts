@@ -69,7 +69,7 @@ export function useForegroundWaits(taskId: number | null): readonly string[] {
 }
 
 /**
- * 看板条目对应的工具 part；尚未收到 snapshot、或那一轮已不在对话里（如编辑重跑移出）时为 null，
+ * 看板条目对应的工具 part；尚未收到 snapshot、或那一回合已不在对话里（如被撤回）时为 null，
  * 看板退回单行。
  */
 export function useBackgroundTaskPart(taskId: number, toolCallId: string): TransportToolCallPart | null {

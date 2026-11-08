@@ -7,14 +7,14 @@ import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-s
 export function RuntimeRenderDiagnostics({ taskId }: { taskId: number }) {
   const messageCount = useAuiState((state) => state.thread.messages.length);
   const isRunning = useAuiState((state) => state.thread.isRunning);
-  const activityRunId = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.activity?.runId ?? null);
+  const activityTurn = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.activity?.turn ?? null);
   const activityStatus = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.activity?.status ?? null);
 
   useEffect(() => {
     void frontendLog("DEBUG", "assistant_ui_render_state", "Assistant UI 渲染状态发生变化", {
-      data: { taskId, messageCount, activityRunId, activityStatus, isRunning },
+      data: { taskId, messageCount, activityTurn, activityStatus, isRunning },
     });
-  }, [activityRunId, activityStatus, isRunning, messageCount, taskId]);
+  }, [activityStatus, activityTurn, isRunning, messageCount, taskId]);
 
   return null;
 }

@@ -8,8 +8,8 @@ import { UserFacingError } from "@/lib/errors/user-facing-error";
  */
 export type LocalAttachmentMetadata = {
   id: string;
-  /** 本机路径；历史消息只带展示信息，路径由编辑重跑边界交给后端恢复。 */
-  path?: string;
+  /** 本机路径：新选的文件由宿主取得，放回输入框的历史附件取自快照（见 {@link restoreLocalFile}）。 */
+  path: string;
   name: string;
   contentType: string;
 };
@@ -28,15 +28,18 @@ export class LocalAttachmentUnavailableError extends UserFacingError {
 const metadataById = new Map<string, LocalAttachmentMetadata>();
 
 /** 登记用户刚选择、粘贴或拖入的本机文件，返回写进草稿 token 的 id。 */
-export function registerLocalFile(metadata: Omit<LocalAttachmentMetadata, "id"> & { path: string }): string {
+export function registerLocalFile(metadata: Omit<LocalAttachmentMetadata, "id">): string {
   const id = crypto.randomUUID();
   metadataById.set(id, { id, ...metadata });
   return id;
 }
 
-/** 保存历史普通文件的展示元数据，不覆盖本机选择器已经登记的真实路径。 */
-export function registerInlineFileMetadata(metadata: Omit<LocalAttachmentMetadata, "path">): void {
-  if (!metadataById.has(metadata.id)) metadataById.set(metadata.id, metadata);
+/**
+ * 按原 id 登记快照里的历史附件：放回输入框的正文 token 沿用原 id，页面重载后登记表为空，
+ * 只能从快照恢复。同 id 的登记来自同一次选择，覆盖无妨。
+ */
+export function restoreLocalFile(metadata: LocalAttachmentMetadata): void {
+  metadataById.set(metadata.id, metadata);
 }
 
 export function getLocalAttachmentById(id: string): LocalAttachmentMetadata | undefined {

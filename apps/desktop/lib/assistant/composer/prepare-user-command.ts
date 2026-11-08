@@ -1,4 +1,4 @@
-import { getUserAddMessageSourceId, isUserAddMessageCommand, type UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
+import { isUserAddMessageCommand, type UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import {
   getLocalAttachmentById,
   LocalAttachmentUnavailableError,
@@ -13,11 +13,9 @@ import { materializeSkillMentions } from "@/lib/assistant/composer/skill-mention
  * metadata), so a reloaded WebView does not depend on the in-memory local
  * attachment registry.
  *
- * 缺失登记的 token 按命令类型分流：
- * - 编辑重跑（带 sourceId）：后端会从目标消息的展示绑定恢复路径，token 原样保留。
- * - 新消息：后端没有可恢复的绑定，必然以「附件不可用」拒绝；这里提前抛
- *   LocalAttachmentUnavailableError（UserFacingError），请求不会发出，调用方据此提示用户重新选择附件。
- *   以前静默丢弃描述符，用户只能看到后端的英文拒绝原因。
+ * 每个 token 都必须有带路径的登记：新选的文件在选择时登记，放回输入框的历史附件按快照里的路径
+ * 登记（`restoreLocalFile`）。缺失登记时后端必然以「附件不可用」拒绝，这里提前抛
+ * LocalAttachmentUnavailableError（UserFacingError），请求不会发出，调用方据此提示用户重新选择附件。
  */
 export function prepareUserCommand(command: unknown): unknown {
   if (!isUserAddMessageCommand(command)) return command;
@@ -30,23 +28,14 @@ export function prepareUserCommand(command: unknown): unknown {
     }
     parts.push({ type: "text", text: materializeSkillMentions(part.text) });
   }
-  const isEdit = getUserAddMessageSourceId(command) !== null;
   const attachments = localFileTokenIds(
     parts.filter((part): part is { type: "text"; text: string } => part.type === "text")
       .map((part) => part.text)
       .join("\n"),
-  ).flatMap((id) => {
+  ).map((id) => {
     const local = getLocalAttachmentById(id);
-    if (!local?.path) {
-      if (isEdit) return [];
-      throw new LocalAttachmentUnavailableError();
-    }
-    return [{
-      id: local.id,
-      name: local.name,
-      contentType: local.contentType,
-      path: local.path,
-    }];
+    if (!local) throw new LocalAttachmentUnavailableError();
+    return { id: local.id, name: local.name, contentType: local.contentType, path: local.path };
   });
   if (attachments.length === 0) {
     return { ...command, message: { ...command.message, parts } } satisfies UserAddMessageCommand;

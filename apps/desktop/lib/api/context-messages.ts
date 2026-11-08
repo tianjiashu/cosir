@@ -3,7 +3,10 @@ import { requestJson, type RequestOptions } from "@/lib/http/client";
 export type ContextMessage = {
   id: number | null;
   task_id: number;
-  run_id: number | null;
+  /** 所在回合（系统提示词为 0）。 */
+  turn: number;
+  /** 来自分叉继承的历史（没有本地运行）。 */
+  inherited: boolean;
   sequence: number;
   include_in_context: boolean;
   created_at: string;
@@ -17,14 +20,31 @@ export type ContextMessage = {
   status?: string | null;
 };
 
-export type ContextMessageQuery = {
-  taskId?: number;
-  runId?: number;
+/** 所选回合所属运行的状态事实；属于整个运行，同一运行的其他回合看到的是同一份。 */
+export type ContextTurnRun = {
+  status: string;
+  end_reason: string | null;
+  error_code: string | null;
+  usage: Record<string, number | null> | null;
+  started_at: string;
+  updated_at: string;
 };
 
+export type ContextObservation = {
+  messages: ContextMessage[];
+  /** 只有按回合查询、且这一回合有本地运行时才有。 */
+  run: ContextTurnRun | null;
+};
+
+export type ContextMessageQuery = {
+  taskId?: number;
+  turn?: number;
+};
+
+/** 读取 Task 的上下文记录，或只读一个回合；Task 必填（观测按 Task 与回合进入，前端看不到运行）。 */
 export function getContextMessages(query: ContextMessageQuery, options?: RequestOptions) {
   const params = new URLSearchParams();
   if (query.taskId !== undefined) params.set("task_id", String(query.taskId));
-  if (query.runId !== undefined) params.set("run_id", String(query.runId));
-  return requestJson<ContextMessage[]>(`/context-messages?${params.toString()}`, options);
+  if (query.turn !== undefined) params.set("turn", String(query.turn));
+  return requestJson<ContextObservation>(`/context-messages?${params.toString()}`, options);
 }

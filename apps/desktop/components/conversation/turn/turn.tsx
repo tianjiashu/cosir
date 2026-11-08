@@ -87,14 +87,13 @@ const AttentionByIndex = memo(function AttentionByIndex({ index, taskId, interac
 export function Turn({ taskId, readonly, cancelling, footerAction }: TurnProps) {
   const messageId = useAuiState((state) => state.message.id);
   const custom = useAuiState((state) => state.message.metadata.custom);
-  const isRunEnd = custom?.isRunEnd === true;
-  const runId = typeof custom?.runId === "number" ? custom.runId : null;
+  const turn = custom?.turn as number;
+  const inherited = custom?.inherited === true;
   const outcome = (custom?.outcome ?? null) as TransportOutcome | null;
   const activity = (custom?.activity ?? null) as TransportActivity | null;
   const layout = custom.turnLayout as TurnLayout;
   const phase = layout.phase;
   const answerText = useMemo(() => layout.answer.map((item) => item.part.text).join("\n\n"), [layout.answer]);
-  const inherited = custom?.runId === null;
   const interactive = !readonly && !inherited;
   const renderCall = useCallback((item: CallItem, visible: boolean) => <CallRowByIndex index={item.index} taskId={taskId} interactive={interactive} taskCancelling={cancelling} visible={visible} inherited={inherited} />, [taskId, interactive, cancelling, inherited]);
 
@@ -141,8 +140,8 @@ export function Turn({ taskId, readonly, cancelling, footerAction }: TurnProps) 
         <TurnFooter
           taskId={taskId}
           messageId={messageId}
-          runId={runId}
-          isRunEnd={isRunEnd}
+          turn={turn}
+          inherited={inherited}
           outcome={outcome}
           activity={activity}
           answerText={answerText}

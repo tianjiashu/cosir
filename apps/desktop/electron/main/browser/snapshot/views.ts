@@ -41,7 +41,7 @@ const CHANGES_MAX_SHARE = 0.4;
  * 行，连同它们的祖先；消失的行只列最外层那个。按条目的稳定键比对：ref 也按节点稳定，没出现在增量里的元素沿用
  * 之前的 ref。变化太多或超出预算时返回 null，由调用方给整页。
  *
- * 基准是宿主记的「上次交出去的」，不保证还在模型的上下文里（编辑重跑撤掉了那一轮、调用中途被取消），所以开头
+ * 基准是宿主记的「上次交出去的」，不保证还在模型的上下文里（撤回撤掉了那一回合、调用中途被取消），所以开头
  * 说清比的是什么、怎么拿整页。
  */
 export function changesView(previous: Outline, current: Outline, { budget = SNAPSHOT_CHAR_BUDGET }: { budget?: number } = {}): string | null {
