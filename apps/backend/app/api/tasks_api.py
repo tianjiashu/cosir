@@ -13,6 +13,8 @@ from fastapi import Depends, HTTPException, Query
 
 from app.api.schemas import (
     ContextMessageResponse,
+    ContextObservationResponse,
+    ContextTurnRunResponse,
     DeleteTaskResponse,
     ForkTaskRequest,
     TaskResponse,
@@ -33,23 +35,24 @@ from app.service.depends import (
 from app.task_runtime.service.task_service import TaskService
 
 
-@app.get("/context-messages", response_model=list[ContextMessageResponse])
+@app.get("/context-messages", response_model=ContextObservationResponse)
 async def list_context_messages(
-    task_id: int | None = Query(default=None, gt=0),
-    run_id: int | None = Query(default=None, gt=0),
+    task_id: int = Query(gt=0),
+    turn: int | None = Query(default=None, gt=0),
     context_service: ConversationTaskContextService = Depends(
         get_conversation_task_context_service
     ),
-) -> list[ContextMessageResponse]:
-    """按 Task 或 Run 读取全部 Agent 上下文消息及其时间戳。"""
+) -> ContextObservationResponse:
+    """读取 Task 的全部 Agent 上下文消息，或只读一个回合（附它所属 Run 的状态事实）。"""
 
-    if task_id is None and run_id is None:
-        raise HTTPException(status_code=422, detail="task_id or run_id is required")
     try:
-        records = context_service.list_observable_messages(task_id=task_id, run_id=run_id)
+        records, run = context_service.list_observable_messages(task_id, turn=turn)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="task or run not found") from exc
-    return [ContextMessageResponse.from_record(record) for record in records]
+        raise HTTPException(status_code=404, detail="task not found") from exc
+    return ContextObservationResponse(
+        messages=[ContextMessageResponse.from_record(record) for record in records],
+        run=ContextTurnRunResponse.from_record(run) if run is not None else None,
+    )
 
 
 @app.get("/tasks/{task_id}")
@@ -89,7 +92,7 @@ async def fork_task(
     """从源 Task 的某条回复往后分叉：新 Task 继承到这条回复为止的上下文。"""
 
     try:
-        target = await task_service.fork_task(task_id, reply=payload.reply)
+        target = await task_service.fork_task(task_id, turn=payload.turn)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="task or message not found") from exc
     except TaskForkConflictError as exc:

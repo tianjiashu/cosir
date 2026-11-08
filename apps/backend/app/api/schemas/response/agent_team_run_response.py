@@ -17,7 +17,6 @@ class AgentTeamNodeVisitResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     visit_number: int
-    conversation_run_id: int | None
     status: str
     agents: list[AgentTeamAgentResponse]
 

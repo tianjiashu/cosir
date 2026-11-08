@@ -20,7 +20,11 @@ from app.api.schemas.request.ModelConfigFieldsRequest import ModelConfigFieldsRe
 from app.api.schemas.request.ModelConfigTestRequest import ModelConfigTestRequest
 from app.api.schemas.request.ModelConfigUpdateRequest import ModelConfigUpdateRequest
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
-from app.api.schemas.response.ContextMessageResponse import ContextMessageResponse
+from app.api.schemas.response.ContextMessageResponse import (
+    ContextMessageResponse,
+    ContextObservationResponse,
+    ContextTurnRunResponse,
+)
 from app.api.schemas.response.DeleteTaskResponse import DeleteTaskResponse
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse
 from app.api.schemas.response.EnvironmentResponse import (
@@ -43,6 +47,8 @@ __all__ = [
     "AgentConfigurationRequest",
     "AgentConfigurationResponse",
     "ContextMessageResponse",
+    "ContextObservationResponse",
+    "ContextTurnRunResponse",
     "CreateTaskRequest",
     "CreateWorkspaceRequest",
     "DeleteTaskResponse",

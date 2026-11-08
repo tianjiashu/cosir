@@ -4,7 +4,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.assistant_transport.request import TransportRequestError
 from app.assistant_transport.state.message_identity import parse_reply_id
-from app.models.fork_reply import ForkReply
 
 
 class ForkTaskRequest(BaseModel):
@@ -34,6 +33,6 @@ class ForkTaskRequest(BaseModel):
         return value
 
     @property
-    def reply(self) -> ForkReply:
-        """校验入口已保证可解码。"""
-        return cast(ForkReply, parse_reply_id(self.reply_message_id))
+    def turn(self) -> int:
+        """所选回复所在的回合号；校验入口已保证可解码。"""
+        return cast(int, parse_reply_id(self.reply_message_id))
