@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import deadlines from "@/electron/main/browser/contract/method-deadlines.json";
 import type { BrowserHost } from "@/electron/main/browser/browser-host";
 import { budgetSignal, deadlineMs, withinDeadline } from "@/electron/main/browser/deadlines";
-import { registerBrowserMethods } from "@/electron/main/browser/methods";
-import { HostMethodError, HostMethodRegistry } from "@/electron/main/host-link/methods";
+import { registerBrowserMethods } from "@/electron/main/browser/browser-methods";
+import { HostMethodError, HostMethodRegistry } from "@/electron/main/host-link/method-registry";
 
 /** 方法时限：契约文件覆盖每个请求类方法，到点以 `DEADLINE_EXCEEDED` 答复，act 的动作预算提前截止。 */
 

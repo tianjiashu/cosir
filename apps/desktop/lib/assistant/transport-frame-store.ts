@@ -17,7 +17,7 @@ import {
   toThreadMessageWithRenderContext,
   type TransportMessageRenderContext,
   type UserAddMessageCommand,
-} from "@/lib/assistant/converter";
+} from "@/lib/assistant/transport-message-converter";
 import { parseTransportState, validateTransportUpdate } from "@/lib/assistant/snapshot-validation";
 
 type TransportFrameBase = {

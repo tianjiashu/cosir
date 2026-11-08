@@ -157,7 +157,7 @@ Electron 桌面应用
 
 ### 宿主工具链路（后端工具 → 宿主方法）
 
-后端工具调用宿主（Electron main）能力的通用通道，不属于任何具体能力：链路只认「方法名 + JSON 参数」，宿主侧方法注册表（`electron/main/host-link/methods.ts`）按名分发，后端工具只经 `app/tools/host/host_call.py` 的 `call_host` 调用（等待、取消、时限与链路错误映射都在这里收口）。宿主是客户端：随 supervisor 快照在后端 ready 时连 WebSocket `/host/link`、generation 变化时换连接；首帧 `hello` 出示宿主拉起后端时注入的 `CODING_AGENT_HOST_TOKEN`，不一致即 4003 拒绝（网页也能连本机 WebSocket，token 是唯一身份依据）。请求只由后端发起；请求 ID 与取消登记归单条连接所有，旧连接的收尾不能操作新连接的同号请求。后端同一时刻只保留最新一条连接，断开或被顶替时未决请求以 `UNAVAILABLE` 失败，链路内不重放。渲染进程不在这条链路上，不作为工具执行端；需要用户在界面上作答的工具仍走 HITL 决定命令。当前注册的能力是内置浏览器（`browser.*`，`electron/main/browser/methods.ts`）：工具参数的唯一来源是后端参数模型，导出成 schema 由宿主校验（`params.ts`），出站形状在 `wire.ts`，错误码登记在 `errors.ts`，方法总时限归宿主（`contract/method-deadlines.json`，后端加链路余量等待）；四者由 `electron/main/browser/contract/` 与后端 `test_browser_contract_guard.py` 跨语言守着。
+后端工具调用宿主（Electron main）能力的通用通道，不属于任何具体能力：链路只认「方法名 + JSON 参数」，宿主侧方法注册表（`electron/main/host-link/method-registry.ts`）按名分发，后端工具只经 `app/tools/host/host_call.py` 的 `call_host` 调用（等待、取消、时限与链路错误映射都在这里收口）。宿主是客户端：随 supervisor 快照在后端 ready 时连 WebSocket `/host/link`、generation 变化时换连接；首帧 `hello` 出示宿主拉起后端时注入的 `CODING_AGENT_HOST_TOKEN`，不一致即 4003 拒绝（网页也能连本机 WebSocket，token 是唯一身份依据）。请求只由后端发起；请求 ID 与取消登记归单条连接所有，旧连接的收尾不能操作新连接的同号请求。后端同一时刻只保留最新一条连接，断开或被顶替时未决请求以 `UNAVAILABLE` 失败，链路内不重放。渲染进程不在这条链路上，不作为工具执行端；需要用户在界面上作答的工具仍走 HITL 决定命令。当前注册的能力是内置浏览器（`browser.*`，`electron/main/browser/browser-methods.ts`）：工具参数的唯一来源是后端参数模型，导出成 schema 由宿主校验（`params.ts`），出站形状在 `wire.ts`，错误码登记在 `errors.ts`，方法总时限归宿主（`contract/method-deadlines.json`，后端加链路余量等待）；四者由 `electron/main/browser/contract/` 与后端 `test_browser_contract_guard.py` 跨语言守着。
 
 ### 本机 HTTP 与 Assistant Transport
 

@@ -1,11 +1,11 @@
 import { create } from "zustand";
 
-import { createAgentEditorSession } from "@/lib/agent-editor/session";
-import { createTeamEditorSession } from "@/lib/agent-team-editor/session";
+import { createAgentEditorSession } from "@/lib/agent-editor/agent-editor-session";
+import { createTeamEditorSession } from "@/lib/agent-team-editor/agent-team-editor-session";
 import type { AgentConfigurationInput } from "@/lib/api/configuration";
 import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
 import { useDockStore } from "@/lib/layout/dock-store";
-import type { WorkbenchDraftTab, WorkbenchTab } from "./types";
+import type { WorkbenchDraftTab, WorkbenchTab } from "./workbench-tab-types";
 
 /**
  * 一个工作区的工作台：标签与激活项。面板显不显示是停靠区的事（`useDockStore`），不在这里：

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TransportMessage, TransportState } from "@/lib/assistant/contract";
-import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import {
   parseTransportFrame,
   TransportFrameStore,

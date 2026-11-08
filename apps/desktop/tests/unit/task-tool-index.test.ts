@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TransportFrameStore } from "@/lib/assistant/transport-frame-store";
 import { beginCommand, forgetCommands, reconcileCommands, stopTarget, useCommandRequests } from "@/lib/assistant/command-request-store";
-import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
+import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
 import { activity, assistantMessage, toolCallPart, transportState } from "./transport-fixtures";
 
 const entry = { toolCallId: "c0", kind: "terminal_command" as const, status: "running" as const, label: "任务", startedAt: "2026-11-07T00:00:00Z", endedAt: null };

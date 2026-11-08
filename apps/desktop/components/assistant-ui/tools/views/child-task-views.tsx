@@ -6,7 +6,7 @@ import { cancelTask } from "@/lib/assistant/task-commands";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
 import { cn } from "@/lib/utils";
-import { useWorkbenchActions } from "@/lib/workbench/context";
+import { useWorkbenchActions } from "@/lib/workbench/workbench-context";
 import { useEnsureTaskListed } from "@/components/layout/task-listing-context";
 import { useOpenTask } from "@/components/links/use-open-task";
 import { CallOpenButton } from "../call-open-button";

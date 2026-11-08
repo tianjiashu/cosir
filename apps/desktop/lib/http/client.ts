@@ -1,6 +1,6 @@
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId, type TraceId } from "@/lib/trace";
-import { parseHttpError } from "@/lib/http/errors";
+import { parseHttpError } from "@/lib/http/http-error";
 import { withTimeout } from "@/lib/async/abort-timeout";
 import { getBackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 

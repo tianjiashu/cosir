@@ -12,8 +12,8 @@ import {
   type FileInfo,
 } from "@/lib/api/workspace-files";
 import { queryKeys } from "@/lib/query/query-keys";
-import { fileSession, useFilesStore } from "@/lib/workspace-files/store";
-import { HttpError } from "@/lib/http/errors";
+import { fileSession, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
+import { HttpError } from "@/lib/http/http-error";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";

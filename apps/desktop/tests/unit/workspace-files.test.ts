@@ -3,7 +3,7 @@ import {
   fileSession,
   parentsOf,
   useFilesStore,
-} from "@/lib/workspace-files/store";
+} from "@/lib/workspace-files/workspace-files-store";
 import { useDockStore } from "@/lib/layout/dock-store";
 
 describe("workspace file sessions", () => {

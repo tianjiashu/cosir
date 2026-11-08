@@ -4,7 +4,7 @@ vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolved
 
 import { uploadAttachment } from "@/lib/assistant/attachments/attachment-upload";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 
 const file = () => new File(["x"], "a.png", { type: "image/png" });
 

@@ -1,6 +1,6 @@
 import type { BackendSnapshot } from "../../shared/host-contract";
 import { logDesktopEvent } from "../desktop-log";
-import { HostMethodError, type HostCallMeta, type HostMethodRegistry } from "./methods";
+import { HostMethodError, type HostCallMeta, type HostMethodRegistry } from "./method-registry";
 
 /**
  * 宿主工具链路客户端：宿主主动连后端的 `/host/link`，执行后端发来的方法调用。

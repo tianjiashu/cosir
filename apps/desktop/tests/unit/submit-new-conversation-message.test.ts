@@ -5,7 +5,7 @@ import {
   wasCommandPossiblyAccepted,
   type SubmitNewConversationMessageInput,
 } from "@/lib/assistant/submit-new-conversation-message";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 
 const input: SubmitNewConversationMessageInput = {
   taskId: 7,

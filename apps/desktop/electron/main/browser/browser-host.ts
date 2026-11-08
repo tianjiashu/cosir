@@ -2,7 +2,7 @@ import { OPERATION_DRAIN_MS } from "./operation";
 import { dialog, shell, type BrowserWindow, type DownloadItem, type Rectangle, type WebContents, type WindowOpenHandlerResponse } from "electron";
 
 import { logDesktopEvent } from "../desktop-log";
-import type { HostMethodError } from "../host-link/methods";
+import type { HostMethodError } from "../host-link/method-registry";
 import type {
   BrowserDialog,
   BrowserDialogAnswer,
@@ -14,7 +14,7 @@ import type {
   BrowserTabLimits,
 } from "../../shared/host-contract";
 import { BrowserTab, type EvaluateOutcome, type PageSnapshot } from "./browser-tab";
-import { browserPageWebPreferences, type BrowserSessionEvents } from "./browser-session";
+import { browserPageWebPreferences, type BrowserSessionEvents } from "./browser-partition";
 import { BrowserDownloads } from "./downloads";
 import { browserError } from "./errors";
 import type { ActResult } from "./input/actions";

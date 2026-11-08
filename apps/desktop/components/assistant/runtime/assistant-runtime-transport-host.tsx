@@ -8,7 +8,7 @@ import type { RuntimeRecovery } from "@/components/assistant/runtime/use-runtime
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportState } from "@/lib/assistant/contract";
-import type { ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { TransportHistoryContext } from "@/lib/assistant/transport-history-context";
 
 type AssistantRuntimeTransportHostProps = {

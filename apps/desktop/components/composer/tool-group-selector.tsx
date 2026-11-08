@@ -7,7 +7,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { EmptyState, LoadingState } from "@/components/ui/state-panel";
 import { Switch } from "@/components/ui/switch";
 import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
-import type { ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 
 type ToolGroupSelectorProps = {
   toolGroups: ToolGroupCatalog[];

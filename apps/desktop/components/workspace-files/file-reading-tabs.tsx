@@ -4,11 +4,11 @@ import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type Re
 import { useQuery } from "@tanstack/react-query";
 import { ReadingCommandsContext, type ReadingCommand, type ReadingCommandRegistry } from "@/lib/workspace-files/reading-commands";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { fileSession, useFilesStore } from "@/lib/workspace-files/store";
+import { fileSession, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 import { WorkspaceFileIcon } from "./file-icon";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { fileTabLabel } from "@/lib/workspace-files/tab-label";
+import { fileTabLabel } from "@/lib/workspace-files/file-tab-label";
 import { cn } from "@/lib/utils";
 import { panelTabClass } from "@/components/ui/panel-tokens";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";

@@ -78,7 +78,7 @@ test("工作台切换标签与收起都保留 Team 草稿和历史", async ({ pa
   await expect(page.getByLabel("消息输入")).toBeVisible();
   // 通过真实工作台装配入口创建工具草稿；后续操作及断言均使用页面。
   await page.evaluate(async draft => {
-    const modulePath = "/lib/workbench/store.ts";
+    const modulePath = "/lib/workbench/workbench-store.ts";
     const layoutModulePath = "/lib/layout/preferences.ts";
     const { useWorkbenchStore } = await import(/* @vite-ignore */ modulePath);
     const { useLayoutPreferences } = await import(/* @vite-ignore */ layoutModulePath);
@@ -90,7 +90,7 @@ test("工作台切换标签与收起都保留 Team 草稿和历史", async ({ pa
   await page.getByRole("button", { name: "画布", exact: true }).click();
   await expect(node(page, 0)).toBeVisible();
   await page.evaluate(async () => {
-    const modulePath = "/lib/workbench/store.ts";
+    const modulePath = "/lib/workbench/workbench-store.ts";
     const { useWorkbenchStore } = await import(/* @vite-ignore */ modulePath);
     useWorkbenchStore.getState().openAgent(7, { taskId: 42, title: "另一个标签" });
   });

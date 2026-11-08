@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 import { fileReadProblem } from "@/lib/workspace-files/read-problem";
 
 describe("fileReadProblem", () => {

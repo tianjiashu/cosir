@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TransportState } from "@/lib/assistant/contract";
-import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { TaskTransportSession, type TaskTransportSessionCallbacks } from "@/lib/assistant/task-transport-session";
 import { TransportFrameStore } from "@/lib/assistant/transport-frame-store";
 import { activity, transportState, userMessage } from "./transport-fixtures";

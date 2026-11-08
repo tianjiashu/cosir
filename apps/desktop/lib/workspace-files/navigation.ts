@@ -1,5 +1,5 @@
 import { useDockStore } from "@/lib/layout/dock-store";
-import { useFilesStore } from "./store";
+import { useFilesStore } from "./workspace-files-store";
 
 
 /**

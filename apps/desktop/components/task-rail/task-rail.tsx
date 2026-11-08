@@ -15,7 +15,7 @@ import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSo
 import type { ElementSize } from "@/hooks/use-element-size";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TASK_RAIL_WIDTH, taskRailPlacement } from "@/lib/task-rail/placement";
-import { useTaskRailStore, type RailCardId } from "@/lib/task-rail/store";
+import { useTaskRailStore, type RailCardId } from "@/lib/task-rail/task-rail-store";
 import { cn } from "@/lib/utils";
 
 import { TASK_RAIL_CARDS } from "./cards";

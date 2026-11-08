@@ -1,4 +1,4 @@
-import { HostMethodError } from "../host-link/methods";
+import { HostMethodError } from "../host-link/method-registry";
 
 /** 执行 JS 的时限（含等 Promise）：页面本身没卡住，超时是脚本的结果，不是页面无响应。 */
 const EVALUATE_TIMEOUT_MS = 15_000;

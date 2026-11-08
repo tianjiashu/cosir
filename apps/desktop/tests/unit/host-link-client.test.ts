@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
 
 import type { BackendSnapshot } from "@/electron/shared/host-contract";
-import { HostLinkClient } from "@/electron/main/host-link/client";
-import { HostMethodError, HostMethodRegistry } from "@/electron/main/host-link/methods";
+import { HostLinkClient } from "@/electron/main/host-link/host-link-client";
+import { HostMethodError, HostMethodRegistry } from "@/electron/main/host-link/method-registry";
 
 /** 最小的 WebSocket 替身：记录发出的帧，由用例驱动 open / message / close。 */
 class FakeSocket {

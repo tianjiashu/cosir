@@ -1,6 +1,6 @@
 import { indexNodeIds } from "@/lib/agent-team-editor/node-id-index";
 import { useStore } from "zustand";
-import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
+import type { TeamEditorSession } from "@/lib/agent-team-editor/agent-team-editor-session";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import {

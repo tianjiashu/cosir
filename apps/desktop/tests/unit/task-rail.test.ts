@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { TASK_RAIL_WIDTH, taskRailPlacement } from "@/lib/task-rail/placement";
-import { normalizeTaskRailPreferences, TASK_RAIL_CARD_IDS } from "@/lib/task-rail/store";
+import { normalizeTaskRailPreferences, TASK_RAIL_CARD_IDS } from "@/lib/task-rail/task-rail-store";
 
 describe("会话侧栏偏好", () => {
   it("完整的当前偏好保持用户设置", () => {

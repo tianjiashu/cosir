@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { TransportOutcome } from "@/lib/assistant/contract";
-import { toAssistantMessageStatus, type TransportMessageRenderContext } from "@/lib/assistant/converter";
+import { toAssistantMessageStatus, type TransportMessageRenderContext } from "@/lib/assistant/transport-message-converter";
 import { parseTransportState } from "@/lib/assistant/snapshot-validation";
 import { activity, assistantMessage, outcome, transportState } from "./transport-fixtures";
 

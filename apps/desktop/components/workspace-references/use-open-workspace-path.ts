@@ -8,7 +8,7 @@ import { fileReadProblem } from "@/lib/workspace-files/read-problem";
 import { useDockStore } from "@/lib/layout/dock-store";
 import type { LineRange } from "@/lib/links/resolve-link";
 import { toWorkspacePath } from "@/lib/links/resolve-link";
-import { parentsOf, useFilesStore } from "@/lib/workspace-files/store";
+import { parentsOf, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 import { useReferenceBridge } from "./reference-bridge";
 
 export type OpenFileOptions = {

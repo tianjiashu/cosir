@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 import { resumeTask } from "@/lib/assistant/task-commands";
 import type { RuntimeSessionContext } from "@/components/assistant/runtime/runtime-types";
 import { UserFacingError } from "@/lib/errors/user-facing-error";

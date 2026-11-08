@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { bindComposerDraft, editDraftKey, forgetComposerDraft, forgetTaskComposerDrafts, readComposerDraft, recoverComposerDraft, recoverRejectedCommands, saveComposerDraft, subscribeComposerDrafts, taskDraftKey } from "@/lib/assistant/composer-drafts";
 import { applyEditDraftToComposer, editableDraftAttachments } from "@/lib/assistant/edit-composer-draft";
-import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 
 const draft = (text: string) => ({ text, attachments: [] });
 

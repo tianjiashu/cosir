@@ -1,7 +1,7 @@
-import { buildTeamOutline } from "@/lib/agent-team-editor/outline";
+import { buildTeamOutline } from "@/lib/agent-team-editor/team-outline";
 import { indexNodeIds } from "@/lib/agent-team-editor/node-id-index";
 import { useStore } from "zustand";
-import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
+import type { TeamEditorSession } from "@/lib/agent-team-editor/agent-team-editor-session";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PlayIcon, PlusIcon, SaveIcon, UnplugIcon } from "lucide-react";
 

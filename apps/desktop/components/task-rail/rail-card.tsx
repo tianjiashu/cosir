@@ -4,7 +4,7 @@ import { GripVerticalIcon } from "lucide-react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { useTaskRailStore, type RailCardId } from "@/lib/task-rail/store";
+import { useTaskRailStore, type RailCardId } from "@/lib/task-rail/task-rail-store";
 import { cn } from "@/lib/utils";
 
 import { TASK_RAIL_CARDS } from "./cards";

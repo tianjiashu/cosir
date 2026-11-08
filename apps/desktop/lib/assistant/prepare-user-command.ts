@@ -1,4 +1,4 @@
-import { getUserAddMessageSourceId, isUserAddMessageCommand, type UserAddMessageCommand } from "@/lib/assistant/converter";
+import { getUserAddMessageSourceId, isUserAddMessageCommand, type UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import {
   getLocalAttachmentById,
   LocalAttachmentUnavailableError,

@@ -1,8 +1,8 @@
 import { WebContentsView, type Rectangle, type WebContents, type WindowOpenHandlerResponse } from "electron";
 
 import { logDesktopEvent } from "../desktop-log";
-import type { HostMethodError } from "../host-link/methods";
-import { browserPageWebPreferences } from "./browser-session";
+import type { HostMethodError } from "../host-link/method-registry";
+import { browserPageWebPreferences } from "./browser-partition";
 import { CdpSession } from "./cdp-session";
 import { browserError } from "./errors";
 import { runActions, type ActResult } from "./input/actions";

@@ -9,7 +9,7 @@ const contents = vi.hoisted(() => ({
 vi.mock("electron", () => ({
   WebContentsView: class { webContents = contents; setBounds() {} },
 }));
-vi.mock("@/electron/main/browser/browser-session", () => ({ browserPageWebPreferences: () => ({}) }));
+vi.mock("@/electron/main/browser/browser-partition", () => ({ browserPageWebPreferences: () => ({}) }));
 vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
 import { BrowserHost } from "@/electron/main/browser/browser-host";
 
@@ -100,7 +100,7 @@ describe("BrowserTab 初始化与 Host 清理", () => {
     // 精确构造 ready 完成后、navigate 续执行前的取消，避免依赖真实线程调度概率。
     const entry = (host as unknown as { tabs: Map<string, { ready: Promise<void> }> }).tabs.get("t1")!;
     void entry.ready.then(() => queueMicrotask(() => owner.abort()));
-    // 被取消的请求不会应答（`host-link/client.ts`），拒绝原因无关紧要；要紧的是没有发起加载、标签留着。
+    // 被取消的请求不会应答（`host-link/host-link-client.ts`），拒绝原因无关紧要；要紧的是没有发起加载、标签留着。
     await expect(opening).rejects.toThrow();
     expect(contents.loadURL.mock.calls).toEqual([["about:blank"]]);
     expect(contents.close).not.toHaveBeenCalled();

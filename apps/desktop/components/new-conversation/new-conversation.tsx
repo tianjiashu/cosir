@@ -20,7 +20,7 @@ import { NewConversationKeyHints } from "@/components/new-conversation/key-hints
 import { modelUnavailable, startBlockedReason } from "@/components/new-conversation/start-readiness";
 import { Button } from "@/components/ui/button";
 import { createWorkspaceTask, deleteTask, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
-import type { ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { useModelCatalog } from "@/lib/model/catalog";
 import { cn } from "@/lib/utils";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model/selection-storage";

@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { getTask } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
-import { useWorkbenchActions } from "@/lib/workbench/context";
+import { useWorkbenchActions } from "@/lib/workbench/workbench-context";
 
 /** 侧栏里的对话 Task；其余（委派子 Agent、Team 节点）只能在工作台里读。 */
 const SIDEBAR_TASK_TYPES = new Set(["user", "user_fork", "agent_fork"]);

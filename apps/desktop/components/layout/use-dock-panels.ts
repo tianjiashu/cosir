@@ -8,7 +8,7 @@ import { useTaskBrowserTabs } from "@/lib/browser/host-state-store";
 import { useBrowserPanelStore } from "@/lib/browser/panel-store";
 import { useDockStore } from "@/lib/layout/dock-store";
 import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/keyboard/shortcuts";
-import { useWorkbenchSession } from "@/lib/workbench/store";
+import { useWorkbenchSession } from "@/lib/workbench/workbench-store";
 import { DOCK_PANEL_WIDTH, useLayoutPreferences, type DockPanel } from "@/lib/layout/preferences";
 
 const MAIN_MIN_WIDTH = 400;

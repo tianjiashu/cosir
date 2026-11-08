@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { countRunning, useBackgroundTasks } from "@/lib/background-tasks/store";
-import { useTaskRailStore } from "@/lib/task-rail/store";
+import { countRunning, useBackgroundTasks } from "@/lib/background-tasks/background-tasks-store";
+import { useTaskRailStore } from "@/lib/task-rail/task-rail-store";
 
 import { BackgroundTaskRow } from "./background-task-row";
 

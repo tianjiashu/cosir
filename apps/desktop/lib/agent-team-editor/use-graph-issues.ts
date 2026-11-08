@@ -3,7 +3,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useStore } from "zustand";
 
 import { checkAgentTeamGraph, type AgentTeamGraphIssue } from "@/lib/api/agent-teams";
-import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
+import type { TeamEditorSession } from "@/lib/agent-team-editor/agent-team-editor-session";
 import { queryKeys } from "@/lib/query/query-keys";
 
 /** 停止编辑多久后再检查；连续输入只发最后一次。 */

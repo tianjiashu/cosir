@@ -1,4 +1,4 @@
-import { createTeamEditorSession, type TeamEditorSession, type PersistTeam } from "@/lib/agent-team-editor/session";
+import { createTeamEditorSession, type TeamEditorSession, type PersistTeam } from "@/lib/agent-team-editor/agent-team-editor-session";
 import { TeamEditorUnsavedGuard } from "@/components/agent-team/unsaved-guard";
 import { confirmDiscardUnsaved } from "@/lib/unsaved-changes";
 import { useMemo, useState } from "react";

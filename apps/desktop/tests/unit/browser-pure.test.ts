@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { BrowserDialog, BrowserDialogAnswer } from "@/electron/shared/host-contract";
-import { HostMethodError } from "@/electron/main/host-link/methods";
+import { HostMethodError } from "@/electron/main/host-link/method-registry";
 import { runActions } from "@/electron/main/browser/input/actions";
 import type { Box } from "@/electron/main/browser/input/element";
 import { BrowserOperation, type FileChooser } from "@/electron/main/browser/operation";

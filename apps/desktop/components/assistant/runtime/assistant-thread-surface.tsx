@@ -8,7 +8,7 @@ import type {
   AssistantRuntimeProps,
 } from "@/components/assistant/runtime/runtime-types";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
-import type { ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 
 type AssistantThreadSurfaceProps = Pick<
   AssistantRuntimeProps,

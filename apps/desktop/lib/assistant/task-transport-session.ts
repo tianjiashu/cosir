@@ -1,5 +1,5 @@
 import { requestHistoryPage } from "@/lib/assistant/assistant-snapshot-client";
-import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { parseTransportFrame, type TransportFrameStore } from "@/lib/assistant/transport-frame-store";
 import { requestOk } from "@/lib/http/client";
 import { frontendLog } from "@/lib/logging/frontend-log";

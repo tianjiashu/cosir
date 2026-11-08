@@ -21,8 +21,8 @@ import {
   type FileEntry,
 } from "@/lib/api/workspace-files";
 import { queryKeys } from "@/lib/query/query-keys";
-import { HttpError } from "@/lib/http/errors";
-import { fileSession, parentsOf, useFilesStore, workspacePathText } from "@/lib/workspace-files/store";
+import { HttpError } from "@/lib/http/http-error";
+import { fileSession, parentsOf, useFilesStore, workspacePathText } from "@/lib/workspace-files/workspace-files-store";
 import { WorkspaceFileIcon } from "./file-icon";
 import { cn } from "@/lib/utils";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";

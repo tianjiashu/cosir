@@ -14,7 +14,7 @@ import {
   type ModelOption,
 } from "@/components/model/model-selector";
 import { ModelAvailability } from "@/components/model/model-availability";
-import { ModelConfigPanel } from "@/components/assistant-ui/model-config-panel";
+import { ModelConfigPanel } from "@/components/model/model-config-dialog";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
 import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
 import { RUN_LAUNCH_LOCKED_HINT } from "@/lib/assistant/run-launch";

@@ -2,7 +2,7 @@ import { outcome, assistantMessage, toolCallPart, activity } from "./transport-f
 import { useDisclosureStore } from "@/lib/assistant/disclosure-store";
 import type { ThreadMessage } from "@assistant-ui/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { toThreadMessageWithRenderContext } from "@/lib/assistant/converter";
+import { toThreadMessageWithRenderContext } from "@/lib/assistant/transport-message-converter";
 import type { TransportMessagePart, TransportOutcome } from "@/lib/assistant/contract";
 import * as turnLayout from "@/lib/assistant/turn-layout";
 

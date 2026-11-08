@@ -1,4 +1,4 @@
-import { HostMethodError } from "../../host-link/methods";
+import { HostMethodError } from "../../host-link/method-registry";
 import { browserError } from "../errors";
 import type { PageAction } from "../params";
 import { highlightTarget } from "./highlight";

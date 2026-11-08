@@ -7,14 +7,14 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { createAgentConfiguration, updateAgentConfiguration, type ConfigurationScope } from "@/lib/api/configuration";
-import type { PersistAgent } from "@/lib/agent-editor/session";
+import type { PersistAgent } from "@/lib/agent-editor/agent-editor-session";
 import { confirmCloseWorkbenchTab } from "@/lib/workbench/drafts";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
-import type { WorkbenchAgentConfigurationDraftTab } from "@/lib/workbench/types";
+import type { WorkbenchAgentConfigurationDraftTab } from "@/lib/workbench/workbench-tab-types";
 import { toolGroupsQueryOptions } from "@/lib/query/query-options";
 
 /**

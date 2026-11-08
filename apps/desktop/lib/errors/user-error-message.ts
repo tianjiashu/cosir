@@ -1,5 +1,5 @@
 import { UserFacingError } from "@/lib/errors/user-facing-error";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 
 /**
  * 把任意错误转换为可以展示给用户的中文文案——界面展示错误的唯一入口。

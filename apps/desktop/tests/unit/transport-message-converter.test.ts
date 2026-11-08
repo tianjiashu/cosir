@@ -7,7 +7,7 @@ import {
   toPendingUserMessage,
   toToolCallPart,
   type TransportMessageRenderContext,
-} from "@/lib/assistant/converter";
+} from "@/lib/assistant/transport-message-converter";
 import { registerInlineFileMetadata, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 import type { TransportMessage, TransportToolCallPart } from "@/lib/assistant/contract";
 import { activity, agentMessagePart, outcome, usage } from "./transport-fixtures";

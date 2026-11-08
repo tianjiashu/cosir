@@ -16,12 +16,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { PANEL_HEADER_CLASS, panelTabClass } from "@/components/ui/panel-tokens";
 import { WorkbenchAgentTabStatus } from "./agent-tab-status";
-import { WorkbenchSurface } from "./surface";
+import { WorkbenchSurface } from "./workbench-surface";
 import type { Workspace } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { confirmCloseWorkbenchTab, useWorkbenchTabDirty } from "@/lib/workbench/drafts";
-import { useWorkbenchStore } from "@/lib/workbench/store";
-import type { WorkbenchTab } from "@/lib/workbench/types";
+import { useWorkbenchStore } from "@/lib/workbench/workbench-store";
+import type { WorkbenchTab } from "@/lib/workbench/workbench-tab-types";
 
 /** 标签图标按 tab 种类区分：子 Agent 运行与两类配置草稿一眼可辨。新增 kind 时此表强制补齐。 */
 const TAB_KIND_ICONS: Record<WorkbenchTab["kind"], LucideIcon> = {

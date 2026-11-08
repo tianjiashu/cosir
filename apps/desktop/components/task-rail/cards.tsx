@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 
-import type { RailCardId } from "@/lib/task-rail/store";
+import type { RailCardId } from "@/lib/task-rail/task-rail-store";
 
 import { BackgroundTasksBody, BackgroundTasksSummary } from "./background-tasks-card";
 

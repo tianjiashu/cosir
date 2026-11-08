@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
 import type { TransportState } from "@/lib/assistant/contract";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 

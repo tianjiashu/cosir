@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createAgentEditorSession, type PersistAgent } from "@/lib/agent-editor/session";
+import { createAgentEditorSession, type PersistAgent } from "@/lib/agent-editor/agent-editor-session";
 import type { AgentConfiguration } from "@/lib/api/configuration";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 

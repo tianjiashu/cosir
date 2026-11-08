@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTeamEditorSession } from "@/lib/agent-team-editor/session";
+import { createTeamEditorSession } from "@/lib/agent-team-editor/agent-team-editor-session";
 import { exportDraft } from "@/lib/agent-team-editor/model";
 import { teamConfiguration } from "./team-editor-fixture";
 import type { AgentTeamConfiguration } from "@/lib/api/agent-teams";

@@ -1,7 +1,7 @@
 import type { ToolCalls } from "@/lib/assistant/tool-call-index";
 import { useCallback, useEffect, useMemo } from "react";
 
-import { getUserAddMessageSourceId, type UserAddMessageCommand } from "@/lib/assistant/converter";
+import { getUserAddMessageSourceId, type UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { recoverRejectedCommands } from "@/lib/assistant/composer-drafts";
 import {
   rerunTaskMessage,

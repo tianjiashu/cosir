@@ -31,7 +31,7 @@ async function fixture(page: Page, request: APIRequestContext) {
 async function seedDrafts(page: Page, team = false) {
   await expect(page.getByRole("button", { name: "浏览工作区文件" })).toBeVisible();
   await page.evaluate(async (withTeam) => {
-    const modulePath = "/lib/workbench/store.ts";
+    const modulePath = "/lib/workbench/workbench-store.ts";
     const { useWorkbenchStore } = await import(modulePath);
     const store = useWorkbenchStore.getState();
     if (withTeam) store.openAgentTeamConfigurationDraft(7, {
@@ -51,7 +51,7 @@ async function seedDrafts(page: Page, team = false) {
 /** 各工作区桶里的标签 id（空桶不列），以及右侧停靠区当前显示的面板。 */
 async function state(page: Page) {
   return page.evaluate(async () => {
-    const modulePath = "/lib/workbench/store.ts";
+    const modulePath = "/lib/workbench/workbench-store.ts";
     const dockModulePath = "/lib/layout/dock-store.ts";
     const { useWorkbenchStore } = await import(modulePath);
     const { useDockStore } = await import(dockModulePath);
@@ -194,7 +194,7 @@ test("Agent 与未激活 Team 标签直接反映草稿未保存状态", async ({
   await expect(team.locator(".sr-only")).toHaveText("未保存");
   await expect(team).toHaveAttribute("aria-selected", "false");
   await page.evaluate(async () => {
-    const modulePath = "/lib/workbench/store.ts";
+    const modulePath = "/lib/workbench/workbench-store.ts";
     const tabs = (await import(modulePath)).useWorkbenchStore.getState().sessions[7].tabs;
     const agent = tabs.find((tab: {kind: string}) => tab.kind === "agent-configuration-draft");
     const team = tabs.find((tab: {kind: string}) => tab.kind === "agent-team-configuration-draft");
@@ -204,7 +204,7 @@ test("Agent 与未激活 Team 标签直接反映草稿未保存状态", async ({
   await expect(agent.locator(".sr-only")).toHaveCount(0);
   await expect(team.locator(".sr-only")).toHaveCount(0);
   await page.evaluate(async () => {
-    const modulePath = "/lib/workbench/store.ts";
+    const modulePath = "/lib/workbench/workbench-store.ts";
     const tabs = (await import(modulePath)).useWorkbenchStore.getState().sessions[7].tabs;
     tabs.find((tab: {kind: string}) => tab.kind === "agent-team-configuration-draft").session.updateConfiguration({ description: "新的后台编辑" });
   });

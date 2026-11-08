@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 
 const FALLBACK = "保存失败，请检查配置后重试";
 

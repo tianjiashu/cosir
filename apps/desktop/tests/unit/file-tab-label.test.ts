@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileTabLabel } from "@/lib/workspace-files/tab-label";
+import { fileTabLabel } from "@/lib/workspace-files/file-tab-label";
 
 describe("文件标签最短可区分路径", () => {
   it("唯一文件只展示文件名", () => {

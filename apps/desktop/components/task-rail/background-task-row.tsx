@@ -2,7 +2,7 @@ import { commandPending, stopTarget, useCommandRequest } from "@/lib/assistant/c
 import { useEffect, useRef } from "react";
 import { BotIcon, CircleMinusIcon, SquareIcon, SquareTerminalIcon, UsersIcon, XCircleIcon, type LucideIcon } from "lucide-react";
 
-import { useTaskRailStore } from "@/lib/task-rail/store";
+import { useTaskRailStore } from "@/lib/task-rail/task-rail-store";
 import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
 import { DeferredDetail } from "@/components/assistant-ui/tools/deferred-detail";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
@@ -10,12 +10,12 @@ import { RenderIsolationBoundary } from "@/components/render-isolation/render-is
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import type { BackgroundTaskEntry, TransportToolCallPart } from "@/lib/assistant/contract";
-import { toToolCallPart } from "@/lib/assistant/converter";
+import { toToolCallPart } from "@/lib/assistant/transport-message-converter";
 import { callKey, useDisclosure } from "@/lib/assistant/disclosure-store";
 import { readToolArtifact } from "@/lib/assistant/tool-artifact";
 import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
-import { useBackgroundTaskPart } from "@/lib/background-tasks/store";
+import { useBackgroundTaskPart } from "@/lib/background-tasks/background-tasks-store";
 
 /** 新增后台结果种类时补一项（种类的事实源是后端 `BackgroundKind`）。 */
 const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {

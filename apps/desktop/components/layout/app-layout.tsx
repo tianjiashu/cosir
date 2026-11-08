@@ -44,7 +44,7 @@ import {
   useTerminalBadge,
   useTerminalWorkbenchStore,
 } from "@/lib/terminal/terminal-workbench-store";
-import { WorkbenchProvider } from "@/lib/workbench/context";
+import { WorkbenchProvider } from "@/lib/workbench/workbench-context";
 import { TaskListingContext } from "@/components/layout/task-listing-context";
 import { SIDEBAR_WIDTH, useLayoutPreferences } from "@/lib/layout/preferences";
 import { cn } from "@/lib/utils";

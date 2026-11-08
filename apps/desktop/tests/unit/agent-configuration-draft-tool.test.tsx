@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { AgentConfigurationDraftTool } from "@/components/assistant-ui/tools/agent-configuration-draft-tool";
-import { WorkbenchProvider } from "@/lib/workbench/context";
+import { WorkbenchProvider } from "@/lib/workbench/workbench-context";
 
 describe("AgentConfigurationDraftTool", () => {
   it.each([true, false])("可编辑配置草稿时只显示编辑入口，不显示放弃按钮 (interactive=%s)", (interactive) => {

@@ -1,4 +1,4 @@
-import type { HostMethodRegistry } from "../host-link/methods";
+import type { HostMethodRegistry } from "../host-link/method-registry";
 import type { BrowserHost } from "./browser-host";
 import { withinDeadline, type BrowserMethod } from "./deadlines";
 import { parseAct, parseDropTasks, parseEvaluate, parseLogs, parseNavigate, parseScreenshot, parseSnapshot, parseTabs } from "./params";

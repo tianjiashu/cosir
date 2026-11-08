@@ -1,4 +1,4 @@
-import type { PersistTeam } from "@/lib/agent-team-editor/session";
+import type { PersistTeam } from "@/lib/agent-team-editor/agent-team-editor-session";
 
 import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,7 +14,7 @@ import { visibleWorkspaceProfiles, type AgentProfilesByScope } from "@/lib/agent
 import { confirmCloseWorkbenchTab } from "@/lib/workbench/drafts";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { queryKeys } from "@/lib/query/query-keys";
-import type { WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
+import type { WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/workbench-tab-types";
 import { agentConfigurationsQueryOptions } from "@/lib/query/query-options";
 
 /**

@@ -1,10 +1,10 @@
 import { useCallback, useRef } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 
-import { countRunning, useBackgroundTasks } from "@/lib/background-tasks/store";
+import { countRunning, useBackgroundTasks } from "@/lib/background-tasks/background-tasks-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/keyboard/shortcuts";
-import { selectTaskRailVisible, useTaskRailStore } from "@/lib/task-rail/store";
+import { selectTaskRailVisible, useTaskRailStore } from "@/lib/task-rail/task-rail-store";
 
 /**
  * 会话侧栏在 AppLayout 里的接线：页头按钮、快捷键与侧栏本身共用这一份开关。

@@ -1,7 +1,7 @@
 import { useRef, useState, type ReactNode } from "react";
 import { MoreHorizontalIcon } from "lucide-react";
 import { copyText } from "@/lib/clipboard";
-import { workspacePathText } from "@/lib/workspace-files/store";
+import { workspacePathText } from "@/lib/workspace-files/workspace-files-store";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import type { FileInfo } from "@/lib/api/workspace-files";

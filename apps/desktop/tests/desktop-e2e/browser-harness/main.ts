@@ -1,9 +1,9 @@
 import { app, BrowserWindow } from "electron";
 
 import { BrowserHost } from "../../../electron/main/browser/browser-host";
-import { configureBrowserSession, configureBrowserUserAgent } from "../../../electron/main/browser/browser-session";
-import { registerBrowserMethods } from "../../../electron/main/browser/methods";
-import { HostMethodRegistry } from "../../../electron/main/host-link/methods";
+import { configureBrowserSession, configureBrowserUserAgent } from "../../../electron/main/browser/browser-partition";
+import { registerBrowserMethods } from "../../../electron/main/browser/browser-methods";
+import { HostMethodRegistry } from "../../../electron/main/host-link/method-registry";
 
 /**
  * 只供 `browser-engine.spec.ts` 使用的 Electron 入口：在真实 Electron 里直接驱动 `BrowserHost`，或经与生产相同的

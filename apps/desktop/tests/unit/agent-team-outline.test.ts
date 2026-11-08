@@ -1,6 +1,6 @@
 import { indexNodeIds } from "@/lib/agent-team-editor/node-id-index";
 import { describe, expect, it } from "vitest";
-import { buildTeamOutline } from "@/lib/agent-team-editor/outline";
+import { buildTeamOutline } from "@/lib/agent-team-editor/team-outline";
 import { createIdentityAllocator, importDraft } from "@/lib/agent-team-editor/model";
 import { teamConfiguration } from "./team-editor-fixture";
 

@@ -1,5 +1,5 @@
-import type { AgentEditorSession } from "@/lib/agent-editor/session";
-import type { TeamEditorSession } from "@/lib/agent-team-editor/session";
+import type { AgentEditorSession } from "@/lib/agent-editor/agent-editor-session";
+import type { TeamEditorSession } from "@/lib/agent-team-editor/agent-team-editor-session";
 
 /** 标签按工作区分桶存放（见 store），标签自身不再记录所属工作区。 */
 type WorkbenchAgentTab = {

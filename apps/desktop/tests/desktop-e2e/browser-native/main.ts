@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { BrowserHost } from "../../../electron/main/browser/browser-host";
 import type { BrowserTab } from "../../../electron/main/browser/browser-tab";
-import { configureBrowserSession, configureBrowserUserAgent } from "../../../electron/main/browser/browser-session";
+import { configureBrowserSession, configureBrowserUserAgent } from "../../../electron/main/browser/browser-partition";
 import { rendererSession } from "../../../electron/main/window";
 
 /** 独立原生 Electron 验收：没有 Playwright、远程调试端口或第二个页面接管器。只访问本机 HTTP。 */

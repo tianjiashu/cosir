@@ -12,7 +12,7 @@ vi.mock("@/electron/main/paths", () => ({
   systemDataRoot: () => tempRoot,
 }));
 vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
-vi.mock("@/electron/main/backend/runtime", () => ({
+vi.mock("@/electron/main/backend/backend-runtime", () => ({
   resolveBackendRuntime: vi.fn(async () => ({ mode: "python-module", launcher: "python", backendDir: tempRoot, terminalWorker: "worker" })),
 }));
 vi.mock("@/electron/main/backend/process", () => ({ spawnBackend: vi.fn(), stopProcessTree: vi.fn(async () => undefined) }));

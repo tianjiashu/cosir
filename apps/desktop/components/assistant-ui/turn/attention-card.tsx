@@ -3,7 +3,7 @@ import { asRecord } from "@/components/assistant-ui/tools/display-utils";
 import { ToolIcon } from "@/components/assistant-ui/tools/tool-icons";
 import { Button } from "@/components/ui/button";
 import { revealHandoff } from "@/lib/handoff/reveal";
-import { useHandoffStore } from "@/lib/handoff/store";
+import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useHandBack } from "@/lib/handoff/use-hand-back";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 import { toolHeading, toolIconName } from "@/lib/assistant/tool-catalog";

@@ -553,7 +553,7 @@ test("同名标签消歧、溢出菜单、临时替换和关闭后的目录入�
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await page.evaluate(async () => {
-    const modulePath = "/lib/workspace-files/store.ts";
+    const modulePath = "/lib/workspace-files/workspace-files-store.ts";
     const store = (await import(modulePath)).useFilesStore.getState();
     for (const path of ["src/index.ts", "test/index.ts", ...Array.from({length: 12}, (_, i) => `deep/folder/file-${i}.ts`)]) store.open(7, path, true);
     store.open(7, "temporary.ts");
@@ -570,7 +570,7 @@ test("同名标签消歧、溢出菜单、临时替换和关闭后的目录入�
   expect((await active.boundingBox())!.x).toBeGreaterThanOrEqual((await list.boundingBox())!.x);
   await expect(surface.getByRole("tab", { name: "src/index.ts", exact: true })).toHaveCount(1);
   await page.evaluate(async () => {
-    const modulePath = "/lib/workspace-files/store.ts";
+    const modulePath = "/lib/workspace-files/workspace-files-store.ts";
     const store = (await import(modulePath)).useFilesStore.getState();
     store.patch(7, { treeVisible: false });
     for (const tab of store.sessions[7].tabs) store.close(7, tab.path);

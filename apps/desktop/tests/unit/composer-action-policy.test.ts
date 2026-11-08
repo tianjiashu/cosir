@@ -7,7 +7,7 @@ import {
   isEditableLatestUserMessage,
   isQueuedUserMessage,
   canResumeStoppedRun,
-} from "@/lib/assistant/conversation-actions";
+} from "@/lib/assistant/composer-action-policy";
 import { activity, agentMessage, agentMessagePart, assistantMessage, queuedMessage, transportState, userMessage } from "./transport-fixtures";
 
 describe("conversation actions", () => {

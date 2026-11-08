@@ -1,9 +1,9 @@
 import { uploadAttachment, type UploadedAttachment } from "@/lib/assistant/attachments/attachment-upload";
-import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 import { sendTaskMessage, type TaskMessageRequest } from "@/lib/assistant/task-commands";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 import type { TraceId } from "@/lib/trace";
 
 type NewConversationImageAttachment = {

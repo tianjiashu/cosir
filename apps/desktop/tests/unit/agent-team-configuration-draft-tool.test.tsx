@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { AgentTeamConfigurationTool } from "@/components/assistant-ui/tools/agent-team-configuration-tool";
-import { WorkbenchProvider } from "@/lib/workbench/context";
+import { WorkbenchProvider } from "@/lib/workbench/workbench-context";
 
 describe("AgentTeamConfigurationTool", () => {
   it.each([true, false])("将未保存的 Team 草稿交给 Workbench 编辑，而不是直接落盘 (interactive=%s)", (interactive) => {

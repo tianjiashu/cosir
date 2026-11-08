@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { TextPreview } from "./text-preview";
 import { ImagePreview } from "./image-preview";
 import { fileInfoQueryOptions } from "@/lib/query/query-options";
-import { fileSession, useFilesStore, type ReadingView } from "@/lib/workspace-files/store";
+import { fileSession, useFilesStore, type ReadingView } from "@/lib/workspace-files/workspace-files-store";
 import type { FileInfo } from "@/lib/api/workspace-files";
 const PdfPreview = lazy(() => import("./pdf-preview"));
 

@@ -2,7 +2,7 @@ import { forgetTaskComposerDrafts } from "@/lib/assistant/composer-drafts";
 import { forgetTeamApprovalDrafts } from "@/lib/assistant/team-approval-draft";
 import { forgetCommands } from "@/lib/assistant/command-request-store";
 import { useDisclosureStore } from "@/lib/assistant/disclosure-store";
-import { useFilesStore } from "@/lib/workspace-files/store";
+import { useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -11,14 +11,14 @@ import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog
 import { deleteTask, deleteWorkspace, forkTask, type StartedConversation } from "@/lib/api/workspaces";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { forgetMessageHeights } from "@/lib/assistant/message-height-cache";
-import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
-import { useHandoffStore } from "@/lib/handoff/store";
+import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
+import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
-import { useWorkbenchStore } from "@/lib/workbench/store";
+import { useWorkbenchStore } from "@/lib/workbench/workbench-store";
 
 export type DeleteTarget =
   | { kind: "workspace"; id: number; label: string; taskCount: number }

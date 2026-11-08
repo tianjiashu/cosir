@@ -110,7 +110,7 @@ const test = base.extend<{ agent: Fixture }>({
 });
 async function open(page: Page, ids: number[]) {
   await page.evaluate(async taskIds => {
-    const path = "/lib/workbench/store.ts";
+    const path = "/lib/workbench/workbench-store.ts";
     const { useWorkbenchStore } = await import(path);
     for (const taskId of taskIds) useWorkbenchStore.getState().openAgent(7, { taskId, title: `Agent${taskId}` });
   }, ids);

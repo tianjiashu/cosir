@@ -6,7 +6,7 @@ import { useHandBack } from "@/lib/handoff/use-hand-back";
 
 /**
  * 资源面板里的交接提示：Agent 要用户做的事，以及「交还」。终端面板与浏览器面板共用，各自按 `surface` 与
- * 资源 id 从 `lib/handoff/store` 取到条目后放在自己的内容上方。
+ * 资源 id 从 `lib/handoff/handoff-store` 取到条目后放在自己的内容上方。
  */
 export function HandoffBanner({ taskId, entry, interactive = true }: { taskId: number; entry: HandoffEntry; interactive?: boolean }) {
   const { handBack, returning } = useHandBack(taskId, entry.toolCallId);

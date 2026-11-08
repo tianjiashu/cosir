@@ -31,14 +31,14 @@ import {
   isEditableLatestUserMessage,
   isQueuedUserMessage,
   canResumeStoppedRun,
-} from "@/lib/assistant/conversation-actions";
+} from "@/lib/assistant/composer-action-policy";
 import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
-import { EDIT_SESSION_RUN_CONFIG, isContinuedEditSession, toEditableUserMessageDraft } from "@/lib/assistant/converter";
+import { EDIT_SESSION_RUN_CONFIG, isContinuedEditSession, toEditableUserMessageDraft } from "@/lib/assistant/transport-message-converter";
 import { editableDocumentAttachments } from "@/lib/assistant/editable-user-document";
 import { isActiveRunStatus, type InputDelivery, type TransportActivity, type TransportMessageSource } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
-import type { ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
 import { RUN_LAUNCH_LOCKED_HINT, useActiveRunLaunch } from "@/lib/assistant/run-launch";
 import { AttachmentWorkspaceContext } from "@/components/assistant-ui/elements/attachment-context";

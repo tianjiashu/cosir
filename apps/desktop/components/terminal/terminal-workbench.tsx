@@ -9,7 +9,7 @@ import { PanelDock } from "@/components/ui/panel-dock";
 import { PANEL_HEADER_CLASS } from "@/components/ui/panel-tokens";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
 import { useOpenLink } from "@/components/links/use-open-link";
-import { handoffOn, useHandoffStore } from "@/lib/handoff/store";
+import { handoffOn, useHandoffStore } from "@/lib/handoff/handoff-store";
 import { queryKeys } from "@/lib/query/query-keys";
 import { listTerminalShells } from "@/lib/terminal/terminal-api";
 import { terminalNoticeClass, terminalPaneStatus } from "@/lib/terminal/terminal-pane-status";

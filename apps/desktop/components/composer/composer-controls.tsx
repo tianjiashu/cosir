@@ -1,4 +1,4 @@
-import { ModelSelector } from "@/components/assistant-ui/model-selector";
+import { ModelSelector } from "@/components/composer/composer-model-selector";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
 import type { ModelSelectionScope } from "@/lib/model/selection-storage";
 

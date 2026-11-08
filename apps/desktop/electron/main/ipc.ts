@@ -7,7 +7,7 @@ import { httpUrl, tabContextOf } from "./browser/params";
 import { addressToUrl } from "./browser/web-url";
 import { BROWSER_USER_WORDING, type BrowserErrorCode } from "./browser/errors";
 import { appendJsonLine, logDesktopEvent } from "./desktop-log";
-import { HostMethodError } from "./host-link/methods";
+import { HostMethodError } from "./host-link/method-registry";
 import { HostUserError } from "./host-user-error";
 import { appLogDir } from "./paths";
 import {

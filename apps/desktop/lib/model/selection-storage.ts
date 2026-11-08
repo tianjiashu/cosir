@@ -2,11 +2,11 @@
  * 模型选择持久化读写（localStorage）。
  *
  * 这是「模型选择」存储契约的唯一真相来源：key 构造、类型定义、解析与
- * 合法性判断都收口在此文件；写入侧（model-selector.tsx、new-conversation.tsx）与读取侧
+ * 合法性判断都收口在此文件；写入侧（composer-model-selector.tsx、new-conversation.tsx）与读取侧
  * （use-runtime-transport.ts 等）都必须引用本模块，禁止各自重写 key 构造或解析逻辑。
  */
 
-import { REASONING_EFFORT_VALUES } from "@/lib/model/selection-constants";
+import { REASONING_EFFORT_VALUES } from "@/lib/model/reasoning-effort";
 
 export type ModelSelection = {
   modelConfigId: number;

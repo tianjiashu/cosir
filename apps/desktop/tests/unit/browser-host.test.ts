@@ -6,7 +6,7 @@ vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
 vi.mock("@/electron/main/browser/browser-tab", () => ({
   get BrowserTab() { return FakeTab; },
 }));
-vi.mock("@/electron/main/browser/browser-session", () => ({ browserPageWebPreferences: () => ({}) }));
+vi.mock("@/electron/main/browser/browser-partition", () => ({ browserPageWebPreferences: () => ({}) }));
 import { deadlineMs, withinDeadline } from "@/electron/main/browser/deadlines";
 import { BrowserHost } from "@/electron/main/browser/browser-host";
 import fs from "node:fs";

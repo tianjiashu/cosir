@@ -15,7 +15,7 @@ import {
   submitToolDecision,
   type TaskMessageRequest,
 } from "@/lib/assistant/task-commands";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 
 const REQUEST: TaskMessageRequest = {
   message: { role: "user", parts: [{ type: "text", text: "hello" }] },

@@ -2,7 +2,7 @@ import { commandPending, decisionTarget, useCommandRequest } from "@/lib/assista
 import { useCallback } from "react";
 
 import { submitToolDecision } from "@/lib/assistant/task-commands";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 

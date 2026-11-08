@@ -2,7 +2,7 @@ import {
   referenceName,
   type WorkspaceReference,
 } from "@/lib/workspace-references/codec";
-import { useFilesStore } from "@/lib/workspace-files/store";
+import { useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 import { Button } from "@/components/ui/button";
 import { CodePreview } from "@/components/workspace-files/code-preview";
 

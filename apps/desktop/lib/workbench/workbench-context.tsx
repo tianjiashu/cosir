@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 
-import { useWorkbenchStore, type AgentDraftInput, type TeamDraftInput } from "./store";
+import { useWorkbenchStore, type AgentDraftInput, type TeamDraftInput } from "./workbench-store";
 
 type WorkbenchContextValue = {
   /** 工作台当前显示的工作区；工具卡片据此决定能否打开标签，以及打开到哪个工作区的桶。 */

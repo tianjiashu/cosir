@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useStore } from "zustand";
 import { Redo2Icon, Undo2Icon } from "lucide-react";
-import type { TeamEditorSession, PersistTeam } from "@/lib/agent-team-editor/session";
+import type { TeamEditorSession, PersistTeam } from "@/lib/agent-team-editor/agent-team-editor-session";
 import { AgentTeamConfigurationForm } from "@/components/agent-team/configuration-form";
 
 import { Button } from "@/components/ui/button";

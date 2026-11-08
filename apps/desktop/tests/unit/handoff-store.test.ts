@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { HandoffEntry } from "@/lib/assistant/contract";
 import { useBrowserPanelStore } from "@/lib/browser/panel-store";
-import { useHandoffStore } from "@/lib/handoff/store";
+import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useDockStore } from "@/lib/layout/dock-store";
 import { selectTerminalTask, useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 

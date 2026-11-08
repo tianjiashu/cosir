@@ -1,4 +1,4 @@
-import { HostMethodError } from "../host-link/methods";
+import { HostMethodError } from "../host-link/method-registry";
 
 /**
  * 浏览器方法经宿主工具链路交给后端的全部错误码：唯一登记处。后端按码给模型建议与卡片短提示

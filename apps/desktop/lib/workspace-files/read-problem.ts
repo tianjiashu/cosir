@@ -1,4 +1,4 @@
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 
 /**
  * 读取工作区文件失败时属于哪一类（后端错误码见 `api/workspace_files_api.py` 的 `file_errors`）。

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import readline from "node:readline";
 
 import { appendHostLogLine, logDesktopEvent } from "../desktop-log";
-import type { BackendRuntime } from "./runtime";
+import type { BackendRuntime } from "./backend-runtime";
 
 export type BackendLaunch = {
   runtime: BackendRuntime;
@@ -10,7 +10,7 @@ export type BackendLaunch = {
   bootstateFile: string;
   dataDir: string;
   consoleLogFile: string;
-  /** 宿主工具链路的认证 token（见 `host-link/client.ts`），后端据此只接受本宿主的连接。 */
+  /** 宿主工具链路的认证 token（见 `host-link/host-link-client.ts`），后端据此只接受本宿主的连接。 */
   hostToken: string;
 };
 

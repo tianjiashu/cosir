@@ -15,11 +15,11 @@ import type {
 } from "@/components/assistant/runtime/runtime-types";
 import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { useBackgroundTasksStore } from "@/lib/background-tasks/store";
-import { useHandoffStore } from "@/lib/handoff/store";
+import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
+import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { newTraceId } from "@/lib/trace";
-import type { ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 import { toolGroupsQueryOptions } from "@/lib/query/query-options";

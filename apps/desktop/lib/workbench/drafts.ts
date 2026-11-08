@@ -1,8 +1,8 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 import { confirmDiscard } from "@/lib/confirm/confirm-store";
-import { draftKey, isDraftTab, useWorkbenchStore } from "./store";
-import type { WorkbenchDraftTab, WorkbenchTab } from "./types";
+import { draftKey, isDraftTab, useWorkbenchStore } from "./workbench-store";
+import type { WorkbenchDraftTab, WorkbenchTab } from "./workbench-tab-types";
 
 /**
  * 标签是否有未保存的草稿：两类草稿会话（子 Agent / Team）的 store 都暴露 `dirty`，这里统一订阅，

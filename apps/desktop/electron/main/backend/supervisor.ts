@@ -9,7 +9,7 @@ import { appLogDir, runtimeDir, systemDataRoot } from "../paths";
 import { spawnBackend, stopProcessTree } from "./process";
 import { waitForBackend } from "./readiness";
 import { HostUserError } from "../host-user-error";
-import { resolveBackendRuntime } from "./runtime";
+import { resolveBackendRuntime } from "./backend-runtime";
 
 const HOST = "127.0.0.1";
 const READY_TIMEOUT_MS = 90_000;

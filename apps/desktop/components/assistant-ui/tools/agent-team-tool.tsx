@@ -5,7 +5,7 @@ import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon } from "lucide
 
 import { submitToolDecision, type ToolDecision } from "@/lib/assistant/task-commands";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/trace";
 import { Badge } from "@/components/ui/badge";

@@ -6,7 +6,7 @@ import { markdown } from "@codemirror/lang-markdown";
 
 import { editorTheme, useEditorSyntaxTheme } from "@/components/code-editor-theme";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
-import { handleMarkdownKeydown } from "@/components/markdown-editor/shortcuts";
+import { handleMarkdownKeydown } from "@/components/markdown-editor/markdown-editor-keymap";
 import { StaticMarkdown } from "@/components/static-markdown";
 import { ViewToggle } from "@/components/ui/view-toggle";
 

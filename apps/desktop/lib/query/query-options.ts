@@ -7,7 +7,7 @@
 import { queryOptions } from "@tanstack/react-query";
 
 import { getAgentConfigurations } from "@/lib/api/configuration";
-import { getToolGroups } from "@/lib/api/tools";
+import { getToolGroups } from "@/lib/api/tool-groups";
 import { getFileInfo } from "@/lib/api/workspace-files";
 import { getSystemSkills } from "@/lib/api/system-extensions";
 import { getModelConfigs } from "@/lib/api/model-configs";

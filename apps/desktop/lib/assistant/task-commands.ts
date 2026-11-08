@@ -13,7 +13,7 @@
  */
 
 import { jsonRequestInit, requestOk, type HttpRequestInit } from "@/lib/http/client";
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { backgroundTarget, beginCommand, decisionTarget, finishCommand, stopTarget, type CommandTarget } from "@/lib/assistant/command-request-store";

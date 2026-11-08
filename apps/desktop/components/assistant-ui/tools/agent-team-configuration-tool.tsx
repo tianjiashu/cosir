@@ -2,7 +2,7 @@ import { PencilIcon, UsersIcon } from "lucide-react";
 
 import { SURFACE_CARD_CLASS } from "@/components/assistant-ui/turn/turn-tokens";
 import { Button } from "@/components/ui/button";
-import { useWorkbenchActions } from "@/lib/workbench/context";
+import { useWorkbenchActions } from "@/lib/workbench/workbench-context";
 import { DraftSaveStatus } from "./draft-save-status";
 import { cn } from "@/lib/utils";
 import { readAgentTeamConfigurationDraftDisplay } from "./agent-team-display";

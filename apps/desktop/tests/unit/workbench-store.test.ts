@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useDockStore } from "@/lib/layout/dock-store";
-import { useWorkbenchStore } from "@/lib/workbench/store";
-import type { WorkbenchAgentConfigurationDraftTab, WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/types";
+import { useWorkbenchStore } from "@/lib/workbench/workbench-store";
+import type { WorkbenchAgentConfigurationDraftTab, WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/workbench-tab-types";
 
 const agentDraft = {
   agent_id: "reviewer",

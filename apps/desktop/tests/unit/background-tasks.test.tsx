@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 // 服务端渲染读 store 的初始状态；组件只经 useBackgroundTasks / useForegroundWaits 读，这里换成可控的表。
 const board = vi.hoisted(() => ({ entries: new Map<number, unknown[]>(), waits: new Map<number, string[]>(), parts: new Map<string, unknown>(), open: new Set<string>() }));
-vi.mock("@/lib/background-tasks/store", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@/lib/background-tasks/store")>(),
+vi.mock("@/lib/background-tasks/background-tasks-store", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/background-tasks/background-tasks-store")>(),
   useBackgroundTasks: (taskId: number | null) => (taskId === null ? [] : board.entries.get(taskId) ?? []),
   useForegroundWaits: (taskId: number | null) => (taskId === null ? [] : board.waits.get(taskId) ?? []),
   useBackgroundTaskPart: (_taskId: number, toolCallId: string) => board.parts.get(toolCallId) ?? null,
@@ -22,12 +22,12 @@ import { readToolArtifact } from "@/lib/assistant/tool-artifact";
 import { BackgroundTasksBody, BackgroundTasksSummary } from "@/components/task-rail/background-tasks-card";
 import { formatElapsed } from "@/components/task-rail/background-task-row";
 import type { BackgroundTaskEntry, TransportBackgroundWork, TransportToolCallPart } from "@/lib/assistant/contract";
-import { toToolCallPart } from "@/lib/assistant/converter";
+import { toToolCallPart } from "@/lib/assistant/transport-message-converter";
 import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
 import { backgroundToolCall } from "@/lib/assistant/task-commands";
 import { callKey, resolveDisclosure, useDisclosureStore } from "@/lib/assistant/disclosure-store";
-import { countRunning, useBackgroundTasksStore } from "@/lib/background-tasks/store";
-import { useTaskRailStore } from "@/lib/task-rail/store";
+import { countRunning, useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
+import { useTaskRailStore } from "@/lib/task-rail/task-rail-store";
 import { createQueryClient } from "@/lib/query/query-client";
 
 import { transportState, indexedState } from "./transport-fixtures";

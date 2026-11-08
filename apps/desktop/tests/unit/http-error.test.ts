@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { HttpError, parseHttpError } from "@/lib/http/errors";
+import { HttpError, parseHttpError } from "@/lib/http/http-error";
 
 describe("parseHttpError", () => {
   it("parses a direct structured error", async () => {

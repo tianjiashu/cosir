@@ -24,7 +24,7 @@ import {
   parentPath,
   parentsOf,
   useFilesStore,
-} from "@/lib/workspace-files/store";
+} from "@/lib/workspace-files/workspace-files-store";
 import {
   ResourceWatchContext,
   useResourceWatchTargets,
@@ -42,7 +42,7 @@ import { READING_ROW_CLASS, ReadingToolbar } from "./reading-toolbar";
  *
  * 头部一行是「目录开关 · 文件标签 · 全部文件 · 铺满 · 收起」；正文第一行左右对齐：目录栏放文件名搜索，
  * 阅读栏放各预览器的工具栏。面板够宽（≥650px）时目录与阅读并排，否则二者轮流占满，目录开关在两者间切换。
- * 浏览状态（打开的文件、展开的目录、目录宽度）按工作区存在 `lib/workspace-files/store`，收起面板不丢。
+ * 浏览状态（打开的文件、展开的目录、目录宽度）按工作区存在 `lib/workspace-files/workspace-files-store`，收起面板不丢。
  */
 export function WorkspaceFilesSurface({
   workspace,

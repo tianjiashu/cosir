@@ -25,8 +25,8 @@ import { LinkTaskContext, useOpenLink, type LinkOpener } from "@/components/link
 import { markdownRehypePlugins } from "@/components/markdown-rendering-config";
 import { ReferenceBridgeProvider } from "@/components/workspace-references/reference-bridge";
 import { useDockStore } from "@/lib/layout/dock-store";
-import { useFilesStore } from "@/lib/workspace-files/store";
-import { HttpError } from "@/lib/http/errors";
+import { useFilesStore } from "@/lib/workspace-files/workspace-files-store";
+import { HttpError } from "@/lib/http/http-error";
 import { createQueryClient } from "@/lib/query/query-client";
 import { QueryClientProvider } from "@tanstack/react-query";
 

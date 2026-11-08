@@ -15,7 +15,7 @@ import {
   TransportFrameStore,
   type FrameStoreItem,
 } from "@/lib/assistant/transport-frame-store";
-import type { UserAddMessageCommand } from "@/lib/assistant/converter";
+import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { reconcileCommands, releaseCommandObservation } from "./command-request-store";
 import { TaskTransportSession, type TransportDisconnect } from "@/lib/assistant/task-transport-session";
 import type { TraceId } from "@/lib/trace";

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState } from "@/components/ui/state-panel";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { fileReadProblem } from "@/lib/workspace-files/read-problem";
-import { useFilesStore } from "@/lib/workspace-files/store";
+import { useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 
 /**
  * 阅读器读不到文件时的统一展示（分类规则见 `lib/workspace-files/read-problem.ts`）。

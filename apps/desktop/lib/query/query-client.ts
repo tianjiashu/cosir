@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 
-import { HttpError } from "@/lib/http/errors";
+import { HttpError } from "@/lib/http/http-error";
 
 const MAX_QUERY_RETRIES = 2;
 

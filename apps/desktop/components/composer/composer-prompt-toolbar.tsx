@@ -1,7 +1,7 @@
 import { FavoritePromptToolbar } from "@/components/composer/favorite-prompt-toolbar";
 import { SkillsSelector } from "@/components/composer/skills-selector";
 import { ToolGroupSelector } from "@/components/composer/tool-group-selector";
-import type { ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 
 type ComposerPromptToolbarProps = {
   toolGroups: ToolGroupCatalog[];

@@ -4,7 +4,7 @@ import { WorkbenchAgentRunSurface } from "./agent-run-surface";
 import { AgentConfigurationDraftSurface } from "./agent-configuration-draft-surface";
 import { AgentTeamConfigurationDraftSurface } from "./agent-team-configuration-draft-surface";
 import type { Workspace } from "@/lib/api/workspaces";
-import type { WorkbenchTab } from "@/lib/workbench/types";
+import type { WorkbenchTab } from "@/lib/workbench/workbench-tab-types";
 
 type SurfaceProps<K extends WorkbenchTab["kind"]> = {
   workspace: Workspace;

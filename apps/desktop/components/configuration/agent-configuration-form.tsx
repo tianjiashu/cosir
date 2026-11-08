@@ -19,9 +19,9 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
-import type { AgentEditorSession } from "@/lib/agent-editor/session";
+import type { AgentEditorSession } from "@/lib/agent-editor/agent-editor-session";
 import type { ConfigurationScope } from "@/lib/api/configuration";
-import type { ToolGroupCatalog } from "@/lib/api/tools";
+import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { modelOptionId, unknownModelName, useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
 import type { ModelSettingsForm } from "@/lib/model/settings-form";
 
