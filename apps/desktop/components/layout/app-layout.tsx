@@ -12,9 +12,9 @@ import { FolderIcon, GlobeIcon, LayoutListIcon, PanelRightIcon, SquareTerminalIc
 import { useHotkeys } from "react-hotkeys-hook";
 
 import { ConversationAsideContext, type ConversationAside } from "@/components/assistant-ui/elements/conversation-aside";
-import { TaskRail } from "@/components/task-rail/task-rail";
-import { useTaskRail } from "@/components/task-rail/use-task-rail";
-import { TASK_RAIL_WIDTH } from "@/lib/task-rail/placement";
+import { ConversationAsidePanel } from "@/components/conversation-aside/conversation-aside-panel";
+import { useConversationAside } from "@/components/conversation-aside/use-conversation-aside";
+import { CONVERSATION_ASIDE_WIDTH } from "@/lib/conversation-aside/placement";
 import { CommandPalette } from "@/components/command-palette/command-palette";
 import { BackendStatusBanner } from "@/components/backend/status-banner";
 import { confirmBackendRestart } from "@/components/backend/backend-restart";
@@ -161,19 +161,19 @@ export function AppLayout() {
   }, [conversationTaskId]);
   useHotkeys(APP_SHORTCUTS.toggleTerminal.keys, toggleTerminal, { ...APP_HOTKEY_OPTIONS, enabled: conversationTaskId !== null }, [toggleTerminal]);
 
-  // ---- 会话侧栏：开关、摆放、页头角标与快捷键见 useTaskRail ----
-  const rail = useTaskRail(conversationTaskId);
-  // 对话页始终给视口一个附注：显隐要看视口量出的摆放，由 TaskRail 自己决定；崩溃兜底占网格右列，与固定时的位置一致。
+  // ---- 会话侧栏：开关、摆放、页头角标与快捷键见 useConversationAside ----
+  const rail = useConversationAside(conversationTaskId);
+  // 对话页始终给视口一个附注：显隐要看视口量出的摆放，由 ConversationAsidePanel 自己决定；崩溃兜底占网格右列，与固定时的位置一致。
   const conversationAside = useMemo<ConversationAside | null>(
     () => conversationTaskId === null ? null : (viewport) => (
       <IsolatedRegion
-        region="task-rail"
+        region="conversation-aside"
         label="会话侧栏"
-        resetKey={`task-rail:${conversationTaskId}`}
-        fallbackClassName="dock-panel bg-background col-start-2 row-start-1 m-2 w-(--task-rail-width) self-start p-3"
+        resetKey={`conversation-aside:${conversationTaskId}`}
+        fallbackClassName="dock-panel bg-background col-start-2 row-start-1 m-2 w-(--conversation-aside-width) self-start p-3"
         escape={{ label: "收起会话侧栏", onClick: (reset) => { rail.close(); reset(); } }}
       >
-        <TaskRail taskId={conversationTaskId} viewport={viewport} onClose={rail.close} />
+        <ConversationAsidePanel taskId={conversationTaskId} viewport={viewport} onClose={rail.close} />
       </IsolatedRegion>
     ),
     [conversationTaskId, rail.close],
@@ -339,7 +339,7 @@ export function AppLayout() {
                 {conversationTaskId !== null && (
                   <TooltipIconButton
                     ref={rail.buttonRef}
-                    tooltip={withShortcut([rail.visible ? "收起会话侧栏" : "打开会话侧栏", rail.runningCount > 0 && `${rail.runningCount} 个后台任务运行中`].filter(Boolean).join(" · "), "toggleTaskRail")}
+                    tooltip={withShortcut([rail.visible ? "收起会话侧栏" : "打开会话侧栏", rail.runningCount > 0 && `${rail.runningCount} 个后台任务运行中`].filter(Boolean).join(" · "), "toggleConversationAside")}
                     aria-label={`会话侧栏，${rail.runningCount} 个后台任务运行中`}
                     aria-pressed={rail.visible}
                     className={cn("relative size-7", rail.visible && "bg-muted text-foreground")}
@@ -366,9 +366,9 @@ export function AppLayout() {
           {/*
             会话侧栏不在这里占列：它是对话画布上的附注，经 ConversationAsideContext 交给对话视口，
             与内容列同在滚动容器的网格里（见 conversation-aside.tsx）。崩溃兜底只能给 class，经
-            `--task-rail-width` 与侧栏取同一个宽度常量。
+            `--conversation-aside-width` 与侧栏取同一个宽度常量。
           */}
-          <div style={{ "--task-rail-width": `${TASK_RAIL_WIDTH}px` } as CSSProperties} className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div style={{ "--conversation-aside-width": `${CONVERSATION_ASIDE_WIDTH}px` } as CSSProperties} className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
             {focusedTaskId !== null && (
               <div className="h-full" inert={!showTaskLayer} aria-hidden={!showTaskLayer || undefined}>
                 <ConversationAsideContext.Provider value={conversationAside}>

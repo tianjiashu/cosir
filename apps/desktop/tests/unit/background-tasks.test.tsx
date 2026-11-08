@@ -19,15 +19,15 @@ vi.mock("@/lib/assistant/disclosure-store", async (importOriginal) => ({
 
 import { ForegroundWaitAction } from "@/components/assistant-ui/tools/foreground-wait-action";
 import { readToolArtifact } from "@/lib/assistant/tool-artifact";
-import { BackgroundTasksBody, BackgroundTasksSummary } from "@/components/task-rail/background-tasks-card";
-import { formatElapsed } from "@/components/task-rail/background-task-row";
+import { BackgroundTasksBody, BackgroundTasksSummary } from "@/components/conversation-aside/background-tasks-card";
+import { formatElapsed } from "@/components/conversation-aside/background-task-row";
 import type { BackgroundTaskEntry, TransportBackgroundWork, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/transport-message-converter";
 import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
 import { backgroundToolCall } from "@/lib/assistant/task-commands";
 import { callKey, resolveDisclosure, useDisclosureStore } from "@/lib/assistant/disclosure-store";
 import { countRunning, useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
-import { useTaskRailStore } from "@/lib/task-rail/task-rail-store";
+import { useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
 import { createQueryClient } from "@/lib/query/query-client";
 
 import { transportState, indexedState } from "./transport-fixtures";
@@ -215,9 +215,9 @@ describe("后台任务卡", () => {
   });
 
   it("定位到看板时展开这一条，并打开侧栏与卡片", () => {
-    useTaskRailStore.setState({ open: false, collapsed: { "background-tasks": true } });
-    useTaskRailStore.getState().revealBackground(1, "a");
-    const state = useTaskRailStore.getState();
+    useConversationAsideStore.setState({ open: false, collapsed: { "background-tasks": true } });
+    useConversationAsideStore.getState().revealBackground(1, "a");
+    const state = useConversationAsideStore.getState();
     expect(state.open).toBe(true);
     expect(state.collapsed["background-tasks"]).toBe(false);
     expect(resolveDisclosure(1, callKey("a"), false)).toBe(true);

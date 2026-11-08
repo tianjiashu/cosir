@@ -16,7 +16,7 @@ export const APP_SHORTCUTS = {
   toggleTerminal: { keys: "ctrl+backquote", label: "切换终端" },
   // 与 VS Code 的辅助侧栏一致。
   toggleWorkbench: { keys: "mod+alt+b", label: "切换工作台" },
-  toggleTaskRail: { keys: "mod+alt+r", label: "切换会话侧栏" },
+  toggleConversationAside: { keys: "mod+alt+r", label: "切换会话侧栏" },
   // 只在 Markdown 配置面板挂载期间绑定。
   saveConfiguration: { keys: "mod+s", label: "保存" },
   // 只在文件面板内生效（见 `lib/workspace-files/reading-commands.ts`）；与 Cursor 的「Add to Chat」一致。

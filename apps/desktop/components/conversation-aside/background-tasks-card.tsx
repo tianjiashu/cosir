@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { countRunning, useBackgroundTasks } from "@/lib/background-tasks/background-tasks-store";
-import { useTaskRailStore } from "@/lib/task-rail/task-rail-store";
+import { useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
 
 import { BackgroundTaskRow } from "./background-task-row";
 
@@ -31,7 +31,7 @@ export function BackgroundTasksBody({ taskId }: { taskId: number }) {
   const ended = entries.filter((entry) => entry.status === "completed" || entry.status === "cancelled");
   const now = useNow(countRunning(entries) > 0);
   // 定位目标在折叠的「已结束」里时先展开列表，行挂载后才接得住定位。
-  const revealEnded = useTaskRailStore((state) => state.revealCall?.taskId === taskId && ended.some((entry) => entry.toolCallId === state.revealCall?.callId));
+  const revealEnded = useConversationAsideStore((state) => state.revealCall?.taskId === taskId && ended.some((entry) => entry.toolCallId === state.revealCall?.callId));
   useEffect(() => { if (revealEnded) setShowEnded(true); }, [revealEnded]);
   if (entries.length === 0) return <p className="text-muted-foreground px-1 py-1 text-xs">没有后台任务</p>;
 

@@ -59,10 +59,10 @@ test("窗口宽高与面板开关不重新执行会话和线程，也不重连�
   await page.setViewportSize({ width: 1500, height: 900 });
   await settleLayout(page);
   expect(await counts()).toEqual({ session: 0, thread: 0 });
-  await expect(page.getByRole("complementary", { name: "会话侧栏" })).toHaveAttribute("data-task-rail", "docked");
+  await expect(page.getByRole("complementary", { name: "会话侧栏" })).toHaveAttribute("data-conversation-aside", "docked");
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   await page.getByRole("button", { name: /^会话侧栏/ }).click();
-  await expect(page.getByRole("complementary", { name: "会话侧栏" })).toHaveAttribute("data-task-rail", "floating");
+  await expect(page.getByRole("complementary", { name: "会话侧栏" })).toHaveAttribute("data-conversation-aside", "floating");
   await page.getByRole("button", { name: "收起文件", exact: true }).click();
   await settleLayout(page);
   expect(await counts()).toEqual({ session: 0, thread: 0 });

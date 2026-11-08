@@ -4,21 +4,21 @@ import { GripVerticalIcon } from "lucide-react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { useTaskRailStore, type RailCardId } from "@/lib/task-rail/task-rail-store";
+import { useConversationAsideStore, type AsideCardId } from "@/lib/conversation-aside/conversation-aside-store";
 import { cn } from "@/lib/utils";
 
-import { TASK_RAIL_CARDS } from "./cards";
+import { CONVERSATION_ASIDE_CARDS } from "./aside-card-registry";
 
 /**
  * 侧栏里一张卡片的外壳：标题行（折叠开关 + 摘要）、拖拽手柄与正文，所有卡片共用。
  *
  * 只有手柄能拖（整张卡可拖会让点标题折叠时误拖）；手柄与折叠箭头平时隐藏，悬停标题行或键盘聚焦时出现，
- * 键盘排序由 dnd-kit 提供（空格拿起、方向键移动、空格放下）。折叠状态是全局偏好，见 `useTaskRailStore`。
+ * 键盘排序由 dnd-kit 提供（空格拿起、方向键移动、空格放下）。折叠状态是全局偏好，见 `useConversationAsideStore`。
  */
-export function RailCard({ id, taskId }: { id: RailCardId; taskId: number }) {
-  const { title, Summary, Body } = TASK_RAIL_CARDS[id];
-  const collapsed = useTaskRailStore((state) => state.collapsed[id] ?? false);
-  const setCollapsed = useTaskRailStore((state) => state.setCollapsed);
+export function AsideCard({ id, taskId }: { id: AsideCardId; taskId: number }) {
+  const { title, Summary, Body } = CONVERSATION_ASIDE_CARDS[id];
+  const collapsed = useConversationAsideStore((state) => state.collapsed[id] ?? false);
+  const setCollapsed = useConversationAsideStore((state) => state.setCollapsed);
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id });
 
   return (
@@ -26,7 +26,7 @@ export function RailCard({ id, taskId }: { id: RailCardId; taskId: number }) {
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
       aria-label={title}
-      data-rail-card={id}
+      data-aside-card={id}
       className={cn("bg-card rounded-xl border p-3 text-sm shadow-xs", isDragging && "relative z-10 shadow-panel")}
     >
       <Collapsible open={!collapsed} onOpenChange={(open) => setCollapsed(id, !open)}>

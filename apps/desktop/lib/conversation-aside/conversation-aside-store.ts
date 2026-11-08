@@ -3,18 +3,18 @@ import { persist } from "zustand/middleware";
 
 import { callKey, useDisclosureStore } from "@/lib/assistant/disclosure-store";
 
-/** 会话侧栏的卡片 id；新增卡片时在这里登记，并在卡片注册表（`components/task-rail/cards.tsx`）补齐实现。 */
-export const TASK_RAIL_CARD_IDS = ["background-tasks"] as const;
-export type RailCardId = (typeof TASK_RAIL_CARD_IDS)[number];
+/** 会话侧栏的卡片 id；新增卡片时在这里登记，并在卡片注册表（`components/conversation-aside/aside-card-registry.tsx`）补齐实现。 */
+export const CONVERSATION_ASIDE_CARD_IDS = ["background-tasks"] as const;
+export type AsideCardId = (typeof CONVERSATION_ASIDE_CARD_IDS)[number];
 
-type TaskRailPreferences = {
+type ConversationAsidePreferences = {
   open: boolean;
-  order: RailCardId[];
-  collapsed: Partial<Record<RailCardId, boolean>>;
+  order: AsideCardId[];
+  collapsed: Partial<Record<AsideCardId, boolean>>;
 };
 
-type TaskRailState = TaskRailPreferences & {
-  /** 对话视口放不下固定侧栏；`TaskRail` 按视口写入，页头开关据此判断在开关哪一种。 */
+type ConversationAsideState = ConversationAsidePreferences & {
+  /** 对话视口放不下固定侧栏；`ConversationAsidePanel` 按视口写入，页头开关据此判断在开关哪一种。 */
   floating: boolean;
   /** 窄屏浮层是否打开，不落盘：浮层盖在对话上，每次都由用户点开，宽屏的常驻偏好不带过来。 */
   floatOpen: boolean;
@@ -26,21 +26,21 @@ type TaskRailState = TaskRailPreferences & {
   consumeReveal: () => void;
   setFloating: (floating: boolean) => void;
   setVisible: (visible: boolean) => void;
-  setCollapsed: (id: RailCardId, collapsed: boolean) => void;
-  setOrder: (order: RailCardId[]) => void;
+  setCollapsed: (id: AsideCardId, collapsed: boolean) => void;
+  setOrder: (order: AsideCardId[]) => void;
 };
 
-function isCardId(value: unknown): value is RailCardId {
-  return TASK_RAIL_CARD_IDS.includes(value as RailCardId);
+function isCardId(value: unknown): value is AsideCardId {
+  return CONVERSATION_ASIDE_CARD_IDS.includes(value as AsideCardId);
 }
 
 /** 只接受当前完整偏好；结构不符时整体恢复默认值，不迁移卡片顺序或保留旧字段。 */
-export function normalizeTaskRailPreferences(raw: unknown): TaskRailPreferences {
-  const defaults: TaskRailPreferences = { open: true, order: [...TASK_RAIL_CARD_IDS], collapsed: {} };
+export function normalizeConversationAsidePreferences(raw: unknown): ConversationAsidePreferences {
+  const defaults: ConversationAsidePreferences = { open: true, order: [...CONVERSATION_ASIDE_CARD_IDS], collapsed: {} };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return defaults;
   const value = raw as Record<string, unknown>;
   if (Object.keys(value).length !== 3 || typeof value.open !== "boolean"
-    || !Array.isArray(value.order) || value.order.length !== TASK_RAIL_CARD_IDS.length
+    || !Array.isArray(value.order) || value.order.length !== CONVERSATION_ASIDE_CARD_IDS.length
     || !value.order.every(isCardId) || new Set(value.order).size !== value.order.length
     || typeof value.collapsed !== "object" || value.collapsed === null || Array.isArray(value.collapsed)
     || !Object.entries(value.collapsed).every(([id, folded]) => isCardId(id) && typeof folded === "boolean")) return defaults;
@@ -52,9 +52,9 @@ export function normalizeTaskRailPreferences(raw: unknown): TaskRailPreferences 
  * 页头按钮与侧栏都要实时读到同一份，所以是响应式 store，经 zustand `persist`（默认存 localStorage）落盘；
  * 存储不可用（隐私模式等）时只在本次会话内生效。
  */
-export const useTaskRailStore = create<TaskRailState>()(persist(
+export const useConversationAsideStore = create<ConversationAsideState>()(persist(
   (set) => ({
-    ...normalizeTaskRailPreferences(undefined),
+    ...normalizeConversationAsidePreferences(undefined),
     floating: false,
     floatOpen: false,
     revealCall: null,
@@ -69,10 +69,10 @@ export const useTaskRailStore = create<TaskRailState>()(persist(
     setOrder: (order) => set({ order }),
   }),
   {
-    name: "cosir:task-rail",
+    name: "cosir:conversation-aside",
     partialize: ({ open, order, collapsed }) => ({ open, order, collapsed }),
-    merge: (persisted, current) => ({ ...current, ...normalizeTaskRailPreferences(persisted) }),
+    merge: (persisted, current) => ({ ...current, ...normalizeConversationAsidePreferences(persisted) }),
   },
 ));
 
-export const selectTaskRailVisible = ({ floating, floatOpen, open }: TaskRailState): boolean => (floating ? floatOpen : open);
+export const selectConversationAsideVisible = ({ floating, floatOpen, open }: ConversationAsideState): boolean => (floating ? floatOpen : open);

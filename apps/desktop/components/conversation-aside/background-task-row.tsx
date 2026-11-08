@@ -2,7 +2,7 @@ import { commandPending, stopTarget, useCommandRequest } from "@/lib/assistant/c
 import { useEffect, useRef } from "react";
 import { BotIcon, CircleMinusIcon, SquareIcon, SquareTerminalIcon, UsersIcon, XCircleIcon, type LucideIcon } from "lucide-react";
 
-import { useTaskRailStore } from "@/lib/task-rail/task-rail-store";
+import { useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
 import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
 import { DeferredDetail } from "@/components/assistant-ui/tools/deferred-detail";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
@@ -46,12 +46,12 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
   const elapsed = entry.status === "settling"
     ? null
     : formatElapsed(Date.parse(entry.startedAt), entry.endedAt === null ? now : Date.parse(entry.endedAt));
-  const requested = useTaskRailStore((state) => state.revealCall);
+  const requested = useConversationAsideStore((state) => state.revealCall);
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (requested?.taskId === taskId && requested.callId === entry.toolCallId) {
       ref.current?.scrollIntoView({ block: "nearest" });
-      useTaskRailStore.getState().consumeReveal();
+      useConversationAsideStore.getState().consumeReveal();
     }
   }, [requested, taskId, entry.toolCallId]);
   const view = part && backgroundCallView(taskId, part, entry.status);

@@ -12,7 +12,7 @@ import { toolHeading, toolIconName } from "@/lib/assistant/tool-catalog";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 import { cn } from "@/lib/utils";
 import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
-import { useTaskRailStore } from "@/lib/task-rail/task-rail-store";
+import { useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
 import { ThinkingLabel } from "../turn/thinking-label";
 import { CallStatus } from "./call-status-badge";
 import { detailsLiveInRail, type CallViewContext } from "./call-view";
@@ -113,7 +113,7 @@ function CallRowContent({ taskId, toolCallId, toolName, args, artifact, interact
       type="button"
       data-slot="call-row"
       className={cn(ROW_CLASS, CLICKABLE_ROW_CLASS)}
-      onClick={() => useTaskRailStore.getState().revealBackground(taskId, toolCallId)}
+      onClick={() => useConversationAsideStore.getState().revealBackground(taskId, toolCallId)}
     >
       <span className="sr-only">在后台任务中查看：</span>
       {contents}

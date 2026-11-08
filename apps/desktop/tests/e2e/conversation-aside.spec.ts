@@ -29,7 +29,7 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 test("宽窗口默认固定为一列；打开右侧面板后收起，点开才浮起，关掉面板恢复固定", async ({ page }, testInfo) => {
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "docked");
   await expect(card(page)).not.toContainText("1 个运行中");
   await expect(card(page)).toContainText("cd /work && make");
   await expect(card(page).getByRole("button", { name: "后台任务", exact: true })).toBeInViewport({ ratio: 1 });
@@ -41,17 +41,17 @@ test("宽窗口默认固定为一列；打开右侧面板后收起，点开才�
   await expect(rail(page)).toHaveCount(0);
   await expect(railButton(page)).toHaveAttribute("aria-pressed", "false");
   await railButton(page).click();
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "floating");
   await expect(card(page).getByText("cd /work && make", { exact: true })).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: testInfo.outputPath("rail-floating.png") });
 
   await page.getByRole("button", { name: "收起文件", exact: true }).click();
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "docked");
 });
 
 // 目的：侧栏是对话画布上的附注；潜在缺陷：侧栏另占一整列时，滚动条竖在对话与侧栏之间、底部终端被它挤窄。
 test("固定的侧栏在对话视口里：靠视口最右侧，底部终端延伸到侧栏下方", async ({ page }, testInfo) => {
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "docked");
   const thread = page.locator(".aui-thread-root");
   await expect(thread.getByRole("complementary", { name: "会话侧栏" })).toBeVisible();
   const threadBox = (await thread.boundingBox())!;
@@ -70,7 +70,7 @@ test("固定的侧栏在对话视口里：靠视口最右侧，底部终端延�
 test("浮层非模态：点对话区不关闭，焦点在侧栏内按 Esc 关闭", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 900 });
   await railButton(page).click();
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "floating");
   // 浮层盖住的是对话区右上角，点左侧空白处的对话区。
   const thread = (await page.getByRole("main").boundingBox())!;
   await page.mouse.click(thread.x + 40, thread.y + thread.height / 2);
@@ -89,7 +89,7 @@ test("开关与折叠是全局偏好，刷新后保留；折叠时摘要仍在",
   await expect(card(page)).toContainText("1 个运行中");
   await page.reload();
   await expect(rail(page)).toBeVisible();
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "docked");
   await expect(card(page).getByRole("button", { name: "后台任务", exact: true })).toBeInViewport({ ratio: 1 });
   await expect(card(page)).toContainText("1 个运行中");
   await expect(card(page)).not.toContainText("cd /work && make");
@@ -104,37 +104,37 @@ test("两栏打开时切换会话：卡片完整可见，仍能随文件栏切�
   await railButton(page).click();
   await page.getByText("另一个会话", { exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`/tasks/${nextTaskId}$`));
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "floating");
   await expect(card(page).getByRole("button", { name: "后台任务", exact: true })).toBeInViewport({ ratio: 1 });
   await expect(card(page).getByText("没有后台任务", { exact: true })).toBeInViewport({ ratio: 1 });
 
   await page.getByRole("button", { name: "收起文件", exact: true }).click();
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "docked");
   await expect(card(page).getByText("没有后台任务", { exact: true })).toBeInViewport({ ratio: 1 });
 });
 
 test("刷新后展开的侧栏响应视口宽高，文件面板铺满再还原不丢失订阅", async ({ page }) => {
   await page.reload();
   const label = card(page).getByText("cd /work && make", { exact: true });
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "docked");
   await expect(label).toBeInViewport({ ratio: 1 });
 
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   await railButton(page).click();
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "floating");
   await expect(label).toBeInViewport({ ratio: 1 });
   await page.getByRole("button", { name: "铺满文件面板" }).click();
   await expect(rail(page)).toBeHidden();
   await page.getByRole("button", { name: "还原文件面板" }).click();
   await expect(label).toBeInViewport({ ratio: 1 });
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "floating");
 
   const previousMaxHeight = await rail(page).evaluate((element) => parseFloat(getComputedStyle(element).maxHeight));
   await page.setViewportSize({ width: 1600, height: 700 });
   await expect.poll(() => rail(page).evaluate((element) => parseFloat(getComputedStyle(element).maxHeight))).toBeLessThan(previousMaxHeight);
   await expect(label).toBeInViewport({ ratio: 1 });
   await page.getByRole("button", { name: "收起文件", exact: true }).click();
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "docked");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "docked");
 });
 
 test("渲染错误恢复重建视口后侧栏恢复，尺寸更新不重绘整个线程", async ({ page, request }) => {
@@ -164,7 +164,7 @@ test("渲染错误恢复重建视口后侧栏恢复，尺寸更新不重绘整�
     page.getByRole("button", { name: "重试", exact: true }).click(),
   ]);
   await expect(card(page).getByText("没有后台任务", { exact: true })).toBeInViewport({ ratio: 1 });
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "floating");
   // 等恢复提交落定再计数；只改变线程局部高度，隔离 AppLayout 自身的窗口尺寸订阅。
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => {
     (window as unknown as { railThreadProbe: { renders: number } }).railThreadProbe.renders = 0;
@@ -181,7 +181,7 @@ test("渲染错误恢复重建视口后侧栏恢复，尺寸更新不重绘整�
 test("只能按手柄拖动，键盘可拿起与取消；浮层里拖动中的 Esc 只取消拖动、不关闭侧栏", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 900 });
   await railButton(page).click();
-  await expect(rail(page)).toHaveAttribute("data-task-rail", "floating");
+  await expect(rail(page)).toHaveAttribute("data-conversation-aside", "floating");
   const handle = card(page).getByRole("button", { name: "拖动排序：后台任务" });
   await handle.focus();
   await page.keyboard.press("Space");

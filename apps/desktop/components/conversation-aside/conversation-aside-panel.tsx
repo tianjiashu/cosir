@@ -14,15 +14,15 @@ import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSo
 
 import type { ElementSize } from "@/hooks/use-element-size";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { TASK_RAIL_WIDTH, taskRailPlacement } from "@/lib/task-rail/placement";
-import { useTaskRailStore, type RailCardId } from "@/lib/task-rail/task-rail-store";
+import { CONVERSATION_ASIDE_WIDTH, conversationAsidePlacement } from "@/lib/conversation-aside/placement";
+import { useConversationAsideStore, type AsideCardId } from "@/lib/conversation-aside/conversation-aside-store";
 import { cn } from "@/lib/utils";
 
-import { TASK_RAIL_CARDS } from "./cards";
-import { RailCard } from "./rail-card";
+import { CONVERSATION_ASIDE_CARDS } from "./aside-card-registry";
+import { AsideCard } from "./aside-card";
 
 const MODIFIERS = [restrictToVerticalAxis, restrictToParentElement];
-const title = (id: unknown) => TASK_RAIL_CARDS[id as RailCardId].title;
+const title = (id: unknown) => CONVERSATION_ASIDE_CARDS[id as AsideCardId].title;
 const ANNOUNCEMENTS: Announcements = {
   onDragStart: ({ active }) => `已拿起「${title(active.id)}」`,
   onDragOver: ({ active, over }) => over ? `「${title(active.id)}」移到「${title(over.id)}」的位置` : undefined,
@@ -38,20 +38,20 @@ const FLOATING_MAX_HEIGHT_RATIO = 0.6;
  * AppLayout 经 `ConversationAsideContext` 把它交给线程视口，放在与内容列同一个网格里、粘在顶部
  * （见 `conversation-aside.tsx`），所以滚动条在视口最外侧，底部终端也不必给它让宽度。
  *
- * 摆放按对话视口宽度决定（`taskRailPlacement`）：`docked` 占网格右列，`floating` 与内容列叠在同一格
+ * 摆放按对话视口宽度决定（`conversationAsidePlacement`）：`docked` 占网格右列，`floating` 与内容列叠在同一格
  * 右上角、不占宽度。固定时默认显示；浮层会盖住对话，只在用户点开（或定位条目）时出现，从不自动弹出，
  * 所以这个组件在对话页常驻，靠它量出的摆放决定显示哪一种，也把摆放告诉页头开关。
  * 浮层是非模态的：点对话区不会关闭它（侧栏里是要盯着看的进度）；焦点在侧栏内时按 Esc 关闭，
- * 拖动中按 Esc 是 dnd-kit 的取消拖动，不关闭侧栏；关闭后焦点交还页头按钮由调用方负责（见 `useTaskRail`）。
- * 高度按视口封顶，卡片多了在侧栏内部滚动。卡片顺序与折叠是全局偏好（`useTaskRailStore`）。
+ * 拖动中按 Esc 是 dnd-kit 的取消拖动，不关闭侧栏；关闭后焦点交还页头按钮由调用方负责（见 `useConversationAside`）。
+ * 高度按视口封顶，卡片多了在侧栏内部滚动。卡片顺序与折叠是全局偏好（`useConversationAsideStore`）。
  */
-export function TaskRail({ taskId, viewport, onClose }: { taskId: number; viewport: ElementSize; onClose: () => void }) {
-  const placement = taskRailPlacement(viewport.width);
+export function ConversationAsidePanel({ taskId, viewport, onClose }: { taskId: number; viewport: ElementSize; onClose: () => void }) {
+  const placement = conversationAsidePlacement(viewport.width);
   const floating = placement === "floating";
-  const visible = useTaskRailStore((state) => (floating ? state.floatOpen : state.open));
-  const setFloating = useTaskRailStore((state) => state.setFloating);
-  const order = useTaskRailStore((state) => state.order);
-  const setOrder = useTaskRailStore((state) => state.setOrder);
+  const visible = useConversationAsideStore((state) => (floating ? state.floatOpen : state.open));
+  const setFloating = useConversationAsideStore((state) => state.setFloating);
+  const order = useConversationAsideStore((state) => state.order);
+  const setOrder = useConversationAsideStore((state) => state.setOrder);
   const [dragging, setDragging] = useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -63,9 +63,9 @@ export function TaskRail({ taskId, viewport, onClose }: { taskId: number; viewpo
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     setDragging(false);
     if (!over || active.id === over.id) return;
-    const next = arrayMove(order, order.indexOf(active.id as RailCardId), order.indexOf(over.id as RailCardId));
+    const next = arrayMove(order, order.indexOf(active.id as AsideCardId), order.indexOf(over.id as AsideCardId));
     setOrder(next);
-    void frontendLog("INFO", "task_rail_card_reordered", "会话侧栏卡片顺序已调整", { data: { taskId, order: next } });
+    void frontendLog("INFO", "conversation_aside_card_reordered", "会话侧栏卡片顺序已调整", { data: { taskId, order: next } });
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || !floating || dragging) return;
@@ -77,9 +77,9 @@ export function TaskRail({ taskId, viewport, onClose }: { taskId: number; viewpo
   return (
     <aside
       aria-label="会话侧栏"
-      data-task-rail={placement}
+      data-conversation-aside={placement}
       style={{
-        width: TASK_RAIL_WIDTH,
+        width: CONVERSATION_ASIDE_WIDTH,
         maxHeight: floating ? viewport.height * FLOATING_MAX_HEIGHT_RATIO : viewport.height,
       }}
       onKeyDown={onKeyDown}
@@ -100,7 +100,7 @@ export function TaskRail({ taskId, viewport, onClose }: { taskId: number; viewpo
         onDragEnd={onDragEnd}
       >
         <SortableContext items={order} strategy={verticalListSortingStrategy}>
-          {order.map((id) => <RailCard key={id} id={id} taskId={taskId} />)}
+          {order.map((id) => <AsideCard key={id} id={id} taskId={taskId} />)}
         </SortableContext>
       </DndContext>
     </aside>
