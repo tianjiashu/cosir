@@ -1,6 +1,8 @@
 # 路径语义审计：apps/desktop
 
-> 状态：审计清单，待用户决定批次。本文件是唯一产物，审计过程未改任何源码、配置或 AGENTS.md。
+> 状态：批 1–3 已执行（未提交，待验证后由用户提交）；批 4（D1、D2）与批 5（D3）待决定。下文清单保留审计时的原始路径，对照时以第 6 节批次表为准。
+> 执行偏差：A2 中的 `electron/main/browser/input/session.ts` 在审计后已被他人提交删除（`PageSession` 并入 `operation.ts`），该项取消；其余项均按清单执行。`tests/unit` 中随被测模块同步改名的有 `transport-message-converter`、`composer-action-policy`、`http-error`、`markdown-editor-keymap`、`terminal-output-viewport` 五个测试文件。
+> 审计过程本身未改任何源码、配置或 AGENTS.md。
 > 范围：用户限定为 `apps/desktop`。含 `components/`（298 个文件）、`lib/`（146）、`electron/`（73）、`hooks/`（4）、`app/`（2）、`src/`（3），共 526 个源文件；`tests/`、`scripts/` 只用来统计引用，不单独审。后端与 `apps/terminal-worker` 不在本次范围。
 > 标准：只看完整路径就能说出文件做什么、属于哪层，也能猜到新功能该放哪。
 

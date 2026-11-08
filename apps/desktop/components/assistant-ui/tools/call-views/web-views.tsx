@@ -1,7 +1,7 @@
 import { resolveLink } from "@/lib/links/resolve-link";
 import type { CallView } from "../call-view";
-import { readArray, readRecords } from "../display-utils";
-import { ExternalLinkRow, listDetail } from "./detail-view";
+import { readArray, readRecords } from "../display-data-readers";
+import { ExternalLinkRow, listDetail } from "./detail-parts";
 
 function siteOf(value: string): string {
   const target = resolveLink(value, { workspaceRoot: null });

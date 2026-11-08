@@ -1,8 +1,8 @@
 import { memo } from "react";
 import { useAuiState } from "@assistant-ui/react";
 
-import { AgentConfigurationDraftTool } from "@/components/assistant-ui/tools/agent-configuration-draft-tool";
-import { AgentTeamConfigurationTool } from "@/components/assistant-ui/tools/agent-team-configuration-tool";
+import { AgentConfigurationDraftTool } from "@/components/assistant-ui/tools/configuration-draft/agent-configuration-draft-tool";
+import { AgentTeamConfigurationTool } from "@/components/assistant-ui/tools/configuration-draft/agent-team-configuration-tool";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import { readToolArtifact } from "@/lib/assistant/tool-artifact";

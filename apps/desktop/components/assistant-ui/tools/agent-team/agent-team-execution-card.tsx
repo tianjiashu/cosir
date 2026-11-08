@@ -14,10 +14,10 @@ import { useWorkbenchActions } from "@/lib/workbench/workbench-context";
 import { SURFACE_CARD_CLASS } from "@/components/assistant-ui/turn/turn-tokens";
 import { cn } from "@/lib/utils";
 import { readAgentTeamRunDisplay } from "./agent-team-display";
-import type { ArtifactCardProps } from "./artifact-card-props";
+import type { ArtifactCardProps } from "../artifact-card-props";
 import type { AgentTeamRunDisplay } from "./agent-team-display";
 import { AgentTeamExecutionPipeline } from "./agent-team-execution-pipeline";
-import { ToolStopButton, useStopRequest } from "./tool-stop-button";
+import { ToolStopButton, useStopRequest } from "../tool-stop-button";
 
 type AgentTeamExecutionCardProps = ArtifactCardProps & {
   displayOverride?: AgentTeamRunDisplay;

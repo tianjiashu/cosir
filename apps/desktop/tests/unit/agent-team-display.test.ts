@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   readAgentTeamPreviewDisplay,
   readAgentTeamRunDisplay,
-} from "@/components/assistant-ui/tools/agent-team-display";
+} from "@/components/assistant-ui/tools/agent-team/agent-team-display";
 
 /** 构造后端预览展示数据（字段名以后端实际下发的契约为准）。 */
 function previewDisplayData(overrides: Record<string, unknown> = {}): Record<string, unknown> {

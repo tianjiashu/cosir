@@ -3,7 +3,7 @@ import { terminalStatusPresentation } from "@/lib/terminal/terminal-sessions";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { CallOpenButton } from "../call-open-button";
 import type { CallView } from "../call-view";
-import { asRecord, readText as text } from "../display-utils";
+import { asRecord, readText as text } from "../display-data-readers";
 
 /**
  * 条件等待的结束原因（后端 `wait_result.end_reason`）→ 中文；不据此宣告命令成功。`idle` 为未带等待条件。

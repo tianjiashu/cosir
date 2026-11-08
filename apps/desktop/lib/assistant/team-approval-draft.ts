@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { create } from "zustand";
-import type { AgentTeamPreviewDisplay } from "@/components/assistant-ui/tools/agent-team-display";
+import type { AgentTeamPreviewDisplay } from "@/components/assistant-ui/tools/agent-team/agent-team-display";
 
 type Draft = { goal: string; nodeGoals: AgentTeamPreviewDisplay["nodeGoals"]; feedback: string };
 

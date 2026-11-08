@@ -2,8 +2,8 @@ import { LinkIcon } from "lucide-react";
 import { WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
 import { cn } from "@/lib/utils";
 import type { CallView } from "../call-view";
-import { readArray, readRecords, readString } from "../display-utils";
-import { DETAIL_ROW_CLASS, listDetail } from "./detail-view";
+import { readArray, readRecords, readString } from "../display-data-readers";
+import { DETAIL_ROW_CLASS, listDetail } from "./detail-parts";
 import { HighlightedMatch } from "./highlighted-match";
 
 /** `file-list`：按 glob 找到的文件路径，可在文件面板打开。 */

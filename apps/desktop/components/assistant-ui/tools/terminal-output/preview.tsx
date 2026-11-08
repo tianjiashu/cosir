@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ansiColor, xtermCardTheme } from "@/components/terminal/xterm-appearance";
 import { useThemeState } from "@/lib/theme/theme-preference";
 
-import { parseTerminalOutput, type OutputRun, type ParsedOutput } from "./terminal-output-text";
+import { parseTerminalOutput, type OutputRun, type ParsedOutput } from "./text";
 
 /** 解析是异步的：新结果到达前继续显示上一版，流式输出不闪空。 */
 export function useParsedOutput(output: string): ParsedOutput | null {

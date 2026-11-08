@@ -9,14 +9,14 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useDisclosure } from "@/lib/assistant/disclosure-store";
-import { TerminalOutputPreview, useParsedOutput } from "../terminal-output-preview";
-import { TerminalOutputReader } from "../terminal-output-reader";
+import { TerminalOutputPreview, useParsedOutput } from "../terminal-output/preview";
+import { TerminalOutputReader } from "../terminal-output/reader";
 import { resolvePathText } from "@/lib/links/resolve-link";
 import { stopTarget } from "@/lib/assistant/command-request-store";
 import { cancelToolCall } from "@/lib/assistant/task-commands";
 import type { CallView, CallViewContext } from "../call-view";
-import { DetailSurface } from "../details/detail-view";
-import { readText as text } from "../display-utils";
+import { DetailSurface } from "./detail-parts";
+import { readText as text } from "../display-data-readers";
 import { ToolStopButton, useStopRequest } from "../tool-stop-button";
 
 /** 输出按原样保留：纯空白也是输出，不走 `readText`。 */

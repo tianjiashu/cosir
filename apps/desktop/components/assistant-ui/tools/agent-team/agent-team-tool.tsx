@@ -15,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { statusColorStyle } from "@/lib/agent-team-editor/team-status";
 import { useAgentTeamRunPolling } from "./agent-team-execution-card";
-import type { ArtifactCardProps } from "./artifact-card-props";
+import type { ArtifactCardProps } from "../artifact-card-props";
 import { readAgentTeamPreviewDisplay, type AgentTeamPreviewDisplay } from "./agent-team-display";
 
 function validateReviewedInputs(

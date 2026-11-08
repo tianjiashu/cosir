@@ -1,5 +1,5 @@
 import { readBrowserPageDisplay } from "@/components/assistant-ui/tools/browser-page-display";
-import { asRecord } from "@/components/assistant-ui/tools/display-utils";
+import { asRecord } from "@/components/assistant-ui/tools/display-data-readers";
 import { ToolIcon } from "@/components/assistant-ui/tools/tool-icons";
 import { Button } from "@/components/ui/button";
 import { revealHandoff } from "@/lib/handoff/reveal";

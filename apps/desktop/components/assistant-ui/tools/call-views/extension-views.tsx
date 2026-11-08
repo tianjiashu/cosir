@@ -1,6 +1,6 @@
 import type { CallView } from "../call-view";
-import { asRecord, readArray, readRecords } from "../display-utils";
-import { DETAIL_ROW_CLASS, DetailEmpty, listDetail } from "./detail-view";
+import { asRecord, readArray, readRecords } from "../display-data-readers";
+import { DETAIL_ROW_CLASS, DetailEmpty, listDetail } from "./detail-parts";
 
 /**
  * `mcp-tool-result`：`list` 列出服务与其工具；`call` 的结果正文只进模型上下文，

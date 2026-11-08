@@ -1,4 +1,4 @@
-import { asRecord } from "./display-utils";
+import { asRecord } from "../display-data-readers";
 
 export type AgentConfigurationDraftDisplay = {
   kind: "agent-configuration-draft";

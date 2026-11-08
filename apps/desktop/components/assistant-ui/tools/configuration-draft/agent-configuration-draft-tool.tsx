@@ -6,7 +6,7 @@ import { useWorkbenchActions } from "@/lib/workbench/workbench-context";
 import { DraftSaveStatus } from "./draft-save-status";
 import { cn } from "@/lib/utils";
 import { readAgentConfigurationDraftDisplay } from "./agent-configuration-draft-display";
-import type { ArtifactCardProps } from "./artifact-card-props";
+import type { ArtifactCardProps } from "../artifact-card-props";
 
 /** 产物区的只读配置提案卡；编辑和保存都委托给 Workbench。 */
 export function AgentConfigurationDraftTool({ artifact, taskId, toolCallId, interactive = true, inherited = false }: ArtifactCardProps) {

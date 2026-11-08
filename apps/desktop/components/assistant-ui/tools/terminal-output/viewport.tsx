@@ -5,7 +5,7 @@ import { useEffect, useImperativeHandle, useLayoutEffect, useRef, type Ref } fro
 import type { TerminalLinkOptions } from "@/components/terminal/terminal-links";
 import { xtermCardTheme } from "@/components/terminal/xterm-appearance";
 import { useThemeState } from "@/lib/theme/theme-preference";
-import { TerminalOutputView, type TerminalSnapshot } from "./terminal-output-view";
+import { TerminalOutputView, type TerminalSnapshot } from "./output-viewport";
 
 /** 视口对外只开放「取已渲染文本」：复制按钮在点击时才读，xterm 实例不出视口。 */
 export type TerminalViewportHandle = {

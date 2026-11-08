@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { useWorkbenchActions } from "@/lib/workbench/workbench-context";
 import { DraftSaveStatus } from "./draft-save-status";
 import { cn } from "@/lib/utils";
-import { readAgentTeamConfigurationDraftDisplay } from "./agent-team-display";
-import type { ArtifactCardProps } from "./artifact-card-props";
+import { readAgentTeamConfigurationDraftDisplay } from "../agent-team/agent-team-display";
+import type { ArtifactCardProps } from "../artifact-card-props";
 
 /** 产物区的 Team 配置候选卡；编辑和保存由 Workbench 负责。 */
 export function AgentTeamConfigurationTool({ artifact, taskId, toolCallId, interactive = true, inherited = false }: ArtifactCardProps) {

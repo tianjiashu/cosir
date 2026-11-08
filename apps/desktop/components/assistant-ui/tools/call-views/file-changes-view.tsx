@@ -6,7 +6,7 @@ import { WorkspacePathLink } from "@/components/workspace-references/workspace-p
 import { cn } from "@/lib/utils";
 import type { CallView } from "../call-view";
 import { readFileChanges, type FileChange } from "@/lib/assistant/file-changes";
-import { asRecord } from "../display-utils";
+import { asRecord } from "../display-data-readers";
 
 type ParsedFileDiff =
   | { kind: "ready"; file: FileData; }

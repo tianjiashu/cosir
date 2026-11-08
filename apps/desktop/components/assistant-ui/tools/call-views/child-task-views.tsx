@@ -11,7 +11,7 @@ import { useEnsureTaskListed } from "@/components/layout/task-listing-context";
 import { useOpenTask } from "@/components/links/use-open-task";
 import { CallOpenButton } from "../call-open-button";
 import type { CallView, CallViewContext } from "../call-view";
-import { DetailSurface } from "../details/detail-view";
+import { DetailSurface } from "./detail-parts";
 import { readAgentTaskResultDisplay, readDelegationDisplay, readForkDisplay, type AgentTaskResultDisplay } from "../child-agent-display";
 import { ToolStopButton, useStopRequest } from "../tool-stop-button";
 

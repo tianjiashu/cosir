@@ -1,6 +1,6 @@
 import { WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
 import { formatByteSize } from "@/lib/format/byte-size";
-import { asRecord } from "../display-utils";
+import { asRecord } from "../display-data-readers";
 import type { CallView } from "../call-view";
 
 function formatFileSize(value: unknown): string {

@@ -12,7 +12,7 @@ import { cn } from "@/lib/utils";
 import { readBrowserPageDisplay, type BrowserActStep, type BrowserPageDisplay } from "../browser-page-display";
 import { CallOpenButton } from "../call-open-button";
 import type { CallView } from "../call-view";
-import { DetailSurface } from "../details/detail-view";
+import { DetailSurface } from "./detail-parts";
 
 /** 地址与标题是调用当时的快照，不是事实源：标签页可能已经导航或关闭（关闭后只标注、不提供打开入口）。 */
 function BrowserPageMeta({ display }: { display: BrowserPageDisplay; }) {

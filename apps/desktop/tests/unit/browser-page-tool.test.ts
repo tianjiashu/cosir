@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { readBrowserPageDisplay } from "@/components/assistant-ui/tools/browser-page-display";
 import { resolveCallView } from "@/components/assistant-ui/tools/call-view-registry";
-import { browserPageView } from "@/components/assistant-ui/tools/views/browser-page-view";
+import { browserPageView } from "@/components/assistant-ui/tools/call-views/browser-page-view";
 import type { CallViewContext } from "@/components/assistant-ui/tools/call-view";
 import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
 

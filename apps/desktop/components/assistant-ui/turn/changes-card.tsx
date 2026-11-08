@@ -2,7 +2,7 @@ import { memo } from "react";
 import { DeferredDetail } from "../tools/deferred-detail";
 import { PencilLineIcon } from "lucide-react";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { DiffStat, FileDiff, fileChangeTag, hasTextDiff } from "@/components/assistant-ui/tools/views/file-changes-view";
+import { DiffStat, FileDiff, fileChangeTag, hasTextDiff } from "@/components/assistant-ui/tools/call-views/file-changes-view";
 import type { ChangedFile, ChangesCard as ChangesCardLayout } from "@/lib/assistant/turn-layout";
 import { fileKey, useDisclosure } from "@/lib/assistant/disclosure-store";
 import { cn } from "@/lib/utils";

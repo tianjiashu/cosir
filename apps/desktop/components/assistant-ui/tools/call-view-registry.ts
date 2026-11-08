@@ -1,16 +1,16 @@
-import { teamView } from "./views/team-view";
+import { teamView } from "./call-views/team-view";
 import { detailsLiveInRail, type CallView, type CallPresentation, type CallViewContext } from "./call-view";
-import { mcpView, skillView } from "./details/extension-views";
-import { imageReadView } from "./details/image-read-view";
-import { readFileView } from "./details/read-file-view";
-import { webExtractView, webSearchView } from "./details/web-views";
-import { contentSearchView, directoryListView, fileListView } from "./details/workspace-list-views";
-import { asRecord } from "./display-utils";
-import { browserPageView } from "./views/browser-page-view";
-import { agentTaskResultView, delegationView, forkTaskView } from "./views/child-task-views";
-import { fileChangesView } from "./views/file-changes-view";
-import { terminalResultView } from "./views/terminal-result-view";
-import { terminalSessionView } from "./views/terminal-session-view";
+import { mcpView, skillView } from "./call-views/extension-views";
+import { imageReadView } from "./call-views/image-read-view";
+import { readFileView } from "./call-views/read-file-view";
+import { webExtractView, webSearchView } from "./call-views/web-views";
+import { contentSearchView, directoryListView, fileListView } from "./call-views/workspace-list-views";
+import { asRecord } from "./display-data-readers";
+import { browserPageView } from "./call-views/browser-page-view";
+import { agentTaskResultView, delegationView, forkTaskView } from "./call-views/child-task-views";
+import { fileChangesView } from "./call-views/file-changes-view";
+import { terminalResultView } from "./call-views/terminal-result-view";
+import { terminalSessionView } from "./call-views/terminal-session-view";
 
 /**
  * `display_data.kind` → 调用行视图。这是前端唯一的工具展示路由：只按 kind，不按工具名、不按静态展示声明。

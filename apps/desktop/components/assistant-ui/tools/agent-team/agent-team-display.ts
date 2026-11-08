@@ -1,4 +1,4 @@
-import { asRecord, readText as text } from "./display-utils";
+import { asRecord, readText as text } from "../display-data-readers";
 import type { AgentTeamConfiguration, AgentTeamStatusConfiguration } from "@/lib/api/agent-teams";
 
 

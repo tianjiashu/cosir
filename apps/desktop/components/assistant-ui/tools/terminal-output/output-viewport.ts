@@ -7,9 +7,9 @@ import { registerTerminalLinks, type TerminalLinkOptions } from "@/components/te
 import { TerminalResizeController } from "@/components/terminal/terminal-resize-controller";
 import { xtermCardTheme, xtermPaneFont } from "@/components/terminal/xterm-appearance";
 
-import { reconcileTerminalOutput } from "./terminal-output-reconciler";
-import { bufferText, SCROLLBACK_ROWS } from "./terminal-output-text";
-import { TerminalWriteScheduler } from "./terminal-write-scheduler";
+import { reconcileTerminalOutput } from "./reconciler";
+import { bufferText, SCROLLBACK_ROWS } from "./text";
+import { TerminalWriteScheduler } from "./write-scheduler";
 
 export type TerminalSnapshot = {
   output: string;
