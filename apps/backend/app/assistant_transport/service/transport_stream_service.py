@@ -83,8 +83,7 @@ class AssistantTransportStreamService:
                 except SubscriberClosed:
                     return
                 except TimeoutError:
-                    if self._snapshots.is_task_deleted(task_id):
-                        return
+                    # Task 删除时订阅随 ``release_deleted_task`` 关闭，由 SubscriberClosed 结束。
                     if sent_since_idle:
                         sent_since_idle = False
                         yield None

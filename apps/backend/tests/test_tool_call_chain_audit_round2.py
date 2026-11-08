@@ -311,8 +311,7 @@ def _memory_manager(
     manager = object.__new__(RuntimeMessageContextManager)
     manager._max_turn = 0
     manager._run_turn = None
-    manager._run_has_input = False
-    manager._run_has_reply = False
+    manager._run_shown = False
 
     manager._used_call_ids = set()
 

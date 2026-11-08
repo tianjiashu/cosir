@@ -18,6 +18,7 @@ from app.core.workflow.execution_state.react_execution_state import ReactExecuti
 from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.service.recover_service import RecoverService
+from tests.model_config_fixtures import model_configs
 from tests.sdk_fixtures import sdk_completion
 
 
@@ -51,8 +52,7 @@ def _runtime_manager(context_store: _RecordingContextStore) -> RuntimeMessageCon
     manager = object.__new__(RuntimeMessageContextManager)
     manager._max_turn = 0
     manager._run_turn = None
-    manager._run_has_input = False
-    manager._run_has_reply = False
+    manager._run_shown = False
     manager._used_call_ids = set()
     manager._response_call_ids = {}
     manager.current_task_id = 7
@@ -228,9 +228,9 @@ def _creation_service(store, monkeypatch, projector):
         ),
     )
     monkeypatch.setattr(
-        "app.models.model_config_record.get_model_config_service",
-        lambda: SimpleNamespace(
-            get_config=lambda _id: SimpleNamespace(
+        "app.assistant_transport.service.user_input_service.get_model_config_service",
+        lambda: model_configs(
+            lambda _id: SimpleNamespace(
                 supports_reasoning_effort=False,
                 supports_image=False,
                 context_window_k=128,

@@ -104,7 +104,6 @@ async def test_draft_model_config(
 
     result = await service.test_draft(**payload.model_dump())
     return {
-        "config_id": result.config_id,
         "success": result.success,
         "elapsed_ms": result.elapsed_ms,
         "error_code": result.error_code,

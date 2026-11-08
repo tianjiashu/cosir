@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from app.models.conversation_run_options import ConversationRunOptions
+from app.models.conversation_run_record import ConversationRunRecord
 from app.models.task_kind import FORK_TASK_TYPES, TaskType
 
 
@@ -16,6 +17,12 @@ class TaskForkLaunch(BaseModel):
     agent_id: str | None
     model_config_id: int | None
     options: ConversationRunOptions
+
+    @classmethod
+    def from_run(cls, run: ConversationRunRecord) -> "TaskForkLaunch":
+        """冻结某个 Run 的发起配置作为分支的初始配置。"""
+
+        return cls(agent_id=run.agent_id, model_config_id=run.model_config_id, options=run.options)
 
 
 class TaskFork(BaseModel):

@@ -22,7 +22,7 @@ class RunInitializedEvent(WorkflowEventEnvelope):
     """一个 Run 已被创建并绑定到 Task。
 
     事实语义：Run 已落库，消费方据此把它设为 Task 当前活动；用户输入及 assistant 消息由各自的
-    事件追加。Run 只前进：编辑重跑新建 Run，不替换已有 Run。
+    事件追加。Run 只前进：撤回后再发送新建 Run，不替换已有 Run。
 
     Attributes:
         created_at: Run 记录的创建时间，由领域侧从落库的记录填入；投影为 ``activity.startedAt``，

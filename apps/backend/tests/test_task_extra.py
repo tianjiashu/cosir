@@ -5,10 +5,10 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.api.schemas.response.TaskResponse import TaskResponse
+from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
 from app.models.task_extra import TaskExtra, TaskFork, TaskNodeConfig
 from app.models.task_kind import TaskType
 from app.models.task_record import TaskRecord
-from app.service.conversation_run.task_launch import initial_task_launch
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.model.task_model import TaskModel
@@ -39,7 +39,7 @@ def test_task_kind_and_typed_extra_round_trip(kind, tmp_path):
     assert "team_node" not in response["extra"]  # execution configuration stays backend-only
     if extra.fork is not None:
         assert response["extra"]["fork"] == {"tree_parent_task_id": 123}
-        assert initial_task_launch(loaded) is None  # absent model does not prevent history fork
+        assert RunLaunch.from_fork(loaded) is None  # absent model does not prevent history fork
         assert loaded.extra.fork.initial_launch.options.reasoning_effort == "low"
 
 

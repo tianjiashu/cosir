@@ -7,13 +7,13 @@ from PIL import Image
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_task_state_service import _apply_mutation
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
+from app.config.constant import Constant
 from app.core.events import RunInitializedEvent
 from app.models.conversation_input import UserInputPresentation
 from app.service.attachment.image_normalizer import (
     ImageNormalizationError,
     normalize_image,
 )
-from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
 from tests.transport_fixtures import consumed
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
@@ -39,10 +39,10 @@ def test_normalize_resizes_image_by_longest_side(tmp_path: Path) -> None:
     result = normalize_image(source, target)
 
     assert result.target_format == "jpeg"
-    assert result.width == DEFAULT_IMAGE_INPUT_POLICY.max_image_side_px
+    assert result.width == Constant.Attachment.MAX_IMAGE_SIDE_PX
     assert result.height == 4_096
     with Image.open(target) as output:
-        assert output.size == (DEFAULT_IMAGE_INPUT_POLICY.max_image_side_px, 4_096)
+        assert output.size == (Constant.Attachment.MAX_IMAGE_SIDE_PX, 4_096)
 
 
 def test_normalize_preserves_already_supported_png(tmp_path: Path) -> None:
@@ -52,13 +52,12 @@ def test_normalize_preserves_already_supported_png(tmp_path: Path) -> None:
 
     result = normalize_image(source, target)
 
-    assert result.source_format == "png"
     assert result.target_format == "png"
     assert target.read_bytes() == source.read_bytes()
 
 
 def test_normalize_uses_unified_image_policy_as_format_source() -> None:
-    assert DEFAULT_IMAGE_INPUT_POLICY.supported_formats == {
+    assert Constant.Attachment.IMAGE_FORMATS == {
         "jpeg",
         "png",
     }

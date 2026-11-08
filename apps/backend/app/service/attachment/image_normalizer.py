@@ -9,7 +9,7 @@ from typing import BinaryIO
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
+from app.config.constant import Constant
 
 
 class ImageNormalizationError(ValueError):
@@ -29,7 +29,6 @@ class NormalizedImage:
     该值对象不负责持久化，也不负责再次验证模型能力。
     """
 
-    source_format: str
     target_format: str
     content_type: str
     path: Path
@@ -51,10 +50,6 @@ class StoredImage:
     byte_size: int
 
 
-_CONTENT_TYPES = {
-    "jpeg": "image/jpeg",
-    "png": "image/png",
-}
 
 
 def _normalize_format(value: str | None) -> str:
@@ -83,7 +78,7 @@ def _inspect(source_path: Path) -> tuple[str, int, int, int]:
 def _resize_to_policy(image: Image.Image) -> tuple[Image.Image, bool]:
     """按统一最长边限制等比例缩放图片，并返回是否发生了缩放。"""
 
-    max_side = DEFAULT_IMAGE_INPUT_POLICY.max_image_side_px
+    max_side = Constant.Attachment.MAX_IMAGE_SIDE_PX
     width, height = image.size
     longest_side = max(width, height)
     if longest_side <= max_side:
@@ -142,7 +137,7 @@ def normalize_image(source_path: Path, target_path: Path) -> NormalizedImage:
         仅读取源文件，并将规范化结果写入 ``target_path``；不写数据库、不发布事件。
     """
 
-    supported = DEFAULT_IMAGE_INPUT_POLICY.supported_formats
+    supported = Constant.Attachment.IMAGE_FORMATS
     source_format, _, _, _ = _inspect(source_path)
     if source_format not in supported:
         raise ImageNormalizationError("ATTACHMENT_TYPE_UNSUPPORTED", "暂不支持该图片格式")
@@ -180,15 +175,14 @@ def normalize_image(source_path: Path, target_path: Path) -> NormalizedImage:
         if output_created:
             target_path.unlink(missing_ok=True)
         raise ImageNormalizationError("IMAGE_CONVERSION_FAILED", "图片规范化输出格式不符合统一策略")
-    if max(width, height) > DEFAULT_IMAGE_INPUT_POLICY.max_image_side_px:
+    if max(width, height) > Constant.Attachment.MAX_IMAGE_SIDE_PX:
         if output_created:
             target_path.unlink(missing_ok=True)
         raise ImageNormalizationError("IMAGE_CONVERSION_FAILED", "图片规范化后仍超过最长边限制")
 
     return NormalizedImage(
-        source_format=source_format,
         target_format=output_format,
-        content_type=_CONTENT_TYPES[output_format],
+        content_type=Constant.Attachment.CONTENT_TYPES[output_format],
         path=target_path,
         width=width,
         height=height,

@@ -1,4 +1,4 @@
-"""Task 取消的副作用与向下游传播：取消运行中的 Agent Team、撤销后台结果、停止子 Task、留用户取消通知。"""
+"""Task 取消的副作用与向下游传播：取消运行中的 Agent Team、撤销后台结果、停止子 Task。"""
 
 from __future__ import annotations
 
@@ -7,8 +7,6 @@ import asyncio
 from app.config.logging.logger import log
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.background.cancel_placeholders import RUN_STOPPED_HINT, cancel_placeholders
-from app.core.workflow.cancel.conversation_run_cancellation_registry import CancelReason
-from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.models import ConversationRunRecord
 from app.service import depends as service_depends
 
@@ -18,7 +16,7 @@ class TaskCancellation:
 
     只承载「取消生效前后对外做什么」，不判定是否取消、何时生效：取消入口、取消信号的打出与取走、
     挂起 Run 的迁移都归 actor——它们依赖 actor 的执行登记与 Task 闸门。本类不持进程内状态，只读写
-    各下游的事实源（TeamRun、后台结果登记表、子 Task、外部队列）。调用时机：
+    各下游的事实源（TeamRun、后台结果登记表、子 Task）。调用时机：
 
     - :meth:`cancel_teams`：发起停止那一刻——有执行者时由 ``TaskExecution.cancel``、挂起的 Run 由
       actor 迁移前调用；
@@ -74,13 +72,13 @@ class TaskCancellation:
                 },
             )
 
-    async def after_cancelled(self, run: ConversationRunRecord, reason: CancelReason) -> None:
-        """Run 落定 cancelled 后：向子 Task 传播，用户取消再给下一个 Run 留一条通知。
+    async def after_cancelled(self, run: ConversationRunRecord) -> None:
+        """Run 落定 cancelled 后向子 Task 传播停止。
 
         后台结果与 Agent Team 不在这里：前者须在取消生效前撤销，后者在发起停止时已取消。子 Task 一律
         以 ``parent`` 原因停止，只发起、不等待：调用方可能持自己的闸门，去等子 Task 的闸门会让父子
-        互等。通知以 ``next_run`` 入队、不推进，随下一次推进写入；上游停止不留通知。传播失败
-        只记录，不影响本 Run 终态；通知入队失败上抛给调用方记录。
+        互等。「用户已停止」不在这里留通知：结束原因已按信号来源落库，下一次驱动据此推导（见
+        ``drive_notices``）。传播失败只记录，不影响本 Run 终态。
         """
         from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -98,12 +96,3 @@ class TaskCancellation:
                     "data": {"task_id": self.task_id, "run_id": run.id},
                 },
             )
-        if reason != "user":
-            return
-        notice = TaskMessage.of(
-            NoticeBody(content="The user stopped your previous turn before it finished.", notice_kind="user_cancelled"),
-            delivery="next_run",
-        )
-        await asyncio.to_thread(
-            service_depends.get_task_message_queue().put, self.task_id, notice
-        )

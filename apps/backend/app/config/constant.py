@@ -115,8 +115,10 @@ class Constant:
         RUN_FAILURE_CODE_UNKNOWN: str = "run_failed"
         # 取消类终态兜底 code：领域侧未给出具体取消原因时使用。
         RUN_FAILURE_CODE_CANCELLED: str = "run_cancelled"
-        # 循环在模型检查点检出 Task 取消信号后落定的取消原因。
-        RUN_END_REASON_RUNTIME_CANCELLED: str = "runtime_cancelled"
+        # 取消落定的结束原因，按取消信号的来源（``CancelReason``）区分：驱动开始时据此推导「用户已
+        # 停止」通知（见 ``drive_notices``），所以必须落库、不能统一写成一个值。
+        RUN_END_REASON_USER_CANCELLED: str = "user_cancelled"
+        RUN_END_REASON_PARENT_CANCELLED: str = "parent_cancelled"
         # 配置期失败：provider / 模型解析不出可用模型，或 Run 缺少 provider 绑定。
         RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE: str = "model_resolve_failed"
         # 流程类失败：模型未返回可用内容。

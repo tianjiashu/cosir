@@ -1,13 +1,12 @@
 """用户输入解析边界：模型能力校验、附件与图片解析、展示 token 转模型正文，产出待入队的
 ``TaskMessage``。
 
-HTTP 发送与编辑重跑使用（编辑取返回消息的 ``body``）；Agent 之间的输入走 ``agent_message``。只读
+HTTP 发送使用；Agent 之间的输入走 ``agent_message``。只读
 Task、模型配置与已发布图片的元数据，不读写普通附件文件、不写库、不入队、不创建 Run。投递方在入队
 之前调用（解析 IO 不占用 Task 闸门），输入不合法在这里同步拒绝，不让坏数据进外部队列。
 """
 
 import re
-from dataclasses import replace
 
 from app.config.constant import Constant
 from app.core.workflow.message_queue.task_message import (
@@ -24,9 +23,8 @@ from app.models import (
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.model_config_record import ModelConfigRecord
 from app.service.attachment.attachment_service import AttachmentService
-from app.service.depends import get_task_crud
+from app.service.depends import get_model_config_service, get_task_crud
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
 
 
@@ -45,15 +43,11 @@ class UserInputService:
             agent_id: str = "main_agent",
             *,
             delivery: Delivery = "immediate",
-            reuse: UserInputPresentation | None = None,
     ) -> TaskMessage:
         """校验模型能力、解析附件与图片，组装成携带发起配置的用户输入消息（尚未入队、没有行 id）。
 
-        ``delivery`` 是信封属性，原样带上。
-
-        ``reuse`` 是编辑重跑目标的展示绑定：复用其已解析的附件路径（不从 Run 猜附件归属），请求里带
-        新路径的附件照常覆盖；正文不再引用的附件丢弃。图片不复用——图片用 locator 存在展示投影里，
-        编辑请求照常带 image part。
+        ``delivery`` 是信封属性，原样带上。普通附件的路径一律由请求携带：撤回后放回输入框的附件，
+        路径来自快照里的展示绑定（``build_user_input_parts``），这里不从历史消息恢复。
 
         异常:
             UserInputRejectedError: 模型配置不存在、模型不支持所选能力、附件或图片不可用、输入为空。
@@ -61,13 +55,13 @@ class UserInputService:
             KeyError: Task 不存在（接入层映射为 404）。
         """
         task = self._task.get(task_id)
-        config = ModelConfigRecord.check_launch_config(model_config_id, reasoning_effort)
+        config = get_model_config_service().check_launch_config(
+            model_config_id, reasoning_effort
+        )
         if command.image_asset_ids and not config.supports_image:
             raise UserInputRejectedError(
                 "IMAGE_NOT_SUPPORTED", "当前模型不支持图片输入，请更换模型或移除图片"
             )
-        if reuse is not None:
-            command = self._reuse_attachments(command, reuse)
         self._check_image_token_bindings(command)
         file_attachments = self._resolve_file_attachments(
             command.attachments,
@@ -137,17 +131,16 @@ class UserInputService:
         """
         by_id = {attachment.id: attachment for attachment in requested}
         result: list[ConversationRunFileAttachment] = []
-        # 编辑可携带原消息的全部绑定；只解析当前正文仍引用的附件。
+        # 请求可能带着正文已删掉引用的附件；只解析当前正文仍引用的。
         for attachment_id in dict.fromkeys(
                 m.group(1) for m in find_message_tokens(Constant.Cosir.LOCAL_FILE_TOKEN, display_text)
         ):
             attachment = by_id.get(attachment_id)
-            if attachment is None or attachment.path is None:
-                reason = "no matching request attachment" if attachment is None else "missing path"
+            if attachment is None:
                 raise UserInputRejectedError(
                     "ATTACHMENT_UNAVAILABLE",
                     "附件已失效，请重新选择附件",
-                    detail=f"ordinary file attachment {attachment_id} is unavailable ({reason})",
+                    detail=f"ordinary file attachment {attachment_id} is unavailable (no request attachment)",
                 )
             result.append(
                 ConversationRunFileAttachment(
@@ -184,23 +177,3 @@ class UserInputService:
         if not image_asset_ids:
             return []
         return AttachmentService().resolve_image_assets_for_run(workspace_id, image_asset_ids)
-
-    @staticmethod
-    def _reuse_attachments(
-            command: ConversationRunCommand, previous: UserInputPresentation
-    ) -> ConversationRunCommand:
-        """合并编辑目标已解析的附件绑定；请求里带新路径的同 id 附件覆盖旧绑定。
-
-        页面重载后前端丢失本地附件登记、只剩正文里的 token，路径只能从这里恢复。合并后没有被正文
-        引用的附件由 ``_resolve_file_attachments`` 丢弃。
-        """
-        attachments = {
-            a["id"]: ConversationRunAttachmentInput(
-                id=a["id"], name=a["name"], content_type=a["content_type"], path=a["path"]
-            )
-            for a in previous.attachments
-        }
-        for attachment in command.attachments:
-            if attachment.path is not None:
-                attachments[attachment.id] = attachment
-        return replace(command, attachments=list(attachments.values()))

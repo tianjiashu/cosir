@@ -6,17 +6,17 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.orm import sessionmaker
 
-from tests.task_extra_fixtures import fork_extra
-from app.models.task_extra import TaskExtra
 from app.api.tasks_api import get_task
 from app.api.workspaces_api import list_workspace_tasks
+from app.models.task_extra import TaskExtra
+from app.service.task.task_service import TaskService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.queries.task_status_queries import TaskStatusQueries
 from app.storage.store_engines import initialize_app_schema
-from app.task_runtime.service.task_service import TaskService
+from tests.task_extra_fixtures import fork_extra
 
 
 @pytest.fixture

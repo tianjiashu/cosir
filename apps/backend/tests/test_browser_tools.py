@@ -31,7 +31,7 @@ from app.core.tool.validation.arguments import validate_tool_arguments
 from app.core.workflow.message_queue.task_message import DecisionBody
 from app.service import depends as service_depends
 from app.service.attachment.attachment_service import AttachmentService
-from app.task_runtime.service.task_service import TaskDeletionResult, TaskService
+from app.service.task.task_service import TaskService
 from app.tools.host.errors import UNAVAILABLE, HostCallError
 from app.tools.tool_handler.browser import (
     BrowserActTool,
@@ -712,7 +712,7 @@ def test_task_deletion_tells_the_host_to_drop_tabs(monkeypatch: pytest.MonkeyPat
     service = object.__new__(TaskService)
     monkeypatch.setattr(service, "_unload_deleted_task_spaces", lambda task_ids: None)
 
-    service.finalize_deleted_task_spaces(TaskDeletionResult(task_ids=frozenset({5, 3})))
+    service.finalize_deleted_task_spaces(frozenset({5, 3}))
 
     assert link.notifications == [("browser.dropTasks", {"task_ids": [3, 5]})]
 

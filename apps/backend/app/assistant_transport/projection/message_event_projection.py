@@ -4,9 +4,9 @@ from collections.abc import Sequence
 from typing import cast
 
 from app.assistant_transport.projection.snapshot_navigation import (
-    active_run_id,
-    ensure_assistant,
-    last_assistant_index,
+    ensure_reply,
+    is_active,
+    reply_index,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import ConversationStatePart
@@ -14,18 +14,33 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.core.events import AssistantPartClosedEvent, AssistantTextDeltaEvent
 
 
+def _running_text_index(
+    state: ConversationStateSnapshot, message_index: int, source_sequence: int
+) -> int | None:
+    parts = state["messages"][message_index]["parts"]
+    for part_index in range(len(parts) - 1, -1, -1):
+        part = parts[part_index]
+        if (
+            isinstance(part, dict)
+            and part.get("type") == "text"
+            and part.get("status") == "running"
+            and part.get("sourceSequence") == source_sequence
+        ):
+            return part_index
+    return None
+
+
 def plan_assistant_text_delta(
     event: AssistantTextDeltaEvent,
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
-    """追加到当前活动 Run 助手消息里同类型的 running part；没有时首次创建该 part。
+    """追加到这一回合回复里同一响应的 running 正文 part；没有时首次创建该 part。
 
-    Run 已终态或不是当前活动时丢弃（迟到 delta）。Run 还没有助手消息（没有用户输入、被结果
-    消息唤醒新开的 Run）时连同 part 一起建出助手消息。
+    当前活动已终态时丢弃（迟到 delta）。这一回合还没有回复（没有输入开头的回合第一次输出）时连同
+    part 一起建出回复。
     """
 
-    run_id = active_run_id(state, event.run_id)
-    if run_id is None:
+    if not is_active(state):
         return []
     new_part = {
         "type": event.part,
@@ -33,27 +48,27 @@ def plan_assistant_text_delta(
         "status": "running",
         "sourceSequence": event.source_sequence,
     }
-    message_index, created = ensure_assistant(state, run_id, cast(ConversationStatePart, new_part))
+    message_index, mutations = ensure_reply(
+        state, event.turn, cast(ConversationStatePart, new_part)
+    )
     if message_index is None:
-        return created
+        return mutations
+    part_index = _running_text_index(state, message_index, event.source_sequence)
+    if part_index is not None:
+        return [
+            *mutations,
+            ConversationStateMutation(
+                "append-text",
+                ("messages", message_index, "parts", part_index, "text"),
+                event.delta,
+            ),
+        ]
     parts = state["messages"][message_index]["parts"]
-    for part_index in range(len(parts) - 1, -1, -1):
-        part = parts[part_index]
-        if (
-            isinstance(part, dict)
-            and part.get("type") == event.part
-            and part.get("status") == "running"
-            and part.get("sourceSequence") == event.source_sequence
-        ):
-            return [
-                ConversationStateMutation(
-                    "append-text",
-                    ("messages", message_index, "parts", part_index, "text"),
-                    event.delta,
-                )
-            ]
     return [
-        ConversationStateMutation("set", ("messages", message_index, "parts", len(parts)), new_part)
+        *mutations,
+        ConversationStateMutation(
+            "set", ("messages", message_index, "parts", len(parts)), new_part
+        ),
     ]
 
 
@@ -61,27 +76,20 @@ def plan_assistant_part_closed(
     event: AssistantPartClosedEvent,
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
-    """把同类型的 running part 标记为 completed；没有 running part 或 Run 已终态时不变。"""
+    """把同一响应的 running 正文 part 标记为 completed；没有 running part 或已终态时不变。"""
 
-    if active_run_id(state, event.run_id) is None:
+    if not is_active(state):
         return []
-    message_index = last_assistant_index(state, event.run_id)
+    message_index = reply_index(state, event.turn)
     if message_index is None:
         return []
-    parts = state["messages"][message_index]["parts"]
-    for part_index in range(len(parts) - 1, -1, -1):
-        part = parts[part_index]
-        if (
-            isinstance(part, dict)
-            and part.get("type") == event.part
-            and part.get("status") == "running"
-            and part.get("sourceSequence") == event.source_sequence
-        ):
-            return [
-                ConversationStateMutation(
-                    "set",
-                    ("messages", message_index, "parts", part_index, "status"),
-                    "completed",
-                )
-            ]
-    return []
+    part_index = _running_text_index(state, message_index, event.source_sequence)
+    if part_index is None:
+        return []
+    return [
+        ConversationStateMutation(
+            "set",
+            ("messages", message_index, "parts", part_index, "status"),
+            "completed",
+        )
+    ]

@@ -1,12 +1,13 @@
-"""一轮输入（用户输入、Agent 消息）展示 parts 的构造与消费投影。"""
+"""回合输入（用户输入、Agent 消息）展示 parts 的构造与消费投影。"""
 
 from collections.abc import Sequence
 from typing import cast
 
 from app.assistant_transport.projection.snapshot_navigation import (
     iter_parts,
-    last_assistant_index,
     message,
+    reply_index,
+    track_turn,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import (
@@ -80,6 +81,7 @@ def build_user_input_parts(
                     "file": f"cosir-local-file:{attachment['id']}",
                     "name": attachment["name"],
                     "contentType": attachment["content_type"],
+                    "path": attachment["path"],
                 }
             )
             referenced_file_ids.add(token_id)
@@ -115,7 +117,7 @@ def build_presentation_parts(presentation: UserInputPresentation) -> list[UserIn
 def build_turn_input(
     presentation: UserInputPresentation, source: MessageSource | None
 ) -> tuple[list[UserInputPart], ConversationStateMessageSource | None]:
-    """一轮输入的 parts 与 wire 来源；消费投影与全量重建共用，两处展示一致。
+    """回合输入的 parts 与 wire 来源；消费投影与全量重建共用，两处展示一致。
 
     Agent 消息（``source`` 非空）是纯文本：不按附件 token 解析——Agent 正文里恰好出现形如 token
     的文字时，解析会因找不到附件而抛错，让整张快照投影失败。
@@ -142,56 +144,51 @@ def plan_input_consumed(
     event: InputConsumedEvent,
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
-    """按事件自带的展示绑定插入 user 消息（Agent 消息带来源）并补其后的助手占位，同时移出排队投影；
-    按身份去重。
+    """按事件自带的展示绑定把回合输入投影进快照，同时移出排队投影；按身份去重。
 
     不从排队投影里取内容：排队投影只镜像队列表，确认删除之后的任何一次刷新都会刷掉这一条。
-    快照在消费提交后才懒重建时，消息已从 context 重建出来，按去重跳过。连续消费多条 user 时，
-    同一 Run 尚无输出的助手占位被这条 user 消息原位替换。
+    快照在消费提交后才懒重建时，消息已从 context 重建出来，按去重跳过。
 
-    Agent 消息只有作为 Run 第一条输入才开回合；Run 已有回复时它是这条回复的一段（全量重建的
-    ``_run_messages`` 同一规则，由实时与冷重建的差分测试守着）。Agent 消息不进排队投影。
+    回合读事件上的回合号（写入时记下，冷重建读行上的同一个号）：这一回合已有回复，说明输入是途中
+    来信，并进这条回复（写入规则保证途中来信时回复已存在）；还没有回复就是这条输入开启了回合，插入
+    user 消息与这一回合的回复。由输入开启的回合总有回复（之后没有输出也保留空回复），冷重建同一
+    规则，连续并入的输入因此各自成对，不用替换前一条的空回复。Agent 消息不进排队投影。
     """
 
     message_id = user_message_id(event.message_id)
-    # 消费只发生在某个 Run 的 prepare_input 节点内，事件总带 Run 身份。
-    run_id = cast(int, event.run_id)
     messages = state["messages"]
     if any(m["id"] == message_id for m in messages) or any(
         part["type"] == "agent-message" and part["id"] == message_id
         for _, part in iter_parts(state)
     ):
         return []
-    reply_index = last_assistant_index(state, run_id)
-    if event.source is not None and reply_index is not None:
+    tracked = track_turn(state, event.turn)
+    existing = reply_index(state, event.turn)
+    if existing is not None:
         return [
+            *tracked,
             ConversationStateMutation(
                 "set",
-                ("messages", reply_index, "parts", len(messages[reply_index]["parts"])),
-                build_agent_message_part(event.message_id, event.presentation, event.source),
-            )
+                ("messages", existing, "parts", len(messages[existing]["parts"])),
+                # 不开回合的输入只会是途中来信（用户输入总开回合），必带来源。
+                build_agent_message_part(
+                    event.message_id, event.presentation, cast(MessageSource, event.source)
+                ),
+            ),
         ]
-    insert_at = len(messages)
-    last = messages[-1] if messages else None
-    if (
-        last is not None
-        and last["role"] == "assistant"
-        and last["runId"] == run_id
-        and not last["parts"]
-    ):
-        insert_at -= 1
     queued = state.get("queued_messages", [])
     parts, source = build_turn_input(event.presentation, event.source)
     return [
+        *tracked,
         ConversationStateMutation(
             "set",
-            ("messages", insert_at),
-            message(message_id, "user", list(parts), run_id, source),
+            ("messages", len(messages)),
+            message(message_id, "user", list(parts), turn=event.turn, source=source),
         ),
         ConversationStateMutation(
             "set",
-            ("messages", insert_at + 1),
-            message(reply_id(event.message_id), "assistant", [], run_id),
+            ("messages", len(messages) + 1),
+            message(reply_id(event.turn), "assistant", [], turn=event.turn),
         ),
         ConversationStateMutation(
             "set", ("queued_messages",), [m for m in queued if m["id"] != message_id]

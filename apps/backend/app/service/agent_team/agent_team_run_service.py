@@ -78,7 +78,7 @@ class AgentTeamRunService:
             elif (
                 state.current_node_id == node_id
                 and row.status == AgentTeamRunStatus.RUNNING.value
-                and (not visits or visits[-1]["conversation_run_id"] is None)
+                and not visits
             ):
                 node_status = "running"
             elif visits:

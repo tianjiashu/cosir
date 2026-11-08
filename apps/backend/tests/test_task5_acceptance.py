@@ -25,13 +25,14 @@ from app.core.events import AssistantTextDeltaEvent
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models import ConversationRunError, ConversationRunStatus
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.models.task_extra import TaskForkLaunch
 from app.service.recover_service import RecoverService
+from app.service.task.fork_source import ForkCut, ForkSource
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.store_engines import APP_MODELS, initialize_app_schema
@@ -359,9 +360,11 @@ def test_real_sqlite_fork_preserves_canonical_identity(
     )
     target = store.tasks.create(store.workspace.id, "fork")
     with store.factory.begin() as session:
-        rows = store.context_service.history(store.task.id, session)
-        store.context_service.copy_fork_prefix(session, store.task, target, rows,
-            max(row.sequence for row in rows) + 1)
+        rows = store.contexts.get(store.task.id, include_in_context=False, session=session)
+        cut = ForkCut(max(row.sequence for row in rows) + 1, TaskForkLaunch.from_run(source_run))
+        ForkSource(task=store.task, rows=rows, runs=[]).copy_before(
+            cut, target, store.contexts, session
+        )
     assert target.current_run_id is None
     assert store.runs.list_by_task(target.id) == []
     source_rows = store.contexts.get(store.task.id, include_in_context=False)

@@ -125,7 +125,7 @@ accepted ──SSE/attach 断开→ reconciling
 - 修改：`apps/backend/app/api/schemas/request/CreateTaskRequest.py`
 - 修改：`apps/backend/app/api/workspaces_api.py`
 - 修改：`apps/backend/app/service/task/workspace_service.py`
-- 修改：`apps/backend/app/task_runtime/service/task_service.py`
+- 修改：`apps/backend/app/service/task/task_service.py`
 - 测试：`apps/backend/tests/test_task_provisional_cleanup.py`
 - 测试：现有 workspace/task API 测试
 
@@ -153,7 +153,7 @@ accepted ──SSE/attach 断开→ reconciling
 **文件：**
 
 - 修改：`apps/backend/app/api/tasks_api.py`
-- 修改：`apps/backend/app/task_runtime/service/task_service.py`
+- 修改：`apps/backend/app/service/task/task_service.py`
 - 修改：`apps/desktop/lib/api/workspaces.ts`
 - 测试：`apps/backend/tests/test_task_provisional_cleanup.py`
 - 测试：`apps/backend/tests/test_tasks_api.py`

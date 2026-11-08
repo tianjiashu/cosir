@@ -56,10 +56,10 @@ class ConfigurationFileStore:
         return candidate
 
     @classmethod
-    def read_text(cls, path: Path, *, root: Path | None = None) -> str:
-        """读取 UTF-8 配置文件；存在安全根时先执行路径校验。"""
+    def read_text(cls, path: Path, *, root: Path) -> str:
+        """校验路径在 ``root`` 之内后读取 UTF-8 配置文件。"""
 
-        target = cls.assert_safe_child(root, path) if root is not None else Path(path)
+        target = cls.assert_safe_child(root, path)
         try:
             return target.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:
@@ -91,111 +91,79 @@ class ConfigurationFileStore:
             yield
 
     @classmethod
-    def write_text_atomic(
-        cls,
-        path: Path,
-        content: str,
-        *,
-        root: Path | None = None,
-    ) -> None:
-        """串行执行受限路径下的原子文本写入。"""
+    def write_text_atomic(cls, path: Path, content: str, *, root: Path) -> None:
+        """在路径锁内以受限权限原子替换文本文件。
 
+        锁是可重入的：调用方要把「读、校验、写」组成临界区时在外层持 :meth:`locked`，只写一次时
+        不必再包一层。
+        """
+
+        target = cls.assert_safe_child(root, path)
         with cls._path_lock(path):
-            return cls._write_text_atomic(
-                path,
-                content,
-                root=root,
-            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path: Path | None = None
+            try:
+                fd, raw_path = tempfile.mkstemp(
+                    prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
+                )
+                temporary_path = Path(raw_path)
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+                    os.chmod(temporary_path, stat.S_IRUSR | stat.S_IWUSR)
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary_path, target)
+                temporary_path = None
+                try:
+                    directory_fd = os.open(target.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+                except OSError as exc:
+                    # 内容替换已经成功，不回滚文件；将目录持久化间隙写入后端落盘日志，便于排查。
+                    log.warning(
+                        "configuration_directory_fsync_failed",
+                        extra={
+                            "msg": "配置文件已替换，但目录同步失败",
+                            "data": {
+                                "directory": str(target.parent),
+                                "error_type": type(exc).__name__,
+                            },
+                        },
+                    )
+            except (OSError, UnicodeError) as exc:
+                log.error(
+                    "configuration_write_failed",
+                    extra={
+                        "msg": "配置文件原子写入失败",
+                        "data": {"path": str(target), "error_type": type(exc).__name__},
+                    },
+                )
+                raise ConfigurationFileError(f"configuration write failed: {target}") from exc
+            finally:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
 
     @classmethod
-    def _write_text_atomic(
-        cls,
-        path: Path,
-        content: str,
-        *,
-        root: Path | None = None,
-    ) -> None:
-        """以受限权限原子替换文本文件，不生成或校验并发元数据。"""
+    def delete_file(cls, path: Path, *, root: Path) -> None:
+        """在路径锁内删除配置文件；文件是否存在由调用方在同一临界区里先判定。"""
 
-        target = cls.assert_safe_child(root, path) if root is not None else Path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path: Path | None = None
-        try:
-            fd, raw_path = tempfile.mkstemp(
-                prefix=f".{target.name}.", suffix=".tmp", dir=target.parent
-            )
-            temporary_path = Path(raw_path)
-            with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
-                os.chmod(temporary_path, stat.S_IRUSR | stat.S_IWUSR)
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary_path, target)
-            temporary_path = None
+        target = cls.assert_safe_child(root, path)
+        with cls._path_lock(path):
             try:
+                target.unlink()
                 directory_fd = os.open(target.parent, os.O_RDONLY)
                 try:
                     os.fsync(directory_fd)
                 finally:
                     os.close(directory_fd)
             except OSError as exc:
-                # 内容替换已经成功，不回滚文件；将目录持久化间隙写入后端落盘日志，便于排查。
-                log.warning(
-                    "configuration_directory_fsync_failed",
+                log.error(
+                    "configuration_delete_failed",
                     extra={
-                        "msg": "配置文件已替换，但目录同步失败",
-                        "data": {"directory": str(target.parent), "error_type": type(exc).__name__},
+                        "msg": "配置文件删除失败",
+                        "data": {"path": str(target), "error_type": type(exc).__name__},
                     },
                 )
-        except (OSError, UnicodeError) as exc:
-            log.error(
-                "configuration_write_failed",
-                extra={
-                    "msg": "配置文件原子写入失败",
-                    "data": {"path": str(target), "error_type": type(exc).__name__},
-                },
-            )
-            raise ConfigurationFileError(f"configuration write failed: {target}") from exc
-        finally:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
-    @classmethod
-    def delete_file(
-        cls,
-        path: Path,
-        *,
-        root: Path,
-    ) -> None:
-        """串行执行受限路径下的配置文件删除。"""
-
-        with cls._path_lock(path):
-            cls._delete_file(path, root=root)
-
-    @classmethod
-    def _delete_file(
-        cls,
-        path: Path,
-        *,
-        root: Path,
-    ) -> None:
-        """删除受限配置文件。"""
-
-        target = cls.assert_safe_child(root, path)
-        if not target.exists():
-            raise FileNotFoundError(target)
-        try:
-            target.unlink()
-            directory_fd = os.open(target.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        except OSError as exc:
-            log.error(
-                "configuration_delete_failed",
-                extra={
-                    "msg": "配置文件删除失败",
-                    "data": {"path": str(target), "error_type": type(exc).__name__},
-                },
-            )
-            raise ConfigurationFileError(f"configuration delete failed: {target}") from exc
+                raise ConfigurationFileError(f"configuration delete failed: {target}") from exc

@@ -10,7 +10,6 @@
   （委托给 ``TaskService``）。
 """
 
-import asyncio
 from pathlib import Path
 
 from app.config.configuration import get_agent_registry
@@ -22,8 +21,6 @@ from app.service import depends as service_depends
 from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
-from app.task_runtime.service.task_service import TaskDeletionResult
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
 from app.utils.path.workspace_cosir import (
     workspace_agent_config_dir,
@@ -265,7 +262,7 @@ class WorkspaceService:
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
                 self._workspace.get(workspace_id)
-                return self._task_service.get_or_create_task(
+                return self._task_service.create_task(
                     workspace_id,
                     title,
                     creation_command_id=creation_command_id,
@@ -277,29 +274,18 @@ class WorkspaceService:
     async def delete_workspace_tree(self, workspace_id: int) -> None:
         """删除 workspace 的用户用例：先在锁外停下其下全部 Task 的 actor，再删除记录。
 
-        与 ``TaskService.delete_task_tree`` 同一套语义：停止即墓碑；收集与停止反复到 Task 集合
-        不再增长；删除没成功时为已停下的 Task 换上新 actor，请求被取消时不回滚。
+        停止与回滚的协议见 ``TaskService.stop_then_delete``，这里只提供「工作区下的全部 Task」与
+        「删除工作区」两件事。
 
         异常:
             KeyError: 工作区不存在。
             DeletionBusyError: workspace 正被其他结构性操作占用。
         """
 
-        stopped: set[int] = set()
-        try:
-            while True:
-                task_ids = set(
-                    await asyncio.to_thread(self._task_crud.list_ids_by_workspace, workspace_id)
-                )
-                if task_ids <= stopped:
-                    break
-                await task_runtime_spaces.stop(task_ids - stopped)
-                await service_depends.get_agent_team_coordinator().drain_for_deletion(task_ids)
-                stopped |= task_ids
-            await asyncio.to_thread(self.delete_workspace, workspace_id)
-        except Exception:
-            task_runtime_spaces.restart_stopped(stopped)
-            raise
+        await self._task_service.stop_then_delete(
+            lambda: set(self._task_crud.list_ids_by_workspace(workspace_id)),
+            lambda: self.delete_workspace(workspace_id),
+        )
 
     def delete_workspace(self, workspace_id: int) -> None:
         """在单个事务内原子删除 workspace 及其全部 task 产物；调用方须已停下其下 Task 的 actor。
@@ -346,8 +332,9 @@ class WorkspaceService:
                         workspace_id, session=session
                     )
                     for task_id in root_task_ids:
-                        result = self._task_service.delete_task_tree_in_session(task_id, session)
-                        deleted_task_ids.update(result.task_ids)
+                        deleted_task_ids |= self._task_service.delete_task_tree_in_session(
+                            task_id, session
+                        )
                     remaining_task_ids = set(
                         self._task_crud.list_ids_by_workspace(workspace_id, session=session)
                     )
@@ -357,11 +344,7 @@ class WorkspaceService:
                             f"{sorted(remaining_task_ids)}"
                         )
                     self._workspace.delete_in_session(session, workspace_id)
-                self._task_service.finalize_deleted_task_spaces(
-                    TaskDeletionResult(
-                        task_ids=frozenset(deleted_task_ids),
-                    )
-                )
+                self._task_service.finalize_deleted_task_spaces(frozenset(deleted_task_ids))
                 if service_depends.get_workspace_file_watcher.cache_info().currsize:
                     service_depends.get_workspace_file_watcher().close_workspace(workspace_id)
                 self._drop_workspace_config_scopes(workspace_record.root_path)

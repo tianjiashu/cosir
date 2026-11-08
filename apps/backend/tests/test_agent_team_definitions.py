@@ -255,7 +255,9 @@ def test_configuration_service_rejects_unavailable_node_profile(
     proposal.pop("scope")
 
     with pytest.raises(ValueError, match="child Agent"):
-        AgentTeamConfigurationService().save_confirmed(
+        AgentTeamConfigurationService(
+            AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
+        ).save_confirmed(
             proposal,
             scope="workspace",
             workspace_root=tmp_path,
@@ -913,7 +915,6 @@ def test_team_run_view_projects_node_and_child_agent_counts(
         session.flush()
         team_run_id = team_run.id
         expected_node_task_id = node_task.id
-        expected_node_run_id = node_run.id
         expected_child_task_id = child_task.id
 
     service = AgentTeamRunService.__new__(AgentTeamRunService)

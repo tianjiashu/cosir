@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.assistant_transport.request import DecisionRequest
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core.hook import hook_registry
@@ -19,6 +18,7 @@ from app.models.agent_team.configuration.agent_team_configuration import AgentTe
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import UserMessageMetadata
 from app.service import depends
+from app.service.configuration.agent_configuration import AgentConfiguration
 from app.service.configuration.agent_configuration_service import AgentConfigurationService
 from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
@@ -93,11 +93,11 @@ async def _parked(actor):
 @pytest.fixture
 def reviewer(backend_env, tmp_path):
     agents = AgentConfigurationService(workspace_root=tmp_path)
-    document = AgentConfigurationDocument(
+    document = AgentConfiguration(
         agent_id="second-reviewer", role="review", description="review changes",
         system_prompt="Review the task", allowed_tools=["read_file"],
     )
-    agents.create_document(document)
+    agents.create(document)
     return agents, document
 
 
@@ -229,7 +229,7 @@ async def test_approved_team_runs_in_background(proposed_team, ending):
 async def test_approval_with_deleted_agent_fails_team_and_card(proposed_team, reviewer):
     first, decision, _ = proposed_team
     agents, document = reviewer
-    agents.delete_document(document.agent_id)
+    agents.delete(document.agent_id)
     service = TransportAssistantService()
     await service.decide(first.task_id, CALL_ID, decision)
     assert await spaces.get(first.task_id).actor.wait_quiescent(5)
@@ -258,7 +258,7 @@ async def test_failed_node_input_does_not_start_another_run_after_restart(propos
         await TransportAssistantService().decide(first.task_id, CALL_ID, decision)
         await model.node_started.wait()
         # A 正在请求模型；删除 B 的配置后，B 的 Run 能建立，但在并入输入前失败。
-        agents.delete_document(document.agent_id)
+        agents.delete(document.agent_id)
         model.release.set()
         assert await spaces.get(first.task_id).actor.wait_quiescent(5)
         row = coordinator._team_run_crud.get_by_tool_call(first.task_id, CALL_ID)
@@ -271,7 +271,7 @@ async def test_failed_node_input_does_not_start_another_run_after_restart(propos
         await asyncio.to_thread(background_registry.close)
         await coordinator.aclose()
         await spaces.aclose()
-        agents.create_document(document)
+        agents.create(document)
         spaces.bind_loop(asyncio.get_running_loop())
         background_registry.open()
         depends.get_recover_service().recover_after_restart()

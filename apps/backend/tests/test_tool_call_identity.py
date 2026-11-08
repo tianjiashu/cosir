@@ -9,7 +9,7 @@ import asyncio
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.handoff.handoff_registry import HandoffLease, HandoffRegistry
 from app.service import depends
-from app.service.conversation_run.tool_decision_service import ToolDecisionService
+from app.service.conversation.tool_decision_service import ToolDecisionService
 from tests.live_cold_support import GatedCommands, LiveColdEnv, tool_call, tool_parts
 
 

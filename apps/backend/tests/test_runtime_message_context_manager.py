@@ -9,7 +9,6 @@ from openai.types.chat import (
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.models.conversation_input import UserInputPresentation
-from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import (
     BackgroundWork,
     EmptyMessageMetadata,
@@ -81,8 +80,7 @@ def _manager(
     manager = object.__new__(RuntimeMessageContextManager)
     manager._max_turn = 0
     manager._run_turn = None
-    manager._run_has_input = False
-    manager._run_has_reply = False
+    manager._run_shown = False
     manager._used_call_ids = set()
     manager._response_call_ids = {}
     manager.current_task_id = 7

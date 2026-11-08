@@ -40,7 +40,6 @@ export type ModelConfigUpdateInput = Partial<Omit<ModelConfigCreateInput, "api_k
 export type ModelConfigTestInput = Omit<ModelConfigCreateInput, "sort_order">;
 
 export type ModelConfigTestResult = {
-  config_id: number | null;
   success: boolean;
   elapsed_ms: number | null;
   error_code?: string | null;

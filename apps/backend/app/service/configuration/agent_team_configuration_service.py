@@ -25,9 +25,6 @@ from app.models.agent_team.configuration.agent_team_configuration import (
 from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,
 )
-from app.service.configuration.agent_team_configuration_source import (
-    AgentTeamConfigurationScopeSource,
-)
 from app.service.configuration.file_store import ConfigurationFileStore
 
 
@@ -39,23 +36,13 @@ class AgentTeamConfigurationService:
     :class:`ConfigurationFileStore`，从而把路径安全、锁和原子替换等底层细节留在通用文件设施中。
     """
 
-    def __init__(self, registry: AgentTeamConfigurationRegistry | None = None) -> None:
-        """创建配置服务并绑定 Agent Team 注册表。
+    def __init__(self, registry: AgentTeamConfigurationRegistry) -> None:
+        """绑定进程级 Team 配置注册表（生命周期装配时注入）。
 
-        参数:
-            registry: 进程级 Team 配置注册表；为 ``None`` 时自建一个带默认配置来源的实例
-                （仅用于测试等不接装配期的场景，生产由生命周期显式注入共享注册表）。
-
-        返回:
-            无。
-
-        副作用:
-            只创建注册表引用与文件仓储对象；不会读取目录或修改文件。
+        不提供缺省值：自建的注册表与全局注册表断开，保存后的配置在别处看不到，是静默失效。
         """
 
-        self._registry = registry or AgentTeamConfigurationRegistry(
-            AgentTeamConfigurationScopeSource()
-        )
+        self._registry = registry
         # 写入目录直接取自注册表的配置来源：写目录与装载目录必须是同一映射，否则保存后的配置
         # 可能落在读取方看不到的位置（「保存成功但列表为空」）。
         self._source = self._registry.source
@@ -224,7 +211,7 @@ class AgentTeamConfigurationService:
         with ConfigurationFileStore.locked(path):
             if path.exists():
                 raise FileExistsError(f"Team 配置已存在: {configuration.team_id}")
-            ConfigurationFileStore._write_text_atomic(
+            ConfigurationFileStore.write_text_atomic(
                 path,
                 AgentTeamConfigurationService._encode(configuration),
                 root=root,

@@ -10,7 +10,7 @@ from app.core.workflow.message_queue.task_message import AgentMessageBody, RunLa
 from app.models.conversation_input import MessageSource
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.model_config_record import ModelConfigRecord
+from app.service.depends import get_model_config_service
 
 
 def prepare_agent_message(
@@ -31,7 +31,7 @@ def prepare_agent_message(
     异常:
         UserInputRejectedError: 模型配置不存在、不支持所选推理强度，或正文为空。
     """
-    ModelConfigRecord.check_launch_config(model_config_id, reasoning_effort)
+    get_model_config_service().check_launch_config(model_config_id, reasoning_effort)
     if not text.strip():
         raise UserInputRejectedError("EMPTY_INPUT", "Agent 消息正文为空")
     body = AgentMessageBody(

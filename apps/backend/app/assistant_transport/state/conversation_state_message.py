@@ -1,4 +1,4 @@
-"""Conversation Transport 的消息契约（Task 视角，扁平排列）。"""
+"""Conversation Transport 的消息契约（Task 视角，扁平排列，以回合为单位）。"""
 
 from typing import Literal
 
@@ -16,12 +16,12 @@ MessageRole = Literal["user", "assistant"]
 
 
 class ConversationStateOutcome(TypedDict):
-    """一轮回复的结局：Run 进入终态时写到该 Run 最后一条助手消息上。
+    """Run 的结局：Run 进入终态时写到它最后一个可见回合的回复上，属于整个 Run、不拆到回合。
 
-    让对话界面不必按 Run 分组也能显示历史回复的「已取消 / 失败 / 用量」；Run 被恢复时清空。
+    前端看不到 Run，靠它显示历史回复的「已取消 / 失败 / 用量」；Run 被恢复时清空。
     ``contextWindowTotal`` 是该 Run 冻结的窗口上限，与 ``usage`` 同属一个 Run：上下文占用的
-    「已用 / 上限」必须同源，两轮之间换了模型也不会拿新窗口配旧用量。``durationMs`` 是 Run 创建到
-    终态的毫秒数，只从 Run 记录的时间戳推导（投影器不读墙钟），终态耗时必填。
+    「已用 / 上限」必须同源，两个 Run 之间换了模型也不会拿新窗口配旧用量。``durationMs`` 是 Run
+    创建到终态的毫秒数，只从 Run 记录的时间戳推导（投影器不读墙钟），终态耗时必填。
     """
 
     status: str
@@ -33,25 +33,26 @@ class ConversationStateOutcome(TypedDict):
 
 
 class ConversationStateMessage(TypedDict):
-    """一条 user / assistant 消息。
+    """一条 user / assistant 消息；一个回合是「开启它的输入（可没有）+ 一条回复」。
 
-    ``runId`` 是消息的 Run 归属，只供事件路由、诊断与 fork 定位；对话界面不按它分组。
-    ``outcome`` 只有「该 Run 最后一条助手消息」在 Run 终态后非空，user 消息恒为 ``None``。
-    ``source`` 只有开启回合的 Agent 消息（Run 第一条输入）非空：它不是用户说的话，
-    前端另行渲染、不可编辑；用户消息与助手消息恒为 ``None``。
-    ``parts`` 保留各自的流式与工具执行生命周期。
+    Run 不在 wire 上：``turn`` 是消息所在的回合号（回复的 id 由它编码），``inherited`` 表示这条消息
+    来自分叉继承的历史（没有本地 Run，不可交互、不可撤回）。``outcome`` 只在 Run 终态后挂在它最后
+    一个可见回合的回复上，user 消息恒为 ``None``。``source`` 只有开启回合的 Agent 消息非空：它不是
+    用户说的话，前端另行渲染、不可编辑；用户消息与助手消息恒为 ``None``。``parts`` 保留各自的流式与
+    工具执行生命周期。
     """
 
     id: str
     role: MessageRole
     parts: list[ConversationStatePart]
-    runId: int | None
+    turn: int
+    inherited: bool
     outcome: ConversationStateOutcome | None
     source: ConversationStateMessageSource | None
 
 
 class ConversationQueuedMessage(TypedDict):
-    """尚未被模型边界消费、需投影的排队消息；还没有 Run 归属。
+    """尚未被模型边界消费、需投影的排队消息；还没有回合。
 
     ``delivery`` 只供前端区分「下个模型边界并入」与「交给下一个 Run」，事实仍在外部队列。
     """

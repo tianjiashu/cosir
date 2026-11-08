@@ -41,7 +41,7 @@ def history_page(messages: list[ConversationStateMessage], end: int) -> HistoryP
     """完整历史中 ``end`` 之前的一页。
 
     异常:
-        ValueError: ``end`` 超出当前历史——客户端的窗口来自已被替换的完整快照（如编辑重跑），
+        ValueError: ``end`` 超出当前历史——客户端的窗口来自已被替换的完整快照（如撤回），
             页位置已经失效。
     """
 

@@ -24,7 +24,6 @@ from app.models.conversation_input import MessageSource
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.task_kind import TaskType
-from app.service.conversation_run.task_launch import initial_task_launch
 from app.service.depends import (
     get_task_message_queue,
     get_task_service,
@@ -106,7 +105,7 @@ class SendMessageTool(HandlerBase):
             first = next_input(get_task_message_queue().pending_nowait(target.id))
             if first is not None:
                 return cast(LaunchInputBody, first.body).launch
-            initial = initial_task_launch(target)
+            initial = RunLaunch.from_fork(target)
             if initial is not None:
                 return initial
             return tool_error(self.name, "The target task has no launch configuration yet.")

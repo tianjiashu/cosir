@@ -24,7 +24,6 @@ from app.service.attachment.image_normalizer import (
     StoredImage,
     normalize_image,
 )
-from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
 from app.utils.path.workspace_cosir import (
     workspace_attachment_dir,
     workspace_attachment_staging_dir,
@@ -322,7 +321,7 @@ class AttachmentService:
         )
         try:
             normalized = normalize_image(source, normalized_tmp)
-            if normalized.byte_size > DEFAULT_IMAGE_INPUT_POLICY.single_image_max_bytes:
+            if normalized.byte_size > Constant.Attachment.MAX_IMAGE_BYTES:
                 raise ImageNormalizationError("ATTACHMENT_FILE_TOO_LARGE", "规范化后的图片过大")
             digest = hashlib.sha256()
             with normalized.path.open("rb") as normalized_file:
@@ -364,13 +363,9 @@ class AttachmentService:
         )
         return descriptor, target
 
-    def resolve_content(
-        self, workspace_id: int, asset_id: str, *, expected_kind: str | None = None
-    ) -> tuple[Path, str]:
+    def resolve_content(self, workspace_id: int, asset_id: str) -> tuple[Path, str]:
         """返回已发布图片文件及其 MIME 类型，不重新解析图片内容。"""
 
-        if expected_kind not in (None, "image"):
-            raise ImageNormalizationError("ATTACHMENT_TYPE_UNSUPPORTED", "附件类型不匹配")
         stored = self._stored_image(workspace_id, asset_id)
         return stored.path, stored.content_type
 
@@ -407,7 +402,7 @@ class AttachmentService:
                 或附件存储目录不可用。
         """
 
-        if len(asset_ids) > DEFAULT_IMAGE_INPUT_POLICY.max_images_per_request:
+        if len(asset_ids) > Constant.Attachment.MAX_IMAGES_PER_REQUEST:
             raise ImageNormalizationError("ATTACHMENT_TOO_MANY_IMAGES", "图片数量超过统一输入限制")
         total_bytes = 0
         paths: list[str] = []
@@ -415,7 +410,7 @@ class AttachmentService:
             stored = self._stored_image(workspace_id, asset_id)
             total_bytes += stored.byte_size
             paths.append(self.relative_path(workspace_id, stored.path))
-        if total_bytes > DEFAULT_IMAGE_INPUT_POLICY.request_total_max_bytes:
+        if total_bytes > Constant.Attachment.REQUEST_TOTAL_MAX_BYTES:
             raise ImageNormalizationError(
                 "ATTACHMENT_REQUEST_TOO_LARGE", "图片总大小超过统一输入限制"
             )

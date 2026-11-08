@@ -17,7 +17,7 @@ from app.core.workflow.message_queue.task_message import DecisionBody
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 from app.service import depends
-from app.service.conversation_run import tool_decision_service as module
+from app.service.conversation import tool_decision_service as module
 
 _CALL_ID = "call-hitl"
 

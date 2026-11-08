@@ -37,17 +37,16 @@ from app.assistant_transport.state.conversation_state_part import (
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
 )
-from app.assistant_transport.state.message_identity import (
-    leading_reply_id,
-    reply_id,
-    user_message_id,
-)
+from app.assistant_transport.state.message_identity import reply_id, user_message_id
 from app.core.tool.call_intent import display_call_arguments
 from app.core.tool.presentation import ToolPresentation
-from app.models.conversation_input import UserInputPresentation
+from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.conversation_run_record import ConversationRunRecord
-from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES
+from app.models.conversation_task_context import (
+    ConversationTaskContextRecord,
+    run_last_turn_withdrawn,
+)
+from app.models.enums.conversation_run_status import TERMINAL_RUN_STATUSES, RunTransition
 from app.models.message_metadata import (
     TURN_INPUT_KINDS,
     AssistantMessageMetadata,
@@ -57,6 +56,9 @@ from app.models.message_metadata import (
 from app.models.task_record import TaskRecord
 from app.utils.datetime_utils import to_text
 from app.utils.message_content import content_to_text
+
+# 能恢复的状态就是恢复迁移的来源状态（与实时投影同一事实）。
+_RESUMABLE_RUN_STATUSES = frozenset(status.value for status in RunTransition.RESUME.sources)
 
 
 class ConversationTaskStateRebuilder:
@@ -177,10 +179,13 @@ class ConversationTaskStateRebuilder:
             context_rows: 该 Task 已持久化的领域消息与 Transport 元数据。
 
         返回:
-            新的 ``ConversationStateSnapshot``：消息按 Run（``created_at`` 再按 id）、Run 内按
-            context 序号扁平排列；同一 Run 的 assistant 行按用户消息分组成一条回复，用户消息之前的
-            回复用 ``assistant-run-{runId}``。已到终态的 Run 把结局写到它最后一条助手消息的
-            ``outcome``。中断输出也保留展示；已落库文本均已停止生成，不由 Run 状态反推。
+            新的 ``ConversationStateSnapshot``：消息按回合扁平排列（继承来的回合在前，本地回合按 Run
+            的 ``created_at`` 再按 id、Run 内按 context 序号）；同一回合的 assistant 行合成一条回复
+            ``assistant-turn-{回合号}``（见 ``_run_messages``）。按 Run 分组只为算 Run 级事实：
+            已到终态的 Run 把结局写到它最后一条回复的 ``outcome``，当前 Run 给出 ``activity``
+            （``turn`` 是它最后一个可见回合，与实时投影推进 ``activity.turn`` 的规则相同）。
+            Run 身份不进快照。
+            中断输出也保留展示；已落库文本均已停止生成，不由 Run 状态反推。
 
         异常:
             RuntimeError: 某条工具结果行在同一 Run 内找不到对应的 AI 工具调用。
@@ -207,7 +212,7 @@ class ConversationTaskStateRebuilder:
         inherited_rows = [r for r in context_rows if r.run_id is None and r.sequence > 0]
         if inherited_rows:
             inherited = ConversationTaskStateRebuilder._run_messages(
-                None, inherited_rows, presentations, leading_id="assistant-context"
+                None, inherited_rows, presentations
             )
             messages.extend(inherited)
         activity: ConversationStateActivity | None = None
@@ -240,7 +245,7 @@ class ConversationTaskStateRebuilder:
                     (m for m in reversed(run_messages) if m["role"] == "assistant"), None
                 )
                 if assistant is not None:
-                    # 终态后 ``updated_at`` 还可能被结果改写（标题支线写回用量）再推一点，与实时
+                    # 终态后 ``updated_at`` 还可能被结构化输出改写结果再推一点，与实时
                     # 投影的终态时间差在秒级以内，耗时只供展示，不另存终态时间戳。
                     elapsed = run.updated_at - run.created_at
                     assistant["outcome"] = ConversationStateOutcome(
@@ -253,10 +258,15 @@ class ConversationTaskStateRebuilder:
                     )
             messages.extend(run_messages)
             if run.id == task.current_run_id:
+                last_reply = next(
+                    (m for m in reversed(run_messages) if m["role"] == "assistant"), None
+                )
                 activity = ConversationStateActivity(
                     modelActivity=None,
-                    runId=run.id,
                     status=run.status,
+                    turn=last_reply["turn"] if last_reply is not None else None,
+                    resumable=run.status in _RESUMABLE_RUN_STATUSES
+                    and not run_last_turn_withdrawn(rows),
                     startedAt=to_text(run.created_at),
                     endReason=run.end_reason,
                     error=ConversationTaskStateRebuilder.build_run_error(run),
@@ -297,65 +307,80 @@ class ConversationTaskStateRebuilder:
         rows: list[ConversationTaskContextRecord],
         presentations: Mapping[str, ToolPresentation] | None = None,
         final_sequence: int | None = None,
-        *,
-        leading_id: str | None = None,
     ) -> list[ConversationStateMessage]:
-        """把单个 Run 的 context 行投影为消息；不投影的行（编辑移出的历史）跳过。"""
+        """把单个 Run（``run_id`` 为空时是继承来的历史）的 context 行按回合投影为消息。
+
+        回合是行上记下的事实（``turn``，规则只在 ``RuntimeMessageContextManager._opens_turn``），
+        这里不再判断「哪条输入开回合」：输入开头的回合投影为 user 消息加回复，没有输入开头的回合
+        只有回复，回复 id 一律是 ``assistant-turn-{回合号}``。回合途中到达的 Agent 消息是回复的
+        一段。不投影的行（撤回移出的历史、内部通知与结果）跳过。实时投影读同一事实（事件上的回合号）。
+
+        由输入开启的回合总有回复（没有输出时是空回复），没有输入开头的回合只在有内容时才有：实时
+        投影在并入输入时就建好回复、在第一次输出时才建没有输入开头的回复，两边规则相同。
+        """
 
         tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows, presentations)
         if run_id is None:
             for part in tool_parts.values():
                 part["awaitingUser"] = False
-        run_messages: list[ConversationStateMessage] = []
-        assistant = message(
-            leading_id or leading_reply_id(cast(int, run_id)), "assistant", [], run_id
-        )
-        has_user_message = False
+        turns: dict[int, list[ConversationTaskContextRecord]] = {}
         for row in rows:
-            if not row.project_to_transport:
-                continue
-            row_message = row.message
-            if row_message["role"] == "user":
-                user_metadata = cast(UserMessageMetadata, row.metadata)
-                # 只有一轮的输入（用户输入、Agent 消息）有展示形态；其它 kind 有可投影形态时
-                # 在这里加渲染。
-                if user_metadata.kind not in TURN_INPUT_KINDS:
-                    continue
+            turns.setdefault(row.turn, []).append(row)
+        run_messages: list[ConversationStateMessage] = []
+        for turn, turn_rows in turns.items():
+            opener = turn_rows[0]
+            opener_metadata = opener.metadata
+            opened_by_input = (
+                opener.project_to_transport
+                and opener.message["role"] == "user"
+                and isinstance(opener_metadata, UserMessageMetadata)
+                and opener_metadata.kind in TURN_INPUT_KINDS
+            )
+            if opened_by_input:
                 # 只按展示绑定投影，不读 SDK 正文（附件解析后的模型正文不适合展示）。
-                presentation = cast(UserInputPresentation, user_metadata.presentation)
-                # 回合途中到达的 Agent 消息是当前回复的一段，规则同 ``plan_input_consumed``。
-                # 继承行没有 Run，分不清是否途中，开头的来信不能并进上一条回复，一律开回合。
-                if (
-                    user_metadata.source is not None
-                    and run_id is not None
-                    and (has_user_message or assistant["parts"])
-                ):
-                    assistant["parts"].append(
-                        build_agent_message_part(
-                            cast(int, row.message_id), presentation, user_metadata.source
-                        )
-                    )
-                    continue
-                parts, source = build_turn_input(presentation, user_metadata.source)
-                has_user_message = True
-                if assistant["parts"]:
-                    run_messages.append(assistant)
+                input_metadata = cast(UserMessageMetadata, opener_metadata)
+                parts, source = build_turn_input(
+                    cast(UserInputPresentation, input_metadata.presentation),
+                    input_metadata.source,
+                )
                 run_messages.append(
                     message(
-                        user_message_id(cast(int, row.message_id)),
+                        user_message_id(cast(int, opener.message_id)),
                         "user",
                         list(parts),
-                        run_id,
-                        source,
+                        turn=turn,
+                        inherited=run_id is None,
+                        source=source,
                     )
                 )
-                assistant = message(reply_id(cast(int, row.message_id)), "assistant", [], run_id)
-            elif row_message["role"] == "assistant":
-                ConversationTaskStateRebuilder._append_assistant_parts(
-                    assistant, row_message, tool_parts, row.sequence, row.sequence == final_sequence
-                )
-        if has_user_message or assistant["parts"]:
-            run_messages.append(assistant)
+            assistant = message(
+                reply_id(turn), "assistant", [], turn=turn, inherited=run_id is None
+            )
+            for row in turn_rows[1:] if opened_by_input else turn_rows:
+                if not row.project_to_transport:
+                    continue
+                row_message = row.message
+                if row_message["role"] == "user":
+                    user_metadata = cast(UserMessageMetadata, row.metadata)
+                    # 只有一轮的输入（用户输入、Agent 消息）有展示形态；不开回合的只会是途中来信。
+                    if user_metadata.kind in TURN_INPUT_KINDS:
+                        assistant["parts"].append(
+                            build_agent_message_part(
+                                cast(int, row.message_id),
+                                cast(UserInputPresentation, user_metadata.presentation),
+                                cast(MessageSource, user_metadata.source),
+                            )
+                        )
+                elif row_message["role"] == "assistant":
+                    ConversationTaskStateRebuilder._append_assistant_parts(
+                        assistant,
+                        row_message,
+                        tool_parts,
+                        row.sequence,
+                        row.sequence == final_sequence,
+                    )
+            if assistant["parts"] or opened_by_input:
+                run_messages.append(assistant)
         return run_messages
 
     @staticmethod

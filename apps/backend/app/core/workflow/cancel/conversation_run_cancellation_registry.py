@@ -5,11 +5,22 @@ from __future__ import annotations
 import threading
 from typing import Literal
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 
 CancelReason = Literal["user", "parent"]
-"""取消原因：用户停止、上游（父 Agent / Team）停止。只有用户停止会给 Agent 留下「用户已取消」
-通知；两者都让下游结果不再回投。"""
+"""取消原因：用户停止、上游（父 Agent / Team）停止。两者都让下游结果不再回投；落库成不同的结束
+原因（:func:`cancel_end_reason`），只有用户停止会在下一次驱动推导出「用户已停止」通知。"""
+
+_END_REASONS: dict[CancelReason, str] = {
+    "user": Constant.Run.RUN_END_REASON_USER_CANCELLED,
+    "parent": Constant.Run.RUN_END_REASON_PARENT_CANCELLED,
+}
+
+
+def cancel_end_reason(reason: CancelReason) -> str:
+    """取消原因落库为 Run 的哪个结束原因；所有 ``RunTransition.CANCEL``（重启收敛除外）都经这里。"""
+    return _END_REASONS[reason]
 
 
 class ConversationRunCancellationRegistry:
@@ -46,6 +57,11 @@ class ConversationRunCancellationRegistry:
     def is_cancelled(self, task_id: int) -> bool:
         with self._lock:
             return task_id in self._reasons
+
+    def reason(self, task_id: int) -> CancelReason | None:
+        """读当前信号的原因、不取走：驱动内的检查点据此落定结束原因，信号仍留给释放边界取走。"""
+        with self._lock:
+            return self._reasons.get(task_id)
 
     def consume(self, task_id: int) -> CancelReason | None:
         """取走信号并返回取走前的原因（没有信号为 ``None``）；只由执行释放边界调用。"""

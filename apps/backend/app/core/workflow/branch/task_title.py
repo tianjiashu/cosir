@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
     from app.core.workflow.execution_state.runtime_context import RuntimeContext
 
-# 收尾等待期间复查取消信号的间隔：信号没有可等待的通知，停止与编辑重跑不该被支线拖住。
+# 收尾等待期间复查取消信号的间隔：信号没有可等待的通知，停止与撤回不该被支线拖住。
 _SETTLE_POLL_SECONDS = 0.2
 
 

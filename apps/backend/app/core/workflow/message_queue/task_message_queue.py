@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 from typing import cast
 
 from sqlalchemy import event
@@ -108,6 +109,20 @@ class TaskMessageQueue:
         不唤醒等待方：撤回不会产生需要推进的新消息。
         """
         return self._messages.delete_one_returning(session, task_id, message_id)
+
+    def withdraw_matching(
+        self, session: Session, task_id: int, matches: Callable[[TaskMessage], bool]
+    ) -> list[TaskMessage]:
+        """在调用方事务内撤回该 Task 队列中命中 ``matches`` 的全部消息（撤回回合时），返回
+        撤回的行。哪些行属于这一回合由调用方判定，本层只按条件删除；不唤醒等待方。"""
+        targets = [
+            cast(int, message.id)
+            for message in self._messages.list_pending(session, task_id)
+            if matches(message)
+        ]
+        if not targets:
+            return []
+        return list(self._messages.delete_returning(session, targets).values())
 
     def ack(self, session: Session, ids: list[int]) -> dict[int, TaskMessage]:
         """在调用方事务内确认（删除）已并入 context 的行，返回实际删除的行内容（按 id）。

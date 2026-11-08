@@ -5,9 +5,9 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 from app.assistant_transport.projection.snapshot_navigation import (
-    active_run_id,
-    ensure_assistant,
+    ensure_reply,
     find_tool,
+    is_active,
 )
 from app.assistant_transport.projection.tool_presentation import tool_presentation
 from app.assistant_transport.projection.tool_result import project_tool_result
@@ -46,14 +46,13 @@ def plan_tool_call_created(
     state: ConversationStateSnapshot,
     presentations: Mapping[str, ToolPresentation] | None = None,
 ) -> Sequence[ConversationStateMutation]:
-    """在当前活动 Run 的助手消息尾部建立 ``pending`` 的 tool-call part。
+    """在这一回合回复的尾部建立 ``pending`` 的 tool-call part。
 
-    同名 toolCallId 已存在时回空列表（幂等）；Run 已终态或不是当前活动时回空列表。Run 还没有
-    助手消息时连同 part 一起建出助手消息。
+    同名 toolCallId 已存在时回空列表（幂等）；当前活动已终态时回空列表。这一回合还没有回复时
+    连同 part 一起建出回复。
     """
 
-    run_id = active_run_id(state, event.run_id)
-    if run_id is None:
+    if not is_active(state):
         return []
     if find_tool(state, event.tool_call_id) is not None:
         return []
@@ -68,14 +67,15 @@ def plan_tool_call_created(
         "awaitingUser": False,
         "isError": False,
     }
-    message_index, created = ensure_assistant(state, run_id, new_part)
+    message_index, mutations = ensure_reply(state, event.turn, new_part)
     if message_index is None:
-        return created
+        return mutations
     parts = state["messages"][message_index]["parts"]
     return [
+        *mutations,
         ConversationStateMutation(
             "set", ("messages", message_index, "parts", len(parts)), new_part
-        )
+        ),
     ]
 
 

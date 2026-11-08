@@ -39,8 +39,8 @@ _RUN_FAILURE_MESSAGES: dict[str, str] = {
     Constant.Run.RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED: "本轮对话已结束，无法继续，请新建对话",
     Constant.Run.RUN_FAILURE_CODE_BACKEND_RESTARTED: "后端已重启，本轮对话被中断，请重新发送",
     # 取消类：领域侧只给到这些原因时的通用文案。
-    "user_cancelled": "已取消本轮对话",
-    "runtime_cancelled": "已取消本轮对话",
+    Constant.Run.RUN_END_REASON_USER_CANCELLED: "已取消本轮对话",
+    Constant.Run.RUN_END_REASON_PARENT_CANCELLED: "上游任务已停止，本轮对话随之取消",
     # 模型调用错误：code 来自 ErrorKind（唯一分类词表），此处只登记文案。
     ErrorKind.MODEL_AUTH_FAILED.value: "模型服务鉴权失败，请检查 API Key 配置",
     ErrorKind.MODEL_INSUFFICIENT_QUOTA.value: "模型服务配额或余额不足，请充值或更换模型",

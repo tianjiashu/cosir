@@ -13,7 +13,6 @@ from openai.types.chat import (
 )
 
 from app.config.configuration import get_tool_registry
-from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
@@ -106,6 +105,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
                 )
                 parts.receive(
                     source_sequence=response.sequence,
+                    turn=response.turn,
                     text=delta.content if delta else None,
                     reasoning=bool(reasoning),
                     tool_delta=bool(delta and delta.tool_calls),
@@ -137,7 +137,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         service_depends.get_conversation_run_ledger().transition(
             run_id,
             RunTransition.CANCEL,
-            end_reason=Constant.Run.RUN_END_REASON_RUNTIME_CANCELLED,
+            end_reason=rc.cancel_end_reason(),
             usage_stats=rc.usage_stats,
         )
         raise

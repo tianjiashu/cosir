@@ -19,7 +19,6 @@ import asyncio
 from typing import cast
 
 from app.config.configuration import get_tool_registry
-from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.events import InputConsumedEvent, ToolCallStatusChangedEvent
 from app.core.workflow.branch import task_title
@@ -120,7 +119,7 @@ async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | No
     先确认再执行（最多执行一次）：确认删除、决定消息与「等待占位推到 ``running``」同一事务提交，
     之后才执行工具。占位离开 ``pending`` 后决定入口不再认它在等待，执行期间迟到的重复决定被拒，
     原调用不会被重放第二次；执行结果由 ``settle_decision_observation`` 推到终态。原调用找不到
-    （如已被编辑重跑移出上下文）时无法执行，决定已写入、交给模型并留痕。
+    （如已被撤回移出上下文）时无法执行，决定已写入、交给模型并留痕。
     """
     rc = _runtime_context()
     body = cast(DecisionBody, decision.body)
@@ -195,7 +194,7 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
     """确认并写入一条外部队列消息，返回是否实际写入；工作线程执行。
 
     同一事务内先确认删除再写入，写入以确认返回的行内容为准；已被别的执行确认或被用户撤回的消息
-    跳过、返回 ``False``。开启一轮的输入（用户输入、Agent 消息）在提交后发消费事件（带展示绑定与
+    跳过、返回 ``False``。回合输入（用户输入、Agent 消息）在提交后发消费事件（带展示绑定、回合号与
     来源），供 Transport 投影出 user 消息。
     后台结论的认领、并入与原占位落定共用此事务；卡片事件只在提交后发布。
     ``claim_decision`` 只用于要执行的决定：同一事务把这次调用仍为 ``pending`` 的等待占位推到
@@ -210,7 +209,7 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
         if current is None:
             return False
         message, metadata = current.body.render()
-        # 一轮的输入以队列行 id 为消息身份：快照里的消息、回复与途中来信都按它寻址。
+        # 回合输入以队列行 id 为消息身份：快照里的用户消息与途中来信都按它寻址。
         is_turn_input = metadata.kind in TURN_INPUT_KINDS
         context.add_message(
             message,
@@ -219,6 +218,8 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
             project_to_transport=current.project_to_transport,
             message_id=current.id if is_turn_input else None,
         )
+        # 刚写下的这一行所属的回合，交给消费事件：实时投影与冷重建读同一个回合号。
+        turn = cast(int, context.current_turn)
         if claim_decision:
             call_id = cast(DecisionBody, current.body).tool_call_id
             placeholder = context.tool_result_metadata(call_id)
@@ -244,6 +245,7 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
                 run_id=rc.run.id,
                 message_id=cast(int, current.id),
                 presentation=cast(UserInputPresentation, metadata.presentation),
+                turn=turn,
                 source=metadata.source,
             )
         )
@@ -263,7 +265,7 @@ def _cancel_before_request(step_id: str, run_id: int) -> None:
     service_depends.get_conversation_run_ledger().transition(
         run_id,
         RunTransition.CANCEL,
-        end_reason=Constant.Run.RUN_END_REASON_RUNTIME_CANCELLED,
+        end_reason=rc.cancel_end_reason(),
         usage_stats=rc.usage_stats,
     )
     raise RunStopped()

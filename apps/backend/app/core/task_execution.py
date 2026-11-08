@@ -61,8 +61,15 @@ class TaskExecution:
         """有执行者且已收到取消信号：这次执行即将作废，不应再往 mailbox 投递。"""
         return self.driving and cancellation_registry.is_cancelled(self.task_id)
 
-    def start(self, run: ConversationRunRecord, initial: Iterable[TaskMessage]) -> None:
+    def start(
+        self,
+        run: ConversationRunRecord,
+        initial: Iterable[TaskMessage],
+        preceding_run: ConversationRunRecord | None,
+    ) -> None:
         """清空 mailbox、投递初始消息，再把 Run 交给后台执行；调用方持 Task 闸门。
+
+        ``preceding_run`` 原样交给驱动（见 ``RuntimeContext.preceding_run``）。
 
         执行作为独立的子 task 运行，调用方不等它：调度 loop 要继续监听（运行中到达的消息才能及时
         投进 mailbox），闸门也不能被整个 Run 占住。
@@ -76,7 +83,7 @@ class TaskExecution:
         for message in initial:
             self._mailbox.post(message)
         self._run = run
-        self._task = asyncio.get_running_loop().create_task(self._drive(run))
+        self._task = asyncio.get_running_loop().create_task(self._drive(run, preceding_run))
         # 兜底：释放边界之外的异常在这里留下日志，不留无人取回失败的 task。
         self._task.add_done_callback(self._on_drive_done)
 
@@ -119,7 +126,9 @@ class TaskExecution:
         self._task = self._run = None
         cancellation_registry.consume(self.task_id)
 
-    async def _drive(self, run: ConversationRunRecord) -> None:
+    async def _drive(
+        self, run: ConversationRunRecord, preceding_run: ConversationRunRecord | None
+    ) -> None:
         """驱动一个 Run 并释放执行，再交给 ``on_released``；失败由 ``RunDriver`` 落定。
 
         注销执行与取走信号之间没有 await（与 :meth:`_signal` 互斥），这是信号的唯一清理点。
@@ -130,7 +139,7 @@ class TaskExecution:
         # 每次驱动现构造：``RunDriver`` 一次构造对应一次驱动；也不能放进构造函数——space 在快照读取
         # 等许多路径上物化，构造执行登记不应牵出 Run / Task service 与存储的装配。
         try:
-            await RunDriver().drive(run)
+            await RunDriver().drive(run, preceding_run)
             if cancellation_registry.is_cancelled(self.task_id):
                 # 取走信号前先撤销后台结果：信号在时迟到结论被 ``deliver_background_result``
                 # 丢弃，取走之后、撤销之前却会入队并开出新 Run。撤销期间执行仍登记着，

@@ -3,7 +3,7 @@
 from typing import Literal
 
 from openai.types import CompletionUsage
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.enums.tool_call_status import ToolCallEventStatus
@@ -33,7 +33,17 @@ CALL_RESULT_KINDS: frozenset[MessageKind] = frozenset(
 
 TURN_INPUT_KINDS: frozenset[MessageKind] = frozenset({"user_input", "agent_message"})
 """开启一轮的输入：投影成对话里的一条 user 消息，后面跟着它的回复。fork 切分、冷重建与消费投影
-都按它认「一轮的起点」；只有其中的 ``user_input`` 可编辑重跑、会触发标题支线。"""
+都按它认「一轮的起点」；只有其中的 ``user_input`` 可撤回、会触发标题支线。"""
+
+
+class NoticeEntry(BaseModel):
+    """合成进一条 ``<system_notice>`` 的单条通知：撤回回合时据此重新投递 Task 级通知，工具准入
+    通知的推导据 ``banned_tools`` 对照上次告知的禁用集合（见 ``NOTICE_LEVELS``）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    notice_kind: str
+    content: str
+    banned_tools: list[str] | None = None
 
 
 class UserMessageMetadata(BaseModel):
@@ -46,8 +56,12 @@ class UserMessageMetadata(BaseModel):
     的 user 指令（如结构化输出）只拼进请求副本、不落库。
 
     ``tool_call_id`` 记录调用结果类消息（见 :data:`CALL_RESULT_KINDS`）回答的是哪次调用：决定与
-    后台结论可能在发起调用之后的轮次才并入，编辑重跑据它判断这行属于哪一轮（见
-    ``ConversationTaskContextService.exclude_from``）。不对应某次调用的后台结论（重启结论）为 ``None``。
+    后台结论可能在发起调用之后的回合才并入，撤回据它判断这行回答的是哪次调用（见
+    ``turn_withdrawal_service``）。不对应某次调用的后台结论（重启结论）为 ``None``。
+
+    ``notices`` 只用于合成通知行（``kind="notice"``）：记下合成进来的每条通知。系统提示词增量、
+    子 Agent 目录变更这类环境通知只投递一次，所在的一轮被撤回时要据此重新投递，否则之后的 Run
+    永远看不到这次变化。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -55,6 +69,7 @@ class UserMessageMetadata(BaseModel):
     presentation: UserInputPresentation | None = None
     source: MessageSource | None = None
     tool_call_id: str | None = None
+    notices: list[NoticeEntry] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _presentation_only_for_turn_inputs(self) -> "UserMessageMetadata":
@@ -64,6 +79,8 @@ class UserMessageMetadata(BaseModel):
             raise ValueError("source is required for agent_message and forbidden otherwise")
         if self.tool_call_id is not None and self.kind not in CALL_RESULT_KINDS:
             raise ValueError("tool_call_id is only allowed for call result messages")
+        if self.notices and self.kind != "notice":
+            raise ValueError("notices are only allowed for notice messages")
         return self
 
 
@@ -83,7 +100,7 @@ BackgroundKind = Literal["terminal_command", "child_agent", "agent_team"]
 class BackgroundWork(BaseModel):
     """一次后台工作的持久化记录，挂在这次调用的后台占位行上，看板与卡片都从它重建。
 
-    为什么不单独建表：后台工作就是对话里的一次工具调用，占位行已经随对话 fork、编辑重跑撤回、Task
+    为什么不单独建表：后台工作就是对话里的一次工具调用，占位行已经随对话 fork、撤回、Task
     删除；记录挂在它上面，看板就是对话的一个投影，没有第二个事实源要手工同步。工作是否还在跑
     不在这里（进程内 ``background_registry`` 的活条目才是），这里只记重启后还需要的事实。
 

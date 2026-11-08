@@ -1,55 +1,37 @@
-"""Task orchestration service.
+"""Task 用例：创建（固化工具 schema）、分叉、删除，以及当前 Run 与派生树的读取。
 
-单一职责：编排任务创建（仅建 task 容器，首轮次由调用方显式创建）与执行态派生。
-
-职责边界：
-- 负责：任务容器创建（不含首轮次）、从最新 turn 派生执行态、任务树原子级联删除
-  （编排 ``TaskCrud``/``ConversationRunCrud``/``ConversationTaskContextCrud`` 在单事务内逐个清理，
-  Run 执行进度随记录级联删除）。
-- 不负责：直接 SQL 操作（委托给上述 CRUD）；不写执行态（执行态由 ``Turn`` 持有，本
-  service 仅派生展示）；不绑定 agent（agent 维度由 turn 与 delegation 记录承载）。
+- 分叉在工作区闸门内一个写事务里完成，切点、初始配置与历史复制的规则在 ``ForkSource``；
+- 删除 = 停止 + 删除记录：停止协议在 :meth:`TaskService.stop_then_delete`（工作区删除共用），
+  记录在一个事务里按后序级联删除，提交后回收 Task 级资源与 runtime space；
+- 不负责 Run 的调度与执行（``core/task_actor.py``），也不直接写 SQL（经各 CRUD）。
 """
 
 import asyncio
+from collections.abc import Callable
 from contextlib import ExitStack
 from copy import deepcopy
-from dataclasses import dataclass
-from typing import cast
+from typing import TypeVar, cast
 
 from sqlalchemy.orm.session import Session
 
 from app.config.logging.logger import log
 from app.core.workflow.message_queue.message_bodies import ADVANCING_KINDS
 from app.models import ConversationRunRecord, TaskRecord
-from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
     ProvisionalTaskCleanupConflictError,
 )
 from app.models.errors.task_fork_errors import TaskForkConflictError
-from app.models.fork_reply import ForkReply
-from app.models.task_extra import TaskExtra, TaskFork, TaskForkLaunch
+from app.models.task_extra import TaskExtra, TaskFork
 from app.models.task_kind import FORK_TASK_TYPES, USER_FACING_TASK_TYPES, TaskType
 from app.service import depends as service_depends
-from app.service.conversation_run.fork_history import (
-    launch_of_run,
-    locate_reply,
-    next_turn_sequence,
-    turn_start_of_call,
-)
+from app.service.task.fork_source import ForkCut, ForkSource
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
 
-
-@dataclass(frozen=True)
-class TaskDeletionResult:
-    """一次已提交任务级联删除需要执行的进程内清理信息。"""
-
-    task_ids: frozenset[int]
-
+_T = TypeVar("_T")
 
 class TaskService:
     """Orchestrate task creation, lifecycle management, and execution-status derivation."""
@@ -73,17 +55,15 @@ class TaskService:
         self._task_register = task_runtime_spaces
         self._task = service_depends.get_task_crud()
         self._turn = service_depends.get_conversation_run_crud()
-        self._workspace = service_depends.get_workspace_crud()
-        self._context = service_depends.get_conversation_task_context_service()
         self._state = service_depends.get_conversation_task_state_service()
         self._task_context_crud = service_depends.get_conversation_task_context_crud()
         self._session_factory = main_session_factory()
 
-    def get_or_create_task(
+    def create_task(
         self,
         workspace_id: int,
         title: str,
-        task_id: int | None = None,
+        *,
         creation_command_id: str | None = None,
         task_type: TaskType = TaskType.USER,
         parent_task_id: int | None = None,
@@ -92,77 +72,44 @@ class TaskService:
         tool_schemas: list[dict[str, object]] | None = None,
         derivation_depth: int = 0,
     ) -> TaskRecord:
-        """创建新 Task 或读取已有 Task，并在新建时固化工具 schema。
+        """创建 Task 并固化它的工具 schema。
 
-        新建用户 Task 时，``tool_schemas`` 由调用方显式提供并固化，本方法不会自行从
-        主 Agent profile 或工具注册表推导（设计意图上曾希望以当前 profile 与工具注册表
-        解析出的 schema 作为默认来源，但当前实现未内置该推导，统一交由调用方负责——此为
-        有意为之，以保持本方法的通用性）。传入 ``None`` 时 ``tasks.tool_schemas`` 会
-        持久化为**空列表**，意味着该 Task 运行期无任何可调用工具（运行期
-        ``task_tool_schemas`` 为空 → ``admitted_tools`` 为空）。主 Agent Task 的 schema 由
-        ``task_tool_scope.main_agent_tool_schemas`` 解析后传入，委派/Team 节点等由各自
-        调用方筛选后传入。已有 Task 只读取持久化记录，不重新根据当前 profile 改写工具集合。
+        schema 由调用方筛选后传入、本方法不自行推导：主 Agent Task 的由
+        ``task_tool_scope.main_agent_tool_schemas`` 解析，委派 / Team 节点由各自调用方筛选。传入
+        ``None`` 持久化为空列表，即该 Task 运行期没有可调用工具。
 
         参数:
-            workspace_id: 所属工作区标识。
-            title: Task 标题。
-            task_id: 已有 Task 标识；非空时只执行读取。
             creation_command_id: provisional Task 的创建命令标识。
-            task_type: Task 类型。
             parent_task_id: 委派子 Task 的父 Task 标识。
-            session: 可选的外部数据库事务会话。
-            extra: Task 扩展 JSON。
-            tool_schemas: 新建 Task 时固化的固定模型工具 schema；传入 ``None`` 会持久化
-                为空列表（即该 Task 无可用工具），调用方须显式提供已筛选的 schema。
-            derivation_depth: 新建 Task 的派生深度（见 ``core.tool.derivation.child_depth``）。
-
-        返回:
-            新建或读取的 ``TaskRecord``。
-
-        异常:
-            RuntimeError: 主 Agent / 工具注册表尚未完成装配，或已固化 schema 无法生成。
-            KeyError: 读取不存在的已有 Task。
-
-        副作用:
-            新建路径向 ``tasks.tool_schemas`` 写入 schema；已有 Task 路径只初始化运行时
-            space 并读取，不修改数据库。
+            session: 传入时加入调用方事务。
+            derivation_depth: 派生深度（见 ``core.tool.derivation.child_depth``）。
         """
 
-        if workspace_id is None:
-            raise ValueError("workspace_id is None")
-
-        if task_id is None:
-            frozen_schemas = [] if tool_schemas is None else tool_schemas
-            task = self._task.create(
-                workspace_id=workspace_id,
-                title=title,
-                task_type=task_type,
-                parent_task_id=parent_task_id,
-                creation_command_id=creation_command_id,
-                extra=extra,
-                tool_schemas=frozen_schemas,
-                session=session,
-                derivation_depth=derivation_depth,
-            )
-            log.info(
-                "task_tool_schemas_frozen",
-                extra={
-                    "msg": "Task 创建时已固化主 Agent 工具 schema",
-                    "data": {
-                        "task_id": task.id,
-                        "task_type": task_type,
-                        "derivation_depth": derivation_depth,
-                        "tool_count": len(frozen_schemas),
-                    },
+        frozen_schemas = [] if tool_schemas is None else tool_schemas
+        task = self._task.create(
+            workspace_id=workspace_id,
+            title=title,
+            task_type=task_type,
+            parent_task_id=parent_task_id,
+            creation_command_id=creation_command_id,
+            extra=extra,
+            tool_schemas=frozen_schemas,
+            session=session,
+            derivation_depth=derivation_depth,
+        )
+        log.info(
+            "task_tool_schemas_frozen",
+            extra={
+                "msg": "Task 创建时已固化工具 schema",
+                "data": {
+                    "task_id": task.id,
+                    "task_type": task_type,
+                    "derivation_depth": derivation_depth,
+                    "tool_count": len(frozen_schemas),
                 },
-            )
-            return task
-        task_runtime_spaces.get_or_create(task_id)
-        return self._task.get(task_id)
-
-    def collect_task_tree_ids(self, task_id: int) -> set[int]:
-        """返回任务及其递归子任务（含 Team 节点）的 id；删除前先停止这些 Task 的执行。"""
-        return self._collect_task_tree_ids(task_id)
+            },
+        )
+        return task
 
     def list_task_ids_to_dispatch(self) -> set[int]:
         """启动时需要拉起 actor 的 Task：外部队列有能推进的消息，或当前 Run 挂起等唤醒。
@@ -232,15 +179,15 @@ class TaskService:
         self,
         source_task_id: int,
         *,
-        reply: ForkReply,
+        turn: int,
     ) -> TaskRecord:
-        """从一条回复往后分叉：新 Task 继承到这条回复为止的上下文。"""
+        """从一条回复（按它所在的回合 ``turn``）分叉：新 Task 继承到这一回合结尾为止的上下文。"""
 
         supervisor = asyncio.create_task(
             asyncio.to_thread(
-                self._fork_task_in_workspace,
+                self._fork_at_turn,
                 source_task_id,
-                reply,
+                turn,
             )
         )
         try:
@@ -270,45 +217,15 @@ class TaskService:
                 },
             )
 
-    def _fork_task_in_workspace(self, source_task_id: int, reply: ForkReply) -> TaskRecord:
-        source = self._task.get(source_task_id)
-        try:
-            with workspace_operations.operation(source.workspace_id, timeout=10):
-                return self._copy_fork_history(source_task_id, reply)
-        except TimeoutError as exc:
-            raise TaskForkConflictError(
-                "WORKSPACE_BUSY", "workspace has an active structural operation"
-            ) from exc
-
-    def _copy_fork_history(self, source_task_id: int, reply: ForkReply) -> TaskRecord:
-        """切点在写事务内算：点击到提交之间并入的新输入不会切错位置。
-
-        异常:
-            KeyError: 回复不存在，映射 404。
-            TaskForkConflictError: 这条回复还在进行（``FORK_REPLY_ACTIVE``）。
-        """
-        with begin_immediate(self._session_factory) as session:
-            source = self._task.ensure_task(session, source_task_id)
-            _require_forkable(source)
-            rows = self._context.history(source_task_id, session)
-            runs = self._turn.list_by_task_in_session(session, source.id)
-            start = locate_reply(rows, reply)
-            before_sequence = next_turn_sequence(rows, start)
-            if before_sequence is None:
-                if any(r.status in ACTIVE_RUN_STATUSES for r in runs):
-                    raise TaskForkConflictError("FORK_REPLY_ACTIVE", "this reply is still running")
-                before_sequence = rows[-1].sequence + 1
-            target = self._copy_prefix(
-                session,
-                source,
-                rows,
-                before_sequence,
-                launch=launch_of_run(source, start.run_id, runs),
-                title=self._task.next_fork_title(source.workspace_id, source.title, session),
-                task_type=TaskType.USER_FORK,
-                depth=0,
-            )
-        return target
+    def _fork_at_turn(self, source_task_id: int, turn: int) -> TaskRecord:
+        """手动分叉：切在所选回复这一回合的结尾（规则见 ``ForkSource.cut_after_turn``）。"""
+        return self._fork(
+            source_task_id,
+            lambda source: source.cut_after_turn(turn),
+            title=None,
+            task_type=TaskType.USER_FORK,
+            depth=0,
+        )
 
     def fork_for_agent(
         self,
@@ -320,6 +237,32 @@ class TaskService:
         derivation_depth: int,
     ) -> TaskRecord:
         """切在调用所在回合的开头：继承到上一条回复，当前回合交给新的任务说明。"""
+        return self._fork(
+            source_task_id,
+            lambda source: source.cut_before_call(run_id, tool_call_id),
+            title=title,
+            task_type=TaskType.AGENT_FORK,
+            depth=derivation_depth,
+        )
+
+    def _fork(
+        self,
+        source_task_id: int,
+        cut: Callable[[ForkSource], ForkCut],
+        *,
+        title: str | None,
+        task_type: TaskType,
+        depth: int,
+    ) -> TaskRecord:
+        """两种分叉共用的编排：工作区闸门内一个写事务里定切点、建目标 Task、复制切点之前的历史。
+
+        ``cut`` 在来源上取切点与初始配置，两种分叉只在这里不同。切点在写事务内算：点击到提交之间
+        并入的新输入不会切错位置。``title`` 为 ``None`` 时按来源标题编号。
+
+        异常:
+            TaskForkConflictError: 来源不能分叉，或工作区有其他结构性操作（``WORKSPACE_BUSY``）。
+            ``cut`` 抛出的异常原样上浮。
+        """
         source = self._task.get(source_task_id)
         try:
             with (
@@ -328,54 +271,36 @@ class TaskService:
             ):
                 source = self._task.ensure_task(session, source_task_id)
                 _require_forkable(source)
-                rows = self._context.history(source_task_id, session)
-                runs = self._turn.list_by_task_in_session(session, source.id)
-                target = self._copy_prefix(
-                    session,
-                    source,
-                    rows,
-                    turn_start_of_call(rows, run_id, tool_call_id),
-                    launch=launch_of_run(source, run_id, runs),
-                    title=title,
-                    task_type=TaskType.AGENT_FORK,
-                    depth=derivation_depth,
+                fork_source = ForkSource(
+                    task=source,
+                    rows=self._task_context_crud.get(
+                        source_task_id, include_in_context=False, session=session
+                    ),
+                    runs=self._turn.list_by_task_in_session(session, source.id),
                 )
+                fork_cut = cut(fork_source)
+                target = self._task.create(
+                    workspace_id=source.workspace_id,
+                    title=title or self._task.next_fork_title(
+                        source.workspace_id, source.title, session
+                    ),
+                    task_type=task_type,
+                    extra=TaskExtra(fork=TaskFork(
+                        source_task_id=source.id,
+                        source_title=source.title,
+                        tree_parent_task_id=source.id,
+                        initial_launch=fork_cut.launch,
+                    )),
+                    # 工具列表是请求前缀的一部分，改了就接不上源的缓存；派生限制由运行期准入执行。
+                    tool_schemas=deepcopy(source.tool_schemas),
+                    session=session,
+                    derivation_depth=depth,
+                )
+                count = fork_source.copy_before(fork_cut, target, self._task_context_crud, session)
         except TimeoutError as exc:
             raise TaskForkConflictError(
                 "WORKSPACE_BUSY", "workspace has an active structural operation"
             ) from exc
-        return target
-
-    def _copy_prefix(
-        self,
-        session: Session,
-        source: TaskRecord,
-        rows: list[ConversationTaskContextRecord],
-        before_sequence: int,
-        *,
-        launch: TaskForkLaunch,
-        title: str,
-        task_type: TaskType,
-        depth: int,
-    ) -> TaskRecord:
-        target = self._task.create(
-            workspace_id=source.workspace_id,
-            title=title,
-            task_type=task_type,
-            extra=TaskExtra(fork=TaskFork(
-                source_task_id=source.id,
-                source_title=source.title,
-                tree_parent_task_id=source.id,
-                initial_launch=launch,
-            )),
-            # 工具列表是请求前缀的一部分，改了就接不上源的缓存；派生限制由运行期准入执行。
-            tool_schemas=deepcopy(source.tool_schemas),
-            session=session,
-            derivation_depth=depth,
-        )
-        count = self._context.copy_fork_prefix(
-            session, source, target, rows, before_sequence
-        )
         log.info(
             "task_fork_copied",
             extra={
@@ -383,7 +308,7 @@ class TaskService:
                 "data": {
                     "source_task_id": source.id,
                     "target_task_id": target.id,
-                    "before_sequence": before_sequence,
+                    "before_sequence": fork_cut.before_sequence,
                     "task_type": task_type,
                     "context_count": count,
                 },
@@ -414,15 +339,11 @@ class TaskService:
     async def delete_task_tree(self, task_id: int, *, with_forks: bool = False) -> frozenset[int]:
         """删除 Task 的用户用例：删除 = 停止 + 删除记录，停止在任何锁之外；返回实际删除的 Task id。
 
-        先停下所有权子树（沿 ``parent_task_id`` 的委派子 Agent 与 Team 节点）的 actor 并等执行
-        落定，停止即墓碑（见 ``TaskRuntimeSpaceRegistry.stop``）；收集与停止反复到子树不再增长，
-        覆盖父 Agent 在停下前刚委派出的子 Task。再由 :meth:`delete_task` 在一个事务里删除记录。
+        经 :meth:`stop_then_delete` 先停下所有权子树（沿 ``parent_task_id`` 的委派子 Agent 与 Team
+        节点），再由 :meth:`delete_task` 在一个事务里删除记录。
         fork 不在所有权子树里，默认不随源 Task 删除、只改挂（见 :meth:`delete_task_tree_in_session`）；
         ``with_forks`` 为真时把全部 fork 后代（含 fork 的 fork）当作额外的根一并停止和删除。fork 后代
         只在开头收集一次，删除的就是停下的这批：停止之后才 fork 出来的照常改挂，不会删掉没停下的 Task。
-
-        删除没成功（闸门忙、写库失败）时为已停下的 Task 换上新 actor：Task 仍在，不能留着没有
-        调度者。请求被取消时不回滚——工作线程里的删除可能照常提交，回滚会给已删除的 Task 拉起 actor。
 
         异常:
             KeyError: Task 不存在。
@@ -434,18 +355,35 @@ class TaskService:
             if with_forks
             else frozenset()
         )
+        def collect() -> set[int]:
+            task_ids: set[int] = set()
+            for root_id in (task_id, *fork_ids):
+                task_ids |= self.collect_task_tree_ids(root_id)
+            return task_ids
+
+        return await self.stop_then_delete(collect, lambda: self.delete_task(task_id, fork_ids))
+
+    async def stop_then_delete(
+        self, collect: Callable[[], set[int]], delete: Callable[[], _T]
+    ) -> _T:
+        """删除一批 Task 的统一协议：在任何锁之外停下 ``collect()`` 给出的 Task，再执行 ``delete``。
+
+        停止即墓碑（见 ``TaskRuntimeSpaceRegistry.stop``），并等各 Task 的 Team 协调任务退出；收集与
+        停止反复到集合不再增长，覆盖父 Agent 在停下前刚委派出的子 Task。``collect`` 与 ``delete`` 是
+        同步函数，在工作线程里调用。``delete`` 没成功（闸门忙、写库失败）时为已停下的 Task 换上新
+        actor：Task 仍在，不能留着没有调度者。请求被取消时不回滚——工作线程里的删除可能照常提交，
+        回滚会给已删除的 Task 拉起 actor。
+        """
         stopped: set[int] = set()
         try:
             while True:
-                task_ids: set[int] = set()
-                for root_id in (task_id, *fork_ids):
-                    task_ids |= await asyncio.to_thread(self.collect_task_tree_ids, root_id)
+                task_ids = await asyncio.to_thread(collect)
                 if task_ids <= stopped:
                     break
                 await self._task_register.stop(task_ids - stopped)
                 await service_depends.get_agent_team_coordinator().drain_for_deletion(task_ids)
                 stopped |= task_ids
-            return await asyncio.to_thread(self.delete_task, task_id, fork_ids)
+            return await asyncio.to_thread(delete)
         except Exception:
             self._task_register.restart_stopped(stopped)
             raise
@@ -503,7 +441,7 @@ class TaskService:
         task = self._task.get(task_id)
         try:
             with workspace_operations.operation(task.workspace_id, timeout=10):
-                result = self._delete_task_locked(task_id, fork_ids)
+                deleted = self._delete_task_locked(task_id, fork_ids)
         except TimeoutError as exc:
             raise DeletionBusyError("task", task_id) from exc
         log.info(
@@ -513,11 +451,11 @@ class TaskService:
                 "data": {
                     "task_id": task_id,
                     "fork_ids": sorted(fork_ids),
-                    "deleted_tasks": len(result.task_ids),
+                    "deleted_tasks": len(deleted),
                 },
             },
         )
-        return result.task_ids
+        return deleted
 
     def cleanup_provisional_task(self, task_id: int, creation_command_id: str) -> None:
         """在 Assistant Transport 尚未接受首条命令时受控删除 provisional Task。
@@ -539,7 +477,7 @@ class TaskService:
                     raise ProvisionalTaskCleanupConflictError(
                         "creationCommandId does not match task"
                     )
-                tree_ids = self._collect_task_tree_ids(task_id)
+                tree_ids = self.collect_task_tree_ids(task_id)
                 locked_ids = self._collect_task_ancestor_ids(task_id) | tree_ids
                 with ExitStack() as stack:
                     for current_id in sorted(locked_ids):
@@ -561,18 +499,18 @@ class TaskService:
             },
         )
 
-    def _delete_task_locked(self, task_id: int, fork_ids: frozenset[int]) -> TaskDeletionResult:
+    def _delete_task_locked(self, task_id: int, fork_ids: frozenset[int]) -> frozenset[int]:
         """在已持有 workspace 闸门时删除任务树（及给定的 fork 后代），不触发附件清理。"""
 
         tree_ids: set[int] = set()
         for root_id in (task_id, *fork_ids):
-            tree_ids |= self._collect_task_tree_ids(root_id)
+            tree_ids |= self.collect_task_tree_ids(root_id)
         service_depends.get_agent_team_coordinator().cancel_for_task_ids(tree_ids)
         return self._delete_task_after_operations(task_id, fork_ids)
 
     def _delete_task_after_operations(
         self, task_id: int, fork_ids: frozenset[int] = frozenset()
-    ) -> TaskDeletionResult:
+    ) -> frozenset[int]:
         """在已持有 workspace 闸门时提交任务树删除。"""
 
         log.info(
@@ -583,9 +521,9 @@ class TaskService:
             },
         )
         with begin_immediate(self._session_factory) as session:
-            result = self.delete_task_tree_in_session(task_id, session, fork_ids=fork_ids)
-        self.finalize_deleted_task_spaces(result)
-        return result
+            deleted = self.delete_task_tree_in_session(task_id, session, fork_ids=fork_ids)
+        self.finalize_deleted_task_spaces(deleted)
+        return deleted
 
     def _collect_task_ancestor_ids(self, task_id: int) -> set[int]:
         """收集 task 自身以上的父 task 标识。
@@ -613,8 +551,9 @@ class TaskService:
             current = self._task.get(parent_id)
         return ancestors
 
-    def _collect_task_tree_ids(self, root_task_id: int) -> set[int]:
-        """收集任务树（根任务及沿 ``parent_task_id`` 递归的全部子 Task）的 id 集合。"""
+    def collect_task_tree_ids(self, root_task_id: int) -> set[int]:
+        """收集任务树（根任务及沿 ``parent_task_id`` 递归的全部子 Task，含 Team 节点）的 id 集合；
+        删除前先停止这些 Task 的执行。"""
 
         with self._session_factory() as session:
             return set(self._collect_task_tree_ids_postorder(root_task_id, session))
@@ -636,7 +575,7 @@ class TaskService:
 
     def delete_task_tree_in_session(
         self, root_task_id: int, session: Session, *, fork_ids: frozenset[int] = frozenset()
-    ) -> TaskDeletionResult:
+    ) -> frozenset[int]:
         """按后序在同一事务删除所有权子树，返回提交后需卸载的 Task 集合。
 
         所有权子树沿 ``parent_task_id``（委派子 Agent、Team 节点）级联删除：它们是被删 Agent 执行的
@@ -657,11 +596,9 @@ class TaskService:
         self._task.reparent_forks(root.workspace_id, deleted, _fork_source(root, deleted), session)
         for current_id in task_ids_postorder:
             self._delete_single_task_in_session(current_id, session)
-        return TaskDeletionResult(
-            task_ids=frozenset(task_ids_postorder),
-        )
+        return deleted
 
-    def finalize_deleted_task_spaces(self, result: TaskDeletionResult) -> None:
+    def finalize_deleted_task_spaces(self, task_ids: frozenset[int]) -> None:
         """数据库提交后回收 Task 级资源（终端、浏览器标签、后台结果、看板）与运行时空间；回滚路径
         一概不碰。
 
@@ -672,15 +609,15 @@ class TaskService:
         from app.core.tool.background.backgraound_registry import background_registry
         from app.core.tool.handoff.handoff_registry import handoff_registry
 
-        service_depends.get_terminal_session_service().delete_task_sessions(result.task_ids)
+        service_depends.get_terminal_session_service().delete_task_sessions(task_ids)
         # 浏览器标签页归宿主所有：发后即忘的通知，宿主未连接时标签页也已不在（链路记日志）。
         service_depends.get_host_link().notify(
-            "browser.dropTasks", {"task_ids": sorted(result.task_ids)}
+            "browser.dropTasks", {"task_ids": sorted(task_ids)}
         )
-        for task_id in result.task_ids:
+        for task_id in task_ids:
             background_registry.drop_task(task_id)
             handoff_registry.drop_task(task_id)
-        self._unload_deleted_task_spaces(set(result.task_ids))
+        self._unload_deleted_task_spaces(set(task_ids))
 
     def _unload_deleted_task_spaces(self, task_ids: set[int]) -> None:
         """清除已删除任务的进程内 runtime space 与 context 引用。"""
@@ -688,7 +625,7 @@ class TaskService:
         for current_id in task_ids:
             try:
                 self._task_register.mark_deleted(current_id)
-                self._state.mark_task_deleted(current_id)
+                self._state.release_deleted_task(current_id)
                 space = self._task_register.get(current_id)
                 if space is None:
                     continue

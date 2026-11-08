@@ -8,11 +8,11 @@
 - 用户交还：决定到达后 ``prepare_input`` 重放原调用，工具调用 :meth:`HandoffRegistry.end` 取回登记；
 - 资源在交接中结束（Agent 不知道的结束，如 shell 退出）：资源一侧调用 :meth:`settle`，代用户驳回那次
   调用，唤醒等它的 Agent；
-- 编辑重跑撤回这一轮：撤回方调用 :meth:`drop`（否则资源会一直显示交接中，也无法再次交接）；
+- 撤回这一回合：撤回方调用 :meth:`drop`（否则资源会一直显示交接中，也无法再次交接）；
 - Task 删除提交后：``TaskService`` 调用 :meth:`drop_task`。
 Run 停止不结束交接：等待中的决定按 HITL 契约在 Run 停止后仍可作出。
 
-为什么放在 core：重跑撤回与 Task 删除在 core 之外的应用层，资源实现在 ``app.tools``；依赖方向只允许
+为什么放在 core：撤回与 Task 删除在 core 之外的应用层，资源实现在 ``app.tools``；依赖方向只允许
 ``app.tools → core``，登记表放在双方都能依赖的这一层。资源类型（``HandoffSurface``）是前端据以把
 交接提示放到对应面板的标识，新增一种可交接的资源只需加一个取值。
 
@@ -130,7 +130,7 @@ class HandoffRegistry:
             )
 
     def drop(self, task_id: int, tool_call_ids: Iterable[str]) -> None:
-        """撤回（编辑重跑移出这一轮）：静默丢弃这些调用的登记，不落定——等待占位已随这一轮移出。"""
+        """撤回回合：静默丢弃这些调用的登记，不落定——等待占位已随这一回合移出。"""
 
         with self._lock:
             dropped = [

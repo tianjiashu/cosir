@@ -32,7 +32,7 @@ from app.core.workflow.conversation_run_ledger import ConversationRunLedger
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
-from app.service.conversation_run.conversation_task_context_service import (
+from app.service.conversation.conversation_task_context_service import (
     ConversationTaskContextService,
 )
 from app.service.recover_service import RecoverService
@@ -161,8 +161,7 @@ def _manager(
     manager = object.__new__(RuntimeMessageContextManager)
     manager._max_turn = 0
     manager._run_turn = None
-    manager._run_has_input = False
-    manager._run_has_reply = False
+    manager._run_shown = False
 
     manager._used_call_ids = set()
 
@@ -762,7 +761,6 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
 
     import app.core.workflow.node_helper.model_stream_state_machine as machine_module
     from app.core.events import ToolCallStatusChangedEvent
-    from app.core.workflow.execution_state.tool_batch import ToolBatch
     from app.core.workflow.node_helper import ModelStreamStateMachine
     from tests.sdk_fixtures import sdk_completion
 

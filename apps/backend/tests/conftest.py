@@ -28,6 +28,7 @@ from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_config, agent_profile_source
 from app.core.context.context_store import ContextStore
 from app.core.tool.execute.tool_executor import ToolExecutor
+from app.core.tool.tool_registry import ToolRegistry
 from app.service.configuration import (
     agent_team_configuration_registry as agent_team_registry_module,
 )
@@ -38,7 +39,7 @@ from app.service.configuration.agent_team_configuration_registry import (
 from app.service.configuration.agent_team_configuration_source import (
     AgentTeamConfigurationScopeSource,
 )
-from app.service.conversation_run.conversation_task_context_service import (
+from app.service.conversation.conversation_task_context_service import (
     ConversationTaskContextService,
 )
 from app.service.depends import close_service_dependencies
@@ -49,7 +50,6 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import init_storage, initialize_app_schema
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-from app.core.tool.tool_registry import ToolRegistry
 from app.tools.tool_registration import build_tool_registry
 from app.utils.path import system_cosir as paths
 from tests.terminal_test_support import terminal_worker_path

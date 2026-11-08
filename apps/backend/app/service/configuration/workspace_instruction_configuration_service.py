@@ -12,6 +12,10 @@ from pathlib import Path
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.configuration.file_store import ConfigurationFileStore
+from app.service.configuration.runtime_notices.system_prompt_delta import (
+    SystemPromptDelta,
+    SystemPromptDeltaSource,
+)
 from app.utils.token_estimator import TokenEstimator
 from app.utils.workspace_instruction import find_workspace_instruction_file
 
@@ -59,7 +63,7 @@ class WorkspaceInstructionConfigurationService:
         """校验 token 预算并原子更新当前有效指令文件。
 
         没有既有候选时写入 workspace 根目录 ``AGENTS.md``；已有嵌套候选时保持其路径不变，
-        以保证配置页面与运行时的有效文件一致。
+        以保证配置页面与运行时的有效文件一致。写入后把变更以增量通知这个 workspace 里已装配的 Task。
         """
 
         document = self.read()
@@ -69,8 +73,7 @@ class WorkspaceInstructionConfigurationService:
                 "workspace AGENTS.md 超出 token 预算: "
                 f"{next_document.token_length} > {next_document.max_tokens}"
             )
-        with self.store.locked(document.path):
-            self.store.write_text_atomic(document.path, content, root=self.root)
+        self.store.write_text_atomic(document.path, content, root=self.root)
         log.info(
             "configuration_workspace_instruction_written",
             extra={
@@ -78,6 +81,14 @@ class WorkspaceInstructionConfigurationService:
                 "data": {"workspace_root": str(self.root), "path": str(document.path)},
             },
         )
+        delta = SystemPromptDelta.between(
+            source=SystemPromptDeltaSource.WORKSPACE_INSTRUCTIONS,
+            previous=document.content,
+            current=content,
+            scope=str(self.root),
+        )
+        if delta is not None:
+            delta.broadcast()
         return next_document
 
     def _document(self, content: str, *, path: Path, exists: bool) -> WorkspaceInstructionDocument:

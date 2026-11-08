@@ -1,4 +1,5 @@
-"""Task message_queue 的消息语义：调度规则（``dispatch_policy``）与单次执行的投递通道（``run_mailbox``）。
+"""Task 消息队列：消息语义（``TaskMessage`` 与 ``message_bodies``）、外部队列 ``TaskMessageQueue``
+与调度规则 ``dispatch_policy``（纯函数）。
 
-外部队列的持久化与调度 actor 仍在 ``service/conversation_run``；这里只放不依赖后端的纯规则与通道。
+单次驱动的投递通道 ``RunMailbox`` 在 ``execution_state``，调度 actor 在 ``core/task_actor.py``。
 """

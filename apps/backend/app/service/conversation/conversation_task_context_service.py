@@ -1,4 +1,4 @@
-"""Task context 的跨 Run 用例：观测读取、fork 复制、按 Run 删除与工具占位闭合。
+"""Task context 的跨行用例：观测读取、占位查询与结算、工具调用闭合、撤回目标定位。
 
 行级读写与固定系统提示词归 ``ContextStore``；本服务只编排「跨多行、跨 Run 或跨 Task」的用例。
 """
@@ -19,6 +19,7 @@ from app.core.context.tool_call_closure import (
     build_placeholder_tool_message,
     plan_tool_call_closures,
 )
+from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import (
@@ -26,23 +27,22 @@ from app.models.message_metadata import (
     ToolMessageMetadata,
     UserMessageMetadata,
 )
-from app.models.task_record import TaskRecord
-from app.service.conversation_run.fork_history import copy_prefix
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
 
 
 class ConversationTaskContextService:
-    """维护 领域消息的 Task 级有序 context 的跨行用例。
+    """Task 级有序 context 的跨行用例。
 
     以 ``conversation_task_contexts`` 表为唯一持久化事实源，每条完整消息占一行；
     ``RuntimeMessageContextManager`` 持有 Task 级内存工作副本，并经 ``ContextStore``
     读写持久化记录；观测页读取存储记录，不读取或替代运行时工作副本。
 
     职责边界：
-    - 负责：观测口径读取、按 Run 删除、fork 前缀复制、为指定 Run 补工具中断占位、编辑重跑的
-      目标定位与软删除。
+    - 负责：观测口径读取、后台与 HITL 占位的查询与结算、为指定 Run 补工具中断占位、撤回目标定位。
+      撤回本身归 ``turn_withdrawal_service``；fork 的切点与历史复制归 ``ForkSource``，由
+      ``TaskService`` 在分叉事务里直接调用。
     - 不负责：单行追加与替换、序号推进、固定系统提示词（由 ``ContextStore`` 负责），
       消息内容语义校验与压缩策略（由上下文管理器负责）。
     """
@@ -56,42 +56,21 @@ class ConversationTaskContextService:
         self._store = ContextStore()
 
     def list_observable_messages(
-        self,
-        *,
-        task_id: int | None = None,
-        run_id: int | None = None,
-    ) -> list[ConversationTaskContextRecord]:
-        """读取观测页消息；Task 或 Run 至少提供一个，并保留全部存储标记状态。"""
+        self, task_id: int, *, turn: int | None = None
+    ) -> tuple[list[ConversationTaskContextRecord], ConversationRunRecord | None]:
+        """读取观测页消息（保留全部存储标记状态）；指定回合时只读这一回合，并给出所属的 Run。
 
-        if run_id is not None:
-            run = self._run_crud.get(run_id)
-            if task_id is not None and run.task_id != task_id:
-                raise KeyError(run_id)
-            resolved_task_id = run.task_id
-        elif task_id is not None:
-            self._task_crud.get(task_id)
-            resolved_task_id = task_id
-        else:
-            raise ValueError("task_id or run_id is required")
-        return self._crud.get_for_observation(resolved_task_id, run_id)
+        回合不跨 Run，所以这一回合的本地行属于同一个 Run；继承来的回合没有 Run，返回 ``None``。
 
-    def history(self, task_id: int, session: Session) -> list[ConversationTaskContextRecord]:
-        """在外部事务中读取 Task 的全部 context 行（含不进上下文、不投影的行）。"""
-
-        return self._crud.get(task_id, include_in_context=False, session=session)
-
-    def copy_fork_prefix(
-        self,
-        session: Session,
-        source: TaskRecord,
-        target: TaskRecord,
-        rows: list[ConversationTaskContextRecord],
-        before_sequence: int,
-    ) -> int:
-        """把切点之前的保留上下文复制成目标 Task 独立、不可执行的历史。"""
-        return copy_prefix(
-            self._crud, self._store, session, source, target, rows, before_sequence
-        )
+        异常:
+            KeyError: Task 不存在（映射 404）。
+        """
+        self._task_crud.get(task_id)
+        rows = self._crud.get_for_observation(task_id, turn)
+        run_id = next((row.run_id for row in rows if row.run_id is not None), None)
+        if turn is None or run_id is None:
+            return rows, None
+        return rows, self._run_crud.get(run_id)
 
     def run_awaits_background(self, task_id: int, run_id: int) -> bool:
         """正常完成前检查本 Run 是否还有后台调用尚欠结论。"""
@@ -154,11 +133,11 @@ class ConversationTaskContextService:
     def latest_user_input(
         self, task_id: int, session: Session | None = None
     ) -> ConversationTaskContextRecord | None:
-        """最新一条输入是用户输入时返回它（编辑重跑只允许改它），否则返回 ``None``。
+        """最新一条输入是用户输入时返回它（撤回只允许撤它），否则返回 ``None``。
 
         按 metadata 的 ``kind`` 判断，不解析正文：通知、决定、后台结果同样是 user 角色。最新一条
-        输入是 Agent 消息（含途中到达的）时也返回 ``None``：越过它改更早的输入会把它一起撤回，
-        前端同样只让最新一条用户消息可编辑。已被编辑移出（不进上下文）的行不算。
+        输入是 Agent 消息（含途中到达的）时也返回 ``None``：越过它撤回更早的输入会把它一起撤回，
+        前端同样只让最新一条用户消息可撤回。已被撤回移出（不进上下文）的行不算。
         """
         for record in reversed(self._crud.get(task_id, include_in_context=True, session=session)):
             if record.run_id is None:
@@ -176,7 +155,7 @@ class ConversationTaskContextService:
         等待与否的事实源是工具结果行：HITL 工具首次调用写入的等待占位 metadata 为 ``pending``；
         ``prepare_input`` 接收决定时在同一事务把它推到 ``running``，执行后由结算推到终态。所以
         「已决定、执行中」也不算等待，迟到的重复决定不会让原调用再重放一次。只看仍进模型上下文
-        的行——被编辑重跑移出的调用已无法重放。工具名取自发起这次调用的 assistant 消息，不依赖
+        的行——被撤回移出的调用已无法重放。工具名取自发起这次调用的 assistant 消息，不依赖
         工具自己的业务事实（如 TeamRun）。
         """
         records = [
@@ -203,37 +182,6 @@ class ConversationTaskContextService:
                     return call["function"]["name"]
         return None
 
-    def exclude_from(self, task_id: int, sequence: int, session: Session) -> frozenset[str]:
-        """编辑重跑：撤回 ``sequence`` 起的这一轮，移出模型上下文与前端投影；返回被撤回的调用 id。
-
-        软删除：行保留供观测页查看。只能对最新一条用户输入调用。
-
-        按归属而不是只按序号移出：之后的行大多是对它的回答，但更早发起的调用的结果（决定、后台
-        结论、HITL 执行结果）可能在这一轮才并入，序号排在它之后——它们回答的是之前的调用，保留，
-        否则那次调用的占位已推到终态、结果却再也进不了上下文。归属读 metadata 的 ``tool_call_id``。
-
-        返回的调用 id 是这一轮发起的全部调用，调用方据此撤销它们仍在进行的延迟工作。在调用方事务内
-        执行，与新消息入队一起提交。``RuntimeMessageContextManager`` 的内存列表每次 ``begin_run``
-        从库重建，之后的 Run 自然看不到这些行，不用通知它。
-        """
-        records = self._crud.get(task_id, include_in_context=False, session=session)
-        earlier_calls: set[str] = set()
-        withdrawn_calls: set[str] = set()
-        for record in records:
-            if record.run_id is None or record.message["role"] != "assistant":
-                continue
-            calls = withdrawn_calls if record.sequence >= sequence else earlier_calls
-            calls.update(call["id"] for call in record.message.get("tool_calls") or ())
-        kept_ids = frozenset(
-            cast(int, record.id)
-            for record in records
-            if record.sequence >= sequence
-            and isinstance(record.metadata, UserMessageMetadata)
-            and record.metadata.tool_call_id in earlier_calls
-        )
-        self._crud.exclude_from_sequence(task_id, sequence, session, keep_ids=kept_ids)
-        return frozenset(withdrawn_calls)
-
     def close_unclosed_tool_calls_for_run(
         self, task_id: int, run_id: int, session: Session | None = None
     ) -> list[str]:
@@ -256,6 +204,7 @@ class ConversationTaskContextService:
                 sequence=record.sequence,
                 message_id=record.message_id,
                 metadata=record.metadata,
+                turn=record.turn,
             )
             for record in records
             if record.run_id == run_id
@@ -263,16 +212,19 @@ class ConversationTaskContextService:
         plans = plan_tool_call_closures(entries)
         next_sequence = self._store.max_sequence(task_id, session=session) + 1
         repaired: list[str] = []
-        for slot in (slot for plan in plans for slot in plan.missing_slots):
-            self._store.append(
-                task_id,
-                run_id,
-                build_placeholder_tool_message(slot.call_id, slot.tool_name),
-                next_sequence,
-                True,
-                ToolMessageMetadata(status="cancelled"),
-                session=session,
-            )
-            repaired.append(slot.call_id)
-            next_sequence += 1
+        for plan in plans:
+            for slot in plan.missing_slots:
+                # 占位属于发起调用的那一回合。
+                self._store.append(
+                    task_id,
+                    run_id,
+                    build_placeholder_tool_message(slot.call_id, slot.tool_name),
+                    next_sequence,
+                    True,
+                    ToolMessageMetadata(status="cancelled"),
+                    session=session,
+                    turn=entries[plan.target_index].turn,
+                )
+                repaired.append(slot.call_id)
+                next_sequence += 1
         return repaired

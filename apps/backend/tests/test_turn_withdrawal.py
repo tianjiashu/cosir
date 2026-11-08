@@ -23,8 +23,8 @@ from app.core.workflow.message_queue.task_message import (
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
+from app.models.withdrawal_plan import WithdrawalPlan
 from app.service import depends
-from app.service.conversation_run.turn_withdrawal_service import plan_withdrawal
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
@@ -105,7 +105,7 @@ def history(isolated_storage, tmp_path):
 def test_plan_withdraws_the_turn_and_keeps_late_results_of_earlier_calls(history) -> None:
     rows = ConversationTaskContextCrud().get(history.task_id, include_in_context=False)
 
-    plan = plan_withdrawal(rows, from_turn=2)
+    plan = WithdrawalPlan.plan_withdrawal(rows, from_turn=2)
 
     assert plan.calls == frozenset({"call-late", "call-team"})
     excluded = {r.sequence for r in rows if r.id in plan.excluded_row_ids}
@@ -301,15 +301,16 @@ def test_the_runs_last_turn_counts_as_withdrawn_only_after_withdrawal(history, s
 
 def test_fork_cannot_cut_at_a_withdrawn_turn(history, side_effects) -> None:
     """撤回留下了更早调用在这一回合才并入的结果（仍带回合号 2），fork 也不能切到这一回合。"""
-    from app.service.conversation_run.fork_history import locate_turn
+    from app.service.task.fork_source import ForkSource
 
     depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
     rows = ConversationTaskContextCrud().get(history.task_id, include_in_context=False)
+    source = ForkSource(task=depends.get_task_crud().get(history.task_id), rows=rows, runs=[])
 
     assert any(r.turn == 2 and r.retained for r in rows)
     with pytest.raises(KeyError):
-        locate_turn(rows, 2)
-    assert locate_turn(rows, 1).sequence == 1
+        source.turn_start(2)
+    assert source.turn_start(1).sequence == 1
 
 
 def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(history, side_effects) -> None:

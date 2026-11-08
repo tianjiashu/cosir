@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 from app.api.configuration.errors import raise_configuration_error
-from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.api.schemas.request.AgentConfigurationRequest import AgentConfigurationRequest
 from app.api.schemas.request.GlobalInstructionUpdateRequest import GlobalInstructionUpdateRequest
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
@@ -17,27 +16,20 @@ from app.api.schemas.response.WorkspaceFileIgnoreResponse import WorkspaceFileIg
 from app.api.schemas.response.WorkspaceInstructionResponse import WorkspaceInstructionResponse
 from app.app import app
 from app.service.configuration.agent_configuration_service import AgentConfigurationService
-from app.service.configuration.workspace_configuration_context import (
-    get_workspace_configuration_context,
-)
+from app.service.configuration.workspace_configuration_root import resolve_workspace_root
 from app.service.configuration.workspace_fileignore_configuration_service import (
     WorkspaceFileIgnoreConfigurationService,
 )
 from app.service.configuration.workspace_instruction_configuration_service import (
     WorkspaceInstructionConfigurationService,
 )
-from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
-    broadcast_system_prompt_delta,
-    build_system_prompt_delta,
-)
-from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 
 
 def _agent_service(workspace_id: int) -> AgentConfigurationService:
     """按 workspace ID 装配 workspace 作用域 Agent service。"""
 
-    context = get_workspace_configuration_context(workspace_id)
-    return AgentConfigurationService(workspace_root=context.root)
+    root = resolve_workspace_root(workspace_id)
+    return AgentConfigurationService(workspace_root=root)
 
 
 @app.get(
@@ -51,8 +43,8 @@ async def list_workspace_configuration_agents(
 
     try:
         return [
-            AgentConfigurationResponse.from_document(item)
-            for item in _agent_service(workspace_id).list_documents()
+            AgentConfigurationResponse.from_entry(item)
+            for item in _agent_service(workspace_id).list_entries()
         ]
     except Exception as exc:
         raise_configuration_error(exc)
@@ -69,9 +61,8 @@ async def create_workspace_configuration_agent(
     """创建 workspace 本地子 Agent。"""
 
     try:
-        document = AgentConfigurationDocument.from_payload(payload)
-        saved = _agent_service(workspace_id).create_document(document)
-        return AgentConfigurationResponse.from_document(saved)
+        saved = _agent_service(workspace_id).create(payload.to_configuration())
+        return AgentConfigurationResponse.from_entry(saved)
     except Exception as exc:
         raise_configuration_error(exc)
 
@@ -88,9 +79,8 @@ async def update_workspace_configuration_agent(
     """更新 workspace 本地子 Agent。"""
 
     try:
-        document = AgentConfigurationDocument.from_payload(payload)
-        saved = _agent_service(workspace_id).update_document(agent_id, document)
-        return AgentConfigurationResponse.from_document(saved)
+        saved = _agent_service(workspace_id).update(agent_id, payload.to_configuration())
+        return AgentConfigurationResponse.from_entry(saved)
     except Exception as exc:
         raise_configuration_error(exc)
 
@@ -100,7 +90,7 @@ async def delete_workspace_configuration_agent(workspace_id: int, agent_id: str)
     """删除 workspace 本地子 Agent。"""
 
     try:
-        _agent_service(workspace_id).delete_document(agent_id)
+        _agent_service(workspace_id).delete(agent_id)
         return {"workspace_id": workspace_id, "agent_id": agent_id, "deleted": True}
     except Exception as exc:
         raise_configuration_error(exc)
@@ -116,8 +106,8 @@ async def get_workspace_instruction_configuration(
     """读取 workspace 当前有效的 AGENTS.md。"""
 
     try:
-        context = get_workspace_configuration_context(workspace_id)
-        document = WorkspaceInstructionConfigurationService(context.root).read()
+        root = resolve_workspace_root(workspace_id)
+        document = WorkspaceInstructionConfigurationService(root).read()
         return WorkspaceInstructionResponse.from_document(document)
     except Exception as exc:
         raise_configuration_error(exc)
@@ -134,18 +124,8 @@ async def update_workspace_instruction_configuration(
     """保存 workspace AGENTS.md，并通知当前进程中匹配的 workspace。"""
 
     try:
-        context = get_workspace_configuration_context(workspace_id)
-        service = WorkspaceInstructionConfigurationService(context.root)
-        previous = service.read().content
-        document = service.update(payload.content)
-        delta = build_system_prompt_delta(
-            source=SystemPromptDeltaSource.WORKSPACE_INSTRUCTIONS,
-            previous=previous,
-            current=document.content,
-            scope=str(context.root),
-        )
-        if delta is not None:
-            broadcast_system_prompt_delta(delta)
+        root = resolve_workspace_root(workspace_id)
+        document = WorkspaceInstructionConfigurationService(root).update(payload.content)
         return WorkspaceInstructionResponse.from_document(document)
     except Exception as exc:
         raise_configuration_error(exc)
@@ -159,8 +139,8 @@ async def get_workspace_fileignore_configuration(workspace_id: int) -> Workspace
     """读取 workspace .fileignore。"""
 
     try:
-        context = get_workspace_configuration_context(workspace_id)
-        document = WorkspaceFileIgnoreConfigurationService(context.root).read()
+        root = resolve_workspace_root(workspace_id)
+        document = WorkspaceFileIgnoreConfigurationService(root).read()
         return WorkspaceFileIgnoreResponse.from_document(document)
     except Exception as exc:
         raise_configuration_error(exc)
@@ -177,8 +157,8 @@ async def update_workspace_fileignore_configuration(
     """校验并保存 workspace .fileignore。"""
 
     try:
-        context = get_workspace_configuration_context(workspace_id)
-        document = WorkspaceFileIgnoreConfigurationService(context.root).update(payload.content)
+        root = resolve_workspace_root(workspace_id)
+        document = WorkspaceFileIgnoreConfigurationService(root).update(payload.content)
         return WorkspaceFileIgnoreResponse.from_document(document)
     except Exception as exc:
         raise_configuration_error(exc)

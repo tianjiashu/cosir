@@ -127,3 +127,38 @@ def test_all_text_parts_from_final_response_marked_and_structured_result_does_no
     apply(state, RunResultUpdatedEvent(task_id=7, run_id=1, end_reason="structured_output_failed"))
     assert [bool(p.get("finalReply")) for p in state["messages"][0]["parts"]] == [False, True, True]
     validate_snapshot(state)
+
+
+def _complete_turn(state, run_id: int, turn: int, text: str, end_reason: str = "stop") -> None:
+    apply(state, RunInitializedEvent(task_id=7, run_id=run_id, created_at=NOW))
+    apply(
+        state,
+        AssistantTextDeltaEvent(task_id=7, run_id=run_id, turn=turn, source_sequence=turn, delta=text),
+    )
+    apply(state, AssistantPartClosedEvent(task_id=7, run_id=run_id, turn=turn, source_sequence=turn))
+    apply(
+        state,
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, turn, tzinfo=UTC),
+            task_id=7,
+            run_id=run_id,
+            status=ConversationRunStatus.COMPLETED,
+            end_reason=end_reason,
+            response_sequence=turn,
+        ),
+    )
+
+
+def test_later_runs_neither_clear_earlier_final_replies_nor_receive_their_results():
+    """后一个 Run 的最终回复与结构化结果只落在它自己的回复上，不清除、不改写前一个 Run 的。"""
+    state = empty_snapshot()
+    _complete_turn(state, 1, 1, "第一个结论")
+    _complete_turn(state, 2, 2, "第二个结论")
+    apply(state, RunResultUpdatedEvent(task_id=7, run_id=2, end_reason="structured_output_failed"))
+    validate_snapshot(state)
+    first, second = state["messages"]
+    assert (first["id"], second["id"]) == ("assistant-turn-1", "assistant-turn-2")
+    assert [p.get("finalReply") for p in first["parts"]] == [True]
+    assert [p.get("finalReply") for p in second["parts"]] == [True]
+    assert first["outcome"]["endReason"] == "stop"
+    assert second["outcome"]["endReason"] == "structured_output_failed"

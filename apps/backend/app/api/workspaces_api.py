@@ -18,12 +18,12 @@ from app.api.schemas import (
 )
 from app.app import app
 from app.models.errors.deletion_errors import DeletionBusyError
-from app.service.conversation_run.workspace_service import WorkspaceService
 from app.service.depends import (
     get_task_service,
     get_workspace_service,
 )
-from app.task_runtime.service.task_service import TaskService
+from app.service.task.task_service import TaskService
+from app.service.workspace.workspace_service import WorkspaceService
 from app.utils.datetime_utils import TASK_TITLE_LIMIT, preview
 
 

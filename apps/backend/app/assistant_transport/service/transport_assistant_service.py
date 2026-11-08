@@ -13,16 +13,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from typing import cast
 
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.assistant_transport.request import (
-    DecisionRequest,
-    RerunMessageRequest,
-    SendMessageRequest,
-)
+from app.assistant_transport.request import DecisionRequest, SendMessageRequest
 from app.assistant_transport.service.transport_stream_service import (
     AssistantTransportStreamService,
 )
@@ -31,15 +26,13 @@ from app.assistant_transport.state.snapshot_window import HistoryPage, window_sn
 from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
 from app.core.tool.background.backgraound_registry import background_registry
-from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.workflow.message_queue.task_message import (
     Delivery,
+    RunLaunch,
     TaskMessage,
     UserInputBody,
 )
-from app.models.message_metadata import UserMessageMetadata
 from app.service import depends as service_depends
-from app.service.conversation_run.task_launch import initial_task_launch
 from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
@@ -53,8 +46,6 @@ class TransportAssistantService:
         self._queue = service_depends.get_task_message_queue()
         self._inputs = service_depends.get_user_input_service()
         self._states = service_depends.get_conversation_task_state_service()
-        self._run = service_depends.get_conversation_run_ledger()
-        self._context = service_depends.get_conversation_task_context_service()
 
     # ── 命令 ──────────────────────────────────────────────────────────────
 
@@ -71,7 +62,7 @@ class TransportAssistantService:
         """
         current = await asyncio.to_thread(self._tasks.require_current_run, task_id)
         initial = (
-            initial_task_launch(await asyncio.to_thread(self._tasks.get_task, task_id))
+            RunLaunch.from_fork(await asyncio.to_thread(self._tasks.get_task, task_id))
             if current is None
             else None
         )
@@ -148,70 +139,29 @@ class TransportAssistantService:
             raise SessionConflictError("MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False)
         return queued
 
-    async def rerun(self, task_id: int, message_id: int, request: RerunMessageRequest) -> None:
-        """编辑最新一条已并入的用户输入并重跑：软删除它及其后 context + 以新消息入队（同一事务）→
-        由 Task 的 actor 照常开新 Run。
+    async def withdraw(self, task_id: int, message_id: int) -> None:
+        """撤回最新一条已并入的用户输入开启的回合（语义见 ``TurnWithdrawalService``），不开新 Run。
 
-        只在 Task 静止（``idle``）时接受，不替用户停止：运行中的 Run 用的是 ``begin_run`` 时建好的
-        内存上下文，看不到库里的移出，会继续回答旧消息并把结果写在移出区段之后（工具结果还会失去
-        配对的调用），新消息也会被并进这个旧 Run。前端只在 activity 为终态时开放入口，这里是最后一道
-        守卫。静止看 actor 的执行阶段而不是 Run 状态：Run 落定终态后执行者还在收尾，此时改 context
-        会与它交错；判定在 Task 闸门内，与 actor 的推进互斥。
-
-        动任何数据之前先校验目标并解析新输入：非法输入同步 400，原消息不受影响。Run 只会前进：旧 Run
-        不重置，被移出的行保留供观测页查看。外部工具副作用不回滚。
+        编辑不是后端命令：前端撤回后把正文与附件放回输入框，改完照常发送。只在 Task 静止（``idle``）
+        时接受，不替用户停止：运行中的 Run 用的是 ``begin_run`` 时建好的内存上下文，看不到库里的移出，
+        会继续回答被撤回的消息。前端只在 activity 为终态时开放入口，这里是最后一道守卫。静止看 actor
+        的执行阶段而不是 Run 状态：Run 落定终态后执行者还在收尾，此时改 context 会与它交错；判定在
+        Task 闸门内，与 actor 的推进互斥。
 
         异常:
-            SessionConflictError: ``EDIT_TARGET_STALE``（目标不是最新一条用户输入）、
+            SessionConflictError: ``WITHDRAW_TARGET_STALE``（目标不是最新一条用户输入）、
                 ``RUN_NOT_STOPPED``（Task 仍在运行、挂起或执行者尚在收尾）。
-            UserInputRejectedError / ValueError: 新输入不合法。
             KeyError: Task 不存在。
         """
-        current = await asyncio.to_thread(self._tasks.require_current_run, task_id)
-        target = await asyncio.to_thread(self._context.latest_user_input, task_id)
-        if target is None or target.message_id != message_id:
-            raise SessionConflictError(
-                "EDIT_TARGET_STALE", "只能编辑最新一条用户消息，请刷新后重试"
-            )
-        # 复用原消息的展示绑定：页面重载后前端只剩附件 token，路径只能从原消息恢复。
-        message = await asyncio.to_thread(
-            self._inputs.prepare,
-            task_id,
-            request.to_run_command(),
-            request.modelConfigId,
-            request.reasoningEffort,
-            current.agent_id if current is not None and current.agent_id else "main_agent",
-            reuse=cast(UserMessageMetadata, target.metadata).presentation,
-        )
+        await asyncio.to_thread(self._tasks.get_task, task_id)
         space = await asyncio.to_thread(task_runtime_spaces.get_or_create, task_id)
         async with space.async_operation():
             if await space.actor.phase() != "idle":
-                raise SessionConflictError(
-                    "RUN_NOT_STOPPED", "当前运行尚未停止，请停止后再编辑重跑"
-                )
-            await asyncio.to_thread(self._replace_latest_input, task_id, message_id, message)
+                raise SessionConflictError("RUN_NOT_STOPPED", "当前运行尚未停止，请停止后再撤回")
+            await asyncio.to_thread(
+                service_depends.get_turn_withdrawal_service().withdraw, task_id, message_id
+            )
         await asyncio.to_thread(self._republish, task_id)
-
-    def _replace_latest_input(self, task_id: int, message_id: int, message: TaskMessage) -> None:
-        """调用方持 Task 闸门且已确认静止：复查目标，撤回它所在的一轮并让新消息入队，同一事务提交。
-
-        被撤回的调用可能还有延迟工作在进行（Run 结束后仍在跑的后台命令、委派）：在提交前撤销登记，
-        否则结论到达后照常回投，以一条上下文里找不到调用的孤儿结论开出新 Run。必须在提交前——登记
-        出队是投递的唯一门槛，提交与撤销之间完成的结论已经入队。事务随后失败时撤销不回滚，同外部
-        工具副作用；被撤回的占位已移出上下文与投影，不再结算、也不给模型留通知。
-        """
-        with main_session_factory().begin() as session:
-            target = self._context.latest_user_input(task_id, session=session)
-            if target is None or target.message_id != message_id:
-                raise SessionConflictError(
-                    "EDIT_TARGET_STALE", "只能编辑最新一条用户消息，请刷新后重试"
-                )
-            withdrawn = self._context.exclude_from(task_id, target.sequence, session)
-            for tool_call_id in withdrawn:
-                background_registry.withdraw(task_id, tool_call_id)
-            # 这一轮发起的交接随之结束：否则资源一直显示交接中，也无法再次交接。
-            handoff_registry.drop(task_id, withdrawn)
-            task_runtime_spaces.enqueue(task_id, message, session=session)
 
     def _republish(self, task_id: int) -> None:
         """移出的行要从前端消失：从 canonical 记录重建并发布（同一临界区，不与投影交错）。"""

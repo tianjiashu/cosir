@@ -24,8 +24,9 @@ from app.models.message_metadata import (
     ToolMessageMetadata,
     UserMessageMetadata,
 )
+from app.service.task.fork_source import ForkSource
+from app.service.task.task_service import TaskService
 from app.storage.model.task_model import TaskModel
-from app.task_runtime.service.task_service import TaskService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.task_runtime.workspace_operation_registry import workspace_operations
 
@@ -37,7 +38,7 @@ def fork_store(request, monkeypatch):
     service = TaskService.__new__(TaskService)
     service._task = store.tasks
     service._turn = store.runs
-    service._context = store.context_service
+    service._task_context_crud = store.contexts
     service._session_factory = store.factory
     store.service = service
     store.context.create_system_prompt(store.task.id, {"role": "system", "content": "固定系统指令"})
@@ -595,8 +596,8 @@ def test_request_cancellation_does_not_release_workspace_before_worker_finishes(
     store = fork_store
     run = append_run(store, "completed")
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
-    original_copy = store.service._copy_prefix
-    original_worker = store.service._fork_task_in_workspace
+    original_copy = ForkSource.copy_before
+    original_worker = store.service._fork_at_turn
 
     def slow_copy(*args, **kwargs):
         entered.set()
@@ -609,8 +610,8 @@ def test_request_cancellation_does_not_release_workspace_before_worker_finishes(
         finally:
             finished.set()
 
-    monkeypatch.setattr(store.service, "_copy_prefix", slow_copy)
-    monkeypatch.setattr(store.service, "_fork_task_in_workspace", worker)
+    monkeypatch.setattr(ForkSource, "copy_before", slow_copy)
+    monkeypatch.setattr(store.service, "_fork_at_turn", worker)
 
     async def scenario():
         request = asyncio.create_task(fork_call(store, run.input_id))

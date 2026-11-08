@@ -90,10 +90,10 @@ class ConversationStateSnapshot(TypedDict):
     """一个 Task 的完整 Transport state。
 
     对话界面只看 Task：``title`` 投影自 ``tasks.title``（事实源在 Task 表，snapshot 只是让打开中的
-    页面实时收到标题变化），``messages`` 按 context 序号扁平排列，``activity`` 是最新 Run 的摘要。
-    Run 分组不进 wire，历史回复的结局由消息上的 ``outcome`` 承载。命令被拒不进 snapshot，由命令的
-    HTTP 响应同步返回。``terminal_sessions`` 是本 Task 终端会话的进程内事实（不持久化），
-    投影规则见 ``ConversationTaskStateService.refresh_terminal_sessions``。
+    页面实时收到标题变化），``messages`` 按回合扁平排列（每个回合：开启它的输入 + 一条回复），
+    ``activity`` 是最新 Run 的状态摘要。Run 身份不进 wire，历史回复的结局由消息上的 ``outcome``
+    承载。命令被拒不进 snapshot，由命令的 HTTP 响应同步返回。``terminal_sessions`` 是本 Task
+    终端会话的进程内事实（不持久化），投影规则见 ``ConversationTaskStateService.refresh_terminal_sessions``。
     ``background_tasks`` 的历史来自持久化占位，活状态来自后台结果登记表；
     ``foreground_waits``（可转到后台的前台等待）是进程内事实，
     二者见 ``refresh_background_results``。
@@ -163,8 +163,9 @@ def _validate_fork(value: object) -> None:
 
 def _validate_activity(value: object) -> None:
     activity = as_shape(value, ConversationStateActivity, "snapshot activity")
-    require_int(activity["runId"], "snapshot activity runId", minimum=0)
     require_one_of(activity["status"], _RUN_STATUSES, "snapshot activity status")
+    require_int(activity["turn"], "snapshot activity turn", minimum=1, nullable=True)
+    require_bool(activity["resumable"], "snapshot activity resumable")
     require_non_empty_str(activity["startedAt"], "snapshot activity startedAt")
     require_str(activity["endReason"], "snapshot activity endReason", nullable=True)
     require_int(
@@ -221,7 +222,8 @@ def _validate_queued_message(value: object, seen_message_ids: set[str]) -> None:
 def _validate_message(value: object, seen_message_ids: set[str]) -> None:
     message = as_shape(value, ConversationStateMessage, "snapshot message")
     _validate_message_fields(message["id"], message["role"], message["parts"], seen_message_ids)
-    require_int(message["runId"], "snapshot message runId", minimum=0, nullable=True)
+    require_int(message["turn"], "snapshot message turn", minimum=1)
+    require_bool(message["inherited"], "snapshot message inherited")
     if message["outcome"] is not None:
         if message["role"] != "assistant":
             raise ValueError("only assistant messages carry an outcome")

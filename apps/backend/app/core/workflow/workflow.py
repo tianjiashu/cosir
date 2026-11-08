@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.workflow.branch import task_title
+from app.core.workflow.drive_notices import drive_notices
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.node_helper.common import RunStopped, execution_scope
@@ -21,7 +22,7 @@ class ReactLikeWorkflow:
 
     扩展方式：``ReactRoute`` 新增成员，在 ``__init__`` 的节点表里登记对应节点，由上游节点返回
     该 route 流入。
-    入口只有 ``prepare_input``：新 Run、续跑、唤醒、编辑重跑、交接都从它进入；它也是每次请求模型前
+    入口只有 ``prepare_input``：新 Run、续跑、唤醒、交接都从它进入；它也是每次请求模型前
     的唯一关口，依次判定取消、挂起、步数上限，再并入 mailbox 中的消息后流向 ``model``。挂起时工具调用已在本步闭合，Run 进度不冻结任何调用。新增节点必须能在
     重新进入后安全重跑，或在下一次模型请求前完成。
     """
@@ -62,6 +63,9 @@ class ReactLikeWorkflow:
         """从 ``prepare_input`` 进入，循环节点直到 END；调用方不传恢复模式。"""
         context = rc.task_space.get_context_manager(agent=rc.agent)
         context.begin_run(rc.run)
+        # 推导要读重建后的上下文；mailbox 已在驱动开始时重置，投进的通知随本次驱动写入或丢弃。
+        for notice in drive_notices(rc, context):
+            rc.mailbox.notify(notice)
         # 整个执行状态都落库，但新驱动只延续跨驱动事实，总从 prepare_input 进入（见 for_new_drive）。
         state = rc.run.execution_data.for_new_drive(rc.agent.max_steps)
         if rc.run.usage is not None:

@@ -454,7 +454,7 @@ class AgentTeamCoordinator:
 
         if node_execution is None:
             main_task = self._task_service.get_task(row.parent_task_id)
-            task = self._task_service.get_or_create_task(
+            task = self._task_service.create_task(
                 workspace_id=row.workspace_id,
                 title=node.name,
                 task_type=TaskType.TEAM_NODE_TASK,
@@ -650,6 +650,22 @@ class AgentTeamCoordinator:
             return any(node.task_id in task_ids for node in state.node_executions.values())
 
         return self._cancel_where(involved, AgentTeamRunEndReason.CANCELLED)
+
+    def withdraw_pending_for_calls(self, parent_task_id: int, tool_call_ids: set[str]) -> int:
+        """撤回回合时放弃这一回合提出、仍待确认的方案，返回收敛的数量。
+
+        待确认的方案没有后台登记，撤回后的卡片已移出上下文、决定入口也找不到它，不在这里收敛就会
+        一直停在 ``pending``。已批准运行中的 Team 经后台登记的撤销回调停下
+        （``background_registry``），这里只碰 ``pending``。自建写事务，调用方须在自己的写事务之外调用。
+        """
+        if not tool_call_ids:
+            return 0
+        return self._cancel_where(
+            lambda row: row.parent_task_id == parent_task_id
+            and row.tool_call_id in tool_call_ids
+            and row.status == AgentTeamRunStatus.PENDING.value,
+            AgentTeamRunEndReason.CANCELLED,
+        )
 
     async def cancel_for_parent_task(self, parent_task_id: int) -> None:
         """取消主 Agent Task 的全部活动 Team：待确认方案与运行中的 Team。

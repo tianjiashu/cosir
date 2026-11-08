@@ -25,6 +25,7 @@ from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.models.task_record import TaskRecord
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
@@ -283,7 +284,8 @@ async def test_attach_ends_when_task_is_deleted() -> None:
     collector = _Collector(_stream_service(service))
     await collector.wait_frames(1)
 
-    service.mark_task_deleted(_TASK_ID)
+    task_runtime_spaces.mark_deleted(_TASK_ID)
+    service.release_deleted_task(_TASK_ID)
 
     await asyncio.wait_for(collector.task, 1)
     assert len(collector.frames) == 1

@@ -12,6 +12,8 @@ class AssistantTextDeltaEvent(WorkflowEventEnvelope):
 
     type: Literal["assistant_text_delta"] = "assistant_text_delta"
     source_sequence: int
+    # 这次响应所在的回合：投影按它找到（或建出）这一回合的回复。
+    turn: int
     part: Literal["text"] = "text"
     delta: str = Field(min_length=1)
 
@@ -21,4 +23,5 @@ class AssistantPartClosedEvent(WorkflowEventEnvelope):
 
     type: Literal["assistant_part_closed"] = "assistant_part_closed"
     source_sequence: int
+    turn: int
     part: Literal["text"] = "text"

@@ -79,7 +79,6 @@ def project_node_visits(
             visits.append(
                 {
                     "visit_number": index + 1,
-                    "conversation_run_id": run_id,
                     "status": run.status,
                     "agents": agents,
                 }
@@ -91,7 +90,6 @@ def project_node_visits(
             visits.append(
                 {
                     "visit_number": len(run_ids) + 1,
-                    "conversation_run_id": None,
                     "status": "running",
                     "agents": [
                         {

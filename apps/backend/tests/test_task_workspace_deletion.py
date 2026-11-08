@@ -7,7 +7,6 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
-from tests.task_extra_fixtures import fork_extra, node_extra
 from app.api.tasks_api import delete_task as delete_task_endpoint
 from app.api.workspaces_api import delete_workspace as delete_workspace_endpoint
 from app.models.conversation_input import UserInputPresentation
@@ -30,6 +29,7 @@ from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import init_storage, main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.path import system_cosir as paths
+from tests.task_extra_fixtures import fork_extra, node_extra
 
 
 def _user_meta(text: str) -> UserMessageMetadata:
@@ -204,7 +204,7 @@ def test_task_delete_recollects_children_inside_write_transaction(
     service = get_task_service()
     collected = threading.Event()
     release = threading.Event()
-    original_collect = service._collect_task_tree_ids
+    original_collect = service.collect_task_tree_ids
     first_call = True
 
     def collect_then_pause(task_id: int) -> set[int]:
@@ -216,11 +216,11 @@ def test_task_delete_recollects_children_inside_write_transaction(
             assert release.wait(5)
         return result
 
-    monkeypatch.setattr(service, "_collect_task_tree_ids", collect_then_pause)
+    monkeypatch.setattr(service, "collect_task_tree_ids", collect_then_pause)
     created: list[int] = []
 
     def create_child() -> None:
-        child = service.get_or_create_task(
+        child = service.create_task(
             workspace.id,
             "created-between-tree-read-and-transaction",
             task_type="agent_task",

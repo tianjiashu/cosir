@@ -406,7 +406,7 @@ vision_input 在请求副本里把 cosir-attachment:// 解析成 data URL（与�
 | `app/core/agents/define_agents.py` | 改 | 主 Agent `allowed_tools` 加入两个工具（子 Agent / Team 节点在 P3-4 随剥离名单一起开放） |
 | `app/config/environment_field_catalog.py` | 改 | 新分组 `browser`「浏览器」；字段 `BROWSER_MAX_TABS_PER_TASK`（默认 5）、`BROWSER_MAX_TABS`（默认 20），integer、minimum 1 |
 | `app/config/settings.py` | 改 | 两个类级字段，`load()` 里经 `_env_positive_int` 读取；保存配置后 `Settings.load()` 重读，下一次工具调用即生效 |
-| `app/task_runtime/service/task_service.py` | 改 | `finalize_deleted_task_spaces` 增加一行 `service_depends.get_host_link().notify("browser.dropTasks", {"task_ids": [...]})` |
+| `app/service/task/task_service.py` | 改 | `finalize_deleted_task_spaces` 增加一行 `service_depends.get_host_link().notify("browser.dropTasks", {"task_ids": [...]})` |
 | `apps/desktop/components/assistant-ui/tools/tool-icons.tsx` | 改 | `display.icon` 用已有的 `globe`，不新增图标 |
 
 ### 12.3 测试

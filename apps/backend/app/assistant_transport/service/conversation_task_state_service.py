@@ -84,7 +84,6 @@ class ConversationTaskStateService:
 
     _lock: ClassVar[RLock] = RLock()
     _subscribers: ClassVar[dict[int, set[Subscriber]]] = {}
-    _deleted_task_ids: ClassVar[set[int]] = set()
 
     def __init__(
         self,
@@ -193,7 +192,7 @@ class ConversationTaskStateService:
         """
 
         with self._lock:
-            if task_id in self._deleted_task_ids:
+            if task_runtime_spaces.is_deleted(task_id):
                 return
             space = task_runtime_spaces.get(task_id)
             if space is None or not space.has_snapshot():
@@ -214,7 +213,7 @@ class ConversationTaskStateService:
         """
 
         with self._lock:
-            if task_id in self._deleted_task_ids:
+            if task_runtime_spaces.is_deleted(task_id):
                 return
             space = task_runtime_spaces.get(task_id)
             if space is None or not space.has_snapshot():
@@ -241,7 +240,7 @@ class ConversationTaskStateService:
         """
 
         with self._lock:
-            if task_id in self._deleted_task_ids:
+            if task_runtime_spaces.is_deleted(task_id):
                 return
             space = task_runtime_spaces.get(task_id)
             if space is None or not space.has_snapshot():
@@ -286,10 +285,9 @@ class ConversationTaskStateService:
     def rebuild_state(self, task_id: int) -> ConversationStateSnapshot:
         """丢弃进程内 working copy，并立即从 canonical 记录重建该 task 的快照。
 
-        与 ``get_state`` 的区别是**强制**丢弃现有副本：调用方已确认快照缺少 canonical 确实
-        存在的 run（二者分叉）时使用，避免继续在陈旧副本上投影。本方法是进程内唯一显式的
-        快照自愈入口（``get_state`` 见到已物化副本不会重建，``unload_snapshot`` 此前只被
-        删除清理使用）。
+        与 ``get_state`` 的区别是**强制**丢弃现有副本（``get_state`` 见到已物化副本不会重建）。
+        唯一的调用方是撤回（经 :meth:`republish_from_canonical`）：撤回改了库里的上下文，副本必须
+        按 canonical 重来。撤回只在 Task 静止时进行，所以没有需要保留的瞬时模型活动。
 
         参数:
             task_id: 目标任务标识。
@@ -304,8 +302,7 @@ class ConversationTaskStateService:
 
         副作用:
             先卸载该 task 的进程内快照副本，再读 canonical 三张表重建一份（终端会话列表取自
-            进程内服务）；同一 Run 仍在执行时保留瞬时模型活动，重启不恢复。
-            本方法不通知 subscriber（调用方需自行 ``publish_state`` 让客户端收敛）。
+            进程内服务）。本方法不通知 subscriber（调用方需自行 ``publish_state`` 让客户端收敛）。
 
         并发:
             全程持 ``_lock``，与投影、订阅注册与删除清理互斥。
@@ -314,18 +311,8 @@ class ConversationTaskStateService:
         with self._lock:
             self._ensure_not_deleted(task_id)
             space = task_runtime_spaces.get_or_create(task_id)
-            previous = (
-                space.get_working_snapshot(lambda: self._rebuild(task_id))["activity"]
-                if space.has_snapshot() else None
-            )
             space.unload_snapshot()
-            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            current = state["activity"]
-            if (
-                previous and current and previous["runId"] == current["runId"]
-                and current["status"] == "running"
-            ):
-                current["modelActivity"] = previous["modelActivity"]
+            space.get_working_snapshot(lambda: self._rebuild(task_id))
             return self.get_state(task_id)
 
     def apply_planned(self, event: WorkflowEvent) -> TransportFrame:
@@ -469,16 +456,19 @@ class ConversationTaskStateService:
                     subscriber.close()
                     if not subscribers:
                         self._subscribers.pop(task_id, None)
-                        if task_id not in self._deleted_task_ids:
+                        if not task_runtime_spaces.is_deleted(task_id):
                             self._unload_if_unwatched(task_id)
 
         return subscriber, unsubscribe, first_frame
 
-    def mark_task_deleted(self, task_id: int) -> None:
-        """canonical Task 删除后，丢弃进程本地状态与 subscriber。"""
+    def release_deleted_task(self, task_id: int) -> None:
+        """Task 删除提交后关闭它的订阅、丢弃快照工作副本。
+
+        调用方先在 ``task_runtime_spaces.mark_deleted`` 记下删除：订阅与读取在本服务的锁内判定是否
+        已删除，先记删除再释放，就不会有新订阅在释放之后挂上来。
+        """
 
         with self._lock:
-            self._deleted_task_ids.add(task_id)
             subscribers = self._subscribers.pop(task_id, set())
             for subscriber in subscribers:
                 with suppress(RuntimeError):
@@ -491,8 +481,8 @@ class ConversationTaskStateService:
     def clear_process_state(cls) -> None:
         """丢弃所有易失的进程本地状态。
 
-        进程生命周期钩子，非持久化操作。清空 subscriber 队列与已删除 task 的墓碑，使同一解释器中
-        后续的存储重新初始化不会从上一次后端生命周期继承陈旧的副本。
+        进程生命周期钩子，非持久化操作。清空 subscriber 队列并关闭 runtime space 登记表（连同删除
+        记录），使同一解释器中后续的存储重新初始化不会从上一次后端生命周期继承陈旧的副本。
         """
 
         with cls._lock:
@@ -500,22 +490,15 @@ class ConversationTaskStateService:
                 subscriber for group in cls._subscribers.values() for subscriber in group
             ]
             cls._subscribers.clear()
-            cls._deleted_task_ids.clear()
         for subscriber in subscribers:
             with suppress(RuntimeError):
                 subscriber.loop.call_soon_threadsafe(subscriber.close)
         task_runtime_spaces.close()
 
-    def is_task_deleted(self, task_id: int) -> bool:
-        """返回本进程是否已对该 Task 完成删除收尾。"""
-
-        with self._lock:
-            return task_id in self._deleted_task_ids
-
     def _ensure_not_deleted(self, task_id: int) -> None:
         """进程本地删除清理后，拒绝读取或投影。"""
 
-        if task_id in self._deleted_task_ids:
+        if task_runtime_spaces.is_deleted(task_id):
             raise KeyError(task_id)
 
     def _rebuild(self, task_id: int) -> ConversationStateSnapshot:
@@ -563,8 +546,8 @@ class ConversationTaskStateService:
                 "data": {
                     "task_id": task_id,
                     "message_count": len(state["messages"]),
-                    "activity_run_id": (
-                        state["activity"]["runId"] if state["activity"] is not None else None
+                    "activity_turn": (
+                        state["activity"]["turn"] if state["activity"] is not None else None
                     ),
                 },
             },

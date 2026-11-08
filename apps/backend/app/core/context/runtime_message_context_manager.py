@@ -1,13 +1,15 @@
-"""Task context 的唯一运行时协调入口；SDK 负责模型聚合，本层负责 working copy、序号与协议闭合。
+"""Task context 的唯一运行时协调入口：SDK 负责模型聚合，本层负责 working copy、序号、回合与
+协议闭合。
 
-行级持久化（追加、原地替换、固定系统提示词）经 ``ContextStore``，本层不直接碰存储。
+行级持久化（追加、原地替换、固定系统提示词）经 ``ContextStore``，本层不直接碰存储。每一行所属的
+回合在这里写入时判定一次（:meth:`_opens_turn`），快照分组、实时投影与 fork 切点都读这个事实。
 """
 
 from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 from openai.lib.streaming.chat import ParsedChatCompletionSnapshot
 from openai.types.chat import (
@@ -41,11 +43,34 @@ from app.models.conversation_task_context import (
     ConversationTaskContextRecord,
 )
 from app.models.message_metadata import (
+    TURN_INPUT_KINDS,
     AssistantMessageMetadata,
     MessageMetadata,
+    NoticeEntry,
     ToolMessageMetadata,
+    UserMessageMetadata,
     empty_message_metadata,
 )
+from app.utils.message_content import content_to_text
+
+
+def _is_turn_input(
+    message: ChatCompletionMessageParam, metadata: MessageMetadata, project: bool
+) -> bool:
+    """可见的一轮输入（用户输入或 Agent 消息）；隐藏的输入不在前端开回合，也就不算。"""
+    return (
+        message["role"] == "user"
+        and isinstance(metadata, UserMessageMetadata)
+        and metadata.kind in TURN_INPUT_KINDS
+        and project
+    )
+
+
+def _is_visible_reply(message: ChatCompletionMessageParam) -> bool:
+    """有正文或调用的 assistant 行：实时投影只在这时建出回复（见 ``ensure_reply``）。"""
+    return message["role"] == "assistant" and bool(
+        content_to_text(message.get("content")) or message.get("tool_calls")
+    )
 
 
 @dataclass
@@ -53,7 +78,7 @@ class RuntimeMessageContextManager:
     """一个 Task 的 Agent context 读写边界与内存消息列表 owner。
 
     内存消息列表（``_entries``）是模型请求的唯一来源，``load_message`` 只读它；每次
-    :meth:`begin_run` 从数据库按 ``include_in_context`` 重建一次，编辑重跑、fork 等改库用例因此
+    :meth:`begin_run` 从数据库按 ``include_in_context`` 重建一次，撤回、fork 等改库用例因此
     不必通知或卸载本对象。列表与序号只经 :meth:`_track` 推进，且只接纳已写库的行。
     """
 
@@ -80,6 +105,11 @@ class RuntimeMessageContextManager:
     # Task 内已用的调用 id，与本次响应按 SDK 位置冻结的规范 id（生命周期同 ``_draft_response``）。
     _used_call_ids: set[str] = field(default_factory=set, init=False)
     _response_call_ids: dict[int, str] = field(default_factory=dict, init=False)
+    # 回合判定的写入期状态（见 :meth:`_opens_turn`）：Task 已用的最大回合号、本 Run 当前回合（还没写
+    # 任何行时为 None）、本 Run 是否已有可见内容（开回合的输入或可见回复）。
+    _max_turn: int = field(default=0, init=False)
+    _run_turn: int | None = field(default=None, init=False)
+    _run_shown: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         """恢复 Task 固定系统提示词；其余消息由 :meth:`begin_run` 加载。
@@ -101,7 +131,7 @@ class RuntimeMessageContextManager:
     def begin_run(self, run: ConversationRunRecord) -> None:
         """绑定当前 Run，并从数据库重建内存消息列表与序号。
 
-        每次都重建而不是沿用上一个 Run 的内存列表：编辑重跑会把旧行移出上下文，fork、删除
+        每次都重建而不是沿用上一个 Run 的内存列表：撤回会把旧行移出上下文，fork、删除
         历史 Run 也会改库，无条件重建让这些用例无需卸载或刷新本对象。代价是每个 Run 多一次读库。
         """
 
@@ -118,6 +148,55 @@ class RuntimeMessageContextManager:
             entry for entry in entries if entry.sequence != TASK_SYSTEM_PROMPT_SEQUENCE
         ]
         self._message_sequence = self.context_store.max_sequence(self.current_task_id) + 1
+        # 回合号不复用：编辑移出的回合也占号。回合按 Run 而不是按驱动：挂起后唤醒、取消后恢复都是
+        # 同一个 Run 的新驱动，从它已写下的行接着判定，不另开回合。
+        self._max_turn = self.context_store.max_turn(self.current_task_id)
+        written = self.context_store.run_records(self.current_task_id, run.id)
+        # 取最大值而不是最后一行：补给本 Run 早先调用的占位排在最后，却属于更早的回合。
+        self._run_turn = max((r.turn for r in written), default=None)
+        self._run_shown = any(
+            _is_turn_input(r.message, r.metadata, r.project_to_transport)
+            or _is_visible_reply(r.message)
+            for r in written
+        )
+
+    @property
+    def current_turn(self) -> int | None:
+        """本 Run 当前回合号（还没写任何行时为 ``None``）；刚写下的输入或响应就属于这一回合。
+
+        ``prepare_input`` 写完一条回合输入后读它交给消费事件，实时投影据此按回合找到回复。
+        """
+        return self._run_turn
+
+    def _opens_turn(
+        self, message: ChatCompletionMessageParam, metadata: MessageMetadata, project: bool
+    ) -> bool:
+        """这一行（尚未写入）是否开启新回合：回合规则的唯一实现。
+
+        - Run 写下的第一行开启回合：没有输入开头的回复（唤醒、结果续跑）也是一个回合；
+        - 用户输入开启回合；
+        - Agent 消息只在本 Run 还没有可见内容（开回合的输入或可见回复）时开回合，否则是当前回复的
+          一段（这时这一回合在快照里已有回复，实时投影按回合号把它并进去）；
+        - 其余行（回复、通知、工具结果与图片、决定与后台结论）留在当前回合。
+
+        工具结果不经这里，属于发起调用的那一回合。
+        """
+        if self._run_turn is None:
+            return True
+        if not _is_turn_input(message, metadata, project):
+            return False
+        return cast(UserMessageMetadata, metadata).source is None or not self._run_shown
+
+    def _turn_for_new_row(
+        self, message: ChatCompletionMessageParam, metadata: MessageMetadata, project: bool
+    ) -> int:
+        """按 :meth:`_opens_turn` 取这一行的回合号并推进写入期状态；调用方随即写库。"""
+        if self._opens_turn(message, metadata, project):
+            self._max_turn += 1
+            self._run_turn = self._max_turn
+        if _is_turn_input(message, metadata, project) or _is_visible_reply(message):
+            self._run_shown = True
+        return cast(int, self._run_turn)
 
     def _track(self, entry: ContextEntry, *, in_context: bool) -> None:
         """内存消息列表与序号的唯一推进入口；调用方保证该行已落库。
@@ -171,13 +250,17 @@ class RuntimeMessageContextManager:
             if paired is None and include_in_context:
                 error = ContextProtocolError(
                     "tool_result_without_current_call",
-                    ContextEntry(message, target_run_id, self._message_sequence),
+                    # 只用于定位错误：这行没有写入，回合号取当前值。
+                    ContextEntry(
+                        message, target_run_id, self._message_sequence, turn=self._max_turn
+                    ),
                     message["tool_call_id"],
                 )
                 self._log_protocol_error(error)
                 raise error
             if paired is not None and paired.tool_index is not None:
                 existing = self._entries[paired.tool_index]
+            owner = self._entries[plan.target_index] if paired is not None and plan else None
         resolved_metadata = (
             metadata if metadata is not None else empty_message_metadata(message["role"])
         )
@@ -193,6 +276,7 @@ class RuntimeMessageContextManager:
                     message=message,
                     include_in_context=True,
                     sequence=existing.sequence,
+                    turn=existing.turn,
                     project_to_transport=project_to_transport,
                     metadata=resolved_metadata,
                 )
@@ -212,12 +296,22 @@ class RuntimeMessageContextManager:
                 },
             )
             return "replaced"
+        if message["role"] == "tool":
+            # 已配对的结果属于发起调用的回合；流式取消预览（未配对、不进上下文）留在当前回合。
+            turn = (
+                owner.turn
+                if owner is not None
+                else self._turn_for_new_row(message, resolved_metadata, project_to_transport)
+            )
+        else:
+            turn = self._turn_for_new_row(message, resolved_metadata, project_to_transport)
         self._append_message(
             message,
             target_run_id,
             include_in_context,
             resolved_metadata,
             project_to_transport,
+            turn=turn,
             message_id=message_id,
             session=session,
         )
@@ -231,10 +325,11 @@ class RuntimeMessageContextManager:
         metadata: MessageMetadata,
         project_to_transport: bool = True,
         *,
+        turn: int,
         message_id: int | None = None,
         session: Session | None = None,
     ) -> ContextEntry:
-        """调用方已验证结果归属；写库成功后才推进内存列表和序号。"""
+        """调用方已验证结果归属并取好回合号；写库成功后才推进内存列表和序号。"""
         entry = self.context_store.append(
             self.current_task_id,
             run_id,
@@ -244,10 +339,25 @@ class RuntimeMessageContextManager:
             metadata,
             project_to_transport=project_to_transport,
             session=session,
+            turn=turn,
             message_id=message_id,
         )
         self._track(entry, in_context=include_in_context)
         return entry
+
+    def latest_notice(self, notice_kind: str) -> tuple[int | None, NoticeEntry] | None:
+        """上下文里最近一条 ``notice_kind`` 通知与它所在行的 Run（继承行为 ``None``）。
+
+        驱动开始时推导 Run 级通知的比对基准（``drive_notices``）：基准取自上下文而不是进程内记忆，
+        重启、缓存卸载、撤回与分叉之后都与模型实际看到的一致。
+        """
+        for entry in reversed(self._entries):
+            metadata = entry.metadata
+            if isinstance(metadata, UserMessageMetadata) and metadata.kind == "notice":
+                for notice in reversed(metadata.notices):
+                    if notice.notice_kind == notice_kind:
+                        return entry.run_id, notice
+        return None
 
     def find_tool_call(
         self, tool_call_id: str
@@ -255,7 +365,7 @@ class RuntimeMessageContextManager:
         """在纳入上下文的 assistant 消息里按身份找回一次工具调用（含名称与原始参数）。
 
         跨 Run 查找：HITL 调用可能在早先的 Run 里发起，决定在之后的 Run 才到。找不到（如已被
-        编辑重跑移出上下文）时返回 ``None``，由调用方决定如何告知模型。
+        撤回移出上下文）时返回 ``None``，由调用方决定如何告知模型。
         """
         for entry in reversed(self._entries):
             if entry.run_id is None or entry.message["role"] != "assistant":
@@ -320,6 +430,7 @@ class RuntimeMessageContextManager:
                 message=entry.message,
                 include_in_context=True,
                 sequence=entry.sequence,
+                turn=entry.turn,
                 project_to_transport=True,
                 metadata=metadata,
             ),
@@ -359,6 +470,7 @@ class RuntimeMessageContextManager:
                 self.current_run_id,
                 include_in_context,
                 metadata,
+                turn=self._turn_for_new_row(message, metadata, True),
             )
             # ``_append_message`` 已按准入决定写 working copy；只有未提交时需留身份供下一帧替换。
             if include_in_context:
@@ -366,6 +478,9 @@ class RuntimeMessageContextManager:
             else:
                 self._draft_response = entry
             return entry
+        if _is_visible_reply(message):
+            # 草稿首帧常是空的，正文与调用在后续帧才到；回合判定要知道本 Run 已有可见回复。
+            self._run_shown = True
         self.context_store.replace_message(
             ConversationTaskContextRecord(
                 task_id=self.current_task_id,
@@ -374,6 +489,7 @@ class RuntimeMessageContextManager:
                 message=message,
                 include_in_context=include_in_context,
                 sequence=draft.sequence,
+                turn=draft.turn,
                 metadata=metadata,
             )
         )
@@ -472,6 +588,8 @@ class RuntimeMessageContextManager:
                             plan.target_run_id,
                             True,
                             ToolMessageMetadata(status="cancelled"),
+                            # 补的占位属于发起调用的那一回合。
+                            turn=entry.turn,
                         )
                     )
                     created += 1

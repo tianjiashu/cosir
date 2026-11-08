@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from openai.types.chat import ChatCompletionMessageParam
@@ -24,6 +25,8 @@ class ConversationTaskContextRecord:
     message: ChatCompletionMessageParam
     include_in_context: bool
     sequence: int
+    # 所属回合的 Task 内序号（系统提示词为 0），见 ``ConversationTaskContextModel.turn``。
+    turn: int
     # 只有用户消息有身份（message_queue 行 id）；其余角色为 None。
     message_id: int | None = None
     metadata: MessageMetadata = field(default_factory=EmptyMessageMetadata)
@@ -68,6 +71,7 @@ class ConversationTaskContextRecord:
             include_in_context=model.include_in_context,
             project_to_transport=model.project_to_transport,
             sequence=model.sequence,
+            turn=model.turn,
             created_at=model.created_at,
             updated_at=model.updated_at,
         )
@@ -99,4 +103,32 @@ class ConversationTaskContextRecord:
             include_in_context=self.include_in_context,
             project_to_transport=self.project_to_transport,
             sequence=self.sequence,
+            turn=self.turn,
         )
+
+
+def turn_withdrawn(turn_rows: Iterable[ConversationTaskContextRecord]) -> bool:
+    """一个回合是否已被撤回：看开启它的那一行（回合内序号最小）是否还保留。
+
+    撤回从开启回合的那一行起移出，但更早调用在这一回合才并入的结果会留下、仍带这个回合号，所以
+    不能看「还有没有行保留着」。看 ``retained`` 而不是 ``include_in_context``：开启回合的也可能是
+    从不进上下文的流式草稿（没有输入开头的 Run 第一行）。恢复、fork 定位与冷重建的「可恢复」
+    共用这一判定。
+    """
+    opener = min(turn_rows, key=lambda row: row.sequence, default=None)
+    return opener is not None and not opener.retained
+
+
+def run_last_turn_withdrawn(run_rows: Iterable[ConversationTaskContextRecord]) -> bool:
+    """一个 Run 的最后一个回合是否已被撤回（没写过行的 Run 不算）。
+
+    ``run_rows`` 是这个 Run 的全部行（含已移出的）。
+
+    撤回之后这个 Run 没有可续的回合：恢复会把新输出接在已撤回的回合上，「用户已停止」也说的是模型已
+    看不到的回合。
+    """
+    rows = list(run_rows)
+    if not rows:
+        return False
+    last = max(row.turn for row in rows)
+    return turn_withdrawn(row for row in rows if row.turn == last)

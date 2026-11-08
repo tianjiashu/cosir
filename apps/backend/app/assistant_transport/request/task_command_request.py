@@ -1,4 +1,4 @@
-"""Task 级命令的 wire schema：发送消息、编辑排队消息、编辑重跑、Agent Team 审批决定。
+"""Task 级命令的 wire schema：发送消息与 HITL 决定（撤回、取消等命令没有请求体）。
 
 命令只对 Task（路径中的 ``task_id``）或消息（路径中的 ``message_id``）寻址，不携带 run_id：Run
 身份由后端按 Task 的最新 Run 解析。wire 字段沿用 camelCase，进入 service 层前映射为领域对象。
@@ -42,45 +42,15 @@ def _ordered_display_text(parts: Sequence[AssistantTextPart | AssistantImagePart
     return "\n".join(segments)
 
 
-class _MessageCommandRequest(BaseModel):
-    """消息命令：把 wire 消息映射成 Run 命令；发起配置由需要开 Run 的子类补充。"""
+class SendMessageRequest(BaseModel):
+    """发送消息；并入时机不由请求决定：后端按 Task 是否有活动 Run 定排队还是立即处理。
+
+    发起配置随消息携带，只在这条消息开新 Run 时生效（见 ``RunLaunch``）。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     message: AssistantUserMessage
-
-    def to_run_command(self) -> ConversationRunCommand:
-        """``display_text`` 保持文字与图片的原始顺序；附件绑定随输入进入 message_queue。"""
-
-        return self._run_command(disabled_tool_groups=[])
-
-    def _run_command(self, *, disabled_tool_groups: list[str]) -> ConversationRunCommand:
-        parts = self.message.parts
-        return ConversationRunCommand(
-            display_text=_ordered_display_text(parts),
-            image_asset_ids=list(
-                dict.fromkeys(
-                    part.image.removeprefix("cosir-attachment://")
-                    for part in parts
-                    if isinstance(part, AssistantImagePart)
-                )
-            ),
-            disabled_tool_groups=disabled_tool_groups,
-            attachments=[
-                ConversationRunAttachmentInput(
-                    id=attachment.id,
-                    name=attachment.name,
-                    content_type=attachment.contentType,
-                    path=attachment.path,
-                )
-                for attachment in self.message.attachments
-            ],
-        )
-
-
-class _LaunchCommandRequest(_MessageCommandRequest):
-    """会开出或并入 Run 的消息命令：附带发起配置。"""
-
     # 模型名由后端配置事实读取，请求只携带配置身份。
     modelConfigId: int = Field(ge=1)
     reasoningEffort: ReasoningEffort | None = None
@@ -97,15 +67,29 @@ class _LaunchCommandRequest(_MessageCommandRequest):
         return value
 
     def to_run_command(self) -> ConversationRunCommand:
-        return self._run_command(disabled_tool_groups=list(self.disabledToolGroups))
+        """``display_text`` 保持文字与图片的原始顺序；附件绑定随输入进入 message_queue。"""
 
-
-class SendMessageRequest(_LaunchCommandRequest):
-    """发送消息；并入时机不由请求决定：后端按 Task 是否有活动 Run 定排队还是立即处理。"""
-
-
-class RerunMessageRequest(_LaunchCommandRequest):
-    """编辑最新一条已并入的用户消息并重跑：按本次请求的配置开新 Run。"""
+        parts = self.message.parts
+        return ConversationRunCommand(
+            display_text=_ordered_display_text(parts),
+            image_asset_ids=list(
+                dict.fromkeys(
+                    part.image.removeprefix("cosir-attachment://")
+                    for part in parts
+                    if isinstance(part, AssistantImagePart)
+                )
+            ),
+            disabled_tool_groups=list(self.disabledToolGroups),
+            attachments=[
+                ConversationRunAttachmentInput(
+                    id=attachment.id,
+                    name=attachment.name,
+                    content_type=attachment.contentType,
+                    path=attachment.path,
+                )
+                for attachment in self.message.attachments
+            ],
+        )
 
 
 class DecisionRequest(BaseModel):

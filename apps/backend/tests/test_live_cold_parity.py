@@ -12,7 +12,7 @@ from app.assistant_transport.service.transport_assistant_service import Transpor
 from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
 from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.models.conversation_run_options import ConversationRunOptions
-from app.service.conversation_run.tool_decision_service import ToolDecisionService
+from app.service.conversation.tool_decision_service import ToolDecisionService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
 from tests.live_cold_support import LiveColdEnv, tool_call, tool_parts
 from tests.sdk_fixtures import sdk_events
@@ -242,6 +242,35 @@ async def test_resuming_a_failed_run_keeps_live_and_cold_in_step(backend_env, tm
     try:
         env.send()
         await env.until("failed")
+        assert env.live()["activity"]["resumable"] is True
+        env.assert_parity()
+
+        await spaces.get(env.task.id).actor.resume()
+        await env.until("completed")
+        state = env.live()
+        replies = [m for m in state["messages"] if m["role"] == "assistant"]
+        assert [m["outcome"]["status"] for m in replies] == ["completed"]
+        assert state["activity"]["resumable"] is False
+        env.assert_parity()
+    finally:
+        await env.close()
+
+
+async def test_resuming_a_cancelled_run_keeps_live_and_cold_in_step(backend_env, tmp_path, monkeypatch):
+    """取消后恢复：同一个 Run 续写同一回合，结局只落在这一条回复上，可恢复判定实时与冷重建一致。"""
+    env = LiveColdEnv(
+        tmp_path,
+        monkeypatch,
+        [
+            ([{"tool_calls": [tool_call("h1", "probe_hitl", {"intent": "批准"})]}], "tool_calls"),
+            ([{"content": "恢复后"}], "stop"),
+        ],
+    )
+    try:
+        env.send()
+        await env.parked()
+        await TransportAssistantService().cancel(env.task.id)
+        await env.until("cancelled")
         assert env.live()["activity"]["resumable"] is True
         env.assert_parity()
 

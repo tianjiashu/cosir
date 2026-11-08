@@ -3,9 +3,6 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.models.conversation_run_options import ReasoningEffort
-from app.models.errors.input_errors import UserInputRejectedError
-from app.service.depends import get_model_config_service
 from app.storage.model.model_config_model import ModelConfigModel
 from app.utils.datetime_utils import from_text
 
@@ -86,28 +83,3 @@ class ModelConfigRecord:
             enabled=self.enabled,
             sort_order=self.sort_order,
         )
-
-    @classmethod
-    def check_launch_config(
-        cls, model_config_id: int, reasoning_effort: ReasoningEffort | None
-    ) -> "ModelConfigRecord":
-        """校验模型配置存在且支持所选推理强度，返回它供调用方继续校验能力（如图片）。
-
-        异常:
-            UserInputRejectedError: 模型配置不存在，或不支持所选推理强度。
-        """
-        # 模型配置缺失不是「寻址不到 Task」：接入层把 KeyError 统一映射为 404 task not found。
-        # 本层明确知道自己查的是什么，就地换成可读的输入拒绝，避免给出错误语义。
-        try:
-            config = get_model_config_service().get_config(model_config_id)
-        except KeyError as exc:
-            raise UserInputRejectedError(
-                "MODEL_CONFIG_UNAVAILABLE",
-                "当前模型配置不存在，请重新选择模型",
-                detail=f"model config {model_config_id} is gone",
-            ) from exc
-        if reasoning_effort is not None and not config.supports_reasoning_effort:
-            raise UserInputRejectedError(
-                "REASONING_EFFORT_UNSUPPORTED", "当前模型不支持所选的推理强度"
-            )
-        return config

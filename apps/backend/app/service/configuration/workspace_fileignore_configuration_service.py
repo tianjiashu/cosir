@@ -59,8 +59,7 @@ class WorkspaceFileIgnoreConfigurationService:
         """校验标准 gitignore 语法、大小和规则数后原子写入规则文件。"""
 
         self._validate(content)
-        with self.store.locked(self.path):
-            self.store.write_text_atomic(self.path, content, root=self.root / ".cosir")
+        self.store.write_text_atomic(self.path, content, root=self.root / ".cosir")
         log.info(
             "configuration_workspace_fileignore_written",
             extra={

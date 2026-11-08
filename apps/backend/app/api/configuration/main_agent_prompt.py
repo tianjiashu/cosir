@@ -10,11 +10,6 @@ from app.config.configuration import replace_main_agent_profile
 from app.service.configuration.main_agent_prompt_configuration_service import (
     MainAgentPromptConfigurationService,
 )
-from app.task_runtime.broadcaster.system_prompt_update_broadcaster import (
-    broadcast_system_prompt_delta,
-    build_system_prompt_delta,
-)
-from app.task_runtime.system_prompt_delta_source import SystemPromptDeltaSource
 
 
 @app.get("/configuration/main-agent-prompt", response_model=MainAgentPromptResponse)
@@ -34,17 +29,8 @@ async def update_main_agent_prompt_configuration(
     """保存主 Agent prompt，并同步替换当前进程 Registry 中的 profile。"""
 
     try:
-        service = MainAgentPromptConfigurationService()
-        previous = service.read().content
-        document = service.update(payload.content)
+        document = MainAgentPromptConfigurationService().update(payload.content)
         replace_main_agent_profile(system_prompt=document.content)
-        delta = build_system_prompt_delta(
-            source=SystemPromptDeltaSource.MAIN_AGENT_PROMPT,
-            previous=previous,
-            current=document.content,
-        )
-        if delta is not None:
-            broadcast_system_prompt_delta(delta)
         return MainAgentPromptResponse.from_document(document)
     except Exception as exc:
         raise_configuration_error(exc)

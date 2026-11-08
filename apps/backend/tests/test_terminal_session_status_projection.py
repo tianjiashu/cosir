@@ -227,7 +227,8 @@ def test_refresh_after_task_deleted_is_silent(
 ) -> None:
     service = ConversationTaskStateService()
     service.get_state(task_id)
-    service.mark_task_deleted(task_id)
+    task_runtime_spaces.mark_deleted(task_id)
+    service.release_deleted_task(task_id)
     published.clear()
     terminals.sessions[task_id] = [_entry()]
     service.refresh_terminal_sessions(task_id)

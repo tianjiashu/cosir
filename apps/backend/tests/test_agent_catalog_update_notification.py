@@ -8,16 +8,12 @@ import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.workflow.message_queue.task_message import NoticeBody
-from app.task_runtime.agent_catalog_change import AgentCatalogChange
-from app.task_runtime.broadcaster import runtime_notice_broadcaster
-from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
-    broadcast_agent_catalog_change,
-)
+from app.service.configuration.runtime_notices.agent_catalog_change import AgentCatalogChange
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
-class _FakeContextManager:
-    """供目录通知过滤测试使用的最小 context manager 外壳。"""
+class _TaskFacts:
+    """过滤只读的 Task 事实：space 记下的 Agent、固化的工具名与工作区。"""
 
     def __init__(self, agent_type: AgentProfileType, tool_names: list[str], root: str) -> None:
         self.agent = SimpleNamespace(agent_type=agent_type)
@@ -26,15 +22,13 @@ class _FakeContextManager:
 
 
 class _FakeRuntimeSpace:
-    """不依赖 SQLite 的 runtime space 外壳，只提供匹配所需的 Task 身份、工具名与 live manager。"""
+    """不依赖 SQLite 的 runtime space 外壳，只提供匹配所需的 Task 身份、Agent、工具名与工作区。"""
 
-    def __init__(self, task_id: int, manager: _FakeContextManager) -> None:
+    def __init__(self, task_id: int, facts: _TaskFacts) -> None:
         self.task_id = task_id
-        self.task_tool_names = manager.tool_names
-        self._manager = manager
-
-    def live_context_manager(self) -> _FakeContextManager:
-        return self._manager
+        self.agent = facts.agent
+        self.task_tool_names = facts.tool_names
+        self.current_workspace = facts.workspace
 
 
 @pytest.fixture(autouse=True)
@@ -56,35 +50,35 @@ def posted(monkeypatch) -> dict[int, list[NoticeBody]]:
         by_task.setdefault(task_id, []).append(message.body)
         return 0
 
-    monkeypatch.setattr(runtime_notice_broadcaster.task_runtime_spaces, "enqueue", enqueue)
+    monkeypatch.setattr(task_runtime_spaces, "enqueue", enqueue)
     return by_task
 
 
-def _install_manager(task_id: int, manager: _FakeContextManager) -> None:
-    """把测试 manager 安装到不依赖 SQLite 的 runtime space 外壳。"""
+def _install_space(task_id: int, facts: _TaskFacts) -> None:
+    """把测试用 Task 事实安装成不依赖 SQLite 的 runtime space 外壳。"""
 
-    task_runtime_spaces._spaces[task_id] = _FakeRuntimeSpace(task_id, manager)
+    task_runtime_spaces._spaces[task_id] = _FakeRuntimeSpace(task_id, facts)
 
 
 def test_agent_catalog_change_reaches_only_delegating_agents_in_scope(posted) -> None:
     """目录变更只投给拥有委派工具且命中作用域的 Agent 所在 Task。"""
 
-    matching_main = _FakeContextManager(
+    matching_main = _TaskFacts(
         AgentProfileType.MAIN, ["delegate_task"], "/workspace/one"
     )
-    matching_child = _FakeContextManager(
+    matching_child = _TaskFacts(
         AgentProfileType.CHILD, ["delegate_task"], "/workspace/one"
     )
-    wrong_workspace = _FakeContextManager(
+    wrong_workspace = _TaskFacts(
         AgentProfileType.MAIN, ["delegate_task"], "/workspace/two"
     )
-    no_delegate = _FakeContextManager(AgentProfileType.CHILD, ["read_file"], "/workspace/one")
-    hidden = _FakeContextManager(
+    no_delegate = _TaskFacts(AgentProfileType.CHILD, ["read_file"], "/workspace/one")
+    hidden = _TaskFacts(
         AgentProfileType.HIDDEN, ["delegate_task"], "/workspace/one"
     )
     managers = [matching_main, matching_child, wrong_workspace, no_delegate, hidden]
     for task_id, manager in enumerate(managers, start=1):
-        _install_manager(task_id, manager)
+        _install_space(task_id, manager)
 
     change = AgentCatalogChange(
         scope="/workspace/one",
@@ -94,7 +88,7 @@ def test_agent_catalog_change_reaches_only_delegating_agents_in_scope(posted) ->
         current_description="新描述",
     )
 
-    assert broadcast_agent_catalog_change(change) == 2
+    assert change.broadcast() == 2
 
     assert sorted(posted) == [1, 2]
     assert all(len(posted[task_id]) == 1 for task_id in (1, 2))
@@ -108,10 +102,10 @@ def test_agent_catalog_change_reaches_only_delegating_agents_in_scope(posted) ->
 def test_system_agent_catalog_change_reaches_all_delegating_agents(posted) -> None:
     """系统级目录变更跨 workspace 通知所有可委派 Agent。"""
 
-    first = _FakeContextManager(AgentProfileType.MAIN, ["delegate_task"], "/workspace/one")
-    second = _FakeContextManager(AgentProfileType.CHILD, ["delegate_task"], "/workspace/two")
-    _install_manager(10, first)
-    _install_manager(11, second)
+    first = _TaskFacts(AgentProfileType.MAIN, ["delegate_task"], "/workspace/one")
+    second = _TaskFacts(AgentProfileType.CHILD, ["delegate_task"], "/workspace/two")
+    _install_space(10, first)
+    _install_space(11, second)
 
     change = AgentCatalogChange(
         scope=None,
@@ -121,5 +115,5 @@ def test_system_agent_catalog_change_reaches_all_delegating_agents(posted) -> No
         current_description="编写文档",
     )
 
-    assert broadcast_agent_catalog_change(change) == 2
+    assert change.broadcast() == 2
     assert {task_id: len(notices) for task_id, notices in posted.items()} == {10: 1, 11: 1}

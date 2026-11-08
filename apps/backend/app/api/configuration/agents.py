@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Any
 
 from app.api.configuration.errors import raise_configuration_error
-from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.api.schemas.request.AgentConfigurationRequest import AgentConfigurationRequest
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
 from app.app import app
@@ -27,8 +26,8 @@ from app.service.configuration.agent_configuration_service import (
 async def list_configuration_agents() -> list[AgentConfigurationResponse]:
     try:
         return [
-            AgentConfigurationResponse.from_document(item)
-            for item in AgentConfigurationService().list_documents()
+            AgentConfigurationResponse.from_entry(item)
+            for item in AgentConfigurationService().list_entries()
         ]
     except Exception as exc:
         raise_configuration_error(exc)
@@ -39,8 +38,8 @@ async def create_configuration_agent(
     payload: AgentConfigurationRequest,
 ) -> AgentConfigurationResponse:
     try:
-        return AgentConfigurationResponse.from_document(
-            AgentConfigurationService().create_document(AgentConfigurationDocument.from_payload(payload))
+        return AgentConfigurationResponse.from_entry(
+            AgentConfigurationService().create(payload.to_configuration())
         )
     except Exception as exc:
         raise_configuration_error(exc)
@@ -51,11 +50,8 @@ async def update_configuration_agent(
     agent_id: str, payload: AgentConfigurationRequest
 ) -> AgentConfigurationResponse:
     try:
-        return AgentConfigurationResponse.from_document(
-            AgentConfigurationService().update_document(
-                agent_id,
-                AgentConfigurationDocument.from_payload(payload),
-            )
+        return AgentConfigurationResponse.from_entry(
+            AgentConfigurationService().update(agent_id, payload.to_configuration())
         )
     except Exception as exc:
         raise_configuration_error(exc)
@@ -64,7 +60,7 @@ async def update_configuration_agent(
 @app.delete("/configuration/agents/{agent_id}")
 async def delete_configuration_agent(agent_id: str) -> dict[str, Any]:
     try:
-        AgentConfigurationService().delete_document(agent_id)
+        AgentConfigurationService().delete(agent_id)
         return {"agent_id": agent_id, "deleted": True}
     except Exception as exc:
         raise_configuration_error(exc)

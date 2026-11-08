@@ -1,4 +1,4 @@
-"""编辑重跑在 context 上的存储语义（真实 SQLite）：定位最新用户输入、按 sequence 软删除。"""
+"""撤回在 context 上的存储语义（真实 SQLite）：定位最新用户输入、按 sequence 软删除。"""
 
 from __future__ import annotations
 
@@ -32,8 +32,8 @@ def _turn_of(previous: list, metadata: object) -> int:
 
 @pytest.fixture
 def task(isolated_storage, tmp_path):
-    workspace = WorkspaceCrud().create("rerun", str(tmp_path))
-    task = TaskCrud().create(workspace.id, "rerun", tool_schemas=[])
+    workspace = WorkspaceCrud().create("withdraw", str(tmp_path))
+    task = TaskCrud().create(workspace.id, "withdraw", tool_schemas=[])
     run = ConversationRunCrud().create(task.id, status="completed")
     store = ContextStore()
     rows = [

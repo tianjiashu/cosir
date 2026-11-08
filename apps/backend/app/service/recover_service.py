@@ -24,6 +24,9 @@ INTERRUPTED_NOTICE = (
 )
 
 
+# 重启收敛给残留 Run 记的结束原因；重启通知与前端都按它识别「被重启中断」。
+_RUNTIME_RESTARTED = "runtime_restarted"
+
 class RecoverService:
     """后端启动期的重启恢复：收敛遗留 running Run / TeamRun，拉起待调度 Task，结算中断的占位。
 
@@ -113,9 +116,7 @@ class RecoverService:
                 ),
             )
 
-    def cancel_orphaned_team_nodes(
-        self, node_task_ids: list[int], end_reason: str = "runtime_restarted"
-    ) -> list[int]:
+    def cancel_orphaned_team_nodes(self, node_task_ids: list[int]) -> list[int]:
         """取消作废 TeamRun 下挂起的节点 Run，返回被取消的 Run id。
 
         只对「等待方不可能再出现」的节点这样做：一般的挂起 Run 照常保留、等可唤醒消息。单个失败
@@ -128,7 +129,9 @@ class RecoverService:
                 run = tasks.require_current_run(task_id)
                 if run is None or run.status != ConversationRunStatus.SUSPENDED.value:
                     continue
-                if self._ledger.transition(run.id, RunTransition.CANCEL, end_reason=end_reason):
+                if self._ledger.transition(
+                    run.id, RunTransition.CANCEL, end_reason=_RUNTIME_RESTARTED
+                ):
                     cancelled.append(run.id)
             except Exception:
                 log.exception(
@@ -137,9 +140,7 @@ class RecoverService:
                 )
         return cancelled
 
-    def recover_orphaned_runs(
-        self, end_reason: str = "runtime_restarted"
-    ) -> list[ConversationRunRecord]:
+    def recover_orphaned_runs(self) -> list[ConversationRunRecord]:
         """启动时取消失去执行者的 running Run；suspended 没有执行者、不需要收敛，保留等消息唤醒。
         每个 Run 的状态与工具占位同事务提交；message_queue 保留，不自动继续，不发布尚无订阅者的事件。
         配对依据不完整时不补占位，记录错误并提交取消，继续恢复其他 Run。"""
@@ -151,7 +152,7 @@ class RecoverService:
                 record = self._ledger.transition(
                     run.id,
                     RunTransition.CANCEL,
-                    end_reason=end_reason,
+                    end_reason=_RUNTIME_RESTARTED,
                     session=session,
                 )
                 if record is not None:
@@ -183,7 +184,7 @@ class RecoverService:
                         "task_id": run.task_id,
                         "run_id": record.id,
                         "status": ConversationRunStatus.CANCELLED.value,
-                        "end_reason": end_reason,
+                        "end_reason": _RUNTIME_RESTARTED,
                         "repaired_tool_call_count": len(repaired_tool_call_ids),
                     },
                 },

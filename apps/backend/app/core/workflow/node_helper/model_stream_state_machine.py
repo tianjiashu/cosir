@@ -41,6 +41,8 @@ class ModelStreamStateMachine:
         self._text_open = False
         self._pending = ""
         self._source_sequence = 0
+        # 这次响应所在的回合（随 ``receive`` 带入，一次请求只写一行响应、只属于一个回合）。
+        self._turn = 0
         self._min_chars = Constant.Workflow.DEFAULT_TEXT_FLUSH_MIN_CHARS
         self._max_interval = Constant.Workflow.DEFAULT_TEXT_FLUSH_MAX_INTERVAL_SECONDS
         self._now: Callable[[], float] = time.monotonic
@@ -55,6 +57,7 @@ class ModelStreamStateMachine:
         self,
         *,
         source_sequence: int,
+        turn: int,
         text: str | None,
         reasoning: bool,
         tool_delta: bool,
@@ -65,6 +68,7 @@ class ModelStreamStateMachine:
         同一帧多通道时工具优先、其次推理、最后正文。先写完本帧正文，再因推理/工具通道收口；
         旧累计身份既不切阶段也不反复收口正文。尚未完整的身份等 SDK 后续快照补全。
         """
+        self._turn = turn
         if tool_delta:
             self._publish_phase("tool_call")
         elif reasoning:
@@ -115,6 +119,7 @@ class ModelStreamStateMachine:
                     step_id=self._step_id,
                     tool_call_id=call_id,
                     tool_name=name,
+                    turn=self._turn,
                 )
             )
 
@@ -174,6 +179,7 @@ class ModelStreamStateMachine:
                 run_id=self._run_id,
                 step_id=self._step_id,
                 source_sequence=self._source_sequence,
+                turn=self._turn,
                 part="text",
                 delta=self._pending,
             )
@@ -191,6 +197,7 @@ class ModelStreamStateMachine:
                 run_id=self._run_id,
                 step_id=self._step_id,
                 source_sequence=self._source_sequence,
+                turn=self._turn,
                 part="text",
             )
         )

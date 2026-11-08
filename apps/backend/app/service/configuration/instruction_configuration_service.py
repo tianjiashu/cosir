@@ -12,6 +12,10 @@ from pathlib import Path
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.configuration.file_store import ConfigurationFileStore
+from app.service.configuration.runtime_notices.system_prompt_delta import (
+    SystemPromptDelta,
+    SystemPromptDeltaSource,
+)
 from app.utils.path.system_cosir import system_cosir_dir, system_instruction_file
 from app.utils.token_estimator import TokenEstimator
 
@@ -48,20 +52,25 @@ class InstructionConfigurationService:
         return self._document(raw)
 
     def update(self, content: str) -> GlobalInstructionDocument:
-        """校验 token 预算后原子写入全局指令。"""
+        """校验 token 预算后原子写入全局指令，再把变更以增量通知已装配的 Task。"""
 
+        previous = self.read().content
         document = self._document(content)
         if document.token_length > document.max_tokens:
             raise InstructionConfigurationError(
                 f"全局 AGENTS.md 超出 token 预算: {document.token_length} > {document.max_tokens}"
             )
-        with self.store.locked(self.path):
-            self.store.write_text_atomic(self.path, content, root=self.root)
+        self.store.write_text_atomic(self.path, content, root=self.root)
         log.info(
             "configuration_global_instruction_written",
             extra={"msg": "系统全局指令已保存", "data": {"path": str(self.path)}},
         )
-        return self._document(content)
+        delta = SystemPromptDelta.between(
+            source=SystemPromptDeltaSource.GLOBAL_INSTRUCTIONS, previous=previous, current=content
+        )
+        if delta is not None:
+            delta.broadcast()
+        return document
 
     def _document(self, content: str) -> GlobalInstructionDocument:
         """把正文投影为文档对象，并附上 token 预算元数据（预算值取自 ``Constant.SystemPrompt``）。

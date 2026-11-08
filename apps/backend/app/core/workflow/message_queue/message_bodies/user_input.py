@@ -19,7 +19,7 @@ from app.models.conversation_run_options import ConversationRunOptions
 from app.models.message_metadata import UserMessageMetadata
 
 if TYPE_CHECKING:
-    from app.models import ConversationRunRecord
+    from app.models import ConversationRunRecord, TaskRecord
 
 
 class RunLaunch(BaseModel):
@@ -41,6 +41,24 @@ class RunLaunch(BaseModel):
             agent_id=run.agent_id,
             model_config_id=run.model_config_id,
             options=run.options,
+        )
+
+    @classmethod
+    def from_fork(cls, task: "TaskRecord") -> "RunLaunch | None":
+        """分支还没有本地 Run 时沿用分叉时冻结的初始配置；不依赖来源 Task 是否还在。
+
+        冻结的模型 id 只是来历，不保证还存在：入队前的消息准备会校验所选模型，用户也可以换。
+        不是分支，或冻结配置缺 Agent / 模型（已被删除）时返回 ``None``。
+        """
+
+        fork = task.extra.fork
+        if fork is None:
+            return None
+        launch = fork.initial_launch
+        if launch.agent_id is None or launch.model_config_id is None:
+            return None
+        return cls(
+            agent_id=launch.agent_id, model_config_id=launch.model_config_id, options=launch.options
         )
 
 

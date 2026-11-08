@@ -21,7 +21,6 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
 from app.service.attachment.attachment_service import AttachmentService, SavedImage
 from app.service.attachment.image_normalizer import ImageNormalizationError
-from app.service.attachment.image_policy import DEFAULT_IMAGE_INPUT_POLICY
 from app.tools.display.image_display import (
     build_read_image_display_data,
 )
@@ -83,7 +82,7 @@ class ReadImageTool(HandlerBase):
     ) -> ToolObservation:
         resolver = PathResolver(execution_context.workspace_root)
         attachments = AttachmentService()
-        total_limit = DEFAULT_IMAGE_INPUT_POLICY.request_total_max_bytes
+        total_limit = Constant.Attachment.REQUEST_TOTAL_MAX_BYTES
         read: list[tuple[str, SavedImage]] = []
         failures: list[tuple[str, str, str]] = []
         total_bytes = 0

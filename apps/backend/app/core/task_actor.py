@@ -39,9 +39,13 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
 
 from app.config.logging.logger import log
+from app.core.context.context_store import ContextStore
 from app.core.task_cancellation import TaskCancellation
 from app.core.task_execution import TaskExecution
-from app.core.workflow.cancel.conversation_run_cancellation_registry import CancelReason
+from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+    CancelReason,
+    cancel_end_reason,
+)
 from app.core.workflow.message_queue import dispatch_policy
 from app.core.workflow.message_queue.task_message import TaskMessage
 from app.models import ConversationRunRecord
@@ -246,12 +250,12 @@ class TaskActor:
                     RunTransition.WAKE,
                 )
                 if woken is not None:
-                    self._start(woken, pending, fresh_run=False)
+                    self._start(woken, pending, fresh_run=False, preceding_run=None)
             elif isinstance(action, dispatch_policy.StartRun):
                 # 新 Run 只改当前活动：``create_run`` 提交后投影 RunInitializedEvent，前端经增量收到，
                 # 不重建、不推整份快照（长对话里每轮重发全部历史）。
                 run = await asyncio.to_thread(self._ledger.create_run, self.task_id, action.launch)
-                self._start(run, pending, fresh_run=True)
+                self._start(run, pending, fresh_run=True, preceding_run=current)
         self._publish_state()
 
     async def cancel(self, reason: CancelReason = "user") -> None:
@@ -316,10 +320,13 @@ class TaskActor:
         await self._cancellation.cancel_background_task()
         await self._cancellation.cancel_teams()
         cancelled = await asyncio.to_thread(
-            self._ledger.transition, current.id, RunTransition.CANCEL
+            self._ledger.transition,
+            current.id,
+            RunTransition.CANCEL,
+            end_reason=cancel_end_reason(reason),
         )
         if cancelled is not None:
-            await self._cancellation.after_cancelled(cancelled, reason)
+            await self._cancellation.after_cancelled(cancelled)
         return True
 
     async def resume(self) -> None:
@@ -327,7 +334,8 @@ class TaskActor:
 
         不经 loop（恢复时通常没有新消息、loop 正挂起），但同样在 Task 闸门内判定与启动：用户恰好
         同时发了消息时，两边不会各开一个执行。删除前的停止（``_stopping``）之后拒绝：恢复是唯一
-        不经 loop 就能开出执行的入口，放行会在即将删除的 Task 上留下执行者。
+        不经 loop 就能开出执行的入口，放行会在即将删除的 Task 上留下执行者。这个 Run 的最后一个回合
+        已被撤回时拒绝：没有可续的回合，新输出会接在已撤回的回合上。
 
         异常:
             SessionConflictError: ``RUN_NOT_RESUMABLE``。
@@ -338,14 +346,21 @@ class TaskActor:
                 raise SessionConflictError("RUN_NOT_RESUMABLE", "Task 正在删除，不可恢复")
             current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
             resumed = None
-            if current is not None and self._phase(current) == "idle":
+            if (
+                current is not None
+                and self._phase(current) == "idle"
+                and not await asyncio.to_thread(
+                    ContextStore().run_last_turn_withdrawn, self.task_id, current.id
+                )
+            ):
                 resumed = await asyncio.to_thread(
                     self._ledger.transition, current.id, RunTransition.RESUME
                 )
             if resumed is None:
                 raise SessionConflictError("RUN_NOT_RESUMABLE", "当前运行不可恢复")
             pending = await asyncio.to_thread(self._queue.pending_nowait, self.task_id)
-            self._start(resumed, pending, fresh_run=False)
+            # 恢复清空结束原因：把迁移前的记录交给驱动，「用户已停止」据此推导。
+            self._start(resumed, pending, fresh_run=False, preceding_run=current)
         self._publish_state()
 
     async def phase(self) -> dispatch_policy.Phase:
@@ -441,14 +456,23 @@ class TaskActor:
         return "idle"
 
     def _start(
-            self, run: ConversationRunRecord, pending: list[TaskMessage], *, fresh_run: bool
+            self,
+            run: ConversationRunRecord,
+            pending: list[TaskMessage],
+            *,
+            fresh_run: bool,
+            preceding_run: ConversationRunRecord | None,
     ) -> None:
         """按 ``dispatch_policy`` 选出初始消息，把 Run 交给执行登记；调用方持 Task 闸门。
+
+        ``preceding_run`` 是这次驱动之前 Task 的当前 Run（见 ``RuntimeContext.preceding_run``）。
 
         异常:
             ValueError: 该 Task 已有执行（调用方违约）。
         """
-        self._execution.start(run, dispatch_policy.initial_messages(pending, fresh_run=fresh_run))
+        self._execution.start(
+            run, dispatch_policy.initial_messages(pending, fresh_run=fresh_run), preceding_run
+        )
 
     async def _after_drive(self, run: ConversationRunRecord, reason: CancelReason | None) -> None:
         """执行已释放（``TaskExecution`` 的回调）：按 Run 落定状态与取消原因传播取消、接续剩余消息，
@@ -467,10 +491,13 @@ class TaskActor:
             settled = await asyncio.to_thread(self._ledger.get_run, run.id)
             if reason is not None and settled.status == ConversationRunStatus.SUSPENDED.value:
                 settled = await asyncio.to_thread(
-                    self._ledger.transition, run.id, RunTransition.CANCEL
+                    self._ledger.transition,
+                    run.id,
+                    RunTransition.CANCEL,
+                    end_reason=cancel_end_reason(reason),
                 ) or settled
             if settled.status == ConversationRunStatus.CANCELLED.value:
-                await self._cancellation.after_cancelled(settled, reason or "user")
+                await self._cancellation.after_cancelled(settled)
             if reason is None and settled.status in CONTINUE_AFTER_STATUSES:
                 pending = await asyncio.to_thread(self._queue.pending_nowait, self.task_id)
                 if pending:

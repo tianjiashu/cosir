@@ -30,13 +30,13 @@ from pathlib import Path
 
 import pytest
 
-from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
+from app.service.configuration.agent_configuration import AgentConfiguration
 from app.service.configuration.agent_configuration_service import (
     AgentConfigurationError,
     AgentConfigurationService,
@@ -917,8 +917,8 @@ def test_agent_service_workspace_write_then_list_matches_loaded_directory(
     )
     service = AgentConfigurationService(workspace_root=workspace)
 
-    service.create_document(
-        AgentConfigurationDocument(
+    service.create(
+        AgentConfiguration(
             agent_id="workspace-reader",
             role="reader",
             description="Probe",
@@ -930,7 +930,7 @@ def test_agent_service_workspace_write_then_list_matches_loaded_directory(
     expected = registry.source.directory(service.scope) / "workspace-reader.json"
     assert expected.exists()
     assert service.directory == expected.parent
-    assert [document.agent_id for document in service.list_documents()] == ["workspace-reader"]
+    assert [document.configuration.agent_id for document in service.list_entries()] == ["workspace-reader"]
 
 
 def test_agent_service_system_write_then_list_without_false_duplicate(
@@ -948,8 +948,8 @@ def test_agent_service_system_write_then_list_without_false_duplicate(
     service = AgentConfigurationService()
 
     with caplog.at_level(logging.WARNING):
-        service.create_document(
-            AgentConfigurationDocument(
+        service.create(
+            AgentConfiguration(
                 agent_id="sys-reader",
                 role="reader",
                 description="Probe",
@@ -957,10 +957,10 @@ def test_agent_service_system_write_then_list_without_false_duplicate(
                 allowed_tools=["read_file"],
             )
         )
-        documents = service.list_documents()
+        documents = service.list_entries()
 
-    assert [document.agent_id for document in documents] == ["sys-reader"]
-    assert documents[0].source == "user_file"
+    assert [document.configuration.agent_id for document in documents] == ["sys-reader"]
+    assert documents[0].builtin is False
     assert documents[0].path is not None and documents[0].path.exists()
     assert not [
         record
@@ -990,8 +990,8 @@ def test_system_scope_create_rejected_when_workspace_holds_same_id(
     service = AgentConfigurationService()
 
     with pytest.raises(AgentConfigurationError, match="已注册"):
-        service.create_document(
-            AgentConfigurationDocument(
+        service.create(
+            AgentConfiguration(
                 agent_id="shared",
                 role="system-reader",
                 description="System level agent with a workspace-local name collision",
@@ -1016,7 +1016,7 @@ def test_agent_service_create_does_not_log_false_duplicate_after_drop(
         lambda: registry,
     )
     service = AgentConfigurationService(workspace_root=workspace)
-    document = AgentConfigurationDocument(
+    document = AgentConfiguration(
         agent_id="workspace-reader",
         role="reader",
         description="Probe",
@@ -1025,7 +1025,7 @@ def test_agent_service_create_does_not_log_false_duplicate_after_drop(
     )
 
     with caplog.at_level(logging.WARNING):
-        service.create_document(document)
+        service.create(document)
         registry.drop_scope(service.scope)
         # drop 后注册表失去「已装载」标记；重新读取应恢复磁盘内容且不抛异常。
         assert registry.resolve_local(service.scope, "workspace-reader") is not None

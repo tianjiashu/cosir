@@ -44,7 +44,8 @@ class SkillCatalog:
     def list_skills(self) -> list[SkillInfo]:
         """返回有效 Skill 清单；元数据错误只跳过对应目录并记录日志。"""
 
-        found: dict[str, SkillInfo] = {}
+        # Skill 名限定小写且必须等于目录名，所以按目录名排序即最终顺序，名字也不会重复。
+        found: list[SkillInfo] = []
         if not self._root.is_dir():
             return []
         resolved_root = self._root.resolve(strict=True)
@@ -71,8 +72,8 @@ class SkillCatalog:
                     },
                 )
                 continue
-            found[info.name] = info
-        return [found[name] for name in sorted(found)]
+            found.append(info)
+        return found
 
     def load(self, name: str, resource_path: str | None = None) -> tuple[SkillInfo, str]:
         """加载 Skill 正文或其目录内的一个配套文本资源。"""

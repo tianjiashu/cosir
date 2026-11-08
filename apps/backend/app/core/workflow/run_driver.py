@@ -57,8 +57,13 @@ class RunDriver:
         self._task_service = get_task_service()
         self._workflow = ReactLikeWorkflow()
 
-    async def drive(self, run: ConversationRunRecord) -> None:
+    async def drive(
+        self, run: ConversationRunRecord, preceding_run: ConversationRunRecord | None
+    ) -> None:
         """驱动一次 Run：装配运行上下文 → 驱动 workflow，异常在此落定。
+
+        ``preceding_run`` 是这次驱动之前 Task 的当前 Run（见 ``RuntimeContext.preceding_run``），由
+        调度方给出，只用于推导驱动开始时的通知。
 
         正常终态由 workflow 节点落定。任何 ``Exception``（含装配期）在这里分类并落定 failed，再把
         仍未收束的工具调用批量收束；Run 已落终态时条件迁移落空，不覆盖既有终态。落定自身失败
@@ -80,7 +85,7 @@ class RunDriver:
             )
 
 
-            rc = RuntimeContext.for_run(run)
+            rc = RuntimeContext.for_run(run, preceding_run)
             await self._workflow.run(rc)
             if await self._has_settled(run):
                 await HookInterceptor.async_safe_fire(

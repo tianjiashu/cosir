@@ -5,23 +5,22 @@ from types import SimpleNamespace
 
 import pytest
 
+import app.assistant_transport.service.user_input_service as user_input_module
 from app.assistant_transport.projection.user_input_projection import build_user_input_parts
-from app.models import model_config_record as model_config_record_module
-from app.models.conversation_run_command import ConversationRunCommand
 from app.assistant_transport.service.user_input_service import UserInputService
+from app.models.conversation_run_command import ConversationRunCommand
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
+from tests.model_config_fixtures import model_configs
 
 
 @pytest.fixture
 def prepare(monkeypatch):
     """经生产入口 ``UserInputService.prepare`` 解析纯文本命令，返回模型正文与展示绑定。"""
     monkeypatch.setattr(
-        model_config_record_module,
+        user_input_module,
         "get_model_config_service",
-        lambda: SimpleNamespace(
-            get_config=lambda _id: SimpleNamespace(
-                supports_reasoning_effort=False, supports_image=False
-            )
+        lambda: model_configs(
+            lambda _id: SimpleNamespace(supports_reasoning_effort=False, supports_image=False)
         ),
     )
     service = object.__new__(UserInputService)

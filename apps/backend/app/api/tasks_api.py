@@ -25,14 +25,14 @@ from app.models.errors.deletion_errors import (
     ProvisionalTaskCleanupConflictError,
 )
 from app.models.errors.task_fork_errors import TaskForkConflictError
-from app.service.conversation_run.conversation_task_context_service import (
+from app.service.conversation.conversation_task_context_service import (
     ConversationTaskContextService,
 )
 from app.service.depends import (
     get_conversation_task_context_service,
     get_task_service,
 )
-from app.task_runtime.service.task_service import TaskService
+from app.service.task.task_service import TaskService
 
 
 @app.get("/context-messages", response_model=ContextObservationResponse)

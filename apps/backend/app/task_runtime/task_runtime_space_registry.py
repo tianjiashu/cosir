@@ -17,14 +17,14 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
-
-    from app.core.workflow.message_queue.task_message import TaskMessage
 
 
 class TaskRuntimeSpaceRegistry:
@@ -130,6 +130,20 @@ class TaskRuntimeSpaceRegistry:
         with self._guard:
             return self._spaces.get(task_id)
 
+    def broadcast_notice(
+        self, notice: NoticeBody, reaches: Callable[[TaskRuntimeSpace], bool]
+    ) -> int:
+        """把一条 Task 级通知写入命中的已物化 Task 的外部队列（每个 Task 一笔事务），返回投递数。
+
+        只发给已物化的 Task：它们的 actor 已在监听，通知随下一次推进写入。不创建新的 space、不启动
+        Run、不打断正在进行的模型请求。``reaches`` 抛出的异常原样上浮。
+        """
+
+        task_ids = [space.task_id for space in self.existing_spaces() if reaches(space)]
+        for task_id in task_ids:
+            self.enqueue(task_id, TaskMessage.of(notice))
+        return len(task_ids)
+
     def existing_spaces(self) -> tuple[TaskRuntimeSpace, ...]:
         """返回当前进程中已经物化的 Task runtime space 快照。
 
@@ -149,10 +163,17 @@ class TaskRuntimeSpaceRegistry:
             return tuple(self._spaces.values())
 
     def mark_deleted(self, task_id: int) -> None:
-        """禁止已删除 Task 再次惰性创建 runtime space。"""
+        """记下 Task 已在本进程删除：之后不再物化它的 space，快照读取与订阅一律拒绝。
+
+        「本进程里这个 Task 已删除」只记在这里，Transport 的快照服务也读这一份。
+        """
 
         with self._guard:
             self._deleted_task_ids.add(task_id)
+
+    def is_deleted(self, task_id: int) -> bool:
+        with self._guard:
+            return task_id in self._deleted_task_ids
 
     def unload(
         self,
@@ -160,21 +181,12 @@ class TaskRuntimeSpaceRegistry:
         *,
         expected_space: TaskRuntimeSpace | None = None,
     ) -> None:
-        """卸载一个已经停止使用的 Task runtime space。
+        """Task 删除提交后卸载它的 runtime space，并停下仍在监听的 actor loop。
 
-        参数:
-            task_id: 待卸载任务标识。
-            expected_space: 可选的身份校验对象；传入时只卸载仍指向该实例的条目，
-                防止旧删除流程误删后来重新创建的 runtime space。
-
-        返回:
-            无。
-
-        异常:
-            无。
-
-        副作用:
-            从进程内 registry 删除一个 Task runtime space；不会停止执行中的任务。
+        ``expected_space`` 传入时只卸载仍指向该实例的条目，防止旧删除流程误删后来重新创建的
+        space。普通删除在删除前已经 :meth:`stop` 过 actor，这里不再有事可做；临时 Task 清理为取
+        Task 闸门物化了 space、actor 还在等新消息，不在这里停下，loop 就永远挂在已删除 Task 的
+        队列上。停止投递到 actor 所在的事件循环、不等完成：调用方可能在工作线程里。
         """
 
         with self._guard:
@@ -184,6 +196,9 @@ class TaskRuntimeSpaceRegistry:
             if expected_space is not None and current is not expected_space:
                 return
             self._spaces.pop(task_id, None)
+            loop = self._loop
+        if not current.actor.stopped.is_set() and loop is not None and not loop.is_closed():
+            asyncio.run_coroutine_threadsafe(current.actor.abort(), loop)
 
     def close(self) -> None:
         """所有执行停止后清理进程内的运行时投影。"""

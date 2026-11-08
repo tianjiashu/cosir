@@ -174,7 +174,7 @@ class DelegateTaskTool(HandlerBase):
             )
             child_final_task_tools = tools_for_task(TaskType.AGENT_TASK, child_task_tools, depth=depth)
 
-            child_task = self._task_service.get_or_create_task(
+            child_task = self._task_service.create_task(
                 workspace_id=execution_context.workspace_id,
                 title=agent_name,
                 task_type=TaskType.AGENT_TASK,

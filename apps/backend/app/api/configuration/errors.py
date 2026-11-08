@@ -13,28 +13,6 @@ from typing import NoReturn
 
 from fastapi import HTTPException
 
-from app.core.agents.agent_profile import AgentProfileConfigError
-from app.service.configuration.agent_configuration_service import AgentConfigurationError
-from app.service.configuration.environment_configuration_service import (
-    EnvironmentConfigurationError,
-)
-from app.service.configuration.file_store import (
-    ConfigurationFileError,
-    ConfigurationPathError,
-)
-from app.service.configuration.instruction_configuration_service import (
-    InstructionConfigurationError,
-)
-from app.service.configuration.main_agent_prompt_configuration_service import (
-    MainAgentPromptConfigurationError,
-)
-from app.service.configuration.workspace_fileignore_configuration_service import (
-    WorkspaceFileIgnoreConfigurationError,
-)
-from app.service.configuration.workspace_instruction_configuration_service import (
-    WorkspaceInstructionConfigurationError,
-)
-
 
 def raise_configuration_error(exc: Exception) -> NoReturn:
     """把配置中心抛出的异常映射为 ``HTTPException``。
@@ -63,18 +41,8 @@ def raise_configuration_error(exc: Exception) -> NoReturn:
         raise HTTPException(
             status_code=409, detail={"code": "configuration_conflict", "message": str(exc)}
         ) from exc
-    if isinstance(
-        exc,
-        ConfigurationPathError
-        | AgentConfigurationError
-        | InstructionConfigurationError
-        | MainAgentPromptConfigurationError
-        | WorkspaceInstructionConfigurationError
-        | WorkspaceFileIgnoreConfigurationError
-        | EnvironmentConfigurationError
-        | AgentProfileConfigError
-        | ValueError,
-    ):
+    # 各配置子域的校验异常（含路径越界）都是 ValueError 子类，统一映射为 400。
+    if isinstance(exc, ValueError):
         raise HTTPException(
             status_code=400, detail={"code": "configuration_invalid", "message": str(exc)}
         ) from exc
@@ -83,7 +51,8 @@ def raise_configuration_error(exc: Exception) -> NoReturn:
             status_code=500,
             detail={"code": "configuration_permission_denied", "message": "配置文件不可写"},
         ) from exc
-    if isinstance(exc, ConfigurationFileError | OSError):
+    # 读写失败（``ConfigurationFileError`` 是 OSError 子类）。
+    if isinstance(exc, OSError):
         raise HTTPException(
             status_code=500,
             detail={"code": "configuration_io_failed", "message": "配置文件读写失败"},

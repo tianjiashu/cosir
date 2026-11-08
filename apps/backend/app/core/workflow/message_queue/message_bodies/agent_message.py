@@ -17,7 +17,7 @@ from app.models.message_metadata import UserMessageMetadata
 class AgentMessageBody(EnqueuedMessageBody):
     """另一个 Agent 发来的消息：和用户输入一样开启一轮、可交接新 Run，但不是用户说的话。
 
-    为什么不复用 ``user_input``：模型会把它读成用户的请求，界面会画成用户气泡，编辑重跑也会把它
+    为什么不复用 ``user_input``：模型会把它读成用户的请求，界面会画成用户气泡，撤回也会把它
     当作「最新用户消息」。必须带 ``launch``：委派刚建的子 Task 还没有 Run，无从继承配置；
     ``launch`` 只在交接新 Run 时生效，并入运行中的 Run 或唤醒挂起的 Run 时不看它。正文是纯文本：
     不像用户输入那样解析附件 token，Agent 文本里恰好出现形如 token 的内容也只是文字。

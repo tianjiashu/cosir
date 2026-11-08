@@ -74,7 +74,7 @@ def project_background_tasks(
 
     entries: list[ConversationBackgroundTask] = []
     for message in messages:
-        if message["runId"] is None:
+        if message["inherited"]:
             continue
         for part in message["parts"]:
             if part["type"] != "tool-call":

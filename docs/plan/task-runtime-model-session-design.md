@@ -826,7 +826,7 @@ backend 重启时不自动重放旧模型调用或工具调用。遗留 active R
 - `apps/backend/app/core/workflows/nodes/tools_node.py`
 - `apps/backend/app/task_runtime/task_runtime_space.py`
 - `apps/backend/app/task_runtime/task_runtime_space_registry.py`
-- `apps/backend/app/task_runtime/service/task_service.py`
+- `apps/backend/app/service/task/task_service.py`
 - `apps/backend/app/core/context/runtime_message_context_manager.py`
 - `apps/backend/app/core/context/context_listener/context_usage_compute_listener.py`
 - `apps/backend/app/core/context/system_prompt_builder.py`

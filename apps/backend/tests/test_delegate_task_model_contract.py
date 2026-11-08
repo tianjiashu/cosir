@@ -124,7 +124,7 @@ def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_c
         def __init__(self) -> None:
             self.created = False
 
-        def get_or_create_task(self, **_kwargs) -> None:
+        def create_task(self, **_kwargs) -> None:
             self.created = True
             raise AssertionError("不应为无效 agent_id 创建 child Task")
 
@@ -171,7 +171,7 @@ def test_delegate_writes_the_child_depth(
         def get_task(self, task_id: int):
             return SimpleNamespace(id=task_id, title="父任务", derivation_depth=parent_depth)
 
-        def get_or_create_task(self, **kwargs):
+        def create_task(self, **kwargs):
             created.append(kwargs)
             raise RuntimeError("stop after recording the child task")
 

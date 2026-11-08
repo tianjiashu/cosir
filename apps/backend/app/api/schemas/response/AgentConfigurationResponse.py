@@ -4,8 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.config.configuration import get_tool_registry
+from app.service.configuration.agent_configuration import AgentConfigurationEntry
 
 
 class AgentConfigurationResponse(BaseModel):
@@ -55,41 +55,30 @@ class AgentConfigurationResponse(BaseModel):
     file_name: str | None = None
 
     @staticmethod
-    def from_document(
-        document: AgentConfigurationDocument,
-    ) -> "AgentConfigurationResponse":
-        """把 Agent 配置文档投影为 HTTP 响应 schema。
+    def from_entry(entry: AgentConfigurationEntry) -> "AgentConfigurationResponse":
+        """把配置条目投影为 HTTP 响应：工具名换回工具组，按是否内置给出来源与可编辑性。
 
-        参数:
-            document: 配置服务返回的 Agent 配置文档。
-
-        返回:
-            可直接作为响应体返回的 ``AgentConfigurationResponse``；工具名由配置 service
-            提供的 profile 转换为调用方可见的工具组，``path`` 缺失时投影为 ``None``，
-
-        异常:
-            无（字段缺失或类型不符由 Pydantic 在构造时抛 ``ValidationError``）。
-
-        副作用:
-            无（纯投影，不读写文件或数据库）。
+        ``validation_status`` / ``validation_error`` 恒为 ``valid`` / ``None``：无效的配置文件在装载
+        时就被跳过，不会成为条目。
         """
 
-        allowed_tool_groups = get_tool_registry().tool_names_to_tool_groups(document.allowed_tools)
-
+        configuration = entry.configuration
         return AgentConfigurationResponse(
-            agent_id=document.agent_id,
-            role=document.role,
-            description=document.description,
-            system_prompt=document.system_prompt,
-            allowed_tool_groups=allowed_tool_groups,
-            max_steps=document.max_steps,
-            model_config_id=document.model_config_id,
-            model_settings=document.model_settings,
-            source=document.source,
-            path=str(document.path) if document.path else None,
-            editable=document.editable,
-            deletable=document.deletable,
-            validation_status=document.validation_status,
-            validation_error=document.validation_error,
-            file_name=document.file_name,
+            agent_id=configuration.agent_id,
+            role=configuration.role,
+            description=configuration.description,
+            system_prompt=configuration.system_prompt,
+            allowed_tool_groups=get_tool_registry().tool_names_to_tool_groups(
+                configuration.allowed_tools
+            ),
+            max_steps=configuration.max_steps,
+            model_config_id=configuration.model_config_id,
+            model_settings=configuration.model_settings,
+            source="builtin" if entry.builtin else "user_file",
+            path=str(entry.path) if entry.path else None,
+            editable=not entry.builtin,
+            deletable=not entry.builtin,
+            validation_status="valid",
+            validation_error=None,
+            file_name=entry.path.name if entry.path else None,
         )

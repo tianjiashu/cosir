@@ -7,6 +7,7 @@ Agent 消息开启一轮、可交接新 Run，但不是用户说的话：模型�
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,7 +24,6 @@ from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import UserMessageMetadata
-from app.models.model_config_record import ModelConfigRecord
 from app.models.task_record import TaskRecord
 
 _SOURCE = MessageSource(task_id=4, name='主任务 "A"')
@@ -61,7 +61,11 @@ def test_source_belongs_only_to_agent_messages() -> None:
 
 
 def test_prepare_carries_launch_and_rejects_empty_text(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ModelConfigRecord, "check_launch_config", lambda *_a: None)
+    monkeypatch.setattr(
+        agent_message_module,
+        "get_model_config_service",
+        lambda: SimpleNamespace(check_launch_config=lambda *_a: None),
+    )
 
     message = agent_message_module.prepare_agent_message(
         "继续", source=_SOURCE, agent_id="child_a", model_config_id=3, reasoning_effort="high"

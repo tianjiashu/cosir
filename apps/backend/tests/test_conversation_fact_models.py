@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+import app.assistant_transport.service.user_input_service as user_input_module
 from app.assistant_transport.service.user_input_service import UserInputService
 from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
@@ -16,7 +17,6 @@ from app.core.workflow.conversation_run_ledger import (
 )
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.message_queue.task_message import UserInputBody
-from app.models import model_config_record as model_config_record_module
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
@@ -27,7 +27,7 @@ from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.task_extra import TaskExtra
 from app.models.task_record import TaskRecord
-from app.service.conversation_run.conversation_task_context_service import (
+from app.service.conversation.conversation_task_context_service import (
     ConversationTaskContextService,
 )
 from app.service.recover_service import RecoverService
@@ -39,6 +39,7 @@ from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.task_model import TaskModel
 from app.storage.store_engines import initialize_app_schema
+from tests.model_config_fixtures import model_configs
 
 
 def _timestamp() -> datetime:
@@ -163,10 +164,10 @@ def test_presentation_is_a_plain_binding() -> None:
 def _input_service(monkeypatch, *, supports_reasoning_effort: bool = False) -> UserInputService:
     """不触达存储的 ``UserInputService``：Task 归属 workspace 7，模型不支持图片。"""
     monkeypatch.setattr(
-        model_config_record_module,
+        user_input_module,
         "get_model_config_service",
-        lambda: SimpleNamespace(
-            get_config=lambda _id: SimpleNamespace(
+        lambda: model_configs(
+            lambda _id: SimpleNamespace(
                 supports_reasoning_effort=supports_reasoning_effort, supports_image=False
             )
         ),
@@ -292,9 +293,7 @@ def test_prepare_rejects_image_token_without_uploaded_asset(monkeypatch) -> None
 def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch) -> None:
     """模型配置缺失不是「寻址不到 Task」，不能以 KeyError 冒到 404 映射。"""
     monkeypatch.setattr(
-        model_config_record_module,
-        "get_model_config_service",
-        lambda: SimpleNamespace(get_config=lambda _id: (_ for _ in ()).throw(KeyError(_id))),
+        user_input_module, "get_model_config_service", lambda: model_configs(lambda _id: (_ for _ in ()).throw(KeyError(_id)))
     )
     service = UserInputService.__new__(UserInputService)
     service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))

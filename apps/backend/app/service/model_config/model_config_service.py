@@ -8,6 +8,8 @@ from app.core.llm_provider.model_probe import (
     ModelProbeOutcome,
     probe_chat_model,
 )
+from app.models.conversation_run_options import ReasoningEffort
+from app.models.errors.input_errors import UserInputRejectedError
 from app.models.model_config_record import ModelConfigRecord
 from app.service import depends as service_depends
 from app.service.model_config.connection_test_result import ModelConfigTestResult
@@ -32,6 +34,30 @@ class ModelConfigService:
         """按主键读取模型配置。"""
 
         return self._crud.get(config_id)
+
+    def check_launch_config(
+        self, model_config_id: int, reasoning_effort: ReasoningEffort | None
+    ) -> ModelConfigRecord:
+        """校验模型配置存在且支持所选推理强度，返回它供调用方继续校验能力（如图片）。
+
+        异常:
+            UserInputRejectedError: 模型配置不存在，或不支持所选推理强度。
+        """
+        # 模型配置缺失不是「寻址不到 Task」：接入层把 KeyError 统一映射为 404 task not found。
+        # 本层明确知道自己查的是什么，就地换成可读的输入拒绝，避免给出错误语义。
+        try:
+            config = self._crud.get(model_config_id)
+        except KeyError as exc:
+            raise UserInputRejectedError(
+                "MODEL_CONFIG_UNAVAILABLE",
+                "当前模型配置不存在，请重新选择模型",
+                detail=f"model config {model_config_id} is gone",
+            ) from exc
+        if reasoning_effort is not None and not config.supports_reasoning_effort:
+            raise UserInputRejectedError(
+                "REASONING_EFFORT_UNSUPPORTED", "当前模型不支持所选的推理强度"
+            )
+        return config
 
     def create_config(self, **fields: object) -> ModelConfigRecord:
         """创建配置并写入不含密钥的结构化审计日志。"""
@@ -88,12 +114,11 @@ class ModelConfigService:
     ) -> ModelConfigTestResult:
         """对完整的未保存表单执行一次真实探活，不写数据库。
 
-        ``config_name`` 只用于保证调用契约与保存表单一致，探活本身不需要读取或记录它。
-        其余字段经与运行期相同的 ``resolve_model`` 解析为 ``ResolvedModel``，然后复用统一的流式探活
+        表单经与运行期相同的 ``resolve_model`` 解析为 ``ResolvedModel``，然后复用统一的流式探活
         入口，避免测试成功与实际运行使用两套请求逻辑。
 
         参数:
-            config_name: 表单中的配置名称，仅用于完整请求契约校验。
+            config_name: 表单中的配置名称；名称是否有效由 API schema 校验，探活不读它。
             base_url: 表单中的 Base URL。
             api_key: 表单中的 API Key，仅在本次调用链内部传递。
             model_name: 表单中的模型名称。
@@ -103,21 +128,16 @@ class ModelConfigService:
             supports_image: 表单声明的图片输入能力。
 
         返回:
-            ``ModelConfigTestResult``（``config_id`` 恒为 None）；成功表示至少收到一个模型
-            生成 chunk，失败携带稳定错误分类和受控文案。
+            ``ModelConfigTestResult``；成功表示至少收到一个模型生成 chunk，失败携带稳定错误分类和
+            受控文案。
 
         异常:
             无。
 
         副作用:
-            发起一次真实模型请求；失败时写 ``model_config_connection_test_failed`` warning 日志
-            （``source`` 为 ``draft``）。
+            发起一次真实模型请求；失败时写 ``model_config_connection_test_failed`` warning 日志。
         """
 
-        # API schema 已经校验了配置名称，服务层仍显式消费该字段，防止调用方绕过完整表单
-        # 契约时出现未被发现的参数漂移。
-        if not config_name.strip():
-            return self._failure_result(None, ModelProbeFailureKind.INVALID_CONFIG, 0)
         try:
             settings = resolve_model(
                 ModelConfigRecord(
@@ -137,8 +157,6 @@ class ModelConfigService:
                 extra={
                     "msg": "模型连接测试失败：表单配置不完整，未发出请求",
                     "data": {
-                        "config_id": None,
-                        "source": "draft",
                         "model": model_name,
                         "base_url": base_url,
                         "failure_kind": ModelProbeFailureKind.INVALID_CONFIG.value,
@@ -146,25 +164,18 @@ class ModelConfigService:
                     },
                 },
             )
-            return self._failure_result(None, ModelProbeFailureKind.INVALID_CONFIG, 0)
+            return self._failure_result(ModelProbeFailureKind.INVALID_CONFIG, 0)
         outcome = await probe_chat_model(settings)
-        return self._outcome_result(None, settings, outcome, source="draft")
+        return self._outcome_result(settings, outcome)
 
     def _outcome_result(
-        self,
-        config_id: int | None,
-        settings: ResolvedModel,
-        outcome: ModelProbeOutcome,
-        *,
-        source: str,
+        self, settings: ResolvedModel, outcome: ModelProbeOutcome
     ) -> ModelConfigTestResult:
         """把探活结果映射为连接测试结果，并记录成功 / 失败日志。
 
         参数:
-            config_id: 已保存配置的标识；当前表单测试场景恒为 None。
             settings: 本次探活使用的运行设置（仅用于日志中的 model / base_url）。
             outcome: 探活结果。
-            source: 测试来源标识；当前仅使用 ``draft``。
 
         返回:
             ``ModelConfigTestResult``；失败时 ``error_code`` 为探活失败分类的稳定取值。
@@ -182,8 +193,6 @@ class ModelConfigService:
                 extra={
                     "msg": "模型连接测试成功",
                     "data": {
-                        "config_id": config_id,
-                        "source": source,
                         "model": settings.model_name,
                         "base_url": settings.base_url,
                         "elapsed_ms": outcome.elapsed_ms,
@@ -191,7 +200,6 @@ class ModelConfigService:
                 },
             )
             return ModelConfigTestResult(
-                config_id=config_id,
                 success=True,
                 elapsed_ms=outcome.elapsed_ms,
             )
@@ -201,8 +209,6 @@ class ModelConfigService:
             extra={
                 "msg": "模型连接测试失败",
                 "data": {
-                    "config_id": config_id,
-                    "source": source,
                     "model": settings.model_name,
                     "base_url": settings.base_url,
                     "failure_kind": kind.value,
@@ -211,18 +217,13 @@ class ModelConfigService:
                 },
             },
         )
-        return self._failure_result(config_id, kind, outcome.elapsed_ms)
+        return self._failure_result(kind, outcome.elapsed_ms)
 
     @staticmethod
-    def _failure_result(
-        config_id: int | None,
-        kind: ModelProbeFailureKind,
-        elapsed_ms: int,
-    ) -> ModelConfigTestResult:
+    def _failure_result(kind: ModelProbeFailureKind, elapsed_ms: int) -> ModelConfigTestResult:
         """按失败分类构造结果（文案取自受控文案目录，不携带原始异常正文）。"""
 
         return ModelConfigTestResult(
-            config_id=config_id,
             success=False,
             elapsed_ms=elapsed_ms,
             error_code=kind.value,

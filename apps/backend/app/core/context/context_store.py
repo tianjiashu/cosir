@@ -18,12 +18,16 @@ from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
 from app.core.context.context_entry import ContextEntry
-from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.conversation_task_context import (
+    ConversationTaskContextRecord,
+    run_last_turn_withdrawn,
+)
 from app.models.message_metadata import MessageMetadata, empty_message_metadata
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 
-# Task 固定系统提示词占用 sequence 0，不参与压缩、编辑与 Run 划分。
+# Task 固定系统提示词占用 sequence 0 与回合 0，不参与压缩、编辑与 Run、回合划分。
 TASK_SYSTEM_PROMPT_SEQUENCE = 0
+TASK_SYSTEM_PROMPT_TURN = 0
 
 
 class ContextStore:
@@ -45,14 +49,15 @@ class ContextStore:
         project_to_transport: bool = True,
         session: Session | None = None,
         *,
+        turn: int,
         message_id: int | None = None,
     ) -> ContextEntry:
         """追加 SDK 正文并返回带稳定身份的 working-copy entry。
 
         有外部 Session 时加入用例事务，不自行提交；否则完成单次存储事务。
-        用户消息沿用 message_queue 行 id 作为身份，其余消息没有身份（``None``）。调用方分配 sequence；
-        本层不做工具去重，已有结果的覆盖由 RuntimeMessageContextManager 决定。
-        数据库写入失败向上传播。
+        用户消息沿用 message_queue 行 id 作为身份，其余消息没有身份（``None``）。调用方分配 sequence
+        与回合号（回合由 RuntimeMessageContextManager 判定，本层只照写）；本层不做工具去重，已有
+        结果的覆盖由 RuntimeMessageContextManager 决定。数据库写入失败向上传播。
         """
 
         record = ConversationTaskContextRecord(
@@ -63,6 +68,7 @@ class ContextStore:
             metadata=metadata if metadata is not None else empty_message_metadata(message["role"]),
             include_in_context=include_in_context,
             sequence=seq,
+            turn=turn,
             project_to_transport=project_to_transport,
         )
         self._crud.create(record, session=session)
@@ -80,7 +86,7 @@ class ContextStore:
                 },
             )
 
-        return ContextEntry(message, run_id, seq, record.message_id, record.metadata)
+        return ContextEntry(message, run_id, seq, record.message_id, record.metadata, turn=turn)
 
     def replace_message(
         self,
@@ -111,6 +117,7 @@ class ContextStore:
                 sequence=record.sequence,
                 message_id=record.message_id,
                 metadata=record.metadata,
+                turn=record.turn,
             )
             for record in records
         ]
@@ -133,6 +140,24 @@ class ContextStore:
         if session is None:
             return self._crud.max_sequence(task_id)
         return self._crud.max_sequence(task_id, session=session)
+
+    def run_records(self, task_id: int, run_id: int) -> list[ConversationTaskContextRecord]:
+        """这个 Run 已写下的全部行（含不进上下文的草稿与中断输出），按序号升序。"""
+
+        return [
+            record
+            for record in self._crud.get(task_id, include_in_context=False)
+            if record.run_id == run_id
+        ]
+
+    def run_last_turn_withdrawn(self, task_id: int, run_id: int) -> bool:
+        """这个 Run 的最后一个回合是否已被撤回（规则见 ``run_last_turn_withdrawn`` 纯函数）。"""
+        return run_last_turn_withdrawn(self.run_records(task_id, run_id))
+
+    def max_turn(self, task_id: int) -> int:
+        """返回 Task 当前最大回合号（含已被编辑移出的行）；无对话行时为 0。"""
+
+        return self._crud.max_turn(task_id)
 
     def get_system_prompt(self, task_id: int) -> ContextEntry | None:
         """读取 Task 固定系统提示词；尚未初始化时返回 None。
@@ -185,6 +210,7 @@ class ContextStore:
             message=prompt,
             include_in_context=True,
             sequence=TASK_SYSTEM_PROMPT_SEQUENCE,
+            turn=TASK_SYSTEM_PROMPT_TURN,
         )
         self._crud.create(record)
         log.info(
@@ -195,11 +221,16 @@ class ContextStore:
             },
         )
         return ContextEntry(
-            prompt, None, TASK_SYSTEM_PROMPT_SEQUENCE, record.message_id, record.metadata
+            prompt,
+            None,
+            TASK_SYSTEM_PROMPT_SEQUENCE,
+            record.message_id,
+            record.metadata,
+            turn=TASK_SYSTEM_PROMPT_TURN,
         )
 
+    @staticmethod
     def to_system_prompt_entry(
-        self,
         task_id: int,
         record: ConversationTaskContextRecord,
     ) -> ContextEntry:
@@ -215,5 +246,10 @@ class ContextStore:
                 "is not a valid system prompt entry"
             )
         return ContextEntry(
-            record.message, record.run_id, record.sequence, record.message_id, record.metadata
+            record.message,
+            record.run_id,
+            record.sequence,
+            record.message_id,
+            record.metadata,
+            turn=record.turn,
         )

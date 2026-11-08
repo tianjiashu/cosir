@@ -95,14 +95,9 @@ class TaskRuntimeSpace:
     current_task: TaskRecord = field(init=False)
     # Task 的调度者；在这里创建、由注册表拉起（space 可能在工作线程物化，拉起必须回到事件循环）。
     actor: TaskActor = field(init=False)
-    # Task 级投递通道：每次开始执行时由 actor 清空，运行中 loop 往里投递，prepare_input 取光。
+    # Task 级投递通道：每次驱动开始时由 actor 清空，运行中 loop 往里投递，prepare_input 取光。
     # 归 space 持有，``RuntimeContext.for_run`` 才能只凭 Run 装配出本次执行的上下文。
     mailbox: RunMailbox = field(default_factory=RunMailbox, init=False)
-    # 「上一次已经告诉模型哪些工具被禁」的进程内备忘（Task 级与 Run 级两个来源的并集），供下一个
-    # Run 只发增量。来源不缓存：通知文本按本轮来源分组生成，集合相同即视为不必再说明。``None`` 表示
-    # 未知（新 Task、fork、后端重启），此时 context 里可能残留其他来源的准入说明，必须重发完整说明。
-    # 只由 ``RuntimeContext.for_run`` 读写，同一 Task 的 Run 由 actor 串行发起，无需加锁。
-    announced_ban_tools: frozenset[str] | None = field(init=False, default=None)
 
     @property
     def task_tool_schemas(self) -> tuple[FunctionDefinition, ...]:
@@ -314,9 +309,9 @@ class TaskRuntimeSpace:
     def live_context_manager(self) -> RuntimeMessageContextManager | None:
         """只读返回仍存活的 context manager；没有时返回 ``None``，不创建、不读库。
 
-        供只需要「这个 Task 当前是否装配了 context」的读取方（如配置变更广播的作用域过滤）使用：
-        :meth:`get_context_manager` 在槽位为空时会构造 manager（读库、新 Task 还会落库系统提示词），
-        不能拿来做判断。弱引用读取本身是原子的，无需持有 ``_context_guard``。
+        :meth:`get_context_manager` 先用它取已有实例，只在槽位为空时才构造（读库、新 Task 还会落库
+        系统提示词）；只想判断「当前是否装配了 context」时用它，不能用 ``get_context_manager``。弱引用
+        读取本身是原子的，无需持有 ``_context_guard``。
         """
 
         manager_ref = self._context_manager

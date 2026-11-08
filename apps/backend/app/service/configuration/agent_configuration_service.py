@@ -2,9 +2,8 @@
 
 本 service 以 ``AgentProfileRegistry`` 作为运行时事实源，以作用域对应的 `.cosir/agents/*.json` 作为
 持久化载体。所有配置写入都复用 ``parse_agent_profile_document`` 完成校验，并在文件操作成功
-后同步注册表；本 service 不实现第二套 profile 加载或状态缓存。对外收发的
-``AgentConfigurationDocument`` 是 API 层传输结构（``app.api.schemas``），本模块只按它读写文件与
-注册表，不定义文档字段语义。
+后同步注册表；本 service 不实现第二套 profile 加载或状态缓存。写入收 ``AgentConfiguration``、
+读取给 ``AgentConfigurationEntry``，界面需要的展示字段由 API 层按条目投影。
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import (
@@ -23,15 +21,14 @@ from app.core.agents.agent_profile import (
     parse_agent_profile_document,
 )
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.service.configuration.file_store import (
-    ConfigurationFileStore,
+from app.service.configuration.agent_configuration import (
+    AgentConfiguration,
+    AgentConfigurationEntry,
 )
-from app.task_runtime.agent_catalog_change import (
+from app.service.configuration.file_store import ConfigurationFileStore
+from app.service.configuration.runtime_notices.agent_catalog_change import (
     AgentCatalogChange,
     AgentCatalogChangeAction,
-)
-from app.task_runtime.broadcaster.agent_catalog_update_broadcaster import (
-    broadcast_agent_catalog_change,
 )
 
 
@@ -85,7 +82,7 @@ class AgentConfigurationService:
         self.directory = self.registry.source.directory(self.scope)
         self.store = ConfigurationFileStore()
 
-    def list_documents(self) -> list[AgentConfigurationDocument]:
+    def list_entries(self) -> list[AgentConfigurationEntry]:
         """列出当前作用域的本地子 Agent，不直接扫描磁盘文件。"""
 
         profiles = (
@@ -93,9 +90,9 @@ class AgentConfigurationService:
             if self.workspace_root is None
             else self.registry.list_workspace_sub_agents(self.workspace_root)
         )
-        return [self._from_profile(profile) for profile in profiles]
+        return [self._entry(profile) for profile in profiles]
 
-    def create_document(self, document: AgentConfigurationDocument) -> AgentConfigurationDocument:
+    def create(self, document: AgentConfiguration) -> AgentConfigurationEntry:
         """校验并创建当前作用域的 Agent JSON，并延迟通知目录消费者。
 
         Agent 文件与 Registry 均成功更新后才广播新增事件；通知失败只记录旁路日志，不回滚
@@ -122,7 +119,7 @@ class AgentConfigurationService:
             except Exception:
                 self.registry.unregister(self.scope, profile.agent_id)
                 raise
-        saved = self._from_profile(profile, path=target)
+        saved = self._entry(profile, path=target)
         log.info(
             "configuration_agent_written",
             extra={
@@ -137,11 +134,7 @@ class AgentConfigurationService:
         )
         return saved
 
-    def update_document(
-            self,
-            agent_id: str,
-            document: AgentConfigurationDocument,
-    ) -> AgentConfigurationDocument:
+    def update(self, agent_id: str, document: AgentConfiguration) -> AgentConfigurationEntry:
         """无损更新当前作用域的 JSON 文档；仅描述变化时通知目录消费者。"""
 
         self._validate_agent_id(agent_id)
@@ -159,7 +152,7 @@ class AgentConfigurationService:
                 root=self.directory,
             )
             self.registry.replace(self.scope, profile)
-        saved = self._from_profile(profile, path=target)
+        saved = self._entry(profile, path=target)
         log.info(
             "configuration_agent_written",
             extra={
@@ -176,7 +169,7 @@ class AgentConfigurationService:
             )
         return saved
 
-    def delete_document(self, agent_id: str) -> None:
+    def delete(self, agent_id: str) -> None:
         """删除当前作用域的 JSON Agent，并延迟通知目录消费者。"""
 
         self._validate_agent_id(agent_id)
@@ -211,76 +204,38 @@ class AgentConfigurationService:
         previous_description: str | None = None,
         current_description: str | None = None,
     ) -> None:
-        """在配置事实提交后投递目录通知；通知旁路失败不影响配置请求成功。
+        """在配置事实提交后广播目录变更；只交出目录可见的 Agent ID 与描述。
 
-        该方法只接收目录可见的 Agent ID 与描述，不把完整 profile、系统提示词或模型配置
-        传给通知层。system 作用域用 ``None`` 表示全局，workspace 作用域使用规范化根路径。
+        system 作用域用 ``None`` 表示全局，workspace 作用域使用规范化根路径。
         """
 
-        change = AgentCatalogChange(
+        AgentCatalogChange(
             scope=None if self.workspace_root is None else str(self.scope),
             action=action,
             agent_id=agent_id,
             previous_description=previous_description,
             current_description=current_description,
-        )
-        try:
-            broadcast_agent_catalog_change(change)
-        except Exception:
-            log.exception(
-                "configuration_agent_catalog_notification_failed",
-                extra={
-                    "msg": "Agent 配置已提交，但目录延迟通知失败",
-                    "data": {
-                        "action": action,
-                        "agent_id": agent_id,
-                        "scope": change.scope,
-                    },
-                },
-            )
+        ).broadcast()
 
-    def _from_profile(
-            self,
-            profile: AgentProfile,
-            *,
-            path: Path | None = None,
-    ) -> AgentConfigurationDocument:
-        """将注册表 profile 与配置文件中的模型选择字段投影为配置中心文档。
+    def _entry(
+        self, profile: AgentProfile, *, path: Path | None = None
+    ) -> AgentConfigurationEntry:
+        """注册表 profile 加上它的文件位置；内置 Agent 没有文件。"""
 
-        ``AgentProfile`` 保存模型选择 ID 与请求偏好（``ModelSettings``）；配置中心直接投影选择 ID，
-        避免重新读取配置文件。
-        """
-
-        is_builtin = (
+        builtin = (
             self.workspace_root is None
             and self.registry.is_builtin_system_agent(profile.agent_id)
         )
-        if path is None and not is_builtin:
+        if path is None and not builtin:
             candidate = self._path_for(profile.agent_id)
             path = candidate if candidate.exists() else None
-        return AgentConfigurationDocument(
-            agent_id=profile.agent_id,
-            role=profile.role,
-            description=profile.description or "",
-            system_prompt=profile.system_prompt,
-            allowed_tools=list(profile.allowed_tools),
-            max_steps=profile.max_steps,
-            model_config_id=profile.model_config_id,
-            model_settings=profile.model_settings.to_dict(),
-            source="builtin" if is_builtin else "user_file",
+        return AgentConfigurationEntry(
+            configuration=AgentConfiguration.from_profile(profile),
             path=path,
-            editable=not is_builtin,
-            deletable=not is_builtin,
-            validation_status="valid",
-            validation_error=None,
-            file_name=path.name if path else None,
+            builtin=builtin,
         )
 
-    def _profile_from_document(
-            self,
-            document: AgentConfigurationDocument,
-            source: Path,
-    ) -> AgentProfile:
+    def _profile_from_document(self, document: AgentConfiguration, source: Path) -> AgentProfile:
         """将编辑器文档按统一 JSON 契约转换为可注册的 CHILD profile。"""
 
         try:
@@ -303,7 +258,7 @@ class AgentConfigurationService:
 
     @staticmethod
     def _validate_agent_id(agent_id: str) -> None:
-        if not isinstance(agent_id, str) or not _AGENT_ID_RE.fullmatch(agent_id):
+        if not _AGENT_ID_RE.fullmatch(agent_id):
             raise AgentConfigurationError(
                 "agent_id 只能包含字母、数字、下划线和连字符，长度为 1-64"
             )

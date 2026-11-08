@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +9,7 @@ import pytest
 from PIL import Image
 
 import app.tools.tool_handler.read_image as read_image_module
+from app.config.constant import Constant
 from app.core.agents.define_agents import general_child_agent, main_agent, only_read_child_agent
 from app.core.tool.schemas import TOOL_READ_IMAGE, ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
@@ -105,12 +105,7 @@ def test_images_beyond_the_batch_total_are_reported_not_truncated(
     first = _png(workspace / "a.png")
     _png(workspace / "b.png", color=(1, 2, 3))
     monkeypatch.setattr(
-        read_image_module,
-        "DEFAULT_IMAGE_INPUT_POLICY",
-        replace(
-            read_image_module.DEFAULT_IMAGE_INPUT_POLICY,
-            request_total_max_bytes=first.stat().st_size + 1,
-        ),
+        Constant.Attachment, "REQUEST_TOTAL_MAX_BYTES", first.stat().st_size + 1
     )
 
     observation = ReadImageTool().execute(["a.png", "b.png"], execution_context=_context(workspace))

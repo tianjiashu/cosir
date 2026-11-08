@@ -32,9 +32,7 @@ from app.service.configuration.agent_team_configuration_registry import get_agen
 from app.service.configuration.agent_team_configuration_service import (
     get_agent_team_configuration_service,
 )
-from app.service.configuration.workspace_configuration_context import (
-    get_workspace_configuration_context,
-)
+from app.service.configuration.workspace_configuration_root import resolve_workspace_root
 from app.service.depends import get_workspace_service
 
 TeamIdPath = Annotated[
@@ -164,7 +162,7 @@ async def save_workspace_agent_team_configuration(
             detail="workspace endpoint only accepts workspace scope",
         )
     try:
-        root = get_workspace_configuration_context(workspace_id).root
+        root = resolve_workspace_root(workspace_id)
         saved = get_agent_team_configuration_service().save_confirmed(
             payload.configuration,
             scope="workspace",
@@ -199,7 +197,7 @@ async def update_workspace_agent_team_configuration(
             detail="workspace endpoint only accepts workspace scope",
         )
     try:
-        root = get_workspace_configuration_context(workspace_id).root
+        root = resolve_workspace_root(workspace_id)
         saved = get_agent_team_configuration_service().update_confirmed(
             team_id,
             payload.configuration,
@@ -227,7 +225,7 @@ async def delete_workspace_agent_team_configuration(
     """删除 workspace 自有 Team 配置，system 同名项会重新可见。"""
 
     try:
-        root = get_workspace_configuration_context(workspace_id).root
+        root = resolve_workspace_root(workspace_id)
         get_agent_team_configuration_service().delete(
             team_id,
             scope="workspace",

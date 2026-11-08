@@ -39,7 +39,8 @@ from __future__ import annotations
 
 import json
 import threading
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Collection
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -82,7 +83,8 @@ class BackgroundRegistry:
         # 调用 id 只在 Task 内唯一（见 ``RuntimeMessageContextManager``），两个 Task 可以同号。
         self._entries: dict[tuple[int, str], _Entry] = {}
         self._closed = False
-        self._delivering = 0
+        # 各 Task 已出队、还在锁外写消息的投递数：关闭等全部写完，撤回一轮等这个 Task 的写完。
+        self._delivering: Counter[int] = Counter()
         self._listener: Callable[[int], None] | None = None
         self._notifier = ThreadPoolExecutor(max_workers=1, thread_name_prefix="background-notify")
 
@@ -263,7 +265,7 @@ class BackgroundRegistry:
     def _take_for_delivery_locked(self, task_id: int, tool_call_id: str) -> None:
         """调用方持锁且已确认条目可结束：出队与在途计数一起提交，关闭必须等待其收尾。"""
         del self._entries[task_id, tool_call_id]
-        self._delivering += 1
+        self._delivering[task_id] += 1
 
     def _deliver(
         self, tool_call_id: str, entry: _Entry, conclusion: BackgroundConclusion,
@@ -287,7 +289,9 @@ class BackgroundRegistry:
             )
         finally:
             with self._lock:
-                self._delivering -= 1
+                self._delivering[entry.task_id] -= 1
+                if not self._delivering[entry.task_id]:
+                    del self._delivering[entry.task_id]
                 self._settled.notify_all()
             self._notify(entry.task_id)
 
@@ -329,6 +333,28 @@ class BackgroundRegistry:
         )
         self._notify(task_id)
         return "detached"
+
+    def withdraw_calls(self, task_id: int, tool_call_ids: Collection[str]) -> None:
+        """撤回回合：放弃这些调用的作业与结论，并等这个 Task 的在途投递写完再返回。
+
+        结论先在锁内出队、再到锁外写消息队列（见 :meth:`complete`）：只撤销登记的话，落在两步之间的
+        结论已出队、撤销扑空，随后照常入队，以一条找不到调用的孤儿结论进入新 Run。等在途投递写完，
+        调用方随后删除队列里属于这些调用的行就一定能看到它们。会阻塞，须在事件循环与写事务之外调用
+        （在途投递要写库）。
+        """
+
+        wanted = set(tool_call_ids)
+        with self._lock:
+            dropped = [
+                (call_id, self._entries.pop((task_id, call_id)))
+                for call_id in list(wanted)
+                if (task_id, call_id) in self._entries
+            ]
+            while self._delivering[task_id]:
+                self._settled.wait()
+        self._cancel_all(dropped, "withdraw")
+        if dropped:
+            self._notify(task_id)
 
     def withdraw(
         self, task_id: int, tool_call_id: str, *, reason: DropReason = "withdraw"

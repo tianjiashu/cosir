@@ -1,7 +1,7 @@
 """Assistant Transport API：Task 级命令、订阅与 snapshot 读取。
 
 命令只对 Task（或消息）寻址，不携带 run_id。本模块只做 wire 映射与 HTTP 错误映射，用例编排全部在
-``TransportAssistantService``。用户命令（发送、编辑、重跑、恢复、审批决定）等后端处理完这一轮再
+``TransportAssistantService``。用户命令（发送、撤回、恢复、审批决定）等后端处理完这次命令再
 返回：输入问题 400、Task 不存在 404、状态冲突 409，成功 200；只有取消是纯投递（202），是否停下以
 snapshot 的 ``activity`` 为准。Run 输出与状态只经 snapshot 交给前端。attach 是跟随 Task 的长订阅，
 不触发业务执行。
@@ -17,7 +17,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.app import app
 from app.assistant_transport.request import (
     DecisionRequest,
-    RerunMessageRequest,
     SendMessageRequest,
 )
 from app.assistant_transport.service.transport_assistant_service import (
@@ -141,17 +140,16 @@ async def delete_queued_message(
     return await _accept(task_id, "delete_queued", service.delete_queued(task_id, message_id))
 
 
-@app.post("/tasks/{task_id}/messages/{message_id}/rerun")
-async def rerun_message(
+@app.post("/tasks/{task_id}/messages/{message_id}/withdraw")
+async def withdraw_message(
     task_id: int,
     message_id: int,
-    request: RerunMessageRequest,
     service: TransportAssistantService = Depends(get_transport_assistant_service),
 ) -> JSONResponse:
-    """编辑最新一条已并入的用户消息并重跑：只在 Task 静止时接受（不替用户停止，否则 409
-    ``RUN_NOT_STOPPED``），撤回它所在的一轮，编辑后的消息进入新建的 Run。"""
+    """撤回最新一条已并入的用户消息开启的回合：只在 Task 静止时接受（否则 409
+    ``RUN_NOT_STOPPED``），不开新 Run；前端把原内容放回输入框。"""
 
-    return await _accept(task_id, "rerun", service.rerun(task_id, message_id, request))
+    return await _accept(task_id, "withdraw", service.withdraw(task_id, message_id))
 
 
 @app.post("/tasks/{task_id}/resume")
@@ -213,8 +211,8 @@ async def assistant_transport_state(
             "msg": "读取 Assistant 历史快照",
             "data": {
                 "task_id": task_id,
-                "run_id": activity["runId"] if activity is not None else None,
-                "run_status": activity["status"] if activity is not None else None,
+                "activity_status": activity["status"] if activity is not None else None,
+                "activity_turn": activity["turn"] if activity is not None else None,
                 "message_count": len(state["messages"]),
                 "message_offset": state["messageOffset"],
             },

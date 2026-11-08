@@ -25,7 +25,7 @@ test("模型配置编辑回显密码态 API Key，测试连接后才能保存", 
   );
   await page.route(`${API_ORIGIN}/model-configs/test`, async (route) => {
     expect(route.request().method()).toBe("POST");
-    return route.fulfill({ json: { config_id: null, success: true, elapsed_ms: 8 } });
+    return route.fulfill({ json: { success: true, elapsed_ms: 8 } });
   });
   await page.route(`${API_ORIGIN}/model-configs/2`, async (route) => {
     if (route.request().method() === "PUT") {

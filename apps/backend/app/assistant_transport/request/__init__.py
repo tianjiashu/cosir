@@ -5,7 +5,6 @@ from app.assistant_transport.request.part.assistant_file_attachment import Assis
 from app.assistant_transport.request.part.assistant_image_part import AssistantImagePart
 from app.assistant_transport.request.task_command_request import (
     DecisionRequest,
-    RerunMessageRequest,
     SendMessageRequest,
 )
 from app.assistant_transport.request.transport_request_error import TransportRequestError
@@ -14,7 +13,6 @@ __all__ = [
     "AssistantFileAttachment",
     "AssistantImagePart",
     "AssistantUserMessage",
-    "RerunMessageRequest",
     "SendMessageRequest",
     "DecisionRequest",
     "TransportRequestError",

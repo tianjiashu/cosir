@@ -101,3 +101,34 @@ def test_cleanup_provisional_task_rejects_accepted_run(storage: Path) -> None:
 
     with pytest.raises(ProvisionalTaskCleanupConflictError):
         get_task_service().cleanup_provisional_task(task.id, "creation-1")
+
+
+async def test_cleanup_provisional_task_stops_the_actor_it_materialized(
+    storage: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """清理为取 Task 闸门物化了 space、拉起了 actor；删除提交后 actor 必须停下，不留挂在已删除
+    Task 队列上的 loop。"""
+    import asyncio
+
+    from app.core.task_actor import TaskActor
+
+    started: list[TaskActor] = []
+    original_start = TaskActor.start
+
+    def record_start(actor: TaskActor) -> None:
+        started.append(actor)
+        original_start(actor)
+
+    monkeypatch.setattr(TaskActor, "start", record_start)
+    task_runtime_spaces.bind_loop(asyncio.get_running_loop())
+    workspace = _workspace(storage)
+    task = get_workspace_service().create_task(
+        workspace.id, "new task", creation_command_id="creation-1"
+    )
+
+    await asyncio.to_thread(get_task_service().cleanup_provisional_task, task.id, "creation-1")
+
+    assert task_runtime_spaces.get(task.id) is None
+    [actor] = [actor for actor in started if actor.task_id == task.id]
+    async with asyncio.timeout(2):
+        await actor.stopped.wait()

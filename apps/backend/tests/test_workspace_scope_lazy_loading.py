@@ -22,12 +22,12 @@ from pathlib import Path
 
 import pytest
 
-from app.api.schemas.AgentConfigurationDocument import AgentConfigurationDocument
 from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_source
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
+from app.service.configuration.agent_configuration import AgentConfiguration
 from app.service.configuration.agent_configuration_service import AgentConfigurationService
 from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,
@@ -149,10 +149,10 @@ def test_configuration_service_lists_disk_agent_on_first_read(
         lambda: registry,
     )
 
-    documents = AgentConfigurationService(workspace_root=workspace).list_documents()
+    documents = AgentConfigurationService(workspace_root=workspace).list_entries()
 
-    assert [document.agent_id for document in documents] == ["workspace-reader"]
-    assert documents[0].source == "user_file"
+    assert [document.configuration.agent_id for document in documents] == ["workspace-reader"]
+    assert documents[0].builtin is False
 
 
 def test_lazy_load_merges_and_keeps_builtin_profiles(tmp_path: Path) -> None:
@@ -380,8 +380,8 @@ def test_creating_agent_does_not_report_false_duplicate(
     service = AgentConfigurationService(workspace_root=workspace)
 
     with caplog.at_level(logging.WARNING):
-        service.create_document(
-            AgentConfigurationDocument(
+        service.create(
+            AgentConfiguration(
                 agent_id="workspace-reader",
                 role="reader",
                 description="Probe",
@@ -389,7 +389,7 @@ def test_creating_agent_does_not_report_false_duplicate(
                 allowed_tools=["read_file"],
             )
         )
-        assert [document.agent_id for document in service.list_documents()] == [
+        assert [document.configuration.agent_id for document in service.list_entries()] == [
             "workspace-reader"
         ]
 

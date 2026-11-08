@@ -17,6 +17,10 @@ from pathlib import Path
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.configuration.file_store import ConfigurationFileError, ConfigurationFileStore
+from app.service.configuration.runtime_notices.system_prompt_delta import (
+    SystemPromptDelta,
+    SystemPromptDeltaSource,
+)
 from app.utils.path.system_cosir import system_cosir_dir, system_main_agent_prompt_file
 from app.utils.token_estimator import TokenEstimator
 
@@ -126,17 +130,23 @@ class MainAgentPromptConfigurationService:
             OSError: 配置文件无法安全写入。
 
         副作用：
-            原子替换系统 ``.cosir`` 下的主 Agent prompt 文件，并写入结构化配置日志。
+            原子替换系统 ``.cosir`` 下的主 Agent prompt 文件、写入结构化配置日志，并把变更以增量
+            通知已装配的主 Agent Task。
         """
 
         self._assert_writable(content)
+        previous = self.read().content
         document = self._document(content, source="user_file", path=self.path)
-        with self.store.locked(self.path):
-            self.store.write_text_atomic(self.path, content, root=self.root)
+        self.store.write_text_atomic(self.path, content, root=self.root)
         log.info(
             "configuration_main_agent_prompt_written",
             extra={"msg": "主 Agent 系统提示词已保存", "data": {"path": str(self.path)}},
         )
+        delta = SystemPromptDelta.between(
+            source=SystemPromptDeltaSource.MAIN_AGENT_PROMPT, previous=previous, current=content
+        )
+        if delta is not None:
+            delta.broadcast()
         return document
 
     @staticmethod

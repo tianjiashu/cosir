@@ -262,7 +262,7 @@ function validateActivity(value: unknown, path: string): void {
     requireString(model.stepId, path);
     if (activity.status !== "running" || !["waiting", "reasoning", "responding", "tool_call"].includes(model.phase as string)) throw new TransportSnapshotValidationError(path, "模型活动阶段");
   }
-  requireNullableNonNegativeInteger(activity.turn, `${path}.turn`);
+  if (activity.turn !== null) requirePositiveInteger(activity.turn, `${path}.turn`);
   if (typeof activity.resumable !== "boolean") throw new TransportSnapshotValidationError(`${path}.resumable`, "布尔值");
   if (!(RUN_STATUSES as readonly unknown[]).includes(activity.status)) throw new TransportSnapshotValidationError(`${path}.status`, "受支持的运行状态");
   if (activity.endReason !== null && typeof activity.endReason !== "string") throw new TransportSnapshotValidationError(`${path}.endReason`, "字符串或 null");
