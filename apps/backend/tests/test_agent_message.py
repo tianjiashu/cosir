@@ -86,6 +86,7 @@ def test_consumed_agent_message_projects_plain_text_with_its_source() -> None:
         run_id=2,
         message_id=11,
         presentation=UserInputPresentation(display_text=_ATTACHMENT_LOOKALIKE),
+        opens_turn=True,
         source=_SOURCE,
     )
 
@@ -114,12 +115,14 @@ def _reply_state(parts: list) -> dict:
     }
 
 
-def _consumed(message_id: int = 11) -> InputConsumedEvent:
+def _consumed(message_id: int = 11, *, opens_turn: bool = False) -> InputConsumedEvent:
+    """默认是途中来信（写入方判定不开回合）；作为 Run 第一条输入时传 ``opens_turn=True``。"""
     return InputConsumedEvent(
         task_id=7,
         run_id=2,
         message_id=message_id,
         presentation=UserInputPresentation(display_text=_ATTACHMENT_LOOKALIKE),
+        opens_turn=opens_turn,
         source=_SOURCE,
     )
 
@@ -162,6 +165,7 @@ def test_rebuild_projects_agent_messages_as_turns_with_source() -> None:
             include_in_context=True,
             sequence=1,
             message_id=11,
+            turn=1,
         ),
         ConversationTaskContextRecord(
             id=2,
@@ -170,6 +174,7 @@ def test_rebuild_projects_agent_messages_as_turns_with_source() -> None:
             message={"role": "assistant", "content": "好的"},
             include_in_context=True,
             sequence=2,
+            turn=1,
         ),
     ]
 

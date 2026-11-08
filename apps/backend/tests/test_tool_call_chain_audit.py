@@ -246,6 +246,7 @@ def _ai_row(tool_calls: list[dict[str, Any]]) -> ConversationTaskContextRecord:
         message={"role": "assistant", "content": "", "tool_calls": tool_calls},
         include_in_context=False,
         sequence=1,
+        turn=1,
     )
 
 
@@ -264,6 +265,7 @@ def _tool_row(
         include_in_context=False,
         sequence=sequence,
         metadata=metadata,
+        turn=1,
     )
 
 

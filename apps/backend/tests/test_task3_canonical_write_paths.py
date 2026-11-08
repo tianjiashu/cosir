@@ -32,7 +32,7 @@ class _RecordingContextStore:
     def append(self, *args: Any, **kwargs: Any) -> None:
         self.appended.append({"args": args, "kwargs": kwargs})
         self.current_max_sequence = args[3]
-        return ContextEntry(args[2], args[1], args[3])
+        return ContextEntry(args[2], args[1], args[3], turn=kwargs["turn"])
 
     def entries_in_context(self, _task_id: int) -> list[ContextEntry]:
         return []
@@ -40,9 +40,19 @@ class _RecordingContextStore:
     def max_sequence(self, _task_id: int) -> int:
         return self.current_max_sequence
 
+    def max_turn(self, _task_id: int) -> int:
+        return 0
+
+    def run_records(self, _task_id: int, _run_id: int) -> list:
+        return []
+
 
 def _runtime_manager(context_store: _RecordingContextStore) -> RuntimeMessageContextManager:
     manager = object.__new__(RuntimeMessageContextManager)
+    manager._max_turn = 0
+    manager._run_turn = None
+    manager._run_has_input = False
+    manager._run_has_reply = False
     manager._used_call_ids = set()
     manager._response_call_ids = {}
     manager.current_task_id = 7
@@ -53,7 +63,7 @@ def _runtime_manager(context_store: _RecordingContextStore) -> RuntimeMessageCon
     manager._system_entry = None
     manager._entries = []
     manager._message_sequence = 1
-    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
+    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1, turn=1)
     return manager
 
 
@@ -84,7 +94,7 @@ def test_begin_run_binds_identity_without_rewriting_context() -> None:
     context_store = _RecordingContextStore()
     manager = _runtime_manager(context_store)
     message = {"role": "user", "content": "existing"}
-    context_store.entries_in_context = lambda _task_id: [ContextEntry(message, 11, 1)]
+    context_store.entries_in_context = lambda _task_id: [ContextEntry(message, 11, 1, turn=1)]
     manager.begin_run(SimpleNamespace(id=12, task_id=7))
     assert manager.current_run_id == 12
     assert manager._entries[0].message is message

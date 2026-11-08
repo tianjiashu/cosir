@@ -109,6 +109,7 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
             metadata=_user_meta("root canonical message"),
             include_in_context=True,
             sequence=1,
+            turn=1,
         )
     )
     context_crud.create(
@@ -119,6 +120,7 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
             metadata=_user_meta("child canonical message"),
             include_in_context=True,
             sequence=1,
+            turn=1,
         )
     )
 

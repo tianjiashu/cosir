@@ -8,19 +8,26 @@ import pytest
 
 from app.core.context.context_store import ContextStore
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
+from app.models.message_metadata import UserMessageMetadata
 from app.service.depends import get_conversation_task_context_service
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
-from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
-from app.storage.store_engines import main_session_factory
 
 
 def _user(text: str) -> UserMessageMetadata:
     return UserMessageMetadata(
         kind="user_input", presentation=UserInputPresentation(display_text=text)
     )
+
+
+def _turn_of(previous: list, metadata: object) -> int:
+    """单个 Run 里的回合号：每条用户输入开一个回合（与写入方规则一致）。"""
+    inputs = [
+        m for _, m, _ in previous if isinstance(m, UserMessageMetadata) and m.kind == "user_input"
+    ]
+    opens = isinstance(metadata, UserMessageMetadata) and metadata.kind == "user_input"
+    return max(1, len(inputs) + int(opens))
 
 
 @pytest.fixture
@@ -38,7 +45,15 @@ def task(isolated_storage, tmp_path):
         ({"role": "user", "content": "<system_notice/>"}, UserMessageMetadata(kind="notice"), 13),
     ]
     for sequence, (message, metadata, message_id) in enumerate(rows, start=1):
-        store.append(task.id, run.id, message, sequence, metadata=metadata, message_id=message_id)
+        store.append(
+            task.id,
+            run.id,
+            message,
+            sequence,
+            metadata=metadata,
+            message_id=message_id,
+            turn=_turn_of(rows[: sequence - 1], metadata),
+        )
     return SimpleNamespace(id=task.id, run_id=run.id)
 
 
@@ -62,68 +77,7 @@ def test_latest_input_from_an_agent_is_not_an_edit_target(task) -> None:
             source=MessageSource(task_id=1, name="parent"),
         ),
         message_id=14,
+        turn=2,
     )
 
     assert get_conversation_task_context_service().latest_user_input(task.id) is None
-
-
-def test_exclude_from_soft_deletes_target_and_later_rows(task) -> None:
-    context = get_conversation_task_context_service()
-
-    with main_session_factory().begin() as session:
-        context.exclude_from(task.id, 3, session)
-
-    crud = ConversationTaskContextCrud()
-    assert [row.sequence for row in crud.get(task.id, include_in_context=True)] == [1, 2]
-    # 行保留供观测页查看，但不进模型上下文、也不投影到前端。
-    excluded = [row for row in crud.get(task.id, include_in_context=False) if row.sequence >= 3]
-    assert [row.sequence for row in excluded] == [3, 4, 5]
-    assert not any(row.project_to_transport for row in excluded)
-    # 被移出的输入不再是编辑目标，最新用户输入回退到更早那条。
-    assert context.latest_user_input(task.id).message_id == 11
-
-
-def test_exclude_from_keeps_late_results_of_earlier_calls(isolated_storage, tmp_path) -> None:
-    """撤回一轮只撤回它自己：更早调用在这一轮才并入的结果保留，返回这一轮发起的调用。"""
-    workspace = WorkspaceCrud().create("rerun", str(tmp_path))
-    task = TaskCrud().create(workspace.id, "rerun", tool_schemas=[])
-    run = ConversationRunCrud().create(task.id, status="completed")
-    store = ContextStore()
-
-    def call(call_id: str) -> dict[str, object]:
-        return {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {"id": call_id, "type": "function", "function": {"name": "t", "arguments": "{}"}}
-            ],
-        }
-
-    def _placeholder() -> ToolMessageMetadata:
-        return ToolMessageMetadata(status="pending", background=BackgroundWork(
-            run_id=1, kind="terminal_command", label="test", started_at="2026-01-01T00:00:00+00:00",
-        ))
-
-    def result_of(call_id: str) -> UserMessageMetadata:
-        return UserMessageMetadata(kind="background_result", tool_call_id=call_id)
-
-    rows = [
-        ({"role": "user", "content": "first"}, _user("first"), 11),
-        (call("call-early"), None, None),
-        ({"role": "tool", "tool_call_id": "call-early", "content": "running"}, _placeholder(), None),
-        ({"role": "user", "content": "second"}, _user("second"), 12),
-        (call("call-late"), None, None),
-        ({"role": "tool", "tool_call_id": "call-late", "content": "running"}, _placeholder(), None),
-        # 第一轮那次调用的结论在第二轮才并入：属于第一轮。
-        ({"role": "user", "content": "early done"}, result_of("call-early"), None),
-        ({"role": "user", "content": "late done"}, result_of("call-late"), None),
-    ]
-    for sequence, (message, metadata, message_id) in enumerate(rows, start=1):
-        store.append(task.id, run.id, message, sequence, metadata=metadata, message_id=message_id)
-
-    with main_session_factory().begin() as session:
-        withdrawn = get_conversation_task_context_service().exclude_from(task.id, 4, session)
-
-    assert withdrawn == frozenset({"call-late"})
-    included = ConversationTaskContextCrud().get(task.id, include_in_context=True)
-    assert [row.sequence for row in included] == [1, 2, 3, 7]

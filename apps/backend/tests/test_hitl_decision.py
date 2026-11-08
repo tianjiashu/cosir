@@ -84,6 +84,9 @@ class _Context:
         self.updated: list[tuple[str, ToolMessageMetadata]] = []
         self.update_sessions: list[Any] = []
 
+    def opens_turn(self, message, metadata, project) -> bool:
+        return True
+
     def add_message(self, message, **kwargs):
         self.added.append({"message": message, **kwargs})
         return "appended"
@@ -481,11 +484,11 @@ def test_context_finds_call_and_updates_only_tool_result_metadata() -> None:
     )
     placeholder = {"role": "tool", "tool_call_id": "call-hitl", "content": "awaiting"}
     manager._entries = [
-        ContextEntry({"role": "assistant", "content": None, "tool_calls": [_CALL]}, 1, 3),
+        ContextEntry({"role": "assistant", "content": None, "tool_calls": [_CALL]}, 1, 3, turn=1),
         ContextEntry(
             placeholder, 1, 4, metadata=ToolMessageMetadata(status="pending")
-        ),
-        ContextEntry({"role": "user", "content": "later"}, 2, 5),
+        , turn=1),
+        ContextEntry({"role": "user", "content": "later"}, 2, 5, turn=1),
     ]
 
     assert manager.find_tool_call("call-hitl") == _CALL
@@ -521,6 +524,7 @@ def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
             metadata=ToolMessageMetadata(
                 status="pending", display_data={"kind": "probe"}, team_run_id=17
             ),
+            turn=1,
         ),
     ]
 

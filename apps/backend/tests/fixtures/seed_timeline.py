@@ -37,6 +37,7 @@ context.create(
         metadata=UserMessageMetadata(
             kind="user_input", presentation=UserInputPresentation(display_text="验收真实时间线")
         ),
+        turn=1,
     )
 )
 responses = [(2, "真实后端进展", None), (3, "真实后端结论", reason)]
@@ -51,6 +52,7 @@ for seq, text, finish in responses:
             include_in_context=finish is not None,
             message={"role": "assistant", "content": text},
             metadata=AssistantMessageMetadata(finish_reason=finish),
+            turn=1,
         )
     )
 runs.update_status_if_in(

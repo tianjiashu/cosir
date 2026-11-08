@@ -53,6 +53,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
             # 消息身份（message_queue 行 id）与确认删除那一刻的展示绑定。
             "message_id": 1,
             "presentation": {"display_text": "hello"},
+            "opens_turn": True,
         },
         InputConsumedEvent,
     ),
@@ -309,7 +310,11 @@ def test_event_is_frozen() -> None:
     """
 
     event = InputConsumedEvent(
-        task_id=1, run_id=1, message_id=1, presentation=UserInputPresentation(display_text="hi")
+        task_id=1,
+        run_id=1,
+        message_id=1,
+        presentation=UserInputPresentation(display_text="hi"),
+        opens_turn=True,
     )
     with pytest.raises(ValidationError):
         event.message_id = 2

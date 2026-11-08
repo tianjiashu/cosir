@@ -20,6 +20,7 @@ from app.core.context.tool_call_closure import ContextProtocolError, plan_tool_c
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.fork_reply import ForkReply
 from app.models.message_metadata import (
+    TURN_INPUT_KINDS,
     BackgroundWork,
     ToolMessageMetadata,
     UserMessageMetadata,
@@ -49,6 +50,52 @@ def fork_store(request, monkeypatch):
     yield store
 
 
+def _turn_of(store, run, message, metadata, project) -> int:
+    """模拟写入方（``RuntimeMessageContextManager.opens_turn``）给夹具行取回合号。
+
+    夹具绕过写入方直接写行，所以在这里按同一规则算：Run 的第一行与用户输入开回合，Agent 消息只在
+    本 Run 还没有输入与可见回复时开回合，工具结果属于发起调用的回合，其余行留在当前回合。
+    """
+    rows = [r for r in store.contexts.get(store.task.id, include_in_context=False) if r.sequence > 0]
+    current = max((r.turn for r in rows), default=0)
+    if message["role"] == "tool":
+        # 孤儿结果（用例故意构造的坏数据）没有发起调用，留在当前回合。
+        return next(
+            (
+                r.turn
+                for r in reversed(rows)
+                if any(
+                    c["id"] == message["tool_call_id"] for c in r.message.get("tool_calls") or ()
+                )
+            ),
+            current,
+        )
+    run_rows = [r for r in rows if r.run_id == run.id]
+    if not run_rows:
+        return current + 1
+    is_input = (
+        isinstance(metadata, UserMessageMetadata)
+        and metadata.kind in TURN_INPUT_KINDS
+        and project
+    )
+    if not is_input:
+        return run_rows[-1].turn
+    earlier_input = any(
+        isinstance(r.metadata, UserMessageMetadata)
+        and r.metadata.kind in TURN_INPUT_KINDS
+        and r.project_to_transport
+        for r in run_rows
+    )
+    earlier_reply = any(
+        r.message["role"] == "assistant"
+        and (r.message.get("content") or r.message.get("tool_calls"))
+        for r in run_rows
+    )
+    if metadata.source is None or not (earlier_input or earlier_reply):
+        return current + 1
+    return run_rows[-1].turn
+
+
 def append(store, run, message, *, metadata=None, message_id=None, include=True, project=True):
     return store.context.append(
         store.task.id,
@@ -59,6 +106,7 @@ def append(store, run, message, *, metadata=None, message_id=None, include=True,
         metadata,
         message_id=message_id,
         project_to_transport=project,
+        turn=_turn_of(store, run, message, metadata, project),
     )
 
 
@@ -168,6 +216,14 @@ def conversation(state):
     return [p.get("text") or p.get("toolCallId") for m in state["messages"] for p in m["parts"]]
 
 
+def grouping(state):
+    """消息边界：每条消息的角色与它的内容，用来比较两边的回合划分。"""
+    return [
+        (m["role"], [p.get("text") or p.get("toolCallId") for p in m["parts"]])
+        for m in state["messages"]
+    ]
+
+
 def history_with_every_kind_of_turn(s):
     """普通回合、没有输入的唤醒回合、Run 中途并入输入开启的回合、途中收到 Agent 消息的回合。"""
     append_run(s, "completed")
@@ -185,7 +241,7 @@ def history_with_every_kind_of_turn(s):
 
 
 def test_every_reply_forks_to_exactly_the_conversation_up_to_it(fork_store):
-    """回合切分与快照分组是两份代码，这条契约让它们不能走偏。"""
+    """fork 切点与快照分组都读行上的回合号；这条契约守着两者对每一种回合都给出同一个边界。"""
     s = fork_store
     history_with_every_kind_of_turn(s)
     state = snapshot(s, s.task)
@@ -200,10 +256,13 @@ def test_every_reply_forks_to_exactly_the_conversation_up_to_it(fork_store):
             {"messages": state["messages"][: index + 1]}
         ), message["id"]
         forks.append(child)
-    # 继承行都没有 Run：唤醒回复并进上一条回复，再分叉要跟着分支里看到的回合走。
+    # 回合号随行复制：分支的回合划分与来源一致，唤醒开出的回复仍是单独一条（继承来的没有输入
+    # 开头的回复用 ``assistant-turn-``），并且同样能再分叉。
     s.task = forks[-1]
     branch = snapshot(s, s.task)
+    assert grouping(branch) == grouping(state)
     assert not any(m["id"].startswith("assistant-run-") for m in branch["messages"])
+    assert any(m["id"].startswith("assistant-turn-") for m in branch["messages"])
     for index, message in enumerate(branch["messages"]):
         if message["role"] == "assistant":
             refork = s.service.get_task(fork_api(s, message["id"]).task_id)
@@ -470,13 +529,17 @@ def test_api_accepts_only_a_reply_id(payload):
 
 @pytest.mark.parametrize(
     ("wire_id", "reply"),
-    [("assistant-12", ForkReply(input_message_id=12)), ("assistant-run-3", ForkReply(run_id=3))],
+    [
+        ("assistant-12", ForkReply(input_message_id=12)),
+        ("assistant-run-3", ForkReply(run_id=3)),
+        ("assistant-turn-5", ForkReply(turn=5)),
+    ],
 )
-def test_api_decodes_both_kinds_of_reply(wire_id, reply):
+def test_api_decodes_every_kind_of_reply(wire_id, reply):
     assert ForkTaskRequest(replyMessageId=wire_id).reply == reply
 
 
-@pytest.mark.parametrize("wire_id", ["assistant-999", "assistant-run-999"])
+@pytest.mark.parametrize("wire_id", ["assistant-999", "assistant-run-999", "assistant-turn-999"])
 def test_unknown_reply_returns_404(fork_store, wire_id):
     with pytest.raises(HTTPException) as caught:
         fork_api(fork_store, wire_id)

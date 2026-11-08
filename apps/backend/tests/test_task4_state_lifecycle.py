@@ -115,6 +115,7 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
             metadata=_user_meta("from canonical context"),
             include_in_context=True,
             sequence=1,
+            turn=1,
         )
     ]
 
@@ -154,6 +155,7 @@ def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
             message={"role": "system", "content": "internal system prompt"},
             include_in_context=True,
             sequence=0,
+            turn=1,
         ),
         ConversationTaskContextRecord(
             id=11,
@@ -163,6 +165,7 @@ def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
             metadata=_user_meta("canonical user message"),
             include_in_context=True,
             sequence=1,
+            turn=1,
         ),
         ConversationTaskContextRecord(
             id=12,
@@ -171,6 +174,7 @@ def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
             message={"role": "assistant", "content": "canonical assistant message"},
             include_in_context=True,
             sequence=2,
+            turn=1,
         ),
     ]
 
@@ -206,6 +210,7 @@ def test_state_snapshot_is_lazily_rebuilt_once_per_task_runtime_space() -> None:
             metadata=_user_meta("durable"),
             include_in_context=True,
             sequence=1,
+            turn=1,
         )
     ]
     reads = {"task": 0, "runs": 0, "context": 0}
@@ -252,6 +257,7 @@ def test_memory_state_is_not_written_to_persistence_and_rebuilds_after_restart()
             metadata=_user_meta("durable"),
             include_in_context=True,
             sequence=1,
+            turn=1,
         )
     ]
 
@@ -304,6 +310,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             metadata=_user_meta("committed user"),
             include_in_context=True,
             sequence=1,
+            turn=1,
         ),
         ConversationTaskContextRecord(
             id=12,
@@ -312,6 +319,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             message={"role": "assistant", "content": "committed assistant fact"},
             include_in_context=True,
             sequence=2,
+            turn=1,
         ),
     ]
 

@@ -76,6 +76,7 @@ def test_live_and_rebuild_agree(status, reason, content, expected):
             metadata=AssistantMessageMetadata(
                 finish_reason=reason
             ),
+            turn=1,
         )
         for sequence, text in [(1, "中途进展"), (2, content)]
     ]

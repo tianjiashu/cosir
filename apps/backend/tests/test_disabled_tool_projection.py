@@ -36,6 +36,7 @@ def test_rebuild_pairs_disabled_tool_closure_with_metadata(
             },
             include_in_context=True,
             sequence=1,
+            turn=1,
         ),
         ConversationTaskContextRecord(
             id=2,
@@ -49,6 +50,7 @@ def test_rebuild_pairs_disabled_tool_closure_with_metadata(
             include_in_context=True,
             sequence=2,
             metadata=ToolMessageMetadata(status="cancelled"),
+            turn=1,
         ),
     ]
 

@@ -700,7 +700,7 @@ async def test_background_result_after_stop_starts_a_run(chain) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 编辑重跑：先校验再动数据；查 Run 表等停；闸门内软删除目标及其后 context 并入队
+# 编辑重跑：先校验再动数据；查执行阶段等停；闸门内交给撤回用例（其语义见 test_turn_withdrawal）
 # ---------------------------------------------------------------------------
 
 
@@ -717,20 +717,12 @@ class _Context:
             )
             for sequence, kind in enumerate(kinds, start=1)
         ]
-        # 被撤回的这一轮发起的调用 id（真实实现从 assistant 行的 tool_calls 读出）。
-        self.withdrawn_calls: frozenset[str] = frozenset()
 
     def latest_user_input(self, _task_id: int, session: Any = None):
         for row in reversed(self.rows):
             if row.include_in_context and row.metadata.kind == "user_input":
                 return row
         return None
-
-    def exclude_from(self, _task_id: int, sequence: int, _session: Any) -> frozenset[str]:
-        for row in self.rows:
-            if row.sequence >= sequence:
-                row.include_in_context = False
-        return self.withdrawn_calls
 
     def included(self) -> list[int]:
         return [row.sequence for row in self.rows if row.include_in_context]
@@ -749,6 +741,21 @@ def rerun(chain, monkeypatch):
 
     chain.service._context = context
     chain.service._inputs = SimpleNamespace(prepare=recording_prepare)
+
+    def withdraw(task_id: int, message_id: int, replacement: Any) -> None:
+        """撤回用例替身：移出目标及其后的行并让新消息入队（真实语义见 test_turn_withdrawal）。"""
+        target = context.latest_user_input(task_id)
+        assert target is not None and target.message_id == message_id
+        for row in context.rows:
+            if row.sequence >= target.sequence:
+                row.include_in_context = False
+        service_module.task_runtime_spaces.enqueue(task_id, replacement)
+
+    monkeypatch.setattr(
+        service_module.service_depends,
+        "get_turn_withdrawal_service",
+        lambda: SimpleNamespace(withdraw=withdraw),
+    )
     chain.service._states = SimpleNamespace(
         republish_from_canonical=lambda task_id: republished.append(task_id),
     )
@@ -788,52 +795,6 @@ async def test_rerun_soft_deletes_target_and_later_rows_then_starts_a_run(rerun)
     assert rerun.republished == [_TASK_ID]
     assert rerun.ledger.current.id != old.id and rerun.ledger.current.status == "running"
     assert _Driver.consumed == [1]
-
-
-async def test_rerun_revokes_background_work_of_withdrawn_calls(rerun) -> None:
-    """被撤回的这一轮还在跑的后台工作要撤销：否则结论到达后以孤儿消息开出新 Run。"""
-    from app.core.tool.background.backgraound_registry import background_registry
-
-    _finished_run(rerun)
-    withdrawn: list[str] = []
-    earlier: list[str] = []
-    _register_background_work("call-withdrawn", "background", withdrawn)
-    _register_background_work("call-earlier", "background", earlier)
-    rerun.context.withdrawn_calls = frozenset({"call-withdrawn"})
-
-    await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
-    await _settle()
-
-    assert withdrawn == ["cancel"]
-    assert not registered(background_registry, _TASK_ID, "call-withdrawn")
-    assert background_registry.complete(_TASK_ID, "call-withdrawn", BackgroundConclusion({"ok": True})) is False
-    # 更早一轮的后台工作不属于被撤回的这一轮，照常进行。
-    assert earlier == [] and registered(background_registry, _TASK_ID, "call-earlier")
-    background_registry.withdraw(_TASK_ID, "call-earlier")
-
-
-async def test_rerun_ends_handoffs_started_in_the_withdrawn_turn(rerun) -> None:
-    """被撤回的这一轮发起的交接随之结束：否则资源一直显示交接中，也无法再次交接。"""
-    from app.core.tool.handoff.handoff_registry import HandoffLease, handoff_registry
-
-    _finished_run(rerun)
-    for call_id, resource in (("call-withdrawn", "term_a"), ("call-earlier", "term_b")):
-        handoff_registry.begin(
-            HandoffLease(
-                tool_call_id=call_id,
-                task_id=_TASK_ID,
-                tool_name="terminal_handoff",
-                surface="terminal",
-                resource_id=resource,
-                reason="password",
-            )
-        )
-    rerun.context.withdrawn_calls = frozenset({"call-withdrawn"})
-
-    await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
-    await _settle()
-
-    assert [lease.tool_call_id for lease in handoff_registry.leases(_TASK_ID)] == ["call-earlier"]
 
 
 async def test_rerun_of_a_non_latest_input_is_rejected_untouched(rerun) -> None:

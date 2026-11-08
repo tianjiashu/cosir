@@ -83,6 +83,7 @@ def _context_row(
             # 落库的 user 行必须带展示绑定；测试用正文作展示文本。
             or ({"kind": "user_input", "presentation": {"display_text": message["content"]}} if message["role"] == "user" else {}),
         ),
+        turn=1,
     )
 
 

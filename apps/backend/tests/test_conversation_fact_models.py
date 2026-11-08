@@ -55,6 +55,7 @@ def test_context_record_round_trips_with_row_identity_and_metadata() -> None:
         sequence=3,
         id=41,
         metadata=metadata,
+        turn=1,
     )
 
     model = record._to_model()
@@ -81,6 +82,7 @@ def test_context_storage_exposes_only_canonical_message_fields() -> None:
         "project_to_transport",
         "include_in_context",
         "sequence",
+        "turn",
         "created_at",
         "updated_at",
     }
@@ -350,6 +352,7 @@ def test_context_crud_raises_on_sequence_collision() -> None:
             include_in_context=True,
             sequence=1,
             metadata=ToolMessageMetadata(status="completed"),
+            turn=1,
         )
         conflicting_sequence = ConversationTaskContextRecord(
             task_id=7,
@@ -358,6 +361,7 @@ def test_context_crud_raises_on_sequence_collision() -> None:
             include_in_context=True,
             sequence=1,
             metadata=ToolMessageMetadata(status="completed"),
+            turn=1,
         )
         with Session(engine) as session:
             crud.create(first, session=session)
@@ -402,6 +406,7 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
                 },
                 include_in_context=True,
                 sequence=1,
+                turn=1,
             )
             session.add(context._to_model())
             session.commit()

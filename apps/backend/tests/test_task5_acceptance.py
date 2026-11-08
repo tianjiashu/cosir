@@ -90,7 +90,7 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
             )
     store.context.append(
         store.task.id, run_id, message, sequence, True, metadata, message_id=message_id
-    )
+    , turn=1)
 
 
 def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = None) -> None:

@@ -41,6 +41,12 @@ class _ContextStore:
     def max_sequence(self, task_id: int) -> int:
         return self.current_max_sequence
 
+    def max_turn(self, task_id: int) -> int:
+        return 0
+
+    def run_records(self, _task_id: int, _run_id: int) -> list:
+        return []
+
     def append(
         self,
         task_id: int,
@@ -52,6 +58,7 @@ class _ContextStore:
         project_to_transport: bool = True,
         session: object = None,
         *,
+        turn: int,
         message_id: int | None = None,
     ) -> ContextEntry:
         self.appended.append((task_id, run_id, message, seq, include_in_context))
@@ -61,6 +68,7 @@ class _ContextStore:
             run_id,
             seq,
             metadata=metadata if metadata is not None else EmptyMessageMetadata(),
+            turn=turn,
         )
 
     def replace_message(self, record: object, **_kwargs: object) -> None:
@@ -71,6 +79,10 @@ def _manager(
     context_store: _ContextStore, *, next_sequence: int = 0
 ) -> RuntimeMessageContextManager:
     manager = object.__new__(RuntimeMessageContextManager)
+    manager._max_turn = 0
+    manager._run_turn = None
+    manager._run_has_input = False
+    manager._run_has_reply = False
     manager._used_call_ids = set()
     manager._response_call_ids = {}
     manager.current_task_id = 7
@@ -78,7 +90,7 @@ def _manager(
     manager.workspace = SimpleNamespace(id=7, root_path="")
     manager.context_store = context_store
     manager.current_run_id = None
-    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
+    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1, turn=1)
     manager._entries = []
     manager._message_sequence = next_sequence
     manager._draft_response = None
@@ -113,6 +125,7 @@ def test_background_completion_updates_work_and_preserves_existing_card():
     manager._entries = [ContextEntry(
         {"role": "tool", "tool_call_id": "c", "content": "placeholder"}, 2, 2,
         metadata=ToolMessageMetadata(status="pending", background=work, display_data=card),
+        turn=1,
     )]
     ended = work.model_copy(update={"ended_at": "2026-01-01T00:01:00+00:00"})
     written = manager.update_tool_result_metadata(
@@ -141,10 +154,10 @@ def test_begin_run_rebuilds_memory_entries_from_persisted_context() -> None:
     """begin_run 无条件从库重建内存列表与序号：上一个 Run 留下的过时内存不会被沿用。"""
     context_store = _ContextStore(max_sequence=4)
     context_store.loaded = [
-        ContextEntry({"role": "user", "content": "existing"}, 2, 3),
+        ContextEntry({"role": "user", "content": "existing"}, 2, 3, turn=1),
     ]
     manager = _manager(context_store, next_sequence=1)
-    manager._entries = [ContextEntry({"role": "user", "content": "stale"}, 1, 1)]
+    manager._entries = [ContextEntry({"role": "user", "content": "stale"}, 1, 1, turn=1)]
     manager.begin_run(SimpleNamespace(task_id=7, id=2))
 
     assert manager.current_run_id == 2
@@ -171,9 +184,10 @@ def test_load_message_moves_existing_tool_result_before_later_human_message() ->
             },
             1,
             1,
+            turn=1,
         ),
-        ContextEntry({"role": "user", "content": "continue"}, 2, 2),
-        ContextEntry({"role": "tool", "content": "cancelled", "tool_call_id": "call-1"}, 1, 3),
+        ContextEntry({"role": "user", "content": "continue"}, 2, 2, turn=1),
+        ContextEntry({"role": "tool", "content": "cancelled", "tool_call_id": "call-1"}, 1, 3, turn=1),
     ]
     manager = _manager(context_store)
     manager._entries = list(context_store.loaded)

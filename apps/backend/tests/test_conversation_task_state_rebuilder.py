@@ -111,6 +111,7 @@ def test_rebuild_writes_outcome_only_on_terminal_runs_last_assistant_message() -
             message={"role": "assistant", "content": text},
             include_in_context=True,
             sequence=sequence,
+            turn=1,
         )
         for sequence, run_id, text in ((1, 1, "第一段"), (2, 1, "第二段"), (3, 2, "进行中"))
     ]
@@ -215,6 +216,7 @@ def test_rebuild_keeps_interrupted_output_stopped_even_when_run_is_active() -> N
         message={"role": "assistant", "content": "输出到一半"},
         include_in_context=False,
         sequence=1,
+        turn=1,
     )
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
@@ -251,6 +253,7 @@ def test_rebuild_keeps_interrupted_output_when_run_is_cancelled() -> None:
         message={"role": "assistant", "content": "输出到一半"},
         include_in_context=False,
         sequence=1,
+        turn=1,
     )
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
@@ -296,6 +299,7 @@ def test_rebuild_restores_child_task_locator_and_workspace_role_from_display_dat
         },
         include_in_context=False,
         sequence=1,
+        turn=1,
     )
     result_row = ConversationTaskContextRecord(
         id=2,
@@ -315,6 +319,7 @@ def test_rebuild_restores_child_task_locator_and_workspace_role_from_display_dat
                 },
             }
         ),
+        turn=1,
     )
 
     tool_part = ConversationTaskStateRebuilder.build_pair_tool_part(
@@ -354,6 +359,7 @@ def test_rebuild_restores_ordinary_file_from_context_input() -> None:
         metadata=UserMessageMetadata(kind="user_input", presentation=presentation),
         include_in_context=True,
         sequence=1,
+        turn=1,
     )
 
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
@@ -424,6 +430,7 @@ def test_reasoning_stays_in_context_observation_but_not_cold_conversation() -> N
         message={"role": "assistant", "content": "结论", "reasoning_content": "推理原文"},
         created_at=timestamp.isoformat(),
         updated_at=timestamp.isoformat(),
+        turn=1,
     )
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
     validate_snapshot(state)
@@ -489,6 +496,7 @@ def test_live_and_rebuilt_calls_share_definition_presentation(name, expected):
                 }
             ],
         },
+        turn=1,
     )
     rebuilt = ConversationTaskStateRebuilder.rebuild(task, [run], [row], catalog)
     validate_snapshot(rebuilt)

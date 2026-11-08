@@ -101,6 +101,7 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
             include_in_context=True,
             sequence=1,
             metadata={},
+            turn=1,
         ),
         ConversationTaskContextRecord(
             task_id=1,
@@ -119,6 +120,7 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
                     },
                 }
             ),
+            turn=1,
         ),
     ]
 

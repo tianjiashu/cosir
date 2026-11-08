@@ -35,6 +35,7 @@ def _tool_row(task_id: int, run_id: int, sequence: int, call_id: str, **metadata
         message={"role": "tool", "tool_call_id": call_id, "content": "placeholder"},
         include_in_context=True,
         sequence=sequence,
+        turn=1,
         metadata=ToolMessageMetadata(**metadata),
     )
 

@@ -40,6 +40,7 @@ def awaiting(tmp_path: Path, isolated_storage, monkeypatch: pytest.MonkeyPatch):
             message={"role": "assistant", "content": None, "tool_calls": [call]},
             include_in_context=True,
             sequence=1,
+            turn=1,
         )
     )
     placeholder = ConversationTaskContextRecord(
@@ -49,6 +50,7 @@ def awaiting(tmp_path: Path, isolated_storage, monkeypatch: pytest.MonkeyPatch):
         include_in_context=True,
         sequence=2,
         metadata=ToolMessageMetadata(status="pending"),
+        turn=1,
     )
     crud.create(placeholder)
     monkeypatch.setattr(
@@ -79,6 +81,7 @@ def test_claimed_call_is_no_longer_awaiting(awaiting) -> None:
             include_in_context=True,
             sequence=awaiting.placeholder.sequence,
             metadata=ToolMessageMetadata(status="running"),
+            turn=1,
         ),
     )
 

@@ -188,6 +188,7 @@ def test_cold_rebuild_keeps_failed_team_run_locator(monkeypatch) -> None:
                     }
                 ],
             },
+            turn=1,
         ),
         ConversationTaskContextRecord(
             task_id=2,
@@ -203,6 +204,7 @@ def test_cold_rebuild_keeps_failed_team_run_locator(monkeypatch) -> None:
                     "team_run_id": 17,
                 }
             ),
+            turn=1,
         ),
     ]
 

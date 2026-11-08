@@ -251,6 +251,9 @@ class _Context:
     def __init__(self) -> None:
         self.added: list[dict] = []
 
+    def opens_turn(self, message, metadata, project) -> bool:
+        return True
+
     def add_message(self, message, **kwargs):
         self.added.append({"message": message, **kwargs})
 

@@ -434,6 +434,7 @@ async def test_context_protocol_failure_has_local_code_and_preserves_diagnostic_
             {"role": "tool", "content": "private tool output", "tool_call_id": "ghost"},
             7,
             4,
+            turn=1,
         ),
         "ghost",
     )
@@ -455,7 +456,7 @@ def test_a_broken_context_still_ends_claimed_decisions(monkeypatch: pytest.Monke
     from app.core.context.tool_call_closure import ContextProtocolError
 
     def broken(*_args: object) -> list[str]:
-        entry = ContextEntry({"role": "tool", "tool_call_id": "c", "content": ""}, 1, 1)
+        entry = ContextEntry({"role": "tool", "tool_call_id": "c", "content": ""}, 1, 1, turn=1)
         raise ContextProtocolError("orphan_tool_result", entry, "c")
 
     cancelled: list[list[str]] = []

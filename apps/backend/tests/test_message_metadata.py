@@ -52,6 +52,7 @@ def test_role_metadata_round_trip_without_polluting_sdk_message(message, metadat
         include_in_context=True,
         message=message,
         metadata=parse_message_metadata(message["role"], metadata),
+        turn=1,
     )
     restored = ConversationTaskContextRecord._from_model(record._to_model())
     assert restored.message == message
@@ -135,6 +136,7 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
                 }
             ],
         },
+        turn=1,
     )
     result = ConversationTaskContextRecord(
         task_id=1,
@@ -143,6 +145,7 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
         include_in_context=True,
         message={"role": "tool", "tool_call_id": "call-1", "content": "model-only result"},
         metadata=metadata,
+        turn=1,
     )
     initial = ConversationTaskStateRebuilder.build_pair_tool_part([call])["call-1"]
     initial["status"] = "running"

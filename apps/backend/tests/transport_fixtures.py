@@ -36,8 +36,18 @@ def queue_user_input(
 
 
 def consumed(
-    task_id: int, run_id: int, message_id: int, presentation: UserInputPresentation
+    task_id: int,
+    run_id: int,
+    message_id: int,
+    presentation: UserInputPresentation,
+    *,
+    opens_turn: bool = True,
 ) -> InputConsumedEvent:
+    """用户输入总开回合；途中来信由调用方显式传 ``opens_turn=False``。"""
     return InputConsumedEvent(
-        task_id=task_id, run_id=run_id, message_id=message_id, presentation=presentation
+        task_id=task_id,
+        run_id=run_id,
+        message_id=message_id,
+        presentation=presentation,
+        opens_turn=opens_turn,
     )

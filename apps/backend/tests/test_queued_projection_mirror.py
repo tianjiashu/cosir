@@ -65,7 +65,11 @@ def test_withdrawn_message_leaves_the_projection_on_refresh(task_id: int) -> Non
 def test_consumption_builds_the_message_without_a_queued_entry() -> None:
     state = empty_snapshot()
     event = InputConsumedEvent(
-        task_id=1, run_id=1, message_id=7, presentation=UserInputPresentation(display_text="你好")
+        task_id=1,
+        run_id=1,
+        message_id=7,
+        presentation=UserInputPresentation(display_text="你好"),
+        opens_turn=True,
     )
 
     mutations = plan_input_consumed(event, state)

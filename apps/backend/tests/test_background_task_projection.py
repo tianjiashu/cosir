@@ -140,6 +140,7 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
                     }
                 ],
             },
+            turn=1,
         )
     )
     service = ConversationTaskStateService()
@@ -164,6 +165,7 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
             include_in_context=True,
             message={"role": "tool", "tool_call_id": "call-bg", "content": "placeholder"},
             metadata=ToolMessageMetadata(status="pending", background=work),
+            turn=1,
         )
     )
     service.apply_planned(
@@ -218,6 +220,7 @@ def test_withdrawn_rounds_are_not_listed(tmp_path, isolated_storage):
                 },
             ],
         },
+        turn=1,
     )
     crud.create(assistant)
     placeholder = ConversationTaskContextRecord(
@@ -229,6 +232,7 @@ def test_withdrawn_rounds_are_not_listed(tmp_path, isolated_storage):
         metadata=ToolMessageMetadata(
             status="completed", background=_work("kept", ended_at="2026-01-01T00:01:00+00:00")
         ),
+        turn=1,
     )
     crud.create(placeholder)
     withdrawn_call = replace(

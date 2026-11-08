@@ -270,11 +270,17 @@ class _RecordingContextStore:
     def entries_in_context(self, task_id: int) -> list[ContextEntry]:
         return list(self.loaded)
 
+    def max_turn(self, _task_id: int) -> int:
+        return 0
+
+    def run_records(self, _task_id: int, _run_id: int) -> list:
+        return []
+
     def get_system_prompt(self, task_id: int) -> ContextEntry | None:
         return None
 
     def create_system_prompt(self, task_id: int, message: Any) -> ContextEntry:
-        return ContextEntry(message, None, -1)
+        return ContextEntry(message, None, -1, turn=1)
 
     def append(
         self,
@@ -287,10 +293,11 @@ class _RecordingContextStore:
         project_to_transport: bool = True,
         session: object = None,
         *,
+        turn: int,
         message_id: int | None = None,
     ) -> None:
         self.appended.append((task_id, run_id, message, sequence, include_in_context))
-        return ContextEntry(message, run_id, sequence)
+        return ContextEntry(message, run_id, sequence, turn=turn)
 
     def replace_message(self, record: Any) -> None:
         self.replaced.append(record)
@@ -302,6 +309,10 @@ def _memory_manager(
     """构造绕过真实持久化的 ``RuntimeMessageContextManager``（与既有测试同口径）。"""
 
     manager = object.__new__(RuntimeMessageContextManager)
+    manager._max_turn = 0
+    manager._run_turn = None
+    manager._run_has_input = False
+    manager._run_has_reply = False
 
     manager._used_call_ids = set()
 
@@ -311,7 +322,7 @@ def _memory_manager(
     manager.workspace = SimpleNamespace(id=7, root_path="")
     manager.context_store = context_store
     manager.current_run_id = _RUN_ID
-    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1)
+    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1, turn=1)
     manager._entries = []
     manager._message_sequence = next_sequence
     return manager
