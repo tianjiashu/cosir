@@ -11,7 +11,8 @@ class ConversationTaskContextModel(StorageBase):
 
     一行存储一条 SDK 请求消息 JSON 正文及按角色约束的 metadata，
     配合 ``sequence`` 维持跨 run 的全局插入顺序，``include_in_context``
-    标记该消息是否纳入上下文视图；``project_to_transport`` 独立标记是否向前端投影。
+    标记该消息是否纳入上下文视图；``project_to_transport`` 独立标记是否向前端投影。``turn`` 是这一行
+    所属回合的 Task 内序号，写入时由 ``RuntimeMessageContextManager`` 一处判定（系统提示词为 0）。
 
     该表是上下文消息的**唯一持久化真相**，与
     :class:`app.models.conversation_task_context.ConversationTaskContextRecord` 一一对应；
@@ -44,3 +45,6 @@ class ConversationTaskContextModel(StorageBase):
         Boolean, default=True, server_default="1", nullable=False
     )
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 回合是写入时的事实，不从 ``run_id`` / ``project_to_transport`` 推导：fork 复制会改写这两项，
+    # 推导出的边界因此会漂移；回合号随行复制，分支与来源的回合划分一致。
+    turn: Mapped[int] = mapped_column(Integer, nullable=False)

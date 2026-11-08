@@ -81,13 +81,17 @@ class ConversationTaskContextCrud:
         以及已接收决定、执行中（``running``）的 HITL 等待占位。
 
         tool 行只有这两类会以非终态落库（普通观察写入即终态），所以按状态即可识别。``task_id`` 为
-        ``None`` 时跨全部 Task（重启收尾用）。按 metadata JSON 过滤，不改表结构。
+        ``None`` 时跨全部 Task（重启收尾用）。按 metadata JSON 过滤，不改表结构。只看仍在上下文
+        里的行：与决定入口、后台等待判定同一口径。
         """
 
         metadata_json = ConversationTaskContextModel.metadata_json
         status = func.json_extract(metadata_json, "$.status")
         stmt = select(ConversationTaskContextModel).where(
             ConversationTaskContextModel.run_id.is_not(None),
+            # 被撤回的占位已移出上下文，不再结算：否则重启会把它推到「已中断」，并给这个
+            # Task 多投一条重启通知。
+            ConversationTaskContextModel.include_in_context.is_(True),
             or_(
                 self._pending_background(),
                 status == "running",
@@ -108,24 +112,18 @@ class ConversationTaskContextCrud:
     def get_for_observation(
         self,
         task_id: int,
-        run_id: int | None = None,
+        turn: int | None = None,
     ) -> list[ConversationTaskContextRecord]:
-        """读取观测页所需的全量消息，不按上下文或流式标记过滤。
+        """读取观测页所需的全量消息，不按上下文或流式标记过滤；指定回合时只取这一回合的行。
 
-        指定 Run 时同时返回无本地 Run 的固定系统提示词和继承上下文；其它本地 Run
-        的消息不混入结果。时间戳由完整持久化记录映射保留。
+        时间戳由完整持久化记录映射保留。
         """
 
         statement = select(ConversationTaskContextModel).where(
             ConversationTaskContextModel.task_id == task_id
         )
-        if run_id is not None:
-            statement = statement.where(
-                or_(
-                    ConversationTaskContextModel.run_id == run_id,
-                    ConversationTaskContextModel.run_id.is_(None),
-                )
-            )
+        if turn is not None:
+            statement = statement.where(ConversationTaskContextModel.turn == turn)
         statement = statement.order_by(ConversationTaskContextModel.sequence.asc())
         with self._session_factory.begin() as session:
             rows = session.scalars(statement).all()
@@ -179,6 +177,19 @@ class ConversationTaskContextCrud:
         """
 
         statement = select(func.coalesce(func.max(ConversationTaskContextModel.sequence), 0)).where(
+            ConversationTaskContextModel.task_id == task_id
+        )
+        if session is not None:
+            current = session.scalar(statement)
+        else:
+            with self._session_factory.begin() as owned_session:
+                current = owned_session.scalar(statement)
+        return int(current or 0)
+
+    def max_turn(self, task_id: int, session: Session | None = None) -> int:
+        """返回指定 task 下最大的回合号（含已被编辑移出的行，回合号不复用）；无行时返回 0。"""
+
+        statement = select(func.coalesce(func.max(ConversationTaskContextModel.turn), 0)).where(
             ConversationTaskContextModel.task_id == task_id
         )
         if session is not None:
@@ -271,27 +282,22 @@ class ConversationTaskContextCrud:
         model.project_to_transport = replacement.project_to_transport
         session.flush()
 
-    def exclude_from_sequence(
-        self,
-        task_id: int,
-        sequence: int,
-        session: Session,
-        *,
-        keep_ids: frozenset[int] = frozenset(),
-    ) -> None:
-        """把 ``sequence`` 及其后的行（``keep_ids`` 除外）移出模型上下文与前端投影；行本身保留，
-        供观测页查看。
+    def exclude_rows(self, task_id: int, row_ids: frozenset[int], session: Session) -> None:
+        """把这些行移出模型上下文与前端投影；行本身保留，供观测页查看。
 
-        由编辑用例决定位置与保留哪些行。行不删除，所以新消息必须追加在 :meth:`max_sequence` 之后，
-        不得复用这里任何行的序号。
+        移出哪些行由撤回用例按回合与调用归属决定（见 ``turn_withdrawal_service``）。行不删除，所以
+        新消息必须追加在 :meth:`max_sequence` 之后，不得复用这里任何行的序号。
         """
-        statement = update(ConversationTaskContextModel).where(
-            ConversationTaskContextModel.task_id == task_id,
-            ConversationTaskContextModel.sequence >= sequence,
+        if not row_ids:
+            return
+        session.execute(
+            update(ConversationTaskContextModel)
+            .where(
+                ConversationTaskContextModel.task_id == task_id,
+                ConversationTaskContextModel.id.in_(row_ids),
+            )
+            .values(include_in_context=False, project_to_transport=False)
         )
-        if keep_ids:
-            statement = statement.where(ConversationTaskContextModel.id.not_in(keep_ids))
-        session.execute(statement.values(include_in_context=False, project_to_transport=False))
 
     def delete_by_task_ids(self, task_ids: list[int], session: Session | None = None) -> None:
         """按一批 task 的标识批量删除其全部上下文消息行。
