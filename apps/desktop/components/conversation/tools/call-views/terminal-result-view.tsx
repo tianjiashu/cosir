@@ -1,6 +1,7 @@
 import { Maximize2Icon } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useRef } from "react";
 
+import { useClipped } from "@/hooks/use-clipped";
 import { callIsExecuting } from "@/lib/assistant/tools/call-status";
 import { useOpenLink } from "@/components/links/use-open-link";
 import { CopyIconButton } from "@/components/ui/copy-icon-button";
@@ -60,17 +61,7 @@ function TerminalResultBody({ data, context }: { data: Record<string, unknown>; 
   const [commandOpen, setCommandOpen] = useDisclosure(taskId, `terminal-command:${toolCallId}`, false);
   const [, setReaderOpen] = useDisclosure(taskId, `terminal-reader:${toolCallId}`, false);
   const commandElement = useRef<HTMLPreElement>(null);
-  const [commandClipped, setCommandClipped] = useState(false);
-  // 隐藏时量到的是 0，重新显示时观察者会再触发一次。
-  useLayoutEffect(() => {
-    const element = commandElement.current;
-    if (!element || commandOpen) return;
-    const measure = () => setCommandClipped(element.scrollHeight > element.clientHeight + 1);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [command, commandOpen]);
+  const commandClipped = useClipped(commandElement, !commandOpen, [command]);
   return (
     <DetailSurface className="group/disclosure space-y-2 leading-relaxed">
       {command && <div>

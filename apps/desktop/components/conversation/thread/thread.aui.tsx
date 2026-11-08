@@ -50,6 +50,7 @@ import { deleteQueuedTaskMessage, sendQueuedTaskMessageNow } from "@/lib/assista
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { UserMessageContent, useHasUserMessageContent } from "@/components/conversation/thread/user-message-content";
 import { UserMessageImages } from "@/components/conversation/thread/user-message-images";
+import { UserMessageBubble } from "@/components/conversation/thread/user-message-bubble";
 import {
   ComposerAttachmentButton,
   ComposerSendButton,
@@ -416,7 +417,8 @@ const UserMessageView: FC = () => {
   const hasContent = useHasUserMessageContent();
   // 渲染失败时的纯文本兜底：只拼正文，胶囊所在位置留空。
   const userText = useAuiState((state) => state.message.parts.map((part) => part.type === "text" ? part.text : "").join(""));
-  const readonly = useThreadContext().readonly === true;
+  const { readonly: readonlyThread, taskId } = useThreadContext();
+  const readonly = readonlyThread === true;
   const canEdit = useAuiState((state) => {
     if (readonly) return false;
     const transportState = readRuntimeTransportState(state.thread.state);
@@ -439,7 +441,7 @@ const UserMessageView: FC = () => {
       <div className="flex max-w-[85%] flex-col items-end gap-2">
         <UserMessageImages />
         {hasContent && (
-          <div className="bg-foreground text-background rounded-[22px] px-4 py-3 text-chat leading-relaxed wrap-break-word">
+          <UserMessageBubble taskId={taskId} messageId={messageId}>
             {/* 正文与行内胶囊是一个整体渲染单元（见 UserMessageContent），按消息隔离而不是按 part。 */}
             <RenderIsolationBoundary
               scope="message"
@@ -456,7 +458,7 @@ const UserMessageView: FC = () => {
             >
               <UserMessageContent />
             </RenderIsolationBoundary>
-          </div>
+          </UserMessageBubble>
         )}
       </div>
       <div className="mt-1 h-6 shrink-0">

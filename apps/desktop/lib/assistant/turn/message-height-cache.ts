@@ -46,7 +46,7 @@ export function forgetDisclosureHeight(taskId: number, key: string): void {
   if (!bucket) return;
   for (const [id, entry] of bucket.sizes) {
     const callId = key.startsWith("call:") ? key.slice(5) : null;
-    if (key === `process:${id}` || key === `agent:${id}` || key.startsWith(`activity:${id}:`)
+    if (key === `process:${id}` || key === `agent:${id}` || key === `user:${id}` || key.startsWith(`activity:${id}:`)
       || key.startsWith(`file:${id}:`)
       || (callId && entry.message?.content.some((part) => part.type === "tool-call" && part.toolCallId === callId))) bucket.sizes.delete(id);
   }

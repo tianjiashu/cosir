@@ -221,6 +221,38 @@
 }
 
 /*
+ * 有最大高度的小滚动区（输入框编辑器）两端随滚动位置渐隐，加在滚动容器本身上：没滚动时顶端不淡，
+ * 滚到底时底端不淡，内容没溢出时滚动时间线不生效、完全不淡。渐隐长度由滚动驱动动画写进两个注册过的
+ * 自定义属性，不用 JS 监听滚动。上面「不用 mask-image」针对长滚动区；这里盒子小，合成开销可忽略，
+ * 首屏也不会被淡化。渐隐长度 1.5rem 与编辑器的光标滚动边距（`composer-editor.tsx`）一致，光标行不进渐隐区。
+ * `animation` 简写会重置 `animation-timeline`，所以时间线必须写在它后面。
+ */
+@property --scroll-fade-mask-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-mask-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@keyframes scroll-fade-mask-start {
+  from { --scroll-fade-mask-start: 0px; }
+  to { --scroll-fade-mask-start: 1.5rem; }
+}
+@keyframes scroll-fade-mask-end {
+  from { --scroll-fade-mask-end: 1.5rem; }
+  to { --scroll-fade-mask-end: 0px; }
+}
+@utility scroll-fade-mask {
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--scroll-fade-mask-start), #000 calc(100% - var(--scroll-fade-mask-end)), transparent);
+  animation: scroll-fade-mask-start linear both, scroll-fade-mask-end linear both;
+  animation-timeline: scroll(self), scroll(self);
+  animation-range: 0 1.5rem, calc(100% - 1.5rem) 100%;
+}
+
+/*
  * 标题栏安全区：窗口最上方一行里被系统或自绘窗口按钮占用的宽度，形态由
  * lib/platform.ts 在首帧前写入 data-titlebar。业务组件只读这两个变量让位，不判断平台。
  * mac-overlay：左上角原生红绿灯（位置见 electron/main/window.ts 的 trafficLightPosition）；

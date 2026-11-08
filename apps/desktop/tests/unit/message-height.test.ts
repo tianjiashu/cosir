@@ -65,6 +65,17 @@ describe("estimateMessageHeight", () => {
     expect(estimateMessageHeight(user(image))).toBe(149);
   });
 
+  // 目的：长用户消息默认收起，估计按收起高度计；潜在缺陷：按全文估计时长消息滚进视口会被修正数百像素，页面跳动。
+  it("用户消息：正文超过收起高度时按开合封顶，开合实时读取", () => {
+    const long = user(text(Array.from({ length: 30 }, (_, line) => `第${line}行`).join("\n")));
+    // 53 行外框 + 24 气泡内边距 + 240 收起高度 + 28「显示全部」一行；展开为 30 行 × 23。
+    expect(estimateMessageHeight(long, 9)).toBe(53 + 24 + 240 + 28);
+    useDisclosureStore.getState().set(9, "user:u", true);
+    expect(estimateMessageHeight(long, 9)).toBe(53 + 24 + 30 * 23 + 28);
+    useDisclosureStore.getState().clearTask(9);
+    expect(estimateMessageHeight(long, 9)).toBe(53 + 24 + 240 + 28);
+  });
+
   // 目的：估计与渲染共用收叠阈值；潜在缺陷：多图消息已收成一叠，估计仍按逐行铺开算，向上滚动时被逐行修正数百像素。
   it("用户消息：阈值以内的图片逐行铺开，超过阈值按收起的一叠计高", () => {
     const images = (count: number) => user(...Array.from({ length: count }, () => image));

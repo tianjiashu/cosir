@@ -1,5 +1,6 @@
 import type { TransportOutcome } from "../contract";
-import { resolveDisclosure, processKey, activityKey, agentKey } from "./disclosure-store";
+import { resolveDisclosure, processKey, activityKey, agentKey, userMessageKey } from "./disclosure-store";
+import { USER_MESSAGE_CLAMP_HEIGHT, USER_MESSAGE_TOGGLE_HEIGHT } from "./user-message-clamp";
 import type { ThreadMessage } from "@assistant-ui/react";
 import { IMAGE_TILE_GAP, IMAGE_TILE_SIZE } from "@/lib/image/tile-size";
 import { IMAGES_PER_ROW, shouldStackImages } from "./image-stack-policy";
@@ -21,10 +22,10 @@ export function estimateMessageHeight(message: ThreadMessage | undefined, taskId
   // 内容计算按不可变消息版本缓存；开合仍实时读取，不能缓存依赖 Task 偏好的最终高度。
   return Math.round(message.role !== "user" ? assistantHeight(message, taskId)
     : isAgentMessage(message) ? ROW_GAP + agentRowHeight(message.id, message.content.map((part) => part.type === "text" ? part.text : "").join("\n"), taskId)
-      : userHeight(message));
+      : userHeight(message, taskId));
 }
 
-const userHeights = new WeakMap<ThreadMessage, number>();
+const userEstimates = new WeakMap<ThreadMessage, { fixed: number; text: number }>();
 const assistantEstimates = new WeakMap<ThreadMessage, {
   layout: TurnLayout;
   hasHeading: boolean;
@@ -46,25 +47,37 @@ const IMAGE_STACK_HEIGHT = IMAGE_HEIGHT;
 const FILE_CHIP_HEIGHT = 30;
 const FILES_PER_ROW = 3;
 
-function userHeight(message: ThreadMessage): number {
-  const cached = userHeights.get(message);
-  if (cached !== undefined) return cached;
-  let text = "";
-  let images = 0;
-  let files = 0;
-  for (const part of message.content) {
-    if (part.type === "text") text += (text ? "\n" : "") + part.text;
-    else if (part.type === "image") images += 1;
-    else if (part.type === "file") files += 1;
+/**
+ * 气泡正文超过收起高度时按开合封顶（收起高度 + 「显示全部」一行，见 `UserMessageBubble`）。内容部分按
+ * 消息版本缓存，开合每次实时读取；是否截断以渲染测量为准，这里的行数只是估计。
+ */
+function userHeight(message: ThreadMessage, taskId?: number): number {
+  let estimate = userEstimates.get(message);
+  if (!estimate) {
+    let text = "";
+    let images = 0;
+    let files = 0;
+    for (const part of message.content) {
+      if (part.type === "text") text += (text ? "\n" : "") + part.text;
+      else if (part.type === "image") images += 1;
+      else if (part.type === "file") files += 1;
+    }
+    const blocks: number[] = [];
+    if (shouldStackImages(images)) blocks.push(IMAGE_STACK_HEIGHT);
+    else if (images > 0) blocks.push(Math.ceil(images / IMAGES_PER_ROW) * (IMAGE_HEIGHT + ATTACHMENT_GAP) - ATTACHMENT_GAP);
+    if (files > 0) blocks.push(Math.ceil(files / FILES_PER_ROW) * (FILE_CHIP_HEIGHT + ATTACHMENT_GAP) - ATTACHMENT_GAP);
+    const hasText = text.trim().length > 0;
+    const blockCount = blocks.length + (hasText ? 1 : 0);
+    estimate = {
+      fixed: ROW_GAP + USER_CHROME + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blockCount - 1) * ATTACHMENT_GAP,
+      text: hasText ? textLines(text, USER_LINE_UNITS) * USER_LINE_HEIGHT : 0,
+    };
+    userEstimates.set(message, estimate);
   }
-  const blocks: number[] = [];
-  if (shouldStackImages(images)) blocks.push(IMAGE_STACK_HEIGHT);
-  else if (images > 0) blocks.push(Math.ceil(images / IMAGES_PER_ROW) * (IMAGE_HEIGHT + ATTACHMENT_GAP) - ATTACHMENT_GAP);
-  if (files > 0) blocks.push(Math.ceil(files / FILES_PER_ROW) * (FILE_CHIP_HEIGHT + ATTACHMENT_GAP) - ATTACHMENT_GAP);
-  if (text.trim()) blocks.push(USER_BUBBLE_PADDING + textLines(text, USER_LINE_UNITS) * USER_LINE_HEIGHT);
-  const height = ROW_GAP + USER_CHROME + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blocks.length - 1) * ATTACHMENT_GAP;
-  userHeights.set(message, height);
-  return height;
+  if (estimate.text === 0) return estimate.fixed;
+  if (estimate.text <= USER_MESSAGE_CLAMP_HEIGHT) return estimate.fixed + USER_BUBBLE_PADDING + estimate.text;
+  const open = taskId !== undefined && resolveDisclosure(taskId, userMessageKey(message.id), false);
+  return estimate.fixed + USER_BUBBLE_PADDING + (open ? estimate.text : USER_MESSAGE_CLAMP_HEIGHT) + USER_MESSAGE_TOGGLE_HEIGHT;
 }
 
 // Agent 消息（`AgentInboundMessage`）：一行来源，展开后正文按 Markdown 排版；常量按
