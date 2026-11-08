@@ -13,7 +13,7 @@ import { LOCAL_IMAGE_LOCATOR_PREFIX } from "./attachment-locator";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
-import { newTraceId, type TraceId } from "@/lib/trace";
+import { newTraceId, type TraceId } from "@/lib/logging/trace-id";
 
 const locatorFor = (assetId: string) => `${LOCAL_IMAGE_LOCATOR_PREFIX}${assetId}`;
 const uploadByDigest = new Map<string, Promise<UploadedAttachment>>();

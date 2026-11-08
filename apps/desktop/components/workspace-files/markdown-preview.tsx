@@ -6,7 +6,7 @@ import { useResourceWatch } from "@/lib/workspace-files/resource-watch";
 import type { ExtraProps } from "streamdown";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
 import { useOpenLink } from "@/components/links/use-open-link";
-import { StaticMarkdown } from "@/components/static-markdown";
+import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { parentPath } from "@/lib/workspace-files/workspace-files-store";
 import { useImageResource } from "@/lib/workspace-files/resources";
 import { fileInfoQueryOptions } from "@/lib/query/query-options";

@@ -8,7 +8,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { useConfigurationDocument, type ConfigurationDocumentAdapter } from "@/components/configuration/use-configuration-document";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { estimateMarkdownTokens, type MarkdownDocumentContract } from "@/lib/markdown-document";
+import { estimateMarkdownTokens, type MarkdownDocumentContract } from "@/lib/configuration-document";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 import { APP_SHORTCUTS, shortcutLabel } from "@/lib/keyboard/shortcuts";
 

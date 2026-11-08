@@ -18,7 +18,7 @@ import {
 import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { reconcileCommands, releaseCommandObservation } from "./command-request-store";
 import { TaskTransportSession, type TransportDisconnect } from "@/lib/assistant/task-transport-session";
-import type { TraceId } from "@/lib/trace";
+import type { TraceId } from "@/lib/logging/trace-id";
 
 export type { TransportDisconnect } from "@/lib/assistant/task-transport-session";
 

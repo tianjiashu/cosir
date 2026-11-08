@@ -2,7 +2,7 @@ import { isCancelledAbort, isTimeoutAbort, withTimeout } from "@/lib/async/abort
 import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
 import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 import { getBackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 
 /**

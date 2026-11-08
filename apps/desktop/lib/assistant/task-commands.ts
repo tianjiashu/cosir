@@ -17,7 +17,7 @@ import { HttpError } from "@/lib/http/http-error";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { backgroundTarget, beginCommand, decisionTarget, finishCommand, stopTarget, type CommandTarget } from "@/lib/assistant/command-request-store";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 
 /** 停止、取消与转后台都幂等（重复投递后端回 409 或照常受理），超时后可以放心重试。 */
 const IDEMPOTENT_COMMAND_TIMEOUT_MS = 15_000;

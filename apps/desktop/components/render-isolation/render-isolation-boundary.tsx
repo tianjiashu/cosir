@@ -5,7 +5,7 @@ import {
 } from "react";
 
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 import type {
   RenderFallback,
   RenderIsolationMetadata,

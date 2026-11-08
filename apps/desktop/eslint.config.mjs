@@ -33,7 +33,7 @@ const eslintConfig = defineConfig([
     },
   },
   {
-    // 设计 token 守卫：颜色只能走 app/globals.css 的语义 token（success / warning /
+    // 设计 token 守卫：颜色只能走 styles/globals.css 的语义 token（success / warning /
     // info / destructive / muted …），字号只能走主题刻度（含 text-2xs）。直接写原始
     // 色板或任意 px 字号会绕过深色模式与终端岛，导致两套主题各自漂移。
     files: ["app/**/*.{ts,tsx}", "components/**/*.{ts,tsx}", "hooks/**/*.{ts,tsx}", "lib/**/*.{ts,tsx}"],

@@ -9,7 +9,7 @@ import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { TaskWorkspaceLayout } from "@/components/task-workspace-layout";
+import { TaskWorkspaceLayout } from "@/components/task/task-workspace-layout";
 import { ErrorState } from "@/components/ui/state-panel";
 import { ThreadSkeleton } from "@/components/assistant/thread-skeleton";
 

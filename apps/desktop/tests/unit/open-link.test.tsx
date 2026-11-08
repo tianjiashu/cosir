@@ -22,7 +22,7 @@ vi.mock("@/lib/notify", () => ({ notify: { info: notifyInfo, error: vi.fn(), suc
 import { ExternalLinkRow } from "@/components/assistant-ui/tools/details/detail-view";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
 import { LinkTaskContext, useOpenLink, type LinkOpener } from "@/components/links/use-open-link";
-import { markdownRehypePlugins } from "@/components/markdown-rendering-config";
+import { markdownRehypePlugins } from "@/components/markdown/markdown-rendering-config";
 import { ReferenceBridgeProvider } from "@/components/workspace-references/reference-bridge";
 import { useDockStore } from "@/lib/layout/dock-store";
 import { useFilesStore } from "@/lib/workspace-files/workspace-files-store";

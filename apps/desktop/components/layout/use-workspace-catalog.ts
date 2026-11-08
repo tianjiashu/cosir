@@ -4,7 +4,7 @@ import type { WorkspaceTreeSource } from "@/components/task-tree/workspace-tree-
 import { getWorkspaceTasks, getWorkspaces, type WorkspaceTask } from "@/lib/api/workspaces";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { readLastWorkspaceId, writeLastWorkspaceId } from "@/lib/workspace-preferences";
+import { readLastWorkspaceId, writeLastWorkspaceId } from "@/lib/last-workspace";
 
 export type WorkspaceWithTasks = WorkspaceTreeSource;
 

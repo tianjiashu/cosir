@@ -20,7 +20,7 @@ import {
   type WorkspaceFileIgnoreConfiguration,
 } from "@/lib/api/configuration";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import type { MarkdownDocumentContract } from "@/lib/markdown-document";
+import type { MarkdownDocumentContract } from "@/lib/configuration-document";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
 

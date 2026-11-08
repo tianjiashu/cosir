@@ -10,9 +10,9 @@ import {
 } from "@/lib/api/context-messages";
 import { queryKeys } from "@/lib/query/query-keys";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { QueryBar } from "./context-observer/query-bar";
-import { ObserverResults } from "./context-observer/observer-results";
-import { parseId } from "./context-observer/message-model";
+import { QueryBar } from "./query-bar";
+import { ObserverResults } from "./observer-results";
+import { parseId } from "./message-model";
 
 /** URL 拥有查询范围；服务端记录交给 Query 管理，页面不复制持久化消息事实。 */
 export function ContextObserverPage() {

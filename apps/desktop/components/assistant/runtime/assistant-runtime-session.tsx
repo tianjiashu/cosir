@@ -18,7 +18,7 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
 import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";

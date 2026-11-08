@@ -1,6 +1,6 @@
 import { Streamdown, type StreamdownProps } from "streamdown";
 
-import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown-rendering-config";
+import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown/markdown-rendering-config";
 import { rehypeHeadingLines } from "@/lib/markdown-outline";
 
 // 模块级单例：插件数组每次渲染都新建会让 Streamdown 重新解析整篇文档。

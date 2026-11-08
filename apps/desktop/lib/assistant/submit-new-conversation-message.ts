@@ -4,7 +4,7 @@ import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
 import { sendTaskMessage, type TaskMessageRequest } from "@/lib/assistant/task-commands";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { HttpError } from "@/lib/http/http-error";
-import type { TraceId } from "@/lib/trace";
+import type { TraceId } from "@/lib/logging/trace-id";
 
 type NewConversationImageAttachment = {
   file: File;

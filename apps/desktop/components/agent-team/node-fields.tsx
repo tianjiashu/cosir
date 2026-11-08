@@ -11,7 +11,7 @@ import type { EditorNode, EditorTransition } from "@/lib/agent-team-editor/model
 import { END_NODE_ID } from "@/lib/agent-team-editor/model";
 import { isImeComposing } from "@/lib/keyboard/ime";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 
 /**
  * Team 节点的编辑字段，画布属性面板与表单大纲共用同一份实现。

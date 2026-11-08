@@ -7,15 +7,15 @@ import { submitToolDecision, type ToolDecision } from "@/lib/assistant/task-comm
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { HttpError } from "@/lib/http/http-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { statusColorStyle } from "@/lib/agent-team-status";
+import { statusColorStyle } from "@/lib/agent-team-editor/team-status";
 import { useAgentTeamRunPolling } from "./agent-team-execution-card";
-import type { ArtifactCardProps } from "./artifact-card";
+import type { ArtifactCardProps } from "./artifact-card-props";
 import { readAgentTeamPreviewDisplay, type AgentTeamPreviewDisplay } from "./agent-team-display";
 
 function validateReviewedInputs(

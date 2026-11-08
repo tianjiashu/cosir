@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import "@/app/globals.css";
-import { RootErrorBoundary } from "@/components/root-error-boundary";
+import "@/styles/globals.css";
+import { RootErrorBoundary } from "@/components/render-isolation/root-error-boundary";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { installGlobalFrontendErrorHandlers } from "@/lib/logging/global-error-handlers";
 import { titlebarMode } from "@/lib/platform";

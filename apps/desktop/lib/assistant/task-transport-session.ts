@@ -3,7 +3,7 @@ import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-co
 import { parseTransportFrame, type TransportFrameStore } from "@/lib/assistant/transport-frame-store";
 import { requestOk } from "@/lib/http/client";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import type { TraceId } from "@/lib/trace";
+import type { TraceId } from "@/lib/logging/trace-id";
 
 /** 长订阅结束的原因：`error` 为 null 表示连接被后端正常关闭（EOF）；`resync` 为真表示背压重同步。 */
 export type TransportDisconnect = {

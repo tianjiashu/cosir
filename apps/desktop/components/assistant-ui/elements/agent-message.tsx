@@ -2,7 +2,7 @@ import { MessagePrimitive, useAuiState, useScrollLock } from "@assistant-ui/reac
 import { BotIcon } from "lucide-react";
 import { useMemo, useRef } from "react";
 import { useOpenTask } from "@/components/links/use-open-task";
-import { StaticMarkdown } from "@/components/static-markdown";
+import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { CopyIconButton } from "@/components/ui/copy-icon-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import type { TransportMessageSource } from "@/lib/assistant/contract";

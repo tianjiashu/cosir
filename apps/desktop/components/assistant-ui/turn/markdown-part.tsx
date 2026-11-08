@@ -1,6 +1,6 @@
 import { useAuiState } from "@assistant-ui/react";
 
-import { MarkdownText } from "@/components/markdown-text";
+import { MarkdownText } from "@/components/markdown/markdown-text";
 import { PartRenderBoundary } from "@/components/assistant-ui/elements/part-render-boundary";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 

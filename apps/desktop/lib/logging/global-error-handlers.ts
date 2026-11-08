@@ -1,5 +1,5 @@
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 
 let installed = false;
 const WINDOW_ERROR_REPORT_INTERVAL_MS = 1000;

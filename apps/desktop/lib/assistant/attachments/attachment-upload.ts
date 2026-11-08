@@ -1,5 +1,5 @@
 import { requestJson } from "@/lib/http/client";
-import type { TraceId } from "@/lib/trace";
+import type { TraceId } from "@/lib/logging/trace-id";
 
 export type UploadedAttachment = {
   id: string;

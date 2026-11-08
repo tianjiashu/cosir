@@ -1,6 +1,6 @@
 import type { FrontendLogEntry, FrontendLogLevel } from "@/electron/shared/host-contract";
 import { desktopHost } from "@/lib/desktop-host";
-import { newTraceId, type TraceId } from "@/lib/trace";
+import { newTraceId, type TraceId } from "@/lib/logging/trace-id";
 
 type FrontendLogWindow = Window & {
   __cosirFrontendLogs?: FrontendLogEntry[];

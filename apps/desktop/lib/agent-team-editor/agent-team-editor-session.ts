@@ -3,9 +3,9 @@ import type {
   AgentTeamConfiguration, AgentTeamConfigurationDraft,
   AgentTeamNodeConfiguration, AgentTeamTransitionConfiguration,
 } from "@/lib/api/agent-teams";
-import { DEFAULT_AGENT_TEAM_STATUS_COLOR } from "@/lib/agent-team-status";
+import { DEFAULT_AGENT_TEAM_STATUS_COLOR } from "@/lib/agent-team-editor/team-status";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { createGraphEditHistory, commitGraphEdit, undoGraphEdit, redoGraphEdit, type AgentTeamGraphEditHistory } from "./history";

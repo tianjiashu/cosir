@@ -1,16 +1,16 @@
 import { createBrowserRouter, Navigate, useMatches } from "react-router-dom";
 
 import { AppLayout, useAppOutlet, type RouteHandle } from "@/components/layout/app-layout";
-import { ContextObserverPage } from "@/components/context-observer-page";
+import { ContextObserverPage } from "@/components/context-observer/context-observer-page";
 import { NewConversation } from "@/components/new-conversation/new-conversation";
 import {
   findSettingsTab,
   SYSTEM_SETTINGS_TABS,
   WORKSPACE_SETTINGS_TABS,
 } from "@/components/settings/settings-tabs";
-import { SystemConfigurationPage } from "@/components/system-configuration-page";
+import { SystemConfigurationPage } from "@/components/configuration/system-configuration-page";
 import { EmptyState } from "@/components/ui/state-panel";
-import { WorkspaceConfigurationPage } from "@/components/workspace-configuration-page";
+import { WorkspaceConfigurationPage } from "@/components/configuration/workspace-configuration-page";
 
 /**
  * 应用路由表（react-router data router）。

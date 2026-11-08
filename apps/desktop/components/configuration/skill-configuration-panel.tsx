@@ -16,7 +16,7 @@ import { Card } from "@/components/ui/card";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Switch } from "@/components/ui/switch";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
-import { StaticMarkdown } from "@/components/static-markdown";
+import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import {
   deleteSystemSkill,
   getSystemSkill,

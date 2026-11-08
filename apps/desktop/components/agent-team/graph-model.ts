@@ -3,7 +3,7 @@ import { MarkerType, type Edge, type Node, type XYPosition } from "@xyflow/react
 import type { EditorDraft as AgentTeamConfigurationDraft, EditorNode as AgentTeamNodeConfiguration, EdgeRoute } from "@/lib/agent-team-editor/model";
 import { DEFAULT_END_VIEW_ID, END_VIEW_ID_PREFIX, END_NODE_ID } from "@/lib/agent-team-editor/model";
 export {   END_NODE_ID } from "@/lib/agent-team-editor/model";
-import { findAgentTeamStatus } from "@/lib/agent-team-status";
+import { findAgentTeamStatus } from "@/lib/agent-team-editor/team-status";
 import type { NodeIdIndex } from "@/lib/agent-team-editor/node-id-index";
 
 type TeamGraphNodeData = {

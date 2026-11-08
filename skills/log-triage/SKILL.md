@@ -22,7 +22,7 @@ allowed-tools: Read,Write,Bash
 
 | 标识 | 是什么 | 产生点 | 落盘/可见位置 | 查询通道 |
 |------|--------|--------|----------------|----------|
-| **链路 trace_id**（32 位小写 hex） | 唯一能**跨前端与后端日志**串起一条请求的键 | 前端 `apps/desktop/lib/trace.ts:newTraceId()`（`crypto.getRandomValues` 128-bit）；后端缺失时由 `new_trace_id()`（`uuid4().hex`）补生成 | 后端固定 JSONL 文件日志 `backend-*.log` 的 `trace_id`；前端 `frontend-*.log` 的 `trace_id` | `query_logs.py trace <ID>` |
+| **链路 trace_id**（32 位小写 hex） | 唯一能**跨前端与后端日志**串起一条请求的键 | 前端 `apps/desktop/lib/logging/trace-id.ts:newTraceId()`（`crypto.getRandomValues` 128-bit）；后端缺失时由 `new_trace_id()`（`uuid4().hex`）补生成 | 后端固定 JSONL 文件日志 `backend-*.log` 的 `trace_id`；前端 `frontend-*.log` 的 `trace_id` | `query_logs.py trace <ID>` |
 | **run_id / task_id**（整数） | 业务事实主键：一次 Agent 执行 = 一个 run | `conversation_runs.id` / `tasks.id` | `<数据根>/.cosir/storage/app.sqlite3` | `query_app_db.py` |
 
 **链路 trace_id 的前后端同源链路（照此反查）**：

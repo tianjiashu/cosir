@@ -35,7 +35,7 @@ import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { notify } from "@/lib/notify";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 import { toolGroupsQueryOptions } from "@/lib/query/query-options";
 
 /** 新对话页的待发图片：提交时才上传，草稿里只保存 File 本身。 */

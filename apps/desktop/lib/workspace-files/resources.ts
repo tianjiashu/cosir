@@ -2,7 +2,7 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useEffect, useState } from "react";
 import { getApiBaseUrl, requestOk } from "@/lib/http/client";
 import { fileUrlPath, type FileInfo } from "@/lib/api/workspace-files";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 export function pdfResource(id: number, info: FileInfo) {

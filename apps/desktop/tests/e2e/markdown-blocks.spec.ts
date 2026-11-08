@@ -3,7 +3,7 @@ import { completedState, seedState } from "./transport-fixtures";
 import { API_ORIGIN } from "./e2e-env";
 
 /*
- * app/markdown.css 覆盖 Streamdown 的块级外观：表格无外框、按钮悬停才出现。
+ * styles/markdown.css 覆盖 Streamdown 的块级外观：表格无外框、按钮悬停才出现。
  * 表格按钮行没有 data-streamdown 标记，只能按结构定位，这里守护 Streamdown
  * 升级后结构变化导致覆盖静默失效。Mermaid 图表包装层与缩放控件同理。
  */

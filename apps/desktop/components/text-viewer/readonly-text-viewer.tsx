@@ -8,7 +8,7 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import {
   editorTheme,
   useEditorSyntaxTheme,
-} from "@/components/code-editor-theme";
+} from "@/components/code-editor/code-editor-theme";
 import type { LineRange } from "@/lib/links/resolve-link";
 import type { FindDirection, FindResult } from "@/lib/find/next-match";
 import { findHighlights, findInEditor } from "./editor-find";

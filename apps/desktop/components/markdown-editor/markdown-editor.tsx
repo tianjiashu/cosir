@@ -4,10 +4,10 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { placeholder as editorPlaceholder } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 
-import { editorTheme, useEditorSyntaxTheme } from "@/components/code-editor-theme";
+import { editorTheme, useEditorSyntaxTheme } from "@/components/code-editor/code-editor-theme";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
 import { handleMarkdownKeydown } from "@/components/markdown-editor/markdown-editor-keymap";
-import { StaticMarkdown } from "@/components/static-markdown";
+import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { ViewToggle } from "@/components/ui/view-toggle";
 
 type SourceEditorHandle = {

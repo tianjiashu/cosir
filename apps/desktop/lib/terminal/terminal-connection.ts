@@ -1,6 +1,6 @@
 import { getApiBaseUrl } from "@/lib/http/client";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { newTraceId, type TraceId } from "@/lib/trace";
+import { newTraceId, type TraceId } from "@/lib/logging/trace-id";
 
 /**
  * 每会话一条的可写终端通道（WS `terminal-v2`，契约见 apps/backend/app/tools/terminal_runtime/interaction_contract.md「交互通道」）。

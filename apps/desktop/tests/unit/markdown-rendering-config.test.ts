@@ -5,7 +5,7 @@ import { cjk } from "@streamdown/cjk";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 
-import { markdownPlugins } from "@/components/markdown-rendering-config";
+import { markdownPlugins } from "@/components/markdown/markdown-rendering-config";
 
 describe("markdown rendering plugins", () => {
   it("keeps the four supported Streamdown plugins in one stable configuration", () => {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { CosirMark } from "@/components/cosir-mark";
+import { CosirMark } from "@/components/backend/cosir-mark";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { useDecodedText } from "./use-decoded-text";
 import "./startup-screen.css";

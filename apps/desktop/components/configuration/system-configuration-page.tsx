@@ -6,7 +6,7 @@ import { AgentConfigurationPanel } from "@/components/configuration/agent-config
 import { SettingsPageLayout } from "@/components/settings/settings-page-layout";
 import { AppearanceSettingsPanel } from "@/components/settings/appearance-settings-panel";
 import { SYSTEM_SETTINGS_TABS, type SystemSettingsTabId } from "@/components/settings/settings-tabs";
-import { EnvironmentConfigurationForm } from "@/components/environment-configuration-form";
+import { EnvironmentConfigurationForm } from "@/components/configuration/environment-configuration-form";
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
 import { AgentTeamConfigurationPanel } from "@/components/agent-team/configuration-panel";
 import { MCPConfigurationPanel } from "@/components/configuration/mcp-configuration-panel";
@@ -28,7 +28,7 @@ import {
 import type { ConfigurationDocumentAdapter } from "@/components/configuration/use-configuration-document";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import type { MarkdownDocumentContract } from "@/lib/markdown-document";
+import type { MarkdownDocumentContract } from "@/lib/configuration-document";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";

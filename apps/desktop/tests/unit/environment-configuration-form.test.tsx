@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { EnvironmentFieldControl } from "@/components/environment-configuration-form";
+import { EnvironmentFieldControl } from "@/components/configuration/environment-configuration-form";
 import type { EnvironmentField } from "@/lib/api/configuration";
 
 const maskedSecret: EnvironmentField = {

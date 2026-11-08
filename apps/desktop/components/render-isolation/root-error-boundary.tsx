@@ -6,7 +6,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 
 type RootErrorBoundaryProps = {
   children: ReactNode;

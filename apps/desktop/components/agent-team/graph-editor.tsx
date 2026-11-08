@@ -51,7 +51,7 @@ import type { TeamGraphIssues } from "@/lib/agent-team-editor/use-graph-issues";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { useThemeState } from "@/lib/theme/theme-preference";
-import { newTraceId } from "@/lib/trace";
+import { newTraceId } from "@/lib/logging/trace-id";
 import { cn } from "@/lib/utils";
 
 const nodeTypes = { team: AgentTeamGraphNode, terminal: AgentTeamGraphTerminalNode, unresolved: AgentTeamGraphUnresolvedEndpoint };
