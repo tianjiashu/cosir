@@ -31,11 +31,12 @@ def _snapshot(
         return {"messages": [], "messageOffset": 0, "activity": None}
     return {
         "messages": [
-            {"id": "1", "role": "user", "parts": [], "runId": run_id, "outcome": None, "source": None}
+            {"id": "1", "role": "user", "parts": [], "turn": run_id, "inherited": False, "outcome": None, "source": None}
         ],
         "messageOffset": 0,
         "activity": {"modelActivity": None,
-            "runId": run_id,
+            "turn": None,
+            "resumable": False,
             "status": status,
             "endReason": end_reason,
             "error": None,
@@ -171,7 +172,7 @@ def test_attach_without_any_run_still_subscribes() -> None:
     [
         "/tasks/{task_id}/messages",
         "/tasks/{task_id}/queued-messages/{message_id}",
-        "/tasks/{task_id}/messages/{message_id}/rerun",
+        "/tasks/{task_id}/messages/{message_id}/withdraw",
         "/tasks/{task_id}/resume",
         "/tasks/{task_id}/tool-calls/{tool_call_id}/decision",
         "/tasks/{task_id}/cancel",

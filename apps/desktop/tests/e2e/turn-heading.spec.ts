@@ -52,17 +52,17 @@ test("completed prose has no heading, divider or occupied space for any duration
   }
 });
 
-// 目的：继承历史没有本地 Run、无从定性；潜在缺陷：继承的纯文字回复顶着「查看过程」，点开合把正文藏起来。
+// 目的：继承来的回合没有本地运行、无从定性；潜在缺陷：继承的纯文字回复顶着「查看过程」，点开合把正文藏起来。
 test("inherited prose has no process heading", async ({ page, request }) => {
   const inheritedReply = "继承来的回复正文。";
   await seedState(request, 42, transportState({
     messages: [
-      { ...userMessage("u0", 1, "之前的问题"), runId: null },
-      { ...assistantMessage("a0", 1, [text(inheritedReply)]), runId: null },
-      userMessage("u", 1, "继续"),
-      assistantMessage("a", 1, [text(reply, true)], outcome("completed", { durationMs: 3000 })),
+      { ...userMessage("u0", 1, "之前的问题"), inherited: true },
+      { ...assistantMessage("assistant-turn-1", 1, [text(inheritedReply)]), inherited: true },
+      userMessage("u", 2, "继续"),
+      assistantMessage("assistant-turn-2", 2, [text(reply, true)], outcome("completed", { durationMs: 3000 })),
     ],
-    activity: activity(1, "completed"),
+    activity: activity(2, "completed"),
   }));
   await page.goto("/tasks/42");
   const inherited = page.locator('[data-slot="turn"][data-inherited="true"]');

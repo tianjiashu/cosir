@@ -103,7 +103,7 @@ async def test_tool_without_decision_model_takes_no_payload(harness) -> None:
 
 
 async def test_call_no_longer_awaiting_conflicts(harness) -> None:
-    """已决定、已被编辑重跑移出上下文或根本不存在的调用，都以占位行不在等待来判定。"""
+    """已决定、已被撤回移出上下文或根本不存在的调用，都以占位行不在等待来判定。"""
     harness.awaiting.clear()
 
     with pytest.raises(SessionConflictError) as caught:

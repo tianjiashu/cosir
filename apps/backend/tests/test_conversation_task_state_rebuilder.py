@@ -68,7 +68,8 @@ def test_rebuild_activity_uses_latest_runs_frozen_context_window(window: int | N
     state = ConversationTaskStateRebuilder.rebuild(task, runs, [])
     validate_snapshot(state)
     assert state["activity"] is not None
-    assert state["activity"]["runId"] == 2
+    # 当前 Run 还没写过行：没有可见回合，completed 也不可恢复。
+    assert (state["activity"]["turn"], state["activity"]["resumable"]) == (None, False)
     assert state["activity"]["contextWindowTotal"] == window
 
 
@@ -111,16 +112,18 @@ def test_rebuild_writes_outcome_only_on_terminal_runs_last_assistant_message() -
             message={"role": "assistant", "content": text},
             include_in_context=True,
             sequence=sequence,
-            turn=1,
+            turn=turn,
         )
-        for sequence, run_id, text in ((1, 1, "第一段"), (2, 1, "第二段"), (3, 2, "进行中"))
+        for sequence, run_id, turn, text in (
+            (1, 1, 1, "第一段"), (2, 1, 1, "第二段"), (3, 2, 2, "进行中")
+        )
     ]
 
     state = ConversationTaskStateRebuilder.rebuild(task, runs, rows)
 
     validate_snapshot(state)
-    run_one = [m for m in state["messages"] if m["runId"] == 1]
-    run_two = [m for m in state["messages"] if m["runId"] == 2]
+    run_one = [m for m in state["messages"] if m["turn"] == 1]
+    run_two = [m for m in state["messages"] if m["turn"] == 2]
     assert run_one[-1]["outcome"] is not None
     assert run_one[-1]["outcome"]["status"] == "completed"
     assert run_one[-1]["outcome"]["endReason"] == "final_answer"
@@ -130,6 +133,7 @@ def test_rebuild_writes_outcome_only_on_terminal_runs_last_assistant_message() -
     assert all(m["outcome"] is None for m in run_two)
     assert state["activity"] is not None
     assert state["activity"]["status"] == "running"
+    assert state["activity"]["turn"] == 2
 
 
 def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
@@ -137,10 +141,11 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
         "title": "task",
         "messages": [
             {
-                "id": "assistant-run-1",
+                "id": "assistant-turn-1",
                 "role": "assistant",
                 "parts": [],
-                "runId": 1,
+                "turn": 1,
+                "inherited": False,
                 "outcome": {
                     "status": "running",
                     "endReason": None,
@@ -172,7 +177,8 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
                 "id": "1",
                 "role": "user",
                 "parts": [],
-                "runId": 1,
+                "turn": 1,
+                "inherited": False,
                 "outcome": {
                     "status": "completed",
                     "endReason": None,
@@ -371,6 +377,7 @@ def test_rebuild_restores_ordinary_file_from_context_input() -> None:
             "file": "cosir-local-file:file-1",
             "name": "notes.md",
             "contentType": "text/markdown",
+            "path": "C:/workspace/notes.md",
         },
     ]
     validate_snapshot(state)
@@ -475,11 +482,12 @@ def test_live_and_rebuilt_calls_share_definition_presentation(name, expected):
     )
     state = ConversationTaskStateRebuilder.rebuild(task, [run], [], catalog)
     mutations = plan_tool_call_created(
-        ToolCallCreatedEvent(task_id=7, run_id=1, tool_call_id="call", tool_name=name),
+        ToolCallCreatedEvent(task_id=7, run_id=1, turn=1, tool_call_id="call", tool_name=name),
         state,
         catalog,
     )
-    assert mutations[0].value["parts"][0]["presentation"] == expected
+    created = next(m for m in mutations if m.path[0] == "messages")
+    assert created.value["parts"][0]["presentation"] == expected
     row = ConversationTaskContextRecord(
         task_id=7,
         run_id=1,

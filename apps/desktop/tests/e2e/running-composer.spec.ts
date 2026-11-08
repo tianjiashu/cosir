@@ -22,13 +22,13 @@ function activeState(queued: TransportState["queued_messages"] = []): TransportS
   return {
     title: "测试对话",
     messages: [
-      { id: "u-1", role: "user", runId: 1, source: null, outcome: null,
+      { id: "u-1", role: "user", turn: 1, inherited: false, source: null, outcome: null,
         parts: [{ type: "text", text: "第一个问题", status: "completed" }] },
-      { id: "assistant-u-1", role: "assistant", runId: 1, source: null, outcome: null,
+      { id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, source: null, outcome: null,
         parts: [{ type: "text", text: "正在处理", status: "running" }] },
     ],
     messageOffset: 0, activity: {modelActivity: null,
-      runId: 1, status: "suspended", endReason: null, error: null, usage: null,
+      turn: 1, resumable: false, status: "suspended", endReason: null, error: null, usage: null,
       contextWindowTotal: null, launch: RUN_LAUNCH, startedAt: "2026-10-27T00:00:00.000Z",
     },
     queued_messages: queued,
@@ -125,7 +125,6 @@ test("编辑排队消息：撤回这一条，正文放回输入框并排在已�
   await expect(queue).toHaveCount(0);
   // 编辑器按段落渲染，textContent 不含段间换行。
   await expect(input).toHaveText(/排队中的消息\s*还没发的草稿/);
-  await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveCount(0);
 });
 
 test("迟到的发送失败并入当前草稿，不覆盖请求期间的新输入", async ({ page, request }) => {

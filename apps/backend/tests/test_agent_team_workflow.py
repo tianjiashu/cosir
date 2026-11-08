@@ -225,7 +225,7 @@ def test_team_run_view_is_typed_and_does_not_accept_runtime_state() -> None:
             "node_id": "review", "name": "Review", "agent_id": "reviewer",
             "role": "审查", "goal_summary": "检查改动", "status": "running",
             "visits": [{
-                "visit_number": 1, "conversation_run_id": 10, "status": "completed",
+                "visit_number": 1, "status": "completed",
                 "agents": [{
                     "task_id": 9, "title": "Review", "agent_id": "reviewer",
                     "role": "审查", "status": "completed",

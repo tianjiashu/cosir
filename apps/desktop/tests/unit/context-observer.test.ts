@@ -16,7 +16,8 @@ const row = (
 ): ContextMessage => ({
   id: sequence,
   task_id: 42,
-  run_id: 21,
+  turn: 1,
+  inherited: false,
   sequence,
   include_in_context: true,
   created_at: "2026-10-17T01:00:00Z",
@@ -31,27 +32,14 @@ describe("上下文观测读取投影", () => {
     expect(roleLabel("human")).toBe("human");
     expect(filterMessages(indexMessages(rows), { ...INITIAL_FILTERS, role: "user" }).map(item => item.sequence)).toEqual([1]);
   });
-  it("工具关联限定 Run，缺少结果不推断状态", () => {
-    const call = row(2, { tool_calls: [{ id: "same", name: "read_file" }] });
-    const result = row(3, { role: "tool", tool_call_id: "same" });
-    const unrelated = row(4, {
-      role: "tool",
-      tool_call_id: "same",
-      run_id: 22,
-    });
-    expect(relatedMessages(call, [call, result, unrelated])).toEqual([result]);
-    expect(relatedMessages(result, [call, result, unrelated])).toEqual([call]);
+  it("工具结果按调用 id 关联，可跨回合，缺少结果不推断状态", () => {
+    const call = row(2, { tool_calls: [{ id: "c1", name: "read_file" }] });
+    const result = row(3, { role: "tool", tool_call_id: "c1" });
+    const later = row(5, { role: "tool", tool_call_id: "c1", turn: 2 });
+    const unrelated = row(4, { role: "tool", tool_call_id: "c2" });
+    expect(relatedMessages(call, [call, result, unrelated, later])).toEqual([result, later]);
+    expect(relatedMessages(later, [call, result, unrelated, later])).toEqual([call]);
     expect(relatedMessages(result, [result])).toEqual([]);
-  });
-  it("继承上下文中同号工具调用按出现位置关联", () => {
-    const first = row(1, { run_id: null, tool_calls: [{ id: "same", name: "read_file" }] });
-    const firstResult = row(2, { run_id: null, role: "tool", tool_call_id: "same" });
-    const second = row(3, { run_id: null, tool_calls: [{ id: "same", name: "read_file" }] });
-    const secondResult = row(4, { run_id: null, role: "tool", tool_call_id: "same" });
-    const rows = [secondResult, first, second, firstResult];
-    expect(relatedMessages(first, rows)).toEqual([firstResult]);
-    expect(relatedMessages(second, rows)).toEqual([secondResult]);
-    expect(relatedMessages(secondResult, rows)).toEqual([second]);
   });
   it("搜索联合角色与纳入筛选，相同时间按序号稳定排序", () => {
     const rows = [
@@ -90,7 +78,7 @@ describe("上下文观测读取投影", () => {
       ),
     ).toBe("查看图片 [image_url]");
   });
-  it("缓存变化不跨 Run 比较，缺少明细不当作零命中率", () => {
+  it("缓存变化只比较本地记录，缺少明细不当作零命中率", () => {
     const usage = (hit: number) => ({
       input_tokens: 100,
       input_token_details: { cache_read: hit },
@@ -98,11 +86,10 @@ describe("上下文观测读取投影", () => {
     expect([
       ...cacheChanges([
         row(1, { usage_metadata: usage(90) }),
-        row(2, { run_id: 22, usage_metadata: usage(10) }),
+        row(2, { inherited: true, usage_metadata: usage(10) }),
         row(3),
-        row(4, { usage_metadata: usage(80) }),
-        row(5, { run_id: null, usage_metadata: usage(90) }),
-        row(6, { run_id: null, usage_metadata: usage(10) }),
+        row(4, { turn: 2, usage_metadata: usage(80) }),
+        row(5, { inherited: true, usage_metadata: usage(10) }),
       ]),
     ]).toEqual([[4, -10]]);
   });

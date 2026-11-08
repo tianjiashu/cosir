@@ -21,6 +21,7 @@ def loop(monkeypatch):
     calls = []
     context = SimpleNamespace(
         begin_run=lambda *args: None,
+        latest_notice=lambda _kind: None,
         load_message=lambda: [
             {"role": "user", "content": "问题"},
             {"role": "assistant", "content": "自然回答"},

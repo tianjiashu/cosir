@@ -31,7 +31,7 @@ def test_nested_tool_parts_serialize_through_actual_routes(presentation):
         {
             "id": "assistant-1",
             "role": "assistant",
-            "runId": 1,
+            "turn": 1, "inherited": False,
             "outcome": None,
             "source": None,
             "parts": [

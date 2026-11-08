@@ -6,8 +6,8 @@ vi.mock("@/lib/http/client", () => ({ postJson, requestJson: vi.fn() }));
 import { forkTask } from "@/lib/api/workspaces";
 
 describe("forkTask（E3）", () => {
-  it.each(["assistant-7", "assistant-run-8"])("按回复分叉：请求体只带回复 id %s", async (replyMessageId) => {
-    await forkTask(42, replyMessageId);
-    expect(postJson).toHaveBeenLastCalledWith("/tasks/42/fork", { replyMessageId });
+  it("按回复分叉：请求体只带回复 id", async () => {
+    await forkTask(42, "assistant-turn-9");
+    expect(postJson).toHaveBeenLastCalledWith("/tasks/42/fork", { replyMessageId: "assistant-turn-9" });
   });
 });

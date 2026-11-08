@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models.task_extra import TaskExtra
+from app.assistant_transport.service.user_input_service import UserInputService
 from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
 from app.core.workflow.conversation_run_ledger import (
@@ -25,11 +25,11 @@ from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import ToolMessageMetadata
+from app.models.task_extra import TaskExtra
 from app.models.task_record import TaskRecord
 from app.service.conversation_run.conversation_task_context_service import (
     ConversationTaskContextService,
 )
-from app.assistant_transport.service.user_input_service import UserInputService
 from app.service.recover_service import RecoverService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
@@ -254,35 +254,6 @@ def test_run_service_accepts_directory_as_one_ordinary_attachment(monkeypatch) -
             "path": str(attachment_path),
         }
     ]
-
-
-def test_edit_preparation_reuses_target_message_attachment(monkeypatch) -> None:
-    attachment_path = Path(__file__)
-    previous = UserInputPresentation(
-        display_text="请阅读 [[cosir-file:readme]]",
-        attachments=[
-            {
-                "id": "readme",
-                "name": "README.md",
-                "content_type": "text/markdown",
-                "path": str(attachment_path),
-            }
-        ],
-    )
-    service = _input_service(monkeypatch, supports_reasoning_effort=True)
-    command = ConversationRunCommand(
-        display_text="请再次阅读 [[cosir-file:readme]]",
-        attachments=[
-            ConversationRunAttachmentInput(
-                id="readme",
-                name="README.md",
-                content_type="text/markdown",
-            )
-        ],
-    )
-    prepared = service.prepare(7, command, 3, None, reuse=previous).body
-    assert prepared.input_text == f"请再次阅读 {attachment_path}"
-    assert prepared.presentation.attachments[0]["path"] == str(attachment_path)
 
 
 def test_prepared_text_does_not_rescan_attachment_paths(monkeypatch) -> None:

@@ -151,7 +151,7 @@ async def test_prepare_input_skips_when_already_requested_or_no_user_input(monke
     assert "title_requested" not in await _prepare(rc, context, requested)
 
     rc = _titled_rc()
-    rc.mailbox.notify(NoticeBody(content="n", notice_kind="probe"))
+    rc.mailbox.notify(NoticeBody(content="n", notice_kind="model_continuation"))
     fresh = ReactExecutionState(step_count=1, step_limit=10)
     assert "title_requested" not in await _prepare(rc, context, fresh)
 

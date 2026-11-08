@@ -8,17 +8,17 @@ const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups:
 /** 两轮回复：第一轮已结束（带结局），第二轮处于 `status`。 */
 const snapshot = (status: "completed" | "running" | "suspended"): TransportState => {
   const ended = (runStatus: string) => runStatus === "completed";
-  const turn = (runId: number, runStatus: string) => [
-    { id: `${runId}`, role: "user" as const, runId, source: null, outcome: null,
-      parts: [{ type: "text" as const, text: `问题 ${runId}`, status: "completed" as const }] },
-    { id: `assistant-${runId}`, role: "assistant" as const, runId, source: null,
-      parts: [{ type: "text" as const, text: `回答 ${runId}`, status: ended(runStatus) ? "completed" as const : "running" as const }],
+  const exchange = (turn: number, runStatus: string) => [
+    { id: `${turn}`, role: "user" as const, turn, inherited: false, source: null, outcome: null,
+      parts: [{ type: "text" as const, text: `问题 ${turn}`, status: "completed" as const }] },
+    { id: `assistant-turn-${turn}`, role: "assistant" as const, turn, inherited: false, source: null,
+      parts: [{ type: "text" as const, text: `回答 ${turn}`, status: ended(runStatus) ? "completed" as const : "running" as const }],
       outcome: ended(runStatus) ? { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 } : null },
   ];
   return {
     title: "测试对话",
-    messages: [...turn(1, "completed"), ...turn(2, status)],
-    messageOffset: 0, activity: {modelActivity: null,  runId: 2, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
+    messages: [...exchange(1, "completed"), ...exchange(2, status)],
+    messageOffset: 0, activity: {modelActivity: null, turn: 2, resumable: false, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 };
@@ -51,7 +51,7 @@ for (const status of ["running", "suspended"] as const) {
     const buttons = page.getByRole("button", { name: "从这里分叉", exact: true });
     await expect(buttons).toHaveCount(1);
     await buttons.click();
-    await expect.poll(() => calls).toEqual([{ replyMessageId: "assistant-1" }]);
+    await expect.poll(() => calls).toEqual([{ replyMessageId: "assistant-turn-1" }]);
     await expect(page.getByText("工作区正在处理其他操作，请稍后重试。", { exact: true })).toBeVisible();
   });
 }
@@ -66,7 +66,7 @@ test("最新一条回复结束后可以分叉，用户消息上没有入口", as
   await seedView(page, request);
   await expect(page.locator('[data-role="user"]').getByRole("button", { name: "从这里分叉" })).toHaveCount(0);
   await page.getByRole("button", { name: "从这里分叉", exact: true }).last().click();
-  await expect.poll(() => calls).toEqual([{ replyMessageId: "assistant-2" }]);
+  await expect.poll(() => calls).toEqual([{ replyMessageId: "assistant-turn-2" }]);
   await expect(page).toHaveURL(/\/tasks\/44$/);
 });
 

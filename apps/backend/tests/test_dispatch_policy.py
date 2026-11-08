@@ -51,7 +51,7 @@ def _user(
 
 
 def _notice(message_id: int) -> TaskMessage:
-    return TaskMessage.of(NoticeBody(content="n", notice_kind="k"), message_id=message_id)
+    return TaskMessage.of(NoticeBody(content="n", notice_kind="terminal_session_ended"), message_id=message_id)
 
 
 def _decision(message_id: int) -> TaskMessage:

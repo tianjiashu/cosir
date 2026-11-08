@@ -278,7 +278,8 @@ def normalized(state: dict[str, Any]) -> dict[str, Any]:
             {
                 "id": message["id"],
                 "role": message["role"],
-                "runId": message["runId"],
+                "turn": message["turn"],
+                "inherited": message["inherited"],
                 "outcome": outcome,
                 "parts": [_part(part) for part in message["parts"]],
             }

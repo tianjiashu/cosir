@@ -77,7 +77,7 @@ function draftImage(id: string) {
 }
 
 describe("edit draft composer write", () => {
-  it("将历史普通文件登记为元数据并清除 AUI lift 副本", async () => {
+  it("清除 AUI lift 副本，普通文件只以正文 token 存在（路径登记归放回输入框的入口）", async () => {
     // assistant-ui 的 edit core 会按 message.content lift 出副本：id 不同但 locator 相同。
     const liftCopy: FakeAttachment = {
       id: "lift-copy",
@@ -110,7 +110,6 @@ describe("edit draft composer write", () => {
     });
     expect(stub.addedIds).toEqual([]);
     expect(stub.removedIds).toEqual(["stale", "lift-copy"]);
-    expect(getLocalAttachmentById("keep")).toMatchObject({ name: "keep.md" });
     expect(stub.text()).toBe("[[cosir-file:keep]]文字");
   });
 

@@ -11,11 +11,11 @@ const parentState: TransportState = {
   title: "主任务",
   messages: [
     {
-      id: "1", role: "user", runId: 1, outcome: null, source: null,
+      id: "1", role: "user", turn: 1, inherited: false, outcome: null, source: null,
       parts: [{ type: "text", text: "前后端一起改", status: "completed" }],
     },
     {
-      id: "assistant-1", role: "assistant", runId: 1, source: null,
+      id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, source: null,
       outcome: { status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 },
       parts: [{presentation: "standalone",
         type: "tool-call", awaitingUser: false, toolCallId: "call-fork", toolName: "fork_task", status: "completed",
@@ -26,7 +26,7 @@ const parentState: TransportState = {
     },
   ],
   messageOffset: 0,
-  activity: {modelActivity: null,  runId: 1, status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
+  activity: {modelActivity: null, turn: 1, resumable: false, status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
   terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
 };
 
@@ -69,8 +69,8 @@ test("手动分叉的历史可读、截图可查看，但不操作来源任务",
     ...parentState, activity: null,
     fork: { sourceTaskId: 991, sourceTitle: "已删除的来源", taskType: "user_fork", initialLaunch: LAUNCH },
     messages: [
-      { ...parentState.messages[0], runId: null },
-      { ...parentState.messages[1], runId: null,
+      { ...parentState.messages[0], inherited: true },
+      { ...parentState.messages[1], inherited: true,
         outcome: null,
         parts: [
           { type: "tool-call", presentation: "standalone", toolCallId: "history-8:child", toolName: "fork_task", status: "pending", awaitingUser: false, child_task_id: 991, args: {}, display_data: { kind: "fork-task-result", title: "来源子任务", child_task_id: 991 } },
@@ -80,12 +80,12 @@ test("手动分叉的历史可读、截图可查看，但不操作来源任务",
   });
   await page.goto("/tasks/9");
   await expect(page.locator('[data-slot="turn"][data-inherited="true"]')).toBeVisible();
-  await expect(page.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "撤回" })).toHaveCount(0);
   await page.locator('[data-slot="activity-head"]').click();
   await page.getByRole("button", { name: /查看已保存网页/ }).click();
   await expect(page.getByRole("img", { name: "网页截图", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /在浏览器面板打开|打开分叉对话|停止子任务|继续运行/ })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "查看继承上下文" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "在上下文观测中查看本回合" })).toBeVisible();
   expect(sourceRequests).toEqual([]);
 });
 
@@ -93,12 +93,12 @@ test("继承历史共用文件、终端和错误展示，展开状态跨虚拟�
   const sourceRequests: string[] = [];
   page.on("request", req => { if (/\/tasks\/991\b|\/agent-team\/runs\/992\b/.test(req.url())) sourceRequests.push(req.url()); });
   const history: TransportState["messages"] = Array.from({ length: 100 }, (_, index) => ({
-    id: `history-${index}`, role: "assistant", runId: null, outcome: null, source: null,
+    id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: true, outcome: null, source: null,
     parts: [{ type: "text", status: "completed", text: `历史说明 ${index}。${"保留背景。".repeat(30)}` }],
   }));
   await seedState(request, 9, {
     ...parentState, activity: null,
-    messages: [...history, { id: "review-history", role: "assistant", runId: null, outcome: null, source: null, parts: [
+    messages: [...history, { id: "assistant-turn-101", role: "assistant", turn: 101, inherited: true, outcome: null, source: null, parts: [
       { type: "text", text: "继承展示验收", status: "completed" },
       { type: "tool-call", presentation: "activity", toolCallId: "context-file", toolName: "read_file", status: "completed", awaitingUser: false,
         intent: "读取验收文件", args: { path: "src/review.py" }, display_data: { kind: "read-file-meta", path: "src/review.py", file_size: 4096, line_range: { start: 12, end: 24 }, truncated: true } },

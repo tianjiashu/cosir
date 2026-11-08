@@ -232,3 +232,54 @@ async def test_a_cancelled_run_keeps_its_pending_decision(backend_env, tmp_path,
         env.assert_parity()
     finally:
         await env.close()
+
+
+async def test_resuming_a_failed_run_keeps_live_and_cold_in_step(backend_env, tmp_path, monkeypatch):
+    """恢复清空结局、续写同一回合的回复：刷新前后都只有这一条回复，可恢复判定一致。"""
+    env = LiveColdEnv(
+        tmp_path, monkeypatch, [RuntimeError("boom"), ([{"content": "恢复后"}], "stop")]
+    )
+    try:
+        env.send()
+        await env.until("failed")
+        assert env.live()["activity"]["resumable"] is True
+        env.assert_parity()
+
+        await spaces.get(env.task.id).actor.resume()
+        await env.until("completed")
+        state = env.live()
+        replies = [m for m in state["messages"] if m["role"] == "assistant"]
+        assert [m["outcome"]["status"] for m in replies] == ["completed"]
+        assert state["activity"]["resumable"] is False
+        env.assert_parity()
+    finally:
+        await env.close()
+
+
+async def test_inputs_merged_together_each_keep_their_reply(backend_env, tmp_path, monkeypatch):
+    """挂起的 Run 被两条立即发送一起唤醒：两个回合各自有回复（前一条为空），结局落在后一条上。"""
+    env = LiveColdEnv(
+        tmp_path,
+        monkeypatch,
+        [
+            ([{"tool_calls": [tool_call("h1", "probe_hitl", {"intent": "批准"})]}], "tool_calls"),
+            ([{"content": "结论"}], "stop"),
+        ],
+    )
+    try:
+        env.send()
+        assert (await env.parked()).status == "suspended"
+        env.send("一", delivery="immediate")
+        env.send("二", delivery="immediate")
+        await env.until("completed")
+        state = env.live()
+        roles = [(m["role"], bool(m["parts"]), m["outcome"] is not None) for m in state["messages"]]
+        assert roles[-4:] == [
+            ("user", True, False),
+            ("assistant", False, False),
+            ("user", True, False),
+            ("assistant", True, True),
+        ]
+        env.assert_parity()
+    finally:
+        await env.close()

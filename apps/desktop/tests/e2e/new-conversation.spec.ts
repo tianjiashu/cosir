@@ -3,8 +3,8 @@ import { expect, test } from "@playwright/test";
 import { frontendLogs, openedSubscriptionCount } from "./frontend-logs";
 import { API_ORIGIN, WEB_ORIGIN } from "./e2e-env";
 
-/** Task 级业务命令端点：发送、编辑、恢复与用户决定（attach / state 不算命令）。 */
-const TASK_COMMAND_PATH = /\/tasks\/\d+\/(?:messages(?:\/[^/]+\/rerun)?|resume|tool-calls\/[^/]+\/decision)$/;
+/** Task 级业务命令端点：发送、撤回、恢复与用户决定（attach / state 不算命令）。 */
+const TASK_COMMAND_PATH = /\/tasks\/\d+\/(?:messages(?:\/[^/]+\/withdraw)?|resume|tool-calls\/[^/]+\/decision)$/;
 function isTaskCommand(url: string): boolean {
   return TASK_COMMAND_PATH.test(new URL(url).pathname);
 }
@@ -127,8 +127,8 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
   await secondResponsePromise;
   const streamLogUrl = `${API_ORIGIN}/__test__/last-stream`;
-  // 订阅不随 Run 结束关闭：以第二轮回复写入结局作为本轮输出结束。
-  await expect.poll(async () => (await request.get(streamLogUrl)).text()).toContain('"runId":2,"outcome":{"status":"completed"');
+  // 订阅不随 Run 结束关闭：以第二个回合的回复写入结局作为本次输出结束。
+  await expect.poll(async () => (await request.get(streamLogUrl)).text()).toContain('"turn":2,"inherited":false,"outcome":{"status":"completed"');
   const streamBody = await (await request.get(streamLogUrl)).text();
   await expect.poll(() => assistantRequests.length).toBe(2);
   expect(assistantRequests[1]?.status).toBe(200);
@@ -305,10 +305,11 @@ test("不可恢复时继续运行被同步拒绝，提示错误并复位按钮",
   await page.getByRole("button", { name: "停止" }).click();
   await expect(page.getByRole("button", { name: "继续运行" })).toBeVisible();
 
-  // 让 Run 不再是用户取消：模拟后端判定不可恢复，恢复命令以 409 RUN_NOT_RESUMABLE 同步拒绝。
-  const state = await (await request.get(`${API_ORIGIN}/tasks/105/assistant/state`)).json();
-  state.activity.endReason = "max_steps_reached";
-  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId: 105, state } });
+  // 快照仍说可恢复、后端却已判定不可恢复（如别处刚撤回了最后一个回合）：恢复命令以 409 RUN_NOT_RESUMABLE 同步拒绝。
+  await page.route(`${API_ORIGIN}/tasks/105/resume`, route => route.fulfill({
+    status: 409, contentType: "application/json",
+    body: JSON.stringify({ detail: { error: { code: "RUN_NOT_RESUMABLE", message: "当前运行不可恢复", retryable: true } } }),
+  }));
   await page.getByRole("button", { name: "继续运行" }).click();
   await expect(page.getByText("当前运行不可恢复", { exact: true })).toBeVisible();
   // 被拒即复位按钮，不等 15 秒的无响应超时（expect 默认 5 秒内必须完成）。
@@ -357,7 +358,7 @@ test("取消后订阅断开时，前端有限重连并解除停止状态", async
   await expect(page.getByRole("button", { name: "正在停止" })).toHaveCount(0);
 });
 
-test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑", async ({ page, request }) => {
+test("撤回入口只给最新用户消息：撤回后内容放回输入框，改完照常发送", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 103, title: "任务103" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
@@ -378,13 +379,12 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
     const nextRequestCount = assistantRequests.length + 1;
     await page.getByLabel("消息输入").fill(text);
     await page.getByRole("button", { name: "发送", exact: true }).click();
-    await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
+    await expect(page.getByText("streaming response", { exact: true }).last()).toBeVisible();
     await expect.poll(() => assistantRequests.length).toBe(nextRequestCount);
     await expect(page.getByRole("button", { name: "发送", exact: true })).toBeVisible();
   };
   await send("first");
   await send("second");
-  await expect.poll(() => assistantRequests.length).toBe(2);
 
   const userMessages = page.locator('[data-role="user"]');
   const followingAssistant = page.locator('[data-role="assistant"]').first();
@@ -392,38 +392,35 @@ test("编辑入口只允许最新用户消息，并提交 sourceId 触发重跑"
   await userMessages.nth(0).scrollIntoViewIfNeeded();
   const followingAssistantBeforeHover = await followingAssistant.boundingBox();
   await userMessages.nth(0).hover();
-  await expect(userMessages.nth(0).getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
+  await expect(userMessages.nth(0).getByRole("button", { name: "撤回" })).toHaveCount(0);
   await expect(userMessages.nth(0).getByRole("button", { name: "复制" })).toBeVisible();
   const followingAssistantAfterFirstHover = await followingAssistant.boundingBox();
   expect(followingAssistantBeforeHover).not.toBeNull();
-  expect(followingAssistantAfterFirstHover).not.toBeNull();
   expect(followingAssistantAfterFirstHover?.y).toBe(followingAssistantBeforeHover?.y);
   await userMessages.last().hover();
-  const editButton = userMessages.last().getByRole("button", { name: "编辑并重跑" });
-  await expect(editButton).toBeVisible();
-  await expect(userMessages.last().getByRole("button", { name: "复制" })).toBeVisible();
-  await editButton.click();
-
-  const editInput = page.getByRole("textbox", { name: "编辑消息" });
-  await expect(editInput).toHaveText("second");
-  await editInput.fill("second-edited");
-  const rerunResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/messages/user-2/rerun") && response.request().method() === "POST"
+  const withdrawButton = userMessages.last().getByRole("button", { name: "撤回" });
+  await expect(withdrawButton).toBeVisible();
+  const withdrawResponse = page.waitForResponse((response) => (
+    response.url().endsWith("/tasks/103/messages/user-2/withdraw") && response.request().method() === "POST"
   ));
-  await page.getByRole("button", { name: "重跑" }).click();
-  await expect((await rerunResponse).status()).toBe(200);
-  await expect(page.getByText("second-edited", { exact: true })).toBeVisible();
-  await expect.poll(() => assistantRequests.length).toBe(3);
+  await withdrawButton.click();
+  await expect((await withdrawResponse).status()).toBe(200);
 
-  // 编辑按消息寻址：目标在路径里，请求体不携带 runId 或投递方式。
-  expect(assistantRequests[2]?.url).toMatch(/\/tasks\/103\/messages\/user-2\/rerun$/);
-  expect(assistantRequests[2]?.body).toMatchObject({ message: { parts: [{ type: "text", text: "second-edited" }] } });
-  expect(assistantRequests[2]?.body.runId).toBeUndefined();
-  expect(assistantRequests[2]?.body.delivery).toBeUndefined();
-  expect(assistantRequests[2]?.status).toBe(200);
+  // 撤回移出这一回合，内容回到主输入框；撤回本身不开新 Run，也不带请求体。
+  await expect(userMessages).toHaveCount(1);
+  const composer = page.getByLabel("消息输入");
+  await expect(composer).toHaveText("second");
+  expect(assistantRequests[2]?.body).toEqual({});
+
+  await composer.fill("second-edited");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(page.getByText("second-edited", { exact: true })).toBeVisible();
+  await expect.poll(() => assistantRequests.length).toBe(4);
+  expect(assistantRequests[3]?.url).toMatch(/\/tasks\/103\/messages$/);
+  expect(assistantRequests[3]?.body).toMatchObject({ message: { parts: [{ type: "text", text: "second-edited" }] } });
 });
 
-test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async ({ page, request }) => {
+test("撤回被拒时消息保留、输入框不动", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 104, title: "任务104" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
@@ -434,42 +431,24 @@ test("编辑重跑失败时恢复消息级编辑，不覆盖顶部草稿", async
   });
 
   await page.goto("/tasks/104");
-  const send = async (text: string) => {
-    await page.getByLabel("消息输入").fill(text);
-    await page.getByRole("button", { name: "发送", exact: true }).click();
-    await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "发送", exact: true })).toBeVisible();
-  };
-  await send("first");
-  await send("second");
+  await page.getByLabel("消息输入").fill("withdraw-failure");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "发送", exact: true })).toBeVisible();
 
-  const topComposer = page.getByLabel("消息输入");
-  await topComposer.fill("keep draft");
+  const composer = page.getByLabel("消息输入");
+  await composer.fill("keep draft");
   const latestUser = page.locator('[data-role="user"]').last();
   await latestUser.hover();
-  await latestUser.getByRole("button", { name: "编辑并重跑" }).click();
-  const editInput = page.getByRole("textbox", { name: "编辑消息" });
-  await editInput.fill("edit-failure");
-  const failureRequest = page.waitForRequest((request) => (
-    request.url().endsWith("/tasks/104/messages/user-2/rerun") && request.method() === "POST"
+  const failure = page.waitForResponse((response) => (
+    response.url().endsWith("/tasks/104/messages/user-1/withdraw") && response.request().method() === "POST"
   ));
-  const failureResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/tasks/104/messages/user-2/rerun") && response.request().method() === "POST"
-  ));
-  await page.getByRole("button", { name: "重跑" }).click();
-  const failedRequestBody = (await failureRequest).postDataJSON() as {
-    message?: { parts?: Array<{ type?: string; text?: string }> };
-  };
-  expect(failedRequestBody.message?.parts?.find((part) => part.type === "text")?.text).toBe("edit-failure");
-  await expect((await failureResponse).status()).toBe(400);
+  await latestUser.getByRole("button", { name: "撤回" }).click();
+  await expect((await failure).status()).toBe(409);
 
-  await expect(page.getByRole("dialog")).toContainText("编辑重跑被测试后端拒绝");
-  await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
-  await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveText("edit-failure");
-  await expect(topComposer).toHaveText("keep draft");
-  await page.getByRole("textbox", { name: "编辑消息" }).fill("继续编辑恢复的内容");
-  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-  await expect(page.getByRole("textbox", { name: "编辑消息" })).toHaveText("继续编辑恢复的内容");
+  await expect(page.getByText("撤回失败")).toBeVisible();
+  await expect(page.locator('[data-role="user"]')).toHaveCount(1);
+  await expect(composer).toHaveText("keep draft");
 });
 
 test("attach 被拒后进入有限重连，订阅恢复后继续接收输出", async ({ page, request }) => {

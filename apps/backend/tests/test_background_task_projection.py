@@ -50,7 +50,7 @@ def _part(call_id: str, status: str, work: BackgroundWork | None = None) -> dict
 
 
 def _messages(*parts: dict[str, object]) -> list[dict[str, object]]:
-    return [{"id": "m1", "role": "assistant", "parts": list(parts), "runId": 1, "outcome": None, "source": None}]
+    return [{"id": "m1", "role": "assistant", "parts": list(parts), "turn": 1, "inherited": False, "outcome": None, "source": None}]
 
 
 def test_live_entries_win_and_unsettled_placeholders_are_settling_not_dropped():

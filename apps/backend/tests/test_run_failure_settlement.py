@@ -108,8 +108,9 @@ def _running_state() -> ConversationStateSnapshot:
 
     state = empty_snapshot()
     state["activity"] = ConversationStateActivity(modelActivity=None,
-        runId=1,
         status="running",
+        turn=None,
+        resumable=False,
         endReason=None,
         error=None,
         usage=None,
@@ -178,7 +179,7 @@ def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) 
 
 def _drive_run(run_id: int) -> Awaitable[None]:
     """驱动一条 Run（本次执行的事实由 ``RuntimeContext.for_run`` 只凭 Run 装配）。"""
-    return run_driver.RunDriver().drive(SimpleNamespace(id=run_id, task_id=3))
+    return run_driver.RunDriver().drive(SimpleNamespace(id=run_id, task_id=3), None)
 
 
 def _make_runtime(

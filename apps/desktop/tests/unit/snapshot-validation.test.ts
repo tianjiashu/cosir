@@ -21,7 +21,7 @@ function without(value: object, key: string): Record<string, unknown> {
 }
 
 const withToolPart = (part: Record<string, unknown>) => transportState({
-  messages: [assistantMessage("assistant-run-1", 1, [part as unknown as TransportMessagePart])],
+  messages: [assistantMessage("assistant-turn-1", 1, [part as unknown as TransportMessagePart])],
   activity: activity(1, "running"),
 });
 
@@ -100,7 +100,7 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(snapshot)).toThrow("snapshot");
   });
 
-  it("消息必须携带 runId 与 outcome 两个字段", () => {
+  it("消息必须携带 turn、inherited 与 outcome 字段", () => {
     const message = { id: "1", role: "user", parts: [] };
     expect(() => parseTransportState({ ...transportState(), messages: [message] })).toThrow("messages[0]");
   });
@@ -128,7 +128,7 @@ describe("Transport snapshot validation", () => {
     const onUser = transportState({ messages: [{ ...userMessage("1", 1), outcome: outcome("completed") }] });
     expect(() => parseTransportState(onUser)).toThrow("messages[0].outcome");
     const running = transportState({
-      messages: [assistantMessage("assistant-run-1", 1, [], { ...outcome("completed"), status: "running" as never })],
+      messages: [assistantMessage("assistant-turn-1", 1, [], { ...outcome("completed"), status: "running" as never })],
     });
     expect(() => parseTransportState(running)).toThrow("messages[0].outcome.status");
   });
@@ -236,10 +236,10 @@ describe("Transport snapshot validation", () => {
       endReason: "model_insufficient_quota",
       error: { code: "model_insufficient_quota", message: "模型服务配额或余额不足，请充值或更换模型" },
     });
-    const snapshot = transportState({ messages: [assistantMessage("assistant-run-1", 1, [], failed)] });
+    const snapshot = transportState({ messages: [assistantMessage("assistant-turn-1", 1, [], failed)] });
     expect(parseTransportState(snapshot)).toBe(snapshot);
     const broken = transportState({
-      messages: [assistantMessage("assistant-run-1", 1, [], { ...failed, error: { code: "x" } as never })],
+      messages: [assistantMessage("assistant-turn-1", 1, [], { ...failed, error: { code: "x" } as never })],
     });
     expect(() => parseTransportState(broken)).toThrow("messages[0].outcome.error");
   });

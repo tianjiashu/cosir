@@ -325,16 +325,17 @@ def _gate_runtime(monkeypatch, *, cancelled=False, result_ids=(), notice_rows=()
         body = BackgroundResultBody(tool_name="child_agent", tool_result="{}", ended_at="t")
         mailbox.post(TaskMessage.of(body, message_id=message_id))
     for message_id, text in notice_rows:
-        notice = NoticeBody(content=text, notice_kind="probe")
+        notice = NoticeBody(content=text, notice_kind="terminal_session_ended")
         mailbox.post(TaskMessage.of(notice, message_id=message_id))
     for text in local_notices:
-        mailbox.notify(NoticeBody(content=text, notice_kind="probe"))
+        mailbox.notify(NoticeBody(content=text, notice_kind="model_continuation"))
     runtime = SimpleNamespace(
         run=SimpleNamespace(id=4, task_id=3),
         task=SimpleNamespace(id=3),
         usage_stats=None,
         mailbox=mailbox,
         is_cancelled=lambda: cancelled,
+        cancel_end_reason=lambda: "user_cancelled",
     )
     monkeypatch.setattr(prepare_input_node, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(

@@ -16,6 +16,7 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import InputConsumedEvent
+from app.core.tool.multi_agent import agent_message as agent_message_module
 from app.core.workflow.message_queue.task_message import AgentMessageBody, RunLaunch
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.conversation_run_record import ConversationRunRecord
@@ -24,7 +25,6 @@ from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import UserMessageMetadata
 from app.models.model_config_record import ModelConfigRecord
 from app.models.task_record import TaskRecord
-from app.core.tool.multi_agent import agent_message as agent_message_module
 
 _SOURCE = MessageSource(task_id=4, name='主任务 "A"')
 # 形如附件 token 的文字：用户输入会去找附件，Agent 消息只当文字。
@@ -80,13 +80,13 @@ def test_prepare_carries_launch_and_rejects_empty_text(monkeypatch: pytest.Monke
 
 
 def test_consumed_agent_message_projects_plain_text_with_its_source() -> None:
-    state = {"messages": [], "queued_messages": []}
+    state = {"messages": [], "queued_messages": [], "activity": None}
     event = InputConsumedEvent(
         task_id=7,
         run_id=2,
         message_id=11,
         presentation=UserInputPresentation(display_text=_ATTACHMENT_LOOKALIKE),
-        opens_turn=True,
+        turn=1,
         source=_SOURCE,
     )
 
@@ -101,28 +101,38 @@ def test_consumed_agent_message_projects_plain_text_with_its_source() -> None:
 def _reply_state(parts: list) -> dict:
     return {
         "messages": [
-            {"id": "5", "role": "user", "parts": [], "runId": 2, "outcome": None, "source": None},
             {
-                "id": "assistant-5",
+                "id": "5",
+                "role": "user",
+                "parts": [],
+                "turn": 3,
+                "inherited": False,
+                "outcome": None,
+                "source": None,
+            },
+            {
+                "id": "assistant-turn-3",
                 "role": "assistant",
                 "parts": parts,
-                "runId": 2,
+                "turn": 3,
+                "inherited": False,
                 "outcome": None,
                 "source": None,
             },
         ],
         "queued_messages": [],
+        "activity": None,
     }
 
 
-def _consumed(message_id: int = 11, *, opens_turn: bool = False) -> InputConsumedEvent:
-    """默认是途中来信（写入方判定不开回合）；作为 Run 第一条输入时传 ``opens_turn=True``。"""
+def _consumed(message_id: int = 11) -> InputConsumedEvent:
+    """途中来信：写入方把它记在当前回合（3），这一回合已有回复。"""
     return InputConsumedEvent(
         task_id=7,
         run_id=2,
         message_id=message_id,
         presentation=UserInputPresentation(display_text=_ATTACHMENT_LOOKALIKE),
-        opens_turn=opens_turn,
+        turn=3,
         source=_SOURCE,
     )
 
@@ -183,7 +193,7 @@ def test_rebuild_projects_agent_messages_as_turns_with_source() -> None:
     user, reply = state["messages"]
     assert user["source"] == {"taskId": 4, "name": '主任务 "A"'}
     assert user["parts"] == [{"type": "text", "text": _ATTACHMENT_LOOKALIKE, "status": "completed"}]
-    assert (reply["id"], reply["source"]) == ("assistant-11", None)
+    assert (reply["id"], reply["source"]) == ("assistant-turn-1", None)
     validate_snapshot(state)
 
 
@@ -192,10 +202,11 @@ def test_snapshot_rejects_a_source_on_assistant_messages() -> None:
         "title": "t",
         "messages": [
             {
-                "id": "assistant-run-1",
+                "id": "assistant-turn-1",
                 "role": "assistant",
                 "parts": [],
-                "runId": 1,
+                "turn": 1,
+                "inherited": False,
                 "outcome": None,
                 "source": {"taskId": 1, "name": "x"},
             }

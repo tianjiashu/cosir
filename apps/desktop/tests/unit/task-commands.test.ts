@@ -8,11 +8,11 @@ import {
   cancelTask,
   cancelToolCall,
   deleteQueuedTaskMessage,
-  rerunTaskMessage,
   resumeTask,
   sendQueuedTaskMessageNow,
   sendTaskMessage,
   submitToolDecision,
+  withdrawTaskMessage,
   type TaskMessageRequest,
 } from "@/lib/assistant/task-commands";
 import { HttpError } from "@/lib/http/http-error";
@@ -47,7 +47,7 @@ describe("task commands", () => {
     release(new Response("{}"));
     await first;
   });
-  it("发送消息只按 Task 寻址，不携带投递方式与 runId（并入时机由后端决定）", async () => {
+  it("发送消息只按 Task 寻址，不携带投递方式与运行身份（并入时机由后端决定）", async () => {
     vi.stubGlobal("fetch", accepted());
 
     await expect(sendTaskMessage(7, REQUEST)).resolves.toBeUndefined();
@@ -73,15 +73,15 @@ describe("task commands", () => {
     expect(init.body).toBeUndefined();
   });
 
-  it("编辑重跑按消息寻址，携带发起配置但不含投递方式", async () => {
+  it("撤回按消息寻址，不带请求体", async () => {
     vi.stubGlobal("fetch", accepted());
 
-    await rerunTaskMessage(7, "msg/1", REQUEST);
+    await withdrawTaskMessage(7, "msg/1");
 
     const [url, init] = lastCall();
-    expect(url).toMatch(/\/tasks\/7\/messages\/msg%2F1\/rerun$/);
+    expect(url).toMatch(/\/tasks\/7\/messages\/msg%2F1\/withdraw$/);
     expect(init.method).toBe("POST");
-    expect(JSON.parse(String(init.body))).toEqual(REQUEST);
+    expect(init.body).toBeUndefined();
   });
 
   it("恢复不带请求体，决定使用后端 wire 字段", async () => {

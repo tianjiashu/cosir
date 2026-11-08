@@ -116,6 +116,9 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
             model=SimpleNamespace(model_config_id=1),
         ),
         admitted_tools=frozenset(),
+        task_banned=frozenset(),
+        run_banned=frozenset(),
+        preceding_run=None,
         tool_definitions={},
         tool_executor=None,
         run_state=run_state_stub(),
@@ -132,5 +135,6 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
     )
     rc.__dict__.update(overrides)
     rc.is_cancelled = lambda: rc.cancelled
+    rc.cancel_end_reason = lambda: "user_cancelled"
     install_runtime_singletons(rc)
     return rc

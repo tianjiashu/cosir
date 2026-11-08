@@ -7,7 +7,7 @@ from app.core.events import AssistantTextDeltaEvent, ModelActivityEvent
 
 def test_phase_without_message_and_old_finish():
     state = empty_snapshot()
-    state["activity"] = {"runId": 1, "status": "running", "modelActivity": None}
+    state["activity"] = {"status": "running", "modelActivity": None}
     event = ModelActivityEvent(task_id=1, run_id=1, step_id="step-2", phase="waiting")
     result = plan_model_activity(event, state)
     assert result[0].value == {"stepId": "step-2", "phase": "waiting"}
@@ -22,7 +22,7 @@ def test_phase_without_message_and_old_finish():
 
 def test_terminal_run_ignores_activity_and_reasoning_never_becomes_content():
     state = empty_snapshot()
-    state["activity"] = {"runId": 1, "status": "cancelled", "modelActivity": None}
+    state["activity"] = {"status": "cancelled", "modelActivity": None}
     assert (
         plan_model_activity(
             ModelActivityEvent(task_id=1, run_id=1, step_id="step-2", phase="reasoning"), state
@@ -34,5 +34,5 @@ def test_terminal_run_ignores_activity_and_reasoning_never_becomes_content():
 
     with pytest.raises(ValidationError):
         AssistantTextDeltaEvent(
-            source_sequence=1, task_id=1, run_id=1, part="reasoning", delta="private reasoning"
+            source_sequence=1, task_id=1, run_id=1, turn=1, part="reasoning", delta="private reasoning"
         )

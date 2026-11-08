@@ -274,7 +274,7 @@ def _seed_running_execute_terminal(projector: ConversationEventProjector, call_i
     projector.process(
         ToolCallCreatedEvent(
             task_id=_TASK_ID,
-            run_id=_RUN_ID,
+            run_id=_RUN_ID, turn=1,
             tool_call_id=call_id,
             tool_name="execute_terminal",
         )

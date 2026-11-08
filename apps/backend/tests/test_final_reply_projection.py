@@ -51,9 +51,9 @@ def test_live_and_rebuild_agree(status, reason, content, expected):
     for sequence, text in [(1, "中途进展"), (2, content)]:
         apply(
             state,
-            AssistantTextDeltaEvent(task_id=7, run_id=1, source_sequence=sequence, delta=text),
+            AssistantTextDeltaEvent(task_id=7, run_id=1, turn=1, source_sequence=sequence, delta=text),
         )
-        apply(state, AssistantPartClosedEvent(task_id=7, run_id=1, source_sequence=sequence))
+        apply(state, AssistantPartClosedEvent(task_id=7, run_id=1, turn=1, source_sequence=sequence))
     apply(
         state,
         RunStatusChangedEvent(
@@ -110,9 +110,9 @@ def test_all_text_parts_from_final_response_marked_and_structured_result_does_no
     for sequence, text in [(1, "草稿"), (2, "结论上半"), (2, "结论下半")]:
         apply(
             state,
-            AssistantTextDeltaEvent(task_id=7, run_id=1, source_sequence=sequence, delta=text),
+            AssistantTextDeltaEvent(task_id=7, run_id=1, turn=1, source_sequence=sequence, delta=text),
         )
-        apply(state, AssistantPartClosedEvent(task_id=7, run_id=1, source_sequence=sequence))
+        apply(state, AssistantPartClosedEvent(task_id=7, run_id=1, turn=1, source_sequence=sequence))
     apply(
         state,
         RunStatusChangedEvent(

@@ -379,17 +379,17 @@ def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: s
     projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=task_id, run_id=run_id, status="running"))
     owner.state["messages"].append(
         {
-            "id": f"assistant-{run_id}",
+            "id": f"assistant-turn-{run_id}",
             "role": "assistant",
             "parts": [],
-            "runId": run_id,
+            "turn": run_id, "inherited": False,
             "outcome": None,
             "source": None,
         }
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=task_id, run_id=run_id, tool_call_id=call_id, tool_name="read_file"
+            task_id=task_id, run_id=run_id, turn=run_id, tool_call_id=call_id, tool_name="read_file"
         )
     )
     projector.process(
@@ -404,7 +404,7 @@ def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: s
 
 def _part(owner: _MemorySnapshotOwner, run_id: int, call_id: str) -> dict[str, Any]:
     for message in owner.state["messages"]:
-        if message["runId"] != run_id:
+        if message["turn"] != run_id:
             continue
         for part in message["parts"]:
             if isinstance(part, dict) and part.get("toolCallId") == call_id:
@@ -1004,11 +1004,11 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=9))
     projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=9, status="running"))
     owner.state["messages"].append(
-        {"id": "assistant-9", "role": "assistant", "parts": [], "runId": 9, "outcome": None, "source": None}
+        {"id": "assistant-turn-9", "role": "assistant", "parts": [], "turn": 9, "inherited": False, "outcome": None, "source": None}
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=1, run_id=9, tool_call_id="call-t", tool_name="execute_terminal"
+            task_id=1, run_id=9, turn=9, tool_call_id="call-t", tool_name="execute_terminal"
         )
     )
     projector.process(
@@ -1172,7 +1172,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
     # 直接向进程内 state service 注入一条 run 骨架，使投影能命中 part。
     state = empty_snapshot()
     state["messages"] = [
-        {"id": "m0", "role": "user", "parts": [], "runId": 5, "outcome": None, "source": None},
+        {"id": "m0", "role": "user", "parts": [], "turn": 5, "inherited": False, "outcome": None, "source": None},
         {
             "id": "m1",
             "role": "assistant",
@@ -1186,13 +1186,14 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
                     "isError": False,
                 }
             ],
-            "runId": 5,
+            "turn": 5, "inherited": False,
             "outcome": None,
             "source": None,
         },
     ]
     state["activity"] = {"modelActivity": None,
-        "runId": 5,
+        "turn": None,
+        "resumable": False,
         "status": "running",
         "endReason": None,
         "error": None,
@@ -1221,7 +1222,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
 
 def _part_from_state(state: ConversationStateSnapshot, run_id: int, call_id: str) -> dict[str, Any]:
     for message in state["messages"]:
-        if message["runId"] != run_id:
+        if message["turn"] != run_id:
             continue
         for part in message["parts"]:
             if isinstance(part, dict) and part.get("toolCallId") == call_id:

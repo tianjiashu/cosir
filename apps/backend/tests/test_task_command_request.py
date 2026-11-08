@@ -3,11 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.assistant_transport.request import (
-    DecisionRequest,
-    RerunMessageRequest,
-    SendMessageRequest,
-)
+from app.assistant_transport.request import DecisionRequest, SendMessageRequest
 
 
 def _message(text: str = "hello", **extra: object) -> dict[str, object]:
@@ -41,14 +37,6 @@ def test_send_maps_command() -> None:
 def test_send_rejects_invalid_fields(overrides: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         _send(**overrides)
-
-
-def test_rerun_rejects_delivery() -> None:
-    """重跑只针对已停下的 Task（运行中先停止），不存在投递方式。"""
-    with pytest.raises(ValidationError):
-        RerunMessageRequest.model_validate(
-            {"message": _message(), "modelConfigId": 1, "delivery": "immediate"}
-        )
 
 
 def test_ordinary_file_attachment_maps_into_command() -> None:

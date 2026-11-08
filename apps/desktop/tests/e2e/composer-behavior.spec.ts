@@ -229,36 +229,37 @@ test("Task 保活但已进入配置页时，迟到文件不写入隐藏草稿", 
   await expect(input).toHaveText("保留正文");
 });
 
-test("重载后的历史普通文件可编辑、撤销移除并重跑，路径由后端绑定恢复", async ({ page, request: apiRequest }) => {
+test("重载后撤回带普通文件的消息：附件按快照里的路径放回输入框，照常发送", async ({ page, request: apiRequest }) => {
   await seedState(apiRequest, 100, completedState(70, { id: "history-user", parts: [
     { type: "text", text: "查看 ", status: "completed" },
-    { type: "file", file: "cosir-local-file:historical", name: "history.md", contentType: "text/markdown" },
+    { type: "file", file: "cosir-local-file:historical", name: "history.md", contentType: "text/markdown", path: "/w/history.md" },
   ] }, [{ type: "text", text: "历史回复", status: "completed" }]));
   await openComposer(page, "task");
   await page.reload();
   const user = page.locator('[data-role="user"]');
   await user.hover();
-  await user.getByRole("button", { name: "编辑并重跑" }).click();
-  const input = page.getByLabel("编辑消息");
+  await user.getByRole("button", { name: "撤回" }).click();
+  const input = page.getByLabel("消息输入");
   await expect(input).toContainText("history.md");
-  await expect(input).toBeEditable();
   await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
   await input.getByRole("button", { name: "移除附件 history.md" }).click();
   await input.press(undo);
   await expect(input).toContainText("history.md");
-  const editUrl = `${api}/tasks/100/messages/history-user/rerun`;
-  const request = page.waitForRequest(req => req.url() === editUrl && req.method() === "POST");
-  await page.route(editUrl, async route => {
-    await route.fulfill({ status: 400, json: { detail: { error: { code: "EDIT_REJECTED", message: "历史编辑回归拒绝", retryable: true } } } });
+  const sendUrl = `${api}/tasks/100/messages`;
+  const request = page.waitForRequest(req => req.url() === sendUrl && req.method() === "POST");
+  await page.route(sendUrl, async route => {
+    await route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "历史附件回归拒绝", retryable: true } } } });
   });
-  await page.getByRole("button", { name: "重跑", exact: true }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   const body = (await request).postDataJSON();
   expect(body).toMatchObject({ message: { parts: [{ type: "text", text: expect.stringContaining("[[cosir-file:historical]]") }] } });
-  expect(body.message.attachments).toBeUndefined();
-  await expect(page.getByRole("dialog")).toContainText("历史编辑回归拒绝");
+  // 页面重载后登记表为空：路径来自快照，不靠后端从原消息恢复。
+  expect(body.message.attachments).toEqual([
+    { id: "historical", name: "history.md", contentType: "text/markdown", path: "/w/history.md" },
+  ]);
+  await expect(page.getByRole("dialog")).toContainText("历史附件回归拒绝");
   await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
   await expect(input).toContainText("history.md");
-  await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
 });
 
 test("Task 图片上传成功但消息提交失败后，正文与完整图片附件均恢复", async ({ page }) => {

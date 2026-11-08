@@ -18,8 +18,9 @@ async function setDocument(input: Locator, content: JSONContent[]) {
     // 经真实注册表和编辑器装配视图，不伪造 token DOM；文件接纳入口由 composer-behavior 覆盖。
     const modulePath = "/lib/assistant/attachments/local-attachment-registry.ts";
     const registry = await import(modulePath);
-    registry.registerInlineFileMetadata({
+    registry.restoreLocalFile({
       id: "token-file", name: "very-long-attachment-filename-that-needs-truncation.md", contentType: "text/markdown",
+      path: "/workspace/very-long-attachment-filename-that-needs-truncation.md",
     });
     const editor = (element as HTMLElement & { editor: Editor }).editor;
     editor.commands.setContent({ type: "doc", content });

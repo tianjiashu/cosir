@@ -18,7 +18,6 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.config.settings import Settings
 from app.core.context.tool_call_closure import ContextProtocolError, plan_tool_call_closures
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.fork_reply import ForkReply
 from app.models.message_metadata import (
     TURN_INPUT_KINDS,
     BackgroundWork,
@@ -51,7 +50,7 @@ def fork_store(request, monkeypatch):
 
 
 def _turn_of(store, run, message, metadata, project) -> int:
-    """模拟写入方（``RuntimeMessageContextManager.opens_turn``）给夹具行取回合号。
+    """模拟写入方（``RuntimeMessageContextManager._opens_turn``）给夹具行取回合号。
 
     夹具绕过写入方直接写行，所以在这里按同一规则算：Run 的第一行与用户输入开回合，Agent 消息只在
     本 Run 还没有输入与可见回复时开回合，工具结果属于发起调用的回合，其余行留在当前回合。
@@ -128,8 +127,22 @@ def append_run(store, status):
     return run
 
 
+def turn_of_input(store, input_id) -> int:
+    """输入所在的回合：它的回复按这个回合号编码。"""
+    return next(
+        r.turn
+        for r in store.contexts.get(store.task.id, include_in_context=False)
+        if r.message_id == int(input_id)
+    )
+
+
+def reply_of(store, input_id) -> str:
+    """这条输入开启的回合的回复 wire id。"""
+    return f"assistant-turn-{turn_of_input(store, input_id)}"
+
+
 def fork_call(store, input_id):
-    return store.service.fork_task(store.task.id, reply=ForkReply(input_message_id=int(input_id)))
+    return store.service.fork_task(store.task.id, turn=turn_of_input(store, input_id))
 
 
 def fork(store, input_id):
@@ -191,7 +204,7 @@ def test_manual_fork_keeps_the_reply_without_executable_runs(fork_store, status)
     ]
     state = snapshot(s, child)
     assert state["activity"] is None and len(state["messages"]) == 2
-    assert all(m["runId"] is None for m in state["messages"])
+    assert all(m["inherited"] for m in state["messages"])
 
 
 @pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
@@ -207,7 +220,7 @@ def test_a_reply_still_in_progress_cannot_fork(fork_store, status):
     s = fork_store
     run = append_run(s, status)
     with pytest.raises(HTTPException) as caught:
-        fork_api(s, f"assistant-{run.input_id}")
+        fork_api(s, reply_of(s, run.input_id))
     assert caught.value.status_code == 409
     assert caught.value.detail["code"] == "FORK_REPLY_ACTIVE"
 
@@ -245,7 +258,9 @@ def test_every_reply_forks_to_exactly_the_conversation_up_to_it(fork_store):
     s = fork_store
     history_with_every_kind_of_turn(s)
     state = snapshot(s, s.task)
-    assert any(m["id"].startswith("assistant-run-") for m in state["messages"])
+    assert all(
+        m["id"].startswith("assistant-turn-") for m in state["messages"] if m["role"] == "assistant"
+    )
     forks = []
     for index, message in enumerate(state["messages"]):
         if message["role"] != "assistant":
@@ -256,13 +271,15 @@ def test_every_reply_forks_to_exactly_the_conversation_up_to_it(fork_store):
             {"messages": state["messages"][: index + 1]}
         ), message["id"]
         forks.append(child)
-    # 回合号随行复制：分支的回合划分与来源一致，唤醒开出的回复仍是单独一条（继承来的没有输入
-    # 开头的回复用 ``assistant-turn-``），并且同样能再分叉。
+    # 回合号随行复制：分支的回合划分与来源一致，同一条回复在两边的 id 相同（都按回合编码），
+    # 唤醒开出的回复仍是单独一条，并且同样能再分叉。
     s.task = forks[-1]
     branch = snapshot(s, s.task)
     assert grouping(branch) == grouping(state)
-    assert not any(m["id"].startswith("assistant-run-") for m in branch["messages"])
-    assert any(m["id"].startswith("assistant-turn-") for m in branch["messages"])
+    assert [m["id"] for m in branch["messages"] if m["role"] == "assistant"] == [
+        m["id"] for m in state["messages"] if m["role"] == "assistant"
+    ]
+    assert all(m["inherited"] for m in branch["messages"])
     for index, message in enumerate(branch["messages"]):
         if message["role"] == "assistant":
             refork = s.service.get_task(fork_api(s, message["id"]).task_id)
@@ -517,6 +534,9 @@ def test_orphan_protocol_aborts_whole_copy(fork_store):
         {"beforeMessageId": "123"},
         {"replyMessageId": "123"},
         {"replyMessageId": "assistant-0"},
+        {"replyMessageId": "assistant-12"},
+        {"replyMessageId": "assistant-run-3"},
+        {"replyMessageId": "assistant-turn-0"},
         {"replyMessageId": "assistant-run-x"},
         {"replyMessageId": "assistant-context"},
         {"runId": 1},
@@ -527,22 +547,13 @@ def test_api_accepts_only_a_reply_id(payload):
         ForkTaskRequest.model_validate(payload)
 
 
-@pytest.mark.parametrize(
-    ("wire_id", "reply"),
-    [
-        ("assistant-12", ForkReply(input_message_id=12)),
-        ("assistant-run-3", ForkReply(run_id=3)),
-        ("assistant-turn-5", ForkReply(turn=5)),
-    ],
-)
-def test_api_decodes_every_kind_of_reply(wire_id, reply):
-    assert ForkTaskRequest(replyMessageId=wire_id).reply == reply
+def test_api_decodes_the_reply_into_its_turn():
+    assert ForkTaskRequest(replyMessageId="assistant-turn-5").turn == 5
 
 
-@pytest.mark.parametrize("wire_id", ["assistant-999", "assistant-run-999", "assistant-turn-999"])
-def test_unknown_reply_returns_404(fork_store, wire_id):
+def test_unknown_reply_returns_404(fork_store):
     with pytest.raises(HTTPException) as caught:
-        fork_api(fork_store, wire_id)
+        fork_api(fork_store, "assistant-turn-999")
     assert caught.value.status_code == 404
 
 
@@ -559,7 +570,7 @@ def test_workspace_busy_is_mapped_to_retryable_409(fork_store, monkeypatch):
 
     monkeypatch.setattr(workspace_operations, "operation", busy)
     with pytest.raises(HTTPException) as caught:
-        fork_api(store, f"assistant-{run.input_id}")
+        fork_api(store, reply_of(store, run.input_id))
     assert caught.value.status_code == 409
     assert caught.value.detail["code"] == "WORKSPACE_BUSY"
     assert caught.value.detail["retryable"] is True
@@ -573,7 +584,7 @@ def test_success_response_does_not_read_database_after_commit(fork_store, monkey
         raise AssertionError("post-commit read")
 
     monkeypatch.setattr(store.service, "get_task", forbidden)
-    response = fork_api(store, f"assistant-{run.input_id}")
+    response = fork_api(store, reply_of(store, run.input_id))
     assert response.task_id != store.task.id
     assert "fork_available" not in response.model_dump()
 

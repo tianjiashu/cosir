@@ -14,14 +14,14 @@ describe("Agent Team 失败流水线", () => {
           node_id: "implement", name: "实现", agent_id: "developer", role: "开发",
           goal_summary: "实现", status: "completed",
           visits: [{
-            visit_number: 1, conversation_run_id: 11, status: "completed", agents: [],
+            visit_number: 1, status: "completed", agents: [],
           }],
         },
         {
           node_id: "review", name: "审查", agent_id: "reviewer", role: "审查",
           goal_summary: "审查", status: "failed",
           visits: [{
-            visit_number: 1, conversation_run_id: 12, status: "failed", agents: [],
+            visit_number: 1, status: "failed", agents: [],
           }],
         },
       ],

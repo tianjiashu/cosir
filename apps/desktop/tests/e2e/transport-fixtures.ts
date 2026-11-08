@@ -6,8 +6,9 @@ import { API_ORIGIN } from "./e2e-env";
 /** E2E 共用的 Task 视角 snapshot 构造器，与 tests/e2e/test-server.mjs 的契约一致。 */
 const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
 
+/** 一个已完成回合的快照；第一个参数是回合号（回复 id 按它编码）。 */
 export function completedState(
-  runId: number,
+  turn: number,
   user: { id: string; parts: TransportMessagePart[] },
   assistantParts: TransportMessagePart[],
 ): TransportState {
@@ -17,10 +18,10 @@ export function completedState(
   return {
     title: "测试对话",
     messages: [
-      { id: user.id, role: "user", parts: user.parts, runId, source: null, outcome: null },
-      { id: `assistant-${user.id}`, role: "assistant", parts: assistantParts, runId, outcome, source: null },
+      { id: user.id, role: "user", parts: user.parts, turn, inherited: false, source: null, outcome: null },
+      { id: `assistant-turn-${turn}`, role: "assistant", parts: assistantParts, turn, inherited: false, outcome, source: null },
     ],
-    messageOffset: 0, activity: { modelActivity: null, runId, ...activityOutcome, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
+    messageOffset: 0, activity: { modelActivity: null, turn, resumable: false, ...activityOutcome, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 }

@@ -15,12 +15,12 @@ describe("AssistantPerformanceProbe", () => {
     probe.recordReactCommit({ scope: "message-row", id: "history", phase: "update", actualDurationMs: 9 });
     probe.recordReactCommit({ scope: "message-row", id: "active", phase: "update", actualDurationMs: 1 });
     probe.recordReactCommit({ scope: "composer", id: "composer", phase: "update", actualDurationMs: 1 });
-    probe.finishStream({ activityRunId: 1, activityStatus: "completed" });
+    probe.finishStream({ activityTurn: 1, activityStatus: "completed" });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(onReport).toHaveBeenCalledTimes(1);
     expect(onReport).toHaveBeenCalledWith(expect.objectContaining({
-      activityRunId: 1,
+      activityTurn: 1,
       activityStatus: "completed",
       frameCount: 2,
       mutationCount: 4,
@@ -43,7 +43,7 @@ describe("AssistantPerformanceProbe", () => {
 
     probe.recordReactCommit({ scope: "message-row", id: "history", phase: "mount", actualDurationMs: 2 });
     probe.beginStream();
-    probe.finishStream({ activityRunId: 1, activityStatus: "running" });
+    probe.finishStream({ activityTurn: 1, activityStatus: "running" });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(onReport.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
@@ -57,7 +57,7 @@ describe("AssistantPerformanceProbe", () => {
     const probe = createAssistantPerformanceProbe({ onReport });
 
     probe.beginStream();
-    probe.finishStream({ activityRunId: 1, activityStatus: "completed" });
+    probe.finishStream({ activityTurn: 1, activityStatus: "completed" });
     probe.recordReactCommit({ scope: "message-row", id: "active", phase: "update", actualDurationMs: 4 });
 
     expect(onReport).not.toHaveBeenCalled();
@@ -78,7 +78,7 @@ describe("AssistantPerformanceProbe", () => {
     probe.recordReactCommit({ scope: "message-row", id: "active", phase: "update", actualDurationMs: 1 });
     probe.recordTerminalConvergence();
     probe.recordPublication({ durationMs: 1, itemCount: 2, activeMessageId: "active", publicationKind: "canonical", terminalConvergence: true });
-    probe.finishStream({ activityRunId: 1, activityStatus: "completed" });
+    probe.finishStream({ activityTurn: 1, activityStatus: "completed" });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(onReport.mock.calls[0]?.[0]).toEqual(expect.objectContaining({

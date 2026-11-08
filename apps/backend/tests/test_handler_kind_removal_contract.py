@@ -860,7 +860,7 @@ def test_emit_swallows_projector_failure() -> None:
         raise RuntimeError("projector exploded")
 
     with execution_scope(SimpleNamespace(event_sink=failing_sink), SimpleNamespace()):
-        emit(AssistantPartClosedEvent(source_sequence=1, task_id=1, run_id=1, part="text"))
+        emit(AssistantPartClosedEvent(source_sequence=1, task_id=1, run_id=1, turn=1, part="text"))
 
 
 def test_is_cancelled_reads_task_signal() -> None:

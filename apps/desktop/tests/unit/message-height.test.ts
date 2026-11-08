@@ -9,7 +9,7 @@ import * as turnLayout from "@/lib/assistant/turn/turn-layout";
 import { forgetMessageHeights, rememberMessageHeight, rememberedMessageHeight } from "@/lib/assistant/turn/message-height-cache";
 import { estimateMessageHeight } from "@/lib/assistant/turn/message-height-estimate";
 
-const projected = (parts: TransportMessagePart[], end: TransportOutcome | null = null, live = false) => toThreadMessageWithRenderContext(assistantMessage("a", 1, parts, end), { runId: 1, source: null, outcome: end, isRunEnd: true, activity: live ? activity(1, "running") : null }) as ThreadMessage;
+const projected = (parts: TransportMessagePart[], end: TransportOutcome | null = null, live = false) => toThreadMessageWithRenderContext(assistantMessage("a", 1, parts, end), { turn: 1, inherited: false, source: null, outcome: end, activity: live ? activity(1, "running") : null }) as ThreadMessage;
 const assistant = (...parts: TransportMessagePart[]) => projected(parts);
 const code = (lines: number) => ["```ts", ...Array.from({ length: lines }, (_, line) => `const v${line} = ${line};`), "```"].join("\n");
 const user = (...content: object[]) => ({ id: "u", role: "user", content }) as unknown as ThreadMessage;

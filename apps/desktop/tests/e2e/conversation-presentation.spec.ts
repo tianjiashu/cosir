@@ -110,7 +110,8 @@ test("an unknown stop result offers explicit retry without claiming a failed exe
   expect(calls).toBe(2);
 });
 
-test("a late stop response cannot make a new Run appear to be stopping", async ({ page, request }) => {
+// 前端看不到 Run：停下与新运行开出在增量里总是先后两帧，「停止中」在活动离开活动态时就已收尾。
+test("a late stop response cannot make a later Run appear to be stopping", async ({ page, request }) => {
   await seedState(request, 42, state([text("旧运行。")], "suspended"));
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
@@ -121,7 +122,8 @@ test("a late stop response cannot make a new Run appear to be stopping", async (
   await page.goto("/tasks/42");
   await page.getByRole("button", { name: "停止", exact: true }).click();
   await expect(page.getByRole("button", { name: "正在停止", exact: true })).toBeDisabled();
-  await seedState(request, 42, transportState({ messages: [userMessage("u2", 2), assistantMessage("a2", 2, [text("新运行。")])], activity: activity(2, "suspended") }));
+  await seedState(request, 42, state([text("旧运行。")], "cancelled"));
+  await seedState(request, 42, transportState({ messages: [userMessage("u2", 2), assistantMessage("assistant-turn-2", 2, [text("新运行。")])], activity: activity(2, "suspended") }));
   await expect(page.getByText("新运行。", { exact: true })).toBeVisible();
   const response = page.waitForResponse(`${API_ORIGIN}/tasks/42/cancel`);
   release();

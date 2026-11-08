@@ -30,13 +30,14 @@ export function toolCallPart(toolCallId: string, toolName: string, overrides: Pa
   return {presentation: "activity",  type: "tool-call", toolCallId, toolName, status: "running", args: {}, awaitingUser: false, ...overrides };
 }
 
-export function userMessage(id: string, runId: number, text = "hello"): TransportMessage {
-  return { id, role: "user", parts: [textPart(text)], runId, source: null, outcome: null };
+/** 用户消息；第二个参数是它所在的回合（夹具里常与回复、活动的回合号一一对应）。 */
+export function userMessage(id: string, turn: number, text = "hello"): TransportMessage {
+  return { id, role: "user", parts: [textPart(text)], turn, inherited: false, source: null, outcome: null };
 }
 
-/** Agent 消息：另一个 Agent 交来、开启一轮的 user 消息，带发送方。 */
-export function agentMessage(id: string, runId: number, text = "请完成子任务", sourceTaskId = 9): TransportMessage {
-  return { id, role: "user", parts: [textPart(text)], runId, outcome: null, source: { taskId: sourceTaskId, name: "主任务" } };
+/** Agent 消息：另一个 Agent 交来、开启回合的 user 消息，带发送方。 */
+export function agentMessage(id: string, turn: number, text = "请完成子任务", sourceTaskId = 9): TransportMessage {
+  return { id, role: "user", parts: [textPart(text)], turn, inherited: false, outcome: null, source: { taskId: sourceTaskId, name: "主任务" } };
 }
 
 /** 回合途中到达的 Agent 消息。 */
@@ -44,13 +45,14 @@ export function agentMessagePart(id: string, text = "追加要求"): TransportMe
   return { type: "agent-message", id, text, source: { taskId: 9, name: "主任务" } };
 }
 
+/** 回复；第二个参数是它所在的回合。 */
 export function assistantMessage(
   id: string,
-  runId: number,
+  turn: number,
   parts: TransportMessagePart[] = [textPart("answer")],
   outcome: TransportOutcome | null = null,
 ): TransportMessage {
-  return { id, role: "assistant", parts, runId, outcome, source: null };
+  return { id, role: "assistant", parts, turn, inherited: false, outcome, source: null };
 }
 
 export function outcome(
@@ -60,14 +62,16 @@ export function outcome(
   return { status, endReason: status === "completed" ? "stop" : null, error: null, usage: null, contextWindowTotal: null, durationMs: 0, ...overrides };
 }
 
+/** 当前活动；第一个参数是它最后一个可见回合（当前回复所在的回合），可否恢复默认按状态。 */
 export function activity(
-  runId: number,
+  turn: number | null,
   status: TransportRunStatus,
   overrides: Partial<TransportActivity> = {},
 ): TransportActivity {
   return {modelActivity: null,
-    runId,
     status,
+    turn,
+    resumable: status === "cancelled" || status === "failed",
     endReason: null,
     error: null,
     usage: null,

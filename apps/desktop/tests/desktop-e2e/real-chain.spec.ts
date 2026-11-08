@@ -172,74 +172,52 @@ test("a vendor reusing one tool call id keeps every call apart, live and after a
   for (const { id } of expected) await expect(env.page.locator(`[data-slot="turn"] [data-tool-call-id="${id}"]`)).toHaveCount(1);
 });
 
-async function startEdit(page: Page, typed: string) {
+async function withdrawLatest(page: Page) {
   const user = page.locator('[data-role="user"]').last();
   await user.hover();
-  await user.getByRole("button", { name: "编辑并重跑" }).click();
-  const editor = page.getByLabel("编辑消息");
-  await expect(editor).toBeEditable();
-  await editor.click();
-  await page.keyboard.press("End");
-  await page.keyboard.type(typed);
-  await expect(editor).toContainText(typed);
+  await user.getByRole("button", { name: "撤回" }).click();
 }
 
-// 目的：编辑草稿比 runtime 活得久，重跑走真实的移出与入队，被后端拒绝时内容回到编辑框；
-// 潜在缺陷：切走 Task 丢改动，重跑后模型仍看到旧消息，或 409 之后改动消失。
-test("an edit survives switching tasks, reruns for real, and comes back when the backend refuses it", async () => {
-  const opened = await Env.open(["编辑甲", "编辑乙"]);
+// 目的：撤回走真实的移出，内容回到输入框、改完照常发送；目标在途时变了由后端拒绝，输入框不动；
+// 潜在缺陷：撤回后模型仍看到旧消息，或 409 之后内容被放回输入框。
+test("a withdrawn message goes back to the composer, the model no longer sees it, and a stale withdraw is refused", async () => {
+  const opened = await Env.open(["撤回甲"]);
   env = opened.env;
   const [task] = opened.tasks;
   const { page } = env;
-  await env.open("编辑甲");
+  await env.open("撤回甲");
   env.model.turns.push({ text: "第一次回答" });
   await env.send(task, "原始问题");
   await env.replied(task, "第一次回答");
 
-  await startEdit(page, "，加上改动");
-  await env.open("编辑乙");
-  await expect(page.getByLabel("编辑消息")).toHaveCount(0);
-  await env.open("编辑甲");
-  await expect(page.getByLabel("编辑消息")).toContainText("原始问题，加上改动");
-  env.model.turns.push({ text: "重跑后的回答" });
-  await page.getByRole("button", { name: "重跑", exact: true }).click();
-  await env.replied(task, "重跑后的回答");
-  await expect(page.getByLabel("编辑消息")).toHaveCount(0);
-  const rerun = JSON.stringify(env.model.requests.at(-1)!.messages);
-  expect(rerun).toContain("原始问题，加上改动");
-  expect(rerun).not.toContain('"原始问题"');
-  expect(rerun).not.toContain("第一次回答");
+  await withdrawLatest(page);
+  const composer = page.getByLabel("消息输入");
+  await expect(composer).toContainText("原始问题");
+  await expect(page.locator('[data-role="user"]')).toHaveCount(0);
+  await composer.click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("，加上改动");
+  env.model.turns.push({ text: "改过之后的回答" });
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await env.replied(task, "改过之后的回答");
+  const resent = JSON.stringify(env.model.requests.at(-1)!.messages);
+  expect(resent).toContain("原始问题，加上改动");
+  expect(resent).not.toContain('"原始问题"');
+  expect(resent).not.toContain("第一次回答");
 
-  // 编辑期间这条消息不再是最新输入：界面看得到这件事，禁止提交但保留改动。
-  await startEdit(page, "，第二次改动");
-  env.model.turns.push({ text: "第二条回答" });
-  await env.send(task, "抢先发出的新消息");
-  await env.replied(task, "第二条回答");
-  await expect(page.getByRole("button", { name: "重跑", exact: true })).toBeDisabled();
-  await expect(page.getByLabel("编辑消息")).toContainText("第二次改动");
-  await page.getByRole("button", { name: "取消编辑" }).click();
-  await expect(page.getByLabel("编辑消息")).toHaveCount(0);
-
-  // 重跑请求在途时目标才变：只有后端能发现，以 EDIT_TARGET_STALE 拒绝。放行前让新消息先落定。
-  await startEdit(page, "，第三次改动");
-  const rerunRoute = `${env.base}/tasks/${task}/messages/*/rerun`;
-  await page.route(rerunRoute, async (route) => {
-    env!.model.turns.push({ text: "第三条回答" });
+  // 撤回请求在途时目标才变：只有后端能发现，以 WITHDRAW_TARGET_STALE 拒绝。放行前让新消息先落定。
+  const withdrawRoute = `${env.base}/tasks/${task}/messages/*/withdraw`;
+  await page.route(withdrawRoute, async (route) => {
+    env!.model.turns.push({ text: "第二条回答" });
     await env!.send(task, "在途时发出的新消息");
-    await env!.replied(task, "第三条回答");
+    await env!.replied(task, "第二条回答");
     await route.continue();
   });
-  await page.getByRole("button", { name: "重跑", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("只能编辑最新一条用户消息");
-  await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
-  await expect(page.getByLabel("编辑消息")).toContainText("第三次改动");
-  await page.unroute(rerunRoute);
-  expect(JSON.stringify(env.model.requests.at(-1)!.messages)).not.toContain("第三次改动");
-  await page.getByRole("button", { name: "取消编辑" }).click();
-  await expect(page.getByLabel("编辑消息")).toHaveCount(0);
-  await env.open("编辑乙");
-  await env.open("编辑甲");
-  await expect(page.getByLabel("编辑消息")).toHaveCount(0);
+  await withdrawLatest(page);
+  await expect(page.getByText("撤回失败")).toBeVisible();
+  await page.unroute(withdrawRoute);
+  await expect(composer).not.toContainText("加上改动");
+  await expect(page.getByText("在途时发出的新消息", { exact: true })).toBeVisible();
 });
 
 // 目的：模型调用失败时 Run 落定、卡片不悬空、后续模型请求的协议完整；

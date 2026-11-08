@@ -926,7 +926,7 @@ def test_team_run_view_projects_node_and_child_agent_counts(
     assert develop["goal_summary"] == "实现"
     assert develop["status"] == "running"
     [visit] = develop["visits"]
-    assert visit["conversation_run_id"] == expected_node_run_id
+    assert visit["visit_number"] == 1
     # 一次节点访问 = 节点 Agent 自身 + 该次节点 Run 委派出的子 Agent，均携带可打开的 Task 标识。
     assert [
         (agent["task_id"], agent["title"], agent["status"]) for agent in visit["agents"]

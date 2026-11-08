@@ -604,7 +604,7 @@ def test_session_end_settles_the_handoff_on_the_users_behalf(monkeypatch, tmp_pa
 
 
 def test_withdrawn_handoff_frees_the_session(monkeypatch, tmp_path, decisions):
-    """编辑重跑撤回交接所在一轮：登记被丢弃，会话不再显示交接中，可以再次交接（回归：曾永远卡在交接中）。"""
+    """撤回交接所在回合：登记被丢弃，会话不再显示交接中，可以再次交接（回归：曾永远卡在交接中）。"""
     service, _ = make_service(monkeypatch)
     session_id = start(service, tmp_path)
     _begin(service, session_id)

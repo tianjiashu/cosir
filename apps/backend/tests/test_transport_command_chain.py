@@ -19,16 +19,14 @@ from typing import Any
 
 import pytest
 
-from app.models.task_extra import TaskExtra
 from app.assistant_transport.service import transport_assistant_service as service_module
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core import task_actor as actor_module
+from app.core import task_cancellation as cancellation_module
 from app.core import task_execution as execution_module
 from app.core.task_actor import TaskActor
-from app.core.tool.background.background_job import BackgroundConclusion
 from app.core.tool.background import cancel_placeholders as placeholder_module
 from app.core.tool.background.cancel_placeholders import USER_CANCELLED_HINT
-from app.core import task_cancellation as cancellation_module
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
@@ -41,8 +39,8 @@ from app.core.workflow.message_queue.task_message import (
 )
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import RunTransition
+from app.models.task_extra import TaskExtra
 from app.task_runtime import task_runtime_space_registry as registry_module
-from tests.live_cold_support import registered
 
 _TASK_ID = 41
 _CHILD_TASK_ID = 42
@@ -96,6 +94,7 @@ class _Ledger:
             task_id=task_id,
             status="running",
             agent_id=launch.agent_id,
+            end_reason=None,
             model_config_id=launch.model_config_id,
             options=launch.options,
         )
@@ -103,12 +102,15 @@ class _Ledger:
         self.current = run
         return run
 
-    def transition(self, run_id: int, transition: RunTransition, **_kw: Any):
+    def transition(
+        self, run_id: int, transition: RunTransition, *, end_reason: str | None = None, **_kw: Any
+    ):
         run = self.runs[run_id]
         sources, target, _ = transition.value
         if run.status not in {source.value for source in sources}:
             return None
         run.status = target.value
+        run.end_reason = end_reason
         return run
 
     def get_run(self, run_id: int) -> SimpleNamespace:
@@ -140,7 +142,7 @@ class _Driver:
     def __init__(self, *_args: object) -> None:
         self._mailbox = _Driver.mailbox
 
-    async def drive(self, run) -> None:
+    async def drive(self, run, preceding_run) -> None:
         if cancellation_registry.is_cancelled(run.task_id):
             # prepare_input：取消优先，不取 mailbox，消息留在外部队列。
             _Driver.ledger.transition(run.id, RunTransition.CANCEL)
@@ -183,6 +185,15 @@ async def chain(monkeypatch):
     _Driver.queue, _Driver.ledger = queue, ledger
     _Driver.finish, _Driver.settle, _Driver.consumed, _Driver.linger = {}, {}, [], {}
     monkeypatch.setattr(execution_module, "RunDriver", _Driver)
+    # 恢复前查这个 Run 的最后一个回合是否已撤回；本文件不撤回（撤回语义见 test_turn_withdrawal）。
+    chain_withdrawn: set[int] = set()
+    monkeypatch.setattr(
+        actor_module,
+        "ContextStore",
+        lambda: SimpleNamespace(
+            run_last_turn_withdrawn=lambda _task_id, run_id: run_id in chain_withdrawn
+        ),
+    )
     # 推进前刷新排队投影；本文件不验证投影（见 test_task_actor_loop 的「先刷新再投递」）。
     states = SimpleNamespace(refresh_queued_messages=lambda _task_id: None)
     for getter, fake in (
@@ -232,7 +243,7 @@ async def chain(monkeypatch):
     service._tasks = ledger
     service._inputs = SimpleNamespace(
         prepare=lambda task_id, command, model_config_id, reasoning_effort=None,
-        agent_id="main_agent", *, delivery="immediate", reuse=None: TaskMessage.of(
+        agent_id="main_agent", *, delivery="immediate": TaskMessage.of(
             UserInputBody(
                 input_text=command.display_text,
                 launch=RunLaunch(agent_id=agent_id, model_config_id=model_config_id),
@@ -249,6 +260,7 @@ async def chain(monkeypatch):
         service=service,
         child_cancels=child_cancels,
         cancelled_teams=cancelled_teams,
+        withdrawn=chain_withdrawn,
     )
     await actor.abort()
     tool_call_cancellation_registry.clear_task(_TASK_ID)
@@ -483,10 +495,10 @@ async def test_message_after_cancelling_a_suspended_run_is_processed(chain) -> N
     await chain.service.send(_TASK_ID, _send_request("继续"))
     await _settle()
 
-    # 取消落定时排了一条「用户已取消」通知（id 1）；用户这条消息（id 2）开出新 Run，两条一并并入。
+    # 用户这条消息开出新 Run；「用户已停止」不入队，由新 Run 的驱动按上一个 Run 的结束原因推导。
     assert run.status == "cancelled"
     assert chain.ledger.current.id != run.id
-    assert _Driver.consumed == [1, 2]
+    assert _Driver.consumed == [1]
 
 
 # ---------------------------------------------------------------------------
@@ -624,32 +636,27 @@ async def test_placeholder_settle_failure_does_not_block_suspended_cancel(chain,
 
 
 # ---------------------------------------------------------------------------
-# 用户取消给下一个 Run 留通知
+# 取消按信号来源落库结束原因；「用户已停止」由下一次驱动推导，不入队（见 test_runtime_notice）
 # ---------------------------------------------------------------------------
 
 
-async def test_user_cancel_leaves_a_notice_for_the_next_run(chain) -> None:
-    await chain.service.send(_TASK_ID, _send_request("first"))
-    await _settle()
-    run = chain.ledger.current
+async def test_user_cancel_records_its_reason_and_queues_no_notice(chain) -> None:
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run.status = "suspended"
 
     await chain.service.cancel(_TASK_ID)
-    await _finish(run.id, "cancelled")
 
-    notices = [row for row in chain.queue.rows if isinstance(row.body, NoticeBody)]
-    assert [(row.body.notice_kind, row.delivery) for row in notices] == [
-        ("user_cancelled", "next_run")
-    ]
+    assert run.status == "cancelled" and run.end_reason == "user_cancelled"
+    assert not any(isinstance(row.body, NoticeBody) for row in chain.queue.rows)
 
 
-async def test_parent_stop_leaves_no_user_notice(chain) -> None:
-    await chain.service.send(_TASK_ID, _send_request("first"))
-    await _settle()
-    run = chain.ledger.current
+async def test_parent_stop_records_parent_reason(chain) -> None:
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run.status = "suspended"
 
     await chain.actor.cancel("parent")
-    await _finish(run.id, "cancelled")
 
+    assert run.status == "cancelled" and run.end_reason == "parent_cancelled"
     assert not any(isinstance(row.body, NoticeBody) for row in chain.queue.rows)
 
 
@@ -700,7 +707,7 @@ async def test_background_result_after_stop_starts_a_run(chain) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 编辑重跑：先校验再动数据；查执行阶段等停；闸门内交给撤回用例（其语义见 test_turn_withdrawal）
+# 撤回：查执行阶段等停；闸门内交给撤回用例（其语义见 test_turn_withdrawal）；不开新 Run
 # ---------------------------------------------------------------------------
 
 
@@ -713,69 +720,37 @@ class _Context:
                 sequence=sequence,
                 message_id=sequence,
                 include_in_context=True,
-                metadata=SimpleNamespace(kind=kind, presentation=f"p{sequence}"),
+                metadata=SimpleNamespace(kind=kind),
             )
             for sequence, kind in enumerate(kinds, start=1)
         ]
-
-    def latest_user_input(self, _task_id: int, session: Any = None):
-        for row in reversed(self.rows):
-            if row.include_in_context and row.metadata.kind == "user_input":
-                return row
-        return None
 
     def included(self) -> list[int]:
         return [row.sequence for row in self.rows if row.include_in_context]
 
 
 @pytest.fixture
-def rerun(chain, monkeypatch):
+def withdraw(chain, monkeypatch):
     context = _Context("user_input", "assistant", "user_input", "assistant")
-    reuses: list[Any] = []
     republished: list[int] = []
-    prepare = chain.service._inputs.prepare
 
-    def recording_prepare(*args, reuse=None, **kwargs):
-        reuses.append(reuse)
-        return prepare(*args, reuse=reuse, **kwargs)
-
-    chain.service._context = context
-    chain.service._inputs = SimpleNamespace(prepare=recording_prepare)
-
-    def withdraw(task_id: int, message_id: int, replacement: Any) -> None:
-        """撤回用例替身：移出目标及其后的行并让新消息入队（真实语义见 test_turn_withdrawal）。"""
-        target = context.latest_user_input(task_id)
-        assert target is not None and target.message_id == message_id
+    def withdraw_turn(task_id: int, message_id: int) -> None:
+        """撤回用例替身：移出目标及其后的行（真实语义与目标校验见 test_turn_withdrawal）。"""
+        target = next(row for row in context.rows if row.message_id == message_id)
         for row in context.rows:
             if row.sequence >= target.sequence:
                 row.include_in_context = False
-        service_module.task_runtime_spaces.enqueue(task_id, replacement)
 
     monkeypatch.setattr(
         service_module.service_depends,
         "get_turn_withdrawal_service",
-        lambda: SimpleNamespace(withdraw=withdraw),
+        lambda: SimpleNamespace(withdraw=withdraw_turn),
     )
     chain.service._states = SimpleNamespace(
         republish_from_canonical=lambda task_id: republished.append(task_id),
     )
-    monkeypatch.setattr(
-        service_module,
-        "main_session_factory",
-        lambda: SimpleNamespace(begin=contextlib.nullcontext),
-    )
-    chain.space = service_module.task_runtime_spaces.get_or_create(_TASK_ID)
-    chain.space.async_operation = contextlib.nullcontext
-    chain.context, chain.reuses, chain.republished = context, reuses, republished
+    chain.context, chain.republished = context, republished
     return chain
-
-
-def _rerun_request(text: str):
-    from app.assistant_transport.request import RerunMessageRequest
-
-    return RerunMessageRequest.model_validate(
-        {"message": {"role": "user", "parts": [{"type": "text", "text": text}]}, "modelConfigId": 1}
-    )
 
 
 def _finished_run(chain, status: str = "completed"):
@@ -784,85 +759,70 @@ def _finished_run(chain, status: str = "completed"):
     return run
 
 
-async def test_rerun_soft_deletes_target_and_later_rows_then_starts_a_run(rerun) -> None:
-    old = _finished_run(rerun)
+async def test_withdraw_removes_the_turn_and_starts_nothing(withdraw) -> None:
+    old = _finished_run(withdraw)
 
-    await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
+    await withdraw.service.withdraw(_TASK_ID, 3)
     await _settle()
 
-    assert rerun.context.included() == [1, 2]
-    assert rerun.reuses == ["p3"]  # 复用原消息的展示绑定
-    assert rerun.republished == [_TASK_ID]
-    assert rerun.ledger.current.id != old.id and rerun.ledger.current.status == "running"
-    assert _Driver.consumed == [1]
+    assert withdraw.context.included() == [1, 2]
+    assert withdraw.republished == [_TASK_ID]
+    # 编辑是前端把内容放回输入框再照常发送：撤回本身不入队、不开新 Run。
+    assert withdraw.ledger.current is old and withdraw.queue.rows == []
 
 
-async def test_rerun_of_a_non_latest_input_is_rejected_untouched(rerun) -> None:
-    _finished_run(rerun)
-
-    with pytest.raises(actor_module.SessionConflictError) as error:
-        await rerun.service.rerun(_TASK_ID, 1, _rerun_request("改旧的"))
-
-    assert error.value.code == "EDIT_TARGET_STALE"
-    assert rerun.context.included() == [1, 2, 3, 4] and rerun.queue.rows == []
-
-
-async def test_rerun_with_invalid_input_leaves_run_and_context_untouched(rerun) -> None:
-    run = _finished_run(rerun, "suspended")
-
-    def reject(*_args, **_kwargs):
-        raise ValueError("bad input")
-
-    rerun.service._inputs = SimpleNamespace(prepare=reject)
-    with pytest.raises(ValueError):
-        await rerun.service.rerun(_TASK_ID, 3, _rerun_request("x"))
-
-    assert run.status == "suspended"
-    assert rerun.context.included() == [1, 2, 3, 4] and rerun.queue.rows == []
-
-
-async def test_rerun_is_rejected_while_running_without_stopping_the_run(rerun) -> None:
-    """重跑不替用户停止：运行中的 Run 用的是内存上下文，看不到移出，只能拒绝。"""
-    await rerun.service.send(_TASK_ID, _send_request("hello"))
+async def test_withdraw_is_rejected_while_running_without_stopping_the_run(withdraw) -> None:
+    """撤回不替用户停止：运行中的 Run 用的是内存上下文，看不到移出，只能拒绝。"""
+    await withdraw.service.send(_TASK_ID, _send_request("hello"))
     await _settle()
-    old = rerun.ledger.current
+    old = withdraw.ledger.current
 
     with pytest.raises(actor_module.SessionConflictError) as error:
-        await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
+        await withdraw.service.withdraw(_TASK_ID, 3)
 
     assert error.value.code == "RUN_NOT_STOPPED"
     assert not cancellation_registry.is_cancelled(_TASK_ID)
-    assert old.status == "running" and rerun.context.included() == [1, 2, 3, 4]
+    assert old.status == "running" and withdraw.context.included() == [1, 2, 3, 4]
     await _finish(old.id, "completed")
 
 
-async def test_rerun_is_rejected_while_suspended(rerun) -> None:
-    old = _finished_run(rerun, "suspended")
+async def test_withdraw_is_rejected_while_suspended(withdraw) -> None:
+    old = _finished_run(withdraw, "suspended")
 
     with pytest.raises(actor_module.SessionConflictError) as error:
-        await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
+        await withdraw.service.withdraw(_TASK_ID, 3)
 
     assert error.value.code == "RUN_NOT_STOPPED"
-    assert old.status == "suspended" and rerun.context.included() == [1, 2, 3, 4]
+    assert old.status == "suspended" and withdraw.context.included() == [1, 2, 3, 4]
 
 
-async def test_rerun_is_rejected_while_the_executor_is_still_settling(rerun) -> None:
+async def test_withdraw_is_rejected_while_the_executor_is_still_settling(withdraw) -> None:
     """Run 已落定 cancelled、执行者还在收尾：此时改 context 会与收尾交错，按执行阶段拒绝。"""
-    await rerun.service.send(_TASK_ID, _send_request("hello"))
+    await withdraw.service.send(_TASK_ID, _send_request("hello"))
     await _settle()
-    old = rerun.ledger.current
+    old = withdraw.ledger.current
     _Driver.linger[old.id] = asyncio.Event()
     await _finish(old.id, "cancelled")
     assert old.status == "cancelled"
 
     with pytest.raises(actor_module.SessionConflictError) as error:
-        await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
+        await withdraw.service.withdraw(_TASK_ID, 3)
     assert error.value.code == "RUN_NOT_STOPPED"
-    assert rerun.context.included() == [1, 2, 3, 4]
+    assert withdraw.context.included() == [1, 2, 3, 4]
 
     _Driver.linger[old.id].set()
     await _settle()
-    await rerun.service.rerun(_TASK_ID, 3, _rerun_request("改过的"))
-    await _settle()
-    assert rerun.context.included() == [1, 2]
-    assert rerun.ledger.current.id != old.id and rerun.ledger.current.status == "running"
+    await withdraw.service.withdraw(_TASK_ID, 3)
+    assert withdraw.context.included() == [1, 2]
+
+
+async def test_resume_is_refused_once_the_runs_last_turn_was_withdrawn(withdraw) -> None:
+    """撤回后这个 Run 没有可续的回合：恢复会把输出接在已撤回的回合上，按不可恢复拒绝。"""
+    old = _finished_run(withdraw, "cancelled")
+    withdraw.withdrawn.add(old.id)
+
+    with pytest.raises(actor_module.SessionConflictError) as error:
+        await withdraw.service.resume(_TASK_ID)
+
+    assert error.value.code == "RUN_NOT_RESUMABLE"
+    assert old.status == "cancelled"

@@ -89,8 +89,10 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
                 presentation=UserInputPresentation(display_text=message["content"]),
             )
     store.context.append(
-        store.task.id, run_id, message, sequence, True, metadata, message_id=message_id
-    , turn=1)
+        store.task.id, run_id, message, sequence, True, metadata, message_id=message_id,
+        # 夹具里每个 Run 一个回合。
+        turn=run_id,
+    )
 
 
 def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = None) -> None:
@@ -202,8 +204,8 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     store.tasks.set_current_run_id(store.task.id, cancelled.id)
 
     state = store.state.get_state(store.task.id)
-    # 消息按 context 序号扁平排列，Run 分组只体现在 ``runId``；activity 是最新 Run 的摘要。
-    assert [message["runId"] for message in state["messages"]] == [
+    # 消息按回合扁平排列（夹具里每个 Run 一个回合），Run 不进快照；activity 是最新 Run 的摘要。
+    assert [message["turn"] for message in state["messages"]] == [
         completed.id,
         completed.id,
         failed.id,
@@ -211,12 +213,13 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
         cancelled.id,
         cancelled.id,
     ]
-    assert state["activity"]["runId"] == cancelled.id
+    assert state["activity"]["turn"] == cancelled.id
     assert state["activity"]["status"] == "cancelled"
+    assert state["activity"]["resumable"] is True
     first_user = store.contexts.get(store.task.id, include_in_context=False)[0]
     assert [message["id"] for message in state["messages"][:2]] == [
         str(first_user.message_id),
-        f"assistant-{first_user.message_id}",
+        f"assistant-turn-{first_user.turn}",
     ]
     # 每个终态 Run（含最新 Run）的结局写在各自最后一条助手消息上。
     assert [
@@ -333,7 +336,7 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
             source_sequence=1,
             event_id="live-delta",
             task_id=store.task.id,
-            run_id=run.id,
+            run_id=run.id, turn=run.id,
             part="text",
             delta=" live",
         )

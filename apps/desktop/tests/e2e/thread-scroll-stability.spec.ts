@@ -32,16 +32,16 @@ function answer(index: number): string {
 function longConversation(): TransportState {
   const messages: TransportState["messages"] = [];
   for (let index = 0; index < PAIRS; index += 1) {
-    messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}：${"请帮我看看。".repeat(index % 3 + 1)}` }], runId: index + 1, source: null, outcome: null });
+    messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}：${"请帮我看看。".repeat(index % 3 + 1)}` }], turn: index + 1, inherited: false, source: null, outcome: null });
     messages.push({
-      id: `a-${index}`, role: "assistant", runId: index + 1, source: null, outcome: OUTCOME,
+      id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: false, source: null, outcome: OUTCOME,
       parts: [
         { type: "text", text: answer(index), finalReply: true },
       ],
     } as TransportState["messages"][number]);
   }
   return {
-    title: "长对话", messages, messageOffset: 0, activity: { modelActivity: null, runId: PAIRS, ...ACTIVITY_OUTCOME, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
+    title: "长对话", messages, messageOffset: 0, activity: { modelActivity: null, turn: PAIRS, resumable: false, ...ACTIVITY_OUTCOME, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 }
@@ -93,7 +93,7 @@ test("运行中上翻历史保留不连续尾行之间的高度，正文增长�
   const state = longConversation();
   // 保持一屏历史窗口以内，隔离分页与不连续渲染区间的行为。
   state.messages = state.messages.slice(0, 80);
-  state.activity = { ...state.activity!, runId: 40, status: "running", endReason: null, startedAt: new Date().toISOString() };
+  state.activity = { ...state.activity!, turn: 40, status: "running", endReason: null, startedAt: new Date().toISOString() };
   const last = state.messages.at(-1)!;
   last.outcome = null;
   last.parts = [{ type: "text", text: "正在生成的末尾回复", status: "running" }];

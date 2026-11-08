@@ -400,7 +400,7 @@ test("fork context: reply boundary, presentation, restart and source deletion", 
     expect((await state(manual.task_id)).activity).toBeNull();
     expect(JSON.stringify((await state(manual.task_id)).messages)).toContain("CHILD_SCOPE_C");
     await expect(page.getByText("CHILD_DONE_D", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "撤回" })).toHaveCount(0);
     await page.screenshot({ path: test.info().outputPath("fork-manual.png"), animations: "disabled" });
     // An earlier reply stops at that reply; the latest one keeps the whole conversation.
     const sourceState = await state(task_id);

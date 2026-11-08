@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { registerInlineFileMetadata, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
+import { registerLocalFile, restoreLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 import { prepareUserCommand } from "@/lib/assistant/composer/prepare-user-command";
 
 describe("prepare user command", () => {
@@ -38,24 +38,6 @@ describe("prepare user command", () => {
     });
   });
 
-  it("leaves an unresolved token in an edit for backend recovery", () => {
-    expect(prepareUserCommand({
-      type: "add-message",
-      sourceId: "user-1",
-      message: {
-        role: "user",
-        parts: [{ type: "text", text: "读取 [[cosir-file:missing]]" }],
-      },
-    })).toEqual({
-      type: "add-message",
-      sourceId: "user-1",
-      message: {
-        role: "user",
-        parts: [{ type: "text", text: "读取 [[cosir-file:missing]]" }],
-      },
-    });
-  });
-
   it("rejects a new message whose file token is no longer registered", () => {
     expect(() => prepareUserCommand({
       type: "add-message",
@@ -66,24 +48,28 @@ describe("prepare user command", () => {
     })).toThrow("附件已失效，请重新选择附件");
   });
 
-  it("历史元数据没有路径时仅允许编辑绑定恢复，不允许用于新的消息", () => {
-    registerInlineFileMetadata({ id: "history-only", name: "history.md", contentType: "text/markdown" });
-    const command = { type: "add-message", message: { role: "user", parts: [{ type: "text", text: "[[cosir-file:history-only]]" }] } };
-    expect(() => prepareUserCommand(command)).toThrow("附件已失效");
-    expect(prepareUserCommand({ ...command, sourceId: "history-user" })).toEqual({ ...command, sourceId: "history-user" });
+  it("放回输入框的历史附件按快照里的路径登记后，照常随新消息发送", () => {
+    restoreLocalFile({ id: "history", name: "history.md", contentType: "text/markdown", path: "/w/history.md" });
+    const prepared = prepareUserCommand({
+      type: "add-message",
+      message: { role: "user", parts: [{ type: "text", text: "[[cosir-file:history]]" }] },
+    }) as { message: { attachments: unknown[] } };
+    expect(prepared.message.attachments).toEqual([
+      { id: "history", name: "history.md", contentType: "text/markdown", path: "/w/history.md" },
+    ]);
   });
 
-  it("keeps canonical hidden token wrappers in an edit request", () => {
+  it("keeps canonical hidden token wrappers in a restored message", () => {
+    restoreLocalFile({ id: "hidden", name: "notes.md", contentType: "text/markdown", path: "/w/notes.md" });
     expect(prepareUserCommand({
       type: "add-message",
-      sourceId: "user-1",
       message: {
         role: "user",
-        parts: [{ type: "text", text: "请查看 <!-- [[cosir-file:missing]] -->" }],
+        parts: [{ type: "text", text: "请查看 <!-- [[cosir-file:hidden]] -->" }],
       },
     })).toMatchObject({
       message: {
-        parts: [{ type: "text", text: "请查看 <!-- [[cosir-file:missing]] -->" }],
+        parts: [{ type: "text", text: "请查看 <!-- [[cosir-file:hidden]] -->" }],
       },
     });
   });

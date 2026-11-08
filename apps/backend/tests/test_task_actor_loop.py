@@ -119,7 +119,7 @@ class _Driver:
     def __init__(self, *_args: object) -> None:
         self._mailbox = _Driver.mailbox
 
-    async def drive(self, run) -> None:
+    async def drive(self, run, preceding_run) -> None:
         if run.id in _Driver.fail:
             raise RuntimeError("run settlement failed")
         drained = []
@@ -141,7 +141,7 @@ def _user(text: str = "hi") -> UserInputBody:
 
 
 def _notice() -> NoticeBody:
-    return NoticeBody(content="config changed", notice_kind="probe")
+    return NoticeBody(content="config changed", notice_kind="system_prompt_delta")
 
 
 def _result() -> BackgroundResultBody:
@@ -156,6 +156,12 @@ def harness(monkeypatch):
     _Driver.drives, _Driver.finish, _Driver.settle, _Driver.fail = [], {}, {}, set()
     _Driver.ledger, _Driver.queue = ledger, queue
     monkeypatch.setattr(execution_module, "RunDriver", _Driver)
+    # 恢复前查最后一个回合是否已撤回；本文件不撤回（见 test_transport_command_chain 的撤回用例）。
+    monkeypatch.setattr(
+        actor_module,
+        "ContextStore",
+        lambda: SimpleNamespace(run_last_turn_withdrawn=lambda _task_id, _run_id: False),
+    )
     refreshed: list[list[int | None]] = []
     # 记下每次刷新排队投影时队列里已有的消息，用来断言「先刷新、再投递」。
     states = SimpleNamespace(

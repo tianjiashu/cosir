@@ -67,7 +67,7 @@ def _decision(decision: str = "approve", *, message_id: int | None = 5) -> TaskM
 
 def _notice(text: str, message_id: int) -> TaskMessage:
     """外部队列里的通知行。"""
-    return TaskMessage.of(NoticeBody(content=text, notice_kind="probe"), message_id=message_id)
+    return TaskMessage.of(NoticeBody(content=text, notice_kind="terminal_session_ended"), message_id=message_id)
 
 
 class _Context:
@@ -84,8 +84,8 @@ class _Context:
         self.updated: list[tuple[str, ToolMessageMetadata]] = []
         self.update_sessions: list[Any] = []
 
-    def opens_turn(self, message, metadata, project) -> bool:
-        return True
+    # 写入后读回的当前回合（替身里所有行都在第 1 回合）。
+    current_turn = 1
 
     def add_message(self, message, **kwargs):
         self.added.append({"message": message, **kwargs})
@@ -267,7 +267,7 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
             {
                 "id": "m1",
                 "role": "assistant",
-                "runId": 2,
+                "turn": 2, "inherited": False,
                 "outcome": None,
                 "source": None,
                 "parts": [

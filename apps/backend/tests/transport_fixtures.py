@@ -41,13 +41,14 @@ def consumed(
     message_id: int,
     presentation: UserInputPresentation,
     *,
-    opens_turn: bool = True,
+    turn: int | None = None,
 ) -> InputConsumedEvent:
-    """用户输入总开回合；途中来信由调用方显式传 ``opens_turn=False``。"""
+    """用户输入总开一个新回合：默认回合号取消息身份（夹具里每条输入一个回合）；途中来信由调用方
+    传它所在回合的号。"""
     return InputConsumedEvent(
         task_id=task_id,
         run_id=run_id,
         message_id=message_id,
         presentation=presentation,
-        opens_turn=opens_turn,
+        turn=message_id if turn is None else turn,
     )

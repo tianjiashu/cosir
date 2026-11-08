@@ -105,7 +105,9 @@ def test_visits_resolve_role_from_registry_by_agent_id(fake_registry: None) -> N
     )
 
     draft_visits = visits_by_node["draft"]
-    assert [v["conversation_run_id"] for v in draft_visits] == [10, 12]
+    # 访问按节点 Run 的先后编号；对话 Run 号不进前端读模型。
+    assert [v["visit_number"] for v in draft_visits] == [1, 2]
+    assert all("conversation_run_id" not in v for v in draft_visits)
     # 角色来自注册表解析，而非 Run 上的冻结字段。
     assert draft_visits[0]["agents"][0]["agent_id"] == "planner"
     assert draft_visits[0]["agents"][0]["role"] == "role:planner"
@@ -148,6 +150,6 @@ def test_running_placeholder_resolves_role_from_registry(fake_registry: None) ->
 
     # 当前节点尚未创建 Run 时，占位访问的角色仍按节点 agent_id 从注册表解析。
     placeholder = visits_by_node["draft"][0]
-    assert placeholder["conversation_run_id"] is None
+    assert placeholder["visit_number"] == 1
     assert placeholder["status"] == "running"
     assert placeholder["agents"][0]["role"] == "role:planner"

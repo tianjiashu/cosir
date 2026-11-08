@@ -69,13 +69,13 @@ def test_consumption_builds_the_message_without_a_queued_entry() -> None:
         run_id=1,
         message_id=7,
         presentation=UserInputPresentation(display_text="你好"),
-        opens_turn=True,
+        turn=4,
     )
 
     mutations = plan_input_consumed(event, state)
 
     user = mutations[0].value
-    assert (user["id"], user["role"], user["runId"]) == ("7", "user", 1)
+    assert (user["id"], user["role"], user["turn"]) == ("7", "user", 4)
     assert user["parts"] == [{"type": "text", "text": "你好", "status": "completed"}]
     assert mutations[-1].path == ("queued_messages",)
     assert mutations[-1].value == []

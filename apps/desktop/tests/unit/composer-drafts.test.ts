@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { bindComposerDraft, editDraftKey, forgetComposerDraft, forgetTaskComposerDrafts, readComposerDraft, recoverComposerDraft, recoverRejectedCommands, saveComposerDraft, subscribeComposerDrafts, taskDraftKey } from "@/lib/assistant/composer/composer-drafts";
+import { bindComposerDraft, forgetTaskComposerDrafts, readComposerDraft, recoverComposerDraft, recoverRejectedCommands, saveComposerDraft, taskDraftKey } from "@/lib/assistant/composer/composer-drafts";
 import { applyEditDraftToComposer, editableDraftAttachments } from "@/lib/assistant/composer/edit-composer-draft";
 import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 
@@ -34,7 +34,7 @@ describe("Task draft ownership", () => {
   });
 });
 
-const rejected = (text: string, sourceId?: string): UserAddMessageCommand => ({ type: "add-message", sourceId, message: { role: "user", parts: [{ type: "text", text }] } });
+const rejected = (text: string): UserAddMessageCommand => ({ type: "add-message", message: { role: "user", parts: [{ type: "text", text }] } });
 
 describe("recoverRejectedCommands", () => {
   it("returns a rejected send to the Task's saved draft after the user left", async () => {
@@ -51,12 +51,6 @@ describe("recoverRejectedCommands", () => {
     unbind();
   });
 
-  it("gives a rejected edit back to its own draft, not the main composer", async () => {
-    await recoverRejectedCommands(99103, [rejected("edited", "message-1")]);
-    expect(readComposerDraft(editDraftKey(99103, "message-1"))?.text).toBe("edited");
-    expect(readComposerDraft(taskDraftKey(99103))).toBeUndefined();
-  });
-
   it("ignores a command with nothing to give back", async () => {
     await expect(recoverRejectedCommands(99104, [rejected("   ")])).resolves.toBeNull();
     expect(readComposerDraft("task:99104")).toBeUndefined();
@@ -64,26 +58,12 @@ describe("recoverRejectedCommands", () => {
 });
 
 describe("draft lifetime", () => {
-  it("deleting a Task drops its input and edit drafts, not other Tasks' with a similar id", () => {
+  it("deleting a Task drops its input draft, not other Tasks' with a similar id", () => {
     saveComposerDraft(taskDraftKey(99105), draft("main"));
-    saveComposerDraft(editDraftKey(99105, "m"), draft("edit"));
-    saveComposerDraft(editDraftKey(991050, "m"), draft("other"));
+    saveComposerDraft(taskDraftKey(991050), draft("other"));
     forgetTaskComposerDrafts(99105);
     expect(readComposerDraft(taskDraftKey(99105))).toBeUndefined();
-    expect(readComposerDraft(editDraftKey(99105, "m"))).toBeUndefined();
-    expect(readComposerDraft(editDraftKey(991050, "m"))?.text).toBe("other");
+    expect(readComposerDraft(taskDraftKey(991050))?.text).toBe("other");
     forgetTaskComposerDrafts(991050);
-  });
-
-  it("notifies only when a draft appears or disappears, not on every keystroke", () => {
-    const listener = vi.fn();
-    const off = subscribeComposerDrafts(listener);
-    const key = editDraftKey(99107, "m");
-    saveComposerDraft(key, draft("a"));
-    saveComposerDraft(key, draft("ab"));
-    expect(listener).toHaveBeenCalledTimes(1);
-    forgetComposerDraft(key);
-    expect(listener).toHaveBeenCalledTimes(2);
-    off();
   });
 });

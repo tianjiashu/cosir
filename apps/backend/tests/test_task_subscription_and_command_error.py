@@ -208,7 +208,7 @@ async def test_one_connection_survives_run_completion_new_run_cancel_and_suspend
     ]
     activity = service.get_state(_TASK_ID)["activity"]
     assert activity is not None
-    assert (activity["runId"], activity["status"]) == (2, "cancelled")
+    assert activity["status"] == "cancelled"
     assert all(frame.kind == "mutation" for frame in collector.frames[1:])
 
     collector.cancel()

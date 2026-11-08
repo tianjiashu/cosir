@@ -312,8 +312,9 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
     human_message = {"role": "user", "content": "继续"}
     env.context.append(env.task.id, previous_run.id, ai_message, 1, True, turn=1)
     env.context.append(
-        env.task.id, current_run.id, human_message, 2, True, _user_metadata(human_message)
-    , turn=1)
+        env.task.id, current_run.id, human_message, 2, True, _user_metadata(human_message),
+        turn=2,
+    )
 
     manager = _manager(
         context_store=env.context,

@@ -128,7 +128,7 @@ def test_channel_switch_flushes_and_closes_before_new_channel() -> None:
 
     harness.machine.text("hi", source_sequence=1)
     harness.machine.receive(
-        source_sequence=1, text=None, reasoning=True, tool_delta=False, tool_calls=[]
+        source_sequence=1, turn=1, text=None, reasoning=True, tool_delta=False, tool_calls=[]
     )
 
     assert harness.event_kinds() == ["delta:text", "closed:text"]
@@ -151,7 +151,7 @@ def test_tool_call_flushes_pending_before_closing() -> None:
 
     harness.machine.text("tail", source_sequence=1)
     harness.machine.receive(
-        source_sequence=1, text=None, reasoning=False, tool_delta=True, tool_calls=[]
+        source_sequence=1, turn=1, text=None, reasoning=False, tool_delta=True, tool_calls=[]
     )
 
     assert harness.event_kinds() == ["delta:text", "closed:text"]
@@ -216,16 +216,16 @@ def test_part_lifecycle_is_well_formed_across_interleaving() -> None:
     harness = _Harness(min_chars=3, max_interval=0.02)
 
     harness.machine.receive(
-        source_sequence=1, text=None, reasoning=True, tool_delta=False, tool_calls=[]
+        source_sequence=1, turn=1, text=None, reasoning=True, tool_delta=False, tool_calls=[]
     )
     harness.machine.text("cd", source_sequence=1)
     harness.clock.advance(0.02)
     harness.machine.receive(
-        source_sequence=1, text=None, reasoning=True, tool_delta=False, tool_calls=[]
+        source_sequence=1, turn=1, text=None, reasoning=True, tool_delta=False, tool_calls=[]
     )
     harness.machine.text("gh", source_sequence=1)
     harness.machine.receive(
-        source_sequence=1, text=None, reasoning=False, tool_delta=True, tool_calls=[]
+        source_sequence=1, turn=1, text=None, reasoning=False, tool_delta=True, tool_calls=[]
     )
     harness.machine.text("ij", source_sequence=1)
     harness.machine.finish()
@@ -333,16 +333,16 @@ def test_phases_follow_delta_not_accumulated_calls(monkeypatch):
     machine = harness.machine
     calls = [_tool_call("c1", "read_file")]
     machine.start()
-    machine.receive(source_sequence=1, text=None, reasoning=True, tool_delta=False, tool_calls=[])
-    machine.receive(source_sequence=1, text=None, reasoning=True, tool_delta=False, tool_calls=[])
+    machine.receive(source_sequence=1, turn=1, text=None, reasoning=True, tool_delta=False, tool_calls=[])
+    machine.receive(source_sequence=1, turn=1, text=None, reasoning=True, tool_delta=False, tool_calls=[])
     machine.receive(
-        source_sequence=1, text=None, reasoning=False, tool_delta=True, tool_calls=calls
+        source_sequence=1, turn=1, text=None, reasoning=False, tool_delta=True, tool_calls=calls
     )
     machine.receive(
-        source_sequence=1, text="答案", reasoning=False, tool_delta=False, tool_calls=calls
+        source_sequence=1, turn=1, text="答案", reasoning=False, tool_delta=False, tool_calls=calls
     )
     machine.receive(
-        source_sequence=1, text="继续", reasoning=False, tool_delta=False, tool_calls=calls
+        source_sequence=1, turn=1, text="继续", reasoning=False, tool_delta=False, tool_calls=calls
     )
     machine.tool_call(calls)  # 最终累计快照不能回退成 tool_call 阶段，也不能截断正文。
     assert harness.closed_parts == []
@@ -364,7 +364,7 @@ def test_mixed_chunk_retains_text_and_only_signals_reasoning():
     harness = _Harness()
     harness.machine.start()
     harness.machine.receive(
-        source_sequence=1, text="正文", reasoning=True, tool_delta=True, tool_calls=[]
+        source_sequence=1, turn=1, text="正文", reasoning=True, tool_delta=True, tool_calls=[]
     )
     harness.machine.finish()
     assert [e.phase for e in harness.events if isinstance(e, ModelActivityEvent)] == [

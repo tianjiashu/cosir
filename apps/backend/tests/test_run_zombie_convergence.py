@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 
 from app.assistant_transport.projection.event_projection import plan_event
 from app.config.logging.logger import log
-from app.core.events import RunInitializedEvent
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
@@ -23,7 +22,8 @@ _SNAPSHOT = {"messages": [], "activity": None, "error": None}
 
 def _activity(run_id: int, status: str) -> dict:
     return {"modelActivity": None,
-        "runId": run_id,
+        "turn": None,
+        "resumable": False,
         "status": status,
         "endReason": None,
         "error": None,
@@ -46,31 +46,6 @@ def _capture_warnings() -> tuple[list[logging.LogRecord], logging.Handler]:
     handler = _Capture()
     log.addHandler(handler)
     return records, handler
-
-
-def test_run_initialized_skeleton_drop_is_logged() -> None:
-    """当前活动是更新且未结束的 Run 时，旧 Run 的初始化被丢弃，必须留 WARNING 日志。"""
-
-    diverged = {
-        **_SNAPSHOT,
-        "activity": _activity(12, "running"),
-    }
-    records, handler = _capture_warnings()
-    try:
-        assert (
-            plan_event(
-                RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=11),
-                diverged,
-            )
-            == []
-        )
-    finally:
-        log.removeHandler(handler)
-    assert any(
-        record.getMessage() == "transport_run_initialized_dropped"
-        and record.levelno == logging.WARNING
-        for record in records
-    )
 
 
 def test_run_status_transition_drop_is_logged() -> None:

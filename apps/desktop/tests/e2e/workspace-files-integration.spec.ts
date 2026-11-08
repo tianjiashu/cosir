@@ -276,7 +276,7 @@ test("引用：@ 搜索去重、设置页隐藏文件并恢复草稿", async ({
   await expect(input.locator("[data-workspace-reference]")).toHaveCount(1);
 });
 
-test("引用：Markdown 粘贴、普通消息发送、重载历史及编辑重跑", async ({
+test("引用：Markdown 粘贴、普通消息发送、重载历史后撤回再发送", async ({
   page,
   request,
 }) => {
@@ -306,7 +306,7 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史及编辑重�
     };
   }> = [];
   page.on("request", (req) => {
-    if (/\/tasks\/\d+\/messages(\/[^/]+\/rerun)?$/.test(req.url()) && req.method() === "POST")
+    if (/\/tasks\/\d+\/messages$/.test(req.url()) && req.method() === "POST")
       sent.push({ url: req.url(), ...req.postDataJSON() });
   });
   await page.getByRole("button", { name: "开始对话", exact: true }).click();
@@ -333,12 +333,11 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史及编辑重�
   await page.reload();
   await expect(user.locator("[data-workspace-reference]")).toHaveCount(3);
   await user.hover();
-  await user.getByRole("button", { name: "编辑并重跑" }).click();
-  const edit = page.getByRole("textbox", { name: "编辑消息" });
-  await expect(edit.locator("[data-workspace-reference]")).toHaveCount(3);
-  await page.getByRole("button", { name: "重跑", exact: true }).click();
+  await user.getByRole("button", { name: "撤回" }).click();
+  // 撤回后引用原样回到主输入框，照常发送。
+  await expect(page.getByLabel("消息输入").locator("[data-workspace-reference]")).toHaveCount(3);
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect.poll(() => sent.length).toBe(2);
-  expect(sent[1].url).toMatch(/\/messages\/[^/]+\/rerun$/);
   expect(
     sent[1].message.parts
       .map((part) => part.text)

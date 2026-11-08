@@ -137,21 +137,21 @@ def _start(projector: ConversationEventProjector, context_window_total: int | No
     _append_user_input(projector)
 
 
-def _messages(state: ConversationStateSnapshot, run_id: int) -> list[dict[str, Any]]:
-    """某 Run 的消息（扁平消息列表按 ``runId`` 过滤）。"""
-    return [message for message in state["messages"] if message["runId"] == run_id]
+def _messages(state: ConversationStateSnapshot, turn: int) -> list[dict[str, Any]]:
+    """某回合的消息（夹具里每个 Run 一个回合，回合号与消息身份、Run 号相同）。"""
+    return [message for message in state["messages"] if message["turn"] == turn]
 
 
-def _run(state: ConversationStateSnapshot, run_id: int) -> dict[str, Any]:
-    """某 Run 在 Task 视角 snapshot 里的生命周期视图：当前活动读 ``activity``，旧 Run 读它最后
-    一条助手消息的 ``outcome``。"""
+def _run(state: ConversationStateSnapshot, turn: int) -> dict[str, Any]:
+    """回合 ``turn`` 所属 Run 的生命周期视图：已有结局且不是当前回合就读结局，否则读当前活动。"""
     activity = state["activity"]
-    if activity is not None and activity["runId"] == run_id:
-        return dict(activity)
-    assistant = [m for m in _messages(state, run_id) if m["role"] == "assistant"]
-    outcome = assistant[-1]["outcome"] if assistant else None
-    assert outcome is not None, f"run {run_id} 既不是当前活动也没有结局"
-    return dict(outcome)
+    reply = next((m for m in state["messages"] if m["id"] == f"assistant-turn-{turn}"), None)
+    if reply is not None and reply["outcome"] is not None and (
+        activity is None or activity["turn"] != turn
+    ):
+        return dict(reply["outcome"])
+    assert activity is not None, f"回合 {turn} 既没有结局也不属于当前活动"
+    return dict(activity)
 
 
 def test_run_initialized_and_user_input(
@@ -162,12 +162,12 @@ def test_run_initialized_and_user_input(
     assert _messages(snapshots.states[1], 1) == []
     _append_user_input(event_projector)
     state = snapshots.states[1]
-    assert state["activity"]["runId"] == 1
-    # Run 由调度 actor 直接以 running 创建，没有待认领态。
+    # 并入输入就推进当前活动的可见回合；Run 由调度 actor 直接以 running 创建，没有待认领态。
+    assert state["activity"]["turn"] == 1
     assert state["activity"]["status"] == "running"
-    assert [(m["id"], m["role"], m["runId"], m["outcome"]) for m in state["messages"]] == [
+    assert [(m["id"], m["role"], m["turn"], m["outcome"]) for m in state["messages"]] == [
         ("1", "user", 1, None),
-        ("assistant-1", "assistant", 1, None),
+        ("assistant-turn-1", "assistant", 1, None),
     ]
     assert state["messages"][0]["parts"][0]["text"] == "你好"
     assert state["messages"][1]["parts"] == []
@@ -181,7 +181,7 @@ def test_delegation_status_event_projects_display_data_to_target_tool(
     event_projector.process(
         ToolCallCreatedEvent(
             task_id=1,
-            run_id=1,
+            run_id=1, turn=1,
             tool_call_id="delegate-1",
             tool_name="delegate_task",
         )
@@ -227,6 +227,7 @@ def test_user_input_projects_ordered_text_image_and_file_parts(
             "file": "cosir-local-file:readme",
             "name": "README.md",
             "contentType": "text/markdown",
+            "path": "attachments/readme.md",
         },
         {"type": "text", "text": "和这张图", "status": "completed"},
         {"type": "image", "image": "cosir-attachment://" + "a" * 64},
@@ -250,9 +251,8 @@ def test_user_input_projects_ordered_text_image_and_file_parts(
         ),
     )
 
-    user_parts = _messages(snapshots.states[1], 1)[0]["parts"]
-    assert user_parts == parts
-    assert all(part.get("path") is None for part in user_parts if isinstance(part, dict))
+    # 文件 part 带本机路径：放回输入框的附件要原样再发送。
+    assert _messages(snapshots.states[1], 1)[0]["parts"] == parts
 
 
 def test_user_input_supports_attachment_only_and_duplicate_event(
@@ -286,6 +286,7 @@ def test_user_input_supports_attachment_only_and_duplicate_event(
             "file": "cosir-local-file:only-file",
             "name": "a.txt",
             "contentType": "text/plain",
+            "path": "attachments/only-file.txt",
         }
     ]
 
@@ -302,6 +303,7 @@ def test_build_user_input_parts_preserves_mixed_composer_order() -> None:
                 "id": "readme",
                 "name": "README.md",
                 "content_type": "text/markdown",
+                "path": "attachments/readme.md",
             }
         ],
     )
@@ -313,6 +315,7 @@ def test_build_user_input_parts_preserves_mixed_composer_order() -> None:
         "file": "cosir-local-file:readme",
         "name": "README.md",
         "contentType": "text/markdown",
+        "path": "attachments/readme.md",
     }
 
 
@@ -367,7 +370,7 @@ def test_assistant_text_and_reasoning_parts(
         ModelActivityEvent(task_id=1, run_id=1, step_id="step-1", phase="reasoning")
     )
     event_projector.process(
-        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="答案")
+        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="答案")
     )
     parts = _messages(snapshots.states[1], 1)[1]["parts"]
     assert [part["type"] for part in parts] == ["text"]
@@ -380,7 +383,7 @@ def test_duplicate_text_delta_is_not_appended_twice(
     event_projector, snapshots = projector
     _start(event_projector)
     event = AssistantTextDeltaEvent(
-        source_sequence=1, task_id=1, run_id=1, part="text", delta="一次"
+        source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="一次"
     )
     first = event_projector.process(event)
     second = event_projector.process(event)
@@ -456,7 +459,7 @@ def test_tool_part_is_created_after_run_resume(
     )
 
     event_projector.process(
-        ToolCallCreatedEvent(task_id=1, run_id=1, tool_call_id="call-9", tool_name="read_file")
+        ToolCallCreatedEvent(task_id=1, run_id=1, turn=1, tool_call_id="call-9", tool_name="read_file")
     )
     event_projector.process(
         ToolCallStatusChangedEvent(
@@ -520,7 +523,7 @@ def test_run_status_usage_is_projected(
     )
     state = snapshots.states[1]
     assert _run(state, 1)["usage"]["total_tokens"] == 14
-    assert state["activity"]["runId"] == 1
+    assert state["activity"]["turn"] == 1
     assert _run(state, 1)["contextWindowTotal"] == 100
     assert _run(state, 1)["status"] == "completed"
 
@@ -575,27 +578,6 @@ def test_new_run_clears_previous_run_usage(
     assert "context_window_total" not in state
 
 
-def test_late_previous_run_events_cannot_overwrite_current_run(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event_projector.process(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
-    )
-    event_projector.process(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
-    )
-    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
-    event_projector.process(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.FAILED)
-    )
-    state = snapshots.states[1]
-    assert _run(state, 2)["status"] == "running"
-    assert _run(state, 1)["status"] == "completed"
-    assert _run(state, 1)["usage"] is None
-
-
 def test_structured_result_updates_completed_run_without_status_transition(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
@@ -609,7 +591,6 @@ def test_structured_result_updates_completed_run_without_status_transition(
     event_projector.process(
         RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
     )
-    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
     change = event_projector.process(
         RunResultUpdatedEvent(
             task_id=1,
@@ -619,45 +600,10 @@ def test_structured_result_updates_completed_run_without_status_transition(
         )
     )
     assert change is not None and change.mutations
-    assert snapshots.states[1]["activity"]["runId"] == 2
+    assert snapshots.states[1]["activity"]["endReason"] == "structured_output_failed"
     assert _run(snapshots.states[1], 1)["status"] == "completed"
     assert _run(snapshots.states[1], 1)["endReason"] == "structured_output_failed"
     assert _run(snapshots.states[1], 1)["usage"]["total_tokens"] == 6
-
-
-def test_historical_run_status_event_updates_its_own_run(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event_projector.process(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
-    )
-    event_projector.process(
-        RunStatusChangedEvent(
-            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
-            run_id=1,
-            status=ConversationRunStatus.COMPLETED,
-        )
-    )
-    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
-    change = event_projector.process(
-        RunStatusChangedEvent(
-            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
-            run_id=1,
-            status=ConversationRunStatus.COMPLETED,
-            end_reason="late_failure",
-            usage_stats=ConversationRunUsageStats(input_tokens=4, output_tokens=2, total_tokens=6),
-        )
-    )
-    assert change is not None and change.mutations
-    state = snapshots.states[1]
-    assert _run(state, 1)["status"] == "completed"
-    assert _run(state, 1)["endReason"] == "late_failure"
-    assert _run(state, 1)["usage"]["total_tokens"] == 6
-    assert _run(state, 2)["status"] == "running"
 
 
 def test_unknown_run_event_raises_and_is_not_projected(
@@ -679,28 +625,6 @@ def test_unknown_run_event_raises_and_is_not_projected(
     assert snapshots.states.get(1, empty_snapshot()) == empty_snapshot()
 
 
-def test_late_run_initialization_cannot_rewind_terminal_newer_run(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event_projector.process(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.RUNNING)
-    )
-    event_projector.process(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
-    )
-    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
-    event_projector.process(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=2, status=ConversationRunStatus.RUNNING)
-    )
-    event_projector.process(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=2, status=ConversationRunStatus.COMPLETED)
-    )
-    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=1))
-    assert _run(snapshots.states[1], 2)["status"] == "completed"
-
-
 def test_unknown_event_is_ignored(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
@@ -716,7 +640,7 @@ def test_model_chunk_event_becomes_assistant_transport_update() -> None:
     event_projector = ConversationEventProjector(snapshots)
     _start(event_projector)
     event = AssistantTextDeltaEvent(
-        source_sequence=1, task_id=1, run_id=1, part="text", delta="你好"
+        source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="你好"
     )
     change = event_projector.process(event)
     assert change is not None and change.mutations
@@ -759,7 +683,7 @@ def test_dedup_window_is_bounded_by_configured_limit(
     _start(event_projector)
     for _ in range(10):
         event_projector.process(
-            AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="x")
+            AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="x")
         )
     assert event_projector._dedup_window.size == 4
 
@@ -775,7 +699,7 @@ def test_dedup_window_is_not_keyed_by_task(monkeypatch: pytest.MonkeyPatch) -> N
         _append_user_input(event_projector, task_id=task_id, run_id=task_id)
         event_projector.process(
             AssistantTextDeltaEvent(
-                source_sequence=1, task_id=task_id, run_id=task_id, part="text", delta="x"
+                source_sequence=1, task_id=task_id, run_id=task_id, turn=task_id, part="text", delta="x"
             )
         )
     assert event_projector._dedup_window.size == 3
@@ -790,7 +714,7 @@ def test_duplicate_delta_event_is_dropped(
     event_projector, snapshots = projector
     _start(event_projector)
     event = AssistantTextDeltaEvent(
-        source_sequence=1, task_id=1, run_id=1, part="text", delta="abc"
+        source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="abc"
     )
     assert event_projector.process(event) is not None
     assert event_projector.process(event) is None
@@ -804,7 +728,7 @@ def test_evicted_delta_is_no_longer_deduplicated(monkeypatch: pytest.MonkeyPatch
     event_projector, snapshots = _projector_with_window(2, monkeypatch)
     _start(event_projector)
     events = [
-        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta=delta)
+        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta=delta)
         for delta in ("a", "b", "c")
     ]
     for event in events:
@@ -824,7 +748,7 @@ def test_duplicate_delta_drop_is_logged(
 
     event_projector, _ = projector
     _start(event_projector)
-    event = AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="a")
+    event = AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="a")
     event_projector.process(event)
     with caplog.at_level(logging.DEBUG):
         event_projector.process(event)
@@ -841,10 +765,10 @@ def test_window_eviction_is_logged(
     _start(event_projector)
     with caplog.at_level(logging.WARNING):
         event_projector.process(
-            AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="a")
+            AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="a")
         )
         event_projector.process(
-            AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="b")
+            AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="b")
         )
     assert "conversation_event_dedup_window_evicted" in caplog.text
 
@@ -857,7 +781,7 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(
-        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, part="text", delta="你好")
+        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="你好")
     )
     _assert_reapply_changes_nothing(
         event_projector,
@@ -877,7 +801,7 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
-        lambda: AssistantPartClosedEvent(source_sequence=1, task_id=1, run_id=1, part="text"),
+        lambda: AssistantPartClosedEvent(source_sequence=1, task_id=1, run_id=1, turn=1, part="text"),
     )
 
 
@@ -891,7 +815,7 @@ def test_idempotent_tool_events_reapply_without_changing_snapshot(
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
-        lambda: ToolCallCreatedEvent(task_id=1, run_id=1, tool_call_id="t1", tool_name="read_file"),
+        lambda: ToolCallCreatedEvent(task_id=1, run_id=1, turn=1, tool_call_id="t1", tool_name="read_file"),
     )
     _assert_reapply_changes_nothing(
         event_projector,
@@ -961,25 +885,31 @@ def test_activity_follows_latest_run(
     )
 
     activity = snapshots.states[1]["activity"]
-    assert (activity["runId"], activity["status"], activity["usage"]) == (2, "running", None)
+    # 新 Run 还没有可见回合，也不可恢复；Run 身份不上 wire。
+    assert (activity["turn"], activity["status"], activity["usage"]) == (None, "running", None)
+    assert activity["resumable"] is False
     assert activity["contextWindowTotal"] == 64
 
 
 def test_terminal_status_writes_outcome_on_last_assistant_message(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
-    """A2：运行中助手消息没有 outcome；Run 终态时写到该 Run 最后一条助手消息，user 消息不带。"""
+    """A2：同一 Run 里连续并入两条输入（立即发送）：两个回合各自保留回复，Run 终态时结局只写到
+    最后一个可见回合（``activity.turn``）的回复上，user 消息不带。"""
 
     event_projector, snapshots = projector
     _start(event_projector, context_window_total=100)
     _consume(event_projector, 2, UserInputPresentation(display_text="追问"))
+    assert [m["id"] for m in snapshots.states[1]["messages"]] == [
+        "1", "assistant-turn-1", "2", "assistant-turn-2"
+    ]
     assert all(m["outcome"] is None for m in snapshots.states[1]["messages"])
 
     _finish(event_projector, 1, ConversationRunStatus.COMPLETED, total_tokens=7)
 
     outcomes = [(m["id"], m["outcome"]) for m in snapshots.states[1]["messages"]]
     assert [message_id for message_id, outcome in outcomes if outcome is not None] == [
-        "assistant-2"
+        "assistant-turn-2"
     ]
     outcome = snapshots.states[1]["messages"][-1]["outcome"]
     assert outcome["status"] == "completed"
@@ -997,49 +927,16 @@ def test_resume_clears_outcome(
     _start(event_projector)
     _finish(event_projector, 1, ConversationRunStatus.CANCELLED)
     assert snapshots.states[1]["messages"][-1]["outcome"]["status"] == "cancelled"
+    assert snapshots.states[1]["activity"]["resumable"] is True
 
     _finish(event_projector, 1, ConversationRunStatus.RUNNING)
     assert snapshots.states[1]["messages"][-1]["outcome"] is None
     assert snapshots.states[1]["activity"]["status"] == "running"
+    assert snapshots.states[1]["activity"]["resumable"] is False
 
     _finish(event_projector, 1, ConversationRunStatus.FAILED)
     assert snapshots.states[1]["messages"][-1]["outcome"]["status"] == "failed"
-
-
-def test_late_events_of_previous_run_only_update_its_outcome(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    """A5：两个 Run 依次结束后回放第一个 Run 的状态 / 结果事件。
-
-    activity 不变，只更新第一个 Run 的 outcome。
-    """
-
-    event_projector, snapshots = projector
-    _start(event_projector)
-    _finish(event_projector, 1, ConversationRunStatus.COMPLETED, total_tokens=5)
-    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
-    _append_user_input(event_projector, run_id=2)
-    _finish(event_projector, 2, ConversationRunStatus.COMPLETED, total_tokens=11)
-    activity_before = copy.deepcopy(snapshots.states[1]["activity"])
-
-    event_projector.process(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=1, status=ConversationRunStatus.COMPLETED)
-    )
-    event_projector.process(
-        RunResultUpdatedEvent(
-            task_id=1,
-            run_id=1,
-            end_reason="structured_output_failed",
-            usage_stats=ConversationRunUsageStats(input_tokens=3, output_tokens=3, total_tokens=6),
-        )
-    )
-
-    state = snapshots.states[1]
-    assert state["activity"] == activity_before
-    first_outcome = _messages(state, 1)[-1]["outcome"]
-    assert first_outcome["endReason"] == "structured_output_failed"
-    assert first_outcome["usage"]["total_tokens"] == 6
-    assert _messages(state, 2)[-1]["outcome"]["usage"]["total_tokens"] == 11
+    assert snapshots.states[1]["activity"]["resumable"] is True
 
 
 def test_run_events_never_write_top_level_error(
@@ -1068,9 +965,9 @@ def test_run_events_never_write_top_level_error(
 def test_first_output_of_run_without_user_input_creates_leading_reply(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
 ) -> None:
-    """被结果消息唤醒新开、没有用户输入的 Run 第一次输出时建出助手消息。
+    """被结果消息唤醒新开、没有用户输入的 Run 第一次输出时建出这一回合的回复。
 
-    该消息 id 为 ``assistant-run-{runId}``。
+    回复 id 与其他回合一样按回合号编码，第一次输出同时推进 ``activity.turn``。
     """
 
     event_projector, snapshots = projector
@@ -1079,17 +976,18 @@ def test_first_output_of_run_without_user_input_creates_leading_reply(
     event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
 
     event_projector.process(
-        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=2, part="text", delta="结")
+        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=2, turn=2, part="text", delta="结")
     )
     event_projector.process(
-        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=2, part="text", delta="论")
+        AssistantTextDeltaEvent(source_sequence=1, task_id=1, run_id=2, turn=2, part="text", delta="论")
     )
     event_projector.process(
-        ToolCallCreatedEvent(task_id=1, run_id=2, tool_call_id="call-9", tool_name="read_file")
+        ToolCallCreatedEvent(task_id=1, run_id=2, turn=2, tool_call_id="call-9", tool_name="read_file")
     )
 
     [reply] = _messages(snapshots.states[1], 2)
-    assert (reply["id"], reply["role"], reply["outcome"]) == ("assistant-run-2", "assistant", None)
+    assert (reply["id"], reply["role"], reply["outcome"]) == ("assistant-turn-2", "assistant", None)
+    assert snapshots.states[1]["activity"]["turn"] == 2
     assert reply["parts"][0]["text"] == "结论"
     assert reply["parts"][1]["toolCallId"] == "call-9"
 
@@ -1137,7 +1035,7 @@ def test_snapshot_rejects_removed_approval_placeholder(projector) -> None:
     event_projector, snapshots = projector
     _start(event_projector)
     event_projector.process(ToolCallCreatedEvent(
-        task_id=1, run_id=1, tool_call_id="obsolete", tool_name="read_file",
+        task_id=1, run_id=1, turn=1, tool_call_id="obsolete", tool_name="read_file",
     ))
     state = snapshots.get_state(1)
     part = state["messages"][-1]["parts"][-1]
@@ -1145,3 +1043,21 @@ def test_snapshot_rejects_removed_approval_placeholder(projector) -> None:
     part["approvalRequestId"] = None
     with pytest.raises(ValueError, match="approvalRequestId"):
         validate_snapshot(state)
+
+
+def test_run_without_a_visible_turn_keeps_its_outcome_on_activity_only(
+    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
+) -> None:
+    """Run 在任何可见输出之前就失败：结局只在 activity 上，不改写上一个 Run 的回复。"""
+
+    event_projector, snapshots = projector
+    _start(event_projector)
+    _finish(event_projector, 1, ConversationRunStatus.COMPLETED)
+    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
+
+    _finish(event_projector, 2, ConversationRunStatus.FAILED)
+
+    state = snapshots.states[1]
+    assert state["messages"][-1]["outcome"]["status"] == "completed"
+    assert (state["activity"]["status"], state["activity"]["turn"]) == ("failed", None)
+    assert state["activity"]["resumable"] is True

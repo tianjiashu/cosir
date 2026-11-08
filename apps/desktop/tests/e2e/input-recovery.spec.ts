@@ -15,10 +15,10 @@ test("发送在途时切走 Task，被拒后内容回到原 Task 的输入框并
   await seedState(request, TASK, {
     title: "甲任务",
     messages: [
-      { id: "u-1", role: "user", runId: 1, source: null, outcome: null, parts: [{ type: "text", text: "第一个问题", status: "completed" }] },
-      { id: "assistant-u-1", role: "assistant", runId: 1, source: null, outcome: null, parts: [{ type: "text", text: "正在处理", status: "running" }] },
+      { id: "u-1", role: "user", turn: 1, inherited: false, source: null, outcome: null, parts: [{ type: "text", text: "第一个问题", status: "completed" }] },
+      { id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, source: null, outcome: null, parts: [{ type: "text", text: "正在处理", status: "running" }] },
     ],
-    activity: { modelActivity: null, runId: 1, status: "suspended", endReason: null, error: null, usage: null, contextWindowTotal: null, launch: { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: [] }, startedAt: "2026-10-27T00:00:00.000Z" },
+    activity: { modelActivity: null, turn: 1, resumable: false, status: "suspended", endReason: null, error: null, usage: null, contextWindowTotal: null, launch: { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: [] }, startedAt: "2026-10-27T00:00:00.000Z" },
   });
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });

@@ -80,7 +80,7 @@ class _ModelHarness:
                     assistant_message(snapshot.choices[0].message, registered_tool_names)
                 )
 
-            return SimpleNamespace(sequence=1)
+            return SimpleNamespace(sequence=1, turn=1)
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],

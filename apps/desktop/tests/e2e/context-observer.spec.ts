@@ -7,7 +7,8 @@ const record = (
 ): ContextMessage => ({
   id: sequence,
   task_id: 42,
-  run_id: 21,
+  turn: 1,
+  inherited: false,
   sequence,
   include_in_context: true,
   created_at: "2026-10-17T01:02:03.123Z",
@@ -16,8 +17,16 @@ const record = (
   content: `消息 ${sequence}：检查上下文记录`,
   ...patch,
 });
+const TURN_RUN = {
+  status: "completed",
+  end_reason: "stop",
+  error_code: null,
+  usage: { input_tokens: 1200, output_tokens: 50, total_tokens: 1250 },
+  started_at: "2026-10-17T01:02:00.000Z",
+  updated_at: "2026-10-17T01:03:00.000Z",
+};
 const fixtures = () => [
-  record(0, { role: "system", run_id: null, content: "你是本地编程助手。" }),
+  record(0, { role: "system", turn: 0, content: "你是本地编程助手。" }),
   record(1),
   record(2, {
     role: "assistant",
@@ -62,12 +71,13 @@ async function mock(page: Page) {
     if (fail)
       return route.fulfill({
         status: 404,
-        json: { detail: "task or run not found" },
+        json: { detail: "task or turn not found" },
       });
+    // 按回合查询时附这一回合所属运行的状态事实；不带回合时是整个 Task 的记录。
     return route.fulfill({
-      json: url.searchParams.get("run_id")
-        ? messages
-        : [...messages, record(101, { run_id: 22, content: "其他轮次消息" })],
+      json: url.searchParams.get("turn")
+        ? { messages, run: TURN_RUN }
+        : { messages: [...messages, record(101, { turn: 2, content: "其他回合消息" })], run: null },
     });
   });
   return {
@@ -101,7 +111,7 @@ test("空状态、加载反馈与查询边界", async ({ page }) => {
   const api = await mock(page);
   await page.goto("/context-observer");
   await expect(
-    page.getByText("选择一个任务或轮次，开始检查上下文"),
+    page.getByText("选择一个任务（可选回合），开始检查上下文"),
   ).toBeVisible();
   await expect(list(page)).toHaveCount(0);
   await page.getByLabel("Task ID", { exact: true }).fill("1.5");
@@ -114,15 +124,16 @@ test("空状态、加载反馈与查询边界", async ({ page }) => {
   await expect(page.getByLabel("正在加载消息")).toBeVisible();
   api.release();
   await expect(list(page)).toBeVisible();
-  await page.goto("/context-observer?task_id=oops&run_id=21");
-  await expect(page.getByRole("alert")).toContainText("查询地址中的 ID 无效");
+  await page.goto("/context-observer?task_id=oops&turn=1");
+  await expect(page.getByRole("alert")).toContainText("查询地址无效");
+  await page.goto("/context-observer?turn=1");
+  await expect(page.getByRole("alert")).toContainText("要同时给出 Task ID");
 });
 test("筛选、调用关联与范围内定位", async ({ page }) => {
   await mock(page);
-  await page.goto("/context-observer?run_id=21");
-  await expect(
-    page.getByText("本轮记录，含系统提示词", { exact: true }),
-  ).toHaveCount(0);
+  await page.goto("/context-observer?task_id=42&turn=1");
+  await expect(page.getByTestId("context-turn-run")).toContainText("所属运行（整个运行共享）：completed · stop · 1250 tokens");
+  await expect(page.getByRole("option", { name: "#101 User", exact: true })).toHaveCount(0);
   await page.getByLabel("按角色筛选").selectOption("assistant");
   await page.getByLabel("搜索已加载消息").fill("read_file");
   await page.getByRole("option", { name: "#2 Assistant", exact: true }).click();
@@ -150,7 +161,7 @@ test("刷新保留列表与正文位置，失败保留旧结果，新范围不�
   page,
 }) => {
   const api = await mock(page);
-  await page.goto("/context-observer?task_id=42&run_id=21");
+  await page.goto("/context-observer?task_id=42&turn=1");
   await page.getByRole("option", { name: "#3 Tool", exact: true }).click();
   const editor = detail(page).locator(".cm-scroller");
   await editor.evaluate((node) => {
@@ -187,14 +198,14 @@ test("刷新保留列表与正文位置，失败保留旧结果，新范围不�
   await page.getByRole("button", { name: "新增 1 条 · 查看最新" }).click();
   await expect(detail(page).getByRole("heading")).toContainText("#100");
   api.fail(true);
-  await page.getByLabel("Run ID", { exact: true }).fill("99");
+  await page.getByLabel("回合", { exact: true }).fill("99");
   await page.getByRole("button", { name: "查询", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("读取失败");
   await expect(detail(page)).toHaveCount(0);
 });
 test("详情用量、JSON、查找与键盘浏览，窄窗口返回保位", async ({ page }) => {
   await mock(page);
-  await page.goto("/context-observer?run_id=21");
+  await page.goto("/context-observer?task_id=42&turn=1");
   await list(page).focus();
   await list(page).press("ArrowDown");
   await list(page).press("ArrowDown");
@@ -241,7 +252,7 @@ for (const theme of ["light", "dark"] as const) {
       theme,
     );
     await mock(page);
-    await page.goto("/context-observer?task_id=42&run_id=21");
+    await page.goto("/context-observer?task_id=42&turn=1");
     await page.getByRole("option", { name: "#3 Tool", exact: true }).click();
     await expect(detail(page).locator(".cm-content")).toContainText(
       "只读原始内容",
@@ -271,7 +282,7 @@ for (const theme of ["light", "dark"] as const) {
 test("推理原文在独立观测页可查看与复制", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await mock(page);
-  await page.goto("/context-observer?run_id=21");
+  await page.goto("/context-observer?task_id=42&turn=1");
   await page.getByRole("option", { name: "#2 Assistant", exact: true }).click();
   await detail(page).getByRole("button", { name: "思考内容", exact: true }).click();
   await expect(detail(page).locator(".cm-content")).toContainText("仅在观测中展示的推理原文");

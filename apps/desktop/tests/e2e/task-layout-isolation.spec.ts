@@ -119,5 +119,5 @@ test("跨工作区切换后，状态通知刷新当前目录，Fork 使用当前
   });
   await page.getByRole("button", { name: "从这里分叉", exact: true }).last().click();
   await expect(page).toHaveURL(/\/tasks\/44$/);
-  expect(calls).toEqual([{ url: `${origin}/tasks/43/fork`, body: { replyMessageId: "assistant-43" } }]);
+  expect(calls).toEqual([{ url: `${origin}/tasks/43/fork`, body: { replyMessageId: "assistant-turn-1" } }]);
 });

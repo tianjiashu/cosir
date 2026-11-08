@@ -61,7 +61,7 @@ function terminalPart(toolCallId: string, overrides: Partial<TransportToolCallPa
 }
 
 function withParts(...parts: TransportToolCallPart[]) {
-  return transportState({ messages: [{ id: "m1", role: "assistant", runId: 1, source: null, outcome: null, parts }] as never });
+  return transportState({ messages: [{ id: "m1", role: "assistant", turn: 1, inherited: false, source: null, outcome: null, parts }] as never });
 }
 
 beforeEach(() => {
@@ -93,7 +93,7 @@ describe("snapshot background_tasks 与工具 part background", () => {
   // 目的：part 的 background 是后端 BackgroundWork 的固定形状；潜在缺陷：沿用旧的 true 或缺字段时卡片仍显示「后台」、看板却没有记录可读。
   it("工具 part 的 background 是固定字段的工作记录", () => {
     const withPart = (background: unknown) => transportState({
-      messages: [{ id: "a1", role: "assistant", runId: 1, source: null, outcome: null, parts: [{ ...terminalPart("c1"), background } as never] }],
+      messages: [{ id: "a1", role: "assistant", turn: 1, inherited: false, source: null, outcome: null, parts: [{ ...terminalPart("c1"), background } as never] }],
     });
     const ok = withPart(WORK);
     expect(parseTransportState(ok)).toBe(ok);

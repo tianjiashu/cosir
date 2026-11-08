@@ -217,7 +217,8 @@ describe("TransportFrameStore", () => {
 
   it("does not defer content mutations that target a historical message", () => {
     const scheduler = deferredScheduler();
-    const store = new TransportFrameStore(running([streaming("history", "old"), streaming("active", "partial")]));
+    const history = assistantMessage("history", 0, [{ type: "text", text: "old", status: "completed" }], outcome("completed"));
+    const store = new TransportFrameStore(running([history, streaming("active", "partial")]));
     let publicationCount = 0;
     store.subscribe(() => { publicationCount += 1; });
 
@@ -255,7 +256,7 @@ describe("TransportFrameStore", () => {
     expect(store.getSnapshot().resyncRequired).toBe(false);
   });
 
-  it("活动元数据更新不重建历史消息，活动状态变化刷新当前 Run 的消息上下文", () => {
+  it("活动元数据更新不重建历史消息，活动状态变化刷新当前回复的上下文", () => {
     const store = new TransportFrameStore(running([userMessage("1", 1), streaming("assistant-1", "x")]));
     const before = store.getSnapshot();
 
@@ -270,24 +271,25 @@ describe("TransportFrameStore", () => {
     ]));
     const settled = store.getSnapshot();
     expect(settled.items[1]).not.toBe(metadata.items[1]);
-    expect(settled.items[1]).toMatchObject({ kind: "canonical", context: { isRunEnd: true, outcome: { status: "completed" } } });
+    expect(settled.items[1]).toMatchObject({ kind: "canonical", context: { turn: 1, outcome: { status: "completed" }, activity: { status: "completed" } } });
   });
 
-  it("每个 Run 只有最后一条助手消息带回复末尾上下文，结局取自消息自身", () => {
+  it("只有当前回合的回复挂活动，结局取自消息自身", () => {
     const store = new TransportFrameStore(transportState({
       messages: [
         userMessage("1", 1),
-        assistantMessage("assistant-1", 1, undefined, outcome("cancelled")),
+        assistantMessage("assistant-turn-1", 1, undefined, outcome("cancelled")),
         userMessage("2", 2),
-        assistantMessage("assistant-run-2", 2),
-        assistantMessage("assistant-2", 2),
+        assistantMessage("assistant-turn-2", 2),
+        userMessage("3", 3),
+        assistantMessage("assistant-turn-3", 3),
       ],
-      activity: activity(2, "running"),
+      activity: activity(3, "running"),
     }));
     const contexts = store.getSnapshot().items.map((item) => item.kind === "canonical" ? item.context : null);
-    expect(contexts[1]).toMatchObject({ runId: 1, isRunEnd: true, outcome: { status: "cancelled" }, activity: null });
-    expect(contexts[3]).toMatchObject({ runId: 2, isRunEnd: false });
-    expect(contexts[4]).toMatchObject({ runId: 2, isRunEnd: true, outcome: null, activity: { runId: 2, status: "running" } });
+    expect(contexts[1]).toMatchObject({ turn: 1, outcome: { status: "cancelled" }, activity: null });
+    expect(contexts[3]).toMatchObject({ turn: 2, outcome: null, activity: null });
+    expect(contexts[5]).toMatchObject({ turn: 3, outcome: null, activity: { turn: 3, status: "running" } });
   });
 
   it("moves a queued message into the conversation without duplicating its stable identity", () => {
@@ -313,7 +315,7 @@ describe("TransportFrameStore 一轮结束（D2）", () => {
 
   it("活动态进入终态时只触发一次 settled，后续无关提交不再触发", () => {
     const performanceProbe = probe();
-    const store = new TransportFrameStore(running([streaming("assistant-run-1", "x")]), { performanceProbe });
+    const store = new TransportFrameStore(running([streaming("assistant-turn-1", "x")]), { performanceProbe });
     const transitions = recordTransitions(store);
 
     store.applyFrame(mutation([{ kind: "set", path: ["activity", "status"], value: "cancelled" }]));
@@ -348,16 +350,6 @@ describe("TransportFrameStore 一轮结束（D2）", () => {
     const transitions = recordTransitions(store);
     store.importState(transportState({ activity: activity(1, "completed") }));
     expect(transitions).toEqual([{ kind: "settled", status: "completed" }]);
-  });
-
-  it("full 帧里旧 Run 已结束、新 Run 已开始：按 runId 变化补 settled 再 started", () => {
-    const store = new TransportFrameStore(running([]));
-    const transitions = recordTransitions(store);
-    store.applyFrame(full(transportState({
-      messages: [assistantMessage("assistant-run-1", 1, [], outcome("completed")), userMessage("2", 2)],
-      activity: activity(2, "running"),
-    })));
-    expect(transitions).toEqual([{ kind: "settled", status: "completed" }, { kind: "started", status: "running" }]);
   });
 
   it("从无活动进入活动态触发 started", () => {
@@ -481,7 +473,7 @@ describe("history window", () => {
     store.completeHistoryFetch(fetch, { messages: history.slice(2, 4), messageOffset: 2 });
     expect(store.getSnapshot().pendingCommands).toHaveLength(1);
 
-    // 编辑重跑移出消息后，新窗口从更早处起：u0 只是之前没加载，不是新出现的。
+    // 撤回移出消息后，新窗口从更早处起：u0 只是之前没加载，不是新出现的。
     store.applyFrame(full(transportState({ messages: history.slice(0, 4), messageOffset: 0, activity: activity(3, "completed") })));
     expect(store.getSnapshot().pendingCommands).toHaveLength(1);
     store.applyFrame(full(transportState({

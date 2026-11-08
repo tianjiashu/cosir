@@ -1,8 +1,9 @@
-"""编辑重跑撤回一轮：范围按回合号、保留按调用归属，以及这一轮全部副产物的收拢。"""
+"""撤回回合：范围按回合号、保留按调用归属，以及这一回合全部副产物的收拢。"""
 
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -23,7 +24,6 @@ from app.models.agent_team.configuration.agent_team_configuration import AgentTe
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
 from app.service import depends
-from app.service.conversation_run import turn_withdrawal_service as withdrawal_module
 from app.service.conversation_run.turn_withdrawal_service import plan_withdrawal
 from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
@@ -69,9 +69,9 @@ def _result_of(call_id: str) -> UserMessageMetadata:
 
 @pytest.fixture
 def history(isolated_storage, tmp_path):
-    """两轮对话：第一轮发起 ``call-early``，第二轮发起 ``call-late`` 与 Team 方案 ``call-team``。
+    """两个回合：第一回合发起 ``call-early``，第二回合发起 ``call-late`` 与 Team 方案 ``call-team``。
 
-    第一轮那次调用的结论、一条环境通知（与只针对这一轮的续写提示合成一行）都在第二轮途中并入。
+    第一回合那次调用的结论、一条 Task 级通知（与驱动内的续写提示合成一行）都在第二回合途中并入。
     """
     workspace = WorkspaceCrud().create("withdraw", str(tmp_path))
     task = TaskCrud().create(workspace.id, "withdraw", tool_schemas=[])
@@ -109,15 +109,15 @@ def test_plan_withdraws_the_turn_and_keeps_late_results_of_earlier_calls(history
 
     assert plan.calls == frozenset({"call-late", "call-team"})
     excluded = {r.sequence for r in rows if r.id in plan.excluded_row_ids}
-    # 第一轮调用的结论（序号 8）回答的是第一轮，保留；其余第二轮的行全部移出。
+    # 第一回合调用的结论（序号 8）回答的是第一回合，保留；其余第二回合的行全部移出。
     assert excluded == {4, 5, 6, 7, 9, 10}
-    # 合成通知行整体移出：环境通知交给调用方重新投递，续写提示只针对这一轮，随之丢弃。
+    # 合成通知行整体移出：Task 级通知交给调用方重新投递，回合级的续写提示随之丢弃。
     assert [n.notice_kind for n in plan.redeliver] == ["system_prompt_delta"]
 
 
 @pytest.fixture
 def side_effects(history, monkeypatch):
-    """被撤回那一轮留下的副产物，以及更早一轮的同类事物（必须不受影响）。"""
+    """被撤回那一回合留下的副产物，以及更早回合的同类事物（必须不受影响）。"""
     # Team 协调器构造时读工具注册表；撤回只用它收敛待确认方案，不调度节点。
     monkeypatch.setattr("app.config.configuration.get_tool_registry", lambda: object())
     depends.get_agent_team_coordinator.cache_clear()
@@ -172,34 +172,22 @@ def side_effects(history, monkeypatch):
     )
     queue.put(
         history.task_id,
-        TaskMessage.of(
-            NoticeBody(content="stopped", notice_kind="user_cancelled"), delivery="next_run"
-        ),
+        TaskMessage.of(NoticeBody(content="shell exited", notice_kind="terminal_session_ended")),
     )
     queued_input = queue.put(history.task_id, _input("排着的"))
-    # 测试里没有 actor：新消息直接写进外部队列，与 ``task_runtime_spaces.enqueue`` 的持久化一致。
-    monkeypatch.setattr(
-        withdrawal_module,
-        "task_runtime_spaces",
-        SimpleNamespace(
-            enqueue=lambda task_id, message, *, session: queue.put(
-                task_id, message, session=session
-            )
-        ),
-    )
     yield SimpleNamespace(revoked=revoked, team_id=team.id, queued_input=queued_input)
     background_registry.withdraw(history.task_id, "call-early")
     handoff_registry.drop_task(history.task_id)
 
 
-def _input(text: str, delivery: str = "next_run") -> TaskMessage:
+def _input(text: str) -> TaskMessage:
     return TaskMessage.of(
         UserInputBody(
             input_text=text,
             launch=RunLaunch(model_config_id=1),
             presentation=UserInputPresentation(display_text=text),
         ),
-        delivery=delivery,  # type: ignore[arg-type]
+        delivery="next_run",
     )
 
 
@@ -217,11 +205,9 @@ def _queued(task_id: int) -> list[tuple[str, object]]:
 
 
 def test_withdraw_gathers_every_side_effect_of_the_turn(history, side_effects) -> None:
-    depends.get_turn_withdrawal_service().withdraw(
-        history.task_id, 12, _input("改过的", "immediate")
-    )
+    depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
 
-    # 这一轮的后台作业被撤销，更早一轮的照常进行。
+    # 这一回合的后台作业被撤销，更早回合的照常进行。
     assert side_effects.revoked == ["call-late"]
     assert (
         background_registry.complete(
@@ -232,13 +218,13 @@ def test_withdraw_gathers_every_side_effect_of_the_turn(history, side_effects) -
     assert handoff_registry.leases(history.task_id) == []
     team = AgentTeamRunCrud().get_by_id(side_effects.team_id)
     assert team is not None and team.status == "cancelled"
-    # 队列：这一轮调用的结论、决定与「用户已停止」被删；更早调用的结论、排队的输入保留；环境通知
-    # 重新投递，新消息入队。
+    # 队列：这一回合调用的结论与决定被删；更早调用的结论、排队的通知与输入保留；移出的 Task 级
+    # 通知重新投递。撤回不入队新消息、不开新 Run。
     assert _queued(history.task_id) == [
         ("background_result", "call-early"),
+        ("notice", "terminal_session_ended"),
         ("user_input", "排着的"),
         ("notice", "system_prompt_delta"),
-        ("user_input", "改过的"),
     ]
     included = ConversationTaskContextCrud().get(history.task_id, include_in_context=True)
     assert [r.sequence for r in included] == [1, 2, 3, 8]
@@ -248,17 +234,15 @@ def test_withdraw_rejects_a_stale_target_before_touching_anything(history, side_
     from app.core.task_actor import SessionConflictError
 
     with pytest.raises(SessionConflictError) as caught:
-        depends.get_turn_withdrawal_service().withdraw(history.task_id, 11, _input("旧的"))
+        depends.get_turn_withdrawal_service().withdraw(history.task_id, 11)
 
-    assert caught.value.code == "EDIT_TARGET_STALE"
+    assert caught.value.code == "WITHDRAW_TARGET_STALE"
     assert side_effects.revoked == []
     assert len(ConversationTaskContextCrud().get(history.task_id, include_in_context=True)) == 10
 
 
 def test_restart_sweep_does_not_settle_withdrawn_placeholders(history, side_effects) -> None:
-    depends.get_turn_withdrawal_service().withdraw(
-        history.task_id, 12, _input("改过的", "immediate")
-    )
+    depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
 
     unsettled = ConversationTaskContextCrud().list_unsettled_placeholders(history.task_id)
 
@@ -303,3 +287,48 @@ def test_withdraw_waits_for_a_conclusion_already_leaving_the_registry(monkeypatc
     assert withdrawn.wait(5)
     delivering.join(5)
     withdrawer.join(5)
+
+
+def test_the_runs_last_turn_counts_as_withdrawn_only_after_withdrawal(history, side_effects) -> None:
+    """恢复与「用户已停止」都据此判断：最后一个回合还在上下文里时不算撤回。"""
+    store = ContextStore()
+    assert store.run_last_turn_withdrawn(history.task_id, history.run_id) is False
+
+    depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
+
+    assert store.run_last_turn_withdrawn(history.task_id, history.run_id) is True
+
+
+def test_fork_cannot_cut_at_a_withdrawn_turn(history, side_effects) -> None:
+    """撤回留下了更早调用在这一回合才并入的结果（仍带回合号 2），fork 也不能切到这一回合。"""
+    from app.service.conversation_run.fork_history import locate_turn
+
+    depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
+    rows = ConversationTaskContextCrud().get(history.task_id, include_in_context=False)
+
+    assert any(r.turn == 2 and r.retained for r in rows)
+    with pytest.raises(KeyError):
+        locate_turn(rows, 2)
+    assert locate_turn(rows, 1).sequence == 1
+
+
+def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(history, side_effects) -> None:
+    """可恢复是后端事实：cancelled 的 Run 撤回最后一个回合后，冷重建给出的 ``resumable`` 为假。"""
+    from app.assistant_transport.service.conversation_task_state_rebuilder import (
+        ConversationTaskStateRebuilder,
+    )
+
+    runs = ConversationRunCrud()
+    run = runs.get(history.run_id)
+    task = TaskCrud().get(history.task_id)
+    task.current_run_id = run.id
+    cancelled = replace(run, status="cancelled")
+
+    def resumable() -> bool:
+        rows = ConversationTaskContextCrud().get(history.task_id, include_in_context=False)
+        state = ConversationTaskStateRebuilder.rebuild(task, [cancelled], rows)
+        return state["activity"]["resumable"]
+
+    assert resumable() is True
+    depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
+    assert resumable() is False

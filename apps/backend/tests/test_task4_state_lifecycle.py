@@ -51,7 +51,8 @@ def _task() -> TaskRecord:
 
 def _activity(run_id: int, status: str) -> dict[str, object]:
     return {"modelActivity": None,
-        "runId": run_id,
+        "turn": None,
+        "resumable": False,
         "status": status,
         "endReason": None,
         "error": None,
@@ -136,9 +137,9 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
     state = service.get_state(7)
 
     assert state["activity"] is not None
-    assert state["activity"]["runId"] == 2
-    # 同 Run 可有多个用户输入，正文取对应 context，不能重复使用 Run 的首条 input_text。
-    assert [message["runId"] for message in state["messages"]] == [2, 2]
+    assert state["activity"]["turn"] == 1
+    # 由输入开启的回合总有回复；正文取对应 context，不能重复使用 Run 的首条 input_text。
+    assert [message["turn"] for message in state["messages"]] == [1, 1]
     assert state["messages"][0]["parts"][0]["text"] == "from canonical context"
 
 
@@ -273,7 +274,7 @@ def test_memory_state_is_not_written_to_persistence_and_rebuilds_after_restart()
     service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     first = service.get_state(7)
     assert first["activity"] is not None
-    assert first["activity"]["runId"] == 2
+    assert first["activity"]["status"] == "completed"
     assert service.get_state(7) == first
 
     ConversationTaskStateService.clear_process_state()
@@ -341,7 +342,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     "id": "stale-user",
                     "role": "user",
                     "parts": [{"type": "text", "text": "stale", "status": "completed"}],
-                    "runId": 2,
+                    "turn": 2, "inherited": False,
                     "outcome": None,
                     "source": None,
                 },
@@ -349,7 +350,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     "id": "stale-assistant",
                     "role": "assistant",
                     "parts": [{"type": "text", "text": "stale", "status": "running"}],
-                    "runId": 2,
+                    "turn": 2, "inherited": False,
                     "outcome": None,
                     "source": None,
                 },
@@ -451,7 +452,6 @@ async def test_cold_sse_first_frame_uses_canonical_rebuild() -> None:
     await stream.aclose()
 
     assert first.kind == "full"
-    assert first.state["activity"]["runId"] == 2
     assert first.state["activity"]["status"] == "completed"
 
 
@@ -532,24 +532,3 @@ async def test_running_snapshot_is_kept_until_the_run_stops_unwatched() -> None:
     assert not space.has_snapshot()
 
 
-def test_rebuild_preserves_only_current_live_model_activity():
-    from app.core.events import ModelActivityEvent
-
-    task = _task()
-    run = _run(2, "running")
-    service = _make_state_service(
-        SimpleNamespace(get=lambda _: task),
-        SimpleNamespace(list_by_task=lambda _: [run]),
-        SimpleNamespace(get=lambda *args, **kwargs: []),
-    )
-    service.apply_planned(ModelActivityEvent(
-        task_id=7, run_id=2, step_id="step-1", phase="reasoning",
-    ))
-    assert service.rebuild_state(7)["activity"]["modelActivity"] == {
-        "stepId": "step-1", "phase": "reasoning",
-    }
-    run.status = "cancelled"
-    assert service.rebuild_state(7)["activity"]["modelActivity"] is None
-    run.status = "running"
-    ConversationTaskStateService.clear_process_state()
-    assert service.get_state(7)["activity"]["modelActivity"] is None

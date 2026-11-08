@@ -25,7 +25,7 @@ const subscribers = new Map();
 // taskId -> 正在执行的模拟 Run（同一 Task 至多一个执行者）。
 const executors = new Map();
 let lastStreamBody = "";
-let nextRunId = 1;
+let nextTurn = 1;
 let testGeneration = 0;
 let dropNextCancelledStream = false;
 let failNextAttach = false;
@@ -74,7 +74,7 @@ function resetTestState() {
   dropNextCancelledStream = false;
   failNextAttach = false;
   lastStreamBody = "";
-  nextRunId = 1;
+  nextTurn = 1;
   telemetry.completedStreamCount = 0;
   telemetry.requestBodies = [];
 }
@@ -86,9 +86,10 @@ const DEFAULT_LAUNCH = { modelConfigId: 2, reasoningEffort: null, disabledToolGr
 
 const emptyState = () => ({ title: "新对话", messages: [], activity: null });
 
-const activityOf = (runId, status, overrides = {}) => ({modelActivity: null,
-  runId,
-  status,
+const activityOf = (turn, status, overrides = {}) => ({modelActivity: null,
+  turn: turn,
+  status: status,
+  resumable: status === "cancelled" || status === "failed",
   endReason: status === "completed" ? "stop" : status === "cancelled" ? "user_cancelled" : null,
   error: null,
   usage: null,
@@ -107,7 +108,7 @@ const outcomeOf = (activity) => ({
   durationMs: 0,
 });
 
-const textMessage = (id, role, text, status, runId) => ({
+const textMessage = (id, role, text, status, turn) => ({
   id,
   role,
   parts: role === "assistant"
@@ -115,31 +116,31 @@ const textMessage = (id, role, text, status, runId) => ({
         { type: "text", text, status: status === "completed" ? "completed" : "running" },
       ]
     : [{ type: "text", text, status: "completed" }],
-  runId,
+  turn,
+  inherited: false,
   outcome: null,
   source: null,
 });
 
-/** 一轮问答：用户消息 id 为 `user-{runId}`，回复 id 按契约为 `assistant-{用户消息 id}`。 */
-function stateWithExchange(previous, text, runId, assistantText, status) {
+/** 一个回合：用户消息 id 为 `user-{turn}`，回复 id 按契约为 `assistant-turn-{turn}`。测试里每个 Run 只有一个回合。 */
+function stateWithExchange(previous, text, turn, assistantText, status) {
   const next = structuredClone(previous);
-  const userId = `user-${runId}`;
   next.messages.push(
-    textMessage(userId, "user", text, "completed", runId),
-    textMessage(`assistant-${userId}`, "assistant", assistantText, status, runId),
+    textMessage(`user-${turn}`, "user", text, "completed", turn),
+    textMessage(`assistant-turn-${turn}`, "assistant", assistantText, status, turn),
   );
-  next.activity = activityOf(runId, TERMINAL.has(status) ? status : "running", {
+  next.activity = activityOf(turn, TERMINAL.has(status) ? status : "running", {
     endReason: status === "completed" ? "stop" : status === "failed" ? "max_steps_reached" : status === "cancelled" ? "user_cancelled" : null,
   });
   if (TERMINAL.has(status)) next.messages.at(-1).outcome = outcomeOf(next.activity);
   return next;
 }
 
-/** 把当前活动收敛到终态：结局写到这一轮最后一条助手消息上。 */
+/** 把当前活动收敛到终态：结局写到 `activity.turn` 那一回合的回复上。 */
 function settle(state, status, overrides = {}) {
   const next = structuredClone(state);
-  next.activity = { ...next.activity, ...activityOf(next.activity.runId, status), usage: next.activity.usage, contextWindowTotal: next.activity.contextWindowTotal, ...overrides };
-  const last = [...next.messages].reverse().find((message) => message.role === "assistant" && message.runId === next.activity.runId);
+  next.activity = { ...next.activity, ...activityOf(next.activity.turn, status), usage: next.activity.usage, contextWindowTotal: next.activity.contextWindowTotal, ...overrides };
+  const last = [...next.messages].reverse().find((message) => message.role === "assistant" && message.turn === next.activity.turn);
   if (last) {
     last.outcome = outcomeOf(next.activity);
     for (const part of last.parts) if (part.status === "running") part.status = "completed";
@@ -147,11 +148,11 @@ function settle(state, status, overrides = {}) {
   return next;
 }
 
-function toolLifecycleParts(runId, status, toolStatus) {
+function toolLifecycleParts(turn, status, toolStatus) {
   return [
     {presentation: "activity",
       type: "tool-call", awaitingUser: false,
-      toolCallId: `tool-lifecycle-${runId}`,
+      toolCallId: `tool-lifecycle-${turn}`,
       toolName: "search_content",
       args: { pattern: "lifecycle" },
       status: toolStatus,
@@ -184,13 +185,13 @@ function usageFixture(secondRun) {
   };
 }
 
-function completedFixture(runId, userMessage, assistantParts) {
-  const activity = activityOf(runId, "completed", { launch: { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] } });
+function completedFixture(turn, userMessage, assistantParts) {
+  const activity = activityOf(turn, "completed", { launch: { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] } });
   return {
     title: "测试对话",
     messages: [
-      { ...userMessage, runId, outcome: null, source: null },
-      { id: `assistant-${userMessage.id}`, role: "assistant", parts: assistantParts, runId, outcome: outcomeOf(activity), source: null },
+      { ...userMessage, turn, inherited: false, outcome: null, source: null },
+      { id: `assistant-turn-${turn}`, role: "assistant", parts: assistantParts, turn, inherited: false, outcome: outcomeOf(activity), source: null },
     ],
     activity,
   };
@@ -231,7 +232,7 @@ function toolTraceState() {
  * `phase` 为 running 时结论还没出、最后一步是正在运行的命令；settled 时回合已结束，带耗时。
  */
 function alternatingSequenceState(phase) {
-  const runId = 79;
+  const turn = 79;
   // 图标、动词与标题由前端工具目录按工具名 + 参数算出，夹具只给真实形状的参数。
   const call = (toolCallId, toolName, args, status, extra = {}) => ({presentation: ["agent_team", "delegate_task", "fork_task"].includes(toolName) ? "standalone" : toolName === "wait_messages" ? "quiet" : "activity",
     type: "tool-call", awaitingUser: false, toolCallId, toolName, args, status, error: null,
@@ -273,12 +274,12 @@ function alternatingSequenceState(phase) {
       { type: "text", text: "已把调度间隔改为读配置项 `scheduler.tickMs`，默认值仍是 250。\n\n新增 3 个单测，`bun test` 全部通过。", status: "completed", finalReply: true },
     );
   }
-  const activity = activityOf(runId, phase === "running" ? "running" : "completed", { endReason: phase === "running" ? null : "stop" });
+  const activity = activityOf(turn, phase === "running" ? "running" : "completed", { endReason: phase === "running" ? null : "stop" });
   return {
     title: "测试对话",
     messages: [
-      { id: "user-alternating", role: "user", parts: [{ type: "text", text: "把调度 tick 改成可配置，并补测试", status: "completed" }], runId, outcome: null, source: null },
-      { id: "assistant-user-alternating", role: "assistant", parts, runId, outcome: phase === "running" ? null : { ...outcomeOf(activity), durationMs: 192_000 }, source: null },
+      { id: "user-alternating", role: "user", parts: [{ type: "text", text: "把调度 tick 改成可配置，并补测试", status: "completed" }], turn, inherited: false, outcome: null, source: null },
+      { id: `assistant-turn-${turn}`, role: "assistant", parts, turn, inherited: false, outcome: phase === "running" ? null : { ...outcomeOf(activity), durationMs: 192_000 }, source: null },
     ],
     activity,
   };
@@ -444,8 +445,7 @@ function wait(milliseconds) {
  */
 async function execute(taskId, { initialState, chunks, finalState }) {
   const generation = testGeneration;
-  const runId = initialState.activity.runId;
-  const executor = { runId, cancelled: false, drop: false };
+  const executor = { cancelled: false, drop: false };
   executors.set(taskId, executor);
   lastStreamBody = "";
   commit(taskId, initialState);
@@ -483,9 +483,9 @@ async function execute(taskId, { initialState, chunks, finalState }) {
   telemetry.completedStreamCount += 1;
 }
 
-async function executeToolLifecycle(taskId, runId, initialState, finalState) {
+async function executeToolLifecycle(taskId, initialState, finalState) {
   const generation = testGeneration;
-  executors.set(taskId, { runId, cancelled: false, drop: false });
+  executors.set(taskId, { cancelled: false, drop: false });
   lastStreamBody = "";
   commit(taskId, initialState);
   await wait(250);
@@ -500,16 +500,16 @@ async function executeToolLifecycle(taskId, runId, initialState, finalState) {
   telemetry.completedStreamCount += 1;
 }
 
-/** 从运行中或用户取消的 Run 继续：同一个 Run 回到 running，回复续写为 resumed response。 */
+/** 从运行中或已停下的 Run 继续：同一个 Run 回到 running，当前回合的回复续写为 resumed response。 */
 function continueRun(taskId) {
   const previous = states.get(taskId);
   const initialState = structuredClone(previous);
-  initialState.activity = { ...initialState.activity, status: "running", endReason: null };
+  initialState.activity = { ...initialState.activity, status: "running", endReason: null, resumable: false };
   const assistant = [...initialState.messages].reverse().find((message) => message.role === "assistant");
   assistant.outcome = null;
-  assistant.parts = textMessage(assistant.id, "assistant", "", "running", assistant.runId).parts;
+  assistant.parts = textMessage(assistant.id, "assistant", "", "running", assistant.turn).parts;
   const finalState = settle(initialState, "completed");
-  finalState.messages[initialState.messages.indexOf(assistant)].parts = textMessage(assistant.id, "assistant", "resumed response", "completed", assistant.runId).parts;
+  finalState.messages[initialState.messages.indexOf(assistant)].parts = textMessage(assistant.id, "assistant", "resumed response", "completed", assistant.turn).parts;
   finalState.messages[initialState.messages.indexOf(assistant)].outcome = outcomeOf(finalState.activity);
   void execute(taskId, { initialState, chunks: ["resumed", " response"], finalState });
 }
@@ -540,56 +540,42 @@ function commandText(body) {
 }
 
 /**
- * 模拟 POST /tasks/{id}/messages 与 /messages/{messageId}/rerun：受理即 200 `{}`，本轮输出由模拟
- * 执行者推给 Task 长订阅；与生产「命令同步受理 + 常驻订阅」的语义一致。运行中发送（生产里排队）也开新一轮，
- * 测试只关心命令与订阅的边界。
+ * 模拟 POST /tasks/{id}/messages：受理即 200 `{}`，本轮输出由模拟执行者推给 Task 长订阅；与生产「命令同步
+ * 受理 + 常驻订阅」的语义一致。运行中发送（生产里排队）也开新一轮，测试只关心命令与订阅的边界。
  */
-function handleMessage(res, body, taskId, sourceId) {
-  telemetry.requestBodies.push({ ...body, taskId, ...(sourceId ? { sourceId } : {}) });
+function handleMessage(res, body, taskId) {
+  telemetry.requestBodies.push({ ...body, taskId });
   const text = commandText(body);
   if (!text.trim()) {
     jsonResponse(res, 400, { detail: { error: { code: "INVALID_MESSAGE", message: "message is required", retryable: false } } });
     return;
   }
-  if (typeof sourceId === "string" && text === "edit-failure") {
-    jsonResponse(res, 400, { detail: { error: { code: "EDIT_REJECTED", message: "编辑重跑被测试后端拒绝", retryable: true } } });
-    return;
-  }
 
-  const runId = nextRunId++;
+  const turn = nextTurn++;
   // 与后端一致：本轮冻结请求携带的发起配置，快照 activity.launch 按它投影。
   const launch = {
     modelConfigId: body.modelConfigId ?? DEFAULT_LAUNCH.modelConfigId,
     reasoningEffort: body.reasoningEffort ?? null,
     disabledToolGroups: body.disabledToolGroups ?? [],
   };
-  const previous = states.get(taskId) ?? emptyState();
-  let base = previous;
-  if (typeof sourceId === "string") {
-    // 编辑重跑：被编辑的用户消息及其后内容移出投影，编辑后的消息以新消息身份进入新一轮。
-    const sourceIndex = previous.messages.findIndex((message) => message.id === sourceId);
-    if (sourceIndex >= 0) {
-      base = structuredClone(previous);
-      base.messages = base.messages.slice(0, sourceIndex);
-    }
-  }
+  const base = states.get(taskId) ?? emptyState();
   accepted(res);
 
   if (text.startsWith("tool-lifecycle")) {
     const finalStatus = text.startsWith("tool-lifecycle-failed") ? "failed"
       : text.startsWith("tool-lifecycle-cancelled") ? "cancelled"
         : "completed";
-    const initialState = stateWithExchange(base, text, runId, "", "running");
-    initialState.messages.at(-1).parts = toolLifecycleParts(runId, "running", "pending");
-    const finalState = stateWithExchange(base, text, runId, "", finalStatus);
-    finalState.messages.at(-1).parts = toolLifecycleParts(runId, finalStatus, finalStatus);
+    const initialState = stateWithExchange(base, text, turn, "", "running");
+    initialState.messages.at(-1).parts = toolLifecycleParts(turn, "running", "pending");
+    const finalState = stateWithExchange(base, text, turn, "", finalStatus);
+    finalState.messages.at(-1).parts = toolLifecycleParts(turn, finalStatus, finalStatus);
     for (const state of [initialState, finalState]) state.activity.launch = launch;
-    void executeToolLifecycle(taskId, runId, initialState, finalState);
+    void executeToolLifecycle(taskId, initialState, finalState);
     return;
   }
 
-  const initialState = stateWithExchange(base, text, runId, "", "running");
-  const finalState = stateWithExchange(base, text, runId, "streaming response", "completed");
+  const initialState = stateWithExchange(base, text, turn, "", "running");
+  const finalState = stateWithExchange(base, text, turn, "streaming response", "completed");
   for (const state of [initialState, finalState]) state.activity.launch = launch;
   if (text.startsWith("usage-regression")) {
     const usage = usageFixture(text.includes("second"));
@@ -602,10 +588,38 @@ function handleMessage(res, body, taskId, sourceId) {
   void execute(taskId, { initialState, chunks: ["stream", "ing response"], finalState });
 }
 
-/** 模拟 POST /tasks/{id}/resume：只续跑用户取消的 Run；不可续跑时 409 `RUN_NOT_RESUMABLE`。 */
+/**
+ * 模拟 POST /tasks/{id}/messages/{messageId}/withdraw：与后端一致，只在 Task 停下时撤回最新一条用户消息
+ * 开启的回合（移出它及之后的消息），不开新 Run；运行中 409 `RUN_NOT_STOPPED`，不是最新一条 409
+ * `WITHDRAW_TARGET_STALE`。正文为 `withdraw-failure` 的消息模拟后端拒绝。
+ */
+function handleWithdraw(res, taskId, messageId) {
+  telemetry.requestBodies.push({ taskId, withdrawnMessageId: messageId });
+  const state = states.get(taskId) ?? emptyState();
+  if (executors.has(taskId) || ["running", "suspended"].includes(state.activity?.status)) {
+    jsonResponse(res, 409, { detail: { error: { code: "RUN_NOT_STOPPED", message: "当前运行尚未停止，请停止后再撤回", retryable: true } } });
+    return;
+  }
+  const index = state.messages.findIndex((message) => message.id === messageId);
+  const latest = state.messages.findLastIndex((message) => message.role === "user");
+  const target = state.messages[index];
+  const failure = target?.parts.some((part) => part.type === "text" && part.text === "withdraw-failure");
+  if (index < 0 || index !== latest || failure) {
+    jsonResponse(res, 409, { detail: { error: { code: "WITHDRAW_TARGET_STALE", message: "只能撤回最新一条用户消息，请刷新后重试", retryable: false } } });
+    return;
+  }
+  const next = structuredClone(state);
+  next.messages = next.messages.slice(0, index);
+  // 与后端一致：最后一个回合被撤回的 Run 不可恢复。
+  if (next.activity) next.activity = { ...next.activity, resumable: false };
+  jsonResponse(res, 200, {});
+  commit(taskId, next);
+}
+
+/** 模拟 POST /tasks/{id}/resume：按快照的 `activity.resumable` 判定；不可恢复时 409 `RUN_NOT_RESUMABLE`。 */
 function handleBusinessResume(res, taskId) {
   const activity = states.get(taskId)?.activity;
-  if (!activity || activity.status !== "cancelled" || activity.endReason !== "user_cancelled" || executors.has(taskId)) {
+  if (!activity?.resumable || executors.has(taskId)) {
     jsonResponse(res, 409, { detail: { error: { code: "RUN_NOT_RESUMABLE", message: "当前运行不可恢复", retryable: true } } });
     return;
   }
@@ -891,7 +905,7 @@ const server = createServer(async (req, res) => {
     // 直接落定某个 Task 的 canonical state：state 读取与 attach 首帧共用这一份事实。
     const body = await readJson(req);
     executors.delete(Number(body.taskId));
-    if (body.hold) executors.set(Number(body.taskId), { runId: body.state.activity?.runId, cancelled: false, drop: false });
+    if (body.hold) executors.set(Number(body.taskId), { cancelled: false, drop: false });
     commit(Number(body.taskId), body.state);
     jsonResponse(res, 200, { ok: true });
     return;
@@ -948,7 +962,7 @@ const server = createServer(async (req, res) => {
     states.set(TASK_ID, alternatingSequenceState(body.phase === "running" ? "running" : "settled"));
     publishTaskStatus(TASK_ID);
     // 运行中的样子要稳定：登记一个不推进的执行者，attach 时不会把它当作遗留 Run 续跑成 resumed response。
-    if (body.phase === "running") executors.set(TASK_ID, { runId: 79, cancelled: false, drop: false });
+    if (body.phase === "running") executors.set(TASK_ID, { cancelled: false, drop: false });
     else executors.delete(TASK_ID);
     jsonResponse(res, 200, { task_id: TASK_ID });
     return;
@@ -1177,12 +1191,17 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { messages: messages.slice(start, end), messageOffset: start });
     return;
   }
-  const taskRoute = url.pathname.match(/^\/tasks\/(\d+)\/(messages|resume|messages\/([^/]+)\/rerun)$/);
+  const withdrawRoute = url.pathname.match(/^\/tasks\/(\d+)\/messages\/([^/]+)\/withdraw$/);
+  if (req.method === "POST" && withdrawRoute) {
+    handleWithdraw(res, Number(withdrawRoute[1]), decodeURIComponent(withdrawRoute[2]));
+    return;
+  }
+  const taskRoute = url.pathname.match(/^\/tasks\/(\d+)\/(messages|resume)$/);
   if (req.method === "POST" && taskRoute) {
     const routeTaskId = Number(taskRoute[1]);
     try {
       if (taskRoute[2] === "resume") handleBusinessResume(res, routeTaskId);
-      else handleMessage(res, await readJson(req), routeTaskId, taskRoute[3] ? decodeURIComponent(taskRoute[3]) : null);
+      else handleMessage(res, await readJson(req), routeTaskId);
     } catch {
       jsonResponse(res, 400, { error: { code: "INVALID_REQUEST", message: "invalid request", retryable: false } });
     }

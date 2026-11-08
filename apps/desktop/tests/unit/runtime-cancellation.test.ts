@@ -16,12 +16,24 @@ describe("跨界面的请求生命周期", () => {
     expect(current()?.task).toBeUndefined();
   });
 
-  it("新 Run 与迟到的 HTTP 响应不能复活旧的「停止中」", () => {
+  it("停下后新开的运行与迟到的 HTTP 响应不能复活旧的「停止中」", () => {
     reconcileCommands(1, activity(7, "running"));
     const request = beginCommand(1, "task")!;
+    reconcileCommands(1, activity(7, "cancelled"));
     reconcileCommands(1, activity(8, "running"));
     finishCommand(1, "task", request, "accepted");
     expect(current()?.task).toBeUndefined();
+  });
+
+  it("对话订阅断开时只把这个 Task 的停止转为待确认", () => {
+    reconcileCommands(1, activity(7, "running"));
+    reconcileCommands(2, activity(3, "running"));
+    beginCommand(1, "task");
+    beginCommand(2, "task");
+    markTaskRequestsUnsynced(1);
+    expect(current()?.task?.error).toContain("待确认");
+    expect(useCommandRequests.getState().tasks[2]?.task?.error).toBeNull();
+    forgetCommands([2]);
   });
 
   it("结果未知可以重试，旧请求的 HTTP 结果被忽略", () => {
@@ -68,7 +80,6 @@ describe("跨界面的请求生命周期", () => {
     reconcileCommands(1, activity(7, "completed"));
     releaseCommandObservation(1);
     const stop = beginCommand(1, "task")!;
-    expect(stop.runId).toBeNull();
     finishCommand(1, "task", stop, "accepted");
     expect(current()?.task?.phase).toBe("syncing");
     reconcileTaskStatuses({ 1: "completed" });

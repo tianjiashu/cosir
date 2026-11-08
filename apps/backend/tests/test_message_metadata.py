@@ -81,10 +81,11 @@ def _running_state(part: dict) -> dict:
 
     return {
         "messages": [
-            {"id": "assistant-1", "role": "assistant", "parts": [part], "runId": 1, "outcome": None, "source": None}
+            {"id": "assistant-1", "role": "assistant", "parts": [part], "turn": 1, "inherited": False, "outcome": None, "source": None}
         ],
         "activity": {"modelActivity": None,
-            "runId": 1,
+            "turn": None,
+            "resumable": False,
             "status": "running",
             "endReason": None,
             "error": None,

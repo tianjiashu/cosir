@@ -8,17 +8,17 @@ import {
   toToolCallPart,
   type TransportMessageRenderContext,
 } from "@/lib/assistant/transport-message-converter";
-import { registerInlineFileMetadata, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
+import { registerLocalFile, restoreLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 import type { TransportMessage, TransportToolCallPart } from "@/lib/assistant/contract";
 import { activity, agentMessagePart, outcome, usage } from "./transport-fixtures";
 import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 
 /** 已到终态那一轮回复末尾的渲染上下文。 */
-const completedRun = (runId: number): TransportMessageRenderContext => ({
-  runId, source: null, outcome: outcome("completed"), isRunEnd: true, activity: null,
+const completedTurn = (turn: number): TransportMessageRenderContext => ({
+  turn, inherited: false, source: null, outcome: outcome("completed"), activity: null,
 });
-const runningRun = (runId: number): TransportMessageRenderContext => ({
-  runId, source: null, outcome: null, isRunEnd: true, activity: activity(runId, "running"),
+const runningTurn = (turn: number): TransportMessageRenderContext => ({
+  turn, inherited: false, source: null, outcome: null, activity: activity(turn, "running"),
 });
 const toThreadMessage = (
   message: Pick<TransportMessage, "id" | "role" | "parts">,
@@ -38,7 +38,7 @@ const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportT
 describe("assistant transport converter", () => {
   it("正文追加复用未变工具的 part/artifact；工具状态或展示数据改变时创建新版本", () => {
     const source = { ...tool("running"), intent: "核对工具结果" };
-    const context = runningRun(1);
+    const context = runningTurn(1);
     const before = toThreadMessage({ id: "a", role: "assistant", parts: [source, { type: "text", text: "开始" }] }, context);
     const after = toThreadMessage({ id: "a", role: "assistant", parts: [source, { type: "text", text: "开始继续" }] }, context);
     expect(after.content[0]).toBe(before.content[0]);
@@ -68,7 +68,7 @@ describe("assistant transport converter", () => {
         { type: "image", image: "cosir-attachment://image-one" },
       ],
     });
-    expect(pending?.metadata.custom).toEqual({ runId: null, source: null, pending: true });
+    expect(pending?.metadata.custom).toEqual({ source: null, pending: true });
     expect(toPendingUserMessage(command)?.id).toBe(pending?.id);
   });
 
@@ -78,29 +78,29 @@ describe("assistant transport converter", () => {
     const parts = [agentMessagePart("5"), { type: "text" as const, text: "结论", status: "completed" as const }];
     const message = toThreadMessageWithRenderContext(
       { id: "assistant-1", role: "assistant", parts },
-      { runId: 1, source: null, outcome: null, isRunEnd: true, activity: null },
+      { turn: 1, inherited: false, source: null, outcome: null, activity: null },
     );
     expect(message.content.map((part) => part.type)).toEqual(["data", "text"]);
   });
 
   it("Agent 消息的发送方随 user 消息的 custom 交给渲染层", () => {
     const message: TransportMessage = {
-      id: "11", role: "user", parts: [{ type: "text", text: "做这个", status: "completed" }], runId: 3, outcome: null,
+      id: "11", role: "user", parts: [{ type: "text", text: "做这个", status: "completed" }], turn: 3, inherited: false, outcome: null,
       source: { taskId: 4, name: "主任务" },
     };
-    const converted = toThreadMessage(message, { runId: 3, source: message.source, outcome: null, isRunEnd: false, activity: null });
-    expect(converted.metadata.custom).toEqual({ runId: 3, source: { taskId: 4, name: "主任务" } });
+    const converted = toThreadMessage(message, { turn: 3, inherited: false, source: message.source, outcome: null, activity: null });
+    expect(converted.metadata.custom).toEqual({ source: { taskId: 4, name: "主任务" } });
   });
 
   it("projects the outcome and activity onto assistant message metadata (D5)", () => {
-    const message: TransportMessage = { id: "assistant-1", role: "assistant", parts: [], runId: 7, source: null, outcome: null };
+    const message: TransportMessage = { id: "assistant-turn-7", role: "assistant", parts: [], turn: 7, inherited: false, source: null, outcome: null };
     const cancelled = outcome("cancelled", { usage: usage({ total_tokens: 42 }) });
-    const ended = toThreadMessage(message, { runId: 7, source: null, outcome: cancelled, isRunEnd: true, activity: null });
-    expect(ended.metadata.custom).toMatchObject({ runId: 7, isRunEnd: true, outcome: cancelled, activity: null });
+    const ended = toThreadMessage(message, { turn: 7, inherited: false, source: null, outcome: cancelled, activity: null });
+    expect(ended.metadata.custom).toMatchObject({ turn: 7, inherited: false, outcome: cancelled, activity: null });
     expect(ended.status).toEqual({ type: "incomplete", reason: "cancelled" });
 
-    const live = toThreadMessage(message, runningRun(7));
-    expect(live.metadata.custom).toMatchObject({ runId: 7, isRunEnd: true, outcome: null, activity: { status: "running" } });
+    const live = toThreadMessage(message, runningTurn(7));
+    expect(live.metadata.custom).toMatchObject({ turn: 7, inherited: false, outcome: null, activity: { status: "running" } });
     expect(live.status).toEqual({ type: "running" });
   });
 
@@ -152,9 +152,10 @@ describe("assistant transport converter", () => {
           file: "cosir-local-file:file-1",
           name: "notes.md",
           contentType: "text/markdown",
+          path: "/w/notes.md",
         }],
       },
-      completedRun(1),
+      completedTurn(1),
     );
 
     expect(converted).toMatchObject({
@@ -185,7 +186,7 @@ describe("assistant transport converter", () => {
   });
 
   it("输入框里只有 token 的普通文件从本机登记取名称并占住原位", () => {
-    registerInlineFileMetadata({ id: "token-only", name: "plan.md", contentType: "text/markdown" });
+    restoreLocalFile({ id: "token-only", name: "plan.md", contentType: "text/markdown", path: "/w/plan.md" });
     const pending = toPendingUserMessage({ type: "add-message", message: { role: "user", parts: [
       { type: "text", text: "[[cosir-file:token-only]] 和 [[cosir-file:token-only]][[cosir-file:gone]]" },
     ] } });
@@ -204,12 +205,12 @@ describe("assistant transport converter", () => {
         role: "user",
         parts: [
           { type: "text", text: "请看", status: "completed" },
-          { type: "file", file: "cosir-local-file:file-1", name: "notes.md", contentType: "text/markdown" },
+          { type: "file", file: "cosir-local-file:file-1", name: "notes.md", contentType: "text/markdown", path: "/w/notes.md" },
           { type: "text", text: "和图片", status: "completed" },
           { type: "image", image: "cosir-attachment://" + "a".repeat(64) },
         ],
       },
-      completedRun(1),
+      completedTurn(1),
     );
 
     expect(converted.content.map((part) => part.type)).toEqual(["text", "file", "text", "image"]);
@@ -222,13 +223,13 @@ describe("assistant transport converter", () => {
         role: "user",
         parts: [
           { type: "text", text: "前文", status: "completed" },
-          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown" },
+          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown", path: "/w/a.md" },
           { type: "text", text: "中间", status: "completed" },
-          { type: "file", file: "cosir-local-file:file-b", name: "b.md", contentType: "text/markdown" },
+          { type: "file", file: "cosir-local-file:file-b", name: "b.md", contentType: "text/markdown", path: "/w/b.md" },
           { type: "text", text: "后文", status: "completed" },
         ],
       },
-      completedRun(1),
+      completedTurn(1),
     );
 
     if (converted.role !== "user") throw new Error("expected user message");
@@ -250,11 +251,11 @@ describe("assistant transport converter", () => {
           { type: "text", text: "文字 A", status: "completed" },
           { type: "image", image: imageLocator },
           { type: "text", text: "文字 B", status: "completed" },
-          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown" },
+          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown", path: "/w/a.md" },
           { type: "text", text: "文字 C", status: "completed" },
         ],
       },
-      completedRun(1),
+      completedTurn(1),
     );
 
     if (converted.role !== "user") throw new Error("expected user message");
@@ -272,10 +273,10 @@ describe("assistant transport converter", () => {
         role: "user",
         parts: [
           { type: "text", text: "查看", status: "completed" },
-          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown" },
+          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown", path: "/w/a.md" },
         ],
       },
-      completedRun(1),
+      completedTurn(1),
     );
 
     if (converted.role !== "user") throw new Error("expected user message");
@@ -314,11 +315,12 @@ describe("assistant transport converter", () => {
         { type: "text", text: "partial **markdown", status: "running" },
 
       ],
-      runId: 1,
+      turn: 1,
+      inherited: false,
       outcome: null,
       source: null,
     };
-    const converted = toThreadMessage(message, runningRun(1));
+    const converted = toThreadMessage(message, runningTurn(1));
     expect(converted.content[0]).toMatchObject({ type: "text", text: "partial **markdown", status: { type: "running" } });
 
     expect(converted.status).toEqual({ type: "running" });

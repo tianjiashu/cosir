@@ -378,7 +378,7 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     projector.process(
         ToolCallCreatedEvent(
             task_id=7,
-            run_id=9,
+            run_id=9, turn=1,
             tool_call_id="call-1",
             tool_name="execute_terminal",
         )
@@ -412,7 +412,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
     projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
     projector.process(
-        ToolCallCreatedEvent(task_id=7, run_id=9, tool_call_id="call-1", tool_name="execute_terminal")
+        ToolCallCreatedEvent(task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal")
     )
     projector.process(
         ToolCallStatusChangedEvent(
@@ -466,7 +466,7 @@ def test_runtime_update_skips_a_pending_part_that_is_not_a_background_placeholde
     projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
     projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
     projector.process(
-        ToolCallCreatedEvent(task_id=7, run_id=9, tool_call_id="call-1", tool_name="execute_terminal")
+        ToolCallCreatedEvent(task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal")
     )
     projector.process(_terminal_output_update(0, "early"))
 
@@ -483,7 +483,7 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
     projector.process(
         ToolCallCreatedEvent(
             task_id=7,
-            run_id=9,
+            run_id=9, turn=1,
             tool_call_id="call-1",
             tool_name="execute_terminal",
         )
@@ -568,7 +568,7 @@ def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, Conversat
     projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
     projector.process(
         ToolCallCreatedEvent(
-            task_id=7, run_id=9, tool_call_id="call-1", tool_name="execute_terminal"
+            task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
         )
     )
     projector.process(

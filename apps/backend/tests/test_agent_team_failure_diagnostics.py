@@ -36,7 +36,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
             {
                 "id": "assistant-run-3",
                 "role": "assistant",
-                "runId": 3,
+                "turn": 3, "inherited": False,
                 "outcome": None,
                 "source": None,
                 "parts": [
@@ -52,7 +52,8 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
         ],
         "messageOffset": 0,
         "activity": {"modelActivity": None,
-            "runId": 3,
+            "turn": None,
+            "resumable": False,
             "status": "running",
             "endReason": None,
             "error": None,
@@ -277,7 +278,6 @@ def test_team_view_marks_output_failure_on_completed_node(monkeypatch) -> None:
             "review": [
                 {
                     "visit_number": 1,
-                    "conversation_run_id": 11,
                     "status": "completed",
                     "agents": [],
                 }

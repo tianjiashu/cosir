@@ -137,7 +137,7 @@ def bind_node(monkeypatch, model):
     def save(snapshot, **kwargs):
         snapshots.append(snapshot)
         memberships.append(kwargs["include_in_context"])
-        return SimpleNamespace(sequence=len(snapshots))
+        return SimpleNamespace(sequence=len(snapshots), turn=1)
 
     context = SimpleNamespace(
         load_message=lambda: [],

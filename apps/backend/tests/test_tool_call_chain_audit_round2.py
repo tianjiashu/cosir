@@ -139,7 +139,7 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
     projector.process(
         ToolCallCreatedEvent(
             task_id=_TASK_ID,
-            run_id=_RUN_ID,
+            run_id=_RUN_ID, turn=_RUN_ID,
             tool_call_id=tool_call_id,
             tool_name="execute_terminal",
         )

@@ -13,7 +13,7 @@ import { parseTransportState } from "@/lib/assistant/transport/snapshot-validati
 import { activity, assistantMessage, outcome, transportState } from "./transport-fixtures";
 
 const ended = (value: TransportOutcome): TransportMessageRenderContext => ({
-  runId: 1, source: null, outcome: value, isRunEnd: true, activity: null,
+  turn: 1, inherited: false, source: null, outcome: value, activity: null,
 });
 
 describe("toAssistantMessageStatus 全组合对抗", () => {
@@ -43,22 +43,22 @@ describe("toAssistantMessageStatus 全组合对抗", () => {
   });
 
   it.each(["running", "suspended"] as const)("没有结局的当前活动回复末尾在 %s 时渲染为运行中", (status) => {
-    expect(toAssistantMessageStatus({ runId: 1, source: null, outcome: null, isRunEnd: true, activity: activity(1, status) })).toEqual({ type: "running" });
+    expect(toAssistantMessageStatus({ turn: 1, inherited: false, source: null, outcome: null, activity: activity(1, status) })).toEqual({ type: "running" });
   });
 
   it("同一 Run 内较早的回复（不是回复末尾）即使活动运行中也已完成", () => {
-    expect(toAssistantMessageStatus({ runId: 1, source: null, outcome: null, isRunEnd: false, activity: null })).toEqual({ type: "complete", reason: "stop" });
+    expect(toAssistantMessageStatus({ turn: 1, inherited: false, source: null, outcome: null, activity: null })).toEqual({ type: "complete", reason: "stop" });
   });
 
   it("活动已到终态但结局尚未投影到消息时不渲染为运行中", () => {
-    expect(toAssistantMessageStatus({ runId: 1, source: null, outcome: null, isRunEnd: true, activity: activity(1, "completed") }))
+    expect(toAssistantMessageStatus({ turn: 1, inherited: false, source: null, outcome: null, activity: activity(1, "completed") }))
       .toEqual({ type: "complete", reason: "stop" });
   });
 });
 
 describe("parseTransportState 结局 error 严格校验对抗", () => {
   const withOutcomeError = (error: unknown) => transportState({
-    messages: [assistantMessage("assistant-run-1", 1, [], { ...outcome("failed"), error: error as never })],
+    messages: [assistantMessage("assistant-turn-1", 1, [], { ...outcome("failed"), error: error as never })],
   });
 
   it("合法 error 契约通过校验", () => {

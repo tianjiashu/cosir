@@ -100,7 +100,7 @@ def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) 
 
 def _drive_run(run_id: int) -> Awaitable[None]:
     """驱动一条 Run（本次执行的事实由 ``RuntimeContext.for_run`` 只凭 Run 装配）。"""
-    return run_driver.RunDriver().drive(SimpleNamespace(id=run_id, task_id=3))
+    return run_driver.RunDriver().drive(SimpleNamespace(id=run_id, task_id=3), None)
 
 
 def _make_runtime(
@@ -749,7 +749,7 @@ def test_validate_snapshot_rejects_boolean_run_id_with_error_contract() -> None:
     """``runId`` 为 bool 时即使 error 契约合法也必须失败（bool 是 int 子类）。"""
 
     state = _record_state()
-    state["activity"]["runId"] = True  # type: ignore[typeddict-item]
+    state["activity"]["resumable"] = "yes"  # type: ignore[typeddict-item]
     with pytest.raises(ValueError):
         validate_snapshot(state)
 
@@ -760,8 +760,9 @@ def test_validate_snapshot_rejects_boolean_run_id_with_error_contract() -> None:
 
 
 _ACTIVITY_REQUIRED_KEYS = {
-    "runId",
     "status",
+    "turn",
+    "resumable",
     "endReason",
     "error",
     "usage",
@@ -773,8 +774,8 @@ _ACTIVITY_REQUIRED_KEYS = {
 def _python_run_literal_keys(text: str, source_name: str) -> list[tuple[int, set[str]]]:
     """用 ``ast`` 精确提取 Python 源码里所有「activity 形状」构造点的键集合。
 
-    认两种构造：同时含 ``runId`` 与 ``launch`` 键的字典字面量，以及 ``ConversationStateActivity(...)``
-    调用的关键字参数；避免把 ``activity["runId"]`` 之类的读取点误判为构造点。
+    认两种构造：同时含 ``startedAt`` 与 ``launch`` 键的字典字面量，以及 ``ConversationStateActivity(...)``
+    调用的关键字参数；避免把 ``activity["status"]`` 之类的读取点误判为构造点。
     """
 
     import ast
@@ -799,7 +800,7 @@ def _python_run_literal_keys(text: str, source_name: str) -> list[tuple[int, set
         for key in node.keys:
             if isinstance(key, ast.Constant) and isinstance(key.value, str):
                 keys.add(key.value)
-        if "runId" in keys and "launch" in keys:
+        if "startedAt" in keys and "launch" in keys:
             results.append((node.lineno, keys))
     return results
 
@@ -843,7 +844,7 @@ def _js_object_literal_keys(text: str) -> list[tuple[int, set[str]]]:
                     position += key_match.end()
                     continue
             position += 1
-        if "runId" in keys and "launch" in keys:
+        if "startedAt" in keys and "launch" in keys:
             results.append((text[:opening].count("\n") + 1, keys))
     return results
 

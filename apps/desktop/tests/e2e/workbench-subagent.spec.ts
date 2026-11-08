@@ -61,7 +61,7 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   expect((await frontendLogs(page)).filter((entry) => entry.event === "react_recoverable_render_error")).toEqual([]);
   const workbench = page.getByRole("complementary", { name: "工作台" });
   await expect(workbench.getByRole("button", { name: "发送", exact: true })).toHaveCount(0);
-  await expect(workbench.getByRole("button", { name: "编辑并重跑" })).toHaveCount(0);
+  await expect(workbench.getByRole("button", { name: "撤回" })).toHaveCount(0);
   await expect(workbench.getByRole("button", { name: "从这里分叉" })).toHaveCount(0);
   await expect(workbench.getByRole("button", { name: "关闭 审查代码" })).toBeVisible();
   expect(businessWrites).toEqual([]);
