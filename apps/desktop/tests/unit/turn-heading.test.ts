@@ -28,10 +28,19 @@ describe("single turn heading", () => {
     const truncated = outcome("completed", { endReason: "length" });
     expect(projectTurnHeading(projectTurn([{ ...text, finalReply: false }], "settled", truncated), truncated, 8000)?.expandable).toBe(true);
   });
-  it("keeps live and suspended duration feedback until normal completion", () => {
+  // 目的：运行中只有正文时正文本身就是反馈；潜在缺陷：未定性的正文被当成过程，纯回复顶着计时标题、完成时标题消失闪一下，点标题还会藏起正在生成的回复。
+  it("live and suspended turns show the timer only above real process", () => {
+    const streaming = { ...text, finalReply: false };
     for (const phase of ["running", "suspended"] as const) {
-      expect(projectTurnHeading(projectTurn([text], phase), null, 8000)).toMatchObject({ label: "用时 8秒", expandable: false });
+      expect(projectTurnHeading(projectTurn([streaming], phase), null, 8000)).toBeNull();
+      expect(projectTurnHeading(projectTurn([call, streaming], phase), null, 8000)).toMatchObject({ label: "用时 8秒", expandable: true });
     }
+  });
+  // 目的：继承历史没有本地 Run、无从定性；潜在缺陷：每条继承的纯文字回复都顶着「查看过程」，点开合会把正文藏起来。
+  it("inherited prose has no heading; inherited tools keep the process entry", () => {
+    const inherited = { ...text, finalReply: false };
+    expect(projectTurnHeading(projectTurn([inherited], "settled"), null, null)).toBeNull();
+    expect(projectTurnHeading(projectTurn([call, inherited], "settled"), null, null)).toMatchObject({ label: "查看过程", expandable: true });
   });
   it("terminal outcomes remain visible; child cancellation cannot cancel its parent", () => {
     for (const [status, label] of [["cancelled", "已停止"], ["failed", "运行失败"]] as const) {

@@ -34,6 +34,16 @@ describe("stable conversation projection", () => {
     expect(after.answer.map((item) => item.part.text)).toEqual(["先读取", "继续核对"]);
     expect(after.defaultProcessOpen).toBe(true);
   });
+  // 目的：Run 有结局前正文未定性，不随过程开合；潜在缺陷：运行中收起过程会把可能就是最终回复的正文一起藏起来。
+  it("prose joins the process only once the Run has an outcome", () => {
+    const parts = [text("先读取"), call("one"), text("回复中")];
+    const running = projectTurn(parts, "running");
+    expect(running.process.items.map((item) => item.kind)).toEqual(["call"]);
+    for (const block of running.blocks) if (block.kind === "narration") expect(visibleTurnBlock(block, false)).toBe(true);
+    const cancelled = projectTurn(parts, "settled", outcome("cancelled"));
+    expect(cancelled.process.items.map((item) => item.kind)).toEqual(["narration", "call", "narration"]);
+    for (const block of cancelled.blocks) if (block.kind === "narration") expect(visibleTurnBlock(block, false)).toBe(false);
+  });
   it("only an explicit completed outcome folds the earlier prose; empty tail never hides all text", () => {
     const parts = [text("进展"), call("one"), text("回复", true)];
     expect(projectTurn(parts, "settled").hasFinalReply).toBe(false);

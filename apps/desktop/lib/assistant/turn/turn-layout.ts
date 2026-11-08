@@ -13,7 +13,12 @@ export function turnPhaseOf(activity: TransportActivity | null): TurnPhase {
 export const CHANGES_KIND = "file-changes";
 export const STANDALONE_ARTIFACT_KINDS = ["agent-configuration-draft", "agent-team-configuration-draft"] as const;
 export type StandaloneArtifactKind = (typeof STANDALONE_ARTIFACT_KINDS)[number];
-export type NarrationItem = { kind: "narration"; index: number; part: TransportTextPart };
+/**
+ * `inProcess`：这段正文已定性为过程（不是最终回复，且 Run 已有结局），随过程开合。Run 运行中、挂起时
+ * 正文尚未定性（可能就是最终回复），手动分叉继承的历史没有本地 Run、无从定性，这两种都始终可见、
+ * 不构成过程。
+ */
+export type NarrationItem = { kind: "narration"; index: number; part: TransportTextPart; inProcess: boolean };
 export type StandaloneItem = { kind: "standalone"; index: number; part: TransportToolCallPart };
 export type CallItem = { kind: "call"; index: number; part: TransportToolCallPart };
 export type AgentItem = { kind: "agent"; index: number; part: TransportAgentMessagePart };
@@ -83,7 +88,10 @@ export function summarizeCalls(calls: readonly CallItem[]): ProcessLayout {
     failedCount, cancelledCount };
 }
 
-/** Stable ordered slots are independent of outcome and subsequent tools; no text ever migrates between parents. */
+/**
+ * Stable ordered slots are independent of outcome and subsequent tools; no text ever migrates between parents.
+ * 正文是否属于过程取决于 Run 结局（见 `NarrationItem.inProcess`）：结局到达时只改变它随不随过程开合，槽位不动。
+ */
 export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnPhase, outcome?: TransportOutcome | null, previous?: TurnLayout | null, activity: TransportActivity | null = null, background: readonly BackgroundTaskEntry[] = []): TurnLayout {
   const hasFinalReply = outcome?.status === "completed" && parts.some((part) => part.type === "text" && part.finalReply && part.text.trim());
   const blocks: TurnBlock[] = [], items: ProcessItem[] = [], calls: CallItem[] = [];
@@ -95,10 +103,10 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
     if (part.type === "text") {
       group = null;
       if (!part.text.trim()) continue;
-      const item: NarrationItem = { kind: "narration", index, part };
+      const item: NarrationItem = { kind: "narration", index, part, inProcess: Boolean(outcome) && !part.finalReply };
       blocks.push(item);
       if (!hasFinalReply || part.finalReply) answer.push({ index, part });
-      if (!part.finalReply) items.push(item);
+      if (item.inProcess) items.push(item);
     } else if (part.type === "tool-call") {
       if (part.presentation === "standalone") {
         group = null;
@@ -165,7 +173,7 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
 
 /** 渲染和虚拟估高共用：需要用户操作的入口常显，其余过程遵循用户开合。 */
 export function visibleTurnBlock(block: TurnBlock, open: boolean, currentKey?: string): boolean {
-  if (block.kind === "narration") return open || block.part.finalReply === true;
+  if (block.kind === "narration") return open || !block.inProcess;
   if (block.kind === "agent") return open;
   if (block.kind === "standalone") return open || block.part.awaitingUser;
   return block.key === currentKey || block.calls.length > 0 && (open || block.calls.some(({ part }) => part.awaitingUser));

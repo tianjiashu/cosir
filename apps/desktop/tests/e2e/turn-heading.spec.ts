@@ -52,6 +52,24 @@ test("completed prose has no heading, divider or occupied space for any duration
   }
 });
 
+// 目的：继承历史没有本地 Run、无从定性；潜在缺陷：继承的纯文字回复顶着「查看过程」，点开合把正文藏起来。
+test("inherited prose has no process heading", async ({ page, request }) => {
+  const inheritedReply = "继承来的回复正文。";
+  await seedState(request, 42, transportState({
+    messages: [
+      { ...userMessage("u0", 1, "之前的问题"), runId: null },
+      { ...assistantMessage("a0", 1, [text(inheritedReply)]), runId: null },
+      userMessage("u", 1, "继续"),
+      assistantMessage("a", 1, [text(reply, true)], outcome("completed", { durationMs: 3000 })),
+    ],
+    activity: activity(1, "completed"),
+  }));
+  await page.goto("/tasks/42");
+  const inherited = page.locator('[data-slot="turn"][data-inherited="true"]');
+  await expect(inherited.locator('[data-slot="prose-part"]')).toContainText(inheritedReply);
+  await expect(inherited.locator('[data-slot="turn-status"]')).toHaveCount(0);
+});
+
 test("quiet successful tools do not create a heading, but quiet failures remain discoverable", async ({ page, request }) => {
   const quiet = toolCallPart("quiet", "wait", { presentation: "quiet", status: "completed" });
   await seedState(request, 42, done([quiet, text(reply, true)]));
@@ -84,7 +102,8 @@ test("streaming prose preserves manual scrolling and settles at the bottom witho
   await page.goto("/tasks/42");
   const prose = page.locator('[data-slot="prose-part"]');
   await expect(prose).toContainText("第 34 段");
-  await expect(page.locator('[data-slot="turn-status"]')).toBeVisible();
+  // 只有正文时正文本身就是反馈：流式期间不出现计时标题，完成时也就没有标题消失的跳动。
+  await expect(page.locator('[data-slot="turn-status"]')).toHaveCount(0);
   const original = await prose.elementHandle();
   const originalParagraph = await prose.locator("p").first().elementHandle();
   const viewport = page.locator(".aui-thread-root .overflow-y-auto").first();
