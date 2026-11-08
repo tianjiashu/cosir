@@ -6,7 +6,7 @@ import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { CopyIconButton } from "@/components/ui/copy-icon-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import type { TransportMessageSource } from "@/lib/assistant/contract";
-import { agentKey, useDisclosure } from "@/lib/assistant/disclosure-store";
+import { agentKey, useDisclosure } from "@/lib/assistant/turn/disclosure-store";
 
 /** 开启回合的 Agent 消息：独立成行，正文就是这条 user 消息的文本。 */
 export function AgentInboundMessage({ source, taskId }: { source: TransportMessageSource; taskId: number }) {

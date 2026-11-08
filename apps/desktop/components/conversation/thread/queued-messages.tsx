@@ -2,7 +2,7 @@ import { ThreadPrimitive, useAuiState } from "@assistant-ui/react";
 import { memo, type FC } from "react";
 
 import type { MessageComponents } from "@/components/conversation/thread/virtualized-thread-message-row";
-import { queuedMessageIdsKey } from "@/lib/assistant/transport-state-operations";
+import { queuedMessageIdsKey } from "@/lib/assistant/transport/transport-state-operations";
 
 type QueuedMessagesProps = {
   components: MessageComponents;

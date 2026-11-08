@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { currentActivity } from "@/lib/assistant/current-activity";
-import { projectCallStatus } from "@/lib/assistant/call-status";
-import { projectTurn } from "@/lib/assistant/turn-layout";
+import { currentActivity } from "@/lib/assistant/turn/current-activity";
+import { projectCallStatus } from "@/lib/assistant/tools/call-status";
+import { projectTurn } from "@/lib/assistant/turn/turn-layout";
 import { activity, toolCallPart } from "./transport-fixtures";
 
 const job = { toolCallId: "bg", kind: "terminal_command" as const, label: "检查导出", status: "running" as const, startedAt: "2026-01-01", endedAt: null };

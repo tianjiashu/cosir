@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { TOOL_CATALOG, toolHeading, toolIconName, toolVerb } from "@/lib/assistant/tool-catalog";
+import { TOOL_CATALOG, toolHeading, toolIconName, toolVerb } from "@/lib/assistant/tools/tool-catalog";
 
 describe("toolHeading", () => {
   // 目的：排队时参数为空对象，取值必须容忍缺字段；潜在缺陷：拼出 "undefined in undefined" 之类的目标。

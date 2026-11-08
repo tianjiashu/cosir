@@ -4,7 +4,7 @@ import {
   LocalAttachmentUnavailableError,
 } from "@/lib/assistant/attachments/local-attachment-registry";
 import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
-import { materializeSkillMentions } from "@/lib/assistant/skill-mention-token";
+import { materializeSkillMentions } from "@/lib/assistant/composer/skill-mention-token";
 
 /**
  * Preserve composer-only ordinary-file tokens at the HTTP boundary and attach

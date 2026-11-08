@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
+import { fetchCanonicalSnapshot } from "@/lib/assistant/transport/canonical-snapshot";
 import type { TransportState } from "@/lib/assistant/contract";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { HttpError } from "@/lib/http/http-error";

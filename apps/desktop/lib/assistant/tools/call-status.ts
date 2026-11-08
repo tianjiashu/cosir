@@ -1,4 +1,4 @@
-import type { BackgroundTaskEntry, TransportToolStatus } from "./contract";
+import type { BackgroundTaskEntry, TransportToolStatus } from "../contract";
 
 const labels: Record<TransportToolStatus, string> = {
   pending: "准备执行", running: "执行中", completed: "已完成",

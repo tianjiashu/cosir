@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TransportState } from "@/lib/assistant/contract";
-import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
+import { fetchCanonicalSnapshot } from "@/lib/assistant/transport/canonical-snapshot";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";

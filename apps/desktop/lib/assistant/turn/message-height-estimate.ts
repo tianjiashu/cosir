@@ -1,4 +1,4 @@
-import type { TransportOutcome } from "./contract";
+import type { TransportOutcome } from "../contract";
 import { resolveDisclosure, processKey, activityKey, agentKey } from "./disclosure-store";
 import type { ThreadMessage } from "@assistant-ui/react";
 import { IMAGE_TILE_GAP, IMAGE_TILE_SIZE } from "@/lib/image/tile-size";

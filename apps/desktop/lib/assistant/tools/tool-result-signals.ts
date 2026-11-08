@@ -1,4 +1,4 @@
-import type { TransportToolDisplayData } from "./contract";
+import type { TransportToolDisplayData } from "../contract";
 
 /** Result warnings are independent of the tool lifecycle; consumers must not turn them into Run failures. */
 export function toolResultSignal(data: TransportToolDisplayData | null | undefined): string | null {

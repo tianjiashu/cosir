@@ -1,9 +1,9 @@
 import { currentActivity, type ActivityFeedback } from "./current-activity";
-import type { BackgroundTaskEntry } from "./contract";
-import { readFileChanges, type FileChange } from "./file-changes";
-import type { TransportActivity, TransportAgentMessagePart, TransportMessagePart, TransportOutcome, TransportTextPart, TransportToolCallPart } from "./contract";
-import { toolHeading, toolVerb } from "./tool-catalog";
-import { toolResultSignal } from "./tool-result-signals";
+import type { BackgroundTaskEntry } from "../contract";
+import { readFileChanges, type FileChange } from "../tools/file-changes";
+import type { TransportActivity, TransportAgentMessagePart, TransportMessagePart, TransportOutcome, TransportTextPart, TransportToolCallPart } from "../contract";
+import { toolHeading, toolVerb } from "../tools/tool-catalog";
+import { toolResultSignal } from "../tools/tool-result-signals";
 
 export type TurnPhase = "running" | "suspended" | "settled";
 /** Only the current canonical reply receives activity; runtime placeholders do not own a Run. */

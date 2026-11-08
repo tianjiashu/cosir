@@ -7,7 +7,7 @@ import type { TransportState } from "@/lib/assistant/contract";
 import {
   toAddMessageCommand,
   useTaskAssistantTransportRuntime,
-} from "@/lib/assistant/use-task-assistant-transport-runtime";
+} from "@/lib/assistant/transport/use-task-assistant-transport-runtime";
 import { activity, transportState } from "./transport-fixtures";
 
 const INITIAL_STATE: TransportState = transportState({

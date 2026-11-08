@@ -1,7 +1,7 @@
 import { Fragment, useState, type ReactNode } from "react";
 
 import { IMAGE_TILE_GAP, IMAGE_TILE_SIZE } from "@/lib/image/tile-size";
-import { IMAGES_PER_ROW } from "@/lib/assistant/image-stack-policy";
+import { IMAGES_PER_ROW } from "@/lib/assistant/turn/image-stack-policy";
 
 /** 展开后最宽排几张（与行高估计的每行张数一致），胶囊因此贴着图片而不是被推到行首；窄时照常折行。 */
 const EXPANDED_MAX_WIDTH = IMAGES_PER_ROW * IMAGE_TILE_SIZE.regular.width + (IMAGES_PER_ROW - 1) * IMAGE_TILE_GAP;

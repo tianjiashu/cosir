@@ -7,11 +7,11 @@ import {
   readComposerDraft,
   saveComposerDraft,
   type ComposerDraft,
-} from "@/lib/assistant/composer-drafts";
+} from "@/lib/assistant/composer/composer-drafts";
 import {
   applyEditDraftToComposer,
   editableDraftAttachments,
-} from "@/lib/assistant/edit-composer-draft";
+} from "@/lib/assistant/composer/edit-composer-draft";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
 /** 消息编辑框的进入方式。`seed` 是没有草稿时的内容；`continued` 表示 composer 还活着，内容不用恢复。 */

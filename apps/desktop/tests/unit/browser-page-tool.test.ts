@@ -4,7 +4,7 @@ import { readBrowserPageDisplay } from "@/components/conversation/tools/browser-
 import { resolveCallView } from "@/components/conversation/tools/call-view-registry";
 import { browserPageView } from "@/components/conversation/tools/call-views/browser-page-view";
 import type { CallViewContext } from "@/components/conversation/tools/call-view";
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
+import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 
 const PAGE = { kind: "browser-page", tab_id: "t2", url: "https://example.com/", title: "Example" };
 const SHA = "a".repeat(64);

@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-vi.mock("@/lib/assistant/disclosure-store", () => ({ fileKey: (id: string, path: string) => `${id}:${path}`, useDisclosure: () => [true, () => undefined] }));
+vi.mock("@/lib/assistant/turn/disclosure-store", () => ({ fileKey: (id: string, path: string) => `${id}:${path}`, useDisclosure: () => [true, () => undefined] }));
 import { ChangesCard } from "@/components/conversation/turn/changes-card";
-import { aggregateChanges } from "@/lib/assistant/turn-layout";
+import { aggregateChanges } from "@/lib/assistant/turn/turn-layout";
 import { toolCallPart } from "./transport-fixtures";
 
 describe("file operation history", () => {

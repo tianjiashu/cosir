@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { revealHandoff } from "@/lib/handoff/reveal";
 import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useHandBack } from "@/lib/handoff/use-hand-back";
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
-import { toolHeading, toolIconName } from "@/lib/assistant/tool-catalog";
+import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
+import { toolHeading, toolIconName } from "@/lib/assistant/tools/tool-catalog";
 import { cn } from "@/lib/utils";
 
 export type AttentionCardProps = {

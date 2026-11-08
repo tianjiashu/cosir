@@ -7,12 +7,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("@/lib/backend/runtime-config", () => ({ getBackendRuntimeSnapshot: () => mocks.backend }));
-vi.mock("@/lib/assistant/assistant-snapshot-client", () => ({
+vi.mock("@/lib/assistant/transport/assistant-snapshot-client", () => ({
   requestAssistantSnapshot: mocks.requestAssistantSnapshot,
 }));
 
 import type { TransportState } from "@/lib/assistant/contract";
-import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
+import { fetchCanonicalSnapshot } from "@/lib/assistant/transport/canonical-snapshot";
 
 const snapshot: TransportState = { title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [] };
 

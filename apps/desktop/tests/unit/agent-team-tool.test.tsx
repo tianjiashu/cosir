@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { AgentTeamApproval } from "@/components/conversation/tools/agent-team/agent-team-tool";
 import type { AgentTeamRun } from "@/lib/api/agent-teams";
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
+import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import { createQueryClient } from "@/lib/query/query-client";
 import { queryKeys } from "@/lib/query/query-keys";
 

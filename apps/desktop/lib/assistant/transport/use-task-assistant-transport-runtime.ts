@@ -1,4 +1,4 @@
-import type { ToolCalls } from "./tool-call-index";
+import type { ToolCalls } from "../tools/tool-call-index";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import {
   useExternalStoreRuntime,
@@ -14,13 +14,13 @@ import {
   convertFrameStoreItem,
   TransportFrameStore,
   type FrameStoreItem,
-} from "@/lib/assistant/transport-frame-store";
+} from "@/lib/assistant/transport/transport-frame-store";
 import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
-import { reconcileCommands, releaseCommandObservation } from "./command-request-store";
-import { TaskTransportSession, type TransportDisconnect } from "@/lib/assistant/task-transport-session";
+import { reconcileCommands, releaseCommandObservation } from "../command-request-store";
+import { TaskTransportSession, type TransportDisconnect } from "@/lib/assistant/transport/task-transport-session";
 import type { TraceId } from "@/lib/logging/trace-id";
 
-export type { TransportDisconnect } from "@/lib/assistant/task-transport-session";
+export type { TransportDisconnect } from "@/lib/assistant/transport/task-transport-session";
 
 export type TaskAssistantTransportOptions = {
   initialState: TransportState;

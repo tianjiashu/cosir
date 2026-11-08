@@ -1,6 +1,6 @@
 import { useAuiState } from "@assistant-ui/react";
-import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
-import { currentActivity, STOPPING_FEEDBACK } from "@/lib/assistant/current-activity";
+import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-state-operations";
+import { currentActivity, STOPPING_FEEDBACK } from "@/lib/assistant/turn/current-activity";
 import { ActivityStatus } from "./thinking-label";
 
 /** 助手消息出现前的临时槽位；出现后归 TurnLayout，同一时刻只有一个所有者。 */

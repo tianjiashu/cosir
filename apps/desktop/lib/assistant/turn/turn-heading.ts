@@ -1,4 +1,4 @@
-import type { TransportOutcome } from "./contract";
+import type { TransportOutcome } from "../contract";
 import { formatDuration } from "./run-duration";
 import type { TurnLayout } from "./turn-layout";
 

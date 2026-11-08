@@ -1,7 +1,7 @@
 import type { Attachment, CreateAttachment } from "@assistant-ui/core";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { inlineAttachmentTokenId } from "./attachments/local-file-token";
-import { extractUserAddMessageAttachments, extractUserAddMessageText, getUserAddMessageSourceId, type UserAddMessageCommand } from "./transport-message-converter";
+import { inlineAttachmentTokenId } from "../attachments/local-file-token";
+import { extractUserAddMessageAttachments, extractUserAddMessageText, getUserAddMessageSourceId, type UserAddMessageCommand } from "../transport-message-converter";
 import { editableDraftAttachments, mergeDraftText, type RecoveredDraft, type ApplyEditDraftResult } from "./edit-composer-draft";
 
 /**

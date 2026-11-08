@@ -4,7 +4,7 @@ import {
   submitNewConversationMessage,
   wasCommandPossiblyAccepted,
   type SubmitNewConversationMessageInput,
-} from "@/lib/assistant/submit-new-conversation-message";
+} from "@/lib/assistant/composer/submit-new-conversation-message";
 import { HttpError } from "@/lib/http/http-error";
 
 const input: SubmitNewConversationMessageInput = {

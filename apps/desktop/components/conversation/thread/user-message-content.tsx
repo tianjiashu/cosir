@@ -6,7 +6,7 @@ import { MarkdownText } from "@/components/markdown/markdown-text";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
 import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { ReferenceChip } from "@/components/workspace-references/reference-chip";
-import { userMessageSegments } from "@/lib/assistant/user-message-segments";
+import { userMessageSegments } from "@/lib/assistant/turn/user-message-segments";
 
 /**
  * 用户消息气泡内的正文与行内胶囊（图片除外，见 `UserMessageImages`）。

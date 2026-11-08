@@ -1,5 +1,5 @@
 import { isCancelledAbort, isTimeoutAbort, withTimeout } from "@/lib/async/abort-timeout";
-import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
+import { requestAssistantSnapshot } from "@/lib/assistant/transport/assistant-snapshot-client";
 import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/logging/trace-id";

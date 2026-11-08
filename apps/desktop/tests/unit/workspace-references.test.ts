@@ -3,7 +3,7 @@ import {
   parseComposerDocument,
   serializeComposerDocument,
 } from "@/components/composer/composer-document";
-import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
+import { prepareUserCommand } from "@/lib/assistant/composer/prepare-user-command";
 import {
   decodeReferences,
   encodeReference,

@@ -8,7 +8,7 @@ import {
   convertFrameStoreItem,
   type ActivityTransition,
   type TransportFrameEnvelope,
-} from "@/lib/assistant/transport-frame-store";
+} from "@/lib/assistant/transport/transport-frame-store";
 import { activity, agentMessage, assistantMessage, outcome, toolCallPart, queuedMessage, transportState, userMessage } from "./transport-fixtures";
 
 const streaming = (id: string, text: string): TransportMessage => (

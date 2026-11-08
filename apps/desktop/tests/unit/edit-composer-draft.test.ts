@@ -5,7 +5,7 @@ import {
   applyEditDraftToComposer,
   editableDraftAttachments,
   type EditDraftComposerTarget,
-} from "@/lib/assistant/edit-composer-draft";
+} from "@/lib/assistant/composer/edit-composer-draft";
 
 type FakeAttachment = {
   id: string;

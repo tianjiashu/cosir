@@ -10,7 +10,7 @@ vi.mock("@/lib/handoff/handoff-store", async (importOriginal) => ({
 }));
 
 import { AttentionCard, attentionDescription } from "@/components/conversation/turn/attention-card";
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
+import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 
 function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
   return {presentation: "activity",

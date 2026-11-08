@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { projectTurn } from "@/lib/assistant/turn-layout";
-import { projectTurnHeading } from "@/lib/assistant/turn-heading";
+import { projectTurn } from "@/lib/assistant/turn/turn-layout";
+import { projectTurnHeading } from "@/lib/assistant/turn/turn-heading";
 import { outcome, toolCallPart } from "./transport-fixtures";
 
 const text = { type: "text" as const, finalReply: true, text: "回复" };

@@ -16,7 +16,7 @@ import {
 import { ModelAvailability } from "@/components/model/model-availability";
 import { ModelConfigPanel } from "@/components/model/model-config-dialog";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
-import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
+import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-state-operations";
 import { RUN_LAUNCH_LOCKED_HINT } from "@/lib/assistant/run-launch";
 import { useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
 import {

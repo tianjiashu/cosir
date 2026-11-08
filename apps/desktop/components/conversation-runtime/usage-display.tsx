@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import type { TransportUsage } from "@/lib/assistant/contract";
-import { latestMeasuredContextUsage } from "@/lib/assistant/transport-state-operations";
+import { latestMeasuredContextUsage } from "@/lib/assistant/transport/transport-state-operations";
 
 type UsageTone = "normal" | "warning" | "critical" | "unknown";
 

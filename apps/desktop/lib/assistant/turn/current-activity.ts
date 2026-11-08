@@ -1,5 +1,5 @@
-import type { BackgroundTaskEntry, TransportActivity, TransportToolCallPart } from "./contract";
-import { toolHeading } from "./tool-catalog";
+import type { BackgroundTaskEntry, TransportActivity, TransportToolCallPart } from "../contract";
+import { toolHeading } from "../tools/tool-catalog";
 
 export type ActivityFeedback = { label: string; animated: boolean };
 export const STOPPING_FEEDBACK: ActivityFeedback = { label: "正在停止…", animated: false };

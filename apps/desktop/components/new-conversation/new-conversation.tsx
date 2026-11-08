@@ -29,7 +29,7 @@ import { ImageAttachmentStrip } from "@/components/composer/image-attachment-str
 import { ImageTile } from "@/components/image/image-tile";
 import { useImageGallery } from "@/components/image/image-gallery";
 import { useObjectUrls } from "@/hooks/use-object-urls";
-import { submitNewConversationMessage, wasCommandPossiblyAccepted } from "@/lib/assistant/submit-new-conversation-message";
+import { submitNewConversationMessage, wasCommandPossiblyAccepted } from "@/lib/assistant/composer/submit-new-conversation-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";

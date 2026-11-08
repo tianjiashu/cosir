@@ -4,7 +4,7 @@ import type { CompleteAttachment } from "@assistant-ui/core";
 import {
   createEditableUserDocument,
   editableDocumentAttachments,
-} from "@/lib/assistant/editable-user-document";
+} from "@/lib/assistant/composer/editable-user-document";
 
 function file(id: string): CompleteAttachment {
   return {

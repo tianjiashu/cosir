@@ -1,4 +1,4 @@
-import { mapMarkdownText, splitMarkdownTokens, type MarkdownTokenPart } from "@/lib/assistant/markdown-literals";
+import { mapMarkdownText, splitMarkdownTokens, type MarkdownTokenPart } from "@/lib/assistant/composer/markdown-literals";
 const SKILL_MENTION_TOKEN = /\[\[cosir-skill:([^\]]+)\]\]/g;
 const SKILL_IDENTIFIER = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MATERIALIZED_SKILL_MENTION = /【Skill: ([^】]+)】/g;

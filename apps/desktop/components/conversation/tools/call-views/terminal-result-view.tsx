@@ -1,14 +1,14 @@
 import { Maximize2Icon } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 
-import { callIsExecuting } from "@/lib/assistant/call-status";
+import { callIsExecuting } from "@/lib/assistant/tools/call-status";
 import { useOpenLink } from "@/components/links/use-open-link";
 import { CopyIconButton } from "@/components/ui/copy-icon-button";
 import { REVEAL_ON_HOVER_CLASS } from "@/components/ui/disclosure-chevron";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { useDisclosure } from "@/lib/assistant/disclosure-store";
+import { useDisclosure } from "@/lib/assistant/turn/disclosure-store";
 import { TerminalOutputPreview, useParsedOutput } from "../terminal-output/preview";
 import { TerminalOutputReader } from "../terminal-output/reader";
 import { resolvePathText } from "@/lib/links/resolve-link";

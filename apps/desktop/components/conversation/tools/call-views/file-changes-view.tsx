@@ -5,7 +5,7 @@ import type { FileData } from "react-diff-view";
 import { WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
 import { cn } from "@/lib/utils";
 import type { CallView } from "../call-view";
-import { readFileChanges, type FileChange } from "@/lib/assistant/file-changes";
+import { readFileChanges, type FileChange } from "@/lib/assistant/tools/file-changes";
 import { asRecord } from "../display-data-readers";
 
 type ParsedFileDiff =

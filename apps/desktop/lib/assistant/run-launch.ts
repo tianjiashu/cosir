@@ -1,7 +1,7 @@
 import { useAuiState } from "@assistant-ui/react";
 
 import { isActiveRunStatus, type TransportRunLaunch, type TransportState } from "@/lib/assistant/contract";
-import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
+import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-state-operations";
 
 /** 运行期配置锁定时，模型与工具控件上的说明。 */
 export const RUN_LAUNCH_LOCKED_HINT = "运行中不能更换模型配置，停止后可修改";

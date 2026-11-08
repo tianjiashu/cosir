@@ -1,4 +1,4 @@
-import type { ToolCalls } from "@/lib/assistant/tool-call-index";
+import type { ToolCalls } from "@/lib/assistant/tools/tool-call-index";
 import { create } from "zustand";
 
 import type { BackgroundTaskEntry, TransportState, TransportToolCallPart } from "@/lib/assistant/contract";

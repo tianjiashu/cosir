@@ -1,13 +1,13 @@
 import { outcome, assistantMessage, toolCallPart, activity } from "./transport-fixtures";
-import { useDisclosureStore } from "@/lib/assistant/disclosure-store";
+import { useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 import type { ThreadMessage } from "@assistant-ui/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toThreadMessageWithRenderContext } from "@/lib/assistant/transport-message-converter";
 import type { TransportMessagePart, TransportOutcome } from "@/lib/assistant/contract";
-import * as turnLayout from "@/lib/assistant/turn-layout";
+import * as turnLayout from "@/lib/assistant/turn/turn-layout";
 
-import { forgetMessageHeights, rememberMessageHeight, rememberedMessageHeight } from "@/lib/assistant/message-height-cache";
-import { estimateMessageHeight } from "@/lib/assistant/message-height-estimate";
+import { forgetMessageHeights, rememberMessageHeight, rememberedMessageHeight } from "@/lib/assistant/turn/message-height-cache";
+import { estimateMessageHeight } from "@/lib/assistant/turn/message-height-estimate";
 
 const projected = (parts: TransportMessagePart[], end: TransportOutcome | null = null, live = false) => toThreadMessageWithRenderContext(assistantMessage("a", 1, parts, end), { runId: 1, source: null, outcome: end, isRunEnd: true, activity: live ? activity(1, "running") : null }) as ThreadMessage;
 const assistant = (...parts: TransportMessagePart[]) => projected(parts);

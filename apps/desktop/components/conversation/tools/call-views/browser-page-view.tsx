@@ -4,7 +4,7 @@ import { useAttachmentWorkspaceId } from "@/components/conversation/thread/attac
 import { ImageStrip } from "@/components/image/image-strip";
 import { WebPageIcon } from "@/components/links/link-target-icon";
 import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
-import { browserActionVerb } from "@/lib/assistant/tool-catalog";
+import { browserActionVerb } from "@/lib/assistant/tools/tool-catalog";
 import { tabLabel } from "@/lib/browser/browser-tab-label";
 import { useBrowserTab } from "@/lib/browser/host-state-store";
 import { revealBrowserTab } from "@/lib/browser/panel-store";

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseHistoryPage, parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
+import { parseHistoryPage, parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/transport/snapshot-validation";
 import type { TransportMessagePart } from "@/lib/assistant/contract";
 import {
   activity,

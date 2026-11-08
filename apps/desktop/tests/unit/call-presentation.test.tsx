@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { resolveCallView } from "@/components/conversation/tools/call-view-registry";
 import type { CallViewContext } from "@/components/conversation/tools/call-view";
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
+import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 
 const resolve = (display_data: Record<string, unknown>) => {
   const artifact: ToolArtifact = { presentation: "activity", backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null, errorCode: null };

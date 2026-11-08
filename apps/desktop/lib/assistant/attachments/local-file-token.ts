@@ -2,7 +2,7 @@ import {
   markdownSegments,
   mapMarkdownText,
   splitMarkdownTokens,
-} from "@/lib/assistant/markdown-literals";
+} from "@/lib/assistant/composer/markdown-literals";
 
 import { LOCAL_IMAGE_LOCATOR_PREFIX } from "./attachment-locator";
 

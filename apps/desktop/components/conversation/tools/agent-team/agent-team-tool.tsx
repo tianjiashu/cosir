@@ -1,4 +1,4 @@
-import { useTeamApprovalDraft } from "@/lib/assistant/team-approval-draft";
+import { useTeamApprovalDraft } from "@/lib/assistant/composer/team-approval-draft";
 import { commandPending, decisionTarget, useCommandRequest } from "@/lib/assistant/command-request-store";
 import { useEffect, useState } from "react";
 import { CheckCircle2Icon, ChevronDownIcon, CircleIcon, ClockIcon } from "lucide-react";

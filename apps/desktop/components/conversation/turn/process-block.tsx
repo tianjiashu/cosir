@@ -1,9 +1,9 @@
 import { memo, useRef } from "react";
 import { useScrollLock } from "@assistant-ui/react";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
-import { activityKey, useDisclosure } from "@/lib/assistant/disclosure-store";
-import { describeProcessProblems, type ActivityGroup, type CallItem } from "@/lib/assistant/turn-layout";
-import type { ActivityFeedback } from "@/lib/assistant/current-activity";
+import { activityKey, useDisclosure } from "@/lib/assistant/turn/disclosure-store";
+import { describeProcessProblems, type ActivityGroup, type CallItem } from "@/lib/assistant/turn/turn-layout";
+import type { ActivityFeedback } from "@/lib/assistant/turn/current-activity";
 import { ActivityStatus } from "./thinking-label";
 
 /** 连续工具区间；摘要承担当前活动，展开才挂载普通调用，用户选择保持稳定。 */

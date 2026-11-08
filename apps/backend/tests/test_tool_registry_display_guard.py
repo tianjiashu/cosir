@@ -1,7 +1,7 @@
 """注册表守卫：每个工具在前端工具目录表里有条目，产出的展示 kind 都登记在契约文档里。
 
 目的：新增工具时不靠人记得补前端目录（图标、动词、标题规则）或更新契约表格——漏了就在这里失败。
-前端目录表是 ``apps/desktop/lib/assistant/tool-catalog.ts``：工具名是封闭集合（``ALL_TOOL_NAMES``），
+前端目录表是 ``apps/desktop/lib/assistant/tools/tool-catalog.ts``：工具名是封闭集合（``ALL_TOOL_NAMES``），
 后端不再下发任何展示外壳，所以这张表就是「工具叫什么、用什么图标」的唯一事实源，由本测试按注册表核对。
 """
 
@@ -14,7 +14,7 @@ from app.config.configuration import get_tool_registry
 from app.core.tool.schemas.tool_names import ALL_TOOL_NAMES
 
 _CONTRACT = Path("app/core/tool/tool_ui_display_contract.md")
-_FRONTEND_CATALOG = Path("../desktop/lib/assistant/tool-catalog.ts")
+_FRONTEND_CATALOG = Path("../desktop/lib/assistant/tools/tool-catalog.ts")
 _DISPLAY_MODULES = [
     *Path("app/tools/display").glob("*.py"),
     *Path("app/core/tool/handler").glob("*/*display*.py"),

@@ -1,5 +1,5 @@
 import { requestJson, type HttpRequestInit } from "@/lib/http/client";
-import { parseHistoryPage, parseTransportState } from "@/lib/assistant/snapshot-validation";
+import { parseHistoryPage, parseTransportState } from "@/lib/assistant/transport/snapshot-validation";
 import type { TransportHistoryPage, TransportState } from "@/lib/assistant/contract";
 
 /**

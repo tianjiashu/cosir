@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { Button } from "@/components/ui/button";
 import { CopyIconButton } from "@/components/ui/copy-icon-button";
 import type { TerminalLinkOptions } from "@/components/terminal/terminal-links";
-import { useDisclosureStore } from "@/lib/assistant/disclosure-store";
+import { useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 import { TerminalViewport, type TerminalViewportHandle } from "./viewport";
 
 /** 下载后端累计原文；不把有限的 xterm 屏幕缓冲伪称为完整输出。 */

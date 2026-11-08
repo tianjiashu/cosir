@@ -4,7 +4,7 @@ import { TransportStatus, type TransportIssue } from "@/components/conversation-
 import { AssistantRuntimeErrorBoundary } from "@/components/conversation-runtime/runtime/assistant-runtime-error-boundary";
 import { AssistantRuntimeSession } from "@/components/conversation-runtime/runtime/assistant-runtime-session";
 import type { AssistantRuntimeProps } from "@/components/conversation-runtime/runtime/runtime-types";
-import { fetchCanonicalSnapshot } from "@/lib/assistant/canonical-snapshot";
+import { fetchCanonicalSnapshot } from "@/lib/assistant/transport/canonical-snapshot";
 import type { TransportState } from "@/lib/assistant/contract";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 

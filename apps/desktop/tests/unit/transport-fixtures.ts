@@ -1,4 +1,4 @@
-import { ToolCallIndex } from "@/lib/assistant/tool-call-index";
+import { ToolCallIndex } from "@/lib/assistant/tools/tool-call-index";
 import type {
   TerminalSessionEntry,
   TransportActivity,

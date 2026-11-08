@@ -5,7 +5,7 @@ vi.mock("@/lib/http/client", () => ({
 }));
 
 import { requestJson } from "@/lib/http/client";
-import { requestAssistantSnapshot } from "@/lib/assistant/assistant-snapshot-client";
+import { requestAssistantSnapshot } from "@/lib/assistant/transport/assistant-snapshot-client";
 import type { TransportState } from "@/lib/assistant/contract";
 
 const requestJsonMock = vi.mocked(requestJson);

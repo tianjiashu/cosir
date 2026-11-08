@@ -5,8 +5,8 @@ import { AgentConfigurationDraftTool } from "@/components/conversation/tools/con
 import { AgentTeamConfigurationTool } from "@/components/conversation/tools/configuration-draft/agent-team-configuration-tool";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
-import { readToolArtifact } from "@/lib/assistant/tool-artifact";
-import type { ArtifactCard, StandaloneArtifactCard } from "@/lib/assistant/turn-layout";
+import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
+import type { ArtifactCard, StandaloneArtifactCard } from "@/lib/assistant/turn/turn-layout";
 import { ChangesCard } from "./changes-card";
 
 export type ArtifactZoneProps = {

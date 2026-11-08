@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { readFileChanges } from "@/lib/assistant/file-changes";
-import { aggregateChanges } from "@/lib/assistant/turn-layout";
+import { readFileChanges } from "@/lib/assistant/tools/file-changes";
+import { aggregateChanges } from "@/lib/assistant/turn/turn-layout";
 import { toolCallPart } from "./transport-fixtures";
 
 describe("shared file operation projection", () => {

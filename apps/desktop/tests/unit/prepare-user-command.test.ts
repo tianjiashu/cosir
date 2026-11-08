@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { registerInlineFileMetadata, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
-import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
+import { prepareUserCommand } from "@/lib/assistant/composer/prepare-user-command";
 
 describe("prepare user command", () => {
   it("preserves ordinary-file tokens and adds explicit local attachment metadata", () => {

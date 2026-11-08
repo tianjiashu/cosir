@@ -1,6 +1,6 @@
-import { requestHistoryPage } from "@/lib/assistant/assistant-snapshot-client";
+import { requestHistoryPage } from "@/lib/assistant/transport/assistant-snapshot-client";
 import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
-import { parseTransportFrame, type TransportFrameStore } from "@/lib/assistant/transport-frame-store";
+import { parseTransportFrame, type TransportFrameStore } from "@/lib/assistant/transport/transport-frame-store";
 import { requestOk } from "@/lib/http/client";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { TraceId } from "@/lib/logging/trace-id";

@@ -12,9 +12,9 @@ vi.mock("@/lib/task-status/task-status-store", async (importOriginal) => ({
 }));
 
 import { CallRow } from "@/components/conversation/tools/call-row";
-import { useDisclosureStore } from "@/lib/assistant/disclosure-store";
+import { useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 import { createQueryClient } from "@/lib/query/query-client";
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
+import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 
 function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
   return {presentation: "activity",

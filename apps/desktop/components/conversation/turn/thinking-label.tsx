@@ -1,6 +1,6 @@
 import type { ComponentProps } from "react";
 
-import type { ActivityFeedback } from "@/lib/assistant/current-activity";
+import type { ActivityFeedback } from "@/lib/assistant/turn/current-activity";
 import { cn } from "@/lib/utils";
 
 /**

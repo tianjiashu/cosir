@@ -8,9 +8,9 @@ import {
 } from "@assistant-ui/react";
 import { Fragment, memo, useCallback, useMemo, useRef, type FC } from "react";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
-import { rememberMessageHeight, rememberedMessageHeight } from "@/lib/assistant/message-height-cache";
-import { estimateMessageHeight } from "@/lib/assistant/message-height-estimate";
-import { queuedMessageIdsKey } from "@/lib/assistant/transport-state-operations";
+import { rememberMessageHeight, rememberedMessageHeight } from "@/lib/assistant/turn/message-height-cache";
+import { estimateMessageHeight } from "@/lib/assistant/turn/message-height-estimate";
+import { queuedMessageIdsKey } from "@/lib/assistant/transport/transport-state-operations";
 import { VirtualizedThreadMessageRow, type MessageComponents } from "@/components/conversation/thread/virtualized-thread-message-row";
 import { useThreadHistoryPaging } from "@/components/conversation/thread/use-thread-history-paging";
 import { measureRenderedElement } from "@/lib/virtual/measure-rendered-element";

@@ -24,7 +24,7 @@
  */
 
 // 引入传输契约类型，作为 ExternalState 增强字段的精确类型。
-import type { TransportState } from "./contract";
+import type { TransportState } from "../contract";
 
 // 标记为模块，确保 TypeScript 将其作为模块增强而非全局脚本处理。
 export {};

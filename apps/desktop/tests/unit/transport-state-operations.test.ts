@@ -5,7 +5,7 @@ import {
   readRuntimeTransportState,
   latestMeasuredContextUsage,
   transportMessageCount,
-} from "@/lib/assistant/transport-state-operations";
+} from "@/lib/assistant/transport/transport-state-operations";
 import { activity, assistantMessage, outcome, queuedMessage, transportState, usage, userMessage } from "./transport-fixtures";
 
 describe("transport state operations", () => {

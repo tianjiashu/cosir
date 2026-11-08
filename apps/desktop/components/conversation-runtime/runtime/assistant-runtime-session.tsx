@@ -1,4 +1,4 @@
-import type { ToolCalls } from "@/lib/assistant/tool-call-index";
+import type { ToolCalls } from "@/lib/assistant/tools/tool-call-index";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 

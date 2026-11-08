@@ -1,4 +1,4 @@
-import { editDraftKey, forgetComposerDraft, readComposerDraft, recoverComposerDraft, subscribeComposerDrafts, taskDraftKey } from "@/lib/assistant/composer-drafts";
+import { editDraftKey, forgetComposerDraft, readComposerDraft, recoverComposerDraft, subscribeComposerDrafts, taskDraftKey } from "@/lib/assistant/composer/composer-drafts";
 import { useComposerDraft } from "@/components/composer/use-composer-draft";
 import { GitForkIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, PlayIcon, Trash2Icon, XIcon, ZapIcon } from "lucide-react";
 import { useContext, createContext, memo, Profiler, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type FC } from "react";
@@ -31,10 +31,10 @@ import {
   isEditableLatestUserMessage,
   isQueuedUserMessage,
   canResumeStoppedRun,
-} from "@/lib/assistant/composer-action-policy";
-import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
+} from "@/lib/assistant/composer/action-policy";
+import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-state-operations";
 import { EDIT_SESSION_RUN_CONFIG, isContinuedEditSession, toEditableUserMessageDraft } from "@/lib/assistant/transport-message-converter";
-import { editableDocumentAttachments } from "@/lib/assistant/editable-user-document";
+import { editableDocumentAttachments } from "@/lib/assistant/composer/editable-user-document";
 import { isActiveRunStatus, type InputDelivery, type TransportActivity, type TransportMessageSource } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";

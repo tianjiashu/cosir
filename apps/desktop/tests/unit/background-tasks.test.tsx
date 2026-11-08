@@ -12,20 +12,20 @@ vi.mock("@/lib/background-tasks/background-tasks-store", async (importOriginal) 
   useBackgroundTaskPart: (_taskId: number, toolCallId: string) => board.parts.get(toolCallId) ?? null,
 }));
 
-vi.mock("@/lib/assistant/disclosure-store", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@/lib/assistant/disclosure-store")>(),
+vi.mock("@/lib/assistant/turn/disclosure-store", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/assistant/turn/disclosure-store")>(),
   useDisclosure: (_taskId: number, key: string, defaultOpen: boolean) => [board.open.has(key) || defaultOpen, () => undefined],
 }));
 
 import { ForegroundWaitAction } from "@/components/conversation/tools/foreground-wait-action";
-import { readToolArtifact } from "@/lib/assistant/tool-artifact";
+import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import { BackgroundTasksBody, BackgroundTasksSummary } from "@/components/conversation-aside/background-tasks-card";
 import { formatElapsed } from "@/components/conversation-aside/background-task-row";
 import type { BackgroundTaskEntry, TransportBackgroundWork, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/transport-message-converter";
-import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/snapshot-validation";
+import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/transport/snapshot-validation";
 import { backgroundToolCall } from "@/lib/assistant/task-commands";
-import { callKey, resolveDisclosure, useDisclosureStore } from "@/lib/assistant/disclosure-store";
+import { callKey, resolveDisclosure, useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 import { countRunning, useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
 import { useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
 import { createQueryClient } from "@/lib/query/query-client";

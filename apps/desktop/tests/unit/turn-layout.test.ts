@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TransportMessagePart, TransportToolCallPart } from "@/lib/assistant/contract";
-import { aggregateChanges, describeProcessProblems, projectTurn, visibleTurnBlock } from "@/lib/assistant/turn-layout";
+import { aggregateChanges, describeProcessProblems, projectTurn, visibleTurnBlock } from "@/lib/assistant/turn/turn-layout";
 import { agentMessagePart, outcome, toolCallPart } from "./transport-fixtures";
 const text = (value: string, finalReply = false): TransportMessagePart => ({ type: "text", text: value, finalReply });
 const call = (id: string, overrides: Partial<TransportToolCallPart> = {}) => toolCallPart(id, "read_file", { status: "completed", ...overrides });

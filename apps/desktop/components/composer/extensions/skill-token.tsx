@@ -3,7 +3,7 @@ import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tip
 import { SkillChip } from "@/components/composer/token-chips";
 import { removeComposerToken } from "./remove-composer-token";
 import { useComposerEditorView } from "@/components/composer/composer-editor-context";
-import { createSkillMentionToken } from "@/lib/assistant/skill-mention-token";
+import { createSkillMentionToken } from "@/lib/assistant/composer/skill-mention-token";
 
 function SkillTokenView({ node, editor, getPos }: NodeViewProps) {
   const context = useComposerEditorView();

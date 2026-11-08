@@ -1,4 +1,4 @@
-import type { ToolCalls } from "@/lib/assistant/tool-call-index";
+import type { ToolCalls } from "@/lib/assistant/tools/tool-call-index";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { memo } from "react";
 
@@ -9,7 +9,7 @@ import type { RuntimeSessionContext } from "@/components/conversation-runtime/ru
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import type { TransportState } from "@/lib/assistant/contract";
 import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
-import { TransportHistoryContext } from "@/lib/assistant/transport-history-context";
+import { TransportHistoryContext } from "@/lib/assistant/transport/transport-history-context";
 
 type AssistantRuntimeTransportHostProps = {
   context: RuntimeSessionContext;

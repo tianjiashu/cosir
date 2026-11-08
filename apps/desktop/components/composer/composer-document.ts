@@ -1,4 +1,4 @@
-import { markdownSegments } from "@/lib/assistant/markdown-literals";
+import { markdownSegments } from "@/lib/assistant/composer/markdown-literals";
 import {
   decodeReferences,
   encodeReference,
@@ -8,7 +8,7 @@ import type { JSONContent } from "@tiptap/core";
 import {
   createSkillMentionToken,
   parseSkillMentionName,
-} from "@/lib/assistant/skill-mention-token";
+} from "@/lib/assistant/composer/skill-mention-token";
 
 // 正文里只有普通文件与 Skill 两种 token；图片走输入框上方的附件条，不进正文。
 const COMPOSER_TOKEN = /\[\[cosir-(file|skill):([^\]]+)\]\]/g;

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
-import { TaskTransportSession, type TaskTransportSessionCallbacks } from "@/lib/assistant/task-transport-session";
-import { TransportFrameStore } from "@/lib/assistant/transport-frame-store";
+import { TaskTransportSession, type TaskTransportSessionCallbacks } from "@/lib/assistant/transport/task-transport-session";
+import { TransportFrameStore } from "@/lib/assistant/transport/transport-frame-store";
 import { activity, transportState, userMessage } from "./transport-fixtures";
 
 const command = (text: string): UserAddMessageCommand => ({

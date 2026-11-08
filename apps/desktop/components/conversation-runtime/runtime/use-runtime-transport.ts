@@ -1,8 +1,8 @@
-import type { ToolCalls } from "@/lib/assistant/tool-call-index";
+import type { ToolCalls } from "@/lib/assistant/tools/tool-call-index";
 import { useCallback, useEffect, useMemo } from "react";
 
 import { getUserAddMessageSourceId, type UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
-import { recoverRejectedCommands } from "@/lib/assistant/composer-drafts";
+import { recoverRejectedCommands } from "@/lib/assistant/composer/composer-drafts";
 import {
   rerunTaskMessage,
   sendTaskMessage,
@@ -14,15 +14,15 @@ import { activeRunLaunch } from "@/lib/assistant/run-launch";
 import { readStoredSelection } from "@/lib/model/selection-storage";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { TransportRunStatus, TransportState } from "@/lib/assistant/contract";
-import { transportMessageCount } from "@/lib/assistant/transport-state-operations";
+import { transportMessageCount } from "@/lib/assistant/transport/transport-state-operations";
 import type { RuntimeRecovery } from "@/components/conversation-runtime/runtime/use-runtime-recovery";
 import type { RuntimeSessionContext } from "@/components/conversation-runtime/runtime/runtime-types";
 import {
   useTaskAssistantTransportRuntime,
   type TransportDisconnect,
-} from "@/lib/assistant/use-task-assistant-transport-runtime";
+} from "@/lib/assistant/transport/use-task-assistant-transport-runtime";
 import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
-import { prepareUserCommand } from "@/lib/assistant/prepare-user-command";
+import { prepareUserCommand } from "@/lib/assistant/composer/prepare-user-command";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";

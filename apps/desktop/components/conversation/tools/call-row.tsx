@@ -1,15 +1,15 @@
 import { DeferredDetail } from "./deferred-detail";
-import { projectCallStatus } from "@/lib/assistant/call-status";
-import { toolResultSignal } from "@/lib/assistant/tool-result-signals";
+import { projectCallStatus } from "@/lib/assistant/tools/call-status";
+import { toolResultSignal } from "@/lib/assistant/tools/tool-result-signals";
 import { memo, useRef, type ReactNode } from "react";
 import { useScrollLock } from "@assistant-ui/react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { DISCLOSURE_ANIMATION_MS, DISCLOSURE_CONTENT_CLASS } from "@/components/conversation/turn/turn-tokens";
-import { callKey, useDisclosure } from "@/lib/assistant/disclosure-store";
-import { toolHeading, toolIconName } from "@/lib/assistant/tool-catalog";
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
+import { callKey, useDisclosure } from "@/lib/assistant/turn/disclosure-store";
+import { toolHeading, toolIconName } from "@/lib/assistant/tools/tool-catalog";
+import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import { cn } from "@/lib/utils";
 import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
 import { useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";

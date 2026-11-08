@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
+import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 
 /** kind 视图渲染时拿到的调用上下文：按 Task 寻址的命令、只读面开关与 assistant-ui 侧的原始参数。 */
 export type CallViewContext = {

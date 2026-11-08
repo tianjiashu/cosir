@@ -11,7 +11,7 @@ import {
 import { registerInlineFileMetadata, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 import type { TransportMessage, TransportToolCallPart } from "@/lib/assistant/contract";
 import { activity, agentMessagePart, outcome, usage } from "./transport-fixtures";
-import { readToolArtifact } from "@/lib/assistant/tool-artifact";
+import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 
 /** 已到终态那一轮回复末尾的渲染上下文。 */
 const completedRun = (runId: number): TransportMessageRenderContext => ({

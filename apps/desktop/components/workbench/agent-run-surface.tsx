@@ -7,12 +7,12 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { useAgentReader } from "@/lib/workbench/use-agent-reader";
-import { useTaskAssistantTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
+import { useTaskAssistantTransportRuntime } from "@/lib/assistant/transport/use-task-assistant-transport-runtime";
 import type { TransportState } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/logging/trace-id";
 import { getBackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
-import { TransportHistoryContext } from "@/lib/assistant/transport-history-context";
+import { TransportHistoryContext } from "@/lib/assistant/transport/transport-history-context";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
 /**

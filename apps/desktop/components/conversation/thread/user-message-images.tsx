@@ -8,7 +8,7 @@ import { ImageStack } from "@/components/conversation/thread/image-stack";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import { resolveTransportImageSrc } from "@/lib/assistant/attachments/image-src";
-import { shouldStackImages } from "@/lib/assistant/image-stack-policy";
+import { shouldStackImages } from "@/lib/assistant/turn/image-stack-policy";
 
 /**
  * 将用户消息中的图片 part 渲染为气泡上方的预览区。

@@ -1,5 +1,5 @@
-import { ToolCallIndex, type ToolCalls } from "./tool-call-index";
-import { projectTurn, turnPhaseOf, type TurnLayout } from "./turn-layout";
+import { ToolCallIndex, type ToolCalls } from "../tools/tool-call-index";
+import { projectTurn, turnPhaseOf, type TurnLayout } from "../turn/turn-layout";
 import type { ThreadMessage } from "@assistant-ui/react";
 
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
@@ -18,7 +18,7 @@ import {
   type TransportMessageRenderContext,
   type UserAddMessageCommand,
 } from "@/lib/assistant/transport-message-converter";
-import { parseTransportState, validateTransportUpdate } from "@/lib/assistant/snapshot-validation";
+import { parseTransportState, validateTransportUpdate } from "@/lib/assistant/transport/snapshot-validation";
 
 type TransportFrameBase = {
   task_id: number;

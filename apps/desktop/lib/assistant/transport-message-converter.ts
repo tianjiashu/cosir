@@ -1,4 +1,4 @@
-import { projectTurn, turnPhaseOf, type TurnLayout } from "./turn-layout";
+import { projectTurn, turnPhaseOf, type TurnLayout } from "./turn/turn-layout";
 import { isActiveRunStatus } from "@/lib/assistant/contract";
 import type { MessageStatus } from "@assistant-ui/core";
 import type { CompleteAttachment, CreateAttachment, RunConfig } from "@assistant-ui/core";
@@ -27,13 +27,13 @@ import {
   localFileTokenIds,
   splitLocalFileTokens,
 } from "@/lib/assistant/attachments/local-file-token";
-import { materializeSkillMentions, restoreSkillMentionTokens } from "@/lib/assistant/skill-mention-token";
-import type { ToolArtifact } from "@/lib/assistant/tool-artifact";
+import { materializeSkillMentions, restoreSkillMentionTokens } from "@/lib/assistant/composer/skill-mention-token";
+import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import {
   createEditableUserDocument,
   editableDocumentAttachments,
   type EditableUserDocument,
-} from "@/lib/assistant/editable-user-document";
+} from "@/lib/assistant/composer/editable-user-document";
 
 const EDIT_SESSION_KEY = "cosirEditSession";
 

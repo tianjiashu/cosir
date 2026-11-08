@@ -2,7 +2,7 @@ import { useAuiState } from "@assistant-ui/react";
 import { useEffect } from "react";
 
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { readRuntimeTransportState } from "@/lib/assistant/transport-state-operations";
+import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-state-operations";
 
 export function RuntimeRenderDiagnostics({ taskId }: { taskId: number }) {
   const messageCount = useAuiState((state) => state.thread.messages.length);

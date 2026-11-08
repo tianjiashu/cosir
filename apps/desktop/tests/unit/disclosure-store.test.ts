@@ -6,7 +6,7 @@ import {
   activityKey,
   resolveDisclosure,
   useDisclosureStore,
-} from "@/lib/assistant/disclosure-store";
+} from "@/lib/assistant/turn/disclosure-store";
 
 describe("disclosure store", () => {
   beforeEach(() => useDisclosureStore.setState({ tasks: {} }));

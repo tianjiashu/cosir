@@ -2,12 +2,12 @@ import type { TransportToolCallPart } from "@/lib/assistant/contract";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const overrides = vi.hoisted(() => new Map<string, boolean>());
-vi.mock("@/lib/assistant/disclosure-store", async (original) => ({
-  ...await original<typeof import("@/lib/assistant/disclosure-store")>(),
+vi.mock("@/lib/assistant/turn/disclosure-store", async (original) => ({
+  ...await original<typeof import("@/lib/assistant/turn/disclosure-store")>(),
   useDisclosure: (_taskId: number, key: string, defaultOpen: boolean) => [overrides.get(key) ?? defaultOpen, () => undefined],
 }));
 import { ProcessBlock } from "@/components/conversation/turn/process-block";
-import { projectTurn } from "@/lib/assistant/turn-layout";
+import { projectTurn } from "@/lib/assistant/turn/turn-layout";
 import { toolCallPart } from "./transport-fixtures";
 const call = (id: string, status: TransportToolCallPart["status"] = "completed") => toolCallPart(id, "read_file", { status });
 function render(status: TransportToolCallPart["status"] = "completed") {

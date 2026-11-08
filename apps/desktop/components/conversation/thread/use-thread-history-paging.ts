@@ -1,7 +1,7 @@
 import type { Virtualizer } from "@tanstack/react-virtual";
 import { useEffect, useLayoutEffect, useRef } from "react";
 
-import { useLoadEarlierHistory } from "@/lib/assistant/transport-history-context";
+import { useLoadEarlierHistory } from "@/lib/assistant/transport/transport-history-context";
 
 // 视口顶部离已加载的最早一条不到这么多行时预取上一页，用户滚到顶之前页已就绪。
 const PREFETCH_ROWS = 2;

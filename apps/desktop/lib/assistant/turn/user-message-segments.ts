@@ -1,6 +1,6 @@
 import type { ThreadUserMessage } from "@assistant-ui/react";
 
-import { splitSkillMentions } from "@/lib/assistant/skill-mention-token";
+import { splitSkillMentions } from "@/lib/assistant/composer/skill-mention-token";
 import { decodeReferences, type WorkspaceReference } from "@/lib/workspace-references/codec";
 
 export type UserMessageSegment =

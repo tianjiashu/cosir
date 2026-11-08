@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { useTaskAssistantTransportRuntime } from "@/lib/assistant/use-task-assistant-transport-runtime";
+import { useTaskAssistantTransportRuntime } from "@/lib/assistant/transport/use-task-assistant-transport-runtime";
 import type { TransportState } from "@/lib/assistant/contract";
 
 /** 真正挂载 adapter，观察提交/活动通知顺序；不向生产代码增加测试接口。 */

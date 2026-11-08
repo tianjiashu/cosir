@@ -1,4 +1,4 @@
-import type { TransportMessage, TransportToolCallPart } from "./contract";
+import type { TransportMessage, TransportToolCallPart } from "../contract";
 
 export type ToolCalls = ReadonlyMap<string, TransportToolCallPart>;
 const messageCalls = new WeakMap<TransportMessage, readonly TransportToolCallPart[]>();

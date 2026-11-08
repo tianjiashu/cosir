@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { transportMessageCount } from "@/lib/assistant/transport-state-operations";
+import { transportMessageCount } from "@/lib/assistant/transport/transport-state-operations";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { RuntimeSessionContext } from "@/components/conversation-runtime/runtime/runtime-types";
 
