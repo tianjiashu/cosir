@@ -8,7 +8,7 @@ import pytest
 from openai.types.chat import ChatCompletionUserMessageParam
 
 import app.core.context.vision_input as vision_input
-from app.models.errors.llm_provider_exceptions import VisionImageError
+from app.service.attachment.image_normalizer import ImageNormalizationError
 
 _IMAGE_REF = {"type": "image_url", "image_url": {"url": "cosir-attachment://attachments/a.png"}}
 _TEXT = {"type": "text", "text": "看看这张图"}
@@ -95,10 +95,10 @@ def test_resolved_block_converts_to_provider_image_url(
 
 def test_attachment_read_failure_propagates(attachment, monkeypatch):
     def reject(*args):
-        raise VisionImageError("附件不可用")
+        raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "附件不可用")
 
     monkeypatch.setattr(attachment, "resolve_for_model", reject)
-    with pytest.raises(VisionImageError):
+    with pytest.raises(ImageNormalizationError):
         vision_input.resolve_messages_for_model([_human(_TEXT, _IMAGE_REF)], workspace_id=1)
 
 

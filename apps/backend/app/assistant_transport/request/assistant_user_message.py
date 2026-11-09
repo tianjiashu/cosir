@@ -26,8 +26,3 @@ class AssistantUserMessage(BaseModel):
     # 显式补充此字段，后端据此把 token 与本机路径绑定。
     # 绑定随输入存入 message_queue，消费后转入 context。
     attachments: list[AssistantFileAttachment] = Field(default_factory=list, max_length=32)
-
-    @property
-    def has_sendable_part(self) -> bool:
-        """返回消息是否包含至少一个可发送的结构化 part。"""
-        return any(part.type in {"text", "image"} for part in self.parts)

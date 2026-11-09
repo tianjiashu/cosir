@@ -651,7 +651,7 @@ class AgentProfileRegistry:
 
         blocks = [
             (
-                "agent_id: {agent_id} | description: {description} | "
+                "- agent_id: {agent_id} | description: {description} | "
                 "allowed_tools: {allowed_tools}"
             ).format(
                 agent_id=profile.agent_id,
