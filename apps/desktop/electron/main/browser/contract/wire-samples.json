@@ -336,5 +336,34 @@
       "created_by": "agent",
       "operation": null
     }
-  ]
+  ],
+  "act_observation_failed": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null,
+      "follows_panel": true
+    },
+    "execution": {
+      "steps": [
+        {
+          "target": "link \"Next\"",
+          "status": "done",
+          "error": null
+        }
+      ],
+      "interruption": null
+    },
+    "observation": null,
+    "observation_error": {
+      "code": "DIALOG_OPEN",
+      "message": "the page is paused: it is showing a confirm dialog (#7)"
+    }
+  }
 }

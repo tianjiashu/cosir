@@ -8,6 +8,7 @@ vi.mock("@/electron/main/browser/browser-tab", () => ({
 }));
 vi.mock("@/electron/main/browser/browser-partition", () => ({ browserPageWebPreferences: () => ({}) }));
 import { deadlineMs, withinDeadline } from "@/electron/main/browser/deadlines";
+import { HostMethodError } from "@/electron/main/host-link/method-registry";
 import { BrowserHost } from "@/electron/main/browser/browser-host";
 import fs from "node:fs";
 import os from "node:os";
@@ -23,7 +24,11 @@ class FakeTab {
   operation = null;
   initialized = true;
   documentGeneration = 0;
-  modify = vi.fn(async (signal: AbortSignal, run: (operation: { signal: AbortSignal }) => Promise<unknown>) => run({ signal }));
+  modify = vi.fn(async (signal: AbortSignal, run: (operation: { signal: AbortSignal }) => Promise<unknown>) => {
+    const operation = { state: "running" as const, stop: vi.fn(), finish: vi.fn(async () => undefined) };
+    this.operation = operation as never;
+    try { return await run({ signal }); } finally { this.operation = null; }
+  });
   readonly view = {};
   show = vi.fn();
   hide = vi.fn();
@@ -41,7 +46,10 @@ class FakeTab {
     undeliveredNotes: vi.fn((): string[] => []),
     digest: vi.fn(() => ({ notes: [], newLogs: { consoleErrors: 0, consoleWarnings: 0, failedRequests: 0 } })),
   };
-  readonly status = null;
+  status: number | null = null;
+  url = "";
+  title = "";
+  loading = true;
   readonly currentEmulation = { width: 1280, height: 800, mobile: false, colorScheme: null };
   readonly tabId: string; readonly taskId: number; readonly events: TabEvents; readonly options: TabOptions;
   get openerId() { return this.options.openerId; }
@@ -54,7 +62,7 @@ class FakeTab {
   }
   initialize(signal: AbortSignal) { return abortable(this.pending, signal); }
   summary() {
-    return { tabId: this.tabId, taskId: this.taskId, createdBy: this.createdBy, openerId: this.openerId, url: "", title: "", loading: true, crashed: false, dialog: null };
+    return { tabId: this.tabId, taskId: this.taskId, createdBy: this.createdBy, openerId: this.openerId, url: this.url, title: this.title, loading: this.loading, crashed: false, dialog: null };
   }
 }
 
@@ -304,5 +312,104 @@ describe("BrowserHost 资源生命周期", () => {
     expect(tab(0).log.note).toHaveBeenCalledWith(expect.stringContaining('the download "report.csv" finished'));
     host.dropTasks([1]);
     expect(host.state().downloads).toEqual([]);
+  });
+});
+
+describe("回执页面事实与投影语义", () => {
+  const execution = { steps: [{ target: 'link "Next"', status: "done" as const, error: null }], interruption: null };
+
+  // 目的：动作可能已经导航；潜在缺陷：观察失败时回执把执行前的地址/标题当当前页面交给模型。
+  it("reports the current page header when act's observation fails after navigating", async () => {
+    const host = new BrowserHost(() => null);
+    const opening = host.userOpen(1, limits);
+    tab().finish(); await opening;
+    tab().url = "https://before.example/old"; tab().title = "before";
+    tab().act.mockImplementation(async () => {
+      tab().url = "https://after.example/new"; tab().title = "after"; tab().loading = false;
+      return execution;
+    });
+    tab().snapshot.mockRejectedValueOnce(new Error("the page is paused"));
+    const outcome = await host.act({ taskId: 1, context: limits, actions: [{ type: "click", target: { ref: "e2" }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
+    expect(outcome).toMatchObject({ url: "https://after.example/new", title: "after", loading: false, execution, observation: null, observationError: { code: "ACTION_FAILED" } });
+    host.closeAll();
+  });
+
+  // 目的：标签在动作后关闭时回执仍要答复；潜在缺陷：已销毁后读 head 抛错把整个回执弄丢，或用了错误的旧页头。
+  it("keeps the act receipt and falls back to the last known header after the tab is destroyed", async () => {
+    const host = new BrowserHost(() => null);
+    const opening = host.userOpen(1, limits);
+    tab().finish(); await opening;
+    tab().url = "https://before.example/old"; tab().title = "before";
+    tab().act.mockImplementation(async () => {
+      tab().url = "https://after.example/new";
+      tab().contents.isDestroyed = () => true;
+      return execution;
+    });
+    tab().snapshot.mockRejectedValueOnce(new HostMethodError("TAB_NOT_FOUND", "tab t1 was closed"));
+    const outcome = await host.act({ taskId: 1, context: limits, actions: [{ type: "click", target: { x: 1, y: 1 }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
+    expect(outcome).toMatchObject({ url: "https://before.example/old", title: "before", execution, observation: null, observationError: { code: "TAB_NOT_FOUND" } });
+    host.closeAll();
+  });
+
+  // 目的：观察失败不能伪造「没有其他标签」；潜在缺陷：兜底路径手写 otherTabs: []，模型据此误判。
+  it("keeps sibling tabs and the current dialog in the navigate fallback", async () => {
+    const host = new BrowserHost(() => null);
+    const openings = [host.userOpen(1, limits), host.userOpen(1, limits)];
+    FakeTab.instances.forEach((item) => item.finish());
+    await Promise.all(openings);
+    tab(0).dialog = { id: 7, type: "confirm", message: "sure?", defaultText: "" };
+    tab(0).snapshot.mockRejectedValueOnce(new Error("the page is paused"));
+    const page = await host.navigate({ taskId: 1, tab: "t1", context: limits, newTab: false, target: { url: "https://example.com" } }, new AbortController().signal);
+    expect(page.otherTabs).toEqual(["t2"]);
+    expect(page.dialog).toEqual({ id: 7, type: "confirm", message: "sure?", defaultText: "" });
+    expect(page.notes.join("\n")).toContain("read a fresh snapshot before continuing");
+    expect(tab(0).deliver).not.toHaveBeenCalled();
+    expect(tab(0).log.digest).not.toHaveBeenCalled();
+
+    // 降级不推进基准；下一次成功页面结果补交一次，不丢不重。
+    tab(0).snapshot.mockResolvedValue({ document: 0, outline: { entries: [], frames: 0 }, dialog: null });
+    await host.navigate({ taskId: 1, tab: "t1", context: limits, newTab: false, target: { url: "https://example.com" } }, new AbortController().signal);
+    expect(tab(0).log.digest).toHaveBeenCalledTimes(1);
+    host.closeAll();
+  });
+
+  // 目的：用户自己的导航占着修改槽位时也不能被当成 Agent 在执行；潜在缺陷：把「有人在操作」与「Agent 在操作」混为一谈。
+  it("does not mark agentBusy while the user is navigating the tab", async () => {
+    const host = new BrowserHost(() => null);
+    const opening = host.userOpen(1, limits);
+    tab().finish(); await opening;
+    let release!: () => void;
+    tab().navigate.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+    const navigating = host.userNavigate("t1", { url: "https://example.com" });
+    await flush();
+    expect(host.state().tabs[0]).toMatchObject({ agentBusy: false, operation: "running" });
+    release(); await navigating;
+    expect(host.state().tabs[0]).toMatchObject({ agentBusy: false, operation: null });
+    host.closeAll();
+  });
+
+  // 目的：成功的 act 外层回执页头与 observation 页头必须同源；潜在缺陷：两处分别取，模型看到两个页面身份。
+  it("reports one page header for a successful act and its observation", async () => {
+    const host = new BrowserHost(() => null);
+    const opening = host.userOpen(1, limits);
+    tab().finish(); await opening;
+    tab().url = "https://after.example/new"; tab().title = "after"; tab().act.mockResolvedValue(execution);
+    const outcome = await host.act({ taskId: 1, context: limits, actions: [{ type: "click", target: { x: 1, y: 1 }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
+    expect(outcome.observation).not.toBeNull();
+    expect({ url: outcome.url, title: outcome.title, status: outcome.status, emulation: outcome.emulation })
+      .toEqual({ url: outcome.observation!.url, title: outcome.observation!.title, status: outcome.observation!.status, emulation: outcome.observation!.emulation });
+    host.closeAll();
+  });
+
+  // 目的：operation 记录的是「修改槽位」，不是「Agent 正在执行」；潜在缺陷：用户自己的导航让面板显示 Agent 正在操作。
+  it("does not mark agentBusy for a running operation that no Agent call owns", async () => {
+    const host = new BrowserHost(() => null);
+    const opening = host.userOpen(1, limits);
+    tab().finish(); await opening;
+    tab().operation = { state: "running", stop: vi.fn(), finish: vi.fn(async () => undefined) } as never;
+    expect(host.state().tabs[0]).toMatchObject({ agentBusy: false, operation: "running" });
+    tab().operation = { state: "unknown", stop: vi.fn(), finish: vi.fn(async () => undefined) } as never;
+    expect(host.state().tabs[0]).toMatchObject({ agentBusy: false, operation: "unknown" });
+    host.closeAll();
   });
 });

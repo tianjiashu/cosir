@@ -158,3 +158,15 @@ describe("TabLog", () => {
     expect(log.read({ kind: "console", since: empty.next, limit: 50 })).toMatchObject({ droppedBefore: null, moreBefore: false });
   });
 });
+
+describe("TabLog failure counting", () => {
+  // 目的：失败数按落定时刻计；潜在缺陷：同一请求先 500、后响应体失败时，被连续两次页面结果重复计数。
+  it("reports the same request as a new failure only once", () => {
+    const log = new TabLog();
+    log.requestStarted("api", { method: "GET", url: "http://a/api/me", resourceType: "Fetch", timestamp: 1 });
+    log.responseReceived("api", 500, 1.1);
+    expect(log.digest().newLogs.failedRequests).toBe(1);
+    log.requestFailed("api", "net::ERR_CONTENT_LENGTH_MISMATCH", 1.2);
+    expect(log.digest().newLogs.failedRequests).toBe(0);
+  });
+});

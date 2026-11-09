@@ -25,6 +25,7 @@ from app.tools.host.errors import CANCELLED, INVALID_PARAMS, UNAVAILABLE, HostCa
 from app.tools.tool_handler.browser.errors import BROWSER_ERRORS, browser_error_observation
 from app.tools.tool_handler.browser.host_request import HOST_DEADLINES
 from app.tools.tool_handler.browser.rendering import (
+    act_observation,
     act_summary,
     evaluate_text,
     logs_text,
@@ -106,10 +107,41 @@ def test_page_sample_renders_header_logs_notes_and_fenced_snapshot(samples: dict
     assert "other tabs in this task: t1" in content
     assert (
         "new on this page since this tab's last page result: 2 console errors, 1 console warning, "
-        "1 failed request (browser_logs shows them; narrow down with level or failed_only)"
+        "1 failed request (read browser_logs without since to see them; narrow down with level "
+        "or failed_only)"
     ) in content
     assert f"- {page['notes'][0]}" in content
     assert f"<page_snapshot>\n{page['snapshot']}\n</page_snapshot>" in content
+
+
+def test_act_observation_failure_sample_renders_the_header_and_the_reason(
+    samples: dict[str, Any],
+) -> None:
+    outcome = samples["act_observation_failed"]
+    observation = act_observation("browser_act", outcome, [{"type": "click"}])
+    content = observation.content
+
+    assert content.startswith("completed 1 of 1 action(s).")
+    assert "tab t3 · Sign in · http://127.0.0.1:5173/login · HTTP 200" in content
+    assert "page observation unavailable (DIALOG_OPEN:" in content
+    assert "Answer it first with a browser_act dialog action" in content
+    assert content.rstrip().endswith("Read a fresh snapshot before continuing.")
+
+
+def test_act_observation_failure_for_a_closed_tab_explains_the_stale_header(
+    samples: dict[str, Any],
+) -> None:
+    outcome = {**samples["act_observation_failed"]}
+    outcome["observation_error"] = {
+        "code": "TAB_NOT_FOUND",
+        "message": "tab t3 is not open in this task",
+    }
+    content = act_observation("browser_act", outcome, [{"type": "click"}]).content
+    assert (
+        "the tab was closed; the page header above is the page as it was before the actions."
+        in content
+    )
+    assert "Pass one of this task's tab ids" in content
 
 
 def test_act_sample_renders_the_failure_and_the_dialog(samples: dict[str, Any]) -> None:
@@ -144,7 +176,10 @@ def test_console_logs_sample_renders_fenced_entries_and_older_entries(
         "#15 [warning] deprecated API (in frame http://localhost:6006/embed)",
     ]
     assert "older matching entries of this page were not returned" in content
-    assert "to read only newer entries later, pass since=16." in content
+    assert (
+        "to read only entries with a sequence number at or after 16 later, pass since=16."
+        in content
+    )
     assert "dropped" not in content
 
 
@@ -161,6 +196,7 @@ def test_network_logs_sample_renders_outcomes_drops_and_more_after(
     ]
     assert "entries before #18 were dropped" in content
     assert "more matching entries follow; pass since=23 to read on." in content
+    assert "read browser_logs without since later to see their final state." in content
     assert "older matching entries" not in content
 
 

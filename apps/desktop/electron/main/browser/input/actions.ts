@@ -5,7 +5,7 @@ import { highlightTarget } from "./highlight";
 import { pressKey, typeText } from "./keyboard";
 import { scroll, select } from "./page-functions";
 import { click, drag, hover } from "./pointer";
-import type { BrowserOperation } from "../operation";
+import { NoEffectError, type BrowserOperation } from "../operation";
 import { describeTarget } from "./targets";
 import { upload } from "./upload";
 import { waitFor } from "./wait";
@@ -37,7 +37,8 @@ export async function runActions(session: BrowserOperation, actions: readonly Pa
       await run(session, action, signal, batch);
       step.status = "done";
     } catch (error) {
-      step.status = session.effectStarted ? "unknown" : "failed";
+      // 已派发过可能生效的命令才可能是 unknown；确定没生效（未派发，或动作显式声明无副作用）是 failed。
+      step.status = error instanceof NoEffectError || !session.effectStarted ? "failed" : "unknown";
       step.error = describe(error);
       result.interruption = step.error;
       // 未知输入后只允许紧接着处理其弹窗，不继续其它业务动作。

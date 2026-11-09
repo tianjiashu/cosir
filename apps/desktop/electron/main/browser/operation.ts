@@ -1,6 +1,7 @@
 import type { BrowserTab } from "./browser-tab";
 import type { SendOptions } from "./cdp-session";
 import { browserError } from "./errors";
+import { HostMethodError } from "../host-link/method-registry";
 import { readGeometry } from "./page-geometry";
 import type { PageNode } from "./ref-registry";
 import type { Box } from "./input/element";
@@ -8,7 +9,24 @@ import { logDesktopEvent } from "../desktop-log";
 
 export type FileChooser = { node: PageNode; multiple: boolean };
 export type OperationState = "running" | "stopping" | "unknown";
-type Release = { method: string; params: Record<string, unknown>; document: number; confirmed: boolean };
+type Release = {
+  method: string;
+  params: Record<string, unknown>;
+  document: number;
+  confirmed: boolean;
+  /** 释放命令已派发；派发前被闸门拒绝时为 false。 */
+  dispatched: boolean;
+};
+
+/**
+ * 动作在派发过命令之后仍能确定页面没有任何改变（例如页面函数报告「已经到底」）：结算为 `failed`，
+ * 而不是「可能已生效」的 `unknown`。由动作模块在页面函数结果证明无副作用时抛出。
+ */
+export class NoEffectError extends HostMethodError {}
+
+export function certainNoEffect(error: HostMethodError): NoEffectError {
+  return new NoEffectError(error.code, error.message);
+}
 export const OPERATION_DRAIN_MS = 1_000;
 
 /**
@@ -58,7 +76,11 @@ export class BrowserOperation {
     raw.then(() => this.pending.delete(raw), () => this.pending.delete(raw));
   }
 
-  /** 副作用必须在取消检查之后才标记为可能生效。 */
+  /**
+   * 包住可能改变页面或输入状态的命令。`effect()` 内只允许这类命令：只读探测（`DOM.resolveNode`、
+   * `DOM.getBoxModel`、只读页面函数等）必须在 effect 外发，否则「确定没生效」会被误记成可能已生效。
+   * 副作用必须在取消检查之后才标记为可能生效。
+   */
   async effect<T>(run: () => Promise<T>): Promise<T> {
     this.signal.throwIfAborted();
     this.effectDepth++;
@@ -68,7 +90,7 @@ export class BrowserOperation {
   /** 按下、可选移动、释放是一单元；取消后只允许已确认且同文档的释放，不再派发后续业务输入。 */
   async inputUnit(method: string, down: Record<string, unknown>, up: Record<string, unknown>, body?: () => Promise<void>): Promise<void> {
     this.signal.throwIfAborted();
-    const release: Release = { method, params: up, document: this.tab.documentGeneration, confirmed: false };
+    const release: Release = { method, params: up, document: this.tab.documentGeneration, confirmed: false, dispatched: false };
     await this.effect(async () => {
       let completed = false;
       try {
@@ -94,21 +116,21 @@ export class BrowserOperation {
     const held = this.held;
     if (!held) return;
     if (!held.confirmed || held.document !== this.tab.documentGeneration || this.tab.contents.isDestroyed()) {
+      this.held = null;
       this.unsafe = true;
       throw browserError("OPERATION_UNKNOWN", "cannot safely release input after the document changed");
     }
-    let dispatched = false;
-    try {
-      await this.send(held.method, held.params, {}, (raw) => {
-        dispatched = true;
-        raw.then(() => { if (this.held === held) this.held = null; }, () => { this.unsafe = true; });
-      });
-    } catch (error) {
-      // 弹窗/时限可先终止等待；真正的 release 仍由原始 Promise 确认，不能重复派发。
-      // 暂停闸门在派发前拒绝时，答完弹窗仍可释放；已派发的失败不得重放。
-      if (dispatched && this.pending.size === 0) this.unsafe = true;
-      throw error;
-    }
+    await this.send(held.method, held.params, {}, (raw) => {
+      held.dispatched = true;
+      raw.then(
+        () => { if (this.held === held) this.held = null; },
+        () => {
+          // 派发后被 Chromium 拒绝：不得重放，保留隔离态；派发前被闸门拒绝时 held 保留给弹窗答复后重试。
+          this.unsafe = true;
+          if (this.held === held) this.held = null;
+        },
+      );
+    });
   }
 
   /** 有界等待只限制答复，不释放仍有命令的槽位；迟到命令完成后自动尝试安全收尾。 */

@@ -70,6 +70,15 @@ const PAGES: Record<string, string> = {
     <span id="n">0</span> <a href="/clickable">Elsewhere</a>`,
   "/wide": `<title>Wide</title><body style="margin:0;width:980px"><button style="position:absolute;left:600px;top:300px;width:200px;height:100px" onclick="document.title = 'hit'">Far button</button></body>`,
   "/far": `<title>Far</title><button style="position: absolute; left: 1100px; top: 700px" onclick="document.title = 'far clicked'">Far</button>`,
+  "/body-scroll": `<title>Body scroll</title>
+    <style>html{height:100%;overflow:hidden}body{height:100%;margin:0;overflow-y:auto}</style>
+    <div style="height:1200px"><button>Top</button></div><div style="height:1200px"><button>Bottom</button></div>`,
+  "/height-only": `<title>Height only</title>
+    <style>html,body{height:100%;margin:0}body{overflow-y:auto}</style>
+    <div style="height:2400px"><button>Top</button></div>`,
+  "/height-only-scroll": `<title>Height only scroll</title>
+    <style>html,body{height:100%;margin:0}body{overflow-y:scroll}</style>
+    <div style="height:2400px"><button>Top</button></div>`,
   "/escape": `<title>Escape</title><script>setTimeout(() => { location.href = "file:///etc/hosts"; }, 0)</script>`,
   "/ua": `<script>document.title = navigator.userAgent</script>`,
   "/act": `<title>Act</title>
@@ -443,6 +452,62 @@ test("pages long snapshots with stable refs, then hovers, presses shortcuts and 
   // 目的：滚到底要报出来；潜在缺陷：无限滚动的批次空转，模型以为加载了更多。
   const end = pageOf(await call("act", { taskId: 24, actions: [{ type: "scroll", direction: "down", ref: inside }] })) as ActPage;
   expect(end).toMatchObject({ execution: { interruption: { code: "SCROLL_END", message: "this area is already at the bottom" } } });
+});
+
+// 目的：有些站点让 body 而不是 html 滚动；潜在缺陷：滚动目标固定为 document.scrollingElement，body 是真实滚动器时
+// 不滚却报「已经到底」，模型以为内容读完。
+test("scrolls the page when body is the scroll container, with and without a ref", async () => {
+  const page = pageOf(await call("navigate", { taskId: 30, target: { url: `${origin}/body-scroll` }, context: context(roomy) }));
+  const top = refOf(page.snapshot, "button", "Top");
+  const scrollTop = async () => Number(valueOf(await link("browser.evaluate", 30, { expression: "document.body.scrollTop" })).value as string);
+
+  const byPage = pageOf(await call("act", { taskId: 30, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
+  expect(byPage).toMatchObject({ execution: { steps: [{ status: "done" }], interruption: null } });
+  const afterPage = await scrollTop();
+  expect(afterPage).toBeGreaterThan(0);
+
+  const byRef = pageOf(await call("act", { taskId: 30, actions: [{ type: "scroll", direction: "down", ref: top }] })) as ActPage;
+  expect(byRef).toMatchObject({ execution: { steps: [{ status: "done" }], interruption: null } });
+  expect(await scrollTop()).toBeGreaterThan(afterPage);
+
+  let ended: ActPage | null = null;
+  for (let index = 0; index < 8 && ended === null; index += 1) {
+    const outcome = pageOf(await call("act", { taskId: 30, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
+    if (outcome.execution.interruption?.code === "SCROLL_END") ended = outcome;
+  }
+  expect(ended?.execution.interruption).toMatchObject({ code: "SCROLL_END", message: "the page is already at the bottom" });
+  expect(ended?.execution.steps[0]).toMatchObject({ status: "failed" });
+});
+
+// 目的：普通 html 视口页滚到底要报「已到底」而不是「页面不可滚」；潜在缺陷：可滚性判定换了、文案分支还用旧谓词。
+test("reports already at the bottom on an ordinary page", async () => {
+  pageOf(await call("navigate", { taskId: 34, target: { url: `${origin}/viewport` }, context: context(roomy) }));
+  let ended: ActPage | null = null;
+  for (let index = 0; index < 20 && ended === null; index += 1) {
+    const page = pageOf(await call("act", { taskId: 34, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
+    if (page.execution.interruption?.code === "SCROLL_END") ended = page;
+  }
+  expect(ended?.execution.interruption).toMatchObject({ code: "SCROLL_END", message: "the page is already at the bottom" });
+  expect(ended?.execution.steps[0]).toMatchObject({ status: "failed" });
+});
+
+// 目的：常见 reset 让 html/body 都是 100% 高、body 写 overflow，真实滚动器仍是 html/viewport；潜在缺陷：把 body 当滚动器，
+// 不滚却报「已经到底」，把原本正常的页面改坏（P1-2 修复的回归面）。
+test("keeps scrolling when html and body are both full height", async () => {
+  for (const [taskId, pagePath] of [[31, "/height-only"], [32, "/height-only-scroll"]] as const) {
+    const page = pageOf(await call("navigate", { taskId, target: { url: `${origin}${pagePath}` }, context: context(roomy) }));
+    const top = refOf(page.snapshot, "button", "Top");
+    const scrollY = async () => Number(valueOf(await link("browser.evaluate", taskId, { expression: "window.scrollY" })).value as string);
+
+    const byPage = pageOf(await call("act", { taskId, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
+    expect(byPage).toMatchObject({ execution: { steps: [{ status: "done" }], interruption: null } });
+    const afterPage = await scrollY();
+    expect(afterPage).toBeGreaterThan(0);
+
+    const byRef = pageOf(await call("act", { taskId, actions: [{ type: "scroll", direction: "down", ref: top }] })) as ActPage;
+    expect(byRef).toMatchObject({ execution: { steps: [{ status: "done" }], interruption: null } });
+    expect(await scrollY()).toBeGreaterThan(afterPage);
+  }
 });
 
 // 目的：Agent 能把本机文件交给网页——经它的点击打开的选文件框，或直接交给文件输入框；潜在缺陷：选文件框被拦下后

@@ -19,9 +19,11 @@ class BrowserLogsArgs(BaseModel):
         default=None,
         ge=0,
         description=(
-            "Read entries from this sequence number on, oldest first; pass the next value of "
-            "your last browser_logs result to read only new entries. Null returns the newest "
-            "entries of the current page."
+            "Read entries whose sequence number is at or after this value, oldest first; pass the "
+            "next value of a previous browser_logs result to continue after its entries. Entries "
+            "that were still in flight then can settle later: read without since (or from an "
+            "earlier number) to see their final state. Null returns the newest entries of the "
+            "current page."
         ),
     )
     level: Literal["error", "warning", "info", "debug"] | None = Field(

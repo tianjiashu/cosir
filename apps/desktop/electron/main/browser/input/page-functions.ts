@@ -1,6 +1,6 @@
 import { browserError } from "../errors";
-import { actionable, callOn, element, evaluate, onNode } from "./element";
-import type { BrowserOperation } from "../operation";
+import { actionable, callOn, element, evaluate, mutateOn, onNode } from "./element";
+import { certainNoEffect, type BrowserOperation } from "../operation";
 
 /**
  * 在页面里执行的固定函数（滚动、清空字段、选择下拉项）与用它们实现的动作。函数体是本模块里写死的字符串，
@@ -12,16 +12,30 @@ import type { BrowserOperation } from "../operation";
  * 否则滚动异步进行，立刻比较位置会误判为滚不动。
  */
 const SCROLL_AREA = `function (down) {
-  const page = document.scrollingElement || document.documentElement;
-  const scrollable = (node) => /(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight;
+  const scrollable = (node) =>
+    /(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight;
+  // 根元素/视口的可滚性不能用 overflowY 谓词：标准模式下 html 的 overflowY 常是 visible，但视口仍随内容滚动。
+  // html overflow hidden/clip 会把视口锁死；怪异模式下 scrollingElement 不是视口滚动的可靠来源。
+  const viewportScroller = () => {
+    const root = document.scrollingElement;
+    if (!root) return null;
+    if (/(hidden|clip)/.test(getComputedStyle(document.documentElement).overflowY)) return null;
+    return root.scrollHeight > root.clientHeight ? root : null;
+  };
+  const viewport = viewportScroller();
+  const bodyScrollable = scrollable(document.body);
+  const page = viewport || (bodyScrollable ? document.body : document.scrollingElement || document.documentElement);
   let target = this;
   while (target && target !== document.body && target !== document.documentElement && !scrollable(target)) target = target.parentElement;
-  if (!target || target === document.body || target === document.documentElement) target = page;
+  if (!target || target === document.body || target === document.documentElement || !scrollable(target)) target = page;
+  const isPage = target === document.scrollingElement || target === document.body || target === document.documentElement;
   const before = target.scrollTop;
-  const height = target === page ? innerHeight : target.clientHeight;
+  const height = isPage ? (target.clientHeight || innerHeight) : target.clientHeight;
   target.scrollBy({ top: (down ? 1 : -1) * Math.round(height * 0.8), behavior: "instant" });
   if (target.scrollTop !== before) return "";
-  return (target === page ? "the page" : "this area") + " is already at the " + (down ? "bottom" : "top");
+  // 只有「视口和 body 都不是滚动器」才是页面不可滚；否则不能滚说明已到边界。
+  if (isPage && !viewport && !bodyScrollable) return "the page cannot scroll (no scrollable area)";
+  return (isPage ? "the page" : "this area") + " is already at the " + (down ? "bottom" : "top");
 }`;
 
 export const CLEAR_FIELD = `function () {
@@ -30,8 +44,11 @@ export const CLEAR_FIELD = `function () {
   return "";
 }`;
 
+const SELECT_CHECK = `function () {
+  return this.tagName === "SELECT" ? "" : "the element is not a select list";
+}`;
+
 const SELECT_OPTIONS = `function (values) {
-  if (this.tagName !== "SELECT") return "the element is not a select list";
   let matched = 0;
   for (const option of this.options) {
     const hit = values.includes(option.value) || values.includes(option.label.trim());
@@ -55,16 +72,21 @@ export async function scroll(session: BrowserOperation, direction: "up" | "down"
     return;
   }
   const down = direction === "down";
+  // 页面函数确认 scrollTop 未变（problem 非空）时页面一定没有滚动：结算 failed，而不是 unknown。
   const problem = ref
-    ? await session.effect(async () => callOn(session, await element(session, ref), SCROLL_AREA, [down]))
+    ? await mutateOn(session, await element(session, ref), SCROLL_AREA, [down])
     : await session.effect(() => evaluate(session, `(${SCROLL_AREA}).call(document.documentElement, ${down})`));
-  if (problem) throw browserError("SCROLL_END", problem);
+  if (problem) throw certainNoEffect(browserError("SCROLL_END", problem));
 }
 
 /** 原生下拉列表按值或可见文字选择；自定义下拉要先点开再点选项（工具描述里说明）。 */
 export async function select(session: BrowserOperation, ref: string, values: readonly string[]): Promise<void> {
   const node = await element(session, ref);
   await actionable(session, node, false, false);
-  const problem = await session.effect(() => callOn(session, node, SELECT_OPTIONS, [values]));
+  // 目标不是原生下拉列表时页面函数在任何修改前返回：只读检查放在 effect 外，结算 failed。
+  const notSelect = await callOn(session, node, SELECT_CHECK);
+  if (notSelect) throw browserError("ACTION_FAILED", notSelect);
+  // 页面函数会先重置 selected；「没有 option 匹配」时已改动页面，因此仍按可能已生效结算。
+  const problem = await mutateOn(session, node, SELECT_OPTIONS, [values]);
   if (problem) throw browserError("ACTION_FAILED", problem);
 }

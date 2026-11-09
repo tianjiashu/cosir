@@ -3,6 +3,7 @@ import { CdpSession } from "@/electron/main/browser/cdp-session";
 import { BrowserOperation } from "@/electron/main/browser/operation";
 import { TabEmulation } from "@/electron/main/browser/tab-emulation";
 import { BrowserTab } from "@/electron/main/browser/browser-tab";
+import { HostMethodError } from "@/electron/main/host-link/method-registry";
 import type { WebContents } from "electron";
 vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
 vi.mock("electron", () => ({ WebContentsView: class {} }));
@@ -116,6 +117,49 @@ describe("BrowserOperation actual command lifetime", () => {
     expect(emulation.current.width).toBe(1280);
     expect(emulation.toInput({ x: 100, y: 20 })).toEqual({ x: 25, y: 5 });
     expect(calls).toEqual([640, 1280, 1280]);
+  });
+
+  it("keeps a dispatched release pending across a dialog pause and settles once it resolves", async () => {
+    const calls: string[] = [];
+    let release!: () => void;
+    let dispatched!: () => void;
+    const sendingRelease = new Promise<void>((resolve) => { dispatched = resolve; });
+    const tab = fixture(async (_method, params) => {
+      calls.push(String(params.type));
+      if (params.type === "mouseReleased") {
+        dispatched();
+        await new Promise<void>((resolve) => { release = resolve; });
+      }
+      return {};
+    });
+    const operation = new BrowserOperation(tab, new AbortController().signal);
+    tab.operation = operation;
+    const typing = operation.inputUnit("Input.dispatchMouseEvent", { type: "mousePressed" }, { type: "mouseReleased" });
+    await sendingRelease;
+    // 页面在 release 派发之后弹窗：等待被闸门提前结束，但原始命令仍可能落定，不能当成「已派发失败」。
+    tab.session.interrupt(new HostMethodError("DIALOG_OPEN", "paused"));
+    await expect(typing).rejects.toMatchObject({ code: "DIALOG_OPEN" });
+    release();
+    await operation.finish();
+    expect(calls).toEqual(["mousePressed", "mouseReleased"]);
+    expect(tab.operation).toBeNull();
+  });
+
+  it("does not replay a release whose command failed after it was dispatched", async () => {
+    const calls: string[] = [];
+    const tab = fixture(async (_method, params) => {
+      calls.push(String(params.type));
+      if (params.type === "mouseReleased") throw new Error("Target closed.");
+      return {};
+    });
+    const operation = new BrowserOperation(tab, new AbortController().signal);
+    tab.operation = operation;
+    await expect(operation.inputUnit("Input.dispatchMouseEvent", { type: "mousePressed" }, { type: "mouseReleased" }))
+      .rejects.toThrow("Target closed.");
+    await operation.finish();
+    expect(calls).toEqual(["mousePressed", "mouseReleased"]);
+    expect(operation.state).toBe("unknown");
+    expect(tab.operation).toBe(operation);
   });
 
   it("releases each completed input unit even while unrelated observation is pending", async () => {

@@ -117,11 +117,19 @@ export class BrowserHost implements BrowserSessionEvents {
     this.assertAgentMayModify(request, entry.tab);
     return this.operate(entry, signal, async (tab, scoped) => {
       await tab.modify(scoped, (operation) => tab.navigate(request.target, operation, request.emulation));
-      const head = this.head(tab);
+      const lastKnown = this.head(tab);
       try { return this.result(tab, await tab.snapshot(), scoped); }
       catch (error) {
         scoped.throwIfAborted();
-        return { ...head, snapshot: "", frames: 0, notes: [`navigation finished; page observation unavailable: ${describeError(error).message}`], newLogs: { consoleErrors: 0, consoleWarnings: 0, failedRequests: 0 }, otherTabs: [], dialog: null };
+        return {
+          ...this.headOr(tab, lastKnown),
+          snapshot: "",
+          frames: 0,
+          notes: [`navigation finished; page observation unavailable: ${describeError(error).message}; read a fresh snapshot before continuing`],
+          newLogs: { consoleErrors: 0, consoleWarnings: 0, failedRequests: 0 },
+          otherTabs: this.siblingTabIds(tab),
+          dialog: tab.dialog,
+        };
       }
     }, "ready", true);
   }
@@ -137,9 +145,10 @@ export class BrowserHost implements BrowserSessionEvents {
   async act(request: ActRequest, signal: AbortSignal): Promise<ActOutcome> {
     const entry = this.agentEntry(request);
     this.assertAgentMayModify(request, entry.tab);
-    const head = this.head(entry.tab);
     const budget = budgetSignal("browser.act", ACT_RESULT_RESERVE_MS, "the call ran out of time before this action");
     return this.operate(entry, signal, async (tab, scoped) => {
+      // 回执要能在标签被销毁后仍答复；这里的最后已知页头只作为销毁后的兜底，观察失败时优先读当前页头。
+      const lastKnown = this.head(tab);
       const action = request.actions[0];
       const control = request.actions.length === 1 && action.type === "dialog" && action.id !== undefined;
       const execution = control
@@ -154,7 +163,7 @@ export class BrowserHost implements BrowserSessionEvents {
         return { ...this.head(tab), execution, observation, observationError: null };
       } catch (error) {
         logDesktopEvent("INFO", "browser", "browser_observation_failed", { tab_id: tab.tabId, task_id: tab.taskId }, error);
-        return { ...head, execution, observation: null, observationError: describeError(error) };
+        return { ...this.headOr(tab, lastKnown), execution, observation: null, observationError: describeError(error) };
       }
     }, "usable", true);
   }
@@ -247,7 +256,7 @@ export class BrowserHost implements BrowserSessionEvents {
 
   state(): BrowserState {
     return {
-      tabs: [...this.tabs.values()].map(({ tab, agentCalls }) => ({ ...tab.summary(), agentBusy: tab.operation?.state !== "unknown" && (agentCalls > 0 || tab.operation !== null), operation: tab.operation?.state ?? null })),
+      tabs: [...this.tabs.values()].map(({ tab, agentCalls }) => ({ ...tab.summary(), agentBusy: agentCalls > 0, operation: tab.operation?.state ?? null })),
       downloads: this.downloads.list(),
     };
   }
@@ -379,6 +388,20 @@ export class BrowserHost implements BrowserSessionEvents {
   private head(tab: BrowserTab): PageHead {
     const { url, title, loading } = tab.summary();
     return { tabId: tab.tabId, url, title, loading, status: tab.status, emulation: tab.currentEmulation };
+  }
+
+  /** 同 Task 的其他标签 id（页面结果里给模型的可切换目标），result 与降级结果共用这一处。 */
+  private siblingTabIds(tab: BrowserTab): string[] {
+    return this.tabsOf(tab.taskId).map(({ tab: other }) => other.tabId).filter((tabId) => tabId !== tab.tabId);
+  }
+
+  /**
+   * 观察失败时的页头：标签还活着就读当前页面；已销毁（或销毁与回执同刻竞争、读取抛错）才退回动作前
+   * 最后已知值。只有后者能保证「标签关闭后仍能答复执行回执」。
+   */
+  private headOr(tab: BrowserTab, lastKnown: PageHead): PageHead {
+    if (tab.contents.isDestroyed()) return lastKnown;
+    try { return this.head(tab); } catch { return lastKnown; }
   }
 
   private async open(taskId: number, context: BrowserTabContext, createdBy: BrowserTabCreator, activate: boolean, signal?: AbortSignal): Promise<TabEntry> {
@@ -660,7 +683,7 @@ export class BrowserHost implements BrowserSessionEvents {
       snapshot: page.outline ? this.snapshotText(tab, page.outline, view) : "",
       frames: page.outline?.frames ?? 0,
       ...tab.log.digest(),
-      otherTabs: this.tabsOf(tab.taskId).map(({ tab: other }) => other.tabId).filter((tabId) => tabId !== tab.tabId),
+      otherTabs: this.siblingTabIds(tab),
       dialog: page.dialog,
     };
   }

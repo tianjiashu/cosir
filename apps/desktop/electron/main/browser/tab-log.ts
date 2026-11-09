@@ -202,10 +202,11 @@ export class TabLog {
     return this.seq;
   }
 
-  /** 原地补上请求的结果；条目由此成了要报的失败（不含被取消）时记入「上次以来」。 */
+  /** 原地补上请求的结果；只在「首次成为失败」时记入「上次以来」，同一请求不跨页面结果重复计数。 */
   private update(entry: NetworkEntry, change: Partial<Pick<NetworkEntry, "status" | "failure">>): void {
+    const failedBefore = isFailed(entry);
     Object.assign(entry, change);
-    if (entry.failure !== CANCELED_FAILURE && isFailed(entry)) this.newFailures.add(entry);
+    if (!failedBefore && entry.failure !== CANCELED_FAILURE && isFailed(entry)) this.newFailures.add(entry);
   }
 
   private finish(requestId: string, timestamp: number): void {

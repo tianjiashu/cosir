@@ -261,3 +261,7 @@ BrowserHost 在执行完成后即持有独立回执。后续标签关闭、快�
 - 构建存在 CSS `::highlight` 优化器识别与大 bundle 警告，属于既有构建边界，本次不夹带构建拆包改造。工作区其他未提交修改保留；本次不提交 Git。
 
 最终原生证据：`/var/folders/3v/z2v0z9f57wd4v2qgtg82s3rh0000gn/T/cosir-browser-native-MCLXmh/result.json`。最终引擎测试输出：`/private/tmp/cosir-browser-engine-accepted.log`。此前失败运行未计入通过结果：首轮 36/40，后续全量又暴露排队视口同步与拖动交错，修复后以最终 40/40 全量结果验收。
+
+## 后续 P1 收尾（2026-11-09）
+
+独立复核后又确认并修复了 5 条 P1（步骤结算/scroll 目标/agentBusy/观察失败回执/日志文案口径），并把 P2-1「已派发释放不重放」随包处理。方案、终态、行为账、改动账本与独立验收记录见 `docs/plan/browser-p1-remediation-plan.md`；本文档记录的 2026-11-08 结构（执行回执与观察分离、操作生命周期、交接约束）保持不变。

@@ -69,16 +69,33 @@ export async function center(session: BrowserOperation, node: PageNode): Promise
   return { x: x + width / 2, y: y + height / 2 };
 }
 
-/** 在元素上执行一段固定的页面函数（不对外开放任意脚本），返回它给出的字符串；检查类函数约定空串表示成功、否则是问题说明。 */
+/** 在元素上执行一段只读页面函数（不对外开放任意脚本），返回它给出的字符串；检查类函数约定空串表示成功、否则是问题说明。 */
 export async function callOn(session: BrowserOperation, node: PageNode, fn: string, args: unknown[] = []): Promise<string> {
+  return pageString(await runOnPage(session, await resolveObject(session, node), node.sessionId, fn, args));
+}
+
+/**
+ * 执行可能改变页面状态的页面函数：解析节点是只读的（在 effect 外），只有 `Runtime.callFunctionOn`
+ * 进入 effect。这样节点已不在、或命令在派发前被闸门拒绝时，不会被误记成「可能已生效」。
+ */
+export async function mutateOn(session: BrowserOperation, node: PageNode, fn: string, args: unknown[] = []): Promise<string> {
+  const objectId = await resolveObject(session, node);
+  return session.effect(async () => pageString(await runOnPage(session, objectId, node.sessionId, fn, args)));
+}
+
+async function resolveObject(session: BrowserOperation, node: PageNode): Promise<string> {
   const { object } = await onNode<{ object: { objectId: string } }>(session, node, "DOM.resolveNode");
-  return pageString(await elementCommand(session.cdp<PageCall>("Runtime.callFunctionOn", {
-    objectId: object.objectId,
+  return object.objectId;
+}
+
+function runOnPage(session: BrowserOperation, objectId: string, sessionId: string | undefined, fn: string, args: unknown[]): Promise<PageCall> {
+  return elementCommand(session.cdp<PageCall>("Runtime.callFunctionOn", {
+    objectId,
     functionDeclaration: fn,
     arguments: args.map((value) => ({ value })),
     returnByValue: true,
     awaitPromise: true,
-  }, { sessionId: node.sessionId })));
+  }, { sessionId }));
 }
 
 /** 在页面（主框架）上执行一段固定的表达式；约定同 `callOn`。 */

@@ -1,6 +1,6 @@
 import type { Modifier } from "../params";
 import type { PageNode } from "../ref-registry";
-import { actionable, callOn, element, onNode } from "./element";
+import { actionable, element, mutateOn, onNode } from "./element";
 import { modifierBits } from "./modifiers";
 import { CLEAR_FIELD } from "./page-functions";
 import type { BrowserOperation } from "../operation";
@@ -43,7 +43,7 @@ export async function typeText(
   const node = await element(session, ref);
   await actionable(session, node, true);
   await focus(session, node);
-  if (options.clear) await session.effect(() => callOn(session, node, CLEAR_FIELD));
+  if (options.clear) await mutateOn(session, node, CLEAR_FIELD);
   if (options.keyByKey) {
     for (const char of text) await stroke(session, charSpec(char));
   } else {

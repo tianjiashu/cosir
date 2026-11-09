@@ -32,6 +32,7 @@
   "exclude": [
     "node_modules",
     "electron/main",
-    "electron/preload"
+    "electron/preload",
+    "temp"
   ]
 }

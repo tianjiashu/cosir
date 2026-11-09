@@ -72,7 +72,7 @@ def _new_logs_line(new_logs: dict[str, int]) -> str | None:
         return None
     return (
         f"new on this page since this tab's last page result: {', '.join(parts)} "
-        "(browser_logs shows them; narrow down with level or failed_only)"
+        "(read browser_logs without since to see them; narrow down with level or failed_only)"
     )
 
 
@@ -164,14 +164,17 @@ def act_observation(
         content = page_text(page, lead=lead)
     else:
         error = outcome["observation_error"]
-        content = "\n".join(
-            [
-                lead,
-                *header_lines(outcome),
-                f"page observation unavailable ({error['code']}: {error['message']}); "
-                "read a fresh snapshot before continuing.",
-            ]
+        lines = [lead, *header_lines(outcome)]
+        if error["code"] == "TAB_NOT_FOUND":
+            lines.append(
+                "the tab was closed; the page header above is the page as it was before the "
+                "actions."
+            )
+        lines.append(
+            f"page observation unavailable ({error['code']}: {error['message']}); "
+            f"{failure_advice(error['code'])} Read a fresh snapshot before continuing."
         )
+        content = "\n".join(lines)
     return tool_success(
         tool_name=tool_name,
         content=content,
@@ -230,7 +233,19 @@ def logs_text(result: dict[str, Any]) -> str:
     if result["more_after"]:
         lines.append(f"more matching entries follow; pass since={result['next']} to read on.")
     else:
-        lines.append(f"to read only newer entries later, pass since={result['next']}.")
+        lines.append(
+            f"to read only entries with a sequence number at or after {result['next']} later, "
+            f"pass since={result['next']}."
+        )
+    # 网络条目在请求开始时取序号、结局之后才补；用游标读过的在途请求不会因 since 重读出现，
+    # 明确告诉模型最终结局从哪里看（省略 since 的默认读取）。
+    if kind == "network" and any(
+        entry["status"] is None and entry["failure"] is None for entry in entries
+    ):
+        lines.append(
+            "some requests above have no outcome yet; read browser_logs without since later to "
+            "see their final state."
+        )
     return "\n".join(lines)
 
 

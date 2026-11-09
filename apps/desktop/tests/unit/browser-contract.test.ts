@@ -59,6 +59,19 @@ describe("wire samples", () => {
     expect(actWire(outcome)).toEqual(samples.act);
   });
 
+  it("act outcome with a failed observation", () => {
+    const outcome: ActOutcome = {
+      ...head(200, defaultEmulation),
+      execution: {
+        steps: [{ target: 'link "Next"', status: "done", error: null }],
+        interruption: null,
+      },
+      observation: null,
+      observationError: { code: "DIALOG_OPEN", message: "the page is paused: it is showing a confirm dialog (#7)" },
+    };
+    expect(actWire(outcome)).toEqual(samples.act_observation_failed);
+  });
+
   it("console and network logs", () => {
     const consoleLogs: LogsResult = {
       ...head(200, defaultEmulation),
