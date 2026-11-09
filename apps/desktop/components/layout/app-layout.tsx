@@ -235,6 +235,9 @@ export function AppLayout() {
       onOpenSettings={() => navigate("/settings")}
       onOpenWorkspaceSettings={(workspaceId) => navigate(`/workspaces/${workspaceId}/settings`)}
       onOpenObserver={() => navigate("/context-observer", { state: { returnTo: focusedTaskId ? `/tasks/${focusedTaskId}` : undefined } })}
+      onOpenSearch={() => setPaletteOpen(true)}
+      onAddWorkspace={() => void actions.addWorkspaceFromFolder()}
+      addingWorkspace={actions.addingWorkspace}
       onRequestDelete={(target) => void actions.requestDelete(target)}
     />
   );

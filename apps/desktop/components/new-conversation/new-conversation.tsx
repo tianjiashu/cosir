@@ -94,7 +94,9 @@ type NewConversationProps = {
    */
   selectedWorkspaceId: number | null;
   onWorkspaceChange: (workspaceId: number) => void;
-  onWorkspaceCreated: () => Promise<void>;
+  /** 从文件夹添加工作区（与侧栏共用 `useWorkspaceActions.addWorkspaceFromFolder`）。 */
+  onAddWorkspace: () => Promise<boolean>;
+  addingWorkspace: boolean;
   /** 首条命令已被后端受理且用户仍停留在本页：由宿主导航到新 Task。 */
   onStarted: (conversation: StartedConversation) => void;
   /** 新 Task 被保留但不导航（用户已离开本页，或受理结果未知）：宿主只需刷新侧栏。 */
@@ -111,7 +113,8 @@ export function NewConversation({
   workspaces,
   selectedWorkspaceId,
   onWorkspaceChange,
-  onWorkspaceCreated,
+  onAddWorkspace,
+  addingWorkspace,
   onStarted,
   onTaskListChanged,
 }: NewConversationProps) {
@@ -251,7 +254,8 @@ export function NewConversation({
             workspaces={workspaces}
             selectedWorkspaceId={selectedWorkspaceId}
             onWorkspaceChange={onWorkspaceChange}
-            onWorkspaceCreated={onWorkspaceCreated}
+            onAddWorkspace={onAddWorkspace}
+            addingWorkspace={addingWorkspace}
           />
           <span aria-hidden="true" className="text-brand font-mono">❯</span>
           <span className="shrink-0">想做什么？</span>

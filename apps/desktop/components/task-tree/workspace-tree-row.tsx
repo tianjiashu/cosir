@@ -2,17 +2,23 @@ import { createContext, useContext, type ReactNode } from "react";
 import { BotIcon, ChevronDownIcon, ChevronRightIcon, FolderIcon, GitForkIcon, PinIcon } from "lucide-react";
 import type { NodeApi, NodeRendererProps, RowRendererProps } from "react-arborist";
 
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/format/relative-time";
 import { cn } from "@/lib/utils";
 import { TaskRunStatusDot } from "./task-run-status";
-import type { TaskSidebarNode, WorkspaceSidebarNode, WorkspaceTreeSource } from "./workspace-tree-model";
+import { TASK_PAGE_SIZE, type TaskSidebarNode, type WorkspaceSidebarNode, type WorkspaceTreeSource } from "./workspace-tree-model";
 import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
 
-/** 当前项由路由与工作区选择决定；树的键盘焦点不构成第二份导航状态。 */
+/**
+ * 当前项由路由与工作区选择决定；树的键盘焦点不构成第二份导航状态。
+ *
+ * 工作区与任务行整行是悬停卡片的触发区（键盘聚焦同样弹出），卡片内容见 `RowHoverCard`；
+ * 延迟与相邻行之间的即时切换由 WorkspaceTree 外层的 TooltipProvider 统一设定。
+ */
 export function WorkspaceTreeRow({ node, innerRef, attrs, children }: RowRendererProps<WorkspaceSidebarNode>) {
   const item = node.data;
   const current = node.id === node.tree.props.selection;
-  return (
+  const row = (
     <div
       {...attrs}
       ref={innerRef}
@@ -39,6 +45,36 @@ export function WorkspaceTreeRow({ node, innerRef, attrs, children }: RowRendere
       {children}
     </div>
   );
+  if (item.kind !== "workspace" && item.kind !== "task") return row;
+  return (
+    <Tooltip>
+      <TooltipTrigger render={row} />
+      <TooltipContent side="right" align="start" sideOffset={8} className="flex-col items-start gap-1 break-all">
+        <RowHoverCard item={item} />
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+const CREATED_AT_FORMAT = new Intl.DateTimeFormat("zh-CN", { dateStyle: "long", timeStyle: "short" });
+
+/** 悬停卡片：工作区给出界面上别处看不到的完整路径（同名工作区靠它区分），任务给出完整标题。 */
+function RowHoverCard({ item }: { item: Extract<WorkspaceSidebarNode, { kind: "workspace" | "task" }> }) {
+  if (item.kind === "workspace") {
+    return (
+      <>
+        <span className="text-sm">{item.workspace.name}</span>
+        <span className="opacity-75">{item.workspace.root_path}</span>
+        <span className="opacity-75">创建于 {CREATED_AT_FORMAT.format(new Date(item.workspace.created_at))}</span>
+      </>
+    );
+  }
+  return (
+    <>
+      <span className="text-sm">{item.task.full_title}</span>
+      {item.workspaceName && <span className="opacity-75">工作区：{item.workspaceName}</span>}
+    </>
+  );
 }
 
 function sidebarNodeLabel(item: WorkspaceSidebarNode): string {
@@ -47,7 +83,13 @@ function sidebarNodeLabel(item: WorkspaceSidebarNode): string {
     case "workspace": return item.workspace.name;
     case "pinned": return PINNED_GROUP_LABEL;
     case "placeholder": return item.label;
+    case "more": return moreLabel(item.hiddenCount);
   }
+}
+
+function moreLabel(hiddenCount: number): string {
+  if (hiddenCount === 0) return "收起";
+  return hiddenCount <= TASK_PAGE_SIZE ? `展开其余 ${hiddenCount} 个` : `显示更多（还有 ${hiddenCount} 个）`;
 }
 
 const PINNED_GROUP_LABEL = "置顶";
@@ -67,66 +109,76 @@ export function WorkspaceTreeNode({ node, style }: NodeRendererProps<WorkspaceSi
   const item = node.data;
   // 只让焦点行的操作进入 Tab 序列，方向键移动仍交给 react-arborist。
   const tabIndex = node.isFocused ? 0 : -1;
+  // 占位与「显示更多」行和顶层任务一样不随层级缩进，文字与任务标题左对齐（标记列 + 间距）。
+  const flushStyle = { ...style, paddingLeft: TASK_MARKER_WIDTH + TASK_MARKER_GAP };
   if (item.kind === "placeholder") {
-    return <div style={style} className={cn("workspace-tree-node", item.isError ? "text-destructive" : "text-muted-foreground")}><span className="truncate pl-7 text-xs">{item.label}</span></div>;
+    return <div style={flushStyle} className={cn("workspace-tree-node", item.isError ? "text-destructive" : "text-muted-foreground")}><span className="truncate text-xs">{item.label}</span></div>;
+  }
+  if (item.kind === "more") {
+    // 激活（点击、Enter）交给树的 onActivate，不在这里另挂按钮。
+    return <div style={flushStyle} className="workspace-tree-node text-muted-foreground"><span className="workspace-tree-title truncate text-xs">{moreLabel(item.hiddenCount)}</span></div>;
   }
   if (item.kind === "pinned") {
     return (
-      <div style={style} className="workspace-tree-node">
-        <button
-          type="button"
-          tabIndex={tabIndex}
-          className="focus-ring flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:text-foreground"
-          aria-expanded={node.isOpen}
-          aria-label={`${node.isOpen ? "收起" : "展开"}置顶任务`}
-          onClick={(event) => { event.stopPropagation(); node.toggle(); }}
-        >
-          {node.isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
-        </button>
-        <span className="flex min-w-0 flex-1 items-center gap-2 py-2 text-sm">
-          <PinIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="workspace-tree-title truncate">{PINNED_GROUP_LABEL}</span>
-          <span className="shrink-0 text-xs font-normal tabular-nums text-muted-foreground" aria-label={`${item.children.length} 个置顶任务`}>{item.children.length}</span>
-        </span>
-      </div>
+      <GroupRow node={node} style={style} tabIndex={tabIndex} icon={<PinIcon className="size-4" />} label={PINNED_GROUP_LABEL} toggleLabel={`${node.isOpen ? "收起" : "展开"}置顶任务`} />
     );
   }
   if (item.kind === "workspace") {
     const workspace = item.workspace;
     // 工作区行只展开 / 收起：选中哪个工作区由「+」、新对话页的选择器或打开任务显式决定，点击行不改选择。
     return (
-      <div style={style} className="workspace-tree-node">
-        <button
-          type="button"
-          tabIndex={tabIndex}
-          className="focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md py-2 text-left text-sm"
-          aria-expanded={node.isOpen}
-          aria-label={`工作区 ${workspace.name}，${node.isOpen ? "点击收起" : "点击展开"}`}
-          title={workspace.name}
-          onClick={(event) => { event.stopPropagation(); node.toggle(); }}
-        >
-          <span className="flex size-7 shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
-            {node.isOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />}
-          </span>
-          <FolderIcon className="-ml-2 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="workspace-tree-title truncate">{workspace.name}</span>
-        </button>
+      <GroupRow
+        node={node}
+        style={style}
+        tabIndex={tabIndex}
+        icon={<FolderIcon className="size-4" />}
+        label={workspace.name}
+        toggleLabel={`工作区 ${workspace.name}，${node.isOpen ? "点击收起" : "点击展开"}`}
+      >
         {workspace.taskLoadError && <span className="shrink-0 text-xs text-destructive" title={workspace.taskLoadError}>加载失败</span>}
-        {/* 任务数与行内操作叠在同一格，悬停或聚焦时换成操作（与任务行的时间 / 操作同一做法）。 */}
-        <div className="workspace-tree-task-tail">
-          <span className="workspace-tree-time pr-1 text-xs tabular-nums text-muted-foreground" aria-label={`${workspace.tasks.length} 个任务`}>{workspace.tasks.length}</span>
-          <div className="workspace-tree-actions" onClick={(event) => event.stopPropagation()}>{renderWorkspaceActions(workspace, tabIndex)}</div>
-        </div>
-      </div>
+        <div className="workspace-tree-actions" onClick={(event) => event.stopPropagation()}>{renderWorkspaceActions(workspace, tabIndex)}</div>
+      </GroupRow>
     );
   }
   return <WorkspaceTaskRow node={node} style={style} item={item} actions={renderTaskActions(item, tabIndex)} />;
 }
 
+/**
+ * 分组行（工作区、置顶）：图标格平时显示分组图标，悬停或聚焦时换成展开箭头（CSS 切换），
+ * 宽度与任务行的状态标记列相同，所以分组名与任务标题左对齐、图标与状态点同列。
+ */
+function GroupRow({ node, style, tabIndex, icon, label, toggleLabel, children }: Pick<NodeRendererProps<WorkspaceSidebarNode>, "node" | "style"> & {
+  tabIndex: number;
+  icon: ReactNode;
+  label: string;
+  toggleLabel: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div style={style} className="workspace-tree-node">
+      <button
+        type="button"
+        tabIndex={tabIndex}
+        className="focus-ring flex min-w-0 flex-1 items-center gap-2 self-stretch rounded-md text-left text-sm"
+        aria-expanded={node.isOpen}
+        aria-label={toggleLabel}
+        onClick={(event) => { event.stopPropagation(); node.toggle(); }}
+      >
+        <span className="workspace-tree-group-icon text-muted-foreground" style={{ width: TASK_MARKER_WIDTH }} aria-hidden="true">
+          <span className="workspace-tree-group-glyph">{icon}</span>
+          <ChevronRightIcon className="workspace-tree-group-chevron size-3.5" data-open={node.isOpen || undefined} />
+        </span>
+        <span className="workspace-tree-title truncate">{label}</span>
+      </button>
+      {children}
+    </div>
+  );
+}
+
 /** workspace 在第 0 层、顶层任务在第 1 层；更深的都是挂在源任务下的 Fork。 */
 const ROOT_TASK_LEVEL = 1;
 /**
- * 顶层任务不随 workspace 层缩进，状态标记列对齐 workspace 的展开按钮；
+ * 顶层任务不随 workspace 层缩进，状态标记列对齐分组行的图标格；
  * Fork 每深一层只缩 12px，避免多层后标题被挤窄。
  */
 const ROOT_TASK_INDENT = 0;
@@ -175,7 +227,7 @@ function WorkspaceTaskRow({ node, style, item, actions }: Pick<NodeRendererProps
         <TaskRunStatusDot status={status} className={showMarkerIcon ? "absolute -top-0.5 right-0 size-1.5" : undefined} />
       </span>
       <span className="flex min-w-0 flex-1 items-center gap-1">
-        <span className="workspace-tree-title min-w-0 truncate" title={item.workspaceName ? `${task.full_title}\n工作区：${item.workspaceName}` : task.full_title}>{task.full_title}</span>
+        <span className="workspace-tree-title min-w-0 truncate">{task.full_title}</span>
         {node.isInternal && (
           // 不进 Tab 序列：键盘用户以左右方向键展开 / 收起，与 workspace 行一致地交给 react-arborist。
           <button
@@ -192,7 +244,7 @@ function WorkspaceTaskRow({ node, style, item, actions }: Pick<NodeRendererProps
       </span>
       {/* 元信息与操作叠在同一尾栏格内，宽度取较宽者；操作显示时隐藏时间，标题不跳动。 */}
       <div className="workspace-tree-task-tail">
-        <time className="workspace-tree-time whitespace-nowrap text-2xs tabular-nums text-muted-foreground" dateTime={task.updated_at} title={task.updated_at}>{formatRelativeTime(task.updated_at)}</time>
+        <time className="workspace-tree-time whitespace-nowrap text-2xs tabular-nums text-muted-foreground" dateTime={task.updated_at}>{formatRelativeTime(task.updated_at)}</time>
         <div className="workspace-tree-actions" onClick={(event) => event.stopPropagation()}>{actions}</div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from "@
 
 import { seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin, WEB_ORIGIN } from "./e2e-env";
+import { installFakeDesktopHost } from "./fake-desktop-host";
 
 const longTitle = "检查工作区任务列表中的超长中文标题与EnglishIdentifierWithoutSpaces".repeat(3);
 const workspaceName = "cosir-用于验证长名称的本地工作区";
@@ -60,7 +61,9 @@ for (const theme of ["light", "dark"]) {
     await expect(row(page, "分支任务").getByRole("img", { name: "运行中" })).toBeVisible();
 
     const title = selected.locator(".workspace-tree-title");
-    await expect(title).toHaveAttribute("title", longTitle);
+    // 当前任务只靠底色标出，不加粗；分组名与任务标题左对齐（图标格与状态标记列同宽）。
+    await expect(title).toHaveCSS("font-weight", "400");
+    expect((await box(workspace.locator(".workspace-tree-title"))).x).toBeCloseTo((await box(title)).x, 0);
     const dimensions = await title.evaluate((element) => ({
       client: element.clientWidth, scroll: element.scrollWidth,
       whiteSpace: getComputedStyle(element).whiteSpace,
@@ -87,6 +90,10 @@ for (const theme of ["light", "dark"]) {
     await expect(selected.locator(".workspace-tree-actions")).toHaveCSS("opacity", "1");
     await expect(selected.locator("time")).toHaveCSS("visibility", "hidden");
     expect(await box(title)).toEqual(titleBefore);
+    // 悬停卡片给出完整标题；工作区的卡片带出界面上别处看不到的完整路径。
+    await expect(page.locator('[data-slot="tooltip-content"][data-open]')).toContainText(longTitle);
+    await workspace.hover();
+    await expect(page.locator('[data-slot="tooltip-content"][data-open]')).toContainText("/workspace/cosir");
     await page.getByRole("navigation", { name: "当前位置" }).click();
     await page.locator("aside").first().screenshot({ path: testInfo.outputPath(`${theme}-sidebar.png`) });
 
@@ -282,4 +289,81 @@ test("尾栏按时间实际宽度让位：默认宽度下短时间的行能放�
   await target.hover();
   await expect(target.getByRole("button", { name: `更多操作：${fitting}`, exact: true })).toBeVisible();
   expect(await box(title)).toEqual(before);
+});
+
+/** 工作区 7 下 `count` 个顶层任务，id 越大越新（侧栏按最近更新倒序，先显示 200+count-1）。 */
+async function seedManyTasks(page: Page, request: APIRequestContext, count: number, statuses: Record<number, string | null> = {}) {
+  await seedSidebar(page, request, "light");
+  const many = Array.from({ length: count }, (_, index) => {
+    const at = new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString();
+    return { task_id: 200 + index, workspace_id: 7, title: `批量任务 ${index}`, task_type: "user", created_at: at, updated_at: at };
+  });
+  await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: many }));
+  await page.route(`${origin}/task-status/stream`, (route) => route.fulfill({
+    contentType: "application/x-ndjson", body: `${JSON.stringify({ type: "full", statuses })}\n`,
+  }));
+  for (const task of many) {
+    await page.route(`${origin}/tasks/${task.task_id}`, (route) => route.fulfill({ json: task }));
+    await seedState(request, task.task_id, { title: task.title, messages: [], activity: null });
+  }
+}
+
+test("每个工作区默认只显示最近 5 个任务，可展开其余并收起", async ({ page, request }) => {
+  await seedManyTasks(page, request, 8);
+  await page.goto("/");
+  await expect(row(page, "批量任务 7")).toBeVisible();
+  await expect(row(page, "批量任务 3")).toBeVisible();
+  await expect(row(page, "批量任务 2")).toHaveCount(0);
+
+  await row(page, "展开其余 3 个").click();
+  await expect(row(page, "批量任务 0")).toBeVisible();
+  await row(page, "收起").click();
+  await expect(row(page, "批量任务 2")).toHaveCount(0);
+  await expect(row(page, "展开其余 3 个")).toBeVisible();
+});
+
+test("运行中与打开过的任务留在可见范围内，离开后也不消失", async ({ page, request }) => {
+  await seedManyTasks(page, request, 12, { 201: "running" });
+  await page.goto("/tasks/202");
+  // 202 排在第 10 位：打开它把水位线推到第 10 个；201 正在运行，推到第 11 个。
+  await expect(row(page, "批量任务 2")).toHaveAttribute("aria-current", "page");
+  await expect(row(page, "批量任务 1")).toBeVisible();
+  await expect(row(page, "批量任务 0")).toHaveCount(0);
+  await expect(row(page, "展开其余 1 个")).toBeVisible();
+
+  await page.getByRole("button", { name: "新对话", exact: true }).click();
+  await expect(page).toHaveURL(`${WEB_ORIGIN}/`);
+  await expect(row(page, "批量任务 2")).toBeVisible();
+});
+
+test("区头：搜索打开命令面板，添加工作区后在新工作区开始新对话", async ({ page, request }) => {
+  await installFakeDesktopHost(page, { directory: "/Users/me/projects/新项目" });
+  await seedSidebar(page, request, "light");
+  const at = new Date().toISOString();
+  const existing = [
+    { workspace_id: 7, name: workspaceName, root_path: "/workspace/cosir", created_at: at, updated_at: at },
+    { workspace_id: 8, name: "其他工作区", root_path: "/workspace/other", created_at: at, updated_at: at },
+  ];
+  const created: { name: string; root_path: string }[] = [];
+  await page.route(`${origin}/workspaces`, async (route) => {
+    if (route.request().method() === "POST") {
+      created.push(route.request().postDataJSON());
+      await route.fulfill({ json: { workspace_id: 9, ...created[0], created_at: at, updated_at: at } });
+      return;
+    }
+    await route.fulfill({ json: created.length === 0 ? existing : [...existing, { workspace_id: 9, ...created[0], created_at: at, updated_at: at }] });
+  });
+  await page.route(`${origin}/workspaces/9/tasks`, (route) => route.fulfill({ json: [] }));
+  await page.goto("/tasks/100");
+
+  await page.getByRole("button", { name: "搜索任务", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "命令面板" })).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  await page.getByRole("button", { name: "添加工作区", exact: true }).click();
+  await expect(row(page, "新项目")).toBeVisible();
+  expect(created).toEqual([{ name: "新项目", root_path: "/Users/me/projects/新项目" }]);
+  await expect(page).toHaveURL(`${WEB_ORIGIN}/`);
+  await expect(page.getByRole("button", { name: "选择工作区，当前 新项目" })).toBeVisible();
+  await expect(row(page, "新项目")).toHaveAttribute("aria-current", "true");
 });

@@ -14,21 +14,24 @@
   background: color-mix(in oklab, var(--foreground) 8%, transparent);
 }
 
-.workspace-tree-row[data-current] .workspace-tree-title {
-  font-weight: 600;
-}
+/* 当前 Task 只靠底色标出，不加粗：中文加粗会变宽，切换任务时标题的截断位置会跳。 */
 
 /* 工作区成为当前项只表示「新对话将建在这里」，不是所在页面：去掉底色，
-   只加粗并点亮图标，底色留给当前 Task，二者不会被误读为同一种选中。 */
+   只加粗并点亮图标，底色留给当前 Task，二者不会被误读为同一种选中。不用 --info 着色：
+   侧栏里蓝色表示「运行中」。工作区切换不频繁，加粗的宽度变化可以接受。 */
 .workspace-tree-row[data-current][data-kind="workspace"] {
   background: transparent;
+}
+
+.workspace-tree-row[data-current][data-kind="workspace"] .workspace-tree-title {
+  font-weight: 600;
 }
 
 .workspace-tree-row[data-current][data-kind="workspace"]:hover {
   background: color-mix(in oklab, var(--foreground) 4%, transparent);
 }
 
-.workspace-tree-row[data-current][data-kind="workspace"] svg.text-muted-foreground {
+.workspace-tree-row[data-current][data-kind="workspace"] .workspace-tree-group-icon {
   color: var(--foreground);
 }
 
@@ -106,6 +109,43 @@
   border-bottom-left-radius: 4px;
 }
 
+/* 分组行的图标格：分组图标与展开箭头叠在同一格，悬停或聚焦行时换成箭头；宽度由组件按任务标记列给出。 */
+.workspace-tree-group-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+}
+
+.workspace-tree-group-icon > * {
+  grid-area: 1 / 1;
+}
+
+.workspace-tree-group-chevron {
+  visibility: hidden;
+  transition: transform 150ms;
+}
+
+.workspace-tree-group-chevron[data-open] {
+  transform: rotate(90deg);
+}
+
+.workspace-tree-row:is(:hover, :focus-within) .workspace-tree-group-glyph {
+  visibility: hidden;
+}
+
+.workspace-tree-row:is(:hover, :focus-within) .workspace-tree-group-chevron {
+  visibility: visible;
+}
+
+/* 「显示更多 / 收起」是可激活的行，悬停时文字提亮。 */
+.workspace-tree-row[data-kind="more"] {
+  cursor: pointer;
+}
+
+.workspace-tree-row[data-kind="more"]:hover .workspace-tree-title {
+  color: var(--foreground);
+}
+
 /* 嵌套行的状态点贴标记右缘，作为引导线的落点。 */
 .workspace-tree-task-marker[data-nested] {
   justify-content: flex-end;
@@ -119,8 +159,8 @@
   pointer-events: none;
 }
 
-/* 元信息（任务的时间、工作区的任务数）与行内操作叠在同一格，宽度取二者较宽者：悬停换成操作时标题不跳动，
-   又不像固定宽度那样为短元信息（如「3天前」）白占标题的位置。 */
+/* 任务行的时间与行内操作叠在同一格，宽度取二者较宽者：悬停换成操作时标题不跳动，
+   又不像固定宽度那样为短时间（如「3天前」）白占标题的位置。 */
 .workspace-tree-task-tail {
   display: grid;
   flex: 0 0 auto;
@@ -143,5 +183,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .workspace-tree-row { transition: none; }
+  .workspace-tree-row,
+  .workspace-tree-group-chevron { transition: none; }
 }

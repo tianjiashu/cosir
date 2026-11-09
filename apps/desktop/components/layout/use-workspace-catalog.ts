@@ -119,8 +119,20 @@ export function useWorkspaceCatalog(routeTaskId: number | null, workspaceConfigu
     writeLastWorkspaceId(workspaceConfigurationId);
   }, [workspaceConfigurationId]);
 
+  // 打开一个任务时把它所在的工作区选中一次（列表里找到它或 GET /tasks/:id 确认它时），之后的目录刷新
+  // 不再改选择：路由切换在 react-router 里是低优先级更新，「添加工作区后离开任务页」时目录刷新先于
+  // 路由切换渲染，若每次刷新都重新选中，会把刚选中的新工作区拉回路由任务所在的工作区。
+  const selectedForRouteTaskRef = useRef<number | null>(null);
+  const selectRouteTaskWorkspace = useCallback((task: WorkspaceTask) => {
+    if (selectedForRouteTaskRef.current === task.task_id) return;
+    selectedForRouteTaskRef.current = task.task_id;
+    setSelectedWorkspaceId(task.workspace_id);
+    writeLastWorkspaceId(task.workspace_id);
+  }, []);
+
   useEffect(() => {
     if (routeTaskId === null) {
+      selectedForRouteTaskRef.current = null;
       setRouteTask(null);
       return;
     }
@@ -128,15 +140,14 @@ export function useWorkspaceCatalog(routeTaskId: number | null, workspaceConfigu
     const task = workspace?.tasks.find((candidate) => candidate.task_id === routeTaskId);
     if (task) {
       setRouteTask(task);
-      setSelectedWorkspaceId(task.workspace_id);
-      writeLastWorkspaceId(task.workspace_id);
+      selectRouteTaskWorkspace(task);
       return;
     }
     // Keep a task already confirmed by GET /tasks/:id while a sidebar refresh
     // temporarily returns an incomplete list. A new route still drops the
     // previous task because its id no longer matches the URL.
     setRouteTask((current) => current?.task_id === routeTaskId ? current : null);
-  }, [routeTaskId, workspaces]);
+  }, [routeTaskId, selectRouteTaskWorkspace, workspaces]);
 
   useEffect(() => {
     void frontendLog("DEBUG", "workspace_route_changed", "AppLayout 观察到路由 task 变化", {
@@ -225,9 +236,8 @@ export function useWorkspaceCatalog(routeTaskId: number | null, workspaceConfigu
   const handleTaskLoaded = useCallback((task: WorkspaceTask) => {
     if (task.task_id !== routeTaskId) return;
     setRouteTask(task);
-    setSelectedWorkspaceId(task.workspace_id);
-    writeLastWorkspaceId(task.workspace_id);
-  }, [routeTaskId]);
+    selectRouteTaskWorkspace(task);
+  }, [routeTaskId, selectRouteTaskWorkspace]);
   const updateWorkspaceExpansion = useCallback((workspaceId: number, expanded: boolean) => {
     setExpandedWorkspaceIds((current) => {
       const ids = current ?? [];

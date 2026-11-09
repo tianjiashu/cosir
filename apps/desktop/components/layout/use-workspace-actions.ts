@@ -8,8 +8,9 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
-import { deleteTask, deleteWorkspace, forkTask, type StartedConversation } from "@/lib/api/workspaces";
+import { createWorkspace, deleteTask, deleteWorkspace, forkTask, type StartedConversation } from "@/lib/api/workspaces";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
+import { desktopHost } from "@/lib/desktop-host";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { HttpError } from "@/lib/http/http-error";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -26,7 +27,7 @@ export type DeleteTarget =
   | { kind: "task"; id: number; label: string; forkCount: number };
 
 /**
- * 工作区 / 任务的用户动作：开始对话、分叉、删除。
+ * 工作区 / 任务的用户动作：开始对话、从文件夹添加工作区、分叉、删除。
  *
  * 只编排「请求 → 刷新目录 → 导航 → 反馈」，目录状态由 useWorkspaceCatalog 持有；
  * 失败统一经 notify / 确认框呈现，并写结构化日志。
@@ -41,12 +42,46 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     return () => { currentLocationKey.current = null; };
   }, [location.key]);
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
+  const addPending = useRef(false);
+  const [addingWorkspace, setAddingWorkspace] = useState(false);
   const { load, selectWorkspace, selectedWorkspaceId, workspaces } = catalog;
 
   const startConversation = useCallback((conversation: StartedConversation) => {
     navigate(`/tasks/${conversation.task_id}`);
     void load();
   }, [load, navigate]);
+
+  /**
+   * 从文件夹添加工作区（侧栏区头与新对话页选择器共用）：系统目录选择 → 创建 → 等目录刷新 →
+   * 选中新工作区并来到新对话页。用户取消目录选择不算失败；返回是否真的添加了一个。
+   * 进行中的再次调用直接忽略，两处入口据 `addingWorkspace` 显示忙碌。
+   */
+  const addWorkspaceFromFolder = useCallback(async (): Promise<boolean> => {
+    if (addPending.current) return false;
+    addPending.current = true;
+    setAddingWorkspace(true);
+    try {
+      if (!desktopHost) throw new UserFacingError("只能在桌面应用中添加工作区");
+      const picked = await desktopHost.dialog.openDirectory({ title: "选择工作区文件夹" });
+      if (picked === null) return false;
+      const name = picked.split(/[\\/]/).filter(Boolean).at(-1) ?? "新工作区";
+      const workspace = await createWorkspace({ name, root_path: picked });
+      await load();
+      selectWorkspace(workspace.workspace_id);
+      if (location.pathname !== "/") navigate("/");
+      void frontendLog("INFO", "workspace_created_from_folder", "已从文件夹添加工作区", {
+        data: { workspaceId: workspace.workspace_id },
+      });
+      return true;
+    } catch (cause) {
+      void frontendLog("ERROR", "workspace_create_from_folder_failed", "从文件夹创建工作区失败", { error: cause });
+      notify.error("添加工作区失败", { error: cause, fallback: "创建工作区失败，请重试" });
+      return false;
+    } finally {
+      addPending.current = false;
+      setAddingWorkspace(false);
+    }
+  }, [load, location.pathname, navigate, selectWorkspace]);
 
   // 请求绑定发起时的 Task 和路由；用户切页后迟到的响应只更新目录，不抢回页面。
   const executeFork = useCallback(async function executeFork(
@@ -167,5 +202,5 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     await load();
   }, [focusedTaskId, load, navigate, selectWorkspace, selectedWorkspaceId, workspaces]);
 
-  return { startConversation, forkMessage, forkingMessageId, requestDelete };
+  return { startConversation, addWorkspaceFromFolder, addingWorkspace, forkMessage, forkingMessageId, requestDelete };
 }

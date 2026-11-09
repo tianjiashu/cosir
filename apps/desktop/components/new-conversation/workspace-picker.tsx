@@ -1,31 +1,26 @@
 import { useState } from "react";
 import { CheckIcon, ChevronsUpDownIcon, FolderIcon, FolderPlusIcon, Loader2Icon } from "lucide-react";
 
-import { Alert } from "@/components/ui/alert";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { createWorkspace, type Workspace } from "@/lib/api/workspaces";
-import { desktopHost } from "@/lib/desktop-host";
-import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { UserFacingError } from "@/lib/errors/user-facing-error";
-import { frontendLog } from "@/lib/logging/frontend-log";
+import type { Workspace } from "@/lib/api/workspaces";
 
 type WorkspacePickerProps = {
   workspaces: Workspace[];
   selectedWorkspaceId: number | null;
   onWorkspaceChange: (workspaceId: number) => void;
-  onWorkspaceCreated: () => Promise<void>;
+  /** 从文件夹添加工作区（`useWorkspaceActions.addWorkspaceFromFolder`）：成功时已选中新工作区，返回 true。 */
+  onAddWorkspace: () => Promise<boolean>;
+  addingWorkspace: boolean;
 };
 
 /**
  * 新对话页标题里的工作区选择器，外观是命令行提示符的目录段（`otto ❯ 想做什么？` 里的 `otto`）。
  * 当前工作区只在这里与侧栏出现，不在输入框里另放一行；完整路径在悬停提示和下拉列表里。
  * 只发出选择意图；确认、提交选择和最近工作区偏好由布局目录边界统一处理。
- * 从文件夹添加：系统目录选择 → 创建 → 等宿主刷新目录 → 选中新工作区；用户取消目录选择不算失败。
+ * 「新建工作区」与侧栏区头共用同一个添加动作，失败经全局提示呈现；成功后收起弹层。
  */
-export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceChange, onWorkspaceCreated }: WorkspacePickerProps) {
+export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceChange, onAddWorkspace, addingWorkspace }: WorkspacePickerProps) {
   const [openMenu, setOpenMenu] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const selected = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
 
   const chooseWorkspace = (workspaceId: number) => {
@@ -33,24 +28,8 @@ export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceCh
     setOpenMenu(false);
   };
 
-  const createFromFolder = async () => {
-    if (creating) return;
-    setCreating(true);
-    setError(null);
-    try {
-      if (!desktopHost) throw new UserFacingError("只能在桌面应用中添加工作区");
-      const picked = await desktopHost.dialog.openDirectory({ title: "选择工作区文件夹" });
-      if (picked === null) return;
-      const name = picked.split(/[\\/]/).filter(Boolean).at(-1) ?? "新工作区";
-      const workspace = await createWorkspace({ name, root_path: picked });
-      await onWorkspaceCreated();
-      chooseWorkspace(workspace.workspace_id);
-    } catch (cause) {
-      setError(userErrorMessage(cause, "创建工作区失败，请重试"));
-      void frontendLog("ERROR", "workspace_create_from_folder_failed", "从文件夹创建工作区失败", { error: cause });
-    } finally {
-      setCreating(false);
-    }
+  const addFromFolder = async () => {
+    if (await onAddWorkspace()) setOpenMenu(false);
   };
 
   return (
@@ -72,8 +51,7 @@ export function WorkspacePicker({ workspaces, selectedWorkspaceId, onWorkspaceCh
             return <button key={workspace.workspace_id} type="button" role="option" aria-selected={active} onClick={() => chooseWorkspace(workspace.workspace_id)} className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left focus-ring"><FolderIcon className="text-muted-foreground size-4 shrink-0" /><span className="min-w-0 flex-1"><span className="block truncate text-sm">{workspace.name}</span><span className="text-muted-foreground block truncate text-2xs">{workspace.root_path}</span></span>{active && <CheckIcon className="text-primary size-4 shrink-0" />}</button>;
           })}
         </div>
-        <div className="border-border/60 mt-1 border-t pt-1"><button type="button" onClick={() => void createFromFolder()} disabled={creating} className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm focus-ring">{creating ? <Loader2Icon className="size-4 animate-spin" /> : <FolderPlusIcon className="size-4" />}新建工作区</button></div>
-        {error && <Alert tone="destructive" className="mt-2 text-xs">{error}</Alert>}
+        <div className="border-border/60 mt-1 border-t pt-1"><button type="button" onClick={() => void addFromFolder()} disabled={addingWorkspace} className="hover:bg-muted flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm focus-ring">{addingWorkspace ? <Loader2Icon className="size-4 animate-spin" /> : <FolderPlusIcon className="size-4" />}新建工作区</button></div>
       </PopoverContent>
     </Popover>
   );

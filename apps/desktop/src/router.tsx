@@ -37,7 +37,8 @@ function NewConversationRoute() {
       workspaces={catalog.workspaces}
       selectedWorkspaceId={catalog.selectedWorkspaceId}
       onWorkspaceChange={catalog.selectWorkspace}
-      onWorkspaceCreated={catalog.load}
+      onAddWorkspace={actions.addWorkspaceFromFolder}
+      addingWorkspace={actions.addingWorkspace}
       onStarted={actions.startConversation}
       onTaskListChanged={() => void catalog.load()}
     />
