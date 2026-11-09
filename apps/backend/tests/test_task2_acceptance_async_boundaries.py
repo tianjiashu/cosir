@@ -110,8 +110,6 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     monkeypatch.setattr(lifespan_module, "build_agent_registry", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(lifespan_module, "set_tool_registry", lambda _value: None)
     monkeypatch.setattr(lifespan_module, "set_agent_registry", lambda _value: None)
-    monkeypatch.setattr(lifespan_module.HookInterceptor, "safe_fire", lambda *_args: None)
-    monkeypatch.setattr("app.core.hook.initialize_hook_registry", lambda: None)
 
     def close_dependencies() -> None:
         assert threading.get_ident() != owner_thread

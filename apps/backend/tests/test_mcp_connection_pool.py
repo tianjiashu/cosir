@@ -16,10 +16,9 @@ import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
-from app.service.configuration.mcp_configuration import (
-    MCPServerConfig,
-    server_connection_fingerprint,
-)
+from app.service.configuration.extension_scope import ExtensionScope
+from app.service.configuration.mcp_configuration import MCPServerConfig, ScopedMCPServer
+from app.service.configuration.mcp_tested_servers import MCPTestedServers
 from app.tools.mcp.client import MCPToolNotFoundError, call_result_text, is_connection_failure
 from app.tools.mcp.connection_pool import MCPConnectionPool
 from app.tools.tool_handler.mcp_tool import MCPTool
@@ -61,13 +60,14 @@ def pool(tmp_path, monkeypatch):
     pool.close()
 
 
-def _server(name: str = "stateful", *extra_args: str) -> MCPServerConfig:
-    return MCPServerConfig(
-        name=name, command=sys.executable, args=["-c", _SERVER_CODE, *extra_args]
+def _server(name: str = "stateful", *extra_args: str) -> ScopedMCPServer:
+    return ScopedMCPServer(
+        ExtensionScope.system(),
+        MCPServerConfig(name=name, command=sys.executable, args=["-c", _SERVER_CODE, *extra_args]),
     )
 
 
-def _bump(pool: MCPConnectionPool, server: MCPServerConfig) -> dict:
+def _bump(pool: MCPConnectionPool, server: ScopedMCPServer) -> dict:
     result = pool.submit(pool.call_tool(server, "bump", {})).result(timeout=30)
     return json.loads(call_result_text(result))
 
@@ -129,19 +129,12 @@ def test_unknown_tool_is_reported_without_dropping_connection(pool):
 
 def test_cancelled_tool_call_returns_promptly_and_keeps_connection(pool, tmp_path, monkeypatch):
     server = _server()
-    config_path = tmp_path / "mcp_servers.json"
+    config_path = tmp_path / "system-cosir" / "config" / "mcp_servers.json"
+    config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        json.dumps(
-            {
-                "servers": [server.model_dump(mode="json")],
-                "tested_servers": {server.name: server_connection_fingerprint(server)},
-            }
-        ),
-        encoding="utf-8",
+        json.dumps({"servers": [server.config.model_dump(mode="json")]}), encoding="utf-8"
     )
-    monkeypatch.setattr(
-        "app.service.configuration.mcp_configuration.system_mcp_servers_file", lambda: config_path
-    )
+    MCPTestedServers.record_pass(server)
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
     first = _bump(pool, server)
     context = ToolExecutionContext(
@@ -171,6 +164,23 @@ def test_cancelled_tool_call_returns_promptly_and_keeps_connection(pool, tmp_pat
     assert observation.status == "cancelled"
     assert time.monotonic() - started < 5
     assert _bump(pool, server)["pid"] == first["pid"]
+
+
+def test_same_name_in_another_scope_gets_its_own_connection(pool, tmp_path):
+    """连接按「作用域 + 服务名」区分：工作区的同名服务不会顶替系统级连接，反之亦然。"""
+
+    system_server = _server()
+    workspace_server = ScopedMCPServer(
+        ExtensionScope.workspace(tmp_path), _server("stateful", "--workspace").config
+    )
+
+    system_first = _bump(pool, system_server)
+    workspace_first = _bump(pool, workspace_server)
+    system_second = _bump(pool, system_server)
+
+    assert (system_first["count"], workspace_first["count"], system_second["count"]) == (1, 1, 2)
+    assert system_second["pid"] == system_first["pid"]
+    assert workspace_first["pid"] != system_first["pid"]
 
 
 def test_closed_pool_rejects_new_work(pool):

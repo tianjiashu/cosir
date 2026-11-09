@@ -1,7 +1,7 @@
 """工具执行管线 ``ToolExecutor`` 的单元测试。
 
 覆盖调度层合并（单一执行入口收口）后的执行管线核心行为：
-- ``ToolAccessGate`` 四段准入（注册表命中 / Agent profile 门禁 / 参数校验 / PreToolUse Hook 短路）
+- ``ToolAccessGate`` 三段准入（注册表命中 / Agent profile 门禁 / 参数校验）
 - ``ToolExecutor`` 编排（成功执行 / 拒绝归一化 / list_tools）
 - running 事件只在真正交给 handler 前由执行器发出一次；门禁拒绝与 stale 拦截不发
 - 拒绝观察一律经 ``ToolObservationBudget`` 治理（模型通道长度限制与截断口径和成功路径一致）
@@ -10,7 +10,6 @@
 from collections.abc import Collection
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -272,37 +271,6 @@ def test_denial_observation_passes_through_budget(
     )
 
     assert observed.get("called") is True
-
-
-def test_gate_modified_arguments_flow_to_handler(tmp_path: Path) -> None:
-    """PreToolUse Hook 改写参数后，隔离执行器应使用改写后的参数。"""
-
-    from app.core.hook import hook_interceptor
-
-    def _fake_fire(context: Any, *_args: Any, **_kwargs: Any):
-        decision = SimpleNamespace(
-            decision="allow",
-            deny_reason=None,
-            modified_arguments={"path": "rewritten.txt"},
-        )
-        return decision
-
-    (tmp_path / "rewritten.txt").write_text("rewritten", encoding="utf-8")
-    monkey_target = hook_interceptor.HookInterceptor
-    original = monkey_target.safe_fire
-    monkey_target.safe_fire = staticmethod(_fake_fire)  # type: ignore[method-assign]
-    try:
-        executor = _make_executor(tmp_path)
-        observation = _execute(
-        executor,
-            ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-7"),
-            _make_context(tmp_path),
-        )
-    finally:
-        monkey_target.safe_fire = original  # type: ignore[method-assign]
-
-    assert observation.status == "success"
-    assert "rewritten" in observation.content
 
 
 def test_gate_evaluate_unknown_tool(tmp_path: Path) -> None:

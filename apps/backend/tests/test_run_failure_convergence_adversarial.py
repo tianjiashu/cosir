@@ -109,14 +109,12 @@ def _make_runtime(
     *,
     operations_available: bool = True,
 ) -> SimpleNamespace:
-    """把 ``RunDriver`` 依赖的 service、hook 与观测替换为最小替身。
+    """把 ``RunDriver`` 依赖的 service 与观测替换为最小替身。
 
     ``operations_available`` 为假时模拟「门面尚未构造就失败」：门面构造抛错，落定必须仍然发生
     （它只依赖 run 级状态服务）。
     """
 
-    tasks = SimpleNamespace(get_task=lambda task_id: SimpleNamespace(id=task_id, workspace_id=9))
-    monkeypatch.setattr(run_driver, "get_task_service", lambda: tasks)
     monkeypatch.setattr(
         run_driver,
         "get_conversation_run_ledger",
@@ -126,15 +124,11 @@ def _make_runtime(
         ),
     )
 
-    async def _noop_fire(_context: object) -> None:
-        return None
-
     def _build(*_args: object, **_kwargs: object) -> object:
         if operations_available:
             return SimpleNamespace()
         raise RuntimeError("operations unavailable")
 
-    monkeypatch.setattr(run_driver.HookInterceptor, "async_safe_fire", _noop_fire)
     monkeypatch.setattr(RuntimeContext, "for_run", classmethod(_build))
     monkeypatch.setattr(
         AgentRuntimeConfig, "for_run", classmethod(lambda *_args: object())

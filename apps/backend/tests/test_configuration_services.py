@@ -33,7 +33,7 @@ from app.service.configuration.instruction_configuration_service import (
     InstructionConfigurationError,
     InstructionConfigurationService,
 )
-from app.service.configuration.runtime_notices.agent_catalog_change import AgentCatalogChange
+from app.service.configuration.runtime_notices.catalog_change import CatalogChange
 
 
 def _configuration_registry() -> AgentProfileRegistry:
@@ -183,7 +183,7 @@ def test_agent_create_emits_deferred_catalog_change(
     registry = _configuration_registry()
     service = _service(monkeypatch, registry)
     changes: list[object] = []
-    monkeypatch.setattr(AgentCatalogChange, "broadcast", lambda change: changes.append(change))
+    monkeypatch.setattr(CatalogChange, "broadcast", lambda change: changes.append(change))
 
     service.create(
         AgentConfiguration(
@@ -196,8 +196,8 @@ def test_agent_create_emits_deferred_catalog_change(
     )
 
     assert len(changes) == 1
-    assert changes[0].action == "created"
-    assert changes[0].agent_id == "reviewer"
+    assert (changes[0].catalog, changes[0].action) == ("agents", "added")
+    assert changes[0].entry_id == "reviewer"
     assert changes[0].current_description == "审查变更"
 
 
@@ -222,7 +222,7 @@ def test_agent_update_notifies_only_when_description_changes(
     )
     service.create(original)
     changes: list[object] = []
-    monkeypatch.setattr(AgentCatalogChange, "broadcast", lambda change: changes.append(change))
+    monkeypatch.setattr(CatalogChange, "broadcast", lambda change: changes.append(change))
 
     service.update(
         "reviewer",
@@ -265,13 +265,13 @@ def test_agent_delete_emits_deferred_catalog_change(
     )
     service.create(document)
     changes: list[object] = []
-    monkeypatch.setattr(AgentCatalogChange, "broadcast", lambda change: changes.append(change))
+    monkeypatch.setattr(CatalogChange, "broadcast", lambda change: changes.append(change))
 
     service.delete("reviewer")
 
     assert len(changes) == 1
-    assert changes[0].action == "deleted"
-    assert changes[0].agent_id == "reviewer"
+    assert changes[0].action == "removed"
+    assert changes[0].entry_id == "reviewer"
     assert changes[0].previous_description == "审查变更"
     assert changes[0].current_description is None
 

@@ -33,6 +33,7 @@ from app.service.configuration import (
     agent_team_configuration_registry as agent_team_registry_module,
 )
 from app.service.configuration import agent_team_configuration_source as configuration_scope_source
+from app.service.configuration import extension_scope, mcp_tested_servers
 from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,
 )
@@ -222,7 +223,7 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
     副作用:
         改写两个配置来源模块内 ``system_agent_config_dir`` / ``system_agent_team_config_dir``
-        的引用；不触碰真实的路径模块，也不创建目录。需要验证真实目录推导的用例可再自行覆盖。
+        的引用，以及 Skill / MCP 作用域与测试记录模块里的系统级路径函数；不触碰真实的路径模块，也不创建目录。需要验证真实目录推导的用例可再自行覆盖。
     """
 
     system_agents = tmp_path / "system-agents"
@@ -236,6 +237,27 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         configuration_scope_source, "system_agent_team_config_dir", lambda: system_teams
     )
     monkeypatch.setattr(agent_profile_config, "system_agent_team_config_dir", lambda: system_teams)
+    # Skill / MCP 的系统级目录与本机测试记录同样隔离：两者每次调用都现读文件，不隔离就会读到
+    # 开发者本机 ``~/.cosir`` 里装的 Skill 与 MCP 服务。用例往 ``tmp_path / "system-cosir"`` 下写即可。
+    system_cosir_root = tmp_path / "system-cosir"
+    monkeypatch.setattr(extension_scope, "system_cosir_dir", lambda: system_cosir_root)
+    monkeypatch.setattr(extension_scope, "system_skills_dir", lambda: system_cosir_root / "skills")
+    monkeypatch.setattr(
+        extension_scope,
+        "system_skills_config_file",
+        lambda: system_cosir_root / "config" / "skills.json",
+    )
+    monkeypatch.setattr(
+        extension_scope,
+        "system_mcp_servers_file",
+        lambda: system_cosir_root / "config" / "mcp_servers.json",
+    )
+    monkeypatch.setattr(mcp_tested_servers, "system_cosir_dir", lambda: system_cosir_root)
+    monkeypatch.setattr(
+        mcp_tested_servers,
+        "system_mcp_tested_servers_file",
+        lambda: system_cosir_root / "config" / "mcp_tested_servers.json",
+    )
 
 
 @pytest.fixture

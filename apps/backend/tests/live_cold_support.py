@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import update
 
 from app.config.configuration import get_tool_registry
-from app.core.hook import hook_registry
 from app.core.tool.background.backgraound_registry import BackgroundRegistry, background_registry
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_success import tool_success
@@ -171,7 +170,6 @@ class LiveColdEnv:
         self.workspace = depends.get_workspace_service().create_workspace("ws", str(tmp_path))
         self.task = depends.get_workspace_service().create_task(self.workspace.id, "parent")
         _install_probe_tools(self.task)
-        monkeypatch.setattr(hook_registry, "_registry", hook_registry.HookRegistry())
         monkeypatch.setattr(
             workflow,
             "resolve_chat_model",

@@ -8,7 +8,6 @@ import pytest
 
 from app.assistant_transport.request import DecisionRequest
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
-from app.core.hook import hook_registry
 from app.core.task_actor import SessionConflictError
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.workflow import workflow
@@ -123,7 +122,6 @@ async def proposed_team(reviewer, tmp_path, monkeypatch):
     })
     get_agent_team_registry().register(config, workspace_root=tmp_path)
     model = ReviewModel()
-    monkeypatch.setattr(hook_registry, "_registry", hook_registry.HookRegistry())
     monkeypatch.setattr(workflow, "resolve_chat_model",
                         lambda **_: SimpleNamespace(model=model, supports_thinking=False))
     monkeypatch.setattr(task_title, "should_launch", lambda *_: False)

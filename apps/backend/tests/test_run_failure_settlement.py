@@ -189,14 +189,12 @@ def _make_runtime(
     build_operations_error: BaseException | None = None,
     run_state_service: _RecordingRunStateService | None = None,
 ) -> SimpleNamespace:
-    """把 ``RunDriver`` 依赖的 service、hook 与观测替换为最小替身，只观察「异常 → 分类 → 落定」。
+    """把 ``RunDriver`` 依赖的 service 与观测替换为最小替身，只观察「异常 → 分类 → 落定」。
 
     ``build_operations_error`` 非空时模拟门面尚未构造就失败的路径。
     """
     state_service = run_state_service or _RecordingRunStateService()
 
-    tasks = SimpleNamespace(get_task=lambda task_id: SimpleNamespace(id=task_id, workspace_id=9))
-    monkeypatch.setattr(run_driver, "get_task_service", lambda: tasks)
     monkeypatch.setattr(
         run_driver,
         "get_conversation_run_ledger",
@@ -206,15 +204,11 @@ def _make_runtime(
         ),
     )
 
-    async def _noop_fire(_context: object) -> None:
-        return None
-
     def _build(*_args: object, **_kwargs: object) -> object:
         if build_operations_error is not None:
             raise build_operations_error
         return operations
 
-    monkeypatch.setattr(run_driver.HookInterceptor, "async_safe_fire", _noop_fire)
     monkeypatch.setattr(RuntimeContext, "for_run", classmethod(_build))
     monkeypatch.setattr(
         AgentRuntimeConfig, "for_run", classmethod(lambda *_args: object())

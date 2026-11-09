@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from pathlib import Path
 import re
 from concurrent.futures import Future
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 from app.tools.tool_handler.mcp_tool import MCPTool
+from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_models.mcp_args import MCPArgs
 from app.tools.tool_models.read_file_args import ReadFileArgs
 from app.tools.tool_models.terminal_session_args import TerminalWriteArgs
@@ -159,13 +161,15 @@ def test_mcp_json_string_is_decoded_once_at_tool_argument_boundary(monkeypatch):
             future.set_result(asyncio.run(coroutine))
             return future
 
-    monkeypatch.setattr("app.tools.tool_handler.mcp_tool.read_mcp_configuration", lambda: None)
     monkeypatch.setattr(
-        "app.tools.tool_handler.mcp_tool.enabled_servers",
-        lambda _: [SimpleNamespace(name="server")],
+        "app.tools.tool_handler.mcp_tool.available_servers",
+        lambda _: [SimpleNamespace(name="server", scope=SimpleNamespace(kind="system"))],
     )
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", _Pool)
-    observation = MCPTool().execute(**result.arguments)
+    context = ToolExecutionContext(
+        task_id=1, workspace_id=1, workspace_root=Path("."), step_id="step", run_id=1
+    )
+    observation = MCPTool().execute(**result.arguments, execution_context=context)
     assert observation.status == "success"
     assert received == [("server", "remote", value)]
     # 校验不得改写上下文中持久化的原始模型参数。

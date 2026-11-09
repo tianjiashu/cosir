@@ -12,7 +12,6 @@ from app.assistant_transport.service.conversation_task_state_rebuilder import (
 )
 from app.config.configuration import get_tool_registry
 from app.core.events import ToolCallIntentEvent, ToolCallStatusChangedEvent
-from app.core.hook import HookInterceptor, HookResult
 from app.core.tool.call_intent import display_call_arguments, model_parameters_with_intent
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
 from app.core.tool.execute.tool_executor import ToolExecutor
@@ -86,7 +85,7 @@ def test_invalid_intent_never_reaches_handler_or_running(tmp_path, monkeypatch, 
     assert not events
 
 
-def test_handler_and_hook_only_receive_business_args_context_keeps_original_intent(
+def test_handler_only_receives_business_args_context_keeps_original_intent(
     tmp_path, monkeypatch
 ):
     seen = []
@@ -109,28 +108,16 @@ def test_handler_and_hook_only_receive_business_args_context_keeps_original_inte
         ]
     )
 
-    def hook(value):
-        if value.tool_arguments is not None:
-            assert value.tool_arguments == {"value": 1}
-            return HookResult(modified_arguments={"value": 2})
-        return HookResult.allow()
-
-    monkeypatch.setattr(HookInterceptor, "safe_fire", hook)
     monkeypatch.setattr("app.core.tool.execute.tool_executor.emit", lambda event: None)
     call = ToolCall(
         tool_name="probe", call_id="c", arguments='{"intent":"  检查数据  ","value":"1"}'
     )
     assert ToolExecutor(registry).execute(call, context(tmp_path), {"probe"}).status == "success"
-    assert seen == [(2, "检查数据", "检查数据")]
-    monkeypatch.setattr(
-        HookInterceptor,
-        "safe_fire",
-        lambda _: HookResult(modified_arguments={"value": 2, "intent": "override"}),
-    )
-    assert ToolAccessGate(registry).evaluate(call, context(tmp_path)).denial is not None
+    # ``intent`` 是调用意图，不进业务参数：收紧空白后只留在运行上下文里。
+    assert seen == [(1, "检查数据", "检查数据")]
 
 
-def test_mcp_json_normalization_is_not_revalidated_after_hook(tmp_path, monkeypatch):
+def test_mcp_json_normalization_is_not_revalidated(tmp_path):
     registry = ToolRegistry(
         [
             ToolDefinition(
@@ -142,7 +129,6 @@ def test_mcp_json_normalization_is_not_revalidated_after_hook(tmp_path, monkeypa
             )
         ]
     )
-    monkeypatch.setattr(HookInterceptor, "safe_fire", lambda _: HookResult.allow())
     call = ToolCall(
         tool_name="mcp",
         call_id="c",

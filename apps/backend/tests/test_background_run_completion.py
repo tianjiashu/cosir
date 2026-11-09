@@ -8,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
-from app.core.hook import hook_registry
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.workflow import workflow
 from app.core.workflow.branch import task_title
@@ -123,7 +122,6 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
                     return current
                 await changed.wait()
 
-    monkeypatch.setattr(hook_registry, "_registry", hook_registry.HookRegistry())
     monkeypatch.setattr(execute_terminal, "LocalExecutionBackend", Command)
     monkeypatch.setattr(
         workflow,

@@ -175,9 +175,7 @@ def test_filter_reads_the_space_agent_and_never_creates_a_manager(
     的弱引用 manager，空闲 Task 视 GC 时机漏收通知。
     """
     from app.core.context import runtime_message_context_manager as manager_module
-    from app.service.configuration.runtime_notices.agent_catalog_change import (
-        AgentCatalogChange,
-    )
+    from app.service.configuration.runtime_notices.catalog_change import CatalogChange
 
     def forbid_creation(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("广播过滤不得创建 context manager")
@@ -194,10 +192,11 @@ def test_filter_reads_the_space_agent_and_never_creates_a_manager(
         current="新全局规则\n",
     )
     assert delta is not None
-    change = AgentCatalogChange(
+    change = CatalogChange(
+        catalog="agents",
         scope=None,
-        action="created",
-        agent_id="writer",
+        action="added",
+        entry_id="writer",
         previous_description=None,
         current_description="编写文档",
     )

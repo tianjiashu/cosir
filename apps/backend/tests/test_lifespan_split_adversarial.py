@@ -704,7 +704,7 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     """把 ``app.lifespan`` 的重依赖替换为可观测 stub，避免真实 DB/网络/服务启动。
 
     替换的是 ``app.lifespan`` 模块命名空间里已导入的符号（lifespan 内部直接按局部名解析），
-    因此不会改动生产代码，也不触发真实存储/终端/Hook 副作用。
+    因此不会改动生产代码，也不触发真实存储/终端副作用。
     """
 
     recorder = _Recorder()
@@ -775,12 +775,6 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         "set_agent_team_configuration_service",
         record("set_agent_team_configuration_service"),
     )
-    monkeypatch.setattr(lifespan_module.HookInterceptor, "safe_fire", _safe_fire_stub(recorder))
-
-    hook_package = importlib.import_module("app.core.hook")
-    monkeypatch.setattr(
-        hook_package, "initialize_hook_registry", record("init_hook_registry")
-    )
 
     return recorder
 
@@ -791,16 +785,6 @@ def _shutdown_logging_stub(recorder: _Recorder) -> Any:
     def _stub(*args: Any, **kwargs: Any) -> None:
         recorder.calls.append("shutdown_logging")
         recorder.shutdown_logging_calls += 1
-
-    return _stub
-
-
-def _safe_fire_stub(recorder: _Recorder) -> Any:
-    """构造记录 Hook 事件的 ``HookInterceptor.safe_fire`` stub。"""
-
-    def _stub(context: Any, *args: Any, **kwargs: Any) -> None:
-        event = getattr(getattr(context, "event", None), "value", None) or str(context)
-        recorder.calls.append(f"safe_fire:{event}")
 
     return _stub
 
@@ -838,7 +822,6 @@ def test_lifespan_happy_path_marks_ready_then_stopped(
     )
     assert calls.index("ensure_system_agent_team_config_dir") < calls.index("build_agent_registry")
     assert calls.index("build_agent_registry") < calls.index("set_agent_registry")
-    assert "init_hook_registry" in calls
     assert calls.count("install_logging") == 2, "启动期应重建一次日志管线"
 
     assert _read_state(boot_file)["phase"] == "stopped"
@@ -848,7 +831,7 @@ def test_lifespan_happy_path_marks_ready_then_stopped(
 def test_lifespan_recovers_after_binding_loop_and_before_ready(
     stubbed_lifespan: _Recorder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """重启恢复会物化 space、投递结论，须在绑定事件循环之后、SESSION_START（就绪）之前执行一次。"""
+    """重启恢复会物化 space、投递结论，须在绑定事件循环、装配工具系统之后执行一次。"""
 
     boot_file = _boot_state_file(monkeypatch, tmp_path)
     _write_phase(boot_file, "booting")
@@ -860,30 +843,7 @@ def test_lifespan_recovers_after_binding_loop_and_before_ready(
     assert calls.count("recover_after_restart") == 1
     assert calls.index("bind_loop") < calls.index("recover_after_restart")
     assert calls.index("set_tool_registry") < calls.index("recover_after_restart")
-    start_event = next(c for c in calls if c.startswith("safe_fire:"))
-    assert calls.index("recover_after_restart") < calls.index(start_event)
     assert _read_state(boot_file)["phase"] == "stopped"
-
-
-def test_lifespan_fires_session_start_and_end(
-    stubbed_lifespan: _Recorder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """SESSION_START 必须在启动步骤后、关闭编排前触发；SESSION_END 在关闭块最先触发。"""
-
-    boot_file = _boot_state_file(monkeypatch, tmp_path)
-    _write_phase(boot_file, "booting")
-    paths.override(DATA_DIR=tmp_path)
-
-    _run_lifespan_once()
-
-    calls = stubbed_lifespan.calls
-    start_events = [c for c in calls if c.startswith("safe_fire:")]
-    assert len(start_events) == 2, start_events
-    # SESSION_START 晚于依赖初始化与 Hook 注册表播种。
-    assert calls.index("init_hook_registry") < calls.index(start_events[0])
-    # SESSION_END 是关闭块的第一步，早于 executor / terminal / 依赖关闭。
-    assert calls.index(start_events[1]) < calls.index("spaces_aclose")
-    assert calls.index(start_events[1]) < calls.index("close_deps")
 
 
 def test_lifespan_startup_failure_reraises_and_marks_failed(
