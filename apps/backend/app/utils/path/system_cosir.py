@@ -46,6 +46,7 @@ _STORAGE_DIR_NAME: Final[str] = "storage"
 _LOG_DIR_NAME: Final[str] = "logs"
 _RUNTIME_DIR_NAME: Final[str] = "runtime"
 _MCP_TESTED_SERVERS_FILE_NAME: Final[str] = "mcp_tested_servers.json"
+_MODEL_CONFIG_FILE_NAME: Final[str] = "models.json"
 _DATABASE_FILE_NAME: Final[str] = "app.sqlite3"
 LOG_FILE_NAME: Final[str] = "backend.log"
 
@@ -188,6 +189,15 @@ def system_mcp_tested_servers_file() -> Path:
     return system_cosir_dir() / COSIR_CONFIG_DIR_NAME / _MCP_TESTED_SERVERS_FILE_NAME
 
 
+def system_model_config_file() -> Path:
+    """返回模型配置文件路径：连接与其下模型的唯一事实源。
+
+    只有系统级：文件里有 API Key，不能像 MCP、Skill 那样放进随仓库共享的 workspace ``.cosir``。
+    """
+
+    return system_cosir_dir() / COSIR_CONFIG_DIR_NAME / _MODEL_CONFIG_FILE_NAME
+
+
 def system_skills_dir() -> Path:
     """返回系统级 Skill 目录路径。"""
 
@@ -241,6 +251,7 @@ __all__ = [
     "system_instruction_file",
     "system_main_agent_prompt_file",
     "system_mcp_servers_file",
+    "system_model_config_file",
     "system_mcp_tested_servers_file",
     "system_skills_dir",
     "system_skills_config_file",

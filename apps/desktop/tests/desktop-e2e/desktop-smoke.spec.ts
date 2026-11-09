@@ -241,7 +241,7 @@ test("I10 real Electron: unified intent travels through real tools, background w
       const response = await fetch(`${base}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       expect(response.status, await response.clone().text()).toBe(200); return response.json();
     };
-    const config = await post("/model-configs", { config_name: "本机意图验收", base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "local-test-only", model_name: "native-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true });
+    const config = (await post("/configuration/model-connections", { name: "本机意图验收", base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "local-test-only", models: [{ model_name: "native-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true }] }) as { models: { config_id: string; connection_id: string; model_name: string }[] }).models[0]!;
     const root = path.join(home, "intent-workspace"); fs.mkdirSync(root); fs.writeFileSync(path.join(root, "sample.txt"), "真实文件内容");
     releasePath = path.join(root, "release");
     const { workspace_id } = await post("/workspaces", { name: "意图真机验收", root_path: root });
@@ -352,8 +352,8 @@ test("fork context: reply boundary, presentation, restart and source deletion", 
       expect(response.status, await response.clone().text()).toBe(200); return response.json();
     };
     const state = async (id: number) => (await (await fetch(`${base}/tasks/${id}/assistant/state`)).json()) as import("../../lib/assistant/contract").TransportState;
-    const replacement = await post("/model-configs", { config_name: "目录默认模型", base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "local-test-only", model_name: "decoy-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true });
-    const config = await post("/model-configs", { config_name: "本机分叉验收", base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "local-test-only", model_name: "fork-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true });
+    const replacement = (await post("/configuration/model-connections", { name: "目录默认模型", base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "local-test-only", models: [{ model_name: "decoy-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true }] }) as { models: { config_id: string; connection_id: string; model_name: string }[] }).models[0]!;
+    const config = (await post("/configuration/model-connections", { name: "本机分叉验收", base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "local-test-only", models: [{ model_name: "fork-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true }] }) as { models: { config_id: string; connection_id: string; model_name: string }[] }).models[0]!;
     const root = path.join(home, "fork-workspace"); fs.mkdirSync(root);
     const { workspace_id } = await post("/workspaces", { name: "分叉真机验收", root_path: root });
     const { task_id } = await post(`/workspaces/${workspace_id}/tasks`, { text: "分叉验收源", creationCommandId: "native-fork-source" });
@@ -434,7 +434,7 @@ test("fork context: reply boundary, presentation, restart and source deletion", 
     await expect.poll(async () => (await state(manual.task_id)).activity?.status).toBe("completed");
     // A frozen seed is provenance. The existing admission boundary rejects a deleted model,
     // while the human can choose a replacement for a branch that still has no local Run.
-    const removedModel = await fetch(`${base}/model-configs/${config.config_id}`, { method: "DELETE" });
+    const removedModel = await fetch(`${base}/configuration/model-connections/${config.connection_id}/models/${encodeURIComponent(config.model_name)}`, { method: "DELETE" });
     expect(removedModel.ok, await removedModel.text()).toBe(true);
     const requestCount = requests.length;
     const rejected = await fetch(`${base}/tasks/${human.task_id}/messages`, {

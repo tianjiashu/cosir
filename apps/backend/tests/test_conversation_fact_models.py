@@ -38,7 +38,7 @@ from app.storage.model.conversation_run_model import ConversationRunModel
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.model.task_model import TaskModel
 from app.storage.store_engines import initialize_app_schema
-from tests.model_config_fixtures import model_configs
+from tests.model_config_fixtures import model_config_record, model_configs
 
 
 def _timestamp() -> datetime:
@@ -166,8 +166,10 @@ def _input_service(
         user_input_module,
         "get_model_config_service",
         lambda: model_configs(
-            lambda _id: SimpleNamespace(
-                supports_reasoning_effort=supports_reasoning_effort, supports_image=False
+            lambda _id: model_config_record(
+                model_name="m",
+                context_window_k=8,
+                supports_reasoning_effort=supports_reasoning_effort,
             )
         ),
     )
@@ -189,7 +191,7 @@ def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch,
     service = _input_service(monkeypatch, tmp_path)
     command = ConversationRunCommand(text=f'请阅读 <file path="{attachment_path}" />')
 
-    prepared = service.prepare(7, command, 3).body
+    prepared = service.prepare(7, command, "test/m3").body
 
     # 模型正文与展示正文是同一份规范化胶囊文本。
     assert prepared.text == command.text
@@ -202,7 +204,7 @@ def test_prepare_returns_an_unqueued_user_input_message_with_delivery(
 ) -> None:
     service = _input_service(monkeypatch, tmp_path)
 
-    message = service.prepare(7, ConversationRunCommand(text="检查项目"), 3, delivery="next_run")
+    message = service.prepare(7, ConversationRunCommand(text="检查项目"), "test/m3", delivery="next_run")
 
     assert (message.id, message.kind, message.delivery) == (None, "user_input", "next_run")
     assert message.project_to_transport is True
@@ -214,12 +216,12 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch, tmp_pat
     queued = service.prepare(
         7,
         ConversationRunCommand(text="检查项目", disabled_tool_groups=["终端工具"]),
-        3,
+        "test/m3",
         "high",
     ).body
     assert queued.launch.options.disabled_tool_groups == ["终端工具"]
     assert queued.launch.options.reasoning_effort == "high"
-    assert queued.launch.model_config_id == 3
+    assert queued.launch.model_config_id == "test/m3"
     # Run 的配置只随 ``launch`` 走；消息体自身没有散落的执行选项或附件字段。
     assert set(queued.model_dump()) == {"text", "presentation", "launch"}
 
@@ -242,7 +244,7 @@ def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch, tmp_p
     service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
 
     with pytest.raises(UserInputRejectedError) as caught:
-        service.prepare(7, ConversationRunCommand(text="你好"), 3)
+        service.prepare(7, ConversationRunCommand(text="你好"), "test/m3")
 
     assert caught.value.code == "MODEL_CONFIG_UNAVAILABLE"
 

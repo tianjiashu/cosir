@@ -68,7 +68,7 @@ def test_unknown_metadata_and_duplicate_creator_are_rejected():
     node = node_extra().team_node.model_dump(mode="json")
     assert set(node) == {"role", "system_prompt", "structured_output", "model_settings"}
     with pytest.raises(ValidationError):
-        TaskNodeConfig.model_validate({**node, "model_config_id": 1})
+        TaskNodeConfig.model_validate({**node, "model_config_id": "test/m1"})
 
 
 @pytest.mark.usefixtures("isolated_storage")

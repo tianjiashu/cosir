@@ -256,7 +256,7 @@ def _validate_source(value: object) -> None:
 
 def _validate_launch(value: object) -> None:
     launch = as_shape(value, ConversationRunLaunch, "snapshot launch")
-    require_int(launch["modelConfigId"], "snapshot launch modelConfigId", nullable=True)
+    require_str(launch["modelConfigId"], "snapshot launch modelConfigId", nullable=True)
     require_str(launch["reasoningEffort"], "snapshot launch reasoningEffort", nullable=True)
     require_str_list(launch["disabledToolGroups"], "snapshot launch disabledToolGroups")
 

@@ -24,6 +24,7 @@ from app.utils.path.system_cosir import (
     system_instruction_file,
     system_main_agent_prompt_file,
     system_mcp_servers_file,
+    system_model_config_file,
     system_skills_config_file,
     system_skills_dir,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "system_instruction_file",
     "system_main_agent_prompt_file",
     "system_mcp_servers_file",
+    "system_model_config_file",
     "system_skills_config_file",
     "system_skills_dir",
     "workspace_agent_config_dir",

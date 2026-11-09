@@ -44,7 +44,7 @@ export function MarkdownConfigurationPanel({
   const save = () => {
     if (!blocked) state.save();
   };
-  useUnsavedChanges("settings", adapter.label, state.dirty);
+  useUnsavedChanges(adapter.label, state.dirty);
   useHotkeys(
     APP_SHORTCUTS.saveConfiguration.keys,
     save,

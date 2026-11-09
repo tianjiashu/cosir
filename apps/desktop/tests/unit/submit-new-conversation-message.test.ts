@@ -13,7 +13,7 @@ const input: SubmitNewConversationMessageInput = {
   text: "hello",
   imageAttachments: [],
   disabledToolGroups: [],
-  modelConfigId: 1,
+  modelConfigId: "c/m1",
   reasoningEffort: "high",
   traceId: "0".repeat(32),
 };
@@ -32,7 +32,7 @@ describe("submitNewConversationMessage", () => {
     expect(url).toMatch(/\/tasks\/7\/messages$/);
     expect(JSON.parse(String(init.body))).toMatchObject({
       message: { role: "user", parts: [{ type: "text", text: "hello" }] },
-      modelConfigId: 1,
+      modelConfigId: "c/m1",
     });
   });
 

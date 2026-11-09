@@ -17,6 +17,7 @@ from app.service import depends
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
 from app.tools.tool_handler import execute_terminal
 from app.tools.tool_handler.terminal import ExecutionResult
+from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_events
 
 
@@ -25,8 +26,8 @@ from tests.sdk_fixtures import sdk_events
     ["command", "delegate", "fork", "cancel", "restart", "queued_restart", "delegate_restart"],
 )
 async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypatch, last):
-    model = depends.get_model_config_service().create_config(
-        config_name="test",
+    model = create_model_config(
+        name="test",
         base_url="http://127.0.0.1",
         api_key="test",
         model_name="test",

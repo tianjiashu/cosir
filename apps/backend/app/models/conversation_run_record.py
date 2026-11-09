@@ -46,7 +46,7 @@ class ConversationRunRecord:
     end_reason: str | None = None
     final_output: str | None = None
     agent_id: str | None = None
-    model_config_id: int | None = None
+    model_config_id: str | None = None
     context_window_total: int | None = None
     options: ConversationRunOptions = field(default_factory=ConversationRunOptions)
     usage: ConversationRunUsage | None = None

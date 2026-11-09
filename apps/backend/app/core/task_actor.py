@@ -252,10 +252,25 @@ class TaskActor:
                 if woken is not None:
                     self._start(woken, pending, fresh_run=False, preceding_run=None)
             elif isinstance(action, dispatch_policy.StartRun):
-                # 新 Run 只改当前活动：``create_run`` 提交后投影 RunInitializedEvent，前端经增量收到，
-                # 不重建、不推整份快照（长对话里每轮重发全部历史）。
-                run = await asyncio.to_thread(self._ledger.create_run, self.task_id, action.launch)
-                self._start(run, pending, fresh_run=True, preceding_run=current)
+                launch = action.launch
+                # 模型在配置文件里，Run 只存 id：模型被删或文件写坏后，发起配置可能
+                # 指向不存在的模型。开不了新 Run 就不动，消息留在队列里等用户换模型再发，
+                # 与原来外键置空后 ``RunLaunch.from_run`` 返回 None 的「不动」一致；
+                # ``dispatch_policy`` 保持纯函数，不读文件。
+                models = service_depends.get_model_config_service()
+                if not await asyncio.to_thread(models.exists, launch.model_config_id):
+                    log.warning(
+                        "task_actor_model_unavailable",
+                        extra={
+                            "msg": "发起配置的模型不可用，暂不开新 Run",
+                            "data": {"task_id": self.task_id, "model": launch.model_config_id},
+                        },
+                    )
+                else:
+                    # 新 Run 只改当前活动：``create_run`` 提交后投影 RunInitializedEvent，前端经
+                    # 增量收到，不重建、不推整份快照（长对话里每轮重发全部历史）。
+                    run = await asyncio.to_thread(self._ledger.create_run, self.task_id, launch)
+                    self._start(run, pending, fresh_run=True, preceding_run=current)
         self._publish_state()
 
     async def cancel(self, reason: CancelReason = "user") -> None:

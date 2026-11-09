@@ -13,11 +13,6 @@ from app.api.schemas.request.EnvironmentChangeRequest import EnvironmentChangeRe
 from app.api.schemas.request.EnvironmentUpdateRequest import EnvironmentUpdateRequest
 from app.api.schemas.request.ForkTaskRequest import ForkTaskRequest
 from app.api.schemas.request.GlobalInstructionUpdateRequest import GlobalInstructionUpdateRequest
-from app.api.schemas.request.ModelConfigCreateRequest import ModelConfigCreateRequest
-from app.api.schemas.request.ModelConfigDiscoveryRequest import ModelConfigDiscoveryRequest
-from app.api.schemas.request.ModelConfigFieldsRequest import ModelConfigFieldsRequest
-from app.api.schemas.request.ModelConfigTestRequest import ModelConfigTestRequest
-from app.api.schemas.request.ModelConfigUpdateRequest import ModelConfigUpdateRequest
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
 from app.api.schemas.response.ContextMessageResponse import (
     ContextMessageResponse,
@@ -34,8 +29,6 @@ from app.api.schemas.response.EnvironmentResponse import (
 )
 from app.api.schemas.response.GlobalInstructionResponse import GlobalInstructionResponse
 from app.api.schemas.response.HealthResponse import HealthResponse
-from app.api.schemas.response.ModelConfigDiscoveryResponse import ModelConfigDiscoveryResponse
-from app.api.schemas.response.ModelConfigResponse import ModelConfigResponse
 from app.api.schemas.response.TaskResponse import TaskResponse
 from app.api.schemas.response.WorkspaceFileIgnoreResponse import WorkspaceFileIgnoreResponse
 from app.api.schemas.response.WorkspaceInstructionResponse import WorkspaceInstructionResponse
@@ -61,13 +54,6 @@ __all__ = [
     "GlobalInstructionResponse",
     "GlobalInstructionUpdateRequest",
     "HealthResponse",
-    "ModelConfigCreateRequest",
-    "ModelConfigDiscoveryRequest",
-    "ModelConfigDiscoveryResponse",
-    "ModelConfigFieldsRequest",
-    "ModelConfigResponse",
-    "ModelConfigTestRequest",
-    "ModelConfigUpdateRequest",
     "TaskResponse",
     "WorkspaceFileIgnoreResponse",
     "WorkspaceInstructionResponse",

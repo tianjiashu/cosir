@@ -24,7 +24,7 @@ class AgentConfiguration:
     system_prompt: str = ""
     allowed_tools: list[str] = field(default_factory=list)
     max_steps: int = AgentProfile.max_steps
-    model_config_id: int | None = None
+    model_config_id: str | None = None
     model_settings: dict[str, Any] = field(default_factory=dict)
 
     @classmethod

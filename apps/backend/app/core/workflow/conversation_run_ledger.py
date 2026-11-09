@@ -63,7 +63,7 @@ class ConversationRunLedger:
                 ConversationRunStatus.RUNNING.value,
                 agent_id=launch.agent_id,
                 model_config_id=launch.model_config_id,
-                context_window_total=config.context_window_k * 1000,
+                context_window_total=config.model.context_window_k * 1000,
                 options=launch.options,
                 session=session,
             )

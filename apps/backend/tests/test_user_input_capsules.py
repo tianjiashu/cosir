@@ -11,7 +11,7 @@ from app.assistant_transport.service.user_input_service import UserInputService
 from app.core.user_input.capsules import FileCapsule, serialize_capsule
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.errors.input_errors import UserInputRejectedError
-from tests.model_config_fixtures import model_configs
+from tests.model_config_fixtures import model_config_record, model_configs
 
 _TASK_ID = 7
 
@@ -27,7 +27,7 @@ def _service(monkeypatch: pytest.MonkeyPatch, workspace_root: Path) -> UserInput
         user_input_module,
         "get_model_config_service",
         lambda: model_configs(
-            lambda _id: SimpleNamespace(supports_reasoning_effort=False, supports_image=False)
+            lambda _id: model_config_record(model_name="m", context_window_k=8)
         ),
     )
     monkeypatch.setattr(
@@ -43,7 +43,7 @@ def _service(monkeypatch: pytest.MonkeyPatch, workspace_root: Path) -> UserInput
 
 
 def _prepare(service: UserInputService, text: str):
-    return service.prepare(_TASK_ID, ConversationRunCommand(text=text), 1)
+    return service.prepare(_TASK_ID, ConversationRunCommand(text=text), "test/m1")
 
 
 def _write_skill(root: Path, name: str, *, enabled: list[str]) -> None:

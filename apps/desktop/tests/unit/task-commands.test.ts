@@ -19,7 +19,7 @@ import { HttpError } from "@/lib/http/http-error";
 
 const REQUEST: TaskMessageRequest = {
   message: { role: "user", parts: [{ type: "text", text: "hello" }] },
-  modelConfigId: 1,
+  modelConfigId: "c/m1",
   reasoningEffort: "high",
   disabledToolGroups: ["文件"],
 };

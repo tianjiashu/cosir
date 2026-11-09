@@ -136,7 +136,7 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   // 模型配置不再只能从 composer 下拉进入，配置中心有独立的「模型」标签。
   await settingsNav.getByRole("link", { name: "模型", exact: true }).click();
   await expect(page).toHaveURL(/\/settings\/models$/);
-  await expect(page.getByRole("heading", { name: "添加模型配置" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "连接 Demo" })).toBeVisible();
 
   await settingsNav.getByRole("link", { name: "全局 AGENTS.md" }).click();
   await expect(page).toHaveURL(/\/settings\/instructions$/);

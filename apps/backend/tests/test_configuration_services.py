@@ -156,15 +156,15 @@ def test_agent_configuration_round_trip_preserves_model_override(
             description="审查变更",
             system_prompt="只审查，不修改文件。",
             allowed_tools=["read_file"],
-            model_config_id=7,
+            model_config_id="test/m7",
             model_settings={"temperature": 0.1},
         ),
     )
-    assert _document(service, "reviewer").model_config_id == 7
-    assert updated.configuration.model_config_id == 7
+    assert _document(service, "reviewer").model_config_id == "test/m7"
+    assert updated.configuration.model_config_id == "test/m7"
     # 注册表 profile 只保存模型选择与偏好，连接字段在 Run 装配时才解析。
     reviewer = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer")
-    assert reviewer.model_config_id == 7
+    assert reviewer.model_config_id == "test/m7"
     assert reviewer.model_settings.temperature == 0.1
     service.delete("reviewer")
     assert registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer") is None

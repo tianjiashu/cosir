@@ -8,16 +8,23 @@ describe("modelUnavailable", () => {
     expect(modelUnavailable({ status: "loading", catalog: null })).toBe(false);
     expect(modelUnavailable({ status: "error", catalog: null })).toBe(true);
     expect(modelUnavailable({ status: "ready", catalog: buildModelCatalog([]) })).toBe(true);
+    const connection = { connection_id: "demo", name: "Demo", base_url: "u", api_key: "k", models: [] };
+    // 只有连接、没有模型时同样算缺失。
+    expect(modelUnavailable({ status: "ready", catalog: buildModelCatalog([connection]) })).toBe(true);
     expect(modelUnavailable({
       status: "ready",
       catalog: buildModelCatalog([{
-        config_id: 1,
-        config_name: "Demo",
-        model_name: "demo-model",
-        context_window_k: 128,
-        supports_reasoning_effort: false,
-        supports_image: false,
-      } as Parameters<typeof buildModelCatalog>[0][number]]),
+        ...connection,
+        models: [{
+          config_id: "demo/demo-model",
+          connection_id: "demo",
+          model_name: "demo-model",
+          context_window_k: 128,
+          supports_thinking: false,
+          supports_reasoning_effort: false,
+          supports_image: false,
+        }],
+      }]),
     })).toBe(false);
   });
 });

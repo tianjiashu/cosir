@@ -18,7 +18,7 @@ from app.core.workflow.execution_state.react_execution_state import ReactExecuti
 from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
 from app.service.recover_service import RecoverService
-from tests.model_config_fixtures import model_configs
+from tests.model_config_fixtures import model_config_record, model_configs
 from tests.sdk_fixtures import sdk_completion
 
 
@@ -197,19 +197,6 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
 
 def _creation_service(store, monkeypatch, projector):
     """创建与冷读共用临时 SQLite，模型解析只注入配置事实。"""
-    from app.storage.model.model_config_model import ModelConfigModel
-
-    with store.factory.begin() as session:
-        session.add(
-            ModelConfigModel(
-                id=1,
-                config_name="test",
-                base_url="http://localhost",
-                api_key="test",
-                model_name="test",
-                context_window_k=128,
-            )
-        )
     service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = store.runs
     service._task = store.tasks
@@ -221,21 +208,13 @@ def _creation_service(store, monkeypatch, projector):
     monkeypatch.setattr(
         "app.core.workflow.conversation_run_ledger.get_model_config_service",
         lambda: SimpleNamespace(
-            get_config=lambda _id: SimpleNamespace(
-                supports_reasoning_effort=False,
-                supports_image=False,
-                context_window_k=128,
-            )
+            get_config=lambda _id: model_config_record(model_name="test", context_window_k=128)
         ),
     )
     monkeypatch.setattr(
         "app.assistant_transport.service.user_input_service.get_model_config_service",
         lambda: model_configs(
-            lambda _id: SimpleNamespace(
-                supports_reasoning_effort=False,
-                supports_image=False,
-                context_window_k=128,
-            )
+            lambda _id: model_config_record(model_name="test", context_window_k=128)
         ),
     )
     return service
@@ -263,7 +242,7 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
     service = _creation_service(store, monkeypatch, Projector())
     body = UserInputBody(
         text="hello",
-        launch=RunLaunch(model_config_id=1),
+        launch=RunLaunch(model_config_id="test/m1"),
         presentation=UserInputPresentation(text="hello"),
     )
     TaskMessageQueue().put(store.task.id, TaskMessage.of(body))

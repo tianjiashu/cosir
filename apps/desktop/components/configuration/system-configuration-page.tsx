@@ -11,7 +11,7 @@ import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-
 import { AgentTeamConfigurationPanel } from "@/components/agent-team/configuration-panel";
 import { MCPConfigurationPanel } from "@/components/configuration/mcp-configuration-panel";
 import { SkillConfigurationPanel } from "@/components/configuration/skill-configuration-panel";
-import { ModelConfigManager } from "@/components/model/model-config-manager";
+import { ModelConnectionsPanel } from "@/components/model/connections/model-connections-panel";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
@@ -92,7 +92,7 @@ function EnvironmentEditor({ groups }: { groups: EnvironmentGroup[] }) {
   const serverValues = useMemo(() => environmentFormValues(groups), [groups]);
   const values = { ...serverValues, ...edits };
   const dirtyCount = Object.keys(edits).length;
-  useUnsavedChanges("settings", "环境变量", dirtyCount > 0);
+  useUnsavedChanges("环境变量", dirtyCount > 0);
 
   const mutation = useMutation({
     mutationFn: updateEnvironmentConfiguration,
@@ -176,22 +176,6 @@ function EnvironmentEditor({ groups }: { groups: EnvironmentGroup[] }) {
 }
 
 /**
- * 配置中心的「模型」标签：与 composer 模型设置对话框共用 ModelConfigManager。
- * 保存 / 删除后的模型目录刷新由 ModelConfigManager 失效共享查询缓存完成，这里不另做。
- */
-function ModelsPanel() {
-  return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="font-medium">模型</h2>
-        <p className="text-muted-foreground mt-1 text-xs">管理 OpenAI 兼容接口的连接配置，测试连接通过后才能保存。</p>
-      </div>
-      <ModelConfigManager unsavedScope="settings" variant="page" />
-    </div>
-  );
-}
-
-/**
  * 系统配置中心（/settings/:tab）。标签来自路由，布局与导航由 SettingsPageLayout 统一提供。
  */
 export function SystemConfigurationPage({ tab }: { tab: SystemSettingsTabId }) {
@@ -199,7 +183,7 @@ export function SystemConfigurationPage({ tab }: { tab: SystemSettingsTabId }) {
     <SettingsPageLayout tabs={SYSTEM_SETTINGS_TABS} basePath="/settings" navLabel="系统配置分类">
       {tab === "appearance" && <AppearanceSettingsPanel />}
       {tab === "agents" && <AgentConfigurationPanel workspaceId={null} />}
-      {tab === "models" && <ModelsPanel />}
+      {tab === "models" && <ModelConnectionsPanel />}
       {tab === "agent-teams" && <AgentTeamConfigurationPanel workspaceId={null} />}
       {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} requireContent description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent 提示词" />}
       {tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="在这里写入系统级工作约束…" saveLabel="保存全局 AGENTS.md" />}

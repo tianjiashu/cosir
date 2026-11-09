@@ -27,6 +27,7 @@ from app.core.agents.model_settings import ModelSettings
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.tool.schemas.tool_names import ALL_TOOL_NAMES
 from app.service.depends import get_model_config_service
+from app.service.model_config.model_config_service import ModelConfigFileError
 from app.utils.json_utils import read_json_object
 
 if TYPE_CHECKING:
@@ -84,7 +85,7 @@ _DOCUMENT_FIELD_TYPES: dict[str, tuple[type, ...]] = {
     "system_prompt": (str,),
     "allowed_tools": (list,),
     "max_steps": (int,),
-    "model_config_id": (int, type(None)),
+    "model_config_id": (str, type(None)),
     "model_settings": (dict,),
     "structured_output": (dict, type(None)),
 }
@@ -217,7 +218,7 @@ class AgentProfile:
     allowed_tools: list[str] = field(default_factory=list)
     agent_type: AgentProfileType = field(default=AgentProfileType.CHILD)
     description: str | None = field(default=None, kw_only=True)
-    model_config_id: int | None = None
+    model_config_id: str | None = None
     model_settings: ModelSettings = field(default_factory=ModelSettings.default_settings)
     structured_output: StructuredOutputSpec | None = None
     max_steps: int = 100
@@ -338,12 +339,12 @@ def parse_agent_profile_document(
     if model_config_id is not None:
         try:
             get_model_config_service().get_config(model_config_id)
-        except KeyError:
+        except (KeyError, ModelConfigFileError):
             if strict_model_config:
                 raise AgentProfileConfigError(
                     f"Agent 配置无效，文件={source}，model_config_id 必须为空或引用有效模型"
                 ) from None
-            # 非严格加载允许无效选择降级为「未选模型」；真正运行时由 Run 选择配置。
+            # 非严格加载允许无效选择（含模型配置文件写坏）降级为「未选模型」；真正运行时由 Run 选择配置。
             model_config_id = None
     raw_structured_output = document.get("structured_output")
     structured_output = (

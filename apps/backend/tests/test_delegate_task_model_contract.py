@@ -179,7 +179,7 @@ def test_delegate_writes_the_child_depth(
     monkeypatch.setattr(
         delegate_task,
         "get_conversation_run_ledger",
-        lambda: SimpleNamespace(get_run=lambda _id: SimpleNamespace(model_config_id=1)),
+        lambda: SimpleNamespace(get_run=lambda _id: SimpleNamespace(model_config_id="test/m1")),
     )
     registry = configuration.build_agent_registry()
     monkeypatch.setattr(configuration, "get_agent_registry", lambda: registry)

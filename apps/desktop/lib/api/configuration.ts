@@ -7,7 +7,7 @@ export type AgentConfiguration = {
   system_prompt: string;
   allowed_tool_groups: string[];
   max_steps: number;
-  model_config_id: number | null;
+  model_config_id: string | null;
   model_settings: Record<string, unknown>;
   source: "builtin" | "user_file" | string;
   path: string | null;

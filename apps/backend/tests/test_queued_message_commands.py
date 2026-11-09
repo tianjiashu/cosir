@@ -25,7 +25,7 @@ from app.core.workflow.message_queue.task_message import (
 from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
 from app.models.conversation_input import UserInputPresentation
 
-_LAUNCH = RunLaunch(model_config_id=5)
+_LAUNCH = RunLaunch(model_config_id="test/m5")
 
 
 def _input(text: str) -> TaskMessage:

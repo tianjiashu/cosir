@@ -150,7 +150,7 @@ export function MCPConfigurationPanel({ workspaceId }: { workspaceId: ExtensionS
   });
 
   const currentJson = editorMode === "json" ? jsonDraft : formatMcpServerJson(fromDraft(draft));
-  useUnsavedChanges("settings", "MCP 服务编辑", dialogOpen && currentJson !== initialJson);
+  useUnsavedChanges("MCP 服务编辑", dialogOpen && currentJson !== initialJson);
 
   const busy = saveMutation.isPending;
 
@@ -168,7 +168,7 @@ export function MCPConfigurationPanel({ workspaceId }: { workspaceId: ExtensionS
   }
 
   async function closeEditor() {
-    if (!(await confirmDiscardUnsaved("settings"))) return;
+    if (!(await confirmDiscardUnsaved())) return;
     setDialogOpen(false);
   }
 

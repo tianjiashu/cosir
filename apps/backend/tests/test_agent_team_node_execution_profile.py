@@ -25,7 +25,6 @@ from unittest.mock import patch
 
 import pytest
 
-from app.models.task_extra import TaskExtra, TaskNodeConfig
 from app.core.agents import agent_runtime_config as runtime_config_module
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
@@ -40,8 +39,8 @@ from app.models.agent_team.configuration.agent_team_configuration import AgentTe
 from app.models.agent_team.state.agent_team_run_components import AgentTeamRunRuntime
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_run_record import ConversationRunRecord
-from app.models.model_config_record import ModelConfigRecord
-from app.service.depends import get_model_config_service
+from app.models.task_extra import TaskExtra, TaskNodeConfig
+from tests.model_config_fixtures import create_model_config, model_config_record
 
 # --------------------------------------------------------------------------- #
 # 构造助手
@@ -88,7 +87,7 @@ def _node_structured_output() -> StructuredOutputSpec:
 
 
 def _node_runtime(
-    model_config_id: int,
+    model_config_id: str,
     *,
     role: str = "develop-role",
     model_settings: dict[str, object] | None = None,
@@ -112,7 +111,7 @@ def _node_runtime(
 
 
 def _node_run(
-    model_config_id: int,
+    model_config_id: str,
     *,
     reasoning_effort: str | None = None,
 ) -> ConversationRunRecord:
@@ -142,7 +141,14 @@ def _node_run_profile(
 
     task = SimpleNamespace(
         workspace_id=1,
-        extra=TaskExtra(team_node=TaskNodeConfig(role=node_runtime.role, system_prompt=node_runtime.system_prompt, structured_output=node_runtime.structured_output, model_settings=node_runtime.model_settings)),
+        extra=TaskExtra(
+            team_node=TaskNodeConfig(
+                role=node_runtime.role,
+                system_prompt=node_runtime.system_prompt,
+                structured_output=node_runtime.structured_output,
+                model_settings=node_runtime.model_settings,
+            )
+        ),
         # 节点 Task 固化的 schema 就是快照冻结的工具名（Coordinator 建节点时解析）。
         tool_schemas=[{"name": name} for name in node_runtime.allowed_tools],
     )
@@ -168,8 +174,8 @@ def _node_run_profile(
 def _create_model_config(*, model_name: str, base_url: str) -> int:
     """写入一条真实 ``model_configs`` 记录并返回其主键。"""
 
-    record = get_model_config_service().create_config(
-        config_name=f"team-node-{model_name}",
+    record = create_model_config(
+        name=f"team-node-{model_name}",
         base_url=base_url,
         api_key=f"{model_name}-secret",
         model_name=model_name,
@@ -238,11 +244,8 @@ def _team_configuration() -> dict[str, object]:
     }
 
 
-_PARENT_MODEL_CONFIG = ModelConfigRecord(
-    id=1,
-    config_name="main",
-    base_url="http://127.0.0.1/v1",
-    api_key="main-secret",
+_PARENT_MODEL_CONFIG = model_config_record(
+    name="main", base_url="http://127.0.0.1/v1", api_key="main-secret",
     model_name="main-model",
     context_window_k=32,
     supports_thinking=True,
@@ -259,7 +262,7 @@ def _materialized_parent_profile() -> AgentRuntimeConfig:
         system_prompt="main system prompt",
         allowed_tools=["agent_team", "read_file"],
         agent_type=AgentProfileType.MAIN,
-        model_config_id=1,
+        model_config_id="test/m1",
     )
     return AgentRuntimeConfig.resolve(definition, _PARENT_MODEL_CONFIG)
 
@@ -373,7 +376,7 @@ def test_node_run_without_model_config_fails_at_assembly() -> None:
     """
 
     registry_profile = _registry_child_profile()
-    node_runtime = _node_runtime(1, model_settings={"reasoning_effort": "low"})
+    node_runtime = _node_runtime("test/m1", model_settings={"reasoning_effort": "low"})
     node_run = _node_run(1)
     node_run.model_config_id = None
 

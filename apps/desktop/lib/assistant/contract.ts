@@ -150,10 +150,10 @@ export type TransportTerminalRunStatus = Extract<TransportRunStatus, "completed"
 
 /**
  * Run 冻结的发起配置（运行期锁定）：活动 Run 期间 composer 只读显示这份配置并以它发送。
- * `modelConfigId` 在模型配置被删除后为 null。
+ * `modelConfigId` 是「连接 id/模型名」；模型从配置文件删除后仍是原 id，在目录里查不到即视为已删除。
  */
 export type TransportRunLaunch = {
-  modelConfigId: number | null;
+  modelConfigId: string | null;
   reasoningEffort: string | null;
   /** 冻结的是用户关掉的工具组名（不是工具名），composer 锁定期直接按组回显。 */
   disabledToolGroups: string[];

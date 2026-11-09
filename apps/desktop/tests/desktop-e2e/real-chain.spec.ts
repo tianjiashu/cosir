@@ -55,7 +55,7 @@ async function startModel() {
 class Env {
   base = "";
   root = "";
-  modelConfigId = 0;
+  modelConfigId = "";
   private constructor(readonly app: ElectronApplication, readonly page: Page, readonly home: string, readonly model: Awaited<ReturnType<typeof startModel>>) {}
 
   static async open(titles: string[]): Promise<{ env: Env; tasks: number[] }> {
@@ -64,7 +64,7 @@ class Env {
     const env = new Env(app, page, home, model);
     await expect(page.getByRole("navigation", { name: "工作区任务列表" })).toBeVisible({ timeout: 120_000 });
     env.base = await backendBaseUrl(page);
-    const config = await env.post("/model-configs", { config_name: "真实链路", base_url: `http://127.0.0.1:${model.port}/v1`, api_key: "local-test-only", model_name: "chain-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true }) as { config_id: number };
+    const config = (await env.post("/configuration/model-connections", { name: "真实链路", base_url: `http://127.0.0.1:${model.port}/v1`, api_key: "local-test-only", models: [{ model_name: "chain-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true }] }) as { models: { config_id: string; connection_id: string; model_name: string }[] }).models[0]!;
     env.modelConfigId = config.config_id;
     env.root = path.join(home, "chain-workspace"); fs.mkdirSync(env.root);
     const { workspace_id } = await env.post("/workspaces", { name: "真实链路验收", root_path: env.root }) as { workspace_id: number };

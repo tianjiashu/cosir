@@ -23,8 +23,8 @@ from app.models import ConversationRunRecord
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.enums.conversation_run_status import ConversationRunStatus
 
-_LAUNCH = RunLaunch(model_config_id=1)
-_OTHER = RunLaunch(model_config_id=2)
+_LAUNCH = RunLaunch(model_config_id="test/m1")
+_OTHER = RunLaunch(model_config_id="test/m2")
 
 
 def _run(status: str, launch: RunLaunch = _LAUNCH) -> ConversationRunRecord:

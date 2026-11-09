@@ -45,7 +45,7 @@ async def test_send_message_rejects_main_profile_before_creating_run(
     class _RunService:
         def require_current_run(self, _task_id: int) -> SimpleNamespace:
             return SimpleNamespace(
-                id=11, status="completed", agent_id="main_agent", model_config_id=1
+                id=11, status="completed", agent_id="main_agent", model_config_id="test/m1"
             )
 
     task_service = _TaskService()
@@ -101,7 +101,7 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
         ),
     )
     monkeypatch.setattr(send_message, "get_workspace_service", lambda: None)
-    run = SimpleNamespace(id=11, status="completed", agent_id="main_agent", model_config_id=3,
+    run = SimpleNamespace(id=11, status="completed", agent_id="main_agent", model_config_id="test/m3",
                           options=ConversationRunOptions(reasoning_effort="high", disabled_tool_groups=["浏览器工具"]))
     monkeypatch.setattr(
         configuration, "get_agent_registry", lambda: pytest.fail("resolved a child profile")
@@ -134,7 +134,7 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
 
     assert result.status == "success"
     [kwargs] = prepared
-    assert (kwargs["agent_id"], kwargs["model_config_id"]) == ("main_agent", 3)
+    assert (kwargs["agent_id"], kwargs["model_config_id"]) == ("main_agent", "test/m3")
     assert kwargs["reasoning_effort"] == "high"
     assert kwargs["disabled_tool_groups"] == ["浏览器工具"]
     assert enqueued == [(41, "agent-message")]

@@ -42,6 +42,7 @@ from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
 from app.tools.tool_handler import execute_terminal
 from app.tools.tool_handler.terminal import ExecutionResult
+from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_events
 
 
@@ -164,8 +165,8 @@ class LiveColdEnv:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, steps: Sequence[Any]
     ) -> None:
         self.model = ScriptedModel(steps)
-        self.model_config = depends.get_model_config_service().create_config(
-            config_name="test",
+        self.model_config = create_model_config(
+            name="test",
             base_url="http://127.0.0.1",
             api_key="test",
             model_name="test",

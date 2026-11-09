@@ -55,8 +55,8 @@ class AgentRuntimeConfig:
 
         异常:
             RuntimeError: 注册表解析不到该 Agent，或 Run 未记录模型配置。
-            KeyError: Run 指向的 Task / 工作区已不存在，或 ``model_config_id`` 指向的配置已不存在。
-            ModelSettingsError: 模型配置不完整。
+            KeyError: Run 指向的 Task / 工作区已不存在，或 ``model_config_id`` 指向的模型已不在。
+            ModelConfigFileError: 模型配置文件无效。
             pydantic.ValidationError: 节点快照或其输出契约不合法。
         """
 
@@ -103,11 +103,7 @@ class AgentRuntimeConfig:
         *,
         reasoning_effort: ReasoningEffort | None = None,
     ) -> AgentRuntimeConfig:
-        """由 Agent 定义（注册表单例，不被修改）与本 Run 的模型选择解析。
-
-        异常:
-            ModelSettingsError: 模型配置不完整（见 :func:`resolve_model`）。
-        """
+        """由 Agent 定义（注册表单例，不被修改）与本 Run 的模型选择解析。"""
 
         return cls(
             agent_id=definition.agent_id,

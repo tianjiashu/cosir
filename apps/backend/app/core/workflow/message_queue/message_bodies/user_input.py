@@ -30,12 +30,15 @@ class RunLaunch(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     # 交接新 Run 时的 Agent 身份；Task 不绑定 Agent，身份随发起配置走。
     agent_id: str = "main_agent"
-    model_config_id: int
+    model_config_id: str
     options: ConversationRunOptions = Field(default_factory=ConversationRunOptions)
 
     @classmethod
     def from_run(cls, run: "ConversationRunRecord | None") -> "RunLaunch | None":
-        """沿用某个 Run 已冻结的发起配置；Run 缺 Agent 或模型配置（已被删除）时返回 ``None``。"""
+        """沿用某个 Run 已冻结的发起配置；Run 没记录 Agent 或模型时返回 ``None``。
+
+        模型被删后 Run 仍保留原 id，这里照样返回；能否开新 Run 由 ``TaskActor`` 查模型是否还在。
+        """
 
         if run is None or run.agent_id is None or run.model_config_id is None:
             return None

@@ -10,7 +10,7 @@ import { getAgentConfigurations } from "@/lib/api/configuration";
 import { getToolGroups } from "@/lib/api/tool-groups";
 import { getFileInfo } from "@/lib/api/workspace-files";
 import { getMCPServers, getSkills } from "@/lib/api/extensions";
-import { getModelConfigs } from "@/lib/api/model-configs";
+import { getModelConfigFile } from "@/lib/api/model-connections";
 import { queryKeys } from "@/lib/query/query-keys";
 
 export const toolGroupsQueryOptions = () => queryOptions({
@@ -41,7 +41,12 @@ export const mcpServersQueryOptions = (workspaceId: number | null) => queryOptio
   queryFn: ({ signal }) => getMCPServers(workspaceId, { signal }),
 });
 
-export const modelConfigsQueryOptions = () => queryOptions({
-  queryKey: queryKeys.modelConfigs(),
-  queryFn: ({ signal }) => getModelConfigs({ signal }),
+/**
+ * 模型配置文件可以在外部编辑器里手改：只对这一个查询开启窗口聚焦重拉，切回应用即看到改动
+ * （各编辑卡的未保存内容是组件本地状态，不受重拉影响）。
+ */
+export const modelConnectionsQueryOptions = () => queryOptions({
+  queryKey: queryKeys.modelConnections(),
+  queryFn: ({ signal }) => getModelConfigFile({ signal }),
+  refetchOnWindowFocus: true,
 });

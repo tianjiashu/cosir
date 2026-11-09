@@ -160,7 +160,7 @@ class SendMessageTool(HandlerBase):
         return RunLaunch(
             agent_id=current_run.agent_id or "",
             model_config_id=current_profile.model_config_id
-            or cast(int, current_run.model_config_id),
+            or cast(str, current_run.model_config_id),
             options=ConversationRunOptions(reasoning_effort=reasoning_effort),
         )
 

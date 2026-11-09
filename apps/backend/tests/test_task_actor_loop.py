@@ -133,7 +133,7 @@ class _Driver:
 def _user(text: str = "hi") -> UserInputBody:
     return UserInputBody(
         text=text,
-        launch=RunLaunch(model_config_id=1),
+        launch=RunLaunch(model_config_id="test/m1"),
         presentation=UserInputPresentation(text=text),
     )
 
@@ -167,7 +167,11 @@ def harness(monkeypatch):
             [message.id for message in queue.pending_nowait(_TASK_ID)]
         )
     )
+    # 模型配置文件替身：开新 Run 前 actor 查模型是否还在，列在 ``missing`` 里的视为已删除。
+    missing: set[str] = set()
+    models = SimpleNamespace(exists=lambda model_config_id: model_config_id not in missing)
     for getter, fake in (
+        ("get_model_config_service", models),
         ("get_conversation_run_ledger", ledger),
         ("get_task_service", ledger),
         ("get_task_message_queue", queue),
@@ -190,7 +194,12 @@ def harness(monkeypatch):
     actor = TaskActor(space)
     _Driver.mailbox = actor.mailbox
     return SimpleNamespace(
-        actor=actor, queue=queue, ledger=ledger, refreshed=refreshed, settled=settled
+        actor=actor,
+        queue=queue,
+        ledger=ledger,
+        refreshed=refreshed,
+        settled=settled,
+        missing_models=missing,
     )
 
 
@@ -213,6 +222,22 @@ async def test_new_message_on_idle_task_starts_a_run_with_all_pending(harness) -
 
     [run] = harness.ledger.created
     assert _Driver.drives == [(run.id, [notice.id, user.id])]
+    await harness.actor.abort()
+
+
+async def test_input_whose_model_was_deleted_stays_queued_until_a_new_input(harness) -> None:
+    """模型从配置文件删掉后 Run 仍留着原 id：开不了新 Run 就不动，消息留在队列里。"""
+
+    harness.missing_models.add(_user().launch.model_config_id)
+    harness.actor.start()
+    harness.queue.put(_user("old model"))
+    await _settle()
+
+    assert harness.ledger.created == []
+    harness.missing_models.clear()
+    harness.queue.put(_user("new model"))
+    await _settle()
+    assert len(harness.ledger.created) == 1
     await harness.actor.abort()
 
 
@@ -311,7 +336,7 @@ async def test_request_cancel_before_start_is_dropped_without_raising(harness, m
 
 
 async def test_suspended_run_is_woken_by_new_message_not_by_notice(harness) -> None:
-    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     harness.ledger.created.clear()
     harness.actor.start()
@@ -329,7 +354,7 @@ async def test_suspended_run_is_woken_by_new_message_not_by_notice(harness) -> N
 
 
 async def test_resume_starts_the_stopped_run_and_rejects_while_running(harness) -> None:
-    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "cancelled"
 
     await harness.actor.resume()
@@ -341,7 +366,7 @@ async def test_resume_starts_the_stopped_run_and_rejects_while_running(harness) 
 
 async def test_resume_is_rejected_after_stop_for_deletion(harness) -> None:
     """删除前的停止是墓碑：恢复是唯一不经 loop 开出执行的入口，停止之后不得再放行。"""
-    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "cancelled"
 
     await harness.actor.stop()
@@ -555,7 +580,7 @@ async def test_wait_quiescent_returns_false_after_the_loop_stopped(harness) -> N
 
 async def test_advance_failure_does_not_report_quiescent(harness) -> None:
     """推进失败不算「已处理」：否则等待方会把上一条 Run 的结论当成这次的。"""
-    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "cancelled"
     harness.ledger.created.clear()
     harness.ledger.fail_create = True
@@ -678,7 +703,7 @@ async def test_cancelling_suspended_run_drops_background_entries(harness) -> Non
     """Run 取消即撤销本 Task 的后台等待：撤销回调被调用，之后的完成返回 False、不再投递。"""
     from app.core.tool.background.backgraound_registry import background_registry
 
-    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     cancelled: list[str] = []
     background_registry.register(

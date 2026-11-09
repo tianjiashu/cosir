@@ -17,7 +17,7 @@ function snapshot(turn: number | null, status = "completed", text = "阅读内�
     }],
     messageOffset: 0,
     activity: {modelActivity: null, turn, resumable: status === "cancelled" || status === "failed", status, endReason: null, error: null, usage: null, contextWindowTotal: null,
-      launch: { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: [] }, startedAt: "2026-10-27T00:00:00.000Z" },
+      launch: { modelConfigId: "demo/demo-model", reasoningEffort: null, disabledToolGroups: [] }, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
   };
 }

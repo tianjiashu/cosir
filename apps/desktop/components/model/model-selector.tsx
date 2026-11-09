@@ -48,6 +48,8 @@ export type ModelOption = {
   disabled?: boolean;
   /** Extra terms matched by ModelSelector.Search, in addition to id and name. */
   keywords?: readonly string[];
+  /** 分组标题（如所属连接）：相邻且同组的选项归在一个标题下；不传则不显示标题。 */
+  group?: string;
   /**
    * Reasoning effort levels the model supports. Pass `true` for the default
    * low/high/max levels, or a custom list. Omit for models without
@@ -443,15 +445,28 @@ function ModelSelectorList({
       {children ?? (
         <>
           <ModelSelectorEmpty />
-          <CommandGroup>
-            {models.map((model) => (
-              <ModelSelectorItem key={model.id} model={model} />
-            ))}
-          </CommandGroup>
+          {groupAdjacent(models).map((group, index) => (
+            <CommandGroup key={index} heading={group.heading}>
+              {group.models.map((model) => (
+                <ModelSelectorItem key={model.id} model={model} />
+              ))}
+            </CommandGroup>
+          ))}
         </>
       )}
     </CommandList>
   );
+}
+
+/** 把相邻且 `group` 相同的选项归成一段；调用方负责让同组选项相邻（目录按连接展开即如此）。 */
+function groupAdjacent(models: readonly ModelOption[]) {
+  const groups: { heading?: string; models: ModelOption[] }[] = [];
+  for (const model of models) {
+    const last = groups.at(-1);
+    if (last && last.heading === model.group) last.models.push(model);
+    else groups.push({ heading: model.group, models: [model] });
+  }
+  return groups;
 }
 
 type ModelSelectorEmptyProps = ComponentPropsWithoutRef<

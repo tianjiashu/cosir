@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
 import { useStore } from "zustand";
 
 import { MarkdownEditor } from "@/components/markdown-editor/markdown-editor";
@@ -14,7 +13,6 @@ import {
   ModelSelectorValue,
   type ModelOption,
 } from "@/components/model/model-selector";
-import { buttonVariants } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -33,8 +31,10 @@ const NO_AGENT_MODEL = "__agent_model_default__";
 function toAgentModelOption(model: ModelCatalogModel): ModelOption {
   return {
     id: model.optionId,
-    name: model.label,
-    keywords: [model.configName, model.modelName],
+    name: model.modelName,
+    triggerName: model.label,
+    group: model.connectionName,
+    keywords: [model.connectionName],
   };
 }
 
@@ -42,8 +42,8 @@ function AgentModelSelector({
   modelConfigId,
   onChange,
 }: {
-  modelConfigId: number | null;
-  onChange: (modelConfigId: number | null) => void;
+  modelConfigId: string | null;
+  onChange: (modelConfigId: string | null) => void;
 }) {
   const { catalog, status, retry } = useModelCatalog();
   const modelOptions = useMemo(() => {
@@ -67,7 +67,6 @@ function AgentModelSelector({
       status={status}
       modelCount={catalog?.models.length ?? 0}
       onRetry={retry}
-      configure={<Link to="/settings/models" className={buttonVariants({ variant: "link", size: "sm" })}>配置模型</Link>}
     >
       <ModelSelectorRoot
         models={modelOptions}

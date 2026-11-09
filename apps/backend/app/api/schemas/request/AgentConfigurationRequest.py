@@ -39,7 +39,7 @@ class AgentConfigurationRequest(BaseModel):
     system_prompt: str
     allowed_tool_groups: list[str]
     max_steps: int = 100
-    model_config_id: int | None = None
+    model_config_id: str | None = None
     model_settings: dict[str, Any] = Field(default_factory=dict)
 
     def to_configuration(self) -> AgentConfiguration:

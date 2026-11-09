@@ -9,7 +9,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictInt, StrictStr
 
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
@@ -38,7 +38,7 @@ class RunInitializedEvent(WorkflowEventEnvelope):
     type: Literal["run_initialized"] = "run_initialized"
     created_at: datetime
     context_window_total: StrictInt | None = Field(default=None, ge=0)
-    model_config_id: StrictInt | None = None
+    model_config_id: StrictStr | None = None
     options: ConversationRunOptions = Field(default_factory=ConversationRunOptions)
 
 

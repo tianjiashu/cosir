@@ -18,7 +18,7 @@ test("新对话 Assistant Transport 被拒绝时不导航、不丢输入并清�
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:workspace:7",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
   await page.route(`${API_ORIGIN}/tasks/*/messages`, async (route) => {
@@ -48,7 +48,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:workspace:7",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
   const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
@@ -57,25 +57,24 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
     const body = (response.request().postDataJSON() ?? {}) as Record<string, unknown>;
     assistantRequests.push({ url: response.url(), body, status: response.status() });
   });
-  await page.route(`${API_ORIGIN}/model-configs`, async (route) => {
+  await page.route(`${API_ORIGIN}/configuration/model-connections`, async (route) => {
     await route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify([{
-        config_id: 1,
-        config_name: "Demo",
+      body: JSON.stringify({ path: "/models.json", connections: [{
+        connection_id: "demo",
+        name: "Demo",
         base_url: "https://api.example.com",
         api_key: "test-api-key",
-        model_name: "demo-model",
-        context_window_k: 128,
-        api_key_configured: true,
-        enabled: true,
-        sort_order: 0,
-        created_at: "",
-        updated_at: "",
-        supports_thinking: false,
-        supports_image: false,
-        supports_reasoning_effort: false,
-      }]),
+        models: [{
+          config_id: "demo/demo-model",
+          connection_id: "demo",
+          model_name: "demo-model",
+          context_window_k: 128,
+          supports_thinking: false,
+          supports_image: false,
+          supports_reasoning_effort: false,
+        }],
+      }] }),
     });
   });
 
@@ -85,7 +84,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await page.getByRole("option", { name: /demo/ }).click();
   await expect(page.getByRole("combobox", { name: "选择模型" })).toContainText("demo-model");
   await expect.poll(() => page.evaluate(() => window.localStorage.getItem("cosir:model-config-selection:workspace:7"))).toBe(
-    JSON.stringify({ modelConfigId: 1, reasoningEffort: null }),
+    JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
   );
   expect(await page.evaluate(() => window.localStorage.getItem("cosir:model-config-selection:default"))).toBeNull();
   await page.getByRole("button", { name: "工具", exact: true }).click();
@@ -108,7 +107,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(assistantRequests[0]?.url).toMatch(/\/tasks\/42\/messages$/);
   expect(assistantRequests[0]?.body).toMatchObject({
     message: { role: "user", parts: [{ type: "text", text: "你好" }] },
-    modelConfigId: 1,
+    modelConfigId: "demo/demo-model",
     disabledToolGroups: ["文件"],
   });
   // 任务页的工具组取自首条消息冻结进 Run 的配置（快照 activity.launch），不另存本地。
@@ -159,7 +158,7 @@ test("任务页面重挂载时自动恢复未结束的 run", async ({ page, requ
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:task:42",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
@@ -186,7 +185,7 @@ test("不同 task 的 Assistant Transport 会话与消息互相隔离", async ({
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:task:100",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
@@ -217,7 +216,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:task:102",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
@@ -295,7 +294,7 @@ test("不可恢复时继续运行被同步拒绝，提示错误并复位按钮",
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:task:105",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
   await page.goto("/tasks/105");
@@ -330,7 +329,7 @@ test("取消后订阅断开时，前端有限重连并解除停止状态", async
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:task:103",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
@@ -364,7 +363,7 @@ test("撤回入口只给最新用户消息：撤回后内容放回输入框，�
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:task:103",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
@@ -426,7 +425,7 @@ test("撤回被拒时消息保留、输入框不动", async ({ page, request }) 
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:task:104",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
@@ -457,7 +456,7 @@ test("attach 被拒后进入有限重连，订阅恢复后继续接收输出", a
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:task:106",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
   await page.goto("/tasks/106");

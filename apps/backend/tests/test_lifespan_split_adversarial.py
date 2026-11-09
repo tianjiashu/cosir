@@ -120,9 +120,12 @@ def test_all_domain_routes_registered_on_same_app() -> None:
         "/tasks/{task_id}/fork",
         "/workspaces/{workspace_id}/attachments",
         "/workspaces/{workspace_id}/attachments/{asset_id}/content",
-        "/model-configs",
-        "/model-configs/{config_id}",
-        "/model-configs/test",
+        "/configuration/model-connections",
+        "/configuration/model-connections/{connection_id}",
+        "/configuration/model-connections/{connection_id}/models",
+        "/configuration/model-connections/{connection_id}/models/{model_name}",
+        "/configuration/model-connections/discover",
+        "/configuration/model-connections/test",
         "/tasks/{task_id}/messages",
         "/tasks/{task_id}/queued-messages/{message_id}",
         "/tasks/{task_id}/messages/{message_id}/withdraw",
@@ -143,7 +146,7 @@ def test_domain_route_modules_share_the_singleton() -> None:
     for module_name in (
         "app.api.tasks_api",
         "app.api.workspaces_api",
-        "app.api.model_configs_api",
+        "app.api.configuration.models",
         "app.assistant_transport.assistant_api",
     ):
         module = sys.modules.get(module_name) or importlib.import_module(module_name)

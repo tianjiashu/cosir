@@ -54,7 +54,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     def current(task_id):
         if _TASKS[task_id].current_run_id is None:
             return None
-        return SimpleNamespace(agent_id="main_agent", model_config_id=3,
+        return SimpleNamespace(agent_id="main_agent", model_config_id="test/m3",
                                options=ConversationRunOptions(reasoning_effort="high"))
     monkeypatch.setattr(send_message, "get_task_service", lambda: SimpleNamespace(
         get_task=_TASKS.__getitem__, require_current_run=current,
@@ -111,7 +111,7 @@ def test_child_tells_its_parent_without_waiting(env, tmp_path) -> None:
     assert env.enqueued == [(_PARENT, "agent-message:根因找到了")]
     [prepared] = env.prepared
     assert prepared["source"].task_id == _CHILD
-    assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", 3)
+    assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", "test/m3")
     assert not background_registry.live_background(_CHILD)
 
 
@@ -146,11 +146,11 @@ def test_target_without_first_run_inherits_its_queued_launch(env, tmp_path, monk
     assert _send(_PARENT, target.id, "hi", tmp_path).status == "error"
     assert not env.enqueued
     pending.append(TaskMessage.of(AgentMessageBody(
-        text="first", launch=RunLaunch(model_config_id=7),
+        text="first", launch=RunLaunch(model_config_id="test/m7"),
         source=MessageSource(task_id=_PARENT, name="parent"),
     )))
     assert _send(_PARENT, target.id, "hi", tmp_path).status == "success"
-    assert env.prepared[0]["model_config_id"] == 7
+    assert env.prepared[0]["model_config_id"] == "test/m7"
 
 
 @pytest.mark.parametrize(
@@ -169,26 +169,27 @@ def test_deriver_is_only_the_agent_that_delegated_or_forked(fields, deriver) -> 
 
 def test_new_manual_fork_uses_frozen_launch_without_source_task(env, tmp_path, monkeypatch):
     target = _task(51, task_type="user_fork", current_run_id=None,
-                   extra=fork_extra(987654, model_config_id=8))
+                   extra=fork_extra(987654, model_config_id="test/m8"))
     monkeypatch.setitem(_TASKS, 51, target)
     monkeypatch.setattr(send_message, "get_task_message_queue",
                         lambda: SimpleNamespace(pending_nowait=lambda _: []))
     assert _send(_PARENT, 51, "continue the branch", tmp_path).status == "success"
-    assert env.prepared[-1]["model_config_id"] == 8
+    assert env.prepared[-1]["model_config_id"] == "test/m8"
     assert env.prepared[-1]["reasoning_effort"] == "low"
 
 
 def test_deleted_fork_model_is_rejected_before_enqueue(env, isolated_storage, tmp_path, monkeypatch):
     """Real model deletion + send_message preparation: a frozen ID never bypasses admission."""
     from app.core.tool.multi_agent.agent_message import prepare_agent_message
-    from app.storage.crud.model_config_crud import ModelConfigCrud
+    from app.service.depends import get_model_config_service
+    from tests.model_config_fixtures import create_model_config
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.models.task_kind import TaskType
 
-    configs = ModelConfigCrud()
-    model = configs.create(config_name="fork", base_url="http://localhost", api_key="test",
-                           model_name="test", context_window_k=8, supports_reasoning_effort=True)
+    model = create_model_config(name="fork", base_url="http://localhost", api_key="test",
+                                model_name="test", context_window_k=8,
+                                supports_reasoning_effort=True)
     workspace = WorkspaceCrud().create("review", str(tmp_path))
     target = TaskCrud().create(workspace.id, "branch", task_type=TaskType.USER_FORK,
                                extra=fork_extra(_PARENT, model_config_id=model.id))
@@ -197,7 +198,7 @@ def test_deleted_fork_model_is_rejected_before_enqueue(env, isolated_storage, tm
                         lambda: SimpleNamespace(pending_nowait=lambda _: []))
     # Keep the real preparation and its single model-validation boundary.
     monkeypatch.setattr(send_message, "prepare_agent_message", prepare_agent_message)
-    configs.delete(model.id)
+    get_model_config_service().delete_connection(model.connection.id)
     result = _send(_PARENT, target.id, "continue", tmp_path)
     assert result.status == "error"
     assert "重新选择模型" in result.content

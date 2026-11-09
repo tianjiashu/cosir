@@ -44,7 +44,7 @@ class AgentConfigurationResponse(BaseModel):
     system_prompt: str
     allowed_tool_groups: list[str]
     max_steps: int
-    model_config_id: int | None = None
+    model_config_id: str | None = None
     model_settings: dict[str, Any] = Field(default_factory=dict)
     source: str
     path: str | None = None

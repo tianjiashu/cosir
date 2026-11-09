@@ -44,7 +44,6 @@ if TYPE_CHECKING:
     from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
     from app.storage.crud.conversation_run_crud import ConversationRunCrud
     from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-    from app.storage.crud.model_config_crud import ModelConfigCrud
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.tools.host.host_link import HostLink
@@ -301,17 +300,8 @@ def get_workspace_service() -> WorkspaceService:
 
 
 @_process_singleton
-def get_model_config_crud() -> ModelConfigCrud:
-    """返回进程级模型连接配置 CRUD 单例。"""
-
-    from app.storage.crud.model_config_crud import ModelConfigCrud
-
-    return ModelConfigCrud()
-
-
-@_process_singleton
 def get_model_config_service() -> ModelConfigService:
-    """返回进程级模型连接配置服务单例。"""
+    """返回进程级模型配置（连接与模型）服务单例。"""
 
     from app.service.model_config import ModelConfigService
 

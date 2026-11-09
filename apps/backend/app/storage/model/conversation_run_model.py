@@ -30,9 +30,8 @@ class ConversationRunModel(StorageBase):
     task_id: Mapped[int] = mapped_column(Integer, ForeignKey("tasks.id"), nullable=False)
     execution_data: Mapped[dict[str, JsonValue]] = mapped_column(JSON, nullable=False)
     agent_id: Mapped[str | None] = mapped_column(Text)
-    model_config_id: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("model_configs.id", ondelete="SET NULL")
-    )
+    # 模型 id（「连接 id/模型名」）；模型在配置文件里，没有外键，删除模型后这里保留原 id。
+    model_config_id: Mapped[str | None] = mapped_column(Text)
     # 与本次 Run 的 usage 配对，避免 Task 后续切换模型后改变历史占用比例。
     context_window_total: Mapped[int | None] = mapped_column(Integer)
     options: Mapped[dict[str, JsonValue]] = mapped_column(JSON, nullable=False)

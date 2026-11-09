@@ -12,7 +12,7 @@ def _message(text: str = "hello", **extra: object) -> dict[str, object]:
 
 def _send(**overrides: object) -> SendMessageRequest:
     return SendMessageRequest.model_validate(
-        {"message": _message(), "modelConfigId": 1, **overrides}
+        {"message": _message(), "modelConfigId": "test/m1", **overrides}
     )
 
 
@@ -39,7 +39,7 @@ def test_text_parts_are_joined_and_images_map_to_asset_ids() -> None:
                     {"type": "text", "text": "后"},
                 ],
             },
-            "modelConfigId": 1,
+            "modelConfigId": "test/m1",
         }
     )
 
@@ -56,7 +56,7 @@ def test_text_parts_are_joined_and_images_map_to_asset_ids() -> None:
         {"disabledToolGroups": ["联网工具", "联网工具"]},
         {"disabledToolGroups": [" "]},
         {"runId": 1},
-        {"modelConfigId": 0},
+        {"modelConfigId": ""},
         # 附件不再有独立字段：本机文件与工作区引用是正文里的胶囊。
         {"message": _message(attachments=[])},
     ],

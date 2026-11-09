@@ -23,16 +23,16 @@ import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes"
 import { agentConfigurationsQueryOptions, toolGroupsQueryOptions } from "@/lib/query/query-options";
 
 /** 子 Agent 卡片上的模型名：目录就绪后找不到即视为已删除的配置；目录未就绪时只给编号，避免误报「未知」。 */
-function agentModelLabel(modelConfigId: number, catalog: ModelCatalog | null): string {
+function agentModelLabel(modelConfigId: string, catalog: ModelCatalog | null): string {
   const model = catalog?.byOptionId.get(modelOptionId(modelConfigId));
   if (model) return model.label;
-  return catalog ? unknownModelName(modelConfigId) : `模型 #${modelConfigId}`;
+  return catalog ? unknownModelName(modelConfigId) : modelConfigId;
 }
 
 
 /** 离开编辑器会丢弃表单，先经统一的未保存守卫确认。 */
 async function leaveEditor(onClose: () => void) {
-  if (await confirmDiscardUnsaved("settings")) onClose();
+  if (await confirmDiscardUnsaved()) onClose();
 }
 
 function AgentEditor({
@@ -52,7 +52,7 @@ function AgentEditor({
   }));
   const dirty = useStore(session.store, (state) => state.dirty);
   const saving = useStore(session.store, (state) => state.saving);
-  useUnsavedChanges("settings", initial ? `子 Agent「${initial.agent_id}」` : "新建子 Agent", dirty);
+  useUnsavedChanges(initial ? `子 Agent「${initial.agent_id}」` : "新建子 Agent", dirty);
 
   const mutation = useMutation({
     mutationFn: () => session.save((input, { agentId }) => (

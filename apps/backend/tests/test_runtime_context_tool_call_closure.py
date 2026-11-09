@@ -885,7 +885,7 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
     with env.factory.begin() as session:
         body = UserInputBody(
             text="新消息",
-            launch=RunLaunch(model_config_id=1),
+            launch=RunLaunch(model_config_id="test/m1"),
             presentation=UserInputPresentation(text="新消息"),
         )
         TaskMessageCrud().append(session, [(env.task.id, TaskMessage.of(body))])

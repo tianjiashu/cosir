@@ -174,7 +174,7 @@ async function referenceWorkspace(
     if (theme) localStorage.setItem("cosir.theme-preference", theme);
     localStorage.setItem(
       "cosir:model-config-selection:workspace:7",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   }, theme);
   await routeFilesToRealBackend(page);

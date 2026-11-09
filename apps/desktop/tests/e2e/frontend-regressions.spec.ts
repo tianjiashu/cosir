@@ -30,7 +30,7 @@ test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输�
     window.localStorage.clear();
     window.localStorage.setItem(
       "cosir:model-config-selection:task:42",
-      JSON.stringify({ modelConfigId: 2, reasoningEffort: null }),
+      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
@@ -330,7 +330,7 @@ test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", 
   await page.route(`${API_ORIGIN}/tasks/{42,43}`, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
   // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
   for (const taskId of [42, 43]) await seedState(request, taskId, emptyState());
-  await page.route(`${API_ORIGIN}/model-configs`, (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
+  await page.route(`${API_ORIGIN}/configuration/model-connections`, (route) => route.fulfill({ json: { path: "/models.json", connections: [{ connection_id: "demo", name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", models: [{ config_id: "demo/demo-model", connection_id: "demo", model_name: "demo-model", context_window_k: 128, supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }] } }));
   // Task 由路径寻址，workspace 归属由后端从 Task 事实解析；这里只需核对请求命中的 Task。
   const requestUrls: string[] = [];
   await page.route(`${API_ORIGIN}/tasks/*/messages`, async (route) => {
@@ -339,8 +339,8 @@ test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", 
   });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:task:42", JSON.stringify({ modelConfigId: 2, reasoningEffort: null }));
-    window.localStorage.setItem("cosir:model-config-selection:task:43", JSON.stringify({ modelConfigId: 2, reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:task:42", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:task:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
 
   await page.goto("/");
@@ -373,11 +373,11 @@ test("同一侧栏内切换 Task 不会重新加载整个侧栏", async ({ page,
     workspaceTaskRequestCount += 1;
     await route.continue();
   });
-  await page.route(`${API_ORIGIN}/model-configs`, (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
+  await page.route(`${API_ORIGIN}/configuration/model-connections`, (route) => route.fulfill({ json: { path: "/models.json", connections: [{ connection_id: "demo", name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", models: [{ config_id: "demo/demo-model", connection_id: "demo", model_name: "demo-model", context_window_k: 128, supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }] } }));
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:task:42", JSON.stringify({ modelConfigId: 2, reasoningEffort: null }));
-    window.localStorage.setItem("cosir:model-config-selection:task:43", JSON.stringify({ modelConfigId: 2, reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:task:42", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:task:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
 
   await page.goto("/tasks/42");
@@ -396,7 +396,7 @@ test("Assistant Transport 会展示后端结构化错误", async ({ page, reques
   await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 103, title: "错误回归任务" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:task:103", JSON.stringify({ modelConfigId: 2, reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:task:103", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
   await page.route(`${API_ORIGIN}/tasks/103/messages`, (route) => route.fulfill({
     status: 400,
@@ -429,7 +429,7 @@ test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace �
   await page.route(`${API_ORIGIN}/tasks/{42,43}`, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
   // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
   for (const taskId of [42, 43]) await seedState(request, taskId, emptyState());
-  await page.route(`${API_ORIGIN}/model-configs`, (route) => route.fulfill({ json: [{ config_id: 2, config_name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", model_name: "demo-model", context_window_k: 128, api_key_configured: true, enabled: true, sort_order: 0, created_at: "", updated_at: "", supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }));
+  await page.route(`${API_ORIGIN}/configuration/model-connections`, (route) => route.fulfill({ json: { path: "/models.json", connections: [{ connection_id: "demo", name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", models: [{ config_id: "demo/demo-model", connection_id: "demo", model_name: "demo-model", context_window_k: 128, supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }] } }));
   // Task 由路径寻址，workspace 归属由后端从 Task 事实解析；这里只需核对请求命中的 Task。
   const requestUrls: string[] = [];
   await page.route(`${API_ORIGIN}/tasks/*/messages`, async (route) => {
@@ -438,7 +438,7 @@ test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace �
   });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:task:43", JSON.stringify({ modelConfigId: 2, reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:task:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
 
   await page.goto("/tasks/42");

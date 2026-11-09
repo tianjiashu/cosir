@@ -21,6 +21,7 @@ from app.service.configuration.agent_configuration import AgentConfiguration
 from app.service.configuration.agent_configuration_service import AgentConfigurationService
 from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
+from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_completion, sdk_events
 
 CALL_ID = "team-review"
@@ -79,8 +80,8 @@ class ReviewModel:
 
 
 def _model_config(name):
-    return depends.get_model_config_service().create_config(
-        config_name=name,
+    return create_model_config(
+        name=name,
         base_url="http://127.0.0.1",
         api_key="test",
         model_name="test",

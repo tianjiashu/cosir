@@ -32,7 +32,7 @@ _CAPSULE_LOOKALIKE = '参考 <file path="/missing.md" /> 这一段'
 
 
 def _body(text: str = "修复登录") -> AgentMessageBody:
-    return AgentMessageBody(text=text, launch=RunLaunch(model_config_id=1), source=_SOURCE)
+    return AgentMessageBody(text=text, launch=RunLaunch(model_config_id="test/m1"), source=_SOURCE)
 
 
 def test_render_tags_the_sender_and_escapes_the_text() -> None:
@@ -66,18 +66,18 @@ def test_prepare_carries_launch_and_rejects_empty_text(monkeypatch: pytest.Monke
     )
 
     message = agent_message_module.prepare_agent_message(
-        "继续", source=_SOURCE, agent_id="child_a", model_config_id=3, reasoning_effort="high"
+        "继续", source=_SOURCE, agent_id="child_a", model_config_id="test/m3", reasoning_effort="high"
     )
 
     assert message.kind == "agent_message"
     assert message.delivery == "immediate" and message.project_to_transport is True
     body = message.body
     assert isinstance(body, AgentMessageBody)
-    assert (body.launch.agent_id, body.launch.model_config_id) == ("child_a", 3)
+    assert (body.launch.agent_id, body.launch.model_config_id) == ("child_a", "test/m3")
     assert body.launch.options.reasoning_effort == "high"
     with pytest.raises(UserInputRejectedError):
         agent_message_module.prepare_agent_message(
-            "  ", source=_SOURCE, agent_id="child_a", model_config_id=3
+            "  ", source=_SOURCE, agent_id="child_a", model_config_id="test/m3"
         )
 
 

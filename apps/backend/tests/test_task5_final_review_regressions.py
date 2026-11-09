@@ -107,7 +107,7 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
         id=11,
         task_id=7,
         context_window_total=128_000,
-        model_config_id=1,
+        model_config_id="test/m1",
         options=ConversationRunOptions(),
         created_at=_RUN_CREATED_AT,
     )
@@ -140,13 +140,15 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
         "app.core.workflow.conversation_run_ledger.get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _config_id: SimpleNamespace(
-                supports_reasoning_effort=False,
-                supports_image=False,
-                context_window_k=128,
+                model=SimpleNamespace(
+                    supports_reasoning_effort=False,
+                    supports_image=False,
+                    context_window_k=128,
+                )
             )
         ),
     )
-    service.create_run(7, RunLaunch(agent_id="child_agent", model_config_id=1))
+    service.create_run(7, RunLaunch(agent_id="child_agent", model_config_id="test/m1"))
 
     assert [getattr(event, "type", None) for event in events] == ["run_initialized"]
 

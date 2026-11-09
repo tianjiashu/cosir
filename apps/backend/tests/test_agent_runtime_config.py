@@ -13,6 +13,7 @@ from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.agents.resolved_model import ResolvedModel
 from app.models.model_config_record import ModelConfigRecord
+from tests.model_config_fixtures import model_config_record
 
 
 def _definition(model_settings: ModelSettings | None = None) -> AgentProfile:
@@ -27,20 +28,17 @@ def _definition(model_settings: ModelSettings | None = None) -> AgentProfile:
     )
 
 
-def _model_config(**overrides: object) -> ModelConfigRecord:
-    values: dict[str, object] = {
-        "id": 3,
-        "config_name": "run",
-        "base_url": "https://run.test",
-        "api_key": "run-key",
-        "model_name": "run-model",
-        "context_window_k": 64,
-        "supports_thinking": True,
-        "supports_reasoning_effort": True,
-        "supports_image": True,
-    }
-    values.update(overrides)
-    return ModelConfigRecord(**values)  # type: ignore[arg-type]
+def _model_config() -> ModelConfigRecord:
+    return model_config_record(
+        connection_id="run",
+        base_url="https://run.test",
+        api_key="run-key",
+        model_name="run-model",
+        context_window_k=64,
+        supports_thinking=True,
+        supports_reasoning_effort=True,
+        supports_image=True,
+    )
 
 
 def test_resolve_flattens_definition_and_model_config() -> None:
@@ -55,7 +53,7 @@ def test_resolve_flattens_definition_and_model_config() -> None:
     )
     assert config.max_steps == 7 and config.structured_output is None
     model = config.model
-    assert model.model_config_id == 3
+    assert model.model_config_id == "run/run-model"
     assert (model.base_url, model.api_key, model.model_name) == (
         "https://run.test",
         "run-key",
@@ -95,14 +93,6 @@ def test_definition_preference_is_kept_without_run_override() -> None:
     config = AgentRuntimeConfig.resolve(definition, _model_config())
 
     assert config.model.reasoning_effort == "high"
-
-
-@pytest.mark.parametrize("override", [{"model_name": ""}, {"base_url": ""}, {"context_window_k": 0}])
-def test_incomplete_model_config_fails_at_assembly(override: dict[str, object]) -> None:
-    """配置不完整在装配期就失败，而不是拖到首次模型请求。"""
-
-    with pytest.raises(ModelSettingsError):
-        AgentRuntimeConfig.resolve(_definition(), _model_config(**override))
 
 
 def test_runtime_config_is_immutable() -> None:

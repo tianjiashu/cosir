@@ -13,13 +13,12 @@ import httpx
 import openai
 import pytest
 
-from app.core.agents.model_settings import ModelSettingsError
-from app.core.agents.resolved_model import ResolvedModel, resolve_model
+from app.core.agents.resolved_model import ResolvedModel
 from app.core.llm_provider import model_probe
 from app.core.llm_provider.model_probe import ModelProbeFailureKind, probe_chat_model
 
 _MATERIALIZED = ResolvedModel(
-    model_config_id=1,
+    model_config_id="test/m1",
     base_url="https://example.test/v1",
     api_key="sk-test",
     model_name="demo-model",
@@ -186,20 +185,3 @@ async def test_probe_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert outcome.ok is False
     assert outcome.failure_kind is ModelProbeFailureKind.TIMEOUT
-
-
-def test_incomplete_model_config_fails_at_resolution_before_any_probe() -> None:
-    """配置不完整在 ``resolve_model`` 就失败（服务映射为 invalid_config），探活不再承担完整性校验。"""
-    from app.models.model_config_record import ModelConfigRecord
-
-    with pytest.raises(ModelSettingsError):
-        resolve_model(
-            ModelConfigRecord(
-                config_name="draft",
-                base_url="",
-                api_key="sk-test",
-                model_name="demo-model",
-                context_window_k=64,
-            )
-        )
-

@@ -234,7 +234,7 @@ test("快捷键切换会话侧栏", async ({ page }) => {
 });
 
 test("右侧面板把对话区压窄时，输入框底栏按自身宽度让位，中文状态不竖排", async ({ page }, testInfo) => {
-  await page.route(`${origin}/model-configs`, route => route.fulfill({ json: [] }));
+  await page.route(`${origin}/configuration/model-connections`, route => route.fulfill({ json: { path: "/models.json", connections: [] } }));
   await page.setViewportSize({ width: 1100, height: 900 });
   await page.reload();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
@@ -243,12 +243,9 @@ test("右侧面板把对话区压窄时，输入框底栏按自身宽度让位�
   const empty = page.getByText("暂无可用模型", { exact: true });
   await expect(empty).toBeVisible();
   expect((await empty.boundingBox())!.height).toBeLessThan(24);
-  const settings = page.getByRole("button", { name: "模型设置", exact: true });
-  await expect(settings).toBeVisible();
-  await expect(settings.getByText("模型设置")).toBeHidden();
+  // 去配置的入口与状态同一行，不被挤成竖排。
+  const configure = page.getByRole("link", { name: "配置模型", exact: true });
+  await expect(configure).toBeVisible();
+  expect((await configure.boundingBox())!.height).toBeLessThan(36);
   await page.screenshot({ path: testInfo.outputPath("narrow-composer.png") });
-
-  // 收起面板、输入框变宽后文字回来。
-  await page.getByRole("button", { name: "收起文件", exact: true }).click();
-  await expect(settings.getByText("模型设置")).toBeVisible();
 });

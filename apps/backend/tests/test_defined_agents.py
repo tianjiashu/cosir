@@ -21,7 +21,7 @@ from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.define_agents import general_child_agent, main_agent
 from app.core.agents.model_settings import ModelSettings
 from app.core.context.system_prompt_builder import SystemPromptBuilder
-from app.models.model_config_record import ModelConfigRecord
+from tests.model_config_fixtures import model_config_record
 
 
 def _code_defined_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list:
@@ -205,17 +205,14 @@ def test_child_profile_model_settings_keep_custom_overrides() -> None:
 
     agent = AgentRuntimeConfig.resolve(
         child,
-        ModelConfigRecord(
-            id=7,
-            config_name="run",
-            base_url="https://run.test",
-            api_key="key",
+        model_config_record(
+            name="run", base_url="https://run.test", api_key="key",
             model_name="run-model",
             context_window_k=64,
         ),
     )
 
     assert agent.model.temperature == 0.2
-    assert agent.model.model_config_id == 7
+    assert agent.model.model_config_id == "test/run-model"
     assert child.model_config_id is None
     assert child.model_settings is custom

@@ -168,11 +168,11 @@ export function AgentTeamConfigurationPanel({ workspaceId }: { workspaceId: numb
   };
 
   if (editing && profiles) {
-    return <><TeamEditorUnsavedGuard session={editing} scope="settings" /><AgentTeamConfigurationEditor
+    return <><TeamEditorUnsavedGuard session={editing} /><AgentTeamConfigurationEditor
       session={editing}
       profilesByScope={profiles}
       scopeEditable={false}
-      onCancel={() => { void confirmDiscardUnsaved("settings").then(discard => { if (discard) setEditing(null); }); }}
+      onCancel={() => { void confirmDiscardUnsaved().then(discard => { if (discard) setEditing(null); }); }}
       onSave={save}
     /></>;
   }

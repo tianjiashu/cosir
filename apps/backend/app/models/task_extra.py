@@ -15,7 +15,7 @@ class TaskForkLaunch(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     agent_id: str | None
-    model_config_id: int | None
+    model_config_id: str | None
     options: ConversationRunOptions
 
     @classmethod

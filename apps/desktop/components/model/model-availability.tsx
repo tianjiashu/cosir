@@ -1,5 +1,8 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { RefreshCwIcon, SparklesIcon } from "lucide-react";
+
+import { buttonVariants } from "@/components/ui/button";
 
 import type { ModelCatalogSnapshot } from "@/lib/model/catalog";
 import { cn } from "@/lib/utils";
@@ -14,20 +17,19 @@ import { cn } from "@/lib/utils";
  * - inline：composer 内的紧凑样式；field：表单字段样式（带边框、与输入框等高）。
  * - 状态文字是用户必须看到的，不收成图标：单行、放不下时省略号，`title` 给全文。中文每个字之间都可断行，
  *   不禁止换行的话，在可收缩的 flex 行里会被压成一字一行。
- * - configure：目录为空或出错时提供的去配置入口（模型配置对话框或配置中心链接）。
+ * - 目录为空或出错时附带「配置模型」入口，统一去配置中心的模型页（批量选模型需要整页空间）；
+ *   离开任务页时任务页保活，返回不丢状态。
  */
 export function ModelAvailability({
   status,
   modelCount,
   onRetry,
-  configure,
   variant = "inline",
   children,
 }: {
   status: ModelCatalogSnapshot["status"];
   modelCount: number;
   onRetry: () => void;
-  configure?: ReactNode;
   variant?: "inline" | "field";
   children: ReactNode;
 }) {
@@ -35,6 +37,7 @@ export function ModelAvailability({
   const frame = variant === "field"
     ? "border-input flex h-9 w-full min-w-0 items-center gap-1.5 rounded-lg border px-3 text-sm"
     : "inline-flex h-8 min-w-0 items-center gap-1.5 px-2 text-xs";
+  const configure = <Link to="/settings/models" className={buttonVariants({ variant: "link", size: "sm" })}>配置模型</Link>;
   const label = (text: string) => <span className="min-w-0 truncate" title={text}>{text}</span>;
 
   if (status === "loading") {

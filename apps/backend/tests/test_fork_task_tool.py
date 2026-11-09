@@ -57,7 +57,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         lambda: SimpleNamespace(
             get_run=lambda _run_id: SimpleNamespace(
                 agent_id="main_agent",
-                model_config_id=3,
+                model_config_id="test/m3",
                 options=ConversationRunOptions(
                     reasoning_effort="high", disabled_tool_groups=["浏览器工具"]
                 ),
@@ -103,7 +103,7 @@ def test_fork_keeps_the_parents_identity_and_waits_in_the_background(env, tmp_pa
     [prepared] = env.prepared
     assert prepared["text"] == "只做前端"
     assert prepared["source"].task_id == 7
-    assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", 3)
+    assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", "test/m3")
     assert prepared["reasoning_effort"] == "high"
     assert prepared["disabled_tool_groups"] == ["浏览器工具"]
     # 交接通知排在任务说明之前：写清身份与任务归属，模型读到任务时已经知道自己是谁。

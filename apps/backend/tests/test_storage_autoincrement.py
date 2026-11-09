@@ -33,19 +33,17 @@ def test_deleted_max_id_is_not_reused(isolated_storage) -> None:
     with main_session_factory().begin() as session:
         session.execute(
             text(
-                "INSERT INTO model_configs (config_name, base_url, api_key, model_name, "
-                "context_window_k, created_at, updated_at) "
-                "VALUES ('a', 'u', 'k', 'm', 1, 't', 't')"
+                "INSERT INTO workspaces (name, root_path, created_at, updated_at) "
+                "VALUES ('a', '/a', 't', 't')"
             )
         )
-        first = session.execute(text("SELECT max(id) FROM model_configs")).scalar_one()
-        session.execute(text("DELETE FROM model_configs WHERE id = :id"), {"id": first})
+        first = session.execute(text("SELECT max(id) FROM workspaces")).scalar_one()
+        session.execute(text("DELETE FROM workspaces WHERE id = :id"), {"id": first})
         session.execute(
             text(
-                "INSERT INTO model_configs (config_name, base_url, api_key, model_name, "
-                "context_window_k, created_at, updated_at) "
-                "VALUES ('b', 'u', 'k', 'm', 1, 't', 't')"
+                "INSERT INTO workspaces (name, root_path, created_at, updated_at) "
+                "VALUES ('b', '/b', 't', 't')"
             )
         )
-        second = session.execute(text("SELECT max(id) FROM model_configs")).scalar_one()
+        second = session.execute(text("SELECT max(id) FROM workspaces")).scalar_one()
     assert second > first

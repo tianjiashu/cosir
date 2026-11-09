@@ -67,7 +67,7 @@ test.beforeEach(async ({ page, request }) => {
   await page.addInitScript(() => {
     localStorage.clear();
     for (const scope of ["workspace:7", "workspace:8", "task:100", "task:101"]) {
-      localStorage.setItem(`cosir:model-config-selection:${scope}`, JSON.stringify({ modelConfigId: 2, reasoningEffort: null }));
+      localStorage.setItem(`cosir:model-config-selection:${scope}`, JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
     }
   });
 });

@@ -81,8 +81,8 @@ function resetTestState() {
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const isActive = (status) => status === "running" || status === "suspended";
-// 与 /model-configs 唯一的模型一致：运行期配置锁定下，运行中发送沿用这份配置。
-const DEFAULT_LAUNCH = { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: [] };
+// 与 /model-connections 唯一的模型一致：运行期配置锁定下，运行中发送沿用这份配置。
+const DEFAULT_LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null, disabledToolGroups: [] };
 
 const emptyState = () => ({ title: "新对话", messages: [], activity: null });
 
@@ -843,23 +843,22 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, { task_id: taskId, deleted: true, deleted_task_ids: [taskId] });
     return;
   }
-  if (req.method === "GET" && url.pathname === "/model-configs") {
-    jsonResponse(res, 200, [{
-      config_id: 2,
-      config_name: "Demo",
+  if (req.method === "GET" && url.pathname === "/configuration/model-connections") {
+    jsonResponse(res, 200, { path: "/home/test/.cosir/config/models.json", connections: [{
+      connection_id: "demo",
+      name: "Demo",
       base_url: "https://api.example.com",
       api_key: "test-api-key",
-      model_name: "demo-model",
-      context_window_k: 128,
-      api_key_configured: true,
-      enabled: true,
-      sort_order: 0,
-      created_at: "",
-      updated_at: "",
-      supports_thinking: false,
-      supports_image: false,
-      supports_reasoning_effort: false,
-    }]);
+      models: [{
+        config_id: "demo/demo-model",
+        connection_id: "demo",
+        model_name: "demo-model",
+        context_window_k: 128,
+        supports_thinking: false,
+        supports_image: false,
+        supports_reasoning_effort: false,
+      }],
+    }] });
     return;
   }
   if (req.method === "GET" && url.pathname === "/tools/groups") {

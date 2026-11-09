@@ -477,7 +477,7 @@ class AgentTeamCoordinator:
             input_text,
             source=MessageSource(task_id=row.parent_task_id, name=configuration.name),
             agent_id=node.agent_id,
-            model_config_id=cast(int, node_runtime.model_config_id),
+            model_config_id=cast(str, node_runtime.model_config_id),
             reasoning_effort=node_runtime.model_settings.get("reasoning_effort"),
         )
         with main_session_factory().begin() as session:

@@ -113,7 +113,7 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         agent=SimpleNamespace(
             structured_output=None,
             max_steps=10,
-            model=SimpleNamespace(model_config_id=1),
+            model=SimpleNamespace(model_config_id="test/m1"),
         ),
         admitted_tools=frozenset(),
         task_banned=frozenset(),

@@ -35,7 +35,7 @@ function WorkspaceFileIgnorePanel({ workspaceId }: { workspaceId: number }) {
     saveFailedEvent: "workspace_fileignore_save_failed",
   }), [workspaceId]);
   const state = useConfigurationDocument(adapter);
-  useUnsavedChanges("settings", adapter.label, state.dirty);
+  useUnsavedChanges(adapter.label, state.dirty);
 
   if (!state.document) {
     return state.loadError

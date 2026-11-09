@@ -50,7 +50,7 @@ class UserInputService:
         self,
         task_id: int,
         command: ConversationRunCommand,
-        model_config_id: int,
+        model_config_id: str,
         reasoning_effort: ReasoningEffort | None = None,
         agent_id: str = "main_agent",
         *,
@@ -68,7 +68,7 @@ class UserInputService:
         """
         task = self._task.get(task_id)
         config = get_model_config_service().check_launch_config(model_config_id, reasoning_effort)
-        if command.image_asset_ids and not config.supports_image:
+        if command.image_asset_ids and not config.model.supports_image:
             raise UserInputRejectedError(
                 "IMAGE_NOT_SUPPORTED", "当前模型不支持图片输入，请更换模型或移除图片"
             )

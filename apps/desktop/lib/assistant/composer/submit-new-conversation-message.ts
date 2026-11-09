@@ -16,7 +16,7 @@ export type SubmitNewConversationMessageInput = {
   text: string;
   imageAttachments: readonly NewConversationImageAttachment[];
   disabledToolGroups: readonly string[];
-  modelConfigId: number;
+  modelConfigId: string;
   reasoningEffort: string | null;
   /** 同一次提交的上传与发送请求共用的 trace id。 */
   traceId: TraceId;

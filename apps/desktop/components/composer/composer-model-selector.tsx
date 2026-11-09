@@ -14,7 +14,6 @@ import {
   type ModelOption,
 } from "@/components/model/model-selector";
 import { ModelAvailability } from "@/components/model/model-availability";
-import { ModelConfigPanel } from "@/components/model/model-config-dialog";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
 import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-state-operations";
 import { RUN_LAUNCH_LOCKED_HINT } from "@/lib/assistant/run-launch";
@@ -73,9 +72,9 @@ function getSelection(
 function toOfficialModel(model: ModelCatalogModel): ModelOption {
   return {
     id: model.optionId,
-    name: model.label,
-    triggerName: model.modelName,
-    keywords: [model.configName, model.modelName],
+    name: model.modelName,
+    group: model.connectionName,
+    keywords: [model.connectionName],
     efforts: model.supportsReasoningEffort
       ? BACKEND_REASONING_EFFORTS
       : undefined,
@@ -236,9 +235,8 @@ function SelectorBody({
     props.onReadyChange?.(status === "ready" && selection !== null);
   }, [props.onReadyChange, selection, status]);
 
-  const configure = <ModelConfigPanel />;
   return (
-    <ModelAvailability status={status} modelCount={catalog?.models.length ?? 0} onRetry={retry} configure={configure}>
+    <ModelAvailability status={status} modelCount={catalog?.models.length ?? 0} onRetry={retry}>
       {locked && !selectedModel && (
         <span className="text-muted-foreground min-w-0 truncate text-xs" title={DELETED_LOCKED_MODEL_HINT}>{DELETED_LOCKED_MODEL_HINT}</span>
       )}

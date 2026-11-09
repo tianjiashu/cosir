@@ -52,5 +52,5 @@ class AgentTeamRunRuntime(BaseModel):
     system_prompt: StrictStr = ""
     allowed_tools: list[str] = Field(default_factory=list)
     structured_output: dict[str, Any] = Field(default_factory=dict)
-    model_config_id: StrictInt | None = None
+    model_config_id: StrictStr | None = None
     model_settings: dict[str, Any] = Field(default_factory=dict)

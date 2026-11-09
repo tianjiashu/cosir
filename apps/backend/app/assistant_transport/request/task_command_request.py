@@ -24,7 +24,7 @@ class SendMessageRequest(BaseModel):
 
     message: AssistantUserMessage
     # 模型名由后端配置事实读取，请求只携带配置身份。
-    modelConfigId: int = Field(ge=1)
+    modelConfigId: str = Field(min_length=1)
     reasoningEffort: ReasoningEffort | None = None
     # 用户关掉的工具组名；后端在运行时按注册表展开为工具名，前端不做换算。
     disabledToolGroups: list[StrictStr] = Field(default_factory=list)

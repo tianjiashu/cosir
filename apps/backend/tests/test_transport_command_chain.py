@@ -161,7 +161,7 @@ class _Driver:
 def _user(text: str = "hi") -> UserInputBody:
     return UserInputBody(
         text=text,
-        launch=RunLaunch(model_config_id=1),
+        launch=RunLaunch(model_config_id="test/m1"),
         presentation=UserInputPresentation(text=text),
     )
 
@@ -194,7 +194,10 @@ async def chain(monkeypatch):
     )
     # 推进前刷新排队投影；本文件不验证投影（见 test_task_actor_loop 的「先刷新再投递」）。
     states = SimpleNamespace(refresh_queued_messages=lambda _task_id: None)
+    # 开新 Run 前 actor 查模型是否还在；本文件的模型总在（悬空 id 见 test_task_actor_loop）。
+    models = SimpleNamespace(exists=lambda _model_config_id: True)
     for getter, fake in (
+        ("get_model_config_service", models),
         ("get_conversation_run_ledger", ledger),
         ("get_task_service", ledger),
         ("get_task_message_queue", queue),
@@ -279,7 +282,7 @@ def _send_request(text: str):
     return SendMessageRequest.model_validate(
         {
             "message": {"role": "user", "parts": [{"type": "text", "text": text}]},
-            "modelConfigId": 1,
+            "modelConfigId": "test/m1",
         }
     )
 
@@ -291,7 +294,7 @@ def _send_request(text: str):
 
 async def test_phase_reads_the_run_on_a_freshly_started_actor(chain) -> None:
     """actor 刚拉起、从未推进过：阶段按当前 Run 判定，不依赖推进时缓存的标志。"""
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "completed"
     assert await chain.actor.phase() == "idle"
     run.status = "suspended"
@@ -360,7 +363,7 @@ async def test_queued_inputs_wait_after_cancel_and_a_new_send_runs_first(chain) 
 
 async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) -> None:
     """挂起的 Run 没有执行者：工具调用都已闭合，标记了也没人取，返回 False。"""
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     assert chain.service.cancel_tool_call(_TASK_ID, "call-1") is False
 
@@ -469,7 +472,7 @@ async def test_baseline_send_starts_a_run_and_cancel_stops_it(chain) -> None:
 
 
 async def test_baseline_resume_restarts_the_cancelled_run(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "cancelled"
 
     await chain.service.resume(_TASK_ID)
@@ -483,7 +486,7 @@ async def test_baseline_resume_restarts_the_cancelled_run(chain) -> None:
 
 
 async def test_cancel_settles_a_suspended_run(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
 
     await chain.service.cancel(_TASK_ID)
@@ -493,7 +496,7 @@ async def test_cancel_settles_a_suspended_run(chain) -> None:
 
 
 async def test_message_after_cancelling_a_suspended_run_is_processed(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     await chain.service.cancel(_TASK_ID)
 
@@ -548,7 +551,7 @@ async def test_cancel_after_the_run_finished_registers_no_signal(chain) -> None:
 
 
 async def test_cancel_of_a_failed_run_does_not_kill_its_resume(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "failed"
 
     await chain.service.cancel(_TASK_ID)
@@ -596,7 +599,7 @@ async def test_cancelled_run_stops_downstream_with_parent_reason(chain) -> None:
 
 async def test_cancelling_a_suspended_run_stops_downstream_immediately(chain) -> None:
     chain.ledger.list_child_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
 
     await chain.service.cancel(_TASK_ID)
@@ -633,7 +636,7 @@ async def test_placeholder_settle_failure_does_not_block_suspended_cancel(
     chain, monkeypatch
 ) -> None:
     _fail_settling(monkeypatch)
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     _register_background_work("call-bg", "background", [])
 
@@ -648,7 +651,7 @@ async def test_placeholder_settle_failure_does_not_block_suspended_cancel(
 
 
 async def test_user_cancel_records_its_reason_and_queues_no_notice(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
 
     await chain.service.cancel(_TASK_ID)
@@ -658,7 +661,7 @@ async def test_user_cancel_records_its_reason_and_queues_no_notice(chain) -> Non
 
 
 async def test_parent_stop_records_parent_reason(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
 
     await chain.actor.cancel("parent")
@@ -673,7 +676,7 @@ async def test_parent_stop_records_parent_reason(chain) -> None:
 
 
 async def test_cancel_reads_state_off_the_event_loop(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     loop_thread = threading.get_ident()
     threads: list[int] = []
@@ -761,7 +764,7 @@ def withdraw(chain, monkeypatch):
 
 
 def _finished_run(chain, status: str = "completed"):
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
+    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = status
     return run
 

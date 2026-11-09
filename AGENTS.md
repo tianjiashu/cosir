@@ -226,7 +226,7 @@ Electron 桌面应用
 
 ## 数据与事实所有权
 
-- 后端拥有 task、workspace、Run、Agent context、model_config 配置、Agent Team 配置（文件系统持久化）与 Agent Team run（SQLite）等持久化事实；前端状态只负责交互和渲染。
+- 后端拥有 task、workspace、Run、Agent context、模型配置与 Agent Team 配置（文件系统持久化）与 Agent Team run（SQLite）等持久化事实；前端状态只负责交互和渲染。
 - **Task、Run、驱动、回合**是对话的四层事实，文档与代码只用这四个词，不单说「一轮」（命令说「这次命令」，调度说「推进」）：
   - **Task**：一段对话、一个 Agent 实例；拥有上下文、外部队列、标题、Task 级资源（终端、浏览器标签与下载）与派生树，删除与停止命令按它寻址。
   - **Run**：Agent 的一次运行；拥有生命周期（`ConversationRunModel.status`）、冻结的发起配置、执行状态（`ReactExecutionState`，跨驱动延续）、用量与结局，调度、取消、恢复与「同一 Task 至多一个活动 Run」按它算。
@@ -287,7 +287,7 @@ Electron 桌面应用
 - `RunDriver` 与 workflow 在后端进程内运行。工具按 `execution_mode` 在线程内或独立进程执行；独立工具进程负责队列通信、取消、超时和进程树清理，但不拥有业务事实，也不构成新服务层。
 - Hook 是运行期扩展边界：registry 负责注册索引，interceptor 负责触发、匹配、拒绝短路与失败安全；异常默认记录放行，不阻断主 Run。
 - 模型工具统一导出 strict function schema，复用 OpenAI SDK 从参数模型生成，再做必要的平台收窄并固化到 Task；模型请求不临时重写 schema。工具执行入口仍负责本地业务校验。
-- provider/model 配置是数据库事实，由 model config service（`ModelConfigService`）管理；运行时模型构建只消费解析后的配置。能力目录不等于连接可用性，provider 连接测试也不等于 Agent Run。
+- 模型配置的事实源是系统级 `config/models.json`（连接与其下模型两层，Key 只存一份；模型 id 为「连接 id/模型名」，Run 只存 id、无外键），由 `ModelConfigService` 现读现写；运行时模型构建只消费解析后的配置。能力目录不等于连接可用性，provider 连接测试也不等于 Agent Run。
 - 诊断使用本地结构化日志与上下文观测页（按 `task_id` + 可选回合读取），不接入外部 tracing。
 - RuntimeMessageContextManager 是 Task 上下文的运行时协调入口与 working copy owner，负责系统提示词、内存消息列表（每次 `begin_run` 从库重建，改库用例无需通知或卸载它）、消息序列、SDK 消息持久化与工具协议闭合；持久化事实归 context 表。inbox 消息由 `TaskActor` 投递进当前驱动的 mailbox，`prepare_input` 节点经 `add_message(session=...)` 把队列确认与 context 写入放在同一事务，提交后经 `EventSink` 发 `InputConsumedEvent` 投影；节点不持 Task 闸门。Run service 负责生命周期与恢复决策。
     - `tool_call_id` 在 Task 内唯一：`save_model_response` 在冲突时改写厂商 id（不冲突时字节不变），全部下游按 id 寻址。

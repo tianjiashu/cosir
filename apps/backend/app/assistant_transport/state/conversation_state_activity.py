@@ -18,16 +18,17 @@ class ModelActivity(TypedDict):
 class ConversationRunLaunch(TypedDict):
     """Run 冻结的发起配置；前端据此锁定运行期配置控件（运行期配置锁定）。
 
-    ``modelConfigId`` 在模型配置被删除后为 ``None``。
+    ``modelConfigId`` 是「连接 id/模型名」；模型从配置文件删除后仍保留原 id，
+    前端按目录查不到即视为已删除。
     """
 
-    modelConfigId: int | None
+    modelConfigId: str | None
     reasoningEffort: str | None
     disabledToolGroups: list[str]
 
 
 def run_launch_snapshot(
-    model_config_id: int | None, options: ConversationRunOptions
+    model_config_id: str | None, options: ConversationRunOptions
 ) -> ConversationRunLaunch:
     return ConversationRunLaunch(
         modelConfigId=model_config_id,

@@ -9,7 +9,7 @@
 import { REASONING_EFFORT_VALUES } from "@/lib/model/reasoning-effort";
 
 export type ModelSelection = {
-  modelConfigId: number;
+  modelConfigId: string;
   reasoningEffort: (typeof REASONING_EFFORT_VALUES)[number] | null;
 };
 
@@ -84,8 +84,8 @@ function parseStoredSelection(
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
     if (
-      typeof value.modelConfigId !== "number" ||
-      !Number.isInteger(value.modelConfigId) ||
+      typeof value.modelConfigId !== "string" ||
+      !value.modelConfigId ||
       !isReasoningEffort(value.reasoningEffort)
     ) {
       return null;

@@ -37,7 +37,6 @@ from app.core.tool.schemas.tool_names import TOOL_AGENT_TEAM
 from app.core.tool.tool_grouping import TOOL_GROUP_AGENT_TEAM
 from app.core.tool.tool_registry import ToolRegistry
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
-from app.models.model_config_record import ModelConfigRecord
 from app.service.configuration import agent_team_configuration_registry as team_registry_module
 from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,
@@ -45,6 +44,7 @@ from app.service.configuration.agent_team_configuration_registry import (
 from app.service.configuration.agent_team_configuration_source import (
     AgentTeamConfigurationScopeSource,
 )
+from tests.model_config_fixtures import model_config_record
 
 # --------------------------------------------------------------------------- #
 # 夹具与构造助手
@@ -141,17 +141,14 @@ def _child_profile() -> AgentProfile:
         system_prompt="child system prompt",
         allowed_tools=["read_file"],
         agent_type=AgentProfileType.CHILD,
-        model_config_id=1,
+        model_config_id="test/m1",
     )
 
 
 # 测试用模型配置：真实链路由 ``model_config_id`` 从模型配置 service 读出，这里用等价记录，
 # 避免用例依赖数据库。
-_MODEL_CONFIG = ModelConfigRecord(
-    id=1,
-    config_name="local",
-    base_url="http://127.0.0.1/v1",
-    api_key="secret",
+_MODEL_CONFIG = model_config_record(
+    name="local", base_url="http://127.0.0.1/v1", api_key="secret",
     model_name="local-model",
     context_window_k=32,
     supports_thinking=True,
@@ -179,7 +176,7 @@ def _parent_run_profile() -> AgentRuntimeConfig:
             system_prompt="main system prompt",
             allowed_tools=["agent_team", "read_file"],
             agent_type=AgentProfileType.MAIN,
-            model_config_id=1,
+            model_config_id="test/m1",
         )
     )
 

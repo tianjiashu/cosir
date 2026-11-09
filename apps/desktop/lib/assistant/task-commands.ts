@@ -35,7 +35,7 @@ type TaskUserMessage = {
 /** 发送消息的请求体（带发起配置），与后端 `SendMessageRequest` 对齐。 */
 export type TaskMessageRequest = {
   message: TaskUserMessage;
-  modelConfigId: number;
+  modelConfigId: string;
   reasoningEffort: string | null;
   /** 用户关掉的工具组名；后端按注册表展开为工具名。 */
   disabledToolGroups: readonly string[];

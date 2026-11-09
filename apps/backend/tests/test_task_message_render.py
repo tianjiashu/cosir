@@ -9,7 +9,7 @@ from app.models.conversation_input import UserInputPresentation
 def _user_input(text: str, *image_paths: str) -> UserInputBody:
     return UserInputBody(
         text=text,
-        launch=RunLaunch(model_config_id=1),
+        launch=RunLaunch(model_config_id="test/m1"),
         presentation=UserInputPresentation(text=text, image_paths=list(image_paths)),
     )
 

@@ -12,7 +12,6 @@ from typing import Any
 from app.config.configuration import get_agent_registry, get_tool_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
-from app.core.agents.model_settings import ModelSettingsError
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.core.tool.multi_agent.agent_team.team_tool_error import TeamToolError
@@ -24,6 +23,7 @@ from app.models.agent_team.configuration.team_node_definition import TeamNodeDef
 from app.models.agent_team.configuration.team_transition_definition import END_TARGET_NODE_ID
 from app.models.task_kind import TaskType
 from app.service.depends import get_model_config_service, get_task_service
+from app.service.model_config.model_config_service import ModelConfigFileError
 
 
 @dataclass(frozen=True)
@@ -106,7 +106,7 @@ def resolve_node_model(
         return resolve_model(
             get_model_config_service().get_config(model_config_id), preferences
         )
-    except (KeyError, ModelSettingsError) as exc:
+    except (KeyError, ModelConfigFileError) as exc:
         raise TeamToolError(
             message=f"节点 Agent {profile.agent_id} 缺少可用的模型运行配置", retryable=False
         ) from exc

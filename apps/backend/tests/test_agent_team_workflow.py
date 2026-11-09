@@ -248,17 +248,14 @@ def test_team_node_model_falls_back_to_parent_model_config_and_keeps_own_prefere
     """没有独立模型配置的节点：沿用主 Run 选用的模型配置，节点偏好覆盖、主 Agent 偏好补缺。"""
     from app.core.agents.resolved_model import ResolvedModel
     from app.core.tool.multi_agent.agent_team import agent_team_preparation_service as preparation
-    from app.models.model_config_record import ModelConfigRecord
+    from tests.model_config_fixtures import model_config_record
 
-    config = ModelConfigRecord(
-        config_name="local",
-        base_url="http://127.0.0.1/v1",
-        api_key="secret",
+    config = model_config_record(
+        name="local", base_url="http://127.0.0.1/v1", api_key="secret",
         model_name="local-model",
         context_window_k=32,
         supports_thinking=True,
         supports_reasoning_effort=True,
-        id=9,
     )
     monkeypatch.setattr(
         preparation,
@@ -272,10 +269,10 @@ def test_team_node_model_falls_back_to_parent_model_config_and_keeps_own_prefere
     )
     parent_agent = SimpleNamespace(
         model=ResolvedModel(
-            model_config_id=9,
-            base_url=config.base_url,
-            api_key=config.api_key,
-            model_name=config.model_name,
+            model_config_id="test/m9",
+            base_url=config.connection.base_url,
+            api_key=config.connection.api_key,
+            model_name=config.model.model_name,
             context_window_k=32,
             supports_thinking=True,
             supports_reasoning_effort=True,
@@ -287,7 +284,7 @@ def test_team_node_model_falls_back_to_parent_model_config_and_keeps_own_prefere
 
     node_model = resolve_node_model(child_profile, parent_agent)
 
-    assert node_model.model_config_id == 9
+    assert node_model.model_config_id == "test/local-model"
     assert node_model.model_name == "local-model"
     assert node_model.reasoning_effort == "high"
     assert node_model.temperature == 0.3

@@ -113,7 +113,7 @@ class _Context:
 def _user_input(message_id: int) -> TaskMessage:
     body = UserInputBody(
         text="帮我重构登录",
-        launch=RunLaunch(model_config_id=1),
+        launch=RunLaunch(model_config_id="test/m1"),
         presentation=UserInputPresentation(text="帮我重构登录"),
     )
     return TaskMessage.of(body, message_id=message_id)

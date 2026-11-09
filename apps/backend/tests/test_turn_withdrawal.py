@@ -184,7 +184,7 @@ def _input(text: str) -> TaskMessage:
     return TaskMessage.of(
         UserInputBody(
             text=text,
-            launch=RunLaunch(model_config_id=1),
+            launch=RunLaunch(model_config_id="test/m1"),
             presentation=UserInputPresentation(text=text),
         ),
         delivery="next_run",

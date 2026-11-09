@@ -101,7 +101,7 @@ def test_restart_withdraws_only_the_interrupted_teams_unconsumed_node_input(
     for source in (parent, other):
         queue.put(node.id, TaskMessage.of(AgentMessageBody(
             source=MessageSource(task_id=source.id, name=source.title),
-            launch=RunLaunch(model_config_id=1), text="queued",
+            launch=RunLaunch(model_config_id="test/m1"), text="queued",
         )))
     coordinator = depends.get_agent_team_coordinator()
     row = SimpleNamespace(id=17, parent_task_id=parent.id, state_json={

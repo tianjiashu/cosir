@@ -1,99 +1,116 @@
-"""模型连接配置的新契约测试。"""
+"""模型配置契约：文件格式、请求边界与连接测试。"""
 
-from datetime import UTC, datetime
+import json
 
 import pytest
 
-from app.api.schemas.request.ModelConfigCreateRequest import ModelConfigCreateRequest
+from app.api.schemas.request.ModelConfigsAddRequest import ModelConfigsAddRequest
 from app.api.schemas.request.ModelConfigTestRequest import ModelConfigTestRequest
-from app.api.schemas.response.ModelConfigResponse import ModelConfigResponse
+from app.api.schemas.request.ModelConnectionCreateRequest import ModelConnectionCreateRequest
+from app.api.schemas.response.ModelConnectionResponse import ModelConnectionResponse
 from app.core.agents.resolved_model import ResolvedModel
 from app.core.llm_provider.model_probe import ModelProbeFailureKind, ModelProbeOutcome
-from app.models.model_config_record import ModelConfigRecord
+from app.models.model_config_file import ModelConfigFile, ModelConnectionEntry, ModelEntry
 from app.service.model_config.model_config_service import ModelConfigService
-from app.storage.model.model_config_model import ModelConfigModel
 
 
-def test_model_config_requires_connection_fields_and_context_window() -> None:
-    """配置必须包含名称、OpenAI 兼容地址、Key、模型名和 K 单位上下文窗口。"""
+def _connection(**overrides: object) -> dict[str, object]:
+    return {"id": "packy", "name": "Packy", "base_url": "u", "api_key": "k", **overrides}
 
-    config = ModelConfigCreateRequest(
-        config_name="本地模型",
-        base_url="https://example.com/v1/",
-        api_key="secret",
-        model_name="demo-model",
-        context_window_k=128,
+
+def test_file_accepts_minimal_hand_written_models_and_ids_survive_slashes() -> None:
+    """手写时能力开关可省略；模型名带 ``/`` 时 id 仍按第一个 ``/`` 拆分。"""
+
+    document = ModelConfigFile.model_validate_json(
+        '{"connections": [{"id": "packy", "name": "Packy", "base_url": "u", "api_key": "k",'
+        ' "models": [{"model_name": "deepseek-ai/DeepSeek-V3", "context_window_k": 64}]}]}'
     )
 
-    assert config.config_name == "本地模型"
-    assert config.base_url == "https://example.com/v1"
-    assert config.context_window_k == 128
+    connection, model = document.find("packy/deepseek-ai/DeepSeek-V3")
+    assert (connection.name, model.supports_image) == ("Packy", False)
+    with pytest.raises(KeyError):
+        document.find("packy/missing")
+    with pytest.raises(KeyError):
+        document.find("nobody/deepseek-ai/DeepSeek-V3")
 
-    with pytest.raises(ValueError):
-        ModelConfigCreateRequest(
-            config_name="缺窗口",
-            base_url="https://example.com/v1",
-            api_key="secret",
-            model_name="demo-model",
+
+@pytest.mark.parametrize(
+    ("connections", "message"),
+    [
+        ([_connection(extra=1)], "extra"),
+        ([_connection(id="Packy")], "pattern"),
+        ([_connection(id="a/b")], "pattern"),
+        ([_connection(models=[{"model_name": "m", "context_window_k": 0}])], "greater than 0"),
+        (
+            [_connection(models=[{"model_name": "m", "context_window_k": 8}] * 2)],
+            "重名模型",
+        ),
+        ([_connection(), _connection(name="Other")], "id 不能重复"),
+        ([_connection(), _connection(id="other")], "name 不能重复"),
+    ],
+)
+def test_file_rejects_what_would_break_lookups(connections: list, message: str) -> None:
+    """多余字段、非法连接 id、非正上下文窗口与各种重名都在读取边界拒绝。"""
+
+    with pytest.raises(ValueError, match=message):
+        # 文件只经 JSON 读取：严格模式下按 JSON 语义校验（数组即元组，不做类型转换）。
+        ModelConfigFile.model_validate_json(json.dumps({"connections": connections}))
+
+
+def test_new_connection_id_is_a_free_slug() -> None:
+    document = ModelConfigFile(connections=(ModelConnectionEntry(**_connection()),))
+
+    assert document.new_connection_id("Packy Code!") == "packy-code"
+    assert document.new_connection_id("packy") == "packy-2"
+    assert document.new_connection_id("深度求索") == "connection"
+
+
+def test_requests_require_models_and_normalize_connection_fields() -> None:
+    """新建连接必须带至少一个模型、模型互不重名；地址去末尾斜杠，空白字段被拒绝。"""
+
+    request = ModelConnectionCreateRequest(
+        name="本地模型",
+        base_url="https://example.com/v1/",
+        api_key="secret",
+        models=[{"model_name": " demo-model ", "context_window_k": 128}],
+    )
+
+    assert request.base_url == "https://example.com/v1"
+    assert request.models[0].to_entry() == ModelEntry(model_name="demo-model", context_window_k=128)
+    for models in ([], [{"model_name": "m"}]):
+        with pytest.raises(ValueError):
+            ModelConnectionCreateRequest(name="n", base_url="u", api_key="k", models=models)
+    with pytest.raises(ValueError, match="duplicate"):
+        ModelConfigsAddRequest(
+            models=[
+                {"model_name": "m", "context_window_k": 8},
+                {"model_name": "m", "context_window_k": 16},
+            ]
         )
-
-    test_request = ModelConfigTestRequest(
-        config_name="本地模型",
-        base_url="https://example.com/v1/",
-        api_key="secret",
-        model_name="demo-model",
-        context_window_k=128,
-    )
-    assert test_request.base_url == "https://example.com/v1"
-
     with pytest.raises(ValueError):
         ModelConfigTestRequest(
-            config_name="缺 Key",
-            base_url="https://example.com/v1",
-            api_key=" ",
-            model_name="demo-model",
-            context_window_k=128,
+            base_url="https://example.com/v1", api_key=" ", model_name="m", context_window_k=8
         )
 
 
-def test_model_config_model_has_no_provider_columns() -> None:
-    """模型配置表只描述连接配置，不再声明 Provider 厂商字段。"""
-
-    columns = set(ModelConfigModel.__table__.c.keys())
-
-    assert {"config_name", "base_url", "api_key", "model_name", "context_window_k"} <= columns
-    assert "name" not in columns
-    assert "type" not in columns
-
-
-def test_model_config_response_returns_api_key_for_local_edit_form() -> None:
-    """本机编辑表单需要回显 API Key，响应应携带明文供前端以密码态展示。"""
-
-    now = datetime.now(UTC)
-    record = ModelConfigRecord(
-        id=1,
-        config_name="测试配置",
-        base_url="https://example.com/v1",
-        api_key="secret",
-        model_name="demo-model",
-        context_window_k=64,
-        created_at=now,
-        updated_at=now,
+def test_connection_response_carries_model_ids_and_key_for_local_edit_form() -> None:
+    connection = ModelConnectionEntry.model_validate_json(
+        json.dumps(_connection(models=[{"model_name": "demo-model", "context_window_k": 64}]))
     )
 
-    response = ModelConfigResponse.from_record(record)
+    response = ModelConnectionResponse.from_entry(connection)
 
-    assert response.config_id == 1
-    assert response.context_window_k == 64
-    assert response.api_key_configured is True
-    assert response.api_key == "secret"
+    assert response.api_key == "k"
+    assert [(m.config_id, m.connection_id, m.context_window_k) for m in response.models] == [
+        ("packy/demo-model", "packy", 64)
+    ]
 
 
 @pytest.mark.asyncio
 async def test_draft_connection_test_uses_the_submitted_endpoint_and_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """未保存测试必须把完整表单解析为 ``ResolvedModel`` 后送入真实探活入口。"""
+    """未保存测试必须把「连接 + 模型」解析为 ``ResolvedModel`` 后送入真实探活入口。"""
 
     captured: list[ResolvedModel] = []
 
@@ -102,63 +119,31 @@ async def test_draft_connection_test_uses_the_submitted_endpoint_and_model(
         return ModelProbeOutcome(ok=True, elapsed_ms=12)
 
     monkeypatch.setattr(
-        "app.service.model_config.model_config_service.probe_chat_model",
-        fake_probe,
+        "app.service.model_config.model_config_service.probe_chat_model", fake_probe
     )
-    service = object.__new__(ModelConfigService)
 
-    result = await service.test_draft(
-        config_name="本地模型",
+    result = await ModelConfigService().test_draft(
         base_url="https://example.com/v1",
         api_key="secret",
-        model_name="demo-model",
-        context_window_k=128,
-        supports_thinking=True,
-        supports_reasoning_effort=True,
-        supports_image=True,
+        model=ModelEntry(
+            model_name="demo-model",
+            context_window_k=128,
+            supports_thinking=True,
+            supports_reasoning_effort=True,
+            supports_image=True,
+        ),
     )
 
-    assert result.success is True
-    assert result.elapsed_ms == 12
-    assert len(captured) == 1
+    assert (result.success, result.elapsed_ms) == (True, 12)
     settings = captured[0]
-    assert settings.base_url == "https://example.com/v1"
-    assert settings.api_key == "secret"
-    assert settings.model_name == "demo-model"
+    assert (settings.base_url, settings.api_key, settings.model_name) == (
+        "https://example.com/v1",
+        "secret",
+        "demo-model",
+    )
     assert settings.context_window_k == 128
-    assert settings.supports_thinking is True
-    assert settings.supports_reasoning_effort is True
-    assert settings.supports_image is True
-
-
-@pytest.mark.asyncio
-async def test_incomplete_draft_is_invalid_config_without_probing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """表单缺 Base URL 等必需字段：解析即失败、映射为 invalid_config，不发出探测请求。"""
-
-    async def fake_probe(*_args: object, **_kwargs: object) -> ModelProbeOutcome:
-        raise AssertionError("配置不完整时不得探活")
-
-    monkeypatch.setattr(
-        "app.service.model_config.model_config_service.probe_chat_model",
-        fake_probe,
-    )
-    service = object.__new__(ModelConfigService)
-
-    result = await service.test_draft(
-        config_name="本地模型",
-        base_url="   ",
-        api_key="secret",
-        model_name="demo-model",
-        context_window_k=128,
-        supports_thinking=False,
-        supports_reasoning_effort=False,
-        supports_image=False,
-    )
-
-    assert result.success is False
-    assert result.error_code == "invalid_config"
+    assert settings.supports_thinking and settings.supports_reasoning_effort
+    assert settings.supports_image
 
 
 @pytest.mark.asyncio
@@ -176,19 +161,12 @@ async def test_connection_failure_exposes_stable_code_and_controlled_message(
         )
 
     monkeypatch.setattr(
-        "app.service.model_config.model_config_service.probe_chat_model",
-        fake_probe,
+        "app.service.model_config.model_config_service.probe_chat_model", fake_probe
     )
-    service = object.__new__(ModelConfigService)
-    result = await service.test_draft(
-        config_name="packyapi",
+    result = await ModelConfigService().test_draft(
         base_url="https://www.packyapi.ai",
         api_key="secret",
-        model_name="qwen3.8-flash",
-        context_window_k=1000,
-        supports_thinking=False,
-        supports_reasoning_effort=False,
-        supports_image=False,
+        model=ModelEntry(model_name="qwen3.8-flash", context_window_k=1000),
     )
 
     assert result.success is False

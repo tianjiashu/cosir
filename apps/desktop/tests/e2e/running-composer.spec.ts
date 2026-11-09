@@ -16,7 +16,7 @@ import { API_ORIGIN as origin } from "./e2e-env";
 
 const TASK_ID = 42;
 // 活动 Run 冻结的发起配置：运行中发送沿用它，而不是 composer 里的选择。
-const RUN_LAUNCH = { modelConfigId: 2, reasoningEffort: null, disabledToolGroups: ["联网工具"] };
+const RUN_LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null, disabledToolGroups: ["联网工具"] };
 
 function activeState(queued: TransportState["queued_messages"] = []): TransportState {
   return {
@@ -69,7 +69,7 @@ for (const via of ["button", "enter"] as const) {
     const body = (await sent).postDataJSON();
     expect(body).toMatchObject({
       message: { parts: [{ type: "text", text: "运行中追加的消息" }] },
-      modelConfigId: 2,
+      modelConfigId: "demo/demo-model",
       disabledToolGroups: ["联网工具"],
     });
     expect(body.delivery).toBeUndefined();

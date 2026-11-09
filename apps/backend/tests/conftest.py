@@ -44,6 +44,7 @@ from app.service.conversation.conversation_task_context_service import (
     ConversationTaskContextService,
 )
 from app.service.depends import close_service_dependencies
+from app.service.model_config import model_config_service
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -223,7 +224,7 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
     副作用:
         改写两个配置来源模块内 ``system_agent_config_dir`` / ``system_agent_team_config_dir``
-        的引用，以及 Skill / MCP 作用域与测试记录模块里的系统级路径函数；不触碰真实的路径模块，也不创建目录。需要验证真实目录推导的用例可再自行覆盖。
+        的引用，以及 Skill / MCP 作用域、测试记录与模型配置服务里的系统级路径函数；不触碰真实的路径模块，也不创建目录。需要验证真实目录推导的用例可再自行覆盖。
     """
 
     system_agents = tmp_path / "system-agents"
@@ -257,6 +258,13 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         mcp_tested_servers,
         "system_mcp_tested_servers_file",
         lambda: system_cosir_root / "config" / "mcp_tested_servers.json",
+    )
+    # 模型配置文件同理：每次现读，且测试会写它。
+    monkeypatch.setattr(model_config_service, "system_cosir_dir", lambda: system_cosir_root)
+    monkeypatch.setattr(
+        model_config_service,
+        "system_model_config_file",
+        lambda: system_cosir_root / "config" / "models.json",
     )
 
 

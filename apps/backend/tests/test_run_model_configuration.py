@@ -10,6 +10,7 @@ from app.core.llm_provider import model_factory
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.model_config_record import ModelConfigRecord
+from tests.model_config_fixtures import model_config_record
 
 
 def _run(*, reasoning_effort: ReasoningEffort | None) -> ConversationRunRecord:
@@ -20,7 +21,7 @@ def _run(*, reasoning_effort: ReasoningEffort | None) -> ConversationRunRecord:
         status="running",
         created_at=now,
         updated_at=now,
-        model_config_id=7,
+        model_config_id="test/m7",
         options=ConversationRunOptions(
             reasoning_effort=reasoning_effort,
         ),
@@ -38,11 +39,8 @@ def _profile() -> AgentProfile:
 
 
 def _model_config() -> ModelConfigRecord:
-    return ModelConfigRecord(
-        id=7,
-        config_name="run",
-        base_url="https://example.test",
-        api_key="secret",
+    return model_config_record(
+        name="run", base_url="https://example.test", api_key="secret",
         model_name="profile-model",
         context_window_k=64,
         supports_thinking=False,

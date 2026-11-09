@@ -18,7 +18,7 @@ def prepare_agent_message(
     *,
     source: MessageSource,
     agent_id: str,
-    model_config_id: int,
+    model_config_id: str,
     reasoning_effort: ReasoningEffort | None = None,
     disabled_tool_groups: Sequence[str] = (),
 ) -> TaskMessage:
