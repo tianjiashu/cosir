@@ -23,7 +23,7 @@ from typing import cast
 
 from app.config.logging.logger import log
 from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.background.run import start_background_job
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.models import ConversationRunRecord

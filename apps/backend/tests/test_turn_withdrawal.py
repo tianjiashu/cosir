@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.context.context_store import ContextStore
-from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.background.background_job import BackgroundConclusion
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.handoff.handoff_registry import HandoffLease, handoff_registry
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
 from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
@@ -269,7 +269,7 @@ def test_withdraw_waits_for_a_conclusion_already_leaving_the_registry(monkeypatc
         return True
 
     monkeypatch.setattr(
-        "app.core.tool.background.backgraound_registry.deliver_background_result", slow_delivery
+        "app.core.tool.background.background_registry.deliver_background_result", slow_delivery
     )
     delivering = threading.Thread(
         target=background_registry.complete,

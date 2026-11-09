@@ -1,0 +1,173 @@
+name: terminal-subsystem
+
+# 终端子系统的窄范围门禁：Rust 静态检查、后端 lint 与终端测试、前端类型检查与终端单测。
+#
+# 为什么只跑终端路径：后端全量 ruff 仍有存量告警（2026-11 时 129 条，分布在终端之外的模块），
+# 前端全量 ruff format 也有 89 个文件的历史漂移。先在已清零的子系统上建立绿灯基线，再按批扩大
+# 范围——一次性全量改会淹没真正的回归。
+#
+# 扩大范围的入口：把新路径/新命令加进对应 job，并把该范围清到零告警；不要放宽成 --exit-zero。
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - "apps/backend/app/tools/terminal_runtime/**"
+      - "apps/backend/app/tools/tool_handler/terminal/**"
+      - "apps/backend/app/tools/tool_handler/terminal_session/**"
+      - "apps/backend/app/tools/tool_handler/execute_terminal.py"
+      - "apps/backend/app/tools/tool_models/execute_terminal_args.py"
+      - "apps/backend/app/tools/tool_models/terminal_session_args.py"
+      - "apps/backend/app/tools/display/terminal_display.py"
+      - "apps/backend/app/tools/shell/**"
+      - "apps/backend/app/core/tool/execute/tool_terminal_projection.py"
+      - "apps/backend/app/assistant_transport/state/conversation_state_terminal_session.py"
+      - "apps/backend/app/api/terminal_sessions_api.py"
+      - "apps/backend/app/api/terminal_stream_api.py"
+      - "apps/backend/app/service/terminal/**"
+      - "apps/backend/tests/test_terminal_*.py"
+      - "apps/backend/tests/test_execute_terminal_*.py"
+      - "apps/backend/tests/test_local_backend_*.py"
+      - "apps/backend/tests/test_tool_terminal_*.py"
+      - "apps/backend/tests/terminal_test_support.py"
+      - "apps/terminal-worker/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/desktop/components/terminal/**"
+      - "apps/desktop/lib/terminal/**"
+      - "apps/desktop/components/conversation/tools/terminal-output/**"
+      - "apps/desktop/components/conversation/tools/call-views/terminal-*.tsx"
+      - "apps/desktop/tests/unit/terminal-*.test.ts"
+      - ".github/workflows/terminal-subsystem.yml"
+  pull_request:
+    branches:
+      - "main"
+    paths:
+      - "apps/backend/app/tools/terminal_runtime/**"
+      - "apps/backend/app/tools/tool_handler/terminal/**"
+      - "apps/backend/app/tools/tool_handler/terminal_session/**"
+      - "apps/backend/app/tools/tool_handler/execute_terminal.py"
+      - "apps/backend/app/tools/tool_models/execute_terminal_args.py"
+      - "apps/backend/app/tools/tool_models/terminal_session_args.py"
+      - "apps/backend/app/tools/display/terminal_display.py"
+      - "apps/backend/app/tools/shell/**"
+      - "apps/backend/app/core/tool/execute/tool_terminal_projection.py"
+      - "apps/backend/app/assistant_transport/state/conversation_state_terminal_session.py"
+      - "apps/backend/app/api/terminal_sessions_api.py"
+      - "apps/backend/app/api/terminal_stream_api.py"
+      - "apps/backend/app/service/terminal/**"
+      - "apps/backend/tests/test_terminal_*.py"
+      - "apps/backend/tests/test_execute_terminal_*.py"
+      - "apps/backend/tests/test_local_backend_*.py"
+      - "apps/backend/tests/test_tool_terminal_*.py"
+      - "apps/backend/tests/terminal_test_support.py"
+      - "apps/terminal-worker/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/desktop/components/terminal/**"
+      - "apps/desktop/lib/terminal/**"
+      - "apps/desktop/components/conversation/tools/terminal-output/**"
+      - "apps/desktop/components/conversation/tools/call-views/terminal-*.tsx"
+      - "apps/desktop/tests/unit/terminal-*.test.ts"
+      - ".github/workflows/terminal-subsystem.yml"
+
+jobs:
+  rust-checks:
+    name: rust-clippy (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 两族 cfg 都要过：unix 与 windows 各自有独立实现（PTY / ConPTY、信号、Job Object）。
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --package cosir-terminal-worker --all-targets -- -D warnings
+
+  backend-terminal:
+    name: backend (ruff + terminal tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 真进程用例要求：worker 已构建（测试回落到 target/debug）、zsh 已安装（shell 集成用例）。
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+
+      - name: Build Terminal Worker
+        run: cargo build --package cosir-terminal-worker
+
+      - name: Install backend dependencies
+        working-directory: apps/backend
+        run: uv sync --frozen
+
+      - name: Ruff (terminal subsystem)
+        working-directory: apps/backend
+        run: |
+          uv run ruff check \
+            app/tools/terminal_runtime \
+            app/tools/tool_handler/terminal \
+            app/tools/tool_handler/terminal_session \
+            app/tools/tool_handler/execute_terminal.py \
+            app/tools/tool_models/execute_terminal_args.py \
+            app/tools/tool_models/terminal_session_args.py \
+            app/tools/display/terminal_display.py \
+            app/tools/shell \
+            app/core/tool/execute/tool_terminal_projection.py \
+            app/assistant_transport/state/conversation_state_terminal_session.py \
+            app/api/terminal_sessions_api.py \
+            app/api/terminal_stream_api.py \
+            app/service/terminal
+
+      - name: Pytest (terminal subsystem)
+        working-directory: apps/backend
+        run: |
+          uv run pytest -q \
+            tests/test_terminal_*.py \
+            tests/test_execute_terminal_*.py \
+            tests/test_local_backend_*.py \
+            tests/test_tool_terminal_*.py
+
+  desktop-terminal:
+    name: desktop (tsc + terminal unit tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: apps/desktop
+        run: npx tsc --noEmit
+
+      - name: Terminal unit tests
+        working-directory: apps/desktop
+        run: npx vitest run tests/unit/terminal

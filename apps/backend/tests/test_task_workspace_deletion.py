@@ -523,7 +523,7 @@ def test_deleting_a_root_keeps_its_forks_as_roots(storage, tmp_path) -> None:
 
 def test_deleting_an_idle_task_revokes_its_background_work(storage, tmp_path) -> None:
     """后台工作归 Task、比 Run 活得久：空闲 Task 没有执行者，删除提交后也要撤销并终止它。"""
-    from app.core.tool.background.backgraound_registry import background_registry
+    from app.core.tool.background.background_registry import background_registry
 
     workspace = get_workspace_crud().create("idle", str(tmp_path))
     task = get_task_crud().create(workspace.id, "idle").id

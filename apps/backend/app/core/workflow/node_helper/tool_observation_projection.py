@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
 )

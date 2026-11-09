@@ -606,7 +606,7 @@ class TaskService:
         撤销，空闲（Run 已完成、后台命令还在跑）或挂起（等后台结论）的 Task 没有执行者。撤销会
         终止后台命令；占位行已随删除消失，不结算。
         """
-        from app.core.tool.background.backgraound_registry import background_registry
+        from app.core.tool.background.background_registry import background_registry
         from app.core.tool.handoff.handoff_registry import handoff_registry
 
         service_depends.get_terminal_session_service().delete_task_sessions(task_ids)

@@ -40,7 +40,7 @@ from app.core.agents.agent_profile_config import (
     ensure_system_agent_config_dir,
     ensure_system_agent_team_config_dir,
 )
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,

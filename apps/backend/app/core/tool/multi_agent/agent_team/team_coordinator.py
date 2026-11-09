@@ -12,8 +12,8 @@ from typing import Any, cast
 from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
-from app.core.tool.background.backgraound_registry import DropReason, background_registry
 from app.core.tool.background.background_job import BackgroundConclusion
+from app.core.tool.background.background_registry import DropReason, background_registry
 from app.core.tool.background.cancel_placeholders import USER_CANCELLED_HINT
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.agent_team.agent_team_result import team_result_payload

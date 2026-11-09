@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
+from app.core.tool.background.background_registry import background_registry
 from app.models.message_metadata import BackgroundKind, BackgroundWork
 
 

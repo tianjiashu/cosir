@@ -26,8 +26,8 @@ from terminal_test_support import (
 )
 
 from app.config.constant import Constant
-from app.core.tool.background import backgraound_registry as background_module
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background import background_registry as background_module
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.handoff.handoff_registry import HandoffConflictError, handoff_registry
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,

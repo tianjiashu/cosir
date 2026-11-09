@@ -24,8 +24,8 @@ from typing import Literal
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.background.run import start_background_job
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.results.tool_cancelled import tool_cancelled
@@ -374,7 +374,8 @@ class ExecuteTerminalTool(HandlerBase):
         if background:
             registered = start_background_job(
                 job, task_id=execution_context.task_id, run_id=execution_context.run_id,
-                tool_call_id=tool_call_id, kind="terminal_command", label=execution_context.call_intent,
+                tool_call_id=tool_call_id, kind="terminal_command",
+                label=execution_context.call_intent,
                 collect_cancelled=job.wait_result, reports_user_stop=True,
             )
             return self._placeholder_observation(

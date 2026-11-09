@@ -1,4 +1,5 @@
-"""交互终端工具族的共享辅助：取消检查、领域错误与 write / read / handoff 观察归一化为 ``ToolObservation``。
+"""交互终端工具族的共享辅助：取消检查、领域错误与 write / read / handoff 观察归一化为
+``ToolObservation``。
 
 展示字段投影由 ``tools/display/terminal_display.py`` 负责；本模块不持有会话状态。
 """

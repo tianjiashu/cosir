@@ -42,7 +42,8 @@ MAX_COMMAND_TIMEOUT_S = 3600.0
 
 _BACKGROUND_DESCRIPTION = (
     "true returns immediately and delivers the result later as a <background_result> message. "
-    "false or null waits here until the command ends. Use wait_messages to wait for background work."
+    "false or null waits here until the command ends. Use wait_messages to wait for "
+    "background work."
 )
 
 # 只写语义与取值范围；「长任务调大并转后台」是选用决策，在工具描述里说一次。

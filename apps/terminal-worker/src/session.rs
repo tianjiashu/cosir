@@ -416,7 +416,7 @@ fn pty_read_is_terminal_eof(runtime: &PtyRuntime, error: &std::io::Error) -> boo
     }
     #[cfg(unix)]
     {
-        return error.raw_os_error() == Some(libc::EIO);
+        error.raw_os_error() == Some(libc::EIO)
     }
     #[cfg(windows)]
     {

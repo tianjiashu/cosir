@@ -11,7 +11,7 @@
 
 from typing import ClassVar
 
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success

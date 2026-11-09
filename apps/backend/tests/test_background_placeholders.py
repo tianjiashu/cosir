@@ -216,7 +216,7 @@ def test_result_arriving_while_stopping_settles_placeholder_as_cancelled(stored)
     import asyncio
 
     from app.core.task_cancellation import TaskCancellation
-    from app.core.tool.background.backgraound_registry import background_registry
+    from app.core.tool.background.background_registry import background_registry
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )
@@ -273,7 +273,7 @@ def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path)
     import time
 
     from app.core.task_cancellation import TaskCancellation
-    from app.core.tool.background.backgraound_registry import background_registry
+    from app.core.tool.background.background_registry import background_registry
     from app.core.tool.schemas import ToolExecutionContext
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,

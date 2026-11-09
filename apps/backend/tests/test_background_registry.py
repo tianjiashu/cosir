@@ -14,13 +14,13 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background import backgraound_registry as background_module
-from app.core.tool.background.backgraound_registry import (
+from app.core.tool.background import background_registry as background_module
+from app.core.tool.background.background_job import BackgroundConclusion
+from app.core.tool.background.background_registry import (
     BackgroundRegistry,
     background_registry,
     deliver_background_result,
 )
-from app.core.tool.background.background_job import BackgroundConclusion
 from app.core.tool.handler.wait_messages import WaitMessagesTool
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry

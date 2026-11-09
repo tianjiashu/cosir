@@ -388,7 +388,7 @@ async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) ->
 
 
 def _register_background_work(tool_call_id: str, mode: str, calls: list[str]) -> threading.Event:
-    from app.core.tool.background.backgraound_registry import background_registry
+    from app.core.tool.background.background_registry import background_registry
 
     detached = threading.Event()
     background_registry.register(

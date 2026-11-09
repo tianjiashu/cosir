@@ -20,7 +20,7 @@ from app.core.llm_provider.model_failure import (
     classify_model_failure,
     extract_model_response_message,
 )
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cancel_placeholders
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.runtime_context import RuntimeContext

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from app.config.logging.logger import log
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.background.cancel_placeholders import RUN_STOPPED_HINT, cancel_placeholders
 from app.models import ConversationRunRecord
 from app.service import depends as service_depends

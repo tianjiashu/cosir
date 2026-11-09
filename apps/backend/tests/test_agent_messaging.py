@@ -12,7 +12,7 @@ import pytest
 
 from tests.task_extra_fixtures import fork_extra
 from app.models.task_extra import TaskExtra
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.multi_agent import send_message
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_run_options import ConversationRunOptions

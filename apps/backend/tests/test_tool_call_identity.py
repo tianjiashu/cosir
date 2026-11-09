@@ -6,7 +6,7 @@
 
 import asyncio
 
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.handoff.handoff_registry import HandoffLease, HandoffRegistry
 from app.service import depends
 from app.service.conversation.tool_decision_service import ToolDecisionService

@@ -51,7 +51,7 @@ Agent 不持锁：一次输入是 worker 输入队列里的一帧，用户按键
 ## service 与线程边界（`session_service.py` / `session_runtime.py` / `session_effects.py`）
 
 - service 拥有会话集合、Task 归属、容量与终态历史（每 Task 最多 10 个已结束会话）；runtime 持单会话锁、输入仲裁、观察、等待与唯一终态迁移。
-- worker 读线程只做内存更新；终态收尾（`worker.close`）在独立线程。worker 握手不持会话锁（启动期间快照投影、订阅不被阻塞），握手与关闭由每会话启动互斥串行化；`starting` 期间输入被拒，resize 记下、握手后补发。用户输入先入队，成功后才记录按键时间、来源与标注。会话变化的 snapshot 重投影（`TerminalSessionRuntime.notify_changed`）、结束通知与交接代为落定经单线程副作用执行器在锁外串行执行。
+- worker 读线程只做内存更新；终态收尾（`worker.close`）在独立线程。worker 握手不持会话锁（启动期间快照投影、订阅不被阻塞），握手与关闭由每会话启动互斥串行化；`starting` 期间 Agent 输入被拒（`_mutable_worker` 只放行 `running`），用户输入与 resize 照常入队、握手后按序补发。用户输入先入队，成功后才记录按键时间、来源与标注。会话变化的 snapshot 重投影（`TerminalSessionRuntime.notify_changed`）、结束通知与交接代为落定经单线程副作用执行器在锁外串行执行。
 - 会话列表 snapshot 条目：`TerminalSessionService.task_runtimes` 顺序（活跃在前按创建时间、已结束最多 10 个）下各会话的 `snapshot()`，由 `assistant_transport` 的 `to_terminal_session` 映射成 camelCase；`label` 缺省为空串。
 
 ## 交互通道（`stream.py`，`api/terminal_stream_api.py`，`terminal-v2`）

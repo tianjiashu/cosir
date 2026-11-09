@@ -150,8 +150,8 @@ class TerminalSessionRuntime:
         label: str | None,
         schedule: EffectScheduler,
     ) -> None:
-        """只建内存状态与 worker 句柄（解析 worker 路径，未配置时抛 ``TerminalWorkerUnavailableError``），
-        不启动子进程；握手见 :meth:`start`。"""
+        """只建内存状态与 worker 句柄（解析 worker 路径，未配置时抛
+        ``TerminalWorkerUnavailableError``），不启动子进程；握手见 :meth:`start`。"""
         # 身份和用途在会话创建后不变；生命周期字段只在会话锁内更新。
         self.session_id: Final = f"term_{uuid.uuid4().hex[:12]}"
         self.task_id: Final = task_id
@@ -180,7 +180,8 @@ class TerminalSessionRuntime:
         # 最近一次被接受输入的来源：shell 报告命令开始时据此记下发起方（见 ``TerminalCommand``）。
         self._last_input_by: InputSource | None = None
         self._user_marks = _UserInputMarks()
-        # 正在会话条件变量上进行的 Agent 条件等待；会话结束时它们会把结果带给 Agent，不必另发结束通知。
+        # 正在会话条件变量上进行的 Agent 条件等待；会话结束时它们会把结果带给 Agent，
+        # 不必另发结束通知。
         self._agent_waits = 0
         # 上一次无等待读取的（信息版本, 状态, 请求参数），用于识别「无变化的重复读取」。
         self._last_read: tuple[object, ...] | None = None
@@ -375,8 +376,9 @@ class TerminalSessionRuntime:
         elif kind == "error":
             code = event.get("code")
             if code == "input_backpressure":
-                # 写入已被接受、事后才在 worker 处因前台程序不读输入而排不进 PTY：用户与 Agent 的输入
-                # 都可能是这一次，只能在面板上提示「部分输入未送达」，Agent 从下一次观察里看到效果。
+                # 写入已被接受、事后才在 worker 处因前台程序不读输入而排不进 PTY：
+                # 用户与 Agent 的输入都可能是这一次，只能在面板上提示「部分输入未送达」，
+                # Agent 从下一次观察里看到效果。
                 log.warning(
                     "terminal_session_input_backpressure",
                     extra={

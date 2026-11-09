@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, NoticeKind
 from app.core.workflow.message_queue.task_message import (

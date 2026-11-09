@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.handler.wait_messages import WaitMessagesTool
 from app.core.tool.multi_agent.child_agent.child_run_job import _deliver_conclusion
 from app.core.workflow.message_queue.task_message import BackgroundResultBody

@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 
-from app.core.tool.background import backgraound_registry as background_module
+from app.core.tool.background import background_registry as background_module
 from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
 from app.core.tool.background.run import start_background_job
 

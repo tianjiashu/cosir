@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tool.background import backgraound_registry as background_module
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background import background_registry as background_module
 from app.core.tool.background.background_job import BackgroundJob
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.tools.tool_handler import execute_terminal as terminal_module

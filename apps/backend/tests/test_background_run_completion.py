@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.workflow import workflow
 from app.core.workflow.branch import task_title
 from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody

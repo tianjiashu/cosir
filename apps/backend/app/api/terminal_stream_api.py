@@ -105,7 +105,10 @@ async def terminal_session_stream(
             # 收尾也不在事件循环里拿锁；shield 保证连接被取消时订阅照样移除。
             await asyncio.shield(asyncio.to_thread(runtime.unsubscribe, subscription))
             subscription.close()
-            log.info("terminal_stream_detached", extra={"msg": "终端交互通道断开", "data": log_data})
+            log.info(
+                "terminal_stream_detached",
+                extra={"msg": "终端交互通道断开", "data": log_data},
+            )
 
 
 async def _serve(

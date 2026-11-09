@@ -14,7 +14,7 @@ from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 from terminal_test_support import ReadyWorker, make_service
 
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema

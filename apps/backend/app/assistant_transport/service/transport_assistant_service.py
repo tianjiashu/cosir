@@ -25,7 +25,7 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.assistant_transport.state.snapshot_window import HistoryPage, window_snapshot
 from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
-from app.core.tool.background.backgraound_registry import background_registry
+from app.core.tool.background.background_registry import background_registry
 from app.core.workflow.message_queue.task_message import (
     Delivery,
     RunLaunch,
