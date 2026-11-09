@@ -32,7 +32,6 @@ from app.assistant_transport.state.conversation_state_message import (
 )
 from app.assistant_transport.state.conversation_state_part import (
     ConversationStateAgentMessagePart,
-    ConversationStateFilePart,
     ConversationStateImagePart,
     ConversationStateMessageSource,
     ConversationStateTextPart,
@@ -89,11 +88,12 @@ class ConversationStateFork(TypedDict):
 class ConversationStateSnapshot(TypedDict):
     """一个 Task 的完整 Transport state。
 
-    对话界面只看 Task：``title`` 投影自 ``tasks.title``（事实源在 Task 表，snapshot 只是让打开中的
-    页面实时收到标题变化），``messages`` 按回合扁平排列（每个回合：开启它的输入 + 一条回复），
-    ``activity`` 是最新 Run 的状态摘要。Run 身份不进 wire，历史回复的结局由消息上的 ``outcome``
-    承载。命令被拒不进 snapshot，由命令的 HTTP 响应同步返回。``terminal_sessions`` 是本 Task
-    终端会话的进程内事实（不持久化），投影规则见 ``ConversationTaskStateService.refresh_terminal_sessions``。
+    对话界面只看 Task：``title`` 投影自 ``tasks.title``（事实源在 Task 表，snapshot 只是让
+    打开中的页面实时收到标题变化），``messages`` 按回合扁平排列（每个回合：开启它的输入 +
+    一条回复），``activity`` 是最新 Run 的状态摘要。Run 身份不进 wire，历史回复的结局由消
+    息上的 ``outcome`` 承载。命令被拒不进 snapshot，由命令的 HTTP 响应同步返回。
+    ``terminal_sessions`` 是本 Task 终端会话的进程内事实（不持久化），投影规则见
+    ``ConversationTaskStateService.refresh_terminal_sessions``。
     ``background_tasks`` 的历史来自持久化占位，活状态来自后台结果登记表；
     ``foreground_waits``（可转到后台的前台等待）是进程内事实，
     二者见 ``refresh_background_results``。
@@ -101,8 +101,8 @@ class ConversationStateSnapshot(TypedDict):
 
     ``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；
     后端工作副本始终是完整历史（恒为 0），
-    只有发给前端的完整快照按窗口裁剪（见 ``snapshot_window``）。增量路径里的消息下标始终是完整历史
-    里的位置；位置只在完整快照处才会变（投影只在末尾追加或原位替换消息），前端据此换算。
+    只有发给前端的完整快照按窗口裁剪（见 ``snapshot_window``）。增量路径里的消息下标始终是完整
+    历史里的位置；位置只在完整快照处才会变（投影只在末尾追加或原位替换消息），前端据此换算。
     """
 
     fork: NotRequired[ConversationStateFork]
@@ -283,8 +283,6 @@ def _validate_part(part: object) -> None:
         _validate_text_part(part)
     elif part_type == "image":
         _validate_image_part(part)
-    elif part_type == "file":
-        _validate_file_part(part)
     elif part_type == "agent-message":
         _validate_agent_message_part(part)
     elif part_type == "tool-call":
@@ -309,15 +307,6 @@ def _validate_image_part(part: object) -> None:
     require_locator(
         image_part["image"], Constant.Transport.IMAGE_LOCATOR, "snapshot image part locator"
     )
-
-
-def _validate_file_part(part: object) -> None:
-    file_part = as_shape(part, ConversationStateFilePart, "snapshot file part")
-    require_locator(
-        file_part["file"], Constant.Transport.FILE_LOCATOR, "snapshot file part locator"
-    )
-    require_non_empty_str(file_part["name"], "snapshot file part name")
-    require_non_empty_str(file_part["contentType"], "snapshot file part contentType")
 
 
 def _validate_agent_message_part(part: object) -> None:

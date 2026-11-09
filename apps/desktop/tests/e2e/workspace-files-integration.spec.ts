@@ -186,7 +186,7 @@ async function referenceWorkspace(
   return page.getByTestId("workspace-files-surface");
 }
 
-test("引用：片段原文、打开来源、删除来源、拒绝发送保留胶囊与撤销", async ({
+test("引用：行范围指针打开当前文件定位，文件删除后提示，拒绝发送保留胶囊与撤销", async ({
   page,
   request,
 }) => {
@@ -205,16 +205,19 @@ test("引用：片段原文、打开来源、删除来源、拒绝发送保留�
   const input = page.getByLabel("新对话内容");
   const capsule = input.locator("[data-workspace-reference]");
   await expect(capsule).toHaveCount(1);
-  await expect(capsule).toContainText("main.py · L1–1");
+  // 引用只是路径 + 行范围指针：不携带选取时的正文。
+  await expect(capsule).toContainText("main.py");
+  await expect(capsule).toContainText("L1");
+  // 点击引用打开当前文件并定位到行，而不是展示消息里的片段快照。
+  await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
   await capsule.getByRole("button").first().click();
-  await expect(surface).toContainText("消息里的引用片段，不是文件当前内容");
-  await surface
-    .getByRole("button", { name: "打开当前文件", exact: true })
-    .click();
   await expect(surface.locator(".cm-content")).toContainText("after update");
+  await expect(surface.getByText("消息里的引用片段", { exact: false })).toHaveCount(0);
+  // 文件被删后点击引用：提示不存在，不留下坏标签。
   await request.post(`${REAL_BACKEND}/__test__/files/delete`);
+  await surface.getByRole("button", { name: "关闭标签" }).click();
   await capsule.getByRole("button").first().click();
-  await expect(surface.locator(".cm-content")).toContainText("after update");
+  await expect(page.getByText("工作区里没有 src/main.py")).toBeVisible();
   const sent: unknown[] = [];
   await page.route("**/tasks/*/messages", (route) => {
     sent.push(route.request().postDataJSON());
@@ -232,11 +235,9 @@ test("引用：片段原文、打开来源、删除来源、拒绝发送保留�
   await page.getByRole("button", { name: "开始对话", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("测试拒绝引用发送");
   await expect(capsule).toHaveCount(1);
-  expect(JSON.stringify(sent)).toContain("cosir-snippet:src/main.py#L1-L1");
-  expect(JSON.stringify(sent)).toContain("after update");
-  expect(JSON.stringify(sent)).not.toContain(
-    "application/vnd.cosir.workspace-reference",
-  );
+  const sentBody = JSON.stringify(sent);
+  expect(sentBody).toContain('<ref path=\\"src/main.py\\" lines=\\"1\\" />');
+  expect(sentBody).not.toContain("after update");
   await page.keyboard.press("Escape");
   await capsule.getByRole("button", { name: /移除引用/ }).click();
   await expect(capsule).toHaveCount(0);
@@ -276,14 +277,14 @@ test("引用：@ 搜索去重、设置页隐藏文件并恢复草稿", async ({
   await expect(input.locator("[data-workspace-reference]")).toHaveCount(1);
 });
 
-test("引用：Markdown 粘贴、普通消息发送、重载历史后撤回再发送", async ({
+test("引用：胶囊标签粘贴、普通消息发送、重载历史后撤回再发送", async ({
   page,
   request,
 }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
   await referenceWorkspace(page);
   const text =
-    '请检查 [src/](cosir-dir:src/) [main.py](cosir-file:src/main.py)\n\n[main.py](cosir-snippet:src/main.py#L1-L2)\n\n```py\nprint("saved content")\n# [[cosir-file:example]] [[cosir-skill:example]]\n```\n\n';
+    '请检查 <ref path="src/" /> <ref path="src/main.py" /> <ref path="src/main.py" lines="1-2" />\n\n```py\nprint("saved content")\n# <ref path="example.txt" /> <skill name="example" />\n```\n';
   const input = page.getByLabel("新对话内容");
   await input.focus();
   await input.evaluate((element, value) => {
@@ -298,6 +299,8 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史后撤回再�
     );
   }, text);
   await expect(input.locator("[data-workspace-reference]")).toHaveCount(3);
+  // 正文里的三个 `<ref>` 变成胶囊；代码块里的同形标签保持字面量，不激活。
+  await expect(input.locator("[data-inline-token]")).toHaveCount(3);
   const sent: Array<{
     url: string;
     message: {
@@ -324,9 +327,10 @@ test("引用：Markdown 粘贴、普通消息发送、重载历史后撤回再�
   const sentText = sent[0].message.parts
     .map((part) => part.text)
     .join("");
-  expect(sentText).toContain("cosir-snippet:src/main.py#L1-L2");
+  // 正文里的标签是规范形态的胶囊指针；代码块里的同形文本保持字面量。
+  expect(sentText).toContain('<ref path="src/main.py" lines="1-2" />');
   expect(sentText).toContain(
-    "# [[cosir-file:example]] [[cosir-skill:example]]",
+    '# <ref path="example.txt" /> <skill name="example" />',
   );
   const user = page.locator('[data-role="user"]').last();
   await expect(user.locator("[data-workspace-reference]")).toHaveCount(3);
@@ -361,7 +365,7 @@ test("引用：Task 混合草稿切换后恢复附件并可移除", async ({ pag
   await input.focus();
   await input.evaluate((element) => {
     const data = new DataTransfer();
-    data.setData("text/plain", "草稿甲 [main.py](cosir-file:src/main.py)");
+    data.setData("text/plain", '草稿甲 <ref path="src/main.py" />');
     element.dispatchEvent(
       new ClipboardEvent("paste", {
         clipboardData: data,
@@ -415,27 +419,26 @@ test("引用：目录与文件通过右键添加、选中文本可附带问题",
     .click({ button: "right" });
   await page.getByRole("menuitem", { name: "添加到对话" }).click();
   const input = page.getByLabel("新对话内容");
-  await expect(
-    input.locator('[data-workspace-reference="directory"]'),
-  ).toHaveCount(1);
-  await expect(input.locator('[data-workspace-reference="file"]')).toHaveCount(
-    1,
-  );
+  const capsules = input.locator("[data-workspace-reference]");
+  await expect(capsules).toHaveCount(2);
+  // 目录引用以 `/` 结尾，文件是裸路径：都是同一种 `<ref>` 指针。
+  await expect(capsules.filter({ hasText: "src/" })).toHaveCount(1);
+  await expect(capsules.filter({ hasText: "README.md" })).toHaveCount(1);
   // 树行菜单操作后文件已激活，窄文件面板需返回目录再选择下一个文件。
   await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
   await surface
     .getByRole("button", { name: "展开目录 src", exact: true })
     .click();
-  await surface.getByRole("treeitem", { name: "main.py", exact: true }).click();
+  await surface
+    .getByRole("treeitem", { name: "main.py", exact: true }).click();
   await surface
     .locator(".cm-lineNumbers .cm-gutterElement")
     .filter({ hasText: /^1$/ })
     .click({ button: "right" });
   await page.getByRole("menuitem", { name: "解释", exact: true }).click();
   await page.keyboard.press("Escape");
-  await expect(
-    input.locator('[data-workspace-reference="snippet"]'),
-  ).toContainText("L1–1");
+  await expect(input.locator("[data-workspace-reference]")).toHaveCount(3);
+  await expect(capsules.filter({ hasText: "main.py" })).toContainText("L1");
   await expect(input).toContainText("请解释这段内容。");
 });
 
@@ -673,7 +676,7 @@ test("真实后端：文件地址与文件名查找分离，候选定位和字�
   await expect(surface.getByRole("button", { name: "添加选区到对话", exact: true })).toBeVisible();
   await editor.focus();
   await page.keyboard.press("ControlOrMeta+l");
-  await expect(page.getByRole("textbox", { name: "消息输入" })).toContainText("L2–2");
+  await expect(page.getByRole("textbox", { name: "消息输入" })).toContainText("L2");
   await message.getByRole("link", { name: "root", exact: true }).click();
   await expect(surface).toContainText("ROOT_API");
   await message.getByRole("link", { name: "guide", exact: true }).click();

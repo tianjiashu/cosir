@@ -22,7 +22,11 @@ import { ErrorState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { ReferenceSelectionMenu, selectedReference } from "@/components/workspace-references/selection-actions";
+import { ReferenceSelectionMenu } from "@/components/workspace-references/selection-actions";
+import { pdfPageOfRange } from "@/lib/workspace-files/dom-selection-locator";
+import { workspaceFileRef, workspacePageRef } from "@/lib/workspace-references/ref-capsule";
+import type { RefCapsule } from "@/lib/assistant/capsules";
+import { fileSession, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 import { useDomSelection } from "@/hooks/use-dom-selection";
 import { AddToChatButton } from "./add-to-chat-button";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
@@ -55,9 +59,26 @@ export default function PdfPreview({
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(0);
   const [error, setError] = useState("");
-  // 文本层里选中的文字可作为摘录添加到对话（与 Markdown 渲染视图同一规则）。
-  const [excerpt, setExcerpt] = useState<string | null>(null);
-  useDomSelection(container, setExcerpt);
+  // 文本层里选中的文字作为「当前页」引用添加到对话（与 Markdown 渲染视图同一规则）。
+  const [selection, setSelection] = useState<RefCapsule | null>(null);
+  useDomSelection(container, (value) => {
+    if (!value || !container.current) {
+      setSelection(null);
+      return;
+    }
+    const pageNumber = pdfPageOfRange(value.range, container.current);
+    setSelection(pageNumber !== null ? workspacePageRef(info.path, pageNumber) : workspaceFileRef(info.path));
+  });
+  // 引用带页码打开时跳到该页；跳完清除，之后照常按滚动位置恢复。
+  const revealPage = useFilesStore((s) => fileSession(s.sessions, workspaceId).positions[info.path]?.revealPage);
+  useEffect(() => {
+    if (revealPage === undefined) return;
+    const viewer = viewerRef.current;
+    if (!viewer || !pages) return;
+    viewer.currentPageNumber = Math.min(Math.max(revealPage, 1), pages);
+    useFilesStore.getState().position(workspaceId, info.path, { revealPage: undefined });
+  }, [revealPage, pages, workspaceId, info.path]);
+  useEffect(() => setSelection(null), [info.path, info.version]);
   const [showSearch, setShowSearch] = useState(false);
   const [focusKey, setFocusKey] = useState(0);
   const [findResult, setFindResult] = useState<FindResult | null>(null);
@@ -179,7 +200,7 @@ export default function PdfPreview({
             aria-expanded={showSearch} onClick={() => showSearch ? closeSearch() : setShowSearch(true)}>
             <SearchIcon />
           </TooltipIconButton>
-          <AddToChatButton workspaceId={workspaceId} path={info.path} excerpt={excerpt} />
+          <AddToChatButton workspaceId={workspaceId} path={info.path} selection={selection} />
         </>}
         // 页面默认随面板宽度适配，缩放是少用操作，放进「更多」让窄面板的工具栏保持一行。
         options={<div className="flex gap-1">
@@ -217,7 +238,7 @@ export default function PdfPreview({
           <FindBar label="在 PDF 中查找" className="absolute top-2 right-4 z-10" result={findResult}
             onSearch={find} onClose={closeSearch} focusKey={focusKey} />
         )}
-        <ReferenceSelectionMenu workspaceId={workspaceId} input={selectedReference(info.path, null, excerpt)}>
+        <ReferenceSelectionMenu workspaceId={workspaceId} capsule={selection}>
           <div ref={container} className="absolute inset-0 overflow-auto">
             <div ref={viewerElement} className="pdfViewer" />
           </div>

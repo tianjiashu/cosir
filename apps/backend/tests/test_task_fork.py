@@ -56,7 +56,9 @@ def _turn_of(store, run, message, metadata, project) -> int:
     夹具绕过写入方直接写行，所以在这里按同一规则算：Run 的第一行与用户输入开回合，Agent 消息只在
     本 Run 还没有输入与可见回复时开回合，工具结果属于发起调用的回合，其余行留在当前回合。
     """
-    rows = [r for r in store.contexts.get(store.task.id, include_in_context=False) if r.sequence > 0]
+    rows = [
+        r for r in store.contexts.get(store.task.id, include_in_context=False) if r.sequence > 0
+    ]
     current = max((r.turn for r in rows), default=0)
     if message["role"] == "tool":
         # 孤儿结果（用例故意构造的坏数据）没有发起调用，留在当前回合。
@@ -74,9 +76,7 @@ def _turn_of(store, run, message, metadata, project) -> int:
     if not run_rows:
         return current + 1
     is_input = (
-        isinstance(metadata, UserMessageMetadata)
-        and metadata.kind in TURN_INPUT_KINDS
-        and project
+        isinstance(metadata, UserMessageMetadata) and metadata.kind in TURN_INPUT_KINDS and project
     )
     if not is_input:
         return run_rows[-1].turn
@@ -114,7 +114,7 @@ def input_message(store, run, text, kind="user_input"):
     mid = store.context.max_sequence(store.task.id) + 100
     meta = UserMessageMetadata(
         kind=kind,
-        presentation=UserInputPresentation(display_text=text),
+        presentation=UserInputPresentation(text=text),
         source=MessageSource(task_id=999, name="Parent") if kind == "agent_message" else None,
     )
     append(store, run, {"role": "user", "content": text}, metadata=meta, message_id=mid)
@@ -243,8 +243,13 @@ def history_with_every_kind_of_turn(s):
     append_run(s, "completed")
     append_run(s, "completed")
     woken = s.runs.create(s.task.id, status="completed")
-    append(s, woken, {"role": "user", "content": "<background_result>"},
-           metadata=UserMessageMetadata(kind="background_result"), project=False)
+    append(
+        s,
+        woken,
+        {"role": "user", "content": "<background_result>"},
+        metadata=UserMessageMetadata(kind="background_result"),
+        project=False,
+    )
     append(s, woken, {"role": "assistant", "content": "woken reply"})
     run = append_run(s, "completed")
     input_message(s, run, "merged input")
@@ -319,8 +324,13 @@ def test_agent_in_a_run_without_input_keeps_the_previous_reply(fork_store):
     s = fork_store
     previous = append_run(s, "completed")
     run = s.runs.create(s.task.id, status="running")
-    append(s, run, {"role": "user", "content": "<background_result>"},
-           metadata=UserMessageMetadata(kind="background_result"), project=False)
+    append(
+        s,
+        run,
+        {"role": "user", "content": "<background_result>"},
+        metadata=UserMessageMetadata(kind="background_result"),
+        project=False,
+    )
     append(s, run, {"role": "assistant", "content": "current turn"})
     call(s, run)
     child = agent_fork(s, run)
@@ -351,7 +361,9 @@ def test_agent_fork_keeps_the_source_tools_at_any_depth(fork_store, monkeypatch,
     s = fork_store
     tools = [{"name": "read_file"}, {"name": "fork_task"}, {"name": "delegate_task"}]
     with s.factory() as session:
-        session.execute(update(TaskModel).where(TaskModel.id == s.task.id).values(tool_schemas=tools))
+        session.execute(
+            update(TaskModel).where(TaskModel.id == s.task.id).values(tool_schemas=tools)
+        )
         session.commit()
     monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
     run = append_run(s, "running")
@@ -394,8 +406,13 @@ def test_agent_in_a_branch_inherits_the_branch_history(fork_store):
 def test_manual_fork_of_agent_restores_hidden_history_and_keeps_internal_flags(fork_store):
     s = fork_store
     earlier = append_run(s, "completed")
-    append(s, earlier, {"role": "user", "content": "internal fact"},
-           metadata=UserMessageMetadata(kind="notice"), project=False)
+    append(
+        s,
+        earlier,
+        {"role": "user", "content": "internal fact"},
+        metadata=UserMessageMetadata(kind="notice"),
+        project=False,
+    )
     run = append_run(s, "running")
     call(s, run)
     child = agent_fork(s, run)
@@ -483,8 +500,13 @@ def test_call_answered_after_the_cut_is_not_inherited_as_submitted(fork_store):
     run = append_run(s, "running")
     background_placeholder(s, run, "bg", "completed")
     input_message(s, run, "next turn")
-    append(s, run, {"role": "user", "content": "<background_result>real conclusion"},
-           metadata=UserMessageMetadata(kind="background_result", tool_call_id="bg"), project=False)
+    append(
+        s,
+        run,
+        {"role": "user", "content": "<background_result>real conclusion"},
+        metadata=UserMessageMetadata(kind="background_result", tool_call_id="bg"),
+        project=False,
+    )
     child = fork(s, run.input_id)
     body = str([r.message for r in s.contexts.get(child.id)])
     assert "submitted" not in body and "real conclusion" not in body
@@ -497,8 +519,13 @@ def test_call_answered_before_the_cut_keeps_its_placeholder_and_conclusion(fork_
     s = fork_store
     run = append_run(s, "running")
     background_placeholder(s, run, "bg", "completed")
-    append(s, run, {"role": "user", "content": "<background_result>real conclusion"},
-           metadata=UserMessageMetadata(kind="background_result", tool_call_id="bg"), project=False)
+    append(
+        s,
+        run,
+        {"role": "user", "content": "<background_result>real conclusion"},
+        metadata=UserMessageMetadata(kind="background_result", tool_call_id="bg"),
+        project=False,
+    )
     input_message(s, run, "next turn")
     child = fork(s, run.input_id)
     body = str([r.message for r in s.contexts.get(child.id)])
@@ -689,5 +716,3 @@ def test_interrupted_output_survives_hidden_fork_and_manual_refork(fork_store):
     manual = fork(s, anchor)
     assert "PARTIAL_OUTPUT" in str(snapshot(s, manual)["messages"])
     assert "PARTIAL_OUTPUT" not in str([r.message for r in s.contexts.get(manual.id)])
-
-

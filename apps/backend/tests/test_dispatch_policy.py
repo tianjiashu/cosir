@@ -44,14 +44,14 @@ def _run(status: str, launch: RunLaunch = _LAUNCH) -> ConversationRunRecord:
 def _user(
     message_id: int, launch: RunLaunch = _LAUNCH, delivery: Delivery = "immediate"
 ) -> TaskMessage:
-    body = UserInputBody(
-        input_text="hi", launch=launch, presentation=UserInputPresentation(display_text="hi")
-    )
+    body = UserInputBody(text="hi", launch=launch, presentation=UserInputPresentation(text="hi"))
     return TaskMessage.of(body, delivery=delivery, message_id=message_id)
 
 
 def _notice(message_id: int) -> TaskMessage:
-    return TaskMessage.of(NoticeBody(content="n", notice_kind="terminal_session_ended"), message_id=message_id)
+    return TaskMessage.of(
+        NoticeBody(content="n", notice_kind="terminal_session_ended"), message_id=message_id
+    )
 
 
 def _decision(message_id: int) -> TaskMessage:
@@ -108,10 +108,17 @@ def test_any_new_message_starts_a_run_after_any_terminal_status(status, make) ->
 
 
 def test_single_call_cancellation_only_wakes_its_owner():
-    receipt = TaskMessage.of(BackgroundResultBody(
-        tool_call_id="bg", tool_name="terminal_command", tool_result="cancelled", ended_at="t",
-        wake_run_id=10, placeholder_status="cancelled",
-    ), message_id=1)
+    receipt = TaskMessage.of(
+        BackgroundResultBody(
+            tool_call_id="bg",
+            tool_name="terminal_command",
+            tool_result="cancelled",
+            ended_at="t",
+            wake_run_id=10,
+            placeholder_status="cancelled",
+        ),
+        message_id=1,
+    )
     assert _next(_run("suspended"), False, [receipt], [receipt]) == Wake()
     assert _next(_run("cancelled"), False, [receipt], [receipt]) == Stay()
     other = _run("suspended")
@@ -173,7 +180,9 @@ def test_fresh_run_receives_one_user_input_resumed_run_only_immediate() -> None:
     """新 Run 接收全部非用户输入与一条用户输入；唤醒 / 续跑只接收 ``immediate``。"""
     pending = [_user(1, delivery="next_run"), _notice(2), _user(3, delivery="next_run"), _result(4)]
     assert dispatch_policy.initial_messages(pending, fresh_run=True) == [
-        pending[0], pending[1], pending[3]
+        pending[0],
+        pending[1],
+        pending[3],
     ]
     assert dispatch_policy.initial_messages(pending, fresh_run=False) == [pending[1], pending[3]]
 

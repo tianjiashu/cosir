@@ -2,25 +2,21 @@ import {
   ReferenceTargetScope,
   useReferenceBridge,
 } from "@/components/workspace-references/reference-bridge";
-import {
-  decodeReferences,
-  encodeReference,
-} from "@/lib/workspace-references/codec";
-import { WorkspaceReferenceNode } from "./extensions/workspace-reference";
+import { serializeCapsule, parseCapsules, hasCapsules } from "@/lib/assistant/capsules";
+import { CapsuleToken } from "./extensions/capsule-token";
 import { ReferenceMention } from "@/components/workspace-references/reference-mention";
 
 import { useCallback, useContext, useEffect, useMemo, useRef } from "react";
 import { EditorContent, useEditor } from "@tiptap/react";
 import { StarterKit } from "@tiptap/starter-kit";
 import { Placeholder } from "@tiptap/extension-placeholder";
-import { AttachmentToken } from "@/components/composer/extensions/attachment-token";
-import { SkillToken } from "@/components/composer/extensions/skill-token";
 import { ComposerEditorViewProvider } from "@/components/composer/composer-editor-context";
 import {
   resolveComposerInsertionPosition,
   shouldSubmitOnEnter,
 } from "@/components/composer/composer-editor-policy";
 import {
+  inlineComposerContent,
   insertionCommandContent,
   parseComposerDocument,
   serializeComposerDocument,
@@ -76,9 +72,7 @@ const composerExtensions = [
     trailingNode: false,
     underline: false,
   }),
-  AttachmentToken,
-  WorkspaceReferenceNode,
-  SkillToken,
+  CapsuleToken,
 ];
 
 /**
@@ -203,9 +197,9 @@ export function ComposerEditor({
       },
       handlePaste: (_view, event) => {
         const text = event.clipboardData?.getData("text/plain") ?? "";
-        if (!decodeReferences(text).some((part) => part.type === "reference")) return false;
+        if (!hasCapsules(text)) return false;
         event.preventDefault();
-        editor?.commands.insertContent(parseComposerDocument(text).content ?? []);
+        editor?.chain().focus().insertContent(inlineComposerContent(text)).run();
         return true;
       },
     },
@@ -270,57 +264,41 @@ export function ComposerEditor({
       referenceBridge.target !== target
     )
       return;
-    return referenceBridge.register(
-      target,
-      (references, question, replacement) => {
-        if (!editor.isEditable) {
-          showFeedback("输入框暂不可编辑，请稍后添加引用");
-          return;
-        }
-        const keys = new Set(
-          decodeReferences(serializeComposerDocument(editor.getJSON())).flatMap(
-            (part) =>
-              part.type === "reference"
-                ? [encodeReference(part.reference)]
-                : [],
-          ),
+    return referenceBridge.register(target, (capsules, question) => {
+      if (!editor.isEditable) {
+        showFeedback("输入框暂不可编辑，请稍后添加引用");
+        return;
+      }
+      const existing = new Set(
+        parseCapsules(serializeComposerDocument(editor.getJSON())).flatMap(
+          (segment) =>
+            segment.type === "capsule" ? [serializeCapsule(segment.capsule)] : [],
+        ),
+      );
+      const unique = capsules.filter((capsule) => {
+        const key = serializeCapsule(capsule);
+        if (existing.has(key)) return false;
+        existing.add(key);
+        return true;
+      });
+      const content = [
+        ...insertionCommandContent({ type: "insert-capsules", capsules: unique }),
+        ...insertionCommandContent({
+          type: "insert-text",
+          text: question ? ` ${question}` : "",
+        }),
+      ];
+      if (content.length > 0) {
+        const position = resolveComposerInsertionPosition(
+          hasCapturedSelectionRef.current,
+          editor.state.selection.anchor,
+          editor.state.doc.content.size,
         );
-        const unique = references.filter((ref) => {
-          const key = encodeReference(ref);
-          if (keys.has(key)) return false;
-          keys.add(key);
-          return true;
-        });
-        const content = [
-          ...insertionCommandContent({
-            type: "insert-references",
-            references: unique,
-          }),
-          ...insertionCommandContent({
-            type: "insert-text",
-            text: question ? ` ${question}` : "",
-          }),
-        ];
-        // @ 准备失败不修改草稿；等待期间用户改过该文本时也不删除新输入。
-        const replace =
-          replacement &&
-          replacement.to <= editor.state.doc.content.size &&
-          editor.state.doc.textBetween(replacement.from, replacement.to) ===
-            replacement.text;
-        const position = replace
-          ? replacement.from
-          : resolveComposerInsertionPosition(
-              hasCapturedSelectionRef.current,
-              editor.state.selection.anchor,
-              editor.state.doc.content.size,
-            );
-        const chain = editor.chain().focus();
-        if (replace) chain.deleteRange(replacement);
-        chain.setTextSelection(position).insertContent(content).run();
+        editor.chain().focus().setTextSelection(position).insertContent(content).run();
         hasCapturedSelectionRef.current = true;
-        if (!unique.length) showFeedback("这些引用已在当前草稿中");
-      },
-    );
+      }
+      if (!unique.length) showFeedback("这些引用已在当前草稿中");
+    });
   }, [
     editor,
     referenceBridge?.register,

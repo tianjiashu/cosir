@@ -1,0 +1,155 @@
+{
+  "description": "输入框胶囊文本语法的跨语言用例。前端 Vitest 与后端 pytest 都读这一份；改语法先改这里，两侧实现必须同时通过。",
+  "cases": [
+    {
+      "name": "无胶囊的普通文本原样保留",
+      "text": "先看看这个文件再回答，1 < 2 也一样",
+      "segments": [{ "type": "text", "text": "先看看这个文件再回答，1 < 2 也一样" }],
+      "plain": "先看看这个文件再回答，1 < 2 也一样",
+      "canonical": "先看看这个文件再回答，1 < 2 也一样"
+    },
+    {
+      "name": "本机文件附件：绝对路径可含空格",
+      "text": "看 <file path=\"/Users/me/a b.md\" /> 这个",
+      "segments": [
+        { "type": "text", "text": "看 " },
+        { "type": "capsule", "capsule": { "kind": "file", "path": "/Users/me/a b.md" } },
+        { "type": "text", "text": " 这个" }
+      ],
+      "plain": "看 a b.md 这个",
+      "canonical": "看 <file path=\"/Users/me/a b.md\" /> 这个"
+    },
+    {
+      "name": "工作区引用：行范围",
+      "text": "检查 <ref path=\"src/a.py\" lines=\"12-14\" /> 这段",
+      "segments": [
+        { "type": "text", "text": "检查 " },
+        { "type": "capsule", "capsule": { "kind": "ref", "path": "src/a.py", "lines": "12-14" } },
+        { "type": "text", "text": " 这段" }
+      ],
+      "plain": "检查 src/a.py:12-14 这段",
+      "canonical": "检查 <ref path=\"src/a.py\" lines=\"12-14\" /> 这段"
+    },
+    {
+      "name": "工作区引用：PDF 页码",
+      "text": "<ref path=\"docs/paper.pdf\" page=\"3\" />",
+      "segments": [
+        { "type": "capsule", "capsule": { "kind": "ref", "path": "docs/paper.pdf", "page": "3" } }
+      ],
+      "plain": "docs/paper.pdf (p.3)",
+      "canonical": "<ref path=\"docs/paper.pdf\" page=\"3\" />"
+    },
+    {
+      "name": "工作区引用：目录保留尾斜杠",
+      "text": "引用 <ref path=\"src/\" /> 目录",
+      "segments": [
+        { "type": "text", "text": "引用 " },
+        { "type": "capsule", "capsule": { "kind": "ref", "path": "src/" } },
+        { "type": "text", "text": " 目录" }
+      ],
+      "plain": "引用 src/ 目录",
+      "canonical": "引用 <ref path=\"src/\" /> 目录"
+    },
+    {
+      "name": "工作区根目录引用：空路径",
+      "text": "<ref path=\"\" />",
+      "segments": [{ "type": "capsule", "capsule": { "kind": "ref", "path": "" } }],
+      "plain": "工作区",
+      "canonical": "<ref path=\"\" />"
+    },
+    {
+      "name": "Skill：发送时只有名称",
+      "text": "用 <skill name=\"review-code\" /> 检查",
+      "segments": [
+        { "type": "text", "text": "用 " },
+        { "type": "capsule", "capsule": { "kind": "skill", "name": "review-code" } },
+        { "type": "text", "text": " 检查" }
+      ],
+      "plain": "用 review-code 检查",
+      "canonical": "用 <skill name=\"review-code\" /> 检查"
+    },
+    {
+      "name": "Skill：后端补完整路径后的形态",
+      "text": "<skill name=\"review-code\" path=\"/Users/me/proj/.cosir/skills/review-code/SKILL.md\" />",
+      "segments": [
+        {
+          "type": "capsule",
+          "capsule": {
+            "kind": "skill",
+            "name": "review-code",
+            "path": "/Users/me/proj/.cosir/skills/review-code/SKILL.md"
+          }
+        }
+      ],
+      "plain": "review-code",
+      "canonical": "<skill name=\"review-code\" path=\"/Users/me/proj/.cosir/skills/review-code/SKILL.md\" />"
+    },
+    {
+      "name": "属性值按 XML 实体转义并可还原",
+      "text": "看 <file path=\"/Users/me/a &amp; b &quot;q&quot; &lt;x&gt;.md\" />",
+      "segments": [
+        { "type": "text", "text": "看 " },
+        {
+          "type": "capsule",
+          "capsule": { "kind": "file", "path": "/Users/me/a & b \"q\" <x>.md" }
+        }
+      ],
+      "plain": "看 a & b \"q\" <x>.md",
+      "canonical": "看 <file path=\"/Users/me/a &amp; b &quot;q&quot; &lt;x&gt;.md\" />"
+    },
+    {
+      "name": "连续胶囊之间没有文本",
+      "text": "<file path=\"/a\" /><ref path=\"b\" />",
+      "segments": [
+        { "type": "capsule", "capsule": { "kind": "file", "path": "/a" } },
+        { "type": "capsule", "capsule": { "kind": "ref", "path": "b" } }
+      ],
+      "plain": "ab",
+      "canonical": "<file path=\"/a\" /><ref path=\"b\" />"
+    },
+    {
+      "name": "属性顺序与多余空白被规范化为唯一写法",
+      "text": "<ref   lines=\"12-14\"   path=\"src/a.py\"   />",
+      "segments": [
+        { "type": "capsule", "capsule": { "kind": "ref", "path": "src/a.py", "lines": "12-14" } }
+      ],
+      "plain": "src/a.py:12-14",
+      "canonical": "<ref path=\"src/a.py\" lines=\"12-14\" />"
+    },
+    {
+      "name": "Skill 属性乱序规范化",
+      "text": "<skill path=\"/a/SKILL.md\" name=\"x\" />",
+      "segments": [
+        { "type": "capsule", "capsule": { "kind": "skill", "name": "x", "path": "/a/SKILL.md" } }
+      ],
+      "plain": "x",
+      "canonical": "<skill name=\"x\" path=\"/a/SKILL.md\" />"
+    },
+    {
+      "name": "行内代码里的标签保持字面量",
+      "text": "`<file path=\"/a\" />`",
+      "segments": [{ "type": "text", "text": "`<file path=\"/a\" />`" }],
+      "plain": "`<file path=\"/a\" />`",
+      "canonical": "`<file path=\"/a\" />`"
+    },
+    {
+      "name": "围栏代码块里的标签保持字面量",
+      "text": "```\n<file path=\"/a\" />\n```",
+      "segments": [{ "type": "text", "text": "```\n<file path=\"/a\" />\n```" }],
+      "plain": "```\n<file path=\"/a\" />\n```",
+      "canonical": "```\n<file path=\"/a\" />\n```"
+    }
+  ],
+  "notCapsules": [
+    "<file path=\"/a\">",
+    "<file />",
+    "<file path=\"\" />",
+    "<ref path=\"a\" lines=\"x\" />",
+    "<ref path=\"a\" lines=\"12-10\" />",
+    "<ref path=\"a\" page=\"0\" />",
+    "<ref path=\"a\" lines=\"1\" page=\"2\" />",
+    "<file path=\"/a\" extra=\"b\" />",
+    "<FILE path=\"/a\" />",
+    "<file path=\"/a\" / >"
+  ]
+}

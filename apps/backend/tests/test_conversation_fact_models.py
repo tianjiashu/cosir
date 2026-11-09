@@ -18,7 +18,6 @@ from app.core.workflow.conversation_run_ledger import (
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.message_queue.task_message import UserInputBody
 from app.models.conversation_input import UserInputPresentation
-from app.models.conversation_run_attachment_input import ConversationRunAttachmentInput
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.conversation_run_record import ConversationRunRecord
@@ -139,8 +138,7 @@ def test_user_input_body_rejects_legacy_assistant_input_wrapper() -> None:
             {
                 "assistant_input": {
                     "version": 1,
-                    "display_text": "请阅读 [[cosir-file:readme.md]]",
-                    "attachments": [],
+                    "text": '请阅读 <file path="/a/readme.md" />',
                 }
             }
         )
@@ -150,18 +148,19 @@ def test_presentation_is_a_plain_binding() -> None:
     """展示绑定只承载事实，不在模型层重复校验：形状由 ``UserInputService`` 保证。"""
     asset = "a" * 64
     presentation = UserInputPresentation(
-        display_text=f"描述\n[[cosir-image:{asset}]]",
+        text='描述 <ref path="src/a.py" lines="1-2" />',
         image_paths=[f"attachments/{asset}.png"],
     )
 
     assert presentation.model_dump() == {
-        "display_text": f"描述\n[[cosir-image:{asset}]]",
+        "text": '描述 <ref path="src/a.py" lines="1-2" />',
         "image_paths": [f"attachments/{asset}.png"],
-        "attachments": [],
     }
 
 
-def _input_service(monkeypatch, *, supports_reasoning_effort: bool = False) -> UserInputService:
+def _input_service(
+    monkeypatch, workspace_root: Path, *, supports_reasoning_effort: bool = False
+) -> UserInputService:
     """不触达存储的 ``UserInputService``：Task 归属 workspace 7，模型不支持图片。"""
     monkeypatch.setattr(
         user_input_module,
@@ -172,134 +171,78 @@ def _input_service(monkeypatch, *, supports_reasoning_effort: bool = False) -> U
             )
         ),
     )
+    monkeypatch.setattr(
+        user_input_module,
+        "get_workspace_service",
+        lambda: SimpleNamespace(
+            get_workspace=lambda _workspace_id: SimpleNamespace(root_path=str(workspace_root))
+        ),
+    )
     service = UserInputService.__new__(UserInputService)
     service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
     return service
 
 
-def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch) -> None:
-    attachment_path = Path(__file__)
-    service = _input_service(monkeypatch)
-    command = ConversationRunCommand(
-        display_text="请阅读 [[cosir-file:readme]]",
-        attachments=[
-            ConversationRunAttachmentInput(
-                id="readme",
-                name="README.md",
-                content_type="text/markdown",
-                path=str(attachment_path),
-            )
-        ],
-    )
+def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch, tmp_path) -> None:
+    attachment_path = tmp_path / "README.md"
+    attachment_path.write_text("hello", encoding="utf-8")
+    service = _input_service(monkeypatch, tmp_path)
+    command = ConversationRunCommand(text=f'请阅读 <file path="{attachment_path}" />')
 
     prepared = service.prepare(7, command, 3).body
 
-    assert prepared.input_text == f"请阅读 {attachment_path}"
-    assert prepared.presentation.display_text == command.display_text
-    assert prepared.presentation.attachments[0]["id"] == "readme"
+    # 模型正文与展示正文是同一份规范化胶囊文本。
+    assert prepared.text == command.text
+    assert prepared.presentation.text == command.text
+    assert prepared.presentation.image_paths == []
 
 
-def test_prepare_returns_an_unqueued_user_input_message_with_delivery(monkeypatch) -> None:
-    service = _input_service(monkeypatch)
+def test_prepare_returns_an_unqueued_user_input_message_with_delivery(
+    monkeypatch, tmp_path
+) -> None:
+    service = _input_service(monkeypatch, tmp_path)
 
-    message = service.prepare(
-        7, ConversationRunCommand(display_text="检查项目"), 3, delivery="next_run"
-    )
+    message = service.prepare(7, ConversationRunCommand(text="检查项目"), 3, delivery="next_run")
 
     assert (message.id, message.kind, message.delivery) == (None, "user_input", "next_run")
     assert message.project_to_transport is True
-    assert message.body.input_text == "检查项目"
+    assert message.body.text == "检查项目"
 
 
-def test_input_preparation_keeps_run_options_out_of_message(monkeypatch) -> None:
-    service = _input_service(monkeypatch, supports_reasoning_effort=True)
+def test_input_preparation_keeps_run_options_out_of_message(monkeypatch, tmp_path) -> None:
+    service = _input_service(monkeypatch, tmp_path, supports_reasoning_effort=True)
     queued = service.prepare(
         7,
-        ConversationRunCommand(
-            display_text="检查项目",
-            disabled_tool_groups=["终端工具"],
-        ),
+        ConversationRunCommand(text="检查项目", disabled_tool_groups=["终端工具"]),
         3,
         "high",
     ).body
     assert queued.launch.options.disabled_tool_groups == ["终端工具"]
     assert queued.launch.options.reasoning_effort == "high"
     assert queued.launch.model_config_id == 3
-    # Run 的配置只随 ``launch`` 走；消息体自身没有散落的执行选项或展示字段。
-    assert set(queued.model_dump()) == {"input_text", "presentation", "launch"}
+    # Run 的配置只随 ``launch`` 走；消息体自身没有散落的执行选项或附件字段。
+    assert set(queued.model_dump()) == {"text", "presentation", "launch"}
 
 
-def test_run_service_accepts_directory_as_one_ordinary_attachment(monkeypatch) -> None:
-    attachment_path = Path(__file__).parent
-    service = _input_service(monkeypatch)
-    command = ConversationRunCommand(
-        display_text="请检查 [[cosir-file:references]]",
-        attachments=[
-            ConversationRunAttachmentInput(
-                id="references",
-                name="references",
-                content_type="application/x-directory",
-                path=str(attachment_path),
-            )
-        ],
-    )
-
-    prepared = service.prepare(7, command, 3).body
-
-    assert prepared.input_text == f"请检查 {attachment_path}"
-    assert prepared.presentation.attachments == [
-        {
-            "id": "references",
-            "name": "references",
-            "content_type": "application/x-directory",
-            "path": str(attachment_path),
-        }
-    ]
-
-
-def test_prepared_text_does_not_rescan_attachment_paths(monkeypatch) -> None:
-    """文件路径插入正文后不再被二次解析；顺带固定「这一层不 stat 附件」。
-
-    路径里带 token 或 Markdown 围栏时，分两趟替换会把模型正文改坏；不存在于磁盘的路径也应
-    照常绑定——存在性由真正读取附件的工具判断。
-    """
-    path = "/nonexistent/[[cosir-image:abc]]/report```.md"
-    service = _input_service(monkeypatch)
-    command = ConversationRunCommand(
-        display_text="看 [[cosir-file:report]]",
-        attachments=[
-            ConversationRunAttachmentInput(
-                id="report", name="report.md", content_type="text/markdown", path=path
-            )
-        ],
-    )
-
-    prepared = service.prepare(7, command, 3).body
-
-    assert prepared.input_text == f"看 {path}"
-    assert prepared.presentation.attachments[0]["path"] == path
-
-
-def test_prepare_rejects_image_token_without_uploaded_asset(monkeypatch) -> None:
-    """正文里的图片 token 没绑定上传图片时在入队前拒绝，不能留给展示投影抛错。"""
-    service = _input_service(monkeypatch)
-
-    with pytest.raises(UserInputRejectedError) as caught:
-        service.prepare(7, ConversationRunCommand(display_text="你好 [[cosir-image:abc]]"), 3)
-
-    assert caught.value.code == "IMAGE_ATTACHMENT_UNAVAILABLE"
-
-
-def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch) -> None:
+def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch, tmp_path) -> None:
     """模型配置缺失不是「寻址不到 Task」，不能以 KeyError 冒到 404 映射。"""
     monkeypatch.setattr(
-        user_input_module, "get_model_config_service", lambda: model_configs(lambda _id: (_ for _ in ()).throw(KeyError(_id)))
+        user_input_module,
+        "get_model_config_service",
+        lambda: model_configs(lambda _id: (_ for _ in ()).throw(KeyError(_id))),
+    )
+    monkeypatch.setattr(
+        user_input_module,
+        "get_workspace_service",
+        lambda: SimpleNamespace(
+            get_workspace=lambda _workspace_id: SimpleNamespace(root_path=str(tmp_path))
+        ),
     )
     service = UserInputService.__new__(UserInputService)
     service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
 
     with pytest.raises(UserInputRejectedError) as caught:
-        service.prepare(7, ConversationRunCommand(display_text="你好"), 3)
+        service.prepare(7, ConversationRunCommand(text="你好"), 3)
 
     assert caught.value.code == "MODEL_CONFIG_UNAVAILABLE"
 

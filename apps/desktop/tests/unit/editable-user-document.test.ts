@@ -12,12 +12,7 @@ function file(id: string): CompleteAttachment {
     type: "file",
     name: `${id}.md`,
     contentType: "text/markdown",
-    content: [{
-      type: "file",
-      data: `cosir-local-file:${id}`,
-      filename: `${id}.md`,
-      mimeType: "text/markdown",
-    }],
+    content: [{ type: "file", data: `/tmp/${id}.md`, filename: `${id}.md`, mimeType: "text/markdown" }],
     status: { type: "complete" },
   };
 }
@@ -34,21 +29,20 @@ function image(id: string): CompleteAttachment {
 }
 
 describe("editable user document", () => {
-  it("splits ordinary files and images into their dedicated surfaces", () => {
-    const document = createEditableUserDocument("before[[cosir-file:a]]after", [
+  it("只把图片放进附件条，正文里的胶囊标签原样保留", () => {
+    const document = createEditableUserDocument('before<file path="/tmp/a.md" />after', [
       file("a"),
       image("image-a"),
       file("b"),
     ]);
 
-    expect(document.inlineFiles.map((attachment) => attachment.id)).toEqual(["a", "b"]);
-    expect(document.previewImages.map((attachment) => attachment.id)).toEqual(["image-a"]);
-    expect(document.text).toBe("before[[cosir-file:a]]after");
+    expect(document.images.map((attachment) => attachment.id)).toEqual(["image-a"]);
+    expect(document.text).toBe('before<file path="/tmp/a.md" />after');
   });
 
-  it("keeps the first occurrence of an attachment ID and preserves file order", () => {
-    const first = file("a");
-    const document = createEditableUserDocument("text", [first, file("a"), image("i"), image("i")]);
+  it("keep the first occurrence of an image and preserve attachment order", () => {
+    const first = image("a");
+    const document = createEditableUserDocument("text", [first, image("a"), image("i"), file("f")]);
 
     expect(editableDocumentAttachments(document).map((attachment) => attachment.id)).toEqual(["a", "i"]);
   });

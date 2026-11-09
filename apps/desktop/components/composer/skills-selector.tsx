@@ -7,7 +7,7 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { type Skill } from "@/lib/api/extensions";
-import { insertSkill, useComposerInsertion } from "@/components/composer/composer-insertion-context";
+import { insertCapsules, useComposerInsertion } from "@/components/composer/composer-insertion-context";
 import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
 
 const EMPTY_SKILLS: Skill[] = [];
@@ -72,7 +72,7 @@ export function SkillsSelector({ disabled = false, workspaceId }: SkillsSelector
                   // 不抢走 composer 的选区，插入位置仍是用户最后的光标处。
                   onMouseDown={(event) => event.preventDefault()}
                   onSelect={() => {
-                    insertSkill(insertion.dispatch, { name: skill.name });
+                    insertCapsules(insertion.dispatch, [{ kind: "skill", name: skill.name }]);
                     setOpen(false);
                   }}
                   className="flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 [&>svg:last-child]:hidden"

@@ -112,9 +112,9 @@ class _Context:
 
 def _user_input(message_id: int) -> TaskMessage:
     body = UserInputBody(
-        input_text="帮我重构登录",
+        text="帮我重构登录",
         launch=RunLaunch(model_config_id=1),
-        presentation=UserInputPresentation(display_text="帮我重构登录"),
+        presentation=UserInputPresentation(text="帮我重构登录"),
     )
     return TaskMessage.of(body, message_id=message_id)
 
@@ -280,3 +280,27 @@ def test_update_title_keeps_sidebar_order_and_reports_missing_task(isolated_stor
     assert updated.updated_at == task.updated_at
     with pytest.raises(KeyError):
         crud.update_title(task.id + 999, "x")
+
+
+def test_title_request_projects_capsules_out_of_user_messages() -> None:
+    """标题模型只看用户说了什么：请求副本里的胶囊投影成可读名称，标签本身不进标题请求。"""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {
+            "role": "user",
+            "content": '看 <file path="/a/notes.md" /> 并检查 <ref path="src/a.py" lines="1-2" />',
+        },
+        {"role": "assistant", "content": "ok"},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": '用 <skill name="review" /> 检查'}],
+        },
+    ]
+
+    projected = task_title._plain_text_messages(messages)  # type: ignore[arg-type]
+
+    assert projected[1]["content"] == "看 notes.md 并检查 src/a.py:1-2"
+    assert projected[2] is messages[2]
+    assert projected[3]["content"] == [{"type": "text", "text": "用 review 检查"}]
+    # 投影只发生在请求副本上，不改主线正在使用的消息。
+    assert messages[1]["content"] != projected[1]["content"]

@@ -1,12 +1,12 @@
 import type { Attachment, CreateAttachment } from "@assistant-ui/core";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { inlineAttachmentTokenId } from "../attachments/local-file-token";
 import { extractUserAddMessageAttachments, extractUserAddMessageText, type UserAddMessageCommand } from "../transport-message-converter";
 import { editableDraftAttachments, mergeDraftText, type RecoveredDraft, type ApplyEditDraftResult } from "./edit-composer-draft";
 
 /**
  * 输入框内容的进程内记录，比 composer 活得久：composer 属于 runtime，切走 Task 就随 `TaskPage` 销毁。
- * 按 Task 存放（key 即 {@link taskDraftKey}），草稿与恢复都只针对主输入框。
+ * 按 Task 存放（key 即 {@link taskDraftKey}），草稿与恢复都只针对主输入框；正文自带胶囊标签，
+ * 附件只有图片。
  */
 export type ComposerDraft = { text: string; attachments: readonly (Attachment | CreateAttachment)[] };
 const drafts = new Map<string, ComposerDraft>();
@@ -49,10 +49,12 @@ export function recoverComposerDraft(key: string, recovered: RecoveredDraft): Pr
   if (recover) return recover(recovered);
   const current = drafts.get(key);
   const attachments = [...(current?.attachments ?? [])];
-  const existing = new Set(editableDraftAttachments(attachments.map(attachment => ({ ...attachment, content: attachment.content ?? [] }))).map(inlineAttachmentTokenId));
+  const existing = new Set(
+    editableDraftAttachments(attachments.map(attachment => ({ ...attachment, content: attachment.content ?? [] })))
+      .map((attachment) => attachment.id),
+  );
   for (const attachment of editableDraftAttachments(recovered.attachments)) {
-    const id = inlineAttachmentTokenId(attachment);
-    if (!existing.has(id)) { attachments.push(attachment); existing.add(id); }
+    if (!existing.has(attachment.id)) { attachments.push(attachment); existing.add(attachment.id); }
   }
   saveComposerDraft(key, { text: mergeDraftText(recovered.text, current?.text ?? ""), attachments });
   return Promise.resolve(null);

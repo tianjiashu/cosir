@@ -4432,44 +4432,6 @@
         "title": "AgentTeamRunResponse",
         "description": "供执行卡渲染的 TeamRun 投影，不包含可恢复执行用的内部 state。"
       },
-      "AssistantFileAttachment": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "contentType": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Contenttype"
-          },
-          "path": {
-            "type": "string",
-            "maxLength": 4096,
-            "minLength": 1,
-            "title": "Path"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "contentType",
-          "path"
-        ],
-        "title": "AssistantFileAttachment",
-        "description": "一次用户消息中的普通文件引用。\n\n``path`` 是本机路径：新选的文件由宿主取得，撤回放回输入框的附件取自快照的展示绑定。该对象\n只描述本机路径，不上传或保存文件二进制。"
-      },
       "AssistantImagePart": {
         "properties": {
           "type": {
@@ -4552,14 +4514,6 @@
             "maxItems": 32,
             "minItems": 1,
             "title": "Parts"
-          },
-          "attachments": {
-            "items": {
-              "$ref": "#/components/schemas/AssistantFileAttachment"
-            },
-            "type": "array",
-            "maxItems": 32,
-            "title": "Attachments"
           }
         },
         "additionalProperties": false,
@@ -4569,7 +4523,7 @@
           "parts"
         ],
         "title": "AssistantUserMessage",
-        "description": "校验 Assistant UI 的用户消息。"
+        "description": "校验 Assistant UI 的用户消息。\n\n本机文件与工作区引用是正文里的 ``<file>`` / ``<ref>`` 胶囊，不再有独立的附件字段：\n胶囊正文由 composer 直接写进 text part。"
       },
       "Body_upload_attachment_workspaces__workspace_id__attachments_post": {
         "properties": {
@@ -5014,9 +4968,6 @@
                   "$ref": "#/components/schemas/ConversationStateImagePart"
                 },
                 {
-                  "$ref": "#/components/schemas/ConversationStateFilePart"
-                },
-                {
                   "$ref": "#/components/schemas/ConversationStateToolCallPart"
                 },
                 {
@@ -5232,41 +5183,6 @@
         "title": "ConversationStateError",
         "description": "面向 UI 的 Run 错误结构。\n\n``code`` 是内部稳定类别；``message`` 可以是模型 HTTP 响应体直接提供的消息。Transport\n只承载这两个字段，不透传完整响应体。"
       },
-      "ConversationStateFilePart": {
-        "properties": {
-          "type": {
-            "type": "string",
-            "const": "file",
-            "title": "Type"
-          },
-          "file": {
-            "type": "string",
-            "title": "File"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "contentType": {
-            "type": "string",
-            "title": "Contenttype"
-          },
-          "path": {
-            "type": "string",
-            "title": "Path"
-          }
-        },
-        "type": "object",
-        "required": [
-          "type",
-          "file",
-          "name",
-          "contentType",
-          "path"
-        ],
-        "title": "ConversationStateFilePart",
-        "description": "普通文件 part：稳定本机 locator、展示元数据与本机路径。\n\n``path`` 让撤回或排队编辑放回输入框的附件能原样再发送（发送请求必须带路径）；它是用户自己\n交给页面的本机路径，前端只把它作为附件描述交回后端，不读文件。"
-      },
       "ConversationStateFork": {
         "properties": {
           "sourceTaskId": {
@@ -5316,7 +5232,7 @@
           "image"
         ],
         "title": "ConversationStateImagePart",
-        "description": "只携带稳定附件 locator 的图片展示 part，不携带二进制。"
+        "description": "只携带稳定图片资源 locator 的展示 part，不携带二进制。"
       },
       "ConversationStateMessage": {
         "properties": {
@@ -5340,9 +5256,6 @@
                 },
                 {
                   "$ref": "#/components/schemas/ConversationStateImagePart"
-                },
-                {
-                  "$ref": "#/components/schemas/ConversationStateFilePart"
                 },
                 {
                   "$ref": "#/components/schemas/ConversationStateToolCallPart"
@@ -5559,7 +5472,7 @@
           "handoffs"
         ],
         "title": "ConversationStateSnapshot",
-        "description": "一个 Task 的完整 Transport state。\n\n对话界面只看 Task：``title`` 投影自 ``tasks.title``（事实源在 Task 表，snapshot 只是让打开中的\n页面实时收到标题变化），``messages`` 按回合扁平排列（每个回合：开启它的输入 + 一条回复），\n``activity`` 是最新 Run 的状态摘要。Run 身份不进 wire，历史回复的结局由消息上的 ``outcome``\n承载。命令被拒不进 snapshot，由命令的 HTTP 响应同步返回。``terminal_sessions`` 是本 Task\n终端会话的进程内事实（不持久化），投影规则见 ``ConversationTaskStateService.refresh_terminal_sessions``。\n``background_tasks`` 的历史来自持久化占位，活状态来自后台结果登记表；\n``foreground_waits``（可转到后台的前台等待）是进程内事实，\n二者见 ``refresh_background_results``。\n``handoffs``（进行中的交接）也是进程内事实，见 ``refresh_handoffs``。\n\n``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；\n后端工作副本始终是完整历史（恒为 0），\n只有发给前端的完整快照按窗口裁剪（见 ``snapshot_window``）。增量路径里的消息下标始终是完整历史\n里的位置；位置只在完整快照处才会变（投影只在末尾追加或原位替换消息），前端据此换算。"
+        "description": "一个 Task 的完整 Transport state。\n\n对话界面只看 Task：``title`` 投影自 ``tasks.title``（事实源在 Task 表，snapshot 只是让\n打开中的页面实时收到标题变化），``messages`` 按回合扁平排列（每个回合：开启它的输入 +\n一条回复），``activity`` 是最新 Run 的状态摘要。Run 身份不进 wire，历史回复的结局由消\n息上的 ``outcome`` 承载。命令被拒不进 snapshot，由命令的 HTTP 响应同步返回。\n``terminal_sessions`` 是本 Task 终端会话的进程内事实（不持久化），投影规则见\n``ConversationTaskStateService.refresh_terminal_sessions``。\n``background_tasks`` 的历史来自持久化占位，活状态来自后台结果登记表；\n``foreground_waits``（可转到后台的前台等待）是进程内事实，\n二者见 ``refresh_background_results``。\n``handoffs``（进行中的交接）也是进程内事实，见 ``refresh_handoffs``。\n\n``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；\n后端工作副本始终是完整历史（恒为 0），\n只有发给前端的完整快照按窗口裁剪（见 ``snapshot_window``）。增量路径里的消息下标始终是完整\n历史里的位置；位置只在完整快照处才会变（投影只在末尾追加或原位替换消息），前端据此换算。"
       },
       "ConversationStateTextPart": {
         "properties": {

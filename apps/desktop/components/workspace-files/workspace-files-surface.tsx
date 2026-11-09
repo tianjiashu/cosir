@@ -2,7 +2,6 @@ import { useOpenWorkspacePath } from "@/components/workspace-references/use-open
 import { useElementSize } from "@/hooks/use-element-size";
 import { useBrowserVisibility } from "@/lib/workspace-files/visibility";
 import { FileBrowserMenu, IgnoredItemsDialog } from "./ignored-items-dialog";
-import { ReferencePreview } from "@/components/workspace-references/reference-preview";
 import { useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -35,7 +34,7 @@ import { FileTree } from "./file-tree";
 import { FileSearch } from "./file-search";
 import { FilePreview } from "./file-preview";
 import { FileReadingTabs, FileTabBar, FileTabPanels } from "./file-reading-tabs";
-import { READING_ROW_CLASS, ReadingToolbar } from "./reading-toolbar";
+import { READING_ROW_CLASS } from "./reading-toolbar";
 
 /**
  * 文件面板：当前工作区的文件浏览器，整块渲染停靠外框。
@@ -274,22 +273,12 @@ export function WorkspaceFilesSurface({
                 onBrowse={() => patch(workspaceId, { treeVisible: true, browsing: true })}
               >
                 {session.active && (
-                  session.reference ? (
-                    <>
-                      <ReadingToolbar navigation={{ path: session.active, rootPath, revealPath }} />
-                      <ReferencePreview
-                        reference={session.reference}
-                        workspaceId={workspaceId}
-                      />
-                    </>
-                  ) : (
-                    <FilePreview
-                      key={session.active}
-                      workspaceId={workspaceId}
-                      path={session.active}
-                      navigation={{ path: session.active, rootPath, revealPath }}
-                    />
-                  )
+                  <FilePreview
+                    key={session.active}
+                    workspaceId={workspaceId}
+                    path={session.active}
+                    navigation={{ path: session.active, rootPath, revealPath }}
+                  />
                 )}
               </FileTabPanels>
             </div>

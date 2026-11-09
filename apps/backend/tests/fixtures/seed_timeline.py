@@ -1,6 +1,5 @@
 """Electron 验收专用：向隔离数据根写入真实 context / Run，不构造 wire 快照。"""
 
-
 # ruff: noqa: E402
 import os
 import sys
@@ -35,7 +34,7 @@ context.create(
         include_in_context=True,
         message={"role": "user", "content": "验收真实时间线"},
         metadata=UserMessageMetadata(
-            kind="user_input", presentation=UserInputPresentation(display_text="验收真实时间线")
+            kind="user_input", presentation=UserInputPresentation(text="验收真实时间线")
         ),
         turn=1,
     )

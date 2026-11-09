@@ -68,9 +68,7 @@ class _Ledger:
         self.created: list[SimpleNamespace] = []
         self.fail_create = False
 
-    def create_run(
-        self, task_id: int, launch: RunLaunch
-    ) -> SimpleNamespace:
+    def create_run(self, task_id: int, launch: RunLaunch) -> SimpleNamespace:
         if self.fail_create:
             raise RuntimeError("storage unavailable")
         run = SimpleNamespace(
@@ -134,9 +132,9 @@ class _Driver:
 
 def _user(text: str = "hi") -> UserInputBody:
     return UserInputBody(
-        input_text=text,
+        text=text,
         launch=RunLaunch(model_config_id=1),
-        presentation=UserInputPresentation(display_text=text),
+        presentation=UserInputPresentation(text=text),
     )
 
 
@@ -181,7 +179,8 @@ def harness(monkeypatch):
     monkeypatch.setattr(
         task_cancellation,
         "cancel_placeholders",
-        lambda task_id, ids, _hint, **_kw: settled.append((task_id, list(ids))) or frozenset({task_id}),
+        lambda task_id, ids, _hint, **_kw: settled.append((task_id, list(ids)))
+        or frozenset({task_id}),
     )
     space = SimpleNamespace(
         task_id=_TASK_ID,
@@ -450,7 +449,9 @@ async def test_wait_quiescent_is_false_while_a_new_input_waits_for_its_run(harne
     await harness.actor.abort()
 
 
-async def test_wait_quiescent_is_false_in_the_gap_between_wake_and_registering_the_executor(harness) -> None:
+async def test_wait_quiescent_is_false_in_the_gap_between_wake_and_registering_the_executor(
+    harness,
+) -> None:
     """唤醒先把 Run 写成 running 再登记执行者，闸门外读到这个空档时不能当作静止。"""
     harness.actor.start()
     harness.queue.put(_user("first"))

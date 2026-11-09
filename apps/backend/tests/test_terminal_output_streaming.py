@@ -36,7 +36,6 @@ from app.core.events import (
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
-from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import BackgroundWork
@@ -107,9 +106,7 @@ def test_finished_output_collector_freezes_snapshot_and_closes_live_sink() -> No
     assert "truncated" not in output
 
 
-def test_output_collector_preserves_ansi_and_sensitive_text_in_stream_and_final_output() -> (
-    None
-):
+def test_output_collector_preserves_ansi_and_sensitive_text_in_stream_and_final_output() -> None:
     emitted: list[str] = []
     collector = _OutputCollector(sink=emitted.append)
 
@@ -164,7 +161,7 @@ def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
     observation = ExecuteTerminalTool().execute(
         command="echo output",
         execution_context=ToolExecutionContext(
-        call_intent="test",
+            call_intent="test",
             step_id="step-1",
             task_id=7,
             workspace_id=1,
@@ -185,7 +182,9 @@ def test_terminal_output_budget_preserves_raw_content_and_artifact(
     tmp_path: Path,
 ) -> None:
     raw_output = "token=visible-secret\n" + ("x" * 300)
-    context = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
+    context = ToolExecutionContext(
+        step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1
+    )
     observation = ToolObservation(
         tool_name="execute_terminal",
         status="success",
@@ -245,7 +244,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
 
     channel = TerminalOutputStream.open(
         ToolExecutionContext(
-        call_intent="test",
+            call_intent="test",
             step_id="step-1",
             task_id=7,
             workspace_id=1,
@@ -266,9 +265,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
 
     assert not producer.is_alive()
     streamed = "".join(
-        event.data.text
-        for event in events
-        if isinstance(event.data, TerminalOutputDeltaData)
+        event.data.text for event in events if isinstance(event.data, TerminalOutputDeltaData)
     )
     assert streamed == expected
     assert [event.seq for event in events] == list(range(len(events)))
@@ -313,7 +310,9 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
     rc = runtime_stub(
         tool_executor=Executor(),
         admitted_tools=frozenset({"execute_terminal"}),
-        tool_definitions={"execute_terminal": SimpleNamespace(parallel_mode="serial", user_decision=None)},
+        tool_definitions={
+            "execute_terminal": SimpleNamespace(parallel_mode="serial", user_decision=None)
+        },
         run=SimpleNamespace(id=9, task_id=7),
         task=SimpleNamespace(id=7),
         workspace=SimpleNamespace(id=2, root_path=str(tmp_path)),
@@ -325,7 +324,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
 
     with execution_scope(rc, SimpleNamespace()):
         observations = await run_tool_batch(
-            rc, [ToolCall(tool_name="execute_terminal", arguments='{}', call_id="call-1")], "step-1"
+            rc, [ToolCall(tool_name="execute_terminal", arguments="{}", call_id="call-1")], "step-1"
         )
 
     assert len(observations) == 1
@@ -373,12 +372,20 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
-    projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
+    projector.process(
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=7,
+            run_id=9,
+            status="running",
+        )
+    )
     projector.process(
         ToolCallCreatedEvent(
             task_id=7,
-            run_id=9, turn=1,
+            run_id=9,
+            turn=1,
             tool_call_id="call-1",
             tool_name="execute_terminal",
         )
@@ -409,15 +416,22 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
-    projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
     projector.process(
-        ToolCallCreatedEvent(task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal")
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=7,
+            run_id=9,
+            status="running",
+        )
     )
     projector.process(
-        ToolCallStatusChangedEvent(
-            task_id=7, run_id=9, tool_call_id="call-1", status="running"
+        ToolCallCreatedEvent(
+            task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
         )
+    )
+    projector.process(
+        ToolCallStatusChangedEvent(task_id=7, run_id=9, tool_call_id="call-1", status="running")
     )
     projector.process(_terminal_output_update(0, "before "))
     # 用户把前台等待转到后台：占位 pending + background，展示数据不带输出，已流出的输出保留。
@@ -428,12 +442,22 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
             tool_call_id="call-1",
             status="pending",
             background=BackgroundWork(
-                run_id=1, kind="terminal_command", label="make", started_at=_RUN_CREATED_AT.isoformat(),
+                run_id=1,
+                kind="terminal_command",
+                label="make",
+                started_at=_RUN_CREATED_AT.isoformat(),
             ),
             display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
         )
     )
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="suspended"))
+    projector.process(
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=7,
+            run_id=9,
+            status="suspended",
+        )
+    )
     projector.process(_terminal_output_update(1, "after"))
 
     part = state["messages"][1]["parts"][0]
@@ -447,8 +471,12 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
             tool_call_id="call-1",
             status="completed",
             display_data={
-                "kind": "terminal-result", "command": "make", "workdir": "/w",
-                "output": "before after", "end": "exited", "exit_code": 0,
+                "kind": "terminal-result",
+                "command": "make",
+                "workdir": "/w",
+                "output": "before after",
+                "end": "exited",
+                "exit_code": 0,
             },
         )
     )
@@ -463,10 +491,19 @@ def test_runtime_update_skips_a_pending_part_that_is_not_a_background_placeholde
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
-    projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
     projector.process(
-        ToolCallCreatedEvent(task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal")
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=7,
+            run_id=9,
+            status="running",
+        )
+    )
+    projector.process(
+        ToolCallCreatedEvent(
+            task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
+        )
     )
     projector.process(_terminal_output_update(0, "early"))
 
@@ -478,12 +515,20 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
-    projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
+    projector.process(
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=7,
+            run_id=9,
+            status="running",
+        )
+    )
     projector.process(
         ToolCallCreatedEvent(
             task_id=7,
-            run_id=9, turn=1,
+            run_id=9,
+            turn=1,
             tool_call_id="call-1",
             tool_name="execute_terminal",
         )
@@ -499,9 +544,7 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
 
     streamed_output = "full live output " * 2_000
     for seq, start in enumerate(range(0, len(streamed_output), 4096)):
-        projector.process(
-            _terminal_output_update(seq, streamed_output[start : start + 4096])
-        )
+        projector.process(_terminal_output_update(seq, streamed_output[start : start + 4096]))
     projector.process(
         ToolCallStatusChangedEvent(
             task_id=7,
@@ -533,7 +576,6 @@ class _MemorySnapshotOwner:
     def get_state(self, _task_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
 
-
     def apply_planned(self, event: Any) -> TransportFrame:
         mutations = tuple(plan_event(event, copy.deepcopy(self.state)))
         for mutation in mutations:
@@ -559,13 +601,22 @@ class _MemorySnapshotOwner:
         )
 
 
-def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, ConversationEventProjector, str]:
+def _streamed_terminal_projector() -> (
+    tuple[ConversationStateSnapshot, ConversationEventProjector, str]
+):
     """建一个已实时流出终端输出、仍在 running 的 ``execute_terminal`` part。"""
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
-    projector.process(consumed(7, 9, 1, UserInputPresentation(display_text="run tool")))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=9, status="running"))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
+    projector.process(
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=7,
+            run_id=9,
+            status="running",
+        )
+    )
     projector.process(
         ToolCallCreatedEvent(
             task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
@@ -573,7 +624,10 @@ def _streamed_terminal_projector() -> tuple[ConversationStateSnapshot, Conversat
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7, run_id=9, tool_call_id="call-1", status="running",
+            task_id=7,
+            run_id=9,
+            tool_call_id="call-1",
+            status="running",
         )
     )
     streamed_output = "streamed line\n" * 600
@@ -633,7 +687,9 @@ def test_terminal_replay_is_idempotent_for_streamed_part(
 
     def replay() -> None:
         projector.process(
-            terminal_event(observation, task_id=7, run_id=9, step_id="step-1", tool_call_id="call-1")
+            terminal_event(
+                observation, task_id=7, run_id=9, step_id="step-1", tool_call_id="call-1"
+            )
         )
 
     replay()

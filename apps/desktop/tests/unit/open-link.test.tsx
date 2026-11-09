@@ -142,12 +142,14 @@ describe("markdown links", () => {
   });
 });
 
-it("renders search affordances separately and preserves all reference protocols", () => {
-  const html = renderMarkdown("`API.md` `./guide.md` [file](cosir-file:src/a.ts) [dir](cosir-dir:src) [snippet](cosir-snippet:src/a.ts#L2-L3) [excerpt](cosir-excerpt:src/a.ts)", { documentDir: "docs" });
+it("renders search affordances separately and treats removed reference schemes as plain text", () => {
+  const html = renderMarkdown("`API.md` `./guide.md` [file](cosir-file:src/a.ts) [dir](cosir-dir:src) [snippet](cosir-snippet:src/a.ts#L2-L3)", { documentDir: "docs" });
   expect(html).toContain('aria-label="查找文件 API.md"');
   expect(html).not.toContain('title="在文件面板打开 API.md"');
   expect(html).toContain('title="在文件面板打开 docs/guide.md"');
-  expect(html.match(/href="cosir-/g)).toHaveLength(4);
+  // 引用改成正文里的胶囊标签，不再是 Markdown 链接：旧 scheme 渲染为纯文本，不带地址。
+  expect(html).not.toContain("<a");
+  expect(html).not.toContain("cosir-");
 });
 
 it("discards late opens after a newer click or closing the dock", async () => {

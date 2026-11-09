@@ -34,9 +34,7 @@ from tests.test_agent_team_definitions import _configuration
 
 
 def _user(text: str) -> UserMessageMetadata:
-    return UserMessageMetadata(
-        kind="user_input", presentation=UserInputPresentation(display_text=text)
-    )
+    return UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(text=text))
 
 
 def _call(*call_ids: str) -> dict:
@@ -69,9 +67,11 @@ def _result_of(call_id: str) -> UserMessageMetadata:
 
 @pytest.fixture
 def history(isolated_storage, tmp_path):
-    """两个回合：第一回合发起 ``call-early``，第二回合发起 ``call-late`` 与 Team 方案 ``call-team``。
+    """两个回合：第一回合发起 ``call-early``，第二回合发起 ``call-late`` 与 Team 方案
+    ``call-team``。
 
-    第一回合那次调用的结论、一条 Task 级通知（与驱动内的续写提示合成一行）都在第二回合途中并入。
+    第一回合那次调用的结论、一条 Task 级通知（与驱动内的续写提示合成一行）都在第二回合途中
+    并入。
     """
     workspace = WorkspaceCrud().create("withdraw", str(tmp_path))
     task = TaskCrud().create(workspace.id, "withdraw", tool_schemas=[])
@@ -183,9 +183,9 @@ def side_effects(history, monkeypatch):
 def _input(text: str) -> TaskMessage:
     return TaskMessage.of(
         UserInputBody(
-            input_text=text,
+            text=text,
             launch=RunLaunch(model_config_id=1),
-            presentation=UserInputPresentation(display_text=text),
+            presentation=UserInputPresentation(text=text),
         ),
         delivery="next_run",
     )
@@ -199,7 +199,7 @@ def _queued(task_id: int) -> list[tuple[str, object]]:
         if isinstance(body, BackgroundResultBody | DecisionBody):
             return (message.kind, body.tool_call_id)
         assert isinstance(body, UserInputBody)
-        return (message.kind, body.input_text)
+        return (message.kind, body.text)
 
     return [describe(m) for m in depends.get_task_message_queue().pending_nowait(task_id)]
 
@@ -289,7 +289,9 @@ def test_withdraw_waits_for_a_conclusion_already_leaving_the_registry(monkeypatc
     withdrawer.join(5)
 
 
-def test_the_runs_last_turn_counts_as_withdrawn_only_after_withdrawal(history, side_effects) -> None:
+def test_the_runs_last_turn_counts_as_withdrawn_only_after_withdrawal(
+    history, side_effects
+) -> None:
     """恢复与「用户已停止」都据此判断：最后一个回合还在上下文里时不算撤回。"""
     store = ContextStore()
     assert store.run_last_turn_withdrawn(history.task_id, history.run_id) is False
@@ -313,7 +315,9 @@ def test_fork_cannot_cut_at_a_withdrawn_turn(history, side_effects) -> None:
     assert source.turn_start(1).sequence == 1
 
 
-def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(history, side_effects) -> None:
+def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(
+    history, side_effects
+) -> None:
     """可恢复是后端事实：cancelled 的 Run 撤回最后一个回合后，冷重建给出的 ``resumable`` 为假。"""
     from app.assistant_transport.service.conversation_task_state_rebuilder import (
         ConversationTaskStateRebuilder,

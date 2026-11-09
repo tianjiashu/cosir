@@ -20,13 +20,6 @@ import type {
   TransportTextPart,
   TransportToolCallPart,
 } from "@/lib/assistant/contract";
-import { getLocalAttachmentById } from "@/lib/assistant/attachments/local-attachment-registry";
-import {
-  localFileIdFromLocator,
-  localFileLocator,
-  localFileTokenIds,
-  splitLocalFileTokens,
-} from "@/lib/assistant/attachments/local-file-token";
 import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import {
   createEditableUserDocument,
@@ -38,19 +31,8 @@ export type UserAddMessageCommand = {
   type: "add-message";
   message: {
     role: "user";
-    attachments?: ReadonlyArray<{
-      id: string;
-      name: string;
-      contentType: string;
-      path: string;
-    }>;
-    parts: ReadonlyArray<
-      | { type: "text"; text: string }
-      | { type: "image"; image: string }
-      // assistant-ui composer-only part. use-runtime-transport resolves it to
-      // a local path embedded in text before the HTTP request is serialized.
-      | { type: "file"; data: string; filename?: string; mimeType: string; sourceType?: "id" }
-    >;
+    /** 正文（带 `<file>` / `<ref>` / `<skill>` 胶囊标签）与已上传图片的 locator，无旁挂附件。 */
+    parts: ReadonlyArray<{ type: "text"; text: string } | { type: "image"; image: string }>;
   };
 };
 
@@ -120,142 +102,50 @@ function toImageAttachment(part: TransportImagePart, index: number): CompleteAtt
   };
 }
 
-function toFileAttachment(part: { file: string; id?: string; name: string; contentType: string }): CompleteAttachment | null {
-  const localId = localFileIdFromLocator(part.file);
-  const id = part.id ?? localId;
-  // A file path or remote locator is content data, never an attachment identity.
-  // Only explicit IDs and our local-file locator can be restored safely.
-  if (!id) return null;
-  return {
-    // Restore must use the same registry ID that appears in the inline text
-    // token, while the content keeps its local-file data locator.
-    id,
-    type: "file" as const,
-    name: part.name,
-    contentType: part.contentType,
-    content: [{
-      type: "file" as const,
-      data: part.file,
-      filename: part.name,
-      mimeType: part.contentType,
-      sourceType: "id" as const,
-    }],
-    status: { type: "complete" as const },
-  };
-}
-
 export type EditableUserMessageDraft = {
   document: EditableUserDocument;
   text: string;
   attachments: readonly CompleteAttachment[];
 };
 
-function attachmentForUserPart(
-  part: Extract<ThreadUserMessage["content"][number], { type: "file" | "image" }>,
-  attachments: readonly CompleteAttachment[],
-): CompleteAttachment | null {
-  if (part.type === "image") {
-    return attachments.find((attachment) => attachment.type === "image" && attachment.id === part.image)
-      ?? toImageAttachment({ type: "image", image: part.image }, 0);
-  }
-
-  const localId = localFileIdFromLocator(part.data);
-  return attachments.find((attachment) =>
-    attachment.type !== "image"
-      && (attachment.id === localId
-        || attachment.content.some((content) => content.type === "file" && content.data === part.data)),
-  ) ?? (localId ? toFileAttachment({
-    id: localId,
-    file: part.data,
-    name: part.filename ?? "附件",
-    contentType: part.mimeType,
-  }) : null);
+/** 图片 part 对应的可放回输入框的附件；图片仍是附件条，不进正文。 */
+function toImageAttachmentForPart(part: Extract<ThreadUserMessage["content"][number], { type: "image" }>, attachments: readonly CompleteAttachment[]): CompleteAttachment {
+  return attachments.find((attachment) => attachment.type === "image" && attachment.id === part.image)
+    ?? toImageAttachment({ type: "image", image: part.image }, 0);
 }
 
 /**
- * Project a canonical user message into the text-plus-attachments shape the
- * composer accepts when a message is put back into it (withdraw, or editing a
- * queued message).
+ * 把 canonical 用户消息投影成「正文 + 图片附件」草稿形状，供撤回与编辑排队消息放回输入框。
  *
- * Canonical user content keeps files and images as ordered message parts so
- * the sent bubble can render them inline. assistant-ui's composer lifts
- * those non-text parts into attachments, but it cannot retain their position
- * in the text and also combines them with `message.attachments`. This helper
- * creates one stable attachment per canonical non-text part and inserts each
- * ordinary file token at its original text position. Images are projected to
- * the separate preview surface. The caller owns
- * writing this result into the composer; this function performs
- * no runtime or persistence side effects.
+ * canonical 正文里的 `<file>` / `<ref>` / `<skill>` 标签就是胶囊指针：编辑器装载时按同一套语法
+ * 解析成原子节点，这里不搬附件、也不重建 token 顺序。图片由输入框的附件条承载。
  */
 export function toEditableUserMessageDraft(message: ThreadUserMessage): EditableUserMessageDraft {
-  const orderedAttachments: CompleteAttachment[] = [];
-  const seenAttachmentIds = new Set<string>();
+  const images: CompleteAttachment[] = [];
+  const seenIds = new Set<string>();
+  const addImage = (attachment: CompleteAttachment) => {
+    if (seenIds.has(attachment.id)) return;
+    seenIds.add(attachment.id);
+    images.push(attachment);
+  };
   const textParts: string[] = [];
-  let pendingTokens = "";
-  let previousWasText = false;
 
-  const addAttachment = (attachment: CompleteAttachment | null) => {
-    if (!attachment || seenAttachmentIds.has(attachment.id)) return;
-    seenAttachmentIds.add(attachment.id);
-    orderedAttachments.push(attachment);
-  };
-
-  message.content.forEach((part, index) => {
+  for (const part of message.content) {
     if (part.type === "text") {
-      textParts.push(`${pendingTokens}${part.text}`);
-      pendingTokens = "";
-      previousWasText = true;
-      return;
+      textParts.push(part.text);
+      continue;
     }
+    if (part.type === "image") addImage(toImageAttachmentForPart(part, message.attachments));
+  }
+  // 快照与 assistant-ui 消息模型都可能带图片附件，同一 locator 只保留一份。
+  for (const attachment of message.attachments) {
+    if (attachment.type === "image") addImage(attachment);
+  }
 
-    if (part.type !== "file" && part.type !== "image") {
-      previousWasText = false;
-      return;
-    }
-
-    const attachment = attachmentForUserPart(part, message.attachments);
-    addAttachment(attachment);
-
-    if (!attachment) {
-      previousWasText = false;
-      return;
-    }
-
-    // Images are rendered by the separate preview surface in edit mode. They
-    // must not become inline text tokens, otherwise the contenteditable and
-    // the preview surface represent the same attachment twice.
-    if (part.type === "image") {
-      previousWasText = false;
-      return;
-    }
-    const token = `[[cosir-file:${attachment.id}]]`;
-    if (previousWasText && textParts.length > 0) {
-      textParts[textParts.length - 1] += token;
-    } else if (message.content[index + 1]?.type === "text") {
-      pendingTokens += token;
-    } else {
-      textParts.push(token);
-    }
-    previousWasText = false;
-  });
-
-  if (pendingTokens) textParts.push(pendingTokens);
-
-  // Keep any attachment metadata not represented by content as a deterministic
-  // fallback. Canonical messages should not normally take this branch, but it
-  // prevents an edit from silently dropping an attachment if a partial
-  // snapshot is observed during reconnect.
-  for (const attachment of message.attachments) addAttachment(attachment);
-
-  const document = createEditableUserDocument(textParts.join(""), orderedAttachments);
-  return {
-    document,
-    // Transport text parts are the exact fragments around attachment parts;
-    // inserting formatting separators here would move the attachment relative
-    // to the user's original text.
-    text: document.text,
-    attachments: editableDocumentAttachments(document),
-  };
+  // Transport 文本 part 是正文的精确片段，插入分隔符会改变用户原文。
+  const text = textParts.join("");
+  const document = createEditableUserDocument(text, images);
+  return { document, text, attachments: editableDocumentAttachments(document) };
 }
 
 /**
@@ -375,14 +265,6 @@ export function toThreadMessageWithRenderContext(
           return toToolCallPart(part);
         case "image":
           return { type: "image", image: part.image };
-        case "file":
-          return {
-            type: "file",
-            data: part.file,
-            filename: part.name,
-            mimeType: part.contentType,
-            sourceType: "id",
-          };
         case "agent-message":
           // 只占下标：回合按 canonical part 下标读内容，来信行直接读 `TurnLayout`。
           return { type: "data", name: part.type, data: null };
@@ -447,61 +329,12 @@ export function extractUserAddMessageText(command: unknown): string {
 }
 
 /**
- * 乐观消息按后端 canonical 形状投影（见后端 `build_user_input_parts`）：正文里的普通文件 token
- * 在原位换成 file part（同一文件只占首次出现的位置），Skill token 物化成发送后的标记；
- * 没有 token 的 file part 追加在后。
- * 这样消息气泡与编辑草稿只处理一种形状，乐观消息被 canonical 替换时附件不挪位。
+ * 乐观消息与后端 canonical 同形：正文（含胶囊标签）与图片 part 原样投影，不再把文件 token
+ * 换成 file part。胶囊由展示侧按同一套标签语法渲染，canonical 到达时内容不挪位。
  */
 export function toPendingUserMessage(command: unknown): ThreadMessage | null {
   if (!isUserAddMessageCommand(command)) return null;
-  // 乐观消息只供渲染、不会再发送：路径取自本机附件登记，登记已失效时留空（命令随后被拒）。
-  const toFilePart = (part: Extract<UserAddMessageCommand["message"]["parts"][number], { type: "file" }>): TransportMessagePart => ({
-    type: "file",
-    file: part.data,
-    name: part.filename ?? "附件",
-    contentType: part.mimeType,
-    path: getLocalAttachmentById(localFileIdFromLocator(part.data) ?? "")?.path ?? "",
-  });
-  const filesById = new Map(command.message.parts.flatMap((part) => {
-    if (part.type !== "file") return [];
-    const localId = localFileIdFromLocator(part.data);
-    return localId === undefined ? [] : [[localId, part] as const];
-  }));
-  const placed = new Set<object>();
-  const placedIds = new Set<string>();
-  const messageParts: TransportMessagePart[] = [];
-  for (const part of command.message.parts) {
-    if (part.type === "text") {
-      for (const piece of splitLocalFileTokens(part.text)) {
-        if (piece.type === "text") {
-          messageParts.push({ type: "text", text: piece.text });
-          continue;
-        }
-        if (placedIds.has(piece.token)) continue;
-        placedIds.add(piece.token);
-        const file = filesById.get(piece.token);
-        if (file) {
-          placed.add(file);
-          messageParts.push(toFilePart(file));
-          continue;
-        }
-        // 输入框里的普通文件只以 token 存在、命令不带 file part，名称从本机附件登记取；
-        // 登记已失效也占住原位，后端会以「附件不可用」拒绝这条命令。
-        const local = getLocalAttachmentById(piece.token);
-        messageParts.push({
-          type: "file",
-          file: localFileLocator(piece.token),
-          name: local?.name ?? "附件",
-          contentType: local?.contentType ?? "application/octet-stream",
-          path: local?.path ?? "",
-        });
-      }
-    } else if (part.type === "image") {
-      messageParts.push({ type: "image", image: part.image });
-    } else if (!placed.has(part)) {
-      messageParts.push(toFilePart(part));
-    }
-  }
+  const messageParts: TransportMessagePart[] = command.message.parts.map((part) => ({ ...part }));
   if (messageParts.length === 0) return null;
   // 乐观消息只需要渲染上下文，不构造尚不存在的后端 Run 事实。
   const pending = toThreadMessageWithRenderContext({
@@ -509,39 +342,14 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     role: "user",
     parts: messageParts,
   }, { turn: null, inherited: false, source: null, outcome: null, activity: null });
-  // The optimistic message follows the same single-source shape as the
-  // canonical projection. The content parts already carry all attachments.
   pending.metadata.custom.pending = true;
   return pending;
 }
 
+/** 失败/撤回时能放回输入框的附件：只有图片；正文里的胶囊随文本一起恢复。 */
 export function extractUserAddMessageAttachments(command: unknown): CreateAttachment[] {
   if (!isUserAddMessageCommand(command)) return [];
-  const attachments = command.message.parts.flatMap((part, index) => {
-    if (part.type === "image") return [toImageAttachment(part, index)];
-    if (part.type === "file") {
-      const attachment = toFileAttachment({
-        file: part.data,
-        name: part.filename ?? "附件",
-        contentType: part.mimeType,
-      });
-      return attachment ? [attachment] : [];
-    }
-    return [];
-  });
-  const knownIds = new Set(attachments.map((attachment) => attachment.id));
-  const localFiles = localFileTokenIds(extractUserAddMessageText(command)).flatMap((id) => {
-    if (knownIds.has(id)) return [];
-    const local = getLocalAttachmentById(id);
-    if (!local) return [];
-    knownIds.add(id);
-    const attachment = toFileAttachment({
-      id,
-      file: localFileLocator(id),
-      name: local.name,
-      contentType: local.contentType,
-    });
-    return attachment ? [attachment] : [];
-  });
-  return [...attachments, ...localFiles];
+  return command.message.parts.flatMap((part, index) =>
+    part.type === "image" ? [toImageAttachment(part, index)] : [],
+  );
 }

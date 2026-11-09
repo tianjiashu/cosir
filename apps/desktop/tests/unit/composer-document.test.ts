@@ -18,31 +18,55 @@ describe("composer document conversion", () => {
     "第一行\n第二行",
     "第一行\n\n末行\n",
     "<script>alert(1)</script> & 保持为普通文本",
-    "[[cosir-file:missing]] 是手写文本",
-    // 图片不进正文，同形文本不是 token。
-    "[[cosir-image:image-1]] 是手写文本",
+    '<file path="/tmp/missing.md" 是手写文本',
+    '<file path = "/tmp/x.md" /> 语法不合法保持文本',
+    '<ref path="a.md" lines="9-2" /> 行范围不合法保持文本',
   ])("纯文本往返保持不变：%j", (text) => {
     expect(serializeComposerDocument(parseComposerDocument(text))).toBe(text);
   });
 
-  it("把附件和 Skill token 解析为原子节点并保持顺序", () => {
-    const value = "开头 [[cosir-file:file-1]] [[cosir-skill:research%20notes]] 结尾";
+  it("把胶囊标签解析为同一个原子节点并保持顺序与类型", () => {
+    const value = '开头 <file path="/tmp/notes.md" /> <ref path="src/a.py" lines="12-14" /> <skill name="review-code" /> 结尾';
     const document = parseComposerDocument(value);
 
     expect(document.content?.[0]?.content?.map((node) => node.type)).toEqual([
-      "text", "attachmentToken", "text", "skillToken", "text",
+      "text", "capsuleToken", "text", "capsuleToken", "text", "capsuleToken", "text",
+    ]);
+    expect(document.content?.[0]?.content?.filter((node) => node.type === "capsuleToken").map((node) => node.attrs?.capsule)).toEqual([
+      { kind: "file", path: "/tmp/notes.md" },
+      { kind: "ref", path: "src/a.py", lines: "12-14" },
+      { kind: "skill", name: "review-code" },
     ]);
     expect(serializeComposerDocument(document)).toBe(value);
+  });
+
+  it("代码块与行内代码里的同形标签保持字面量", () => {
+    const value = '示例 `<file path="/tmp/a.md" />`\n\n```\n<skill name="review-code" />\n```';
+    const document = parseComposerDocument(value);
+
+    expect(document.content?.flatMap((node) => node.content ?? []).map((node) => node.type)).not.toContain("capsuleToken");
+    expect(serializeComposerDocument(document)).toBe(value);
+  });
+
+  it("胶囊序列化为规范标签：属性顺序、转义与目录尾斜杠", () => {
+    const document = parseComposerDocument(
+      '<file path="/tmp/a &amp; b.md" /><ref path="src/x.pdf" page="3" /><skill name="s" path="/abs/SKILL.md" /><file path="/tmp/dir/" />',
+    );
+    expect(serializeComposerDocument(document)).toBe(
+      '<file path="/tmp/a &amp; b.md" /><ref path="src/x.pdf" page="3" /><skill name="s" path="/abs/SKILL.md" /><file path="/tmp/dir/" />',
+    );
   });
 
   it("把外部插入命令转换成有序的行内节点", () => {
     const commands = [
       insertionCommandContent({ type: "insert-text", text: "多行\n提示" }),
       insertionCommandContent({
-        type: "insert-attachments",
-        attachments: [{ id: "file-1", name: "notes.md" }],
+        type: "insert-capsules",
+        capsules: [
+          { kind: "file", path: "/tmp/notes.md" },
+          { kind: "skill", name: "research" },
+        ],
       }),
-      insertionCommandContent({ type: "insert-skill", skill: { name: "research" } }),
     ];
     const document: JSONContent = {
       type: "doc",
@@ -50,13 +74,13 @@ describe("composer document conversion", () => {
     };
 
     expect(serializeComposerDocument(document)).toBe(
-      "多行\n提示[[cosir-file:file-1]][[cosir-skill:research]]",
+      '多行\n提示<file path="/tmp/notes.md" /><skill name="research" />',
     );
   });
 
   it("受控值追上内部编辑前保留本地草稿", () => {
     const lastPropValue = "初始";
-    const pending = "初始[[cosir-file:file-1]]";
+    const pending = '初始<file path="/tmp/notes.md" />';
 
     expect(shouldPreservePendingEditorValue("初始", lastPropValue, pending)).toBe(true);
     expect(shouldPreservePendingEditorValue(pending, lastPropValue, pending)).toBe(false);

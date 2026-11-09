@@ -1,18 +1,13 @@
 import type { CreateAttachment } from "@assistant-ui/core";
 
-import {
-  inlineAttachmentTokenId,
-  type InlineAttachmentIdentity,
-} from "@/lib/assistant/attachments/local-file-token";
-
-/** 交回输入框的内容：失败恢复与撤回用，都是可重新加入的完整附件。 */
+/** 交回输入框的内容：失败恢复与撤回用，附件只有图片，正文自带胶囊标签。 */
 export type RecoveredDraft = {
   text: string;
   attachments: readonly CreateAttachment[];
 };
 
-/** 草稿附件必须带稳定身份，否则无法与 composer 里已有附件去重。 */
-export type EditDraftAttachment = CreateAttachment & InlineAttachmentIdentity;
+/** 草稿附件必须带稳定 id，否则无法与 composer 里已有附件去重。 */
+export type EditDraftAttachment = CreateAttachment & { id: string };
 
 /**
  * 草稿写入所需的最小 composer 契约。
@@ -21,7 +16,7 @@ export type EditDraftAttachment = CreateAttachment & InlineAttachmentIdentity;
  * 单元测试可用同形假对象覆盖，无需 React 运行时。
  */
 export type EditDraftComposerTarget = {
-  getState(): { text: string; attachments: readonly InlineAttachmentIdentity[] };
+  getState(): { text: string; attachments: readonly { id: string }[] };
   addAttachment(attachment: CreateAttachment): Promise<void>;
   setText(text: string): void;
   attachment(options: { index: number }): { remove(): Promise<void> | void };
@@ -31,7 +26,7 @@ export type EditDraftComposerTarget = {
 export type ApplyEditDraftResult = {
   /** 需要恢复到 AUI 的图片数。 */
   expectedCount: number;
-  /** 实际新加入 composer 的附件数（同键附件不重复加入）。 */
+  /** 实际新加入 composer 的附件数（同 id 附件不重复加入）。 */
   addedCount: number;
   /** 清理掉的「草稿之外」附件数。 */
   removedCount: number;
@@ -42,27 +37,19 @@ export type ApplyEditDraftResult = {
 };
 
 /**
- * 收窄为具备稳定身份的草稿附件。
+ * 收窄为可恢复的草稿附件。
  *
- * 负责什么：只保留带非空 `id` 的附件——没有 id 的附件无法与内联 token 关联，也无法与
- * composer 里已有附件去重。
- * 不负责什么：不补 id、不做去重（去重由 `applyEditDraftToComposer` 按 `inlineAttachmentTokenId` 完成）。
- *
- * 参数:
- *     attachments: 任意来源（canonical 投影或失败恢复）的待写入附件。
- *
- * 返回:
- *     具备稳定 id 的附件子集，保持原顺序。
- *
- * 异常/副作用:
- *     无；纯函数。
+ * 草稿只保留图片（普通文件、引用与 Skill 都在正文标签里），且图片必须带稳定 id——没有 id 就无法与
+ * composer 里已有附件去重。纯函数，不补 id、不做去重。
  */
 export function editableDraftAttachments(
   attachments: readonly CreateAttachment[],
 ): readonly EditDraftAttachment[] {
   return attachments.filter(
     (attachment): attachment is EditDraftAttachment =>
-      typeof attachment.id === "string" && attachment.id.length > 0,
+      attachment.type === "image" &&
+      typeof attachment.id === "string" &&
+      attachment.id.length > 0,
   );
 }
 
@@ -79,7 +66,7 @@ export async function applyEditDraftToComposer(options: {
   isStillCurrent: () => boolean;
 }): Promise<ApplyEditDraftResult> {
   const { composer, text, isStillCurrent, mode } = options;
-  const images = options.attachments.filter((attachment) => attachment.type === "image");
+  const images = options.attachments;
   const result: ApplyEditDraftResult = { expectedCount: images.length, addedCount: 0, removedCount: 0, superseded: false, error: null };
   if (!isStillCurrent()) return { ...result, superseded: true };
   const pending: Promise<void>[] = [];
@@ -90,11 +77,11 @@ export async function applyEditDraftToComposer(options: {
   };
   const current = composer.getState();
   perform(() => composer.setText(mode === "prepend" ? mergeDraftText(text, current.text) : text));
-  const existing = new Set(current.attachments.map(inlineAttachmentTokenId));
+  const existing = new Set(current.attachments.map((attachment) => attachment.id));
   if (mode === "replace") {
-    const wanted = new Set(images.map(inlineAttachmentTokenId));
+    const wanted = new Set(images.map((attachment) => attachment.id));
     const kept = new Set<string>();
-    const stale = current.attachments.map((attachment, index) => ({ key: inlineAttachmentTokenId(attachment), index }))
+    const stale = current.attachments.map((attachment, index) => ({ key: attachment.id, index }))
       .filter(({ key }) => {
         if (!wanted.has(key) || kept.has(key)) return true;
         kept.add(key);
@@ -104,9 +91,8 @@ export async function applyEditDraftToComposer(options: {
     for (const { index } of stale.reverse()) perform(() => composer.attachment({ index }).remove(), () => result.removedCount++);
   }
   for (const attachment of images) {
-    const key = inlineAttachmentTokenId(attachment);
-    if (existing.has(key)) continue;
-    existing.add(key);
+    if (existing.has(attachment.id)) continue;
+    existing.add(attachment.id);
     perform(() => composer.addAttachment(attachment), () => result.addedCount++);
   }
   for (const settled of await Promise.allSettled(pending)) {

@@ -215,7 +215,8 @@ def _creation_service(store, monkeypatch, projector):
     service._task = store.tasks
     service._session_factory = store.factory
     monkeypatch.setattr(
-        "app.core.workflow.conversation_run_ledger.get_conversation_event_projector", lambda: projector
+        "app.core.workflow.conversation_run_ledger.get_conversation_event_projector",
+        lambda: projector,
     )
     monkeypatch.setattr(
         "app.core.workflow.conversation_run_ledger.get_model_config_service",
@@ -255,15 +256,15 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
             assert store.runs.get(event.run_id).context_window_total == 128000
             [queued] = TaskMessageQueue().pending_nowait(store.task.id)
             assert isinstance(queued.body, UserInputBody)
-            assert queued.body.input_text == "hello"
+            assert queued.body.text == "hello"
             assert store.contexts.get(store.task.id, include_in_context=False) == []
             events.append(event)
 
     service = _creation_service(store, monkeypatch, Projector())
     body = UserInputBody(
-        input_text="hello",
+        text="hello",
         launch=RunLaunch(model_config_id=1),
-        presentation=UserInputPresentation(display_text="hello"),
+        presentation=UserInputPresentation(text="hello"),
     )
     TaskMessageQueue().put(store.task.id, TaskMessage.of(body))
     run = service.create_run(store.task.id, body.launch)
@@ -321,7 +322,8 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
     ledger_module.get_conversation_event_projector = lambda: _Projector()
     try:
         result = service.transition(
-            11, RunTransition.FAIL,
+            11,
+            RunTransition.FAIL,
             end_reason="max_steps_reached",
             usage_stats=ConversationRunUsageStats(
                 input_tokens=3,

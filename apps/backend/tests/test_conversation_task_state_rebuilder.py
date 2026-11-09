@@ -115,7 +115,9 @@ def test_rebuild_writes_outcome_only_on_terminal_runs_last_assistant_message() -
             turn=turn,
         )
         for sequence, run_id, turn, text in (
-            (1, 1, 1, "第一段"), (2, 1, 1, "第二段"), (3, 2, 2, "进行中")
+            (1, 1, 1, "第一段"),
+            (2, 1, 1, "第二段"),
+            (3, 2, 2, "进行中"),
         )
     ]
 
@@ -337,7 +339,7 @@ def test_rebuild_restores_child_task_locator_and_workspace_role_from_display_dat
     assert tool_part["display_data"]["role"] == "workspace-reviewer"
 
 
-def test_rebuild_restores_ordinary_file_from_context_input() -> None:
+def test_rebuild_restores_capsule_text_and_images_from_context_input() -> None:
     timestamp = _timestamp()
     run = ConversationRunRecord(
         id=1,
@@ -346,22 +348,14 @@ def test_rebuild_restores_ordinary_file_from_context_input() -> None:
         created_at=timestamp,
         updated_at=timestamp,
     )
-    presentation = UserInputPresentation(
-        display_text="请查看 [[cosir-file:file-1]]",
-        attachments=[
-            {
-                "id": "file-1",
-                "name": "notes.md",
-                "content_type": "text/markdown",
-                "path": "C:/workspace/notes.md",
-            }
-        ],
-    )
+    image_id = "a" * 64
+    text = '请查看 <ref path="src/a.py" lines="1-2" />'
+    presentation = UserInputPresentation(text=text, image_paths=[f"attachments/{image_id}.png"])
     row = ConversationTaskContextRecord(
         id=1,
         task_id=7,
         run_id=1,
-        message={"role": "user", "content": "请查看 C:/workspace/notes.md"},
+        message={"role": "user", "content": text},
         metadata=UserMessageMetadata(kind="user_input", presentation=presentation),
         include_in_context=True,
         sequence=1,
@@ -371,14 +365,8 @@ def test_rebuild_restores_ordinary_file_from_context_input() -> None:
     state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
 
     assert state["messages"][0]["parts"] == [
-        {"type": "text", "text": "请查看 ", "status": "completed"},
-        {
-            "type": "file",
-            "file": "cosir-local-file:file-1",
-            "name": "notes.md",
-            "contentType": "text/markdown",
-            "path": "C:/workspace/notes.md",
-        },
+        {"type": "text", "text": text, "status": "completed"},
+        {"type": "image", "image": f"cosir-attachment://{image_id}"},
     ]
     validate_snapshot(state)
 
@@ -402,24 +390,6 @@ def test_rebuild_does_not_invent_user_message_from_run() -> None:
 def test_legacy_input_wrapper_is_rejected() -> None:
     with pytest.raises((TypeError, ValueError)):
         UserInputPresentation.model_validate({"assistant_input": {}})
-
-
-def test_blank_file_path_is_rejected() -> None:
-    with pytest.raises((TypeError, ValueError)):
-        UserInputPresentation.model_validate(
-            {
-                "display_text": "请查看 [[cosir-file:file-1]]",
-                "attachments": [
-                    {
-                        "id": "file-1",
-                        "name": "notes.md",
-                        "content_type": "text/markdown",
-                        "path": "   ",
-                    }
-                ],
-                "input_text": "请查看 notes.md",
-            }
-        )
 
 
 def test_reasoning_stays_in_context_observation_but_not_cold_conversation() -> None:

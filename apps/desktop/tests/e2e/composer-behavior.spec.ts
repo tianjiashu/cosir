@@ -24,7 +24,7 @@ async function openNativePicker(page: Page): Promise<FileChooser> {
 
 async function nativePicker(page: Page) {
   await (await openNativePicker(page)).setFiles(pickedNotes);
-  await expect(page.locator("[data-attachment-token]")).toHaveCount(1);
+  await expect(page.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(1);
 }
 
 async function transfer(input: Locator, kind: "paste" | "drop", name: string, type: string, text = "") {
@@ -123,7 +123,7 @@ for (const mode of ["new", "task"] as const) {
     await nativePicker(page);
     await expect(send).toBeEnabled();
     await input.getByRole("button", { name: "移除附件 notes.md" }).click();
-    await expect(input.locator("[data-attachment-token]")).toHaveCount(0);
+    await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(0);
     await expect(send).toBeDisabled();
     await input.press(undo);
     await expect(input).toContainText("notes.md");
@@ -136,14 +136,16 @@ for (const mode of ["new", "task"] as const) {
     await expect(send).toBeDisabled();
     await input.press(undo);
     await expect(input).toContainText("notes.md");
-    let submitted: { message: { attachments?: { path: string }[] } } | undefined;
+    let submitted: { message: { parts: { type: string; text: string }[] } } | undefined;
     await page.route(`${api}/tasks/*/messages`, async route => {
       submitted = route.request().postDataJSON();
       await route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "回归测试拒绝发送", retryable: true } } } });
     });
     await send.click();
     await expect(page.getByRole("dialog")).toContainText("回归测试拒绝发送");
-    expect(submitted?.message.attachments).toEqual([expect.objectContaining({ path: "/tmp/notes.md" })]);
+    expect(submitted?.message.parts).toEqual([
+      { type: "text", text: '<file path="/tmp/notes.md" />' },
+    ]);
     await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
     await expect(input).toContainText("notes.md");
     await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
@@ -161,7 +163,7 @@ for (const mode of ["new", "task"] as const) {
     await expect(page.getByRole("alert")).toContainText("不是本机文件");
     await transfer(input, "drop", "animation.gif", "image/gif");
     await expect(page.getByRole("alert")).toContainText("仅支持 JPEG 和 PNG");
-    await expect(input.locator("[data-attachment-token]")).toHaveCount(0);
+    await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(0);
     await expect(send).toBeEnabled();
   });
 
@@ -194,7 +196,7 @@ test("Task 草稿离开后恢复普通文件，原生选择迟到结果不会写
   await chooser.setFiles(pickedNotes);
   await expect(input).toHaveText("草稿 B");
   await page.getByText("草稿100", { exact: true }).click();
-  await expect(input.locator("[data-attachment-token]")).toHaveCount(1);
+  await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(1);
 });
 
 test("Shift+Enter 换行，组合输入 Enter 不提交，普通 Enter 只发送一次", async ({ page }) => {
@@ -231,8 +233,7 @@ test("Task 保活但已进入配置页时，迟到文件不写入隐藏草稿", 
 
 test("重载后撤回带普通文件的消息：附件按快照里的路径放回输入框，照常发送", async ({ page, request: apiRequest }) => {
   await seedState(apiRequest, 100, completedState(70, { id: "history-user", parts: [
-    { type: "text", text: "查看 ", status: "completed" },
-    { type: "file", file: "cosir-local-file:historical", name: "history.md", contentType: "text/markdown", path: "/w/history.md" },
+    { type: "text", text: '查看 <file path="/w/history.md" />', status: "completed" },
   ] }, [{ type: "text", text: "历史回复", status: "completed" }]));
   await openComposer(page, "task");
   await page.reload();
@@ -252,11 +253,8 @@ test("重载后撤回带普通文件的消息：附件按快照里的路径放�
   });
   await page.getByRole("button", { name: "发送", exact: true }).click();
   const body = (await request).postDataJSON();
-  expect(body).toMatchObject({ message: { parts: [{ type: "text", text: expect.stringContaining("[[cosir-file:historical]]") }] } });
-  // 页面重载后登记表为空：路径来自快照，不靠后端从原消息恢复。
-  expect(body.message.attachments).toEqual([
-    { id: "historical", name: "history.md", contentType: "text/markdown", path: "/w/history.md" },
-  ]);
+  expect(body).toMatchObject({ message: { parts: [{ type: "text", text: expect.stringContaining('<file path="/w/history.md" />') }] } });
+  expect(body.message.attachments).toBeUndefined();
   await expect(page.getByRole("dialog")).toContainText("历史附件回归拒绝");
   await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
   await expect(input).toContainText("history.md");

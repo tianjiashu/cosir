@@ -185,14 +185,8 @@ export function toAddMessageCommand(message: AppendMessage): UserAddMessageComma
       parts.push({ type: "image", image: part.image });
       continue;
     }
-    if (part.type === "file") {
-      parts.push({
-        type: "file",
-        data: part.data,
-        filename: part.filename ?? "附件",
-        mimeType: part.mimeType,
-      });
-    }
+    // 普通文件、引用与 Skill 都是正文里的胶囊标签，不会以 file part 出现；
+    // 本机附件上传适配器只产出图片。
   }
 
     // assistant-ui 将上传附件保存在 `message.attachments`，composer 不会把它们复制到

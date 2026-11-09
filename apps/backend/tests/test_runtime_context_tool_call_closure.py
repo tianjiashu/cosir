@@ -51,7 +51,9 @@ _CrudT = TypeVar("_CrudT")
 
 def _user_metadata(message: dict) -> UserMessageMetadata:
     """落库的 user 行必须带展示绑定；测试用正文作展示文本。"""
-    return UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(display_text=message["content"]))
+    return UserMessageMetadata(
+        kind="user_input", presentation=UserInputPresentation(text=message["content"])
+    )
 
 
 def _ai_message(*call_ids: str) -> ChatCompletionAssistantMessageParam:
@@ -75,7 +77,7 @@ def _ai_message(*call_ids: str) -> ChatCompletionAssistantMessageParam:
 def _image_path() -> str:
     """构造合法的 workspace 相对图片路径（文件名 stem 为 64 位十六进制 asset id）。
 
-    ``build_user_input_parts`` 会把它转成 ``cosir-attachment://<asset_id>`` 并按
+    ``build_presentation_parts`` 会把它转成 ``cosir-attachment://<asset_id>`` 并按
     ``Constant.Transport.IMAGE_LOCATOR`` 校验，形状不对会直接抛错。
     """
 
@@ -279,8 +281,14 @@ def test_duplicate_call_id_slots_fail_loudly_instead_of_reusing_a_row(
     existing_result = {"role": "tool", "content": "result", "tool_call_id": "call-1"}
     env.context.append(env.task.id, run.id, duplicate_calls, 1, True, turn=1)
     env.context.append(
-        env.task.id, run.id, existing_result, 2, True, ToolMessageMetadata(status="completed")
-    , turn=1)
+        env.task.id,
+        run.id,
+        existing_result,
+        2,
+        True,
+        ToolMessageMetadata(status="completed"),
+        turn=1,
+    )
     manager = _manager(
         context_store=env.context,
         task_id=env.task.id,
@@ -311,7 +319,12 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
     human_message = {"role": "user", "content": "继续"}
     env.context.append(env.task.id, previous_run.id, ai_message, 1, True, turn=1)
     env.context.append(
-        env.task.id, current_run.id, human_message, 2, True, _user_metadata(human_message),
+        env.task.id,
+        current_run.id,
+        human_message,
+        2,
+        True,
+        _user_metadata(human_message),
         turn=2,
     )
 
@@ -473,8 +486,8 @@ def test_persisted_result_must_have_one_owner_in_the_same_run(env, case):
     )
     if case == "duplicate":
         env.context.append(
-            env.task.id, run.id, result, 3, True, ToolMessageMetadata(status="completed")
-        , turn=1)
+            env.task.id, run.id, result, 3, True, ToolMessageMetadata(status="completed"), turn=1
+        )
     original = _rows(env)
     manager = _manager(
         context_store=env.context,
@@ -539,8 +552,8 @@ def test_close_unclosed_tool_call_is_idempotent_and_ordered(env: SimpleNamespace
     third_result = {"role": "tool", "content": "c done", "tool_call_id": "call-3"}
     env.context.append(env.task.id, run.id, first_call, 1, True, turn=1)
     env.context.append(
-        env.task.id, run.id, first_result, 2, True, ToolMessageMetadata(status="completed")
-    , turn=1)
+        env.task.id, run.id, first_result, 2, True, ToolMessageMetadata(status="completed"), turn=1
+    )
     env.context.append(env.task.id, run.id, second_call, 3, True, turn=1)
     env.context.append(env.task.id, run.id, third_result, 4, True, {"status": "completed"}, turn=1)
 
@@ -565,7 +578,8 @@ def test_close_unclosed_tool_call_is_idempotent_and_ordered(env: SimpleNamespace
     assert len([row for row in _rows(env) if row.message["role"] == "tool"]) == 3
 
     manager._entries = [
-        ContextEntry(message, run.id, index, turn=1) for index, message in enumerate(messages[1:], start=1)
+        ContextEntry(message, run.id, index, turn=1)
+        for index, message in enumerate(messages[1:], start=1)
     ]
     manager.load_message()
 
@@ -584,8 +598,8 @@ def test_close_keeps_completed_batches_and_only_appends_missing_results(
     second_result = {"role": "tool", "content": "b done", "tool_call_id": "call-2"}
     env.context.append(env.task.id, run.id, first_call, 1, True, turn=1)
     env.context.append(
-        env.task.id, run.id, first_result, 2, True, ToolMessageMetadata(status="completed")
-    , turn=1)
+        env.task.id, run.id, first_result, 2, True, ToolMessageMetadata(status="completed"), turn=1
+    )
     env.context.append(env.task.id, run.id, second_call, 3, True, turn=1)
     env.context.append(env.task.id, run.id, second_result, 4, True, {"status": "completed"}, turn=1)
 
@@ -788,7 +802,6 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
         task_id=env.task.id,
         run_id=run.id,
         step_id="step-1",
-
     )
     machine.tool_call(
         [
@@ -871,9 +884,9 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
     )
     with env.factory.begin() as session:
         body = UserInputBody(
-            input_text="新消息",
+            text="新消息",
             launch=RunLaunch(model_config_id=1),
-            presentation=UserInputPresentation(display_text="新消息"),
+            presentation=UserInputPresentation(text="新消息"),
         )
         TaskMessageCrud().append(session, [(env.task.id, TaskMessage.of(body))])
     manager = _manager(
@@ -907,18 +920,18 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
     assert requested == []
     with env.factory() as session:
         queued = TaskMessageCrud().list_pending(session, env.task.id)
-        assert [
-            item.body.input_text
-            for item in queued
-            if isinstance(item.body, UserInputBody)
-        ] == ["新消息"]
+        assert [item.body.text for item in queued if isinstance(item.body, UserInputBody)] == [
+            "新消息"
+        ]
     assert len(_rows(env)) == 1
 
 
 def test_included_result_cannot_promote_an_incomplete_draft_into_a_call(env):
     """库中即使有同 ID 草稿，也不能把未完成调用提升为已执行依据。"""
     run = env.seed_run("running")
-    env.context.append(env.task.id, run.id, _ai_message("partial"), 1, include_in_context=False, turn=1)
+    env.context.append(
+        env.task.id, run.id, _ai_message("partial"), 1, include_in_context=False, turn=1
+    )
     env.context.append(
         env.task.id,
         run.id,

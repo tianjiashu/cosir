@@ -1,47 +1,55 @@
-import {
-  referenceName,
-  type WorkspaceReference,
-} from "@/lib/workspace-references/codec";
 import { WorkspaceFileIcon } from "@/components/workspace-files/file-icon";
 import { InlineToken } from "@/components/ui/inline-token";
+import type { RefCapsule } from "@/lib/assistant/capsules";
+import {
+  refDescription,
+  refIsDirectory,
+  refLineRange,
+  refLocatorText,
+  refName,
+  refWorkspacePath,
+} from "@/lib/workspace-references/ref-capsule";
 import { useOpenWorkspacePath } from "./use-open-workspace-path";
 
 /**
  * 工作区引用胶囊：输入框与已发送消息共用同一外观，消息里不传 `remove`。
- * 片段预览来自消息正文，只有显式打开路径才访问当前文件。
+ *
+ * 点击打开当前文件并定位：行范围在文本阅读器里选中并居中，PDF 跳到对应页；目录在文件树里展开定位。
+ * 引用只是指针，不携带选取时的正文，文件删除后打开会按实际的「文件不存在」提示。
  */
 export function ReferenceChip({
-  reference,
+  capsule,
   remove,
   disabled = false,
 }: {
-  reference: WorkspaceReference;
+  capsule: RefCapsule;
   remove?: () => void;
   disabled?: boolean;
 }) {
   const opener = useOpenWorkspacePath();
-  const name = referenceName(reference);
-  // 引用路径本身就是工作区相对路径（目录引用可能是根目录 ""），不经 `resolve` 换算。
+  const directory = refIsDirectory(capsule);
+  const name = refName(capsule);
+  const detail = refLocatorText(capsule);
+  // 引用路径本身就是工作区相对路径（根目录为空串），不经 `resolve` 换算。
   const open = () => {
     if (!opener) return;
-    if (reference.kind === "directory") {
-      opener.openDirectory(reference.path);
+    if (directory) {
+      opener.openDirectory(refWorkspacePath(capsule));
       return;
     }
-    // 摘录引用带着选取时的正文，文件面板先展示这段快照，用户可再切到当前文件。
-    void opener.openFile(reference.path, reference.content !== undefined ? { excerpt: reference } : undefined);
+    void opener.openFile(capsule.path, {
+      lines: refLineRange(capsule) ?? undefined,
+      page: capsule.page !== undefined ? Number(capsule.page) : undefined,
+    });
   };
-  const fileName = reference.path.split("/").at(-1) || "工作区";
-  const detail = reference.kind === "excerpt" ? " · 摘录"
-    : reference.startLine ? ` · L${reference.startLine}–${reference.endLine}` : undefined;
   return (
-    <span data-workspace-reference={reference.kind}>
+    <span data-workspace-reference="true">
       <InlineToken
-        icon={<WorkspaceFileIcon name={reference.path} folder={reference.kind === "directory"} />}
-        name={`${fileName}${reference.kind === "directory" ? "/" : ""}`}
+        icon={<WorkspaceFileIcon name={capsule.path} folder={directory} />}
+        name={name}
         detail={detail}
-        description={`${reference.path || "."}${detail ?? ""}`}
-        preserveExtension={reference.kind !== "directory"}
+        description={refDescription(capsule)}
+        preserveExtension={!directory}
         open={{ label: `查看引用 ${name}`, disabled: opener === null, onClick: open }}
         remove={remove ? { label: `移除引用 ${name}`, disabled, onClick: remove } : undefined}
       />

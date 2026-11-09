@@ -1,39 +1,19 @@
-import { markdownSegments } from "@/lib/assistant/composer/markdown-literals";
 import {
-  decodeReferences,
-  encodeReference,
-  type WorkspaceReference,
-} from "@/lib/workspace-references/codec";
+  parseCapsules,
+  serializeCapsule,
+  type Capsule,
+  type CapsuleSegment,
+} from "@/lib/assistant/capsules";
 import type { JSONContent } from "@tiptap/core";
-import {
-  createSkillMentionToken,
-  parseSkillMentionName,
-} from "@/lib/assistant/composer/skill-mention-token";
 
-// 正文里只有普通文件与 Skill 两种 token；图片走输入框上方的附件条，不进正文。
-const COMPOSER_TOKEN = /\[\[cosir-(file|skill):([^\]]+)\]\]/g;
-
-export type InlineComposerAttachment = {
-  id: string;
-  name: string;
-};
-
-export type InlineComposerSkill = {
-  name: string;
-};
-
+/** 编辑器里唯一的外部插入命令；胶囊统一经 `insert-capsules` 由调用方给出语义对象。 */
 export type ComposerInsertionCommand =
   | { type: "insert-text"; text: string }
-  | {
-      type: "insert-attachments";
-      attachments: readonly InlineComposerAttachment[];
-    }
-  | { type: "insert-references"; references: readonly WorkspaceReference[] }
-  | { type: "insert-skill"; skill: InlineComposerSkill };
+  | { type: "insert-capsules"; capsules: readonly Capsule[] };
 
 /**
- * 将持久化/受控文本转换为编辑器文档。附件、Skill token 在编辑期间是原子节点，
- * 普通文本里的相似字符串只在外部值重新装载时解析，避免每次击键都重建选区。
+ * 将持久化/受控文本转换为编辑器文档：胶囊标签在编辑期间是原子节点，代码块/行内代码里的同形文本
+ * 保持原文。普通文本里的相似字符串只在外部值重新装载时解析，避免每次击键都重建选区。
  */
 export function parseComposerDocument(text: string): JSONContent {
   const paragraphs: JSONContent[][] = [[]];
@@ -45,44 +25,12 @@ export function parseComposerDocument(text: string): JSONContent {
       if (index < lines.length - 1) paragraphs.push([]);
     });
   };
+  const appendSegment = (segment: CapsuleSegment) => {
+    if (segment.type === "text") appendText(segment.text);
+    else paragraphs[paragraphs.length - 1]?.push(capsuleNode(segment.capsule));
+  };
 
-  for (const part of decodeReferences(text)) {
-    if (part.type === "reference") {
-      paragraphs[paragraphs.length - 1]?.push({
-        type: "workspaceReference",
-        attrs: { reference: part.reference },
-      });
-      continue;
-    }
-    for (const segment of markdownSegments(part.text)) {
-      if (segment.literal) {
-        appendText(segment.text);
-        continue;
-      }
-      const plain = segment.text;
-      let cursor = 0;
-      for (const match of plain.matchAll(COMPOSER_TOKEN)) {
-        const token = match[0];
-        const offset = match.index ?? cursor;
-        appendText(plain.slice(cursor, offset));
-        cursor = offset + token.length;
-        const kind = match[1];
-        const tokenId = match[2] ?? "";
-        if (kind === "skill") {
-          paragraphs[paragraphs.length - 1]?.push({
-            type: "skillToken",
-            attrs: { name: parseSkillMentionName(tokenId) },
-          });
-        } else {
-          paragraphs[paragraphs.length - 1]?.push({
-            type: "attachmentToken",
-            attrs: { tokenId },
-          });
-        }
-      }
-      appendText(plain.slice(cursor));
-    }
-  }
+  for (const segment of parseCapsules(text)) appendSegment(segment);
 
   return {
     type: "doc",
@@ -93,7 +41,7 @@ export function parseComposerDocument(text: string): JSONContent {
   };
 }
 
-/** 把编辑器文档投影回现有的纯文本 token 契约，作为父组件与发送边界的值。 */
+/** 把编辑器文档投影回正文（胶囊序列化为规范标签），作为父组件与发送边界的值。 */
 export function serializeComposerDocument(document: JSONContent): string {
   if (document.type !== "doc") return serializeInlineNode(document);
   const nodes = document.content ?? [];
@@ -113,28 +61,15 @@ export function serializeComposerDocument(document: JSONContent): string {
 export function insertionCommandContent(
   command: ComposerInsertionCommand,
 ): JSONContent[] {
-  if (command.type === "insert-text") {
-    return command.text
-      .split("\n")
-      .flatMap((line, index, lines) => [
-        ...(line ? [{ type: "text", text: line } satisfies JSONContent] : []),
-        ...(index < lines.length - 1
-          ? [{ type: "hardBreak" } satisfies JSONContent]
-          : []),
-      ]);
-  }
-  if (command.type === "insert-skill") {
-    return [{ type: "skillToken", attrs: { name: command.skill.name } }];
-  }
-  if (command.type === "insert-references")
-    return command.references.map((reference) => ({
-      type: "workspaceReference",
-      attrs: { reference },
-    }));
-  return command.attachments.map((attachment) => ({
-    type: "attachmentToken",
-    attrs: { tokenId: attachment.id },
-  }));
+  if (command.type === "insert-text") return textContent(command.text);
+  return command.capsules.map(capsuleNode);
+}
+
+/** 粘贴带胶囊的文本时使用的行内内容：标签解析为节点，其余文本原样（换行变 hardBreak）。 */
+export function inlineComposerContent(text: string): JSONContent[] {
+  return parseCapsules(text).flatMap((segment) =>
+    segment.type === "capsule" ? [capsuleNode(segment.capsule)] : textContent(segment.text),
+  );
 }
 
 /** 旧受控值尚未跟上内部编辑时，让编辑器文档暂时保留最新输入。 */
@@ -150,15 +85,27 @@ export function shouldPreservePendingEditorValue(
   );
 }
 
+function capsuleNode(capsule: Capsule): JSONContent {
+  return { type: "capsuleToken", attrs: { capsule } };
+}
+
+function textContent(text: string): JSONContent[] {
+  return text
+    .split("\n")
+    .flatMap((line, index, lines) => [
+      ...(line ? [{ type: "text", text: line } satisfies JSONContent] : []),
+      ...(index < lines.length - 1
+        ? [{ type: "hardBreak" } satisfies JSONContent]
+        : []),
+    ]);
+}
+
 function serializeInlineNode(node: JSONContent): string {
   if (node.type === "text") return node.text ?? "";
   if (node.type === "hardBreak") return "\n";
-  if (node.type === "attachmentToken")
-    return `[[cosir-file:${String(node.attrs?.tokenId ?? "")}]]`;
-  if (node.type === "workspaceReference")
-    return encodeReference(node.attrs?.reference as WorkspaceReference);
-  if (node.type === "skillToken") {
-    return createSkillMentionToken(String(node.attrs?.name ?? ""));
+  if (node.type === "capsuleToken") {
+    const capsule = node.attrs?.capsule as Capsule | null | undefined;
+    return capsule ? serializeCapsule(capsule) : "";
   }
   return (node.content ?? []).map(serializeInlineNode).join("");
 }

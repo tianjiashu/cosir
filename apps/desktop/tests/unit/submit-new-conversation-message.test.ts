@@ -36,6 +36,21 @@ describe("submitNewConversationMessage", () => {
     });
   });
 
+  it("正文胶囊标签原样发送为 text part，没有旁挂附件字段", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 202 })));
+    const text = '看 <file path="/tmp/notes.md" /> 和 <ref path="src/a.py" lines="1-2" />';
+
+    await expect(submitNewConversationMessage({ ...input, text })).resolves.toBeUndefined();
+
+    const [, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(init.body));
+    expect(body.message).toEqual({
+      role: "user",
+      parts: [{ type: "text", text }],
+    });
+    expect(body.message.attachments).toBeUndefined();
+  });
+
   it("treats a non-2xx response as a definitive rejection with the backend reason", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ detail: { error: { code: "INVALID_MESSAGE", message: "测试拒绝", retryable: true } } }),

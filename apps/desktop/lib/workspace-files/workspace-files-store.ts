@@ -1,5 +1,4 @@
 import type { LineRange } from "@/lib/links/resolve-link";
-import type { WorkspaceReference } from "@/lib/workspace-references/codec";
 import { create } from "zustand";
 
 type FileTab = { path: string; pinned: boolean };
@@ -12,6 +11,8 @@ export type ReadingPosition = {
   previewScrollTop?: number;
   /** 待定位的行范围（链接带行号打开时写入）；文本预览选中并居中后清除，之后照常按 `scrollTop` 恢复。 */
   reveal?: LineRange;
+  /** 待定位的 PDF 页码（引用带页码打开时写入）；PDF 预览跳转后清除。 */
+  revealPage?: number;
 };
 /** 有渲染形态的文件（Markdown、SVG、无内置预览的二进制）看渲染结果还是源码；纯文本只有源码。 */
 export type ReadingView = "rendered" | "source";
@@ -20,7 +21,6 @@ export type ReadingPreference = {
   view?: ReadingView;
 };
 export type FileSession = {
-  reference: WorkspaceReference | null;
   preferences: Record<string, ReadingPreference>;
   tabs: FileTab[];
   active: string | null;
@@ -37,7 +37,6 @@ export type FileSession = {
   searchRequest: { query: string; id: number; navigation?: { lines?: LineRange } } | null;
 };
 const fresh = (): FileSession => ({
-  reference: null,
   preferences: {},
   tabs: [],
   active: null,
@@ -97,7 +96,7 @@ export const useFilesStore = create<{
         navigationId: state.navigationId + 1,
         sessions: {
           ...state.sessions,
-          [id]: { ...session, tabs, active: path, positions, browsing: false, reference: null },
+          [id]: { ...session, tabs, active: path, positions, browsing: false },
         },
       };
     }),

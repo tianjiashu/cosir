@@ -90,7 +90,7 @@ class TransportAssistantService:
 
         重新入队得到新的消息身份，actor 把它当作新到达的消息照常判定：有执行者就并入当前 Run，
         挂起就唤醒，空闲就以它开新 Run。不原地改 ``delivery``：actor 只按水位之后的新消息推进，
-        原地更新唤不醒它。正文、附件与发起配置原样沿用。
+        原地更新唤不醒它。正文（含胶囊指针）、图片与发起配置原样沿用。
 
         异常:
             SessionConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
@@ -142,11 +142,11 @@ class TransportAssistantService:
     async def withdraw(self, task_id: int, message_id: int) -> None:
         """撤回最新一条已并入的用户输入开启的回合（语义见 ``TurnWithdrawalService``），不开新 Run。
 
-        编辑不是后端命令：前端撤回后把正文与附件放回输入框，改完照常发送。只在 Task 静止（``idle``）
-        时接受，不替用户停止：运行中的 Run 用的是 ``begin_run`` 时建好的内存上下文，看不到库里的移出，
-        会继续回答被撤回的消息。前端只在 activity 为终态时开放入口，这里是最后一道守卫。静止看 actor
-        的执行阶段而不是 Run 状态：Run 落定终态后执行者还在收尾，此时改 context 会与它交错；判定在
-        Task 闸门内，与 actor 的推进互斥。
+        编辑不是后端命令：前端撤回后把正文（含胶囊指针）放回输入框，改完照常发送。
+        只在 Task 静止（``idle``）时接受，不替用户停止：运行中的 Run 用的是 ``begin_run`` 时建好的
+        内存上下文，看不到库里的移出，会继续回答被撤回的消息。前端只在 activity 为终态时开放入口，
+        这里是最后一道守卫。静止看 actor 的执行阶段而不是 Run 状态：Run 落定终态后执行者还在收尾，
+        此时改 context 会与它交错；判定在 Task 闸门内，与 actor 的推进互斥。
 
         异常:
             SessionConflictError: ``WITHDRAW_TARGET_STALE``（目标不是最新一条用户输入）、
@@ -193,8 +193,9 @@ class TransportAssistantService:
         """取消一次工具调用；没有可取消的对象（或已标记过）时返回 ``False``。
 
         这次调用登记了后台结果时撤销登记，不要求 Run 在执行（后台工作本来就在 Run 之外）：前台条目
-        由撤销回调唤醒工具线程、以取消结果收尾；后台条目向其活动 Run 回投取消结论，所属 Run 已结束时只结算占位。没有登记时只中止当前执行中
-        的工具调用：看执行者而不是 Run 状态，挂起的 Run 没有执行者，标记了也没人取。
+        由撤销回调唤醒工具线程、以取消结果收尾；后台条目向其活动 Run 回投取消结论，所属 Run 已结束
+        时只结算占位。没有登记时只中止当前执行中的工具调用：看执行者而不是 Run 状态，挂起的 Run
+        没有执行者，标记了也没人取。
 
         异常:
             KeyError: Task 不存在。
@@ -219,7 +220,8 @@ class TransportAssistantService:
             )
 
     async def decide(self, task_id: int, tool_call_id: str, request: DecisionRequest) -> None:
-        """用户对一次等待决定的工具调用作出决定：校验与入队归 ``ToolDecisionService``，不等工具执行。
+        """用户对一次等待决定的工具调用作出决定：校验与入队归 ``ToolDecisionService``，
+        不等工具执行。
 
         异常:
             KeyError: Task 不存在。

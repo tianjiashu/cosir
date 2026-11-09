@@ -53,13 +53,13 @@ describe("buildTaskForest", () => {
 describe("task tree title", () => {
   const fullTitle = (title: string) => buildTaskForest([task(1, title)])[0].full_title;
 
-  it("strips inline attachment tokens", () => {
-    expect(fullTitle("[[cosir-file:abc]]帮我优化这个文档")).toBe("帮我优化这个文档");
-    expect(fullTitle("<!-- [[cosir-file:abc]] -->前文 [[cosir-image:def]]后文")).toBe("前文 后文");
+  it("projects capsule tags to readable names", () => {
+    expect(fullTitle('<file path="/tmp/notes.md" />帮我优化这个文档')).toBe("notes.md帮我优化这个文档");
+    expect(fullTitle('前文 <ref path="src/a.py" lines="12-14" /> 后文')).toBe("前文 src/a.py:12-14 后文");
+    expect(fullTitle('<skill name="review-code" />检查')).toBe("review-code检查");
   });
 
   it("falls back when the title has no visible text", () => {
-    expect(fullTitle("[[cosir-file:abc]]")).toBe("新对话");
     expect(fullTitle("   ")).toBe("新对话");
   });
 

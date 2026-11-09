@@ -8,6 +8,7 @@ import {
   type FileEntry,
 } from "@/lib/api/workspace-files";
 import { useReferenceBridge } from "./reference-bridge";
+import { workspaceDirectoryRef, workspaceFileRef } from "@/lib/workspace-references/ref-capsule";
 import { WorkspaceFileIcon } from "@/components/workspace-files/file-icon";
 
 /** 使用编辑器的真实选区识别 @；输入法组合输入期间不提交候选，也不抢 Enter 发送。 */
@@ -112,22 +113,11 @@ export function ReferenceMention({
   }, [query, bridge?.workspaceId, bridge?.target, target, revision]);
   const choose = (entry: FileEntry) => {
     if (!editor || !mention || !bridge?.workspaceId) return;
-    const replacement = {
-      from: mention.from,
-      to: mention.to,
-      text: `@${mention.query}`,
-    };
-    void bridge.add(
-      bridge.workspaceId,
-      [
-        {
-          path: entry.path,
-          kind: entry.kind === "directory" ? "directory" : "file",
-        },
-      ],
-      undefined,
-      replacement,
-    );
+    // 先删掉已输入的 `@query`：胶囊插入的是当前光标处，正好落在原来的 `@` 位置。
+    editor.chain().focus().deleteRange({ from: mention.from, to: mention.to }).run();
+    void bridge.add(bridge.workspaceId, [
+      entry.kind === "directory" ? workspaceDirectoryRef(entry.path) : workspaceFileRef(entry.path),
+    ]);
   };
   useEffect(() => {
     if (!editor || !mention || bridge?.target !== target) return;

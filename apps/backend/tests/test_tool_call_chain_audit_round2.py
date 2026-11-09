@@ -105,7 +105,6 @@ class _MemorySnapshotOwner:
     def get_state(self, _task_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
 
-
     def apply_planned(self, event: Any) -> TransportFrame:
         mutations = tuple(plan_event(event, copy.deepcopy(self.state)))
         for mutation in mutations:
@@ -132,14 +131,24 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
 
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=_RUN_ID))
+    projector.process(
+        RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=_RUN_ID)
+    )
     # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
-    projector.process(consumed(_TASK_ID, _RUN_ID, 1, UserInputPresentation(display_text="test")))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=_TASK_ID, run_id=_RUN_ID, status="running"))
+    projector.process(consumed(_TASK_ID, _RUN_ID, 1, UserInputPresentation(text="test")))
+    projector.process(
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=_TASK_ID,
+            run_id=_RUN_ID,
+            status="running",
+        )
+    )
     projector.process(
         ToolCallCreatedEvent(
             task_id=_TASK_ID,
-            run_id=_RUN_ID, turn=_RUN_ID,
+            run_id=_RUN_ID,
+            turn=_RUN_ID,
             tool_call_id=tool_call_id,
             tool_name="execute_terminal",
         )
@@ -473,7 +482,8 @@ def test_p5_placeholder_of_another_run_is_not_overwritten() -> None:
         metadata=ToolMessageMetadata(status="completed"),
     )
 
-    # 写入归属取 manager 的当前 Run（``add_message`` 不再接受 run_id）：换到新 Run 后再写同一调用的结果。
+    # 写入归属取 manager 的当前 Run（``add_message`` 不再接受 run_id）：
+    # 换到新 Run 后再写同一调用的结果。
     manager.current_run_id = _RUN_ID + 1
     with pytest.raises(ContextProtocolError, match="tool_result_without_current_call"):
         manager.add_message(

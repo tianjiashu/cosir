@@ -1,6 +1,8 @@
-"""Task 标题支线：Run 首次并入用户输入后，与主线并行地请模型给对话起一个简短标题；每个 Run 至多一次。
+"""Task 标题支线：Run 首次并入用户输入后，与主线并行地请模型给对话起一个简短标题；
+每个 Run 至多一次。
 
-为什么挂在驱动上：支线复用本次 Run 的 ``rc.model``（同一 client、同一工具定义，命中 Task 的前缀缓存），
+为什么挂在驱动上：支线复用本次 Run 的 ``rc.model``（同一 client、同一工具定义，
+命中 Task 的前缀缓存），
 而 client 在 ``ReactLikeWorkflow.run`` 收尾时关闭，所以支线由驱动持有（``rc.title_branch``），
 ``settle`` 在关闭 client 前收尾它。成败都不影响 Run：失败、超时、取消只记日志，标题保持原样
 （创建 Task 时的用户输入兜底，或上一次生成的标题）。
@@ -14,15 +16,21 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionUserMessageParam
+from openai.types.chat import (
+    ChatCompletionContentPartParam,
+    ChatCompletionContentPartTextParam,
+    ChatCompletionMessageParam,
+    ChatCompletionUserMessageParam,
+)
 from openai.types.shared_params import ResponseFormatJSONObject
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.events import TaskTitleUpdatedEvent
 from app.core.llm_provider.openai_model import usage_from_response
+from app.core.user_input import capsules
 from app.core.workflow.node_helper.common import emit
 from app.models.task_kind import USER_FACING_TASK_TYPES
 from app.service import depends as service_depends
@@ -85,9 +93,9 @@ async def _generate(rc: RuntimeContext, messages: list[ChatCompletionMessagePara
     started = time.monotonic()
     current = rc.task.title
     try:
-        messages.append(
-            ChatCompletionUserMessageParam(role="user", content=_instruction(current))
-        )
+        # 标题模型只看用户说了什么：胶囊在请求副本里投影成可读名称，避免标签本身干扰主题判断。
+        messages = _plain_text_messages(messages)
+        messages.append(ChatCompletionUserMessageParam(role="user", content=_instruction(current)))
         response = await asyncio.wait_for(
             rc.model.complete(  # type: ignore[union-attr]  # 驱动期已补齐
                 messages, response_format=ResponseFormatJSONObject(type="json_object")
@@ -151,6 +159,40 @@ async def _generate(rc: RuntimeContext, messages: list[ChatCompletionMessagePara
             },
         },
     )
+
+
+def _plain_text_messages(
+    messages: list[ChatCompletionMessageParam],
+) -> list[ChatCompletionMessageParam]:
+    """把请求副本里的 user 消息正文投影为纯文本（``str`` 或 content 列表里的 text block）。
+
+    只处理 user 消息：胶囊只出现在用户输入里，系统提示词与工具结果保持原样。副本由调用方取好，
+    这里返回新列表，不改动主线正在使用的请求。
+    """
+    projected: list[ChatCompletionMessageParam] = []
+    for message in messages:
+        if message["role"] != "user":
+            projected.append(message)
+            continue
+        content = message["content"]
+        if isinstance(content, str):
+            text_content: str | list[ChatCompletionContentPartParam] = capsules.plain_text(content)
+        else:
+            text_content = [
+                ChatCompletionContentPartTextParam(
+                    type="text", text=capsules.plain_text(part["text"])
+                )
+                if part["type"] == "text"
+                else part
+                for part in content
+            ]
+        projected.append(
+            cast(
+                ChatCompletionUserMessageParam,
+                {**message, "content": text_content},
+            )
+        )
+    return projected
 
 
 def _instruction(current_title: str) -> str:

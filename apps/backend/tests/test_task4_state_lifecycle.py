@@ -30,11 +30,10 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 # 任务运行时空间在构造时会读当前 task，因此本文件全部用例都需要隔离主库。
 pytestmark = pytest.mark.usefixtures("isolated_storage")
 
+
 def _user_meta(text: str) -> UserMessageMetadata:
     """落库的用户消息都带来源 ``kind``；用户输入还带展示绑定（snapshot 重建与 fork 只从这里取）。"""
-    return UserMessageMetadata(
-        kind="user_input", presentation=UserInputPresentation(display_text=text)
-    )
+    return UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(text=text))
 
 
 def _task() -> TaskRecord:
@@ -50,7 +49,8 @@ def _task() -> TaskRecord:
 
 
 def _activity(run_id: int, status: str) -> dict[str, object]:
-    return {"modelActivity": None,
+    return {
+        "modelActivity": None,
         "turn": None,
         "resumable": False,
         "status": status,
@@ -138,7 +138,7 @@ def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
 
     assert state["activity"] is not None
     assert state["activity"]["turn"] == 1
-    # 由输入开启的回合总有回复；正文取对应 context，不能重复使用 Run 的首条 input_text。
+    # 由输入开启的回合总有回复；正文取对应 context，不能重复使用 Run 的首条 text。
     assert [message["turn"] for message in state["messages"]] == [1, 1]
     assert state["messages"][0]["parts"][0]["text"] == "from canonical context"
 
@@ -342,7 +342,8 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     "id": "stale-user",
                     "role": "user",
                     "parts": [{"type": "text", "text": "stale", "status": "completed"}],
-                    "turn": 2, "inherited": False,
+                    "turn": 2,
+                    "inherited": False,
                     "outcome": None,
                     "source": None,
                 },
@@ -350,7 +351,8 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     "id": "stale-assistant",
                     "role": "assistant",
                     "parts": [{"type": "text", "text": "stale", "status": "running"}],
-                    "turn": 2, "inherited": False,
+                    "turn": 2,
+                    "inherited": False,
                     "outcome": None,
                     "source": None,
                 },
@@ -527,8 +529,11 @@ async def test_running_snapshot_is_kept_until_the_run_stops_unwatched() -> None:
 
     sources.run = _run(2, "completed")
     service.apply_planned(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=2, status=ConversationRunStatus.COMPLETED)
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=7,
+            run_id=2,
+            status=ConversationRunStatus.COMPLETED,
+        )
     )
     assert not space.has_snapshot()
-
-

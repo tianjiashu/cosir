@@ -1,38 +1,43 @@
-"""用户输入解析边界：模型能力校验、附件、图片与 Skill 解析、展示 token 转模型正文，产出待入队的
-``TaskMessage``。
+"""用户输入解析边界：模型能力校验、胶囊指针校验与 Skill 路径补全，产出待入队的 ``TaskMessage``。
 
-HTTP 发送使用；Agent 之间的输入走 ``agent_message``。只读
-Task、模型配置与已发布图片的元数据，不读写普通附件文件、不写库、不入队、不创建 Run。投递方在入队
-之前调用（解析 IO 不占用 Task 闸门），输入不合法在这里同步拒绝，不让坏数据进外部队列。
+HTTP 发送使用；Agent 之间的输入走 ``agent_message``。只读 Task、模型配置、工作区与已发布图片的
+元数据，不写库、不入队、不创建 Run。投递方在入队之前调用（校验 IO 不占用 Task 闸门），输入不合法
+在这里同步拒绝，不让坏数据进外部队列。
+
+正文里的 ``<file>`` / ``<ref>`` / ``<skill>`` 是用户给的指针：这里校验指针可用、把 Skill 的
+``SKILL.md`` 绝对路径补回标签，正文本身不替换成文件或 Skill 内容——模型自己按指针去读。
 """
 
-import re
+import os
+import stat
+from collections import Counter
 from pathlib import Path
-from urllib.parse import unquote
 
-from app.config.constant import Constant
+from app.config.logging.logger import log
+from app.core.user_input.capsules import (
+    Capsule,
+    CapsuleSegment,
+    CapsuleSegmentLike,
+    FileCapsule,
+    RefCapsule,
+    SkillCapsule,
+    parse_capsules,
+    serialize_segments,
+)
 from app.core.workflow.message_queue.task_message import (
     Delivery,
     RunLaunch,
     TaskMessage,
     UserInputBody,
 )
-from app.models import (
-    ConversationRunAttachmentInput,
-    ConversationRunCommand,
-    ConversationRunFileAttachment,
-)
+from app.models import ConversationRunCommand
 from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
 from app.service.attachment.attachment_service import AttachmentService
-from app.core.workflow.message_queue.message_bodies.rendering import escape_tag
-from app.service.configuration.skill_catalog import SkillCatalog, SkillLoadError
+from app.service.configuration.skill_catalog import SkillCatalog
 from app.service.configuration.skill_configuration import SkillConfigurationError
 from app.service.depends import get_model_config_service, get_task_crud, get_workspace_service
-from app.utils.message_tokens import find_message_tokens, replace_message_tokens
-
-_SKILL_TAG = "skill"
 
 
 class UserInputService:
@@ -42,54 +47,54 @@ class UserInputService:
         self._task = get_task_crud()
 
     def prepare(
-            self,
-            task_id: int,
-            command: ConversationRunCommand,
-            model_config_id: int,
-            reasoning_effort: ReasoningEffort | None = None,
-            agent_id: str = "main_agent",
-            *,
-            delivery: Delivery = "immediate",
+        self,
+        task_id: int,
+        command: ConversationRunCommand,
+        model_config_id: int,
+        reasoning_effort: ReasoningEffort | None = None,
+        agent_id: str = "main_agent",
+        *,
+        delivery: Delivery = "immediate",
     ) -> TaskMessage:
-        """校验模型能力、解析附件、图片与 Skill，组装成携带发起配置的用户输入消息（尚未入队、没有行 id）。
+        """校验模型能力与胶囊指针，组装成携带发起配置的用户输入消息（尚未入队、没有行 id）。
 
-        ``delivery`` 是信封属性，原样带上。普通附件的路径一律由请求携带：撤回后放回输入框的附件，
-        路径来自快照里的展示绑定（``build_user_input_parts``），这里不从历史消息恢复。
+        ``delivery`` 是信封属性，原样带上。
 
         异常:
-            UserInputRejectedError: 模型配置不存在、模型不支持所选能力、附件 / 图片 / Skill 不可用、输入为空。
+            UserInputRejectedError: 模型配置不存在、模型不支持所选能力、胶囊指向的文件 / 引用 /
+                Skill 不可用、输入为空。
             ImageNormalizationError: 本次图片数量或总大小超过统一输入限制。
             KeyError: Task 不存在（接入层映射为 404）。
         """
         task = self._task.get(task_id)
-        config = get_model_config_service().check_launch_config(
-            model_config_id, reasoning_effort
-        )
+        config = get_model_config_service().check_launch_config(model_config_id, reasoning_effort)
         if command.image_asset_ids and not config.supports_image:
             raise UserInputRejectedError(
                 "IMAGE_NOT_SUPPORTED", "当前模型不支持图片输入，请更换模型或移除图片"
             )
-        self._check_image_token_bindings(command)
-        file_attachments = self._resolve_file_attachments(
-            command.attachments,
-            display_text=command.display_text,
-        )
-        skills = self._resolve_skills(task.workspace_id, command.display_text)
-        input_text = self._resolve_input_tokens(command.display_text, file_attachments) + "".join(
-            f'\n\n<{_SKILL_TAG} name="{name}">\n{escape_tag(text, _SKILL_TAG)}\n</{_SKILL_TAG}>'
-            for name, text in skills.items()
-        )
+        segments = self._validated_segments(command.text, task.workspace_id)
+        text = serialize_segments(segments)
         image_paths = self._resolve_image_assets(task.workspace_id, command.image_asset_ids)
-        # wire schema 已保证文本 part 非空，但「正文只剩图片 token」时替换后同样是空。
-        if not input_text.strip() and not image_paths:
+        if not text.strip() and not image_paths:
             raise UserInputRejectedError("EMPTY_INPUT", "请输入消息内容")
+        counts = Counter(
+            segment.capsule.kind for segment in segments if isinstance(segment, CapsuleSegment)
+        )
+        log.info(
+            "user_input_capsules_validated",
+            extra={
+                "msg": "用户输入胶囊已校验",
+                "data": {
+                    "task_id": task_id,
+                    "file": counts["file"],
+                    "ref": counts["ref"],
+                    "skill": counts["skill"],
+                },
+            },
+        )
         body = UserInputBody(
-            input_text=input_text,
-            presentation=UserInputPresentation(
-                display_text=command.display_text,
-                image_paths=image_paths,
-                attachments=file_attachments,
-            ),
+            text=text,
+            presentation=UserInputPresentation(text=text, image_paths=image_paths),
             launch=RunLaunch(
                 agent_id=agent_id,
                 model_config_id=model_config_id,
@@ -101,121 +106,122 @@ class UserInputService:
         )
         return TaskMessage.of(body, delivery=delivery)
 
-    @staticmethod
-    def _check_image_token_bindings(command: ConversationRunCommand) -> None:
-        """正文里的图片 token 必须绑定本次请求上传的图片资源。
+    @classmethod
+    def _validated_segments(cls, text: str, workspace_id: int) -> list[CapsuleSegmentLike]:
+        """校验正文里的胶囊并补全 Skill 路径。
 
-        图片正文不进模型文本（由 image content part 承载），漏绑不会在正文里露馅；但展示投影
-        （``build_user_input_parts``）要求每个图片 token 都能解析成图片资源。少了这条，用户随手
-        输入一段形如 token 的文本就会在入队后的快照重建里抛错，把 Task 停在「有 running Run
-        却没有执行者」的状态。
+        语法不合法的标签已被解析器当普通文本保留，不在这里拒绝。
         """
-        assets = set(command.image_asset_ids)
-        unbound = [
-            token_id
-            for token_id in dict.fromkeys(
-                match.group(1)
-                for match in find_message_tokens(
-                    Constant.Cosir.LOCAL_IMAGE_TOKEN, command.display_text
-                )
-            )
-            if token_id not in assets
-        ]
-        if unbound:
-            raise UserInputRejectedError(
-                "IMAGE_ATTACHMENT_UNAVAILABLE",
-                "正文中的图片已失效，请重新添加图片",
-                detail=f"image token(s) {unbound} have no uploaded asset",
-            )
-
-    @staticmethod
-    def _resolve_file_attachments(
-            requested: list[ConversationRunAttachmentInput],
-            *,
-            display_text: str,
-    ) -> list[ConversationRunFileAttachment]:
-        """把正文引用的普通附件 token 绑定到本次请求（或复用）的附件描述符。
-
-        只做绑定，不访问文件系统：本机 Agent 的附件路径来自前端原生选择器，存在性由真正读取
-        它的工具负责。这一层提前 stat 既保证不了后续读取（TOCTOU），又会把权限不足、网络盘卡顿
-        误报成「附件不可用」，而展示绑定只需要一条稳定的引用。
-        """
-        by_id = {attachment.id: attachment for attachment in requested}
-        result: list[ConversationRunFileAttachment] = []
-        # 请求可能带着正文已删掉引用的附件；只解析当前正文仍引用的。
-        for attachment_id in dict.fromkeys(
-                m.group(1) for m in find_message_tokens(Constant.Cosir.LOCAL_FILE_TOKEN, display_text)
-        ):
-            attachment = by_id.get(attachment_id)
-            if attachment is None:
-                raise UserInputRejectedError(
-                    "ATTACHMENT_UNAVAILABLE",
-                    "附件已失效，请重新选择附件",
-                    detail=f"ordinary file attachment {attachment_id} is unavailable (no request attachment)",
-                )
-            result.append(
-                ConversationRunFileAttachment(
-                    id=attachment.id,
-                    name=attachment.name,
-                    content_type=attachment.content_type,
-                    path=attachment.path,
-                )
-            )
-        return result
-
-    @staticmethod
-    def _resolve_skills(workspace_id: int, display_text: str) -> dict[str, str]:
-        """正文里选中的 Skill（按首次出现去重）→ 交给模型的正文。
-
-        正文在入队时固化：之后改动或删除 Skill 不影响这条已发出的输入，历史可复现、上下文前缀也
-        不会因为 Skill 文件变化而漂移。名称按 Task 所在工作区解析（工作区同名覆盖系统级），不存在或
-        已停用时同步拒绝，前端收回乐观消息并恢复草稿。
-        """
-
-        names = list(
-            dict.fromkeys(
-                unquote(match.group(1))
-                for match in find_message_tokens(Constant.Cosir.LOCAL_SKILL_TOKEN, display_text)
-            )
-        )
-        if not names:
-            return {}
         workspace_root = Path(get_workspace_service().get_workspace(workspace_id).root_path)
-        catalog = SkillCatalog.visible_from(workspace_root)
-        documents: dict[str, str] = {}
-        for name in names:
-            try:
-                documents[name] = catalog.load_enabled(name).for_model()
-            except (SkillLoadError, SkillConfigurationError) as exc:
-                raise UserInputRejectedError(
-                    "SKILL_UNAVAILABLE",
-                    f"Skill「{name}」不可用，请重新选择",
-                    detail=f"skill {name!r} cannot be loaded: {exc}",
-                ) from exc
-        return documents
+        return [
+            CapsuleSegment(capsule=cls._validate_capsule(segment.capsule, workspace_root))
+            if isinstance(segment, CapsuleSegment)
+            else segment
+            for segment in parse_capsules(text)
+        ]
+
+    @classmethod
+    def _validate_capsule(cls, capsule: Capsule, workspace_root: Path) -> Capsule:
+        if isinstance(capsule, FileCapsule):
+            cls._check_local_file(capsule.path)
+            return capsule
+        if isinstance(capsule, RefCapsule):
+            cls._check_workspace_ref(capsule.path, workspace_root)
+            return capsule
+        return SkillCapsule(name=capsule.name, path=cls._skill_file(capsule.name, workspace_root))
 
     @staticmethod
-    def _resolve_input_tokens(
-            text: str,
-            attachments: list[ConversationRunFileAttachment],
-    ) -> str:
-        """把正文里的 token 换成模型可读内容：文件换路径，图片由 image part 承载、正文丢弃，Skill 换成
-        名称引用（正文另附在输入末尾）。
+    def _check_local_file(path: str) -> None:
+        """校验本机文件附件：一次 stat 区分「不存在」与「不可访问」，并按尾斜杠核对目录形态。
 
-        必须单趟扫描三类 token：分两趟时第一趟插入的文件路径会被第二趟当成原文再解析，路径里含
-        token 或 Markdown 围栏就会把正文改坏。
+        不存在是用户可修正的失效（重新选择附件）；其它 ``OSError``（权限、网络盘不可达）必须报
+        「无法访问」——把它说成不存在会误导用户去重新选择一个仍然有效的文件。
         """
-        paths = {attachment["id"]: attachment["path"] for attachment in attachments}
+        # `<file>` 的契约是本机绝对路径（前端由宿主原生选择器给出）。相对路径会在后端进程 cwd
+        # 下解析，语义取决于启动方式，直接拒绝而不是猜。
+        if not Path(path).is_absolute():
+            raise UserInputRejectedError(
+                "CAPSULE_FILE_UNAVAILABLE",
+                "附件已失效，请重新选择附件",
+                detail=f"file capsule path must be absolute: {path}",
+            )
+        try:
+            mode = os.stat(path).st_mode
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            # 尾斜杠写在文件上时 ``os.stat`` 报 ``NotADirectoryError``：用户声明的目录不存在，
+            # 与路径不存在同归「附件已失效」。
+            raise UserInputRejectedError(
+                "CAPSULE_FILE_UNAVAILABLE",
+                "附件已失效，请重新选择附件",
+                detail=f"file capsule path does not exist: {path}",
+            ) from exc
+        except OSError as exc:
+            raise UserInputRejectedError(
+                "CAPSULE_FILE_UNREADABLE",
+                "附件无法访问，请重新选择附件",
+                detail=f"file capsule path cannot be accessed: {path}: {exc}",
+            ) from exc
+        is_directory = stat.S_ISDIR(mode)
+        # 目录必须以 ``/`` 结尾：前端据此区分「文件」与「目录」两种胶囊，模型也据此决定读取方式。
+        if is_directory and not path.endswith("/"):
+            raise UserInputRejectedError(
+                "CAPSULE_FILE_UNAVAILABLE",
+                "附件已失效，请重新选择附件",
+                detail=f"directory capsule path must end with '/': {path}",
+            )
+        if path.endswith("/") and not is_directory:
+            raise UserInputRejectedError(
+                "CAPSULE_FILE_UNAVAILABLE",
+                "附件已失效，请重新选择附件",
+                detail=f"file capsule path is not a directory: {path}",
+            )
 
-        def substitute(match: re.Match[str]) -> str:
-            kind, token_id = match.group(1), match.group(2)
-            if kind == "file":
-                return paths[token_id]
-            if kind == "skill":
-                return f'[Skill "{unquote(token_id)}"]'
-            return ""
+    @staticmethod
+    def _check_workspace_ref(path: str, workspace_root: Path) -> None:
+        """校验工作区引用：路径必须相对工作区且不越界，解析后必须存在。
 
-        return replace_message_tokens(Constant.Cosir.LOCAL_INPUT_TOKEN, substitute, text)
+        空 ``path`` 表示工作区根。只做词法越界判断，不解析符号链接：引用是用户自己看到的相对
+        路径，工作区文件工具才是真正读取它的地方。
+        """
+        relative = Path(path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise UserInputRejectedError(
+                "CAPSULE_REF_UNAVAILABLE",
+                "引用已失效，请重新选择引用",
+                detail=f"ref capsule path is not workspace-relative: {path}",
+            )
+        try:
+            (workspace_root / relative).stat()
+        except OSError as exc:
+            raise UserInputRejectedError(
+                "CAPSULE_REF_UNAVAILABLE",
+                "引用已失效，请重新选择引用",
+                detail=f"ref capsule path does not exist: {path}: {exc}",
+            ) from exc
+
+    @staticmethod
+    def _skill_file(name: str, workspace_root: Path) -> str:
+        """按 Task 所在工作区解析用户选中的 Skill，返回 ``SKILL.md`` 的绝对路径。
+
+        名称按工作区解析（工作区同名覆盖系统级），不存在或已停用时同步拒绝，前端收回乐观消息
+        并恢复草稿。模型从路径或 ``skill`` 工具读正文，不在这里把正文固化进上下文。
+        """
+        catalog = SkillCatalog.visible_from(workspace_root)
+        try:
+            info = catalog.find(name)
+        except (KeyError, SkillConfigurationError) as exc:
+            raise UserInputRejectedError(
+                "SKILL_UNAVAILABLE",
+                f"Skill「{name}」不可用，请重新选择",
+                detail=f"skill {name!r} cannot be resolved: {exc}",
+            ) from exc
+        if not info.enabled:
+            raise UserInputRejectedError(
+                "SKILL_UNAVAILABLE",
+                f"Skill「{name}」不可用，请重新选择",
+                detail=f"skill {name!r} is disabled",
+            )
+        return str(info.skill_file)
 
     @staticmethod
     def _resolve_image_assets(workspace_id: int, image_asset_ids: list[str]) -> list[str]:

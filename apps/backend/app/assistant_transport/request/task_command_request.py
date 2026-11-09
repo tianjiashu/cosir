@@ -4,42 +4,14 @@
 身份由后端按 Task 的最新 Run 解析。wire 字段沿用 camelCase，进入 service 层前映射为领域对象。
 """
 
-from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
 from app.assistant_transport.request.assistant_user_message import AssistantUserMessage
 from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
-from app.config.constant import Constant
-from app.models import ConversationRunAttachmentInput, ConversationRunCommand
+from app.models import ConversationRunCommand
 from app.models.conversation_run_options import ReasoningEffort
-from app.utils.message_tokens import find_message_tokens, replace_message_tokens
-
-
-def _ordered_display_text(parts: Sequence[AssistantTextPart | AssistantImagePart]) -> str:
-    """将 composer 的文本/图片顺序编码进输入消息的展示文本。"""
-
-    image_token = Constant.Cosir.LOCAL_IMAGE_TOKEN
-    emitted_image_ids = {
-        match.group(1)
-        for part in parts
-        if isinstance(part, AssistantTextPart)
-        for match in find_message_tokens(image_token, part.text)
-    }
-    segments: list[str] = []
-    for part in parts:
-        if isinstance(part, AssistantTextPart):
-            segments.append(
-                replace_message_tokens(Constant.Transport.HIDDEN_LOCAL_FILE_TOKEN, r"\1", part.text)
-            )
-        else:
-            asset_id = part.image.removeprefix("cosir-attachment://")
-            if asset_id in emitted_image_ids:
-                continue
-            segments.append(f"[[cosir-image:{asset_id}]]")
-            emitted_image_ids.add(asset_id)
-    return "\n".join(segments)
 
 
 class SendMessageRequest(BaseModel):
@@ -67,28 +39,20 @@ class SendMessageRequest(BaseModel):
         return value
 
     def to_run_command(self) -> ConversationRunCommand:
-        """``display_text`` 保持文字与图片的原始顺序；附件绑定随输入进入 message_queue。"""
+        """text part 按出现顺序用换行连成胶囊正文；图片只携带已上传附件 id。"""
 
-        parts = self.message.parts
         return ConversationRunCommand(
-            display_text=_ordered_display_text(parts),
+            text="\n".join(
+                part.text for part in self.message.parts if isinstance(part, AssistantTextPart)
+            ),
             image_asset_ids=list(
                 dict.fromkeys(
                     part.image.removeprefix("cosir-attachment://")
-                    for part in parts
+                    for part in self.message.parts
                     if isinstance(part, AssistantImagePart)
                 )
             ),
             disabled_tool_groups=list(self.disabledToolGroups),
-            attachments=[
-                ConversationRunAttachmentInput(
-                    id=attachment.id,
-                    name=attachment.name,
-                    content_type=attachment.contentType,
-                    path=attachment.path,
-                )
-                for attachment in self.message.attachments
-            ],
         )
 
 

@@ -186,23 +186,6 @@ function validatePart(value: unknown, path: string): void {
     }
     return;
   }
-  if (type === "file") {
-    requireExactKeys(part, ["type", "file", "name", "contentType", "path"], path);
-    const file = requireString(part.file, `${path}.file`);
-    if (!/^cosir-local-file:[A-Za-z0-9._-]{1,128}$/.test(file)) {
-      throw new TransportSnapshotValidationError(`${path}.file`, "合法的本地附件 locator");
-    }
-    if (!requireString(part.name, `${path}.name`)) {
-      throw new TransportSnapshotValidationError(`${path}.name`, "非空字符串");
-    }
-    if (!requireString(part.contentType, `${path}.contentType`)) {
-      throw new TransportSnapshotValidationError(`${path}.contentType`, "非空字符串");
-    }
-    if (!requireString(part.path, `${path}.path`)) {
-      throw new TransportSnapshotValidationError(`${path}.path`, "非空字符串");
-    }
-    return;
-  }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
   const allowed = ["type", "toolCallId", "toolName", "presentation", "status", "args", "intent", "error", "errorCode", "awaitingUser", "display_data", "team_run_id", "background", "isError", "child_task_id", "agent_role", "terminal_output_seq"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");

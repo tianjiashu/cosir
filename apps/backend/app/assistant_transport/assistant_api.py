@@ -69,7 +69,7 @@ async def _accept(
         )
     except UserInputRejectedError as exc:
         # 输入问题要用户自己改：400 + 具体原因，不要复用「状态冲突、刷新重试」那种误导文案。
-        # ``str(exc)`` 是只进日志的诊断细节（附件 id、缺失资源），线上只回 ``message``。
+        # ``str(exc)`` 是只进日志的诊断细节（胶囊路径、缺失资源），线上只回 ``message``。
         log.warning(
             "task_command_input_rejected",
             extra={
@@ -124,9 +124,7 @@ async def send_queued_message_now(
     """把排队中的用户消息改为立即处理：运行中并入当前 Run，挂起时唤醒，空闲时开新 Run（已并入时
     409 ``MESSAGE_CONSUMED``）。"""
 
-    return await _accept(
-        task_id, "send_queued_now", service.send_queued_now(task_id, message_id)
-    )
+    return await _accept(task_id, "send_queued_now", service.send_queued_now(task_id, message_id))
 
 
 @app.delete("/tasks/{task_id}/queued-messages/{message_id}")

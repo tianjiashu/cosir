@@ -1,14 +1,14 @@
 import { MessageSquarePlusIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useReferenceBridge } from "./reference-bridge";
-import type { ReferenceInput } from "@/lib/workspace-references/prepare";
+import type { Capsule } from "@/lib/assistant/capsules";
 export function AddReferenceButton({
   workspaceId,
-  inputs,
+  capsules,
   label,
 }: {
   workspaceId: number;
-  inputs: ReferenceInput[];
+  capsules: Capsule[];
   label: string;
 }) {
   const bridge = useReferenceBridge();
@@ -17,8 +17,8 @@ export function AddReferenceButton({
       type="button"
       size="sm"
       variant="ghost"
-      disabled={!bridge?.canAdd(workspaceId) || !inputs.length}
-      onClick={() => bridge?.add(workspaceId, inputs)}
+      disabled={!bridge?.canAdd(workspaceId) || !capsules.length}
+      onClick={() => void bridge?.add(workspaceId, capsules)}
     >
       <MessageSquarePlusIcon className="size-3.5" />
       {label}

@@ -8,7 +8,6 @@ from .conversation_state_agent_message_part import (
     ConversationStateAgentMessagePart,
     ConversationStateMessageSource,
 )
-from .conversation_state_file_part import ConversationStateFilePart
 from .conversation_state_image_part import ConversationStateImagePart
 from .conversation_state_text_part import ConversationStateTextPart, TextPartStatus
 from .conversation_state_tool_call_part import (
@@ -20,7 +19,6 @@ from .conversation_state_tool_call_part import (
 ConversationStatePart = (
     ConversationStateTextPart
     | ConversationStateImagePart
-    | ConversationStateFilePart
     | ConversationStateToolCallPart
     | ConversationStateAgentMessagePart
 )
@@ -28,7 +26,6 @@ ConversationStatePart = (
 __all__ = [
     "ConversationBackgroundWork",
     "ConversationStateAgentMessagePart",
-    "ConversationStateFilePart",
     "ConversationStateImagePart",
     "ConversationStateMessageSource",
     "ConversationStatePart",

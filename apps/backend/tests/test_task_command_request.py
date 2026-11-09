@@ -20,8 +20,33 @@ def test_send_maps_command() -> None:
     request = _send(disabledToolGroups=["联网工具"])
 
     command = request.to_run_command()
-    assert command.display_text == "hello"
+    assert command.text == "hello"
     assert command.disabled_tool_groups == ["联网工具"]
+
+
+def test_text_parts_are_joined_and_images_map_to_asset_ids() -> None:
+    image_id = "a" * 64
+    request = SendMessageRequest.model_validate(
+        {
+            "message": {
+                "role": "user",
+                "parts": [
+                    {"type": "text", "text": "前"},
+                    {
+                        "type": "image",
+                        "image": f"cosir-attachment://{image_id}",
+                    },
+                    {"type": "text", "text": "后"},
+                ],
+            },
+            "modelConfigId": 1,
+        }
+    )
+
+    command = request.to_run_command()
+
+    assert command.text == "前\n后"
+    assert command.image_asset_ids == [image_id]
 
 
 @pytest.mark.parametrize(
@@ -32,31 +57,13 @@ def test_send_maps_command() -> None:
         {"disabledToolGroups": [" "]},
         {"runId": 1},
         {"modelConfigId": 0},
+        # 附件不再有独立字段：本机文件与工作区引用是正文里的胶囊。
+        {"message": _message(attachments=[])},
     ],
 )
 def test_send_rejects_invalid_fields(overrides: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         _send(**overrides)
-
-
-def test_ordinary_file_attachment_maps_into_command() -> None:
-    request = _send(
-        message=_message(
-            "查看 [[cosir-file:file-1]]",
-            attachments=[
-                {
-                    "id": "file-1",
-                    "name": "notes.md",
-                    "contentType": "text/markdown",
-                    "path": "C:/workspace/notes.md",
-                }
-            ],
-        )
-    )
-
-    [attachment] = request.to_run_command().attachments
-    assert attachment.id == "file-1"
-    assert attachment.content_type == "text/markdown"
 
 
 @pytest.mark.parametrize("effort", [None, "low", "high", "max"])
@@ -77,7 +84,9 @@ def test_decision_carries_no_tool_specific_address() -> None:
     )
 
     assert (decision.decision, decision.feedback, decision.data) == (
-        "reject", "换个分工", {"goal": "ok"}
+        "reject",
+        "换个分工",
+        {"goal": "ok"},
     )
 
 

@@ -21,7 +21,8 @@ from tests.sdk_fixtures import sdk_events
 
 
 @pytest.mark.parametrize(
-    "last", ["command", "delegate", "fork", "cancel", "restart", "queued_restart", "delegate_restart"]
+    "last",
+    ["command", "delegate", "fork", "cancel", "restart", "queued_restart", "delegate_restart"],
 )
 async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypatch, last):
     model = depends.get_model_config_service().create_config(
@@ -89,7 +90,10 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
                                 "message": "child-report",
                             },
                         ),
-                        "fork": ("fork_task", {"intent": "fork", "title": "review", "message": "child-report"}),
+                        "fork": (
+                            "fork_task",
+                            {"intent": "fork", "title": "review", "message": "child-report"},
+                        ),
                     }.get("delegate" if last == "delegate_restart" else last, cmd("B"))
                     calls = [
                         {
@@ -136,9 +140,9 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
             task.id,
             TaskMessage.of(
                 UserInputBody(
-                    input_text="start",
+                    text="start",
                     launch=RunLaunch(model_config_id=model.id),
-                    presentation=UserInputPresentation(display_text="start"),
+                    presentation=UserInputPresentation(text="start"),
                 )
             ),
         )

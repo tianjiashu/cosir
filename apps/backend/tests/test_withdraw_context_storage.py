@@ -16,9 +16,7 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 
 
 def _user(text: str) -> UserMessageMetadata:
-    return UserMessageMetadata(
-        kind="user_input", presentation=UserInputPresentation(display_text=text)
-    )
+    return UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(text=text))
 
 
 def _turn_of(previous: list, metadata: object) -> int:
@@ -73,7 +71,7 @@ def test_latest_input_from_an_agent_is_not_an_edit_target(task) -> None:
         6,
         metadata=UserMessageMetadata(
             kind="agent_message",
-            presentation=UserInputPresentation(display_text="from parent"),
+            presentation=UserInputPresentation(text="from parent"),
             source=MessageSource(task_id=1, name="parent"),
         ),
         message_id=14,

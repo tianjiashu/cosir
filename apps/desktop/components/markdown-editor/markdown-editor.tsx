@@ -96,7 +96,9 @@ function SourceEditor({ value, onChange, placeholder, ariaLabel, ref }: {
 /** 把预览滚到不晚于 `line` 的最后一个标题；它之前没有标题时回到顶部。 */
 function scrollPreviewToLine(host: HTMLElement, line: number) {
   let target: HTMLElement | null = null;
+  // `data-source-line` 也打在正文块上（选区求行范围用），这里只认标题。
   for (const heading of host.querySelectorAll<HTMLElement>("[data-source-line]")) {
+    if (!/^H[1-6]$/.test(heading.tagName)) continue;
     if (Number(heading.dataset.sourceLine) > line) break;
     target = heading;
   }

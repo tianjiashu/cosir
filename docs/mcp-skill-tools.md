@@ -85,10 +85,10 @@ Skill 的任务步骤和约束写在这里。
 
 **使用方式**
 
-Agent 有两条路使用 Skill，拿到的正文一致：
+Agent 有两条路使用 Skill，最终读到的都是同一个 `SKILL.md`：
 
 - **Agent 自己加载**：`action: "load"` 读取已启用 Skill 的正文，正文前附 Skill 目录的绝对路径，正文里的 `scripts/`、`references/` 等相对路径以它为基准。带 `resource_path` 时读取目录内的一个文本文件。工具只读取文本，不执行脚本，脚本由终端工具运行。
-- **用户在输入框选中**：正文里写入 token `[[cosir-skill:<name>]]`。后端在入队时校验这个 Skill（不存在或已停用时以 400 `SKILL_UNAVAILABLE` 拒绝），把它的正文与目录固化进这条输入的 `<skill>` 块，模型不需要再调用工具。展示时 token 留在文本里，由前端渲染成胶囊。手打的其他写法只是普通文字。
+- **用户在输入框选中**：正文里写入 `<skill name="<name>" />` 指针。后端在入队时校验这个 Skill（不存在或已停用时以 400 `SKILL_UNAVAILABLE` 拒绝），并把 `SKILL.md` 的绝对路径写回成 `<skill name="<name>" path="/…/SKILL.md" />`；正文不注入上下文，模型据此读取该文件或调用 `skill(action: "load")` 后遵循。手打的其他写法只是普通文字。
 
 **配置页**
 

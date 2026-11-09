@@ -52,7 +52,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
             "run_id": 1,
             # 消息身份（message_queue 行 id）与确认删除那一刻的展示绑定。
             "message_id": 1,
-            "presentation": {"display_text": "hello"},
+            "presentation": {"text": "hello"},
             "turn": 1,
         },
         InputConsumedEvent,
@@ -113,8 +113,14 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
         ToolCallCreatedEvent,
     ),
     (
-        {"type": "tool_call_intent", "task_id": 1, "run_id": 1,
-         "tool_call_id": "1:step-2:0", "intent": "核对配置", "args": {}},
+        {
+            "type": "tool_call_intent",
+            "task_id": 1,
+            "run_id": 1,
+            "tool_call_id": "1:step-2:0",
+            "intent": "核对配置",
+            "args": {},
+        },
         ToolCallIntentEvent,
     ),
     (
@@ -237,8 +243,13 @@ def test_envelope_defaults_and_optional_fields() -> None:
             "tool_call_id": "",
             "tool_name": "x",
         },
-        {"type": "run_status_changed",
-            "changed_at": "2026-01-01T00:00:01Z", "task_id": 1, "run_id": 1, "status": "half_done"},
+        {
+            "type": "run_status_changed",
+            "changed_at": "2026-01-01T00:00:01Z",
+            "task_id": 1,
+            "run_id": 1,
+            "status": "half_done",
+        },
         {
             "type": "run_initialized",
             "task_id": 0,
@@ -276,7 +287,7 @@ def test_envelope_defaults_and_optional_fields() -> None:
         "non_positive_task_id",
         "unknown_field",
         "run_initialized_user_input_fields",
-        "user_input_text_field",
+        "user_text_field",
     ],
 )
 def test_constraints_reject_invalid_payloads(payload: dict[str, object]) -> None:
@@ -319,7 +330,7 @@ def test_event_is_frozen() -> None:
         task_id=1,
         run_id=1,
         message_id=1,
-        presentation=UserInputPresentation(display_text="hi"),
+        presentation=UserInputPresentation(text="hi"),
         turn=1,
     )
     with pytest.raises(ValidationError):
@@ -345,7 +356,10 @@ def test_run_status_uses_domain_enumeration() -> None:
 
     event = RunStatusChangedEvent(
         changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-        task_id=1, run_id=1, status=ConversationRunStatus.CANCELLED, end_reason="user_cancelled"
+        task_id=1,
+        run_id=1,
+        status=ConversationRunStatus.CANCELLED,
+        end_reason="user_cancelled",
     )
     assert event.status is ConversationRunStatus.CANCELLED
     assert event.model_dump(mode="json")["status"] == "cancelled"

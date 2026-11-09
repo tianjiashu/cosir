@@ -107,7 +107,6 @@ class _MemorySnapshotOwner:
 
         return copy.deepcopy(self.state)
 
-
     def apply_planned(self, event: Any) -> TransportFrame:
         import copy
 
@@ -175,9 +174,7 @@ def _batch_runtime(
 def _projected_batch(*call_ids: str) -> ToolBatch:
     """给定调用均视为本步已创建工具卡片的批次。"""
 
-    return ToolBatch(
-
-    )
+    return ToolBatch()
 
 
 @pytest.fixture(autouse=True)
@@ -202,7 +199,6 @@ async def test_cancel_path_never_touches_shared_projection(
     缺陷类型：有人把即时通知旁路重新接回执行层（例如在 runner 内构造终态或调用 ``emit``），
     这里会立刻非零。
     """
-
 
     emitted: list[Any] = []
     mapped: list[str] = []
@@ -267,14 +263,24 @@ async def test_cancel_path_never_touches_shared_projection(
 def _seed_running_execute_terminal(projector: ConversationEventProjector, call_id: str) -> None:
     """在真实 projector 上初始化一个 ``execute_terminal`` 的 running part。"""
 
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=_RUN_ID))
+    projector.process(
+        RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=_RUN_ID)
+    )
     # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
-    projector.process(consumed(_TASK_ID, _RUN_ID, 1, UserInputPresentation(display_text="test")))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=_TASK_ID, run_id=_RUN_ID, status="running"))
+    projector.process(consumed(_TASK_ID, _RUN_ID, 1, UserInputPresentation(text="test")))
+    projector.process(
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=_TASK_ID,
+            run_id=_RUN_ID,
+            status="running",
+        )
+    )
     projector.process(
         ToolCallCreatedEvent(
             task_id=_TASK_ID,
-            run_id=_RUN_ID, turn=1,
+            run_id=_RUN_ID,
+            turn=1,
             tool_call_id=call_id,
             tool_name="execute_terminal",
         )
@@ -318,7 +324,6 @@ def _project_cancelled_via_real_path(
         _batch_runtime(_CancelledExecutor()),
         ToolCall(tool_name="execute_terminal", arguments="{}", call_id=call_id),
         "step-1",
-
         None,
     )
     assert len(captured) == 1

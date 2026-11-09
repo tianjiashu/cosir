@@ -87,10 +87,16 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
         if metadata is None:
             metadata = UserMessageMetadata(
                 kind="user_input",
-                presentation=UserInputPresentation(display_text=message["content"]),
+                presentation=UserInputPresentation(text=message["content"]),
             )
     store.context.append(
-        store.task.id, run_id, message, sequence, True, metadata, message_id=message_id,
+        store.task.id,
+        run_id,
+        message,
+        sequence,
+        True,
+        metadata,
+        message_id=message_id,
         # 夹具里每个 Run 一个回合。
         turn=run_id,
     )
@@ -228,7 +234,7 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
         for message in state["messages"]
         if message["outcome"] is not None
     ] == ["completed", "failed", "cancelled"]
-    # 消息身份与正文取自 context，Run.input_text 仅记录首条输入的摘要。
+    # 消息身份与正文取自 context 的展示绑定，不从 Run 反推。
     assert state["messages"][0]["parts"][0]["text"] == f"user-{completed.id}"
     # 工具终态由 Run 分组配对产出（同一份 canonical 行同时驱动冷读快照与模型上下文）。
     tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
@@ -337,7 +343,8 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
             source_sequence=1,
             event_id="live-delta",
             task_id=store.task.id,
-            run_id=run.id, turn=run.id,
+            run_id=run.id,
+            turn=run.id,
             part="text",
             delta=" live",
         )

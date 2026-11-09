@@ -1,7 +1,7 @@
-"""普通消息中的附件标记只在代码外生效；此模块不识别工作区引用或持久化任何状态。"""
+"""普通消息里的标记只在代码外生效；此模块不解释标记含义，也不持久化任何状态。"""
 
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from typing import Any
 
 from markdown_it import MarkdownIt
@@ -59,15 +59,3 @@ def find_message_tokens(pattern: re.Pattern[str], text: str) -> Iterator[re.Matc
         return
     for start, end in _text_regions(text):
         yield from pattern.finditer(text, start, end)
-
-
-def replace_message_tokens(
-    pattern: re.Pattern[str], replacement: str | Callable[[re.Match[str]], str], text: str
-) -> str:
-    pieces: list[str] = []
-    cursor = 0
-    for match in find_message_tokens(pattern, text):
-        pieces.append(text[cursor : match.start()])
-        pieces.append(replacement(match) if callable(replacement) else match.expand(replacement))
-        cursor = match.end()
-    return "".join([*pieces, text[cursor:]])

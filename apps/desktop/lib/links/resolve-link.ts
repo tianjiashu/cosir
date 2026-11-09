@@ -1,5 +1,3 @@
-import { parseReferenceUrl } from "@/lib/workspace-references/codec";
-
 /** 行范围，1 起算、闭区间。 */
 export type LineRange = { start: number; end: number };
 
@@ -35,7 +33,7 @@ const LINE_SUFFIX = /:([1-9]\d*)(?::\d+)?$/;
  *
  * - 网页只认 http(s) 与 mailto；其余协议、协议相对地址返回 null，调用方渲染为纯文本。
  * - `#…` 是同一篇 Markdown 里的位置（脚注等），在原文里滚动过去，不离开页面。
- * - 工作区路径：相对路径、工作区内绝对路径、`cosir-file:` / `cosir-dir:` 引用地址；越出工作区返回 null。
+ * - 工作区路径：相对路径、工作区内绝对路径；越出工作区返回 null。
  * - 行号：规范写法是片段 `#L42` / `#L42-L60`（GitHub、VS Code 同款，也是提示词约定的写法）；同时容忍
  *   模型与编译器习惯的 `:42` / `:42:7` 后缀（列号不用）。以 `/` 结尾的是目录。
  *
@@ -46,17 +44,6 @@ export function resolveLink(href: string, base: LinkBase): LinkTarget | null {
   if (!raw || raw.startsWith("//")) return null;
   if (raw.startsWith("#")) return raw.length > 1 ? { kind: "anchor", id: decodePath(raw.slice(1)) } : null;
   if (/^(?:https?|mailto):/i.test(raw)) return webLink(raw);
-  if (/^cosir-(?:file|dir|snippet|excerpt):/.test(raw)) {
-    const reference = parseReferenceUrl(raw);
-    if (!reference || base.workspaceRoot === null) return null;
-    // 引用地址的路径已是工作区相对路径；根目录引用的路径为空串。
-    return {
-      kind: "workspace",
-      path: reference.path,
-      directory: reference.kind === "directory",
-      ...(reference.startLine ? { lines: { start: reference.startLine, end: reference.endLine! } } : {}),
-    };
-  }
   if (base.workspaceRoot === null) return null;
 
   const hash = raw.indexOf("#");

@@ -7,20 +7,14 @@ import {
   type ReactNode,
 } from "react";
 import { toast } from "sonner";
-import {
-  prepareReference,
-  type ReferenceInput,
-} from "@/lib/workspace-references/prepare";
-import type { WorkspaceReference } from "@/lib/workspace-references/codec";
+import type { Capsule } from "@/lib/assistant/capsules";
+import { getDirectory, getFileInfo } from "@/lib/api/workspace-files";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { refIsDirectory, refWorkspacePath } from "@/lib/workspace-references/ref-capsule";
 
-export type ReferenceReplacement = { from: number; to: number; text: string };
-type Receiver = (
-  references: WorkspaceReference[],
-  question?: string,
-  replacement?: ReferenceReplacement,
-) => void;
+/** 输入框一侧收到的胶囊：在光标处插入这些标签，可再附一句预设提问。 */
+type Receiver = (capsules: Capsule[], question?: string) => void;
 type Bridge = {
   target: string | null;
   workspaceId: number | null;
@@ -31,13 +25,12 @@ type Bridge = {
   canAdd: (workspace: number) => boolean;
   /** 迟到回调用：读最新工作区，不随发起组件的渲染闭包过期。 */
   isCurrentWorkspace: (workspace: number) => boolean;
-  /** 唯一的添加边界：再次确认目标输入框仍在（可能刚切走），不在就提示；准备失败的引用逐条提示。 */
-  add: (
-    workspace: number,
-    inputs: ReferenceInput[],
-    question?: string,
-    replacement?: ReferenceReplacement,
-  ) => void;
+  /**
+   * 唯一的添加边界：再次确认目标输入框仍在（可能刚切走），不在就提示；工作区引用逐条确认目标仍然
+   * 存在（文件读一次文件信息、目录读一次目录页），不存在的引用逐条提示且不插入。本机文件与 Skill
+   * 由后端在发送时校验，这里不查。
+   */
+  add: (workspace: number, capsules: Capsule[], question?: string) => Promise<void>;
 };
 const Context = createContext<Bridge | null>(null);
 export const ReferenceTargetScope = createContext<string | null>(null);
@@ -68,12 +61,7 @@ export function ReferenceBridgeProvider({
     };
   }, []);
   const add = useCallback(
-    (
-      workspace: number,
-      inputs: ReferenceInput[],
-      question?: string,
-      replacement?: ReferenceReplacement,
-    ) => {
+    async (workspace: number, capsules: Capsule[], question?: string) => {
       const destination = receivers.current.at(-1);
       if (
         !destination ||
@@ -83,25 +71,25 @@ export function ReferenceBridgeProvider({
         toast.error("请先打开当前工作区的对话输入框");
         return;
       }
-      const references: WorkspaceReference[] = [];
+      const accepted: Capsule[] = [];
       const failed: string[] = [];
-      for (const input of inputs) {
+      for (const capsule of capsules) {
         try {
-          references.push(prepareReference(input));
+          await confirmWorkspaceTarget(workspace, capsule);
+          accepted.push(capsule);
         } catch (error) {
           failed.push(
-            `${input.path || "工作区"}：${userErrorMessage(error, "添加失败")}`,
+            `${capsule.kind === "ref" ? capsule.path || "工作区" : capsule.kind}：${userErrorMessage(error, "添加失败")}`,
           );
           void frontendLog(
             "WARNING",
-            "workspace_reference_prepare_failed",
-            "准备引用失败",
-            { error, data: { workspaceId: workspace, path: input.path } },
+            "workspace_reference_missing",
+            "工作区引用不存在",
+            { error, data: { workspaceId: workspace, capsule } },
           );
         }
       }
-      if (references.length)
-        destination.callback(references, question, replacement);
+      if (accepted.length) destination.callback(accepted, question);
       if (failed.length) toast.error(failed.join("\n"), { duration: 8000 });
     },
     [],
@@ -125,4 +113,15 @@ export function ReferenceBridgeProvider({
     [target, workspaceId, workspaceRoot, workspaceName, register, canAdd, isCurrentWorkspace, add],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
+}
+
+/**
+ * 工作区引用在插入前确认目标存在（目录读目录页、文件读文件信息），读取失败（不存在、无权限）即不插入。
+ * 本机文件与 Skill 不经过工作区文件接口，交给后端发送时校验。
+ */
+async function confirmWorkspaceTarget(workspace: number, capsule: Capsule): Promise<void> {
+  if (capsule.kind !== "ref") return;
+  const path = refWorkspacePath(capsule);
+  if (refIsDirectory(capsule)) await getDirectory(workspace, path, undefined);
+  else await getFileInfo(workspace, path);
 }

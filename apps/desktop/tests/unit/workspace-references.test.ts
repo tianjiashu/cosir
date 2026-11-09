@@ -1,132 +1,58 @@
-import { describe, it, expect } from "vitest";
-import {
-  parseComposerDocument,
-  serializeComposerDocument,
-} from "@/components/composer/composer-document";
-import { prepareUserCommand } from "@/lib/assistant/composer/prepare-user-command";
-import {
-  decodeReferences,
-  encodeReference,
-  type WorkspaceReference,
-} from "@/lib/workspace-references/codec";
-import { prepareReference } from "@/lib/workspace-references/prepare";
-const cases: WorkspaceReference[] = [
-  { kind: "file", path: "src/中文 [test](a)#% file.py" },
-  { kind: "directory", path: "" },
-  {
-    kind: "snippet",
-    path: "a.py",
-    startLine: 12,
-    endLine: 14,
-    content: "中文😀\n  return 'value'\n```\n~~~\n[引用](cosir-file:evil)",
-  },
-  { kind: "excerpt", path: "README.md", content: "Markdown 摘录\n\n第二段" },
-];
-describe("前端 Markdown 引用", () => {
-  it.each(cases)("正文往返且发送不依赖附件注册表：$kind", (reference) => {
-    const text = `前文 ${encodeReference(reference)} 后文`;
-    expect(decodeReferences(text)).toEqual([
-      { type: "text", text: "前文 " },
-      { type: "reference", reference },
-      { type: "text", text: " 后文" },
-    ]);
-    expect(serializeComposerDocument(parseComposerDocument(text))).toBe(text);
-    expect(
-      prepareUserCommand({
-        type: "add-message",
-        message: { role: "user", parts: [{ type: "text", text }] },
-      }),
-    ).toEqual({
-      type: "add-message",
-      message: { role: "user", parts: [{ type: "text", text }] },
-    });
-  });
-  it("连续引用反复编解码不增加空行", () => {
-    const text = cases.map(encodeReference).join("");
-    let next = text;
-    for (let i = 0; i < 5; i++)
-      next = serializeComposerDocument(parseComposerDocument(next));
-    expect(next).toBe(text);
-    expect(
-      decodeReferences(next).filter((p) => p.type === "reference"),
-    ).toHaveLength(4);
-  });
-  it.each([
-    "[x](cosir-snippet:a.py)",
-    "[x](cosir-snippet:a.py)\n\n```py\nunclosed",
-    "[x](cosir-file:../secret)",
-    "[x](cosir-file:%ZZ)",
-    "`[x](cosir-file:a.py)`",
-    "```md\n[x](cosir-file:a.py)\n```",
-    "[normal](https://example.com)",
-  ])("未知、损坏及示例内容原样保留：%s", (text) => {
-    expect(decodeReferences(text)).toEqual([{ type: "text", text }]);
-    expect(serializeComposerDocument(parseComposerDocument(text))).toBe(text);
-  });
-  it("已选文字与路径转换为引用", () => {
-    expect(
-      prepareReference({
-        kind: "snippet",
-        path: "a",
-        content: "old\r\ntext\n",
-        start_line: 1,
-        end_line: 2,
-      }),
-    ).toEqual({
-      kind: "snippet",
-      path: "a",
-      content: "old\ntext",
-      startLine: 1,
-      endLine: 2,
-    });
-    expect(prepareReference({ kind: "file", path: "deleted.py" })).toEqual({
-      kind: "file",
-      path: "deleted.py",
-    });
-  });
-});
+import { describe, expect, it } from "vitest";
 
-describe("引用内容作为原文传输", () => {
-  it.each([
-    "末行\n",
-    "末行\n\n",
-    "\n\n",
-    "<!-- [[cosir-file:missing]] -->\n[[cosir-skill:example]]\n[[cosir-image:missing]]",
-  ])("反复转换不丢失片段原文：%j", (content) => {
-    const text = encodeReference({ kind: "snippet", path: "code.md", content });
-    let next = text;
-    for (let i = 0; i < 5; i++)
-      next = serializeComposerDocument(parseComposerDocument(next));
-    expect(next).toBe(text);
-    expect(decodeReferences(next)).toEqual([
-      {
-        type: "reference",
-        reference: { kind: "snippet", path: "code.md", content },
-      },
-    ]);
-    const command = {
-      type: "add-message",
-      message: { role: "user", parts: [{ type: "text", text }] },
-    };
-    expect(prepareUserCommand(command)).toEqual(command);
-  });
-  it.each([
-    ">     [[cosir-file:example]]",
-    "`[[cosir-skill:example]] [[cosir-file:missing]]`",
-    "```\n<!-- [[cosir-file:missing]] -->\n[[cosir-skill:example]]\n```",
-  ])("普通代码中的标记不会变胶囊：%j", (text) => {
-    const doc = parseComposerDocument(text);
-    expect(JSON.stringify(doc)).not.toMatch(/attachmentToken|skillToken/);
-    expect(serializeComposerDocument(doc)).toBe(text);
-    const command = {
-      type: "add-message",
-      message: { role: "user", parts: [{ type: "text", text }] },
-    };
-    expect(prepareUserCommand(command)).toEqual(command);
-  });
-});
+import { parseCapsules, serializeCapsule } from "@/lib/assistant/capsules";
+import {
+  refDescription,
+  refIsDirectory,
+  refLineRange,
+  refLocatorText,
+  refName,
+  refWorkspacePath,
+  workspaceDirectoryRef,
+  workspaceFileRef,
+  workspacePageRef,
+} from "@/lib/workspace-references/ref-capsule";
 
-it("目录尾斜杠统一到文件树路径，单独复制胶囊也保留正文", () => {
-  expect(decodeReferences("[src/](cosir-dir:src/)" )).toEqual([{ type: "reference", reference: { kind: "directory", path: "src" } }]);
-  expect(serializeComposerDocument({ type: "doc", content: [{ type: "workspaceReference", attrs: { reference: { kind: "file", path: "src/a.py" } } }] })).toBe("[src/a.py](cosir-file:src/a.py)");
+describe("工作区引用胶囊", () => {
+  it("文件引用带行范围时与胶囊语法一致", () => {
+    const capsule = workspaceFileRef("src/a.py", { start: 12, end: 14 });
+    expect(capsule).toEqual({ kind: "ref", path: "src/a.py", lines: "12-14" });
+    expect(serializeCapsule(capsule)).toBe('<ref path="src/a.py" lines="12-14" />');
+    expect(refLineRange(capsule)).toEqual({ start: 12, end: 14 });
+    expect(refName(capsule)).toBe("a.py");
+    expect(refLocatorText(capsule)).toBe(" · L12–14");
+    expect(refDescription(capsule)).toBe("src/a.py · L12–14");
+  });
+
+  it("单行范围收成单个数字；没有定位时只显示路径", () => {
+    const oneLine = workspaceFileRef("README.md", { start: 7, end: 7 });
+    expect(oneLine.lines).toBe("7");
+    expect(serializeCapsule(oneLine)).toBe('<ref path="README.md" lines="7" />');
+    expect(refLocatorText(oneLine)).toBe(" · L7");
+    const wholeFile = workspaceFileRef("README.md");
+    expect(refLineRange(wholeFile)).toBeNull();
+    expect(refLocatorText(wholeFile)).toBeUndefined();
+    expect(refDescription(wholeFile)).toBe("README.md");
+  });
+
+  it("目录引用统一以 `/` 结尾，根目录用空路径（`/` 是绝对路径）", () => {
+    expect(workspaceDirectoryRef("src")).toEqual({ kind: "ref", path: "src/" });
+    expect(workspaceDirectoryRef("src/")).toEqual({ kind: "ref", path: "src/" });
+    expect(workspaceDirectoryRef("")).toEqual({ kind: "ref", path: "" });
+    expect(refIsDirectory(workspaceDirectoryRef("src"))).toBe(true);
+    expect(refIsDirectory(workspaceDirectoryRef(""))).toBe(true);
+    expect(refWorkspacePath(workspaceDirectoryRef("src"))).toBe("src");
+    expect(refWorkspacePath(workspaceDirectoryRef(""))).toBe("");
+    expect(refName(workspaceDirectoryRef("src"))).toBe("src/");
+    expect(refName(workspaceDirectoryRef(""))).toBe("工作区");
+  });
+
+  it("PDF 引用用页码定位，并能被胶囊语法解析回来", () => {
+    const capsule = workspacePageRef("docs/guide.pdf", 3);
+    expect(serializeCapsule(capsule)).toBe('<ref path="docs/guide.pdf" page="3" />');
+    expect(refLocatorText(capsule)).toBe(" · p.3");
+    expect(parseCapsules(serializeCapsule(capsule))).toEqual([
+      { type: "capsule", capsule },
+    ]);
+  });
 });

@@ -221,24 +221,6 @@ class Constant:
             "png": "image/png",
         }
 
-    class Cosir:
-        """cosir 内部文件 / 图片 / Skill 占位 token 的正则（多处复用，单一事实源）。"""
-
-        # 本地文件占位 token：``[[cosir-file:<id>]]``。
-        LOCAL_FILE_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-file:([^\]]+)\]\]")
-        # 本地图片占位 token：``[[cosir-image:<id>]]``。
-        LOCAL_IMAGE_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-image:([^\]]+)\]\]")
-        # 用户在输入框选中的 Skill：``[[cosir-skill:<URL 编码的 Skill 名>]]``，由后端校验并把正文固化进
-        # 模型输入；展示时留在文本里，由前端渲染成胶囊。
-        LOCAL_SKILL_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-skill:([^\]]+)\]\]")
-        # 展示投影识别的附件 token：``[[cosir-(file|image):<id>]]``，各自投影为 file / image part。
-        LOCAL_ATTACHMENT_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-(file|image):([^\]]+)\]\]")
-        # 换成模型正文时一次遍历同时识别三类 token：``[[cosir-(file|image|skill):<id>]]``。
-        # 正文替换必须单趟完成——分两趟时第一趟插入的附件路径会被第二趟重新解析。
-        LOCAL_INPUT_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-(file|image|skill):([^\]]+)\]\]")
-        # 本地文件 ID 格式：1~128 位安全字符。
-        LOCAL_FILE_ID: re.Pattern[str] = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
-
     class LogRecord:
         """结构化日志记录的共享常量。"""
 
@@ -325,16 +307,10 @@ class Constant:
         )
 
     class Transport:
-        """Assistant Transport 层共享常量：cosir 资源定位符 / 隐藏 token 正则与事件去重窗口。"""
+        """Assistant Transport 层共享常量：cosir 资源定位符与事件去重窗口。"""
 
         # 图片资源定位符：``cosir-attachment://<64hex>``。
         IMAGE_LOCATOR: re.Pattern[str] = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
-        # 本地文件资源定位符：``cosir-local-file:<id>``。
-        FILE_LOCATOR: re.Pattern[str] = re.compile(r"^cosir-local-file:[A-Za-z0-9._-]{1,128}$")
-        # 被 HTML 注释包裹的隐藏 cosir token（保留编辑器顺序的同时从渲染文本隐藏）。
-        HIDDEN_LOCAL_FILE_TOKEN: re.Pattern[str] = re.compile(
-            r"<!--\s*(\[\[cosir-(?:file|image):[^\]]+\]\])\s*-->"
-        )
         # Conversation event 去重窗口容量：projector 保留最近 N 条 event_id 用于抵御重复投递。
         # 依据：重复投递只发生在同一投递路径的近距离重放；按增量合批口径（32 字符/次）换算，
         # 本窗口约等于 256KB 流式文本，远超任何可能的重放距离。窗口有界 ⇒ 内存上界恒定
@@ -384,4 +360,3 @@ class Constant:
         MAX_OUTPUT_CHARS: int = 20_000
         # 同一回复内工具调用的并行 worker 上限（并行批次按此收敛，超出的调用排队执行）。
         MAX_PARALLEL_CALLS: int = 8
-

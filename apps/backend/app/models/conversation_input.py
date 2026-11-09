@@ -4,8 +4,6 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
-
 
 def image_asset_id(path: str) -> str:
     """从已发布图片的 workspace 相对路径推导资源 id（文件名去掉扩展名）。
@@ -31,12 +29,15 @@ class MessageSource(BaseModel):
 class UserInputPresentation(BaseModel):
     """随 user 消息持久化的展示绑定；不重复保存 SDK 消息正文或 Run 执行配置。
 
-    「正文 token ↔ 附件 / 图片」的自洽由入队边界 ``UserInputService`` 保证：那里逐项校验并按
-    token 顺序绑定附件。本模型只承载已成立的事实，不再重复校验自身——它在每次快照重建与
+    正文与模型看到的是同一份规范化胶囊文本（``<file>`` / ``<ref>`` / ``<skill>`` 指针，Skill
+    已补上 ``path``），不再分开保存两份正文。``image_paths`` 是已上传图片的 workspace 相对路径，
+    顺序即发送时的图片顺序。
+
+    「胶囊指针可用」由入队边界 ``UserInputService`` 保证：那里 stat 本机文件、校验工作区引用、
+    解析 Skill 并写回路径。本模型只承载已成立的事实，不再重复校验自身——它在每次快照重建与
     context 读取时都会被 ``model_validate``，为上游已保证的数据反复付出代价没有收益。
     """
 
     model_config = ConfigDict(extra="forbid")
-    display_text: str
+    text: str
     image_paths: list[str] = Field(default_factory=list)
-    attachments: list[ConversationRunFileAttachment] = Field(default_factory=list, max_length=32)

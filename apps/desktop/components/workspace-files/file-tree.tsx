@@ -3,6 +3,7 @@ import { copyText } from "@/lib/clipboard";
 import { useChangeBrowserVisibility } from "@/lib/workspace-files/visibility";
 import { IgnoreMenuItem, openKeyboardContextMenu } from "./ignore-menu-item";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
+import { workspaceDirectoryRef, workspaceFileRef } from "@/lib/workspace-references/ref-capsule";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import {
   useEffect,
@@ -325,10 +326,11 @@ export function FileTree({
               addEntries={(entries) =>
                 bridge?.add(
                   workspaceId,
-                  entries.map((entry) => ({
-                    path: entry.path,
-                    kind: entry.kind === "directory" ? "directory" : "file",
-                  })),
+                  entries.map((entry) =>
+                    entry.kind === "directory"
+                      ? workspaceDirectoryRef(entry.path)
+                      : workspaceFileRef(entry.path),
+                  ),
                 )
               }
               openFile={(path, pinned) => open(workspaceId, path, pinned)}

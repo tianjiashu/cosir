@@ -1,33 +1,51 @@
 import { PuzzleIcon } from "lucide-react";
 
+import { basename } from "@/lib/assistant/capsules";
 import { InlineToken } from "@/components/ui/inline-token";
 import { WorkspaceFileIcon } from "@/components/workspace-files/file-icon";
 
 type ChipRemove = { label: string; disabled?: boolean; onClick: () => void };
 
 /** Skill 胶囊：输入框与已发送消息共用，消息里不传 `remove`。 */
-export function SkillChip({ name, remove }: { name: string; remove?: ChipRemove }) {
-  return <InlineToken icon={<PuzzleIcon />} name={name} description={`Skill：${name}`} tone="skill" remove={remove} />;
-}
-
-/**
- * 普通文件胶囊：输入框与已发送消息共用。`state` 只在输入框里有意义（附件登记尚在同步或已失效），
- * 消息里的文件来自后端展示绑定，恒为就绪。
- */
-export function FileChip({ name, description, state = "ready", remove }: {
+export function SkillChip({ name, remove, disabled = false }: {
   name: string;
-  description: string;
-  state?: "ready" | "pending" | "error";
   remove?: ChipRemove;
+  disabled?: boolean;
 }) {
   return (
     <InlineToken
-      icon={<WorkspaceFileIcon name={name} />}
+      icon={<PuzzleIcon />}
       name={name}
-      description={description}
-      preserveExtension={state === "ready"}
-      state={state}
-      remove={remove}
+      description={`Skill：${name}`}
+      tone="skill"
+      remove={remove && { ...remove, disabled: remove.disabled || disabled }}
+    />
+  );
+}
+
+/** 路径是否为目录引用：胶囊语法约定目录以 `/` 结尾。 */
+export function isDirectoryCapsulePath(path: string): boolean {
+  return /[\\/]$/.test(path);
+}
+
+/**
+ * 本机文件胶囊：输入框与已发送消息共用，名称从路径推导，目录按尾斜杠区分并显示文件夹图标。
+ * 消息里不传 `remove`。
+ */
+export function FileChip({ path, remove, disabled = false }: {
+  path: string;
+  remove?: ChipRemove;
+  disabled?: boolean;
+}) {
+  const directory = isDirectoryCapsulePath(path);
+  const name = `${basename(path)}${directory ? "/" : ""}`;
+  return (
+    <InlineToken
+      icon={<WorkspaceFileIcon name={name} folder={directory} />}
+      name={name}
+      description={path}
+      preserveExtension={!directory}
+      remove={remove && { ...remove, disabled: remove.disabled || disabled }}
     />
   );
 }

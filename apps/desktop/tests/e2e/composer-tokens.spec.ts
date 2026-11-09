@@ -6,22 +6,18 @@ import { API_ORIGIN } from "./e2e-env";
 
 const undo = process.platform === "darwin" ? "Meta+z" : "Control+z";
 const redo = process.platform === "darwin" ? "Meta+Shift+z" : "Control+Shift+z";
-const file = { type: "attachmentToken", attrs: { tokenId: "token-file" } };
-const skill = { type: "skillToken", attrs: { name: "review-code" } };
-const reference = { type: "workspaceReference", attrs: { reference: {
-  kind: "snippet", path: "src/very-long-component-name-that-needs-truncation.tsx",
-  startLine: 12, endLine: 28, content: "const value = 1;", language: "tsx",
+const file = { type: "capsuleToken", attrs: { capsule: {
+  kind: "file",
+  path: "/workspace/very-long-attachment-filename-that-needs-truncation.md",
+} } };
+const skill = { type: "capsuleToken", attrs: { capsule: { kind: "skill", name: "review-code" } } };
+const reference = { type: "capsuleToken", attrs: { capsule: {
+  kind: "ref", path: "src/very-long-component-name-that-needs-truncation.tsx", lines: "12-28",
 } } };
 
 async function setDocument(input: Locator, content: JSONContent[]) {
   await input.evaluate(async (element, content) => {
-    // 经真实注册表和编辑器装配视图，不伪造 token DOM；文件接纳入口由 composer-behavior 覆盖。
-    const modulePath = "/lib/assistant/attachments/local-attachment-registry.ts";
-    const registry = await import(modulePath);
-    registry.restoreLocalFile({
-      id: "token-file", name: "very-long-attachment-filename-that-needs-truncation.md", contentType: "text/markdown",
-      path: "/workspace/very-long-attachment-filename-that-needs-truncation.md",
-    });
+    // 经真实编辑器装配视图，不伪造胶囊 DOM；文件接纳入口由 composer-behavior 覆盖。
     const editor = (element as HTMLElement & { editor: Editor }).editor;
     editor.commands.setContent({ type: "doc", content });
   }, content);
@@ -32,7 +28,7 @@ test.beforeEach(async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 100, title: "行内标签" } });
   await seedState(request, 100, completedState(70, {
     id: "history-user",
-    parts: [{ type: "text", text: "查看 [src/main.ts](cosir-file:src/main.ts)", status: "completed" }],
+    parts: [{ type: "text", text: '查看 <ref path="src/main.ts" />', status: "completed" }],
   }, [{ type: "text", text: "历史回复", status: "completed" }]));
   await page.goto("/tasks/100");
   await expect(page.getByLabel("消息输入", { exact: true })).toBeEditable();
@@ -55,11 +51,8 @@ for (const theme of ["light", "dark"]) {
         { type: "paragraph", content: [{ type: "text", text: "使用 " }, skill, { type: "text", text: " 检查" }] },
         { type: "paragraph", content: [file] },
         { type: "paragraph", content: [reference] },
-        { type: "paragraph", content: [
-          { type: "attachmentToken", attrs: { tokenId: "missing" } },
-        ] },
       ]);
-      await expect(input.locator("[data-inline-token]")).toHaveCount(4);
+      await expect(input.locator("[data-inline-token]")).toHaveCount(3);
       const metrics = await input.evaluate(element => {
         const bounds = element.getBoundingClientRect();
         return {
@@ -86,7 +79,7 @@ for (const theme of ["light", "dark"]) {
       // 历史引用与输入框共用同一胶囊外观。
       await expect(history.locator("[data-inline-token]")).toHaveCount(1);
       await input.screenshot({ path: testInfo.outputPath("tokens.png"), animations: "disabled" });
-      await input.locator("[data-attachment-token] [data-inline-token]").first().hover();
+      await input.locator('[data-capsule-token][data-capsule-kind="file"] [data-inline-token]').first().hover();
       await expect(page.getByRole("tooltip")).toContainText("very-long-attachment-filename-that-needs-truncation.md");
     });
   }
@@ -94,9 +87,8 @@ for (const theme of ["light", "dark"]) {
 
 for (const [name, token, removeLabel] of [
   ["附件", file, "移除附件 very-long-attachment-filename-that-needs-truncation.md"],
-  ["失效附件", { type: "attachmentToken", attrs: { tokenId: "missing" } }, "移除附件"],
   ["Skill", skill, "移除 Skill review-code"],
-  ["引用", reference, "移除引用 very-long-component-name-that-needs-truncation.tsx · L12–28"],
+  ["引用", reference, "移除引用 very-long-component-name-that-needs-truncation.tsx"],
 ] as const) {
   test(`${name}：立即删除与后续输入分别撤销，重做和焦点正常`, async ({ page }) => {
     const input = page.getByLabel("消息输入", { exact: true });
@@ -119,6 +111,19 @@ for (const [name, token, removeLabel] of [
   });
 }
 
+test("粘贴胶囊文本解析为原子节点，代码里的同形标签保持原文", async ({ page }) => {
+  const input = page.getByLabel("消息输入", { exact: true });
+  await input.focus();
+  await input.evaluate(element => {
+    const data = new DataTransfer();
+    data.setData("text/plain", '看 <file path="/tmp/notes.md" /> 和 `<file path="/tmp/literal.md" />`');
+    element.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(1);
+  await expect(input).toContainText("notes.md");
+  await expect(input).toContainText('<file path="/tmp/literal.md" />');
+});
+
 test("键盘可聚焦查看和移除，禁用编辑器不能移除", async ({ page }) => {
   const input = page.getByLabel("消息输入", { exact: true });
   await setDocument(input, [{ type: "paragraph", content: [skill, reference] }]);
@@ -127,7 +132,7 @@ test("键盘可聚焦查看和移除，禁用编辑器不能移除", async ({ pa
   const remove = input.getByRole("button", { name: "移除 Skill review-code" });
   await expect(remove).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(input.locator("[data-skill-token]")).toHaveCount(0);
+  await expect(input.locator('[data-capsule-token][data-capsule-kind="skill"]')).toHaveCount(0);
   await expect(input).toBeFocused();
   await input.evaluate(element => (element as HTMLElement & { editor: Editor }).editor.setEditable(false, false));
   // 绕过父级 disabled 外观，验证事务边界仍拒绝只读编辑器中的删除。

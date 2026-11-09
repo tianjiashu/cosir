@@ -1,40 +1,32 @@
 import type { CompleteAttachment } from "@assistant-ui/core";
 
 /**
- * The UI working document for an editable user message.
+ * 可编辑用户消息的输入框工作文档。
  *
- * Ordinary files are inline blocks because their token has a meaningful text
- * position. Images deliberately live in a separate preview surface and are
- * therefore not represented by inline text tokens. This is a UI projection;
- * the backend canonical message remains the source of truth.
+ * 正文（含 `<file>` / `<ref>` / `<skill>` 胶囊标签）由编辑器按胶囊语法解析成原子节点；图片不占正文
+ * 位置，单独放在输入框的附件条。本类型只是 UI 投影，canonical 消息仍是唯一事实源。
  */
 export type EditableUserDocument = {
   text: string;
-  inlineFiles: readonly CompleteAttachment[];
-  previewImages: readonly CompleteAttachment[];
+  images: readonly CompleteAttachment[];
 };
 
-/** Build the one composer-facing projection from ordered text and attachments. */
+/** 从文本与附件构造输入框工作文档；只保留图片，同一附件只出现一次。 */
 export function createEditableUserDocument(
   text: string,
   attachments: readonly CompleteAttachment[],
 ): EditableUserDocument {
-  const inlineFiles: CompleteAttachment[] = [];
-  const previewImages: CompleteAttachment[] = [];
+  const images: CompleteAttachment[] = [];
   const seen = new Set<string>();
-
   for (const attachment of attachments) {
-    if (seen.has(attachment.id)) continue;
+    if (attachment.type !== "image" || seen.has(attachment.id)) continue;
     seen.add(attachment.id);
-    if (attachment.type === "image") previewImages.push(attachment);
-    else inlineFiles.push(attachment);
+    images.push(attachment);
   }
-
-  return { text, inlineFiles, previewImages };
+  return { text, images };
 }
 
-/** Return the exact ordered attachments that the composer must hydrate. */
+/** 输入框需要恢复的附件：只有图片条。 */
 export function editableDocumentAttachments(document: EditableUserDocument): readonly CompleteAttachment[] {
-  return [...document.inlineFiles, ...document.previewImages];
+  return document.images;
 }
-

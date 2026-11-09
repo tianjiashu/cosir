@@ -337,7 +337,7 @@ class ConversationTaskStateRebuilder:
                 and opener_metadata.kind in TURN_INPUT_KINDS
             )
             if opened_by_input:
-                # 只按展示绑定投影，不读 SDK 正文（附件解析后的模型正文不适合展示）。
+                # 只按展示绑定投影，不读 SDK 正文（正文是带 ``<user_input>`` 包装的模型输入）。
                 input_metadata = cast(UserMessageMetadata, opener_metadata)
                 parts, source = build_turn_input(
                     cast(UserInputPresentation, input_metadata.presentation),

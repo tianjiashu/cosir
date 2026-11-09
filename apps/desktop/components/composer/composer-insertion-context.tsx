@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useRef, type PropsWithChildren } from "react";
-import type { InlineComposerAttachment, InlineComposerSkill, ComposerInsertionCommand } from "@/components/composer/composer-document";
+import type { Capsule } from "@/lib/assistant/capsules";
+import type { ComposerInsertionCommand } from "@/components/composer/composer-document";
 
 type ComposerInsertionContextValue = {
   register: (handler: (command: ComposerInsertionCommand) => void, isEditable: () => boolean) => () => void;
@@ -35,17 +36,14 @@ export function useComposerInsertion() {
   return context;
 }
 
-export function insertAttachments(
+export function insertCapsules(
   dispatch: ComposerInsertionContextValue["dispatch"],
-  attachments: readonly InlineComposerAttachment[],
+  capsules: readonly Capsule[],
 ) {
-  dispatch({ type: "insert-attachments", attachments });
+  if (capsules.length === 0) return;
+  dispatch({ type: "insert-capsules", capsules });
 }
 
 export function insertText(dispatch: ComposerInsertionContextValue["dispatch"], text: string) {
   dispatch({ type: "insert-text", text });
-}
-
-export function insertSkill(dispatch: ComposerInsertionContextValue["dispatch"], skill: InlineComposerSkill) {
-  dispatch({ type: "insert-skill", skill });
 }

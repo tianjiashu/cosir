@@ -23,11 +23,13 @@ import { newTraceId } from "@/lib/logging/trace-id";
 /** 停止、取消与转后台都幂等（重复投递后端回 409 或照常受理），超时后可以放心重试。 */
 const IDEMPOTENT_COMMAND_TIMEOUT_MS = 15_000;
 
-/** 用户消息正文（文本、图片与附件）。 */
+/**
+ * 用户消息正文：文本（带 `<file>` / `<ref>` / `<skill>` 胶囊标签）与已上传图片的 locator。
+ * 本机文件、工作区引用与 Skill 都只是正文里的指针，不再有旁挂附件列表。
+ */
 type TaskUserMessage = {
   role: "user";
   parts: Array<{ type: "text"; text: string } | { type: "image"; image: string }>;
-  attachments?: Array<{ id: string; name: string; contentType: string; path: string }>;
 };
 
 /** 发送消息的请求体（带发起配置），与后端 `SendMessageRequest` 对齐。 */

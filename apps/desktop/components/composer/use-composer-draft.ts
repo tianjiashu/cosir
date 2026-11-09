@@ -15,8 +15,8 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 
 /**
  * 让主输入框的内容比 runtime 活得久：在 AUI 仍存活时保存正文与图片，挂载时恢复，并接住失败与撤回
- * 恢复。普通文件引用随正文保存，展示元数据与路径复用登记表。只在输入框为空时恢复。返回是否正在
- * 恢复（此时不能提交）。
+ * 恢复。普通文件、引用与 Skill 都只是正文里的胶囊标签，随文本保存；附件条只有图片。只在输入框为
+ * 空时恢复。返回是否正在恢复（此时不能提交）。
  */
 function useComposerDraft(key: string | null): boolean {
   const aui = useAui();

@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import contextlib
 import copy
 import json
 import threading
@@ -44,7 +45,9 @@ from app.tools.tool_handler.terminal import ExecutionResult
 from tests.sdk_fixtures import sdk_events
 
 
-def tool_call(call_id: str, name: str, args: dict[str, Any] | str, index: int = 0) -> dict[str, Any]:
+def tool_call(
+    call_id: str, name: str, args: dict[str, Any] | str, index: int = 0
+) -> dict[str, Any]:
     """流式 delta 里的一个工具调用；参数给字符串时原样透传，用来构造残缺 JSON。"""
     arguments = args if isinstance(args, str) else json.dumps(args)
     return {
@@ -115,7 +118,9 @@ def _install_probe_tools(task: TaskRecord) -> None:
     assert definition is not None
     schemas = [*task.tool_schemas, definition.to_model_tool_definition()]
     with main_session_factory().begin() as session:
-        session.execute(update(TaskModel).where(TaskModel.id == task.id).values(tool_schemas=schemas))
+        session.execute(
+            update(TaskModel).where(TaskModel.id == task.id).values(tool_schemas=schemas)
+        )
 
 
 class GatedCommands:
@@ -155,7 +160,9 @@ class GatedCommands:
 class LiveColdEnv:
     """一个工作区加一个 Task；保持订阅，让实时快照一直是投影出来的工作副本。"""
 
-    def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, steps: Sequence[Any]) -> None:
+    def __init__(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, steps: Sequence[Any]
+    ) -> None:
         self.model = ScriptedModel(steps)
         self.model_config = depends.get_model_config_service().create_config(
             config_name="test",
@@ -194,7 +201,7 @@ class LiveColdEnv:
             model_config_id=self.model_config.id, options=options or ConversationRunOptions()
         )
         body = UserInputBody(
-            input_text=text, launch=launch, presentation=UserInputPresentation(display_text=text)
+            text=text, launch=launch, presentation=UserInputPresentation(text=text)
         )
         spaces.enqueue(task_id or self.task.id, TaskMessage.of(body, **kwargs))
 
@@ -221,13 +228,13 @@ class LiveColdEnv:
             while True:
                 actor = spaces.get(target).actor
                 changed = actor.state_changed
-                run = await asyncio.to_thread(depends.get_task_service().require_current_run, target)
+                run = await asyncio.to_thread(
+                    depends.get_task_service().require_current_run, target
+                )
                 if run is not None and matches(run) and not actor.driving:
                     return run
-                try:
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(changed.wait(), 0.05)
-                except TimeoutError:
-                    pass
 
     def live(self) -> dict[str, Any]:
         return copy.deepcopy(self.state.get_state(self.task.id))

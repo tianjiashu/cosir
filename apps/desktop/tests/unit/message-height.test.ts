@@ -14,7 +14,6 @@ const assistant = (...parts: TransportMessagePart[]) => projected(parts);
 const code = (lines: number) => ["```ts", ...Array.from({ length: lines }, (_, line) => `const v${line} = ${line};`), "```"].join("\n");
 const user = (...content: object[]) => ({ id: "u", role: "user", content }) as unknown as ThreadMessage;
 const text = (value: string, finalReply = true) => ({ type: "text" as const, text: value, finalReply });
-const file = { type: "file", filename: "a.md", mimeType: "text/markdown", data: "" };
 const image = { type: "image", image: "x" };
 const call = (id: string, status: "completed" | "pending" | "running" = "completed", extra = {}) => toolCallPart(id, "read_file", { status, ...extra });
 const running = (...parts: TransportMessagePart[]) => projected(parts, null, true);
@@ -57,11 +56,12 @@ describe("estimateMessageHeight", () => {
     expect(estimateMessageHeight(projected([text("回复")], outcome("failed"))) - plainHeight).toBe(37 + 16);
   });
 
-  it("用户消息：气泡按折行增高，附件区按行排在气泡上方", () => {
+  it("用户消息：气泡按折行增高，胶囊按可读名称计入正文", () => {
     expect(estimateMessageHeight(user(text("问题")))).toBe(100);
     expect(estimateMessageHeight(user(text("请帮我看看。".repeat(20))))).toBe(146);
-    expect(estimateMessageHeight(user(text("看这个"), file))).toBe(138);
-    expect(estimateMessageHeight(user(text("看这些"), file, file, file))).toBe(138);
+    // 文件、引用、Skill 是正文里的行内胶囊，不再有独立的附件区。
+    expect(estimateMessageHeight(user(text('<file path="/tmp/a.md" />')))).toBe(100);
+    expect(estimateMessageHeight(user(text('前文 <ref path="src/main.py" lines="12-14" /> 后文')))).toBe(100);
     expect(estimateMessageHeight(user(image))).toBe(149);
   });
 

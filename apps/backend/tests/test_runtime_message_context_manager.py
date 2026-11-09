@@ -20,9 +20,7 @@ from tests.sdk_fixtures import sdk_completion
 
 def _user_meta(text: str) -> UserMessageMetadata:
     """落库的用户消息都带来源 ``kind``；用户输入还带展示绑定（snapshot 重建与 fork 只从这里取）。"""
-    return UserMessageMetadata(
-        kind="user_input", presentation=UserInputPresentation(display_text=text)
-    )
+    return UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(text=text))
 
 
 class _ContextStore:
@@ -117,14 +115,21 @@ def test_background_completion_updates_work_and_preserves_existing_card():
     store = _ContextStore(max_sequence=2)
     manager = _manager(store)
     work = BackgroundWork(
-        run_id=1, kind="child_agent", label="research", started_at="2026-01-01T00:00:00+00:00",
+        run_id=1,
+        kind="child_agent",
+        label="research",
+        started_at="2026-01-01T00:00:00+00:00",
     )
     card = {"kind": "child-agent", "child_task_id": 11}
-    manager._entries = [ContextEntry(
-        {"role": "tool", "tool_call_id": "c", "content": "placeholder"}, 2, 2,
-        metadata=ToolMessageMetadata(status="pending", background=work, display_data=card),
-        turn=1,
-    )]
+    manager._entries = [
+        ContextEntry(
+            {"role": "tool", "tool_call_id": "c", "content": "placeholder"},
+            2,
+            2,
+            metadata=ToolMessageMetadata(status="pending", background=work, display_data=card),
+            turn=1,
+        )
+    ]
     ended = work.model_copy(update={"ended_at": "2026-01-01T00:01:00+00:00"})
     written = manager.update_tool_result_metadata(
         "c", ToolMessageMetadata(status="completed", background=ended)
@@ -185,7 +190,9 @@ def test_load_message_moves_existing_tool_result_before_later_human_message() ->
             turn=1,
         ),
         ContextEntry({"role": "user", "content": "continue"}, 2, 2, turn=1),
-        ContextEntry({"role": "tool", "content": "cancelled", "tool_call_id": "call-1"}, 1, 3, turn=1),
+        ContextEntry(
+            {"role": "tool", "content": "cancelled", "tool_call_id": "call-1"}, 1, 3, turn=1
+        ),
     ]
     manager = _manager(context_store)
     manager._entries = list(context_store.loaded)
@@ -306,5 +313,3 @@ def test_add_message_replaces_paired_tool_result_row_in_place() -> None:
     assert [entry.message.get("content") for entry in manager._entries] == ["", "real"]
     assert manager._entries[-1].metadata == ToolMessageMetadata(status="completed")
     assert manager._message_sequence == 7, "覆盖不得推进序号游标"
-
-

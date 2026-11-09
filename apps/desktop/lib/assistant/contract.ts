@@ -101,31 +101,24 @@ export type TransportImagePart = {
 };
 
 /**
- * 用户普通文件 part：稳定 locator、展示元数据与本机路径。
- *
- * `path` 让放回输入框的附件（撤回、编辑排队消息）能原样再发送；前端只把它作为附件描述交回后端，
- * 不读文件。
+ * 回合途中到达的 Agent 消息：当前回复过程里的一段，不开新回合。开启回合的 Agent 消息见 `TransportMessage.source`。
  */
-type TransportFilePart = {
-  type: "file";
-  file: string;
-  name: string;
-  contentType: string;
-  path: string;
-};
-/** 回合途中到达的 Agent 消息：当前回复过程里的一段，不开新回合。开启回合的 Agent 消息见 `TransportMessage.source`。 */
 export type TransportAgentMessagePart = {
   type: "agent-message";
   id: string;
   text: string;
   source: TransportMessageSource;
 };
-/** 单条 Transport 消息的内容 part。 */
+/**
+ * 单条 Transport 消息的内容 part。
+ *
+ * 用户消息只有 text 与 image：文件、引用、Skill 都是正文文本里的胶囊标签（`<file>` / `<ref>` /
+ * `<skill>`），由展示侧解析成行内胶囊，不再有独立的 file part。
+ */
 export type TransportMessagePart =
   | TransportTextPart
   | TransportToolCallPart
   | TransportImagePart
-  | TransportFilePart
   | TransportAgentMessagePart;
 
 /** 一次 Run 当前累计的模型 token 用量；字段缺少 provider 明细时为 null。 */

@@ -19,7 +19,6 @@ import {
   type TransportDisconnect,
 } from "@/lib/assistant/transport/use-task-assistant-transport-runtime";
 import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
-import { prepareUserCommand } from "@/lib/assistant/composer/prepare-user-command";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
@@ -111,9 +110,8 @@ export function useRuntimeTransport(
         reasoningEffort: selection ? selection.reasoningEffort ?? null : state.fork?.initialLaunch.reasoningEffort ?? null,
         disabledToolGroups: [...selectedToolGroups],
       };
-      // prepareUserCommand 已剔除 composer-only 的 file part，并为普通文件补齐带路径的描述符。
-      const prepared = prepareUserCommand(command) as UserAddMessageCommand;
-      const message = prepared.message as TaskMessageRequest["message"];
+      // 正文里的胶囊标签就是机器可读的指针，命令原样发送，不在前端改写 parts。
+      const message = command.message as TaskMessageRequest["message"];
       if (launch.modelConfigId === null) {
         throw new UserFacingError(runLaunch ? "当前运行的模型配置已删除，请停止后重新选择" : "请先选择模型后再发送");
       }
@@ -129,7 +127,6 @@ export function useRuntimeTransport(
           taskId: context.taskId,
           launchLocked: runLaunch !== null,
           partCount: message.parts.length,
-          attachmentCount: message.attachments?.length ?? 0,
         },
       });
       await sendTaskMessage(context.taskId, request, { traceId: context.traceId });

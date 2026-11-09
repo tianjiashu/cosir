@@ -42,6 +42,12 @@ class SkillInfo:
     scope: ExtensionScope
     overrides: bool = False
 
+    @property
+    def skill_file(self) -> Path:
+        """该 Skill 的 ``SKILL.md`` 绝对路径；用户输入的 ``<skill>`` 胶囊把它写给模型按需读取。"""
+
+        return (self.directory / _SKILL_FILE_NAME).resolve()
+
 
 @dataclass(frozen=True)
 class SkillDocument:
@@ -51,7 +57,9 @@ class SkillDocument:
     body: str
 
     def for_model(self) -> str:
-        """给模型的正文：先说明 Skill 目录（正文里的相对路径以它为基准），超出预算时截断并指明原文位置。"""
+        """给模型的正文：先说明 Skill 目录（正文里的相对路径以它为基准），
+        超出预算时截断并指明原文位置。
+        """
 
         directory = self.info.directory.resolve()
         body = self.body

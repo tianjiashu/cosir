@@ -1,8 +1,8 @@
-import {
-  selectedReference,
-  ReferenceSelectionMenu,
-  type TextSelection,
-} from "@/components/workspace-references/selection-actions";
+import { ReferenceSelectionMenu } from "@/components/workspace-references/selection-actions";
+import type { DomTextSelection } from "@/lib/workspace-files/dom-selection-locator";
+import { sourceLinesOfRange } from "@/lib/workspace-files/dom-selection-locator";
+import { workspaceFileRef } from "@/lib/workspace-references/ref-capsule";
+import type { RefCapsule } from "@/lib/assistant/capsules";
 import { AddToChatButton } from "./add-to-chat-button";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -44,8 +44,7 @@ export function TextPreview({
   rendered: boolean;
   view?: ReactNode;
 }) {
-  const [selection, setSelection] = useState<TextSelection | null>(null);
-  const [excerpt, setExcerpt] = useState<string | null>(null);
+  const [selection, setSelection] = useState<RefCapsule | null>(null);
   const position = useFilesStore(
     (s) => fileSession(s.sessions, workspaceId).positions[info.path],
   );
@@ -101,7 +100,6 @@ export function TextPreview({
   });
   useEffect(() => {
     setSelection(null);
-    setExcerpt(null);
   }, [info.version, encoding, offset, tail, before]);
   useEffect(() => {
     if (page.error instanceof HttpError && page.error.status === 409) {
@@ -153,8 +151,17 @@ export function TextPreview({
       text={page.data.text}
       name={info.name}
       onSelection={(value) => {
-        setSelection(value && page.data.offset ? { ...value, startLine: undefined, endLine: undefined } : value);
-        setExcerpt(null);
+        // 分段读取的大文件没有「整篇行号」映射：拿到整文件指针，不编造行范围。
+        setSelection(
+          value
+            ? workspaceFileRef(
+                info.path,
+                page.data.offset === 0 && value.startLine !== undefined && value.endLine !== undefined
+                  ? { start: value.startLine, end: value.endLine }
+                  : undefined,
+              )
+            : null,
+        );
       }}
       wrap={wrap}
       reveal={wholeFile ? reveal : undefined}
@@ -169,9 +176,11 @@ export function TextPreview({
     <MarkdownPreview
       hostRef={markdownHost}
       text={page.data.text}
-      onSelectText={(value) => {
-        setExcerpt(value);
-        setSelection(null);
+      onSelectSelection={(value: DomTextSelection | null) => {
+        // 渲染视图按块级 data-source-line 求源码行范围；求不出时退化为整文件指针。
+        const host = markdownHost.current;
+        const lines = value && host ? sourceLinesOfRange(value.range, host) : null;
+        setSelection(value ? workspaceFileRef(info.path, lines ?? undefined) : null);
       }}
       workspaceId={workspaceId}
       path={info.path}
@@ -216,7 +225,6 @@ export function TextPreview({
             workspaceId={workspaceId}
             path={info.path}
             selection={selection}
-            excerpt={excerpt}
           />
         </>}
         options={<>
@@ -284,7 +292,7 @@ export function TextPreview({
         ) : (
           <ReferenceSelectionMenu
             workspaceId={workspaceId}
-            input={selectedReference(info.path, selection, excerpt)}
+            capsule={selection}
           >
             <div className="min-h-0 min-w-0 flex-1">{rendered ? markdown : source}</div>
           </ReferenceSelectionMenu>

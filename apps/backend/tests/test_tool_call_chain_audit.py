@@ -120,7 +120,9 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
     gate = ToolAccessGate(registry)
     outcome = gate.evaluate(
         ToolCall(
-            tool_name="read_file", arguments='{"intent": "验证工具行为", "nonexistent_field": 1}', call_id="call-disabled"
+            tool_name="read_file",
+            arguments='{"intent": "验证工具行为", "nonexistent_field": 1}',
+            call_id="call-disabled",
         ),
         execution_context=_execution_context(tmp_path),
         allowed_tool_names={"other_tool"},  # read_file 已注册但本轮被禁用
@@ -130,7 +132,9 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
     assert outcome.tool is None
     assert outcome.denial is not None
     # 关键事实：命中的是「本轮禁用」分支，而不是「参数非法」分支。
-    assert outcome.denial.content.startswith("tool is not allowed: read_file"), outcome.denial.content
+    assert outcome.denial.content.startswith(
+        "tool is not allowed: read_file"
+    ), outcome.denial.content
     assert "This tool is not available" in outcome.denial.content
     assert outcome.denial.tool_call_id == "call-disabled"
 
@@ -145,7 +149,11 @@ def test_t2_disabled_with_valid_args_yields_disabled_denial(tmp_path: Any) -> No
     registry = ToolRegistry([ReadFileTool().to_definition()])
     gate = ToolAccessGate(registry)
     outcome = gate.evaluate(
-        ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "a.txt"}', call_id="call-disabled-2"),
+        ToolCall(
+            tool_name="read_file",
+            arguments='{"intent": "验证工具行为", "path": "a.txt"}',
+            call_id="call-disabled-2",
+        ),
         execution_context=_execution_context(tmp_path),
         allowed_tool_names={"other_tool"},
     )
@@ -166,7 +174,9 @@ def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
     registry = ToolRegistry([ReadFileTool().to_definition()])
     gate = ToolAccessGate(registry)
     outcome = gate.evaluate(
-        ToolCall(tool_name="ghost_tool", arguments='{"intent": "验证工具行为"}', call_id="call-ghost"),
+        ToolCall(
+            tool_name="ghost_tool", arguments='{"intent": "验证工具行为"}', call_id="call-ghost"
+        ),
         execution_context=_execution_context(tmp_path),
         allowed_tool_names=set(),  # 连空白名单都要先让位给「注册表未命中」
     )
@@ -312,7 +322,7 @@ def test_t4_rebuild_snapshot_materializes_all_tool_results(
         end_reason=None,
         usage=None,
         error=None,
-        input_text="",
+        text="",
         context_window_total=None,
         model_config_id=None,
         options=ConversationRunOptions(),
@@ -429,7 +439,8 @@ def test_t4_delegation_display_data_backfills_child_locators(
     """T4-h：委派结果的展示数据回填 child_task_id / agent_role（子 Agent 按 Task 寻址，无 run_id）。
 
     实际观测：``display_data.kind == "delegation-result"`` 时，part 上出现 ``child_task_id``；
-    ``display_data`` 使用持久化 role，并把 role 写回 ``display_data["role"]`` 与 ``part["agent_role"]``。
+    ``display_data`` 使用持久化 role，并把 role 写回 ``display_data["role"]`` 与
+    ``part["agent_role"]``。
     是否符合预期：符合（旧委派记录的 role 回填既定行为）。
     """
 

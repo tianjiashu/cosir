@@ -38,9 +38,12 @@ describe("resolveLink", () => {
     expect(resolveLink("apps/desktop/", repo)).toEqual({ kind: "workspace", path: "apps/desktop", directory: true });
   });
 
-  it("opens reference URLs copied from user messages", () => {
-    expect(resolveLink("cosir-file:src/a.ts#L3-L5", repo)).toEqual({ kind: "workspace", path: "src/a.ts", directory: false, lines: { start: 3, end: 5 } });
-    expect(resolveLink("cosir-dir:src", repo)).toEqual({ kind: "workspace", path: "src", directory: true });
+  it("no longer treats legacy reference schemes as workspace paths", () => {
+    // 引用已是正文里的胶囊标签（`<ref path=… />`），不再是 Markdown 链接地址。
+    for (const href of ["cosir-file:src/a.ts#L3-L5", "cosir-dir:src", "cosir-snippet:a.py", "cosir-excerpt:README.md"]) {
+      expect(resolveLink(href, repo)).toBeNull();
+    }
+    // 普通路径里恰好以 cosir- 开头的文件名照常解析。
     expect(resolveLink("cosir-notes/a.md", repo)).toMatchObject({ path: "cosir-notes/a.md" });
   });
 
@@ -80,6 +83,7 @@ describe("resolveLink", () => {
   it("only resolves web links without a workspace", () => {
     expect(resolveLink("src/app.ts", { workspaceRoot: null })).toBeNull();
     expect(resolveLink("cosir-file:src/a.ts", { workspaceRoot: null })).toBeNull();
+    expect(resolveLink("cosir-file:src/a.ts", repo)).toBeNull();
   });
 
   it("resolves document links against the document directory, with / meaning the workspace root", () => {

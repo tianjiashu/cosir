@@ -8,7 +8,6 @@ import {
   toToolCallPart,
   type TransportMessageRenderContext,
 } from "@/lib/assistant/transport-message-converter";
-import { registerLocalFile, restoreLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 import type { TransportMessage, TransportToolCallPart } from "@/lib/assistant/contract";
 import { activity, agentMessagePart, outcome, usage } from "./transport-fixtures";
 import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
@@ -53,18 +52,16 @@ describe("assistant transport converter", () => {
     expect(readToolArtifact(first.artifact).intent).toBe("核对工具结果");
     expect(readToolArtifact(settled.artifact).intent).toBe("核对工具结果");
   });
-  it("乐观用户消息复用渲染上下文，保持身份与附件顺序且不伪造 Run 事实", () => {
+  it("乐观用户消息复用渲染上下文，正文胶囊与图片原样投影", () => {
     const command = { type: "add-message", message: { role: "user", parts: [
-      { type: "text", text: "查看文件和图片" },
-      { type: "file", data: "cosir-local-file:one", filename: "notes.md", mimeType: "text/markdown" },
+      { type: "text", text: '查看 <file path="/tmp/notes.md" /> 和 ' },
       { type: "image", image: "cosir-attachment://image-one" },
     ] } };
     const pending = toPendingUserMessage(command);
     expect(pending).toMatchObject({
       role: "user", attachments: [],
       content: [
-        { type: "text", text: "查看文件和图片" },
-        { type: "file", data: "cosir-local-file:one", filename: "notes.md", mimeType: "text/markdown" },
+        { type: "text", text: '查看 <file path="/tmp/notes.md" /> 和 ' },
         { type: "image", image: "cosir-attachment://image-one" },
       ],
     });
@@ -104,155 +101,52 @@ describe("assistant transport converter", () => {
     expect(live.status).toEqual({ type: "running" });
   });
 
-  it("rebuilds ordinary attachments from inline token ids for failure restore", () => {
-    const id = registerLocalFile({
-      path: "C:\\workspace\\设计 说明.md",
-      name: "设计 说明.md",
-      contentType: "text/markdown",
-    });
+  it("rebuilds only images for failure restore；正文胶囊随文本恢复", () => {
+    const locator = `cosir-attachment://${"a".repeat(64)}`;
     const attachments = extractUserAddMessageAttachments({
       type: "add-message",
       message: {
         role: "user",
-        parts: [{ type: "text", text: `请查看 [[cosir-file:${id}]]` }],
+        parts: [
+          { type: "text", text: '请查看 <file path="/tmp/a.md" />' },
+          { type: "image", image: locator },
+        ],
       },
     });
     expect(attachments).toMatchObject([{
-      id,
-      type: "file",
-      name: "设计 说明.md",
-      content: [{ data: `cosir-local-file:${id}` }],
+      id: locator,
+      type: "image",
+      content: [{ type: "image", image: locator }],
     }]);
   });
 
-  it("keeps the local registry ID when restoring a sent file part", () => {
-    const attachments = extractUserAddMessageAttachments({
-      type: "add-message",
-      message: {
-        role: "user",
-        parts: [{
-          type: "file",
-          data: "cosir-local-file:local-file-restore",
-          filename: "设计 说明.md",
-          mimeType: "text/markdown",
-        }],
-      },
-    });
-
-    expect(attachments).toMatchObject([{ id: "local-file-restore" }]);
-  });
-
-  it("keeps canonical attachments in ordered content instead of a second top-level source", () => {
-    const converted = toThreadMessage(
-      {
-        id: "user-1",
-        role: "user",
-        parts: [{
-          type: "file",
-          file: "cosir-local-file:file-1",
-          name: "notes.md",
-          contentType: "text/markdown",
-          path: "/w/notes.md",
-        }],
-      },
-      completedTurn(1),
-    );
-
-    expect(converted).toMatchObject({
-      role: "user",
-      attachments: [],
-      content: [{
-        type: "file",
-        data: "cosir-local-file:file-1",
-        filename: "notes.md",
-      }],
-    });
-  });
-
-  // 目的：乐观消息与后端 canonical 同形，气泡在原位渲染文件、Skill 胶囊，canonical 到达时附件不挪位。
-  it("乐观消息把文件 token 换成原位 file part，Skill token 原样留在文本里", () => {
-    const pending = toPendingUserMessage({ type: "add-message", message: { role: "user", parts: [
-      { type: "text", text: "请用 [[cosir-skill:review-code]] 看 [[cosir-file:file-1]] 和 `[[cosir-file:file-2]]`" },
-      { type: "file", data: "cosir-local-file:file-1", filename: "notes.md", mimeType: "text/markdown" },
-      { type: "file", data: "cosir-local-file:file-3", filename: "extra.md", mimeType: "text/markdown" },
-    ] } });
-
-    expect(pending?.content).toMatchObject([
-      { type: "text", text: "请用 [[cosir-skill:review-code]] 看 " },
-      { type: "file", data: "cosir-local-file:file-1", filename: "notes.md" },
-      { type: "text", text: " 和 `[[cosir-file:file-2]]`" },
-      { type: "file", data: "cosir-local-file:file-3", filename: "extra.md" },
-    ]);
-  });
-
-  it("输入框里只有 token 的普通文件从本机登记取名称并占住原位", () => {
-    restoreLocalFile({ id: "token-only", name: "plan.md", contentType: "text/markdown", path: "/w/plan.md" });
-    const pending = toPendingUserMessage({ type: "add-message", message: { role: "user", parts: [
-      { type: "text", text: "[[cosir-file:token-only]] 和 [[cosir-file:token-only]][[cosir-file:gone]]" },
-    ] } });
-
-    expect(pending?.content).toMatchObject([
-      { type: "file", data: "cosir-local-file:token-only", filename: "plan.md", mimeType: "text/markdown" },
-      { type: "text", text: " 和 " },
-      { type: "file", data: "cosir-local-file:gone", filename: "附件" },
-    ]);
-  });
-
-  it("keeps text, file, and image parts in canonical order", () => {
+  it("keeps text and image parts in canonical order", () => {
+    const imageLocator = `cosir-attachment://${"a".repeat(64)}`;
     const converted = toThreadMessage(
       {
         id: "user-ordered",
         role: "user",
         parts: [
-          { type: "text", text: "请看", status: "completed" },
-          { type: "file", file: "cosir-local-file:file-1", name: "notes.md", contentType: "text/markdown", path: "/w/notes.md" },
-          { type: "text", text: "和图片", status: "completed" },
-          { type: "image", image: "cosir-attachment://" + "a".repeat(64) },
+          { type: "text", text: '请看 <file path="/tmp/notes.md" />', status: "completed" },
+          { type: "image", image: imageLocator },
         ],
       },
       completedTurn(1),
     );
 
-    expect(converted.content.map((part) => part.type)).toEqual(["text", "file", "text", "image"]);
+    expect(converted.content.map((part) => part.type)).toEqual(["text", "image"]);
   });
 
-  it("builds one edit attachment list and preserves file token positions", () => {
+  it("builds one edit draft from canonical text and images, keeping capsule tags in place", () => {
+    const imageLocator = `cosir-attachment://${"b".repeat(64)}`;
     const converted = toThreadMessage(
       {
         id: "user-edit-order",
         role: "user",
         parts: [
-          { type: "text", text: "前文", status: "completed" },
-          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown", path: "/w/a.md" },
-          { type: "text", text: "中间", status: "completed" },
-          { type: "file", file: "cosir-local-file:file-b", name: "b.md", contentType: "text/markdown", path: "/w/b.md" },
-          { type: "text", text: "后文", status: "completed" },
-        ],
-      },
-      completedTurn(1),
-    );
-
-    if (converted.role !== "user") throw new Error("expected user message");
-    const draft = toEditableUserMessageDraft(converted);
-
-    expect(draft.text).toBe(
-      "前文[[cosir-file:file-a]]中间[[cosir-file:file-b]]后文",
-    );
-    expect(draft.attachments.map((attachment) => attachment.id)).toEqual(["file-a", "file-b"]);
-  });
-
-  it("preserves mixed image and file positions in the edit draft", () => {
-    const imageLocator = `cosir-attachment://${"a".repeat(64)}`;
-    const converted = toThreadMessage(
-      {
-        id: "user-edit-mixed",
-        role: "user",
-        parts: [
-          { type: "text", text: "文字 A", status: "completed" },
+          { type: "text", text: '前文<file path="/tmp/a.md" />中间', status: "completed" },
           { type: "image", image: imageLocator },
-          { type: "text", text: "文字 B", status: "completed" },
-          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown", path: "/w/a.md" },
-          { type: "text", text: "文字 C", status: "completed" },
+          { type: "text", text: '后文 <ref path="src/b.py" lines="3" />', status: "completed" },
         ],
       },
       completedTurn(1),
@@ -261,20 +155,18 @@ describe("assistant transport converter", () => {
     if (converted.role !== "user") throw new Error("expected user message");
     const draft = toEditableUserMessageDraft(converted);
 
-    expect(draft.text).toBe("文字 A文字 B[[cosir-file:file-a]]文字 C");
-    expect(draft.document.inlineFiles.map((attachment) => attachment.id)).toEqual(["file-a"]);
-    expect(draft.document.previewImages.map((attachment) => attachment.id)).toEqual([imageLocator]);
+    expect(draft.text).toBe('前文<file path="/tmp/a.md" />中间后文 <ref path="src/b.py" lines="3" />');
+    expect(draft.attachments.map((attachment) => attachment.id)).toEqual([imageLocator]);
+    expect(draft.document.images.map((attachment) => attachment.id)).toEqual([imageLocator]);
   });
 
-  it("deduplicates edit attachments even when the message model contains both sources", () => {
+  it("deduplicates edit image attachments even when the message model contains both sources", () => {
+    const imageLocator = `cosir-attachment://${"c".repeat(64)}`;
     const converted = toThreadMessage(
       {
         id: "user-edit-dedup",
         role: "user",
-        parts: [
-          { type: "text", text: "查看", status: "completed" },
-          { type: "file", file: "cosir-local-file:file-a", name: "a.md", contentType: "text/markdown", path: "/w/a.md" },
-        ],
+        parts: [{ type: "image", image: imageLocator }],
       },
       completedTurn(1),
     );
@@ -285,26 +177,8 @@ describe("assistant transport converter", () => {
       attachments: [...converted.attachments, ...converted.attachments],
     });
 
-    expect(draft.text).toBe("查看[[cosir-file:file-a]]");
     expect(draft.attachments).toHaveLength(1);
-    expect(draft.attachments[0]?.id).toBe("file-a");
-  });
-
-  it("does not use a file path or remote locator as an attachment ID", () => {
-    const attachments = extractUserAddMessageAttachments({
-      type: "add-message",
-      message: {
-        role: "user",
-        parts: [{
-          type: "file",
-          data: "C:\\workspace\\leftHook.yml",
-          filename: "leftHook.yml",
-          mimeType: "text/yaml",
-        }],
-      },
-    });
-
-    expect(attachments).toEqual([]);
+    expect(draft.attachments[0]?.id).toBe(imageLocator);
   });
 
   it("maps streaming text and reasoning without losing their running status", () => {

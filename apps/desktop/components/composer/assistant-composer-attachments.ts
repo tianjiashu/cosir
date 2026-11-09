@@ -1,7 +1,6 @@
-import type { InlineComposerAttachment } from "./composer-document";
+import type { FileCapsule } from "@/lib/assistant/capsules";
 import { classifyComposerExternalFiles, type ComposerExternalFileResult } from "./composer-external-files";
 import { MAX_IMAGES_PER_MESSAGE } from "@/lib/assistant/attachments/attachment-upload";
-import { registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
 /** 输入框的图片集合：新对话草稿或 assistant-ui composer 各自提供添加与当前数量。 */
@@ -11,24 +10,22 @@ export type ComposerImageSink = {
 };
 
 /**
- * 所有附件入口共用分类与接纳顺序。普通文件登记本机路径后只返回 token，不进入图片附件集合；
- * 图片交给宿主添加，超出单条消息图片上限的按顺序跳过并记为问题。每个异步步骤后确认原编辑会话
- * 仍存在，避免迟到结果写入另一草稿。
+ * 所有附件入口共用分类与接纳顺序。本机普通文件直接成为 `<file>` 胶囊（路径就是正文里的指针，
+ * 后端按路径读取，前端不再登记附件元数据）；图片交给宿主添加，超出单条消息图片上限的按顺序跳过
+ * 并记为问题。每个异步步骤后确认原编辑会话仍存在，避免迟到结果写入另一草稿。
  */
 export async function addComposerFiles(
   files: readonly File[],
   port: { images: ComposerImageSink; isCurrent: () => boolean },
-): Promise<ComposerExternalFileResult<InlineComposerAttachment>> {
+): Promise<ComposerExternalFileResult<FileCapsule>> {
   const { accepted, problems } = classifyComposerExternalFiles(files);
-  const attachments: InlineComposerAttachment[] = [];
+  const capsules: FileCapsule[] = [];
   // 开始时取一次余量：宿主的数量不一定在每次添加后同步更新（assistant-ui 的添加是异步的）。
   let remainingImages = MAX_IMAGES_PER_MESSAGE - port.images.count();
   for (const item of accepted) {
-    if (!port.isCurrent()) return { attachments: [], problems: [] };
+    if (!port.isCurrent()) return { capsules: [], problems: [] };
     if (item.kind === "file") {
-      const { file, path } = item;
-      const id = registerLocalFile({ path, name: file.name, contentType: file.type || "application/octet-stream" });
-      attachments.push({ id, name: file.name });
+      capsules.push({ kind: "file", path: item.path });
       continue;
     }
     if (remainingImages <= 0) {
@@ -45,5 +42,5 @@ export async function addComposerFiles(
       });
     }
   }
-  return { attachments, problems };
+  return { capsules, problems };
 }

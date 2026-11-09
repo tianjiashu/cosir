@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,9 +12,6 @@ from sqlalchemy.orm import sessionmaker
 
 from app.assistant_transport.service.conversation_task_state_rebuilder import (
     ConversationTaskStateRebuilder,
-)
-from app.assistant_transport.state.conversation_state_snapshot import (
-    validate_snapshot,
 )
 from app.core.events import RunInitializedEvent
 from app.core.workflow.conversation_run_ledger import ConversationRunLedger
@@ -81,7 +77,11 @@ def _context_row(
             message["role"],
             metadata
             # 落库的 user 行必须带展示绑定；测试用正文作展示文本。
-            or ({"kind": "user_input", "presentation": {"display_text": message["content"]}} if message["role"] == "user" else {}),
+            or (
+                {"kind": "user_input", "presentation": {"text": message["content"]}}
+                if message["role"] == "user"
+                else {}
+            ),
         ),
         turn=1,
     )
@@ -133,7 +133,8 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
 
     service._session_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
     monkeypatch.setattr(
-        "app.core.workflow.conversation_run_ledger.get_conversation_event_projector", lambda: Projector()
+        "app.core.workflow.conversation_run_ledger.get_conversation_event_projector",
+        lambda: Projector(),
     )
     monkeypatch.setattr(
         "app.core.workflow.conversation_run_ledger.get_model_config_service",

@@ -20,7 +20,7 @@ from app.models.message_metadata import ToolMessageMetadata, parse_message_metad
         ({"role": "user", "content": "internal notice"}, {"kind": "notice"}),
         (
             {"role": "user", "content": "resolved text"},
-            {"kind": "user_input", "presentation": {"display_text": "visible text"}},
+            {"kind": "user_input", "presentation": {"text": "visible text"}},
         ),
         (
             {"role": "assistant", "content": "answer"},
@@ -65,9 +65,9 @@ def test_role_metadata_round_trip_without_polluting_sdk_message(message, metadat
     [
         ("tool", {}),
         ("user", {"status": "completed"}),
-        ("assistant", {"kind": "user_input", "presentation": {"display_text": "wrong role"}}),
+        ("assistant", {"kind": "user_input", "presentation": {"text": "wrong role"}}),
         ("system", {"usage": {}}),
-        ("user", {"user_input": {"display_text": "old wrapper"}}),
+        ("user", {"user_input": {"text": "old wrapper"}}),
         ("tool", {"status": "completed", "status_hint": "obsolete"}),
     ],
 )
@@ -81,9 +81,18 @@ def _running_state(part: dict) -> dict:
 
     return {
         "messages": [
-            {"id": "assistant-1", "role": "assistant", "parts": [part], "turn": 1, "inherited": False, "outcome": None, "source": None}
+            {
+                "id": "assistant-1",
+                "role": "assistant",
+                "parts": [part],
+                "turn": 1,
+                "inherited": False,
+                "outcome": None,
+                "source": None,
+            }
         ],
-        "activity": {"modelActivity": None,
+        "activity": {
+            "modelActivity": None,
             "turn": None,
             "resumable": False,
             "status": "running",
@@ -176,7 +185,8 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
 
 def test_final_tool_metadata_uses_authoritative_terminal_output():
     """终态 display_data 是完整执行事实；明确携带 output 时替换实时预览。"""
-    part = {"presentation": "activity",
+    part = {
+        "presentation": "activity",
         "type": "tool-call",
         "toolCallId": "call-1",
         "status": "running",

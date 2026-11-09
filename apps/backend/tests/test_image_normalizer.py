@@ -57,10 +57,10 @@ def test_normalize_preserves_already_supported_png(tmp_path: Path) -> None:
 
 
 def test_normalize_uses_unified_image_policy_as_format_source() -> None:
-    assert Constant.Attachment.IMAGE_FORMATS == {
+    assert {
         "jpeg",
         "png",
-    }
+    } == Constant.Attachment.IMAGE_FORMATS
 
 
 def _apply_planned(event, snapshot):
@@ -78,9 +78,7 @@ def test_run_initialized_has_no_messages_and_input_event_projects_image() -> Non
     assert snapshot["messages"] == []
 
     image_part = {"type": "image", "image": "cosir-attachment://" + "1" * 64}
-    presentation = UserInputPresentation(
-        display_text="", image_paths=[f"attachments/{'1' * 64}.png"]
-    )
+    presentation = UserInputPresentation(text="", image_paths=[f"attachments/{'1' * 64}.png"])
     snapshot = _apply_planned(consumed(1, 1, 1, presentation), snapshot)
     user_message, assistant_message = snapshot["messages"]
     assert user_message["role"] == "user"

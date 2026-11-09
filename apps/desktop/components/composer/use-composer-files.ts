@@ -1,10 +1,10 @@
 import { addComposerFiles, type ComposerImageSink } from "./assistant-composer-attachments";
 import { summarizeComposerFileProblems } from "./composer-external-files";
 import { useComposerFeedback } from "./composer-feedback";
-import { insertAttachments, useComposerInsertion } from "./composer-insertion-context";
+import { insertCapsules, useComposerInsertion } from "./composer-insertion-context";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
-/** 附件按钮、粘贴、拖放的唯一接纳入口；反馈和 token 只交给仍可编辑的原会话，迟到结果只记录。 */
+/** 附件按钮、粘贴、拖放的唯一接纳入口；反馈和胶囊只交给仍可编辑的原会话，迟到结果只记录。 */
 export function useComposerFiles(images: ComposerImageSink) {
   const insertion = useComposerInsertion();
   const feedback = useComposerFeedback();
@@ -16,7 +16,7 @@ export function useComposerFiles(images: ComposerImageSink) {
       });
       return;
     }
-    insertAttachments(insertion.dispatch, result.attachments);
+    insertCapsules(insertion.dispatch, result.capsules);
     const message = summarizeComposerFileProblems(result.problems);
     if (message) {
       feedback.show(message);

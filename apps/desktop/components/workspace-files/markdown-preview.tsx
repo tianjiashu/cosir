@@ -1,6 +1,7 @@
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useMemo, useLayoutEffect, type ComponentProps, type RefObject } from "react";
 import { useDomSelection } from "@/hooks/use-dom-selection";
+import type { DomTextSelection } from "@/lib/workspace-files/dom-selection-locator";
 import { useQuery } from "@tanstack/react-query";
 import { useResourceWatch } from "@/lib/workspace-files/resource-watch";
 import type { ExtraProps } from "streamdown";
@@ -48,7 +49,7 @@ export function MarkdownPreview({
   path,
   scrollTop,
   onScroll,
-  onSelectText,
+  onSelectSelection,
 }: {
   /** 滚动容器；阅读器经它做就地查找与大纲跳转。 */
   hostRef: RefObject<HTMLDivElement | null>;
@@ -57,9 +58,9 @@ export function MarkdownPreview({
   path: string;
   scrollTop: number;
   onScroll: (top: number) => void;
-  onSelectText?: (text: string | null) => void;
+  onSelectSelection?: (selection: DomTextSelection | null) => void;
 }) {
-  useDomSelection(host, (value) => onSelectText?.(value));
+  useDomSelection(host, (value) => onSelectSelection?.(value));
   useLayoutEffect(() => {
     if (host.current) host.current.scrollTop = scrollTop;
   }, []);

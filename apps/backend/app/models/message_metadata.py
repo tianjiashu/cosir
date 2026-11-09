@@ -50,8 +50,8 @@ class UserMessageMetadata(BaseModel):
     """落库的 user 消息都来自 Task 消息队列：``kind`` 记录来源，一轮的输入另带展示绑定。
 
     所有队列消息进模型时都是 user 角色，区分来源只能靠 ``kind``，不解析正文标签：编辑资格、
-    排队与消费投影都据此判断。模型正文经附件解析后有损（附件名、类型、图片位置与编辑器 token
-    顺序都不在其中），snapshot 重建、编辑复用附件与 fork 都只能从 ``presentation`` 取。Agent 消息
+    排队与消费投影都据此判断。模型正文与展示正文是同一份规范化胶囊文本（Skill 已补 ``path``），
+    图片路径单独保存在 ``presentation``；snapshot 重建、编辑复用与 fork 都只从它取。Agent 消息
     （``agent_message``）的 ``presentation`` 只有纯文本正文，另带发送方 ``source``。内部注入
     的 user 指令（如结构化输出）只拼进请求副本、不落库。
 

@@ -8,7 +8,6 @@ vi.mock("@/lib/desktop-host", () => ({
 }));
 
 import { addComposerFiles } from "@/components/composer/assistant-composer-attachments";
-import { getLocalAttachmentById } from "@/lib/assistant/attachments/local-attachment-registry";
 
 const textFile = (name: string) => new File([], name, { type: "text/plain" });
 const pngFile = (name: string) => new File([], name, { type: "image/png" });
@@ -16,15 +15,14 @@ const pngFile = (name: string) => new File([], name, { type: "image/png" });
 const sink = (add: (file: File) => void | Promise<void>, existing = 0) => ({ add, count: () => existing });
 
 describe("统一 Composer 附件接入", () => {
-  it("普通文件登记本机路径并只返回文档 token，图片只进入图片附件集合", async () => {
+  it("本机普通文件直接产出文件胶囊，图片只进入图片附件集合", async () => {
     const image = new File(["image"], "photo.png", { type: "image/png" });
     const addImage = vi.fn();
     const result = await addComposerFiles([textFile("notes.md"), image], { images: sink(addImage), isCurrent: () => true });
 
     expect(addImage).toHaveBeenCalledExactlyOnceWith(image);
     expect(result.problems).toEqual([]);
-    expect(result.attachments).toEqual([{ id: expect.any(String), name: "notes.md" }]);
-    expect(getLocalAttachmentById(result.attachments[0].id)).toMatchObject({ path: "/workspace/notes.md", contentType: "text/plain" });
+    expect(result.capsules).toEqual([{ kind: "file", path: "/workspace/notes.md" }]);
   });
 
   it("在入口拒绝没有本机路径的普通文件和不支持的图片", async () => {
@@ -34,7 +32,7 @@ describe("统一 Composer 附件接入", () => {
       new File([], "animation.gif", { type: "image/gif" }),
     ], { images: sink(addImage), isCurrent: () => true });
     expect(addImage).not.toHaveBeenCalled();
-    expect(result).toEqual({ attachments: [], problems: [
+    expect(result).toEqual({ capsules: [], problems: [
       { name: "clipboard.md", reason: "local-path-required" },
       { name: "animation.gif", reason: "unsupported-image" },
     ] });
@@ -44,17 +42,17 @@ describe("统一 Composer 附件接入", () => {
     const result = await addComposerFiles([
       new File([], "failed.png", { type: "image/png" }), textFile("accepted.md"),
     ], { images: sink(async () => { throw new Error("adapter failed"); }), isCurrent: () => true });
-    expect(result.attachments.map(({ name }) => name)).toEqual(["accepted.md"]);
+    expect(result.capsules).toEqual([{ kind: "file", path: "/workspace/accepted.md" }]);
     expect(result.problems).toEqual([{ name: "failed.png", reason: "add-failed" }]);
   });
 
-  it("会话在异步添加期间失效后，停止处理并丢弃待插入 token", async () => {
+  it("会话在异步添加期间失效后，停止处理并丢弃待插入胶囊", async () => {
     let current = true;
     const addImage = vi.fn(async () => { current = false; });
     const result = await addComposerFiles([
       textFile("first.md"), new File([], "photo.png", { type: "image/png" }), textFile("last.md"),
     ], { images: sink(addImage), isCurrent: () => current });
-    expect(result).toEqual({ attachments: [], problems: [] });
+    expect(result).toEqual({ capsules: [], problems: [] });
     expect(addImage).toHaveBeenCalledTimes(1);
   });
 
@@ -65,7 +63,7 @@ describe("统一 Composer 附件接入", () => {
       pngFile("a.png"), pngFile("b.png"), textFile("notes.md"), pngFile("c.png"),
     ], { images: sink(addImage, 18), isCurrent: () => true });
     expect(addImage.mock.calls.map(([file]) => file.name)).toEqual(["a.png", "b.png"]);
-    expect(result.attachments.map(({ name }) => name)).toEqual(["notes.md"]);
+    expect(result.capsules).toEqual([{ kind: "file", path: "/workspace/notes.md" }]);
     expect(result.problems).toEqual([{ name: "c.png", reason: "image-limit" }]);
   });
 });

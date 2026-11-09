@@ -29,9 +29,7 @@ _LAUNCH = RunLaunch(model_config_id=5)
 
 
 def _input(text: str) -> TaskMessage:
-    body = UserInputBody(
-        input_text=text, launch=_LAUNCH, presentation=UserInputPresentation(display_text=text)
-    )
+    body = UserInputBody(text=text, launch=_LAUNCH, presentation=UserInputPresentation(text=text))
     return TaskMessage.of(body, delivery="next_run")
 
 
@@ -64,7 +62,7 @@ async def test_send_now_requeues_as_immediate_with_a_new_identity(harness) -> No
     await harness.service.send_queued_now(harness.task_id, target)
 
     rows = harness.queue.pending_nowait(harness.task_id)
-    assert [(row.body.input_text, row.delivery) for row in rows] == [
+    assert [(row.body.text, row.delivery) for row in rows] == [
         ("first", "next_run"),
         ("target", "immediate"),
     ]

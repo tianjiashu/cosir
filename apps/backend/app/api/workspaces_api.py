@@ -17,6 +17,7 @@ from app.api.schemas import (
     WorkspaceResponse,
 )
 from app.app import app
+from app.core.user_input import capsules
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service.depends import (
     get_task_service,
@@ -189,7 +190,7 @@ async def create_workspace_task(
         task = await asyncio.to_thread(
             workspace_service.create_task,
             workspace_id,
-            preview(payload.text, limit=TASK_TITLE_LIMIT) or "新对话",
+            preview(capsules.plain_text(payload.text), limit=TASK_TITLE_LIMIT) or "新对话",
             payload.creation_command_id,
         )
     except KeyError as exc:

@@ -8,17 +8,15 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
-from app.models.task_extra import TaskExtra
 from app.api.tasks_api import get_task
 from app.app import app
 from app.assistant_transport.assistant_api import assistant_history_page, assistant_transport_state
-from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
-from app.assistant_transport.request.task_command_request import _ordered_display_text
 from app.assistant_transport.service.transport_assistant_service import (
     TransportAssistantService,
 )
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import RunTransition
+from app.models.task_extra import TaskExtra
 from app.service.depends import get_workspace_service
 from app.service.recover_service import RecoverService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -31,10 +29,19 @@ def _snapshot(
         return {"messages": [], "messageOffset": 0, "activity": None}
     return {
         "messages": [
-            {"id": "1", "role": "user", "parts": [], "turn": run_id, "inherited": False, "outcome": None, "source": None}
+            {
+                "id": "1",
+                "role": "user",
+                "parts": [],
+                "turn": run_id,
+                "inherited": False,
+                "outcome": None,
+                "source": None,
+            }
         ],
         "messageOffset": 0,
-        "activity": {"modelActivity": None,
+        "activity": {
+            "modelActivity": None,
             "turn": None,
             "resumable": False,
             "status": status,
@@ -46,35 +53,6 @@ def _snapshot(
             "launch": None,
         },
     }
-
-
-def test_ordered_display_text_encodes_image_between_text_parts() -> None:
-    """Transport 入口必须把 composer 中图片位置编码进既有展示文本。"""
-
-    image_id = "b" * 64
-    display_text = _ordered_display_text(
-        [
-            AssistantTextPart(type="text", text="前"),
-            AssistantImagePart(type="image", image=f"cosir-attachment://{image_id}"),
-            AssistantTextPart(type="text", text="后"),
-        ]
-    )
-
-    assert display_text == f"前\n[[cosir-image:{image_id}]]\n后"
-
-
-def test_ordered_display_text_does_not_duplicate_image_marker_from_edit_text() -> None:
-    """编辑草稿已有图片 marker 时，附件 parts 不能再追加第二个 marker。"""
-
-    image_id = "c" * 64
-    display_text = _ordered_display_text(
-        [
-            AssistantTextPart(type="text", text=f"前[[cosir-image:{image_id}]]后"),
-            AssistantImagePart(type="image", image=f"cosir-attachment://{image_id}"),
-        ]
-    )
-
-    assert display_text == f"前[[cosir-image:{image_id}]]后"
 
 
 def test_task_route_has_one_get_method() -> None:
@@ -208,9 +186,7 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
     class _RunCrud:
         def list_recoverable(self) -> list[object]:
             return [
-                SimpleNamespace(
-                    id=run_id, task_id=task_id, execution_data=ReactExecutionState()
-                )
+                SimpleNamespace(id=run_id, task_id=task_id, execution_data=ReactExecutionState())
                 for run_id, task_id in ((7, 1), (8, 2))
             ]
 
@@ -285,7 +261,10 @@ async def test_history_page_maps_a_stale_position_to_409() -> None:
                 raise ValueError("stale")
             return {"messages": [], "messageOffset": 0}
 
-    assert await assistant_history_page(1, 3, _TransportService()) == {"messages": [], "messageOffset": 0}
+    assert await assistant_history_page(1, 3, _TransportService()) == {
+        "messages": [],
+        "messageOffset": 0,
+    }
     with pytest.raises(HTTPException) as caught:
         await assistant_history_page(1, 9, _TransportService())
     assert caught.value.status_code == 409
@@ -343,6 +322,7 @@ async def test_task_gate_waits_without_blocking_event_loop(tmp_path: Path) -> No
         task_runtime_spaces.unload(task.id)
 
     assert not holder.is_alive()
+
 
 # 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
 pytestmark = pytest.mark.usefixtures("backend_env")

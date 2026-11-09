@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { getLocalAttachmentById, registerLocalFile } from "@/lib/assistant/attachments/local-attachment-registry";
 
 import {
   applyEditDraftToComposer,
@@ -54,89 +53,60 @@ function createComposerStub(initial: readonly FakeAttachment[] = [], failOnAdd =
   };
 }
 
-function draftFile(id: string) {
-  return {
-    id,
-    type: "file" as const,
-    name: `${id}.md`,
-    contentType: "text/markdown",
-    content: [
-      {
-        type: "file" as const,
-        data: `cosir-local-file:${id}`,
-        filename: `${id}.md`,
-        mimeType: "text/markdown",
-      },
-    ],
-  };
-}
-
 function draftImage(id: string) {
   return { id, type: "image" as const, name: `${id}.png`, contentType: "image/png",
     content: [{ type: "image" as const, image: `cosir-attachment://${id}` }] };
 }
 
 describe("edit draft composer write", () => {
-  it("清除 AUI lift 副本，普通文件只以正文 token 存在（路径登记归放回输入框的入口）", async () => {
-    // assistant-ui 的 edit core 会按 message.content lift 出副本：id 不同但 locator 相同。
-    const liftCopy: FakeAttachment = {
-      id: "lift-copy",
-      type: "file",
-      name: "keep.md",
-      content: [{ type: "file", data: "cosir-local-file:keep" }],
-    };
-    const stale: FakeAttachment = {
-      id: "stale",
-      type: "file",
-      name: "stale.md",
-      content: [{ type: "file", data: "cosir-local-file:stale" }],
-    };
+  it("清理起始快照之外附件，只把图片加入附件条，正文胶囊留在文本里", async () => {
+    const liftCopy: FakeAttachment = { id: "lift-copy", type: "file", name: "keep.md" };
+    const stale: FakeAttachment = { id: "stale", type: "image", name: "stale.png" };
     const stub = createComposerStub([liftCopy, stale]);
 
     const result = await applyEditDraftToComposer({
-        mode: "replace",
+      mode: "replace",
       composer: stub.composer,
-      text: "[[cosir-file:keep]]文字",
-      attachments: [draftFile("keep")],
+      text: '<file path="/tmp/keep.md" />文字',
+      attachments: [draftImage("keep")],
       isStillCurrent: () => true,
     });
 
     expect(result).toMatchObject({
-      expectedCount: 0,
-      addedCount: 0,
+      expectedCount: 1,
+      addedCount: 1,
       removedCount: 2,
       superseded: false,
       error: null,
     });
-    expect(stub.addedIds).toEqual([]);
+    expect(stub.addedIds).toEqual(["keep"]);
     expect(stub.removedIds).toEqual(["stale", "lift-copy"]);
-    expect(stub.text()).toBe("[[cosir-file:keep]]文字");
+    expect(stub.text()).toBe('<file path="/tmp/keep.md" />文字');
   });
 
-  it("只恢复图片集合，普通文件通过 token 恢复", async () => {
-    const stub = createComposerStub();
+  it("已存在的同 id 图片不重复加入", async () => {
+    const stub = createComposerStub([draftImage("a")]);
 
     const result = await applyEditDraftToComposer({
-        mode: "replace",
+      mode: "replace",
       composer: stub.composer,
-      text: "[[cosir-file:a]][[cosir-file:b]]",
-      attachments: [draftFile("a"), draftImage("b")],
+      text: "正文",
+      attachments: [draftImage("a")],
       isStillCurrent: () => true,
     });
 
-    expect(result).toMatchObject({ addedCount: 1, removedCount: 0, superseded: false, error: null });
-    expect(stub.addedIds).toEqual(["b"]);
-    expect(stub.text()).toBe("[[cosir-file:a]][[cosir-file:b]]");
+    expect(result).toMatchObject({ addedCount: 0, removedCount: 0, superseded: false, error: null });
+    expect(stub.addedIds).toEqual([]);
   });
 
   it("leaves text untouched when the draft was superseded", async () => {
     const stub = createComposerStub();
 
     const result = await applyEditDraftToComposer({
-        mode: "replace",
+      mode: "replace",
       composer: stub.composer,
-      text: "[[cosir-file:a]]",
-      attachments: [draftFile("a")],
+      text: "正文",
+      attachments: [draftImage("a")],
       isStillCurrent: () => false,
     });
 
@@ -145,34 +115,28 @@ describe("edit draft composer write", () => {
     expect(stub.addedIds).toEqual([]);
   });
 
-  it("图片恢复失败时仍保留普通文件 token 与正文", async () => {
+  it("图片恢复失败时仍保留正文", async () => {
     const stub = createComposerStub([], true);
 
     const result = await applyEditDraftToComposer({
-        mode: "replace",
+      mode: "replace",
       composer: stub.composer,
-      text: "[[cosir-file:a]]正文 `[[cosir-file:example]]`",
-      attachments: [draftFile("a"), draftImage("fail")],
+      text: '正文 <file path="/tmp/a.md" /> `示例`',
+      attachments: [draftImage("fail")],
       isStillCurrent: () => true,
     });
 
     expect(result.error).toBeInstanceOf(Error);
-    expect(stub.text()).toBe("[[cosir-file:a]]正文 `[[cosir-file:example]]`");
+    expect(stub.text()).toBe('正文 <file path="/tmp/a.md" /> `示例`');
     expect(stub.addedIds).toEqual([]);
   });
 
-  it("历史展示元数据不会覆盖撤销所需的真实本机路径", async () => {
-    const id = registerLocalFile({ name: "native.md", path: "/workspace/native.md", contentType: "text/plain" });
-    const stub = createComposerStub();
-    await applyEditDraftToComposer({
-        mode: "replace", composer: stub.composer, text: `[[cosir-file:${id}]]`, attachments: [draftFile(id)], isStillCurrent: () => true });
-    expect(getLocalAttachmentById(id)?.path).toBe("/workspace/native.md");
-    expect(stub.attachments()).toEqual([]);
-  });
-
-  it("drops attachments that have no stable identity", () => {
-    expect(editableDraftAttachments([{ name: "无 id", type: "file", contentType: "text/plain", content: [] }])).toEqual([]);
-    expect(editableDraftAttachments([draftFile("a")]).map((attachment) => attachment.id)).toEqual(["a"]);
+  it("drops attachments that are not images or have no stable identity", () => {
+    expect(editableDraftAttachments([
+      { name: "无 id", type: "image", contentType: "image/png", content: [] },
+      { id: "file-a", name: "a.md", type: "file", contentType: "text/markdown", content: [] },
+    ])).toEqual([]);
+    expect(editableDraftAttachments([draftImage("a")]).map((attachment) => attachment.id)).toEqual(["a"]);
   });
 });
 

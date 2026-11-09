@@ -2,6 +2,7 @@ import { useChangeBrowserVisibility } from "@/lib/workspace-files/visibility";
 import { IgnoreMenuItem, openKeyboardContextMenu } from "./ignore-menu-item";
 import { ContextMenu } from "radix-ui";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
+import { workspaceFileRef } from "@/lib/workspace-references/ref-capsule";
 import { AddReferenceButton } from "@/components/workspace-references/add-reference-button";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useEffect, useRef, useState } from "react";
@@ -76,7 +77,7 @@ export function FileSearch({
         {selected.length > 0 && (
           <AddReferenceButton
             workspaceId={workspaceId}
-            inputs={selected.map((path) => ({ path, kind: "file" }))}
+            capsules={selected.map((path) => workspaceFileRef(path))}
             label={`添加到对话（${selected.length}）`}
           />
         )}
@@ -230,7 +231,7 @@ export function FileSearch({
                           (selected.includes(entry.path)
                             ? selected
                             : [entry.path]
-                          ).map((path) => ({ path, kind: "file" })),
+                          ).map((path) => workspaceFileRef(path)),
                         )
                       }
                     >

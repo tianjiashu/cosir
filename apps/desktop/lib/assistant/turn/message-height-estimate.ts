@@ -2,6 +2,8 @@ import type { TransportOutcome } from "../contract";
 import { resolveDisclosure, processKey, activityKey, agentKey, userMessageKey } from "./disclosure-store";
 import { USER_MESSAGE_CLAMP_HEIGHT, USER_MESSAGE_TOGGLE_HEIGHT } from "./user-message-clamp";
 import type { ThreadMessage } from "@assistant-ui/react";
+
+import { capsuleTextToPlainText } from "@/lib/assistant/capsules";
 import { IMAGE_TILE_GAP, IMAGE_TILE_SIZE } from "@/lib/image/tile-size";
 import { IMAGES_PER_ROW, shouldStackImages } from "./image-stack-policy";
 import { visibleTurnBlock, type TurnLayout } from "./turn-layout";
@@ -44,8 +46,6 @@ const ATTACHMENT_GAP = IMAGE_TILE_GAP;
 const IMAGE_HEIGHT = IMAGE_TILE_SIZE.regular.height;
 // 超过阈值时收成一叠（`ImageStack`）：错开的两层是 transform，不占布局高度，收起态与单张图同高。
 const IMAGE_STACK_HEIGHT = IMAGE_HEIGHT;
-const FILE_CHIP_HEIGHT = 30;
-const FILES_PER_ROW = 3;
 
 /**
  * 气泡正文超过收起高度时按开合封顶（收起高度 + 「显示全部」一行，见 `UserMessageBubble`）。内容部分按
@@ -56,16 +56,14 @@ function userHeight(message: ThreadMessage, taskId?: number): number {
   if (!estimate) {
     let text = "";
     let images = 0;
-    let files = 0;
     for (const part of message.content) {
-      if (part.type === "text") text += (text ? "\n" : "") + part.text;
+      // 文件、引用、Skill 是正文里的行内胶囊：按可读名称计入正文宽度，标签本身不占额外行。
+      if (part.type === "text") text += (text ? "\n" : "") + capsuleTextToPlainText(part.text);
       else if (part.type === "image") images += 1;
-      else if (part.type === "file") files += 1;
     }
     const blocks: number[] = [];
     if (shouldStackImages(images)) blocks.push(IMAGE_STACK_HEIGHT);
     else if (images > 0) blocks.push(Math.ceil(images / IMAGES_PER_ROW) * (IMAGE_HEIGHT + ATTACHMENT_GAP) - ATTACHMENT_GAP);
-    if (files > 0) blocks.push(Math.ceil(files / FILES_PER_ROW) * (FILE_CHIP_HEIGHT + ATTACHMENT_GAP) - ATTACHMENT_GAP);
     const hasText = text.trim().length > 0;
     const blockCount = blocks.length + (hasText ? 1 : 0);
     estimate = {

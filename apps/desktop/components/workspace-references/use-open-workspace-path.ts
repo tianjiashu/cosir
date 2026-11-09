@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { beginFileNavigation } from "@/lib/workspace-files/navigation";
-import type { WorkspaceReference } from "@/lib/workspace-references/codec";
 import { notify } from "@/lib/notify";
 import { fileInfoQueryOptions } from "@/lib/query/query-options";
 import { fileReadProblem } from "@/lib/workspace-files/read-problem";
@@ -12,10 +11,10 @@ import { parentsOf, useFilesStore } from "@/lib/workspace-files/workspace-files-
 import { useReferenceBridge } from "./reference-bridge";
 
 export type OpenFileOptions = {
-  /** 摘录引用的快照：文件面板先展示这段正文，用户可再切到当前文件。 */
-  excerpt?: WorkspaceReference;
   /** 打开后选中并居中的行范围。 */
   lines?: LineRange;
+  /** PDF 打开后跳到的页码。 */
+  page?: number;
   /** 搜索候选保持临时标签；明确引用默认固定标签。 */
   pinned?: boolean;
 };
@@ -72,35 +71,33 @@ export function useOpenWorkspacePath(): WorkspacePathOpener | null {
         // 用户点的链接不随发起组件卸载失效（虚拟行滚走、切 Task），只有换工作区或被后续导航取代才放弃。
         const isCurrent = () => isCurrentWorkspace(workspaceId) && navigation.isCurrent();
         try {
-          // 摘录引用展示的是消息里保存的那段正文，文件已不在也能看，不先确认。
-          if (!options.excerpt) {
-            try {
-              await queryClient.fetchQuery(fileInfoQueryOptions(workspaceId, path));
-            } catch (error) {
-              if (!isCurrent()) return "superseded";
-              if (fileReadProblem(error) === "missing-file") {
-                notify.info(`工作区里没有 ${path}`, {
-                  description: "文件可能已被删除、移动，或路径写错了。",
-                  action: {
-                    label: "查找同名文件",
-                    onClick: () => {
-                      const name = path.split("/").at(-1)!;
-                      if (isCurrentWorkspace(workspaceId)) searchFilename(name, options.lines);
-                      else notify.info(`已离开原工作区，没有查找 ${name}`);
-                    },
+          // 引用是路径指针，先确认目标还在：文件删除后打开会留下一个坏标签。
+          try {
+            await queryClient.fetchQuery(fileInfoQueryOptions(workspaceId, path));
+          } catch (error) {
+            if (!isCurrent()) return "superseded";
+            if (fileReadProblem(error) === "missing-file") {
+              notify.info(`工作区里没有 ${path}`, {
+                description: "文件可能已被删除、移动，或路径写错了。",
+                action: {
+                  label: "查找同名文件",
+                  onClick: () => {
+                    const name = path.split("/").at(-1)!;
+                    if (isCurrentWorkspace(workspaceId)) searchFilename(name, options.lines);
+                    else notify.info(`已离开原工作区，没有查找 ${name}`);
                   },
-                });
-                return "missing";
-              }
+                },
+              });
+              return "missing";
             }
           }
           if (!isCurrent()) return "superseded";
           showFiles();
           const files = useFilesStore.getState();
           files.open(workspaceId, path, options.pinned ?? true);
-          if (options.excerpt) files.patch(workspaceId, { reference: options.excerpt });
-          // 行范围记在该文件的阅读位置上，由文本预览消费一次（见 `ReadingPosition.reveal`）。
+          // 行范围 / PDF 页码记在该文件的阅读位置上，由阅读器消费一次（见 `ReadingPosition.reveal`）。
           if (options.lines) files.position(workspaceId, path, { offset: 0, before: undefined, tail: false, reveal: options.lines });
+          if (options.page !== undefined) files.position(workspaceId, path, { revealPage: options.page });
           return "opened";
         } finally {
           navigation.release();
@@ -113,7 +110,6 @@ export function useOpenWorkspacePath(): WorkspacePathOpener | null {
           browsing: true,
           treeVisible: true,
           expanded: [...parentsOf(path), path],
-          reference: null,
         });
       },
     };

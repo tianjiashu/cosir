@@ -6,8 +6,8 @@ export type ComposerFileProblem = {
   reason: "unsupported-image" | "local-path-required" | "add-failed" | "image-limit";
 };
 
-export type ComposerExternalFileResult<TAttachment> = {
-  attachments: readonly TAttachment[];
+export type ComposerExternalFileResult<TItem> = {
+  capsules: readonly TItem[];
   problems: readonly ComposerFileProblem[];
 };
 

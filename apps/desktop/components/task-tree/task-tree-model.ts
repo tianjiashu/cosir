@@ -1,5 +1,5 @@
 import type { WorkspaceTask } from "@/lib/api/workspaces";
-import { stripInlineAttachmentTokens } from "@/lib/assistant/attachments/local-file-token";
+import { capsuleTextToPlainText } from "@/lib/assistant/capsules";
 
 export type TaskTreeNode = WorkspaceTask & {
   children: TaskTreeNode[];
@@ -19,27 +19,27 @@ function getForkSourceTaskId(task: WorkspaceTask): number | null {
   return typeof sourceTaskId === "number" && Number.isInteger(sourceTaskId) ? sourceTaskId : null;
 }
 
-/** 标题完全由内部 token 组成时的展示回退文案。 */
+/** 标题投影后没有可见内容时的展示回退文案。 */
 const EMPTY_TITLE_FALLBACK = "新对话";
 
 /**
  * 把原始标题归一为用户可读文本。
  *
- * 负责什么：剥离内联附件 token（任务标题由首条消息原文派生，可能含 `[[cosir-file:<id>]]`），
- * 全为 token 时回退为占位文案。
+ * 负责什么：把标题里的胶囊标签（任务标题由首条消息正文派生，可能含 `<file …/>` / `<ref …/>` /
+ * `<skill …/>`）投影为可读名称，全部投影为空时回退为占位文案。
  * 不负责什么：不截断长度、不修改任务事实。
  *
  * 参数:
  *     rawTitle: 后端返回的任务标题原文。
  *
  * 返回:
- *     剥离 token 后的单行标题；无可见内容时返回 `EMPTY_TITLE_FALLBACK`。
+ *     投影后的单行标题；无可见内容时返回 `EMPTY_TITLE_FALLBACK`。
  *
  * 异常/副作用:
  *     无；纯函数。
  */
 function visibleTaskTitle(rawTitle: string): string {
-  return stripInlineAttachmentTokens(rawTitle) || EMPTY_TITLE_FALLBACK;
+  return capsuleTextToPlainText(rawTitle).trim() || EMPTY_TITLE_FALLBACK;
 }
 
 function compareByUpdatedAt(left: WorkspaceTask, right: WorkspaceTask): number {

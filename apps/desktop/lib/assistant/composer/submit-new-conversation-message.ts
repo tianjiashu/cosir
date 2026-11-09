@@ -1,6 +1,4 @@
 import { uploadAttachment, type UploadedAttachment } from "@/lib/assistant/attachments/attachment-upload";
-import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
-import { prepareUserCommand } from "@/lib/assistant/composer/prepare-user-command";
 import { sendTaskMessage, type TaskMessageRequest } from "@/lib/assistant/task-commands";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { HttpError } from "@/lib/http/http-error";
@@ -14,6 +12,7 @@ type NewConversationImageAttachment = {
 export type SubmitNewConversationMessageInput = {
   taskId: number;
   workspaceId: number;
+  /** 正文原文；机器可读的 `<file>` / `<ref>` / `<skill>` 标签原样交给后端解析。 */
   text: string;
   imageAttachments: readonly NewConversationImageAttachment[];
   disabledToolGroups: readonly string[];
@@ -38,7 +37,7 @@ class NewConversationDeliveryUnknownError extends UserFacingError {
 /**
  * 判断提交失败后后端是否可能已经受理了命令。
  *
- * 只有「请求未发出（上传失败、附件失效）」和「HTTP 明确拒绝」两类失败可以断定命令没有落库；
+ * 只有「请求未发出（上传失败）」和「HTTP 明确拒绝」两类失败可以断定命令没有落库；
  * 其余都可能已有 Run，调用方不得删除对应 Task。
  */
 export function wasCommandPossiblyAccepted(error: unknown): boolean {
@@ -48,10 +47,10 @@ export function wasCommandPossiblyAccepted(error: unknown): boolean {
 /**
  * 提交新对话首条消息，以 2xx 作为后端已受理的边界（新 Run 已启动，输出经 Task 长订阅到达）。
  *
- * 本函数只负责附件预上传与请求序列化，不拥有 React 页面状态，也不订阅输出；调用方在成功返回后
+ * 本函数只负责图片预上传与请求组装，不拥有 React 页面状态，也不订阅输出；调用方在成功返回后
  * 负责导航，在异常时按 `wasCommandPossiblyAccepted` 决定是否清理 provisional Task。新 Task 没有
  * 活动 Run，后端必然立即新开 Run。异常语义：
- * - 上传失败 / 附件失效：原样抛出（HttpError、TimeoutError、UserFacingError），请求未发出。
+ * - 上传失败：原样抛出（HttpError、TimeoutError、UserFacingError），请求未发出。
  * - HTTP 非 2xx：抛 HttpError（含后端结构化原因），后端明确拒绝。
  * - 其余失败：抛 NewConversationDeliveryUnknownError。
  */
@@ -63,22 +62,19 @@ export async function submitNewConversationMessage(
     uploadedImages.push(await uploadAttachment(input.workspaceId, attachment.file, input.traceId));
   }
 
-  const command = prepareUserCommand({
-    type: "add-message",
-    message: {
-      role: "user",
-      parts: [
-        ...(input.text ? [{ type: "text" as const, text: input.text }] : []),
-        ...uploadedImages.map((image) => ({
-          type: "image" as const,
-          image: image.locator,
-        })),
-      ],
-    },
-  }) as UserAddMessageCommand;
+  const message: TaskMessageRequest["message"] = {
+    role: "user",
+    parts: [
+      ...(input.text ? [{ type: "text" as const, text: input.text }] : []),
+      ...uploadedImages.map((image) => ({
+        type: "image" as const,
+        image: image.locator,
+      })),
+    ],
+  };
   try {
     await sendTaskMessage(input.taskId, {
-      message: command.message as TaskMessageRequest["message"],
+      message,
       modelConfigId: input.modelConfigId,
       reasoningEffort: input.reasoningEffort,
       disabledToolGroups: [...input.disabledToolGroups],

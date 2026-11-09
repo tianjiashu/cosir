@@ -12,107 +12,32 @@ from app.assistant_transport.projection.snapshot_navigation import (
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import (
     ConversationStateAgentMessagePart,
-    ConversationStateFilePart,
     ConversationStateImagePart,
     ConversationStateMessageSource,
     ConversationStateTextPart,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.state.message_identity import reply_id, user_message_id
-from app.config.constant import Constant
 from app.core.events import InputConsumedEvent
 from app.models.conversation_input import MessageSource, UserInputPresentation, image_asset_id
-from app.models.conversation_run_file_attachment import ConversationRunFileAttachment
-from app.utils.message_tokens import find_message_tokens
 
-UserInputPart = ConversationStateTextPart | ConversationStateImagePart | ConversationStateFilePart
-
-
-def build_user_input_parts(
-    display_text: str,
-    image_paths: Sequence[str],
-    file_attachments: Sequence[ConversationRunFileAttachment],
-) -> list[UserInputPart]:
-    """将已消费或排队输入的展示绑定投影为安全 locator parts，不读取附件内容。
-
-    display_text 中的 token 保留编辑器顺序；未嵌入正文的图片按输入顺序追加。Skill token
-    （``[[cosir-skill:…]]``）留在文本 part 里，由前端在原位渲染成胶囊。
-    token 无对应附件或输入无可展示内容时抛 ValueError。
-    """
-
-    attachments_by_id: dict[str, ConversationRunFileAttachment] = {}
-    for attachment_record in file_attachments:
-        attachment_id = attachment_record.get("id")
-        if (
-            not attachment_id
-            or not Constant.Transport.FILE_LOCATOR.fullmatch(f"cosir-local-file:{attachment_id}")
-            or not attachment_record.get("name")
-            or not attachment_record.get("content_type")
-        ):
-            raise ValueError("ordinary file attachment is malformed")
-        attachments_by_id[attachment_id] = attachment_record
-
-    image_paths_by_id: dict[str, str] = {}
-    for path in image_paths:
-        image_id = image_asset_id(path)
-        locator = f"cosir-attachment://{image_id}"
-        if not Constant.Transport.IMAGE_LOCATOR.fullmatch(locator):
-            raise ValueError("image attachment locator is invalid")
-        image_paths_by_id[image_id] = path
-
-    parts: list[UserInputPart] = []
-    cursor = 0
-    referenced_image_ids: set[str] = set()
-    referenced_file_ids: set[str] = set()
-    for match in find_message_tokens(Constant.Cosir.LOCAL_ATTACHMENT_TOKEN, display_text):
-        text_part = display_text[cursor : match.start()]
-        if text_part:
-            parts.append({"type": "text", "text": text_part, "status": "completed"})
-        marker_kind, token_id = match.groups()
-        if marker_kind == "file":
-            attachment = attachments_by_id.get(token_id)
-            if attachment is None:
-                raise ValueError("ordinary file attachment is unavailable")
-            if token_id in referenced_file_ids:
-                cursor = match.end()
-                continue
-            parts.append(
-                {
-                    "type": "file",
-                    "file": f"cosir-local-file:{attachment['id']}",
-                    "name": attachment["name"],
-                    "contentType": attachment["content_type"],
-                    "path": attachment["path"],
-                }
-            )
-            referenced_file_ids.add(token_id)
-        else:
-            if token_id not in image_paths_by_id:
-                raise ValueError("image attachment is unavailable")
-            if token_id in referenced_image_ids:
-                cursor = match.end()
-                continue
-            parts.append({"type": "image", "image": f"cosir-attachment://{token_id}"})
-            referenced_image_ids.add(token_id)
-        cursor = match.end()
-    remaining_text = display_text[cursor:]
-    if remaining_text:
-        parts.append({"type": "text", "text": remaining_text, "status": "completed"})
-    parts.extend(
-        {"type": "image", "image": f"cosir-attachment://{image_id}"}
-        for image_id in image_paths_by_id
-        if image_id not in referenced_image_ids
-    )
-    if not parts:
-        raise ValueError("user input event must contain at least one part")
-    return parts
+UserInputPart = ConversationStateTextPart | ConversationStateImagePart
 
 
 def build_presentation_parts(presentation: UserInputPresentation) -> list[UserInputPart]:
-    """按展示绑定构造用户消息 parts；排队投影、消费投影与全量重建共用，三处展示一致。"""
-    return build_user_input_parts(
-        presentation.display_text, presentation.image_paths, presentation.attachments
+    """按展示绑定构造用户消息 parts：一段胶囊正文，图片按发送顺序各一个稳定 locator。
+
+    普通文件与工作区引用不再有独立 part：它们是正文里的 ``<file>`` / ``<ref>`` 胶囊。
+    """
+
+    parts: list[UserInputPart] = []
+    if presentation.text:
+        parts.append({"type": "text", "text": presentation.text, "status": "completed"})
+    parts.extend(
+        {"type": "image", "image": f"cosir-attachment://{image_asset_id(path)}"}
+        for path in presentation.image_paths
     )
+    return parts
 
 
 def build_turn_input(
@@ -120,12 +45,12 @@ def build_turn_input(
 ) -> tuple[list[UserInputPart], ConversationStateMessageSource | None]:
     """回合输入的 parts 与 wire 来源；消费投影与全量重建共用，两处展示一致。
 
-    Agent 消息（``source`` 非空）是纯文本：不按附件 token 解析——Agent 正文里恰好出现形如 token
-    的文字时，解析会因找不到附件而抛错，让整张快照投影失败。
+    Agent 消息（``source`` 非空）是纯文本：不按胶囊投影——Agent 正文里恰好出现形如标签的文字时，
+    按胶囊解析会改变展示，而它并不是用户选择的指针。
     """
     if source is None:
         return build_presentation_parts(presentation), None
-    text: UserInputPart = {"type": "text", "text": presentation.display_text, "status": "completed"}
+    text: UserInputPart = {"type": "text", "text": presentation.text, "status": "completed"}
     return [text], {"taskId": source.task_id, "name": source.name}
 
 
@@ -136,7 +61,7 @@ def build_agent_message_part(
     return {
         "type": "agent-message",
         "id": user_message_id(message_id),
-        "text": presentation.display_text,
+        "text": presentation.text,
         "source": {"taskId": source.task_id, "name": source.name},
     }
 

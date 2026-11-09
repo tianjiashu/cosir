@@ -44,13 +44,26 @@ class ReviewModel:
         elif not self.proposed:
             self.proposed = True
             args = {
-                "intent": "启动审查团队", "team_id": "review", "goal": "review",
+                "intent": "启动审查团队",
+                "team_id": "review",
+                "goal": "review",
                 "node_goals": [{"node_id": node_id, **GOAL} for node_id in ("a", "b")],
             }
-            frames = sdk_events([{"tool_calls": [{
-                "index": 0, "id": CALL_ID, "type": "function",
-                "function": {"name": "agent_team", "arguments": json.dumps(args)},
-            }]}], finish_reason="tool_calls")
+            frames = sdk_events(
+                [
+                    {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": CALL_ID,
+                                "type": "function",
+                                "function": {"name": "agent_team", "arguments": json.dumps(args)},
+                            }
+                        ]
+                    }
+                ],
+                finish_reason="tool_calls",
+            )
         else:
             if any("<tool_result " in text for text in inputs):
                 self.receipt_seen.set()
@@ -67,17 +80,28 @@ class ReviewModel:
 
 def _model_config(name):
     return depends.get_model_config_service().create_config(
-        config_name=name, base_url="http://127.0.0.1", api_key="test", model_name="test",
-        context_window_k=96, supports_thinking=True, supports_reasoning_effort=True,
+        config_name=name,
+        base_url="http://127.0.0.1",
+        api_key="test",
+        model_name="test",
+        context_window_k=96,
+        supports_thinking=True,
+        supports_reasoning_effort=True,
         supports_image=False,
     )
 
 
 def _send(task_id, model_id, text):
-    spaces.enqueue(task_id, TaskMessage.of(UserInputBody(
-        input_text=text, launch=RunLaunch(model_config_id=model_id),
-        presentation=UserInputPresentation(display_text=text),
-    )))
+    spaces.enqueue(
+        task_id,
+        TaskMessage.of(
+            UserInputBody(
+                text=text,
+                launch=RunLaunch(model_config_id=model_id),
+                presentation=UserInputPresentation(text=text),
+            )
+        ),
+    )
 
 
 async def _parked(actor):
@@ -93,8 +117,11 @@ async def _parked(actor):
 def reviewer(backend_env, tmp_path):
     agents = AgentConfigurationService(workspace_root=tmp_path)
     document = AgentConfiguration(
-        agent_id="second-reviewer", role="review", description="review changes",
-        system_prompt="Review the task", allowed_tools=["read_file"],
+        agent_id="second-reviewer",
+        role="review",
+        description="review changes",
+        system_prompt="Review the task",
+        allowed_tools=["read_file"],
     )
     agents.create(document)
     return agents, document
@@ -107,33 +134,48 @@ async def proposed_team(reviewer, tmp_path, monkeypatch):
     ws = depends.get_workspace_service().create_workspace("ws", str(tmp_path))
     parent = depends.get_workspace_service().create_task(ws.id, "parent")
     _, document = reviewer
-    config = AgentTeamConfiguration.model_validate({
-        "team_id": "review", "name": "Review", "description": "Review changes",
-        "start_node_id": "a",
-        "nodes": [
-            {"node_id": key, "name": key.upper(), "agent_id": agent_id,
-             "statuses": [{"name": "done", "color": "#16A34A"}]}
-            for key, agent_id in [("a", "general-assistant"), ("b", document.agent_id)]
-        ],
-        "transitions": [
-            {"from_node_id": "a", "status": "done", "target_node_id": "b"},
-            {"from_node_id": "b", "status": "done", "target_node_id": "END"},
-        ],
-    })
+    config = AgentTeamConfiguration.model_validate(
+        {
+            "team_id": "review",
+            "name": "Review",
+            "description": "Review changes",
+            "start_node_id": "a",
+            "nodes": [
+                {
+                    "node_id": key,
+                    "name": key.upper(),
+                    "agent_id": agent_id,
+                    "statuses": [{"name": "done", "color": "#16A34A"}],
+                }
+                for key, agent_id in [("a", "general-assistant"), ("b", document.agent_id)]
+            ],
+            "transitions": [
+                {"from_node_id": "a", "status": "done", "target_node_id": "b"},
+                {"from_node_id": "b", "status": "done", "target_node_id": "END"},
+            ],
+        }
+    )
     get_agent_team_registry().register(config, workspace_root=tmp_path)
     model = ReviewModel()
-    monkeypatch.setattr(workflow, "resolve_chat_model",
-                        lambda **_: SimpleNamespace(model=model, supports_thinking=False))
+    monkeypatch.setattr(
+        workflow,
+        "resolve_chat_model",
+        lambda **_: SimpleNamespace(model=model, supports_thinking=False),
+    )
     monkeypatch.setattr(task_title, "should_launch", lambda *_: False)
     spaces.bind_loop(asyncio.get_running_loop())
     try:
         _send(parent.id, model_config.id, "use team")
         first = await asyncio.wait_for(_parked(spaces.get(parent.id).actor), 5)
         assert first.status == "suspended"
-        decision = DecisionRequest(decision="approve", data={
-            "configuration": config.model_dump(mode="json"), "goal": "review",
-            "node_goals": {node.node_id: GOAL for node in config.nodes},
-        })
+        decision = DecisionRequest(
+            decision="approve",
+            data={
+                "configuration": config.model_dump(mode="json"),
+                "goal": "review",
+                "node_goals": {node.node_id: GOAL for node in config.nodes},
+            },
+        )
         yield first, decision, model
     finally:
         model.release.set()
@@ -143,7 +185,8 @@ async def proposed_team(reviewer, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "ending", ["done", "failed", "user_stop", "parent_stop", "delete", "shutdown"],
+    "ending",
+    ["done", "failed", "user_stop", "parent_stop", "delete", "shutdown"],
 )
 async def test_approved_team_runs_in_background(proposed_team, ending):
     first, decision, model = proposed_team
@@ -203,7 +246,8 @@ async def test_approved_team_runs_in_background(proposed_team, ending):
         current = depends.get_task_service().require_current_run(task_id)
         records = depends.get_conversation_task_context_crud().get(task_id)
         results = [
-            r for r in records
+            r
+            for r in records
             if isinstance(r.metadata, UserMessageMetadata)
             and r.metadata.kind == "background_result"
         ]
@@ -239,7 +283,8 @@ async def test_approval_with_deleted_agent_fails_team_and_card(proposed_team, re
     [card] = [r.metadata for r in records if r.message.get("tool_call_id") == CALL_ID]
     assert (card.status, card.error, card.team_run_id) == ("failed", "方案配置无效", row.id)
     [receipt] = [
-        r for r in records
+        r
+        for r in records
         if isinstance(r.metadata, UserMessageMetadata) and r.metadata.kind == "tool_result"
     ]
     assert document.agent_id in receipt.message["content"]

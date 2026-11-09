@@ -11,9 +11,9 @@ import { userMessageSegments } from "@/lib/assistant/turn/user-message-segments"
 /**
  * 用户消息气泡内的正文与行内胶囊（图片除外，见 `UserMessageImages`）。
  *
- * 引用、Skill、普通文件按输入框里的同一组胶囊在原位渲染，发送前后外观一致；解码只在
- * `userMessageSegments` 一处。没有胶囊时整段走 `MarkdownText`，保留完整 Markdown 排版；
- * 有胶囊时按片段渲染，段落改为行内以便胶囊与文字同行（与输入框里的排版一致）。
+ * 文件、引用、Skill 是正文里的胶囊标签，由 `userMessageSegments` 一处解析成与输入框同款的胶囊，
+ * 发送前后外观一致。没有胶囊时整段走 `MarkdownText`，保留完整 Markdown 排版；有胶囊时按片段渲染，
+ * 段落改为行内以便胶囊与文字同行（与输入框里的排版一致）。
  */
 export function UserMessageContent() {
   // 本组件只挂在用户消息下，parts 恒为用户消息的内容形状。
@@ -38,21 +38,21 @@ export function UserMessageContent() {
                 {segment.text}
               </StaticMarkdown>
             );
-          case "reference":
-            return <ReferenceChip key={index} reference={segment.reference} />;
+          case "ref":
+            return <ReferenceChip key={index} capsule={segment.capsule} />;
           case "skill":
-            return <SkillChip key={index} name={segment.name} />;
+            return <SkillChip key={index} name={segment.capsule.name} />;
           case "file":
-            return <FileChip key={index} name={segment.name} description={segment.name} />;
+            return <FileChip key={index} path={segment.capsule.path} />;
         }
       })}
     </div>
   );
 }
 
-/** 气泡里是否有可渲染内容（非空白正文或普通文件）；只有图片的消息不画空气泡。 */
+/** 气泡里是否有可渲染内容（非空白正文）；只有图片的消息不画空气泡。 */
 export function useHasUserMessageContent(): boolean {
   return useAuiState((state) => state.message.parts.some(
-    (part) => (part.type === "text" && part.text.trim().length > 0) || part.type === "file",
+    (part) => part.type === "text" && part.text.trim().length > 0,
   ));
 }

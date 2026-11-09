@@ -26,9 +26,9 @@ pytestmark = pytest.mark.usefixtures("isolated_storage", "empty_tool_registry")
 def _user(text: str) -> TaskMessage:
     return TaskMessage.of(
         UserInputBody(
-            input_text=text,
+            text=text,
             launch=RunLaunch(model_config_id=1),
-            presentation=UserInputPresentation(display_text=text),
+            presentation=UserInputPresentation(text=text),
         ),
         delivery="next_run",
     )
@@ -68,7 +68,7 @@ def test_consumption_builds_the_message_without_a_queued_entry() -> None:
         task_id=1,
         run_id=1,
         message_id=7,
-        presentation=UserInputPresentation(display_text="你好"),
+        presentation=UserInputPresentation(text="你好"),
         turn=4,
     )
 

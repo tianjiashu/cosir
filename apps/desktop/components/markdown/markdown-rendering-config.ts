@@ -20,28 +20,17 @@ export const markdownPlugins = {
   cjk,
 } as const;
 
-const [sanitize, sanitizeSchema] = defaultRehypePlugins.sanitize as [unknown, {
-  protocols: Record<string, string[]>;
-}];
-
 /**
  * 所有 Markdown 渲染面共用的 HTML 处理：允许内嵌 HTML，再按 GitHub 同款白名单清洗。
  *
  * 链接的安全边界就是这一步加上链接打开入口（`components/links`）：清洗去掉 `javascript:`、`file:` 等
  * 协议，相对地址原样保留；是否可打开、打开到哪由 `resolveLink` 判定。不用 Streamdown 默认的
  * rehype-harden：它把相对地址改写成以 `/` 开头的路径（`../a.md` 变成 `/a.md`），丢掉相对关系，
- * 而它额外的协议拦截已由打开入口覆盖。引用地址（`cosir-file:` / `cosir-dir:`）加进链接白名单，
- * 模型照抄用户消息里的引用时也能打开。
+ * 而它额外的协议拦截已由打开入口覆盖。
  */
 export const markdownRehypePlugins = [
   defaultRehypePlugins.raw,
-  [
-    sanitize,
-    {
-      ...sanitizeSchema,
-      protocols: { ...sanitizeSchema.protocols, href: [...sanitizeSchema.protocols.href, "cosir-file", "cosir-dir", "cosir-snippet", "cosir-excerpt"] },
-    },
-  ],
+  defaultRehypePlugins.sanitize,
 ] as NonNullable<StreamdownProps["rehypePlugins"]>;
 
 type ResolvedTheme = ThemeState["resolvedTheme"];

@@ -86,9 +86,7 @@ class _Ledger:
         self.runs: dict[int, SimpleNamespace] = {}
         self.current: SimpleNamespace | None = None
 
-    def create_run(
-        self, task_id: int, launch: RunLaunch
-    ) -> SimpleNamespace:
+    def create_run(self, task_id: int, launch: RunLaunch) -> SimpleNamespace:
         run = SimpleNamespace(
             id=len(self.runs) + 1,
             task_id=task_id,
@@ -162,9 +160,9 @@ class _Driver:
 
 def _user(text: str = "hi") -> UserInputBody:
     return UserInputBody(
-        input_text=text,
+        text=text,
         launch=RunLaunch(model_config_id=1),
-        presentation=UserInputPresentation(display_text=text),
+        presentation=UserInputPresentation(text=text),
     )
 
 
@@ -225,9 +223,11 @@ async def chain(monkeypatch):
     monkeypatch.setattr(
         registry_module.task_runtime_spaces,
         "get_or_create",
-        lambda task_id: SimpleNamespace(actor=SimpleNamespace(
-            request_cancel=lambda reason: child_cancels.append((task_id, reason))
-        )),
+        lambda task_id: SimpleNamespace(
+            actor=SimpleNamespace(
+                request_cancel=lambda reason: child_cancels.append((task_id, reason))
+            )
+        ),
     )
     cancelled_teams: list[int] = []
 
@@ -242,12 +242,17 @@ async def chain(monkeypatch):
     service = TransportAssistantService.__new__(TransportAssistantService)
     service._tasks = ledger
     service._inputs = SimpleNamespace(
-        prepare=lambda task_id, command, model_config_id, reasoning_effort=None,
-        agent_id="main_agent", *, delivery="immediate": TaskMessage.of(
+        prepare=lambda task_id,
+        command,
+        model_config_id,
+        reasoning_effort=None,
+        agent_id="main_agent",
+        *,
+        delivery="immediate": TaskMessage.of(
             UserInputBody(
-                input_text=command.display_text,
+                text=command.text,
                 launch=RunLaunch(agent_id=agent_id, model_config_id=model_config_id),
-                presentation=UserInputPresentation(display_text=command.display_text),
+                presentation=UserInputPresentation(text=command.text),
             ),
             delivery=delivery,
         )
@@ -323,7 +328,7 @@ async def test_sends_while_running_queue_and_drain_one_per_run(chain) -> None:
     await _finish(first_run.id, "completed")
     second_run = chain.ledger.current
     assert second_run.id != first_run.id
-    assert [row.body.input_text for row in chain.queue.rows] == ["third"]
+    assert [row.body.text for row in chain.queue.rows] == ["third"]
 
     await _finish(second_run.id, "completed")
     assert chain.ledger.current.id != second_run.id
@@ -340,14 +345,14 @@ async def test_queued_inputs_wait_after_cancel_and_a_new_send_runs_first(chain) 
     await _finish(chain.ledger.current.id, "cancelled")
     assert chain.ledger.current.status == "cancelled"
     # 队列里还有用户取消留下的通知（随下一个 Run 并入）。
-    assert [row.body.input_text for row in chain.queue.rows if isinstance(row.body, UserInputBody)] == [
+    assert [row.body.text for row in chain.queue.rows if isinstance(row.body, UserInputBody)] == [
         "queued"
     ]
 
     await chain.service.send(_TASK_ID, _send_request("fresh"))
     await _settle()
     assert chain.ledger.current.status == "running"
-    assert [row.body.input_text for row in chain.queue.rows if isinstance(row.body, UserInputBody)] == [
+    assert [row.body.text for row in chain.queue.rows if isinstance(row.body, UserInputBody)] == [
         "queued"
     ]
     await _finish(chain.ledger.current.id, "completed")
@@ -624,7 +629,9 @@ async def test_placeholder_settle_failure_does_not_block_running_cancel(chain, m
     assert run.status == "cancelled"
 
 
-async def test_placeholder_settle_failure_does_not_block_suspended_cancel(chain, monkeypatch) -> None:
+async def test_placeholder_settle_failure_does_not_block_suspended_cancel(
+    chain, monkeypatch
+) -> None:
     _fail_settling(monkeypatch)
     run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id=1))
     run.status = "suspended"
