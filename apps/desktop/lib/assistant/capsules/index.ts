@@ -4,6 +4,7 @@ export {
   capsuleFromTag,
   capsulePlainText,
   escapeAttribute,
+  isDirectoryPath,
   serializeCapsule,
   unescapeAttribute,
   type Capsule,

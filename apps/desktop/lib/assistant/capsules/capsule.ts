@@ -123,6 +123,11 @@ export function capsulePlainText(capsule: Capsule): string {
   return capsule.name;
 }
 
+/** 路径是否指向目录：空路径（工作区根）或带尾分隔符。 */
+export function isDirectoryPath(path: string): boolean {
+  return path === "" || /[\\/]$/.test(path);
+}
+
 /** 路径的最后一段；兼容 Windows 反斜杠与目录尾斜杠。 */
 export function basename(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");

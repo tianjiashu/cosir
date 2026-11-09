@@ -1,4 +1,4 @@
-import { basename, type RefCapsule } from "@/lib/assistant/capsules";
+import { basename, isDirectoryPath, type RefCapsule } from "@/lib/assistant/capsules";
 import type { LineRange } from "@/lib/links/resolve-link";
 
 /**
@@ -24,9 +24,9 @@ export function workspacePageRef(path: string, page: number): RefCapsule {
   return { kind: "ref", path, page: String(page) };
 }
 
-/** 引用是否指向目录（路径以 `/` 结尾；空路径是工作区根目录）。 */
+/** 引用是否指向目录（空路径是工作区根目录，其余以分隔符结尾）。 */
 export function refIsDirectory(capsule: RefCapsule): boolean {
-  return capsule.path === "" || capsule.path.endsWith("/");
+  return isDirectoryPath(capsule.path);
 }
 
 /** 打开文件 / 在文件树定位目录时的工作区相对路径（去掉目录尾斜杠）。 */

@@ -9,7 +9,6 @@ type InlineTokenProps = {
   description: string;
   preserveExtension?: boolean;
   tone?: "neutral" | "skill";
-  state?: "ready" | "pending" | "error";
   open?: { label: string; disabled?: boolean; onClick: () => void };
   remove?: { label: string; disabled?: boolean; onClick: () => void };
 };
@@ -17,7 +16,7 @@ type InlineTokenProps = {
 /** 仅承载行内标签的排版和操作外观；文档编辑、附件事实及打开路径由调用方拥有。 */
 export function InlineToken({
   icon, name, detail, description, preserveExtension = false,
-  tone = "neutral", state = "ready", open, remove,
+  tone = "neutral", open, remove,
 }: InlineTokenProps) {
   const descriptionId = useId();
   const extensionAt = preserveExtension ? name.lastIndexOf(".") : -1;
@@ -39,7 +38,6 @@ export function InlineToken({
         className="cosir-inline-token"
         data-inline-token="true"
         data-tone={tone}
-        data-state={state}
         contentEditable={false}
         delay={500}
       >

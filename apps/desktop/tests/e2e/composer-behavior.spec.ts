@@ -127,7 +127,6 @@ for (const mode of ["new", "task"] as const) {
     await expect(send).toBeDisabled();
     await input.press(undo);
     await expect(input).toContainText("notes.md");
-    await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
     await input.press(redo);
     await expect(send).toBeDisabled();
     await input.press(undo);
@@ -148,7 +147,6 @@ for (const mode of ["new", "task"] as const) {
     ]);
     await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
     await expect(input).toContainText("notes.md");
-    await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
   });
 
   test(`${mode} 图片粘贴和拖放各接纳一次，普通文件与不支持的图片在入口反馈`, async ({ page }) => {
@@ -189,7 +187,6 @@ test("Task 草稿离开后恢复普通文件，原生选择迟到结果不会写
   await page.getByText("草稿100", { exact: true }).click();
   await expect(input).toContainText("草稿 A");
   await expect(input).toContainText("notes.md");
-  await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
   const chooser = await openNativePicker(page);
   await page.getByText("草稿101", { exact: true }).click();
   await expect(input).toHaveText("草稿 B");
@@ -242,7 +239,6 @@ test("重载后撤回带普通文件的消息：附件按快照里的路径放�
   await user.getByRole("button", { name: "撤回" }).click();
   const input = page.getByLabel("消息输入");
   await expect(input).toContainText("history.md");
-  await expect(input.locator('[data-inline-token][data-state="error"]')).toHaveCount(0);
   await input.getByRole("button", { name: "移除附件 history.md" }).click();
   await input.press(undo);
   await expect(input).toContainText("history.md");

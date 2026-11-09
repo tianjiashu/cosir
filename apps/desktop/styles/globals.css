@@ -438,17 +438,6 @@ body > :not(#root) > * {
     color: var(--skill-foreground);
   }
 
-  .cosir-inline-token[data-state="pending"],
-  .cosir-inline-token[data-state="error"] {
-    border-style: dashed;
-    color: var(--muted-foreground);
-  }
-
-  .cosir-inline-token[data-state="error"] {
-    background: color-mix(in oklab, var(--destructive) 6%, var(--muted));
-    border-color: color-mix(in oklab, var(--destructive) 30%, var(--border));
-  }
-
   .cosir-inline-token-label,
   .cosir-inline-token-name {
     display: inline-flex;

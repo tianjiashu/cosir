@@ -1,6 +1,6 @@
 import { PuzzleIcon } from "lucide-react";
 
-import { basename } from "@/lib/assistant/capsules";
+import { basename, isDirectoryPath } from "@/lib/assistant/capsules";
 import { InlineToken } from "@/components/ui/inline-token";
 import { WorkspaceFileIcon } from "@/components/workspace-files/file-icon";
 
@@ -23,11 +23,6 @@ export function SkillChip({ name, remove, disabled = false }: {
   );
 }
 
-/** 路径是否为目录引用：胶囊语法约定目录以 `/` 结尾。 */
-export function isDirectoryCapsulePath(path: string): boolean {
-  return /[\\/]$/.test(path);
-}
-
 /**
  * 本机文件胶囊：输入框与已发送消息共用，名称从路径推导，目录按尾斜杠区分并显示文件夹图标。
  * 消息里不传 `remove`。
@@ -37,7 +32,7 @@ export function FileChip({ path, remove, disabled = false }: {
   remove?: ChipRemove;
   disabled?: boolean;
 }) {
-  const directory = isDirectoryCapsulePath(path);
+  const directory = isDirectoryPath(path);
   const name = `${basename(path)}${directory ? "/" : ""}`;
   return (
     <InlineToken
