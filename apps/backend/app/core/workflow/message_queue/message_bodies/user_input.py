@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.workflow.message_queue.message_bodies.base import EnqueuedMessageBody, TaskMessageKind
 from app.core.workflow.message_queue.message_bodies.rendering import (
+    escape_tag,
     render_time,
     user_message_with_images,
 )
@@ -68,7 +69,9 @@ class UserInputBody(EnqueuedMessageBody):
     KIND: ClassVar[TaskMessageKind] = "user_input"
     TAG: ClassVar[str] = "user_input"
     PROMPT_GUIDE: ClassVar[str] = (
-        "the user talking to you. `image_paths` lists attached images by local path."
+        "the user talking to you. `image_paths` lists attached images by local path. "
+        "A `<skill>` block inside it is a Skill the user picked for this message: follow its "
+        "instructions."
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = True
@@ -81,7 +84,8 @@ class UserInputBody(EnqueuedMessageBody):
     def text(self) -> str:
         """起始标签的 ``hint`` 提醒模型遵循系统提示词的 ``output_layer``。
 
-        标签正文保留用户原文，有图片时在原文之后逐行列出路径。
+        标签正文是用户原文（含入队时附上的 ``<skill>`` 正文），转义同名标签后放入，用户输入里的
+        ``</user_input>`` 不能伪造消息边界；有图片时在原文之后逐行列出路径。
         """
 
         img_paths = "".join(f"\n- {path}" for path in self.presentation.image_paths)
@@ -89,7 +93,7 @@ class UserInputBody(EnqueuedMessageBody):
             img_paths = "\nimage_paths:" + img_paths
         return (
             f'<{self.TAG} time="{render_time()}" hint="Follow the output_layer rules.">'
-            f"{self.input_text}{img_paths}"
+            f"{escape_tag(self.input_text, self.TAG)}{img_paths}"
             f"</{self.TAG}>"
         )
 

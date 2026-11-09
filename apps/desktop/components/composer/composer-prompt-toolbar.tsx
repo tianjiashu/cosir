@@ -12,6 +12,8 @@ type ComposerPromptToolbarProps = {
   disabled?: boolean;
   /** 工具组只读时的说明，见 {@link ToolGroupSelector} 的 `lockedHint`。 */
   toolGroupsLockedHint?: string;
+  /** 当前工作区：Skill 选择器列出它看得到的 Skill；新对话还没选工作区时为 `null`，只列系统级。 */
+  workspaceId: number | null;
 };
 
 export function ComposerPromptToolbar({
@@ -22,11 +24,12 @@ export function ComposerPromptToolbar({
   toolGroupsError,
   disabled = false,
   toolGroupsLockedHint,
+  workspaceId,
 }: ComposerPromptToolbarProps) {
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       <FavoritePromptToolbar disabled={disabled} />
-      <SkillsSelector disabled={disabled} />
+      <SkillsSelector disabled={disabled} workspaceId={workspaceId} />
       <ToolGroupSelector
         toolGroups={toolGroups}
         selectedToolGroups={selectedToolGroups}

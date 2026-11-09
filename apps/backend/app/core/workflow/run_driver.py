@@ -1,10 +1,11 @@
 """驱动一次 Conversation Run：对话场景的装配方，也是 Run 失败的唯一异常边界。
 
-Task 的 ``TaskActor`` 决定「什么时候跑」，:class:`RunDriver` 负责「怎么跑一次」：读取 Run、Task 与工作区，
-合成本次 Run 的 Agent 运行时配置，把 Run / Task 级事实（Task 运行空间，以及 Transport projector
-的事件回调）装进 ``RuntimeContext``，再交给 core 的 ``ReactLikeWorkflow``。进程级单例（Run 状态
-写入、外部消息队列、工具系统）由 workflow 节点直接取用，不经这里转手；事件回调必须由这里注入，
-因为 core 不依赖 Assistant Transport。Run 生命周期与持久进度由领域服务维护，模型上下文归 Task。
+Task 的 ``TaskActor`` 决定「什么时候跑」，:class:`RunDriver` 负责「怎么跑一次」：读取 Run、Task
+与工作区，合成本次 Run 的 Agent 运行时配置，把 Run / Task 级事实（Task 运行空间，以及 Transport
+projector 的事件回调）装进 ``RuntimeContext``，再交给 core 的 ``ReactLikeWorkflow``。进程级单例
+（Run 状态写入、外部消息队列、工具系统）由 workflow 节点直接取用，不经这里转手；事件回调必须
+由这里注入，因为 core 不依赖 Assistant Transport。Run 生命周期与持久进度由领域服务维护，模型
+上下文归 Task。
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.context.tool_call_closure import ContextProtocolError
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.llm_provider.model_failure import (
     classify_model_failure,
     extract_model_response_message,
@@ -25,22 +25,13 @@ from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cance
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
-from app.models import ConversationRunRecord, ConversationRunStatus
+from app.models import ConversationRunRecord
 from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.conversation_run_status import RunTransition
 from app.service.depends import (
     get_conversation_event_projector,
     get_conversation_run_ledger,
     get_conversation_task_context_service,
-    get_task_service,
-)
-
-_STOP_HOOK_STATUSES = frozenset(
-    {
-        ConversationRunStatus.COMPLETED.value,
-        ConversationRunStatus.CANCELLED.value,
-        ConversationRunStatus.SUSPENDED.value,
-    }
 )
 
 
@@ -53,8 +44,8 @@ class RunDriver:
 
     def __init__(self) -> None:
         from app.core.workflow.workflow import ReactLikeWorkflow
+
         self._ledger = get_conversation_run_ledger()
-        self._task_service = get_task_service()
         self._workflow = ReactLikeWorkflow()
 
     async def drive(
@@ -73,24 +64,12 @@ class RunDriver:
         启动收敛。
 
         副作用:
-            触发 USER_PROMPT_SUBMIT 与 STOP（正常收束 / 取消 / 挂起）Hook；结束前回收本 Run 遗留的
-            工具级取消信号（Task 级信号归调度方的释放边界）。
+            结束前回收本 Run 遗留的工具级取消信号（Task 级信号归调度方的释放边界）。
         """
 
         try:
-            task = self._task_service.get_task(run.task_id)
-            # 无内置实现；Hook 判定 deny 也不阻断已开始的 Run。
-            await HookInterceptor.async_safe_fire(
-                HookContext.from_locatable(event=HookEvent.USER_PROMPT_SUBMIT, turn=run, locatable=None)
-            )
-
-
             rc = RuntimeContext.for_run(run, preceding_run)
             await self._workflow.run(rc)
-            if await self._has_settled(run):
-                await HookInterceptor.async_safe_fire(
-                    HookContext.from_locatable(event=HookEvent.STOP, locatable=task, turn=run)
-                )
 
         except Exception as exc:
             # 即使失败本身落库出错，未提交的工作也不能继续等待启动。
@@ -102,12 +81,6 @@ class RunDriver:
         finally:
             # 兜底回收「点名了已结束的工具调用」这类不会再被消费的工具级信号。
             tool_call_cancellation_registry.clear_task(run.task_id)
-
-    async def _has_settled(self, run: ConversationRunRecord) -> bool:
-        """workflow 返回后重读状态：只有收束到终态或挂起才触发 STOP Hook。"""
-
-        current = await asyncio.to_thread(self._ledger.get_run, run.id)
-        return current.status in _STOP_HOOK_STATUSES
 
     def _settle_failure(self, run: ConversationRunRecord, exc: Exception) -> bool:
         """把异常归类成失败 code 并落定 failed，返回本次是否真的落定了。
@@ -185,9 +158,7 @@ class RunDriver:
                     status="cancelled",
                 )
             )
-        cancel_placeholders(
-            run.task_id, context.claimed_decisions(run.task_id), INTERRUPTED_HINT
-        )
+        cancel_placeholders(run.task_id, context.claimed_decisions(run.task_id), INTERRUPTED_HINT)
 
 
 def _failure_code_for(exc: BaseException) -> str:

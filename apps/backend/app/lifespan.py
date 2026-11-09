@@ -8,9 +8,8 @@
 职责边界：
 
 - 负责：日志管线安装（失败窗口先建最小管线，配置加载后按最终数据根重建）、``Settings``
-  加载、服务依赖初始化、重启恢复（编排见 ``RecoverService``）、Hook 注册表播种、
-  工具系统装配、``SESSION_START`` / ``SESSION_END`` 触发、启动状态标记、
-  系统级 ``.cosir`` 目录创建。
+  加载、服务依赖初始化、重启恢复（编排见 ``RecoverService``）、工具系统装配、
+  启动状态标记、系统级 ``.cosir`` 目录创建。
 - 不负责：HTTP 路由、中间件安装、FastAPI 实例的创建与导出。
 
 本模块在 ``app.app`` 导入期被加载，因此这里的顶层 import 都发生在应用装配阶段；
@@ -41,7 +40,6 @@ from app.core.agents.agent_profile_config import (
     ensure_system_agent_config_dir,
     ensure_system_agent_team_config_dir,
 )
-from app.core.hook import HookContext, HookEvent, HookInterceptor
 from app.core.tool.background.backgraound_registry import background_registry
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.service.configuration.agent_team_configuration_registry import (
@@ -153,9 +151,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
 
     副作用:
         按启动顺序安装日志管线、加载配置、初始化服务依赖、创建系统级 ``.cosir`` 目录、
-        播种 Hook 与 Agent 注册表（注册表只播种代码内置 profile，用户 JSON 由注册表在作用域
-        首次被读取时按需装载）、装配工具系统，再收敛遗留 Run，
-        并在就绪后写入 ``ready`` 启动状态；关闭时触发 ``SESSION_END``、
+        播种 Agent 注册表（注册表只播种代码内置 profile，用户 JSON 由注册表在作用域首次被读取时
+        按需装载）、装配工具系统，再收敛遗留 Run，并在就绪后写入 ``ready`` 启动状态；关闭时
         关闭 Run 执行与终端会话、flush 观测数据、关闭服务依赖，最后写入 ``stopped``
         启动状态并卸载日志管线。日志管线共安装两次：先按当前 ``paths.LOG_DIR`` 建立最小
         管线，覆盖配置加载与依赖初始化的失败窗口；``Settings.load()`` 触发 ``paths.reset()``
@@ -177,12 +174,6 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         backup_count=Constant.Logging.BACKUP_COUNT,
     )
     _ensure_system_cosir_dir()
-    # Hook 注册表初始化（启动期单线程播种，必须在 ToolExecutor 首次触发拦截前完成，
-    # 否则 HookInterceptor 首次 fire 会拿不到注册表）。无配置层（决策 D3）。
-    from app.core.hook import initialize_hook_registry
-
-    initialize_hook_registry()
-
     # 确保系统级 Agent / Team 配置目录存在，作为用户手工放置自定义配置的固定位置。
     # 配置内容不在此处装载：两个 registry 都在各自作用域首次被读取时按需装载，因此启动之后
     # 才创建的 workspace（或运行期新放入的 JSON）无需重启后端就能被解析到；坏配置由装载来源
@@ -216,16 +207,11 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     )
     get_recover_service().recover_after_restart()
 
-    # SESSION_START 挂接：后端进程启动就绪后触发（无消费方拦截，仅作事件接通）。
-    # 统一经 HookInterceptor 收口。
-    HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_START))
     _mark_boot_ready()
     try:
         yield
     finally:
         try:
-            # SESSION_END 挂接：进程关闭前触发（服务依赖关闭前，保证日志仍可用）。
-            HookInterceptor.safe_fire(HookContext(event=HookEvent.SESSION_END))
             # 先禁止后台结果投递（撤销全部条目、等在途投递写完）：之后关闭终端会把会话结束为
             # closed、唤醒等待线程与交接，它们不得在关闭期间写 task_messages。再停下全部 actor
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
@@ -329,9 +315,9 @@ def _ensure_system_cosir_dir() -> None:
 
     系统级 ``.cosir`` 用于承载跨 workspace 的系统级配置：**目录名固定为 ``.cosir``**，
     位置由 ``system_cosir_dir()`` 给出（macOS 为 ``~/.cosir``、Windows 为
-    ``%USERPROFILE%\\.cosir``；其他平台由桌面宿主注入的数据根（Electron 应用数据目录）下的 ``.cosir``；直接运行
-    后端时 macOS/Windows 使用用户主目录，其他平台未注入数据根即启动报错）。workspace 级 ``.cosir``
-    由 ``WorkspaceService`` 在创建工作区时创建，与本函数无关。
+    ``%USERPROFILE%\\.cosir``；其他平台由桌面宿主注入的数据根（Electron 应用数据目录）下的
+    ``.cosir``；直接运行后端时 macOS/Windows 使用用户主目录，其他平台未注入数据根即启动报错）。
+    workspace 级 ``.cosir`` 由 ``WorkspaceService`` 在创建工作区时创建，与本函数无关。
 
     参数:
         无。

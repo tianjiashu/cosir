@@ -27,7 +27,6 @@ import {
   localFileTokenIds,
   splitLocalFileTokens,
 } from "@/lib/assistant/attachments/local-file-token";
-import { materializeSkillMentions, restoreSkillMentionTokens } from "@/lib/assistant/composer/skill-mention-token";
 import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import {
   createEditableUserDocument,
@@ -203,7 +202,7 @@ export function toEditableUserMessageDraft(message: ThreadUserMessage): Editable
 
   message.content.forEach((part, index) => {
     if (part.type === "text") {
-      textParts.push(`${pendingTokens}${restoreSkillMentionTokens(part.text)}`);
+      textParts.push(`${pendingTokens}${part.text}`);
       pendingTokens = "";
       previousWasText = true;
       return;
@@ -473,7 +472,7 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
   const messageParts: TransportMessagePart[] = [];
   for (const part of command.message.parts) {
     if (part.type === "text") {
-      for (const piece of splitLocalFileTokens(materializeSkillMentions(part.text))) {
+      for (const piece of splitLocalFileTokens(part.text)) {
         if (piece.type === "text") {
           messageParts.push({ type: "text", text: piece.text });
           continue;

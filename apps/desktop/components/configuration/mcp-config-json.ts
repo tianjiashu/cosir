@@ -1,4 +1,4 @@
-import type { MCPServerConfiguration, MCPTransport } from "@/lib/api/system-extensions";
+import type { MCPServerConfiguration, MCPTransport } from "@/lib/api/extensions";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 
 type JsonRecord = Record<string, unknown>;

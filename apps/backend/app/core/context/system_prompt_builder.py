@@ -277,7 +277,7 @@ class SystemPromptBuilder:
             RuntimeError: 委派或团队工具可用但对应进程级注册表未初始化时原样抛出，不静默降级。
 
         副作用:
-            读取按工具可用性选择的进程级注册表和系统级 MCP/Skill 配置，不修改配置。
+            读取按工具可用性选择的进程级注册表与本工作区可见的 MCP/Skill 配置，不修改配置。
         """
         blocks: list[str] = []
         usage = SystemPromptBuilder._build_tool_usage(available_tool_names)
@@ -365,7 +365,7 @@ class SystemPromptBuilder:
             RuntimeError: 委派或团队工具可用但对应进程级注册表未初始化时原样抛出，不静默降级。
 
         副作用:
-            读取按工具可用性选择的进程级注册表和系统级 MCP/Skill 配置，不修改配置。
+            读取按工具可用性选择的进程级注册表与本工作区可见的 MCP/Skill 配置，不修改配置。
         """
         has_catalog_tool = bool(
             {TOOL_DELEGATE_TASK, TOOL_AGENT_TEAM, TOOL_MCP, TOOL_SKILL} & set(available_tool_names)
@@ -397,25 +397,24 @@ class SystemPromptBuilder:
                 blocks.append(team_summary)
 
         if TOOL_MCP in available_tool_names:
-            blocks.append(SystemPromptBuilder._build_mcp_catalog())
+            blocks.append(SystemPromptBuilder._build_mcp_catalog(workspace_root))
 
         if TOOL_SKILL in available_tool_names:
-            blocks.append(SystemPromptBuilder._build_skill_catalog())
+            blocks.append(SystemPromptBuilder._build_skill_catalog(workspace_root))
 
         return blocks
 
     @staticmethod
-    def _build_mcp_catalog() -> str:
-        """列出已启用且连接测试通过的 MCP 服务名；工具详情按需发现。"""
+    def _build_mcp_catalog(workspace_root: str) -> str:
+        """列出本工作区可用的 MCP 服务名（系统级与 workspace 级合并、启用且本机测试通过）；工具详情按需发现。"""
 
         from app.service.configuration.mcp_configuration import (
             MCPConfigurationError,
-            enabled_servers,
-            read_mcp_configuration,
+            available_servers,
         )
 
         try:
-            servers = enabled_servers(read_mcp_configuration())
+            servers = available_servers(workspace_root)
         except MCPConfigurationError as exc:
             logger.warning(
                 "system_prompt_mcp_catalog_unavailable",
@@ -434,14 +433,18 @@ class SystemPromptBuilder:
         )
 
     @staticmethod
-    def _build_skill_catalog() -> str:
-        """列出启用 Skill 的名称与描述，正文由 Skill 工具按需加载。"""
+    def _build_skill_catalog(workspace_root: str) -> str:
+        """列出本工作区可见且启用的 Skill 名称与描述，正文由 Skill 工具按需加载。"""
 
         from app.service.configuration.skill_catalog import SkillCatalog
         from app.service.configuration.skill_configuration import SkillConfigurationError
 
         try:
-            skills = [skill for skill in SkillCatalog().list_skills() if skill.enabled]
+            skills = [
+                skill
+                for skill in SkillCatalog.visible_from(workspace_root).list_skills()
+                if skill.enabled
+            ]
         except SkillConfigurationError as exc:
             logger.warning(
                 "system_prompt_skill_catalog_unavailable",

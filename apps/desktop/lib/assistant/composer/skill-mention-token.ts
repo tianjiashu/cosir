@@ -1,47 +1,33 @@
-import { mapMarkdownText, splitMarkdownTokens, type MarkdownTokenPart } from "@/lib/assistant/composer/markdown-literals";
+import { splitMarkdownTokens, type MarkdownTokenPart } from "@/lib/assistant/composer/markdown-literals";
+
+/**
+ * 输入框里选中的 Skill：`[[cosir-skill:<URL 编码的名称>]]`。编辑器、发送正文与后端快照用的是同一个
+ * token——后端按它校验 Skill 并把正文固化进模型输入，展示时 token 留在文本里，由这里切出胶囊。
+ * 手打的其他写法（如 `【Skill: x】`）只是普通文字。
+ */
 const SKILL_MENTION_TOKEN = /\[\[cosir-skill:([^\]]+)\]\]/g;
 const SKILL_IDENTIFIER = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const MATERIALIZED_SKILL_MENTION = /【Skill: ([^】]+)】/g;
 
-/** 把 Skill 名称编码为仅供 composer 编辑器使用的行内标记。 */
 export function createSkillMentionToken(name: string): string {
   return `[[cosir-skill:${encodeURIComponent(name)}]]`;
 }
 
-/** 将 composer 内部 token 投影成可读且可从编辑态恢复的正文标记。 */
-export function materializeSkillMentions(text: string): string {
-  return mapMarkdownText(text, (text) =>
-    text.replace(SKILL_MENTION_TOKEN, (_token, encodedName: string) => {
-      const name = parseSkillMentionName(encodedName);
-      return `【Skill: ${encodeURIComponent(name)}】`;
-    }),
-  );
-}
-
-/** 把已发送正文中的可逆 Skill 标记重新投影为编辑器胶囊 token。 */
-export function restoreSkillMentionTokens(text: string): string {
-  return mapMarkdownText(text, (text) =>
-    text.replace(MATERIALIZED_SKILL_MENTION, (_mention, encodedName: string) => {
-      const name = parseSkillMentionName(encodedName);
-      return SKILL_IDENTIFIER.test(name)
-        ? createSkillMentionToken(name)
-        : _mention;
-    }),
-  );
-}
-
 /**
- * 把已发送正文切成文本与 Skill 名称，供消息气泡按胶囊渲染；识别规则与
- * {@link restoreSkillMentionTokens} 相同，不合法的名称按原文保留。
+ * 把已发送正文切成文本与 Skill 名称，供消息气泡按胶囊渲染；代码片段里的 token 与不合法的名称按原文保留。
  */
 export function splitSkillMentions(text: string): MarkdownTokenPart<string>[] {
-  return splitMarkdownTokens(text, MATERIALIZED_SKILL_MENTION, (match) => {
+  return splitMarkdownTokens(text, SKILL_MENTION_TOKEN, (match) => {
     const name = parseSkillMentionName(match[1] ?? "");
     return SKILL_IDENTIFIER.test(name) ? name : null;
   });
 }
 
-/** 解析编辑器 token 中的 Skill 名称；无效编码按原始名称保留，避免丢失草稿文本。 */
+/** 纯文本场景（侧栏标题等）里把 Skill token 换成 Skill 名称。 */
+export function replaceSkillMentionsWithNames(text: string): string {
+  return text.replace(SKILL_MENTION_TOKEN, (_token, encodedName: string) => parseSkillMentionName(encodedName));
+}
+
+/** 解析 token 中的 Skill 名称；无效编码按原始名称保留，避免丢失草稿文本。 */
 export function parseSkillMentionName(encodedName: string): string {
   try {
     return decodeURIComponent(encodedName);

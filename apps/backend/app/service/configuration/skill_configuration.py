@@ -1,34 +1,37 @@
-"""系统级 Skill 启用状态配置。"""
+"""一个作用域的 Skill 启用状态配置（``<.cosir>/config/skills.json``）。"""
 
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.config.logging.logger import log
-from app.utils.path.system_cosir import system_skills_config_file
+from app.service.configuration.extension_scope import ExtensionScope
 
 
 class SkillConfiguration(BaseModel):
-    """由系统配置文件声明允许 Agent 使用的 Skill 名称。"""
+    """由作用域配置文件声明本作用域允许 Agent 使用的 Skill 名称。
+
+    每个作用域只管自己目录里的 Skill：workspace 的名单不能启停系统级 Skill，反之亦然。
+    """
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     enabled_skills: list[str] | None = None
 
     def is_enabled(self, name: str) -> bool:
-        """配置文件缺失时默认开放已安装 Skill；存在时仅开放显式列出的名称。"""
+        """配置文件缺失时默认开放本作用域已安装 Skill；存在时仅开放显式列出的名称。"""
 
         return self.enabled_skills is None or name in self.enabled_skills
 
 
 class SkillConfigurationError(ValueError):
-    """系统级 Skill 配置文件无法读取或不符合契约。"""
+    """Skill 启用状态配置文件无法读取或不符合契约。"""
 
 
-def read_skill_configuration() -> SkillConfiguration:
-    """读取 Skill 启用状态；尚未创建配置文件时默认全部启用。"""
+def read_skill_configuration(scope: ExtensionScope) -> SkillConfiguration:
+    """读取一个作用域的 Skill 启用状态；尚未创建配置文件时默认全部启用。"""
 
-    path = system_skills_config_file()
+    path = scope.skills_config_file
     try:
         content = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -38,7 +41,7 @@ def read_skill_configuration() -> SkillConfiguration:
             "skill_configuration_read_failed",
             extra={
                 "msg": "读取 Skill 配置失败",
-                "data": {"error_type": type(exc).__name__},
+                "data": {"scope": scope.key, "error_type": type(exc).__name__},
             },
         )
         raise SkillConfigurationError("Skill 配置文件无法读取") from exc
@@ -53,7 +56,7 @@ def read_skill_configuration() -> SkillConfiguration:
             "skill_configuration_invalid",
             extra={
                 "msg": "Skill 配置文件格式无效",
-                "data": {"error_type": type(exc).__name__},
+                "data": {"scope": scope.key, "error_type": type(exc).__name__},
             },
         )
         raise SkillConfigurationError("Skill 配置文件格式无效") from exc

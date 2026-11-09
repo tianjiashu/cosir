@@ -1,4 +1,4 @@
-import { HammerIcon } from "lucide-react";
+import { PuzzleIcon } from "lucide-react";
 
 import { InlineToken } from "@/components/ui/inline-token";
 import { WorkspaceFileIcon } from "@/components/workspace-files/file-icon";
@@ -7,7 +7,7 @@ type ChipRemove = { label: string; disabled?: boolean; onClick: () => void };
 
 /** Skill 胶囊：输入框与已发送消息共用，消息里不传 `remove`。 */
 export function SkillChip({ name, remove }: { name: string; remove?: ChipRemove }) {
-  return <InlineToken icon={<HammerIcon />} name={name} description={`Skill：${name}`} tone="skill" remove={remove} />;
+  return <InlineToken icon={<PuzzleIcon />} name={name} description={`Skill：${name}`} tone="skill" remove={remove} />;
 }
 
 /**

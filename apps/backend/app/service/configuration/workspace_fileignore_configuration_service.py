@@ -20,6 +20,7 @@ from app.tools.tool_handler.search.ignore_rules import (
     FILEIGNORE_MAX_RULES,
     ignore_file_path,
 )
+from app.utils.path.workspace_cosir import workspace_cosir_dir
 
 
 class WorkspaceFileIgnoreConfigurationError(ValueError):
@@ -44,6 +45,7 @@ class WorkspaceFileIgnoreConfigurationService:
         """绑定 workspace 根目录和固定规则文件路径。"""
 
         self.root = Path(workspace_root)
+        self.cosir_dir = workspace_cosir_dir(self.root)
         self.path = ignore_file_path(self.root)
         self.store = ConfigurationFileStore()
 
@@ -52,14 +54,14 @@ class WorkspaceFileIgnoreConfigurationService:
 
         if not self.path.exists():
             return self._document("", exists=False)
-        content = self.store.read_text(self.path, root=self.root / ".cosir")
+        content = self.store.read_text(self.path, root=self.cosir_dir)
         return self._document(content, exists=True)
 
     def update(self, content: str) -> WorkspaceFileIgnoreDocument:
         """校验标准 gitignore 语法、大小和规则数后原子写入规则文件。"""
 
         self._validate(content)
-        self.store.write_text_atomic(self.path, content, root=self.root / ".cosir")
+        self.store.write_text_atomic(self.path, content, root=self.cosir_dir)
         log.info(
             "configuration_workspace_fileignore_written",
             extra={

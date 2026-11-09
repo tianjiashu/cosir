@@ -13,7 +13,7 @@ export type UserMessageSegment =
  * 已发送用户消息中除图片外各 part 的展示片段，是气泡里行内胶囊的唯一解码点。
  *
  * 输入是 canonical 形状（后端已把普通文件 token 在原位换成 file part，乐观消息由
- * converter 对齐同一形状），所以这里只识别正文里的引用链接与物化后的 Skill 标记。
+ * converter 对齐同一形状），所以这里只识别正文里的引用链接与 Skill token。
  * 图片由气泡上方的预览区渲染，不在此产出；空白文本照常保留，避免胶囊两侧的空格被吞掉。
  */
 export function userMessageSegments(parts: ThreadUserMessage["content"]): UserMessageSegment[] {

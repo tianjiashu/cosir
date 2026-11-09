@@ -81,7 +81,7 @@ export type ThreadProps = {
 };
 
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
-type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "workspaceRoot" | "cancelling" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "taskId">;
+type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "workspaceRoot" | "cancelling" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "taskId" | "workspaceId">;
 const ThreadContext = createContext<ThreadContextValue | null>(null);
 
 /** 线程内部组件只在 Thread 下渲染；缺 Provider 是装配错误，直接暴露。 */
@@ -97,7 +97,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
   const isEmpty = useAuiState(isNewChatView);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ taskId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, cancelling, readonly }}>
+    <ThreadContext.Provider value={{ taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, cancelling, readonly }}>
       <AttachmentWorkspaceContext.Provider value={workspaceId}>
       <LinkTaskContext.Provider value={taskId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -247,6 +247,7 @@ const ThreadComposerPromptToolbar: FC<{ disabled?: boolean; lockedLaunch?: Trans
       toolGroupsError={context.toolGroupsError}
       disabled={disabled || composer.isDisabled}
       toolGroupsLockedHint={lockedGroups === null ? undefined : RUN_LAUNCH_LOCKED_HINT}
+      workspaceId={context.workspaceId}
     />
   );
 };

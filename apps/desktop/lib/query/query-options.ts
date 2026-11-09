@@ -9,7 +9,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { getAgentConfigurations } from "@/lib/api/configuration";
 import { getToolGroups } from "@/lib/api/tool-groups";
 import { getFileInfo } from "@/lib/api/workspace-files";
-import { getSystemSkills } from "@/lib/api/system-extensions";
+import { getMCPServers, getSkills } from "@/lib/api/extensions";
 import { getModelConfigs } from "@/lib/api/model-configs";
 import { queryKeys } from "@/lib/query/query-keys";
 
@@ -29,9 +29,16 @@ export const fileInfoQueryOptions = (workspaceId: number, path: string) => query
   queryFn: ({ signal }) => getFileInfo(workspaceId, path, signal),
 });
 
-export const skillsQueryOptions = () => queryOptions({
-  queryKey: queryKeys.skills(),
-  queryFn: ({ signal }) => getSystemSkills({ signal }),
+/** 某一作用域看得到的 Skill：`null` 为系统级，否则为该工作区的合并视图（含继承的系统级 Skill）。 */
+export const skillsQueryOptions = (workspaceId: number | null) => queryOptions({
+  queryKey: queryKeys.skills(workspaceId),
+  queryFn: ({ signal }) => getSkills(workspaceId, { signal }),
+});
+
+/** 某一作用域看得到的 MCP 服务，含义同 {@link skillsQueryOptions}。 */
+export const mcpServersQueryOptions = (workspaceId: number | null) => queryOptions({
+  queryKey: queryKeys.mcpServers(workspaceId),
+  queryFn: ({ signal }) => getMCPServers(workspaceId, { signal }),
 });
 
 export const modelConfigsQueryOptions = () => queryOptions({

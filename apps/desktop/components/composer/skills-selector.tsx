@@ -1,32 +1,35 @@
 import { skillsQueryOptions } from "@/lib/query/query-options";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { HammerIcon } from "lucide-react";
+import { PuzzleIcon } from "lucide-react";
 
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
-import { type SystemSkill } from "@/lib/api/system-extensions";
+import { type Skill } from "@/lib/api/extensions";
 import { insertSkill, useComposerInsertion } from "@/components/composer/composer-insertion-context";
 import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
 
-const EMPTY_SKILLS: SystemSkill[] = [];
+const EMPTY_SKILLS: Skill[] = [];
 
 type SkillsSelectorProps = {
   disabled?: boolean;
+  /** 列出这个工作区看得到的 Skill（系统级与工作区合并）；`null` 只列系统级。 */
+  workspaceId: number | null;
 };
 
 /**
- * 选择当前可用的系统 Skill，并把 mention 插入最近的 composer 光标位置。
+ * 选择当前工作区可用的 Skill（系统级与工作区合并，同名时工作区优先），并把 mention 插入最近的
+ * composer 光标位置。
  *
  * 列表用 cmdk：方向键选择、回车插入、输入即筛选（名称与描述都参与匹配，按相关度排序）。
  */
-export function SkillsSelector({ disabled = false }: SkillsSelectorProps) {
+export function SkillsSelector({ disabled = false, workspaceId }: SkillsSelectorProps) {
   const insertion = useComposerInsertion();
   const [open, setOpen] = useState(false);
-  // 与配置中心的 Skill 列表共用缓存：启用 / 禁用后由配置侧失效 skills()，这里无需自行刷新。
+  // 与配置中心的 Skill 列表共用缓存：配置侧写入后失效对应作用域（系统级写入失效全部作用域），这里无需自行刷新。
   const skillsQuery = useQuery({
-    ...skillsQueryOptions(),
+    ...skillsQueryOptions(workspaceId),
     enabled: open,
   });
   const skills = skillsQuery.data ?? EMPTY_SKILLS;
@@ -46,7 +49,7 @@ export function SkillsSelector({ disabled = false }: SkillsSelectorProps) {
         aria-label="选择 Skill"
         title="Skills"
       >
-        <HammerIcon />
+        <PuzzleIcon />
       </PopoverTrigger>
       <PopoverContent align="start" side="top" sideOffset={6} className="w-80 rounded-xl p-0 shadow-lg">
         {loading ? (
@@ -75,7 +78,7 @@ export function SkillsSelector({ disabled = false }: SkillsSelectorProps) {
                   className="flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 [&>svg:last-child]:hidden"
                 >
                   <span className="flex items-center gap-1.5 text-sm font-medium">
-                    <HammerIcon className="text-muted-foreground size-3.5" />{skill.name}
+                    <PuzzleIcon className="text-muted-foreground size-3.5" />{skill.name}
                   </span>
                   {skill.description && <span className="text-muted-foreground line-clamp-2 pl-5 text-xs">{skill.description}</span>}
                 </CommandItem>

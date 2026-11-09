@@ -222,15 +222,20 @@ class Constant:
         }
 
     class Cosir:
-        """cosir 内部文件 / 图片占位 token 的正则（多处复用，单一事实源）。"""
+        """cosir 内部文件 / 图片 / Skill 占位 token 的正则（多处复用，单一事实源）。"""
 
         # 本地文件占位 token：``[[cosir-file:<id>]]``。
         LOCAL_FILE_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-file:([^\]]+)\]\]")
         # 本地图片占位 token：``[[cosir-image:<id>]]``。
         LOCAL_IMAGE_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-image:([^\]]+)\]\]")
-        # 一次遍历同时识别两类 token：``[[cosir-(file|image):<id>]]``。
+        # 用户在输入框选中的 Skill：``[[cosir-skill:<URL 编码的 Skill 名>]]``，由后端校验并把正文固化进
+        # 模型输入；展示时留在文本里，由前端渲染成胶囊。
+        LOCAL_SKILL_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-skill:([^\]]+)\]\]")
+        # 展示投影识别的附件 token：``[[cosir-(file|image):<id>]]``，各自投影为 file / image part。
+        LOCAL_ATTACHMENT_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-(file|image):([^\]]+)\]\]")
+        # 换成模型正文时一次遍历同时识别三类 token：``[[cosir-(file|image|skill):<id>]]``。
         # 正文替换必须单趟完成——分两趟时第一趟插入的附件路径会被第二趟重新解析。
-        LOCAL_INPUT_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-(file|image):([^\]]+)\]\]")
+        LOCAL_INPUT_TOKEN: re.Pattern[str] = re.compile(r"\[\[cosir-(file|image|skill):([^\]]+)\]\]")
         # 本地文件 ID 格式：1~128 位安全字符。
         LOCAL_FILE_ID: re.Pattern[str] = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 

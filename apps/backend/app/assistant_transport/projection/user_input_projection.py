@@ -35,7 +35,8 @@ def build_user_input_parts(
 ) -> list[UserInputPart]:
     """将已消费或排队输入的展示绑定投影为安全 locator parts，不读取附件内容。
 
-    display_text 中的 token 保留编辑器顺序；未嵌入正文的图片按输入顺序追加。
+    display_text 中的 token 保留编辑器顺序；未嵌入正文的图片按输入顺序追加。Skill token
+    （``[[cosir-skill:…]]``）留在文本 part 里，由前端在原位渲染成胶囊。
     token 无对应附件或输入无可展示内容时抛 ValueError。
     """
 
@@ -63,7 +64,7 @@ def build_user_input_parts(
     cursor = 0
     referenced_image_ids: set[str] = set()
     referenced_file_ids: set[str] = set()
-    for match in find_message_tokens(Constant.Cosir.LOCAL_INPUT_TOKEN, display_text):
+    for match in find_message_tokens(Constant.Cosir.LOCAL_ATTACHMENT_TOKEN, display_text):
         text_part = display_text[cursor : match.start()]
         if text_part:
             parts.append({"type": "text", "text": text_part, "status": "completed"})

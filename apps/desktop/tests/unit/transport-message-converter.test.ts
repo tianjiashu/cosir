@@ -170,7 +170,7 @@ describe("assistant transport converter", () => {
   });
 
   // 目的：乐观消息与后端 canonical 同形，气泡在原位渲染文件、Skill 胶囊，canonical 到达时附件不挪位。
-  it("乐观消息把文件 token 换成原位 file part，并物化 Skill 标记", () => {
+  it("乐观消息把文件 token 换成原位 file part，Skill token 原样留在文本里", () => {
     const pending = toPendingUserMessage({ type: "add-message", message: { role: "user", parts: [
       { type: "text", text: "请用 [[cosir-skill:review-code]] 看 [[cosir-file:file-1]] 和 `[[cosir-file:file-2]]`" },
       { type: "file", data: "cosir-local-file:file-1", filename: "notes.md", mimeType: "text/markdown" },
@@ -178,7 +178,7 @@ describe("assistant transport converter", () => {
     ] } });
 
     expect(pending?.content).toMatchObject([
-      { type: "text", text: "请用 【Skill: review-code】 看 " },
+      { type: "text", text: "请用 [[cosir-skill:review-code]] 看 " },
       { type: "file", data: "cosir-local-file:file-1", filename: "notes.md" },
       { type: "text", text: " 和 `[[cosir-file:file-2]]`" },
       { type: "file", data: "cosir-local-file:file-3", filename: "extra.md" },

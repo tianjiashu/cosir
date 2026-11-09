@@ -12,7 +12,7 @@ from app.models.message_metadata import NoticeEntry, UserMessageMetadata
 
 NoticeKind = Literal[
     "system_prompt_delta",
-    "agent_catalog_change",
+    "catalog_change",
     "terminal_session_ended",
     "fork_handover",
     "backend_restarted",
@@ -23,7 +23,7 @@ NoticeKind = Literal[
 NoticeLevel = Literal["task", "run", "turn"]
 
 # 通知按它说的事属于哪一层分级，级别决定通知从哪来、撤回回合时怎么办：
-# - task：Task 环境的变化（系统提示词、子 Agent 目录、终端会话、分叉交接、后端重启）。事件只在那一刻
+# - task：Task 环境的变化（系统提示词、能力目录、终端会话、分叉交接、后端重启）。事件只在那一刻
 #   存在，经外部队列投递、只投一次；所在回合被撤回时重新投递，否则之后的 Run 永远看不到这次变化。
 # - run：本 Run 的事实（工具准入）。驱动开始时对照上下文推导（``drive_notices``），不入队。
 # - turn：上一个回合怎样结束（用户已停止）或本次驱动内的提示（续写）。驱动开始时推导或驱动内投递，
@@ -31,7 +31,7 @@ NoticeLevel = Literal["task", "run", "turn"]
 # run 与 turn 级都从持久化事实与上下文现推，撤回后自然重新推导，所以撤回只需重新投递 task 级。
 NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
     "system_prompt_delta": "task",
-    "agent_catalog_change": "task",
+    "catalog_change": "task",
     "terminal_session_ended": "task",
     "fork_handover": "task",
     "backend_restarted": "task",

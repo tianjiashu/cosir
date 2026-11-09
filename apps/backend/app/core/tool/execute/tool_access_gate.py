@@ -1,24 +1,21 @@
-"""工具调用准入门禁：解析工具定义 + 权限门禁 + 参数校验 + PreToolUse Hook。
+"""工具调用准入门禁：解析工具定义 + 权限门禁 + 参数校验。
 
 这是工具执行管线（``ToolExecutor.execute``）的第一阶段：把「模型请求的一次工具调用」
 翻译为「可以安全交给隔离执行器的工具定义 + 已校验参数」，或一条归一化的拒绝观察。
-四段检查（注册表命中 / Agent profile 权限 / 参数 schema / PreToolUse Hook）同属
-「准入决策」这一职责，故收口在本模块，不在管线门面里平铺。
+三段检查（注册表命中 / Agent profile 权限 / 参数 schema）同属「准入决策」这一职责，故收口
+在本模块，不在管线门面里平铺。
 
 职责边界：
-- 负责：解析工具定义、按 ``allowed_tool_names`` 做 Agent 级门禁、参数解码与校验、PreToolUse
-  Hook 拦截（DENY 短路、modified_arguments 改写），并把四类拒绝各自的原因文案归一为
-  面向模型的富文本观察。
+- 负责：解析工具定义、按 ``allowed_tool_names`` 做 Agent 级门禁、参数解码与校验，并把各类
+  拒绝的原因文案归一为面向模型的富文本观察。
 - 不负责：隔离执行与硬超时强杀、输出预算（以上归 ``ToolHandlerRunner`` /
   ``ToolObservationBudget``）。
 """
 
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import Any
 
 from app.config.logging.logger import log
-from app.core.hook import HookContext, HookDecision, HookEvent, HookInterceptor, HookResult
 from app.core.llm_provider.message_codec import decode_tool_arguments
 from app.core.tool.call_intent import split_call_arguments
 from app.core.tool.results.tool_error import tool_error
@@ -30,7 +27,6 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.tool.validation.arguments import (
-    ToolArgumentValidation,
     validate_tool_arguments,
 )
 
@@ -41,9 +37,7 @@ class ToolGateOutcome:
 
     字段:
         tool: 通过全部检查的工具定义；被拒时为 ``None``，此时 ``denial`` 非空。
-        arguments: 准入后的最终参数字典（已过 schema 校验，可能被 PreToolUse Hook
-            改写）；被拒时为空字典。被 Hook 改写后的参数是执行器真正使用的入参，
-            Hook 改写必须在执行前生效，故由本对象承载而非回写 ``ToolCall``。
+        arguments: 准入后的最终参数字典（已过 schema 校验）；被拒时为空字典。
         denial: 被拒时的归一化 error 观察；通过时为 ``None``。该观察**尚未**过输出
             预算，由 ``ToolExecutor`` 统一应用，保证所有返回路径预算口径一致。
     """
@@ -100,17 +94,16 @@ class ToolAccessGate:
         execution_context: ToolExecutionContext,
         allowed_tool_names: Collection[str] | None = None,
     ) -> ToolGateOutcome:
-        """按顺序执行四段准入检查并返回判定结果。
+        """按顺序执行三段准入检查并返回判定结果。
 
         检查顺序：注册表命中 → Agent profile 权限门禁 → 图片能力（``returns_images`` 的工具要求本次
-        Run 的模型支持图片）→ 参数解码与校验 → PreToolUse Hook。
-        任一环节拒绝即短路返回 ``denial``，不继续后续检查、不执行工具、不触发
-        PostToolUse Hook。全部通过时返回 ``admitted=True`` 的判定结果。
+        Run 的模型支持图片）→ 参数解码与校验。
+        任一环节拒绝即短路返回 ``denial``，不继续后续检查、不执行工具。全部通过时返回
+        ``admitted=True`` 的判定结果。
 
         参数:
             call: 模型请求的工具调用，含工具名、原始参数串与调用 id。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；由
-                ``ToolExecutor`` 保证非 None，用于构造 Hook 上下文。
+            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。
             allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
                 调用方不增加 Agent 级门禁。
 
@@ -119,11 +112,10 @@ class ToolAccessGate:
             参数；被拒时 ``denial`` 为经 :func:`tool_error` 构造的 error 观察。
 
         异常:
-            无（四类拒绝全部归一化为 denial 观察，不向外抛出）。
+            无（各类拒绝全部归一化为 denial 观察，不向外抛出）。
 
         副作用:
-            触发 PreToolUse Hook；Hook 自身异常时由 ``HookInterceptor.safe_fire``
-            兜底放行（失败安全），不阻断工具执行。
+            无；只读注册表与执行上下文，不执行工具。
         """
 
         tool = self._registry.get_tool_definition(call.tool_name)
@@ -214,63 +206,4 @@ class ToolAccessGate:
                 },
             )
 
-        arguments = self._apply_pre_tool_use_hook(
-            tool, validation, execution_context, call.call_id
-        )
-        if isinstance(arguments, ToolObservation):
-            return ToolGateOutcome(denial=arguments)
-        return ToolGateOutcome(tool=tool, arguments=arguments, intent=intent)
-
-    @staticmethod
-    def _apply_pre_tool_use_hook(
-        tool: ToolDefinition,
-        validation: ToolArgumentValidation,
-        execution_context: ToolExecutionContext,
-        tool_call_id: str,
-    ) -> dict[str, Any] | ToolObservation:
-        """触发 PreToolUse 拦截点，返回最终参数或硬拒绝观察。
-
-        Hook 在参数校验通过后、执行前触发。``DENY`` 是硬拒绝，短路返回 error 观察
-        （不执行工具、不触发 PostToolUse Hook）；``modified_arguments`` 非空时替换
-        最终参数后再继续执行。注册表未初始化或 Hook 抛异常时，
-        ``HookInterceptor.safe_fire`` 返回 None，按放行处理（失败安全）。
-
-        参数:
-            tool: 已通过注册表与权限门禁的工具定义。
-            validation: 已通过的参数校验结果。
-            execution_context: 本次执行的运行时边界，用于构造 Hook 上下文。
-            tool_call_id: 关联的模型工具调用 id，用于回写拒绝观察。
-
-        返回:
-            放行时为最终参数字典（可能被 Hook 改写）；硬拒绝时为 :class:`ToolObservation`。
-
-        异常:
-            无（Hook 异常由 ``safe_fire`` 内部兜底）。
-
-        副作用:
-            触发 PreToolUse Hook，可能产生副作用（Hook 自行负责）。
-        """
-
-        decision = (
-            HookInterceptor.safe_fire(
-                HookContext.from_locatable(
-                    event=HookEvent.PRE_TOOL_USE,
-                    locatable=execution_context,
-                    tool_name=tool.name,
-                    tool_arguments=validation.arguments,
-                )
-            )
-            or HookResult.allow()
-        )
-        if decision.decision == HookDecision.DENY:
-            return tool_error(
-                tool.name,
-                decision.deny_reason or "blocked by pre-tool-use hook",
-                tool_call_id=tool_call_id,
-            )
-        if decision.modified_arguments is not None:
-            if "intent" in decision.modified_arguments:
-                return tool_error(tool.name, "PreToolUse Hook must not modify reserved intent",
-                                  tool_call_id=tool_call_id)
-            return decision.modified_arguments
-        return validation.arguments
+        return ToolGateOutcome(tool=tool, arguments=validation.arguments, intent=intent)

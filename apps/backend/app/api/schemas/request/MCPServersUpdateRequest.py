@@ -1,4 +1,4 @@
-"""替换系统级 MCP 服务列表的请求体。"""
+"""替换一个作用域 MCP 服务列表的请求体。"""
 
 from pydantic import BaseModel, ConfigDict
 
@@ -6,7 +6,7 @@ from app.api.schemas.request.MCPServerConfigRequest import MCPServerConfigReques
 
 
 class MCPServersUpdateRequest(BaseModel):
-    """待保存的完整 MCP 服务列表。"""
+    """待保存的本作用域完整服务列表（不含继承来的系统级服务）。"""
 
     model_config = ConfigDict(extra="forbid")
 

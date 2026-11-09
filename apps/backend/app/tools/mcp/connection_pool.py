@@ -22,6 +22,7 @@ HTTP / SSE / 停止请求。工具 handler 在工作线程里经 :meth:`MCPConne
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 import threading
 import time
@@ -34,10 +35,7 @@ from typing import Any, TextIO, TypeVar
 from mcp import ClientSession, types
 
 from app.config.logging.logger import log
-from app.service.configuration.mcp_configuration import (
-    MCPServerConfig,
-    server_connection_fingerprint,
-)
+from app.service.configuration.mcp_configuration import ScopedMCPServer
 from app.tools.mcp.client import (
     MCPToolNotFoundError,
     describe_exception,
@@ -60,15 +58,15 @@ _STDERR_LOG_MAX_BYTES = 5 * 1024 * 1024
 
 
 class MCPConnectionPool:
-    """按服务名持有 MCP 长连接；协程方法只能在池的事件循环上运行（经 :meth:`submit` 提交）。"""
+    """按「作用域 + 服务名」持有 MCP 长连接（两个 workspace 的同名服务互不顶替）；协程方法只能在池的事件循环上运行（经 :meth:`submit` 提交）。"""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._closed = False
-        self._connections: dict[str, _Connection] = {}
-        self._open_locks: dict[str, asyncio.Lock] = {}
+        self._connections: dict[tuple[str, str], _Connection] = {}
+        self._open_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._reaper: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------------
@@ -136,7 +134,7 @@ class MCPConnectionPool:
     # 循环侧操作（只在池的事件循环上运行）
     # ------------------------------------------------------------------
 
-    async def list_tools(self, server: MCPServerConfig) -> list[types.Tool]:
+    async def list_tools(self, server: ScopedMCPServer) -> list[types.Tool]:
         """返回服务的工具目录（优先用连接缓存）。"""
 
         async with self._use(server) as connection:
@@ -144,7 +142,7 @@ class MCPConnectionPool:
 
     async def call_tool(
         self,
-        server: MCPServerConfig,
+        server: ScopedMCPServer,
         tool_name: str,
         arguments: dict[str, Any],
     ) -> types.CallToolResult:
@@ -160,7 +158,7 @@ class MCPConnectionPool:
             return await connection.session.call_tool(tool_name, arguments)
 
     @asynccontextmanager
-    async def _use(self, server: MCPServerConfig) -> AsyncIterator[_Connection]:
+    async def _use(self, server: ScopedMCPServer) -> AsyncIterator[_Connection]:
         """取（或建立）连接并计入在途调用；连接级失败时丢弃连接，异常原样上浮。"""
 
         connection = await self._acquire(server)
@@ -175,11 +173,11 @@ class MCPConnectionPool:
             connection.in_flight -= 1
             connection.last_used = time.monotonic()
 
-    async def _acquire(self, server: MCPServerConfig) -> _Connection:
-        fingerprint = server_connection_fingerprint(server)
-        lock = self._open_locks.setdefault(server.name, asyncio.Lock())
+    async def _acquire(self, server: ScopedMCPServer) -> _Connection:
+        fingerprint = server.fingerprint
+        lock = self._open_locks.setdefault(server.pool_key, asyncio.Lock())
         async with lock:
-            current = self._connections.get(server.name)
+            current = self._connections.get(server.pool_key)
             if current is not None:
                 if current.alive and current.fingerprint == fingerprint:
                     return current
@@ -188,14 +186,15 @@ class MCPConnectionPool:
             connection = _Connection(server, fingerprint)
             started = time.monotonic()
             await connection.open()
-            self._connections[server.name] = connection
+            self._connections[server.pool_key] = connection
             log.info(
                 "mcp_connection_opened",
                 extra={
                     "msg": "MCP 服务长连接已建立",
                     "data": {
+                        "scope": server.scope.key,
                         "server_name": server.name,
-                        "transport": server.transport,
+                        "transport": server.config.transport,
                         "elapsed_ms": round((time.monotonic() - started) * 1000),
                     },
                 },
@@ -211,8 +210,8 @@ class MCPConnectionPool:
     ) -> None:
         """从池中移除并关闭连接；同一连接被并发丢弃时只关闭一次。"""
 
-        if self._connections.get(connection.server.name) is connection:
-            del self._connections[connection.server.name]
+        if self._connections.get(connection.server.pool_key) is connection:
+            del self._connections[connection.server.pool_key]
         if connection.closing:
             return
         log.info(
@@ -220,6 +219,7 @@ class MCPConnectionPool:
             extra={
                 "msg": "MCP 服务长连接已丢弃",
                 "data": {
+                    "scope": connection.server.scope.key,
                     "server_name": connection.server.name,
                     "reason": reason,
                     "error": describe_exception(error) if error is not None else None,
@@ -255,7 +255,7 @@ class MCPConnectionPool:
 class _Connection:
     """一个服务的长连接：owner task 持有会话上下文，直到被要求关闭或传输失败。"""
 
-    def __init__(self, server: MCPServerConfig, fingerprint: str) -> None:
+    def __init__(self, server: ScopedMCPServer, fingerprint: str) -> None:
         self.server = server
         self.fingerprint = fingerprint
         self.in_flight = 0
@@ -328,7 +328,7 @@ class _Connection:
         return any(tool.name == tool_name for tool in await self.tools())
 
     async def _own(self) -> None:
-        errlog = _open_stderr_log(self.server) if self.server.transport == "stdio" else None
+        errlog = _open_stderr_log(self.server) if self.server.config.transport == "stdio" else None
         try:
             async with open_client_session(
                 self.server,
@@ -376,14 +376,19 @@ class _Connection:
             )
 
 
-def _open_stderr_log(server: MCPServerConfig) -> TextIO | None:
-    """打开该 stdio 服务的 stderr 日志（``<LOG_DIR>/mcp/<server>.stderr.log``），超限先轮转一次。
+def _open_stderr_log(server: ScopedMCPServer) -> TextIO | None:
+    """打开该 stdio 服务的 stderr 日志，超限先轮转一次。
 
-    日志是诊断旁路：打不开时记录并返回 ``None``（退回后端 stderr），不阻断建连。
+    系统级服务写 ``<LOG_DIR>/mcp/<server>.stderr.log``；workspace 服务的文件名再带上工作区路径的
+    短哈希，两个工作区的同名服务不写进同一个文件。日志是诊断旁路：打不开时记录并返回 ``None``
+    （退回后端 stderr），不阻断建连。
     """
 
     directory: Path = system_cosir.LOG_DIR / "mcp"
     safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", server.name)
+    if server.scope.workspace_root is not None:
+        scope_hash = hashlib.sha256(server.scope.key.encode("utf-8")).hexdigest()[:8]
+        safe_name = f"{safe_name}.{scope_hash}"
     path = directory / f"{safe_name}.stderr.log"
     try:
         directory.mkdir(parents=True, exist_ok=True)

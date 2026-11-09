@@ -284,6 +284,7 @@ export function NewConversation({
                 toolGroupsLoading={toolGroupsQuery.isPending}
                 toolGroupsError={toolGroupsError}
                 disabled={submitting}
+                workspaceId={selectedWorkspaceId ?? null}
               />
               <ComposerControls
                 scope={selectedWorkspaceId ? { kind: "workspace", id: selectedWorkspaceId } : undefined}

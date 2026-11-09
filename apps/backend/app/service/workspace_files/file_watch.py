@@ -12,6 +12,7 @@ from watchdog.observers.api import BaseObserver, ObservedWatch
 
 from app.config.logging.logger import log
 from app.service.depends import get_workspace_files_service
+from app.utils.path.workspace_cosir import workspace_cosir_dir
 
 
 @dataclass(eq=False)
@@ -55,7 +56,7 @@ class WorkspaceFileWatcher:
         # 根的父目录让整个 workspace 被移走后仍能收到通知。
         targets = {root, root.parent}
         # 忽略配置可在编辑器中原子替换；目录不存在时由根监听和周期校验覆盖首次创建。
-        settings_dir = root / ".cosir"
+        settings_dir = workspace_cosir_dir(root)
         if settings_dir.is_dir():
             targets.add(settings_dir)
         for relative in paths:

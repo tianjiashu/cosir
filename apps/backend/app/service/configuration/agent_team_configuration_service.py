@@ -26,6 +26,11 @@ from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,
 )
 from app.service.configuration.file_store import ConfigurationFileStore
+from app.service.configuration.runtime_notices.catalog_change import (
+    CatalogChange,
+    broadcast_catalog_changes,
+)
+from app.utils.workspace_scope import normalize_scope_path
 
 
 class AgentTeamConfigurationService:
@@ -119,12 +124,14 @@ class AgentTeamConfigurationService:
         with ConfigurationFileStore.locked(path):
             if not path.exists():
                 raise KeyError(configuration.team_id)
+            before = self._agent_view(self._view_root(configuration.scope, workspace_root))
             ConfigurationFileStore.write_text_atomic(
                 path,
                 self._encode(configuration),
                 root=root,
             )
             self._registry.register(configuration, workspace_root=workspace_root)
+        self._publish(self._view_root(configuration.scope, workspace_root), before)
         return configuration
 
     def delete(
@@ -150,12 +157,14 @@ class AgentTeamConfigurationService:
             }
             if team_id not in owned_ids:
                 raise KeyError(team_id)
+            before = self._agent_view(self._view_root(scope, workspace_root))
             ConfigurationFileStore.delete_file(path, root=root)
             self._registry.unregister(
                 team_id,
                 scope=scope,
                 workspace_root=workspace_root,
             )
+        self._publish(self._view_root(scope, workspace_root), before)
 
     def save(
         self,
@@ -170,9 +179,50 @@ class AgentTeamConfigurationService:
         """
 
         root = self._directory_for(configuration.scope, workspace_root)
+        before = self._agent_view(self._view_root(configuration.scope, workspace_root))
         self._create_configuration_file(configuration, directory=root)
         self._registry.register(configuration, workspace_root=workspace_root)
+        self._publish(self._view_root(configuration.scope, workspace_root), before)
         return configuration
+
+    @staticmethod
+    def _view_root(scope: str, workspace_root: str | Path | None) -> str | Path | None:
+        """这次写入影响的目录视图：workspace 作用域是那个工作区，系统级为 ``None``。"""
+
+        return workspace_root if scope == "workspace" else None
+
+    def _agent_view(self, view_root: str | Path | None) -> dict[str, str | None]:
+        """Agent 看到的 Team 目录（team_id → 目录条目），用来比较变更前后。
+
+        workspace 用合并视图（删掉覆盖后回落到系统项算作 ``updated``）；系统级只看系统层。
+        """
+
+        if view_root is None:
+            teams = self._registry.list_scope("system")
+        else:
+            teams = self._registry.list_visible(view_root)
+        return {team.team_id: self._registry.summary_block(team) for team in teams}
+
+    def _publish(self, view_root: str | Path | None, before: dict[str, str | None]) -> None:
+        """配置写入后通知固化了 ``agent_team`` 工具的 Task 目录有哪些可见变化。"""
+
+        broadcast_catalog_changes(
+            CatalogChange.between(
+                "agent_teams",
+                scope=None if view_root is None else normalize_scope_path(view_root),
+                before=before,
+                after=self._agent_view(view_root),
+                shadowed_in=self._workspace_defines if view_root is None else None,
+            )
+        )
+
+    def _workspace_defines(self, workspace_root: str, team_id: str) -> bool:
+        """工作区自己是否有同名 Team（会遮住系统级同名 Team）。"""
+
+        return any(
+            team.team_id == team_id
+            for team in self._registry.list_scope("workspace", workspace_root=workspace_root)
+        )
 
     def _directory_for(
         self,

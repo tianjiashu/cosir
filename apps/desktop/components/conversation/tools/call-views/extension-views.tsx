@@ -3,13 +3,13 @@ import { asRecord, readArray, readRecords } from "../display-data-readers";
 import { DETAIL_ROW_CLASS, DetailEmpty, listDetail } from "./detail-parts";
 
 /**
- * `mcp-tool-result`：`list` 列出服务与其工具；`call` 的结果正文只进模型上下文，
+ * `mcp-tool-result`：`list` 列出服务与其工具，工作区自己的服务（`scope === "workspace"`）在列表与调用行都标「工作区」；`call` 的结果正文只进模型上下文，
  * 卡片只显示调用了哪个服务的哪个工具，因此没有展开内容。
  */
 export const mcpView: CallView = (data) => {
   return {
     meta: data.action === "call"
-      ? `${String(data.server_name ?? "MCP 服务")} · ${String(data.tool_name ?? "工具")}`
+      ? `${String(data.server_name ?? "MCP 服务")} · ${String(data.tool_name ?? "工具")}${data.scope === "workspace" ? " · 工作区" : ""}`
       : `${readArray(data.servers).length} 个服务`,
     detail: data.action === "list" ? {
       render: () => {
@@ -21,7 +21,10 @@ export const mcpView: CallView = (data) => {
               const tools = readArray(server.tools).map(asRecord);
               return (
                 <li key={`${String(server.server_name ?? "server")}-${index}`}>
-                  <p className="font-medium">{String(server.server_name ?? "MCP 服务")}</p>
+                  <p className="font-medium">
+                    {String(server.server_name ?? "MCP 服务")}
+                    {server.scope === "workspace" && <span className="text-muted-foreground ml-2 font-normal">工作区</span>}
+                  </p>
                   {typeof server.error === "string" && <p className="text-muted-foreground mt-1">{server.error}</p>}
                   {tools.length > 0 && (
                     <ul className="mt-1 space-y-1 pl-3">
@@ -44,15 +47,16 @@ export const mcpView: CallView = (data) => {
   };
 };
 
-/** `skill-content`：`list` 列出可用 Skill；`load` 的正文只进模型上下文，只显示 Skill 名。 */
+/** `skill-content`：`list` 列出可用 Skill，工作区自己的 Skill 在列表与调用行都标「工作区」；`load` 的正文只进模型上下文，只显示 Skill 名。 */
 export const skillView: CallView = (data) => {
   return {
     meta: data.action === "list"
       ? `${readArray(data.skills).length} 个 Skill`
-      : String(data.skill_name ?? "Skill"),
+      : `${String(data.skill_name ?? "Skill")}${data.scope === "workspace" ? " · 工作区" : ""}`,
     detail: data.action === "list" ? listDetail(data, () => readRecords(data.skills), "没有可用 Skill", (skill, index) => (
       <li key={`${String(skill.name ?? "skill")}-${index}`} className={DETAIL_ROW_CLASS}>
         <span className="shrink-0 font-medium">{String(skill.name ?? "未命名 Skill")}</span>
+        {skill.scope === "workspace" && <span className="text-muted-foreground shrink-0">工作区</span>}
         {typeof skill.description === "string" && skill.description && <span className="text-muted-foreground truncate">{skill.description}</span>}
       </li>
     )) : undefined,

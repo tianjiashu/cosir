@@ -327,24 +327,32 @@ class AgentTeamConfigurationRegistry:
                 "no agent teams available; if the user asks to use an agent team, call "
                 "propose_agent_team_configuration to draft a configuration first"
             )
-        blocks = []
-        for configuration in teams:
-            lines = [
-                f"team_id: {configuration.team_id} | name: {configuration.name} | description: {configuration.description}",
-                "  nodes:",
-            ]
-            lines.extend(
-                f"    - node_id: {node.node_id} | name: {node.name} | "
-                f"agent_id: {node.agent_id} | statuses: {[status.name for status in node.statuses]}"
-                for node in configuration.nodes
-            )
-            lines.append("  transitions:")
-            lines.extend(
-                f"    - {transition.from_node_id} (status={transition.status}) -> {transition.target_node_id}"
-                for transition in configuration.transitions
-            )
-            blocks.append("\n".join(lines))
+        blocks = [self.summary_block(configuration) for configuration in teams]
         return "Available agent teams:\n" + "\n\n".join(blocks)
+
+    @staticmethod
+    def summary_block(configuration: AgentTeamConfiguration) -> str:
+        """一个 Team 在目录里的完整条目（标识、名称、用途、节点与流转）。
+
+        系统提示词目录与目录变更通知共用这一份写法：通知里的「变更前 / 后描述」就是这一段，
+        节点或流转改了也能被比较出来。
+        """
+
+        lines = [
+            f"team_id: {configuration.team_id} | name: {configuration.name} | description: {configuration.description}",
+            "  nodes:",
+        ]
+        lines.extend(
+            f"    - node_id: {node.node_id} | name: {node.name} | "
+            f"agent_id: {node.agent_id} | statuses: {[status.name for status in node.statuses]}"
+            for node in configuration.nodes
+        )
+        lines.append("  transitions:")
+        lines.extend(
+            f"    - {transition.from_node_id} (status={transition.status}) -> {transition.target_node_id}"
+            for transition in configuration.transitions
+        )
+        return "\n".join(lines)
 
     def _ensure_scope(self, scope: str) -> None:
         """确保指定作用域的 Team 配置已装载（每个作用域在本进程内只读盘一次）。

@@ -26,9 +26,9 @@ from app.service.configuration.agent_configuration import (
     AgentConfigurationEntry,
 )
 from app.service.configuration.file_store import ConfigurationFileStore
-from app.service.configuration.runtime_notices.agent_catalog_change import (
-    AgentCatalogChange,
-    AgentCatalogChangeAction,
+from app.service.configuration.runtime_notices.catalog_change import (
+    CatalogChange,
+    CatalogChangeAction,
 )
 
 
@@ -128,7 +128,7 @@ class AgentConfigurationService:
             },
         )
         self._notify_catalog_change(
-            action="created",
+            action="added",
             agent_id=document.agent_id,
             current_description=profile.description,
         )
@@ -191,7 +191,7 @@ class AgentConfigurationService:
             },
         )
         self._notify_catalog_change(
-            action="deleted",
+            action="removed",
             agent_id=agent_id,
             previous_description=existing.description,
         )
@@ -199,7 +199,7 @@ class AgentConfigurationService:
     def _notify_catalog_change(
         self,
         *,
-        action: AgentCatalogChangeAction,
+        action: CatalogChangeAction,
         agent_id: str,
         previous_description: str | None = None,
         current_description: str | None = None,
@@ -209,10 +209,11 @@ class AgentConfigurationService:
         system 作用域用 ``None`` 表示全局，workspace 作用域使用规范化根路径。
         """
 
-        AgentCatalogChange(
+        CatalogChange(
+            catalog="agents",
             scope=None if self.workspace_root is None else str(self.scope),
             action=action,
-            agent_id=agent_id,
+            entry_id=agent_id,
             previous_description=previous_description,
             current_description=current_description,
         ).broadcast()

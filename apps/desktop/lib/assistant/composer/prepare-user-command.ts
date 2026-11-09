@@ -4,7 +4,6 @@ import {
   LocalAttachmentUnavailableError,
 } from "@/lib/assistant/attachments/local-attachment-registry";
 import { localFileTokenIds } from "@/lib/assistant/attachments/local-file-token";
-import { materializeSkillMentions } from "@/lib/assistant/composer/skill-mention-token";
 
 /**
  * Preserve composer-only ordinary-file tokens at the HTTP boundary and attach
@@ -26,7 +25,8 @@ export function prepareUserCommand(command: unknown): unknown {
       parts.push(part);
       continue;
     }
-    parts.push({ type: "text", text: materializeSkillMentions(part.text) });
+    // Skill token 原样发送：后端据此校验 Skill 并把正文固化进模型输入。
+    parts.push({ type: "text", text: part.text });
   }
   const attachments = localFileTokenIds(
     parts.filter((part): part is { type: "text"; text: string } => part.type === "text")

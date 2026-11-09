@@ -21,7 +21,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 
-from app.service.configuration.mcp_configuration import MCPServerConfig
+from app.service.configuration.mcp_configuration import ScopedMCPServer
 
 # 异常说明进入模型上下文与日志，只保留足够定位的长度。
 _MAX_ERROR_CHARS = 300
@@ -40,12 +40,12 @@ class MCPToolCallError(RuntimeError):
 
 @asynccontextmanager
 async def open_client_session(
-    server: MCPServerConfig,
+    server: ScopedMCPServer,
     *,
     errlog: TextIO | None = None,
     message_handler: MessageHandlerFnT | None = None,
 ) -> AsyncIterator[ClientSession]:
-    """按服务配置建立并初始化 MCP 会话，退出时释放传输资源（stdio 会结束服务子进程）。
+    """按作用域内的服务配置建立并初始化 MCP 会话，退出时释放传输资源（stdio 会结束服务子进程）。
 
     SDK 的会话与传输基于 anyio task group：进入与退出必须发生在同一个 asyncio task 内，
     长连接因此由连接池里每个服务一个的 owner task 持有本上下文。
@@ -56,7 +56,8 @@ async def open_client_session(
         message_handler: 服务端主动消息（如 ``tools/list_changed`` 通知）与读流异常的回调。
     """
 
-    if server.transport == "stdio":
+    config = server.config
+    if config.transport == "stdio":
         async with (
             stdio_client(_stdio_parameters(server), errlog=errlog or sys.stderr) as (read, write),
             ClientSession(read, write, message_handler=message_handler) as client,
@@ -65,26 +66,26 @@ async def open_client_session(
             yield client
         return
 
-    if server.transport == "sse":
+    if config.transport == "sse":
         async with (
-            sse_client(server.url, headers=server.headers) as (read, write),
+            sse_client(config.url, headers=config.headers) as (read, write),
             ClientSession(read, write, message_handler=message_handler) as client,
         ):
             await client.initialize()
             yield client
         return
 
-    http_client = create_mcp_http_client(headers=server.headers)
+    http_client = create_mcp_http_client(headers=config.headers)
     async with (
         http_client,
-        streamable_http_client(server.url, http_client=http_client) as (read, write, _),
+        streamable_http_client(config.url, http_client=http_client) as (read, write, _),
         ClientSession(read, write, message_handler=message_handler) as client,
     ):
         await client.initialize()
         yield client
 
 
-async def list_server_tools(server: MCPServerConfig) -> list[dict[str, Any]]:
+async def list_server_tools(server: ScopedMCPServer) -> list[dict[str, Any]]:
     """短连接到一个 MCP 服务并返回工具目录；只供配置界面的连接测试使用。"""
 
     async with open_client_session(server) as client:
@@ -155,13 +156,19 @@ def _leaf_exception(exc: BaseException) -> BaseException:
     return exc
 
 
-def _stdio_parameters(server: MCPServerConfig) -> StdioServerParameters:
-    """只把服务显式配置的变量传给子进程；SDK 会补入命令启动所需的默认环境白名单。"""
+def _stdio_parameters(server: ScopedMCPServer) -> StdioServerParameters:
+    """只把服务显式配置的变量传给子进程；SDK 会补入命令启动所需的默认环境白名单。
 
+    workspace 服务以工作区根目录为 cwd（``npx`` 类服务常按 cwd 找项目文件）；系统级服务不属于
+    任何工作区，沿用后端进程目录。
+    """
+
+    config = server.config
     return StdioServerParameters(
-        command=server.command,
-        args=server.args,
-        env=server.env,
+        command=config.command,
+        args=config.args,
+        env=config.env,
+        cwd=server.cwd,
     )
 
 

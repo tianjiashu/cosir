@@ -1,4 +1,4 @@
-"""用户输入解析边界：模型能力校验、附件与图片解析、展示 token 转模型正文，产出待入队的
+"""用户输入解析边界：模型能力校验、附件、图片与 Skill 解析、展示 token 转模型正文，产出待入队的
 ``TaskMessage``。
 
 HTTP 发送使用；Agent 之间的输入走 ``agent_message``。只读
@@ -7,6 +7,8 @@ Task、模型配置与已发布图片的元数据，不读写普通附件文件�
 """
 
 import re
+from pathlib import Path
+from urllib.parse import unquote
 
 from app.config.constant import Constant
 from app.core.workflow.message_queue.task_message import (
@@ -24,8 +26,13 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
 from app.service.attachment.attachment_service import AttachmentService
-from app.service.depends import get_model_config_service, get_task_crud
+from app.core.workflow.message_queue.message_bodies.rendering import escape_tag
+from app.service.configuration.skill_catalog import SkillCatalog, SkillLoadError
+from app.service.configuration.skill_configuration import SkillConfigurationError
+from app.service.depends import get_model_config_service, get_task_crud, get_workspace_service
 from app.utils.message_tokens import find_message_tokens, replace_message_tokens
+
+_SKILL_TAG = "skill"
 
 
 class UserInputService:
@@ -44,13 +51,13 @@ class UserInputService:
             *,
             delivery: Delivery = "immediate",
     ) -> TaskMessage:
-        """校验模型能力、解析附件与图片，组装成携带发起配置的用户输入消息（尚未入队、没有行 id）。
+        """校验模型能力、解析附件、图片与 Skill，组装成携带发起配置的用户输入消息（尚未入队、没有行 id）。
 
         ``delivery`` 是信封属性，原样带上。普通附件的路径一律由请求携带：撤回后放回输入框的附件，
         路径来自快照里的展示绑定（``build_user_input_parts``），这里不从历史消息恢复。
 
         异常:
-            UserInputRejectedError: 模型配置不存在、模型不支持所选能力、附件或图片不可用、输入为空。
+            UserInputRejectedError: 模型配置不存在、模型不支持所选能力、附件 / 图片 / Skill 不可用、输入为空。
             ImageNormalizationError: 本次图片数量或总大小超过统一输入限制。
             KeyError: Task 不存在（接入层映射为 404）。
         """
@@ -67,7 +74,11 @@ class UserInputService:
             command.attachments,
             display_text=command.display_text,
         )
-        input_text = self._resolve_file_tokens(command.display_text, file_attachments)
+        skills = self._resolve_skills(task.workspace_id, command.display_text)
+        input_text = self._resolve_input_tokens(command.display_text, file_attachments) + "".join(
+            f'\n\n<{_SKILL_TAG} name="{name}">\n{escape_tag(text, _SKILL_TAG)}\n</{_SKILL_TAG}>'
+            for name, text in skills.items()
+        )
         image_paths = self._resolve_image_assets(task.workspace_id, command.image_asset_ids)
         # wire schema 已保证文本 part 非空，但「正文只剩图片 token」时替换后同样是空。
         if not input_text.strip() and not image_paths:
@@ -153,20 +164,56 @@ class UserInputService:
         return result
 
     @staticmethod
-    def _resolve_file_tokens(
+    def _resolve_skills(workspace_id: int, display_text: str) -> dict[str, str]:
+        """正文里选中的 Skill（按首次出现去重）→ 交给模型的正文。
+
+        正文在入队时固化：之后改动或删除 Skill 不影响这条已发出的输入，历史可复现、上下文前缀也
+        不会因为 Skill 文件变化而漂移。名称按 Task 所在工作区解析（工作区同名覆盖系统级），不存在或
+        已停用时同步拒绝，前端收回乐观消息并恢复草稿。
+        """
+
+        names = list(
+            dict.fromkeys(
+                unquote(match.group(1))
+                for match in find_message_tokens(Constant.Cosir.LOCAL_SKILL_TOKEN, display_text)
+            )
+        )
+        if not names:
+            return {}
+        workspace_root = Path(get_workspace_service().get_workspace(workspace_id).root_path)
+        catalog = SkillCatalog.visible_from(workspace_root)
+        documents: dict[str, str] = {}
+        for name in names:
+            try:
+                documents[name] = catalog.load_enabled(name).for_model()
+            except (SkillLoadError, SkillConfigurationError) as exc:
+                raise UserInputRejectedError(
+                    "SKILL_UNAVAILABLE",
+                    f"Skill「{name}」不可用，请重新选择",
+                    detail=f"skill {name!r} cannot be loaded: {exc}",
+                ) from exc
+        return documents
+
+    @staticmethod
+    def _resolve_input_tokens(
             text: str,
             attachments: list[ConversationRunFileAttachment],
     ) -> str:
-        """把正文里的附件 token 换成模型可读内容：文件换路径，图片由 image part 承载、正文丢弃。
+        """把正文里的 token 换成模型可读内容：文件换路径，图片由 image part 承载、正文丢弃，Skill 换成
+        名称引用（正文另附在输入末尾）。
 
-        必须单趟扫描两类 token：分两趟时第一趟插入的文件路径会被第二趟当成原文再解析，路径里含
+        必须单趟扫描三类 token：分两趟时第一趟插入的文件路径会被第二趟当成原文再解析，路径里含
         token 或 Markdown 围栏就会把正文改坏。
         """
         paths = {attachment["id"]: attachment["path"] for attachment in attachments}
 
         def substitute(match: re.Match[str]) -> str:
             kind, token_id = match.group(1), match.group(2)
-            return paths[token_id] if kind == "file" else ""
+            if kind == "file":
+                return paths[token_id]
+            if kind == "skill":
+                return f'[Skill "{unquote(token_id)}"]'
+            return ""
 
         return replace_message_tokens(Constant.Cosir.LOCAL_INPUT_TOKEN, substitute, text)
 

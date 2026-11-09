@@ -46,3 +46,9 @@ describe("strip inline attachment tokens", () => {
     expect(stripInlineAttachmentTokens("普通标题")).toBe("普通标题");
   });
 });
+
+describe("strip inline tokens for plain-text titles", () => {
+  it("replaces skill tokens with the skill name and drops attachment tokens", () => {
+    expect(stripInlineAttachmentTokens("用 [[cosir-skill:review-code]] 看 [[cosir-file:f1]] 吧")).toBe("用 review-code 看 吧");
+  });
+});

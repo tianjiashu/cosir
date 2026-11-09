@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from app.config.logging.logger import log
 from app.service.configuration.file_store import ConfigurationFileStore
+from app.utils.path.workspace_cosir import (
+    workspace_cosir_dir,
+    workspace_file_browser_settings_file,
+)
 
 
 def normalize_path(value: str) -> str:
@@ -66,8 +70,8 @@ class BrowserVisibilityStore:
     """只由浏览用例调用；锁覆盖读改写，撤销仅反向修改本次实际变更的路径。"""
 
     def __init__(self, root: Path) -> None:
-        self.root = root / ".cosir"
-        self.path = self.root / "file-browser.json"
+        self.root = workspace_cosir_dir(root)
+        self.path = workspace_file_browser_settings_file(root)
         self.store = ConfigurationFileStore()
 
     def read(self) -> BrowserVisibility:

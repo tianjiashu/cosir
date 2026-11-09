@@ -22,9 +22,13 @@ export const queryKeys = {
   environment: () => ["cosir", "environment"] as const,
   terminalShells: () => ["cosir", "terminal-shells"] as const,
   workspaceFileIgnore: (workspaceId: number) => ["cosir", "workspace-file-ignore", workspaceId] as const,
-  mcpServers: () => ["cosir", "mcp-servers"] as const,
-  skills: () => ["cosir", "skills"] as const,
-  skill: (name: string) => ["cosir", "skill", name] as const,
+  // Skill / MCP：工作区列表含继承来的系统级条目，所以系统级写入后要按前缀失效全部作用域
+  // （`skillsAll` / `mcpServersAll`），工作区写入只失效该工作区。
+  mcpServersAll: ["cosir", "mcp-servers"] as const,
+  mcpServers: (workspaceId: number | null) => ["cosir", "mcp-servers", workspaceId ?? "system"] as const,
+  skillsAll: ["cosir", "skills"] as const,
+  skills: (workspaceId: number | null) => ["cosir", "skills", workspaceId ?? "system"] as const,
+  skill: (workspaceId: number | null, name: string) => ["cosir", "skills", workspaceId ?? "system", "document", name] as const,
   toolGroups: () => ["cosir", "tool-groups"] as const,
   modelConfigs: () => ["cosir", "model-configs"] as const,
   contextMessages: (query: unknown) => ["cosir", "context-messages", query] as const,

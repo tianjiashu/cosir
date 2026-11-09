@@ -29,9 +29,8 @@ from app.core.tool.tool_grouping import TOOL_GROUP_MCP
 from app.service import depends as service_depends
 from app.service.configuration.mcp_configuration import (
     MCPConfigurationError,
-    MCPServerConfig,
-    enabled_servers,
-    read_mcp_configuration,
+    ScopedMCPServer,
+    available_servers,
 )
 from app.tools.display.mcp_display import (
     build_mcp_call_display_data,
@@ -73,16 +72,17 @@ class MCPTool(HandlerBase):
         server_name: str | None = None,
         tool_name: str | None = None,
         arguments: dict[str, Any] | None = None,
-        execution_context: ToolExecutionContext | None = None,
+        *,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        """列出本机已启用且测试通过服务的工具，或调用其中一项工具。
+        """列出当前工作区可用服务（系统级与 workspace 级合并、启用且本机测试通过）的工具，或调用其中一项。
 
         arguments 已由 MCPArgs 在参数入口从 JSON 字符串解析为对象；handler 不再解析，
         模型上下文保留原始字符串，执行参数对象只在当前工具调用内流转。
         """
 
         try:
-            servers = enabled_servers(read_mcp_configuration())
+            servers = available_servers(execution_context.workspace_root)
         except MCPConfigurationError as exc:
             return tool_error(
                 self.name,
@@ -105,9 +105,9 @@ class MCPTool(HandlerBase):
 
     def _list(
         self,
-        servers: list[MCPServerConfig],
+        servers: list[ScopedMCPServer],
         server_name: str | None,
-        execution_context: ToolExecutionContext | None,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         selected = [
             server for server in servers if server_name is None or server.name == server_name
@@ -119,7 +119,7 @@ class MCPTool(HandlerBase):
             return _catalog_observation([])
         pool = service_depends.get_mcp_connection_pool()
 
-        async def discover(server: MCPServerConfig) -> list[types.Tool]:
+        async def discover(server: ScopedMCPServer) -> list[types.Tool]:
             async with asyncio.timeout(DISCOVERY_TIMEOUT_SECONDS):
                 return await pool.list_tools(server)
 
@@ -149,20 +149,28 @@ class MCPTool(HandlerBase):
                     "mcp_server_discovery_failed",
                     extra={
                         "msg": "MCP 服务工具发现失败",
-                        "data": {"server_name": server.name, "error": error},
+                        "data": {"scope": server.scope.key, "server_name": server.name, "error": error},
                     },
                 )
-                catalog.append({"server_name": server.name, "error": error, "tools": []})
+                catalog.append(
+                    {"server_name": server.name, "scope": server.scope.kind, "error": error, "tools": []}
+                )
             else:
-                catalog.append({"server_name": server.name, "tools": tool_catalog(outcome)})
+                catalog.append(
+                    {
+                        "server_name": server.name,
+                        "scope": server.scope.kind,
+                        "tools": tool_catalog(outcome),
+                    }
+                )
         return _catalog_observation(catalog)
 
     def _call(
         self,
-        server: MCPServerConfig,
+        server: ScopedMCPServer,
         tool_name: str,
         arguments: dict[str, Any],
-        execution_context: ToolExecutionContext | None,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         pool = service_depends.get_mcp_connection_pool()
         try:
@@ -198,7 +206,12 @@ class MCPTool(HandlerBase):
                 "mcp_tool_call_failed",
                 extra={
                     "msg": "MCP 工具调用失败",
-                    "data": {"server_name": server.name, "tool_name": tool_name, "error": error},
+                    "data": {
+                        "scope": server.scope.key,
+                        "server_name": server.name,
+                        "tool_name": tool_name,
+                        "error": error,
+                    },
                 },
             )
             return tool_error(
@@ -210,7 +223,9 @@ class MCPTool(HandlerBase):
         return tool_success(
             self.name,
             content,
-            display_data=build_mcp_call_display_data(server_name=server.name, tool_name=tool_name),
+            display_data=build_mcp_call_display_data(
+                server_name=server.name, tool_name=tool_name, scope=server.scope.kind
+            ),
         )
 
     def to_definition(self) -> ToolDefinition:

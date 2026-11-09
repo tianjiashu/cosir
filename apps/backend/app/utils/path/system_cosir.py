@@ -11,6 +11,7 @@
 ``<DATA_DIR>/.cosir/storage/app.sqlite3``
 ``<DATA_DIR>/.cosir/runtime/``
 ``<DATA_DIR>/.cosir/config/mcp_servers.json``
+``<DATA_DIR>/.cosir/config/mcp_tested_servers.json``（两个作用域的 MCP 本机测试记录）
 ``<DATA_DIR>/.cosir/config/skills.json``
 ``<DATA_DIR>/.cosir/skills/``
 
@@ -31,19 +32,20 @@ from typing import Any, Final
 from app.utils.path.workspace_cosir import (
     COSIR_AGENT_CONFIG_DIR_NAME,
     COSIR_AGENT_TEAM_CONFIG_DIR_NAME,
+    COSIR_CONFIG_DIR_NAME,
     COSIR_DIR_NAME,
     COSIR_ENV_FILE_NAME,
     COSIR_INSTRUCTION_FILE_NAME,
     COSIR_MAIN_AGENT_PROMPT_FILE_NAME,
+    COSIR_MCP_SERVERS_FILE_NAME,
+    COSIR_SKILLS_CONFIG_FILE_NAME,
+    COSIR_SKILLS_DIR_NAME,
 )
 
 _STORAGE_DIR_NAME: Final[str] = "storage"
 _LOG_DIR_NAME: Final[str] = "logs"
 _RUNTIME_DIR_NAME: Final[str] = "runtime"
-_CONFIG_DIR_NAME: Final[str] = "config"
-_MCP_SERVERS_FILE_NAME: Final[str] = "mcp_servers.json"
-_SKILLS_CONFIG_FILE_NAME: Final[str] = "skills.json"
-_SKILLS_DIR_NAME: Final[str] = "skills"
+_MCP_TESTED_SERVERS_FILE_NAME: Final[str] = "mcp_tested_servers.json"
 _DATABASE_FILE_NAME: Final[str] = "app.sqlite3"
 LOG_FILE_NAME: Final[str] = "backend.log"
 
@@ -171,21 +173,31 @@ def system_env_file() -> Path:
 
 
 def system_mcp_servers_file() -> Path:
-    """返回系统级 MCP stdio 服务配置文件路径。"""
+    """返回系统级 MCP 服务配置文件路径。"""
 
-    return system_cosir_dir() / _CONFIG_DIR_NAME / _MCP_SERVERS_FILE_NAME
+    return system_cosir_dir() / COSIR_CONFIG_DIR_NAME / COSIR_MCP_SERVERS_FILE_NAME
+
+
+def system_mcp_tested_servers_file() -> Path:
+    """返回 MCP 本机测试记录文件路径：系统级与 workspace 级服务的测试结果都只记在这里。
+
+    不和服务配置放在一起：workspace 配置可能随仓库共享，测试结果必须是本机事实，否则仓库里预先
+    写好的「已测试」就能让未经本机测试的命令直接交给 Agent 使用。
+    """
+
+    return system_cosir_dir() / COSIR_CONFIG_DIR_NAME / _MCP_TESTED_SERVERS_FILE_NAME
 
 
 def system_skills_dir() -> Path:
     """返回系统级 Skill 目录路径。"""
 
-    return system_cosir_dir() / _SKILLS_DIR_NAME
+    return system_cosir_dir() / COSIR_SKILLS_DIR_NAME
 
 
 def system_skills_config_file() -> Path:
     """返回系统级 Skill 启用状态配置文件路径。"""
 
-    return system_cosir_dir() / _CONFIG_DIR_NAME / _SKILLS_CONFIG_FILE_NAME
+    return system_cosir_dir() / COSIR_CONFIG_DIR_NAME / COSIR_SKILLS_CONFIG_FILE_NAME
 
 
 def env_file() -> Path:
@@ -229,6 +241,7 @@ __all__ = [
     "system_instruction_file",
     "system_main_agent_prompt_file",
     "system_mcp_servers_file",
+    "system_mcp_tested_servers_file",
     "system_skills_dir",
     "system_skills_config_file",
     "system_agent_config_dir",

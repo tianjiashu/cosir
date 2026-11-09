@@ -85,8 +85,8 @@
 | agent-configuration-draft | status=draft、agent_id、role、description、system_prompt；保存和编辑属于 Workbench，遵守调用方只读限制 |
 | agent-team-configuration-draft | status=draft、team_id/name/description/scope/start_node/nodes/edges/configuration |
 | agent-team-approval | team_run_id/team_id/name/goal/node_goals/start_node/nodes/edges/configuration；审批/执行状态读 TeamRun，不从展示字符串推断 |
-| mcp-tool-result | action=call: server_name/tool_name；action=list: servers[{server_name,tools,error?}]，单服务 error 不改变整个调用的生命周期 |
-| skill-content | action=list: skills；action=load: skill_name/resource_path，正文只进模型上下文 |
+| mcp-tool-result | action=call: server_name/tool_name/scope；action=list: servers[{server_name,scope,tools,error?}]，`scope` 为 system / workspace，单服务 error 不改变整个调用的生命周期 |
+| skill-content | action=list: skills[{name,description,scope}]；action=load: skill_name/resource_path/scope，正文只进模型上下文 |
 
 分页 page 为 offset/limit/has_more/next_offset。链接须经现有 URL 边界处理；本机图片经附件资源入口读取，不直接拼接本机路径。
 

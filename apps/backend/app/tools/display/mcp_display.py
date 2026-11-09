@@ -3,12 +3,15 @@
 from typing import Any
 
 
-def build_mcp_call_display_data(*, server_name: str, tool_name: str) -> dict[str, Any]:
+def build_mcp_call_display_data(*, server_name: str, tool_name: str, scope: str) -> dict[str, Any]:
+    """``call``：调用了哪个服务的哪个工具，``scope`` 为服务所在的作用域（system / workspace）。"""
+
     return {
         "kind": "mcp-tool-result",
         "action": "call",
         "server_name": server_name,
         "tool_name": tool_name,
+        "scope": scope,
     }
 
 

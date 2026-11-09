@@ -100,11 +100,10 @@ Agent 能力集中在 `apps/backend/app/core/`，按能力分子包。
 - `HandlerBase`（`tools/tool_handler/tool_base.py`）：所有内置工具 handler 的抽象基类，约定类级事实（`name`/`description`/`permission`/`args_model`/`timeout_seconds`/`risk_level`）与 `execute()`、`to_definition()` 契约；只产出模型要读的 `content` 和前端要渲染的 `display_data`，不承载任何渲染职责。
 - `ToolDefinition`（`tools/schemas/tool_definition.py`）：工具元数据与 handler 契约的单一事实源（frozen 纯数据）；模型可见结构由 `to_model_tool_definition()` 投影，`permission`、`execution_mode` 等内部字段不下发。
 - `ToolObservation`（`tools/schemas/tool_observation.py`）：工具调用结果的唯一稳定结构，区分三条通道——`content`（模型消费）、`display_data`（前端渲染）、`artifact_data`（内部产物）。失败归一为 `error`、用户取消归一为 `cancelled`，且从不抛异常。
-- `ToolRegistry` / `ToolExecutor` / `ToolSystem`：分别负责工具注册与查询（`tools/tool_registry.py`）、执行管线（`tools/tool_execute/`：准入 → 文件状态协调 → 隔离执行 → Hook → 输出预算）、以及整体装配（`tools/tool_system.py`）。
+- `ToolRegistry` / `ToolExecutor` / `ToolSystem`：分别负责工具注册与查询（`tools/tool_registry.py`）、执行管线（`tools/tool_execute/`：准入 → 文件状态协调 → 隔离执行 → 输出预算）、以及整体装配（`tools/tool_system.py`）。
 
-**Hook 与观测**
+**观测**
 
-- Hook（`core/hook/`）：运行期扩展边界——registry 负责注册索引，interceptor 负责触发、匹配、拒绝短路与失败安全；Hook 异常默认记录放行，不阻断主 Run。
 - 本地诊断：结构化日志关联前后端执行链路，上下文观测页展示持久化消息、工具调用与用量；日志失败不改变 Run 结果。
 
 **模型接入（`core/llm_provider/`）**

@@ -2,9 +2,9 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Loader2Icon,
+  NetworkIcon,
   PencilIcon,
   PlusIcon,
-  ServerIcon,
   Trash2Icon,
   WrenchIcon,
 } from "lucide-react";
@@ -28,17 +28,21 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { formatMcpServerJson, parseMcpServerJson, validateMcpServerConfiguration } from "@/components/configuration/mcp-config-json";
 import {
-  getMCPServers,
+  mcpServerConfiguration,
+  ownScope,
   saveMCPServers,
   testMCPServer,
+  type ExtensionScopeId,
+  type MCPServer,
   type MCPServerConfiguration,
   type MCPServerTestResult,
   type MCPTransport,
-} from "@/lib/api/system-extensions";
+} from "@/lib/api/extensions";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
+import { mcpServersQueryOptions } from "@/lib/query/query-options";
 import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
 
 type ServerDraft = Omit<MCPServerConfiguration, "args" | "env"> & {
@@ -96,9 +100,13 @@ const EDITOR_MODE_OPTIONS = [
   { value: "json", label: "JSON" },
 ] as const;
 
-/** 系统 MCP 服务的连接配置、工具发现与启停管理。 */
-export function MCPConfigurationPanel() {
+/**
+ * 一个作用域的 MCP 服务连接配置、工具发现与启停管理。`workspaceId` 为 `null` 时管理系统级服务；
+ * 否则管理该工作区的 `.cosir/config/mcp_servers.json`，并列出继承来的系统级服务（只读）。
+ */
+export function MCPConfigurationPanel({ workspaceId }: { workspaceId: ExtensionScopeId }) {
   const queryClient = useQueryClient();
+  const scope = ownScope(workspaceId);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [draft, setDraft] = useState<ServerDraft>(emptyDraft);
@@ -110,28 +118,34 @@ export function MCPConfigurationPanel() {
   const [formError, setFormError] = useState<string | null>(null);
   const [lastTests, setLastTests] = useState<Record<string, MCPServerTestResult>>({});
 
-  const serversQuery = useQuery({
-    queryKey: queryKeys.mcpServers(),
-    queryFn: ({ signal }) => getMCPServers({ signal }),
-  });
-  const servers = serversQuery.data?.servers;
+  const serversQuery = useQuery(mcpServersQueryOptions(workspaceId));
+  // 本作用域自己的服务：整表保存只能提交它们，继承来的系统级服务不能写进工作区文件。
+  const servers = serversQuery.data?.servers.filter((server) => server.scope === scope).map(mcpServerConfiguration);
+
+  // 工作区列表含继承来的系统级服务，系统级写入要让全部作用域重拉。
+  function invalidateServers() {
+    void queryClient.invalidateQueries({
+      queryKey: workspaceId === null ? queryKeys.mcpServersAll : queryKeys.mcpServers(workspaceId),
+    });
+  }
 
   // 整表 PUT：保存、启停、删除都提交完整列表，因此同一时刻只允许一次写入，避免基于旧列表互相覆盖。
   const saveMutation = useMutation({
-    mutationFn: saveMCPServers,
+    mutationFn: (next: MCPServerConfiguration[]) => saveMCPServers(workspaceId, next),
     onSuccess: (saved) => {
-      queryClient.setQueryData(queryKeys.mcpServers(), saved);
+      queryClient.setQueryData(queryKeys.mcpServers(workspaceId), saved);
+      if (workspaceId === null) invalidateServers();
       // 「本次测试」结果只对应保存前的配置，保存后服务会按新配置重建，旧结果不再可信。
       setLastTests({});
     },
   });
 
   const testMutation = useMutation({
-    mutationFn: testMCPServer,
+    mutationFn: (server: MCPServerConfiguration) => testMCPServer(workspaceId, server),
     onSuccess: (result, server) => {
       setLastTests((current) => ({ ...current, [server.name]: result }));
-      // 已保存服务测试通过后后端会把它标记为可供 Agent 使用，需要重读 tested 状态。
-      if (result.agent_available) void queryClient.invalidateQueries({ queryKey: queryKeys.mcpServers() });
+      // 测试结果记在本机测试记录里，已保存服务的「测试通过」状态随之变化，需要重读。
+      invalidateServers();
     },
   });
 
@@ -140,7 +154,7 @@ export function MCPConfigurationPanel() {
 
   const busy = saveMutation.isPending;
 
-  function openEditor(server?: MCPServerConfiguration) {
+  function openEditor(server?: MCPServer) {
     setEditingName(server?.name ?? null);
     const nextDraft = server ? toDraft(server) : emptyDraft();
     const nextJson = formatMcpServerJson(fromDraft(nextDraft));
@@ -187,7 +201,7 @@ export function MCPConfigurationPanel() {
     });
   }
 
-  function toggleServer(server: MCPServerConfiguration) {
+  function toggleServer(server: MCPServer) {
     if (!servers || busy) return;
     const next = servers.map((item) => item.name === server.name ? { ...item, enabled: !item.enabled } : item);
     saveMutation.mutate(next, {
@@ -196,20 +210,22 @@ export function MCPConfigurationPanel() {
     });
   }
 
-  async function deleteServer(server: MCPServerConfiguration) {
+  async function deleteServer(server: MCPServer) {
     if (!servers) return;
     const next = servers.filter((item) => item.name !== server.name);
     const deleted = await confirmDelete({
       target: `MCP 服务「${server.name}」`,
-      consequence: "删除后 Agent 将无法再调用它提供的工具。",
+      consequence: server.overrides
+        ? "删除后本工作区改用系统级同名服务。"
+        : "删除后 Agent 将无法再调用它提供的工具。",
       action: () => saveMutation.mutateAsync(next),
       failureFallback: "删除 MCP 服务失败",
     });
     if (deleted) notify.success(`已删除 MCP 服务 ${server.name}`);
   }
 
-  function testSavedServer(server: MCPServerConfiguration) {
-    testMutation.mutate(server, {
+  function testSavedServer(server: MCPServer) {
+    testMutation.mutate(mcpServerConfiguration(server), {
       onError: (error) => notify.error(`测试 ${server.name} 失败`, { error, fallback: "MCP 连接测试失败" }),
     });
   }
@@ -251,7 +267,14 @@ export function MCPConfigurationPanel() {
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1.5">
           <h2 id="mcp-configuration-heading" className="text-lg font-semibold">MCP 服务</h2>
-          <p className="text-muted-foreground text-sm">配置本机 MCP 服务。测试时会启动服务并读取它提供的工具。</p>
+          <p className="text-muted-foreground text-sm">
+            {workspaceId === null
+              ? "配置所有工作区共用的 MCP 服务。测试时会启动服务并读取它提供的工具。"
+              : "配置只在本工作区可用的 MCP 服务，stdio 服务在工作区根目录运行；与系统级同名时本工作区的优先。"}
+          </p>
+          {workspaceId !== null && (
+            <p className="text-muted-foreground text-xs">配置文件在工作区的 .cosir/config/mcp_servers.json，可能随代码提交；令牌等凭据建议放在系统级服务里。</p>
+          )}
         </div>
         <Button onClick={() => openEditor()} disabled={!servers || busy}><PlusIcon />添加服务</Button>
       </header>
@@ -266,18 +289,20 @@ export function MCPConfigurationPanel() {
         />
       ) : serversQuery.data.servers.length === 0 ? (
         <EmptyState
-          icon={<ServerIcon />}
+          icon={<NetworkIcon />}
           title="还没有 MCP 服务"
-          description="添加本机服务后，Agent 就可以发现并调用它提供的工具。"
+          description="添加服务并测试通过后，Agent 就可以发现并调用它提供的工具。"
         />
       ) : (
         <div className="space-y-3">
           {serversQuery.data.servers.map((server) => {
             const result = lastTests[server.name];
+            // 工作区里继承来的系统级服务只读：编辑、测试与启停都要去系统设置。
+            const inherited = server.scope !== scope;
             return (
-              <Card key={server.name} className="p-4">
+              <Card key={`${server.scope}:${server.name}`} className="p-4">
                 <div className="flex flex-wrap items-start gap-3">
-                  <ServerIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+                  <NetworkIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="truncate text-sm font-medium">{server.name}</h3>
@@ -287,12 +312,14 @@ export function MCPConfigurationPanel() {
                       <Badge size="sm" tone={server.tested ? "success" : "neutral"}>
                         {server.tested ? "测试通过" : "待测试"}
                       </Badge>
+                      {inherited && <Badge size="sm" tone="neutral">系统继承</Badge>}
+                      {server.overrides && <Badge size="sm" tone="neutral">覆盖系统同名</Badge>}
                     </div>
                     <p className="text-muted-foreground mt-1 truncate font-mono text-xs">
                       {server.transport === "stdio" ? `${server.command} ${server.args.join(" ")}` : server.url}
                       <span className="ml-2 font-sans">{transportLabel(server.transport)}</span>
                     </p>
-                    {!server.tested && <p className="text-muted-foreground mt-2 text-xs">连接测试成功并获取工具列表后，Agent 才能使用此服务。</p>}
+                    {!server.tested && <p className="text-muted-foreground mt-2 text-xs">在本机测试连接成功后，Agent 才能使用此服务。</p>}
                     {result && <p className={`mt-2 text-xs ${result.success ? "text-success" : "text-destructive"}`}>
                       {result.success ? `本次测试成功 · 发现 ${result.tools.length} 个工具` : `本次测试失败 · ${result.error || "请检查服务配置"}`}
                     </p>}
@@ -305,13 +332,17 @@ export function MCPConfigurationPanel() {
                       </details>
                     )}
                   </div>
-                  <Switch checked={server.enabled} aria-label={`${server.enabled ? "停用" : "启用"} ${server.name}`} disabled={busy || !server.tested} onClick={() => toggleServer(server)} />
+                  {!inherited && <Switch checked={server.enabled} aria-label={`${server.enabled ? "停用" : "启用"} ${server.name}`} disabled={busy || !server.tested} onClick={() => toggleServer(server)} />}
                 </div>
-                <div className="mt-4 flex flex-wrap justify-end gap-2">
-                  <Button variant="outline" size="sm" onClick={() => openEditor(server)} disabled={busy}><PencilIcon />编辑</Button>
-                  <Button variant="outline" size="sm" onClick={() => testSavedServer(server)} disabled={testMutation.isPending}><WrenchIcon />测试连接</Button>
-                  <Button variant="ghost" size="sm" onClick={() => void deleteServer(server)} disabled={busy} aria-label={`删除 ${server.name}`}><Trash2Icon /></Button>
-                </div>
+                {inherited ? (
+                  <p className="text-muted-foreground mt-3 text-right text-xs">在系统设置中管理</p>
+                ) : (
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    <Button variant="outline" size="sm" onClick={() => openEditor(server)} disabled={busy}><PencilIcon />编辑</Button>
+                    <Button variant="outline" size="sm" onClick={() => testSavedServer(server)} disabled={testMutation.isPending}><WrenchIcon />测试连接</Button>
+                    <Button variant="ghost" size="sm" onClick={() => void deleteServer(server)} disabled={busy} aria-label={`删除 ${server.name}`}><Trash2Icon /></Button>
+                  </div>
+                )}
               </Card>
             );
           })}
@@ -364,7 +395,7 @@ export function MCPConfigurationPanel() {
             {editorMode === "form" && <label className="flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm"><span>启用此服务</span><Switch checked={draft.enabled} aria-label="启用此服务" onClick={() => setDraft((current) => ({ ...current, enabled: !current.enabled }))} /></label>}
             {formError && <Alert tone="destructive">{formError}</Alert>}
             {testResult && <Alert role="status" tone={testResult.success ? "success" : "destructive"}>
-              {testResult.success ? `测试成功，已获取 ${testResult.tools.length} 个工具。${testResult.agent_available ? "Agent 已可使用此服务。" : "保存配置后，还需对已保存服务测试一次才能供 Agent 使用。"}` : `测试失败：${testResult.error || "请检查服务配置"}`}
+              {testResult.success ? `测试成功，已获取 ${testResult.tools.length} 个工具。${testResult.agent_available ? "Agent 已可使用此服务。" : "保存后 Agent 即可使用此服务。"}` : `测试失败：${testResult.error || "请检查服务配置"}`}
             </Alert>}
             {testResult?.success && testResult.tools.length > 0 && <ul className="max-h-40 space-y-1 overflow-y-auto rounded-lg bg-muted/40 p-3 text-xs">{testResult.tools.map((tool) => <li key={tool.name}><span className="font-mono font-medium">{tool.name}</span>{tool.description && <span className="text-muted-foreground ml-2">{tool.description}</span>}</li>)}</ul>}
             <DialogFooter>

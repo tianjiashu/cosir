@@ -7,7 +7,7 @@
 - :mod:`app.api.configuration.global_instructions`：``/configuration/global-instructions``；
 - :mod:`app.api.configuration.main_agent_prompt`：``/configuration/main-agent-prompt``；
 - :mod:`app.api.configuration.environment`：``/configuration/environment``；
-- :mod:`app.api.configuration.extensions`：系统级 MCP 服务和 Skill 管理；
+- :mod:`app.api.configuration.extensions`：系统级与 workspace 级 MCP 服务和 Skill 管理；
 - :mod:`app.api.configuration.errors`：各子域共用的「领域异常 → HTTP 错误」映射。
 
 路由仍以模块级 ``@app.*`` 装饰器注册到 ``app.app`` 的单例 FastAPI：由 ``app.app`` 在定义

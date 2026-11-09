@@ -1,3 +1,4 @@
+import { replaceSkillMentionsWithNames } from "@/lib/assistant/composer/skill-mention-token";
 import {
   markdownSegments,
   mapMarkdownText,
@@ -42,8 +43,8 @@ const INLINE_ATTACHMENT_TOKEN_PATTERN =
 /**
  * 去掉内联附件 token，得到用户可见文本。
  *
- * 负责什么：剔除 `[[cosir-file:<id>]]`、`[[cosir-image:<id>]]` 及其注释包裹形式，并把因此
- * 产生的多余空白压成单空格。
+ * 负责什么：剔除 `[[cosir-file:<id>]]`、`[[cosir-image:<id>]]` 及其注释包裹形式，把
+ * `[[cosir-skill:<name>]]` 换成 Skill 名称，并把因此产生的多余空白压成单空格。
  * 不负责什么：不截断长度、不判断附件是否真实存在、不修改任何事实。
  *
  * 参数:
@@ -57,7 +58,7 @@ const INLINE_ATTACHMENT_TOKEN_PATTERN =
  */
 export function stripInlineAttachmentTokens(text: string): string {
   return mapMarkdownText(text, (part) =>
-    part.replace(INLINE_ATTACHMENT_TOKEN_PATTERN, " "),
+    replaceSkillMentionsWithNames(part.replace(INLINE_ATTACHMENT_TOKEN_PATTERN, " ")),
   )
     .replace(/\s+/g, " ")
     .trim();

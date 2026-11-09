@@ -4,7 +4,7 @@ import {
   formatMcpServerJson,
   parseMcpServerJson,
 } from "@/components/configuration/mcp-config-json";
-import type { MCPServerConfiguration } from "@/lib/api/system-extensions";
+import type { MCPServerConfiguration } from "@/lib/api/extensions";
 
 const stdioServer: MCPServerConfiguration = {
   name: "filesystem",
