@@ -375,15 +375,10 @@ test("引用：Task 混合草稿切换后恢复附件并可移除", async ({ pag
     );
   });
   // 仅替代操作系统文件选择边界（fake-desktop-host），附件登记、AUI 适配器和草稿恢复仍走实际实现。
-  await page
-    .getByRole("button", { name: "添加图片、文件或文件夹", exact: true })
-    .click();
+  await page.getByRole("button", { name: "添加", exact: true }).click();
   const chooser = page.waitForEvent("filechooser");
-  await page
-    .getByRole("button", { name: "选择文件或图片", exact: true })
-    .click();
+  await page.getByRole("option", { name: /^文件或图片/ }).click();
   await (await chooser).setFiles({ name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("# notes") });
-  await page.keyboard.press("Escape");
   await expect(input).toContainText("notes.md");
   await page.getByText("混合草稿乙", { exact: true }).click();
   await expect(page).toHaveURL(/\/tasks\/101$/);

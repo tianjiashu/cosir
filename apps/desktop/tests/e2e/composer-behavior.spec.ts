@@ -10,16 +10,14 @@ const selectAll = process.platform === "darwin" ? "Meta+a" : "Control+a";
 const pickedNotes = { name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("# notes") };
 
 /**
- * 经附件按钮打开系统文件选择框（只替代操作系统边界）。返回选择框：调用方可以先切走会话，
- * 再交付文件，模拟用户迟迟才选好的情形。
+ * 经「+」菜单的「文件或图片」打开系统文件选择框（只替代操作系统边界）。选择框打开前菜单已收起。
+ * 返回选择框：调用方可以先切走会话，再交付文件，模拟用户迟迟才选好的情形。
  */
 async function openNativePicker(page: Page): Promise<FileChooser> {
-  await page.getByRole("button", { name: "添加图片、文件或文件夹", exact: true }).click();
+  await page.getByRole("button", { name: "添加", exact: true }).click();
   const chooser = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "选择文件或图片", exact: true }).click();
-  const fileChooser = await chooser;
-  await page.keyboard.press("Escape");
-  return fileChooser;
+  await page.getByRole("option", { name: /^文件或图片/ }).click();
+  return chooser;
 }
 
 async function nativePicker(page: Page) {
@@ -50,8 +48,8 @@ async function pasteImages(input: Locator, names: readonly string[]) {
   }, names);
 }
 
-async function openComposer(page: Page, mode: "new" | "task") {
-  await installFakeDesktopHost(page);
+async function openComposer(page: Page, mode: "new" | "task", host: { directory?: string } = {}) {
+  await installFakeDesktopHost(page, host);
   await page.goto(mode === "new" ? "/" : "/tasks/100");
   if (mode === "new") {
     await page.getByRole("button", { name: "选择工作区" }).click();
@@ -174,6 +172,50 @@ for (const mode of ["new", "task"] as const) {
     await pasteImages(input, ["a.png", "b.png", "c.png", "d.png"]);
     await expect(thumbnails).toHaveCount(20);
     await expect(page.getByRole("alert")).toContainText("一条消息最多 20 张图片，已跳过 2 张");
+  });
+}
+
+for (const mode of ["new", "task"] as const) {
+  test(`${mode} 「+」菜单：插入 Skill 与常用提示词，管理打开提示词库，文件夹以目录引用插入`, async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("cosir:favorite-prompts:v1", JSON.stringify([{ id: "p1", title: "代码审查", content: "请审查这次改动" }]));
+    });
+    const skill = (name: string, enabled: boolean) => ({ name, description: `${name} 的说明`, enabled, scope: "system", overrides: false });
+    await page.route(/\/configuration\/skills$/, (route) => route.fulfill({ json: [skill("release-notes", true), skill("disabled-skill", false)] }));
+    const { input } = await openComposer(page, mode, { directory: "C:/demo/docs" });
+    const addButton = page.getByRole("button", { name: "添加", exact: true });
+
+    // Skill 页只列已启用的，可搜索，选中后插入 Skill 胶囊并收起菜单。
+    await addButton.click();
+    await page.getByRole("option", { name: /^Skill/ }).click();
+    await expect(page.getByRole("option", { name: /disabled-skill/ })).toHaveCount(0);
+    await page.getByRole("combobox", { name: "搜索 Skill" }).fill("release");
+    await page.keyboard.press("Enter");
+    await expect(input.locator('[data-capsule-token][data-capsule-kind="skill"]')).toHaveCount(1);
+    await expect(page.getByRole("combobox", { name: "搜索 Skill" })).toHaveCount(0);
+
+    // 第一层可以只用键盘：方向键移到「常用提示词」，回车进入，返回后回到第一层。
+    await addButton.click();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await page.getByRole("button", { name: "返回", exact: true }).click();
+    await expect(page.getByRole("option", { name: /^文件夹/ })).toBeVisible();
+    await page.getByRole("option", { name: /^常用提示词/ }).click();
+    await page.getByRole("option", { name: /代码审查/ }).click();
+    await expect(input).toContainText("请审查这次改动");
+
+    await addButton.click();
+    await page.getByRole("option", { name: /^常用提示词/ }).click();
+    await page.getByRole("button", { name: "管理", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "管理常用提示词" })).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await addButton.click();
+    await page.getByRole("option", { name: /^文件夹/ }).click();
+    await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(1);
+    await expect(input).toContainText("docs");
   });
 }
 

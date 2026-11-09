@@ -2,7 +2,7 @@ import { expect, test, type Locator } from "@playwright/test";
 import type { Editor } from "@tiptap/core";
 import { API_ORIGIN } from "./e2e-env";
 
-const placeholder = "描述要做的事，例如：帮我查找登录相关代码…";
+const placeholder = "描述要做的事，输入 @ 引用工作区文件…";
 
 async function expectAlignedPlaceholder(input: Locator) {
   await expect(input).toHaveAttribute("aria-placeholder", placeholder);

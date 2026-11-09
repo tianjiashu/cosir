@@ -4,16 +4,18 @@ import type { ComponentProps, SetStateAction } from "react";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2Icon, SendIcon } from "lucide-react";
+import { ArrowUpIcon, Loader2Icon } from "lucide-react";
 
-import { ComposerControls } from "@/components/composer/composer-controls";
+import { ComposerAddMenu } from "@/components/composer/add-menu/add-menu";
 import { ComposerEditor, COMPOSER_EDITOR_CLASS_NAME, COMPOSER_PLACEHOLDER } from "@/components/composer/composer-editor";
 import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
 import { ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
 import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
-import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
+import { ModelSelector } from "@/components/composer/composer-model-selector";
 import { ComposerSurface } from "@/components/composer/composer-surface";
+import { ComposerToolbar } from "@/components/composer/composer-toolbar";
+import { ToolGroupSelector } from "@/components/composer/tool-group-selector";
 import { WorkspacePicker } from "@/components/new-conversation/workspace-picker";
 import { NewConversationBackdrop } from "@/components/new-conversation/backdrop";
 import { NewConversationKeyHints } from "@/components/new-conversation/key-hints";
@@ -24,7 +26,6 @@ import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { useModelCatalog } from "@/lib/model/catalog";
 import { cn } from "@/lib/utils";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model/selection-storage";
-import { AttachmentPicker } from "@/components/composer/attachment-picker";
 import { ImageAttachmentStrip } from "@/components/composer/image-attachment-strip";
 import { ImageTile } from "@/components/image/image-tile";
 import { useImageGallery } from "@/components/image/image-gallery";
@@ -279,45 +280,43 @@ export function NewConversation({
             aria-label="新对话内容"
             autoFocus
           />
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <ComposerPromptToolbar
-                toolGroups={toolGroups}
-                selectedToolGroups={selectedToolGroups}
-                onSelectedToolGroupsChange={setSelectedToolGroups}
-                toolGroupsLoading={toolGroupsQuery.isPending}
-                toolGroupsError={toolGroupsError}
-                disabled={submitting}
-                workspaceId={selectedWorkspaceId ?? null}
-              />
-              <ComposerControls
-                scope={selectedWorkspaceId ? { kind: "workspace", id: selectedWorkspaceId } : undefined}
-                onModelReadyChange={setModelReady}
-              />
-            </div>
-            <div className="flex items-center gap-1">
-              <AttachmentPicker
-                workspaceRoot={selectedWorkspace?.root_path}
-                images={images}
-                disabled={submitting}
-              />
-              {blockedReason && (
-                <span id={blockedReasonId} className="text-muted-foreground px-1 text-xs">{blockedReason}</span>
-              )}
-              {/* 没有草稿时只留图标，避免禁用态的文字按钮抢占视线；可访问名称始终是「开始对话」。 */}
-              <Button
-                type="submit"
-                size={hasDraft ? "default" : "icon"}
-                className="shrink-0 rounded-full"
-                disabled={!canStart}
-                aria-label="开始对话"
-                title="开始对话"
-                aria-describedby={blockedReason ? blockedReasonId : undefined}
-              >
-              {submitting ? <Loader2Icon className="animate-spin" /> : <SendIcon />}{hasDraft && "开始对话"}
-              </Button>
-            </div>
-          </div>
+          <ComposerToolbar
+            add={<ComposerAddMenu images={images} workspaceRoot={selectedWorkspace?.root_path} workspaceId={selectedWorkspaceId ?? null} disabled={submitting} />}
+            config={(
+              <>
+                <ToolGroupSelector
+                  toolGroups={toolGroups}
+                  selectedToolGroups={selectedToolGroups}
+                  onSelectedToolGroupsChange={setSelectedToolGroups}
+                  loading={toolGroupsQuery.isPending}
+                  error={toolGroupsError}
+                  disabled={submitting}
+                />
+                <ModelSelector
+                  scope={selectedWorkspaceId ? { kind: "workspace", id: selectedWorkspaceId } : undefined}
+                  onReadyChange={setModelReady}
+                />
+              </>
+            )}
+            action={(
+              <>
+                {blockedReason && (
+                  <span id={blockedReasonId} className="text-muted-foreground px-1 text-xs">{blockedReason}</span>
+                )}
+                <Button
+                  type="submit"
+                  size="icon"
+                  className="size-8 rounded-full"
+                  disabled={!canStart}
+                  aria-label="开始对话"
+                  title="开始对话"
+                  aria-describedby={blockedReason ? blockedReasonId : undefined}
+                >
+                  {submitting ? <Loader2Icon className="size-4 animate-spin" /> : <ArrowUpIcon className="size-4" />}
+                </Button>
+              </>
+            )}
+          />
           <ComposerFeedback />
           </ComposerFeedbackProvider>
         </ComposerSurface>

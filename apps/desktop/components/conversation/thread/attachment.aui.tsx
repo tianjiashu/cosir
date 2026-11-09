@@ -13,7 +13,6 @@ import { useImageGallery } from "@/components/image/image-gallery";
 import { useAttachmentWorkspaceId } from "@/components/conversation/thread/attachment-context";
 import { ImageAttachmentStrip } from "@/components/composer/image-attachment-strip";
 import { ImageTile } from "@/components/image/image-tile";
-import { AttachmentPicker } from "@/components/composer/attachment-picker";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
 import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
 import { useTaskComposerDraft } from "@/components/composer/use-composer-draft";
@@ -86,8 +85,8 @@ export const ComposerAttachments: FC = () => {
   );
 };
 
-/** assistant-ui composer 作为附件入口的图片集合；数量现读 composer 状态，不订阅。 */
-function useComposerImageSink(): ComposerImageSink {
+/** assistant-ui composer 作为附件入口的图片集合（输入框编辑器与「+」菜单共用）；数量现读 composer 状态，不订阅。 */
+export function useComposerImageSink(): ComposerImageSink {
   const aui = useAui();
   return {
     add: (file) => aui.composer.addAttachment(file),
@@ -177,17 +176,6 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
       hydrating={hydrating || restoringDraft}
       className={className}
       aria-label={ariaLabel}
-    />
-  );
-};
-
-export const ComposerAttachmentButton: FC<{ workspaceRoot?: string; disabled?: boolean }> = ({ workspaceRoot, disabled = false }) => {
-  const images = useComposerImageSink();
-  return (
-    <AttachmentPicker
-      workspaceRoot={workspaceRoot}
-      disabled={disabled}
-      images={images}
     />
   );
 };

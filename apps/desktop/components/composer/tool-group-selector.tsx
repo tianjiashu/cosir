@@ -12,8 +12,8 @@ import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 type ToolGroupSelectorProps = {
   toolGroups: ToolGroupCatalog[];
   /**
-   * 被关闭（禁用）的工具组。名称沿用上游 ComposerPromptToolbar 的 props；发送命令与 Run 冻结的
-   * `disabledToolGroups` 都以禁用的组名为契约，界面只是反过来呈现成开关。
+   * 被关闭（禁用）的工具组。名称沿用 runtime 层的 `selectedToolGroups`（名不副实，待单独改名）；发送命令与
+   * Run 冻结的 `disabledToolGroups` 都以禁用的组名为契约，界面只是反过来呈现成开关。
    */
   selectedToolGroups: string[];
   onSelectedToolGroupsChange?: (groups: string[]) => void;

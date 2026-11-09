@@ -10,8 +10,9 @@ export const COMPOSER_SURFACE_CLASS_NAME =
   "@container border-border/60 bg-card focus-within:border-brand/60 focus-within:ring-brand/20 focus-within:ring-2 flex min-w-0 w-full flex-col gap-2 rounded-3xl border p-2 shadow-sm";
 
 /**
- * 输入框底栏图标按钮（附件、常用提示词、Skills、工具）的统一外观：只放图标，名称走 `title` 与
- * `aria-label`。底栏同时容纳模型、上下文与发送，带文字的胶囊会在常见宽度下折成两行。
+ * 输入框底栏图标按钮（「+」添加菜单、工具）的统一外观：只放图标，名称走 `title` 与 `aria-label`。
+ * 底栏同时容纳模型、上下文与发送，带文字的胶囊会在常见宽度下折成两行；内容入口因此收进「+」菜单，
+ * 在菜单里才有名称与说明。
  */
 export const COMPOSER_ICON_BUTTON_CLASS_NAME =
   "text-muted-foreground hover:text-foreground hover:bg-muted-foreground/15 relative inline-flex size-7 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent [&_svg]:size-4";

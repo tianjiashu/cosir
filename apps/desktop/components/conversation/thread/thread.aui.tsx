@@ -14,9 +14,11 @@ import {
 
 import { StopButton } from "@/components/conversation-runtime/stop-button";
 import { TaskContextUsage } from "@/components/conversation-runtime/usage-display";
-import { ComposerControls } from "@/components/composer/composer-controls";
+import { ComposerAddMenu } from "@/components/composer/add-menu/add-menu";
+import { ModelSelector } from "@/components/composer/composer-model-selector";
+import { ComposerToolbar } from "@/components/composer/composer-toolbar";
+import { ToolGroupSelector } from "@/components/composer/tool-group-selector";
 import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
-import { ComposerPromptToolbar } from "@/components/composer/composer-prompt-toolbar";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import { CurrentActivity } from "@/components/conversation/turn/current-activity";
@@ -46,10 +48,10 @@ import { UserMessageContent, useHasUserMessageContent } from "@/components/conve
 import { UserMessageImages } from "@/components/conversation/thread/user-message-images";
 import { UserMessageBubble } from "@/components/conversation/thread/user-message-bubble";
 import {
-  ComposerAttachmentButton,
   ComposerSendButton,
   ComposerAttachments,
   InlineComposerInput,
+  useComposerImageSink,
 } from "@/components/conversation/thread/attachment.aui";
 import { COMPOSER_EDITOR_CLASS_NAME, COMPOSER_PLACEHOLDER } from "@/components/composer/composer-editor";
 import { COMPOSER_SURFACE_CLASS_NAME } from "@/components/composer/composer-surface";
@@ -205,21 +207,17 @@ const Composer = memo(function Composer() {
               aria-label="消息输入"
             />
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-              <ThreadComposerPromptToolbar lockedLaunch={runLaunch} />
-              <TaskContextUsage />
-              <div className="min-w-0 flex-1">
-                <ComposerControls
-                  scope={{ kind: "task", id: taskId }}
-                  runtimeModelContext
-                  locked={runLaunch}
-                />
-              </div>
-            </div>
-            <ComposerAttachmentButton workspaceRoot={workspaceRoot} />
-            <ComposerAction />
-          </div>
+          <ComposerToolbar
+            add={<ThreadComposerAddMenu workspaceRoot={workspaceRoot} />}
+            config={(
+              <>
+                <ThreadToolGroupSelector lockedLaunch={runLaunch} />
+                <ModelSelector scope={{ kind: "task", id: taskId }} runtimeModelContext locked={runLaunch} />
+              </>
+            )}
+            status={<TaskContextUsage />}
+            action={<ComposerAction />}
+          />
           <ComposerFeedback />
         </ComposerPrimitive.Root>
       </ComposerFeedbackProvider>
@@ -229,25 +227,28 @@ const Composer = memo(function Composer() {
 
 const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
 
+/** 任务页的「+」菜单：图片交给 assistant-ui composer，Skill 按 Task 所在工作区列出。 */
+const ThreadComposerAddMenu: FC<{ workspaceRoot?: string }> = ({ workspaceRoot }) => {
+  const composer = unstable_useComposerInput();
+  const { workspaceId } = useThreadContext();
+  return <ComposerAddMenu images={useComposerImageSink()} workspaceRoot={workspaceRoot} workspaceId={workspaceId} disabled={composer.isDisabled} />;
+};
+
 /** `lockedLaunch` 为活动 Run 冻结的配置：工具组按它冻结的组名回显、只读。 */
-const ThreadComposerPromptToolbar: FC<{ disabled?: boolean; lockedLaunch?: TransportRunLaunch | null }> = ({
-  disabled = false,
-  lockedLaunch = null,
-}) => {
+const ThreadToolGroupSelector: FC<{ lockedLaunch?: TransportRunLaunch | null }> = ({ lockedLaunch = null }) => {
   const composer = unstable_useComposerInput();
   const context = useThreadContext();
   const toolGroups = context.toolGroups ?? EMPTY_TOOL_GROUPS;
   const lockedGroups = lockedLaunch?.disabledToolGroups ?? null;
   return (
-    <ComposerPromptToolbar
+    <ToolGroupSelector
       toolGroups={toolGroups}
       selectedToolGroups={lockedGroups ?? context.selectedToolGroups ?? []}
       onSelectedToolGroupsChange={lockedLaunch === null ? context.onSelectedToolGroupsChange : undefined}
-      toolGroupsLoading={context.toolGroupsLoading}
-      toolGroupsError={context.toolGroupsError}
-      disabled={disabled || composer.isDisabled}
-      toolGroupsLockedHint={lockedGroups === null ? undefined : RUN_LAUNCH_LOCKED_HINT}
-      workspaceId={context.workspaceId}
+      loading={context.toolGroupsLoading}
+      error={context.toolGroupsError}
+      disabled={composer.isDisabled}
+      lockedHint={lockedGroups === null ? undefined : RUN_LAUNCH_LOCKED_HINT}
     />
   );
 };
