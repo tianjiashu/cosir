@@ -194,7 +194,7 @@ def test_service_error_observation_marks_rejected_handshake_as_not_retryable() -
     """投影给模型的握手错误必须不可重试，并给「先修再试」而非「稍后重试」。"""
 
     observation = service_error_observation(
-        "terminal_start",
+        "terminal_write",
         TerminalWorkerHandshakeError("handshake rejected"),
     )
 
@@ -220,7 +220,6 @@ def test_rejected_handshake_raises_handshake_error_and_logs_field_comparison(
             "pty_kind": "conpty",
             "rows": 24,
             "columns": 80,
-            "capabilities": [],
         }
     )
     _patch_worker_process(monkeypatch, _FakeProcess(stale_handshake))
@@ -330,7 +329,6 @@ def _valid_handshake(instance_id: str) -> bytes:
             "pty_kind": "unix_pty",
             "rows": 24,
             "columns": 80,
-            "capabilities": [],
         }
     )
 

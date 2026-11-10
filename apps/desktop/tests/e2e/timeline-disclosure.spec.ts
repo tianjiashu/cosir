@@ -151,7 +151,10 @@ test("A10 automatic folding hands focus from the hidden process to its heading",
 });
 
 test("A10 a block losing its always-visible reason hands focus to the heading", async ({ page, request }) => {
-  const waiting = toolCallPart("hand", "terminal_handoff", { status: "pending", awaitingUser: true, args: { session_id: "s" } });
+  const waiting = toolCallPart("hand", "browser_handoff", {
+    status: "pending", awaitingUser: true, args: { reason: "完成登录" },
+    display_data: { kind: "browser-page", tab_id: "t1", url: "https://example.test/login", title: "登录", handoff_reason: "完成登录后交还" },
+  });
   const final = text("结论", true);
   await seedState(request, 42, state([waiting, final], outcome("completed", { durationMs: 8000 })));
   await page.goto("/tasks/42");

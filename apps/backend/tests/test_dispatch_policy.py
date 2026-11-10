@@ -50,7 +50,7 @@ def _user(
 
 def _notice(message_id: int) -> TaskMessage:
     return TaskMessage.of(
-        NoticeBody(content="n", notice_kind="terminal_session_ended"), message_id=message_id
+        NoticeBody(content="n", notice_kind="backend_restarted"), message_id=message_id
     )
 
 

@@ -1,6 +1,6 @@
 """终端工作台 HTTP：shell 列表、活跃计数、用户新建 / 关闭会话与错误映射。
 
-终端服务用替身：本文件只验证 HTTP 编排（Task 类型判定、工作区根目录、``created_by="user"``）与
+终端服务用替身：本文件只验证 HTTP 编排（Task 类型判定、工作区根目录）与
 ``detail={code, message, retryable}`` 的状态码映射，会话生命周期由终端服务自己的测试覆盖。
 """
 
@@ -49,10 +49,10 @@ class _FakeTerminals:
         self.started.append(kwargs)
         return SimpleNamespace(session_id="term_new")
 
-    def close(self, session_id: str, *, task_id: int, by: str) -> dict[str, object]:
+    def close(self, session_id: str, *, task_id: int) -> dict[str, object]:
         if self.close_error is not None:
             raise self.close_error
-        self.closed.append((session_id, task_id, by))
+        self.closed.append((session_id, task_id))
         return {}
 
 
@@ -104,7 +104,6 @@ def test_user_creates_session_for_sidebar_task(
             "task_id": task_id,
             "workspace_root": workspace.root_path,
             "shell": "bash",
-            "created_by": "user",
             "run_id": None,
         }
     ]
@@ -181,7 +180,7 @@ def test_close_session(client: TestClient, terminals: _FakeTerminals, workspace:
     response = client.delete(f"/tasks/{task_id}/terminal/sessions/term_a")
     assert response.status_code == 200
     assert response.json() == {}
-    assert terminals.closed == [("term_a", task_id, "user")]
+    assert terminals.closed == [("term_a", task_id)]
 
 
 @pytest.mark.parametrize(

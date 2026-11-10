@@ -58,7 +58,7 @@ describe("Transport snapshot validation", () => {
 
     const snapshot = transportState({
       terminal_sessions: [
-        terminalSession("t1", { createdBy: "agent", label: "dev server" }),
+        terminalSession("t1", { label: "dev server" }),
         terminalSession("t2", { status: "exited", exitCode: 0, endReason: "shell_exited", integration: "unavailable" }),
       ],
     });
@@ -78,17 +78,23 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(transportState({
       terminal_sessions: [{ ...terminalSession("t1"), handoff: null } as never],
     }))).toThrow(TransportSnapshotValidationError);
+    // 会话只由用户创建，不再有创建者字段。
+    expect(() => parseTransportState(transportState({
+      terminal_sessions: [{ ...terminalSession("t1"), createdBy: "user" } as never],
+    }))).toThrow(TransportSnapshotValidationError);
   });
 
-  it("handoffs 是必填数组：字段固定、资源类型受控、调用与资源各自唯一", () => {
+  it("handoffs 是必填数组：字段固定、只接受浏览器表面、调用与资源各自唯一", () => {
     const withoutHandoffs: Record<string, unknown> = { ...transportState() };
     delete withoutHandoffs.handoffs;
     expect(() => parseTransportState(withoutHandoffs)).toThrow(/snapshot/);
 
     const entry = { toolCallId: "c1", toolName: "browser_handoff", surface: "browser" as const, resourceId: "t1", reason: "登录" };
-    const snapshot = transportState({ handoffs: [entry, { ...entry, toolCallId: "c2", surface: "terminal", resourceId: "t1" }] });
+    const snapshot = transportState({ handoffs: [entry, { ...entry, toolCallId: "c2", resourceId: "t2" }] });
     expect(parseTransportState(snapshot)).toBe(snapshot);
 
+    // 终端交接已删除，只接受浏览器。
+    expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, surface: "terminal" } as never] }))).toThrow(/handoffs\[0\]\.surface/);
     expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, surface: "editor" } as never] }))).toThrow(/handoffs\[0\]\.surface/);
     expect(() => parseTransportState(transportState({ handoffs: [entry, { ...entry, toolCallId: "c2" }] }))).toThrow(/handoffs\[1\]/);
     expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, extra: 1 } as never] }))).toThrow(TransportSnapshotValidationError);

@@ -32,7 +32,6 @@ def _entry(session_id: str = "term_1", **overrides: Any) -> dict[str, Any]:
         "sessionId": session_id,
         "label": "终端 1",
         "shellKind": "zsh",
-        "createdBy": "user",
         "status": "running",
         "endReason": None,
         "exitCode": None,
@@ -56,7 +55,6 @@ class _FakeRuntime:
             session_id=entry["sessionId"],
             label=entry["label"] or None,
             shell_kind=entry["shellKind"],
-            created_by=entry["createdBy"],
             initial_cwd="/workspace",
             created_at=datetime.fromisoformat(entry["createdAt"]),
             status=entry["status"],
@@ -133,7 +131,7 @@ def test_snapshot_without_terminal_sessions_is_rejected() -> None:
     "entry",
     [
         _entry(status="interrupted"),
-        _entry(createdBy="system"),
+        _entry(label=1),
         _entry(integration="maybe"),
         _entry(commandRunning="yes"),
         _entry(exitCode=True),
@@ -153,7 +151,7 @@ def test_invalid_terminal_session_entries_are_rejected(entry: dict[str, Any]) ->
 def test_valid_entries_including_exit_pass() -> None:
     state = empty_snapshot()
     state["terminal_sessions"] = [  # type: ignore[list-item]
-        _entry("a", createdBy="agent"),
+        _entry("a"),
         _entry("b", status="exited", endReason="shell_exited", exitCode=0, integration="off"),
     ]
     validate_snapshot(state)

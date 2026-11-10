@@ -1,4 +1,4 @@
-"""交互通道 terminal-v2：asyncio 桥接订阅、背压与 WS 帧（输入 / resize / 租约 / 交接）。"""
+"""交互通道 terminal-v2：asyncio 桥接订阅、背压与 WS 帧（用户输入 / resize）。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from terminal_test_support import make_service, start
+from terminal_test_support import ReadyWorker, make_service, start
 
 from app.config.constant import Constant
 from app.tools.terminal_runtime.stream import (
@@ -109,7 +109,7 @@ async def test_websocket_input_resize_and_exit(monkeypatch, tmp_path: Path):
     from app.api.terminal_stream_api import terminal_session_stream
 
     service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path, created_by="user")
+    session_id = start(service, tmp_path)
     workers[0].output(b"hello")
     ws = FakeWebSocket()
     ws.push({"type": "attach", "after_seq": None})
@@ -136,27 +136,27 @@ async def test_websocket_input_resize_and_exit(monkeypatch, tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_websocket_accepts_input_while_agent_waits(monkeypatch, tmp_path: Path):
+async def test_websocket_accepts_user_input_after_agent_prefill(monkeypatch, tmp_path: Path):
     from app.api.terminal_stream_api import terminal_session_stream
-    from app.tools.terminal_runtime.inputs import TerminalWait
 
-    service, workers = make_service(monkeypatch)
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
     session_id = start(service, tmp_path)
+    workers[0].screen(["$ "], cursor=(0, 2))
+    workers[0].shell("shell_prompt", cwd="/w")
     ws = FakeWebSocket()
     ws.push({"type": "attach", "after_seq": None})
     task = asyncio.create_task(terminal_session_stream(ws, 1, session_id, service))
     await _settle(lambda: "attached" in ws.types())
-    writer = threading.Thread(target=lambda: service.require(session_id, 1).write(
-        {"type": "line", "text": "sleep"}, "op",
-        TerminalWait(until="elapsed", timeout_ms=500), run_id=1, tool_call_id="call-op",
-        is_cancelled=lambda: False))
-    writer.start()
+    service.require(session_id, 1).prefill(
+        "echo hi", run_id=1, tool_call_id="call-prefill"
+    )
     await _settle(lambda: "input_mark" in ws.types())
+    assert workers[0].writes == [{"type": "prefill", "text": "echo hi"}]
+    # 填入不执行、也不占用输入权：用户随后按键照常送达。
     ws.push({"type": "input", "data_base64": base64.b64encode(b"q").decode()})
     await _settle(lambda: len(workers[0].writes) == 2)
     assert workers[0].writes[-1] == {"type": "raw", "data_base64": "cQ=="}
     assert "input_rejected" not in ws.types()
-    writer.join(2)
     ws.disconnect()
     await asyncio.wait_for(task, 2)
 

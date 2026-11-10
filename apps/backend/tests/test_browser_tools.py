@@ -1055,7 +1055,11 @@ def test_handoff_requires_host_operation_to_have_settled(monkeypatch, context, o
     _install(monkeypatch, [{**TABS[0], "operation": operation}])
     result = BrowserHandoffTool().execute("please sign in", None, execution_context=context)
     assert result.status == "error"
-    assert handoff_registry.on_resource("browser", "t1") is None
+    assert [
+        lease
+        for lease in handoff_registry.leases(context.task_id)
+        if lease.resource_id == "t1"
+    ] == []
 
 
 def test_handoff_constraint_is_attached_to_subsequent_requests(monkeypatch, context):

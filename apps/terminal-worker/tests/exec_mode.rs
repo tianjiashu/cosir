@@ -153,15 +153,11 @@ fn a_stop_that_arrives_after_the_command_exited_keeps_the_exit() {
 fn input_frames_are_rejected_without_stopping_the_command() {
     let mut worker = Worker::start(exec("sleep 0.3; echo done"));
     assert_eq!(worker.next_event()["type"], "handshake");
-    worker.send(json!({"type": "write", "input": {"type": "line", "text": "x"}}));
-    worker.send(json!({"type": "signal", "request_id": "r1", "signal": "interrupt"}));
+    worker.send(json!({"type": "write", "input": {"type": "prefill", "text": "x"}}));
     let events = worker.events();
     assert!(events
         .iter()
         .any(|event| event["type"] == "error" && event["code"] == "input_rejected"));
-    assert!(events.iter().any(|event| event["type"] == "signal_result"
-        && event["request_id"] == "r1"
-        && event["status"] == "unsupported"));
     assert_eq!(output(&events), "done\n");
     assert_eq!(
         events.last().unwrap(),

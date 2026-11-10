@@ -1,106 +1,52 @@
-"""终端工具面：5 个工具、按平台生成的按键 / 信号 schema、参数边界、展示数据与错误短提示。"""
+"""终端工具面：3 个工具（list / read / write）、参数边界、展示数据与错误短提示。"""
 
 from __future__ import annotations
 
-import json
 import uuid
-from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 from terminal_test_support import ReadyWorker, make_service
 
 from app.core.tool.background.background_registry import background_registry
-from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
-from app.core.workflow.message_queue.task_message import DecisionBody
 from app.service import depends
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
+    TerminalPrefillRejectedError,
     TerminalSessionNotFoundError,
     TerminalSessionStateError,
-    TerminalUserCommandRunningError,
-    TerminalUserTypingError,
 )
 from app.tools.terminal_runtime.shell_resolver import ShellResolver
 from app.tools.tool_handler.terminal_session import (
-    TerminalHandoffTool,
     TerminalListTool,
     TerminalReadTool,
-    TerminalStartTool,
     TerminalWriteTool,
     build_terminal_definitions,
 )
 from app.tools.tool_handler.terminal_session.common import service_error_observation
-from app.tools.tool_models import TerminalReadArgs, TerminalStartArgs, TerminalWriteArgs
+from app.tools.tool_models import TerminalReadArgs, TerminalWriteArgs
 
 
-def test_exactly_six_terminal_tools_are_built() -> None:
+def test_exactly_three_terminal_tools_are_built() -> None:
     definitions = {definition.name: definition for definition in build_terminal_definitions()}
-    assert list(definitions) == [
-        "terminal_list", "terminal_start", "terminal_read", "terminal_write",
-        "terminal_handoff", "terminal_close",
-    ]
-    # 交接复用 HITL：只有它声明需要用户决定，决定之后重放原调用。
-    assert definitions["terminal_handoff"].user_decision == "execute"
-    assert all(
-        definition.user_decision is None
-        for name, definition in definitions.items()
-        if name != "terminal_handoff"
-    )
+    assert list(definitions) == ["terminal_list", "terminal_read", "terminal_write"]
+    # Agent 对交互终端没有任何 HITL 工具：填入不执行，也不需要用户交还。
+    assert all(definition.user_decision is None for definition in definitions.values())
 
 
-@pytest.mark.parametrize(
-    ("system", "control", "signals"),
-    [("Darwin", "ctrl_d", ["interrupt", "suspend", "eof"]), ("Windows", "ctrl_z", ["interrupt"])],
-)
-def test_write_schema_keys_and_signals_follow_host(monkeypatch, system, control, signals) -> None:
-    monkeypatch.setattr("platform.system", lambda: system)
+def test_write_schema_is_strict_and_fills_without_running() -> None:
     schema = strict_parameters_schema(TerminalWriteArgs)
-    keys = schema["$defs"]["InputKeys"]["properties"]["keys"]["items"]["enum"]
-    assert control in keys and "shift_tab" in keys and "page_down" in keys
-    assert schema["$defs"]["InputSignal"]["properties"]["signal"]["enum"] == signals
-    other = "ctrl_z" if control == "ctrl_d" else "ctrl_d"
+    assert set(schema["properties"]) == {"session_id", "command"}
+    assert "It is not run" in schema["properties"]["command"]["description"]
+    from jsonschema import Draft202012Validator
+
+    Draft202012Validator(schema).validate({"session_id": "s", "command": "echo hi"})
     with pytest.raises(ValidationError):
-        TerminalWriteArgs.model_validate(
-            {"session_id": "s", "operation_id": "o", "input": {"type": "keys", "keys": [other]}}
-        )
-
-
-def test_write_schema_is_strict_and_accepts_every_input_type() -> None:
-    schema = strict_parameters_schema(TerminalWriteArgs)
-    validator = Draft202012Validator(schema)
-    wait = {"until": "match", "pattern": "ok", "quiet_ms": None, "timeout_ms": 30000}
-    for input_value in (
-        {"type": "line", "text": "ls"},
-        {"type": "keys", "keys": ["tab"]},
-        {"type": "signal", "signal": "interrupt"},
-    ):
-        validator.validate({"session_id": "s", "operation_id": "o", "input": input_value,
-                            "wait": wait})
-    assert "oneOf" not in json.dumps(schema) and "discriminator" not in json.dumps(schema)
-
-
-@pytest.mark.parametrize(
-    "bad",
-    [
-        {"input": {"type": "line", "text": "a\nb"}},
-        {"input": {"type": "keys", "keys": []}},
-        {"input": {"type": "key", "key": "ctrl_c"}},
-        {"wait": {"until": "match"}},
-        {"wait": {"until": "match", "pattern": "("}},
-        {"wait": {"until": "elapsed", "timeout_ms": 3_600_001}},
-    ],
-)
-def test_write_arguments_reject_invalid_input(bad: dict[str, Any]) -> None:
-    raw = {"session_id": "s", "operation_id": "o", "input": {"type": "line", "text": "x"}, **bad}
-    with pytest.raises(ValidationError):
-        TerminalWriteArgs.model_validate(raw)
+        TerminalWriteArgs.model_validate({"session_id": "s", "command": "x", "input": {}})
 
 
 def test_read_arguments_bound_limits() -> None:
@@ -114,46 +60,22 @@ def test_read_arguments_bound_limits() -> None:
 
 
 def test_error_observations_use_controlled_status_hints() -> None:
-    typing = service_error_observation("terminal_write", TerminalUserTypingError("typing"))
-    assert typing.display_data["status_hint"] == "用户输入中"
-    assert "Wait a few seconds" in (typing.content or "")
-    busy = service_error_observation("terminal_write", TerminalUserCommandRunningError("busy"))
-    assert busy.display_data["status_hint"] == "用户命令中"
-    assert "Use another session" in (busy.content or "")
-    need = service_error_observation("terminal_write", TerminalIntegrationRequiredError("x"))
+    rejected = service_error_observation(
+        "terminal_write", TerminalPrefillRejectedError("a command is running")
+    )
+    assert rejected.display_data["status_hint"] == "无法填入"
+    assert "Give the command in your reply" in (rejected.content or "")
+    need = service_error_observation("terminal_read", TerminalIntegrationRequiredError("x"))
     assert need.display_data["status_hint"] == "缺少集成"
     assert "until=output_quiet" in (need.content or "")
     gone = service_error_observation(
-        "terminal_write", TerminalSessionNotFoundError("session s no longer exists")
+        "terminal_read", TerminalSessionNotFoundError("session s no longer exists")
     )
     assert "terminal_list" in (gone.content or "")
-    other = service_error_observation("terminal_write", TerminalSessionStateError("x"))
+    other = service_error_observation("terminal_read", TerminalSessionStateError("x"))
     assert other.display_data["status_hint"] == "终端失败"
     # 多因的 StateError 不追加类型级建议：message 已是完整事实。
     assert (other.content or "").endswith(": x")
-
-
-def test_start_shell_description_lists_installed_shells_and_paths(monkeypatch) -> None:
-    """候选值在字段描述里同源生成（模型不必先调 terminal_list），并保留自定义可执行文件路径；
-    Agent 拿不到它无法决策的 integration 开关。"""
-
-    from app.tools.tool_handler.terminal_session import start as start_module
-
-    monkeypatch.setattr(
-        start_module.ShellResolver, "resolve", lambda *_a, **_k: SimpleNamespace(kind="zsh")
-    )
-    monkeypatch.setattr(
-        start_module.ShellResolver,
-        "available",
-        lambda **_k: [{"kind": "zsh"}, {"kind": "fish"}],
-    )
-
-    schema = start_module._parameters_schema(TerminalStartArgs)
-    description = schema["properties"]["shell"]["description"]
-    assert "auto" in description and "zsh" in description
-    assert "Installed here: zsh, fish." in description
-    assert "path to a shell executable" in description
-    assert "integration" not in schema["properties"]
 
 
 def test_shell_resolver_lists_installed_shells_with_integration(monkeypatch) -> None:
@@ -203,69 +125,43 @@ def _context(tmp_path: Path) -> Any:
 
 def test_tool_handlers_return_observation_text_and_display_data(tool_service, tmp_path) -> None:
     service, workers = tool_service
-    started = TerminalStartTool().execute(execution_context=_context(tmp_path), label="dev")
-    assert started.display_data["kind"] == "terminal-session"
-    assert started.display_data["label"] == "dev"
-    session_id = str(started.display_data["session_id"])
-    # 给模型的是一行摘要，不再是 JSON 元数据；集成就绪时不出现 integration 提示。
-    assert started.content == f'session {session_id} "dev" by agent · zsh · running'
-
-    workers[0].screen(["$ "], cursor=(0, 2))
-
-    written = TerminalWriteTool().execute(
-        session_id=session_id, operation_id="op", input={"type": "line", "text": "echo hi"},
-        wait={"until": "elapsed", "pattern": None, "quiet_ms": None, "timeout_ms": 0},
-        execution_context=_context(tmp_path),
+    runtime = service.start(  # noqa: S604 - 显式 shell 取值，测试不启动真实 shell
+        task_id=1, workspace_root=str(tmp_path), shell="auto", label="dev", run_id=None
     )
-    assert written.status == "success" and not written.suspend
-    assert (written.content or "").startswith(f"session {session_id} · zsh · running")
-    assert written.display_data == {
+    session_id = runtime.session_id
+    workers[0].screen(["$ "], cursor=(0, 2))
+    workers[0].shell("shell_prompt", cwd="/w")
+
+    filled = TerminalWriteTool().execute(
+        session_id=session_id, command="echo hi", execution_context=_context(tmp_path)
+    )
+    assert filled.status == "success" and not filled.suspend
+    assert workers[0].writes == [{"type": "prefill", "text": "echo hi"}]
+    assert (filled.content or "").startswith(f"session {session_id} · zsh · running")
+    assert "filled into the prompt" in (filled.content or "")
+    assert filled.display_data == {
         "kind": "terminal-session",
         "session_id": session_id,
         "status": "running",
         "lines": [1, 1],
         "screen": False,
-        "wait_result": {"until": "elapsed", "end_reason": "elapsed"},
+        "wait_result": None,
         "input_summary": "echo hi",
     }
 
-    handoff_context = _context(tmp_path)
-    handoff = TerminalHandoffTool().execute(
-        session_id=session_id, reason="password", execution_context=handoff_context
+    # 同一提示符上第二次填入是受控错误，短提示为「无法填入」。
+    again = TerminalWriteTool().execute(
+        session_id=session_id, command="echo again", execution_context=_context(tmp_path)
     )
-    # 首次调用是 HITL 等待占位：挂起 Agent，交接登记在交接登记表。
-    assert handoff.suspend is True and handoff.awaiting_decision is True
-    assert handoff.display_data["input_summary"] == "password"
-    [lease] = handoff_registry.leases(1)
-    assert (lease.surface, lease.resource_id, lease.tool_call_id) == (
-        "terminal",
-        session_id,
-        handoff_context.tool_call_id,
-    )
-    # 用户交还：决定到达后重放同一调用，报告交接以来的输出并清除交接。
-    workers[0].screen(["$ ", "$ sudo ok"], cursor=(1, 9))
-    returned = TerminalHandoffTool().execute(
-        session_id=session_id,
-        reason="password",
-        execution_context=replace(
-            handoff_context,
-            user_decision=DecisionBody(
-                tool_call_id=handoff_context.tool_call_id,
-                tool_name="terminal_handoff",
-                decision="approve",
-            ),
-        ),
-    )
-    assert returned.status == "success" and not returned.suspend
-    assert "handed the terminal back" in (returned.content or "")
-    assert handoff_registry.leases(1) == []
+    assert again.status == "error" and "TERMINAL_PREFILL_REJECTED" in (again.content or "")
+    assert again.display_data["status_hint"] == "无法填入"
 
     read = TerminalReadTool().execute(session_id=session_id, execution_context=_context(tmp_path))
-    assert read.display_data["lines"] == [1, 2] and "input_summary" not in read.display_data
+    assert read.display_data["lines"] == [1, 1] and "input_summary" not in read.display_data
 
     listed = TerminalListTool().execute(execution_context=_context(tmp_path))
     session_line, shells_line = (listed.content or "").split("\n")
-    assert session_line.startswith(f'session {session_id} "dev" by agent · zsh · running')
+    assert session_line.startswith(f'session {session_id} "dev" · zsh · running')
     assert shells_line.startswith("shells: ")
     assert listed.display_data == {"kind": "terminal-session", "session_count": 1}
 
@@ -277,29 +173,13 @@ def test_command_returned_without_integration_is_tool_error(monkeypatch, tmp_pat
         "app.tools.tool_handler.terminal_session.common.should_stop_call",
         lambda task_id, tool_call_id: False,
     )
-    started = TerminalStartTool().execute(execution_context=_context(tmp_path))
-    session_id = str(started.display_data["session_id"])
-    result = TerminalWriteTool().execute(
-        session_id=session_id, operation_id="op", input={"type": "line", "text": "ls"},
+    runtime = service.start(  # noqa: S604 - 显式 shell 取值，测试不启动真实 shell
+        task_id=1, workspace_root=str(tmp_path), shell="auto", run_id=None
+    )
+    result = TerminalReadTool().execute(
+        session_id=runtime.session_id,
         wait={"until": "command_returned", "pattern": None, "quiet_ms": None, "timeout_ms": None},
         execution_context=_context(tmp_path),
     )
     assert result.status == "error"
     assert "TERMINAL_INTEGRATION_REQUIRED" in (result.content or "")
-
-
-def test_handoff_replay_after_the_session_is_gone_reports_it(tool_service, tmp_path) -> None:
-    """后端重启或会话被淘汰后才交还：会话已不在，结果照常让等待占位收尾。"""
-    context = _context(tmp_path)
-    returned = TerminalHandoffTool().execute(
-        session_id="term_missing",
-        reason="password",
-        execution_context=replace(
-            context,
-            user_decision=DecisionBody(
-                tool_call_id=context.tool_call_id, tool_name="terminal_handoff", decision="approve"
-            ),
-        ),
-    )
-    assert returned.status == "success"
-    assert "no longer exists" in (returned.content or "")

@@ -16,7 +16,6 @@ from typing import Any
 
 import pytest
 
-from app.tools.terminal_runtime.inputs import keys_for_platform
 from app.tools.terminal_runtime.session_service import TerminalSessionService
 
 
@@ -35,9 +34,6 @@ requires_terminal_worker = pytest.mark.skipif(
     not terminal_worker_path().is_file(), reason="terminal-worker binary is not built"
 )
 
-ALL_KEYS = sorted(set(keys_for_platform("Linux")) | set(keys_for_platform("Windows")))
-
-
 class FakeWorker:
     pid = 4321
     rows = 24
@@ -46,14 +42,8 @@ class FakeWorker:
 
     def __init__(self) -> None:
         self.geometry = {"rows": self.rows, "columns": self.columns}
-        self.capabilities = frozenset(
-            {"input_keys", "signal_interrupt", "signal_suspend",
-             "signal_eof_canonical"}
-            | {f"key_{key}" for key in ALL_KEYS}
-        )
         self.callback: Callable[[dict[str, Any]], None] | None = None
         self.writes: list[dict[str, Any]] = []
-        self.signals: list[str] = []
         self.resizes: list[tuple[int, int]] = []
         self.closed = False
         self.on_write: Callable[[FakeWorker, dict[str, Any]], None] | None = None
@@ -70,9 +60,6 @@ class FakeWorker:
         self.writes.append(dict(input))
         if self.on_write is not None:
             self.on_write(self, dict(input))
-
-    def signal(self, signal_name: str) -> None:
-        self.signals.append(signal_name)
 
     def resize(self, rows: int, columns: int) -> None:
         self.resizes.append((rows, columns))
@@ -135,7 +122,6 @@ def make_service(
     *,
     worker_type: type[FakeWorker] = FakeWorker,
     on_changed: Callable[[int], None] | None = None,
-    on_agent_ended: Callable[[int, str], None] | None = None,
 ) -> tuple[TerminalSessionService, list[FakeWorker]]:
     """只在具体构造边界替换 worker，收集每个会话独立创建的替身。"""
 
@@ -154,7 +140,7 @@ def make_service(
         "app.tools.terminal_runtime.session_service.ShellResolver.resolve",
         lambda shell, integration="auto", **_: _spec(shell, integration),
     )
-    capture_terminal_effects(monkeypatch, on_changed=on_changed, on_agent_ended=on_agent_ended)
+    capture_terminal_effects(monkeypatch, on_changed=on_changed)
     return TerminalSessionService(), workers
 
 
@@ -162,16 +148,12 @@ def capture_terminal_effects(
     monkeypatch: Any,
     *,
     on_changed: Callable[[int], None] | None = None,
-    on_agent_ended: Callable[[int, str], None] | None = None,
 ) -> None:
-    """替换会话对应用层的两个副作用（snapshot 重投影、会话结束通知）；交接落定由各测试自行替换。"""
-    from app.tools.terminal_runtime import session_effects
+    """替换会话对应用层的副作用（snapshot 重投影）；会话本身不触达其他应用层动作。"""
+    from app.tools.terminal_runtime import session_runtime
 
     monkeypatch.setattr(
-        session_effects, "refresh_task_sessions", on_changed or (lambda _task: None)
-    )
-    monkeypatch.setattr(
-        session_effects, "post_session_ended_notice", on_agent_ended or (lambda _task, _text: None)
+        session_runtime, "refresh_task_sessions", on_changed or (lambda _task: None)
     )
 
 
@@ -183,17 +165,24 @@ def _spec(shell: str, integration: str) -> Any:
 
 
 def start(service: TerminalSessionService, tmp_path: Any, *, task_id: int = 1,
-          created_by: str = "agent", shell: str = "auto") -> str:
+          shell: str = "auto") -> str:
     runtime = service.start(
         task_id=task_id,
         workspace_root=str(tmp_path),
         shell=shell,
-        created_by=created_by,  # type: ignore[arg-type]
-        run_id=1 if created_by == "agent" else None,
+        run_id=None,
     )
-    if created_by == "agent":
-        runtime.wait_for_integration()  # 与 terminal_start 工具一致
     return runtime.session_id
+
+
+def user_enter(runtime: Any, text: str = "") -> None:
+    """以用户身份敲一行（原文 + 回车）：与终端 WS 的 raw 帧同一路径，Agent 不再有这条路径。"""
+    assert runtime.user_input((text + "\r").encode()) == "accepted"
+
+
+def wait_for_integration(runtime: Any, timeout: float = 5.0) -> None:
+    """真 worker 的 shell 集成异步就绪：带超时轮询到 ready，供需要提示符的用例使用。"""
+    wait_until(lambda: runtime.snapshot().integration == "ready", timeout=timeout)
 
 
 def never() -> bool:

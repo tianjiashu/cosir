@@ -101,6 +101,11 @@ ignore = [
     "RUF001", # 中文普通字符串中的“歧义 unicode”多为中文标点误报
 ]
 
+[tool.ruff.lint.pycodestyle]
+# E501 的检查上限单独放宽到 120，格式化仍按 line-length = 100 换行：中文与全角标点按 2 列计宽，
+# 中文注释与 docstring 写不到 50 字就超 100；代码由 ruff format 保证在 100 以内，不受影响。
+max-line-length = 120
+
 [tool.ruff.lint.per-file-ignores]
 # 测试目录允许 assert 与子进程调用类安全规则。
 "tests/**" = ["S101", "S603", "S607"]

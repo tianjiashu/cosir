@@ -26,7 +26,6 @@ pytestmark = pytest.mark.usefixtures("backend_env")
 _USER_SURFACE_ONLY = {
     "agent_team",
     "browser_handoff",
-    "terminal_handoff",
     "propose_agent_configuration",
     "propose_agent_team_configuration",
 }
@@ -80,7 +79,7 @@ def test_unknown_task_type_is_an_assembly_defect() -> None:
 def test_team_node_tools_filter_by_rule_and_keep_unregistered_names() -> None:
     """节点工具按规则过滤、不代为追加；注册表里没有的名字原样保留，让节点建 Task 时如实报错。"""
     profile = SimpleNamespace(
-        allowed_tools=["read_file", "agent_team", "terminal_start", "delegate_task", "ghost"]
+        allowed_tools=["read_file", "agent_team", "terminal_read", "delegate_task", "ghost"]
     )
     kept = materialize_node_tools(profile, depth=0)  # type: ignore[arg-type]
     assert kept == ["read_file", "delegate_task", "ghost"]

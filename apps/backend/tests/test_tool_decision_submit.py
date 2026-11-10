@@ -111,7 +111,7 @@ def test_concurrent_submissions_enqueue_exactly_one(awaiting, monkeypatch: pytes
 
     def submit(decision: str) -> None:
         try:
-            module.ToolDecisionService().submit(awaiting.task_id, _CALL_ID, decision, source="user")  # type: ignore[arg-type]
+            module.ToolDecisionService().submit(awaiting.task_id, _CALL_ID, decision)  # type: ignore[arg-type]
             outcomes.append("enqueued")
         except SessionConflictError as exc:
             outcomes.append(exc.code)

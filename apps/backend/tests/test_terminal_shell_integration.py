@@ -1,5 +1,7 @@
-"""真实 PTY 集成：zsh 与 bash（/bin/bash 3.2、Homebrew 5.x）的命令区间、条件等待、按键、原始输入、
-resize 与输入租约；Windows PowerShell / pwsh 只在 Windows 宿主运行。未安装的 shell 显式 skip。
+"""真实 PTY 集成：zsh 与 bash（/bin/bash 3.2、Homebrew 5.x）的命令区间、条件等待、Agent 填入、
+用户原始输入与 resize；Windows PowerShell / pwsh 只在 Windows 宿主运行。未安装的 shell 显式 skip。
+
+Agent 对交互终端只能填入一行、不能执行：驱动 shell 的输入一律走用户原始字节（与终端 WS 同一路径）。
 """
 
 from __future__ import annotations
@@ -16,6 +18,9 @@ from terminal_test_support import (
     geometry,
     session_entries,
     terminal_worker_path,
+    user_enter,
+    wait_for_integration,
+    wait_until,
 )
 
 from app.tools.terminal_runtime.inputs import TerminalWait
@@ -42,115 +47,134 @@ def terminal(request: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> A
     capture_terminal_effects(monkeypatch)
     service = TerminalSessionService()
     runtime = service.start(
-        task_id=1, workspace_root=str(tmp_path), shell=shell,
-        created_by="agent", run_id=1,
+        task_id=1, workspace_root=str(tmp_path), shell=shell, run_id=None,
     )
-    runtime.wait_for_integration()  # 与 terminal_start 工具一致
-    meta = runtime.snapshot()
-    session_id = runtime.session_id
+    wait_for_integration(runtime)
     try:
-        yield _Terminal(service, session_id, meta)
+        yield _Terminal(service, runtime)
     finally:
         service.shutdown()
 
 
 class _Terminal:
-    def __init__(self, service: TerminalSessionService, session_id: str, meta: Any) -> None:
+    def __init__(self, service: TerminalSessionService, runtime: Any) -> None:
         self.service = service
-        self.session_id = session_id
-        self.meta = meta
-        self._ops = 0
+        self.runtime = runtime
+        self.session_id: str = runtime.session_id
 
-    def write(self, input: dict[str, Any], **wait: Any) -> Any:
-        self._ops += 1
-        return self.service.require(self.session_id, 1).write(
-            input, f"op{self._ops}", TerminalWait(**wait) if wait else None, run_id=1,
-            tool_call_id=f"call-w{self._ops}", is_cancelled=lambda: False,
-        )
+    def user_bytes(self, data: bytes) -> None:
+        assert self.runtime.user_input(data) == "accepted"
 
-    def line(self, text: str, **wait: Any) -> Any:
-        return self.write({"type": "line", "text": text},
-                          **(wait or {"until": "command_returned", "timeout_ms": 10000}))
+    def user(self, text: str) -> None:
+        user_enter(self.runtime, text)
+
+    def prefill(self, command: str) -> Any:
+        return self.runtime.prefill(command, run_id=1, tool_call_id="call-prefill")
 
     def read(self, **kwargs: Any) -> Any:
-        return self.service.require(self.session_id, 1).read(is_cancelled=lambda: False, **kwargs)
+        return self.runtime.read(is_cancelled=lambda: False, **kwargs)
+
+    def run_user(self, text: str, timeout: float = 10.0) -> Any:
+        """用户敲一行并回车，等这条命令结束，返回尾部观察。"""
+        before = self.runtime._observation.command_counter
+        self.user(text)
+        wait_until(
+            lambda: (command := self.runtime._observation.latest_command) is not None
+            and command.number > before
+            and command.status != "executing",
+            timeout=timeout,
+        )
+        return self.read(tail=400)
 
 
 def test_integration_ready_and_command_output_range(terminal: _Terminal) -> None:
-    assert "shell integration" not in terminal.meta.summary, terminal.meta
-    result = terminal.line("printf 'alpha\\nbeta\\n'")
-    assert result.wait_result["end_reason"] == "command_returned", result.text
-    header = result.text.splitlines()[1]
-    assert "exit 0" in header and "output lines" in header, result.text
+    assert "shell integration" not in terminal.runtime.snapshot().summary
+    result = terminal.run_user("printf 'alpha\\nbeta\\n'")
+    header = next(line for line in result.text.splitlines() if "output lines" in line)
+    assert "exit 0" in header, result.text
     start, end = (int(n) for n in header.split("output lines ")[1].split(" ")[0].split("-"))
     ranged = terminal.read(start_line=start, limit=end - start + 1)
     assert [line.split("│", 1)[1] for line in ranged.text.splitlines()[-2:]] == ["alpha", "beta"]
-    failed = terminal.line("false")
+    failed = terminal.run_user("false")
     assert "exit 1" in failed.text and "no output" in failed.text
 
 
 def test_line_numbers_survive_scroll_and_clear(terminal: _Terminal) -> None:
-    terminal.line("for i in $(seq 1 60); do echo row$i; done")
-    numbered = terminal.read(tail=400)
+    numbered = terminal.run_user("for i in $(seq 1 60); do echo row$i; done")
     row1 = next(line for line in numbered.text.splitlines() if line.endswith("│row1"))
     number = int(row1.split("│")[0])
-    terminal.line("clear")
+    terminal.run_user("clear")
     again = terminal.read(start_line=number, limit=1)
     assert again.text.splitlines()[-1] == f"{number}│row1"
 
 
 def test_long_wrapped_line_is_one_logical_line(terminal: _Terminal) -> None:
     text = "x" * 200
-    result = terminal.line(f"echo {text}")
+    result = terminal.run_user(f"echo {text}")
     assert any(line.endswith(f"│{text}") for line in result.text.splitlines()), result.text
 
 
-def test_full_screen_app_screen_view_text_input_and_stable_line_numbers(
-    terminal: _Terminal,
-) -> None:
+def test_full_screen_app_screen_view_and_stable_line_numbers(terminal: _Terminal) -> None:
     if os.name == "nt" or shutil.which("less") is None:
         pytest.skip("less is not available")
-    terminal.line("echo before-less")
+    terminal.run_user("echo before-less")
     marker = next(
         line for line in terminal.read(tail=10).text.splitlines() if line.endswith("│before-less")
     )
     number = int(marker.split("│")[0])
-    opened = terminal.write({"type": "line", "text": "seq 1 200 | less"},
-                            until="match", pattern="^1$", timeout_ms=5000)
+    terminal.user("seq 1 200 | less")
+    opened = terminal.read(wait=TerminalWait(until="match", pattern="^1$", timeout_ms=5000))
+    assert opened.wait_result["end_reason"] == "matched"
     assert opened.screen and "s1│1" in opened.text, opened.text
-    # 24 行终端里 less 显示 23 行：下移 3 行后才会出现 26。
-    scrolled = terminal.write({"type": "keys", "keys": ["down", "down", "down"]},
-                              until="match", pattern="^26$", timeout_ms=5000)
+    # 24 行终端里 less 显示 23 行：用户下移 3 行后才会出现 26。
+    terminal.user_bytes(b"jjj")
+    scrolled = terminal.read(wait=TerminalWait(until="match", pattern="^26$", timeout_ms=5000))
     assert scrolled.screen and "s1│4" in scrolled.text, scrolled.text
     # 全屏期间行号不被屏幕行占用：进入前的输出仍在原行号上。
     assert terminal.read(start_line=number, limit=1).text.splitlines()[-1] == marker
-    closed = terminal.write({"type": "text", "text": "q"},
-                            until="command_returned", timeout_ms=5000)
-    assert closed.wait_result["end_reason"] == "command_returned", closed.text
-    assert not closed.screen and "s1│" not in closed.text
+    terminal.user_bytes(b"q")
+    wait_until(lambda: terminal.runtime._observation.buffer.alternate is False)
     assert terminal.read(start_line=number, limit=1).text.splitlines()[-1] == marker
 
 
-def test_match_and_keys_and_interrupt(terminal: _Terminal) -> None:
-    started = terminal.write(
-        {"type": "line", "text": "sleep 0.3; echo READY-NOW; sleep 30"},
-        until="match", pattern="READY-NOW$", timeout_ms=10000,
+def test_prefill_fills_the_prompt_without_running_it(terminal: _Terminal) -> None:
+    """填入只把命令写进行里：屏幕上出现文本，但没有出现命令输出；用户回车后才执行。"""
+    if os.name == "nt":
+        pytest.skip("prefill output check is POSIX-only")
+    wait_until(lambda: terminal.runtime._observation.phase == "editing")
+    terminal.prefill("echo PREFILLED")
+    time.sleep(1)
+    shown = terminal.read(tail=40).text
+    assert "echo PREFILLED" in shown, shown
+    screen_text = [line.split("│", 1)[-1] for line in shown.splitlines() if "│" in line]
+    assert "PREFILLED" not in screen_text, (
+        "the filled command must not run before the user presses Enter: " + shown
+    )
+    terminal.user_bytes(b"\r")
+    executed = terminal.read(
+        wait=TerminalWait(until="match", pattern="^PREFILLED$", timeout_ms=5000)
+    )
+    assert executed.wait_result["end_reason"] == "matched", executed.text
+
+
+def test_match_reports_running_command(terminal: _Terminal) -> None:
+    terminal.user("sleep 0.3; echo READY-NOW; sleep 30")
+    started = terminal.read(
+        wait=TerminalWait(until="match", pattern="READY-NOW$", timeout_ms=10000)
     )
     assert started.wait_result["end_reason"] == "matched", started.text
     # 命令执行中投影 commandRunning，前端据此决定关闭时是否确认。
     assert session_entries(terminal.service, 1)[0]["commandRunning"] is True
-    # bash 3.2 在两条简单命令之间（DEBUG trap 内）收到 Ctrl-C 时偶发不报告返回（WP1 已知竞态），
-    # 等 sleep 真正开始再中断。
+    # bash 3.2 在两条简单命令之间（DEBUG trap 内）收到 Ctrl-C 时偶发不报告返回（已知竞态），
+    # 等 sleep 真正开始再中断。用户按 Ctrl-C 中断前台命令（Agent 已无 signal 能力，原始字节是用户输入）。
     time.sleep(0.3)
-    interrupted = terminal.write({"type": "keys", "keys": ["ctrl_c"]},
-                                 until="command_returned", timeout_ms=5000)
-    assert interrupted.wait_result["end_reason"] == "command_returned", interrupted.text
+    terminal.user_bytes(b"\x03")
+    wait_until(
+        lambda: (command := terminal.runtime._observation.latest_command) is not None
+        and command.status != "executing",
+        timeout=10,
+    )
     assert session_entries(terminal.service, 1)[0]["commandRunning"] is False
-    # 历史调出上一条命令：up + enter 重新执行 echo。
-    terminal.line("echo recall-me")
-    recalled = terminal.write({"type": "keys", "keys": ["up", "enter"]},
-                              until="command_returned", timeout_ms=5000)
-    assert recalled.text.count("recall-me") >= 1, recalled.text
 
 
 def test_user_raw_input_and_resize(terminal: _Terminal) -> None:
@@ -167,16 +191,21 @@ def test_user_raw_input_and_resize(terminal: _Terminal) -> None:
             break
         time.sleep(0.05)
     assert geometry(service, session_id) == (30, 100)
-    size = terminal.line("stty size")
+    size = terminal.run_user("stty size")
     assert any(line.endswith("│30 100") for line in size.text.splitlines()), size.text
 
 
 def test_quiet_wait_without_command_return(terminal: _Terminal) -> None:
-    result = terminal.write({"type": "line", "text": "cat"}, until="output_quiet",
-                            quiet_ms=300, timeout_ms=5000)
+    terminal.user("cat")
+    result = terminal.read(
+        wait=TerminalWait(until="output_quiet", quiet_ms=300, timeout_ms=5000)
+    )
     assert result.wait_result["end_reason"] == "output_quiet"
     assert "executing `cat`" in result.text
-    done = terminal.write({"type": "signal", "signal": "eof"} if os.name != "nt"
-                          else {"type": "keys", "keys": ["ctrl_c"]},
-                          until="command_returned", timeout_ms=5000)
-    assert done.wait_result["end_reason"] == "command_returned", done.text
+    # 用户按 Ctrl-D（POSIX）或 Ctrl-C（Windows）结束前台程序。
+    terminal.user_bytes(b"\x03" if os.name == "nt" else b"\x04")
+    wait_until(
+        lambda: (command := terminal.runtime._observation.latest_command) is not None
+        and command.status != "executing",
+        timeout=10,
+    )

@@ -268,7 +268,9 @@ def test_mailbox_dedupes_persisted_rows_within_one_execution() -> None:
 def test_mailbox_takes_notices_from_both_sources_in_delivery_order() -> None:
     """通知一次取光（外部行与执行内通知都在内），其余消息不动；通知不算可唤醒消息。"""
     mailbox = RunMailbox()
-    row = TaskMessage.of(NoticeBody(content="terminal ended", notice_kind="terminal_session_ended"), message_id=5)
+    row = TaskMessage.of(
+        NoticeBody(content="terminal ended", notice_kind="backend_restarted"), message_id=5
+    )
     result = TaskMessage.of(
         BackgroundResultBody(tool_name="child_agent", tool_result="{}", ended_at="t"),
         message_id=6,
@@ -308,8 +310,12 @@ async def test_prepare_input_writes_notices_from_both_sources_as_one_message() -
 
     已被别处确认的行跳过。
     """
-    row = TaskMessage.of(NoticeBody(content="terminal ended", notice_kind="terminal_session_ended"), message_id=4)
-    stale = TaskMessage.of(NoticeBody(content="already acked", notice_kind="terminal_session_ended"), message_id=9)
+    row = TaskMessage.of(
+        NoticeBody(content="terminal ended", notice_kind="backend_restarted"), message_id=4
+    )
+    stale = TaskMessage.of(
+        NoticeBody(content="already acked", notice_kind="backend_restarted"), message_id=9
+    )
     acks: list[list[int]] = []
 
     def ack(session, ids):

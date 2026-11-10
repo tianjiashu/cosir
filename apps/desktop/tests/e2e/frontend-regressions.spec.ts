@@ -177,8 +177,8 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await expect(changes).toContainText("涉及 2 个路径");
   await expect(changes).toContainText("1 次调用");
   const attention = assistant.locator('[data-slot="attention-card"]');
-  await expect(attention).toContainText("交给用户输入");
-  await expect(attention).toContainText("输入完成后点「交还」");
+  await expect(attention).toContainText("交给你操作网页");
+  await expect(attention).toContainText("输入完成后点「交还」，Agent 会继续安装");
   await expect(attention.getByRole("button", { name: "交还" })).toBeVisible();
   await assistant.screenshot({ path: `${SHOTS}/impl-settled.png`, animations: "disabled" });
 
@@ -193,8 +193,8 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await expect(rows.nth(1).locator('[data-call-status="failed"]')).toHaveCount(1);
   await expect(rows.nth(2)).toContainText("应用补丁");
   await expect(rows.nth(2)).toContainText("src/config.ts");
-  await expect(rows.nth(3)).toContainText("交给用户输入");
-  await expect(rows.nth(3)).toContainText("term-alt");
+  await expect(rows.nth(3)).toContainText("交给你操作网页");
+  await expect(rows.nth(3)).toContainText("输入 sudo 密码");
   await expect(rows.nth(3)).toContainText("等你操作");
   await expect(assistant.getByText("先找调度循环在哪里。", { exact: true })).toBeVisible();
   await assistant.screenshot({ path: `${SHOTS}/impl-expanded.png`, animations: "disabled" });

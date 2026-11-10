@@ -230,22 +230,13 @@ def test_team_rejects_ambiguous_node_identity(kind):
 
 
 @pytest.mark.parametrize(
-    "input_value",
-    [
-        {"type": "line", "text": "echo ok"},
-        {"type": "keys", "keys": ["ctrl_c"]},
-        {"type": "signal", "signal": "interrupt"},
-    ],
+    "command",
+    ["echo ok", "cd /tmp && ls", "git status"],
 )
-def test_terminal_strict_union_preserves_input_operations(input_value):
+def test_terminal_write_prefills_one_command_line(command):
     schema = strict_parameters_schema(TerminalWriteArgs)
     _assert_strict_schema(schema)
-    raw = {
-        "session_id": "s",
-        "operation_id": "op",
-        "input": input_value,
-        "wait": {"until": "output_quiet", "pattern": None, "quiet_ms": 500, "timeout_ms": 3000},
-    }
+    raw = {"session_id": "s", "command": command}
     Draft202012Validator(schema).validate(raw)
     result = validate_tool_arguments(raw, schema, TerminalWriteArgs)
     assert result.ok

@@ -104,7 +104,6 @@ export function terminalSession(sessionId: string, overrides: Partial<TerminalSe
     sessionId,
     label: "",
     shellKind: "zsh",
-    createdBy: "user",
     status: "running",
     endReason: null,
     exitCode: null,

@@ -104,13 +104,6 @@ describe("终端工作台 store", () => {
     expect(task()).toMatchObject({ open: true, autoCreate: false });
   });
 
-  it("Agent 新开会话不弹出面板（交接弹出由 lib/handoff 负责）", () => {
-    const store = useTerminalWorkbenchStore.getState();
-    store.syncSessions(TASK, [terminalSession("t1")]);
-    store.syncSessions(TASK, [terminalSession("t1"), terminalSession("a1", { createdBy: "agent" })]);
-    expect(task().open).toBe(false);
-  });
-
   it("选中的会话从 snapshot 消失后退到第一个活跃会话；已结束但仍在列表里的保留选中", () => {
     const store = useTerminalWorkbenchStore.getState();
     store.syncSessions(TASK, [terminalSession("t1"), terminalSession("t2")]);
@@ -132,13 +125,13 @@ describe("终端工作台 store", () => {
 });
 
 describe("终端标签命名", () => {
-  it("单会话显示「终端」不编号；多会话按序编号，Agent label 优先", () => {
+  it("单会话显示「终端」不编号；多会话按序编号，label 优先", () => {
     expect(terminalTabs([terminalSession("t1")], "t1")).toEqual([
       expect.objectContaining({ title: "终端" }),
     ]);
     const tabs = terminalTabs([
       terminalSession("t1"),
-      terminalSession("a1", { createdBy: "agent", label: "dev server" }),
+      terminalSession("a1", { label: "dev server" }),
       terminalSession("t3"),
     ], "t1");
     expect(tabs.map((tab) => tab.title)).toEqual(["终端 1", "dev server", "终端 3"]);

@@ -1,6 +1,6 @@
 # 终端统一：用户命令进程收进 Terminal Worker
 
-> 状态：已完成（2026-11-03），四个阶段都已落地；Windows 部分未实测，见 AGENTS.md 的 Windows 待办。实施中把会话模式的归属从「控制终端」改为「会话号」（U9），执行模式改为先握手再启动命令（§5.2）。由 `terminal-gap-assessment.md` 的 T5 与「残留进程清理」讨论演化而来，取代其中 T5 的方案。
+> 状态：已完成（2026-11-03），四个阶段都已落地；Windows 部分未实测，见 AGENTS.md 的 Windows 待办。实施中把会话模式的归属从「控制终端」改为「会话号」（U9），执行模式改为先握手再启动命令（§5.2）。由 `terminal-gap-assessment.md` 的 T5 与「残留进程清理」讨论演化而来，取代其中 T5 的方案。§3 的工具边界已被 `terminal-agent-read-prefill-plan.md` 取代（Agent 不再新建、关闭、交接交互终端，只能列出、读取与填入不执行）。
 > 范围：一次性命令 `execute_terminal` 与交互终端 `terminal_*` 的进程启动、归属与清理；两个工具对 Agent 的边界。不含沙箱（只定接入点）与 T3 的读输出 / 停止工具（下一步，基于本设计）。
 
 ## 1. 要解决什么
@@ -19,7 +19,7 @@
 ## 2. 已定的取舍
 
 - **统一到 Rust worker，不改用 Python**：Windows 的 PTY 在 Python 侧仍需原生扩展（pywinpty 本身是 Rust 写的）；屏幕模型只能退回 pyte（慢，对全屏程序支持较弱）；解析大量输出会和后端主流程抢 GIL；已验证的 shell 集成、查询应答、写入线程、进程清理都要重写。worker 约 2700 行，规模可控。
-- **沙箱不在本设计里**：安全与权限后续整体设计（AGENTS.md 待办「安全与权限」，终端部分的草案见 [`terminal-sandbox-design.md`](terminal-sandbox-design.md)，srt 与 Codex 沙箱都在候选里）。无论选哪个，对沙箱要紧的是**所有用户命令只从一处启动**——这正是本设计。
+- **沙箱不在本设计里**：安全与权限后续整体设计（AGENTS.md 待办「安全与权限」，现方案见 [`agent-permission-sandbox-design.md`](agent-permission-sandbox-design.md)）。无论选哪个，对沙箱要紧的是**所有用户命令只从一处启动**——这正是本设计。
 - **两个工具保持分开**：统一的是进程层，不是工具。见第 3 节。
 
 ## 3. 两个工具的边界（从 Agent 角度）
@@ -130,7 +130,7 @@ terminal_* ── SessionRuntime ───────────────�
 - Windows 上的温和终止阶段：Job 直接结束。
 - T3 的读输出与停止工具：下一步，基于执行模式做（命令运行时持有 worker 句柄）。
 - worker 进程池：每次一个进程，简单且隔离清楚。
-- 沙箱接入：接入点就是 worker 的启动入口，方案见 [`terminal-sandbox-design.md`](terminal-sandbox-design.md)。
+- 沙箱接入：接入点就是 worker 的启动入口，方案见 [`agent-permission-sandbox-design.md`](agent-permission-sandbox-design.md)。
 
 ## 9. 风险
 

@@ -33,9 +33,9 @@ describe("toolHeading", () => {
     expect(toolHeading("browser_evaluate", { expression: "a".repeat(70) }).target).toBe(`${"a".repeat(60)}…`);
   });
 
-  it("终端输入写「会话 · 输入摘要」，MCP 与 Skill 按动作拼目标", () => {
-    expect(toolHeading("terminal_write", { session_id: "term_1", input: { type: "line", text: "npm test" } }).target).toBe("term_1 · npm test");
-    expect(toolHeading("terminal_write", { session_id: "term_1", input: { type: "keys", keys: ["ctrl+c", "enter"] } }).target).toBe("term_1 · ctrl+c enter");
+  it("终端填入写「会话 · 命令」，MCP 与 Skill 按动作拼目标", () => {
+    expect(toolHeading("terminal_write", { session_id: "term_1", command: "npm test" }).target).toBe("term_1 · npm test");
+    expect(toolHeading("terminal_write", { session_id: "term_1" }).target).toBe("term_1");
     expect(toolHeading("mcp", { action: "call", server_name: "fs", tool_name: "read" })).toEqual({ title: "调用 MCP", target: "fs/read" });
     expect(toolHeading("mcp", { action: "list", server_name: "fs" }).target).toBe("fs");
     expect(toolHeading("skill", { action: "load", skill_name: "pdf", resource_path: "ref.md" }).target).toBe("pdf/ref.md");

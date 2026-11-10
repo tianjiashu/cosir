@@ -1,6 +1,8 @@
-"""终端服务契约：按行读取、条件等待（事件驱动）、输入仲裁、后台等待、交接与 snapshot 投影。
+"""终端服务契约：按行读取、条件等待（事件驱动）、Agent 填入准入、后台等待与 snapshot 投影。
 
-worker 用假替身按协议喂事件；真实 PTY 行为见 ``test_terminal_shell_integration.py``。
+worker 用假替身按协议喂事件；真实 PTY 行为见 ``test_terminal_shell_integration.py``。Agent 对交互
+终端只能「填入一行、不执行」：原有用 ``write`` 整行/按键驱动 shell 的用例改成用户输入
+（``runtime.user_input``，与终端 WS 的 raw 帧同一路径）。
 """
 
 from __future__ import annotations
@@ -22,41 +24,23 @@ from terminal_test_support import (
     session_entries,
     session_view,
     start,
+    user_enter,
     wait_until,
 )
 
 from app.config.constant import Constant
-from app.core.tool.background import background_registry as background_module
 from app.core.tool.background.background_registry import background_registry
-from app.core.tool.handoff.handoff_registry import HandoffConflictError, handoff_registry
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
+    TerminalPrefillRejectedError,
     TerminalSessionCapacityError,
-    TerminalSessionError,
     TerminalSessionNotFoundError,
     TerminalSessionOwnershipError,
     TerminalSessionStateError,
-    TerminalUserCommandRunningError,
-    TerminalUserTypingError,
     TerminalWorkerBackpressureError,
     TerminalWorkerUnavailableError,
 )
 from app.tools.terminal_runtime.inputs import TerminalWait
-
-
-@pytest.fixture
-def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, str, dict[str, Any]]]:
-    calls: list[tuple[int, str, dict[str, Any]]] = []
-
-    def deliver(
-        task_id: int, *, tool_call_id: str | None, tool_name: str, result: dict[str, Any]
-    ) -> bool:
-        assert tool_call_id  # 终端条目都按触发调用登记
-        calls.append((task_id, tool_name, result))
-        return True
-
-    monkeypatch.setattr(background_module, "deliver_background_result", deliver)
-    return calls
 
 
 @pytest.fixture(autouse=True)
@@ -66,15 +50,9 @@ def _drop_entries() -> Any:
         background_registry.drop_task(task_id)
 
 
-def write(service: Any, session_id: str, input: dict[str, Any], wait: TerminalWait | None = None,
-          *, op: str | None = None, cancelled: Any = never) -> Any:
-    return service.require(session_id, 1).write(
-        input,
-        op or f"op-{time.monotonic_ns()}",
-        wait,
-        run_id=1,
-        tool_call_id=_call_id(),
-        is_cancelled=cancelled,
+def prefill(service: Any, session_id: str, command: str, *, task_id: int = 1) -> Any:
+    return service.require(session_id, task_id).prefill(
+        command, run_id=1, tool_call_id=_call_id()
     )
 
 
@@ -86,18 +64,9 @@ def _call_id() -> str:
     return f"call-{time.monotonic_ns()}"
 
 
-def echo_command(worker: FakeWorker, input: dict[str, Any]) -> None:
-    """模拟 zsh：回车后命令开始、输出两行、命令返回、回到提示符。"""
-    if input["type"] != "line":
-        return
-    text = input["text"]
-    worker.output(b"out")
-    worker.screen([f"$ {text}", ""], cursor=(1, 0))
-    worker.shell("command_started", command=text)
-    worker.screen([f"$ {text}", "out1", "out2", ""], cursor=(3, 0))
-    worker.shell("command_returned", result={"success": True, "code": 0, "code_kind": "x"})
-    worker.screen([f"$ {text}", "out1", "out2", "$ "], cursor=(3, 2))
-    worker.shell("shell_prompt", cwd="/w")
+def prompt(worker: FakeWorker, cwd: str = "/w") -> None:
+    """shell 集成报告「已回到提示符」：这是 Agent 填入的前提。"""
+    worker.shell("shell_prompt", cwd=cwd)
 
 
 # ---------------------------------------------------------------- 生命周期与归属
@@ -107,13 +76,12 @@ def test_start_list_close_and_ownership(monkeypatch, tmp_path: Path) -> None:
     service, workers = make_service(monkeypatch)
     session_id = start(service, tmp_path)
     meta = session_view(service, session_id)
-    assert service.require(session_id, 1).created_by == "agent"
-    assert meta.summary.startswith(f"session {session_id} by agent")
+    assert meta.summary.startswith(f"session {session_id} · zsh · running")
     with pytest.raises(TerminalSessionOwnershipError):
         service.require(session_id, 2)
     with pytest.raises(TerminalSessionNotFoundError):
-        service.close("missing", task_id=1, by="agent")
-    closed = service.close(session_id, task_id=1, by="agent")
+        service.close("missing", task_id=1)
+    closed = service.close(session_id, task_id=1)
     assert closed.status == "closed"
     assert workers[0].closed
     assert active_session_ids(service) == []
@@ -121,16 +89,14 @@ def test_start_list_close_and_ownership(monkeypatch, tmp_path: Path) -> None:
     assert service.active_session_count() == 0
 
 
-def test_agent_per_task_limit_leaves_room_for_user(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(Constant.Terminal, "MAX_AGENT_SESSIONS_PER_TASK", 2)
+def test_active_session_capacity_is_global(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Constant.Terminal, "MAX_ACTIVE_SESSIONS", 2)
     service, _ = make_service(monkeypatch)
     start(service, tmp_path)
-    start(service, tmp_path)
-    with pytest.raises(TerminalSessionCapacityError):
-        start(service, tmp_path)
-    start(service, tmp_path, created_by="user")
     start(service, tmp_path, task_id=2)
-    assert service.active_session_count() == 4
+    with pytest.raises(TerminalSessionCapacityError):
+        start(service, tmp_path, task_id=3)
+    assert service.active_session_count() == 2
 
 
 def test_worker_exit_cleanup_runs_off_reader_thread_and_notifies(monkeypatch, tmp_path) -> None:
@@ -144,51 +110,6 @@ def test_worker_exit_cleanup_runs_off_reader_thread_and_notifies(monkeypatch, tm
     wait_until(lambda: len(changes) >= 2)
     assert set(changes) == {1}
     assert read(service, session_id).status == "exited"
-
-
-def test_agent_is_told_when_its_session_ends_unnoticed(monkeypatch, tmp_path) -> None:
-    """Agent 不知情的结束（shell 退出、用户关闭）投递一次通知；自己关闭与用户的会话不通知。"""
-    notices: list[tuple[int, str]] = []
-    service, workers = make_service(
-        monkeypatch, on_agent_ended=lambda task, text: notices.append((task, text))
-    )
-    exited = start(service, tmp_path)
-    workers[0].screen(["$ npm run dev", "crashed: port in use", "$ "], cursor=(2, 2))
-    workers[0].exit(1)
-    wait_until(lambda: len(notices) == 1)
-    task_id, text = notices[0]
-    assert task_id == 1 and f"session {exited}" in text and "exit 1" in text
-    assert "crashed: port in use" in text
-
-    by_user = start(service, tmp_path)
-    service.close(by_user, task_id=1, by="user")
-    wait_until(lambda: len(notices) == 2)
-    assert "closed_by_user" in notices[1][1]
-
-    own = start(service, tmp_path)
-    service.close(own, task_id=1, by="agent")
-    start(service, tmp_path, created_by="user")
-    workers[3].exit(0)
-    wait_until(lambda: workers[3].closed)
-    service.shutdown()
-    assert len(notices) == 2 and own not in "".join(text for _, text in notices)
-
-
-def test_session_end_during_agent_wait_is_not_announced_twice(monkeypatch, tmp_path) -> None:
-    notices: list[tuple[int, str]] = []
-    service, workers = make_service(
-        monkeypatch, on_agent_ended=lambda task, text: notices.append((task, text))
-    )
-    session_id = start(service, tmp_path)
-    thread, box = run_in_thread(
-        lambda: read(service, session_id, wait=TerminalWait(until="elapsed", timeout_ms=5000))
-    )
-    wait_until(lambda: service._lookup(session_id)._agent_waits == 1)
-    workers[0].exit(0)
-    thread.join(2)
-    assert box["result"].wait_result["end_reason"] == "session_ended"
-    service.shutdown()
-    assert notices == []
 
 
 def test_worker_disconnect_fails_session_but_not_after_exit(monkeypatch, tmp_path) -> None:
@@ -208,23 +129,18 @@ def test_worker_disconnect_fails_session_but_not_after_exit(monkeypatch, tmp_pat
     assert (entry["status"], entry["exitCode"]) == ("exited", 0)
 
 
-def test_worker_unavailable_on_commands_does_not_end_session(monkeypatch, tmp_path) -> None:
-    """信号回执超时只报错给调用方；按键时 worker 已不在按会话已结束回报（不无声丢键）。两者都不由
-    命令路径判会话失败，终态只来自 worker 事件流。"""
-    service, workers = make_service(monkeypatch)
+def test_worker_unavailable_on_fill_does_not_end_session(monkeypatch, tmp_path) -> None:
+    """worker 不可用只作为这次调用的错误抛出，不结束会话；按键按会话已结束回报（不无声丢键）。"""
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
     session_id = start(service, tmp_path)
-
-    def slow_ack(signal_name: str) -> None:
-        raise TerminalWorkerUnavailableError("terminal worker signal acknowledgement timed out")
+    prompt(workers[0])
 
     def unavailable(input: dict[str, Any]) -> None:
         raise TerminalWorkerUnavailableError("terminal worker is not ready")
 
-    workers[0].signal = slow_ack  # type: ignore[method-assign]
-    fast = TerminalWait(until="elapsed", timeout_ms=0)
-    with pytest.raises(TerminalWorkerUnavailableError):
-        write(service, session_id, {"type": "signal", "signal": "interrupt"}, fast)
     workers[0].write = unavailable  # type: ignore[method-assign]
+    with pytest.raises(TerminalWorkerUnavailableError):
+        prefill(service, session_id, "ls")
     assert service.require(session_id, 1).user_input(b"a") == "session_ended"
     assert read(service, session_id).status == "running"
     assert not workers[0].closed
@@ -241,16 +157,16 @@ def test_user_input_after_shell_exit_keeps_exited(monkeypatch, tmp_path) -> None
 
 def test_task_runtimes_orders_active_first_and_keeps_ten_ended(monkeypatch, tmp_path):
     service, _ = make_service(monkeypatch)
-    ended = [start(service, tmp_path, created_by="user") for _ in range(12)]
+    ended = [start(service, tmp_path) for _ in range(12)]
     for session_id in ended:
-        service.close(session_id, task_id=1, by="agent")
+        service.close(session_id, task_id=1)
     live = start(service, tmp_path)
     entries = session_entries(service, 1)
     assert entries[0]["sessionId"] == live
     assert len(entries) == 11
     assert [e["sessionId"] for e in entries[1:]] == ended[2:]
     assert set(entries[0]) == {
-        "sessionId", "label", "shellKind", "createdBy", "status", "endReason", "exitCode",
+        "sessionId", "label", "shellKind", "status", "endReason", "exitCode",
         "integration", "commandRunning",
         "createdAt",
     }
@@ -312,7 +228,7 @@ def test_read_pattern_rejects_tail_and_invalid_regex() -> None:
 
 def test_user_typed_lines_are_reported_once(monkeypatch, tmp_path: Path) -> None:
     service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path, created_by="user")
+    session_id = start(service, tmp_path)
     workers[0].screen(["a", "b", "$ "], cursor=(2, 2))
     assert service.require(session_id, 1).user_input(b"l") == "accepted"
     assert workers[0].writes[-1] == {"type": "raw", "data_base64": "bA=="}
@@ -323,25 +239,11 @@ def test_user_typed_lines_are_reported_once(monkeypatch, tmp_path: Path) -> None
 # ---------------------------------------------------------------- 条件等待
 
 
-def test_write_command_returned_reports_output_range(monkeypatch, tmp_path: Path) -> None:
-    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
-    session_id = start(service, tmp_path)
-    workers[0].on_write = echo_command
-    workers[0].screen(["$ "], cursor=(0, 2))
-    result = write(service, session_id, {"type": "line", "text": "ls"},
-                   TerminalWait(until="command_returned"))
-    assert result.wait_result == {"until": "command_returned", "end_reason": "command_returned"}
-    assert "cmd 1 `ls` returned exit 0 · output lines 2-3" in result.text
-    assert "1│$ ls\n2│out1\n3│out2" in result.text
-    assert result.input_summary == "ls" and result.input_type == "line"
-
-
 def test_command_returned_without_integration_is_rejected(monkeypatch, tmp_path: Path) -> None:
     service, _ = make_service(monkeypatch)
     session_id = start(service, tmp_path)
     with pytest.raises(TerminalIntegrationRequiredError):
-        write(service, session_id, {"type": "line", "text": "ls"},
-              TerminalWait(until="command_returned"))
+        read(service, session_id, wait=TerminalWait(until="command_returned"))
 
 
 def test_match_wakes_on_event_without_polling(monkeypatch, tmp_path: Path) -> None:
@@ -362,11 +264,12 @@ def test_match_wakes_on_event_without_polling(monkeypatch, tmp_path: Path) -> No
 
 
 def test_output_quiet_elapsed_and_timeout(monkeypatch, tmp_path: Path) -> None:
-    service, workers = make_service(monkeypatch)
+    service, _ = make_service(monkeypatch)
     session_id = start(service, tmp_path)
     began = time.monotonic()
-    quiet = write(service, session_id, {"type": "line", "text": "x"},
-                  TerminalWait(until="output_quiet", quiet_ms=200, timeout_ms=3000))
+    quiet = read(
+        service, session_id, wait=TerminalWait(until="output_quiet", quiet_ms=200, timeout_ms=3000)
+    )
     assert quiet.wait_result["end_reason"] == "output_quiet"
     assert 0.18 < time.monotonic() - began < 1.0
     elapsed = read(service, session_id, wait=TerminalWait(until="elapsed", timeout_ms=150))
@@ -410,117 +313,106 @@ def test_read_command_returned_waits_for_running_command(monkeypatch, tmp_path: 
     assert "exit 2" in box["result"].text
 
 
-def test_keys_signal_and_duplicate_operation(monkeypatch, tmp_path: Path) -> None:
-    service, workers = make_service(monkeypatch)
+# ---------------------------------------------------------------- Agent 填入
+
+
+def test_prefill_fills_the_prompt_without_running_it(monkeypatch, tmp_path: Path) -> None:
+    """填入只把一行写进空提示符：worker 收到 prefill 帧，立即返回尾部，不等输出。"""
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
     session_id = start(service, tmp_path)
-    fast = TerminalWait(until="elapsed", timeout_ms=0)
-    write(service, session_id, {"type": "keys", "keys": ["down", "enter"]}, fast, op="k")
-    assert workers[0].writes == [{"type": "keys", "keys": ["down", "enter"]}]
-    again = write(service, session_id, {"type": "keys", "keys": ["down", "enter"]}, fast, op="k")
-    assert "duplicate operation_id" in again.text and len(workers[0].writes) == 1
-    with pytest.raises(TerminalSessionError):
-        write(service, session_id, {"type": "line", "text": "y"}, fast, op="k")
-    write(service, session_id, {"type": "signal", "signal": "interrupt"}, fast)
-    assert workers[0].signals == ["interrupt"]
+    workers[0].screen(["$ "], cursor=(0, 2))
+    prompt(workers[0])
+    marks: list[dict[str, object]] = []
+    runtime = service.require(session_id, 1)
+    monkeypatch.setattr(runtime._stream, "publish", lambda name, **fields: marks.append(
+        {"type": name, **fields}
+    ))
+
+    result = prefill(service, session_id, "echo hi")
+
+    assert workers[0].writes == [{"type": "prefill", "text": "echo hi"}]
+    assert result.input_type == "prefill" and result.input_summary == "echo hi"
+    assert "input prefill `echo hi`" in result.text
+    assert "runs only if the user presses Enter" in result.text
+    assert {"type": "input_mark", "by": "agent"} in marks
+    assert runtime._observation.prompt_has_input is True
 
 
-# ---------------------------------------------------------------- 输入仲裁
-
-_NO_WAIT = TerminalWait(until="elapsed", timeout_ms=0)
-
-
-def test_agent_waits_for_user_to_pause_typing_then_proceeds(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(Constant.Terminal, "USER_TYPING_IDLE_SECONDS", 0.3)
-    service, workers = make_service(monkeypatch)
+def test_second_prefill_on_the_same_prompt_is_rejected(monkeypatch, tmp_path: Path) -> None:
+    """同一提示符至多填一次：这替代了旧的 operation_id 幂等缓存。"""
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
     session_id = start(service, tmp_path)
-    service.require(session_id, 1).user_input(b"a")
-    assert "user is typing" in read(service, session_id).text
-    thread, box = run_in_thread(
-        lambda: write(service, session_id, {"type": "line", "text": "ls"}, _NO_WAIT)
-    )
-    time.sleep(0.1)
+    prompt(workers[0])
+    prefill(service, session_id, "echo first")
+    with pytest.raises(TerminalPrefillRejectedError, match="already has input"):
+        prefill(service, session_id, "echo second")
     assert len(workers[0].writes) == 1
-    thread.join(2)
-    assert "result" in box and workers[0].writes[-1] == {"type": "line", "text": "ls"}
 
 
-def test_agent_times_out_with_retryable_error_while_user_keeps_typing(
+def test_user_typing_on_the_prompt_blocks_prefill_until_the_next_prompt(
     monkeypatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(Constant.Terminal, "USER_TYPING_IDLE_SECONDS", 30.0)
-    monkeypatch.setattr(Constant.Terminal, "AGENT_TYPING_WAIT_SECONDS", 0.2)
-    service, _ = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
-    service.require(session_id, 1).user_input(b"a")
-    with pytest.raises(TerminalUserTypingError) as caught:
-        write(service, session_id, {"type": "line", "text": "ls"})
-    assert caught.value.retryable
-
-
-def test_user_input_is_never_rejected_while_agent_waits(monkeypatch, tmp_path: Path) -> None:
-    service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
-    thread, box = run_in_thread(lambda: write(
-        service, session_id, {"type": "line", "text": "sleep"},
-        TerminalWait(until="elapsed", timeout_ms=400)))
-    wait_until(lambda: workers[0].writes == [{"type": "line", "text": "sleep"}])
-    assert service.require(session_id, 1).user_input(b"q") == "accepted"
-    assert workers[0].writes[-1] == {"type": "raw", "data_base64": "cQ=="}
-    thread.join(2)
-    assert "user typed lines" in box["result"].text
-    service.close(session_id, task_id=1, by="agent")
-    assert service.require(session_id, 1).user_input(b"x") == "session_ended"
-
-
-def test_agent_rejected_at_once_while_users_command_runs(monkeypatch, tmp_path: Path) -> None:
-    """用户启动的命令可能长驻：Agent 输入立即失败、不等待，命令返回后恢复。"""
-    monkeypatch.setattr(Constant.Terminal, "USER_TYPING_IDLE_SECONDS", 0.05)
     service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
     session_id = start(service, tmp_path)
-    service.require(session_id, 1).user_input(b"npm run dev\r")
-    workers[0].shell("command_started", command="npm run dev")
-    time.sleep(0.1)
+    prompt(workers[0])
+    service.require(session_id, 1).user_input(b"ec")
+    with pytest.raises(TerminalPrefillRejectedError, match="already has input"):
+        prefill(service, session_id, "echo hi")
+    prompt(workers[0])
+    prefill(service, session_id, "echo hi")
+    assert workers[0].writes[-1] == {"type": "prefill", "text": "echo hi"}
+
+
+def test_prefill_rejected_while_a_command_runs_or_without_integration(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
+    session_id = start(service, tmp_path)
+    prompt(workers[0])
+    workers[0].shell("command_started", command="sleep 1")
+    with pytest.raises(TerminalPrefillRejectedError, match="command is running"):
+        prefill(service, session_id, "ls")
+
+    off_service, _ = make_service(monkeypatch)
+    off_session = start(off_service, tmp_path, task_id=2)
+    with pytest.raises(TerminalPrefillRejectedError, match="no shell integration"):
+        prefill(off_service, off_session, "ls", task_id=2)
+
+
+def test_prefill_on_an_ended_session_reports_the_session_state(monkeypatch, tmp_path: Path) -> None:
+    """会话结束后填入按会话状态拒绝，不误报成「有命令在运行」，也不写 worker。"""
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
+    session_id = start(service, tmp_path)
+    prompt(workers[0])
+    workers[0].exit(0)
+    with pytest.raises(TerminalSessionStateError, match="terminal session is exited"):
+        prefill(service, session_id, "ls")
+    assert workers[0].writes == []
+
+
+def test_command_started_by_the_user_after_a_prefill(monkeypatch, tmp_path: Path) -> None:
+    """Agent 只填行；回车由用户按，命令的发起方因此记为用户。"""
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
+    session_id = start(service, tmp_path)
+    prompt(workers[0])
+    prefill(service, session_id, "echo PREFILLED")
+    user_enter(service.require(session_id, 1))
+    # 真实 worker 的 command_started 在用户按键之后才到达；假替身按同一顺序显式发送。
+    workers[0].shell("command_started", command="echo PREFILLED")
     assert "started by user" in read(service, session_id).text
-    begin = time.monotonic()
-    with pytest.raises(TerminalUserCommandRunningError) as caught:
-        write(service, session_id, {"type": "signal", "signal": "interrupt"}, _NO_WAIT)
-    assert time.monotonic() - begin < 0.5 and not caught.value.retryable
-    assert workers[0].signals == []
-    workers[0].shell("command_returned", result={"success": True, "code": 0})
-    workers[0].shell("shell_prompt", cwd="/w")
-    write(service, session_id, {"type": "line", "text": "ls"}, _NO_WAIT)
-    assert workers[0].writes[-1] == {"type": "line", "text": "ls"}
 
 
-def test_agent_waiting_for_the_user_is_rejected_once_their_command_starts(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """用户回车后、命令开始事件到达前 Agent 进入打字等待；等待期间命令开始，必须立即拒绝，不能在
-    用户停手后把输入打进用户的程序。"""
-    monkeypatch.setattr(Constant.Terminal, "USER_TYPING_IDLE_SECONDS", 30.0)
-    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
-    session_id = start(service, tmp_path)
-    service.require(session_id, 1).user_input(b"vim notes\r")
-    thread, box = run_in_thread(
-        lambda: write(service, session_id, {"type": "line", "text": "ls"}, _NO_WAIT)
-    )
-    time.sleep(0.1)
-    begin = time.monotonic()
-    workers[0].shell("command_started", command="vim notes")
-    thread.join(2)
-    assert time.monotonic() - begin < 1
-    assert isinstance(box.get("error"), TerminalUserCommandRunningError)
-    assert workers[0].writes == [{"type": "raw", "data_base64": "dmltIG5vdGVzDQ=="}]
+def test_write_arguments_reject_line_breaks_and_control_characters() -> None:
+    from pydantic import ValidationError
 
+    from app.tools.tool_models.terminal_session_args import TerminalWriteArgs
 
-def test_agent_may_type_into_its_own_running_command(monkeypatch, tmp_path: Path) -> None:
-    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
-    session_id = start(service, tmp_path)
-    write(service, session_id, {"type": "line", "text": "python3"}, _NO_WAIT)
-    workers[0].shell("command_started", command="python3")
-    assert "started by user" not in read(service, session_id).text
-    write(service, session_id, {"type": "line", "text": "1+1"}, _NO_WAIT)
-    assert workers[0].writes[-1] == {"type": "line", "text": "1+1"}
+    assert TerminalWriteArgs(session_id="s", command="echo hi").command == "echo hi"
+    for bad in ["a\nb", "a\rb", "a\x1bb", "a\x03b"]:
+        with pytest.raises(ValidationError):
+            TerminalWriteArgs(session_id="s", command=bad)
+    with pytest.raises(ValidationError):
+        TerminalWriteArgs.model_validate({"session_id": "s", "command": "x", "input": {}})
 
 
 def test_resize_is_forwarded_and_geometry_follows_screen(monkeypatch, tmp_path: Path) -> None:
@@ -532,175 +424,30 @@ def test_resize_is_forwarded_and_geometry_follows_screen(monkeypatch, tmp_path: 
     assert geometry(service, session_id) == (40, 120)
 
 
-# ---------------------------------------------------------------- 交接（HITL）
-
-
-@pytest.fixture
-def decisions(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, str, str, str]]:
-    """记录运行时代为提交的交接决定，不写队列。"""
-    from app.service import depends
-
-    calls: list[tuple[int, str, str, str]] = []
-
-    class _Decisions:
-        def submit(self, task_id, tool_call_id, decision, *, feedback=None, data=None, source="user"):
-            calls.append((task_id, tool_call_id, decision, source))
-
-    monkeypatch.setattr(depends, "get_tool_decision_service", lambda: _Decisions())
-    return calls
-
-
-def _begin(service: Any, session_id: str, tool_call_id: str = "call-handoff", reason: str = "password"):
-    return service.require(session_id, 1).begin_handoff(reason, tool_call_id)
-
-
-def test_handoff_is_registered_and_ended_by_the_decision_replay(
-    monkeypatch, tmp_path, decisions
-) -> None:
-    """交接只登记在交接登记表（不改变输入仲裁、不登记后台结果）；重放取回登记，报告交接以来的输出。"""
-    service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
-    workers[0].screen(["$ sudo make install", "Password:"], cursor=(1, 9))
-    shown = _begin(service, session_id, reason="Enter sudo password")
-    assert shown.input_type == "handoff" and shown.input_summary == "Enter sudo password"
-    lease = handoff_registry.on_resource("terminal", session_id)
-    assert lease is not None and lease.tool_call_id == "call-handoff" and lease.task_id == 1
-    assert not background_registry.live_background(1)
-    with pytest.raises(HandoffConflictError):
-        _begin(service, session_id, tool_call_id="call-other")
-
-    workers[0].screen(["$ sudo make install", "Password:", "installed"], cursor=(2, 9))
-    returned = service.require(session_id, 1).end_handoff(handoff_registry.end(1, "call-handoff"))
-    assert "handed the terminal back" in returned.text and "installed" in returned.text
-    assert handoff_registry.on_resource("terminal", session_id) is None
-    assert decisions == []
-
-
-def test_user_typing_pause_does_not_end_handoff(monkeypatch, tmp_path, decisions):
-    """输密码时会停顿；交接只认「交还」（HITL 决定），不能因用户停手而结束。"""
-    monkeypatch.setattr(Constant.Terminal, "USER_TYPING_IDLE_SECONDS", 0.1)
-    service, _ = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
-    _begin(service, session_id)
-    service.require(session_id, 1).user_input(b"secr")
-    time.sleep(0.2)
-    service.require(session_id, 1).user_input(b"et")
-    time.sleep(0.2)
-    assert handoff_registry.on_resource("terminal", session_id) is not None
-    assert decisions == []
-
-
-def test_session_end_settles_the_handoff_on_the_users_behalf(monkeypatch, tmp_path, decisions):
-    """shell 意外退出时经登记表代为落定那次调用，Agent 不会一直挂着；重放时报告会话已结束。"""
-    service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
-    _begin(service, session_id)
-    workers[0].exit(1)
-    wait_until(lambda: len(decisions) == 1)
-    assert decisions == [(1, "call-handoff", "reject", "runtime")]
-    assert handoff_registry.leases(1) == []
-    returned = service.require(session_id, 1).end_handoff(handoff_registry.end(1, "call-handoff"))
-    assert "ended before the user handed it back" in returned.text
-
-
-def test_withdrawn_handoff_frees_the_session(monkeypatch, tmp_path, decisions):
-    """撤回交接所在回合：登记被丢弃，会话不再显示交接中，可以再次交接（回归：曾永远卡在交接中）。"""
-    service, _ = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
-    _begin(service, session_id)
-    handoff_registry.drop(1, ["call-handoff"])
-    assert "handed off to user" not in service.require(session_id, 1).snapshot().summary
-    _begin(service, session_id, tool_call_id="call-again")
-    assert handoff_registry.on_resource("terminal", session_id).tool_call_id == "call-again"
-    assert decisions == []
-
-
-def test_backend_shutdown_keeps_the_pending_handoff_decision(monkeypatch, tmp_path, decisions):
-    """后端关闭不代为落定：等待中的决定按 HITL 契约保留，重启后交还会报告会话已不在。"""
-    service, _ = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
-    _begin(service, session_id)
-    service.shutdown()
-    time.sleep(0.2)
-    assert decisions == []
-
-
-def test_read_command_returned_on_idle_shell_returns_at_once(monkeypatch, tmp_path):
-    service, _ = make_service(monkeypatch, worker_type=ReadyWorker)
-    session_id = start(service, tmp_path)
-    result = read(
-        service, session_id, wait=TerminalWait(until="command_returned", timeout_ms=30_000)
-    )
-    assert result.wait_result == {"until": "command_returned", "end_reason": "idle"}
-    assert not background_registry.live_background(1)
-
-
-def test_match_after_line_input_skips_the_echo_line(monkeypatch, tmp_path: Path) -> None:
-    service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
-    command = "make && echo BUILD_DONE"
-
-    def echo_then_finish(worker: FakeWorker, input: dict[str, Any]) -> None:
-        worker.screen([f"$ {command}", ""], cursor=(1, 0))
-
-    workers[0].on_write = echo_then_finish
-    thread, box = run_in_thread(lambda: write(
-        service, session_id, {"type": "line", "text": command},
-        TerminalWait(until="match", pattern="BUILD_DONE", timeout_ms=2_000),
-    ))
-    time.sleep(0.2)
-    assert thread.is_alive(), "回显行不应命中 match"
-    workers[0].screen([f"$ {command}", "BUILD_DONE", "$ "], cursor=(2, 2))
-    thread.join(2)
-    assert box["result"].wait_result == {
-        "until": "match", "end_reason": "matched", "matched_line": 2
-    }
-
-
-def test_match_on_read_includes_the_cursor_line(monkeypatch, tmp_path: Path) -> None:
-    service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
-    workers[0].screen(["Password:"], cursor=(0, 9))
-    result = read(service, session_id, wait=TerminalWait(until="match", pattern="Password"))
-    assert result.wait_result == {"until": "match", "end_reason": "matched", "matched_line": 1}
-
-
 # ---------------------------------------------------------------- 全屏程序（备用屏幕）
 
 
-def open_less(worker: FakeWorker, input: dict[str, Any]) -> None:
-    """模拟 less：line 进入全屏程序，text ``q`` 退回主屏，keys 原地重绘。"""
-    if input["type"] == "line":
-        worker.screen(["1", "2", "3", ":"], cursor=(3, 1), alternate=True)
-    elif input["type"] == "keys":
-        worker.screen(["4", "5", "6", ":"], cursor=(3, 1), alternate=True)
-    elif input["type"] == "text" and input["text"] == "q":
-        worker.screen(["$ echo a", "a", "$ seq 9 | less", "$ "], cursor=(3, 2))
-
-
-def test_full_screen_app_returns_screen_view_and_keeps_line_numbers(monkeypatch, tmp_path):
+def test_full_screen_app_reads_screen_view_and_keeps_line_numbers(monkeypatch, tmp_path):
     service, workers = make_service(monkeypatch)
     session_id = start(service, tmp_path)
-    workers[0].on_write = open_less
     workers[0].screen(["$ echo a", "a", "$ "], cursor=(2, 2))
     before = read(service, session_id, start_line=1, limit=3).text
 
-    opened = write(service, session_id, {"type": "line", "text": "seq 9 | less"})
+    # 用户在终端里打开了全屏程序：屏幕切到备用屏幕，主屏逻辑行冻结。
+    workers[0].screen(["1", "2", "3", ":"], cursor=(3, 1), alternate=True)
+    opened = read(service, session_id)
     assert opened.screen and opened.lines is None
     assert "full-screen app" in opened.text and "s1│1\ns2│2\ns3│3\ns4│:" in opened.text
     assert "cursor s4" in opened.text
 
-    # 原地重绘：write 返回整屏，而不是「输入后新增行」。
-    scrolled = write(service, session_id, {"type": "keys", "keys": ["down"]})
-    assert "s1│4\ns2│5\ns3│6" in scrolled.text
     # 逻辑行号不被屏幕行占用：start_line 仍读到进入前的主屏。
     frozen = read(service, session_id, start_line=1, limit=3)
     assert not frozen.screen and frozen.text.splitlines()[-3:] == before.splitlines()[-3:]
-    assert read(service, session_id).screen
 
-    closed = write(service, session_id, {"type": "text", "text": "q"})
-    assert workers[0].writes[-1] == {"type": "text", "text": "q"}
-    assert not closed.screen and "4│$ " in closed.text and "s1│" not in closed.text
+    # 用户退出全屏程序后回到主屏视图。
+    workers[0].screen(["$ echo a", "a", "$ "], cursor=(2, 2))
+    back = read(service, session_id)
+    assert not back.screen and "s1│" not in back.text
 
 
 def test_match_in_full_screen_app_scans_the_whole_screen(monkeypatch, tmp_path):
@@ -714,25 +461,9 @@ def test_match_in_full_screen_app_scans_the_whole_screen(monkeypatch, tmp_path):
     assert "wait=match → matched at s3" in result.text
 
 
-def test_match_after_input_ignores_the_screen_before_the_redraw(monkeypatch, tmp_path):
-    service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
-    workers[0].screen(["1", "2", "3", ":"], cursor=(3, 1), alternate=True)
-    thread, box = run_in_thread(lambda: write(
-        service, session_id, {"type": "keys", "keys": ["down"]},
-        TerminalWait(until="match", pattern="^2$", timeout_ms=2_000),
-    ))
-    time.sleep(0.2)
-    assert thread.is_alive(), "输入前就可见的 2 不应命中"
-    workers[0].screen(["2", "3", "4", ":"], cursor=(3, 1), alternate=True)
-    thread.join(2)
-    assert box["result"].wait_result["matched_screen_row"] == 1
-    assert "s1│2\ns2│3\ns3│4" in box["result"].text
-
-
 def test_user_input_in_full_screen_app_is_flagged_without_line_marks(monkeypatch, tmp_path):
     service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path, created_by="user")
+    session_id = start(service, tmp_path)
     workers[0].screen(["~", "~", ":"], cursor=(2, 1), alternate=True)
     service.require(session_id, 1).user_input(b"j")
     text = read(service, session_id).text
@@ -740,15 +471,7 @@ def test_user_input_in_full_screen_app_is_flagged_without_line_marks(monkeypatch
     assert "user typed" not in read(service, session_id, tail=3).text
 
 
-def test_text_input_rejects_control_characters_and_empty() -> None:
-    from pydantic import ValidationError
-
-    from app.tools.terminal_runtime.inputs import InputText
-
-    assert InputText.model_validate({"type": "text", "text": ":wq"}).text == ":wq"
-    for bad in ["", "q\r", "\x1b"]:
-        with pytest.raises(ValidationError):
-            InputText.model_validate({"type": "text", "text": bad})
+# ---------------------------------------------------------------- 并发与握手
 
 
 class SlowStartWorker(FakeWorker):
@@ -773,7 +496,7 @@ def slow_start() -> Any:
 
 def test_handshake_does_not_block_projection_or_input(monkeypatch, tmp_path, slow_start) -> None:
     service, workers = make_service(monkeypatch, worker_type=slow_start)
-    thread, box = run_in_thread(lambda: start(service, tmp_path, created_by="user"))
+    thread, box = run_in_thread(lambda: start(service, tmp_path))
     assert slow_start.entered.wait(2)
     session_id = str(session_entries(service, 1)[0]["sessionId"])
     began = time.monotonic()
@@ -795,10 +518,10 @@ def test_close_during_handshake_disposes_after_start_returns(
     monkeypatch, tmp_path, slow_start
 ) -> None:
     service, workers = make_service(monkeypatch, worker_type=slow_start)
-    thread, box = run_in_thread(lambda: start(service, tmp_path, created_by="user"))
+    thread, box = run_in_thread(lambda: start(service, tmp_path))
     assert slow_start.entered.wait(2)
     session_id = str(session_entries(service, 1)[0]["sessionId"])
-    closer, closed = run_in_thread(lambda: service.close(session_id, task_id=1, by="agent"))
+    closer, closed = run_in_thread(lambda: service.close(session_id, task_id=1))
     time.sleep(0.2)
     # 终态已迁移，但 worker 要等握手结束才关闭，不在 start 半途被关。
     assert session_entries(service, 1)[0]["status"] == "closed"

@@ -267,9 +267,12 @@ function alternatingSequenceState(phase) {
     }));
   } else {
     parts.push(
-      call("alt-handoff", "terminal_handoff", { session_id: "term-alt", reason: "enter the sudo password" }, "pending", {
+      call("alt-handoff", "browser_handoff", { tab: "tab-alt", reason: "输入 sudo 密码" }, "pending", {
         awaitingUser: true,
-        display_data: { kind: "terminal-session", session_id: "term-alt", status: "running", input_summary: "输入完成后点「交还」，Agent 会继续安装" },
+        display_data: {
+          kind: "browser-page", tab_id: "tab-alt", url: "https://example.test/sudo", title: "sudo 确认",
+          handoff_reason: "输入完成后点「交还」，Agent 会继续安装",
+        },
       }),
       { type: "text", text: "已把调度间隔改为读配置项 `scheduler.tickMs`，默认值仍是 250。\n\n新增 3 个单测，`bun test` 全部通过。", status: "completed", finalReply: true },
     );
@@ -703,7 +706,6 @@ function createTerminalSession(taskId, shell) {
       sessionId,
       label: "",
       shellKind: shell === "auto" ? "zsh" : shell,
-      createdBy: "user",
       status: "running",
       endReason: null,
       exitCode: null,

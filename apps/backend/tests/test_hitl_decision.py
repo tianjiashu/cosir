@@ -67,7 +67,9 @@ def _decision(decision: str = "approve", *, message_id: int | None = 5) -> TaskM
 
 def _notice(text: str, message_id: int) -> TaskMessage:
     """外部队列里的通知行。"""
-    return TaskMessage.of(NoticeBody(content=text, notice_kind="terminal_session_ended"), message_id=message_id)
+    return TaskMessage.of(
+        NoticeBody(content=text, notice_kind="backend_restarted"), message_id=message_id
+    )
 
 
 class _Context:

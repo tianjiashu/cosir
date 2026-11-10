@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-from app.tools.terminal_runtime.errors import TerminalWorkerSignalFailedError
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
 from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
 from tests.terminal_test_support import requires_terminal_worker
@@ -54,6 +53,15 @@ def _windows_interactive_shell_spec(name: str) -> ShellSpec:
     if not executable:
         pytest.skip(f"{executable_name} is not available")
     return ShellSpec(name, executable, (executable, "-NoLogo", "-NoProfile"))
+
+
+def _raw(worker: ProcessTerminalWorker, data: bytes) -> None:
+    """用户的原始按键：与终端 WS 的 raw 帧同一协议（Agent 不再有 line / keys 输入）。"""
+    worker.write({"type": "raw", "data_base64": base64.b64encode(data).decode("ascii")})
+
+
+def _line(worker: ProcessTerminalWorker, text: str) -> None:
+    _raw(worker, (text + "\r").encode())
 
 
 def _output_text(events: list[dict[str, object]]) -> str:
@@ -111,10 +119,10 @@ def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
     try:
         worker.start(_shell_spec(), str(tmp_path), on_event)
         if os.name == "nt":
-            worker.write({"type": "line", "text": "echo terminal-worker-smoke"})
-            worker.write({"type": "line", "text": "exit"})
+            _line(worker, "echo terminal-worker-smoke")
+            _line(worker, "exit")
         else:
-            worker.write({"type": "line", "text": "printf 'terminal-worker-smoke\\n'; exit"})
+            _line(worker, "printf 'terminal-worker-smoke\\n'; exit")
         assert exited.wait(10), f"worker did not report shell exit: {events!r}"
     finally:
         worker.close()
@@ -275,17 +283,6 @@ time.sleep(60)
             os.killpg(backend.pid, signal.SIGKILL)
 
 
-@requires_terminal_worker
-def test_real_worker_signal_failure_is_reported_to_caller(tmp_path: Path) -> None:
-    worker = ProcessTerminalWorker("signal-integration-test")
-    try:
-        worker.start(_shell_spec(), str(tmp_path), lambda event: None)
-        with pytest.raises(TerminalWorkerSignalFailedError):
-            worker.signal("unknown-signal")
-    finally:
-        worker.close()
-
-
 @pytest.mark.skipif(os.name != "nt", reason="Windows ConPTY interrupt test")
 @requires_terminal_worker
 @pytest.mark.parametrize("shell_name", ["cmd", "powershell", "pwsh", "custom_cmd"])
@@ -338,8 +335,8 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
         ready_command = (
             "Write-Output " if shell.kind in {"powershell", "pwsh"} else "echo "
         ) + ready_marker.decode()
-        first.write({"type": "line", "text": ready_command})
-        second.write({"type": "line", "text": ready_command})
+        _line(first, ready_command)
+        _line(second, ready_command)
         assert wait_for_output(first_events, ready_marker, 5), "first shell did not become ready"
         assert wait_for_output(second_events, ready_marker, 5), "second shell did not become ready"
 
@@ -349,8 +346,8 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
         else:
             command = "ping -n 90 127.0.0.1 >nul"
             echo = "echo"
-        first.write({"type": "line", "text": command})
-        second.write({"type": "line", "text": command})
+        _line(first, command)
+        _line(second, command)
         first_recovered = f"{echo} FIRST_SESSION_RECOVERED"
         second_recovered = f"{echo} SECOND_SESSION_RECOVERED"
         first_recovered_marker = b"FIRST_SESSION_RECOVERED"
@@ -361,11 +358,11 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
         prompt = b"PS " if shell.kind in {"powershell", "pwsh"} else b">"
         first_output_offset = len(output_bytes(first_events))
         second_output_offset = len(output_bytes(second_events))
-        first.signal("interrupt")
+        _raw(first, b"\x03")
         assert wait_for_prompt_after(
             first_events, first_output_offset, prompt, 5
         ), "Ctrl+C did not return the first shell to its prompt"
-        first.write({"type": "line", "text": first_recovered})
+        _line(first, first_recovered)
         assert wait_for_output(first_events, first_recovered_marker, 5), (
             "Ctrl+C did not return the first shell to a usable prompt: "
             f"{output_bytes(first_events)[-2000:]!r}"
@@ -374,11 +371,11 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
             second_events, second_output_offset, prompt, 0.5
         ), "interrupting the first ConPTY session also interrupted the second session"
 
-        second.signal("interrupt")
+        _raw(second, b"\x03")
         assert wait_for_prompt_after(
             second_events, second_output_offset, prompt, 5
         ), "Ctrl+C did not return the second shell to its prompt"
-        second.write({"type": "line", "text": second_recovered})
+        _line(second, second_recovered)
         assert wait_for_output(
             second_events, second_recovered_marker, 5
         ), "the second shell did not recover when its own Ctrl+C was sent"
@@ -402,7 +399,7 @@ def test_real_worker_close_reaps_a_suspended_job(tmp_path: Path) -> None:
     try:
         worker.start(spec, str(tmp_path), events.append)
         pids = _wait_reported_pids(events, "STOPPED_CHILD_PID:")
-        worker.signal("suspend")
+        _raw(worker, b"\x1a")
     finally:
         worker.close()
 
@@ -414,68 +411,65 @@ def test_real_worker_close_reaps_a_suspended_job(tmp_path: Path) -> None:
 async def test_task_shell_state_survives_run_completion_and_cancellation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """真实 PTY 经工具创建后，下一 Run 发现并继续使用原 shell 环境。"""
-    from terminal_test_support import active_session_ids, capture_terminal_effects
+    """真实 PTY 经服务创建后跨 Run 保留：同一 Task 的下一 Run 读到的是同一个 shell 环境。
 
-    from app.core.tool.schemas import ToolExecutionContext
-    from app.tools.terminal_runtime.session_service import TerminalSessionService
-    from app.tools.tool_handler.terminal_session import (
-        TerminalListTool,
-        TerminalReadTool,
-        TerminalStartTool,
-        TerminalWriteTool,
+    Agent 不能执行命令（只能读、列、填入），驱动 shell 的状态变化由用户原始输入完成。
+    """
+    from terminal_test_support import (
+        active_session_ids,
+        capture_terminal_effects,
+        user_enter,
+        wait_for_integration,
+        wait_until,
     )
 
-    capture_terminal_effects(monkeypatch)
-    terminal = TerminalSessionService()
+    from app.core.tool.schemas import ToolExecutionContext
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )
     from app.service import depends as service_depends
+    from app.tools.terminal_runtime.session_service import TerminalSessionService
+    from app.tools.tool_handler.terminal_session import TerminalListTool, TerminalReadTool
     from tests.runtime_context_stub import singleton_getter
 
+    capture_terminal_effects(monkeypatch)
+    terminal = TerminalSessionService()
     monkeypatch.setattr(
         service_depends, "get_terminal_session_service", singleton_getter(lambda: terminal)
     )
-    first = ToolExecutionContext(
-        step_id="step-1",
+    runtime = terminal.start(
         task_id=1,
-        workspace_id=1,
-        workspace_root=tmp_path,
+        workspace_root=str(tmp_path),
+        shell="cmd" if os.name == "nt" else "bash",
         run_id=1,
     )
-    second = ToolExecutionContext(
-        step_id="step-1",
-        task_id=1,
-        workspace_id=1,
-        workspace_root=tmp_path,
-        run_id=2,
+    wait_for_integration(runtime)
+    session_id = runtime.session_id
+    first = ToolExecutionContext(
+        step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1
     )
-    try:
-        started = TerminalStartTool().execute(
-            shell="cmd" if os.name == "nt" else "bash",
-            label="persistent shell",
-            execution_context=first,
+    second = ToolExecutionContext(
+        step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=2
+    )
+
+    def run_as_user(text: str) -> None:
+        """用户敲一行并等这条命令结束：只在命令号前进且不再执行时返回，避免拿到上一条的结果。"""
+        before = runtime._observation.command_counter
+        user_enter(runtime, text)
+        wait_until(
+            lambda: (command := runtime._observation.latest_command) is not None
+            and command.number > before
+            and command.status != "executing",
+            timeout=10,
         )
-        assert started.status == "success", started.content
-        session_id = str(started.display_data["session_id"])
+
+    try:
         set_command = (
             "set COSIR_TERMINAL_STATE=kept"
             if os.name == "nt"
             else "export COSIR_TERMINAL_STATE=kept"
         )
-        assert (
-            TerminalWriteTool()
-            .execute(
-                session_id=session_id,
-                operation_id="set-env",
-                input={"type": "line", "text": set_command},
-                wait=None,
-                execution_context=first,
-            )
-            .status
-            == "success"
-        )
+        run_as_user(set_command)
         cancellation_registry.request_cancel(1)
         assert TerminalReadTool().execute(session_id, execution_context=first).status == "cancelled"
         # 第一个 Run 的执行释放取走 Task 信号；同一 Task 的后续 Run 复用终端不受影响。
@@ -489,14 +483,7 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
             if os.name == "nt"
             else 'printf "STATE:%s\\n" "$COSIR_TERMINAL_STATE"'
         )
-        TerminalWriteTool().execute(
-            session_id=session_id,
-            operation_id="check-env",
-            input={"type": "line", "text": command},
-            wait={"until": "match", "pattern": "STATE:kept", "quiet_ms": None,
-                  "timeout_ms": 10000},
-            execution_context=second,
-        )
+        run_as_user(command)
         result = terminal.require(session_id, 1).read(is_cancelled=lambda: False)
         assert "STATE:kept" in result.text
     finally:

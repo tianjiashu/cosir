@@ -325,7 +325,7 @@ def _gate_runtime(monkeypatch, *, cancelled=False, result_ids=(), notice_rows=()
         body = BackgroundResultBody(tool_name="child_agent", tool_result="{}", ended_at="t")
         mailbox.post(TaskMessage.of(body, message_id=message_id))
     for message_id, text in notice_rows:
-        notice = NoticeBody(content=text, notice_kind="terminal_session_ended")
+        notice = NoticeBody(content=text, notice_kind="backend_restarted")
         mailbox.post(TaskMessage.of(notice, message_id=message_id))
     for text in local_notices:
         mailbox.notify(NoticeBody(content=text, notice_kind="model_continuation"))

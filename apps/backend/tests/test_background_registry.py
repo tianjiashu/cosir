@@ -250,7 +250,7 @@ def test_complete_while_stopping_leaves_entry_for_drop(delivered) -> None:
 
 def test_deliver_to_deleted_task_returns_false(enqueued: list[tuple[int, Any]]) -> None:
     assert not deliver_background_result(
-        404, tool_call_id=None, tool_name="terminal_handoff", result={}
+        404, tool_call_id=None, tool_name="browser_handoff", result={}
     )
 
 

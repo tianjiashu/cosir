@@ -136,10 +136,10 @@ def side_effects(history, monkeypatch):
         HandoffLease(
             tool_call_id="call-late",
             task_id=history.task_id,
-            tool_name="terminal_handoff",
-            surface="terminal",
-            resource_id="term",
-            reason="password",
+            tool_name="browser_handoff",
+            surface="browser",
+            resource_id="tab",
+            reason="sign in",
         )
     )
     team = AgentTeamRunCrud().create(
@@ -172,7 +172,7 @@ def side_effects(history, monkeypatch):
     )
     queue.put(
         history.task_id,
-        TaskMessage.of(NoticeBody(content="shell exited", notice_kind="terminal_session_ended")),
+        TaskMessage.of(NoticeBody(content="shell exited", notice_kind="backend_restarted")),
     )
     queued_input = queue.put(history.task_id, _input("排着的"))
     yield SimpleNamespace(revoked=revoked, team_id=team.id, queued_input=queued_input)
@@ -222,7 +222,7 @@ def test_withdraw_gathers_every_side_effect_of_the_turn(history, side_effects) -
     # 通知重新投递。撤回不入队新消息、不开新 Run。
     assert _queued(history.task_id) == [
         ("background_result", "call-early"),
-        ("notice", "terminal_session_ended"),
+        ("notice", "backend_restarted"),
         ("user_input", "排着的"),
         ("notice", "system_prompt_delta"),
     ]
