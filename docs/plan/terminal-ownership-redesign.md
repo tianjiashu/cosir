@@ -1,6 +1,6 @@
 # 终端归属改造：Agent 执行，人在人的终端
 
-> 实施顺序（11-10 定）：一期只收窄 Agent 对交互终端的能力（保留 list / read，write 只填入，不含「请你执行」），实施方案见 [`terminal-agent-read-prefill-plan.md`](terminal-agent-read-prefill-plan.md)；二期把运行中的后台命令并入 `terminal_read` 统一读取；「请你执行」与沙箱在其后另议。
+> 实施顺序（11-10 定）：一期只收窄 Agent 对交互终端的能力（保留 list / read，write 只填入，不含「请你执行」），实施方案见 [`terminal-agent-read-prefill-plan.md`](terminal-agent-read-prefill-plan.md)（已实施）；二期把运行中的后台命令并入 `terminal_list` / `terminal_read` 统一读取、新增 `terminal_stop`，实施方案见 [`terminal-unified-read-plan.md`](terminal-unified-read-plan.md)；「请你执行」与沙箱在其后另议。
 > 状态：2026-11-10 设计稿，未实施。修订经过：
 > - 11-09 初稿：「请人执行」用卡片 + 运行按钮。
 > - 11-10 上午：改为「填入提示符 + 等待交还」。

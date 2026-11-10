@@ -1,6 +1,6 @@
 # 终端能力差距评估（对照 Codex / Claude Code）
 
-> 状态：调查结论（2026-11-02）；P0（§7.1）与 P1 交互终端稳健性（§7.3）已实施未提交、P2 界面第一阶段（§7.4）已实施未提交；T3-T5（§7.2）与 P2 第二、三阶段待实施。
+> 状态：调查结论（2026-11-02）；P0（§7.1）与 P1 交互终端稳健性（§7.3）已实施未提交、P2 界面第一阶段（§7.4）已实施未提交；T5 已由 `terminal-process-unification-design.md` 实施；T3 / T4 由 [`terminal-unified-read-plan.md`](terminal-unified-read-plan.md) 实施（待执行）；P2 第二、三阶段待实施。
 > 范围：一次性命令 `execute_terminal`、交互终端（Rust worker + `terminal_*` 工具 + `terminal-v2` 通道）、前端终端工作台与对话内终端卡片。**沙箱不在本稿范围**；安全与权限按「先功能后安全」只记待办（§6）。
 
 ## 1. 参照系

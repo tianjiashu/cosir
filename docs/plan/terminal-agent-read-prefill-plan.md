@@ -1,7 +1,7 @@
 # 交互终端一期：Agent 只读与填入
 
-> 状态：2026-11-10 实施方案，待执行。主设计会话调研定稿，交给执行者（没有讨论上下文）按本文实施。
-> 上游：[`terminal-ownership-redesign.md`](terminal-ownership-redesign.md)。本文是它的一期，只做「收窄 Agent 对交互终端的能力」，不做「请你执行」，也不做统一读取（二期，见 [`execute-terminal-read-stop-plan.md`](execute-terminal-read-stop-plan.md)，该稿待改写）。
+> 状态：已实施（2026-11-10，提交 `68399308`）。
+> 上游：[`terminal-ownership-redesign.md`](terminal-ownership-redesign.md)。本文是它的一期，只做「收窄 Agent 对交互终端的能力」，不做「请你执行」，也不做统一读取（二期，见 [`terminal-unified-read-plan.md`](terminal-unified-read-plan.md)）。
 > 不在范围：`execute_terminal`、沙箱、权限、浏览器交接。
 
 ---
@@ -359,7 +359,7 @@
   - 删除结束通知、人机仲裁、交接三节，换成一节「Agent 填入」：条件、不执行、`prompt_has_input`。
   - worker 协议部分：输入只有 `prefill` 与 `raw`，删除 signal 与 capabilities。
 - **`docs/plan/terminal-process-unification-design.md`** 顶部状态行：注明「§3 的工具边界已被 `terminal-agent-read-prefill-plan.md` 取代」。
-- `terminal-ownership-redesign.md` 与 `execute-terminal-read-stop-plan.md` 的状态行主设计会话已改好，不要动。
+- `terminal-ownership-redesign.md` 与二期方案的状态行主设计会话已改好，不要动。
 
 ### 10. 测试
 
